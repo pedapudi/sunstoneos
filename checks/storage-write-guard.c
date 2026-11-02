@@ -24,6 +24,8 @@ uint64_t ss_counter_ticks(void)
 }
 int ss_clock_ready(void) { return 1; }
 void ss_progress(void) {}
+void ss_activity_begin(void) {}
+void ss_activity_end(int success) { (void)success; }
 void sha256_block_ce(const uint8_t b[64], uint8_t d[32]) { (void)b; (void)d; abort(); }          /* the CE path is verified in QEMU */
 int ss_cpu_observations(unsigned core, struct ss_cpu_observation *o) { (void)core; memset(o, 0, sizeof *o); return 1; }
 int ss_storage_enable(const void *b, size_t n) { (void)b; (void)n; return 1; }

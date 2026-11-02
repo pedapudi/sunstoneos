@@ -122,9 +122,10 @@ struct result {
 _Static_assert(sizeof(struct result) == 512, "result is the manifest's output_limit");
 static struct result r;
 
-static int card_open;
+static int card_open, activity;
 static void finish_report(void)
 {
+    if (activity) { ss_activity_end(r.status == 0); activity = 0; }          /* closes the thermal window the image reports */
     if (card_open) { (void)ss_storage_close(); card_open = 0; }
     ss_finish(&r, sizeof r);
 }
@@ -229,6 +230,7 @@ void storage_write_main(const struct ss_grant *grant)
     }
     r.cpu_hz = cpu_cycles_per_second(&r.cpu_calibration_ticks);
     ss_progress();
+    ss_activity_begin(); activity = 1;                          /* the thermal report covers the card work */
     card_open = 1;                                             /* enabling opens the card in the owner task, even if it then refuses */
     if (!ss_storage_enable(bounds->base, bounds->bytes)) { r.status = E_BOUNDS; (void)ss_storage_diagnostic(r.diag); finish_report(); }
     if (!ss_storage_region(flush->base, flush->bytes)) { r.status = E_REGION; (void)ss_storage_diagnostic(r.diag); finish_report(); }

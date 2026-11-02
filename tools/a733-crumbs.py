@@ -180,6 +180,10 @@ def board_failure(words, defines, elf):
         record.update(ticket_low_bits=site>>16&511,ticket_bits=9)
         if value&defines['NPU_OUTPUT_LENGTH']:record['output_bytes']=value&0x7fffffff
         else:record.update(output_byte_index=value>>8,output_byte=value&255)
+    if record['group'] == 'thermal' and value >> 31:
+        # apps/os/thermal.c critical_reading(): the reading behind a CRITICAL stop.
+        record['thermal_reading'] = {'channel': value >> 24 & 7, 'celsius': (value & 0xffffff) / 1000,
+                                     'stale': bool(value >> 30 & 1)}
     if record['group'] == 'cpu_return' and record['site'] == BOUNDED:
         record['deadline_seconds'] = record['aux']
         record['refusal'] = [text for bit, text in LIVE_REFUSAL if value >> bit & 1]

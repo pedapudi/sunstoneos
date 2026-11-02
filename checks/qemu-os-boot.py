@@ -292,7 +292,7 @@ def board_prefix(identity, epoch=0x1101, generation=0x2202, lease=0x3303):
     return raw
 
 
-def thermal_service(total):
+def thermal_service(total, cpu_critical=0):
     """The thermal owner's record (struct os_session after the board prefix)."""
     h = lambda n: hashlib.sha256(n.encode()).digest()
     record = struct.pack('<5Q', OS_SERVICE_MAGIC, 1, total, 0x7e40a1, 0x7e40a2)
@@ -300,16 +300,16 @@ def thermal_service(total):
     record += struct.pack('<2I4B', 0, 24000000, 0, 31, 31, 0)
     for hot, hysteresis, critical in ((1500, 1600, 1400),) * 5:
         record += struct.pack('<3H', hot, hysteresis, critical)
-    record += bytes(2) + struct.pack('<I', 0)
+    record += bytes(2) + struct.pack('<I', cpu_critical)       # cpu_critical_millicelsius; zero keeps the 110 C default
     assert len(record) == host.SERVICE_BYTES[host.THERMAL], len(record)
     return record
 
 
-def session_for(elf, input_bytes):
+def session_for(elf, input_bytes, cpu_critical=0):
     """The complete sealed session of the image's application and its launch contract."""
     info = host.image_manifest(elf)
     identity = elf_bytes(elf, 'a733_smp_build_id', 32)
-    services = {host.THERMAL: thermal_service(host.PREFIX_BYTES + host.SERVICE_BYTES[host.THERMAL])}
+    services = {host.THERMAL: thermal_service(host.PREFIX_BYTES + host.SERVICE_BYTES[host.THERMAL], cpu_critical)}
     given = input_bytes if isinstance(input_bytes, list) else [input_bytes] if input_bytes is not None else []
     raw = host.session_bytes(board_prefix(identity), services, info['manifest'], info['sha256'], 0, host.BIND_SID, given)
     epoch, generation, lease = struct.unpack_from('<3Q', raw, 24)
@@ -614,8 +614,8 @@ def main():
             partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result(), facts_elf.result())
     built = time.monotonic() - started
 
-    def run_case(name, elf, scenario_bytes, input_bytes=data, memory='512M', extra_inputs=()):
-        raw, contract, info = session_for(elf, input_bytes)
+    def run_case(name, elf, scenario_bytes, input_bytes=data, memory='512M', extra_inputs=(), cpu_critical=0):
+        raw, contract, info = session_for(elf, input_bytes, cpu_critical)
         given = input_bytes if isinstance(input_bytes, list) else [input_bytes] if input_bytes is not None else []
         inputs = [(info['manifest']['regions'][i]['address'], b) for i, b in enumerate(given)]
         inputs += list(extra_inputs)
@@ -660,6 +660,14 @@ def main():
     c = run_case('sensor-lost', os_elf, scenario(first_ms=(2, 2, None, 2, 2), usb_ready_ms=usb_delay_ms, limit_ms=9000))
     c.failed_with('THERMAL')
     c.require(5_000_000 <= int(c.failure['t_us']) < 6_500_000, 'the lost sensor was reported at %s us' % c.failure['t_us'])
+
+    # 4b. A sensor that reads above the critical limit: the stop record carries the reading that caused it (a stop returns no
+    # report; the runner reads this record after the reset). Channel 3 at 62 C against a session limit of 60 C (the board model's sensors top out near 65 C).
+    c = run_case('sensor-critical-reading', os_elf, scenario(temperature_c=(52, 60, 48, 62, 50), usb_ready_ms=usb_delay_ms, limit_ms=9000), cpu_critical=60000)
+    c.failed_with('THERMAL')
+    word = int(c.failure['value'], 16)
+    c.require(word >> 31 == 1 and not word >> 30 & 1 and (word >> 24 & 7) == 3 and 61_000 <= (word & 0xffffff) <= 63_000,
+              'the stop record holds %#x, not channel 3 near 62000 mC' % word)
 
     # 5. An OS service that fails to start ends the session with a named record, not a hang.
     for fault, group in ((1, 'THERMAL'), (2, 'THERMAL'), (3, 'PMIC')):
