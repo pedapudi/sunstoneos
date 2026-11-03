@@ -6,17 +6,34 @@
 #include "aarch64_device_memory.h"
 #include "a733_mapping_check.h"
 #include <string.h>
+/* The CPU's own instructions of the adapter: on the board they are the real ones; a host build of the open path (the check
+ * checks/os-npu-service.py) has no CPU to configure, so they do nothing there. */
+#ifdef __aarch64__
+#define CPU_READ_SCTLR(v) __asm__ volatile("mrs %0,sctlr_el1":"=r"(v))
+#define CPU_WRITE_SCTLR(v) __asm__ volatile("msr sctlr_el1,%0\n isb"::"r"(v):"memory")
+#define CPU_CLEAN_INVALIDATE(a) __asm__ volatile("dc civac,%0"::"r"(a):"memory")
+#define CPU_DSB() __asm__ volatile("dsb sy":::"memory")
+#else
+#define CPU_READ_SCTLR(v) ((v)=0)
+#define CPU_WRITE_SCTLR(v) ((void)(v))
+#define CPU_CLEAN_INVALIDATE(a) ((void)(a))
+#define CPU_DSB() ((void)0)
+#endif
 /* Applications may provide one constant edge table in their image. */
 __attribute__((weak)) const struct ss_npu_queue_edges ss_npu_queue_edges={0};
-#define MAX_EDGES (SS_NPU_QUEUE_MAX_HANDLES*SS_NPU_QUEUE_MAX_TENSORS)
-_Static_assert(SS_NPU_QUEUE_MAX_HANDLES>=NPU_RUNTIME_SLOTS&&SS_NPU_QUEUE_MAX_TENSORS>=NBG_ASSEMBLY_MAX_TENSORS,
-    "the queue holds a handle for every slot and every tensor of a graph");
-static struct ss_npu_queue_edge edges[MAX_EDGES];
+/* The adapter's tables come from the runtime's reservation in the NPU pool (os_npu_queue_tables), sized by the declaration:
+ * the image's constant edges and those the application may add, the private copy of the requested edges and the hardware
+ * command record of each handle. */
+static struct ss_npu_queue_edge *edges,*requested_copy;
+static size_t edge_capacity,copy_capacity;
+static struct npu_queue_command *commands;
+_Static_assert(sizeof(struct npu_queue_command)<=64,"the runtime reserves 64 bytes for each handle's command record");
 static size_t edge_count;
+static unsigned edges_ready;
 static unsigned edges_prepared;
 int os_npu_queue_prepare_edges(struct npu_runtime *rt)
 {
-    if(!rt||edges_prepared||ss_npu_queue_edges.count>MAX_EDGES||
+    if(!rt||edges_prepared||!edges_ready||ss_npu_queue_edges.count>edge_capacity||
        (ss_npu_queue_edges.count&&!ss_npu_queue_edges.edges))return 0;
     edge_count=ss_npu_queue_edges.count;
     if(edge_count)memcpy(edges,ss_npu_queue_edges.edges,edge_count*sizeof(*edges));
@@ -34,8 +51,23 @@ int os_npu_queue_prepare_edges(struct npu_runtime *rt)
     edges_prepared=1;return 1;
 }
 static struct ss_npu_queue ring;
+/* The queue's tables, taken at start (before the scheduler). The ring's handles, groups and requested-edge slots are in the pool,
+ * where EL0 reads and writes them by design. The edge tables and the command records are what EL1 trusts: they come from the
+ * metadata allocator, where no EL0 mapping reaches. 0 when either block is too small for the declaration. */
+int os_npu_queue_tables(struct npu_runtime *rt)
+{
+    if(!rt||!rt->queue_tables||!rt->queue_meta||edges_ready)return 0;
+    const size_t edge_bytes=((rt->queue_image_links+rt->queue_links)*sizeof(*edges)+63u)&~(size_t)63;
+    const size_t copy_bytes=(rt->queue_links*sizeof(*requested_copy)+63u)&~(size_t)63;
+    if(ss_npu_queue_meta_bytes(rt->slots,rt->queue_image_links,rt->queue_links)>rt->queue_meta_bytes||
+       ss_npu_queue_tables_bytes(rt->slots,rt->queue_tensors,rt->queue_links)>rt->queue_bytes||
+       !ss_npu_queue_service_tables(&ring,rt->slots,rt->queue_tensors,rt->queue_links,rt->queue_tables,rt->queue_bytes))return 0;
+    uint8_t *at=rt->queue_meta;
+    edges=(void *)at;at+=edge_bytes;requested_copy=(void *)at;at+=copy_bytes;commands=(void *)at;
+    edge_capacity=rt->queue_image_links+rt->queue_links;copy_capacity=rt->queue_links;
+    edges_ready=1;return 1;
+}
 static struct npu_runtime_queue direct;
-static struct npu_queue_command commands[SS_NPU_QUEUE_MAX_HANDLES];
 static struct npu_queue_job job;
 static struct npu_queue_fence hardware_fence;
 static unsigned opened,closed,cache_stride;
@@ -78,12 +110,11 @@ static int mapped(struct npu_runtime_region r)
  * once from the queue, which the application can write; every edge is checked against the loaded graphs and against the
  * edges already made (the image's constant table), at most as many as the session declared, and linked while the runtime
  * is idle, before the handles are built and the direct queue is claimed. */
-static struct ss_npu_queue_edge requested_copy[MAX_EDGES];
 static int link_requested(struct npu_runtime *rt)
 {
     const size_t asked=ring.requested_links;
     if(!asked)return 1;
-    if(asked>os_npu_links()||asked>MAX_EDGES-edge_count)return 0;
+    if(asked>os_npu_links()||asked>copy_capacity||asked>edge_capacity-edge_count)return 0;
     memcpy(requested_copy,ring.requested,asked*sizeof(*requested_copy));
     for(size_t i=0;i<asked;++i){
         const struct ss_npu_queue_edge *e=&requested_copy[i];
@@ -109,18 +140,18 @@ static int open_queue(void *unused,unsigned depth)
     if(opened||os_npu_stopping()||!os_npu_queue_begin())return -1;
     struct npu_runtime *rt=os_npu_queue_runtime();
     /* Slot i holds graph i of the image catalogue: load them now (the first open), then make the image's own links. */
-    if(rt&&rt->slots<=SS_NPU_QUEUE_MAX_HANDLES&&!edges_prepared){
+    if(rt&&edges_ready&&!edges_prepared){
         for(unsigned i=0;i<rt->slots;++i){const int r=npu_runtime_load_resident(rt,i,i);if(r<0)return -1;if(!r){os_npu_queue_end();return 0;}}
         if(!os_npu_queue_prepare_edges(rt))return -1;
     }
-    if(!rt||!edges_prepared||rt->slots>SS_NPU_QUEUE_MAX_HANDLES||
+    if(!rt||!edges_prepared||
        (cache_stride=aarch64_device_cache_stride())!=64)return -1;
     if(!link_requested(rt))return -1;
     for(unsigned i=0;i<rt->slots;++i){
         struct npu_runtime_slot *s=&rt->slot[i];
-        struct ss_npu_tensor in[SS_NPU_QUEUE_MAX_TENSORS],out[SS_NPU_QUEUE_MAX_TENSORS];
-        if(s->layout.inputs>SS_NPU_QUEUE_MAX_TENSORS||s->layout.outputs>SS_NPU_QUEUE_MAX_TENSORS||
-           !mapped(s->read)||!mapped(s->write))return -1;
+        /* The tensors of the handle, staged in the runtime's scratch (as many as the slot's graph has). */
+        struct ss_npu_tensor *in=rt->scratch,*out=in+s->layout.inputs;
+        if((size_t)(s->layout.inputs+s->layout.outputs)*sizeof(*in)>rt->scratch_bytes||!mapped(s->read)||!mapped(s->write))return -1;
         for(unsigned j=0;j<s->layout.inputs;++j)in[j]=(struct ss_npu_tensor){s->tensors[j].data,s->tensors[j].bytes};
         for(unsigned j=0;j<s->layout.outputs;++j)out[j]=(struct ss_npu_tensor){s->tensors[s->layout.inputs+j].data,s->tensors[s->layout.inputs+j].bytes};
         if(!ss_npu_queue_service_handle(&ring,in,s->layout.inputs,out,s->layout.outputs,
@@ -133,9 +164,9 @@ static int open_queue(void *unused,unsigned depth)
         if(!npu_queue_register(&direct.queue,&commands[i],&rt->commands[i+1]))return -1;
     /* Only the pinned producer on this core performs CIVAC. The same WB
      * identity view is used at EL0 and EL1; no NC alias is introduced. */
-    __asm__ volatile("mrs %0,sctlr_el1":"=r"(original_sctlr));
+    CPU_READ_SCTLR(original_sctlr);
     uint64_t enabled=original_sctlr|(UINT64_C(1)<<26);
-    __asm__ volatile("msr sctlr_el1,%0\n isb"::"r"(enabled):"memory");
+    CPU_WRITE_SCTLR(enabled);
     ring.job_limit=UINT64_MAX; /* no lifetime count of jobs; the 64-bit sequence is the only bound */
     opened=1;return 1;
 }
@@ -143,7 +174,7 @@ static int close_queue(void *unused)
 {
     (void)unused;if(!opened||os_npu_progress()!=1)return -1;
     int r=npu_runtime_queue_return(&direct);if(r!=1)return r;
-    __asm__ volatile("msr sctlr_el1,%0\n isb"::"r"(original_sctlr):"memory");
+    CPU_WRITE_SCTLR(original_sctlr);
     os_npu_queue_end();
     if(os_npu_close()!=1)return -1;
     closed=1;return 1;
@@ -152,7 +183,7 @@ static int start(void *unused,unsigned handle,uint64_t sequence,uint64_t after,u
 {
     (void)unused;(void)sequence;
     const struct os_session *s=os_session();
-    if(!opened||closed||os_npu_stopping()||!s||handle>ring.handles||!handle)return -1;
+    if(!opened||closed||os_npu_stopping()||!s||handle>ring.handles||!handle||handle>direct.runtime->slots)return -1;
     struct npu_queue_fence dependency={0};
     if(after)dependency=(struct npu_queue_fence){&direct.queue,after};
     /* The handle lease keeps every DMA buffer pinned across record release. */
@@ -171,8 +202,8 @@ static void cache(void *unused,uintptr_t address,size_t bytes)
      * device lease, so CIVAC after completion cannot overwrite device data.
      * IVAC is deliberately avoided: it is undefined at EL0. */
     for(size_t offset=0;offset<bytes;offset+=cache_stride)
-        __asm__ volatile("dc civac,%0"::"r"(address+offset):"memory");
-    __asm__ volatile("dsb sy":::"memory");
+        CPU_CLEAN_INVALIDATE(address+offset);
+    CPU_DSB();
 }
 int ss_npu_queue_svc(void)
 {
@@ -184,8 +215,13 @@ int ss_npu_queue_svc(void)
 }
 static int doorbell(void *unused)
 {
-    (void)unused;register long result __asm__("x0");
+    (void)unused;
+#ifdef __aarch64__
+    register long result __asm__("x0");
     __asm__ volatile("svc #120":"=r"(result)::"memory");return (int)result;
+#else
+    return ss_npu_queue_svc(); /* the host has no supervisor call: the same entry runs in place */
+#endif
 }
 static void progress(void *unused,BaseType_t *woken)
 {

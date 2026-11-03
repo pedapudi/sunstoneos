@@ -3,9 +3,8 @@
 #include "a733_npu_controller.h"
 #include "aarch64_device_memory.h"
 
-/* The bootstrap stream and four regions for each of the 31 slots the command mask allows (npu_declaration.h). */
-#define A733_NPU_MEMORY_MAX_BUFFERS 128u
-
+/* The registered buffers have no fixed count: the caller gives init a table, sized by a733_npu_memory_tables_bytes for the
+ * buffers it registers, and the page-table builder's region list lives in it. */
 /* READ buffers may change between jobs and are cleaned at every publication.
  * CONSTANT buffers are device-read data, such as weights and descriptors,
  * that the CPU must not write after the bootstrap publication; like tables
@@ -36,7 +35,7 @@ struct a733_npu_memory_ops {
     void (*barrier)(void *);
 };
 struct a733_npu_memory {
-    struct a733_npu_buffer buffers[A733_NPU_MEMORY_MAX_BUFFERS];
+    struct a733_npu_buffer *buffers;      /* count entries, sorted by device address, in the caller's table */
     size_t count;
     uintptr_t arena;
     size_t capacity;
@@ -46,10 +45,16 @@ struct a733_npu_memory {
     struct a733_npu_command active;
     enum a733_npu_memory_state state;
     unsigned booted;
-    uint8_t groups[A733_NPU_MEMORY_MAX_BUFFERS]; /* Parallel to buffers; 0 is shared. */
+    uint8_t *groups;                      /* Parallel to buffers; 0 is shared. */
     size_t active_index;
-    struct a733_npu_region scratch_regions[A733_NPU_MEMORY_MAX_BUFFERS]; /* init's table for the page-table builder */
+    struct a733_npu_region *scratch_regions; /* init's list for the page-table builder */
 };
+/* The bytes of the table a733_npu_memory_init needs for count buffers: the sorted buffers, their groups and the builder's
+ * region list. The caller supplies them (8-byte aligned); on the OS path they come from the NPU pool. */
+#define A733_NPU_MEMORY_TABLES_BYTES(count) \
+    (((count) * sizeof(struct a733_npu_buffer) + 7u) / 8u * 8u + ((count) + 7u) / 8u * 8u + \
+     (count) * sizeof(struct a733_npu_region))
+size_t a733_npu_memory_tables_bytes(size_t count);
 
 /* Privileged, serialized memory policy; no allocation or MMIO. Zero once.
  * Caller supplies dedicated pinned RAM with stable mappings, no other CPU or
@@ -58,7 +63,8 @@ struct a733_npu_memory {
  * cache must complete to the point of coherency with a supported stride and
  * barriers. All callbacks must be bounded; native callbacks remain separate.
  *
- * init copies and sorts at most 128 buffers, checks CPU mappings, and builds
+ * init copies and sorts the buffers into tables (a733_npu_memory_tables_bytes; they must not overlap any buffer, the arena
+ * or this object and stay private for the lifetime), checks CPU mappings, and builds
  * private 4 KiB NPU page tables. Exactly one bootstrap allocation is required.
  * CPU/PA/device bases and lengths of buffers must be 4 KiB aligned. All CPU,
  * physical, and device ranges are disjoint; SRAM VA 0x400000..0x47ffff is
@@ -73,7 +79,8 @@ struct a733_npu_memory {
  * instance. This policy does not validate command semantics or SRAM remaps. */
 int a733_npu_memory_init(struct a733_npu_memory *, void *arena, size_t capacity,
                          uint64_t physical, const struct a733_npu_buffer *, size_t,
-                         const struct a733_npu_memory_ops *, void *cookie);
+                         const struct a733_npu_memory_ops *, void *cookie,
+                         void *tables, size_t table_bytes);
 /* Look up a command by device base, returning a stable internal resource token.
  * The entire registered allocation is the readable prefetch span. */
 int a733_npu_memory_command(const struct a733_npu_memory *, uint32_t device,

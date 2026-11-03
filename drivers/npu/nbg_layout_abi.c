@@ -18,7 +18,7 @@ unsigned long nbg_layout_abi(unsigned which)
     case 9: return offsetof(struct nbg_assembly_layout, dynamic);
     case 10: return offsetof(struct nbg_assembly_layout, program_offset);
     case 11: return offsetof(struct nbg_assembly_layout, program_bytes);
-    case 12: return NBG_LAYOUT_MAX_BUFFERS;
+    case 12: return offsetof(struct nbg_assembly_layout, capacity);
     default: return (unsigned long)-1;
     }
 }

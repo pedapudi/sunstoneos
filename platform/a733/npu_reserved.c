@@ -48,8 +48,14 @@ struct npu_convolution *a733_npu_reserved_prepare(struct a733_npu_reserved *s,
     for (unsigned i = 0; i < NPU_CONVOLUTION_BUFFERS; ++i) {
         const struct npu_convolution_slot *l = &npu_convolution_layout[i];
         if (!l->bytes) continue;
+        size_t bytes = l->bytes;
+        if (i == NPU_CONVOLUTION_COMMAND) {
+            /* The command buffer is the graph's own stream, inside the span the layout gives it. */
+            bytes = npu_convolution_command_bytes(model, model_bytes);
+            if (!bytes || bytes > l->bytes) { device_memory_retain(pool, lease); return NULL; }
+        }
         config.buffers[i] = (struct a733_npu_buffer){extent.cpu + l->offset,
-            extent.physical + l->offset, l->bytes, l->device, l->role};
+            extent.physical + l->offset, bytes, l->device, l->role};
     }
     size_t offset = NPU_CONVOLUTION_ARENA_OFFSET;
     config.arena = (void *)(extent.cpu + offset);

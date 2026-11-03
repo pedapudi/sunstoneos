@@ -5,12 +5,17 @@
 #include "queue.h"
 #include "a733_npu_controller.h"
 #include <stdatomic.h>
+#ifndef UINT_MAX
+#define UINT_MAX 0xffffffffu
+#endif
 
-/* One client per slot. A client's command mask has 32 bits and command 0 is the bootstrap, so a service holds at most 31
- * clients: the one fixed count here that comes from the interface and not from memory (docs/designs/npu-resources.md). */
-#define NPU_SERVICE_CLIENTS 31u
-#define NPU_SERVICE_COMMANDS 32u
+/* The service has no fixed count of clients or commands. A client's slot, its permission to submit each command (one bit of
+ * a bitmap with a bit for every command), its member record and the request queue's storage are tables that the caller gives
+ * the service before init, sized for the clients and commands it declares (npu_service_tables_bytes, npu_service_tables);
+ * command 0 is the bootstrap. Memory is the only bound (docs/designs/npu-resources.md). */
 #define NPU_SERVICE_STACK_WORDS 4096u
+/* "No client": the owner of a service nobody has opened, the member running no job. */
+#define NPU_SERVICE_NONE UINT_MAX
 
 enum npu_service_operation {
     NPU_SERVICE_STATUS, NPU_SERVICE_OPEN, NPU_SERVICE_SUBMIT,
@@ -70,7 +75,7 @@ struct npu_service_member {
 };
 struct npu_service_client {
     TaskHandle_t task;
-    uint32_t commands;
+    uint32_t *commands;   /* bit c: the client may submit command c; (commands + 31) / 32 words in the service's tables */
     uint64_t next_ticket, pending;
     QueueHandle_t replies;
     StaticQueue_t reply_state;
@@ -107,7 +112,7 @@ struct npu_service_irq_ops {
  * most one bounded step of the runtime's bulk work and returns 1 when it did
  * work, 0 when none remains. finished reports a completed job of client,
  * already reaped, whose reply stays held; with faulted set it reports a
- * controller fault, client being NPU_SERVICE_CLIENTS when no job ran.
+ * controller fault, client being NPU_SERVICE_NONE when no job ran.
  * closed reports a member's successful CLOSE. idle_hint enables the
  * idle-register completion hint while interrupt delivery is unqualified. */
 struct npu_service_runtime {
@@ -189,8 +194,10 @@ struct npu_service {
     struct npu_service_message held;
     unsigned has_held;
     struct a733_npu_mmu_image image;
-    struct a733_npu_command commands[NPU_SERVICE_COMMANDS];
-    unsigned command_count, owner, initialized;
+    struct a733_npu_command *commands;   /* command_count entries, in the tables */
+    unsigned command_count, client_count, owner, initialized;
+    void *tables; size_t table_bytes;    /* what npu_service_tables was given, until init */
+    unsigned table_commands;
     atomic_uint activation_state;
     struct npu_service_activation activation;
     int (*restart_irq)(void *), (*restart_ready)(void *);
@@ -198,14 +205,14 @@ struct npu_service {
     uint64_t job_ticket;
     QueueHandle_t requests;
     StaticQueue_t request_state;
-    uint8_t request_storage[NPU_SERVICE_CLIENTS * sizeof(struct npu_service_message)];
-    struct npu_service_client clients[NPU_SERVICE_CLIENTS];
+    uint8_t *request_storage;            /* client_count messages */
+    struct npu_service_client *clients;  /* client_count entries */
     TaskHandle_t worker;
     UBaseType_t affinity;
     StaticTask_t worker_state;
     StackType_t worker_stack[NPU_SERVICE_STACK_WORDS];
     unsigned shared, members, running, next;
-    struct npu_service_member member[NPU_SERVICE_CLIENTS];
+    struct npu_service_member *member;   /* client_count entries */
     struct npu_service_runtime_state *runtime; /* Null outside runtime mode. */
 #ifdef SUNSTONE_A733_OS_NPU_OBSERVE
     void (*observe)(void *,const struct npu_service *,unsigned);
@@ -217,6 +224,21 @@ struct npu_service {
 #endif
 };
 
+/* The bytes of the tables of a service of clients clients and commands commands (commands[]: the bootstrap and every
+ * application command), and the macro form for a static array. They hold the commands, the clients, the members, the
+ * permission bitmaps and the request queue's storage, each 8-byte aligned. */
+#define NPU_SERVICE_PERMIT_WORDS(commands) (((commands) + 31u) / 32u)
+#define NPU_SERVICE_TABLES_BYTES(clients, commands) \
+    (((size_t)(commands) * sizeof(struct a733_npu_command) + 7u) / 8u * 8u + \
+     (size_t)(clients) * ((sizeof(struct npu_service_client) + 7u) / 8u * 8u) + \
+     (size_t)(clients) * ((sizeof(struct npu_service_member) + 7u) / 8u * 8u) + \
+     (size_t)(clients) * ((NPU_SERVICE_PERMIT_WORDS(commands) * 4u + 7u) / 8u * 8u) + \
+     (size_t)(clients) * ((sizeof(struct npu_service_message) + 7u) / 8u * 8u))
+size_t npu_service_tables_bytes(unsigned clients, unsigned commands);
+/* Before init, once: the service takes memory for its tables, for the clients and commands it will hold (init's command
+ * count may not exceed commands). Returns 0, leaving the service unchanged, when the memory is too small (the caller names
+ * the resource that did not fit), is not 8-byte aligned, or the counts are zero. The memory stays private to the service. */
+int npu_service_tables(struct npu_service *, unsigned clients, unsigned commands, void *memory, size_t bytes);
 int npu_service_runtime_parked(const struct npu_service *);
 int npu_service_observe(struct npu_service *,
     void (*)(void *,const struct npu_service *,unsigned),void *);
@@ -275,6 +297,9 @@ int npu_service_init_deferred(struct npu_service *,const struct a733_npu_ops *,v
  * Bootstrap task, callback context and prepared resources remain live/pinned. */
 enum npu_service_result npu_service_activate(struct npu_service *);
 int npu_service_bind(struct npu_service *, unsigned slot, TaskHandle_t, uint32_t command_mask);
+/* The same for a client that may submit commands first .. first + count - 1 (command 0, the bootstrap, is never allowed),
+ * as many as the service's commands. */
+int npu_service_bind_range(struct npu_service *, unsigned slot, TaskHandle_t, unsigned first, unsigned count);
 /* Optional shared mode, after init and before scheduling. Every bound client
  * then opens its own session on the one controller instead of claiming it
  * exclusively. The first OPEN boots the controller; later OPENs join it. Each

@@ -11,12 +11,9 @@ extern "C" {
 #ifndef SS_NPU_QUEUE_MAX_DEPTH
 #define SS_NPU_QUEUE_MAX_DEPTH 64u
 #endif
-/* One handle for each of the 31 slots a command mask allows. The tensors of a handle are as many as the loader admits for
- * a graph (NBG_ASSEMBLY_MAX_TENSORS, include/nbg_assembly.h: the loader's own choice, set at build). */
-#define SS_NPU_QUEUE_MAX_HANDLES 31u
-#ifndef SS_NPU_QUEUE_MAX_TENSORS
-#define SS_NPU_QUEUE_MAX_TENSORS 8u
-#endif
+/* The queue has a handle for every resident graph the application declares and as many tensors in a handle as its graph has:
+ * their tables, the group bitmaps and the tables of edges are allocated when the queue opens, from the NPU pool and sized by
+ * the declaration (docs/designs/npu-resources.md). Only the ring's depth is fixed (above): a full ring is backpressure. */
 /* Optional immutable image composition. Prepared-entry and tensor indices
  * are zero based. Every declared output/input pair has identical shape and
  * representation. Connected handles share one buffer lease. The OS copies and admits this table before scheduling. */

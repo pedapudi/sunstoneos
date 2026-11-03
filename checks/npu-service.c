@@ -297,6 +297,8 @@ void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
 void kernel_main(void)
 {
     platform_init();
+static _Alignas(8) uint8_t memory_tables[A733_NPU_MEMORY_TABLES_BYTES(4)];
+static _Alignas(8) uint8_t service_tables[NPU_SERVICE_TABLES_BYTES(2, 3)];
     memset(data, 0x69, sizeof(data));
     struct a733_npu_buffer buffers[4];
     for (unsigned i = 0; i < 3; ++i)
@@ -307,12 +309,13 @@ void kernel_main(void)
         4096, 0x10180000, A733_NPU_BUFFER_WRITE};
     configASSERT(a733_npu_bootstrap(command_memory[0], sizeof(command_memory[0])));
     configASSERT(a733_npu_native_init(&native, 0x09000000, 0x09000000,
-        arena, sizeof(arena), (uintptr_t)arena, buffers, 4, fatal, NULL));
+        arena, sizeof(arena), (uintptr_t)arena, buffers, 4, fatal, NULL, memory_tables, sizeof(memory_tables)));
     struct a733_npu_command commands[3];
     for (unsigned i = 0; i < 3; ++i)
         configASSERT(a733_npu_memory_command(&native.memory, buffers[i].device, &commands[i]));
     model.regs[0x20/4] = 0x9000; model.regs[0x24/4] = 0x9202;
     model.regs[0x30/4] = 0x1000003b; model.regs[0x28/4] = 0x20240101; model.regs[1] = IDLE;
+    configASSERT(npu_service_tables(&service, 2, 3, service_tables, sizeof(service_tables)));
     configASSERT(npu_service_init(&service, &model_ops, NULL, &native.memory.image, commands, 3, 4, 1));
     TaskHandle_t owners[2];
     owners[0] = xTaskCreateStaticAffinitySet(owner, "owner", 4096, NULL, 5, stacks[0], &tasks[0], 1);

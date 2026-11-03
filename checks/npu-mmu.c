@@ -7,8 +7,10 @@
 
 static _Alignas(4096) unsigned char storage[A733_NPU_MMU_MAX_BYTES + 8192];
 static unsigned char saved[A733_NPU_MMU_MAX_BYTES];
-static struct a733_npu_region regions[A733_NPU_MMU_MAX_REGIONS];
-static struct a733_npu_region saved_regions[A733_NPU_MMU_MAX_REGIONS];
+/* The builder has no region limit; the check's own array holds the 2000 regions of the many-regions case. */
+#define MANY_REGIONS 2000u
+static struct a733_npu_region regions[MANY_REGIONS + 8];
+static struct a733_npu_region saved_regions[MANY_REGIONS + 8];
 static unsigned char *arena = storage + 4096;
 static size_t capacity = A733_NPU_MMU_MAX_BYTES;
 static uint64_t arena_pa = UINT64_C(0x2740000000);
@@ -169,7 +171,6 @@ int main(void)
     refuses(arena, capacity, arena_pa, regions, 1, (void *)arena);
     refuses(arena, capacity, arena_pa, regions, 1, (void *)regions);
     refuses(arena, capacity, arena_pa, NULL, 1, &image);
-    refuses(arena, capacity, arena_pa, regions, A733_NPU_MMU_MAX_REGIONS + 1, &image);
     refuses((void *)(UINTPTR_MAX - 4095), capacity, arena_pa, regions, 1, &image);
 
     /* The low device range. The OS loader admits an unpatched descriptor pointer word below A733_NPU_MMU_LOW_RESERVED
@@ -196,6 +197,18 @@ int main(void)
         }
         for (uint32_t address = 0; address < 0x1000; ++address) { faults(address, 0, 0); faults(address, 1, 0); }
     }
+    /* No limit on the number of regions: 2000 separate 4 KiB regions (more than the former 512), each followed by a gap, are
+     * all accepted and all translate. */
+    memset(regions, 0, sizeof(regions));
+    for (unsigned i = 0; i < MANY_REGIONS; ++i)
+        regions[i] = (struct a733_npu_region){UINT64_C(0x1000000000) + (uint64_t)i * 0x1000, 4096,
+                                              A733_NPU_MMU_LOW_RESERVED + i * 0x2000u, A733_NPU_PAGE_4K, i & 1};
+    build(MANY_REGIONS);
+    for (unsigned i = 0; i < MANY_REGIONS; ++i) {
+        translated(A733_NPU_MMU_LOW_RESERVED + i * 0x2000u + 0x123, i & 1, UINT64_C(0x1000000000) + (uint64_t)i * 0x1000 + 0x123);
+        faults(A733_NPU_MMU_LOW_RESERVED + i * 0x2000u + 0x1000, 0, 0);
+    }
+    memset(regions, 0, sizeof(regions));
     build(0); /* Rebuilding an offline image removes every previous mapping. */
     assert(image.bytes == 4096 && image.tables == 0);
     for (unsigned i = 0; i < 256; ++i) faults(i << 24, 0, 0);

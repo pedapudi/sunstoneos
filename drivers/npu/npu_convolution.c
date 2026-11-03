@@ -193,11 +193,27 @@ static int tensor_profile(const struct nbg_tensor *t,const uint32_t raw[12],size
     for(unsigned i=0;i<6;++i)if(t->sizes[i]!=raw[i+1])return 0;
     return 1;
 }
-/* Assembly allocation size fixed by the shared layout; zero when unused. */
+/* Assembly allocation size of plan entry i: fixed by the shared layout, except the command allocation, which is the
+ * graph's own stream (command, the size the configuration gave that buffer; the assembler still requires it to match
+ * the plan exactly). Zero when unused. */
+static size_t command_bytes_in_use;
 static size_t allocation_bytes(unsigned i)
 {
     unsigned slot=npu_convolution_allocation[i];
+    if(slot==NPU_CONVOLUTION_COMMAND)return command_bytes_in_use;
     return slot<NPU_CONVOLUTION_BUFFERS ? npu_convolution_layout[slot].bytes : 0;
+}
+size_t npu_convolution_command_bytes(const void *model,size_t model_bytes)
+{
+    struct nbg_model m;struct nbg_assembly_plan plan;
+    if(!model||!model_bytes||nbg_model_open(model,model_bytes,&m)!=NBG_DECODE_OK ||
+#if defined(SUNSTONE_NPU_LARGE_GRAPH) && !defined(SUNSTONE_NPU_NN_POOL_GRAPH)
+       !nbg_sh_nt_requirements(&m,&plan)
+#else
+       !nbg_assembly_requirements(&m,&plan)
+#endif
+       )return 0;
+    return plan.buffers[NBG_ALLOC_COMMAND].allocation_bytes;
 }
 static int profile(const struct nbg_model *m,const struct nbg_assembly_plan *p,
     const struct supported_model *v)
@@ -268,7 +284,11 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
             if(b->cpu||b->physical||b->bytes||b->device||b->role!=A733_NPU_BUFFER_READ)return 0;
             continue;
         }
-        if(b->bytes!=l->bytes || b->role!=l->role ||
+        /* The command buffer is sized from the graph (at most the slot's span in the parent allocation, whole pages); every
+         * other buffer is the layout's. */
+        const int graph_sized=i==NPU_CONVOLUTION_COMMAND;
+        if(graph_sized ? (!b->bytes || b->bytes>l->bytes || (b->bytes&4095)) : b->bytes!=l->bytes ||
+           b->role!=l->role ||
            !a733_span_incl_nonempty((const void *)b->cpu,b->bytes) ||
            a733_extents_intersect(b->cpu,b->bytes,(uintptr_t)c,sizeof(*c)) ||
            a733_extents_intersect(b->cpu,b->bytes,(uintptr_t)config,sizeof(*config)) ||
@@ -286,6 +306,7 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
     c->model_index=selected;c->input_bytes=models[selected].input_bytes;
     c->output_bytes=models[selected].output_bytes;
     struct nbg_model model;struct nbg_assembly_plan plan;
+    command_bytes_in_use=v.buffers[NPU_CONVOLUTION_COMMAND].bytes;
     if(nbg_model_open(c->model,c->model_bytes,&model)!=NBG_DECODE_OK ||
 #if defined(SUNSTONE_NPU_LARGE_GRAPH) && !defined(SUNSTONE_NPU_NN_POOL_GRAPH)
        !nbg_sh_nt_requirements(&model,&plan)
@@ -302,7 +323,8 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
     const struct a733_npu_buffer *native_buffers=c->buffers;size_t native_count=NPU_CONVOLUTION_BUFFERS;
 #endif
     if(!a733_npu_native_init(&c->native,v.register_cpu,v.register_physical,v.arena,v.arena_bytes,
-        v.arena_physical,native_buffers,native_count,v.fatal,v.fatal_cookie))return fault(c);
+        v.arena_physical,native_buffers,native_count,v.fatal,v.fatal_cookie,
+        c->memory_tables,sizeof(c->memory_tables)))return fault(c);
     static const struct a733_mapping_rule private_buffer={A733_MAPPING_WRITE,1,
         {{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
     for(unsigned i=0;i<NPU_CONVOLUTION_BUFFERS;++i) {
@@ -460,7 +482,8 @@ int npu_convolution_bind(struct npu_convolution *c,struct a733_npu_startup *star
        xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
     c->startup=startup;c->client=client;
     const struct npu_service_activation activation={startup->task,prepared,c};
-    if(!npu_service_init_deferred(&c->service,&operations,c,&c->native.memory.image,c->commands,NPU_CONVOLUTION_COMMANDS,
+    if(!npu_service_tables(&c->service,1,NPU_CONVOLUTION_COMMANDS,c->service_tables,sizeof(c->service_tables)) ||
+       !npu_service_init_deferred(&c->service,&operations,c,&c->native.memory.image,c->commands,NPU_CONVOLUTION_COMMANDS,
         priority,affinity,&activation) || !npu_service_bind(&c->service,0,client,
         (1u<<NPU_CONVOLUTION_COMMANDS)-2u))return fault(c);
     c->bound=1;return 1;

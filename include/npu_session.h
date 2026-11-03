@@ -11,6 +11,11 @@
  * round-robin order. Models must match the image's admitted table
  * (npu_admitted_models.h); a caller hash cannot add one. */
 #define NPU_SESSION_MODELS 8u /* the finite session driver's own table, independent of the service's clients */
+/* This driver's own tables (it predates the runtime and keeps fixed arrays for its eight models): the tensors of a model in
+ * each direction, the layout entries and registered buffers they need. The OS runtime has none of these limits. */
+#define NPU_SESSION_TENSORS 8u
+#define NPU_SESSION_ENTRIES NBG_LAYOUT_ENTRIES(NPU_SESSION_TENSORS, NPU_SESSION_TENSORS)
+#define NPU_SESSION_MAX_BUFFERS 128u
 #define NPU_SESSION_DEVICE_BASE 0x10000000u
 #define NPU_SESSION_BOOTSTRAP_BYTES 524288u
 
@@ -36,7 +41,8 @@ struct npu_session {
     size_t model_bytes;
     unsigned entry;
     struct nbg_assembly_layout layout;
-    struct a733_npu_buffer buffers[NBG_LAYOUT_MAX_BUFFERS];
+    struct nbg_allocation_requirement layout_table[NPU_SESSION_ENTRIES];
+    struct a733_npu_buffer buffers[NPU_SESSION_ENTRIES];
     unsigned char constant_digest[2][32], stream_digest[32];
     size_t stream_bytes;
     TaskHandle_t client;
@@ -56,6 +62,8 @@ struct npu_sessions {
     unsigned char bootstrap_digest[32];
     struct a733_npu_native native;
     struct a733_npu_command commands[NPU_SESSION_MODELS + 1];
+    _Alignas(8) uint8_t memory_tables[A733_NPU_MEMORY_TABLES_BYTES(NPU_SESSION_MAX_BUFFERS)];
+    _Alignas(8) uint8_t service_tables[NPU_SERVICE_TABLES_BYTES(NPU_SESSION_MODELS, NPU_SESSION_MODELS + 1)];
     struct npu_service service;
     struct a733_npu_startup *startup;
     atomic_uint failed;

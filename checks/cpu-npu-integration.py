@@ -38,6 +38,8 @@ class Model(owner.Model):
   self.put64(self.n+self.nf['client'],0x3000);self.put64(self.n+self.nf['bootstrap'],0x4000)
   self.put64(layout.address('main_task','apps/os/application.c'),0x3000)
   grant=layout.address('grant','apps/os/application.c');self.put64(grant+layout.layouts['ss_grant']['finish_by_us'],55000000)
+  # The slot table is carved from the runtime's reservation and the runtime points to it (fail_at reads slot 0).
+  self.put64(self.rt+layout.layouts['npu_runtime']['slot'],0x41f01000)
   for k in ('initialized','irq_bound','irq_stopped'):self.put32(self.service+self.sf[k],1)
   self.put64(layout.address('instance','drivers/npu/npu_service.c'),self.service)
   self.put64(self.service+self.sf['runtime'],self.rt) # nonnull authority; parked loop uses no hooks
@@ -102,7 +104,8 @@ if not a.late_isr_only:
   m=Model(image,layout);m.hooks.pop(layout.address('npu_runtime_stop_poll'))
   startup=m.n+m.nf['startup'];rf=layout.layouts['npu_runtime']
   m.put64(m.rt+rf['startup'],startup);m.put32(m.rt+rf['bound'],1);m.put32(m.rt+rf['prepared'],1)
-  m.put32(m.rt+rf['slots'],1);m.put32(m.rt+rf['slot']+layout.layouts['npu_runtime_slot']['state'],8)
+  slots=0x41f01000 # the slot table is carved from the reservation: the runtime points to it
+  m.put64(m.rt+rf['slot'],slots);m.put32(m.rt+rf['slots'],1);m.put32(slots+layout.layouts['npu_runtime_slot']['state'],8)
   m.put64(startup+layout.layouts['a733_npu_startup']['task'],0x3000)
   m.put32(m.service+m.sf['runtime_parked'],parked);m.put32(m.rt+rf['failed'],failed)
   if pending:

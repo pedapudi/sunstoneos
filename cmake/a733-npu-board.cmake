@@ -33,7 +33,7 @@ sunstone_board_application(npu-board BOOT "${npub_build}/boot.c" LINK_SCRIPT "${
   apps/npu-board/thermal.c drivers/thermal/a733_thermal.c drivers/thermal/a733_thermal_native.c
   apps/npu-board/admission.c apps/npu-board/snapshot.c "${npub_build}/models.c" "${npub_build}/npu_admitted_models.c"
   platform/a733/device_memory_layout.c platform/a733-smp-cached/irq_table.c drivers/gpu/gicv3_spi.c
-  platform/a733/npu_native.c runtime/counter_clock.c drivers/npu/a733_npu_runtime.c drivers/npu/a733_npu_runtime_interim.c
+  platform/a733/npu_native.c runtime/counter_clock.c drivers/npu/a733_npu_runtime.c drivers/npu/a733_npu_runtime_interim.c drivers/npu/npu_pool.c
   drivers/npu/npu_service.c drivers/npu/a733_npu_controller.c drivers/npu/a733_npu_memory.c
   drivers/npu/a733_npu_mmu.c drivers/npu/nbg_model.c drivers/npu/nbg_assembly.c
   drivers/npu/nbg_checksum.c drivers/npu/nbg_relocation.c drivers/npu/a733_npu_startup.c

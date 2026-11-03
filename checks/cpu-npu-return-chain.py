@@ -83,8 +83,11 @@ class Native(owners.Model):
         self.rf = layout.layouts['npu_runtime']
         self.service = self.rt+self.rf['service']
         self.sf = layout.layouts['npu_service']
-        self.slot = self.rt+self.rf['slot']
         self.slotf = layout.layouts['npu_runtime_slot']
+        # The runtime's tables are carved from its reservation and the runtime points to them (npu_runtime.slot, .plans,
+        # .commands, ...), not arrays inside the runtime: this model puts them in the pool, clear of the tensor windows.
+        self.tables = 0x300000
+        self.slot = POOL+0x300000+0x20000
         self.startup = self.n+self.nf['startup']
         self.report = layout.address('os_npu_published_report')
         self.ops, self.ticket, self.operation, self.submits = [], 0, 0, 0
@@ -138,6 +141,7 @@ class Native(owners.Model):
         self.put32(self.rt+self.rf['slots'], 1)
         self.put64(self.rt+self.rf['parent_cpu'], POOL)
         self.put64(self.rt+self.rf['parent_bytes'], POOL_BYTES)
+        self.put64(self.rt+self.rf['slot'], self.slot)
         self.put64(self.slot+self.slotf['client'], CLIENT)
         self.put32(self.slot+self.slotf['state'], 2)
         self.put64(layout.address('instance', 'drivers/npu/npu_service.c'), self.service)
@@ -163,15 +167,18 @@ class Native(owners.Model):
         self.put32(plan+pf['inputs'], 1)
         self.put32(plan+pf['outputs'], 1)
         requirement = type_size(image.path, 'nbg_allocation_requirement')
-        self.put32(plan+pf['buffers']+4*requirement, self.input_bytes)
-        self.put32(plan+pf['buffers']+5*requirement, len(self.reference))
+        table = POOL+0x220000                      # the layout's table of allocations (buffers, capacity)
+        self.put64(plan+pf['buffers'], table); self.put32(plan+pf['capacity'], 8)
+        self.put32(table+4*requirement, self.input_bytes)
+        self.put32(table+5*requirement, len(self.reference))
         self.uc.mem_write(self.slot+self.slotf['layout'],
                           bytes(self.uc.mem_read(plan, type_size(image.path, 'nbg_assembly_layout'))))
         tf = layout.layouts['npu_runtime_tensor']
         tensor_size = type_size(image.path, 'npu_runtime_tensor')
+        self.put64(self.slot+self.slotf['tensors'], POOL+0x300000+0x40000); self.put32(self.slot+self.slotf['tensor_capacity'], 4)
         for index, (address, count) in enumerate(((self.input_window, self.input_bytes),
                                                   (self.output_window, len(self.reference)))):
-            tensor = self.slot+self.slotf['tensors']+index*tensor_size
+            tensor = POOL+0x300000+0x40000+index*tensor_size
             self.put64(tensor+tf['data'], address)
             self.put64(tensor+tf['bytes'], count)
         hooks = layout.address('hooks', 'drivers/npu/a733_npu_runtime.c')
@@ -349,7 +356,7 @@ def producer(args):
     shutil.copyfile(ROOT/'apps/os/npu-observe.c', adapter)
     executable = directory/'producer'
     command = [args.cc, '-std=c11', '-O2', '-ffp-contract=off', '-pthread',
-        '-DSUNSTONE_A733_OS_NPU=1', '-DSUNSTONE_A733_OS_NPU_OBSERVE=1',
+        '-DOS_NPU_META_BYTES=64ULL', '-DSUNSTONE_A733_OS_NPU=1', '-DSUNSTONE_A733_OS_NPU_OBSERVE=1',
         '-I'+str(ROOT/'checks/cpu-npu-concurrency'), '-I'+str(ROOT/'include'),
         '-I'+str(ROOT/'apps/cpu-npu-concurrency'), str(ROOT/'apps/cpu-npu-concurrency/main.c'),
         str(adapter), str(ROOT/'checks/cpu-npu-concurrency/producer.c'), '-o', str(executable)]

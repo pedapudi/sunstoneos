@@ -5,6 +5,10 @@
 #include "npu_service.h"
 #include "a733_storage_digest.h"
 #include "npu_declaration.h"
+#include "npu_pool.h"
+#ifndef UINT_MAX
+#define UINT_MAX 0xffffffffu
+#endif
 #include "nbg_assembly.h"
 
 /* Compiled models loaded into fixed slots at runtime and run concurrently on
@@ -14,7 +18,9 @@
  * outputs in place. Jobs of different slots share the NPU with round-robin
  * starts. The catalogue is fixed at preparation; the runtime admits each model by its structure and addresses
  * (nbg_assembly.h), not by a table of digests. */
-#define NPU_RUNTIME_SLOTS NPU_SERVICE_CLIENTS
+/* No fixed count of slots, graphs or tensors: the runtime's tables are carved from the reservation at prepare, sized by the
+ * declaration and the graphs (docs/designs/npu-resources.md). NPU_RUNTIME_NONE is "no slot". */
+#define NPU_RUNTIME_NONE UINT_MAX
 #define NPU_RUNTIME_DEVICE_BASE 0x10000000u
 /* The command region of a slot sized for graphs registered later (a declaration that names no graph for each slot): one
  * hardware fetch. A graph whose stream is longer is linked in segments and needs a larger region; it fits only a slot
@@ -42,10 +48,16 @@ struct npu_runtime_model { const void *data; size_t bytes; const unsigned char *
  * lifetime; LOAD authenticates each copy it makes. */
 /* Graphs loaded after preparation (npu_runtime_register): capacity more catalogue entries, each model at most graph_bytes
  * long with no tensor larger than tensor_bytes. The reservation covers them, so a registered graph cannot fail on memory. */
-/* slot_model: when not NULL, slot i holds catalogue model slot_model[i] for the whole run (a queue image keeps one graph
- * resident per slot) and its regions are sized from that graph alone; NULL sizes every slot for the largest graph. It
- * needs capacity 0, because a graph registered later could go to any slot. LOAD refuses a graph that does not fit its slot. */
-struct npu_runtime_bounds { unsigned capacity; size_t graph_bytes, tensor_bytes; const unsigned *slot_model; };
+/* per_graph: slot i holds catalogue model i for the whole run (a queue image keeps one graph resident in each slot) and its
+ * regions are sized from that graph alone; 0 sizes every slot for the largest graph. It needs capacity 0, because a graph
+ * registered later could go to any slot, and at most as many slots as graphs. LOAD refuses a graph that does not fit its slot. */
+/* scratch, scratch_bytes: work memory for a sizing call (npu_runtime_reservation_with, npu_runtime_requirements_with), which
+ * admits the graphs without a reservation to put their layouts in: npu_runtime_scratch_bytes says how much. Prepare takes
+ * its work memory from the reservation and ignores them. */
+/* queue: reserve the tables of the EL0 queue too (ss_npu_queue_reserve_bytes): the links an application may ask for at run
+ * time (queue_links) and the edges the image's constant table holds (queue_image_links). */
+struct npu_runtime_bounds { unsigned capacity; size_t graph_bytes, tensor_bytes; unsigned per_graph;
+                            void *scratch; size_t scratch_bytes; unsigned queue, queue_links, queue_image_links; };
 struct npu_runtime_config {
     const struct npu_runtime_model *models; /* count entries; the caller keeps them alive until prepare returns */
     unsigned count, slots;
@@ -57,6 +69,8 @@ struct npu_runtime_config {
     uint64_t register_physical;
     void (*fatal)(void *);
     void *fatal_cookie;
+    /* The EL1-private allocator for the metadata (include/npu_pool.h): sized by npu_runtime_meta_bytes_with. */
+    struct npu_meta *meta;
 };
 /* Slot states, written by preparation before bind, then by the worker. Clients
  * read with acquire
@@ -101,9 +115,11 @@ struct npu_runtime_slot {
     unsigned model, phase, span;
     size_t offset;
     struct npu_runtime_region command, constant, read, write;
-    struct nbg_assembly_buffer targets[NBG_LAYOUT_MAX_BUFFERS];
+    /* The slot's own tables, in the reservation: as many entries as the graphs of this slot need (layout.capacity). */
+    struct nbg_assembly_buffer *targets;
     struct nbg_assembly_layout layout;
-    struct npu_runtime_tensor tensors[2 * NBG_ASSEMBLY_MAX_TENSORS];
+    struct npu_runtime_tensor *tensors;
+    unsigned tensor_capacity;
     uint32_t stream_bytes, end_mark, address_crc, readonly_crc, crc;
     uint64_t timeout_us, finished;
     unsigned faulted; /* the job failed with an NPU MMU exception: its reply is a job fault */
@@ -112,16 +128,24 @@ struct npu_runtime_slot {
     uint64_t pending;
     enum npu_service_operation pending_operation;
     unsigned opened, closed;
+    unsigned job_failed;    /* npu_job.c: a request of this slot failed; written only by the slot's client */
     unsigned resident_load; /* the load was made by the owner (npu_runtime_load_resident): no client waits for a reply */
 };
 struct npu_runtime {
-    struct npu_runtime_slot slot[NPU_RUNTIME_SLOTS];
+    struct npu_runtime_slot *slot;   /* slots entries, in the reservation */
     /* Per-graph tables, count entries each, placed at the start of the runtime's reservation (npu_runtime_tables_bytes):
      * the catalogue, the plan of each graph and the SHA-256 of each model at prepare time, for LOAD's copy check. */
     struct npu_runtime_model *catalogue;
     struct nbg_assembly_layout *plans;
     unsigned char (*model_digest)[32];
-    struct a733_npu_buffer buffers[1 + 4 * NPU_RUNTIME_SLOTS]; /* the registered NPU buffers, built by prepare */
+    struct a733_npu_buffer *buffers; /* the registered NPU buffers (1 + 4 * slots), built by prepare */
+    struct npu_runtime_span *spans;  /* the worker's spans of one step: as many as the largest slot has tensors */
+    void *scratch; size_t scratch_bytes; /* work memory of linking and registration (one largest layout, twice) */
+    void *queue_tables; size_t queue_bytes; size_t queue_tensors; /* the ring's tables (pool) */
+    void *queue_meta; size_t queue_meta_bytes;                     /* the adapter's edge tables and command records (metadata) */
+     unsigned queue_links, queue_image_links; /* the queue's reservation */
+    void *memory_tables, *service_tables; /* the memory layer's and the service's tables, carved at prepare */
+    unsigned later_entries;          /* table entries of a graph registered after prepare */
     atomic_uint count;   /* catalogue entries in use; register publishes the next one with release order */
     unsigned capacity, slots;
     size_t command_bytes, constant_bytes, read_bytes, write_bytes, staging_bytes;
@@ -130,7 +154,7 @@ struct npu_runtime {
     struct a733_npu_buffer bootstrap;
     uint32_t table_crc, bootstrap_crc;
     struct a733_npu_native native;
-    struct a733_npu_command commands[NPU_RUNTIME_SLOTS + 1];
+    struct a733_npu_command *commands; /* slots + 1, in the reservation */
     struct npu_service service;
     struct a733_npu_startup *startup;
     /* Worker-private LOAD state: one load runs at a time. */
@@ -148,6 +172,7 @@ struct npu_runtime {
     struct npu_runtime_counters counters;
     atomic_uint failed;
     unsigned prepared, bound, resident, tensor_links;
+    enum npu_declaration_result refusal; /* why prepare refused: the resource that did not fit */
 };
 
 /* Size of the parent allocation for slots slots and these catalogue models,
@@ -167,8 +192,16 @@ enum npu_declaration_result npu_runtime_reservation_with(const struct npu_runtim
 int npu_runtime_register(struct npu_runtime *, const void *model, size_t bytes, unsigned *index);
 enum npu_declaration_result npu_runtime_reservation(const struct npu_runtime_model *models, unsigned count, unsigned slots, size_t pool_bytes,
                             size_t *bytes);
-/* The bytes at the start of a reservation for the per-graph tables of count graphs (a multiple of 64). */
-size_t npu_runtime_tables_bytes(unsigned count);
+/* The work memory a sizing call needs for these models: one layout of the largest graph and a record of each graph's regions
+ * (0 when a model is not admissible). */
+size_t npu_runtime_scratch_bytes(const struct npu_runtime_model *models, unsigned count);
+/* The bytes at the start of a reservation for the fixed tables of count graphs and slots slots: the catalogue, the plans and
+ * digests, the slot records (a multiple of 64). The variable tables (layouts, tensors, service, buffers) follow them and
+ * are sized by the graphs. */
+size_t npu_runtime_tables_bytes(unsigned count, unsigned slots);
+/* The bytes of EL1-private metadata prepare takes from config.meta for the same arguments (0 when a graph is refused). */
+size_t npu_runtime_meta_bytes_with(const struct npu_runtime_model *, unsigned count, unsigned slots,
+                                   const struct npu_runtime_bounds *);
 size_t npu_runtime_requirements_with(const struct npu_runtime_model *, unsigned count, unsigned slots,
                                     const struct npu_runtime_bounds *);
 size_t npu_runtime_requirements(const struct npu_runtime_model *, unsigned count, unsigned slots);

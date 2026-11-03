@@ -83,6 +83,9 @@ int board_application_pins(struct a733_pin_handoff *pins)
  * the startup with its domain-4 row, the bound service, the interrupt and the
  * client. The worker, the bootstrap and the client run on core 1, the core
  * that receives INTID 97; USB0 and the power service stay on core 0. */
+/* This application's own arenas (it predates the OS runtime's sizing): the sizing call's work memory and the EL1 metadata. */
+static _Alignas(64) uint8_t sizing_scratch[65536], meta_memory[262144];
+static struct npu_meta_window meta_window;
 int board_application_start(void)
 {
     struct npu_board_application *a=&npu_board;
@@ -92,13 +95,15 @@ int board_application_start(void)
     if(!npu_board_session_valid(&a->session)||memcmp(a->session.board.image,a733_smp_build_id,32))return 0;
     struct device_memory_pool *pool=a733_memory_reservations_init();
     if(!npu_board_model_count)return 0;
-    const size_t bytes=npu_runtime_requirements(npu_board_models,npu_board_model_count,NPU_BOARD_SLOTS);
+    const struct npu_runtime_bounds sizing={.scratch=sizing_scratch,.scratch_bytes=sizeof sizing_scratch};
+    const size_t bytes=npu_runtime_requirements_with(npu_board_models,npu_board_model_count,NPU_BOARD_SLOTS,&sizing);
+    npu_meta_window_init(&meta_window,meta_memory,sizeof meta_memory);
     if(!pool||!bytes||!device_memory_acquire(pool,a->session.owner,bytes,&a->lease,&a->extent) ||
        a->extent.bytes!=bytes)return 0;
     a->pool=pool;
     struct npu_runtime_config config={.models=npu_board_models,.count=npu_board_model_count,.slots=NPU_BOARD_SLOTS,.cpu=a->extent.cpu,
         .physical=a->extent.physical,.bytes=a->extent.bytes,.register_cpu=0x03600000,
-        .register_physical=0x03600000,.fatal=fatal};
+        .register_physical=0x03600000,.fatal=fatal,.meta=&meta_window.meta};
     if(!npu_runtime_prepare(&a->runtime,&config))return 0;
     const struct a733_board_session *s=&a->session.board;
     const struct a733_npu_startup_config startup={{{s->fabric[0],s->fabric[1],s->fabric[2]},

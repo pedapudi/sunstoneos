@@ -6,8 +6,6 @@
 static struct {
     struct npu_runtime *rt;
     TickType_t wait;
-    /* Written only by each slot's client task. */
-    unsigned failed[NPU_RUNTIME_SLOTS];
 } job;
 
 int npu_job_attach(struct npu_runtime *rt, TickType_t wait)
@@ -18,18 +16,18 @@ int npu_job_attach(struct npu_runtime *rt, TickType_t wait)
     job.wait = wait;
     return 1;
 }
-/* The slot whose client is the calling task, or NPU_RUNTIME_SLOTS. */
+/* The slot whose client is the calling task, or NPU_RUNTIME_NONE. */
 static unsigned own_slot(void)
 {
-    if (!job.rt || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return NPU_RUNTIME_SLOTS;
+    if (!job.rt || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return NPU_RUNTIME_NONE;
     const TaskHandle_t self = xTaskGetCurrentTaskHandle();
     for (unsigned i = 0; i < job.rt->slots; ++i)
         if (job.rt->slot[i].client == self) return i;
-    return NPU_RUNTIME_SLOTS;
+    return NPU_RUNTIME_NONE;
 }
 static int failed_at(unsigned slot, uint32_t reason, uint32_t site, const void *caller)
 {
-    job.failed[slot] = 1;
+    job.rt->slot[slot].job_failed = 1; /* written only by the slot's client task */
     sunstone_crumb_fail(site, reason, caller);
     sunstone_crumb(NPU_JOB_CRUMB_FAILED, reason);
     return -1;
@@ -58,16 +56,14 @@ static size_t extent(unsigned slot, enum nbg_section_id section)
 {
     size_t total = 0;
     struct npu_runtime_tensor t;
-    for (unsigned i = 0; i < NBG_ASSEMBLY_MAX_TENSORS &&
-         npu_runtime_tensor(job.rt, slot, section, i, &t) == 1; ++i) total += t.bytes;
+    for (unsigned i = 0; npu_runtime_tensor(job.rt, slot, section, i, &t) == 1; ++i) total += t.bytes;
     return total;
 }
 /* Copy between the caller's bytes and the tensor windows, in model order. */
 static void copy(unsigned slot, enum nbg_section_id section, unsigned char *bytes)
 {
     struct npu_runtime_tensor t;
-    for (unsigned i = 0; i < NBG_ASSEMBLY_MAX_TENSORS &&
-         npu_runtime_tensor(job.rt, slot, section, i, &t) == 1; ++i) {
+    for (unsigned i = 0; npu_runtime_tensor(job.rt, slot, section, i, &t) == 1; ++i) {
         if (section == NBG_INPUT) memcpy(t.data, bytes, t.bytes);
         else memcpy(bytes, t.data, t.bytes);
         bytes += t.bytes;
@@ -77,8 +73,8 @@ int npu_job_run(unsigned model, const void *in, size_t in_bytes, void *out, size
                 uint64_t deadline_us)
 {
     const unsigned slot = own_slot();
-    if (slot == NPU_RUNTIME_SLOTS) return refused(1);
-    if (job.failed[slot]) return -1;
+    if (slot == NPU_RUNTIME_NONE) return refused(1);
+    if (job.rt->slot[slot].job_failed) return -1;
     struct npu_runtime *rt = job.rt;
     struct npu_runtime_slot *s = &rt->slot[slot];
     if (model >= rt->count || !in || !in_bytes || !out || !out_bytes || !deadline_us ||
@@ -113,8 +109,8 @@ int npu_job_run(unsigned model, const void *in, size_t in_bytes, void *out, size
 int npu_job_close(void)
 {
     const unsigned slot = own_slot();
-    if (slot == NPU_RUNTIME_SLOTS) return refused(5);
-    if (job.failed[slot]) return -1;
+    if (slot == NPU_RUNTIME_NONE) return refused(5);
+    if (job.rt->slot[slot].job_failed) return -1;
     struct npu_runtime_slot *s = &job.rt->slot[slot];
     if (!s->opened || s->closed) return refused(6);
     struct npu_service_reply r;

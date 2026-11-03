@@ -45,10 +45,19 @@ def load(path, data):
     return lib
 
 
-def requirements(raw):
-    """(allocation bytes by slot, inputs, outputs, dynamic, nn_operations, command_body_bytes) from a layout."""
-    sizes = [struct.unpack_from('<III', raw, 12 * i)[2] for i in range(SLOTS)]
-    inputs, outputs, nn, _, _, body, dynamic = struct.unpack_from('<7I', raw, 12 * SLOTS)
+def new_layout(entries=64):
+    """A struct nbg_assembly_layout (include/nbg_assembly.h) with a caller's table of entries: {table pointer, capacity, counts}."""
+    table = (c.c_uint32 * (3 * entries))()
+    layout = (c.c_ubyte * 16384)()
+    struct.pack_into('<QI', layout, 0, c.addressof(table), entries)
+    layout.table = table   # the layout points into it: keep it alive as long as the layout is
+    return layout, table
+
+
+def requirements(raw, table):
+    """(allocation bytes by slot, inputs, outputs, dynamic, nn_operations, command_body_bytes) from a layout and its table."""
+    sizes = [struct.unpack_from('<III', bytes(table), 12 * i)[2] for i in range(SLOTS)]
+    inputs, outputs, nn, _, _, body, dynamic = struct.unpack_from('<7I', raw, 12)
     return sizes, inputs, outputs, dynamic, nn, body
 
 
@@ -57,9 +66,9 @@ def assemble(lib, data, stepwise):
     buf = c.create_string_buffer(data, len(data))
     model = (c.c_ubyte * 4096)()
     assert lib.nbg_model_open(buf, len(data), model) == 0
-    layout = (c.c_ubyte * 16384)()
+    layout, table = new_layout()
     assert lib.nbg_assembly_layout(model, layout) == 1
-    sizes, inputs, outputs, dynamic, nn, body = requirements(bytes(layout))
+    sizes, inputs, outputs, dynamic, nn, body = requirements(bytes(layout), table)
     count = 4 + inputs + outputs + dynamic
     maps, array, device = [], (Buffer * count)(), 0x10000000
     for i in range(count):
@@ -67,7 +76,7 @@ def assemble(lib, data, stepwise):
             mem = mmap.mmap(-1, sizes[i]); maps.append(mem)
             array[i] = Buffer(c.addressof(c.c_char.from_buffer(mem)), sizes[i], device)
             device += (sizes[i] + 0xfffff) & ~0xfffff
-    out = (c.c_ubyte * 16384)()
+    out, out_table = new_layout()
     if stepwise:
         cursor = (c.c_uint32 * 4)()
         assert lib.nbg_assembly_begin(model, array, count, out, cursor) == 1
@@ -88,7 +97,7 @@ def assemble(lib, data, stepwise):
 
 def admits(lib, data):
     buf = c.create_string_buffer(data, len(data)); model = (c.c_ubyte * 4096)()
-    return lib.nbg_model_open(buf, len(data), model) == 0 and lib.nbg_assembly_layout(model, (c.c_ubyte * 16384)()) == 1
+    return lib.nbg_model_open(buf, len(data), model) == 0 and lib.nbg_assembly_layout(model, new_layout()[0]) == 1
 
 
 def walk(command, device, limit):
@@ -170,7 +179,7 @@ def main():
                                                        '#define NBG_SEGMENT_BYTES 128u')]), None)
     data = (args.graphs / 'sh-exp' / 'export_nbg_unify/network_binary.nb').read_bytes()
     buf = c.create_string_buffer(data, len(data)); model = (c.c_ubyte * 4096)()
-    assert tiny.nbg_model_open(buf, len(data), model) == 0 and tiny.nbg_assembly_layout(model, (c.c_ubyte * 16384)()) == 0
+    assert tiny.nbg_model_open(buf, len(data), model) == 0 and tiny.nbg_assembly_layout(model, new_layout()[0]) == 0
     print('PASS %d graphs, %d links, tiny limit refused' % (len(GRAPHS), total_links))
 
 

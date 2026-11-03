@@ -31,6 +31,16 @@ static struct os_npu_application {
     unsigned attempted,started,opened,jobs;
     uint32_t window_ms; /* the reply wait window of the last call */
 } npu;
+/* The EL1-private metadata of the runtime, the service and the queue adapter (include/npu_pool.h, struct npu_meta). The OS has
+ * no EL1-only allocator that grows at run time; this arena is image data and bss, which the shared tables map for EL1 only (no
+ * EL0 access), linked at exactly the size the image's declaration needs (os-npu-meta.h, from tools/npu-meta-header.py: the
+ * runtime's own sizing call). A session that declares more is refused at start. The unified memory work
+ * (docs/designs/unified-memory.md, step 1) replaces the arena with kernel-owned ledger buffers; only this definition changes. */
+#ifndef OS_NPU_META_BYTES /* a host check that supplies its own metadata allocator defines it */
+#include "os-npu-meta.h"
+#endif
+static _Alignas(64) uint8_t npu_meta_arena[OS_NPU_META_BYTES];
+static struct npu_meta_window npu_meta_state;
 static atomic_uint bootstrap_ran; /* The bootstrap task has run: the service may have powered or submitted. */
 static unsigned creating; /* Only while os_npu_start creates its two tasks. */
 extern unsigned char __os_npu_pool_start[],__os_npu_pool_end[];
@@ -103,7 +113,7 @@ static int fail_at(uint32_t line,enum npu_service_operation op,unsigned model,ui
         if(watch){f->watch_valid=1;f->now=watch->now;f->end=watch->end;f->gate=watch->gate;}
         /* These fields have atomic publication. A timeout does not authorize
          * reading mutable controller fields owned by the NPU worker. */
-        f->slot_state=atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire);
+        f->slot_state=npu.runtime.slot?atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire):0; /* null before prepare */
         f->runtime_failed=atomic_load_explicit(&npu.runtime.failed,memory_order_acquire);
         f->irq_pending=atomic_load_explicit(&npu.runtime.service.irq_pending,memory_order_acquire);
         f->irq_stopped=atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire);
@@ -500,9 +510,9 @@ static struct npu_image_needs image_needs(void)
 /* The tables this image holds (fixed when it is built). */
 static struct npu_tables image_tables(void)
 {
-    /* Graphs have no table limit: their tables come from the reservation. */
-    return (struct npu_tables){NPU_RUNTIME_SLOTS,UINT32_MAX,SS_NPU_QUEUE_MAX_DEPTH,
-        SS_NPU_QUEUE_MAX_HANDLES*SS_NPU_QUEUE_MAX_TENSORS};
+    /* Slots, graphs and links have no table limit: their tables come from the reservation (memory bounds them). The ring's
+     * depth is the one bounded structure. */
+    return (struct npu_tables){UINT32_MAX,UINT32_MAX,SS_NPU_QUEUE_MAX_DEPTH,UINT32_MAX};
 }
 static struct npu_declaration declaration_of(const struct os_npu_session *n)
 {
@@ -567,14 +577,12 @@ int os_npu_start(void)
     /* Graphs beyond the linked ones are loaded at run time, within the bounds the session declares. */
     struct npu_runtime_bounds bounds={0};
     if(declared.graph_bytes&&declared.tensor_bytes&&declared.graphs>os_npu_model_count)
-        bounds=(struct npu_runtime_bounds){declared.graphs-os_npu_model_count,declared.graph_bytes,declared.tensor_bytes,NULL};
+        bounds=(struct npu_runtime_bounds){.capacity=declared.graphs-os_npu_model_count,.graph_bytes=declared.graph_bytes,.tensor_bytes=declared.tensor_bytes};
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
-    /* A queue image keeps graph i resident in slot i: each slot is sized by its own graph, not by the largest. */
-    static unsigned slot_model[NPU_RUNTIME_SLOTS];
-    if(!bounds.capacity&&slots==os_npu_model_count&&slots<=NPU_RUNTIME_SLOTS){
-        for(unsigned i=0;i<slots;++i)slot_model[i]=i;
-        bounds.slot_model=slot_model;
-    }
+    /* A queue image keeps graph i resident in slot i: each slot is sized by its own graph, not by the largest. The queue's
+     * tables (handles, tensors, edges) are reserved with the rest, from the declared links. */
+    if(!bounds.capacity&&slots==os_npu_model_count)bounds.per_graph=1;
+    bounds.queue=1;bounds.queue_links=declared.links;bounds.queue_image_links=(unsigned)ss_npu_queue_edges.count;
 #endif
     /* The lease is the whole pool and prepare takes what the declaration needs from its start (it refuses if that is more).
      * Sizing the reservation first would admit every graph twice before the scheduler, which the secondary cores wait for
@@ -592,14 +600,23 @@ int os_npu_start(void)
     if(npu.extent.cpu!=start||npu.extent.physical!=start||npu.extent.bytes!=need)return REFUSE();
     struct npu_runtime_config config={.models=os_npu_models,.count=os_npu_model_count,.slots=slots,.bounds=bounds,.cpu=npu.extent.cpu,
         .physical=npu.extent.physical,.bytes=npu.extent.bytes,.register_cpu=0x03600000,
-        .register_physical=0x03600000,.fatal=fatal};
+        .register_physical=0x03600000,.fatal=fatal,.meta=&npu_meta_state.meta};
+    npu_meta_window_init(&npu_meta_state,npu_meta_arena,sizeof(npu_meta_arena));
     if(!npu_runtime_prepare(&npu.runtime,&config)){
-        /* Name the cause: the reservation says whether a graph is refused or the declaration does not fit the pool. */
-        size_t needed=0;
-        const enum npu_declaration_result fit=npu_runtime_reservation_with(os_npu_models,os_npu_model_count,slots,OS_NPU_POOL_BYTES,&needed,&bounds);
-        if(fit!=NPU_DECLARATION_OK)board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),(uint32_t)fit,SUNSTONE_CRUMB_HERE());
+        /* Name the cause: prepare says which resource did not fit (a graph that is refused, the NPU's address space, or the
+         * pool for the declaration's tables and regions). */
+        if(npu.runtime.refusal!=NPU_DECLARATION_OK)
+            board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),(uint32_t)npu.runtime.refusal,SUNSTONE_CRUMB_HERE());
         device_memory_retain(&npu.pool,npu.lease);return REFUSE();
     }
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+    /* The queue's tables are in the reservation: take them before the scheduler starts, so the application's first open
+     * finds its ring sized for the declaration. */
+    if(!os_npu_queue_tables(&npu.runtime)){
+        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),(uint32_t)NPU_DECLARATION_MEMORY,SUNSTONE_CRUMB_HERE());
+        device_memory_retain(&npu.pool,npu.lease);return REFUSE();
+    }
+#endif
     if(!os_npu_sdk_bind(&npu.runtime)){device_memory_retain(&npu.pool,npu.lease);return REFUSE();}
     device_memory_lookup(&npu.pool,npu.lease)->state=DEVICE_MEMORY_DEVICE;
     const struct a733_board_session *b=&s->board;
