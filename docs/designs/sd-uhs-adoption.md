@@ -171,3 +171,10 @@ Stop word `0x48873f00`, site 17: the platform faulted at the register write of `
 again after the restart before phase 1, in platform stage IDENTIFY; the card was at 1.8 V and reported group 1 support `0x1f`. The word did not say which register. The host checks that exercise the restart (the platform model, and the lifetimes model with every write
 offered to the real adapter filter) pass, and the IDMAC value rule accepts every write of the restart for a configuration with and without a descriptor area; what differs on the board is that this probe configures descriptor DMA, which the host models of the restart do not.
 The next submission is the same run with the stop word extended for site 17: the first register the adapter refused, the core's setup step and its restart step, so a second stop names the access (apps/sd-backup-probe/input.py, `stop` with site 17).
+
+### Second submission (entry `1793666839062917650-d5d01b71`): the cause
+
+Stop word `0x48872607`, site 17: the first register refused was SMHC offset `0x18`, the command register, in the core's identification (setup step 6). The native adapter's CMD6 rule (`drivers/storage/a733_mmc_platform_native.c`) admitted function 1 and, in the UHS-I profile,
+function 3 only; the restart under the SDR50 ceiling sends the function 2 switch (`0x00fffff2`, `0x80fffff2`), which the adapter refused. That is the restart of phase 2; the report of the first run, which had the same stop, is lost, so its stop at the same place is consistent with this
+and not proved. The host models did not cover it because their restarts used the ceiling SDR104 only, and no check had put a card with SDR50 through the adapter filter. The adapter now admits the function 2 switch in the UHS-I profile, and the lifetimes model walks a card with SDR50
+through the ceilings SDR104, SDR50 and SDR25 with every write offered to the real filter: it fails with the old rule (the restart under SDR50 is refused) and passes with the new one. The prediction above is unchanged.
