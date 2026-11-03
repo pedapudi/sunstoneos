@@ -143,7 +143,7 @@ application performance result.
 
 ## Host checks and the returning image have different evidence scopes
 
-`checks/gpu-local.py` checks the real compiler product and reproduces its
+no host check (evidence: docs/evidence/gpu-compute-local-memory.jsonl) checks the real compiler product and reproduces its
 tracked descriptor. It refuses malformed compiler metadata and compares every
 supported common-store allocation against the pinned Mesa CDM generator. It
 checks legacy command bytes and preservation of output on resource refusal.

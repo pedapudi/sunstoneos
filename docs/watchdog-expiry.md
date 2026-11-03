@@ -139,7 +139,7 @@ checks execute the linked diagnostic in an instruction model and exercise the
 host protocol through injected transport callbacks.
 
 ```sh
-"$HOME/.cache/sunstoneos/venv/bin/python" checks/watchdog-expiry.py \
+"$HOME/.cache/sunstoneos/venv/bin/python" no host check (evidence: buses-rtc-watchdog-fel-return; docs/status/buses-rtc.md) \
   "$HOME/.cache/sunstoneos/build/watchdog-expiry/probe.bin" \
   "$HOME/.cache/sunstoneos/build/watchdog-expiry/probe.elf"
 python3 no host check

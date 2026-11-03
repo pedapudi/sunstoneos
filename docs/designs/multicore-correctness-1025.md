@@ -54,7 +54,7 @@ Cost: each core executes 13 more instructions once per entry; the mirror adds 18
 
 ## 4. The return-deadline constants have one definition
 
-`boot/a733/secondary-local-probe.h` defines `DEADLINE_RECORD` (`0x4201b200`), `DEADLINE_RECORD_BYTES`, `DEADLINE_RECORD_MAGIC` and `DEADLINE_TICKS` as plain literals, with the C declarations under `#ifndef __ASSEMBLER__`. `workload-deadline-probe.S` and `secondary-identity-probe.c` include it. The builder reads every `#define NAME VALUE` line with a regular expression, as `checks/memtest-image.py` does; the host modules take the values from the builder, and the model reads the header with the same expression.
+`boot/a733/secondary-local-probe.h` defines `DEADLINE_RECORD` (`0x4201b200`), `DEADLINE_RECORD_BYTES`, `DEADLINE_RECORD_MAGIC` and `DEADLINE_TICKS` as plain literals, with the C declarations under `#ifndef __ASSEMBLER__`. `workload-deadline-probe.S` and `secondary-identity-probe.c` include it. The builder reads every `#define NAME VALUE` line with a regular expression, as no host check (evidence: memory-qualification-host-models) does; the host modules take the values from the builder, and the model reads the header with the same expression.
 
 ## 5. The host module reapplies the builder's patch plan
 
@@ -66,7 +66,7 @@ The resident contract magic in `platform/a733-smp-cached/boot.h` is `0x415337335
 
 ## Workload model counter rate
 
-The workload instruction models (`checks/all-core-task-workload-probe.py` and the return-deadline model built on it) advance the counter `COUNTER_STEP` = 250 ticks per scheduling quantum, about 50,000 CPU0 instructions per tick period. The image reprograms its tick as the previous compare value plus the period, so a tick handled late fires again at once; a faster modeled counter stalls CPU0's worker behind back-to-back ticks. Both workload models fail at once, naming the saturated model, when CPU0's enabled tick compare value falls more than one period (24,000 counter ticks) behind the modeled counter. A core on the board executes roughly a million instructions per tick period, so the board does not approach this limit. Programming the tick from the counter, as Linux does, would remove the catch-up behavior and belongs to [multicore-performance-1025.md](multicore-performance-1025.md).
+The workload instruction models (no host check (evidence: a733-smp-supervised-all-core-task-workload (docs/evidence/a733-smp-supervised.jsonl)) and the return-deadline model built on it) advance the counter `COUNTER_STEP` = 250 ticks per scheduling quantum, about 50,000 CPU0 instructions per tick period. The image reprograms its tick as the previous compare value plus the period, so a tick handled late fires again at once; a faster modeled counter stalls CPU0's worker behind back-to-back ticks. Both workload models fail at once, naming the saturated model, when CPU0's enabled tick compare value falls more than one period (24,000 counter ticks) behind the modeled counter. A core on the board executes roughly a million instructions per tick period, so the board does not approach this limit. Programming the tick from the counter, as Linux does, would remove the catch-up behavior and belongs to [multicore-performance-1025.md](multicore-performance-1025.md).
 
 The model lets the EL3-routed deadline interrupt take CPU0 in `identity_park` at EL1 in the `stalled-no-tick` case, as the hardware does. The core 3 reproduction cases (`-secondary-unfixed`) require only that core 3 itself did not reach OFF.
 

@@ -922,7 +922,7 @@ upload over USB affects only the USB mimus image.
 changes.
 
 **How to measure.** Extend the modeled-endpoint USB0 cases
-([checks/board-application.py](../../checks/board-application.py)) with a transmit model that completes after N µs. Assert
+(no host check (evidence: docs/status/security.md (mentions it); no evidence record)) with a transmit model that completes after N µs. Assert
 more than one packet per pass, unchanged request and acknowledgement order, and
 completion of a 4168-byte response in one or two modeled ticks. Physical
 throughput is timed by the host in a later bounded board session.
@@ -1836,7 +1836,7 @@ content edit must still change `build-id.txt`.
 ### Hook only the addresses that matter in emulated checks
 
 **Finding:** `checks-harness-8` (medium).
-**Files:** [checks/storage-read-single-core.py](../../checks/storage-read-single-core.py).
+**Files:** no host check (evidence: docs/status/storage.md; mbus-restore-host-checks).
 
 **Current behavior.** 120 of the 176 Unicorn code-hook registrations in
 `checks/` have no address range, so Python runs on every emulated instruction.
@@ -1853,7 +1853,7 @@ budgets as instruction counts only.
 **Expected gain.** Ten to a hundred times less emulation time in the migrated
 checks, and results that do not depend on host load.
 
-**How to measure.** Run `storage-read-single-core.py` before and after against
+**How to measure.** Run no host check (evidence: docs/status/storage.md; mbus-restore-host-checks) before and after against
 the same image: identical `results.json` and about an order of magnitude less
 wall time.
 

@@ -65,7 +65,7 @@ The vendor device tree assigns G2D 300 MHz (`sun60iw2p1.dtsi` lines 3383–3384)
 
 - `checks/el3-mbus.py OUTPUT` builds `checks/el3-mbus.c` with sanitizers and runs the admission, master-check and read-back cases. It also assembles `boot/a733/mbus-window.S`, requires it to be free of relocations and equal to the header's array, and runs it under Unicorn at `0x5f000` (including a stuck update bit at each of the four waits). It also pins the sixteen ROM and boot0 words that the header cites.
 - `checks/a733-monitor-are.py` runs the returning monitor's instructions: from the ROM's value it requires the six MBUS writes before the BL31 security writes and the log line `MBUS 0x84000000 0x81000000 0`. With the GPU clocked or DMA0 busy it requires the log line with code 8 or 9, no MBUS write and a normal start.
-- `checks/a733-smp-cached.py` models boot0's value, so the restore makes no write there; `checks/secondary-local-probe.py` admits the restore's two reads.
+- `checks/a733-smp-cached.py` models boot0's value, so the restore makes no write there; no host check (evidence: a733-smp-supervised-secondary-local) admits the restore's two reads.
 - `checks/sram-window-reservation.py` fails when any linker script region, `ldr sp` stack, Python SRAM region table or hexadecimal literal outside the owning files overlaps `0x5f000`–`0x5ffff`. The DDR start (`tools/run-ddr.py`, `boot/a733/ddr-entry.S`) loads boot0 over the page before any image runs and is allowed with that reason.
 - `checks/board-bundles.py`: the row numbers with `RESERVED_POSITIONS` (19 and 20) count from 1 without a gap.
 - No host check covers a session that names G2D at 300 MHz or the refusal of a 100 MHz session.

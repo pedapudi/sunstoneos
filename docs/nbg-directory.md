@@ -93,7 +93,7 @@ requirements. CRC also supplies no authentication for the payloads it covers.
 
 ## The focused comparison reuses the numerical fixture
 
-[nbg-directory-reference.py](../checks/nbg-directory-reference.py) accepts the
+no host check (evidence: docs/nbg-directory.md) accepts the
 pinned model, the SDK inspector and a new output directory. It extracts the
 relevant DWARF type definitions from the inspector, records directory and tensor
 data, and computes every checksum with Python zlib. No vendor code executes.

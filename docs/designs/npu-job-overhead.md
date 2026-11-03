@@ -29,7 +29,7 @@ The register pass selects this point by default (`a733_npu_startup_rate`; `apps/
 | Cache lines, publication + finish | 19,520 + 17,152 | 2,432 + 64 | same |
 | Client SUBMIT to DONE, convolution QEMU model | 522-566 µs | 182-221 µs | same |
 
-The host figures come from `checks/npu-job-cost.py`, which runs the image's own constructor, SUBMIT and job callbacks in Unicorn and counts instructions. Doorbell to interrupt for ShuffleNetV2 is 2.91 ms at 852 MHz and 3.69 ms at 492 MHz.
+The host figures come from no host check (evidence: npu-job-overhead-cost-breakdown), which runs the image's own constructor, SUBMIT and job callbacks in Unicorn and counts instructions. Doorbell to interrupt for ShuffleNetV2 is 2.91 ms at 852 MHz and 3.69 ms at 492 MHz.
 
 ## Limits and open work
 

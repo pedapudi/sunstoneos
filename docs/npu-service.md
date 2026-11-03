@@ -120,7 +120,7 @@ the interrupt stop. A controller fault, such as an expired deadline, retains
 the controller and every member's buffers; every member then receives FAULT.
 Exclusive mode, the default, is unchanged.
 
-The [shared-mode check](../checks/npu-service-shared.c) runs three EL0 member
+The shared-mode check (since removed) runs three EL0 member
 tasks on two QEMU cores against the actual controller, memory policy and
 native cache operations, with a register model that completes one job per
 credit granted by the check. It covers:
@@ -138,11 +138,11 @@ credit granted by the check. It covers:
 
 Before scheduling, sharing refuses a command overlapping internal SRAM and a
 second `npu_service_share` call.
-[npu-session.py](../checks/npu-session.py) builds the check with the
+no host check builds the check with the
 npu-service-model flags and link line and runs it:
 
 ```sh
-checks/npu-session.py BUILD_DIRECTORY NEW_OUTPUT_DIRECTORY --mode service-shared
+no host check BUILD_DIRECTORY NEW_OUTPUT_DIRECTORY --mode service-shared
 ```
 
 It passed seven consecutive QEMU runs; results are under
@@ -185,7 +185,7 @@ runtime loop. An image that never calls `npu_service_runtime` therefore links
 neither the loop nor its state.
 
 [npu-session-runtime.c](../checks/npu-session-runtime.c) checks the mode with
-the runtime; [npu-session.py](../checks/npu-session.py) runs it with
+the runtime; no host check runs it with
 `--mode runtime`. The shared-mode, session, reserved, exclusive and interrupt
 checks pass with the changed source.
 

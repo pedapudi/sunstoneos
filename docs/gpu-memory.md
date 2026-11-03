@@ -114,7 +114,7 @@ After relevant inputs change, configure the pinned firmware as described in
 ```sh
 cmake -S . -B ~/.cache/sunstoneos/build/qemu-virt
 cmake --build ~/.cache/sunstoneos/build/qemu-virt --target gpu-memory-model -j 8
-python3 checks/pvr-gpu-service.py \
+python3 no host check \
   --elf ~/.cache/sunstoneos/build/qemu-virt/gpu-memory-model.elf \
   --qemu ~/.cache/sunstoneos/host/usr/bin/qemu-system-aarch64 \
   --nm /usr/lib/llvm-21/bin/llvm-nm \

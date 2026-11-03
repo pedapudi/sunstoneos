@@ -174,19 +174,19 @@ measurement.
 | 4 | `ICC_PMR_EL1` read-back of the API mask | `patches/freertos-smp-c.patch` (xPortStartScheduler) | same | `...readback_after_write_api_mask` |
 | 5 | Secure PMR bit 7 after EL3 writes 0xff | `platform/a733-smp-cached/continue.S` | `secure_pmr` in the Unicorn models | `gic.cpuif.icc_pmr_el1.inherited` |
 | 6 | `ICC_CTLR_EL1` PRIbits 5 (only `ICC_AP0R0` and `ICC_AP1R0` exist), IDbits | `platform/a733-smp-cached/continue.S` comments and active priority clears | `checks/a733-smp-cached.py` | `gic.cpuif.icc_ctlr_el1.pribits`, `.idbits` |
-| 7 | `ICC_RPR_EL1` at idle 0xff | the FreeRTOS port (`patches/freertos-smp-c.patch`) | `checks/a733-supervised-scheduler.py`, `checks/a733-smp-cached.py` | `gic.cpuif.icc_rpr_el1.idle` |
+| 7 | `ICC_RPR_EL1` at idle 0xff | the FreeRTOS port (`patches/freertos-smp-c.patch`) | no host check (evidence: docs/evidence/a733-facts-probe.jsonl a733-facts-probe-removed-host-check-results), `checks/a733-smp-cached.py` | `gic.cpuif.icc_rpr_el1.idle` |
 | 8 | `GICD_CTLR` ARE_S and ARE_NS set and group enables clear at route time | `platform/a733-smp-cached/irq_table.c` (a733_irq_table_route) | `checks/a733-irq-table.c` | `gic.dist.gicd_ctlr.*` |
 | 9 | `GICD_TYPER` line count bounds each routed INTID | `platform/a733-smp-cached/irq_table.c` | `checks/a733-irq-table.c` | `gic.dist.gicd_typer.itlinesnumber` |
-| 10 | INTID 97 group, configuration, enable, pending, active, priority, route (bind clauses 3 to 9) | `platform/a733/npu_irq.c` bind_refusal | `checks/npu-board-providers.py` | `gic.dist.spi97.*` |
+| 10 | INTID 97 group, configuration, enable, pending, active, priority, route (bind clauses 3 to 9) | `platform/a733/npu_irq.c` bind_refusal | no host check (evidence: npu-board-image-checks) | `gic.dist.spi97.*` |
 | 11 | INTID 187 configuration and priority 0xb0 | `apps/board/host_irq.c` board_host_irq_bind | `checks/usb-host-irq.c` | `gic.dist.spi187.*` |
 | 12 | INTID 71 and 143 routes at priority 0xd8 | `tools/sunstone-manifest.py` route table, `apps/os/thermal.c`, `apps/os/audio.c` | `checks/a733-irq-table.c` | `gic.dist.spi71.*`, `spi143.*` |
 | 13 | Other device SPIs: 56 to 61, 67, 69, 70, 80, 81, 95, 149, 153, 161, 185, 200, 201, 228, 242 | `drivers/spi`, `include/a733_pwm.h`, `a733_lradc.h`, `a733_adc.h`, `a733_gpu_backend.h`, `a733_ce.h`, `drivers/rtc/a733_rtc_boot.c`, `apps/isp0/irq.h`, `apps/pcie-*/irq.c` | per-driver checks | `gic.dist.spiN.*` |
-| 14 | SGI 0 priority and group (Secure 0xf0, Non-secure view) | `platform/a733-smp-cached/continue.c`, port | `checks/a733-supervised-scheduler.py` | `gic.redist.intid0.priority` |
+| 14 | SGI 0 priority and group (Secure 0xf0, Non-secure view) | `platform/a733-smp-cached/continue.c`, port | no host check (evidence: docs/evidence/a733-facts-probe.jsonl a733-facts-probe-removed-host-check-results) | `gic.redist.intid0.priority` |
 | 15 | `GICR_TYPER`, `GICR_WAKER` words read at pre-release admission | `platform/a733-smp-cached/continue.c` | none | `gic.redist.gicr_typer`, `gicr_waker` |
 | 16 | Redistributor group, enable, pending, active words of SGI and PPI frames | `platform/a733-smp-cached/continue.c` | the Unicorn models (`0x10080`, `0x10100`) | `gic.redist.sgi_ppi.*` |
 | 17 | `CNTFRQ_EL0` is 24 MHz | `platform/a733/counter_clock.c`, `platform/a733-smp-cached/start.S` (writes it), `include/` conversions by 24 | `platform/qemu-os/platform.c` (declares 24 MHz), `checks/a733-smp-cached.py` | `cpu.cntfrq_el0` |
 | 18 | `MPIDR_EL1` affinity: core in Aff1, Aff0, Aff2 and Aff3 zero | `platform/a733/cpu_start.c` a733_cpu_index | `checks/a733-smp-cached.py` (`0x81000000 | c << 8`) | `cpu.mpidr_el1.*` |
-| 19 | `MIDR_EL1` masked part number: Cortex-A55 on cores 0 to 5, Cortex-A76 on cores 6 and 7 | `platform/a733/cpu_coherence.c`, `platform/a733/cpu_entry.c` | `checks/a733-smp-cached.py`, `checks/a733-supervised-scheduler.py` (`0x412fd050`, `0x414fd0b1`) | `cpu.midr_el1.*` |
+| 19 | `MIDR_EL1` masked part number: Cortex-A55 on cores 0 to 5, Cortex-A76 on cores 6 and 7 | `platform/a733/cpu_coherence.c`, `platform/a733/cpu_entry.c` | `checks/a733-smp-cached.py`, no host check (evidence: docs/evidence/a733-facts-probe.jsonl a733-facts-probe-removed-host-check-results) (`0x412fd050`, `0x414fd0b1`) | `cpu.midr_el1.*` |
 | 20 | `REVIDR_EL1` selects errata workarounds | `platform/a733/cpu_entry.c` | the same models | `cpu.revidr_el1` |
 | 21 | `CTR_EL0`, `CLIDR_EL1`, `CCSIDR_EL1` per cache: line size, sets, ways, levels | `arch/aarch64/cache.S`, `platform/a733/cpu_observation.c`, `kernel/scheduler/topology.c` | `checks/a733-smp-cached.py` (`ctr_el0`, `clidr_el1`) | `cpu.ctr_el0.*`, `cpu.clidr_el1`, `cache.ccsidr_el1.selN` |
 | 22 | `ID_AA64ISAR0_EL1` atomics (LSE), `ID_AA64MMFR2_EL1.CCIDX` | `platform/a733/cpu_observation.c` | `checks/a733-smp-cached.py` | `cpu.id_aa64isar0_el1.atomic`, `cpu.id_aa64mmfr2_el1.ccidx` |
@@ -214,7 +214,7 @@ Implemented:
   bits from `ICC_CTLR_EL1.PRIbits`, selects the shifted or unshifted Non-secure view that reproduces the
   measured `ICC_PMR_EL1` read-back, fails with `ContradictsTable` when neither does, and returns an observed
   Non-secure priority for an interrupt that has one.
-- `checks/a733-smp-cached.py` and `checks/a733-supervised-scheduler.py` use `GicModel` for the priority mask,
+- `checks/a733-smp-cached.py` and no host check (evidence: docs/evidence/a733-facts-probe.jsonl a733-facts-probe-removed-host-check-results) use `GicModel` for the priority mask,
   the Non-secure writes, the Non-secure reads and the `ICC_PMR_EL1` and `ICC_RPR_EL1` views.
 - `checks/hw-facts.py` fails when one of those models hard-codes the mask, the shift or a Non-secure priority
   literal, when the table and the layout of the C code differ, and when the facts file is malformed.
@@ -242,7 +242,7 @@ Remaining, in order:
 - `checks/hw-facts.py` decodes synthetic tables (valid, skipped slots, malformed, incomplete, wrong core,
   virtual board), checks the JSON file and `GicModel` against the file and against
   contradicting files, and scans the host models.
-- The Unicorn models cannot run end to end on this tree: `checks/a733-supervised-scheduler.py` stops at
+- The Unicorn models cannot run end to end on this tree: no host check (evidence: docs/evidence/a733-facts-probe.jsonl a733-facts-probe-removed-host-check-results) stops at
   `id_aa64isar0_el1` before any change here, and the others need cached evidence. They compile and import.
 
 Results of host checks that no longer exist are kept in the evidence record [a733-facts-probe.jsonl](../evidence/a733-facts-probe.jsonl).

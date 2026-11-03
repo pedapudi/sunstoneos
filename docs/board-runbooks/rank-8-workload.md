@@ -38,7 +38,7 @@ regenerates only the records:
 
 - `build/`: rebuilt by the current `tools/prepare-secondary-identity-probe.py
   --task-workload`; its manifest (`73a422d7…`) pins the current sources.
-- A new primary-preparation snapshot from `checks/secondary-identity-probe.py`
+- A new primary-preparation snapshot from no host check (evidence: a733-smp-supervised-secondary-identity)
   (`cpu-refreeze/identity-check/`).
 - The two instruction cases, rerun with the current model
   (`cpu-refreeze/workload-check/`): the success case completes 32 rounds,
@@ -46,7 +46,7 @@ regenerates only the records:
   returns, and its report is byte-identical to the 2026-10-19 report; the
   damaged-round-count case resumes from the new completed-worker checkpoint
   and retains all cores, also with a byte-identical report.
-- The 13 host cases of `checks/all-core-first-task-host.py --task-workload`,
+- The 13 host cases of no host check (evidence: a733-smp-supervised-all-core-first-task (docs/evidence/a733-smp-supervised.jsonl)) --task-workload`,
   with the current host tools (`host/software.json`, `84fd5210…`).
 
 The current runner's own loaders (`validate_bundle`, the host profile's

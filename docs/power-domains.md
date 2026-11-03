@@ -341,7 +341,7 @@ the cost model.
   18 initialization failures with retained pins, and preservation of an untouched
   domain-4 register block. With an output
   path it writes the GPU power-on and
-  power-off register trace that `checks/a733-gpu-power-reference.py`
+  power-off register trace that no host check (evidence: docs/evidence/power-domains.jsonl power-domains-implementation-notes; docs/gpu-power.md)
   compares with the pinned PCK functions.
 - `checks/power-domains-service.c` runs the service step with a shim that
   records its ticks, wakes and notifications, at 400 kHz and 100 kHz, with one

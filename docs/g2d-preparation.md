@@ -152,7 +152,7 @@ interrupt delivery, recovery or performance.
 
 ## Focused software checks
 
-`checks/g2d-preparation.py` consumes the frozen native evidence directory and raw
+no host check (evidence: docs/evidence/g2d-preparation.jsonl) consumes the frozen native evidence directory and raw
 page-table artifact from the actual allocator case. It produces typed modeled
 facts, checks allocation and descriptor refusals, and compiles the SRAM launcher
 once. The checker records physical authority as false. The operational

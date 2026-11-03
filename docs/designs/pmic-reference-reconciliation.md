@@ -52,7 +52,7 @@ preserving its notices. No vendor driver code is linked into the diagnostic.
 ## Host evidence
 
 [The source comparison](../../checks/pmic-supply-decode.py) checks the native
-decoder against both references. [The linked client check](../../checks/pmic-supply-native.py)
+decoder against both references. no host check (evidence: docs/evidence/pmic-supply-observation.jsonl)
 covers enabled and disabled observations, an address NACK and a deadline
 fault; a failure retains the pending request, client lease and held provider
 mutex, and normal completion reaps six snapshots before releasing the lease.

@@ -290,7 +290,7 @@ ShuffleNetV2-sized slot, the placement rules of `npu_runtime_requirements` give
 8,388,608 bytes: the read-only group holds 2,953,216 bytes and ends at 4 MiB.
 The input group holds 151,552 bytes and the pool and output group 1,097,728
 bytes, and each ends on the next 2 MiB boundary.
-`checks/npu-board-providers.py` runs the image's own construction and reads the
+no host check (evidence: npu-board-image-checks) runs the image's own construction and reads the
 pool's slots afterwards; no runtime, service or client function calls the
 allocator, so LOAD and CLOSE leave the free extents unchanged (796,917,760 bytes
 free after admission).
@@ -357,7 +357,7 @@ is in the [handoff](../handoff.md).
 
 ## Host checks
 
-`checks/npu-image-checks.py` builds the images of a configured
+no host check (evidence: npu-board-image-checks) builds the images of a configured
 `apps/accelerators` build and, when given, the root `sunstone-a733-npu-board`,
 with `nice -n 10` and six jobs. It converts the reviewed session fixtures,
 608-byte version-2 NPU pages and the 9,080-byte combined session, to the reduced
@@ -366,9 +366,9 @@ layout the image's DWARF and layout words describe, and invokes each check:
 | Check | Images |
 | --- | --- |
 | `npu-stop-native.py` | Single-core, all-core, accelerator, board; fourteen cases including refused domain-4 policy and delay-row writes and the PLL gate rules |
-| `npu-single-core.py --retention-only` | Single-core; three cases |
-| `accelerator-providers.py` | Accelerator; the application's one GPU/PCK manager, the startup's borrowed providers and its single domain-4 row |
-| `npu-board-providers.py` | Board; provider construction, the pool's slots and the linked FIFO sizes |
+| no host check (evidence: docs/evidence/npu-board.jsonl, docs/evidence/npu-platform.jsonl) --retention-only` | Single-core; three cases |
+| no host check (evidence: docs/evidence/npu-board.jsonl npu-board-image-checks) | Accelerator; the application's one GPU/PCK manager, the startup's borrowed providers and its single domain-4 row |
+| no host check (evidence: npu-board-image-checks) | Board; provider construction, the pool's slots and the linked FIFO sizes |
 
 `platform_init` sets DAIF.I again after the local pool preparation, because a
 kernel critical section there clears it in the single-core port, and the

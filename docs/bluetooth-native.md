@@ -224,8 +224,8 @@ offsets. Physical startup time is not established, and the six-command HCI
 identity required for success is unchanged. Recorded software results are in
 [bluetooth-native.jsonl](evidence/bluetooth-native.jsonl).
 
-[bluetooth-application.py](../checks/bluetooth-application.py) runs
-[bluetooth-module-owner.c](../checks/bluetooth-module-owner.c) with the real
+no host check runs
+bluetooth-module-owner.c (since removed) with the real
 UART, H4 and HCI over the HCI wire model. It refuses a bootstrap-only or
 faulted session, another owner task or adapter, other session or platform
 owners, another topology, radio identity or firmware span and another

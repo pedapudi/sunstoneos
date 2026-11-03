@@ -191,7 +191,7 @@ models, including ShuffleNetV2's format `0x1001e`.
 - **Uncovered.** ConcatLayer and TensorCopy occur only in ShuffleNetV2, so no
   reference comparison covers them. A catalogue graph that contains them, with
   a reference, would cover them.
-- **Native.** Reserved case 0 of [npu-session.py](../checks/npu-session.py)
+- **Native.** Reserved case 0 of no host check
   delivers output bytes for all five models through the session runtime in
   QEMU. Its register model derives an output from input bytes only for a
   neural descriptor that reads a model input and writes a model output. Native
@@ -337,7 +337,7 @@ when a board application produces files; the producer is listed under
 - `tools/npu-mimus-linear.py` should expose the int32-bias rule as a function
   with unchanged behaviour; the harness would then import it in place of its
   own copy, `mimus_int32_bias`.
-- `checks/npu-conv-reference.py` and `checks/npu-dual-reference.py` can drop
+- no host check (evidence: docs/npu-conformance.md) and no host check (evidence: docs/npu-conformance.md) can drop
   their simulator comparisons: this harness compares the same fixtures on the
   same catalogued inputs and four more vectors each.
 - A reference for ConcatLayer and TensorCopy needs a pinned-compiler catalogue

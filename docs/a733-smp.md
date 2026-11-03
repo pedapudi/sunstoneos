@@ -292,7 +292,7 @@ Their ELF symbol addresses appear in the image-check evidence.
 
 ## The launcher check covers admission and refusal
 
-The launcher instruction check, `checks/a733-smp-launch.py`, executes the linked
+The launcher instruction check, no host check (evidence: docs/evidence/a733-smp.jsonl a733-smp-launcher-host), executes the linked
 AArch32 bytes with modeled registers and counter reads. Its cases cover
 admission, contract mismatch, ignored register writes, counter rollback,
 overflow, elapsed-time refusal, caller-state restoration, ARM and Thumb returns,
@@ -301,7 +301,7 @@ pre-mutation refusals, unsafe-context parking and the first-write boundary.
 a board.
 
 ```sh
-~/.cache/sunstoneos/venv/bin/python checks/a733-smp-launch.py \
+~/.cache/sunstoneos/venv/bin/python no host check (evidence: docs/evidence/a733-smp.jsonl a733-smp-launcher-host) \
   --bundle /absolute/prepared-directory --output /absolute/launcher-results.json
 ```
 

@@ -157,7 +157,7 @@ and the `+0xa80` selector and divider in the encoder's write allowlist.
 
 ## Checks
 
-`checks/video-pll.py` compares the profile with the pinned manual, kernel clock
+no host check (evidence: video-pll-host; video-pll-fel-clock-dump; docs/status/video.md) compares the profile with the pinned manual, kernel clock
 driver, device trees, operating-point table, `cedar_ve.c`, U-Boot and kernel
 device trees and the schematic text and the port 3-3 dump words. The comparison
 includes the order of the vendor's enable, lock wait, lock-enable toggle and

@@ -106,7 +106,7 @@ unobserved; post-reset DRAM is never treated as execution evidence.
 
 ## Check only the changed launch paths
 
-`checks/a733-device-launch.py` accepts the actual runtime ELF and manifest with
+no host check (evidence: docs/a733-device-launch.md, docs/launch-admission.md; none in jsonl) accepts the actual runtime ELF and manifest with
 `--image`, `--image-manifest` and `--evidence`. It prepares the bundle once, checks
 new range and evidence refusals, and composes the actual transfer helpers against
 a finite model endpoint. The ARM instruction model checks version-2 publication

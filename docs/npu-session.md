@@ -142,14 +142,14 @@ permanently. A service fault or an unexpected reply retains every model.
 
 ## Emulator checks
 
-[npu-session.py](../checks/npu-session.py) compiles
+no host check compiles
 [npu-session.c](../checks/npu-session.c), the runtime and its dependencies with
 the npu-service-model target's flags and link line, embeds catalogue models
 after verifying their hashes, and runs QEMU with two Cortex-A55 cores:
 
 ```sh
-checks/npu-session.py BUILD_DIRECTORY NEW_OUTPUT_DIRECTORY --mode session --artifacts ARTIFACTS.json
-checks/npu-session.py BUILD_DIRECTORY NEW_OUTPUT_DIRECTORY --mode reserved --artifacts ARTIFACTS.json
+no host check BUILD_DIRECTORY NEW_OUTPUT_DIRECTORY --mode session --artifacts ARTIFACTS.json
+no host check BUILD_DIRECTORY NEW_OUTPUT_DIRECTORY --mode reserved --artifacts ARTIFACTS.json
 ```
 
 `ARTIFACTS.json` maps each catalogue name to its model, input and reference

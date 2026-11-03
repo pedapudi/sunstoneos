@@ -61,7 +61,7 @@ the core keeps its caches powered.
 
 ## Measurements
 
-The check [cpu-power-states.py](../checks/cpu-power-states.py) builds the
+The check no host check (evidence: cpu-power-states-model-budgets (docs/evidence/cpu-power-states.jsonl)) builds the
 cached diagnostic image with a workload in which one task per secondary core
 blocks on a notification and the core 0 task sleeps for 64 ticks. It executes
 the image in the instruction model of
@@ -107,7 +107,7 @@ applied together.
 
 ```sh
 PATH=$HOME/.cache/sunstoneos/host/usr/lib/llvm-21/bin:$PATH \
-PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/cpu-power-states.py \
+PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python no host check (evidence: cpu-power-states-model-budgets (docs/evidence/cpu-power-states.jsonl)) \
   --evidence <new directory> --freertos <pinned FreeRTOS-Kernel> [--patch <image change>]
 ```
 

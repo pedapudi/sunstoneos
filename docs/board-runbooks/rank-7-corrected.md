@@ -30,7 +30,7 @@ lists the codes and the checks that still end without a return.
 | `build/` | Built by `tools/prepare-secondary-identity-probe.py --first-task`; manifest SHA-256 `110f5ecf…` |
 | `build-identity/`, `identity-check/` | Identity-profile build and the primary-preparation snapshot that the instruction checks resume from; its own three cases pass |
 | `first-task-check/` | Five instruction cases, all passing: success (eight first-task entries, 9,280 cleaned lines per core, matched return, report byte-identical to 2026-10-18), wrong task argument and failed EL3 restoration (cores retained), every GIC word 0 (returns with code `0x10`) and CPU0 PPI 29 pending (returns with code `0x34`) |
-| `host/` | Ten host cases of `checks/all-core-first-task-host.py`, all passing; `host/software.json` SHA-256 `24d5a961…` |
+| `host/` | Ten host cases of no host check (evidence: a733-smp-supervised-all-core-first-task (docs/evidence/a733-smp-supervised.jsonl)), all passing; `host/software.json` SHA-256 `24d5a961…` |
 | `template/` | Unchanged admission records and prepared bundle of the 2026-10-18 pass |
 | `overlay-comparison.json` | Native payload segments identical to the 2026-10-18 build; the overlay differs only in its identity extension |
 | `cpu-prepare.py` | Binds the bundle to the current USB instance (offline) |

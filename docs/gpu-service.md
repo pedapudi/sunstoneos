@@ -257,7 +257,7 @@ The focused check verifies:
 One compiled executable supports three distinct failure cases. The first also
 covers successful lifecycle transitions and ownership transfer; the other two
 reach shutdown and control failure independently. Each has a ten-second host
-limit. The [runner](../checks/pvr-gpu-service.py) changes only the initialized
+limit. The no host check changes only the initialized
 fixture-selection word in derived ELF files and verifies the reported case.
 
 A freestanding implementation supplies the compiler-generated `memmove`
@@ -360,7 +360,7 @@ Reproduce only after relevant inputs change, using the configured toolchain:
 cmake -S . -B ~/.cache/sunstoneos/build/qemu-virt \
   -DSUNSTONE_GPU_FIRMWARE="$HOME/.cache/sunstoneos/sources/gpu/imagination-firmware/powervr/rogue_36.56.104.183_v1.fw"
 cmake --build ~/.cache/sunstoneos/build/qemu-virt --target gpu-service-model -j 8
-python3 checks/pvr-gpu-service.py \
+python3 no host check \
   --elf ~/.cache/sunstoneos/build/qemu-virt/gpu-service-model.elf \
   --qemu ~/.cache/sunstoneos/host/usr/bin/qemu-system-aarch64 \
   --nm /usr/lib/llvm-21/bin/llvm-nm \

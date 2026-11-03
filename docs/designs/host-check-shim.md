@@ -50,7 +50,7 @@ Each converted check links the real compilation unit of the code it tests and ru
 | `os-gpu-thermal.py` | `apps/os/gpu.c` | A close that ignores clients |
 | `os-thermal-cadence.py` | thermal service source | A 25 ms phase advance replaced by a fixed time |
 
-`checks/os-npu-fault.py`, `os-npu-graphs.py`, `os-npu-service.py` and `npu-pool-size.py` also use the shim.
+`checks/os-npu-fault.py`, `os-npu-graphs.py`, no host check (evidence: docs/evidence/npu.jsonl, docs/evidence/npu-resources.jsonl) and `npu-pool-size.py` also use the shim.
 
 Coverage notes:
 

@@ -88,7 +88,7 @@ Records: `docs/evidence/workload-bisect.jsonl`.
 
 ## Limitations and open work
 
-- Open: a board run of the profiles with the status-bit masks. The masks and waits pass the instruction models (`checks/workload-bisect-probe.py`) and host cases (`checks/workload-bisect-host.py`) only.
+- Open: a board run of the profiles with the status-bit masks. The masks and waits pass the instruction models (no host check (evidence: docs/evidence/workload-bisect.jsonl)) and host cases (no host check (evidence: workload-bisect-first-profile-nonreturn; workload-bisect-run5-gic-restore; docs/evidence/w)) only.
 - Open: the FIQ entry (reason 1) and the EL1 cleaning helper (reasons 1 and 2) have not run on a board. A forced-stall variant (the deadline profile with one secondary stopped before its completion record, expected to return with reason 2) would prove the cleaning path and is not built.
 - Once CPU0 leaves, nothing takes the secondaries' own deadline exit, so a run without a return cannot separate a CPU0 that took no interrupt from a return that hung.
 - Two one-word follow-ups remain available if a record points at the tick or a lost wake: programming the tick from the current counter (replacing the CVAL load in `platform_tick_ack`) and enabling the CNTKCTL event stream.

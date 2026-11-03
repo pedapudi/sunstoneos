@@ -313,7 +313,7 @@ unresolved:
   SHA-256 hashes, copies the OS and models to their linked addresses, builds the
   resident launch record and enters the OS at EL3.
 - Keep the recorder's admission checks as the loader's entry gate.
-- Extend [cold-entry.py](../../checks/cold-entry.py) and
+- Extend no host check (evidence: cold-entry-cache-wrapper (docs/evidence/cold-entry.jsonl)) and
   [microsd-boot-package.py](../../checks/microsd-boot-package.py) to model the
   card read, the copy and the entry.
 - Extend the package validation with a manifest record that names entry

@@ -97,7 +97,7 @@ recovery keep their earlier timing. An image with no application keeps the
 header's 60 s. The OS session decoder refuses a manifest whose `run_us` ends later
 than the lifetime minus `return_reserve_us`; the derivation makes that
 impossible, and the image link check
-([sunstone-image-link.py](../checks/sunstone-image-link.py)) refuses an image
+(no host check) refuses an image
 whose watchdog marker, manifest and compiled lifetime disagree.
 
 The longest session is 3600 s (`MAX_SECONDS`). No hardware limit sits below it:

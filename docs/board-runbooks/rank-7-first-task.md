@@ -33,7 +33,7 @@ changed since:
   `tools/usb-access.py`.
 - Instruction evidence: the model `checks/a733-smp-cached.py`, which gained
   instruction counting and two architectural registers, and the success
-  checker `checks/all-core-first-task-probe.py`. The primary-preparation
+  checker no host check (evidence: a733-smp-supervised-all-core-first-task (docs/evidence/a733-smp-supervised.jsonl))`. The primary-preparation
   snapshot that the instruction checks resume from is itself pinned to the
   old model.
 
@@ -45,7 +45,7 @@ records:
 
 - `build/`: rebuilt by the current `tools/prepare-secondary-identity-probe.py
   --first-task`; its manifest (`11ce5fe2…`) pins the current sources.
-- A new primary-preparation snapshot from `checks/secondary-identity-probe.py`,
+- A new primary-preparation snapshot from no host check (evidence: a733-smp-supervised-secondary-identity),
   whose own three cases pass (`cpu-refreeze/identity-check/`).
 - The three instruction cases, rerun with the current model
   (`cpu-refreeze/first-task-check/`): the success case passes eight
@@ -57,7 +57,7 @@ records:
   the current tree with only that checker replaced
   (`cpu-refreeze/shadow-prior-checker/`). The multicore owner may instead
   update the pin; the reviewer must accept one of the two.
-- The nine host cases of `checks/all-core-first-task-host.py`, with the
+- The nine host cases of no host check (evidence: a733-smp-supervised-all-core-first-task (docs/evidence/a733-smp-supervised.jsonl)), with the
   current host tools (`host/software.json`, `75a1559a…`).
 
 The current runner's own loaders (`validate_bundle`, the host profile's

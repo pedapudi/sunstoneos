@@ -114,7 +114,7 @@ unchanged upstream PDS/control-stream encoders and the board firmware-stream
 decoder into a host reference:
 
 ```sh
-python3 checks/pvr-compute-job.py \
+python3 no host check (evidence: docs/evidence/gpu-first-job.jsonl, docs/evidence/gpu-mimus-compute.jsonl) \
   --mesa-source ~/.cache/sunstoneos/gpu-producer-build/mesa \
   --mesa-build ~/.cache/sunstoneos/gpu-producer-build/build \
   --board-source ~/.cache/sunstoneos/sources/gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination \

@@ -97,7 +97,7 @@ whole-board power removal. A transport failure stops capture immediately.
 
 ## Check the prepared software path
 
-`checks/isp0-preparation.py` accepts explicit paths to the real ELF, manifest,
+no host check (evidence: isp0-preparation-removed-host-check-results) accepts explicit paths to the real ELF, manifest,
 producer session, input, native allocation JSON and raw page table. It creates
 explicitly labeled model records, verifies that production refuses modeled
 authority, and substitutes only the physical-authority predicate for preparation.

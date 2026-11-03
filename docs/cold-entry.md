@@ -60,7 +60,7 @@ The native ELF is
 One invocation of the vendor packer produced the 20 MiB ordinary container
 `60561dc7f3a9111749b7935330ac7aaa8bf0f6e2e4f5b44a60b3d06a0fa697c8`.
 
-[The instruction check](../checks/cold-entry.py) feeds the actual payload to the
+no host check (evidence: cold-entry-cache-wrapper (docs/evidence/cold-entry.jsonl)) feeds the actual payload to the
 pinned boot0 parser, then executes its main tail from `0x5e34c`, including the
 counter delay and cleanup at `0x48e8c`. The observed instructions clear translation
 and cache controls and request instruction-cache and branch-predictor

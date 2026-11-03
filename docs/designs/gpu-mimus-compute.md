@@ -367,7 +367,7 @@ lists their commands. None executes USC code or touches hardware.
   inner-loop instructions are counted from the compiler's listing, and the tag
   store follows every sum store and its data fence.
 - **Shared code in this repository:** `checks/pvr-compute-service`
-  and `checks/pvr-compute-job.py`.
+  and no host check (evidence: docs/evidence/gpu-first-job.jsonl, docs/evidence/gpu-mimus-compute.jsonl)`.
 
 ## Limitations
 

@@ -695,7 +695,7 @@ readback check before the `SCR_EL3` write, and set `SCTLR_EL1` bit 18; then
 regenerate the reviewed image manifest.
 
 **Verification.** Run the EL0-access and Secure-PMR model cases from
-[checks/a733-supervised-scheduler.py](../../checks/a733-supervised-scheduler.py)
+no host check (evidence: docs/evidence/a733-facts-probe.jsonl a733-facts-probe-removed-host-check-results)
 against the diagnostic ELF, or confirm the target is gone from CMake and the
 checks.
 
@@ -1143,7 +1143,7 @@ libstdc++ hashes appear.
 
 **Review corrections.** Other mechanisms partly cover the gap: the build ID
 hashes the ASR inputs, the recognition seal pins earlier mimus and newlib
-files, and some checks capture `*.ld` files separately. `checks/bluetooth-application.py`
+files, and some checks capture `*.ld` files separately. no host check
 does not build the mimus-enabled image, so the clearer example is the check
 cited above. Whether reuse checks accept stale evidence was not shown.
 
@@ -1157,7 +1157,7 @@ report a pass when the code under test executes undefined behavior.
 diagnostic prints `runtime error:` and the program exits 0. Several runners
 set `ASAN_OPTIONS=halt_on_error=1`, which does not
 affect UBSan. A one-line signed overflow built this way printed the diagnostic
-and exited 0. Only `gpu-display-preparation.py` inspects stderr.
+and exited 0. Only no host check inspects stderr.
 
 **Failure scenario.** A driver change introduces signed overflow in a DMA
 length or an over-wide shift in a register helper. The check logs the
@@ -1780,7 +1780,7 @@ the unmodified baseline first and changes one field, so deleting the targeted
 check still makes the case fail.
 
 **Fix.** Catch `ValueError` and assert a message substring per case, following
-[checks/gpu-display-preparation.py](../../checks/gpu-display-preparation.py).
+no host check.
 Keep the `OSError` catch where an injected durable-write failure needs it.
 
 ### checks-harness-12: resumed drivers overwrite failed-attempt records

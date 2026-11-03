@@ -17,7 +17,7 @@ and makes two comparisons:
 
 ## Native delivery of tensor bytes
 
-Reserved case 0 of [npu-session.py](../../checks/npu-session.py) runs the five
+Reserved case 0 of no host check runs the five
 catalogue models through the session runtime in QEMU. No host check compares
 native allocations and relocations with the SDK loader. The QEMU register
 model's `execute()` in `checks/npu-session.c` derives an output from the input
@@ -192,8 +192,8 @@ It reports every model's state and no partial pass. Timeouts per step:
 - **mimus rule.** The int32-bias rule is written inline in the mimus tool's
   `compare` step and copied into the harness; moving it into a function there
   removes the copy.
-- **Duplicate comparisons.** `checks/npu-conv-reference.py` and
-  `checks/npu-dual-reference.py` keep simulator comparisons that this harness
+- **Duplicate comparisons.** no host check (evidence: docs/npu-conformance.md) and
+  no host check (evidence: docs/npu-conformance.md) keep simulator comparisons that this harness
   covers for the same fixtures and inputs.
 - **Not covered.** The NPU metrics of section 3 of
   [performance-architecture.md](../performance-architecture.md) are counted in

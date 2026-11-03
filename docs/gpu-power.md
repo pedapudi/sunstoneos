@@ -218,7 +218,7 @@ provider is retried. DCDC4 at 860 mV is refused with no write, its snapshot
 reaped and the lease released. After an owner's boot check that refused
 DCDC4, the platform fails before it takes a lease.
 
-The [reference check](../checks/a733-gpu-power-reference.py) compiles the original
+The no host check (evidence: docs/evidence/power-domains.jsonl power-domains-implementation-notes; docs/gpu-power.md) compiles the original
 power-domain initialization and transition functions with a register model. All
 emitted TOP writes match the trace of one GPU power-on and power-off through
 the real owner, which `checks/power-domains-pck.c` writes. It reads the BXM

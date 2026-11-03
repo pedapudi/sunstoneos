@@ -114,7 +114,7 @@ interconnect.
 
 The complete native image links the actual shared providers, CE and radio
 startup, authenticated TCP/RSN sources and both TinyUSB roles. The focused runner
-`checks/board-application.py` passed nine AArch64 instruction cases. Client cases
+no host check (evidence: docs/status/security.md (mentions it); no evidence record) passed nine AArch64 instruction cases. Client cases
 cover continued polling after a copied sector, retained host failure and
 attachment loss after a copy. Watchdog cases cover refusal without progress,
 renewal after a completed transfer and expired-operation refusal. Output cases

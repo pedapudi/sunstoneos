@@ -143,7 +143,7 @@ and cache ordering, confinement and larger mimus shapes remain pending.
 
 The large-native constructor check requires the linked `relative-shift128`
 model identity. The published ShuffleNet image has a different pool layout
-and uses `checks/npu-nn-pool-native.py`. The constructor fixture runs the real
+and uses no host check (evidence: none (docs/npu-relative-shift.md))`. The constructor fixture runs the real
 local-pool preparation before allocating, matching boot's publication order.
 Constructor and corrupted-model cases pass against the rebuilt relative-shift
 profile in `~/.cache/sunstoneos/build/npu-resume-1024/relative-shift/`.

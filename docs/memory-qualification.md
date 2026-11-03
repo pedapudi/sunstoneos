@@ -296,7 +296,7 @@ The host checks run without a board:
 ```sh
 PY="env PYTHONDONTWRITEBYTECODE=1 $HOME/.cache/sunstoneos/venv/bin/python"
 $PY checks/memtest-plan.py --out OUT/plan
-$PY checks/memtest-image.py --elf BUILD/a733-memtest.elf --binary BUILD/a733-memtest.bin --out OUT/image
+$PY no host check (evidence: memory-qualification-host-models) --elf BUILD/a733-memtest.elf --binary BUILD/a733-memtest.bin --out OUT/image
 $PY checks/memtest-emulate.py --elf BUILD/a733-memtest.elf --binary BUILD/a733-memtest.bin --out OUT/emulate
 ```
 
@@ -307,7 +307,7 @@ $PY checks/memtest-emulate.py --elf BUILD/a733-memtest.elf --binary BUILD/a733-m
   every group and confirms that at least 256 MiB separate each write from the
   next read, and it runs every refusal of the upload gate and of the
   acceptance record.
-- `memtest-image.py` checks the recovery placement, the beacons in the ELF
+- no host check (evidence: memory-qualification-host-models) checks the recovery placement, the beacons in the ELF
   and the binary, the targets of every relocation into the recovery pages, the
   EL3 stack depth, the zero contract and the record layout. It also emulates
   `platform_init` and classifies every translation-table word: the

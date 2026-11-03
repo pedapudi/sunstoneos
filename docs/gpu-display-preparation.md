@@ -138,7 +138,7 @@ release, a reconnect retry or reuse of frame memory.
 The preparation and capture checks use the selected version-2 image. Version-1
 native and host evidence remains frozen in its original scope; it is not replayed
 to qualify USB observation. The focused preparation check is
-`checks/gpu-display-preparation.py`. Its positive bundle
+no host check`. Its positive bundle
 fixture substitutes only the explicit physical-record predicate, while retaining
 the new binding, provenance, assembly and freeze checks. The same fixture must
 fail ordinary production validation. Earlier linked input checks use the actual

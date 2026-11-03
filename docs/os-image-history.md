@@ -442,7 +442,7 @@ SHA-256 of the linked model's SHA-256 digest.
   The runtime cleans and invalidates the output lines before the job, so an
   output byte that the job does not write keeps its pattern byte; an
   invalidate alone would discard the pattern, and the runtime check
-  (`checks/npu-session.py --mode runtime`) requires the whole output span
+  (no host check --mode runtime`) requires the whole output span
   cleaned and invalidated. After the
   job, the client compares the outputs with the linked reference, counts the
   bytes that kept the pattern and records the SHA-256 digest of the outputs.

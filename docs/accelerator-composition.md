@@ -132,7 +132,7 @@ Focused checks pass on the combined linked image. The actual constructors
 allocate the NPU parent first, then all GPU firmware, payload and table parents;
 they bind one counter, clock registry, lock set, PMIC and global PCK manager.
 Independent counter, registry, retained-lock and manager failure cases revoke
-both engines. `checks/accelerator-providers.py` also checks that the startup
+both engines. no host check (evidence: docs/evidence/npu-board.jsonl npu-board-image-checks) also checks that the startup
 borrows those same providers, that the owner holds one domain-4 row, and that
 a domain-4 fault leaves the shared providers live. The native clients and common USB parser complete the interleaved
 copied-result sequence and both healthy CLOSE operations. Transport cases cover

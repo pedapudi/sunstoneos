@@ -12,7 +12,7 @@ The command stream programs registers and points the NPU at those descriptors.
 
 ## The trace stops before device submission
 
-[nbg-loader-reference.py](../checks/nbg-loader-reference.py) maps the pinned
+no host check (evidence: docs/nbg-loader-trace.md) maps the pinned
 `libNBGlinker.so` in Unicorn. It invokes library initialization, model creation,
 preparation, tensor-buffer creation and binding, and asynchronous triggering.
 It intercepts the HAL submission call and stops without returning a submission
@@ -131,7 +131,7 @@ Run the check with the pinned SDK, model, host encoder library, and a new
 output directory:
 
 ```sh
-python3 checks/nbg-loader-reference.py /path/to/libNBGlinker.so \
+python3 no host check (evidence: docs/nbg-loader-trace.md) /path/to/libNBGlinker.so \
   /path/to/network_binary.nb /path/to/native.so /path/to/new-evidence-directory
 ```
 

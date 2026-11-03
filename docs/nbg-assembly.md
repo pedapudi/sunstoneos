@@ -227,7 +227,7 @@ refused a buffer count that differs from the plan. Results are
 under `~/.cache/sunstoneos/build/audit-npu-runtime/evidence/layout-*/`.
 
 The focused checks are nbg-assembly.c (since removed) and
-[nbg-assembly.py](../checks/nbg-assembly.py). Build the host shared library from
+no host check (evidence: nbg-assembly-removed-host-check-results). Build the host shared library from
 `nbg_assembly.c`, `nbg_model.c`, `nbg_relocation.c`, and `nbg_checksum.c` with
 `-shared -fPIC -Iinclude`.
 The Python check takes the model, shared library, saved capture directory, and

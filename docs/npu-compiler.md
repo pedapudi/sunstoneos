@@ -76,7 +76,7 @@ the same 192 quantized input bytes.
 | Maximum dequantized error against exact float output | `0.015134785324335098` |
 | Root-mean-square dequantized error | `0.0065643259496975725` |
 
-[npu-conv-reference.py](../checks/npu-conv-reference.py) compares the saved inputs
+no host check (evidence: docs/npu-conformance.md) compares the saved inputs
 and outputs, checks the target ID, and records their hashes. It executes neither
 the compiler nor device commands. Its artifact comparison passed once after the
 inline comparisons were consolidated into this reusable check. Compiler execution
@@ -193,7 +193,7 @@ are dyadic fractions, so the integer reference is exact in float32.
 [npu-dual-pipeline.sh](../tools/npu-dual-pipeline.sh) compiles it in the pinned
 image with UINT8 asymmetric quantization, or with `--perchannel-int8` as INT8
 tensors with per-channel symmetric weights, and runs the SDK simulator on both
-inputs. [npu-dual-reference.py](../checks/npu-dual-reference.py) requires exact
+inputs. no host check (evidence: docs/npu-conformance.md) requires exact
 float outputs and simulator bytes equal to the quantized CPU inference.
 
 Both variants pass. The emitted graphs are 2,912 bytes each, with SHA-256
