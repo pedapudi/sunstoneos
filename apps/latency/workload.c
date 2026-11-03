@@ -69,6 +69,38 @@ void ss_latency_task_ready(void *task)
         return;
     }
 }
+#ifdef SUNSTONE_LATENCY_TLBI
+/* docs/designs/application-memory-layout.md, step 7: the cost of a broadcast TLB invalidation to the cores that do not issue
+ * it. CPU0's tick hook issues one on every tick of the measured phases, immediately before it releases the pinned tasks, so
+ * that every wake sample is taken beside an invalidation (an upper bound on a release every 100 ms). The form is the build's
+ * SUNSTONE_LATENCY_TLBI: 1 the page of the traffic buffer (TLBI VAE1IS), 2 one ASID (TLBI ASIDE1IS), 3 everything
+ * (TLBI VMALLE1IS). The largest ticks the issuing core spent, from the instruction to the end of the DSB, go to the
+ * report's dma_jobs word, which an image without the DMA client leaves zero. */
+static atomic_uint_fast64_t tlbi_issue_max;
+static atomic_uint tlbi_issued;
+static inline void tlbi_broadcast(void)
+{
+    uint64_t begin, end;
+#ifdef SUNSTONE_LATENCY_MODEL
+    (void)begin; (void)end;                 /* the host model has no TLB: count the issue only */
+    atomic_fetch_add_explicit(&tlbi_issued, 1, memory_order_relaxed);
+    return;
+#else
+    __asm__ volatile("isb\n mrs %0, cntvct_el0" : "=r"(begin) :: "memory");
+#if SUNSTONE_LATENCY_TLBI == 1
+    __asm__ volatile("tlbi vae1is, %0" :: "r"((uint64_t)(uintptr_t)memory >> 12) : "memory");
+#elif SUNSTONE_LATENCY_TLBI == 2
+    __asm__ volatile("tlbi aside1is, %0" :: "r"((uint64_t)1 << 48) : "memory");
+#else
+    __asm__ volatile("tlbi vmalle1is" ::: "memory");
+#endif
+    __asm__ volatile("dsb ish\n isb\n mrs %0, cntvct_el0" : "=r"(end) :: "memory");
+    uint64_t cost = end - begin, seen = atomic_load_explicit(&tlbi_issue_max, memory_order_relaxed);
+    if (cost > seen) atomic_store_explicit(&tlbi_issue_max, cost, memory_order_relaxed);
+    atomic_fetch_add_explicit(&tlbi_issued, 1, memory_order_relaxed);
+#endif
+}
+#endif
 /* CPU0's periodic interrupt releases each pinned task. Remote-core samples
  * include SGI delivery. One outstanding sample prevents overwritten stamps. */
 void ss_latency_tick_hook(void)
@@ -76,6 +108,9 @@ void ss_latency_tick_hook(void)
     unsigned p = atomic_load_explicit(&phase, memory_order_acquire);
     if (p == BUSY) latency_dma_model_tick();
     if (p != IDLE && p != BUSY) return;
+#ifdef SUNSTONE_LATENCY_TLBI
+    tlbi_broadcast();
+#endif
     unsigned limit = p == IDLE ? LATENCY_IDLE_SAMPLES : LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES;
     BaseType_t woken = pdFALSE;
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
@@ -207,6 +242,10 @@ void latency_workload_run(struct latency_result *out)
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
         while (!atomic_load_explicit(&load[c].stopped, memory_order_acquire)) wait_tick();
     out->dma_jobs = latency_dma_model_stop();
+#ifdef SUNSTONE_LATENCY_TLBI
+    configASSERT(atomic_load_explicit(&tlbi_issued, memory_order_relaxed) >= LATENCY_IDLE_SAMPLES);
+    out->dma_jobs = (uint32_t)atomic_load_explicit(&tlbi_issue_max, memory_order_relaxed);
+#endif
     atomic_store_explicit(&phase, QUIET, memory_order_release);
     atomic_store_explicit(&phase, STOP, memory_order_release);
     for (unsigned c = 0; c < LATENCY_CORES; ++c) xTaskNotifyGive(wake_task[c]);

@@ -550,6 +550,35 @@ which the runner compared as bytes. Entry `1793665683000181061-de31a526` repeats
 `returned`, with the same receipt, in 5.9 s of launch. The pool at `0x78600000` works: the failed run of the pool was the lost
 wake-up, not the pool. The NPU's reach above `0x48000000` is shown by those seven graphs (a pool at the top of the slot 1 area).
 
+### Predicted board runs of the broadcast invalidation (step 7)
+
+The design limits where a broadcast TLB invalidation can happen and requires a measurement before one is used. The scheduler latency
+diagnostic (`apps/latency`) now has a build option, `SUNSTONE_LATENCY_TLBI`: 0 none, 1 `TLBI VAE1IS` of the traffic buffer's page,
+2 `TLBI ASIDE1IS` of ASID 1, 3 `TLBI VMALLE1IS`. CPU0's tick hook, the interrupt that releases the eight pinned wake tasks, issues
+the chosen invalidation, followed by `DSB ISH`, immediately before every release of the idle and busy phases. Every wake sample is
+therefore taken beside an invalidation, which bounds the effect of one release every 100 ms from above. The diagnostic keeps the
+largest time the issuing core spent from the instruction to the end of the `DSB`; that time is also an upper bound on how long any
+other core can be held, because the barrier completes only when all cores have completed the invalidation. The report's `dma_jobs`
+word carries it in this image, which has no DMA client. `checks/latency-tlbi.py` shows that the images of the four forms differ
+only by that one instruction. `apps/latency/tlbi-report.py` summarizes a report.
+
+The harness releases at the tick, 1 kHz, not at 10 kHz, and takes 64 idle and 128 busy samples per core. That is too few for a 99.9th
+percentile, which equals the maximum of a core's busy samples, and the control's own busy wake time is large (an earlier report of
+the same diagnostic: busy maximum 135 us on the Cortex-A55 cores and 34 us on the Cortex-A76 cores). The wake metrics can therefore
+show only a cost that is large against that spread. The issuing core's time is the sensitive figure.
+
+Hypothesis: a broadcast invalidation costs the issuing core less than 5 us in the worst case under the harness's memory load for
+the page and ASID forms, and less than 10 us for the form that invalidates everything, and it moves neither wake metric's maximum
+outside the spread of two runs of the control. Five runs on port 3-1 with the same session: the control twice, then forms 1, 2 and 3.
+
+- **Expected.** All five return normally. The control reports no invalidation. Forms 1 and 2 report at most 5 us for the issuing core,
+  form 3 at most 10 us. For each of idle and busy and each cluster, the maximum of every form lies within the range of the two
+  controls' maxima plus 5 us.
+- **A different result and what it means.** An issuing time above 10 us says that a core running other work can be held for that
+  long by a release, so the design's local or deferred forms are needed. A wake maximum that rises by more than the spread of the
+  two controls says the same through the scheduler. A watchdog end or a failure record would mean the invalidation in the tick hook
+  broke the harness (it runs in interrupt context at EL1), not that it is costly.
+
 ### Predicted board run of the heap
 
 Hypothesis: with the OS image built with the address-test decode check
