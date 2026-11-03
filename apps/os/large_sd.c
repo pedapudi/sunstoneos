@@ -178,8 +178,9 @@ static int configure(unsigned start18)
             (uint8_t)((*(volatile uint32_t *)f.pull_address >> f.pull_shift) & 3u),
             (uint8_t)((*(volatile uint32_t *)f.drive_address >> f.drive_shift) & 15u)};
     }
-    /* The board kernel's pad drive for SDC0 (sun60iw2p1.dtsi sdc0_pins_a/b and _f/_g): the clock (PF2) at 30 mA, code 2, command and data at 10 mA, code 0, all pulled up. */
-    for (unsigned i = 0; i < 6; ++i) config.desired[i] = (struct a733_pin_config){2, 1, i == 2 ? 2u : 0u};
+    /* 20 mA (code 1) on all six pins. The board kernel's strengths (sun60iw2p1.dtsi sdc0_pins_a/b and _f/_g: the clock at 30 mA, command and data at 10 mA) were tried on 3-3 and did
+     * not change the write fault (docs/designs/sd-uhs-adoption.md); the 3.3 V high-speed writes that pass on 3-1 were made with these. */
+    for (unsigned i = 0; i < 6; ++i) config.desired[i] = (struct a733_pin_config){2, 1, 1};
     config.desired[6] = (struct a733_pin_config){0, 1, 1};
     a733_clock_mask_t scopes;
     return a733_mmc_platform_scopes(&config, &scopes);
