@@ -128,7 +128,7 @@ static int read32(void *ctx, uint32_t off, uint32_t *out)
                 else if (m.ticks_acd) { if (!--m.ticks_acd) m.reg[off / 4] |= SUNXI_SMHC_INT_AUTO_STOP_DONE; }
             }
             if (m.crc_error && m.next_desc > 0) m.reg[off / 4] |= 1u << 7;
-            if (m.busy_to && m.next_desc > 0) m.reg[off / 4] |= 1u << 18;        /* the write-busy timeout, which the core treats as terminal */
+            if (m.busy_to && m.next_desc > 0) { m.reg[off / 4] |= 1u << 18; m.busy_to = 0; }        /* the controller's write-busy timeout, raised once */
         }
         *out = m.reg[off / 4]; return 1;
     case SUNXI_SMHC_STATUS:
@@ -391,10 +391,14 @@ int main(void)
     h.config.dma = NULL; r = request(2); assert(!sunxi_mmc_write_dma(&h, &r, &a)); h.config.dma = desc;
     memset(h.card.csd, 0, sizeof h.card.csd); assert(!start(2));                                      /* not writable */
     assert(!m.reads_seen && !m.authority_calls && !h.borrowed && h.state == SUNXI_MMC_READY);
+    /* The controller's write-busy timeout (RINTSTS bit 18, a limit of 112 ms at 150 MHz) is not an error of the write: it is cleared and counted, and the write completes. */
+    setup(1, 64, 20); csd_writable(); m.busy_to = 1;
+    assert(start(64)); finish();
+    assert(h.state == SUNXI_MMC_DONE && h.result.busy_timeouts >= 1 && h.result.confirmed_blocks == 64);
+    media_is(64);
     /* Faults retain the operation and never write outside the range. */
     struct { const char *name; unsigned *knob; unsigned value; enum sunxi_mmc_error error; } faults[] = {
         {"data crc", &m.crc_error, 1, SUNXI_MMC_CONTROLLER},
-        {"write busy timeout (bit 18)", &m.busy_to, 1, SUNXI_MMC_CONTROLLER},
         {"card error in the CMD25 response", &m.card_error_cmd, 1, SUNXI_MMC_CARD},
         {"card error in the CMD12 response", &m.card_error_stop, 1, SUNXI_MMC_CARD},
         {"IDMAC error", &m.idst_error, 1, SUNXI_MMC_CONTROLLER},
@@ -414,7 +418,6 @@ int main(void)
         if (h.result.error != faults[i].error) { fprintf(stderr, "%s: error %d expected %d\n", faults[i].name, h.result.error, faults[i].error); return 1; }
         assert(h.borrowed == source && h.result.confirmed_blocks == 0);
         assert(h.result.fault_line);                                                       /* every fault names the check that raised it */
-        if (faults[i].knob == &m.busy_to) assert(h.result.interrupts & (1u << 18));          /* a write-busy timeout is bit 18 of RINTSTS, outside the low 16 bits the record used to keep */
         /* A data error in the transfer says where it stopped: the bytes the card side took and the descriptor the IDMAC had reached. */
         if (faults[i].knob == &m.crc_error) assert(h.result.where_valid && h.result.tbc0 == (uint32_t)h.result.desc_index * 4096u && h.result.desc_index > 0 && (h.result.rint_late & (1u << 7)));   /* and RINTSTS read again as the fault was raised (the model's extra read moves the DMA on, so the count is compared with the descriptor, not with the model's later position) */    /* and RINTSTS read again as the fault was raised */
         unsigned calls = m.reads_seen, auth = m.authority_calls;

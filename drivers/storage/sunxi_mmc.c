@@ -484,6 +484,13 @@ static int interrupts(struct sunxi_mmc *h)
     h->result.interrupts = v; h->seen |= v;
     /* Bit 10 reports switch completion while the CMD11 sequence runs. */
     uint32_t errors = v & ERRORS & ~(UHS_ON && h->signal_window ? VSD : 0u);
+    /* The controller's own limit on the card's busy time after written data (SMHC_WR_BUSY_TMOUT, default 0xffffff card clocks: 112 ms at 150 MHz, 336 ms at 50 MHz) raises bit 18.
+     * The board kernel's error mask does not contain it and its write path waits for the card on DAT0 itself; a card that programs a piece for longer than the limit is slow, not
+     * broken, and the busy wait after the data (busy_wait, with its own deadline) bounds it. The bit is cleared and counted; it is an error in no other command. */
+    if ((errors & (1u << 18)) && h->protocol == P_WRITE_DMA) {
+        if (!wr(h, 0x38, 1u << 18)) return 0;
+        errors &= ~(1u << 18); if (h->result.busy_timeouts < 255) ++h->result.busy_timeouts;
+    }
     if (errors) {
         /* Card removal ends everything; any other error is the CMD19 attempt's failure in a sweep (see fault). */
         if (errors & ((1u << 18) | (1u << 31))) { fatal(h, SUNXI_MMC_CONTROLLER); return 0; }

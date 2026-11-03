@@ -629,7 +629,7 @@ static int write_fail(unsigned stage, enum a733_mmc_platform_result r, uint64_t 
     const struct sunxi_mmc *c = &platform.core;
     int live = c->state == SUNXI_MMC_FAULT;       /* else the restart has replaced the core: the snapshot taken before it */
     int rc = DIAG(stage, live ? os_sd_where_detail(c, c->card.timing) : saved_where);
-    os_sd_diag[2] = live ? os_sd_where_aux(c) : (uint64_t)saved_aux;
+    if (os_sd_diag[0] == stage) os_sd_diag[2] = live ? os_sd_where_aux(c) : (uint64_t)saved_aux;     /* the first stop's record keeps its own aux: a recovery that failed wrote it, and this call runs after it */
     if (!os_sd_diag[3]) os_sd_diag[3] = sector;
     (void)r;
     return rc;
