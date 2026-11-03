@@ -43,6 +43,7 @@ def decode(data):
         'guard': {'asked': bool(flags & 1), 'observed': bool(flags & 2), 'refused': bool(flags & 128)},
         # The rails showed BLDO5 off, so the power-on writes were needed; they ran only if the stage reached 'powered'.
         'bldo5_needs_power_on': bool(flags & 4),
+        'clean_failure': bool(flags & 256),
         'shutdown_readbacks_matched': bool(flags & 8),
         'bldo5_already_on': bool(flags & 16),
         'failure_shutdown': {'ran': bool(flags & 32), 'matched': bool(flags & 64)},

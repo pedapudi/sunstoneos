@@ -82,9 +82,10 @@ static enum board_radio_result retain(struct board_radio *r)
         (void)a733_radio_platform_poll(&r->platform);
         waiting=r->platform.aborting&&!r->platform.abort_done&&!r->platform.fault;
     }
-    /* The board's failure bit waits for the failure shutdown. A refusal before any write leaves it alone, so the
-     * session can end normally; the report says what was seen (a733_radio_platform.refused). */
-    if(!waiting&&!r->platform.refused)atomic_fetch_or_explicit(r->config.recovery_state,4,memory_order_acq_rel);
+    /* The board's failure bit waits for the failure shutdown. A failure that left nothing powered (a
+     * refusal before any write, or a failure shutdown that finished with every readback matched) leaves it alone, so
+     * the session ends normally and the record can be read; a watchdog reset would lose DRAM. */
+    if(!waiting&&!a733_radio_platform_clean(&r->platform))atomic_fetch_or_explicit(r->config.recovery_state,4,memory_order_acq_rel);
     if(!r->config.scan_only)(void)a733_radio_entropy_retain(&r->entropy);
     if(waiting)return BOARD_RADIO_PENDING;
     if(r->config.report_memory.allocate){

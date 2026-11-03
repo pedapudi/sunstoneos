@@ -112,6 +112,12 @@ struct a733_radio_platform {
      * by the first-run guard; valid once guard_done is set. */
     uint32_t pad_power[4];
 };
+/* The failure left nothing powered, so no reset is needed to release anything: the first-run guard refused before
+ * any write, or the failure shutdown finished with every readback matched (PM1 low, clocks off, BLDO5 off). Such a
+ * failure keeps the board alive: it leaves the register lock and the leases as they are, sets no failure bit, and the
+ * session ends with a normal return and its record. A watchdog reset loses DRAM, and with it the record. */
+static inline int a733_radio_platform_clean(const struct a733_radio_platform *p)
+{return p->refused||(p->abort_done&&(p->abort_flags&16u));}
 /* Pure scope planning and init; no MMIO. Fresh private storage only. All inputs,
  * managers, provider objects and callback contexts remain disjoint and live. */
 int a733_radio_platform_scopes(const struct a733_radio_platform_config *,a733_clock_mask_t *);

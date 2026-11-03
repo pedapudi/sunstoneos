@@ -162,8 +162,9 @@ static void radio_owner(void *unused)
 #endif
             if(r==BOARD_RADIO_RETAINED||r==BOARD_RADIO_INVALID){
                 atomic_store_explicit(&board.radio_result,3,memory_order_release);
-                /* A guard refusal before any write is not a board failure: nothing was powered. */
-                if(!radio.platform.refused){
+                /* A failure that left nothing powered (a guard refusal, or a completed failure shutdown) is not a
+                 * board failure: the session ends normally with the record. */
+                if(!a733_radio_platform_clean(&radio.platform)){
                     atomic_fetch_or_explicit(&board.watchdog_state,4,memory_order_release);
                     a733_typec_revoke(&board.typec.provider);
                 }

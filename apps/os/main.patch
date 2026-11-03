@@ -29,7 +29,7 @@
 +        os_module_poll();
 +#endif
 +        /* A failed radio stops reporting, so the resident watchdog resets the board; a guard refusal changed nothing and keeps reporting. */
-+        if(atomic_load_explicit(&board.radio_result,memory_order_acquire)!=3||radio.platform.refused)BOARD_PROGRESS(OS_SERVICE_RADIO);
++        if(atomic_load_explicit(&board.radio_result,memory_order_acquire)!=3||a733_radio_platform_clean(&radio.platform))BOARD_PROGRESS(OS_SERVICE_RADIO);
          vTaskDelay(1);
      }
  }

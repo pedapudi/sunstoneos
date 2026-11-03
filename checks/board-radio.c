@@ -131,7 +131,7 @@ int a733_radio_platform_shutdown(struct a733_radio_platform *p,const struct a733
 enum a733_radio_platform_result a733_radio_platform_poll(struct a733_radio_platform *p)
 {assert(p==&app.platform);
  if(p->aborting){
-     if(abort_steps_left&&--abort_steps_left==0){p->aborting=0;p->abort_done=1;p->fault=1;return A733_RADIO_RETAINED;}
+     if(abort_steps_left&&--abort_steps_left==0){p->aborting=0;p->abort_done=1;p->abort_flags|=16u;p->fault=1;return A733_RADIO_RETAINED;}
      return A733_RADIO_PENDING;
  }
  return ++platform_steps<3?A733_RADIO_PENDING:A733_RADIO_DOWN;}
@@ -347,7 +347,7 @@ int main(void)
             assert(board_radio_external_failure(&app)==BOARD_RADIO_PENDING&&!(atomic_load(&recovery_state)&4));
             assert(app.platform.aborting&&!app.platform.abort_done);
             assert(board_radio_external_failure(&app)==BOARD_RADIO_PENDING&&!(atomic_load(&recovery_state)&4));
-            assert(board_radio_external_failure(&app)==BOARD_RADIO_RETAINED&&(atomic_load(&recovery_state)&4));
+            assert(board_radio_external_failure(&app)==BOARD_RADIO_RETAINED&&!(atomic_load(&recovery_state)&4)); /* Clean: nothing is powered, so no failure bit. */
             assert(app.platform.abort_done);
         } else if(model==1) {
             assert(board_radio_external_failure(&app)==BOARD_RADIO_PENDING&&!(atomic_load(&recovery_state)&4));

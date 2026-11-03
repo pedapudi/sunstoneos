@@ -421,6 +421,7 @@ int main(void)
             r.power.now+=3000000; /* Past the abort's deadline. */
             status=a733_radio_platform_poll(&r.radio);
             assert(status==A733_RADIO_RETAINED&&r.radio.fault&&!r.radio.abort_done&&(r.power.pmic[0x21]&4));
+            assert(!a733_radio_platform_clean(&r.radio)&&a733_clock_token_status(&r.power.clocks,&r.radio.clock)==A733_CLOCK_FAULT);
             continue;
         }
         status=A733_RADIO_PENDING;
@@ -432,6 +433,11 @@ int main(void)
         assert(!(*pmic_model_word(&r.power,0x07025040)&2));            /* PM1 low. */
         assert(!(r.power.pmic[0x21]&4)&&r.power.pmic[0x2e]==0x2d);      /* BLDO5 off. */
         assert(!r.radio.fail_line&&!r.radio.refused);
+        /* A completed failure shutdown leaves nothing powered: the failure is clean, nothing is retained, and the
+         * record carries it. */
+        assert(a733_radio_platform_clean(&r.radio)&&!r.register_retained);
+        assert(a733_clock_token_status(&r.power.clocks,&r.radio.clock)==A733_CLOCK_OK);
+        assert(a733_rail_status(&r.power.rails,&r.radio.rail)!=A733_RAIL_RETAINED);
     }
     /* A reset left BLDO5 on at 1.8V and PG reads 1.8V: the guard accepts, the writes are skipped, the waits stay,
      * and the shutdown still turns BLDO5 off. */

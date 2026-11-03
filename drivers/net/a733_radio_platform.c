@@ -64,8 +64,8 @@ static enum a733_radio_platform_result fail_at(struct a733_radio_platform *p,uns
     if(line&&!p->fail_line){p->fail_line=line;p->fail_stage=p->stage;}
     /* An abort is never cut short: while it runs inside its deadline the failure waits for it. */
     if(p->aborting&&p->last_now<p->deadline)return A733_RADIO_PENDING;
-    if(p->refused){
-        /* No hardware was changed: leave the register lock and keep every lease as it is. */
+    if(a733_radio_platform_clean(p)){
+        /* Nothing is powered: leave the register lock and keep every lease as it is. */
         p->fault=1;
         if(p->host.initialized)sunxi_sdio_stop(&p->host,SUNXI_SDIO_IO_ERROR);
         if(p->held){p->ops.leave(p->cookie);p->held=0;}
