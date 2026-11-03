@@ -90,7 +90,7 @@ static void serve(struct request *r)
      * watchdog stop that follows the controller's retention cannot hide it. */
     if (!ok && !(os_sd_diag[0] >= 20 && os_sd_diag[0] <= 24)) {
         /* A failed write also carries its pieces written and the bus timing in the record's aux field (bits 30:16 of the site word). */
-        uint32_t aux = (os_sd_diag[0] == 33 || os_sd_diag[0] == 34) ? (uint32_t)(os_sd_diag[2] & 0x7fff) : 0;
+        uint32_t aux = (os_sd_diag[0] == 33 || os_sd_diag[0] == 34 || (os_sd_diag[0] >= 37 && os_sd_diag[0] <= 40)) ? (uint32_t)(os_sd_diag[2] & 0x7fff) : 0;
         board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(APPLICATION) | aux << 16, diag_word(), SUNSTONE_CRUMB_HERE());
     }
     /* A failed async read reports -1 from poll; the proxy's poll reads the stored result. */

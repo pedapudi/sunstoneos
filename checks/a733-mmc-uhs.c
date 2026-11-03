@@ -185,7 +185,13 @@ static void write_recovery(uint8_t *buffer)
 {
     /* A write CRC error at SDR104 steps down to SDR50 and the retry completes (a read is the stand-in for the retried write: the platform's recovery does not tell them apart). */
     begin(1, 1, 3); u.sdr50 = 1; assert(settle() == A733_MMC_READY); assert(m.platform.core.card.timing == 3);
+    /* The write owner runs in interrupt mode (the third write session on 3-3 stopped because it could not leave it with the core faulted): the platform restart refuses
+     * while the mode is on, and the owner's call to leave it must work in that state. */
+    assert(a733_mmc_platform_irq(&m.platform, 1) && m.platform.irq_mode);
     write_fault(buffer, SUNXI_MMC_CARD);
+    assert(a733_mmc_platform_recover(&m.platform, 9000000) == A733_MMC_INVALID);        /* the mode is still on */
+    assert(a733_mmc_platform_irq(&m.platform, 0) && !m.platform.irq_mode);
+    m.platform.recover_errors = 0;
     /* The record's fields while the fault stands: the core's error, protocol step and interrupt status, the pieces written and the timing. */
     {
         uint64_t detail = os_sd_write_detail(&m.platform.core), aux = os_sd_write_aux(1234, m.platform.core.card.timing);
