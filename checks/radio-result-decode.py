@@ -23,7 +23,7 @@ def main():
     # BLDO5 was off, so the power-on was needed; no write ran (stage never reached 'powered').
     assert r['bldo5_needs_power_on'] and not r['bldo5_already_on'] and not r['failure_shutdown']['ran']
     assert r['platform_failure']['guard_refusal'] == {'code': 0x431, 'pg_bits': 3, 'unmet': ['pg']}
-    assert r['platform_failure']['stage'] == 7
+    assert r['platform_failure']['stage'] == 7 and r['platform_failure']['source'] == 'platform'
     # The board read 1.8 V for PG and PM with BLDO5 off (enable byte 0xb8, selector 13).
     assert r['pad_power']['pg'] == '1.8V' and r['pad_power']['pm'] == '1.8V' and r['pad_power']['gpio_val'] == 0x020ff980
     bldo5 = [x for x in r['rails'] if x['rail'] == 'bldo5'][0]

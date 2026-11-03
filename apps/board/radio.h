@@ -60,6 +60,10 @@ struct board_radio {
     struct aic8800_dispatch_record diagnostic;
     uint64_t startup_events,diagnostic_records;
     unsigned stage,constructed,scan_started,scan_done;
+    /* A failure in progress: the first retain starts the failure shutdown, and each later one drives it until it
+     * is done or its bound passes; only then is the failure final. */
+    unsigned failing;
+    uint64_t failing_since;
     struct a733_radio_report report;
     uint64_t operation_deadline;
     /* Link recovery: owner-drained events while reassociating, and the bound

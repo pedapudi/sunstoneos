@@ -403,6 +403,36 @@ int main(void)
         assert(!r.first_host_at||failure!=3);
         emit_result("failure-shutdown",&r.radio,0);
     }
+    /* The session fails after READY, or during transport setup (the platform is READY in both): an outside retain
+     * starts the failure shutdown, later retains never cut it short, and the polls complete it with PM1 low and
+     * BLDO5 off. The platform records no failure line of its own for it. A step that hangs past the deadline ends
+     * in the ordinary retention with the shutdown unfinished. */
+    for(unsigned hang=0;hang<2;++hang) {
+        radio_setup();r.power.pmic[0x21]&=(uint8_t)~4u;r.power.pmic[0x2e]=0x3a;
+        *pmic_model_word(&r.power,0x02000048)=3u<<12;*pmic_model_word(&r.power,0x07025348)=3u<<2;
+        status=A733_RADIO_PENDING;
+        for(unsigned i=0;i<4000 && status!=A733_RADIO_READY;++i){status=radio_step();assert(status!=A733_RADIO_RETAINED);}
+        assert(r.radio.stage==RSTAGE_READY&&r.radio.power_on&&(r.power.pmic[0x21]&4));
+        assert(a733_radio_platform_retain(&r.radio)==A733_RADIO_PENDING&&r.radio.aborting&&!r.radio.fault);
+        for(unsigned again=0;again<3;++again)
+            assert(a733_radio_platform_retain(&r.radio)==A733_RADIO_PENDING&&r.radio.aborting&&!r.radio.fault&&!r.radio.abort_done);
+        assert(!r.radio.fail_line); /* An outside retain is not a platform failure site. */
+        if(hang) {
+            r.power.now+=3000000; /* Past the abort's deadline. */
+            status=a733_radio_platform_poll(&r.radio);
+            assert(status==A733_RADIO_RETAINED&&r.radio.fault&&!r.radio.abort_done&&(r.power.pmic[0x21]&4));
+            continue;
+        }
+        status=A733_RADIO_PENDING;
+        for(unsigned i=0;i<4000&&status!=A733_RADIO_RETAINED;++i) {
+            r.power.now+=100;(void)pmic_model_step(&r.power);status=a733_radio_platform_poll(&r.radio);
+            assert(!r.radio.fault||status==A733_RADIO_RETAINED);
+        }
+        assert(status==A733_RADIO_RETAINED&&r.radio.abort_done&&r.radio.fault&&(r.radio.abort_flags&16u));
+        assert(!(*pmic_model_word(&r.power,0x07025040)&2));            /* PM1 low. */
+        assert(!(r.power.pmic[0x21]&4)&&r.power.pmic[0x2e]==0x2d);      /* BLDO5 off. */
+        assert(!r.radio.fail_line&&!r.radio.refused);
+    }
     /* A reset left BLDO5 on at 1.8V and PG reads 1.8V: the guard accepts, the writes are skipped, the waits stay,
      * and the shutdown still turns BLDO5 off. */
     radio_setup();*pmic_model_word(&r.power,0x02000048)=3u<<12;*pmic_model_word(&r.power,0x07025348)=3u<<2;
