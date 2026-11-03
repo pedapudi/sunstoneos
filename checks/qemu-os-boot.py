@@ -599,6 +599,12 @@ def main():
         application = image.application('notify-test', ['checks/qemu-os/notify-main.c'], ROOT / 'checks/qemu-os/notify-manifest.json')
         return image.build(application)
 
+    def build_wake_race():
+        """An application whose waits are given their event between the test and the registration."""
+        image = Image(out / 'build-wake-race', extra_sources=['checks/qemu-os/wake-race.c'])
+        application = image.application('wake-race', ['checks/qemu-os/wake-race-main.c'], ROOT / 'checks/qemu-os/wake-race-manifest.json')
+        return image.build(application, wraps=['board_service_blocked_until'])
+
     def build_heap(name, manifest):
         """An application whose heap is above the linked limit, so that the ledger serves it (step 1 of
         docs/designs/application-memory-layout.md). The C library's sbrk is linked in; its allocator is not."""
@@ -664,6 +670,7 @@ def main():
         heap_elf, heap_big_elf, heap_early_elf = heap_elf.result(), heap_big_elf.result(), heap_early.result()
         notify_elf = pool.submit(build_notify).result()
         usb_race_elf = pool.submit(build_usb_race).result()
+        wake_race_elf = pool.submit(build_wake_race).result()
         storage_write_space_elf = pool.submit(build_storage_write_space).result()
         (out / 'build-reverted-owner').mkdir()
         reverted_owner_elf = pool.submit(build_storage_write, reverted_owner(out / 'build-reverted-owner'))
@@ -987,6 +994,16 @@ def main():
     c.require(c.main is not None and c.main['live'] == '1' and int(c.main['t_us']) < 2_000_000,
               'the application did not start after the transport became ready between its test and its wait')
     c.require(c.finished is not None and c.finished['status'] == '1', 'the application did not finish')
+
+    # An OS wake-up between the test and the registration of the wait is kept: a host request offered there, and a USB
+    # state change there, end ss_host_recv and ss_usb_wait at the event and not at their two-second timeout.
+    for mode, what in ((0, 'host-request'), (1, 'usb-change')):
+        c = run_case('wake-between-test-and-wait-' + what, wake_race_elf, scenario(usb_ready_ms=usb_delay_ms),
+                     struct.pack('<Q', mode) + bytes(4088))
+        c.clean()
+        tag, result, e = struct.unpack('<3Q', bytes.fromhex(c.finished['result']))
+        c.require(tag == 0x57414b45 and result == 1 and e < 500000,
+                  '%s between the test and the wait ended the call after %d us with result %d' % (what, e, result))
 
     # The OS gives the main task its usb-ready and live-state notifications while the main task sleeps in the deadline
     # wait and in ss_host_recv: each ends at its own condition (the deadline; the timeout), not at the OS's notification.

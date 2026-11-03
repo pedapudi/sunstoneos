@@ -27,7 +27,10 @@ class Model(owner.Model):
   self.rt=self.n+self.nf['runtime'];self.service=self.rt+layout.layouts['npu_runtime']['service']
   self.sf=layout.layouts['npu_service'];self.report=layout.address('os_npu_published_report')
   self.closed_operation=None;self.stop_calls=0;self.stop_pending=0;self.publish_stop=False
-  self.failures=[];self.callback_after_park=0
+  self.failures=[];self.callback_after_park=0;self.wakes=0;self.waits=[];self.delays=0
+  self.hooks[layout.address('os_application_wake_main')]=self.wake_main
+  self.deadline_wait=layout.address('sunstone_deadline_wait_until')
+  self.hooks[layout.address('board_service_blocked_until')]=lambda:1 # the service's health window is the board's, not under test
   self.put32(self.n+self.nf['started'],1);self.put32(self.n+self.nf['active'],1)
   self.put32(self.n+self.nf['opened'],1);self.put64(self.n+self.nf['end'],55000000)
   self.put64(self.n+self.nf['initial_deadline'],55000000)
@@ -50,6 +53,10 @@ class Model(owner.Model):
   self.notify_wait=layout.address('ulTaskGenericNotifyTake') if 'ulTaskGenericNotifyTake' in layout.symbols else layout.address('ulTaskNotifyTake')
   self.s['host_bootstrap']=layout.address('bootstrap','apps/os/npu.c')
   self.s['host_runtime_worker']=layout.address('runtime_worker','drivers/npu/npu_service.c')
+ def wake_main(self):
+  self.wakes+=1;return 0
+ def delay(self):
+  self.delays+=1;return super().delay()
  def clock_now(self):
   self.put64(self.uc.reg_read(prior.fault.REGS[1]),self.time//24);return 1
  def send(self):
@@ -65,6 +72,8 @@ class Model(owner.Model):
   if address==self.layout.address('board_fail_at'):
    self.failures.append((uc.reg_read(prior.fault.REGS[0]),uc.reg_read(prior.fault.REGS[1])))
    self.stop='failure';uc.emu_stop();return
+  if address==self.deadline_wait:
+   self.waits.append(uc.reg_read(prior.fault.REGS[0]));self.stop='waiting';uc.emu_stop();return
   if address==self.notify_wait:
    self.stop='blocked';uc.emu_stop();return
   super().code(uc,address,size,unused)
@@ -121,6 +130,7 @@ if not a.late_isr_only:
  m.uc.reg_write(prior.fault.REGS[0],1);m.uc.reg_write(UC_ARM64_REG_PC,m.uc.reg_read(UC_ARM64_REG_LR));m.stop=None
  m.uc.emu_start(m.uc.reg_read(UC_ARM64_REG_PC),0,count=100000)
  assert m.stop=='suspended' and m.stop_calls==3 and m.u32(m.n+m.nf['stopped'])==1
+ assert m.wakes>=1 # the local stop wakes the application's end wait
  results.append(dict(case='actual-bootstrap-close-park-delayed-local-stop',passed=True,platform_stop_calls=m.stop_calls))
 
  # Bootstrap begins with accepted startup false; force its already-started
@@ -211,6 +221,15 @@ if not a.late_isr_only:
  assert site&0x80000fff==0x8000073c and (site>>12)&15==3,hex(site)
  assert (site>>16)&0x4001==0x4001 and value==0x41234568,(hex(site),hex(value))
  results.append(dict(case='supervisor-cutoff-names-progress-site-and-npu-state',passed=True,failures=m.failures))
+# The retirement wait of ss_finish is an event wait, not a poll: with the retirement incomplete and time to spare, the main
+# task sleeps once in the deadline wait, which ends one second before the cutoff, and calls vTaskDelay never.
+if not a.late_isr_only:
+ m=Model(image,layout);m.stopped();m.put32(m.report+12,0)
+ m.time=(55000000-5000000)*24
+ m.uc.mem_write(0x41f00000,b'producer-receipt')
+ m.call(6,'ss_finish',(0x41f00000,16))
+ assert m.stop=='waiting' and m.waits==[54000000] and m.delays==0,(m.stop,m.waits,m.delays,[(hex(a),hex(b)) for a,b in m.failures])
+ results.append(dict(case='finish-waits-for-the-retirement-event',passed=True,wait_until_us=m.waits))
 save(a.out/'results.json',dict(physical_access=False,model_boundary=__doc__,cases=results,
  image_sha256=hashlib.sha256(a.elf.read_bytes()).hexdigest(),
  sources={name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in CHECK_INPUTS},
