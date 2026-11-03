@@ -64,21 +64,24 @@ static const uint8_t tuning_pattern[64] = {
     0xff, 0xf0, 0xff, 0xf0, 0x0f, 0xfc, 0xcc, 0x3c, 0xcc, 0x33, 0xcc, 0xcf, 0xff, 0xef, 0xff, 0xee,
     0xff, 0xfd, 0xff, 0xfd, 0xdf, 0xff, 0xbf, 0xff, 0xbb, 0xff, 0xf7, 0xff, 0xf7, 0x7f, 0x7b, 0xde };
 
-static void fatal(struct sunxi_mmc *h, enum sunxi_mmc_error e)
-{ if (h->state != SUNXI_MMC_FAULT) { h->result.error = e; h->state = SUNXI_MMC_FAULT; } }
+/* Every fault records the source line of the check that raised it (result.fault_line, the first one of a request), so an error code shared by many checks names its site. */
+static void fatal_at(struct sunxi_mmc *h, enum sunxi_mmc_error e, unsigned line)
+{ if (h->state != SUNXI_MMC_FAULT) { h->result.error = e; h->state = SUNXI_MMC_FAULT; h->result.fault_line = (uint16_t)line; } }
+#define fatal(h, e) fatal_at((h), (e), __LINE__)
 /* The one rule for the CMD19 sweep: while an attempt is in flight (queued by tune_next, not yet judged by the P_SD_TUNE step), a failure that the
  * attempt itself can produce, a controller error or a card error, fails this delay and never ends the sweep; the recovery that follows resets
  * the controller. The board kernel's loop judges the delay the same way (sunxi_mmc_execute_tuning, sunxi-mmc.c:2432-2640: any error or mismatch
  * breaks the repeat loop and the delay counts as failed). Everything else stays terminal and goes through fatal(): a failed register or
  * callback (IO), a clock that went backwards (TIME), the operation deadline (TIMEOUT), lost ownership (ADMISSION), a variant mismatch, and card
  * removal, which interrupts() raises with fatal() itself. */
-static void fault(struct sunxi_mmc *h, enum sunxi_mmc_error e)
+static void fault_at(struct sunxi_mmc *h, enum sunxi_mmc_error e, unsigned line)
 {
     if (UHS_ON && h->tune_attempt && h->state != SUNXI_MMC_FAULT && (e == SUNXI_MMC_CONTROLLER || e == SUNXI_MMC_CARD)) {
         h->tune_attempt = 0; h->tune_failed = 1; h->tune_hung = 0; return;
     }
-    fatal(h, e);
+    fatal_at(h, e, line);
 }
+#define fault(h, e) fault_at((h), (e), __LINE__)
 static int rd(struct sunxi_mmc *h, uint32_t o, uint32_t *v)
 {
     if (h->config.ops.read32(h->config.context, o, v) == 1) return 1;
@@ -466,7 +469,7 @@ static void write_where(struct sunxi_mmc *h)
     int have_chda = h->config.ops.read32(h->config.context, 0x90, &chda) == 1;
     uint32_t idst = 0, late = 0;
     if (h->config.ops.read32(h->config.context, SUNXI_SMHC_IDST, &idst) == 1) h->result.dma_status = idst;
-    if (h->config.ops.read32(h->config.context, 0x38, &late) == 1) h->result.rint_late = late & 0xffffu;   /* the error that the IDST card-error summary shows may have arrived after the first read */
+    if (h->config.ops.read32(h->config.context, 0x38, &late) == 1) h->result.rint_late = late;   /* the error that the IDST card-error summary shows may have arrived after the first read */
     h->result.tbc0 = t0; h->result.tbc1 = t1; h->result.where_valid = (uint8_t)ok;
     uint32_t base = (uint32_t)(uintptr_t)h->config.dma;
     h->result.desc_index = !have_chda ? 62u : (chda >= base && chda - base < SUNXI_MMC_DMA_DESCRIPTORS * sizeof(struct sunxi_mmc_dma_descriptor)) ?

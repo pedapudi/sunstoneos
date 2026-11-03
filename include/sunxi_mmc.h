@@ -160,7 +160,7 @@ struct sunxi_mmc_result {
     /* Where a DMA write stopped, read when the controller reported an error in the data phase: SMHC_TBC0 (0x48, bytes between card and FIFO) and SMHC_TBC1 (0x4c, bytes
      * between memory and FIFO), and the index of the descriptor the IDMAC had reached (the current host descriptor address, vendor sunxi-mmc.h REG_CHDA 0x90, against
      * the list base; 62 when unreadable, 63 when outside the list). */
-    uint32_t tbc0, tbc1, rint_late; uint8_t desc_index, where_valid; /* rint_late: RINTSTS read again when the fault was raised */
+    uint32_t tbc0, tbc1, rint_late; uint16_t fault_line; uint8_t desc_index, where_valid; /* rint_late: RINTSTS read again when the fault was raised (all 32 bits); fault_line: the source line of the check that raised the fault (sunxi_mmc.c) */
 };
 struct sunxi_mmc_write_request {
     uintptr_t policy_token;

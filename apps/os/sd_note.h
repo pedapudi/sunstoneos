@@ -16,13 +16,20 @@ static inline uint64_t os_sd_where_aux(const struct sunxi_mmc *core)
 {
     return (uint64_t)((core->result.tbc0 / 512u) & 511u) | (uint64_t)sunxi_mmc_idst4(core->result.dma_status) << 9 | (uint64_t)sunxi_mmc_piece_class(core->write_request.blocks) << 13;
 }
-/* The first fault of a session, for the failure record of stages 37 to 40 (26 bits): the status bits 15:1 of both reads of RINTSTS (the one that raised the fault and the one taken as it was
- * raised) in 14:0, the IDMAC error bits in 18:15, the piece's size class in 20:19, the bus timing in 22:21 and the core's error (clamped to 7) in 25:23. The descriptor is in the aux. */
-static inline uint64_t os_sd_first_fault(const struct sunxi_mmc *core, unsigned timing)
+/* The first fault of a session, for the failure record of stages 37 to 40 (26 bits): the RINTSTS bits 15:2 of both reads (the one that raised the fault and the one taken as it was
+ * raised) in 13:0, bit 18 of either (the write-busy timeout, outside the low 16 bits) in bit 14, and the source line of the check in sunxi_mmc.c that raised the fault in 25:15. */
+static inline uint64_t os_sd_first_fault(const struct sunxi_mmc *core)
 {
-    unsigned e = (unsigned)core->result.error; if (e > 7u) e = 7u;
-    return (uint64_t)(((core->result.interrupts | core->result.rint_late) >> 1) & 0x7fffu) | (uint64_t)sunxi_mmc_idst4(core->result.dma_status) << 15 |
-           (uint64_t)sunxi_mmc_piece_class(core->write_request.blocks) << 19 | (uint64_t)(timing & 3u) << 21 | (uint64_t)e << 23;
+    uint32_t r = core->result.interrupts | core->result.rint_late;
+    return (uint64_t)((r >> 2) & 0x3fffu) | (uint64_t)((r >> 18) & 1u) << 14 | (uint64_t)(core->result.fault_line & 0x7ffu) << 15;
+}
+/* The aux of a failed recovery (15 bits): the platform's result in 2:0 and its fault flag in 3; board_live_refusal() bits 30:28 (fatal, service window, session deadline) in 6:4; the
+ * owner's lifetime deadline passed in 7; the first fault's piece size class in 9:8 and IDMAC error bits in 13:10; in 14 that the loop ended on a platform result and not on
+ * board_live() or the lifetime. */
+static inline uint64_t os_sd_recover_aux(unsigned result, unsigned platform_fault, unsigned refusal, unsigned lifetime, unsigned piece, unsigned idst, unsigned result_exit)
+{
+    return (uint64_t)(result & 7u) | (uint64_t)(platform_fault & 1u) << 3 | (uint64_t)(refusal & 7u) << 4 | (uint64_t)(lifetime & 1u) << 7 | (uint64_t)(piece & 3u) << 8 |
+           (uint64_t)(idst & 15u) << 10 | (uint64_t)(result_exit & 1u) << 14;
 }
 /* The value word of the record for a stage and a detail, as sd_owner.c's diag_word builds it. */
 static inline uint32_t os_sd_note_value(unsigned stage, uint64_t detail) { return (uint32_t)(stage & 0x3fu) | (uint32_t)(detail & 0x3ffffffu) << 6; }

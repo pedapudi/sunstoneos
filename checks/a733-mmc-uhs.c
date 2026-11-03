@@ -179,7 +179,7 @@ static void write_fault(uint8_t *buffer, enum sunxi_mmc_error error)
     struct sunxi_mmc *c = &m.platform.core;
     c->state = SUNXI_MMC_FAULT; c->result.error = error; c->writing = 1; c->dma_write = 1; c->borrowed = buffer; c->borrowed_bytes = 512;
     c->protocol = 27; c->result.interrupts = 0x8080u; c->result.tbc0 = 96u * 512u; c->result.tbc1 = 112u * 512u; c->result.desc_index = 12; c->result.where_valid = 1;
-    c->result.rint_late = 0x8000u;                                                  /* the end-bit error that arrived after the first read of RINTSTS */
+    c->result.rint_late = 0x8000u | (1u << 18); c->result.fault_line = 1234;                /* and the write-busy timeout, bit 18, which the low 16 bits cannot show; the line of the check that raised it */
     c->result.dma_status = (1u << 2) | (1u << 9); c->write_request.blocks = 256;                 /* an IDMAC fatal bus error and its summary, in a piece of 256 sectors */
     /* A fault in the data phase of a tuned write leaves the controller as the write set it: the new timing mode and the write's sample delay. The restart must not inherit them. */
     u.base.reg[0x5c / 4] |= 0x80000110u; u.base.reg[0x144 / 4] = 0x80u;               /* a data CRC error and an end-bit error, as a CRC status failure raises them */
@@ -206,8 +206,10 @@ static void write_recovery(uint8_t *buffer)
         /* stage in 5:0; then status bits 15:1 in 20:6, timing 22:21, descriptor 28:23, error 31:29; aux: 96 blocks in 8:0, the first fault's 5 descriptors in 14:9 */
         assert((value & 0x3f) == 34 && ((value >> 6) & 0x7fff) == (0x8080u >> 1) && ((value >> 21) & 3) == 3 && ((value >> 23) & 63) == 12 && (value >> 29) == SUNXI_MMC_CARD);
         {   /* the first-fault word of stages 37 to 40: both reads of RINTSTS, the IDMAC bits, the piece class, the timing and the error */
-            uint64_t first = os_sd_first_fault(&m.platform.core, m.platform.core.card.timing);
-            assert((first & 0x7fffu) == ((0x8080u >> 1) & 0x7fffu) && ((first >> 15) & 15) == 9 && ((first >> 19) & 3) == 3 && ((first >> 21) & 3) == 3 && ((first >> 23) & 7) == SUNXI_MMC_CARD);
+            uint64_t first = os_sd_first_fault(&m.platform.core);
+            assert((first & 0x3fffu) == ((0x8080u >> 2) & 0x3fffu) && ((first >> 14) & 1) == 1 && ((first >> 15) & 0x7ff) == 1234);       /* the status of both reads, bit 18, and the line */
+            uint64_t raux = os_sd_recover_aux(0, 0, 5, 1, 3, 9, 1);
+            assert((raux & 7) == 0 && ((raux >> 3) & 1) == 0 && ((raux >> 4) & 7) == 5 && ((raux >> 7) & 1) == 1 && ((raux >> 8) & 3) == 3 && ((raux >> 10) & 15) == 9 && ((raux >> 14) & 1) == 1 && raux < (1u << 15));
         }
         assert((aux & 511) == 96 && ((aux >> 9) & 15) == 9 /* bus error and summary */ && ((aux >> 13) & 3) == 3 /* a piece of 256 sectors */);
     }
