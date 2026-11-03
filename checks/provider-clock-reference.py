@@ -6,7 +6,7 @@ GATE_RUNS = [['--output', '{output}']]
 if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 ROOT=Path(__file__).resolve().parents[1]
 def block(text,name):
-    start=re.search(r'(?:static )?(?:int|enum a733_pins_result) '+name+r'\(',text).start()
+    start=re.search(r'(?:static )?(?:int|unsigned|enum a733_pins_result) '+name+r'\(',text).start()
     opening=text.index('{',start);end=opening+1;depth=1
     while depth:
         depth+=(text[end]=='{')-(text[end]=='}');end+=1
@@ -43,6 +43,8 @@ static void initial(unsigned osc,unsigned n,unsigned m){memset(registers,0,sizeo
         text=(ROOT/path).read_text();actual=block(text,fn)
         if name=='twi':
             actual=block((ROOT/'drivers/i2c/a733_twi.c').read_text(),'a733_twi_divider')+'\n'+block(text,'settled')+'\n'+actual
+        if name=='radio':
+            actual=block(text,'profile_line')+'\n'+actual
         if name in ('i2s','pwm'):
             typ,header=('a733_audio_parent','a733_i2s_platform.h') if name=='i2s' else ('a733_pwm','a733_pwm.h')
             extra='uint64_t deadline,' if name=='i2s' else ''
