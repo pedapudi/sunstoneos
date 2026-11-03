@@ -1,8 +1,9 @@
 # Design: application memory sized from the build and the manifest
 
-Status: **design**, with two steps of the migration implemented and host and
-emulator checked: the layout record (step 2) and the heap from the ledger
-(step 1). No part is board-qualified. See "Implemented so far" below.
+Status: **design**, with the migration steps through step 5 implemented and host and
+emulator checked. Board runs pass for the heap from the ledger, manifest regions and the main
+stack in slot 1, the preserving run of a scratch region, and the NPU pool in the slot 1 area.
+See "Implemented so far" below.
 Readers are assumed to know AArch64 stage-1 translation (Arm ARM DDI 0487,
 D8), the FreeRTOS SMP port, [memory-architecture.md](memory-architecture.md)
 and [large-app-regions.md](large-app-regions.md).
@@ -460,6 +461,94 @@ Condition: one run on port 3-1, no card, development DRAM mode.
     The host check shows the tables are right, so this would be a property of the interconnect and would be new.
   - Every graph `mismatch` with the same differing count: the device read or wrote another copy than the CPU, a cache
     maintenance or attribute difference of the slot 1 blocks.
+
+### Predicted board run of the NPU pool below 0x48000000 with the upper memory mapped
+
+The first run of the pool in the slot 1 area (entry `1793652334060640370-11f14671`, the image built from commit `8c4508c3` with the
+pool at `0x78600000`) ended at the watchdog. The only failure it recorded is the supervisor's cutoff test in
+`os_cpu_return_supervise` (`apps/os/cpu-return.c`, detail `0x73c`): the application had not asked for the return by the session
+deadline minus the 5 s return reserve, about 55 s after launch. No NPU, board or application failure came first, and the board
+live test never failed, so no service's progress window expired. The passing run that this one repeated took 5 s. That run was built without the DRAM decode check, so the new image differs in two ways, not one: the pool
+address, and the check, which maps the upper memory at EL1, gives the application an address space and takes its main stack from
+the ledger. The prediction of the first run named only the pool.
+
+Hypothesis: the pool address is the cause. A pool at `0x78600000` leaves the NPU service waiting for a job that does not complete,
+or for a stop that does not finish, while the same image with the pool below `0x48000000` completes. The control is the same
+source tree and recipe with one change, `SUNSTONE_OS_NPU_POOL_BASE` empty: a 10 MiB pool ending at `0x47000000`, which is
+`0x46600000..0x47000000`. The decode check, the application space, the main stack in the ledger and the A76 main core stay as in the
+failed image. A build of the failed recipe from the same tree reproduces the failed image byte for byte, so the control differs
+from it in the pool symbols and the code they select (the ledger reservation, the start test of the reservation, the EL3 pool
+entries and the terminal's clean of a sized pool).
+
+Condition: one run on port 3-1, no card, development DRAM mode, 852 MHz at 800 mV as before.
+
+- **Hypothesis true.** Normal return with the receipt of `expect.json`: seven records with status `match` and no differing byte,
+  `completed` and `matched` equal to 7, the SDK closed, `RETURN_ROM` as the last breadcrumb, about 10 s of launch.
+- **Hypothesis false.** The same watchdog end: last stage `EL3_STOP`, first failure `0x73c`, about 55 s of launch. The cause is then
+  in the composition of the decode check with the NPU service (the application space and TTBR0 switching, the ledger main stack, or an
+  application space on core 6 beside the NPU service on core 1), and the next image must name what the application waits for.
+
+Host evidence before this run. The image's own start code (`checks/os-npu-start.py`, with the kernel tables seeded as the decode check
+leaves them) accepts the session of the failed run and starts the NPU service with the pool at `0x78600000`. An application with no
+regions, a main stack in the ledger and an application space starts and finishes on core 6 and on core 2 in the emulated board.
+No host model contains the NPU's reach of memory, so neither can show a pool-address failure.
+
+**Result.** The control (entry `1793663710033568998-bec104fe`, pool at `0x46600000`) ended exactly as the failed image did: last stage
+`EL3_STOP`, first failure `0x73c` at the supervisor's cutoff, no earlier failure. The hypothesis is false. The pool address is not
+the cause, and the cause lies in running the NPU service in an image whose decode check is on.
+
+### Predicted board run that names what the session waits on
+
+A session that reaches the supervisor's cutoff now records what it was waiting on. The NPU retirement wait in `ss_finish`, the
+only wait of the application that lasts until the cutoff, gives up one second earlier with failure `0x75f`, whose value is the set of
+unmet retirement conditions (`OS_NPU_STATE_*` in `apps/os/npu.h`). The supervisor's cutoff failure `0x73c` carries the return
+address of the application's latest `ss_progress` call as its value and the same conditions in the auxiliary field of its site.
+`tools/a733-crumbs.py` names both.
+
+Hypothesis: the session waits in `ss_finish` for the NPU to retire. The run uses the control image (pool at `0x46600000`, decode
+check on) built from the tree with this change. Nothing else differs from the control.
+
+Condition: one run on port 3-1, no card, development DRAM mode, 852 MHz at 800 mV.
+
+- **Hypothesis true.** First failure `0x75f` in the application group, about 54 s after launch, with a value that lists the unmet
+  conditions. Which of them are unmet says where retirement stops: the report not published points at the client task or the
+  close, the report published but `os_npu_stopped` false points at the bootstrap's local stop or the interrupt state.
+- **Hypothesis false, application elsewhere.** First failure `0x73c` with a progress site inside the graph loop or the close loop of
+  `npu_graphs_main`, which the decoder reports as an address to symbolize against the image.
+- **Hypothesis false, application never ran.** First failure `0x73c` with progress site `0`, and the NPU conditions show whether
+  the service started. The main task did not reach its first `ss_progress` call.
+- **Normal return.** The change alters timing and the cause is a race. The receipt then decides.
+
+**Result.** The run (entry `1793664765522129781-2eeb4b7e`) ended at the cutoff with first failure `0x73c`, not `0x75f`, so the
+session was not waiting in `ss_finish`. The record names the wait. Its value is `0x41089608`, the return address of the
+`ss_progress` call in the first loop of `main_entry` (`apps/os/application.c`), which waits until `ss_live()` is not zero. That
+loop never ended, so the application's main entry never ran. `ss_live()` stays zero while `ss_grant()` is null or the USB service
+task has not marked the transport ready (`os_application_usb_ready`, called first thing by `board_usb0_task` in this profile). The
+NPU state in the site's auxiliary field, `0x41cb`, says the service started and became active, the SDK was never opened, and no
+report was published. The next image must say which of the two terms of `ss_live()` is unmet.
+
+**Cause.** `main_entry` tests `ss_live()`, finds the application not live, and waits for the transport with
+`application_wait_until(deadline - 10 ms)`. A wake-up (`os_wake`) reaches only a task that has registered its wait. When the USB
+service task marks the transport ready after the test and before the registration, the wake-up finds no waiter, and the main
+task sleeps to the session deadline, which the supervisor's cutoff then ends. The wait also extended the application's progress
+window to the deadline, which is why no service window expired. The emulated board reproduces it
+(`usb-ready-between-test-and-wait` in `checks/qemu-os-boot.py`): on the earlier code the application never enters. The wait now
+registers first and tests `ss_live()` again once registered, so the event is either seen by that test or delivered.
+
+### Predicted board run of the NPU pool in the slot 1 area, repeated with the wait fixed
+
+Hypothesis: the failed run of the pool at `0x78600000` (entry `1793652334060640370-11f14671`) was this lost wake-up, and the pool is
+not at fault. The same recipe built from the tree with the wait fixed returns normally with the receipt of `expect.json`: seven
+graphs `match`, `completed` and `matched` equal to 7, the SDK closed, `RETURN_ROM` last, about 10 s of launch. The image differs from
+the failed one in the fix and in the cutoff diagnostics. If the run ends at `0x73c` again, the record's progress site and NPU state
+say where the application waits, and the lost wake-up was not the whole cause.
+
+**Result.** Entry `1793665367809526758-0a66d342` returned normally (`RETURN_ROM` last, about 39 s of launch on a busy queue). Its
+receipt equals the expectation word for word: seven graphs `match` with no differing byte, `completed` and `matched` 7, the SDK
+closed. The queue labelled it `result-mismatch` because my submission passed an expectation file that was already converted,
+which the runner compared as bytes. Entry `1793665683000181061-de31a526` repeats the run with the correct file and has outcome
+`returned`, with the same receipt, in 5.9 s of launch. The pool at `0x78600000` works: the failed run of the pool was the lost
+wake-up, not the pool. The NPU's reach above `0x48000000` is shown by those seven graphs (a pool at the top of the slot 1 area).
 
 ### Predicted board run of the heap
 

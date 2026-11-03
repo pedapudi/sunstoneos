@@ -65,6 +65,24 @@ int os_npu_progress(void);
 int os_npu_complete(void);
 /* Task context only: preserve a late atomic failure before generic cleanup. */
 int os_npu_retirement_check(void);
+/* Which conditions of os_npu_retirement_check() are unmet, as bits (OS_NPU_STATE_*). Zero in an image without the NPU
+ * service; bit 14 is always set in one, so a nonzero word says the service is linked. Reads state only. */
+#define OS_NPU_STATE_NOT_PUBLISHED (1u<<0)  /* the client's report is not published */
+#define OS_NPU_STATE_NOT_STOPPED_REPORT (1u<<1) /* the report does not say stopped */
+#define OS_NPU_STATE_REPORT_RETAINED (1u<<2) /* the report says a failure is retained */
+#define OS_NPU_STATE_NOT_STOPPED (1u<<3)    /* os_npu_stopped() is false */
+#define OS_NPU_STATE_CLOSED (1u<<4)         /* the SDK close completed */
+#define OS_NPU_STATE_STOPPED_FLAG (1u<<5)   /* the bootstrap's local stop completed */
+#define OS_NPU_STATE_ACTIVE (1u<<6)
+#define OS_NPU_STATE_STARTED (1u<<7)
+#define OS_NPU_STATE_OPENED (1u<<8)
+#define OS_NPU_STATE_FAILED (1u<<9)
+#define OS_NPU_STATE_RUNTIME_FAILED (1u<<10)
+#define OS_NPU_STATE_IRQ_PENDING (1u<<11)
+#define OS_NPU_STATE_IRQ_STOPPED (1u<<12)
+#define OS_NPU_STATE_PARKED (1u<<13)
+#define OS_NPU_STATE_LINKED (1u<<14)
+unsigned os_npu_retirement_state(void);
 void os_npu_client_task(void *);
 int os_npu_task_privileged(void (*)(void *),void *);
 struct a733_pin_handoff;
@@ -135,6 +153,7 @@ struct os_npu_report {
     uint8_t last_digest[32]; /* SHA-256 of the last completed job's outputs */
 };
 _Static_assert(sizeof(struct os_npu_report)==OS_NPU_REPORT_BYTES,"OS NPU report geometry");
+extern struct os_npu_report os_npu_published_report;
 /* First local NPU failure, retained without further device operations. Ready
  * is 0 empty, 1 being copied, 2 published. The RTC first-failure latch remains
  * authoritative when an earlier device/provider failure already exists. */

@@ -225,6 +225,25 @@ static int retirement_fault(void)
  * allocations are DRAM state that the host restores. */
 int os_npu_never_ran(void)
 {return !atomic_load_explicit(&bootstrap_ran,memory_order_acquire)&&!atomic_load_explicit(&npu.active,memory_order_acquire);}
+unsigned os_npu_retirement_state(void)
+{
+    unsigned s=OS_NPU_STATE_LINKED;
+    if(!atomic_load_explicit(&os_npu_published_report.finished,memory_order_acquire))s|=OS_NPU_STATE_NOT_PUBLISHED;
+    if(!os_npu_published_report.stopped)s|=OS_NPU_STATE_NOT_STOPPED_REPORT;
+    if(os_npu_published_report.retained)s|=OS_NPU_STATE_REPORT_RETAINED;
+    if(!os_npu_stopped())s|=OS_NPU_STATE_NOT_STOPPED;
+    if(atomic_load_explicit(&npu.closed,memory_order_acquire))s|=OS_NPU_STATE_CLOSED;
+    if(atomic_load_explicit(&npu.stopped,memory_order_acquire))s|=OS_NPU_STATE_STOPPED_FLAG;
+    if(atomic_load_explicit(&npu.active,memory_order_acquire))s|=OS_NPU_STATE_ACTIVE;
+    if(npu.started)s|=OS_NPU_STATE_STARTED;
+    if(npu.opened)s|=OS_NPU_STATE_OPENED;
+    if(atomic_load_explicit(&npu.failed,memory_order_acquire))s|=OS_NPU_STATE_FAILED;
+    if(atomic_load_explicit(&npu.runtime.failed,memory_order_acquire))s|=OS_NPU_STATE_RUNTIME_FAILED;
+    if(atomic_load_explicit(&npu.runtime.service.irq_pending,memory_order_acquire))s|=OS_NPU_STATE_IRQ_PENDING;
+    if(atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire))s|=OS_NPU_STATE_IRQ_STOPPED;
+    if(npu_service_runtime_parked(&npu.runtime.service))s|=OS_NPU_STATE_PARKED;
+    return s;
+}
 int os_npu_retirement_check(void)
 {return !retirement_fault()&&os_npu_complete();}
 #ifdef SUNSTONE_A733_OS_PERF

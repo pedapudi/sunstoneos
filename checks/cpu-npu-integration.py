@@ -185,6 +185,32 @@ if not a.late_isr_only:
   else:
    assert m.stop=='failure' and m.u32(finished)==0 and not m.u32(m.flags['closing']),(variant,m.stop,m.failures)
   results.append(dict(case='finish-'+variant,passed=True,failures=m.failures))
+# A session whose NPU retirement never completes must end with the named failure of ss_finish (site group 4, detail
+# 0x75f, value the unmet NPU conditions), recorded before the supervisor's cutoff test, and the supervisor's own cutoff
+# failure must carry the application's latest progress site and the unmet conditions instead of an empty record.
+if not a.late_isr_only:
+ SECOND=24000000
+ for variant in ['unpublished','not-stopped']:
+  m=Model(image,layout);m.stopped()
+  if variant=='unpublished':m.put32(m.report+12,0)
+  else:m.put32(m.n+m.nf['stopped'],0)
+  m.time=(55000000-1000000+50)*24 # inside the last second before the cutoff of the supervisor
+  m.uc.mem_write(0x41f00000,b'producer-receipt')
+  m.call(6,'ss_finish',(0x41f00000,16))
+  assert m.stop=='failure' and m.failures,(variant,m.stop)
+  site,value=m.failures[0]
+  assert site&0x80000fff==0x8000075f and (site>>12)&15==4,(variant,hex(site))
+  assert value&0x4000 and value&{'unpublished':1,'not-stopped':8}[variant],(variant,hex(value))
+  results.append(dict(case='finish-names-the-unmet-npu-conditions-'+variant,passed=True,failures=m.failures))
+ m=Model(image,layout);m.stopped();m.put32(m.report+12,0)
+ m.put32(layout.address('progress_site','apps/os/application.c'),0x41234568)
+ m.time=55000000*24
+ m.call(0,'os_cpu_return_supervise')
+ assert m.stop=='failure' and m.failures
+ site,value=m.failures[0]
+ assert site&0x80000fff==0x8000073c and (site>>12)&15==3,hex(site)
+ assert (site>>16)&0x4001==0x4001 and value==0x41234568,(hex(site),hex(value))
+ results.append(dict(case='supervisor-cutoff-names-progress-site-and-npu-state',passed=True,failures=m.failures))
 save(a.out/'results.json',dict(physical_access=False,model_boundary=__doc__,cases=results,
  image_sha256=hashlib.sha256(a.elf.read_bytes()).hexdigest(),
  sources={name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in CHECK_INPUTS},

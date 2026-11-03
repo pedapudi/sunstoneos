@@ -36,16 +36,9 @@
  * is unusable (sample_win_th). */
 #define TUNE_REPEATS 20u
 #define TUNE_WINDOW 12u
-/* Sampling errors expected at a bad sample delay: response error, response
- * and data CRC, response and data timeout, FIFO run error, start and end bit.
- * The vendor driver counts each of them, and the hardware-locked bit (12), as a
- * failed delay (SDXC_INTERRUPT_ERROR_BIT of sunxi-mmc.h); data starvation (bit 10)
- * is added for the same reason, a sample point that garbles a block can leave
- * the host starved. The FIFO run error (bit 11) was left out first, and the
- * first SDR104 trial on the board faulted in the sweep on a delay that raised it.
- * Others (card insert and remove, bits 30 and 31 and bit 18) stay terminal. */
-#define TUNE_TOLERATED ((1u << 1) | (1u << 6) | (1u << 7) | (1u << 8) | (1u << 9) | \
-                        (1u << 10) | (1u << 11) | (1u << 12) | (1u << 13) | (1u << 15))
+/* A CMD19 that does not complete within this time fails its delay (the vendor's wait for the request has its own timeout), counted against the cap below. */
+#define TUNE_ATTEMPT_US 10000u
+#define TUNE_HUNG_CAP 12u
 #define TUNE_TIMEOUT 0x040000ffu /* About 1.7 ms of data timeout at 150 MHz. */
 #define UHS SUNXI_MMC_SD_UHS_SDR104
 /* SUNXI_MMC_NO_UHS builds without the UHS-I profile: every UHS-I path is
@@ -71,8 +64,21 @@ static const uint8_t tuning_pattern[64] = {
     0xff, 0xf0, 0xff, 0xf0, 0x0f, 0xfc, 0xcc, 0x3c, 0xcc, 0x33, 0xcc, 0xcf, 0xff, 0xef, 0xff, 0xee,
     0xff, 0xfd, 0xff, 0xfd, 0xdf, 0xff, 0xbf, 0xff, 0xbb, 0xff, 0xf7, 0xff, 0xf7, 0x7f, 0x7b, 0xde };
 
-static void fault(struct sunxi_mmc *h, enum sunxi_mmc_error e)
+static void fatal(struct sunxi_mmc *h, enum sunxi_mmc_error e)
 { if (h->state != SUNXI_MMC_FAULT) { h->result.error = e; h->state = SUNXI_MMC_FAULT; } }
+/* The one rule for the CMD19 sweep: while an attempt is in flight (queued by tune_next, not yet judged by the P_SD_TUNE step), a failure that the
+ * attempt itself can produce, a controller error or a card error, fails this delay and never ends the sweep; the recovery that follows resets
+ * the controller. The board kernel's loop judges the delay the same way (sunxi_mmc_execute_tuning, sunxi-mmc.c:2432-2640: any error or mismatch
+ * breaks the repeat loop and the delay counts as failed). Everything else stays terminal and goes through fatal(): a failed register or
+ * callback (IO), a clock that went backwards (TIME), the operation deadline (TIMEOUT), lost ownership (ADMISSION), a variant mismatch, and card
+ * removal, which interrupts() raises with fatal() itself. */
+static void fault(struct sunxi_mmc *h, enum sunxi_mmc_error e)
+{
+    if (UHS_ON && h->tune_attempt && h->state != SUNXI_MMC_FAULT && (e == SUNXI_MMC_CONTROLLER || e == SUNXI_MMC_CARD)) {
+        h->tune_attempt = 0; h->tune_failed = 1; h->tune_hung = 0; return;
+    }
+    fatal(h, e);
+}
 static int rd(struct sunxi_mmc *h, uint32_t o, uint32_t *v)
 {
     if (h->config.ops.read32(h->config.context, o, v) == 1) return 1;
@@ -402,11 +408,8 @@ static int interrupts(struct sunxi_mmc *h)
     /* Bit 10 reports switch completion while the CMD11 sequence runs. */
     uint32_t errors = v & ERRORS & ~(UHS_ON && h->signal_window ? VSD : 0u);
     if (errors) {
-        /* A sampling error marks this CMD19 delay as failed; recovery resets
-         * the controller FIFO and state machines before the next delay. */
-        if (UHS_ON && h->tuning && h->protocol == P_SD_TUNE && !(errors & ~TUNE_TOLERATED)) {
-            h->tune_failed = 1; return 0;
-        }
+        /* Card removal ends everything; any other error is the CMD19 attempt's failure in a sweep (see fault). */
+        if (errors & ((1u << 18) | (1u << 31))) { fatal(h, SUNXI_MMC_CONTROLLER); return 0; }
         fault(h, SUNXI_MMC_CONTROLLER); return 0;
     }
     return 1;
@@ -788,7 +791,7 @@ static int sd_rate(struct sunxi_mmc *h)
 static void hs_check(struct sunxi_mmc *h)
 {queue(h,P_SD_SWITCH_CHECK,6u|RESP|CRC|DATA|WAIT,0x00fffff1,h->card.switch_status,64);}
 static void tune_next(struct sunxi_mmc *h)
-{queue(h,P_SD_TUNE,19u|RESP|CRC|DATA|WAIT,0,h->tuning_block,64);}
+{h->tune_attempt=1;h->attempt_us=h->last_us;queue(h,P_SD_TUNE,19u|RESP|CRC|DATA|WAIT,0,h->tuning_block,64);}
 /* SDR104 timing, from the board kernel's v4p6x method that its tuning selects:
  * old sample mode (NTSR MODE_SEL 0), 180-degree command and data drive and the
  * software sample delay; each read also sets the read threshold. TMOUT bounds
@@ -858,7 +861,7 @@ static void sd_clock(struct sunxi_mmc *h)
         ++h->sd_ios;return;
     case 2:
         if(uhs){
-            h->tuning=1;h->tune_forced=0;h->card.sample_delay=0;
+            h->tuning=1;h->tune_forced=0;h->tune_hung=0;h->tune_attempt=0;h->card.sample_delay=0;
             if(!uhs_registers(h,1)||!fence(h)||!wr(h,0x18,UPDATE))return;
             ++h->sd_ios;return;
         }
@@ -1166,6 +1169,7 @@ static void protocol(struct sunxi_mmc *h)
         /* The R1 status is not judged during the sweep, as the board kernel's loop does (it looks at the host's command and data errors and compares the
          * block): after a command aborted by a controller reset the card reports COM_CRC_ERROR in its next response, and the third SDR104 trial on 3-3
          * stopped on that at delay 16 or 17, which the first trial had passed. */
+        h->tune_attempt=0;h->tune_hung=0;
         for(unsigned i=0;i<64;++i)if(h->tuning_block[i]!=tuning_pattern[i]){h->tune_failed=1;return;}
         if(++h->tune_repeat<TUNE_REPEATS){tune_next(h);return;}
         tune_advance(h,1);return;
@@ -1244,6 +1248,11 @@ void sunxi_mmc_poll(struct sunxi_mmc *h)
     else if(h->protocol==P_SD_CLOCK)sd_clock(h);
     else if(h->last_us<h->retry_us){h->wait=SUNXI_MMC_WAIT_TIMER;h->wait_us=(uint32_t)(h->retry_us-h->last_us>UINT32_MAX?UINT32_MAX:h->retry_us-h->last_us);}
     else if(UHS_ON&&h->protocol==P_SD_SIGNAL)sd_signal(h);
+    else if(UHS_ON&&h->tune_attempt&&h->last_us-h->attempt_us>=TUNE_ATTEMPT_US){
+        /* No completion and no error: this delay fails. Consecutive attempts that hang stop the sweep. */
+        h->tune_attempt=0;h->tune_failed=1;
+        if(++h->tune_hung>TUNE_HUNG_CAP)fatal(h,SUNXI_MMC_TIMEOUT);
+    }
     else if(UHS_ON&&(h->tune_failed||h->protocol==P_SD_TUNE_RECOVER))tune_recover(h);
     else if(command_step(h))protocol(h);
     if (h->state != SUNXI_MMC_FAULT) (void)time_ok(h);

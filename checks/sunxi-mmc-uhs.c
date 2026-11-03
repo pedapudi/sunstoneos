@@ -47,6 +47,57 @@ static void drive(struct uhs *u, struct sunxi_mmc *h)
     }
     assert(!"UHS model did not reach a terminal state");
 }
+/* Like drive, with one injected fault armed before attempt inj_nth of delay inj_delay (see struct uhs). */
+static void fuzz_drive(struct uhs *u, struct sunxi_mmc *h)
+{
+    for (unsigned i = 0; i < 400000; ++i) {
+        if (h->state == SUNXI_MMC_READY || h->state == SUNXI_MMC_DONE || h->state == SUNXI_MMC_FAULT) return;
+        if (u->sweep_ready && !u->inj_fired && h->tuning && h->tune_delay == u->inj_delay && h->tune_repeat == u->inj_nth) { u->inj_fired = 1; u->inj_armed = 1; }
+        u->base.fifo_this_poll = 0; sunxi_mmc_poll(h);
+    }
+    /* Not terminal: the caller counts it as a failure (a sweep that hangs). */
+}
+static unsigned fuzz_runs, fuzz_failures, fuzz_by_mode[6];
+/* One injected fault: the sweep must end READY (a window, or the no-window fallback) and never FAULT; removal bits must fault. */
+static void fuzz_one(struct uhs *u, struct sunxi_mmc *h, unsigned mode, unsigned bits, unsigned delay, unsigned nth, unsigned must_fault)
+{
+    want_reenter = 1; begin(u, h, 3); want_reenter = 0; u->s18a = 0;
+    if (getenv("FUZZ_TRACE")) fprintf(stderr, "mode %u bits %08x delay %u nth %u\n", mode, bits, delay, nth);
+    u->inj_on = 1; u->inj_mode = mode; u->inj_bits = bits; u->inj_delay = delay; u->inj_nth = nth;
+    fuzz_drive(u, h); ++fuzz_runs;
+    int ok = must_fault ? (h->state == SUNXI_MMC_FAULT && u->inj_fired)
+                        : (u->inj_fired && h->state == SUNXI_MMC_READY &&
+                           (h->card.uhs_outcome == SUNXI_MMC_UHS_SDR104 || h->card.uhs_outcome == SUNXI_MMC_UHS_NO_WINDOW));
+    if (!ok) {
+        ++fuzz_by_mode[mode];
+        if (fuzz_failures++ < 6)
+            printf("FUZZ FAIL mode %u bits 0x%08x delay %u repeat %u: state %d error %d outcome %d fired %u\n", mode, bits, delay, nth,
+                   (int)h->state, (int)h->result.error, (int)h->card.uhs_outcome, u->inj_fired);
+    }
+}
+static void fuzz(struct uhs *u, struct sunxi_mmc *h)
+{
+    /* Every interrupt bit (mode 0), every R1 status bit (1), every control (4) and status (5) register bit, at every delay; the same at the
+     * last repeat of four delays. Removal bits (18, 31) must fault; no other bit may. */
+    for (unsigned mode = 0; mode <= 5; ++mode) {
+        if (mode == 2 || mode == 3) continue;
+        for (unsigned bit = 0; bit < 32; ++bit) {
+            /* The control register's reset bits (0 to 2) report a reset in progress: flipping them lies about progress, which no software can detect. */
+            if (mode == 4 && bit < 3) continue;
+            unsigned must = mode == 0 && (bit == 18 || bit == 31);
+            for (unsigned d = 0; d < 64; ++d) fuzz_one(u, h, mode, 1u << bit, d, 0, must);
+            for (unsigned k = 0; k < 4; ++k) fuzz_one(u, h, mode, 1u << bit, 20 + k * 8 - (k == 3 ? 1 : 0), 19, must);
+        }
+    }
+    /* Every bit at once. */
+    for (unsigned d = 0; d < 64; ++d) { fuzz_one(u, h, 0, 0x7ffbffffu, d, 0, 0); fuzz_one(u, h, 1, 0xffffffffu, d, 0, 0); fuzz_one(u, h, 5, 0xffffffffu, d, 0, 0); }
+    /* A command that never completes, with START clear (2) and set (3), at every delay and at the last repeat. */
+    for (unsigned mode = 2; mode <= 3; ++mode)
+        for (unsigned d = 0; d < 64; ++d) { fuzz_one(u, h, mode, 0, d, 0, 0); if (d >= 20 && d < 44) fuzz_one(u, h, mode, 0, d, 19, 0); }
+    printf("fuzz: %u runs, %u failures (interrupt bits %u, R1 bits %u, hang %u, stuck %u, control register %u, status register %u)\n", fuzz_runs, fuzz_failures,
+           fuzz_by_mode[0], fuzz_by_mode[1], fuzz_by_mode[2], fuzz_by_mode[3], fuzz_by_mode[4], fuzz_by_mode[5]);
+    fflush(stdout); assert(!fuzz_failures);
+}
 static void read_back(struct uhs *u, struct sunxi_mmc *h)
 {
     uint8_t data[4096]; struct sunxi_mmc_result result;
@@ -136,6 +187,8 @@ int main(void)
     assert(h.state == SUNXI_MMC_READY && h.card.uhs_outcome == SUNXI_MMC_UHS_SDR104 && h.card.sample_delay == 32);
     /* A controller that a reset does not free: the recovery repeats the reset and gives up after 12 consecutive recoveries that did not complete. */
     want_reenter = 1; begin(u, &h, 3); want_reenter = 0; u->stuck_always = 1; u->unfixable = 1; faulted(u, &h, SUNXI_MMC_TIMEOUT);
+    /* A card that never answers at any failing delay: each attempt fails its delay after the attempt timer, and 12 in a row stop the sweep. */
+    want_reenter = 1; begin(u, &h, 3); want_reenter = 0; u->hang_always = 1; faulted(u, &h, SUNXI_MMC_TIMEOUT);
     /* A card that fails the sweep the way the board's does: every kind of sampling error, including the FIFO run error. */
     want_reenter = 1; begin(u, &h, 3); want_reenter = 0; u->tune_kinds = 8; u->s18a = 0; drive(u, &h);
     assert(h.state == SUNXI_MMC_READY && h.card.uhs_outcome == SUNXI_MMC_UHS_SDR104 && h.card.sample_delay == 32);
@@ -194,6 +247,7 @@ int main(void)
     drive(u, &h); assert(h.state == SUNXI_MMC_READY && h.card.tuning_start == 50 && h.card.sample_delay == 57);
     /* A FIFO overrun during tuning is not a sampling error. */
     begin(u, &h, 3); u->fatal_delay = 5; faulted(u, &h, SUNXI_MMC_CONTROLLER);
+    fuzz(u, &h);
     /* The profile requires the voltage callback. */
     struct sunxi_mmc probe = {0}; struct sunxi_mmc_config c = {{uhs_read, uhs_write, barrier, now_us, admit,
         retained, uhs_module, uhs_read_fifo, model_write_fifo, NULL, NULL}, u, 0xa733, SUNXI_MMC_SD, 800000, 0x300000,

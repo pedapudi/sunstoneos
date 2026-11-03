@@ -124,14 +124,23 @@ int ss_live(void)
     if(!(grant.devices&SS_DEVICE_USB_STORAGE))return atomic_load_explicit(&board.result,memory_order_acquire)==3;
     return a733_smp_counter()/24<atomic_load_explicit(&observed_until,memory_order_acquire);
 }
-void ss_progress(void){board_service_progress(OS_SERVICE_APPLICATION);}
+static _Atomic uint32_t progress_site;
+__attribute__((noinline)) void ss_progress(void)
+{
+    atomic_store_explicit(&progress_site,(uint32_t)(uintptr_t)__builtin_return_address(0),memory_order_relaxed);
+    board_service_progress(OS_SERVICE_APPLICATION);
+}
+uint32_t os_application_progress_site(void){return atomic_load_explicit(&progress_site,memory_order_relaxed);}
 uint64_t ss_counter_ticks(void)
 {
     uint64_t now;__asm__ volatile("isb\n mrs %0,cntpct_el0":"=r"(now)::"memory");return now;
 }
 void os_application_usb_changed(void)
 {os_wake(main_task);}
-static int application_wait_until(uint64_t until)
+/* A wake-up reaches only a task that has registered its wait (os_wake). An event that happens after the caller tested its
+ * condition and before it registered finds no waiter, and the wait would last to its deadline. unless() tests the
+ * condition again once the wait is registered: the event is then either seen by that test or delivered to the waiter. */
+static int application_wait_until_unless(uint64_t until,int (*unless)(void))
 {
     if(xTaskGetCurrentTaskHandle()==main_task){
         uint64_t limit=board.session.deadline_us;
@@ -141,10 +150,12 @@ static int application_wait_until(uint64_t until)
         if(!board_service_blocked_until(OS_SERVICE_APPLICATION,health))return SUNSTONE_DEADLINE_ERROR;
     }
     const unsigned slot=os_wait_begin(xTaskGetCurrentTaskHandle());
-    const int result=sunstone_deadline_wait_until(until);
+    const int result=unless&&unless()?0:sunstone_deadline_wait_until(until);
     os_wait_end(slot);
     return result;
 }
+static int application_wait_until(uint64_t until){return application_wait_until_unless(until,NULL);}
+static int live_changed(void){return ss_live()!=0;}
 void ss_usb_wait(uint32_t wait_us)
 {
     uint64_t now=a733_smp_counter()/24;
@@ -292,7 +303,7 @@ static void main_entry(void *unused)
     int live;
     while(!(live=ss_live())){
         ss_progress();
-        if(application_wait_until(board.session.deadline_us-10000)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
+        if(application_wait_until_unless(board.session.deadline_us-10000,live_changed)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
         if(a733_smp_counter()/24>=board.session.deadline_us-10000&&ss_live()!=1)ss_fail(0x750);
     }
     if(live<0)ss_fail(0x750);
@@ -452,8 +463,11 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
     /* SDK CLOSE transfers no bootstrap/local-stop authority. Wait for its
      * immutable client report and revalidate the live IRQ/runtime state. */
     while(!os_npu_retirement_check()){
-        if(ss_live()<0||a733_smp_counter()>=os_cpu_return_cutoff()||
-           (grant.finish_by_us&&a733_smp_counter()/24>=grant.finish_by_us))ss_fail(0x75f);
+        /* Give up one second before the supervisor's cutoff, so that this failure, which names the unmet conditions,
+         * is the first one recorded rather than the supervisor's. The stop takes milliseconds. */
+        if(ss_live()<0||a733_smp_counter()+OS_NPU_RETIREMENT_MARGIN_TICKS>=os_cpu_return_cutoff()||
+           (grant.finish_by_us&&a733_smp_counter()/24+OS_NPU_RETIREMENT_MARGIN_TICKS/24>=grant.finish_by_us))
+            ss_fail_value(0x75f,os_npu_retirement_state());
         ss_progress();vTaskDelay(1);
     }
 #endif

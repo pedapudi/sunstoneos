@@ -613,6 +613,12 @@ def main():
         application = image.application('heap-test', ['checks/qemu-os/heap-main.c'], manifest)
         return image.build(application, wraps=['os_large_prepare'])
 
+    def build_usb_race():
+        """An application that is started while the transport becomes ready between its liveness test and its wait."""
+        image = Image(out / 'build-usb-race', extra_sources=['checks/qemu-os/usb-race.c'])
+        application = image.application('hello-compute', ['apps/hello-compute/main.c'], ROOT / 'apps/hello-compute/manifest.json')
+        return image.build(application, wraps=['board_service_blocked_until'])
+
     def build_slot1():
         """An application with a manifest region in level-1 slot 1 above the EL0 window."""
         image = Image(out / 'build-slot1', extra_defines=['-DQEMU_OS_UPPER=1'])
@@ -657,6 +663,7 @@ def main():
         slot1_elf = pool.submit(build_slot1).result()
         heap_elf, heap_big_elf, heap_early_elf = heap_elf.result(), heap_big_elf.result(), heap_early.result()
         notify_elf = pool.submit(build_notify).result()
+        usb_race_elf = pool.submit(build_usb_race).result()
         storage_write_space_elf = pool.submit(build_storage_write_space).result()
         (out / 'build-reverted-owner').mkdir()
         reverted_owner_elf = pool.submit(build_storage_write, reverted_owner(out / 'build-reverted-owner'))
@@ -972,6 +979,14 @@ def main():
     c.failed_with('APPLICATION', 0xe24)
     guard = int(c.failure['value'], 16)
     c.require(0x50000000 <= guard < 0x50200000, 'the overflow faulted at %#x, not in the guard block 0x50000000..0x50200000' % guard)
+
+    # The transport becomes ready between the main task's liveness test and its wait: the wake-up finds no waiter, and the
+    # task must still start, not sleep to the session deadline.
+    c = run_case('usb-ready-between-test-and-wait', usb_race_elf, scenario(usb_ready_ms=60000, limit_ms=4000))
+    c.clean()
+    c.require(c.main is not None and c.main['live'] == '1' and int(c.main['t_us']) < 2_000_000,
+              'the application did not start after the transport became ready between its test and its wait')
+    c.require(c.finished is not None and c.finished['status'] == '1', 'the application did not finish')
 
     # The OS gives the main task its usb-ready and live-state notifications while the main task sleeps in the deadline
     # wait and in ss_host_recv: each ends at its own condition (the deadline; the timeout), not at the OS's notification.
