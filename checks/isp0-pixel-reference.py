@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by isp0-pixel-reference-check.py'
 PLANE = 640 * 480
 
 

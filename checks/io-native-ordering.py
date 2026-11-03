@@ -19,6 +19,7 @@ from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_SP, UC_ARM64_REG_L
 from register_latency import PostedWrites, RegisterLatency
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--output', '{output}']]
 TWI = 0x07083000
 CTRL, STATUS, DATA = TWI + 12, TWI + 16, TWI + 8
 WDT, FEL = 0x02050000, 0x07090108

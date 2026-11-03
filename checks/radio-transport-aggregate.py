@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--evidence', '{output}']]
 SOURCES = ["checks/radio-transport-aggregate.c", "drivers/net/aic8800_dispatch.c", "drivers/net/aic8800_runtime.c",
            "drivers/net/aic8800_wifi.c", "drivers/net/aic8800_security.c", "drivers/net/aic8800_data.c",
            "drivers/net/aic8800_firmware.c", "drivers/net/aic8800_sdio_transport.c", "drivers/net/aic8800_sdio_codec.c",

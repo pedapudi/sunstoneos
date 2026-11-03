@@ -20,6 +20,7 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP
 
 ROOT=Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--image', '{elf:ret-gpu}', '--output', '{output}']]
 spec=importlib.util.spec_from_file_location('gpu_return_rules',ROOT/'apps/os/gpu-return.py')
 decoder=importlib.util.module_from_spec(spec);spec.loader.exec_module(decoder)
 

@@ -10,6 +10,7 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_MEM_READ, UC_HOOK_ME
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_PC
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--firmware', '{cache}/sources/cpu-startup/monitor.fex', '--evidence', '{output}']]
 FIRMWARE_SHA = "8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632"
 
 

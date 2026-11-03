@@ -8,6 +8,9 @@ import re
 import shutil
 import subprocess
 from harness import SANITIZE, environment
+GATE_RUNS = [
+    ['--source', '{cache}/sources/bluetooth-hci', '--l2cap-source', '{cache}/sources/bluetooth-l2cap', '--sdp-source', '{cache}/sources/bluetooth-sdp', '--rfcomm-source', '{cache}/sources/bluetooth-rfcomm', '--hfp-source', '{cache}/sources/bluetooth-hfp', '--audio-source', '{cache}/sources/bluetooth-audio', '--core-source', '{cache}/sources/bluetooth-incoming', '--output', '{output}'],
+]
 p=argparse.ArgumentParser()
 p.add_argument('--source',type=pathlib.Path,required=True)
 p.add_argument('--l2cap-source',type=pathlib.Path,required=True)

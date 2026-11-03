@@ -9,6 +9,9 @@ import argparse, hashlib, json, subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--output', '{output}'],
+]
 
 
 def main():

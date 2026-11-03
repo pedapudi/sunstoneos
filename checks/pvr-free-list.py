@@ -6,6 +6,9 @@ import json
 from pathlib import Path
 import re
 import subprocess
+GATE_RUNS = [
+    ['--sources', '{cache}/sources/gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination', '--output', '{output}'],
+]
 if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 SHIM = r'''

@@ -8,6 +8,9 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--reference-dir', '{cache}/sources/radio/kernel/drivers/net/wireless/aic8800/aic8800_bsp', '--evidence', '{output}'],
+]
 REFERENCES = {
     "aicsdio.c": "f08bcfa63f9b7226f4b26832ee9b6088c057fd5ee06389f3ad872f13f9246f0c",
     "aic_bsp_driver.c": "43439d69cd1c3f537ee90f50d4bc52d2a54379f41092f625ded080daacf7de6e",

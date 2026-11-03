@@ -32,6 +32,16 @@ from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from harness import machine as harness_machine
 from unicorn import arm64_const as reg
+GATE_RUNS = [
+    ['--build', '{build:sup}', '--output', '{output}'],
+    ['--build', '{build:res}', '--output', '{output}'],
+    ['--build', '{build:resaud}', '--output', '{output}'],
+    ['--build', '{build:resradio}', '--output', '{output}'],
+    ['--build', '{build:headset}', '--output', '{output}'],
+    ['--build', '{build:resheadset}', '--output', '{output}'],
+    ['--build', '{build:radio-headset}', '--output', '{output}'],
+    ['--build', '{build:resradio-headset}', '--output', '{output}'],
+]
 
 SESSION = 0x50001000
 WORKLOAD, SID_AUTHORITY, PROFILE_ADDRESS, PROFILE_BYTES = 400, 312, 352, 360

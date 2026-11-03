@@ -8,6 +8,9 @@ import re
 import shutil
 import subprocess
 from harness import SANITIZE, environment
+GATE_RUNS = [
+    ['{cache}/sources/pcie/kernel', '{cache}/sources/u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a', '{output}'],
+]
 
 
 def block(text, pattern):

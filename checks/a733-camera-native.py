@@ -9,6 +9,7 @@ import shutil
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--evidence', '{output}']]
 CACHE = Path.home()/'.cache/sunstoneos'
 DIMENSIONS = [(160,120),(176,144),(320,240),(640,480),(720,480),(720,576),(1024,768),(1280,720),(1920,1080),(2592,1944)]
 SOURCES = [

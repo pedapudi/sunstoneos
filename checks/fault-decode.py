@@ -14,6 +14,7 @@ import json
 import struct
 import sys
 from pathlib import Path
+GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by fault-capture.py'
 
 SLOT_MAGIC = 0x31544c4633333741   # "A733FLT1"
 SLOT_OPEN = 0x30544c4633333741    # "A733FLT0"

@@ -21,6 +21,7 @@ CHECK_INPUTS = ('apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu.h', '
                 'tools/a733-crumbs.py', 'checks/os-npu-first-failure.c',
                 'checks/os-npu-sdk-report.c', 'drivers/storage/storage_digest.c')
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--native-flags', '{build:npu}/CMakeFiles/sunstone-a733-os.dir/flags.make', '--output', '{output}']]
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--native-flags', type=Path, required=True)
 p.add_argument('--output', type=Path, required=True)

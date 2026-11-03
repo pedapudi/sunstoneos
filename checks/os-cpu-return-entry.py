@@ -10,6 +10,7 @@ from pathlib import Path
 from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_LR
 from harness import Image, save
 ROOT=Path(__file__).resolve().parents[1]
+GATE_RUNS = [['{elf:ret-npu-load}', '--out', '{output}']]
 spec=importlib.util.spec_from_file_location('entry_prior',ROOT/'checks/cpu-runtime-qualification.py')
 prior=importlib.util.module_from_spec(spec);spec.loader.exec_module(prior)
 

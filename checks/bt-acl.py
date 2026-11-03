@@ -7,6 +7,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+GATE_RUNS = [['--source', '{cache}/sources/bluetooth-hci', '--output', '{output}']]
 p=argparse.ArgumentParser()
 p.add_argument('--source',type=pathlib.Path,required=True)
 p.add_argument('--output',type=pathlib.Path,required=True)

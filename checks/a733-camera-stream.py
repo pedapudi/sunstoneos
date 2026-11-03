@@ -5,6 +5,7 @@ import hashlib
 import json
 import subprocess
 from pathlib import Path
+GATE_RUNS = [['--evidence', '{output}']]
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--evidence', type=Path, required=True)

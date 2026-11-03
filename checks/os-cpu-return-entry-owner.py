@@ -13,6 +13,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn.arm64_const import UC_ARM64_REG_PC,UC_ARM64_REG_LR,UC_ARM64_REG_SP
 from harness import Image,save
+GATE_RUNS = [['{elf:ret-npu-load}', '--out', '{output}']]
 spec_crumb=importlib.util.spec_from_file_location('owner_cpu_crumbs',Path(__file__).resolve().parents[1]/'tools/a733-crumbs.py')
 cpu_crumbs=importlib.util.module_from_spec(spec_crumb);spec_crumb.loader.exec_module(cpu_crumbs)
 ROOT=Path(__file__).resolve().parents[1]

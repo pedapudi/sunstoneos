@@ -13,6 +13,7 @@ import subprocess
 from harness import CACHE, CLANG, LLD, environment
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--output', '{output}']]
 UNITS = ['drivers/pci/a733_pcie.c', 'drivers/pci/a733_pcie_phy.c',
          'drivers/power/a733_pmic.c', 'drivers/power/a733_rail_leases.c',
          'drivers/clock/a733_clock_leases.c', 'drivers/pinctrl/a733_pins.c',

@@ -12,6 +12,7 @@ import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--work', '{output}']]
 
 
 def digest(data):

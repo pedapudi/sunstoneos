@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--build', '{output}']]
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--build', type=Path, required=True)
 p.add_argument('--cc', default='clang')

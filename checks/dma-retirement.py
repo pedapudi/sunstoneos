@@ -11,6 +11,9 @@ from elftools.elf.elffile import ELFFile
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['include/dma_service.h', 'drivers/dma/dma_service.c',
                 'checks/dma-service.c', 'checks/dma-retirement.c']
+GATE_RUNS = [
+    ['--output', '{output}', '--freertos', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64', '--lld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld'],
+]
 LABELS = {0: 'normal-and-delayed-drain', 1: 'failed-mask-retained',
           2: 'uncollected-peer-reply', 3: 'queued-peer-request', 4: 'stuck-busy-retained'}
 

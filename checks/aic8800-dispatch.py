@@ -8,6 +8,9 @@ from pathlib import Path
 import shutil
 import subprocess
 ROOT=Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--tcp', '{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7', '--rsn', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--kernel', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--headers', '{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include', '--linker', '{cache}/host/usr/lib/llvm-21/bin/ld.lld', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64', '--reference-dir', '{cache}/sources/radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv', '--evidence', '{output}'],
+]
 REFERENCES={
  "aicwf_txrxif.c":"2c22a400aa25e38fa908d0f43313081811aa8b988641464555ed1643585e8ce4",
  "rwnx_cmds.c":"41e06e13c9ad59c244710c89abd9fd53d665739744f73323e8ed9297c11bc71a",

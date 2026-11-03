@@ -2,6 +2,7 @@
 """Exercise selected provider clock admissions on modeled register reads."""
 import argparse, hashlib, json, re, shlex, subprocess
 from pathlib import Path
+GATE_RUNS = [['--output', '{output}']]
 if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 ROOT=Path(__file__).resolve().parents[1]
 def block(text,name):

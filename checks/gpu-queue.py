@@ -20,6 +20,9 @@ from harness import environment
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--output', '{output}', '--freertos', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--firmware', '{cache}/sources/gpu/rogue_36.56.104.183_v1.fw', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64', '--lld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld'],
+]
 CASES = {1: 'grid replay, exact sums', 2: 'grid replay, pattern sums', 3: 'grid replay, jobs complete at once',
          4: 'as 3 with one firmware event per job', 5: 'refused jobs', 6: 'coalesced wake and reserved request capacity',
          7: 'missing tag', 8: 'hang', 9: 'context reset', 10: 'OPEN only',

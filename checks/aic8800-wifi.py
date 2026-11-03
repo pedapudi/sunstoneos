@@ -8,6 +8,9 @@ import struct
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--reference-dir', '{cache}/sources/radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv', '--binding-vectors', '{cache}/evidence/radio-runtime-20261016/model/binding-vectors.bin', '--evidence', '{output}'],
+]
 REFERENCES = {
     "lmac_msg.h": "916df5d5a2346a6504b35bad2fc221233e959a4a68de3d1bd61b1df6dfaf12d3",
     "lmac_mac.h": "90dae163c4350a7786194c4b1f12f7e1d7012cdf1ffda683ff6f116d72bcddce",

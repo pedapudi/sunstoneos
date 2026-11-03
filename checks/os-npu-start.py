@@ -18,6 +18,7 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_UN
 from unicorn.arm64_const import (UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_LR,
                                  UC_ARM64_REG_PSTATE, UC_ARM64_REG_TPIDR_EL1)
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--image', '{elf:ret-npu-load}', '--session', '{session:ret-npu-load}', '--output', '{output}']]
 sys.path.insert(0, str(ROOT / 'checks'))
 import harness
 import importlib.util

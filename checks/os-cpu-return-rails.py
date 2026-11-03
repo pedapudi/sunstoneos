@@ -19,6 +19,7 @@ from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X30, UC_ARM64_REG_PC, UC_ARM64_REG_SP
 from harness import machine as harness_machine, Image, save
+GATE_RUNS = [['{bundle:opp33}', '--out', '{output}'], ['{bundle:opp33-dcdc3}', '--out', '{output}']]
 
 
 def main():

@@ -11,8 +11,9 @@ One edge is allowed on a runtime guard: the failure path board_fail wipes the Wi
 callers and wrong for ss_fail. ss_fail and ss_fail_value set board_fail_from_el0 first and board_fail then skips the wipe.
 The check requires both functions to reference that variable before it stops at board_fail.
 
-usage: el0-privilege.py IMAGE.elf [--allow FUNCTION ...] [--self-test]
+usage: el0-privilege.py IMAGE.elf|BUILD_DIR [--allow FUNCTION ...]  (the self-test always runs first)
 """
+GATE_RUNS = [['{build:resradio}'], ['{build:ret-radio-scan}']]
 import argparse
 import re
 import subprocess
@@ -141,13 +142,10 @@ def self_test():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('image', nargs='?')
+    parser.add_argument('image', help='an image ELF, or a build directory whose *.elf images are scanned')
     parser.add_argument('--allow', nargs='*', default=[])
-    parser.add_argument('--self-test', action='store_true')
     args = parser.parse_args()
     self_test()
-    if args.self_test or not args.image:
-        return 0
     import pathlib
     target = pathlib.Path(args.image)
     images = sorted(target.glob('*.elf')) if target.is_dir() else [target]

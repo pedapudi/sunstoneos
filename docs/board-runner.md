@@ -228,6 +228,18 @@ run is queued. An empty reason is refused. An image that is not a typed-session
 OS image (a probe, a USB class or rail-helper image, a finite NPU image) has no
 host admission; its entry records `preflight: not applicable` with the reason.
 
+A pre-flight is valid only if it ran the host code the daemon will run. The daemon
+records its checkout in `daemon.json` in the queue directory, and the runner it
+starts prepares and admits the session with that checkout's files. `submit` and
+`check` from another checkout compare every file that prepares or admits a
+session with the daemon checkout's `HEAD`. The set is derived, not listed:
+`board.session_files` follows what `tools/board.py`, `tools/board_images.py` and
+`tools/session.py` import, load and run, and the headers the C sources include.
+If any file differs, the tool refuses with `the daemon runs REVISION; these
+session files differ: ...; land them and restart the daemon first`. The daemon
+keeps running only the code on `bringup`. A daemon started before this record
+existed has no `daemon.json` and is not compared until it restarts.
+
 ### The recorded board words
 
 The offline build needs board words that a live run reads under the port lock:

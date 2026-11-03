@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 import types
 from unittest.mock import patch
+GATE_RUNS = [['--out', '{output}']]
 
 if not __debug__:
     raise RuntimeError('Checks require assertions.')

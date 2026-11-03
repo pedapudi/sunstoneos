@@ -13,6 +13,7 @@ import host_rtos
 from harness import environment
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--output', '{output}']]
 CACHE = Path.home() / '.cache/sunstoneos'
 CHECK_INPUTS = ('checks/npu-nocaps.c', 'checks/nbg_wide.py', 'drivers/npu/npu_service.c', 'drivers/npu/nbg_assembly.c',
                 'drivers/npu/a733_npu_mmu.c', 'drivers/npu/nbg_relocation.c', 'runtime/npu_app_queue.c')

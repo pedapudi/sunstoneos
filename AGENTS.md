@@ -83,9 +83,12 @@ The review a change needs depends on what it touches:
   simplicity, hardware performance and correctness. The same three review the
   code. Measure before and after; an unexplained regression blocks the merge.
 
-Run the checks that cover the change, in a build whose feature flags select the
-changed branches ([docs/validation.md](docs/validation.md)). A commit, rebase or
-handoff does not invalidate test evidence. Driver and fixture authors follow
+Build and run the checks you changed, in a build whose feature flags select the
+changed branches ([docs/validation.md](docs/validation.md)). Do not run the
+affected gate after each commit: the gate runs once, at landing, and the landing
+reuses a passing gate ([docs/landing.md](docs/landing.md#the-gate-runs-once)). You
+may run it once before you ask for a landing. A commit, rebase or handoff does not
+invalidate test evidence. Driver and fixture authors follow
 [completion and timing validation](docs/driver-validation.md).
 
 ## Documents and evidence

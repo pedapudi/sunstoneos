@@ -24,6 +24,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+GATE_WAIVED = 'helper module of a runnable check (not run on its own) | run by cmake/a733-memtest.cmake'
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]

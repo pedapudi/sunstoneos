@@ -20,6 +20,7 @@ import sys
 import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--build', '{output}', '--cc', '/usr/bin/clang', '--clang', '/usr/bin/clang']]
 p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 p.add_argument('--build', type=Path, required=True, help='empty or absent scratch directory')
 p.add_argument('--manifest', type=Path, action='append', default=[], help='additional application manifest (repeatable)')

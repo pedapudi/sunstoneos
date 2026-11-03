@@ -6,6 +6,7 @@ import json
 import pathlib
 import shutil
 import subprocess
+GATE_RUNS = [['--evidence', '{output}']]
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--sources', type=pathlib.Path, default=pathlib.Path.home()/'.cache/sunstoneos/sources')

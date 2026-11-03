@@ -8,6 +8,7 @@ from pathlib import Path
 import struct
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_SP, UC_ARM64_REG_LR
+GATE_RUNS = [['--elf', '{elf:ret-npu-load}', '--evidence', '{output}']]
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--elf',type=Path,required=True)
 p.add_argument('--layout-helper',type=Path,default=Path(__file__).resolve().parent/'storage-read-native.py')

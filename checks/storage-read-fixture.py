@@ -3,6 +3,7 @@
 import hashlib,importlib.util,json,re,struct
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
+GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by tools/gate_session.py'
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 FACTS={

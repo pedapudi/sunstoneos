@@ -9,6 +9,7 @@ from pathlib import Path
 import struct
 import subprocess
 import sys
+GATE_RUNS = [['--image', '{bundle:storage-read-returning}', '--output', '{output}']]
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'checks'))

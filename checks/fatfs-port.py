@@ -13,6 +13,7 @@ import shutil
 import struct
 import subprocess
 from pathlib import Path
+GATE_RUNS = [['--evidence', '{output}']]
 
 p = argparse.ArgumentParser()
 p.add_argument('--fatfs', type=Path, default=Path.home() / 'git/esp-idf/components/fatfs/src',

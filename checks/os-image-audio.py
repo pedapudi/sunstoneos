@@ -29,6 +29,7 @@ from harness import machine as harness_machine
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--build', '{build:resaud}', '--output', '{output}']]
 CASES = ['two-generations-pcm-headroom-and-stream-reuse', 'discontinuous-period-refused',
          'self-stopped-stream-refused', 'request-rules', 'progress-reports',
          'formats-periods-and-buffers', 'rates-and-period-sizes', 'full-ring-and-handshakes',

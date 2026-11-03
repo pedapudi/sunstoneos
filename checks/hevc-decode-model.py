@@ -22,6 +22,7 @@ from pathlib import Path
 import subprocess
 
 ROOT=Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--output', '{output}']]
 CACHE=Path.home()/'.cache/sunstoneos'
 SOURCES=['checks/hevc-decode-model.c','apps/hevc/parse.c','apps/hevc/storage.c',
     'drivers/video/a733_video_hevc.c','drivers/video/a733_video_platform.c','drivers/video/a733_video_unit.c',
