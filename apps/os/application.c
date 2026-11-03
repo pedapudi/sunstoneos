@@ -501,7 +501,11 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
 #endif
 #ifdef SUNSTONE_A733_OS_RADIO
     /* The session is over: the Wi-Fi credential record leaves RAM before the result is published. */
+#ifndef SUNSTONE_A733_OS_RADIO_SCAN
     os_wifi_credential_wipe();
+#endif
+    /* The scanning image wipes from the EL1 return supervisor (os_radio_scan_return_request): the wipe's
+     * cache maintenance (dc civac) traps at EL0, where this task runs. */
 #endif
     struct ss_result *r=(void *)ss_result_record;
     r->magic=SS_RESULT_MAGIC;r->version=SS_RESULT_VERSION;r->bytes=sizeof(*r)+ss_result_capacity;
