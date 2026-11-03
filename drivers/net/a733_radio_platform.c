@@ -199,7 +199,8 @@ static int host_time(void *cookie,uint64_t *out)
     if(p->fault||p->ops.current(p->cookie)!=1)return 0;
     if(!timely(p)){fail(p);return 0;}
     if((p->host.state==SUNXI_SDIO_PREPARING||p->host.state==SUNXI_SDIO_QUEUED||
-        p->host.state==SUNXI_SDIO_ACTIVE||p->host.state==SUNXI_SDIO_DONE||p->host.state==SUNXI_SDIO_WIDENING)&&
+        p->host.state==SUNXI_SDIO_ACTIVE||p->host.state==SUNXI_SDIO_DONE||p->host.state==SUNXI_SDIO_WIDENING||
+        p->host.state==SUNXI_SDIO_QUIESCING)&&
         p->last_now>=p->host.deadline) {
         sunxi_sdio_stop(&p->host,SUNXI_SDIO_TIMEOUT);fail(p);return 0;
     }
@@ -505,6 +506,80 @@ static enum a733_radio_platform_result controller(struct a733_radio_platform *p)
     if(!timely(p)||p->fault)return fail(p);
     return p->stage==RSTAGE_READY?A733_RADIO_READY:A733_RADIO_PENDING;
 }
+int a733_radio_platform_shutdown(struct a733_radio_platform *p,const struct a733_radio_borrow *token,uint64_t deadline)
+{
+    if(!p||!p->initialized||!token||!a733_ranges_disjoint(p,sizeof(*p),token,sizeof(*token)))return 0;
+    unsigned expected=0;
+    if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return 0;
+    int ok=!p->fault&&p->ops.current(p->cookie)==1&&p->stage==RSTAGE_READY&&token->generation&&
+        token->generation==p->borrower.generation&&token->owner==p->borrower.owner&&
+        p->host.state==SUNXI_SDIO_READY&&p->card.state==SDIO_CARD_READY&&observe(p)&&
+        deadline>p->last_now&&deadline<=p->config.lifetime_deadline_us;
+    if(ok){p->deadline=deadline;p->stage=RSTAGE_SHUTDOWN_PM1;}
+    (void)finish(p,A733_RADIO_PENDING);return ok;
+}
+/* One bounded shutdown step; the caller's finish() releases the register lock. */
+static enum a733_radio_platform_result shutdown_poll(struct a733_radio_platform *p)
+{
+    if(p->stage==RSTAGE_DOWN)return A733_RADIO_DOWN;
+    if(p->stage==RSTAGE_SHUTDOWN_PM1) {
+        enum a733_pins_result r=a733_pins_write_outputs(p->pins,&p->pin_lease,A733_PIN_M,2,0,p->deadline);
+        if(!timely(p))return fail(p);
+        if(r==A733_PINS_BUSY)return A733_RADIO_BUSY;
+        if(r!=A733_PINS_OK)return fail(p);
+        p->stage=RSTAGE_SHUTDOWN_CONTROLLER;return A733_RADIO_PENDING;
+    }
+    if(p->stage==RSTAGE_SHUTDOWN_POWER) {
+        if(!p->power_on){p->stage=RSTAGE_DOWN;return A733_RADIO_DOWN;}
+        enum a733_pmic_status r=a733_pmic_submit_power_off(p->pmic,p->config.owner,&p->rail,A733_RAIL_BLDO5,
+            RADIO_IO_CODE,p->deadline,&p->pmic_request);
+        if(!timely(p))return fail(p);
+        if(r==A733_PMIC_BUSY)return A733_RADIO_BUSY;
+        if(r!=A733_PMIC_PENDING||!p->pmic_request.id)return fail(p);
+        p->stage=RSTAGE_SHUTDOWN_POWER_WAIT;return A733_RADIO_PENDING;
+    }
+    if(p->stage==RSTAGE_SHUTDOWN_POWER_WAIT) {
+        struct a733_pmic_snapshot off;
+        enum a733_pmic_status r=a733_pmic_result(p->pmic,&p->pmic_request,&off);
+        if(!timely(p))return fail(p);
+        if(r==A733_PMIC_PENDING||r==A733_PMIC_BUSY)return A733_RADIO_PENDING;
+        if(r!=A733_PMIC_COMPLETE||off.rail!=A733_RAIL_BLDO5||off.page_before||off.page_after||off.chip!=3||
+            off.revision||off.enabled||(off.selector&31u)!=RADIO_IO_CODE)return fail(p);
+        r=a733_pmic_reap(p->pmic,&p->pmic_request);
+        if(r==A733_PMIC_BUSY)return A733_RADIO_PENDING;
+        if(r!=A733_PMIC_COMPLETE)return fail(p);
+        p->pmic_request=(struct a733_pmic_request){0};
+        p->stage=RSTAGE_DOWN;return A733_RADIO_DOWN;
+    }
+    /* Controller and clock steps hold the shared register lock. */
+    int live=clock_live(p);
+    if(live<0)return fail(p);
+    if(!live)return A733_RADIO_BUSY;
+    int locked=lock(p);
+    if(locked<0)return fail(p);
+    if(!locked)return A733_RADIO_BUSY;
+    if(p->pins->failed||!timely(p))return fail(p);
+    /* Only the clock step writes shared CCU state under the register lock. */
+    if(p->stage!=RSTAGE_SHUTDOWN_CLOCKS){p->ops.leave(p->cookie);p->held=0;}
+    if(p->stage==RSTAGE_SHUTDOWN_CONTROLLER) {
+        if(!sunxi_sdio_quiesce(&p->host,p->deadline))return fail(p);
+        p->stage=RSTAGE_SHUTDOWN_CONTROLLER_WAIT;
+    } else if(p->stage==RSTAGE_SHUTDOWN_CONTROLLER_WAIT) {
+        p->core_call=1;sunxi_sdio_poll(&p->host);p->core_call=0;
+        if(p->host.state==SUNXI_SDIO_FAULT)return fail(p);
+        if(p->host.state==SUNXI_SDIO_QUIESCED)p->stage=RSTAGE_SHUTDOWN_CLOCKS;
+    } else if(p->stage==RSTAGE_SHUTDOWN_CLOCKS) {
+        /* Module gate off, then the bus gate and reset asserted, each read back; the
+         * interrupt stays masked and inactive. */
+        uint32_t old=p->running_module;
+        int ok=update(p,CCU+0xd10,0x87001f1f,old,old&~BIT(31))&&
+            update(p,CCU+0xd1c,0x10001,0x10001,0)&&masked(p)==1;
+        if(!ok)return fail(p);
+        p->running_module=old&~BIT(31);p->stage=RSTAGE_SHUTDOWN_POWER;
+    } else return fail(p);
+    if(!timely(p)||p->fault)return fail(p);
+    return A733_RADIO_PENDING;
+}
 enum a733_radio_platform_result a733_radio_platform_poll(struct a733_radio_platform *p)
 {
     if(!p||!p->initialized)return A733_RADIO_INVALID;
@@ -513,7 +588,14 @@ enum a733_radio_platform_result a733_radio_platform_poll(struct a733_radio_platf
     if(p->fault)return finish(p,fail(p));
     if(p->ops.current(p->cookie)!=1)return finish(p,A733_RADIO_INVALID);
     if(p->stage==RSTAGE_READY)return finish(p,p->host.state==SUNXI_SDIO_FAULT?fail(p):A733_RADIO_READY);
+    if(p->stage==RSTAGE_DOWN)return finish(p,A733_RADIO_DOWN);
     if(!timely(p))return finish(p,fail(p));
+    if(p->stage>RSTAGE_READY){
+        int health=supply_live(p);
+        if(health<0)return finish(p,fail(p));
+        if(!health)return finish(p,A733_RADIO_BUSY);
+        return finish(p,shutdown_poll(p));
+    }
     if(p->stage>RSTAGE_RAILS) {
         int health=supply_live(p);
         if(health<0)return finish(p,fail(p));

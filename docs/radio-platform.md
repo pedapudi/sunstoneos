@@ -230,8 +230,32 @@ admission therefore requires independent recovery. Its supervised RAM-only PIO
 mode permits confirmed whole-board power removal while all radio resources
 remain retained; it grants no retry or reuse after uncertainty.
 
-The current radio transport has no complete shutdown and disposal protocol.
-Accordingly, this binding offers no resource-release API after handoff.
+## Shutdown reads back every step
+
+`a733_radio_platform_shutdown()` shuts the module down so that the board can
+return normally. Only the downstream owner that holds the borrow token may ask,
+and only from READY with an idle controller. Poll then runs these steps in
+order, and a mismatch in any readback retains the platform:
+
+1. PM1 is driven low and read back from the DATA latch.
+2. The controller stops the card clock (the clock register cleared and its update
+   command, read back) and clears its interrupt mask and DMA interrupt enable
+   (read back).
+3. The SDC1 module clock gate is turned off, then the bus gate and reset are
+   asserted, each read back. INTID 194 is checked to be masked and inactive.
+4. If this run powered BLDO5 on, BLDO5 is turned off through the PMIC provider:
+   its enable byte is cleared in a read-modify-write and read back, and its
+   selector is not written. The provider refuses unless BLDO5 is on at selector
+   code 13.
+
+The result is `A733_RADIO_DOWN`. The card and the borrow are unusable afterwards.
+The shutdown is host-tested only; the readbacks prove programmed and latched
+values, not a measured rail voltage or a quiet bus.
+
+The current radio transport has no complete disposal protocol for a firmware
+lifetime that is still running: the shutdown requires the owner to have stopped
+the transport first. Accordingly, this binding offers no resource-release API
+after handoff.
 Downstream firmware, runtime and packet objects remain alive through fault and
 external recovery. A future shutdown path must first close every borrower and
 prove card/controller quiescence before restoring pins or changing module power.

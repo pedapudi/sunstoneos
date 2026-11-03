@@ -294,6 +294,37 @@ int main(void)
     assert(r.radio.power_on && r.radio.rail_verify && r.enabled_at>=pmic_log[1].at+10000);
     assert(r.first_host_at>=r.enabled_at+50000);
     assert(r.radio.snapshots[1].rail==A733_RAIL_BLDO5 && r.radio.snapshots[1].enabled && r.radio.snapshots[1].programmed_uv==1800000);
+    /* Shutdown with a readback at every step, in order: PM1 low, controller quiesce, module and bus
+     * clocks off, BLDO5 off. Only the borrow holder may ask, and nothing is usable afterwards. */
+    {
+        struct a733_radio_borrow down_token={0},none={0};struct sdio_card *down_card=0;
+        assert(!a733_radio_platform_shutdown(&r.radio,&down_token,r.power.now+400000)); /* Not borrowed yet. */
+        assert(a733_radio_platform_borrow(&r.radio,80,&down_token,&down_card));
+        struct a733_radio_borrow forged=down_token;++forged.generation;
+        assert(!a733_radio_platform_shutdown(&r.radio,&none,r.power.now+400000));
+        assert(!a733_radio_platform_shutdown(&r.radio,&forged,r.power.now+400000));
+        assert(!a733_radio_platform_shutdown(&r.radio,&down_token,r.power.now)); /* Deadline in the past. */
+        assert(a733_radio_platform_shutdown(&r.radio,&down_token,r.power.now+400000));
+        assert(!a733_radio_platform_shutdown(&r.radio,&down_token,r.power.now+400000));
+        unsigned order[16],n=0,last=r.radio.stage;enum a733_radio_platform_result down=A733_RADIO_PENDING;order[n++]=last;
+        for(unsigned i=0;i<400&&down!=A733_RADIO_DOWN;++i){
+            down=radio_step();assert(down!=A733_RADIO_RETAINED);
+            if(r.radio.stage!=last&&n<16){order[n++]=last=r.radio.stage;}
+        }
+        assert(down==A733_RADIO_DOWN&&n==7);
+        assert(order[0]==RSTAGE_SHUTDOWN_PM1);
+        assert(order[n-1]==RSTAGE_DOWN&&r.radio.stage==RSTAGE_DOWN);
+        for(unsigned i=1;i<n;++i)assert(order[i]>order[i-1]); /* Steps never run out of order. */
+        assert(!(*pmic_model_word(&r.power,0x07025040)&2));                    /* PM1 low. */
+        assert(r.sdc[0x04/4]==0&&r.sdc[0x30/4]==0&&r.sdc[0x8c/4]==0);           /* Card clock stopped, interrupts masked. */
+        assert(!(*pmic_model_word(&r.power,0x02002d10)&(1u<<31)));              /* Module clock gate off. */
+        assert(!(*pmic_model_word(&r.power,0x02002d1c)&0x10001));               /* Bus gate off, reset asserted. */
+        assert(pmic_log_count==3&&pmic_log[2].reg==0x21&&pmic_log[2].value==0xfb&&!pmic_log[2].pm1); /* BLDO5 off after PM1 low. */
+        assert(r.power.pmic[0x2e]==0x2d&&!(r.power.pmic[0x21]&4)&&r.power.pmic[0x2f]==13);
+        assert(r.radio.host.state==SUNXI_SDIO_QUIESCED&&!r.radio.pmic_request.id);
+        assert(a733_radio_platform_live(&r.radio,&down_token,r.power.now+1000)==A733_RADIO_INVALID);
+        assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_DOWN);
+    }
     /* First-run guard: observes DCDC8 and the pad power words before any write and
      * proceeds only if BLDO5 is off, PG is unsupplied, CLDO1 is 1.8V and DCDC1 is code 23. */
     guard_config=1;

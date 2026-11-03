@@ -30,10 +30,13 @@ struct a733_radio_platform_config {
 };
 /* Platform startup stages, in order; READY is the last. Public so a result record can name the stage reached. */
 enum a733_radio_platform_stage {
-    RSTAGE_ACQUIRE, RSTAGE_RESERVE_RAILS, RSTAGE_WAIT_RAILS, RSTAGE_ADMIT, RSTAGE_RAILS, RSTAGE_BASELINE, RSTAGE_GIC_WAIT, RSTAGE_GUARD, RSTAGE_PINS, RSTAGE_POWER_ON, RSTAGE_POWER_WAIT, RSTAGE_VERIFY_RAILS, RSTAGE_SUPPLY_WAIT, RSTAGE_ENABLE_MODULE, RSTAGE_MODULE_SETTLE, RSTAGE_BUS_GATE, RSTAGE_RESET_WAIT, RSTAGE_RESET_RELEASE, RSTAGE_PREPARE, RSTAGE_PREPARING, RSTAGE_ENUMERATE, RSTAGE_ENUMERATING, RSTAGE_WIDE_READ, RSTAGE_WIDE_WRITE, RSTAGE_WIDEN, RSTAGE_WIDENING, RSTAGE_WIDE_VERIFY, RSTAGE_READY
+    RSTAGE_ACQUIRE, RSTAGE_RESERVE_RAILS, RSTAGE_WAIT_RAILS, RSTAGE_ADMIT, RSTAGE_RAILS, RSTAGE_BASELINE, RSTAGE_GIC_WAIT, RSTAGE_GUARD, RSTAGE_PINS, RSTAGE_POWER_ON, RSTAGE_POWER_WAIT, RSTAGE_VERIFY_RAILS, RSTAGE_SUPPLY_WAIT, RSTAGE_ENABLE_MODULE, RSTAGE_MODULE_SETTLE, RSTAGE_BUS_GATE, RSTAGE_RESET_WAIT, RSTAGE_RESET_RELEASE, RSTAGE_PREPARE, RSTAGE_PREPARING, RSTAGE_ENUMERATE, RSTAGE_ENUMERATING, RSTAGE_WIDE_READ, RSTAGE_WIDE_WRITE, RSTAGE_WIDEN, RSTAGE_WIDENING, RSTAGE_WIDE_VERIFY, RSTAGE_READY,
+    /* Shutdown, in order: PM1 low, controller quiesce, module and bus clocks off, BLDO5 off, DOWN. */
+    RSTAGE_SHUTDOWN_PM1, RSTAGE_SHUTDOWN_CONTROLLER, RSTAGE_SHUTDOWN_CONTROLLER_WAIT, RSTAGE_SHUTDOWN_CLOCKS,
+    RSTAGE_SHUTDOWN_POWER, RSTAGE_SHUTDOWN_POWER_WAIT, RSTAGE_DOWN
 };
 enum a733_radio_platform_result { A733_RADIO_PENDING, A733_RADIO_BUSY,
-    A733_RADIO_READY, A733_RADIO_RETAINED, A733_RADIO_INVALID };
+    A733_RADIO_READY, A733_RADIO_RETAINED, A733_RADIO_INVALID, A733_RADIO_DOWN };
 /* Bounded, non-reentrant callbacks. Physical admission authenticates the exact
  * handoff, board topology and scope token; excludes console/storage/card/DMA,
  * remote firmware, GIC handlers and all independent module reset/power writers.
@@ -118,6 +121,17 @@ int a733_radio_platform_four_bit(struct a733_radio_platform *);
  * selector code 23. Otherwise it keeps every observation and retains with no
  * PMIC write. */
 int a733_radio_platform_first_run_guard(struct a733_radio_platform *);
+/* Shut the module down, with a readback for every step, so that the board can
+ * return normally. Only from READY, by the downstream owner that holds the borrow
+ * token and has stopped all card use: the host controller must be idle. Poll
+ * then runs, in order, PM1 low (read back from DATA), the controller quiesce (card
+ * clock stopped, interrupts masked, read back), the SDC1 module clock gate off and
+ * the bus gate and reset asserted (read back, INTID 194 still masked), and, if this
+ * run powered BLDO5 on, BLDO5 off with its enable byte read back. The result is
+ * A733_RADIO_DOWN when every readback matched; any mismatch retains. After DOWN the
+ * card and borrow are unusable. The deadline must lie after the current time and
+ * within the lifetime deadline. Physical operation unqualified. */
+int a733_radio_platform_shutdown(struct a733_radio_platform *,const struct a733_radio_borrow *,uint64_t deadline);
 /* Sample PM4 host-wake through the actual shared pin owner. Its level does
  * not establish controller readiness or acknowledge an interrupt. */
 enum a733_radio_platform_result a733_radio_platform_bluetooth_wake(struct a733_radio_platform *,

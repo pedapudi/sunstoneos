@@ -427,6 +427,19 @@ int main(int argc,char **argv)
         assert(data_writes==2 && m.pmic[0x2e]==0x2d && m.pmic[0x21]==0xff && got.enabled && got.decoded &&
             got.programmed_uv==1800000 && got.selector==0x2d && got.enable==0xff && !m.i2c_held);
         assert(a733_pmic_reap(&m.provider,&request)==A733_PMIC_COMPLETE);
+        /* The reverse: only the output this driver turned on, at its code; the selector is not written. */
+        data_writes=0;
+        assert(a733_pmic_submit_power_off(&m.provider,10,&io,A733_RAIL_CLDO1,13,m.now+1000000,&request)==A733_PMIC_INVALID);
+        assert(a733_pmic_submit_power_off(&m.provider,10,&io,A733_RAIL_BLDO5,12,m.now+1000000,&request)==A733_PMIC_INVALID);
+        assert(a733_pmic_submit_power_off(&m.provider,10,&io,A733_RAIL_BLDO5,13,m.now+1000000,&request)==A733_PMIC_PENDING);
+        finish(&m,&request,&got);
+        assert(data_writes==1 && m.pmic[0x21]==0xfb && m.pmic[0x2e]==0x2d && !got.enabled && got.enable==0xfb && !m.i2c_held);
+        assert(a733_pmic_reap(&m.provider,&request)==A733_PMIC_COMPLETE);
+        /* Already off: nothing to turn off, no write. */
+        data_writes=0;
+        assert(a733_pmic_submit_power_off(&m.provider,10,&io,A733_RAIL_BLDO5,13,m.now+1000000,&request)==A733_PMIC_PENDING);
+        for(unsigned i=0;i<200 && !m.provider.failed;++i)pmic_model_step(&m);
+        assert(m.provider.failed && !data_writes && m.pmic[0x21]==0xfb);
     }
     /* Independent DMA/autonomous engines refuse before pin transition. */
     const uintptr_t dirty[]={0x07083200,0x07083314,0x07083218,0x0340011c};

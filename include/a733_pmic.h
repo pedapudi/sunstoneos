@@ -194,6 +194,14 @@ enum a733_pmic_status a733_pmic_submit_write(struct a733_pmic *,uint64_t owner,
 enum a733_pmic_status a733_pmic_submit_power_on(struct a733_pmic *,uint64_t owner,
     const struct a733_rail_token *,enum a733_rail,uint8_t target,
     uint64_t deadline,struct a733_pmic_request *);
+/* The reverse of the power-on, for the BLDO5 supply that this driver turned on:
+ * under an exclusive lease, the request reads the six snapshot bytes, requires
+ * the output enabled at selector code target, clears its enable bit in a
+ * read-modify-write of the enable byte and reads that back. It does not touch
+ * the selector. Any other state retains the request without a write. */
+enum a733_pmic_status a733_pmic_submit_power_off(struct a733_pmic *,uint64_t owner,
+    const struct a733_rail_token *,enum a733_rail,uint8_t target,
+    uint64_t deadline,struct a733_pmic_request *);
 enum a733_pmic_status a733_pmic_result(struct a733_pmic *,const struct a733_pmic_request *,
     struct a733_pmic_snapshot *);
 enum a733_pmic_status a733_pmic_reap(struct a733_pmic *,const struct a733_pmic_request *);
