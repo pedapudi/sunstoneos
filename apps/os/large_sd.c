@@ -192,7 +192,7 @@ static int configure(unsigned start18)
  * a second time because the card was found at 1.8 V, 47:40 the recovery restarts; [1] the card clock in Hz; [2] bits 7:0 the sample delay, 15:8 the window start,
  * 23:16 its width, 31:24 the group 1 support bits, 32 S18A; [3] the first four mode log entries, one byte each (from | to << 2 | reason << 4); [4] the first two faults the recovery acted on (os_sd_fault_events: error, protocol step, interrupt status). */
 uint64_t os_sd_mode[5];
-static unsigned reopened, restarts;
+static unsigned reopened, restarts, busy_total;
 static void record_mode(void)
 {
     const struct sunxi_mmc_card *c = &platform.core.card;
@@ -215,7 +215,7 @@ static int found_at_1v8(void)
     return sunxi_mmc_card_found_at_1v8(&platform.core.card);
 }
 #define RECOVER_US 3000000u
-static unsigned saved_aux, busy_total; static uint64_t saved_where;   /* where the last write fault stopped, kept across the restart that discards the core's result */
+static unsigned saved_aux; static uint64_t saved_where;   /* where the last write fault stopped, kept across the restart that discards the core's result */
 static uint64_t first_fault_detail; static unsigned first_fault_piece, first_fault_idst;       /* the core's error, protocol step and interrupt status at the first failed request (apps/os/sd_note.h), kept for the failure record */
 static uint64_t last_sector; static uint32_t last_count; static uint8_t *last_dma;
 #ifdef OS_SD_WRITE
