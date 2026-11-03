@@ -460,8 +460,10 @@ static enum a733_radio_platform_result registers(struct a733_radio_platform *p)
         for(unsigned i=0;ok&&i<4;++i)ok=rd(p,words[i],&p->pad_power[i]);
         if(ok) {
             p->guard_done=1;
-            /* BLDO5 off with PG unsupplied, or (left on by a reset) on at 1.8V with PG reading 1.8V. */
-            unsigned pg=(p->pad_power[1]>>12)&3,unmet=(p->already_on?pg==3:pg<2)?0u:1u;
+            /* Refuse only a PG reading of 3.3 V (10): the manual defines no "unsupplied" reading (00 and 01 are Invalid),
+             * the board reads 11 with BLDO5 off and on, and 3.3 V would be another supply that could fight BLDO5.
+             * BLDO5 must be off, or (left on by a reset) on at 1.8V. */
+            unsigned pg=(p->pad_power[1]>>12)&3,unmet=pg!=2?0u:1u;
             for(unsigned i=0;i<p->rail_count;++i) {
                 const struct a733_pmic_snapshot *s=&p->snapshots[i];
                 if(s->rail==A733_RAIL_DCDC1)unmet|=(s->enabled&&(s->selector&31u)==23)?0u:2u;

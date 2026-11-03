@@ -90,11 +90,11 @@ not follow BLDO5, so this word does not show what supplies PG. Either another
 1.8 V source supplies PG, or the detect does not track the pin in this state.
 The device tree still annotates BLDO5 as `vcc-pg` (`wlan_power`, line 2957 of
 the board device tree) and the schematic names no supply for the net. The
-first-run guard treated `00` and `01` as "unsupplied" and `11` as "supplied by
-something else"; the manual supports neither reading, and the guard refused
-for that reason (code `0x431`). Whether to keep the PG condition is a decision
-that follows from a measurement of PG with the module's supply isolated, not
-from this register alone.
+first-run guard had treated `00` and `01` as "unsupplied" and required them; the
+manual supports no such reading, and the guard refused the run for that reason
+(code `0x431`). The guard now refuses only a 3.3 V reading (`10`), which would be
+a different supply that could fight BLDO5, and records the PG bits either way
+(`docs/designs/radio-service-stages.md`).
 
 The finite observer `apps/power-supply-observe` already reads the PMIC bytes;
 the pin-block words come from the existing read-only bundle reader

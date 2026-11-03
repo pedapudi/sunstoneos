@@ -328,7 +328,7 @@ int main(void)
         assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_DOWN);
     }
     /* First-run guard: observes DCDC8 and the pad power words before any write and
-     * proceeds only if BLDO5 is off, PG is unsupplied, CLDO1 is 1.8V and DCDC1 is code 23. */
+     * proceeds only if BLDO5 is off (or on at 1.8V), PG does not read 3.3 V, CLDO1 is 1.8V and DCDC1 is code 23. */
     guard_config=1;
     radio_setup();r.power.pmic[0x21]&=(uint8_t)~4u;r.power.pmic[0x2e]=0x3a;
     *pmic_model_word(&r.power,0x02000048)=1u<<12;*pmic_model_word(&r.power,0x07025348)=3u<<2;
@@ -340,10 +340,21 @@ int main(void)
     {unsigned seen=0;for(unsigned i=0;i<4;++i)if(r.radio.snapshots[i].rail==A733_RAIL_DCDC8){
         seen=1;assert(r.radio.snapshots[i].selector==100 && !r.radio.snapshots[i].decoded);}
      assert(seen);}
+    /* PG at 1.8 V (11) or Invalid (00, 01) with BLDO5 off: the guard passes and the power-on goes ahead. */
+    for(unsigned pg=0;pg<4;++pg) {
+        if(pg==2)continue;
+        radio_setup();r.power.pmic[0x21]&=(uint8_t)~4u;r.power.pmic[0x2e]=0x3a;
+        *pmic_model_word(&r.power,0x02000048)=pg<<12;*pmic_model_word(&r.power,0x07025348)=3u<<2;
+        status=A733_RADIO_PENDING;
+        for(unsigned i=0;i<4000 && status!=A733_RADIO_READY;++i){status=radio_step();assert(status!=A733_RADIO_RETAINED);}
+        assert(r.radio.guard_done&&r.radio.power_on&&!r.radio.refused&&!r.radio.already_on&&pmic_log_count==2);
+        assert(((r.radio.pad_power[1]>>12)&3)==pg);
+        if(pg==3)emit_result("guard-pg-1v8",&r.radio,0);
+    }
     for(unsigned mismatch=0;mismatch<4;++mismatch) {
+        if(mismatch==1)continue; /* BLDO5 already on at 1.8 V is no longer a refusal: see the already-on case below. */
         radio_setup();r.power.pmic[0x21]&=(uint8_t)~4u;r.power.pmic[0x2e]=0x3a;
         if(mismatch==0)*pmic_model_word(&r.power,0x02000048)=2u<<12; /* PG supplied at 3.3V */
-        if(mismatch==1){r.power.pmic[0x21]|=4;r.power.pmic[0x2e]=13;} /* BLDO5 already on, 1.8V */
         if(mismatch==2)r.power.pmic[0x2f]=14;                        /* CLDO1 at 1.9V */
         if(mismatch==3)r.power.pmic[0x12]=22;                        /* DCDC1 at code 22 */
         status=A733_RADIO_PENDING;
@@ -353,17 +364,15 @@ int main(void)
         assert(!(*pmic_model_word(&r.power,0x07025040)&2));
         if(mismatch==0)emit_result("guard-pg-supplied",&r.radio,0);
         /* A guard refusal changes nothing: the register lock is left, not retained, and the leases stay live. */
-        if(mismatch<2){
+        if(mismatch==0){
             assert(r.radio.refused&&!r.register_retained&&r.radio.fail_stage==RSTAGE_GUARD&&(r.radio.fail_line>>8)==4);
             assert(a733_clock_token_status(&r.power.clocks,&r.radio.clock)==A733_CLOCK_OK);
             assert(a733_rail_status(&r.power.rails,&r.radio.rail)!=A733_RAIL_RETAINED);
             assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_RETAINED&&!r.register_retained);
         }
         if(mismatch==0)assert(r.radio.fail_line==(0x400u|2u<<4|1u)); /* PG at 3.3 V, PG condition only. */
-        if(mismatch==1)assert((r.radio.fail_line&15u)==1&&(r.radio.fail_line&0x30u)>>4==((r.radio.pad_power[1]>>12)&3));
         if(mismatch>=2)assert(!r.radio.refused); /* The rail checks before the guard still retain. */
         if(mismatch==0){assert(r.radio.guard_done && ((r.radio.pad_power[1]>>12)&3)==2);}
-        if(mismatch==1)assert(r.radio.guard_done && !r.radio.power_on);
         if(mismatch==3)assert(!r.radio.guard_done); /* The earlier DCDC1 check refuses first. */
         if(mismatch==2)assert(!r.radio.guard_done);
     }
