@@ -737,6 +737,8 @@ class Live:
         if info.get('dma'):
             require(self.dma_binding is not None, 'DMA runner has no original-instance admission.')
         live = {} if info.get('native_probe') or self.args.kind=='probe' else self.live_state(info.get('finite_npu',False))
+        if live.get('words'):
+            self.record['live_words'] = dict(live['words'])
         if images.npu_on_required(info):
             live['words'].update(self.npu_on_state())
         plan = images.prepare(self.args, info, live, self.evidence/'bundle', dma_binding=self.dma_binding)
@@ -1075,33 +1077,70 @@ def check_image(args):
               'watchdog': plan['watchdog'],
               'uploads': [{'address': a, 'file': str(p), 'sha256': images.sha(p)} for a, p in plan['uploads']]}
     report.update({k: plan[k] for k in ('epoch', 'generation', 'lease', 'marker', 'host_admission') if k in plan})
+    report['preflight'] = check_preflight(args, info, plan)
     save(evidence/'admission.json', report)
     print(json.dumps(report, indent=2))
     return 0
 
 
+def apply_override(args, record):
+    """Refuse a record whose pre-flight is unavailable unless --no-preflight REASON records an override."""
+    reason = getattr(args, 'no_preflight', None)
+    if reason is not None and not reason.strip():
+        raise PreflightUnavailable('--no-preflight needs a reason.')
+    if record.get('unavailable'):
+        if reason is None:
+            raise PreflightUnavailable('Pre-flight cannot run: %s. Fix that, or record an override with --no-preflight REASON.'
+                                       % record['unavailable'])
+        record = dict(record, override=reason.strip())
+    return record
+
+
+class PreflightUnavailable(ValueError):
+    """The host pre-flight cannot run for an image that has a typed session; nothing is queued."""
+
+
+NOT_TYPED_KINDS = ('probe', 'usb-class', 'rail-helper')
+
+
+def check_preflight(args, info, plan):
+    """The record of the host admission `check` ran, or the refusal when a typed session has none (see preflight_submission)."""
+    if not info.get('generic') or info.get('finite_npu') or info.get('native_probe'):
+        return {'admitted': None, 'preflight': 'not applicable', 'reason': 'not a typed-session OS image'}
+    return apply_override(args, plan.get('host_admission') or {'admitted': None, 'unavailable': 'no host admission in the plan'})
+
+
 def preflight_submission(args, source, directory):
     """Run the image's own EL3 admission on the session the runner will send, before the submission is queued.
 
-    Builds the session as the runner does (from the frozen inputs and template, with captured board words in place of
+    Builds the session as the runner does (from the frozen inputs and template, with the recorded board words in place of
     a live read) and runs the admission code compiled with the image's definitions (tools/host_admission.py). A refusal
-    names the failing term and refuses the submission; a gap in what can be checked without the board is reported and
-    leaves the submission to the runner's own checks."""
+    names the failing term and refuses the submission. An image that is not a typed-session OS image (a probe, a finite
+    NPU image) has no host admission: its record says `not applicable`. When the pre-flight cannot run for an image that
+    has a typed session, PreflightUnavailable refuses the submission unless --no-preflight REASON is given; the record
+    then carries the reason and the override. `directory` is the queue entry; None builds the session from the arguments."""
+    return apply_override(args, preflight_record(args, source, directory))
+
+
+def preflight_record(args, source, directory):
     descriptor = args.descriptor or Path(str(source)+'.board.json')
     try:
         info = images.inspect(source, args.kind, json.loads(descriptor.read_text()) if descriptor.exists() else None,
                               args.host_tree)
     except (ValueError, OSError, KeyError) as error:
+        if args.kind in NOT_TYPED_KINDS:
+            return {'admitted': None, 'preflight': 'not applicable', 'reason': 'image not inspectable: %s' % error}
         return {'admitted': None, 'unavailable': 'image not inspectable: %s' % error}
     if not info.get('generic') or info.get('finite_npu') or info.get('native_probe'):
-        return {'admitted': None, 'unavailable': 'not a typed-session OS image'}
+        return {'admitted': None, 'preflight': 'not applicable', 'reason': 'not a typed-session OS image'}
     words = images.offline_words()
     if words is None:
-        return {'admitted': None, 'unavailable': 'no captured board words on this machine'}
+        return {'admitted': None, 'unavailable': 'no recorded board words on this machine (board_images.offline_words)'}
     frozen = argparse.Namespace(**vars(args))
     frozen.image = source
-    frozen.input = [directory/f'input-{i}.bin' for i, _ in enumerate(args.input)]
-    frozen.template = directory/'template' if (directory/'template').is_dir() else args.template
+    if directory is not None:
+        frozen.input = [directory/f'input-{i}.bin' for i, _ in enumerate(args.input)]
+        frozen.template = directory/'template' if (directory/'template').is_dir() else args.template
     import tempfile
     with tempfile.TemporaryDirectory(prefix='preflight-', dir=CACHE) as scratch:
         try:
@@ -1165,6 +1204,7 @@ def development(argv=None):
     parser.add_argument('--template', type=Path)
     parser.add_argument('--manifest', type=Path)
     parser.add_argument('--descriptor', type=Path)
+    parser.add_argument('--no-preflight', metavar='REASON')
     parser.add_argument('--approved-by', choices=('coordinator',))
     parser.add_argument('--host-tree', type=Path)
     parser.add_argument('--objcopy', type=Path)
@@ -1199,7 +1239,7 @@ def development(argv=None):
         command += ['--records', str(args.records or state.RECORDS)]
     elif args.records:
         command += ['--records', str(args.records)]
-    for name in ('template', 'manifest', 'descriptor', 'host_tree', 'objcopy', 'approved_by'):
+    for name in ('template', 'manifest', 'descriptor', 'host_tree', 'objcopy', 'approved_by', 'no_preflight'):
         if getattr(args, name):
             command += ['--'+name.replace('_','-'), str(getattr(args, name))]
     if args.restore_rails and args.kind not in ('npu', 'usb-class'):
@@ -1339,7 +1379,7 @@ class Queue:
         options = {'reference': 'none' if reference.get('none') else f"{reference['path']}#{reference['anchor']}"}
         if reference.get('none'):
             options['reference_reason'] = reference['reason']
-        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy'):
+        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight'):
             value = getattr(args,name)
             options[name] = str(value.resolve()) if isinstance(value,Path) else value
         for name in ('records', 'decoder', 'manifest'):
@@ -1391,14 +1431,15 @@ class Queue:
         # The image's own admission, on the exact session and contract, before the board could be touched.
         try:
             preflight = preflight_submission(args, source, directory)
-        except images.AdmissionRefusal:
+        except (images.AdmissionRefusal, PreflightUnavailable):
             # Nothing was queued: move the half-built entry directory out of the queue (never delete it).
             trash = CACHE/'trash'/f'refused-submit-{identifier}'
             trash.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(directory), str(trash))
             raise
-        if preflight.get('unavailable'):
-            print('pre-flight not run: %s' % preflight['unavailable'], file=sys.stderr)
+        if preflight.get('override'):
+            print('pre-flight not run (override recorded): %s; reason: %s' % (preflight['unavailable'], preflight['override']),
+                  file=sys.stderr)
         # Capture the complete queued input inventory, including templates.
         frozen = {str(p.relative_to(directory)): images.sha(p) for p in directory.rglob('*') if p.is_file()}
         job = {'id': identifier, 'submitted': time.time(), 'image': str(image),
@@ -1443,7 +1484,9 @@ class Queue:
             job = next((j for j in state['jobs'] if j['id']==identifier), None)
             if job is None or job['state']=='done':
                 return
+            result['preflight'] = job.get('preflight')
             save(job['result_path'], result)
+            images.record_board_words(result)
             job.update(state='done', result=result, completed=time.time())
             self.event('result', job=job['id'], outcome=result['outcome'], stage=result.get('stage'),
                        site=(result.get('first_failure') or {}).get('site'))
@@ -1645,6 +1688,8 @@ def run_options(parser, submit=False):
                         '"none" needs --approved-by coordinator and --reference-reason.')
     parser.add_argument('--reference-reason', help='Why a coordinator exempts this run from a reference.')
     parser.add_argument('--storage-write', action='store_true')
+    parser.add_argument('--no-preflight', metavar='REASON',
+                        help='Queue or check an image whose host pre-flight cannot run; REASON is recorded in the entry and the result.')
     parser.add_argument('--descriptor', type=Path, help='Hash-bound image metadata; defaults to IMAGE.board.json.')
     parser.add_argument('--restore-rails', action='store_true', help='Restore guarded CPU rails after a validated normal return.')
     parser.add_argument('--preserve-dram', action='store_true',

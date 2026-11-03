@@ -207,6 +207,31 @@ def submit(board, admission, image, refused_image, located, cache, work, cases):
         leftover = [d for d in (queue.root / 'entries').iterdir() if not (d / 'entry.json').exists()]
         assert not leftover, f'a refused submission left a half-built entry directory: {leftover}'
         cases.append('submit refuses the changed manifest')
+        # With no recorded board words the pre-flight cannot run: the submission refuses, and only a recorded reason queues it.
+        with queue.locked() as state:
+            before = len(state['jobs']) + len(state['history'])
+
+        def refused_unavailable():
+            try:
+                queue.submit(arguments(image, 'no recorded words'))
+            except board.PreflightUnavailable as error:
+                assert 'Pre-flight cannot run' in str(error), str(error)
+                return True
+            return False
+
+        from unittest.mock import patch
+        with patch.object(board.images, 'offline_words', return_value=None):
+            assert refused_unavailable(), 'submit queued an image whose pre-flight could not run'
+            with queue.locked() as state:
+                assert before == len(state['jobs']) + len(state['history']), 'a refused submission was queued'
+            with patch.object(board, 'apply_override', lambda args, record: record):
+                assert not refused_unavailable(), 'the check does not detect warn-and-continue'
+            cases.append('submit refuses an unavailable pre-flight; warn-and-continue fails this check')
+            overridden = arguments(image, 'override')
+            overridden.no_preflight = 'words rebuilt by the next run'
+            job = queue.submit(overridden)
+            assert job['preflight']['override'] == 'words rebuilt by the next run' and job['preflight']['unavailable'], job['preflight']
+            cases.append('submit --no-preflight records its reason')
     finally:
         board.images.policy = keep
 

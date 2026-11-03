@@ -1,5 +1,6 @@
 /* Actual OS thermal/failure event producers; scheduler effects are modeled. */
 #include "../apps/os/npu.c"
+#include "../apps/os/npu-declaration.c"
 #include "../runtime/npu_app.c"
 #include <assert.h>
 #include <stdio.h>

@@ -16,7 +16,7 @@ import subprocess
 import sys
 from harness import SANITIZE, environment
 
-CHECK_INPUTS = ('apps/os/npu.c', 'apps/os/npu.h', 'apps/os/npu-client.c',
+CHECK_INPUTS = ('apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu.h', 'apps/os/npu-client.c',
                 'apps/os/npu-report.py', 'include/sunstone_crumb.h',
                 'tools/a733-crumbs.py', 'checks/os-npu-first-failure.c',
                 'checks/os-npu-sdk-report.c', 'drivers/storage/storage_digest.c')
