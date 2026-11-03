@@ -89,6 +89,10 @@ for name in ('ready', 'ready-scanned', 'ready-many'): # The decoder reads the le
 guard = records['guard-ready']
 assert guard['guard']['asked'] and guard['pad_power']['pg'] == 'invalid' and guard['pad_power']['pm'] == '1.8V'
 assert [r['rail'] for r in guard['rails']] == ['dcdc1', 'dcdc8', 'bldo5', 'cldo1'] and guard['rails'][1]['selector'] == 100
+on = records['already-on']
+assert on['bldo5_already_on'] and on['shutdown_readbacks_matched'] and not on['guard']['bldo5_powered_on']
+shut = records['failure-shutdown']   # the last of the failure cases: a failing PM1 write after power-on
+assert shut['failed'] and shut['failure_shutdown']['ran'] and not shut['failure_shutdown']['matched']
 refused = records['guard-pg-supplied']
 assert refused['failed'] and refused['stage'] == 'rails-observed' and refused['failed_at'] == 'guard-passed'
 assert refused['pad_power']['pg'] == '3.3V' and refused['guard']['observed']

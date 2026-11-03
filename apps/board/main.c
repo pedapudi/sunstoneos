@@ -148,6 +148,9 @@ static void radio_owner(void *unused)
             atomic_store_explicit(&board.radio_result,3,memory_order_release);
         }else if(atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)){
             enum board_radio_result r=board_radio_poll(&radio);
+#ifdef SUNSTONE_A733_OS_RADIO_SCAN
+            os_radio_scan_step(&radio,(int)r);
+#endif
             if(r==BOARD_RADIO_RETAINED||r==BOARD_RADIO_INVALID){
                 atomic_store_explicit(&board.radio_result,3,memory_order_release);
                 atomic_fetch_or_explicit(&board.watchdog_state,4,memory_order_release);

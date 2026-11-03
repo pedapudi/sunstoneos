@@ -33,7 +33,10 @@ enum a733_radio_platform_stage {
     RSTAGE_ACQUIRE, RSTAGE_RESERVE_RAILS, RSTAGE_WAIT_RAILS, RSTAGE_ADMIT, RSTAGE_RAILS, RSTAGE_BASELINE, RSTAGE_GIC_WAIT, RSTAGE_GUARD, RSTAGE_PINS, RSTAGE_POWER_ON, RSTAGE_POWER_WAIT, RSTAGE_VERIFY_RAILS, RSTAGE_SUPPLY_WAIT, RSTAGE_ENABLE_MODULE, RSTAGE_MODULE_SETTLE, RSTAGE_BUS_GATE, RSTAGE_RESET_WAIT, RSTAGE_RESET_RELEASE, RSTAGE_PREPARE, RSTAGE_PREPARING, RSTAGE_ENUMERATE, RSTAGE_ENUMERATING, RSTAGE_WIDE_READ, RSTAGE_WIDE_WRITE, RSTAGE_WIDEN, RSTAGE_WIDENING, RSTAGE_WIDE_VERIFY, RSTAGE_READY,
     /* Shutdown, in order: PM1 low, controller quiesce, module and bus clocks off, BLDO5 off, DOWN. */
     RSTAGE_SHUTDOWN_PM1, RSTAGE_SHUTDOWN_CONTROLLER, RSTAGE_SHUTDOWN_CONTROLLER_WAIT, RSTAGE_SHUTDOWN_CLOCKS,
-    RSTAGE_SHUTDOWN_POWER, RSTAGE_SHUTDOWN_POWER_WAIT, RSTAGE_DOWN
+    RSTAGE_SHUTDOWN_POWER, RSTAGE_SHUTDOWN_POWER_WAIT, RSTAGE_DOWN,
+    /* Failure shutdown: after the power-on writes, a failure first drives PM1 low, stops the SDC1 clocks and
+     * turns BLDO5 off, each read back where the hardware still answers, and only then retains. */
+    RSTAGE_ABORT_PM1, RSTAGE_ABORT_CLOCKS, RSTAGE_ABORT_POWER, RSTAGE_ABORT_POWER_WAIT
 };
 enum a733_radio_platform_result { A733_RADIO_PENDING, A733_RADIO_BUSY,
     A733_RADIO_READY, A733_RADIO_RETAINED, A733_RADIO_INVALID, A733_RADIO_DOWN };
@@ -95,6 +98,10 @@ struct a733_radio_platform {
     uint32_t selected_mhz[3],initial_module,initial_bus,running_module;
     unsigned initialized,stage,fault,held,retained,core_call,rail_count,rail_index,rail_retained;
     unsigned four_bit,card_pending,bus_interface,power_on,rail_verify,guard_done,first_run_guard;
+    /* already_on: the first-run guard found BLDO5 on at 1.8V with PG at 1.8V (a reset left it on), so the two
+     * power-on writes are skipped. aborting/abort_done/abort_flags: the failure shutdown (bit0 ran, bit1 PM1 low,
+     * bit2 clocks off, bit3 BLDO5 off; all of bits 1 to 3 that applied read back matched sets bit4). */
+    unsigned already_on,aborting,abort_done,abort_flags,abort_from;
     /* GPIO_POW_MOD_SEL, GPIO_POW_VAL, SGPIO_POW_MOD_SEL, SGPIO_POW_VAL as read
      * by the first-run guard; valid once guard_done is set. */
     uint32_t pad_power[4];

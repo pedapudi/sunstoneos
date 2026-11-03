@@ -47,6 +47,15 @@ IMAGES = {
     'stage2': {'configure': [
         '-DSUNSTONE_A733_STAGE2=ON',
     ], 'target': 'a733-stage2', 'elf': 'a733-stage2.elf'},
+    # the returning scanning radio image
+    'ret-radio-scan': {'configure': [
+        '-DSUNSTONE_APPLICATION=radio-scan',
+        '-DSUNSTONE_A733_OS_RADIO=ON',
+        '-DSUNSTONE_A733_OS_RADIO_SCAN=ON',
+        '-DSUNSTONE_A733_OS_CPU_RETURN=ON',
+        '-DSUNSTONE_A733_OS_CPU_CLOCK=ON',
+        '-DA733_A76_ADMITTED=ON',
+    ], 'target': 'sunstone-a733-os-radio-scan', 'elf': 'sunstone-a733-os-radio-scan.elf'},
 }
 BUNDLES = {
     'opp33': ['--bundle', '33'],
