@@ -145,8 +145,7 @@ Controlled failures: an incompatible record (control error 4), no health complet
 
 A power-off adds two commands, two acknowledgement polls and 14 register steps; the health check adds one command. The control and stop budgets (200 ms and 300 ms) and the 500 ms start bound fit, with the 100 ms report, inside the 1.5 s session deadline and keep the monitor's 500 ms margin.
 
-- `checks/pvr-gpu-stop.c` and `checks/pvr-gpu-stop-reference.py` cover the 14-step plan, the interrupt acknowledgement with and without a pending event, the retained faults and the upstream comparison with each vendor difference.
-- `checks/pvr-gpu-control.c` covers the completion test: executed without a return word completes, a return word of 1 is recorded, two executions or a bad return word refuse, and a count without the read offset past the command waits.
+- No host check covers the 14-step plan, the interrupt acknowledgement, the retained faults, the upstream comparison or the completion test.
 - `apps/gpu-power-id/check.py --fw-stop` runs nine cases on the linked image with a model of the firmware's kernel CCB, power-sync word and interrupt status.
 
 | Figure | Value | Record |
@@ -156,5 +155,5 @@ A power-off adds two commands, two acknowledgement polls and 14 register steps; 
 
 ## Limitations and open work
 
-- A GPU service host fixture path through `checks/gpu-draw.c` and `checks/gpu-draw-repeat.c` is unchecked: both checks fail earlier than the stop.
+- No GPU service host fixture reaches the stop.
 - The second start in one lifetime (`gpu-firmware-stop-step-c`) has no recorded result.

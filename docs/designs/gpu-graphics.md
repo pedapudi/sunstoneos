@@ -244,10 +244,9 @@ boundaries; and ETC2 and EAC formats.
 
 ## Targets and qualified figures
 
-The harnesses are the frame-path emulation `checks/gpu-texture-frame.py`, which
-runs the render service under Unicorn without modeling scheduler pacing; the
-display replay model `checks/gpu-display-replay.py`; and the VM check
-`checks/pvr-gpu-vm.c`. Targets are maxima, except the largest render time,
+The harness is the frame-path emulation `checks/gpu-texture-frame.py`, which
+runs the render service under Unicorn without modeling scheduler pacing. No
+host check covers the display replay or the VM plans. Targets are maxima, except the largest render time,
 which is a minimum. The value column is the frame-path emulation for a
 1920 x 1080 profile 4 read-back frame and a 1280 x 720 profile 2 read-back
 frame (steady-state second frame); "met" marks a target already reached. The
@@ -312,9 +311,7 @@ Owners other than this design:
    with the VM plans above, no depth region and DISPOSE refused while an extent
    is imported; a fixed free list with growth removed and GROW as unknown state;
    the whole-payload translation in the DATA step of OPEN instead of the first
-   BEGIN; the two statistics reads; `pvr-batch.c` assertions for `clip_mode`,
-   `down_scale`, the PBE pack mode and clear `zloaden` and `zstoreen`; the PTE
-   and display-bank assertions in `pvr-gpu-vm.c`.
+   BEGIN; the two statistics reads.
 2. **Display** (`a733_display_engine.c`): a replay that ends at RCQ finish and
    readback, with a separate frame-end step; ring and tables built after GPU
    OPEN; binding of the TCON TV vertical-blank interrupt, which removes the

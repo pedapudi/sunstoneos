@@ -144,8 +144,8 @@ class 1).
 ## Constraints and unproven items
 
 - The cycle configuration matches `a733_cpu_cycles_enable`, so the two coexist.
-  The helpers `pmu_start` and `pmu_read` in `checks/memory-architecture-smp.c`
-  and `checks/device-memory-capacity.c` stay because their inline
+  The helpers `pmu_start` and `pmu_read` in `checks/device-memory-capacity.c`
+  stay because their inline
   two-instruction read is shorter than a call.
 - Regions exclude SMC calls: `MDCR_EL3.SPME` is 0, so whether EL3 time counts
   depends on the SoC's debug authentication signals.

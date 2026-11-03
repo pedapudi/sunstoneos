@@ -1,6 +1,6 @@
 # Native SPI3 command-response transfers through DMA0
 
-Status: **host-tested.** The DMA application profile (`apps/spi/dma.c`, `apps/spi/dma.h`, option `SUNSTONE_SPI_DMA` in `cmake/a733-spi.cmake`) is implemented and checked on the host (`checks/spi-dma-host.py`, `checks/spi-dma-native.py`). No board run exists; an identified 1.8 V-compatible peer, physical interrupt, DMA and cache behaviour, and recovery are unqualified.
+Status: **implemented, no host check.** The DMA application profile (`apps/spi/dma.c`, `apps/spi/dma.h`, option `SUNSTONE_SPI_DMA` in `cmake/a733-spi.cmake`) is implemented. No host check and no board run exist; an identified 1.8 V-compatible peer, physical interrupt, DMA and cache behaviour, and recovery are unqualified.
 
 The supervised SPI application sends one authenticated command of 1-16 bytes and receives exactly 4096 bytes under one CS0 assertion. Its owner task controls SPI3 and two DMA0 channels. The polling and FIFO interrupt profiles remain available. No peer opcode or electrical compatibility is assumed. The SPI core implements DMA request gating and terminal wire checks; the DMA controller, startup adapter, native memory policy and allocator provide channel ownership and cache operations, so no common DMA, power or memory change is needed. `a733_spi_platform_interrupt_start` admits a valid active DMA transfer.
 
@@ -153,17 +153,7 @@ The design budgets (one 16 KiB pool allocation, total added storage below 48 KiB
 
 ## Focused validation and ownership
 
-The host checks build one DMA image with the accepted native toolchain and use SPI linked
-fixtures extended to execute the actual application, SPI platform/core, DMA
-controller, startup binding, native mapping/cache callbacks, and copied output.
-They model only hardware effects, scheduling, and unavailable peer/physical authority.
-They cover success, delayed RX completion after the SPI event, missing IRQ, DMA error,
-failed drain, and output revocation. Assert no request enable before both ACTIVE
-channels, no DMA stop before request shutdown, and no RX copy before both drains.
-
-Admission cases cover wrong channels, routing, fabric, memory extent,
-request count, exact command, truncated authority, and mismatched image profile.
-The checks also run the offline prepare, freeze and verification and the fragmented host capture, and the private launcher, session and IRQ-route boundary on the same image. One preserved-profile compatibility case covers the changed interrupt admission; the FIFO polling and IRQ suites, source table, descriptor encoder, DMA controller and native cache evidence are reused where their production inputs are unchanged.
+No host check covers the DMA profile. Such a check would build one DMA image with the accepted native toolchain and execute the actual application, SPI platform and core, DMA controller, startup binding, native mapping and cache callbacks, and copied output, modeling only hardware effects, scheduling, and unavailable peer or physical authority. It would cover success, delayed RX completion after the SPI event, missing IRQ, DMA error, failed drain, and output revocation; assert no request enable before both ACTIVE channels, no DMA stop before request shutdown, and no RX copy before both drains; and cover admission with wrong channels, routing, fabric, memory extent, request count, exact command, truncated authority, and mismatched image profile. The FIFO polling and IRQ suites, source table, descriptor encoder, DMA controller and native cache checks stay with their owners.
 
 The files that implement the profile are `apps/spi/`, `cmake/a733-spi.cmake`, the narrow SPI platform
 interrupt admission and its header/documentation, existing SPI checks, and this

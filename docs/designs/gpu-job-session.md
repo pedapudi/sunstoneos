@@ -68,7 +68,6 @@ These rules follow the pinned upstream `pvr_fw_startstop.c:220–320`, which ret
 
 ## Checks
 
-- `checks/pvr-cccb.c` runs eight two-command jobs through the 1,024-byte ring and compares upstream's bytes after every job, including the padding command and each KICK's write offset and wrap mask.
 - `apps/gpu-power-id/check.py --fw-session` runs fifteen cases on the eight-job image: complete jobs, a job that never completes or a context reset at jobs 1, 5, 6 and 8, a firmware that reads the padding command, the clock passing the wait's end (job 6 never kicked), less than 10 ms of wait left, and the worst-case log.
 - The native ELF checks model the firmware and platform power callbacks and cover the shutdown rules above. They establish software ordering only.
 

@@ -98,4 +98,4 @@ No write at 1.8 V has run. What is known and what is needed:
 2. Run the read-only switch to 1.8 V on port 3-1, which has never been at 1.8 V (prediction in record `sd-uhs-adoption-3-1-switch`, not run).
 3. A runtime SDR104-to-SDR25 mode change and the strict CMD25 model at 1.8 V.
 4. The runner: approval of the 150 MHz point and of CMD11 for OS images, and the image classification for UHS-I.
-5. Five image-level SD checks (`storage-read-native.py`, `storage-read-binding.py`, `sd-return-native.py`, `sd-return-host.py`, `sd-return-continuity.py`) are stale models of the current image and are waived in `checks/gate-inputs.json`; rewrite them against the image.
+5. Two image-level SD checks (`storage-read-native.py`, `sd-return-native.py`) are stale models of the current image and are waived in `checks/gate-inputs.json`; rewrite them against the image.

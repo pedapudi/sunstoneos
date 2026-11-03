@@ -106,19 +106,17 @@ phases do.
 
 ## Checks
 
-- `checks/rail-leases.c`: acquire, poll and release in production order;
-  READY on the first poll for all fifteen rails; a full table returns BUSY.
 - `checks/a733-pmic.c`: submit before READY returns BUSY; a fault raised on
   another core during startup stays latched after READY; a registry fault
   during a write faults the provider before the selector-write byte; a fault
   during a spin stops all later TWI access.
-- `checks/a733-pmic-polls.c`, `checks/power-domains-pck.c` and
-  `checks/power-domains-service.c`: bus, wake and domain behaviour, described
+- `checks/power-domains-pck.c` and
+  `checks/power-domains-service.c`: wake and domain behaviour, described
   in [power-domains.md](power-domains.md).
 - `checks/cpu-clock-model.c`: the CPU voltage target never falls below the
   baseline.
-- `checks/pmic-tree.py`, `checks/rail-leases-cost.py` and
-  `checks/a733-pmic-cost.c`: tree rules and cost budgets.
+- `checks/pmic-tree.py` and `checks/rail-leases-cost.py`: tree rules and
+  lease cost budgets.
 
 ## Qualified figures
 

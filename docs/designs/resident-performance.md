@@ -47,9 +47,9 @@ All figures are host or modeled-native results (record `resident-performance-hos
 | Session | 1,176 bytes, four card extents |
 | Modeled 852-to-492 MHz retune after 70 s | 5 writes, 65 register reads, 11 clock reads, 236 µs |
 | Same-rate success | 0 writes, 7 register reads, 5 clock reads |
-| Cases | 13 provider, 21 producer authority/admission, 6 native, plus the OS mailbox fixture |
+| Cases | 13 provider, 21 producer authority/admission, 6 native |
 
-No task, stack, heap allocation or model copy is added, and inference and idle ticks incur no new retune work. `checks/os-npu-perf-mailbox.c` includes the actual `apps/os/npu.c` and models only scheduler calls and the provider answer; the record gives the compile recipe.
+No task, stack, heap allocation or model copy is added, and inference and idle ticks incur no new retune work. No host check covers the OS mailbox path.
 
 ## Open work
 

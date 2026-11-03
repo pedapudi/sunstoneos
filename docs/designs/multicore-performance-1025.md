@@ -10,7 +10,6 @@ The port sources are `patches/freertos-smp-c.patch`, `patches/freertos-smp-asm.p
 
 - [checks/smp-port-cost.py](../../checks/smp-port-cost.py) builds a two-core QEMU image and counts `INST_RETIRED` under `-icount shift=0`, on `cortex-a55` and `cortex-a76` cores: critical-section pairs, notifications, the same-core switch, cross-core round trips, an SGI to the sending core, one counter clock read, the tick wakes of an unpinned task (also in an image whose two cores have different types) and `__getreent` in an image built with the SMP newlib runtime.
 - [checks/a733-smp-cached.py](../../checks/a733-smp-cached.py) `--count` runs the cached eight-core diagnostic in the instruction model and gives the median instructions, `SVC`, `DSB`, `DMB` and `ISB` per call and per IRQ. `--late-ticks 5` puts the counter five periods past the pending tick deadline while core 0 has no IRQ in progress. The model treats the timer PPI as level-sensitive, as the GIC does, and reports `CNTP_CTL_EL0.ISTATUS`.
-- [checks/clock-counter-contention.c](../../checks/clock-counter-contention.c) runs the counter clock on 16 host threads with modeled counter reads.
 
 QEMU on an x86-64 host and the instruction model execute the real instructions but do not reproduce the Arm memory model, so neither can show a missing or misplaced barrier. The ordering arguments below rest on reasoning until a board session tests them.
 

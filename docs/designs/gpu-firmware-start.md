@@ -169,7 +169,7 @@ The standalone image leaves the GPU powered with the firmware running. The vendo
 
 ## Checks and qualified figures
 
-- `checks/pvr-gpu-start.c` and `checks/pvr-gpu-start-reference.py` cover the 29-step controller (36 retained faults, 40 refusals, and the reference traces less `SOFT_RESET2`).
+- No host check covers the 29-step controller's retained faults, refusals or reference traces.
 - `apps/gpu-power-id/check.py --fw-start` runs eleven cases on the linked image with only the ON, the clock, translations, cache maintenance and the log modeled: the complete start, timeout, started word already set or 2, CORE6 not reaching 8, unexpected identity, wrong SMC0 mapping, a write-back translation of a shared page, a start refused by the deadlines, and a seeded mutant of the SMC0 write value.
 - The start adds two 32-bit reads and one 40-byte write for the timer record, two writes and two reads for the secure configuration, and 18 accesses from splitting 64-bit accesses (24 in all). A complete run's log is 8,047 of 16,128 bytes.
 

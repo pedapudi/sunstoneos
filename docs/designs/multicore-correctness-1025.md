@@ -62,7 +62,7 @@ Cost: each core executes 13 more instructions once per entry; the mirror adds 18
 
 ## 6. The resident contract has its own magic number
 
-The resident contract magic in `platform/a733-smp-cached/boot.h` is `0x4153373352434e31`, which no other file uses; the uncached image's result magic is different. `checks/a733-resident-contract.c` refuses the uncached value for a FEL contract, and the resident build also refuses it. Only builds that define `SUNSTONE_A733_RESIDENT` use it, and no image does.
+The resident contract magic in `platform/a733-smp-cached/boot.h` is `0x4153373352434e31`, which no other file uses; the uncached image's result magic is different. The resident build refuses the uncached value for a FEL contract; no host check covers this. Only builds that define `SUNSTONE_A733_RESIDENT` use it, and no image does.
 
 ## Workload model counter rate
 

@@ -75,7 +75,7 @@ linked image, and `a733_cached_prepare()` publishes 0 table lines) and
 `checks/a733-cpu-coherence.py` (`enable_el1` flushes both EL1 pages before any
 system-register write, and a wrong checksum or a malformed root entry 1 leaves
 `SCTLR_EL1.M` clear). The capacity fixtures
-(`checks/device-memory-capacity*.c`, `checks/cached-device-reservations.c`)
+(`checks/device-memory-capacity*.c`)
 run the same core-0 sequence as the images.
 
 ## Part 2: fault-report host reader

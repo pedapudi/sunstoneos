@@ -68,7 +68,7 @@ The vendor device tree assigns G2D 300 MHz (`sun60iw2p1.dtsi` lines 3383–3384)
 - `checks/a733-smp-cached.py` models boot0's value, so the restore makes no write there; `checks/secondary-local-probe.py` admits the restore's two reads.
 - `checks/sram-window-reservation.py` fails when any linker script region, `ldr sp` stack, Python SRAM region table or hexadecimal literal outside the owning files overlaps `0x5f000`–`0x5ffff`. The DDR start (`tools/run-ddr.py`, `boot/a733/ddr-entry.S`) loads boot0 over the page before any image runs and is allowed with that reason.
 - `checks/board-bundles.py`: the row numbers with `RESERVED_POSITIONS` (19 and 20) count from 1 without a gap.
-- `checks/g2d-power-native.py` and `checks/g2d-modes-native.py` pass with a session that names G2D at 300 MHz and refuse the 100 MHz session.
+- No host check covers a session that names G2D at 300 MHz or the refusal of a 100 MHz session.
 
 ## Open work
 

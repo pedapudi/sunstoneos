@@ -57,7 +57,7 @@ All rows are host-model or emulation results; no board has run the image.
 | Admission | no path | 8 reads, no writes; the clock build adds 22 inspection reads and 2 PMIC snapshots | same |
 | Recognition, bench recording | not measured | modeled 1.20 s CPU-only at 2,002 MHz | `cpu-a76-dvfs.jsonl`, `cpu-a76-dvfs-recognition-model` |
 
-The checks are `checks/cpu-clock-check.py` (transition model), `checks/os-cpu-clock-native.py` (register adapter and owner request order), `checks/smp-sgi-send.py`, `checks/smp-port-cost.py`, `checks/a733-smp-cached.py --count`, `tools/check-smp.py` and `tools/check-mimus-smp.py`. Their results are in `cpu-a76-dvfs-host-checks`.
+The checks are `checks/cpu-clock-check.py` (transition model), `checks/os-cpu-clock-native.py` (register adapter and owner request order), `checks/smp-port-cost.py`, `checks/a733-smp-cached.py --count`, `tools/check-smp.py` and `tools/check-mimus-smp.py`. Their results are in `cpu-a76-dvfs-host-checks`.
 
 ## Failure classes
 

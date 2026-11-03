@@ -18,9 +18,8 @@ and makes two comparisons:
 ## Native delivery of tensor bytes
 
 Reserved case 0 of [npu-session.py](../../checks/npu-session.py) runs the five
-catalogue models through the session runtime in QEMU, and
-[nbg-layout-reference.py](../../checks/nbg-layout-reference.py) shows that
-native allocations and relocations match the SDK loader. The QEMU register
+catalogue models through the session runtime in QEMU. No host check compares
+native allocations and relocations with the SDK loader. The QEMU register
 model's `execute()` in `checks/npu-session.c` derives an output from the input
 bytes only when the descriptor that writes a model output also reads a model
 input. When it reads intermediate memory, it writes a constant.

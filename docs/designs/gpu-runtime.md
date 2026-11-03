@@ -228,7 +228,7 @@ exclusion check refuses the GPU ([remote-writers.md](../remote-writers.md)).
 
 ## Performance budgets (open rows)
 
-Counts come from `checks/pvr-gpu-service.{c,py}`, `checks/pvr-compute-service.{c,py}`, `checks/a733-gpu-backend-emulate.py`, `checks/pvr-gpu-vm.c`, `checks/device-memory-capacity.c` and disassembly. The worker-pacing rows are met in the host models ([record](../evidence/gpu-runtime.jsonl) `gpu-runtime-pacing-host`). The rows below keep their baseline:
+Counts come from `checks/pvr-gpu-service.{c,py}`, `checks/pvr-compute-service.{c,py}`, `checks/a733-gpu-backend-emulate.py`, `checks/device-memory-capacity.c` and disassembly. The worker-pacing rows are met in the host models ([record](../evidence/gpu-runtime.jsonl) `gpu-runtime-pacing-host`). The rows below keep their baseline:
 
 | Metric | Baseline | Target |
 | --- | --- | --- |

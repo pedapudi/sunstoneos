@@ -539,12 +539,9 @@ failed replay. With `paced=0`, copied windows are available immediately.
   agreement, malformed manifests.
 - `checks/os-audio-replay.py`: the production capture implementation compiled
   without I2S or headset support, under AddressSanitizer,
-  UndefinedBehaviorSanitizer and AArch64 instruction emulation.
-  `checks/os-audio-replay-linked.py` executes the actual linked instructions of
-  a generic application built by `checks/os-audio-replay-image.cmake` with an
-  empty `MIMUS_DIR`, and verifies 320 frames, 20 ms of paced waits and an
-  independent Adler-32 checksum. Grant publication, liveness, clock, waits,
-  progress and finish are modeled; startup and scheduling do not run.
+  UndefinedBehaviorSanitizer and AArch64 instruction emulation. No host check
+  executes the linked instructions of a generic application with this capture
+  path.
 - Admission costs one SHA-256 over the 552-byte manifest per boot. Input
   authentication hashes each INPUT region in 4 KiB steps in the main task
   (14.2 MB for the mimus inputs). Each `ss_*` call is a direct function call

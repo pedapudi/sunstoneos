@@ -382,9 +382,8 @@ lists their commands. None executes USC code or touches hardware.
 - **Program.** The linked USC constant equals the compile manifest, the
   inner-loop instructions are counted from the compiler's listing, and the tag
   store follows every sum store and its data fence.
-- **Shared code in this repository:** `checks/pvr-compute-service`,
-  `checks/pvr-compute-package.py`, `checks/pvr-compute-job.py` and
-  `checks/pvr-gpu-vm.c`.
+- **Shared code in this repository:** `checks/pvr-compute-service`
+  and `checks/pvr-compute-job.py`.
 
 ## Limitations
 

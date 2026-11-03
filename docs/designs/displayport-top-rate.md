@@ -45,14 +45,12 @@ voltage or domain transition.
 
 ## Checks and qualified figures
 
-`checks/displayport-top-rate.py` compares the linked PHY trace with the pinned
-vendor functions for both cable polarities and legal signal levels, checks the
-transport calculations separately, observes actual source and receiver rate
-and training-pattern writes, and refuses lower-rate sinks. Controller fault
-cases cover AUX timeout, repeated DEFER, short replies, lost clock recovery and
-configuration mutation. Host preparation checks reject lower-rate authority and
-accept only explicit 5.4 Gb/s authority with the linked marker. All fixture
-facts are modeled; production authority rejects them.
+No host check compares the linked PHY trace with the pinned vendor functions,
+the transport calculations, the controller fault cases (AUX timeout, repeated
+DEFER, short replies, lost clock recovery, configuration mutation) or the
+preparation rule that accepts only explicit 5.4 Gb/s authority with the linked
+marker. The figures below are recorded values and no current check reproduces
+them. All fixture facts were modeled; production authority rejects them.
 
 | Figure | Value | Record |
 | --- | --- | --- |

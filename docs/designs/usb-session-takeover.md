@@ -208,18 +208,13 @@ would remove it.
 
 All checks are offline and model register behavior:
 
-- `checks/a733-usb-platform.py` builds and runs the host-compiled provider
-  checks. `checks/a733-usb-rom-handoff.c` takes over from the observed word
-  with the ROM's interrupt enables, checks SoftConn reading clear 30 ms after
-  its write with the 150 ms interval starting at that read, and SoftConn never
-  clearing, which retains at the deadline before any reset write. It also
-  checks six inherited variants, including LSDEV and FSDEV, and ten refused
-  variants, each refused before any write.
+- No host check covers the host-compiled provider takeover from the observed
+  word with the ROM's interrupt enables, SoftConn reading clear 30 ms after its
+  write with the 150 ms interval starting at that read, SoftConn never
+  clearing, the six inherited variants, or the ten refused variants.
 - `apps/usb-returning/check.py` runs the linked provider and native callbacks
   of the returning image. Its register model leaves PCTL unchanged on a word
   store and updates it on a byte store. It checks the never-clearing SoftConn
   and five admission refusals.
 - `apps/usb-returning/host-check.py` requires that the 2026-10-23 session record
   never classifies as functional success.
-- `checks/usb-first-fault.py` runs the native callback, BUSY and first-fault
-  cases on the built image.

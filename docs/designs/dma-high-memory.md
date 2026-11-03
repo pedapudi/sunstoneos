@@ -39,7 +39,7 @@ Host models and freestanding object builds only (record `dma-high-memory-host-ob
 | Native camera `initialize` growth | 32 bytes (2,020 to 2,052), run once per camera start |
 | `.text` of the camera, NVMe and board images | 205,232; 548,688; 498,736 bytes |
 
-Host checks that pass: `checks/a733-camera-native.py` (cases 0 to 20, including an allocation at physical `0x1_8000_0000` and one across 2^34), `checks/a733-pcie-trace.py`, `checks/dma-address-width.c`, `checks/a733-camera-capture.py`, `checks/a733-xhci-detach.py` and `checks/camera-supervised.py`.
+Host checks that pass: `checks/dma-address-width.c` and `checks/a733-xhci-detach.py`. No host check covers a camera allocation at physical `0x1_8000_0000` or one across 2^34.
 
 ## Limitations
 

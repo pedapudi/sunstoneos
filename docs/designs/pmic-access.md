@@ -65,10 +65,9 @@ before this design took 917 µs (146%). Run records are in
    bus-status polling. `INT_FLAG`, the expected status and STOP/idle
    establish the bus transaction's completion. Reads of R_CCU, CCU, GIC and
    R_PIO at admission and startup keep `DSB SY` on both sides.
-   `checks/pmic-tree.py` keeps the placement, and
-   `checks/power-write-order.py` executes the native adapter with
-   independently posted stores and bus latency; removing DATA's `DSB SY`
-   fails it before CNTR.
+   `checks/pmic-tree.py` keeps the placement. No host check executes the
+   native adapter with independently posted stores and bus latency, so the
+   DATA-before-CNTR ordering is not covered by a host check.
 
 `phase_at` is a microsecond time truncated from the counter and read after
 the write completes, so a spin ends within about ±1 µs of the flag. Polls
@@ -178,7 +177,6 @@ route to 110% needs fewer serial register accesses per snapshot.
   matching provider mutant fails it.
 - `checks/a733-pmic-time.c`: the reciprocal division against integer division
   for every divisor up to 4,096 and the powers of two to 2^32.
-- `checks/a733-pmic-cost.c --limits`: time-read and register-access counts.
 - `checks/pmic-tree.py`: the adapter boundary. Only the provider, native
   adapter and bundle power layer use the adapter's operations; consumers use
   `a733_pmic_native_bind()`, `a733_pmic_now()` and `a733_pmic_outside()`.

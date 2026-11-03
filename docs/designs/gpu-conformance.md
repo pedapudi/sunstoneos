@@ -7,8 +7,8 @@ The GPU driver implements a fixed clear, a colored-triangle profile, three
 indexed-texture profiles (2, 3 and 4, in [gpu-render.md](../gpu-render.md))
 and caller-selected compute programs
 ([gpu-compiled-programs.md](../gpu-compiled-programs.md)). The native service
-checks write a modeled pattern into device output, such as `pixel ^ 0x00ffffff`
-in `checks/gpu-batch.c`, and no host program executes PowerVR unified shader
+checks write a modeled pattern into device output, such as `pixel ^ 0x00ffffff`,
+and no host program executes PowerVR unified shader
 core (USC) code. Only board captures establish GPU conformance. The harness
 compares them with a graphics reference built from the pinned Mesa llvmpipe
 driver and a closed-form compute reference, using per-feature tolerances.
@@ -317,11 +317,11 @@ session.
   unconfirmed one, and passes with the passed one. The 1920 x 384 comparison is
   unconfirmed without a profile 4 comparison.
 
-Transport and driver paths stay with their owners: `checks/gpu-draw-runtime.py`
-and `checks/gpu-texture-runtime.py` model the draw and 1920 x 1080 texture
-transports, including a partial final slot and a packet-aligned end, and
-`checks/gpu-texture.c` checks the driver's output invalidation, padded snapshot
-copy and 64 KiB chunking against `result_pixel()`.
+Transport and driver paths stay with their owners: `checks/gpu-texture.c`
+checks the driver's output invalidation, padded snapshot copy and 64 KiB
+chunking against `result_pixel()`. No host check models the draw and
+1920 x 1080 texture transports, including a partial final slot and a
+packet-aligned end.
 
 ## Memory, caches and cores
 
@@ -403,6 +403,5 @@ The modeled board predictions are in `gpu-conformance-board-launches`.
 5. **255 x 129 driver case.** `checks/gpu-texture.c` gains one `gpu_render_case`
    with a 255 x 129 frame, using `result_pixel()` and the existing per-word
    assertion. Owner: the GPU driver work.
-6. **Short final packet.** If that coverage is wanted,
-   `checks/gpu-texture-runtime.py` takes a frame-size argument, counts loop
-   iterations per slot and runs at 255 x 129. Owner: the texture transport work.
+6. **Short final packet.** The texture transport has no host model, so a
+   short final packet is not covered. Owner: the texture transport work.

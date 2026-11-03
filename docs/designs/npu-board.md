@@ -187,10 +187,9 @@ The catalogue's largest output, linear-i16-per-row's 2,816 bytes, gives a
 2,880-byte response. The shared MUSB patch assembles a controller word with byte
 loads or stores at unaligned ring addresses and keeps the word loop for aligned
 ones; controller accesses are 32-bit words followed by byte tails.
-`checks/npu-board-usb-stack.py` executes the linked USB task, TinyUSB and MUSB
-bulk transfer and interrupt code over a register model of full and high speed,
-odd addresses, ring wrap, the largest catalogue response and terminal
-zero-length packets. An early RETURN keeps the window lent until the final
+No host check executes the linked USB task, TinyUSB and MUSB bulk transfer and
+interrupt code at full and high speed, with odd addresses, ring wrap, the
+largest catalogue response and terminal zero-length packets. An early RETURN keeps the window lent until the final
 completion.
 
 ## Interrupts and polling
@@ -365,7 +364,6 @@ layout the image's DWARF and layout words describe, and invokes each check:
 
 | Check | Images |
 | --- | --- |
-| `npu-application-clock-reference.py` | Single-core, accelerator, board; six reference cases drive the image's sequencer through its register pass |
 | `npu-stop-native.py` | Single-core, all-core, accelerator, board; fourteen cases including refused domain-4 policy and delay-row writes and the PLL gate rules |
 | `npu-single-core.py --retention-only` | Single-core; three cases |
 | `accelerator-providers.py` | Accelerator; the application's one GPU/PCK manager, the startup's borrowed providers and its single domain-4 row |

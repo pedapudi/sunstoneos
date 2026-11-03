@@ -813,9 +813,8 @@ backend stall cycles inside each core's longest masked spans; the counters are r
 only. On the board, spans of 17 to 30 µs retire 770 to 2100 instructions with 20 to
 60 L1D refills, 25 to 50 cycles per instruction, and `STALL_BACKEND` is 94 to 98% of
 their cycles (59 to 68% on core 3's critical section) while eight cores stream 1 MiB
-sweeps. The QEMU trace (`checks/scheduler-masked-stalls.py`) shows 4 to 17 barriers,
-SGI writes and exception instructions per span, and no Device or non-cacheable
-access in any span. A service entry with two `DSB SY` and 35 L1D refills stalls about
+sweeps. No host trace counts the barriers, SGI writes and exception instructions per
+span, and whether any span contains a Device or non-cacheable access is open. A service entry with two `DSB SY` and 35 L1D refills stalls about
 33 000 cycles, 0.5 µs per refill if the refills serialize behind a saturated DRAM,
 whereas the barrier drain alone would need about 8 µs per `DSB`; the refill reading
 fits better. Spans therefore shorten with fewer distinct lines per entry or
