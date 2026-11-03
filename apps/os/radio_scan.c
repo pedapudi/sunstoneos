@@ -6,6 +6,7 @@
 #include "cpu-return.h"
 #include "a733_radio_result.h"
 #include "os_radio_result.h"
+#include "sunstone_crumb.h"
 #include <string.h>
 
 /* The host reads this symbol after the return (tools/radio_result_channel.py). It lives in BSS, zero
@@ -58,6 +59,10 @@ void os_radio_scan_step(struct board_radio *r, int result)
         publish(r);
         atomic_store_explicit(&state, DOWN, memory_order_release);
     } else if ((result == BOARD_RADIO_RETAINED || result == BOARD_RADIO_INVALID) && current != FAILED) {
+        /* The first failure record names where the platform failed (source line and stage), so a run that
+         * cannot return still says it; the descriptor's record carries the same site. */
+        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD) | SUNSTONE_CRUMB_FAIL_RETURN,
+            r->platform.fail_line << 16 | (r->platform.fail_stage & 0xffffu), __builtin_return_address(0));
         publish(r);
         atomic_store_explicit(&state, FAILED, memory_order_release);
     }

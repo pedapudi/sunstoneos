@@ -61,8 +61,9 @@ def decode(data):
         man, dev, cls, present = struct.unpack_from('<2H2B', data, 136 + 8 * i)
         if present:
             result['card']['functions'].append({'function': i, 'manufacturer': man, 'device': dev, 'class': cls})
-    chip, sub, fw_flags = struct.unpack_from('<3I', data, 200)
+    chip, sub, fw_flags, fail_site = struct.unpack_from('<4I', data, 200)
     result['identity'] = {'chip_word': chip, 'subrevision_word': sub}
+    result['platform_failure'] = {'line': fail_site >> 16, 'stage': fail_site & 0xffff} if fail_site else None
     reported, dropped = struct.unpack_from('<2I', data, 220)
     aps = []
     for i in range(ap_count):

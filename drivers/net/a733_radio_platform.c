@@ -59,8 +59,9 @@ static int abort_possible(struct a733_radio_platform *p)
        a733_pmic_live(p->pmic,&p->pmic_lifetime)!=A733_PMIC_READY)return 0;
     return 1;
 }
-static enum a733_radio_platform_result fail(struct a733_radio_platform *p)
+static enum a733_radio_platform_result fail_at(struct a733_radio_platform *p,unsigned line)
 {
+    if(!p->fail_line){p->fail_line=line;p->fail_stage=p->stage;}
     if(abort_possible(p)){
         /* The module is powered: undo that before retaining. The controller is stopped now (software
          * only); the abort steps run from the next polls with a fresh deadline. */
@@ -82,6 +83,7 @@ static enum a733_radio_platform_result fail(struct a733_radio_platform *p)
     }
     return A733_RADIO_RETAINED;
 }
+#define fail(p) fail_at((p),(unsigned)__LINE__)
 static int observe(struct a733_radio_platform *p)
 {
     uint64_t now;

@@ -102,6 +102,8 @@ struct a733_radio_platform {
      * power-on writes are skipped. aborting/abort_done/abort_flags: the failure shutdown (bit0 ran, bit1 PM1 low,
      * bit2 clocks off, bit3 BLDO5 off; all of bits 1 to 3 that applied read back matched sets bit4). */
     unsigned already_on,aborting,abort_done,abort_flags,abort_from;
+    /* Where the first failure was decided: the source line of the fail call and the stage then. Zero while healthy. */
+    unsigned fail_line,fail_stage;
     /* GPIO_POW_MOD_SEL, GPIO_POW_VAL, SGPIO_POW_MOD_SEL, SGPIO_POW_VAL as read
      * by the first-run guard; valid once guard_done is set. */
     uint32_t pad_power[4];

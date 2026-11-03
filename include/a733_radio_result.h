@@ -34,7 +34,7 @@ struct a733_radio_result_head {
     uint32_t rca, function_count, cccr_revision, sdio_revision;
     uint32_t sd_revision, capabilities, wide, card_hz;
     struct a733_radio_result_function functions[A733_RADIO_RESULT_FUNCTIONS];
-    uint32_t chip_word, subrevision_word, firmware_flags, reserved0;
+    uint32_t chip_word, subrevision_word, firmware_flags, fail_site; /* fail_site: source line << 16 | stage of the first platform failure */
     uint32_t ap_count, aps_reported, aps_dropped, reserved1; /* dropped: results not kept because memory ran out */
 };
 _Static_assert(sizeof(struct a733_radio_result_rail)==8,"rail record");

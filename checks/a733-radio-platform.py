@@ -95,6 +95,7 @@ assert shut['failed'] and shut['failure_shutdown']['ran'] and not shut['failure_
 refused = records['guard-pg-supplied']
 assert refused['failed'] and refused['stage'] == 'rails-observed' and refused['failed_at'] == 'guard-passed'
 assert refused['pad_power']['pg'] == '3.3V' and refused['guard']['observed']
+assert refused['platform_failure'] and refused['platform_failure']['line'] > 0 and records['ready']['platform_failure'] is None
 
 kernel = args.sources/'FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2'
 smp_port = args.evidence/'smp-port'
