@@ -48,6 +48,19 @@
 #else
 #define UHS_ON 1
 #endif
+/* A read-only core has no CMD25 path, so the compiler drops every write-only
+ * check behind WRITE_ON. SUNXI_MMC_NO_IRQ drops the interrupt-taken hook the
+ * same way, for a caller that polls (the cold stage-2 loader). */
+#ifdef SUNXI_MMC_READ_ONLY
+#define WRITE_ON 0
+#else
+#define WRITE_ON 1
+#endif
+#ifdef SUNXI_MMC_NO_IRQ
+#define IRQ_ON 0
+#else
+#define IRQ_ON 1
+#endif
 
 enum { P_IDLE, P_SD_IF, P_SD_APP, P_SD_OCR, P_MMC_QUERY, P_MMC_OCR,
        P_CID, P_RCA, P_CSD, P_SELECT, P_STATUS, P_BLOCKLEN, P_EXT,
@@ -480,21 +493,21 @@ static int interrupts(struct sunxi_mmc *h)
     uint32_t v;
     if (!rd(h, 0x38, &v)) return 0;
     /* Bits the interrupt handler already acknowledged: read after the raw status, so none is lost to either order. */
-    if (h->irq_taken) v |= h->irq_taken(h->irq_context);
+    if (IRQ_ON && h->irq_taken) v |= h->irq_taken(h->irq_context);
     h->result.interrupts = v; h->seen |= v;
     /* Bit 10 reports switch completion while the CMD11 sequence runs. */
     uint32_t errors = v & ERRORS & ~(UHS_ON && h->signal_window ? VSD : 0u);
     /* The controller's own limit on the card's busy time after written data (SMHC_WR_BUSY_TMOUT, default 0xffffff card clocks: 112 ms at 150 MHz, 336 ms at 50 MHz) raises bit 18.
      * The board kernel's error mask does not contain it and its write path waits for the card on DAT0 itself; a card that programs a piece for longer than the limit is slow, not
      * broken, and the busy wait after the data (busy_wait, with its own deadline) bounds it. The bit is cleared and counted; it is an error in no other command. */
-    if ((errors & (1u << 18)) && h->protocol == P_WRITE_DMA) {
+    if ((errors & (1u << 18)) && (WRITE_ON && h->protocol == P_WRITE_DMA)) {
         if (!wr(h, 0x38, 1u << 18)) return 0;
         errors &= ~(1u << 18); if (h->result.busy_timeouts < 255) ++h->result.busy_timeouts;
     }
     if (errors) {
         /* Card removal ends everything; any other error is the CMD19 attempt's failure in a sweep (see fault). */
         if (errors & ((1u << 18) | (1u << 31))) { fatal(h, SUNXI_MMC_CONTROLLER); return 0; }
-        if (h->protocol == P_WRITE_DMA && !h->result.where_valid) write_where(h);
+        if ((WRITE_ON && h->protocol == P_WRITE_DMA) && !h->result.where_valid) write_where(h);
         fault(h, SUNXI_MMC_CONTROLLER); return 0;
     }
     return 1;
@@ -587,7 +600,7 @@ static int fifo_step(struct sunxi_mmc *h)
     return 1;
 }
 static int dma_command(const struct sunxi_mmc *h)
-{ return h->dma_read && (h->protocol == P_READ || h->protocol == P_WRITE_DMA) && h->data_bytes; }
+{ return h->dma_read && (h->protocol == P_READ || (WRITE_ON && h->protocol == P_WRITE_DMA)) && h->data_bytes; }
 static int since_read(struct sunxi_mmc *h,uint32_t *out)
 {
     if (!time_ok(h)) return 0;
@@ -670,7 +683,7 @@ static int command_step(struct sunxi_mmc *h)
         if (!interrupts(h)) return 0;
         /* Acknowledge stale command/data flags only; leave card-detect/SDIO. */
         if (!wr(h, 0x38, h->result.interrupts & 0xffffu)) return 0;
-        if (h->irq_taken) (void)h->irq_taken(h->irq_context);
+        if (IRQ_ON && h->irq_taken) (void)h->irq_taken(h->irq_context);
         h->seen = 0;
         /* Programmed I/O routes the FIFO to the CPU (bit 31); a DMA read
          * leaves it to IDMAC and also resets the DMA interface and IDMAC. */
@@ -703,7 +716,7 @@ static int command_step(struct sunxi_mmc *h)
         /* A DMA write sets the write threshold as the board kernel's thld_ctl does for every 512-byte
          * write (sunxi-mmc-v5p3x.c:647-701; docs/sd-card.md, section 4): the block size in
          * bits 27:16, the write enable (bit 2) set and the read enable (bit 0) clear. */
-        if (h->protocol == P_WRITE_DMA) {
+        if ((WRITE_ON && h->protocol == P_WRITE_DMA)) {
             uint32_t t;
             if (!rd(h, 0x100, &t) || !wr(h, 0x100, ((t & ~0x0fff0001u) | (512u << 16) | 4u))) return 0;
         }
@@ -712,7 +725,7 @@ static int command_step(struct sunxi_mmc *h)
          * The new mode carries the controller's own handling of the token (manual 11.3.8.23: bit 22, clear the data input phase before the CRC status) and the sample phase of
          * the vendor's v5p3x row for the clock (phase 0 for 104 and 208 MHz, sunxi-mmc-v5p3x.c:838-855). The tuned old mode and delay return when the data and the automatic
          * stop are done (P_WRITE_DMA below). */
-        if (UHS_ON && h->protocol == P_WRITE_DMA && h->config.sd_profile == UHS && h->card.timing >= 2) {
+        if (UHS_ON && (WRITE_ON && h->protocol == P_WRITE_DMA) && h->config.sd_profile == UHS && h->card.timing >= 2) {
             uint32_t n;
             if (!rd(h, 0x5c, &n) || !wr(h, 0x5c, (n & ~(START | 0x331u)) | START | (SUNXI_MMC_WRITE_NTSR_PHASE << 8) | (SUNXI_MMC_WRITE_NTSR_PHASE << 4)) || !wr(h, 0x144, 0x80u)) return 0;
             h->write_delay_set = 1;
@@ -721,7 +734,7 @@ static int command_step(struct sunxi_mmc *h)
         if (dma_command(h) && !dma_start(h)) return 0;
         /* Interrupt mask for a DMA command (board kernel sunxi_mmc_parse_cmd): the error bits, and the one completion bit
          * that ends it, the automatic stop for a command that carries one, else data over. */
-        if (h->irq_taken && dma_command(h)) {
+        if (IRQ_ON && h->irq_taken && dma_command(h)) {
             /* The controller raises its line only with the global interrupt enable (GCTRL bit 4) set, which the board kernel sets once at host
              * init (sunxi_mmc_init_host); this core keeps it off while idle, so it is set with the mask and cleared with it. Without it the
              * mask is inert and every wait ends on the recheck timer (the first board reads and writes spent 5 ms per request there). */
@@ -738,7 +751,7 @@ static int command_step(struct sunxi_mmc *h)
         if (!interrupts(h)) return 0;
         if (dma_command(h)) {
             if (!rd(h, SUNXI_SMHC_IDST, &h->result.dma_status)) return 0;
-            if (h->result.dma_status & SUNXI_SMHC_IDST_ERRORS) { if (h->protocol == P_WRITE_DMA && !h->result.where_valid) write_where(h); fault(h, SUNXI_MMC_CONTROLLER); return 0; }
+            if (h->result.dma_status & SUNXI_SMHC_IDST_ERRORS) { if ((WRITE_ON && h->protocol == P_WRITE_DMA) && !h->result.where_valid) write_where(h); fault(h, SUNXI_MMC_CONTROLLER); return 0; }
             if (!h->result.first_byte_us) {
                 if (!rd(h, SUNXI_SMHC_CBCR, &v)) return 0;
                 if (v && !since_read(h,&h->result.first_byte_us)) return 0;
@@ -771,7 +784,7 @@ static int command_step(struct sunxi_mmc *h)
         if (!dma_command(h) && h->position < h->data_bytes && (!(h->command & WRITE) || h->response_seen) &&
             !fifo_step(h)) return 0;
         v = command_done | (h->data_bytes ? DTC : 0) | ((h->command & AUTO) ? ACD : 0);
-        if ((h->seen & v) != v) { if (h->irq_taken && dma_command(h)) h->wait = SUNXI_MMC_WAIT_IRQ; return 0; }
+        if ((h->seen & v) != v) { if (IRQ_ON && h->irq_taken && dma_command(h)) h->wait = SUNXI_MMC_WAIT_IRQ; return 0; }
         if (dma_command(h)) {
             /* The done bits first, then the OWN bits (uncached reads). */
             if (!dma_closed(h)) return 0;
@@ -824,7 +837,7 @@ static int command_step(struct sunxi_mmc *h)
         if (!rd(h,SUNXI_SMHC_GCTRL,&v) || (v&SUNXI_SMHC_GCTRL_FIFO_RESET)) return 0;
         if (v&(SUNXI_SMHC_GCTRL_DMA_ENABLE|SUNXI_SMHC_GCTRL_DMA_RESET)) { fault(h,SUNXI_MMC_CONTROLLER);return 0; }
         /* The DMA command is over: disarm the interrupt mask the command armed. */
-        if (h->irq_taken) {
+        if (IRQ_ON && h->irq_taken) {
             uint32_t g;
             if (!wr(h, 0x30, 0) || !rd(h, SUNXI_SMHC_GCTRL, &g) || !wr(h, SUNXI_SMHC_GCTRL, g & ~SUNXI_SMHC_GCTRL_INT_ENABLE)) return 0;
         }

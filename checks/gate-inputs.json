@@ -57,6 +57,14 @@
    "target": "sunstone-a733-storage-read",
    "elf": "sunstone-a733-storage-read.elf",
    "uses": "the supervised SD0 read image (apps/storage-read); the host session is modeled by checks/storage-read-fixture.py (tools/gate_session.py), at profile 2, or the profile in the image name (storage-read-p1: profile 1)"
+  },
+  "stage2": {
+   "configure": [
+    "-DSUNSTONE_A733_STAGE2=ON"
+   ],
+   "target": "a733-stage2",
+   "elf": "a733-stage2.elf",
+   "uses": "the cold-entry monitor with the stage-2 slot loader (boot/a733/stage2); the stage-2 and standalone-boot checks load its ELF and binary from the build directory"
   }
  },
  "checks": {
@@ -2357,6 +2365,32 @@
     }
    ]
   },
+  "stage2-session.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{build:stage2}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "standalone-boot-loader.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{build:stage2}",
+      "--boot0",
+      "{cache}/sources/board-boot/boot0_sdcard_orangepizero3w.fex",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
   "storage-read-dma.py": {
    "runs": [
     {
@@ -2501,6 +2535,7 @@
   "aic8800-supplicant.py": "helper module of a runnable check (not run on its own) | loaded by aic8800-security.py",
   "build-identity.py": "real defect or unexplained failure, reported to the coordinator | configuring with -DSUNSTONE_BOARD_USB2_IRQ=ON fails: apps/board/host_irq_platform.patch no longer applies, reported",
   "cached-device-reservations.py": "real defect or unexplained failure, reported to the coordinator | a733_cached_devices_prepare() returns 0 against the frozen fixtures at line 137; stale fixture or regression, reported",
+  "cold-entry.py": "helper module of a runnable check (not run on its own) | loaded by standalone-boot-loader.py",
   "cpu-runtime-qualification.py": "helper module of a runnable check (not run on its own) | loaded by os-cpu-return-services.py",
   "elf-memory-hazards.py": "real defect or unexplained failure, reported to the coordinator | the EL3 session seal now reaches SIMD SHA-256 code in the OS image, reported",
   "fault-decode.py": "helper module of a runnable check (not run on its own) | loaded by fault-capture.py",
@@ -2516,8 +2551,6 @@
   "pcie-application-native.py": "helper module of a runnable check (not run on its own) | loaded by pcie-pd-rail-native.py",
   "pvr-gpu-flush-reference.py": "helper module of a runnable check (not run on its own) | loaded by pvr-gpu-flush.py",
   "sd-return-native.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | fails on the current image: the monitor_vectors symbol it reads is not in the linked image; the only guard of terminal SD close, kept by the coordinator",
-  "stage2-session.py": "real defect or unexplained failure, reported to the coordinator | a733-stage2 no longer links: .text ends at 0x47008D10, past the 0x47008000 limit, reported",
-  "standalone-boot-loader.py": "real defect or unexplained failure, reported to the coordinator | a733-stage2 no longer links: .text ends at 0x47008D10, past the 0x47008000 limit, reported",
   "storage-read-fixture.py": "helper module of a runnable check (not run on its own) | loaded by tools/gate_session.py",
   "storage-read-native.py": "helper module of a runnable check (not run on its own) | loaded by npu-stop-native.py",
   "storage-read-service.py": "helper module of a runnable check (not run on its own) | loaded by storage-read-sd-modes.py",

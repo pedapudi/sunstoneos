@@ -18,8 +18,8 @@ add_executable(a733-stage2 EXCLUDE_FROM_ALL
   "${stage2_root}/runtime/memory.c")
 target_include_directories(a733-stage2 PRIVATE
   "${stage2_root}/include" "${stage2_root}/runtime/include")
-# The loader uses 3.3 V high-speed four-bit SD; leave the UHS-I code out.
-target_compile_definitions(a733-stage2 PRIVATE A733_COLD_STAGE2=1 SUNXI_MMC_NO_UHS=1)
+# The loader only reads and uses 3.3 V high-speed four-bit SD; leave the write and UHS-I code out.
+target_compile_definitions(a733-stage2 PRIVATE A733_COLD_STAGE2=1 SUNXI_MMC_NO_UHS=1 SUNXI_MMC_READ_ONLY=1 SUNXI_MMC_NO_IRQ=1)
 # MMU and caches stay off at EL3: Device memory requires aligned accesses, and
 # no FP/SIMD trap configuration exists before this code runs.
 target_compile_options(a733-stage2 PRIVATE
@@ -41,6 +41,7 @@ add_custom_command(TARGET a733-stage2 POST_BUILD
 set_source_files_properties(
   "${stage2_root}/boot/a733/stage2/loader.c"
   "${stage2_root}/boot/a733/stage2/cpu.c"
+  "${stage2_root}/drivers/storage/sunxi_mmc.c"
   PROPERTIES COMPILE_OPTIONS "-Os")
 # Admission includes the fixed predecessor checks; size optimization keeps
 # the report ABI unchanged. The SD transfer and digest implementations stay O2.
