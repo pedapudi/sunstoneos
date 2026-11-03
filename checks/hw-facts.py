@@ -319,6 +319,7 @@ LITERAL_COMPARISONS = {
     'apps/spi/irq.c': (2, 'single-core SPI image: compares with 0xb0 in its own monitor view'),
     'drivers/pwm/a733_pwm.c': (1, 'single-core PWM image: compares with 0xd8 in its own monitor view'),
     'checks/a733-irq-table.c': (1, 'model of the route installer: stored priority'),
+    'checks/sunstone-image-link.py': (1, 'route floor: the stored API floor 0xd8 compared with the stored priority'),
 }
 PRIORITY_LITERAL = re.compile(r'(?:==|!=|<=|>=|(?<![<])<(?![<])|(?<![>])>(?![>]))\s*(?:UINT32_C\()?0x(?:b0|d8)(?:0{6})?u?\b|'
                               r'\b0x(?:b0|d8)(?:0{6})?u?\)?\s*(?:==|!=|<=|>=)')
