@@ -5,8 +5,16 @@
 #include "sunxi-mmc-uhs-card.h"
 #define PERI400 ((1u << 11) | (1u << 2) | (1u << 1))
 #define PERI300 ((1u << 11) | (1u << 9) | (1u << 5) | (1u << 4))
+#include <sys/mman.h>
+#ifndef MAP_32BIT
+#define MAP_32BIT 0x40
+#endif
 static struct uhs u;
-static unsigned pf_flip, cfg_nowindow;
+static unsigned pf_flip, cfg_nowindow, cfg_dma;
+/* The probe and the OS owner configure descriptor DMA (a 64-byte aligned area below 4 GiB, outside the result page) even for the identification and the
+ * restart that never use it: the platform's IDMAC value rule and the adapter's register list then apply to the restart's writes. */
+static volatile struct sunxi_mmc_dma_descriptor *dma_area;
+static int uhs_dma_sync(void *v, uint8_t *b, size_t n, unsigned phase) { (void)v; (void)b; (void)n; (void)phase; return 1; }
 static unsigned pf_settle, pf_writes, module_writes, restore_settle, restore_writes, cfg_sdr25, cfg_start18, commands_at_mismatch;
 static uint32_t last_module;
 static void live(struct storage_model *s)
@@ -68,7 +76,7 @@ static int uhs_platform_write(void *v, uintptr_t a, uint32_t value)
     assert(a == s->platform.module || a == s->platform.bus);
     if (a == s->platform.module) {
         uint32_t setting = value & 0x07001f1fu;
-        assert(setting == 29 || setting == 0x01000003 || setting == 0x01000001 || setting == 0x02000000);
+        assert(setting == 29 || (setting & ~31u) == 0x01000000 || setting == 0x02000000);   /* identification, 400 MHz / 2 to 32, 300 MHz / 1 */
         if (value & (1u << 31)) {
             if (!s->module_at) s->module_at = s->power.now;
             if (setting != 29) { ++module_writes; last_module = value; }
@@ -78,6 +86,10 @@ static int uhs_platform_write(void *v, uintptr_t a, uint32_t value)
 }
 static void begin(unsigned pf_mode, unsigned fast, unsigned caps)
 {
+    if (cfg_dma && !dma_area) {
+        void *p = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | 0x20 /* MAP_ANONYMOUS */ | MAP_32BIT, -1, 0);
+        assert(p != (void *)-1 && (uintptr_t)p < (UINT64_C(1) << 32) - 4096); dma_area = p;
+    }
     memset(&m, 0, sizeof(m)); memset(&u, 0, sizeof(u));
     pf_flip = 0; pf_settle = 3; pf_writes = module_writes = restore_writes = restore_settle = commands_at_mismatch = 0; last_module = 0;
     pmic_model_setup(&m.power); seed(&u.base, &m.platform.core, SUNXI_MMC_SD, 1);
@@ -101,13 +113,13 @@ static void begin(unsigned pf_mode, unsigned fast, unsigned caps)
     *pmic_model_word(&m.power, 0x02000070) = 1;
     struct a733_mmc_platform_config c = {.owner = 42, .handoff = 200, .topology = 201, .kind = SUNXI_MMC_SD,
         .deadline_us = 8000000, .lifetime_deadline_us = 10000000, .voltage_mask = 0x00300000,
-        .sd_profile = SUNXI_MMC_SD_UHS_SDR104, .sdr25_only = (uint8_t)cfg_sdr25, .start_1v8 = (uint8_t)cfg_start18,
+        .sd_profile = SUNXI_MMC_SD_UHS_SDR104, .sdr25_only = (uint8_t)cfg_sdr25, .start_1v8 = (uint8_t)cfg_start18, .dma = cfg_dma ? dma_area : NULL,
         .fabric = {0, 1u << 31, 1u << 31},
         .fabric_hz = {24000000, 24000000, 24000000}};
     for (unsigned i = 0; i < 7; ++i) { c.desired[i].function = i < 6 ? 2 : 0; c.desired[i].pull = 1; }
     const struct a733_mmc_platform_ops o = {storage_now, storage_current, storage_admit, storage_enter,
         storage_leave, storage_retain, uhs_platform_read, uhs_platform_write, storage_barrier, storage_outside,
-        storage_read_fifo, storage_write_fifo, NULL};
+        storage_read_fifo, storage_write_fifo, cfg_dma ? uhs_dma_sync : NULL};
     assert(a733_mmc_platform_init(&m.platform, &c, &o, &m, &m.power.clocks, &m.power.pins, &m.power.rails,
                                   &m.power.provider));
 }
@@ -140,6 +152,50 @@ static void lost(uint8_t *buffer, uintptr_t address, uint32_t clear, uint32_t se
     uint32_t *w = pmic_model_word(&m.power, address); *w = (*w & ~clear) | set;
     assert(uhs_step() == A733_MMC_RETAINED && m.platform.core.borrowed == buffer && u.base.command_count == commands);
     retained();
+}
+/* Runtime recovery through the platform: a failed read is A733_MMC_ERROR, the recovery policy identifies again at the same ceiling (a new tuning) and then steps
+ * down one mode, the card at 1.8 V is re-entered at 1.8 V with no new PF write or CMD11, and every step is in the card's record. */
+static enum a733_mmc_platform_result failed_read(uint8_t *buffer)
+{
+    assert(a733_mmc_platform_read(&m.platform, 8, 8, buffer, 4096, 9000000) == A733_MMC_PENDING);
+    enum a733_mmc_platform_result r = A733_MMC_PENDING;
+    for (unsigned i = 0; i < 400 && r != A733_MMC_ERROR; ++i) { r = uhs_step(); assert(r != A733_MMC_RETAINED); }
+    assert(r == A733_MMC_ERROR && m.platform.stage == 15 /* READY */ && !m.platform.fault);
+    return r;
+}
+static void recover_to_ready(void)
+{
+    assert(a733_mmc_platform_recover(&m.platform, 9000000) == A733_MMC_PENDING);
+    enum a733_mmc_platform_result r = settle();
+    if (r != A733_MMC_READY) fprintf(stderr, "recover: result %d platform stage %u fault line %u refused %u core state %d error %d protocol %u setup %u restart %u step %u\n", (int)r, m.platform.stage, m.platform.fault_line, m.platform.refused, (int)m.platform.core.state, (int)m.platform.core.result.error, m.platform.core.protocol, m.platform.core.setup, m.platform.core.restart, m.platform.core.command_step);
+    assert(r == A733_MMC_READY);
+}
+static void runtime_recovery(uint8_t *buffer)
+{
+    /* One error: identify again at the same ceiling, SDR104 tuned again, with no PF write, CMD11 or bank restore. */
+    begin(1, 1, 3); assert(settle() == A733_MMC_READY); read_ok(buffer);
+    unsigned cmd19 = u.cmd19; u.read_fail = 1; failed_read(buffer); recover_to_ready();
+    assert(m.platform.core.card.timing == 3 && m.platform.core.card.mode_steps == 1 && m.platform.core.card.mode_log[0].reason == SUNXI_MMC_MODE_RETUNE);
+    assert(u.cmd19 > cmd19 && pf_writes == 1 && u.cmd11 == 1 && !restore_writes && m.platform.signal == 2 && m.platform.core.card.reentered);
+    read_ok(buffer); assert(m.platform.recover_errors == 0);
+    /* Two errors in a row step down: this card has no SDR50, so SDR25 at 50 MHz, still at 1.8 V. */
+    u.read_fail = 2; failed_read(buffer); recover_to_ready(); failed_read(buffer); recover_to_ready();
+    assert(m.platform.core.card.timing == 1 && m.platform.core.card.signal_1v8 && m.platform.core.card.card_hz == 50000000 && u.sdr == 1);
+    assert(m.platform.core.card.mode_steps == 3 && m.platform.core.card.mode_log[2].reason == SUNXI_MMC_MODE_ERRORS && m.platform.core.card.mode_log[2].from == 3);
+    assert(pf_writes == 1 && u.cmd11 == 1 && !restore_writes);
+    read_ok(buffer);
+    /* An error storm in the tuned modes walks down SDR104, SDR50, SDR25: the card has SDR50 and every fast read fails. */
+    begin(1, 1, 3); u.sdr50 = 1; assert(settle() == A733_MMC_READY); u.read_fail_fast = 1;
+    for (unsigned i = 0; i < 8 && m.platform.core.card.timing >= 2; ++i) { failed_read(buffer); recover_to_ready(); }
+    assert(m.platform.core.card.timing == 1 && m.platform.core.card.signal_1v8 && pf_writes == 1 && u.cmd11 == 1);
+    read_ok(buffer);
+    /* A 3.3 V card steps down from high speed to default speed, and a card that fails at every mode is final. */
+    begin(2, 1, 2); assert(settle() == A733_MMC_READY); assert(m.platform.core.card.timing == 1 && !m.platform.core.card.signal_1v8);
+    u.read_fail = 2; failed_read(buffer); recover_to_ready(); failed_read(buffer); recover_to_ready();
+    assert(m.platform.core.card.timing == 0 && u.sdr == 0 && m.platform.core.card.card_hz == 25000000 && !pf_writes);
+    read_ok(buffer);
+    u.read_fail_always = 1; failed_read(buffer); recover_to_ready(); failed_read(buffer);
+    assert(a733_mmc_platform_recover(&m.platform, 9000000) == A733_MMC_INVALID);
 }
 int main(void)
 {
@@ -174,6 +230,7 @@ int main(void)
     assert(a733_mmc_platform_native_address(SUNXI_MMC_SD, 0x04020100, 1));
     assert(!a733_mmc_platform_native_address_selected(SUNXI_MMC_EMMC, A733_MMC_EMMC_SDC2, 0x04022100, 1));
     assert(!a733_mmc_platform_native_address_selected(SUNXI_MMC_EMMC, A733_MMC_EMMC_SDC3, 0x04023100, 0));
+    runtime_recovery(buffer);
     puts("PASS UHS-I platform: one adaptive-mode PF write, 150 MHz from PERI0_300M, 100 MHz without it, "
          "3.3 V high speed in manual PF mode, retained bank timeout and three retained losses after the switch");
     return 0;

@@ -31,6 +31,12 @@ SECTIONS {
     /* Weak references to absent functions load their address from here; without a place the linker puts the
      * orphan after the table block, which EL1 cannot read. */
     .got : { *(.got*) } > RAM
+    /* Static constructors, which runtime_init() of an image with the C library's start-up runs after the admission. */
+    .init_array : ALIGN(8) {
+        __init_array_start = .;
+        KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*))) KEEP(*(.init_array))
+        __init_array_end = .;
+    } > RAM
     .bss (NOLOAD) : ALIGN(64) {
         __bss_start = .;
         *(.bss*) *(COMMON)
