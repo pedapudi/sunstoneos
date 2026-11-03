@@ -68,7 +68,9 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
 }
 static enum board_radio_result retain(struct board_radio *r)
 {
-    atomic_fetch_or_explicit(r->config.recovery_state,4,memory_order_acq_rel);
+    /* A refusal before any write leaves the board's failure state alone, so the session can end normally;
+     * the report says what was seen (a733_radio_platform.refused). */
+    if(!r->platform.refused)atomic_fetch_or_explicit(r->config.recovery_state,4,memory_order_acq_rel);
     atomic_store_explicit(&r->failed,1,memory_order_release);
     if(!r->config.scan_only)(void)a733_radio_entropy_retain(&r->entropy);
     (void)a733_radio_session_retain(&r->session);

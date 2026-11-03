@@ -62,6 +62,13 @@ static int abort_possible(struct a733_radio_platform *p)
 static enum a733_radio_platform_result fail_at(struct a733_radio_platform *p,unsigned line)
 {
     if(!p->fail_line){p->fail_line=line;p->fail_stage=p->stage;}
+    if(p->refused){
+        /* No hardware was changed: leave the register lock and keep every lease as it is. */
+        p->fault=1;
+        if(p->host.initialized)sunxi_sdio_stop(&p->host,SUNXI_SDIO_IO_ERROR);
+        if(p->held){p->ops.leave(p->cookie);p->held=0;}
+        return A733_RADIO_RETAINED;
+    }
     if(abort_possible(p)){
         /* The module is powered: undo that before retaining. The controller is stopped now (software
          * only); the abort steps run from the next polls with a fresh deadline. */
@@ -454,14 +461,19 @@ static enum a733_radio_platform_result registers(struct a733_radio_platform *p)
         if(ok) {
             p->guard_done=1;
             /* BLDO5 off with PG unsupplied, or (left on by a reset) on at 1.8V with PG reading 1.8V. */
-            unsigned pg=(p->pad_power[1]>>12)&3,met=p->already_on?pg==3:pg<2;
+            unsigned pg=(p->pad_power[1]>>12)&3,unmet=(p->already_on?pg==3:pg<2)?0u:1u;
             for(unsigned i=0;i<p->rail_count;++i) {
                 const struct a733_pmic_snapshot *s=&p->snapshots[i];
-                if(s->rail==A733_RAIL_DCDC1)met&=s->enabled&&(s->selector&31u)==23;
-                else if(s->rail==A733_RAIL_BLDO5)met&=p->already_on?s->enabled:!s->enabled;
-                else if(s->rail==A733_RAIL_CLDO1)met&=s->enabled&&s->decoded&&s->programmed_uv==1800000;
+                if(s->rail==A733_RAIL_DCDC1)unmet|=(s->enabled&&(s->selector&31u)==23)?0u:2u;
+                else if(s->rail==A733_RAIL_BLDO5)unmet|=(p->already_on?s->enabled:!s->enabled)?0u:4u;
+                else if(s->rail==A733_RAIL_CLDO1)unmet|=(s->enabled&&s->decoded&&s->programmed_uv==1800000)?0u:8u;
             }
-            if(!met)ok=0; /* Observations stay in the object; nothing was written. */
+            if(unmet){
+                /* Observations stay in the object; nothing was written. The refusal names the PG bits and the
+                 * unmet conditions, and ends without retaining anything. */
+                if(!p->fail_line){p->fail_line=0x400u|pg<<4|unmet;p->fail_stage=p->stage;}
+                p->refused=1;ok=0;
+            }
             else p->stage=RSTAGE_PINS;
         }
     } else if(p->stage==RSTAGE_BUS_GATE) {

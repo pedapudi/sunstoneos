@@ -104,6 +104,10 @@ struct a733_radio_platform {
     unsigned already_on,aborting,abort_done,abort_flags,abort_from;
     /* Where the first failure was decided: the source line of the fail call and the stage then. Zero while healthy. */
     unsigned fail_line,fail_stage;
+    /* The first-run guard refused before any write: nothing is powered and nothing needs undoing, so the failure
+     * releases the register lock instead of retaining it and the lifetime can end normally. fail_line then holds
+     * 0x400 | PG bits (13:12 of GPIO_POW_VAL) << 4 | the unmet conditions (1 PG, 2 DCDC1, 4 BLDO5, 8 CLDO1). */
+    unsigned refused;
     /* GPIO_POW_MOD_SEL, GPIO_POW_VAL, SGPIO_POW_MOD_SEL, SGPIO_POW_VAL as read
      * by the first-run guard; valid once guard_done is set. */
     uint32_t pad_power[4];

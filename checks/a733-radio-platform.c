@@ -352,6 +352,16 @@ int main(void)
         assert(status==A733_RADIO_RETAINED && !pmic_log_count && !r.first_host_at && !r.radio.pin_lease.id);
         assert(!(*pmic_model_word(&r.power,0x07025040)&2));
         if(mismatch==0)emit_result("guard-pg-supplied",&r.radio,0);
+        /* A guard refusal changes nothing: the register lock is left, not retained, and the leases stay live. */
+        if(mismatch<2){
+            assert(r.radio.refused&&!r.register_retained&&r.radio.fail_stage==RSTAGE_GUARD&&(r.radio.fail_line>>8)==4);
+            assert(a733_clock_token_status(&r.power.clocks,&r.radio.clock)==A733_CLOCK_OK);
+            assert(a733_rail_status(&r.power.rails,&r.radio.rail)!=A733_RAIL_RETAINED);
+            assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_RETAINED&&!r.register_retained);
+        }
+        if(mismatch==0)assert(r.radio.fail_line==(0x400u|2u<<4|1u)); /* PG at 3.3 V, PG condition only. */
+        if(mismatch==1)assert((r.radio.fail_line&15u)==1&&(r.radio.fail_line&0x30u)>>4==((r.radio.pad_power[1]>>12)&3));
+        if(mismatch>=2)assert(!r.radio.refused); /* The rail checks before the guard still retain. */
         if(mismatch==0){assert(r.radio.guard_done && ((r.radio.pad_power[1]>>12)&3)==2);}
         if(mismatch==1)assert(r.radio.guard_done && !r.radio.power_on);
         if(mismatch==3)assert(!r.radio.guard_done); /* The earlier DCDC1 check refuses first. */
