@@ -25,6 +25,9 @@ def paths(cache=CACHE):
         'tcp': next(iter(sorted(d for d in stacks.glob('FreeRTOS-Plus-TCP-*') if d.is_dir())), None),
         'rsn': next(iter(sorted(d for d in stacks.glob('wpa_supplicant-*') if d.is_dir())), None),
         'headers': next(iter(sorted((cache / 'host').glob('arm-gnu-toolchain-*/aarch64-none-elf/include'))), None),
+        'newlib': next(iter(sorted(d for d in (cache / 'host').glob('arm-gnu-toolchain-*') if d.is_dir())), None),
+        # The OS kit's SMP C and C++ runtime (tools/build-newlib-smp.py): the most recently built distribution.
+        'newlib_smp': next(iter(sorted((d for d in (cache / 'host').glob('newlib-smp-*') if d.is_dir()), key=lambda d: d.stat().st_mtime, reverse=True)), None),
     }
     for name, path in found.items():
         if path is None or not path.is_dir():
@@ -33,10 +36,12 @@ def paths(cache=CACHE):
 
 
 def cmake_arguments(cache=CACHE, supervised=True):
-    """-D arguments for any image: FREERTOS_DIR, TINYUSB_DIR, the network sources and headers, and the supervised board switch the board images need."""
+    """-D arguments for any image: FREERTOS_DIR, TINYUSB_DIR, the network sources and headers, the C and C++ runtimes (NEWLIB_ROOT, NEWLIB_SMP_ROOT) and the
+    supervised board switch the board images need."""
     p = paths(cache)
     arguments = ['-DFREERTOS_DIR=%s' % p['freertos'], '-DTINYUSB_DIR=%s' % p['tinyusb'], '-DSUNSTONE_TCP_DIR=%s' % p['tcp'],
-                 '-DSUNSTONE_RSN_DIR=%s' % p['rsn'], '-DSUNSTONE_NETWORK_C_HEADERS=%s' % p['headers']]
+                 '-DSUNSTONE_RSN_DIR=%s' % p['rsn'], '-DSUNSTONE_NETWORK_C_HEADERS=%s' % p['headers'], '-DNEWLIB_ROOT=%s' % p['newlib'],
+                 '-DNEWLIB_SMP_ROOT=%s' % p['newlib_smp']]
     if supervised:
         arguments.append('-DSUNSTONE_BOARD_SUPERVISED=ON')
     return arguments

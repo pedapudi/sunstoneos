@@ -180,6 +180,12 @@ static void ladder(struct uhs *u, struct sunxi_mmc *h)
         want_ceiling = -1;
     }
     want_reenter = 0;
+    /* The owner's rule for a card found at 1.8 V by a 3.3 V host: the card at 1.8 V (phase 3) answers S18A clear and reports SDR50 and SDR104; a 3.3 V card, a card
+     * that declines UHS and a card that took the switch are not it. */
+    begin(u, h, 3); u->s18a = 0; u->phase = 3; u->bank = 0; u->sdr50 = 1; want_reenter = 0; drive(u, h);
+    assert(h->state == SUNXI_MMC_READY && !h->card.signal_1v8 && h->card.timing == 1 && sunxi_mmc_card_found_at_1v8(&h->card));
+    begin(u, h, 3); drive(u, h); assert(h->card.signal_1v8 && !sunxi_mmc_card_found_at_1v8(&h->card));                                   /* the switch was taken */
+    begin(u, h, 3); u->s18a = 0; u->nohs = 0; drive(u, h); assert(h->state == SUNXI_MMC_READY && !sunxi_mmc_card_found_at_1v8(&h->card)); /* 3.3 V card, S18A clear, no UHS functions at 3.3 V */
     /* A card that only signals 3.3 V (no S18A): high speed at 50 MHz, no switch, whatever it supports. */
     begin(u, h, 3); u->s18a = 0; u->sdr50 = 1; expect_mode(u, h, 1, 4, 0, SUNXI_MMC_UHS_DECLINED, 0, 0, 0);
     assert(!u->cmd11 && !h->card.signal_1v8 && h->card.card_hz == 50000000);

@@ -126,7 +126,7 @@ static int dma_sync(void *cookie, uint8_t *b, size_t n, unsigned phase)
  * failed bounds read (sector + 1), [3] the bounds reads made. For an open that stopped, [2] is INTID 193's state before the owner masked it
  * (bit 0 enabled, 1 pending, 2 active; stray handler entries << 8) and [3] its state after the mask settled. Stages: 1 declared or already open, 2 PMIC service, 3 descriptor memory,
  * 4 configure, 5 native binding, 6 platform init, 7 identification (detail: result), 8 card query (result), 9 interrupt and timer
- * registration or irq arming (detail 1 platform, 2 or 3 GIC rearm), 10 owner task creation (sd_owner.c), 11 owner wait (sd_owner.c), 12 GIC mask before the baseline, 30 to 36 a refused read, write or status request (detail: result | platform stage << 8 | platform fault << 16 | core error << 24), 20 enable preconditions, 21 blob copy, 22 blob parse, 23 bounds verify (detail: object state), 24 write binding. */
+ * registration or irq arming (detail 1 platform, 2 or 3 GIC rearm), 10 owner task creation (sd_owner.c), 11 owner wait (sd_owner.c), 12 GIC mask before the baseline, 37 to 42 the recovery of a failed read (37 restart refused, 38 identification again, 39 card query, 40 interrupt re-armed) or the re-opening of a card found at 1.8 V (41 its read, 42 its close), 30 to 36 a refused read, write or status request (detail: result | platform stage << 8 | platform fault << 16 | core error << 24), 20 enable preconditions, 21 blob copy, 22 blob parse, 23 bounds verify (detail: object state), 24 write binding. */
 uint64_t os_sd_diag[4];
 static inline int diag_set(uint64_t stage, uint64_t detail)
 {
@@ -157,7 +157,7 @@ static int fabric(void)
     return 1;
 }
 
-static int configure(void)
+static int configure(unsigned start18)
 {
     const struct a733_board_session *s = &board.session;
     uint64_t owner = (s->lease ^ UINT64_C(0x5344303052454144)) | 1, generation = s->generation | 1;
@@ -167,7 +167,7 @@ static int configure(void)
     if (start == UINT64_MAX) return 0;
     config = (struct a733_mmc_platform_config){.owner = owner, .handoff = s->lease | 1, .topology = generation ^ owner,
         .deadline_us = start + IDENTIFY_US, .lifetime_deadline_us = start + LIFETIME_US, .kind = SUNXI_MMC_SD,
-        .voltage_mask = 0x00300000, .sd_profile = SUNXI_MMC_SD_HIGH_SPEED4, .dma = descriptors};
+        .voltage_mask = 0x00300000, .sd_profile = SUNXI_MMC_SD_UHS_SDR104, .start_1v8 = (uint8_t)start18, .dma = descriptors};
     if (!config.topology || !fabric()) return 0;
     /* The pins carry whatever the ROM and the runner left; the provider replaces that state. */
     for (unsigned i = 0; i < 7; ++i) {
@@ -183,6 +183,68 @@ static int configure(void)
     return a733_mmc_platform_scopes(&config, &scopes);
 }
 
+/* The bus speed mode the card runs and every step the owner took, for the application's report (ss_storage_mode). [0] bit 0 valid, 7:4 the card timing
+ * (3 SDR104, 2 SDR50, 1 SDR25 or high speed, 0 SDR12 or default speed), 8 the card signals 1.8 V, 15:12 the UHS-I outcome (sunxi_mmc_uhs_outcome), 23:20 the mode
+ * steps taken (all, including the restarts of the recovery), 31:28 the ceiling, 32 the card was re-entered at 1.8 V without CMD11, 36 the owner opened the platform
+ * a second time because the card was found at 1.8 V, 47:40 the recovery restarts; [1] the card clock in Hz; [2] bits 7:0 the sample delay, 15:8 the window start,
+ * 23:16 its width, 31:24 the group 1 support bits, 32 S18A; [3] the first four mode log entries, one byte each (from | to << 2 | reason << 4). */
+uint64_t os_sd_mode[4];
+static unsigned reopened, restarts;
+static void record_mode(void)
+{
+    const struct sunxi_mmc_card *c = &platform.core.card;
+    uint64_t log = 0;
+    for (unsigned i = 0; i < 4 && i < c->mode_steps && i < SUNXI_MMC_MODE_LOG; ++i)
+        log |= (uint64_t)((c->mode_log[i].from & 3u) | (c->mode_log[i].to & 3u) << 2 | (c->mode_log[i].reason & 15u) << 4) << (8 * i);
+    os_sd_mode[1] = c->card_hz;
+    os_sd_mode[2] = (uint64_t)c->sample_delay | (uint64_t)c->tuning_start << 8 | (uint64_t)c->tuning_width << 16 | (uint64_t)c->group1_support << 24 |
+                    (uint64_t)(c->ocr >> 24 & 1u) << 32;
+    os_sd_mode[3] = log;
+    os_sd_mode[0] = 1u | (uint64_t)(c->timing & 3u) << 4 | (uint64_t)(c->signal_1v8 ? 1u : 0u) << 8 | (uint64_t)(c->uhs_outcome & 15u) << 12 |
+                    (uint64_t)(c->mode_steps & 15u) << 20 | (uint64_t)(c->ceiling & 15u) << 28 | (uint64_t)(c->reentered ? 1u : 0u) << 32 |
+                    (uint64_t)(reopened & 1u) << 36 | (uint64_t)(restarts & 255u) << 40;
+}
+/* The rule of docs/designs/sd-uhs-adoption.md for a card that was identified at 3.3 V: S18A clear with SDR50 or SDR104 in the group 1 support field (bits 2 and 3
+ * of status byte 13) is a card that already signals 1.8 V, as the 3.3 V host in front of 3-3's card measured; a card without UHS-I reports functions 2 to 4 as 0. */
+static int found_at_1v8(void)
+{
+    return sunxi_mmc_card_found_at_1v8(&platform.core.card);
+}
+#define RECOVER_US 3000000u
+static uint64_t last_sector; static uint32_t last_count; static uint8_t *last_dma;
+#ifdef OS_SD_WRITE
+static void irq_suspend(void);
+static int irq_resume(void);
+#endif
+/* A failed read the platform can recover (A733_MMC_ERROR): identify again, which tunes again, or step the mode down (a733_mmc_platform_recover). Blocking, in the owner. */
+static int recover_blocking(void)
+{
+    enum a733_mmc_platform_result r;
+#ifdef OS_SD_WRITE
+    irq_suspend();
+#endif
+    do { r = a733_mmc_platform_recover(&platform, now_us() + RECOVER_US); if (r == A733_MMC_BUSY) vTaskDelay(1); } while (r == A733_MMC_BUSY && board_live(NULL));
+    if (r != A733_MMC_PENDING) return DIAG(37, PLAT(r));
+    ++restarts;
+    for (;;) {
+        uint64_t wake = now_us();
+        for (;;) {
+            r = a733_mmc_platform_poll(&platform);
+            if (r != A733_MMC_PENDING && r != A733_MMC_BUSY) break;
+            if (now_us() - wake >= 1000 || !board_live(NULL)) break;
+        }
+        if (r == A733_MMC_READY) break;
+        if ((r != A733_MMC_PENDING && r != A733_MMC_BUSY) || !board_live(NULL) || now_us() >= config.lifetime_deadline_us) return DIAG(38, PLAT(r));
+        vTaskDelay(1);
+    }
+    do { r = a733_mmc_platform_card(&platform, &card, config.lifetime_deadline_us); if (r == A733_MMC_BUSY) vTaskDelay(1); } while (r == A733_MMC_BUSY && board_live(NULL));
+    if (r != A733_MMC_READY) return DIAG(39, PLAT(r));
+    record_mode();
+#ifdef OS_SD_WRITE
+    if (!irq_resume()) return DIAG(40, 0);
+#endif
+    return 1;
+}
 /* One request at a time into dma, to completion or failure; the loader's metadata reads. */
 #ifdef OS_SD_WRITE
 static enum a733_mmc_platform_result drive_platform(uint64_t deadline, uint32_t recheck_us);
@@ -192,14 +254,18 @@ static uint32_t recheck_for(uint32_t blocks, int write);
 static int read_blocking(uint64_t sector, uint32_t count, uint8_t *dma)
 {
     enum a733_mmc_platform_result r;
-    do { r = a733_mmc_platform_read(&platform, sector, count, dma, count * 512u, now_us() + READ_US); }
-    while (r == A733_MMC_BUSY && board_live(NULL));
-    if (r != A733_MMC_PENDING) return DIAG(30, PLATX(r));
+    for (unsigned attempt = 0;; ++attempt) {
+        do { r = a733_mmc_platform_read(&platform, sector, count, dma, count * 512u, now_us() + READ_US); }
+        while (r == A733_MMC_BUSY && board_live(NULL));
+        if (r != A733_MMC_PENDING) return DIAG(30, PLATX(r));
 #ifdef OS_SD_WRITE
-    r = drive_platform(now_us() + READ_US, recheck_for(count, 0));
+        r = drive_platform(now_us() + READ_US, recheck_for(count, 0));
 #else
-    do { r = a733_mmc_platform_poll(&platform); } while ((r == A733_MMC_PENDING || r == A733_MMC_BUSY) && board_live(NULL));
+        do { r = a733_mmc_platform_poll(&platform); } while ((r == A733_MMC_PENDING || r == A733_MMC_BUSY) && board_live(NULL));
 #endif
+        if (r == A733_MMC_ERROR && attempt < 3 && recover_blocking()) continue;      /* identify again or step down, then the same request again */
+        break;
+    }
     if (r != A733_MMC_COMPLETE) return DIAG(31, PLATX(r));
     do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
     if (r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.received == count * 512u) return 1;
@@ -221,7 +287,7 @@ static int sd_submit(void *unused, uint64_t sector, uint32_t count, uint8_t *dma
     enum a733_mmc_platform_result r;
     do { r = a733_mmc_platform_read(&platform, sector, count, dma, count * 512u, now_us() + READ_US); }
     while (r == A733_MMC_BUSY && board_live(NULL));
-    blocks_in_flight = count;
+    blocks_in_flight = count; last_sector = sector; last_count = count; last_dma = dma;
     if (r != A733_MMC_PENDING) return 0;
 #ifndef OS_SD_WRITE
     /* The request is accepted but the command is issued by the polls that follow, and the loader hashes the previous piece
@@ -240,6 +306,13 @@ static int sd_poll(void *unused)
     (void)unused;
     enum a733_mmc_platform_result r = a733_mmc_platform_poll(&platform);
     if (r == A733_MMC_PENDING || r == A733_MMC_BUSY) return board_live(NULL) ? 0 : -1;
+    if (r == A733_MMC_ERROR) {
+        /* A failed read: identify again (or step down) and submit the same request again; the caller keeps waiting. */
+        if (!recover_blocking()) return -1;
+        do { r = a733_mmc_platform_read(&platform, last_sector, last_count, last_dma, last_count * 512u, now_us() + READ_US); }
+        while (r == A733_MMC_BUSY && board_live(NULL));
+        return r == A733_MMC_PENDING ? 0 : -1;
+    }
     if (r != A733_MMC_COMPLETE) return -1;
     do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
     return r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.received == blocks_in_flight * 512u ? 1 : -1;
@@ -265,33 +338,47 @@ const struct os_large_device *os_large_device(void)
 #ifdef OS_SD_WRITE
     if (!sd_irq_mask_settled()) return DIAGP(12, 0);        /* the route table enabled INTID 193 at boot; the platform's baseline wants it masked */
 #endif
-    if (!configure()) return DIAGP(4, 0);
-    if (!a733_mmc_platform_native_init_selected(&native, &providers.shared.locks, xTaskGetCurrentTaskHandle(), SUNXI_MMC_SD,
-            A733_MMC_EMMC_SDC2, admit, &platform)) return DIAGP(5, 0);
-    native.operations.dma_sync = dma_sync;
-    if (!a733_mmc_platform_init(&platform, &config, &native.operations, &native, &providers.shared.clocks,
-            &providers.shared.pins, &providers.shared.rails, &providers.shared.pmic)) return DIAGP(6, 0);
-    opened = 1;
-    /* Identification polls for up to a millisecond per wake and yields so that the PMIC task can answer. */
-    for (;;) {
-        uint64_t wake = now_us();
-        enum a733_mmc_platform_result r;
+    for (unsigned start18 = 0;; start18 = 1) {
+        if (!configure(start18)) return DIAGP(4, 0);
+        if (!a733_mmc_platform_native_init_selected(&native, &providers.shared.locks, xTaskGetCurrentTaskHandle(), SUNXI_MMC_SD,
+                A733_MMC_EMMC_SDC2, admit, &platform)) return DIAGP(5, 0);
+        native.operations.dma_sync = dma_sync;
+        if (!a733_mmc_platform_init(&platform, &config, &native.operations, &native, &providers.shared.clocks,
+                &providers.shared.pins, &providers.shared.rails, &providers.shared.pmic)) return DIAGP(6, 0);
+        opened = 1;
+        /* Identification polls for up to a millisecond per wake and yields so that the PMIC task can answer. */
         for (;;) {
-            r = a733_mmc_platform_poll(&platform);
-            if (r != A733_MMC_PENDING && r != A733_MMC_BUSY) break;
-            if (now_us() - wake >= 1000 || !board_live(NULL)) break;
+            uint64_t wake = now_us();
+            enum a733_mmc_platform_result r;
+            for (;;) {
+                r = a733_mmc_platform_poll(&platform);
+                if (r != A733_MMC_PENDING && r != A733_MMC_BUSY) break;
+                if (now_us() - wake >= 1000 || !board_live(NULL)) break;
+            }
+            if (r == A733_MMC_READY) break;
+            if ((r != A733_MMC_PENDING && r != A733_MMC_BUSY) || !board_live(NULL) || now_us() >= config.deadline_us) {
+                (void)a733_mmc_platform_retain(&platform);
+                return DIAGP(7, PLAT(r));
+            }
+            vTaskDelay(1);
         }
-        if (r == A733_MMC_READY) break;
-        if ((r != A733_MMC_PENDING && r != A733_MMC_BUSY) || !board_live(NULL) || now_us() >= config.deadline_us) {
-            (void)a733_mmc_platform_retain(&platform);
-            return DIAGP(7, PLAT(r));
-        }
-        vTaskDelay(1);
+        enum a733_mmc_platform_result r;
+        do { r = a733_mmc_platform_card(&platform, &card, config.deadline_us); if (r == A733_MMC_BUSY) vTaskDelay(1); }
+        while (r == A733_MMC_BUSY && board_live(NULL));
+        if (r != A733_MMC_READY || !card.sectors) { (void)a733_mmc_platform_retain(&platform); return DIAGP(8, PLAT(r)); }
+        if (start18 || !found_at_1v8()) break;
+        /* The card was identified at 3.3 V but already signals 1.8 V (the rule above): one read so that the platform may close, close it with the bank at 3.3 V,
+         * and open it again with the bank moved to 1.8 V first and the card re-entered with no CMD11, the lifetime proven on 3-3. */
+        static uint8_t scratch[512];
+        if (!sd_read(NULL, 0, 1, scratch)) { (void)a733_mmc_platform_retain(&platform); return DIAGP(41, 0); }
+        enum a733_mmc_platform_result c;
+        do { c = a733_mmc_platform_close(&platform, config.lifetime_deadline_us); if (c == A733_MMC_BUSY || c == A733_MMC_PENDING) vTaskDelay(1); }
+        while ((c == A733_MMC_BUSY || c == A733_MMC_PENDING) && now_us() < config.lifetime_deadline_us);
+        if (c != A733_MMC_CLOSED) { (void)a733_mmc_platform_retain(&platform); return DIAGP(42, PLAT(c)); }
+        memset(&platform, 0, sizeof platform); memset(&native, 0, sizeof native); memset(&card, 0, sizeof card);
+        opened = 0; blocks_in_flight = 0; reopened = 1;
     }
-    enum a733_mmc_platform_result r;
-    do { r = a733_mmc_platform_card(&platform, &card, config.deadline_us); if (r == A733_MMC_BUSY) vTaskDelay(1); }
-    while (r == A733_MMC_BUSY && board_live(NULL));
-    if (r != A733_MMC_READY || !card.sectors) { (void)a733_mmc_platform_retain(&platform); return DIAGP(8, PLAT(r)); }
+    record_mode();
     device = (struct os_large_device){{NULL, sd_read, card.sectors}, {NULL, sd_submit, sd_poll}, 0, 0, buffers};
     return &device;
 }
@@ -374,6 +461,26 @@ static int sd_irq_mask_settled(void)
     return 0;
 }
 static uint32_t irq_taken(void *unused) { (void)unused; return atomic_exchange_explicit(&irq_bits, 0, memory_order_acquire); }
+static int irq_owner_on;       /* the owner has switched on completion by interrupt (os_sd_open_owner) */
+/* A restart needs the interrupt masked and the platform out of irq mode; both are put back after it. */
+static void irq_suspend(void)
+{
+    if (!irq_owner_on) return;
+    irq_live = 0; (void)sd_irq_mask_settled(); (void)a733_mmc_platform_irq(&platform, 0);
+}
+static int irq_resume(void)
+{
+    if (!irq_owner_on) return 1;
+    if (!a733_mmc_platform_irq(&platform, 1)) return 0;
+    irq_live = 1;
+    for (unsigned tries = 0; tries < 100; ++tries) {
+        int r = gicv3_spi_rearm(&sd_gic);
+        if (r < 0) { irq_live = 0; return 0; }
+        if (r) return 1;
+        vTaskDelay(1);
+    }
+    irq_live = 0; return 0;
+}
 
 /* The wait loop: poll, then sleep on the interrupt or a one-shot timer, as the core's hint says. */
 struct drive { enum a733_mmc_platform_result r; int (*poll)(void); };
@@ -519,7 +626,7 @@ const struct os_sd_hw *os_sd_open_owner(void)
     owner_task = xTaskGetCurrentTaskHandle();
     if (sunstone_deadline_register() != 1 || !sunxi_mmc_set_irq(&platform.core, irq_taken, NULL)) { (void)DIAG(9, 0); return 0; }
     if (!a733_mmc_platform_irq(&platform, 1)) { (void)DIAG(9, 1); return 0; }
-    irq_live = 1;
+    irq_live = 1; irq_owner_on = 1;
     int armed = 0;
     for (unsigned tries = 0; tries < 100 && !armed; ++tries) {
         int r = gicv3_spi_rearm(&sd_gic);
@@ -533,7 +640,7 @@ const struct os_sd_hw *os_sd_open_owner(void)
 }
 void os_sd_close_owner(void)
 {
-    irq_live = 0;
+    irq_live = 0; irq_owner_on = 0;
     (void)sd_irq_mask_settled();
     (void)a733_mmc_platform_irq(&platform, 0);
     os_sd_close_owner_device();

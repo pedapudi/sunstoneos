@@ -228,6 +228,11 @@ int sunxi_mmc_reenter(struct sunxi_mmc *);
 /* After init and before open, UHS-I profile only: after identification at 1.8 V run SDR25 at 50 MHz and never try SDR104 or tuning
  * (card.uhs_outcome is SUNXI_MMC_UHS_LIMITED). The CMD6 response of the switch still reports every function group's support bits. */
 int sunxi_mmc_sdr25_only(struct sunxi_mmc *);
+/* A card identified at 3.3 V that already signals 1.8 V, from an earlier lifetime that switched it (measured on 3-3: a 3.3 V host reads such a card at high speed,
+ * S18A clear, with SDR50 and SDR104 in the CMD6 group 1 support field; docs/designs/sd-uhs-adoption.md). The owner then closes and opens again with the bank moved to
+ * 1.8 V first. A card without UHS-I reports functions 2 to 4 as 0 at 3.3 V, so S18A clear alone is not enough. */
+static inline int sunxi_mmc_card_found_at_1v8(const struct sunxi_mmc_card *c)
+{ return c && !c->signal_1v8 && !(c->ocr >> 24 & 1u) && (c->switch_status[13] & 0x0cu); }
 /* After init and before open, UHS-I profile: the highest bus speed mode identification may select (a card.timing value: 3 SDR104, 2 SDR50,
  * 1 SDR25 or high speed, 0 SDR12 or default speed). The default is 3. A card at 3.3 V is limited to 1 whatever the ceiling. */
 int sunxi_mmc_set_ceiling(struct sunxi_mmc *, unsigned timing);
