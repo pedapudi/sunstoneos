@@ -18,7 +18,8 @@ An application declares regions of upper memory, up to the 11 GiB the board maps
 | Heap from the ledger | qualified on the board | see [application memory layout](../designs/application-memory-layout.md) | `application-memory-layout-heap-modes` |
 | Partitioned scheduler's task-switch hook | host-tested | builds and boots in QEMU | `checks/qemu-os-boot.py` |
 | Device grant | open | interface only | [design](../designs/large-app-regions.md) |
-| Regions requested at run time | open | needs a growing ledger, table pages at run time, a broadcast invalidation | [application memory layout](../designs/application-memory-layout.md) |
+| Broadcast TLB invalidation cost (1,000 per second from an A55 core) | qualified on the board | page and ASID forms: control-path maximum 3.54 us against 3.33 us without; all-entries form not cleared (5.38 us jitter in one soak of six) | `application-memory-layout-tlbi-soaks` |
+| Regions requested at run time | open | needs a growing ledger and table pages at run time; the release protocol is in the design | [application memory layout](../designs/application-memory-layout.md) |
 
 ## Open work
 

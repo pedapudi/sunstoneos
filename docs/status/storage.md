@@ -4,7 +4,7 @@
 
 Native SD identification, bounded reads, backup-first updates, slot loading, cold entry, descriptor-DMA reads, the FAT32 write service and UHS-I SDR104 reads have software evidence; reads, bounded writes and SDR104 reads on the 62.5 GB and 32 GB cards are board-qualified within the scope below. Neither board has populated eMMC or UFS (host-tested only); the failed UFS probe stays disabled.
 
-**Board-qualified scope:** Returning microSD PIO reads at 50 MHz, four-bit, 3.3 V, one 4 KiB and one 64 KiB sixteen-descriptor DMA read matching same-card PIO references, restoring controller, clocks, pins and saved RAM before normal ROM return. Read-only SD Status (ACMD13), FAT32 volume mount and 160 sequential 128 KiB reads (port 3-1). Bounded CMD25 writes on port 3-1: a 512 MiB file with append, one interruption with recovery, and read-back, through the OS image's SD owner task. Read-only SDR104 at 150 MHz on port 3-3, reached by re-entering a card at 1.8 V, with the bank returned to 3.3 V at close. No other card, write at 1.8 V or 150 MHz, or autonomous boot is qualified. Any physical card write needs its full host backup and the approved target-bound path in [goal section 4](../goal.md).
+**Board-qualified scope:** Returning microSD PIO reads at 50 MHz, four-bit, 3.3 V, one 4 KiB and one 64 KiB sixteen-descriptor DMA read matching same-card PIO references, restoring controller, clocks, pins and saved RAM before normal ROM return. Read-only SD Status (ACMD13), FAT32 volume mount and 160 sequential 128 KiB reads (port 3-1). Bounded CMD25 writes on port 3-1: a 512 MiB file with append, one interruption with recovery, and read-back, through the OS image's SD owner task. Read-only SDR104 at 150 MHz on port 3-3, reached by re-entering a card at 1.8 V, with the bank returned to 3.3 V at close, and bounded writes to the scratch card on port 3-3 at SDR25 (50 MHz) after the write step-down from SDR104 and SDR50. No other card, write at 100 or 150 MHz, or autonomous boot is qualified. Any physical card write needs its full host backup and the approved target-bound path in [goal section 4](../goal.md).
 
 | Capability | Status | Key figure | Evidence and design |
 | --- | --- | --- | --- |
@@ -17,13 +17,17 @@ Native SD identification, bounded reads, backup-first updates, slot loading, col
 | Session-start resolution algorithm | host-tested | 256 cut sessions all usable | [sd-uhs-recovery](../designs/sd-uhs-recovery.md) |
 | File-create module | host-tested | 326-sector backup | [region-test-file-write](../designs/region-test-file-write.md) |
 | FAT32 read cursor | host-tested | 511 links for 256 KiB, against 67,667 | `storage.jsonl` `storage-fat32-read-cursor` |
-| OS adoption of SDR104, SDR50, DDR50, GPT, multiple volumes | open | | [sd-uhs-adoption](../designs/sd-uhs-adoption.md) |
+| UHS-I SDR104 and SDR50 reads in the OS owner, port 3-3 | qualified on the board | 440,401,920-byte file read back at 46.8 MB/s, 0 mismatches | [sd-uhs-adoption](../designs/sd-uhs-adoption.md); `1793689311355151182-d43861f7` |
+| Writes at 1.8 V on scratch card 3-3 | qualified on the board at SDR25 only | 440,401,920 bytes at 9.8 MB/s | [sd-uhs-adoption](../designs/sd-uhs-adoption.md); `1793689196470444588-1be26413` |
+| Writes at SDR50 and SDR104 | open | every write faults with no CRC status token from the first block | `1793689119969310811-abcfb6bc` |
+| Scratch-card admission (`SSBW0004`) and mode 9 reformat | qualified on the board | format of 15,286,272 bytes | [storage-write](../designs/storage-write.md#scratch-cards) |
+| DDR50, GPT, multiple volumes | open | | |
 | Autonomous OS boot from the card | open | | |
 
 ## Open work
 
 1. Qualify physical installation, autonomous OS boot, cold controller and supply state, reset retirement and power-loss recovery.
-2. Run the UHS-I owner on a board. `apps/os/large_sd.c` selects SDR104 (150 MHz), SDR50 (100 MHz), SDR25, SDR12, or high or default speed at 3.3 V, re-enters at 1.8 V for a card found already at 1.8 V, and steps the mode down on failed reads (host-tested). Read-only runs on port 3-3 are qualified (SDR104 2.445 ms per 128 KiB request, SDR50 3.342 ms, SDR25 6.059 ms, restarts without CMD11); port 3-1 has run at 3.3 V only; no board has written at 1.8 V. See [the adoption design](../designs/sd-uhs-adoption.md) and [the recovery design](../designs/sd-uhs-recovery.md). Five image-level SD checks are stale and waived in `checks/gate-inputs.json`; rewrite them against the image. The board documents disagree on whether DC1SW2 powers the card, so no supply cycle is attempted.
+2. Make writes work at SDR50 and SDR104. `apps/os/large_sd.c` selects SDR104 (150 MHz), SDR50 (100 MHz), SDR25, SDR12, or high or default speed at 3.3 V, re-enters at 1.8 V for a card found already at 1.8 V, and steps the mode down after two faults in a row on reads and writes alike. On port 3-3 every write at 100 and 150 MHz faults with no CRC status token from the first block (error 6, `P_WRITE_DMA`, RINTSTS `0x801c`) and the owner finishes at SDR25. The pad drive strength is not the cause; the sample point for the token is the next candidate. Reads at 150 MHz are sound. Port 3-1 has run at 3.3 V only. See [the adoption design](../designs/sd-uhs-adoption.md) and [the recovery design](../designs/sd-uhs-recovery.md). Five image-level SD checks are stale and waived in `checks/gate-inputs.json`; rewrite them against the image. The board documents disagree on whether DC1SW2 powers the card, so no supply cycle is attempted.
 3. Measure sustained throughput on broader extents and cards, and qualify card replacement, removal and recovery, and voltage timing.
 4. Implement SDR50 and DDR50; add GPT, multiple volumes and clients.
 5. Write qualification beyond one cut: more interruption points, other cards, directories other than `/sunstone-test/`, concurrent writers.
@@ -37,7 +41,7 @@ Native SD identification, bounded reads, backup-first updates, slot loading, col
 Board results are records in [`docs/evidence/storage.jsonl`](../evidence/storage.jsonl); add one with `tools/evidence.py add`. Design records are in [sd-uhs](../evidence/sd-uhs.jsonl), [sd-uhs-recovery](../evidence/sd-uhs-recovery.jsonl), [sd-dma](../evidence/sd-dma.jsonl), [storage-write](../evidence/storage-write.jsonl), [mmc-multiblock-write](../evidence/mmc-multiblock-write.jsonl), [region-test-file-write](../evidence/region-test-file-write.jsonl) and [spi-native-dma](../evidence/spi-native-dma.jsonl). Earlier prose evidence is in [the historical log](../history/status-storage-20261101.md).
 
 <!-- evidence-table:begin -->
-38 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+54 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -79,4 +83,20 @@ Board results are records in [`docs/evidence/storage.jsonl`](../evidence/storage
 | `1793667245855934208-55d19b3c` | 2026-11-02 | 3-3 | `ea5720010089` | result-mismatch | passed | run_total 148.541 s, run_total 0 s, sdr104_request 2.445 ms, sdr104_retuned_request 2.445 ms, sdr50_request 3.342 ms, sdr25_request 6.059 ms, sdr104_window 48, sdr50_window 64, reads_done 128 |
 | `sd-uhs-adoption-3-1-switch` | 2026-11-02 |  | `` | not-run | inconclusive |  |
 | `sd-uhs-adoption-3-3-layout-capture` | 2026-11-02 | 3-3 | `99c966ae6350` | result-mismatch | inconclusive |  |
+| `sd-uhs-adoption-scratch-card-plan` | 2026-11-02 |  | `` | not-run | inconclusive |  |
+| `sd-uhs-adoption-write-second-attempt` | 2026-11-02 |  | `` | not-run | inconclusive |  |
+| `sd-uhs-adoption-write-table` | 2026-11-02 |  | `` | returned | inconclusive |  |
+| `1793683567666621650-3e3c6631` | 2026-11-03 | 3-3 | `5c866e6806ef` | watchdog-reset | inconclusive |  |
+| `1793683923163699289-3c296ae6` | 2026-11-03 | 3-3 | `99c966ae6350` | result-mismatch | inconclusive |  |
+| `1793683932704369296-a2880fff` | 2026-11-03 | 3-3 | `99c966ae6350` | result-mismatch | inconclusive |  |
+| `1793685607294001067-6c6ebb1d` | 2026-11-03 | 3-3 | `c4ee679e857c` | watchdog-reset | inconclusive |  |
+| `1793686672190595430-c7085caf` | 2026-11-03 | 3-3 | `8f5a453e9d8f` | refused-before-launch | inconclusive |  |
+| `1793687494152436674-9dcd2cb2` | 2026-11-03 | 3-3 | `8f5a453e9d8f` | watchdog-reset | inconclusive |  |
+| `1793687913540627897-0dcbebfc` | 2026-11-03 | 3-3 | `38edac6cf0f7` | watchdog-reset | inconclusive |  |
+| `1793688426368337098-abb94372` | 2026-11-03 | 3-3 | `e4457f8e655b` | watchdog-reset | inconclusive |  |
+| `1793688694680089992-4e190fcd` | 2026-11-03 | 3-3 | `3899a8578c19` | watchdog-reset | inconclusive |  |
+| `1793689119969310811-abcfb6bc` | 2026-11-03 | 3-3 | `3e308c9c6222` | returned | inconclusive |  |
+| `1793689196470444588-1be26413` | 2026-11-03 | 3-3 | `3e308c9c6222` | result-mismatch | inconclusive |  |
+| `1793689311355151182-d43861f7` | 2026-11-03 | 3-3 | `3e308c9c6222` | returned | inconclusive |  |
+| `1793689497237363008-de0d289f` | 2026-11-03 | 3-3 | `83bfe0ba5a1b` | returned | inconclusive |  |
 <!-- evidence-table:end -->

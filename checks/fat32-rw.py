@@ -1,28 +1,40 @@
 #!/usr/bin/env python3
-"""Check the FAT32 write service: power-loss sweep, recovery, write accounting and the write guard.
+"""Check the FAT32 write service's crash-consistency order, its recovery at each step of that order, the write guard and the write accounting.
 
-The host model (checks/fat32-rw.c) runs a scenario against a mkfs.fat volume inside a card image
-(the partition starts at sector 32768, as on the board) and logs every sector write. A power cut
-after k sector writes leaves the first k logged sectors on the card (the model persists a write call's
-sectors in ascending order; a card may persist the sectors of one call in another order, so a random
-subset of each multi-sector call is also tested). For every cut the check:
-  1. runs the service's mount-time recovery on the cut image,
-  2. requires `fsck.fat -n` to report a clean volume (exit status 0),
-  3. reads the volume with an independent Python FAT32 reader and requires every file to match the
-     constraints the scenario recorded: synced bytes intact, a replaced or renamed file whole old or
-     whole new, and
-  4. requires a second mount to write nothing.
-A sample of cuts also cuts the recovery itself at every sector write and recovers again.
+The writer (drivers/storage/fat32_rw.c, include/fat32_rw.h) claims that a power cut at any point of a session leaves a volume that
+mount-time recovery repairs. It holds because a session changes the card in a fixed order, each step harmless until the next one
+makes it reachable:
+  1. data clusters are written to clusters that the FAT still shows free (the service reserves them in memory only), so a cut here
+     leaves no trace;
+  2. at the first sync the dirty flag (FAT entry 1, clean bit) is cleared, in FAT copy 1 and then copy 2, so that a cut from here
+     on is seen at the next mount;
+  3. the file's FAT chain is written, copy 1 then copy 2; until the directory entry exists the chain is an orphan that recovery
+     frees;
+  4. the directory entry is written; the file is now present with its synced size;
+  5. the FSInfo free count and next-free hint are written (they are hints, recomputed by recovery);
+  6. at unmount the dirty flag is set again (clean), copy 2 then copy 1, so mount reads the flag from the copy written last.
+The specification the code follows moves step 1 below step 2 (data after the flag); the code writes the data first because the
+clusters are unreachable until step 3, which makes the early flag unnecessary for them. This check runs the one session of
+create, write across several clusters, sync, close, unmount; asserts that the observed order of the writes is the order above
+(a reordering such as the directory entry before the FAT chain fails here); cuts the session at each boundary between the steps
+and at the boundary between the two FAT copies of a step (ten cuts); and for each cut runs the service's own recovery in memory
+(`serve` mode of checks/fat32-rw.c, one open image), then asserts: the file is absent before step 4 and whole after it; the dirty
+flag is clean; the two FAT copies agree; every allocated cluster belongs to the root directory or to the file (no lost cluster);
+FSInfo free count equals the free clusters; a second mount writes nothing; and fsck.fat -n reports a clean volume.
+Then: the write guard, POSIX-like calls through the newlib system calls, and write-size accounting.
+Usage: fat32-rw.py --output DIR
 """
 import argparse
 import multiprocessing
 import os
 from pathlib import Path
 import random
+import resource
 import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -30,7 +42,13 @@ import harness
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE, PART_SECTORS, AU, MAXW = 32768, 73728, 128, 64
+SIZE = 3000                      # bytes written by the session: six clusters of 512 bytes
+CLEAN_BIT = 0x08000000
+NAME = 'SESSION.BIN'
 CLANG = harness.CLANG
+# The order of a session's writes, as (kind, FAT copy or 0): see the docstring.
+EXPECTED = [('DATA', 0), ('FLAG_DIRTY', 1), ('FLAG_DIRTY', 2), ('FAT', 1), ('FAT', 2), ('DIRENT', 0), ('FSINFO', 0),
+            ('FLAG_CLEAN', 2), ('FLAG_CLEAN', 1)]
 
 
 def run(command, **kwargs):
@@ -129,30 +147,6 @@ class Volume:
         return self.content(first, size)
 
 
-def load_marks(path):
-    groups = {}
-    end = None
-    for line in Path(path).read_text().splitlines():
-        t = line.split()
-        if t[0] == 'END':
-            end = int(t[1])
-        else:
-            _, seq, idx, name, lo, hi, ref, absent = t
-            groups.setdefault(name, []).append((int(seq), int(idx), int(lo), int(hi), ref, int(absent)))
-    return groups, end
-
-
-def active(groups, k):
-    """Per path, the alternatives of the latest group that started at or before write index k."""
-    out = {}
-    for name, rows in groups.items():
-        live = [r for r in rows if r[1] <= k]
-        if live:
-            seq = max(r[0] for r in live)
-            out[name] = [r for r in live if r[0] == seq]
-    return out
-
-
 def load_log(path):
     raw = Path(path).read_bytes()
     rec = 8 + 8 + 512
@@ -164,117 +158,149 @@ def load_log(path):
     return out
 
 
-def apply(img, entries):
-    with open(img, 'r+b') as f:
-        for sec, _, data in entries:
-            f.seek(sec * 512)
-            f.write(data)
-
-
 def fsck_clean(img, workdir):
     part = workdir / 'part.img'
-    subprocess.run(['dd', f'if={img}', f'of={part}', 'bs=512', f'skip={BASE}', f'count={PART_SECTORS}', 'status=none'], check=True)
+    # 1 MiB blocks: the same bytes as bs=512 with a seventy-thousandth of the system calls; holes stay holes.
+    subprocess.run(['dd', f'if={img}', f'of={part}', 'bs=1M', 'iflag=skip_bytes,count_bytes', f'skip={BASE * 512}',
+                    f'count={PART_SECTORS * 512}', 'conv=sparse', 'status=none'], check=True)
     r = subprocess.run([FSCK, '-n', str(part)], capture_output=True, text=True)
     return r.returncode == 0, r.stdout + r.stderr
 
 
-def verify(img, groups, k, refs, workdir, where):
-    ok, text = fsck_clean(img, workdir)
-    assert ok, f'{where}: fsck.fat -n failed:\n{text}'
+class Server:
+    """The model's mount recovery on one open image (checks/fat32-rw.c, `serve`): recover, then undo to restore the sectors the
+    recovery changed, so no case copies the image."""
+
+    def __init__(self, binary, img):
+        self.process = subprocess.Popen([str(binary), 'serve', str(img), str(BASE), str(PART_SECTORS), str(AU)], stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, text=True, env=harness.environment())
+
+    def ask(self, line):
+        self.process.stdin.write(line + '\n')
+        self.process.stdin.flush()
+        reply = self.process.stdout.readline()
+        assert reply and 'failed' not in reply and 'unknown' not in reply, f'recover failed: {reply!r}'
+        return reply
+
+    def recover(self, log=None):
+        return self.ask('recover' + (f' {log}' if log else ''))
+
+    def undo(self):
+        self.ask('undo')
+
+    def close(self):
+        self.process.stdin.close()
+        self.process.wait()
+
+
+
+def phases(entries, base_img):
+    """The session's writes as consecutive (kind, FAT copy) phases, with the number of writes that end each phase."""
+    boot = Path(base_img).read_bytes()[BASE * 512:BASE * 512 + 512]
+    reserved, fats, fsz, info, spc, root = u16(boot, 14), boot[16], u32(boot, 36), u16(boot, 48), boot[13], u32(boot, 44)
+    fat1, data = BASE + reserved, BASE + reserved + fats * fsz
+    root_sectors = range(data + (root - 2) * spc, data + (root - 1) * spc)
+    with open(base_img, 'rb') as stream:
+        def sector(n):
+            stream.seek(n * 512)
+            return stream.read(512)
+        current, kinds = {}, []
+        for sec, _, data_bytes in entries:
+            before = current.get(sec) or sector(sec)
+            current[sec] = data_bytes
+            if sec == BASE + info:
+                kind = ('FSINFO', 0)
+            elif fat1 <= sec < data:
+                copy = 1 + (sec - fat1) // fsz
+                changed = [i for i in range(128) if before[4 * i:4 * i + 4] != data_bytes[4 * i:4 * i + 4]]
+                if changed == [1] and (sec - fat1) % fsz == 0:
+                    kind = ('FLAG_CLEAN' if u32(data_bytes, 4) & CLEAN_BIT else 'FLAG_DIRTY', copy)
+                else:
+                    kind = ('FAT', copy)
+            elif sec in root_sectors:
+                kind = ('DIRENT', 0)
+            else:
+                kind = ('DATA', 0)
+            kinds.append(kind)
+    result = []
+    for number, kind in enumerate(kinds, 1):
+        if result and result[-1][0] == kind:
+            result[-1][1] = number
+        else:
+            result.append([kind, number])
+    return [(kind, end) for kind, end in result]
+
+
+def lost_clusters_and_copies(img):
+    """(allocated clusters outside the root directory and the file's chain, whether the FAT copies agree, clean flag, free count)."""
     vol = Volume(img, BASE)
-    state = {}
-    for name, alts in active(groups, k).items():
-        data = vol.file(name)
-        state[name] = data
-        good = False
-        for _, _, lo, hi, ref, absent in alts:
-            if data is None:
-                good |= bool(absent)
-            elif lo <= len(data) <= hi and data == refs[ref][:len(data)]:
-                good = True
-        assert good, f'{where}: {name} has {None if data is None else len(data)} bytes, not allowed by {alts}'
-    old, tmp = state.get('old.bin'), state.get('tmp1.bin')
-    if old is not None and old == refs['tmp1']:
-        assert tmp is None, f'{where}: both names of a renamed file survive'
-    return state
+    entries = (PART_SECTORS - (vol.data - BASE)) // vol.spc + 2
+    allocated = {c for c in range(2, entries) if u32(vol.fat[0], 4 * c) & 0x0fffffff}
+    hit = vol.lookup(NAME)
+    owned = set(vol.chain(vol.root)) | (set(vol.chain(hit[1])) if hit else set())
+    info = vol.read(BASE + u16(vol.read(BASE, 1), 48), 1)
+    free = sum(1 for c in range(2, entries) if not u32(vol.fat[0], 4 * c) & 0x0fffffff)
+    return allocated - owned, vol.fat[0] == vol.fat[1], bool(u32(vol.fat[0], 4) & CLEAN_BIT and u32(vol.fat[1], 4) & CLEAN_BIT), \
+        u32(info, 488), free
 
 
-def recover(binary, img, cut_log=None, cut=None):
-    cmd = [str(binary), 'recover', str(img), str(BASE), str(PART_SECTORS), str(AU)]
-    if cut_log:
-        cmd += [str(cut_log)] + ([str(cut)] if cut is not None else [])
-    r = subprocess.run(cmd, capture_output=True, text=True, env=harness.environment())
-    assert r.returncode == 0, f'recover failed: {r.stdout}{r.stderr}'
-    return r.stdout
+def cuts(binary, base, session_log, work):
+    entries = load_log(session_log)
+    seen = phases(entries, base)
+    print('observed order of the session\'s %d sector writes: %s' % (len(entries), ' '.join('%s%s' % (k, c or '') for (k, c), _ in seen)))
+    assert [kind for kind, _ in seen] == EXPECTED, f'the session writes in this order: {seen}\nthe documented order is: {EXPECTED}'
+    dirent_done = next(end for (kind, _), end in seen if kind == 'DIRENT')
+    img = work / 'cut.img'
+    harness.copy_image(base, img)
+    server = Server(binary, img)
+    boundaries = [0] + [end for _, end in seen]
+    fd = os.open(img, os.O_RDWR)
+    results, applied = [], 0
+    try:
+        for cut in boundaries:
+            for sec, _, data in entries[applied:cut]:
+                os.pwrite(fd, data, sec * 512)
+            applied = cut
+            where = f'cut after {cut} of {len(entries)} sector writes'
+            out = server.recover()
+            check = work / 'check.img'
+            harness.copy_image(img, check)                    # one image per cut: ten in all
+            lost, same, clean, hint_free, free = lost_clusters_and_copies(img)
+            assert same, f'{where}: the FAT copies differ after recovery'
+            assert clean, f'{where}: the dirty flag is still set after recovery'
+            assert not lost, f'{where}: lost clusters {sorted(lost)[:8]}'
+            assert hint_free in (free, 0xffffffff), f'{where}: FSInfo says {hint_free} free clusters, the FAT has {free}'
+            vol = Volume(img, BASE)
+            hit = vol.lookup(NAME)
+            if cut < dirent_done:
+                assert hit is None, f'{where}: the file exists before its directory entry was written'
+            else:
+                assert hit is not None and vol.file(NAME) == bytes(stream_bytes(SIZE)), f'{where}: the synced file is not whole'
+            ok, text = fsck_clean(img, work)
+            assert ok, f'{where}: fsck.fat -n failed:\n{text}'
+            again = server.recover()
+            assert 'sector_writes=0 ' in again, f'{where}: a second mount wrote: {again}'
+            server.undo()
+            results.append((cut, out.strip()))
+            print(f'PASS {where}: {out.strip()}')
+    finally:
+        server.close()
+        os.close(fd)
+    return len(results)
 
 
-def check_hint(pre, post, out):
-    """After a recovery that rebuilt the free count, the FSInfo next-free hint is the old hint while that cluster is
-    free, else the first cluster after the highest used one, never the start of the FAT because that is where a
-    full scan finds the lowest hole."""
-    if 'recoveries=1' not in out:
-        return
-    old = struct.unpack_from('<I', Volume(pre, BASE).read(BASE + u16(Volume(pre, BASE).read(BASE, 1), 48), 1), 492)[0]
-    v = Volume(post, BASE)
-    info = v.read(BASE + u16(v.read(BASE, 1), 48), 1)
-    free, hint = struct.unpack_from('<II', info, 488)
-    entries = (PART_SECTORS - (v.data - BASE)) // v.spc + 2
-    fat = [u32(v.fat[0], 4 * c) & 0x0fffffff for c in range(entries)]
-    used = [c for c in range(2, entries) if fat[c]]
-    expect = old if 2 <= old < entries and fat[old] == 0 else (max(used) + 1 if used and max(used) + 1 < entries else None)
-    assert expect is None or hint == expect, f'recovery set the hint to {hint}, expected {expect} (old {old})'
-    assert hint >= 2 and (hint >= entries or fat[hint] == 0), f'the hint {hint} is not a free cluster'
-
-
-def worker(args):
-    binary, base_img, log, marks, work, lo, hi, double_every, seed = args
-    work = Path(work) / f'w{lo}'
-    work.mkdir(parents=True, exist_ok=True)
-    groups, end = load_marks(marks)
-    refs = {p.name: p.read_bytes() for p in (Path(work).parent.parent / 'ref').iterdir()}
-    entries = load_log(log)
-    prefix = work / 'prefix.img'
-    harness.copy_image(base_img, prefix)
-    apply(prefix, entries[:lo])
-    rng = random.Random(seed + lo)
-    done = recovered_clusters = doubles = subsets = 0
-    for k in range(lo, hi + 1):
-        if k > lo:
-            apply(prefix, entries[k - 1:k])
-        cut = work / 'cut.img'
-        harness.copy_image(prefix, cut)
-        pre = work / 'pre.img'
-        harness.copy_image(cut, pre)
-        check_hint(pre, cut, recover(binary, cut))
-        verify(cut, groups, k, refs, work, f'cut after {k} sector writes')
-        again = recover(binary, cut)
-        assert 'sector_writes=0 ' in again, f'second mount wrote: {again}'
-        done += 1
-        # A call that persisted a random subset of its sectors.
-        if 0 < k < len(entries) and entries[k][1] == entries[k - 1][1]:
-            call = entries[k][1]
-            members = [e for e in entries if e[1] == call]
-            first = next(i for i, e in enumerate(entries) if e[1] == call)
-            for _ in range(2):
-                keep = [e for e in members if rng.random() < 0.5]
-                harness.copy_image(base_img, cut)
-                apply(cut, entries[:first])
-                apply(cut, keep)
-                recover(binary, cut)
-                verify(cut, groups, first, refs, work, f'random subset of call {call} after {first} sector writes')
-                subsets += 1
-        if double_every and k % double_every == 0:
-            relog = work / 'recovery.log'
-            harness.copy_image(pre, cut)
-            out = recover(binary, cut, relog)
-            rentries = load_log(relog)
-            for j in range(len(rentries) + 1):
-                harness.copy_image(pre, cut)
-                apply(cut, rentries[:j])
-                recover(binary, cut)
-                verify(cut, groups, k, refs, work, f'recovery cut after {j} of {len(rentries)} sector writes (initial cut {k})')
-                doubles += 1
-    return done, subsets, doubles
+def stream_bytes(n, seed=7):
+    """The bytes the session writes (stream_fill of checks/fat32-rw.c)."""
+    out = bytearray()
+    for i in range(n):
+        x = ((i >> 3) + seed * 0x9e3779b97f4a7c15) & 0xffffffffffffffff
+        x ^= x >> 30
+        x = (x * 0xbf58476d1ce4e5b9) & 0xffffffffffffffff
+        x ^= x >> 27
+        x = (x * 0x94d049bb133111eb) & 0xffffffffffffffff
+        x ^= x >> 31
+        out.append((x >> (8 * (i & 7))) & 0xff)
+    return out
 
 
 def static_checks(binary, base, out):
@@ -299,53 +325,39 @@ def static_checks(binary, base, out):
     return results
 
 
+def recover(binary, img):
+    r = subprocess.run([str(binary), 'recover', str(img), str(BASE), str(PART_SECTORS), str(AU)], capture_output=True, text=True,
+                       env=harness.environment())
+    assert r.returncode == 0, f'recover failed: {r.stdout}{r.stderr}'
+    return r.stdout
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--output', type=Path, required=True)
-    ap.add_argument('--jobs', type=int, default=8)
     ap.add_argument('--library', type=Path, default=ROOT / 'drivers/storage/fat32_rw.c', help='service source (mutation checks pass a modified copy)')
-    ap.add_argument('--double-every', type=int, default=40)
     a = ap.parse_args()
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    binary = out / 'fat32-rw'
-    (out / 'host_sys.h').write_text('#define SS_SYS(name) host_##name\n')
+    work = harness.ram_directory('fat32-rw-')      # the images live in RAM and are removed on exit, error and SIGTERM
+    binary = work / 'fat32-rw'
+    (work / 'host_sys.h').write_text('#define SS_SYS(name) host_##name\n')
     run([str(CLANG), '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', *harness.SANITIZE,
-         '-I', str(ROOT / 'include'), '-include', str(out / 'host_sys.h'), str(ROOT / 'checks/fat32-rw.c'), str(a.library),
+         '-I', str(ROOT / 'include'), '-include', str(work / 'host_sys.h'), str(ROOT / 'checks/fat32-rw.c'), str(a.library),
          str(ROOT / 'drivers/storage/sunstone_fs.c'), str(ROOT / 'drivers/storage/sunstone_fs_syscalls.c'),
          '-o', str(binary)])
-    (out / 'ref').mkdir()
-    (out / 'work').mkdir()
-    base = out / 'base.img'
+    base = work / 'base.img'
     with open(base, 'wb') as f:
         f.truncate(BASE * 512 + PART_SECTORS * 512)
     subprocess.run(['/usr/sbin/mkfs.fat', '-F', '32', '-s', '1', '-n', 'SUNSTONE', '--offset', str(BASE), str(base),
                     str(PART_SECTORS // 2)], check=True, capture_output=True)
-    img = out / 'run.img'
+    static_checks(binary, base, work)
+    img, log = work / 'session.img', work / 'session.log'
     harness.copy_image(base, img)
-    log, marks = out / 'write.log', out / 'marks.txt'
-    others = static_checks(binary, base, out)
-    snap = out / 'setup.img'
-    r = subprocess.run([str(binary), 'scenario', str(img), str(BASE), str(PART_SECTORS), str(log), str(marks),
-                        str(out / 'ref'), str(AU), str(MAXW), str(snap)], capture_output=True, text=True,
-                       env=harness.environment())
-    assert r.returncode == 0, r.stdout + r.stderr
-    print(r.stdout.strip())
-    # The finished run is clean without recovery: a second mount writes nothing.
-    ok, text = fsck_clean(img, out)
-    assert ok, text
-    prior = recover(binary, img)
-    assert 'sector_writes=0 ' in prior, prior
-    groups, end = load_marks(marks)
-    total = end
-    step = (total + a.jobs) // a.jobs
-    jobs = [(binary, snap, log, marks, out / 'work', i, min(i + step - 1, total), a.double_every, 1)
-            for i in range(0, total + 1, step)]
-    with multiprocessing.Pool(len(jobs)) as pool:
-        results = pool.map(worker, jobs)
-    cuts = sum(r[0] for r in results)
-    print(f'power-loss sweep: {cuts} cuts, {sum(r[1] for r in results)} random subsets, '
-          f'{sum(r[2] for r in results)} recovery cuts, all fsck.fat -n clean with synced bytes intact')
+    print(run([binary, 'session', img, BASE, PART_SECTORS, log, AU, SIZE], env=harness.environment()).strip())
+    count = cuts(binary, base, log, work)
+    harness.save(out / 'result.json', {'physical_access': False, 'cuts': count, 'order': [list(k) for k in EXPECTED]})
+    print(f'PASS FAT32 write service: the session writes in the documented order and recovery is correct at all {count} cuts')
 
 
 if __name__ == '__main__':

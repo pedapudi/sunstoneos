@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import stat
 import struct
+import sys
 import subprocess
 import traceback
 
@@ -42,6 +43,44 @@ def copy_image(source, destination):
         info = os.stat(destination)
         with open(log, 'a') as stream:
             stream.write(f'{info.st_size} {info.st_blocks * 512}\n')
+
+
+def available_gib():
+    """MemAvailable in GiB, or None when the system does not report it."""
+    try:
+        for line in Path('/proc/meminfo').read_text().splitlines():
+            if line.startswith('MemAvailable:'):
+                return int(line.split()[1]) / 1048576
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+_ram_directories = []
+
+
+def _release_ram_directories(*_):
+    import shutil
+    while _ram_directories:
+        shutil.rmtree(_ram_directories.pop(), ignore_errors=True)
+
+
+def ram_directory(prefix):
+    """A new directory in RAM (/dev/shm) for disk images that the check discards, so that a run by hand does not write them to the
+    shared disk. The gate's temporary directory is already there. The caller removes the directory."""
+    import tempfile
+    base = Path(tempfile.gettempdir())
+    if not str(base.resolve()).startswith('/dev/shm'):
+        base = Path('/dev/shm') if os.access('/dev/shm', os.W_OK) else base
+    directory = Path(tempfile.mkdtemp(prefix=prefix, dir=base))
+    if not _ram_directories:
+        import atexit
+        import signal
+        atexit.register(_release_ram_directories)
+        if signal.getsignal(signal.SIGTERM) == signal.SIG_DFL:
+            signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))      # so that atexit runs when the gate stops the check
+    _ram_directories.append(directory)
+    return directory
 
 
 def machine():

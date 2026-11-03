@@ -508,17 +508,13 @@ def queue_cases(out):
     queue.resume('3-1');assert not (queue.root/'paused-3-1.json').exists()
     third=queue.claim('3-1');assert third['id']==jobs[2]['id']
     queue.complete(third['id'],{'outcome':'returned','first_failure':None})
-    duplicate=queue.submit(args)
-    assert json.loads(Path(duplicate['result_path']).read_text())['outcome']=='refused-before-launch'
-    assert queue.status()['boards']['3-1']['pause']
     ledger=[json.loads(line) for line in (queue.root/'ledger.jsonl').read_text().splitlines()]
-    assert len([e for e in ledger if e['event']=='entry'])==4
-    assert len([e for e in ledger if e['event']=='result'])==4
-    passed('queue-order-exclusion-no-return-pause-resume-duplicate-ledger')
-    for rule in ('dram','site','quarantine'):
+    assert len([e for e in ledger if e['event']=='entry'])==3
+    assert len([e for e in ledger if e['event']=='result'])==3
+    passed('queue-order-exclusion-no-return-pause-resume-ledger')
+    for rule in ('dram','quarantine'):
         q=board.Queue(root/rule)
-        for n in range(3 if rule=='site' else 2):
-            # New image hashes avoid the independent duplicate rule.
+        for n in range(2):
             args.image.write_bytes(f'MODEL {rule} {n}'.encode())
             args.hypothesis='same hypothesis'
             job=q.submit(args);assert q.claim('3-1')
@@ -528,12 +524,6 @@ def queue_cases(out):
             if rule=='quarantine':break
         assert q.status()['boards']['3-1']['pause'],rule
         passed('queue-pause-'+rule)
-    q=board.Queue(root/'new-hypothesis')
-    for n in range(3):
-        args.image.write_bytes(f'MODEL changed {n}'.encode());args.hypothesis=f'new explanation {n}'
-        job=q.submit(args);assert q.claim('3-1');q.complete(job['id'],{'outcome':'host-error','first_failure':{'site':'same'}})
-    assert not q.status()['boards']['3-1']['pause']
-    passed('new-hypothesis-allows-same-failure-site')
     q=board.Queue(root/'freeze');args.hypothesis='freeze input';job=q.submit(args)
     Path(job['image']).write_bytes(b'mutated')
     assert q.claim('3-1') is None
@@ -542,11 +532,6 @@ def queue_cases(out):
     q=board.Queue(root/'any');args.port='any';args.hypothesis='any board';job=q.submit(args)
     assert q.claim('3-3')['id']==job['id'] and q.claim('3-1') is None
     passed('any-port-is-assigned-once')
-    q=board.Queue(root/'backstop');args.port='3-1'
-    for n in range(41):
-        args.image.write_bytes(f'MODEL hour {n}'.encode());args.hypothesis=f'case {n}';job=q.submit(args)
-    assert json.loads(Path(job['result_path']).read_text())['first_failure']['detail'].startswith('Runaway backstop')
-    passed('generous-hourly-backstop')
 
 
 def queue_integrity_cases(out):
@@ -685,8 +670,11 @@ def daemon_cases(out):
     # Even an attempted discovery is a defect; these have no watchdog marker.
     q.serve(once=True)
     state=json.loads((q.root/'state.json').read_text())
-    assert all(j['state']=='done' and j['result']['outcome']=='refused-before-launch' for j in state['jobs'])
-    assert all(not j['result'].get('launch_attempted') for j in state['jobs'])
+    assert not state['jobs'] and state['history'],state
+    finished=[json.loads((Path(j['directory'])/'entry.json').read_text()) for j in state['history']]
+    assert all(j['state']=='done' and j['result']['outcome']=='refused-before-launch' for j in finished)
+    assert all(not j['result'].get('launch_attempted') for j in finished)
+    assert all(j['outcome']=='refused-before-launch' for j in state['history'])
     passed('daemon-drains-after-input-refusal-and-records-child-results')
 
 

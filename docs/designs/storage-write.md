@@ -362,6 +362,12 @@ The first backup (`backup-395-sectors.bin`, the card before any write) stays as 
 
 The runner admits a bounded-write image only with `--storage-write` and `--approved-by coordinator`; its input carries the allowed sector ranges and the SHA-256 of the metadata backup (`tools/board.py`, `tools/board_images.py`).
 
+### Scratch cards
+
+A card that the coordinator lists as scratch (it holds nothing of value; `scratch-cards.json` in the coordinator's directory) is admitted on its CID and its FAT32 partition. The blob (`SSBW0004`, `tools/storage_bounds.py encode_scratch`) holds one write range, the partition, with no backup range and no digest. The enable checks the card's CID and that every write lies inside the partition; nothing is read back from the card. The coordinator keeps one record per card (`storage-card-<cid>.json`), not one per image.
+
+Mode 9 of `storage-write-test` restores a scratch card by reformatting the partition in place: both FATs and the root cluster are zeroed, FAT entries 0 to 2, the FSInfo sector and the boot sector's label are rewritten, and the geometry stays. `checks/storage-write-guard.py` checks it on the host (`fsck.fat -n` clean, the region file created again afterwards). A card that is not listed as scratch keeps the strict path above: a blob (`SSBW0003`) naming the backup's SHA-256, a restore point per CID (`restore-points.json`, never replaced) and a record per blob.
+
 ## Qualified scope
 
 Board-qualified on the 62.5 GB card (Class 10, U3, V30, A1; profile 2), through the OS image's SD owner task:

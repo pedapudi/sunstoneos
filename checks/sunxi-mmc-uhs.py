@@ -102,6 +102,10 @@ for source, name in [(text[BOARD + 'bsp/drivers/mmc/sunxi-mmc-v5p3x.c'], 'static
     rate = body(source, name)
     assert rate.index('#ifdef MMC_FPGA') < rate.index('rval |= (1 << 7);') < rate.index('#else\n\t/* clear internal divider */')
 assert 'case MMC_TIMING_UHS_SDR104:\n\t\tdat_drv_ph = 1;' in v4 and 'rval &= ~(SDXC_2X_TIMING_MODE);' in v4
+# The sdc0 node sets execute_tuning_in_kernel, and the tuning leaves the host in the v4p6x method (never restored to v5p3x); its rule for SDR50 and SDR104 is command drive 180
+# (the default) and data drive 180, so a tuned mode is driven with both at 180, not with the v5p3x 104M and 208M rows.
+assert 'u32 cmd_drv_ph = 1;' in v4 and 'case MMC_TIMING_UHS_SDR50:\n\tcase MMC_TIMING_UHS_SDR104:\n\t\tdat_drv_ph = 1;' in v4
+assert 'sunxi_mmc_init_priv_v5p3x' not in tune
 # Upstream sunxi-mmc has no tuning and no bank switch; it masks UHS without delay chains.
 upstream = text[LINUX + 'drivers/mmc/host/sunxi-mmc.c']
 assert 'execute_tuning' not in upstream and 'mmc_regulator_set_vqmmc' in upstream
@@ -175,7 +179,7 @@ reference = a.read_reference.read_bytes()
 assert hashlib.sha256(reference).hexdigest() == '846797588f8bd2470d885027b13078762f4a966826fc71be822c0346e6bf44af'
 (a.output / 'mmc-reference.h').write_bytes(reference); inputs[str(a.read_reference)] = hashlib.sha256(reference).hexdigest()
 sanitize = [a.cc, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
-            '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', '-Iinclude', '-Ichecks', '-I' + str(a.output)]
+            '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', '-Iinclude', '-Iapps/os', '-Ichecks', '-I' + str(a.output)]
 native = [a.cc, '-std=gnu11', '-Wall', '-Wextra', '-Werror', '-Iinclude', '--target=aarch64-none-elf',
           '-mcpu=cortex-a55', '-ffreestanding', '-fno-builtin', '-O2', '-fstack-usage', '-c']
 steps = [('core-build', sanitize + ['drivers/storage/sunxi_mmc.c', 'checks/sunxi-mmc-uhs.c', '-o', str(a.output / 'core')]),
@@ -222,6 +226,10 @@ for name, old_text, new_text in mutations:
 runtime_mutations = [
     ('no-runtime-step-down', 'drivers/storage/a733_mmc_platform.c', 'ceiling=timing-1;why=SUNXI_MMC_MODE_ERRORS;', 'ceiling=timing;why=SUNXI_MMC_MODE_ERRORS;'),
     ('no-retune-first', 'drivers/storage/a733_mmc_platform.c', 'if(p->recover_errors>=2){', 'if(p->recover_errors>=1){'),
+    ('irq-mode-not-left-after-fault', 'drivers/storage/a733_mmc_platform.c', 'if(p&&p->initialized&&!enable){p->irq_mode=0;return 1;}', ''),
+    ('writes-not-recoverable', 'drivers/storage/sunxi_mmc.c', 'h->state == SUNXI_MMC_FAULT && h->config.kind == SUNXI_MMC_SD &&', 'h->state == SUNXI_MMC_FAULT && !h->writing && h->config.kind == SUNXI_MMC_SD &&'),
+    ('setup-clock-update-unmasked', 'drivers/storage/sunxi_mmc.c', '!wr(h, 4, (1u << 16) | MASK_DAT0) || !fence(h) || !wr(h, 0x18, UPDATE)', '!wr(h, 4, 1u << 16) || !fence(h) || !wr(h, 0x18, UPDATE)'),
+    ('restart-pending-fatal', 'drivers/storage/a733_mmc_platform.c', 'return masked_pending(p,p->core.restart!=0);', 'return masked_pending(p,0);'),
     ('restart-forgets-1v8', 'drivers/storage/sunxi_mmc.c', 'fresh.reenter = h->card.signal_1v8;', 'fresh.reenter = 0;'),
     ('restart-keeps-mode-ceiling', 'drivers/storage/sunxi_mmc.c', 'fresh.ceil1 = (uint8_t)(ceiling + 1);', 'fresh.ceil1 = 0;'),
 ]

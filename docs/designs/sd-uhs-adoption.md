@@ -1,6 +1,6 @@
 # Design: adopting UHS-I SDR104 in the OS
 
-Status: **host-tested; read-only paths qualified on the board (port 3-3).** The OS owner (`apps/os/large_sd.c`) implements the algorithm below and has not run on a board; writes at 1.8 V have not run. The design builds on [the recovery design](sd-uhs-recovery.md), whose board results are:
+Status: **qualified on the board for reads at SDR104 and for writes at SDR25 (scratch card, port 3-3); writes at SDR50 and SDR104 fail.** The OS owner (`apps/os/large_sd.c`) implements the algorithm below. The design builds on [the recovery design](sd-uhs-recovery.md), whose board results are:
 
 - **Port 3-3 card (Phison SD32G, 2020):** re-entered at 1.8 V after a watchdog reset by moving the bank to 1.8 V first (CMD0, CMD8, ACMD41, no CMD11). S18A is clear at 1.8 V; the CMD6 group 1 support field read at 1.8 V is `0x801f` (SDR12 to SDR104 and DDR50). SDR25 reads at 50 MHz run at 21.4 MB/s per request, and SDR104 at 150 MHz runs at 47.6 MB/s per request and 27.4 MB/s sustained (see [the UHS-I design](sd-uhs.md)). The close restores the bank to 3.3 V and the lifetime returns normally.
 - **Port 3-1 card (Phison SD64G, 2026):** seen at 3.3 V only. It answers S18A set at 3.3 V. Its 1.8 V behaviour is expected to match 3-3's and is unmeasured.
@@ -69,33 +69,29 @@ first command is CMD0 at 1.8 V.
 
 The card is never left in a state that needs a human, except the terminal case of step 4, which needs two failures at once (a card that refuses CMD0 at 1.8 V and no response at 3.3 V).
 
-## The write path (CMD25) at SDR104
+## The write path (CMD25) at 1.8 V
 
-No write at 1.8 V has run. What is known and what is needed:
+- **Registers.** The core programs the read threshold for reads (`THLD` block size and bit 0) and the write threshold for CMD25 (`THLD` block size 512 in 27:16, bit 2 set, bit 0 clear) per command. The native adapter admits a `THLD` write in the UHS-I profile, and CMD25 only for a verified bounds object in a writer build (`A733_MMC_BOUNDED_WRITER`). The DAT0 busy timer and programming-status check do not depend on the bus speed.
+- **Drive and sample phases.** The board kernel sets them per clock range in `sunxi_mmc_set_clk_dly` (`bsp/drivers/mmc/sunxi-mmc-v5p3x.c`); the `&sdc0` node sets none. The sdc0 node enables the in-kernel tuning, which leaves the host in the v4p6x method (`mmc-sdc3/sunxi-mmc-v4p5x.c`): its rule drives command and data at 180 degrees for SDR50 and SDR104. The core writes these values in `uhs_registers`; `checks/sunxi-mmc-uhs.py` pins the table from the vendor source and `checks/sunxi-mmc-uhs.c` compares every mode's registers with it. Command drive is bit 16 and data drive bit 17 of `0x140`; the sample phases are bits 5:4 (command) and 9:8 (data) of `0x5c`; the tuned delay is written to `SAMP_DL`.
 
-- **Known (code).** The core programs the read threshold for SDR104 reads (`THLD` block size and bit 0) and the write threshold for CMD25 (`THLD` block size and bit 2) per command, so the two do not
-  conflict. The native adapter admits a `THLD` write in the UHS-I profile, and CMD25 only for a verified bounds object in a writer build (`A733_MMC_BOUNDED_WRITER`); the two have not been combined in one
-  host model. The write path's DAT0 busy timer and programming-status check do not depend on the bus speed.
-- **Drive and sample phases (derived).** The board kernel sets them per clock range in `sunxi_mmc_set_clk_dly` (`bsp/drivers/mmc/sunxi-mmc-v5p3x.c`) from the defaults of `sunxi_mmc_clk_dly_v5p3x`; the `&sdc0` node sets none. The command drive phase is bit 16 and the data drive phase bit 17 of `0x140`; the sample phases are bits 5:4 (command) and 9:8 (data) of `0x5c`. `SAMP_DL` and `DS_DL` are written only by tuning. The core writes these values (`uhs_registers`, the cold setup), `checks/sunxi-mmc-uhs.py` pins the table by parsing the vendor source and node, and `checks/sunxi-mmc-uhs.c` compares every mode's register values with it.
+  | Mode | Command drive | Data drive | Data sample | Command sample |
+  | --- | --- | --- | --- | --- |
+  | identification (400 kHz), default speed, SDR12 | 180 | 90 | 0 | 0 |
+  | high speed, SDR25 | 180 | 180 | 1 | 1 |
+  | SDR50, SDR104 | 180 | 180 | 0 | 0 (tuned delay) |
 
-  | Range (clock) | Our modes | Command drive | Data drive | Data sample | Command sample |
-  | --- | --- | --- | --- | --- | --- |
-  | 400 kHz | identification | 180 | 90 | 0 | 0 |
-  | up to 26 MHz | default speed, SDR12 | 180 | 90 | 0 | 0 |
-  | up to 52 MHz | high speed, SDR25 | 180 | 180 | 1 | 1 |
-  | up to 104 MHz | SDR50 | 180 | 90 | 0 | 0 (tuned delay) |
-  | up to 208 MHz | SDR104 | 180 | 90 | 0 | 0 (tuned delay) |
-
-  The same registers serve reads and writes. The CRC status of a write is sampled with the read-data setting, so the tuned delay applies. Reads do not depend on the data drive phase; a write does. Reads with data drive 90 degrees at 400 kHz, SDR50 and SDR104 pass on port 3-3; writes are untested on a board.
-- **Policy until qualified.** Writes run at SDR25 (50 MHz) on a card at 1.8 V, or at 3.3 V high speed on a card that was never switched. The core has no runtime mode change, so an SDR104 session that wants to write needs a step in its state machine (clock stop, CMD6 check and set, module clock change, restart) and the strict CMD25 model run at 1.8 V and 50 MHz.
-- **Qualification path.** (1) Extend `checks/sunxi-mmc-write-dma.c` to a 1.8 V card at SDR25 and then SDR104 with the sample-delay and drive-phase registers modeled from the vendor driver. (2) Read the
-  vendor `sunxi-mmc-v5p3x.c` for the write-side timing registers at SDR104 and record the register sequence the way `docs/designs/mmc-multiblock-write.md` does for 3.3 V. (3) A board write session at
-  SDR25 on 1.8 V under the per-session backup procedure. (4) Only then SDR104 writes, in the same way. Every board write session keeps the existing blob, backup and approval-record rules.
+  The same registers serve reads and writes. Reads do not depend on the data drive phase; a write does.
+- **Registers compared with the vendor's tuned SDR104 write state.** `DRV_DL`, `SAMP_DL`, `NTSR`, `CSDC` (CRC_DET_PARA 3), `EDSD`, `THLD`, `FTRGL` (`0x200700f8`), `TMOUT`, `WIDTH`, the command register, the DMA registers and the descriptor chain match. The data strobe delay `DS_DL` (an HS400 field) and the debug register are not written; clock gating differs; every clock update masks DAT0, as the vendor's does. The pad drive differs (vendor: command and data 10 mA, clock 30 mA; ours 20 mA on all six pins); running with the vendor's strengths changed nothing, so ours stays.
+- **Step-down on write faults.** A write that faults with a controller, card or timeout error is a recoverable result: the first error since the last completed request identifies the card again at the same ceiling (a new tuning); the second in a row steps down one mode (SDR104, SDR50, SDR25, SDR12 at 1.8 V); the owner writes the same piece again with the same data inside the same admitted bounds. An unrecoverable error (a lost register, a platform deadline) retains the platform. The ladder is `A733_MMC_RECOVERIES` (8: two per mode), bounded by the lifetime deadline. The stepped-down mode is the core's ceiling for the rest of the session. `checks/a733-mmc-uhs.c` (`write_recovery`) walks the ladder, and mutations that make writes unrecoverable fail it.
+- **Restart after a write fault.** CMD0 ends a programming state and returns the card to idle in any state without changing the signalling level; the identification treats S18A clear with the re-entry flag as the 1.8 V card and sends no CMD11. The restart tolerates the level interrupt of the fault still pending in the distributor during the core's reset phases, and requires it clear afterwards. A card left programming by an aborted CMD25 holds DAT0 low, so every clock update masks DAT0. The host model keeps a card busy after an aborted write until CMD0, and mutations that restore either old rule fail the check.
+- **Failure record of a write.** Stage in bits 5:0 of the value word; the detail field holds the status bits 15:1 in 14:0, the bus timing in 16:15, the descriptor reached in 22:17 (62 unreadable, 63 outside the list) and the core's error in 25:23; the aux field holds the card-side 512-byte blocks of the last fault in 8:0 and the first fault's count in 4 KiB units in 14:9. The core reads `SMHC_TBC0` (`0x48`), `SMHC_TBC1` (`0x4c`) and the current host descriptor (`0x90`) at a data-phase error. `os_sd_mode` holds the mode and the steps, and the report carries the first two faults (`sd_mode.faults` in `apps/storage-write-test/host.py`).
+- **Measured.** Writes at 3.3 V, 50 MHz on port 3-1 complete (256-sector pieces). On port 3-3 at 1.8 V every write at 100 and 150 MHz faults with RINTSTS `0x801c` (command done, data over, TX request, end-bit error: no CRC status token) after 1 block, and SDR25 at 50 MHz completes. Reads at 150 MHz on the same card are sound. The records are in `docs/evidence/storage.jsonl` (`sd-uhs-adoption-write-table`, `1793689119969310811-abcfb6bc`).
+- **Open question.** The CRC status token after a written block is the card's output, sampled by the circuit that samples read data, with the delay that the read sweep tunes. Nothing tunes it for writes, and neither does the vendor. The sample delay chosen for reads (window 18 to 63, delay 41) may not suit the token.
 
 ## Open work
 
-1. Run the OS owner on a board (read run and the bounded write at 1.8 V on port 3-3, which needs the write session backup procedure; the 3-3 layout and backup plan is in record `sd-uhs-adoption-3-3-layout-capture`).
+1. Make writes work at SDR50 and SDR104: find the sample point or delay for the CRC status token.
 2. Run the read-only switch to 1.8 V on port 3-1, which has never been at 1.8 V (prediction in record `sd-uhs-adoption-3-1-switch`, not run).
-3. A runtime SDR104-to-SDR25 mode change and the strict CMD25 model at 1.8 V.
+3. A runtime mode change that lets a session write at SDR25 and read at SDR104.
 4. The runner: approval of the 150 MHz point and of CMD11 for OS images, and the image classification for UHS-I.
-5. Two image-level SD checks (`storage-read-native.py`, `sd-return-native.py`) are stale models of the current image and are waived in `checks/gate-inputs.json`; rewrite them against the image.
+5. Five image-level SD checks (`storage-read-native.py`, `storage-read-binding.py`, `sd-return-native.py`, `sd-return-host.py`, `sd-return-continuity.py`) are stale models of the current image and are waived in `checks/gate-inputs.json`; rewrite them against the image.

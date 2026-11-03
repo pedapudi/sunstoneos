@@ -127,8 +127,7 @@ def port_case(out, rails_unrestored):
         result['rails_unrestored'] = True
     queue.complete(job['id'], result)
     status = queue.status()['boards']['3-1']
-    with queue.locked() as state:
-        done = next(j for j in state['jobs'] if j['id'] == job['id'])
+    done = queue.job(job['id'])
     assert done['result']['outcome'] == 'returned'
     return bool(status['pause'])
 

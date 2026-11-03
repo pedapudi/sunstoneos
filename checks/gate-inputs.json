@@ -1033,6 +1033,7 @@
   "thermal-application-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
   "thermal-single-core-host.py": "recorded evidence or fixture captures | needs --image, --manifest, --session, --output, cache/evidence",
   "thermal-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "tlbi-issuer-image.py": "an application image, session or bundle the gate does not build | needs --none, --f0, --f1, --f2, --f3",
   "training-record-capture.py": "ROM, boot0 or device captures | needs --restore-set, --boot0, --output",
   "training-record-copies.py": "ROM, boot0 or device captures | needs --restore-set, --boot0, --output",
   "uart-dma-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
@@ -1062,8 +1063,7 @@
   "workload-bisect-host.py": "an application image, session or bundle the gate does not build | needs --build, --bundle, --models, --fel, --output",
   "workload-bisect-probe.py": "an application image, session or bundle the gate does not build | needs --case, --image, --bundle, --output",
   "sd-return-host.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | needs the output of sd-return-native.py, which does not run on the current image",
-  "sd-return-continuity.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | needs the output of sd-return-native.py, which does not run on the current image",
-  "storage-write-geometry-33.py": "cached builds or images of earlier work (cache/build) | needs --output, cache/build, cache/sd-backup"
+  "sd-return-continuity.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | needs the output of sd-return-native.py, which does not run on the current image"
  },
  "bundles": {
   "opp33": [

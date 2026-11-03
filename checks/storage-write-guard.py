@@ -7,7 +7,9 @@ runs 512 MiB and derives its guard from the session deadline), over a file-backe
              the file equal to the first `written_bytes` of the tools/region_test_file.py stream, a clean-flagged volume;
   fast       no delay and no guard: status 0, the whole file, fsck clean, the whole stream;
   append     mode 5 on the slow image: the file reaches the full length, equals the stream, the volume is clean; on a whole file or an absent file nothing is written;
-  read-back  mode 3 on the fast image: status 0 and no mismatches; on the slow image: status 12 (the file is short).
+  read-back  mode 3 on the fast image: status 0 and no mismatches; on the slow image: status 12 (the file is short);
+  format     mode 9 on the whole-file image (a scratch card's restore): status 0, `fsck.fat -n` clean, the file and its directory gone, the whole partition outside the
+             FATs, the boot sector's label and the FSInfo counts the only other writes, the geometry kept; the region file then created again by mode 0, whole and equal to the stream.
 """
 import argparse
 import hashlib
@@ -102,6 +104,8 @@ def main():
     slow_img = out / 'slow.img'; make_image(slow_img)
     d = run(binary, slow_img, 0, out / 'slow.result', 1500)
     assert d['status'] == 11, d
+    assert host.guard_stop(d) and not host.failures(d), d                      # stopping at the guard after a clean close is a pass, with its bytes and rate reported
+    assert host.failures(dict(d, status=8)) and host.failures(dict(d, mismatches=1)) and host.failures(dict(d, detail=d['detail'] + 1)), d
     assert 0 < d['written_bytes'] < FILE and d['detail'] == d['written_bytes'], d
     assert d['mismatches'] == 0, d
     fsck_clean(slow_img)
@@ -148,6 +152,30 @@ def main():
     assert d3['status'] == 0 and d3['mismatches'] == 0 and d3['volume_size'] == FILE, d3
     d4 = run(fast, slow_img, 3, out / 'slow-read.result', 0)
     assert d4['status'] == 12 and d4['volume_size'] == synced, d4
+    # format: a scratch card is restored by reformatting its partition in place
+    full = fast_img.read_bytes()
+    d10 = run(fast, fast_img, 9, out / 'format.result', 0)
+    assert d10['status'] == 0 and d10['written_bytes'] > 0, d10
+    fsck_clean(fast_img)
+    after = fast_img.read_bytes()
+    data10, clean10 = volume_state(fast_img)
+    assert data10 is None and clean10, (data10 is None, clean10)
+    boot = full[BASE * 512:(BASE + 1) * 512]
+    rsvd, nfats, fatsz, spc = struct.unpack_from('<H', boot, 14)[0], boot[16], struct.unpack_from('<I', boot, 36)[0], boot[13]
+    data_start = BASE + rsvd + nfats * fatsz
+    touched = set(range(BASE + rsvd, data_start)) | set(range(data_start, data_start + spc)) | {BASE, BASE + struct.unpack_from('<H', boot, 48)[0]}
+    changed = {sec for sec in range(BASE + PART) if full[sec * 512:(sec + 1) * 512] != after[sec * 512:(sec + 1) * 512]}
+    assert changed and changed <= touched, sorted(changed - touched)[:8]      # nothing outside the FATs, the root cluster and FSInfo was written
+    assert full[:(BASE + rsvd) * 512] == after[:(BASE + rsvd) * 512] or changed <= touched
+    d11 = run(fast, fast_img, 0, out / 'format-create.result', 0)
+    assert d11['status'] == 0 and d11['written_bytes'] == FILE, d11
+    data11, clean11 = volume_state(fast_img)
+    assert clean11 and data11 == stream(FILE), 'the file created after the format differs from the stream'
+    fsck_clean(fast_img)
+    # a partition that is not FAT32 is not touched
+    bad = out / 'bad.img'; bad.write_bytes(after); raw = bytearray(bad.read_bytes()); raw[BASE * 512 + 510] = 0; bad.write_bytes(raw)
+    d12 = run(fast, bad, 9, out / 'format-bad.result', 0)
+    assert d12['status'] == 5 and bad.read_bytes() == bytes(raw), d12
     # append: mode 5 continues the guard-stopped file to the full length, writing only after the existing end
     before = (slow_img).read_bytes()
     d5 = run(fast, slow_img, 5, out / 'append.result', 0)

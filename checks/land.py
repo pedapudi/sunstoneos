@@ -64,6 +64,7 @@ class Fixture:
         self.cache = root / 'cache'
         (self.cache / 'build').mkdir(parents=True)
         (root / 'ok.py').write_text('')
+        (root / 'unregistered.py').write_text('import sys\nprint("checks with no registry answer: new-check.py")\nsys.exit(1)\n')
         (root / 'gate.py').write_text(GATE)
         self.origin = root / 'origin.git'
         git(root, 'init', '-q', '--bare', str(self.origin))
@@ -86,7 +87,8 @@ class Fixture:
                    '--bringup-worktree', str(self.bringup),
                    '--gate-command', '%s %s' % (sys.executable, self.root / 'gate.py'),
                    '--evidence-command', '%s %s' % (sys.executable, self.root / 'ok.py'),
-                   '--progress-command', '%s %s' % (sys.executable, self.root / 'ok.py'), *extra]
+                   '--progress-command', '%s %s' % (sys.executable, self.root / 'ok.py'),
+                   '--registry-command', '%s %s' % (sys.executable, self.root / 'ok.py'), *extra]
         return subprocess.run(command, capture_output=True, text=True, env=env)
 
     def gate_runs(self):
@@ -158,6 +160,15 @@ def run(root):
     assert fx.origin_tip() == before and fx.gate_runs() == runs + 1
     (fx.cache / 'gate-fail').unlink()
     passed('failed gate refusal')
+
+    # A check without a registry answer: refused after the merge and before the gate.
+    w = fx.worker('unregistered')
+    commit(w, 'unregistered.txt', 'x\n', 'unregistered check')
+    runs = fx.gate_runs()
+    result = fx.land(w, '--registry-command', '%s %s' % (sys.executable, fx.root / 'unregistered.py'))
+    assert result.returncode and 'checks/gate-inputs.py failed' in result.stderr and 'new-check.py' in result.stderr, result.stderr
+    assert fx.origin_tip() == before and fx.gate_runs() == runs
+    passed('unregistered check refused before the gate')
 
     # Protected path: refused before the gate, then landed with the coordinator approval.
     w = fx.worker('protected')
