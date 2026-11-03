@@ -5,8 +5,16 @@
 #include "sunxi-mmc-uhs-card.h"
 #define PERI400 ((1u << 11) | (1u << 2) | (1u << 1))
 #define PERI300 ((1u << 11) | (1u << 9) | (1u << 5) | (1u << 4))
+#include <sys/mman.h>
+#ifndef MAP_32BIT
+#define MAP_32BIT 0x40
+#endif
 static struct uhs u;
-static unsigned pf_flip, cfg_nowindow;
+static unsigned pf_flip, cfg_nowindow, cfg_dma;
+/* The probe and the OS owner configure descriptor DMA (a 64-byte aligned area below 4 GiB, outside the result page) even for the identification and the
+ * restart that never use it: the platform's IDMAC value rule and the adapter's register list then apply to the restart's writes. */
+static volatile struct sunxi_mmc_dma_descriptor *dma_area;
+static int uhs_dma_sync(void *v, uint8_t *b, size_t n, unsigned phase) { (void)v; (void)b; (void)n; (void)phase; return 1; }
 static unsigned pf_settle, pf_writes, module_writes, restore_settle, restore_writes, cfg_sdr25, cfg_start18, commands_at_mismatch;
 static uint32_t last_module;
 static void live(struct storage_model *s)
@@ -78,6 +86,10 @@ static int uhs_platform_write(void *v, uintptr_t a, uint32_t value)
 }
 static void begin(unsigned pf_mode, unsigned fast, unsigned caps)
 {
+    if (cfg_dma && !dma_area) {
+        void *p = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | 0x20 /* MAP_ANONYMOUS */ | MAP_32BIT, -1, 0);
+        assert(p != (void *)-1 && (uintptr_t)p < (UINT64_C(1) << 32) - 4096); dma_area = p;
+    }
     memset(&m, 0, sizeof(m)); memset(&u, 0, sizeof(u));
     pf_flip = 0; pf_settle = 3; pf_writes = module_writes = restore_writes = restore_settle = commands_at_mismatch = 0; last_module = 0;
     pmic_model_setup(&m.power); seed(&u.base, &m.platform.core, SUNXI_MMC_SD, 1);
@@ -101,13 +113,13 @@ static void begin(unsigned pf_mode, unsigned fast, unsigned caps)
     *pmic_model_word(&m.power, 0x02000070) = 1;
     struct a733_mmc_platform_config c = {.owner = 42, .handoff = 200, .topology = 201, .kind = SUNXI_MMC_SD,
         .deadline_us = 8000000, .lifetime_deadline_us = 10000000, .voltage_mask = 0x00300000,
-        .sd_profile = SUNXI_MMC_SD_UHS_SDR104, .sdr25_only = (uint8_t)cfg_sdr25, .start_1v8 = (uint8_t)cfg_start18,
+        .sd_profile = SUNXI_MMC_SD_UHS_SDR104, .sdr25_only = (uint8_t)cfg_sdr25, .start_1v8 = (uint8_t)cfg_start18, .dma = cfg_dma ? dma_area : NULL,
         .fabric = {0, 1u << 31, 1u << 31},
         .fabric_hz = {24000000, 24000000, 24000000}};
     for (unsigned i = 0; i < 7; ++i) { c.desired[i].function = i < 6 ? 2 : 0; c.desired[i].pull = 1; }
     const struct a733_mmc_platform_ops o = {storage_now, storage_current, storage_admit, storage_enter,
         storage_leave, storage_retain, uhs_platform_read, uhs_platform_write, storage_barrier, storage_outside,
-        storage_read_fifo, storage_write_fifo, NULL};
+        storage_read_fifo, storage_write_fifo, cfg_dma ? uhs_dma_sync : NULL};
     assert(a733_mmc_platform_init(&m.platform, &c, &o, &m, &m.power.clocks, &m.power.pins, &m.power.rails,
                                   &m.power.provider));
 }
