@@ -125,7 +125,6 @@
       "used_by": [
         "tools/prepare-microsd-boot.py",
         "tools/prepare-ddr.py",
-        "checks/cold-entry.py",
         "docs/boot.md",
         "docs/microsd-boot-package.md",
         "docs/cold-entry.md"
@@ -408,7 +407,6 @@
       "bytes": 174728,
       "cache_path": "sources/npu/ai-sdk-fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libNBGlinker.so",
       "used_by": [
-        "checks/nbg-loader-reference.py",
         "docs/nbg-relocation.md",
         "docs/nbg-conv-loader.md"
       ],
@@ -428,7 +426,6 @@
       "bytes": 187008,
       "cache_path": "sources/npu/ai-sdk-fc90006d0f6569da2f6726c2d8395877686f5aca/tools/nbinfo",
       "used_by": [
-        "checks/nbg-directory-reference.py",
         "docs/nbg-directory.md",
         "tools/npu-conformance-references.json"
       ],
@@ -445,7 +442,6 @@
       "bytes": 964224,
       "cache_path": "sources/npu/ai-sdk-fc90006d0f6569da2f6726c2d8395877686f5aca/examples/vpm_run/operator/v3/network_binary.nb",
       "used_by": [
-        "checks/nbg-loader-reference.py",
         "docs/npu.md",
         "docs/nbg-checksum.md",
         "tools/npu-models.json"
