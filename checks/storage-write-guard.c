@@ -42,7 +42,7 @@ int ss_storage_region(void *b, size_t n) { (void)b; (void)n; return 1; }
 int ss_storage_close(void) { return 1; }
 int ss_storage_open_read(void) { return 1; }
 int ss_storage_diagnostic(uint64_t out[4]) { memset(out, 0, 32); return 1; }
-int ss_storage_mode(uint64_t out[4]) { memset(out, 0, 32); return 1; }
+int ss_storage_mode(uint64_t out[5]) { memset(out, 0, 40); return 1; }
 int ss_storage_owner_stats(struct ss_storage_owner_stats *s) { memset(s, 0, sizeof *s); s->irq_cores = s->owner_cores = s->caller_cores = 1; return 1; }
 void ss_finish(const void *res, size_t bytes)
 {

@@ -146,8 +146,7 @@ struct result {
     uint64_t app_core, irq_cores, owner_cores, caller_cores, sha_ce;   /* irq_cores: mask | stray entries << 32 */
     uint64_t diag[4], isar0, observed;               /* where an open or enable stopped (ss_storage_diagnostic); the core's ISAR0 */
     uint32_t irq_entries[8];                         /* handler entries of INTID 193 per core */
-    uint64_t sdmode[4];                              /* the bus speed mode and its steps (ss_storage_mode; apps/os/large_sd.c, os_sd_mode) */
-    uint64_t reserved[512 / 8 - 36 - FWR_HIST / 2 - 5 - 6 - 4 - 4];
+    uint64_t sdmode[5];                              /* the bus speed mode and its steps (ss_storage_mode; apps/os/large_sd.c, os_sd_mode) */
 };
 _Static_assert(sizeof(struct result) == 512, "result is the manifest's output_limit");
 static struct result r;

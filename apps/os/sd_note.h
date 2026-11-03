@@ -9,4 +9,16 @@ static inline uint64_t os_sd_write_detail(const struct sunxi_mmc *core)
 static inline uint64_t os_sd_write_aux(uint64_t pieces, unsigned timing) { return (pieces & 0x1fffu) | (uint64_t)(timing & 3u) << 13; }
 /* The value word of the record for a stage and a detail, as sd_owner.c's diag_word builds it. */
 static inline uint32_t os_sd_note_value(unsigned stage, uint64_t detail) { return (uint32_t)(stage & 0x3fu) | (uint32_t)(detail & 0x3ffffffu) << 6; }
+/* The first two faults that the recovery acted on, for the report (os_sd_mode word 4): each in 26 bits, the core's error in 3:0, its protocol step in 9:4 and the low 16 bits
+ * of the raw interrupt status in 25:10; the first fault in bits 25:0 and the second in bits 57:32. A session that steps down and completes still carries them. */
+static inline uint64_t os_sd_fault_events(const struct sunxi_mmc_card *c)
+{
+    uint64_t word = 0; unsigned seen = 0;
+    for (unsigned i = 0; i < c->mode_steps && i < SUNXI_MMC_MODE_LOG && seen < 2; ++i) {
+        if (c->mode_log[i].reason != SUNXI_MMC_MODE_RETUNE && c->mode_log[i].reason != SUNXI_MMC_MODE_ERRORS) continue;
+        const struct sunxi_mmc_mode_event *e = &c->mode_log[i];
+        word |= ((uint64_t)(e->error & 15u) | (uint64_t)(e->protocol & 63u) << 4 | (uint64_t)e->interrupts << 10) << (32 * seen++);
+    }
+    return word;
+}
 #endif

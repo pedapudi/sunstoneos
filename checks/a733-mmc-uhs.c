@@ -194,9 +194,18 @@ static void write_recovery(uint8_t *buffer)
         assert((aux & 0x1fff) == 1234 && ((aux >> 13) & 3) == 3);
     }
     recover_to_ready(); assert(m.platform.core.card.timing == 3);                       /* the first error: tuned again */
+    assert(m.platform.core.card.mode_log[0].error == SUNXI_MMC_CARD && m.platform.core.card.mode_log[0].protocol == 27 && m.platform.core.card.mode_log[0].interrupts == 0x8080u);
     write_fault(buffer, SUNXI_MMC_CARD); recover_to_ready();                           /* the second in a row: one step down */
     assert(m.platform.core.card.timing == 2 && m.platform.core.card.uhs_outcome == SUNXI_MMC_UHS_SDR50 && m.platform.core.card.mode_steps == 2);
     assert(m.platform.core.card.mode_log[1].reason == SUNXI_MMC_MODE_ERRORS && m.platform.core.card.mode_log[1].from == 3);
+    /* The session that stepped down and completed still carries both faults: the report word has them, with the core's error and interrupt status of each. */
+    {
+        uint64_t events = os_sd_fault_events(&m.platform.core.card);
+        for (unsigned k = 0; k < 2; ++k) {
+            uint64_t f = events >> (32 * k) & 0x3ffffffu;
+            assert((f & 15) == SUNXI_MMC_CARD && ((f >> 4) & 63) == 27 && (f >> 10) == 0x8080u);
+        }
+    }
     read_ok(buffer);                                                                    /* the retry completes and clears the count */
     assert(m.platform.recover_errors == 0 && !m.platform.core.writing);
     /* Down to the lowest mode (SDR12 on a card at 1.8 V), and a stop there is a clean fault: the record is intact and the platform is not restarted. */

@@ -188,8 +188,8 @@ static int configure(unsigned start18)
  * (3 SDR104, 2 SDR50, 1 SDR25 or high speed, 0 SDR12 or default speed), 8 the card signals 1.8 V, 15:12 the UHS-I outcome (sunxi_mmc_uhs_outcome), 23:20 the mode
  * steps taken (all, including the restarts of the recovery), 31:28 the ceiling, 32 the card was re-entered at 1.8 V without CMD11, 36 the owner opened the platform
  * a second time because the card was found at 1.8 V, 47:40 the recovery restarts; [1] the card clock in Hz; [2] bits 7:0 the sample delay, 15:8 the window start,
- * 23:16 its width, 31:24 the group 1 support bits, 32 S18A; [3] the first four mode log entries, one byte each (from | to << 2 | reason << 4). */
-uint64_t os_sd_mode[4];
+ * 23:16 its width, 31:24 the group 1 support bits, 32 S18A; [3] the first four mode log entries, one byte each (from | to << 2 | reason << 4); [4] the first two faults the recovery acted on (os_sd_fault_events: error, protocol step, interrupt status). */
+uint64_t os_sd_mode[5];
 static unsigned reopened, restarts;
 static void record_mode(void)
 {
@@ -201,6 +201,7 @@ static void record_mode(void)
     os_sd_mode[2] = (uint64_t)c->sample_delay | (uint64_t)c->tuning_start << 8 | (uint64_t)c->tuning_width << 16 | (uint64_t)c->group1_support << 24 |
                     (uint64_t)(c->ocr >> 24 & 1u) << 32;
     os_sd_mode[3] = log;
+    os_sd_mode[4] = os_sd_fault_events(c);
     os_sd_mode[0] = 1u | (uint64_t)(c->timing & 3u) << 4 | (uint64_t)(c->signal_1v8 ? 1u : 0u) << 8 | (uint64_t)(c->uhs_outcome & 15u) << 12 |
                     (uint64_t)(c->mode_steps & 15u) << 20 | (uint64_t)(c->ceiling & 15u) << 28 | (uint64_t)(c->reentered ? 1u : 0u) << 32 |
                     (uint64_t)(reopened & 1u) << 36 | (uint64_t)(restarts & 255u) << 40;

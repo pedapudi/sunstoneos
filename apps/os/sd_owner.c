@@ -51,7 +51,7 @@ static _Atomic uint32_t owner_core_mask, caller_core_mask;
 static struct os_large_device proxy;
 #include "sd_note.h"
 extern uint64_t os_sd_diag[4];
-extern uint64_t os_sd_mode[4];                  /* apps/os/large_sd.c: the bus speed mode and its steps */
+extern uint64_t os_sd_mode[5];                  /* apps/os/large_sd.c: the bus speed mode and its steps */
 
 static void finish(struct request *r, int ok)
 {
@@ -278,10 +278,10 @@ int ss_storage_diagnostic(uint64_t out[4])
     for (unsigned i = 0; i < 4; ++i) out[i] = os_sd_diag[i];
     return 1;
 }
-int ss_storage_mode(uint64_t out[4])
+int ss_storage_mode(uint64_t out[5])
 {
     if (!out) return 0;
-    for (unsigned i = 0; i < 4; ++i) out[i] = os_sd_mode[i];
+    for (unsigned i = 0; i < 5; ++i) out[i] = os_sd_mode[i];
     return 1;
 }
 int ss_storage_owner_stats(struct ss_storage_owner_stats *out)
