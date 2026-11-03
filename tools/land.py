@@ -164,6 +164,13 @@ def label_for(args, branch):
     return label
 
 
+def gate_argv(args, tree):
+    """The command that starts the gate on TREE: the gate command given with --gate-command, or tools/integration-gate.py of TREE itself.
+
+    The gate takes the host-wide gate lock (CACHE/gate.lock) itself, so it needs no wrapper."""
+    return args.gate_command or [sys.executable, str(Path(tree) / 'tools/integration-gate.py')]
+
+
 def integration_tree(args, ref):
     """The shared worktree where every code landing is gated, detached at ref.
 
@@ -194,7 +201,7 @@ def verify(args, worktree, base, tip, names, label):
     tree = integration_tree(args, tip)
     # The gate starts beside the registry check, which refuses in seconds what the gate would refuse at its
     # end. If the registry check refuses, the gate is stopped by its own process group.
-    command = args.gate_command + [str(tree), label, '--reason', args.reason, '--affected', '%s..%s' % (base, tip), '--keep-going']
+    command = gate_argv(args, tree) + [str(tree), label, '--reason', args.reason, '--affected', '%s..%s' % (base, tip), '--keep-going']
     gate = subprocess.Popen(command, cwd=tree, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     try:
         run_step('checks/gate-inputs.py', args.registry_command + ['--output', str(args.cache / 'build' / ('registry-' + label + '.json'))], tree)
@@ -286,7 +293,8 @@ def main(argv=None):
     parser.add_argument('--remote', default='origin')
     # The commands are replaceable so that checks/land.py can run without a real gate.
     parser.add_argument('--gate-command', default=os.environ.get('LAND_GATE_COMMAND'),
-                        help='gate command; WORKTREE LABEL --reason TEXT --affected RANGE --keep-going are appended')
+                        help='gate command; WORKTREE LABEL --reason TEXT --affected RANGE --keep-going are appended; '
+                        'default: tools/integration-gate.py of the integration worktree')
     parser.add_argument('--evidence-command', default=os.environ.get('LAND_EVIDENCE_COMMAND'))
     parser.add_argument('--links-command', default=os.environ.get('LAND_LINKS_COMMAND'))
     parser.add_argument('--full-gate-command', default=os.environ.get('LAND_FULL_GATE_COMMAND'),
@@ -299,7 +307,7 @@ def main(argv=None):
     except host_space.SpaceShortage as error:
         print('REFUSED: %s' % error, file=sys.stderr)
         return 1
-    args.gate_command = shlex.split(args.gate_command or str(args.cache / 'bin/integration-gate.sh'))
+    args.gate_command = shlex.split(args.gate_command) if args.gate_command else None
     args.evidence_command = shlex.split(args.evidence_command or '%s tools/evidence.py' % sys.executable)
     args.links_command = shlex.split(args.links_command or '%s -B checks/docs-links.py' % sys.executable)
     args.full_gate_command = shlex.split(args.full_gate_command if args.full_gate_command is not None else '%s %s' % (sys.executable, ROOT / 'tools/full-gate.py'))

@@ -162,7 +162,7 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
             selected.write_bytes(payload)
             log = run('mode-' + str(mode), [str(args.qemu.resolve()),
                 '-machine', 'virt,gic-version=3,secure=off,virtualization=off',
-                '-cpu', 'cortex-a55', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
+                '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a55', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
                 '-semihosting-config', 'enable=on,target=native', '-kernel', str(selected)], timeout=15)
             assert 'PASS render cleanup case' in log, log
             results[str(mode)] = {'result': log.strip(), 'elf_sha256': sha(selected), 'selector_offset': selector_offset}

@@ -173,11 +173,18 @@ in a design or status document.
   peripherals as qualification blockers. Source inspection and emulation are
   not physical qualification.
 
+## Build, session and submit tools
+
+- Configure with `tools/configure.py`, build the session with `tools/session.py build`,
+  and submit with `tools/board.py submit --wait`. Do not write configure, packaging
+  or submit scripts under `~/.cache/sunstoneos/build/`; when a tool lacks an option
+  you need, add it to the tool.
+
 ## Git and files
 
 - Never use `rm`. Move discarded files into
   `~/.cache/sunstoneos/trash/<descriptive-name>/`, or delete generated files
-  with `~/.cache/sunstoneos/bin/clean-generated.py`.
+  with `tools/clean-generated.py`.
 - Work on your own branch and preserve other workers' changes. Never pipe
   `git merge`; before committing, check for unmerged paths and conflict markers.
   Never use bare `git stash`; set work aside in a temporary commit.

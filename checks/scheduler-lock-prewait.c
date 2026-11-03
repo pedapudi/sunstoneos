@@ -1,17 +1,16 @@
-/* The host can deschedule a thread for milliseconds, which no lock design bounds. Each thread reads its own
- * involuntary context-switch count (getrusage RUSAGE_THREAD, ru_nivcsw) before a wait, after it, and while it
- * holds the lock, and adds any increase to a shared count. A wait during which that shared count changed, because
- * this thread or the thread holding the lock was descheduled, is counted as host-descheduled; it is late only if
- * it passes its bound and the count did not change. A phase with more than half of its waits host-descheduled is
- * inconclusive and fails. The control phase (no unmasked wait) is reported and not judged.
+/* Two parts, so that no verdict depends on how loaded the host is.
  *
- * Eight threads contend for a ticket lock, with and without the unmasked wait of
- * runtime/lock_prewait_wait.h in front of the ticket. A thread's wait has two
- * parts: the unmasked wait (interrupts would run) and the queued wait after the
- * ticket is taken (interrupts would be masked). The check reports both per
- * thread and fails when any thread is starved: it must complete its share of
- * acquisitions, no unmasked wait may exceed the limit by more than a wake-up
- * slack, and the queued wait must stay within the ticket queue's bound. */
+ * Real threads: eight host threads contend for a ticket lock, with and without the unmasked wait of
+ * runtime/lock_prewait_wait.h in front of the ticket. The verdict is what holds at any scheduling: every
+ * thread completes its acquisitions and no update is lost. Latencies are printed and not judged, because a
+ * host thread can be descheduled for milliseconds.
+ *
+ * Model: the same workload runs as eight cooperative fibers on a controlled clock. A fiber advances time only
+ * by sleeping, so each behaves as a core of its own that polls every POLL_NS, and every run is identical on
+ * every host. The latency bounds are judged there, with no slack for descheduling: a thread's wait has two
+ * parts, the unmasked wait (interrupts would run), which ends within the limit plus one poll, and the queued
+ * wait after the ticket is taken (interrupts would be masked), which stays within the ticket queue's bound.
+ * A bound in real microseconds on the board's cores is a board measurement, not a host check. */
 #define _GNU_SOURCE
 #include <pthread.h>
 #include <sys/resource.h>
@@ -21,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <ucontext.h>
 
 #define THREADS 8
 #define ROUNDS 20000
@@ -28,7 +28,7 @@
 #define DEPTH 1
 
 static uint64_t hold_ns = 2000; /* set per phase before the threads start */
-static unsigned rounds = ROUNDS;
+static unsigned rounds = 500; /* real threads: enough contention for the atomics, short when the host is oversubscribed */
 static _Alignas(64) _Atomic uint32_t lock_word; /* owner low, next high */
 static _Atomic uint64_t protected_counter;
 static _Atomic int start_flag;
@@ -39,9 +39,13 @@ static uint64_t now_ns(void)
     clock_gettime(CLOCK_MONOTONIC, &t);
     return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
 }
-#define SS_PW_NOW() now_ns()
+static int model_active; /* nonzero while the fiber model runs on the controlled clock */
+static uint64_t model_now;
+static void model_sleep(uint64_t ns);
+#define POLL_NS 1000u
+#define SS_PW_NOW() (model_active ? model_now : now_ns())
 #define SS_PW_ARM(word) atomic_load_explicit((const _Atomic uint32_t *)(word), memory_order_acquire)
-#define SS_PW_SLEEP() sched_yield()
+#define SS_PW_SLEEP() (model_active ? model_sleep(POLL_NS) : (void)sched_yield())
 #define SS_PW_DISARM() ((void)0)
 #include "../runtime/lock_prewait_wait.h"
 
@@ -104,10 +108,7 @@ static void *worker(void *argument)
         if (unmasked > r->max_unmasked) r->max_unmasked = unmasked;
         if (queued > r->max_queued) r->max_queued = queued;
         if (total > r->max_total) r->max_total = total;
-        const int descheduled = switches_after != switches_before;
-        r->descheduled += descheduled;
-        if (!descheduled && unmasked > LIMIT_NS + 50000) ++r->late_unmasked;
-        if (!descheduled && queued > (THREADS - 1) * (uint64_t)(hold_ns + 100000)) ++r->late_queued;
+        (void)switches_before; (void)switches_after;
         r->queued_sample[r->done] = queued;
         ++r->done;
         state = state * 6364136223846793005u + 1442695040888963407u;
@@ -153,17 +154,90 @@ static int run(int prewait, const char *label)
     const uint64_t p50 = all[total_waits / 2], p99 = all[total_waits * 99 / 100], p999 = all[total_waits * 999 / 1000];
     printf(" queued wait over all threads: p50 %.1f us, p99 %.1f us, p99.9 %.1f us\n", p50 / 1e3, p99 / 1e3, p999 / 1e3);
     printf(" worst unmasked %.1f us, worst queued %.1f us, worst total %.1f us\n", worst_unmasked / 1e3, worst_queued / 1e3, worst_total / 1e3);
-    /* The unmasked wait ends within the limit plus one wake-up, and a queued wait within the ticket
-     * queue's bound (THREADS-1 holders). A host thread can be descheduled for longer than either, so the
-     * check allows 50 us of slack on the first and 100 us per holder on the second, ignores waits during which the thread was descheduled, and fails when more
-     * than 0.1% of the waits are late; a starved thread would be late every time. */
-    uint64_t late_unmasked = 0, late_queued = 0, descheduled = 0;
-    for (int i = 0; i < THREADS; ++i) { late_unmasked += result[i].late_unmasked; late_queued += result[i].late_queued; descheduled += result[i].descheduled; }
-    printf(" late unmasked waits %llu, late queued waits %llu, host-descheduled waits %llu, of %u\n", (unsigned long long)late_unmasked,
-           (unsigned long long)late_queued, (unsigned long long)descheduled, total_waits);
-    if (prewait && descheduled * 2 > (uint64_t)total_waits) { printf("INCONCLUSIVE: more than half of the waits were host-descheduled\n"); failed = 1; }
-    if (prewait && late_unmasked > total_waits / 1000) { printf("FAIL unmasked waits past the limit\n"); failed = 1; }
-    if (prewait && late_queued > total_waits / 1000) { printf("FAIL queued waits past the ticket queue bound\n"); failed = 1; }
+    printf(" latencies above are reported, not judged\n");
+    return failed;
+}
+
+/* ---- model on the controlled clock ---- */
+#define FIBER_STACK 65536
+struct fiber { ucontext_t context; uint64_t wake; int done; unsigned char *stack; };
+static struct fiber fiber[THREADS];
+static ucontext_t scheduler;
+static int current_fiber;
+static void model_sleep(uint64_t ns)
+{
+    fiber[current_fiber].wake = model_now + ns;
+    swapcontext(&fiber[current_fiber].context, &scheduler);
+}
+struct model_result { uint64_t done, timed_out, max_unmasked, max_queued, late_unmasked, late_queued; };
+static struct model_result model_result[THREADS];
+static unsigned model_rounds;
+static void model_worker(void)
+{
+    const int id = current_fiber;
+    struct model_result *r = &model_result[id];
+    uint64_t state = (uint64_t)(id + 1) * 2654435761u + 1;
+    for (unsigned i = 0; i < model_rounds; ++i) {
+        const uint64_t begin = model_now;
+        uint64_t end = begin;
+        const uint32_t seen = atomic_load(&lock_word);
+        if (ss_prewait_depth(seen) > DEPTH)
+            r->timed_out += ss_prewait_run((const volatile uint32_t *)&lock_word, DEPTH, begin, LIMIT_NS, &end);
+        const uint64_t queued_from = model_now;
+        const uint32_t ticket = atomic_fetch_add(&lock_word, 1u << 16) >> 16;
+        while ((uint16_t)atomic_load(&lock_word) != (uint16_t)ticket) model_sleep(POLL_NS);
+        const uint64_t got = model_now;
+        model_sleep(hold_ns);
+        _Atomic uint16_t *owner = (_Atomic uint16_t *)&lock_word;
+        atomic_store(owner, (uint16_t)(atomic_load(owner) + 1));
+        const uint64_t unmasked = end - begin, queued = got - queued_from;
+        if (unmasked > r->max_unmasked) r->max_unmasked = unmasked;
+        if (queued > r->max_queued) r->max_queued = queued;
+        if (unmasked > LIMIT_NS + POLL_NS) ++r->late_unmasked;
+        if (queued > (THREADS - 1) * (uint64_t)(hold_ns + POLL_NS) + POLL_NS) ++r->late_queued;
+        ++r->done;
+        state = state * 6364136223846793005u + 1442695040888963407u;
+        model_sleep(1000 + (state >> 33) % 6000);
+    }
+    fiber[id].done = 1;
+}
+static int run_model(const char *label)
+{
+    for (int i = 0; i < THREADS; ++i) model_result[i] = (struct model_result){0};
+    atomic_store(&lock_word, 0);
+    model_now = 0;
+    model_active = 1;
+    for (int i = 0; i < THREADS; ++i) {
+        fiber[i].done = 0; fiber[i].wake = 0;
+        if (!fiber[i].stack) fiber[i].stack = malloc(FIBER_STACK);
+        getcontext(&fiber[i].context);
+        fiber[i].context.uc_stack.ss_sp = fiber[i].stack;
+        fiber[i].context.uc_stack.ss_size = FIBER_STACK;
+        fiber[i].context.uc_link = &scheduler;
+        makecontext(&fiber[i].context, model_worker, 0);
+    }
+    for (;;) { /* resume the fiber with the earliest wake time; ties go to the lowest index */
+        int pick = -1;
+        for (int i = 0; i < THREADS; ++i) if (!fiber[i].done && (pick < 0 || fiber[i].wake < fiber[pick].wake)) pick = i;
+        if (pick < 0) break;
+        if (fiber[pick].wake > model_now) model_now = fiber[pick].wake;
+        current_fiber = pick;
+        swapcontext(&scheduler, &fiber[pick].context);
+    }
+    model_active = 0;
+    int failed = 0;
+    uint64_t late_u = 0, late_q = 0, timed_out = 0, worst_u = 0, worst_q = 0;
+    for (int i = 0; i < THREADS; ++i) {
+        const struct model_result *r = &model_result[i];
+        if (r->done != model_rounds) { printf("FAIL model thread %d completed %llu of %u\n", i, (unsigned long long)r->done, model_rounds); failed = 1; }
+        late_u += r->late_unmasked; late_q += r->late_queued; timed_out += r->timed_out;
+        if (r->max_unmasked > worst_u) worst_u = r->max_unmasked;
+        if (r->max_queued > worst_q) worst_q = r->max_queued;
+    }
+    printf("model, %s: worst unmasked %.1f us, worst queued %.1f us, timed out %llu, late unmasked %llu, late queued %llu\n",
+           label, worst_u / 1e3, worst_q / 1e3, (unsigned long long)timed_out, (unsigned long long)late_u, (unsigned long long)late_q);
+    if (late_u) { printf("FAIL model: unmasked waits past the limit\n"); failed = 1; }
+    if (late_q) { printf("FAIL model: queued waits past the ticket queue bound\n"); failed = 1; }
     return failed;
 }
 
@@ -173,8 +247,14 @@ int main(void)
     failed |= run(1, "unmasked wait first, depth 1, limit 100 us");
     /* Long holds keep the queue deep, so the limit ends every wait: it must hold at 100 us however long the lock is busy. */
     hold_ns = 40000;
-    rounds = 1000;
+    rounds = 100;
     failed |= run(1, "long holds (40 us): the limit ends the unmasked wait");
+    /* The same two workloads on the controlled clock, where the bounds are judged. */
+    hold_ns = 2000; model_rounds = ROUNDS;
+    failed |= run_model("short holds (2 us)");
+    hold_ns = 40000; model_rounds = 1000;
+    failed |= run_model("long holds (40 us): the limit ends the unmasked wait");
+    if (!failed && !model_result[0].timed_out && !model_result[1].timed_out) { puts("FAIL model: long holds never reached the limit"); failed = 1; }
     puts(failed ? "FAILED" : "PASSED");
     return failed;
 }

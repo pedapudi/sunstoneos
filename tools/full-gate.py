@@ -45,7 +45,7 @@ def run(args):
         land.git(bringup, 'worktree', 'add', '-q', '--detach', str(tree), tip)
     label = 'full-%s-%s' % (tip[:8], datetime.datetime.now().strftime('%m%d-%H%M%S'))
     started = time.monotonic()
-    subprocess.run(args.gate_command + [str(tree), label, '--reason', 'full gate on bringup %s' % tip[:8], '--full'],
+    subprocess.run(land.gate_argv(args, tree) + [str(tree), label, '--reason', 'full gate on bringup %s' % tip[:8], '--full'],
                    cwd=tree, capture_output=True, text=True)
     summary = cache / 'build' / ('gate-' + label) / 'summary.txt'
     passed = land.gate_passes(summary)
@@ -78,7 +78,7 @@ def main(argv=None):
     try:
         host_space.preflight(args.cache / 'build')
         host_space.use_disk_tmp(args.cache / 'build')
-        args.gate_command = shlex.split(args.gate_command or str(args.cache / 'bin/integration-gate.sh'))
+        args.gate_command = shlex.split(args.gate_command) if args.gate_command else None
         with open(args.cache / 'full-gate.lock', 'a+') as lock:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

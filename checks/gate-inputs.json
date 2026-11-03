@@ -2537,6 +2537,20 @@
     }
    ]
   },
+  "session-build.py": {
+   "runs": [
+    {
+     "args": [
+      "--control-elf",
+      "{elf:ret-latency}",
+      "--npu-elf",
+      "{elf:ret-npu-load}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
   "stage2-session.py": {
    "runs": [
     {

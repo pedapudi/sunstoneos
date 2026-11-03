@@ -122,6 +122,30 @@ def harness_key(image, sources):
     return h.hexdigest()[:24]
 
 
+def own_source(image, build_dir, source):
+    """The source tree the build directory was configured from, after checking that this is the tree the harness compiles.
+
+    The harness takes its include paths and defines from the build directory, so its sources must come from the same tree: a source
+    given by the caller must be that tree, which must still exist, and the image must carry the build ID that the build directory
+    recorded. Anything else is refused, because mixing the include paths of one tree with the sources of another compiles code
+    that no image ran."""
+    cache = Path(build_dir) / 'CMakeCache.txt'
+    home = re.search(r'^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$', cache.read_text(), re.M) if cache.is_file() else None
+    if not home:
+        raise Unavailable('the build directory %s has no CMakeCache.txt naming its source tree' % build_dir)
+    tree = Path(home.group(1))
+    if Path(source).resolve() != tree.resolve():
+        raise Unavailable('the admission sources must come from the tree the image was built from, %s, not %s' % (tree, source))
+    if not (tree / 'CMakeLists.txt').is_file():
+        raise Unavailable('the source tree %s of the build %s is missing or has moved; rebuild the image' % (tree, build_dir))
+    with Path(image).open('rb') as stream:
+        carried = symbol_bytes(ELFFile(stream), 'a733_smp_build_id')
+    recorded = Path(build_dir) / 'os-image' / ('' if Path(image).stem == 'sunstone-a733-os' else Path(image).stem) / (Path(image).stem + '-build-id.c')
+    if carried is None or not recorded.is_file() or bytes(int(x, 16) for x in re.findall(r'0x([0-9a-f]{2})', recorded.read_text())) != carried:
+        raise Unavailable('the image %s does not carry the build ID that %s recorded; it is not the image of that build' % (image, build_dir))
+    return tree
+
+
 def build_harness(image, build=None, cache=None):
     """Compile the image's admission code into a host executable; returns its path. Cached by image digest."""
     image = Path(image)
@@ -134,6 +158,7 @@ def build_harness(image, build=None, cache=None):
             return candidate
         raise Unavailable('the image is not under its CMake build directory and no harness was built at submission')
     build_dir, source = located
+    source = own_source(image, build_dir, source)
     target = image.stem
     output = build_dir / 'os-image' / ('' if target == 'sunstone-a733-os' else target)
     flags = build_dir / 'CMakeFiles/sunstone-a733-os-core.dir/flags.make'
