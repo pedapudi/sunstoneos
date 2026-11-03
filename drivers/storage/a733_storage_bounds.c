@@ -29,11 +29,17 @@ static int walk(const uint8_t *p, uint32_t n)
 
 int a733_storage_bounds_parse(struct a733_storage_bounds *b, const uint8_t *blob, size_t bytes)
 {
-    if (!b || !blob || b->state != A733_BOUNDS_EMPTY || bytes < HEADER || memcmp(blob, A733_BOUNDS_MAGIC, 8)) return 0;
+    if (!b || !blob || b->state != A733_BOUNDS_EMPTY || bytes < HEADER) return 0;
+    int scratch = !memcmp(blob, A733_BOUNDS_MAGIC_SCRATCH, 8);
+    if (!scratch && memcmp(blob, A733_BOUNDS_MAGIC, 8)) return 0;
     uint32_t w = le32(blob + 8), k = le32(blob + 12);
-    if (bytes < HEADER + 16u || !w || !k || (bytes - HEADER - 16u) % 16u || (bytes - HEADER - 16u) / 16u != (size_t)w + k) return 0;   /* the last 16 bytes are the card's CID */
+    if (scratch) {                                 /* one partition range, no backup, an all-zero digest */
+        static const uint8_t zero[32];
+        if (w != 1 || k != 0 || memcmp(blob + 16, zero, 32)) return 0;
+    }
+    if (bytes < HEADER + 16u || !w || (!k && !scratch) || (bytes - HEADER - 16u) % 16u || (bytes - HEADER - 16u) / 16u != (size_t)w + k) return 0;   /* the last 16 bytes are the card's CID */
     if (!walk(blob + HEADER, w) || !walk(blob + HEADER + 16u * (size_t)w, k)) return 0;
-    b->blob = blob; b->bytes = bytes; b->writes = w; b->backups = k;
+    b->blob = blob; b->bytes = bytes; b->writes = w; b->backups = k; b->scratch = (uint8_t)scratch;
     storage_digest_bytes(blob, bytes, b->digest);
     b->state = A733_BOUNDS_PARSED;
     return 1;
@@ -42,6 +48,7 @@ int a733_storage_bounds_parse(struct a733_storage_bounds *b, const uint8_t *blob
 int a733_storage_bounds_verify(struct a733_storage_bounds *b, int (*read)(void *, uint64_t, uint8_t *), void *context)
 {
     if (!b || !read || b->state != A733_BOUNDS_PARSED || !a733_storage_bounds_intact(b)) return 0;
+    if (b->scratch) { b->state = A733_BOUNDS_VERIFIED; return 1; }              /* nothing to re-read: the card's identity and the partition are the bounds */
     struct storage_digest d;
     storage_digest_init(&d);
     uint8_t record[520];

@@ -33,7 +33,9 @@ enum sunxi_mmc_uhs_outcome { SUNXI_MMC_UHS_NONE, SUNXI_MMC_UHS_SDR104,
 /* Why the mode changed from the one in force (card.mode_log). */
 enum sunxi_mmc_mode_reason { SUNXI_MMC_MODE_NONE, SUNXI_MMC_MODE_NO_WINDOW, SUNXI_MMC_MODE_CARD_LACKS, SUNXI_MMC_MODE_CEILING,
     SUNXI_MMC_MODE_ERRORS, SUNXI_MMC_MODE_RETUNE_FAILED, SUNXI_MMC_MODE_RETUNE };
-struct sunxi_mmc_mode_event { uint8_t from, to, reason, signal_1v8; };   /* from and to are card.timing values */
+/* from and to are card.timing values. A step taken after a failed request keeps what the core saw at the fault: its error code (sunxi_mmc_error), the protocol step
+ * it was in and the low 16 bits of the controller's raw interrupt status, so a session that steps down and completes still says why. Zero for a step with no fault. */
+struct sunxi_mmc_mode_event { uint8_t from, to, reason, signal_1v8, error, protocol; uint16_t interrupts; };
 #define SUNXI_MMC_MODE_LOG 6u
 /* sd_signal operations and QUERY capability bits. */
 #define SUNXI_MMC_SIGNAL_QUERY 0u
@@ -242,7 +244,8 @@ int sunxi_mmc_set_ceiling(struct sunxi_mmc *, unsigned timing);
  * the reason. The controller is reset, the card clock stopped, the module returned to the identification clock and the cold setup run again by the
  * following polls; the state is IDENTIFY until READY. Returns 0 for any other state, for a write in progress or a deadline in the past. */
 int sunxi_mmc_restart(struct sunxi_mmc *, unsigned ceiling, enum sunxi_mmc_mode_reason why, uint64_t absolute_deadline_us);
-/* A failed read the restart can recover: the error is a controller, card or timeout error and no write was running. */
+/* A failed read or write the restart can recover: the error is a controller, card or timeout error. A write is retried by its owner with the same sectors and
+ * the same data, inside the bounds that admitted it; the card is reset by the identification, so a half-programmed block is abandoned. */
 int sunxi_mmc_recoverable(const struct sunxi_mmc *);
 /* Entire range and byte/sector command argument are validated before MMIO.
  * Borrowed storage must remain exclusive through DONE or terminal FAULT.

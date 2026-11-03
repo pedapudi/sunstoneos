@@ -23,7 +23,7 @@ void os_application_usb_changed(void);               /* apps/os/application.c: x
 #define DISK_SECTORS 65536u
 #define CARD_SECTORS UINT64_C(0x7a00000)
 
-uint64_t os_sd_mode[4];                              /* as in apps/os/large_sd.c: the bus speed mode (the QEMU card has none) */
+uint64_t os_sd_mode[5];                              /* as in apps/os/large_sd.c: the bus speed mode (the QEMU card has none) */
 uint64_t os_sd_diag[4];                              /* as in apps/os/large_sd.c: stage, detail, first failed read + 1, reads */
 #define DIAG(stage, detail) (os_sd_diag[0] = (stage), os_sd_diag[1] = (uint64_t)(detail), 0)
 

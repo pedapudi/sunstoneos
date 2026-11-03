@@ -9,6 +9,9 @@
 #include <stdint.h>
 
 #define A733_BOUNDS_MAGIC "SSBW0003"
+/* A scratch card (a card the coordinator lists as holding nothing of value): version 4, one write range (the card's FAT32 partition), no backup ranges and an all-zero
+ * digest, then the card's CID. There is no backup to re-read: the object is verified at parse, and writes are allowed anywhere inside the partition for that card only. */
+#define A733_BOUNDS_MAGIC_SCRATCH "SSBW0004"
 /* No copy of the ranges is made: the object keeps a pointer to the blob the runner delivered as the first input and
  * walks the ranges from there, so the only limit is the size of that input. The image keeps the input read-only for as
  * long as the object is used. Ranges are little-endian (first sector, sector count) u64 pairs. The last 16 bytes of the input are the identity of the
@@ -19,6 +22,7 @@ struct a733_storage_bounds {
     const uint8_t *blob;
     size_t bytes;
     uint32_t writes, backups;
+    uint8_t scratch;               /* a version 4 blob: no backup to verify */
     uint8_t digest[32];            /* SHA-256 of the blob at parse time; allows() refuses a blob that no longer matches */
 };
 /* Check the blob (magic, counts, exact length, sorted disjoint nonempty ranges), keep a pointer to it and its SHA-256.

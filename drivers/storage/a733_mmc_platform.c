@@ -741,6 +741,9 @@ static int close_idle(struct a733_mmc_platform *p)
 }
 int a733_mmc_platform_irq(struct a733_mmc_platform *p,int enable)
 {
+    /* Leaving interrupt mode is always allowed: a failed transfer (a core in FAULT, a borrowed buffer) must be able to give the mode up before its restart, which
+     * refuses while the mode is on (the third write session on 3-3 stopped there: its owner could not clear the mode with the core faulted). */
+    if(p&&p->initialized&&!enable){p->irq_mode=0;return 1;}
     if(!p||!p->initialized||p->update||p->config.kind!=SUNXI_MMC_SD||p->stage!=READY||p->fault||
        p->core.state!=SUNXI_MMC_READY||p->core.borrowed||p->ops.current(p->cookie)!=1)return 0;
     p->irq_mode=enable?1u:0u;return 1;

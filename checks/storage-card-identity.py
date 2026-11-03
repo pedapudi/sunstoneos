@@ -120,6 +120,43 @@ def scenario(module, out):
     refused(lambda: admit('3-3', '3-3'), 'differs')
     made['3-3']['backup'].write_bytes(saved)
     assert admit('3-3', '3-3') == made['3-3']['blob']
+    scratch_cases(module, out, approvals, made)
+
+
+def scratch_cases(module, out, approvals, made):
+    """A scratch card is admitted on its CID and partition by one record per card; any deviation is refused."""
+    registry = out / 'scratch-cards.json'
+    part = [2048, 61065216]
+    registry.write_text(json.dumps({CID33: {'port': '3-3', 'partition': part}}))
+    blob = module.encode_scratch(tuple(part), CID33)
+    blob_file = _write(out / 'scratch-blob.bin', blob)
+    descriptor = {'storage_scratch': {'card_cid': CID33, 'partition': part}}
+
+    def go(port='3-3', desc=None, input_file=blob_file):
+        args = SimpleNamespace(approved_by='coordinator', storage_write=True, port=port, input=[str(input_file)], host_tree=None)
+        return module.admit(desc or descriptor, args, 'deadbeef', approvals=approvals)
+
+    def refused(call, text):
+        try:
+            call()
+        except ValueError as e:
+            assert text in str(e), (text, str(e))
+            return
+        raise AssertionError('admitted, expected refusal: ' + text)
+
+    module.SCRATCH_CARDS = registry
+    refused(go, 'No coordinator approval record for the scratch card')
+    module.card_approval_path(CID33, approvals).write_text(json.dumps({'card_cid': CID33, 'port': '3-3'}))
+    assert go() == blob                                                       # the card, its port and its partition: admitted with no backup and no restore point
+    assert go() == blob                                                       # and again, with the same record: a record is per card
+    refused(lambda: go('3-1'), 'not on port 3-1')
+    refused(lambda: go(desc={'storage_scratch': {'card_cid': CID31, 'partition': part}}), 'not listed as a scratch card')
+    refused(lambda: go(desc={'storage_scratch': {'card_cid': CID33, 'partition': [2048, 61065217]}}), 'differs from the scratch card')
+    refused(lambda: go(input_file=_write(out / 'wide.bin', module.encode_scratch((1, 61067264), CID33))), 'first input')
+    module.card_approval_path(CID33, approvals).write_text(json.dumps({'card_cid': CID33, 'port': '3-1'}))
+    refused(go, 'another card or port')
+    module.card_approval_path(CID33, approvals).write_text(json.dumps({'card_cid': CID33, 'port': '3-3'}))
+    refused(lambda: go(desc=dict(descriptor, storage_bounds=made['3-3']['descriptor']['storage_bounds'])), 'not both')
 
 
 def _write(path, data):
@@ -157,18 +194,23 @@ def main():
             ('restore point on any port', "    require(point.get('port') == port,", "    require(True or point.get('port') == port,"),
             ('record card not compared', "    require(record.get('card_cid') == bounds['card_cid'], 'The approval record is for another card.')\n", ''),
             ('record port not compared', "    require(record.get('port') == args.port, 'The approval record is for another port.')\n", ''),
+            ('scratch port not compared', "    require(entry.get('port') == args.port,", "    require(True or entry.get('port') == args.port,"),
+            ('scratch partition not compared', "    require(entry.get('partition') == partition,", "    require(True or entry.get('partition') == partition,"),
+            ('scratch card record not required', "    require(record.is_file(), f'No coordinator", "    require(True or record.is_file(), f'No coordinator"),
+            ('scratch listing not required', "    require(entry,", "    require(True or entry,"),
             ('restore point replaced', "    require(card_cid not in points, 'This card already has a restore point; it is never replaced.')\n", '')):
         assert original.count(old) == 1, (name, original.count(old))
         mutant = out / ('mutant-' + name.replace(' ', '-') + '.py')
         mutant.write_text(original.replace(old, new))
         try:
             scenario(load(mutant), out / ('cases-' + name.replace(' ', '-')))
-        except (AssertionError, ValueError):
+        except (AssertionError, ValueError, OSError):
             killed.append(name)
         else:
             raise AssertionError('mutation survived: ' + name)
     source = (ROOT / 'drivers/storage/a733_storage_bounds.c').read_text()
     for name, old, new in (('identity always accepted', "        if (w != cid[i]) return 0;", "        if (0 && w != cid[i]) return 0;"),
+                           ('scratch verified without checking shape', "        if (w != 1 || k != 0 || memcmp(blob + 16, zero, 32)) return 0;", "        (void)zero;"),
                            ('identity read before verify', "    if (!b || !cid || b->state != A733_BOUNDS_VERIFIED || !a733_storage_bounds_intact(b)) return 0;", "    if (!b || !cid) return 0;")):
         assert source.count(old) == 1, (name, source.count(old))
         mutant = out / ('mutant-' + name.replace(' ', '-') + '.c')
