@@ -28,6 +28,7 @@ import harness
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / 'tools/clean-generated.py'
 CHECK_INPUTS = ['tools/clean-generated.py']
+GATE_RUNS = [['--output', '{output}']]
 OLD = time.time() - 30 * 86400
 
 
