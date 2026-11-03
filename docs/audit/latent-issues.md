@@ -1067,7 +1067,7 @@ attempt is wasted.
 version and supervised seconds (reusing `A733_BOARD_SUPERVISED_SECONDS`), and
 compile each launcher with flags. Until then, route every substitution
 through one helper that asserts exactly one match, including the substitution
-in [checks/board-supervised.py](../../checks/board-supervised.py). Keep the
+in no host check. Keep the
 generated `launch.bin` byte-identical, or regenerate the launcher-case
 evidence bound to each `launch.bin` hash.
 

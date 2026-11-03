@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Use the native decoder to reconstruct previously captured SDK submissions.
+"""Host wrapper over the native NBG decoder (drivers/npu/nbg_*.c), used by the NPU host tools.
 
-No SDK code is executed. Tensor metadata is compared with the existing host
-inspector, whose reference comparison is recorded in docs/npu.md.
+The former driver that reconstructed captured SDK submissions with it was removed together with
+checks/nbg-loader-reference.py; its result is recorded in docs/npu.md.
 """
 import argparse
 import ctypes as c
@@ -163,55 +163,3 @@ class Capture:
 
     def read64(self, address):
         return struct.unpack('<Q', self.mem_read(address, 8))[0]
-
-
-def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('model', type=Path)
-    ap.add_argument('native', type=Path, help='shared library with decoder and address encoder')
-    ap.add_argument('capture', type=Path)
-    ap.add_argument('output', type=Path)
-    args = ap.parse_args()
-    root = Path(__file__).resolve().parents[1]
-    reference = module('reference', root/'checks/nbg-loader-reference.py')
-    inspector = module('inspector', root/'tools/inspect-nbg.py')
-    data = args.model.read_bytes()
-    if hashlib.sha256(data).hexdigest() != reference.MODEL_SHA:
-        raise SystemExit('model identity mismatch')
-    args.output.mkdir(parents=True)
-    native = Native(args.native, data)
-    metadata = inspector.inspect(data)
-    h = native.view.header
-    assert h.target == int(metadata['target'], 16) and h.checksum == int(metadata['stored_checksum'], 16)
-    assert h.name.decode() == metadata['name'] and h.operation_count == metadata['operation_count']
-    assert h.pool_bytes == metadata['memory']['pool_bytes']
-    tensor_count = 0
-    for section, key, count in [(0, 'inputs', h.input_count), (1, 'outputs', h.output_count)]:
-        for actual, expected in zip(native.tensors(section, count), metadata[key], strict=True):
-            for key in ('dimensions', 'logical_bytes', 'name', 'buffer_type'):
-                assert actual[key] == expected[key]
-            assert inspector.FORMATS[actual['format']][0] == expected['format']
-            q = expected['quantization']
-            assert ('none', 'dynamic_fixed_point', 'asymmetric')[actual['quantization']] == q['kind']
-            if actual['quantization'] == 2:
-                assert struct.unpack('<f', struct.pack('<I', actual['scale_bits']))[0] == q['scale']
-                assert actual['zero_point'] == q['zero_point']
-            elif actual['quantization'] == 1:
-                assert actual['fixed_position'] == q['fixed_position']
-            tensor_count += 1
-    for index, key in enumerate(inspector.SECTIONS):
-        assert native.section(index) == data[metadata['sections'][key]['offset']:
-                                           metadata['sections'][key]['offset'] + metadata['sections'][key]['bytes']]
-    capture = Capture(args.capture, reference.SDK_SHA, reference.MODEL_SHA)
-    result = reference.reconstruct(capture, data, args.native, args.output,
-                                   capture.report['network'], decoded=native, capture=args.capture)
-    result.update(decoder='native C', tensors_compared=tensor_count,
-                  table_entries_resolved=native.table_calls, sdk_executed=False,
-                  capture=str(args.capture.resolve()),
-                  model_sha256=reference.MODEL_SHA)
-    (args.output/'comparison.json').write_text(json.dumps(result, indent=2)+'\n')
-    print(json.dumps(result, indent=2))
-
-
-if __name__ == '__main__':
-    main()

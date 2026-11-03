@@ -1973,6 +1973,16 @@
     }
    ]
   },
+  "qemu-os-boot.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
   "queue-add.py": {
    "runs": [
     {
@@ -2397,7 +2407,7 @@
     {
      "args": [
       "--tlc-jar",
-      "{cache}/build/scheduler-rt-1101/wake-model-build/tla2tools.jar",
+      "{cache}/host/tla/tla2tools.jar",
       "--build-dir",
       "{output}"
      ]
@@ -2607,7 +2617,6 @@
   "memtest-emulate.py": "helper module of a runnable check (not run on its own) | loaded by memtest-map-admission.py",
   "memtest-image.py": "helper module of a runnable check (not run on its own) | run by cmake/a733-memtest.cmake",
   "memtest-machine.py": "helper module of a runnable check (not run on its own) | loaded by board-probe-abort.py",
-  "nbg-model.py": "helper module of a runnable check (not run on its own) | loaded by tools/npu-nbg-census.py",
   "pcie-application-native.py": "helper module of a runnable check (not run on its own) | loaded by pcie-pd-rail-native.py",
   "pvr-gpu-flush-reference.py": "helper module of a runnable check (not run on its own) | loaded by pvr-gpu-flush.py",
   "storage-read-fixture.py": "helper module of a runnable check (not run on its own) | loaded by tools/gate_session.py",
