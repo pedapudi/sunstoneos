@@ -828,15 +828,6 @@ int nbg_assembly_layout(const struct nbg_model *m, struct nbg_assembly_layout *o
     return 1;
 }
 
-/* A buffer is exactly its allocation, except the command buffer: 87afaecf sized the layout's command allocation from the graph's own
- * stream, so a service with a fixed hardware-maximum command buffer (the convolution's reserved layout) passes a larger one, up to
- * the fetch limit rounded to a page. The assembler fills all of it with END pairs and the controller fetches all of it. */
-#define NBG_ASSEMBLY_COMMAND_LIMIT ((A733_NPU_FETCH_BYTES + 4095u) & ~4095u)
-static inline int nbg_assembly_bytes_fit(unsigned index, uint64_t bytes, uint64_t allocation)
-{
-    return index == NBG_ALLOC_COMMAND ? bytes >= allocation && bytes <= NBG_ASSEMBLY_COMMAND_LIMIT : bytes == allocation;
-}
-
 /* Placement rules shared by the one-call and stepwise assemblers. Forced
  * inlining keeps the one-call assembler as compact as before the stepwise
  * form existed; only images that link the stepwise form carry the copies. */
@@ -849,7 +840,7 @@ static inline __attribute__((always_inline)) int placed(const struct nbg_model *
             if (b[i].cpu || b[i].bytes || b[i].device) return 0;
             continue;
         }
-        if (!nbg_assembly_bytes_fit(i, b[i].bytes, p->buffers[i].allocation_bytes) || !a733_span_excl_nonempty(b[i].cpu, b[i].bytes) ||
+        if (b[i].bytes != p->buffers[i].allocation_bytes || !a733_span_excl_nonempty(b[i].cpu, b[i].bytes) ||
             ((uintptr_t)b[i].cpu & 4095) || b[i].device < NBG_ASSEMBLY_LOW_RESERVED || (b[i].device & 4095) ||
             b[i].bytes > (UINT64_C(1) << 32) - b[i].device ||
             a733_extents_overlap_prechecked(b[i].device, b[i].bytes, 0x400000, 0x80000) ||
