@@ -934,12 +934,12 @@ to the stated scope:
   four-bit, 3.3 V. All 256 reads in the recorded session completed.
   The CMD11 completion and clock-restart timing corrections pass focused
   software checks, including the full post-delay timeout and both required
-  completion bits. [Read-only descriptor DMA](designs/sd-dma.md) is implemented
+  completion bits. [Read-only descriptor DMA](sd-card.md) is implemented
   for transfers of up to 256 sectors. Focused software checks cover descriptor
   ranges, controller drain, cache publication and measurement parsing; native
   builds pass. Physical DMA, cache coherence, SDR104 and throughput remain
   unqualified. Evidence is under `resume-sd-completion-1025/snapshot/`.
-  [SD/eMMC identification and bounded reads](mmc.md) are **implemented**
+  [SD/eMMC identification and bounded reads](sd-card.md) are **implemented**
   for the one-bit legacy-speed profile and negotiated read-only SD profiles.
   Host checks and source comparisons cover capacity, full-range
   addressing, automatic stop, completion/status and retained partial buffers;
@@ -947,7 +947,7 @@ to the stated scope:
   return are **tested** in the earlier eMMC probe; CMD1 received no response.
   [Physical storage evidence](storage.md) records that negative result. That
   eMMC probe identified no media; neither current board has populated eMMC.
-  The [native storage binding](mmc-platform.md)
+  The [native storage binding](sd-card.md)
   composes SDC0 reads and explicitly selected SDC2 or SDC3 eMMC reads with actual
   clock, pin, rail and PMIC ownership. Both eMMC selections reserve the two
   controllers together because they share one card. The corrected PC route uses
@@ -960,7 +960,7 @@ to the stated scope:
   Evidence: `emmc-native-20261018/`. Neither current board has eMMC populated;
   physical eMMC reads are not applicable. The optional application's single-core
   lifetime retains resources permanently and has no qualified ROM return.
-  The [bounded write primitive](mmc-write.md) snapshots input,
+  The [bounded write primitive](sd-card.md) snapshots input,
   authenticates each request and confirms each sector through card status.
   Focused host checks cover SD/eMMC writes, authority loss and retained partial
   failure; affected native consumers compile. The [storage update service](storage-update.md)
@@ -1047,7 +1047,7 @@ to the stated scope:
   core with a modeled controller and refusals of corrupt metadata; the native
   objects compile. No image links it, and no card has been read through it.
   GPT cards, several volumes, several client tasks and writes are unsupported.
-  UHS-I SDR104 is **implemented** as SD profile three ([design](designs/sd-uhs.md)):
+  UHS-I SDR104 is **implemented** as SD profile three ([design](sd-card.md)):
   S18R and CMD11, one PF bank selector write to 1.8 V (the board has no card
   I/O regulator), SDR104 at 150 MHz from PERI0_300M and a 64-delay CMD19
   sweep, with high speed as the fallback. Core, platform and record host checks

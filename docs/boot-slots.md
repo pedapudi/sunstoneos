@@ -180,7 +180,7 @@ both to registers that serve only SDC0:
    in the same order. Each write is read back, and a mismatch refuses.
 
 Admission then waits 1 ms for the pull-up to settle and requires PF6 to read
-low, the active-low card-detect level ([SD presence](mmc.md)). The card sees
+low, the active-low card-detect level ([SD presence](sd-card.md)). The card sees
 a pause and a slower clock while its bus is idle; the SD core's first command
 is CMD0.
 

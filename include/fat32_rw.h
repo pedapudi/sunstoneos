@@ -1,6 +1,6 @@
 #ifndef SUNSTONE_FAT32_RW_H
 #define SUNSTONE_FAT32_RW_H
-/* General FAT32 write service for a microSD card (docs/designs/storage-write.md).
+/* General FAT32 write service for a microSD card (docs/sd-card.md).
  *
  * Applications write through a RAM buffer. The service flushes data in writes that end on
  * allocation-unit boundaries, reserves clusters in memory (the FAT does not change until a

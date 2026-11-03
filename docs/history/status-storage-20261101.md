@@ -54,6 +54,6 @@ and exact source equivalence remain unresolved. Any physical card write needs
 its full host backup and the approved target-bound path in [goal section 4](../goal.md).
 No NVMe write is permitted without user-designated scratch storage.
 
-See [storage evidence](../storage.md), [MMC](../mmc.md),
-[SD DMA](../designs/sd-dma.md), [updates](../storage-update.md),
+See [storage evidence](../storage.md), [MMC](../sd-card.md),
+[SD DMA](../sd-card.md), [updates](../storage-update.md),
 [cold entry](../cold-entry.md) and [slot layout](../boot-slots.md).

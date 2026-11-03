@@ -4,7 +4,7 @@ The [FatFs port](../drivers/storage/fatfs_port.c) reads files from a FAT12,
 FAT16, FAT32 or exFAT volume on the microSD card. A resident image can then load
 mimus models and configuration by path from an ordinary card partition, in place
 of fixed sector ranges. The port reads through the polled
-[SD/eMMC core](mmc.md) and never writes to the card. Card writes remain limited
+[SD/eMMC core](sd-card.md) and never writes to the card. Card writes remain limited
 to the backup-first [storage update service](storage-update.md).
 
 Status: implemented and host-modeled. Host checks cover FAT16, FAT32 and exFAT
@@ -177,8 +177,8 @@ script regenerates the card images and does not keep them.
 
 - Link the port into the resident OS image or the supervised read service, and
   choose the owning task, its deadlines and its idle function.
-- Read a physical card. Every physical prerequisite of the [SD core](mmc.md) and
-  its [platform binding](mmc-platform.md) still applies, and no SD command has
+- Read a physical card. Every physical prerequisite of the [SD core](sd-card.md) and
+  its [platform binding](sd-card.md) still applies, and no SD command has
   run on either board.
 - GPT cards, volumes above 2 TiB, more than one volume, concurrent access from
   several tasks and any write remain unsupported.

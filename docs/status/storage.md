@@ -8,25 +8,25 @@ Native SD identification, bounded reads, backup-first updates, slot loading, col
 
 | Capability | Status | Key figure | Evidence and design |
 | --- | --- | --- | --- |
-| PIO reads, 50 MHz, four-bit, 3.3 V | qualified on the board | 21.4 to 21.9 MB/s per request | [sd-dma](../designs/sd-dma.md); `1793602100319385552-a0551753` |
-| Descriptor-DMA read, 64 KiB, sixteen descriptors | qualified on the board | transfer 3,332 us; CRCs match PIO | [sd-dma](../designs/sd-dma.md); `sd-dma.jsonl` `sd-dma-chain-read` |
+| PIO reads, 50 MHz, four-bit, 3.3 V | qualified on the board | 21.4 to 21.9 MB/s per request | [SD card reference](../sd-card.md); `1793602100319385552-a0551753` |
+| Descriptor-DMA read, 64 KiB, sixteen descriptors | qualified on the board | transfer 3,332 us; CRCs match PIO | [SD card reference](../sd-card.md); `sd-dma.jsonl` `sd-dma-chain-read` |
 | SD Status (ACMD13), FAT32 mount | qualified on the board | allocation unit 4 MiB (8,192 sectors) in 519 us; 457 sectors backed up | `1793612289390889939-c86b87e7`, `1793602559946667231-3a060254` |
-| FAT32 write service, CMD25 DMA writes | qualified on the board | 14.7 MB/s flushed; flush p50 256 ms, p99 803 ms; recovery after a cut writes 1,536 bytes | [storage-write](../designs/storage-write.md), [mmc-multiblock-write](../designs/mmc-multiblock-write.md); `storage-write-qualification` |
-| Re-entry of a card at 1.8 V, SDR25 | qualified on the board | 21.4 MB/s per request | [sd-uhs-recovery](../designs/sd-uhs-recovery.md); `1793649661736969334-9742cb48` |
-| UHS-I SDR104 at 150 MHz, read only | qualified on the board | 47.6 MB/s per request, 27.4 MB/s sustained; window 16 to 63, delay 40 | [sd-uhs](../designs/sd-uhs.md); `1793650532228649180-1fb49397` |
-| Session-start resolution algorithm | host-tested | 256 cut sessions all usable | [sd-uhs-recovery](../designs/sd-uhs-recovery.md) |
+| FAT32 write service, CMD25 DMA writes | qualified on the board | 14.7 MB/s flushed; flush p50 256 ms, p99 803 ms; recovery after a cut writes 1,536 bytes | [SD card reference](../sd-card.md); `storage-write-qualification` |
+| Re-entry of a card at 1.8 V, SDR25 | qualified on the board | 21.4 MB/s per request | [SD card reference](../sd-card.md); `1793649661736969334-9742cb48` |
+| UHS-I SDR104 at 150 MHz, read only | qualified on the board | 47.6 MB/s per request, 27.4 MB/s sustained; window 16 to 63, delay 40 | [SD card reference](../sd-card.md); `1793650532228649180-1fb49397` |
+| Session-start resolution algorithm | host-tested | 256 cut sessions all usable | [SD card reference](../sd-card.md) |
 | File-create module | host-tested | 326-sector backup | [region-test-file-write](../designs/region-test-file-write.md) |
 | FAT32 read cursor | host-tested | 511 links for 256 KiB, against 67,667 | `storage.jsonl` `storage-fat32-read-cursor` |
-| UHS-I SDR104 and SDR50 reads in the OS owner, port 3-3 | qualified on the board | 440,401,920-byte file read back at 46.8 MB/s, 0 mismatches | [sd-uhs-adoption](../designs/sd-uhs-adoption.md); `1793689311355151182-d43861f7` |
-| Writes at 1.8 V on scratch card 3-3, SDR104 at 150 MHz | qualified on the board | 512 MiB in 42 s, 13.2 MB/s flushed (card-bound), 0 restarts, 0 mismatches on read-back at 46.5 MB/s | [sd-uhs-adoption](../designs/sd-uhs-adoption.md); `1793692393910115727-f58db0e9`, `1793692075400545011-09988217` |
-| Scratch-card admission (`SSBW0004`) and mode 9 reformat | qualified on the board | format of 15,286,272 bytes | [storage-write](../designs/storage-write.md#scratch-cards) |
+| UHS-I SDR104 and SDR50 reads in the OS owner, port 3-3 | qualified on the board | 440,401,920-byte file read back at 46.8 MB/s, 0 mismatches | [SD card reference](../sd-card.md); `1793689311355151182-d43861f7` |
+| Writes at 1.8 V on scratch card 3-3, SDR104 at 150 MHz | qualified on the board | 512 MiB in 42 s, 13.2 MB/s flushed (card-bound), 0 restarts, 0 mismatches on read-back at 46.5 MB/s | [SD card reference](../sd-card.md); `1793692393910115727-f58db0e9`, `1793692075400545011-09988217` |
+| Scratch-card admission (`SSBW0004`) and mode 9 reformat | qualified on the board | format of 15,286,272 bytes | [SD card reference](../sd-card.md) |
 | DDR50, GPT, multiple volumes | open | | |
 | Autonomous OS boot from the card | open | | |
 
 ## Open work
 
 1. Qualify physical installation, autonomous OS boot, cold controller and supply state, reset retirement and power-loss recovery.
-2. Explain the restart loop that gave up with the platform healthy in the first two mode 0 faults on port 3-3 (`1793690551898353510-7e2b465d`, `1793690890150131786-bfd9daeb`: aux 0, `board_live` true, lifetime not passed). The record that would say why was overwritten and has been fixed; no fault has occurred since, so provoke one and read the aux. `apps/os/large_sd.c` selects SDR104 (150 MHz), SDR50 (100 MHz), SDR25, SDR12, or high or default speed at 3.3 V, re-enters at 1.8 V for a card found already at 1.8 V, and steps the mode down after two faults in a row on reads and writes alike; writes at SDR104 run in the new timing mode and wait out the controller's write-busy timeout. Port 3-1 has run at 3.3 V only. See [the adoption design](../designs/sd-uhs-adoption.md) and [the recovery design](../designs/sd-uhs-recovery.md). Five image-level SD checks are stale and waived in `checks/gate-inputs.json`; rewrite them against the image. The board documents disagree on whether DC1SW2 powers the card, so no supply cycle is attempted.
+2. Explain the restart loop that gave up with the platform healthy in the first two mode 0 faults on port 3-3 (`1793690551898353510-7e2b465d`, `1793690890150131786-bfd9daeb`: aux 0, `board_live` true, lifetime not passed). The record that would say why was overwritten and has been fixed; no fault has occurred since, so provoke one and read the aux. `apps/os/large_sd.c` selects SDR104 (150 MHz), SDR50 (100 MHz), SDR25, SDR12, or high or default speed at 3.3 V, re-enters at 1.8 V for a card found already at 1.8 V, and steps the mode down after two faults in a row on reads and writes alike; writes at SDR104 run in the new timing mode and wait out the controller's write-busy timeout. Port 3-1 has run at 3.3 V only. See [the adoption design](../sd-card.md) and [the recovery design](../sd-card.md). Five image-level SD checks are stale and waived in `checks/gate-inputs.json`; rewrite them against the image. The board documents disagree on whether DC1SW2 powers the card, so no supply cycle is attempted.
 3. Measure sustained throughput on broader extents and cards, and qualify card replacement, removal and recovery, and voltage timing.
 4. Implement SDR50 and DDR50; add GPT, multiple volumes and clients.
 5. Write qualification beyond one cut: more interruption points, other cards, directories other than `/sunstone-test/`, concurrent writers.
