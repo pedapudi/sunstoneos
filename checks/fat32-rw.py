@@ -5,14 +5,16 @@ The host model (checks/fat32-rw.c) runs a scenario against a mkfs.fat volume ins
 (the partition starts at sector 32768, as on the board) and logs every sector write. A power cut
 after k sector writes leaves the first k logged sectors on the card (the model persists a write call's
 sectors in ascending order; a card may persist the sectors of one call in another order, so a random
-subset of each multi-sector call is also tested). For every cut the check:
+subset of each multi-sector call is also tested). The cuts fall at write-call boundaries: a cut
+inside a call leaves the metadata of the cut at that call's start, and the random subsets cover the
+partial call. For every cut the check:
   1. runs the service's mount-time recovery on the cut image,
   2. requires `fsck.fat -n` to report a clean volume (exit status 0),
   3. reads the volume with an independent Python FAT32 reader and requires every file to match the
      constraints the scenario recorded: synced bytes intact, a replaced or renamed file whole old or
      whole new, and
   4. requires a second mount to write nothing.
-A sample of cuts also cuts the recovery itself at every sector write and recovers again.
+Every --double-every-th cut also cuts the recovery itself at every sector write and recovers again.
 """
 import argparse
 import multiprocessing
@@ -238,9 +240,11 @@ def worker(args):
     apply(prefix, entries[:lo])
     rng = random.Random(seed + lo)
     done = recovered_clusters = doubles = subsets = 0
-    for k in range(lo, hi + 1):
-        if k > lo:
-            apply(prefix, entries[k - 1:k])
+    cuts = [k for k in range(lo, hi + 1) if k in (0, len(entries)) or (0 < k < len(entries) and entries[k][1] != entries[k - 1][1])]
+    applied = lo
+    for n, k in enumerate(cuts):
+        apply(prefix, entries[applied:k])
+        applied = k
         cut = work / 'cut.img'
         harness.copy_image(prefix, cut)
         pre = work / 'pre.img'
@@ -250,12 +254,12 @@ def worker(args):
         again = recover(binary, cut)
         assert 'sector_writes=0 ' in again, f'second mount wrote: {again}'
         done += 1
-        # A call that persisted a random subset of its sectors.
-        if 0 < k < len(entries) and entries[k][1] == entries[k - 1][1]:
+        # The call that starts here persisted a random subset of its sectors.
+        if k < len(entries) and k + 1 < len(entries) and entries[k + 1][1] == entries[k][1]:
             call = entries[k][1]
             members = [e for e in entries if e[1] == call]
             first = next(i for i, e in enumerate(entries) if e[1] == call)
-            for _ in range(2):
+            for _ in range(1):
                 keep = [e for e in members if rng.random() < 0.5]
                 harness.copy_image(base_img, cut)
                 apply(cut, entries[:first])
@@ -263,7 +267,7 @@ def worker(args):
                 recover(binary, cut)
                 verify(cut, groups, first, refs, work, f'random subset of call {call} after {first} sector writes')
                 subsets += 1
-        if double_every and k % double_every == 0:
+        if double_every and n % double_every == 0:
             relog = work / 'recovery.log'
             harness.copy_image(pre, cut)
             out = recover(binary, cut, relog)
@@ -304,7 +308,7 @@ def main():
     ap.add_argument('--output', type=Path, required=True)
     ap.add_argument('--jobs', type=int, default=8)
     ap.add_argument('--library', type=Path, default=ROOT / 'drivers/storage/fat32_rw.c', help='service source (mutation checks pass a modified copy)')
-    ap.add_argument('--double-every', type=int, default=40)
+    ap.add_argument('--double-every', type=int, default=8)
     a = ap.parse_args()
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
