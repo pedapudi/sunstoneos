@@ -41,6 +41,7 @@ static inline int a733_mmc_dma_chain(volatile const struct sunxi_mmc_dma_descrip
 static inline int a733_mmc_module_setting(enum sunxi_mmc_sd_profile profile,
                                         unsigned divisor,uint32_t *out)
 {
+    if(divisor==SUNXI_MMC_MODULE_IDENT){*out=UINT32_C(0x8000001d);return profile==SUNXI_MMC_SD_UHS_SDR104;}
     unsigned m=divisor&0xffu,source=(divisor&SUNXI_MMC_MODULE_300M)?2u:1u;
     int ok=!(divisor&~(0xffu|SUNXI_MMC_MODULE_300M))&&(profile==SUNXI_MMC_SD_UHS_SDR104?
         ((source==2&&m==1)||(source==1&&(m==2||(m>=4&&m<=32)))):(source==1&&m>=4&&m<=32));

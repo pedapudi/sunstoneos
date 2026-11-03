@@ -32,7 +32,7 @@ enum sunxi_mmc_uhs_outcome { SUNXI_MMC_UHS_NONE, SUNXI_MMC_UHS_SDR104,
     SUNXI_MMC_UHS_SDR50 };     /* SDR50 at 100 MHz with a tuning window: the card lacks SDR104 or its sweep found no window */
 /* Why the mode changed from the one in force (card.mode_log). */
 enum sunxi_mmc_mode_reason { SUNXI_MMC_MODE_NONE, SUNXI_MMC_MODE_NO_WINDOW, SUNXI_MMC_MODE_CARD_LACKS, SUNXI_MMC_MODE_CEILING,
-    SUNXI_MMC_MODE_ERRORS, SUNXI_MMC_MODE_RETUNE_FAILED };
+    SUNXI_MMC_MODE_ERRORS, SUNXI_MMC_MODE_RETUNE_FAILED, SUNXI_MMC_MODE_RETUNE };
 struct sunxi_mmc_mode_event { uint8_t from, to, reason, signal_1v8; };   /* from and to are card.timing values */
 #define SUNXI_MMC_MODE_LOG 6u
 /* sd_signal operations and QUERY capability bits. */
@@ -43,6 +43,8 @@ struct sunxi_mmc_mode_event { uint8_t from, to, reason, signal_1v8; };   /* from
 #define SUNXI_MMC_SIGNAL_300M 2u /* A stable 300 MHz module parent exists. */
 /* sd_module divisor flag: divide the 300 MHz parent instead of 400 MHz. */
 #define SUNXI_MMC_MODULE_300M 0x100u
+/* sd_module divisor 0x200 (UHS-I profile): the identification clock again, the 24 MHz oscillator divided by 30, for a restart. */
+#define SUNXI_MMC_MODULE_IDENT 0x200u
 #define SUNXI_MMC_TUNING_DELAYS 64u /* SAMP_DL_SW steps, manual 11.3.8.37. */
 enum sunxi_mmc_state { SUNXI_MMC_COLD, SUNXI_MMC_IDENTIFY,
     SUNXI_MMC_READY, SUNXI_MMC_READING, SUNXI_MMC_DONE, SUNXI_MMC_FAULT,
@@ -204,7 +206,7 @@ struct sunxi_mmc {
     /* UHS-I switch and tuning progress. */
     uint64_t signal_us, attempt_us;
     unsigned sd_sig, tune_delay, tune_repeat, tune_recover, tune_forced, tune_hung;
-    uint8_t s18r, signal_window, tuning, tune_failed, tune_attempt, after_clock, observe_s18, reenter, sdr25_only, uhs_func, ceil1;
+    uint8_t s18r, signal_window, tuning, tune_failed, tune_attempt, after_clock, observe_s18, reenter, sdr25_only, uhs_func, ceil1, restart, restarted;
     uint8_t tuning_block[64];
 };
 /* Zero storage before its first use. Single task owner; no concurrent ISR or
@@ -229,6 +231,14 @@ int sunxi_mmc_sdr25_only(struct sunxi_mmc *);
 /* After init and before open, UHS-I profile: the highest bus speed mode identification may select (a card.timing value: 3 SDR104, 2 SDR50,
  * 1 SDR25 or high speed, 0 SDR12 or default speed). The default is 3. A card at 3.3 V is limited to 1 whatever the ceiling. */
 int sunxi_mmc_set_ceiling(struct sunxi_mmc *, unsigned timing);
+/* UHS-I profile, an SD card that is idle (READY) or whose last read failed with a controller, card or timeout error: forget the identification and
+ * identify again under a new ceiling (SDR104 3, SDR50 2, SDR25 1, SDR12 0; a card at 3.3 V is limited to 1 or, with 0, to default speed). A card at 1.8 V
+ * is re-entered at 1.8 V with no CMD11 and the bank is not touched, so the ladder of such a card stays at 1.8 V. The step is recorded in card.mode_log with
+ * the reason. The controller is reset, the card clock stopped, the module returned to the identification clock and the cold setup run again by the
+ * following polls; the state is IDENTIFY until READY. Returns 0 for any other state, for a write in progress or a deadline in the past. */
+int sunxi_mmc_restart(struct sunxi_mmc *, unsigned ceiling, enum sunxi_mmc_mode_reason why, uint64_t absolute_deadline_us);
+/* A failed read the restart can recover: the error is a controller, card or timeout error and no write was running. */
+int sunxi_mmc_recoverable(const struct sunxi_mmc *);
 /* Entire range and byte/sector command argument are validated before MMIO.
  * Borrowed storage must remain exclusive through DONE or terminal FAULT.
  */

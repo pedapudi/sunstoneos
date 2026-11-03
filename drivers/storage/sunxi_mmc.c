@@ -214,6 +214,48 @@ static void mode_note(struct sunxi_mmc *h, unsigned from, unsigned to, enum sunx
     if (h->card.mode_steps < 255) ++h->card.mode_steps;
 }
 
+int sunxi_mmc_recoverable(const struct sunxi_mmc *h)
+{
+    return UHS_ON && h && h->initialized && h->state == SUNXI_MMC_FAULT && !h->writing && h->config.kind == SUNXI_MMC_SD &&
+           h->config.sd_profile == UHS && (h->result.error == SUNXI_MMC_CONTROLLER || h->result.error == SUNXI_MMC_CARD || h->result.error == SUNXI_MMC_TIMEOUT);
+}
+int sunxi_mmc_restart(struct sunxi_mmc *h, unsigned ceiling, enum sunxi_mmc_mode_reason why, uint64_t deadline)
+{
+    if (!UHS_ON || !h || !h->initialized || h->entered || h->config.kind != SUNXI_MMC_SD || h->config.sd_profile != UHS || ceiling > 3 ||
+        deadline <= h->last_us || h->writing || !h->config.ops.sd_module || (h->state != SUNXI_MMC_READY && !sunxi_mmc_recoverable(h))) return 0;
+    struct sunxi_mmc fresh = {0};
+    fresh.config = h->config; fresh.initialized = 1; fresh.irq_taken = h->irq_taken; fresh.irq_context = h->irq_context; fresh.last_us = h->last_us;
+    fresh.card.signal_1v8 = h->card.signal_1v8; fresh.card.mode_steps = h->card.mode_steps;
+    for (unsigned i = 0; i < SUNXI_MMC_MODE_LOG; ++i) fresh.card.mode_log[i] = h->card.mode_log[i];
+    fresh.reenter = h->card.signal_1v8; fresh.ceil1 = (uint8_t)(ceiling + 1); fresh.sdr25_only = ceiling < 2;
+    mode_note(&fresh, h->card.timing, ceiling < 3 && ceiling < h->card.timing ? ceiling : h->card.timing, why);
+    fresh.restart = 1; fresh.deadline_us = deadline; fresh.state = SUNXI_MMC_IDENTIFY;
+    *h = fresh; return 1;
+}
+/* The steps before the cold setup of a restart: reset the controller, clear the transfer state, stop the card clock with DAT0 masked (a card that was mid-read
+ * may still hold it), and return the module to the identification clock. */
+static void restart_step(struct sunxi_mmc *h)
+{
+    uint32_t v;
+    switch (h->restart) {
+    case 1:
+        if (!rd(h, 0, &v) || !wr(h, 0, v | 7u)) return;
+        ++h->restart; return;
+    case 2:
+        if (!rd(h, 0, &v) || (v & 7u)) return;
+        if (!wr(h, 0x30, 0) || !wr(h, 0x8c, 0) || !wr(h, 0x80, 0) || (h->config.dma && !wr(h, 0x88, 0x337u)) || !rd(h, 0x38, &v) || !wr(h, 0x38, v & 0xffffu) ||
+            !rd(h, 0x100, &v) || !wr(h, 0x100, v & ~0x1fff0005u) || !wr(h, 4, MASK_DAT0) || !fence(h) || !wr(h, 0x18, UPDATE)) return;
+        ++h->restart; return;
+    case 3:
+        if (!rd(h, 0x18, &v) || (v & START)) return;
+        if (!rd(h, 0x38, &v) || !wr(h, 0x38, v & 0xffffu) || !wr(h, 4, 0) || !rd(h, 4, &v)) return;
+        if (v) { fault(h, SUNXI_MMC_CONTROLLER); return; }
+        if (h->config.ops.sd_module(h->config.context, h->config.token, SUNXI_MMC_MODULE_IDENT) != 1) { fault(h, SUNXI_MMC_IO); return; }
+        ++h->restart; return;
+    default:
+        h->restart = 0; h->restarted = 1; h->setup = 0; return;
+    }
+}
 int sunxi_mmc_open(struct sunxi_mmc *h, uint64_t deadline)
 {
     if (!h || !h->initialized || h->entered || h->state != SUNXI_MMC_COLD ||
@@ -445,7 +487,7 @@ static void setup(struct sunxi_mmc *h)
         if (!rd(h, 0x18, &v)) return;
         if (v & START) { fault(h, SUNXI_MMC_ADMISSION); return; }
         if (!rd(h, 0x3c, &v)) return;
-        if (v & (BUSY | START)) { fault(h, SUNXI_MMC_ADMISSION); return; }
+        if ((v & START) || ((v & BUSY) && !h->restarted)) { fault(h, SUNXI_MMC_ADMISSION); return; }
         if (!rd(h, 0x80, &v)) return;
         if (v & (1u << 7)) { fault(h, SUNXI_MMC_ADMISSION); return; }
         if (!wr(h, 0, 7)) return;
@@ -1290,7 +1332,8 @@ void sunxi_mmc_poll(struct sunxi_mmc *h)
 #endif
     h->wait = SUNXI_MMC_WAIT_NONE;
     if (h->state == SUNXI_MMC_READING) ++h->result.polls;
-    if (h->setup < 6) setup(h);
+    if (UHS_ON && h->restart) restart_step(h);
+    else if (h->setup < 6) setup(h);
     else if(h->protocol==P_SD_CLOCK)sd_clock(h);
     else if(h->last_us<h->retry_us){h->wait=SUNXI_MMC_WAIT_TIMER;h->wait_us=(uint32_t)(h->retry_us-h->last_us>UINT32_MAX?UINT32_MAX:h->retry_us-h->last_us);}
     else if(UHS_ON&&h->protocol==P_SD_SIGNAL)sd_signal(h);

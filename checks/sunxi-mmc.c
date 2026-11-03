@@ -135,7 +135,7 @@ static void command(struct model *m, uint32_t cmd)
     m->data_command = 0; m->fifo_total = m->fifo_pos = 0;
     switch (n) {
     case 0:
-        assert(cmd & (1u << 15)); assert(arg == 0); m->state = 0; break;
+        assert(cmd & (1u << 15)); assert(arg == 0); m->state = 0; m->selected = 0; m->ocr_calls = 0; m->app = 0; break;   /* a reset card is idle and unselected */
     case 8:
         if (m->kind == SUNXI_MMC_SD) {
             assert(!m->state && arg == 0x1aa && !(cmd & (1u << 9)));

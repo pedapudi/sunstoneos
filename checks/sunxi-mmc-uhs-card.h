@@ -23,7 +23,7 @@ struct uhs {
     unsigned width, sdr, sdr104, sdr104_busy, set_refuses, cmd11_timeout, no_dat_low, no_dat_high;
     unsigned pending_done, no_cc, no_vsd, set_fails, bad_caps, fatal_delay, cmd19, cmd11, cmd6_uhs, cmd6_hs;
     unsigned window[2][2], s18r_seen, cmd11_before_cmd2, cid_seen, dat0_masked;
-    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18, sdr50, set_refuses50, nohs, win50_start, win50_width, tune_kinds, stuck, stuck_always, dat0_busy, unfixable, card_err_next, hang_always;
+    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18, read_fail, read_fail_fast, read_fail_always, sdr50, set_refuses50, nohs, win50_start, win50_width, tune_kinds, stuck, stuck_always, dat0_busy, unfixable, card_err_next, hang_always;
     /* Fuzz injection (see fuzz in sunxi-mmc-uhs.c): one fault, armed by the driver before attempt inj_nth of delay inj_delay, of kind inj_mode with
      * the bit mask inj_bits. Write-side kinds (interrupt bits, R1 bits, no completion, stuck command) apply to the next CMD19; read-side kinds
      * (one read of the controller control register; the status register until the controller is reset). */
@@ -128,6 +128,7 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
         m->reg[0x38/4] = VSD;
         u->phase = 1; u->answered = m->now; return 1;
     }
+    if (cmd == 0) { u->cid_seen = 0; u->sdr = 0; if (u->base.command_count > 40) u->base.command_count = 0; }   /* the log is bounded; a restart begins with CMD0 */
     if (cmd == 2) { u->cid_seen = 1; if (u->cmd11) u->cmd11_before_cmd2 = 1; assert(u->phase == 0 || u->phase == 3); }
     if (m->selected && (cmd == 55 || cmd == 51 || cmd == 6 || cmd == 19)) {
         reply(m, cmd, value, arg);
@@ -182,6 +183,11 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
             }
         }
         return 1;
+    }
+    /* A read that fails with a data CRC error: the next read_fail reads, every read while the mode is SDR50 or SDR104, or every read. */
+    if ((cmd == 17 || cmd == 18) && (u->read_fail || (u->read_fail_fast && u->sdr >= 2) || u->read_fail_always)) {
+        if (u->read_fail) --u->read_fail;
+        int r = write32(m, off, value); m->reg[0x38/4] |= 1u << 7; return r;
     }
     return write32(m, off, value);
 }

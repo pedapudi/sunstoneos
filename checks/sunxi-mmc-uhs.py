@@ -218,7 +218,25 @@ for name, old_text, new_text in mutations:
     run = subprocess.run([str(directory / 'core')], capture_output=True, text=True)
     assert run.returncode != 0, 'mutation survived: ' + name
     killed.append(name)
-print('mode-ladder mutations killed: ' + ', '.join(killed))
+# Mutations of the runtime recovery, each caught by the platform check: the platform and core sources are replaced by a mutated copy in the platform build.
+runtime_mutations = [
+    ('no-runtime-step-down', 'drivers/storage/a733_mmc_platform.c', 'ceiling=timing-1;why=SUNXI_MMC_MODE_ERRORS;', 'ceiling=timing;why=SUNXI_MMC_MODE_ERRORS;'),
+    ('no-retune-first', 'drivers/storage/a733_mmc_platform.c', 'if(p->recover_errors>=2){', 'if(p->recover_errors>=1){'),
+    ('restart-forgets-1v8', 'drivers/storage/sunxi_mmc.c', 'fresh.reenter = h->card.signal_1v8;', 'fresh.reenter = 0;'),
+    ('restart-keeps-mode-ceiling', 'drivers/storage/sunxi_mmc.c', 'fresh.ceil1 = (uint8_t)(ceiling + 1);', 'fresh.ceil1 = 0;'),
+]
+for name, relative, old_text, new_text in runtime_mutations:
+    original = (ROOT / relative).read_text()
+    assert original.count(old_text) == 1, (name, original.count(old_text))
+    directory = a.output / ('mutant-' + name); directory.mkdir()
+    mutated = directory / Path(relative).name; mutated.write_text(original.replace(old_text, new_text))
+    command = sanitize + ['-Wno-unused-function'] + [str(mutated) if source == relative else source for source in sources] + ['checks/a733-mmc-uhs.c', '-o', str(directory / 'platform')]
+    build = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+    assert build.returncode == 0, (name, build.stderr)
+    run = subprocess.run([str(directory / 'platform')], capture_output=True, text=True)
+    assert run.returncode != 0, 'mutation survived: ' + name
+    killed.append(name)
+print('mutations killed: ' + ', '.join(killed))
 nm = subprocess.run(['/usr/lib/llvm-21/bin/llvm-nm', str(a.output / 'sunxi_mmc-no-uhs.o')], capture_output=True, text=True, check=True).stdout
 assert not any(name in nm.split() for name in ('sd_signal', 'tune_recover', 'tune_advance', 'uhs_registers', 'tuning_pattern', 'set_delay'))
 frames = {}

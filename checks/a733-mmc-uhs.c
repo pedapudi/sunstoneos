@@ -68,7 +68,7 @@ static int uhs_platform_write(void *v, uintptr_t a, uint32_t value)
     assert(a == s->platform.module || a == s->platform.bus);
     if (a == s->platform.module) {
         uint32_t setting = value & 0x07001f1fu;
-        assert(setting == 29 || setting == 0x01000003 || setting == 0x01000001 || setting == 0x02000000);
+        assert(setting == 29 || (setting & ~31u) == 0x01000000 || setting == 0x02000000);   /* identification, 400 MHz / 2 to 32, 300 MHz / 1 */
         if (value & (1u << 31)) {
             if (!s->module_at) s->module_at = s->power.now;
             if (setting != 29) { ++module_writes; last_module = value; }
@@ -141,6 +141,50 @@ static void lost(uint8_t *buffer, uintptr_t address, uint32_t clear, uint32_t se
     assert(uhs_step() == A733_MMC_RETAINED && m.platform.core.borrowed == buffer && u.base.command_count == commands);
     retained();
 }
+/* Runtime recovery through the platform: a failed read is A733_MMC_ERROR, the recovery policy identifies again at the same ceiling (a new tuning) and then steps
+ * down one mode, the card at 1.8 V is re-entered at 1.8 V with no new PF write or CMD11, and every step is in the card's record. */
+static enum a733_mmc_platform_result failed_read(uint8_t *buffer)
+{
+    assert(a733_mmc_platform_read(&m.platform, 8, 8, buffer, 4096, 9000000) == A733_MMC_PENDING);
+    enum a733_mmc_platform_result r = A733_MMC_PENDING;
+    for (unsigned i = 0; i < 400 && r != A733_MMC_ERROR; ++i) { r = uhs_step(); assert(r != A733_MMC_RETAINED); }
+    assert(r == A733_MMC_ERROR && m.platform.stage == 15 /* READY */ && !m.platform.fault);
+    return r;
+}
+static void recover_to_ready(void)
+{
+    assert(a733_mmc_platform_recover(&m.platform, 9000000) == A733_MMC_PENDING);
+    enum a733_mmc_platform_result r = settle();
+    if (r != A733_MMC_READY) fprintf(stderr, "recover: result %d platform stage %u fault line %u refused %u core state %d error %d protocol %u setup %u restart %u step %u\n", (int)r, m.platform.stage, m.platform.fault_line, m.platform.refused, (int)m.platform.core.state, (int)m.platform.core.result.error, m.platform.core.protocol, m.platform.core.setup, m.platform.core.restart, m.platform.core.command_step);
+    assert(r == A733_MMC_READY);
+}
+static void runtime_recovery(uint8_t *buffer)
+{
+    /* One error: identify again at the same ceiling, SDR104 tuned again, with no PF write, CMD11 or bank restore. */
+    begin(1, 1, 3); assert(settle() == A733_MMC_READY); read_ok(buffer);
+    unsigned cmd19 = u.cmd19; u.read_fail = 1; failed_read(buffer); recover_to_ready();
+    assert(m.platform.core.card.timing == 3 && m.platform.core.card.mode_steps == 1 && m.platform.core.card.mode_log[0].reason == SUNXI_MMC_MODE_RETUNE);
+    assert(u.cmd19 > cmd19 && pf_writes == 1 && u.cmd11 == 1 && !restore_writes && m.platform.signal == 2 && m.platform.core.card.reentered);
+    read_ok(buffer); assert(m.platform.recover_errors == 0);
+    /* Two errors in a row step down: this card has no SDR50, so SDR25 at 50 MHz, still at 1.8 V. */
+    u.read_fail = 2; failed_read(buffer); recover_to_ready(); failed_read(buffer); recover_to_ready();
+    assert(m.platform.core.card.timing == 1 && m.platform.core.card.signal_1v8 && m.platform.core.card.card_hz == 50000000 && u.sdr == 1);
+    assert(m.platform.core.card.mode_steps == 3 && m.platform.core.card.mode_log[2].reason == SUNXI_MMC_MODE_ERRORS && m.platform.core.card.mode_log[2].from == 3);
+    assert(pf_writes == 1 && u.cmd11 == 1 && !restore_writes);
+    read_ok(buffer);
+    /* An error storm in the tuned modes walks down SDR104, SDR50, SDR25: the card has SDR50 and every fast read fails. */
+    begin(1, 1, 3); u.sdr50 = 1; assert(settle() == A733_MMC_READY); u.read_fail_fast = 1;
+    for (unsigned i = 0; i < 8 && m.platform.core.card.timing >= 2; ++i) { failed_read(buffer); recover_to_ready(); }
+    assert(m.platform.core.card.timing == 1 && m.platform.core.card.signal_1v8 && pf_writes == 1 && u.cmd11 == 1);
+    read_ok(buffer);
+    /* A 3.3 V card steps down from high speed to default speed, and a card that fails at every mode is final. */
+    begin(2, 1, 2); assert(settle() == A733_MMC_READY); assert(m.platform.core.card.timing == 1 && !m.platform.core.card.signal_1v8);
+    u.read_fail = 2; failed_read(buffer); recover_to_ready(); failed_read(buffer); recover_to_ready();
+    assert(m.platform.core.card.timing == 0 && u.sdr == 0 && m.platform.core.card.card_hz == 25000000 && !pf_writes);
+    read_ok(buffer);
+    u.read_fail_always = 1; failed_read(buffer); recover_to_ready(); failed_read(buffer);
+    assert(a733_mmc_platform_recover(&m.platform, 9000000) == A733_MMC_INVALID);
+}
 int main(void)
 {
     static uint8_t buffer[4096];
@@ -174,6 +218,7 @@ int main(void)
     assert(a733_mmc_platform_native_address(SUNXI_MMC_SD, 0x04020100, 1));
     assert(!a733_mmc_platform_native_address_selected(SUNXI_MMC_EMMC, A733_MMC_EMMC_SDC2, 0x04022100, 1));
     assert(!a733_mmc_platform_native_address_selected(SUNXI_MMC_EMMC, A733_MMC_EMMC_SDC3, 0x04023100, 0));
+    runtime_recovery(buffer);
     puts("PASS UHS-I platform: one adaptive-mode PF write, 150 MHz from PERI0_300M, 100 MHz without it, "
          "3.3 V high speed in manual PF mode, retained bank timeout and three retained losses after the switch");
     return 0;
