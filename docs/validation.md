@@ -146,7 +146,8 @@ and does the same to the earlier gates of the same landing label. It keeps `summ
 everything until a later gate of that label passes. The deletion is `slim_gate` in `tools/clean-generated.py` and obeys its refusals:
 no evidence records, sources or build directory that an evidence record or queue entry names. The per-checkout build directories
 (`gate-os-*`, `gate-img-*`, `gate-central-*`) are the incremental build caches and stay; `clean-generated.py stale-builds DAYS` prunes them.
-`clean-generated.py slim-gates [--apply]` applies the same rule to the passing gate directories already on disk.
+`clean-generated.py` never deletes a build directory that a check or tool names as `build/NAME` in its source (for example `npu-graph-variants`);
+the set is derived from the sources. `clean-generated.py slim-gates [--apply]` applies the same rule to the passing gate directories already on disk.
 
 ### The gate keeps its temporary files off /tmp
 
