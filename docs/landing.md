@@ -1,10 +1,12 @@
 # Landing a branch
 
 `tools/land.py` lands a worker branch on `bringup` without the coordinator. It
-performs the steps that the coordinator performed by hand: merge `bringup` into
-the branch, run the full gate, validate the evidence records and the progress
-view, fast-forward `bringup` and push it. `checks/land.py` checks the tool
-against a temporary origin.
+merges `bringup` into the branch, runs the checks that the change earns,
+fast-forwards `bringup` and pushes it. The checks scale with risk: a change to
+`docs/` runs three quick checks and no gate, and any other change runs the gate in
+its affected mode. The full suite runs afterwards on the `bringup` tip, in its
+own process, and blocks nothing. `checks/land.py` checks the tool against a
+temporary origin.
 
 ## Use
 
@@ -19,11 +21,33 @@ coordinator passes it.
 
 Further options serve the check: `--cache`, `--bringup-worktree`, `--remote`,
 `--wait SECONDS` (wait for the lock instead of refusing at once),
-`--gate-command`, `--evidence-command`, `--progress-command` and
-`--registry-command`. The four command options also read `LAND_GATE_COMMAND`,
-`LAND_EVIDENCE_COMMAND`, `LAND_PROGRESS_COMMAND` and `LAND_REGISTRY_COMMAND`.
-They exist so that the check can replace the gate; a real landing uses the
-defaults.
+`--gate-command`, `--evidence-command`, `--links-command`, `--registry-command`
+and `--full-gate-command`. Each command option also reads an environment
+variable (`LAND_GATE_COMMAND`, `LAND_EVIDENCE_COMMAND`, `LAND_LINKS_COMMAND`,
+`LAND_REGISTRY_COMMAND`, `LAND_FULL_GATE_COMMAND`). They exist so that the check
+can replace the gate; a real landing uses the defaults.
+
+## Checks by risk
+
+The tool compares the diff against `bringup` with the glob `docs/**`.
+
+- **Only `docs/`, evidence records included.** The tool runs `tools/evidence.py
+  validate`, `tools/evidence.py sync --check` and `checks/docs-links.py` in the
+  worker's worktree, and no gate. The landing record names the gate `docs-only`.
+  A Markdown file outside `docs/` is code for this purpose.
+- **Anything else.** The tool starts the gate in its affected mode, `integration-gate.sh
+  TREE LABEL --reason TEXT --affected BASE..TIP --keep-going`, and runs the
+  registry check (`checks/gate-inputs.py`) beside it. The gate selects the
+  checks whose inputs the diff touches and reports every failure. If the registry
+  check refuses a check that the gate registry (`checks/gate-inputs.json`)
+  neither runs nor waives with a reason, the tool stops the gate and refuses. The
+  gate passes when `~/.cache/sunstoneos/build/gate-LABEL/summary.txt` has a
+  `PASS selected` line and no `FAIL` line; a refusal quotes the failing lines.
+
+The gate runs in the integration worktree `~/.cache/sunstoneos/land-integration`,
+which the tool detaches at the commit to land. Every code landing gates there,
+so the build directories persist from one landing to the next and a gate rebuilds
+only what changed, and a worker cannot move the tree under the gate.
 
 ## Sequence
 
@@ -40,30 +64,50 @@ defaults.
    the tool again.
 5. It requires that `bringup` is an ancestor of the merge result and that the
    branch holds at least one commit beyond `bringup`.
-6. It compares the diff against `bringup` with the protected paths (below),
-   then runs `checks/gate-inputs.py`. That check refuses, in about ten seconds,
-   a check that the gate registry (`checks/gate-inputs.json`) neither runs nor
-   waives with a reason. The gate would otherwise fail on that check after its
-   full run.
-7. It runs `~/.cache/sunstoneos/bin/integration-gate.sh WORKTREE LABEL --reason
-   TEXT --full` with the label `land-BRANCH-MMDD-HHMMSS`. The gate passes when
-   `~/.cache/sunstoneos/build/gate-LABEL/summary.txt` has a `PASS selected`
-   line and no `FAIL` line.
-8. It runs `tools/evidence.py validate` and `checks/progress.py --output DIR`
-   with a new directory under `~/.cache/sunstoneos/build/`.
-9. It requires that the worktree is still clean and unchanged. If `bringup`
-   moved during the gate, it merges again and gates again, up to three times.
-10. It fast-forwards `bringup` in the `bringup` worktree with `git merge
-    --ff-only` and pushes `bringup` to the remote. If the push fails after the
-    fast-forward, the tool reports it and the push is repeated by hand; the
-    tool does not undo the fast-forward.
-11. It prints the landed commit and the gate label, and appends one line to
+6. It compares the diff against `bringup` with the protected paths (below).
+7. It runs the checks of the diff's tier (above).
+8. It requires that the worktree is still clean and unchanged. If `bringup`
+   moved during the checks, it merges again and checks again, up to three times.
+9. It fast-forwards `bringup` in the `bringup` worktree with `git merge
+   --ff-only` and pushes `bringup` to the remote. If the push fails after the
+   fast-forward, the tool reports it and the push is repeated by hand; the
+   tool does not undo the fast-forward.
+10. It prints the landed commit and the gate label, and appends one line to
     `~/.cache/sunstoneos/landings.jsonl` with the time, branch, landed tip, gate
-    label, reason and approver.
+    label, reason and approver. After a code landing it starts `tools/full-gate.py`
+    in a new session and does not wait for it.
 
 The tool never deletes files, never uses `git stash`, `git reset --hard` or
 `git clean`, never forces a push and never pipes the output of `git merge`. It
 exits with status 1 and prints `REFUSED:` and the cause for every refusal.
+
+## Evidence logs
+
+`.gitattributes` marks `docs/evidence/*.jsonl` with `merge=union`. Each log is
+append-only, so two branches that each add a record merge to a log with both, and
+`tools/evidence.py validate` accepts the result. The status tables that
+`tools/evidence.py sync` generates in `docs/status/*.md` are not covered: two
+branches that add records to one subsystem still conflict in that table, and the
+second worker regenerates it with `sync` after merging.
+
+## The gate lock
+
+`tools/integration-gate.py` takes the host-wide lock `~/.cache/sunstoneos/gate.lock`
+and waits for it when another gate holds it, so a direct call and a landing never
+run gates side by side. The full suite takes `~/.cache/sunstoneos/gate-full.lock`
+instead, so that it blocks no landing and no worker's gate.
+
+## Full suite on bringup
+
+`tools/full-gate.py` runs the gate with `--full` in its own worktree,
+`~/.cache/sunstoneos/full-gate-tree`, detached at the `bringup` tip. A code landing
+starts it; the coordinator can run it by hand. One run at a time: a run that
+finds another running exits at once, and the next landing's run covers the newer
+tip. It writes `~/.cache/sunstoneos/full-gate.txt` and appends one line to
+`~/.cache/sunstoneos/full-gate.jsonl` with the commit, label, duration, verdict,
+failing steps and the last passing commit. A failure names the failing steps and
+the commit range since the last passing run, `LAST_PASS..TIP`; the first bad
+commit lies in that range.
 
 ## Protected paths
 
@@ -95,8 +139,10 @@ coordinator.
 
 `checks/land.py --output DIR` builds a bare origin, a `bringup` worktree and
 worker worktrees in the new directory `DIR`, and replaces the gate with a stub.
-It covers a clean landing, a landing when `bringup` moves during the gate, and
-the refusals for unmerged paths, a failed gate, an unregistered check,
-protected paths, a dirty
-worktree, a branch with nothing to land and a held lock. It also covers the
-coordinator approval.
+It covers a code landing in affected mode, the `docs/`-only landing that runs the
+evidence and link checks and no gate, the full suite starting after a code
+landing, a landing when `bringup` moves during the gate, the refusals for unmerged
+paths, a failed gate, a missing registry entry, protected paths, a dirty
+worktree, a branch with nothing to land and a held lock, and the coordinator
+approval. It also covers `tools/full-gate.py`, the union merge of two appended
+evidence records and the gate lock of `tools/integration-gate.py`.
