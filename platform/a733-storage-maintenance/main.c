@@ -8,8 +8,8 @@ static struct a733_storage_native_boot boot;
 static struct a733_maintenance_transfer transfer;
 void vApplicationStackOverflowHook(TaskHandle_t task,char *name)
 {(void)task;platform_panic(name,2);}
-void a733_storage_maintenance_stop(void)
-{a733_maintenance_revoke(a733_maintenance_native_lease());}
+void a733_storage_maintenance_stop(unsigned status)
+{(void)status;a733_maintenance_revoke(a733_maintenance_native_lease());}
 void a733_smp_diagnostic_start(void)
 {
     uint8_t raw[A733_STORAGE_SESSION_BYTES];

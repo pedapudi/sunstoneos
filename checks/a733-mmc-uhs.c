@@ -249,6 +249,10 @@ static void write_recovery(uint8_t *buffer)
 }
 /* The retry budget of an owner is the ladder: faults with no success in between walk SDR104, SDR50, SDR25, SDR12 and end at the lowest mode, in A733_MMC_RECOVERIES calls
  * to the recovery, the last of them refused. A budget below it ends a session at SDR50 (the fourth format run on 3-3 did). */
+static void busy_field_case(void)
+{
+    assert(os_sd_busy_field(0) == 0 && os_sd_busy_field(7) == (UINT64_C(7) << 40) && os_sd_busy_field(300) == (UINT64_C(255) << 40));   /* saturating, in 47:40 of word 2 */
+}
 static void recovery_budget(uint8_t *buffer)
 {
     begin(1, 1, 3); u.sdr50 = 1; assert(settle() == A733_MMC_READY);
@@ -322,7 +326,7 @@ int main(void)
     assert(!a733_mmc_platform_native_address_selected(SUNXI_MMC_EMMC, A733_MMC_EMMC_SDC2, 0x04022100, 1));
     assert(!a733_mmc_platform_native_address_selected(SUNXI_MMC_EMMC, A733_MMC_EMMC_SDC3, 0x04023100, 0));
     runtime_recovery(buffer);
-    write_recovery(buffer); recovery_budget(buffer);
+    write_recovery(buffer); recovery_budget(buffer); busy_field_case();
     puts("PASS UHS-I platform: one adaptive-mode PF write, 150 MHz from PERI0_300M, 100 MHz without it, "
          "3.3 V high speed in manual PF mode, retained bank timeout and three retained losses after the switch");
     return 0;

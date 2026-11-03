@@ -104,6 +104,8 @@ def main():
     slow_img = out / 'slow.img'; make_image(slow_img)
     d = run(binary, slow_img, 0, out / 'slow.result', 1500)
     assert d['status'] == 11, d
+    words = [1 | 3 << 4 | 1 << 8, 150000000, 41 | 7 << 40, 0, 0]
+    assert host.decode_mode(words)['busy_timeouts'] == 7 and host.decode_mode(words)['sample_delay'] == 41      # the busy timeouts in 47:40 of word 2
     assert host.guard_stop(d) and not host.failures(d), d                      # stopping at the guard after a clean close is a pass, with its bytes and rate reported
     assert host.failures(dict(d, status=8)) and host.failures(dict(d, mismatches=1)) and host.failures(dict(d, detail=d['detail'] + 1)), d
     assert 0 < d['written_bytes'] < FILE and d['detail'] == d['written_bytes'], d

@@ -1,6 +1,6 @@
 --- a/platform/a733-smp-cached/continue.S
 +++ b/platform/a733-smp-cached/continue.S
-@@ -273,6 +273,58 @@
+@@ -273,6 +273,59 @@
  1:  dsb sy
      str x2, [x1, #16]
      dsb sy
@@ -55,11 +55,12 @@
 +    add x3, x3, x4, lsl #12
 +    msr spsel, #1
 +    mov sp, x3
++    mov x0, x20
 +    bl a733_storage_maintenance_stop
      cbnz x19, .Lpark
      mov x0, x20
      mov x1, x21
-@@ -307,10 +359,11 @@
+@@ -307,10 +360,11 @@
      b \handler
      .space 124
  .endm

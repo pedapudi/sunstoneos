@@ -31,6 +31,9 @@ static inline uint64_t os_sd_recover_aux(unsigned result, unsigned platform_faul
     return (uint64_t)(result & 7u) | (uint64_t)(platform_fault & 1u) << 3 | (uint64_t)(refusal & 7u) << 4 | (uint64_t)(lifetime & 1u) << 7 | (uint64_t)(piece & 3u) << 8 |
            (uint64_t)(idst & 15u) << 10 | (uint64_t)(result_exit & 1u) << 14;
 }
+/* The write-busy timeouts of the controller that DMA writes cleared and waited out (RINTSTS bit 18, result.busy_timeouts per write), summed over the session and saturating at 255, in
+ * bits 47:40 of os_sd_mode word 2. */
+static inline uint64_t os_sd_busy_field(unsigned total) { return (uint64_t)(total > 255u ? 255u : total) << 40; }
 /* The value word of the record for a stage and a detail, as sd_owner.c's diag_word builds it. */
 static inline uint32_t os_sd_note_value(unsigned stage, uint64_t detail) { return (uint32_t)(stage & 0x3fu) | (uint32_t)(detail & 0x3ffffffu) << 6; }
 /* The first two faults that the recovery acted on, for the report (os_sd_mode word 4): each in 26 bits, the core's error in 3:0, its protocol step in 9:4 and the low 16 bits

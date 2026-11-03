@@ -201,7 +201,7 @@ static void record_mode(void)
         log |= (uint64_t)((c->mode_log[i].from & 3u) | (c->mode_log[i].to & 3u) << 2 | (c->mode_log[i].reason & 15u) << 4) << (8 * i);
     os_sd_mode[1] = c->card_hz;
     os_sd_mode[2] = (uint64_t)c->sample_delay | (uint64_t)c->tuning_start << 8 | (uint64_t)c->tuning_width << 16 | (uint64_t)c->group1_support << 24 |
-                    (uint64_t)(c->ocr >> 24 & 1u) << 32;
+                    (uint64_t)(c->ocr >> 24 & 1u) << 32 | os_sd_busy_field(busy_total);
     os_sd_mode[3] = log | os_sd_fault_blocks(c);
     os_sd_mode[4] = os_sd_fault_events(c);
     os_sd_mode[0] = 1u | (uint64_t)(c->timing & 3u) << 4 | (uint64_t)(c->signal_1v8 ? 1u : 0u) << 8 | (uint64_t)(c->uhs_outcome & 15u) << 12 |
@@ -215,7 +215,7 @@ static int found_at_1v8(void)
     return sunxi_mmc_card_found_at_1v8(&platform.core.card);
 }
 #define RECOVER_US 3000000u
-static unsigned saved_aux; static uint64_t saved_where;   /* where the last write fault stopped, kept across the restart that discards the core's result */
+static unsigned saved_aux, busy_total; static uint64_t saved_where;   /* where the last write fault stopped, kept across the restart that discards the core's result */
 static uint64_t first_fault_detail; static unsigned first_fault_piece, first_fault_idst;       /* the core's error, protocol step and interrupt status at the first failed request (apps/os/sd_note.h), kept for the failure record */
 static uint64_t last_sector; static uint32_t last_count; static uint8_t *last_dma;
 #ifdef OS_SD_WRITE
@@ -657,6 +657,7 @@ static int hw_write_piece(uint64_t sector, uint32_t count, const uint8_t *src)
     do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
     int ok = r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.confirmed_blocks == count;
     if (ok) { ++os_sd_write_pieces; os_sd_write_sectors += count; }
+    if (result.busy_timeouts) { busy_total += result.busy_timeouts; os_sd_mode[2] = (os_sd_mode[2] & ~(UINT64_C(255) << 40)) | os_sd_busy_field(busy_total); }
     return ok;
 }
 void os_sd_close_owner(void);
