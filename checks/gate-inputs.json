@@ -2596,7 +2596,7 @@
   "a733-radio-session.py": "real defect or unexplained failure, reported to the coordinator | fails at checks/a733-radio-session.c:304: 55ec8993 stopped decoding DCDC8 and DCDC9 selector codes above 87 (docs/designs/pmic-reference-reconciliation.md), so the shared PMIC model's DCDC8 code 100 is undecoded and the radio platform's 1.8 V rail check (drivers/net/a733_radio_platform.c:186) refuses; the fix is a voltage decision, awaiting approval",
   "a733-smp-cached.py": "helper module of a runnable check (not run on its own) | loaded by deadline.py",
   "aic8800-supplicant.py": "helper module of a runnable check (not run on its own) | loaded by aic8800-security.py",
-  "cached-device-reservations.py": "real defect or unexplained failure, reported to the coordinator | a733_cached_devices_prepare() returns 0 against the frozen fixtures at line 137; stale fixture or regression, reported",
+  "cached-device-reservations.py": "real defect or unexplained failure, reported to the coordinator | convolution service passes a fixed 524,288-byte command buffer; the assembler requires the graph-sized allocation (87afaecf); fixed by the NPU cap removal",
   "cold-entry.py": "helper module of a runnable check (not run on its own) | loaded by standalone-boot-loader.py",
   "cpu-runtime-qualification.py": "helper module of a runnable check (not run on its own) | loaded by os-cpu-return-services.py",
   "fault-decode.py": "helper module of a runnable check (not run on its own) | loaded by fault-capture.py",
