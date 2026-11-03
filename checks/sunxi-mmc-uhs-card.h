@@ -23,7 +23,7 @@ struct uhs {
     unsigned width, sdr, sdr104, sdr104_busy, set_refuses, cmd11_timeout, no_dat_low, no_dat_high;
     unsigned pending_done, no_cc, no_vsd, set_fails, bad_caps, fatal_delay, cmd19, cmd11, cmd6_uhs, cmd6_hs;
     unsigned window[2][2], s18r_seen, cmd11_before_cmd2, cid_seen, dat0_masked;
-    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18, read_fail, read_fail_fast, read_fail_always, sdr50, set_refuses50, nohs, win50_start, win50_width, tune_kinds, stuck, stuck_always, dat0_busy, unfixable, card_err_next, hang_always;
+    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18, read_fail, read_fail_fast, read_fail_always, sdr50, set_refuses50, nohs, win50_start, win50_width, tune_kinds, stuck, stuck_always, dat0_busy, prog_busy, unfixable, card_err_next, hang_always;
     /* Fuzz injection (see fuzz in sunxi-mmc-uhs.c): one fault, armed by the driver before attempt inj_nth of delay inj_delay, of kind inj_mode with
      * the bit mask inj_bits. Write-side kinds (interrupt bits, R1 bits, no completion, stuck command) apply to the next CMD19; read-side kinds
      * (one read of the controller control register; the status register until the controller is reset). */
@@ -106,6 +106,9 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
          * clock update for this reason). The wait ends when the update is made with the mask set. */
         if (u->dat0_busy && !(m->reg[4/4] & (1u << 31))) { m->reg[0x18/4] = value; return 1; }
         u->dat0_busy = 0;
+        /* A card programming after an aborted write holds DAT0 low until it is reset by CMD0 (specification 4.3: CMD0 terminates programming): a clock update waits for
+         * DAT0 unless it is masked, and the mask applies to each update, not once. */
+        if (u->prog_busy && !(value & VSW) && (value & (1u << 21)) && !(m->reg[4/4] & (1u << 31))) { m->reg[0x18/4] = value; return 1; }
         if (u->unfixable && u->stuck) { m->reg[0x18/4] = value; return 1; }       /* a controller that stays stuck through reset and update */
         return write32(m, off, value);
     }
@@ -128,7 +131,7 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
         m->reg[0x38/4] = VSD;
         u->phase = 1; u->answered = m->now; return 1;
     }
-    if (cmd == 0) { u->cid_seen = 0; u->sdr = 0; if (u->base.command_count > 40) u->base.command_count = 0; }   /* the log is bounded; a restart begins with CMD0 */
+    if (cmd == 0) { u->prog_busy = 0; u->cid_seen = 0; u->sdr = 0; if (u->base.command_count > 40) u->base.command_count = 0; }   /* the log is bounded; a restart begins with CMD0 */
     if (cmd == 2) { u->cid_seen = 1; if (u->cmd11) u->cmd11_before_cmd2 = 1; assert(u->phase == 0 || u->phase == 3); }
     if (m->selected && (cmd == 55 || cmd == 51 || cmd == 6 || cmd == 19)) {
         reply(m, cmd, value, arg);

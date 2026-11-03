@@ -288,3 +288,36 @@ Run: mode 0 as before, on the image of the commit that carries this section, wit
 **Fix.** `uhs_registers` drives command and data at 180 for SDR50 and SDR104 (the 400 kHz setup and the untuned modes keep the v5p3x rows). The Python check now asserts the v4p6x rule from the pinned source, and the core check asserts both drive bits for every tuned mode.
 
 **Prediction for the next write run.** The format (mode 9) completes at SDR104 with status 0, `written_bytes` 15,286,272, no faults in `sd_mode.faults`, 29,856 sectors in about 120 calls. If a fault remains, its RINTSTS names the next candidate and the restart's platform result is in aux.
+
+## The data drive phase did not change the fault (entry `1793687913540627897-0dcbebfc`), and the restart after a write fault
+
+**The record.** The same value as the first format run, `0x801c8da6`: write fault in `P_WRITE_DMA` (core error 6), RINTSTS `0x801c`, no CRC status token (bit 15). Aux 372 is now the restart's result: RETAINED (4) at platform stage IDENTIFY (14) with the fault flag set. So driving data at 180 did not change the first write fault, and the restart that follows it fails. The two are separate problems.
+
+**The restart (fixed).** A card left programming by an aborted CMD25 holds DAT0 low (specification 4.3: busy as long as the card is in the programming state; CMD0 terminates the programming). A clock update waits for DAT0 unless the clock control masks it. The restart masked DAT0 in its first update only; the cold setup that follows updated the clock without the mask (clock off, then clock on), so the controller waited for a busy that only CMD0 could end, and CMD0 comes after the clock is on. The identification stopped at the deadline. The vendor masks DAT0 in every clock update (`sunxi_mmc_oclk_onoff` calls `__sunxi_mmc_do_oclk_onoff` with `ignore_dat0` 1), so a card left busy never blocks it. Every clock update in the core's setup and clock change now sets the mask and clears it afterwards.
+- CMD12 first is not needed: CMD0 sets every card to idle in any state (4.2.1) and ends the programming. CMD0 does not change the signalling voltage, so a card at 1.8 V stays there; the identification already treats S18A clear with the re-entry flag as the 1.8 V card and sends no CMD11 (`P_SD_OCR`, `h->reenter`). The host keeps the bank at 1.8 V; the restart returns the module to the identification clock and resets the controller before CMD0.
+- Linux: `mmc_sd_hw_reset` is `mmc_power_cycle` (power off, 1 ms, power up) followed by `mmc_sd_init_card` with the old card, so it negotiates 1.8 V again. The board has the switch for it (`vmmc-supply = <&reg_dc1sw2>` for sdc0) and the platform already holds that rail, but a power cycle would also drop the card's 1.8 V state and cost a full re-negotiation; CMD0 is enough here.
+- The host model had a DAT0 hold only for a failed read, cleared by the first masked update. It now has a card that stays busy after an aborted write until CMD0 (`prog_busy`), and a clock update without the mask waits for it. Before the fix the platform check stops in the restart at the unmasked clock enable (setup step 4, platform stage IDENTIFY); after the fix it completes. The mutation `setup-clock-update-unmasked` restores the old update and is killed.
+
+**Prediction for the next format run.** The first write at SDR104 faults as before; the restart now completes (CMD0 ends the programming); the second consecutive fault steps down; the format completes at SDR50 or SDR25 with status 0, `written_bytes` 15,286,272, restarts 2 or 3, mode steps 2 or 3, and `sd_mode.faults` holding the two faults (error 6, protocol 35, RINTSTS `0x801c`).
+
+**The register state of a tuned SDR104 write, the vendor's and ours.** The vendor's state is the v4p6x method that its in-kernel tuning leaves (`mmc-sdc3/sunxi-mmc-v4p5x.c`, hash pinned in `checks/sunxi-mmc-uhs.py`) over the v5p3x host (`sunxi-mmc-v5p3x.c`, `sunxi-mmc.c`); lines are those files'.
+
+| Register | Vendor | Ours | Same |
+| --- | --- | --- | --- |
+| DRV_DL 0x140 phases | command 180, data 180 (`v4p5x:419-431`, SDR50 and SDR104 set `dat_drv_ph` 1 at `:308-313`) | 180, 180 (`uhs_registers`, since `9d54a1fc`) | yes |
+| SAMP_DL 0x144 | `SW_EN | kernel tuning delay` (`:425-429`) | `0x80 | tuned delay` | yes |
+| DS_DL 0x148 | `(DS_DL & ~0x3f) | ds_dly (0) | SW_EN` (`:431-435`); the manual calls it the data strobe delay (HS400) | never written (reset value `0x2000`, software enable clear) | **no** (HS400 field; unlikely to matter) |
+| NTSR 0x5c | 1x mode (bit 31 clear, `:811-814`); other bits at reset | bit 31, 9:8, 5:4, 0 cleared | yes |
+| CSDC 0x54 | CRC_DET_PARA 3 (`:820-833`) | 3 | yes |
+| EDSD 0x10c | HS400 bit 31 clear | clear | yes |
+| THLD 0x100 (write) | block size 512 in 27:16, write enable (bit 2) set, read enable clear (`thld_ctl :866-907`) | the same (`P_WRITE_DMA`) | yes |
+| SFC 0x104 | not written (`sfc_dis` only for SMHC v4p5p1 and v4p9; this is v5.3) | bypass bit cleared, which is the reset value | yes |
+| FTRGL 0x40 | `dma_tl` of sdc0: `0x200700f8` (`sunxi-mmc.c:3630`) | `0x200700f8` | yes |
+| TMOUT 0x08, WIDTH 0x0c | `0xffffffff`, 4-bit | the same | yes |
+| A12A 0x58, IMASK 0x30, CMDR | 0, errors + auto-command-done, CMD25 with data, write, response CRC, wait-pre-over, auto stop | the same | yes |
+| GCTRL, DMAC 0x80, DLBA, IDST, IDIE | resets before each DMA, DMA enable, `FIX_BURST | IDMA_ON` (`0x82`), IDIE for reads only | the same | yes |
+| DBGC 0x50 | `0xdeb` at host init (`sunxi-mmc.c:722`), debug counters | never written | no (debug) |
+| CLKCR 0x04 | enable, `CCLK_CTRL` low-power gating from `sunxi-power-save-mode`, `MASK_DATA0` in every update | enable only, no gating; the mask is now in every update | gating differs |
+| Pad drive strength (SDC0 pins) | command and data 10 mA (code 0), clock 30 mA (code 2), pull-up, 1.8 V power source in the `mmc_1v8` state (`sun60iw2p1.dtsi:997-1030`) | 20 mA (code 1) on all six pins, pull-up (`large_sd.c:181`) | **no** |
+
+**What differs.** In the SMHC registers only the data-strobe delay and the debug register, neither used by SDR104 writes. The one state that differs and is plausible for a fault that appears only when the host drives the data lines (reads pass, and so do commands) is the pad drive: the vendor drives the data and command pins at 10 mA and the clock at 30 mA, we drive all at 20 mA. A faster clock edge and slower data edges move the data against the clock at the card, which is what the 90 and 180 degree phases are tuned around. That is a candidate, not a finding: the board has not been run with the vendor's strengths, and the 50 MHz writes that pass on 3-1 used ours. The step-down makes it a performance question instead of a correctness one; it should be tried on 3-3 after this run.

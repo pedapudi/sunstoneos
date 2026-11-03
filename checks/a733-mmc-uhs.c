@@ -178,6 +178,7 @@ static void write_fault(uint8_t *buffer, enum sunxi_mmc_error error)
     struct sunxi_mmc *c = &m.platform.core;
     c->state = SUNXI_MMC_FAULT; c->result.error = error; c->writing = 1; c->dma_write = 1; c->borrowed = buffer; c->borrowed_bytes = 512;
     c->protocol = 27; c->result.interrupts = 0x8080u;               /* a data CRC error and an end-bit error, as a CRC status failure raises them */
+    u.prog_busy = 1;                                                /* the card is left programming, with DAT0 low, until the restart resets it with CMD0 */
     enum a733_mmc_platform_result r = uhs_step();
     assert(r == A733_MMC_ERROR && m.platform.stage == 15 && !m.platform.fault);
 }

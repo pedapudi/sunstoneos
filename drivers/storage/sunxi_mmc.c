@@ -496,7 +496,7 @@ static void setup(struct sunxi_mmc *h)
         ++h->setup; return;
     case 2:
         if (!rd(h, 0, &v) || (v & 7u)) return;
-        if (!wr(h, 4, 0) || !wr(h, 0x30, 0) || !wr(h, 0x8c, 0) ||
+        if (!wr(h, 4, MASK_DAT0) || !wr(h, 0x30, 0) || !wr(h, 0x8c, 0) ||      /* every clock update masks DAT0, as the vendor's does: a card left programming holds it low */
             !wr(h, 0x80, 0) || !wr(h, 0, START)) return;
         ++h->setup; return;
     case 3:
@@ -510,11 +510,11 @@ static void setup(struct sunxi_mmc *h)
         ++h->setup; return;
     case 4:
         if (!rd(h, 0x18, &v) || (v & START)) return;
-        if (!interrupts(h) || !wr(h, 4, 1u << 16) || !fence(h) || !wr(h, 0x18, UPDATE)) return;
+        if (!interrupts(h) || !wr(h, 4, (1u << 16) | MASK_DAT0) || !fence(h) || !wr(h, 0x18, UPDATE)) return;
         ++h->setup; return;
     case 5:
         if (!rd(h, 0x18, &v) || (v & START)) return;
-        if (!interrupts(h) || !rd(h, 4, &v)) return;
+        if (!interrupts(h) || !wr(h, 4, 1u << 16) || !rd(h, 4, &v)) return;
         if (v != (1u << 16)) { fault(h, SUNXI_MMC_CONTROLLER); return; }
         if (!rd(h, 0xc, &v)) return;
         if (v) { fault(h, SUNXI_MMC_CONTROLLER); return; }
@@ -917,11 +917,11 @@ static void sd_clock(struct sunxi_mmc *h)
     switch(h->sd_ios){
     case 0:
         if(!rd(h,0x18,&v)||(v&START)||!rd(h,0x3c,&v)||(v&BUSY))return;
-        if(!interrupts(h)||!wr(h,4,0)||!fence(h)||!wr(h,0x18,UPDATE))return;
+        if(!interrupts(h)||!wr(h,4,MASK_DAT0)||!fence(h)||!wr(h,0x18,UPDATE))return;
         ++h->sd_ios;return;
     case 1:
         if(!rd(h,0x18,&v)||(v&START))return;
-        if(!interrupts(h)||!rd(h,4,&v))return;
+        if(!interrupts(h)||!wr(h,4,0)||!rd(h,4,&v))return;
         if(v){fault(h,SUNXI_MMC_CONTROLLER);return;}
         /* Fresh time/ownership surround the provider's bounded rate change. */
         if(!time_ok(h)||h->config.ops.retained(h->config.context,h->config.token)!=1){fault(h,SUNXI_MMC_ADMISSION);return;}
@@ -931,7 +931,7 @@ static void sd_clock(struct sunxi_mmc *h)
     case 2:
         if(uhs){
             h->tuning=1;h->tune_forced=0;h->tune_hung=0;h->tune_attempt=0;h->card.sample_delay=0;
-            if(!uhs_registers(h,1)||!fence(h)||!wr(h,0x18,UPDATE))return;
+            if(!uhs_registers(h,1)||!wr(h,4,(1u<<16)|MASK_DAT0)||!fence(h)||!wr(h,0x18,UPDATE))return;
             ++h->sd_ios;return;
         }
         /* UHS fallback at 1.8 V leaves tuning with SDR25's fixed phases and
@@ -942,11 +942,11 @@ static void sd_clock(struct sunxi_mmc *h)
          * CMD/data sample phases0/1 for <=26MHz/default and <=52MHz/HS. */
         if(!rd(h,0x140,&v)||!wr(h,0x140,(v&~(3u<<16))|((hs?3u:1u)<<16))||
            !rd(h,0x5c,&v)||!wr(h,0x5c,(v&~(START|0x331u))|START|(hs?0x110u:0))||
-           !wr(h,4,1u<<16)||!fence(h)||!wr(h,0x18,UPDATE))return;
+           !wr(h,4,(1u<<16)|MASK_DAT0)||!fence(h)||!wr(h,0x18,UPDATE))return;
         ++h->sd_ios;return;
     case 3:
         if(!rd(h,0x18,&v)||(v&START))return;
-        if(!interrupts(h))return;
+        if(!interrupts(h)||!wr(h,4,1u<<16))return;
         if(uhs){if(!uhs_registers(h,0))return;}
         else {
             if(!rd(h,4,&v))return;
