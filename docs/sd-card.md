@@ -201,7 +201,6 @@ A write-capable image cannot write until `ss_storage_enable` receives a **bounds
 **Limits.**
 - **Write rate.** The write rate at SDR104 is the card's programming rate, about 13 MB/s on the 3-3 card; the bus runs at 150 MHz and idles. Larger caches or other cards may program faster or slower.
 - **Cards.** Only port 3-3's card (Phison SD32G) has been written at 1.8 V, and only as a scratch card. Port 3-1's card has run at 3.3 V only.
-- **Unexplained restart give-up.** In the first two mode 0 faults on 3-3 the restart loop ended with the platform healthy (`1793690551898353510-7e2b465d`, `1793690890150131786-bfd9daeb`); the aux that would explain it had been overwritten and has been fixed, and no fault has occurred since. The restart path after a write fault is host-checked (`checks/a733-mmc-uhs.c:write_recovery`) and was exercised on the board with the earlier fault (`1793688694680089992-4e190fcd`, `1793689119969310811-abcfb6bc`).
 - **Not implemented.** DDR50, GPT, multiple volumes, a power cycle of the card, the busy-clear interrupt in place of the DAT0 timer.
 
 ## 12. How to test a change
