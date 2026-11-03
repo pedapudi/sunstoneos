@@ -13,4 +13,9 @@
 #ifdef SUNSTONE_LIST_CHECK
 #define configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES 1
 #endif
+/* The object-lock check runs a hook inside every successful queue send, within the queue's critical section. */
+#if defined(SS_OBJECT_HOOK) && !defined(__ASSEMBLER__)
+extern void ss_object_hook(void *queue);
+#define traceQUEUE_SEND(pxQueue) ss_object_hook((void *)(pxQueue))
+#endif
 #endif

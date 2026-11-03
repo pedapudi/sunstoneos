@@ -1938,7 +1938,7 @@
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +traceENTER_vTaskEnterCritical();
 +if (!xSchedulerRunning) { portDISABLE_INTERRUPTS(); { traceRETURN_vTaskEnterCritical(); return; } }
-+ssKernelObjectEnter();
++ssKernelObjectEnterFor(0, (uintptr_t)__builtin_return_address(0));
 +portINCREMENT_CRITICAL_NESTING_COUNT(ssKernelCPUId());
 +if (portGET_CRITICAL_NESTING_COUNT(ssKernelCPUId()) == 1) portASSERT_IF_IN_ISR();
 +traceRETURN_vTaskEnterCritical();

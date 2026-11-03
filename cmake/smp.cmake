@@ -141,6 +141,29 @@ if(SUNSTONE_PARTITIONED_SCHEDULER)
 endif()
 
 if(SUNSTONE_PARTITIONED_SCHEDULER)
+  # Object locks across eight cores: independent objects must not wait for each other, and shared objects keep their
+  # contents (checks/scheduler-objects-qemu.c). The queue, event group and stream buffer sources are the patched copies.
+  add_executable(scheduler-objects-qemu EXCLUDE_FROM_ALL
+    platform/qemu-smp/start.S platform/qemu-smp/platform.c runtime/memory.c
+    checks/scheduler-objects-qemu.c
+    "${smp_build}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
+    "${FREERTOS_DIR}/event_groups.c" "${FREERTOS_DIR}/stream_buffer.c"
+    "${smp_build}/port.c" "${smp_build}/portASM.S")
+  target_include_directories(scheduler-objects-qemu PRIVATE
+    checks/scheduler-partitioned-qemu-config platform/qemu-smp include runtime/include
+    "${FREERTOS_DIR}/include" "${smp_build}")
+  target_compile_definitions(scheduler-objects-qemu PRIVATE SUNSTONE_SMP_CORES=8 SS_KERNEL_TEST_ADMIN_ENTER=1 SS_WAKE=1 SS_OBJECT_HOOK=1)
+  target_compile_options(scheduler-objects-qemu PRIVATE ${SUNSTONE_KERNEL_FLAGS})
+  target_link_options(scheduler-objects-qemu PRIVATE -nostdlib -static -Wl,--gc-sections
+    -Wl,--defsym=SUNSTONE_SMP_STACKS=8
+    "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
+    "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/scheduler-objects-qemu.map")
+  set_target_properties(scheduler-objects-qemu PROPERTIES SUFFIX ".elf"
+    LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld")
+  sunstone_scheduler_partitioned_bind(scheduler-objects-qemu "${smp_build}")
+endif()
+
+if(SUNSTONE_PARTITIONED_SCHEDULER)
   add_executable(scheduler-partitioned-heap-qemu EXCLUDE_FROM_ALL
     platform/qemu-smp/start.S platform/qemu-smp/platform.c runtime/memory.c
     checks/scheduler-partitioned-qemu.c
