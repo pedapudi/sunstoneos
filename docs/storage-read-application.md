@@ -56,7 +56,7 @@ The existing 880-byte version-two session uses its former reserved word at
 offset 860 as typed `sd_profile`. Zero selects the original one-bit 400 kHz
 path. One selects four-bit default speed up to the card's CSD limit and
 25 MHz. Two requires four-bit high speed at 50 MHz. Three requests UHS-I SDR104
-at 1.8 V, with high speed as its fallback ([design](designs/sd-uhs.md)). Profile zero preserves its original
+at 1.8 V, with high speed as its fallback ([design](sd-card.md)). Profile zero preserves its original
 pin route and version-two response. Nonzero profiles also require a read-only,
 file-backed SD capability marker in the actual image. An older legacy image
 cannot be prepared for a new profile merely because its session size matches.
@@ -73,7 +73,7 @@ sequence; its preparation also requires topology authority for approved 1.8 V
 signalling, an exclusive PF bank writer, observed adaptive withstand mode and
 whole-board power removal after the lifetime.
 
-The actual [MMC controller and platform](mmc.md) read SCR, negotiate ACMD6 and,
+The actual [MMC controller and platform](sd-card.md) read SCR, negotiate ACMD6 and,
 for profile two, check and select high speed through CMD6. Card-output disable
 and completed update precede the local module-clock change. Completed timing
 and clock readback plus final CMD13 precede client access. Native and USB clients
@@ -154,7 +154,7 @@ voltage setting alone cannot establish the card's signaling mode.
 
 The pinned A733 manual's section 11.3.8.6 defines `SEND_INIT_SEQ` at command bit
 15. The pinned bootloader's `drivers/mmc/sunxi_mmc.c` sets that flag for CMD0.
-These are the existing [MMC source references](mmc.md), not runtime dependencies.
+These are the existing [MMC source references](sd-card.md), not runtime dependencies.
 The first attempt preserves the medium: it issues initialization/identification
 and read commands, with no media write, erase, trim or regulator change. A power
 cycle is a recovery action after a retained failure, rather than a requirement

@@ -179,7 +179,7 @@ static int configure(unsigned start18)
             (uint8_t)((*(volatile uint32_t *)f.drive_address >> f.drive_shift) & 15u)};
     }
     /* 20 mA (code 1) on all six pins. The board kernel's strengths (sun60iw2p1.dtsi sdc0_pins_a/b and _f/_g: the clock at 30 mA, command and data at 10 mA) were tried on 3-3 and did
-     * not change the write fault (docs/designs/sd-uhs-adoption.md); the 3.3 V high-speed writes that pass on 3-1 were made with these. */
+     * not change the write fault (docs/sd-card.md); the 3.3 V high-speed writes that pass on 3-1 were made with these. */
     for (unsigned i = 0; i < 6; ++i) config.desired[i] = (struct a733_pin_config){2, 1, 1};
     config.desired[6] = (struct a733_pin_config){0, 1, 1};
     a733_clock_mask_t scopes;
@@ -208,7 +208,7 @@ static void record_mode(void)
                     (uint64_t)(c->mode_steps & 15u) << 20 | (uint64_t)(c->ceiling & 15u) << 28 | (uint64_t)(c->reentered ? 1u : 0u) << 32 |
                     (uint64_t)(reopened & 1u) << 36 | (uint64_t)(restarts & 255u) << 40;
 }
-/* The rule of docs/designs/sd-uhs-adoption.md for a card that was identified at 3.3 V: S18A clear with SDR50 or SDR104 in the group 1 support field (bits 2 and 3
+/* The rule of docs/sd-card.md for a card that was identified at 3.3 V: S18A clear with SDR50 or SDR104 in the group 1 support field (bits 2 and 3
  * of status byte 13) is a card that already signals 1.8 V, as the 3.3 V host in front of 3-3's card measured; a card without UHS-I reports functions 2 to 4 as 0. */
 static int found_at_1v8(void)
 {

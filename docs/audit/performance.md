@@ -1127,7 +1127,7 @@ and STATUS bits 27:17 report its fill level.
    (`STORAGE_READ_MAX_BLOCKS`), its borrowed buffer, and the update path's
    two-block chunk.
 
-The 16-word bound is a documented contract ([docs/mmc.md](../mmc.md)) and an
+The 16-word bound is a documented contract ([docs/sd-card.md](../sd-card.md)) and an
 assertion in [checks/sunxi-mmc.c](../../checks/sunxi-mmc.c); both change with
 the code.
 

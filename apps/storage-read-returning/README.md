@@ -8,7 +8,7 @@ The earlier programmed-I/O image completed 256
 high-speed reads on port 3-3 (`board-session-20261025-30`). Its SDR104 run
 stopped at CMD11 (`board-session-20261025-32`). The corrected switch and this
 64 KiB path have native instruction-model evidence, not board evidence. See
-[the DMA design](../../docs/designs/sd-dma.md) for the measured PIO baseline
+[the DMA design](../../docs/sd-card.md) for the measured PIO baseline
 and predicted DMA costs. The default admission policy requires whole-board power removal after every
 DMA lifetime. A reviewed exception permits normal continuation after the
 bounded 3.3 V read under the conditions below.

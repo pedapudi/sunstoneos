@@ -1,6 +1,6 @@
 #ifndef SUNSTONE_FS_H
 #define SUNSTONE_FS_H
-/* POSIX-like file calls for applications (docs/designs/storage-write.md). They sit on the FAT32
+/* POSIX-like file calls for applications (docs/sd-card.md). They sit on the FAT32
  * write service (fat32_rw.h): writes go to a RAM buffer, the buffer flushes in allocation-unit
  * writes, and fsync is the durability point. Every call returns a non-negative value or a negated
  * errno value. The newlib system calls in sunstone_fs_syscalls.c wrap these, so fopen, fwrite,

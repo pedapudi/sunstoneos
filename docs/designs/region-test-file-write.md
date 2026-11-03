@@ -1,6 +1,6 @@
 # Design: creating a file in an empty FAT32 volume
 
-Status: **host-tested.** The file-create module (`drivers/storage/fat32_create.c`, `include/fat32_create.h`) is checked on the host by `checks/fat32-create.py` and is linked by no image. The board created the large-region test file with the general [storage write service](storage-write.md) instead, which also creates the directory `sunstone-test`.
+Status: **host-tested.** The file-create module (`drivers/storage/fat32_create.c`, `include/fat32_create.h`) is checked on the host by `checks/fat32-create.py` and is linked by no image. The board created the large-region test file with the general [storage write service](../sd-card.md) instead, which also creates the directory `sunstone-test`.
 
 The large application region test loads `/sunstone-test/sunstone-region-test.bin` (512 MiB) from the card's FAT32 volume. A PC cannot put the file there, so the board creates it: it generates the content with the counter-mode SHA-256 stream of `tools/region_test_file.py`, so nothing is uploaded, and writes one file into the empty volume.
 

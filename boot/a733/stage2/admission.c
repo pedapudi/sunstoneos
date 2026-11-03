@@ -160,7 +160,7 @@ int a733_stage2_card_admission(uint32_t module_hz)
 }
 
 /* The loader's retained() callback asks this before every SD core poll.
- * Presence comes from the active-low PF6 card-detect pin (docs/mmc.md),
+ * Presence comes from the active-low PF6 card-detect pin (docs/sd-card.md),
  * read under the configuration that admission selected. */
 int a733_stage2_card_present(void)
 {
