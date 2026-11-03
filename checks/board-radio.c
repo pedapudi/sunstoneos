@@ -265,6 +265,11 @@ int main(void)
     scan_only.report_memory.allocate=arena_allocate;
     assert(board_radio_init(&app,&scan_only)&&guard_calls==1&&board_radio_report(&app));
     scheduler=taskSCHEDULER_RUNNING;app.session.dispatcher.initialized=1;time_us=100;
+    /* The net client task has nothing to do and must not fail the session: the first probe run retained the radio
+     * at its first poll because this returned -1 and revoked the owner's recovery state. */
+    task=(TaskHandle_t)(uintptr_t)5;
+    assert(board_radio_client_poll(&app)==0&&!(atomic_load(&recovery_state)&4)&&!atomic_load(&app.failed));
+    task=scan_only.session.owner_task;
     assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&scan_calls==1&&app.stage==SCANNING);
     assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==SCANNING&&take_scan_calls==1);
     assert(board_radio_report(&app)->ap_count==2&&board_radio_report(&app)->head.aps_reported==3);

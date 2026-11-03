@@ -531,6 +531,9 @@ static int listener_poll(struct board_radio *r)
 }
 int board_radio_client_poll(struct board_radio *r)
 {
+    /* A scan-only session has no network and no client exchange: the client task idles. Reporting failure
+     * here would revoke the owner's recovery state before its first poll. */
+    if(r&&r->self==r&&r->constructed&&r->config.scan_only)return 0;
     if(!r||r->self!=r||!r->constructed||!r->startup_profile||
         xTaskGetCurrentTaskHandle()!=r->config.network.clients[0])return -1;
     if(atomic_load_explicit(&r->failed,memory_order_acquire)||

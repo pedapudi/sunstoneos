@@ -58,10 +58,16 @@ __attribute__((noinline)) void board_fail_note(uint32_t site,uint32_t value,cons
     (void)site;(void)value;(void)caller;
 #endif
 }
+#ifdef SUNSTONE_A733_OS_RADIO
+/* Set by an application failure (ss_fail), which runs at EL0, where the wipe's cache maintenance traps: the radio
+ * owner then wipes at EL1 (os_wifi_credential_poll). */
+_Atomic unsigned board_fail_from_el0;
+#endif
 __attribute__((noinline)) void board_fail(void *context)
 {
 #ifdef SUNSTONE_A733_OS_RADIO
-    os_wifi_credential_wipe();   /* a fault ends the session: the Wi-Fi credential leaves RAM first (EL1 only) */
+    /* A fault ends the session: the Wi-Fi credential leaves RAM first (EL1 callers only). */
+    if(!atomic_load_explicit(&board_fail_from_el0,memory_order_acquire))os_wifi_credential_wipe();
 #endif
  board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD)|SUNSTONE_CRUMB_FAIL_RETURN,(uint32_t)(uintptr_t)context,
     __builtin_return_address(0));fail_close();}
@@ -143,6 +149,9 @@ static void power(void *unused)
 static void radio_owner(void *unused)
 {
     (void)unused;for(;;){
+#ifdef SUNSTONE_A733_OS_RADIO
+        os_wifi_credential_poll(); /* EL1: the credential leaves RAM once the application has finished */
+#endif
         if(!board_live(NULL)){
             (void)board_radio_external_failure(&radio);
             atomic_store_explicit(&board.radio_result,3,memory_order_release);

@@ -1131,6 +1131,20 @@
     }
    ]
   },
+  "el0-privilege.py": {
+   "runs": [
+    {
+     "args": [
+      "{build:resradio}"
+     ]
+    },
+    {
+     "args": [
+      "{build:ret-radio-scan}"
+     ]
+    }
+   ]
+  },
   "el3-mbus.py": {
    "runs": [
     {

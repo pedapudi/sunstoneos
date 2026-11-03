@@ -6,7 +6,6 @@
 #include "cpu-return.h"
 #include "a733_radio_result.h"
 #include "os_radio_result.h"
-#include "sunstone_wifi_credential.h"
 #include <string.h>
 
 /* The host reads this symbol after the return (tools/radio_result_channel.py). It lives in BSS, zero
@@ -63,13 +62,7 @@ void os_radio_scan_step(struct board_radio *r, int result)
         atomic_store_explicit(&state, FAILED, memory_order_release);
     }
 }
-/* Called by the EL1 return supervisor: the credential record leaves RAM here, where cache maintenance is allowed. */
-void os_radio_scan_return_request(void)
-{
-    static unsigned wiped;
-    if (!wiped) { wiped = 1; os_wifi_credential_wipe(); }
-    atomic_store_explicit(&returning, 1, memory_order_release);
-}
+void os_radio_scan_return_request(void){atomic_store_explicit(&returning, 1, memory_order_release);}
 /* Down with every readback matched, or failed and published: nothing more can be shut down. */
 int os_radio_scan_return_ready(void)
 {
