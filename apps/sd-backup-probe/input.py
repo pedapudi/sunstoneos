@@ -103,7 +103,9 @@ def decode(raw, requested):
                              card_clock_hz=u[14], module_clock_hz=u[15])
     st = [struct.unpack_from('<4Q4I', raw, OFFSET['stat'] + 48 * p) for p in range(8)]
     out['phases'] = [dict(phase=p, requests=x[4], mean_ms=round(x[0] / x[4] / 1000, 3), min_ms=round(x[1] / 1000, 3), max_ms=round(x[2] / 1000, 3),
-                          over_5ms=x[5], over_10ms=x[6], window_s=round(x[3] / 24e6, 4), sum_s=round(x[0] / 1e6, 4)) for p, x in enumerate(st) if x[4]]
+                          over_5ms=x[5], over_10ms=x[6], window_s=round(x[3] / 24e6, 4), sum_s=round(x[0] / 1e6, 4),
+                          stage=dict(timing=x[7] & 3, outcome=UHS_OUTCOMES[x[7] >> 2 & 15] if (x[7] >> 2 & 15) < len(UHS_OUTCOMES) else x[7] >> 2 & 15, sample_delay=x[7] >> 6 & 63,
+                                     window_width=x[7] >> 12 & 127, window_start=x[7] >> 19 & 63, mode_steps=x[7] >> 25 & 7)) for p, x in enumerate(st) if x[4]]
     n = min(out['done'], 512)
     el = struct.unpack_from(f'<{n}I', raw, OFFSET['elapsed']); crc = struct.unpack_from(f'<{n}I', raw, OFFSET['crc'])
     win, nbytes = struct.unpack_from('<2Q', raw, 64)
@@ -122,7 +124,7 @@ def main():
     i = sub.add_parser('input')
     i.add_argument('--output', type=Path, required=True)
     i.add_argument('--ranges', nargs='+', required=True, help='FIRST:COUNT pairs, for example 0:1 32768:2')
-    i.add_argument('--uhs-mode', type=int, default=0, choices=(0, 1, 2, 3), help='0 high speed with S18A observed, 1 UHS-I lifetime 1, 2 UHS-I lifetime 2, 3 re-entry then SDR104 with tuning')
+    i.add_argument('--uhs-mode', type=int, default=0, choices=(0, 1, 2, 3, 4), help='0 high speed with S18A observed, 1 UHS-I lifetime 1, 2 UHS-I lifetime 2, 3 re-entry then SDR104 with tuning, 4 mode 3 with a restart of the identification between phases (phase 1 same ceiling, 2 SDR50, 3 SDR25)')
     i.add_argument('--reads', type=int, default=1)
     i.add_argument('--phase', action='append', default=[], metavar='FIRST_SECTOR:BLOCKS:READS[:quick]', help='one phase of a multi-phase plan (up to 8), run in order in one lifetime')
     i.add_argument('--blocks', type=int, default=8)

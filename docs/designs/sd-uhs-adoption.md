@@ -146,3 +146,21 @@ Not predicted to happen: S18A set from a card at 1.8 V; any change of the card's
 The second outcome of the prediction: CMD8 and ACMD41 answered, OCR `0xc0ff8000` (S18A clear), identification at 3.3 V high speed took 0.299 s, 32 reads of 128 KiB ran at 21.43 MB/s median (the first eight slow, as at 1.8 V), the CRCs match, the bank stayed at 3.3 V,
 the card stayed at 1.8 V, and the lifetime returned normally. The CMD6 support field was `0x801f`. This was also the first board run of the 400 kHz setup with data drive 90 degrees: identification and reads are unchanged. A card at 1.8 V read by a 3.3 V host is
 out of its signalling specification and happened to work here; the OS therefore re-enters at 1.8 V as soon as the rule above says the card is there, and does not read it at 3.3 V.
+
+## Prediction for the forced step-down restart on 3-3 (written before the run)
+
+Run: the read-only probe in mode 4 on 3-3: re-entry at 1.8 V and SDR104 as in the earlier runs, then four phases of 32 reads of 128 KiB from 4 MiB (the region that was always fast), with the platform's restart between them, as the recovery policy does after
+errors: before phase 1 the same ceiling (a new tuning), before phase 2 the ceiling SDR50, before phase 3 the ceiling SDR25. Read only; the card is at 1.8 V already and the bank is at 3.3 V, as in the previous lifetime. The restart has never run on a board; it is the
+first board run of the SDR50 mode and of the corrected data drive phase (90 degrees) in the tuned modes, for reads.
+
+| Item | Prediction |
+| --- | --- |
+| Identification | re-entry at 1.8 V, S18A clear, SDR104 at 150 MHz; a sweep window of 40 to 50 delays starting near 17; chosen delay 40 plus or minus 6 |
+| Phase 0, SDR104 | median 2.4 to 2.8 ms per request (47 to 52 MB/s); no request over 5 ms in this region apart from the first few of the lifetime |
+| Restart 1, same ceiling | no CMD11, no PF write, bank stays at 1.8 V; SDR104 again; a new window within 8 delays of the first width; mode steps 1 (reason retune); phase 1 as phase 0 within 10 percent |
+| Restart 2, ceiling SDR50 | the card reports SDR50 (group 1 support `0x801f`), so outcome SDR50 at 100 MHz with a window of at least 12 delays (most likely 30 to 50); median 3.3 to 4.2 ms (31 to 40 MB/s); mode steps 2 |
+| Restart 3, ceiling SDR25 | 50 MHz without tuning; median 6.0 to 6.2 ms (21.4 MB/s, as every earlier 50 MHz run); mode steps 3 |
+| Whole run | 128 reads, no error; the log holds (3 to 3 retune), (3 to 2 errors), (2 to 1 errors); normal close with the bank back at 3.3 V; normal return |
+| Risk | the restart is new on hardware. About one chance in three that it fails the first time. A stop reads: reason 17 (the platform refused the restart), or reason 6 or 7 with a core protocol in the identification steps (the cold setup after the restart did not accept the controller), or no stop word and a watchdog reset (a wait in the restart that never ended: reset bits, clock update or module change) |
+
+A clear difference between phase 0 and phase 1 at the same ceiling would mean that the restart leaves the controller in a different state from a cold start. SDR50 slower than SDR25 would point at its phases or its sample delay.

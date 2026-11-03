@@ -60,7 +60,7 @@ static uint8_t buffer[3 * DMA_BUFFER] __attribute__((aligned(4096)));
 static StaticTask_t tasks[2];
 static StackType_t stacks[2][4096];
 
-enum { CONSTRUCT, IDENTIFY, CARD, STATUS, READ, POLL, TAKE, CAPTURE, FAT, REGION };
+enum { CONSTRUCT, IDENTIFY, CARD, STATUS, READ, POLL, TAKE, CAPTURE, FAT, REGION, RESTART };
 static uint32_t pf_ready[3];
 /* The last raw interrupt word of a core that stopped before tuning, as 5 flags: response timeout (bit 8), response CRC error (6), response error (1),
  * command done (2), any other error bit. A silent card shows as the timeout without command done. */
@@ -100,6 +100,15 @@ static uint32_t elapsed[SDP_MAX_READS], crcs[SDP_MAX_READS];
 static uint32_t plan_total, phase_first[SDP_PHASES + 1], cur_blocks, cur_phase, cur_index;
 static struct sdp_phase_stat pstat[SDP_PHASES];
 static uint64_t bytes_total, phase_started[SDP_PHASES];
+static uint32_t restarted_phase;
+/* What the card runs in each phase, packed into the phase's spare word: timing 2 bits, UHS outcome 4, sample delay 6, window width 7, window start 6,
+ * mode steps so far 3 (apps/sd-backup-probe/input.py unpacks it). */
+static void stage_note(uint32_t phase)
+{
+    const struct sunxi_mmc_card *c = &s.platform.core.card;
+    pstat[phase].reserved = (c->timing & 3u) | ((c->uhs_outcome & 15u) << 2) | ((c->sample_delay & 63u) << 6) | ((c->tuning_width & 127u) << 12) |
+                            ((c->tuning_start & 63u) << 19) | ((c->mode_steps > 7 ? 7u : c->mode_steps) << 25);
+}
 /* The phase and index in it of request n. */
 static void locate(uint32_t n, uint32_t *phase, uint32_t *index)
 {
@@ -245,11 +254,11 @@ static int setup(void)
         .kind = SUNXI_MMC_SD, .voltage_mask = 0x00300000, .sd_profile = SUNXI_MMC_SD_HIGH_SPEED4, .dma = DESCRIPTORS,
         .observe_s18 = 1};          /* ACMD41 carries S18R and the card's S18A is kept in the OCR; CMD11 is never sent */
     if (!s.config.topology) return 0;
-    if (c->uhs_mode > 3) return 0;
+    if (c->uhs_mode > 4) return 0;
     if (c->uhs_mode) {              /* a UHS-I lifetime: the profile that moves the bank, SDR25 only, no S18A observation */
         s.config.sd_profile = SUNXI_MMC_SD_UHS_SDR104; s.config.observe_s18 = 0; s.config.sdr25_only = 1;
-        s.config.start_1v8 = c->uhs_mode >= 2;
-        if (c->uhs_mode == 3) s.config.sdr25_only = 0;       /* SDR104 and the CMD19 sweep; the core falls back to SDR25 without a window */
+        s.config.start_1v8 = c->uhs_mode >= 2;       /* mode 4: mode 3, then between phases a restart of the identification under a lower ceiling */
+        if (c->uhs_mode >= 3) s.config.sdr25_only = 0;       /* SDR104 and the CMD19 sweep; the core falls back to SDR25 without a window */
     }
     /* Establish entry state, do not require it: the pins carry whatever the boot ROM and the runner left
      * (the provider accepts the passive and the ROM JTAG patterns). The inherited fields are read here,
@@ -456,6 +465,16 @@ static int step(void)
         cur_blocks = ph->blocks;
         uint64_t first = (uint64_t)ph->first + (uint64_t)cur_index * ph->blocks;
         if (first + ph->blocks > s.card.sectors) return stop(5);
+        if (s.input.uhs_mode == 4 && !cur_index && restarted_phase < cur_phase) {
+            /* Phase 1: identify again at the same ceiling (a new tuning); phase 2: ceiling SDR50; phase 3: SDR25. Each is what the recovery policy does. */
+            static const uint8_t ceilings[4] = {3, 3, 2, 1};
+            enum sunxi_mmc_mode_reason why = cur_phase == 1 ? SUNXI_MMC_MODE_RETUNE : SUNXI_MMC_MODE_ERRORS;
+            r = a733_mmc_platform_restart(&s.platform, now + 3000000u, ceilings[cur_phase & 3], why);
+            if (r == A733_MMC_BUSY) return 0;
+            if (r != A733_MMC_PENDING) return stop(17);
+            restarted_phase = cur_phase; s.stage = RESTART; return 2;
+        }
+        if (!cur_index) stage_note(cur_phase);
         s.started = counter();
         if (!s.done) s.first_start = s.started;
         if (!cur_index) phase_started[cur_phase] = s.started;
@@ -464,6 +483,11 @@ static int step(void)
         if (r != A733_MMC_PENDING) return stop(5);
         s.stage = POLL; return 2;
     }
+    case RESTART:
+        r = a733_mmc_platform_poll(&s.platform);
+        if (r == A733_MMC_READY) { s.card = s.platform.core.card; s.stage = READ; return 2; }
+        if (r != A733_MMC_PENDING && r != A733_MMC_BUSY) return stop(17);
+        return 0;
     case POLL:
         for (;;) {
             r = a733_mmc_platform_poll(&s.platform);
