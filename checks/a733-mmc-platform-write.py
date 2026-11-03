@@ -52,7 +52,7 @@ static struct a733_clock_leases registry;
 static struct a733_platform_locks locks;
 static struct a733_mmc_platform_native native;
 static struct a733_storage_bounds bounds;
-static uint8_t blob[48 + 16 * 2];
+static uint8_t blob[48 + 16 * 2 + 16];
 /* The native adapter's register hooks: the controller window is the model, everything else reads zero. */
 uint32_t a733_native_host_load(uintptr_t a)
 { uint32_t v = 0; if (a >= platform.base && a < platform.base + 0x304) read32(NULL, (uint32_t)(a - platform.base), &v); return v; }
@@ -91,6 +91,9 @@ static int platform_core_init(const struct sunxi_mmc_config *c)
 static void bind_bounds(void)
 {
     memcpy(blob, A733_BOUNDS_MAGIC, 8); blob[8] = 1; blob[12] = 1;
+    static const uint32_t cid[4] = {0x11111111u, 0x22222222u, 0x33333333u, 0x44444444u};
+    for (unsigned i = 0; i < 4; ++i) for (unsigned k = 0; k < 4; ++k) blob[48 + 32 + 4 * i + k] = (uint8_t)(cid[i] >> (24 - 8 * k));
+    memcpy(platform.core.card.cid, cid, sizeof cid);
     struct storage_digest d; storage_digest_init(&d);
     uint8_t rec[520]; put64(rec, 0); read_card(NULL, 0, rec + 8); storage_digest_add(&d, rec, sizeof rec);
     storage_digest_end(&d, blob + 16);

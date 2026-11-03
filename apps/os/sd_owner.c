@@ -49,7 +49,9 @@ static uint32_t unit_sectors;
 static _Atomic uint64_t idle_us, wake_count, first_us;
 static _Atomic uint32_t owner_core_mask, caller_core_mask;
 static struct os_large_device proxy;
+#include "sd_note.h"
 extern uint64_t os_sd_diag[4];
+extern uint64_t os_sd_mode[5];                  /* apps/os/large_sd.c: the bus speed mode and its steps */
 
 static void finish(struct request *r, int ok)
 {
@@ -62,8 +64,8 @@ static void finish(struct request *r, int ok)
  * result | platform stage << 8), 26:24 INTID 193 before the owner masked it (enabled, pending, active), 30:28 after the mask settled. */
 static uint32_t diag_word(void)
 {
-    if (os_sd_diag[0] >= 30)                         /* a refused request: stage in 5:0, then the 26 bits of large_sd.c PLATX */
-        return (uint32_t)(os_sd_diag[0] & 0x3f) | (uint32_t)(os_sd_diag[1] & 0x3ffffff) << 6;
+    if (os_sd_diag[0] >= 30)                         /* a refused request: stage in 5:0, then the 26 bits of large_sd.c PLATX (stages 33 and 34: write_fail's core error, protocol step and interrupt status) */
+        return os_sd_note_value((unsigned)os_sd_diag[0], os_sd_diag[1]);
     return (uint32_t)(os_sd_diag[0] & 0xff) | (uint32_t)(os_sd_diag[1] & 0xffff) << 8 | (uint32_t)(os_sd_diag[2] & 7) << 24 |
            (uint32_t)(os_sd_diag[3] & 7) << 28;
 }
@@ -86,7 +88,11 @@ static void serve(struct request *r)
     /* A refused request leaves its stage as a note, except the enable refusals (stages 20 to 24: preconditions, parse, verify mismatch, binding), which are results the
      * application reports. The first failure record names the SD0 binding when it came first, and a thermal or
      * watchdog stop that follows the controller's retention cannot hide it. */
-    if (!ok && !(os_sd_diag[0] >= 20 && os_sd_diag[0] <= 24)) board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(APPLICATION), diag_word(), SUNSTONE_CRUMB_HERE());
+    if (!ok && !(os_sd_diag[0] >= 20 && os_sd_diag[0] <= 24)) {
+        /* A failed write also carries its pieces written and the bus timing in the record's aux field (bits 30:16 of the site word). */
+        uint32_t aux = (os_sd_diag[0] == 33 || os_sd_diag[0] == 34 || (os_sd_diag[0] >= 37 && os_sd_diag[0] <= 40)) ? (uint32_t)(os_sd_diag[2] & 0x7fff) : 0;
+        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(APPLICATION) | aux << 16, diag_word(), SUNSTONE_CRUMB_HERE());
+    }
     /* A failed async read reports -1 from poll; the proxy's poll reads the stored result. */
     finish(r, ok);
 }
@@ -270,6 +276,12 @@ int ss_storage_diagnostic(uint64_t out[4])
 {
     if (!out) return 0;
     for (unsigned i = 0; i < 4; ++i) out[i] = os_sd_diag[i];
+    return 1;
+}
+int ss_storage_mode(uint64_t out[5])
+{
+    if (!out) return 0;
+    for (unsigned i = 0; i < 5; ++i) out[i] = os_sd_mode[i];
     return 1;
 }
 int ss_storage_owner_stats(struct ss_storage_owner_stats *out)

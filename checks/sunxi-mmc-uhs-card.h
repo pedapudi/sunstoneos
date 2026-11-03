@@ -23,7 +23,7 @@ struct uhs {
     unsigned width, sdr, sdr104, sdr104_busy, set_refuses, cmd11_timeout, no_dat_low, no_dat_high;
     unsigned pending_done, no_cc, no_vsd, set_fails, bad_caps, fatal_delay, cmd19, cmd11, cmd6_uhs, cmd6_hs;
     unsigned window[2][2], s18r_seen, cmd11_before_cmd2, cid_seen, dat0_masked;
-    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18, tune_kinds, stuck, stuck_always, dat0_busy, unfixable, card_err_next, hang_always;
+    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18, read_fail, read_fail_fast, read_fail_always, sdr50, set_refuses50, nohs, win50_start, win50_width, tune_kinds, stuck, stuck_always, dat0_busy, prog_busy, unfixable, card_err_next, hang_always;
     /* Fuzz injection (see fuzz in sunxi-mmc-uhs.c): one fault, armed by the driver before attempt inj_nth of delay inj_delay, of kind inj_mode with
      * the bit mask inj_bits. Write-side kinds (interrupt bits, R1 bits, no completion, stuck command) apply to the next CMD19; read-side kinds
      * (one read of the controller control register; the status register until the controller is reset). */
@@ -32,6 +32,7 @@ struct uhs {
 };
 static unsigned passes(struct uhs *u, unsigned d)
 {
+    if (u->sdr == 2 && u->win50_width) return d >= u->win50_start && d < u->win50_start + u->win50_width;
     for (unsigned i = 0; i < 2; ++i)
         if (u->window[i][1] && d >= u->window[i][0] && d < u->window[i][0] + u->window[i][1]) return 1;
     return 0;
@@ -82,7 +83,7 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
     if (off == 0 && u->stuck && (value & 7) && !u->unfixable) { u->stuck = 0; u->card_err_next = 1; m->reg[0x18/4] &= ~(1u << 31); }     /* a controller reset ends a stuck command */
     if (off != 0x18) return write32(m, off, value);
     unsigned cmd = value & 63, arg = m->reg[0x1c/4];
-    if ((value & (1u << 21)) && u->sdr == 3) u->sweep_ready = 1;
+    if ((value & (1u << 21)) && u->sdr >= 2) u->sweep_ready = 1;
     if (value & (1u << 21)) {
         if (value & VSW) {
             assert(u->phase == 1 || u->phase == 2);
@@ -105,6 +106,9 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
          * clock update for this reason). The wait ends when the update is made with the mask set. */
         if (u->dat0_busy && !(m->reg[4/4] & (1u << 31))) { m->reg[0x18/4] = value; return 1; }
         u->dat0_busy = 0;
+        /* A card programming after an aborted write holds DAT0 low until it is reset by CMD0 (specification 4.3: CMD0 terminates programming): a clock update waits for
+         * DAT0 unless it is masked, and the mask applies to each update, not once. */
+        if (u->prog_busy && !(value & VSW) && (value & (1u << 21)) && !(m->reg[4/4] & (1u << 31))) { m->reg[0x18/4] = value; return 1; }
         if (u->unfixable && u->stuck) { m->reg[0x18/4] = value; return 1; }       /* a controller that stays stuck through reset and update */
         return write32(m, off, value);
     }
@@ -127,6 +131,7 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
         m->reg[0x38/4] = VSD;
         u->phase = 1; u->answered = m->now; return 1;
     }
+    if (cmd == 0) { u->prog_busy = 0; u->cid_seen = 0; u->sdr = 0; if (u->base.command_count > 40) u->base.command_count = 0; }   /* the log is bounded; a restart begins with CMD0 */
     if (cmd == 2) { u->cid_seen = 1; if (u->cmd11) u->cmd11_before_cmd2 = 1; assert(u->phase == 0 || u->phase == 3); }
     if (m->selected && (cmd == 55 || cmd == 51 || cmd == 6 || cmd == 19)) {
         reply(m, cmd, value, arg);
@@ -139,18 +144,20 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
         else if (cmd == 6) {
             assert(!m->app && u->width == 4 && m->reg[0xc/4] == 1 && m->reg[0x10/4] == 64);
             m->data_command = value; m->fifo_total = 64; memset(u->sw, 0, 64);
-            u->sw[13] = 3 | (u->sdr104 && u->phase == 3 ? 8 : 0);   /* functions 2 to 4 are reported only at 1.8 V (specification Table 4-11 text) */ u->sw[29] = u->sdr104_busy ? 8 : 0;
-            if ((arg & 0xf) == 3) {
-                assert(u->phase == 3 && (arg == 0x00fffff3 || arg == 0x80fffff3)); ++u->cmd6_uhs;
-                u->sw[16] = u->sdr104 && !u->sdr104_busy ? 3 : 0xf;
-                if (arg >> 31) { if (u->set_refuses) u->sw[16] = 0xf; else if (u->sw[16] == 3) u->sdr = 3; }
+            u->sw[13] = (u->nohs ? 1 : 3) | (u->phase == 3 ? (u->sdr104 ? 8 : 0) | (u->sdr50 ? 4 : 0) : 0);   /* functions 2 to 4 are reported only at 1.8 V (specification Table 4-11 text) */ u->sw[29] = u->sdr104_busy ? 8 : 0;
+            if ((arg & 0xf) == 3 || (arg & 0xf) == 2) {
+                unsigned f = arg & 0xf;
+                assert(u->phase == 3 && (arg == (0x00fffff0u | f) || arg == (0x80fffff0u | f))); ++u->cmd6_uhs;
+                if (f == 3) u->sw[16] = u->sdr104 && !u->sdr104_busy ? 3 : 0xf;
+                else u->sw[16] = u->sdr50 ? 2 : 0xf;
+                if (arg >> 31) { if (f == 3 ? u->set_refuses : u->set_refuses50) u->sw[16] = 0xf; else if (u->sw[16] == f) u->sdr = f; }
             } else {
                 assert(arg == 0x00fffff1 || arg == 0x80fffff1); ++u->cmd6_hs; u->sw[16] = 1;
                 if (arg >> 31) u->sdr = 1;
             }
         } else {
             unsigned d = m->reg[0x144/4] & 63;
-            assert(u->sdr == 3 && u->phase == 3 && !arg && m->reg[0x10/4] == 64 && (m->reg[0x144/4] & 0x80));
+            assert(u->sdr >= 2 && u->phase == 3 && !arg && m->reg[0x10/4] == 64 && (m->reg[0x144/4] & 0x80));
             assert(!(m->reg[0x5c/4] & (1u << 31)) && (m->reg[0x100/4] & 0x1fff0001u) == ((64u << 16) | 1u));
             assert(m->reg[8/4] == 0x040000ffu);
             ++u->cmd19; m->data_command = value; m->fifo_total = 64; memcpy(u->data, pattern, 64);
@@ -179,6 +186,11 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
             }
         }
         return 1;
+    }
+    /* A read that fails with a data CRC error: the next read_fail reads, every read while the mode is SDR50 or SDR104, or every read. */
+    if ((cmd == 17 || cmd == 18) && (u->read_fail || (u->read_fail_fast && u->sdr >= 2) || u->read_fail_always)) {
+        if (u->read_fail) --u->read_fail;
+        int r = write32(m, off, value); m->reg[0x38/4] |= 1u << 7; return r;
     }
     return write32(m, off, value);
 }

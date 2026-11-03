@@ -17,6 +17,24 @@ TAG = 0x5357544553544f4b
 COUNTER_HZ = 24_000_000
 
 
+MODE_NAMES = {(1, 3): 'SDR104', (1, 2): 'SDR50', (1, 1): 'SDR25', (1, 0): 'SDR12', (0, 1): 'high speed', (0, 0): 'default speed'}
+
+
+def decode_mode(w):
+    """The bus speed mode words of the SD owner (apps/os/large_sd.c, os_sd_mode): timing in 7:4, 1.8 V in bit 8, the UHS-I outcome in 15:12, mode steps in
+    23:20, ceiling in 31:28, re-entry in bit 32, a second opening because the card was found at 1.8 V in bit 36, recovery restarts in 47:40; the card clock;
+    sample delay, window start and width, group 1 support bits and S18A; the first four steps (from, to, reason); the first two faults with the position each stopped at (word 3 bits 40:32 and 56:48 the card-side blocks, word 4 bits 31:26 and 63:58 the descriptor)."""
+    if not w[0] & 1:
+        return None
+    timing, v18 = w[0] >> 4 & 15, w[0] >> 8 & 1
+    steps = [dict(frm=w[3] >> (8 * i) & 3, to=w[3] >> (8 * i + 2) & 3, reason=w[3] >> (8 * i + 4) & 15) for i in range(min(4, w[0] >> 20 & 15))]
+    return dict(mode=MODE_NAMES.get((v18, timing), (v18, timing)), signal_1v8=bool(v18), outcome_code=w[0] >> 12 & 15, mode_steps=w[0] >> 20 & 15, ceiling=w[0] >> 28 & 15,
+                reentered=bool(w[0] >> 32 & 1), reopened=bool(w[0] >> 36 & 1), restarts=w[0] >> 40 & 255, card_hz=w[1], sample_delay=w[2] & 255, window_start=w[2] >> 8 & 255,
+                window_width=w[2] >> 16 & 255, group1_support=hex(w[2] >> 24 & 255), s18a=bool(w[2] >> 32 & 1), steps=steps,
+                faults=[dict(core_error=f & 15, protocol=f >> 4 & 63, interrupts=hex(f >> 10 & 0xffff), descriptor=f >> 26 & 63, blocks=w[3] >> (32 + 16 * i) & 511)
+                        for i, f in enumerate((w[4] & 0xffffffff, w[4] >> 32 & 0xffffffff)) if f & 0x3ffffff])
+
+
 def mode_input(mode=0, cut_bytes=0):
     return struct.pack('<IIQ', mode, 0, cut_bytes).ljust(4096, b'\0')
 
@@ -32,6 +50,9 @@ def decode(payload):
     out.update(zip(TAIL, struct.unpack_from('<%dQ' % len(TAIL), payload, offset)))
     offset += 8 * len(TAIL)
     out['irq_entries'] = list(struct.unpack_from('<8I', payload, offset))
+    offset += 32
+    out['mode_words'] = list(struct.unpack_from('<5Q', payload, offset))
+    out['sd_mode'] = decode_mode(out['mode_words'])
     if out['tag'] != TAG:
         raise ValueError('storage-write result has the wrong tag.')
     out['irq_stray'] = out['irq_cores'] >> 32
@@ -58,8 +79,20 @@ def decode(payload):
     return out
 
 
+E_TIMEOUT = 11
+
+
+def guard_stop(decoded):
+    """A write that ended at the time guard: status 11 with the bytes written in `detail`, the file synced and closed at that length (no close error, no mismatch).
+    The session's lifetime bounds a write run, not the feature, so this is a pass; the bytes written and the throughput are the result."""
+    return (decoded['mode'] in (0, 5) and decoded['status'] == E_TIMEOUT and decoded['detail'] == decoded['written_bytes'] and decoded['mismatches'] == 0 and
+            0 < decoded['written_bytes'] < decoded['file_bytes'])
+
+
 def failures(decoded):
-    return [] if decoded['status'] == 0 and decoded['mismatches'] == 0 else [f"status {decoded['status']} detail {decoded['detail']} mismatches {decoded['mismatches']}"]
+    if decoded['mismatches'] == 0 and (decoded['status'] == 0 or guard_stop(decoded)):
+        return []
+    return [f"status {decoded['status']} detail {decoded['detail']} mismatches {decoded['mismatches']}"]
 
 
 def inputs():

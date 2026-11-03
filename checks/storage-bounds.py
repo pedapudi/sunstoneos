@@ -103,14 +103,19 @@ def main():
     approvals = out / 'approvals'
     approvals.mkdir()
 
-    def blob_of(rs, bk, h):
-        return bounds.encode_input([tuple(r) for r in rs], [tuple(r) for r in bk], h)
+    cid = '0123456789abcdef0123456789abcdef'
+    # The restore point of this card (its first full capture), on port 3-1.
+    registry = out / 'restore-points.json'
+    bounds.register_restore_point(cid, '3-1', backup, digest, registry)
+
+    def blob_of(rs, bk, h, card=None):
+        return bounds.encode_input([tuple(r) for r in rs], [tuple(r) for r in bk], h, card or cid)
 
     def record(rs=ranges, bk=backup_ranges, h=digest, backup_file=backup, data=data_ranges, port='3-1',
                image=bounds.ANY_IMAGE, directory=approvals):
         path = bounds.approval_path(blob_of(rs, bk, h), directory)
         path.write_text(json.dumps({'ranges': rs, 'backup_ranges': bk, 'data_ranges': data, 'backup_sha256': h,
-                                    'backup': str(backup_file), 'port': port, 'image': image}))
+                                    'backup': str(backup_file), 'port': port, 'image': image, 'card_cid': cid}))
         return path
 
     counter = [0]
@@ -120,18 +125,18 @@ def main():
         record(rs, bk, h, backup_file, data, **kw)
         counter[0] += 1
         blob_file = _write(out / f'case-{counter[0]}.bin', blob_of(rs, bk, h))
-        return {'storage_bounds': {'ranges': rs, 'backup_ranges': bk, 'backup_sha256': h}}, blob_file
+        return {'storage_bounds': {'ranges': rs, 'backup_ranges': bk, 'backup_sha256': h, 'card_cid': cid}}, blob_file
 
     def submit(image, descriptor=None, *, flag=True, port='3-1', inputs=None, directory=approvals, approved='coordinator'):
         args = SimpleNamespace(approved_by=approved, storage_write=flag, port=port, image=image,
                                input=list(inputs if inputs is not None else ()), host_tree=None)
-        with patch.dict(os.environ, {'SUNSTONE_STORAGE_APPROVALS': str(directory)}):
+        with patch.dict(os.environ, {'SUNSTONE_STORAGE_APPROVALS': str(directory), 'SUNSTONE_RESTORE_POINTS': str(registry)}):
             images.policy({'descriptor': descriptor or {}, 'symbols': {}}, args)
         return args
 
     blob_path = _write(out / 'bounds.bin', blob_of(ranges, backup_ranges, digest))
     other = _write(out / 'other.bin', blob_path.read_bytes()[:-1] + b'\x01')
-    good = {'storage_bounds': {'ranges': ranges, 'backup_ranges': backup_ranges, 'backup_sha256': digest}}
+    good = {'storage_bounds': {'ranges': ranges, 'backup_ranges': backup_ranges, 'backup_sha256': digest, 'card_cid': cid}}
     # Read-only images and images without an SD core pass with no flags and no records.
     for image in (readonly, nocore, table, blob):
         submit(image, flag=False, approved=None)
@@ -140,7 +145,7 @@ def main():
         no(lambda: submit(image, flag=False, approved=None), 'needs --storage-write')
         no(lambda: submit(image, good, inputs=(blob_path,)), 'No coordinator approval record')
         record()
-        no(lambda: submit(image, good, port='3-3', inputs=(blob_path,)), 'port 3-1 only')
+        no(lambda: submit(image, good, port='3-3', inputs=(blob_path,)), 'another port')
         no(lambda: submit(image, {}, inputs=(blob_path,)), 'storage_bounds')
         no(lambda: submit(image, good), 'first input')
         no(lambda: submit(image, good, inputs=(other,)), 'first input')
@@ -214,11 +219,11 @@ def main():
     d, i = case(backup_file=flipped)
     no(lambda: submit(named, d, inputs=(i,)), 'differs from the approved hash')
     for h in ('', 'ab', digest.upper(), digest[:-1]):
-        no(lambda: submit(named, {'storage_bounds': {'ranges': ranges, 'backup_ranges': backup_ranges, 'backup_sha256': h}},
+        no(lambda: submit(named, {'storage_bounds': {'ranges': ranges, 'backup_ranges': backup_ranges, 'backup_sha256': h, 'card_cid': cid}},
                           inputs=(blob_path,)), 'Invalid storage_bounds')
-    no(lambda: submit(named, {'storage_bounds': {'ranges': ranges, 'backup_ranges': backup_ranges, 'backup_sha256': digest, 'extra': 1}},
+    no(lambda: submit(named, {'storage_bounds': {'ranges': ranges, 'backup_ranges': backup_ranges, 'backup_sha256': digest, 'card_cid': cid, 'extra': 1}},
                       inputs=(blob_path,)), 'storage_bounds')
-    no(lambda: submit(named, {'storage_bounds': {'ranges': ranges, 'backup_sha256': digest}}, inputs=(blob_path,)), 'backup_ranges')
+    no(lambda: submit(named, {'storage_bounds': {'ranges': ranges, 'backup_sha256': digest, 'card_cid': cid}}, inputs=(blob_path,)), 'backup_ranges')
     # An unordered backup file is refused even when its hash is right.
     unordered = out / 'unordered.bin'
     recs = backup.read_bytes()
@@ -249,7 +254,7 @@ def main():
         assert job['frozen'][str(frozen_input.relative_to(entry))] == images.sha(blob_path), 'the frozen inventory omits the input'
         # Policy sees the frozen copy, and the post-freeze check passes on it.
         args = SimpleNamespace(approved_by='coordinator', storage_write=True, port='3-1', image=named, input=[frozen_input], host_tree=None)
-        with patch.dict(os.environ, {'SUNSTONE_STORAGE_APPROVALS': str(approvals)}):
+        with patch.dict(os.environ, {'SUNSTONE_STORAGE_APPROVALS': str(approvals), 'SUNSTONE_RESTORE_POINTS': str(registry)}):
             images.policy({'descriptor': good, 'symbols': {}}, args)
         bounds.verify_delivered(args)
         # A swap after admission is caught by verify_delivered ...
@@ -258,14 +263,13 @@ def main():
         # ... and a swap inside the queue entry stops the claim.
         frozen_input.write_bytes(other.read_bytes())
         assert queue.claim('3-1') is None, 'a queue entry with a swapped input was claimed'
-        state = json.loads((queue_root / 'state.json').read_text())
-        assert any('Queued input bytes changed' in json.dumps(j) for j in state['jobs']), 'the swap was not recorded as a refusal'
+        assert 'Queued input bytes changed' in json.dumps(queue.job(job['id'])), 'the swap was not recorded as a refusal'
         # A resubmission with other bytes is a new entry whose own blob needs its own record.
         second = queue.submit(parser.parse_args(argv + ['--input', str(other), '--hypothesis', 'a different blob']))
         assert Path(second['directory']) != entry and Path(second['options']['input'][0]).read_bytes() == other.read_bytes()
         args = SimpleNamespace(approved_by='coordinator', storage_write=True, port='3-1', image=named,
                                input=[Path(second['options']['input'][0])], host_tree=None)
-        with patch.dict(os.environ, {'SUNSTONE_STORAGE_APPROVALS': str(approvals)}):
+        with patch.dict(os.environ, {'SUNSTONE_STORAGE_APPROVALS': str(approvals), 'SUNSTONE_RESTORE_POINTS': str(registry)}):
             no(lambda: images.policy({'descriptor': good, 'symbols': {}}, args), 'first input')
     print(f'storage-bounds: classification of 7 images; read-only and no-core pass unchanged; {count[0]} refusals; '
           'complete submission admitted; first input frozen byte for byte and unswappable')

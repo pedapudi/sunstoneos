@@ -58,7 +58,10 @@ static inline unsigned a733_mmc_sd0_inherited_mux(const struct a733_pin_config *
 }
 enum a733_mmc_platform_result { A733_MMC_PENDING, A733_MMC_BUSY,
     A733_MMC_READY, A733_MMC_COMPLETE, A733_MMC_RETAINED, A733_MMC_INVALID,
-    A733_MMC_CLOSED };
+    A733_MMC_CLOSED,
+    /* A read failed in a way a restart can recover (sunxi_mmc_recoverable): the platform is still READY and owns everything; the owner calls
+     * a733_mmc_platform_restart with a lower ceiling, or gives up with a733_mmc_platform_retain. */
+    A733_MMC_ERROR };
 /* Bounded, non-reentrant callbacks; exactly1 means success. Authenticated
  * admission covers the immutable config and actual token, cold native card
  * state (or the documented first read-only SD CMD0 policy), populated eMMC,
@@ -116,6 +119,7 @@ struct a733_mmc_platform {
      * 2 the lifetime deadline, 3 the clock or the update liveness), and the first register access the adapter refused (SMHC offset / 4 + 1,
      * 0xff for another address; 0 none). Zero until a fault. */
     uint16_t fault_line, fault_why, refused;
+    unsigned recover_errors;         /* A733_MMC_ERROR results since the last completed read (a733_mmc_platform_recover) */
     unsigned irq_mode;               /* the owner has unmasked the controller's GIC interrupt (a733_mmc_platform_irq) */
     unsigned signal; /* PF bank: 0 at 3.3 V, 1 selector written, 2 reports 1.8 V, 3 restore written at close (reads 1.8 V or 3.3 V). */
     uint64_t signal_since;           /* when the selector was last written or the bank last reported its new level */
@@ -167,6 +171,17 @@ enum a733_mmc_platform_result a733_mmc_platform_close(struct a733_mmc_platform *
  * report it masked, then call with 0 before close or any clock or signal change. Only the enable state is relaxed: a pending or
  * active interrupt stays the owner's to explain. No register access. 1 on success. */
 int a733_mmc_platform_irq(struct a733_mmc_platform *,int enable);
+/* UHS-I profile, READY with an idle core or after A733_MMC_ERROR: identify again under a ceiling (sunxi_mmc_restart; the card at 1.8 V is re-entered
+ * at 1.8 V, the bank is not touched). Returns PENDING, then poll to READY (or ERROR/RETAINED again). The interrupt must be masked and irq mode off. */
+enum a733_mmc_platform_result a733_mmc_platform_restart(struct a733_mmc_platform *,uint64_t deadline,unsigned ceiling,enum sunxi_mmc_mode_reason why);
+/* The recovery policy after A733_MMC_ERROR, event driven (the owner calls it when a read fails, nothing runs on a timer): the first error since the last
+ * completed read identifies again at the same ceiling, which tunes again at SDR104 and SDR50; a second error in a row steps down one mode (SDR104 to
+ * SDR50 to SDR25 to SDR12 at 1.8 V, high speed to default speed at 3.3 V); an error at the lowest mode is final. Returns PENDING when a restart began,
+ * otherwise INVALID, and the owner retains the platform. The mode and every step are in the card record (card.mode_log). */
+enum a733_mmc_platform_result a733_mmc_platform_recover(struct a733_mmc_platform *,uint64_t deadline);
+/* The recoveries a request can use before the ladder ends: two per mode (identify again, then step down) through SDR104, SDR50 and SDR25 to SDR12 at 1.8 V, and the one at SDR12
+ * that is refused. An owner's retry loop is bounded by this and by its lifetime deadline; checks/a733-mmc-uhs.c walks the ladder and requires the same count. */
+#define A733_MMC_RECOVERIES 8u
 /* Private service composition. A copied pointer cannot establish ownership:
  * the service authenticates its self, exact platform and complete grant. */
 int a733_mmc_platform_storage(struct a733_mmc_platform *,const void *,size_t);

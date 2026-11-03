@@ -32,7 +32,7 @@ def main():
                'drivers/pinctrl/a733_pins.c', 'drivers/pinctrl/a733_pin_tables.c', 'drivers/storage/a733_mmc_platform_native.c', 'drivers/storage/a733_storage_bounds.c', 'checks/sd-return-close.c']
     flags = [shutil.which('clang-21'), '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
              '-Wno-unused-function', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
-             '-fno-omit-frame-pointer', '-DA733_MMC_NATIVE_HOST_TEST', '-Iinclude', '-Ichecks/host', '-I'+str(Path.home()/'.cache/sunstoneos/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2/include'), '-Ichecks', '-I'+str(e)]
+             '-fno-omit-frame-pointer', '-DA733_MMC_NATIVE_HOST_TEST', '-Iinclude', '-Iapps/os', '-Ichecks/host', '-I'+str(Path.home()/'.cache/sunstoneos/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2/include'), '-Ichecks', '-I'+str(e)]
     commands = []
 
     def run(command, name):

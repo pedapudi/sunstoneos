@@ -197,9 +197,68 @@ int sunxi_mmc_sdr25_only(struct sunxi_mmc *h)
 {
     if (!UHS_ON || !h || !h->initialized || h->entered || h->state != SUNXI_MMC_COLD || h->config.kind != SUNXI_MMC_SD ||
         h->config.sd_profile != UHS) return 0;
-    h->sdr25_only = 1; return 1;
+    h->sdr25_only = 1; h->ceil1 = 2; return 1;
+}
+int sunxi_mmc_set_ceiling(struct sunxi_mmc *h, unsigned timing)
+{
+    if (!UHS_ON || !h || !h->initialized || h->entered || h->state != SUNXI_MMC_COLD || h->config.kind != SUNXI_MMC_SD ||
+        h->config.sd_profile != UHS || timing > 3) return 0;
+    h->ceil1 = (uint8_t)(timing + 1); h->sdr25_only = timing < 2; return 1;
+}
+/* The ceiling in force: 3 unless lowered (ceil1 holds ceiling + 1, zero for none). */
+static unsigned ceiling_of(const struct sunxi_mmc *h) { return h->ceil1 ? (unsigned)h->ceil1 - 1u : 3u; }
+static void mode_note(struct sunxi_mmc *h, unsigned from, unsigned to, enum sunxi_mmc_mode_reason why, const struct sunxi_mmc *fault)
+{
+    if (h->card.mode_steps < SUNXI_MMC_MODE_LOG)
+        h->card.mode_log[h->card.mode_steps] = (struct sunxi_mmc_mode_event){(uint8_t)from, (uint8_t)to, (uint8_t)why, h->card.signal_1v8,
+            fault ? (uint8_t)fault->result.error : 0u, fault ? (uint8_t)fault->protocol : 0u, fault ? (uint16_t)(fault->result.interrupts & 0xffffu) : 0u,
+            fault ? (uint16_t)(fault->result.tbc0 / 512u) : 0u, fault ? fault->result.desc_index : 0u};
+    if (h->card.mode_steps < 255) ++h->card.mode_steps;
 }
 
+int sunxi_mmc_recoverable(const struct sunxi_mmc *h)
+{
+    return UHS_ON && h && h->initialized && h->state == SUNXI_MMC_FAULT && h->config.kind == SUNXI_MMC_SD &&
+           h->config.sd_profile == UHS && (h->result.error == SUNXI_MMC_CONTROLLER || h->result.error == SUNXI_MMC_CARD || h->result.error == SUNXI_MMC_TIMEOUT);
+}
+int sunxi_mmc_restart(struct sunxi_mmc *h, unsigned ceiling, enum sunxi_mmc_mode_reason why, uint64_t deadline)
+{
+    if (!UHS_ON || !h || !h->initialized || h->entered || h->config.kind != SUNXI_MMC_SD || h->config.sd_profile != UHS || ceiling > 3 ||
+        deadline <= h->last_us || !h->config.ops.sd_module || (h->state != SUNXI_MMC_READY && !sunxi_mmc_recoverable(h))) return 0;
+    struct sunxi_mmc fresh = {0};
+    fresh.config = h->config; fresh.initialized = 1; fresh.irq_taken = h->irq_taken; fresh.irq_context = h->irq_context; fresh.last_us = h->last_us;
+    fresh.card.signal_1v8 = h->card.signal_1v8; fresh.card.mode_steps = h->card.mode_steps;
+    for (unsigned i = 0; i < SUNXI_MMC_MODE_LOG; ++i) fresh.card.mode_log[i] = h->card.mode_log[i];
+    fresh.reenter = h->card.signal_1v8; fresh.ceil1 = (uint8_t)(ceiling + 1); fresh.sdr25_only = ceiling < 2;
+    mode_note(&fresh, h->card.timing, ceiling < 3 && ceiling < h->card.timing ? ceiling : h->card.timing, why,
+              h->state == SUNXI_MMC_FAULT ? h : NULL);
+    fresh.restart = 1; fresh.deadline_us = deadline; fresh.state = SUNXI_MMC_IDENTIFY;
+    *h = fresh; return 1;
+}
+/* The steps before the cold setup of a restart: reset the controller, clear the transfer state, stop the card clock with DAT0 masked (a card that was mid-read
+ * may still hold it), and return the module to the identification clock. */
+static void restart_step(struct sunxi_mmc *h)
+{
+    uint32_t v;
+    switch (h->restart) {
+    case 1:
+        if (!rd(h, 0, &v) || !wr(h, 0, v | 7u)) return;
+        ++h->restart; return;
+    case 2:
+        if (!rd(h, 0, &v) || (v & 7u)) return;
+        if (!wr(h, 0x30, 0) || !wr(h, 0x8c, 0) || !wr(h, 0x80, 0) || (h->config.dma && !wr(h, 0x88, 0x337u)) || !rd(h, 0x38, &v) || !wr(h, 0x38, v & 0xffffu) ||
+            !rd(h, 0x100, &v) || !wr(h, 0x100, v & ~0x1fff0005u) || !wr(h, 4, MASK_DAT0) || !fence(h) || !wr(h, 0x18, UPDATE)) return;
+        ++h->restart; return;
+    case 3:
+        if (!rd(h, 0x18, &v) || (v & START)) return;
+        if (!rd(h, 0x38, &v) || !wr(h, 0x38, v & 0xffffu) || !wr(h, 4, 0) || !rd(h, 4, &v)) return;
+        if (v) { fault(h, SUNXI_MMC_CONTROLLER); return; }
+        if (h->config.ops.sd_module(h->config.context, h->config.token, SUNXI_MMC_MODULE_IDENT) != 1) { fault(h, SUNXI_MMC_IO); return; }
+        ++h->restart; return;
+    default:
+        h->restart = 0; h->restarted = 1; h->setup = 0; return;
+    }
+}
 int sunxi_mmc_open(struct sunxi_mmc *h, uint64_t deadline)
 {
     if (!h || !h->initialized || h->entered || h->state != SUNXI_MMC_COLD ||
@@ -398,6 +457,17 @@ int sunxi_mmc_write_dma(struct sunxi_mmc *h,const struct sunxi_mmc_write_request
     return 1;
 }
 #endif /* SUNXI_MMC_READ_ONLY */
+/* Where a DMA write stopped (best effort: a failed read only marks the field, it does not fault). */
+static void write_where(struct sunxi_mmc *h)
+{
+    uint32_t t0 = 0, t1 = 0, chda = 0;
+    int ok = h->config.ops.read32(h->config.context, 0x48, &t0) == 1 && h->config.ops.read32(h->config.context, 0x4c, &t1) == 1;
+    int have_chda = h->config.ops.read32(h->config.context, 0x90, &chda) == 1;
+    h->result.tbc0 = t0; h->result.tbc1 = t1; h->result.where_valid = (uint8_t)ok;
+    uint32_t base = (uint32_t)(uintptr_t)h->config.dma;
+    h->result.desc_index = !have_chda ? 62u : (chda >= base && chda - base < SUNXI_MMC_DMA_DESCRIPTORS * sizeof(struct sunxi_mmc_dma_descriptor)) ?
+                           (uint8_t)((chda - base) / sizeof(struct sunxi_mmc_dma_descriptor)) : 63u;
+}
 static int interrupts(struct sunxi_mmc *h)
 {
     uint32_t v;
@@ -410,6 +480,7 @@ static int interrupts(struct sunxi_mmc *h)
     if (errors) {
         /* Card removal ends everything; any other error is the CMD19 attempt's failure in a sweep (see fault). */
         if (errors & ((1u << 18) | (1u << 31))) { fatal(h, SUNXI_MMC_CONTROLLER); return 0; }
+        if (h->protocol == P_WRITE_DMA && !h->result.where_valid) write_where(h);
         fault(h, SUNXI_MMC_CONTROLLER); return 0;
     }
     return 1;
@@ -431,14 +502,14 @@ static void setup(struct sunxi_mmc *h)
         if (!rd(h, 0x18, &v)) return;
         if (v & START) { fault(h, SUNXI_MMC_ADMISSION); return; }
         if (!rd(h, 0x3c, &v)) return;
-        if (v & (BUSY | START)) { fault(h, SUNXI_MMC_ADMISSION); return; }
+        if ((v & START) || ((v & BUSY) && !h->restarted)) { fault(h, SUNXI_MMC_ADMISSION); return; }
         if (!rd(h, 0x80, &v)) return;
         if (v & (1u << 7)) { fault(h, SUNXI_MMC_ADMISSION); return; }
         if (!wr(h, 0, 7)) return;
         ++h->setup; return;
     case 2:
         if (!rd(h, 0, &v) || (v & 7u)) return;
-        if (!wr(h, 4, 0) || !wr(h, 0x30, 0) || !wr(h, 0x8c, 0) ||
+        if (!wr(h, 4, MASK_DAT0) || !wr(h, 0x30, 0) || !wr(h, 0x8c, 0) ||      /* every clock update masks DAT0, as the vendor's does: a card left programming holds it low */
             !wr(h, 0x80, 0) || !wr(h, 0, START)) return;
         ++h->setup; return;
     case 3:
@@ -446,17 +517,17 @@ static void setup(struct sunxi_mmc *h)
             !rd(h, 0x104, &v) || !wr(h, 0x104, v & ~1u) ||
             !rd(h, 0x10c, &v) || !wr(h, 0x10c, v & ~START) ||
             !rd(h, 0x54, &v) || !wr(h, 0x54, (v & ~15u) | 3u) ||
-            !rd(h, 0x140, &v) || !wr(h, 0x140, (v & ~(3u << 16)) | (3u << 16)) ||
+            !rd(h, 0x140, &v) || !wr(h, 0x140, (v & ~(3u << 16)) | (1u << 16)) ||
             !wr(h, 0x144, 0x80) || !wr(h, 0xc, 0) || !wr(h, 8, UINT32_MAX) ||
             !fence(h) || !wr(h, 0x18, UPDATE)) return;
         ++h->setup; return;
     case 4:
         if (!rd(h, 0x18, &v) || (v & START)) return;
-        if (!interrupts(h) || !wr(h, 4, 1u << 16) || !fence(h) || !wr(h, 0x18, UPDATE)) return;
+        if (!interrupts(h) || !wr(h, 4, (1u << 16) | MASK_DAT0) || !fence(h) || !wr(h, 0x18, UPDATE)) return;
         ++h->setup; return;
     case 5:
         if (!rd(h, 0x18, &v) || (v & START)) return;
-        if (!interrupts(h) || !rd(h, 4, &v)) return;
+        if (!interrupts(h) || !wr(h, 4, 1u << 16) || !rd(h, 4, &v)) return;
         if (v != (1u << 16)) { fault(h, SUNXI_MMC_CONTROLLER); return; }
         if (!rd(h, 0xc, &v)) return;
         if (v) { fault(h, SUNXI_MMC_CONTROLLER); return; }
@@ -608,7 +679,7 @@ static int command_step(struct sunxi_mmc *h)
             if (!wr(h, 0x10, block) || !wr(h, 0x14, (uint32_t)h->data_bytes)) return 0;
             /* SDR104 read threshold: start a block only with room for all of
              * it, sized to the block as the board kernel's thld_ctl does. */
-            if (UHS_ON && h->card.timing == 3 && !(h->command & WRITE)) {
+            if (UHS_ON && h->card.timing >= 2 && !(h->command & WRITE)) {
                 uint32_t t;
                 /* The vendor's mask (V:676-701): bits 27:16 and the write
                  * threshold enable (bit 2) cleared, the read threshold on. */
@@ -783,9 +854,9 @@ static int sd_rate(struct sunxi_mmc *h)
     if((speed&128)||u>3||!values[m])return 0;
     uint32_t cap=(uint32_t)((uint64_t)units[u]*values[m]/10);
     if(cap>25000000)cap=25000000;
-    unsigned divisor=h->config.sd_profile>=SUNXI_MMC_SD_HIGH_SPEED4?4:
+    unsigned divisor=h->config.sd_profile>=SUNXI_MMC_SD_HIGH_SPEED4&&!(UHS_ON&&h->card.timing==0)?4:
         (unsigned)((UINT64_C(400000000)+2u*cap-1)/(2u*cap));
-    if(divisor<4||divisor>32||(h->config.sd_profile==SUNXI_MMC_SD_DEFAULT4&&divisor<8))return 0;
+    if(divisor<4||divisor>32||((h->config.sd_profile==SUNXI_MMC_SD_DEFAULT4||(UHS_ON&&h->card.timing==0))&&divisor<8))return 0;
     h->card.module_divisor=divisor;return 1;
 }
 static void hs_check(struct sunxi_mmc *h)
@@ -793,7 +864,9 @@ static void hs_check(struct sunxi_mmc *h)
 static void tune_next(struct sunxi_mmc *h)
 {h->tune_attempt=1;h->attempt_us=h->last_us;queue(h,P_SD_TUNE,19u|RESP|CRC|DATA|WAIT,0,h->tuning_block,64);}
 /* SDR104 timing, from the board kernel's v4p6x method that its tuning selects:
- * old sample mode (NTSR MODE_SEL 0), 180-degree command and data drive and the
+ * old sample mode (NTSR MODE_SEL 0), 180-degree command and data drive (the v4p6x
+ * clock-delay rule for SDR50 and SDR104: sunxi_mmc_set_clk_dly sets dat_drv_ph for
+ * both, and the in-kernel tuning leaves the host in that method) and the
  * software sample delay; each read also sets the read threshold. TMOUT bounds
  * a failed CMD19. Writing restores the set after a controller reset; reading
  * verifies it. */
@@ -837,22 +910,31 @@ static void tune_advance(struct sunxi_mmc *h,unsigned passed)
     h->tuning=0;h->card.tuning_start=(uint8_t)start;h->card.tuning_width=(uint8_t)best;
     if(best>=TUNE_WINDOW){
         if(!set_delay(h,start+best/2)||!wr(h,8,UINT32_MAX))return;
-        h->card.uhs_outcome=SUNXI_MMC_UHS_SDR104;ready_status(h,P_SD_MODE_STATUS);return;
+        h->card.uhs_outcome=h->card.timing==3?SUNXI_MMC_UHS_SDR104:SUNXI_MMC_UHS_SDR50;ready_status(h,P_SD_MODE_STATUS);return;
     }
-    h->card.uhs_outcome=SUNXI_MMC_UHS_NO_WINDOW;h->card.timing=1;h->card.module_divisor=4;
-    h->card.sample_delay=0;h->after_clock=1;h->protocol=P_SD_CLOCK;h->sd_ios=0;
+    /* No window: one mode down, through SDR25's clock (50 MHz), which the card accepts a function switch at. SDR104 goes to SDR50 when the card
+     * has it, otherwise to SDR25; SDR50 goes to SDR25. */
+    h->card.uhs_outcome=SUNXI_MMC_UHS_NO_WINDOW;
+    {
+        unsigned from=h->card.timing,to=1;
+        if(from==3&&(h->card.group1_support&4))to=2;
+        mode_note(h,from,to,SUNXI_MMC_MODE_NO_WINDOW,NULL);
+        h->ceil1=(uint8_t)(to+1);
+        h->card.timing=1;h->card.module_divisor=4;h->after_clock=to==2?2:1;
+    }
+    h->card.sample_delay=0;h->protocol=P_SD_CLOCK;h->sd_ios=0;
 }
 static void sd_clock(struct sunxi_mmc *h)
 {
-    uint32_t v;unsigned hs=h->card.timing==1,uhs=UHS_ON&&h->card.timing==3;
+    uint32_t v;unsigned hs=h->card.timing==1,uhs=UHS_ON&&h->card.timing>=2;
     switch(h->sd_ios){
     case 0:
         if(!rd(h,0x18,&v)||(v&START)||!rd(h,0x3c,&v)||(v&BUSY))return;
-        if(!interrupts(h)||!wr(h,4,0)||!fence(h)||!wr(h,0x18,UPDATE))return;
+        if(!interrupts(h)||!wr(h,4,MASK_DAT0)||!fence(h)||!wr(h,0x18,UPDATE))return;
         ++h->sd_ios;return;
     case 1:
         if(!rd(h,0x18,&v)||(v&START))return;
-        if(!interrupts(h)||!rd(h,4,&v))return;
+        if(!interrupts(h)||!wr(h,4,0)||!rd(h,4,&v))return;
         if(v){fault(h,SUNXI_MMC_CONTROLLER);return;}
         /* Fresh time/ownership surround the provider's bounded rate change. */
         if(!time_ok(h)||h->config.ops.retained(h->config.context,h->config.token)!=1){fault(h,SUNXI_MMC_ADMISSION);return;}
@@ -862,7 +944,7 @@ static void sd_clock(struct sunxi_mmc *h)
     case 2:
         if(uhs){
             h->tuning=1;h->tune_forced=0;h->tune_hung=0;h->tune_attempt=0;h->card.sample_delay=0;
-            if(!uhs_registers(h,1)||!fence(h)||!wr(h,0x18,UPDATE))return;
+            if(!uhs_registers(h,1)||!wr(h,4,(1u<<16)|MASK_DAT0)||!fence(h)||!wr(h,0x18,UPDATE))return;
             ++h->sd_ios;return;
         }
         /* UHS fallback at 1.8 V leaves tuning with SDR25's fixed phases and
@@ -873,11 +955,11 @@ static void sd_clock(struct sunxi_mmc *h)
          * CMD/data sample phases0/1 for <=26MHz/default and <=52MHz/HS. */
         if(!rd(h,0x140,&v)||!wr(h,0x140,(v&~(3u<<16))|((hs?3u:1u)<<16))||
            !rd(h,0x5c,&v)||!wr(h,0x5c,(v&~(START|0x331u))|START|(hs?0x110u:0))||
-           !wr(h,4,1u<<16)||!fence(h)||!wr(h,0x18,UPDATE))return;
+           !wr(h,4,(1u<<16)|MASK_DAT0)||!fence(h)||!wr(h,0x18,UPDATE))return;
         ++h->sd_ios;return;
     case 3:
         if(!rd(h,0x18,&v)||(v&START))return;
-        if(!interrupts(h))return;
+        if(!interrupts(h)||!wr(h,4,1u<<16))return;
         if(uhs){if(!uhs_registers(h,0))return;}
         else {
             if(!rd(h,4,&v))return;
@@ -895,6 +977,7 @@ static void sd_clock(struct sunxi_mmc *h)
             if(!rd(h,0x100,&v))return;
             if(v&0x1fff0001u){fault(h,SUNXI_MMC_CONTROLLER);return;}
         }
+        if(UHS_ON&&h->after_clock==2){h->after_clock=0;h->uhs_func=2;queue(h,P_SD_UHS_SET,6u|RESP|CRC|DATA|WAIT,0x80fffff2,h->card.switch_status,64);return;}
         if(UHS_ON&&h->after_clock){hs_check(h);return;}
         ready_status(h,P_SD_MODE_STATUS);return;
     default:fault(h,SUNXI_MMC_CONTROLLER);return;
@@ -1129,10 +1212,21 @@ static void protocol(struct sunxi_mmc *h)
         if(!card_response(h)||!wr(h,0xc,1)||!rd(h,0xc,&r))return;
         if(r!=1){fault(h,SUNXI_MMC_CONTROLLER);return;}h->card.bus_width=4;
         if(h->config.sd_profile>=SUNXI_MMC_SD_HIGH_SPEED4){
-            if((h->card.scr[0]&15)<1||!(bits(h->card.csd,84,12)&(1u<<10))){fault(h,SUNXI_MMC_UNSUPPORTED);return;}
-            /* At 1.8 V, ask for SDR104 (function 3); SDR25 is the fallback. */
-            if(UHS_ON&&h->card.signal_1v8&&h->sdr25_only){h->card.uhs_outcome=SUNXI_MMC_UHS_LIMITED;hs_check(h);return;}
-            if(UHS_ON&&h->card.signal_1v8){queue(h,P_SD_UHS_CHECK,6u|RESP|CRC|DATA|WAIT,0x00fffff3,h->card.switch_status,64);return;}
+            int hs_ok=(h->card.scr[0]&15)>=1&&(bits(h->card.csd,84,12)&(1u<<10));
+            /* A card without high speed, or a ceiling of default speed at 3.3 V: 25 MHz default speed (UHS-I profile only). */
+            if(UHS_ON&&h->config.sd_profile==UHS&&!h->card.signal_1v8&&(!hs_ok||ceiling_of(h)==0)){
+                h->card.timing=0;h->card.uhs_outcome=hs_ok?SUNXI_MMC_UHS_LIMITED:SUNXI_MMC_UHS_NO_SDR104;
+                if(!sd_rate(h)){fault(h,SUNXI_MMC_UNSUPPORTED);return;}
+                h->protocol=P_SD_CLOCK;h->sd_ios=0;return;
+            }
+            if(!hs_ok){fault(h,SUNXI_MMC_UNSUPPORTED);return;}
+            /* At 1.8 V the ceiling gives the highest mode tried: SDR104 (function 3) or SDR50 (function 2) with tuning, SDR25 (function 1)
+             * or SDR12 (default timing) without. */
+            if(UHS_ON&&h->card.signal_1v8){
+                if(ceiling_of(h)==0){h->card.uhs_outcome=SUNXI_MMC_UHS_LIMITED;h->card.timing=0;h->card.module_divisor=8;h->protocol=P_SD_CLOCK;h->sd_ios=0;return;}
+                if(ceiling_of(h)<2){h->card.uhs_outcome=SUNXI_MMC_UHS_LIMITED;hs_check(h);return;}
+                queue(h,P_SD_UHS_CHECK,6u|RESP|CRC|DATA|WAIT,0x00fffff3,h->card.switch_status,64);return;
+            }
             hs_check(h);return;
         }
         if(!sd_rate(h)){fault(h,SUNXI_MMC_UNSUPPORTED);return;}
@@ -1149,20 +1243,31 @@ static void protocol(struct sunxi_mmc *h)
         if(!sd_rate(h)){fault(h,SUNXI_MMC_UNSUPPORTED);return;}
         h->protocol=P_SD_CLOCK;h->sd_ios=0;return;
     case P_SD_UHS_CHECK:
-        /* Status byte 13 bit 3: SDR104 supported; byte 29 bit 3: busy;
-         * byte 16 low nibble: the function the set would select. */
+        /* Status byte 13: the group 1 support bits (bit 3 SDR104, bit 2 SDR50, bit 1 SDR25, bit 0 SDR12); byte 29: busy bits; byte 16 low
+         * nibble: the function the set would select. The best function the card supports and the ceiling allows is set; a card that
+         * lacks both stays at SDR25. */
         if(!UHS_ON){fault(h,SUNXI_MMC_CARD);return;}
         if(!card_response(h))return;
-        if((h->card.switch_status[13]&8)&&!(h->card.switch_status[29]&8)&&(h->card.switch_status[16]&15)==3){
-            queue(h,P_SD_UHS_SET,6u|RESP|CRC|DATA|WAIT,0x80fffff3,h->card.switch_status,64);return;
+        h->card.group1_support=h->card.switch_status[13];
+        if(ceiling_of(h)>=3&&(h->card.switch_status[13]&8)&&!(h->card.switch_status[29]&8)&&(h->card.switch_status[16]&15)==3){
+            h->uhs_func=3;queue(h,P_SD_UHS_SET,6u|RESP|CRC|DATA|WAIT,0x80fffff3,h->card.switch_status,64);return;
+        }
+        if(ceiling_of(h)>=2&&(h->card.switch_status[13]&4)&&!(h->card.switch_status[29]&4)){
+            h->uhs_func=2;queue(h,P_SD_UHS_SET,6u|RESP|CRC|DATA|WAIT,0x80fffff2,h->card.switch_status,64);return;
         }
         h->card.uhs_outcome=SUNXI_MMC_UHS_NO_SDR104;hs_check(h);return;
     case P_SD_UHS_SET:
         if(!UHS_ON){fault(h,SUNXI_MMC_CARD);return;}
         if(!card_response(h))return;
-        if((h->card.switch_status[16]&15)!=3){h->card.uhs_outcome=SUNXI_MMC_UHS_NO_SDR104;hs_check(h);return;}
-        h->card.timing=3;
-        h->card.module_divisor=(h->card.uhs_caps&SUNXI_MMC_SIGNAL_300M)?(SUNXI_MMC_MODULE_300M|1u):2u;
+        if((h->card.switch_status[16]&15)!=h->uhs_func){
+            /* The card refused the function: the next one down, or SDR25. */
+            if(h->uhs_func==3&&ceiling_of(h)>=2&&(h->card.switch_status[13]&4)&&!(h->card.switch_status[29]&4)){
+                h->uhs_func=2;queue(h,P_SD_UHS_SET,6u|RESP|CRC|DATA|WAIT,0x80fffff2,h->card.switch_status,64);return;
+            }
+            h->card.uhs_outcome=SUNXI_MMC_UHS_NO_SDR104;hs_check(h);return;
+        }
+        h->card.timing=h->uhs_func;
+        h->card.module_divisor=(h->uhs_func==3&&(h->card.uhs_caps&SUNXI_MMC_SIGNAL_300M))?(SUNXI_MMC_MODULE_300M|1u):2u;
         h->protocol=P_SD_CLOCK;h->sd_ios=0;return;
     case P_SD_TUNE:
         if(!UHS_ON){fault(h,SUNXI_MMC_CARD);return;}
@@ -1174,7 +1279,7 @@ static void protocol(struct sunxi_mmc *h)
         if(++h->tune_repeat<TUNE_REPEATS){tune_next(h);return;}
         tune_advance(h,1);return;
     case P_SD_MODE_STATUS:
-        if(ready(h))h->state=SUNXI_MMC_READY;return;
+        if(ready(h)){h->card.ceiling=(uint8_t)ceiling_of(h);h->state=SUNXI_MMC_READY;}return;
     case P_SD_STATUS_APP:
         if (!card_response(h)) return;
         if (!(r & (1u << 5))) { fault(h, SUNXI_MMC_CARD); return; }
@@ -1244,7 +1349,8 @@ void sunxi_mmc_poll(struct sunxi_mmc *h)
 #endif
     h->wait = SUNXI_MMC_WAIT_NONE;
     if (h->state == SUNXI_MMC_READING) ++h->result.polls;
-    if (h->setup < 6) setup(h);
+    if (UHS_ON && h->restart) restart_step(h);
+    else if (h->setup < 6) setup(h);
     else if(h->protocol==P_SD_CLOCK)sd_clock(h);
     else if(h->last_us<h->retry_us){h->wait=SUNXI_MMC_WAIT_TIMER;h->wait_us=(uint32_t)(h->retry_us-h->last_us>UINT32_MAX?UINT32_MAX:h->retry_us-h->last_us);}
     else if(UHS_ON&&h->protocol==P_SD_SIGNAL)sd_signal(h);

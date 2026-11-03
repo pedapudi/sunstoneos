@@ -182,7 +182,7 @@ static int voltage(struct a733_mmc_platform *p,unsigned initial)
 }
 static uint32_t irq_bit(const struct a733_mmc_platform *p)
 {return A733_MMC_GIC_BIT(a733_mmc_slot(p->config.kind,p->config.emmc_host));}
-static int masked(struct a733_mmc_platform *p)
+static int masked_pending(struct a733_mmc_platform *p,int tolerate_pending)
 {
     uint32_t v,mask=irq_bit(p);
     if(!rd(p,GIC,&v))return -1;
@@ -192,13 +192,17 @@ static int masked(struct a733_mmc_platform *p)
     if(!rd(p,GIC+0x318,&v))return -1;
     if(v&mask)return 0;
     if(!rd(p,GIC+0x218,&v))return -1;
-    return (v&mask)?-1:1; /* Preserve an unexplained inherited pending interrupt. */
+    return (v&mask)&&!tolerate_pending?-1:1; /* Preserve an unexplained inherited pending interrupt. */
 }
+static int masked(struct a733_mmc_platform *p){return masked_pending(p,0);}
 /* The controller's interrupt as the running checks want it: masked, or, once the owner completes by interrupt, enabled with the
  * distributor settled. */
 static int gic_ok(struct a733_mmc_platform *p)
 {
-    if(!p->irq_mode)return masked(p);
+    /* A level interrupt stays pending in the distributor while the controller's status asserts it. After a fault in interrupt mode the owner has masked the line, but
+     * the status that raised it is cleared only by the restart's own reset (restart_step), which runs after this check: until that reset has run the pending bit is
+     * the fault's, not an unexplained inheritance. The third write session's restart failed here, before its first controller access. */
+    if(!p->irq_mode)return masked_pending(p,p->core.restart!=0);
     uint32_t v;
     return rd(p,GIC,&v)&&!(v&BIT(31))?1:-1;
 }
@@ -549,6 +553,7 @@ static enum a733_mmc_platform_result controller(struct a733_mmc_platform *p)
            !(p->core.state==SUNXI_MMC_IDENTIFY&&p->core.tuning))||p->core.last_us<p->core.retry_us)break;
     }
     p->core_call=0;
+    if(!p->fault&&p->core.state==SUNXI_MMC_FAULT&&p->stage==READY&&!p->update&&timely(p)&&sunxi_mmc_recoverable(&p->core))return A733_MMC_ERROR;
     if(p->fault||p->core.state==SUNXI_MMC_FAULT||!timely(p))return fail(p);
     if(p->core.state==SUNXI_MMC_READY){p->stage=READY;return A733_MMC_READY;}
     if(p->core.state==SUNXI_MMC_DONE)return A733_MMC_COMPLETE;
@@ -652,7 +657,7 @@ static enum a733_mmc_platform_result command(struct a733_mmc_platform *p,unsigne
     p->core_call=0;
     /* Successful take is the final metadata operation: no fallible callback
      * observes time or hardware after releasing the borrowed buffer. */
-    if(operation==1)return finish(p,sunxi_mmc_take(&p->core,out)?A733_MMC_READY:A733_MMC_INVALID);
+    if(operation==1){int taken=sunxi_mmc_take(&p->core,out);if(taken)p->recover_errors=0;return finish(p,taken?A733_MMC_READY:A733_MMC_INVALID);}
     *(struct sunxi_mmc_card *)out=p->core.card;return finish(p,A733_MMC_READY);
 }
 enum a733_mmc_platform_result a733_mmc_platform_read(struct a733_mmc_platform *p,
@@ -740,9 +745,38 @@ static int close_idle(struct a733_mmc_platform *p)
 }
 int a733_mmc_platform_irq(struct a733_mmc_platform *p,int enable)
 {
+    /* Leaving interrupt mode is always allowed: a failed transfer (a core in FAULT, a borrowed buffer) must be able to give the mode up before its restart, which
+     * refuses while the mode is on (the third write session on 3-3 stopped there: its owner could not clear the mode with the core faulted). */
+    if(p&&p->initialized&&!enable){p->irq_mode=0;return 1;}
     if(!p||!p->initialized||p->update||p->config.kind!=SUNXI_MMC_SD||p->stage!=READY||p->fault||
        p->core.state!=SUNXI_MMC_READY||p->core.borrowed||p->ops.current(p->cookie)!=1)return 0;
     p->irq_mode=enable?1u:0u;return 1;
+}
+enum a733_mmc_platform_result a733_mmc_platform_restart(struct a733_mmc_platform *p,uint64_t deadline,unsigned ceiling,enum sunxi_mmc_mode_reason why)
+{
+    if(!p||!p->initialized||p->update||p->config.kind!=SUNXI_MMC_SD||p->config.sd_profile!=SUNXI_MMC_SD_UHS_SDR104||!deadline||
+       deadline>p->config.lifetime_deadline_us)return A733_MMC_INVALID;
+    if(!enter_api(p))return A733_MMC_BUSY;
+    if(p->fault)return finish(p,fail(p));
+    if(p->irq_mode||p->ops.current(p->cookie)!=1||p->stage!=READY||p->signal==1||p->signal==3||(p->core.borrowed&&p->core.state!=SUNXI_MMC_FAULT)||
+       (p->core.state!=SUNXI_MMC_READY&&!sunxi_mmc_recoverable(&p->core)))return finish(p,A733_MMC_INVALID);
+    p->deadline=deadline;
+    p->core_call=1;int ok=sunxi_mmc_restart(&p->core,ceiling,why,deadline);p->core_call=0;
+    if(!ok)return finish(p,A733_MMC_INVALID);
+    p->stage=IDENTIFY;
+    return finish(p,A733_MMC_PENDING);
+}
+enum a733_mmc_platform_result a733_mmc_platform_recover(struct a733_mmc_platform *p,uint64_t deadline)
+{
+    if(!p||!p->initialized)return A733_MMC_INVALID;
+    unsigned timing=p->core.card.timing,ceiling=timing;
+    ++p->recover_errors;
+    enum sunxi_mmc_mode_reason why=SUNXI_MMC_MODE_RETUNE;
+    if(p->recover_errors>=2){
+        if(!timing)return A733_MMC_INVALID;              /* an error at the lowest mode, again: final */
+        ceiling=timing-1;why=SUNXI_MMC_MODE_ERRORS;p->recover_errors=0;
+    }
+    return a733_mmc_platform_restart(p,deadline,ceiling,why);
 }
 /* The core is idle and its last operation finished and was collected: a read that delivered its bytes, or, in a write-capable build, a bounded DMA write
  * that the card confirmed (CMD13 READY and TRAN after every block it submitted). A write that started and was not confirmed is not a state to close from. */

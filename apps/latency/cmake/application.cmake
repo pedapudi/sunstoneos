@@ -25,3 +25,7 @@ option(SUNSTONE_LATENCY_FORCE_EL0_ABORT "Take a data abort at EL0 after the CPU 
 if(SUNSTONE_LATENCY_FORCE_EL0_ABORT)
   target_compile_definitions(${latency_name} PRIVATE SUNSTONE_LATENCY_FORCE_EL0_ABORT=1)
 endif()
+set(SUNSTONE_LATENCY_TLBI "0" CACHE STRING "Issue a broadcast TLB invalidation on every tick of the measured phases: 0 none, 1 TLBI VAE1IS, 2 TLBI ASIDE1IS, 3 TLBI VMALLE1IS")
+if(NOT SUNSTONE_LATENCY_TLBI STREQUAL "0")
+  target_compile_definitions(${latency_name} PRIVATE SUNSTONE_LATENCY_TLBI=${SUNSTONE_LATENCY_TLBI})
+endif()
