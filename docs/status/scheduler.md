@@ -226,7 +226,7 @@ The rule chose the fork, and it is the default.
 Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-75 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+81 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -305,4 +305,10 @@ Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`,
 | `1793617020998598953-a6ecdfc1` | 2026-11-02 | 3-3 | `8164782bdec2` | returned | passed | run_total 109.557 s, idle_pulls 6722, idle_entries_with_work_waiting 4632, recognition_mean 111.033 ms |
 | `1793617131735748473-bef01b84` | 2026-11-02 | 3-3 | `8164782bdec2` | returned | passed | run_total 140.514 s, idle_pulls 3939, idle_entries_with_work_waiting 2496, recognition_mean 110.943 ms |
 | `1793617277487733781-666ca5a4` | 2026-11-02 | 3-3 | `8164782bdec2` | returned | passed | run_total 141.26 s, idle_pulls 6266, idle_entries_with_work_waiting 7600, recognition_mean 111.031 ms |
+| `1793668412009966237-1c10f02f` | 2026-11-03 | 3-3 | `e7a4f58229a1` | returned | passed | run_total 273.108 s, task_latency_max_4khz 31.1 us, entry_max_4khz 11.3 us, gap_max_4khz 25.2 us, recognition_mean 110.683 ms |
+| `1793668868450145397-9ef28fda` | 2026-11-03 | 3-3 | `89fb9417c2c6` | returned | passed | run_total 275.648 s, gap_max_4khz 16 us, recognition_mean 109.411 ms |
+| `1793668892195242489-3b585c56` | 2026-11-03 | 3-3 | `89fb9417c2c6` | returned | passed | run_total 311.477 s, gap_max_4khz 19.8 us, recognition_mean 109.434 ms |
+| `1793669877242530330-39c2dcac` | 2026-11-03 | 3-3 | `422d047168aa` | returned | failed | run_total 280.539 s, gap_p50_1khz 6.5 us |
+| `1793669888246106384-74781dfd` | 2026-11-03 | 3-3 | `422d047168aa` | returned | failed | run_total 278.983 s, gap_p50_1khz 6.5 us |
+| `1793671006348692345-8b3ce66b` | 2026-11-03 | 3-3 | `e7a4f58229a1` | returned | passed | run_total 260.588 s, task_latency_max_4khz 31.1 us, recognition_mean 110.551 ms |
 <!-- evidence-table:end -->
