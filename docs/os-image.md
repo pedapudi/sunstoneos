@@ -3,7 +3,8 @@
 SunstoneOS builds a FreeRTOS OS image independently of any recognizer. The
 OS owns board startup, session admission, device services, supervision,
 interrupt routing, thermal policy and return to the host. An image contains
-zero or one statically linked application.
+zero or one statically linked application. A session grants the services that
+the image links ([services are granted at admission](#services-are-granted-at-admission)).
 
 The application kit consists of `include/sunstone_app.h`,
 `include/sunstone_session.h`, `tools/sunstone-manifest.py`, and the CMake
@@ -134,6 +135,38 @@ mappings remain writable in hardware; they do not isolate a faulty or hostile
 application. The legacy GPU profile separately enforces its CPU read-only
 output mapping. [Memory protection](memory-protection.md) records the
 system's trust model.
+
+## Services are granted at admission
+
+A session grants services; the image does not fix them. The decoded session
+(`struct os_session`) holds the NPU, I2S, CPU clock and DMA records of every
+image and a mask, `granted`, of the services that this session carries:
+
+- **I2S capture:** the I2S device bit and the receive record, together. A record
+  without the device bit, or the device bit without the record, is refused.
+- **Radio station:** the board prefix's workload 1 (and, in a build that has the
+  radio, only with USB storage).
+- **NPU, CPU clock grant, DMA:** the service's record.
+
+The wire form is unchanged: a record is present only for a granted service, and
+the thermal record's size field names the board prefix plus the records present.
+A service whose code the image does not link cannot be granted; the build options
+`SUNSTONE_A733_OS_AUDIO`, `_RADIO`, `_NPU`, `_NPU_QUEUE`, `_CPU_CLOCK`, `_PERF`,
+`_HEADSET` and `_RESIDENT` decide which code is linked until each is replaced by
+its run-time form ([the design](designs/one-os-image.md)). The `all` gate variant
+links every service that is already a run-time option.
+
+A service that is not granted touches no hardware. Its start entry returns before
+it authorizes a pin, binds a callback, creates a task or reads a register, the
+supervisor requires no progress from it, and the EL3 identity hook reads the radio
+profile and the chip ID only for workload 1. Every service has its id in every
+image (`OS_SERVICE_*`).
+
+The compositions that admission refuses are one table, `refused_compositions` in
+`apps/os/grants.c`, each row with its reason: the NPU with I2S capture, the NPU
+with the radio, I2S with the DMA service, resident CPU grants with I2S or the
+radio, and the NPU with CPU grants outside a recorded or performance-mode image.
+`checks/os-session-grants.py` lists them and checks the wire sizes.
 
 ## Host messages and results
 

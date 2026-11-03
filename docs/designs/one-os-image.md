@@ -151,6 +151,14 @@ Today's rules, and what each becomes at admission:
 
 The refusals are one table in the admission code, each row with its reason. A refusal that is a convenience becomes a candidate for removal once checks cover the combination; this design does not remove them.
 
+**The two NPU rows.** "The NPU with the radio" and "the NPU with I2S capture" conflict with the robotics target, where a robot runs models on the NPU while it talks over Wi-Fi and listens. They stay for now.
+
+- *Original reason.* The rows are the build's refusal of 24 October ("The NPU OS profile requires recorded recognition and a supported GPU/CPU composition"), added with the first NPU profile (commits 70403fba and d7112328, "work in progress"). The profile was qualified with recorded input only, and the build refused everything it had not been run with. I found no recorded hardware conflict, failure or shared-resource analysis behind either row; they were a scope limit of the first profile.
+- *What the two compositions share.* DRAM bandwidth (NPU graphs and Wi-Fi DMA or I2S DMA), the thermal gate (the NPU's ALLOW and STOP come from the one thermal owner), the supervisor's windows (radio and network 1 s, audio 1 s, NPU 5 s), the interrupt cores, and the DMA0 channel of I2S. They share no rail: the NPU is PCK600 domain 4 and the PLL_NPU clock, the radio module is BLDO5 behind SDC1, and I2S is PB5, PB6 and PB8.
+- *The measurement that lifts the NPU and radio row.* On the board at the approved top clocks, run an NPU graph stream and a Wi-Fi TCP exchange together for the length of a recognition session (at least 10 minutes) against the same two alone. Pass when (a) no supervisor window is missed and the worst radio poll and network step latency with the NPU running are within 10 percent of the radio alone at the 99.9th percentile, (b) the NPU's job latency distribution (p50, p99, maximum) with the radio running is within 5 percent of the NPU alone, (c) the thermal level never reaches STOP from the added load, and (d) the TCP exchange loses no data. The record is an evidence record with the prediction written first.
+- *The measurement that lifts the NPU and I2S row.* The same, with a capture loop in place of the Wi-Fi exchange: pass when the I2S ring (4,096-byte periods, 64 entries) records no overrun and no late period over at least 10 minutes with the NPU saturating DRAM, the worst DMA0 service latency is within 10 percent of the capture alone, and (b) and (c) above hold.
+- *What a pass changes.* The row is removed from `refused_compositions`, with the evidence record named in the commit, and the `all` image is then the configuration under test.
+
 ## Size
 
 Existing builds from the wifi-stages gate (`~/.cache/sunstoneos/build/gate-os-*-wifi-stages-1103-3798495c50`), `.text` + `.rodata` / `.data` / `.bss` in bytes:
@@ -191,7 +199,7 @@ A disabled service costs one load at start and its code size. Nothing polls. Gra
 One option family per commit series. Each series lands on its own, passes its checks and removes its variants from `VARIANTS` before the next is built on it:
 
 1. **Foundation (done).** The granted set (`struct os_session` holds every record and `granted`; the wire form carries a record only for a granted service and the thermal record's size follows the records present), the fixed service ids, the refusal table (`apps/os/grants.c`), the start-entry guards of the NPU, I2S and radio, the EL3 identity hook reading the radio profile and chip ID only for workload 1, the `all` variant and the ungranted-service checks. No option removed yet; the options now decide only which code is linked.
-2. **CPU family** (`A76_ADMITTED`, `CPU_CLOCK`, `PERF`): removes `cpu-clock`, `perf` and `perf-npu-low`. Its design goes to the three-reviewer panel before any code.
+2. **CPU family** (`A76_ADMITTED`, `CPU_CLOCK`, `PERF`): removes `cpu-clock`, `perf` and `perf-npu-low`. [Its design](one-os-image-cpu.md) goes to the three-reviewer panel before any code.
 3. **Services** (`AUDIO`, `RADIO`, `HEADSET`, `MSBC`): removes `resaud`, `resradio`, `resradioaud`, `headset`, `resheadset`, `radio-headset`, `resradio-headset`. The radio gets its device bit and extent, the I2S gate becomes a real admission check (device bit and record together, done in the foundation), and the headset and MSBC become the manifest-linked object library.
 4. **NPU** (`NPU`, `NPU_QUEUE`, `NPU_OBSERVE`, the catalogue): removes `npu` and `npu-queue`. Builds on the umem dynamic-pool branch.
 5. **Lifetime** (`RESIDENT`, then `CPU_RETURN`): removes `res` and, if it folds, the returning variants.
