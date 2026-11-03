@@ -63,13 +63,14 @@ function(sunstone_scheduler_partitioned_bind target output)
   get_target_property(sources ${target} SOURCES)
   sunstone_scheduler_partitioned_sources(sources "${output}")
   set_property(TARGET ${target} PROPERTY SOURCES "${sources}")
-  set_source_files_properties("${output}/tasks.c" "${output}/queue.c"
-    "${output}/event_groups.c" "${output}/stream_buffer.c" "${output}/timers.c"
-    PROPERTIES COMPILE_OPTIONS "-mgeneral-regs-only")
+  # The include path and definition sit on the sources themselves, so an image that copies this target's sources
+  # (get_target_property ... SOURCES) compiles the object-locked kernel files with the adapter they need.
+  set(kernel_sources "${output}/tasks.c" "${output}/queue.c" "${output}/event_groups.c" "${output}/stream_buffer.c" "${output}/timers.c")
   foreach(name owner notification deadline freertos_registry freertos_control)
-    set_source_files_properties("${root}/kernel/scheduler/${name}.c"
-      PROPERTIES COMPILE_OPTIONS "-mgeneral-regs-only")
+    list(APPEND kernel_sources "${root}/kernel/scheduler/${name}.c")
   endforeach()
+  set_source_files_properties(${kernel_sources} PROPERTIES COMPILE_OPTIONS "-mgeneral-regs-only"
+    INCLUDE_DIRECTORIES "${output}/include;${root}/kernel/scheduler" COMPILE_DEFINITIONS "configSS_PARTITIONED_SCHEDULER=1")
   target_include_directories(${target} BEFORE PRIVATE "${output}/include" "${root}/kernel/scheduler")
   target_compile_definitions(${target} PRIVATE configSS_PARTITIONED_SCHEDULER=1)
   target_compile_options(${target} PRIVATE -march=armv8.1-a+lse)

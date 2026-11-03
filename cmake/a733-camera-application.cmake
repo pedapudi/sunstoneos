@@ -78,10 +78,6 @@ target_include_directories(sunstone-a733-camera BEFORE PRIVATE "${camera_root}/a
 target_compile_definitions(sunstone-a733-camera PRIVATE SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1
  SUNSTONE_A733_USB=1 SUNSTONE_CAMERA_APPLICATION=1 SUNSTONE_CAMERA_SIZE=${camera_size}
  SUNSTONE_CAMERA_WIDTH=${camera_width} SUNSTONE_CAMERA_HEIGHT=${camera_height})
-# The sources come from the storage image, including its object-locked kernel sources; they need the same scheduler binding.
-if(SUNSTONE_PARTITIONED_SCHEDULER)
- sunstone_scheduler_partitioned_bind(sunstone-a733-camera "${storage_base}")
-endif()
 if(NOT SUNSTONE_CAMERA_SUPERVISED)
  target_compile_definitions(sunstone-a733-camera PRIVATE
   A733_SMP_CONTRACT_MAGIC=0x4153373343414332ULL A733_SMP_RESULT_MAGIC=0x4153373343415232ULL)
