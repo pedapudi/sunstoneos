@@ -16,6 +16,7 @@ import subprocess
 import harness
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--evidence', '{output}', '--dsi-reference', '{cache}/evidence/dsi-phy-20261016/reference.c']]
 CLOCK = r'''
 #include <stdint.h>
 #include <assert.h>

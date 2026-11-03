@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--upstream', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--evidence', '{output}']]
 spec = importlib.util.spec_from_file_location("rsn_recipe", ROOT / "checks/aic8800-supplicant.py")
 recipe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(recipe)

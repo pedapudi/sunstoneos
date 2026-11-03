@@ -6,6 +6,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+GATE_RUNS = [['--sources', '{cache}/sources', '--evidence', '{output}']]
 
 p = argparse.ArgumentParser()
 p.add_argument('--sources', type=Path, required=True, help='External SunstoneOS sources cache')

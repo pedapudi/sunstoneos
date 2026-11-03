@@ -13,6 +13,7 @@ from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X29, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_PC
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--evidence', '{output}']]
 SOURCES = ['include/a733_cpu_coherence.h', 'platform/a733/cpu_coherence.c', 'platform/a733/cpu_coherence.S',
            'checks/a733-cpu-coherence.c', 'checks/a733-cpu-coherence.py']
 TF = Path.home() / '.cache/sunstoneos/sources/cpu-continue'

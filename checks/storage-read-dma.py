@@ -9,6 +9,9 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn.arm64_const import UC_ARM64_REG_X0
 ROOT=Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--image', '{elf:storage-read}', '--session', '{session:storage-read}', '--output', '{output}', '--case', 'single-read', '--case', 'two-clients', '--case', 'usb-final-in', '--case', 'bounds-alias', '--case', 'mapping-descriptor', '--case', 'mapping-buffer', '--case', 'cache-contract', '--case', 'cache-before-fail', '--case', 'cache-after-fail', '--case', 'loss-active', '--case', 'deadline-active', '--case', 'native-client'],
+]
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 modes=module('read_dma_modes',ROOT/'checks/storage-read-sd-modes.py')

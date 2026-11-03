@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+GATE_RUNS = [['--evidence', '{output}']]
 
 root = Path(__file__).resolve().parents[1]
 ap = argparse.ArgumentParser()

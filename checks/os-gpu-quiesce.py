@@ -11,6 +11,7 @@ from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP
 from harness import machine as harness_machine, Image, save, skip_crumbs
+GATE_RUNS = [['--image', '{elf:ret-gpu}', '--output', '{output}']]
 
 CASES=('ready','owned-job','recovery','manual-closed','cold','refused-create','pending-create',
        'unconstructed','lost-isolation','deadline','missing-primary-queue',

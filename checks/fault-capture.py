@@ -32,6 +32,7 @@ from unicorn.arm64_const import (UC_ARM64_REG_X0, UC_ARM64_REG_X29, UC_ARM64_REG
                                  UC_ARM64_REG_PC)
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--image', '{elf:sup}', '--output', '{output}']]
 spec = importlib.util.spec_from_file_location('fault_decode', ROOT / 'checks/fault-decode.py')
 decode = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(decode)

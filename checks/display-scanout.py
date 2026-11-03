@@ -5,6 +5,7 @@ import hashlib
 import json
 import pathlib
 import subprocess
+GATE_RUNS = [['--evidence', '{output}']]
 if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 p = argparse.ArgumentParser()

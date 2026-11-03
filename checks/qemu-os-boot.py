@@ -33,6 +33,7 @@ from concurrent.futures import ThreadPoolExecutor
 from harness import CACHE, CLANG, LLD, environment
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--output', '{output}']]
 QEMU = CACHE / 'host/usr/bin/qemu-system-aarch64'
 PYTHON = sys.executable
 OBJCOPY = '/usr/lib/llvm-21/bin/llvm-objcopy'

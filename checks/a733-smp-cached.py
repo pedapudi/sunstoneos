@@ -40,6 +40,7 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_RE
 from unicorn.arm64_const import *
 ROOT=Path(__file__).resolve().parents[1]
 import importlib.util
+GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by deadline.py'
 spec=importlib.util.spec_from_file_location('hw_facts',ROOT/'tools/hw_facts.py')
 hw_facts=importlib.util.module_from_spec(spec);spec.loader.exec_module(hw_facts)
 # The Non-secure view of a Secure priority comes from docs/hardware/a733-facts.json.

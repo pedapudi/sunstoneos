@@ -7,6 +7,9 @@ import pathlib
 import re
 import shlex
 import subprocess
+GATE_RUNS = [
+    ['--mesa-source', '{cache}/gpu-producer-build/mesa', '--mesa-build', '{cache}/gpu-producer-build/build', '--evidence', '{output}'],
+]
 if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 REVISION = '86c7176d2dd0065555521bf8c61f208bf53c75d6'

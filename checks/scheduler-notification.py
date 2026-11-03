@@ -7,6 +7,7 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--build-dir', '{output}']]
 
 
 def run(command, env):

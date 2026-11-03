@@ -4,6 +4,7 @@ import argparse,hashlib,importlib.util,json,struct
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--image', '{elf:storage-read-p1}', '--session', '{session:storage-read-p1}', '--output', '{output}']]
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 service=module('sd_modes_service',ROOT/'checks/storage-read-service.py')

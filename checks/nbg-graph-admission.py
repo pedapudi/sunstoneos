@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ('drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_relocation.c', 'drivers/npu/nbg_model.c',
                 'include/nbg_assembly.h', 'tools/npu-nbg-mutate.py', 'checks/nbg-graph-admission.py')
+GATE_RUNS = [['--output', '{output}']]
 GRAPHS = ('add', 'sub', 'mul', 'relu', 'sig', 'tanh', 'swish', 'ln176', 'ln64', 'sm64', 'sm32', 'chainA', 'chainB',
           'chainC', 'deep', 'mm', 'glu', 'sh-exp', 'sh-gather', 'sh-resize', 'sh-pad')
 

@@ -41,6 +41,7 @@ CHECK_INPUTS = ['apps/cpu-npu-concurrency/main.c', 'apps/cpu-npu-concurrency/gem
  'checks/cpu-npu-concurrency/producer.c', 'checks/os-cpu-return-services.py',
  'checks/os-cpu-return.py', 'apps/os/thermal.c', 'apps/os/thermal-report.py',
  'apps/os/cpu-return-thermal.py', 'tools/board.py', 'tools/board_images.py']
+GATE_RUNS = [['--elf', '{elf:ret-npu-load}', '--out', '{output}']]
 MAIN, CLIENT, BOOTSTRAP, WORKER = 0x5000, 0x3000, 0x4000, 0x9000
 POOL, POOL_BYTES = 0x47400000, 0x800000  # replaced by the image's own pool symbols in main()
 

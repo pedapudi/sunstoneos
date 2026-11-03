@@ -63,6 +63,7 @@ from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_L
 from harness import Image as Layouts, save
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['{elf:ret-npu-load}', '--out', '{output}']]
 sys.path.insert(0, str(ROOT / 'tools'))
 import board_images
 

@@ -14,6 +14,7 @@ import argparse, hashlib, json, re, subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--output', '{output}']]
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--sources', type=Path, default=Path.home() / '.cache/sunstoneos/sources')
 p.add_argument('--output', type=Path, required=True, help='new evidence directory')

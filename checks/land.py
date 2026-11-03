@@ -15,6 +15,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+GATE_RUNS = [['--output', '{output}']]
 
 if not __debug__:
     raise SystemExit('checks require assertions')

@@ -11,6 +11,9 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--work', '{output}', '--', '-DFREERTOS_DIR={cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '-DTINYUSB_DIR={cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '-DSUNSTONE_LLD={cache}/host/usr/lib/llvm-21/bin/ld.lld', '-DSUNSTONE_NETWORK_C_HEADERS={cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include', '-DSUNSTONE_RSN_DIR={cache}/sources/radio/stacks/wpa_supplicant-2.12', '-DSUNSTONE_TCP_DIR={cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7', '-DSUNSTONE_BOARD_SUPERVISED=ON', '-DSUNSTONE_GPU_FIRMWARE={cache}/evidence/gpu-render-20261017/native1/fixtures/gpu.fw', '-DNEWLIB_ROOT={cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf', '-DNEWLIB_SMP_ROOT={cache}/host/newlib-smp-bd24e79bebf17c01', '-DSUNSTONE_BT_SECURITY_DIR={cache}/sources/bluetooth-security-zephyr-v4.2.1'],
+]
 IDENTITIES = ("board-application/build-id.txt", "storage-maintenance/build-id.txt")
 
 

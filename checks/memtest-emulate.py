@@ -33,6 +33,7 @@ from pathlib import Path
 import shutil
 import struct
 import sys
+GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by memtest-map-admission.py'
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]

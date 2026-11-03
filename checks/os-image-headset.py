@@ -59,6 +59,7 @@ from harness import machine as harness_machine
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--build', '{build:headset}', '--output', '{output}']]
 CASES = ['pins-and-startup', 'keyboard-generations', 'request-after-publication', 'refused-borrow',
          'request-rules', 'refused-request', 'failed-application', 'owner-iteration',
          'stopped-capture', 'wideband-segment', 'button-only-workload']

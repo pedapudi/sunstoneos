@@ -7,6 +7,9 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+GATE_RUNS = [
+    ['--output', '{output}', '--port', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2/portable/GCC/AArch64'],
+]
 
 CASES = ['nested-msc', 'nested-hid-ls', 'nested-mtt-hid-ls', 'nested-unplug', 'nested-leaf-unplug',
          'nested-refused', 'third-tier',

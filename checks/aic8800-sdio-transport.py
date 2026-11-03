@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--reference-dir', '{cache}/sources/radio-transport', '--evidence', '{output}']]
 REFERENCES = {
     "aicsdio.c": "f08bcfa63f9b7226f4b26832ee9b6088c057fd5ee06389f3ad872f13f9246f0c",
     "aicsdio.h": "af520385376df1843a6e24c01cc7128a151b148fea18d73c0d20f1a345bc6571",

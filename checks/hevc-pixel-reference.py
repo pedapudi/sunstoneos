@@ -12,6 +12,7 @@ from pathlib import Path
 import subprocess
 
 import harness
+GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by hevc-pixel-reference-host.py'
 
 PICTURE_BYTES = 640 * 480 * 3 // 2
 LUMA_BYTES = 640 * 480

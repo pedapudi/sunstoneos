@@ -11,6 +11,7 @@ from elftools.elf.elffile import ELFFile
 from unicorn import (Uc, UC_ARCH_ARM, UC_ARCH_ARM64, UC_MODE_THUMB, UC_MODE_ARM,
                      UC_HOOK_CODE, UC_HOOK_MEM_WRITE)
 from unicorn import arm_const as arm, arm64_const as a64
+GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by standalone-boot-loader.py'
 
 
 def sha(data):

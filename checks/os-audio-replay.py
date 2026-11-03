@@ -18,6 +18,7 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--build', '{build:sup}', '--output', '{output}']]
 CASES = ['recorded-sequences-tail-and-headroom', 'paced-windows-and-stale-sequences',
          'short-tail-refused', 'grant-range-and-lifecycle-refusals',
          'all-container-formats-after-WAV-header', 'clock-regression-retained',

@@ -27,6 +27,9 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_RE
 from unicorn import arm64_const as a64
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--build', '{build:stage2}', '--boot0', '{cache}/sources/board-boot/boot0_sdcard_orangepizero3w.fex', '--output', '{output}'],
+]
 
 
 def module(name, path):
