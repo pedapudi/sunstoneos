@@ -1268,24 +1268,36 @@ def daemon_code_cases(out):
         (daemon/name).parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(board.ROOT/name,daemon/name)
     env={**os.environ,'GIT_AUTHOR_NAME':'c','GIT_AUTHOR_EMAIL':'c@e.invalid','GIT_COMMITTER_NAME':'c','GIT_COMMITTER_EMAIL':'c@e.invalid',
          'GIT_CONFIG_GLOBAL':os.devnull,'GIT_CONFIG_SYSTEM':os.devnull}
-    def git(*a):subprocess.run(['git','-C',str(daemon),*a],check=True,capture_output=True,env=env)
-    git('init','-q');git('add','-A');git('commit','-qm','daemon checkout')
-    queue=board.Queue(root/'state');(queue.root/'daemon.json').write_text(json.dumps({'root':str(daemon)}))
+    def git(*a):return subprocess.run(['git','-C',str(daemon),*a],check=True,capture_output=True,text=True,env=env).stdout.strip()
+    # The daemon started from a revision whose session files are older; the checkout has advanced since, and its HEAD now holds
+    # exactly the files of the tree under test. A comparison with HEAD would pass; the daemon still runs the older revision.
+    older=['tools/board_images.py','apps/os/host.py']
+    saved={name:(daemon/name).read_bytes() for name in older}
+    for name in older:(daemon/name).write_text('# an older copy\n')
+    git('init','-q');git('add','-A');git('commit','-qm','older session files');started=git('rev-parse','HEAD')
+    for name in older:(daemon/name).write_bytes(saved[name])
+    git('commit','-qam','the checkout advanced');advanced=git('rev-parse','HEAD');assert advanced!=started
+    queue=board.Queue(root/'state');record=queue.root/'daemon.json'
     args=arguments(root,submit=True);args.queue=queue.root
     with patch.object(images,'inspect',return_value={'generic':False}),patch.object(board,'port_idle',return_value=True):
+        record.write_text(json.dumps({'root':str(daemon),'started_revision':advanced}))
         queue.submit(args);board.require_daemon_code(queue.root)
         passed('daemon-code-identical-files-pass-submit-and-check')
-        (daemon/'tools/board_images.py').write_text('# an older copy\n');(daemon/'apps/os/host.py').write_text('# an older copy\n')
-        git('commit','-qam','older session files')
+        record.write_text(json.dumps({'root':str(daemon),'started_revision':started}))
         for action in (lambda:queue.submit(args),lambda:board.check_image(args)):
             try:action()
             except ValueError as error:
                 message=str(error)
-                assert 'the daemon runs' in message and 'apps/os/host.py, tools/board_images.py;' in message and 'apps/os/host.py' in message,message
+                assert started[:12] in message and 'apps/os/host.py, tools/board_images.py;' in message,message
                 assert message.endswith('land them and restart the daemon first'),message
             else:raise AssertionError('a pre-flight on files the daemon does not run was accepted')
         assert len(list((queue.root/'entries').glob('*/entry.json')))==1,'a refused submission was queued'
-        passed('daemon-code-differing-session-files-refuse-submit-and-check')
+        passed('daemon-code-started-revision-not-head-decides-submit-and-check')
+        record.write_text(json.dumps({'root':str(daemon)}))
+        try:board.require_daemon_code(queue.root)
+        except ValueError as error:assert 'no started_revision' in str(error),str(error)
+        else:raise AssertionError('a daemon record without its started revision was accepted')
+        passed('daemon-code-record-without-started-revision-refused')
 
 
 def main():
