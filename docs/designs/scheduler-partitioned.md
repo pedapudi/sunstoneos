@@ -1069,9 +1069,23 @@ The task path misses the 10 us wake target (maximum 23.5 to 31.5 us, 99.99th per
 
 The second measurement attributes the locks. With `SUNSTONE_OBJECT_TRACE` every acquisition of the task lock and the interrupt lock is recorded by (object, caller) on each core: count, wait, hold and waits over 5 us. A wait over 5 us is also charged to the acquisition that last took that lock before the waiter arrived, giving a table of waiter against holder by object and call site. The object is the queue, event group or stream buffer the kernel call works on; public critical sections have none.
 
-Prediction for the entry/gap split (soaks of the unmodified fork, 25 s, task path alone at 1, 2 and 4 kHz): the entry delay carries the tail. Its maximum is at least 80% of the latency maximum on each core, and the gap stays at or below 8 us at the maximum and 6 us at the 99.99th percentile, so the gap alone meets the 10 us target. The interrupted contexts of the largest entry delays are EL0 code at the return from a supervisor call (the mask close of a kernel call), not interrupt handlers.
+Prediction for the entry/gap split (soaks of the unmodified fork, 25 s, task path alone at 1, 2 and 4 kHz; refuted, see the result below): the entry delay carries the tail. Its maximum is at least 80% of the latency maximum on each core, and the gap stays at or below 8 us at the maximum and 6 us at the 99.99th percentile, so the gap alone meets the 10 us target. The interrupted contexts of the largest entry delays are EL0 code at the return from a supervisor call (the mask close of a kernel call), not interrupt handlers.
 
 Prediction for the lock attribution: the waits over 5 us are on the task lock and the interrupt lock in comparable shares, more than 60% of them are charged to a holder acting on a different object than the waiter, and the rest are the same object (the allocator's recursive mutex and one or two queues). If so, most of the tail is serialization of independent objects, which per-object locks remove; if instead the same object dominates, a per-object lock cannot help and the tail needs shorter holds.
+
+Result of the split (two unmodified-fork soaks, entries `1793668412009966237-1c10f02f` and `1793671006348692345-8b3ce66b`, pooled; microseconds). The prediction that the entry delay carries the tail was wrong. The entry delay is short and the gap carries the tail.
+
+| Rate | Latency p50 / p99.99 / max | Entry delay p99.99 / max | Gap p50 / p99.99 / max |
+| --- | --- | --- | --- |
+| 1 kHz | 5.2 / 22.0 / 23.9 | 6.3 / 10.0 | 4.8 / 21.3 / 22.7 |
+| 2 kHz | 4.5 / 20.3 / 25.1 | 8.3 / 8.8 | 4.2 / 19.0 / 24.7 |
+| 4 kHz | 4.0 / 27.2 / 31.1 | 9.2 / 11.3 | 3.7 / 24.2 / 25.2 |
+
+Phase timers (`SUNSTONE_OWNER_COUNTERS`) on the wake path of cores 1 to 3, global locks (entry `1793668868450145397-9ef28fda`): the notification takes 0.9 to 1.2 us on average and at most 5.1 us; the interrupt-exit work 1.6 to 2.0 us on average, at most 18.9 us; the task switch 1.4 us on average, at most 11.4 us. Inside the exit work, the control drain exceeds 5 us in 536 of 548 148 passes on core 1 (at most 8.5 us, 13.7 us on core 2) and idle pull in 606 of 274 074 (at most 16.6 us), which are task transfers; hint inspection, deadline expiry and slice refresh never exceed 2.1 us. The rest of the gap is the exit and restore code and the task's own supervisor calls.
+
+Object locks against global locks, same image and phase timers (entries `1793668892195242489-3b585c56` and `1793668868450145397-9ef28fda`): entry delay maxima 5.3, 4.8, 5.5 against 5.7, 5.0, 5.7 us, gap maxima 15.7, 25.0, 19.8 against 16.0, 25.8, 16.0 us, recognition time 109.43 against 109.41 ms. The object locks do not change the task path. A wake-path variant that prefetches the woken task's lines and defers idle pull past a pending switch (entries `1793669877242530330-39c2dcac`, `1793669888246106384-74781dfd`) left the gap median at 6.5, 5.7, 5.3 us against 6.8, 5.8, 5.5 and failed the object check in four runs; it was removed.
+
+Conclusion. Locking cannot bring the task path to 10 us. The median wake already costs 4 to 7 us in kernel code on the woken core, and its tail (13 to 25 us) comes from idle-pull transfers, control drains and the exit and switch code, none of which waits for a global lock. Meeting the target needs a shorter wake path, for example fewer supervisor calls and barriers per wake, no owner pass that precedes the switch, or a core reserved from the streaming application.
 
 ### Object locks: queues, event groups and stream buffers lock their own object
 

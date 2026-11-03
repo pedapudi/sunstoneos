@@ -10,7 +10,7 @@ The robot's hard real-time work runs in interrupt handlers above the kernel API 
 
 | Target | Control path (above the API mask) | Task path (woken task) |
 | --- | --- | --- |
-| Wake latency at most 10 us | Met: maximum 3.6, 99.99th percentile 3.0 at 10 kHz over 1 254 587 periods (fork, five soaks after the exit change) | Not met: maximum 23.5 to 31.5, 99.99th percentile 19.7 to 24.5 at 1, 2 and 4 kHz over 125 000 to 504 000 periods per rate |
+| Wake latency at most 10 us | Met: maximum 3.6, 99.99th percentile 3.0 at 10 kHz over 1 254 587 periods (fork, five soaks after the exit change) | Not met: maximum 23.5 to 31.5, 99.99th percentile 19.7 to 24.5 at 1, 2 and 4 kHz over 125 000 to 504 000 periods per rate; with per-object locks the same (see the next section) |
 | Jitter at most 5% of the period | Met at 10 kHz: maximum 3.4 against 5 | Met at 1 kHz (maximum 18.5 against 50) and 2 kHz (20.9 against 25); not met at 4 kHz (28.3 maximum, 21.8 at the 99.99th percentile, against 12.5) |
 | No missed period | Met: none in any soak | Met: none in any soak |
 | Model within 2% | Met: the interrupts cost 0.02 to 0.06 percent of recognition time per kHz | Same |
@@ -22,6 +22,12 @@ Kernel choice. Pooled over five soaks per kernel (fork before the exit change, s
 Model cost of the interrupts, as a share of recognition time per kHz of interrupt rate: fork 0.020 (17 kHz of control and task interrupts cost 0.34%), stock 0.047 (0.80%); with 25 kHz of each path on five cores, +2.73% on the fork and +4.55% on stock, 0.055 and 0.091 per kHz, about 0.5 and 0.9 us of recognition time per interrupt. A robot should budget 0.02 to 0.1 percent of model throughput per kHz, spread over the cores that take the interrupts.
 
 Idle wake cost on the control core. The idle task is `dsb sy; wfi` and nothing else (`a733_cpu_idle`); there is no retention or clock-gating step. On the fork, 170 000 wake-ups per soak on core 4 took a median of 0.33 us from interrupt to handler, 0.5 to 0.7 us at the 99th percentile, 3.2 us at the 99.99th and at most 3.6 us, so the control core can stay in plain `wfi`. The stock kernel's `wfi` wake tail reached 10.9 us, because its interrupts waited behind `PSTATE.I` held by its yield handler.
+
+## The task path's time is in the wake path, not in lock waits
+
+Split of each task-path wake at the handler (`SUNSTONE_CONTROL_IRQ` images; entry delay is the handler start minus the deadline, gap is the task start minus the handler start). Two unmodified-fork soaks pooled, microseconds: entry delay p99.99 6.3 / 8.3 / 9.2 and maximum 10.0 / 8.8 / 11.3 at 1 / 2 / 4 kHz; gap median 4.8 / 4.2 / 3.7, p99.99 21.3 / 19.0 / 24.2, maximum 22.7 / 24.7 / 25.2. The gap carries the tail. Phase timers show the wake path (notification 1 us, interrupt-exit owner work 1.6 to 2 us, task switch 1.4 us on average) and its tail events (control drains and idle-pull transfers of 5 to 17 us, task switches to 11 us); none of them waits for a global lock. Per-object kernel locks (design: [object locks](../designs/scheduler-partitioned.md#object-locks-queues-event-groups-and-stream-buffers-lock-their-own-object)) leave the figures unchanged within the run-to-run spread: entry delay maxima 5.3 / 4.8 / 5.5 against 5.7 / 5.0 / 5.7, gap maxima 15.7 / 25.0 / 19.8 against 16.0 / 25.8 / 16.0. A prefetch of the woken task's lines with idle pull deferred past a pending switch changed nothing and was removed. The 10 us target cannot be reached by locking changes; the wake path itself must shorten. The object locks are kept: operations on independent objects no longer wait for each other (the `objects` emulator case fails on the global locks and passes on object locks) and the event-list insertion race is closed.
+
+Pending: five-soak sets of the final images (`before-task`, `after-task`), the lock trace (`trace-global`, `trace-object`) and a run with the woken task at EL1 are submitted but did not run, because the port was paused after repeated submissions of one image and hypothesis; the coordinator resumes it with `board.py resume 3-3`. The queued entries are in `build/sched-tasklock-1102/scratch/ids2.txt`.
 
 ## Intervals with PSTATE.I set on the control core
 
@@ -49,9 +55,9 @@ After the exit change the largest control latency per soak is 3.3 to 3.7 us, fro
 
 ## Backlog
 
-1. Task-path wake latency to the 10 us target (now 20 to 25 us at the 99.99th percentile). The masked time is 82 to 96% lock wait on the task lock (the sweep below); its remedies are in items 2 to 4.
-2. Per-object locking: move queue and notify state under per-object or per-owner locks so independent queues stop serializing; the fork still takes the global task and ISR locks in `ssKernelObjectEnter`.
-3. Shorter lock holds: touch the object's cache lines before masking; each hold is about 3.5 us of dependent DRAM refills.
+1. Task-path wake latency to the 10 us target (20 to 28 us at the 99.99th percentile). The gap from handler to task start carries the tail; shorten the wake path (fewer supervisor calls and barriers, no owner pass before the switch, bounded idle-pull and control-drain work per exit).
+2. Per-object locking: done for queues, event groups and stream buffers; no effect on the task path.
+3. Shorter lock holds and prefetch: the prefetch of the wake path's lines was tried and gave nothing.
 4. The abortable queue lock: a waiter that can take its place in line with the mask open.
 5. Tickless idle on the stock-derived kernel (work on `work/tickless-idle-1101`; changes the protected `patches/freertos-smp-*.patch`): measure control-period jitter with and without it.
 6. The 11 us owner-work time at interrupt exit on the control core. It no longer holds off the control interrupt, but it still delays ordinary interrupts and the task-path wake; bound the work per exit.
