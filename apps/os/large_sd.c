@@ -22,6 +22,7 @@
 #include "aarch64_device_memory.h"
 #include "device_memory_pool.h"
 #include "sunxi_smhc.h"
+#include "sd_note.h"
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -600,6 +601,22 @@ static int in_region(const uint8_t *p, size_t bytes)
     uintptr_t a = (uintptr_t)p;
     return write_region && a >= (uintptr_t)write_region && a - (uintptr_t)write_region <= write_region_bytes && bytes <= write_region_bytes - (a - (uintptr_t)write_region);
 }
+/* Where a write stopped, for the failure record that survives the watchdog reset (the report does not): stage 33 or 34, the platform fields as for a refused request,
+ * and what the report would have said. os_sd_diag[1] carries the core's error (3:0), its protocol step (9:4) and the low 16 bits of the controller's raw interrupt
+ * status at the fault (25:10); os_sd_diag[2] the pieces written so far (12:0) and the bus timing in force (14:13; 3 SDR104, 2 SDR50, 1 SDR25 or high speed, 0 SDR12 or
+ * default) for the record's 15-bit aux field (sd_owner.c); os_sd_diag[3] the failing piece's first sector. os_sd_write_pieces and os_sd_write_sectors count the pieces and
+ * sectors that completed. The mode log (os_sd_mode) holds every step the recovery took. */
+uint64_t os_sd_write_pieces, os_sd_write_sectors;
+static int write_fail(unsigned stage, enum a733_mmc_platform_result r, uint64_t sector, uint32_t count)
+{
+    (void)count;
+    const struct sunxi_mmc *c = &platform.core;
+    int rc = DIAG(stage, os_sd_write_detail(c));
+    if (!os_sd_diag[2]) os_sd_diag[2] = os_sd_write_aux(os_sd_write_pieces, c->card.timing);
+    if (!os_sd_diag[3]) os_sd_diag[3] = sector;
+    (void)r;
+    return rc;
+}
 static int hw_write_piece(uint64_t sector, uint32_t count, const uint8_t *src)
 {
     if (!count || count > OS_SD_WRITE_PIECE_SECTORS) return 0;
@@ -609,13 +626,21 @@ static int hw_write_piece(uint64_t sector, uint32_t count, const uint8_t *src)
     struct sunxi_mmc_write_authority authority;
     a733_storage_bounds_authority(&bounds, &authority);
     enum a733_mmc_platform_result r;
-    do { r = a733_mmc_platform_write_dma(&platform, &authority, A733_BOUNDED_WRITE_TOKEN, sector, count, dma, now_us() + WRITE_US); }
-    while (r == A733_MMC_BUSY && board_live(NULL));
-    if (r != A733_MMC_PENDING) return DIAG(33, PLATX(r));
-    r = drive_platform(now_us() + WRITE_US, recheck_for(count, 1));
-    if (r != A733_MMC_COMPLETE) return DIAG(34, PLATX(r));
+    /* A recoverable error (a controller, card or timeout error, a CRC status error or a busy timeout among them) identifies the card again, which tunes again, and on
+     * the second one in a row steps the mode down (a733_mmc_platform_recover); the same piece, the same sectors and data, is then written again, inside the same bounds. */
+    for (unsigned attempt = 0;; ++attempt) {
+        do { r = a733_mmc_platform_write_dma(&platform, &authority, A733_BOUNDED_WRITE_TOKEN, sector, count, dma, now_us() + WRITE_US); }
+        while (r == A733_MMC_BUSY && board_live(NULL));
+        if (r != A733_MMC_PENDING) return write_fail(33, r, sector, count);
+        r = drive_platform(now_us() + WRITE_US, recheck_for(count, 1));
+        if (r == A733_MMC_ERROR && attempt < 3 && recover_blocking()) continue;
+        break;
+    }
+    if (r != A733_MMC_COMPLETE) return write_fail(34, r, sector, count);
     do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
-    return r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.confirmed_blocks == count;
+    int ok = r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.confirmed_blocks == count;
+    if (ok) { ++os_sd_write_pieces; os_sd_write_sectors += count; }
+    return ok;
 }
 void os_sd_close_owner(void);
 static struct os_sd_hw hw;

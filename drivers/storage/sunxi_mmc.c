@@ -216,13 +216,13 @@ static void mode_note(struct sunxi_mmc *h, unsigned from, unsigned to, enum sunx
 
 int sunxi_mmc_recoverable(const struct sunxi_mmc *h)
 {
-    return UHS_ON && h && h->initialized && h->state == SUNXI_MMC_FAULT && !h->writing && h->config.kind == SUNXI_MMC_SD &&
+    return UHS_ON && h && h->initialized && h->state == SUNXI_MMC_FAULT && h->config.kind == SUNXI_MMC_SD &&
            h->config.sd_profile == UHS && (h->result.error == SUNXI_MMC_CONTROLLER || h->result.error == SUNXI_MMC_CARD || h->result.error == SUNXI_MMC_TIMEOUT);
 }
 int sunxi_mmc_restart(struct sunxi_mmc *h, unsigned ceiling, enum sunxi_mmc_mode_reason why, uint64_t deadline)
 {
     if (!UHS_ON || !h || !h->initialized || h->entered || h->config.kind != SUNXI_MMC_SD || h->config.sd_profile != UHS || ceiling > 3 ||
-        deadline <= h->last_us || h->writing || !h->config.ops.sd_module || (h->state != SUNXI_MMC_READY && !sunxi_mmc_recoverable(h))) return 0;
+        deadline <= h->last_us || !h->config.ops.sd_module || (h->state != SUNXI_MMC_READY && !sunxi_mmc_recoverable(h))) return 0;
     struct sunxi_mmc fresh = {0};
     fresh.config = h->config; fresh.initialized = 1; fresh.irq_taken = h->irq_taken; fresh.irq_context = h->irq_context; fresh.last_us = h->last_us;
     fresh.card.signal_1v8 = h->card.signal_1v8; fresh.card.mode_steps = h->card.mode_steps;

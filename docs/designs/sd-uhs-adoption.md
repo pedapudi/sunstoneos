@@ -219,3 +219,47 @@ The capture returned normally. 3-3's card: CID `2750485344333247120000029d014c47
 root cluster 2, FSInfo at sector 1, label `32 GB DRIVE`; FSInfo: 1,907,354 free clusters, next-free hint 2 (an empty volume). So FAT1 starts at 2080, FAT2 at 16,992, the data area at 31,904 (cluster 2 is the root directory, sectors 31,904 to 31,935). The allocation unit is 4 MiB, so the file's data starts at the next AU boundary, sector 32,768 (cluster 29).
 
 The plan, as the 3-1 plan is built (a 512 MiB region file written by mode 0), on this geometry: write ranges `[2049,1]` (FSInfo), `[2080,258]` and `[16992,258]` (the first 258 FAT sectors of each copy: the file's 32,768 clusters, 29 to 32,796, need FAT indexes 0 to 256), `[31904,64]` (the root cluster and the new directory's cluster) and `[32768,1048576]` (data, exempt from the backup); backup ranges `[0,1]`, `[2048,8]`, `[2080,258]`, `[16992,258]`, `[31904,64]`, 589 sectors in all, which two captures of at most 512 sectors cover. Two read-only capture runs of this card follow (A: sector 0, 2048 to 2055 and the first FAT's 258 sectors; B: the second FAT's 258 sectors and the 64 root and directory sectors); the same prediction as for the first capture applies: normal return, the card unchanged, FATs and root cluster as `mkfs.fat` left them.
+
+## The first bounded write on 3-3 stopped (entry `1793683567666621650-3e3c6631`), and what the next session does
+
+**What the record shows.** A watchdog reset. The failure record names `apps/os/sd_owner.c:90` on core 2 with value `0x80229122`: stage 34 (`hw_write_piece`: `drive_platform` returned something other than COMPLETE), platform result 4 (RETAINED), fault flag set, no deadline expired
+(`fault_why` 0), no register refused by the adapter (`refused` 0), platform fault line 553 of `a733_mmc_platform.c`: the exit taken when the controller core is in FAULT. So the core faulted during a write at SDR104 and 150 MHz. The report was lost with the reset (DRAM is not kept), and the record did not carry
+the core's error, its interrupt status, the piece or the count of pieces written. That is what the next run adds (below).
+
+**The card afterwards** (the read-only capture A of the restore-point sectors, entry `1793683923163699289-3c296ae6`; B, entry `1793683932704369296-a2880fff`, is pending when this was written): of the 267 sectors of capture A, one differs from the restore point: FAT 1 sector 0, whose entry 1 went from `0x0fffffff` to `0x07ffffff`
+(the volume dirty flag, set when the session mounted for writing) and whose entry 3 is now `0x0fffffff`, the end-of-chain mark of cluster 3, the new directory `/sunstone-test` the session was creating. The boot area and FSInfo (1,907,354 free, hint 2) are unchanged. So the session got as far as creating the directory
+and stopped in or before the first flush of the file. The volume is dirty.
+
+**What mode 0 does next.** It mounts for writing; the service recovers a dirty volume at mount (`fwr_mount`: it finds interrupted entries, completes or truncates them, corrects FSInfo and clears the flag; proven on 3-1). It then makes `/sunstone-test` (an existing directory is accepted) and opens the region file with `FWR_O_CREATE`, which **fails when the path
+exists** (status 7, `E_OPEN`, detail the error). A file the failed session published would therefore stop the next mode 0; the capture shows no cluster chain beyond cluster 3 in FAT 1's first 7 entries, so the file was not published. The mode 0 expectation stays as it was (status 0, 536,870,912 bytes), and status 7 would mean a file existed.
+
+**The write path against the vendor, register by register** (board kernel `sunxi-mmc-v5p3x.c`, `sunxi-mmc.c`, pinned in `checks/sunxi-mmc-uhs.py`):
+
+| Item | Vendor | Ours | Same |
+| --- | --- | --- | --- |
+| Command and data drive phase at 150 MHz (the 208 MHz row) | command 180, data 90 (`:867-872`, `:874-881`; no `sunxi-dly` on sdc0) | command 180, data 90 (`uhs_registers`) | yes, pinned by the host check |
+| Sample phases, sample delay, timing mode | phases 0 and 0; the tuned `SAMP_DL` (set by `sunxi_mmc_set_samp_dl_raw`); old sample mode | the same, the delay from the sweep (41 on the read run) | yes |
+| Write threshold | `WR_THLD_ENB` with the block size when `blksz <= tdtl` (the TX trigger level in bytes, 992 here) (`:647-681`) | block size 512 in 27:16, bit 2 set, bit 0 cleared (`command_step`, `P_WRITE_DMA`) | yes in effect: the vendor's read branch clears the read enable for a write |
+| FIFO watermarks and burst size | `dma_tl` the same for read and write | `FTRGL` `0x200700f8` for both | yes |
+| Descriptor chain | the same chain for both directions | the same 4 KiB chain, the platform walks it for the write direction | yes |
+| Busy after a write | `card_busy` on DAT0 with a bounded wait after the data over | DAT0 busy timer, then CMD13 until the card is ready (`P_WRITE_DMA_STATUS`) | equivalent |
+| Write-specific tuning or delay | none: `execute_tuning` samples read data only (`:2415-2640`) | none | yes |
+| Data timeout | the host default | `TMOUT` 0xffffffff after the sweep | differs (longer); a write that waits on the card's CRC status or on busy is not cut short by it |
+
+No register-level difference that explains a write fault at 150 MHz which reads do not see. The vendor drives and samples the write's CRC status with the settings that the read sweep tunes, as we do. What the sources do not give is whether this card needs another sample delay for the CRC
+status token than for read data; neither the vendor nor we tune it. The next session therefore does not assume the write works at 150 MHz: it steps down on errors, and records why.
+
+**Writes now step down like reads.** A write that faults with a controller, card or timeout error (a CRC status error, a busy or data timeout, an end-bit error among them) is a recoverable result of the platform, not a retention: the first error since the last completed request identifies the card again at the same ceiling (a new tuning), the second in a row steps down one mode (SDR104, SDR50, SDR25,
+SDR12 at 1.8 V), and the owner writes the same piece again, the same sectors with the same data, inside the same admitted bounds. A stop at the lowest mode, or an unrecoverable error (a lost register, a platform deadline), retains the platform as before, with the record below.
+Every step is in the mode log. The host check (`checks/a733-mmc-uhs.c`, `write_recovery`) shows a write CRC error at SDR104 stepping down to SDR50 and the retry completing, the walk down to SDR12, a stop there faulting cleanly with the core's error, interrupt status and protocol step intact, and an I/O error retaining; a mutation that makes writes not recoverable fails it.
+
+**The failure record of a write.** The record's value word carries the stage in bits 5:0, the core's error in 9:6, its protocol step in 15:10 and the low 16 bits of the controller's raw interrupt status at the fault in 31:16; its aux field carries the pieces written so far in 12:0 and the bus timing in force in 14:13 (3 SDR104 ... 0 default). The piece's first sector follows from the
+piece count and the stream (the geometry check's write log maps piece numbers to sectors). `os_sd_write_pieces` and `os_sd_write_sectors` count what completed; `os_sd_mode` holds the mode and the steps.
+
+## Prediction for the bounded write session on 3-3, second attempt (written before the run)
+
+Run: mode 0 as before, on the image of the commit that carries this section, with the write recovery. Everything in the first prediction holds except the failure handling.
+- **If SDR104 writes now pass** (the first failure was transient or the retune cures it): status 0, 536,870,912 bytes, 8 to 30 MB/s, mode record SDR104 with at most a restart or two (restarts 0 to 2, mode steps 0 to 2, the log naming retune), the volume clean.
+- **If the write needs a lower mode** (the likelier case, given the first stop): the first write error tunes again at SDR104, the second steps to SDR50, then SDR25, until a mode writes; the session completes with status 0 and the file whole; the mode record shows the mode it finished in (SDR50 or SDR25) with 2 to 6 restarts and the steps in the log with reason 4 (errors). The rate is the card's.
+- **Mount first:** the dirty volume is recovered at mount (recoveries 1, recovered clusters 0 or 1, the directory kept); the directory exists; the file is created fresh. A status 7 (`E_OPEN`) means a file existed after all.
+- **If every mode fails:** the platform is retained, the watchdog resets, and the record now names the core's error, protocol step and interrupt status, the pieces written and the timing at the stop; nothing outside the plan can have been written.

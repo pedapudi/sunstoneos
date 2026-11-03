@@ -175,7 +175,7 @@ reference = a.read_reference.read_bytes()
 assert hashlib.sha256(reference).hexdigest() == '846797588f8bd2470d885027b13078762f4a966826fc71be822c0346e6bf44af'
 (a.output / 'mmc-reference.h').write_bytes(reference); inputs[str(a.read_reference)] = hashlib.sha256(reference).hexdigest()
 sanitize = [a.cc, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
-            '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', '-Iinclude', '-Ichecks', '-I' + str(a.output)]
+            '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', '-Iinclude', '-Iapps/os', '-Ichecks', '-I' + str(a.output)]
 native = [a.cc, '-std=gnu11', '-Wall', '-Wextra', '-Werror', '-Iinclude', '--target=aarch64-none-elf',
           '-mcpu=cortex-a55', '-ffreestanding', '-fno-builtin', '-O2', '-fstack-usage', '-c']
 steps = [('core-build', sanitize + ['drivers/storage/sunxi_mmc.c', 'checks/sunxi-mmc-uhs.c', '-o', str(a.output / 'core')]),
@@ -222,6 +222,7 @@ for name, old_text, new_text in mutations:
 runtime_mutations = [
     ('no-runtime-step-down', 'drivers/storage/a733_mmc_platform.c', 'ceiling=timing-1;why=SUNXI_MMC_MODE_ERRORS;', 'ceiling=timing;why=SUNXI_MMC_MODE_ERRORS;'),
     ('no-retune-first', 'drivers/storage/a733_mmc_platform.c', 'if(p->recover_errors>=2){', 'if(p->recover_errors>=1){'),
+    ('writes-not-recoverable', 'drivers/storage/sunxi_mmc.c', 'h->state == SUNXI_MMC_FAULT && h->config.kind == SUNXI_MMC_SD &&', 'h->state == SUNXI_MMC_FAULT && !h->writing && h->config.kind == SUNXI_MMC_SD &&'),
     ('restart-forgets-1v8', 'drivers/storage/sunxi_mmc.c', 'fresh.reenter = h->card.signal_1v8;', 'fresh.reenter = 0;'),
     ('restart-keeps-mode-ceiling', 'drivers/storage/sunxi_mmc.c', 'fresh.ceil1 = (uint8_t)(ceiling + 1);', 'fresh.ceil1 = 0;'),
 ]

@@ -242,7 +242,8 @@ int sunxi_mmc_set_ceiling(struct sunxi_mmc *, unsigned timing);
  * the reason. The controller is reset, the card clock stopped, the module returned to the identification clock and the cold setup run again by the
  * following polls; the state is IDENTIFY until READY. Returns 0 for any other state, for a write in progress or a deadline in the past. */
 int sunxi_mmc_restart(struct sunxi_mmc *, unsigned ceiling, enum sunxi_mmc_mode_reason why, uint64_t absolute_deadline_us);
-/* A failed read the restart can recover: the error is a controller, card or timeout error and no write was running. */
+/* A failed read or write the restart can recover: the error is a controller, card or timeout error. A write is retried by its owner with the same sectors and
+ * the same data, inside the bounds that admitted it; the card is reset by the identification, so a half-programmed block is abandoned. */
 int sunxi_mmc_recoverable(const struct sunxi_mmc *);
 /* Entire range and byte/sector command argument are validated before MMIO.
  * Borrowed storage must remain exclusive through DONE or terminal FAULT.
