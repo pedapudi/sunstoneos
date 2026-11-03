@@ -105,8 +105,10 @@ struct board_radio_profile {
     uint8_t network_dns[4],network_reserved[3];
     uint32_t address_timeout_ticks,lease_cap_ticks;
 };
-/* Profile versions 7 and 8 are scan-only sessions; see radio.c. */
-int board_radio_profile_scan_only(const struct board_radio_profile *);
+/* Profile version 7 is a scan-only session; see radio.c. Inline so that every image that
+ * links the board composition has it without linking the radio owner. */
+static inline int board_radio_profile_scan_only(const struct board_radio_profile *f)
+{return f&&f->version==BOARD_RADIO_PROFILE_SCAN_VERSION;}
 /* Wire timing fields are 32-bit ticks, widened into the actual TickType_t.
  * Fixed addressing has no acquisition/lease timer; optional DNS is independent. */
 static inline int board_radio_profile_network_valid(const struct board_radio_profile *p)

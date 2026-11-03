@@ -349,8 +349,6 @@ static int radio_authorize(void *cookie,const struct a733_radio_platform_config 
 /* A scan-only profile (version 7) needs no entropy qualification, crypto engine,
  * credential or TCP exchange, and association_timeout_us bounds its scan. Every
  * other field keeps its meaning. */
-int board_radio_profile_scan_only(const struct board_radio_profile *f)
-{return f&&f->version==BOARD_RADIO_PROFILE_SCAN_VERSION;}
 static int startup_profile_valid(const struct board_radio_profile *f,const uint8_t expected[32],
     const struct board_radio_chip_id *id)
 {
