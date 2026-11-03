@@ -91,7 +91,7 @@ def prepare(image, prefix, services, inputs, output, *, devices, flags=0):
     prefix = bytes(prefix)
     values = [bytes(data) for data in inputs]
     facts, uploads = host.input_facts(info['manifest'], values)
-    services = host.bind_npu_pool(image, services)
+    services = host.retire_npu_pool(services)
     session = host.session_bytes(prefix, services, info['manifest'], info['sha256'], devices, flags, values)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)

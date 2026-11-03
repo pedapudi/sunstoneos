@@ -62,13 +62,6 @@ def record():
         # The upper memory above the unmapped hole 0x79000000..0x80000000: level-1 slots 2 to 12, to the end of the installed
         # memory. A manifest region may lie here too, in 2 MiB blocks (docs/designs/application-memory-layout.md, step 6b).
         'upper_area': (0x80000000, 0x340000000),
-        'npu_pool': {
-            'legacy': (0x47400000, 0x47c00000),
-            'top': 0x47000000, 'min': 0xa00000, 'max': 0x3000000, 'block': BLOCK,
-            # A pool the build places in the slot 1 area, whole blocks up to `ledger_max` bytes, below 4 GiB
-            # (device memory class DMA32), reserved in the ledger at admission (docs/designs/application-memory-layout.md).
-            'ledger': (0x48000000, 0x79000000), 'ledger_max': 768 * MIB,
-        },
         # The part of DRAM that the board runner backs up, restores and uploads into: all that FEL addresses, since its
         # read and write commands carry 32-bit addresses (docs/designs/application-memory-layout.md).
         'runner_dram': (0x40000000, 0x100000000),
@@ -90,17 +83,11 @@ def extent(pair):
     return (pair[0], pair[1] - pair[0])
 
 
-def npu_pool_valid(low, high):
-    """True for an NPU pool extent that an image may link: the legacy pool, one sized from the declaration that ends at
-    the bottom of the monitor interval, or one placed in the slot 1 area."""
-    pool = record()['npu_pool']
-    size = high - low
-    if (low, high) == tuple(pool['legacy']):
-        return True
-    if high == pool['top']:
-        return pool['min'] <= size <= pool['max'] and size % pool['block'] == 0
-    return (pool['ledger'][0] <= low < high <= pool['ledger'][1] and low % pool['block'] == 0 and
-            size % pool['block'] == 0 and pool['min'] <= size <= pool['ledger_max'])
+def device_range_valid(address, size):
+    """True for a range that the OS may publish as device-visible (apps/os/device-ranges.h): 64-byte lines, in the DRAM above
+    the OS image. The ranges themselves are chosen at run time and read from the return record."""
+    low, high = record()['dram'][0] + (0x42200000 - 0x40000000), record()['dram'][1]
+    return size > 0 and address % 64 == 0 and size % 64 == 0 and low <= address and address + size <= high
 
 
 def preserve_seconds(preserved_bytes):

@@ -43,13 +43,6 @@ TODAY = {
     'monitor.bss_first': 0x42005000,
     'monitor.tables': 0x421f0000,
     'window': (0x44000000, 0x47000000),
-    'npu_pool.legacy': (0x47400000, 0x47c00000),
-    'npu_pool.top': 0x47000000,
-    'npu_pool.min': 0xa00000,
-    'npu_pool.max': 0x3000000,
-    'npu_pool.block': 0x200000,
-    'npu_pool.ledger': (0x48000000, 0x79000000),
-    'npu_pool.ledger_max': 0x30000000,
     'runner_dram': (0x40000000, 0x100000000),
     'fel_bytes_per_second': 550000,
     'boot_slot_load': (0x41000000, 0x47000000),
@@ -93,30 +86,24 @@ def linker_script(path, record):
     return text
 
 
-def check_pool_sources(record):
-    """A pool in the slot 1 area: the build, the OS header, the normal-return terminal and the table builder agree with the record."""
-    low, high = record['npu_pool']['ledger']
-    biggest = record['npu_pool']['ledger_max']
-    cmake = (ROOT / 'cmake/sunstone-os-core.cmake').read_text()
-    require('LESS %d ' % low in cmake and 'GREATER %d ' % high in cmake and 'GREATER %d)' % biggest in cmake,
-            'cmake/sunstone-os-core.cmake: the placed NPU pool bounds differ from the record')
-    header = (ROOT / 'apps/os/npu.h').read_text()
-    require(all('UINT64_C(0x%x)' % v in header for v in (low, high, biggest)), 'apps/os/npu.h: the placed NPU pool bounds differ from the record')
+def check_device_ranges():
+    """The NPU's reservation is taken from the ledger when the application is admitted and published for the return: the terminal
+    reads the published list, the EL3 tables map every DRAM block that the decode check passed, and nothing names a pool at link
+    or build time."""
     terminal = (ROOT / 'apps/os/cpu-return/terminal.patch').read_text()
-    require(all(('#0x%x' % v) in terminal for v in (low, high, biggest, record['npu_pool']['min'])),
-            'apps/os/cpu-return/terminal.patch: the placed NPU pool bounds differ from the record')
+    require('os_device_ranges_head' in terminal and '.Lranges_next' in terminal and '__os_npu_pool' not in terminal,
+            'apps/os/cpu-return/terminal.patch: the return does not clean the published device ranges')
     memory = (ROOT / 'platform/a733-smp-cached/memory.c').read_text()
-    require('pool_low >= UINT64_C(0x%x)' % low in memory, 'platform/a733-smp-cached/memory.c: the placed NPU pool start differs from the record')
-    require('slot1_area' in record and tuple(record['slot1_area']) == (low, high), 'the placed NPU pool lies in the slot 1 area')
-    valid = memory_layout.npu_pool_valid
-    for extent in ((0x47400000, 0x47c00000), (0x45a00000, 0x47000000), (low, low + 10 * MIB), (low, low + biggest),
-                   (high - 2 * MIB * 5, high), (0x60000000, 0x66000000)):
-        require(valid(*extent), 'a pool the build may place is refused: %#x..%#x' % extent)
-    for extent in ((low - 2 * MIB * 5, low), (low + 2 * MIB, low + 2 * MIB + 4 * MIB),            # below the area, under the minimum
-                   (low, low + biggest + 2 * MIB), (high - 8 * MIB, high + 2 * MIB),                 # over the maximum, past the area
-                   (low + 1 * MIB, low + 11 * MIB), (low, low + 11 * MIB),                          # not whole blocks
-                   (0x47400000, 0x47e00000), (0x44000000, 0x46000000), (0x80000000, 0x84000000)):
-        require(not valid(*extent), 'a pool the build may not place is accepted: %#x..%#x' % extent)
+    require('a733_cached_el3_l1[g]' in memory and 'dram_map[r]' in memory and '__os_npu_pool' not in memory,
+            'platform/a733-smp-cached/memory.c: the EL3 tables do not map all DRAM for the published ranges')
+    for path in ('cmake/sunstone-os-core.cmake', 'apps/os/npu.h', 'apps/os/npu.c', 'apps/os/large.c', 'apps/os/admission.c'):
+        text = (ROOT / path).read_text()
+        for name in ('OS_NPU_POOL', 'SUNSTONE_OS_NPU_POOL', '__os_npu_pool', 'SUNSTONE_OS_NPU_LINKS', 'os-npu-meta', 'OS_NPU_META'):
+            require(name not in text, '%s still names %s' % (path, name))
+    require(memory_layout.device_range_valid(0x60000000, 0x400000) and memory_layout.device_range_valid(0x100000000, 0x200000) and
+            not memory_layout.device_range_valid(0x41f00000, 0x1000) and not memory_layout.device_range_valid(0x60000001, 64) and
+            not memory_layout.device_range_valid(0x33ffffe00, 0x400) and not memory_layout.device_range_valid(0x60000000, 0),
+            'tools/memory_layout.py device_range_valid')
 
 
 def check_sources(record):
@@ -156,10 +143,6 @@ def check_consumers(record):
         print('memory-layout: cpu-return-host not loaded (%s); skipped' % error)
         return
     require(returning.IMAGE_RAM == memory_layout.extent(record['image']['image_ram']), 'CPU-return image RAM differs')
-    pool = record['npu_pool']
-    require(returning.NPU_POOL_LEGACY == tuple(pool['legacy']) and
-            (returning.NPU_POOL_TOP, returning.NPU_POOL_MIN, returning.NPU_POOL_MAX, returning.NPU_POOL_BLOCK) ==
-            (pool['top'], pool['min'], pool['max'], pool['block']), 'CPU-return NPU pool constants differ')
 
 
 def check_shape(record):
@@ -179,12 +162,9 @@ def check_shape(record):
     result, contract = monitor['result'], monitor['contract']
     require(result[1] == contract[0] and contract[1] <= monitor['bss_first'] < monitor['tables'] < monitor['range'][1],
             'monitor records overlap')
-    window, pool = record['window'], record['npu_pool']
-    require(record['el0'][0] <= window[0] and window[1] <= pool['top'] <= record['el0'][1], 'window or NPU pool lies outside EL0 reach')
-    require(window[1] <= pool['legacy'][0] < pool['legacy'][1] <= record['el0'][1], 'legacy NPU pool lies outside EL0 reach')
+    window = record['window']
+    require(record['el0'][0] <= window[0] and window[1] <= record['el0'][1], 'window lies outside EL0 reach')
     require(shared[1] <= window[0], 'window overlaps the image range')
-    require(pool['min'] <= pool['max'] and pool['min'] % pool['block'] == 0 and pool['max'] % pool['block'] == 0,
-            'NPU pool sizes are not whole blocks')
     require(record['boot_slot_load'] == (code[0], window[1]), 'boot slot range is not the image range through the window')
     require(record['runner_dram'][0] == record['dram'][0] and record['runner_dram'][1] <= 1 << 32,
             'runner range lies outside FEL reach (a 32-bit address)')
@@ -265,16 +245,6 @@ def check_pools(record, images):
                         '%s: the %s [%#x, %#x) lies in the slot 1 area' % (path, start, symbols[start], symbols[end]))
 
 
-def check_el3_regions():
-    """The return cleans each work and output region at EL3, so a region above the EL3-mapped 0x48000000 has EL3 entries."""
-    terminal = (ROOT / 'apps/os/cpu-return/terminal.patch').read_text()
-    require('.Lregion' in terminal and 'cmp w2, #2' in terminal and 'cmp w2, #3' in terminal,
-            'the return no longer cleans the work and output regions at EL3; revisit the EL3 entries of slot 1 regions')
-    memory = (ROOT / 'platform/a733-smp-cached/memory.c').read_text()
-    require('SS_REGION_WORK' in memory and 'SS_REGION_OUTPUT' in memory and 'a733_cached_el3_l2[(a - UINT64_C(0x40000000)) >> 21]' in memory,
-            'memory.c does not map the EL3 blocks of a work or output region in slot 1, which the return cleans at EL3')
-
-
 def load_elf(path):
     from elftools.elf.elffile import ELFFile
     return ELFFile(open(path, 'rb'))
@@ -317,11 +287,10 @@ def main():
     require(record is not memory_layout.record(), 'the record is shared between calls')
     check_shape(record)
     check_sources(record)
-    check_pool_sources(record)
+    check_device_ranges()
     check_consumers(record)
     check_placement(record)
     check_pools(record, args.image)
-    check_el3_regions()
     for image in args.image:
         check_image(image, record)
     if args.output:

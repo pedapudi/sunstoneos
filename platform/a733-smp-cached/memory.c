@@ -40,10 +40,6 @@ void os_kernel_l2_slot1(uint64_t out[512]) { for (unsigned i = 0; i < 512; ++i) 
 extern unsigned char __tables_start[], __tables_end[], __bss_end[], __heap_end[];
 extern unsigned char __device_pool_start[], __device_pool_end[];
 extern unsigned char __uncached_pool_start[], __uncached_pool_end[];
-#if defined(SUNSTONE_A733_OS)
-/* Defined by an image that links an NPU pool; an absent symbol reads as address zero. */
-extern unsigned char __os_npu_pool_start[] __attribute__((weak)), __os_npu_pool_end[] __attribute__((weak));
-#endif
 /* DRAM above the boot image that EL1 maps when this boot's decode check
  * passes: level-2 blocks below 0x80000000, level-1 blocks from there. The same
  * table is the list the check receives and drives the entry writes. The
@@ -193,36 +189,23 @@ int a733_cached_memory_prepare(void)
                 *entry++ = v;
         }
 #if defined(SUNSTONE_A733_OS)
-        /* The return cleans every work and output region of the manifest at EL3 before the board goes back to the ROM
-         * (apps/os/cpu-return/terminal.patch), and it parks on a block that its table does not map as normal
-         * write-back memory. A region that the build placed in level-1 slot 1 above the EL0 window therefore needs the
-         * EL3 entries of its blocks; the rest of the upper memory stays unmapped at EL3. */
-        const struct ss_manifest *placed = ss_application.manifest;
-        for (unsigned r = 0; placed && r < placed->region_count; ++r) {
-            const struct ss_region *region = &placed->regions[r];
-            if ((region->kind != SS_REGION_WORK && region->kind != SS_REGION_OUTPUT) ||
-                region->address < UINT64_C(0x48000000)) continue;
-            if (region->address >= UINT64_C(0x80000000)) {
-                /* Upper memory: the EL3 level-2 table covers only 0x40000000..0x80000000, so each gigabyte that holds such
-                 * a region gets a level-1 block entry (the decode check passed for all of it, as for the EL1 entries). The
-                 * attributes are those of a level-2 block, which the terminal tests the same way. */
-                for (uint64_t g = region->address >> 30; g <= (region->address + region->bytes - 1) >> 30; ++g)
+        /* The return cleans, at EL3 before the board goes back to the ROM, every range that the OS published as visible to a
+         * device or written by one (apps/os/cpu-return/terminal.patch, apps/os/device-ranges.h), and it parks on a block
+         * that its table does not map as normal write-back memory. Those ranges are chosen at run time, so the EL3 tables
+         * map every byte of DRAM that the decode check passed, with the attributes of a level-2 block; they do not depend on
+         * where the OS places a buffer. */
+        for (unsigned r = 0; r < DRAM_MAP_RANGES; ++r) {
+            uint64_t base = dram_map[r].base, end = base + dram_map[r].size;
+            if (base >= UINT64_C(0x80000000)) {
+                for (uint64_t g = base >> 30; g < end >> 30; ++g)
                     a733_cached_el3_l1[g] = (g << 30) | BIT(54) | BIT(10) | (UINT64_C(3) << 8) | 4 | 1 | BIT(5) | BIT(6);
                 continue;
             }
-            for (uint64_t a = region->address & ~UINT64_C(0x1fffff); a < region->address + region->bytes; a += 0x200000) {
+            for (uint64_t a = base; a < end; a += 0x200000) {
                 uint64_t common = a | BIT(54) | BIT(10) | (UINT64_C(3) << 8) | 4 | 1;
                 a733_cached_el3_l2[(a - UINT64_C(0x40000000)) >> 21] = common | BIT(5) | BIT(6);
             }
         }
-        /* The same for an NPU pool that the build placed in the slot 1 area: the terminal cleans the whole pool at EL3
-         * (the symbols exist only in an NPU image, and a pool below 0x48000000 is in the mapped window already). */
-        uint64_t pool_low = (uint64_t)(uintptr_t)__os_npu_pool_start, pool_high = (uint64_t)(uintptr_t)__os_npu_pool_end;
-        if (pool_low >= UINT64_C(0x48000000) && pool_high <= UINT64_C(0x80000000))
-            for (uint64_t a = pool_low & ~UINT64_C(0x1fffff); a < pool_high; a += 0x200000) {
-                uint64_t common = a | BIT(54) | BIT(10) | (UINT64_C(3) << 8) | 4 | 1;
-                a733_cached_el3_l2[(a - UINT64_C(0x40000000)) >> 21] = common | BIT(5) | BIT(6);
-            }
 #endif
     }
 #endif

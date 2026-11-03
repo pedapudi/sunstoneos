@@ -105,6 +105,9 @@ static unsigned char sunstone_npu_canary[1];
 static int sunstone_npu_hook_slot = -1;
 static uint32_t sunstone_npu_hook_address;
 #endif
+/* The ranges that the EL3 terminal cleans (apps/os/device-ranges.h): the host check has no terminal. os_npu_pool_prepare
+ * publishes the pool it reserved from the ledger; the check prepares its own runtime and does not go through it. */
+int os_device_range_publish(uint64_t base, uint64_t bytes) { (void)base; (void)bytes; return 1; }
 /* The sizing calls of the runtime take their work memory from the caller. */
 static enum npu_declaration_result reserve_with(const struct npu_runtime_model *models, unsigned count, unsigned slots,
                                                 size_t pool, size_t *bytes, struct npu_runtime_bounds bounds)
@@ -828,7 +831,7 @@ int main(int argc, char **argv)
     if (mode == 29) registered_case = 1;
     /* Case 28: the 31 slots of the command mask. Case 30: one slot for each catalogue model, each sized by its own graph
      * (the queue image's layout); environment UNIFORM sizes every slot for the largest graph, to compare the totals. */
-    /* NPU_SLOTS sets the slot count of case 30, as an application's declaration does (tools/npu-pool-plan.py). */
+    /* NPU_SLOTS sets the slot count of case 30, as an application's declaration does. */
     const unsigned slots = mode == 28 ? (getenv("NPU_SLOTS") ? (unsigned)atoi(getenv("NPU_SLOTS")) : 31u) : mode == 30 || mode == 33 ? (getenv("NPU_SLOTS") ? (unsigned)atoi(getenv("NPU_SLOTS")) : os_npu_model_count) : 1;
     if ((mode == 30 || mode == 33) && !getenv("UNIFORM")) {
         assert(slots <= os_npu_model_count && !bounds.capacity);
@@ -844,7 +847,7 @@ int main(int argc, char **argv)
     assert(meta_need);
     free(bounds.scratch); bounds.scratch = NULL; bounds.scratch_bytes = 0; /* prepare takes its work memory from the reservation */
     assert(need && !(need & (NPU_RUNTIME_GROUP_BYTES - 1)));
-    if (mode == 30 && getenv("NPU_SIZE_ONLY")) {         /* the reservation alone, for tools/npu-pool-plan.py */
+    if (mode == 30 && getenv("NPU_SIZE_ONLY")) {         /* the reservation alone */
         printf("%u slots: %zu bytes reserved, 0 bytes in the slots' regions, %zu bytes of EL1 metadata\n", slots, need, meta_need);
         return 0;
     }

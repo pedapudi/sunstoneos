@@ -48,6 +48,12 @@ class Model(prior.Model):
                 assert len(matches) == 1, ('ambiguous local native hook', name)
                 self.local[name] = matches[0]['st_value']
         self.pool_deadline = False
+        # The ranges that the OS publishes for the terminal to clean (apps/os/device-ranges.h): two pages, the first with a range in
+        # level-1 slot 1 and one in upper memory, the second with one range from another gigabyte, so that the walk crosses a page.
+        self.published = [(0x60000000, 0x400000), (0x100000000, 0x200000), (0x140000000, 0x200000)]
+        self.pages = (0x70000000, 0x70001000)
+        for page in self.pages:
+            self.uc.mem_map(page, 0x1000)
         self.spi_corrupt = False
         self.gpu_spi_corrupt = False
 
@@ -60,7 +66,7 @@ class Model(prior.Model):
             end = min((start + 0x200000) & ~0x1fffff, self.gpr('x25'))
             assert end > start and (end - start) % 64 == 0
             self.ranges[self.core].append((start, end))
-            if self.pool_deadline and start >= self.image.symbols.get('__os_npu_pool_start', 0x47400000):
+            if self.pool_deadline and start >= self.published[0][0]:
                 self.put64(self.report + 32, self.time)
             # Execute the real next-loop arithmetic/branch at the end of a
             # modeled contiguous cache-maintenance batch.
@@ -69,7 +75,7 @@ class Model(prior.Model):
 
     def write(self, uc, access, address, size, value, unused):
         super().write(uc, access, address, size, value, unused)
-        if self.clean_started and any(low <= address < high for low, high in self.regions):
+        if self.clean_started and any(low <= address < high for low, high in self.regions + [(a, a + n) for a, n in self.published]):
             self.postclean.append((self.core, address, size, value))
         if 0x03400180 <= address < 0x03400200 or 0x03400280 <= address < 0x03400300:
             dst = address - 0x80
@@ -91,9 +97,19 @@ class Model(prior.Model):
             self.put64(self.s['a733_cached_el3_l2'] + i * 8, (0x40000000 + i * 0x200000) | 0x725)
             self.put64(self.s['a733_cached_el3_l3'] + i * 8, (0x42000000 + i * 4096) | (1 << 54) | 0x443)
         self.put64(self.s['a733_cached_el3_l2'] + 128, self.s['a733_cached_el3_l3'] | 3)
-        # The platform's level-1 blocks for the gigabytes above 0x80000000 that hold a work or output region.
-        for g in sorted({a >> 30 for low, high in self.regions if low >= 0x80000000 for a in (low, high - 1)}):
+        # The platform maps every gigabyte of DRAM above 0x80000000 at EL3 (platform/a733-smp-cached/memory.c), whatever the
+        # application holds there, because the ranges a device uses are chosen at run time.
+        for g in range(2, 13):
             self.put64(self.s['a733_cached_el3_l1'] + g * 8, (g << 30) | (1 << 54) | 0x765)
+        first, second = self.pages
+        self.put64(first, second)
+        self.put64(first + 8, 2)
+        for i, (base, size) in enumerate(self.published[:2]):
+            self.put64(first + 16 + 16 * i, base); self.put64(first + 24 + 16 * i, size)
+        self.put64(second, 0)
+        self.put64(second + 8, 1)
+        self.put64(second + 16, self.published[2][0]); self.put64(second + 24, self.published[2][1])
+        self.put64(self.s['os_device_ranges_head'], first)
         if 'os_npu_published_report' in self.s:
             # Terminal-only fixture: preceding service close/local stop and
             # worker park are supplied inputs; their real functions have a
@@ -169,14 +185,14 @@ def main():
         # Regions from 0x80000000 are cleaned through the EL3 level-1 table: a gigabyte with no block, with another
         # gigabyte's block, or with the wrong attributes parks the return before any of those regions is cleaned.
         cases += ('upper-region-no-block', 'upper-region-wrong-block', 'upper-region-wrong-alias')
+    # The published device ranges: a range that an EL3 block does not map as normal write-back memory, a page or range outside
+    # the DRAM above the image, and one that is not on a 64-byte line park the return before the ranges are cleaned.
+    cases += ('wrong-published-alias', 'published-upper-no-block', 'published-page-outside-dram', 'published-range-unaligned',
+              'published-range-wraps', 'published-deadline')
     if '__os_npu_pool_start' in image.symbols:
-        cases += ('wrong-npu-pool-alias', 'npu-pool-deadline', 'npu-late-irq')
-        # The pool is the legacy 8 MiB or one sized from the declaration (22 MiB in the encoder timing image): the host rule
-        # of the normal return accepts exactly those, and every case below uses the image's own pool symbols.
-        host_spec = importlib.util.spec_from_file_location('os_return_host_rule', ROOT / 'apps/os/cpu-return-host.py')
-        host_rule = importlib.util.module_from_spec(host_spec); host_spec.loader.exec_module(host_rule)
-        assert host_rule.npu_pool_extent_valid(image.symbols['__os_npu_pool_start'], image.symbols['__os_npu_pool_end']), \
-            'the image links a pool that the normal return does not accept'
+        raise SystemExit('the image still links a fixed NPU pool')
+    if 'os_npu_published_report' in image.symbols:
+        cases += ('npu-late-irq',)
     if 'os_gpu_return_report' in image.symbols:
         cases += ('gpu-active','gpu-spi-restore-readback','wrong-pool-alias')
     if args.case:
@@ -233,11 +249,19 @@ def main():
             block=(image.symbols['__device_pool_start']-0x40000000)>>21
             entry=image.symbols['a733_cached_el3_l2']+block*8
             model.put64(entry,model.u64(entry)&~32)
-        elif case == 'wrong-npu-pool-alias':
-            block=(image.symbols['__os_npu_pool_start']-0x40000000)>>21
-            entry=image.symbols['a733_cached_el3_l2']+block*8
-            model.put64(entry,model.u64(entry)&~32)
-        elif case == 'npu-pool-deadline':
+        elif case == 'wrong-published-alias':
+            block = (model.published[0][0] - 0x40000000) >> 21
+            entry = image.symbols['a733_cached_el3_l2'] + block * 8
+            model.put64(entry, model.u64(entry) & ~32)
+        elif case == 'published-upper-no-block':
+            model.put64(image.symbols['a733_cached_el3_l1'] + (model.published[1][0] >> 30) * 8, 0)
+        elif case == 'published-page-outside-dram':
+            model.put64(image.symbols['os_device_ranges_head'], 0x41f00000)
+        elif case == 'published-range-unaligned':
+            model.put64(model.pages[0] + 16, model.published[0][0] + 1)
+        elif case == 'published-range-wraps':
+            model.put64(model.pages[0] + 24, 0xfffffffffffff000)
+        elif case == 'published-deadline':
             model.pool_deadline = True
         elif case == 'npu-late-irq':
             layout = Image(image.path, {'os_npu_application', 'npu_runtime', 'npu_service'})
@@ -254,8 +278,7 @@ def main():
         if case == 'success':
             for ranges in model.ranges:
                 expected = [(0x41200000, image.symbols['__device_pool_end'] if 'os_gpu_return_report' in image.symbols else image.symbols['__heap_end']), *regions]
-                if '__os_npu_pool_start' in image.symbols:
-                    expected += [(image.symbols['__os_npu_pool_start'], image.symbols['__os_npu_pool_end'])]
+                expected += [(a, a + n) for a, n in model.published]
                 merged = []
                 for lo, hi in ranges:
                     if merged and merged[-1][1] == lo:
@@ -271,7 +294,7 @@ def main():
             (args.out / 'return-report.bin').write_bytes(raw)
         rows.append({'name': case, 'outcome': outcome, 'instructions': model.count,
                      'cache_batches': [len(x) for x in model.ranges],
-                     'npu_pool_lines_per_core': [sum((hi-lo)//64 for lo,hi in ranges if image.symbols.get('__os_npu_pool_start', 0x47400000) <= lo < image.symbols.get('__os_npu_pool_end', 0x47c00000)) for ranges in model.ranges]})
+                     'published_lines_per_core': [sum((hi-lo)//64 for lo,hi in ranges if lo >= model.published[0][0]) for ranges in model.ranges]})
     save(args.out / 'results.json', {'physical_access': False, 'cases': rows,
          'image_sha256': hashlib.sha256(args.elf.read_bytes()).hexdigest(),
          'checker_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

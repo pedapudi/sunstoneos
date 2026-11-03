@@ -5,8 +5,9 @@
 #include "../board/application.h"
 #include "a733_mapping_check.h"
 #include "aarch64_device_memory.h"
-#include "device_memory_pool.h"
+#include "umem.h"
 #include "app_large.h"
+#include "device-ranges.h"
 #include "application.h"
 #include "sunstone_crumb.h"
 #include "boot.h"
@@ -20,9 +21,8 @@
 static struct os_npu_application {
     struct npu_runtime runtime;
     struct a733_npu_startup startup;
-    struct device_memory_pool pool;
-    struct device_memory_lease lease;
-    struct device_memory_extent extent;
+    struct umem_buf pool;
+    int prepared;
     StaticTask_t tasks[2];StackType_t stacks[2][STACK];
     TaskHandle_t bootstrap,client;
     atomic_uint_fast64_t gate;
@@ -31,19 +31,50 @@ static struct os_npu_application {
     unsigned attempted,started,opened,jobs;
     uint32_t window_ms; /* the reply wait window of the last call */
 } npu;
-/* The EL1-private metadata of the runtime, the service and the queue adapter (include/npu_pool.h, struct npu_meta). The OS has
- * no EL1-only allocator that grows at run time; this arena is image data and bss, which the shared tables map for EL1 only (no
- * EL0 access), linked at exactly the size the image's declaration needs (os-npu-meta.h, from tools/npu-meta-header.py: the
- * runtime's own sizing call). A session that declares more is refused at start. The unified memory work
- * (docs/designs/unified-memory.md, step 1) replaces the arena with kernel-owned ledger buffers; only this definition changes. */
-#ifndef OS_NPU_META_BYTES /* a host check that supplies its own metadata allocator defines it */
-#include "os-npu-meta.h"
-#endif
-static _Alignas(64) uint8_t npu_meta_arena[OS_NPU_META_BYTES];
-static struct npu_meta_window npu_meta_state;
+/* The EL1-private metadata of the runtime, the service and the queue adapter (include/npu_pool.h, struct npu_meta): memory that
+ * no EL0 table maps and that the NPU's page tables do not map. It comes from kernel-owned ledger chunks, taken when a table is
+ * asked for: at admission for the declaration's tables, and later for run-time links. A chunk starts with a header (the chunk
+ * before it and its size); a block is carved from the newest chunk, and a block released last is given back to it. */
+struct meta_chunk { struct meta_chunk *previous; size_t bytes, used; uint64_t padding[5]; };
+_Static_assert(sizeof(struct meta_chunk)==64,"a chunk's blocks start on a 64-byte line");
+static struct { struct npu_meta meta; struct umem *ledger; struct meta_chunk *newest; } meta_state;
+static void *meta_allocate(struct npu_meta *m,size_t bytes)
+{
+    (void)m;
+    bytes=(bytes+63u)&~(size_t)63;
+    if(!meta_state.ledger||!bytes)return NULL;
+    struct meta_chunk *c=meta_state.newest;
+    if(!c||c->bytes-c->used<bytes){
+        /* A new chunk: the request plus the header, in whole pages, and at least 64 KiB so that many small tables share it. */
+        size_t want=(bytes+sizeof(struct meta_chunk)+4095u)&~(size_t)4095u;
+        if(want<65536u)want=65536u;
+        struct umem_buf b;
+        struct umem_request r={.bytes=want,.align=4096,.owner=UMEM_OWNER_KERNEL,.flags=UMEM_RAW};
+        if(umem_alloc(meta_state.ledger,&r,&b)!=UMEM_OK)return NULL;
+        c=(struct meta_chunk *)(uintptr_t)b.base;
+        c->previous=meta_state.newest;c->bytes=b.bytes-sizeof(struct meta_chunk);c->used=0;
+        meta_state.newest=c;
+    }
+    void *block=(uint8_t *)c+sizeof(struct meta_chunk)+c->used;
+    memset(block,0,bytes);
+    c->used+=bytes;
+    return block;
+}
+static void meta_release(struct npu_meta *m,void *block,size_t bytes)
+{
+    (void)m;
+    bytes=(bytes+63u)&~(size_t)63;
+    struct meta_chunk *c=meta_state.newest;
+    if(c&&bytes<=c->used&&(uint8_t *)block==(uint8_t *)c+sizeof(struct meta_chunk)+c->used-bytes)c->used-=bytes;
+}
+static struct npu_meta *meta_init(struct umem *ledger)
+{
+    meta_state.meta.allocate=meta_allocate;meta_state.meta.release=meta_release;
+    meta_state.ledger=ledger;meta_state.newest=NULL;
+    return &meta_state.meta;
+}
 static atomic_uint bootstrap_ran; /* The bootstrap task has run: the service may have powered or submitted. */
 static unsigned creating; /* Only while os_npu_start creates its two tasks. */
-extern unsigned char __os_npu_pool_start[],__os_npu_pool_end[];
 static int clock_now(uint64_t *now)
 {return a733_counter_clock_now(&providers.shared.counter,now);}
 struct os_npu_failure os_npu_first_failure;
@@ -508,6 +539,64 @@ unsigned os_npu_links(void)
     const struct os_session *s=os_session();
     return s?s->npu.links:0;
 }
+/* Each refusal of the admission-time preparation records its source line in group NPU, with the detail that says what did not
+ * fit; os_npu_start then refuses (the application is not stopped by an NPU it cannot use). */
+static int unprepared(uint32_t detail,const void *here){board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),detail,here);return 1;}
+#define UNPREPARED(detail) unprepared((detail),SUNSTONE_CRUMB_HERE())
+int os_npu_pool_prepare(struct umem *led,uint16_t owner)
+{
+    const struct os_session *s=os_session_admitted();
+    if(!s||!os_npu_model_count||!led||npu.prepared||npu.attempted)return 1;
+    const struct os_npu_session *g=&s->npu;
+    static const struct a733_mapping_rule wb={A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
+    /* The application's declaration sets the slots; the reservation covers them all, so that nothing is allocated on
+     * the job path. A declaration that does not fit names the resource in the record's value. */
+    if(os_npu_declaration_admitted(g)!=NPU_DECLARATION_OK)return 1;
+    const struct npu_declaration declared=os_npu_declaration_of(g);
+    const unsigned slots=declared.slots;
+    /* Graphs beyond the linked ones are loaded at run time, within the bounds the session declares. */
+    struct npu_runtime_bounds bounds={0};
+    if(declared.graph_bytes&&declared.tensor_bytes&&declared.graphs>os_npu_model_count)
+        bounds=(struct npu_runtime_bounds){.capacity=declared.graphs-os_npu_model_count,.graph_bytes=declared.graph_bytes,.tensor_bytes=declared.tensor_bytes};
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+    /* A queue image keeps graph i resident in slot i: each slot is sized by its own graph, not by the largest. The queue's
+     * tables (handles, tensors, edges) are reserved with the rest, from the declared links. */
+    if(!bounds.capacity&&slots==os_npu_model_count)bounds.per_graph=1;
+    bounds.queue=1;bounds.queue_links=declared.links;bounds.queue_image_links=(unsigned)ss_npu_queue_edges.count;
+#endif
+    /* Reserve the largest extent the NPU can address inside one 4 GiB window (its tables share one physical window and its
+     * working address limit is the device-width table's), let prepare place the declaration from the start of it, then give
+     * back what it did not use. Sizing the reservation first would admit every graph twice before the scheduler, which the
+     * secondary cores wait for one second at most: a layout takes tens of milliseconds on a Cortex-A55 at the boot clock. */
+    uint64_t base,bytes;
+    const struct umem_request shape={.policy=UMEM_WB,.device_mask=UMEM_DEV_NPU,.window=UINT64_C(1)<<32};
+    if(umem_largest(led,&shape,&base,&bytes)!=UMEM_OK)return UNPREPARED(0x801);
+    bytes&=~(uint64_t)(NPU_RUNTIME_GROUP_BYTES-1);
+    if(!bytes)return UNPREPARED(0x802);
+    const struct umem_request take={.bytes=bytes,.align=NPU_RUNTIME_GROUP_BYTES,.base=base,.owner=owner,.flags=UMEM_RAW|UMEM_AT,
+        .access=UMEM_PROT_READ|UMEM_PROT_WRITE,.device_mask=UMEM_DEV_NPU,.window=UINT64_C(1)<<32};
+    if(umem_alloc(led,&take,&npu.pool)!=UMEM_OK)return UNPREPARED(0x803);
+    struct npu_runtime_config config={.models=os_npu_models,.count=os_npu_model_count,.slots=slots,.bounds=bounds,.cpu=(uintptr_t)base,
+        .physical=base,.bytes=bytes,.register_cpu=0x03600000,
+        .register_physical=0x03600000,.fatal=fatal,.meta=meta_init(led)};
+    if(!npu_runtime_prepare(&npu.runtime,&config)){
+        /* Name the cause: prepare says which resource did not fit (a graph that is refused, the NPU's address space, or the
+         * memory for the declaration's tables and regions). The extent stays held. */
+        return UNPREPARED(npu.runtime.refusal!=NPU_DECLARATION_OK?(uint32_t)npu.runtime.refusal:0x804);
+    }
+    const size_t kept=npu_runtime_trim_parent(&npu.runtime);
+    if(!kept||umem_trim(led,&npu.pool,kept)!=UMEM_OK)return UNPREPARED(0x805);
+    if(!a733_mapping_check_stride(aarch64_device_translate,(uintptr_t)base,base,kept,0x200000,&wb))return UNPREPARED(0x806);
+    /* The reservation is visible to the NPU from here: published before anything can use it. */
+    if(!os_device_range_publish(base,kept))return UNPREPARED(0x807);
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+    /* The queue's tables are in the reservation: take them before the scheduler starts, so the application's first open
+     * finds its ring sized for the declaration. */
+    if(!os_npu_queue_tables(&npu.runtime))return UNPREPARED((uint32_t)NPU_DECLARATION_MEMORY);
+#endif
+    npu.prepared=1;
+    return 1;
+}
 int os_npu_start(void)
 {
     extern int os_npu_sdk_bind(const struct npu_runtime *);
@@ -522,62 +611,9 @@ int os_npu_start(void)
     if(board.session.deadline_us<=10000)return REFUSE();
     npu.attempted=1;
     const struct os_npu_session *g=&s->npu;
-    static const struct a733_mapping_rule wb={A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
-    uintptr_t start=(uintptr_t)__os_npu_pool_start,end=(uintptr_t)__os_npu_pool_end;
-    /* The reservation fits any one catalogue entry; the runtime takes the
-     * linked entry's exact requirement from its start. */
-    if(!os_npu_model_count)return REFUSE();
-    /* The application's declaration sets the slots; the reservation covers them all, so that nothing is allocated on
-     * the job path. A declaration that does not fit names the resource in the record's value. */
-    if(os_npu_declaration_admitted(g)!=NPU_DECLARATION_OK)return REFUSE();
-    const struct npu_declaration declared=os_npu_declaration_of(g);
-    const unsigned slots=declared.slots;
-    size_t need=0;
-    /* Graphs beyond the linked ones are loaded at run time, within the bounds the session declares. */
-    struct npu_runtime_bounds bounds={0};
-    if(declared.graph_bytes&&declared.tensor_bytes&&declared.graphs>os_npu_model_count)
-        bounds=(struct npu_runtime_bounds){.capacity=declared.graphs-os_npu_model_count,.graph_bytes=declared.graph_bytes,.tensor_bytes=declared.tensor_bytes};
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
-    /* A queue image keeps graph i resident in slot i: each slot is sized by its own graph, not by the largest. The queue's
-     * tables (handles, tensors, edges) are reserved with the rest, from the declared links. */
-    if(!bounds.capacity&&slots==os_npu_model_count)bounds.per_graph=1;
-    bounds.queue=1;bounds.queue_links=declared.links;bounds.queue_image_links=(unsigned)ss_npu_queue_edges.count;
-#endif
-    /* The lease is the whole pool and prepare takes what the declaration needs from its start (it refuses if that is more).
-     * Sizing the reservation first would admit every graph twice before the scheduler, which the secondary cores wait for
-     * one second at most: a layout takes tens of milliseconds on a Cortex-A55 at the boot clock. */
-    need=OS_NPU_POOL_BYTES;
-    if(start!=OS_NPU_POOL_START||end-start!=OS_NPU_POOL_BYTES)return REFUSE();
-#ifdef OS_NPU_POOL_BASE
-    /* A pool in the slot 1 area is used only while the ledger holds it for the kernel: no application region, heap or
-     * stack overlaps it and no application space maps it. */
-    if(!os_large_kernel_reserved(start,end-start))return REFUSE();
-#endif
-    if(!a733_mapping_check_stride(aarch64_device_translate,start,start,end-start,0x200000,&wb))return REFUSE();
-    if(!device_memory_pool_init_typed(&npu.pool,start,start,end-start,DEVICE_MEMORY_CLASS_DMA32,DEVICE_MEMORY_WRITE_BACK))return REFUSE();
-    if(!device_memory_acquire(&npu.pool,g->owner,need,&npu.lease,&npu.extent))return REFUSE();
-    if(npu.extent.cpu!=start||npu.extent.physical!=start||npu.extent.bytes!=need)return REFUSE();
-    struct npu_runtime_config config={.models=os_npu_models,.count=os_npu_model_count,.slots=slots,.bounds=bounds,.cpu=npu.extent.cpu,
-        .physical=npu.extent.physical,.bytes=npu.extent.bytes,.register_cpu=0x03600000,
-        .register_physical=0x03600000,.fatal=fatal,.meta=&npu_meta_state.meta};
-    npu_meta_window_init(&npu_meta_state,npu_meta_arena,sizeof(npu_meta_arena));
-    if(!npu_runtime_prepare(&npu.runtime,&config)){
-        /* Name the cause: prepare says which resource did not fit (a graph that is refused, the NPU's address space, or the
-         * pool for the declaration's tables and regions). */
-        if(npu.runtime.refusal!=NPU_DECLARATION_OK)
-            board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),(uint32_t)npu.runtime.refusal,SUNSTONE_CRUMB_HERE());
-        device_memory_retain(&npu.pool,npu.lease);return REFUSE();
-    }
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
-    /* The queue's tables are in the reservation: take them before the scheduler starts, so the application's first open
-     * finds its ring sized for the declaration. */
-    if(!os_npu_queue_tables(&npu.runtime)){
-        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),(uint32_t)NPU_DECLARATION_MEMORY,SUNSTONE_CRUMB_HERE());
-        device_memory_retain(&npu.pool,npu.lease);return REFUSE();
-    }
-#endif
-    if(!os_npu_sdk_bind(&npu.runtime)){device_memory_retain(&npu.pool,npu.lease);return REFUSE();}
-    device_memory_lookup(&npu.pool,npu.lease)->state=DEVICE_MEMORY_DEVICE;
+    /* The reservation was made when the application was admitted (os_npu_pool_prepare). */
+    if(!npu.prepared)return REFUSE();
+    if(!os_npu_sdk_bind(&npu.runtime))return REFUSE();
     const struct a733_board_session *b=&s->board;
     npu.end=board.session.deadline_us-10000;
 #ifdef SUNSTONE_BOARD_RESIDENT

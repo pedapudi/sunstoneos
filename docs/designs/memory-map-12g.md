@@ -26,7 +26,7 @@ prerequisite of [memory-architecture.md](memory-architecture.md).
 | level-2 64–455 | `0x4800_0000`–`0x7900_0000` | unchanged pools | `A733_EL1_DRAM_BLOCK(pa)` |
 | level-2 456–511 | `0x7900_0000`–`0x8000_0000` | invalid | invalid |
 | level-1 2–12 | `0x8000_0000`–`0x3_4000_0000` | `A733_EL1_DRAM_BLOCK(pa)` | `A733_EL1_DRAM_BLOCK(pa)` |
-| EL3 level-1 2–12 | same | invalid | invalid |
+| EL3 level-1 2–12 | same | 1 GiB blocks in the OS image, invalid elsewhere | 1 GiB blocks in the OS image, invalid elsewhere |
 
 `A733_EL1_DRAM_BLOCK(pa)` in `include/a733_device_memory_layout.h` is Normal
 write-back (MAIR index 1, `0xff`), inner shareable, access flag set, EL1
@@ -242,3 +242,5 @@ QEMU execution traces and the golden comparison (record `memory-map-12g-qemu` in
 1. **Board evidence.** The decode check returns 1 on the board, and the memory qualification image's address test passes over its 12,224 MiB tested map. One boot of each image class with the high map and SError unmasked reaches the scheduler with no SError. In the GPU linear OS image, EL0 and EL1 stores into `0x46C0_0000` raise permission faults, `DC CIVAC` on the region completes, and the `mimus_board_pins` check passes. `CPU_CYCLES` around `a733_cached_memory_prepare()` on core 0 replaces the instruction estimate. The prediction is the record `memory-map-12g-board`.
 2. **DRAM-controller code.** Make `a733_dram_decode_check()` read the controller and firewall registers to the contract above once a register source exists, and link `drivers/dram/a733_dram_decode.c` into the images that build `memory.c`.
 3. **Other designs.** [cpu-table-walks.md](cpu-table-walks.md) and [cpu-coherence.md](../cpu-coherence.md) should replace their `0x8000_0000`–`0xFFFF_FFFF` requirement with this contract.
+
+The OS image maps every gigabyte and every 2 MiB block of DRAM that the decode check passed at EL3 too, as normal write-back memory with the attributes of a level-2 block, because the return cleans at EL3 the device-visible ranges that the OS publishes (`apps/os/device-ranges.h`), and the OS chooses them at run time. The fixtures that build the extended layout map nothing there.
