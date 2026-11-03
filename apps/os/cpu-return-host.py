@@ -107,12 +107,12 @@ def geometry(image):
     # The OS publishes the DRAM ranges that a device reads or writes when it allocates them (apps/os/device-ranges.h); the EL3
     # terminal cleans them from the list whose head is this word of image RAM. Nothing about them is known at link time, and
     # the runner neither backs them up nor restores them: their contents are scratch, as a manifest region marked scratch is.
-    require('os_device_ranges_head' in symbols, 'Device range list head absent.')
-    address, size = symbols['os_device_ranges_head']
     begin, end = result['cached_writable']
-    require(size == 8 and address % 8 == 0 and begin <= address < address + size <= end,
-            'Device range list head outside preserved image RAM.')
-    result['device_ranges_head'] = {'address': address, 'bytes': size}
+    if 'os_device_ranges_head' in symbols:     # an OS image; the returning probes clean no published range
+        address, size = symbols['os_device_ranges_head']
+        require(size == 8 and address % 8 == 0 and begin <= address < address + size <= end,
+                'Device range list head outside preserved image RAM.')
+        result['device_ranges_head'] = {'address': address, 'bytes': size}
     if 'os_npu_published_report' in symbols:
         address, size = symbols['os_npu_published_report']
         require(size == npu_capture.REPORT_BYTES and begin <= address < address + size <= end,
