@@ -149,6 +149,16 @@ the early rows and are not tied to pages or cache lines, and the 16 KiB segmente
 one (300 jobs without a fault; rows computed after both links equal the simulator). The segmented run shows that the front end follows the
 links.
 
+## Attention step of the tiled encoder (2026-11-02)
+
+The attention step of the length-independent encoder layer (`docs/designs/npu-tiled-execution.md`) runs as two jobs of 64 query
+rows against 128 keys, 229.4 microseconds each (458.8 for the step, one slot, 852 MHz and 800 mV), with outputs equal to the SDK
+simulator's byte for byte. The earlier forms took 859 to 906 microseconds. The gain comes from three placements the hardware
+rewards: `Elu` plus one on the activation unit for the exponentials of non-positive arguments, a row sum taken from a product with
+a ones column, and a job small enough for the 512 KiB of on-chip memory. [The placement note](../hardware/npu-op-placement.md)
+holds the unit of each operation, its cost and the shapes the compiler refuses. No operating-system or kit change was needed.
+Two jobs of one key tile share the key, value and position inputs, which the current queue makes the application copy per job.
+
 ## Open work
 
 1. Done: declared resources, run-time graph loading, shader integration, backpressure depth and tensor linking after the scheduler starts (see "What the NPU runs now"). What remains of this item is the backlog below.
@@ -165,7 +175,7 @@ links.
 Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-47 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+61 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -216,4 +226,18 @@ Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added
 | `1793616163904565650-da3f264f` | 2026-11-02 | 3-3 | `9117aaf6a95f` | returned | passed | run_total 88.57 s, jobs_per_k 1000, us_per_job_k2_to_128 5.45 us, jobs_per_s 183400, refusals_k_le_64 0, refusals_k128 38255, linked_pair 11.4 us |
 | `1793616402162300846-13133d4b` | 2026-11-02 | 3-1 | `2c64a0a714ea` | returned | passed | run_total 21.996 s |
 | `1793616938769293285-42647824` | 2026-11-02 | 3-1 | `7d5acbff80f3` | returned | passed | run_total 24.225 s, jobs_per_k 1000, us_per_job_k2_to_128 5.45 us, jobs_per_s 183400, refusals_k_le_64 0, refusals_k128 38258 |
+| `1793663674220336593-99dbc180` | 2026-11-03 | 3-3 | `ccdb5441a47c` | returned | failed | run_total 25.651 s, job_p50 753.3 µs, job_min 751.6 µs, job_p99 799.4 µs |
+| `1793664173227863386-90f70e13` | 2026-11-03 | 3-1 | `1f77cd5adde1` | returned | passed | run_total 73.971 s, job_p50 495.8 µs, job_min 493.6 µs, job_p99 541.4 µs |
+| `1793665169652521941-79f0d183` | 2026-11-03 | 3-1 | `61e58fa3364c` | returned | passed | run_total 212.859 s, job_p50 221.6 µs, job_min 219.8 µs, job_p99 239 µs |
+| `1793665620604466101-a312e346` | 2026-11-03 | 3-1 | `2d66c899b0d0` | returned | failed | run_total 162.139 s, job_p50 391.2 µs, job_min 389.8 µs, job_p99 426 µs |
+| `1793665824405367432-7def0e13` | 2026-11-03 | 3-1 | `7ecec187d2d3` | returned | passed | run_total 25.68 s, job_p50 906.6 µs, job_min 906 µs, job_p99 957.2 µs |
+| `1793665932622614738-61ffecfb` | 2026-11-03 | 3-1 | `cb4aa17185c8` | returned | passed | run_total 25.819 s, job_p50 622.5 µs, job_min 621.6 µs, job_p99 670.8 µs |
+| `1793666001596247189-bae5598b` | 2026-11-03 | 3-1 | `fe40a6d33a2e` | returned | passed | run_total 25.483 s, job_p50 871.4 µs, job_min 871 µs, job_p99 919.1 µs |
+| `1793666062767994561-6a9d8cc7` | 2026-11-03 | 3-1 | `bc2a74a82f18` | returned | passed | run_total 25.14 s, job_p50 303.3 µs, job_min 303 µs, job_p99 340.3 µs |
+| `1793666124325449583-48b4f19a` | 2026-11-03 | 3-1 | `70ea27030909` | returned | passed | run_total 24.342 s, job_p50 161.8 µs, job_min 161 µs, job_p99 192.2 µs |
+| `1793666171093864199-12181392` | 2026-11-03 | 3-1 | `9e655c1dd344` | returned | failed | run_total 24.737 s, job_p50 303.3 µs, job_min 303 µs, job_p99 339.6 µs |
+| `1793666202399765909-18a4fce7` | 2026-11-03 | 3-1 | `5107675f42fe` | returned | failed | run_total 26.92 s, job_p50 731 µs, job_min 728.1 µs, job_p99 780.3 µs |
+| `1793666366906891069-9a72ca56` | 2026-11-03 | 3-1 | `0f45dff3d769` | returned | failed | run_total 228.74 s, job_p50 221.6 µs, job_min 221.2 µs, job_p99 256.6 µs |
+| `1793667205533452916-4c9bfc05` | 2026-11-03 | 3-1 | `b9fe39fdaad4` | host-error | inconclusive | run_total 35.274 s |
+| `1793667292474700968-bd255624` | 2026-11-03 | 3-1 | `b9fe39fdaad4` | returned | passed | run_total 257.257 s, job_p50 229.4 µs, job_min 227.8 µs, job_p99 264.5 µs |
 <!-- evidence-table:end -->

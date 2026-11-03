@@ -7,6 +7,7 @@
 #include "aarch64_device_memory.h"
 #include "device_memory_pool.h"
 #include "app_large.h"
+#include "application.h"
 #include "sunstone_crumb.h"
 #include "boot.h"
 #include "sunstone_npu_service.h"
@@ -430,7 +431,7 @@ static void bootstrap(void *unused)
             if(now>=npu.initial_deadline)os_npu_thermal(0,1,0,now);
             if(os_npu_stopping()) {
                 /* No startup step or activation has occurred. */
-                atomic_store_explicit(&npu.stopped,1,memory_order_release);
+                atomic_store_explicit(&npu.stopped,1,memory_order_release);os_application_wake_main();
                 xTaskNotifyGive(npu.client);STOPPED_WAIT();return;
             }
             if(!claim()){(void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));continue;}
@@ -458,7 +459,7 @@ static void bootstrap(void *unused)
                         r=npu_runtime_stop_poll(&npu.runtime);
                         if(r==A733_NPU_PLATFORM_RETAINED){(void)FAIL_REQUEST(NPU_SERVICE_CLOSE,0,0,NULL,A733_NPU_PLATFORM_READY,r);goto failed;}
                         if(r==A733_NPU_PLATFORM_READY) {
-                            atomic_store_explicit(&npu.stopped,1,memory_order_release);
+                            atomic_store_explicit(&npu.stopped,1,memory_order_release);os_application_wake_main();
                             xTaskNotifyGive(npu.client);STOPPED_WAIT();return;
                         }
                         vTaskDelay(1);

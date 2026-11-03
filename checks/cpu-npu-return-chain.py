@@ -155,7 +155,10 @@ class Native(owners.Model):
         self.hooks[layout.address('npu_runtime_send')] = self.send
         self.hooks[layout.address('npu_runtime_collect')] = self.collect
         self.hooks[layout.address('a733_npu_startup_stop')] = self.platform_stop
-        plan = self.rt+self.rf['plans']
+        # The plans are a table that the runtime's reservation holds and the runtime points to (npu_runtime.plans), not an
+        # array inside the runtime: put one in the pool, clear of the tensor windows.
+        plan = POOL+0x200000
+        self.put64(self.rt+self.rf['plans'], plan)
         pf = layout.layouts['nbg_assembly_layout']
         self.put32(plan+pf['inputs'], 1)
         self.put32(plan+pf['outputs'], 1)

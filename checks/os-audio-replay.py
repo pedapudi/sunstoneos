@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 import shlex
 import subprocess
-from harness import CLANG, LLD, SANITIZE, Image, environment
+from harness import machine as harness_machine, CLANG, LLD, SANITIZE, Image, environment
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0
@@ -53,7 +53,7 @@ def main():
         parts = [(int(s['p_vaddr']), bytes(s.data()), int(s['p_memsz']))
                  for s in ELFFile(stream).iter_segments() if s['p_type'] == 'PT_LOAD']
     for selected, name in enumerate(CASES):
-        uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+        uc = harness_machine()
         pages = set()
         for address, data, size in parts:
             for page in range(address & ~4095, (address + size + 4095) & ~4095, 4096):

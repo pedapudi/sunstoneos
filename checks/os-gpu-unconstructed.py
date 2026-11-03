@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 import struct
 from elftools.elf.elffile import ELFFile
-from harness import Image, hook_addresses, refused, save, skip_crumbs
+from harness import machine as harness_machine, Image, hook_addresses, refused, save, skip_crumbs
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP
 
@@ -49,7 +49,7 @@ def run_image(path,output):
     cases += ['nonzero-'+field for field in gpu_fields]
     rows=[]
     for case in cases:
-        u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x41000000,0x1200000);u.mem_map(0x80000000,0x20000)
+        u=harness_machine();u.mem_map(0x41000000,0x1200000);u.mem_map(0x80000000,0x20000)
         for address,data in image.parts:
             if data:u.mem_write(address,data)
         skip_crumbs(u,image)
@@ -78,13 +78,14 @@ def run_image(path,output):
         elif case.startswith('nonzero-'):put(gpu+gpu_fields[case.removeprefix('nonzero-')],1,1)
         callbacks=('eTaskGetState','uxQueueMessagesWaiting','pvr_gpu_service_send_epoch',
                    'pvr_gpu_service_collect','a733_gpu_backend_stopped')
-        names=['a733_smp_counter','xTaskGetCurrentTaskHandle','board_live','os_gpu_queue_quiesce','board_fail','platform_exit',
+        names=['a733_smp_counter','ucPortGetCoreID','xTaskGetCurrentTaskHandle','board_live','os_gpu_queue_quiesce','board_fail','platform_exit',
                'vTaskSuspend','os_gpu_retire','os_cpu_return_begin',*callbacks]
         hooks={image.address(name):name for name in names}
         def ret(value=0):u.reg_write(UC_ARM64_REG_X0,value);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
         def hook(machine,address,size,unused):
             name=hooks[address];arg=machine.reg_read(UC_ARM64_REG_X0)
             if name=='a733_smp_counter':ret(state['clock_us']*24)
+            elif name=='ucPortGetCoreID':ret(6)         # the application's core: the scheduler port reads it from a user-visible register
             elif name=='xTaskGetCurrentTaskHandle':ret(state['task'])
             elif name=='os_cpu_return_begin':state['cpu_return_entries']+=1
             elif name=='os_gpu_retire':state['retire_entries']+=1

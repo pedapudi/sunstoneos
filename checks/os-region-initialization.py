@@ -14,7 +14,7 @@ from pathlib import Path
 import subprocess
 
 from elftools.elf.elffile import ELFFile
-from harness import Image, hook_addresses
+from harness import machine as harness_machine, Image, hook_addresses
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_PC
 
@@ -34,7 +34,7 @@ def sha(path):
 class Model:
     def __init__(self, image):
         self.image = image
-        self.uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+        self.uc = harness_machine()
         self.uc.mem_map(0x40000000, 0x08000000)
         self.uc.mem_map(STACK, 0x100000)
         for address, data in image.parts:
