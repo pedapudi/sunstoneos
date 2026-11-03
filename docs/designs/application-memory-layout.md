@@ -550,6 +550,17 @@ which the runner compared as bytes. Entry `1793665683000181061-de31a526` repeats
 `returned`, with the same receipt, in 5.9 s of launch. The pool at `0x78600000` works: the failed run of the pool was the lost
 wake-up, not the pool. The NPU's reach above `0x48000000` is shown by those seven graphs (a pool at the top of the slot 1 area).
 
+### Predicted board run of the NPU graphs with the end wait driven by events
+
+An OS wake-up of the main task that finds no registered wait is now kept for its next wait, `ss_host_recv` tests its mailbox again
+after registering, and the NPU retirement wait in `ss_finish` sleeps in the deadline wait until the client's report or the
+bootstrap's local stop wakes it, instead of polling with `vTaskDelay(1)`. The wait ends one second before the supervisor's cutoff.
+
+Hypothesis: the NPU graphs image with the 10 MiB pool at `0x78600000`, built from this tree, returns normally with the receipt of
+`expect.json`, as the run before the change did (seven graphs `match`, `completed` and `matched` 7, the SDK closed, `RETURN_ROM`
+last, about 6 s of launch). A watchdog end with `0x75f` would mean the stop did not wake the main task in time, and the value of the
+failure lists the unmet retirement conditions.
+
 ### Predicted board run of the heap
 
 Hypothesis: with the OS image built with the address-test decode check
