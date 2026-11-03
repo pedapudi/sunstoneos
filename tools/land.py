@@ -21,6 +21,10 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import host_priority
+import host_space
+
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path(os.environ.get('SUNSTONE_CACHE', Path.home() / '.cache/sunstoneos'))
 BRINGUP_WORKTREE = Path.home() / 'git/sunstoneos-worktrees/bringup'
@@ -202,6 +206,7 @@ def land(args):
 
 
 def main(argv=None):
+    host_priority.lower()      # the landing gate and its builds yield the disk and CPUs to the board runner (tools/host_priority.py)
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('worktree', type=Path)
     parser.add_argument('--reason', required=True)
@@ -216,6 +221,12 @@ def main(argv=None):
     parser.add_argument('--evidence-command', default=os.environ.get('LAND_EVIDENCE_COMMAND'))
     parser.add_argument('--progress-command', default=os.environ.get('LAND_PROGRESS_COMMAND'))
     args = parser.parse_args(argv)
+    try:
+        host_space.preflight(args.cache / 'build')
+        host_space.use_disk_tmp(args.cache / 'build')       # the gate, its compilers and the evidence tools inherit TMPDIR
+    except host_space.SpaceShortage as error:
+        print('REFUSED: %s' % error, file=sys.stderr)
+        return 1
     args.gate_command = shlex.split(args.gate_command or str(args.cache / 'bin/integration-gate.sh'))
     args.evidence_command = shlex.split(args.evidence_command or '%s tools/evidence.py' % sys.executable)
     args.progress_command = shlex.split(args.progress_command or '%s checks/progress.py' % sys.executable)

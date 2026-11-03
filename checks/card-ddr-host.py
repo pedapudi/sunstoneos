@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Check derived-image identity and helper updates with actual producers and files."""
 import argparse,copy,hashlib,importlib.util,json,os,shutil,struct
+import sys
+from pathlib import Path as _P
+sys.path.insert(0,str(_P(__file__).resolve().parent))
+from harness import copy_image
 from pathlib import Path
 from types import SimpleNamespace
 ROOT=Path(__file__).resolve().parents[1]
@@ -32,7 +36,7 @@ for kind in ('policy','helper-crc','units','qualification','wrong-patch','change
     (out/'boot0-card-restore.bin').write_bytes(data);(out/'card-ddr-helper.bin').write_bytes(h)
     (out/'manifest.json').write_text(json.dumps(m));refused(kind,lambda:v.validate_variant(out/'manifest.json',original))
 allocation=json.loads(a.allocation.read_text());units=allocation['training_records']
-image=a.output/'card.img';shutil.copyfile(a.backup,image)
+image=a.output/'card.img';copy_image(a.backup,image)
 card={'kind':1,'host':0,'cid':[0x1111,0x2222,0x3333,0x4444],'sectors':image.stat().st_size//512,'target':{'port':'model','sysfs':'model'}}
 plan=a.build/'helper-plan/plan.json';converted=u.plan(plan,a.allocation,image,card,a.output/'sessions')
 assert len(converted['sessions'])==2

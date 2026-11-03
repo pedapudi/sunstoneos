@@ -204,7 +204,7 @@ done:
     r->stopped=os_npu_stopped();
     memcpy((uint8_t *)&published+16,(const uint8_t *)r+16,OS_NPU_REPORT_BYTES-16);
     memcpy(&published,r,12);
-    atomic_store_explicit(&published.finished,1,memory_order_release);vTaskSuspend(NULL);return;
+    atomic_store_explicit(&published.finished,1,memory_order_release);os_application_wake_main();vTaskSuspend(NULL);return;
 retained:
     /* Every NPU resource stays held; board_fail ends the lifetime. */
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE

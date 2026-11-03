@@ -18,6 +18,7 @@ if not __debug__:
 ROOT = Path(__file__).resolve().parents[1]
 LAND = ROOT / 'tools/land.py'
 ENV = {**os.environ, 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_SYSTEM': os.devnull,
+       'SUNSTONE_HOST_SPACE': 'off',     # the fake cache is in a scratch directory (tools/host_space.py)
        'GIT_AUTHOR_NAME': 'check', 'GIT_AUTHOR_EMAIL': 'check@example.invalid',
        'GIT_COMMITTER_NAME': 'check', 'GIT_COMMITTER_EMAIL': 'check@example.invalid'}
 

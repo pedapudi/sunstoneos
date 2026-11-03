@@ -49,13 +49,34 @@ import harness
 ROOT = Path(__file__).resolve().parents[1]
 # The index was once a tracked file at this path; --verify refuses its return.
 RETIRED_INDEX = 'checks/index.json'
-# Checks that the device-access scan matches by text but that open no device. Each
-# runs against fixtures; the value is the option that names its new output directory.
+# Checks that the scan does not class pure-host by text, but that run with only a new output
+# directory and open no device: the device-access scan matches them by text, or they name the
+# directory with an option other than --output or as a positional parameter. Each runs against
+# fixtures or models; the value is the option that names its new output directory, or the
+# positional parameter's name (output_arguments() puts the directory alone on the command).
 HOST_ONLY = {
     'board-runner.py': '--out',           # fake FEL and board under the output directory
     'usb-disconnect.py': '--output',      # sysfs metadata fixtures; no device is opened
     'usb-access-discover.py': '--output', # fixture sysfs tree; no device is opened
+    'board-npu-on-admission.py': '--out',        # offline admission with a model of the runner
+    'board-return-preservation.py': '--out',     # models of the runner's helper and return ordering
+    'board-usb-power.py': '--out',               # models of the VBUS probe and the port policy
+    'cpu-npu-concurrency.py': '--out',           # host producer, arithmetic, observer and receipt cases
+    'memtest-plan.py': '--out',                  # plan arithmetic
+    'returning-watchdog.py': '--out',            # the watchdog and breadcrumb model
+    'accelerator-shared-owner.py': 'output',     # bus timing model
+    'cpu-clock-check.py': 'output',              # CPU clock driver against its model
+    'cpu-pmu.py': 'output',                      # PMU driver against its model
+    'dram-controller.py': 'output',              # controller facts against the pinned sources and a model
+    'npu-native-delay.py': 'output',             # delay arithmetic under Unicorn
+    'perf-mode.py': 'output',                    # performance-mode tables, engine and owner models
+    'register-latency.py': 'output',             # register-latency model
 }
+
+
+def output_arguments(option, directory):
+    """The command-line words that give a check its new output directory."""
+    return [option, str(directory)] if option.startswith('-') else [str(directory)]
 # Checks whose failure can reflect documentation prose alone. The gate reports
 # them as WARN unless --strict-docs is given. True covers the whole check; a tuple
 # names the test cases that read repository documents, so that a failure in any
@@ -363,7 +384,7 @@ def main():
     for name in runnable:
         command = [sys.executable, str(ROOT / 'checks' / name)]
         if index[name]['output_option']:
-            command += [index[name]['output_option'], str(out / Path(name).stem)]
+            command += output_arguments(index[name]['output_option'], out / Path(name).stem)
         try:
             result = subprocess.run(command, cwd=ROOT, capture_output=True, env=run_environment(), timeout=args.timeout)
             output, code = result.stdout + result.stderr, result.returncode
