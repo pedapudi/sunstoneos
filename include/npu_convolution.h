@@ -79,6 +79,9 @@ struct npu_convolution {
     unsigned char stream_digest[NPU_CONVOLUTION_STREAMS][32];
     struct a733_npu_native native;
     struct a733_npu_command commands[NPU_CONVOLUTION_COMMANDS];
+    /* The tables of the memory layer and of the service, for this driver's one client and its fixed buffers. */
+    _Alignas(8) uint8_t memory_tables[A733_NPU_MEMORY_TABLES_BYTES(NPU_CONVOLUTION_BUFFERS)];
+    _Alignas(8) uint8_t service_tables[NPU_SERVICE_TABLES_BYTES(1, NPU_CONVOLUTION_COMMANDS)];
     struct npu_service service;
     struct a733_npu_startup *startup;
     TaskHandle_t client;

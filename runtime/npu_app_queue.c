@@ -21,7 +21,7 @@ int ss_npu_queue_open_linked(unsigned depth,const struct ss_npu_queue_edge *link
     if(!q||!out||!depth||depth>SS_NPU_QUEUE_MAX_DEPTH||!q->backend.on_core(q->context))return -1;
     unsigned s=atomic_load_explicit(&q->state,memory_order_acquire);
     if(s==IDLE){
-        if(count>sizeof(q->requested)/sizeof(*q->requested)||(count&&!links))return -1;
+        if(count>q->requested_capacity||(count&&!links))return -1;
         q->depth=depth;q->producer=q->backend.identity(q->context);
         if(!q->producer)return -1;
         if(count)memcpy(q->requested,links,count*sizeof(*links));
@@ -38,17 +38,41 @@ static int within(struct ss_npu_tensor t,struct ss_npu_cache_span s)
 {return t.data&&t.bytes&&!((uintptr_t)t.data&63)&&t.bytes<=SIZE_MAX-63&&
     ((t.bytes+63)&~(size_t)63)<=s.bytes&&(uintptr_t)t.data>=s.cpu&&
     (uintptr_t)t.data-s.cpu<=s.bytes-((t.bytes+63)&~(size_t)63);}
+/* The next n bytes of the tables, zeroed, 8-aligned; the caller checked that the tensor count fits, which bounds the tables. */
+static void *carve(struct ss_npu_queue *q,size_t n)
+{
+    n=(n+7u)&~(size_t)7;
+    void *p=q->at;q->at+=n;memset(p,0,n);return p;
+}
+int ss_npu_queue_service_tables(struct ss_npu_queue *q,unsigned handles,size_t tensors,size_t links,void *memory,size_t bytes)
+{
+    const size_t need=ss_npu_queue_tables_bytes(handles,tensors,links);
+    if(!q||q!=bound||atomic_load(&q->state)!=IDLE||q->tables||!handles||!tensors||bytes<need||!memory||((uintptr_t)memory&7))return 0;
+    memset(memory,0,need);
+    q->tables=memory;q->table_bytes=need;q->at=q->tables;
+    q->handle=carve(q,(size_t)handles*sizeof(*q->handle));q->group=carve(q,(size_t)handles*sizeof(*q->group));
+    q->member_words=ss_npu_queue_member_words(handles);
+    for(unsigned i=0;i<handles;++i)q->group[i].members=carve(q,(size_t)q->member_words*4u);
+    q->requested=carve(q,links*sizeof(*q->requested));
+    q->handle_capacity=handles;q->tensor_capacity=(unsigned)tensors;q->requested_capacity=links;
+    /* The per-tensor tables are carved as handles are added, from the tensor budget, in this order and sizes. */
+    return 1;
+}
 int ss_npu_queue_service_handle(struct ss_npu_queue *q,const struct ss_npu_tensor *in,unsigned ni,
     const struct ss_npu_tensor *out,unsigned no,struct ss_npu_cache_span read,struct ss_npu_cache_span write)
 {
-    if(!q||atomic_load(&q->state)!=OPEN_REQUEST||q->edges_admitted||q->handles==SS_NPU_QUEUE_MAX_HANDLES||
-       !in||!out||!ni||!no||ni>SS_NPU_QUEUE_MAX_TENSORS||no>SS_NPU_QUEUE_MAX_TENSORS||
+    if(!q||atomic_load(&q->state)!=OPEN_REQUEST||q->edges_admitted||q->handles==q->handle_capacity||q->tensors_used>q->tensor_capacity||
+       !in||!out||!ni||!no||ni>q->tensor_capacity-q->tensors_used||no>q->tensor_capacity-q->tensors_used-ni||
        !read.cpu||!write.cpu||!read.bytes||!write.bytes||((read.cpu|read.bytes|write.cpu|write.bytes)&63)||
        read.bytes>UINTPTR_MAX-read.cpu||write.bytes>UINTPTR_MAX-write.cpu)return 0;
     for(unsigned i=0;i<ni;++i)
         if(!in[i].data||!in[i].bytes||((uintptr_t)in[i].data&63)||in[i].bytes>SIZE_MAX-63)return 0;
     for(unsigned i=0;i<no;++i)if(!within(out[i],write))return 0;
     struct ss_npu_queue_handle *h=&q->handle[q->handles++];
+    h->input=carve(q,ni*sizeof(*in));h->output=carve(q,no*sizeof(*out));
+    h->dirty[SS_NPU_INPUT]=carve(q,ni*sizeof(struct ss_npu_dirty_range));h->dirty[SS_NPU_OUTPUT]=carve(q,no*sizeof(struct ss_npu_dirty_range));
+    h->alias=carve(q,ni*sizeof(struct ss_npu_queue_alias));
+    q->tensors_used+=ni+no;
     memcpy(h->input,in,ni*sizeof(*in));memcpy(h->output,out,no*sizeof(*out));
     h->inputs=ni;h->outputs=no;h->read=read;h->write=write;
     for(unsigned i=0;i<ni;++i)h->dirty[SS_NPU_INPUT][i].end=in[i].bytes;
@@ -60,7 +84,7 @@ static int overlaps(struct ss_npu_cache_span a,struct ss_npu_cache_span b)
 int ss_npu_queue_service_edges(struct ss_npu_queue *q,const struct ss_npu_queue_edge *edges,size_t count)
 {
     if(!q||atomic_load(&q->state)!=OPEN_REQUEST||q->edges_admitted||!q->handles||
-       count>SS_NPU_QUEUE_MAX_HANDLES*SS_NPU_QUEUE_MAX_TENSORS||(!edges&&count))return 0;
+       count>q->tensor_capacity||(!edges&&count))return 0;
     for(unsigned i=0;i<q->handles;++i){
         struct ss_npu_queue_handle *h=&q->handle[i];
         if(overlaps(h->read,h->write))return 0;
@@ -69,7 +93,7 @@ int ss_npu_queue_service_edges(struct ss_npu_queue *q,const struct ss_npu_queue_
             if(overlaps(h->read,p->read)||overlaps(h->read,p->write)||
                overlaps(h->write,p->read)||overlaps(h->write,p->write))return 0;
         }
-        h->group=i;memset(q->group[i].members,0,sizeof q->group[i].members);q->group[i].members[i/32u]=UINT32_C(1)<<(i%32u);
+        h->group=i;memset(q->group[i].members,0,(size_t)q->member_words*4u);q->group[i].members[i/32u]=UINT32_C(1)<<(i%32u);
     }
     for(size_t i=0;i<count;++i){
         const struct ss_npu_queue_edge *e=&edges[i];
@@ -83,7 +107,7 @@ int ss_npu_queue_service_edges(struct ss_npu_queue *q,const struct ss_npu_queue_
         c->dirty[SS_NPU_INPUT][e->input]=(struct ss_npu_dirty_range){0};
         unsigned from=c->group,to=p->group;
         if(from!=to){
-            for(unsigned w=0;w<SS_NPU_QUEUE_MEMBER_WORDS;++w){q->group[to].members[w]|=q->group[from].members[w];q->group[from].members[w]=0;}
+            for(unsigned w=0;w<q->member_words;++w){q->group[to].members[w]|=q->group[from].members[w];q->group[from].members[w]=0;}
             for(unsigned j=0;j<q->handles;++j)if(q->handle[j].group==from)q->handle[j].group=to;
         }
     }
@@ -161,7 +185,7 @@ int ss_npu_queue_submit(struct ss_npu_queue *q,ss_npu_handle handle,struct ss_np
     if(!g->device_owned){
         /* Component membership is fixed at admission. Clean every CPU-dirty
          * member before starting any job that can touch a shared tensor. */
-        for(unsigned i=0;i<q->handles;++i)if(ss_npu_queue_member(g,i)){
+        for(unsigned i=0;i<q->handles;++i)if(ss_npu_queue_member(q,g,i)){
             clean_dirty(q,&q->handle[i],SS_NPU_INPUT);clean_dirty(q,&q->handle[i],SS_NPU_OUTPUT);
         }
         g->device_owned=1;
@@ -221,7 +245,7 @@ int ss_npu_queue_acquire_handle(struct ss_npu_queue *q,ss_npu_handle handle)
     struct ss_npu_queue_group *g=&q->group[q->handle[handle-1].group];
     if(atomic_load_explicit(&q->completed,memory_order_acquire)<g->last_use)return 0;
     if(g->device_owned){
-        for(unsigned h=0;h<q->handles;++h)if(ss_npu_queue_member(g,h)){
+        for(unsigned h=0;h<q->handles;++h)if(ss_npu_queue_member(q,g,h)){
             struct ss_npu_queue_handle *member=&q->handle[h];
             for(unsigned i=0;i<member->outputs;++i)
                 q->backend.cache(q->context,(uintptr_t)member->output[i].data,

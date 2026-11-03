@@ -1,6 +1,7 @@
 #include "npu_arch.h"
 #include "npu_service.h"
 #include "sunstone_crumb.h"
+#include "a733_range.h"
 #include <string.h>
 
 static struct npu_service *instance;
@@ -65,6 +66,12 @@ static int irq_call(struct npu_service *s, unsigned which, int (*call)(void *))
         }
     } else s->irq_waiting &= ~bit;
     return result;
+}
+/* The permission is one bit of the client's bitmap, tested against the commands the service holds. */
+static int command_allowed(const struct npu_service *s, unsigned client, unsigned command)
+{
+    return client < s->client_count && command < s->command_count &&
+           (s->clients[client].commands[command / 32u] >> (command % 32u) & 1u);
 }
 static int irq_mask(struct npu_service *s)
 {
@@ -328,7 +335,7 @@ static enum npu_service_result execute(struct npu_service *s,
         if(s->irq_bound && ((c->state==A733_NPU_CLOSED && !reopening) || c->state==A733_NPU_FAULT))return NPU_SERVICE_FAULT;
         if(s->irq_bound && irq_mask(s)!=1)
             return c->state==A733_NPU_FAULT ? NPU_SERVICE_FAULT : SERVICE_DEFERRED;
-        if (s->owner != NPU_SERVICE_CLIENTS) return NPU_SERVICE_BUSY;
+        if (s->owner != NPU_SERVICE_NONE) return NPU_SERVICE_BUSY;
         if (c->state != A733_NPU_COLD && c->state != A733_NPU_CLOSED) return NPU_SERVICE_BUSY;
         if(reopening) {
             taskENTER_CRITICAL();
@@ -351,7 +358,7 @@ static enum npu_service_result execute(struct npu_service *s,
         if (c->state == A733_NPU_FAULT) return NPU_SERVICE_FAULT;
         if(reopening){irq_fault(s);return NPU_SERVICE_FAULT;}
         /* Controller validation refused before borrowing or hardware access. */
-        s->owner = NPU_SERVICE_CLIENTS; s->job_ticket = 0;
+        s->owner = NPU_SERVICE_NONE; s->job_ticket = 0;
         return NPU_SERVICE_INVALID;
     }
     if (s->owner != m->client) return NPU_SERVICE_DENIED;
@@ -361,7 +368,7 @@ static enum npu_service_result execute(struct npu_service *s,
         return active(c->state) ? SERVICE_HELD : NPU_SERVICE_OK;
     case NPU_SERVICE_SUBMIT:
         if (!r->command || r->command >= s->command_count) return NPU_SERVICE_INVALID;
-        if (!(s->clients[m->client].commands & (UINT32_C(1) << r->command))) return NPU_SERVICE_DENIED;
+        if (!command_allowed(s, m->client, r->command)) return NPU_SERVICE_DENIED;
         if (c->state != A733_NPU_READY) return NPU_SERVICE_BUSY;
         if(s->irq_bound && irq_mask(s)!=1)
             return c->state==A733_NPU_FAULT ? NPU_SERVICE_FAULT : SERVICE_DEFERRED;
@@ -449,7 +456,7 @@ static enum npu_service_result execute(struct npu_service *s,
                 if(!r)return SERVICE_DEFERRED;
                 atomic_store_explicit(&s->irq_stopped,1,memory_order_release);
             }
-            s->owner = NPU_SERVICE_CLIENTS; s->job_ticket = 0;
+            s->owner = NPU_SERVICE_NONE; s->job_ticket = 0;
             if(s->restart_irq) {
                 unsigned expected=SERVICE_ACTIVE;
                 if(!atomic_compare_exchange_strong_explicit(&s->activation_state,&expected,SERVICE_PARKED,
@@ -499,7 +506,7 @@ static enum a733_npu_state view(const struct npu_service *s, unsigned client)
 }
 static int queued(const struct npu_service *s)
 {
-    for (unsigned i = 0; i < NPU_SERVICE_CLIENTS; ++i)
+    for (unsigned i = 0; i < s->client_count; ++i)
         if (s->member[i].state == MEMBER_QUEUED) return 1;
     return 0;
 }
@@ -540,7 +547,7 @@ SERVICE_INLINE enum npu_service_result execute_shared(struct npu_service *s,
             SERVICE_HELD : NPU_SERVICE_OK;
     case NPU_SERVICE_SUBMIT:
         if (!r->command || r->command >= s->command_count) return NPU_SERVICE_INVALID;
-        if (!(s->clients[m->client].commands & (UINT32_C(1) << r->command))) return NPU_SERVICE_DENIED;
+        if (!command_allowed(s, m->client, r->command)) return NPU_SERVICE_DENIED;
         if (member->state != MEMBER_IDLE || c->state == A733_NPU_BOOTING) return NPU_SERVICE_BUSY;
         member->state = MEMBER_QUEUED; member->command = r->command;
         member->timeout_us = r->timeout_us; member->job_ticket = m->ticket; member->refused = 0;
@@ -600,20 +607,20 @@ static void respond_shared(struct npu_service *s, const struct npu_service_messa
 static void dispatch(struct npu_service *s)
 {
     struct a733_npu_controller *c = &s->controller;
-    if (c->state == A733_NPU_DONE && s->running < NPU_SERVICE_CLIENTS) {
+    if (c->state == A733_NPU_DONE && s->running != NPU_SERVICE_NONE) {
         void *token; int stopped;
         if (a733_npu_reap(c, &token, &stopped)) {
             s->member[s->running].state = stopped ? MEMBER_CANCELED : MEMBER_DONE;
-            s->running = NPU_SERVICE_CLIENTS;
+            s->running = NPU_SERVICE_NONE;
         }
     }
-    if (c->state != A733_NPU_READY || s->running != NPU_SERVICE_CLIENTS) return;
-    for (unsigned k = 0; k < NPU_SERVICE_CLIENTS; ++k) {
-        unsigned i = (s->next + k) % NPU_SERVICE_CLIENTS;
+    if (c->state != A733_NPU_READY || s->running != NPU_SERVICE_NONE) return;
+    for (unsigned k = 0; k < s->client_count; ++k) {
+        unsigned i = (s->next + k) % s->client_count;
         struct npu_service_member *member = &s->member[i];
         if (member->state != MEMBER_QUEUED) continue;
         if (s->irq_bound && irq_mask(s) != 1) return; /* Retried on the next pass. */
-        s->next = (i + 1) % NPU_SERVICE_CLIENTS;
+        s->next = (i + 1) % s->client_count;
         if (a733_npu_submit(c, &s->commands[member->command], member->timeout_us) ||
             c->state == A733_NPU_FAULT) {
             /* A faulted start stays attributed to its member and is retained. */
@@ -626,7 +633,7 @@ static void dispatch(struct npu_service *s)
 }
 static void release_waits(struct npu_service *s)
 {
-    for (unsigned i = 0; i < NPU_SERVICE_CLIENTS; ++i) {
+    for (unsigned i = 0; i < s->client_count; ++i) {
         struct npu_service_member *member = &s->member[i];
         enum a733_npu_state state = view(s, i);
         if (!member->has_wait || state == A733_NPU_BOOTING || state == A733_NPU_RUNNING) continue;
@@ -674,7 +681,7 @@ static enum npu_service_result execute_runtime(struct npu_service *s,
     if (member->state != MEMBER_IDLE) return NPU_SERVICE_BUSY;
     if (r->operation == NPU_SERVICE_SUBMIT &&
         (!r->command || r->command >= s->command_count ||
-         !(s->clients[m->client].commands & (UINT32_C(1) << r->command)))) return NPU_SERVICE_DENIED;
+         !command_allowed(s, m->client, r->command))) return NPU_SERVICE_DENIED;
     enum npu_service_result result = NPU_SERVICE_INVALID;
     if (!rt->hooks.request(rt->context, m->client, r, &result)) return result;
     member->state = MEMBER_QUEUED; member->wait = *m; member->has_wait = 1;
@@ -700,19 +707,19 @@ static void runtime_settle(struct npu_service *s)
 {
     struct a733_npu_controller *c = &s->controller;
     struct npu_service_runtime_state *rt = s->runtime;
-    if (c->state == A733_NPU_DONE && s->running < NPU_SERVICE_CLIENTS) {
+    if (c->state == A733_NPU_DONE && s->running != NPU_SERVICE_NONE) {
         void *token; int stopped;
         unsigned client = s->running;
 #ifdef SUNSTONE_A733_OS_NPU_OBSERVE
         if(s->observe)s->observe(s->observe_cookie,s,2);
 #endif
         if (a733_npu_reap(c, &token, &stopped) && !stopped) {
-            s->running = NPU_SERVICE_CLIENTS; s->member[client].state = MEMBER_QUEUED;
+            s->running = NPU_SERVICE_NONE; s->member[client].state = MEMBER_QUEUED;
             rt->hooks.finished(rt->context, client, 0);
         }
     }
     if (c->state == A733_NPU_FAULT && c->fault == A733_NPU_MMU && !rt->failed && !c->bootstrap &&
-        s->running < NPU_SERVICE_CLIENTS && s->member[s->running].has_wait) {
+        s->running != NPU_SERVICE_NONE && s->member[s->running].has_wait) {
         /* An NPU MMU exception during a job: fail that job only, then recover as the vendor driver does
          * (vip2/task/vip_drv_task_common.c:463-535). The slot is released first, so that its read-only region is
          * checked like that of a finished job; the reply carries the status and the address; then the NPU is
@@ -721,7 +728,7 @@ static void runtime_settle(struct npu_service *s)
         rt->marks |= NPU_MARK_CAPTURED | NPU_MARK_SETTLE;
         rt->hooks.finished(rt->context, client, 2);
         rt->marks |= NPU_MARK_FINISHED;
-        s->running = NPU_SERVICE_CLIENTS; s->member[client].state = MEMBER_QUEUED;
+        s->running = NPU_SERVICE_NONE; s->member[client].state = MEMBER_QUEUED;
         /* The SUBMIT reply stays held, as for a finished job, until the runtime has checked the slot's read-only
          * region; it carries what the controller captured, which the recovery below clears. */
         rt->fault_status = c->mmu_status; rt->fault_address = c->mmu_address;
@@ -738,7 +745,7 @@ static void runtime_settle(struct npu_service *s)
     if (c->state != A733_NPU_FAULT || rt->failed) return;
     rt->failed = 1;
     rt->hooks.finished(rt->context, s->running, 1);
-    for (unsigned i = 0; i < NPU_SERVICE_CLIENTS; ++i)
+    for (unsigned i = 0; i < s->client_count; ++i)
         if (s->member[i].has_wait) runtime_reply(s, i, NPU_SERVICE_FAULT, A733_NPU_FAULT);
 }
 static int controller_active(const struct npu_service *s)
@@ -779,7 +786,7 @@ static void runtime_worker(struct npu_service *s)
              * this iteration can only park; a claimant may preempt us after
              * its notification without resuming any worker MMIO operation. */
             int ready = s->controller.state == A733_NPU_READY &&
-                s->running == NPU_SERVICE_CLIENTS && !s->has_deferred &&
+                s->running == NPU_SERVICE_NONE && !s->has_deferred &&
                 !s->has_held && !s->runtime->failed && !s->irq_retained &&
                 !atomic_load_explicit(&s->irq_pending, memory_order_acquire) &&
                 !uxQueueMessagesWaiting(s->requests);
@@ -821,7 +828,7 @@ static void runtime_worker(struct npu_service *s)
         if (handled) message = s->deferred;
         else handled = xQueueReceive(s->requests, &message, 0) == pdTRUE;
         if (handled) {
-            configASSERT(message.client < NPU_SERVICE_CLIENTS && message.ticket);
+            configASSERT(message.client < s->client_count && message.ticket);
             unsigned closed = 0;
             enum npu_service_result result = valid_request(&message.request, NPU_SERVICE_LOAD) ?
                 execute_runtime(s, &message, &closed) : NPU_SERVICE_INVALID;
@@ -902,7 +909,7 @@ static void worker(void *argument)
                 (void)ulTaskNotifyTake(pdTRUE,wait);continue;
             }
         }else if (xQueueReceive(s->requests, &message, wait) != pdTRUE) continue;
-        configASSERT(message.client < NPU_SERVICE_CLIENTS && message.ticket);
+        configASSERT(message.client < s->client_count && message.ticket);
         unsigned canceled = 0, closed = 0;
         enum npu_service_result result = !s->shared ? execute(s, &message, &canceled) :
             valid_request(&message.request, NPU_SERVICE_WAIT) ? execute_shared(s, &message, &canceled, &closed) :
@@ -945,30 +952,31 @@ static int initialize(struct npu_service *s, const struct a733_npu_ops *ops, voi
         activation=&saved_activation;
     }
     if (!s || instance || s->initialized || !ops || !image || !commands ||
-        !count || count > NPU_SERVICE_COMMANDS || !priority || priority >= configMAX_PRIORITIES ||
+        !s->client_count || !count || count > s->table_commands || !priority || priority >= configMAX_PRIORITIES ||
         !affinity || (affinity >> configNUMBER_OF_CORES) ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
         !ops->read || !ops->write || !ops->microseconds || !ops->delay ||
         !ops->barrier || !ops->publish || !ops->finish) return 0;
     const struct a733_npu_ops saved_ops=*ops;
     const struct a733_npu_mmu_image saved_image=*image;
-    struct a733_npu_command saved_commands[NPU_SERVICE_COMMANDS];
-    memcpy(saved_commands,commands,count*sizeof(*commands));
-    ops=&saved_ops;image=&saved_image;commands=saved_commands;
+    /* The commands are copied once into the service's own table and checked there, so what is checked is what is kept. */
+    if (!a733_span_incl_nonempty(commands, count * sizeof(*commands)) ||
+        a733_extents_intersect((uintptr_t)commands, count * sizeof(*commands), (uintptr_t)s->tables, s->table_bytes)) return 0;
+    ops=&saved_ops;image=&saved_image;
+    for (unsigned i = 0; i < count; ++i) s->commands[i] = commands[i];
     for (unsigned i = 0; i < count; ++i) {
-        const struct a733_npu_command *c = &commands[i];
+        const struct a733_npu_command *c = &s->commands[i];
         if (!c->device || (c->device & 63) || !c->token || c->readable_bytes < A733_NPU_MIN_COMMAND_BYTES || (c->readable_bytes & 7) ||
             c->readable_bytes > (UINT64_C(1) << 32) - c->device) return 0;
         for (unsigned j = 0; j < i; ++j)
-            if (commands[j].token == c->token || commands[j].device == c->device) return 0;
+            if (s->commands[j].token == c->token || s->commands[j].device == c->device) return 0;
     }
     s->ops = *ops; s->cookie = cookie; s->image = *image; s->command_count = count;
-    for (unsigned i = 0; i < count; ++i) s->commands[i] = commands[i];
-    s->owner = NPU_SERVICE_CLIENTS;
-    s->requests = xQueueCreateStatic(NPU_SERVICE_CLIENTS, sizeof(struct npu_service_message),
+    s->owner = NPU_SERVICE_NONE;
+    s->requests = xQueueCreateStatic(s->client_count, sizeof(struct npu_service_message),
                                      s->request_storage, &s->request_state);
     configASSERT(s->requests);
-    for (unsigned i = 0; i < NPU_SERVICE_CLIENTS; ++i) {
+    for (unsigned i = 0; i < s->client_count; ++i) {
         struct npu_service_client *c = &s->clients[i];
         c->replies = xQueueCreateStatic(1, sizeof(struct npu_service_reply),
                                         c->reply_storage, &c->reply_state);
@@ -1028,7 +1036,7 @@ int npu_service_restart_enable(struct npu_service *s,int (*irq)(void *),int (*re
 #endif
        !s->irq_bound || s->shared || s->runtime || !s->activation.bootstrap || !s->clients[0].task ||
        xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
-    for(unsigned i=1;i<NPU_SERVICE_CLIENTS;++i)if(s->clients[i].task)return 0;
+    for(unsigned i=1;i<s->client_count;++i)if(s->clients[i].task)return 0;
     s->restart_irq=irq;s->restart_ready=ready;return 1;
 }
 #ifdef SUNSTONE_NPU_ACTIVE_CANCEL
@@ -1040,9 +1048,9 @@ int npu_service_cancel_diagnostic_enable(struct npu_service *s,
        s->cancel_diagnostic || s->restart_irq || !s->irq_bound || s->shared || s->runtime ||
        !s->activation.bootstrap || !s->clients[0].task || command!=2 || s->command_count!=3 ||
        s->commands[command].device!=UINT32_C(0xe010a000) || s->commands[command].readable_bytes!=524288 ||
-       !(s->clients[0].commands&(1u<<command)) || d->command || d->started || d->reaped || d->recovered ||
+       !command_allowed(s,0,command) || d->command || d->started || d->reaped || d->recovered ||
        xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
-    for(unsigned i=1;i<NPU_SERVICE_CLIENTS;++i)if(s->clients[i].task)return 0;
+    for(unsigned i=1;i<s->client_count;++i)if(s->clients[i].task)return 0;
     d->command=command;d->trigger=trigger;d->check=check;d->cookie=cookie;d->irq=irq;
     atomic_init(&d->irq_receipts,0);atomic_init(&d->irq_window,0);
     s->cancel_diagnostic=d;return 1;
@@ -1068,7 +1076,7 @@ enum npu_service_result npu_service_restart_prepare(struct npu_service *s)
     if(state==SERVICE_RETAINED)return NPU_SERVICE_FAULT;
     if(state!=SERVICE_PARKED)return NPU_SERVICE_BUSY;
     if(!s->restart_reaped || s->controller.state!=A733_NPU_CLOSED || s->controller.fault ||
-       s->owner!=NPU_SERVICE_CLIENTS || s->job_ticket || s->has_deferred || s->has_held ||
+       s->owner!=NPU_SERVICE_NONE || s->job_ticket || s->has_deferred || s->has_held ||
        s->clients[0].pending || uxQueueMessagesWaiting(s->requests) ||
        uxQueueMessagesWaiting(s->clients[0].replies) || !npu_service_irq_stopped(s))return NPU_SERVICE_INVALID;
     return atomic_compare_exchange_strong_explicit(&s->activation_state,&state,SERVICE_PREPARING,
@@ -1101,7 +1109,7 @@ int npu_service_share(struct npu_service *s)
     for (unsigned i = 0; i < s->command_count; ++i)
         if ((uint64_t)s->commands[i].device + s->commands[i].readable_bytes > 0x400000 &&
             s->commands[i].device < 0x480000) return 0;
-    s->running = NPU_SERVICE_CLIENTS; s->shared = 1;
+    s->running = NPU_SERVICE_NONE; s->shared = 1;
     return 1;
 }
 int npu_service_runtime(struct npu_service *s, const struct npu_service_runtime *r, void *context)
@@ -1117,12 +1125,12 @@ int npu_service_runtime(struct npu_service *s, const struct npu_service_runtime 
 int npu_service_start(struct npu_service *s, unsigned client, unsigned command, uint64_t timeout)
 {
     struct a733_npu_controller *c = &s->controller;
-    if (!s->runtime || client >= NPU_SERVICE_CLIENTS || !s->irq_bound ||
+    if (!s->runtime || client >= s->client_count || !s->irq_bound ||
         s->member[client].state != MEMBER_QUEUED || !s->member[client].has_wait ||
         s->member[client].wait.request.operation != NPU_SERVICE_SUBMIT ||
-        c->state != A733_NPU_READY || s->running != NPU_SERVICE_CLIENTS ||
+        c->state != A733_NPU_READY || s->running != NPU_SERVICE_NONE ||
         !command || command >= s->command_count ||
-        !(s->clients[client].commands & (UINT32_C(1) << command))) return -1;
+        !command_allowed(s, client, command)) return -1;
     int masked = irq_mask(s);
     if (masked != 1) return masked < 0 || c->state == A733_NPU_FAULT ? -1 : 0;
     if (!a733_npu_submit(c, &s->commands[command], timeout) && c->state != A733_NPU_FAULT) return -1;
@@ -1136,7 +1144,7 @@ int npu_service_start(struct npu_service *s, unsigned client, unsigned command, 
 void npu_service_release(struct npu_service *s, unsigned client, enum npu_service_result result,
                          enum a733_npu_state state)
 {
-    configASSERT(s->runtime && client < NPU_SERVICE_CLIENTS && s->member[client].has_wait &&
+    configASSERT(s->runtime && client < s->client_count && s->member[client].has_wait &&
                  s->member[client].state == MEMBER_QUEUED);
     runtime_reply(s, client, result, state);
 }
@@ -1146,19 +1154,62 @@ void npu_service_retain(struct npu_service *s)
     if (s->controller.state == A733_NPU_FAULT) return;
     s->controller.state = A733_NPU_FAULT; s->controller.fault = A733_NPU_MEMORY;
 }
-int npu_service_bind(struct npu_service *s, unsigned slot, TaskHandle_t task, uint32_t commands)
+static int bind_common(struct npu_service *s, unsigned slot, TaskHandle_t task)
 {
     if (!s || s != instance || !s->initialized || s->restart_irq ||
 #ifdef SUNSTONE_NPU_ACTIVE_CANCEL
         s->cancel_diagnostic ||
 #endif
-        slot >= NPU_SERVICE_CLIENTS || !task ||
-        task == s->worker || s->clients[slot].task || (commands & 1u) ||
-        (s->command_count < 32 && (commands >> s->command_count)) ||
+        slot >= s->client_count || !task ||
+        task == s->worker || s->clients[slot].task ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
-    for (unsigned i = 0; i < NPU_SERVICE_CLIENTS; ++i)
+    for (unsigned i = 0; i < s->client_count; ++i)
         if (s->clients[i].task == task) return 0;
-    s->clients[slot].task = task; s->clients[slot].commands = commands;
+    return 1;
+}
+static void clear_permissions(struct npu_service *s, unsigned slot)
+{
+    memset(s->clients[slot].commands, 0, NPU_SERVICE_PERMIT_WORDS(s->table_commands) * sizeof(uint32_t));
+}
+int npu_service_bind(struct npu_service *s, unsigned slot, TaskHandle_t task, uint32_t commands)
+{
+    if (!bind_common(s, slot, task) || (commands & 1u) || (s->command_count < 32 && (commands >> s->command_count))) return 0;
+    s->clients[slot].task = task;
+    clear_permissions(s, slot);
+    s->clients[slot].commands[0] = commands;
+    return 1;
+}
+int npu_service_bind_range(struct npu_service *s, unsigned slot, TaskHandle_t task, unsigned first, unsigned count)
+{
+    if (!bind_common(s, slot, task) || !first || !count || first > s->command_count || count > s->command_count - first) return 0;
+    s->clients[slot].task = task;
+    clear_permissions(s, slot);
+    for (unsigned c = first; c < first + count; ++c) s->clients[slot].commands[c / 32u] |= UINT32_C(1) << (c % 32u);
+    return 1;
+}
+size_t npu_service_tables_bytes(unsigned clients, unsigned commands)
+{
+    if (!clients || !commands) return 0;
+    return NPU_SERVICE_TABLES_BYTES(clients, commands);
+}
+int npu_service_tables(struct npu_service *s, unsigned clients, unsigned commands, void *memory, size_t bytes)
+{
+    const size_t need = npu_service_tables_bytes(clients, commands);
+    if (!s || s->initialized || s->tables || !need || bytes < need || !memory || ((uintptr_t)memory & 7u) ||
+        !a733_span_incl_nonempty(memory, need) || a733_extents_intersect((uintptr_t)memory, need, (uintptr_t)s, sizeof(*s)))
+        return 0;
+    memset(memory, 0, need);
+    uint8_t *at = memory;
+#define TAKE(pointer, type, count_, each) do { (pointer) = (type *)at; at += (size_t)(count_) * (each); } while (0)
+    TAKE(s->commands, struct a733_npu_command, 1, ((size_t)commands * sizeof(struct a733_npu_command) + 7u) / 8u * 8u);
+    TAKE(s->clients, struct npu_service_client, clients, (sizeof(struct npu_service_client) + 7u) / 8u * 8u);
+    TAKE(s->member, struct npu_service_member, clients, (sizeof(struct npu_service_member) + 7u) / 8u * 8u);
+    const size_t permit = (NPU_SERVICE_PERMIT_WORDS(commands) * 4u + 7u) / 8u * 8u;
+    for (unsigned i = 0; i < clients; ++i) s->clients[i].commands = (uint32_t *)(at + (size_t)i * permit);
+    at += (size_t)clients * permit;
+    TAKE(s->request_storage, uint8_t, clients, (sizeof(struct npu_service_message) + 7u) / 8u * 8u);
+#undef TAKE
+    s->client_count = clients; s->table_commands = commands; s->tables = memory; s->table_bytes = need;
     return 1;
 }
 int npu_service_bind_irq(struct npu_service *s,const struct npu_service_irq_ops *ops,void *cookie,
@@ -1199,7 +1250,7 @@ static struct npu_service_client *caller(struct npu_service *s, unsigned *slot)
     if (!s || s != instance || !s->initialized ||
         xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return NULL;
     TaskHandle_t task = xTaskGetCurrentTaskHandle();
-    for (unsigned i = 0; i < NPU_SERVICE_CLIENTS; ++i)
+    for (unsigned i = 0; i < s->client_count; ++i)
         if (s->clients[i].task == task) { *slot = i; return &s->clients[i]; }
     return NULL;
 }

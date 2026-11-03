@@ -18,22 +18,22 @@ struct nbg_assembly_plan {
 /* General plan: NN, COEFF, POOL and COMMAND as above, then one allocation per
  * input tensor in model order, then one per output tensor. With one input
  * and one output this is the six-slot plan order. */
-/* The most inputs, and the most outputs, of one graph. The format does not bound them (the header counts are 32-bit
- * fields, and the vendor sources show no limit); this is the loader's own choice, fixed by the size of
- * struct nbg_assembly_layout (24 bytes a tensor, kept in the per-graph table) and by the queue handle. An image is built
- * for the largest graph its application declares (cmake -DSUNSTONE_OS_NPU_MAX_TENSORS=N); 8 is the default of an image
- * built without a declaration. A graph beyond it is refused by name at admission. */
+/* A graph's inputs and outputs have no count limit here: the header counts them (each a 32-bit field, validated against its
+ * section's size by the decoder, so a model file bounds them) and a layout's per-allocation table is the caller's storage,
+ * sized for that graph by nbg_assembly_layout_entries. Memory is the only bound. */
 /* The low device range [0, NBG_ASSEMBLY_LOW_RESERVED) is reserved: placed() refuses a buffer that starts below it, so a
  * pointer word that no patch sets and whose value is below it cannot address a mapped byte. A stream-processor operation
  * that keeps its result in the engine's own scratch (the steps of a softmax) carries a small offset there, up to 118,496
  * in compiled attention layers (docs/hardware/npu-command-formats.md, "Unpatched pointer words"). */
 #define NBG_ASSEMBLY_LOW_RESERVED A733_NPU_MMU_LOW_RESERVED
-#ifndef NBG_ASSEMBLY_MAX_TENSORS
-#define NBG_ASSEMBLY_MAX_TENSORS 8u
-#endif
-#define NBG_LAYOUT_MAX_BUFFERS (NBG_ALLOC_INPUT + 2u * NBG_ASSEMBLY_MAX_TENSORS + 1u)
+/* The entries of a layout's table for a graph of inputs and outputs tensors: the four fixed allocations, one for each tensor
+ * and the dynamic-input allocation a graph may have. */
+#define NBG_LAYOUT_ENTRIES(inputs, outputs) ((size_t)NBG_ALLOC_INPUT + (inputs) + (outputs) + 1u)
+/* buffers and capacity are the caller's: nbg_assembly_layout (and the assemblers, which take the layout they fill) write
+ * the plan into capacity entries at buffers and refuse a graph that needs more. A layout copied by value shares the table. */
 struct nbg_assembly_layout {
-    struct nbg_allocation_requirement buffers[NBG_LAYOUT_MAX_BUFFERS];
+    struct nbg_allocation_requirement *buffers;
+    uint32_t capacity;
     uint32_t inputs, outputs;
     uint32_t nn_operations, descriptor_patches, state_patches, command_body_bytes;
     /* 1 when the model has a dynamic-input section (directory format): one more allocation follows the output
@@ -80,6 +80,10 @@ struct nbg_assembly_buffer {
  * descriptor semantics remain unverified. No controller token is produced. */
 int nbg_assembly_requirements(const struct nbg_model *, struct nbg_assembly_plan *);
 
+/* The entries a layout's table needs for this model (NBG_LAYOUT_ENTRIES of the header's tensor counts), or 0 when a count is
+ * zero or the table would not fit the address space. Reads the header only. */
+size_t nbg_assembly_layout_entries(const struct nbg_model *);
+
 /* Supply six buffer slots in enum order. An empty working pool requires
  * {NULL, 0, 0}; no allocation or memory access occurs for that slot.
  * Supply exclusively owned offline buffers for nonempty slots, with exact
@@ -111,7 +115,7 @@ int nbg_assemble(const struct nbg_model *,
  * placement rules. The same refusal guarantees and the same lack of
  * submission authorization apply. The six-slot functions remain limited to
  * one UINT8 input and one UINT8 output. */
-int nbg_assembly_layout(const struct nbg_model *, struct nbg_assembly_layout *);
+int nbg_assembly_layout(const struct nbg_model *, struct nbg_assembly_layout *);   /* out->buffers, out->capacity set by the caller */
 int nbg_assemble_layout(const struct nbg_model *, const struct nbg_assembly_buffer *, size_t count,
                         struct nbg_assembly_layout *);
 

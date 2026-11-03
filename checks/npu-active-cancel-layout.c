@@ -22,6 +22,7 @@ static void fixture_fatal(void *unused){(void)unused;__builtin_trap();}
 int npu_active_cancel_native(struct a733_npu_native *native,uintptr_t parent,
     uint64_t physical,uintptr_t registers)
 {
+    static _Alignas(8) uint8_t tables[A733_NPU_MEMORY_TABLES_BYTES(NPU_CONVOLUTION_BUFFERS)];
     struct a733_npu_buffer buffers[NPU_CONVOLUTION_BUFFERS];
     for(unsigned i=0;i<NPU_CONVOLUTION_BUFFERS;++i) {
         const struct npu_convolution_slot *slot=&npu_convolution_layout[i];
@@ -31,7 +32,7 @@ int npu_active_cancel_native(struct a733_npu_native *native,uintptr_t parent,
     return a733_npu_native_init(native,registers,0x03600000,
         (void *)(parent+NPU_CONVOLUTION_ARENA_OFFSET),NPU_CONVOLUTION_TABLE_BYTES,
         physical+NPU_CONVOLUTION_ARENA_OFFSET,buffers,NPU_CONVOLUTION_BUFFERS,
-        fixture_fatal,NULL);
+        fixture_fatal,NULL,tables,sizeof(tables));
 }
 __attribute__((used,retain)) const struct a733_npu_ops *const
     npu_active_cancel_native_operations=&a733_npu_native_operations;

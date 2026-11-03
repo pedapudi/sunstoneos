@@ -60,10 +60,11 @@ static int device_mapping(uintptr_t cpu, uint64_t physical, int write)
 int a733_npu_native_init(struct a733_npu_native *n, uintptr_t register_cpu,
                          uint64_t register_physical, void *arena, size_t capacity,
                          uint64_t arena_physical, const struct a733_npu_buffer *buffers,
-                         size_t count, void (*on_fatal)(void *), void *cookie)
+                         size_t count, void (*on_fatal)(void *), void *cookie,
+                         void *tables, size_t table_bytes)
 {
     if (!n || n->initialized || n->failed || !on_fatal || !buffers || !count ||
-        count > A733_NPU_MEMORY_MAX_BUFFERS || (uintptr_t)n > UINTPTR_MAX - sizeof(*n) ||
+        (uintptr_t)n > UINTPTR_MAX - sizeof(*n) ||
         (uintptr_t)buffers > UINTPTR_MAX - count * sizeof(*buffers) ||
         !register_cpu || (register_cpu & 4095) || register_cpu > UINTPTR_MAX - 4096 ||
         (register_physical & 4095) || register_physical > (UINT64_C(1) << 40) - 4096 ||
@@ -85,7 +86,7 @@ int a733_npu_native_init(struct a733_npu_native *n, uintptr_t register_cpu,
     struct counter_clock clock = {0};
     if (!hz || hz > UINT32_MAX || !counter_clock_start(&clock, (uint32_t)hz, counter())) return 0;
     const struct a733_npu_memory_ops ops = {translate, cache, barrier};
-    if (!a733_npu_memory_init(&n->memory, arena, capacity, arena_physical, buffers, count, &ops, n)) return 0;
+    if (!a733_npu_memory_init(&n->memory, arena, capacity, arena_physical, buffers, count, &ops, n, tables, table_bytes)) return 0;
     n->clock = clock; n->registers = register_cpu; n->register_physical = register_physical;
     n->fatal = on_fatal; n->fatal_cookie = cookie; n->initialized = 1;
     return 1;

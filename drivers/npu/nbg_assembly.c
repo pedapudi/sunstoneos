@@ -115,8 +115,8 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_layout *p, int
     if (checked && nbg_checksum_verify(m->data, m->bytes, &checksum) != NBG_CHECKSUM_MATCH) return 0;
     if ((!directory && h->version != NBG_MODEL_VERSION) || h->target != 0x1000003b ||
         h->flags != (directory ? 0x0aU : 0x02d00027U) || h->core_count != 1 || h->nn_bytes != 192 ||
-        !h->input_count || h->input_count > NBG_ASSEMBLY_MAX_TENSORS ||
-        !h->output_count || h->output_count > NBG_ASSEMBLY_MAX_TENSORS ||
+        !h->input_count || !h->output_count ||
+        (uint64_t)NBG_LAYOUT_ENTRIES(h->input_count, h->output_count) > p->capacity ||
         h->operation_count < 2 ||
         h->pool_alignment != 64 || h->pool_base || h->axi_sram_base ||
         h->axi_sram_bytes || h->vip_sram_base || !h->vip_sram_bytes ||
@@ -137,7 +137,13 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_layout *p, int
         default: if (m->sections[i].bytes) return 0;
         }
     }
-    memset(p, 0, sizeof(*p));
+    {   /* The table is the caller's: clear it and keep it. */
+        struct nbg_allocation_requirement *const table = p->buffers;
+        const uint32_t capacity = p->capacity;
+        memset(table, 0, capacity * sizeof(*table));
+        memset(p, 0, sizeof(*p));
+        p->buffers = table; p->capacity = capacity;
+    }
     p->inputs = h->input_count; p->outputs = h->output_count;
     p->nn_operations = h->operation_count - 1;
     /* Shader operations (kind 1) have no neural-network record: they take their program from the shader table. */
@@ -819,11 +825,28 @@ static int inspect(const struct nbg_model *m, const struct nbg_assembly_buffer *
     return 1;
 }
 
+size_t nbg_assembly_layout_entries(const struct nbg_model *m)
+{
+    const uint32_t in = m->header.input_count, out = m->header.output_count;
+    if (!in || !out || (uint64_t)in + out > UINT32_MAX / 2) return 0;
+    return NBG_LAYOUT_ENTRIES(in, out);
+}
+/* The caller's table of a layout: valid, and apart from the model and the result. */
+static int table_space(const struct nbg_model *m, const struct nbg_assembly_layout *out)
+{
+    return out->buffers && out->capacity &&
+           a733_span_excl_nonempty(out->buffers, (size_t)out->capacity * sizeof(*out->buffers)) &&
+           separate(out->buffers, (size_t)out->capacity * sizeof(*out->buffers), out, sizeof(*out)) &&
+           separate(out->buffers, (size_t)out->capacity * sizeof(*out->buffers), m, sizeof(*m)) &&
+           separate(out->buffers, (size_t)out->capacity * sizeof(*out->buffers), m->data, m->bytes);
+}
 int nbg_assembly_layout(const struct nbg_model *m, struct nbg_assembly_layout *out)
 {
     struct nbg_assembly_layout p;
     refusal_reason = NBG_REFUSED_NONE; refusal_operation = 0;
-    if (!result_space(m, out, sizeof(*out)) || !profile(m, &p, 1) || !inspect(m, NULL, &p)) return 0;
+    if (!result_space(m, out, sizeof(*out)) || !table_space(m, out)) return 0;
+    p.buffers = out->buffers; p.capacity = out->capacity;
+    if (!profile(m, &p, 1) || !inspect(m, NULL, &p)) return 0;
     *out = p;
     return 1;
 }
@@ -860,8 +883,9 @@ int nbg_assemble_layout(const struct nbg_model *m, const struct nbg_assembly_buf
 {
     struct nbg_assembly_layout p;
     const size_t metadata_bytes = count * sizeof(*b);
-    if (!result_space(m, out, sizeof(*out)) || count > NBG_LAYOUT_MAX_BUFFERS ||
+    if (!result_space(m, out, sizeof(*out)) || !table_space(m, out) ||
         !a733_span_excl_nonempty(b, metadata_bytes) || !separate(out, sizeof(*out), b, metadata_bytes) ||
+        (p.buffers = out->buffers, p.capacity = out->capacity, 0) ||
         !profile(m, &p, 1) || count != buffer_count(&p) || !placed(m, b, count, &p, out, sizeof(*out)) ||
         !inspect(m, b, &p)) return 0;
 
@@ -914,7 +938,8 @@ int nbg_assembly_begin(const struct nbg_model *m, const struct nbg_assembly_buff
     struct nbg_assembly_layout p;
     const size_t metadata_bytes = count * sizeof(*b);
     if (!result_space(m, out, sizeof(*out)) || !result_space(m, cursor, sizeof(*cursor)) ||
-        count > NBG_LAYOUT_MAX_BUFFERS || !a733_span_excl_nonempty(b, metadata_bytes) ||
+        !table_space(m, out) || (p.buffers = out->buffers, p.capacity = out->capacity, 0) ||
+        !a733_span_excl_nonempty(b, metadata_bytes) ||
         !separate(out, sizeof(*out), b, metadata_bytes) || !separate(cursor, sizeof(*cursor), b, metadata_bytes) ||
         !separate(out, sizeof(*out), cursor, sizeof(*cursor)) ||
         !profile(m, &p, 0) || count != buffer_count(&p) || !placed(m, b, count, &p, out, sizeof(*out)) ||
@@ -975,14 +1000,15 @@ static int single(const struct nbg_model *m, const struct nbg_assembly_layout *p
 }
 static void narrow(const struct nbg_assembly_layout *l, struct nbg_assembly_plan *p)
 {
-    memcpy(p->buffers, l->buffers, sizeof(p->buffers));
+    memcpy(p->buffers, l->buffers, sizeof(p->buffers)); /* a single-tensor layout has at least these entries */
     p->nn_operations = l->nn_operations; p->descriptor_patches = l->descriptor_patches;
     p->state_patches = l->state_patches; p->command_body_bytes = l->command_body_bytes;
 }
 
 int nbg_assembly_requirements(const struct nbg_model *m, struct nbg_assembly_plan *out)
 {
-    struct nbg_assembly_layout l;
+    struct nbg_allocation_requirement table[NBG_LAYOUT_ENTRIES(1, 1)];
+    struct nbg_assembly_layout l = {.buffers = table, .capacity = NBG_LAYOUT_ENTRIES(1, 1)};
     if (!result_space(m, out, sizeof(*out)) || !nbg_assembly_layout(m, &l) || !single(m, &l))
         return 0;
     narrow(&l, out);
@@ -992,7 +1018,8 @@ int nbg_assembly_requirements(const struct nbg_model *m, struct nbg_assembly_pla
 int nbg_assemble(const struct nbg_model *m, const struct nbg_assembly_buffer *b,
                  struct nbg_assembly_plan *out)
 {
-    struct nbg_assembly_layout l;
+    struct nbg_allocation_requirement table[NBG_LAYOUT_ENTRIES(1, 1)];
+    struct nbg_assembly_layout l = {.buffers = table, .capacity = NBG_LAYOUT_ENTRIES(1, 1)};
     if (!result_space(m, out, sizeof(*out)) ||
         !a733_span_excl_nonempty(b, NBG_ALLOCATION_COUNT * sizeof(*b)) ||
         !separate(out, sizeof(*out), b, NBG_ALLOCATION_COUNT * sizeof(*b)) ||

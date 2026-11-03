@@ -292,7 +292,7 @@ static __attribute__((unused)) _Noreturn void npu_graphs_queue_main(void)
 static _Noreturn void npu_graphs_sequence_main(void)
 {
     const unsigned n = npu_graph_count;
-    if (n == 0 || n > SS_NPU_QUEUE_MAX_HANDLES || n > SS_NPU_QUEUE_MAX_DEPTH || n > 32) queue_fault(0, n);
+    if (n == 0 || n > SS_NPU_QUEUE_MAX_DEPTH || n > 32) queue_fault(0, n);
     struct ss_npu_queue *q = NULL;
     uint64_t begin = ss_counter_ticks();
     int opened;

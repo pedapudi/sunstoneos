@@ -30,6 +30,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # The list of described models. SUNSTONE_NPU_MODEL_DB names another list, for an application's own graphs: the entries
 # only describe tensors and locate files; the OS runtime admits a graph by its structure, not by being listed.
 CATALOGUE = Path(os.environ.get('SUNSTONE_NPU_MODEL_DB', ROOT / 'tools/npu-session-models.json'))
+# The most tensors, inputs and outputs together, of a graph in the generated table npu_admitted_models (the session driver's own
+# table: 2 * NPU_SESSION_TENSORS in include/npu_session.h). The OS runtime's layouts have no such limit.
 MAX_TENSORS = 8
 
 
@@ -45,9 +47,9 @@ class Requirement(c.Structure):
 
 
 class Layout(c.Structure):
-    # Mirrors struct nbg_assembly_layout (include/nbg_assembly.h): four fixed allocations, the tensors and the
-    # dynamic-input allocation, then the counts and the dynamic-input flag.
-    _fields_ = [('buffers', Requirement * (4 + 2 * MAX_TENSORS + 1))] + [(n, c.c_uint32) for n in (
+    # Mirrors struct nbg_assembly_layout (include/nbg_assembly.h): the caller's table of allocations (four fixed ones, the
+    # tensors and the dynamic-input allocation) and its entry count, then the counts and the dynamic-input flag.
+    _fields_ = [('buffers', c.POINTER(Requirement)), ('capacity', c.c_uint32)] + [(n, c.c_uint32) for n in (
         'inputs', 'outputs', 'nn_operations', 'descriptor_patches', 'state_patches',
         'command_body_bytes', 'dynamic', 'program_offset', 'program_bytes')]
 
@@ -70,8 +72,8 @@ def check_abi(lib, layout=Layout):
             getattr(layout, field).offset
         if have != want:
             raise ValueError(f'the Layout mirror differs from struct nbg_assembly_layout in {label}: {have} against {want}')
-    if layout.buffers.size // c.sizeof(Requirement) != lib.nbg_layout_abi(12):
-        raise ValueError('the Layout mirror holds a different number of buffers')
+    if layout.capacity.offset != lib.nbg_layout_abi(12):
+        raise ValueError('the Layout mirror places the table capacity differently')
 
 
 def identity(path):
@@ -86,6 +88,9 @@ def add(args):
     check_abi(native.lib)
     native.lib.nbg_assembly_layout.argtypes = [c.POINTER(decoder.View), c.POINTER(Layout)]
     layout = Layout()
+    # The table is ours: one entry for each of the four fixed allocations, every tensor and the dynamic-input allocation.
+    table = (Requirement * (5 + native.view.header.input_count + native.view.header.output_count))()
+    layout.buffers = c.cast(table, c.POINTER(Requirement)); layout.capacity = len(table)
     if native.lib.nbg_assembly_layout(c.byref(native.view), c.byref(layout)) != 1:
         raise ValueError('native assembler refused the model')
     header = native.view.header

@@ -65,7 +65,7 @@ static int tensors(struct npu_board_client *c)
 {
     c->inputs=c->outputs=0;
     for(unsigned k=0;k<2;++k) {
-        for(unsigned i=0;i<NBG_ASSEMBLY_MAX_TENSORS;++i) {
+        for(unsigned i=0;i<NPU_BOARD_TENSORS;++i) {
             struct npu_runtime_tensor t;
             if(npu_runtime_tensor(c->rt,c->slot,k ? NBG_OUTPUT : NBG_INPUT,i,&t)!=1)break;
             struct npu_board_tensor *out=k ? &c->output[c->outputs++] : &c->input[c->inputs++];

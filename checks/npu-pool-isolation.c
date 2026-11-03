@@ -120,6 +120,7 @@ static int run(const struct pool *pool, int mutate_overlap)
     }
     assert(device < DEVICE_BASE + span);
     struct a733_npu_buffer buffers[1 + SLOTS * 4];
+    static _Alignas(8) uint8_t tables[A733_NPU_MEMORY_TABLES_BYTES(1 + SLOTS * 4)];
     for (unsigned i = 0; i < n; ++i)
         buffers[i] = (struct a733_npu_buffer){(uintptr_t)host_base + list[i].offset, pool->base + list[i].offset,
                                               list[i].bytes, list[i].device, list[i].role};
@@ -128,14 +129,14 @@ static int run(const struct pool *pool, int mutate_overlap)
         struct a733_npu_memory_ops ops = {translate, cache, barrier};
         memset(&memory, 0, sizeof memory);
         int accepted = a733_npu_memory_init(&memory, host_base + arena_offset, arena_bytes, pool->base + arena_offset,
-                                            buffers, n, &ops, (void *)pool);
+                                            buffers, n, &ops, (void *)pool, tables, sizeof(tables));
         munmap(host_base, pool->bytes);
         return accepted;
     }
     struct a733_npu_memory_ops ops = {translate, cache, barrier};
     memset(&memory, 0, sizeof memory);
     assert(a733_npu_memory_init(&memory, host_base + arena_offset, arena_bytes, pool->base + arena_offset,
-                                buffers, n, &ops, (void *)pool));
+                                buffers, n, &ops, (void *)pool, tables, sizeof(tables)));
     walk(host_base + arena_offset, pool->base + arena_offset, arena_bytes);
 
     /* Exactly the declared pages, at the declared addresses, with the permission of the role. */

@@ -22,6 +22,8 @@ enum npu_board_window { NPU_BOARD_HELD, NPU_BOARD_READ_LENT, NPU_BOARD_WRITE_LEN
 enum npu_board_operation { NPU_BOARD_LOAD=1, NPU_BOARD_SUBMIT, NPU_BOARD_RETURN, NPU_BOARD_CLOSE };
 /* A tensor as USB0 sees it: CPU address and bytes inside a window. */
 struct npu_board_tensor { uintptr_t cpu; uint32_t bytes; };
+/* The tensors of a graph that this application's report carries (its own format; the runtime has no such limit). */
+#define NPU_BOARD_TENSORS 16u
 struct npu_board_client {
     struct npu_runtime *rt;
     unsigned slot;
@@ -46,7 +48,7 @@ struct npu_board_client {
     atomic_uint window, start, ready, closed;
     unsigned state, model, inputs, outputs;
     uint64_t job;
-    struct npu_board_tensor input[NBG_ASSEMBLY_MAX_TENSORS], output[NBG_ASSEMBLY_MAX_TENSORS];
+    struct npu_board_tensor input[NPU_BOARD_TENSORS], output[NPU_BOARD_TENSORS];
     /* Counts for the host model: runtime requests and replies, and requests
      * refused because a window was lent. */
     unsigned requests, replies, refused;

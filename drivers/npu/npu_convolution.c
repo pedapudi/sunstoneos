@@ -323,7 +323,8 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
     const struct a733_npu_buffer *native_buffers=c->buffers;size_t native_count=NPU_CONVOLUTION_BUFFERS;
 #endif
     if(!a733_npu_native_init(&c->native,v.register_cpu,v.register_physical,v.arena,v.arena_bytes,
-        v.arena_physical,native_buffers,native_count,v.fatal,v.fatal_cookie))return fault(c);
+        v.arena_physical,native_buffers,native_count,v.fatal,v.fatal_cookie,
+        c->memory_tables,sizeof(c->memory_tables)))return fault(c);
     static const struct a733_mapping_rule private_buffer={A733_MAPPING_WRITE,1,
         {{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
     for(unsigned i=0;i<NPU_CONVOLUTION_BUFFERS;++i) {
@@ -481,7 +482,8 @@ int npu_convolution_bind(struct npu_convolution *c,struct a733_npu_startup *star
        xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
     c->startup=startup;c->client=client;
     const struct npu_service_activation activation={startup->task,prepared,c};
-    if(!npu_service_init_deferred(&c->service,&operations,c,&c->native.memory.image,c->commands,NPU_CONVOLUTION_COMMANDS,
+    if(!npu_service_tables(&c->service,1,NPU_CONVOLUTION_COMMANDS,c->service_tables,sizeof(c->service_tables)) ||
+       !npu_service_init_deferred(&c->service,&operations,c,&c->native.memory.image,c->commands,NPU_CONVOLUTION_COMMANDS,
         priority,affinity,&activation) || !npu_service_bind(&c->service,0,client,
         (1u<<NPU_CONVOLUTION_COMMANDS)-2u))return fault(c);
     c->bound=1;return 1;

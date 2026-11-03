@@ -54,8 +54,10 @@ static struct npu_runtime_queue direct;
 static struct npu_runtime_queue *active_queue=&direct;
 static struct npu_queue_command command;
 static struct npu_queue_job record;
-static struct npu_runtime_tensor inputs[NBG_ASSEMBLY_MAX_TENSORS],outputs[NBG_ASSEMBLY_MAX_TENSORS];
-static size_t input_cache[NBG_ASSEMBLY_MAX_TENSORS],output_cache[NBG_ASSEMBLY_MAX_TENSORS];
+/* This application's own buffers for the tensor windows of its one graph (the runtime has no such limit). */
+#define FINITE_TENSORS 16u
+static struct npu_runtime_tensor inputs[FINITE_TENSORS],outputs[FINITE_TENSORS];
+static size_t input_cache[FINITE_TENSORS],output_cache[FINITE_TENSORS];
 static unsigned input_count,output_count,completed,checked,bad;
 static unsigned char copied[NPU_FINITE_OUTPUT_BYTES];
 static uint32_t durations[JOBS],ordered[JOBS],doorbells[JOBS];
@@ -112,14 +114,14 @@ static void windows(void)
 {
     const struct npu_runtime_slot *slot=&runtime->slot[0];
     size_t bytes=0;
-    while(input_count<NBG_ASSEMBLY_MAX_TENSORS&&npu_runtime_tensor(runtime,0,NBG_INPUT,input_count,&inputs[input_count])) {
+    while(input_count<FINITE_TENSORS&&npu_runtime_tensor(runtime,0,NBG_INPUT,input_count,&inputs[input_count])) {
         if(inputs[input_count].bytes>SIZE_MAX-bytes||
            !(input_cache[input_count]=cache_extent(&inputs[input_count],&slot->targets[NBG_ALLOC_INPUT+input_count])))retained(31);
         bytes+=inputs[input_count++].bytes;
     }
     if(!input_count||input_count!=slot->layout.inputs||bytes!=npu_finite_networks[0].input_bytes)retained(32);
     bytes=0;
-    while(output_count<NBG_ASSEMBLY_MAX_TENSORS&&npu_runtime_tensor(runtime,0,NBG_OUTPUT,output_count,&outputs[output_count])) {
+    while(output_count<FINITE_TENSORS&&npu_runtime_tensor(runtime,0,NBG_OUTPUT,output_count,&outputs[output_count])) {
         if(outputs[output_count].bytes>SIZE_MAX-bytes||
            !(output_cache[output_count]=cache_extent(&outputs[output_count],&slot->targets[NBG_ALLOC_INPUT+input_count+output_count])))retained(33);
         bytes+=outputs[output_count++].bytes;
