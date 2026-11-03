@@ -741,6 +741,66 @@ a stall costs a tenth of the periods), invalidations whose entries the receiving
 not the ones the recognition touches, so the receivers lose nothing and refill nothing), and receivers on the Cortex-A76 cores,
 which ran recognition workers but no control interrupt.
 
+### Predicted board runs of the broadcast invalidation (step 7)
+
+The design limits where a broadcast TLB invalidation can happen and requires a measurement before one is used. The scheduler latency
+diagnostic (`apps/latency`) now has a build option, `SUNSTONE_LATENCY_TLBI`: 0 none, 1 `TLBI VAE1IS` of the traffic buffer's page,
+2 `TLBI ASIDE1IS` of ASID 1, 3 `TLBI VMALLE1IS`. CPU0's tick hook, the interrupt that releases the eight pinned wake tasks, issues
+the chosen invalidation, followed by `DSB ISH`, immediately before every release of the idle and busy phases. Every wake sample is
+therefore taken beside an invalidation, which bounds the effect of one release every 100 ms from above. The diagnostic keeps the
+largest time the issuing core spent from the instruction to the end of the `DSB`; that time is also an upper bound on how long any
+other core can be held, because the barrier completes only when all cores have completed the invalidation. The report's `dma_jobs`
+word carries it in this image, which has no DMA client. `checks/latency-tlbi.py` shows that the images of the four forms differ
+only by that one instruction. `apps/latency/tlbi-report.py` summarizes a report.
+
+The harness releases at the tick, 1 kHz, not at 10 kHz, and takes 64 idle and 128 busy samples per core. That is too few for a 99.9th
+percentile, which equals the maximum of a core's busy samples, and the control's own busy wake time is large (an earlier report of
+the same diagnostic: busy maximum 135 us on the Cortex-A55 cores and 34 us on the Cortex-A76 cores). The wake metrics can therefore
+show only a cost that is large against that spread. The issuing core's time is the sensitive figure.
+
+Hypothesis: a broadcast invalidation costs the issuing core less than 5 us in the worst case under the harness's memory load for
+the page and ASID forms, and less than 10 us for the form that invalidates everything, and it moves neither wake metric's maximum
+outside the spread of two runs of the control. Five runs on port 3-1 with the same session: the control twice, then forms 1, 2 and 3.
+
+- **Expected.** All five return normally. The control reports no invalidation. Forms 1 and 2 report at most 5 us for the issuing core,
+  form 3 at most 10 us. For each of idle and busy and each cluster, the maximum of every form lies within the range of the two
+  controls' maxima plus 5 us.
+- **A different result and what it means.** An issuing time above 10 us says that a core running other work can be held for that
+  long by a release, so the design's local or deferred forms are needed. A wake maximum that rises by more than the spread of the
+  two controls says the same through the scheduler. A watchdog end or a failure record would mean the invalidation in the tick hook
+  broke the harness (it runs in interrupt context at EL1), not that it is costly.
+
+**Result of the five runs (port 3-1, entries `1793671134053745086-10f06621` and `1793671142888118311-6d401880` for the control,
+`1793671155101547801-f4fdd008` for `TLBI VAE1IS`, `1793671164171009720-be7dc135` for `TLBI ASIDE1IS`,
+`1793671172712527319-915ef621` for `TLBI VMALLE1IS`).** All five returned normally. Every run took 199 ticks of the application.
+The memory sweeps of each core (38 to 74 in the control) are equal in the runs of the page and ASID forms; in the run of the form
+that invalidates everything, core 1 made 42 sweeps against 52 and core 3 made 47 against 38, one lower and one higher, so no
+throughput cost shows. (The host-side
+stage durations differ widely between the runs because of disk load, and the launch time of the runs of the three forms, 18.7 to
+31.0 s against 5.4 s, is a host-side figure from slow periods, not a property of the application.) In microseconds:
+
+| | issuing core, largest | busy A55 max | busy A76 max | idle A55 max | idle A76 max |
+| --- | --- | --- | --- | --- | --- |
+| control, first run | none | 172.7 | 36.0 | 20.0 | 6.3 |
+| control, second run | none | 159.0 | 32.8 | 21.4 | 7.4 |
+| `TLBI VAE1IS` | 9.79 | 160.5 | 34.8 | 20.1 | 7.5 |
+| `TLBI ASIDE1IS` | 8.62 | 154.2 | 37.3 | 20.4 | 6.6 |
+| `TLBI VMALLE1IS` | 6.83 | 158.7 | 30.5 | 20.5 | 7.1 |
+
+The wake half of the prediction held: no maximum of a form lies outside the range of the two controls plus 5 us. The issuing-time
+half did not: the page and ASID forms took 9.8 and 8.6 us against the predicted 5 us (the form that invalidates everything took
+6.8 us, under its 10 us); all stay under 10 us. The figure includes the wait of `DSB ISH` for every earlier access of the issuing
+core, issued from the tick interrupt while the other cores sweep memory, so it overstates what an idle receiver is held for.
+
+What the runs decide. The busy wake maxima of the control itself are 33 to 173 us, far above the design's 10 us worst case and 5 us
+at the 99.9th percentile, and two runs of the control differ by up to 14 us. A cost of a few microseconds cannot show in that
+spread, with 192 samples per core and the 1 kHz tick instead of the 10 kHz release the design assumed. What the data show is an
+upper bound on the stall a broadcast invalidation imposes: under the full memory load of the harness the issuing core waited at most
+9.8 us for every core to complete it, and no wake or sweep count moved outside the control's spread. That does not clear the
+broadcast form against the 5 us criterion of the design, so the design's order stands: the deferred reuse and the local form come
+first, and the broadcast form needs a measurement on the control path at 10 kHz (the interrupt latency histograms of the control
+interrupts in `runtime/control_irq.c`) before an application call uses it.
+
 ### Predicted board run of the NPU graphs with the end wait driven by events
 
 An OS wake-up of the main task that finds no registered wait is now kept for its next wait, `ss_host_recv` tests its mailbox again

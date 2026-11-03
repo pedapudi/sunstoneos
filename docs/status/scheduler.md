@@ -10,7 +10,7 @@ The robot's hard real-time work runs in interrupt handlers above the kernel API 
 
 | Target | Control path (above the API mask) | Task path (woken task) |
 | --- | --- | --- |
-| Wake latency at most 10 us | Met: maximum 3.6, 99.99th percentile 3.0 at 10 kHz over 1 254 587 periods (fork, five soaks after the exit change) | Not met: maximum 23.5 to 31.5, 99.99th percentile 19.7 to 24.5 at 1, 2 and 4 kHz over 125 000 to 504 000 periods per rate |
+| Wake latency at most 10 us | Met: maximum 3.6, 99.99th percentile 3.0 at 10 kHz over 1 254 587 periods (fork, five soaks after the exit change) | Not met: maximum 23.5 to 31.5, 99.99th percentile 19.7 to 24.5 at 1, 2 and 4 kHz over 125 000 to 504 000 periods per rate; with per-object locks the same (see the next section) |
 | Jitter at most 5% of the period | Met at 10 kHz: maximum 3.4 against 5 | Met at 1 kHz (maximum 18.5 against 50) and 2 kHz (20.9 against 25); not met at 4 kHz (28.3 maximum, 21.8 at the 99.99th percentile, against 12.5) |
 | No missed period | Met: none in any soak | Met: none in any soak |
 | Model within 2% | Met: the interrupts cost 0.02 to 0.06 percent of recognition time per kHz | Same |
@@ -22,6 +22,18 @@ Kernel choice. Pooled over five soaks per kernel (fork before the exit change, s
 Model cost of the interrupts, as a share of recognition time per kHz of interrupt rate: fork 0.020 (17 kHz of control and task interrupts cost 0.34%), stock 0.047 (0.80%); with 25 kHz of each path on five cores, +2.73% on the fork and +4.55% on stock, 0.055 and 0.091 per kHz, about 0.5 and 0.9 us of recognition time per interrupt. A robot should budget 0.02 to 0.1 percent of model throughput per kHz, spread over the cores that take the interrupts.
 
 Idle wake cost on the control core. The idle task is `dsb sy; wfi` and nothing else (`a733_cpu_idle`); there is no retention or clock-gating step. On the fork, 170 000 wake-ups per soak on core 4 took a median of 0.33 us from interrupt to handler, 0.5 to 0.7 us at the 99th percentile, 3.2 us at the 99.99th and at most 3.6 us, so the control core can stay in plain `wfi`. The stock kernel's `wfi` wake tail reached 10.9 us, because its interrupts waited behind `PSTATE.I` held by its yield handler.
+
+## The task path's time is in the wake path, not in lock waits
+
+Split of each task-path wake at the handler (`SUNSTONE_CONTROL_IRQ` images; entry delay is the handler start minus the deadline, gap is the task start minus the handler start). Two unmodified-fork soaks pooled, microseconds: entry delay p99.99 6.3 / 8.3 / 9.2 and maximum 10.0 / 8.8 / 11.3 at 1 / 2 / 4 kHz; gap median 4.8 / 4.2 / 3.7, p99.99 21.3 / 19.0 / 24.2, maximum 22.7 / 24.7 / 25.2. The gap carries the tail. Phase timers show the wake path (notification 1 us, interrupt-exit owner work 1.6 to 2 us, task switch 1.4 us on average) and its tail events (control drains and idle-pull transfers of 5 to 17 us, task switches to 11 us); none of them waits for a global lock. Per-object kernel locks (design: [object locks](../designs/scheduler-partitioned.md#object-locks-queues-event-groups-and-stream-buffers-lock-their-own-object)) leave the figures unchanged within the run-to-run spread: entry delay maxima 5.3 / 4.8 / 5.5 against 5.7 / 5.0 / 5.7, gap maxima 15.7 / 25.0 / 19.8 against 16.0 / 25.8 / 16.0. A prefetch of the woken task's lines with idle pull deferred past a pending switch changed nothing and was removed. The 10 us target cannot be reached by locking changes; the wake path itself must shorten. The object locks are kept: operations on independent objects no longer wait for each other (the `objects` emulator case fails on the global locks and passes on object locks) and the event-list insertion race is closed.
+
+Present result of the task-path work, in five points.
+
+1. Notification change (kept). `ssKernelNotify` no longer raises and lowers the priority mask when it runs in an exception with `PSTATE.I` already set, which removes about four data and four instruction barriers per wake. Five soaks against three unmodified-fork soaks, pooled, task latency at 4 kHz: 99th percentile 11.5 to 7.5 us, 99.9th 19.8 to 11.5 us, wakes of 10 us or more 1.43% to 0.17% (989 to 2071 per soak before, 116 to 246 after). The 99.99th percentile (26.3 to 22.8 us) and the maximum (31.0 to 26.5 us) barely move, and the 1 and 2 kHz tails are unchanged. One qualification: the five "after" soaks were measured on images with the per-object locks (point 2, `work/sched-tasklock-1102`), and the three "before" soaks on images with the global locks. The tree that carries this document has the notification change on the global locks, which no soak set has measured. Two phase-timed single soaks showed no difference between the two lock schemes, so the improvement is attributed to the notification change, but no soak set isolates it; a five-soak set of the global-lock images with the notification change would.
+2. Per-object locks (measured negative result for the task path). Queues, event groups and stream buffers lock their own hashed slot instead of the two global locks. A host check proves unrelated objects no longer wait for each other. On the board the global locks serialized independent queues heavily (99% of waits over 5 us were charged to a holder working on a different object), but removing that serialization did not change the task path's entry delay or gap. The code is only on branch `work/sched-tasklock-1102`; this tree keeps the global locks. Its value would be the closed race in point 3 (which the global-lock fix below also closes) and lower lock contention for the recognition workers, not task-path latency.
+3. Event-list race (fixed, commit `21614e95` on `work/event-list-race-1103`). A blocking task inserted itself into an event list under the task lock alone, while the owner timing out another waiter of the same list removed its item under the interrupt lock alone. The insertion now holds the interrupt lock too. The race exists on the global-lock code; a linked-kernel host case fails without the fix.
+4. The 10 us task-path target is not met: the 99.99th percentile is 19 to 26 us at 1, 2 and 4 kHz after the change, and the maximum 25 to 27 us. The measured cause is not lock waits. Entry delay is 5 to 11 us at most. The gap from handler to task start carries the tail: control drains and idle-pull transfers of 5 to 17 us (about 600 drains over 5 us per soak on cores 1 and 2), and task switches of up to 11 us. A cap of one idle-pull transfer per pass shortened the pull phase but not the drains, and is an off-by-default option. Locking changes alone cannot meet the target. Not done: a breakdown of one long drain into its records, which was the next step planned.
+5. Task path on A76 cores (a single soak, entry `8d56d9aa`; not repeated). Core 7 at 4 kHz reached 8.8 us at most and core 6 at 1 kHz 12.3 us, against 14.8 to 20.6 us on the A55 cores 1 to 3. Slow wakes on the A55 cores refill two to three times as many L2 lines as fast ones. This suggests that running the real-time tasks on the A76 cores may help, but one soak does not establish it, and the recognition time with the task path on those cores (the 2% rule) was not measured.
 
 ## Intervals with PSTATE.I set on the control core
 
@@ -49,9 +61,9 @@ After the exit change the largest control latency per soak is 3.3 to 3.7 us, fro
 
 ## Backlog
 
-1. Task-path wake latency to the 10 us target (now 20 to 25 us at the 99.99th percentile). The masked time is 82 to 96% lock wait on the task lock (the sweep below); its remedies are in items 2 to 4.
-2. Per-object locking: move queue and notify state under per-object or per-owner locks so independent queues stop serializing; the fork still takes the global task and ISR locks in `ssKernelObjectEnter`.
-3. Shorter lock holds: touch the object's cache lines before masking; each hold is about 3.5 us of dependent DRAM refills.
+1. Task-path wake latency to the 10 us target (about 20 to 26 us at the 99.99th percentile after the notification change). The gap from handler to task start carries the tail; shorten the wake path (fewer supervisor calls and barriers, no owner pass before the switch, bounded idle-pull and control-drain work per exit).
+2. Per-object locking: done for queues, event groups and stream buffers; no effect on the task path.
+3. Shorter lock holds and prefetch: the prefetch of the wake path's lines was tried and gave nothing.
 4. The abortable queue lock: a waiter that can take its place in line with the mask open.
 5. Tickless idle on the stock-derived kernel (work on `work/tickless-idle-1101`; changes the protected `patches/freertos-smp-*.patch`): measure control-period jitter with and without it.
 6. The 11 us owner-work time at interrupt exit on the control core. It no longer holds off the control interrupt, but it still delays ordinary interrupts and the task-path wake; bound the work per exit.
@@ -220,7 +232,7 @@ The rule chose the fork, and it is the default.
 Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-75 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+89 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -299,4 +311,18 @@ Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`,
 | `1793617020998598953-a6ecdfc1` | 2026-11-02 | 3-3 | `8164782bdec2` | returned | passed | run_total 109.557 s, idle_pulls 6722, idle_entries_with_work_waiting 4632, recognition_mean 111.033 ms |
 | `1793617131735748473-bef01b84` | 2026-11-02 | 3-3 | `8164782bdec2` | returned | passed | run_total 140.514 s, idle_pulls 3939, idle_entries_with_work_waiting 2496, recognition_mean 110.943 ms |
 | `1793617277487733781-666ca5a4` | 2026-11-02 | 3-3 | `8164782bdec2` | returned | passed | run_total 141.26 s, idle_pulls 6266, idle_entries_with_work_waiting 7600, recognition_mean 111.031 ms |
+| `1793668412009966237-1c10f02f` | 2026-11-03 | 3-3 | `e7a4f58229a1` | returned | passed | run_total 273.108 s, task_latency_max_4khz 31.1 us, entry_max_4khz 11.3 us, gap_max_4khz 25.2 us, recognition_mean 110.683 ms |
+| `1793668868450145397-9ef28fda` | 2026-11-03 | 3-3 | `89fb9417c2c6` | returned | passed | run_total 275.648 s, gap_max_4khz 16 us, recognition_mean 109.411 ms |
+| `1793668892195242489-3b585c56` | 2026-11-03 | 3-3 | `89fb9417c2c6` | returned | passed | run_total 311.477 s, gap_max_4khz 19.8 us, recognition_mean 109.434 ms |
+| `1793669877242530330-39c2dcac` | 2026-11-03 | 3-3 | `422d047168aa` | returned | failed | run_total 280.539 s, gap_p50_1khz 6.5 us |
+| `1793669888246106384-74781dfd` | 2026-11-03 | 3-3 | `422d047168aa` | returned | failed | run_total 278.983 s, gap_p50_1khz 6.5 us |
+| `1793671006348692345-8b3ce66b` | 2026-11-03 | 3-3 | `e7a4f58229a1` | returned | passed | run_total 260.588 s, task_latency_max_4khz 31.1 us, recognition_mean 110.551 ms |
+| `1793672779737331795-9c485d61` | 2026-11-03 | 3-3 | `72b12109513e` | returned | passed | run_total 138.924 s, p99_4khz 7.67 us, wakes_ge10us_4khz 145 |
+| `1793672791833556437-3d0beaf0` | 2026-11-03 | 3-3 | `72b12109513e` | returned | passed | run_total 416.477 s, p99_4khz 7.67 us, wakes_ge10us_4khz 246 |
+| `1793674399585324316-78758903` | 2026-11-03 | 3-3 | `72b12109513e` | returned | passed | run_total 304.397 s, p99_4khz 7.67 us, wakes_ge10us_4khz 121 |
+| `1793674413669633557-95819732` | 2026-11-03 | 3-3 | `72b12109513e` | returned | passed | run_total 219.156 s, p99_4khz 7.17 us, wakes_ge10us_4khz 236 |
+| `1793674429022164361-d3113ba6` | 2026-11-03 | 3-3 | `72b12109513e` | returned | passed | run_total 98.588 s, p99_4khz 7.33 us, wakes_ge10us_4khz 116 |
+| `1793676328926858188-8d56d9aa` | 2026-11-03 | 3-3 | `0d5bdbfd73f1` | returned | inconclusive | run_total 96.879 s, core7_max_4khz 8.83 us, core6_max_1khz 12.29 us |
+| `1793676331839315084-eb658d1e` | 2026-11-03 | 3-3 | `5a3dfb486054` | returned | inconclusive | run_total 97.391 s, pull_over5us_core1 676, drains_over5us_core1 622 |
+| `1793676334897453864-1c03391a` | 2026-11-03 | 3-3 | `b172a440f124` | returned | failed | run_total 96.658 s, pull_over5us_core1 428, drains_over5us_core1 688 |
 <!-- evidence-table:end -->

@@ -155,6 +155,22 @@ raw = (ROOT / 'checks/sunxi-mmc.c').read_text()
 (a.output / 'mmc-card-model.h').write_text(raw[raw.index('struct model {'):raw.index('static int barrier(void *ctx)')])
 platform = (ROOT / 'checks/a733-mmc-platform.c').read_text()
 (a.output / 'mmc-platform-fixture.h').write_text(platform[:platform.index('int main(')])
+# Drive and sample phases of the board kernel per clock range (sunxi-mmc-v5p3x.c mmc_clk_dly defaults), which the board's sdc0 node does not override.
+import re
+vendor = (a.sources / 'sd-uhs/board-kernel-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/mmc/sunxi-mmc-v5p3x.c').read_text()
+assert hashlib.sha256(vendor.encode()).hexdigest() == '348a6893ae256b2df712813e998ab2b6a13341dd8c57f6fcfb31656fe735d94c'
+assert hashlib.sha256((a.sources / 'board-kernel/sun60i-a733-orangepi-zero3w.dts').read_bytes()).hexdigest() == '31145367f604fd756f2c6a67447e5134e4be0ad5fae87672cfaa9b7c6d055a39'
+rows = {}
+for name in ('400k', '26M', '52M', '104M', '208M'):
+    fields = {f: int(re.search(r'mmc_clk_dly\[mmc_clk_%s\]\.%s\s*=\s*(\d+)' % (name, f), vendor).group(1)) for f in ('cmd_drv_ph', 'dat_drv_ph', 'sam_ph_dat', 'sam_ph_cmd')}
+    rows[name] = fields
+assert 'sunxi-dly' not in re.search(r'&sdc0 \{.*?\n\};?\n', (a.sources / 'board-kernel/sun60i-a733-orangepi-zero3w.dts').read_text(), re.S).group(0)
+assert rows == {'400k': dict(cmd_drv_ph=1, dat_drv_ph=0, sam_ph_dat=0, sam_ph_cmd=0), '26M': dict(cmd_drv_ph=1, dat_drv_ph=0, sam_ph_dat=0, sam_ph_cmd=0),
+                '52M': dict(cmd_drv_ph=1, dat_drv_ph=1, sam_ph_dat=1, sam_ph_cmd=1), '104M': dict(cmd_drv_ph=1, dat_drv_ph=0, sam_ph_dat=0, sam_ph_cmd=0),
+                '208M': dict(cmd_drv_ph=1, dat_drv_ph=0, sam_ph_dat=0, sam_ph_cmd=0)}, rows
+(a.output / 'vendor-phases.h').write_text('/* generated from the pinned board kernel by checks/sunxi-mmc-uhs.py */\n'
+    'static const struct { unsigned cmd, dat, sam_dat, sam_cmd; } vendor_phase[] = {\n' + ''.join(
+        '    {%d, %d, %d, %d}, /* %s */\n' % (r['cmd_drv_ph'], r['dat_drv_ph'], r['sam_ph_dat'], r['sam_ph_cmd'], n) for n, r in rows.items()) + '};\n')
 reference = a.read_reference.read_bytes()
 assert hashlib.sha256(reference).hexdigest() == '846797588f8bd2470d885027b13078762f4a966826fc71be822c0346e6bf44af'
 (a.output / 'mmc-reference.h').write_bytes(reference); inputs[str(a.read_reference)] = hashlib.sha256(reference).hexdigest()
@@ -181,6 +197,46 @@ for name, command in steps:
         sizes = subprocess.run(['/usr/lib/llvm-21/bin/llvm-size', str(a.output / 'sunxi_mmc.o'), str(a.output / 'sunxi_mmc-no-uhs.o')],
                                capture_output=True, text=True, check=True).stdout
         (a.output / 'sizes.txt').write_text(sizes)
+# Mutations of the mode ladder: each switches one step-down or selection off, and the core check must then fail.
+mutations = [
+    ('no-sdr50-fallback', 'if(from==3&&(h->card.group1_support&4))to=2;', 'if(0)to=2;'),
+    ('no-step-down-at-all', 'h->card.sample_delay=0;h->protocol=P_SD_CLOCK;h->sd_ios=0;\n}', 'fault(h,SUNXI_MMC_CARD);return;\n}'),
+    ('ceiling-ignored', 'return h->ceil1 ? (unsigned)h->ceil1 - 1u : 3u;', 'return 3u;'),
+    ('sdr50-never-selected', 'if(ceiling_of(h)>=2&&(h->card.switch_status[13]&4)&&!(h->card.switch_status[29]&4)){\n            h->uhs_func=2;', 'if(0){\n            h->uhs_func=2;'),
+    ('no-default-speed', '(!hs_ok||ceiling_of(h)==0)){', '0){'),
+]
+source = (ROOT / 'drivers/storage/sunxi_mmc.c').read_text()
+killed = []
+for name, old_text, new_text in mutations:
+    assert source.count(old_text) == 1, (name, source.count(old_text))
+    directory = a.output / ('mutant-' + name); directory.mkdir()
+    (directory / 'sunxi_mmc.c').write_text(source.replace(old_text, new_text))
+    build = subprocess.run([a.cc, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Wno-unused-function', '-Wno-unused-parameter', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                            '-Iinclude', '-Ichecks', '-I' + str(a.output), str(directory / 'sunxi_mmc.c'), 'checks/sunxi-mmc-uhs.c', '-o', str(directory / 'core')],
+                           cwd=ROOT, capture_output=True, text=True)
+    assert build.returncode == 0, (name, build.stderr)
+    run = subprocess.run([str(directory / 'core')], capture_output=True, text=True)
+    assert run.returncode != 0, 'mutation survived: ' + name
+    killed.append(name)
+# Mutations of the runtime recovery, each caught by the platform check: the platform and core sources are replaced by a mutated copy in the platform build.
+runtime_mutations = [
+    ('no-runtime-step-down', 'drivers/storage/a733_mmc_platform.c', 'ceiling=timing-1;why=SUNXI_MMC_MODE_ERRORS;', 'ceiling=timing;why=SUNXI_MMC_MODE_ERRORS;'),
+    ('no-retune-first', 'drivers/storage/a733_mmc_platform.c', 'if(p->recover_errors>=2){', 'if(p->recover_errors>=1){'),
+    ('restart-forgets-1v8', 'drivers/storage/sunxi_mmc.c', 'fresh.reenter = h->card.signal_1v8;', 'fresh.reenter = 0;'),
+    ('restart-keeps-mode-ceiling', 'drivers/storage/sunxi_mmc.c', 'fresh.ceil1 = (uint8_t)(ceiling + 1);', 'fresh.ceil1 = 0;'),
+]
+for name, relative, old_text, new_text in runtime_mutations:
+    original = (ROOT / relative).read_text()
+    assert original.count(old_text) == 1, (name, original.count(old_text))
+    directory = a.output / ('mutant-' + name); directory.mkdir()
+    mutated = directory / Path(relative).name; mutated.write_text(original.replace(old_text, new_text))
+    command = sanitize + ['-Wno-unused-function'] + [str(mutated) if source == relative else source for source in sources] + ['checks/a733-mmc-uhs.c', '-o', str(directory / 'platform')]
+    build = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+    assert build.returncode == 0, (name, build.stderr)
+    run = subprocess.run([str(directory / 'platform')], capture_output=True, text=True)
+    assert run.returncode != 0, 'mutation survived: ' + name
+    killed.append(name)
+print('mutations killed: ' + ', '.join(killed))
 nm = subprocess.run(['/usr/lib/llvm-21/bin/llvm-nm', str(a.output / 'sunxi_mmc-no-uhs.o')], capture_output=True, text=True, check=True).stdout
 assert not any(name in nm.split() for name in ('sd_signal', 'tune_recover', 'tune_advance', 'uhs_registers', 'tuning_pattern', 'set_delay'))
 frames = {}
@@ -192,7 +248,7 @@ for relative in ['include/sunxi_mmc.h', 'include/sunxi_smhc.h', 'include/a733_mm
                  'checks/sunxi-mmc.c', 'checks/a733-mmc-platform.c', *sources]:
     inputs[relative] = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
 (a.output / 'result.json').write_text(json.dumps(dict(
-    passed=True, physical_access=False, inputs=inputs, stack_frames=frames,
+    passed=True, physical_access=False, mutations_killed=killed, inputs=inputs, stack_frames=frames,
     scope='Reference facts from pinned sources; MMC core and actual storage platform with modeled card, MMIO and '
           'time under ASan/UBSan; AArch64 compilation. No native image, board, USB or card access.'), indent=2) + '\n')
 print('PASS UHS-I references, core and platform models; frames: sunxi_mmc_poll %d, command_step %d bytes'

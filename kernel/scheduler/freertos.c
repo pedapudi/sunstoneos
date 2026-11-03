@@ -26,6 +26,9 @@ _Static_assert(configNUMBER_OF_CORES > 1 && configNUMBER_OF_CORES <= 8,
 _Static_assert(configMAX_PRIORITIES == SS_OWNER_PRIORITIES,
                "owner priorities must match FreeRTOS priorities");
 
+#ifndef SS_PULL_MOVES_PER_PASS
+#define SS_PULL_MOVES_PER_PASS 0u /* transfers one idle-pull pass may start; 0 is unlimited */
+#endif
 enum ssKernelExecution { SS_K_READY, SS_K_RUNNING, SS_K_BLOCKED, SS_K_SUSPENDED, SS_K_DEAD, SS_K_TRANSFERRING };
 enum ssKernelWait { SS_K_NONE, SS_K_DELAY, SS_K_EVENT, SS_K_NOTIFICATION };
 enum ssKernelOutcome { SS_K_WAITING, SS_K_EVENT_READY, SS_K_TIMED_OUT, SS_K_ABORTED };
@@ -125,6 +128,32 @@ unsigned long ulSunstoneKernelPmu(unsigned core, unsigned region, unsigned count
 #define SS_PMU_ENTER ((void)0)
 #define SS_PMU_LEAVE(region) ((void)0)
 #endif
+#ifdef SUNSTONE_OWNER_COUNTERS
+/* Measurement: how long each phase of the wake path takes on each CPU, in counter ticks of 41.7 ns: the count, the sum,
+ * the longest and the count over 5 us. Written by the CPU itself. Phases: 0 notification, 1 interrupt-exit work, 2 service
+ * pass, 3 control drain, 4 incoming hints, 5 idle pull, 6 deadline expiry, 7 slice refresh, 8 yield tail, 9 task switch. */
+#define SS_PHASES 10u
+struct ssPhase { uint64_t n, sum, max, over5, pad[4]; };
+static struct ssPhase ssPhases[configNUMBER_OF_CORES][SS_PHASES] __attribute__((aligned(64)));
+static inline uint64_t ssPhaseNow(void)
+{
+    uint64_t t;
+    __asm__ volatile("isb\n mrs %0, cntvct_el0" : "=r"(t) :: "memory");
+    return t;
+}
+#define SS_PH_BEGIN const uint64_t ssph_t0 = ssPhaseNow()
+#define SS_PH_END(phase) do { const uint64_t d = ssPhaseNow() - ssph_t0; struct ssPhase *x = &ssPhases[ssKernelCPUId()][phase]; \
+    ++x->n; x->sum += d; if (d > x->max) x->max = d; if (d > 120) ++x->over5; } while (0)
+uint64_t ulSunstonePhase(unsigned cpu, unsigned phase, unsigned field)
+{
+    if (cpu >= configNUMBER_OF_CORES || phase >= SS_PHASES || field > 3) return 0;
+    const struct ssPhase *x = &ssPhases[cpu][phase];
+    return field == 0 ? x->n : field == 1 ? x->sum : field == 2 ? x->max : x->over5;
+}
+#else
+#define SS_PH_BEGIN ((void)0)
+#define SS_PH_END(phase) ((void)0)
+#endif
 #ifdef SUNSTONE_IRQ_COUNT
 /* Measurement: which call sites send SGIs, to which CPU. One table per sending
  * CPU, written by that CPU only; read after the measured interval. */
@@ -161,6 +190,19 @@ static __attribute__((noinline)) void ssKernelSGI(void *context, unsigned cpu)
     if (xSchedulerRunning) ssKernelSgiCount((uintptr_t)__builtin_return_address(0), cpu);
 #endif
     if (xSchedulerRunning) portYIELD_CORE((BaseType_t)cpu);
+}
+/* True when PSTATE.I is set on this CPU (an exception handler, or code that masked all interrupts). */
+static inline bool ssKernelIrqsDisabled(void)
+{
+#if defined(__aarch64__)
+    /* DAIF is not readable at EL0; the interrupt and supervisor entries mark the task register as EL1. */
+    if (!((ullPortGetTaskRegister() >> portTASK_REGISTER_EL1_BIT) & 1U)) return false;
+    uint64_t daif;
+    __asm__ volatile("mrs %0, daif" : "=r"(daif));
+    return (daif & 0x80) != 0;
+#else
+    return false;
+#endif
 }
 static const struct ss_owner_backend ssKernelBackend = { .sgi = ssKernelSGI };
 static unsigned ssKernelCPUId(void) { return (unsigned)portGET_CORE_ID(); }
@@ -708,15 +750,34 @@ static void ssKernelExpired(void *context, const struct ss_deadline_result *resu
  * batch or one that arrived after the drain, or object repair. */
 static bool ssKernelServiceOnce(unsigned c, struct ssKernelCPU *cpu)
 {
-    ssKernelControlDrain();
-    ss_owner_drain(&cpu->run, ssKernelInspect, NULL);
-    if (!cpu->selecting) ssKernelPullServe(c);
+    {
+        SS_PH_BEGIN;
+        ssKernelControlDrain();
+        SS_PH_END(3);
+    }
+    {
+        SS_PH_BEGIN;
+        ss_owner_drain(&cpu->run, ssKernelInspect, NULL);
+        SS_PH_END(4);
+    }
+    if (!cpu->selecting) {
+        SS_PH_BEGIN;
+        ssKernelPullServe(c);
+        SS_PH_END(5);
+    }
     /* Event timeout completion edits object metadata. Exception entry does
      * that maintenance before selection; newly due work gets another entry. */
-    if (!cpu->selecting)
+    if (!cpu->selecting) {
+        SS_PH_BEGIN;
         ss_deadline_expire(&cpu->deadlines, ssKernelNow(), SS_DEADLINE_BATCH,
                            ssKernelExpired, NULL);
-    ssKernelSliceRefresh(c, false);
+        SS_PH_END(6);
+    }
+    {
+        SS_PH_BEGIN;
+        ssKernelSliceRefresh(c, false);
+        SS_PH_END(7);
+    }
     if (atomic_load_explicit(&cpu->slice_deadline, memory_order_relaxed) <= ssKernelNow()) {
         cpu->yield_tail = true;
         cpu->reschedule = true;
@@ -737,6 +798,7 @@ static void ssKernelService(void)
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    SS_PH_BEGIN;
     SS_PMU_ENTER;
     /* Work that arrived during the pass is taken by the next pass here. A new
      * exception entry costs an SGI, the exception and a full service entry, a
@@ -750,6 +812,7 @@ static void ssKernelService(void)
         ssKernelForce(c);
     }
     SS_PMU_LEAVE(1);
+    SS_PH_END(2);
     portCLEAR_INTERRUPT_MASK(irq);
 }
 static bool ssKernelDispatch(void *context, unsigned cpu)
@@ -764,6 +827,7 @@ static bool ssKernelDispatch(void *context, unsigned cpu)
 static void ssKernelSwitch(unsigned c)
 {
     configASSERT(c == ssKernelCPUId());
+    SS_PH_BEGIN;
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
     if (cpu->preempt || ss_control_checkpoint(&ssKernelControl, c)) {
         cpu->reschedule = true;
@@ -860,6 +924,7 @@ static void ssKernelSwitch(unsigned c)
         cpu->reschedule = true;
         ssKernelForce(c);
     }
+    SS_PH_END(9);
 }
 #ifdef SUNSTONE_OWNER_COUNTERS
 /* Owner-work drains by CPU (measurement): from the outermost interrupt exit, skipped by the mask guard there, and
@@ -898,6 +963,7 @@ static inline void ssOwnerSpan(uint64_t begin, bool yield)
 #endif
 void ssKernelOwnerYieldTail(void)
 {
+    SS_PH_BEGIN;
     const uint64_t span_begin = ssOwnerClock();
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
@@ -911,6 +977,7 @@ void ssKernelOwnerYieldTail(void)
     cpu->reschedule = true;
     portCLEAR_INTERRUPT_MASK(irq);
     ssOwnerSpan(span_begin, true);
+    SS_PH_END(8);
 }
 void ssKernelOwnerYield(void)
 {
@@ -942,6 +1009,7 @@ BaseType_t ssKernelOwnerIRQExit(void)
     if (pmr <= portMAX_API_PRIORITY_MASK) { SS_OWNER_COUNT(exit_skipped); SS_OWNER_PENDING(); return 2; } /* tells the exit path not to switch tasks */
     SS_OWNER_COUNT(exit_work);
     const uint64_t begin = ssOwnerClock();
+    SS_PH_BEGIN;
     /* The exit path calls this with PSTATE.I set, and the owner work takes several microseconds. Run it as an ISR
      * critical section does: raise ICC_PMR_EL1 to the API mask and clear PSTATE.I, so that only interrupts above the
      * API mask (the control class) can run in it. Their exit leaves the work alone (the PMR test above), and the
@@ -952,6 +1020,7 @@ BaseType_t ssKernelOwnerIRQExit(void)
      * ordinary interrupt taken then would be a second outermost exit inside this one. */
     __asm__ volatile("msr daifset, #2\n dsb sy\n isb\n msr icc_pmr_el1, %0\n dsb sy\n isb" :: "r"((uint64_t)previous) : "memory");
     ssOwnerSpan(begin, false);
+    SS_PH_END(1);
     if (result == pdTRUE) SS_OWNER_COUNT(exit_raised);
     return result;
 #endif
@@ -1025,10 +1094,15 @@ static BaseType_t ssKernelNotify(TaskHandle_t task, UBaseType_t index,
         SS_NOTIFY_OVERWRITE, SS_NOTIFY_NO_OVERWRITE
     };
     configASSERT((unsigned)action < sizeof(actions) / sizeof(actions[0]));
-    UBaseType_t irq = from_isr ? portSET_INTERRUPT_MASK_FROM_ISR() : portSET_INTERRUPT_MASK();
+    SS_PH_BEGIN;
+    /* An interrupt handler runs with PSTATE.I set, so no API-level interrupt can enter the section and raising the priority
+     * mask would only cost two data synchronization barriers and two instruction barriers on each side. Interrupts above
+     * the API mask never call the kernel. */
+    const bool masked_by_exception = from_isr && ssKernelIrqsDisabled();
+    UBaseType_t irq = masked_by_exception ? 0 : from_isr ? portSET_INTERRUPT_MASK_FROM_ISR() : portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
     if (!ss_kernel_handle_pin(&ssKernelRegistry, task, &pin)) {
-        if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
+        if (masked_by_exception) {} else if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
         return pdFAIL;
     }
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
@@ -1043,7 +1117,8 @@ static BaseType_t ssKernelNotify(TaskHandle_t task, UBaseType_t index,
         ssKernelPublishReference(pin);
         if (woken && ssKernelCPUs[ssKernelCPUId()].reschedule) *woken = pdTRUE;
     } else ss_kernel_handle_put(&pin);
-    if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
+    if (masked_by_exception) {} else if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
+    SS_PH_END(0);
     return result.accepted ? pdPASS : pdFAIL;
 }
 static uint32_t ssKernelNotifyWait(UBaseType_t index, uint32_t clear_entry,
@@ -1514,6 +1589,9 @@ static void ssKernelPullServe(unsigned c)
     if (atomic_load_explicit(&cpu->pull_requests, memory_order_relaxed))
         requests = atomic_exchange_explicit(&cpu->pull_requests, 0, memory_order_acq_rel);
     uint64_t serve = (requests | atomic_load_explicit(&ssKernelIdleMask, memory_order_acquire)) & targets;
+#if SS_PULL_MOVES_PER_PASS
+    unsigned moved = 0;
+#endif
     while (serve) {
         const unsigned target = (unsigned)__builtin_ctzll(serve);
         serve &= serve - 1;
@@ -1528,6 +1606,10 @@ static void ssKernelPullServe(unsigned c)
         if (move.changed) {
             atomic_fetch_add_explicit(&ssKernelIdlePulls, 1, memory_order_relaxed);
             ssKernelControlDrain();
+#if SS_PULL_MOVES_PER_PASS
+            /* Bound the transfer work of one pass; an idle core stays in the idle mask and the next pass serves it. */
+            if (++moved >= SS_PULL_MOVES_PER_PASS) break;
+#endif
         }
         if (cpu->run.ready_bitmap == 0) break;
     }

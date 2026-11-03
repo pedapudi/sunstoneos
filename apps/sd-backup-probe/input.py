@@ -36,9 +36,19 @@ def pack_input(sectors, uhs_mode=0, reads=1, blocks=8, phases=()):
 def stop_fields_identification(w):
     """The stop word of a lifetime that failed before the card was identified (probe reason 3): fault line 10 bits, why 2, platform stage 5, the core's
     error 4 (sunxi_mmc_error: 1 io, 2 time, 3 timeout, 4 admission, 5 variant, 6 controller, 7 card, 8 unsupported, 9 signal), its protocol step 6 (the
-    P_* enum of drivers/storage/sunxi_mmc.c), and the CMD19 sample delay reached divided by two, 5."""
+    P_* enum of drivers/storage/sunxi_mmc.c), and then 5 bits: the CMD19 sample delay reached divided by two when the core was tuning, otherwise the last raw interrupt word as flags (bit 0 response
+    timeout, 1 response CRC error, 2 response error, 3 command done, 4 any other error)."""
+    low = w & 31
     return dict(fault_line=w >> 22 & 1023, why=w >> 20 & 3, platform_stage=w >> 15 & 31, core_error=w >> 11 & 15, core_protocol=w >> 5 & 63,
-                tune_delay_half=w & 31)
+                tune_delay_half=low, raw_flags=dict(response_timeout=low & 1, response_crc_error=low >> 1 & 1, response_error=low >> 2 & 1, command_done=low >> 3 & 1,
+                                                    other_error=low >> 4 & 1))
+
+
+def stop_fields_restart(w):
+    """The stop word of a restart that failed (probe reason 17): fault line 10 bits, why 2, platform stage 5 (above 8 bits), then the first register the adapter
+    refused (SMHC offset / 4 + 1, 0xff another address, 0 none) in the low byte, the core's setup step in bits 10:8 and its restart step in bits 13:11."""
+    return dict(fault_line=w >> 22 & 1023, why=w >> 20 & 3, platform_stage=w >> 15 & 31, refused=w & 255, refused_offset=((w & 255) - 1) * 4 if 0 < (w & 255) < 0xff else None,
+                setup_step=w >> 8 & 7, restart_step=w >> 11 & 7)
 
 
 def stop_fields(w):
@@ -48,7 +58,7 @@ def stop_fields(w):
                 card_at_1v8=w >> 8 & 1, crc_fold=hex(w & 255))
 
 
-UHS_OUTCOMES = ('none', 'sdr104', 'host', 'declined', 'no_sdr104', 'no_window', 'limited_to_sdr25')
+UHS_OUTCOMES = ('none', 'sdr104', 'host', 'declined', 'no_sdr104', 'no_window', 'limited_to_sdr25', 'sdr50')
 
 
 def bank_level(pow_val):
@@ -100,7 +110,9 @@ def decode(raw, requested):
                              card_clock_hz=u[14], module_clock_hz=u[15])
     st = [struct.unpack_from('<4Q4I', raw, OFFSET['stat'] + 48 * p) for p in range(8)]
     out['phases'] = [dict(phase=p, requests=x[4], mean_ms=round(x[0] / x[4] / 1000, 3), min_ms=round(x[1] / 1000, 3), max_ms=round(x[2] / 1000, 3),
-                          over_5ms=x[5], over_10ms=x[6], window_s=round(x[3] / 24e6, 4), sum_s=round(x[0] / 1e6, 4)) for p, x in enumerate(st) if x[4]]
+                          over_5ms=x[5], over_10ms=x[6], window_s=round(x[3] / 24e6, 4), sum_s=round(x[0] / 1e6, 4),
+                          stage=dict(timing=x[7] & 3, outcome=UHS_OUTCOMES[x[7] >> 2 & 15] if (x[7] >> 2 & 15) < len(UHS_OUTCOMES) else x[7] >> 2 & 15, sample_delay=x[7] >> 6 & 63,
+                                     window_width=x[7] >> 12 & 127, window_start=x[7] >> 19 & 63, mode_steps=x[7] >> 25 & 7)) for p, x in enumerate(st) if x[4]]
     n = min(out['done'], 512)
     el = struct.unpack_from(f'<{n}I', raw, OFFSET['elapsed']); crc = struct.unpack_from(f'<{n}I', raw, OFFSET['crc'])
     win, nbytes = struct.unpack_from('<2Q', raw, 64)
@@ -119,7 +131,7 @@ def main():
     i = sub.add_parser('input')
     i.add_argument('--output', type=Path, required=True)
     i.add_argument('--ranges', nargs='+', required=True, help='FIRST:COUNT pairs, for example 0:1 32768:2')
-    i.add_argument('--uhs-mode', type=int, default=0, choices=(0, 1, 2, 3), help='0 high speed with S18A observed, 1 UHS-I lifetime 1, 2 UHS-I lifetime 2, 3 re-entry then SDR104 with tuning')
+    i.add_argument('--uhs-mode', type=int, default=0, choices=(0, 1, 2, 3, 4, 5), help='5 CMD11 from 3.3 V, then the mode ladder (SDR104, SDR50, SDR25) with tuning; 0 high speed with S18A observed, 1 UHS-I lifetime 1, 2 UHS-I lifetime 2, 3 re-entry then SDR104 with tuning, 4 mode 3 with a restart of the identification between phases (phase 1 same ceiling, 2 SDR50, 3 SDR25)')
     i.add_argument('--reads', type=int, default=1)
     i.add_argument('--phase', action='append', default=[], metavar='FIRST_SECTOR:BLOCKS:READS[:quick]', help='one phase of a multi-phase plan (up to 8), run in order in one lifetime')
     i.add_argument('--blocks', type=int, default=8)
@@ -132,7 +144,7 @@ def main():
     k.add_argument('--esr', type=lambda x: int(x, 0), required=True)
     a = p.parse_args()
     if a.cmd == 'stop':
-        print(json.dumps(dict(reason=a.site, **(stop_fields_identification(a.esr) if a.site == 3 else stop_fields(a.esr))), indent=1)); return
+        print(json.dumps(dict(reason=a.site, **(stop_fields_identification(a.esr) if a.site == 3 else stop_fields_restart(a.esr) if a.site == 17 else stop_fields(a.esr))), indent=1)); return
     sectors = sorted({s for r in a.ranges for s in range(int(r.split(':')[0]), int(r.split(':')[0]) + int(r.split(':')[1]))})
     if a.cmd == 'input':
         with a.output.open('xb') as f:

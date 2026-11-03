@@ -135,7 +135,7 @@ static void command(struct model *m, uint32_t cmd)
     m->data_command = 0; m->fifo_total = m->fifo_pos = 0;
     switch (n) {
     case 0:
-        assert(cmd & (1u << 15)); assert(arg == 0); m->state = 0; break;
+        assert(cmd & (1u << 15)); assert(arg == 0); m->state = 0; m->selected = 0; m->ocr_calls = 0; m->app = 0; break;   /* a reset card is idle and unselected */
     case 8:
         if (m->kind == SUNXI_MMC_SD) {
             assert(!m->state && arg == 0x1aa && !(cmd & (1u << 9)));
@@ -300,7 +300,7 @@ static void identified(struct model *m, struct sunxi_mmc *h, unsigned kind, unsi
     assert(m->cmd16 == !sector && h->card.sector_addressed == sector);
     assert(m->reg[0x5c/4] == 0x01710000 && m->reg[0x10c/4] == 0x1234);
     assert(m->reg[0x54/4] == 0x12345673 && m->reg[0x104/4] == 6);
-    assert(m->reg[0x140/4] == 0xa5a70000 && m->reg[0x144/4] == 0x80);
+    assert(m->reg[0x140/4] == 0xa5a50000 && m->reg[0x144/4] == 0x80);   /* the vendor 400 kHz row: command drive 180 (bit 16), data drive 90 (bit 17 clear) */
     assert(m->reg[0x80/4] == 0 && m->reg[0x8c/4] == 0 && m->reg[0xc/4] == 0);
     assert(m->reset_pending_reads&&m->update_pending_reads);
 }

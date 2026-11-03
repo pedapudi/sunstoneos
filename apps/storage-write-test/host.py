@@ -17,6 +17,22 @@ TAG = 0x5357544553544f4b
 COUNTER_HZ = 24_000_000
 
 
+MODE_NAMES = {(1, 3): 'SDR104', (1, 2): 'SDR50', (1, 1): 'SDR25', (1, 0): 'SDR12', (0, 1): 'high speed', (0, 0): 'default speed'}
+
+
+def decode_mode(w):
+    """The bus speed mode words of the SD owner (apps/os/large_sd.c, os_sd_mode): timing in 7:4, 1.8 V in bit 8, the UHS-I outcome in 15:12, mode steps in
+    23:20, ceiling in 31:28, re-entry in bit 32, a second opening because the card was found at 1.8 V in bit 36, recovery restarts in 47:40; the card clock;
+    sample delay, window start and width, group 1 support bits and S18A; the first four steps (from, to, reason)."""
+    if not w[0] & 1:
+        return None
+    timing, v18 = w[0] >> 4 & 15, w[0] >> 8 & 1
+    steps = [dict(frm=w[3] >> (8 * i) & 3, to=w[3] >> (8 * i + 2) & 3, reason=w[3] >> (8 * i + 4) & 15) for i in range(min(4, w[0] >> 20 & 15))]
+    return dict(mode=MODE_NAMES.get((v18, timing), (v18, timing)), signal_1v8=bool(v18), outcome_code=w[0] >> 12 & 15, mode_steps=w[0] >> 20 & 15, ceiling=w[0] >> 28 & 15,
+                reentered=bool(w[0] >> 32 & 1), reopened=bool(w[0] >> 36 & 1), restarts=w[0] >> 40 & 255, card_hz=w[1], sample_delay=w[2] & 255, window_start=w[2] >> 8 & 255,
+                window_width=w[2] >> 16 & 255, group1_support=hex(w[2] >> 24 & 255), s18a=bool(w[2] >> 32 & 1), steps=steps)
+
+
 def mode_input(mode=0, cut_bytes=0):
     return struct.pack('<IIQ', mode, 0, cut_bytes).ljust(4096, b'\0')
 
@@ -32,6 +48,9 @@ def decode(payload):
     out.update(zip(TAIL, struct.unpack_from('<%dQ' % len(TAIL), payload, offset)))
     offset += 8 * len(TAIL)
     out['irq_entries'] = list(struct.unpack_from('<8I', payload, offset))
+    offset += 32
+    out['mode_words'] = list(struct.unpack_from('<4Q', payload, offset))
+    out['sd_mode'] = decode_mode(out['mode_words'])
     if out['tag'] != TAG:
         raise ValueError('storage-write result has the wrong tag.')
     out['irq_stray'] = out['irq_cores'] >> 32
