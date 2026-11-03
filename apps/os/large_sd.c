@@ -577,6 +577,7 @@ static int hw_enable_writes(const uint8_t *blob, size_t bytes)
     if (!a733_storage_bounds_parse(&bounds, blob_copy, bytes)) return DIAG(22, bytes);
     os_sd_diag[3] = 0;                               /* count the verify reads */
     if (!a733_storage_bounds_verify(&bounds, bounds_read, NULL)) return DIAG(23, bounds.state);
+    if (!a733_storage_bounds_card_is(&bounds, card.cid)) return DIAG(25, card.cid[3]);          /* the bounds were made for another card: nothing is writable */
     if (!a733_mmc_platform_native_bind_bounds(&native, &platform, &bounds)) return DIAG(24, 0);
     return 1;
 }

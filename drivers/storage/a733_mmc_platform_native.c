@@ -237,7 +237,7 @@ int a733_mmc_platform_native_bind_bounds(struct a733_mmc_platform_native *n,cons
      * an SD card addressed by sector, behind this very binding, with a verified bounds object. */
     if(!n||!n->initialized||n->bounds||n->kind!=SUNXI_MMC_SD||!b||b->state!=A733_BOUNDS_VERIFIED||!current(n)||
        !p||p->cookie!=n||p->config.kind!=n->kind||!p->core.card.sectors||
-       !a733_storage_bounds_card_ok(b,p->config.kind==SUNXI_MMC_SD,p->core.card.sector_addressed))return 0;
+       !a733_storage_bounds_card_ok(b,p->config.kind==SUNXI_MMC_SD,p->core.card.sector_addressed,p->core.card.cid))return 0;
     n->bounds=b;return 1;
 }
 #endif

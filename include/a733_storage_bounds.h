@@ -8,10 +8,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define A733_BOUNDS_MAGIC "SSBW0002"
+#define A733_BOUNDS_MAGIC "SSBW0003"
 /* No copy of the ranges is made: the object keeps a pointer to the blob the runner delivered as the first input and
  * walks the ranges from there, so the only limit is the size of that input. The image keeps the input read-only for as
- * long as the object is used. Ranges are little-endian (first sector, sector count) u64 pairs. */
+ * long as the object is used. Ranges are little-endian (first sector, sector count) u64 pairs. The last 16 bytes of the input are the identity of the
+ * card the bounds were made for: its CID register as the card reports it (the four response words, most significant first, each big-endian). */
 enum a733_bounds_state { A733_BOUNDS_EMPTY, A733_BOUNDS_PARSED, A733_BOUNDS_VERIFIED, A733_BOUNDS_CLOSED };
 struct a733_storage_bounds {
     enum a733_bounds_state state;
@@ -30,6 +31,8 @@ int a733_storage_bounds_parse(struct a733_storage_bounds *, const uint8_t *blob,
 int a733_storage_bounds_verify(struct a733_storage_bounds *, int (*read)(void *, uint64_t sector, uint8_t *out), void *context);
 /* 1 when verified and [first, first + blocks) lies inside one write range. */
 int a733_storage_bounds_allows(const struct a733_storage_bounds *, uint64_t first, uint64_t blocks);
+/* 1 when the blob names this card: its CID words (card.cid of the MMC core, bit 127 in word 0 bit 31) equal the identity in the blob's last 16 bytes. */
+int a733_storage_bounds_card_is(const struct a733_storage_bounds *, const uint32_t cid[4]);
 #include "sunxi_mmc.h"
 #define A733_BOUNDED_WRITE_TOKEN ((uintptr_t)0x42574452u)
 /* The authority for sunxi_mmc_write_dma and a733_mmc_platform_write_dma: admits a request carrying the bounded-writer token whose
@@ -54,8 +57,9 @@ static inline int a733_storage_bounds_cmd25_ok(const struct a733_storage_bounds 
 int a733_storage_bounds_intact(const struct a733_storage_bounds *);
 static inline int a733_storage_bounds_threshold_ok(const struct a733_storage_bounds *b)
 { return b && b->state == A733_BOUNDS_VERIFIED && a733_storage_bounds_intact(b); }
-/* Whether a bounded writer may bind to this card: an SD card (kind 1), addressed by sector (SDHC and SDXC), with a
- * verified object. The register rule above takes the argument as a sector number. */
-static inline int a733_storage_bounds_card_ok(const struct a733_storage_bounds *b, unsigned kind_is_sd, unsigned sector_addressed)
-{ return kind_is_sd && sector_addressed && a733_storage_bounds_threshold_ok(b); }
+/* Whether a bounded writer may bind to this card: an SD card (kind 1), addressed by sector (SDHC and SDXC), whose CID is the one the
+ * bounds name, with a verified object. The register rule above takes the argument as a sector number. */
+static inline int a733_storage_bounds_card_ok(const struct a733_storage_bounds *b, unsigned kind_is_sd, unsigned sector_addressed,
+                                              const uint32_t cid[4])
+{ return kind_is_sd && sector_addressed && a733_storage_bounds_threshold_ok(b) && a733_storage_bounds_card_is(b, cid); }
 #endif
