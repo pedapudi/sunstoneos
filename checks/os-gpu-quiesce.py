@@ -10,7 +10,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP
-from harness import Image, save, skip_crumbs
+from harness import machine as harness_machine, Image, save, skip_crumbs
 
 CASES=('ready','owned-job','recovery','manual-closed','cold','refused-create','pending-create',
        'unconstructed','lost-isolation','deadline','missing-primary-queue',
@@ -36,7 +36,7 @@ with a.image.open('rb') as f:
                 image.layouts['gpu_private']={c.attributes['DW_AT_name'].value.decode():c.attributes['DW_AT_data_member_location'].value for c in typ.iter_children() if c.tag=='DW_TAG_member'}
 rows=[]
 for case in a.case or CASES:
-    u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x41000000,0x1200000);u.mem_map(0x80000000,0x20000)
+    u=harness_machine();u.mem_map(0x41000000,0x1200000);u.mem_map(0x80000000,0x20000)
     for address,data in image.parts:
         if data:u.mem_write(address,data)
     skip_crumbs(u,image)

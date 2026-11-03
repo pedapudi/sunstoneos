@@ -13,6 +13,7 @@ BaseType_t xTaskGenericNotify(TaskHandle_t task,UBaseType_t index,uint32_t value
     else {assert(task==npu.bootstrap);++bootstrap_events;}
     return pdPASS;
 }
+void os_application_wake_main(void){}   /* the application's end wait (apps/os/application.c); no application runs here */
 void board_fail_note(uint32_t site,uint32_t value,const void *where)
 {assert(site);(void)value;(void)where;}
 void board_fail(void *unused){assert(!unused);++failures;}

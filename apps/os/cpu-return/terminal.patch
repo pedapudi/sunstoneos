@@ -22,7 +22,7 @@
      add x25, x25, #63
      and x25, x25, #-64
      mov x2, #0x42000000
-@@ -229,6 +233,16 @@
+@@ -229,8 +233,21 @@
      // Linker RAM is mapped by 2MiB blocks. Require the NS bit, WB index1,
      // inner-shareable field and access flag before cleaning each block.
      address x26, a733_cached_el3_l2
@@ -38,11 +38,39 @@
 +    mov x28, #0
  .Lclean:
      check_time
++    mov x2, #0x80000000
++    cmp x24, x2
++    b.hs .Lclean_upper
      mov x2, #0x40000000
-@@ -248,6 +262,74 @@
+     sub x2, x24, x2
+     lsr x2, x2, #21
+@@ -244,10 +261,97 @@
+     mov x4, #0x725
+     cmp x3, x4
+     b.ne qualification_park
++.Lclean_line:
+     dc civac, x24
      add x24, x24, #64
      cmp x24, x25
      b.lo .Lclean
++    b .Lnext_region
++.Lclean_upper:
++    // Memory from 0x80000000 is mapped by 1 GiB blocks of the EL3 level-1 table (slots 2 to 12, installed to 0x340000000).
++    // The block must be this gigabyte's, with the same NS, write-back, inner-shareable and access-flag bits as a level-2 block.
++    lsr x2, x24, #30
++    cmp x2, #13
++    b.hs qualification_park
++    address x3, a733_cached_el3_l1
++    ldr x3, [x3, x2, lsl #3]
++    ubfx x4, x3, #30, #18
++    cmp x4, x2
++    b.ne qualification_park
++    mov x4, #0x73f
++    and x3, x3, x4
++    mov x4, #0x725
++    cmp x3, x4
++    b.ne qualification_park
++    b .Lclean_line
 +.Lnext_region:
 +    cbz x28, .Lclean_finished
 +    sub x28, x28, #1
@@ -114,7 +142,7 @@
      dsb sy
      add x2, x23, #688
      add x2, x2, x20, lsl #10
-@@ -369,9 +447,40 @@
+@@ -369,9 +473,40 @@
      dsb sy
      str x1, [x2, #40]
      dsb sy

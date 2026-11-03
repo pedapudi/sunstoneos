@@ -22,6 +22,7 @@ int npu_service_runtime_parked(const struct npu_service *service)
 {assert(service==&npu.runtime.service);return 1;}
 int board_live(void *context){assert(!context);return (int)live_value;}
 uint32_t board_live_refusal(void){return live_value?0:UINT32_C(1)<<28;}
+void os_application_wake_main(void){}   /* the application's end wait (apps/os/application.c); no application runs here */
 void board_fail_note(uint32_t site,uint32_t value,const void *caller)
 {if(!first_site){first_site=site;first_value=value;first_caller=caller;}}
 void board_fail(void *context){assert(!context);++board_failures;live_value=0;}

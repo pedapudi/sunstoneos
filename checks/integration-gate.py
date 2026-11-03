@@ -26,7 +26,7 @@ class GateTests(unittest.TestCase):
         self.sandbox = Path(tempfile.mkdtemp(prefix='gate-', dir=OUTPUT))
         self.calls = self.sandbox / 'calls.jsonl'
         self.env = dict(os.environ, GATE_TEST_CALLS=str(self.calls), GATE_TEST_TIMES=str(self.sandbox / 'times.jsonl'),
-                        PYTHONDONTWRITEBYTECODE='1')
+                        PYTHONDONTWRITEBYTECODE='1', SUNSTONE_HOST_SPACE='off')   # a sandbox in a scratch directory (tools/host_space.py)
         self.env.pop('EXAMPLE_DIR', None)
         self.env.pop('SUNSTONE_EXTERNAL_APPLICATIONS', None)
         # These tools only record arguments. No build, emulator or device is used.
@@ -90,6 +90,7 @@ def plan(value=None, changed=None, index=None):
         checks.append({'check': 'pre-push-hook.py', 'status': 'runnable', 'needs': [], 'output': True})
     return {'baseline': 'sup', 'range': value, 'changed': changed, 'checks': checks}
 ''')
+        (selector.parent / 'gate-inputs.json').write_text('{"images": {}, "bundles": {}, "checks": {}, "board": [], "waived": {}}\n')
         (selector.parent / 'pre-push-hook.py').write_text('CHECK_INPUTS = ("untracked-hook-input.txt",)\nprint("fake hook fixture")\n')
         hook = source / 'tools/git-hooks/pre-push'
         hook.parent.mkdir(parents=True)
@@ -560,7 +561,7 @@ exec "$REAL" "$@"
         self.assertIn('other-image', central)
         self.assertNotIn('clean', central)
         self.assertNotIn('ignored.o', central)
-        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 15)  # core, example and thirteen OS variants
+        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 16)  # core, example and fourteen OS variants
         application = next(c for c in calls if c[0] == 'cmake' and 'smp-example-model' in c)
         # The fake lists the same targets in both builds; example builds only its own.
         self.assertEqual(application[application.index('--target') + 1:],
@@ -580,7 +581,7 @@ exec "$REAL" "$@"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.records()
         self.assertFalse(any('smp-example-model' in call for call in calls))
-        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 14)  # core and thirteen OS variants
+        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 15)  # core and fourteen OS variants
         self.assertTrue(all('-DEXAMPLE_DIR=' in c for c in calls if c[0] == 'cfg.sh'))
 
     def test_external_change_during_steps_fails(self):
