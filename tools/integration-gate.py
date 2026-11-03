@@ -347,7 +347,10 @@ def main(argv=None):
         for name in classified['supplied']:
             for run_ in inputs['checks'][name]['runs']:
                 for kind, image in placeholders(run_['args']):
-                    if kind == 'bundle':
+                    if kind == 'fixture':
+                        if image not in inputs['fixtures']:
+                            parser.error('%s names the unknown fixture %s' % (name, image))
+                    elif kind == 'bundle':
                         if image not in inputs['bundles']:
                             parser.error('%s names the unknown bundle %s' % (name, image))
                     elif image in VARIANTS and image not in variants:
