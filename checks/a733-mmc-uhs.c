@@ -71,6 +71,7 @@ static int uhs_platform_write(void *v, uintptr_t a, uint32_t value)
         /* A command with the bank at 1.8 V (selector written) and a card still signalling 3.3 V would drive 3.3 V into the bank. */
         if (a == s->platform.base + 0x18 && (value & (1u << 31)) && !(value & (1u << 21)) && u.bank >= 1 && u.bank <= 2 && u.phase == 0)
             ++commands_at_mismatch;
+        if (a == s->platform.base + 0x30 || a == s->platform.base + 0x38) *pmic_model_word(&s->power, 0x03400218) &= ~2u;     /* the controller's reset and the clear of its status deassert the line */
         return uhs_write(&u, (uint32_t)(a - s->platform.base), value);
     }
     if (a == 0x03400198) { assert(value == 2u); *pmic_model_word(&s->power, 0x03400118) &= ~value; return 1; }
@@ -179,6 +180,7 @@ static void write_fault(uint8_t *buffer, enum sunxi_mmc_error error)
     c->state = SUNXI_MMC_FAULT; c->result.error = error; c->writing = 1; c->dma_write = 1; c->borrowed = buffer; c->borrowed_bytes = 512;
     c->protocol = 27; c->result.interrupts = 0x8080u;               /* a data CRC error and an end-bit error, as a CRC status failure raises them */
     u.prog_busy = 1;                                                /* the card is left programming, with DAT0 low, until the restart resets it with CMD0 */
+    if (m.platform.irq_mode) *pmic_model_word(&m.power, 0x03400218) |= 2u;                  /* the owner masked INTID 193, but the status that raised it still asserts the line: pending until the status is cleared */
     enum a733_mmc_platform_result r = uhs_step();
     assert(r == A733_MMC_ERROR && m.platform.stage == 15 && !m.platform.fault);
 }

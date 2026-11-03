@@ -229,6 +229,7 @@ runtime_mutations = [
     ('irq-mode-not-left-after-fault', 'drivers/storage/a733_mmc_platform.c', 'if(p&&p->initialized&&!enable){p->irq_mode=0;return 1;}', ''),
     ('writes-not-recoverable', 'drivers/storage/sunxi_mmc.c', 'h->state == SUNXI_MMC_FAULT && h->config.kind == SUNXI_MMC_SD &&', 'h->state == SUNXI_MMC_FAULT && !h->writing && h->config.kind == SUNXI_MMC_SD &&'),
     ('setup-clock-update-unmasked', 'drivers/storage/sunxi_mmc.c', '!wr(h, 4, (1u << 16) | MASK_DAT0) || !fence(h) || !wr(h, 0x18, UPDATE)', '!wr(h, 4, 1u << 16) || !fence(h) || !wr(h, 0x18, UPDATE)'),
+    ('restart-pending-fatal', 'drivers/storage/a733_mmc_platform.c', 'return masked_pending(p,p->core.restart!=0);', 'return masked_pending(p,0);'),
     ('restart-forgets-1v8', 'drivers/storage/sunxi_mmc.c', 'fresh.reenter = h->card.signal_1v8;', 'fresh.reenter = 0;'),
     ('restart-keeps-mode-ceiling', 'drivers/storage/sunxi_mmc.c', 'fresh.ceil1 = (uint8_t)(ceiling + 1);', 'fresh.ceil1 = 0;'),
 ]
