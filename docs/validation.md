@@ -193,9 +193,9 @@ the option that receives each check's new output directory. Every other check
 that reaches a device keeps its USB classification and is reported as PENDING;
 a name in `HOST_ONLY` that is not pure-host fails `check-index.py --verify`.
 
-The host's existing `~/.cache/sunstoneos/bin/integration-gate.sh SOURCE LABEL`
-command delegates to this repository tool and accepts the same selection
-options. Host dependency configuration remains in `~/.cache/sunstoneos/bin/cfg.sh`.
+Run the gate as `python3 tools/integration-gate.py SOURCE LABEL`; it takes the
+host-wide gate lock itself. `tools/configure.py` holds the host dependency
+configuration.
 `--build-root` selects a separate directory for new builds and gate evidence.
 The gate builds and checks software only; board runs remain separately queued.
 

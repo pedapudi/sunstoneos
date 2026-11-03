@@ -95,7 +95,7 @@ def main():
         run([a.linker, '-T', root / 'platform/qemu-smp/link.ld', '--gc-sections',
              '-Map=' + str(case_dir / 'gpu-call.map'), *linked, '-o', elf])
         command = [a.qemu, '-machine', 'virt,gic-version=3,secure=off,virtualization=off',
-                   '-cpu', 'cortex-a55', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
+                   '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a55', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
                    '-semihosting-config', 'enable=on,target=native', '-kernel', elf]
         output = run(command, timeout=15)
         (case_dir / 'run.log').write_text(output)

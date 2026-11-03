@@ -1055,6 +1055,25 @@ def finish_result(result, evidence, started, stage):
     return summary
 
 
+def result_summary(result, limit=1500):
+    """The lines a waiting `submit --wait` prints: outcome, stage, first failure and the decoded application summary."""
+    def short(value):
+        text = json.dumps(value, sort_keys=True)
+        return text if len(text) <= limit else text[:limit] + f'... ({len(text)} bytes of JSON in the result)'
+    lines = [f"outcome: {result.get('outcome')}", f"stage: {result.get('stage')}",
+             'first failure: ' + (short(result['first_failure']) if result.get('first_failure') else 'none')]
+    if 'decoded' in result:
+        decoded = result['decoded']
+        if isinstance(decoded, dict) and 'passed' in decoded:
+            lines.append(f"passed: {decoded['passed']}")
+        lines.append('decoded: ' + short(decoded))
+    else:
+        lines.append('decoded: none (no decoder, or the image did not return a result)')
+    if result.get('decoder_failures'):
+        lines.append('decoder failures: ' + short(result['decoder_failures']))
+    return lines
+
+
 def check_image(args):
     """Apply launch admission and prepare uploads without constructing a USB owner."""
     descriptor = args.descriptor or Path(str(args.image)+'.board.json')
@@ -1734,7 +1753,11 @@ def main(argv=None):
     run_options(submit,True)
     submit.add_argument('--worker',required=True)
     submit.add_argument('--hypothesis',required=True)
-    submit.add_argument('--no-wait',action='store_true')
+    waiting = submit.add_mutually_exclusive_group()
+    waiting.add_argument('--no-wait',action='store_true',help='Print the result path without waiting for the result.')
+    waiting.add_argument('--wait',action='store_true',
+                         help='Wait for the result, then print its outcome, stage, first failure and decoded summary before the path; '
+                              'exit 0 only for a returned image.')
     commands.add_parser('status')
     watch = commands.add_parser('watch')
     watch.add_argument('entry',nargs='?',help='Entry ID to wait for, or display status on changes.')
@@ -1761,8 +1784,17 @@ def main(argv=None):
         job = queue.submit(args)
         path = Path(job['result_path'])
         if not args.no_wait:
-            while not path.exists():
-                time.sleep(.2)
+            try:
+                while not path.exists():
+                    time.sleep(.2)
+            except KeyboardInterrupt:
+                print(f"still queued: {job['id']} (board.py watch {job['id']}); result will be {path}",file=sys.stderr)
+                return 130
+        if args.wait:
+            result = json.loads(path.read_text())
+            print('\n'.join(result_summary(result)))
+            print(path)
+            return 0 if result.get('outcome')=='returned' and not result.get('decoder_failures') else 1
         print(path)
     elif args.command=='status':
         print(json.dumps(queue.status(),indent=2))
