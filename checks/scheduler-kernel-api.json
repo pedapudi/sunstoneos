@@ -282,7 +282,7 @@
       "definition_route": "traceENTER_vTaskEnterCritical();",
       "definition_helpers": [
         "ssKernelCPUId",
-        "ssKernelObjectEnter"
+        "ssKernelObjectEnterFor"
       ]
     },
     {

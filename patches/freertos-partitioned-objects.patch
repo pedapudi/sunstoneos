@@ -70,7 +70,7 @@
 +
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +#define SS_FREERTOS_OBJECT_TRANSLATION 1
-+#define SS_FREERTOS_OBJECT_EXPR ( &xTimerQueue )
++#define SS_FREERTOS_OBJECT_GLOBAL 1
 +#include "freertos.h"
 +#endif
  #include "queue.h"

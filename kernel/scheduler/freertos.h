@@ -21,17 +21,28 @@ BaseType_t ssKernelOwnerIRQExit(void);
 void ssKernelOwnerYield(void);
 void ssKernelOwnerYieldTail(void);
 #ifdef SS_FREERTOS_OBJECT_TRANSLATION
-/* Object sources lock the object they work on and nothing else, so operations on different objects do not wait
- * for each other. The public critical-section API keeps its global locks and does not exclude them. */
 #undef taskENTER_CRITICAL
 #undef taskEXIT_CRITICAL
 #undef taskENTER_CRITICAL_FROM_ISR
 #undef taskEXIT_CRITICAL_FROM_ISR
+#ifdef SS_FREERTOS_OBJECT_GLOBAL
+/* The timer source keeps the global locks: its sections enclose queue creation and queue sections, so they sit
+ * outside the object locks in the lock order. */
+#define taskENTER_CRITICAL() ssKernelObjectEnter()
+#define taskEXIT_CRITICAL() ssKernelObjectExit()
+#define taskENTER_CRITICAL_FROM_ISR() ssKernelObjectEnterFromISR()
+#define taskEXIT_CRITICAL_FROM_ISR(mask) ssKernelObjectExitFromISR(mask)
+#define vTaskSuspendAll() ssKernelObjectSuspend()
+#define xTaskResumeAll() ssKernelObjectResume()
+#else
+/* Object sources lock the object they work on and nothing else, so operations on different objects do not wait
+ * for each other. The public critical-section API keeps its global locks and does not exclude them. */
 #define taskENTER_CRITICAL() ssKernelObjectEnterOn((const void *)(SS_FREERTOS_OBJECT_EXPR))
 #define taskEXIT_CRITICAL() ssKernelObjectLeave()
 #define taskENTER_CRITICAL_FROM_ISR() ssKernelObjectEnterFromISROn((const void *)(SS_FREERTOS_OBJECT_EXPR))
 #define taskEXIT_CRITICAL_FROM_ISR(mask) ssKernelObjectLeaveFromISR(mask)
 #define vTaskSuspendAll() ssKernelObjectSuspendOn((const void *)(SS_FREERTOS_OBJECT_EXPR))
 #define xTaskResumeAll() ssKernelObjectResumeOn()
+#endif
 #endif
 #endif

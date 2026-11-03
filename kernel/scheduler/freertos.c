@@ -907,6 +907,7 @@ static UBaseType_t ssDonationEnter(void)
 static void ssDonationLeave(UBaseType_t irq)
 {
     ssTicketRelease(&ssDonation.lock);
+    ssKernelFlush(); /* publishes a donation repair now unless an enclosing section does it at its exit */
     portCLEAR_INTERRUPT_MASK(irq);
 }
 
@@ -1285,6 +1286,10 @@ static BaseType_t ssKernelOwnerIRQExitWork(void)
  * interrupted code's value, because the exit path has not changed it. */
 BaseType_t ssKernelOwnerIRQExit(void)
 {
+#if !defined(__aarch64__)
+    /* The host fixture has no priority mask, so the exit work runs as it did before the mask guard existed. */
+    return ssKernelOwnerIRQExitWork();
+#else
     uint64_t pmr;
     __asm__ volatile("mrs %0, icc_pmr_el1" : "=r"(pmr));
     if (pmr <= portMAX_API_PRIORITY_MASK) { SS_OWNER_COUNT(exit_skipped); SS_OWNER_PENDING(); return 2; } /* tells the exit path not to switch tasks */
@@ -1302,6 +1307,7 @@ BaseType_t ssKernelOwnerIRQExit(void)
     ssOwnerSpan(begin, false);
     if (result == pdTRUE) SS_OWNER_COUNT(exit_raised);
     return result;
+#endif
 }
 static BaseType_t ssKernelTick(void)
 {

@@ -603,22 +603,22 @@ int main(int argc, char **argv)
     fixture_cpu = 0;
     List_t event;
     vListInitialise(&event);
-    ssKernelObjectEnter();
+    ssKernelObjectEnterOn(&event);
     vTaskPlaceOnEventList(&event, 4);
-    ssKernelObjectExit();
+    ssKernelObjectLeave();
     enter(0);
     fixture_cpu = 1;
-    UBaseType_t irq = ssKernelObjectEnterFromISR();
+    UBaseType_t irq = ssKernelObjectEnterFromISROn(&event);
     (void)xTaskRemoveFromEventList(&event);
-    ssKernelObjectExitFromISR(irq);
+    ssKernelObjectLeaveFromISR(irq);
     enter(0);
     assert(pxCurrentTCBs[0] == task && listLIST_IS_EMPTY(&event));
     assert(!record(task)->event_reference.descriptor);
     assert(!record(task)->deadline.owner);
     /* Timeout removes an event registration before making the task ready. */
-    ssKernelObjectEnter();
+    ssKernelObjectEnterOn(&event);
     vTaskPlaceOnEventList(&event, 1);
-    ssKernelObjectExit();
+    ssKernelObjectLeave();
     enter(0);
     (void)xTaskIncrementTick();
     enter(0);
