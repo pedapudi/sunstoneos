@@ -146,7 +146,7 @@ void qemu_main(void) {{
         for index, case in enumerate(cases):
             label = suite + '-' + case
             log = run(label, [a.qemu, '-machine', 'virt,gic-version=3,secure=off,virtualization=off',
-                              '-cpu', 'cortex-a55', '-smp', '1', '-m', '128M', '-nographic', '-monitor', 'none',
+                              '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a55', '-smp', '1', '-m', '128M', '-nographic', '-monitor', 'none',
                               '-semihosting-config', 'enable=on,target=native', '-kernel', image,
                               '-device', f'loader,addr=0x47fff000,data={index},data-len=4'])
             assert 'PASS QEMU PCIe assertions' in log, label

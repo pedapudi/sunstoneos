@@ -164,7 +164,7 @@ target_compile_options(dma-copy-cached PRIVATE ${{options}} -mgeneral-regs-only)
             'clang_sha256': sha(Path(shutil.which('clang', path=environment['PATH'])).resolve())}, indent=2) + '\n')
         if not args.build_only:
             output = run('execute', [str(args.qemu.resolve()), '-machine', 'virt,gic-version=3',
-                '-cpu', 'cortex-a53', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
+                '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a53', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
                 '-semihosting-config', 'enable=on,target=native', '-kernel', str(binary)], timeout=30)
             if 'PASS DMA pool session:' not in output:
                 raise RuntimeError('missing selected composition result')
