@@ -23,7 +23,7 @@ extern struct { uint64_t epoch, startup_deadline, diagnostic_deadline, redistrib
 #define INTID 27u       /* EL1 virtual timer: the control path */
 #define TASK_INTID 30u  /* EL1 physical timer: the task path (core 0 keeps it for the scheduler tick) */
 #define FIRST_CORE 1u
-#define CORES 6u        /* control cores 1 to 5; index by core */
+#define CORES 8u        /* control cores 1 to 7; index by core */
 #define BINS SS_CONTROL_BINS
 #define TICKS_PER_US 24u
 
@@ -40,17 +40,25 @@ struct path {
     uint64_t count, missed;
     uint32_t seq, latency_max, jitter_max;
     uint32_t latency_bin[BINS], jitter_bin[BINS];
+    /* Task path only: the wake split at the handler. entry = handler start minus the deadline (the time the core
+     * held the interrupt off); gap = task start minus handler start (handler, exit work, switch). */
+    uint32_t entry_max, gap_max;
+    uint32_t entry_bin[BINS], gap_bin[BINS];
 };
 static struct core_state {
     volatile uint32_t requested, armed, stop;
     uint32_t rate_hz, paths;
     struct path control, task;   /* the interrupt handler's samples; the woken task's samples */
     struct worst worst[WORST];
+    struct worst entry_worst[WORST]; /* task path: the largest handler entry delays with the interrupted context */
     struct ss_ring ring;
     uint64_t consumed, gaps;
     uint32_t expected;
     TaskHandle_t task_handle;
     uint64_t fired_deadline;     /* the deadline whose interrupt woke the task */
+    uint64_t fired_entry;        /* the counter value at that interrupt's handler start */
+    uint64_t fired_l1, fired_l2; /* L1D and L2D refill counts at that handler start */
+    uint64_t refill_n[2], refill_l1[2], refill_l2[2]; /* by gap class: 0 at most 10 us, 1 longer: wakes and refills during the gap */
 } __attribute__((aligned(64))) state[CORES];
 
 static inline uint64_t counter(void)
@@ -69,9 +77,7 @@ static inline void program_task(uint64_t compare, uint64_t control)
 }
 static inline unsigned this_core(void)
 {
-    uint64_t mpidr;
-    __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
-    return (unsigned)((mpidr >> 8) & 0xffu); /* the A733 numbers cores in affinity level 1 */
+    return (unsigned)portGET_CORE_ID(); /* the kernel's own core number; the A76 cores do not number themselves in affinity level 1 */
 }
 
 /* Record one entry of a path: latency against the deadline it served, jitter against the previous entry. */
@@ -106,6 +112,12 @@ static void arm(struct core_state *s)
     s->control.last_entry = s->task.last_entry = 0;
     if (s->paths & 1u) program(s->control.deadline, 1);
     if (s->paths & 2u) program_task(s->task.deadline, 1);
+    /* Count L1D (0x03) and L2D (0x17) refills in counters 0 and 1, readable from EL0, for the wake's gap. */
+    {
+        uint64_t en;
+        __asm__ volatile("msr pmevtyper0_el0, %0\n msr pmevtyper1_el0, %1\n msr pmuserenr_el0, %2\n mrs %3, pmcntenset_el0\n orr %3, %3, #3\n msr pmcntenset_el0, %3\n mrs %3, pmcr_el0\n orr %3, %3, #1\n msr pmcr_el0, %3\n isb"
+                         :: "r"((uint64_t)0x03), "r"((uint64_t)0x17), "r"((uint64_t)1), "r"(en) : "memory");
+    }
     s->armed = 1;
 }
 
@@ -164,7 +176,24 @@ static void handle_task_path(struct core_state *s)
     const unsigned missed = advance(&s->task, now, &served);
     program_task(s->task.deadline, 1);
     s->fired_deadline = served;
+    s->fired_entry = now;
+    __asm__ volatile("mrs %0, pmevcntr0_el0\n mrs %1, pmevcntr1_el0" : "=r"(s->fired_l1), "=r"(s->fired_l2));
     s->task.missed += missed;
+    {
+        const uint64_t late = now - served;
+        const uint32_t entry = late > 0xffffffffu ? 0xffffffffu : (uint32_t)late;
+        ++s->task.entry_bin[entry / SS_CONTROL_BIN_TICKS < BINS ? entry / SS_CONTROL_BIN_TICKS : BINS - 1u];
+        if (entry > s->task.entry_max) s->task.entry_max = entry;
+        unsigned low = 0;
+        for (unsigned i = 1; i < WORST; ++i) if (s->entry_worst[i].latency < s->entry_worst[low].latency) low = i;
+        if (entry > s->entry_worst[low].latency) {
+            struct worst *w = &s->entry_worst[low];
+            uint64_t pmr, rpr;
+            __asm__ volatile("mrs %0, icc_pmr_el1\n mrs %1, icc_rpr_el1\n mrs %2, elr_el1\n mrs %3, spsr_el1\n mrs %4, tpidrro_el0"
+                             : "=r"(pmr), "=r"(rpr), "=r"(w->elr), "=r"(w->spsr), "=r"(w->task));
+            w->latency = entry; w->pmr = (uint32_t)pmr; w->rpr = rpr; w->nesting = ullCriticalNestings[this_core()]; w->when = now;
+        }
+    }
     BaseType_t woken = pdFALSE;
     if (s->task_handle) vTaskNotifyGiveFromISR(s->task_handle, &woken);
     portYIELD_FROM_ISR(woken);
@@ -178,6 +207,16 @@ static void task_path(void *argument)
         const uint64_t now = counter();
         if (s->stop) continue;
         const uint64_t deadline = s->fired_deadline;
+        {
+            const uint64_t gap = now - s->fired_entry;
+            const uint32_t g = gap > 0xffffffffu ? 0xffffffffu : (uint32_t)gap;
+            ++s->task.gap_bin[g / SS_CONTROL_BIN_TICKS < BINS ? g / SS_CONTROL_BIN_TICKS : BINS - 1u];
+            if (g > s->task.gap_max) s->task.gap_max = g;
+            uint64_t l1, l2;
+            __asm__ volatile("mrs %0, pmevcntr0_el0\n mrs %1, pmevcntr1_el0" : "=r"(l1), "=r"(l2));
+            const unsigned k = g > 240u ? 1u : 0u;
+            ++s->refill_n[k]; s->refill_l1[k] += (uint32_t)(l1 - s->fired_l1); s->refill_l2[k] += (uint32_t)(l2 - s->fired_l2);
+        }
         record(&s->task, now, deadline, 0);
     }
 }
@@ -274,9 +313,29 @@ unsigned ulSunstoneControlStatsRead(unsigned core, unsigned path, struct ss_cont
 }
 const uint32_t *ulSunstoneControlHistogram(unsigned core, unsigned path, unsigned kind)
 {
-    if (core < FIRST_CORE || core >= FIRST_CORE + CORES - 1u || path > 1u || kind > 1u) return 0;
+    if (core < FIRST_CORE || core >= FIRST_CORE + CORES - 1u || path > 1u || kind > (path ? 3u : 1u)) return 0;
     const struct path *p = path ? &state[core].task : &state[core].control;
-    return kind ? p->jitter_bin : p->latency_bin;
+    switch (kind) {
+    case 0: return p->latency_bin;
+    case 1: return p->jitter_bin;
+    case 2: return p->entry_bin;
+    default: return p->gap_bin;
+    }
+}
+/* Rank r (0 largest) of the task path's handler entry delays with the interrupted context. */
+unsigned ulSunstoneTaskEntryWorst(unsigned core, unsigned rank, struct ss_control_worst *out)
+{
+    if (core < FIRST_CORE || core >= FIRST_CORE + CORES - 1u || rank >= WORST || !state[core].rate_hz) return 0;
+    const struct worst *copy[WORST];
+    for (unsigned i = 0; i < WORST; ++i) copy[i] = &state[core].entry_worst[i];
+    for (unsigned i = 0; i < WORST; ++i)
+        for (unsigned j = i + 1; j < WORST; ++j)
+            if (copy[j]->latency > copy[i]->latency) { const struct worst *t = copy[i]; copy[i] = copy[j]; copy[j] = t; }
+    const struct worst *w = copy[rank];
+    if (!w->latency) return 0;
+    out->latency_ns = w->latency * 1000u / TICKS_PER_US; out->pmr = w->pmr; out->elr = w->elr; out->spsr = w->spsr;
+    out->rpr = w->rpr; out->task = w->task; out->nesting = w->nesting; out->when_us = w->when / TICKS_PER_US;
+    return 1;
 }
 /* Rank r (0 largest) of the worst control-path latencies of a core; fields in the order of struct ss_control_worst. */
 unsigned ulSunstoneControlWorst(unsigned core, unsigned rank, struct ss_control_worst *out)
@@ -294,6 +353,7 @@ unsigned ulSunstoneControlWorst(unsigned core, unsigned rank, struct ss_control_
     return 1;
 }
 /* Present only in a fork image built with SUNSTONE_OWNER_COUNTERS; the weak copy keeps other images linking. */
+__attribute__((weak)) uint64_t ulSunstonePhase(unsigned cpu, unsigned phase, unsigned field) { (void)cpu; (void)phase; (void)field; return 0; }
 __attribute__((weak)) uint64_t ulSunstoneOwnerCounters(unsigned cpu, unsigned which) { (void)cpu; (void)which; return 0; }
 /* Interrupts of a control core that ended a wfi: count, longest and count over 5 us, and the histogram. */
 unsigned ulSunstoneControlWfi(unsigned core, uint64_t *count, uint64_t *max_ticks, uint64_t *over5, const uint32_t **bins)
@@ -306,3 +366,9 @@ unsigned ulSunstoneControlWfi(unsigned core, uint64_t *count, uint64_t *max_tick
 /* Idle pull diagnostics of the partitioned scheduler; the weak copies keep the stock kernel linking. */
 __attribute__((weak)) unsigned long ulSunstoneIdleWaiting(unsigned core) { (void)core; return 0; }
 __attribute__((weak)) unsigned long ulSunstoneIdlePulls(void) { return 0; }
+/* Mean refills during the gap, by gap class (0 at most 10 us, 1 longer): field 0 count, 1 L1D refills, 2 L2D refills. */
+uint64_t ulSunstoneTaskRefills(unsigned core, unsigned klass, unsigned field)
+{
+    if (core < FIRST_CORE || core >= FIRST_CORE + CORES - 1u || klass > 1u || field > 2u) return 0;
+    return field == 0 ? state[core].refill_n[klass] : field == 1 ? state[core].refill_l1[klass] : state[core].refill_l2[klass];
+}

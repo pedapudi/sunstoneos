@@ -320,7 +320,8 @@ operating points, not from probe images.
 
 1. **Heap from the ledger.** The heap becomes an application region obtained at admission when `heap_bytes` exceeds what is linked, the manifest's cap becomes the ledger's free space, and `runtime/newlib.c` takes the heap base and limit from the region. This has the most application impact for the least risk: heap size is the limit that today fails at link time, the change reuses the large-region ledger and tables that already pass host and QEMU checks, and an image that asks for no heap above the linked size behaves as before. The step also supplies the first board run of the per-application tables.
 2. **Planner and layout record**, producing today's constants. Host only, with no image change. (Implemented before step 1.)
-2b. **Every application heap from the ledger.** Remove `heap_link_max`: the heap of any manifest is a ledger region when the image maps upper memory, and an image whose decode check fails falls back to the linked heap. This changes the mimus image, so it waits for the qualified board run of step 1 and for a board run of mimus.
+2b. **Constructors after the heap is attached, and every application heap from the ledger.** The first part is implemented; the second waits as described.
+    **Every application heap from the ledger.** Remove `heap_link_max`: the heap of any manifest is a ledger region when the image maps upper memory, and an image whose decode check fails falls back to the linked heap. This changes the mimus image, so it waits for the qualified board run of step 1 and for a board run of mimus.
 3. **Manifest regions placed by the planner, and the 48 MiB window lifted**, with the slot 1 per-application page and the ledger's lowest slot at 1. Stack pool with guard blocks in the same step.
 4. **Runner and backup/restore from the record**, with the `preserve` attribute and the time estimate.
 5. **NPU pool and GPU buffers from the ledger**, using the hardware bounds table.
@@ -405,6 +406,15 @@ mutations (the old ceiling, no scratch filter, no budget test, one pass in the
 estimate, scratch allowed on an input, no upper bound) each fail it. The board
 run listed for this step (an 8 MiB OUTPUT and a 16 MiB WORK at `0x88000000`,
 restored bytes equal to the backup) is not yet done.
+
+**Constructors after the heap is attached (step 2b, first part).** The static constructors of the application and the C library run
+once, in `runtime_init`, which `os_application_prepare` calls after `os_large_prepare` has attached the ledger's heap region, and no
+boot code runs the `.init_array`. A constructor that takes memory from `sbrk` therefore takes it from the ledger's region, zeroed.
+`checks/qemu-os-boot.py` shows this with a constructor that takes 4096 bytes (`heap-constructor-allocates`: the block is the
+first 4096 bytes of the region at `0x50000000`, zero although the memory held a pattern, and the main task's block follows it),
+and the case fails, ending in the startup panic, when `runtime_init` is called before `os_large_prepare`. The emulated board's link
+script gained an `.init_array` for this. The second part, taking `heap_link_max` away so that every heap comes from the ledger,
+still waits for a board run of the mimus image.
 
 **Regions above 2 GiB (step 6b).** Implemented and checked on the host and the emulated board; the board run is listed under its
 prediction below. The manifest tool places a region in the upper memory (`upper_area` of the record, `0x80000000` to the end of the
@@ -699,7 +709,7 @@ What the run does not show: the rate at which `_sbrk` zeroes memory (the result 
 - **Decode check coverage.** The check proves linear decode, not that the memory firewall passes Non-secure accesses or that no other master writes. Upper memory above `0x4800_0000` has the board-recorded result for the address test only; a bus error there resets the board through the watchdog. Step 1's board run is also the first OS-image run of it.
 - **FEL address width.** The protocol limit is verified on the host from the pinned tool source (see the bounds table); whether this ROM implements a wider private extension is irrelevant, because the tool cannot send one. The runner check in step 4 refuses higher addresses.
 - **Upload time.** An initialized image above tens of megabytes costs minutes per run at 0.55 MB/s. Data of that size belongs in INPUT or large regions.
-- **Start-up order.** The heap of the ledger replaces the linked heap only if the linked heap has handed out no byte. A static constructor that calls `malloc` before admission therefore refuses the application at admission (the QEMU case `heap-after-early-sbrk` shows the refusal and that the application does not start). Step 2b removes the dependency by running the constructors after the heap is attached.
+- **Start-up order.** The heap of the ledger replaces the linked heap only if the linked heap has handed out no byte. A static constructor that calls `malloc` before admission therefore refuses the application at admission (the QEMU case `heap-after-early-sbrk` shows the refusal and that the application does not start). The constructors run after the heap is attached (step 2b, implemented: `runtime_init` is called in `os_application_prepare` after `os_large_prepare`, and nothing else runs the `.init_array`); only another caller of `sbrk` before the admission still refuses the application.
 - **Stale memory.** Every extent handed out must be zeroed, and boot-time zeroing of the heap and bss has to be measured against the supervision window.
 - **EL1 execution of application text.** The kernel tables must map it, and the application's EL1 worker functions have to be listed in the layout record. A function at an unmapped address faults at EL1.
 - **Branch thunks and code model.** The thunk check must run for the application's real size. An application that places more than 4 GiB of bss in link-time symbols is outside the code model; it uses the heap or a region instead.
