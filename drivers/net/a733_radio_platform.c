@@ -35,7 +35,6 @@ int a733_radio_platform_rails(const struct a733_radio_platform_config *c,a733_ra
         c->topology.vbat!=A733_RADIO_DCDC1||c->topology.pg!=A733_RADIO_BLDO5||c->topology.pm!=A733_RADIO_CLDO1||
         (c->topology.vddio!=A733_RADIO_BLDO5&&c->topology.vddio!=A733_RADIO_CLDO1))return 0;
     *out=rail_scope(c->topology.vbat)|rail_scope(c->topology.pg)|rail_scope(c->topology.pm)|rail_scope(c->topology.vddio);
-    if(c->first_run_guard)*out|=rail_scope(A733_RADIO_DCDC8); /* Observed and recorded only. */
     return 1;
 }
 int a733_radio_platform_scopes(const struct a733_radio_platform_config *c,a733_clock_mask_t *out)
@@ -285,6 +284,15 @@ int a733_radio_platform_four_bit(struct a733_radio_platform *p)
     if(!p||!p->initialized||p->stage!=ACQUIRE||p->clock.id||p->fault||p->four_bit)return 0;
     p->four_bit=1;p->shared|=A733_CLOCK_PERI0;return 1;
 }
+int a733_radio_platform_first_run_guard(struct a733_radio_platform *p)
+{
+    if(!p||!p->initialized||p->stage!=ACQUIRE||p->clock.id||p->fault||p->first_run_guard||p->rail_count>=4)return 0;
+    /* DCDC8 joins the shared lease as an observation only; rebuild the sequence. */
+    p->first_run_guard=1;p->rail_scopes|=rail_scope(A733_RADIO_DCDC8);p->rail_count=0;
+    for(unsigned rail=0;rail<A733_RAIL_COUNT;++rail)
+        if(p->rail_scopes&A733_RAIL_BIT(rail))p->rail_sequence[p->rail_count++]=(enum a733_rail)rail;
+    return 1;
+}
 int a733_radio_platform_bluetooth(struct a733_radio_platform *p,const struct a733_radio_bluetooth_pins *b)
 {
     if(!p||!p->initialized||p->stage!=ACQUIRE||p->clock.id||p->fault||p->bluetooth.authority||
@@ -410,7 +418,7 @@ static enum a733_radio_platform_result registers(struct a733_radio_platform *p)
             rd(p,CCU+0xd1c,&p->initial_bus)&&!(p->initial_bus&0x10001u)&&wr(p,GIC+0x198,4);
         if(ok)p->stage=GIC_WAIT;
     } else if(p->stage==GIC_WAIT) {
-        r=masked(p);ok=r>=0;if(r==1)p->stage=p->config.first_run_guard?GUARD:PINS;
+        r=masked(p);ok=r>=0;if(r==1)p->stage=p->first_run_guard?GUARD:PINS;
     } else if(p->stage==GUARD) {
         /* Read-only: pad power words, then every condition before any write. */
         static const uintptr_t words[4]={UINT32_C(0x02000040),UINT32_C(0x02000048),UINT32_C(0x07025340),UINT32_C(0x07025348)};

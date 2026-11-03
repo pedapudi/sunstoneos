@@ -144,13 +144,14 @@ static int radio_try_setup(enum a733_radio_rail supply)
         .deadline_us=500000,.lifetime_deadline_us=10000000,
         .topology={201,A733_RADIO_DCDC1,supply,A733_RADIO_CLDO1,supply},
         .fabric={0,1u<<31,1u<<31},.fabric_hz={24000000,24000000,24000000},
-        .card={.supported_ocr=0x00300000,.command_timeout=20000,.ready_poll_interval=100},
-        .first_run_guard=guard_config};
+        .card={.supported_ocr=0x00300000,.command_timeout=20000,.ready_poll_interval=100}};
     for(unsigned i=0;i<8;++i)config.desired[i].function=i<6?2:i==6?0:1;
     const struct a733_radio_platform_ops ops={radio_now,radio_current,radio_admit,radio_enter,
         radio_leave,radio_retain,radio_read,radio_write,radio_barrier};
-    return a733_radio_platform_init(&r.radio,&config,&ops,&r,&r.power.clocks,
+    int ok=a733_radio_platform_init(&r.radio,&config,&ops,&r,&r.power.clocks,
         &r.power.pins,&r.power.rails,&r.power.provider);
+    if(ok&&guard_config)assert(a733_radio_platform_first_run_guard(&r.radio)&&!a733_radio_platform_first_run_guard(&r.radio));
+    return ok;
 }
 static void radio_setup(void){assert(radio_try_setup(A733_RADIO_BLDO5));}
 static enum a733_radio_platform_result radio_step(void)

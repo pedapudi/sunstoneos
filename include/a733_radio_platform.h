@@ -27,12 +27,6 @@ struct a733_radio_platform_config {
     struct a733_pin_config expected[8],desired[8];
     /* Fixed3.3V supply: supported OCR is a nonempty subset of bits20/21. */
     struct sdio_card_config card;
-    /* Nonzero: the first power-on run. Before any write the platform also
-     * observes DCDC8 (recorded, never required) and the pad power words, and
-     * proceeds only if BLDO5 is off, PG reads unsupplied, CLDO1 is on at 1.8V
-     * and DCDC1 is on at selector code 23. Otherwise it records and retains
-     * with no PMIC write. */
-    uint32_t first_run_guard;
 };
 enum a733_radio_platform_result { A733_RADIO_PENDING, A733_RADIO_BUSY,
     A733_RADIO_READY, A733_RADIO_RETAINED, A733_RADIO_INVALID };
@@ -93,7 +87,7 @@ struct a733_radio_platform {
     uint64_t deadline,last_now,wait_since;
     uint32_t selected_mhz[3],initial_module,initial_bus,running_module;
     unsigned initialized,stage,fault,held,retained,core_call,rail_count,rail_index,rail_retained;
-    unsigned four_bit,card_pending,bus_interface,power_on,rail_verify,guard_done;
+    unsigned four_bit,card_pending,bus_interface,power_on,rail_verify,guard_done,first_run_guard;
     /* GPIO_POW_MOD_SEL, GPIO_POW_VAL, SGPIO_POW_MOD_SEL, SGPIO_POW_VAL as read
      * by the first-run guard; valid once guard_done is set. */
     uint32_t pad_power[4];
@@ -113,6 +107,13 @@ int a733_radio_platform_bluetooth(struct a733_radio_platform *,const struct a733
  * lock, verifies the controller, and rereads CCCR before READY: a 25 MHz card
  * clock. A low-speed card stays at one bit. Physically unqualified. */
 int a733_radio_platform_four_bit(struct a733_radio_platform *);
+/* Request the first-run guard before the first poll (kept out of the wire
+ * profile's configuration). Before any PMIC write the platform also observes
+ * DCDC8 (recorded, never required) and the pad power words, and proceeds only
+ * if BLDO5 is off, PG reads unsupplied, CLDO1 is on at 1.8V and DCDC1 is on at
+ * selector code 23. Otherwise it keeps every observation and retains with no
+ * PMIC write. */
+int a733_radio_platform_first_run_guard(struct a733_radio_platform *);
 /* Sample PM4 host-wake through the actual shared pin owner. Its level does
  * not establish controller readiness or acknowledge an interrupt. */
 enum a733_radio_platform_result a733_radio_platform_bluetooth_wake(struct a733_radio_platform *,
