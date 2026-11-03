@@ -2398,6 +2398,13 @@
     }
    ]
   },
+  "radio-result-channel.py": {
+   "runs": [
+    {
+     "args": []
+    }
+   ]
+  },
   "radio-transport-aggregate.py": {
    "runs": [
     {
