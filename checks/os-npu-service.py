@@ -100,7 +100,7 @@ print('PASS mutation: metadata placed in the pool is refused by the trust-bounda
 
 # Case 33: the queue's open path. The queue units and the adapter of apps/os/npu-queue.c are compiled in; the CPU instructions
 # of the adapter are no-ops on the host, and the worker, the runtime and the service are the production code on the modeled device.
-queue_units = (*UNITS, 'checks/host/strict_mmio.c', 'apps/os/npu-queue.c', 'runtime/npu_app_queue.c', 'drivers/npu/npu_queue.c')
+queue_units = (*UNITS, 'checks/host/strict_mmio.c', 'kernel/appmem/app_region.c', 'apps/os/npu-queue.c', 'runtime/npu_app_queue.c', 'drivers/npu/npu_queue.c')
 qexe = host_rtos.build(out / 'qexe', [*queue_units, generated / 'npu-models.c'], 'os-npu-service-queue',
                        defines=DEFINES + ['SUNSTONE_A733_OS_NPU_QUEUE=1', 'SUNSTONE_OS_NPU_QUEUE_DEPTH=64', 'OS_NPU_CORE=0u'], includes=[ROOT / 'checks/host/mmio', *includes],
                        flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'], link=['-Wl,--gc-sections'])
@@ -108,3 +108,10 @@ done = subprocess.run([str(qexe), '33', str(out)], capture_output=True, text=Tru
 (out / 'case33.log').write_text(done.stdout + done.stderr)
 assert done.returncode == 0, ('case 33', done.stdout[-800:], done.stderr[-2500:])
 print(done.stdout.strip().splitlines()[-1])
+
+# Mutation: the application's tables do not map the pool. The queue's open must be refused, and the refusal must carry its own
+# failure detail (0x70c, the read region of slot 0), so a record never says only "retained".
+bad = subprocess.run([str(qexe), '33', str(out)], capture_output=True, text=True,
+                     env={**environment(), 'MUTATE_POOL_UNMAPPED': '1', **({'EXPECT_WIDE': '1'} if EXPECT_WIDE else {})}, timeout=3000)
+assert bad.returncode == 0 and 'PASS the open is refused' in bad.stdout, ('mutation not refused', bad.stdout[-400:], bad.stderr[-800:])
+print('PASS mutation: a pool outside the application\'s mappings fails the queue open with its own reason')

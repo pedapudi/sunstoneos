@@ -123,16 +123,19 @@ int os_npu_sdk_bind(const struct npu_runtime *runtime)
     os_npu_runtime_for_sdk=runtime;
     return ss_npu_service_bind_fault(sdk_fault)&&ss_npu_service_bind_register(sdk_register)&&ss_npu_service_bind(&backend);
 }
+/* Every path that retains the NPU resources names its reason: a record with only "retained" cannot be diagnosed. The site
+ * carries the line and the detail a number that is unique to the statement. */
+#define RETAIN(detail) do{board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),(detail),SUNSTONE_CRUMB_HERE());goto retained;}while(0)
 void os_npu_client_task(void *unused)
 {
     (void)unused;struct os_npu_report report={0},*r=&report;
     const struct os_session *s=os_session();
     header(r);r->model=os_npu_client_model;r->jobs_selected=s->npu.jobs;r->pattern=OS_NPU_OUTPUT_PATTERN;
     for(;;) {
-        if(os_npu_progress()!=1)goto retained;
+        if(os_npu_progress()!=1)RETAIN(0x601);
         int opened=os_npu_open();
         if(opened==1)break;
-        if(opened<0||!board_live(NULL))goto retained;
+        if(opened<0||!board_live(NULL))RETAIN(0x602);
         if(os_npu_stopped()){r->refused=1;goto done;}
         (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));
     }
@@ -140,9 +143,9 @@ void os_npu_client_task(void *unused)
         /* Application completion must follow ss_npu_close. Thermal stop also
          * closes this slot through its sole owner. */
         while(!os_npu_stopping()) {
-            if(os_npu_progress()!=1||ss_npu_service_step()<0)goto retained;
+            if(os_npu_progress()!=1||ss_npu_service_step()<0)RETAIN(0x603);
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
-            if(os_npu_queue_sdk_step()<0)goto retained;
+            if(os_npu_queue_sdk_step()<0)RETAIN(0x604);
             if(os_npu_queue_sdk_closed()){sdk_closed=1;goto wait_stop;}
 #endif
             if(sdk_closed)goto wait_stop;
@@ -160,28 +163,28 @@ void os_npu_client_task(void *unused)
     /* A thermal stop after the check above makes LOAD refuse. */
     const int loaded=os_npu_load(os_npu_client_entry);
     if(!loaded){r->refused=1;goto close;}
-    if(loaded<0)goto retained;
+    if(loaded<0)RETAIN(0x605);
     for(unsigned job=0;job<s->npu.jobs;++job) {
         if(os_npu_stopping()){r->refused=1;break;}
         for(unsigned i=0;i<os_npu_input_count;++i) {
             struct npu_runtime_tensor tensor;
-            if(!os_npu_tensor(NBG_INPUT,i,&tensor)||tensor.bytes!=os_npu_inputs[i].bytes)goto retained;
+            if(!os_npu_tensor(NBG_INPUT,i,&tensor)||tensor.bytes!=os_npu_inputs[i].bytes)RETAIN(0x606);
             memcpy(tensor.data,os_npu_inputs[i].data,tensor.bytes);
         }
         for(unsigned i=0;i<os_npu_output_count;++i) {
             struct npu_runtime_tensor tensor;
-            if(!os_npu_tensor(NBG_OUTPUT,i,&tensor)||tensor.bytes!=os_npu_references[i].bytes)goto retained;
+            if(!os_npu_tensor(NBG_OUTPUT,i,&tensor)||tensor.bytes!=os_npu_references[i].bytes)RETAIN(0x607);
             fill(tensor.data,tensor.bytes);
         }
         int submitted=os_npu_submit(1000000);
         if(!submitted){r->refused=1;break;}
-        if(submitted<0)goto retained;
+        if(submitted<0)RETAIN(0x608);
         struct storage_digest digest;storage_digest_init(&digest);
         unsigned mismatch=0;uint32_t bytes=0,pattern=0;
         for(unsigned i=0;i<os_npu_output_count;++i) {
             struct npu_runtime_tensor tensor;
-            if(!os_npu_tensor(NBG_OUTPUT,i,&tensor)||tensor.bytes!=os_npu_references[i].bytes)goto retained;
-            if(!storage_digest_add(&digest,tensor.data,tensor.bytes))goto retained;
+            if(!os_npu_tensor(NBG_OUTPUT,i,&tensor)||tensor.bytes!=os_npu_references[i].bytes)RETAIN(0x609);
+            if(!storage_digest_add(&digest,tensor.data,tensor.bytes))RETAIN(0x60a);
             if(memcmp(tensor.data,os_npu_references[i].data,tensor.bytes))mismatch=1;
             bytes+=(uint32_t)tensor.bytes;pattern+=kept(tensor.data,tensor.bytes);
         }
@@ -189,10 +192,10 @@ void os_npu_client_task(void *unused)
         r->output_bytes=bytes;r->pattern_bytes=pattern;
     }
 close:
-    if(os_npu_close()!=1)goto retained;
+    if(os_npu_close()!=1)RETAIN(0x60b);
 wait_stop:
     while(!os_npu_stopped()) {
-        if(os_npu_progress()!=1)goto retained;
+        if(os_npu_progress()!=1)RETAIN(0x60c);
         (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));
     }
 done:

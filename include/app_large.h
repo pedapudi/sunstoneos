@@ -44,6 +44,10 @@ unsigned os_large_count(void);
 /* 1 when the ledger holds [base, base + bytes) for the kernel (APP_REGION_KERNEL_OWNER): the NPU pool of an image that
  * places it in the slot 1 area. The pool is used only when this says so. */
 int os_large_kernel_reserved(uint64_t base, uint64_t bytes);
+struct aarch64_translation;
+/* The EL0 translation of address in the application's tables (a733_translate_fn); the current regime's when the image has no
+ * application space. */
+int os_large_translate_el0(uintptr_t address, int write, struct aarch64_translation *out);
 struct large_slot *os_large_slot_mutable(unsigned index);
 const struct ss_large_region *os_large_record(unsigned index);
 void os_large_finish(unsigned index, unsigned state, uint32_t error);   /* final state, wakes the waiters */

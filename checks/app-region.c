@@ -371,8 +371,10 @@ static void slot1_cases(void)
             for (unsigned k = 0; k < sizeof points / sizeof points[0]; ++k)
                 for (int write = 0; write < 2; ++write) {
                     struct result m = walk(app_space_ttbr0(spaces[i]), points[k], write);
-                    uint64_t d = app_space_el0_descriptor_with(spaces[i], points[k], write, read_word_ctx, 0);
+                    uint64_t pa = 0;
+                    uint64_t d = app_space_el0_descriptor_with(spaces[i], points[k], write, &pa, read_word_ctx, 0);
                     assert((d != 0) == (m.fault == FAULT_NONE));
+                    if (d) assert(pa == m.pa);
                 }
     }
     /* EL1 keeps read and write access to the owners' blocks, except to the read-only one. */
