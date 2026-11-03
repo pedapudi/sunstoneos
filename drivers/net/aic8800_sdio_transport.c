@@ -107,8 +107,12 @@ int aic8800_transport_init(struct aic8800_sdio_transport *t, struct sdio_card *c
         (cfg->pad != AIC8800_PAD_KEEP && cfg->pad != AIC8800_PAD_WRITE_80) ||
         !cfg->ticks_per_ms || !cfg->command_timeout || !cfg->poll_interval ||
         c->function_count < 2 || !(c->capabilities & 2) ||
+        /* The vendor driver matches c8a1:0182 on function 2 (aicsdio.c:213) and then runs all I/O on function 1
+         * (aicsdio.c:218, "replace 2 with 1"); the board's function 1 reads c8a1:0082. */
+        !c->functions[2].has_manufacturer || c->functions[2].manufacturer != 0xc8a1 ||
+        c->functions[2].device != 0x0182 ||
         !c->functions[1].has_manufacturer || c->functions[1].manufacturer != 0xc8a1 ||
-        c->functions[1].device != 0x0182 || c->functions[1].max_block_bytes < 512 ||
+        c->functions[1].max_block_bytes < 512 ||
         !c->functions[1].enable_timeout_ms ||
         cfg->ticks_per_ms > UINT64_MAX / c->functions[1].enable_timeout_ms) return 0;
     struct aic8800_sdio_transport initial = {0};

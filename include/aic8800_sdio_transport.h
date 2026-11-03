@@ -87,7 +87,7 @@ struct aic8800_sdio_transport {
  * overlap. Caller owns the entire card/host and retains them, callback context,
  * and all buffers until external disposal, including after uncertain failure.
  * Context storage must not alias transport/card; its extent is caller-owned.
- * Requires real completed enumeration, c8a1:0182 function 1 and at least two
+ * Requires real completed enumeration, c8a1:0182 function 2 (I/O runs on function 1) and at least two
  * functions, >=512-byte block capability, multi-block support, prepared host.
  * IDs only validate compatibility with the explicit variant, never firmware.
  */
