@@ -15,6 +15,17 @@ struct large_slot {
 int large_admit(struct app_region_ledger *, uint16_t owner, const struct ss_large_region *records, unsigned count,
                 struct large_slot *out, unsigned out_capacity);
 
+/* The allocator that large_admit_with takes regions from. acquire reserves bytes (rounded up to 2 MiB) for owner and
+ * returns the base and rounded size; release gives back the region that starts at base. Both return an
+ * app_region_status. */
+struct large_allocator {
+    void *ctx;
+    int (*acquire)(void *ctx, uint16_t owner, uint64_t bytes, unsigned access, uint64_t *base, uint64_t *rounded);
+    int (*release)(void *ctx, uint16_t owner, uint64_t base);
+};
+int large_admit_with(const struct large_allocator *, uint16_t owner, const struct ss_large_region *records, unsigned count,
+                     struct large_slot *out, unsigned out_capacity);
+
 /* The block device the loader reads, supplied by the board; the default is none (the regions then fail
  * as unloadable and the application learns it). */
 #include "fat32_ro.h"

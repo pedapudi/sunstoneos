@@ -9,6 +9,8 @@
 #include "sunstone_app.h"
 #include "os_space.h"
 #include "app_region.h"
+#include "app_large.h"
+#include "umem.h"
 #include "sunstone_notify.h"
 #include <stdint.h>
 #include <string.h>
@@ -56,8 +58,15 @@ extern const unsigned os_large_capacity;
 extern struct large_slot os_large_slot_storage[];
 extern const unsigned os_ledger_capacity;
 extern struct app_region_entry os_large_entry_storage[];
-static struct app_region_ledger ledger;
-static struct app_region_range usable_storage[APP_REGION_SLOTS];
+/* The ledger of the unified memory allocator (docs/designs/unified-memory.md). Its first entries come from this array;
+ * it carves the pages for the rest from the memory it manages. The chunk policy bytes cover the DRAM the ledger can
+ * hold, 2 MiB each, from the first byte of usable memory to the end of the installed memory. */
+#define UMEM_FIRST_CELLS 64u
+static uint8_t umem_cells[UMEM_FIRST_CELLS * 128] __attribute__((aligned(16)));
+static struct umem ledger;
+static uint8_t chunk_policy[(APP_REGION_LIMIT - APP_REGION_FLOOR) / UMEM_CHUNK];
+/* The application's regions as the space builder reads them: a snapshot of the owner's extents from the ledger. */
+static struct app_region_ledger view;
 /* One space: the root and a level-2 table per upper slot, the most it can need (app_region.h). */
 static uint64_t arena_pages[APP_SPACE_PAGES][512] __attribute__((aligned(4096)));
 static struct app_table_arena arena;
@@ -69,6 +78,58 @@ static void *main_stack;
 static uint64_t kernel_base, kernel_bytes;
 int os_large_kernel_reserved(uint64_t base, uint64_t bytes) { return admitted && kernel_bytes && kernel_base == base && kernel_bytes == bytes; }
 void *os_large_main_stack(void) { return main_stack; }
+
+/* The ledger's allocation interface for large_admit_with, and the one-call forms the admission below uses. Every extent
+ * is a whole number of 2 MiB blocks on a block boundary, as the space builder maps blocks. Admission runs before the
+ * scheduler on one core, so the ledger takes no lock; the memory is raw because the loader fills a region, the heap
+ * allocator zeroes what it hands out, and a region with a source is overwritten up to the source's length. */
+static const struct umem_hooks umem_boot_hooks = {0};
+static int region_take(void *ctx, uint16_t owner, uint64_t bytes, unsigned access, uint64_t *base, uint64_t *rounded)
+{
+    (void)ctx;
+    struct umem_buf b;
+    struct umem_request r = {.bytes = (bytes + APP_REGION_BLOCK - 1) & ~(APP_REGION_BLOCK - 1), .align = APP_REGION_BLOCK,
+                             .owner = owner, .flags = UMEM_RAW, .access = (uint8_t)access};
+    if (!bytes || bytes > APP_REGION_LIMIT) return APP_REGION_INVALID;
+    int s = umem_alloc(&ledger, &r, &b);
+    if (s) return s == UMEM_NO_SPACE ? APP_REGION_NO_SPACE : APP_REGION_INVALID;
+    *base = b.base; *rounded = b.bytes;
+    return APP_REGION_OK;
+}
+static int region_take_at(uint16_t owner, uint64_t base, uint64_t bytes, unsigned access)
+{
+    struct umem_buf b;
+    struct umem_request r = {.bytes = (bytes + APP_REGION_BLOCK - 1) & ~(APP_REGION_BLOCK - 1), .align = APP_REGION_BLOCK,
+                             .base = base, .owner = owner, .flags = UMEM_RAW | UMEM_AT, .access = (uint8_t)access};
+    if (!bytes || bytes > APP_REGION_LIMIT || (base & (APP_REGION_BLOCK - 1))) return APP_REGION_INVALID;
+    int s = umem_alloc(&ledger, &r, &b);
+    return s == 0 ? APP_REGION_OK : s == UMEM_NO_SPACE ? APP_REGION_NO_SPACE : APP_REGION_INVALID;
+}
+static int region_give(void *ctx, uint16_t owner, uint64_t base)
+{
+    (void)ctx;
+    struct umem_buf b;
+    struct umem_extent e;
+    if (umem_lookup(&ledger, base, &b) || umem_describe(&ledger, &b, &e, 0) || e.owner != owner) return APP_REGION_NOT_OWNED;
+    return umem_free(&ledger, &b) ? APP_REGION_NOT_OWNED : APP_REGION_OK;
+}
+static const struct large_allocator region_allocator = {0, region_take, region_give};
+/* The owner's extents, in the form the space builder reads. The ledger's own storage is not a table of regions. */
+struct export_state { unsigned count; };
+static int export_one(void *ctx, const struct umem_extent *e)
+{
+    struct export_state *x = ctx;
+    if (x->count >= os_ledger_capacity) return 1;
+    os_large_entry_storage[x->count++] = (struct app_region_entry){e->base, e->bytes, e->owner, e->access};
+    return 0;
+}
+static int export_regions(uint16_t owner)
+{
+    struct export_state x = {0};
+    view = (struct app_region_ledger){.entry = os_large_entry_storage, .capacity = os_ledger_capacity};
+    memset(os_large_entry_storage, 0, sizeof *os_large_entry_storage * os_ledger_capacity);
+    return umem_for_each(&ledger, owner, export_one, &x) == x.count;
+}
 
 static void install_space(uint64_t kernel_ttbr);
 /* The eight-core images walk their tables without the data caches (TCR_EL1 IRGN0 = ORGN0 = 0,
@@ -115,46 +176,45 @@ int os_large_prepare(void)
     __asm__ volatile("mrs %0, id_aa64mmfr0_el1\n mrs %1, tcr_el1" : "=r"(mmfr0), "=r"(tcr));
     app_asid_pool_init(&asids, mmfr0, tcr);
     owner_asid = app_asid_alloc(&asids);
+    struct umem_range umem_ranges[APP_REGION_SLOTS];
+    for (unsigned i = 0; i < ranges; ++i) umem_ranges[i] = (struct umem_range){usable[i].base, usable[i].bytes};
     if (!owner_asid || !ranges || count > os_large_capacity ||
-        app_region_ledger_init(&ledger, usable_storage, APP_REGION_SLOTS, os_large_entry_storage, os_ledger_capacity, usable, ranges)) return large_failed(2 + (!owner_asid ? 0 : !ranges ? 1 : 2));
+        umem_init(&ledger, &umem_boot_hooks, umem_cells, sizeof umem_cells / umem_cell_bytes(), chunk_policy, APP_REGION_FLOOR,
+                  sizeof chunk_policy, umem_ranges, ranges)) return large_failed(2 + (!owner_asid ? 0 : !ranges ? 1 : 2));
 #ifdef OS_NPU_POOL_BASE
     /* The NPU pool of an image that places it in the slot 1 area: held for the kernel before any application region, so
      * that a manifest region, the heap or the stack cannot take it, and no application space maps it. */
-    if (app_region_acquire_at(&ledger, APP_REGION_KERNEL_OWNER, OS_NPU_POOL_BASE, OS_NPU_POOL_BYTES,
-                              APP_REGION_READ | APP_REGION_WRITE)) return large_failed(5);
+    if (region_take_at(APP_REGION_KERNEL_OWNER, OS_NPU_POOL_BASE, OS_NPU_POOL_BYTES, APP_REGION_READ | APP_REGION_WRITE)) return large_failed(5);
     kernel_base = OS_NPU_POOL_BASE; kernel_bytes = OS_NPU_POOL_BYTES;
 #endif
     for (unsigned i = 0; manifest && i < manifest->region_count; ++i) {
         const struct ss_region *r = &manifest->regions[i];
         if (r->address < APP_REGION_FLOOR) continue;
-        if (app_region_acquire_at(&ledger, owner_asid, r->address, r->bytes,
-                                  APP_REGION_READ | (r->access & SS_ACCESS_WRITE ? APP_REGION_WRITE : 0))) return large_failed(6);
+        if (region_take_at(owner_asid, r->address, r->bytes, APP_REGION_READ | (r->access & SS_ACCESS_WRITE ? APP_REGION_WRITE : 0))) return large_failed(6);
     }
-    if (large_admit(&ledger, owner_asid, __start_sunstone_large_regions, count, slots, os_large_capacity)) return large_failed(7);
+    if (large_admit_with(&region_allocator, owner_asid, __start_sunstone_large_regions, count, slots, os_large_capacity)) return large_failed(7);
     /* The main stack: a 2 MiB block that the guard owner holds below it, so that an overflow is an EL0 fault in memory
      * no space maps. The stack is at the bottom of its own block. Where no extent is free the static stack stays. */
     if (manifest) {
         uint64_t base, bytes;
-        if (app_region_acquire(&ledger, APP_REGION_GUARD_OWNER, 2 * APP_REGION_BLOCK, APP_REGION_READ, &base, &bytes) == 0) {
-            (void)app_region_release(&ledger, APP_REGION_GUARD_OWNER, base);
-            if (app_region_acquire_at(&ledger, APP_REGION_GUARD_OWNER, base, APP_REGION_BLOCK, APP_REGION_READ) == 0 &&
-                app_region_acquire_at(&ledger, owner_asid, base + APP_REGION_BLOCK, manifest->stack_bytes,
-                                      APP_REGION_READ | APP_REGION_WRITE) == 0)
+        if (region_take(0, APP_REGION_GUARD_OWNER, 2 * APP_REGION_BLOCK, APP_REGION_READ, &base, &bytes) == 0) {
+            (void)region_give(0, APP_REGION_GUARD_OWNER, base);
+            if (region_take_at(APP_REGION_GUARD_OWNER, base, APP_REGION_BLOCK, APP_REGION_READ) == 0 &&
+                region_take_at(owner_asid, base + APP_REGION_BLOCK, manifest->stack_bytes, APP_REGION_READ | APP_REGION_WRITE) == 0)
                 main_stack = (void *)(uintptr_t)(base + APP_REGION_BLOCK);
-            else if (ledger.entry)
-                for (unsigned i = 0; i < ledger.capacity; ++i)        /* give back what the pair took */
-                    if (ledger.entry[i].owner == APP_REGION_GUARD_OWNER) ledger.entry[i].owner = 0;
+            else
+                (void)region_give(0, APP_REGION_GUARD_OWNER, base);     /* give back what the pair took */
         }
     }
     arena = (struct app_table_arena){arena_pages, (uintptr_t)arena_pages, APP_SPACE_PAGES, 0};
-    int built = app_space_build_l2(&space, &arena, base_l1, base_l2, &ledger, owner_asid, owner_asid, 0) == 0;
+    int built = export_regions(owner_asid) && app_space_build_l2(&space, &arena, base_l1, base_l2, &view, owner_asid, owner_asid, 0) == 0;
     /* The heap record, when the manifest has one, becomes the C library's heap; an image whose library cannot
      * take it refuses the application rather than run with a heap of another size. */
     for (unsigned i = 0; built && i < count; ++i)
         if ((slots[i].flags & SS_LARGE_HEAP) && !(runtime_heap_attach && runtime_heap_attach((uintptr_t)slots[i].base, (size_t)slots[i].bytes)))
             built = 0;
     if (!built) {
-        for (unsigned i = 0; i < count; ++i) if (slots[i].bytes) app_region_release(&ledger, owner_asid, slots[i].base);
+        for (unsigned i = 0; i < count; ++i) if (slots[i].bytes) region_give(0, owner_asid, slots[i].base);
         memset(slots, 0, sizeof *slots * count);
         return large_failed(8);
     }
