@@ -81,8 +81,8 @@ static int parents_stable(struct a733_dma_platform *p)
     if (!rd(p,OSC,&osc) || !rd(p,CCU,&ref) || !a733_clock_ref24_valid(osc,ref)) return 0;
     if (!(p->shared&A733_CLOCK_PERI0)) return 1;
     /* User Manual 4.1.6.6: input divisor M1 is bit 1 plus one. */
-    if (!rd(p,CCU+0xa0,&peri) || (peri&UINT32_C(0xfe000000))!=UINT32_C(0xfe000000) ||
-        (peri&(BIT(24)|BIT(1))) || !rd(p,CCU+0xa8,&a) || (a&BIT(31)) ||
+    if (!rd(p,CCU+0xa0,&peri) || !a733_clock_peri0_valid(peri) ||
+        !rd(p,CCU+0xa8,&a) || (a&BIT(31)) ||
         !rd(p,CCU+0xac,&b) || (b&BIT(27)) || !rd(p,CCU+0x1908,&gate_config) ||
         !rd(p,CCU+0x1988,&gate_status)) return 0;
     unsigned n=((peri>>8)&255)+1;
