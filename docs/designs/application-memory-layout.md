@@ -1,8 +1,9 @@
 # Design: application memory sized from the build and the manifest
 
-Status: **design**, with two steps of the migration implemented and host and
-emulator checked: the layout record (step 2) and the heap from the ledger
-(step 1). No part is board-qualified. See "Implemented so far" below.
+Status: **design**, with the migration steps through step 5 implemented and host and
+emulator checked. Board runs pass for the heap from the ledger, manifest regions and the main
+stack in slot 1, the preserving run of a scratch region, and the NPU pool in the slot 1 area.
+See "Implemented so far" below.
 Readers are assumed to know AArch64 stage-1 translation (Arm ARM DDI 0487,
 D8), the FreeRTOS SMP port, [memory-architecture.md](memory-architecture.md)
 and [large-app-regions.md](large-app-regions.md).
@@ -541,6 +542,13 @@ not at fault. The same recipe built from the tree with the wait fixed returns no
 graphs `match`, `completed` and `matched` equal to 7, the SDK closed, `RETURN_ROM` last, about 10 s of launch. The image differs from
 the failed one in the fix and in the cutoff diagnostics. If the run ends at `0x73c` again, the record's progress site and NPU state
 say where the application waits, and the lost wake-up was not the whole cause.
+
+**Result.** Entry `1793665367809526758-0a66d342` returned normally (`RETURN_ROM` last, about 39 s of launch on a busy queue). Its
+receipt equals the expectation word for word: seven graphs `match` with no differing byte, `completed` and `matched` 7, the SDK
+closed. The queue labelled it `result-mismatch` because my submission passed an expectation file that was already converted,
+which the runner compared as bytes. Entry `1793665683000181061-de31a526` repeats the run with the correct file and has outcome
+`returned`, with the same receipt, in 5.9 s of launch. The pool at `0x78600000` works: the failed run of the pool was the lost
+wake-up, not the pool. The NPU's reach above `0x48000000` is shown by those seven graphs (a pool at the top of the slot 1 area).
 
 ### Predicted board run of the heap
 
