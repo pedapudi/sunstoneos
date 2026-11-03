@@ -209,7 +209,7 @@ static enum a733_radio_platform_result radio_step(void)
 /* PERI0 at 2400 MHz with its 400 MHz branch (divider 6) enabled and gated on. */
 static void radio_peri0(unsigned gated)
 {
-    *pmic_model_word(&r.power,0x020020a0)=0xfe000000u|(1u<<20)|(99u<<8);
+    *pmic_model_word(&r.power,0x020020a0)=0xff000000u|(1u<<20)|(99u<<8);
     uint32_t branch=(1u<<11)|(1u<<2)|(1u<<1);
     *pmic_model_word(&r.power,0x02003908)=gated?branch|(branch<<16):0;
     *pmic_model_word(&r.power,0x02003988)=branch<<16;

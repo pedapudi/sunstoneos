@@ -139,7 +139,8 @@ static unsigned profile_line(struct a733_radio_platform *p)
         !rd(p,CCU+0x5e0,&a)||!(a&BIT(30))||
         !rd(p,CCU+0x59c,&a)||(a&0x30001u)!=0x30001u)return __LINE__;
     if(!(p->shared&A733_CLOCK_PERI0))return 0;
-    if(!rd(p,CCU+0xa0,&pll)||(pll&0xfe000000u)!=0xfe000000u||(pll&(BIT(24)|BIT(1)))||
+    /* Bit 24 is reserved in the vendor PERI0 description and reads 1 on both boards (0xff126310). */
+    if(!rd(p,CCU+0xa0,&pll)||(pll&0xfe000000u)!=0xfe000000u||(pll&BIT(1))||
         !rd(p,CCU+0xa8,&a)||(a&BIT(31))||!rd(p,CCU+0xac,&b)||(b&BIT(27))||
         !rd(p,CCU+0x1908,&gate)||!rd(p,CCU+0x1988,&status))return __LINE__;
     n=((pll>>8)&255)+1;if(n<53||n>105)return __LINE__;
