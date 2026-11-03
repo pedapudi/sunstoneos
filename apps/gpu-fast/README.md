@@ -11,9 +11,9 @@ Select `SUNSTONE_APPLICATION=gpu-fast`, `SUNSTONE_A733_OS_GPU=ON`,
 configuration helper. The target is `sunstone-a733-os-gpu-fast`.
 
 `prepare.py --jobs 0|10000 --cache writeback|uncached --output DIRECTORY` writes
-the 16-byte input and the complete 96-byte expectation. Submit through the board
+the 16-byte input. Submit through the board
 queue, with `--kind cpu-return`, `--input DIRECTORY/input.bin`,
-`--expect DIRECTORY/expect.json`, an admitted GPU template and this checkout's
+an admitted GPU template and this checkout's
 `apps/gpu-fast/host.py` as `--decoder`, with `--decode-application`.
 Run the zero-job control before the measured input.
 

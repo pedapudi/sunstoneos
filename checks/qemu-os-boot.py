@@ -868,7 +868,6 @@ def main():
               'the PPI 27 write test did not read back what it wrote')
     c.require(by[('gic.dist.spi97.route_requested', 0)]['value'] == 0x100d8, 'the probe image routes INTID 97 at 0xd8 on core 0')
     c.require(by[('mmio.0x07064000', 0)]['status'] == 'unmeasured', 'the PPU word was read although its gate is closed')
-    c.require(hw_facts.matches(table, hw_facts.expectation()), 'the returned table does not satisfy the board expectation')
 
     # 11. Large regions. The OS takes them from the ledger before the scheduler starts and a loader task fills them from
     # a RAM disk through the FAT32 reader and two buffers. The application waits for the region, reads it at EL0 in its

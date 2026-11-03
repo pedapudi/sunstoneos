@@ -112,11 +112,9 @@ cfg=$HOME/.cache/sunstoneos/bin/cfg.sh; build=$HOME/.cache/sunstoneos/build/hw-f
   -DSUNSTONE_A733_OS_CPU_RETURN=ON -DA733_A76_ADMITTED=ON -DSUNSTONE_A733_OS_CPU_CLOCK=ON \
   -DSUNSTONE_A733_CPU_TOPOLOGY=ON -DSUNSTONE_A733_HW_FACTS=ON
 cmake --build "$build" --target sunstone-a733-os-hw-facts -j12
-python3 tools/hw_facts.py expect expect.json
 ```
 
-The queue entry uses `--kind cpu-return` and `--expect expect.json`, which fixes the layout, the slot
-identities and the flag range of every slot and leaves the values free. After the run, decode the returned
+The queue entry uses `--kind cpu-return`; its hypothesis states the layout, the slot identities and the flag range of every slot, and leaves the values free. After the run, decode the returned
 output (`output.bin` in the run directory) and merge it:
 
 ```sh
@@ -239,10 +237,10 @@ Remaining, in order:
 ## Host tests
 
 - `checks/qemu-os-boot.py` builds the facts image for the virtual board, runs it, decodes the table the
-  application returns and checks the decoded values and the board expectation. The table names the virtual
+  application returns and checks the decoded values. The table names the virtual
   board.
 - `checks/hw-facts.py` decodes synthetic tables (valid, skipped slots, malformed, incomplete, wrong core,
-  virtual board), checks the expectation, the JSON file and `GicModel` against the file and against
+  virtual board), checks the JSON file and `GicModel` against the file and against
   contradicting files, and scans the host models.
 - The Unicorn models cannot run end to end on this tree: `checks/a733-supervised-scheduler.py` stops at
   `id_aa64isar0_el1` before any change here, and the others need cached evidence. They compile and import.

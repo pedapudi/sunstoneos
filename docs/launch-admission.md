@@ -63,8 +63,8 @@ when runner admission refuses the image.
 
 ## Generate image instructions from the build manifest
 
-`tools/board_readme.py` emits the image path, SHA-256, queue command, expected
-result and first-failure decode. It verifies the manifest's image digest before
+`tools/board_readme.py` emits the image path, SHA-256, queue command, the hypothesis
+and first-failure decode. It verifies the manifest's image digest before
 writing instructions. It performs no launch admission or device access.
 
 ```sh
@@ -75,10 +75,10 @@ writing instructions. It performs no launch admission or device access.
 The renderer accepts link-check manifests, returning-image input records and an
 optional `board_image` object in a build manifest. That object can name `path`,
 `sha256`, `kind`, `expected_result`, `first_failure`, `port`, `hypothesis`,
-`expect`, `template` and `inputs`. Image, template and input paths in that object
+`template` and `inputs`. Image, template and input paths in that object
 are relative to the manifest;
-an explicit `--image` is relative to the current directory. PORT and
-EXPECTED_OUTPUT remain explicit placeholders when the build lacks those inputs.
+an explicit `--image` is relative to the current directory. PORT
+remains an explicit placeholder when the build lacks it.
 The coordinator supplies them before submission. A README does not establish
 that an image meets the runner's return contract.
 
@@ -96,7 +96,7 @@ without a compatible watchdog, finite cleanup and return receipt are blocked
 at runner admission. Historical cached READMEs are retained as evidence; new
 builds use the shared renderer.
 
-GPU receipt/thermal capture, complete binary expectations and finite NPU queue
+GPU receipt/thermal capture, and finite NPU queue
 adapters share runner admission. Finite NPU inputs and host dependencies are
 frozen at submission; optional stopped-state capture precedes verified DRAM
 restoration. Thermal decode failure or incomplete evidence yields a result

@@ -195,9 +195,8 @@ instead of an application result. Retirement is validated, DRAM is
 restored, and with `--restore-rails` the rail helper runs. The outcome is
 `failure-return`: a failed result (the command exits 1) with the failure record
 in `first_failure`. The port is not quarantined and is not paused; the three
-same-site repeats rule still applies to repeated `failure-return` results. An
-`--expect` file, when given, is compared with the 48-byte failure record
-(`struct ss_failure`).
+same-site repeats rule still applies to repeated `failure-return` results. The
+48-byte failure record (`struct ss_failure`) is recorded in `first_failure`.
 
 ## Checks
 
@@ -241,8 +240,7 @@ lifetime is not linked on that board, so its `os_cpu_return_el0_fault` records
 and suspends without the claim.
 
 `checks/board-return-preservation.py` covers three runner cases: a failure
-return (outcome `failure-return`, DRAM and rails restored, not quarantined), the
-same with a differing expectation (`result-mismatch`, still restored), and a
+return (outcome `failure-return`, DRAM and rails restored, not quarantined), and a
 failure record returned by an image that does not link the failure return (host
 error, quarantined). Five NPU cases cover the never-started report: valid with a
 failure return (restored, not quarantined), and refused for a normal return, a

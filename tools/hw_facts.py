@@ -368,50 +368,6 @@ def encode(platform=PLATFORM_A733, values=None, skipped=(), done=(1 << CORES) - 
     return bytes(blob)
 
 
-def expectation():
-    """Board word expectation (sunstone-board-expect-u32-v1) for any complete table: the layout words and the
-    slot identities are exact; the measured values are free."""
-    words = []
-    full = {'min': 0, 'max': 0xffffffff}
-    for offset in range(0, TABLE_BYTES, 4):
-        words.append(full)
-    def exact(offset, value):
-        words[offset // 4] = value
-    words[0:2] = [MAGIC & 0xffffffff, MAGIC >> 32]
-    words[2:11] = [VERSION, TABLE_BYTES, {'min': 1, 'max': 2}, CORES, SHARED_SLOTS, CORE_SLOTS, SHARED_OFFSET, CORE_OFFSET,
-                   CORE_SLOTS * SLOT_BYTES]
-    words[11] = (1 << CORES) - 1
-    words[12:16] = [0, 0, 0, 0]
-    for scope, specs in (('shared', SHARED_SPECS), ('core', CORE_SPECS)):
-        for core in range(1 if scope == 'shared' else CORES):
-            for index in range(CORE_SLOTS if scope == 'core' else SHARED_SLOTS):
-                offset = slot_offset(scope, index, core)
-                if index < len(specs):
-                    ident, _ = specs[index]
-                    # id (16 bits), core (8 bits) and flags (8 bits): flags may carry skipped or anomaly bits.
-                    exact_low = ident | core << 16
-                    words[offset // 4] = {'min': exact_low | 1 << 24, 'max': exact_low | 7 << 24}
-                else:
-                    words[offset // 4] = 0
-                    words[offset // 4 + 1] = 0
-                    words[offset // 4 + 2] = 0
-                    words[offset // 4 + 3] = 0
-    return {'schema': 'sunstone-board-expect-u32-v1', 'words': words}
-
-
-def matches(blob, expected):
-    """Whether a returned table satisfies a sunstone-board-expect-u32-v1 expectation."""
-    if len(blob) != 4 * len(expected['words']):
-        return False
-    for word, want in zip(struct.unpack('<%dI' % len(expected['words']), blob), expected['words']):
-        if isinstance(want, dict):
-            if not want['min'] <= word <= want['max']:
-                return False
-        elif word != want:
-            return False
-    return True
-
-
 # ---------------------------------------------------------------------------
 # The facts file
 
@@ -730,16 +686,12 @@ def main():
     d.add_argument('--queue-entry')
     d.add_argument('--image-sha256')
     d.add_argument('--port')
-    e = commands.add_parser('expect')
-    e.add_argument('output', type=Path)
     args = parser.parse_args()
     if args.command == 'gen':
         TABLE_INC.write_text(table_inc())
     elif args.command == 'init':
         FACTS_JSON.parent.mkdir(exist_ok=True)
         FACTS_JSON.write_text(json.dumps(seeded_document(), indent=1) + '\n')
-    elif args.command == 'expect':
-        args.output.write_text(json.dumps(expectation()) + '\n')
     else:
         header, facts = decode(args.table.read_bytes())
         print(json.dumps(dict(header=header, facts=len(facts))))
