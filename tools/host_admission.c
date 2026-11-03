@@ -15,13 +15,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+/* Output through the host's own stdio (tools/host_admission_io.c): the image's include path may carry newlib headers, whose stdout
+ * is a reentrancy structure that a host executable does not have. */
+void host_err(const char *format, ...);
+void host_out(const char *format, ...);
+void host_perror(const char *what);
 /* The session mapping lives in host_admission_io.c: the system memory-mapping headers conflict with the image's own types. */
 void *host_map_session(uintptr_t address, size_t bytes);
 
 static size_t slurp(const char *path, void *buffer, size_t capacity)
 {
     FILE *f = fopen(path, "rb");
-    if (!f) { perror(path); exit(2); }
+    if (!f) { host_perror(path); exit(2); }
     size_t n = fread(buffer, 1, capacity, f);
     fclose(f);
     return n;
@@ -32,12 +37,12 @@ int main(int argc, char **argv)
     if (argc != 4) return 2;
     /* The decoder reads the session at its fixed board address. */
     void *at = host_map_session(A733_BOARD_SESSION_ADDRESS, 1 << 16);
-    if (at != (void *)(uintptr_t)A733_BOARD_SESSION_ADDRESS) { fprintf(stderr, "cannot map the session address\n"); return 3; }
+    if (at != (void *)(uintptr_t)A733_BOARD_SESSION_ADDRESS) { host_err("cannot map the session address\n"); return 3; }
     size_t session = slurp(argv[1], at, 1 << 16);
     struct a733_smp_contract contract;
     memset(&contract, 0, sizeof contract);
     size_t bytes = slurp(argv[2], &contract, sizeof contract);
-    if (!session || bytes != sizeof contract) { fprintf(stderr, "short session or contract\n"); return 2; }
+    if (!session || bytes != sizeof contract) { host_err("short session or contract\n"); return 2; }
     unsigned refusal = a733_smp_contract_refusal(&contract, strtoull(argv[3], NULL, 0));
     struct os_session decoded;
     memset(&decoded, 0, sizeof decoded);
@@ -49,11 +54,11 @@ int main(int argc, char **argv)
         if (a733_smp_contract_valid(&contract, strtoull(argv[3], NULL, 0))) return 5;
         stop = (unsigned)a733_smp_refusal_detail(1, 1);
     }
-    printf("refusal=0x%x decode=%u stop=0x%x\n", refusal, ok ? 0 : why, stop);
+    host_out("refusal=0x%x decode=%u stop=0x%x\n", refusal, ok ? 0 : why, stop);
 #ifdef SUNSTONE_A733_OS_NPU
     /* A refused NPU session says which declaration rule refused it (enum npu_declaration_result). */
     if (!ok && why == A733_DECODE_SERVICE)
-        fprintf(stderr, "npu declaration result %d, client model %u (image %u)\n", (int)os_npu_declaration_admitted(&decoded.npu),
+        host_err("npu declaration result %d, client model %u (image %u)\n", (int)os_npu_declaration_admitted(&decoded.npu),
                 (unsigned)decoded.npu.client_model, (unsigned)os_npu_client_model);
 #endif
     return 0;
