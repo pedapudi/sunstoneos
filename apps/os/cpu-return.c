@@ -33,6 +33,19 @@ static TaskHandle_t terminal_handle[8];
 /* The site is the detail; the caller symbolizes the failing check. */
 __attribute__((noinline)) static _Noreturn void fail(unsigned detail)
 {board_fail_at(SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_CPU_RETURN<<12|(detail&0xfff),0,__builtin_return_address(0));platform_exit(detail);}
+/* The cutoff failure says what the session was waiting on: the value is the application's latest progress site (the
+ * return address of its last ss_progress call) and the auxiliary field of the site holds the unmet NPU retirement
+ * conditions (os_npu_retirement_state, 15 bits; zero in an image without the NPU service). */
+__attribute__((noinline)) static _Noreturn void fail_cutoff(void)
+{
+    unsigned npu=0;
+#ifdef SUNSTONE_A733_OS_NPU
+    npu=os_npu_retirement_state()&0x7fffu;
+#endif
+    board_fail_at(SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_CPU_RETURN<<12|0x73c|(uint32_t)npu<<16,
+        os_application_progress_site(),__builtin_return_address(0));
+    platform_exit(0x73c);
+}
 static uint64_t completion_cutoff(void)
 {
 #ifdef SUNSTONE_A733_OS_GPU_LINEAR
@@ -253,7 +266,7 @@ void os_cpu_return_supervise(void)
          * every inference worker stopped. Recognition itself gets no extension. */
         if(os_gpu_return_started())cutoff=completion_cutoff();
 #endif
-        if(a733_smp_counter()>=cutoff)fail(0x73c);
+        if(a733_smp_counter()>=cutoff)fail_cutoff();
         return;
     }
     if(!os_cpu_return_devices_ready())fail(0x741);

@@ -33,6 +33,9 @@ int os_application_gpu_share_bind(struct pvr_compute_queue *);
 int os_application_deadline(void);
 unsigned os_application_activity_generation(void);
 int os_application_finished(void);
+/* The low 32 bits of the return address of the application's latest ss_progress call (0 before the first): where its
+ * waiting loop is. The cutoff failure of the return supervisor records it. */
+uint32_t os_application_progress_site(void);
 /* Publish the failure record as the session result (status SS_RESULT_FAILED)
  * and mark the application finished. The caller holds the failure return. */
 void os_application_failed(const struct ss_failure *,uint64_t epoch,uint64_t generation);

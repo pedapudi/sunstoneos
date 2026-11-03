@@ -11,7 +11,7 @@ import importlib.util
 from pathlib import Path
 import struct
 import hashlib
-from unicorn.arm64_const import UC_ARM64_REG_PC,UC_ARM64_REG_LR,UC_ARM64_REG_SP
+from unicorn.arm64_const import UC_ARM64_REG_PC,UC_ARM64_REG_LR,UC_ARM64_REG_SP,UC_CPU_ARM64_MAX
 from harness import Image,save
 CHECK_INPUTS = ['apps/cpu-npu-concurrency/main.c', 'apps/cpu-npu-concurrency/gemm.h', 'apps/cpu-npu-concurrency/receipt.h', 'apps/cpu-npu-concurrency/host.py', 'apps/cpu-npu-concurrency/vectors.py', 'apps/os/npu-observe.c', 'apps/os/application.c', 'apps/os/cpu-return.c', 'apps/os/npu.c', 'apps/os/npu-irq.c', 'apps/os/cpu-return/terminal.patch', 'apps/os/cpu-return/thermal.patch', 'apps/os/cpu-return-host.py', 'drivers/npu/npu_service.c', 'drivers/npu/a733_npu_runtime.c', 'platform/a733/npu_irq.c', 'include/sunstone_app.h', 'include/npu_service.h', 'include/a733_npu_irq.h', 'cmake/sunstone-os-core.cmake', 'cmake/a733-os-cpu-return.cmake', 'checks/cpu-npu-concurrency/producer.c', 'checks/cpu-npu-concurrency/FreeRTOS.h', 'checks/cpu-npu-concurrency/task.h', 'checks/cpu-npu-concurrency/npu.h', 'checks/cpu-npu-concurrency/a733_npu_irq.h']
 ROOT=Path(__file__).resolve().parents[1]
@@ -19,6 +19,18 @@ def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 owner=module('cpu_npu_return_owners',ROOT/'checks/os-cpu-return-services.py')
 prior=owner.prior
+# The image uses the large-system atomics (CAS, LDADD), which the default emulated core lacks: build the machine on the
+# maximal core (the model must be chosen before memory is mapped).
+from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM
+_machine=prior.fault.Image.machine
+def _max_machine(self):
+ original=Uc.__init__
+ def init(uc,arch,mode):
+  original(uc,arch,mode);uc.ctl_set_cpu_model(UC_CPU_ARM64_MAX)
+ Uc.__init__=init
+ try:return _machine(self)
+ finally:Uc.__init__=original
+prior.fault.Image.machine=_max_machine
 
 class Model(owner.Model):
  def __init__(self,image,layout):
@@ -185,6 +197,32 @@ if not a.late_isr_only:
   else:
    assert m.stop=='failure' and m.u32(finished)==0 and not m.u32(m.flags['closing']),(variant,m.stop,m.failures)
   results.append(dict(case='finish-'+variant,passed=True,failures=m.failures))
+# A session whose NPU retirement never completes must end with the named failure of ss_finish (site group 4, detail
+# 0x75f, value the unmet NPU conditions), recorded before the supervisor's cutoff test, and the supervisor's own cutoff
+# failure must carry the application's latest progress site and the unmet conditions instead of an empty record.
+if not a.late_isr_only:
+ SECOND=24000000
+ for variant in ['unpublished','not-stopped']:
+  m=Model(image,layout);m.stopped()
+  if variant=='unpublished':m.put32(m.report+12,0)
+  else:m.put32(m.n+m.nf['stopped'],0)
+  m.time=(55000000-1000000+50)*24 # inside the last second before the cutoff of the supervisor
+  m.uc.mem_write(0x41f00000,b'producer-receipt')
+  m.call(6,'ss_finish',(0x41f00000,16))
+  assert m.stop=='failure' and m.failures,(variant,m.stop)
+  site,value=m.failures[0]
+  assert site&0x80000fff==0x8000075f and (site>>12)&15==4,(variant,hex(site))
+  assert value&0x4000 and value&{'unpublished':1,'not-stopped':8}[variant],(variant,hex(value))
+  results.append(dict(case='finish-names-the-unmet-npu-conditions-'+variant,passed=True,failures=m.failures))
+ m=Model(image,layout);m.stopped();m.put32(m.report+12,0)
+ m.put32(layout.address('progress_site','apps/os/application.c'),0x41234568)
+ m.time=55000000*24
+ m.call(0,'os_cpu_return_supervise')
+ assert m.stop=='failure' and m.failures
+ site,value=m.failures[0]
+ assert site&0x80000fff==0x8000073c and (site>>12)&15==3,hex(site)
+ assert (site>>16)&0x4001==0x4001 and value==0x41234568,(hex(site),hex(value))
+ results.append(dict(case='supervisor-cutoff-names-progress-site-and-npu-state',passed=True,failures=m.failures))
 save(a.out/'results.json',dict(physical_access=False,model_boundary=__doc__,cases=results,
  image_sha256=hashlib.sha256(a.elf.read_bytes()).hexdigest(),
  sources={name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in CHECK_INPUTS},

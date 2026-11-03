@@ -124,7 +124,13 @@ int ss_live(void)
     if(!(grant.devices&SS_DEVICE_USB_STORAGE))return atomic_load_explicit(&board.result,memory_order_acquire)==3;
     return a733_smp_counter()/24<atomic_load_explicit(&observed_until,memory_order_acquire);
 }
-void ss_progress(void){board_service_progress(OS_SERVICE_APPLICATION);}
+static _Atomic uint32_t progress_site;
+__attribute__((noinline)) void ss_progress(void)
+{
+    atomic_store_explicit(&progress_site,(uint32_t)(uintptr_t)__builtin_return_address(0),memory_order_relaxed);
+    board_service_progress(OS_SERVICE_APPLICATION);
+}
+uint32_t os_application_progress_site(void){return atomic_load_explicit(&progress_site,memory_order_relaxed);}
 uint64_t ss_counter_ticks(void)
 {
     uint64_t now;__asm__ volatile("isb\n mrs %0,cntpct_el0":"=r"(now)::"memory");return now;
@@ -452,8 +458,11 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
     /* SDK CLOSE transfers no bootstrap/local-stop authority. Wait for its
      * immutable client report and revalidate the live IRQ/runtime state. */
     while(!os_npu_retirement_check()){
-        if(ss_live()<0||a733_smp_counter()>=os_cpu_return_cutoff()||
-           (grant.finish_by_us&&a733_smp_counter()/24>=grant.finish_by_us))ss_fail(0x75f);
+        /* Give up one second before the supervisor's cutoff, so that this failure, which names the unmet conditions,
+         * is the first one recorded rather than the supervisor's. The stop takes milliseconds. */
+        if(ss_live()<0||a733_smp_counter()+OS_NPU_RETIREMENT_MARGIN_TICKS>=os_cpu_return_cutoff()||
+           (grant.finish_by_us&&a733_smp_counter()/24+OS_NPU_RETIREMENT_MARGIN_TICKS/24>=grant.finish_by_us))
+            ss_fail_value(0x75f,os_npu_retirement_state());
         ss_progress();vTaskDelay(1);
     }
 #endif
