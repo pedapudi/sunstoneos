@@ -98,8 +98,12 @@ def args_for(image, evidence, approved=False):
     board.run_options(parser)
     parser.add_argument('--evidence', type=Path)
     parser.add_argument('--state', type=Path)
-    return parser.parse_args([str(image), '--kind', 'usb-class', '--port', '3-1',
+    args = parser.parse_args([str(image), '--kind', 'usb-class', '--port', '3-1',
         '--evidence', str(evidence), *(['--approved-by', 'coordinator'] if approved else [])])
+    # A host check never reads the live queue: check_image compares the tree with the daemon's checkout through the queue root's
+    # daemon.json, so the check names a private queue directory under its output, which has no daemon.
+    args.queue = Path(evidence).parent / 'private-queue'
+    return args
 
 
 def admission(out):
@@ -249,7 +253,8 @@ def wrappers(out):
     passed('probe-kind-preserves-USB-approval')
     with contextlib.redirect_stdout(io.StringIO()):
         assert board.development(['usb-class', '--check-only', '--image', str(image),
-            '--approved-by', 'coordinator', '--evidence', str(out/'development')]) == 0
+            '--approved-by', 'coordinator', '--evidence', str(out/'development'),
+            '--queue', str(out/'private-queue')]) == 0
     report = json.loads((out/'development/admission.json').read_text())
     assert report['admitted'] and not report['physical_access']
     passed('development-wrapper-offline-native-probe')

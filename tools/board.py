@@ -1275,6 +1275,7 @@ def development(argv=None):
     parser.add_argument('--manifest', type=Path)
     parser.add_argument('--descriptor', type=Path)
     parser.add_argument('--no-preflight', metavar='REASON')
+    parser.add_argument('--queue', type=Path, help='the queue root the command reads (default: the live queue)')
     parser.add_argument('--approved-by', choices=('coordinator',))
     parser.add_argument('--host-tree', type=Path)
     parser.add_argument('--objcopy', type=Path)
@@ -1323,7 +1324,7 @@ def development(argv=None):
     command += ['--decode-application']
     for path in args.input:
         command += ['--input', str(path)]
-    return main(command)
+    return main(['--queue', str(args.queue), *command] if args.queue else command)
 
 
 def legacy_run(args, kind='probe', image=None, storage_write=False):
