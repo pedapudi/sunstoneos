@@ -178,7 +178,10 @@ static void write_fault(uint8_t *buffer, enum sunxi_mmc_error error)
 {
     struct sunxi_mmc *c = &m.platform.core;
     c->state = SUNXI_MMC_FAULT; c->result.error = error; c->writing = 1; c->dma_write = 1; c->borrowed = buffer; c->borrowed_bytes = 512;
-    c->protocol = 27; c->result.interrupts = 0x8080u; c->result.tbc0 = 96u * 512u; c->result.tbc1 = 112u * 512u; c->result.desc_index = 12; c->result.where_valid = 1;               /* a data CRC error and an end-bit error, as a CRC status failure raises them */
+    c->protocol = 27; c->result.interrupts = 0x8080u; c->result.tbc0 = 96u * 512u; c->result.tbc1 = 112u * 512u; c->result.desc_index = 12; c->result.where_valid = 1;
+    c->result.dma_status = (1u << 2) | (1u << 9); c->write_request.blocks = 256;                 /* an IDMAC fatal bus error and its summary, in a piece of 256 sectors */
+    /* A fault in the data phase of a tuned write leaves the controller as the write set it: the new timing mode and the write's sample delay. The restart must not inherit them. */
+    u.base.reg[0x5c / 4] |= 0x80000110u; u.base.reg[0x144 / 4] = 0x80u;               /* a data CRC error and an end-bit error, as a CRC status failure raises them */
     u.prog_busy = 1;                                                /* the card is left programming, with DAT0 low, until the restart resets it with CMD0 */
     if (m.platform.irq_mode) *pmic_model_word(&m.power, 0x03400218) |= 2u;                  /* the owner masked INTID 193, but the status that raised it still asserts the line: pending until the status is cleared */
     enum a733_mmc_platform_result r = uhs_step();
@@ -197,16 +200,18 @@ static void write_recovery(uint8_t *buffer)
     m.platform.recover_errors = 0;
     /* The record's fields while the fault stands: the core's error, protocol step and interrupt status, the pieces written and the timing. */
     {
-        uint64_t detail = os_sd_where_detail(&m.platform.core, m.platform.core.card.timing), aux = os_sd_where_aux(&m.platform.core, 5);
+        uint64_t detail = os_sd_where_detail(&m.platform.core, m.platform.core.card.timing), aux = os_sd_where_aux(&m.platform.core);
         uint32_t value = os_sd_note_value(34, detail);
         /* stage in 5:0; then status bits 15:1 in 20:6, timing 22:21, descriptor 28:23, error 31:29; aux: 96 blocks in 8:0, the first fault's 5 descriptors in 14:9 */
         assert((value & 0x3f) == 34 && ((value >> 6) & 0x7fff) == (0x8080u >> 1) && ((value >> 21) & 3) == 3 && ((value >> 23) & 63) == 12 && (value >> 29) == SUNXI_MMC_CARD);
-        assert((aux & 511) == 96 && ((aux >> 9) & 63) == 5);
+        assert((aux & 511) == 96 && ((aux >> 9) & 15) == 9 /* bus error and summary */ && ((aux >> 13) & 3) == 3 /* a piece of 256 sectors */);
     }
     recover_to_ready(); assert(m.platform.core.card.timing == 3);                       /* the first error: tuned again */
+    assert(!(u.base.reg[0x5c / 4] & 0x80000331u) && (u.base.reg[0x144 / 4] & 0xbfu) == (0x80u | m.platform.core.card.sample_delay));      /* the old mode and the tuned delay are back */
     assert(m.platform.core.card.mode_log[0].error == SUNXI_MMC_CARD && m.platform.core.card.mode_log[0].protocol == 27 && m.platform.core.card.mode_log[0].interrupts == 0x8080u);
     assert(m.platform.core.card.mode_log[0].blocks == 96 && m.platform.core.card.mode_log[0].descriptor == 12);        /* where the transfer stopped */
     write_fault(buffer, SUNXI_MMC_CARD); recover_to_ready();                           /* the second in a row: one step down */
+    assert(!(u.base.reg[0x5c / 4] & 0x80000331u) && m.platform.core.card.timing == 2);
     assert(m.platform.core.card.timing == 2 && m.platform.core.card.uhs_outcome == SUNXI_MMC_UHS_SDR50 && m.platform.core.card.mode_steps == 2);
     assert(m.platform.core.card.mode_log[1].reason == SUNXI_MMC_MODE_ERRORS && m.platform.core.card.mode_log[1].from == 3);
     /* The session that stepped down and completed still carries both faults: the report word has them, with the core's error and interrupt status of each. */
@@ -217,7 +222,7 @@ static void write_recovery(uint8_t *buffer)
             assert((f & 15) == SUNXI_MMC_CARD && ((f >> 4) & 63) == 27 && ((f >> 10) & 0xffff) == 0x8080u && ((f >> 26) & 63) == 12);       /* and the descriptor the IDMAC had reached */
         }
         uint64_t where = os_sd_fault_blocks(&m.platform.core.card);
-        assert((where >> 32 & 511) == 96 && (where >> 48 & 511) == 96);                                                                     /* the card-side blocks of each */
+        assert((where >> 32 & 511) == 96 && (where >> 48 & 511) == 96 && (where >> 41 & 15) == 9 && (where >> 57 & 15) == 9 && (where >> 45 & 3) == 3 && (where >> 61 & 3) == 3);                                                                     /* the card-side blocks of each */
     }
     read_ok(buffer);                                                                    /* the retry completes and clears the count */
     assert(m.platform.recover_errors == 0 && !m.platform.core.writing);

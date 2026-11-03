@@ -215,7 +215,7 @@ static int found_at_1v8(void)
     return sunxi_mmc_card_found_at_1v8(&platform.core.card);
 }
 #define RECOVER_US 3000000u
-static unsigned first_fault_units, saved_blocks, saved_timing; static uint64_t saved_where;   /* where the last write fault stopped, kept across the restart that discards the core's result */
+static unsigned saved_aux; static uint64_t saved_where;   /* where the last write fault stopped, kept across the restart that discards the core's result */
 static uint64_t first_fault_detail;       /* the core's error, protocol step and interrupt status at the first failed request (apps/os/sd_note.h), kept for the failure record */
 static uint64_t last_sector; static uint32_t last_count; static uint8_t *last_dma;
 #ifdef OS_SD_WRITE
@@ -223,19 +223,19 @@ static void irq_suspend(void);
 static int irq_resume(void);
 #endif
 /* A recovery that did not complete (stages 37 to 40) leaves the fault that began it: os_sd_diag[1] is the core's error, protocol step and interrupt status at the first failed
- * request, and os_sd_diag[2] the platform's result in 2:0, its stage in 7:3 and its fault flag in bit 8, for the record's aux field. */
+ * request, and os_sd_diag[2] the platform's result in 2:0, its fault flag in bit 3 and the source line of its fault in 14:4 (a733_mmc_platform.c), for the record's aux field. */
 static int recover_fail(unsigned stage, enum a733_mmc_platform_result r)
 {
     int rc = DIAG(stage, first_fault_detail);
-    os_sd_diag[2] = (uint64_t)((unsigned)r & 7u) | (uint64_t)(platform.stage & 31u) << 3 | (uint64_t)(platform.fault ? 1u : 0u) << 8;   /* always: irq_suspend leaves its own interrupt state here, which the format run mistook for the result */
+    os_sd_diag[2] = (uint64_t)((unsigned)r & 7u) | (uint64_t)(platform.fault ? 1u : 0u) << 3 | (uint64_t)(platform.fault_line & 0x7ffu) << 4;   /* always: irq_suspend leaves its own interrupt state here, which the format run mistook for the result */
     return rc;
 }
 /* A failed read the platform can recover (A733_MMC_ERROR): identify again, which tunes again, or step the mode down (a733_mmc_platform_recover). Blocking, in the owner. */
 static int recover_blocking(void)
 {
     enum a733_mmc_platform_result r;
-    if (!first_fault_detail) { first_fault_detail = os_sd_write_detail(&platform.core); first_fault_units = platform.core.result.tbc0 / 4096u; }
-    saved_where = os_sd_where_detail(&platform.core, platform.core.card.timing); saved_blocks = (platform.core.result.tbc0 / 512u) & 511u;
+    if (!first_fault_detail) { first_fault_detail = os_sd_write_detail(&platform.core); }
+    saved_where = os_sd_where_detail(&platform.core, platform.core.card.timing); saved_aux = (unsigned)os_sd_where_aux(&platform.core);
 #ifdef OS_SD_WRITE
     irq_suspend();
 #endif
@@ -628,7 +628,7 @@ static int write_fail(unsigned stage, enum a733_mmc_platform_result r, uint64_t 
     const struct sunxi_mmc *c = &platform.core;
     int live = c->state == SUNXI_MMC_FAULT;       /* else the restart has replaced the core: the snapshot taken before it */
     int rc = DIAG(stage, live ? os_sd_where_detail(c, c->card.timing) : saved_where);
-    os_sd_diag[2] = (live ? os_sd_where_aux(c, first_fault_units) : (uint64_t)(saved_blocks | (first_fault_units & 63u) << 9));
+    os_sd_diag[2] = live ? os_sd_where_aux(c) : (uint64_t)saved_aux;
     if (!os_sd_diag[3]) os_sd_diag[3] = sector;
     (void)r;
     return rc;

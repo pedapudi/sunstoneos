@@ -212,7 +212,8 @@ static void mode_note(struct sunxi_mmc *h, unsigned from, unsigned to, enum sunx
     if (h->card.mode_steps < SUNXI_MMC_MODE_LOG)
         h->card.mode_log[h->card.mode_steps] = (struct sunxi_mmc_mode_event){(uint8_t)from, (uint8_t)to, (uint8_t)why, h->card.signal_1v8,
             fault ? (uint8_t)fault->result.error : 0u, fault ? (uint8_t)fault->protocol : 0u, fault ? (uint16_t)(fault->result.interrupts & 0xffffu) : 0u,
-            fault ? (uint16_t)(fault->result.tbc0 / 512u) : 0u, fault ? fault->result.desc_index : 0u};
+            fault ? (uint16_t)(fault->result.tbc0 / 512u) : 0u, fault ? fault->result.desc_index : 0u,
+            fault ? sunxi_mmc_idst4(fault->result.dma_status) : 0u, fault ? sunxi_mmc_piece_class(fault->write_request.blocks) : 0u};
     if (h->card.mode_steps < 255) ++h->card.mode_steps;
 }
 
@@ -463,6 +464,8 @@ static void write_where(struct sunxi_mmc *h)
     uint32_t t0 = 0, t1 = 0, chda = 0;
     int ok = h->config.ops.read32(h->config.context, 0x48, &t0) == 1 && h->config.ops.read32(h->config.context, 0x4c, &t1) == 1;
     int have_chda = h->config.ops.read32(h->config.context, 0x90, &chda) == 1;
+    uint32_t idst = 0;
+    if (h->config.ops.read32(h->config.context, SUNXI_SMHC_IDST, &idst) == 1) h->result.dma_status = idst;
     h->result.tbc0 = t0; h->result.tbc1 = t1; h->result.where_valid = (uint8_t)ok;
     uint32_t base = (uint32_t)(uintptr_t)h->config.dma;
     h->result.desc_index = !have_chda ? 62u : (chda >= base && chda - base < SUNXI_MMC_DMA_DESCRIPTORS * sizeof(struct sunxi_mmc_dma_descriptor)) ?

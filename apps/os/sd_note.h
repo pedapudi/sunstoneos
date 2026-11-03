@@ -6,16 +6,18 @@
 static inline uint64_t os_sd_write_detail(const struct sunxi_mmc *core)
 { return (uint64_t)(core->result.error & 15u) | (uint64_t)(core->protocol & 63u) << 4 | (uint64_t)(core->result.interrupts & 0xffffu) << 10; }
 /* Where a write fault stopped, for the failure record of stages 33 and 34 (a watchdog reset loses the report). The detail's 26 bits: the raw interrupt status bits 15:1 in 14:0, the bus
- * timing in 16:15, the descriptor the IDMAC had reached in 22:17 (62 unreadable, 63 outside the list) and the core's error (clamped to 7) in 25:23. The record's aux field (15 bits): in 8:0 the 512-byte
- * blocks the card side had taken at the last fault (SMHC_TBC0 / 512), in 14:9 the same count of the first fault of the session in 4 KiB units (one descriptor). The piece's sector count and the
- * pieces written are not in the record; protocol step 35 (the CMD25 data phase) is implied by the status bits. */
+ * timing in 16:15, the descriptor the IDMAC had reached in 22:17 (62 unreadable, 63 outside the list) and the core's error (clamped to 7) in 25:23. The record's aux field (15 bits): in
+ * 8:0 the 512-byte blocks the card side had taken at the fault (SMHC_TBC0 / 512), in 12:9 the IDMAC error bits (sunxi_mmc_idst4) and in 14:13 the piece's size class
+ * (sunxi_mmc_piece_class: 0 one sector, 1 two to 32, 2 33 to 255, 3 256). Protocol step 35 (the CMD25 data phase) is implied. */
 static inline uint64_t os_sd_where_detail(const struct sunxi_mmc *core, unsigned timing)
 {
     unsigned e = (unsigned)core->result.error; if (e > 7u) e = 7u;
     return (uint64_t)((core->result.interrupts >> 1) & 0x7fffu) | (uint64_t)(timing & 3u) << 15 | (uint64_t)(core->result.desc_index & 63u) << 17 | (uint64_t)e << 23;
 }
-static inline uint64_t os_sd_where_aux(const struct sunxi_mmc *core, unsigned first_units)
-{ return (uint64_t)((core->result.tbc0 / 512u) & 511u) | (uint64_t)(first_units & 63u) << 9; }
+static inline uint64_t os_sd_where_aux(const struct sunxi_mmc *core)
+{
+    return (uint64_t)((core->result.tbc0 / 512u) & 511u) | (uint64_t)sunxi_mmc_idst4(core->result.dma_status) << 9 | (uint64_t)sunxi_mmc_piece_class(core->write_request.blocks) << 13;
+}
 /* The value word of the record for a stage and a detail, as sd_owner.c's diag_word builds it. */
 static inline uint32_t os_sd_note_value(unsigned stage, uint64_t detail) { return (uint32_t)(stage & 0x3fu) | (uint32_t)(detail & 0x3ffffffu) << 6; }
 /* The first two faults that the recovery acted on, for the report (os_sd_mode word 4): each in 26 bits, the core's error in 3:0, its protocol step in 9:4 and the low 16 bits
@@ -30,14 +32,14 @@ static inline uint64_t os_sd_fault_events(const struct sunxi_mmc_card *c)
     }
     return word;
 }
-/* Where each of those two faults stopped, for the upper half of os_sd_mode word 3: the 512-byte blocks the card side had taken (SMHC_TBC0 / 512) in 8:0 of each 16-bit half, the first
- * fault in bits 40:32 and the second in 56:48; the descriptor the IDMAC had reached is in bits 31:26 of each fault in word 4 (62 unreadable, 63 outside the list). */
+/* Where each of those two faults stopped, for the upper half of os_sd_mode word 3, 16 bits per fault (the first in bits 47:32, the second in 63:48): the 512-byte blocks the card side had
+ * taken (SMHC_TBC0 / 512) in 8:0, the IDMAC error bits in 12:9 and the piece's size class in 14:13; the descriptor the IDMAC had reached is in bits 31:26 of each fault in word 4. */
 static inline uint64_t os_sd_fault_blocks(const struct sunxi_mmc_card *c)
 {
     uint64_t word = 0; unsigned seen = 0;
     for (unsigned i = 0; i < c->mode_steps && i < SUNXI_MMC_MODE_LOG && seen < 2; ++i) {
         if (c->mode_log[i].reason != SUNXI_MMC_MODE_RETUNE && c->mode_log[i].reason != SUNXI_MMC_MODE_ERRORS) continue;
-        word |= (uint64_t)(c->mode_log[i].blocks & 511u) << (32 + 16 * seen++);
+        word |= (uint64_t)((c->mode_log[i].blocks & 511u) | (c->mode_log[i].idst & 15u) << 9 | (c->mode_log[i].piece & 3u) << 13) << (32 + 16 * seen++);
     }
     return word;
 }

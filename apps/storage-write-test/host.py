@@ -31,7 +31,8 @@ def decode_mode(w):
     return dict(mode=MODE_NAMES.get((v18, timing), (v18, timing)), signal_1v8=bool(v18), outcome_code=w[0] >> 12 & 15, mode_steps=w[0] >> 20 & 15, ceiling=w[0] >> 28 & 15,
                 reentered=bool(w[0] >> 32 & 1), reopened=bool(w[0] >> 36 & 1), restarts=w[0] >> 40 & 255, card_hz=w[1], sample_delay=w[2] & 255, window_start=w[2] >> 8 & 255,
                 window_width=w[2] >> 16 & 255, group1_support=hex(w[2] >> 24 & 255), s18a=bool(w[2] >> 32 & 1), steps=steps,
-                faults=[dict(core_error=f & 15, protocol=f >> 4 & 63, interrupts=hex(f >> 10 & 0xffff), descriptor=f >> 26 & 63, blocks=w[3] >> (32 + 16 * i) & 511)
+                faults=[dict(core_error=f & 15, protocol=f >> 4 & 63, interrupts=hex(f >> 10 & 0xffff), descriptor=f >> 26 & 63, blocks=w[3] >> (32 + 16 * i) & 511, idst=w[3] >> (41 + 16 * i) & 15,
+                             piece=['1 sector', '2 to 32', '33 to 255', '256'][w[3] >> (45 + 16 * i) & 3])
                         for i, f in enumerate((w[4] & 0xffffffff, w[4] >> 32 & 0xffffffff)) if f & 0x3ffffff])
 
 

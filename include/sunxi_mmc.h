@@ -35,7 +35,7 @@ enum sunxi_mmc_mode_reason { SUNXI_MMC_MODE_NONE, SUNXI_MMC_MODE_NO_WINDOW, SUNX
     SUNXI_MMC_MODE_ERRORS, SUNXI_MMC_MODE_RETUNE_FAILED, SUNXI_MMC_MODE_RETUNE };
 /* from and to are card.timing values. A step taken after a failed request keeps what the core saw at the fault: its error code (sunxi_mmc_error), the protocol step
  * it was in and the low 16 bits of the controller's raw interrupt status, so a session that steps down and completes still says why. Zero for a step with no fault. */
-struct sunxi_mmc_mode_event { uint8_t from, to, reason, signal_1v8, error, protocol; uint16_t interrupts; uint16_t blocks; uint8_t descriptor; /* where a write fault stopped: 512-byte blocks the card side had taken (SMHC_TBC0) and the descriptor reached */ };
+struct sunxi_mmc_mode_event { uint8_t from, to, reason, signal_1v8, error, protocol; uint16_t interrupts; uint16_t blocks; uint8_t descriptor, idst, piece; /* where a write fault stopped: 512-byte blocks the card side had taken (SMHC_TBC0), the descriptor reached, the IDMAC error bits (4 bits, sd_note.h) and the piece's size class (0: 1 sector, 1: 2 to 32, 2: 33 to 255, 3: 256) */ };
 #define SUNXI_MMC_MODE_LOG 6u
 /* The sample phase (SMHC_NTSR data and command phase fields, 0: 90 degrees, 1: 180 degrees) of the new timing mode that a tuned card's data write runs in; the tuned old mode
  * and the read sweep's delay return afterwards. 0 is the board kernel's v5p3x row for 104 and 208 MHz. */
@@ -254,6 +254,10 @@ int sunxi_mmc_restart(struct sunxi_mmc *, unsigned ceiling, enum sunxi_mmc_mode_
 /* A failed read or write the restart can recover: the error is a controller, card or timeout error. A write is retried by its owner with the same sectors and
  * the same data, inside the bounds that admitted it; the card is reset by the identification, so a half-programmed block is abandoned. */
 int sunxi_mmc_recoverable(const struct sunxi_mmc *);
+/* The IDMAC status error bits (2 fatal bus error, 4 descriptor unavailable, 5 card error summary, 9 abnormal summary) as four bits, and a write's size class. */
+static inline uint8_t sunxi_mmc_idst4(uint32_t idst)
+{ return (uint8_t)((idst >> 2 & 1u) | (idst >> 4 & 1u) << 1 | (idst >> 5 & 1u) << 2 | (idst >> 9 & 1u) << 3); }
+static inline uint8_t sunxi_mmc_piece_class(uint32_t blocks) { return blocks <= 1u ? 0u : blocks <= 32u ? 1u : blocks < 256u ? 2u : 3u; }
 /* Entire range and byte/sector command argument are validated before MMIO.
  * Borrowed storage must remain exclusive through DONE or terminal FAULT.
  */
