@@ -625,6 +625,12 @@ def main():
         application = image.application('slot1-test', ['checks/qemu-os/slot1-main.c'], ROOT / 'checks/qemu-os/slot1-manifest.json')
         return image.build(application)
 
+    def build_upper():
+        """The same application with its region in level-1 slot 2, above the unmapped hole (step 6b)."""
+        image = Image(out / 'build-upper', extra_defines=['-DQEMU_OS_UPPER=1'])
+        application = image.application('slot1-test', ['checks/qemu-os/slot1-main.c'], ROOT / 'checks/qemu-os/upper-manifest.json')
+        return image.build(application)
+
     def build_facts():
         image = Image(out / 'build-hw-facts', extra_defines=['-DSUNSTONE_A733_HW_FACTS=1'],
                       extra_sources=['platform/a733/hw_facts.c'])
@@ -663,6 +669,7 @@ def main():
         slot1_elf = pool.submit(build_slot1).result()
         heap_elf, heap_big_elf, heap_early_elf = heap_elf.result(), heap_big_elf.result(), heap_early.result()
         notify_elf = pool.submit(build_notify).result()
+        upper_elf = pool.submit(build_upper).result()
         usb_race_elf = pool.submit(build_usb_race).result()
         storage_write_space_elf = pool.submit(build_storage_write_space).result()
         (out / 'build-reverted-owner').mkdir()
@@ -973,6 +980,19 @@ def main():
     c = run_case('region-in-slot-1-end-faults', slot1_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(1), '4G')
     c.failed_with('APPLICATION', 0xe24)
     c.require(int(c.failure['value'], 16) == 0x55000000, 'the byte after the slot 1 region faults at %s' % c.failure['value'])
+
+    # A manifest region from 0x80000000: level-1 slot 2, mapped for its application alone; the byte after it is a kernel block.
+    c = run_case('region-in-upper', upper_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G')
+    c.clean()
+    tag, address, size, fold = struct.unpack('<4Q', bytes.fromhex(c.finished['result']))
+    expected_fold = 0xffffffffffffffff
+    for i in range(0, (64 << 20) // 8, 512):
+        expected_fold ^= (0x9e3779b97f4a7c15 * (i + 1)) & (2 ** 64 - 1)
+    c.require(tag == 0x534c4f5431 and address == 0x88000000 and size == 64 << 20 and fold == expected_fold,
+              'upper region result %#x at %#x, %#x bytes, fold %#x' % (tag, address, size, fold))
+    c = run_case('region-in-upper-end-faults', upper_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(1), '4G')
+    c.failed_with('APPLICATION', 0xe24)
+    c.require(int(c.failure['value'], 16) == 0x8c000000, 'the byte after the upper region faults at %s' % c.failure['value'])
 
     # The main stack comes from upper memory with an unmapped guard block below it: an overflow is an EL0 fault in the guard.
     c = run_case('main-stack-overflow-hits-guard', slot1_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(2), '4G')

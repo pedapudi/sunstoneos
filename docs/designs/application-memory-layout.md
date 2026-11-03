@@ -497,6 +497,31 @@ against the budget of 240 s; the session returned normally (`RETURN_ROM`), its 3
 attribute, the estimate, the budget and the backup and restore of regions in slot 1 on a board. It does not show the reach
 above 2 GiB, which step 6b is for.
 
+### Predicted board run of the preserving runner above 2 GiB (step 6b)
+
+The manifest tool places a work, output or input region in the upper memory (`0x80000000` up to the installed memory) when the
+window and the slot 1 area are full, or where the manifest pins it. The admission holds every such region in the ledger by its
+address. The platform gives the EL3 level-1 table one 1 GiB block for each gigabyte that holds a work or output region, only where
+this boot's decode check passed. The normal-return terminal reads that block for an address from `0x80000000` and applies the test
+that it applies to a level-2 block (the gigabyte's own block, NS, write-back, inner-shareable, access flag). The EL3 publication of
+the identity step accepts the installed memory. The emulated board maps and uses such a region from EL0 and faults one byte past
+it, and `checks/os-cpu-return.py` shows the terminal cleaning the regions and parking when the block is missing, belongs to
+another gigabyte, or has the wrong attributes.
+
+Hypothesis: a preserving run (`--preserve-dram`, development off) of `slot1-test` mode 0 with the manifest
+`apps/slot1-test/manifest-upper.json` (a 16 MiB WORK region at `0x88000000`, an 8 MiB OUTPUT region at `0x89000000` and an 8 MiB
+scratch WORK region at `0x8a000000`, all in level-1 slot 2) behaves as the run of the same shape in the slot 1 area did.
+
+- **Expected.** The runner backs up the image RAM, the 16 MiB and the 8 MiB regions (about 42 MiB, estimate about 160 s under a
+  budget of 240 s) and leaves out `0x8a000000`; the session returns normally with the 32-byte result `{SLOT1 tag, 0x88000000,
+  16 MiB, fold}`; the record says `dram_restored` true and the restoration's readback hashes equal the backup's. The terminal
+  cleaning the regions through the EL3 level-1 block is what lets the session reach `RETURN_ROM`.
+- **A different result and what it means.** A watchdog end after the `TERMINAL` stage means the terminal parked on the level-1
+  block (the platform's entry is missing or its attributes differ from the test), because the host model does not run the
+  platform code that writes it. A bus hang or a fault at the first store to `0x88000000` would be a property of the decode check
+  or the interconnect; the heap run reached `0x80000000` already. A restore hash that differs from the backup is a defect of the
+  runner's transfer above 2 GiB, which this run is the first to exercise.
+
 ### Predicted board run of the NPU pool in the slot 1 area
 
 Hypothesis: an `npu-graphs` image built from the recipe of the passing run `1793599845892192862-30dc9323` (seven
