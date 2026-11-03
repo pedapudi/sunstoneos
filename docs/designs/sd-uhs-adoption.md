@@ -1,6 +1,6 @@
 # Design: adopting UHS-I SDR104 in the OS
 
-Status: **open.** No adoption code is written. The design builds on [the recovery design](sd-uhs-recovery.md), whose board results are:
+Status: **host-tested; read-only paths qualified on the board (port 3-3).** The OS owner (`apps/os/large_sd.c`) implements the algorithm below and has not run on a board; writes at 1.8 V have not run. The design builds on [the recovery design](sd-uhs-recovery.md), whose board results are:
 
 - **Port 3-3 card (Phison SD32G, 2020):** re-entered at 1.8 V after a watchdog reset by moving the bank to 1.8 V first (CMD0, CMD8, ACMD41, no CMD11). S18A is clear at 1.8 V; the CMD6 group 1 support field read at 1.8 V is `0x801f` (SDR12 to SDR104 and DDR50). SDR25 reads at 50 MHz run at 21.4 MB/s per request, and SDR104 at 150 MHz runs at 47.6 MB/s per request and 27.4 MB/s sustained (see [the UHS-I design](sd-uhs.md)). The close restores the bank to 3.3 V and the lifetime returns normally.
 - **Port 3-1 card (Phison SD64G, 2026):** seen at 3.3 V only. It answers S18A set at 3.3 V. Its 1.8 V behaviour is expected to match 3-3's and is unmeasured.
@@ -37,9 +37,9 @@ Steps:
    at 1.8 V), CMD2 onward (the core's re-entry mode). No CMD11. Silence here, with the bank returned to 3.3 V, is the one terminal outcome: card absent or hung, needing power removal.
 5. **Speed.** At 1.8 V the CMD6 group 1 support field is meaningful: select SDR104 when `0x8` is set and the tuning sweep finds a window of at least 12 delays, otherwise SDR25 at 50 MHz.
 
-**The measurement that settles step 2 (open).** Whether a 3.3 V host reads a 1.8 V card is unmeasured. One read-only run on 3-3 with the card at 1.8 V and the bank at 3.3 V (the existing mode 0: CMD0,
-CMD8, ACMD41 with S18R, no CMD11) answers it: an answer, with its S18A value, or a stop at identification. If the card is silent at 3.3 V (a 3.3 V host does not read a card at 1.8 V), step 2 needs no discriminator: silence means 1.8 V
-or absent, and the OS goes straight to step 4. If it answers with S18A clear, the discriminator above applies. The run is safe (it only reads and never sends CMD11); it has not run.
+**What the cards answer (records in `docs/evidence/storage.jsonl`).** A 3.3 V host reads a card at 1.8 V, and the card answers S18A clear, as it does to a 1.8 V host, so S18A alone cannot tell a card at 1.8 V from a card that declines UHS. The CMD6 group 1 support field tells them apart: a card at 3.3 V reports functions 2 to 4 as 0 (port 3-1: `0x8003`), a card at 1.8 V reports them (port 3-3: `0x801f`, through either host voltage). The rule, with no 1.8 V probe: at 3.3 V, S18A set means switch with CMD11; S18A clear with SDR50, SDR104 or DDR50 in the group 1 support field means the card is at 1.8 V, so move the bank to 1.8 V and re-enter; S18A clear with only functions 0 and 1 is a card without UHS-I and stays at 3.3 V high speed; no answer to CMD8 at 3.3 V means re-enter at 1.8 V. Re-entry costs one more identification (about 0.3 s) once per power cycle. The card at 1.8 V read by a 3.3 V host is outside its signalling specification, so the OS re-enters at 1.8 V and does not read it at 3.3 V.
+
+**Restart and step-down.** A failed read identifies again (a new tuning), then steps the mode down through the ceilings SDR104, SDR50 and SDR25 with no CMD11 and no PF write. The native adapter admits the CMD6 function 1, 2 and 3 switches of the UHS-I profile; the lifetimes model walks a card with SDR50 through all three ceilings with every write offered to the real filter.
 
 **A marker.** A byte that survives a watchdog reset and is lost with board power would let the OS skip step 2: "the card was switched". The vendor boot flow uses the AXP8191 `BUFFER0`
 (`0x04`) for the reboot mode, so it is not taken; the RTC words after the breadcrumb block are not cleared by a reset but the runner clears the breadcrumb block at each launch, and whether the
@@ -76,19 +76,26 @@ No write at 1.8 V has run. What is known and what is needed:
 - **Known (code).** The core programs the read threshold for SDR104 reads (`THLD` block size and bit 0) and the write threshold for CMD25 (`THLD` block size and bit 2) per command, so the two do not
   conflict. The native adapter admits a `THLD` write in the UHS-I profile, and CMD25 only for a verified bounds object in a writer build (`A733_MMC_BOUNDED_WRITER`); the two have not been combined in one
   host model. The write path's DAT0 busy timer and programming-status check do not depend on the bus speed.
-- **Not known.** The data and CRC-status sampling at SDR104 for writes: the tuning picks the sample delay for card-to-host data, and the host-to-card phase for writes (`DRV_DL`) and the CRC token sample point
-  at 150 MHz are not modelled by any check. The vendor kernel supports writes at SDR104, so the registers exist; their values are not derived here.
-- **Policy until qualified.** Writes run at SDR25 (50 MHz) on a card at 1.8 V, or at 3.3 V high speed on a card that was never switched. An SDR104 session that wants to write first changes the card's
-  mode to SDR25 with CMD6 (function 1) and the module clock to 50 MHz, with no change of signalling level; the core has no runtime mode change, so this needs a new step in its state machine
-  (clock stop, CMD6 check and set, module clock change, restart) and the strict CMD25 model run at 1.8 V and 50 MHz.
+- **Drive and sample phases (derived).** The board kernel sets them per clock range in `sunxi_mmc_set_clk_dly` (`bsp/drivers/mmc/sunxi-mmc-v5p3x.c`) from the defaults of `sunxi_mmc_clk_dly_v5p3x`; the `&sdc0` node sets none. The command drive phase is bit 16 and the data drive phase bit 17 of `0x140`; the sample phases are bits 5:4 (command) and 9:8 (data) of `0x5c`. `SAMP_DL` and `DS_DL` are written only by tuning. The core writes these values (`uhs_registers`, the cold setup), `checks/sunxi-mmc-uhs.py` pins the table by parsing the vendor source and node, and `checks/sunxi-mmc-uhs.c` compares every mode's register values with it.
+
+  | Range (clock) | Our modes | Command drive | Data drive | Data sample | Command sample |
+  | --- | --- | --- | --- | --- | --- |
+  | 400 kHz | identification | 180 | 90 | 0 | 0 |
+  | up to 26 MHz | default speed, SDR12 | 180 | 90 | 0 | 0 |
+  | up to 52 MHz | high speed, SDR25 | 180 | 180 | 1 | 1 |
+  | up to 104 MHz | SDR50 | 180 | 90 | 0 | 0 (tuned delay) |
+  | up to 208 MHz | SDR104 | 180 | 90 | 0 | 0 (tuned delay) |
+
+  The same registers serve reads and writes. The CRC status of a write is sampled with the read-data setting, so the tuned delay applies. Reads do not depend on the data drive phase; a write does. Reads with data drive 90 degrees at 400 kHz, SDR50 and SDR104 pass on port 3-3; writes are untested on a board.
+- **Policy until qualified.** Writes run at SDR25 (50 MHz) on a card at 1.8 V, or at 3.3 V high speed on a card that was never switched. The core has no runtime mode change, so an SDR104 session that wants to write needs a step in its state machine (clock stop, CMD6 check and set, module clock change, restart) and the strict CMD25 model run at 1.8 V and 50 MHz.
 - **Qualification path.** (1) Extend `checks/sunxi-mmc-write-dma.c` to a 1.8 V card at SDR25 and then SDR104 with the sample-delay and drive-phase registers modeled from the vendor driver; (2) read the
   vendor `sunxi-mmc-v5p3x.c` for the write-side timing registers at SDR104 and record the register sequence the way `docs/designs/mmc-multiblock-write.md` does for 3.3 V; (3) a board write session at
   SDR25 on 1.8 V under the per-session backup procedure; (4) only then SDR104 writes, in the same way. Every board write session keeps the existing blob, backup and approval-record rules.
 
 ## Open work
 
-1. Platform: accept the bank at 1.8 V in the baseline; a runtime SDR104-to-SDR25 mode change; the OS owner (`apps/os/large_sd.c`) using the UHS-I profile with `start_1v8` decided by step 1.
-2. The resolution algorithm in the platform and the owner, with its host models (the recovery model already runs the table).
-3. The measurement of step 2 (mode 0 on 3-3), then the same set of runs on 3-1, which has never been at 1.8 V.
-4. The write-path qualification above.
-5. The runner: approval of the 150 MHz point and of CMD11 for OS images, and the image classification for UHS-I.
+1. Run the OS owner on a board (read run and the bounded write at 1.8 V on port 3-3, which needs the write session backup procedure; the 3-3 layout and backup plan is in record `sd-uhs-adoption-3-3-layout-capture`).
+2. Run the read-only switch to 1.8 V on port 3-1, which has never been at 1.8 V (prediction in record `sd-uhs-adoption-3-1-switch`, not run).
+3. A runtime SDR104-to-SDR25 mode change and the strict CMD25 model at 1.8 V.
+4. The runner: approval of the 150 MHz point and of CMD11 for OS images, and the image classification for UHS-I.
+5. Five image-level SD checks (`storage-read-native.py`, `storage-read-binding.py`, `sd-return-native.py`, `sd-return-host.py`, `sd-return-continuity.py`) are stale models of the current image and are waived in `checks/gate-inputs.json`; rewrite them against the image.

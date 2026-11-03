@@ -46,7 +46,7 @@ def main():
         [(100000 + 10 * i, 5) for i in range(300)]
     ranges.sort()
     blob = out / 'blob.bin'
-    blob.write_bytes(bounds.encode_input(ranges, backup_ranges, digest))
+    blob.write_bytes(bounds.encode_input(ranges, backup_ranges, digest, '0123456789abcdef0123456789abcdef'))
     r = subprocess.run([str(binary), str(blob), str(card)], capture_output=True, text=True, env=harness.environment())
     assert r.returncode == 0, r.stdout + r.stderr
     print(r.stdout.strip())

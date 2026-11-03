@@ -67,7 +67,7 @@ static int shadow_write(void *v,uintptr_t a,uint32_t value)
 static void setup_read(void)
 {
     static uint8_t buffer[4096];
-    closing=stall_update=fail_gate=gate_order=0;
+    closing=stall_update=fail_gate=gate_order=0;cfg_dma=0;
     begin(2,1,2);assert(settle()==A733_MMC_READY);
     assert(a733_mmc_platform_close(&m.platform,9000000)==A733_MMC_INVALID);
     read_ok(buffer);m.platform.ops.write=close_write;closing=1;
@@ -80,12 +80,13 @@ static enum a733_mmc_platform_result close_step(void)
 /* variant 0 SDR25 only; 1 SDR104 at 150 MHz; 2 SDR104 at 100 MHz (no 300 MHz branch); 3 SDR104 with no passing delay, which falls back to SDR25 at 50 MHz. */
 static int run_lifetime(unsigned start18,int cut,unsigned variant)
 {
-    unsigned sdr104=variant!=0;cfg_nowindow=variant==3;
+    unsigned sdr104=variant!=0;cfg_nowindow=variant==3;cfg_dma=variant==5;
     static uint8_t buffer[4096];struct sunxi_mmc_result result;unsigned n=0,uhs_pf_value;
     selected_profile=SUNXI_MMC_SD_UHS_SDR104;cfg_sdr25=!sdr104;cfg_start18=start18;
     closing=stall_update=fail_gate=gate_order=0;
 #define TICK() do{if((int)n++==cut)goto cut_point;}while(0)
     if(variant==2)begin(1,0,1);else begin(1,1,3);
+    if(variant==4)u.sdr50=1;       /* a card with SDR50 as well: the restarts walk SDR104, SDR50, SDR25 */
     shadow_begin();shadow_refusals=0;m.platform.ops.write=shadow_write;
     enum a733_mmc_platform_result r=A733_MMC_PENDING;
     for(unsigned i=0;i<40000&&r!=A733_MMC_READY;++i){TICK();r=uhs_step();assert(r==A733_MMC_PENDING||r==A733_MMC_READY);}
@@ -96,7 +97,7 @@ static int run_lifetime(unsigned start18,int cut,unsigned variant)
                m.platform.core.card.uhs_outcome==SUNXI_MMC_UHS_NO_WINDOW&&m.platform.core.card.reentered==start18&&u.cmd19&&pf_writes==1&&m.platform.signal==2);
     }else if(sdr104){
         /* SDR104 after the CMD19 sweep (150 MHz, or 100 MHz without the 300 MHz branch): the window of the card model is delays 20 to 43, midpoint 32. */
-        assert(m.platform.core.card.signal_1v8&&m.platform.core.card.timing==3&&m.platform.core.card.card_hz==(variant==1?150000000u:100000000u)&&
+        assert(m.platform.core.card.signal_1v8&&m.platform.core.card.timing==3&&m.platform.core.card.card_hz==(variant==2?100000000u:150000000u)&&
                m.platform.core.card.uhs_outcome==SUNXI_MMC_UHS_SDR104&&m.platform.core.card.sample_delay==32&&
                m.platform.core.card.reentered==start18&&u.cmd11==(start18?0u:1u)&&pf_writes==1&&m.platform.signal==2&&u.cmd19&&u.cmd6_uhs==2);       /* CMD6 SDR104 check, then set */
     }else
@@ -104,10 +105,43 @@ static int run_lifetime(unsigned start18,int cut,unsigned variant)
            m.platform.core.card.uhs_outcome==SUNXI_MMC_UHS_LIMITED&&m.platform.core.card.reentered==start18&&
            u.cmd11==(start18?0u:1u)&&pf_writes==1&&m.platform.signal==2&&!u.cmd19&&!u.cmd6_uhs);
     assert(m.platform.core.card.switch_status[13]&8);                                  /* SDR104 support, visible at 1.8 V */
+    if(variant!=5){      /* the descriptor-DMA variant has no IDMAC model: it identifies, restarts and closes, and never reads */
     assert(a733_mmc_platform_read(&m.platform,8,8,buffer,sizeof(buffer),9000000)==A733_MMC_PENDING);
     r=A733_MMC_PENDING;
     for(unsigned i=0;i<400&&r!=A733_MMC_COMPLETE;++i){TICK();r=uhs_step();assert(r!=A733_MMC_RETAINED);}
     assert(r==A733_MMC_COMPLETE&&a733_mmc_platform_take(&m.platform,&result,9000000)==A733_MMC_READY&&result.received==4096);
+    }
+    if(variant==4||variant==5){
+        /* A restart of the identification (what the recovery policy does after a failed read), with every register write offered to the real adapter filter:
+         * the card is re-entered at 1.8 V with no CMD11 and no new PF write, tuned again, and read again. */
+        assert(a733_mmc_platform_restart(&m.platform,9000000,3,SUNXI_MMC_MODE_RETUNE)==A733_MMC_PENDING);
+        r=A733_MMC_PENDING;
+        for(unsigned i=0;i<40000&&r!=A733_MMC_READY;++i){TICK();r=uhs_step();assert(r==A733_MMC_PENDING||r==A733_MMC_READY);}
+        assert(r==A733_MMC_READY&&m.platform.core.card.timing==3&&m.platform.core.card.reentered&&u.cmd11==(start18?0u:1u)&&pf_writes==1&&m.platform.signal==2&&
+               u.cmd6_uhs==4&&m.platform.core.card.mode_steps==1&&m.platform.core.card.sample_delay==32);
+        if(variant==4){
+        assert(a733_mmc_platform_read(&m.platform,8,8,buffer,sizeof(buffer),9000000)==A733_MMC_PENDING);
+        r=A733_MMC_PENDING;
+        for(unsigned i=0;i<400&&r!=A733_MMC_COMPLETE;++i){TICK();r=uhs_step();assert(r!=A733_MMC_RETAINED);}
+        assert(r==A733_MMC_COMPLETE&&a733_mmc_platform_take(&m.platform,&result,9000000)==A733_MMC_READY&&result.received==4096);
+        }
+    }
+    if(variant==4){
+        /* The ceilings SDR50 and then SDR25: the CMD6 for function 2 must pass the adapter's command rule (the first restart probe on the board stopped on it). */
+        static const unsigned ceilings[2]={2,1};
+        for(unsigned step=0;step<2;++step){
+            assert(a733_mmc_platform_restart(&m.platform,9000000,ceilings[step],SUNXI_MMC_MODE_ERRORS)==A733_MMC_PENDING);
+            r=A733_MMC_PENDING;
+            for(unsigned i=0;i<40000&&r!=A733_MMC_READY;++i){TICK();r=uhs_step();assert(r==A733_MMC_PENDING||r==A733_MMC_READY);}
+            assert(r==A733_MMC_READY&&m.platform.core.card.signal_1v8&&u.cmd11==(start18?0u:1u)&&pf_writes==1&&m.platform.signal==2);
+            assert(m.platform.core.card.timing==(step?1u:2u)&&m.platform.core.card.card_hz==(step?50000000u:100000000u));
+            assert(a733_mmc_platform_read(&m.platform,8,8,buffer,sizeof(buffer),9000000)==A733_MMC_PENDING);
+            r=A733_MMC_PENDING;
+            for(unsigned i=0;i<400&&r!=A733_MMC_COMPLETE;++i){TICK();r=uhs_step();assert(r!=A733_MMC_RETAINED);}
+            assert(r==A733_MMC_COMPLETE&&a733_mmc_platform_take(&m.platform,&result,9000000)==A733_MMC_READY&&result.received==4096);
+        }
+    }
+    if(variant==5){assert(!shadow_refusals&&!commands_at_mismatch);return (int)n;}   /* no read happened, so the platform does not close (close_ready) */
     closing=1;
     for(unsigned i=0;i<40&&r!=A733_MMC_CLOSED;++i){TICK();r=close_step();
         if(r!=A733_MMC_PENDING&&r!=A733_MMC_CLOSED&&getenv("PF_RESTORE"))fprintf(stderr,"close retained: stage %u fault line %u why %u signal %u\n",m.platform.stage,m.platform.fault_line,m.platform.fault_why,m.platform.signal);
@@ -134,14 +168,14 @@ int main(int argc,char **argv)
     assert(argc==1||(argc==2&&(!strcmp(argv[1],"--failures-only")||!strcmp(argv[1],"--admission")||!strcmp(argv[1],"--lifetimes"))));
     if(argc==2&&!strcmp(argv[1],"--lifetimes")){
         unsigned cuts=0;
-        for(unsigned variant=0;variant<4;++variant)for(unsigned start18=0;start18<2;++start18){
+        for(unsigned variant=0;variant<6;++variant)for(unsigned start18=0;start18<2;++start18){
             unsigned sdr104=variant!=0;
             int total=run_lifetime(start18,-1,variant);assert(total>0);
             /* every poll for SDR25; for SDR104 every poll except inside the 520-command sweep, where every 9th */
             for(int cut=0;cut<total;cut+=(sdr104&&cut>300&&cut<total-60)?9:1){assert(run_lifetime(start18,cut,variant)==-1);++cuts;}
         }
         /* A UHS-I lifetime that stayed at 3.3 V (manual PF mode, no switch) closes too. */
-        selected_profile=SUNXI_MMC_SD_UHS_SDR104;cfg_sdr25=cfg_start18=0;closing=stall_update=fail_gate=gate_order=0;
+        selected_profile=SUNXI_MMC_SD_UHS_SDR104;cfg_sdr25=cfg_start18=cfg_dma=0;closing=stall_update=fail_gate=gate_order=0;
         begin(2,1,2);assert(settle()==A733_MMC_READY&&!m.platform.signal);
         {static uint8_t b[4096];read_ok(b);}
         m.platform.ops.write=close_write;closing=1;enum a733_mmc_platform_result r=A733_MMC_PENDING;

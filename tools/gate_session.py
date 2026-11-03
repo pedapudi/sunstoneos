@@ -16,7 +16,9 @@ derived thermal fields and the entry check, which is why a host check can use th
 cannot build the session and the gate then fails the step, naming it.
 """
 import argparse
+import importlib.util
 from pathlib import Path
+import re
 import sys
 import tempfile
 
@@ -61,7 +63,21 @@ def npu_template(image, scratch):
     return directory
 
 
+def storage_read_session(image, scratch):
+    """The modeled session of the supervised SD0 read image (checks/storage-read-fixture.py, profile 2, the profile it runs)."""
+    spec = importlib.util.spec_from_file_location('gate_storage_read_fixture', ROOT / 'checks/storage-read-fixture.py')
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    out = Path(scratch) / 'storage-read-fixture'
+    # storage-read images named -pN run the fixture at SD profile N (the image directory carries the name); the default is profile 2.
+    named = re.search(r'storage-read-p([0-3])', str(image))
+    fixture.produce(image, out, False, int(named.group(1)) if named else 2)
+    return (out / 'session-template.bin').read_bytes()
+
+
 def session_for(image, scratch):
+    if 'storage_read_consumer' in images.symbols(image):
+        return storage_read_session(image, scratch)
     words = images.offline_words()
     if words is None:
         raise SystemExit('the captured board words are not on this machine (board_images.offline_words)')

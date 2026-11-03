@@ -104,7 +104,7 @@ static inline int a733_mmc_platform_native_module_write_allowed(enum sunxi_mmc_k
     uint32_t setting=v&(mask&~UINT32_C(0x80000000));
     if(setting==29)return 1;
     if(kind!=SUNXI_MMC_SD||!profile)return 0;
-    int running=uhs?(setting==UINT32_C(0x01000003)||setting==UINT32_C(0x01000001)||setting==UINT32_C(0x02000000)):
+    int running=uhs?(setting==UINT32_C(0x02000000)||setting==UINT32_C(0x01000001)||((setting&~31u)==UINT32_C(0x01000000)&&(setting&31u)>=3)):
         ((setting&~31u)==UINT32_C(0x01000000)&&(profile==SUNXI_MMC_SD_DEFAULT4?(setting&31u)>=7:(setting&31u)==3));
     if(running)return 1;
     /* Terminal close: the exact inherited factors, only after module and bus are off with reset asserted. */

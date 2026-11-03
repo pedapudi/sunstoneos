@@ -38,7 +38,8 @@ int a733_storage_update_owned(const struct a733_storage_update *u, const struct 
 
 #define EXACT ((1u << 31) | (1u << 13) | (1u << 12) | (1u << 10) | (1u << 9) | (1u << 8) | (1u << 6) | 25u)
 
-static uint8_t blob[48 + 16 * 5];
+static uint8_t blob[48 + 16 * 5 + 16];
+static const uint32_t CID[4] = {0x27504853u, 0x44333247u, 0x12000002u, 0x9d014c47u};   /* 3-3's card; the blob names it in its last 16 bytes */
 static uint8_t card_byte(uint64_t sector, unsigned i) { return (uint8_t)(sector * 13 + i * 3 + 1); }
 static int read_card(void *c, uint64_t sector, uint8_t *out) { (void)c; for (unsigned i = 0; i < 512; ++i) out[i] = card_byte(sector, i); return 1; }
 static void put64(uint8_t *p, uint64_t v) { for (unsigned i = 0; i < 8; ++i) p[i] = (uint8_t)(v >> (8 * i)); }
@@ -54,6 +55,7 @@ static void make_blob(void)
     storage_digest_end(&d, blob + 16);
     for (unsigned i = 0; i < 3; ++i) { put64(blob + 48 + 16 * i, write[i][0]); put64(blob + 56 + 16 * i, write[i][1]); }
     for (unsigned i = 0; i < 2; ++i) { put64(blob + 48 + 48 + 16 * i, backup[i][0]); put64(blob + 56 + 48 + 16 * i, backup[i][1]); }
+    for (unsigned i = 0; i < 4; ++i) for (unsigned k = 0; k < 4; ++k) blob[48 + 16 * 5 + 4 * i + k] = (uint8_t)(CID[i] >> (24 - 8 * k));
 }
 
 static struct a733_platform_locks locks;
@@ -65,6 +67,7 @@ static void card(unsigned sector_addressed, uint64_t sectors, enum sunxi_mmc_kin
     memset(&platform, 0, sizeof platform);
     platform.cookie = &n; platform.config.kind = kind;
     platform.core.card.sectors = sectors; platform.core.card.sector_addressed = (uint8_t)sector_addressed;
+    memcpy(platform.core.card.cid, CID, sizeof CID);
 }
 static int admission(void *c, const struct a733_mmc_platform_config *cfg, const struct a733_clock_token *t) { (void)c; (void)cfg; (void)t; return 1; }
 
@@ -176,9 +179,13 @@ int main(void)
     task_ok = 0; assert(!a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds)); task_ok = 1;
     assert(a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds));
     /* The card test the image applies before binding. */
-    assert(a733_storage_bounds_card_ok(&bounds, 1, 1));
-    assert(!a733_storage_bounds_card_ok(&bounds, 1, 0));                 /* byte-addressed card */
-    assert(!a733_storage_bounds_card_ok(&bounds, 0, 1));                 /* eMMC */
+    assert(a733_storage_bounds_card_ok(&bounds, 1, 1, CID));
+    assert(!a733_storage_bounds_card_ok(&bounds, 1, 0, CID));            /* byte-addressed card */
+    assert(!a733_storage_bounds_card_ok(&bounds, 0, 1, CID));            /* eMMC */
+    for (unsigned w = 0; w < 4; ++w) for (unsigned bit = 0; bit < 32; ++bit) {      /* any other card: every single-bit difference in the CID is refused */
+        uint32_t other[4]; memcpy(other, CID, sizeof other); other[w] ^= 1u << bit;
+        assert(!a733_storage_bounds_card_ok(&bounds, 1, 1, other) && !a733_storage_bounds_card_is(&bounds, other));
+    }
     /* The binding makes the card test itself: byte-addressed, unidentified, eMMC and foreign-platform cards are refused. */
     fresh(SUNXI_MMC_SD, SUNXI_MMC_SD_HIGH_SPEED4, 1);
     card(0, 1u << 20, SUNXI_MMC_SD);
@@ -191,10 +198,12 @@ int main(void)
     card(1, 1u << 20, SUNXI_MMC_SD); platform.cookie = &locks;           /* a platform that does not own this adapter */
     assert(!a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds));
     assert(!a733_mmc_platform_native_bind_bounds(&n, NULL, &bounds));
+    card(1, 1u << 20, SUNXI_MMC_SD); platform.core.card.cid[3] ^= 1u;                    /* another card (the other board's): the bounds name a different CID */
+    assert(!a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds) && !n.bounds && !command(EXACT, 1000, 512, 512));
     card(1, 1u << 20, SUNXI_MMC_SD);
     assert(a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds) && command(EXACT, 1000, 512, 512));   /* and the sector-addressed card binds */
     struct a733_storage_bounds raw = {0};
-    assert(!a733_storage_bounds_card_ok(&raw, 1, 1) && !a733_storage_bounds_card_ok(NULL, 1, 1));
+    assert(!a733_storage_bounds_card_ok(&raw, 1, 1, CID) && !a733_storage_bounds_card_ok(NULL, 1, 1, CID));
     puts("PASS: write-capable filter: CMD25 accepted only for the exact word, 512-byte blocks, 1 to 256 blocks inside one admitted range; "
          "32 single-bit changes, block size and count, edges, straddles, clock-update form, unbound, unverified, closed, eMMC and foreign task refused; "
          "threshold writable only when verified; byte-addressed card refused");

@@ -4,6 +4,7 @@
 #include "sunxi-mmc.c"
 #undef main
 #include "sunxi-mmc-uhs-card.h"
+#include "vendor-phases.h"   /* rows: 0 400 kHz, 1 26 MHz, 2 52 MHz, 3 104 MHz, 4 208 MHz */
 static int uhs_module(void *v, uintptr_t token, unsigned divisor)
 {
     struct uhs *u = v; struct model *m = &u->base;
@@ -24,6 +25,7 @@ static int uhs_signal(void *v, uintptr_t token, unsigned operation, unsigned *st
     *state = u->bank == 2; return 1;
 }
 static unsigned want_sdr25, want_reenter;
+static int want_ceiling = -1;   /* sunxi_mmc_set_ceiling before open, when not negative */
 static void begin(struct uhs *u, struct sunxi_mmc *h, unsigned caps)
 {
     memset(u, 0, sizeof(*u)); seed(&u->base, h, SUNXI_MMC_SD, 1);
@@ -35,6 +37,7 @@ static void begin(struct uhs *u, struct sunxi_mmc *h, unsigned caps)
         SUNXI_MMC_SD_UHS_SDR104, NULL};
     assert(sunxi_mmc_init(h, &c));
     if (want_sdr25) assert(sunxi_mmc_sdr25_only(h));
+    if (want_ceiling >= 0) assert(sunxi_mmc_set_ceiling(h, (unsigned)want_ceiling));
     if (want_reenter) { assert(sunxi_mmc_reenter(h)); u->phase = 3; u->bank = 2; }
     assert(sunxi_mmc_open(h, 100000000));
 }
@@ -106,7 +109,7 @@ static void read_back(struct uhs *u, struct sunxi_mmc *h)
     assert(u->base.reg[0x10/4] == 512 && u->base.reg[8/4] == UINT32_MAX);
     /* SDR104 reads start a block only with 512 bytes free; other timings
      * leave the read threshold disabled. */
-    assert((u->base.reg[0x100/4] & 0x1fff0001u) == (h->card.timing == 3 ? (512u << 16) | 1u : 0u));
+    assert((u->base.reg[0x100/4] & 0x1fff0001u) == (h->card.timing >= 2 ? (512u << 16) | 1u : 0u));
 }
 static void faulted(struct uhs *u, struct sunxi_mmc *h, enum sunxi_mmc_error error)
 {
@@ -127,6 +130,71 @@ static void sdr25_18(struct uhs *u, struct sunxi_mmc *h, unsigned outcome)
     assert((u->base.reg[0x5c/4] & 0x80000331u) == 0x80000110u && u->base.reg[0x144/4] == 0x80);
     read_back(u, h);
 }
+/* The mode ladder: what identification selects for each kind of card, and how it steps down. */
+static void expect_mode(struct uhs *u, struct sunxi_mmc *h, unsigned mode, unsigned divisor, unsigned signal, enum sunxi_mmc_uhs_outcome outcome,
+                        unsigned steps, unsigned first_from, unsigned first_to)
+{
+    drive(u, h);
+    assert(h->state == SUNXI_MMC_READY && h->card.timing == mode && h->card.signal_1v8 == signal && h->card.uhs_outcome == outcome);
+    assert((u->divisor & 0xff) == divisor && h->card.mode_steps == steps && u->sdr == mode);
+    /* The drive and sample phases are the board kernel's for the clock range: default speed and SDR12 the 26 MHz row, high speed and SDR25 the 52 MHz row,
+     * SDR50 the 104 MHz row, SDR104 the 208 MHz row (the board's sdc0 node sets no override). The sample phases are in the new timing register; a tuned mode
+     * uses the old sample mode with the software delay. */
+    {
+        unsigned row = mode == 3 ? 4 : mode == 2 ? 3 : mode == 1 ? 2 : 1;
+        uint32_t drive = u->base.reg[0x140 / 4], ntsr = u->base.reg[0x5c / 4];
+        assert(((drive >> 16) & 1) == vendor_phase[row].cmd && ((drive >> 17) & 1) == vendor_phase[row].dat);
+        if (mode < 2) assert(((ntsr >> 8) & 3) == vendor_phase[row].sam_dat && ((ntsr >> 4) & 3) == vendor_phase[row].sam_cmd);
+        else assert(!(ntsr & 0x331u) && vendor_phase[row].sam_dat == 0 && vendor_phase[row].sam_cmd == 0);
+    }
+    if (steps) assert(h->card.mode_log[0].from == first_from && h->card.mode_log[0].to == first_to && h->card.mode_log[0].reason == SUNXI_MMC_MODE_NO_WINDOW);
+    read_back(u, h);
+}
+static void ladder(struct uhs *u, struct sunxi_mmc *h)
+{
+    for (unsigned reenter = 0; reenter <= 1; ++reenter) {
+        want_reenter = reenter;
+        /* SDR104 with a window: 150 MHz (module 300 MHz, divisor 1 from the 300M parent). */
+        begin(u, h, 3); u->s18a = !reenter; expect_mode(u, h, 3, 1, 1, SUNXI_MMC_UHS_SDR104, 0, 0, 0);
+        /* S18A but no SDR104 in the card: SDR50 at 100 MHz when it has it, tuned, else SDR25. */
+        begin(u, h, 3); u->s18a = !reenter; u->sdr104 = 0; u->sdr50 = 1; expect_mode(u, h, 2, 2, 1, SUNXI_MMC_UHS_SDR50, 0, 0, 0);
+        assert(h->card.module_hz == 200000000 && h->card.card_hz == 100000000 && h->card.tuning_width >= 12);
+        begin(u, h, 3); u->s18a = !reenter; u->sdr104 = 0; expect_mode(u, h, 1, 4, 1, SUNXI_MMC_UHS_NO_SDR104, 0, 0, 0);
+        /* SDR104 with no window: SDR50 when the card has it and its sweep finds one; the step is recorded. */
+        begin(u, h, 3); u->s18a = !reenter; u->sdr50 = 1; u->window[0][1] = 0; u->win50_start = 30; u->win50_width = 20;
+        expect_mode(u, h, 2, 2, 1, SUNXI_MMC_UHS_SDR50, 1, 3, 2);
+        assert(h->card.tuning_start == 30 && h->card.tuning_width == 20 && h->card.sample_delay == 40);
+        /* Neither mode has a window: SDR25, two steps recorded. */
+        begin(u, h, 3); u->s18a = !reenter; u->sdr50 = 1; u->window[0][1] = 0; u->win50_start = 30; u->win50_width = 5;
+        expect_mode(u, h, 1, 4, 1, SUNXI_MMC_UHS_NO_WINDOW, 2, 3, 2);
+        assert(h->card.mode_log[1].from == 2 && h->card.mode_log[1].to == 1 && h->card.mode_log[1].reason == SUNXI_MMC_MODE_NO_WINDOW);
+        /* SDR104 with no window in a card without SDR50: straight to SDR25. */
+        begin(u, h, 3); u->s18a = !reenter; u->window[0][1] = 0; expect_mode(u, h, 1, 4, 1, SUNXI_MMC_UHS_NO_WINDOW, 1, 3, 1);
+        /* A SDR50 request the card refuses: SDR25. */
+        begin(u, h, 3); u->s18a = !reenter; u->sdr104 = 0; u->sdr50 = 1; u->set_refuses50 = 1; expect_mode(u, h, 1, 4, 1, SUNXI_MMC_UHS_NO_SDR104, 0, 0, 0);
+        /* Ceilings: SDR50 on a card that has SDR104, SDR25, and SDR12 at 25 MHz (module 50 MHz, divisor 8). */
+        want_ceiling = 2; begin(u, h, 3); u->s18a = !reenter; u->sdr50 = 1; expect_mode(u, h, 2, 2, 1, SUNXI_MMC_UHS_SDR50, 0, 0, 0);
+        want_ceiling = 1; begin(u, h, 3); u->s18a = !reenter; u->sdr50 = 1; expect_mode(u, h, 1, 4, 1, SUNXI_MMC_UHS_LIMITED, 0, 0, 0);
+        want_ceiling = 0; begin(u, h, 3); u->s18a = !reenter; u->sdr50 = 1; expect_mode(u, h, 0, 8, 1, SUNXI_MMC_UHS_LIMITED, 0, 0, 0);
+        assert(h->card.card_hz == 25000000 && h->card.ceiling == 0);
+        want_ceiling = -1;
+    }
+    want_reenter = 0;
+    /* The owner's rule for a card found at 1.8 V by a 3.3 V host: the card at 1.8 V (phase 3) answers S18A clear and reports SDR50 and SDR104; a 3.3 V card, a card
+     * that declines UHS and a card that took the switch are not it. */
+    begin(u, h, 3); u->s18a = 0; u->phase = 3; u->bank = 0; u->sdr50 = 1; want_reenter = 0; drive(u, h);
+    assert(h->state == SUNXI_MMC_READY && !h->card.signal_1v8 && h->card.timing == 1 && sunxi_mmc_card_found_at_1v8(&h->card));
+    begin(u, h, 3); drive(u, h); assert(h->card.signal_1v8 && !sunxi_mmc_card_found_at_1v8(&h->card));                                   /* the switch was taken */
+    begin(u, h, 3); u->s18a = 0; u->nohs = 0; drive(u, h); assert(h->state == SUNXI_MMC_READY && !sunxi_mmc_card_found_at_1v8(&h->card)); /* 3.3 V card, S18A clear, no UHS functions at 3.3 V */
+    /* A card that only signals 3.3 V (no S18A): high speed at 50 MHz, no switch, whatever it supports. */
+    begin(u, h, 3); u->s18a = 0; u->sdr50 = 1; expect_mode(u, h, 1, 4, 0, SUNXI_MMC_UHS_DECLINED, 0, 0, 0);
+    assert(!u->cmd11 && !h->card.signal_1v8 && h->card.card_hz == 50000000);
+    /* A card without high speed (SCR version 1.0) at 3.3 V: 25 MHz default speed. */
+    begin(u, h, 3); u->s18a = 0; u->nohs = 1; u->scr[0] = 0; expect_mode(u, h, 0, 8, 0, SUNXI_MMC_UHS_NO_SDR104, 0, 0, 0);
+    assert(h->card.card_hz == 25000000);
+    /* A ceiling of default speed at 3.3 V. */
+    want_ceiling = 0; begin(u, h, 3); u->s18a = 0; expect_mode(u, h, 0, 8, 0, SUNXI_MMC_UHS_LIMITED, 0, 0, 0); want_ceiling = -1;
+}
 int main(void)
 {
     struct uhs *u = calloc(1, sizeof(*u)); struct sunxi_mmc h; assert(u);
@@ -138,7 +206,7 @@ int main(void)
     assert(h.card.tuning_start == 20 && h.card.tuning_width == 24 && h.card.sample_delay == 32);
     assert(h.card.tuning_map == (((UINT64_C(1) << 24) - 1) << 20) && u->cmd19 == 24 * 20 + 40);
     assert(u->base.reg[0x144/4] == (0x80u | 32) && !(u->base.reg[0x5c/4] & 0x80000331u));
-    assert(((u->base.reg[0x140/4] >> 16) & 3) == 3 && (u->base.reg[0x100/4] & 0x1fff0001u) == ((64u << 16) | 1u));
+    assert(((u->base.reg[0x140/4] >> 16) & 3) == 1 && (u->base.reg[0x100/4] & 0x1fff0001u) == ((64u << 16) | 1u));
     read_back(u, &h); unsigned first = u->cmd19;
     /* 100 MHz from 400 MHz when the 300 MHz branch is absent. */
     begin(u, &h, 1); drive(u, &h);
@@ -247,6 +315,7 @@ int main(void)
     drive(u, &h); assert(h.state == SUNXI_MMC_READY && h.card.tuning_start == 50 && h.card.sample_delay == 57);
     /* A FIFO overrun during tuning is not a sampling error. */
     begin(u, &h, 3); u->fatal_delay = 5; faulted(u, &h, SUNXI_MMC_CONTROLLER);
+    ladder(u, &h);
     fuzz(u, &h);
     /* The profile requires the voltage callback. */
     struct sunxi_mmc probe = {0}; struct sunxi_mmc_config c = {{uhs_read, uhs_write, barrier, now_us, admit,
