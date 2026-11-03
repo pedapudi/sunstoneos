@@ -1000,6 +1000,10 @@ static BaseType_t ssKernelOwnerIRQExitWork(void)
  * interrupted code's value, because the exit path has not changed it. */
 BaseType_t ssKernelOwnerIRQExit(void)
 {
+#if !defined(__aarch64__)
+    /* The host fixture has no priority mask. */
+    return ssKernelOwnerIRQExitWork();
+#else
     uint64_t pmr;
     __asm__ volatile("mrs %0, icc_pmr_el1" : "=r"(pmr));
     if (pmr <= portMAX_API_PRIORITY_MASK) { SS_OWNER_COUNT(exit_skipped); SS_OWNER_PENDING(); return 2; } /* tells the exit path not to switch tasks */
@@ -1019,6 +1023,7 @@ BaseType_t ssKernelOwnerIRQExit(void)
     SS_PH_END(1);
     if (result == pdTRUE) SS_OWNER_COUNT(exit_raised);
     return result;
+#endif
 }
 static BaseType_t ssKernelTick(void)
 {
@@ -1037,6 +1042,8 @@ static BaseType_t ssKernelTick(void)
     SS_OWNER_COUNT(tick_work);
     return ssKernelOwnerIRQExitWork();
 }
+/* Test hook: the depth of the interrupt-lock sections when a waiter is inserted into an event list. */
+extern void ss_kernel_test_event_insert(unsigned isr_depth) __attribute__((weak));
 static void ssKernelEventBlock(List_t *list, TickType_t value, TickType_t ticks,
                                bool unordered, bool indefinite)
 {
@@ -1045,10 +1052,15 @@ static void ssKernelEventBlock(List_t *list, TickType_t value, TickType_t ticks,
     configASSERT(!s->event_reference.descriptor);
     configASSERT(ss_kernel_handle_pin(&ssKernelRegistry, t, &s->event_reference));
     s->unordered = unordered;
+    /* The caller holds only the task lock (a suspension). Another CPU's owner timing out a waiter of this list removes
+     * its item under the interrupt lock alone, so the insertion needs that lock too. */
+    UBaseType_t irq = ssKernelObjectEnterFromISR();
+    if (ss_kernel_test_event_insert) ss_kernel_test_event_insert(ssKernelCPUs[ssKernelCPUId()].isr_depth);
     if (unordered) {
         listSET_LIST_ITEM_VALUE(&t->xEventListItem, value | taskEVENT_LIST_ITEM_VALUE_IN_USE);
         vListInsertEnd(list, &t->xEventListItem);
     } else vListInsert(list, &t->xEventListItem);
+    ssKernelObjectExitFromISR(irq);
     ssKernelBlock(ticks, indefinite, SS_K_EVENT);
 }
 static BaseType_t ssKernelEventWake(ListItem_t *item, TickType_t value, bool unordered)
