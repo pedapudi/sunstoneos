@@ -61,7 +61,9 @@ static int abort_possible(struct a733_radio_platform *p)
 }
 static enum a733_radio_platform_result fail_at(struct a733_radio_platform *p,unsigned line)
 {
-    if(!p->fail_line){p->fail_line=line;p->fail_stage=p->stage;}
+    if(line&&!p->fail_line){p->fail_line=line;p->fail_stage=p->stage;}
+    /* An abort is never cut short: while it runs inside its deadline the failure waits for it. */
+    if(p->aborting&&p->last_now<p->deadline)return A733_RADIO_PENDING;
     if(p->refused){
         /* No hardware was changed: leave the register lock and keep every lease as it is. */
         p->fault=1;
@@ -116,7 +118,7 @@ enum a733_radio_platform_result a733_radio_platform_retain(struct a733_radio_pla
     if(!p||!p->initialized||p->ops.current(p->cookie)!=1)return A733_RADIO_INVALID;
     unsigned expected=0;
     if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return A733_RADIO_BUSY;
-    return finish(p,fail(p));
+    return finish(p,fail_at(p,0)); /* An outside retain is not a platform failure site. */
 }
 static int rd(struct a733_radio_platform *p,uintptr_t a,uint32_t *v)
 {return timely(p)&&p->ops.read(p->cookie,a,v)==1&&timely(p);}
@@ -460,8 +462,10 @@ static enum a733_radio_platform_result registers(struct a733_radio_platform *p)
         for(unsigned i=0;ok&&i<4;++i)ok=rd(p,words[i],&p->pad_power[i]);
         if(ok) {
             p->guard_done=1;
-            /* BLDO5 off with PG unsupplied, or (left on by a reset) on at 1.8V with PG reading 1.8V. */
-            unsigned pg=(p->pad_power[1]>>12)&3,unmet=(p->already_on?pg==3:pg<2)?0u:1u;
+            /* Refuse only a PG reading of 3.3 V (10): the manual defines no "unsupplied" reading (00 and 01 are Invalid),
+             * the board reads 11 with BLDO5 off and on, and 3.3 V would be another supply that could fight BLDO5.
+             * BLDO5 must be off, or (left on by a reset) on at 1.8V. */
+            unsigned pg=(p->pad_power[1]>>12)&3,unmet=pg!=2?0u:1u;
             for(unsigned i=0;i<p->rail_count;++i) {
                 const struct a733_pmic_snapshot *s=&p->snapshots[i];
                 if(s->rail==A733_RAIL_DCDC1)unmet|=(s->enabled&&(s->selector&31u)==23)?0u:2u;
@@ -572,7 +576,7 @@ static enum a733_radio_platform_result abort_end(struct a733_radio_platform *p,u
 {
     if((p->abort_flags&wanted)==wanted)p->abort_flags|=ABORT_MATCHED;
     p->aborting=0;p->abort_done=1;
-    return fail(p); /* Now the ordinary retention. */
+    return fail_at(p,0); /* Now the ordinary retention. */
 }
 static enum a733_radio_platform_result abort_poll(struct a733_radio_platform *p)
 {

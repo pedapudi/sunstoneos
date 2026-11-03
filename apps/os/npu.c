@@ -539,6 +539,14 @@ unsigned os_npu_links(void)
     const struct os_session *s=os_session();
     return s?s->npu.links:0;
 }
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+/* The queue adapter's tables are carved into the object that os_npu_queue_sdk_bind binds, so the bind comes first: it runs at
+ * admission with the tables, not at start. The host check of the open path runs this same function. */
+int os_npu_queue_prepare(struct npu_runtime *rt)
+{
+    return os_npu_queue_sdk_bind()&&os_npu_queue_tables(rt);
+}
+#endif
 /* Each refusal of the admission-time preparation records its source line in group NPU, with the detail that says what did not
  * fit; os_npu_start then refuses (the application is not stopped by an NPU it cannot use). */
 static int unprepared(uint32_t detail,const void *here){board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),detail,here);return 1;}
@@ -592,7 +600,7 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
     /* The queue's tables are in the reservation: take them before the scheduler starts, so the application's first open
      * finds its ring sized for the declaration. */
-    if(!os_npu_queue_tables(&npu.runtime))return UNPREPARED((uint32_t)NPU_DECLARATION_MEMORY);
+    if(!os_npu_queue_prepare(&npu.runtime))return UNPREPARED((uint32_t)NPU_DECLARATION_MEMORY);
 #endif
     npu.prepared=1;
     return 1;
@@ -603,7 +611,6 @@ int os_npu_start(void)
     extern int os_npu_diagnostic_bind(struct npu_runtime *) __attribute__((weak));
     if(!ss_npu_service_bind_event(sdk_notify,NULL))return REFUSE();
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
-    if(!os_npu_queue_sdk_bind())return REFUSE();
 #endif
     const struct os_session *s=os_session_admitted();
     if(!s)return REFUSE();

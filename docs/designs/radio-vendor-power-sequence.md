@@ -62,25 +62,39 @@ Two facts remain unproven by the sources. Sheet 14 does not draw the source of
 no supply for the `VCC-PG` net, while the device tree annotates BLDO5 as
 `vcc-pg`. The most consistent reading is BLDO5 for PG and CLDO1 for PM, with
 `VCCIO_1V8_WIFI` on one of the two. Both are enabled in the vendor sequence, so
-the choice does not change what the sequence does. The board observation below
-separates the readings.
+the choice does not change what the sequence does. The board read of the PG
+detect word, below, does not separate the readings.
 
-## One read-only observation separates the readings
+## What the board read for PG
 
-`GPIO_POW_VAL` at `0x02000048` reports the voltage that the SoC detects on the
-`VCC-PG` pin. Bits 13:12 are `10` for 3.3 V, `11` for 1.8 V and `00` or `01`
-when the pin is not supplied (A733 User Manual V1.00, section 18.14.6.2).
-`GPIO_POW_MOD_SEL` at `0x02000040` bits 13:12 reports the selected mode.
-PM is in the always-on pin block with its own pair of registers
-(`SGPIO_POW_VAL`, `SGPIO_POW_MOD_SEL`). A run that reads these two words, plus
-the BLDO5, CLDO1 and DCDC8 enable and selector bytes through the PMIC provider,
-writes nothing and predicts:
+`GPIO_POW_VAL` at `0x02000048` reports the voltage the SoC detects on each pin
+group. For PG, bits 13:12 are `10` for 3.3 V, `11` for 1.8 V, and `00` or `01`
+for "Invalid" (A733 User Manual V1.00, section 18.14.6.2, `PG_PWR_VAL`, near
+line 85398 of the text extraction). The manual says nothing more about the
+invalid values: it does not say they mean the pin is unsupplied. Section
+18.14.4.6 says only that, in adaptive mode (`GPIO_POW_MOD_SEL` field `01`), the
+withstand circuit follows "the detected GPIO voltage". `GPIO_POW_MOD_SEL` at
+`0x02000040` read `0x01155550`, its reset value, so PG was in adaptive mode.
+PM has its own pair of registers (`SGPIO_POW_VAL`, `SGPIO_POW_MOD_SEL`).
 
-| Reading | PMIC bytes at handoff | PG detected voltage |
-| --- | --- | --- |
-| BLDO5 supplies PG (vendor annotation) | BLDO5 off | `00` or `01`, not supplied |
-| PG is already on another 1.8 V rail | BLDO5 off or on | `11` |
-| PG is on DCDC8 at the Linux-table 3.1 V | DCDC8 code 100 | `10`, 3.3 V |
+The board read `GPIO_POW_VAL` as `0x020ff980` in two runs, so PG bits 13:12 are
+`11` (1.8 V) in both:
+
+| Run | BLDO5 (PMIC `0x21` bit 2, selector `0x2e`) | `GPIO_POW_VAL` | `SGPIO_POW_VAL` |
+| --- | --- | --- | --- |
+| `1793739986203659373-932efd85` | on, selector 13 (1.8 V) | `0x020ff980` | `0x0e` |
+| `1793742152141316018-59ac4fd1` | off, selector 13 | `0x020ff980` | `0x0e` |
+
+With BLDO5 off, the word is the same as with it on. The detected voltage does
+not follow BLDO5, so this word does not show what supplies PG. Either another
+1.8 V source supplies PG, or the detect does not track the pin in this state.
+The device tree still annotates BLDO5 as `vcc-pg` (`wlan_power`, line 2957 of
+the board device tree) and the schematic names no supply for the net. The
+first-run guard had treated `00` and `01` as "unsupplied" and required them; the
+manual supports no such reading, and the guard refused the run for that reason
+(code `0x431`). The guard now refuses only a 3.3 V reading (`10`), which would be
+a different supply that could fight BLDO5, and records the PG bits either way
+(`docs/designs/radio-service-stages.md`).
 
 The finite observer `apps/power-supply-observe` already reads the PMIC bytes;
 the pin-block words come from the existing read-only bundle reader

@@ -902,8 +902,7 @@ int main(int argc, char **argv)
     if (mode == 33) {
         model_space_build(pool, need, !getenv("MUTATE_POOL_UNMAPPED"));
         session_record.npu.in_flight = 64;
-        assert(os_npu_queue_sdk_bind());
-        assert(os_npu_queue_tables(&npu.runtime));
+        assert(os_npu_queue_prepare(&npu.runtime));   /* the bind and the tables, as the admission-time preparation runs them */
     }
 #endif
     if (mode == 31) {

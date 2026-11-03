@@ -43,6 +43,9 @@ struct a733_radio_session {
     atomic_uint busy;
     uint64_t deadline,last_now;
     unsigned stage,fault,renew_pending;
+    /* Where the first failure was decided: the source line of the fail call and the stage then. Zero while healthy;
+     * an external retain records no line. */
+    unsigned fail_line,fail_stage;
     unsigned bootstrap_only,reconnect_phase,reconnect_lost;
     uint64_t discarded_data; /* Ordinary frames received without a consumer. */
     uint64_t reconnect_deadline,reconnect_open;

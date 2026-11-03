@@ -17,9 +17,9 @@ import host_rtos
 from harness import environment
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--output', '{output}']]
+GATE_RUNS = [['--output', '{output}', '--graphs', '{fixture:npu-graphs}']]
 CACHE = Path.home() / '.cache/sunstoneos'
-CHECK_INPUTS = ('apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-queue.c', 'apps/os/npu-catalogue.py', 'drivers/npu/a733_npu_runtime.c',
+CHECK_INPUTS = ('tools/npu-graph-specs.json', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-queue.c', 'apps/os/npu-catalogue.py', 'drivers/npu/a733_npu_runtime.c',
                 'drivers/npu/npu_service.c', 'drivers/npu/nbg_assembly.c', 'runtime/npu_app_queue.c',
                 'checks/os-npu-service.c', 'checks/os-npu-service.py', 'checks/nbg_wide.py')
 sys.path.insert(0, str(ROOT / 'checks'))

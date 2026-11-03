@@ -32,7 +32,7 @@ void a733_radio_report_platform(struct a733_radio_report *r,const struct a733_ra
     h->failed=p->fault!=0;
     if(h->failed&&!h->failure_stage)h->failure_stage=h->stage+1; /* The stage that did not complete. */
     h->flags=(p->first_run_guard?1u:0)|(p->guard_done?2u:0)|(p->power_on?4u:0)|(p->stage==RSTAGE_DOWN?8u:0)|(p->already_on?16u:0)|
-        (p->abort_done?32u:0)|((p->abort_flags&16u)?64u:0);
+        (p->abort_done?32u:0)|((p->abort_flags&16u)?64u:0)|(p->refused?128u:0);
     memcpy(h->pad_power,p->pad_power,sizeof(h->pad_power));
     h->platform_stage=p->stage;
     h->fail_site=p->fail_line?(p->fail_line<<16)|(p->fail_stage&0xffffu):0;
@@ -57,6 +57,8 @@ void a733_radio_report_platform(struct a733_radio_report *r,const struct a733_ra
         }
     }
 }
+void a733_radio_report_session_failure(struct a733_radio_report *r,unsigned line,unsigned stage)
+{if(line&&!r->head.fail_site)r->head.fail_site=(line<<16)|0x100u|(stage&0xffu);}
 void a733_radio_report_firmware(struct a733_radio_report *r)
 {if(r->head.stage<A733_RADIO_STAGE_FIRMWARE)r->head.stage=A733_RADIO_STAGE_FIRMWARE;}
 void a733_radio_report_identity(struct a733_radio_report *r,uint32_t chip,uint32_t sub)

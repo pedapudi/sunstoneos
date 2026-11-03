@@ -28,6 +28,7 @@ import harness
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / 'tools/clean-generated.py'
 CHECK_INPUTS = ['tools/clean-generated.py']
+GATE_RUNS = [['--output', '{output}']]
 OLD = time.time() - 30 * 86400
 
 
@@ -120,8 +121,74 @@ def main():
     code, text = run(home, 'path', str(link), '--apply')
     assert elsewhere.exists() and 'not inside an allowed root' in text, text
     passed.append('a path outside the roots, a root itself and a link out of the build directory are refused')
+    slim(home, build, passed)
+    # a build directory that a check names as a default input is protected, derived from the checks' sources
+    declared = {'npu-graph-variants': 'checks/os-npu-graphs.py', 'npu-board': 'tools/gate_images.py'}
+    for name, source in declared.items():
+        assert "build/" + name in (ROOT / source).read_text(), (name, source)
+        make(build / name)
+        code, text = run(home, 'build', name, '--apply')
+        assert (build / name).exists() and 'is referenced' in text, (name, text)
+    code, text = run(home, 'stale-builds', '7', '--apply')
+    assert all((build / name).exists() for name in declared), text
+    passed.append('a build directory that a check or tools/gate_images.py names as a default input is never deleted')
+    # stale-builds carries on past a read-only fixture directory instead of stopping with PermissionError
+    fixture = make(build / 'old-readonly/case-24/bundle/build')
+    fixture.chmod(0o500)
+    for item in (fixture.parent, fixture.parent.parent, build / 'old-readonly'):
+        os.utime(item, (OLD, OLD))
+    fixture.parent.chmod(0o500)
+    make(build / 'old-after')
+    code, text = run(home, 'stale-builds', '7', '--apply')
+    assert code == 0 and not (build / 'old-readonly').exists() and not (build / 'old-after').exists(), text
+    passed.append('stale-builds removes a tree with read-only directories and carries on')
     for line in passed:
         print('PASS ' + line)
+
+
+def slim(home, build, passed):
+    """slim-gates and slim_after_pass keep the records of a gate and remove its bulky outputs, whatever their mode."""
+    def gate(name, verdict):
+        directory = build / name
+        for kept in ('summary.txt', 'gate-record.json', 'timing.txt', 'disk-peak.json', 'image-x.log', 'evidence/images/a/result.json'):
+            (directory / kept).parent.mkdir(parents=True, exist_ok=True)
+            (directory / kept).write_text(verdict if kept == 'summary.txt' else '{}\n')
+        (directory / 'evidence/images/a/build').mkdir()
+        (directory / 'evidence/images/a/build/object.o').write_bytes(bytes(100))
+        fixture = directory / 'evidence/images/b/bundle/build'
+        fixture.mkdir(parents=True)
+        (fixture / 'x').write_bytes(bytes(10))
+        fixture.chmod(0o500)                       # a read-only fixture directory, as a check leaves it
+        (fixture.parent).chmod(0o500)
+        (directory / 'evidence/images/c').mkdir()
+        (directory / 'evidence/images/c/huge.bin').write_bytes(bytes(9 << 20))
+        for root, dirs, files in os.walk(directory):
+            for item in [root, *[os.path.join(root, f) for f in files]]:
+                os.utime(item, (OLD, OLD))
+        return directory
+    passing, failing = gate('gate-land-demo-1103-1103-100000', 'PASS selected\n'), gate('gate-land-demo-1103-1103-090000', 'FAIL kernel\n')
+    code, text = run(home, 'slim-gates', '--apply')
+    assert code == 0 and 'Freed' in text and '1 passing' in text, text
+    assert not (passing / 'evidence/images/a/build').exists() and not (passing / 'evidence/images/b/bundle/build').exists()
+    assert not (passing / 'evidence/images/c/huge.bin').exists(), 'a file over 8 MiB stayed'
+    for kept in ('summary.txt', 'gate-record.json', 'timing.txt', 'disk-peak.json', 'image-x.log', 'evidence/images/a/result.json'):
+        assert (passing / kept).exists(), kept
+    assert (failing / 'evidence/images/a/build/object.o').exists(), 'a failed gate lost its outputs'
+    passed.append('slim-gates removes the bulky outputs of a passing gate, read-only directories included, and keeps its records and a failed gate')
+    # A later passing gate of the same landing label slims the earlier failed one; another label's gate is untouched.
+    other = gate('gate-land-demo-two-1103-1103-080000', 'FAIL kernel\n')
+    code = subprocess.run([sys.executable, '-B', '-c', 'import importlib.util as u, pathlib, sys\n'
+        's = u.spec_from_file_location("cg", sys.argv[1]); m = u.module_from_spec(s); s.loader.exec_module(m)\n'
+        'print(m.slim_after_pass(pathlib.Path(sys.argv[2]), sys.argv[3]))', str(TOOL), str(passing), 'land-demo-1103-1103-100000'],
+        env=dict(os.environ, HOME=str(home)), capture_output=True, text=True)
+    assert code.returncode == 0, code.stderr
+    assert not (failing / 'evidence/images/a/build').exists() and (failing / 'summary.txt').exists()
+    assert (other / 'evidence/images/a/build/object.o').exists()
+    passed.append('a passing gate also slims the earlier failed gates of its landing label and no other')
+    for item in build.glob('gate-*'):
+        for root, dirs, files in os.walk(item):
+            for name in dirs:
+                os.chmod(os.path.join(root, name), 0o700)
 
 
 if __name__ == '__main__':

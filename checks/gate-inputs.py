@@ -60,7 +60,8 @@ def main():
         for run in entry['gate'].get('runs', ()):
             assert run and all(isinstance(a, str) for a in run), (name, 'a run needs string arguments')
             for kind, image in gate.placeholders(run):
-                assert (image in inputs['bundles'] if kind == 'bundle' else image in gate.VARIANTS or image in inputs['images']), (name, image)
+                assert (image in inputs['fixtures'] if kind == 'fixture' else image in inputs['bundles'] if kind == 'bundle'
+                        else image in gate.VARIANTS or image in inputs['images']), (name, image)
         assert ' | ' in entry['gate'].get('waived', ' | '), (name, 'a waiver needs "category | reason"')
     unanswered = []
     for name, entry in sorted(index.items()):
