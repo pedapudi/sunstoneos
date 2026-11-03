@@ -23,7 +23,7 @@ extern struct { uint64_t epoch, startup_deadline, diagnostic_deadline, redistrib
 #define INTID 27u       /* EL1 virtual timer: the control path */
 #define TASK_INTID 30u  /* EL1 physical timer: the task path (core 0 keeps it for the scheduler tick) */
 #define FIRST_CORE 1u
-#define CORES 6u        /* control cores 1 to 5; index by core */
+#define CORES 8u        /* control cores 1 to 7; index by core */
 #define BINS SS_CONTROL_BINS
 #define TICKS_PER_US 24u
 
@@ -57,6 +57,8 @@ static struct core_state {
     TaskHandle_t task_handle;
     uint64_t fired_deadline;     /* the deadline whose interrupt woke the task */
     uint64_t fired_entry;        /* the counter value at that interrupt's handler start */
+    uint64_t fired_l1, fired_l2; /* L1D and L2D refill counts at that handler start */
+    uint64_t refill_n[2], refill_l1[2], refill_l2[2]; /* by gap class: 0 at most 10 us, 1 longer: wakes and refills during the gap */
 } __attribute__((aligned(64))) state[CORES];
 
 static inline uint64_t counter(void)
@@ -112,6 +114,12 @@ static void arm(struct core_state *s)
     s->control.last_entry = s->task.last_entry = 0;
     if (s->paths & 1u) program(s->control.deadline, 1);
     if (s->paths & 2u) program_task(s->task.deadline, 1);
+    /* Count L1D (0x03) and L2D (0x17) refills in counters 0 and 1, readable from EL0, for the wake's gap. */
+    {
+        uint64_t en;
+        __asm__ volatile("msr pmevtyper0_el0, %0\n msr pmevtyper1_el0, %1\n msr pmuserenr_el0, %2\n mrs %3, pmcntenset_el0\n orr %3, %3, #3\n msr pmcntenset_el0, %3\n mrs %3, pmcr_el0\n orr %3, %3, #1\n msr pmcr_el0, %3\n isb"
+                         :: "r"((uint64_t)0x03), "r"((uint64_t)0x17), "r"((uint64_t)1), "r"(en) : "memory");
+    }
     s->armed = 1;
 }
 
@@ -171,6 +179,7 @@ static void handle_task_path(struct core_state *s)
     program_task(s->task.deadline, 1);
     s->fired_deadline = served;
     s->fired_entry = now;
+    __asm__ volatile("mrs %0, pmevcntr0_el0\n mrs %1, pmevcntr1_el0" : "=r"(s->fired_l1), "=r"(s->fired_l2));
     s->task.missed += missed;
     {
         const uint64_t late = now - served;
@@ -205,6 +214,10 @@ static void task_path(void *argument)
             const uint32_t g = gap > 0xffffffffu ? 0xffffffffu : (uint32_t)gap;
             ++s->task.gap_bin[g / SS_CONTROL_BIN_TICKS < BINS ? g / SS_CONTROL_BIN_TICKS : BINS - 1u];
             if (g > s->task.gap_max) s->task.gap_max = g;
+            uint64_t l1, l2;
+            __asm__ volatile("mrs %0, pmevcntr0_el0\n mrs %1, pmevcntr1_el0" : "=r"(l1), "=r"(l2));
+            const unsigned k = g > 240u ? 1u : 0u;
+            ++s->refill_n[k]; s->refill_l1[k] += (uint32_t)(l1 - s->fired_l1); s->refill_l2[k] += (uint32_t)(l2 - s->fired_l2);
         }
         record(&s->task, now, deadline, 0);
     }
@@ -355,3 +368,9 @@ unsigned ulSunstoneControlWfi(unsigned core, uint64_t *count, uint64_t *max_tick
 /* Idle pull diagnostics of the partitioned scheduler; the weak copies keep the stock kernel linking. */
 __attribute__((weak)) unsigned long ulSunstoneIdleWaiting(unsigned core) { (void)core; return 0; }
 __attribute__((weak)) unsigned long ulSunstoneIdlePulls(void) { return 0; }
+/* Mean refills during the gap, by gap class (0 at most 10 us, 1 longer): field 0 count, 1 L1D refills, 2 L2D refills. */
+uint64_t ulSunstoneTaskRefills(unsigned core, unsigned klass, unsigned field)
+{
+    if (core < FIRST_CORE || core >= FIRST_CORE + CORES - 1u || klass > 1u || field > 2u) return 0;
+    return field == 0 ? state[core].refill_n[klass] : field == 1 ? state[core].refill_l1[klass] : state[core].refill_l2[klass];
+}
