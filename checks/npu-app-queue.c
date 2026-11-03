@@ -136,6 +136,10 @@ int main(int argc,char **argv)
         assert(npu_queue_register(&native_queue,&native_command[i],&cmd));
     }
     assert(ss_npu_queue_service_bind(&q,&b,NULL));
+    /* The queue's tables come from memory the OS gives it, sized by the declaration: 4 handles, 16 tensors, 4 links. */
+    static _Alignas(8) unsigned char tables[4096];
+    assert(sizeof(tables)>=ss_npu_queue_tables_bytes(4,16,4)&&!ss_npu_queue_service_tables(&q,4,16,4,tables,64));
+    assert(ss_npu_queue_service_tables(&q,4,16,4,tables,sizeof(tables)));
     struct ss_npu_queue *pub=NULL;
     if(argc>1&&atoi(argv[1])==8){
         /* The ring holds the depth the image was built for, which is what the application declared: one more is refused
@@ -147,7 +151,7 @@ int main(int argc,char **argv)
     if(argc>1&&atoi(argv[1])==9){
         /* Links chosen at open: copied once into the queue for the backend, refused when malformed, ignored when polling. */
         const struct ss_npu_queue_edge want[2]={{0,0,1,0},{1,0,0,0}};
-        assert(ss_npu_queue_open_linked(3,want,SS_NPU_QUEUE_MAX_HANDLES*SS_NPU_QUEUE_MAX_TENSORS+1,&pub)==-1&&requests==0);
+        assert(ss_npu_queue_open_linked(3,want,5,&pub)==-1&&requests==0);
         assert(ss_npu_queue_open_linked(3,NULL,1,&pub)==-1&&requests==0);
         assert(ss_npu_queue_open_linked(3,want,2,&pub)==0&&requests==1);
         assert(q.requested_links==2&&!memcmp(q.requested,want,sizeof(want)));

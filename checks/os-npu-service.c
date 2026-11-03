@@ -26,6 +26,10 @@
 #include "a733_npu_memory.h"
 #include "a733_storage_digest.h"
 #include "a733_mapping_check.h"
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+#include "sunstone_npu_queue_service.h"
+#include "npu_runtime_queue.h"
+#endif
 #include "../apps/board/application.h"
 #include <assert.h>
 #include <sys/mman.h>
@@ -100,6 +104,24 @@ static unsigned char sunstone_npu_canary[1];
 static int sunstone_npu_hook_slot = -1;
 static uint32_t sunstone_npu_hook_address;
 #endif
+/* The sizing calls of the runtime take their work memory from the caller. */
+static enum npu_declaration_result reserve_with(const struct npu_runtime_model *models, unsigned count, unsigned slots,
+                                                size_t pool, size_t *bytes, struct npu_runtime_bounds bounds)
+{
+    const size_t scratch = npu_runtime_scratch_bytes(models, count);
+    if (!scratch) return NPU_DECLARATION_MODEL;
+    bounds.scratch = aligned_alloc(64, (scratch + 63) & ~(size_t)63); bounds.scratch_bytes = scratch;
+    assert(bounds.scratch);
+    const enum npu_declaration_result r = npu_runtime_reservation_with(models, count, slots, pool, bytes, &bounds);
+    free(bounds.scratch);
+    return r;
+}
+#define npu_runtime_reservation(models, count, slots, pool, bytes) reserve_with(models, count, slots, pool, bytes, (struct npu_runtime_bounds){0})
+static size_t requirements_of(const struct npu_runtime_model *models, unsigned count, unsigned slots)
+{
+    size_t bytes = 0;
+    return reserve_with(models, count, slots, SIZE_MAX / 4, &bytes, (struct npu_runtime_bounds){0}) == NPU_DECLARATION_OK ? bytes : 0;
+}
 static unsigned registered_case; /* case 29: graphs handed over after the scheduler started */
 static unsigned registered_ok, registered_refused, registered_job, registered_changed_result;
 static unsigned long_run; /* case 26: many jobs through a session whose job field is 1 */
@@ -222,10 +244,11 @@ static int memory_cache(void *cookie, enum aarch64_cache_op op, uintptr_t cpu, s
 static void memory_barrier(void *cookie) { (void)cookie; }
 int a733_npu_native_init(struct a733_npu_native *n, uintptr_t register_cpu, uint64_t register_physical,
                          void *arena, size_t capacity, uint64_t arena_physical,
-                         const struct a733_npu_buffer *buffers, size_t count, void (*fatal)(void *), void *cookie)
+                         const struct a733_npu_buffer *buffers, size_t count, void (*fatal)(void *), void *cookie,
+                         void *tables, size_t table_bytes)
 {
     const struct a733_npu_memory_ops ops = {memory_translate, memory_cache, memory_barrier};
-    if (!a733_npu_memory_init(&n->memory, arena, capacity, arena_physical, buffers, count, &ops, n)) return 0;
+    if (!a733_npu_memory_init(&n->memory, arena, capacity, arena_physical, buffers, count, &ops, n, tables, table_bytes)) return 0;
     n->registers = register_cpu; n->register_physical = register_physical;
     n->fatal = fatal; n->fatal_cookie = cookie; n->initialized = 1;
     return 1;
@@ -326,6 +349,78 @@ static void client_all(void)
         ++graphs_run;
     }
 }
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+/* The direct queue driver (drivers/npu/npu_runtime_queue.c) is aarch64 code (system registers, DSB, the MMIO doorbell); the
+ * host stands in for its claim and return with the same preconditions, and links the generic queue (drivers/npu/npu_queue.c)
+ * that the adapter registers each handle's command with. EL0 translation and the cache stride are the model's. */
+BaseType_t npu_runtime_queue_task_privileged(TaskFunction_t entry, void *argument) { (void)entry; (void)argument; return pdFALSE; }
+int aarch64_device_translate_el0(uintptr_t cpu, int write, struct aarch64_translation *out)
+{ return memory_translate(NULL, cpu, write, out); }
+unsigned aarch64_device_cache_stride(void) { return 64; }
+static int fake_validate(void *context, const struct a733_npu_command *c)
+{
+    const struct npu_runtime *rt = ((struct npu_runtime_queue *)context)->runtime;
+    for (unsigned i = 0; i < rt->slots; ++i)
+        if (c->device == rt->commands[i + 1].device && c->token == rt->commands[i + 1].token) return 1;
+    return 0;
+}
+static int fake_start(void *context, const struct a733_npu_command *c, uint64_t t) { (void)context; (void)c; (void)t; return 0; }
+static int fake_complete(void *context) { (void)context; return 0; }
+static void fake_notify(void *context) { (void)context; }
+int npu_runtime_queue_claim(struct npu_runtime_queue *q, struct npu_runtime *rt)
+{
+    if (!q || !rt || q->claimed || !rt->bound || !rt->resident || rt->service.direct || rt->service.direct_request ||
+        rt->service.controller.state != A733_NPU_READY || rt->service.running != NPU_SERVICE_NONE || rt->service.has_deferred) return 0;
+    for (unsigned i = 0; i < rt->slots; ++i)
+        if (rt->slot[i].pending || atomic_load_explicit(&rt->slot[i].state, memory_order_acquire) != NPU_RUNTIME_READY) return 0;
+    const struct npu_queue_ops ops = {fake_validate, fake_start, fake_complete, fake_notify};
+    q->runtime = rt;
+    if (!npu_queue_init(&q->queue, &ops, q)) return 0;
+    q->claimed = 1;
+    return 1;
+}
+int npu_runtime_queue_return(struct npu_runtime_queue *q) { q->claimed = 0; return 1; }
+/* Case 33: the open path of the OS queue (apps/os/npu-queue.c) with the declaration of the image: every resident graph is
+ * loaded through the worker, a handle is built for each, the direct queue is claimed and the ring is ready. Before the open,
+ * the service refuses a SUBMIT of a command beyond the declared slots and one of another slot's command. */
+static unsigned queue_handles, queue_wide_inputs, queue_denied, queue_invalid, queue_closed;
+static void queue_client(void *unused)
+{
+    (void)unused;
+    for (;;) {
+        int opened = os_npu_open();
+        if (opened == 1) break;
+        assert(opened == 0);
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(25));
+    }
+    for (unsigned pass = 0; pass < 2; ++pass) {
+        struct npu_service_request r = {NPU_SERVICE_SUBMIT, pass ? 5u : npu.runtime.slots + 1u, 1000000};
+        uint64_t ticket; struct npu_service_reply reply;
+        assert(npu_service_send(&npu.runtime.service, &r, pdMS_TO_TICKS(100), &ticket));
+        assert(npu_service_collect(&npu.runtime.service, ticket, &reply, pdMS_TO_TICKS(1000)));
+        if (pass) queue_invalid = reply.result == NPU_SERVICE_INVALID; else queue_denied = reply.result == NPU_SERVICE_DENIED;
+    }
+    struct ss_npu_queue *q = NULL;
+    for (unsigned spin = 0;; ++spin) {
+        const int r = ss_npu_queue_open(os_npu_in_flight(), &q);
+        if (r == 1) break;
+        assert(r == 0 && spin < 100000);
+        assert(os_npu_queue_sdk_step() >= 0);
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
+    }
+    queue_handles = q->handles;
+    for (unsigned h = 0; h < q->handles; ++h) if (q->handle[h].inputs >= 12) queue_wide_inputs = q->handle[h].inputs;
+    for (unsigned spin = 0; spin < 100000; ++spin) {
+        const int r = ss_npu_queue_close(q);
+        assert(r >= 0);
+        if (r == 1) { queue_closed = 1; break; }
+        (void)os_npu_queue_sdk_step();
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
+    }
+    finished = 1;
+    vTaskSuspend(NULL);
+}
+#endif
 static void client(void *unused)
 {
     (void)unused;
@@ -436,7 +531,7 @@ static uint32_t canary_now(void)
 static void verify(void *unused)
 {
     (void)unused;
-    for (unsigned waited = 0; !finished && live_value && waited < (long_run ? 2000000u : fault_case ? 30000u : 5000u); ++waited)
+    for (unsigned waited = 0; !finished && live_value && waited < (long_run ? 2000000u : fault_case ? 30000u : npu.runtime.slots > 40 ? 200000u : 5000u); ++waited)
         vTaskDelay(pdMS_TO_TICKS(1));
     if (fault_case) {
         /* One line for each job and one summary; the driver (os-npu-service.py) judges them against the scenario. */
@@ -466,6 +561,14 @@ static void verify(void *unused)
         assert(finished && !board_failures && long_jobs_done == long_run && result_close == 1 && model.triggers == 1 + long_run);
         return;
     }
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+    printf("queue: %u handles, widest %u inputs, closed %u, command beyond the declared slots denied %u, another slot's command refused %u, failures %u\n",
+           queue_handles, queue_wide_inputs, queue_closed, queue_denied, queue_invalid, board_failures);
+    fflush(stdout);
+    assert(finished && queue_handles == npu.runtime.slots && queue_closed && queue_denied && queue_invalid && !board_failures);
+    if (getenv("EXPECT_WIDE")) assert(queue_wide_inputs == 12);
+    return;
+#endif
     printf("open %u load %u submit %u close %u finished %u failures %u site %#x value %#x triggers %u\n",
            result_open, result_load, result_submit, result_close, finished, board_failures, first_site,
            first_value, model.triggers);
@@ -530,6 +633,57 @@ static void check_constant_region_read_only(void)
     assert(walk_tables(0, 0) == 0 && walk_tables(0xfff, 1) == 0);
 }
 
+/* Trust boundary. Every table that the EL1 code trusts must lie outside every EL0 mapping and outside the NPU's page tables:
+ * a task that can write one grants itself another client's commands, or redirects what the worker writes. The model of what EL0
+ * reaches is the whole pool (tasks can write the parent allocation until the fixed mappings exist: docs/designs/npu-breadth.md);
+ * what the NPU reaches is the registered buffers and the page-table arena. The queue ring's tables are the one thing EL0 writes
+ * by design and must be in the pool. */
+static void trusted(const void *p, size_t n, uintptr_t pool_lo, uintptr_t pool_hi, const struct npu_runtime *rt, const char *what)
+{
+    const uintptr_t a = (uintptr_t)p, b = a + n;
+    if (!p || !n) { fprintf(stderr, "trusted table %s is empty\n", what); abort(); }
+    if (a < pool_hi && pool_lo < b) { fprintf(stderr, "trusted table %s lies in the pool EL0 can write\n", what); abort(); }
+    for (size_t i = 0; i < rt->native.memory.count; ++i) {
+        const struct a733_npu_buffer *buffer = &rt->native.memory.buffers[i];
+        if (a < buffer->cpu + buffer->bytes && buffer->cpu < b) { fprintf(stderr, "trusted table %s lies in a buffer the NPU maps\n", what); abort(); }
+    }
+    if (a < rt->native.memory.arena + rt->native.memory.capacity && rt->native.memory.arena < b) {
+        fprintf(stderr, "trusted table %s lies in the NPU's page tables\n", what); abort();
+    }
+}
+#define TRUST(p, n) trusted((p), (n), pool_lo, pool_hi, rt, #p)
+static void check_trust(const struct npu_runtime *rt, uintptr_t pool_lo, uintptr_t pool_hi)
+{
+    const unsigned n = rt->slots, entries = rt->capacity;
+    TRUST(rt->slot, (size_t)n * sizeof(*rt->slot));
+    TRUST(rt->catalogue, (size_t)entries * sizeof(*rt->catalogue));
+    TRUST(rt->plans, (size_t)entries * sizeof(*rt->plans));
+    TRUST(rt->model_digest, (size_t)entries * 32);
+    for (unsigned i = 0; i < entries; ++i) TRUST(rt->plans[i].buffers, (size_t)rt->plans[i].capacity * sizeof(*rt->plans[i].buffers));
+    for (unsigned i = 0; i < n; ++i) {
+        TRUST(rt->slot[i].layout.buffers, (size_t)rt->slot[i].layout.capacity * sizeof(*rt->slot[i].layout.buffers));
+        TRUST(rt->slot[i].targets, (size_t)rt->slot[i].layout.capacity * sizeof(*rt->slot[i].targets));
+        TRUST(rt->slot[i].tensors, (size_t)rt->slot[i].tensor_capacity * sizeof(*rt->slot[i].tensors));
+    }
+    TRUST(rt->spans, sizeof(*rt->spans));
+    TRUST(rt->scratch, rt->scratch_bytes);
+    TRUST(rt->commands, ((size_t)n + 1) * sizeof(*rt->commands));
+    TRUST(rt->buffers, ((size_t)n * 4 + 1) * sizeof(*rt->buffers));
+    TRUST(rt->native.memory.buffers, rt->native.memory.count * sizeof(*rt->native.memory.buffers));
+    TRUST(rt->native.memory.groups, rt->native.memory.count);
+    TRUST(rt->native.memory.scratch_regions, rt->native.memory.count * sizeof(*rt->native.memory.scratch_regions));
+    TRUST(rt->service.commands, (size_t)rt->service.table_commands * sizeof(*rt->service.commands));
+    TRUST(rt->service.clients, (size_t)rt->service.client_count * sizeof(*rt->service.clients));
+    TRUST(rt->service.member, (size_t)rt->service.client_count * sizeof(*rt->service.member));
+    TRUST(rt->service.request_storage, (size_t)rt->service.client_count * sizeof(struct npu_service_message));
+    for (unsigned i = 0; i < rt->service.client_count; ++i)
+        TRUST(rt->service.clients[i].commands, NPU_SERVICE_PERMIT_WORDS(rt->service.table_commands) * sizeof(uint32_t));
+    if (rt->queue_bytes) {
+        /* The ring's tables are written by EL0 by design: in the pool. The adapter's tables are EL1's. */
+        assert((uintptr_t)rt->queue_tables >= pool_lo && (uintptr_t)rt->queue_tables + rt->queue_bytes <= pool_hi);
+        TRUST(rt->queue_meta, rt->queue_meta_bytes);
+    }
+}
 int main(int argc, char **argv)
 {
     assert(argc == 2 || argc == 3);
@@ -541,7 +695,7 @@ int main(int argc, char **argv)
         assert(npu_runtime_reservation(os_npu_models, os_npu_model_count, 1, 8u << 20, &one) == NPU_DECLARATION_OK && one);
         assert(npu_runtime_reservation(os_npu_models, os_npu_model_count, 4, 64u << 20, &many) == NPU_DECLARATION_OK && many > one);
         /* The reservation is the exact requirement and grows with the slots. */
-        assert(one == npu_runtime_requirements(os_npu_models, os_npu_model_count, 1));
+        assert(one == requirements_of(os_npu_models, os_npu_model_count, 1));
         assert(npu_runtime_reservation(os_npu_models, os_npu_model_count, 1, one - 1, &scratch) == NPU_DECLARATION_MEMORY);
         assert(npu_runtime_reservation(os_npu_models, os_npu_model_count, 1, one, &scratch) == NPU_DECLARATION_OK);
         unsigned char *copy = malloc(os_npu_models[0].bytes);
@@ -556,7 +710,7 @@ int main(int argc, char **argv)
         for (unsigned i = 0; i < 40; ++i) forty[i] = os_npu_models[0];
         size_t with_forty = 0;
         assert(npu_runtime_reservation(forty, 40, 1, 64u << 20, &with_forty) == NPU_DECLARATION_OK && with_forty >= one);
-        assert(npu_runtime_tables_bytes(40) == 40 * 336 + 0 || npu_runtime_tables_bytes(40) >= 40 * 336);
+        assert(npu_runtime_tables_bytes(40, 1) >= 40 * 100);
         /* The declaration against the image and its tables. The image links one graph and no queue. */
         struct os_npu_session n = {0};
         assert(os_npu_declaration_admitted(&n) == NPU_DECLARATION_MISSING); /* no default: nothing declared is refused */
@@ -572,7 +726,7 @@ int main(int argc, char **argv)
         bad = n; bad.graphs = 17; assert(os_npu_declaration_admitted(&bad) == NPU_DECLARATION_OK); /* graphs have no table limit */
         bad = n; bad.graphs = 100000; assert(os_npu_declaration_admitted(&bad) == NPU_DECLARATION_OK);
         const struct npu_declaration good = {1, 1, 1, 0};
-        const struct npu_tables small = {8, 16, 64, 256}, large = {31, 100000, 1000000, 100000};
+        const struct npu_tables small = {8, 16, 64, 256}, large = {UINT32_MAX, 100000, 1000000, 100000};
         const struct npu_image_needs none = {1, 1, 0}, two_graphs = {1, 2, 0}, queued = {3, 1, 2};
         assert(npu_declaration_check(&good, &none, &small) == NPU_DECLARATION_OK);
         assert(npu_declaration_check(&good, &two_graphs, &small) == NPU_DECLARATION_IMAGE_GRAPHS);
@@ -581,10 +735,11 @@ int main(int argc, char **argv)
         assert(npu_declaration_check(&slots3, &queued, &small) == NPU_DECLARATION_IMAGE_LINKS);
         const struct npu_declaration full = {3, 64, 1, 2};
         assert(npu_declaration_check(&full, &queued, &small) == NPU_DECLARATION_OK);
-        /* The only fixed refusal that is not memory is the command mask: 31 slots. Everything else is the tables. */
-        const struct npu_declaration slots31 = {31, 1, 1, 0}, slots32 = {32, 1, 1, 0};
+        /* Slots have no limit of their own: 31, 32 and 400 are admitted by tables that hold them. */
+        const struct npu_declaration slots31 = {31, 1, 1, 0}, slots32 = {32, 1, 1, 0}, slots400 = {400, 1, 1, 0};
         assert(npu_declaration_check(&slots31, &none, &large) == NPU_DECLARATION_OK);
-        assert(npu_declaration_check(&slots32, &none, &large) == NPU_DECLARATION_SLOTS);
+        assert(npu_declaration_check(&slots32, &none, &large) == NPU_DECLARATION_OK);
+        assert(npu_declaration_check(&slots400, &none, &large) == NPU_DECLARATION_OK);
         /* Fields are full width: 300 graphs, a depth of 100000 and 5000 links are admitted by tables that hold them, and
          * refused by the image's tables with their own name. */
         const struct npu_declaration wide = {8, 100000, 300, 5000};
@@ -593,7 +748,7 @@ int main(int argc, char **argv)
         printf("declarations: one slot %zu bytes, four slots %zu bytes; every refusal names its resource\n", one, many);
         return 0;
     }
-    assert(mode == 20 || mode == 21 || mode == 26 || mode == 27 || mode == 28 || mode == 29 || mode == 30 || mode == 31 || ((mode == 22 || mode == 25) && argc == 3));
+    assert(mode == 20 || mode == 21 || mode == 26 || mode == 27 || mode == 28 || mode == 29 || mode == 30 || mode == 31 || mode == 33 || ((mode == 22 || mode == 25) && argc == 3));
     if (argc == 3) input_directory = argv[2];
     if (mode == 21) bootstrap_us = 30000;
     if (mode == 26) { long_run = (unsigned)strtoul(getenv("LONG_JOBS") ? getenv("LONG_JOBS") : "120000", NULL, 0); job_us = 3; }
@@ -619,29 +774,39 @@ int main(int argc, char **argv)
     /* Case 28: the 31 slots of the command mask. Case 30: one slot for each catalogue model, each sized by its own graph
      * (the queue image's layout); environment UNIFORM sizes every slot for the largest graph, to compare the totals. */
     /* NPU_SLOTS sets the slot count of case 30, as an application's declaration does (tools/npu-pool-plan.py). */
-    const unsigned slots = mode == 28 ? NPU_RUNTIME_SLOTS : mode == 30 ? (getenv("NPU_SLOTS") ? (unsigned)atoi(getenv("NPU_SLOTS")) : os_npu_model_count) : 1;
-    static unsigned slot_model[NPU_RUNTIME_SLOTS];
-    if (mode == 30 && !getenv("UNIFORM")) {
-        assert(slots <= NPU_RUNTIME_SLOTS && !bounds.capacity);
-        for (unsigned i = 0; i < slots; ++i) slot_model[i] = i;
-        bounds.slot_model = slot_model;
+    const unsigned slots = mode == 28 ? (getenv("NPU_SLOTS") ? (unsigned)atoi(getenv("NPU_SLOTS")) : 31u) : mode == 30 || mode == 33 ? (getenv("NPU_SLOTS") ? (unsigned)atoi(getenv("NPU_SLOTS")) : os_npu_model_count) : 1;
+    if ((mode == 30 || mode == 33) && !getenv("UNIFORM")) {
+        assert(slots <= os_npu_model_count && !bounds.capacity);
+        bounds.per_graph = 1;
     }
+    if (mode == 30 && getenv("NPU_QUEUE")) { bounds.queue = 1; sscanf(getenv("NPU_QUEUE"), "%u,%u", &bounds.queue_links, &bounds.queue_image_links); }
+    if (mode == 33) { bounds.queue = 1; bounds.queue_links = 8; bounds.queue_image_links = 0; bounds.capacity = 0; }
+    const size_t scratch_bytes = npu_runtime_scratch_bytes(os_npu_models, os_npu_model_count);
+    assert(scratch_bytes);
+    bounds.scratch = aligned_alloc(64, (scratch_bytes + 63) & ~(size_t)63); bounds.scratch_bytes = scratch_bytes;
     const size_t need = npu_runtime_requirements_with(os_npu_models, os_npu_model_count, slots, &bounds);
+    const size_t meta_need = npu_runtime_meta_bytes_with(os_npu_models, os_npu_model_count, slots, &bounds);
+    assert(meta_need);
+    free(bounds.scratch); bounds.scratch = NULL; bounds.scratch_bytes = 0; /* prepare takes its work memory from the reservation */
     assert(need && !(need & (NPU_RUNTIME_GROUP_BYTES - 1)));
     if (mode == 30 && getenv("NPU_SIZE_ONLY")) {         /* the reservation alone, for tools/npu-pool-plan.py */
-        printf("%u slots: %zu bytes reserved, 0 bytes in the slots' regions\n", slots, need);
+        printf("%u slots: %zu bytes reserved, 0 bytes in the slots' regions, %zu bytes of EL1 metadata\n", slots, need, meta_need);
         return 0;
     }
     /* The runtime registers physical addresses below 2^40, so the pool is placed in the low
      * 2 GiB of the host address space and aligned to the allocation group. */
-    uint8_t *raw = mmap(NULL, need + NPU_RUNTIME_GROUP_BYTES, PROT_READ | PROT_WRITE,
+    /* MUTATE_META_IN_POOL: the metadata comes from the pool's own tail, as if the allocator were wrong; check_trust must refuse. */
+    const size_t slack = getenv("MUTATE_META_IN_POOL") ? (meta_need + NPU_RUNTIME_GROUP_BYTES) & ~(size_t)(NPU_RUNTIME_GROUP_BYTES - 1) : 0;
+    uint8_t *raw = mmap(NULL, need + slack + NPU_RUNTIME_GROUP_BYTES, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
     assert(raw != MAP_FAILED);
     void *pool = (void *)(((uintptr_t)raw + NPU_RUNTIME_GROUP_BYTES - 1) & ~(uintptr_t)(NPU_RUNTIME_GROUP_BYTES - 1));
+    static struct npu_meta_window meta_window;
+    npu_meta_window_init(&meta_window, getenv("MUTATE_META_IN_POOL") ? (uint8_t *)pool + need : calloc(1, meta_need + 64), meta_need);
     static _Alignas(4096) uint8_t register_page[4096];
     struct npu_runtime_config config = {.count = os_npu_model_count, .slots = slots, .bounds = bounds, .cpu = (uintptr_t)pool,
         .physical = (uintptr_t)pool, .bytes = need, .register_cpu = (uintptr_t)register_page,
-        .register_physical = 0x03600000, .fatal = fatal};
+        .register_physical = 0x03600000, .fatal = fatal, .meta = &meta_window.meta};
     config.models = os_npu_models;
     if (mode == 31) {
         /* Models given with the digest they must have (a model delivered from outside the image: a runner input region, or
@@ -663,7 +828,25 @@ int main(int argc, char **argv)
         }
         config.models = given;
     }
-    assert(npu_runtime_prepare(&npu.runtime, &config));
+    if (mode == 30) {
+        /* An image whose declaration needs more metadata than it linked is refused at start, naming the memory. */
+        static struct npu_runtime shortfall;
+        static struct npu_meta_window short_window;
+        static uint8_t short_memory[64];
+        npu_meta_window_init(&short_window, short_memory, sizeof short_memory);
+        struct npu_runtime_config small = config;
+        small.meta = &short_window.meta;
+        assert(!npu_runtime_prepare(&shortfall, &small) && shortfall.refusal == NPU_DECLARATION_MEMORY);
+    }
+    if (!npu_runtime_prepare(&npu.runtime, &config)) { fprintf(stderr, "prepare refused: %s (meta %zu used %zu)\n", npu_declaration_name(npu.runtime.refusal), meta_need, meta_window.used); abort(); }
+    check_trust(&npu.runtime, (uintptr_t)pool, (uintptr_t)pool + need + slack);
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+    if (mode == 33) {
+        session_record.npu.in_flight = 64;
+        assert(os_npu_queue_sdk_bind());
+        assert(os_npu_queue_tables(&npu.runtime));
+    }
+#endif
     if (mode == 31) {
         assert(npu_runtime_preload(&npu.runtime, 0, 0));   /* the staged copy hashes to the declared digest */
         puts("PASS models given with their digests are accepted at prepare and at LOAD"); return 0;
@@ -672,9 +855,7 @@ int main(int argc, char **argv)
         const unsigned n = npu.runtime.slots;
         /* Thirty-one slots: every slot's regions are registered, distinct, ascending and inside the NPU's 32-bit address
          * space; the per-graph tables lie at the start of the reservation; the page tables hold 1 + 4 * 31 buffers. */
-        assert(NPU_RUNTIME_SLOTS == 31 && npu.runtime.slots == (mode == 28 ? 31 : slots) && npu.runtime.native.memory.count == 1 + 4 * n);
-        assert((uintptr_t)npu.runtime.catalogue == (uintptr_t)pool && (uintptr_t)npu.runtime.plans > (uintptr_t)pool &&
-               (uintptr_t)npu.runtime.model_digest > (uintptr_t)npu.runtime.plans);
+        assert(npu.runtime.slots == slots && npu.runtime.native.memory.count == 1 + 4 * n);
         uint64_t last = 0;
         for (unsigned i = 0; i < n; ++i) {
             const struct npu_runtime_slot *sl = &npu.runtime.slot[i];
@@ -684,7 +865,19 @@ int main(int argc, char **argv)
             assert(walk_tables((uint32_t)sl->constant.device, 0) == 1 && walk_tables((uint32_t)sl->write.device, 1) == 1);
         }
         check_low_range_unmapped(&npu.runtime);
-        assert(npu_runtime_reservation(os_npu_models, os_npu_model_count, 32, UINT64_MAX >> 1, &(size_t){0}) == NPU_DECLARATION_SLOTS);
+        /* Isolation of each slot: the page after each of its four regions is not mapped, and the regions of different slots do not
+         * overlap in the device's address space (the mapped ranges above are distinct and ascending). */
+        unsigned widest = 0;
+        for (unsigned i = 0; i < n; ++i) {
+            const struct npu_runtime_slot *sl = &npu.runtime.slot[i];
+            const struct npu_runtime_region *r[4] = {&sl->command, &sl->constant, &sl->read, &sl->write};
+            for (unsigned k = 0; k < 4; ++k) assert(walk_tables((uint32_t)(r[k]->device + r[k]->bytes), 0) == 0);
+            assert(sl->layout.capacity >= NBG_LAYOUT_ENTRIES(1, 1) && sl->tensor_capacity >= sl->layout.inputs + sl->layout.outputs);
+            if (sl->layout.capacity > widest) widest = sl->layout.capacity;
+        }
+        if (getenv("EXPECT_WIDE")) assert(widest >= NBG_LAYOUT_ENTRIES(12, 10));
+        assert(npu.runtime.service.client_count == n && npu.runtime.service.table_commands == n + 1);
+        assert(npu_runtime_reservation(os_npu_models, os_npu_model_count, 0, UINT64_MAX >> 1, &(size_t){0}) == NPU_DECLARATION_SLOTS);
         /* The command allocation is the largest resident graph's stream rounded to a page, not the 512 KiB hardware bound. */
         for (unsigned i = 0; i < n; ++i)
             assert(npu.runtime.slot[i].command.bytes < NPU_RUNTIME_COMMAND_BYTES && !(npu.runtime.slot[i].command.bytes & 4095));
@@ -692,18 +885,26 @@ int main(int argc, char **argv)
         for (unsigned i = 0; i < n; ++i)
             regions += npu.runtime.slot[i].command.bytes + npu.runtime.slot[i].constant.bytes + npu.runtime.slot[i].read.bytes +
                        npu.runtime.slot[i].write.bytes;
-        printf("%u slots: %zu bytes reserved, %zu bytes in the slots' regions, %u buffers registered, the tables at the start\n",
-               n, need, regions, (unsigned)npu.runtime.native.memory.count);
+        printf("%u slots: %zu bytes reserved, %zu bytes in the slots' regions, %zu bytes of EL1 metadata, %u buffers registered\n",
+               n, need, regions, meta_need, (unsigned)npu.runtime.native.memory.count);
         return 0;
     }
     check_low_range_unmapped(&npu.runtime);
     check_constant_region_read_only();
     npu.end = long_run ? UINT64_C(1000000000000) : 60000000;
     npu.bootstrap = xTaskCreateStatic(bootstrap, "os-npu-boot", STACK, NULL, 4, npu.stacks[0], &npu.tasks[0]);
+    #ifdef SUNSTONE_A733_OS_NPU_QUEUE
+    npu.client = xTaskCreateStatic(mode == 33 ? queue_client : client, "os-npu-app", STACK, NULL, 3, npu.stacks[1], &npu.tasks[1]);
+#else
     npu.client = xTaskCreateStatic(client, "os-npu-app", STACK, NULL, 3, npu.stacks[1], &npu.tasks[1]);
+#endif
     npu.startup.initialized = 1;
     assert(a733_npu_startup_bind_task(&npu.startup, npu.bootstrap));
     TaskHandle_t clients[] = {npu.client};
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+    if (mode == 33) assert(npu_runtime_bind_resident(&npu.runtime, &npu.startup, npu.client, 4, 1));
+    else
+#endif
     assert(npu_runtime_bind(&npu.runtime, &npu.startup, clients, 4, 1));
     assert(npu_runtime_bind_irq(&npu.runtime, &irq_ops, &npu.runtime, 1, 0));
     npu.initial_deadline = 1000000;

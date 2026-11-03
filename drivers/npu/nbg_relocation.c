@@ -17,7 +17,7 @@ int nbg_relocate(void *buffer, size_t bytes,
                  const struct nbg_relocation *patches, size_t count)
 {
     const uint64_t address_space = UINT64_C(1) << 32;
-    if (!count || count > NBG_RELOCATION_MAX_PATCHES ||
+    if (!count || count > bytes / 4 ||
         !a733_span_excl_nonempty(buffer, bytes) ||
         !a733_span_excl_nonempty(patches, count * sizeof(*patches)))
         return 0;

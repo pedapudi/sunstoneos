@@ -447,13 +447,23 @@ static struct npu_service_reply call(unsigned slot, enum npu_service_operation o
  * with their padding, and the whole fetch span of the command allocation. */
 #define SCRATCH_BASE (PARENT_BASE + (24u << 20))
 #define SCRATCH_BYTES (3u << 20)
+/* The runtime's sizing call takes its work memory from the caller. */
+static size_t requirements(const struct npu_runtime_model *models, unsigned count, unsigned slots)
+{
+    static _Alignas(64) unsigned char scratch[1u << 16];
+    struct npu_runtime_bounds bounds = {.scratch = scratch, .scratch_bytes = sizeof(scratch)};
+    return slots ? npu_runtime_requirements_with(models, count, slots, &bounds) : 0;
+}
 static void same_as_one_call(unsigned slot)
 {
     const struct npu_runtime_slot *s = &rt.slot[slot];
     const struct fixture *f = &fixtures[s->model];
     struct nbg_model view;
-    struct nbg_assembly_buffer b[NBG_LAYOUT_MAX_BUFFERS];
-    struct nbg_assembly_layout l;
+    /* The check's own tables: the largest fixture has few tensors. */
+    struct nbg_assembly_buffer b[NBG_LAYOUT_ENTRIES(8, 8)];
+    struct nbg_allocation_requirement l_table[NBG_LAYOUT_ENTRIES(8, 8)];
+    struct nbg_assembly_layout l = {.buffers = l_table, .capacity = NBG_LAYOUT_ENTRIES(8, 8)};
+    configASSERT(s->layout.inputs <= 8 && s->layout.outputs <= 8);
     unsigned count = NBG_ALLOC_INPUT + s->layout.inputs + s->layout.outputs;
     uintptr_t at = SCRATCH_BASE + slot * SCRATCH_BYTES;
     configASSERT(rt.parent_bytes <= SCRATCH_BASE - PARENT_BASE);
@@ -464,7 +474,9 @@ static void same_as_one_call(unsigned slot)
     }
     configASSERT(at <= SCRATCH_BASE + (slot + 1) * SCRATCH_BYTES);
     configASSERT(nbg_model_open(f->model, f->bytes, &view) == NBG_DECODE_OK &&
-                 nbg_assemble_layout(&view, b, count, &l) && !memcmp(&l, &s->layout, sizeof(l)));
+                 nbg_assemble_layout(&view, b, count, &l) && l.inputs == s->layout.inputs && l.outputs == s->layout.outputs &&
+                 l.nn_operations == s->layout.nn_operations && l.command_body_bytes == s->layout.command_body_bytes &&
+                 !memcmp(l.buffers, s->layout.buffers, count * sizeof(*l.buffers)));
     for (unsigned i = NBG_ALLOC_NN; i <= NBG_ALLOC_COEFF; ++i)
         configASSERT(!memcmp(b[i].cpu, s->targets[i].cpu, b[i].bytes));
     configASSERT(!memcmp(b[NBG_ALLOC_COMMAND].cpu, (const void *)s->command.cpu, A733_NPU_FETCH_BYTES));
@@ -1178,24 +1190,29 @@ void kernel_main(void)
     struct npu_runtime_config config = {.count = FIXTURES, .slots = SLOTS, .cpu = PARENT_BASE,
         .physical = PARENT_BASE, .register_cpu = REGISTER_CPU, .register_physical = 0x03600000,
         .fatal = fatal};
+    static _Alignas(64) uint8_t meta_memory[1u << 20];
+    static struct npu_meta_window meta_window;
+    npu_meta_window_init(&meta_window, meta_memory, sizeof meta_memory);
+    config.meta = &meta_window.meta;
     static struct npu_runtime_model model_table[FIXTURES];
     for (unsigned m = 0; m < FIXTURES; ++m)
         model_table[m] = (struct npu_runtime_model){m == CONV8 ? writable_conv8 : fixtures[m].model, fixtures[m].bytes};
     config.models = model_table;
-    size_t bytes = npu_runtime_requirements(config.models, FIXTURES, SLOTS);
+    size_t bytes = requirements(config.models, FIXTURES, SLOTS);
     configASSERT(bytes && bytes <= PARENT_LIMIT && !(bytes & (NPU_RUNTIME_GROUP_BYTES - 1)));
-    configASSERT(!npu_runtime_requirements(config.models, FIXTURES, 0) &&
-                 !npu_runtime_requirements(config.models, FIXTURES, NPU_RUNTIME_SLOTS + 1));
+    configASSERT(!requirements(config.models, FIXTURES, 0) &&
+                 requirements(config.models, FIXTURES, 2 * SLOTS) > bytes); /* the slots have no limit but memory */
     writable_conv8[7] ^= 1;
-    configASSERT(!npu_runtime_requirements(config.models, FIXTURES, SLOTS));
+    configASSERT(!requirements(config.models, FIXTURES, SLOTS));
     writable_conv8[7] ^= 1;
     config.bytes = bytes - NPU_RUNTIME_GROUP_BYTES;
     struct npu_runtime_config bad = config;
     configASSERT(!npu_runtime_prepare(&rt, &bad) && atomic_load(&rt.failed));
-    memset(&rt, 0, sizeof(rt));
+    memset(&rt, 0, sizeof(rt)); npu_meta_window_init(&meta_window, meta_memory, sizeof meta_memory);
     config.bytes = bytes;
     bad = config; bad.cpu += 4096; bad.physical += 4096;
     configASSERT(!npu_runtime_prepare(&rt, &bad) && !atomic_load(&rt.failed));
+    npu_meta_window_init(&meta_window, meta_memory, sizeof meta_memory);
     configASSERT(npu_runtime_prepare(&rt, &config) && !npu_runtime_prepare(&rt, &config));
     layout_checks();
 

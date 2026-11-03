@@ -37,6 +37,14 @@ static int admit(const unsigned char *data, size_t bytes, unsigned *entry, struc
     *entry = e;
     return 1;
 }
+static int same_layout(const struct nbg_assembly_layout *a, const struct nbg_assembly_layout *b)
+{
+    return a->inputs == b->inputs && a->outputs == b->outputs && a->nn_operations == b->nn_operations &&
+        a->descriptor_patches == b->descriptor_patches && a->state_patches == b->state_patches &&
+        a->command_body_bytes == b->command_body_bytes && a->dynamic == b->dynamic &&
+        a->program_offset == b->program_offset && a->program_bytes == b->program_bytes &&
+        !memcmp(a->buffers, b->buffers, (size_t)nbg_layout_buffers(a) * sizeof(*a->buffers));
+}
 static uint32_t buffer_count(const struct nbg_assembly_layout *l)
 { return nbg_layout_buffers(l); }
 static enum a733_npu_buffer_role role(const struct nbg_assembly_layout *l, unsigned i)
@@ -55,8 +63,8 @@ static enum a733_npu_buffer_role role(const struct nbg_assembly_layout *l, unsig
  * after each allocation. Returns the parent size, or 0 when it cannot fit. */
 struct placement {
     size_t model_offset[NPU_SESSION_MODELS], bootstrap_offset, arena_offset, arena_bytes, bytes;
-    size_t offset[NPU_SESSION_MODELS][NBG_LAYOUT_MAX_BUFFERS];
-    uint32_t device[NPU_SESSION_MODELS][NBG_LAYOUT_MAX_BUFFERS], bootstrap_device;
+    size_t offset[NPU_SESSION_MODELS][NPU_SESSION_ENTRIES];
+    uint32_t device[NPU_SESSION_MODELS][NPU_SESSION_ENTRIES], bootstrap_device;
     unsigned buffers;
 };
 static int place(const size_t *model_bytes, const struct nbg_assembly_layout *layouts, unsigned count,
@@ -84,7 +92,7 @@ static int place(const size_t *model_bytes, const struct nbg_assembly_layout *la
     /* One 16 KiB leaf table per 16 MiB root that the device range touches. */
     uint64_t roots = ((device - PAGE - 1) >> 24) - (NPU_SESSION_DEVICE_BASE >> 24) + 1;
     p->arena_offset = offset; p->arena_bytes = PAGE + roots * 16384u;
-    if (p->buffers > A733_NPU_MEMORY_MAX_BUFFERS || offset > SIZE_MAX - p->arena_bytes) return 0;
+    if (p->buffers > NPU_SESSION_MAX_BUFFERS || offset > SIZE_MAX - p->arena_bytes) return 0;
     p->bytes = offset + p->arena_bytes;
     return 1;
 }
@@ -92,12 +100,14 @@ static int place(const size_t *model_bytes, const struct nbg_assembly_layout *la
 size_t npu_session_requirements(const struct npu_session_model *models, unsigned count)
 {
     struct nbg_assembly_layout layouts[NPU_SESSION_MODELS];
+    struct nbg_allocation_requirement tables[NPU_SESSION_MODELS][NPU_SESSION_ENTRIES];
     size_t sizes[NPU_SESSION_MODELS];
     struct placement p;
     if (!models || !count || count > NPU_SESSION_MODELS) return 0;
     for (unsigned m = 0; m < count; ++m) {
         struct nbg_model model;
         unsigned entry;
+        layouts[m] = (struct nbg_assembly_layout){.buffers = tables[m], .capacity = NPU_SESSION_ENTRIES};
         if (!a733_span_incl_nonempty(models[m].data, models[m].bytes) ||
             !admit(models[m].data, models[m].bytes, &entry, &model, &layouts[m])) return 0;
         sizes[m] = models[m].bytes;
@@ -185,13 +195,15 @@ int npu_session_prepare(struct npu_sessions *s, const struct npu_session_config 
     }
     struct nbg_model models[NPU_SESSION_MODELS];
     struct nbg_assembly_layout layouts[NPU_SESSION_MODELS];
+    struct nbg_allocation_requirement tables[NPU_SESSION_MODELS][NPU_SESSION_ENTRIES];
     struct placement p;
+    for (unsigned m = 0; m < v.count; ++m) layouts[m] = (struct nbg_assembly_layout){.buffers = tables[m], .capacity = NPU_SESSION_ENTRIES};
     for (unsigned m = 0; m < v.count; ++m)
         if (!admit(s->session[m].model, sizes[m], &s->session[m].entry, &models[m], &layouts[m]))
             return fault(s);
     if (!place(sizes, layouts, v.count, &p) || p.bytes != v.bytes) return fault(s);
     s->count = v.count; s->parent_cpu = v.cpu; s->parent_bytes = v.bytes;
-    struct a733_npu_buffer all[A733_NPU_MEMORY_MAX_BUFFERS];
+    struct a733_npu_buffer all[NPU_SESSION_MAX_BUFFERS];
     unsigned n = 0;
     s->bootstrap = all[n++] = (struct a733_npu_buffer){v.cpu + p.bootstrap_offset,
         v.physical + p.bootstrap_offset, NPU_SESSION_BOOTSTRAP_BYTES, p.bootstrap_device,
@@ -199,6 +211,8 @@ int npu_session_prepare(struct npu_sessions *s, const struct npu_session_config 
     for (unsigned m = 0; m < v.count; ++m) {
         struct npu_session *session = &s->session[m];
         session->layout = layouts[m];
+        memcpy(session->layout_table, layouts[m].buffers, sizeof(session->layout_table));
+        session->layout.buffers = session->layout_table; session->layout.capacity = NPU_SESSION_ENTRIES;
         for (unsigned i = 0; i < buffer_count(&layouts[m]); ++i) {
             uint32_t bytes = layouts[m].buffers[i].allocation_bytes;
             if (!bytes) continue;
@@ -208,18 +222,19 @@ int npu_session_prepare(struct npu_sessions *s, const struct npu_session_config 
     }
     if (!a733_npu_native_init(&s->native, v.register_cpu, v.register_physical,
             (void *)(v.cpu + p.arena_offset), p.arena_bytes, v.physical + p.arena_offset,
-            all, n, v.fatal, v.fatal_cookie)) return fault(s);
+            all, n, v.fatal, v.fatal_cookie, s->memory_tables, sizeof(s->memory_tables))) return fault(s);
     for (unsigned m = 0; m < v.count; ++m) {
         struct npu_session *session = &s->session[m];
-        struct nbg_assembly_buffer targets[NBG_LAYOUT_MAX_BUFFERS] = {0};
+        struct nbg_assembly_buffer targets[NPU_SESSION_ENTRIES] = {0};
         for (unsigned i = 0; i < buffer_count(&layouts[m]); ++i) {
             const struct a733_npu_buffer *b = &session->buffers[i];
             if (b->bytes && !a733_npu_memory_group(&s->native.memory, b->device, m + 1)) return fault(s);
             if (b->bytes) targets[i] = (struct nbg_assembly_buffer){(void *)b->cpu, b->bytes, b->device};
         }
-        struct nbg_assembly_layout assembled;
+        struct nbg_allocation_requirement assembled_table[NPU_SESSION_ENTRIES];
+        struct nbg_assembly_layout assembled = {.buffers = assembled_table, .capacity = NPU_SESSION_ENTRIES};
         if (!nbg_assemble_layout(&models[m], targets, buffer_count(&layouts[m]), &assembled) ||
-            memcmp(&assembled, &layouts[m], sizeof(assembled)) ||
+            !same_layout(&assembled, &layouts[m]) ||
             !a733_npu_memory_command(&s->native.memory, session->buffers[NBG_ALLOC_COMMAND].device,
                                      &s->commands[m + 1])) return fault(s);
         for (unsigned j = 0; j < 2; ++j) {
@@ -325,12 +340,13 @@ int npu_session_bind(struct npu_sessions *s, struct a733_npu_startup *startup,
     }
     s->startup = startup;
     const struct npu_service_activation activation = {startup->task, prepared, s};
-    if (!npu_service_init_deferred(&s->service, &operations, s, &s->native.memory.image, s->commands,
+    if (!npu_service_tables(&s->service, NPU_SESSION_MODELS, NPU_SESSION_MODELS + 1, s->service_tables, sizeof(s->service_tables)) ||
+        !npu_service_init_deferred(&s->service, &operations, s, &s->native.memory.image, s->commands,
             s->count + 1, priority, affinity, &activation) || !npu_service_share(&s->service))
         return fault(s);
     for (unsigned m = 0; m < s->count; ++m) {
         s->session[m].client = clients[m];
-        if (!npu_service_bind(&s->service, m, clients[m], UINT32_C(1) << (m + 1))) return fault(s);
+        if (!npu_service_bind_range(&s->service, m, clients[m], m + 1, 1)) return fault(s);
     }
     s->bound = 1;
     return 1;

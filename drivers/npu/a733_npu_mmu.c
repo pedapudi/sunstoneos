@@ -57,8 +57,7 @@ int a733_npu_mmu_build(void *arena, size_t capacity, uint64_t physical,
     size_t offsets[ROOT_ENTRIES] = {0};
     size_t used = ROOT_BYTES;
     unsigned tables = 0;
-    if (count > A733_NPU_MMU_MAX_REGIONS ||
-        !a733_span_incl_nonempty(arena, capacity) || !a733_span_incl_nonempty(result, sizeof(*result)) ||
+    if (!a733_span_incl_nonempty(arena, capacity) || !a733_span_incl_nonempty(result, sizeof(*result)) ||
         (count && !a733_span_incl_nonempty(regions, count * sizeof(*regions))) ||
         ((uintptr_t)arena & 4095u) || (physical & 4095u) ||
         capacity < ROOT_BYTES || capacity > A733_NPU_MMU_MAX_BYTES || (capacity & 63u) ||

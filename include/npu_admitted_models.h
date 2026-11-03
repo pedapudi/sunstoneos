@@ -16,7 +16,7 @@
 struct npu_admitted_model {
     unsigned char digest[32];
     uint32_t model_bytes, inputs, outputs;
-    uint32_t tensor_bytes[2 * NBG_ASSEMBLY_MAX_TENSORS];
+    uint32_t tensor_bytes[2 * 8u /* the session driver's own table: NPU_SESSION_TENSORS each way (npu_session.h) */];
     uint32_t nn_operations, descriptor_patches, state_patches, command_body_bytes;
 };
 extern const struct npu_admitted_model npu_admitted_models[];

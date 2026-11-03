@@ -42,12 +42,19 @@ static int live_mappings(const struct a733_npu_memory *m, int all)
     return 1;
 }
 
+size_t a733_npu_memory_tables_bytes(size_t count)
+{
+    if (count > (SIZE_MAX - 64) / (sizeof(struct a733_npu_buffer) + sizeof(struct a733_npu_region) + 1)) return 0;
+    return A733_NPU_MEMORY_TABLES_BYTES(count);
+}
 int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity,
                          uint64_t physical, const struct a733_npu_buffer *buffers,
-                         size_t count, const struct a733_npu_memory_ops *ops, void *cookie)
+                         size_t count, const struct a733_npu_memory_ops *ops, void *cookie,
+                         void *tables, size_t table_bytes)
 {
     if (!a733_span_incl_nonempty(m, sizeof(*m)) || m->state != A733_NPU_MEMORY_EMPTY ||
-        !count || count > A733_NPU_MEMORY_MAX_BUFFERS ||
+        !count || !a733_npu_memory_tables_bytes(count) || table_bytes < a733_npu_memory_tables_bytes(count) ||
+        ((uintptr_t)tables & 7u) || !a733_span_incl_nonempty(tables, table_bytes) ||
         !a733_span_incl_nonempty(buffers, count * sizeof(*buffers)) ||
         !a733_span_incl_nonempty(ops, sizeof(*ops)) ||
         !ops->translate || !ops->cache || !ops->barrier || !a733_span_incl_nonempty(arena, capacity) ||
@@ -60,13 +67,21 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
         a733_extents_intersect((uintptr_t)m, sizeof(*m), (uintptr_t)buffers, input_bytes) ||
         a733_extents_intersect((uintptr_t)m, sizeof(*m), (uintptr_t)ops, sizeof(*ops)) ||
         a733_extents_intersect((uintptr_t)arena, capacity, (uintptr_t)buffers, input_bytes) ||
-        a733_extents_intersect((uintptr_t)arena, capacity, (uintptr_t)ops, sizeof(*ops))) return 0;
+        a733_extents_intersect((uintptr_t)arena, capacity, (uintptr_t)ops, sizeof(*ops)) ||
+        a733_extents_intersect((uintptr_t)tables, table_bytes, (uintptr_t)m, sizeof(*m)) ||
+        a733_extents_intersect((uintptr_t)tables, table_bytes, (uintptr_t)arena, capacity) ||
+        a733_extents_intersect((uintptr_t)tables, table_bytes, (uintptr_t)buffers, input_bytes) ||
+        a733_extents_intersect((uintptr_t)tables, table_bytes, (uintptr_t)ops, sizeof(*ops))) return 0;
 
     /* Built in place: the memory object is static and zero until this call succeeds, and a refusal leaves it zero
      * again. No copy of it and no table of regions is kept on the stack (the tables hold up to 125 buffers). */
     struct a733_npu_memory *const next_ = m;
-    struct a733_npu_region *const regions = m->scratch_regions;
     for (volatile unsigned char *zero = (volatile unsigned char *)m, *end = zero + sizeof(*m); zero != end; ++zero) *zero = 0;
+    for (volatile unsigned char *zero = tables, *end = zero + a733_npu_memory_tables_bytes(count); zero != end; ++zero) *zero = 0;
+    next_->buffers = tables;
+    next_->groups = (uint8_t *)tables + (count * sizeof(struct a733_npu_buffer) + 7u) / 8u * 8u;
+    next_->scratch_regions = (struct a733_npu_region *)(next_->groups + (count + 7u) / 8u * 8u);
+    struct a733_npu_region *const regions = next_->scratch_regions;
     next_->count = count; next_->arena = (uintptr_t)arena; next_->capacity = capacity;
     next_->image.physical = physical; next_->ops = *ops; next_->cookie = cookie;
     unsigned bootstraps = 0;
@@ -79,6 +94,7 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
             b->bytes > VA_LIMIT - b->device ||
             a733_extents_intersect(b->cpu, b->bytes, (uintptr_t)m, sizeof(*m)) ||
             a733_extents_intersect(b->cpu, b->bytes, (uintptr_t)arena, capacity) ||
+            a733_extents_intersect(b->cpu, b->bytes, (uintptr_t)tables, table_bytes) ||
             a733_extents_intersect(b->physical, b->bytes, physical, capacity) ||
             a733_extents_intersect(b->device, b->bytes, 0x400000, 0x80000)) return 0;
         if (b->role == A733_NPU_BUFFER_BOOTSTRAP) ++bootstraps;

@@ -8,7 +8,7 @@ checksums, so only the loader's own rule can refuse it) and the copy must be ref
 assembler without the rule that the case tests; the mutated copy must then be admitted, so the case does test the
 rule. The graphs are found under --graphs (one directory per graph with export_nbg_unify/network_binary.nb).
 """
-import argparse, ctypes as c, importlib.util, struct, subprocess, sys
+import struct, argparse, ctypes as c, importlib.util, struct, subprocess, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +50,7 @@ def admit(library, data):
     lib = c.CDLL(str(library))
     buf = c.create_string_buffer(data, len(data))
     model, layout = (c.c_ubyte * 4096)(), (c.c_ubyte * 16384)()
+    table = (c.c_uint32 * 192)(); struct.pack_into('<QI', layout, 0, c.addressof(table), 64); layout.table = table  # the caller's table of the layout
     lib.nbg_model_open.argtypes = [c.c_void_p, c.c_size_t, c.c_void_p]
     lib.nbg_assembly_layout.argtypes = [c.c_void_p, c.c_void_p]
     if lib.nbg_model_open(buf, len(data), model) != 0:
@@ -65,6 +66,7 @@ def admission_reason(graph, edits):
     lib = c.CDLL(str(graph.native))
     buf = c.create_string_buffer(mutated.data, len(mutated.data))
     model, layout = (c.c_ubyte * 4096)(), (c.c_ubyte * 16384)()
+    table = (c.c_uint32 * 192)(); struct.pack_into('<QI', layout, 0, c.addressof(table), 64); layout.table = table  # the caller's table of the layout
     lib.nbg_model_open.argtypes = [c.c_void_p, c.c_size_t, c.c_void_p]
     lib.nbg_assembly_layout.argtypes = [c.c_void_p, c.c_void_p]
     lib.nbg_assembly_refusal.argtypes = [c.c_void_p]

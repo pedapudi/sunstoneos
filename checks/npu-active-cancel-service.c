@@ -171,19 +171,21 @@ BaseType_t npu_active_cancel_task_privileged(TaskFunction_t entry,void *argument
 void kernel_main(void)
 {
     platform_init();memset(data,0x69,sizeof(data));set(&model.validated,1);
+    static _Alignas(8) uint8_t memory_tables[A733_NPU_MEMORY_TABLES_BYTES(4)],service_tables[NPU_SERVICE_TABLES_BYTES(1,3)];
     struct a733_npu_buffer buffers[4];
     static const uint32_t addresses[3]={0xe0089000,0xe0004000,0xe010a000};
     for(unsigned i=0;i<3;++i)buffers[i]=(struct a733_npu_buffer){(uintptr_t)command_memory[i],
         (uintptr_t)command_memory[i],sizeof(command_memory[i]),addresses[i],i?A733_NPU_BUFFER_COMMAND:A733_NPU_BUFFER_BOOTSTRAP};
     buffers[3]=(struct a733_npu_buffer){(uintptr_t)data+4096,(uintptr_t)data+4096,4096,0xe0087000,A733_NPU_BUFFER_WRITE};
     configASSERT(a733_npu_bootstrap(command_memory[0],sizeof(command_memory[0])));
-    configASSERT(a733_npu_native_init(&native,0x09000000,0x09000000,arena,sizeof(arena),(uintptr_t)arena,buffers,4,fatal,NULL));
+    configASSERT(a733_npu_native_init(&native,0x09000000,0x09000000,arena,sizeof(arena),(uintptr_t)arena,buffers,4,fatal,NULL,memory_tables,sizeof(memory_tables)));
     struct a733_npu_command commands[3];
     for(unsigned i=0;i<3;++i)configASSERT(a733_npu_memory_command(&native.memory,addresses[i],&commands[i]));
     model.regs[0x20/4]=0x9000;model.regs[0x24/4]=0x9202;model.regs[0x30/4]=0x1000003b;model.regs[1]=IDLE;
     bootstrap_task=xTaskCreateStaticAffinitySet(diagnostic_bootstrap,"cancel-boot",4096,NULL,5,stacks[1],&tasks[1],1);
     const struct npu_service_activation activation={bootstrap_task,prepared_diagnostic,&service};
     struct a733_npu_ops ops={diagnostic_read,diagnostic_write,diagnostic_now,diagnostic_delay,barrier,publish,finish};
+    configASSERT(npu_service_tables(&service,1,3,service_tables,sizeof(service_tables)));
     configASSERT(npu_service_init_deferred(&service,&ops,NULL,&native.memory.image,commands,3,4,1,&activation));
     TaskHandle_t client=xTaskCreateStaticAffinitySet(diagnostic_owner,"cancel-owner",4096,NULL,5,stacks[0],&tasks[0],1);
     configASSERT(client && npu_service_bind(&service,0,client,6));

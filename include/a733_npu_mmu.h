@@ -7,7 +7,10 @@
  * any buffer, vip2/memory/vip_drv_mmu.c:721-729), and the loader admits pointer words below it that no patch sets. */
 #define A733_NPU_MMU_LOW_RESERVED UINT32_C(0x100000)
 
-#define A733_NPU_MMU_MAX_REGIONS 512u
+/* The one fixed bound of the page-table builder, and a hardware one: the NPU translates a 32-bit device address through a
+ * 4 KiB root of 256 directory entries of 16 MiB, each pointing to one 16 KiB leaf table at most, so a mapped device range is
+ * at most 4 GiB and its tables at most this many bytes. A region that starts or ends outside the range, or a set of regions
+ * that needs more tables, is refused. The number of regions has no limit: the caller's array is the builder's input. */
 #define A733_NPU_MMU_MAX_BYTES (4096u + 256u * 16384u)
 
 enum a733_npu_page_size {

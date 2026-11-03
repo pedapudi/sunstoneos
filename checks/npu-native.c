@@ -101,19 +101,20 @@ void kernel_main(void)
         {(uintptr_t)data + 4096, (uintptr_t)data + 4096, 4096, 0x10100000, A733_NPU_BUFFER_WRITE},
         {(uintptr_t)data + 8192, (uintptr_t)data + 8192, 4096, 0x10101000, A733_NPU_BUFFER_READ}
     };
+    static _Alignas(8) uint8_t tables[A733_NPU_MEMORY_TABLES_BYTES(4)];
     memset(data, 0x69, sizeof(data));
     memset(arena, 0xa5, sizeof(arena));
     /* RAM and substituted physical addresses cannot become an MMIO window. */
     configASSERT(!a733_npu_native_init(&invalid, (uintptr_t)data, (uintptr_t)data,
-        arena, sizeof(arena), (uintptr_t)arena, buffers, 4, fatal, &adapter));
+        arena, sizeof(arena), (uintptr_t)arena, buffers, 4, fatal, &adapter, tables, sizeof(tables)));
     configASSERT(!a733_npu_native_init(&invalid, 0x46000000, 0x46000000,
-        arena, sizeof(arena), (uintptr_t)arena, buffers, 4, fatal, &adapter));
+        arena, sizeof(arena), (uintptr_t)arena, buffers, 4, fatal, &adapter, tables, sizeof(tables)));
     configASSERT(!a733_npu_native_init(&invalid, 0x09000000, 0x09001000,
-        arena, sizeof(arena), (uintptr_t)arena, buffers, 4, fatal, &adapter));
+        arena, sizeof(arena), (uintptr_t)arena, buffers, 4, fatal, &adapter, tables, sizeof(tables)));
     struct a733_npu_buffer saved = buffers[2];
     buffers[2].cpu = buffers[2].physical = 0x47000000;
     configASSERT(!a733_npu_native_init(&invalid, 0x09000000, 0x09000000,
-        arena, sizeof(arena), (uintptr_t)arena, buffers, 4, fatal, &adapter));
+        arena, sizeof(arena), (uintptr_t)arena, buffers, 4, fatal, &adapter, tables, sizeof(tables)));
     buffers[2] = saved;
     for (unsigned i = 0; i < sizeof(invalid); ++i) configASSERT(!((uint8_t *)&invalid)[i]);
     for (unsigned i = 0; i < sizeof(arena); ++i) configASSERT(arena[i] == 0xa5);
@@ -121,7 +122,7 @@ void kernel_main(void)
     /* PL011 is the Device-memory target for MMIO access only. Never run the
      * NPU controller's register sequence against an unrelated peripheral. */
     configASSERT(a733_npu_native_init(&adapter, 0x09000000, 0x09000000,
-        arena, sizeof(arena), (uintptr_t)arena, buffers, 4, fatal, &adapter));
+        arena, sizeof(arena), (uintptr_t)arena, buffers, 4, fatal, &adapter, tables, sizeof(tables)));
     configASSERT(a733_npu_memory_command(&adapter.memory, 0x10000000, &commands[0]));
     configASSERT(a733_npu_memory_command(&adapter.memory, 0x10080000, &commands[1]));
     uint32_t value;

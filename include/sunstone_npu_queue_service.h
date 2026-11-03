@@ -20,16 +20,24 @@ struct ss_npu_queue_backend {
 };
 struct ss_npu_cache_span { uintptr_t cpu; size_t bytes; };
 struct ss_npu_dirty_range { size_t first, end; };
+/* The tables of one queue, in memory the OS gives it (ss_npu_queue_service_tables): sized by the handles, the tensors of
+ * all of them and the links the application may ask for. A handle's tensors, dirty ranges and aliases are carved from the
+ * tables as ss_npu_queue_service_handle adds it. */
+struct ss_npu_queue_alias { unsigned handle, output; };
 struct ss_npu_queue_handle {
-    struct ss_npu_tensor input[SS_NPU_QUEUE_MAX_TENSORS], output[SS_NPU_QUEUE_MAX_TENSORS];
+    struct ss_npu_tensor *input, *output;
     unsigned inputs, outputs;
-    struct ss_npu_dirty_range dirty[2][SS_NPU_QUEUE_MAX_TENSORS];
+    struct ss_npu_dirty_range *dirty[2];
     struct ss_npu_cache_span read, write;
     unsigned group;
     /* One-based producer handle for an aliased input; zero for own read. */
-    struct { unsigned handle, output; } alias[SS_NPU_QUEUE_MAX_TENSORS];
+    struct ss_npu_queue_alias *alias;
 };
-struct ss_npu_queue_group { unsigned members, device_owned; uint64_t last_use; };
+/* A group is the set of handles that share tensors; its members are a bitmap with one bit for each handle. */
+struct ss_npu_queue_group { uint32_t *members; unsigned device_owned; uint64_t last_use; };
+static inline unsigned ss_npu_queue_member_words(unsigned handles) { return (handles + 31u) / 32u; }
+static inline int ss_npu_queue_member(const struct ss_npu_queue *q, const struct ss_npu_queue_group *g, unsigned handle)
+{ (void)q; return g->members[handle / 32u] >> (handle % 32u) & 1u; }
 struct ss_npu_queue_entry { unsigned handle; uint64_t after, timeout; };
 struct ss_npu_queue {
     struct ss_npu_queue_backend backend;
@@ -38,14 +46,39 @@ struct ss_npu_queue {
     unsigned depth, handles, edges_admitted;
     /* Edges the application asked for at open (ss_npu_queue_open_linked); the backend copies and checks them. */
     size_t requested_links;
-    struct ss_npu_queue_edge requested[SS_NPU_QUEUE_MAX_HANDLES * SS_NPU_QUEUE_MAX_TENSORS];
+    struct ss_npu_queue_edge *requested;
+    size_t requested_capacity;               /* the links the declaration allows */
     atomic_uint state, active;
     atomic_uint_fast64_t published, completed, released, waiter;
     uint64_t consuming, job_limit;
-    struct ss_npu_queue_handle handle[SS_NPU_QUEUE_MAX_HANDLES];
-    struct ss_npu_queue_group group[SS_NPU_QUEUE_MAX_HANDLES];
+    struct ss_npu_queue_handle *handle;      /* handle_capacity entries, in the tables */
+    struct ss_npu_queue_group *group;
+    unsigned handle_capacity, tensor_capacity, tensors_used, member_words;
+    uint8_t *tables, *at; size_t table_bytes; /* the tables and the cursor of the next carve */
     struct ss_npu_queue_entry entry[SS_NPU_QUEUE_MAX_DEPTH];
 };
+/* The bytes of the tables for handles handles holding tensors tensors in all (inputs and outputs) and links requested edges. */
+static inline size_t ss_npu_queue_tables_bytes(unsigned handles, size_t tensors, size_t links)
+{
+    const size_t words = ss_npu_queue_member_words(handles);
+    return 64u + (size_t)handles * (sizeof(struct ss_npu_queue_handle) + sizeof(struct ss_npu_queue_group) + words * 4u + 32u) +
+           tensors * (sizeof(struct ss_npu_tensor) + 2u * sizeof(struct ss_npu_dirty_range) + sizeof(struct ss_npu_queue_alias) + 24u) +
+           links * sizeof(struct ss_npu_queue_edge) + 64u;
+}
+/* What the runtime reserves for the queue of slots slots holding tensors tensors in all, with image_links edges in the image's
+ * constant table and links more the application may ask for. The ring's tables, which EL0 writes by design, come from the
+ * pool (ss_npu_queue_tables_bytes). The adapter's edge table (image + requested), the private copy of the requested edges and
+ * one hardware command record for each handle (at most 64 bytes: apps/os/npu-queue.c checks it) are trusted by EL1 and come
+ * from the metadata allocator (ss_npu_queue_meta_bytes). */
+static inline size_t ss_npu_queue_meta_bytes(unsigned slots, size_t image_links, size_t links)
+{
+    return (((image_links + links) * sizeof(struct ss_npu_queue_edge) + 63u) & ~(size_t)63) +
+           ((links * sizeof(struct ss_npu_queue_edge) + 63u) & ~(size_t)63) + (size_t)slots * 64u;
+}
+/* After bind, before the ring opens: take memory for handles handles of up to tensors tensors in all and links requested
+ * edges. 0, leaving the queue unchanged, when the memory is too small (the open is refused and says so) or the queue is not
+ * waiting to open. */
+int ss_npu_queue_service_tables(struct ss_npu_queue *, unsigned handles, size_t tensors, size_t links, void *memory, size_t bytes);
 /* Bind once before application startup. Zero queue storage once. */
 int ss_npu_queue_service_bind(struct ss_npu_queue *, const struct ss_npu_queue_backend *, void *);
 /* Called only by backend.open before ready is published. Spans cover the

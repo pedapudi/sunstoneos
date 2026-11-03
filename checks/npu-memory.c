@@ -115,9 +115,10 @@ static void prepare(void)
     model.regs[0x30/4] = 0x1000003b; model.regs[0x28/4] = 0x20240101;
     model.regs[1] = IDLE;
 }
+static _Alignas(8) uint8_t tables[A733_NPU_MEMORY_TABLES_BYTES(4)];
 static void initialize(void)
 {
-    assert(a733_npu_memory_init(&memory, arena, sizeof(arena), TABLE_PA, input, 4, &ops, &model));
+    assert(a733_npu_memory_init(&memory, arena, sizeof(arena), TABLE_PA, input, 4, &ops, &model, tables, sizeof(tables)));
     assert(a733_npu_memory_command(&memory, BOOT_VA, &boot));
     assert(a733_npu_memory_command(&memory, JOB_VA, &job));
     assert(memory.image.tables == 4 && memory.image.bytes == 4096 + 4 * 16384);
@@ -214,14 +215,14 @@ static void retained(void)
     assert(!a733_npu_memory_publish(&memory, &memory.image, &boot, 1));
     assert(!a733_npu_memory_finish(&memory, &boot));
     assert(!a733_npu_memory_command(&memory, JOB_VA, &job));
-    assert(!a733_npu_memory_init(&memory, arena, sizeof(arena), TABLE_PA, input, 4, &ops, &model));
+    assert(!a733_npu_memory_init(&memory, arena, sizeof(arena), TABLE_PA, input, 4, &ops, &model, tables, sizeof(tables)));
     assert(before == model.translations + model.cache_calls + model.barriers);
     guards();
 }
 static void refused_init(void *at, size_t bytes, uint64_t pa)
 {
     struct a733_npu_memory original = memory;
-    assert(!a733_npu_memory_init(&memory, at, bytes, pa, input, 4, &ops, &model));
+    assert(!a733_npu_memory_init(&memory, at, bytes, pa, input, 4, &ops, &model, tables, sizeof(tables)));
     assert(!memcmp(&memory, &original, sizeof(memory)));
     for (size_t i = 0; i < sizeof(arena); ++i) assert(arena[i] == 0xa5);
     assert(!model.cache_calls && !model.barriers); guards();
