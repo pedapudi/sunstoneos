@@ -12,6 +12,7 @@ from pathlib import Path
 
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
+from harness import machine as harness_machine
 from unicorn.arm64_const import (UC_ARM64_REG_X0, UC_ARM64_REG_X1,
                                 UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_LR)
 
@@ -48,7 +49,7 @@ class Image:
 class Machine:
     def __init__(self, image, clock_after=0, thermal_until=0, live_failure_at=None):
         self.image = image
-        self.cpu = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+        self.cpu = harness_machine()
         self.tick = self.progress = self.delays = self.workloads = 0
         self.clock_after, self.thermal_until = clock_after, thermal_until
         self.live_failure_at = live_failure_at

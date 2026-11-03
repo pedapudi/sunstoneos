@@ -21,6 +21,8 @@ import uuid
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import board_images as images
+import host_priority
+import host_space
 from host_evidence import evidence_directory
 
 ROOT, CACHE = images.ROOT, images.CACHE
@@ -900,12 +902,13 @@ def run_reference(args):
 
 def run_image(args, backend=Live):
     started = time.monotonic()
+    pressure_start = host_priority.pressure()
     evidence = args.evidence or CACHE/'board-queue/runs'/f'{time.time_ns()}-{args.port}-{uuid.uuid4().hex[:8]}'
     evidence = evidence_directory(evidence)
     result = {'schema': 'sunstone-board-result-v1', 'port': args.port, 'image': str(args.image),
               'kind': args.kind, 'outcome': 'host-error', 'first_failure': None, 'durations': {},
               'evidence_path': str(evidence.resolve()), 'result_path': str((evidence/'result.json').resolve()),
-              'quarantined': False, 'launch_attempted': False, 'time': time.time(),
+              'quarantined': False, 'launch_attempted': False, 'time': time.time(), 'host_pressure': {'start': pressure_start},
               'git_revision': subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'], capture_output=True,text=True).stdout.strip()}
     result['dram_mode'] = 'preserved' if images.preserving(args) else 'development'
     result['reference'] = run_reference(args)
@@ -1092,6 +1095,9 @@ def run_image(args, backend=Live):
 def finish_result(result, evidence, started, stage):
     result['stage'] = stage
     result['durations']['total'] = round(time.monotonic()-started,6)
+    # The kernel's I/O, CPU and memory stall figures at both ends of the run: a slow host stage is then attributed from data
+    # (the stall time of the run is the difference of the two totals, in microseconds).
+    result.setdefault('host_pressure', {})['end'] = host_priority.pressure()
     # Raw transaction evidence has its own record; result.json stays compact.
     summary = {k:v for k,v in result.items() if k != 'transactions'}
     save(evidence/'result.json', summary)
@@ -1691,6 +1697,8 @@ def run_options(parser, submit=False):
 
 
 def main(argv=None):
+    host_priority.raise_runner()      # the runner and the daemon keep their I/O ahead of the gate's (tools/host_priority.py)
+    host_space.use_disk_tmp(CACHE)    # temporary files on the main disk: /tmp has run out of inodes and of quota (tools/host_space.py)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--queue', type=Path, default=CACHE/'board-queue')
     commands = parser.add_subparsers(dest='command',required=True)

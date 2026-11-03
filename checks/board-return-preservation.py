@@ -367,6 +367,9 @@ def main():
                 self.before=self.memory.copy()
             def journal(self):pass
             def elapsed_now(self):return self.clock
+            def wall_now(self):return self.clock
+            def instance_created(self,node):return self.clock      # the kernel dates the new instance when the model's wait returns
+            node=None
             def read(self,address,size,path):
                 data=self.memory[address];assert len(data)==size;path.write_bytes(data);return data
             def upload(self,address,path,*,expected_sha256=None):
@@ -431,7 +434,9 @@ def main():
             try:board.Live.rails(owner,'restore-rails')
             except ValueError:assert variant not in ('normal','development')
             else:assert variant in ('normal','development')
-        assert len(owner.events)==(4 if variant=='normal' else 2 if variant in ('dcdc3-raised','development') else 0)
+        # A refusal after the helper ran (dcdc3-raised) still restores the DRAM the helper overwrote, then raises the refusal.
+        assert len(owner.events)==(4 if variant in ('normal','dcdc3-raised') else 2 if variant=='development' else 0)
+        if variant=='dcdc3-raised':assert owner.memory==owner.before and owner.record['dram_restored']
         if variant=='normal':assert owner.memory==owner.before
         if variant=='development':
             assert 'rail_dram_backups' not in owner.record and not owner.record['dram_restored']

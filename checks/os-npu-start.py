@@ -43,7 +43,7 @@ class Start:
     def __init__(self, image, session):
         self.image = image
         self.e = e = harness.Image(image, layout_names=LAYOUTS)
-        self.uc = u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+        self.uc = u = harness.machine()
         for base, size in ((0x02000000, 0x08000000), (0x40000000, 0x40000000)):
             u.mem_map(base, size)
         for at, data in e.parts:
@@ -106,8 +106,12 @@ class Start:
                     pass
         ok = lambda: self.returned(1)
         zero = lambda: self.returned(0)
-        for n in ('vTaskEnterCritical', 'vTaskExitCritical', 'vTaskDelay', 'vTaskCoreAffinitySet'):
+        # The port's interrupt-mask calls read TPIDRRO_EL0 and trap to the kernel when the task is not privileged; the model
+        # has no kernel, so they return as at EL1 with nothing masked, and the core is the application's.
+        for n in ('vTaskEnterCritical', 'vTaskExitCritical', 'vTaskDelay', 'vTaskCoreAffinitySet', 'uxPortSetInterruptMask',
+                  'vPortClearInterruptMask'):
             reg(n, zero)
+        reg('ucPortGetCoreID', lambda: self.returned(6))
         for n in ('aarch64_device_cache', 'board_live', 'a733_cached_devices_prepare'):
             reg(n, ok)
         reg('aarch64_device_cache_stride', lambda: self.returned(64))
