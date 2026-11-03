@@ -581,8 +581,10 @@ outside the spread of two runs of the control. Five runs on port 3-1 with the sa
 
 **Result of the five runs (port 3-1, entries `1793671134053745086-10f06621` and `1793671142888118311-6d401880` for the control,
 `1793671155101547801-f4fdd008` for `TLBI VAE1IS`, `1793671164171009720-be7dc135` for `TLBI ASIDE1IS`,
-`1793671172712527319-915ef621` for `TLBI VMALLE1IS`).** All five returned normally. Every run took 199 ticks of the application
-and the same traffic sweeps within noise, so the invalidation changed no throughput that these counters show. (The host-side
+`1793671172712527319-915ef621` for `TLBI VMALLE1IS`).** All five returned normally. Every run took 199 ticks of the application.
+The memory sweeps of each core (38 to 74 in the control) are equal in the runs of the page and ASID forms; in the run of the form
+that invalidates everything, core 1 made 42 sweeps against 52 and core 3 made 47 against 38, one lower and one higher, so no
+throughput cost shows. (The host-side
 stage durations differ widely between the runs because of disk load, and the launch time of the runs of the three forms, 18.7 to
 31.0 s against 5.4 s, is a host-side figure from slow periods, not a property of the application.) In microseconds:
 
