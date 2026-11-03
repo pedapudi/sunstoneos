@@ -190,6 +190,34 @@ def gate_failures(summary):
     return [l for l in lines if re.match(r'(FAIL|SKIP|INCOMPLETE)\b', l)]
 
 
+def prior_gate(args, worktree, tip):
+    """The passing affected gate whose tree differs least from the tip's tree: (gate directory name, differing paths), or None.
+
+    tools/integration-gate.py writes gate-record.json only for a passing --affected gate on a clean tree."""
+    records = sorted((args.cache / 'build').glob('gate-*/gate-record.json'), key=lambda p: p.stat().st_mtime, reverse=True)
+    best = None
+    for record in records[:50]:
+        try:
+            data = json.loads(record.read_text())
+            tree, gate_base = data['tree'], data['base']
+        except (OSError, ValueError, KeyError):
+            continue
+        # The gate covered every change since a commit that is already on bringup, and its tree is in this repository.
+        if git(worktree, 'cat-file', '-e', tree + '^{tree}', check=False).returncode or not is_ancestor(worktree, gate_base, 'bringup'):
+            continue
+        paths = out(worktree, 'diff', '--name-only', tree, tip + '^{tree}').splitlines()
+        if best is None or len(paths) < len(best[1]):
+            best = (record.parent.name, paths)
+    return best
+
+
+def affected_checks(args, tree, paths):
+    done = subprocess.run(args.affected_command + ['--changed', *paths, '--json'], cwd=tree, capture_output=True, text=True)
+    if done.returncode:
+        raise Refused('the affected-check selection failed:\n%s' % (done.stderr or done.stdout).strip()[-1500:])
+    return json.loads(done.stdout)['checks']
+
+
 def verify(args, worktree, base, tip, names, label):
     """Run the checks that the diff earns. Returns the gate label, or 'docs-only' when no gate ran."""
     if docs_only(names):
@@ -199,9 +227,19 @@ def verify(args, worktree, base, tip, names, label):
             run_step(name, command, worktree)
         return 'docs-only'
     tree = integration_tree(args, tip)
+    # The landing reuses a passing gate (docs/landing.md): only the checks that a path differing from that gate's tree
+    # affects run again. With no prior gate, every check the branch affects runs.
+    prior = prior_gate(args, worktree, tip)
+    scope = ['--affected', '%s..%s' % (base, tip)]
+    if prior:
+        scope = ['--changed', *prior[1]]
+        if not prior[1] or not affected_checks(args, tree, prior[1]):
+            run_step('checks/gate-inputs.py', args.registry_command + ['--output', str(args.cache / 'build' / ('registry-' + label + '.json'))], tree)
+            print('reusing gate %s: no check is affected by the %d paths that differ from its tree' % (prior[0], len(prior[1])))
+            return 'reused-' + prior[0]
     # The gate starts beside the registry check, which refuses in seconds what the gate would refuse at its
     # end. If the registry check refuses, the gate is stopped by its own process group.
-    command = gate_argv(args, tree) + [str(tree), label, '--reason', args.reason, '--affected', '%s..%s' % (base, tip), '--keep-going']
+    command = gate_argv(args, tree) + [str(tree), label, '--reason', args.reason, '--keep-going', *scope]
     gate = subprocess.Popen(command, cwd=tree, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     try:
         run_step('checks/gate-inputs.py', args.registry_command + ['--output', str(args.cache / 'build' / ('registry-' + label + '.json'))], tree)
@@ -300,6 +338,7 @@ def main(argv=None):
     parser.add_argument('--full-gate-command', default=os.environ.get('LAND_FULL_GATE_COMMAND'),
                         help='starts the full suite on the bringup tip after a code landing; empty: do not start it')
     parser.add_argument('--registry-command', default=os.environ.get('LAND_REGISTRY_COMMAND'))
+    parser.add_argument('--affected-command', default=os.environ.get('LAND_AFFECTED_COMMAND'))
     args = parser.parse_args(argv)
     try:
         host_space.preflight(args.cache / 'build')
@@ -312,6 +351,7 @@ def main(argv=None):
     args.links_command = shlex.split(args.links_command or '%s -B checks/docs-links.py' % sys.executable)
     args.full_gate_command = shlex.split(args.full_gate_command if args.full_gate_command is not None else '%s %s' % (sys.executable, ROOT / 'tools/full-gate.py'))
     args.registry_command = shlex.split(args.registry_command or '%s -B checks/gate-inputs.py' % sys.executable)
+    args.affected_command = shlex.split(args.affected_command or '%s -B checks/affected.py' % sys.executable)
     try:
         land(args)
     except Refused as error:

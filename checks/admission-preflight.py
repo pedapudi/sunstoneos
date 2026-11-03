@@ -28,6 +28,7 @@ from pathlib import Path
 import shutil
 import struct
 import sys
+GATE_RUNS = [['--build', '{build:ret-latency}', '--output', '{output}']]
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))

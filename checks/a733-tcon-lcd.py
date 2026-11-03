@@ -6,6 +6,9 @@ import json
 import pathlib
 import re
 import subprocess
+GATE_RUNS = [
+    ['--source-root', '{cache}/sources/display', '--manual', '{cache}/sources/camera-research/A733_User_Manual_V1.00.pdf', '--text', '{cache}/sources/camera-research/A733_User_Manual_V1.00.txt', '--evidence', '{output}'],
+]
 if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 p = argparse.ArgumentParser()

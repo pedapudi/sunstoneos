@@ -6,6 +6,7 @@ import json
 import pathlib
 import re
 import subprocess
+GATE_RUNS = [['--source-root', '{cache}/sources/display', '--evidence', '{output}']]
 
 p = argparse.ArgumentParser()
 p.add_argument('--source-root', type=pathlib.Path, required=True)

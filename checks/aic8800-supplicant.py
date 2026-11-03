@@ -8,6 +8,7 @@ from pathlib import Path
 import struct
 import subprocess
 ROOT = Path(__file__).resolve().parents[1]
+GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by aic8800-security.py'
 ARCHIVE_SHA256 = "08e23937e16d0155e55cab2b51f51fbe10d80a1aa91c4e15442645059b737ef6"
 EXTERNAL = ["rsn_supp/wpa.c", "rsn_supp/wpa_ie.c", "rsn_supp/pmksa_cache.c",
     "common/wpa_common.c", "common/ieee802_11_common.c", "utils/common.c", "utils/wpabuf.c",

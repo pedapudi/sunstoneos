@@ -12,6 +12,7 @@ import subprocess
 import sys
 
 import harness
+GATE_RUNS = [['--clip', '{cache}/evidence/hevc-decode-20261020/two-pictures.hevc', '--output', '{output}']]
 
 
 def main():

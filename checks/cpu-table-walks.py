@@ -22,6 +22,7 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_WR
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X29, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_PC
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--image', '{elf:sup}', '--output', '{output}']]
 sys.path.insert(0, str(ROOT / 'checks'))
 import harness  # noqa: E402  Refuses to run with assertions disabled.
 

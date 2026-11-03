@@ -13,6 +13,7 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP
 from harness import machine as harness_machine, Image, save, refused, skip_crumbs
 ROOT=Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--image', '{elf:ret-gpu}', '--output', '{output}']]
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--case',action='append');p.add_argument('--session',type=Path)
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
 types={'board_application','a733_board_session','a733_gpu_platform','a733_gpu_power','a733_pmic_consumer',

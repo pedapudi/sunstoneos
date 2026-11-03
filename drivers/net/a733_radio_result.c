@@ -31,7 +31,8 @@ void a733_radio_report_platform(struct a733_radio_report *r,const struct a733_ra
     if(!later)h->stage=stage;
     h->failed=p->fault!=0;
     if(h->failed&&!h->failure_stage)h->failure_stage=h->stage+1; /* The stage that did not complete. */
-    h->flags=(p->first_run_guard?1u:0)|(p->guard_done?2u:0)|(p->power_on?4u:0)|(p->stage==RSTAGE_DOWN?8u:0);
+    h->flags=(p->first_run_guard?1u:0)|(p->guard_done?2u:0)|(p->power_on?4u:0)|(p->stage==RSTAGE_DOWN?8u:0)|(p->already_on?16u:0)|
+        (p->abort_done?32u:0)|((p->abort_flags&16u)?64u:0);
     memcpy(h->pad_power,p->pad_power,sizeof(h->pad_power));
     h->platform_stage=p->stage;
     h->rail_count=0;

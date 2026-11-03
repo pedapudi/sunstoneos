@@ -19,6 +19,9 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_RE
 from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_LR
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--build', '{output}/build', '--output', '{output}/result.json', '--clang', '/usr/lib/llvm-21/bin/clang', '--lld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld', '--objdump', '/usr/lib/llvm-21/bin/llvm-objdump'],
+]
 p = argparse.ArgumentParser(description=__doc__)
 for name in ('build', 'output', 'clang', 'lld', 'objdump'):
     p.add_argument('--' + name, type=Path, required=True)

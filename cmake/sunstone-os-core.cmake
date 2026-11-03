@@ -8,6 +8,8 @@ option(SUNSTONE_A733_OS_USB_JPEG "OS camera MJPEG hardware decoder" OFF)
 option(SUNSTONE_A733_OS_AUDIO "OS I2S capture service" OFF)
 option(SUNSTONE_A733_OS_DMA "Adopted DMA0 RAM-copy service with normal retirement" OFF)
 option(SUNSTONE_A733_OS_RADIO "Integrated OS with the board's radio station" OFF)
+option(SUNSTONE_A733_OS_RADIO_ENUMERATE "The scanning radio station stops after SDIO enumeration: the smallest probe (needs SUNSTONE_A733_OS_RADIO_SCAN)" OFF)
+option(SUNSTONE_A733_OS_RADIO_SCAN "Radio station that scans and returns: board workload 3, no USB host, scan-only profile, normal return" OFF)
 option(SUNSTONE_A733_OS_HEADSET "OS Bluetooth headset capture service" OFF)
 option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
 option(SUNSTONE_A733_OS_NPU "Integrated OS with a task-bound NPU catalogue service" OFF)
@@ -42,6 +44,9 @@ option(SUNSTONE_A733_OS_GPU_RECOVERY_TEST
 set(SUNSTONE_A733_OS_GPU_BISECT "" CACHE STRING
   "GPU diagnostic limit: constructor, firmware, jobs:N or layer:K")
 option(SUNSTONE_A733_OS_CPU_RETURN "Application result with success-only ROM return" OFF)
+if(SUNSTONE_A733_OS_RADIO_SCAN AND (NOT SUNSTONE_A733_OS_RADIO OR NOT SUNSTONE_A733_OS_CPU_RETURN))
+  message(FATAL_ERROR "The scanning radio station needs SUNSTONE_A733_OS_RADIO=ON and SUNSTONE_A733_OS_CPU_RETURN=ON")
+endif()
 if(SUNSTONE_A733_OS_NPU_OBSERVE AND
    (NOT SUNSTONE_A733_OS_NPU OR NOT SUNSTONE_A733_OS_CPU_RETURN))
   message(FATAL_ERROR "NPU diagnostic sampling requires returning NPU composition")
@@ -221,11 +226,18 @@ if(SUNSTONE_A733_OS_RADIO)
   # The board's own radio composition serves workload 1; its owner and client
   # report resident progress through the patched main.c.
   list(APPEND os_added apps/os/radio.c apps/os/wifi_credential.c)
-  apply_build_patch("${os_build}/main.c" "${os_root}/apps/board/main.c" "${os_root}/apps/os/main.patch")
-  list(REMOVE_ITEM os_sources "${os_root}/apps/board/main.c")
-  list(APPEND os_sources "${os_build}/main.c")
-  list(APPEND os_patches "${os_root}/apps/os/main.patch")
-  list(APPEND os_generated "${os_build}/main.c")
+  if(SUNSTONE_A733_OS_RADIO_SCAN)
+    list(APPEND os_added apps/os/radio_scan.c)
+  endif()
+  if(NOT SUNSTONE_A733_OS_CPU_RETURN)
+    # The returning lifetime patches main.c itself (cmake/a733-os-cpu-return.cmake); the resident
+    # progress reports of this patch have no use in it.
+    apply_build_patch("${os_build}/main.c" "${os_root}/apps/board/main.c" "${os_root}/apps/os/main.patch")
+    list(REMOVE_ITEM os_sources "${os_root}/apps/board/main.c")
+    list(APPEND os_sources "${os_build}/main.c")
+    list(APPEND os_patches "${os_root}/apps/os/main.patch")
+    list(APPEND os_generated "${os_build}/main.c")
+  endif()
   if(SUNSTONE_A733_OS_RESIDENT)
     list(REMOVE_ITEM os_sources "${os_root}/apps/board/radio_profile.c")
     list(APPEND os_added apps/os/radio_profile.c)
@@ -549,6 +561,8 @@ target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICAT
   "$<$<BOOL:${SUNSTONE_A733_OS_RESIDENT}>:SUNSTONE_BOARD_RESIDENT=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_AUDIO}>:SUNSTONE_A733_OS_AUDIO=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO}>:SUNSTONE_A733_OS_RADIO=1>"
+  "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_SCAN}>:SUNSTONE_A733_OS_RADIO_SCAN=1>"
+  "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_ENUMERATE}>:SUNSTONE_A733_OS_RADIO_ENUMERATE=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_HEADSET}>:SUNSTONE_A733_OS_HEADSET=1>")
 if(SUNSTONE_A733_OS_NPU)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_NPU=1)

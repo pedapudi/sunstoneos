@@ -11,6 +11,9 @@ CHECK_INPUTS = ['runtime/gpu_call.S', 'include/pvr_gpu_call.h',
                 'patches/freertos-gpu-call.patch', 'patches/freertos-smp-asm.patch',
                 'patches/freertos-smp-c.patch', 'patches/freertos-smp-macro.patch',
                 'platform/qemu-smp', 'checks/gpu-call.c', 'checks/gpu-call-abi.S']
+GATE_RUNS = [
+    ['--freertos', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--clang', '/usr/lib/llvm-21/bin/clang', '--linker', '{cache}/host/usr/lib/llvm-21/bin/ld.lld', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64', '--output', '{output}'],
+]
 
 
 def main():

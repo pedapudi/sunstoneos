@@ -210,6 +210,17 @@ int os_radio_start(void);
 /* The radio profile that os_radio_pins authenticated; NULL before. */
 struct board_radio_profile;
 const struct board_radio_profile *os_radio_profile(void);
+#ifdef SUNSTONE_A733_OS_RADIO_SCAN
+/* The scanning radio station (apps/os/radio_scan.c). The radio owner task calls
+ * os_radio_scan_step after every board_radio_poll with its result. Once the return has
+ * begun, the owner shuts the module down (board_radio_shutdown), publishes the encoded
+ * result and a descriptor (include/os_radio_result.h), and os_radio_scan_return_ready
+ * reports 1. The CPU return waits for it before it stops the PMIC service. */
+struct board_radio;
+void os_radio_scan_step(struct board_radio *,int result);
+void os_radio_scan_return_request(void);
+int os_radio_scan_return_ready(void);
+#endif
 #endif
 #ifdef SUNSTONE_A733_OS_HEADSET
 /* The Bluetooth profile address. With the radio, the radio profile occupies

@@ -6,6 +6,9 @@ import json
 import re
 import subprocess
 from pathlib import Path
+GATE_RUNS = [
+    ['--sources', '{cache}/sources/camera/bsp/drivers/vin/vin-mipi/combo_csi', '--manual', '{cache}/sources/camera-research/A733_User_Manual_V1.00.pdf', '--text', '{cache}/sources/camera-research/A733_User_Manual_V1.00.txt', '--evidence', '{output}'],
+]
 
 p = argparse.ArgumentParser()
 p.add_argument('--sources', type=Path, required=True, help='Pinned combo_csi directory')

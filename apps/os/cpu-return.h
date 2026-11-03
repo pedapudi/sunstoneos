@@ -9,6 +9,11 @@
 /* Longest a failure return may take before the failure ends at the watchdog. */
 #define OS_FAILURE_RETURN_US UINT64_C(3000000)
 uint64_t a733_smp_counter(void);
+#ifdef SUNSTONE_A733_OS_RADIO_SCAN
+/* The scanning radio station: the radio owner reports each poll result (apps/os/radio_scan.c). */
+struct board_radio;
+void os_radio_scan_step(struct board_radio *,int result);
+#endif
 uint64_t os_cpu_return_cutoff(void);
 int os_cpu_return_requested(void);
 /* Failure return (docs/designs/failure-return.md). */

@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+GATE_RUNS = [['{elf:sup}']]
 
 STRING_ROUTINES = ('memcpy', 'memmove', 'memset')
 # C entries and fault handlers that EL3 assembly reaches with translation off.

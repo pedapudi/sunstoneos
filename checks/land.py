@@ -15,6 +15,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+GATE_RUNS = [['--output', '{output}']]
 
 if not __debug__:
     raise SystemExit('checks require assertions')
@@ -35,6 +36,11 @@ with open(cache / "gate-args", "a") as log:
 runs = cache / "gate-runs"
 runs.write_text(runs.read_text() + label + "\\n" if runs.exists() else label + "\\n")
 (cache / "build" / ("gate-" + label)).mkdir(parents=True)
+if (cache / "record-on").exists() and "--affected" in sys.argv:    # the record of a passing affected gate on a clean tree
+    import json, subprocess
+    git = lambda *a: subprocess.run(["git", "-C", worktree, *a], capture_output=True, text=True).stdout.strip()
+    base = git("rev-parse", sys.argv[sys.argv.index("--affected") + 1].split("..")[0])
+    (cache / "build" / ("gate-" + label) / "gate-record.json").write_text(json.dumps({"tree": git("rev-parse", "HEAD^{tree}"), "base": base, "checks": {}}))
 failed = (cache / "gate-fail").exists() or (Path(worktree) / "bad.txt").exists()
 summary = "FAIL kernel\\n" if failed else "PASS selected\\n"
 (cache / "build" / ("gate-" + label) / "summary.txt").write_text(summary)
@@ -49,6 +55,12 @@ if advance.exists():
 sys.exit(1 if failed else 0)
 '''
 
+
+# Stub of checks/affected.py --changed PATH... --json: a path under tools/input selects one check.
+AFFECTED = '''import json, sys
+paths = sys.argv[sys.argv.index("--changed") + 1:-1]
+print(json.dumps({"checks": [{"check": "x.py"}] if any(p.startswith("tools/input") for p in paths) else []}))
+'''
 
 STEP = '''import os, sys
 from pathlib import Path
@@ -79,6 +91,7 @@ class Fixture:
             (root / (tag + '.py')).write_text(STEP.replace('TAG', tag))
         (root / 'unregistered.py').write_text('import sys\nprint("checks with no registry answer: new-check.py")\nsys.exit(1)\n')
         (root / 'gate.py').write_text(GATE)
+        (root / 'affected.py').write_text(AFFECTED)
         (root / 'full.py').write_text('import sys\nfrom pathlib import Path\nPath(sys.argv[sys.argv.index("--cache") + 1], "full-started").write_text(" ".join(sys.argv[1:]))\n')
         self.origin = root / 'origin.git'
         git(root, 'init', '-q', '--bare', str(self.origin))
@@ -103,6 +116,7 @@ class Fixture:
                    '--evidence-command', '%s %s' % (sys.executable, self.root / 'evidence.py'),
                    '--links-command', '%s %s' % (sys.executable, self.root / 'links.py'),
                    '--registry-command', '%s %s' % (sys.executable, self.root / 'registry.py'),
+                   '--affected-command', '%s %s' % (sys.executable, self.root / 'affected.py'),
                    '--full-gate-command', full_gate, *extra]
         return subprocess.run(command, capture_output=True, text=True, env=env)
 
@@ -247,7 +261,54 @@ def run(root):
     full_gate(fx)
     union_merge(root / 'union')
     gate_lock(root / 'gatelock')
+    reuse_gate(fx)
     default_gate(root / 'defaultgate')
+
+
+def reuse_gate(fx):
+    """A landing reuses a passing affected gate: no rerun when nothing it covered changed, a partial rerun when a merged path
+    affects a check, a full affected run when no prior gate exists."""
+    def agent_gate(worker):
+        env = {**ENV, 'LAND_CHECK_CACHE': str(fx.cache), 'LAND_CHECK_BRINGUP': str(fx.bringup)}
+        done = subprocess.run([sys.executable, str(fx.root / 'gate.py'), str(worker), 'agent-' + worker.name, '--reason', 'x',
+                               '--affected', 'bringup..HEAD'], env=env, cwd=worker, capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+    def move_bringup(name):
+        commit(fx.bringup, name, 'x\n', 'bringup moves: ' + name)
+        git(fx.bringup, 'push', '-q', 'origin', 'bringup')
+    git(fx.bringup, 'rm', '-q', 'bad.txt')            # the full-gate case left a commit that fails the stub gate
+    git(fx.bringup, 'commit', '-qm', 'remove bad.txt')
+    git(fx.bringup, 'push', '-q', 'origin', 'bringup')
+    w = fx.worker('noprior')
+    commit(w, 'noprior.txt', 'x\n', 'branch work')
+    runs = fx.gate_runs()
+    result = fx.land(w)
+    assert result.returncode == 0, result.stderr
+    assert fx.gate_runs() == runs + 1 and '--affected' in fx.gate_args()[-1], fx.gate_args()[-2:]
+    passed('no prior gate: the affected gate runs in full')
+    (fx.cache / 'record-on').write_text('')
+    w = fx.worker('reuse')
+    commit(w, 'reuse.txt', 'x\n', 'branch work')
+    agent_gate(w)
+    move_bringup('unrelated.txt')
+    runs, steps = fx.gate_runs(), len(fx.steps())
+    result = fx.land(w)
+    assert result.returncode == 0, result.stderr
+    assert fx.gate_runs() == runs and 'reusing gate' in result.stdout, result.stdout
+    assert fx.records()[-1]['gate'] == 'reused-gate-agent-reuse' and fx.steps()[steps:] == ['registry --output']
+    assert fx.origin_tip() == git(w, 'rev-parse', 'HEAD')
+    passed('a passing gate is reused when the merge affects no check')
+    w = fx.worker('partial')
+    commit(w, 'partial.txt', 'x\n', 'branch work')
+    agent_gate(w)
+    move_bringup('tools/input.py')
+    runs = fx.gate_runs()
+    result = fx.land(w)
+    assert result.returncode == 0, result.stderr
+    args = fx.gate_args()[-1]
+    assert fx.gate_runs() == runs + 1 and '--changed tools/input.py' in args and '--affected' not in args, args
+    assert fx.records()[-1]['gate'].startswith('land-partial-')
+    passed('a merged path that affects a check reruns only the affected checks')
 
 
 def docs_only(fx):

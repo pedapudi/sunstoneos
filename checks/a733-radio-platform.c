@@ -10,7 +10,7 @@ struct radio_model {
     struct a733_radio_platform radio;
     uint32_t sdc[256];
     uint8_t card[3][0x20000];
-    unsigned commands,ready_queries,accesses,register_retained,admitted,fail_write;
+    unsigned commands,ready_queries,accesses,register_retained,admitted,fail_write,fail_command,fail_pm1;
     uint64_t pins_at,enabled_at,module_at,first_host_at;
     uint64_t pins_ticks,enabled_ticks;
     unsigned fraction,gpio_cost;
@@ -64,6 +64,7 @@ static void emit_result(const char *name,const struct a733_radio_platform *p,uns
 static int radio_pin_write(void *v,uintptr_t a,uint32_t value)
 {
     unsigned rising=a==0x07025040&&(value&2)&&!(*pmic_model_word(v,a)&2);
+    if(rising&&((struct radio_model *)v)->fail_pm1)return 0; /* The pin manager's write fails. */
     if(rising)r.power.now+=r.gpio_cost;
     int result=pmic_model_pin_write(v,a,value);
     if(rising){r.enabled_ticks=r.power.now*24+r.fraction;
@@ -121,6 +122,7 @@ static int radio_write(void *v,uintptr_t a,uint32_t value)
         unsigned command=value&63;uint32_t arg=m->sdc[0x1c/4];
         assert(command==3 || command==5 || command==7 || command==52);
         ++m->commands;m->sdc[0x38/4]|=4;m->sdc[0x20/4]=0;
+        if(command==m->fail_command){m->sdc[0x38/4]=(m->sdc[0x38/4]&~4u)|0x100;return 1;} /* No response. */
         if(command==5) {
             m->sdc[0x20/4]=(2u<<28)|0x00ff8000;
             if(arg && ++m->ready_queries>1)m->sdc[0x20/4]|=1u<<31;
@@ -355,6 +357,48 @@ int main(void)
         if(mismatch==3)assert(!r.radio.guard_done); /* The earlier DCDC1 check refuses first. */
         if(mismatch==2)assert(!r.radio.guard_done);
     }
+    /* Failure after the power-on writes: PM1 low, then the SDC1 clocks, then BLDO5 off, each read back, and only then
+     * the retention. No response to CMD5, an error on CMD3 or CMD7, and a failing PM1 write after power-on. */
+    for(unsigned failure=0;failure<4;++failure) {
+        radio_setup();r.power.pmic[0x21]&=(uint8_t)~4u;r.power.pmic[0x2e]=0x3a;
+        *pmic_model_word(&r.power,0x02000048)=1u<<12;*pmic_model_word(&r.power,0x07025348)=3u<<2;
+        if(failure==0)r.fail_command=5;
+        if(failure==1)r.fail_command=3;
+        if(failure==2)r.fail_command=7;
+        if(failure==3)r.fail_pm1=1;
+        status=A733_RADIO_PENDING;unsigned aborted_first=0;
+        for(unsigned i=0;i<4000&&status!=A733_RADIO_RETAINED;++i) {
+            r.power.now+=100;(void)pmic_model_step(&r.power);status=a733_radio_platform_poll(&r.radio);
+            if(r.radio.aborting&&!aborted_first){aborted_first=1;assert(!r.radio.fault);} /* Not retained yet. */
+        }
+        assert(status==A733_RADIO_RETAINED&&aborted_first&&r.radio.abort_done&&r.radio.fault);
+        assert(!(*pmic_model_word(&r.power,0x07025040)&2));                       /* PM1 low. */
+        assert(!(r.power.pmic[0x21]&4)&&r.power.pmic[0x2e]==0x2d);                 /* BLDO5 off, selector kept. */
+        assert(pmic_log_count==3&&pmic_log[2].reg==0x21&&pmic_log[2].value==0xfb);
+        if(failure!=3)assert(!pmic_log[2].pm1);                                    /* PM1 low before BLDO5 off. */
+        if(failure!=3){
+            assert((r.radio.abort_flags&16u)&&(r.radio.abort_flags&14u)==14u);     /* Every readback matched. */
+            assert(!(*pmic_model_word(&r.power,0x02002d10)&(1u<<31)));            /* Clocks off. */
+            assert(!(*pmic_model_word(&r.power,0x02002d1c)&0x10001));
+        } else assert(!(r.radio.abort_flags&16u)&&(r.radio.abort_flags&8u));       /* PM1 failed; BLDO5 still went off. */
+        assert(!r.first_host_at||failure!=3);
+        emit_result("failure-shutdown",&r.radio,0);
+    }
+    /* A reset left BLDO5 on at 1.8V and PG reads 1.8V: the guard accepts, the writes are skipped, the waits stay,
+     * and the shutdown still turns BLDO5 off. */
+    radio_setup();*pmic_model_word(&r.power,0x02000048)=3u<<12;*pmic_model_word(&r.power,0x07025348)=3u<<2;
+    status=A733_RADIO_PENDING;
+    for(unsigned i=0;i<4000 && status!=A733_RADIO_READY;++i){status=radio_step();assert(status!=A733_RADIO_RETAINED);}
+    assert(r.radio.already_on&&!r.radio.power_on&&!pmic_log_count&&r.first_host_at>=r.enabled_at+50000);
+    {
+        struct a733_radio_borrow token={0};struct sdio_card *card=0;
+        assert(a733_radio_platform_borrow(&r.radio,80,&token,&card));
+        assert(a733_radio_platform_shutdown(&r.radio,&token,r.power.now+400000));
+        enum a733_radio_platform_result down=A733_RADIO_PENDING;
+        for(unsigned i=0;i<400&&down!=A733_RADIO_DOWN;++i){down=radio_step();assert(down!=A733_RADIO_RETAINED);}
+        assert(down==A733_RADIO_DOWN&&pmic_log_count==1&&pmic_log[0].reg==0x21&&pmic_log[0].value==0xfb&&!pmic_log[0].pm1);
+    }
+    emit_result("already-on",&r.radio,0);
     guard_config=0;
     /* A rail that refuses to turn on stops before PM1 rises; no host access follows. */
     radio_setup();r.power.pmic[0x21]&=(uint8_t)~4u;stuck_enable=1;

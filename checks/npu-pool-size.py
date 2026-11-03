@@ -13,6 +13,9 @@ import argparse, json, os, re, subprocess, sys, shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--artifacts', '{cache}/build/npu-board/session-artifacts.json', '--models', 'apps/os/npu-models.json', '--output', '{output}'],
+]
 CACHE = Path.home() / '.cache/sunstoneos'
 sys.path.insert(0, str(ROOT / 'checks'))
 import host_rtos

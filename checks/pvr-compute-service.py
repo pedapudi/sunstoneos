@@ -6,6 +6,9 @@ import json
 from pathlib import Path
 import struct
 import subprocess
+GATE_RUNS = [
+    ['--output', '{output}', '--freertos', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--firmware', '{cache}/sources/gpu/rogue_36.56.104.183_v1.fw', '--lld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64'],
+]
 
 
 def run(command, out, name, timeout=120):

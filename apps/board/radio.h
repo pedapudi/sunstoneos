@@ -28,6 +28,9 @@ struct board_radio_config {
     struct a733_radio_allocator report_memory;
     uint64_t scan_timeout_us;
     unsigned scan_only,first_run_guard;
+    /* Stop after enumeration (no four-bit widening, no transport, no firmware), for the smallest
+     * probe; the owner then reports BOARD_RADIO_SCANNED with the report at stage enumerated. */
+    unsigned enumeration_only;
 };
 enum board_radio_result { BOARD_RADIO_PENDING,BOARD_RADIO_NETWORK,
     BOARD_RADIO_RETAINED,BOARD_RADIO_INVALID,BOARD_RADIO_SCANNED,BOARD_RADIO_DOWN };

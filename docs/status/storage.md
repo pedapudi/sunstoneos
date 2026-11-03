@@ -26,7 +26,7 @@ Native SD identification, bounded reads, backup-first updates, slot loading, col
 ## Open work
 
 1. Qualify physical installation, autonomous OS boot, cold controller and supply state, reset retirement and power-loss recovery.
-2. Five image-level SD checks are stale and waived in `checks/gate-inputs.json`; rewrite them against the image. The SD path is described in [the SD card reference](../sd-card.md). The board documents disagree on whether DC1SW2 powers the card, so no supply cycle is attempted.
+2. Five image-level SD checks are stale and waived by `GATE_WAIVED` in their files; rewrite them against the image. The SD path is described in [the SD card reference](../sd-card.md). The board documents disagree on whether DC1SW2 powers the card, so no supply cycle is attempted.
 3. Measure sustained throughput on broader extents and cards, and qualify card replacement, removal and recovery, and voltage timing.
 4. Implement SDR50 and DDR50; add GPT, multiple volumes and clients.
 5. Write qualification beyond one cut: more interruption points, other cards, directories other than `/sunstone-test/`, concurrent writers.

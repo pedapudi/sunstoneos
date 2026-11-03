@@ -11,6 +11,9 @@ import subprocess
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_LR, UC_ARM64_REG_SP
+GATE_RUNS = [
+    ['--output', '{output}', '--source-cache', '{cache}/sources/usb-platform', '--lld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld'],
+]
 if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 

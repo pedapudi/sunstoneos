@@ -19,6 +19,7 @@ import json
 from pathlib import Path
 import re
 import sys
+GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by os-image-audio.py'
 
 SOURCES = {'snd_sunxi_i2s.c': 'd3446ec1e11a3fd69d53161f5612a0155e43391ee14569f1fecf942d7daec3a3',
            'snd_sun60iw2_i2s.c': '0dc8d0c0912fced3dac450ffd98f5694bf0146e7608c922e6a562e6e7ed795d5',

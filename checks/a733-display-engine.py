@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compare inactive A733 DE framebuffer programming with pinned source."""
 import argparse, hashlib, json, pathlib, re, subprocess
+GATE_RUNS = [['--source-root', '{cache}/sources/display', '--evidence', '{output}']]
 p=argparse.ArgumentParser()
 p.add_argument('--source-root',type=pathlib.Path,required=True)
 p.add_argument('--evidence',type=pathlib.Path,required=True)

@@ -18,6 +18,7 @@ from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_S
 
 ROOT = Path(__file__).resolve().parents[1]
 import importlib.util
+GATE_RUNS = [['--output', '{output}']]
 _spec = importlib.util.spec_from_file_location('hw_facts', ROOT / 'tools/hw_facts.py')
 hw_facts = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(hw_facts)
 # The Non-secure view of a stored priority comes from docs/hardware/a733-facts.json (checks/hw-facts.py).

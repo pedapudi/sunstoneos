@@ -12,6 +12,7 @@ import subprocess
 from elftools.elf.elffile import ELFFile
 
 ROOT=Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--build', '{output}', '--ld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld']]
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--build',type=Path,required=True)
 p.add_argument('--cc',default='clang')

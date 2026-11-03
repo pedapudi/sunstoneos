@@ -36,6 +36,7 @@ import json
 from pathlib import Path
 from host_evidence import unique_directory
 import host_priority
+import gate_images
 import host_space
 import os
 import re
@@ -132,16 +133,15 @@ def available_gib():
 
 # Needs that only a board or the host's USB ports can meet. A check that has only these needs is reported, never refused.
 BOARD_NEEDS = {'USB access', '--fel'}
-INPUTS_FILE = 'checks/gate-inputs.json'
 
 
-def load_gate_inputs(source):
-    """checks/gate-inputs.json: the images the gate builds, the checks it runs on them, and the explicit waivers."""
-    record = json.loads((Path(source) / INPUTS_FILE).read_text())
-    for key in ('images', 'bundles', 'checks', 'board', 'waived'):
-        if key not in record:
-            raise ValueError(INPUTS_FILE + ' lacks ' + key)
-    return record
+def load_gate_inputs(index):
+    """What the checks declare for the gate (GATE_RUNS, GATE_BOARD, GATE_WAIVED; checks/check-index.py) and the images it builds."""
+    gate = {name: entry.get('gate', {}) for name, entry in index.items()}
+    return {'images': gate_images.IMAGES, 'bundles': gate_images.BUNDLES,
+            'checks': {n: {'runs': [{'args': a} for a in g['runs']]} for n, g in gate.items() if 'runs' in g},
+            'board': [n for n, g in gate.items() if 'board' in g],
+            'waived': {n: g['waived'] for n, g in gate.items() if 'waived' in g}}
 
 
 def classify_affected(entries, index, inputs):
@@ -345,7 +345,7 @@ def main(argv=None):
                 pending = [check for check in affected_plan['checks'] if check['status'] == 'pending']
                 affected_entries = pending
                 variants = list(dict.fromkeys([*variants, affected_plan['baseline']]))
-            inputs = load_gate_inputs(source)
+            inputs = load_gate_inputs(index)
             classified = classify_affected(affected_entries, index, inputs)
         except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
             parser.error('cannot select indexed checks: ' + str(error))
@@ -498,8 +498,8 @@ def main(argv=None):
         note('PENDING checks/' + check['check'] + ': ' + ', '.join(check['needs']))
     if inputs is not None:
         note('affected checks that need more than the host: %d supplied by the gate, %d need a board or USB (reported, not refused), '
-             '%d waived in %s, %d unsupplied' % (len(classified['supplied']), len(classified['board']), len(classified['waived']),
-                                                  INPUTS_FILE, len(classified['unsupplied'])))
+             '%d waived by their own GATE_WAIVED, %d unsupplied' % (len(classified['supplied']), len(classified['board']),
+                                                                        len(classified['waived']), len(classified['unsupplied'])))
         for name in classified['board']:
             note('BOARD checks/' + name + ': needs a board or USB access; not run by the gate')
         if classified['waived']:
@@ -507,8 +507,8 @@ def main(argv=None):
             note('WAIVED %d affected checks (reasons in waived.txt)' % len(classified['waived']))
         if classified['unsupplied']:
             for name, needs in classified['unsupplied']:
-                note('FAIL unsupplied affected check checks/%s: the gate cannot supply %s; register it in %s or waive it there with a reason'
-                     % (name, ', '.join(needs) or 'its inputs', INPUTS_FILE))
+                note('FAIL unsupplied affected check checks/%s: the gate cannot supply %s; declare GATE_RUNS, GATE_BOARD or GATE_WAIVED in it'
+                     % (name, ', '.join(needs) or 'its inputs'))
             note('INCOMPLETE affected coverage: %d affected checks have inputs the gate does not supply' % len(classified['unsupplied']))
             return 2
     revision, changes, diff, untracked = state
@@ -808,6 +808,12 @@ def main(argv=None):
     if failed or skipped:
         note('FAIL selected integration checks: ' + ', '.join(failed + skipped))
         return 1
+    if affected_plan and affected_plan.get('revisions') and not changes:
+        # tools/land.py reuses this pass for a landing: the tree it ran on and the checks it selected with their inputs.
+        tree_hash = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=source, text=True).strip()
+        selected = [c['check'] for c in affected_plan['checks']]
+        (output / 'gate-record.json').write_text(json.dumps({'tree': tree_hash, 'base': affected_plan['revisions'][0], 'checks': {
+            name: index[name].get('inputs', []) for name in selected if name in index}}, indent=1) + '\n')
     note('PASS selected integration checks; unselected behavior is not revalidated')
     return 0
 

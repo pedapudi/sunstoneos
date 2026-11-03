@@ -5,6 +5,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_LR, UC_ARM64_REG_FP, UC_ARM64_REG_PSTATE
+GATE_RUNS = [['--output', '{output}']]
 
 parser=argparse.ArgumentParser()
 parser.add_argument('--repository',type=Path,default=Path(__file__).resolve().parents[1])

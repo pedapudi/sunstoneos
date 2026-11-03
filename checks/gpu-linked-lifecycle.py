@@ -11,6 +11,7 @@ from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_SP, UC_ARM64_REG_L
 
 # Linked image sources whose paths are not named by the boundary model.
 CHECK_INPUTS = ('drivers/gpu/gpu_queue.c',)
+GATE_RUNS = [['--image', '{elf:ret-gpu}', '--profile', 'os', '--output', '{output}']]
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--image', type=Path, required=True)

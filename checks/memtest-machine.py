@@ -18,6 +18,7 @@ import ctypes
 from pathlib import Path
 import struct
 import sys
+GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by board-probe-abort.py'
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness  # noqa: E402

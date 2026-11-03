@@ -24,6 +24,10 @@ import json
 from pathlib import Path
 import re
 import sys
+GATE_RUNS = [
+    ['--firmware', '{cache}/sources/radio/firmware/aic8800d80', '--four-bit', '--profile', 'radio'],
+    ['--firmware', '{cache}/sources/radio/firmware/aic8800d80', '--four-bit', '--profile', 'headset'],
+]
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]

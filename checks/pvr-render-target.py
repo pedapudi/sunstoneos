@@ -9,6 +9,9 @@ import subprocess
 import tarfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
+GATE_RUNS = [
+    ['--sources', '{cache}/sources/gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination', '--mesa', '{cache}/gpu-producer-build/mesa', '--mesa-archive', '{cache}/sources/gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6.tar.gz', '--output', '{output}'],
+]
 if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 ROOT = Path(__file__).resolve().parents[1]

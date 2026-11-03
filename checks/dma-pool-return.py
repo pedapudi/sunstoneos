@@ -8,6 +8,9 @@ import shlex
 from pathlib import Path
 import shutil
 import subprocess
+GATE_RUNS = [
+    ['--output', '{output}', '--freertos', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64', '--lld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld'],
+]
 
 HERE = Path(__file__).resolve().parent
 CASES = ('normal', 'changed-route', 'registry-busy', 'registry-transient')

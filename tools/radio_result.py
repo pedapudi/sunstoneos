@@ -38,6 +38,8 @@ def decode(data):
         'failed_at': STAGES[failure_stage] if failed and failure_stage < len(STAGES) else None,
         'guard': {'asked': bool(flags & 1), 'observed': bool(flags & 2), 'bldo5_powered_on': bool(flags & 4)},
         'shutdown_readbacks_matched': bool(flags & 8),
+        'bldo5_already_on': bool(flags & 16),
+        'failure_shutdown': {'ran': bool(flags & 32), 'matched': bool(flags & 64)},
     }
     mod_g, val_g, mod_m, val_m = struct.unpack_from('<4I', data, 40)
     power = {0: 'invalid', 1: 'invalid', 2: '3.3V', 3: '1.8V'}

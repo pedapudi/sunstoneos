@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import struct
 import subprocess
+GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by tools/check-a733-h264-supervised.py'
 
 
 def main():

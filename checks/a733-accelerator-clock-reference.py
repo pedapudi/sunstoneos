@@ -5,6 +5,7 @@ The NPU reference-clock cases run in checks/npu-startup-host.c and, on the
 linked images, checks/npu-application-clock-reference.py."""
 import argparse, hashlib, json, subprocess
 from pathlib import Path
+GATE_RUNS = [['--output', '{output}']]
 if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__)

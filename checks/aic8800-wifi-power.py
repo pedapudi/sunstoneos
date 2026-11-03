@@ -7,6 +7,9 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--reference-dir', '{cache}/sources/radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv', '--evidence', '{output}'],
+]
 spec = importlib.util.spec_from_file_location("wifi_reference", ROOT / "checks/aic8800-wifi.py")
 wifi = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(wifi)
