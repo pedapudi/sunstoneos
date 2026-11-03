@@ -299,18 +299,37 @@ writes word 2 as width + (height << 16) in 32 bits without masking:
 | 276 frames, whole length | scores | 304,152 | `0x0006520c` | 152,076 x 4 | width 21,004, height 6 |
 | 276 frames, whole length | indices | 4 | `0x29900001` | 1 x 76,176 | width 1, height 10,640 |
 
-The board separates the graphs by this dimension (one layer, 300 jobs or three consecutive jobs, one slot). The mechanism, that the
-shader reads the 16-bit fields, is the inference that fits this table; no board run has varied the field alone:
+The board separates the graphs by this dimension. Four candidate causes fit the first table, because the passing and failing layers
+differ in all of them at once; each is a size of the gather's input or index table:
 
-| Graph | Widest flat dimension | Board output |
+| Candidate | Passing layers (largest) | Failing layers (smallest) |
 | --- | --- | --- |
-| 92 frames, whole length | 16,836 | byte-exact with the simulator |
-| 184 frames, 92-row blocks | 33,764 | byte-exact |
-| 276 frames, 92-row blocks | 50,692 (index rows 25,392) | byte-exact |
-| 184 frames, whole length | 67,528 | different in every run |
-| 368 frames, 92-row blocks | 67,620 | different in every run |
-| 460 and 512 frames, 92-row blocks | 84,548 and 94,116 | different in every run |
-| 276 frames, whole length | 152,076 (index rows 76,176) | wrong by up to 305 steps |
+| Flat width of the gather input, 65,536 or more (a 16-bit field) | 65,472 (512 frames, 64-row blocks) | 67,528 (184 frames, whole length) |
+| Gather input of four heads above 512 KiB (the on-chip memory) | 523,776 bytes | 540,224 bytes |
+| Index table above 128 KiB | 131,072 bytes (32,768 indices) | 135,424 bytes (33,856 indices) |
+| Largest index value 65,536 or more | 65,471 | 67,527 |
+
+A set of position-score graphs (the product of the queries with the position table, aligned by a gather, 128 keys unless stated)
+varied one candidate at a time. The loader's refusal was disabled in the build (`-DNBG_ALLOW_LONG_DIMENSION`), each graph ran as
+100 single jobs and then 100 jobs at queue depths 1, 2 and 4 on one slot, and the output was compared with the SDK simulator's.
+The flat width and the largest index value are the same number in this graph, so the experiment separates the first and last
+candidates from the other two, not from each other:
+
+| Graph | Flat width | Bytes (all heads) | Indices | Output |
+| --- | --- | --- | --- | --- |
+| 4 heads, 128 rows | 32,640 | 261,120 | 16,384 | byte-exact |
+| 4 heads, 200 rows | 65,400 | 523,200 | 25,600 | byte-exact |
+| 4 heads, 202 rows | 66,458 | 531,664 | 25,856 | 54 bytes differ |
+| 1 head, 256 rows | 98,048 | 196,096 | 32,768 | 37 bytes differ |
+| 8 heads, 128 rows | 32,640 | 522,240 | 16,384 | byte-exact |
+| 8 heads, 140 rows | 37,380 | 598,080 | 17,920 | byte-exact |
+| 4 heads, 128 rows, 300 keys | 54,656 | 437,248 | 38,400 (153,600 bytes) | byte-exact |
+
+The graph with one head and 98,048 elements, far below 512 KiB and with an index table at the passing limit, fails. The graphs above
+512 KiB and above 128 KiB of indices, with a flat width below 65,536, pass. The graphs of 200 and 202 rows differ by two rows and
+by nothing else in kind, and the first passes and the second fails. The failure therefore follows the flat width (or the largest
+gather index) reaching 65,536, and neither the size in bytes nor the index table's size. The failing outputs differ in tens of
+bytes in these small graphs and are the same in each sweep.
 
 The SDK simulator computes with the 32-bit values and returned the compiler's intended result for every one of these graphs, so
 agreement with the simulator does not cover this limit. The loader therefore refuses a descriptor whose width or height, taken

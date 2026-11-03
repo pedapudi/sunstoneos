@@ -84,8 +84,7 @@ readback, at about 0.55 MB/s in each direction. The remaining stages take about
 $board submit /absolute/image.elf --kind cpu-return --port any \
   --worker cpu-integration \
   --hypothesis 'The corrected cache cleanup permits all cores to retire' \
-  --reference docs/cpu-clock.md#operating-points-come-from-the-26-mhz-table-columns \
-  --expect /absolute/expected-output.bin
+  --reference docs/cpu-clock.md#operating-points-come-from-the-26-mhz-table-columns
 $board status
 $board watch
 ```
@@ -107,21 +106,18 @@ an image that only reports register values. It is accepted only with
 `--approved-by coordinator` and a nonempty `--reference-reason`; the reason is
 stored with the entry and the result.
 
-`submit` copies the image, inputs, session template and expectation into
+`submit` copies the image, inputs and session template into
 `~/.cache/sunstoneos/board-queue/entries/`. It blocks until a result exists and
 prints its JSON path. `--no-wait` prints the future result path immediately.
 `watch ENTRY_ID` waits for that entry; `watch` prints status when it changes.
 `--port 3-1` or `--port 3-3` fixes the target. `any` selects the first eligible
 board, respecting submission order among entries eligible for that board.
 
-An existing `--expect` file requires an exact byte match, unless it declares
-`schema: sunstone-board-expect-u32-v1`. That JSON format has a `words` array
-covering the entire little-endian 32-bit payload. Each entry is either an exact
-unsigned word or an inclusive `{"min": 0, "max": 199999}` range for a measured
-hardware duration. Missing words, extra bytes and malformed ranges are refused.
-The runner validates both original files and frozen queue specifications before
-device access. Other expectation text requires a substring in the UTF-8 output.
-The queue freezes the expectation at submission. `--input FILE` supplies each manifest input in order. Without an
+The hypothesis is the prediction: it states the result that the diff of our code against the vendor sequence leads
+us to expect, and the runner does not compare the output with any expected value. The coordinator compares the
+decoded result with the hypothesis in review. The queue freezes the image, inputs and template bytes at submission;
+the runner refuses a claim whose frozen bytes changed. It uses the host code that the daemon started with, and the
+result records that code's Git revision. `--input FILE` supplies each manifest input in order. Without an
 input argument, hello-compute receives `SunstoneOS board control` followed by a
 newline. Its result is the little-endian Adler-32 checksum, a zero reserved
 word and the input length, packed as `<IIQ`.
@@ -191,8 +187,7 @@ stall, so their difference is the stall time of the run itself, which attributes
 ## A run establishes its prerequisites
 
 ```sh
-$board run /absolute/image.elf --port 3-1 --kind cpu-return \
-  --expect /absolute/expected-output.bin
+$board run /absolute/image.elf --port 3-1 --kind cpu-return
 ```
 
 A direct run prints a one-line outcome and result path. It does not enter the
@@ -251,13 +246,12 @@ someone checks the rails.
 
 | Outcome | Meaning |
 | --- | --- |
-| `returned` | Matching return breadcrumbs, valid retirement report and matching output. This does not qualify the device's complete functionality. |
-| `failure-return` | The image linked the [failure return](designs/failure-return.md) and returned normally after its first failure. Retirement is valid (an NPU image may publish the never-started stop report, `finished` 2, which is accepted only here) and DRAM is restored; the breadcrumbs and the returned `ss_failure` record describe the failure. The result is failed (exit status 1) and `first_failure` holds the record. The port is not quarantined and not paused. |
-| `result-mismatch` | Uploaded bytes, the native report or the returned output differ from the required values. A failure return whose record differs from `--expect` is also reported here, after DRAM restoration. |
+| `returned` | Matching return breadcrumbs, a valid retirement report and a success result record. The output is recorded, and `decoded` holds the application decoder's result. This does not qualify the device's complete functionality. |
+| `failure-return` | The image returned normally with a result record that is not a success record: either it linked the [failure return](designs/failure-return.md) and returned after its first failure, or its result record carries a nonzero status, a foreign session or a malformed report. Retirement is valid (an NPU image may publish the never-started stop report, `finished` 2, which is accepted only here) and DRAM is restored; the breadcrumbs and the returned `ss_failure` record describe the failure. The result is failed (exit status 1) and `first_failure` holds the record. The port is not quarantined and not paused. |
 | `watchdog-reset` | A new permitted FEL instance returned with WDT0 still enabled. Breadcrumbs identify the last stage and any first fault. DRAM is lost. The runner disarms WDT0 on the fresh instance and releases it: the result records `dram_released_by_reset`, the instance is not quarantined, and the port is not paused. |
 | `no-return` | No accessible new FEL instance appeared within the watchdog window and margin. Recovery is unresolved. |
 | `refused-before-launch` | Image, session, helper or prerequisite validation stopped the submitted image before launch. Earlier setup helpers may have run. |
-| `host-error` | Host code, transport or evidence handling failed. Inspect the first failure and quarantine fields. |
+| `host-error` | Host code, transport or evidence handling failed, including an upload that reads back differently after launch and a result that the decoder cannot decode. Inspect the first failure and quarantine fields. |
 
 Each result records the image SHA-256, Git revision, per-stage durations,
 evidence path and first failure. A watchdog reset uses the decoded fault ELR
@@ -418,7 +412,7 @@ linker bounds cover the exact range. Application result bounds remain unchanged.
 
 ## Qualify on port 3-1
 
-The host checks build a deliberate watchdog probe and the CPU expectation file:
+The host checks build a deliberate watchdog probe:
 
 ```sh
 ~/.cache/sunstoneos/venv/bin/python3 -B checks/board-runner.py \
@@ -433,8 +427,7 @@ The following artifacts are already built in the local cache:
 hello="$HOME/.cache/sunstoneos/build/board-runner-1031/merged-hello/sunstone-a733-os-hello.elf"
 checks="$HOME/.cache/sunstoneos/build/board-runner-1031/probe-final"
 gpu="$HOME/.cache/sunstoneos/build/gpu-bisect-1031/crumbs/ladder-wdt4/2-firmware/sunstone-a733-os.elf"
-$board run "$hello" --port 3-1 --kind cpu-return \
-  --expect "$checks/qualification/hello-expected.bin"
+$board run "$hello" --port 3-1 --kind cpu-return
 $board run "$gpu" --port 3-1 --kind gpu-return
 $board run "$checks/qualification/watchdog-probe.bin" --port 3-1 --kind probe
 ```
@@ -482,9 +475,8 @@ development run does not. Immediately before watchdog arming it
 checks the reviewed ROM instructions and native NPU entry state again.
 
 After normal return, the interrupt-profile parser validates the monitor,
-platform log and cleanup receipt before restoring the saved DRAM, if one exists. Numerical
-mismatch still permits restoration after validated retirement and remains a
-failed result. An invalid receipt or incomplete restoration quarantines the
+platform log and cleanup receipt before restoring the saved DRAM, if one exists. A numerical
+difference in the decoded result still permits restoration after validated retirement; the reviewer reads it. An invalid receipt or incomplete restoration quarantines the
 instance. The new ROM retains ownership of SRAM; the adapter never restores
 old SRAM over it. Watchdog recovery follows the shared runner path and does
 not restore potentially invalid DRAM. These host paths do not qualify hardware.
@@ -492,6 +484,6 @@ not restore potentially invalid DRAM. These host paths do not qualify hardware.
 The development wrapper accepts a finite NPU session file through `--records`
 and an exact build record through `--manifest`. Both inputs reach the same
 runner preparation as `--template`; `--state` selects offline checking.
-`--expect-result` compares the decoded JSON result for application decoders.
-Malformed or incomplete thermal captures fail result validation while retaining
+A decoder's `decode` result is recorded as `decoded`, and the value of its optional `failures` function as `decoder_failures`; neither changes the outcome.
+Malformed or incomplete thermal captures yield `failure-return` while retaining
 the native return, application, GPU and thermal bytes.

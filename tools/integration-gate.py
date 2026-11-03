@@ -4,7 +4,8 @@
 Host configuration stays in CACHE/bin/cfg.sh. This tool never launches a board.
 Build directories belong to the resolved source checkout, so gates on different
 checkouts never share a CMake cache; a lock refuses a second concurrent gate on
-the same checkout. The recorded source identity includes uncommitted changes:
+the same checkout. Every gate also waits for the host-wide lock CACHE/gate.lock (CACHE/gate-full.lock for --full), so
+gates never run side by side. The recorded source identity includes uncommitted changes:
 the revision, the tracked diff and every untracked file that Git does not
 ignore. The gate fails if that state cannot be read completely, or if it
 changes before the gate holds the lock or by the end of the last step.
@@ -222,6 +223,23 @@ def gate_environment(source, cache, build_root):
     return env
 
 
+def take_gate_lock(cache, name):
+    """Block until this process holds CACHE/NAME; the returned file keeps the lock while it is referenced."""
+    cache.mkdir(parents=True, exist_ok=True)
+    handle = open(cache / name, 'a+')
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.seek(0)
+        print('waiting for %s, held by %s' % (cache / name, handle.read().strip() or 'another gate'), flush=True)
+        fcntl.flock(handle, fcntl.LOCK_EX)
+    handle.seek(0)
+    handle.truncate()
+    handle.write('pid %d since %s\n' % (os.getpid(), time.strftime('%Y-%m-%dT%H:%M:%S')))
+    handle.flush()
+    return handle
+
+
 def main(argv=None):
     host_priority.lower()             # nice 10 and the idle I/O class for the gate and everything it starts (tools/host_priority.py)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -269,6 +287,9 @@ def main(argv=None):
     source, cache = args.source.resolve(), args.cache.resolve()
     if not (source / 'CMakeLists.txt').is_file():
         parser.error('source must be a SunstoneOS checkout')
+    # One gate at a time on the host, whoever starts it: a direct call waits behind a landing's gate instead of running beside
+    # it. The full suite takes its own lock so that it blocks no landing. The lock is held until the process exits.
+    gate_lock = take_gate_lock(cache, 'gate-full.lock' if args.full else 'gate.lock')
     targets = list(dict.fromkeys(args.target))
     variants = list(VARIANTS) if args.full else list(dict.fromkeys(args.variant))
     indexed, pending, affected_plan, hook_scope = [], [], None, None

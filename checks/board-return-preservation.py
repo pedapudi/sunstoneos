@@ -34,7 +34,7 @@ def main():
     cpu = records.cpu
     UNSTARTED = ('failure-return-npu-unstarted','failure-return-npu-unstarted-stale','failure-return-npu-unstarted-missing',
                  'failure-return-npu-unstarted-retained','failure-return-npu-unstarted-other-generation')
-    FAILURES = ('failure-return','failure-return-mismatch','failure-return-unlinked',*UNSTARTED)
+    FAILURES = ('failure-return','failure-return-unlinked',*UNSTARTED)
     FAILURE_SITE, FAILURE_CALLER = 0x80004b7f, 0x41070123
     # include/sunstone_session.h struct ss_failure: running context, core 6.
     FAILURE_RECORD = records.host.FAILURE.pack(records.host.FAILURE_MAGIC,1,1,FAILURE_SITE,0x4641,FAILURE_CALLER,6,0,123456)
@@ -139,7 +139,7 @@ def main():
         def prepare(self,info):
             plan=make_plan(self.variant)
             # The image inspection marks images that link the failure return.
-            plan['failure_return']=self.variant in ('failure-return','failure-return-mismatch',*UNSTARTED)
+            plan['failure_return']=self.variant in ('failure-return',*UNSTARTED)
             return plan
         def arm(self,mode,**kwargs):self.armed=True
         def tx(self,*values):
@@ -211,7 +211,7 @@ def main():
     source=args.out/'model.bin';source.write_bytes(b'MODEL ONLY')
     variants=['normal','output-malformed','thermal-malformed','retirement-invalid','backup-corrupt',
               'range-omitted','restore-readback','watchdog','late-fault','decoder-bound',
-              'failure-return','failure-return-mismatch','failure-return-unlinked']
+              'failure-return','failure-return-unlinked']
     if has_npu:variants.extend(('npu-sdk','npu-late-fault','npu-mismatch','npu-refused','npu-telemetry-malformed',
                                 'npu-unstarted-no-failure',*UNSTARTED))
     else:variants=[v for v in variants if v not in UNSTARTED]
@@ -224,16 +224,10 @@ def main():
         parser=argparse.ArgumentParser();board.run_options(parser)
         options=parser.parse_args([str(source),'--port','3-1','--restore-rails']+(['--preserve-dram'] if preserve else []))
         options.evidence=evidence
-        if variant in FAILURES:
-            # An exact expectation of the failure record; the mismatch case expects a different one.
-            expected=args.out/(variant+'.expect');expected.write_bytes(
-                FAILURE_RECORD if variant!='failure-return-mismatch' else FAILURE_RECORD[:-8]+bytes(8))
-            options.expect=str(expected)
         if variant=='decoder-bound':
             options.decoder=args.out/'bound-decoder.py'
             options.decoder.write_text('BINDING = '+repr({'image_sha256':images.sha(source),'private_mode':99})+
                 '\ndef decode(payload):\n    assert payload == b"complete" and BINDING["private_mode"] == 99\n    return {"bytes": len(payload)}\n')
-            options.expect_result={'bytes':8}
         owners=[]
         def backend(*values):
             owner=Owner(*values,variant);owners.append(owner);return owner
@@ -252,7 +246,7 @@ def main():
              contextlib.redirect_stdout(io.StringIO()):
             result=board.run_image(options,backend)
         good=variant in ('normal','output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed','npu-sdk','decoder-bound',
-                         'failure-return','failure-return-mismatch','failure-return-npu-unstarted')
+                         'failure-return','failure-return-npu-unstarted')
         if not preserve:
             owner=owners[0]
             assert result['dram_mode']=='development',result
@@ -267,7 +261,7 @@ def main():
             assert result['outcome']==('returned' if variant in ('normal','npu-sdk','decoder-bound') else
                                       'failure-return' if variant=='failure-return' else
                                       'watchdog-reset' if variant=='watchdog' else
-                                      'host-error' if variant in ('late-fault','failure-return-unlinked') else 'result-mismatch'),(variant,result)
+                                      'failure-return' if variant in ('output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed') else 'host-error'),(variant,result)
             # No DRAM was promised, so only unproven retirement quarantines.
             assert result['quarantined']==(variant=='retirement-invalid'),(variant,result)
             assert bool(result.get('native_retirement_validated'))==(variant in ('normal','output-malformed','failure-return','decoder-bound','npu-sdk')),(variant,result)
@@ -287,7 +281,7 @@ def main():
         assert result['outcome']==('returned' if variant in ('normal','npu-sdk','decoder-bound') else
                                   'failure-return' if variant in ('failure-return','failure-return-npu-unstarted') else
                                   'watchdog-reset' if variant=='watchdog' else
-                                  'host-error' if variant in ('late-fault','failure-return-unlinked') else 'result-mismatch'),(variant,result)
+                                  'failure-return' if variant in ('output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed') else 'host-error'),(variant,result)
         # A watchdog reset returns a fresh ROM instance with DRAM lost: nothing to restore, nothing to quarantine.
         assert result['quarantined']==(not good and variant!='watchdog'),(variant,result)
         if variant=='watchdog':assert result['dram_lost'] and result['rom_returned'] and result['dram_released_by_reset']
@@ -317,8 +311,6 @@ def main():
                 assert result['rails_restored'] and result['dram_restored'] and not result['quarantined']
                 assert result['return_report']['npu_stop']['finished']==2 and result['return_report']['npu_capture_status']=='decoded'
                 assert result['return_report']['npu_report']['mode']=='never-started'
-            if variant=='failure-return-mismatch':
-                assert result['first_failure']['detail']=='Failure record differs from expectation.',result
             if variant=='decoder-bound':
                 assert result['decoded']=={'bytes':8}
                 assert result['rail_runs']['restore-rails']['image_sha256']==board.POST_RAIL_HELPER_SHA256

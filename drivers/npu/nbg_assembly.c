@@ -493,7 +493,9 @@ static int shader_operation(const struct nbg_model *m, uint32_t number, uint32_t
                 const uint64_t height = plane / stride;
                 const uint32_t width = hw - (uint32_t)(height << 16);
                 if (!height || width > stride) return 0;
+#ifndef NBG_ALLOW_LONG_DIMENSION   /* -DNBG_ALLOW_LONG_DIMENSION builds a diagnostic that admits long tensors, to vary the dimension on the board */
                 if (height >= 65536 || width >= 65536) { refused(NBG_REFUSED_DIMENSION, number); return 0; }
+#endif
                 const uint64_t extent = (uint64_t)plane * depth;
                 if ((uint64_t)p.source_offset + extent > region) return 0;
                 r.referenced_bytes = extent ? extent : 1;

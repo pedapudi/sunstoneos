@@ -171,7 +171,7 @@ recovery; software timeouts alone cannot recover a stalled bus transaction.
 The host classifies WDT0 and breadcrumbs before any DRAM read. After a normal
 return it requires the full receipt nonce, completed cleanup/retirement, disabled
 watchdog, bounded counters and matching payload checksum. A nonzero diagnostic
-status yields `result-mismatch`. A watchdog reset loses DRAM; only retained RTC
+status yields `failure-return`. A watchdog reset loses DRAM; only retained RTC
 records are decoded. See [runner outcomes](board-runner.md#interpret-the-result-and-recovery-state).
 
 ## Convert the existing memtest image

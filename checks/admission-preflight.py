@@ -181,7 +181,7 @@ def submit(board, admission, image, refused_image, located, cache, work, cases):
         names += ['--input', str(work / f'input-{i}.bin')]
 
     def arguments(path, hypothesis):
-        return parser.parse_args([str(path), '--port', 'any', '--kind', 'cpu-return', '--expect', 'complete', '--preserve-dram',
+        return parser.parse_args([str(path), '--port', 'any', '--kind', 'cpu-return', '--preserve-dram',
                                   '--reference', 'docs/board-runner.md#submit-a-frozen-image-and-hypothesis',
                                   '--worker', 'worker', '--hypothesis', hypothesis, *names])
 

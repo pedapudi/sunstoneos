@@ -2,8 +2,8 @@
 """Validate the complete queue-add binary result emitted by ss_finish.
 
 Completion times are bounded by the application's 200000-microsecond job
-budget. --expect-result on tools/dev-run.py selects the exact expected job
-count while the copied result.bin preserves every measured timing value.
+budget. The copied result.bin preserves every measured timing value, and the
+hypothesis states the expected job count.
 """
 import struct
 

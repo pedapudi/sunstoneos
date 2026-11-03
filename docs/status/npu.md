@@ -21,6 +21,7 @@ The NPU path is implemented: native model decoding, mappings, shared-provider st
 | Run-time graph registration and links | qualified on the board | five graphs registered after start | `npu-status-runs-and-queue` |
 | Externally supplied models | qualified on the board | 18 graphs, 22.75 ms per pass | `npu-resources-external-models` |
 | Long attention layers (184 to 276 frames in 92-row blocks) | qualified on the board | 4.83 ms and 8.00 ms per job | `npu-status-long-attention-layers` |
+| Cause of the long-attention failures | qualified on the board | a flat gather width of 65,536 or more, not the bytes or the index table | [long tensors](../hardware/npu-command-formats.md#shader-operations-kind-1) |
 | Attention step of the tiled encoder | qualified on the board | 458.8 µs as two jobs | [tiled execution](../designs/npu-tiled-execution.md) |
 | Idle clock gating | qualified on the board | resume at most 25 µs; no gating at 9 ms gaps | `npu-status-board-scope` |
 | Combined CPU and NPU image | qualified on the board | four jobs, overlap mask 15 | `npu-status-board-scope` |
@@ -45,7 +46,7 @@ Designs: [platform](../designs/npu-platform.md), [fast path](../designs/npu-fast
 Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` records hold the results that earlier status prose described. Earlier prose evidence is in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-67 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+74 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -116,4 +117,11 @@ Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` recor
 | `1793666366906891069-9a72ca56` | 2026-11-03 | 3-1 | `0f45dff3d769` | returned | failed | run_total 228.74 s, job_p50 221.6 µs, job_min 221.2 µs, job_p99 256.6 µs |
 | `1793667205533452916-4c9bfc05` | 2026-11-03 | 3-1 | `b9fe39fdaad4` | host-error | inconclusive | run_total 35.274 s |
 | `1793667292474700968-bd255624` | 2026-11-03 | 3-1 | `b9fe39fdaad4` | returned | passed | run_total 257.257 s, job_p50 229.4 µs, job_min 227.8 µs, job_p99 264.5 µs |
+| `1793719053555565452-4cbcbf1a` | 2026-11-03 | 3-1 | `d32f27cd975e` | result-mismatch | passed | run_total 32.097 s, flat_width 98048 elements, gather_bytes 196096 bytes, output_bytes_differing 37 bytes |
+| `1793719090977603447-05602472` | 2026-11-03 | 3-1 | `086f59ba1ab3` | returned | passed | run_total 28.053 s, flat_width 37380 elements, gather_bytes 598080 bytes, output_bytes_differing 0 bytes |
+| `1793719124804236417-18292fe6` | 2026-11-03 | 3-1 | `22dd89ef81bb` | returned | passed | run_total 27.164 s, flat_width 54656 elements, gather_bytes 437248 bytes, output_bytes_differing 0 bytes |
+| `1793719227420443802-d3a3883b` | 2026-11-03 | 3-1 | `f7b7d9319c42` | result-mismatch | passed | run_total 26.675 s, flat_width 66458 elements, gather_bytes 531664 bytes, output_bytes_differing 54 bytes |
+| `1793719329671640562-91b56adc` | 2026-11-03 | 3-1 | `0419095357aa` | returned | passed | run_total 26.278 s, flat_width 65400 elements, gather_bytes 523200 bytes, output_bytes_differing 0 bytes |
+| `1793719431661400089-4f6a7d7e` | 2026-11-03 | 3-1 | `61ee14873aae` | returned | passed | run_total 27.385 s, flat_width 32640 elements, gather_bytes 522240 bytes, output_bytes_differing 0 bytes |
+| `1793719534250914902-0b709b24` | 2026-11-03 | 3-1 | `6cc60b2a4044` | returned | passed | run_total 25.056 s, flat_width 32640 elements, gather_bytes 261120 bytes, output_bytes_differing 0 bytes |
 <!-- evidence-table:end -->

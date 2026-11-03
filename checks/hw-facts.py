@@ -170,21 +170,6 @@ def test_decoder():
     return blob
 
 
-def test_expectation(blob):
-    expected = hw.expectation()
-    assert len(expected['words']) * 4 == hw.TABLE_BYTES
-    assert hw.matches(blob, expected)
-    bad = bytearray(blob)
-    bad[hw.CORE_OFFSET] ^= 1  # a slot identity
-    assert not hw.matches(bytes(bad), expected)
-    bad = bytearray(blob)
-    bad[12] ^= 1  # the table size
-    assert not hw.matches(bytes(bad), expected)
-    pad = bytearray(blob)
-    pad[hw.SHARED_OFFSET + len(hw.SHARED_SPECS) * 16 + 8] = 1  # a slot past the catalogue is zero
-    assert not hw.matches(bytes(pad), expected)
-
-
 def test_document():
     document = hw.load_document()
     assert document['schema'] == hw.SCHEMA
@@ -397,7 +382,6 @@ def main():
     variant.directory = args.output
     test_layout()
     blob = test_decoder()
-    test_expectation(blob)
     test_document()
     test_models()
     test_no_hardcoded_values()

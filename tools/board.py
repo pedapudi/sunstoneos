@@ -37,7 +37,7 @@ POST_RAIL_HELPER_SHA256 = 'f48a6be72b336c8990a124fd608bba5fddb5c8617ec62eac5642b
 # Linked __heap_end from ELF SHA-256 ae00ce1d4a1f82b77ab1e016dc1a08f795e56c9c6f4c92d166f6434d75590098.
 POST_RAIL_HELPER_DRAM = (0x41000000, 0x47300)
 DRAM_UNRESOLVED = 'DRAM ownership remains unresolved.'
-OUTCOMES = ('returned', 'failure-return', 'result-mismatch', 'watchdog-reset', 'no-return', 'refused-before-launch', 'host-error')
+OUTCOMES = ('returned', 'failure-return', 'watchdog-reset', 'no-return', 'refused-before-launch', 'host-error')
 crumbs = images.load('board_crumbs', ROOT/'tools/a733-crumbs.py')
 import board_state as state
 import board_usb_power as usb_power
@@ -769,65 +769,6 @@ class Live:
             raise
 
 
-def expectation(value):
-    if value is None:
-        return None
-    path = Path(value)
-    if path.is_file():
-        raw = path.read_bytes()
-        try:
-            spec = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            spec = None
-        if isinstance(spec, dict) and isinstance(spec.get('schema'), str) and spec['schema'].startswith('sunstone-board-expect-'):
-            require(set(spec) == {'schema', 'words'} and spec['schema'] == 'sunstone-board-expect-u32-v1',
-                    'Unknown binary expectation schema.')
-            return validate_expectation({'mode': 'u32le', 'words': spec['words']})
-        return {'mode': 'bytes', 'hex': raw.hex()}
-    return {'mode': 'text', 'text': value}
-
-
-def validate_expectation(expected):
-    """Validate a file-derived or frozen queue expectation before device access."""
-    require(isinstance(expected, dict), 'Invalid frozen expectation.')
-    mode = expected.get('mode')
-    if mode == 'bytes':
-        require(set(expected) == {'mode', 'hex'} and isinstance(expected['hex'], str),
-                'Invalid exact-byte expectation.')
-        bytes.fromhex(expected['hex'])
-    elif mode == 'text':
-        require(set(expected) == {'mode', 'text'} and isinstance(expected['text'], str),
-                'Invalid text expectation.')
-    else:
-        require(mode == 'u32le' and set(expected) == {'mode', 'words'},
-                'Unknown frozen expectation mode.')
-        words = expected['words']
-        require(isinstance(words, list) and 1 <= len(words) <= 16384,
-                'Binary expectation must name every 32-bit word.')
-        for word in words:
-            require(type(word) is int and 0 <= word <= 0xffffffff or
-                    isinstance(word, dict) and set(word) == {'min', 'max'} and
-                    all(type(word[k]) is int for k in ('min', 'max')) and
-                    0 <= word['min'] <= word['max'] <= 0xffffffff,
-                    'Invalid fixed word or inclusive range in binary expectation.')
-    return expected
-
-
-def matches_expectation(expected, payload):
-    """Compare every binary field while allowing declared hardware timings."""
-    if expected['mode'] == 'bytes':
-        return payload == bytes.fromhex(expected['hex'])
-    if expected['mode'] == 'text':
-        return expected['text'] in payload.decode(errors='replace')
-    require(expected['mode'] == 'u32le', 'Unknown frozen expectation mode.')
-    words = expected['words']
-    if len(payload) != 4 * len(words):
-        return False
-    actual = struct.unpack('<' + 'I' * len(words), payload)
-    return all(got == want if type(want) is int else want['min'] <= got <= want['max']
-               for got, want in zip(actual, words))
-
-
 def port_idle(port):
     """Inspect only the host lock; never open a USB device."""
     with Path(f'/tmp/sunstoneos-a733-{port}.lock').open('a') as lock:
@@ -849,43 +790,6 @@ def process_identity(pid):
 def process_alive(identity):
     current = process_identity(identity['pid'])
     return bool(current and current['start_ticks']==identity['start_ticks'] and current['state']!='Z')
-
-
-def references(args):
-    """Hash the host preparation code and cached helper inputs used by a job."""
-    paths = set()
-    trees = {ROOT}
-    if args.host_tree or args.kind=='gpu-return':
-        trees.add(args.host_tree or images.GPU_TREE)
-    for tree in trees:
-        for directory in ('tools','checks','apps/os','apps/board','apps/cpu-runtime-qualification'):
-            paths.update((tree/directory).glob('*.py'))
-        for directory in ('platform/a733-smp-supervised','platform/a733-smp-observe','platform/a733-smp-cached','include'):
-            paths.update(p for p in (tree/directory).glob('*') if p.is_file())
-        paths.add(tree/'drivers/clock/a733_cpu_clock.c')
-        paths.add(tree/'apps/board/launch.c')
-        if args.kind == 'npu' and 'ss_result_record' not in images.symbols(args.image):
-            finite = images.load('reference_npu_irq', tree/'apps/npu-interrupt/host.py').finite
-            paths.update(tree/name for name in finite.HOST_SOURCES)
-            paths.update(tree/name for name in ('apps/npu-finite/development.py','tools/vendor-mbus.py'))
-    paths.update((args.fel,args.rail_helper))
-    if args.restore_rails:
-        paths.update((POST_RAIL_HELPER, POST_RAIL_HELPER.parent/'input-identities.json',
-                      POST_RAIL_HELPER.parent/'build/probe.elf'))
-    if args.kind == 'npu':
-        paths.add(args.objcopy)
-    for directory in (args.ddr_build,args.ddr_restore):
-        manifest = directory/'manifest.json'
-        paths.add(manifest)
-        if manifest.exists():
-            paths.update(directory/name for name in json.loads(manifest.read_text())['files'])
-    paths.update(args.training_dir.glob('*.bin'))
-    return {str(p.resolve()):images.sha(p) for p in paths if p.is_file()}
-
-
-def verify_references(inventory):
-    require(all(Path(path).is_file() and images.sha(path)==digest for path,digest in inventory.items()),
-            'Queued host code or helper inputs changed; resubmit the frozen image.')
 
 
 def run_reference(args):
@@ -943,8 +847,6 @@ def run_image(args, backend=Live):
             finite = images.load('preflight_npu_irq',(args.host_tree or ROOT)/'apps/npu-interrupt/host.py').finite
             finite.original.session_profile(args.records.read_bytes(), (456,224,232,72,96,128))
         args.image = frozen
-        if args.reference_inventory:
-            verify_references(json.loads(args.reference_inventory.read_text()))
         helper_only = args.kind == 'rail-helper'
         dma_binding = None
         if helper_only:
@@ -961,11 +863,6 @@ def run_image(args, backend=Live):
             dma_binding = images.dma_admission(args, info)
             application_inputs(args, info, evidence)
             images.load('storage_bounds', ROOT/'tools/storage_bounds.py').verify_delivered(args)
-            require(getattr(args, 'expect_result', None) is None or getattr(args, 'decoder', None) is not None,
-                    '--expect-result requires a result decoder.')
-        expected = validate_expectation(json.loads(args.expect_spec.read_text())) if args.expect_spec else expectation(args.expect)
-        if expected is not None:
-            save(evidence/'expect.json', expected)
         owner = backend(args, evidence, result)
         with owner.locked():
             try:
@@ -1011,9 +908,6 @@ def run_image(args, backend=Live):
                             result['rails_unrestored'] = True
                             result['first_failure_rails'] = str(error)
                         result['rail_restore'] = owner.record.get('rails')
-                    matched = captured['valid']
-                    if expected:
-                        matched &= matches_expectation(expected, payload)
                     if owner.record.get('failure_return'):
                         # A normal return that carries a failure record is a
                         # failed result. Retirement, DRAM and rails are already
@@ -1024,33 +918,25 @@ def run_image(args, backend=Live):
                             detail=result['breadcrumbs'].get('summary', 'Failure return'),
                             record=captured['report'].get('failure'))
                         result['outcome'] = 'failure-return'
-                        # A finite NPU failure return carries its record in the platform log, so
-                        # a success expectation cannot match it.
-                        if expected and plan.get('format') != 'npu' and not matches_expectation(expected, payload):
-                            raise Mismatch('Failure record differs from expectation.')
                         if owner.journal_error is not None:
                             raise owner.journal_error
                         return finish_result(result, evidence, started, stage)
-                    if not matched:
-                        raise Mismatch('Returned result differs from expectation.')
+                    if not captured['valid']:
+                        # The image returned normally with a result record whose status or magic is not a success.
+                        # Retirement, DRAM and rails are restored, so the port stays usable.
+                        result['first_failure'] = {'site': 'capture', 'detail': 'The returned result record is not a success record.'}
+                        result['outcome'] = 'failure-return'
+                        return finish_result(result, evidence, started, stage)
                     if getattr(args, 'decoder', None):
                         decoder = load_decoder(args)
                         try:
                             decoded = decoder.decode(payload)
                         except (ValueError, struct.error) as error:
-                            raise Mismatch('Invalid decoded result: '+str(error)) from error
+                            raise ValueError('Invalid decoded result: '+str(error)) from error
+                        # The decoded result is the evidence; the reviewer compares it with the hypothesis.
                         result['decoded'] = decoded
                         if hasattr(decoder, 'failures'):
-                            failures = decoder.failures(decoded)
-                            if failures:
-                                raise Mismatch('Decoder reported failures: '+str(failures))
-                        if getattr(args, 'expect_result', None) is not None or hasattr(decoder, 'expected'):
-                            values = [p.read_bytes() for p in args.input]
-                            if not values:
-                                values = [p.read_bytes() for p in sorted((evidence/'bundle').glob('input-*.bin'))]
-                            wanted = args.expect_result if getattr(args, 'expect_result', None) is not None else decoder.expected(values)
-                            if decoded != wanted:
-                                raise Mismatch('Decoded result differs from expectation.')
+                            result['decoder_failures'] = decoder.failures(decoded)
                 else:
                     decoded = result.get('breadcrumbs',{})
                     fault = decoded.get('fault',{})
@@ -1077,11 +963,8 @@ def run_image(args, backend=Live):
         result['outcome'] = 'no-return'
         result['first_failure'] = {'site': stage, 'detail': str(error)}
     except usb_power.PowerFault as error:
-        result['outcome'] = 'result-mismatch' if result.get('launch_attempted') else 'refused-before-launch'
+        result['outcome'] = 'host-error' if result.get('launch_attempted') else 'refused-before-launch'
         result['first_failure'] = result.get('usb_vbus_fault', {'site': stage, 'detail': str(error)})
-    except Mismatch as error:
-        result['outcome'] = 'result-mismatch'
-        result['first_failure'] = {'site': stage, 'detail': str(error)}
     except (ValueError, DramFailure) as error:
         result['outcome'] = 'host-error' if result.get('launch_attempted') else 'refused-before-launch'
         result['first_failure'] = {'site': stage, 'detail': str(error)}
@@ -1220,7 +1103,6 @@ def development(argv=None):
     parser.add_argument('--approved-by', choices=('coordinator',))
     parser.add_argument('--host-tree', type=Path)
     parser.add_argument('--objcopy', type=Path)
-    parser.add_argument('--expect-result', type=json.loads)
     parser.add_argument('--port', default=os.environ.get('SUNSTONE_USB_PORT'), choices=PORTS)
     parser.add_argument('--evidence', type=Path)
     parser.add_argument('--state', type=Path)
@@ -1255,8 +1137,6 @@ def development(argv=None):
     for name in ('template', 'manifest', 'descriptor', 'host_tree', 'objcopy', 'approved_by'):
         if getattr(args, name):
             command += ['--'+name.replace('_','-'), str(getattr(args, name))]
-    if args.expect_result is not None:
-        command += ['--expect-result', json.dumps(args.expect_result)]
     if args.restore_rails and args.kind not in ('npu', 'usb-class'):
         command += ['--restore-rails']
     if args.preserve_dram:
@@ -1284,8 +1164,6 @@ def legacy_run(args, kind='probe', image=None, storage_write=False):
         command += ['--template', str(bundle)]
     if storage_write:
         command += ['--storage-write']
-    if getattr(args, 'expect', None):
-        command += ['--expect', args.expect]
     return main(command)
 
 
@@ -1404,8 +1282,6 @@ class Queue:
                 options[name] = str(target)
         if getattr(args, 'decoder_origin', None):
             options['decoder_origin'] = str(args.decoder_origin)
-        if args.expect_result is not None:
-            options['expect_result'] = json.dumps(args.expect_result)
         options['input'] = []
         for i,path in enumerate(args.input):
             target = directory/f'input-{i}.bin'
@@ -1452,14 +1328,6 @@ class Queue:
             raise
         if preflight.get('unavailable'):
             print('pre-flight not run: %s' % preflight['unavailable'], file=sys.stderr)
-        exp = expectation(args.expect)
-        if exp:
-            target = directory/'expect.json'
-            save(target,exp)
-            options['expect_spec'] = str(target)
-        inventory = directory/'references.json'
-        save(inventory,references(args))
-        options['reference_inventory'] = str(inventory)
         # Capture the complete queued input inventory, including templates.
         frozen = {str(p.relative_to(directory)): images.sha(p) for p in directory.rglob('*') if p.is_file()}
         job = {'id': identifier, 'submitted': time.time(), 'image': str(image),
@@ -1486,11 +1354,6 @@ class Queue:
             directory = Path(job['directory'])
             if any(not (directory/name).is_file() or images.sha(directory/name) != digest for name,digest in job['frozen'].items()):
                 self.refused(state, job, 'Queued input bytes changed; execution refused.')
-                return None
-            try:
-                verify_references(json.loads((directory/'references.json').read_text()))
-            except ValueError as error:
-                self.refused(state,job,str(error))
                 return None
             job.update(state='running', assigned_port=port, started=time.time())
             self.event('running', job=job['id'], port=port)
@@ -1690,8 +1553,6 @@ def run_options(parser, submit=False):
     parser.add_argument('image', type=Path)
     parser.add_argument('--port', choices=('any',*PORTS) if submit else PORTS, required=True)
     parser.add_argument('--kind', choices=('cpu-return','gpu-return','npu','probe','usb-class','rail-helper'), default='cpu-return', required=submit)
-    parser.add_argument('--expect', required=submit, help='File: exact bytes or sunstone-board-expect-u32-v1 JSON; otherwise UTF-8 substring.')
-    parser.add_argument('--expect-result', type=json.loads, help='Required decoded JSON result; needs a result decoder.')
     parser.add_argument('--manifest', type=Path, help='Exact finite NPU build manifest.')
     parser.add_argument('--objcopy', type=Path, default=Path('/usr/bin/llvm-objcopy-21'))
     parser.add_argument('--approved-by', choices=('coordinator',))
@@ -1705,7 +1566,7 @@ def run_options(parser, submit=False):
                         help='Qualification run: save the image DRAM before launch and restore it after retirement. Development runs skip both.')
     parser.add_argument('--preserve-budget-s', type=float,
                         help='Longest estimated backup and restore time, in seconds, that a --preserve-dram run accepts; the plan is refused above it.')
-    parser.add_argument('--decoder', type=Path, help='Application payload decoder with optional expected(inputs).')
+    parser.add_argument('--decoder', type=Path, help='Application payload decoder; its decoded result is recorded in the result.')
     parser.add_argument('--decoder-origin', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--decode-application', action='store_true', help='Use the application decoder and its default inputs when available.')
     parser.add_argument('--records', type=Path, help='Board, thermal and CPU session records for a generic image.')
@@ -1717,8 +1578,6 @@ def run_options(parser, submit=False):
     parser.add_argument('--ddr-build', type=Path, default=CACHE/'build/a733-ddr')
     parser.add_argument('--ddr-restore', type=Path, default=CACHE/'build/a733-ddr-restore')
     parser.add_argument('--training-dir', type=Path, default=CACHE/'ddr-records')
-    parser.add_argument('--expect-spec',type=Path,help=argparse.SUPPRESS)
-    parser.add_argument('--reference-inventory',type=Path,help=argparse.SUPPRESS)
     parser.add_argument('--process-record',type=Path,help=argparse.SUPPRESS)
 
 

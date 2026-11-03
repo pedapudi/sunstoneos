@@ -45,7 +45,7 @@ def measure(entries, since=''):
             manifest = host.image_manifest(run / 'image.elf')['manifest']
         except (OSError, ValueError, KeyError, struct.error):
             continue
-        if result.get('outcome') not in ('returned', 'failure-return', 'result-mismatch') or crumbs['last']['name'] != 'RETURN_ROM':
+        if result.get('outcome') not in ('returned', 'failure-return') or crumbs['last']['name'] != 'RETURN_ROM':
             continue
         deadline_s = struct.unpack_from('<Q', report, 32)[0] / 24e6
         table[manifest['name']].append(crumbs['last']['seconds_since_power_on'] - (deadline_s - lifetime))

@@ -236,12 +236,9 @@ A write-capable image cannot write until `ss_storage_enable` receives a **bounds
    open('mode9.bin', 'wb').write(host.mode_input(9))            # 9 format, 0 create the file, 3 verify it
    image_sha = hashlib.sha256(open('image.elf', 'rb').read()).hexdigest()
    json.dump({'image_sha256': image_sha, 'storage_scratch': {'card_cid': CID, 'partition': PARTITION}}, open('image.board.json', 'w'))
-   expect = host.expectation(9)
-   for i in range(114, 128): expect['words'][i] = {'min': 0, 'max': 4294967295}   # the mode record words vary by card and run
-   json.dump(expect, open('expect.json', 'w'))
    ```
-3. *Pre-flight.* `tools/board.py check --kind cpu-return --port 3-3 --storage-write --input blob.bin --input mode9.bin --expect expect.json --descriptor image.board.json --state STATE --evidence DIR image.elf` runs the runner's own admission on the host.
-4. *Submit.* The same arguments with `submit --worker NAME --no-wait --reference DOC#ANCHOR --hypothesis "…"`. The submission needs the coordinator's approval for the card (`scratch-cards.json` and `storage-card-<cid>.json` in the coordinator's directory) and for the image's new hypothesis text.
+3. *Pre-flight.* `tools/board.py check --kind cpu-return --port 3-3 --storage-write --input blob.bin --input mode9.bin --descriptor image.board.json --state STATE --evidence DIR image.elf` runs the runner's own admission on the host.
+4. *Submit.* The same arguments with `submit --worker NAME --no-wait --reference DOC#ANCHOR --hypothesis "…"`. The hypothesis states the predicted result, such as the mode record's fields and the file's size; the runner compares nothing with it, and the decode in step 5 gives the result that the coordinator reviews against it. The submission needs the coordinator's approval for the card (`scratch-cards.json` and `storage-card-<cid>.json` in the coordinator's directory) and for the image's new hypothesis text.
 5. *Decode.* `python3 -c` with `host.decode(open('run/output.bin', 'rb').read()[:512])` from `apps/storage-write-test/host.py`, then `host.failures(...)`; a watchdog reset has no report, so read the failure note from `run/result.json` (`first_failure.value` and `aux`) with the tables of section 8.
 6. *Record.* `tools/evidence.py add ENTRY --subsystem storage --verdict … --prediction … --conclusion … --measure …`, then `tools/evidence.py validate` and `sync --check`.
 7. Repeat with mode 0 (the 512 MiB file), then mode 3 (the verify read, which needs the file to be exactly 512 MiB). A failed or interrupted session on the scratch card is undone by running mode 9 again.

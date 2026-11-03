@@ -1,2 +1,5 @@
 # Unified diffs require leading context spaces, including on blank lines.
 patches/*.patch -whitespace
+
+# Append-only evidence logs: two branches that each append a record merge without a conflict.
+docs/evidence/*.jsonl merge=union

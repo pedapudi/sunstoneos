@@ -25,7 +25,7 @@ def forbidden(*args, **kwargs):
 root = Path(tempfile.mkdtemp(prefix='sunstone-capture-policy-'))
 bundle = root / 'bundle'
 args = SimpleNamespace(fel=root / 'model-fel', evidence=root / 'must-not-exist',
-                       bundle=bundle, expect='fixture-result')
+                       bundle=bundle)
 # The runner owns image admission, watchdog bounds and recovery. Exercise the
 # real legacy adapter and stop at its CLI boundary, before any device access.
 with patch.dict(os.environ, {'SUNSTONE_USB_PORT': '3-3'}), \
@@ -41,6 +41,6 @@ with patch.dict(os.environ, {'SUNSTONE_USB_PORT': '3-3'}), \
     runner.assert_called_once_with([
         'run', str(bundle / 'image.elf'), '--kind', 'probe', '--port', '3-3',
         '--fel', str(args.fel), '--evidence', str(args.evidence),
-        '--template', str(bundle), '--expect', args.expect])
+        '--template', str(bundle)])
 assert not args.evidence.exists()
 print('PASS supervised launch delegates image, port, inputs and exit status; no device access')
