@@ -106,7 +106,7 @@ extern const struct a733_cpu_coherence_ops a733_cpu_coherence_native_ops;
 /* Stackless cache/TLB primitives, DAIF masked. Return 1 success, -1 refusal or
  * deadline. Absolute deadlines use CNTPCT ticks; caller must establish a stable
  * counter, checked monotonic externally. No instruction can recover a bus hang.
- * EL3 publication accepts owned physical DRAM [0x40000000,0x48000000), after
+ * EL3 publication accepts owned physical DRAM [0x40000000,0x340000000), after
  * dirty aliases have been resolved. Performs CVAC + DSB SY, never invalidates
  * possibly dirty data. Clean code/data/table ranges before exposing to peers.
  */

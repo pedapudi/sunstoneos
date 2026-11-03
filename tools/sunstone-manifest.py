@@ -42,7 +42,8 @@ ACCESS = {'read': 1, 'write': 2, 'gpu-read': 4, 'gpu-write': 8, 'scratch': 16}
 # radio and Bluetooth profile reservation and below the loader limit.
 WINDOW = tuple(memory_layout.record()['window'])
 SLOT1 = tuple(memory_layout.record()['slot1_area'])
-AREAS = (WINDOW, SLOT1)
+UPPER = tuple(memory_layout.record()['upper_area'])
+AREAS = (WINDOW, SLOT1, UPPER)
 PAGE = 0x1000
 BLOCK = 0x200000
 # OS host operations: the fault, NPU, thermal and performance reports keep
@@ -293,6 +294,10 @@ def span(r):
     return r['address'], r['address'] + -(-r['bytes'] // alignment) * alignment
 
 
+def where_of(m, i):
+    return '%s region %s' % (m['name'], m['region_names'][i])
+
+
 def assign(m):
     """Place unpinned regions at the lowest free 2 MiB boundary in the window.
 
@@ -305,7 +310,7 @@ def assign(m):
         where = '%s region %s' % (m['name'], m['region_names'][i])
         low, high = span(r)
         require(any(a <= low and high <= b for a, b in AREAS),
-                '%s: [%#x, %#x) outside the application window and the slot 1 area' % (where, low, high))
+                '%s: [%#x, %#x) outside the application window, the slot 1 area and the upper memory' % (where, low, high))
         require(low < SLOT1[0] or low % BLOCK == 0, '%s: a region in the slot 1 area starts on a 2 MiB boundary' % where)
         for other, (a, b) in taken:
             require(high <= a or b <= low, '%s overlaps region %s' % (where, other))
@@ -322,6 +327,11 @@ def assign(m):
                 if high > WINDOW[1] and low < SLOT1[0]:          # the window is full: continue in the slot 1 area
                     r['address'] = SLOT1[0]
                     continue
+                if high > SLOT1[1] and low < UPPER[0]:           # the slot 1 area is full: continue in the upper memory
+                    r['address'] = UPPER[0]
+                    continue
+                require(high <= UPPER[1], '%s: the regions need memory up to %#x and %d MiB is installed above %#x' % (
+                    where_of(m, i), high, (UPPER[1] - UPPER[0]) >> 20, UPPER[0]))
                 clash = [b for _, (a, b) in taken if not (high <= a or b <= low)]
                 if not clash:
                     break
