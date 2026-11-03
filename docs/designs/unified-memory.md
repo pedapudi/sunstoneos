@@ -1,6 +1,6 @@
 # Design: one memory allocator for the CPU, GPU, NPU and DMA
 
-Status: **design only**. Nothing in this document is implemented. The inventory records the code as it stands; every other section specifies what to build. Board runs listed under the migration order are unscheduled.
+Status: **design**, with the ledger core **implemented** and checked on the host and in QEMU (`kernel/umem/umem.c`, `kernel/umem/umem_policy.c`, `include/umem.h`). The OS image admits its large regions and the NPU pool through the ledger. The mappings of the GPU, NPU and IOMMU spaces, the SDK calls and the other migration steps are not built. The inventory records the code as it stands before the migration; every section after the inventory specifies the end state. Board runs listed under the migration order are unscheduled.
 
 Readers are assumed to know AArch64 stage-1 translation, the FreeRTOS SMP port and non-coherent DMA. They should also have read [memory-architecture.md](memory-architecture.md), [memory-map-12g.md](memory-map-12g.md), [application-memory-layout.md](application-memory-layout.md), [large-app-regions.md](large-app-regions.md), [dma-high-memory.md](dma-high-memory.md), [npu-resources.md](npu-resources.md) and [../memory-protection.md](../memory-protection.md).
 
@@ -104,9 +104,9 @@ The ledger owns every byte from `0x4220_0000` (the end of the OS image, monitor 
 The region ledger of `kernel/appmem/app_region.c` is the starting point. It keeps the properties that the board qualified: extents of one owner, the 1 GiB placement preference for large regions, release with refusal for non-owners, and `app_region_owner_of()`. It gains these properties:
 
 - **Page granularity.** An extent is a multiple of 4 KiB, the smallest unit that every consumer maps (CPU, GPU, NPU and IOMMU all use 4 KiB pages). The 2 MiB block stays the CPU mapping unit for extents that are 2 MiB aligned and 2 MiB long; smaller extents get level-3 tables.
-- **Run-time growth.** Entry storage grows by carving 4 KiB pages from the ledger itself, owned by the kernel and mapped in no application space. The entry count is bounded by memory: at 32 bytes an entry, 3,145,728 buffers of 4 KiB would use 96 MiB. A fixed entry table sized from manifests is gone.
-- **Ordered index.** Entries sit in an address-ordered array with a size-class free list, so acquire and release take a bounded number of steps and no scan of every entry. The lock hold is a bounded instruction count that a host check measures (budget in the migration order).
-- **Constraints per request.** A request names a size, an alignment, a physical window (`phys_max`, the exclusive upper bound, and optionally a naturally aligned window that the extent may not cross) and a cache policy. Placement is first fit within the window, the smallest fit otherwise, and aligned to the largest device page of the devices in the request.
+- **Run-time growth.** Entry storage grows by carving 4 KiB pages from the ledger itself, owned by the kernel and mapped in no application space. The entry count is bounded by memory: at 88 bytes an entry, 3,145,728 buffers of 4 KiB would use 264 MiB, and measured use with 40,000 live buffers of up to 128 KiB is 5.4 MiB. No entry table is sized from manifests.
+- **Ordered index.** Extents sit in one treap ordered by address, and free extents also in a list per policy and size class. Lookup, insertion and removal take a logarithmic number of steps. A request with no constraint takes the first extent of the next larger size class, so it visits few extents: with 40,000 live buffers the 99th percentile is 79 steps and the worst 178. A request with an alignment, window, physical limit or non-default policy visits every free extent of the classes it can fit, so its worst case grows with fragmentation (5,036 steps measured). A release costs 87 steps on average and 272 at worst.
+- **Constraints per request.** A request names a size, an alignment, a physical window (`phys_max`, the exclusive upper bound, and optionally a naturally aligned window that the extent may not cross) and a cache policy. Placement is first fit among the extents of the next larger size class (the request's own class last, or first with `UMEM_REUSE`), and aligned to the largest device page of the devices in the request. A request of 1 GiB or more is placed on a 1 GiB boundary when one is free.
 - **Owners.** An owner is an application space (ASID), the kernel, or a service. The kernel owner keeps its extents out of every application space, as the NPU pool does today.
 
 ### A buffer record
@@ -127,15 +127,17 @@ Free extents carry `dirty` as well. Adjacent free extents merge and OR their fla
 
 A buffer has one policy, and every CPU mapping of it, kernel and EL0, uses that policy's attribute. Mixed-attribute aliases of one physical page do not arise.
 
-The kernel's identity map of DRAM is write-back in 1 GiB blocks. An `NC` buffer needs the kernel's entry for its 2 MiB chunk to be non-cacheable. The ledger therefore keeps one policy byte per 2 MiB chunk (6,144 bytes for 12 GiB) and allocates `NC` buffers only from `NC` chunks. A free chunk converts when a request needs the other policy:
+The kernel's identity map of DRAM is write-back. An `NC` buffer needs the entry for its 2 MiB chunk to be non-cacheable in every table that maps the chunk, and that includes the EL1-only entries that each application root carries for memory the application does not own: kernel code that runs in an application's task uses that root. The ledger keeps one policy byte per 2 MiB chunk (6,144 bytes for 12 GiB) and allocates `NC` buffers only from `NC` chunks. A free chunk converts when a request needs the other policy (`umem_policy_convert`):
 
-1. The ledger marks the chunk converting under its lock; no allocation uses it.
-2. For the 1 GiB block that contains it, the kernel splits the block into a level-2 table of 2 MiB write-back blocks, once. The table page comes from the ledger, kernel-owned.
-3. The kernel maps the chunk write-back at a scratch virtual address, the last 2 MiB block of the unowned hole's address range (`0x7fe0_0000`, a virtual address with no physical memory behind it), and runs `DC IVAC` over it. The chunk is free, so its contents are dead and the invalidate discards nothing of value.
-4. The kernel writes the chunk's level-2 entry invalid, executes `DSB ISH`, `TLBI VAE1IS` and `DSB ISH`, writes the entry with the new attribute, and executes `DSB ISH` and `ISB`.
+1. The ledger takes the chunk out of the free lists under its lock; no allocation uses it.
+2. The conversion clears the valid bit of the chunk's entry in every table that maps it: the kernel's level-2 table, each application's private level-2 table and each split gigabyte's table. It executes `DSB ISH`, `TLBI VAAE1IS` (all ASIDs) and `DSB ISH`, and `ISB`. No entry maps the chunk now, in a table or in a TLB.
+3. It writes the same descriptors with the new attribute index, executes `DSB ISH` and `ISB`.
+4. It runs `DC IVAC` over the chunk through the new mapping. The chunk is free, so its contents are dead and the invalidate discards nothing of value, and it removes any line that an access before step 2 allocated under the old attribute.
 5. The chunk joins the free space of its new policy.
 
-Step 3 needs a valid translation, which is why it runs through the scratch mapping and not through the entry that step 4 invalidates. Application spaces map only chunks they own buffers in, so no application table has to change. The conversion runs at allocation time, never on a job path, and an `NC` chunk stays `NC` until it is free and a request needs `WB` memory and no `WB` chunk is free.
+Between steps 2 and 3 no mapping exists, so write-back and non-cacheable translations of one page never coexist. A host model with a TLB and speculative accesses between every instruction checks this, and a variant without the TLBI is flagged.
+
+A gigabyte of upper memory is one level-1 block until it is split into a level-2 table of 2 MiB blocks. The split is a boot step, taken before any application root copies the level-1 table; the policy layer refuses a split, and so a conversion in an unsplit gigabyte, once an application root exists. An `NC` request after admission therefore draws on chunks that boot converted, on slot 1, or on a gigabyte that boot split. Making application spaces share the split tables, so that any gigabyte converts at run time, belongs to step 3, where the device pools first need `NC` memory. The conversion runs at allocation time, never on a job path, and an `NC` chunk stays `NC` while it is free until a request needs `WB` memory and no `WB` chunk fits.
 
 Policy follows use. CPU-written, device-read data that the CPU rereads (weights, tensors, command buffers) is `WB` with a clean at hand-off. Descriptor rings, firmware queues, scanout buffers and any buffer that a device writes while the CPU polls are `NC`. A write-combining CPU mapping is the `NC` attribute on this core family; no further attribute is used.
 
@@ -206,7 +208,7 @@ One table replaces the scattered width constants. Each row has a device, the phy
 
 **Graphs and command streams run as compiled.** The services validate structure and addresses at admission, as the NPU loader's relocation and the GPU service do today, and they never rewrite a stream's access pattern. Out-of-range device accesses fault in the MMU; the NPU fault path (`ss_npu_last_fault`) and the GPU fault capture report the address.
 
-**EL0.** EL0 reaches only what its tables map. The shared boot table shrinks to the OS image, `0x4000_0000`..`0x4220_0000`: OS code, data, heap and the session record, which the SDK calls reach as plain function calls. Every other byte of DRAM is a ledger buffer, and a buffer is mapped at EL0 in the spaces of its owner and of the applications the owner grants. This replaces the cached-profile rule "DRAM above `0x4800_0000` is closed to EL0". The old rule exists because one table serves every EL0 task; per-application tables already map upper memory, so the rule becomes a property of the tables and needs no address threshold. A byte outside the application's mappings, including another application's buffer, a device buffer and the ledger's metadata, takes a permission or translation fault at EL0. The OS image stays EL0-readable and writable because the OS calls are plain functions; hardening that boundary needs an SDK call gate and is outside this design.
+**EL0.** EL0 reaches only what its tables map. The shared boot table shrinks to the OS image, `0x4000_0000`..`0x4220_0000`: OS code, data, heap and the session record, which the SDK calls reach as plain function calls. Every other byte of DRAM is a ledger buffer, and a buffer is mapped at EL0 in the spaces of its owner and of the applications the owner grants. This replaces the cached-profile rule "DRAM above `0x4800_0000` is closed to EL0". The old rule exists because one table serves every EL0 task; per-application tables already map upper memory, so the rule becomes a property of the tables and needs no address threshold. A byte outside the application's mappings, including another application's buffer, a device buffer and the ledger's metadata, takes a permission or translation fault at EL0. The OS image stays EL0-readable and writable by design: SDK calls are plain function calls, and no system-call gate is planned (see Limitations).
 
 **Checks stay at EL1.** The ledger, the table builders, cache maintenance and every device register write run at EL1. EL0 holds handles and mapped pointers only. Handles carry a generation, so a stale handle is refused after free.
 
@@ -233,13 +235,13 @@ The ledger generalizes the existing hand-off rule to every device. `ss_mem_sync`
 
 A hand-off that moves a `WB` buffer from device to CPU while a mapping in another EL0 space is writable is refused; one space writes at a time. The clean granule is the 64-byte line, and every extent starts on a 4 KiB boundary, so two buffers never share a line.
 
-EL0 reaches maintenance through `ss_mem_sync`, which enters EL1, because `DC IVAC` is EL1-only. Whether EL0 may issue `DC CVAC` and `DC CIVAC` directly (`SCTLR_EL1.UCI`) is a source check that decides if clean needs the call (open question 10).
+Hand-offs on the submit and completion paths of the NPU, GPU and DMA run in the service (an EL1 worker or the completion interrupt), driven by the ranges that the ring entry names, so the application enters the kernel for none of them. `ss_mem_sync` serves buffers that no ring carries; it enters EL1, because `DC IVAC` is EL1-only. Whether EL0 may issue `DC CVAC` and `DC CIVAC` directly (`SCTLR_EL1.UCI`) is a source check that decides whether a clean needs the call (open question 10).
 
 Large `WB` buffers cost a clean per line (a 1 GiB clean is predicted at no more than 80 M A76 cycles in [memory-architecture.md](memory-architecture.md); the board run that fixes the figure is queued under open work there). A producer that writes a buffer once and a device that reads it many times pays the clean once. A producer that streams a buffer every frame and reads none of it takes `NC` instead.
 
 ## The SDK interface
 
-The SDK offers a POSIX-like allocate, map and free. All calls are plain functions safe at EL0. Names follow `ss_*`; each returns zero or a positive value on success and a negative `errno` value otherwise: `-ENOMEM` (no extent), `-EINVAL`, `-EBUSY` (a device mapping or a pending operation), `-EPERM` (not the owner), `-ENODEV` (no such device).
+The SDK offers a POSIX-like allocate, map and free. All calls are plain functions safe at EL0. The `ss_mem_*` calls may enter EL1, because they build tables, zero memory and maintain caches. The hot paths enter no kernel code: submit and complete for the NPU, GPU and DMA go through rings in shared memory, and the kernel is entered only to sleep when a ring is empty or full and to wake the other side. Names follow `ss_*`; each returns zero or a positive value on success and a negative `errno` value otherwise: `-ENOMEM` (no extent), `-EINVAL`, `-EBUSY` (a device mapping or a pending operation), `-EPERM` (not the owner), `-ENODEV` (no such device).
 
 ```c
 typedef struct { uint32_t index, generation; } ss_mem;
@@ -273,9 +275,9 @@ int   ss_mem_info(ss_mem, struct ss_mem_info *);       /* size, policy, state, d
 
 A device flag is a constraint and a promise: the ledger applies the device's width, alignment and policy rules, and `ss_mem_alloc` refuses a combination that no device can honor (for example, `SS_MEM_DEV_NPU` with `SS_MEM_DEV_USB` and a size that does not fit below 4 GiB). Mapping into a device is not an application call. The services map a buffer when the application binds it:
 
-- **NPU queue.** `ss_npu_queue_bind(queue, handle, kind, index, ss_mem, offset, bytes)` binds a buffer to a tensor of a prepared graph. `ss_npu_queue_tensor()` returns a pointer into a buffer that the queue allocated from the ledger for that application, so unbound tensors still live in application-owned memory mapped at EL0. The first submit maps the buffer in the application's NPU space and transfers the buffer's device state; connected handles share one buffer. The `ss_npu_run` copy path and its 1 MiB tensor limit go away.
+- **NPU queue.** `ss_npu_queue_bind(queue, handle, kind, index, ss_mem, offset, bytes)` binds a buffer to a tensor of a prepared graph, at open and not on the submit path. `ss_npu_queue_tensor()` returns a pointer into a buffer that the queue allocated from the ledger for that application, so unbound tensors still live in application-owned memory mapped at EL0. The first submit maps the buffer in the application's NPU space and transfers the buffer's device state; connected handles share one buffer. The `ss_npu_run` copy path and its 1 MiB tensor limit go away.
 - **GPU service.** A client registers a buffer handle at open instead of a pointer. The worker maps the buffer into the client's GPU context and no longer copies it, because the buffer is mapped at EL0 in the client's space already.
-- **DMA.** `ss_dma_submit(src, dst, bytes)` takes two handles. The service builds DMA0 descriptors from their physical extents, or maps them into a bank's IOMMU space for a master that translates. The fixed 4 KiB catalogue of `ss_dma_open` goes away.
+- **DMA.** `ss_dma_submit(src, dst, bytes)` takes two handles and publishes a ring entry. The service builds DMA0 descriptors from their physical extents, or maps them into a bank's IOMMU space for a master that translates. The fixed 4 KiB catalogue of `ss_dma_open` goes away.
 
 The kernel interface that services call, and that `work/npu-nocaps-1103` takes its tables from, is the same ledger with owner, space and device arguments:
 
@@ -287,7 +289,7 @@ struct umem_request {
     uint32_t policy;            /* UMEM_WB or UMEM_NC */
     uint32_t device_mask;       /* widths, page-size alignment and policy derive from the mask */
     uint16_t owner;
-    uint16_t flags;             /* UMEM_KERNEL_ONLY, UMEM_REUSE, UMEM_AT (use base) */
+    uint16_t flags;             /* UMEM_AT (use base), UMEM_REUSE, UMEM_NO_CONVERT, UMEM_RAW (ready at once, contents kept) */
     uint64_t base;              /* with UMEM_AT: pinned address */
 };
 struct umem_buf { uint64_t base, bytes; uint32_t index, generation; };
@@ -328,10 +330,10 @@ A run that returns a different result changes the device-width table of "Each de
 
 **Host checks.**
 
-- `checks/umem-ledger.c`: randomized allocate, free, convert and grant sequences against a model, checking that extents never overlap, every extent meets its alignment, window and `phys_max`, free bytes plus allocated bytes equal usable bytes, and generations are never reused. It reports the instruction count of acquire and release at 100,000 live buffers, against a budget of 2,000 instructions.
-- `checks/umem-policy.c`: the conversion sequence against a model that flags any access through a mismatched alias and any maintenance through an unmapped address.
+- `checks/umem-ledger.c`: randomized allocate, free and convert sequences against a model, checking that extents never overlap, every extent meets its alignment, window and `phys_max`, free bytes plus allocated bytes equal usable bytes, and generations are never reused. It counts the steps of acquire and release with 40,000 live buffers against a budget: the 99th percentile of an unconstrained acquire at most 400 steps, its worst at most 800, a release at most 400.
+- `checks/umem-policy.c`: the conversion sequence against a translation model with a TLB and speculative accesses between instructions, which flags any moment at which two attributes reach one chunk and any maintenance through an unmapped address.
 - The NPU table walker (`checks/npu-mmu.c`) runs over the tables the NPU service builds from ledger mappings and proves that the reachable physical pages equal the mapping records of the space, including a mapping above 4 GiB, a 16 MiB page and a mixed-size 16 MiB range refusal.
-- `checks/region-el0.c` on QEMU: an application space maps a ledger buffer at `0x4400_0000` and one in upper memory; the other space takes a permission fault on both and the OS image stays reachable.
+- `checks/region-el0.c` on QEMU: an application space maps a ledger buffer in upper memory and another in slot 1; the other space and the ledger's own metadata page take a permission fault, the ledger grows on the real tables, and a converted chunk is non-cacheable in every root. The old window `0x4400_0000`..`0x4700_0000` joins this check when step 4 moves it into the ledger.
 - `checks/os-npu-pool-bind.py` and `checks/npu-pool-size.py` are replaced by a check that an image links no pool constant, and `checks/memory-layout.py` drops the pool rows.
 - The QEMU OS boot (`checks/qemu-os-boot.py`) runs with a 1 GiB allocation at admission.
 
@@ -341,7 +343,7 @@ A run that returns a different result changes the device-width table of "Each de
 
 ### Step 2: the GPU reservations
 
-**Scope.** The GPU service takes firmware objects, compute payloads, graphics buffers and every page table from the ledger. `A733_GPU_RESERVED_*`, `A733_GPU_COMPUTE_PAYLOAD_PAGES`, `PVR_COMPUTE_SERVICE_TABLE_PAGES`, `A733_GPU_GRAPHICS_*` and the `private_image()` range checks are replaced by sizes computed from the firmware image and the request (rows G1 to G6). EL0 clients' buffers are mapped at EL0 and in the GPU context, and the worker's per-buffer `memcpy` and the 64-page client buffer limit are gone.
+**Scope.** The GPU service takes firmware objects, compute payloads, graphics buffers and every page table from the ledger. `A733_GPU_RESERVED_*`, `A733_GPU_COMPUTE_PAYLOAD_PAGES`, `PVR_COMPUTE_SERVICE_TABLE_PAGES`, `A733_GPU_GRAPHICS_*` and the `private_image()` range checks are replaced by sizes computed from the firmware image and the request (rows G1 to G6). EL0 clients' buffers are mapped at EL0 and in the GPU context, and the worker's per-buffer `memcpy` and the 64-page client buffer limit are gone. This step also corrects [memory-architecture.md](memory-architecture.md) and [gpu-runtime.md](gpu-runtime.md), which name 2 MiB GPU pages: the GPU's largest data page on this part is 256 KiB, and the 2 MiB alignment of large `dma32` extents serves the CPU block mapping.
 
 **Host checks.**
 
@@ -434,5 +436,5 @@ Each needs a board measurement unless it says otherwise.
 
 - A buffer is one physically contiguous extent. Fragmentation after long runs can refuse a large request while memory is free. A buffer of several extents is a later extension; it needs EL0 addresses that differ from physical addresses, which the identity mapping excludes today.
 - Masters of one IOMMU bank share an address space, so containment between those masters is by mapping lifetime.
-- The OS image stays EL0-readable and writable until an SDK call gate exists.
+- The OS image stays EL0-readable and writable. SDK calls are plain function calls and no system-call gate is planned: per-application page tables and the device MMUs isolate buffers at no per-access cost, and application performance takes priority over containing the OS image.
 - The design adds no quota. An application can exhaust memory; a manifest-declared reservation that admission guarantees is the extension if a deployment needs it.

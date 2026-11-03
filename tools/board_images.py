@@ -562,6 +562,11 @@ def prepare(args, info, live, out, *, dma_binding=None):
     plan = dict(meta, epoch=epoch, generation=generation, uploads=uploads, launch=['exe', '0x52000'],
                 host_admission=host_admission, watchdog=info['watchdog'], format='generic', geometry=info['report_geometry'],
                 return_host=returning, input_regions=meta['uploads'], image_ram=returning.IMAGE_RAM)
+    if getattr(args, 'wifi', None):
+        # The credential is a separate input, uploaded by the runner from memory (Live.deliver_credential); it is not
+        # a file of the bundle. Only its extent is known here, so the preservation list can cover it.
+        wifi = load('runner_wifi_credential', ROOT/'tools/wifi-credential.py')
+        plan['credential'] = {'address': wifi.RECORD_ADDRESS, 'bytes': wifi.RECORD_BYTES}
     plan['preserve_regions'] = preservation_regions(plan)
     validate_uploads(plan)
     return plan
@@ -581,6 +586,8 @@ def preservation_regions(plan):
                 for name in ('monitor', 'cached_writable')]
     extents += [(r['address'], r['bytes']) for r in geo['application_regions']]
     extents += [(r['address'], r['bytes']) for r in plan['input_regions']]
+    if plan.get('credential'):
+        extents.append((plan['credential']['address'], plan['credential']['bytes']))
     if 'npu_pool' in geo:
         extents.append((geo['npu_pool']['address'], geo['npu_pool']['bytes']))
     merged = []

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Run the large application region on QEMU: real tables, ASIDs, EL0 routines and fault records.
 
+The fixture also runs the unified memory ledger on the same tables: run-time growth, prepare and hand-off with the real
+maintenance, the policy conversion of a chunk through every root, and the isolation of two applications' ledger buffers
+and of the ledger's own pages.
+
 The fixture boots at EL1 with the probe platform's kernel tables and the upper map, takes a 1 GiB
 region from the ledger, builds three address spaces and runs the EL0 routines of the board image
 (apps/sd-read-probe/region.c and el0.S). It checks which EL0 accesses fault and with what exception
@@ -48,7 +52,11 @@ def main():
                             (ROOT / 'checks/region-el0.S', []),
                             (ROOT / 'apps/sd-read-probe/region.c', ['-mgeneral-regs-only', '-DREGION_PROGRESS()=((void)0)']),
                             (ROOT / 'apps/sd-read-probe/el0.S', []),
-                            (ROOT / 'kernel/appmem/app_region.c', ['-mgeneral-regs-only'])):
+                            (ROOT / 'kernel/appmem/app_region.c', ['-mgeneral-regs-only']),
+                            (ROOT / 'kernel/umem/umem.c', ['-mgeneral-regs-only']),
+                            (ROOT / 'kernel/umem/umem_policy.c', ['-mgeneral-regs-only']),
+                            (ROOT / 'arch/aarch64/umem_cpu.c', ['-mgeneral-regs-only']),
+                            (ROOT / 'arch/aarch64/device_memory.c', ['-mgeneral-regs-only'])):
         obj = out / (source.name + '.o')
         run(flags + options + [source, '-o', obj], out / (source.name + '.log'))
         objects.append(obj)

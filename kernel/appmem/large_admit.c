@@ -46,8 +46,20 @@ int ss_large_records_valid(const struct ss_large_region *r, unsigned count)
     return 1;
 }
 
+static int ledger_acquire(void *ctx, uint16_t owner, uint64_t bytes, unsigned access, uint64_t *base, uint64_t *rounded)
+{ return app_region_acquire(ctx, owner, bytes, access, base, rounded); }
+static int ledger_release(void *ctx, uint16_t owner, uint64_t base) { return app_region_release(ctx, owner, base); }
+
 int large_admit(struct app_region_ledger *l, uint16_t owner, const struct ss_large_region *r, unsigned count,
                 struct large_slot *out, unsigned out_capacity)
+{
+    if (!l) return APP_REGION_INVALID;
+    const struct large_allocator a = {l, ledger_acquire, ledger_release};
+    return large_admit_with(&a, owner, r, count, out, out_capacity);
+}
+
+int large_admit_with(const struct large_allocator *l, uint16_t owner, const struct ss_large_region *r, unsigned count,
+                     struct large_slot *out, unsigned out_capacity)
 {
     if (out_capacity) memset(out, 0, sizeof(struct large_slot) * out_capacity);
     if (!l || !owner || out_capacity < count || (count && !out) || !ss_large_records_valid(r, count)) return APP_REGION_INVALID;
@@ -55,7 +67,7 @@ int large_admit(struct app_region_ledger *l, uint16_t owner, const struct ss_lar
     for (unsigned i = 0; i < count && status == APP_REGION_OK; ++i) {
         struct large_slot *s = &out[i];
         unsigned access = APP_REGION_READ | (r[i].flags & SS_LARGE_WRITE ? APP_REGION_WRITE : 0);
-        status = app_region_acquire(l, owner, r[i].bytes, access, &s->base, &s->bytes);
+        status = l->acquire(l->ctx, owner, r[i].bytes, access, &s->base, &s->bytes);
         if (status == APP_REGION_OK) {
             s->index = r[i].index; s->flags = r[i].flags;
             s->state = r[i].flags & SS_LARGE_HEAP ? SS_LARGE_READY : SS_LARGE_PENDING;    /* nothing loads the heap */
@@ -63,7 +75,7 @@ int large_admit(struct app_region_ledger *l, uint16_t owner, const struct ss_lar
     }
     if (status != APP_REGION_OK) {                               /* all or nothing */
         for (unsigned i = 0; i < count; ++i)
-            if (out[i].bytes) app_region_release(l, owner, out[i].base);
+            if (out[i].bytes) l->release(l->ctx, owner, out[i].base);
         memset(out, 0, sizeof(struct large_slot) * out_capacity);
     }
     return status;
