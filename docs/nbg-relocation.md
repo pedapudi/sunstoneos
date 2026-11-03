@@ -109,14 +109,12 @@ The initial isolated comparison remains under
 Existing kernel, service, DMA, and application evidence was reused; no board
 request or kernel rebuild occurred.
 
-The focused checks are [nbg-relocation.c](../checks/nbg-relocation.c) and
-[nbg-relocation-reference.py](../checks/nbg-relocation-reference.py). The Python
-check takes the pinned SDK library, pinned model, and a host shared library
-built from the native encoder. Its host dependencies are pinned in
-[host-requirements.txt](../checks/host-requirements.txt).
-The isolated AArch64 CMake target is `nbg-relocation`.
+The focused check is [nbg-relocation.c](../checks/nbg-relocation.c). No host
+check compares the encoder with the pinned SDK library. The isolated AArch64 CMake target is `nbg-relocation`.
 
 The native assembler resolves the observed profile's sources and validates
 encoded ring ranges. Complete access extents and command semantics still require
 validation before publication. Internal-SRAM routing, output
 padding, dynamic command registration, and numerical inference remain required.
+
+Results of host checks that no longer exist are kept in the evidence record [nbg-relocation.jsonl](evidence/nbg-relocation.jsonl).

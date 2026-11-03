@@ -1,9 +1,9 @@
 # Native core-count admission for A733 computation
 
 The A733 GPU is documented as **BXM-4-64 MC1**, a single-core GPU. The native
-backend now observes its core count and capabilities after power admission.
+backend observes its core count and capabilities after power admission.
 The service requires that observation before firmware startup and again before
-COMPUTE. Native instruction-model and FreeRTOS composition checks pass; physical
+COMPUTE. No host check remains; physical
 observation and GPU execution remain unqualified.
 
 The primary A733 User Manual V1.00 names MC1 in its overview and block diagram.
@@ -84,25 +84,19 @@ not silently reduce support for hardware that a future observation establishes.
 
 ## Focused evidence and integration requirements
 
-The native instruction-model check validates pinned source offsets and widths,
-MC1 capabilities, malformed and multicore counts, token/epoch replacement,
-Device-page refusal, and deadlines expiring during either new read. The FreeRTOS
-check covers failed admission after power, renewed refusal before client-ring
-writes, and successful fresh admission through submission. Existing program-byte,
-context-byte, completion, reset, and power-controller evidence is reused.
-
-Exact executed sources, compiler inputs, ELF files, source manifests, and results
-are retained in `~/.cache/sunstoneos/evidence/gpu-compute-mode-20261016/`.
-The native emulator runner is `checks/pvr-compute-mode.py`; its required source
-cache is `~/.cache/sunstoneos/sources/gpu-mode/`. The service runner selects the
-new behavior with `checks/pvr-compute-service.py --cases 4 5 6` and the existing
-required build arguments. Mechanical updates keep the older backend fixtures
-compatible with the two additional observations; their old suite was not repeated.
+No host check validates the pinned source offsets and widths, MC1
+capabilities, malformed and multicore counts, token and epoch replacement,
+Device-page refusal, deadlines expiring during either new read, failed
+admission after power, renewed refusal before client-ring writes, or
+successful fresh admission through submission. The service selects the
+behavior at build time.
 
 Link `drivers/gpu/pvr_compute_mode.c` wherever the native GPU backend is linked.
-The appended service callback and backend observation storage require recompiling
-callers against the current headers. The compute service remains optional.
+The service callback and backend observation storage are appended to the existing
+layouts, so callers recompile against the current headers. The compute service remains optional.
 Physical qualification still requires independent recovery, a complete reserved
 memory/platform image, correct rail/clock ownership, and an independent proven
 block-and-drain implementation. Power OFF does not establish memory isolation.
 Only the board-test coordinator may perform that qualification.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-compute-mode.jsonl).

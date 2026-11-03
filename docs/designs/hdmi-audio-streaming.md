@@ -203,10 +203,8 @@ reused as is.
 
 The checks cover the stream fixture (I2S3 configuration, ring wraps, short END,
 starvation, late IRQ, bounded delayed drain, timeout retention, FIFO
-accounting, one I2S0 compatibility case), the linked streaming image with its
-actual DMA, output and USB tasks over more than 48,000 frames, checkpointed
-failure cases (corrupt period, partial upload, cancellation, unknown drain, late
-response), boot IRQ routing and inherited-state refusal, native USB full and
+accounting, one I2S0 compatibility case). They also cover the linked streaming image with its
+actual DMA, output and USB tasks over more than 48,000 frames, and checkpointed failure cases (corrupt period, partial upload, cancellation, unknown drain, late response). They further cover boot IRQ routing and inherited-state refusal, native USB full and
 short packet completion, and host preparation, identity, sequence and credit
 refusal with the frozen image and manifest.
 

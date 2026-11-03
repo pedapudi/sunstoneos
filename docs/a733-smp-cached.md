@@ -145,16 +145,9 @@ The armed watchdog is the only bound on a hang in a resident image. A
 resident image must therefore link a supervising task that renews the watchdog
 only while every service reports progress. A stalled service then lets the
 watchdog reset the board into a cold boot. The resident contract is
-implemented and host-checked only. Its physical use needs the watchdog-expiry
-recovery trial, remote-writer exclusion and a stage-2 loader that produces it.
-
-`checks/a733-resident-contract.c` compiles the admission code both ways and
-checks the nominal contract plus every refusal listed above:
-
-```sh
-clang -std=c11 -fsanitize=address,undefined -fno-sanitize-recover=all \
-  -DSUNSTONE_A733_RESIDENT checks/a733-resident-contract.c -o resident && ./resident
-```
+implemented, with no host check and no board run. Its physical use needs the
+watchdog-expiry recovery trial, remote-writer exclusion and a stage-2 loader
+that produces it.
 
 ## A fixed interrupt table serves images with several device owners
 

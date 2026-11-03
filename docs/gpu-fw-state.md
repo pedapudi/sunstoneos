@@ -1,7 +1,7 @@
 # GPU firmware initialization records and resource mappings
 
-Native preparation of firmware initialization records is **implemented and
-host-tested**. It connects the command queues to system, OS, power, recovery,
+Native preparation of firmware initialization records is **implemented**;
+no host check remains. It connects the command queues to system, OS, power, recovery,
 trace, and timing resources. The prepared records have not been used by a
 physical GPU. Firmware startup, platform integration, and qualification remain
 outstanding.
@@ -78,29 +78,19 @@ It is valid only while the device cannot access these records. A failed call
 preserves every resource and the mapping output. Live reset and restoration
 need a separate protocol that preserves firmware diagnostics until collected.
 
-## Integration and reference checks cover the complete prepared state
+## No host check covers the complete prepared state
 
-One [sanitizer check](../checks/pvr-fw-state.c) combines state preparation,
-queue formatting, firmware staging, and MIPS page-table construction. It uses
-discontiguous physical pages above 4 GiB and walks all resource mappings back
-to their supplied physical pages. The combined table contains 75 mapped pages:
-25 code, five data, and 45 resource pages.
+No host check combines state preparation, queue formatting, firmware staging
+and MIPS page-table construction over discontiguous physical pages above 4 GiB,
+walks all resource mappings back to their physical pages, or compares the 19
+complete allocations byte for byte with the original initialization functions.
+The combined table holds 75 mapped pages: 25 code, five data and 45 resource
+pages. By design record preparation leaves queue contents unchanged, and 36
+atomic refusals cover invalid profiles, missing backing, sizes and overlaps.
 
-The check also covers allocation guards, unaligned offline CPU buffers,
-unchanged queue contents during record preparation, and 36 atomic refusals
-for invalid profiles, missing backing, sizes, and overlaps. Its clock value
-is synthetic and provides no physical frequency or performance evidence.
+The native component compiles for AArch64 with strict alignment and
+freestanding options. It contains 2,400 bytes of code/read-only data, no
+writable static data, and a 96-byte preparation frame. No device access or
+performance measurement has occurred.
 
-The [reference comparison](../checks/pvr-fw-state-reference.py) compiles the
-original initialization functions with their complete firmware interface
-headers and layout assertions. Host substitutes supply object addresses,
-physical pages, feature values, and the clock. All nineteen complete allocations
-match byte-for-byte, including padding, host trace pointers, and preserved queue
-padding. Source hashes are verified against the pinned download manifest.
-
-Clang 21 compiled the native component for AArch64 with strict alignment and
-freestanding options. It contains 2,400 bytes of code/read-only data, no writable
-static data, and a 96-byte preparation frame. Commands, snapshots, input copies,
-hashes, and objects are under `~/.cache/sunstoneos/evidence/gpu-fw-state-20261016/`.
-Existing standalone firmware, queue, OS, mimus, and NPU evidence was reused.
-No device access or performance measurement occurred.
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-fw-state.jsonl).

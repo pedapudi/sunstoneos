@@ -49,7 +49,7 @@ for the query projection and the second feed-forward linear (graph
 verification status −3), and its NN configuration lists no 32-bit data type.
 The probe compiles the query projection with UINT8, INT8 and INT16 outputs,
 diffs the 192-byte NN records and the neural-transpose records to locate the
-output data-type, post-multiplier and post-shift fields, writes each unused
+output data-type, post-multiplier and post-shift fields. It writes each unused
 data-type code into a copy of the INT16 graph with repaired checksums, and
 runs the copy in the simulator. A code is accepted only if every sum of the
 three studied layers comes back exact. Patched graphs are simulator-only
@@ -86,8 +86,8 @@ eight chunks and are refused.
 
 **3. INT16 variant.** The INT16 graph is a separate recorded variant. Its
 accuracy model builds on mimus `train/static_scales.py`, which simulates static
-per-tensor input scales with calibration, saturation and the same scoring, with
-two additions: the bias rounded to an int32 code in units of the input scale
+per-tensor input scales with calibration, saturation and the same scoring. It
+makes two additions: the bias rounded to an int32 code in units of the input scale
 times `ws[n]`, and one rounding of each output to the INT16 step at the NPU
 output scale, taken from the site's calibrated output range. Scoring uses
 `train/compare_wer.py` with 10,000 bootstrap resamples. A set passes when the
@@ -100,12 +100,11 @@ for milestones its owner calls.
 
 One job runs one layer for R = 8 activation rows, the live stream's chunk of
 eight encoder frames. The runtime path is [npu-session.md](../npu-session.md):
-the client sends SUBMIT with six spans totalling 704·R bytes; the service
-worker verifies the model (SHA-256 over the NN descriptor and coefficient
-buffers, a command-stream digest and a scan of the 512 KiB fetch allocation),
-translates every page of the MMU arena and the session buffers, and cleans or
-invalidates each whole buffer; the NPU writes the partials; the client's WAIT
-returns DONE and `npu_session_output` copies 8,448·R bytes; REAP returns the
+the client sends SUBMIT with six spans totalling 704·R bytes. The service worker verifies the model (SHA-256 over the NN descriptor and coefficient
+buffers, a command-stream digest and a scan of the 512 KiB fetch allocation) and
+translates every page of the MMU arena and the session buffers. It cleans or
+invalidates each whole buffer. The NPU writes the partials. The client's WAIT
+returns DONE and `npu_session_output` copies 8,448·R bytes. REAP returns the
 buffers. A job takes three round trips. The exact path replaces the packed NEON
 kernel on an A76 core, and passes only when both hold:
 

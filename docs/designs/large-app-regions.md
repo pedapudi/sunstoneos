@@ -248,7 +248,7 @@ The pieces below are implemented in the OS image and checked on the host and in 
 - **Cost of the hook.** Compiled, the hook is 6 instructions while no space is installed, about 20 when a space is
   installed and the table does not change, and one more (the `MSR`) when it changes. QEMU's instruction time
   (`-icount shift=0`) for 20,000 notification round trips between two tasks of one core is 289.16 ticks per
-  round trip in one space and 289.34 with a TTBR0 write at each switch: 0.18 ticks (7.5 ns) per round trip, 3.8 ns per
+  round trip in one space and 289.34 with a TTBR0 write at each switch. The difference is 0.18 ticks (7.5 ns) per round trip, 3.8 ns per
   switch, four instructions' time. This is not hardware time. The OS test application runs the same benchmark, so
   the figure on the board is one run away.
 - **SDK.** `ss_large_wait`, `ss_large_base`, `ss_large_status` and `ss_large_attach`. There is no call to take a
@@ -257,18 +257,17 @@ The pieces below are implemented in the OS image and checked on the host and in 
 - **ASIDs.** An ASID comes from `app_asid_alloc()` (`kernel/appmem/app_region.c`), which gives each number out once and
   never takes one back. The bound comes from the hardware: `app_asid_pool_init()` reads `ID_AA64MMFR0_EL1.ASIDBits`
   (bits 7:4; 0 is 8 bits and 2 is 16 bits) and `TCR_EL1.AS` (bit 36). The pool hands out 1 to 65535 only when the
-  hardware has 16 bits and AS is set, and 1 to 255 otherwise, because with AS clear the hardware ignores the upper
+  hardware has 16 bits and AS is set, and 1 to 255 otherwise. The reason is that with AS clear the hardware ignores the upper
   byte of the TTBR0 ASID field and two spaces would share a number. The Cortex-A55 and A76 support 16 bits, but the
   boot code installs TCR_EL1 with AS clear (`A733_CPU_COHERENCE_TCR_*`, pinned by the boot-chain checks), so the OS
-  hands out 1 to 255; setting AS there is a change to those boot constants, and the pool then widens by itself.
+  hands out 1 to 255. Setting AS there is a change to those boot constants, and the pool then widens by itself.
   The OS has one application and nothing tears a space down, so there is no reuse path; the pool refuses
   (returns 0) when it is exhausted. A teardown that wanted to reuse an ASID would first clear the space's tables and
   execute `DSB ISH; TLBI ASIDE1IS, (asid << 48); DSB ISH`; without that the old space's translations would stay
   live in the TLBs under the number. `checks/app-region.py` covers both widths, the cases where the register and
   TCR disagree, and exhaustion.
 - **Kernel mappings.** Every per-application root is a copy of the boot root: slot 0 (MMIO) is copied and slot 1
-  points to the same level-2 table, so the code, data, stacks and devices that EL1 runs on between the `MSR` and the
-  `ERET` are the same global (nG = 0) entries in every table, while the upper-memory slots carry nG = 1 and an ASID
+  points to the same level-2 table. The code, data, stacks and devices that EL1 runs on between the `MSR` and the `ERET` are therefore the same global (nG = 0) entries in every table. The upper-memory slots carry nG = 1 and an ASID
   and are touched by EL1 only in the loader and drivers, never in the scheduler.
 - **Reading the boot root.** Admission copies the boot root from the platform (`os_kernel_l1_head`, `include/os_space.h`)
   and never loads from the table's pages. The A733 tables sit in the monitor's 2 MiB block at 0x42000000-0x421fffff,
@@ -280,10 +279,10 @@ The pieces below are implemented in the OS image and checked on the host and in 
   that admits a region fails with the same ESR if admission loads from the table.
 - **Loader** (`apps/os/large_load.c`): one EL1 task reads each region's FAT32 file (or raw extent) in 128 KiB
   requests through two buffers, copies into the region through the kernel table, hashes, and sets READY only when
-  the digest matches; the application's waiters are woken by task notification. A missing file, a failing device
+  the digest matches. The application's waiters are woken by task notification. A missing file, a failing device
   and a digest mismatch set FAILED with the loader's status, and the application returns normally.
 - **Device.** The board supplies `os_large_device()`, which runs in the loader task. On the A733 it is
-  `apps/os/large_sd.c`: the OS's shared providers (`providers.shared`: counter, locks, clock leases, pins, rails and
+  `apps/os/large_sd.c`. That file holds the OS's shared providers (`providers.shared`: counter, locks, clock leases, pins, rails and
   the PMIC that the board-pmic task serves), the read-only SD core (`SUNXI_MMC_READ_ONLY`, so no write or erase command
   is reachable; `checks/sd-read-only.py --elf` passes on the image) and the descriptor DMA of `a733_mmc_platform`
   with its 33 descriptors in a lease of the uncached pool. `os_large_sd_pins()` authorizes PF0 to PF6 at boot when the
@@ -302,7 +301,21 @@ The pieces below are implemented in the OS image and checked on the host and in 
 
 ## Host checks
 
-`checks/app-region.py` compiles the ledger and the table builder with the sanitizers and walks the tables with a separate model of AArch64 stage-1 translation (4 KiB granule, 39-bit input, levels 1 and 2, access flag, AP and execute-never bits; the model aborts on a descriptor bit it does not model). It covers: an application reaches every sampled byte of its region at EL0 and a second application and the kernel's EL0 view fault on the same bytes; bytes below and above each region fault in every space; a read-only region faults on an EL0 write while the kernel's table gives EL1 write access; block counts and page counts (three 1 GiB blocks for 3 GiB, one 1 GiB block plus 256 2 MiB blocks for 1.5 GiB, 51 2 MiB blocks for 102 MiB, with 1, 2 and 2 pages); kernel mappings identical in every space; refusals (too large, zero, write-only, overflow, full ledger) that leave the ledger unchanged, exact-fit success and release restoring memory; an empty usable list; an undersized table arena leaving the space unbuilt; and a TLB model with global and ASID-tagged entries that shows no conflict and no stale permission with non-global upper entries and both failures with global kernel entries. A mutation that gives read-only regions write permission fails the check.
+`checks/app-region.py` compiles the ledger and the table builder with the sanitizers and walks the tables with a separate model of AArch64 stage-1 translation (4 KiB granule, 39-bit input, levels 1 and 2, access flag, AP and execute-never bits; the model aborts on a descriptor bit it does not model).
+
+It covers:
+
+- an application reaches every sampled byte of its region at EL0 and a second application and the kernel's EL0 view fault on the same bytes;
+- bytes below and above each region fault in every space;
+- a read-only region faults on an EL0 write while the kernel's table gives EL1 write access;
+- block counts and page counts (three 1 GiB blocks for 3 GiB, one 1 GiB block plus 256 2 MiB blocks for 1.5 GiB, 51 2 MiB blocks for 102 MiB, with 1, 2 and 2 pages);
+- kernel mappings identical in every space;
+- refusals (too large, zero, write-only, overflow, full ledger) that leave the ledger unchanged, exact-fit success and release restoring memory;
+- an empty usable list;
+- an undersized table arena leaving the space unbuilt;
+- a TLB model with global and ASID-tagged entries that shows no conflict and no stale permission with non-global upper entries and both failures with global kernel entries.
+
+A mutation that gives read-only regions write permission fails the check.
 
 ## Qualified figures
 
@@ -319,7 +332,7 @@ Each row points to an evidence record by id; the records hold the conditions and
 | 6 GiB region, one A76 core | read 12.66, write 12.16, copy 5.84 GB/s over the whole region; 805,306,368 words verified with 0 mismatches | `1793637177478128324-7b885910` (memory-dma) |
 | 6 GiB region isolation | level 2 translation fault below the region, level 1 permission fault above it and from a task outside any application space | `1793638861895715015-a7176fec`, `1793638933466934204-4dc4152d`, `1793638990638144080-9a9aad2d` (memory-dma) |
 
-The loader's load time is bounded by the card: 23.25 s of the 24.386 s is reading, within 12 percent of the 25 MB/s raw ceiling of the 4-bit 50 MHz high-speed bus mode (`SUNXI_MMC_SD_HIGH_SPEED4`, `apps/os/large_sd.c`). The loader reads the 24 MHz counter for its times, issues the next request before it hashes the current piece (`sd_submit` steps the controller until the command is issued), and hashes with the SHA-256 instructions (`drivers/storage/storage_digest_ce.S`) when `ID_AA64ISAR0_EL1` reports SHA2, with the C path otherwise. Copying by DMA straight into the region would save at most 0.15 s and hashing in parallel at most about 1 s; a faster bus mode (SDR104) is the storage task that would help. A region declared without a `sha256` is not hashed.
+The loader's load time is bounded by the card: 23.25 s of the 24.386 s is reading, within 12 percent of the 25 MB/s raw ceiling of the 4-bit 50 MHz high-speed bus mode (`SUNXI_MMC_SD_HIGH_SPEED4`, `apps/os/large_sd.c`). The loader reads the 24 MHz counter for its times, issues the next request before it hashes the current piece (`sd_submit` steps the controller until the command is issued), it hashes with the SHA-256 instructions (`drivers/storage/storage_digest_ce.S`) when `ID_AA64ISAR0_EL1` reports SHA2, with the C path otherwise. Copying by DMA straight into the region would save at most 0.15 s and hashing in parallel at most about 1 s; a faster bus mode (SDR104) is the storage task that would help. A region declared without a `sha256` is not hashed.
 
 ## Open work
 

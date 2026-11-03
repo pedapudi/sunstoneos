@@ -137,15 +137,14 @@ all later requests. Per-request deadlines bound execution only.
 
 ## Evidence and remaining coverage
 
-The initial command checks are `checks/a733-ce.c` and `checks/a733-ce.py`. The model
-uses deterministic DMA fixtures to check descriptor decoding, complete address
-writes, error rejection, clock/health refusal, cache handoff and retained faults.
-It also covers a final deadline failure while registry retention is busy.
-For the initial one-request implementation, the sanitizer model, pinned-source
-checks and native AArch64 compilation passed. Its two native objects contained 8,336 bytes of code and no static data or BSS.
-Its largest direct compiler-reported stack frame was 336 bytes; this is not a
-whole-call-chain stack bound. These fixtures provide no evidence about physical
-randomness. Exact inputs and artifacts are preserved in
+No host check covers the command model (descriptor decoding, complete address
+writes, error rejection, clock/health refusal, cache handoff, retained faults
+and a final deadline failure while registry retention is busy). The one-request
+implementation's two native objects hold 8,336 bytes of code and no static data
+or BSS; its largest direct compiler-reported stack frame is 336 bytes, which is
+not a whole-call-chain bound. The recorded fixtures provide no evidence about
+physical randomness; see [crypto-engine.jsonl](evidence/crypto-engine.jsonl).
+Exact inputs and artifacts are preserved in
 `~/.cache/sunstoneos/evidence/ce-20261016/batch1/`.
 
 Primary references are A733 manual sections 19.1.4.14, 19.1.7, 19.1.8.34–37

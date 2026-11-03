@@ -215,22 +215,18 @@ and `memset`. Its SHA-256 is
 The six-slot plan occupies 88 bytes and the general plan 264 bytes. The
 isolated build target is `nbg-assembly`.
 
-The general interface has its own comparison with the pinned SDK loader.
-[nbg-layout-reference.py](../checks/nbg-layout-reference.py) runs the loader
-in an instruction emulator with every input and output bound, stops at the
-intercepted submission, and compares every native allocation, minimum size,
-relocation and guard page with the SDK buffers after the address and
-completion-event adjustments. It passes for the two-input, two-output UINT8
+No host check compares the general interface with the pinned SDK loader. An earlier
+comparison ran the loader in an instruction emulator with every input and output
+bound, stopped at the intercepted submission, and compared every native allocation,
+minimum size, relocation and guard page with the SDK buffers after the address and
+completion-event adjustments. It passed for the two-input, two-output UINT8
 graph, its INT8 per-channel variant, the 8×8 convolution and the compiled
 mimus query projection, whose three operations are a transpose step, a
-neural-network operation and a second transpose step with INT16 tensors.
-The check also refuses a buffer count that differs from the plan. Results are
-under `~/.cache/sunstoneos/build/audit-npu-runtime/evidence/layout-*/`; the
-existing 120-case and directory checks and both saved SDK comparisons were
-rerun after the change and pass.
+neural-network operation and a second transpose step with INT16 tensors. It also
+refused a buffer count that differs from the plan. Results are
+under `~/.cache/sunstoneos/build/audit-npu-runtime/evidence/layout-*/`.
 
-The focused checks are [nbg-assembly.c](../checks/nbg-assembly.c),
-[nbg-directory-assembly.c](../checks/nbg-directory-assembly.c), and
+The focused checks are [nbg-assembly.c](../checks/nbg-assembly.c) and
 [nbg-assembly.py](../checks/nbg-assembly.py). Build the host shared library from
 `nbg_assembly.c`, `nbg_model.c`, `nbg_relocation.c`, and `nbg_checksum.c` with
 `-shared -fPIC -Iinclude`.
@@ -265,3 +261,5 @@ The assembler returns no controller token and is not registered with the
 FreeRTOS execution service. Complete command admission, controlled registration,
 platform resources, numerical output, physical completion, and recovery remain
 required. No physical device request occurred during this work.
+
+Results of host checks that no longer exist are kept in the evidence record [nbg-assembly.jsonl](evidence/nbg-assembly.jsonl).

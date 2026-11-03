@@ -3,8 +3,7 @@
 The GPU platform binding connects real resource admission to the bounded GPU
 power controller. Its native backend performs ordered CCU and PCK accesses.
 Static FreeRTOS mutexes serialize register changes and PMIC I2C transactions
-across participating drivers. These components have instruction-model and
-FreeRTOS emulator evidence. Physical GPU power transitions remain unqualified.
+across participating drivers. These components have no host check. Physical GPU power transitions remain unqualified.
 
 The binding supports the verified inherited baseline described in
 [GPU resource ownership](gpu-resources.md): a 400 MHz parent clock, enabled
@@ -122,27 +121,18 @@ Every initialization must succeed before clients use the objects. None of these
 initializers reads a peripheral. The native clock callback must not support
 device work until native initialization validates the counter frequency.
 
-## Focused evidence covers the new bindings
+## No host check covers the bindings
 
-The native instruction-model check executes the resource manager, resource
-adapter, power controller, platform wrapper, and native power operations as
-AArch64 code. It models I2C transfers, immediate domain acknowledgements, and
-the clock write-key readback. It passes resource contention, on/off/reopen,
-restricted-operation refusal, release contention, and retained transport and
-controller failures. A separate focused entry verifies rejection when the final
-wrapper clock read moves backward relative to the controller's latest reading.
-
-One two-core FreeRTOS session passes a waiter blocked behind another task,
-deadline refusal, recursive/nested and critical-section refusal, and retained
-I2C ownership. Register locking remains usable after I2C retention. These checks
-reuse the existing native rail-adapter and source-reference evidence. They do
-not execute the physical I2C controller or qualify physical GPU acknowledgements.
-
-Evidence, commands, source identities, and artifacts are under
-`~/.cache/sunstoneos/evidence/gpu-platform-20261016/`. The new checks are
-`checks/a733-gpu-platform-native.c`, `checks/a733-gpu-platform-emulate.py`, and
-`checks/a733-platform-locks.c`. The emulator fixture supplies the inherited
-baseline; it is not a board-ready executable.
+No host check executes the resource manager, resource adapter, power
+controller, platform wrapper and native power operations as AArch64 code with
+modeled I2C transfers, immediate domain acknowledgements and the clock
+write-key readback, for resource contention, on/off/reopen, restricted-operation
+refusal, release contention, retained transport and controller failures, or
+rejection when the final wrapper clock read moves backward relative to the
+controller's latest reading. Nor does one cover a waiter blocked behind another
+task, deadline refusal, recursive, nested and critical-section refusal, or
+retained I2C ownership with register locking usable afterward. The physical I2C
+controller and physical GPU acknowledgements are unexercised.
 
 Physical qualification requires current board access, recovery suitable for the
 selected bounded test, Device mappings, a real shared-lock deployment, and an
@@ -151,3 +141,5 @@ unrelated supervised tests. A coordinator can then build a bounded power
 transition image with explicit token and register-state reporting. GPU firmware
 boot, transaction isolation, execution, and physical IRQ delivery still require
 their own integration. No board request is submitted from these emulator images.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-platform.jsonl).

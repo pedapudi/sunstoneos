@@ -30,10 +30,7 @@ configuration, and it opens no USB device.
    board receives and renders every frame on every run. No scene is described
    twice and no reference frame is cached.
 3. **Capture.** The capture functions run under the board coordinator. The
-   capturing host hashes the bytes it passes to them and records the hash with
-   the state word, the reply's frame sequence and result, the input generation
-   for texture launches (the triangle protocol has none) and, for a failed
-   compute job, the job phase and error. The board does not attest the hash.
+   capturing host hashes the bytes it passes to them and records the hash with the state word, the reply's frame sequence and result, and the input generation for texture launches (the triangle protocol has none). For a failed compute job it also records the job phase and error. The board does not attest the hash.
 4. **Comparison.** The comparator refuses a capture whose recorded hash or
    state differs from the plan, whose sequences do not advance by one per
    frame or whose texture frames lack a generation. It records a frame with a
@@ -383,9 +380,7 @@ The modeled board predictions are in `gpu-conformance-board-launches`.
 1. **Capture provenance.** `capture_frames()` in `apps/gpu-render/texture.py`
    and `apps/gpu-render/draw.py` returns only pixels per frame. It must return
    each frame's reply sequence (`h[4]` in texture replies, the decoded sequence
-   in draw replies), the input generation for texture frames (`h[13]` of the
-   BEGIN reply) and the reply state, and on a failed reply or CLOSE raise with
-   the frames captured so far and the failing frame's reply state. Board
+   in draw replies), the input generation for texture frames (`h[13]` of the BEGIN reply) and the reply state. On a failed reply or CLOSE it must raise with the frames captured so far and the failing frame's reply state. Board
    comparison is blocked until then. Owner: the GPU render transport.
 2. **Compute job error in the reply.** The program application's failure reply
    must carry the service's `phase` and `compute_job_error`, which

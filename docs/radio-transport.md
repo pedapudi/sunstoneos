@@ -150,13 +150,11 @@ settling delay, or a held record awaiting its consumer. An owner may therefore
 repeat polls while the counter increases and yield when it does not, without
 changing the step semantics or deadlines.
 
-[checks/radio-poll-batching.py](../checks/radio-poll-batching.py) runs the setup
-and bootstrap identity sequence of the integrated fixture twice: once with one
-poll per owner tick and once repeating polls while `progress` increases. Every
-call stays within the controller's FIFO budget, and every repeated tick ends on a
-waiting call. The fixture's controller model completes bus work instantly, so
-only the owner's tick count is meaningful: 172 ticks drop to 42.
-This shows the removed per-step tick waits, not physical bus time.
+In a host model whose controller completes bus work instantly, repeating polls
+while `progress` increases cuts the owner's setup and bootstrap identity sequence
+from 172 ticks to 42 and keeps every call within the controller's FIFO budget.
+This shows the removed per-step tick waits, not physical bus time. No retained
+check repeats it; see [the evidence file](evidence/radio-transport.jsonl).
 
 ## Unrelated messages apply backpressure without disappearing
 
@@ -185,53 +183,16 @@ the transport object.
 
 ## Integrated evidence and remaining work
 
-[checks/aic8800-sdio-transport.py](../checks/aic8800-sdio-transport.py) builds the
-transport with the real controller, enumeration, and codec implementations under
-address and undefined-behavior sanitizers. It reuses the existing register model
-without running that model's independent test suite. The integrated fixture covers:
-
-- Delayed function readiness, block-size verification, preserved enable bits,
-  both pad choices, and the required settling interval.
-- Credit backpressure, two identity reads, fixed FIFO addressing, zero transmit
-  padding, and retained unrelated responses before a matching confirmation.
-- A 10-block aggregate holding three 1,500-byte records before the setup-write
-  confirmation, which starts at byte 4,512. One CMD53 reads all 5,120 bytes,
-  with a deadline of two command timeouts, and every record is parsed in order.
-- A byte-mode length over 512 bytes, an unsupported interrupt reason, malformed
-  byte-mode response, partial FIFO failure, and a setup write that takes effect
-  before failure.
-- Deadline expiry while waiting for credit or holding an unrelated message,
-  with retained state and no backend access after fault.
-
-[checks/radio-transport-aggregate.py](../checks/radio-transport-aggregate.py)
-runs the same model after runtime start, with the native dispatcher as receive
-owner. One CMD53 reads an 18-block aggregate holding three 1,500-byte data
-records, a 4,604-byte print record and an unrelated control message. The
-dispatcher retires all five in order and keeps a diagnostic copy of the print
-record truncated to 4,096 bytes.
-
-The function-setup and receive-boundary evidence remains under
-`~/.cache/sunstoneos/evidence/radio-transport-20261016/model-corrected/`.
-A focused bootstrap integration case passed after adding the fixed memory write:
-it exercises an unrelated response, a write confirmation with non-echo fields,
-conditional pad restoration, settling, and both identity reads. Additional cases
-cover malformed/truncated write confirmations, missing confirmation after a
-modeled write effect, an uncertain pad write, and partial transmit failure.
-
-The focused result, commands, source/header hashes, and executable identity are
-under `~/.cache/sunstoneos/evidence/radio-bootstrap-20261016/model/`. Controller,
-card, and unaffected codec-path evidence is reused. The changed codec and
-transport compile for freestanding AArch64; `aarch64/results.json` records both
-object identities. Their runtime dependency beyond the native SDIO/codec APIs
-is `memset`. No board operation, firmware selection, performance run, or unchanged
-component-suite rerun was performed.
-
-```sh
-python3 checks/aic8800-sdio-transport.py \
-  --reference-dir /path/to/pinned/radio-transport-references \
-  --evidence /path/outside/repository/radio-bootstrap-evidence \
-  --case bootstrap
-```
+The transport has no retained integrated host check. A sanitizer run with the
+real controller, enumeration and codec implementations covered delayed function
+readiness, credit backpressure, retained unrelated responses, a 10-block
+aggregate with three 1,500-byte records read by one CMD53, an 18-block aggregate
+with a 4,604-byte print record retired by the native dispatcher, malformed and
+partial transfers, and deadline expiry with no backend access after fault. The
+changed codec and transport compile for freestanding AArch64; their only runtime
+dependency beyond the native SDIO and codec APIs is `memset`. No board
+operation, firmware selection or performance run has been done. The cases and
+figures are in [the evidence file](evidence/radio-transport.jsonl).
 
 The public record consumer observes the monotonic counter before and after
 retirement under the reentry guard, as the dispatcher-owned consumer does.

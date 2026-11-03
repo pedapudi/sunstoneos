@@ -367,7 +367,7 @@ configured (observed, upstream `gicv3_distif_init`, `gicv3_cpuif_enable`).
 
 The distributor reports `GICD_IIDR = 0x0201643b`, GIC-600 r1p6, and each
 redistributor frame `n` reports `GICR_PWRR = n << 8` (confirmed on a board:
-[ROM interrupt-frame reads](../a733-smp-supervised.md#rom-reads-identify-all-interrupt-frames-without-changing-their-state)).
+[ROM interrupt-frame reads](../a733-smp-supervised.md#returning-diagnostics)).
 
 ## CPU errata and implementation-defined registers
 

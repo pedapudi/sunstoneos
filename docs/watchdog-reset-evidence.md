@@ -90,22 +90,15 @@ using bit 15 and updates progress/error fields from its arguments. For example,
 arguments `7, 2` produce `0x8702` in the selected half. These are software writes,
 so observing a changed word cannot independently identify a watchdog event.
 
-The focused binary check executes the reset prefix and this helper. Five cases
-passed: both initial selector states, direct forced-FEL entry, and both active
-halves in the helper. No instructions are skipped. The check stops before FEL
-initialization, uses synthetic MMIO, and does not model reset retention.
-The capture also contains transfers to addresses beyond its end, including
-`0x11000` and `0x17000`; it does not establish every later ROM-side write.
-
-```sh
-"$HOME/.cache/sunstoneos/venv/bin/python" checks/watchdog-rom-reset-log.py \
-  "$HOME/.cache/sunstoneos/evidence/rom-copy-20261016-084055/physical-rom.bin"
-```
-
-The check and source hashes are retained under
-`~/.cache/sunstoneos/evidence/watchdog-reset-evidence-20261016/`.
-The existing expiry, ROM-dispatch, and hardware configuration checks were not
-repeated. No device access or physical measurement occurred.
+A host run of the reset prefix and this helper on the captured ROM passed five
+cases: both initial selector states, direct forced-FEL entry, and both active
+halves in the helper. No instructions are skipped. The run stops before FEL
+initialization, uses synthetic MMIO, and does not model reset retention. It has
+no retained check; its hashes and cases are in
+[the evidence file](evidence/watchdog-reset-evidence.jsonl). The capture also
+contains transfers to addresses beyond its end, including `0x11000` and
+`0x17000`; it does not establish every later ROM-side write. No device access or
+physical measurement occurred.
 
 ## Keep the next physical decisions separate
 

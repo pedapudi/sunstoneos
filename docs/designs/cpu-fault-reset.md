@@ -29,7 +29,7 @@ previous boot's records over USB0.
    MPIDR that does not decode to a core stores byte 0.
 3. **Capture.** For SMC entries that pass validation, the stackless leaf
    `a733_fault_capture` in `platform/a733/fault.S` fills the core's 128-byte
-   slot (layout in [a733_fault.h](../../include/a733_fault.h)): an open marker
+   slot (layout in [a733_fault.h](../../include/a733_fault.h)). The slot holds an open marker
    `A733FLT0`, the kind, status and detail from `x0` and `x1`, the vector
    slot, `CNTPCT_EL0` and the contract epoch, then a CRC32C and the final
    magic `A733FLT1`. Only a vector fault also records `ESR_EL1`, `ELR_EL1`,
@@ -53,7 +53,7 @@ previous boot's records over USB0.
    It copies into `a733_fault_previous` in EL1 `.bss` the previous resident
    result (which the stage-2 loader moved into bytes 192..319 of its report at
    `0x47008200`, taken only when that report holds its magic and status 6) and
-   each slot whose magic and CRC match, then zeroes the eight slots.
+   each slot whose magic and CRC match. It then zeroes the eight slots.
 7. **Report.** USB0 operation 5 (`apps/os/usb0.c`; host side
    `tools/fault-report.py`, decoder `checks/fault-decode.py`) returns
    `a733_fault_previous`: an 8-byte header, the 128-byte previous resident

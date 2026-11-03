@@ -48,7 +48,7 @@ One `DSB SY` stays before `MSR ICC_EOIR1_EL1`, so a handler's device write that 
 The tick acknowledgement advances the compare value by one period, so a tick IRQ taken N periods late would leave the compare value in the past and the timer would fire N more times in a row. The tick IRQ in `platform/a733-smp-cached/platform.c` therefore:
 
 - reads `CNTP_CTL_EL0.ISTATUS` and processes no tick when the timer condition no longer holds, as Linux's timer handler acts only on `ISTATUS`;
-- after the first tick handler call reads `ISTATUS` again; when the condition still holds, the IRQ was late, and it makes at most three tick handler calls in all (`TICK_CALLS_PER_IRQ`), as `hrtimer_interrupt` retries at most three times, with one comparison of the counter against the next deadline plus a period deciding whether a third call is due;
+- after the first tick handler call reads `ISTATUS` again; when the condition still holds, the IRQ was late. It makes at most three tick handler calls in all (`TICK_CALLS_PER_IRQ`), as `hrtimer_interrupt` retries at most three times, with one comparison of the counter against the next deadline plus a period deciding whether a third call is due;
 - advances the compare value by one period per call, so the next deadline stays in phase and the kernel's tick count equals the elapsed periods;
 - masks IRQs again before each further call, because the tick handler's FromISR critical section clears `PSTATE.I`. The level-sensitive timer interrupt is taken again for any period still due.
 
@@ -71,6 +71,6 @@ The soak, runtime, kernel and context cases passed ten of ten trials on `cortex-
 
 ## Limitations and open work
 
-- The first board session (record `multicore-performance-1025-session-1`) completed all six runs with 32 rounds and progress on every core and a late tick that behaved as modeled, but its cycle criterion failed: the eight measurement tasks timed their pairs at the same time and measured lock contention.
-- Open: the revised session, which times one core at a time while the others wait in `WFE`, takes 32 samples of 64 pairs per core with a 95% confidence interval, ends the SGI timing when the core's handler has counted the SGI, and measures SGI, tick and floating-point progress on all eight cores, the skew between A55 and A76 counter reads and a forced late tick on core 0 (record `multicore-performance-1025-session-revised`). `SUNSTONE_A733_PERF_SESSION` adds the measurements to the cached images (`platform/a733-smp-cached/perf_session.c`).
+- The first board session (record `multicore-performance-1025-session-1`) completed all six runs with 32 rounds and progress on every core and a late tick that behaved as modeled, but its cycle criterion failed. The eight measurement tasks timed their pairs at the same time and measured lock contention.
+- Open: the revised session. It times one core at a time while the others wait in `WFE`, takes 32 samples of 64 pairs per core with a 95% confidence interval, and ends the SGI timing when the core's handler has counted the SGI. It also measures SGI, tick and floating-point progress on all eight cores, the skew between A55 and A76 counter reads and a forced late tick on core 0 (record `multicore-performance-1025-session-revised`). `SUNSTONE_A733_PERF_SESSION` adds the measurements to the cached images (`platform/a733-smp-cached/perf_session.c`).
 - The board session does not measure wake placement, which acts only between idle cores; its evidence is the QEMU and model figures.

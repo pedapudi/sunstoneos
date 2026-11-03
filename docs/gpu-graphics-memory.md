@@ -100,28 +100,18 @@ and its free-list implementation. Geometry sizing follows
 [Mesa's render-target allocation](https://gitlab.freedesktop.org/mesa/mesa/-/blob/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/pvr_arch_job_render.c).
 The implementation preserves the applicable MIT notices.
 
-The [reference check](../checks/pvr-render-target.py) compiles source initializers
-and compares complete record bytes and allocation requirements. The
-[native composition](../checks/gpu-graphics-memory.py) uses actual firmware,
-compute, graphics, VM, allocator and FreeRTOS service implementations. Its power
-provider refuses activation after inspecting completed publication. Separate
-cases exercise capacity refusal and a late final publication step. Existing
-firmware startup, numerical compute and free-list protocol evidence is reused.
+No host check compiles the source initializers and compares complete record
+bytes and allocation requirements. No host check composes the actual firmware, compute,
+graphics, VM, allocator and FreeRTOS service implementations with a power
+provider that refuses activation after inspecting completed publication, capacity
+refusal and a late final publication step. Expanded reservation admission has
+separate capacity evidence; compact reservations are the bounded-extent
+allocator's case.
 
-The source comparison and all three native cases pass. The native composition
-uses the updated bounded-extent allocator with compact reservations. Expanded
-reservation admission retains its separate capacity evidence; this check does
-not qualify the larger physical range. Executed inputs, native objects, tool
-identities and preserved executables are recorded under
-`~/.cache/sunstoneos/evidence/gpu-graphics-memory-20261017/` in
-`final-inputs.json`, `reference4/` and `native2/`.
-
-All six affected central GPU service targets compile and link with the actual
+All six central GPU service targets compile and link with the actual
 graphics and reservation adapters. Their private linker script reuses the
 production pool sections. Fixtures that do not admit graphics have empty pools;
-linking those adapters grants no usable memory. The central build and symbol
-inspection are recorded in `gpu-central-integration-20261017/`. Component runtime
-cases were not repeated for this build integration.
+linking those adapters grants no usable memory.
 
 The [fixed offscreen render service](gpu-render.md) adds a real render context,
 separate geometry/fragment command rings, programs, color output ownership and
@@ -131,3 +121,5 @@ The resource-only constructor remains available. The fixed render path admits on
 required. Physical firmware startup, external request blocking, transaction drain
 and resource disposal remain unqualified. Preparing resources establishes none of
 those physical conditions.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-graphics-memory.jsonl).

@@ -158,19 +158,19 @@ The firmware-start image (`apps/gpu-power-id/fw-start.c`, build and check option
 3. It starts only while the 1 s start bound and a 100 ms report fit before the 1.5 s session deadline, which also keeps the start's end 500 ms before the monitor's 2 s recovery. Otherwise it returns status 7 with nothing written.
 4. It reads `RGX_CR_TIMER` and writes one timer-correlation record into slot 1, then sequence 1.
 5. It writes SMC0 `+0xb0` = 2 and `drm_ctrl` = 0, and records both read-backs.
-6. It runs the 29 steps of `pvr_gpu_start.c`: publication (cache clean of the write-back firmware memory), a check that the started word is 0, the vendor's register sequence with every 64-bit register as two 32-bit accesses, and a wait of at most 1 s for the 32-bit started word, yielding one scheduler tick after each 50 µs of reads.
+6. It runs the 29 steps of `pvr_gpu_start.c`: publication (cache clean of the write-back firmware memory), a check that the started word is 0, and the vendor's register sequence with every 64-bit register as two 32-bit accesses. It then waits at most 1 s for the 32-bit started word, yielding one scheduler tick after each 50 µs of reads.
 7. It reports the controller's result, the started word, the marker and start timestamp, system data's flags and power state, the connection states, the executed command count, and read-backs of `SOFT_RESET` and the eleven MIPS wrapper registers.
 
 Every GPU, wrapper and SMC0 access is one 32-bit access, made after the progress record at result offset 128 (magic `GPUFWS01`) names it and after a `GPU FWS reading` or `writing` log line.
 
-Controlled failures: a started word that is not 1 by the deadline (error 2), is already set (error 4) or holds another value (error 5) fails with the shared state and registers reported and the firmware processor released; an identity other than `36.56.104.183` fails before any write with the GPU powered; a refused preparation, mapping or time budget fails before any GPU, wrapper or SMC0 access. A register access that never completes stops the CPU, the monitor does not return, and only a power removal recovers the board.
+Controlled failures: a started word that is not 1 by the deadline (error 2), is already set (error 4) or holds another value (error 5) fails with the shared state and registers reported and the firmware processor released. An identity other than `36.56.104.183` fails before any write with the GPU powered; a refused preparation, mapping or time budget fails before any GPU, wrapper or SMC0 access. A register access that never completes stops the CPU, the monitor does not return, and only a power removal recovers the board.
 
 The standalone image leaves the GPU powered with the firmware running. The vendor stops the firmware only after the firmware's own forced-idle and power-off handshake, which needs the command queue and interrupt service that this image does not carry; the [firmware-stop design](gpu-firmware-stop.md) adds them. The firmware's MIPS page table maps only the image's own firmware and shared pages.
 
 ## Checks and qualified figures
 
 - No host check covers the 29-step controller's retained faults, refusals or reference traces.
-- `apps/gpu-power-id/check.py --fw-start` runs eleven cases on the linked image with only the ON, the clock, translations, cache maintenance and the log modeled: the complete start, timeout, started word already set or 2, CORE6 not reaching 8, unexpected identity, wrong SMC0 mapping, a write-back translation of a shared page, a start refused by the deadlines, and a seeded mutant of the SMC0 write value.
+- `apps/gpu-power-id/check.py --fw-start` runs eleven cases on the linked image with only the ON, the clock, translations, cache maintenance and the log modeled. The cases are the complete start, timeout, started word already set or 2, CORE6 not reaching 8, unexpected identity, wrong SMC0 mapping, a write-back translation of a shared page, a start refused by the deadlines, and a seeded mutant of the SMC0 write value.
 - The start adds two 32-bit reads and one 40-byte write for the timer record, two writes and two reads for the secure configuration, and 18 accesses from splitting 64-bit accesses (24 in all). A complete run's log is 8,047 of 16,128 bytes.
 
 | Figure | Value | Record |

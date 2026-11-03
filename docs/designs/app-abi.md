@@ -71,11 +71,9 @@ The OS image derives its session lifetime from `run_deadline_us` and
 `return_reserve_us` ([os-image.md](../os-image.md#the-session-lifetime-follows-the-manifest)).
 No manifest can exceed it.
 
-The generator refuses a manifest that breaks these rules, for example an
-INPUT with write access, overlapping regions or a region outside the window; a
-host range that meets an OS operation; a required capture device listed
-together with the other capture device, or a capture device without a format;
-an unknown device or CPU key.
+The generator refuses a manifest that breaks these rules. Examples are an INPUT with write access, overlapping regions or a region outside the window; a
+host range that meets an OS operation. It also refuses a required capture device listed
+together with the other capture device, a capture device without a format, and an unknown device or CPU key.
 
 CPU access flags are declarations for trusted applications. General INPUT
 regions retain writable hardware mappings; only the GPU output profile
@@ -153,8 +151,8 @@ card with a malformed grant is refused before it is written.
 - that the granted devices contain the required devices, lie within the
   required and optional devices, and hold at most one capture device;
 - that an image without the USB class services grants no mouse, serial or
-  camera device and grants a keyboard only with USB storage; and that a grant
-  without USB storage has no capture device, no radio service and the
+  camera device and grants a keyboard only with USB storage;
+- that a grant without USB storage has no capture device, no radio service and the
   `SS_SESSION_BIND_SID` flag (the recorded mode without storage, which the
   loader binds to the board's SID words);
 - that the audio extent's `capture_samples` lies within the manifest's
@@ -166,7 +164,7 @@ card with a malformed grant is refused before it is written.
   the return reserve.
 
 The board prefix keeps a `workload` word that must agree with the device
-grant (`apps/os/session.c`): 0 for storage, 4 for storage with keyboard, 2 for
+grant (`apps/os/session.c`). It is 0 for storage, 4 for storage with keyboard, 2 for
 no storage, 0 for any USB class device in an image with the class services,
 and 1 in an image with the radio service. Applications derive their mode from
 the grant, not from this word.
@@ -246,7 +244,7 @@ supplies the version word, state, total, tag and payload of its own replies.
 
 - **`sunstone-a733-os-core`**: an object library with the board composition
   (the board sources without the board's USB0 exchange, USB2 client,
-  identity hook, admission and supervised boot), the OS services, admission,
+  identity hook, admission and supervised boot). It also contains the OS services, admission,
   start, supervision, thermal and watchdog code, the interrupt table and fault
   capture, and the C and C++ runtime. Each device service (I2S capture,
   headset, GPU) and each selectable OS service (radio station, NPU client) is
@@ -462,9 +460,8 @@ timeout; interrupt completions and owner-task publications wake the
 application. Disconnect retires queued unread leases and input events; held
 leases remain readable until explicit release. The demos `usb-input`,
 `usb-serial` and `usb-camera` each have their own manifest and build without
-external application sources: the first returns its first input event, the
-second echoes one receive buffer and returns the receive and transmit byte
-counts, and the third checksums a frame in place, releases it and returns its
+external application sources. The first returns its first input event, the
+second echoes one receive buffer and returns the receive and transmit byte counts. The third checksums a frame in place, releases it and returns its
 sequence, byte count, checksum and dimensions. The software ownership contract
 does not establish physical DMA drain or hotplug qualification.
 

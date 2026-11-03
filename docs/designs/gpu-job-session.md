@@ -21,7 +21,7 @@ The first-job image (`apps/gpu-power-id/fw-start.c` built with `FWS_STOP` and `F
 1. Workload pages and tables, `MMUCACHE` waited for by the executed count, the client CCB format, then job 1, as in the first job.
 2. When job *n* completes (timeline *n*, 32 words and both guards checked) and *n* < 8, `pvr_compute_job_repeat` starts job *n* + 1 on the same context with the session deadline (`bb_power.deadline`). The publish step refills the output with the complement of each expected word and cleans it, and the CDM command is written with the UPDATE value *n* + 1. A job that does not run leaves the fill, so each job's words are its own. A repeat starts only while at least 10 ms of the 150 ms wait remain; otherwise the sequence ends with outcome 6 (budget).
 3. The first job that does not complete ends the sequence. Its outcome is reported as 2 (no timeline), 3 (output differs), 4 (transport) or 5 (firmware event), with its number.
-4. After the sequence the cleanup is sent when the firmware has finished with the context: the timeline equals the current job's sequence, or the firmware reset the context, or the current job was never kicked (its client CCB serial is still the previous job's and the timeline is at the previous sequence). A job kicked whose timeline never arrived keeps the context live and no cleanup runs. Then the stop and OFF follow, with or without the firmware's acknowledgements, as in the first job.
+4. After the sequence the cleanup is sent when the firmware has finished with the context. That is so when the timeline equals the current job's sequence, or the firmware reset the context, or the current job was never kicked (its client CCB serial is still the previous job's and the timeline is at the previous sequence). A job kicked whose timeline never arrived keeps the context live and no cleanup runs. Then the stop and OFF follow, with or without the firmware's acknowledgements, as in the first job.
 
 ### Timing
 
@@ -52,7 +52,7 @@ The log is about 13.6 KB of 16,128 bytes; the host check asserts the worst case 
 | Control service, per pass after *done* | Two interrupt-status reads, kernel CCB control reads with barriers, counter-clock reads | |
 | Output check, 8 per session | One page invalidate, 64 word reads | |
 
-Completion is polled because the image has no qualified GPU interrupt handler; the interrupt path is qualified in the GPU service (`checks/pvr-gpu-irq.c`) and the wait is far shorter than a tick. A job that does not complete is a controlled failure: the sequence ends, the cleanup runs when the firmware has finished with the context, and the stop powers the GPU off, with the firmware's acknowledgements or by upstream's hard reset when the idle checks pass. A GPU that never reports idle stays powered until a power removal.
+Completion is polled because the image has no qualified GPU interrupt handler; the interrupt path is qualified in the GPU service (`checks/pvr-gpu-irq.c`) and the wait is far shorter than a tick. A job that does not complete is a controlled failure: the sequence ends, the cleanup runs when the firmware has finished with the context. The stop powers the GPU off, with the firmware's acknowledgements or by upstream's hard reset when the idle checks pass. A GPU that never reports idle stays powered until a power removal.
 
 ## Failed shutdown retains power and ownership
 

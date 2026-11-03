@@ -292,8 +292,8 @@ writer. A fixture assembled from the parser's own constants cannot establish
 that the native writer and host parser agree.
 For a new supervised caller, check its actual `run_session` entry policy as well
 as its capture callback. Direct callback fixtures missed unsupported result keys
-for H.264, DSI and UART. Reuse `checks/h264-supervisor-entry.py --caller <path> --case actual`
-to stop at readiness before queue or device access; do not replay unchanged cases.
+for H.264, DSI and UART. No host check covers a caller's actual entry policy, so
+review it by reading the code before queue or device access.
 
 Hand off changed behavior, frozen artifacts, checks and their limits, unresolved
 physical prerequisites, and the smallest next board procedure. Use existing

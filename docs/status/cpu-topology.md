@@ -31,7 +31,7 @@ not qualify sustained operation, other operating points, energy costs or thermal
 4. Connect the topology to task placement in the partitioned scheduler; `SUNSTONE_A733_CPU_TOPOLOGY` defaults to off and the control kernel does not read it.
 5. Decide whether NEON-heavy work uses its own weight; the NEON ratio (4.093) differs from the integer ratio (3.589) that the maximum weights use.
 6. Repeat the capacity comparison for sustained operation and fault recovery.
-7. Publish the boot CPU observation in the CPU-return profile. `ss_cpu_observations` returned 0 for every core in the storage-write application's runs on the A733 CPU-return image, so an application cannot learn its core's `ID_AA64ISAR0_EL1` (the register is not readable at EL0); the storage-write test falls back on the measured table in [the hardware facts](../hardware/a733-facts.json) (record `cpu-topology-cpu-return-observation-missing`). Find why the profile's cores do not publish the snapshot that `ss_cpu_observe_boot` (`platform/a733-smp-cached/continue.c`) creates.
+7. Publish the boot CPU observation in the CPU-return profile. `ss_cpu_observations` returned 0 for every core in the storage-write application's runs on the A733 CPU-return image, so an application cannot learn its core's `ID_AA64ISAR0_EL1` (the register is not readable at EL0). The storage-write test falls back on the measured table in [the hardware facts](../hardware/a733-facts.json) (record `cpu-topology-cpu-return-observation-missing`). Find why the profile's cores do not publish the snapshot that `ss_cpu_observe_boot` (`platform/a733-smp-cached/continue.c`) creates.
 
 ## Evidence
 

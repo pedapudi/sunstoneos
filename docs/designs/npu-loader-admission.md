@@ -29,7 +29,7 @@ Fields that the loader does not interpret (program words, shader state, some des
 
 Because the loader does not interpret every field, the hardware confines every NPU memory access to the job's mappings:
 
-- The NPU runs with its MMU enabled. The vendor driver enables it for every core before any job, and the controller of this repository checks `+0x388 == 0x21` before every start and before open completes. Command fetch, descriptor fetch, weights and tensors are addressed by device virtual address through the page tables that `a733_npu_mmu.c` builds from exactly the registered buffers; an absent entry holds the exception-enabled value ([MMU notes](../npu-mmu.md)).
+- The NPU runs with its MMU enabled. The vendor driver enables it for every core before any job, and the controller of this repository checks `+0x388 == 0x21` before every start and before open completes. Command fetch, descriptor fetch, weights and tensors are addressed by device virtual address through the page tables that `a733_npu_mmu.c` builds from exactly the registered buffers. An absent entry holds the exception-enabled value ([MMU notes](../npu-mmu.md)).
 - The one window outside the page tables is the internal SRAM, the 512 KiB of shared SRAM that the boot code routes to the NPU, at device address `0x400000`. A reference into that window reaches only that SRAM. The memory layer refuses every buffer that overlaps `0x400000` to `0x480000`.
 
 Board result ([reference](../reference-backsolve-npu.md#npu-mmu-exceptions)): five graphs, each with one descriptor pointer aimed at an unmapped address, failed one by one with an NPU MMU exception at that address; the DRAM canary stayed unchanged and the service recovered each time.

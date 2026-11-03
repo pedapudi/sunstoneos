@@ -45,9 +45,12 @@ The vendor driver reaches a port by two routes, one for the field writes and one
 
 The component installs no interrupt or timer. The NSI interrupt (SPI 43) has no qualified delivery and stays masked. The window step runs in the output task's existing `vTaskDelay(1)` loop in `apps/gpu-display/display.c`, a tick wait that [performance architecture](../performance-architecture.md) section 1.3 permits for a device without qualified interrupt delivery. The pending check is one ISB, one counter read and one compare, about 1,000 per second.
 
-Records and window state live in normal write-back memory that no device reads, so they need no cache maintenance. The hook adds no barrier; the framebuffer's `raw_read` and `raw_write` keep their `DSB SY` pair per access, at most 29 pairs once per framebuffer instance, and the last NSI access of a phase has completed before the counter read that ends the phase (section 1.2).
+Records and window state live in normal write-back memory that no device reads, so they need no cache maintenance. The
+hook adds no barrier. The framebuffer's `raw_read` and `raw_write` keep their `DSB SY` pair per access, at most 29 pairs once per framebuffer instance, and the last NSI access of a phase has completed before the counter read that ends the phase (section 1.2).
 
-Each port has one writer: the hook writes ports 2, 14 and 15; the window writes only port 2's counter words. Both run in the output task, which also fills the evidence. The copy tasks share one phase word with the output task: it wakes them with a task notification at the start of phase B and stores the end phase with release; each task loads the phase word and the application state with acquire once per pass and calls `vTaskSuspend(NULL)` after the end phase or a state other than 1. Each task counts passes in its own 64-byte-aligned slot, which the output task reads with acquire after storing the end phase. The component adds no lock.
+Each port has one writer: the hook writes ports 2, 14 and 15; the window writes only port 2's counter words. Both run in the output task, which also fills the evidence. The copy tasks share one phase word with
+the output task. It wakes them with a task notification at the start of phase B and stores the end phase with
+release. Each task loads the phase word and the application state with acquire once per pass and calls `vTaskSuspend(NULL)` after the end phase or a state other than 1. Each task counts passes in its own 64-byte-aligned slot, which the output task reads with acquire after storing the end phase. The component adds no lock.
 
 ## Failure classes
 
@@ -111,6 +114,12 @@ RTF is recognition wall time divided by audio duration. If a conclusive run fail
    - Framebuffer: `dram_address()`, the stage 4 call and the evidence member under `SUNSTONE_DRAM_PRIORITY`, and the load accessor under `SUNSTONE_GPU_DISPLAY_DRAM_LOAD`.
    - `apps/gpu-display`: the evidence block and reply version 2 in `observation.h`; in the load build only, the window step and abandon rules in `display.c`, the copy tasks, lease and privileged entry in `main.c`, and the owner constant in `application.h`; `capture.py` and the observation host cases for reply version 2.
    - `cmake/a733-gpu-display.cmake`: the two flags for the three images. `checks/device-memory-capacity.c`: a replay of the load image's write-back leases, including the 32 MiB lease at 2 MiB alignment.
-   - Host cases: a full prepare sequence calls the hook once, at the step from stage 4 to 5, and makes zero NSI accesses when the NSI is off; each port and field mismatch reaches the failure path and leaves later fields untouched; the reads-only build writes nothing and an HDMI build makes no NSI access; the period written is P × `fabric_hz[2]` and a start at stage 4, in state 2 or 3 or after phase B makes zero accesses; each refusal rule and the free-running fallback behave as specified; a first start with `+0x588` bit 28 set ends the phases early; abandon makes zero register accesses; no copy pass starts after the end phase.
+   - Host cases: a full prepare sequence calls the hook once, at the step from stage 4 to 5, and makes zero NSI accesses when
+     the NSI is off. Each port and field mismatch reaches the failure path and leaves later
+     fields untouched. The reads-only build writes nothing and an HDMI build makes
+     no NSI access. The period written is P × `fabric_hz[2]` and a start at stage 4, in state 2 or 3 or after phase B makes
+     zero accesses. Each refusal rule and the free-running fallback behave as
+     specified. A first start with `+0x588` bit 28 set ends the phases early.
+     Abandon makes zero register accesses. No copy pass starts after the end phase.
 2. Run the table and no-table load images in one board session, no-table image first: inherited fields and CCU words, then final fields, the scan-out row, the collect-order bit, `phase_ticks_max`, the CPU clocks, passes per core and the third presentation time. The prediction and conclusiveness rule are in `dram-controller-scan-out-board`.
 3. Measure the DDR trip's recognition RTF and the offset between the THS DDR channel and the DRAM die (a thermocouple on the LPDDR5 package read alongside the channel) before THROTTLE reaches the CPU clock driver.

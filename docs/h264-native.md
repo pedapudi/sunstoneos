@@ -148,9 +148,8 @@ The controller programs frame-list POCs, both motion-vector field pointers,
 both reference lists, prediction weights and raster scaling matrices from the
 immutable plan. Cedrus places reference-list/weight programming after decoder
 INIT/FLUSH and scaling programming before INIT. The lower native VE policy now
-admits the weight-denominator register at `0x01c0e210`; the focused access check
-executes that actual policy, including width, alignment and peripheral-base
-refusals. Existing VLD offset-zero copying, busy guards and decoded-macroblock
+admits the weight-denominator register at `0x01c0e210`; no host check covers its
+width, alignment and peripheral-base refusals. Existing VLD offset-zero copying, busy guards and decoded-macroblock
 completion checks remain in force.
 
 ### Compiled evidence and physical limits
@@ -192,53 +191,11 @@ failure. `bounds/result.json` records focused sanitized syntax refusals.
 `preparation-coverage.json` records setup failures and their limited repairs.
 No completed native case is replayed for those repairs.
 
-The evidence above predates the four-slot full-HD layout, which moved every
-device span except the input and halved the input capacity. The same checks
-were rerun on the four-slot image: `checks/h264-high-allocation.py` with the
-full-HD, HD and three-reference full-HD fixtures, `checks/h264-high-native.py`
-with the full-HD, HD, four-reference HD, three-reference full-HD and
-normal-mode variants, `checks/h264-high-register-oracle.py`,
-`checks/h264-high-bounds.py`, `checks/h264-high-entry.py` and
-`checks/h264-high-host.py`. The
-three-reference fixture is a 12-picture libx264 clip made with the full-HD
-fixture command and `ref=3`; its pictures use slots 0 to 3. Copied frames of
-the earlier variants are unchanged. These results are retained under
-`~/.cache/sunstoneos/build/audit-video-consolidation/checks`.
+The evidence above covers the four-slot full-HD layout: the full-HD, HD, four-reference HD, three-reference full-HD and normal-mode variants. The three-reference fixture is a 12-picture libx264 clip made with the full-HD fixture command and `ref=3`; its pictures use slots 0 to 3. The host checks that produced these results have been removed, so they are not repeatable; the results are retained under `~/.cache/sunstoneos/build/audit-video-consolidation/checks`.
 
 ### Long-term, wraparound and profile coverage
 
-libx264 emits neither long-term marking, memory-management operation 5 nor short
-POC or frame_num moduli. `checks/h264-high-modes.py` therefore rewrites the slice
-headers of small 320-by-240 libx264 clips, and for wraparound also the SPS. It
-copies the CABAC slice data unchanged after the realigned header, so the decoded
-pixels differ from the source while each stream stays valid. FFmpeg must decode
-every nominal stream with error detection set to explode and supplies the pixel
-reference. FFmpeg's trace_headers syntax then drives an independent Python model
-of POC, initial lists, list modification and marking. The check compares that
-model with the sanitized host build of the native parser picture by picture. It
-covers these nominal streams:
-
-- 30 P pictures in two GOPs: a long-term IDR, operations 1, 2, 3, 4 and 6, an
-  index taken over by operation 3, and list modification 2.
-- 40 P pictures with 16-value POC and frame_num moduli and operation 5 in the
-  middle, so both counters wrap and restart.
-- 40 I/P/B pictures with the same moduli, so POC type 0 wraps across B pictures.
-- Unmodified Baseline (CAVLC) and Main (CABAC with implicit weighted B) clips.
-
-It also requires a refusal at the exact picture for a B picture whose list holds
-a long-term IDR, an operation 3 index above the maximum, a list modification 2
-above the maximum, operation 2 on an absent frame, operation 6 with no long-term
-index allowed, and an SPS relabelled as Extended profile. The unchanged parser
-refuses the long-term and profile streams and already decodes the wraparound
-streams correctly. `apps/h264/high.py` builds a sealed manifest from each nominal
-stream. `checks/h264-high-native.py` then runs the five nominal streams through
-the linked High image with FFmpeg pixels injected as device output. Every
-picture's frame list, reference lists and the retained contents of each
-referenced slot match, and every copied picture matches the FFmpeg reference.
-These results are under
-`~/.cache/sunstoneos/build/audit-codec-streaming/checks/modes` and
-`native-modes`; they have not been frozen into the evidence store. They establish
-parser and controller behavior with modeled device effects only.
+libx264 emits neither long-term marking, memory-management operation 5 nor short POC or frame_num moduli, and no host check exercises them. An earlier run rewrote the slice headers of small 320-by-240 libx264 clips (and for wraparound also the SPS) and compared the native parser with an independent Python model of POC, initial lists, list modification and marking. It covered 30 P pictures in two GOPs with a long-term IDR and operations 1, 2, 3, 4 and 6, 40 P pictures and 40 I/P/B pictures with 16-value POC and frame_num moduli and operation 5, and unmodified Baseline and Main clips. It refused a B picture whose list holds a long-term IDR, an operation 3 index above the maximum, a list modification 2 above the maximum, operation 2 on an absent frame, operation 6 with no long-term index allowed, and an SPS relabelled as Extended profile. Those results are under `~/.cache/sunstoneos/build/audit-codec-streaming/checks/modes` and `native-modes` and establish parser and controller behavior with modeled device effects only.
 
 The focused Astra source review covers short-term POC/lists/marking, speculative
 commit, reference/MV lifetime and output ordering. It predates long-term marking,
@@ -400,13 +357,11 @@ not silently replace the accepted image's inputs.
 The original host capture checks bypassed two host entry guards. The actual VGA
 launcher fix has separate evidence below. The shared supervisor also omitted
 `h264_result` from its result allowlist, so public H.264 invocation refused before
-transport. Commit `70650ed` corrects that allowlist. Maintained
-`checks/h264-supervisor-entry.py` reaches a readiness sentinel through actual
-`run_session` with the caller policy and reviewed FEL digest: a 59-second H.264
-result is admitted; 60-second and unknown-result requests refuse. Evidence is
-`h264-supervisor-entry-20261019/result.json` and `frozen/manifest.json`. This check
-performs no queue, USB or FEL execution. Decoder and launcher evidence is
-unaffected by this host-only correction.
+transport. Commit `70650ed` corrects that allowlist. No host check covers the
+admission: an earlier run reached a readiness sentinel through actual
+`run_session` with the caller policy and reviewed FEL digest, admitted a
+59-second H.264 result and refused 60-second and unknown-result requests
+(`h264-supervisor-entry-20261019/result.json` and `frozen/manifest.json`).
 
 ## VGA streaming with a fixed retained pool
 
@@ -605,10 +560,9 @@ Evidence is under `~/.cache/sunstoneos/evidence/h264-vga-20261019`:
   native behavior and the single-IDR parser wrapper have focused compatibility
   evidence. Earlier unchanged parser cases are reused.
 
-The VGA launcher accepts session versions 1 and 2. A focused check in
-`checks/h264-launcher.py` executes the actual generated AArch32 launcher with
-producer-built legacy and VGA sessions, including unsupported-version refusal.
-The earlier host and bundle checks substituted launcher construction. They did
+The VGA launcher accepts session versions 1 and 2. No host check
+executes the generated AArch32 launcher with legacy and VGA sessions or the
+unsupported-version refusal. The earlier host and bundle checks substituted launcher construction. They did
 not cover its session-version guard; the retained earlier launcher refuses VGA
 with reason 14 before native startup. Its native ELF and decoder evidence remain
 preserved. The corrected launcher has separate evidence under
@@ -883,11 +837,12 @@ Focused evidence is under
   macroblocks; `reference.yuv` is the independent FFmpeg pixel oracle.
   `headers.log`, `oracle-result.json` and `a733-reference-trace.json` compare
   parsed syntax/register fields with FFmpeg and pinned A733 POC/reference helpers.
-- `checks/h264-sequence.c` composes the actual controller and video provider.
-  It covers two-picture completion, engine failure, incomplete macroblock count
-  and copy refusal while preserving the first output. The bounded parser checks
-  use ASan/UBSan and reject changed frame numbers, list modification, adaptive
-  marking and a third picture without publishing partial results.
+- An earlier host run composed the actual controller and video provider and
+  covered two-picture completion, engine failure, incomplete macroblock count
+  and copy refusal while preserving the first output; its check has been removed.
+  The bounded parser checks use ASan/UBSan and reject changed frame numbers, list
+  modification, adaptive marking and a third picture without publishing partial
+  results.
 - `native-context/result.json` records the corrected persistent-scratch image's
   composed native upload, actual allocator, IOMMU construction/validation,
   controller, guarded copy and indexed serializer. MMIO, power/admission callbacks,
@@ -925,3 +880,5 @@ transactions have drained before reclamation. This implementation retains all
 resources rather than claiming that reclamation is safe. Both boards are
 unavailable for recovery; no physical attempt is authorized by this evidence.
 The coordinator owns any later supervised board attempt.
+
+Results of host checks that no longer exist are kept in the evidence record [h264-native.jsonl](evidence/h264-native.jsonl).

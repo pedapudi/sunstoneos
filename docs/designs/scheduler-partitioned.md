@@ -37,14 +37,9 @@ points to a record in [the scheduler evidence](../evidence/scheduler.jsonl).
 
 ## Acceptance compares each live stage with the unmodified kernel
 
-Acceptance requires no shared scheduler-state lock for local wake or context
-switch (an uncontended local notification path also takes no object lock); loaded
-ready-to-running p99 below 10 µs and workload mask and lock-wait maxima below 25 µs,
-recorded as p50, p99 and maximum per CPU and phase; correct immediate preemption
-including publication concurrent with priority lowering and WFI entry; no scheduler
-timer interrupt without a deadline or equal-priority slice competitor; eight-core
-QEMU soak, linked-kernel stress and exact mimus recognition after each live stage;
-and a measured capacity ratio, weighted-versus-equal splitting and
+Acceptance requires no shared scheduler-state lock for local wake or context switch (an uncontended local notification path also takes no object lock). It also requires loaded
+ready-to-running p99 below 10 µs and workload mask and lock-wait maxima below 25 µs, recorded as p50, p99 and maximum per CPU and phase. Further requirements are correct immediate preemption
+including publication concurrent with priority lowering and WFI entry; no scheduler timer interrupt without a deadline or equal-priority slice competitor; and eight-core QEMU soak, linked-kernel stress and exact mimus recognition after each live stage. Last, a measured capacity ratio, weighted-versus-equal splitting and
 big-pinned-versus-unpinned latency at the vendor top points. Observed maxima are not
 worst-case proofs, and every analytic bound names its admission assumptions. The
 task path misses its 10 µs target, and the capacity, splitting and idle-wakeup items
@@ -507,9 +502,7 @@ unmeasured.
 
 SunstoneOS runs quadruped and biped robots with several cameras and lidar.
 Real-time response ranks above throughput. Targets: worst-case wake latency of
-the highest-priority task at most 10 µs; jitter of the control period at most 5% of
-the period (12.5 µs at 4 kHz, 5 µs at 10 kHz); no deadline miss under the full
-load; the model workload within 2% of its run alone. The primary rate is 4 kHz and
+the highest-priority task at most 10 µs; jitter of the control period at most 5% of the period (12.5 µs at 4 kHz, 5 µs at 10 kHz); no deadline miss under the full load; the model workload within 2% of its run alone. The primary rate is 4 kHz and
 the stretch rate 10 kHz. A kernel is chosen if it meets the real-time targets at its
 highest rate and keeps the model within 2%; among those the higher control rate wins,
 then the higher model throughput. Measurements report the maximum and the 99.99th
@@ -521,8 +514,7 @@ core has API-level interrupts masked, the entry and wake path run, the scheduler
 selects the task, and the context switch completes. The first term is the largest
 and is bounded below by the longest masked span of any kernel path on that core. On
 the A733 with the memory system saturated, a span is set by dependent DRAM
-refills: 94 to 98 percent of the cycles of the longest spans are backend stalls
-(about 35 refills at 0.5 µs each), and the same spans take 2.5 to 5.5 µs with the
+refills: 94 to 98 percent of the cycles of the longest spans are backend stalls (about 35 refills at 0.5 µs each). The same spans take 2.5 to 5.5 µs with the
 memory system idle. Two levers follow: shorten and split the masked sections, and
 run the hardest path in an interrupt above the API mask. Fork and stock spans,
 the sweeps, the lock-wait split and the task-path measurements are in the records
@@ -554,9 +546,7 @@ and holds no priority literal.
 `runtime/control_irq.c` (`SUNSTONE_CONTROL_IRQ`, default off, a measurement option)
 drives it from the EL1 virtual timer (PPI 27) of cores 1 to 5, one rate each at 1, 2,
 4, 8 and 10 kHz. The handler reads the counter, re-arms the compare value from the
-previous deadline so the period does not drift, records latency (entry minus the
-programmed deadline) and period jitter in per-core histograms with one counter tick
-(41.7 ns) per bin, and puts a sample into a single-producer single-consumer ring
+previous deadline so the period does not drift. It records latency (entry minus the programmed deadline) and period jitter in per-core histograms with one counter tick (41.7 ns) per bin, and puts a sample into a single-producer single-consumer ring
 (`runtime/control_ring.h`). A task drains the rings and checks sequence numbers; a
 full ring drops the new sample and counts it. A core arms its own timer from its
 first interrupt after the request, because only that core can configure its
@@ -576,7 +566,7 @@ it, sleeps in `WFE` with the mask open, then calls the real function, which mask
 and takes a ticket as before.
 
 Rules. Most kernel callers on the OS image are EL0 tasks, which reach the mask
-through a supervisor call and cannot read it, so an EL0 task waits when its core's
+through a supervisor call and cannot read it. An EL0 task therefore waits when its core's
 critical nesting count is zero and it does not hold the task lock; an EL1 task waits
 when the priority mask is open and `DAIF.I` is clear. The mask reads back in the
 Non-secure view (`include/a733_gic_priority.h`: the 0xff written reads back as
@@ -664,14 +654,14 @@ Mechanism. An object hashes, by its address, to one of 64 slots (`SS_OBJECT_SLOT
 | Owner timing out or repairing a waiter | I of the slot recorded when the waiter blocked | raised |
 | Priority donation (`xTaskPriorityInherit` and its inverse) | the donation lock, a leaf | raised |
 
-The slot needs no field in the object, so `StaticQueue_t` and its siblings keep their layout. A task that blocks on an event list records the slot (`event_slot`) under the object's lock; the owner that later times the waiter out takes I of that slot, so it excludes the senders and receivers of the same object and nothing else. The insertion into the event list now also holds I of the slot, which closes a race the global scheme had: a waiter placing itself on a list under T alone while the owner of another waiter of that list removed it under the global I alone.
+The slot needs no field in the object, so `StaticQueue_t` and its siblings keep their layout. A task that blocks on an event list records the slot (`event_slot`) under the object's lock; the owner that later times the waiter out takes I of that slot, so it excludes the senders and receivers of the same object and nothing else. The insertion into the event list now also holds I of the slot, which closes a race the global scheme had. A waiter placed itself on a list under T alone while the owner of another waiter of that list removed it under the global I alone.
 
 The public `taskENTER_CRITICAL()` family keeps the global locks and no longer excludes object sections. Application critical sections protect application data, not kernel objects, and the kernel took no application lock inside an object section. The timer source keeps the global locks because its sections enclose queue creation; with the timers disabled in the OS image it is not on the hot path.
 
 Invariants.
 
 - **Lock order.** Global locks, then at most one task-side slot and one interrupt-side slot per CPU (nesting is on the same object or one in the same slot, asserted), then the donation lock. No section waits for an owner acknowledgment while holding a lock; commands and publications defer to the outermost release, as before.
-- **No lost or duplicated task.** A waiter leaves an event list by exactly one of: the waker's `xTaskRemoveFromEventList` under the object's lock, or the owner's timeout under the same slot's I; the outcome compare-and-swap that arbitrates them, the wait generation, the pins and the deferred publication are unchanged. The interrupt-side lock of the slot orders list edits (insert, remove, priority reorder) against each other.
+- **No lost or duplicated task.** A waiter leaves an event list by exactly one of two paths: the waker's `xTaskRemoveFromEventList` under the object's lock, or the owner's timeout under the same slot's I. The outcome compare-and-swap that arbitrates them, the wait generation, the pins and the deferred publication are unchanged. The interrupt-side lock of the slot orders list edits (insert, remove, priority reorder) against each other.
 - **No priority inversion.** Locks are FIFO tickets, so a holder is never overtaken. Donation and its removal still hold the donation lock across the read-modify-write of the donated priority and the mutex count, and publish the repair at the outermost release. A mutex shares a slot with other objects only as a longer queue, never with an unbounded wait: every holder runs a bounded section.
 - **Affinity masks.** Placement, publication, migration and idle pull are untouched; the change adds no path that moves or queues a task.
 - **Event-driven.** Waiting is `WFE` on the ticket, release is `SEV`; there is no polling and no tick dependency.
@@ -761,8 +751,7 @@ remaining expired work schedules another local entry after interrupts are restor
 EL0 callers use the privilege transition for timer programming and SGIs; the port
 orders device writes, uses ISB after timer register programming and observes GIC
 write-pending completion before readback. Software timers use the timer-service
-task, with the next command or expiry on owner deadlines. Tickless idle needs a
-cross-core sleep protocol: a privileged idle entry, a sleep generation number,
+task, with the next command or expiry on owner deadlines. Tickless idle needs a cross-core sleep protocol. The protocol has a privileged idle entry, a sleep generation number,
 acknowledgment from every idle core, atomic cancellation of admission or a CPU0 wake
 before remote callbacks run, tick correction from the counter, and no kernel lock
 held across WFI or an acknowledgment wait. The upstream generic path is unusable
@@ -810,8 +799,7 @@ cores as scheduler atomic stores, read-modify-writes and atomic loads; the count
 do not convert to time because the emulator has no cache misses.
 `SUNSTONE_LATENCY_PMU` adds instructions retired, cycles, L1D and L2D refills, and
 backend stall cycles inside each core's longest masked spans; the counters are read
-only. On the board, spans of 17 to 30 µs retire 770 to 2100 instructions with 20 to
-60 L1D refills, 25 to 50 cycles per instruction, and `STALL_BACKEND` is 94 to 98% of
+only. On the board, spans of 17 to 30 µs retire 770 to 2100 instructions with 20 to 60 L1D refills and 25 to 50 cycles per instruction. `STALL_BACKEND` is 94 to 98% of
 their cycles (59 to 68% on core 3's critical section) while eight cores stream 1 MiB
 sweeps. No host trace counts the barriers, SGI writes and exception instructions per
 span, and whether any span contains a Device or non-cacheable access is open. A service entry with two `DSB SY` and 35 L1D refills stalls about
@@ -846,10 +834,7 @@ owner, and generation reuse, and checks exactly one activation. Negative models
 that remove a barrier, reference or winner check must produce a lost-wakeup or
 unsafe-reuse trace. Linked-kernel stress (`checks/scheduler-kernel-*.c`,
 `checks/scheduler-partitioned-qemu.c`, `scheduler-yield-qemu.c`) runs real task,
-notification, queue, event and timer APIs on eight concurrently executing QEMU
-cores, forcing wakes during block commit, timeout and remote priority changes,
-migrating permitted tasks and deleting and recreating static tasks while
-publications are outstanding; assertions detect duplicate running ownership and
+notification, queue, event and timer APIs on eight concurrently executing QEMU cores. It forces wakes during block commit, timeout and remote priority changes, migrates permitted tasks and deletes and recreates static tasks while publications are outstanding. Assertions detect duplicate running ownership and
 non-owner link writes. These establish properties of finite abstractions, not Arm
 instruction correctness or latency bounds.
 

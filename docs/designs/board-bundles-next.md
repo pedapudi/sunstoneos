@@ -32,8 +32,7 @@ the Terminal class.
   bundle supplies only a data file `WORDS.json`. The reader saves the 128 FEL
   scratch bytes at `0x71000` with `read`, then issues `readl`. Each
   command-line `readl` reads one word: it writes a 48-byte A32 stub and the
-  word's slot, the same first 52 bytes of scratch whatever the word count, and
-  runs the stub in the ROM's context (`fel.c` and `aw_fel_readl_n` in the
+  word's slot, the same first 52 bytes of scratch whatever the word count. The command then runs the stub in the ROM's context (`fel.c` and `aw_fel_readl_n` in the
   A733 build of sunxi-tools, revision `b92f4ed`, pull request 259 applied).
   The 128-byte save therefore covers every `readl` command. The first FEL
   write of a session also clears `SCTLR.I` in the ROM's context, because
@@ -104,7 +103,7 @@ written acceptance of an uncovered bus stall.
 | 34 | Returning | Two GPU integer matrix products with exact sums, cleanup and OFF |
 
 Rows 1 to 9 and 20 to 24 run on port 3-3; rows 11 to 13, 16, 17, 19, 25, 26, 28
-and 29 run on port 3-1 after row 11 in the same lifetime, and a GPU firmware row
+and 29 run on port 3-1 after row 11 in the same lifetime. A GPU firmware row
 is the last GPU image of its lifetime when its runbook says so. Row 10 runs at 492 MHz,
 and at 852 MHz only when row 9's speed bin qualifies and row 6 verified DCDC2 at
 800 mV. The approval rule in [docs/hardware.md](../hardware.md) belongs to the
@@ -125,8 +124,7 @@ operator applies the gates.
   `0x25` with a level-1 translation fault in the ISS; `FAR_EL1` equal to
   `0x4_0000_0000`; `ELR_EL1` inside the test function.
 - **Bundle 4.** Status 2, interrupt 29, the log markers of the completed counter
-  and walk stages and of the WFI stage's start, and a progress record at
-  `0x42000080` holding magic `0x3130535342344242`, stage 3, a wake count below
+  and walk stages and of the WFI stage's start. Its progress record at `0x42000080` holds magic `0x3130535342344242`, stage 3, a wake count below
   1,000 and a last wake stamp more than 48,000 counter ticks (two ticks) older
   than the monitor's `end_counter`. This outcome means the core stopped waking
   from `WFI` on PPI 30. An outcome names such a record through its `progress`
@@ -141,19 +139,18 @@ operator applies the gates.
   No later bundle writes the PPU in that lifetime. When the owner refuses the
   row before any PPU write (a closed CCU or PPU gate, an unverified DCDC2 or a
   domain whose policy and status disagree), the image ends with status 0 and a
-  record that says so; the run is inconclusive, and bundle 8 then finds domain 1
+  record that says so. The run is inconclusive, and bundle 8 then finds domain 1
   not ON.
 - **Bundle 8.** Status 1 with one `FAIL exception` line whose ISS is a
   synchronous external abort, whose `FAR_EL1` is one of the twelve field words
   the image reads (ports 2, 13, 14 and 15) and whose `ELR_EL1` lies in its access
-  function, one outcome per word; or status 1 with a readback mismatch and its
+  function, one outcome per word. The other outcome is status 1 with a readback mismatch and its
   stopping field. An SError from a posted write matches no outcome. After an
   abort, a Read bundle of the same fields gives the Secure view. When domain 1
   status does not read ON or a gate is closed, the image skips every NSI access
   and ends with status 0 and a record that names the skipped stage; the run is
   inconclusive. A Secure-only NSI can return zeros to Non-secure reads, so
-  inherited fields that read zero on all three ports are recorded as possibly
-  protected; the write readback then separates the two cases.
+  inherited fields that read zero on all three ports are recorded as possibly protected. The write readback then separates the two cases.
 - Rows 25 to 29 and 30 to 34 list their own controlled failures in the tool's
   row table.
 
@@ -190,8 +187,7 @@ inconclusive record.
   pages in `platform_init()`, so uncached walks read the same descriptors as
   cached ones; `checks/board-bundles-apps.py` checks this in the source and in
   the linked object's relocations. The image reads CCU `+0x588` and refuses the
-  stage when `MBUS_DFS_EN` is set. The run records the CPU-L rate only; the CPU-B
-  and DSU rates that [cpu-table-walks.md](cpu-table-walks.md) asks for with each
+  stage when `MBUS_DFS_EN` is set. The run records the CPU-L rate only. The CPU-B and DSU rates that [cpu-table-walks.md](cpu-table-walks.md) asks for with each
   walk run need a Read bundle of their words.
 - **WFI.** Over 1,000 ticks, the task runs `a733_cpu_idle()` (`DSB SY`, `WFI`)
   with IRQs unmasked, so the tick handler runs on each wake. No other task is
@@ -210,8 +206,7 @@ startup and the service session end 1.5 s after the monitor's entry. One service
 task at priority 2 runs `a733_power_service_step()`; a client task runs at
 priority 1. A recording layer between each native adapter and its user passes
 every S_TWI0 access to an observer that classifies the reads of the control
-register (flag polls after a START or byte, STOP polls after a STOP), and stores
-every owner access with its `CNTPCT` stamp. Each image prints its summary and
+register (flag polls after a START or byte, STOP polls after a STOP). The observer also stores every owner access with its `CNTPCT` stamp. Each image prints its summary and
 outcome line first, then detail lines while 256 log bytes remain free, then a
 count of the omitted lines.
 
@@ -224,13 +219,12 @@ count of the omitted lines.
   bit times per START, repeated START or STOP, nine per byte). The summary counts
   steps at most 1,000, 1,050, 1,100 and 1,268 permille of their measured wire
   time, then those above 1,268, with ratios rounded up from counter ticks. At the
-  park, the service task enters the I2C mutex through the adapter while the
-  provider is idle and times by `CNTPCT` 256 iterations each of control-register
+  park, the service task enters the I2C mutex through the adapter while the provider is idle. It times by `CNTPCT` 256 iterations each of control-register
   reads with `DSB SY` before and after, plain reads with the value discarded,
   dependent plain reads, the adapter's time and read operations, the task check
   and the trace observer. The record names the service's core (`MPIDR_EL1`
   Aff1). The pass bound is `BB_BOUND_PERMILLE` (1,268 of measured wire time) plus
-  40 µs for the first step, and the byte time is nine bit times or the lower
+  40 µs for the first step. The byte time is nine bit times or the lower
   stamp of a back-to-back flag spin when that is longer and at most 110% of nine
   bit times ([pmic-access.md](pmic-access.md) gives why a larger byte fails). The
   verdict requires both supplies verified, every snapshot `0xff9e`, 34 snapshots
@@ -263,13 +257,9 @@ refuses, as when its trace is full, ends the run as a refused access, never as a
 readback mismatch. Its NSI priority writes persist until power removal.
 
 **Bundles 20 to 24** (`apps/board-bundles-power/cpu-opp-step.c`, built with
-`-DOPP_BUNDLE=n`) run steps 1 and 3 to 5 of [the top operating-point
-design](cpu-top-opp.md): bundle 20 raises CPU-B from 1,014 to 1,404 MHz and back
-at the 800 mV of bin vf0400 with cores 6 and 7 off, writing no PMIC register;
-bundle 21 raises DCDC3 to 1,050 mV and back with CPU-B held at 1,014 MHz;
-bundle 22 raises CPU-L to 1,196 MHz and the DSU to 780 MHz at 800 mV; bundle 23
-raises CPU-B to 2,002 MHz at 1,050 mV with the DSU at 910 MHz, then back; bundle
-24 raises CPU-L to 1,794 MHz at 1,000 mV and the DSU to 1,274 MHz and ends its
+`-DOPP_BUNDLE=n`) run steps 1 and 3 to 5 of [the top operating-point design](cpu-top-opp.md). Bundle 20 raises CPU-B from 1,014 to 1,404 MHz and back
+at the 800 mV of bin vf0400 with cores 6 and 7 off, writing no PMIC register. Bundle 21 raises DCDC3 to 1,050 mV and back with CPU-B held at 1,014 MHz. Bundle 22 raises CPU-L to 1,196 MHz and the DSU to 780 MHz at 800 mV. Bundle 23
+raises CPU-B to 2,002 MHz at 1,050 mV with the DSU at 910 MHz, then back. Bundle 24 raises CPU-L to 1,794 MHz at 1,000 mV and the DSU to 1,274 MHz and ends its
 lifetime. Each reads a temperature set and the CPU-L, DSU and CPU-B words before
 the change and requires every PLL and mux word and both rails to read as before
 afterwards. Admission refuses, before any write and with a controlled warm
@@ -320,8 +310,7 @@ objects record the compile directory. Each object of an image is one of:
 
 - an object of an image that passed: the kernel check of ranks 4 and 5, bundle 2
   or `rank-9-usb-v4/`. A returning platform object of `rank-9-usb-v4/` is used
-  when this tree's object equals it; `monitor.c` is used when its instructions are
-  equal; a provider object is used when the unit recompiles byte-identical;
+  when this tree's object equals it. `monitor.c` is used when its instructions are equal. A provider object is used when the unit recompiles byte-identical;
 - an object of the base image of the same set (origin `set-base`): the central
   kernel check with `monitor.c` compiled with the counter option. Bundle 4 links
   every base object except `checks/kernel.c`, and bundles 6 to 8 link its

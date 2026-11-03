@@ -153,7 +153,9 @@ The design budgets (one 16 KiB pool allocation, total added storage below 48 KiB
 
 ## Focused validation and ownership
 
-No host check covers the DMA profile. Such a check would build one DMA image with the accepted native toolchain and execute the actual application, SPI platform and core, DMA controller, startup binding, native mapping and cache callbacks, and copied output, modeling only hardware effects, scheduling, and unavailable peer or physical authority. It would cover success, delayed RX completion after the SPI event, missing IRQ, DMA error, failed drain, and output revocation; assert no request enable before both ACTIVE channels, no DMA stop before request shutdown, and no RX copy before both drains; and cover admission with wrong channels, routing, fabric, memory extent, request count, exact command, truncated authority, and mismatched image profile. The FIFO polling and IRQ suites, source table, descriptor encoder, DMA controller and native cache checks stay with their owners.
+No host check covers the DMA profile. Such a check would build one DMA image with the accepted native toolchain and execute the actual application, SPI platform and core, DMA controller, startup binding, native mapping and cache callbacks, and copied output, modeling only hardware effects, scheduling, and unavailable peer or physical authority. It would cover success, delayed RX completion after the SPI event, missing IRQ, DMA error, failed drain, and
+output revocation. It would assert no request enable before both ACTIVE channels, no DMA stop before request shutdown, and no RX copy before
+both drains. It would also cover admission with wrong channels, routing, fabric, memory extent, request count, exact command, truncated authority, and mismatched image profile. The FIFO polling and IRQ suites, source table, descriptor encoder, DMA controller and native cache checks stay with their owners.
 
 The files that implement the profile are `apps/spi/`, `cmake/a733-spi.cmake`, the narrow SPI platform
 interrupt admission and its header/documentation, existing SPI checks, and this

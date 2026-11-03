@@ -8,7 +8,7 @@ MBUS clocks the memory-bus fabric between the DRAM controller and the bus master
 
 ## The boot ROM sets 400 MHz on every return
 
-- **boot0** (`829ea8e3`, routine at `0x57a4c`, part of the DRAM clock setup) gates MBUS off with the update bit, resets the NSI and the DRAM controller, reprograms PLL_DDR and the DRAM clock, then writes `0x89000000` into the cleared source field of `MBUS_CLK_REG` (`0x57b1e`–`0x57b28`): gate on, update, source 1 (PERI0_600M), divider 1. MBUS reads `0x81000000`, 600 MHz.
+- **boot0** (`829ea8e3`, routine at `0x57a4c`, part of the DRAM clock setup) gates MBUS off with the update bit, resets the NSI and the DRAM controller, reprograms PLL_DDR and the DRAM clock. It then writes `0x89000000` into the cleared source field of `MBUS_CLK_REG` (`0x57b1e`–`0x57b28`): gate on, update, source 1 (PERI0_600M), divider 1. MBUS reads `0x81000000`, 600 MHz.
 - **Boot ROM** (`a8e31821`, the capture `rom-copy-20261016-084055`). The forced-FEL entry at `0x20`, which every SunstoneOS image uses to return, sets r0 to 127 (`0x224`) and branches to the FEL dispatcher (`0x22c`). With 127 the dispatcher calls the secondary clock setup `0x2444` (`0x252c`–`0x2534`), which reaches the MBUS routine `0x2084` through `0x2160`. That routine:
   1. clears the gate and sets the update bit, then polls the update bit for up to 240,000 counter ticks, 10 ms (literal at `0x2158`);
   2. clears bit 17 of `MSI_LITE0_BGR_REG` (`0x02002594`), asserting MSI_LITE0's MBUS reset;
@@ -24,7 +24,7 @@ MBUS clocks the memory-bus fabric between the DRAM controller and the bus master
 `a733_el3_mbus_restore()` in [`include/a733_el3_mbus.h`](../../include/a733_el3_mbus.h) runs at EL3 in both EL3 monitors (`platform/a733/monitor.c`, `apps/storage-read-single-core/monitor.c`), before their security setup, and in both SMP boots (`platform/a733-smp/boot.c`, `platform/a733-smp-cached/boot.c`) and the secondary identity probe (`boot/a733/secondary-identity-probe.c`) before any secondary core is released. No driver has started an MBUS master at that point.
 
 - **Admission.** It acts only when the masked word (gate, DFS enable, update, source and divider) is the ROM's `0x84000000` and MSI_LITE0's gate and both resets read released. At `0x81000000` it does nothing, and any other value is left alone for the drivers' fabric checks. The ROM's clock setup runs on every forced-FEL entry whether or not boot0 ran in the power cycle, so a lifetime without boot0 also starts at `0x84000000` and is restored. That is intended: 600 MHz is right whenever the bus starts at the ROM's 400 MHz, and PERI0_600M runs in both cases.
-- **Bus masters.** Before any write it requires the masters that an earlier image could have left running to be idle. Otherwise it skips the restore with no write and returns the code below: MBUS stays at 400 MHz, the monitor logs the code, and the image continues, so an image that returned with the GPU still clocked does not stop every later image of the lifetime. The drivers' fabric checks then see 400 MHz and refuse sessions that name 600 MHz.
+- **Bus masters.** Before any write it requires the masters that an earlier image could have left running to be idle. Otherwise it skips the restore with no write and returns the code below: MBUS stays at 400 MHz, the monitor logs the code, and the image continues. An image that returned with the GPU still clocked therefore does not stop every later image of the lifetime. The drivers' fabric checks then see 400 MHz and refuse sessions that name 600 MHz.
   - GPU (code 8): module clock gate (CCU `+0xb20` bit 31) and bus gate (`+0xb24` bit 0) off.
   - NPU (8): module clock gate (`+0xb00` bit 31) and bus gate (`+0xb04` bit 0) off.
   - DMA0 (9): with its bus gate and reset released (`+0x704` bits 0 and 16), `DMA_STA_REG` (`0x04601030`) zero, every channel idle and the MBUS FIFO empty (manual 13.1.7.3).
@@ -63,8 +63,8 @@ The vendor device tree assigns G2D 300 MHz (`sun60iw2p1.dtsi` lines 3383–3384)
 | Time at EL3 from the ROM's value | under 100 µs | 30 µs in the window's modeled run, plus the 340-byte copy |
 | Time at boot0's value | One register read | One read |
 
-- `checks/el3-mbus.py OUTPUT` builds `checks/el3-mbus.c` with sanitizers and runs the admission, master-check and read-back cases; assembles `boot/a733/mbus-window.S`, requires it to be free of relocations and equal to the header's array, and runs it under Unicorn at `0x5f000` (including a stuck update bit at each of the four waits); and pins the sixteen ROM and boot0 words that the header cites.
-- `checks/a733-monitor-are.py` runs the returning monitor's instructions: from the ROM's value it requires the six MBUS writes before the BL31 security writes and the log line `MBUS 0x84000000 0x81000000 0`; with the GPU clocked or DMA0 busy it requires the log line with code 8 or 9, no MBUS write and a normal start.
+- `checks/el3-mbus.py OUTPUT` builds `checks/el3-mbus.c` with sanitizers and runs the admission, master-check and read-back cases. It also assembles `boot/a733/mbus-window.S`, requires it to be free of relocations and equal to the header's array, and runs it under Unicorn at `0x5f000` (including a stuck update bit at each of the four waits). It also pins the sixteen ROM and boot0 words that the header cites.
+- `checks/a733-monitor-are.py` runs the returning monitor's instructions: from the ROM's value it requires the six MBUS writes before the BL31 security writes and the log line `MBUS 0x84000000 0x81000000 0`. With the GPU clocked or DMA0 busy it requires the log line with code 8 or 9, no MBUS write and a normal start.
 - `checks/a733-smp-cached.py` models boot0's value, so the restore makes no write there; `checks/secondary-local-probe.py` admits the restore's two reads.
 - `checks/sram-window-reservation.py` fails when any linker script region, `ldr sp` stack, Python SRAM region table or hexadecimal literal outside the owning files overlaps `0x5f000`–`0x5ffff`. The DDR start (`tools/run-ddr.py`, `boot/a733/ddr-entry.S`) loads boot0 over the page before any image runs and is allowed with that reason.
 - `checks/board-bundles.py`: the row numbers with `RESERVED_POSITIONS` (19 and 20) count from 1 without a gap.
@@ -72,6 +72,6 @@ The vendor device tree assigns G2D 300 MHz (`sun60iw2p1.dtsi` lines 3383–3384)
 
 ## Open work
 
-1. Run the frozen qualification set on ports 3-3 and 3-1 in one lifetime each: cold DDR start, write the pattern, two kernel checks, verify the pattern, and on port 3-3 the clock dump and one SMP OS image (the plan, predictions and bundle locations are in `mbus-restore-board-qualification`). The SMP OS image needs the native-image refreeze procedure rerun.
+1. Run the frozen qualification set on ports 3-3 and 3-1 in one lifetime each: cold DDR start, write the pattern, two kernel checks, verify the pattern, and on port 3-3 the clock dump and one SMP OS image. The plan, predictions and bundle locations are in `mbus-restore-board-qualification`. The SMP OS image needs the native-image refreeze procedure rerun.
 2. Measure the ShuffleNetV2 timing at 492 and 852 MHz with sessions naming 600 MHz for MBUS, and compare the G2D application's output digests with those at 100 MHz.
 3. Move the video and SDIO clocks as described under Deferred changes.

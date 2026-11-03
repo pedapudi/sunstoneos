@@ -192,28 +192,15 @@ I2S platform, stream, cyclic, runtime and duplex models exercise those entry
 points against the bank-qualified implementation, and the PB pin checks run in
 the focused batch below.
 
-## Focused evidence and remaining integration
+## Validation and remaining integration
 
-The focused batch compares all mux admissions and register fields with the
-pinned main and always-on sources. Its register model exercises Bluetooth/header
-UART exclusion, camera groups, mixed PB ownership, GPIO input and output,
-always-on latch provenance, interrupt W1C ownership, shared debounce, reentry
-and retained failures. It includes the existing PB ownership and deadline
-fixtures because their shared manager representation changed. It does not
-repeat I2S, DMA, board workloads or performance measurements.
-
-Run the affected batch into a new external evidence directory:
-
-```sh
-python3 checks/pins-expanded.py \
-  --evidence "$HOME/.cache/sunstoneos/evidence/pins-expanded-20261016/checked"
-```
-
-The batch passed once with address and undefined-behavior sanitizers. The
-manager, pin table and native adapter also compiled for freestanding AArch64
-without warnings. Evidence is preserved in
-`~/.cache/sunstoneos/evidence/pins-expanded-20261016/checked/`, including exact
-inputs, commands, executables and object hashes. No physical accesses ran.
+The manager, pin table and native adapter compile for freestanding AArch64
+without warnings. No host check compares all mux
+admissions and register fields with the pinned main and always-on sources. The
+UART exclusion, camera groups, mixed PB ownership, interrupt W1C ownership,
+shared debounce, reentry and retained failures described above rest on the
+source comparison made when the tables were written and on the I2S platform
+models, which exercise the manager. No physical accesses have run.
 
 Production integration still needs authenticated platform
 handoffs, the shared FreeRTOS service, GIC binding, unresolved UART signal maps,

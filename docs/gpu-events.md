@@ -1,8 +1,8 @@
 # GPU firmware events resolve owned resources before dispatch
 
 Native decoding and dispatch are implemented for the eight event types delegated
-by the GPU control worker. Host checks use the pinned firmware structures and the
-existing queue/control implementation. Physical firmware events remain unqualified.
+by the GPU control worker, using the pinned firmware structures. No host check
+remains. Physical firmware events remain unqualified.
 This document assumes familiarity with firmware queues and GPU resource ownership.
 
 The dispatcher does not implement depth/stencil allocation, free-list growth,
@@ -109,35 +109,23 @@ control worker converts refusal into a retained control/queue failure. Its queue
 consumer has already acknowledged the event slot; retained diagnostic and resource
 state must therefore survive that failure.
 
-## Focused host evidence covers decoding and control integration
+## No host check covers decoding and control integration
 
-The source-derived fixture fills the original firmware structures with nonzero
-padding and exercises all eight event types. AddressSanitizer and
-UndefinedBehaviorSanitizer checks pass for ownership resolution, signed values,
+No host check fills the firmware structures with nonzero padding and
+exercises all eight event types, or covers ownership resolution, signed values,
 unaligned input, catalogue copying, all-context resets, unsupported handlers,
-action side effects, recursive dispatch, and nineteen rejected events.
+action side effects, recursive dispatch and nineteen rejected events. Nor does
+one cover a reconstruction request with an unknown final ID after an owned
+growth request: by design no reconstruction callback runs, the controller and
+queue retain failure, preserve the raw event, and perform no later device I/O.
 
-A separate focused control fixture accepts an owned growth request, then receives
-a reconstruction request whose final ID is unknown. No reconstruction callback
-runs. The controller and queue retain failure, preserve the raw event, and perform
-no later device I/O. This fixture reuses the existing software device model without
-running its broader test suite. It does not execute GPU firmware instructions.
+The AArch64 object occupies 3,112 code bytes with no static data or BSS.
+Compiler stack frames are 144 bytes for decoding, 1,920 for initialization, and
+592 for dispatch; callback frames are additional. Physical stack use remains
+unmeasured.
 
-Evidence is retained in `~/.cache/sunstoneos/evidence/gpu-events-20261016/`.
-The `integrated` directory holds the host logs and final source snapshots.
-The AArch64 object occupies 3,112 code bytes with no static data or BSS. Compiler
-stack frames are 144 bytes for decoding, 1,920 for initialization, and 592 for
-dispatch; callback frames are additional. Physical stack use remains unmeasured.
+No board-test request has been queued. A physical executable still needs
+qualified recovery, board power, memory and interrupt bindings, real resource
+handlers, response submission, and workloads that produce these events.
 
-Reproduce after relevant inputs change:
-
-```sh
-python3 checks/pvr-gpu-events.py \
-  --sources ~/.cache/sunstoneos/sources/gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination \
-  --output ~/.cache/sunstoneos/evidence/gpu-events-local
-```
-
-No board-test request has been queued. A physical executable still needs qualified
-recovery, board power/memory/interrupt bindings, real resource handlers, response
-submission, and workloads that produce these events. Host evidence establishes
-decoding and dispatch behavior, while those hardware operations remain required.
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-events.jsonl).

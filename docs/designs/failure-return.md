@@ -220,7 +220,8 @@ and the scheduler state words. It covers:
 - exceptions from EL0 (data abort on core 6, instruction abort, undefined
   instruction, PC and SP alignment faults, a store on a secondary core), which
   enter the real vector, return to EL0 on a reserved stack with the arguments,
-  record the failure and reach the ROM; a second fault on another core takes a
+  record the failure and reach the ROM;
+- a second fault on another core takes a
   second stack and keeps the first record;
 - negative controls that keep the watchdog ending: an exception from EL1, an EL0
   exception with interrupts masked, with the priority mask raised to the API
@@ -233,10 +234,9 @@ and the scheduler state words. It covers:
   the ROM.
 
 `checks/qemu-os-boot.py` runs a case on the virtual board, where the MMU raises
-a real translation fault: the application's store to an unmapped address reaches
+a real translation fault. The application's store to an unmapped address reaches
 the same vector source, the task continues on a reserved stack, the board
-records group application with detail 0xe24, the faulting address and
-instruction, and the task is suspended while the other cores run. The returning
+records group application with detail 0xe24, the faulting address and instruction. The task is suspended while the other cores run. The returning
 lifetime is not linked on that board, so its `os_cpu_return_el0_fault` records
 and suspends without the claim.
 

@@ -151,10 +151,12 @@ and revalidates the frozen bundle. A physical run also needs
 coordinator approval of the rate, independent AUX host-clock evidence and a
 reviewed watchdog return path.
 
-`checks/displayport-top-rate.py` compares the linked PHY with unchanged pinned
-vendor functions for both polarities and all ten legal swing/pre-emphasis
-pairs. Separate source calculations check timestamps, transfer-unit fields and
-the secondary-data window. Linked controller cases check source/receiver rate
-writes, training pattern 2 and 3, lower-rate sink refusal and retained stop.
-These are software models; physical link quality, visible pixels, unplug
-behavior, interrupts and drain remain unqualified.
+No host check compares the linked PHY with the unchanged pinned vendor
+functions for both polarities and all ten legal swing/pre-emphasis pairs, or
+exercises timestamps, transfer-unit fields, the secondary-data window,
+source/receiver rate writes, training patterns 2 and 3, lower-rate sink refusal
+and retained stop. The recorded results are in
+[the rate evidence](evidence/displayport-top-rate.jsonl). Physical link quality,
+visible pixels, unplug behavior, interrupts and drain remain unqualified.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/displayport-native.jsonl).

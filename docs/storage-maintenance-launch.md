@@ -169,12 +169,10 @@ and source comparison reused the saved ELF without another build or runtime chec
 Instruction models do not implement A733 cache coherence, peripheral timing,
 physical USB enumeration or independent recovery. Those remain physical prerequisites.
 
-The focused `checks/storage-maintenance-usb-burst.py` comparison executes the
-burst loop and the former one-pass-per-tick loop with the same modeled 2 KiB
-FIFO, 512-byte endpoint and host turnaround. A 32,840-byte framed response takes
-8 scheduler ticks rather than 66, and a one-packet response takes one rather
-than two. Idle remains one
-pass per tick. Delayed or abandoned hosts, counter stalls and failures, expiry,
-and provider loss or waiting exercise the burst and retention boundaries.
-These counts establish scheduling behavior under the model, not physical
-throughput. The existing DMA and storage-command evidence is reused.
+The USB task passes bursts instead of one pass per tick. In a model with a
+2 KiB FIFO, a 512-byte endpoint and host turnaround, a 32,840-byte framed
+response takes 8 scheduler ticks rather than the 66 of a one-pass-per-tick
+loop, and a one-packet response takes one rather than two; idle remains one
+pass per tick. No retained check repeats the comparison, and the counts
+establish scheduling behavior under the model, not physical throughput (see
+[the evidence file](evidence/storage-maintenance-launch.jsonl)).

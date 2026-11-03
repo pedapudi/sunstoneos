@@ -103,13 +103,7 @@ explicitly labeled model records, verifies that production refuses modeled
 authority, and substitutes only the physical-authority predicate for preparation.
 The fixed SRAM launcher is compiled once and preserved in the resulting bundle.
 
-`checks/isp0-host.py` consumes that modeled bundle. Its arbitrary output bytes
-exercise transport and digest authentication; they are not an ISP model. Cases
-cover both USB packet sizes, pending queries, malformed identities and geometry,
-proof refusal, digest corruption, premature termination, failed durability,
-upload failure and retained ACK identity. Preparation passed against the preserved ELF and constructor artifacts. The focused host batch passed fifteen capture cases, eight geometry refusals,
-four input refusals and thirteen completion-proof refusals. The actual supervisor
-entry reached readiness and stopped before queue or device callbacks.
+No host check consumes the modeled bundle. An earlier run used arbitrary output bytes to exercise transport and digest authentication (they are not an ISP model). Its cases covered both USB packet sizes, pending queries, malformed identities and geometry, proof refusal, digest corruption, premature termination, failed durability, upload failure and retained ACK identity. Preparation passed against the preserved ELF and constructor artifacts. The host batch passed fifteen capture cases, eight geometry refusals, four input refusals and thirteen completion-proof refusals. The actual supervisor entry reached readiness and stopped before queue or device callbacks.
 
 The processing source defaults and setters come from the pinned open GPL-2.0
 implementation. Source provenance and native behavior belong to the component
@@ -149,3 +143,5 @@ subsequent numbered files. It validates each sequence and preserves earlier
 outputs when a later transfer or durability check fails. The supervisor's
 existing caller defaults to one capture. See [the replay contract](camera-isp0.md)
 for native completion, IRQ handling, reference limits and probe conversion.
+
+Results of host checks that no longer exist are kept in the evidence record [isp0-preparation.jsonl](evidence/isp0-preparation.jsonl).

@@ -113,7 +113,7 @@ if another file writes a block the owner holds.
   pending phase's expected duration (two bit times for START, repeated START
   and STOP, nine for a byte), timed from the provider's time of the
   phase-start write ([pmic-access.md](pmic-access.md)), by reading the raw
-  counter without the provider lock, then calls `a733_pmic_poll` once. Spinning
+  counter without the provider lock. It then calls `a733_pmic_poll` once. Spinning
   stops after 1 ms in one step, and the step returns one tick. The S_TWI0
   interrupt (GIC SPI 203, `sun60iw2p1.dtsi` line 1962) is unqualified.
 - **Retention.** An unexpected PCK600 status or a passed deadline retains the
@@ -209,12 +209,7 @@ reaching the PPU.
 GPU healthy OFF/ON has a software contract and host evidence; its physical
 lifecycle is unqualified. NPU startup and local CLOSE use a retained ON
 domain. The references establish different responsibilities, and the table
-with their limits is in record `power-domains-accelerator-assessment`:
-register status alone does not prove accelerator drain; GPU firmware
-handshakes and local drain precede reset, gate teardown and platform
-power-off; the NPU platform source does not establish when runtime power
-management completes OFF; the generic PCK-600 TRM supplies no A733 isolation
-register; and shared SRAM `0x00074000`–`0x000f3fff` requires NPU power while in
+with their limits is in record `power-domains-accelerator-assessment`. Register status alone does not prove accelerator drain. GPU firmware handshakes and local drain precede reset, gate teardown and platform power-off. The NPU platform source does not establish when runtime power management completes OFF. The generic PCK-600 TRM supplies no A733 isolation register. Shared SRAM `0x00074000`–`0x000f3fff` requires NPU power while in
 use.
 
 - **GPU.** The stop controller closes admission, obtains fresh firmware

@@ -1,8 +1,8 @@
 # A733 display engine: one immutable RGB framebuffer
 
 The native display-engine driver programs one full-frame, linear XRGB8888
-surface for LCD1 and DSI1. It is implemented and checked against published
-register-programming code. Physical scanout is unqualified. Platform resource
+surface for LCD1 and DSI1. It is implemented and derived from published
+register-programming code; no host check remains. Physical scanout is unqualified. Platform resource
 binding, a selected panel, and board execution remain prerequisites.
 
 The implementation is in `drivers/display/a733_display_engine.c`, with its
@@ -138,42 +138,35 @@ failed readback, callback failure, clock regression, deadline, or reentry ends
 in `FAULT_RETAINED`. There is no automatic rollback, reset, retry, or release.
 Terminal states perform no callbacks.
 
-## Evidence covers source agreement and retained failure states
+## The register images derive from source; no host check covers them
 
 The primary register reference is the published Linux display driver at
 [revision 2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f](https://github.com/orangepi-xunlong/linux-orangepi/tree/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de).
 Relevant files are `sunxi_de.c`, `de_top.c`, and the overlay, blender, scaler,
 CSC, gamma, dither, smart-backlight, and CRC modules and platform tables.
 The A733 User Manual V1.00, section 14.3, describes DE capabilities but does
-not provide its register map. Source hashes are embedded in
-`checks/a733-display-engine.py`; source-lock proposals accompany the evidence.
+not provide its register map. Source hashes are in `sources.lock.json`.
 
-One ASan/UBSan source/model batch compared complete overlay, blender, and top
-register images through preparation, start, and stop. Four profiles covered
-ordinary and padded pitch, high address bits, the 40-bit boundary, and the
-existing burst/loose-RGB666 timing profile. The comparison executes unchanged
-source functions with reduced host type and MMIO adapters.
+The overlay, blender and top register images for preparation, start and stop
+follow the source functions for ordinary and padded pitch, high address bits,
+the 40-bit boundary and the burst/loose-RGB666 timing profile. No host check
+compares them with the unchanged source functions.
 
-The source comparison exposes two intentional control differences: producer
+The driver has two intentional control differences from the source: producer
 and automatic-clock enable are deferred until `START`; automatic-clock control
 remains enabled after `STOP` pending external drain. The source blender blocks
 overlap at one word; the native AHB copy writes that identical word once.
 No other register-image difference is accepted.
 
-The same batch checked address/timing rejection, authority denial, active RCQ,
+The driver rejects bad address or timing, denied authority, an active RCQ,
 enabled bypass blocks, conflicting routes, uncertain writes, readback mismatch,
-post-write deadlines, clock regression, reentry, and stop refusal. No prior
-DSI or LCD test was rerun.
+missed post-write deadlines, clock regression, reentry and stop while busy. No
+host check exercises these refusals.
 
 The freestanding AArch64 object is 3024 bytes, with direct stack frames of
 336 bytes for planning, 592 for initialization, and 96 for polling. Planning
 nests the LCD/DSI planners, so the FreeRTOS task budget must include their
 frames and callback frames. These build measurements do not measure execution performance.
-
-Exact inputs, executables, commands, native object, stack report, and results
-are preserved under
-`~/.cache/sunstoneos/evidence/display-engine-20261016/initial-snapshot/`.
-No physical hardware was accessed.
 
 ## Complete display support requires further work
 
@@ -267,9 +260,9 @@ Replay source authority remains Linux revision
 `sunxi_de.c`, `sunxi_drm_crtc.c`, `sunxi_drm_drv.c` and `drm_atomic_helper.c`,
 with hashes in `sources.lock.json`. Failed admission, uncertain submission,
 readback mismatch, stale completion or deadline retains the bank and resources.
-The host model in `checks/a733-display-engine.c` replays immutable contents
-through two-, three- and four-slot rings. It checks that no lifecycle state
-grants rewrite permission, including successful replay. It also checks these refusals:
+The driver replays immutable contents through two-, three- and four-slot rings
+and grants rewrite permission in no lifecycle state, including successful
+replay. It refuses:
 
 - invalid slot counts and ring geometry at initialization;
 - `START` over command pages that do not match the configured ring;
@@ -278,7 +271,9 @@ grants rewrite permission, including successful replay. It also checks these ref
 - requests while a replay is pending, after `STOP`, and after deadline and
   stale-completion faults.
 
-No application yet writes recycled slots: the GPU-to-HDMI and DSI
-applications still present sealed two-frame banks with a zero
+No host check exercises these refusals. No application writes recycled slots:
+the GPU-to-HDMI and DSI applications present sealed two-frame banks with a zero
 `ring_frame_bytes`. A streaming producer, source-backed retirement and physical
 scanout remain outstanding.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/display-engine.jsonl).

@@ -219,46 +219,20 @@ They do not enable a function or program its current block size. A caller must
 complete and verify those operations before submitting the corresponding
 CMD53 request. The advertised maximum is not the programmed block size.
 
-## Focused evidence covers the implemented boundaries
+## Validation covers the implemented boundaries
 
-The [register-model fixture](../checks/sdio-controller.c) passed with address
-and undefined-behavior sanitizers. It covers enumeration with two functions,
-manufacturer inheritance, CMD52 read-after-write, a 20-byte radio identity
-command, a 512-byte byte-mode read, a 1,024-byte block-mode write, and interrupt
-reassertion. Error cases cover version rejection, reset timeout, clock regression,
-R5 errors, missing completion events, late completion, and an invalid CIS pointer.
+The register-model fixture [checks/sdio-controller.c](../checks/sdio-controller.c)
+has no retained runner. A sanitizer run of it covered enumeration with two
+functions, manufacturer inheritance, CMD52 read-after-write, a 20-byte radio
+identity command, byte-mode and block-mode transfers, interrupt reassertion,
+CMD7 status and partial FIFO failure. It also covered malformed function-extension tuples, refusal
+to reinitialize active or faulted objects, four-bit widening and the error
+cases (version rejection, reset timeout, clock regression, R5 errors, missing
+and late completion, invalid CIS pointer). The cases and their evidence are in
+[the evidence file](evidence/sdio.jsonl). The card layer uses the runtime's
+`memset` plus the controller API.
 
-Focused follow-up cases passed for CMD7 informational/error status, partial
-FIFO callback failure, malformed function-extension tuple shapes, and refusal
-to reinitialize active or faulted objects. The
-earlier enumeration/transfer evidence was reused. These corrections change
-response-bit and malformed-tuple rejection; the earlier successful responses
-and valid tuples remain accepted. The initialization guard preserves the
-first initialization path; its refusal check confirms retained state and
-callback counts remain unchanged.
-
-A later case, selected with `--case widen`, covers four-bit widening: refusal of
-out-of-range divisors and repeated requests, the module callback with the card
-clock stopped, readback of clock, width, delays and timing mode, a level-sized
-128-word read burst from one status sample, and terminal faults when the
-module change fails or the sample delay no longer matches preparation.
-
-Raw evidence is under `~/.cache/sunstoneos/evidence/sdio-controller-20261016/`.
-`results.json` identifies the initial successful direct build/run;
-`select-io/results.json`, `cis-shape/results.json`, and `reinit/results.json`
-identify the focused follow-ups. The runner was added
-after the initial session and did not trigger an unchanged rerun.
-The evidence includes compiler, command, source/header hashes, and executable
-identity. Freestanding AArch64 object evidence is under `aarch64-lifecycle/`.
-The card layer uses the runtime's `memset` plus the controller API.
-
-```sh
-python3 checks/sdio-controller.py \
-  --reference-dir /path/to/pinned/kernel \
-  --evidence /path/outside/repository/sdio-evidence
-```
-
-The controller checks performed no physical operations or measurements. The
+The controller run performed no physical operations or measurements. The
 native identity application exists, but fitted rail/pin authority and reusable
 shutdown remain unresolved; see its [return design](../apps/radio-sdio-id/RETURNING.md).
 Physical qualification needs real shared-resource admission and bounded FIFO

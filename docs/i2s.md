@@ -129,11 +129,12 @@ routing and retained uncertain stops. Its register model asserts that the DMA
 request is off whenever a DMA channel starts or stops and whenever the CPU
 acquires a captured period. Address and undefined-behavior sanitizers pass.
 
-The reference check extracts unmodified functions from the pinned audio driver
-and compares accepted and refused clock ratios, wire timing, I2S delay, channel
-counts, and reversed RX mapping-register order. It passes for 135 supported
-plans and 1,602 refused ratios. Sample-resolution and DMA-width choices also
-have direct source evidence; physical FIFO packing remains unqualified.
+No host check compares the format planner with the pinned audio driver's
+clock ratios, wire timing, I2S delay, channel counts or reversed RX
+mapping-register order. An earlier comparison of unmodified driver functions
+accepted 135 supported plans and refused 1,602 ratios. Sample-resolution and
+DMA-width choices have direct source evidence; physical FIFO packing remains
+unqualified.
 
 Reproduce only affected checks when their relevant inputs change:
 
@@ -142,9 +143,6 @@ cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -Iinclude checks/i2s.c drivers/audio/a733_i2s_stream.c drivers/audio/a733_i2s.c \
   drivers/dma/a733_dma.c drivers/dma/a733_dma_controller.c -o /tmp/i2s-check
 /tmp/i2s-check
-python3 checks/i2s-reference.py \
-  --source-dir "$HOME/.cache/sunstoneos/sources/i2s" \
-  --build-dir "$HOME/.cache/sunstoneos/evidence/i2s-reference"
 ```
 
 The two-core service compositions and the native application evidence are
@@ -155,8 +153,7 @@ described in [i2s-stream.md](i2s-stream.md) and
 
 The implementation uses register and routing facts from board-kernel revision
 `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`. Downloaded source remains outside Git.
-The reference checker verifies source hashes before extracting functions and
-retains their original license notices in its temporary compilation unit.
+The original license notices of the sources stay in the external cache.
 
 | Source | Relevant facts | SHA-256 |
 | --- | --- | --- |
@@ -171,3 +168,5 @@ Board routing, request IDs, alternate pin functions, and CCU offsets come from
 and `bsp/drivers/clk/sunxi-ng/ccu-sun60iw2.c` at the same revision. The cached
 source manifest records downloaded input identities. Schematic provenance is
 maintained in the [board wiring record](board-wiring.md).
+
+Results of host checks that no longer exist are kept in the evidence record [i2s.jsonl](evidence/i2s.jsonl).

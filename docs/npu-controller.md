@@ -141,30 +141,9 @@ must provide a consistent counter across callers and bounded callback execution.
 
 ## Focused validation
 
-The [host check](../checks/npu-controller.c) uses a stateful register model,
-read-to-acknowledge events, delayed completion and idle transitions, and separate
-CPU/device buffer copies. It builds a real native MMU image for the command
-allocations and checks that publication receives that selected image.
+No host check covers the controller. An earlier run with a stateful register model with read-to-acknowledge events, delayed completion and idle transitions, and separate CPU/device buffer copies exercised bootstrap decoding, initialization state, buffer publication and command trigger. It also exercised event arrival before memory idle, output visibility, single result consumption and shutdown. It further exercised counter wrap, ignored starts, stale events, directory changes, AXI/MMU faults and a fault during the final idle read. It also exercised cancellation pulse timing, acknowledgment without idle, failed cancellation and refusal to submit after cancellation until close. Last, it exercised register, publication and completion failures, retained ownership, identity mismatch, startup expiry and insufficient command mappings. The publication callback receives the selected native MMU image.
 
-The check covers:
-
-- Bootstrap decoding, initialization state, buffer publication, and command trigger.
-- Event arrival before memory idle, output visibility, single result consumption,
-  and successful shutdown.
-- Counter wrap, ignored starts, stale events, directory changes, AXI/MMU faults,
-  and a fault that appears during the final idle read.
-- Cancellation pulse timing, acknowledgment without idle, failed cancellation,
-  and refusal to submit after cancellation until close.
-- Register failures, publication and completion failures, retained ownership,
-  identity mismatch, startup expiry, and insufficient command mappings.
-
-An initial sanitizer check and target compile passed. API review then made the
-selected MMU image explicit in the publication callback. One focused sanitizer
-check and target compile passed on that final interface. Earlier inputs are
-superseded for this component; unchanged MMU-builder, model-inspection, DMA, and
-mimus evidence remains reusable.
-
-Final evidence is under
+Evidence is under
 `~/.cache/sunstoneos/evidence/npu-controller-20261016/final/`.
 The AArch64 object has SHA-256
 `0667e3f2255966cfb30441445550602d689c43bb15262d308391670b82a48cae`.
@@ -173,25 +152,14 @@ It contains 5,508 bytes of code and constants, no static data, and an unresolved
 service storage is measured in its separate implementation record. Physical
 stack usage and timing remain unmeasured.
 
-Reproduce the focused host check with:
-
-```sh
-clang-21 -std=c11 -O1 -g -Wall -Wextra -Werror \
-  -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude \
-  checks/npu-controller.c drivers/npu/a733_npu_controller.c \
-  drivers/npu/a733_npu_mmu.c -o /tmp/npu-controller-check
-/tmp/npu-controller-check
-```
-
-After configuring the AArch64 build as described in [build.md](build.md), compile
-only the controller with:
+To compile only the controller, configure the AArch64 build as described in [build.md](build.md) and run:
 
 ```sh
 cmake -S . -B "$HOME/.cache/sunstoneos/build/qemu-virt"
 cmake --build "$HOME/.cache/sunstoneos/build/qemu-virt" --target a733-npu-controller
 ```
 
-The [native assembler](nbg-assembly.md) now supplies relocation and command
+The [native assembler](nbg-assembly.md) supplies relocation and command
 construction for the recorded model profiles. Complete command-memory admission,
 physical platform startup, numerical inference and error recovery remain
 outstanding. No hardware request occurred during these controller checks.
@@ -211,3 +179,5 @@ The original `a733_npu_poll` preserves its inactive-state no-op behavior and
 continues sampling events for the default polled profile. An event observed
 between jobs by the optional notified path cannot be attributed to a later job.
 Neither a notification nor an idle observation alone establishes completion.
+
+Results of host checks that no longer exist are kept in the evidence record [npu-controller.jsonl](evidence/npu-controller.jsonl).

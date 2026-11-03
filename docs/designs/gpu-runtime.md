@@ -72,7 +72,7 @@ Start, stop and job preparation are paced by the hardware:
   start by more than the delay.
 - A register `POLL` in `pvr_gpu_stop.c`, the readiness-byte read and a
   firmware acknowledgement re-read for up to 50 µs from their first read, then
-  return AGAIN; the worker then waits one tick, as section 1.3 of
+  return AGAIN. The worker then waits one tick, as section 1.3 of
   performance-architecture.md allows for a hardware wait of a tick or more.
 - The power controller in `a733_gpu_power.c` runs its register steps back to
   back in one poll. It waits on the clock for the 1 µs settling delay and
@@ -90,8 +90,7 @@ Start, stop and job preparation are paced by the hardware:
   to a client ring. With CPU work left, it checks the request queue without
   waiting and calls `taskYIELD()`. After 1 ms of such bursts it blocks for one
   tick, so tasks below its priority on core 0 (the GPU, NPU, PMIC and USB
-  clients at priority 2) still run during long preparation or disposal; core 0
-  is idle for that tick when none is ready.
+  clients at priority 2) still run during long preparation or disposal. Core 0 is idle for that tick when none is ready.
 - Only the ring writes before a kick are exempt from the 1 ms bound: a compute
   job from admission to its kick and a render from geometry formatting to its
   kick. No tick wait lies between a request and its kick. The fixed submission
@@ -287,7 +286,7 @@ Host cases still to add: resubmission after RESET with correct output; refusal a
   writes guard and poison words over the full output with 4-byte stores and
   cleans each step by address. Writing only the guard bands once the board
   shows full tile coverage, or filling with `DC ZVA` or NEON stores, would
-  shorten it; it moves to an A76 core once the multicore work admits those
+  shorten it. It moves to an A76 core once the multicore work admits those
   cores, and is then budgeted and measured on the board.
 - `apps/accelerators/gpu.c` and the render applications use completion
   messages.

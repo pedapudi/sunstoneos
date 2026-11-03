@@ -49,7 +49,7 @@ also serves JPEG encoding, keeps its inherited start (see
   the HDMI, UFS and COMBO 0.8 V nets. Board schematic v1.2 shows this twice:
   the PMIC sheet (sheet 6, "06_POWER AXP318") draws DCDC2's output with the
   net labels VDD-SYS, VDD-VE, VDD-COMB0, VDD08-HDMI, VDD-DRAM and VDD08-UFS,
-  and DCDC5's with VDD-CPUL; the power-sequence table on sheet 2 lists VDD-VE
+  and DCDC5's with VDD-CPUL. The power-sequence table on sheet 2 lists VDD-VE
   under DCDC2 at 0.8 V. The vendor U-Boot device tree's `ve-supply` names DCDC5
   (`u-boot-current.dts` lines 1949 and 4197–4204), which contradicts both
   sheets; the board kernel's device tree has no `ve-supply`. One row of the
@@ -117,7 +117,7 @@ the decoder programs a PLL, so the code names PLL_VE0 and nothing else.
 - **Native access.** The decoder's write allowlist is a pure rule,
   `a733_video_platform_write_policy`, which `native_write` applies with native
   reads. It accepts PLL_VE0 with the owned bits `0xf870ff02` only while none of
-  PLL_VE0's consumers runs on it: the encoder's module clock at mux 0, the
+  PLL_VE0's consumers runs on it. The encoder's module clock at mux 0, the
   decoder's at mux 1 and the NPU's at mux 4 (`ccu-sun60iw2.c` lines 965–1015)
   must each have the gate closed or select another source. It accepts the
   decoder's selector and divider only while the decoder's module gate is
@@ -159,11 +159,11 @@ and the `+0xa80` selector and divider in the encoder's write allowlist.
 
 `checks/video-pll.py` compares the profile with the pinned manual, kernel clock
 driver, device trees, operating-point table, `cedar_ve.c`, U-Boot and kernel
-device trees and the schematic text, including the order of the vendor's
-enable, lock wait, lock-enable toggle and module clock gates, and with the port
-3-3 dump words. It builds and runs two models with address and
+device trees and the schematic text and the port 3-3 dump words. The comparison
+includes the order of the vendor's enable, lock wait, lock-enable toggle and
+module clock gates. It builds and runs two models with address and
 undefined-behavior sanitizers and seventeen driver mutants that the cold model
-must refuse, checks the three session producers' defaults, and compiles the
+must refuse. It checks the three session producers' defaults and compiles the
 H.264, HEVC and JPEG applications' `native.c` with their configured flags and
 warnings as errors (`--app-compile-commands` names the configured builds). It
 also compiles the changed drivers for AArch64. `checks/a733-video-cold.c` is

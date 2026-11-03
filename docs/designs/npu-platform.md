@@ -60,12 +60,10 @@ call runs stages until one waits.
    makes no PMIC transfer of its own.
 3. **Register pass.** Under one register-lock acquisition, with no write,
    check: the 24 MHz reference; the shared SRAM routed to the CPU; the AHB, NSI
-   and MBUS words against the record, with no DFS update pending on the last
-   two; PERI0 when a fabric clock selects it; the video encode and decode
-   gates closed and their bus word's gates closed and resets asserted; the NPU
-   module and bus gates closed, core, AXI and AHB resets asserted and SRAM
-   reset released; DRAM0 gated on from DDRPLL with the DRAM bus clocked by the
-   PHY PLL; the autonomous clock modes off; PLL_NPU either disabled (with only
+   and MBUS words against the record, with no DFS update pending on the last two. It also checks: PERI0 when a fabric clock selects it; the video encode and decode
+   gates closed and their bus word's gates closed and resets asserted. It then checks: the NPU module and bus gates closed, core, AXI and AHB resets asserted and SRAM
+   reset released. It then checks: DRAM0 gated on from DDRPLL with the DRAM bus clocked by the
+   PHY PLL. Finally, the pass checks: the autonomous clock modes off; PLL_NPU either disabled (with only
    the inherited reserved bit set outside documented fields) or already locked
    with its output open at the selected or the other supported rate; and the
    four PLL_NPU tuning words at reset. Any mismatch is a refusal before the
@@ -93,16 +91,14 @@ and between steps.
 
 **Operating point.** The default is the vendor point for the board's speed
 bin, read from SID word `0x0300624c`: 852 MHz at 800 mV for bin codes `0x04`,
-`0x05` and `0x12` (a 1,704 MHz oscillator, multiplier 71, P0 = 2, divider 1),
-and refusal for every other code, because points above 800 mV need DCDC2
-changes and DCDC2 also supplies eDP and HDMI. 492 MHz (multiplier 82, P0 = 4)
-is selectable before the scheduler starts with `a733_npu_startup_rate`.
+`0x05` and `0x12` (a 1,704 MHz oscillator, multiplier 71, P0 = 2, divider 1). Every other code is refused, because points above 800 mV need DCDC2
+changes and DCDC2 also supplies eDP and HDMI. The 492 MHz point (multiplier 82, P0 = 4) is selectable before the scheduler starts with `a733_npu_startup_rate`.
 
 **Local stop** closes the module and bus gates and asserts the three resets in
 one call and one locked pass, routes the shared SRAM back to the CPU, and
 leaves domain 4 on and PLL_NPU locked with its output open. **Restart** and
 **retune** accept only that stopped state: restart re-runs the PLL and open
-stages through the adoption path, and `a733_npu_startup_retune` changes the
+stages through the adoption path. `a733_npu_startup_retune` changes the
 rate with the vendor order (output gate off, factors, lock enable cleared and
 set, LOCK, output gate on) only while the NPU is stopped and the speed bin
 allows it. A failed readback retains the clock, rail and lease tokens. Power-off
@@ -187,7 +183,7 @@ and `npu-platform-board-evidence-plan`.
    wakes every 1000 ms when idle.
 3. **Cancel and restart.** On a missed deadline the worker masks interrupt 97,
    polls once, then calls `a733_npu_cancel`: a 100 µs assertion, then up to 1 ms
-   for the acknowledgement (`0x3a8` bit 4) and full idle, then one poll per tick
+   for the acknowledgement (`0x3a8` bit 4) and full idle. After that, one poll per tick
    up to 20 ms (the vendor 200 × 100 µs bound). On success the job reports
    CANCELED, then `a733_npu_reap`, `a733_npu_close` and `a733_npu_open` with the
    soft reset and bootstrap stream run, and interrupt 97 is unmasked. Four
@@ -199,8 +195,7 @@ and `npu-platform-board-evidence-plan`.
    SUBMIT or CLOSE. A job then costs two round trips.
 5. **Per-job work.** Remove the per-job constant-buffer digest (917,504 bytes),
    `AT` translations, MMU table scan and output copy after the primary agent
-   maps the admitted regions and the EL1 translation-table pages read-only with
-   no writable alias; use SHA2 instructions for the remaining digests where
+   maps the admitted regions and the EL1 translation-table pages read-only with no writable alias. Use SHA2 instructions for the remaining digests where
    `ID_AA64ISAR0_EL1` reports them. Move cache maintenance to the writers: the
    client cleans its input (`DC CVAC`, then `DSB SY` before SUBMIT), the worker
    clean-invalidates the 4,096 output bytes before a job and invalidates them
@@ -208,8 +203,7 @@ and `npu-platform-board-evidence-plan`.
    identical outputs from a pool prefilled with zeros and with `0xa5`.
 6. **Idle gating of the local clocks.** After 100 ms without a job the worker
    closes the controller and masks interrupt 97, then gates the module and bus
-   clocks and asserts the AHB, AXI and core resets in one locked pass; domain 4,
-   the PLL and the rail stay on. The next submit opens the gates and the
+   clocks and asserts the AHB, AXI and core resets in one locked pass. Domain 4, the PLL and the rail stay on. The next submit opens the gates and the
    controller (soft reset, 208-byte bootstrap stream) with submits queued
    during the wake. Gating is off until the read-only mappings exist and a
    board current measurement shows a saving. This design is separate from the

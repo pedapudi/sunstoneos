@@ -1,8 +1,9 @@
 # Accelerator register completion audit
 
 Status: source audit and focused software validation of `drivers/gpu`, `drivers/npu`, `drivers/dma`,
-`drivers/iommu` and `drivers/crypto`. Completion and timing fixes below are
-implemented and software-verified. Hardware qualification
+`drivers/iommu` and `drivers/crypto`. Completion and timing rules below are
+implemented; the NPU settle, native-delay and DMA reset hold rules have host
+checks, and the others have none. Hardware qualification
 remains open. The intended reader understands MMIO, DMA and device ownership.
 An ordinary control-word readback proves the sampled value; it proves a
 transition complete only when the cited reference assigns that meaning.
@@ -57,7 +58,7 @@ Offsets in this table are relative to the named register bank.
 | --- | --- | --- |
 | `a733_gpu_power.c`, `on_steps`, `a733_gpu_power_poll` | PLL_GPU0, CCU `+0xe0`: output closed, LDO/PLL/lock enable, then three LOCK samples separated by more than 3 µs; more than 20 µs before output opens. Same wait after factor change. | Manual §4.1.4.1–2, §4.1.6.16; CCU lock helper. Correct spacing, reset on lock loss, 100-read bound and global deadline. Ordinary PLL readbacks exclude status; LOCK is observed separately. |
 | Same | GPU0_CLK, CCU `+0xb20`, bit 27 after core gate enable and repeated update request. | Manual §4.1.6.121, R/WAC GPU0_UPD; both ON requests poll clear before the next step. A permanently set bit fails after 100 reads. |
-| Same, `off_steps` | GPU0_CLK gate disable writes bit 27, waits for UPD clear, checks bit 31, then disables PLL_GPU0. | Manual §4.1.6.121: bit 27 clears after configuration becomes valid. OFF now polls clear with the existing 100-read/global deadline bounds before PLL/reset work. The vendor KEY_FIELD_MOD path supplies no demonstrated wait; this check follows the manual's completion condition. |
+| Same, `off_steps` | GPU0_CLK gate disable writes bit 27, waits for UPD clear, checks bit 31, then disables PLL_GPU0. | Manual §4.1.6.121: bit 27 clears after configuration becomes valid. OFF polls clear with the existing 100-read/global deadline bounds before PLL/reset work. The vendor KEY_FIELD_MOD path supplies no demonstrated wait; this check follows the manual's completion condition. |
 | Same | CORE6 PWCR `+0x20`, policy `+0`, status `+8`; TOP5 power row. | Selected `sunxi_platform.c` and Arm DEN0051E §5.2.8, as pinned in [GPU power](gpu-power.md). PWCR requires settled policy except the documented cold state. ON/OFF wait for CORE6 status; TOP5 completion comes from the power owner. Status polls retain resources on timeout. |
 | Same | CCU `+0xb24` reset and bus gate; PLL disable control fields. | Manual §4.1.6.16,122 and CCU disable source. Each control write has its own readback; no separate local reset-done field is documented. CORE/TOP retirement precedes clock removal. |
 | `a733_gpu_performance.c`, `a733_gpu_platform_performance_poll`, `a733_gpu_platform_performance_off` | CCU `+0xb20` source/divider update. | Manual §4.1.6.121. Both paths poll UPD clear, then verify the resulting selector/divider/rate under a deadline. Correct completion condition. |
@@ -77,7 +78,7 @@ Offsets in this table are relative to the named register bank.
 | --- | --- | --- |
 | `a733_npu_startup.c`, `apply_factors`, `lock_wait`, retune | PLL_NPU CCU `+0x2a0`, gate config `+0x1920`; lock then settle before output. | Manual §4.1.4.1–2, §4.1.6.56,255; CCU source. Shared `a733_pll_lock.h` requires three spaced samples and more than 20 µs settle. Exact control checks ignore LOCK and preserve the inherited reserved bit. Correct. |
 | Same, local open/stop tables | CCU `+0xb00/+0xb04` resets and gates; SYSCTRL `0x03000008` SRAM route. | Manual §4.1.6.119–120; NPU platform `npu_clk_init/uninit`; U-Boot `board_sun60iw2.c:119–133`, revision `b791be842935b27268ae3d00e943a9075495f30a`. Each write has a separate readback; no module update bit is documented. Domain ON precedes local open. Local stop retains the domain and PLL. |
-| Same, `A733_NPU_STARTUP_SETTLE` | Wait after local clocks before controller access: 2,000 µs. | NPU platform source `:1386–1387`. The endpoint now includes 1 µs of rounding allowance. The raw-counter tail returns PENDING after 1,024 unchanged samples; the original absolute deadline remains in force. |
+| Same, `A733_NPU_STARTUP_SETTLE` | Wait after local clocks before controller access: 2,000 µs. | NPU platform source `:1386–1387`. The endpoint includes 1 µs of rounding allowance. The raw-counter tail returns PENDING after 1,024 unchanged samples; the original absolute deadline remains in force. |
 | `a733_npu_controller.c`, `reset` | NPU `+0` FSCALE pulse, isolation; `+0x3a8` reset assert/deassert; delays 5/20/20/40/50 µs. | NPU `reset_vip:104–233`. Two successful passes require idle bit 0, control `0x30000` and disabled MMU; final full idle is mandatory. Delays delegate to the native adapter. `platform/a733/npu_native.c` now requires the rounded elapsed value to exceed the request. Its existing 1,048,576-loop bound and fatal retention remain. |
 | Same, `a733_npu_open`, `trigger` | MMU directory `+0x3b4`, MMU control `+0x388`, IRQ enable `+0x14`, command address `+0x654`, trigger `+0x3a4`. | NPU hardware initialization and submit functions. Exact directory/control/IRQ readbacks and clear events/full idle precede bootstrap. Trigger orders address before fetch with a barrier. Job completion requires event bit 0 and full idle before output acquire; idle alone is insufficient. |
 | Same, `a733_npu_advance`, completed bootstrap | After bootstrap event, full idle and output acquire: 10 µs before READY. | VIPLite `vip_drv_hardware.c:848–850`. This post-bootstrap hold is separate from the pre-trigger reset-event drain. The native delay includes rounding allowance; the controller rechecks its deadline before publishing READY. |
@@ -129,7 +130,7 @@ code. A raw volatile store or DMB is not recorded as a completion barrier.
 | GPU VM tables and firmware shared state | `gpu_vm_memory.c` and `gpu_memory.c` publication/sync callbacks | Cache publication and shared-state stores end with DSB; clock-correlation payload stores finish before the sequence word is published. | GPU host MMU/firmware structures. Firmware-started, power-sync and command acknowledgements establish the subsequent protocol state. |
 | GPU voltage settling | Platform/performance → PMIC result/reap provider | The validated timestamp follows completed result collection and reap. The PMIC's selector readback and bus retirement belong to that provider. | `sunxiSetVoltage` and `axp2101-regulator.c:383–408`; existing 1,200 µs hold remains strict at a rounded endpoint. No additional MMIO barrier substitutes for rail settling. |
 | NPU local CCU resets/gates, PLL_NPU and SRAM routing | `a733_npu_startup.c` → `a733_npu_platform_native.c` | Each accepted store ends with DSB; readbacks use DSB on both sides. | Manual §4.1.4.1–2 and VIPLite platform clock order. PLL lock spacing/settle, domain ON, route readback and the 2 ms post-open hold remain separate. |
-| NPU FSCALE, reset, isolation and cancellation | Controller → runtime/session/convolution wrappers → `platform/a733/npu_native.c:write32` | Pre-store DMB OSHST is retained; an accepted store now ends with DSB SY before return to the hold/timestamp step. Refused stores issue neither. | VIPLite `reset_vip:104–233`: 5/20/20/40/50 µs holds across two passes; initialization also drains reset-era events after 10 µs. `vipdrv_hw_cancel:1119–1200` holds assertion for 100 µs before release. This fixes architectural posting, with endpoint timing still subject to the mapping limitation above. |
+| NPU FSCALE, reset, isolation and cancellation | Controller → runtime/session/convolution wrappers → `platform/a733/npu_native.c:write32` | Pre-store DMB OSHST is retained; an accepted store ends with DSB SY before return to the hold/timestamp step. Refused stores issue neither. | VIPLite `reset_vip:104–233`: 5/20/20/40/50 µs holds across two passes; initialization also drains reset-era events after 10 µs. `vipdrv_hw_cancel:1119–1200` holds assertion for 100 µs before release. This fixes architectural posting, with endpoint timing still subject to the mapping limitation above. |
 | NPU command address/trigger and output handoff | Controller `trigger/advance` → native adapter and memory callbacks | Address write completes before the explicit barrier and fetch trigger. Trigger store completes architecturally before return. Full idle precedes the existing completion barrier and cache acquire. | VIPLite submit/completion source. Event plus full idle, or cancel acknowledgement plus full idle, remains mandatory; DSB does not synthesize either condition. |
 | DMA0 local reset, gates and global configuration | `a733_dma_platform.c` → `a733_dma_platform_native.c` | Each admitted RMW has DSB before the read and after the store; readbacks use DSB on both sides. | DMA source initialization order and native reset contract. The reset baseline is held for more than 20 rounded µs before release; no other fixed inter-write hold is prescribed. |
 | DMA descriptors, enable, pause/stop and pending clear | Controller → `platform/a733/dma_native.c` | Register writes use DSB before/after; reads end in DSB. Descriptor cache publication and teardown have explicit barrier callbacks. | DMA submit and terminate source. Address/IRQ configuration precedes enable; disable plus channel BUSY clear precedes output acquisition. These conditions do not establish cyclic counter/data ordering. |
@@ -141,52 +142,44 @@ The confirmed native ordering omission was the NPU writer's absent post-store
 completion boundary. GPU, DMA, IOMMU and CE providers already supply the
 barriers shown above. This audit adds no undocumented vendor delay.
 
-## Focused models expose the original completion gaps
+## Focused models cover NPU settle, native delays and the DMA reset hold
 
-- **GPU OFF update:** the original `checks/a733-gpu-power.c` cleared
-  GPU_UPD during writes, so its gate readback could not distinguish a
-  pending update. Its `--completion-only` mode now schedules delayed or
-  permanently pending hardware completion through `register_latency.h`.
-  Any PLL shutdown while that request remains pending fails independently.
-- **IOMMU flush:** the original `checks/a733-iommu.c` advanced only whole
-  microseconds. Its `>=10` assertion could not expose rounding, and the
-  source-comparison fixture only checked the delay argument. The focused
-  mode now uses a 24 MHz counter and rejects flush clear before 240 ticks
-  have elapsed after the final micro-TLB request.
-- **NPU cancel:** `checks/npu-controller.c --completion-only` separates a
-  costly assertion write, fractional time, the minimum pulse and delayed
-  acknowledgement. It also checks expiry during the write and while the
-  minimum pulse remains incomplete. Expiry issues no deassertion or output
-  acquire and retains the job.
 - **NPU settle:** `checks/npu-startup-host.c --completion-only` checks the
   endpoint against the actual local-enable timestamp. A stopped raw clock
-  returns PENDING; subsequent original-deadline expiry retains ownership.
+  returns PENDING; expiry of the deadline retains ownership.
 - **NPU native delays:** `checks/npu-native-delay.py` compiles the production
   C delay function with a host clock, replacing only the AArch64 yield
   instruction with a compiler barrier. Six requested intervals run at all
   24 fractional phases of a 24 MHz counter. Stopped-clock and excessive-delay
-  cases retain the original fatal bounds. Address and undefined-behavior
+  cases retain the fatal bounds. Address and undefined-behavior
   sanitizers cover this extracted-function check.
-- **GPU supply settle:** `checks/gpu-performance-platform.c --settle-only`
-  lets the actual PMIC provider finish after the GPU entry timestamp.
-  Separately charged result and reap callbacks expose stale anchors in
-  startup and performance changes. Expiry preserves the prior endpoint,
-  current voltage, clock selector and owned resources. Build this case with
-  `SUNSTONE_GPU_SETTLE_LATENCY=1`, `SUNSTONE_A733_OS_PERF=1`, and linker
-  wraps for `a733_pmic_result` and `a733_pmic_reap`.
 - **DMA reset hold:** `checks/dma-platform.c --reset-minimum-only` charges
   the final baseline read and uses fractional 24 MHz time. Release at
-  fewer than 480 ticks fails independently; original-deadline expiry
+  fewer than 480 ticks fails independently; deadline expiry
   retains the token before any write.
-- **DMA:** `checks/dma-controller.c` already separates queue completion
-  from explicit bus drain and checks that output invalidation follows
-  EN=0 and BUSY=0. That independent model remains in place.
-- **CE:** `checks/a733-ce.c --completion-only` now schedules success after
-  task load and keeps device output separate until completion. It rejects
-  early acquire and checks a permanently pending task against the original
-  deadline. Ordinary CE task waits required no production change.
 
-The fixes preserve operating points, supply settings and hard timeouts.
+No host check models the following completion rules, which the code
+implements:
+
+- **GPU OFF update:** GPU_UPD is a write-and-clear bit, so a gate readback
+  cannot distinguish a pending update. A delayed or permanently pending
+  completion fails PLL shutdown independently while the request remains pending.
+- **IOMMU flush:** a 24 MHz counter rejects flush clear before 240 ticks
+  have elapsed after the final micro-TLB request.
+- **NPU cancel:** a costly assertion write, fractional time, the minimum pulse
+  and a delayed acknowledgement are separate. Expiry during the write or while
+  the minimum pulse remains incomplete issues no deassertion or output acquire
+  and retains the job.
+- **GPU supply settle:** the settle interval is anchored after the PMIC result
+  and reap callbacks complete. Expiry preserves the prior endpoint, current
+  voltage, clock selector and owned resources.
+- **DMA controller:** queue completion is separate from explicit bus drain, and
+  output invalidation follows EN=0 and BUSY=0.
+- **CE:** success follows task load, device output stays separate until
+  completion, early acquire is rejected, and a permanently pending task is
+  checked against the deadline. Ordinary CE task waits need no change.
+
+The rules preserve operating points, supply settings and hard timeouts.
 Physical timing and recovery remain unqualified.
 
 ## Executed native ordering check
@@ -208,42 +201,23 @@ Image, native source, fixture and shared-helper hashes are bound in
 `~/.cache/sunstoneos/build/model-fidelity-1031/ordering-followup/accelerators/native-ordering/inputs.json`;
 that directory's `results.json` contains the instruction counts and counter
 samples. This is a host instruction fixture, not a physical submission.
-The controller, client wrappers and firmware command layouts are unchanged;
-their earlier sequence evidence remains applicable. Physical endpoint arrival
+Physical endpoint arrival
 and minimum pulse qualification remain open where nGnRE is admitted.
 
 ## Executed checks and remaining qualification
 
-Focused GPU OFF, IOMMU flush, NPU cancellation, NPU settle and CE completion
-cases pass. The native-delay extracted-function check passes with address and
-undefined-behavior sanitizers. Rebuilt `npu-native-model`, `npu-startup-model`
-and `a733-npu-controller` include the changed code and controller layout.
-Both linked FreeRTOS models pass in QEMU with GICv3. An initial native-model
-invocation selected QEMU's default GICv2 and failed before NPU execution;
-its corrected invocation is preserved beside that failed setup.
+The NPU settle case and the native-delay extracted-function check pass, the
+latter with address and undefined-behavior sanitizers. `npu-native-model`,
+`npu-startup-model` and `a733-npu-controller` include the controller layout
+and build. Both linked FreeRTOS models pass in QEMU with GICv3.
 
-Removing the GPU OFF wait fails before PLL shutdown. Restoring the original
-IOMMU interval fails the 240-tick flush check. Removing cancellation rounding
-allowance fails the 2,400-tick pulse check. The original native-delay loop
-fails the fractional-time minimum check. Restoring the DMA reset comparison
-releases reset before 480 ticks. Removing either GPU post-collection time
-sample anchors settling before the required interval. These negative controls establish
-that the focused checks detect the corrected behavior.
-
-For identical inherited GPU ON/OFF inputs, ON uses 190 callbacks before and
-after the change. OFF increases from 48 to 50 callbacks, with 24 writes
-unchanged across the complete ON/OFF pair. The added work is one register
-sample and its deadline sample. The complete original and current host closures
-took 1.227 and 1.286 ms in one process invocation each; those wall times do not
-measure board performance. The current closure passes its complete fault sweep.
-
-Commands, logs and mutation results are under
+The negative controls establish that the remaining focused checks detect the
+behavior they cover. Restoring the integer-microsecond native-delay loop fails
+the fractional-time minimum check. Restoring the DMA reset comparison releases
+reset before 480 ticks. Commands, logs and mutation results are under
 `~/.cache/sunstoneos/build/model-fidelity-1031/accelerators/`, especially
 `results.json`, `mutations/results.json` and `native-delay-sanitized/`.
-The additional DMA/GPU minimum-delay evidence is in
-`minimum-extension/results.json`. The ordinary GPU provider closure passes
-its ten cases before and after the anchor corrections. Each completed supply
-write adds one validated time sample, with no added register writes.
+The DMA and GPU minimum-delay results are in `minimum-extension/results.json`.
 
 No board was accessed. GPU OFF update latency, NPU pulse and settle timing,
 IOMMU flush duration, DMA cyclic ordering and physical fault recovery remain
@@ -261,3 +235,5 @@ through the CCB and NPU controller remains covered in the tables above.
 - **DMA:** `a733_dma.c`, `dma_memory.c`, `dma_service.c`, `dma_service_i2s.c`, `dma_service_i2s_stream.c`.
 - **IOMMU:** every file has an entry in the tables.
 - **CRYPTO:** `a733_ce_cipher.c`, `a733_ce_entropy.c`, `a733_ce_hash.c`, `a733_ce_session.c`.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/driver-completion-accelerators.jsonl).

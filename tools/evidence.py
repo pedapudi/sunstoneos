@@ -7,7 +7,6 @@ One JSON Lines file per subsystem lives in docs/evidence/. See docs/evidence.md.
   evidence.py validate             check schema, queue agreement and status claims
   evidence.py sync [--check]       rewrite (or compare) the table in each status file
   evidence.py table S              print the table for one subsystem
-  evidence.py migrate STATUS_MD    move a prose status file to the short format
 """
 import argparse
 import datetime
@@ -111,9 +110,40 @@ def validate_records(root, queue=None):
     return problems
 
 
+REFERENCE = re.compile(r'(docs/[^#\s]+\.(?:md|jsonl))(?:#(\S+))?')
+
+
+def heading_anchors(path):
+    """The anchors of a Markdown file: GitHub heading slugs and explicit <a id> tags."""
+    text = Path(path).read_text()
+    found = set(re.findall(r'<a id="([^"]+)"', text))
+    for heading in re.findall(r'^#{1,6}\s+(.+?)\s*$', text, re.M):
+        slug = re.sub(r'[^\w\s-]', '', re.sub(r'[`*]', '', heading).lower()).strip().replace(' ', '-')
+        found.add(slug)
+    return found
+
+
+def reference_problems(root, where, record):
+    """A reference of the form docs/PATH.md#ANCHOR (or PATH.jsonl#ID) must resolve."""
+    match = REFERENCE.fullmatch(record.get('reference') or '')
+    if not match:
+        return []
+    path, anchor = match.groups()
+    target = Path(root) / path
+    if not target.exists():
+        return [f'{where}: reference {path} does not exist']
+    if not anchor:
+        return []
+    if path.endswith('.jsonl'):
+        known = {item.get('id') for _, item in read_records(target)[0]}
+    else:
+        known = heading_anchors(target)
+    return [] if anchor in known else [f'{where}: reference anchor #{anchor} not found in {path}']
+
+
 def extension_problems(root, where, record):
     """Rules for the prediction, conclusion and narrative fields."""
-    problems = []
+    problems = reference_problems(root, where, record)
     if record.get('prediction') and not record.get('conclusion'):
         problems.append(f'{where}: a record with a prediction requires a conclusion')
     if not record.get('entry_id') and not record.get('measurements') and not record.get('narrative'):
@@ -288,7 +318,7 @@ def cmd_sync(args):
 
 
 def claim_problems(root):
-    """Every queue entry a migrated status file cites must have a record."""
+    """Every queue entry a status file cites must have a record."""
     root, problems = Path(root), []
     everything = load_all(root)
     known = {record['id'] for records in everything.values() for record in records}
@@ -322,128 +352,6 @@ def cmd_table(args):
     print(table(load_all(args.root).get(args.subsystem, [])))
 
 
-# ---------------------------------------------------------------------------
-# Migration of a prose status file.
-
-
-
-def paragraphs(text):
-    return [part.strip() for part in re.split(r'\n\s*\n', text) if part.strip()]
-
-
-def flat(paragraph):
-    return ' '.join(paragraph.split())
-
-
-UNITS = r'(?:us|µs|ms|ns|s|MHz|GHz|mV|V|MiB|KiB|GiB|bytes|jobs/s|jobs|%|x|×)'
-
-
-def snake(text):
-    return re.sub(r'[^a-z0-9]+', '_', text.lower()).strip('_')
-
-
-def cells(line):
-    return [item.strip() for item in line.strip().strip('|').split('|')]
-
-
-def table_measurements(text, entry):
-    """Named measurements from the Markdown table row that cites the entry, if any."""
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        if not line.startswith('|') or entry not in line:
-            continue
-        top = index
-        while top > 0 and lines[top - 1].startswith('|'):
-            top -= 1
-        if top + 1 >= index:
-            return []
-        headers, values, found = cells(lines[top]), cells(line), []
-        for header, value in zip(headers[1:], values[1:]):
-            base, _, unit = header.partition(',')
-            unit = unit.strip()
-            base = re.sub(r'`', '', base).strip()
-            tail = re.search(r'\s(' + UNITS + r')$', base)
-            if tail and not unit:
-                base, unit = base[:tail.start()].strip(), tail.group(1)
-            value = value.replace(',', '') if re.fullmatch(r'[\d,. /]+', value) else value
-            parts = [item.strip() for item in base.split('/')]
-            numbers = [item.strip() for item in value.split('/')]
-            if len(parts) > 1 and len(numbers) == len(parts) and all(re.fullmatch(r'-?\d+(?:\.\d+)?', n) for n in numbers):
-                prefix = ' '.join(parts[0].split()[:-1])
-                names = [snake(prefix + ' ' + part.split()[-1]) for part in parts]
-                found += [{'name': n, 'value': split_value(v)[0], 'unit': unit} for n, v in zip(names, numbers)]
-            elif re.fullmatch(r'-?\d+(?:\.\d+)?', value) and unit:
-                found.append({'name': snake(base), 'value': split_value(value)[0], 'unit': unit})
-            else:
-                for word, number, unit_text in re.findall(r'(?:([A-Za-z]+)\s+)?(-?\d[\d,]*(?:\.\d+)?)\s*(' + UNITS + r')\b', value):
-                    name = snake(word if word and word.lower() not in ('and', 'the', 'with') else base)
-                    found.append({'name': name or snake(base), 'value': split_value(number.replace(',', ''))[0], 'unit': unit_text})
-        return found
-    return []
-
-
-def cmd_migrate(args):
-    root = Path(args.root)
-    source = Path(args.status)
-    source = source if source.is_absolute() else root / source
-    stem = source.stem
-    text = source.read_text()
-    if BEGIN in text:
-        raise SystemExit(f'{source} already uses the evidence format.')
-    stamp = args.date or datetime.date.today().strftime('%Y%m%d')
-    history = root / 'docs/history' / f'status-{stem}-{stamp}.md'
-    history.parent.mkdir(exist_ok=True)
-    title = re.match(r'# ([^\n]+)', text).group(1)
-    # The old file moves unchanged so relative links stay valid (docs/history has the same depth).
-    history.write_text(
-        f'# {title}: historical status record {stamp[:4]}-{stamp[4:6]}-{stamp[6:]}\n\n'
-        f'This log holds the prose evidence of [the current status](../status/{stem}.md) as it stood on the '
-        f'date above. It is not updated. Board results that have queue entries are in the records '
-        f'`docs/evidence/{stem}.jsonl`.\n\n'
-        + re.sub(r'\]\((?=[A-Za-z0-9_-]+\.md)', '](../status/', re.sub(r'\A# [^\n]+\n', '', text)).lstrip('\n'))
-    # Records for every queue entry the file cites.
-    queue = Path(args.queue)
-    cited = list(dict.fromkeys(ENTRY.findall(text)))
-    flat_text = flat(text)
-    created = []
-    for entry in cited:
-        if not (queue / 'entries' / entry / 'entry.json').exists():
-            print(f'warning: queue entry {entry} is not in {queue}; it stays in the historical log only')
-            continue
-        record = queue_record(queue, entry, stem)
-        sentences = [item for item in re.split(r'(?<=[.!?])\s+', flat_text) if entry in item]
-        record['note'] = ' '.join(sentences)[:600]
-        record['measurements'] += [item for item in table_measurements(text, entry)
-                                   if item['name'] not in {m['name'] for m in record['measurements']}]
-        append_record(root, record, replace=True)
-        created.append(entry)
-    intro = re.split(r'^#{2,} ', text, maxsplit=1, flags=re.M)[0]
-    status = re.search(r'^\*\*Status: [^\n]+\*\*[ \t]*$', intro, re.M)
-    scope = re.search(r'^\*\*Board-qualified scope:\*\* [^\n]+(?:\n(?!\n|#|\*\*)[^\n]+)*', intro, re.M)
-    summary = paragraphs(intro.split(status.group(0), 1)[1] if status else '')
-    summary = [flat(item) for item in summary[:1] if not item.startswith('**Board') and len(item.splitlines()) <= 6]
-    # Open work is never inferred: copy an existing section or leave a placeholder.
-    section = re.search(r'^## (?:Open work|Next (?:steps|actions)|Remaining work)[^\n]*\n(.*?)(?=^## |\Z)',
-                        text, re.M | re.S | re.I)
-    if section and section.group(1).strip():
-        open_work = section.group(1).strip().splitlines()
-    else:
-        open_work = ['1. Open work has not been written; see the historical log.']
-        print(f'warning: {source.name} has no open-work section; wrote a placeholder to replace by hand')
-    out = [f'# {title}', '', status.group(0) if status else '**Status: implemented.**', '',
-           *([summary[0], ''] if summary else []),
-           scope.group(0) if scope else '**Board-qualified scope:** None.', '',
-           '## Open work', '']
-    out += open_work
-    out += ['', '## Evidence', '',
-            f'Board results with a queue entry are records in `docs/evidence/{stem}.jsonl`, added with `tools/evidence.py add`. '
-            f'Results cited by path, and earlier prose evidence, are in [the historical log](../history/{history.name}).', '',
-            render_block(stem, load_all(root).get(stem, [])), '']
-    source.write_text('\n'.join(out))
-    print(f'{source.relative_to(root)}: {len(text.splitlines())} -> {len(out)} lines, '
-          f'{len(created)} records, history {history.relative_to(root)}')
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--root', default=str(ROOT))
@@ -472,10 +380,6 @@ def main():
     show = commands.add_parser('table')
     show.add_argument('subsystem')
     show.set_defaults(run=cmd_table)
-    migrate = commands.add_parser('migrate')
-    migrate.add_argument('status')
-    migrate.add_argument('--date')
-    migrate.set_defaults(run=cmd_migrate)
     args = parser.parse_args()
     args.run(args)
 

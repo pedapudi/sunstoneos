@@ -368,78 +368,20 @@ the sensor-write adapter. Stack provisioning must also include the called
 leaf controllers and platform callbacks. These are
 static build facts, not performance measurements.
 
-A separate continuous-capture model, `checks/a733-camera-stream.py`, runs the
-same native controllers in a 320 × 240 mode with three slots. Its frame engine
-latches the address registers at each modeled frame start, writes each frame's
-own payload into the latched slots at frame end and raises the frame-done
-flag. A late frame instead writes its last 64 bytes per plane and raises frame
-done a set delay after the next frame start. The model checks that the device
-writes only the programmed or active slot, and a late frame's last bytes only
-a slot the CPU cannot read. It checks that every invalidated slot is named by
-neither address register, the frame in progress nor a late frame, and that
-every delivered frame is complete and matches its frame-start count. The cases
-are:
-
-- both ports and both byte orders, with every frame delivered;
-- receiver admission pending for 25 ms and an interface-enable transfer taking
-  50 ms, followed by all eleven completed frames delivered after twelve starts;
-- a 100 ms frame-enable transfer or a 100 ms owner stall after that write,
-  each suppressing delivery because the first interval was exceeded;
-- refused receiver admission, uncertain interface/frame writes, bad readback,
-  overdue frame enable, and deadline expiry before enable, all retaining leases;
-- failed, backward and overdue clocks, and callback reentry at interval
-  opening, each preventing frame enable and retaining leases;
-- a consumer holding two of three slots, with the dropped frames counted;
-- a frame start racing the first or the second address write, which drops two
-  frames and keeps every later frame correct;
-- one frame whose frame done arrives 3 ms after the next start, which drops
-  that frame only;
-- every frame's frame done arriving 3, 5 or 7 ms after the next start, which
-  delivers nothing;
-- one late frame done that merges with the next frame's flag in one status
-  read, which drops every later frame;
-- an owner that stalls after the fifth frame start until two more frames have
-  started, with every frame done 3 ms late, which delivers nothing, and with
-  frame done on time, which delivers the four frames before the stall and none
-  after it;
-- a stream renewed on every poll by three frame periods, which runs past its
-  open deadline, refused renewals before `STREAMING` and for a reached
-  deadline, and a stream without renewal, which faults at the open deadline
-  and keeps every lease;
-- a QSXGA mode given with frame length 0, whose quiet interval follows the
-  derived reference frame length, and the VGA interval of 100 ms;
-- missing frame-done flags, which deliver nothing, and an owed count set one
-  below its ceiling, which saturates instead of wrapping to zero;
-- an error flag and a failed invalidation, which fault and retain every lease;
-- refused slot counts, slot sizes, spans and the raw format.
-
-Removing the status read after the address writes, delivering without
-a frame-done flag, delivering an unattributable slot, or delivering whenever
-a frame-done flag followed the slot's start without counting owed flags each
-makes the model fail. Computing the quiet interval from the given mode instead of
-the derived one also fails it. The check script also builds the model with the
-status-interval comparison removed and requires it to fail: the stalled owner
-with late frame done then gets slots delivered while the device still writes
-their last bytes. The model passes under AddressSanitizer and UndefinedBehaviorSanitizer.
-Its results are under
-`~/.cache/sunstoneos/build/audit-camera-streaming/dev/stream-check/`.
-
-The startup fix passes the streaming and still-image composition checks under
-`~/.cache/sunstoneos/build/camera-resume-1024/stream-reentry/` and
-`~/.cache/sunstoneos/build/camera-resume-1024/capture/`. They include AArch64
-compilation and the existing status-interval mutation check. The preceding
-coordinator fails the delayed-start delivery assertion with the same model inputs.
-For each port's nominal twelve-start case, before and after counts match:
-5,229 clock calls, 355 sensor accesses, 408 DMA accesses and eleven slot
-synchronizations. Opening still initializes the ring once. The change adds
-no per-frame operations or copies. The coordinator object grows from 8,588 to 8,752
-bytes because the write adapter checks the stream state and initializes the
-ring at frame enable. These are software-model and build results; no camera
-hardware was used.
-
-Exact commands, inputs, executable artifacts and snapshots are retained under
-`~/.cache/sunstoneos/evidence/camera-capture-20261016/`; the `publication/`
-subdirectory contains the final changed-behavior check and native object.
-The analog ownership clarification changes comments and prose only. Its
-existing execution evidence remains valid. This composition adds no external
-source dependency or physical qualification evidence.
+No host check covers continuous capture. The native controllers run it in a
+320 × 240 mode with three slots. The frame engine latches the address registers
+at each frame start, writes each frame's own payload into the latched slots at
+frame end and raises the frame-done flag. A late frame writes its last 64 bytes
+per plane and raises frame done a set delay after the next frame start. The
+coordinator delivers only complete frames that match their frame-start count,
+names no invalidated slot in either address register, the frame in progress or a late frame. It also drops frames it cannot attribute, saturates its owed-frame count
+instead of wrapping, and faults and retains every lease on an error flag, a
+failed invalidation, an overdue clock or an unrenewed stream past its open
+deadline. For each port's nominal twelve-start case the coordinator uses 5,229
+clock calls, 355 sensor accesses, 408 DMA accesses and eleven slot
+synchronizations; its object is 8,752 bytes. Opening initializes the ring once
+and no per-frame operation or copy is added. These are software-model and build
+results recorded in [camera-capture.jsonl](evidence/camera-capture.jsonl); no
+camera hardware was used. Exact commands, inputs, executable artifacts and
+snapshots are retained under
+`~/.cache/sunstoneos/evidence/camera-capture-20261016/`.

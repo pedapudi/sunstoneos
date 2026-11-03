@@ -122,8 +122,7 @@ change and in its bus-recovery pulses. A line that another master holds after
 an intermediate STOP stops the next START, whose wait the request deadline
 bounds.
 
-The [poll-count and BUSY check](../checks/a733-pmic-polls.c) models bus timing
-in software. Its clock advances 1 microsecond for each time read, and each
+A software model of bus timing has no retained check. Its clock advances 1 microsecond for each time read, and each
 completion flag sets 90 microseconds after the write that starts its bus event.
 That is about one byte with acknowledgment at 100 kHz. A provider task that
 polls once per 1 ms tick completes a snapshot in 44 polls in this model. These
@@ -161,7 +160,7 @@ and the service polls once more; that poll marks the mutex retained.
 A poll holds the provider object, so a concurrent `a733_pmic_result()` or
 `a733_pmic_reap()` caller observes BUSY while the poll runs. In the model, the
 longest poll lasts 17 modeled microseconds with 7 register accesses, and the
-polls of one snapshot last about 470 modeled microseconds in total. The check
+polls of one snapshot last about 470 modeled microseconds in total. The model
 counts each complete poll as BUSY time, so these figures are upper bounds. A
 caller deadline bounds the complete snapshot, including mutex acquisition and
 result publication. `a733_pmic_live()` takes no lock: it compares the
@@ -190,11 +189,10 @@ adapter's time read calls the counter clock, if an accessor queries the mutex
 holder or checks the task, or if a source other than the provider and the
 board-bundle forwarders calls the adapter's read or write operation.
 
-[The cost check](../checks/a733-pmic-cost.c) counts the work of one DCDC2
-snapshot and one DCDC3 selector write through the same model. The snapshot
-makes 200 register accesses, 137 time reads and one bus acquisition; the
-selector write 255 accesses and 174 time reads. With `--limits` the check
-asserts those budgets. `docs/designs/power-authority.md` and
+The same model counts the work of one DCDC2 snapshot and one DCDC3 selector
+write, and no retained check asserts the counts. The snapshot makes 200
+register accesses, 137 time reads and one bus acquisition; the selector write
+255 accesses and 174 time reads. `docs/designs/power-authority.md` and
 [the PMIC access evidence records](evidence/pmic-access.jsonl) record the counts against the
 earlier providers.
 
@@ -224,8 +222,7 @@ the other until a deadline. When another caller holds the object as
 the poll returns from the waits, the poll releases the I2C mutex without any
 bus access and returns BUSY, and the next poll repeats admission. A client
 fault latched during the waits also releases the unused mutex and retains the
-request. [The lock-wait check](../checks/a733-pmic-waits.c) covers these
-three cases. Startup still holds the object while it acquires the pins and the
+request. These three cases have no host check. Startup still holds the object while it acquires the pins and the
 I2C mutex. Before startup completes, `a733_pmic_live()` never reports READY,
 so no consumer proceeds on a provider observation during that time.
 
@@ -369,19 +366,20 @@ and I2C helper definitions. These are the sources already pinned for
 [The focused model](../checks/a733-pmic.c) composes actual provider, rail,
 clock, GPU-guard and pin-manager code. Its reusable register backend supports
 radio composition through `PMIC_MODEL_NO_MAIN`.
-[The reference check](../checks/a733-pmic-reference.py) executes the original
-bootloader voltage getter for supported selectors and checks I2C helper order
-and status constants. It does not execute original I2C MMIO instructions.
-Successful early physical reads do not qualify this new concurrent provider.
+[The supply decode check](../checks/pmic-supply-decode.py) compares disputed
+selectors with the pinned sources and the real provider; no check executes the
+original bootloader voltage getter across all supported selectors or compares
+its I2C helper order. Successful early physical reads do not qualify this concurrent provider.
 
-The focused batch passed on 2026-10-16. AddressSanitizer and UndefinedBehaviorSanitizer
-reported no errors in actual shared-manager composition. The cases cover all
+The focused model runs under AddressSanitizer and UndefinedBehaviorSanitizer
+with the actual shared-manager composition. The cases cover all
 six rail snapshots, borrow retention, two client owners, stale request refusal,
 autonomous/DMA/IRQ exclusion, arbitration loss, queued and active expiry,
 failed STOP, aliased outputs and replacement of a caller token during a callback.
-The reference getter matched all 1,268 supported raw-selector cases in that
-batch. With DCDC3 and DCDC5 included, the comparison matches 1,620 cases and
-also checks the bootloader's write-helper order against the selector write. Both
+A one-time comparison against the original bootloader getter matched all 1,268
+supported raw-selector cases; with DCDC3 and DCDC5 included it matched 1,620
+and also checked the write-helper order against the selector write. No retained
+check repeats that comparison. Both
 provider translation units compiled for AArch64 against the real FreeRTOS
 headers. Native task checks and actual MMIO effects remain unexecuted.
 
@@ -393,13 +391,12 @@ The rail dependency is commit `4ae15a55b51b4b654a6a5f3de660a67b30da6bc3`.
 Its earlier ledger tests remain applicable; this batch exercises the new
 provider's composition with that unchanged dependency.
 
-[The MMC output check](../checks/a733-pmic-mmc.py) separately validates DC1SW2
-and CLDO5 through the actual provider. Both snapshots share one live
-DCDC1/DC1SW2/CLDO5 lease. The check verifies the six-byte register sequence,
-borrow lifetime, reserved selectors and enable status. Its source comparison
-matches 472 valid raw-selector cases against the original getter. The focused
-sanitizer batch and changed provider-core AArch64 compilation passed; existing
-provider scenarios were not repeated. Evidence is retained in
+The DC1SW2 and CLDO5 snapshots go through the actual provider and share one
+live DCDC1/DC1SW2/CLDO5 lease, with a six-byte register sequence. A source
+comparison of 472 valid raw-selector cases against the original getter matched,
+and the changed provider core compiled for AArch64. No retained check repeats
+that comparison or the sequence, borrow lifetime and reserved-selector cases.
+Evidence from the comparison is in
 `~/.cache/sunstoneos/evidence/pmic-mmc-20261016/initial/`.
 
 The BLDO2 addition uses the same pinned bootloader profile and unchanged

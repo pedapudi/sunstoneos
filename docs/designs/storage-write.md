@@ -3,7 +3,7 @@
 Applications write files on a FAT32 volume of the microSD card through a RAM
 write-back buffer. The service flushes in large writes that end on the card's
 allocation-unit boundaries, changes the FAT and the directory only at sync
-points, and orders every sync so that a power cut at any sector write leaves a
+points. It orders every sync so that a power cut at any sector write leaves a
 volume that recovers to a state `fsck.fat -n` reports clean, with every
 synced byte intact. POSIX-like calls over the service let storage code written
 for FatFs and newlib stdio (for example mimus on ESP32 parts) run unchanged.
@@ -18,8 +18,8 @@ stalls it is write amplification: a write smaller than, or not aligned to, the
 card's allocation unit (AU) makes the controller read, modify and rewrite a
 whole erase unit. The SD Physical Layer Simplified Specification, version 9.10,
 defines the AU in the SD Status register (section 4.10.2, Table 4-44, bits
-431:428 `AU_SIZE`; section 4.10.2.4, Table 4-47 lists 16 KB to 64 MB; Table 4-48
-gives the maximum for each capacity, 4 MB up to 32 GB and 64 MB above). The host
+431:428 `AU_SIZE`). Section 4.10.2.4, Table 4-47 lists 16 KB to 64 MB, and Table
+4-48 gives the maximum for each capacity, 4 MB up to 32 GB and 64 MB above. The host
 reads SD Status with ACMD13. A card in a UHS-I bus mode reports the AU for that
 mode in `UHS_AU_SIZE` (section 4.10.2.9), and the host uses that field instead.
 Section 4.3.4 states that a multiple-block write (CMD25, WRITE_MULTIPLE_BLOCK)
@@ -75,9 +75,9 @@ A file object owns a RAM buffer supplied by the caller.
    count; a real-time producer treats zero as would-block.
 2. `fwr_service`, called by the writer task, flushes when at least one unit is
    buffered. The unit is the AU, or when the buffer is smaller than two AUs the
-   largest divisor of the AU that fits half the buffer (an AU is a multiple of
+   largest divisor of the AU that fits half the buffer. An AU is a multiple of
    its divisors, so a write that ends on the divisor never straddles an AU in
-   the middle). A non-final flush writes only whole sectors up to the last
+   the middle. A non-final flush writes only whole sectors up to the last
    boundary that is a multiple of the unit in absolute card sectors, so every
    write ends on an AU boundary. The remainder (less than one unit) moves to the
    front of the buffer.
@@ -141,7 +141,7 @@ write each step issues:
    state, the clean bit is set again in FAT copy 2 first, then copy 1. Mount
    reads the flag from copy 1, so copy 1 is cleared last and set first.
 
-The ordering follows Linux `fs/fat` (stable tree `linux-6.12.y`) with three deliberate differences. The dirty flag is FAT[1] bit 27, not the boot sector's state byte, because the boot sector is outside the writable regions and `fsck.fat` reads FAT[1]; it is set lazily, so a session that writes nothing writes nothing. The FAT chain is written before the directory entry, so that an entry never names a chain the FAT does not hold, where Linux writes the entry first; recovery handles a chain longer than its entry by truncation. FSInfo is written at checkpoint and unmount, as Linux writes it with the superblock. Where they agree: the FAT copies are written in order, a new directory cluster is zeroed before it is linked, and a deleted file marks its short and long-name entries deleted; `entry_delete` deletes long entries in other sectors first, so a cut leaves a valid file under its short name. The record `storage-write-host-evidence` holds the function-level comparison.
+The ordering follows Linux `fs/fat` (stable tree `linux-6.12.y`) with three deliberate differences. The dirty flag is FAT[1] bit 27, not the boot sector's state byte, because the boot sector is outside the writable regions and `fsck.fat` reads FAT[1]; it is set lazily, so a session that writes nothing writes nothing. The FAT chain is written before the directory entry, so that an entry never names a chain the FAT does not hold, where Linux writes the entry first; recovery handles a chain longer than its entry by truncation. FSInfo is written at checkpoint and unmount, as Linux writes it with the superblock. Where they agree: the FAT copies are written in order, a new directory cluster is zeroed before it is linked, and a deleted file marks its short and long-name entries deleted. `entry_delete` deletes long entries in other sectors first, so a cut leaves a valid file under its short name. The record `storage-write-host-evidence` holds the function-level comparison.
 
 The cost of a sync is one write for the partial AU, one or two FAT sector runs
 (two copies), one directory sector, and on the first metadata write of a session
@@ -221,7 +221,7 @@ scheduler therefore asks `board_application_task_privileged`, which reaches `os_
 the owner's predicate.
 
 **One device's clock fault must not fail the shared provider (open defect).** A faulted SD0 binding takes the thermal service down with it. The
-call path is `a733_mmc_platform.c fail()` (lines 57 to 64), which calls `a733_clock_retain` on the SD0 token; `a733_clock_leases.c` then latches
+call path is `a733_mmc_platform.c fail()` (lines 57 to 64), which calls `a733_clock_retain` on the SD0 token. `a733_clock_leases.c` then latches
 `fail(m)`, which sets the registry-wide `failed` flag and the power authority's CLOCK_FAULT bit, so that `enter()` returns FAULT to every later caller
 of any token. The thermal service reads that flag in `live()` and in every register access (`apps/os/thermal.c`), so it ends the session within a second
 or two, before the owner can report the SD fault. The platform's own retention of the register lock has the same reach (the thermal service enters the
@@ -233,8 +233,8 @@ SD0 binding when it came first.
 application copies it into its result, so a refused enable can be read without another instrumented image.
 
 **Completion by interrupt and one-shot timer.** No transfer polls the controller in a loop. The core arms the SMHC0 interrupt
-mask for each DMA command as the board kernel does (`sunxi_mmc_exe_cmd`, `sunxi-mmc.c:2754`: the mask is written before the
-argument and command): the error bits plus the automatic-stop-done bit for a CMD25 or CMD18 that carries a stop, else the
+mask for each DMA command as the board kernel does (`sunxi_mmc_exe_cmd`, `sunxi-mmc.c:2754`: the mask is written before
+the argument and command). The mask is the error bits plus the automatic-stop-done bit for a CMD25 or CMD18 that carries a stop, else the
 data-over bit (`sunxi_mmc_parse_cmd`, `sunxi-mmc.c:2638`). The handler for GIC SPI 161 (INTID 193, level high, board kernel
 `sun60iw2p1.dtsi`, `sdc0`) follows `sunxi_mmc_irq` (`sunxi-mmc.c:1271`): it reads the masked status, accumulates the bits,
 writes the same bits back to the raw status to acknowledge them, and wakes the waiter. The core ORs the accumulated bits into
@@ -260,8 +260,7 @@ mode. The unit is read from `UHS_AU_SIZE` instead when the card signals at 1.8 V
 
 **The bounds blob.** The runner's frozen first input is an INPUT region of the application, mapped read-write at EL0 like all
 kernel data and application regions in this OS (`docs/memory-protection.md`: only the text and read-only data block is
-read-only), so no mapping can keep it unchanged. The image copies it once into memory taken from the OS heap at enable time (sized from the input's length; the only refusal is that the heap has no room), parses the copy, and
-`a733_storage_bounds_allows` re-hashes it on every use and refuses a blob that has changed since parse. This detects a
+read-only), so no mapping can keep it unchanged. The image copies it once into memory taken from the OS heap at enable time (sized from the input's length; the only refusal is that the heap has no room), parses the copy. `a733_storage_bounds_allows` re-hashes it on every use and refuses a blob that has changed since parse. This detects a
 change; it does not prevent one made between the hash and the use, which would take a second EL0 task on another core racing
 a microsecond window. A read-only mapping needs page-table support the OS does not have yet; the wider gap, kernel and driver data reachable from EL0, is a backlog item in `docs/memory-protection.md`.
 

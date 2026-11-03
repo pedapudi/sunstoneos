@@ -83,8 +83,7 @@ retain their rail leases and outstanding requests.
 The focused native instruction fixture composes the actual PMIC transaction
 state machine, rail and clock registries, pin manager, consumer, GPU native
 adapter/platform and, in the preserved run below, the NPU startup's former
-DCDC2 consumer. `checks/a733-pmic-consumers.c` now holds the GPU cases only.
-Its scheduler ownership, mutex dispatch,
+DCDC2 consumer. The fixture is not retained as a host check. Its scheduler ownership, mutex dispatch,
 hardware responses and architectural counter input are modeled. Existing
 FreeRTOS mutex and scheduler evidence covers those unchanged implementations.
 The fixture contains no accelerator command execution or physical access.

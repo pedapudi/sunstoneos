@@ -21,5 +21,5 @@ Both jobs share the 200 ms job budget, including a 50 ms cleanup reserve, and an
 
 ## Open work
 
-1. Provide a qualification caller in the mimus checkout that runs the workload above, with host checks that execute the linked caller against a model of the platform and firmware, covering narrow and wide jobs, a missing tag, a wrong sum, a damaged guard and a missing timeline.
+1. Provide a qualification caller in the mimus checkout that runs the workload above. Also provide host checks that execute the linked caller against a model of the platform and firmware, covering narrow and wide jobs, a missing tag, a wrong sum, a damaged guard and a missing timeline.
 2. Run it once, supervised and RAM-only, after a coordinator accepts the frozen image, the board state and the returning caller's authority requirements. Require the `GPU exact sums` record to report two jobs, 1,122 sums and zero bad tags, sums and guards, context cleanup status 1, the exact-sum COMPLETE line, status zero and a normal CPU return under the 18 MiB RAM disposition contract. Any failure ends the attempt, and a retained powered GPU needs the recovery procedure before another GPU run. The prediction is the record `gpu-exact-sum-caller-physical`.

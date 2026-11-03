@@ -46,7 +46,7 @@ A job costs 59 transport and 6 maintenance barriers by the code reading, plus 19
 
 ## Synchronization across cores
 
-All runtime work runs on the recognition core. The slot moves IDLE to SUBMITTED (hook, release store), TAKEN (worker, compare-and-swap with acquire) and IDLE (worker, before the post). The hook's failed send is the only other transition, SUBMITTED to IDLE by compare-and-swap, so the hook and the worker never both run a job. The worker posts the completion after the trailing `DSB SY` of its maintenance, and the queue's critical section orders the post before the recognizer's tag reads. The second inference worker on the pair's other core writes codes before the hook's join, which the leading barrier of the code clean covers, and reads half of each job's sums after the completion's `DC CIVAC` has acted on every core's cache in the inner-shareable domain.
+All runtime work runs on the recognition core. The slot moves IDLE to SUBMITTED (hook, release store), TAKEN (worker, compare-and-swap with acquire) and IDLE (worker, before the post). The hook's failed send is the only other transition, SUBMITTED to IDLE by compare-and-swap, so the hook and the worker never both run a job. The worker posts the completion after the trailing `DSB SY` of its maintenance, and the queue's critical section orders the post before the recognizer's tag reads. The second inference worker on the pair's other core writes codes before the hook's join, which the leading barrier of the code clean covers. It reads half of each job's sums after the completion's `DC CIVAC` has acted on every core's cache in the inner-shareable domain.
 
 ## Mapping check and build gate
 

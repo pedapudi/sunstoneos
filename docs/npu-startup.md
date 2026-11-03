@@ -544,8 +544,6 @@ admission. No board or queue access was performed for this change.
   with real FreeRTOS tasks and the real counter, registry, ledger and register
   lock. The success mode reaches service activation; the readback mode shows a
   wrong readback retaining the register lock and every token.
-- `checks/npu-application-clock-reference.py` drives the linked image's
-  sequencer through its register pass for six reference-clock cases.
 - `checks/npu-stop-native.py` exercises the linked allowlist adapter's stop
   writes, PLL rules, routing-word rule and PCK600 refusals.
 - `apps/npu-finite/sram-route-check.py` runs the finite image's linked

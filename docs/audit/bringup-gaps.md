@@ -186,8 +186,7 @@ at all.
 - Fix: add a `SUNSTONE_SOURCE_CACHE` variable and a helper that resolves each
   input through its lock archive path.
 - Fix: add lock entries for the deinterlace inputs.
-- Fix: update the checks that hard-code the old layout, such as
-  [pcie-pd-rail.py](../../checks/pcie-pd-rail.py).
+- Fix: update the checks that hard-code the old layout.
 
 **Unverified external inputs and no build recipe for the recovery tool
 (`build-system-9`).** Configuration accepts a FreeRTOS directory if one file
@@ -314,8 +313,7 @@ unresolved:
   SHA-256 hashes, copies the OS and models to their linked addresses, builds the
   resident launch record and enters the OS at EL3.
 - Keep the recorder's admission checks as the loader's entry gate.
-- Extend [cold-entry.py](../../checks/cold-entry.py),
-  [boot0-monitor-handoff.py](../../checks/boot0-monitor-handoff.py) and
+- Extend [cold-entry.py](../../checks/cold-entry.py) and
   [microsd-boot-package.py](../../checks/microsd-boot-package.py) to model the
   card read, the copy and the entry.
 - Extend the package validation with a manifest record that names entry

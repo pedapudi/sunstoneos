@@ -160,9 +160,8 @@ tuning; it confirms the core sequence only.
 ## What SunstoneOS checks beyond the references
 
 SunstoneOS requires adaptive PF mode, sensed 3.3 V and CLDO5 programmed to
-1.8 V before offering the switch; reads back the selector and every SMHC timing
-register; verifies the PERI0_300M gates and PLL ratio on every platform poll
-while running from that parent; and refuses a tuning sweep without a window of
+1.8 V before offering the switch. It reads back the selector and every SMHC timing register. It verifies the PERI0_300M gates and PLL ratio on every platform poll
+while running from that parent. It also refuses a tuning sweep without a window of
 12 delays instead of continuing with an unset delay. It uses PERI0_300M where
 the vendor selects PERI1_300M (`sun60iw2p1.dtsi:4496–4497`), because PERI0 is
 already the reserved and checked parent of the negotiated profiles; both give

@@ -19,10 +19,10 @@ The linked AArch64 check in `staging-native/`, under the same build directory,
 executes both published-request erasure and preservation of producer-owned
 request bytes. Its RTOS and authority callbacks are modeled.
 The producer also erases copied request data after copy refusal or post-copy
-expiry. `checks/crypto-upload-erasure.py` executes those linked instructions
-and checks successful publication separately. Results for SHA-256 and SM3
-requests are in `upload-sha-native/` and `upload-erasure-native/`, under the
-same build directory; board-liveness and counter observations are modeled.
+expiry. A one-time linked run executed those instructions and checked
+successful publication separately; board-liveness and counter observations are
+modeled, and no retained check repeats the run (see
+[the evidence file](evidence/security-engines.jsonl)).
 
 The [engine](crypto-engine.md), [hash service](crypto-hash.md),
 [cipher service](crypto-cipher.md), [entropy service](entropy.md) and
@@ -52,11 +52,13 @@ bytes. A stream retains its existing absolute deadline and client slot. HMAC
 keys remain bounded to 1024 bytes. Task completion permits reuse of these
 reserved buffers; it does not authorize release or reset.
 
-`checks/crypto-digests.py` authenticates cached source hashes, compiles the
-actual controller, services and native request parser with sanitizers, and
-compares results with host OpenSSL through `hashlib` and `hmac`. Its descriptor
-model implements compression independently of the production code. The model
-does not establish the physical engine's digest byte order.
+A one-time host run compiled the actual controller, services and native
+request parser with sanitizers and compared results with host OpenSSL through
+`hashlib` and `hmac`. The comparison used a descriptor model that implements compression
+independently of the production code (210 stream cases and 27 application
+cases; see [the evidence file](evidence/security-engines.jsonl)). No retained
+check repeats it. The model does not establish the physical engine's digest
+byte order.
 
 The check covers 210 streams across MD5 and SM3: fifteen message lengths with
 plain hashing and six HMAC key lengths. Lengths include both sides of padding
@@ -155,9 +157,8 @@ padding, test model and shared host-parser patch.
 | Check | Result and scope |
 | --- | --- |
 | `checks/crypto-staging.py` | Passed sanitized orchestration, CPU erasure and unchanged session metadata; see `staging-ownership-check/`. |
-| `checks/crypto-digests.py` | Passed 210 stream cases and 27 application cases, with reserved-selector and retained-error checks; see `digests-check/`. The host producer supports the extended digest selectors. |
-| `checks/crypto-modes-native.py` | Passed linked MD5/SM3 upload and publication checks in `digests-native/`, and complete CPU-erasure/producer-ownership checks in `staging-native/`. CE completion is modeled. |
-| `checks/crypto-upload-erasure.py` | Passed linked producer refusal, post-copy expiry and successful publication; see the upload directories above. |
+| Digest comparison with host OpenSSL (no retained check) | Passed 210 stream cases and 27 application cases, with reserved-selector and retained-error checks; see `digests-check/`. The host producer supports the extended digest selectors. |
+| Linked MD5/SM3 upload, erasure and publication (no retained check) | Passed linked MD5/SM3 upload and publication in `digests-native/`, complete CPU-erasure and producer-ownership in `staging-native/`, and producer refusal and post-copy expiry in the upload directories above. CE completion is modeled. |
 | OS-only, hello-compute and external mimus | All three baseline targets build with Clang 21 through the cached configuration wrapper. Independent OS builds use empty `MIMUS_DIR`; mimus uses its pinned external checkout. |
 | Native crypto | `crypto/sunstone-a733-crypto-single-core.elf` builds with empty `MIMUS_DIR`. The built-in diagnostic remains SHA-256/AES; runtime hash requests select MD5/SM3. This is compilation and emulation evidence only. |
 

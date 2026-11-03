@@ -238,8 +238,7 @@ both directions, the return to UART mode, loopback, IrDA at 115200 baud, every
 refusal and a busy line, and readback faults. The DMA lease model runs on UART1,
 UART2 and S_UART1. The controller compiles as freestanding AArch64 C. The
 linked native write policy, including the ninth-bit rule that follows the last
-modem control and line control writes, is checked separately on the UART DMA
-image by [uart-native-fcr.py](../checks/uart-native-fcr.py). The
+modem control and line control writes, has no retained image check. The
 [platform composition check](uart-platform.md#validation-composes-the-real-software-components)
 runs the line modes and the DMA lease on UART1 and S_UART0 through the
 binding's register filter.

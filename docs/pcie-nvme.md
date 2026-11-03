@@ -185,56 +185,9 @@ and build `sunstone-a733-pcie-nvme`. Add
 `SUNSTONE_A733_PCIE_NVME_MSIX=ON` for the optional interrupt mode. The manifest profile is
 `pcie-nvme-supervised-v1` and the workload is `nvme-read-one-block`.
 
-The checks run in this order; each consumes the previous output:
+No host check builds the session fixture, runs the linked image against a modeled NVMe controller, or exercises host admission and capture. Earlier host runs executed the linked application stages, function client, NVMe driver, native write filter and USB0 serializer in Unicorn. The modeled controller answers BAR sizing and processes queue entries from the non-cacheable pool, with bus mastering and device-owned pages required for every modeled DMA. The nominal case issued two identify commands, the queue-count and queue-creation commands, one read and the two queue deletions, in that order, copied the expected bytes, called the port stop once and left the pages retained. At READY the native filter refused a controller enable outside a driver session, an I/O doorbell, a BAR reassignment, a command register value with I/O decode, a region-one retarget and a root window change. Four failure cases ended with status 2, retained pages and retained leases. An unmapped BAR window was refused before any BAR access or bus mastering, a read without completion and a shutdown that never completes kept bus mastering set and never stopped the port, and an LBA outside the namespace was refused before any read was submitted. The MSI-X image's linked interrupt service routine, GIC mask and rearm adapter and callback state were also executed in those runs. Scheduler primitives, GIC register side effects, provider status, address translation and USB transport were modeled.
 
-```sh
-checks/pcie-nvme-fixture.py --image IMAGE --output FIXTURE
-checks/pcie-nvme-native.py --image IMAGE --session FIXTURE/session-template.bin --output NATIVE
-checks/pcie-nvme-host.py --image IMAGE --fixture FIXTURE --frame NATIVE/native-frame.bin --output HOST
-```
-
-- The fixture builds a session and admission from the existing PCIe software
-  fixture and a modeled NVMe record, through the production validators.
-- The native check builds [pcie-nvme-registers.c](../checks/pcie-nvme-registers.c)
-  with the NVMe host model to obtain the register state of a READY port with a
-  cold NVMe function. It then runs the linked image in Unicorn: the application
-  stages, the function client, the NVMe driver, the native write filter and the
-  USB0 serializer execute as linked. A modeled controller answers BAR sizing and
-  processes queue entries from the non-cacheable pool, and requires bus
-  mastering and device-owned pages for every modeled DMA. The nominal case
-  issues two identify commands, the queue-count and queue-creation commands, one
-  read and the two queue deletions, in that order. It copies the expected bytes,
-  calls the port stop once and leaves the pages retained. The decoded USB frame
-  matches the payload. At READY the native filter refuses a controller enable
-  outside a driver session, an I/O doorbell, a BAR reassignment, a command
-  register value with I/O decode, a region-one retarget and a root window
-  change, and accepts the current command value. Four failure cases end with
-  status 2, retained pages and retained leases. An unmapped BAR window is
-  refused before any BAR access or bus mastering. A read without completion and
-  a shutdown that never completes both keep bus mastering set and never stop the
-  port. An LBA outside the namespace is refused before any read is submitted.
-  Removing the window check from the application makes the unmapped-window case
-  fail.
-- The host check refuses session geometry errors, NVMe records that miss a
-  fact, name another LBA or schema or lack a controller identity, and altered
-  frames. It captures over a modeled exchange, refuses to retry after a transport
-  loss, and builds the launcher and a frozen bundle from the tested image.
-- `checks/h264-supervisor-entry.py --caller apps/pcie-nvme/capture.py` stops at
-  readiness before any queue or device access and confirms that the supervisor
-  accepts the capture bounds.
-
-For the optional MSI-X image, the native check also executes the linked ISR,
-GIC mask/rearm adapter and callback state. It covers completion after a wake,
-a wake before the CQ entry, repeated level delivery, lost delivery with CQ
-completion, an unsupported MSI vector, repeated delivery while RWP delays
-rearming, count consumption, a notification before the wait, and a CLOSED
-source fault that revokes output. The NVMe failure cases check that the MSI target
-page and port leases remain retained. Scheduler primitives and GIC register
-side effects are modeled. `checks/pcie-irq-route.py --nvme --image IMAGE
---output ROUTE` separately executes the linked EL3 route and dispatch branch,
-including enabled, pending, active and RWP refusals and failed readbacks.
-
-The selected MSI-X and default polling builds and focused checks passed on
+The selected MSI-X and default polling builds passed their focused checks on
 2026-10-28. The MSI-X ELF SHA-256 is
 `9a41fe83d5828ae95c436c9053aee1c9ac9c3e910866b78a34be111e27a16c72`;
 its build ID is
@@ -242,17 +195,9 @@ its build ID is
 Artifacts and per-case results are under
 `~/.cache/sunstoneos/evidence/sol-nvme-msix-1028/`, with the source and option
 closure in the two build directories named `sol-nvme-msix-1028` and
-`sol-nvme-poll-1028`. The native cases, route cases and host admission,
-serialization, durable capture and frozen launcher checks pass. The default
-polling image also passes its linked nominal read/shutdown/copy case.
-The optional image adds 2204 text bytes relative to that default build;
+`sol-nvme-poll-1028`. The optional image adds 2204 text bytes relative to the default build;
 reported data and BSS totals are unchanged. It reserves the additional MSI
 page from the existing pool. These are build and modeled behavior results.
-
-Port startup and `a733_pcie_stop` are replaced by their results in the native
-check; [a733-pcie-trace.py](../checks/a733-pcie-trace.py) covers them in the
-host model. Provider status, address translation, the scheduler, the controller
-and USB transport are modeled.
 
 ## Remaining work
 
@@ -262,3 +207,5 @@ and USB transport are modeled.
 - Reads of more than one block and physical Gen3 training, negotiated fallback
   and link-fault recovery. Native applications request the vendor Gen3 default;
   host checks cover negotiated Gen1–Gen3.
+
+Results of host checks that no longer exist are kept in the evidence record [pcie-nvme.jsonl](evidence/pcie-nvme.jsonl).

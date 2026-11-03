@@ -1167,13 +1167,9 @@ input paths. The existing launcher preloads and verifies those segments with
 the recognition inputs. Staging does not establish the physical startup timing
 described under [Radio station](#radio-station).
 
-[os-radio-staging.py](../checks/os-radio-staging.py) checks combined preparation,
-frozen verification, preload bytes and range/identity refusals with labeled
-synthetic facts. It also checks single-profile selection, standalone Bluetooth
-and plain OS compatibility. The native Bluetooth profile validator, compiled
-for the OS headset profile, admits the staged headset bytes. These checks reuse
-the linked radio/headset image and unchanged runtime evidence; their synthetic
-facts cannot authorize a board run.
+No host check covers combined preparation, frozen verification, preload bytes,
+range and identity refusals, single-profile selection, or standalone Bluetooth
+and plain OS compatibility. Synthetic facts cannot authorize a board run.
 
 [check-a733-os-supervised.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/tools/check-a733-os-supervised.py) launches
 one bundle under an existing coordinator claim. It revalidates the frozen
@@ -1343,3 +1339,5 @@ No integrated OS physical execution is established by these checks.
   stage-2 entry prerequisite, a qualified watchdog-expiry recovery, and
   measured service windows; the resident microphone build also needs a
   reviewed audio entry record with the resident DMA facts.
+
+Results of host checks that no longer exist are kept in the evidence record [os-image-history.jsonl](evidence/os-image-history.jsonl).

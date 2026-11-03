@@ -322,12 +322,10 @@ Owners other than this design:
 5. **Build** (`cmake/gpu.cmake`): draw-mode selection becomes program-set
    selection.
 6. **Primary agent:** route SPI 95 to core 6 and admit cores 6 and 7 for the
-   graphics images; qualify the cross-cluster task-notification wake between the
-   A76 and A55 cores, whose latency counts in the interrupt-to-RCQ budget; add
-   `DMB OSHST` to `a733_mmio.h`; a multi-range cache-maintenance call with one
+   graphics images. Qualify the cross-cluster task-notification wake between the
+   A76 and A55 cores, whose latency counts in the interrupt-to-RCQ budget. Add `DMB OSHST` to `a733_mmio.h`. Add a multi-range cache-maintenance call with one
    trailing `DSB SY`, needed because the emulation counts more than 16 `DSB SY`
-   from `aarch64_device_cache` per frame (144 for the 720p display frame); and
-   a `memcpy` in `runtime/memory.c` that copies with shifted 8-byte words when
+   from `aarch64_device_cache` per frame (144 for the 720p display frame). Add a `memcpy` in `runtime/memory.c` that copies with shifted 8-byte words when
    source and destination differ in 8-byte alignment, as `-mstrict-align`
    requires, so that the worker's private copy loop can go.
 

@@ -71,10 +71,10 @@ because that experiment uses the temporary mapping.
 Checks that cover the step 1 flush: `checks/cpu-table-walks.py` (the flush is
 called before the table builder, every flushed line precedes the first
 table-section write, `enable_el1` issues 128 `DC CIVAC` and 512 `LDP` in the
-linked image, and `a733_cached_prepare()` publishes 0 table lines) and
-`checks/a733-cpu-coherence.py` (`enable_el1` flushes both EL1 pages before any
-system-register write, and a wrong checksum or a malformed root entry 1 leaves
-`SCTLR_EL1.M` clear). The capacity fixtures
+linked image, and `a733_cached_prepare()` publishes 0 table lines).
+`checks/a733-cpu-coherence.py` also covers it: `enable_el1` flushes both EL1
+pages before any system-register write, and a wrong checksum or a malformed root entry 1 leaves
+`SCTLR_EL1.M` clear. The capacity fixtures
 (`checks/device-memory-capacity*.c`)
 run the same core-0 sequence as the images.
 
@@ -114,10 +114,10 @@ and refuses the flag unless the frozen image defines `a733_fault_previous`.
 applies the operation 5 rules of `usb0.c` and returns the response in
 fragments of 1, 29 and 512 bytes. It covers the byte-for-byte result after one
 `retain()` call, the request bytes and response size against the device and
-decoder constants, every refusal (a device that stops without answering, an
+decoder constants, every refusal. The refusals are a device that stops without answering, an
 extra byte in the completing transfer, an empty fragment, an identity change
 before each transfer and before `retain()`, a deadline that expires before the
-write, during the reads and after the last read), the shifted next frame that
+write, during the reads and after the last read. It also covers the shifted next frame that
 an extra byte in a later transfer causes, and a static check that the module
 imports no USB library and has no command line.
 

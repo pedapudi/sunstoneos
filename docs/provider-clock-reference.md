@@ -3,12 +3,10 @@
 The generic TWI11 adapter, USB2 host platform, radio platform and crypto engine
 validate a 24 MHz **reference output**, rather than requiring a 24 MHz raw board
 oscillator. On the 26 MHz board, PLL_REF can supply that output with N=96 and
-M=104. The providers now use the existing `a733_clock_ref24_valid()` decoder;
-they do not retune the oscillator, PLL_REF or PERI0.
+M=104. The providers use the `a733_clock_ref24_valid()` decoder; they do not
+retune the oscillator, PLL_REF or PERI0.
 
-The previous guards required DCXO selector 0 or 3 and equal reference multiplier
-and divider. That rejected a correctly normalized reference on the 26 MHz board.
-The replacement requires the actual oscillator's enabled/stable bits, enabled
+The guard requires the actual oscillator's enabled/stable bits, enabled
 and locked PLL_REF, supported N range, and exact integer equation
 `DCXO_Hz × N = 24,000,000 × M`. Rate arithmetic downstream of PLL_REF remains
 based on 24 MHz. Shared clock leases, register locks, pin/rail authority, expiry
@@ -37,29 +35,19 @@ Its `pll_ref_clk` factors and fixed `pll_peri0_clk` parent agree with this path.
 | `drivers/dma/a733_dma_platform.c` | AHB, NSI and MBUS use SYS_CLK24M or admitted PERI0 branches. Every profile retains REF; all-source-zero profiles avoid unrelated PERI0 reads. Existing divisors and gate checks remain. | Manual §§4.1.6.66, 4.1.6.74, 4.1.6.76; Linux `apb0_parents`, `nsi_parents`, `mbus_parents`; [focused DMA evidence](dma-platform.md#admission-verifies-the-selected-parent-and-programmed-rate) |
 
 TWI11 is not the always-on S_TWI1 controller used by Type-C. APBS1 source 0 is
-raw DCXO; source 4 is normalized PLL_REF. This correction changes neither the
-S_TWI1 adapter nor its 26 MHz timing. It also does not widen USB selectors to
-accept raw DCXO with unchanged 24 MHz constants.
+raw DCXO; source 4 is normalized PLL_REF. The S_TWI1 adapter and its 26 MHz timing are separate, and the USB selectors
+do not widen to accept raw DCXO with unchanged 24 MHz constants.
 
-## Focused software evidence
+## Validation
 
-`checks/provider-clock-reference.py` compiles the actual changed clock-check
-function bodies against the actual public structures with address and
-undefined-behavior sanitizers. TWI uses the complete native prepare function;
-USB2, radio and CE use their parent-admission functions. The check accepts valid
-24, 26 and 19.2 MHz normalization, rejects invalid factors and lost enable/lock
-state, covers selected TWI/radio PERI0 paths, and preserves CE's separate
-TRNG RC16M requirement. Register reads and existing lock, pin, time and ownership
-dependencies are modeled. This is not whole-provider or native-startup execution.
-
-Evidence is under `provider-clock-reference-20261020`. Fixture setup repairs
-and previously completed cases are retained; only affected or unexecuted cases
-resume. Astra's focused source review found no remaining parent/rate mismatch.
-No application image was rebuilt or old frozen evidence relabeled. The source
-checks establish configured-rate admission, not measured board frequencies,
-electrical readiness, radio operation, USB transfers, camera operation or CE
-execution. Existing component and physical-admission requirements still apply;
-see [camera platform](camera-platform.md), [USB2 host](usb2-host.md),
+Configured-rate admission of the TWI, USB2, radio and CE parent checks, and of
+the I2S and PWM guards, passed on the host under address and
+undefined-behavior sanitizers; the cases are recorded in
+[the evidence file](evidence/provider-clock-reference.jsonl). No retained check
+repeats them. They establish configured-rate admission, not measured board
+frequencies, electrical readiness, radio operation, USB transfers, camera
+operation or CE execution. Component and physical-admission requirements still
+apply; see [camera platform](camera-platform.md), [USB2 host](usb2-host.md),
 [radio platform](radio-platform.md) and [crypto engine](crypto-engine.md).
 
 ## I2S, PWM and HDMI follow-up
@@ -77,7 +65,7 @@ The optional LED's APBS0 route needs a separate check: manual §4.2.5.2 and
 Linux `r_apbs_parents` identify source 0 as raw DCXO and source 4 as normalized
 PLL_REF. Source 0 therefore retains the raw-24 MHz restriction required by the
 existing LED plan. On a 26 MHz board, that LED configuration is refused; source
-4 can use the existing normalized 24 MHz plan. This patch does not silently
+4 can use the existing normalized 24 MHz plan. The guard does not
 reinterpret a caller's fixed 24 MHz APBS0 rate as 26 MHz.
 
 HDMI uses two independent references. Manual §4.1.6.232 and Linux
@@ -97,51 +85,17 @@ rates. Raw 19.2 MHz is refused. DDC timing retains its normalized 24 MHz basis;
 mode totals, internal PHY words and bounded lock handling retain their source
 sequences. See [HDMI timing](hdmi.md) and [native ownership](hdmi-native.md).
 
-The added cases are selected without replaying the earlier four providers:
-
-```sh
-python checks/provider-clock-reference.py --providers i2s pwm --output evidence
-```
-
-Both pass with address and undefined-behavior sanitizers against the actual
-`reference()` and `profile()` function bodies and public structures. The cases
-cover valid oscillator encodings, malformed reference/enable state, PWM PERI0
-rate mismatch, LED source-0 refusal at 26/19.2 MHz, source-4 acceptance and APBS0
-readback mismatch. Astra's delta source review found no remaining mismatch.
-Evidence is under `audio-pwm-hdmi-clock-20261020`. Earlier provider evidence
-remains under its original frozen inputs. No HDMI, whole-image, startup or
-physical checks were executed for this follow-up.
-
 ## HDMI native evidence
 
-`checks/hdmi-clock-native.py` builds the native TV0 pattern target once and
-reuses its compiled provider, controller, PHY and ownership objects in a focused
-composition. On modeled raw 26 MHz hardware, the actual native path prepares,
-starts and stops the 720p pattern while retaining REF and the other resources.
-The native requests and supplied record name the same raw reference. Separate
-continuations from the saved baseline refuse raw 19.2 MHz, a missing REF lock,
-and an observed raw rate that differs from the admitted request. Refusal occurs
-before VO1 or local HDMI writes.
-
-The executed trace matches the pinned 26 MHz TOP row, internal PHY words
-and color conversion. The source audit retains DDC's normalized 24 MHz timing
-basis. The calculated 720p pixel rate is
-73.9375 MHz. Source-row and host-profile checks also cover the 147.875 MHz
-1080p plan; that mode was not executed in this affected native case. The
-24 MHz protocol/reference evidence remains under its original frozen inputs.
-
-Evidence is under `~/.cache/sunstoneos/evidence/hdmi-ref26-20261020/`.
-The pattern ELF SHA-256 is
-`3eadec9b7c6e53962baa6ee39abc728e35f5ee9b75c19885fd3cb77e9647328f`.
-`manifest.json` binds the image, composition, sources, artifacts, CPU/RAM
-checkpoints and results. The initial nominal case completed before a
-postprocessing checkpoint-label error. The corrected check verified saved
-executable bytes and resumed only the unfinished comparison and refusal cases;
-it did not rebuild or repeat the nominal path. Both check versions remain in
-the evidence. Firmware boot, GIC/startup and physical HDMI operation were not
-executed. Architectural services, scheduling, MMIO, electrical state and analog
-admission were modeled. No electrical or standard-compliance qualification is
-claimed for either nominal mode or the approximate raw-26 MHz clocks.
+On modeled raw 26 MHz hardware the native TV0 720p pattern path prepares,
+starts and stops while retaining REF and the other resources. It refuses raw 19.2 MHz, a missing REF lock and an observed raw rate that differs from the
+admitted request, all before VO1 or local HDMI writes. The trace matches the
+pinned 26 MHz TOP row, internal PHY words and color conversion. This is a host
+model: firmware boot, GIC/startup and physical HDMI operation were not
+executed, and no electrical or standard-compliance qualification is claimed
+for either nominal mode or the approximate raw-26 MHz clocks. The case, the
+1080p plan and the pattern image hash are in
+[the evidence file](evidence/provider-clock-reference.jsonl).
 
 ## Video engine and PCIe
 

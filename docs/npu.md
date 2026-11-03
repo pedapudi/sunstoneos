@@ -202,9 +202,9 @@ The [checksum verifier](nbg-checksum.md) matches two published models and is
 required before assembly.
 The assembler also validates [encoded circular-buffer ranges](nbg-rings.md),
 with host field-packing and complete-submission comparisons.
-The [pinned host compiler](npu-compiler.md) now produces a small numerical fixture
+The [pinned host compiler](npu-compiler.md) produces a small numerical fixture
 whose simulator output matches the quantized CPU reference. Its `0x20000` format
-now has native decoding support. The [directory investigation](nbg-directory.md)
+has native decoding support. The [directory investigation](nbg-directory.md)
 records its changed layouts and checksum coverage. Native checksum verification
 passes host checks. The [convolution capture](nbg-conv-loader.md) supplies allocation
 and command evidence now matched by native assembly with no working-pool allocation.
@@ -409,17 +409,11 @@ two-byte logical tensor. The [SDK loader trace](nbg-loader-trace.md) records a
 and rounds it to a 4 KiB allocation for the memory policy. Complete descriptor
 access extents remain unresolved. The host inspector reports logical sizes.
 
-One focused check compares network metadata and tensor descriptions against
-recorded `nbinfo` reports. It also rejects 18 malformed variants covering
+No host check compares network metadata and tensor descriptions against
+recorded `nbinfo` reports. An earlier check did so and rejected 18 malformed variants covering
 truncation, unknown layout, invalid ranges and aliases, count mismatch, tensor
 size and quantization errors, invalid references, and allocation alignment.
 No physical request or OS rebuild occurred.
-
-The check is reproducible with the same fixture and recorded reports:
-
-```sh
-python3 checks/nbg-inspection.py /path/to/network_binary.nb /path/to/reference-reports
-```
 
 Local evidence is under `~/.cache/sunstoneos/evidence/npu-source-20261016/`.
 It includes reference reports, the reader trace, disassembly, check results,
@@ -529,3 +523,5 @@ A first native launch has been attempted, but no captured result establishes NPU
 execution. Physical completion with copied numerical output is still the gating
 result for this application. [Issue 9](https://github.com/pedapudi/sunstoneos/issues/9)
 retains both NPU and video-codec acceptance requirements.
+
+Results of host checks that no longer exist are kept in the evidence record [npu-design.jsonl](evidence/npu-design.jsonl).

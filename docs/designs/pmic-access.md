@@ -161,7 +161,7 @@ instrumentation, and their step times are not measured.
 
 110% of wire time (693 µs) is not reachable by the register accesses of this
 design: with every software cost set to zero the model gives 712 µs (113%)
-with `DSB SY` pairs and 694 µs with plain `DATA` stores, because the rounded
+with `DSB SY` pairs and 694 µs with plain `DATA` stores. This is because the rounded
 wire spin already takes 642 µs and 42 phases share the remaining 51 µs. A
 route to 110% needs fewer serial register accesses per snapshot.
 

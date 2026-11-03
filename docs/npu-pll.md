@@ -176,9 +176,8 @@ the clock token remains the authority.
 `checks/npu-startup-host.c` runs the table through the sequencer, including a
 PLL that never locks; its `--second-start` cases adopt the stopped PLL with
 bit 24 clear and set and refuse the other enabled states. `checks/npu-stop-native.py` exercises the adapter's PLL
-rules in the linked images, and `checks/npu-application-clock-reference.py`
-shows that an admitted reference case requests domain 4 ON and makes no
-device write before the domain is ON.
+rules in the linked images. No host check shows that an admitted reference case
+requests domain 4 ON and makes no device write before the domain is ON.
 
 The sanitizer check `checks/npu-startup-host.c --inherited-pll` covers the
 observed disabled word `0x41104500` and the equal-LDO word `0x40104500`.
@@ -191,3 +190,5 @@ refuses entry with reserved bits 23, 25 or 26 set. The original 15-case baseline
 has identical counts. These are modeled register results, not physical PLL
 qualification. Evidence is in
 `~/.cache/sunstoneos/evidence/npu-pll-inherited-20261024/`.
+
+Results of host checks that no longer exist are kept in the evidence record [npu-pll.jsonl](evidence/npu-pll.jsonl).

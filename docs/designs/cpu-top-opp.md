@@ -1,6 +1,6 @@
 # Design: CPU clusters and the DSU default to the vendor's top operating points
 
-Status: **implemented**; the CPU clock driver and the clock-owner path for both clusters and the DSU are host-modeled; **qualified on the board** for the returning steps 1 to 6 on port 3-3 (CPU-B 2002 MHz, CPU-L 1794 MHz and the DSU 1274 MHz under the eight-core workload); **open** for the integrated OS image at the top points (B1 and TOP).
+Status: **implemented**; the CPU clock driver and the clock-owner path for both clusters and the DSU are host-modeled. It is **qualified on the board** for the returning steps 1 to 6 on port 3-3 (CPU-B 2002 MHz, CPU-L 1794 MHz and the DSU 1274 MHz under the eight-core workload) and **open** for the integrated OS image at the top points (B1 and TOP).
 
 Every hardware block defaults to the highest operating point that the vendor uses for the chip's speed bin, with the vendor's voltage; lower points are optional modes ([AGENTS.md](../../AGENTS.md), "Implementation"). This design derives the top points and the vendor's rate-change sequence from the references, states how the CPU clock driver ([cpu-clock.md](../cpu-clock.md)) follows that sequence, and records the board qualification. The records are in [the evidence file](../evidence/cpu-top-opp.jsonl). The OS image placement and owner are in [cpu-a76-dvfs.md](cpu-a76-dvfs.md); the run-time switch between top and low points is in [performance-modes.md](performance-modes.md).
 
@@ -195,11 +195,11 @@ The FEL boot ROM programs the CPU-L and DSU PLLs (N = 38) and selects their muxe
 
 ## The returning workload relocks its own clocks
 
-Every launch starts from the ROM, which resets CPU-L and the DSU, so the workload sets its clocks itself. Before it releases any secondary, CPU0 at EL3 relocks CPU-B, CPU-L and the DSU to their top points (`boot/a733/top-opp-relock.c`), following the driver's sequence. Before its first clock write it checks the board itself: the DCXO enabled and stable at 26 MHz, speed-bin code `0x04`, every domain on its locked PLL with modulation off, and DCDC3 at 1050 mV and DCDC5 at 1000 mV, read from the AXP8191 over S_TWI0 with the PMIC provider's bus checks and phase order. Any difference ends the run with a refusal code through the deadline unit before any secondary starts. The relock and lowering records sit in the identity header (`0x42018180` and `0x42018160`) and the runner's decoder refuses a completed run without the lowering record. The relock and its tables fit in the gap of the overlay's 16 KiB reservation. `tools/top-opp-workload-bind.py` binds the prepared bundle to the current survey's instance chain and refuses port 3-1 until its supplies are read.
+Every launch starts from the ROM, which resets CPU-L and the DSU, so the workload sets its clocks itself. Before it releases any secondary, CPU0 at EL3 relocks CPU-B, CPU-L and the DSU to their top points (`boot/a733/top-opp-relock.c`), following the driver's sequence. Before its first clock write it checks the board itself: the DCXO enabled and stable at 26 MHz, speed-bin code `0x04`, every domain on its locked PLL with modulation off. It also checks DCDC3 at 1050 mV and DCDC5 at 1000 mV, read from the AXP8191 over S_TWI0 with the PMIC provider's bus checks and phase order. Any difference ends the run with a refusal code through the deadline unit before any secondary starts. The relock and lowering records sit in the identity header (`0x42018180` and `0x42018160`) and the runner's decoder refuses a completed run without the lowering record. The relock and its tables fit in the gap of the overlay's 16 KiB reservation. `tools/top-opp-workload-bind.py` binds the prepared bundle to the current survey's instance chain and refuses port 3-1 until its supplies are read.
 
 ## Board qualification
 
-Each returning step is a CPU0 image on the provider path of bundle 15 ([board-bundles-next.md](board-bundles-next.md)): it reads two sets of the five temperature sensors around its change, inspects the CPU domains read-only, refuses before any write unless the board matches the record, stops and lowers at 70 °C, and returns to the ROM. Every step passed on port 3-3 on 2026-10-25.
+Each returning step is a CPU0 image on the provider path of bundle 15 ([board-bundles-next.md](board-bundles-next.md)): it reads two sets of the five temperature sensors around its change, and inspects the CPU domains read-only. It refuses before any write unless the board matches the record, stops and lowers at 70 °C, and returns to the ROM. Every step passed on port 3-3 on 2026-10-25.
 
 | Step | Change | Result | Record |
 | --- | --- | --- | --- |
@@ -208,7 +208,7 @@ Each returning step is a CPU0 image on the provider path of bundle 15 ([board-bu
 | 6 | All-core workload at CPU-B 2002, CPU-L 1794, DSU 1274 MHz | 32 rounds on every core; relock parks 55, 70 and 69 µs; CPU-B lowered in 54 µs; 37.1 °C | `cpu-top-opp-step6-run` |
 | 6 | Background-task progress at the top points | 3.85 times on the A55 cores, 2.06 times on the A76 cores against the same image at the boot rates | `cpu-top-opp-step6-background` |
 
-Measured at the top points against the boot rates, a CPU-bound loop runs about 3.85 times faster on the A55 cores and 2.06 times faster on the A76 cores; the A76 core runs 1.10 to 1.12 times as many iterations per cycle as an A55 core. The shipped Orange Pi kernel leaves the DSU driver out and keeps the DSU at 494 MHz, so the DSU's top point comes from Allwinner's table and driver alone.
+Measured at the top points against the boot rates, a CPU-bound loop runs about 3.85 times faster on the A55 cores and 2.06 times faster on the A76 cores. The A76 core runs 1.10 to 1.12 times as many iterations per cycle as an A55 core. The shipped Orange Pi kernel leaves the DSU driver out and keeps the DSU at 494 MHz, so the DSU's top point comes from Allwinner's table and driver alone.
 
 ## Limitations
 

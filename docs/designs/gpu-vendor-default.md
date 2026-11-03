@@ -121,8 +121,7 @@ uses TIMER0.
 - The PMIC provider (`drivers/power/a733_pmic.c`) admits a DCDC4 selector write
   under an exclusive DCDC4 lease when the target decodes to one of that row's
   voltages. The CPU rails keep their 800-1050 mV rule.
-- The GPU platform raises DCDC4 once, before its first ON: an exclusive DCDC4
-  lease, a snapshot read, a write from 800 mV to 960 mV with its readback, and
+- The GPU platform raises DCDC4 once, before its first ON. The sequence is an exclusive DCDC4 lease, a snapshot read, a write from 800 mV to 960 mV with its readback, and
   1.2 ms of settling (the regulator's 1 ms ramp for 160 mV at 250 us/us,
   `axp2101-regulator.c:383-410`, plus the vendor's 200 us, `sunxiSetVoltage`). A
   DCDC4 already at 960 mV is not written.

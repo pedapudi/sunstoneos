@@ -2,7 +2,7 @@
 
 Status: qualified on the board (port 3-1) for the start, one health check, forced-idle and power-off requests, the 14-step stop and the platform OFF; host-tested. The second start in the same lifetime has no result record of its own.
 
-The firmware start leaves the GPU on with the firmware running ([the firmware-start design](gpu-firmware-start.md)). This note derives from the vendor's host driver how the firmware is stopped before the GPU powers off and which command the firmware acknowledges first, and describes the image that starts the firmware, sends it a command, stops it and powers the GPU off, so that a lifetime can continue.
+The firmware start leaves the GPU on with the firmware running ([the firmware-start design](gpu-firmware-start.md)). This note derives from the vendor's host driver how the firmware is stopped before the GPU powers off and which command the firmware acknowledges first. It also describes the image that starts the firmware, sends it a command, stops it and powers the GPU off, so that a lifetime can continue.
 
 **Sources.** The vendor's sequence comes from the Imagination DDK host driver and the `rgx_sunxi/` platform glue as shipped in Orange Pi `linux-orangepi` `2ac08e8c`, cached with their URLs and SHA-256 in `~/.cache/sunstoneos/sources/gpu-fw-start-ddk-2ac08e8c/manifest.json` (paths below relative to `rogue_km/`). The command numbers, structure layouts and power states come from the open firmware's interface, the upstream Linux headers in `~/.cache/sunstoneos/sources/gpu/board-2ac08e8c…/imagination/`, because the board runs the open firmware. The firmware binary is never disassembled (`LICENSE.powervr` line 14).
 

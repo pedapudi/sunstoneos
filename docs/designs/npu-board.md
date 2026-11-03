@@ -178,7 +178,8 @@ or the load is refused. The USB0 framing is described at the top of
 `CFG_TUD_EDPT_DEDICATED_HWFIFO=1` and a 4 KiB vendor transmit FIFO. The MUSB
 driver moves bytes by programmed I/O (PIO) between each controller FIFO and the
 TinyUSB class FIFO, and `tud_vendor_read` and `tud_vendor_write` copy bytes
-between the class FIFO and the lent tensor window, so each tensor byte needs one
+between the class FIFO and the lent tensor window. Each tensor byte therefore
+needs one
 memory copy and one PIO move in either direction, with no endpoint staging
 buffer. A READ response no larger than the FIFO enters the empty FIFO in one
 exchange, so TinyUSB sends a zero-length packet only after its last byte;
@@ -286,8 +287,8 @@ unqualified.
 allocations and the runtime's parent come from the 768 MiB write-back pool at
 `0x48000000`–`0x78000000`, which EL1 maps with 2 MiB blocks. For one
 ShuffleNetV2-sized slot, the placement rules of `npu_runtime_requirements` give
-8,388,608 bytes: the read-only group holds 2,953,216 bytes and ends at 4 MiB;
-the input group holds 151,552 bytes and the pool and output group 1,097,728
+8,388,608 bytes: the read-only group holds 2,953,216 bytes and ends at 4 MiB.
+The input group holds 151,552 bytes and the pool and output group 1,097,728
 bytes, and each ends on the next 2 MiB boundary.
 `checks/npu-board-providers.py` runs the image's own construction and reads the
 pool's slots afterwards; no runtime, service or client function calls the
@@ -296,10 +297,10 @@ free after admission).
 
 The cache policy per job, by address through `aarch64_device_cache`:
 preparation cleans the inputs, cleans and invalidates the output lines, and
-zeroes the 1,093,632-byte pool with `DC ZVA`, then cleans and invalidates it;
-completion invalidates the outputs; the interim checks run (T and A before the
+zeroes the 1,093,632-byte pool with `DC ZVA`, then cleans and invalidates it.
+Completion invalidates the outputs. The interim checks run (T and A before the
 trigger, H after the job, about 1.51 MB read per job; H holds back the SUBMIT
-reply); LOAD cleans the read-only bytes it wrote. Startup, service and runtime
+reply). LOAD cleans the read-only bytes it wrote. Startup, service and runtime
 state lives in kernel `.bss` (Normal write-back, inner shareable). Each field
 has one writing task, except the row's request and answer fields.
 

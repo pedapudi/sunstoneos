@@ -70,7 +70,7 @@ constant.
 **Position.** Known results come before new code: rank 7 re-runs a frozen ELF
 that has passed. A memory run can lose the connection through a bus stall, or
 through a non-linear address decode that turns a write to tested DDR into a
-write to the monitor; memory qualification's alias probe cannot detect such a
+write to the monitor. Memory qualification's alias probe cannot detect such a
 decode, and its page signature only bounds the damage. Rank 8 can hang a
 secondary core outside any forced return. Placing memory before rank 8 is a
 judgement that the decode fault is less likely than a secondary-core hang under
@@ -95,7 +95,7 @@ plan; memory qualification's `prepare()` derives each run's step and its
 ([platform/a733/monitor.S](../../platform/a733/monitor.S)). An image that hung
 while still renewing would never return. The memory target needs a renewal
 handler that sets the deadline to the earlier of the current count plus 2 s and
-the entry count plus 22 s, so a hang returns at most 22 s after entry, inside
+the entry count plus 22 s. A hang then returns at most 22 s after entry, inside
 the host's 30 s return window. It builds without `SUNSTONE_USB_RUNTIME`,
 records the entry count where EL1 cannot write it, and defines
 `monitor_renewal_cap`. Without it the tool prepares no memory bundle.
@@ -152,9 +152,9 @@ march is limited by the CPU, at 1.0 to 1.6 GB/s. The estimated chain is 4 to 6
 runs ([record](../evidence/board-bundles.jsonl), `board-bundles-memory-chain-estimates`).
 
 Requirements on the memory qualification package: it owns the step table and
-the 20 s clamp; it takes the map limit, time budget and seed from the contract;
-its mapping check's translation count and stride, and the host's golden-word
-comparison, use the step's limit; and Unicorn fixtures show that a step 1
+the 20 s clamp. It takes the map limit, time budget and seed from the contract.
+Its mapping check's translation count and stride, and the host's golden-word
+comparison, use the step's limit. Unicorn fixtures show that a step 1
 contract makes no access at or above `0x8000_0000`, that no valid descriptor at
 or above the limit exists when the MMU is first enabled, and that `prepare()`
 refuses each retaining record.
@@ -221,9 +221,9 @@ tool refuses a Terminal row unless its runner declares the module-level literal
 and procedure record the counts as measurements, not as pass conditions.
 Open work for the GPU service, NPU service and OS and accelerator image
 owners: count the three kinds separately per job, carry them to the host in each
-job's result, have `tools/check-a733-os-supervised.py` and
+job's result. Have `tools/check-a733-os-supervised.py` and
 `tools/check-a733-accelerators-supervised.py` write them to the session record
-under those names and declare `COMPLETION_COUNTS`, and name the admission values
+under those names and declare `COMPLETION_COUNTS`. Name the admission values
 that identify the NPU service, GPU service, dispatcher and arbiter builds.
 
 ## Guard against board contact

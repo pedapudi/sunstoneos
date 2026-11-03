@@ -88,15 +88,7 @@ qualification requirements; the per-period `observed_before_us` and
 `observed_after_us` records can measure the bridge on the board. No performance
 measurement is included in the model checks.
 
-`checks/i2s-interrupt.py` builds `checks/i2s-interrupt.c` on the stream model
-above with the image's interrupt adapter and runs two QEMU cases. With a
-200-tick fallback, five finite receive periods each bridge into the next
-period after their queue-end interrupt alone, the worker reads no DMA register
-between periods, each interrupt masks the SPI once and the worker re-enables it
-only after acknowledging the event. With the native one-tick fallback and no
-interrupt delivery at all, the same five periods bridge within the polled path's
-few ticks. DMA and I2S registers, the GIC SPI and interrupt delivery are
-modeled.
+No host check runs the image's interrupt adapter on the stream model. An earlier two-case QEMU run showed that with a 200-tick fallback, five finite receive periods each bridge into the next period after their queue-end interrupt alone. It also showed that the worker reads no DMA register between periods, each interrupt masks the SPI once and the worker re-enables it only after acknowledging the event. With the native one-tick fallback and no interrupt delivery at all, the same five periods bridge within the polled path's few ticks. DMA and I2S registers, the GIC SPI and interrupt delivery were modeled.
 
 Period records carry a sequential frame offset, host observation times and the
 raw direction counter. RXCNT counts samples entering the receive FIFO. TXCNT
@@ -308,9 +300,8 @@ idle does not establish wire drain.
 `~/.cache/sunstoneos/evidence/i2s-hardware-cyclic-20261019/` preserves descriptor
 checks, the actual native link, actual FreeRTOS/provider composition checks and
 producer-derived native client cases. That evidence predates the copy guard.
-The [cyclic provider check](../checks/i2s-cyclic.c), run by
-[its runner](../checks/i2s-cyclic.py), covers the guarded window. Its cases
-cover three ring wraps,
+No host check covers the guarded window. The cyclic provider cases of the
+earlier run covered three ring wraps,
 coalesced progress, reuse during the invalidation and after the copy, cursor transitions, retained
 staging, held fill leases, untrusted initial counts, delayed start readback and
 ambiguous observation history. Three further cases model the margin
@@ -397,10 +388,10 @@ service before accepting another capture generation.
 Host checks in `checks/os-image-audio.py` exercise finite and cyclic delivery,
 copy refusal and reversed timestamps. Raw DMA pages contain deliberately
 incorrect bytes in the cyclic fixture, so successful PCM comparison establishes
-that delivery used staging. The real FreeRTOS/provider cases 17 and 18 in
-`checks/i2s-cyclic.py` cover a busy writer during cancellation, held-copy
-retention, overrun, both direction closes and stale tickets after reopening.
-Registers, DMA effects and cache visibility are modeled.
+that delivery used staging. No host check covers a busy writer during
+cancellation, held-copy retention, overrun, both direction closes or stale
+tickets after reopening. Registers, DMA effects and cache visibility are
+modeled.
 
 ## Compare the native lifecycle with the pinned vendor implementation
 
@@ -427,3 +418,5 @@ for the controller, `0dc8d0c0912fced3dac450ffd98f5694bf0146e7608c922e6a562e6e7ed
 for the A733 clock adapter, `017b8aca7246ffdf786f9e20a38f3e9c2b62f1f6115cfc6e23d20052ba999620`
 for the PCM helper, and `d60e6598835ddf16b1f2374f746abd82da507dfefeb16edade9a0f7021b3d3bb`
 for DMA. The manual's destination-write/counter ordering gap remains unresolved.
+
+Results of host checks that no longer exist are kept in the evidence record [i2s-stream.jsonl](evidence/i2s-stream.jsonl).

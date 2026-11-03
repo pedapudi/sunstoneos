@@ -18,9 +18,9 @@ names the check that still runs and covers the same failure.
 
 No figure in this document has been measured on the board. Costs marked
 *counted* come from reading the code. Costs marked *estimated* are
-order-of-magnitude reasoning from the instruction sequence. The USB0 figures in
-section 3 come from the host model `checks/usb0-service-burst.py`, run on
-2026-10-21 against the tree at commit `3d576cb`.
+order-of-magnitude reasoning from the instruction sequence. The USB0 baselines in
+section 3 come from a host model of the shared service loop, run on
+2026-10-21 against the tree at commit `3d576cb`; that model is not a maintained check.
 
 ## Terms
 
@@ -502,9 +502,9 @@ state what the multicore work must reach.
 
 ### USB0 evidence channel
 
-Baselines come from `checks/usb0-service-burst.py`, which models the shared
+Baselines come from a host model of the shared
 loop in [apps/board/usb0_service.h](../apps/board/usb0_service.h) with a host
-that services a packet 20 µs after it is written.
+that services a packet 20 µs after it is written; the model is not a maintained check.
 
 | Metric | Baseline | Budget |
 | --- | --- | --- |
@@ -585,3 +585,5 @@ patches (critical sections, per-core arrays, idle `WFI`), the page tables in
 [arch/aarch64/device_memory.c](../arch/aarch64/device_memory.c) (the leading
 `DSB SY`). A design that needs one of these states the change and its
 consumer, and the primary agent schedules it.
+
+Results of host checks that no longer exist are kept in the evidence record [performance-architecture.jsonl](evidence/performance-architecture.jsonl).

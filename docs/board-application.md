@@ -60,9 +60,8 @@ wakes on every tick. The
 resident supervising task stops the same way after a refused renewal. The
 Type-C, power and radio owner tasks keep polling once per tick after a failure,
 because they continue to revoke the Type-C attachment or report the radio
-failure. [checks/board-park.py](../checks/board-park.py) runs the PMIC task of
-a linked image under Unicorn. It checks that a stopped task suspends and never
-sleeps, and that a live idle task still sleeps one tick per poll.
+failure. A stopped task suspends and never sleeps, while a live idle task still sleeps
+one tick per poll. No host check covers this.
 
 The device and host each keep their original TinyUSB configuration and logical
 port zero. The host object compilation renames the common TinyUSB exports and

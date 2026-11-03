@@ -203,9 +203,7 @@ slot lets the next segment record during transcription.
 The owner keeps its 1 ms poll, which the UART and audio receive-latency
 contract requires; before the first press those 1,000 wake-ups per second do
 no audio work. Both 4-poll latencies (`AT+BVRA=1` to commit, and commit to the
-synchronous-connection setup accepted by the UART) are the heavier form that
-section 1.3 of `docs/performance-architecture.md` describes: the owner
-advances RFCOMM, L2CAP, ACL, HCI and the UART one step per poll, and no
+synchronous-connection setup accepted by the UART) are the heavier form that section 1.3 of `docs/performance-architecture.md` describes. The owner advances RFCOMM, L2CAP, ACL, HCI and the UART one step per poll, and no
 qualified UART receive interrupt wakes it sooner.
 
 Consumers wait in `ulTaskNotifyTake(pdTRUE, timeout)` on index 0 and re-read
@@ -274,10 +272,7 @@ The host models `bt-hfp-ag.py`, `bluetooth-headset.py` and
 image with recognition (with and without mSBC) and the OS headset image. They
 cover a window or stop at each setup and link stage, requests around
 publication and `+BVRA: 0`, a workload 4 headset cancel followed by a button
-press and by a new Enter, zero-sample and odd-byte early ends against the
-digest of the even prefix, odd-length CVSD packets between activations, mSBC
-activations separated by an odd number of released frames, and every
-unrequested peer release (each reports a failure and, when committed on, sends
+press and by a new Enter, zero-sample and odd-byte early ends against the digest of the even prefix, odd-length CVSD packets between activations, and mSBC activations separated by an odd number of released frames. They also cover every unrequested peer release (each reports a failure and, when committed on, sends
 `+BVRA: 0` before DONE).
 
 ## Limitations and open work

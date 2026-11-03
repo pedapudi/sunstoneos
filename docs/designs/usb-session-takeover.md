@@ -56,8 +56,7 @@ The word `0x00029940` that the matched ROM leaves decodes as:
 
 This is the state the matched nonsecure ROM (SHA-256 `95be69c9…`,
 disassembly `sources/brom/ns-brom.dis`) leaves. Its connection routine sets
-SoftConn with `ldrb`/`orr #64`/`strb` at offsets `0x1db8` to `0x1dc4`,
-selects endpoint 2 with `strb` at `0x1d50`, writes INTUSBE `7` with `strb`
+SoftConn with `ldrb`/`orr #64`/`strb` at offsets `0x1db8` to `0x1dc4`. It then selects endpoint 2 with `strb` at `0x1d50`, writes INTUSBE `7` with `strb`
 at `0x1d68`, sets INTTxE bit 0 with `ldrb`/`strb` at `0x1d70` to `0x1d78`,
 and clears VEND0 bit 0 with `strb` at `0x2458`. Its device test at
 `0x23bc` to `0x23e8` requires BDEVICE and VBUS level 3.
@@ -155,8 +154,7 @@ enters `ROM_WAIT_SOFTCONN` and re-reads on later polls without writing; the
 interval starts at the first clear read, which adds at most one read per poll
 while SoftConn still reads set. A bit that never clears exhausts the provider
 deadline at stage `0x1d`; no reset is written. The provider would record a time
-failure (kind 1) whose observed value is the last word read, but in the
-returning image the USB task's `live()` check uses the same deadline and runs
+failure (kind 1) whose observed value is the last word read. In the returning image, however, the USB task's `live()` check uses the same deadline and runs
 first, so the board almost always reports `startup deadline/provider` with
 `USB_STAGE=0x1d` and an empty fault record. `ROM_RESET_ASSERT` checks SoftConn
 clear again before the reset write.

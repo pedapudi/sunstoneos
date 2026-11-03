@@ -3,13 +3,12 @@
 The native [free-list manager](../drivers/gpu/pvr_free_list.c) constructs GPU page
 lists, handles growth and reconstruction requests, and submits their firmware
 responses. A free list supplies physical pages to the GPU's parameter memory
-allocator. Host checks cover the manager with the real event dispatcher and
-command queue. Physical GPU operation remains unqualified.
+allocator. No host check remains. Physical GPU operation remains unqualified.
 
 This document assumes familiarity with memory ownership and firmware queues.
 Platform allocation, protected GPU mappings, and render-target recovery still
 need concrete board bindings. [Lifecycle-worker integration](gpu-freelist-service.md)
-now has emulator evidence. The manager exposes its platform
+has emulator evidence. The manager exposes its platform
 operations through [bounded callbacks](../include/pvr_free_list.h).
 
 ## Initial construction publishes owned pages before exposing the list
@@ -133,38 +132,22 @@ The worker collects the recorded firmware return on a later poll. A failed
 submission, expired deadline, or unsuccessful return stops the manager.
 Command acceptance does not establish GPU job completion or permit page release.
 
-## Focused evidence checks ABI agreement and retained failures
+## No host check covers ABI agreement and retained failures
 
-The [host runner](../checks/pvr-free-list.py) verifies downloaded source hashes,
-compiles unmodified reference functions for reserve calculation, record
-initialization, and page insertion, and runs AddressSanitizer and
-UndefinedBehaviorSanitizer. Reference headers also define the expected firmware
-request and response structures.
+No host check compiles the unmodified reference functions for reserve
+calculation, record initialization and page insertion, or compares complete
+initial records, page tables and response bytes with them. Nor does one cover
+successful growth, a partial allocation refusal, reuse of retained spares,
+growth at capacity, reconstruction of two lists. Nor does one cover response submission after all
+command return slots were occupied, uncertain allocation, publication failure,
+render-target recovery failure, allocator reentry, deadline expiry, overlapping
+GPU tables, a clock older than the queue clock, or an initial reserve
+containing every page. By design every terminal case preserves ownership on
+later polling and performs no callbacks.
 
-The check compares complete initial records, page tables, and response bytes.
-It exercises successful growth, a partial allocation refusal, reuse of retained
-spares, growth at capacity, reconstruction of two lists, and response submission
-after all command return slots were occupied. Fault cases cover
-uncertain allocation, publication failure, render-target recovery failure,
-allocator reentry, and deadline expiry. Every terminal case verifies that later
-polling preserves ownership and performs no callbacks. Separate validation cases
-cover overlapping GPU tables, a clock older than the queue clock, and an initial
-reserve containing every page.
+Board testing requires concrete allocation and publication bindings, protected
+table and record mappings, linked render-target recovery, executable firmware,
+and qualified independent reset recovery. This component provides no board
+executable or physical qualification.
 
-Run the focused check with the pinned source directory and a private evidence
-directory:
-
-```sh
-python3 checks/pvr-free-list.py \
-  --sources /path/to/pinned/imagination \
-  --output /path/to/private/evidence
-```
-
-Use `--case validation` to run only the configuration and clock cases.
-The runner records compiler identity, input hashes, reference functions, binary
-hash, and results. Existing command-queue and event-decoder evidence remains
-applicable to their unchanged implementations. Board testing requires concrete
-allocation and publication bindings, protected table/record mappings, linked
-render-target recovery, executable firmware, and qualified
-independent reset recovery. No board executable or physical qualification is
-provided by this component.
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-freelist.jsonl).

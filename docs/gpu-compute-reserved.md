@@ -72,20 +72,17 @@ The service requires freshly observed single-core capability after power
 activation and before firmware startup and computation. Memory reservation
 cannot establish that capability or physical GPU visibility.
 
-## Focused verification checks construction and refusal
+## No host check covers construction and refusal
 
-The [instruction fixture](../checks/gpu-compute-reserved.py) executes native
-translation instructions and the actual builders. One mode checks complete
-construction, service binding, retained ownership and mutation refusal. The
-other leaves the write-back pool one page short of the planner's table request
-and checks retention of both already-acquired parents.
-
-NPU and entropy occupancy use their complete retained extents. Their existing
-preparation checks are reused. The fixture executes no accelerator command,
-models no successful physical completion, and performs no benchmark. Existing
-boot-layout, firmware lifecycle and numerical checks are not replayed.
-
-Both selected modes passed. The executed base image has SHA-256
-`a5548ee822938716ce43bc38d7862dae0a684dea138efc9a31919dc1f105f306`.
-Evidence, dependency snapshots and the selected executable identities are in
+No host check executes the native translation instructions and the actual
+builders for complete construction, service binding, retained ownership and
+mutation refusal, or for a write-back pool one page short of the planner's table
+request (which must retain both already-acquired parents). NPU and entropy
+occupancy use their complete retained extents. The constructor executes no
+accelerator command, models no successful physical completion, and has no
+benchmark. The base image has SHA-256
+`a5548ee822938716ce43bc38d7862dae0a684dea138efc9a31919dc1f105f306`; the
+evidence directory for it is
 `~/.cache/sunstoneos/evidence/gpu-compute-reserved-20261016/batch/`.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-compute-reserved.jsonl).

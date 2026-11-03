@@ -100,14 +100,12 @@ with `dcxo`; that bookkeeping does not establish that DMA transfers run at
 24 MHz. The fabric checks establish conservative stability prerequisites. Throughput
 and complete fabric power management require separate qualification.
 
-The focused `checks/dma-clock-reference.c` check executes the actual platform
-and clock registry for SYS_CLK24M-only and PERI0 profiles. Ten sanitizer cases
-cover three valid oscillator/reference pairs, invalid normalization and missing
-reference lock. Accepted paths exclude a competing REF writer; rejected paths
-retain ownership without register writes. Evidence is under
-`dma-clock-reference-20261020/`. Earlier platform batches were not repeated.
-Register effects and time are modeled; this does not qualify a native image,
-DMA transfer or physical clock.
+No host check executes the platform with the clock registry for the
+SYS_CLK24M-only and PERI0 profiles, the three valid oscillator/reference pairs,
+invalid normalization or a missing reference lock. By design, accepted paths
+exclude a competing REF writer and rejected paths retain ownership without
+register writes. The clock provider has not run in a native image, a DMA
+transfer or on a physical clock.
 
 ## Cold startup releases an inherited reset without taking over active work
 
@@ -165,28 +163,24 @@ clock profiles. It also checks denied handoff, a live remote channel, uncertain
 writes, clock regression, and late final operations. Retained failures reject
 later polls without more device operations.
 
-The source comparison decodes observed fabric rates and gate writes from the
-same fixture log. It checks the DMA0 device-tree binding, critical-gate mask,
-reset/bus/MBUS order, automatic-gating value, and CPU route value. The native
-adapter has compile evidence; it has not executed against the physical device.
-Existing DMA controller, memory-adapter, FreeRTOS service, audio, and GPU checks
-remain applicable and were not repeated.
+The native adapter has compile evidence; it has not executed against the
+physical device. No host check compares the DMA0 device-tree binding,
+critical-gate mask, reset/bus/MBUS order, automatic-gating value or CPU route
+value with the pinned source.
 
 PERI0 input-divider bit 1 must be zero, selecting division by one. The A733
 User Manual V1.00, section 4.1.6.6, defines this field even though the kernel
 clock profile omits it. The focused `--pll-input-only` case admits the unchanged
 profile and refuses divide-by-two before writes, retaining ownership.
 Sanitizers and native compilation pass. Evidence is in
-`~/.cache/sunstoneos/evidence/peri0-input-divider-20261016/`;
-unchanged platform and service behavior retains its earlier evidence.
+`~/.cache/sunstoneos/evidence/peri0-input-divider-20261016/`.
 
 The focused `--parent-gates-only` check covers each required No-Auto, software
 enable and effective-status bit, failed or late gate reads, unselected branches,
 and retained ownership without writes. Its source comparison and artifacts are
 in `~/.cache/sunstoneos/evidence/peri0-gates-20261016/`. The focused host check passes with address
 and undefined-behavior sanitizers; both affected native units compile for AArch64. The DMA startup
-fixture supplies the enabled inherited gate values; its unchanged lifecycle
-evidence remains applicable and was not repeated.
+fixture supplies the enabled inherited gate values.
 
 Raw evidence is in `~/.cache/sunstoneos/evidence/dma-platform-20261016/`.
 The separate `clock-evidence.json` covers registry extension checks;
@@ -211,3 +205,5 @@ protected Device mappings. After readiness, the DMA service may authorize only
 channels in `desired_cpu`. Its descriptor, buffer, translation, cache, and FIFO
 reservations remain separate requirements. Controller readiness does not establish
 buffer ownership, DMA drain, microphone operation, or physical qualification.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/dma-platform.jsonl).

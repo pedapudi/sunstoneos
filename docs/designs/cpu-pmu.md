@@ -11,7 +11,7 @@ Board A/B runs need cycle counts and cache and TLB event counts per core:
 [memory architecture](memory-architecture.md), and cycles in the
 [power authority](power-authority.md) and [NPU exact sum](npu-exact-sum.md)
 designs. The module measures a region at EL1 on Cortex-A55 r2p0 (cores 0–5)
-and Cortex-A76 r4p1 (cores 6 and 7): a region reads the cycle counter and six
+and Cortex-A76 r4p1 (cores 6 and 7). A region reads the cycle counter and six
 event counters at its start and end, and the module writes the per-core
 differences into a fixed 64-byte record. It is linked by the board-bundle
 applications `apps/board-bundles-cpu` and `apps/board-bundles-power`.
@@ -32,8 +32,7 @@ applications `apps/board-bundles-cpu` and `apps/board-bundles-power`.
 
 The record is little-endian and fills one 64-byte line: format version, core,
 counters used, supported-event mask, overflow mask, status, `MIDR_EL1`,
-`CNTFRQ_EL0`, 64-bit cycle and counter-tick differences, and six 32-bit event
-differences in the order `INST_RETIRED` (0x08), `L1D_CACHE_REFILL` (0x03),
+`CNTFRQ_EL0`, 64-bit cycle and counter-tick differences. Then come six 32-bit event differences in the order `INST_RETIRED` (0x08), `L1D_CACHE_REFILL` (0x03),
 `L2D_CACHE_REFILL` (0x17), `BUS_ACCESS` (0x19), `DTLB_WALK` (0x34) and
 `ITLB_WALK` (0x35). The caller owns the region (24 bytes, on its stack) and the
 record. The module allocates nothing and touches no MMIO.
@@ -65,7 +64,7 @@ Sources: Cortex-A55 TRM 100442_0200_00 (r2p0), TF-A `0892ad4d`
 `a95129bf` (hashes and paths in `checks/cpu-pmu-sources.json`, verified by the
 host check). Configuration runs when begin finds the configured flag clear or
 `PMCR_EL0.E` equal to 0. The one event that makes a configured core stale is a
-warm reset of that core, which sets `PMCR_EL0.E` to 0 (TRM D5.4); no other code
+warm reset of that core, which sets `PMCR_EL0.E` to 0 (TRM D5.4). No other code
 in an image that links this module writes `E` as 0 or writes the event counter
 registers, and `a733_cpu_cycles_enable` writes the same cycle-counter values.
 
@@ -88,8 +87,7 @@ registers, and `a733_cpu_cycles_enable` writes the same cycle-counter values.
 
 The configured path makes 28 system-register accesses and 2 `ISB`: 14 in begin
 (`DAIF` read, `DAIFSet`, `TPIDR_EL1`, `PMCR_EL0`, six `PMEVCNTR<n>_EL0` writes,
-`PMOVSCLR_EL0`, `ISB`, `PMCCNTR_EL0`, `CNTPCT_EL0`, `DAIF` restore) and 14 in end
-(`DAIF` read, `DAIFSet`, `ISB`, `PMEVCNTR0_EL0`, `PMCCNTR_EL0`, `CNTPCT_EL0`,
+`PMOVSCLR_EL0`, `ISB`, `PMCCNTR_EL0`, `CNTPCT_EL0`, `DAIF` restore). The other 14 are in end (`DAIF` read, `DAIFSet`, `ISB`, `PMEVCNTR0_EL0`, `PMCCNTR_EL0`, `CNTPCT_EL0`,
 `TPIDR_EL1`, the other five `PMEVCNTR<n>_EL0` reads, `PMOVSSET_EL0`, `PMCR_EL0`,
 `DAIF` restore). Begin zeroes counter 0 (`INST_RETIRED`) last and end reads it
 first, so the counted window holds as few instructions as possible; begin
@@ -135,8 +133,7 @@ code (`enum a733_cpu_pmu_status`) on a final-core mismatch (another task
 changed the measured task's affinity), a changed generation (another region
 began on the core, which also refuses nested regions), or `PMCR_EL0.E` reading 0.
 A task moved to a second core and back inside one region passes these checks
-and gets a wrong record, so no task changes a measured task's affinity during a
-region; in the tree, one task sets another's affinity only at creation
+and gets a wrong record, so no task changes a measured task's affinity during a region. In the tree, one task sets another's affinity only at creation
 (`apps/board/main.c`, `apps/spi/main.c`) and in scheduler migration checks.
 Every refusal happens before any device access and retains nothing (section 1.8
 class 1).
@@ -184,10 +181,9 @@ and the `MDCR_EL2` write in both continuation sources.
 `checks/cpu-pmu-smp.py` builds `checks/cpu-pmu-smp.c` on `platform/qemu-smp`
 with two cores, once with `-cpu cortex-a55` and once with `-cpu cortex-a76`,
 under `-icount shift=0`. Each core runs a pinned task that measures a loop of
-2,000 instructions while the other core measures its own; the check requires
+2,000 instructions while the other core measures its own. The check requires
 `INST_RETIRED` equal to that count plus the empty region's, a nonzero cycle
-difference, the correct core and MIDR, a supported mask equal to QEMU's
-`PMCEID` bits, the refusal of a two-core affinity mask at begin, the
+difference, the correct core and MIDR, a supported mask equal to QEMU's `PMCEID` bits. It also requires the refusal of a two-core affinity mask at begin, the
 final-core-mismatch refusal when a peer moves a pinned task, and the refusal of
 a nested region.
 

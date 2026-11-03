@@ -134,8 +134,8 @@ and no other barrier is added.
 **Fixed mappings** are requested from the owner of the platform memory
 management: the read-only and write groups read-only at EL0 and EL1, the read
 group read-write, and an EL1-only read-write alias of the read-only and write
-groups for loads, pool clears and `DC IVAC`, with sealed tables so a stray CPU
-write faults at the writing instruction. They are not built.
+groups for loads, pool clears and `DC IVAC`. The tables are sealed, so a stray
+CPU write faults at the writing instruction. They are not built.
 
 ## Interim integrity checks
 
@@ -245,9 +245,9 @@ Images that link the service but not the runtime keep their section sizes
 function pointer, so `--gc-sections` removes the loop from them.
 
 Interim figures above the plan, each with its cause: H is bounded by the model
-file size rather than the counted read-only bytes; W carries that H and the
+file size rather than the counted read-only bytes. W carries that H and the
 longest step L = 0.235 ms (the LOAD step that decodes the staged copy runs
-about 58,000 instructions, against C = 0.1 ms); a LOAD takes 65.2 ms against
+about 58,000 instructions, against C = 0.1 ms). A LOAD takes 65.2 ms against
 about 58 ms because of the staging copy. D for ShuffleNetV2 is unmeasured and
 W > D is likely.
 

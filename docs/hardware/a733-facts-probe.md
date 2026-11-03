@@ -28,7 +28,7 @@ taken from source (`platform/a733-smp-cached/boot.c:95` stops the boot when `DS`
 (bit 1), ARE_NS (bit 4) and RWP (bit 31); `DS`, `ARE_S`, EnableGrp0 and EnableGrp1S are not shown (IHI0069,
 `GICD_CTLR`, "Non-secure access when GICD_CTLR.DS == 0"). `GICD_IGROUPR`, `GICD_IGRPMODR`, `GICR_IGROUPR0` and
 `GICR_IGRPMODR0` are RAZ/WI, and every field of a Secure interrupt reads 0. The decoder therefore marks those
-fields `raz-in-view`; an SPI is treated as visible only when one of its priority, enable, pending, active,
+fields `raz-in-view`. An SPI is treated as visible only when one of its priority, enable, pending, active,
 configuration or route fields reads nonzero, and a priority byte, a state word of the SGI and PPI frame or
 `GICR_WAKER` that reads 0 is `raz-in-view` too. `MIDR_EL1` and `MPIDR_EL1` are what EL1 reads: `VPIDR_EL2` and
 `VMPIDR_EL2`, which the monitor sets from the hardware registers. The GIC has two security states, so the Non-secure value of a priority byte or of `ICC_PMR_EL1` differs from
@@ -147,10 +147,10 @@ the table. Every core reported; the values below hold on all eight cores unless 
 | NPU PPU words `0x07064000`, `0x07064008` | 8, read at EL1 after the three gates were open |
 
 The shifted view reproduces both numbers that failed board runs: the Secure value 0xd8 reads 0xb0 at INTID 97
-(the bind comparison) and 0xd0 at PPI 27 after the image writes 0xd8 (the earlier assertion of 0xd8 and the
+(the bind comparison). That value also reads 0xd0 at PPI 27 after the image writes 0xd8 (the earlier assertion of 0xd8 and the
 earlier acceptance of 0xb0 both differ from 0xd0). The `0xf8` read-back that an earlier board run showed after
-an unmasked write is not reproduced here: this probe reads 0xf0 after the same write at the same level, so that
-earlier value came from another state of the interface (for example with tasks running) that the table does not
+an unmasked write is not reproduced here: this probe reads 0xf0 after the same write at
+the same level. That earlier value therefore came from another state of the interface (for example with tasks running) that the table does not
 yet cover. Merging the board table replaced that observation, as the merge replaces observed entries.
 
 `ICC_IGRPEN0_EL1` read at Non-secure EL1 traps to EL3 is recorded as a measured fact from entry
@@ -159,8 +159,9 @@ yet cover. Merging the board table replaced that observation, as the merge repla
 Seeds that remain `observed` are the runner's own readings (`runner.mmio.*` for the five NPU admission words
 and `runner.rail.*`: DCDC3 and DCDC5 800 mV, DCXO 26 MHz, CPU voltage bin 4) from entry
 `1793587317962103239-5bbfc48d`. The open NPU interrupt bind condition is `bind_refusal` in
-`platform/a733/npu_irq.c`; the table holds every register that function reads for INTID 97 in the state a
-routed image leaves at EL1 (all clear and level-sensitive, priority 0xb0), the state in which the clauses of that function hold for this image's route (core 0, secure priority 0xd8).
+`platform/a733/npu_irq.c`. The table holds every register that function reads for INTID 97 in the state a
+routed image leaves at EL1 (all clear and level-sensitive, priority 0xb0). In
+that state the clauses of that function hold for this image's route (core 0, secure priority 0xd8).
 
 ## Inventory of asserted and refused hardware values
 
@@ -169,7 +170,7 @@ measurement.
 
 | # | Value or behaviour | Code site | Host model site | Fact |
 | --- | --- | --- | --- | --- |
-| 1 | PPI 27 priority byte 0xd8 written, Non-secure read-back | `platform/a733-smp-cached/platform.c` (a733_smp_primary_el1), `apps/npu-finite/deadline.c` | `platform/qemu-os/platform.c` local_init, `checks/npu-deadline-setup.py`, GIC models | `gic.redist.intid27.priority[_after_write]` |
+| 1 | PPI 27 priority byte 0xd8 written, Non-secure read-back | `platform/a733-smp-cached/platform.c` (a733_smp_primary_el1), `apps/npu-finite/deadline.c` | `platform/qemu-os/platform.c` local_init, GIC models | `gic.redist.intid27.priority[_after_write]` |
 | 2 | PPI 30 priority byte | `platform/a733-smp-cached/platform.c` | `platform/qemu-os/platform.c` | `gic.redist.intid30.priority[_after_write]` |
 | 3 | `ICC_PMR_EL1` unmasked read-back (0xf0 measured; an earlier run showed 0xf8) | `platform/a733/platform.c` configASSERT, `apps/os/cpu-return.c` core_can_schedule, `apps/os/cpu-return-el0.S` | `GicModel` in `tools/hw_facts.py`; the five Unicorn models | `gic.cpuif.icc_pmr_el1.readback_after_write_ff` |
 | 4 | `ICC_PMR_EL1` read-back of the API mask | `patches/freertos-smp-c.patch` (xPortStartScheduler) | same | `...readback_after_write_api_mask` |
@@ -179,11 +180,11 @@ measurement.
 | 8 | `GICD_CTLR` ARE_S and ARE_NS set and group enables clear at route time | `platform/a733-smp-cached/irq_table.c` (a733_irq_table_route) | `checks/a733-irq-table.c` | `gic.dist.gicd_ctlr.*` |
 | 9 | `GICD_TYPER` line count bounds each routed INTID | `platform/a733-smp-cached/irq_table.c` | `checks/a733-irq-table.c` | `gic.dist.gicd_typer.itlinesnumber` |
 | 10 | INTID 97 group, configuration, enable, pending, active, priority, route (bind clauses 3 to 9) | `platform/a733/npu_irq.c` bind_refusal | `checks/npu-board-providers.py` | `gic.dist.spi97.*` |
-| 11 | INTID 187 configuration and priority 0xb0 | `apps/board/host_irq.c` board_host_irq_bind | `checks/usb-host-irq.c`, `checks/usb-host-irq-route.py` | `gic.dist.spi187.*` |
+| 11 | INTID 187 configuration and priority 0xb0 | `apps/board/host_irq.c` board_host_irq_bind | `checks/usb-host-irq.c` | `gic.dist.spi187.*` |
 | 12 | INTID 71 and 143 routes at priority 0xd8 | `tools/sunstone-manifest.py` route table, `apps/os/thermal.c`, `apps/os/audio.c` | `checks/a733-irq-table.c` | `gic.dist.spi71.*`, `spi143.*` |
 | 13 | Other device SPIs: 56 to 61, 67, 69, 70, 80, 81, 95, 149, 153, 161, 185, 200, 201, 228, 242 | `drivers/spi`, `include/a733_pwm.h`, `a733_lradc.h`, `a733_adc.h`, `a733_gpu_backend.h`, `a733_ce.h`, `drivers/rtc/a733_rtc_boot.c`, `apps/isp0/irq.h`, `apps/pcie-*/irq.c` | per-driver checks | `gic.dist.spiN.*` |
-| 14 | SGI 0 priority and group (Secure 0xf0, Non-secure view) | `platform/a733-smp-cached/continue.c`, port | `checks/a733-supervised-scheduler.py`, `checks/all-core-task-workload-probe.py` | `gic.redist.intid0.priority` |
-| 15 | `GICR_TYPER`, `GICR_WAKER` words read at pre-release admission | `platform/a733-smp-cached/continue.c` | `checks/all-core-first-task-probe.py` ADMISSION_OFFSETS | `gic.redist.gicr_typer`, `gicr_waker` |
+| 14 | SGI 0 priority and group (Secure 0xf0, Non-secure view) | `platform/a733-smp-cached/continue.c`, port | `checks/a733-supervised-scheduler.py` | `gic.redist.intid0.priority` |
+| 15 | `GICR_TYPER`, `GICR_WAKER` words read at pre-release admission | `platform/a733-smp-cached/continue.c` | none | `gic.redist.gicr_typer`, `gicr_waker` |
 | 16 | Redistributor group, enable, pending, active words of SGI and PPI frames | `platform/a733-smp-cached/continue.c` | the Unicorn models (`0x10080`, `0x10100`) | `gic.redist.sgi_ppi.*` |
 | 17 | `CNTFRQ_EL0` is 24 MHz | `platform/a733/counter_clock.c`, `platform/a733-smp-cached/start.S` (writes it), `include/` conversions by 24 | `platform/qemu-os/platform.c` (declares 24 MHz), `checks/a733-smp-cached.py` | `cpu.cntfrq_el0` |
 | 18 | `MPIDR_EL1` affinity: core in Aff1, Aff0, Aff2 and Aff3 zero | `platform/a733/cpu_start.c` a733_cpu_index | `checks/a733-smp-cached.py` (`0x81000000 | c << 8`) | `cpu.mpidr_el1.*` |
@@ -198,25 +199,25 @@ measurement.
 | 27 | PMIC rails DCDC3 and DCDC5 at 800 mV, DCXO 26 MHz, voltage bin | rail helper (`tools/board_state.py`), `drivers/power/a733_pmic.c` | `platform/qemu-os/mmio.c`, `checks/a733-pmic.c` | `runner.rail.*` (not in the probe) |
 | 28 | TWI controller idle state `0xf8` status, control `0x40`, divider | `drivers/power/a733_pmic.c`, `drivers/i2c/a733_twi.c` | `platform/qemu-os/mmio.c`, `checks/board-bundles-apps-model.c` | not a probe fact: the probe makes no TWI access |
 
-The inventory holds 28 rows. Rows 1 to 4 and 10 are the facts behind the three board failures; rows 5 to 9 and
-11 to 25 are the other GIC and CPU values that code asserts or that a model restates; rows 26 to 28 are the
+The inventory holds 28 rows. Rows 1 to 4 and 10 are the facts behind the three board
+failures. Rows 5 to 9 and
+11 to 25 are the other GIC and CPU values that code asserts or that a model
+restates. Rows 26 to 28 are the
 runner and PMIC values.
 
 ## Adoption plan
 
-Host models first, driver code second. This round converts the models of rows 3 to 7 and 14; no driver
-behaviour changes.
+Host models are converted first and driver code second. The models of rows 3 to 7 and 14 read the facts file;
+no driver behaviour depends on it.
 
-Done in this round:
+Implemented:
 
 - `tools/hw_facts.py` provides `Facts` and `GicModel`. `GicModel` takes the number of implemented priority
   bits from `ICC_CTLR_EL1.PRIbits`, selects the shifted or unshifted Non-secure view that reproduces the
   measured `ICC_PMR_EL1` read-back, fails with `ContradictsTable` when neither does, and returns an observed
   Non-secure priority for an interrupt that has one.
-- `checks/a733-smp-cached.py`, `checks/a733-supervised-scheduler.py`, `checks/all-core-first-task-probe.py`,
-  `checks/all-core-task-workload-probe.py`, `checks/primary-cache-probe.py` and
-  `checks/secondary-interrupt-probe.py` use `GicModel` for the priority mask, the Non-secure writes, the
-  Non-secure reads and the `ICC_PMR_EL1` and `ICC_RPR_EL1` views.
+- `checks/a733-smp-cached.py` and `checks/a733-supervised-scheduler.py` use `GicModel` for the priority mask,
+  the Non-secure writes, the Non-secure reads and the `ICC_PMR_EL1` and `ICC_RPR_EL1` views.
 - `checks/hw-facts.py` fails when one of those models hard-codes the mask, the shift or a Non-secure priority
   literal, when the table and the layout of the C code differ, and when the facts file is malformed.
 
@@ -245,3 +246,5 @@ Remaining, in order:
   contradicting files, and scans the host models.
 - The Unicorn models cannot run end to end on this tree: `checks/a733-supervised-scheduler.py` stops at
   `id_aa64isar0_el1` before any change here, and the others need cached evidence. They compile and import.
+
+Results of host checks that no longer exist are kept in the evidence record [a733-facts-probe.jsonl](../evidence/a733-facts-probe.jsonl).

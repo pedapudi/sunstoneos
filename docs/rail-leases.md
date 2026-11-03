@@ -107,38 +107,31 @@ instructions outside the measuring wrappers and the 64-byte lines of the ledger,
 registry and GPU manager that each operation touches. The configurations hold
 42 clock and 16 rail leases, then 126 clock leases and a full rail table.
 
-| Operation | Previous ledger, 16 / full | Current ledger, 16 / full |
-| --- | --- | --- |
-| Rail status, one-rail token | 222 / 888 instructions; 34 / 256 lines | 37 / 37 instructions; 3 / 3 lines |
-| Clock token status | 235 / 592 instructions | 45 / 45 instructions |
-| Acquire, poll and release | 1,643 / 3,565 instructions | 335 / 335 instructions |
-| Borrow | 823 / 1,531 instructions | 153 / 153 instructions |
-| End borrow | 271 / 923 instructions | 86 / 86 instructions |
-| Authority check per PMIC transaction | 498 / 1,507 instructions | 6 / 6 instructions, 1 line |
-| Ledger storage | 20,096 bytes | 1,600 bytes |
+| Operation | Instructions (16 leases and full table) |
+| --- | --- |
+| Rail status, one-rail token | 37 / 37; 3 / 3 lines |
+| Clock token status | 45 / 45 |
+| Acquire, poll and release | 335 / 335 |
+| Borrow | 153 / 153 |
+| End borrow | 86 / 86 |
+| Authority check per PMIC transaction | 6 / 6; 1 line |
+| Ledger storage | 1,600 bytes |
 
-The previous ledger, at merge base `d40ca4b72b42348880d89f1ebc4eaec61704b8d0`,
-had 128 slots, so its full configuration holds 127 rail leases; the current
-ledger holds 31. Equal costs in the two configurations show
-that no operation scans holders. With `--limits` the check enforces the budgets
-of `docs/designs/power-authority.md`.
+Equal costs in the two configurations show that no operation scans holders. The
+ledger holds 31 rail leases. The power-domain row read costs 12 instructions with
+one acquire load and no exclusive access; load/store exclusive instructions and
+ARMv8.1 LSE atomics count as exclusive accesses. With `--limits` the check
+enforces the budgets of `docs/designs/power-authority.md`. The comparison with
+a 128-slot ledger design is in [the evidence file](evidence/rail-leases.jsonl).
 
 ## Checks
 
-- `checks/rail-leases.c`, built with AddressSanitizer and
-  UndefinedBehaviorSanitizer, covers acquire, poll and release in production
-  order for all fifteen outputs with no registry or GPU lease and no bus
-  access; refusal of every other output; exclusion; aliases; a full table;
-  never-reused identifiers; borrow capacity; fault retention, including a
-  registry fault reported in the state word; and row pins.
-- `checks/rail-leases.py` runs that model and compiles every affected native
-  unit with its recorded flags, archiving inputs and the executable.
 - `checks/rail-leases-cost.py` measures the costs above and the power-domain
-  row read: 12 instructions with one acquire load and no exclusive access,
-  against one DE_SYS provider poll at the merge base of 344 instructions with
-  a lock entry and two register reads. It counts load/store exclusive
-  instructions and the ARMv8.1 LSE atomics (CAS, SWP, LDADD and the other
-  atomic memory operations) as exclusive accesses.
+  row read.
+- Acquire, poll and release for all fifteen outputs, refusal of every other
+  output, exclusion, aliases, a full table, never-reused identifiers, borrow
+  capacity, fault retention and row pins have no retained host check; a
+  sanitizer run of them is in the evidence file.
 
 These checks establish metadata behavior only; physical PMIC, rail and
 peripheral qualification remains pending.

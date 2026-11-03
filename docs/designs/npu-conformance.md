@@ -127,8 +127,7 @@ the two outputs must be equal; this detects simulator nondeterminism.
 ShuffleNetV2 repeats the vector with every code at 255.
 
 On the board, a pair whose outputs differ on a line detects only the loss of
-both output cache operations, or a wrong memory attribute on the output
-buffer: `a733_npu_memory_publish` cleans and invalidates every output buffer
+both output cache operations, or a wrong memory attribute on the output buffer. The cause is that `a733_npu_memory_publish` cleans and invalidates every output buffer
 before each job and `a733_npu_memory_finish` invalidates it again, so either
 masks a missing other. A missing input clean changes the output only while the
 new input bytes are still dirty in the CPU cache when the NPU reads them.

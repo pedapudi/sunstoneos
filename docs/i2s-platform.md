@@ -171,12 +171,12 @@ sample. It requires retained recovery before any DMA or I2S access. The shared
 mutex model rejects nested acquisition during pin or lease callbacks.
 ASan and UBSan reported no errors.
 
-A source comparison decodes the fixture's observed clock words using field
-positions and divisor conventions from the pinned CCU source. It confirms the
-3.072 GHz, 614.4 MHz and 24.576 MHz chain and compares PLL enable transitions
-with the source helper. The affected I2S/DMA fixture additionally checks pending
-open/close, retained acquisition and late callbacks. Existing format and pin
-encoding comparisons remain valid because those calculations are unchanged.
+No host check compares the fixture's clock words with the pinned CCU source.
+An earlier source comparison decoded them using field positions and divisor
+conventions from that source, confirmed the 3.072 GHz, 614.4 MHz and 24.576 MHz
+chain and compared PLL enable transitions with the source helper. The I2S/DMA
+fixture additionally checks pending open/close, retained acquisition and late
+callbacks.
 
 AArch64 freestanding compilation covers the capture core, platform binding
 and native adapter. Native MMIO has not executed on the board. Raw evidence is
@@ -207,8 +207,6 @@ cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   drivers/dma/a733_dma.c drivers/dma/a733_dma_controller.c \
   -o /tmp/i2s-platform-check
 /tmp/i2s-platform-check > /tmp/i2s-platform.log
-python3 checks/i2s-platform-reference.py \
-  ~/.cache/sunstoneos/sources/i2s-platform /tmp/i2s-platform.log
 /tmp/i2s-platform-check --rates > /tmp/i2s-rates.log
 python3 checks/i2s-rates-reference.py ~/.cache/sunstoneos/sources/i2s \
   ~/.cache/sunstoneos/sources/i2s-platform /tmp/i2s-rates.log
@@ -237,3 +235,5 @@ register facts; Linux is not a runtime dependency.
 | [ccu_mult.h](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu_mult.h) | `1ecf95b5e4d35807b4b8fa5dca3b454af5b0924991fcee276e730b8e528d7c79` |
 | [ccu_div.h](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu_div.h) | `a379fcb476803bc3fda7143f79d18cfcecb4320bc9f04facbea2a5b0d7c1d17e` |
 | [snd_sun60iw2_i2s.c](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/sound/platform/platforms/snd_sun60iw2_i2s.c) | `0dc8d0c0912fced3dac450ffd98f5694bf0146e7608c922e6a562e6e7ed795d5` |
+
+Results of host checks that no longer exist are kept in the evidence record [i2s-platform.jsonl](evidence/i2s-platform.jsonl).

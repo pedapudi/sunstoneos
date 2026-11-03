@@ -26,8 +26,7 @@ memory architecture designs (`docs/designs/gpu-runtime.md`,
 
 A mimus linear layer multiplies int16 activation codes by int8 weight codes and
 sums the products exactly. mimus then converts each sum to float once and
-applies scales, a bias and, for residual layers, `y += alpha x value`, in a
-fixed float order: the **read-out**. The GPU computes the sums and the CPU runs
+applies scales, a bias and, for residual layers, `y += alpha x value`, in a fixed float order. This step is the **read-out**. The GPU computes the sums and the CPU runs
 the read-out, so output stays bit-identical to the host reference. On one
 Cortex-A55 at 494 MHz the linear layers take 14.894 s of 19.476 s and perform
 4,167,910,560 multiply-accumulates (MACs) ([mimus.md](../mimus.md)).
@@ -87,9 +86,8 @@ otherwise. Every sum satisfies |sum| <= 3,520 x 32,767 x 128 < 2^34.
 - **Stores without branches.** A store to a channel outside the job, and the
   high word of an int32 sum, goes to the lane's own tag word, which the tag
   store then overwrites.
-- **Argument record.** Thirty-two bytes: GPU address of channel 0's weight
-  codes (words 0-1), address of row 0's activation codes (words 2-3), K with
-  `n_gpu` in the high 16 bits (word 4), rows (5), weight stride with the
+- **Argument record.** The record is thirty-two bytes. It holds the GPU address of channel 0's weight
+  codes (words 0-1), the address of row 0's activation codes (words 2-3), K with `n_gpu` in the high 16 bits (word 4), and rows (5). It ends with the weight stride with the
   activation stride in the high 16 bits, in bytes (6), and the sequence (7).
 - **Job words.** `pvr_compute_job.c` reuses its profile-three PDS and CDM
   construction with per-job workgroup counts. The argument record and the CDM
@@ -97,14 +95,10 @@ otherwise. Every sum satisfies |sum| <= 3,520 x 32,767 x 128 < 2^34.
   writes and cleans only while no job is in flight. The 31-workgroup cap stays
   for sealed package sessions.
 - **Admission at open.** The adapter refuses a tensor whose K is not a multiple
-  of 4, whose weight stride is below K, whose weight offset or stride is not a
-  multiple of 4, or whose weight extent `offset + (n_gpu - 1) x stride + K` does
-  not lie inside that tensor's model region, using the overflow-safe helpers of
-  `a733_range.h`. The two model regions are adjacent in GPU addresses, so an
+  of 4, whose weight stride is below K, or whose weight offset or stride is not a multiple of 4. It also refuses a tensor whose weight extent `offset + (n_gpu - 1) x stride + K` does not lie inside that tensor's model region. The check uses the overflow-safe helpers of `a733_range.h`. The two model regions are adjacent in GPU addresses, so an
   unchecked extent could read the other one. It computes each tensor's
   `job_rows` as `min(floor(2^26 / (K x n_gpu)), floor((2 MiB - 64 KiB) /
-  (n_gpu x width)), 32 x floor(512 / ceil(n_gpu / 16)))`: the 64 Mi MAC cap, the
-  sum area and the 512 workgroups that fill the 64 KiB tag area. A tensor whose
+  (n_gpu x width)), 32 x floor(512 / ceil(n_gpu / 16)))`. The three terms are the 64 Mi MAC cap, the sum area and the 512 workgroups that fill the 64 KiB tag area. A tensor whose
   bound is below 32 runs on the CPU.
 - **Admission at submit.** The adapter refuses `rows == 0`, `rows > job_rows`,
   sequence 0, an activation offset or row stride that is not a multiple of 4,
@@ -193,11 +187,8 @@ touching that call's codes. The per-job clean provides coherence, and the
 per-job extent check stays.
 
 The GPU worker runs at EL1 on core 6 and performs all maintenance. Completion
-arrives by SPI 63 (INTID 95) on core 6. In order: the worker reads the
-completion record; it cleans and invalidates the job's tags and sums behind the
-helper's leading `DSB SY`, and the trailing `DSB SY` completes the maintenance
-for every core; it posts the completion; the recognizer compares every tag with
-the job's sequence; then it reads out the sums.
+arrives by SPI 63 (INTID 95) on core 6. The order is as follows. The worker reads the completion record. It cleans and invalidates the job's tags and sums behind the
+helper's leading `DSB SY`, and the trailing `DSB SY` completes the maintenance for every core. It posts the completion. The recognizer compares every tag with the job's sequence, then reads out the sums.
 
 - **GPU-only calls (`n_gpu = N`).** The recognizer runs the read-out through
   mimus's `ParallelFor` over rows on cores 6 and 7. The `ParallelFor` hand-off
@@ -282,8 +273,7 @@ assumptions, and board items replace them:
 - the USC issues one 32-lane instruction per clock at 400 MHz, at the measured
   instruction groups per MAC;
 - memory latency adds a second bound: each 32-lane task waits L GPU clocks after
-  each of its 12 loads per pass of 4 K steps and after each of its 32 sum
-  stores, and R tasks are resident to hide those waits, where R follows from the
+  each of its 12 loads per pass of 4 K steps and after each of its 32 sum stores. R tasks are resident to hide those waits, where R follows from the
   program's temps and the unified store (8 at 106 temps; Mesa's formula for the
   BXM-4-64 gives 28,672 temps, 16 instances of 256 rows x 8 banks less two
   reserved 128-register lines). A task takes `max(issue, chain / R)` clocks, with
@@ -299,10 +289,7 @@ assumptions, and board items replace them:
   instructions per clock.
 
 Rerunning the model with measured constants sets `n_gpu` for each shape. A 4 x 4
-tile over 4 K steps does 64 integer multiply-adds, 12 word loads, 32 signed
-extractions and about 4 loop instructions: 1.75 instructions per MAC with a
-single-instruction signed bitfield extract and a full-rate multiply-add;
-two-instruction extraction gives 2.19 and a half-rate multiply-add 2.75.
+tile over 4 K steps does 64 integer multiply-adds, 12 word loads, 32 signed extractions and about 4 loop instructions. That is 1.75 instructions per MAC with a single-instruction signed bitfield extract and a full-rate multiply-add; two-instruction extraction gives 2.19 and a half-rate multiply-add 2.75.
 Without cache reuse each lane reads 12 bytes per 16 MACs (3.1 GB per recording,
 5.5 GB/s); reusing a workgroup's 32 activation rows and 16 weight channels
 through the GPU caches reads 80 bytes per 512 MACs (0.65 GB).
@@ -371,14 +358,11 @@ lists their commands. None executes USC code or touches hardware.
   separates the `ParallelFor` join from the activation clean and the completion
   read from the clean-and-invalidate, and it enforces codes inside the arena
   span, `rows <= job_rows`, 32-row job boundaries, complete tags and total MACs
-  within 0.06% of the profile. Cases cover refusals of every admission rule,
-  RESET and LOST before any CPU row, a three-job residual call with `n_gpu < N`
+  within 0.06% of the profile. Cases cover refusals of every admission rule and RESET and LOST before any CPU row. They also cover a three-job residual call with `n_gpu < N`
   whose middle job is refused or misses one tag, an earlier boot's tags with and
   without the boot clear, and negative chunk sums at K = 1,584 and 3,520.
 - **Read-out.** The compiled read-out entry runs under Unicorn on edge inputs
-  (-0, +-(2^24 + 1), the int32 limits, +-2^34, (2^24 + 1) x 2^k for k up to 9,
-  int64 sums built from negative chunk carries) and matches the scalar CPU path
-  bit for bit; it counts instructions per output.
+  (-0, +-(2^24 + 1), the int32 limits, +-2^34, (2^24 + 1) x 2^k for k up to 9, int64 sums built from negative chunk carries) and matches the scalar CPU path bit for bit. It counts instructions per output.
 - **Program.** The linked USC constant equals the compile manifest, the
   inner-loop instructions are counted from the compiler's listing, and the tag
   store follows every sum store and its data fence.
@@ -387,9 +371,7 @@ lists their commands. None executes USC code or touches hardware.
 
 ## Limitations
 
-A left-out performance change returns when the time model, fed with
-board-measured constants, gives it a saving above 2% of the linear stage of the
-best channel split on the A76 pair at 2,002 MHz, the configuration in which the
+A left-out performance change returns when the time model, fed with board-measured constants, gives it a saving above 2% of the linear stage of the best channel split on the A76 pair at 2,002 MHz. That is the configuration in which the
 other stages fit the pipeline goal. Model figures at that clock:
 
 - **A second job in flight:** 0.33% with the measured program (0.6% in the
@@ -431,11 +413,7 @@ Also not provided:
    layer shape (instructions per MAC, multiply-add rate, bandwidth) against a
    single-load latency probe, which sets L and shows how many tasks stay
    resident; firmware latency per job; a job streaming 30 MiB against one
-   streaming 2 MiB, which bounds the TLB-miss cost; on an A76 at each admitted
-   clock, nanoseconds per cleaned and per invalidated line, per read-out output
-   and per `ParallelFor` hand-off; CPU and GPU branch times per shape; SPI 63
-   delivery for every job, with submit-to-kick plus completion-to-wake under 50
-   us.
+   streaming 2 MiB, which bounds the TLB-miss cost. On an A76 at each admitted clock: nanoseconds per cleaned and per invalidated line, per read-out output and per `ParallelFor` hand-off. Also CPU and GPU branch times per shape, and SPI 63 delivery for every job, with submit-to-kick plus completion-to-wake under 50 us.
 4. **Instruction count.** Reduce the 217 groups per pass of 4 K steps toward 112
    by 16-byte loads and run-time shift amounts once the board measurements in
    item 3 show they pay; the gap decides how many channels return to the CPU.

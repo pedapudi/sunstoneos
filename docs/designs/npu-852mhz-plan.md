@@ -34,7 +34,7 @@ the table and SunstoneOS does not use it.
 - **Default.** Without a rate request, the register pass in
   `drivers/npu/a733_npu_startup.c` selects the vendor's point for the speed
   bin: 852 MHz for SID codes `0x12`, `0x04` and `0x05`, and a refusal before
-  any write for every other code, because a point above 800 mV needs a
+  any write for every other code. This is because a point above 800 mV needs a
   voltage change this startup does not make. Both boards read code 4.
 - **Explicit request.** `a733_npu_startup_rate(s, 852)` or `(s, 492)` selects
   a profile after initialization and before the scheduler. The finite image

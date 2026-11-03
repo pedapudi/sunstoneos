@@ -69,27 +69,20 @@ The compute path also requires freshly observed single-core hardware capability
 before firmware startup and submission. Free lists, wider workloads and
 graphics require further concrete providers.
 
-## Focused verification
+## No host check covers the boot mapping
 
-The [instruction check](../checks/gpu-reserved.py) uses the production boot
-mapping helper and linker reservation sections. It combines actual reserved NPU
-preparation with actual GPU firmware preparation and native cache publication.
-It also checks refusal of absent service providers and retained ownership after
-uncached capacity exhaustion. QEMU supplies CPU translation/cache behavior;
-no GPU or NPU command executes. Physical cache visibility and remote drain
-remain unqualified.
+No host check combines the production boot mapping helper and linker
+reservation sections with actual reserved NPU preparation, actual GPU firmware
+preparation and native cache publication, refusal of absent service providers,
+or retained ownership after uncached capacity exhaustion. No linker check
+confirms that all allocated sections, load segments and symbols are preserved
+when the uncached reservation is absent, that the complete block is accepted,
+or that an invalid size and overlap with the image and write-back pool are
+refused. The provider accepts matching inner or outer effective shareability for
+uncached pages, consistent with the existing GPU adapter. No GPU or NPU command
+executes, and physical cache visibility and remote drain remain unqualified.
+The base image has SHA-256
+`7c03ba96e9996a5ecf4915f9cde9d53d74984cb04417ba5485f0b8baace3cfba`, with
+evidence in `~/.cache/sunstoneos/evidence/gpu-reserved-20261016/`.
 
-The selected instruction modes passed, as did native boot-object compilation.
-The linker check preserved all existing allocated sections, load segments and
-symbols when the uncached reservation was absent. It accepted the complete
-block and refused both an invalid size and overlap with the image/write-back
-pool. The provider accepts matching inner or outer effective shareability for
-uncached pages, consistent with the existing GPU adapter.
-
-Evidence is stored in
-`~/.cache/sunstoneos/evidence/gpu-reserved-20261016/`. The `selected-modes`
-directory contains the executed images, dependency snapshots and results;
-`layout` contains the linker comparisons. The executed base image has SHA-256
-`7c03ba96e9996a5ecf4915f9cde9d53d74984cb04417ba5485f0b8baace3cfba`.
-The external `run-built.py` driver performed the final incremental build and
-execution; the repository runner provides the equivalent fresh-build procedure.
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-reserved.jsonl).

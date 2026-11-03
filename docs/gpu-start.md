@@ -1,9 +1,8 @@
 # Bounded GPU firmware startup
 
-The native GPU startup controller is **implemented and host-tested**. It applies
+The native GPU startup controller is **implemented**; no host check remains. It applies
 the pinned MIPS startup sequence through platform callbacks and waits for the
-firmware-started flag. Complete register traces match the reference functions.
-It has not accessed a physical GPU or booted firmware on the board.
+firmware-started flag, following the reference functions. It has not accessed a physical GPU or booted firmware on the board.
 
 This document assumes familiarity with MMIO, cache maintenance, and device
 reset. The [API](../include/pvr_gpu_start.h) separates offline initialization,
@@ -97,52 +96,38 @@ exchange, command health, GPU job completion, shutdown, fault recovery, and phys
 qualification are separate requirements. Reinitialization requires discarded
 controller state after independently verified shutdown.
 
-## Host checks cover ordering, deadlines, and retained failures
+## No host check covers ordering, deadlines or retained failures
 
-The [sanitizer check](../checks/pvr-gpu-start.c) uses the pinned firmware and a
-saved wrapper plan from the existing MIPS preparation evidence. Its device model
-charges one microsecond for each clock read and two for each device callback. It
-checks publication before register access, minimum delays waited inside one
-poll, a readiness wait bounded to 50 µs per poll, a deadline that expires during
-a delay, and at most one register access per poll. A second clock model counts
-one 24 MHz tick per clock read and callback and reports whole microseconds
-rounded down, as the board counter does. Under it, the two 3 µs delays
-separated their bracketing callbacks by 98 and 95 counter ticks, at least the
-72 that 3 µs requires. With a stopped clock, a delay and a readiness wait each
-return to the caller without advancing and complete once the clock runs. A synthetic feature variant covers
-alternate reset-mask selection, omission of the secure-bus operations, a
-1,024-bit cache line, and the lazy-writeback workaround. It is not another
-physically supported board profile.
+No host check runs the controller with the pinned firmware and a saved wrapper
+plan against a device model that charges one microsecond for each clock read and
+two for each device callback. The design is: publication precedes register
+access, minimum delays are waited inside one poll, a readiness wait is bounded
+to 50 µs per poll, a deadline can expire during a delay, and each poll makes at
+most one register access. Under a clock that counts one 24 MHz tick per clock
+read and callback and reports whole microseconds rounded down, as the board
+counter does, the two 3 µs delays separated their bracketing callbacks by 98 and 95 counter ticks. Both are at least the 72 that 3 µs requires. With a stopped clock, a
+delay and a readiness wait each return to the caller without advancing and
+complete once the clock runs. A synthetic feature variant covers alternate
+reset-mask selection, omission of the secure-bus operations, a 1,024-bit cache
+line and the lazy-writeback workaround; it is not another physically supported
+board profile.
 
-The successful check covers 36 retained-failure cases and 40 atomic input
-refusals. Every device callback in the successful sequence has a failure case.
-Other cases cover clock failure/regression, stale or malformed readiness,
-firmware boot timeout, timeout during a minimum delay, cancellation, malformed
-wrapper settings, unsupported feature data, and repeated API calls after failure.
+No host check covers the 36 retained-failure cases (a failure for every device
+callback in the successful sequence, clock failure and regression, stale or
+malformed readiness, firmware boot timeout, timeout during a minimum delay,
+cancellation, malformed wrapper settings, unsupported feature data and
+repeated API calls after failure). No host check covers the 40 atomic input refusals. No host
+check compares the startup, cache, AXI-ACE and MIPS wrapper register traces
+with the reference functions. The reference makes twenty-four register accesses
+for the pinned firmware (twenty-two for the synthetic variant), omitting its six
+`SOFT_RESET2` accesses, and requests two three-microsecond delays. A trace
+would establish neither physical reset, cache coherence nor firmware execution.
 
-The initial sanitizer invocation stopped in the fixture reader because it treated
-the saved wrapper record as entries without its eight-byte header. Correcting the
-reader produced the successful check without changing the controller. The
-AArch64 compilation was reused.
+Clang 21 compiles the component for AArch64 with strict alignment and
+freestanding options. It contains 3,724 bytes of code/read-only data and no
+writable static data. Individual stack frames are 2,080 bytes for offline
+initialization, 96 for polling, and 32 each for begin and the clock helper. The
+caller must account for nested helpers, firmware decoding and callbacks. No
+device access or performance measurement has occurred.
 
-The [reference comparison](../checks/pvr-gpu-start-reference.py) compiles the
-original startup, cache, AXI-ACE, and MIPS wrapper functions. Mock register
-operations record their complete traces. Leaving out the reference's six
-`SOFT_RESET2` accesses, all twenty-four register accesses for the pinned
-firmware and twenty-two for the synthetic variant match native offsets,
-widths, values, and order. The reference also requests two three-microsecond
-delays. Source hashes are checked against the pinned board-source manifest.
-Neither trace establishes physical reset, cache coherence, or firmware execution.
-
-Clang 21 compiled the component for AArch64 with strict alignment and freestanding
-options. It contains 3,724 bytes of code/read-only data and no writable static
-data. Individual stack frames are 2,080 bytes for offline initialization,
-96 for polling, and 32 each for begin and the clock helper. These are individual
-frames; the caller must account for nested helpers, firmware decoding, and callbacks.
-
-Commands, source snapshots, firmware and wrapper identities, traces, compiler
-output, and comparison results are under
-`~/.cache/sunstoneos/evidence/gpu-start-20261025/` (the earlier run, with
-`SOFT_RESET2`, is under `gpu-start-20261016/`). Existing OS, mimus, NPU,
-and GPU preparation evidence was reused. No device access or performance
-measurement occurred.
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-start.jsonl).

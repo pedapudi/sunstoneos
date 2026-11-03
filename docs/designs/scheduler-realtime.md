@@ -99,7 +99,7 @@ Status: open. Enabling the upstream generic path does not work on this port. In
 the pinned upstream `tasks.c`, `prvGetExpectedIdleTime` rejects an idle ready list
 longer than one (this configuration has eight idle tasks); `vTaskSuspendAll` keeps
 the task lock until `xTaskResumeAll`, so sleeping within it extends a global lock
-hold through the sleep; `vTaskStepTick` requires scheduler suspension when stepping
+hold through the sleep. In the same file, `vTaskStepTick` requires scheduler suspension when stepping
 to the next delayed-task expiry; and `xTaskGetTickCountFromISR` reads global time
 with local masking. These anchors refer to the source pinned by
 [the source lock](../../sources.lock.json) before project patches. The partitioned

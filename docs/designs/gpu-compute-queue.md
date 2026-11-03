@@ -257,7 +257,7 @@ Here `tags` = ⌈n_gpu / 16⌉ × ⌈rows / 32⌉ × 32 words and `sums` = `rows
 
 ### What mimus keeps
 
-mimus keeps one job in flight, the sequence and tag check of each OK record, the comparison of every sum with a CPU sum, CPU computation of refused jobs, the end of the boot on FAULT, and the CPU path while the device is closed for thermal throttling (the queue reports PARKED).
+mimus keeps one job in flight, the sequence and tag check of each OK record, the comparison of every sum with a CPU sum, CPU computation of refused jobs and the end of the boot on FAULT. It also keeps the CPU path while the device is closed for thermal throttling (the queue reports PARKED).
 
 ### The application registers startup initialization
 
@@ -265,7 +265,7 @@ An application may place `ss_region_initializer` records in the immutable `sunst
 
 ## Performance and failure classes
 
-Budgets per job: submit to kick in one worker step with no tick wait; one client record; no queue round trip to deliver a result; no copy of input or result bytes; at most 57 transport and 6 maintenance `DSB SY`; at most 27 translations, all in the backend; 23 aligned uncached ring stores; hang detection at `job_us` plus at most the 4 ms backup poll. The per-job admission compares (every compared field changes per job) and the copy of the 160-byte job description (the worker must not read fields the client can still change) are the heavier forms used; buffer data is never copied. The estimated added CPU time is at most 0.5 µs per job on an A76, not yet measured on the board ([record](../evidence/gpu-compute-queue.jsonl) `gpu-compute-queue-submit-cost`).
+Budgets per job: submit to kick in one worker step with no tick wait; one client record; no queue round trip to deliver a result; no copy of input or result bytes. Also at most 57 transport and 6 maintenance `DSB SY`; at most 27 translations, all in the backend; 23 aligned uncached ring stores; and hang detection at `job_us` plus at most the 4 ms backup poll. The per-job admission compares (every compared field changes per job) and the copy of the 160-byte job description (the worker must not read fields the client can still change) are the heavier forms used; buffer data is never copied. The estimated added CPU time is at most 0.5 µs per job on an A76, not yet measured on the board ([record](../evidence/gpu-compute-queue.jsonl) `gpu-compute-queue-submit-cost`).
 
 The worker caps its wait at 4 ms while a job is in flight until the GPU interrupt is qualified on a board; a lost interrupt then costs at most 4 ms on that job instead of a FAULT at `job_us`. It keeps its one-tick wait while a masked event batch remains, and an idle worker waits with `portMAX_DELAY`.
 
@@ -299,7 +299,7 @@ The worker caps its wait at 4 ms while a job is in flight until the GPU interrup
 
 ## Settled decisions
 
-One address space per context; a region with both CPU write and GPU write is refused; no priority field; a recoverable timeout or reset isolates the failed job and restarts the retained context while unproven isolation keeps the service failed; no zero fill of leases; one context, two admitted callers, one job in flight, one program, four leases, four bindings and 64 argument bytes; the worker calls the queue directly; the 4 ms backup poll stays until the GPU interrupt is qualified on a board.
+One address space per context; a region with both CPU write and GPU write is refused; no priority field. A recoverable timeout or reset isolates the failed job and restarts the retained context while unproven isolation keeps the service failed. There is no zero fill of leases. The limits are one context, two admitted callers, one job in flight, one program, four leases, four bindings and 64 argument bytes. The worker calls the queue directly, and the 4 ms backup poll stays until the GPU interrupt is qualified on a board.
 
 ## Open work
 
