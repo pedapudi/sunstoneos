@@ -31,6 +31,7 @@ references = {
 for name, digest in references.items():
     assert hashlib.sha256((args.sources/name).read_bytes()).hexdigest() == digest, name
 commands = []
+outputs = []
 compiler = shutil.which('clang-21') or shutil.which('clang')
 assert compiler
 
@@ -42,10 +43,11 @@ def run(command):
         f.write(result.stdout)
     (args.evidence/'commands.json').write_text(json.dumps(commands, indent=2)+'\n')
     print(result.stdout, end='')
+    outputs.append(result.stdout)
     if result.returncode:
         raise SystemExit(result.returncode)
 
-host_sources = ['drivers/net/a733_radio_platform.c', 'drivers/storage/sunxi_sdio.c',
+host_sources = ['drivers/net/a733_radio_platform.c', 'drivers/net/a733_radio_result.c', 'drivers/storage/sunxi_sdio.c',
                 'drivers/storage/sdio_card.c', 'drivers/clock/a733_clock_leases.c',
                 'drivers/power/a733_rail_leases.c', 'drivers/power/a733_pmic.c',
                 'drivers/gpu/a733_gpu_resources.c', 'drivers/pinctrl/a733_pins.c',
@@ -60,6 +62,29 @@ for source in host_sources:
 binary = args.evidence/'composed-radio'
 run(flags+objects+['-o', binary])
 run([binary])
+# The host decoder reads the records that the composition emitted.
+import sys
+sys.path.insert(0, str(root/'tools'))
+import radio_result
+records = {}
+for line in ''.join(outputs).splitlines():
+    if line.startswith('RESULT '):
+        _, name, hexdata = line.split()
+        records[name] = radio_result.decode(bytes.fromhex(hexdata))
+ready, scanned = records['ready'], records['ready-scanned']
+assert ready['stage'] == 'enumerated' and not ready['failed'] and ready['card']['function_count'] == 2
+assert ready['card']['rca'] == 0x1234 and ready['card']['ocr'] and ready['card']['functions']
+assert [r['rail'] for r in ready['rails']] == ['dcdc1', 'bldo5', 'cldo1'] and all(r['enabled'] for r in ready['rails'])
+assert scanned['stage'] == 'scanned' and scanned['scan']['listed'] == 2 and scanned['scan']['reported'] == 3
+assert [a['ssid'] for a in scanned['scan']['aps']] == ['guest', 'lab'] and scanned['scan']['aps'][0]['channel'] == 36
+assert scanned['scan']['aps'][1]['rssi_dbm'] == -55 and scanned['scan']['aps'][1]['channel'] == 6
+assert scanned['identity']['chip_word'] == 0x00080001
+guard = records['guard-ready']
+assert guard['guard']['enabled'] and guard['pad_power']['pg'] == 'invalid' and guard['pad_power']['pm'] == '1.8V'
+assert [r['rail'] for r in guard['rails']] == ['dcdc1', 'dcdc8', 'bldo5', 'cldo1'] and guard['rails'][1]['selector'] == 100
+refused = records['guard-pg-supplied']
+assert refused['failed'] and refused['stage'] == 'rails-observed' and refused['failed_at'] == 'guard-passed'
+assert refused['pad_power']['pg'] == '3.3V' and refused['guard']['observed']
 
 kernel = args.sources/'FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2'
 smp_port = args.evidence/'smp-port'

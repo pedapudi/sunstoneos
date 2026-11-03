@@ -1,7 +1,9 @@
 /* Actual PMIC, rail, pin, clock, SDIO and card composition on modeled MMIO. */
 #define PMIC_MODEL_NO_MAIN
 #include "a733-pmic.c"
+#include <string.h>
 #include "a733_radio_platform_native.h"
+#include "a733_radio_result.h"
 struct radio_model {
     struct pmic_model power;
     struct a733_radio_platform radio;
@@ -13,6 +15,23 @@ struct radio_model {
     unsigned fraction,gpio_cost;
 };
 static struct radio_model r;
+/* One line per record for the host decoder check: RESULT name hex. */
+static void emit_result(const char *name,const struct a733_radio_platform *p,unsigned scan)
+{
+    static struct a733_radio_result record;memset(&record,0,sizeof(record));
+    a733_radio_result_platform(&record,p);
+    if(scan){
+        static const uint8_t bssid_a[6]={0x02,0x11,0x22,0x33,0x44,0x55},bssid_b[6]={0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+        a733_radio_result_firmware(&record);a733_radio_result_identity(&record,0x00080001,0x20);
+        a733_radio_result_ap(&record,bssid_a,(const uint8_t *)"lab",3,2437,-61);
+        a733_radio_result_ap(&record,bssid_b,(const uint8_t *)"guest",5,5180,-48);
+        a733_radio_result_ap(&record,bssid_a,(const uint8_t *)"lab",3,2437,-55);
+        a733_radio_result_scan_done(&record,3);
+    }
+    printf("RESULT %s ",name);
+    for(size_t i=0;i<sizeof(record);++i)printf("%02x",((const uint8_t *)&record)[i]);
+    printf("\n");
+}
 /* Every PMIC register data write, with the PM1 level and time at which it happened. */
 static struct {uint8_t reg,value;unsigned pm1;uint64_t at;} pmic_log[16];
 static unsigned pmic_log_count,stuck_enable,guard_config;
@@ -208,6 +227,7 @@ int main(void)
     enum a733_radio_platform_result status=A733_RADIO_PENDING;
     for(unsigned i=0;i<4000 && status!=A733_RADIO_READY;++i){status=radio_step();assert(status!=A733_RADIO_RETAINED);}
     assert(status==A733_RADIO_READY && r.radio.card.function_count==2 && r.radio.host.card_hz==400000);
+    emit_result("ready",&r.radio,0);emit_result("ready-scanned",&r.radio,1);
     assert(r.radio.rail_count==3 && r.radio.rail_index==3 && !r.radio.pmic_request.id && !r.radio.power_on);
     assert(r.radio.snapshots[0].programmed_uv==3300000 && r.radio.snapshots[1].programmed_uv==1800000 &&
         r.radio.snapshots[2].programmed_uv==1800000);
@@ -264,6 +284,7 @@ int main(void)
     status=A733_RADIO_PENDING;
     for(unsigned i=0;i<4000 && status!=A733_RADIO_READY;++i){status=radio_step();assert(status!=A733_RADIO_RETAINED);}
     assert(pmic_log_count==2 && r.radio.rail_count==4 && r.radio.guard_done);
+    emit_result("guard-ready",&r.radio,0);
     assert(((r.radio.pad_power[1]>>12)&3)==1 && ((r.radio.pad_power[3]>>2)&3)==3);
     {unsigned seen=0;for(unsigned i=0;i<4;++i)if(r.radio.snapshots[i].rail==A733_RAIL_DCDC8){
         seen=1;assert(r.radio.snapshots[i].selector==100 && !r.radio.snapshots[i].decoded);}
@@ -279,6 +300,7 @@ int main(void)
         /* Every observation is kept and nothing is written, PM1 stays low. */
         assert(status==A733_RADIO_RETAINED && !pmic_log_count && !r.first_host_at && !r.radio.pin_lease.id);
         assert(!(*pmic_model_word(&r.power,0x07025040)&2));
+        if(mismatch==0)emit_result("guard-pg-supplied",&r.radio,0);
         if(mismatch==0){assert(r.radio.guard_done && ((r.radio.pad_power[1]>>12)&3)==2);}
         if(mismatch==1)assert(r.radio.guard_done && !r.radio.power_on);
         if(mismatch==3)assert(!r.radio.guard_done); /* The earlier DCDC1 check refuses first. */

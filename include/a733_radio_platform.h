@@ -28,6 +28,10 @@ struct a733_radio_platform_config {
     /* Fixed3.3V supply: supported OCR is a nonempty subset of bits20/21. */
     struct sdio_card_config card;
 };
+/* Platform startup stages, in order; READY is the last. Public so a result record can name the stage reached. */
+enum a733_radio_platform_stage {
+    RSTAGE_ACQUIRE, RSTAGE_RESERVE_RAILS, RSTAGE_WAIT_RAILS, RSTAGE_ADMIT, RSTAGE_RAILS, RSTAGE_BASELINE, RSTAGE_GIC_WAIT, RSTAGE_GUARD, RSTAGE_PINS, RSTAGE_POWER_ON, RSTAGE_POWER_WAIT, RSTAGE_VERIFY_RAILS, RSTAGE_SUPPLY_WAIT, RSTAGE_ENABLE_MODULE, RSTAGE_MODULE_SETTLE, RSTAGE_BUS_GATE, RSTAGE_RESET_WAIT, RSTAGE_RESET_RELEASE, RSTAGE_PREPARE, RSTAGE_PREPARING, RSTAGE_ENUMERATE, RSTAGE_ENUMERATING, RSTAGE_WIDE_READ, RSTAGE_WIDE_WRITE, RSTAGE_WIDEN, RSTAGE_WIDENING, RSTAGE_WIDE_VERIFY, RSTAGE_READY
+};
 enum a733_radio_platform_result { A733_RADIO_PENDING, A733_RADIO_BUSY,
     A733_RADIO_READY, A733_RADIO_RETAINED, A733_RADIO_INVALID };
 /* Bounded, non-reentrant callbacks. Physical admission authenticates the exact
