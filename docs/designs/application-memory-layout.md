@@ -561,6 +561,10 @@ Hypothesis: the NPU graphs image with the 10 MiB pool at `0x78600000`, built fro
 last, about 6 s of launch). A watchdog end with `0x75f` would mean the stop did not wake the main task in time, and the value of the
 failure lists the unmet retirement conditions.
 
+**Result.** Entry `1793668814201417903-92757416` returned normally (`RETURN_ROM` last): seven graphs `match`, `completed` and
+`matched` 7, the SDK closed, no failure record. Its launch took 32.7 s of queue time against 5.9 s for the run before the change,
+so the board run shows the event-driven end wait is correct, and says nothing about its latency.
+
 ### Predicted board run of the heap
 
 Hypothesis: with the OS image built with the address-test decode check
