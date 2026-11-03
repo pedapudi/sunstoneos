@@ -1300,9 +1300,12 @@ class Queue:
         with (self.root/'queue.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             path = self.root/'state.json'
-            state = json.loads(path.read_text()) if path.exists() else {'jobs': [], 'pauses': {}}
+            text = path.read_text() if path.exists() else None
+            state = json.loads(text) if text else {'jobs': [], 'pauses': {}}
             yield state
-            save(path, state)
+            # The daemon takes this lock several times a second; rewrite and fsync only on change.
+            if text is None or json.dumps(state, indent=2, sort_keys=True)+'\n' != text:
+                save(path, state)
 
     def event(self, event, **fields):
         with (self.root/'ledger.jsonl').open('a') as stream:
