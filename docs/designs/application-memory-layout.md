@@ -583,8 +583,8 @@ than 2 us over the form-0 control in every soak of every form, at both rates, an
   maximum would show the invalidation lengthening kernel spans and is inconclusive against that path's own spread. A difference
   between the image without the task and form 0 is the cost of the task's wake, not of the instruction.
 
-**Result of the soaks (port 3-1; 20 soaks of 25 s submitted, 18 usable at 1 000 invalidations per second).** All returned exact
-(`FORMATTED There was silence.`) with `missed=0 gaps=0 dropped=0`, 250 000 control periods each, 4.5 million in all. One soak
+**Result of the soaks (port 3-1; 21 soaks of 25 s at 1 000 invalidations per second submitted, 20 usable).** All returned exact
+(`FORMATTED There was silence.`) with `missed=0 gaps=0 dropped=0`, 250 000 control periods each, 5.0 million in all. One soak
 (form 1, first attempt) was a host error, the USB node vanished in the DRAM stage, and was repeated. The first five entries carry an
 expectation file that the runner compared as bytes, so the queue labels all of them `result-mismatch`; the output of each is the one
 the prediction names and the figures below come from it. Control path, core 4, in microseconds:
@@ -603,7 +603,7 @@ of the controls in all of them; recognition time is 0.1 to 0.3% above the contro
 (15 to 33 us at the three rates) lie inside the spread of the controls (17 to 31 us). The prediction fails in one place: that
 soak's control path jitter was 5.38 us against the bound of 5 us. Its two largest latencies (5.625 us, 7 s apart) were both taken
 with the interrupted code at the same address, in `ssKernelObjectResume` of the partitioned kernel's object section; no other soak
-of any image has a latency above 3.6 us. The soak is one of 18 with an invalidation (one of 6 with form 3) against none of 8 without
+of any image has a latency above 3.6 us. The soak is one of 12 with an invalidation (one of 6 with form 3) against none of 8 without
 one (Fisher's exact test, one-sided, p of 0.43 for form 3 against the eight controls), so the data neither show nor exclude an effect
 of that form. The earlier pooled soaks of the same path without any invalidation include a 12.8 us maximum over five soaks, so
 single outliers of this size occur without one.
