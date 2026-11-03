@@ -251,17 +251,23 @@ on one key; carrying `l / 64` instead would reduce that cost. The maximum of neg
 simulator and the hardware (`docs/hardware/npu-command-formats.md`, "Maximum of negative values"). The step has nine inputs
 and three outputs, more than the loader's default of eight tensors, so `qu` and `qv` travel as one tensor of eight heads.
 
-**Cost of the attention step (board, N = 128, one slot, 852 MHz and 800 mV).** The step, not the per-frame graphs, sets the time
-at 500 frames: 16 layers of 16 steps. The step form with the gather that aligns the relative-position scores took about 1.1 ms.
-The best form measured so far takes 859 microseconds; the target is 600. Which engine runs each operation decides the cost:
+**Cost of the attention step (board, one slot, 852 MHz and 800 mV).** The step, not the per-frame graphs, sets the time at 500
+frames: 16 layers of 16 steps. The first form, with the gather that aligns the relative-position scores, took about 1.1 ms for
+four heads and 128 query rows. Aligning by slices took 902 microseconds, and the best single-job form with the native softmax took
+859. The step now runs as **two jobs of 64 query rows against the 128 keys of a tile, 229.4 microseconds each, 458.8 for the
+step**, and the board's outputs equal the simulator's byte for byte. The forms and every timing are in the mimus repository
+(`docs/npu-encoder-offload.md`, section 8). The reformulation rests on three facts about the hardware, stated with the unit of
+each operation in [the placement note](../hardware/npu-op-placement.md):
 
-- The shader runs `Gather`, and `Exp` and `Div` at full tensor size. It dominates the step, and the compiler gives no cycle
-  estimate for shader operations, so only measurement locates its cost.
-- The neural-network core runs `BatchGemm` and `Add` or `Mul` of equal shapes.
-- The transpose unit runs `StrideSlice`, `Transpose` and `Concat`.
-- The stream processor runs operations with a broadcast operand, `ReduceMax` and `Softmax`.
-- The activation unit runs `Exp` of small tensors.
-- Each job carries about 5 microseconds of overhead.
+- The activation unit computes `Elu`, and `Elu(x) + 1` equals `exp(x)` for `x` at or below zero, which every softmax numerator
+  satisfies after the maximum is subtracted. The shader's exponential cost 88 microseconds more in a 64-row job.
+- A product with a column of ones appended to the values returns the row sum with the weighted values, and a reciprocal of the
+  small row-sum tensor replaces the shader's division of the large output.
+- When the tensors live at one time exceed the 512 KiB of on-chip memory, the same operations cost several times as much. Jobs
+  of 64 rows stay inside it; a job of 128 rows takes 731 microseconds, not 459.
+
+The accuracy of the form is in the mimus note. Over the nine tile pairs of 294 frames of the last layer it has a root-mean-square
+error of 1.2% of the signal, against 4.7% for the shader form on the same calibration.
 
 ## 9. The rebinding service in EL1: containment and tests (proposed)
 
@@ -313,6 +319,8 @@ If they fail, the merge moves to the CPU (section 3) and the step graph returns 
 
 Resolved by the implementation:
 
+- The attention step takes 458.8 microseconds as two jobs of 64 rows (section 8), under the 600 microseconds it was required to
+  meet.
 - The compiler accepts `ReduceMax`, `Exp`, `ReduceSum` (as a product with a column of ones), `Softmax`, `Gather` and `Div` on the
   shapes of the step, and the step runs on the board. Mask values and the initial state are representable in the scales of
   `m` and `l` once each layer has its own constants (section 8).
@@ -323,10 +331,9 @@ Open:
 
 - **The rebinding calls are not implemented.** `ss_npu_queue_register_set`, `ss_npu_queue_region` and `ss_npu_queue_submit_jobs`
   (section 6) and the EL1 service with its containment tests (section 9) do not exist. Until they do, every tile job pays the
-  copy of section 8 and an application cannot publish a layer's `2n + n^2` jobs in one call. The share of the copy in the
-  step time is not measured.
-- **The attention step misses its target.** The best form takes 859 microseconds against 600. Shader operations are the
-  largest part, and the compiler gives no cycle estimate for them, so each reformulation needs a board measurement.
+  copy of section 8 and an application cannot publish a layer's `2n + n^2` jobs in one call. The step now runs as two jobs per
+  tile pair, and the two jobs share the key, value and position inputs, so the copies per step double and the rebinding
+  calls remove more than before. The share of the copies in the step time is not measured.
 - **The production image needs an NPU pool of 24 MiB or more** for the subsampling graphs.
 - **The subsampling tile sizes are untuned.** Subsampling graphs named for 32, 64 and 128 were timed on the board at 2.2, 3.7
   and 8.7 ms, and none has been compared with the schedule's other costs.
