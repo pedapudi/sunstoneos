@@ -79,7 +79,7 @@ for path in sorted(paths):
  records.append({'path':str(path),'sha256':digest,'snapshot':str(target.relative_to(a.evidence))})
 (a.evidence/'inputs.json').write_text(json.dumps(records,indent=2)+'\n')
 binary=a.evidence/'write-model';run(host+host_sources+['-o',binary],'build-host.log');run([binary],'host.log')
-# CMD25 through descriptor DMA against the strict controller model (docs/designs/mmc-multiblock-write.md). The
+# CMD25 through descriptor DMA against the strict controller model (docs/sd-card.md). The
 # model maps memory below 4 GiB, which the sanitizers' address space refuses, so it builds with UBSan only.
 dma_binary=a.evidence/'write-dma-model'
 run(common+['-Idrivers/storage','-O1','-g','-fsanitize=undefined','-fno-sanitize-recover=all','drivers/storage/sunxi_mmc.c','drivers/storage/storage_wait.c','checks/sunxi-mmc-write-dma.c','-o',dma_binary],'build-dma.log')

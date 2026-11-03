@@ -38,7 +38,7 @@ struct a733_mmc_platform_config {
      * update service may bind; its writes remain authorized one-sector PIO. */
     volatile struct sunxi_mmc_dma_descriptor *dma;
     uint8_t observe_s18;       /* SD high speed only: ACMD41 carries S18R and its S18A is recorded; no CMD11 (sunxi_mmc.h) */
-    /* UHS-I profile only (design: docs/designs/sd-uhs-recovery.md). sdr25_only: run SDR25 at 1.8 V and never try SDR104 or tuning.
+    /* UHS-I profile only (design: docs/sd-card.md). sdr25_only: run SDR25 at 1.8 V and never try SDR104 or tuning.
      * start_1v8: the card still signals 1.8 V from an earlier lifetime; the platform moves the bank to 1.8 V before the core opens
      * (stage ENTER_1V8, with the card clock stopped) and the core identifies without CMD11 (sunxi_mmc_reenter). */
     uint8_t sdr25_only, start_1v8;

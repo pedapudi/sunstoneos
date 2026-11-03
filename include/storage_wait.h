@@ -1,7 +1,7 @@
 #ifndef SUNSTONE_STORAGE_WAIT_H
 #define SUNSTONE_STORAGE_WAIT_H
 /* Drive a polled storage operation without spinning: after each poll that did not finish, sleep on the event the core
- * says will end the wait (docs/designs/storage-write.md). The wake source is a task notification: the controller's
+ * says will end the wait (docs/sd-card.md). The wake source is a task notification: the controller's
  * interrupt handler gives it, and a one-shot deadline timer bounds every sleep. Every wake, however it came, is only a
  * hint; the next poll reads the controller's status. */
 #include <stdint.h>

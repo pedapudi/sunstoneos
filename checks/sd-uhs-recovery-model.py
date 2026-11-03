@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host model of the card-state recovery paths for the UHS-I voltage switch (docs/designs/sd-uhs-recovery.md).
+"""Host model of the card-state recovery paths for the UHS-I voltage switch (docs/sd-card.md).
 
 The model has a card (signalling level, state, timing), a host (PF bank level, clock gate) and one rule from the SD Physical
 Layer Specification 9.10 (section 3.9.4): once the card has switched to 1.8 V signalling it stays there through CMD0 until VDD

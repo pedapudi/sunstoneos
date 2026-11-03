@@ -238,7 +238,7 @@ int sunxi_mmc_reenter(struct sunxi_mmc *);
  * (card.uhs_outcome is SUNXI_MMC_UHS_LIMITED). The CMD6 response of the switch still reports every function group's support bits. */
 int sunxi_mmc_sdr25_only(struct sunxi_mmc *);
 /* A card identified at 3.3 V that already signals 1.8 V, from an earlier lifetime that switched it (measured on 3-3: a 3.3 V host reads such a card at high speed,
- * S18A clear, with SDR50 and SDR104 in the CMD6 group 1 support field; docs/designs/sd-uhs-adoption.md). The owner then closes and opens again with the bank moved to
+ * S18A clear, with SDR50 and SDR104 in the CMD6 group 1 support field; docs/sd-card.md). The owner then closes and opens again with the bank moved to
  * 1.8 V first. A card without UHS-I reports functions 2 to 4 as 0 at 3.3 V, so S18A clear alone is not enough. */
 static inline int sunxi_mmc_card_found_at_1v8(const struct sunxi_mmc_card *c)
 { return c && !c->signal_1v8 && !(c->ocr >> 24 & 1u) && (c->switch_status[13] & 0x0cu); }

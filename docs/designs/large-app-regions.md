@@ -22,7 +22,7 @@ An application needs memory for data sets that are far larger than the 48 MiB ap
 - The boot tables map `0x8000_0000`–`0x3_4000_0000` with eleven 1 GiB blocks at EL1 only, when `a733_dram_decode_check()` passes ([memory-map-12g.md](memory-map-12g.md)). An image that links the address-test definition (CMake option `SUNSTONE_A733_DRAM_DECODE_PROBE`) maps it; the default definition returns 0 and maps nothing, so the ledger has no usable ranges.
 - The boot tables are one set, built at EL3 with the MMU off and installed in TTBR0 on every core. Every EL0 task shares them, so an EL0 task can reach any address that has an EL0 mapping; the 48 MiB application window `0x4400_0000`–`0x4700_0000` is shared by all EL0 code ([memory-protection.md](../memory-protection.md)). Per-application root tables add the regions.
 - TCR_EL1 has a 39-bit input range, a 4 KiB granule and `A1` clear, so the ASID comes from TTBR0. MAIR index 1 is write-back, index 2 non-cacheable (`include/a733_cpu_coherence.h`).
-- The SD driver reads with the controller's internal DMA engine in requests of up to 128 KiB below 4 GiB ([sd-dma.md](sd-dma.md)). The file system port reads a FAT or exFAT file read-only ([filesystem.md](../filesystem.md)).
+- The SD driver reads with the controller's internal DMA engine in requests of up to 128 KiB below 4 GiB ([the SD card reference](../sd-card.md)). The file system port reads a FAT or exFAT file read-only ([filesystem.md](../filesystem.md)).
 - The board runner uploads at about 0.55 MB/s, so 730 MB takes about 22 minutes by upload.
 
 ## Ownership and isolation

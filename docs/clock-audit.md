@@ -271,7 +271,7 @@ driver compares the live word with its session.
   400 kHz. Profiles 1 and 2 run four lines at up to 25 and 50 MHz at 3.3 V.
   Profile 3 switches the PF pin bank and the card to 1.8 V signalling, selects
   SDR104 and runs at 150 MHz from PERI0_300M, with 100 MHz from PERI0_400M ÷ 2
-  and 50 MHz SDR25 as fallbacks ([UHS-I design](designs/sd-uhs.md)). The user
+  and 50 MHz SDR25 as fallbacks ([UHS-I design](sd-card.md)). The user
   approved the 1.8 V switch on 2026-10-25.
 - **Board status.** Only the 400 kHz path has board evidence. The first
   profile 3 run (2026-10-25, port 3-3) launched and timed out with the result
@@ -289,7 +289,7 @@ driver compares the live word with its session.
   CMD6 function group 1; the profile 3 run records both.
 - **Throughput.** Programmed I/O bounds the gain: the design predicts 1.0–1.2
   times the high-speed throughput, against the bus's 3 times, until the
-  controller's descriptor DMA replaces it ([SD DMA](designs/sd-dma.md)).
+  controller's descriptor DMA replaces it ([SD DMA](sd-card.md)).
 
 ## A read-only dump measures the clock tree
 
@@ -383,7 +383,7 @@ GPU and NPU clock and voltage changes and the microSD 1.8 V switch.
    - *Reference:* dts:1637, 1644.
    - *Change:* none; it is built.
    - *Approval:* approved on 2026-10-25.
-   - *Board run:* the rerun of `docs/board-runbooks/sd-uhs.md` after the power
+   - *Board run:* the rerun of `docs/sd-card.md` after the power
      removal. Its gain stays small until descriptor DMA replaces programmed
      I/O.
 7. **SDIO Wi-Fi above 25 MHz.**

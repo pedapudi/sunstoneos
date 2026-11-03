@@ -728,7 +728,7 @@ update is left incomplete.
 bit 31 in the auto-stop response check and, as a hedge, in the CMD13 that
 immediately follows. Keep it fatal in every other case and leave the CMD18
 response check unchanged. Record the rule and its source in
-[docs/mmc.md](../mmc.md).
+[docs/sd-card.md](../sd-card.md).
 
 **Verification.** In [checks/sunxi-mmc.c](../../checks/sunxi-mmc.c), set bit
 31 in the auto-stop response for an 8-block read ending at `sectors-1` and

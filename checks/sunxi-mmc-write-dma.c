@@ -1,6 +1,6 @@
 /* Strict model of the SMHC controller and an SD card for CMD25 writes through descriptor DMA, driven by
  * the real core (drivers/storage/sunxi_mmc.c). The model accepts only the register accesses the vendor
- * sequence uses (docs/designs/mmc-multiblock-write.md) and asserts on any other. It consumes the
+ * sequence uses (docs/sd-card.md) and asserts on any other. It consumes the
  * descriptor chain in order, clears each OWN bit, moves the data into a media array, and raises the
  * command-done, data-done and automatic-stop-done interrupts and the DAT0 busy status on a schedule of
  * register reads. The sentinel pattern outside the written range must survive. */
