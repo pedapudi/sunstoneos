@@ -39,8 +39,8 @@ sys.path.insert(0, str(ROOT/'tools'))
 import board
 import board_images as images
 
-TRASH = Path.home()/'.cache/sunstoneos/trash'
-REAL_CONFIG = Path.home()/'.config/sunstoneos/wifi'
+CONFIG_ENVIRONMENT = 'SUNSTONEOS_WIFI_CONFIG_DIR'
+REAL_CONFIG = Path(os.path.expanduser('~'))/'.config/sunstoneos/wifi'
 SSID, PASSWORD = 'SunstoneCheckNet', 'fake-pass-1103-xyz'
 rows = []
 
@@ -51,9 +51,10 @@ def passed(name):
 
 
 def trash(path, label):
-    """Never delete: move into the trash directory."""
-    TRASH.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(path), str(TRASH/('wifi-credential-check-%s-%s' % (label, os.getpid()))))
+    """Never delete: move the file aside, inside the check's own output directory."""
+    aside = Path(os.environ[CONFIG_ENVIRONMENT]).parent/'moved-aside'
+    aside.mkdir(exist_ok=True)
+    shutil.move(str(path), str(aside/('%s-%s' % (label, os.getpid()))))
 
 
 def forms(wifi, entry):
