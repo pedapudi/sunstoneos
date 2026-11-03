@@ -1302,10 +1302,44 @@ class Queue:
             path = self.root/'state.json'
             text = path.read_text() if path.exists() else None
             state = json.loads(text) if text else {'jobs': [], 'pauses': {}}
+            state.setdefault('history', [])
+            for job in [j for j in state['jobs'] if j['state']=='done']:
+                self.archive(state, job)
             yield state
             # The daemon takes this lock several times a second; rewrite and fsync only on change.
             if text is None or json.dumps(state, indent=2, sort_keys=True)+'\n' != text:
                 save(path, state)
+
+    HISTORY = 20  # per port: the status listing and the DRAM and release rules read the most recent runs
+
+    @staticmethod
+    def summary(job):
+        """The few fields of a finished job that the queue's own rules and the status listing read."""
+        result = job['result']
+        return {'id': job['id'], 'worker': job['worker'], 'port': job['port'], 'assigned_port': job.get('assigned_port'),
+                'kind': job.get('kind'), 'image_sha256': job['image_sha256'],
+                'submitted': job['submitted'], 'completed': job.get('completed'), 'directory': job['directory'],
+                'result_path': job['result_path'], 'outcome': result.get('outcome'), 'stage': result.get('stage'),
+                'site': (result.get('first_failure') or {}).get('site'),
+                'instance': (result.get('instances') or [{}])[-1].get('identity')}
+
+    def archive(self, state, job):
+        """Move a finished job out of the live state. The full record stays in its entry directory."""
+        save(Path(job['directory'])/'entry.json', job)
+        state['jobs'].remove(job)
+        history = state['history'] + [self.summary(job)]
+        port = lambda j: j.get('assigned_port') or j['port']
+        state['history'] = [j for i, j in enumerate(history)
+                            if sum(port(k)==port(j) for k in history[i+1:]) < self.HISTORY]
+
+    def job(self, identifier):
+        """The full record of a live or finished job."""
+        with self.locked() as state:
+            live = next((dict(j) for j in state['jobs'] if j['id']==identifier), None)
+        if live is not None:
+            return live
+        path = self.root/'entries'/identifier/'entry.json'
+        return json.loads(path.read_text()) if path.exists() else None
 
     def event(self, event, **fields):
         with (self.root/'ledger.jsonl').open('a') as stream:
@@ -1329,7 +1363,8 @@ class Queue:
                   'reference': job.get('reference')}
         save(job['result_path'], result)
         job.update(state='done', result=result, completed=time.time())
-        self.event('result', job=job['id'], result_path=job['result_path'], result=result)
+        self.event('result', job=job['id'], outcome='refused-before-launch', detail=detail)
+        self.archive(state, job)
 
     def submit(self, args):
         require(re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', args.worker), 'Invalid worker name.')
@@ -1433,20 +1468,10 @@ class Queue:
                'directory': str(directory), 'result_path': str(directory/'run/result.json'), 'options': options, 'frozen': frozen,
                'preflight': preflight}
         with self.locked() as state:
-            history = state['jobs']
-            repeated = next((j for j in history if j['worker'] == job['worker'] and
-                             j['image_sha256'] == job['image_sha256'] and j['hypothesis'] == job['hypothesis']), None)
-            history.append(job)
+            state['jobs'].append(job)
             save(directory/'entry.json', job)
-            self.event('entry', entry=job)
-            if repeated:
-                port = repeated.get('assigned_port') or (args.port if args.port != 'any' else None)
-                ports = [port] if port else PORTS
-                for port in ports:
-                    self.pause(state, port, f"{args.worker} repeated image {job['image_sha256'][:12]} with the same hypothesis")
-                self.refused(state, job, 'Repeated image and hypothesis; submit a new hypothesis.')
-            elif sum(j['worker'] == args.worker and job['submitted']-j['submitted'] < 3600 for j in history) > 40:
-                self.refused(state, job, 'Runaway backstop: 40 submissions per worker per hour.')
+            self.event('entry', job=identifier, worker=job['worker'], port=job['port'], kind=job['kind'],
+                       image_sha256=job['image_sha256'])
         return job
 
     def claim(self, port):
@@ -1473,26 +1498,22 @@ class Queue:
 
     def complete(self, identifier, result):
         with self.locked() as state:
-            job = next(j for j in state['jobs'] if j['id']==identifier)
-            if job['state']=='done':
+            job = next((j for j in state['jobs'] if j['id']==identifier), None)
+            if job is None or job['state']=='done':
                 return
             save(job['result_path'], result)
             job.update(state='done', result=result, completed=time.time())
-            self.event('result', job=job['id'], result_path=job['result_path'], result=result)
+            self.event('result', job=job['id'], outcome=result['outcome'], stage=result.get('stage'),
+                       site=(result.get('first_failure') or {}).get('site'))
+            self.archive(state, job)
             port = job['assigned_port']
             if result['outcome']=='no-return' or result.get('quarantined'):
                 self.pause(state,port,'No return within the watchdog recovery window; inspect recovery before resuming.')
-            history = [j for j in state['jobs'] if j.get('assigned_port')==port and j['state']=='done']
-            if len(history)>=2 and all(j['result'].get('stage')=='dram' and j['result']['outcome']!='returned' for j in history[-2:]):
+            history = [j for j in state['history'] if j.get('assigned_port')==port]
+            if len(history)>=2 and all(j['stage']=='dram' and j['outcome']!='returned' for j in history[-2:]):
                 self.pause(state,port,'Two consecutive DRAM bring-ups failed.')
             if result.get('rails_unrestored'):
                 self.pause(state,port,'The CPU rails were not restored and are not shown to be at 800 mV; check them before resuming.')
-            failure = result.get('first_failure')
-            if failure and result['outcome'] not in ('returned','refused-before-launch'):
-                matches = [j for j in history if j['hypothesis']==job['hypothesis'] and
-                           (j['result'].get('first_failure') or {}).get('site')==failure['site']]
-                if len(matches)>=3:
-                    self.pause(state,port,f"Third failure at {failure['site']} with no new hypothesis.")
 
     def resume(self, port):
         with self.locked() as state:
@@ -1546,10 +1567,10 @@ class Queue:
         require(all(r['reason']==DRAM_UNRESOLVED for _,r in found),
                 'Only an unresolved-DRAM-ownership quarantine can be released; other reasons need a replug.')
         with self.locked() as state:
-            jobs = [j for j in state['jobs'] if j['state']=='done' and j.get('assigned_port')==port]
-        run = next((j for j in reversed(jobs) if (j['result'].get('instances') or [{}])[-1].get('identity')==observed),None)
+            jobs = [j for j in state['history'] if j.get('assigned_port')==port]
+        run = next((j for j in reversed(jobs) if j['instance']==observed),None)
         require(run is not None,'No finished run on this port ended on the quarantined instance.')
-        result = run['result']
+        result = json.loads(Path(run['result_path']).read_text())
         reset = (result.get('outcome')=='watchdog-reset' and result.get('rom_returned') is True and result.get('dram_lost') is True)
         refused = self.refused_before_launch_is_safe(result, access, node)
         require(reset or refused,
@@ -1570,6 +1591,8 @@ class Queue:
         require(bool(reason.strip()),'A nonempty reason is required.')
         with self.locked() as state:
             job = next((j for j in state['jobs'] if j['id']==identifier),None)
+            if job is None and any(j['id']==identifier for j in state['history']):
+                job = {'state': 'done'}
             require(job is not None,f'No queue entry {identifier}.')
             require(job['state']=='queued',f"Entry {identifier} is {job['state']}; only a queued entry can be withdrawn.")
             self.refused(state,job,'Withdrawn by the coordinator: '+reason.strip())
@@ -1603,8 +1626,8 @@ class Queue:
             return {'queue':str(self.root), 'boards':{port:{'pause':state['pauses'].get(port),
                 'running':[j for j in state['jobs'] if j['state']=='running' and j.get('assigned_port')==port],
                 'queued':[j for j in state['jobs'] if j['state']=='queued' and j['port'] in ('any',port)],
-                'results':[j for j in state['jobs'] if j['state']=='done' and
-                           j.get('assigned_port', j['port'])==port][-20:]} for port in PORTS}}
+                'results':[j for j in state['history'] if (j.get('assigned_port') or j['port'])==port][-20:]}
+                for port in PORTS}}
 
     def serve(self, once=False):
         with (self.root/'daemon.lock').open('a') as lock:
