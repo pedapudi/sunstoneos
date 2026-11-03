@@ -52,7 +52,7 @@ The partitioned fork is the default kernel in SMP images, and `-DSUNSTONE_PARTIT
 Board results are records in `docs/evidence/scheduler.jsonl` (runs and their summaries); host results and unrun predictions of the design are in `docs/evidence/scheduler-partitioned.jsonl` and `docs/evidence/scheduler-realtime.jsonl`. Earlier prose evidence is in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-100 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+107 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
