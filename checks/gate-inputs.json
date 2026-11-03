@@ -1522,20 +1522,6 @@
     }
    ]
   },
-  "npu-pool-size.py": {
-   "runs": [
-    {
-     "args": [
-      "--artifacts",
-      "{cache}/build/npu-board/session-artifacts.json",
-      "--models",
-      "apps/os/npu-models.json",
-      "--output",
-      "{output}"
-     ]
-    }
-   ]
-  },
   "npu-stop-native.py": {
    "runs": [
     {
