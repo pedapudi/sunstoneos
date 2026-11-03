@@ -69,7 +69,9 @@ def decode(data):
             result['card']['functions'].append({'function': i, 'manufacturer': man, 'device': dev, 'class': cls})
     chip, sub, fw_flags, fail_site = struct.unpack_from('<4I', data, 200)
     result['identity'] = {'chip_word': chip, 'subrevision_word': sub}
-    result['platform_failure'] = {'line': fail_site >> 16, 'stage': fail_site & 0xffff} if fail_site else None
+    # fail_site: source line << 16 | 0x100 when the session decided the failure (the platform decided none) | stage.
+    result['platform_failure'] = {'line': fail_site >> 16, 'stage': fail_site & 0xff,
+                                  'source': 'session' if fail_site & 0x100 else 'platform'} if fail_site else None
     if flags & 128:
         # A guard refusal: the 'line' is 0x400 | PG bits (GPIO_POW_VAL 13:12) << 4 | the unmet conditions.
         code = fail_site >> 16

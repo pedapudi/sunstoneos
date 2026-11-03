@@ -66,15 +66,31 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
         !a733_radio_session_init(&r->session,&r->platform,&p->session))return 0;
     r->constructed=1;atomic_store_explicit(&r->failed,0,memory_order_release);return 1;
 }
+/* The board's failure bound on the failure shutdown, past the platform's own 2 s deadline. */
+#define FAILURE_SHUTDOWN_BOUND_US 3000000u
 static enum board_radio_result retain(struct board_radio *r)
 {
-    /* A refusal before any write leaves the board's failure state alone, so the session can end normally;
-     * the report says what was seen (a733_radio_platform.refused). */
-    if(!r->platform.refused)atomic_fetch_or_explicit(r->config.recovery_state,4,memory_order_acq_rel);
+    uint64_t now=0;
+    int have=a733_counter_clock_now(&r->config.shared->counter,&now);
+    if(!r->failing){r->failing=1;r->failing_since=now;}
     atomic_store_explicit(&r->failed,1,memory_order_release);
-    if(!r->config.scan_only)(void)a733_radio_entropy_retain(&r->entropy);
+    /* The first retain starts the failure shutdown when the module is powered; a later one never cuts it short. */
     (void)a733_radio_session_retain(&r->session);
-    if(r->config.report_memory.allocate)a733_radio_report_platform(&r->report,&r->platform);
+    unsigned waiting=r->platform.aborting&&!r->platform.abort_done&&!r->platform.fault&&have&&
+        now-r->failing_since<FAILURE_SHUTDOWN_BOUND_US;
+    if(waiting){
+        (void)a733_radio_platform_poll(&r->platform);
+        waiting=r->platform.aborting&&!r->platform.abort_done&&!r->platform.fault;
+    }
+    /* The board's failure bit waits for the failure shutdown. A refusal before any write leaves it alone, so the
+     * session can end normally; the report says what was seen (a733_radio_platform.refused). */
+    if(!waiting&&!r->platform.refused)atomic_fetch_or_explicit(r->config.recovery_state,4,memory_order_acq_rel);
+    if(!r->config.scan_only)(void)a733_radio_entropy_retain(&r->entropy);
+    if(waiting)return BOARD_RADIO_PENDING;
+    if(r->config.report_memory.allocate){
+        a733_radio_report_platform(&r->report,&r->platform);
+        a733_radio_report_session_failure(&r->report,r->session.fail_line,r->session.fail_stage);
+    }
     return BOARD_RADIO_RETAINED;
 }
 static uint64_t bounded_deadline(struct board_radio *r,uint64_t now,uint64_t duration)

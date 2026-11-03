@@ -57,6 +57,8 @@ void a733_radio_report_platform(struct a733_radio_report *r,const struct a733_ra
         }
     }
 }
+void a733_radio_report_session_failure(struct a733_radio_report *r,unsigned line,unsigned stage)
+{if(line&&!r->head.fail_site)r->head.fail_site=(line<<16)|0x100u|(stage&0xffu);}
 void a733_radio_report_firmware(struct a733_radio_report *r)
 {if(r->head.stage<A733_RADIO_STAGE_FIRMWARE)r->head.stage=A733_RADIO_STAGE_FIRMWARE;}
 void a733_radio_report_identity(struct a733_radio_report *r,uint32_t chip,uint32_t sub)

@@ -363,6 +363,7 @@ static void client_worker(void *unused)
     r.operation=SUNSTONE_NET_SEND;r.bytes=sizeof(payload)-1;memcpy(r.payload,payload,r.bytes);assert(request(&r).result==SUNSTONE_NET_OK);
     r.operation=SUNSTONE_NET_RECEIVE;r.bytes=1472;reply=request(&r);assert(reply.result==SUNSTONE_NET_LINK_LOST);
     assert(session.fault&&!aic8800_network_ready(&session.sockets.network));
+    assert(session.fail_line&&session.fail_stage<=12); /* The session names the line that decided the failure. */
     assert(session.sockets.sockets[0].socket&&session.borrow.generation==session.platform->clock.id);
     platform_puts("PASS actual radio session ownership, staged lease renewal, pre-network broadcast discard, native TCP queues and retained live-guard failure; firmware/association checkpoints and entropy are modeled\n");
     platform_exit(0);

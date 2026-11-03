@@ -61,7 +61,9 @@ static int abort_possible(struct a733_radio_platform *p)
 }
 static enum a733_radio_platform_result fail_at(struct a733_radio_platform *p,unsigned line)
 {
-    if(!p->fail_line){p->fail_line=line;p->fail_stage=p->stage;}
+    if(line&&!p->fail_line){p->fail_line=line;p->fail_stage=p->stage;}
+    /* An abort is never cut short: while it runs inside its deadline the failure waits for it. */
+    if(p->aborting&&p->last_now<p->deadline)return A733_RADIO_PENDING;
     if(p->refused){
         /* No hardware was changed: leave the register lock and keep every lease as it is. */
         p->fault=1;
@@ -116,7 +118,7 @@ enum a733_radio_platform_result a733_radio_platform_retain(struct a733_radio_pla
     if(!p||!p->initialized||p->ops.current(p->cookie)!=1)return A733_RADIO_INVALID;
     unsigned expected=0;
     if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return A733_RADIO_BUSY;
-    return finish(p,fail(p));
+    return finish(p,fail_at(p,0)); /* An outside retain is not a platform failure site. */
 }
 static int rd(struct a733_radio_platform *p,uintptr_t a,uint32_t *v)
 {return timely(p)&&p->ops.read(p->cookie,a,v)==1&&timely(p);}
@@ -574,7 +576,7 @@ static enum a733_radio_platform_result abort_end(struct a733_radio_platform *p,u
 {
     if((p->abort_flags&wanted)==wanted)p->abort_flags|=ABORT_MATCHED;
     p->aborting=0;p->abort_done=1;
-    return fail(p); /* Now the ordinary retention. */
+    return fail_at(p,0); /* Now the ordinary retention. */
 }
 static enum a733_radio_platform_result abort_poll(struct a733_radio_platform *p)
 {

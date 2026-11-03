@@ -60,6 +60,9 @@ void a733_radio_report_release(struct a733_radio_report *);
  * enumeration, and the card's identity. Later stages keep what a caller has
  * already set. Copies only; no hardware access. */
 void a733_radio_report_platform(struct a733_radio_report *,const struct a733_radio_platform *);
+/* The session's failure site, when the platform decided none (its fail_site is zero): source line << 16 | 0x100 |
+ * stage. Call after a733_radio_report_platform. */
+void a733_radio_report_session_failure(struct a733_radio_report *,unsigned line,unsigned stage);
 void a733_radio_report_firmware(struct a733_radio_report *);
 void a733_radio_report_identity(struct a733_radio_report *,uint32_t chip_word,uint32_t subrevision_word);
 /* One scan result; the list keeps one entry per BSSID (the latest sighting) and
