@@ -62,7 +62,7 @@ struct ssKernelTask {
 struct ssKernelCPU {
     struct ss_owner run;
     struct ss_deadline_heap deadlines;
-    unsigned preempt, object_depth, critical_depth, isr_depth;
+    unsigned preempt, object_depth, critical_depth, suspend_depth, isr_depth;
     UBaseType_t object_mask;
     /* The per-object lock domain (SS_OBJECT_SLOTS). o_depth counts the holds of the task-side lock (critical sections
      * and suspensions), o_critical the critical sections, o_suspend the suspensions and o_isr the interrupt-side regions.
@@ -655,7 +655,8 @@ uint64_t ulSunstoneObjectTraceOverflow(unsigned core, unsigned which)
 
 /* ---- Global compatibility sections --------------------------------------------------------------------------------
  * The public critical sections (vTaskEnterCritical and its FromISR form) keep the two global locks of the port: lock 0
- * is the task lock, lock 1 the interrupt lock in the trace. The kernel's own sources do not use them. */
+ * is the task lock, lock 1 the interrupt lock in the trace. Only the public critical sections and the timer service's
+ * suspension use them. */
 static __attribute__((noinline)) void ssKernelObjectEnterAt(uintptr_t object, uintptr_t site)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
@@ -725,6 +726,45 @@ void ssKernelObjectExitFromISR(UBaseType_t irq)
         ssKernelFlush();
     }
     portCLEAR_INTERRUPT_MASK(irq);
+}
+static __attribute__((noinline)) void ssKernelObjectSuspendAt(uintptr_t object, uintptr_t site)
+{
+    /* Queue retry bookkeeping retains T with local preemption disabled. API
+     * IRQs remain enabled outside its separate inner I-protected sections. */
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
+    unsigned c = ssKernelCPUId();
+    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    if (!cpu->object_depth) {
+        ++cpu->preempt;
+        SS_TR_START(c, 0, 0);
+        portGET_TASK_LOCK((BaseType_t)c);
+        SS_TR_LOCKED(c, 0, 0, object, site);
+    }
+    ++cpu->object_depth;
+    ++cpu->suspend_depth;
+    portCLEAR_INTERRUPT_MASK(irq);
+}
+__attribute__((noinline)) void ssKernelObjectSuspend(void) { ssKernelObjectSuspendAt(0, (uintptr_t)__builtin_return_address(0)); }
+BaseType_t ssKernelObjectResume(void)
+{
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
+    unsigned c = ssKernelCPUId();
+    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    configASSERT(cpu->suspend_depth && cpu->object_depth && !cpu->critical_depth);
+    --cpu->suspend_depth;
+    if (!--cpu->object_depth) {
+        SS_TR_RELEASED(c, 0);
+        portRELEASE_TASK_LOCK((BaseType_t)c);
+        ssKernelFlush();
+        configASSERT(cpu->preempt);
+        --cpu->preempt;
+    }
+    bool yield = !cpu->preempt && cpu->reschedule;
+    ssKernelCommandsDetach();
+    portCLEAR_INTERRUPT_MASK(irq);
+    ssKernelCommandsFinish(true);
+    if (yield && ssKernelCanPreempt()) portYIELD();
+    return yield ? pdTRUE : pdFALSE;
 }
 
 /* ---- Object sections ------------------------------------------------------------------------------------------------

@@ -63,7 +63,7 @@
  /* The MPU ports require MPU_WRAPPERS_INCLUDED_FROM_API_FILE to be defined
 --- timers.c
 +++ timers.c
-@@ -36,6 +36,13 @@
+@@ -36,6 +36,12 @@
  
  #include "FreeRTOS.h"
  #include "task.h"
@@ -71,13 +71,48 @@
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +#define SS_FREERTOS_OBJECT_TRANSLATION 1
 +#define SS_FREERTOS_OBJECT_EXPR pxTimer
-+#define SS_FREERTOS_OBJECT_KEEP_SUSPEND 1
 +#include "freertos.h"
 +#endif
  #include "queue.h"
  #include "timers.h"
  
-@@ -1118,7 +1125,7 @@
+@@ -783,7 +789,7 @@
+         TickType_t xTimeNow;
+         BaseType_t xTimerListsWereSwitched;
+ 
+-        vTaskSuspendAll();
++        ssTimerServiceSuspend();
+         {
+             /* Obtain the time now to make an assessment as to whether the timer
+              * has expired or not.  If obtaining the time causes the lists to switch
+@@ -797,7 +803,7 @@
+                 /* The tick count has not overflowed, has the timer expired? */
+                 if( ( xListWasEmpty == pdFALSE ) && ( xNextExpireTime <= xTimeNow ) )
+                 {
+-                    ( void ) xTaskResumeAll();
++                    ( void ) ssTimerServiceResume();
+                     prvProcessExpiredTimer( xNextExpireTime, xTimeNow );
+                 }
+                 else
+@@ -817,7 +823,7 @@
+ 
+                     vQueueWaitForMessageRestricted( xTimerQueue, ( xNextExpireTime - xTimeNow ), xListWasEmpty );
+ 
+-                    if( xTaskResumeAll() == pdFALSE )
++                    if( ssTimerServiceResume() == pdFALSE )
+                     {
+                         /* Yield to wait for either a command to arrive, or the
+                          * block time to expire.  If a command arrived between the
+@@ -833,7 +839,7 @@
+             }
+             else
+             {
+-                ( void ) xTaskResumeAll();
++                ( void ) ssTimerServiceResume();
+             }
+         }
+     }
+@@ -1118,7 +1124,7 @@
          /* Check that the list from which active timers are referenced, and the
           * queue used to communicate with the timer service, have been
           * initialised. */
@@ -86,7 +121,7 @@
          {
              if( xTimerQueue == NULL )
              {
-@@ -1160,7 +1167,7 @@
+@@ -1160,7 +1166,7 @@
                  mtCOVERAGE_TEST_MARKER();
              }
          }

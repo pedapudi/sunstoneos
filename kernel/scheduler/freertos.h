@@ -4,6 +4,8 @@
 /* Included after FreeRTOS.h. The public critical sections (vTaskEnterCritical and its FromISR form) take the two
  * global locks of the port; the queue, event group, stream buffer and timer sources use the per-object entries. */
 void ssKernelObjectExit(void);
+void ssKernelObjectSuspend(void);
+BaseType_t ssKernelObjectResume(void);
 UBaseType_t ssKernelObjectEnterFromISR(void);
 void ssKernelObjectExitFromISR(UBaseType_t);
 void ssKernelObjectEnterFor(const void *object, uintptr_t site);
@@ -26,20 +28,20 @@ void ssKernelOwnerYieldTail(void);
 /* A section opened by name, where the source cannot use the translated macro. */
 #define ssKernelObjectSectionEnter(object) ssKernelObjectEnterOn((const void *)(object))
 /* Object sources lock the object they work on and nothing else, so operations on different objects do not wait
- * for each other. The public critical-section API takes the global locks and does not exclude them. The timer source
- * keeps the public scheduler suspension (SS_FREERTOS_OBJECT_KEEP_SUSPEND): its service task suspends the scheduler
- * across timer callbacks, which may call any object's API, so the suspension cannot be tied to one object. */
+ * for each other. The public critical-section API takes the global locks and does not exclude them. */
 #define taskENTER_CRITICAL() ssKernelObjectEnterOn((const void *)(SS_FREERTOS_OBJECT_EXPR))
 #define taskEXIT_CRITICAL() ssKernelObjectLeave()
 #define taskENTER_CRITICAL_FROM_ISR() ssKernelObjectEnterFromISROn((const void *)(SS_FREERTOS_OBJECT_EXPR))
 #define taskEXIT_CRITICAL_FROM_ISR(mask) ssKernelObjectLeaveFromISR(mask)
+/* The timer service suspends the scheduler across timer callbacks, which may call any object's API, so its suspension
+ * is not tied to one object: it takes the global task lock. */
+#define ssTimerServiceSuspend() ssKernelObjectSuspend()
+#define ssTimerServiceResume() ssKernelObjectResume()
 /* The timer source's one-time initialisation creates the timer queue, and the queue's own section nests inside it, so
  * it takes the public critical section (the global locks), which orders before every object lock. */
 #define ssTimerInitEnter() vTaskEnterCritical()
 #define ssTimerInitExit() vTaskExitCritical()
-#ifndef SS_FREERTOS_OBJECT_KEEP_SUSPEND
 #define vTaskSuspendAll() ssKernelObjectSuspendOn((const void *)(SS_FREERTOS_OBJECT_EXPR))
 #define xTaskResumeAll() ssKernelObjectResumeOn()
-#endif
 #endif
 #endif
