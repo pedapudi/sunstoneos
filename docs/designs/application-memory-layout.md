@@ -492,6 +492,32 @@ leaves them) accepts the session of the failed run and starts the NPU service wi
 regions, a main stack in the ledger and an application space starts and finishes on core 6 and on core 2 in the emulated board.
 No host model contains the NPU's reach of memory, so neither can show a pool-address failure.
 
+**Result.** The control (entry `1793663710033568998-bec104fe`, pool at `0x46600000`) ended exactly as the failed image did: last stage
+`EL3_STOP`, first failure `0x73c` at the supervisor's cutoff, no earlier failure. The hypothesis is false. The pool address is not
+the cause, and the cause lies in running the NPU service in an image whose decode check is on.
+
+### Predicted board run that names what the session waits on
+
+A session that reaches the supervisor's cutoff now records what it was waiting on. The NPU retirement wait in `ss_finish`, the
+only wait of the application that lasts until the cutoff, gives up one second earlier with failure `0x75f`, whose value is the set of
+unmet retirement conditions (`OS_NPU_STATE_*` in `apps/os/npu.h`). The supervisor's cutoff failure `0x73c` carries the return
+address of the application's latest `ss_progress` call as its value and the same conditions in the auxiliary field of its site.
+`tools/a733-crumbs.py` names both.
+
+Hypothesis: the session waits in `ss_finish` for the NPU to retire. The run uses the control image (pool at `0x46600000`, decode
+check on) built from the tree with this change. Nothing else differs from the control.
+
+Condition: one run on port 3-1, no card, development DRAM mode, 852 MHz at 800 mV.
+
+- **Hypothesis true.** First failure `0x75f` in the application group, about 54 s after launch, with a value that lists the unmet
+  conditions. Which of them are unmet says where retirement stops: the report not published points at the client task or the
+  close, the report published but `os_npu_stopped` false points at the bootstrap's local stop or the interrupt state.
+- **Hypothesis false, application elsewhere.** First failure `0x73c` with a progress site inside the graph loop or the close loop of
+  `npu_graphs_main`, which the decoder reports as an address to symbolize against the image.
+- **Hypothesis false, application never ran.** First failure `0x73c` with progress site `0`, and the NPU conditions show whether
+  the service started. The main task did not reach its first `ss_progress` call.
+- **Normal return.** The change alters timing and the cause is a race. The receipt then decides.
+
 ### Predicted board run of the heap
 
 Hypothesis: with the OS image built with the address-test decode check
