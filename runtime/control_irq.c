@@ -77,9 +77,7 @@ static inline void program_task(uint64_t compare, uint64_t control)
 }
 static inline unsigned this_core(void)
 {
-    uint64_t mpidr;
-    __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
-    return (unsigned)((mpidr >> 8) & 0xffu); /* the A733 numbers cores in affinity level 1 */
+    return (unsigned)portGET_CORE_ID(); /* the kernel's own core number; the A76 cores do not number themselves in affinity level 1 */
 }
 
 /* Record one entry of a path: latency against the deadline it served, jitter against the previous entry. */
