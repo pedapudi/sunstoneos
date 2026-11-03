@@ -51,7 +51,6 @@ def quantile(counter, fraction):
     total = sum(counter.values())
     if not total:
         return 0.0
-    need = -(-total * fraction // 1)
     need = max(1, int(-(-total * fraction // 1)))
     seen = 0
     for b in sorted(counter):
@@ -66,7 +65,17 @@ def main():
     parser.add_argument('entries', nargs='+')
     parser.add_argument('--queue', type=Path, default=QUEUE)
     parser.add_argument('--json', action='store_true')
+    parser.add_argument('--runs', action='store_true', help='also print each entry: recognition time and the control path')
     args = parser.parse_args()
+    if args.runs:
+        for entry in args.entries:
+            text = entry_text(entry, args.queue)
+            soak = re.search(r'SOAK iterations=(\d+) mean_total_us=(\d+)', text)
+            control = re.search(r'CONTROL core=4 .* lat_max_ns=(\d+) lat_p9999_ns=(\d+) jit_max_ns=(\d+)', text)
+            task = re.findall(r'TASKPATH core=(\d) .*lat_max_ns=(\d+)', text)
+            print('%s soak %s iterations, mean %s us; control latency max %s ns, jitter max %s ns; task latency max (ns) %s' % (
+                entry[:24], soak.group(1) if soak else '-', soak.group(2) if soak else '-', control.group(1) if control else '-',
+                control.group(3) if control else '-', ' '.join('%s:%s' % t for t in task)))
     pooled = collections.defaultdict(collections.Counter)
     maximum = {}
     for entry in args.entries:
