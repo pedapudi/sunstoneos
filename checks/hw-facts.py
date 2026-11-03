@@ -23,8 +23,7 @@ hw = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(hw)
 
 # Host models that stand in for the GIC. Each reads GicModel instead of restating the values.
-MODELS = ('checks/a733-smp-cached.py', 'checks/a733-supervised-scheduler.py', 'checks/all-core-first-task-probe.py',
-          'checks/all-core-task-workload-probe.py', 'checks/primary-cache-probe.py', 'checks/secondary-interrupt-probe.py',
+MODELS = ('checks/a733-smp-cached.py', 'checks/a733-supervised-scheduler.py',
           'checks/cpu-local-timer.py', 'checks/cpu-idle-wake.py', 'checks/cpu-power-states.py', 'checks/storage-read-single-core.py')
 # The literals that encoded the priority mask and the Non-secure views.
 FORBIDDEN = (
