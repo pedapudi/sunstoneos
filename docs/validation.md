@@ -121,6 +121,9 @@ check that is not pure-host, the check's own file says what the gate does, in a 
   ELF and the build directory of a gate variant (`sup`, `resaud`, `headset`, `cpu-clock` and the others of `VARIANTS`) or of a
   recipe in [tools/gate_images.py](../tools/gate_images.py) (the CPU-return NPU image, the CPU-return GPU image, the latency image). The gate builds each image once
   per tree state, keyed by the revision, the tracked diff and the untracked files, and passes it to the check.
+  `{fixture:NAME}` names a fixture of `FIXTURES` in the same file: host data that a cache cleanup may delete. The gate runs the
+  fixture's build command, which skips whatever is current, before the checks that name it. The `npu-graphs` fixture is the compiled
+  test graphs under `build/npu-graph-variants` ([tools/npu-graph-build.py](../tools/npu-graph-build.py)).
 - **Board.** A check that needs a board or USB access is reported with a `BOARD` line and does not refuse. One that needs a
   board without a USB or `--fel` argument declares `GATE_BOARD = 'reason'`.
 - **Waived.** A helper module declares `GATE_WAIVED = 'category | reason'`. The gate counts waived checks and writes their reasons to
