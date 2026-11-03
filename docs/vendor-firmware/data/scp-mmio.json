@@ -138,9 +138,7 @@
    "base": "0x07060000",
    "registers": 2,
    "sunstoneos_touches_block": true,
-   "example_files": [
-    "checks/a733-gpu-power-reference.py"
-   ]
+   "example_files": []
   },
   {
    "peripheral": "RTC",
@@ -241,8 +239,6 @@
    "sunstoneos_touches_block": true,
    "example_files": [
     "apps/board-bundles-power/trace.h",
-    "apps/npu-returning/check.py",
-    "apps/npu-returning/main.c",
     "apps/thermal-returning/adc-check.py"
    ]
   },
@@ -279,9 +275,7 @@
    "base": "0x08010000",
    "registers": 2,
    "sunstoneos_touches_block": true,
-   "example_files": [
-    "checks/nbg-loader-reference.py"
-   ]
+   "example_files": []
   },
   {
    "peripheral": "USB0",
@@ -671,10 +665,7 @@
     "sunstoneos_files": [
      "apps/cpu-runtime-qualification/terminal.S",
      "checks/a733-cpu-continue.py",
-     "checks/a733-cpu-start.py",
-     "checks/a733-device-launch.py",
-     "checks/a733-smp-launch.py",
-     "checks/a733-smp-supervised-launch.py"
+     "checks/a733-cpu-start.py"
     ],
     "status": "observed"
    },
@@ -4688,9 +4679,7 @@
     "functions": [
      "0x400095a0"
     ],
-    "sunstoneos_files": [
-     "checks/a733-gpu-power-reference.py"
-    ],
+    "sunstoneos_files": [],
     "status": "observed"
    },
    {
@@ -4725,8 +4714,7 @@
      "apps/monitor/native.c",
      "apps/pcie-nvme/native.c",
      "apps/pcie-test/native.c",
-     "apps/pcie/native.c",
-     "apps/rtc-alarm-returning/main.c"
+     "apps/pcie/native.c"
     ],
     "status": "observed"
    },
@@ -4740,8 +4728,6 @@
      "0x40005c44"
     ],
     "sunstoneos_files": [
-     "apps/rtc-returning/check.py",
-     "checks/rtc-single-core.py",
      "drivers/adc/a733_adc_native.c"
     ],
     "status": "observed"
@@ -4758,7 +4744,6 @@
      "0x40005ba8"
     ],
     "sunstoneos_files": [
-     "apps/rtc-returning/check.py",
      "drivers/adc/a733_adc_native.c"
     ],
     "status": "observed"
@@ -4772,10 +4757,7 @@
     "functions": [
      "0x400093f2"
     ],
-    "sunstoneos_files": [
-     "apps/rtc-returning/check.py",
-     "checks/rtc-single-core.py"
-    ],
+    "sunstoneos_files": [],
     "status": "observed"
    },
    {
@@ -4787,10 +4769,7 @@
     "functions": [
      "0x400093f2"
     ],
-    "sunstoneos_files": [
-     "apps/rtc-returning/check.py",
-     "checks/rtc-single-core.py"
-    ],
+    "sunstoneos_files": [],
     "status": "observed"
    },
    {
@@ -5294,7 +5273,6 @@
      "0x400057f4"
     ],
     "sunstoneos_files": [
-     "apps/npu-returning/check.py",
      "apps/pwm/native.c",
      "apps/thermal-returning/adc-check.py"
     ],
@@ -5314,7 +5292,6 @@
      "0x40005e9c"
     ],
     "sunstoneos_files": [
-     "apps/npu-returning/check.py",
      "apps/thermal-returning/adc-check.py",
      "checks/a733-clock-reference-pmic.c",
      "checks/a733-clock-reference-sd.c",
@@ -5435,7 +5412,6 @@
      "0x40005d32"
     ],
     "sunstoneos_files": [
-     "apps/npu-returning/check.py",
      "apps/thermal-returning/adc-check.py",
      "checks/a733-pmic.c"
     ],
@@ -5486,14 +5462,7 @@
      "0x400058c8",
      "0x40005d32"
     ],
-    "sunstoneos_files": [
-     "apps/rtc-alarm-returning/main.c",
-     "apps/rtc-alarm-returning/monitor.c",
-     "apps/rtc-returning/check.py",
-     "apps/rtc-returning/main.c",
-     "apps/rtc-source-returning/check.py",
-     "apps/rtc-source-returning/main.c"
-    ],
+    "sunstoneos_files": [],
     "status": "observed"
    },
    {
@@ -5753,7 +5722,6 @@
     ],
     "sunstoneos_files": [
      "apps/board-bundles-power/trace.h",
-     "apps/npu-returning/check.py",
      "apps/thermal-returning/adc-check.py",
      "checks/a733-pmic-parent.c"
     ],
@@ -5779,8 +5747,6 @@
     ],
     "sunstoneos_files": [
      "apps/board-bundles-power/trace.h",
-     "apps/npu-returning/check.py",
-     "apps/npu-returning/main.c",
      "apps/thermal-returning/adc-check.py",
      "apps/thermal-returning/adc.c"
     ],
@@ -5798,8 +5764,6 @@
     ],
     "sunstoneos_files": [
      "apps/board-bundles-power/trace.h",
-     "apps/npu-returning/check.py",
-     "apps/npu-returning/main.c",
      "apps/thermal-returning/adc-check.py",
      "apps/thermal-returning/adc.c"
     ],
@@ -5817,8 +5781,6 @@
      "0x40006ad6"
     ],
     "sunstoneos_files": [
-     "apps/npu-returning/check.py",
-     "apps/npu-returning/main.c",
      "apps/thermal-returning/adc-check.py",
      "apps/thermal-returning/adc.c",
      "checks/a733-clock-reference-pmic.c"
@@ -5879,8 +5841,6 @@
     ],
     "sunstoneos_files": [
      "apps/board-bundles-power/trace.h",
-     "apps/npu-returning/check.py",
-     "apps/npu-returning/main.c",
      "apps/thermal-returning/adc-check.py",
      "apps/thermal-returning/adc.c"
     ],
