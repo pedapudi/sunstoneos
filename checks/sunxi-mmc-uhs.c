@@ -138,12 +138,14 @@ static void expect_mode(struct uhs *u, struct sunxi_mmc *h, unsigned mode, unsig
     assert(h->state == SUNXI_MMC_READY && h->card.timing == mode && h->card.signal_1v8 == signal && h->card.uhs_outcome == outcome);
     assert((u->divisor & 0xff) == divisor && h->card.mode_steps == steps && u->sdr == mode);
     /* The drive and sample phases are the board kernel's for the clock range: default speed and SDR12 the 26 MHz row, high speed and SDR25 the 52 MHz row,
-     * SDR50 the 104 MHz row, SDR104 the 208 MHz row (the board's sdc0 node sets no override). The sample phases are in the new timing register; a tuned mode
+     * SDR50 and SDR104 the v4p6x rule (both drives 180) that the in-kernel tuning leaves in force (the board's sdc0 node sets no override). The sample phases are in the new timing register; a tuned mode
      * uses the old sample mode with the software delay. */
     {
         unsigned row = mode == 3 ? 4 : mode == 2 ? 3 : mode == 1 ? 2 : 1;
         uint32_t drive = u->base.reg[0x140 / 4], ntsr = u->base.reg[0x5c / 4];
-        assert(((drive >> 16) & 1) == vendor_phase[row].cmd && ((drive >> 17) & 1) == vendor_phase[row].dat);
+        /* A tuned mode runs the v4p6x method the vendor's tuning leaves in force: command and data drive both 180 (sunxi-mmc-v4p5x.c, pinned by the Python check). */
+        if (mode >= 2) assert(((drive >> 16) & 3) == 3);
+        else assert(((drive >> 16) & 1) == vendor_phase[row].cmd && ((drive >> 17) & 1) == vendor_phase[row].dat);
         if (mode < 2) assert(((ntsr >> 8) & 3) == vendor_phase[row].sam_dat && ((ntsr >> 4) & 3) == vendor_phase[row].sam_cmd);
         else assert(!(ntsr & 0x331u) && vendor_phase[row].sam_dat == 0 && vendor_phase[row].sam_cmd == 0);
     }
@@ -206,7 +208,7 @@ int main(void)
     assert(h.card.tuning_start == 20 && h.card.tuning_width == 24 && h.card.sample_delay == 32);
     assert(h.card.tuning_map == (((UINT64_C(1) << 24) - 1) << 20) && u->cmd19 == 24 * 20 + 40);
     assert(u->base.reg[0x144/4] == (0x80u | 32) && !(u->base.reg[0x5c/4] & 0x80000331u));
-    assert(((u->base.reg[0x140/4] >> 16) & 3) == 1 && (u->base.reg[0x100/4] & 0x1fff0001u) == ((64u << 16) | 1u));
+    assert(((u->base.reg[0x140/4] >> 16) & 3) == 3 && (u->base.reg[0x100/4] & 0x1fff0001u) == ((64u << 16) | 1u));
     read_back(u, &h); unsigned first = u->cmd19;
     /* 100 MHz from 400 MHz when the 300 MHz branch is absent. */
     begin(u, &h, 1); drive(u, &h);

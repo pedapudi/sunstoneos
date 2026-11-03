@@ -240,7 +240,7 @@ exists** (status 7, `E_OPEN`, detail the error). A file the failed session publi
 
 | Item | Vendor | Ours | Same |
 | --- | --- | --- | --- |
-| Command and data drive phase at 150 MHz (the 208 MHz row) | command 180, data 90 (`:867-872`, `:874-881`; no `sunxi-dly` on sdc0) | command 180, data 90 (`uhs_registers`) | yes, pinned by the host check |
+| Command and data drive phase at 150 MHz | the sdc0 node sets `execute_tuning_in_kernel`, and the in-kernel tuning leaves the host in the v4p6x method (`sunxi_mmc_execute_tuning` exits v5p3x and initialises v4p6x; nothing restores v5p3x), whose `sunxi_mmc_set_clk_dly` drives command and data at 180 for SDR50 and SDR104 (`mmc-sdc3/sunxi-mmc-v4p5x.c`, pinned). The v5p3x 104M and 208M rows (data 90) apply only until the tuning runs | command 180, data 180 in `uhs_registers` since the fix below; the first three write sessions and the format run drove data at 90 | **no, until the fix** |
 | Sample phases, sample delay, timing mode | phases 0 and 0; the tuned `SAMP_DL` (set by `sunxi_mmc_set_samp_dl_raw`); old sample mode | the same, the delay from the sweep (41 on the read run) | yes |
 | Write threshold | `WR_THLD_ENB` with the block size when `blksz <= tdtl` (the TX trigger level in bytes, 992 here) (`:647-681`) | block size 512 in 27:16, bit 2 set, bit 0 cleared (`command_step`, `P_WRITE_DMA`) | yes in effect: the vendor's read branch clears the read enable for a write |
 | FIFO watermarks and burst size | `dma_tl` the same for read and write | `FTRGL` `0x200700f8` for both | yes |
@@ -278,3 +278,13 @@ Run: mode 0 as before, on the image of the commit that carries this section, wit
 **Run 2, mode 0 (create the 512 MiB region file).** Mount finds a clean volume (recoveries 0), makes `/sunstone-test` and creates the file as in the second-attempt prediction above: status 0, 536,870,912 bytes, 8 to 30 MB/s, the mode of run 1 or a lower one, the volume clean. A status 7 (`E_OPEN`) would mean the format left the old file visible.
 
 **Restore.** After any failed or interrupted session on this card: mode 9 again, then the next mode 0. The host check `checks/storage-write-guard.py` runs the format over an image that holds the finished file: `fsck.fat -n` clean afterwards, only the FATs, the root cluster, the FSInfo and the boot sector written, the file gone, and the region file created again whole.
+
+## The format run (entry `1793687494152436674-9dcd2cb2`): the data drive phase of a tuned mode
+
+**Record.** Value `0x801c8da6`, `sd_owner.c:94`, aux 1. Stage 38 (`recover_fail`, the restart's poll loop), detail `first_fault_detail`: core error 6 (`SUNXI_MMC_CONTROLLER`), protocol step 35 (`P_WRITE_DMA`, the CMD25 data phase), RINTSTS low 16 bits `0x801c`: COMMAND_DONE (2), DATA_OVER (3), TX_DATA_REQUEST (4) and END_BIT_ERROR (15). The manual (section 11.3.8, SMHC_RINTSTS) defines bit 15 while transmitting as "the host controller does not receive CRC status token"; a negative token would set bit 7 (DATA_CRC_ERROR), a data timeout bit 9, the busy clear bit 13. So the first write at SDR104 ended with no CRC status token seen, after the controller had sent its data. Aux 1 is the interrupt state that `irq_suspend` leaves in `os_sd_diag[2]`, not the platform result (the guard in `recover_fail` kept it); the restart's own result was not recorded and is now.
+
+**Cause.** The driver took the drive phases of a tuned mode from the v5p3x rows (data 90 at 104 and 208 MHz). The vendor never runs a tuned SDR50 or SDR104 card in v5p3x: its in-kernel tuning exits v5p3x for v4p6x, whose clock-delay rule drives data at 180 for both modes. Reads do not use the data drive phase, so the read runs passed; every write has driven data at 90 since the phases were changed. The card sampled the data half a bit off, and the CRC status token never came back.
+
+**Fix.** `uhs_registers` drives command and data at 180 for SDR50 and SDR104 (the 400 kHz setup and the untuned modes keep the v5p3x rows). The Python check now asserts the v4p6x rule from the pinned source, and the core check asserts both drive bits for every tuned mode.
+
+**Prediction for the next write run.** The format (mode 9) completes at SDR104 with status 0, `written_bytes` 15,286,272, no faults in `sd_mode.faults`, 29,856 sectors in about 120 calls. If a fault remains, its RINTSTS names the next candidate and the restart's platform result is in aux.

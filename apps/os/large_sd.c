@@ -224,7 +224,7 @@ static int irq_resume(void);
 static int recover_fail(unsigned stage, enum a733_mmc_platform_result r)
 {
     int rc = DIAG(stage, first_fault_detail);
-    if (!os_sd_diag[2]) os_sd_diag[2] = (uint64_t)((unsigned)r & 7u) | (uint64_t)(platform.stage & 31u) << 3 | (uint64_t)(platform.fault ? 1u : 0u) << 8;
+    os_sd_diag[2] = (uint64_t)((unsigned)r & 7u) | (uint64_t)(platform.stage & 31u) << 3 | (uint64_t)(platform.fault ? 1u : 0u) << 8;   /* always: irq_suspend leaves its own interrupt state here, which the format run mistook for the result */
     return rc;
 }
 /* A failed read the platform can recover (A733_MMC_ERROR): identify again, which tunes again, or step the mode down (a733_mmc_platform_recover). Blocking, in the owner. */

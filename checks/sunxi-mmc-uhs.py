@@ -102,6 +102,10 @@ for source, name in [(text[BOARD + 'bsp/drivers/mmc/sunxi-mmc-v5p3x.c'], 'static
     rate = body(source, name)
     assert rate.index('#ifdef MMC_FPGA') < rate.index('rval |= (1 << 7);') < rate.index('#else\n\t/* clear internal divider */')
 assert 'case MMC_TIMING_UHS_SDR104:\n\t\tdat_drv_ph = 1;' in v4 and 'rval &= ~(SDXC_2X_TIMING_MODE);' in v4
+# The sdc0 node sets execute_tuning_in_kernel, and the tuning leaves the host in the v4p6x method (never restored to v5p3x); its rule for SDR50 and SDR104 is command drive 180
+# (the default) and data drive 180, so a tuned mode is driven with both at 180, not with the v5p3x 104M and 208M rows.
+assert 'u32 cmd_drv_ph = 1;' in v4 and 'case MMC_TIMING_UHS_SDR50:\n\tcase MMC_TIMING_UHS_SDR104:\n\t\tdat_drv_ph = 1;' in v4
+assert 'sunxi_mmc_init_priv_v5p3x' not in tune
 # Upstream sunxi-mmc has no tuning and no bank switch; it masks UHS without delay chains.
 upstream = text[LINUX + 'drivers/mmc/host/sunxi-mmc.c']
 assert 'execute_tuning' not in upstream and 'mmc_regulator_set_vqmmc' in upstream

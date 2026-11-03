@@ -851,17 +851,19 @@ static void hs_check(struct sunxi_mmc *h)
 static void tune_next(struct sunxi_mmc *h)
 {h->tune_attempt=1;h->attempt_us=h->last_us;queue(h,P_SD_TUNE,19u|RESP|CRC|DATA|WAIT,0,h->tuning_block,64);}
 /* SDR104 timing, from the board kernel's v4p6x method that its tuning selects:
- * old sample mode (NTSR MODE_SEL 0), 180-degree command and data drive and the
+ * old sample mode (NTSR MODE_SEL 0), 180-degree command and data drive (the v4p6x
+ * clock-delay rule for SDR50 and SDR104: sunxi_mmc_set_clk_dly sets dat_drv_ph for
+ * both, and the in-kernel tuning leaves the host in that method) and the
  * software sample delay; each read also sets the read threshold. TMOUT bounds
  * a failed CMD19. Writing restores the set after a controller reset; reading
  * verifies it. */
 static int uhs_registers(struct sunxi_mmc *h,unsigned write)
 {
     uint32_t v,delay=0x80u|h->card.sample_delay;
-    if(write)return rd(h,0x140,&v)&&wr(h,0x140,(v&~(3u<<16))|(1u<<16))&&rd(h,0x5c,&v)&&wr(h,0x5c,v&~(START|0x331u))&&
+    if(write)return rd(h,0x140,&v)&&wr(h,0x140,v|(3u<<16))&&rd(h,0x5c,&v)&&wr(h,0x5c,v&~(START|0x331u))&&
         wr(h,0x144,delay)&&wr(h,8,h->tuning?TUNE_TIMEOUT:UINT32_MAX)&&wr(h,0xc,1)&&wr(h,4,1u<<16);
     if(!rd(h,0x140,&v))return 0;
-    if(((v>>16)&3)!=1)goto bad;
+    if(((v>>16)&3)!=3)goto bad;
     if(!rd(h,0x5c,&v))return 0;
     if(v&(START|0x331u))goto bad;
     if(!rd(h,0x144,&v))return 0;
