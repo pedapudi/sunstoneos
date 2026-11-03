@@ -11,7 +11,7 @@ import importlib.util
 from pathlib import Path
 import struct
 import hashlib
-from unicorn.arm64_const import UC_ARM64_REG_PC,UC_ARM64_REG_LR,UC_ARM64_REG_SP,UC_CPU_ARM64_MAX
+from unicorn.arm64_const import UC_ARM64_REG_PC,UC_ARM64_REG_LR,UC_ARM64_REG_SP
 from harness import Image,save
 CHECK_INPUTS = ['apps/cpu-npu-concurrency/main.c', 'apps/cpu-npu-concurrency/gemm.h', 'apps/cpu-npu-concurrency/receipt.h', 'apps/cpu-npu-concurrency/host.py', 'apps/cpu-npu-concurrency/vectors.py', 'apps/os/npu-observe.c', 'apps/os/application.c', 'apps/os/cpu-return.c', 'apps/os/npu.c', 'apps/os/npu-irq.c', 'apps/os/cpu-return/terminal.patch', 'apps/os/cpu-return/thermal.patch', 'apps/os/cpu-return-host.py', 'drivers/npu/npu_service.c', 'drivers/npu/a733_npu_runtime.c', 'platform/a733/npu_irq.c', 'include/sunstone_app.h', 'include/npu_service.h', 'include/a733_npu_irq.h', 'cmake/sunstone-os-core.cmake', 'cmake/a733-os-cpu-return.cmake', 'checks/cpu-npu-concurrency/producer.c', 'checks/cpu-npu-concurrency/FreeRTOS.h', 'checks/cpu-npu-concurrency/task.h', 'checks/cpu-npu-concurrency/npu.h', 'checks/cpu-npu-concurrency/a733_npu_irq.h']
 ROOT=Path(__file__).resolve().parents[1]
@@ -19,18 +19,6 @@ def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 owner=module('cpu_npu_return_owners',ROOT/'checks/os-cpu-return-services.py')
 prior=owner.prior
-# The image uses the large-system atomics (CAS, LDADD), which the default emulated core lacks: build the machine on the
-# maximal core (the model must be chosen before memory is mapped).
-from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM
-_machine=prior.fault.Image.machine
-def _max_machine(self):
- original=Uc.__init__
- def init(uc,arch,mode):
-  original(uc,arch,mode);uc.ctl_set_cpu_model(UC_CPU_ARM64_MAX)
- Uc.__init__=init
- try:return _machine(self)
- finally:Uc.__init__=original
-prior.fault.Image.machine=_max_machine
 
 class Model(owner.Model):
  def __init__(self,image,layout):
