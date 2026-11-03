@@ -8,7 +8,7 @@ An application needs memory for data sets that are far larger than the 48 MiB ap
 
 | Question | Decision |
 | --- | --- |
-| Who owns upper memory | The region ledger in `kernel/appmem/app_region.c`. It holds the usable ranges and the regions the manifests declare, each owned by one application. |
+| Who owns upper memory | The unified memory ledger in `kernel/umem/umem.c` ([unified-memory.md](unified-memory.md)). The OS image admits every region, the NPU pool, the heap and the main stack through it. `kernel/appmem/app_region.c` keeps the space builder and the region records it reads, and its own ledger serves the host checks and the probe images. |
 | Isolation between applications | Each application has its own address space: a copy of the kernel's level-1 table plus the application's regions, selected by TTBR0 with the application's ASID. |
 | Isolation from DMA masters | A region is reachable by a master only through an explicit device grant (interface below). No master is granted any region at load or at start. |
 | Mapping | 1 GiB blocks for every 1 GiB slot that a region covers whole; 2 MiB blocks for the rest. Regions of 1 GiB or more are placed on a 1 GiB boundary. |
