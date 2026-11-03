@@ -203,6 +203,15 @@ struct ss_thermal_status {
     int32_t millicelsius[5], reserved;
 };
 void ss_thermal_status(struct ss_thermal_status *status);
+/* The radio station of an image that selects it (SUNSTONE_A733_OS_RADIO_SCAN): the stage it
+ * has reached and whether it is finished. Copies a snapshot; images without the station report
+ * zero. stage is the enum a733_radio_stage of include/a733_radio_result.h; done is 1 once the
+ * scan has completed, or the station has failed, so that the application can finish and the OS
+ * can shut the module down and publish the full result. */
+struct ss_radio_status {
+    uint32_t stage, failed, done, reserved;
+};
+void ss_radio_status(struct ss_radio_status *status);
 /* 1 once the CPU clock owner has finished the session grant's requests,
  * whatever their result, or when the image grants no CPU operating points. */
 int ss_clock_ready(void);

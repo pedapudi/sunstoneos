@@ -171,6 +171,9 @@ void ss_usb_wait(uint32_t wait_us)
     if(application_wait_until(now+(wait_us?wait_us:1))==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
 }
 int ss_throttled(void){return os_thermal_throttled();}
+#ifndef SUNSTONE_A733_OS_RADIO_SCAN
+void ss_radio_status(struct ss_radio_status *status){*status=(struct ss_radio_status){0};}
+#endif
 int ss_clock_ready(void)
 {
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK

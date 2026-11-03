@@ -357,7 +357,10 @@ static int startup_profile_valid(const struct board_radio_profile *f,const uint8
         f->magic!=BOARD_RADIO_PROFILE_MAGIC||(f->version!=BOARD_RADIO_PROFILE_VERSION&&f->version!=BOARD_RADIO_PROFILE_LISTENER_VERSION&&f->version!=BOARD_RADIO_PROFILE_SCAN_VERSION)||f->bytes!=sizeof(*f)||!board_radio_profile_network_valid(f)||
         !f->platform_authority||
         !evidence(f->platform_evidence)||
-        memcmp(f->chip_id,id->words,sizeof(f->chip_id))||!id->secure_read_record)return 0;
+        !id->secure_read_record)return 0;
+    /* A scan-only profile is not bound to one board: the firmware's binding check reads the chip
+     * identity from the secure reader, and the profile's own copy is unused. */
+    if(!scan&&memcmp(f->chip_id,id->words,sizeof(f->chip_id)))return 0;
     if(scan){
         if(f->tcp_mode||!f->association_timeout_us||f->startup_deadline_us<f->bootstrap_deadline_us||
             f->startup_deadline_us>f->platform.lifetime_deadline_us)return 0;

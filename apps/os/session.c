@@ -83,7 +83,7 @@ int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,un
 #endif
     if(!(h->devices&SS_DEVICE_USB_STORAGE)){
         if(capture||!(h->flags&SS_SESSION_BIND_SID))REFUSE(A733_DECODE_DEVICES);
-#ifdef SUNSTONE_A733_OS_RADIO
+#if defined(SUNSTONE_A733_OS_RADIO) && !defined(SUNSTONE_A733_OS_RADIO_SCAN)
         REFUSE(A733_DECODE_DEVICES);
 #endif
     }
@@ -103,7 +103,9 @@ int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,un
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
     if(h->devices&(SS_DEVICE_USB_KEYBOARD|SS_DEVICE_USB_MOUSE|SS_DEVICE_USB_SERIAL|SS_DEVICE_USB_CAMERA))workload=0;
 #endif
-#ifdef SUNSTONE_A733_OS_RADIO
+#if defined(SUNSTONE_A733_OS_RADIO_SCAN)
+    workload=3;
+#elif defined(SUNSTONE_A733_OS_RADIO)
     workload=1;
 #endif
     if(out->board.workload!=workload)REFUSE(A733_DECODE_WORKLOAD);
