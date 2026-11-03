@@ -168,3 +168,24 @@ reference. `npu-conv-pipeline.sh` runs its compiler and simulator workflow insid
 the pinned host image. [Compiler setup and evidence](../docs/npu-compiler.md)
 record image identities, execution conditions, results, and the emitted format's
 current native-loader limitation.
+
+## Build, package, submit and wait
+
+`configure.py SRC BUILD [cmake options]` runs CMake with the aarch64 toolchain
+file and every pinned dependency path (`checks/image_dependencies.py` derives
+them from `sources.lock.json`); it refuses with the fetch command when one is
+missing, and a `-D` option of yours replaces the pinned one.
+
+`session.py build IMAGE --out DIR` writes the typed board session of an image to
+`DIR/template/session.bin`, from the image's own symbols and manifest and the
+board facts in `session-facts.json`. `session.py check DIR [--admit]` decodes it
+and runs the image's EL3 admission. `board.py submit IMAGE --template
+DIR/template ... --wait` queues the run, waits, and prints the outcome, stage,
+first failure and decoded summary. [The runner document](../docs/board-runner.md)
+gives the four commands in order. Do not write packaging or configure scripts
+under the build cache.
+
+`clean-generated.py` deletes generated files under the build cache, the trash
+directory and session scratch directories, only with `--apply`, and refuses
+evidence, sources, host tools, queue databases and any build directory that an
+evidence record or queue entry names.

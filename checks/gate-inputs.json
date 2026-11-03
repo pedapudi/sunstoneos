@@ -2508,6 +2508,17 @@
     }
    ]
   },
+  "session-build.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}"
+     ]
+    }
+   ],
+   "uses": "the board-queue entries of three images that ran on the board (mimus CPU-return, NPU queue, storage-write) and the NPU image's CMake build directory in the cache; see the case table in the check"
+  },
   "stage2-session.py": {
    "runs": [
     {
