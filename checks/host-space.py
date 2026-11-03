@@ -68,6 +68,24 @@ def main():
     message = harness.refused(lambda: space.preflight(DISK_BUILD_ROOT, tmp_minimum=huge), '/tmp', space.SpaceShortage)
     message = harness.refused(lambda: space.preflight(DISK_BUILD_ROOT, tmp_minimum=(0, 1 << 60)), '/tmp', space.SpaceShortage)
     assert 'free inodes' in message, message
+    # The floor is measured: twice the largest peak of the last ten gates, a small default when none is recorded.
+    import json, time
+    root = out / 'measured'
+    assert space.measured_minimum(root) == space.DEFAULT_BUILD_MINIMUM and space.DEFAULT_BUILD_MINIMUM[0] < 10 * space.GIB
+    for number, (peak, inodes) in enumerate([(900 * space.GIB, 5)] + [(3 * space.GIB, 1000 + n) for n in range(10)]):
+        (root / ('gate-%d' % number)).mkdir(parents=True)                  # gate-0 is the oldest, so it falls outside the last ten
+        record = root / ('gate-%d' % number) / space.PEAK_FILE
+        record.write_text(json.dumps({'bytes': peak, 'inodes': inodes}))
+        os.utime(record, (time.time() - 100 + number, time.time() - 100 + number))
+    assert space.gate_peak(root) == (3 * space.GIB, 1009, 10), space.gate_peak(root)
+    assert space.measured_minimum(root) == (6 * space.GIB, 2018)
+    message = harness.refused(lambda: space.preflight(root, build_minimum=(1 << 60, 1)), 'the build root', space.SpaceShortage)
+    assert 'twice the largest peak of the last 10 gates: 3.0 GiB, 1009 inodes' in message, message
+    sized = out / 'sized'
+    (sized / 'sub').mkdir(parents=True)
+    (sized / 'sub' / 'f').write_bytes(bytes(10000))
+    total, count = space.write_peak(sized, [sized])
+    assert total >= 10000 and count == 3 and json.loads((sized / space.PEAK_FILE).read_text()) == {'bytes': total, 'inodes': count}
     for name, needs in (('tools/land.py', ('use_disk_tmp', 'preflight')), ('tools/board.py', ('use_disk_tmp',)),
                         ('tools/integration-gate.py', ('use_disk_tmp', 'preflight'))):
         text = (ROOT / name).read_text()

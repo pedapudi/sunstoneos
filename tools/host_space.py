@@ -12,8 +12,11 @@ from pathlib import Path
 import tempfile
 
 GIB = 1 << 30
-# What a gate needs: builds and sweeps on the main disk, and enough of /tmp left for the tools that still write there.
-BUILD_ROOT_MINIMUM = (30 * GIB, 500_000)
+# What a gate needs on the main disk: twice the largest peak that one of the last ten gates recorded (gate_peak), or this small
+# default when none is recorded. Enough of /tmp must stay free for the tools that still write there.
+DEFAULT_BUILD_MINIMUM = (5 * GIB, 100_000)
+PEAK_FILE = 'disk-peak.json'
+PEAK_WINDOW = 10
 TMP_MINIMUM = (2 * GIB, 20_000)
 VOLATILE = (Path('/tmp'), Path('/dev/shm'), Path('/var/tmp'))
 # Checks that run the gate or the landing against a fake cache in a scratch directory set SUNSTONE_HOST_SPACE=off; nothing else does.
@@ -53,10 +56,60 @@ def volume(path):
     return stat.f_bavail * stat.f_frsize, stat.f_favail
 
 
-def preflight(build_root, tmp='/tmp', build_minimum=BUILD_ROOT_MINIMUM, tmp_minimum=TMP_MINIMUM):
+def usage(paths):
+    """(bytes on disk, inodes) of the files and directories under paths."""
+    total, count = 0, 0
+    for path in paths:
+        for root, dirs, files in os.walk(path):
+            for name in [root, *[os.path.join(root, f) for f in files]]:
+                try:
+                    total += os.lstat(name).st_blocks * 512
+                    count += 1
+                except OSError:
+                    pass
+    return total, count
+
+
+def write_peak(gate_directory, paths):
+    """Record what a gate's directories occupy; gate_peak reads the records of the last ten gates."""
+    import json
+    total, count = usage(paths)
+    (Path(gate_directory) / PEAK_FILE).write_text(json.dumps({'bytes': total, 'inodes': count}) + '\n')
+    return total, count
+
+
+def gate_peak(build_root):
+    """(largest recorded bytes, largest recorded inodes, number of records) over the last ten gates that recorded a peak."""
+    import json
+    records = sorted(Path(build_root).glob('gate-*/' + PEAK_FILE), key=lambda p: p.stat().st_mtime, reverse=True)[:PEAK_WINDOW]
+    peaks = []
+    for record in records:
+        try:
+            peaks.append(json.loads(record.read_text()))
+        except (OSError, ValueError):
+            pass
+    return max((p['bytes'] for p in peaks), default=0), max((p['inodes'] for p in peaks), default=0), len(peaks)
+
+
+def measured_minimum(build_root):
+    """(bytes, inodes) a gate needs free: twice the measured peak of the last ten gates, or the default when none is recorded."""
+    peak_bytes, peak_inodes, recorded = gate_peak(build_root)
+    return (2 * peak_bytes, 2 * peak_inodes) if recorded else DEFAULT_BUILD_MINIMUM
+
+
+def basis(build_root):
+    peak_bytes, peak_inodes, recorded = gate_peak(build_root)
+    if not recorded:
+        return 'no gate has recorded a peak; the default'
+    return 'twice the largest peak of the last %d gates: %.1f GiB, %d inodes' % (recorded, peak_bytes / GIB, peak_inodes)
+
+
+def preflight(build_root, tmp='/tmp', build_minimum=None, tmp_minimum=TMP_MINIMUM):
     """Raise SpaceShortage naming the first volume that is short of space or inodes."""
     if disabled():
         return
+    if build_minimum is None:
+        build_minimum = measured_minimum(build_root)
     probe = Path(build_root)
     while not probe.exists() and probe != probe.parent:
         probe = probe.parent
@@ -66,6 +119,6 @@ def preflight(build_root, tmp='/tmp', build_minimum=BUILD_ROOT_MINIMUM, tmp_mini
             continue
         free_bytes, free_inodes = volume(path)
         if free_bytes < need_bytes:
-            raise SpaceShortage('%s has %.1f GiB free; %.1f GiB are needed' % (label, free_bytes / GIB, need_bytes / GIB))
+            raise SpaceShortage('%s has %.1f GiB free; %.1f GiB are needed (%s)' % (label, free_bytes / GIB, need_bytes / GIB, basis(build_root)))
         if free_inodes < need_inodes:
-            raise SpaceShortage('%s has %d free inodes; %d are needed' % (label, free_inodes, need_inodes))
+            raise SpaceShortage('%s has %d free inodes; %d are needed (%s)' % (label, free_inodes, need_inodes, basis(build_root)))

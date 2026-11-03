@@ -29,6 +29,7 @@ status-record checks report WARN lines and do not fail the gate unless
 --strict-docs is given.
 """
 import argparse
+import atexit
 import fcntl
 import hashlib
 import importlib.util
@@ -132,7 +133,7 @@ BOARD_NEEDS = {'USB access', '--fel'}
 def load_gate_inputs(index):
     """What the checks declare for the gate (GATE_RUNS, GATE_BOARD, GATE_WAIVED; checks/check-index.py) and the images it builds."""
     gate = {name: entry.get('gate', {}) for name, entry in index.items()}
-    return {'images': gate_images.IMAGES, 'bundles': gate_images.BUNDLES,
+    return {'images': gate_images.IMAGES, 'bundles': gate_images.BUNDLES, 'fixtures': gate_images.FIXTURES,
             'checks': {n: {'runs': [{'args': a} for a in g['runs']]} for n, g in gate.items() if 'runs' in g},
             'board': [n for n, g in gate.items() if 'board' in g],
             'waived': {n: g['waived'] for n, g in gate.items() if 'waived' in g}}
@@ -164,9 +165,9 @@ def classify_affected(entries, index, inputs):
 
 
 def placeholders(command):
-    """The (kind, name) pairs a registered command asks for: {elf:IMAGE}, {build:IMAGE}, {session:IMAGE} and {bundle:NAME}."""
+    """The (kind, name) pairs a registered command asks for: {elf:IMAGE}, {build:IMAGE}, {session:IMAGE}, {bundle:NAME} and {fixture:NAME}."""
     return sorted({(m.group(1), m.group(2)) for part in command
-                   for m in re.finditer(r'\{(elf|build|session|bundle):([A-Za-z0-9_-]+)\}', part)})
+                   for m in re.finditer(r'\{(elf|build|session|bundle|fixture):([A-Za-z0-9_-]+)\}', part)})
 
 
 def compatibility_variables(source):
@@ -346,7 +347,10 @@ def main(argv=None):
         for name in classified['supplied']:
             for run_ in inputs['checks'][name]['runs']:
                 for kind, image in placeholders(run_['args']):
-                    if kind == 'bundle':
+                    if kind == 'fixture':
+                        if image not in inputs['fixtures']:
+                            parser.error('%s names the unknown fixture %s' % (name, image))
+                    elif kind == 'bundle':
                         if image not in inputs['bundles']:
                             parser.error('%s names the unknown bundle %s' % (name, image))
                     elif image in VARIANTS and image not in variants:
@@ -416,6 +420,16 @@ def main(argv=None):
     python = cache / 'venv/bin/python'
     qemu = cache / 'host/usr/bin/qemu-system-aarch64'
     evidence = output / 'evidence'
+
+    def record_peak():
+        """Record what this gate's directories occupy: its output and the build directories of this checkout.
+        preflight sizes the next gate's free space from the last ten (tools/host_space.py)."""
+        try:
+            if not (output / host_space.PEAK_FILE).exists():
+                host_space.write_peak(output, [output, *build_root.glob('gate-*-' + tree)])
+        except OSError:
+            pass
+    atexit.register(record_peak)         # a failed gate keeps everything and still records its peak
 
     fail_fast = args.fail_fast or not (args.full or args.keep_going)
     jobs = 1 if fail_fast else args.jobs
@@ -553,11 +567,13 @@ def main(argv=None):
         return 1
     # An image is built once per tree state: the key names the revision, the tracked diff and the untracked files.
     tree_key = hashlib.sha256(repr(state).encode()).hexdigest()[:16]
-    recipes, bundles, sessions = {}, {}, []
+    recipes, bundles, sessions, fixtures = {}, {}, [], {}
     for check in classified['supplied']:
         for run_ in inputs['checks'][check]['runs']:
             for kind, image in placeholders(run_['args']):
-                if kind == 'bundle':
+                if kind == 'fixture':
+                    fixtures[image] = inputs['fixtures'][image]
+                elif kind == 'bundle':
                     bundles[image] = inputs['bundles'][image]
                 elif image in inputs['images']:
                     recipes[image] = inputs['images'][image]
@@ -585,11 +601,15 @@ def main(argv=None):
     def session_file(image):
         return evidence / 'sessions' / (image + '.bin')
 
+    def fixture_directory(name):
+        return cache / inputs['fixtures'][name]['directory']
+
     def resolve(argument):
         def one(match):
             kind, name = match.group(1), match.group(2)
-            return str({'elf': image_file, 'build': image_directory, 'bundle': bundle_file, 'session': session_file}[kind](name))
-        return re.sub(r'\{(elf|build|session|bundle):([A-Za-z0-9_-]+)\}', one, argument).replace('{cache}', str(cache)).replace('{source}', str(source))
+            return str({'elf': image_file, 'build': image_directory, 'bundle': bundle_file, 'session': session_file,
+                        'fixture': fixture_directory}[kind](name))
+        return re.sub(r'\{(elf|build|session|bundle|fixture):([A-Za-z0-9_-]+)\}', one, argument).replace('{cache}', str(cache)).replace('{source}', str(source))
 
     def discover(name, directory):
         """The build targets that CMake lists, or None after a failure."""
@@ -669,6 +689,9 @@ def main(argv=None):
                                          else ('apps/board-bundles-power/build-opp.py', bundle_args))
                 run('bundle-' + name + '-build', [python, builder, *builder_args,
                                                    '--platform-build', build_dir, '--evidence', output_dir])
+        for name, recipe in fixtures.items():
+            # Idempotent: a fixture that is current is left alone, one that a cache cleanup deleted is rebuilt.
+            run('fixture-' + name, [python, *[value.replace('{directory}', str(fixture_directory(name))) for value in recipe['build']]])
         for image in sessions:
             if results.get('img-' + image + '-build') == 'PASS':
                 run('session-' + image, [python, 'tools/gate_session.py', image_file(image), session_file(image)])
@@ -726,7 +749,8 @@ def main(argv=None):
                 stem = Path(check).stem + ('' if len(inputs['checks'][check]['runs']) == 1 else '-%d' % number)
                 directory = evidence / 'images' / stem
                 command = [python, 'checks/' + check, *[resolve(a).replace('{output}', str(directory)) for a in run_['args']]]
-                needs = [('bundle-%s-build' % image) if kind == 'bundle' else ('session-' + image) if kind == 'session' else
+                needs = [('fixture-' + image) if kind == 'fixture' else ('bundle-%s-build' % image) if kind == 'bundle' else
+                         ('session-' + image) if kind == 'session' else
                          ('os-' + image if image in VARIANTS else 'img-' + image) + '-build'
                          for kind, image in placeholders(run_['args'])]
                 tasks.append({'name': 'image-' + stem, 'command': command, 'script': check,
@@ -809,6 +833,15 @@ def main(argv=None):
         (output / 'gate-record.json').write_text(json.dumps({'tree': tree_hash, 'base': affected_plan['revisions'][0], 'checks': {
             name: index[name].get('inputs', []) for name in selected if name in index}}, indent=1) + '\n')
     note('PASS selected integration checks; unselected behavior is not revalidated')
+    # A passing gate removes its own bulky outputs and those of earlier gates of the same landing (tools/clean-generated.py).
+    record_peak()
+    try:
+        spec = importlib.util.spec_from_file_location('clean_generated', Path(__file__).with_name('clean-generated.py'))
+        cleaner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cleaner)
+        note('retention: freed %.1f MiB of bulky outputs' % (cleaner.slim_after_pass(output, args.label) / 2**20))
+    except Exception as error:
+        note('retention skipped: %s' % error)
     return 0
 
 if __name__ == '__main__':
