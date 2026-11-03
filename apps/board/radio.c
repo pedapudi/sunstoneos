@@ -61,7 +61,7 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
             p->admit,p->admission_context)||
         !a733_radio_platform_init(&r->platform,&p->platform,&r->native.operations,&r->native,
             &p->shared->clocks,&p->shared->pins,&p->shared->rails,&p->shared->pmic)||
-        !a733_radio_platform_four_bit(&r->platform)||
+        (!p->enumeration_only&&!a733_radio_platform_four_bit(&r->platform))||
         (p->first_run_guard&&!a733_radio_platform_first_run_guard(&r->platform))||
         !a733_radio_session_init(&r->session,&r->platform,&p->session))return 0;
     r->constructed=1;atomic_store_explicit(&r->failed,0,memory_order_release);return 1;
@@ -217,6 +217,10 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
         if(result==A733_SESSION_NETWORK)r->recovering=0;
         return publish(r,!atomic_load(&r->session.sockets.offline)&&aic8800_network_ready(&r->session.sockets.network)?
             BOARD_RADIO_NETWORK:BOARD_RADIO_PENDING);
+    }
+    if(result==A733_SESSION_ENUMERATED){
+        /* Enumeration-only session: the card is enumerated and borrowed; this is its end state. */
+        r->stage=SCANNED;report_progress(r);return publish(r,BOARD_RADIO_SCANNED);
     }
     if(result!=A733_SESSION_MANAGEMENT)return publish(r,BOARD_RADIO_PENDING);
     if(now>=r->session.deadline)return retain(r);
@@ -399,11 +403,15 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
         struct board_radio_config sc={.shared=shared,.platform=f->platform,.chip_id=id,.recovery_state=recovery_state,
             .admit=radio_authorize,.admission_context=p,.startup_deadline_us=f->startup_deadline_us,
             .scan_only=1,.first_run_guard=1,.scan_timeout_us=f->association_timeout_us,
+#ifdef SUNSTONE_A733_OS_RADIO_ENUMERATE
+            .enumeration_only=1,
+#endif
             .report_memory={report_allocate,report_release,NULL}};
         sc.session=(struct a733_radio_session_config){.owner_task=owner,.owner=f->session_owner,
             .bootstrap_deadline=f->bootstrap_deadline_us,.runtime_lease_us=f->runtime_lease_us,
             .renew_margin_us=f->renew_margin_us,.transport=f->transport,.bootstrap=f->bootstrap,
-            .firmware={.identity=f->radio_identity,.profile=1},.runtime={.binding_timeout=f->binding_timeout_us},.wifi=f->wifi};
+            .firmware={.identity=f->radio_identity,.profile=1},.runtime={.binding_timeout=f->binding_timeout_us},.wifi=f->wifi,
+            .enumeration_only=sc.enumeration_only};
         for(unsigned i=0;i<4;++i)sc.session.firmware.blobs[i]=(struct aic8800_firmware_blob){
             (const uint8_t *)(uintptr_t)f->firmware_address[i],(size_t)f->firmware_bytes[i]};
         if(!board_radio_init(r,&sc))return 0;

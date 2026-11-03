@@ -67,7 +67,7 @@ int a733_radio_platform_four_bit(struct a733_radio_platform *p)
 int a733_radio_session_init(struct a733_radio_session *s,struct a733_radio_platform *p,
     const struct a733_radio_session_config *c)
 {
-    assert(s==&app.session&&p==&app.platform&&c->owner_task==task&&p->four_bit);
+    assert(s==&app.session&&p==&app.platform&&c->owner_task==task&&(p->four_bit||c->enumeration_only));
     uint8_t output[16];assert(c->runtime.read_platform_id(c->runtime.context,output));
     assert(output[0]==0x44&&output[3]==0x11&&output[15]==0xdd);
     s->deadline=9000;return 1;
@@ -306,6 +306,19 @@ int main(void)
     unsigned retains_before=entropy_retains;time_us=1100;
     assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED&&entropy_retains==retains_before&&board_radio_report(&app)->head.failed==0);
     a733_radio_report_release(&app.report);
+    /* The smallest probe: enumeration only. No widening request, no transport or firmware, and the owner
+     * reports the terminal result as soon as the session says ENUMERATED. */
+    {
+        memset(&app,0,sizeof(app));scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);report_used=0;
+        unsigned widen_before=fast_requests,saved=session_result,scans=scan_calls;
+        struct board_radio_config probe=scan_only;probe.enumeration_only=1;probe.session.enumeration_only=1;
+        assert(board_radio_init(&app,&probe)&&fast_requests==widen_before&&!app.platform.four_bit);
+        scheduler=taskSCHEDULER_RUNNING;time_us=100;app.session.dispatcher.initialized=1;
+        session_result=A733_SESSION_ENUMERATED;
+        assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED&&app.stage==SCANNED&&scan_calls==scans); /* No scan was started. */
+        assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED);
+        session_result=saved;a733_radio_report_release(&app.report);
+    }
     /* The profile-level entry: no WPA2 target makes a scan-only session with no crypto engine. */
     {
         struct board_radio_profile sp=admitted;sp.version=BOARD_RADIO_PROFILE_SCAN_VERSION;
