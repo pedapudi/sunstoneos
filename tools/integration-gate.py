@@ -29,6 +29,7 @@ status-record checks report WARN lines and do not fail the gate unless
 --strict-docs is given.
 """
 import argparse
+import atexit
 import fcntl
 import hashlib
 import importlib.util
@@ -416,6 +417,16 @@ def main(argv=None):
     python = cache / 'venv/bin/python'
     qemu = cache / 'host/usr/bin/qemu-system-aarch64'
     evidence = output / 'evidence'
+
+    def record_peak():
+        """Record what this gate's directories occupy: its output and the build directories of this checkout.
+        preflight sizes the next gate's free space from the last ten (tools/host_space.py)."""
+        try:
+            if not (output / host_space.PEAK_FILE).exists():
+                host_space.write_peak(output, [output, *build_root.glob('gate-*-' + tree)])
+        except OSError:
+            pass
+    atexit.register(record_peak)         # a failed gate keeps everything and still records its peak
 
     fail_fast = args.fail_fast or not (args.full or args.keep_going)
     jobs = 1 if fail_fast else args.jobs
@@ -819,6 +830,15 @@ def main(argv=None):
         (output / 'gate-record.json').write_text(json.dumps({'tree': tree_hash, 'base': affected_plan['revisions'][0], 'checks': {
             name: index[name].get('inputs', []) for name in selected if name in index}}, indent=1) + '\n')
     note('PASS selected integration checks; unselected behavior is not revalidated')
+    # A passing gate removes its own bulky outputs and those of earlier gates of the same landing (tools/clean-generated.py).
+    record_peak()
+    try:
+        spec = importlib.util.spec_from_file_location('clean_generated', Path(__file__).with_name('clean-generated.py'))
+        cleaner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cleaner)
+        note('retention: freed %.1f MiB of bulky outputs' % (cleaner.slim_after_pass(output, args.label) / 2**20))
+    except Exception as error:
+        note('retention skipped: %s' % error)
     return 0
 
 if __name__ == '__main__':

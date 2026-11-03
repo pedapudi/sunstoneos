@@ -141,14 +141,26 @@ The gate and the landing run at nice +10 and the idle I/O class, and image-copyi
 ([board runner](board-runner.md#board-runs-keep-their-timing-while-the-gate-runs)). A check that copies a disk image calls
 `harness.copy_image`, not `shutil.copyfile`; `checks/host-priority.py` checks the priorities and the sparse copy.
 
+### A passing gate removes its bulky outputs
+
+A gate that passes deletes the fixture build trees (`build`, `build-*`, `inputs`) and the files over 8 MiB under its `evidence/` directory,
+and does the same to the earlier gates of the same landing label. It keeps `summary.txt`, `timing.txt`, `commands.txt`,
+`gate-record.json` (which `tools/land.py` reads), `disk-peak.json`, the step logs and the other evidence files. A failed gate keeps
+everything until a later gate of that label passes. The deletion is `slim_gate` in `tools/clean-generated.py` and obeys its refusals:
+no evidence records, sources or build directory that an evidence record or queue entry names. The per-checkout build directories
+(`gate-os-*`, `gate-img-*`, `gate-central-*`) are the incremental build caches and stay; `clean-generated.py stale-builds DAYS` prunes them.
+`clean-generated.py` never deletes a build directory that a check or tool names as `build/NAME` in its source (for example `npu-graph-variants`);
+the set is derived from the sources. `clean-generated.py slim-gates [--apply]` applies the same rule to the passing gate directories already on disk.
+
 ### The gate keeps its temporary files off /tmp
 
 /tmp is a memory-backed volume with a per-user inode and size quota; scratch there stops builds with "Disk quota exceeded".
 [host_space.py](../tools/host_space.py) sets `TMPDIR`, `TMP` and `TEMP` to `tmp` under the build root (the landing: under the cache's
 `build` directory; the board runner: under the cache) at the start of `main()` in `tools/integration-gate.py`, `tools/land.py` and
 `tools/board.py`, so the compilers, CMake, the checks and the helpers all write on the main disk. A base under `/tmp`, `/var/tmp` or
-`/dev/shm` is refused. The gate and the landing also refuse to start, naming the volume, when the build root has less than 30 GiB or
-500,000 inodes free, or `/tmp` has less than 2 GiB or 20,000 inodes free. Fixtures that run the gate or the landing against a scratch
+`/dev/shm` is refused. The gate and the landing also refuse to start, naming the volume, when the build root has less than twice the largest
+disk use (bytes and inodes) that one of the last ten gates recorded in its `disk-peak.json`, or less than 5 GiB
+and 100,000 inodes when none is recorded, or `/tmp` has less than 2 GiB or 20,000 inodes free. Fixtures that run the gate or the landing against a scratch
 sandbox set `SUNSTONE_HOST_SPACE=off`; nothing else does. `checks/host-space.py` runs the gate's environment setup and checks all of this.
 
 ### Failure handling, parallelism and prose checks
