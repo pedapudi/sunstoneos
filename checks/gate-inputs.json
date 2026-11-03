@@ -1103,8 +1103,7 @@
    "runs": [
     {
      "args": [
-      "{elf:sup}",
-      "{elf:ret-gpu}"
+      "{elf:sup}"
      ]
     }
    ]
