@@ -136,7 +136,7 @@ def main():
     board.run_options(cli, submit=True)
     cli.add_argument('--worker', default='synthetic-host-fixture')
     cli.add_argument('--hypothesis', default='host input freezing only')
-    queued = cli.parse_args([str(args.image), '--port', '3-1', '--kind', 'cpu-return', '--expect', 'fixture',
+    queued = cli.parse_args([str(args.image), '--port', '3-1', '--kind', 'cpu-return',
                              '--template', str(template), '--reference', 'docs/board-runner.md#submit-a-frozen-image-and-hypothesis'])
     job = board.Queue(args.output/'synthetic-queue').submit(queued)
     frozen = Path(job['directory'])/'template/dma-authority.json'

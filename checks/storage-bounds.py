@@ -242,7 +242,7 @@ def main():
     parser.add_argument('--evidence', type=Path)
     parser.add_argument('--worker', default='storage-write')
     parser.add_argument('--hypothesis', default='bounds reach the image unchanged')
-    argv = [str(source), '--port', '3-1', '--evidence', str(out / 'run'), '--kind', 'probe', '--expect', 'complete',
+    argv = [str(source), '--port', '3-1', '--evidence', str(out / 'run'), '--kind', 'probe',
             '--reference', 'docs/board-runner.md#submit-a-frozen-image-and-hypothesis', '--storage-write',
             '--approved-by', 'coordinator', '--preserve-dram']
     with patch.object(board, 'port_idle', return_value=True):

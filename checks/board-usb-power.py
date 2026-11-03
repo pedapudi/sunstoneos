@@ -92,7 +92,7 @@ def main():
             with patch.object(fixture, 'Model', HighReturn):
                 result, model, owner = fixture.lifecycle(args.out/('return-'+variant), variant)
             assert result['outcome'] == ('watchdog-reset' if variant == 'watchdog' else
-                                        'host-error' if variant == 'return-decoder' else 'result-mismatch'), result
+                                        'host-error'), result
             assert result['usb_vbus_fault']['site'] == 'usb-vbus-output-high'
             assert model.registers[power.DAT] == 0xa5a50000
             assert result['usb_vbus'][-1]['recovered_low'] and not model.quarantined

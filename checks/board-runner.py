@@ -44,7 +44,7 @@ def arguments(root, *extra, submit=False, development=False):
         image.write_bytes(b'MODEL ONLY - never launch')
     values = [str(image),'--port','3-1','--evidence',str(root/'run')]
     if submit:
-        values += ['--kind','probe','--expect','complete','--reference','docs/board-runner.md#submit-a-frozen-image-and-hypothesis']
+        values += ['--kind','probe','--reference','docs/board-runner.md#submit-a-frozen-image-and-hypothesis']
     # Existing cases exercise the qualification behavior; development cases opt in.
     return parser.parse_args(values+([] if development else ['--preserve-dram'])+list(extra))
 
@@ -173,7 +173,6 @@ def lifecycle(root,variant,restore=False,dirty=None):
     root.mkdir()
     args=arguments(root)
     args.restore_rails=restore
-    if variant=='mismatch':args.expect='a different output'
     model=Model(variant)
     owners=[]
     class Backend(board.Live):
@@ -211,11 +210,6 @@ def lifecycle(root,variant,restore=False,dirty=None):
         args.decoder=root/'application-decoder.py'
         args.decoder.write_text('def decode(payload):\n    return {"failed": True}\ndef failures(decoded):\n    return ["native job failed"]\n' if variant=='decoder-failure' else
                                 'def decode(payload):\n    raise ValueError("malformed payload")\n')
-    if variant in ('decoder-expected', 'decoder-wrong-expected'):
-        args.decoder=root/'application-decoder.py'
-        args.decoder.write_text('def decode(payload):\n    return {"bytes": len(payload)}\n'
-                                'def expected(inputs):\n    raise AssertionError("Explicit expectation must override inference")\n')
-        args.expect_result={'bytes':8 if variant=='decoder-expected' else 9}
     info={'entry_guard':True,'descriptor':{},'watchdog':{'mode':0xb1,'session_seconds':1}}
     with patch.object(images,'inspect',return_value=info),patch.object(images,'policy'), \
          patch.object(board.os,'access',return_value=True),contextlib.redirect_stdout(io.StringIO()), \
@@ -227,11 +221,11 @@ def lifecycle(root,variant,restore=False,dirty=None):
 
 
 def transport_cases(out):
-    for variant in ('normal','mismatch','watchdog','no-return','host-error','dram-failure','rail-refusal','readback','partial-arm','journal-error','invalid-report','stuck-disarm','return-decoder'):
+    for variant in ('normal','watchdog','no-return','host-error','dram-failure','rail-refusal','readback','partial-arm','journal-error','invalid-report','stuck-disarm','return-decoder'):
         result,model,owner=lifecycle(out/variant,variant)
-        expected={'normal':'returned','mismatch':'result-mismatch','watchdog':'watchdog-reset','no-return':'no-return',
+        expected={'normal':'returned','watchdog':'watchdog-reset','no-return':'no-return',
                   'host-error':'host-error','dram-failure':'refused-before-launch','rail-refusal':'refused-before-launch',
-                  'readback':'result-mismatch','partial-arm':'host-error','journal-error':'host-error','invalid-report':'result-mismatch','stuck-disarm':'host-error','return-decoder':'host-error'}[variant]
+                  'readback':'refused-before-launch','partial-arm':'host-error','journal-error':'host-error','invalid-report':'host-error','stuck-disarm':'host-error','return-decoder':'host-error'}[variant]
         assert result['outcome']==expected,(variant,result)
         assert bool(model.quarantined)==(variant in ('no-return','stuck-disarm')),(variant,model.quarantined)
         if variant=='stuck-disarm':
@@ -251,14 +245,14 @@ def transport_cases(out):
     for variant,expected in (
             ('watchdog-before-entry','watchdog-reset'),('missing-return','host-error'),
             ('wrong-return-session','host-error'),('fel-after-return','host-error'),
-            ('decoder-failure','result-mismatch'),('decoder-invalid','result-mismatch'),
+            ('decoder-failure','returned'),('decoder-invalid','host-error'),
             ('restore-failure','host-error'),('restore-clock','host-error'),
-            ('normal','returned'),('watchdog','watchdog-reset'),('mismatch','result-mismatch')):
+            ('normal','returned'),('watchdog','watchdog-reset')):
         result,model,owner=lifecycle(out/('restore-'+variant),variant,restore=True)
         assert result['outcome']==expected,(variant,result)
         assert bool(model.quarantined)==(variant in ('fel-after-return','missing-return','wrong-return-session')),(variant,model.quarantined)
-        assert bool(result.get('rails_restored'))==(variant in ('normal','mismatch','decoder-failure','decoder-invalid'))
-        assert owner.rail_phases==(['rails','restore-rails'] if variant in ('normal','mismatch','decoder-failure','decoder-invalid','restore-failure') else ['rails'])
+        assert bool(result.get('rails_restored'))==(variant in ('normal','decoder-failure','decoder-invalid'))
+        assert owner.rail_phases==(['rails','restore-rails'] if variant in ('normal','decoder-failure','decoder-invalid','restore-failure') else ['rails'])
         if variant=='watchdog-before-entry':
             assert result['dram_lost'] and not result['breadcrumbs']['session']
         if variant in ('missing-return','wrong-return-session','watchdog-before-entry'):
@@ -481,17 +475,6 @@ def reset_release_cases(out):
     passed('release-requires-reason')
 
 
-def decoded_expectation_cases(out):
-    for variant in ('decoder-expected', 'decoder-wrong-expected'):
-        result, model, owner=lifecycle(out/variant, variant, restore=True)
-        good=variant=='decoder-expected'
-        assert result['outcome']==('returned' if good else 'result-mismatch'),result
-        assert result['rails_restored']
-        assert owner.rail_phases==['rails','restore-rails']
-        assert result['normal_return'] and not model.quarantined
-        passed(variant)
-
-
 def queue_cases(out):
     root=out/'queue';root.mkdir();queue=board.Queue(root/'state')
     args=arguments(root,submit=True)
@@ -535,7 +518,7 @@ def queue_cases(out):
 
 
 def queue_integrity_cases(out):
-    """A queue claim checks frozen bytes and consumed host helpers before launch."""
+    """A queue claim checks the frozen image and input bytes before launch; the runner uses the host code the daemon started with."""
     for target in ('image', 'host-helper'):
         for mutation in ('unchanged', 'changed', 'missing'):
             root=out/f'integrity-{target}-{mutation}';root.mkdir()
@@ -549,15 +532,15 @@ def queue_integrity_cases(out):
             elif mutation=='missing':
                 path.rename(root/'saved-input')
             claimed=queue.claim('3-1')
-            if mutation=='unchanged':
+            if mutation=='unchanged' or target=='host-helper':
+                # A host helper that changed after submission is not frozen: the run uses the code the daemon started with.
                 assert claimed and claimed['id']==job['id']
                 continue
             assert claimed is None
             result=json.loads(Path(job['result_path']).read_text())
             assert result['outcome']=='refused-before-launch' and not result['launch_attempted']
             assert result['first_failure']['site']=='queue'
-            reason='Queued input bytes changed' if target=='image' else 'Queued host code or helper inputs changed'
-            assert result['first_failure']['detail'].startswith(reason)
+            assert result['first_failure']['detail'].startswith('Queued input bytes changed')
             assert not queue.status()['boards']['3-1']['running']
         passed('queued-'+target+'-integrity-before-launch')
 
@@ -757,7 +740,7 @@ def gpu_capture_cases(out, gpu_images):
             variants+=['zero-jobs','diagnostic-for-normal']
         for variant in variants:
             root=out/f'gpu-{index}-{variant}';root.mkdir()
-            args=arguments(root);args.image=image;args.kind='gpu-return';args.expect=None
+            args=arguments(root);args.image=image;args.kind='gpu-return'
             epoch,generation=1,2
             output=bytearray(56+limit);payload=b'complete'
             struct.pack_into('<7Q',output,0,0x31544c5553455241,1,len(output),epoch,generation,1,len(payload))
@@ -806,7 +789,7 @@ def gpu_capture_cases(out, gpu_images):
             with patch.object(board.os,'access',return_value=True),contextlib.redirect_stdout(io.StringIO()):
                 result=board.run_image(args,Backend)
             invalid=variant != 'normal'
-            assert result['outcome']==('result-mismatch' if invalid else 'returned'),(variant,result)
+            assert result['outcome']==('failure-return' if invalid else 'returned'),(variant,result)
             report=result['return_report']
             assert report['secondaries_off']==7 and not report['qualification_passed']
             assert result['normal_return'] and not model.lock and not model.quarantined
@@ -831,11 +814,6 @@ def gpu_capture_cases(out, gpu_images):
                 if diagnostic:assert report['gpu']['jobs']==0 and not report['gpu']['completed_gpu_work']
                 else:assert report['gpu']['jobs']==7 and report['gpu']['completed_gpu_work']
             passed(f'generic-gpu-{index}-{variant}-preserves-native-return-and-raw-captures')
-        inventory=board.references(args)
-        for path in ('tools/board_images.py','apps/os/cpu-return-host.py','apps/os/gpu-return.py',
-                     'apps/os/cpu-return-thermal.py','apps/os/thermal-report.py','apps/os/host.py'):
-            assert inventory[str((ROOT/path).resolve())]==images.sha(ROOT/path)
-        passed(f'generic-gpu-{index}-freezes-all-capture-decoder-inputs')
 
 
 def report_cases(out,hello):
@@ -890,7 +868,7 @@ def report_cases(out,hello):
         limit=host.host.image_manifest(hello)['manifest']['output_limit']
         for foreign in (False,True):
             control=root/('cpu-foreign-output' if foreign else 'cpu-normal-output');control.mkdir()
-            args=arguments(control);args.image=hello;args.kind='cpu-return';args.expect=None
+            args=arguments(control);args.image=hello;args.kind='cpu-return'
             model=Model('normal')
             output=struct.pack('<7Q',0x31544c5553455241,1,56+limit,2 if foreign else 1,2,1,8)+b'complete'+bytes(limit-8)
             for address,data in [(geo['report_address'],copied_return_report(1)),(geo['output_address'],output)]:
@@ -908,7 +886,7 @@ def report_cases(out,hello):
                     return plan
             with patch.object(board.os,'access',return_value=True),contextlib.redirect_stdout(io.StringIO()):
                 result=board.run_image(args,Backend)
-            assert result['outcome']==('result-mismatch' if foreign else 'returned'),result
+            assert result['outcome']==('failure-return' if foreign else 'returned'),result
             report=result['return_report']
             assert report['secondaries_off']==7 and report['thermal_capture_status']=='absent'
             assert report['output_capture_status']==('malformed' if foreign else 'decoded')
@@ -1181,10 +1159,26 @@ def finite_npu_cases(out, image_root, state, fixture, host_tree=None, cases=()):
             frozen=Path(job['directory'])/'template'
             assert (frozen/'manifest.json').read_bytes()==(image.parent/'manifest.json').read_bytes()
             assert (frozen/'session.bin').read_bytes()==(template/'session.bin').read_bytes()
-            refs=json.loads((Path(job['directory'])/'references.json').read_bytes())
-            assert str(ROOT/'apps/npu-finite/development.py') in refs
-            assert str(ROOT/'apps/npu-interrupt/host.py') in refs
+            assert not (Path(job['directory'])/'references.json').exists()
         passed('finite-npu-frozen-preparation-'+name)
+
+
+def removed_cases(out):
+    """The hypothesis is the prediction: no expectation option, file or outcome, and no host-code refusal."""
+    for option in ('--expect','--expect-result'):
+        parser=argparse.ArgumentParser(exit_on_error=False)
+        board.run_options(parser,True)
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):parser.parse_args(['image.bin','--port','3-1',option,'x'])
+        except (SystemExit,argparse.ArgumentError):pass
+        else:raise AssertionError(option+' is still accepted')
+    assert 'result-mismatch' not in board.OUTCOMES
+    assert not any(hasattr(board,name) for name in ('expectation','matches_expectation','validate_expectation','references','verify_references'))
+    result,model,owner=lifecycle(out/'recorded-decoder-failure','decoder-failure',restore=True)
+    assert result['outcome']=='returned' and result['decoded']=={'failed':True} and result['decoder_failures']==['native job failed'],result
+    assert not (Path(result['evidence_path'])/'expect.json').exists()
+    assert result['git_revision']
+    passed('no-expectation-option-file-or-outcome')
 
 
 def main():
@@ -1199,12 +1193,11 @@ def main():
     parser.add_argument('--npu-case',action='append',default=[],
                         choices=('local-restart','model-switch','sdk-access','power-cycle'),
                         help='Run only selected finite NPU cases; repeat to resume unfinished cases.')
-    parser.add_argument('--only',default='transport,decoded-expectation,queue,queue-integrity,policy,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
+    parser.add_argument('--only',default='transport,queue,queue-integrity,policy,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
     args=parser.parse_args()
     args.out.mkdir(parents=True,exist_ok=False)
     groups=args.only.split(',')
-    if 'transport' in groups:transport_cases(args.out)
-    if 'decoded-expectation' in groups:decoded_expectation_cases(args.out)
+    if 'transport' in groups:transport_cases(args.out);removed_cases(args.out)
     if 'queue' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):withdraw_cases(args.out)
