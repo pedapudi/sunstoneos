@@ -2,7 +2,6 @@
  * observations below are explicit checkpoints, not RF or entropy evidence. */
 #include "../apps/board/radio.c"
 #include "../drivers/net/a733_radio_result.c"
-#include <stdlib.h>
 #include <assert.h>
 #include <stdio.h>
 static struct board_radio app;
@@ -111,8 +110,16 @@ int a733_radio_session_take_event(struct a733_radio_session *s,struct aic8800_di
     memcpy(e->metadata.scan.bssid,n==2?"\x02\x00\x00\x00\x00\x02":"\x02\x00\x00\x00\x00\x01",6);
     return 1;
 }
-static void *report_allocate(void *context,size_t bytes){assert(context==&allocations);++allocations;return malloc(bytes);}
-static void report_release(void *context,void *memory){assert(context==&allocations);free(memory);}
+/* A bump arena: the freestanding image headers used by sibling checks provide no malloc. */
+static _Alignas(16) uint8_t report_arena[8192];
+static size_t report_used;
+static void *report_allocate(void *context,size_t bytes)
+{
+    assert(context==&allocations);++allocations;
+    bytes=(bytes+15u)&~15u;if(bytes>sizeof(report_arena)-report_used)return NULL;
+    void *p=report_arena+report_used;report_used+=bytes;return p;
+}
+static void report_release(void *context,void *memory){assert(context==&allocations);(void)memory;}
 int a733_radio_session_take_record(struct a733_radio_session *s,struct aic8800_dispatch_record *d)
 {assert(s==&app.session&&d==&app.diagnostic);return 1;}
 int sunstone_net_submit(struct sunstone_net *s,const struct sunstone_net_request *r,uint64_t *ticket)
@@ -228,7 +235,7 @@ int main(void)
     assert(board_radio_external_failure(&app)==BOARD_RADIO_RETAINED&&entropy_calls==polls&&entropy_retains==3);
     /* The staged service with no credential: guard request, scan before anything else, no
      * entropy, connect or network, and a terminal SCANNED result with every access point recorded. */
-    memset(&app,0,sizeof(app));staged=1;scan_events_left=3;scan_finished=0;
+    memset(&app,0,sizeof(app));staged=1;scan_events_left=3;scan_finished=0;report_used=0;
     unsigned entropy_before=entropy_calls,connects_before=connects,network_before=network_calls,security_before=security_calls;
     struct board_radio_config scan_only={.shared=&shared,.chip_id=&id,.admit=admission,.recovery_state=&recovery_state,
         .platform={.lifetime_deadline_us=10000},.session={.owner_task=task,.bootstrap_deadline=500},
@@ -257,7 +264,7 @@ int main(void)
     assert(entropy_calls==entropy_before&&connects==connects_before&&network_calls==network_before&&security_calls==security_before);
     /* A scan that does not finish in time retains the radio with no entropy involved. */
     a733_radio_report_release(&app.report);
-    memset(&app,0,sizeof(app));scan_events_left=0;scan_finished=0;scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);
+    memset(&app,0,sizeof(app));scan_events_left=0;scan_finished=0;report_used=0;scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);
     assert(board_radio_init(&app,&scan_only));scheduler=taskSCHEDULER_RUNNING;time_us=100;app.session.dispatcher.initialized=1;
     assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==SCANNING);
     unsigned retains_before=entropy_retains;time_us=1100;
