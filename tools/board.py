@@ -1106,15 +1106,19 @@ def session_files():
 def require_daemon_code(queue_root):
     """Refuse a pre-flight that ran code the daemon will not run.
 
-    serve() records its checkout in daemon.json. The runner the daemon starts prepares and admits the session with that
-    checkout's files, so a check or submission from another checkout is valid only if every session file is the same."""
+    serve() records its checkout and the revision it started from in daemon.json. The runner the daemon starts prepares and admits
+    the session with the files of that revision, so a check or submission from another checkout is valid only if every session file is
+    the same as in the started revision, whatever the checkout's HEAD has advanced to since."""
     record = Path(queue_root)/'daemon.json'
     if not record.is_file():
         return
-    daemon = Path(json.loads(record.read_text())['root'])
+    running = json.loads(record.read_text())
+    daemon = Path(running['root'])
     if daemon.resolve() == ROOT.resolve():
         return
-    revision = subprocess.run(['git', '-C', str(daemon), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+    # The revision the daemon started from, not the checkout's HEAD now: bringup advances while a daemon keeps running.
+    revision = running.get('started_revision') or ''
+    require(revision, 'daemon.json names no started_revision; restart the daemon')
     differing = []
     for name in session_files():
         shown = subprocess.run(['git', '-C', str(daemon), 'show', revision+':'+name], capture_output=True)

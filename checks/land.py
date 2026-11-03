@@ -204,6 +204,18 @@ def run(root):
     (fx.cache / 'gate-fail').unlink()
     passed('failed gate refusal')
 
+    # A gate that exits at argument validation writes no summary: the refusal quotes the end of the gate's log.
+    w = fx.worker('early-exit')
+    commit(w, 'early.txt', 'x\n', 'early exit work')
+    (fx.root / 'early.py').write_text('import sys\nprint("line1")\nfor n in range(40):\n    print("noise", n)\nsys.stdout.flush()\nprint("error: names the unknown image npu-graphs", file=sys.stderr)\nsys.exit(2)\n')
+    before, runs = fx.origin_tip(), fx.gate_runs()
+    result = fx.land(w, '--gate-command', '%s %s' % (sys.executable, fx.root / 'early.py'))
+    assert result.returncode and 'names the unknown image npu-graphs' in result.stderr, result.stderr
+    assert 'wrote no summary' in result.stderr and 'exit 2' in result.stderr and 'line1' not in result.stderr, result.stderr
+    assert any('land-early-exit-' in p.name and p.name.endswith('-gate.log') for p in (fx.cache / 'build').iterdir())
+    assert fx.origin_tip() == before
+    passed('a gate that exits early is refused with the end of its log')
+
     # A check without a registry answer: refused after the merge and before the gate.
     w = fx.worker('unregistered')
     commit(w, 'unregistered.txt', 'x\n', 'unregistered check')
