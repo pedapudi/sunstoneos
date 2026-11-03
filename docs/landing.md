@@ -42,8 +42,9 @@ The tool compares the diff against `bringup` with the glob `docs/**`.
   (`checks/gate-inputs.py`) beside it. The gate selects the checks whose inputs
   the diff touches and reports every failure. If that check finds a check that
   declares no `GATE_RUNS`, `GATE_BOARD` or `GATE_WAIVED`, the tool stops the gate and refuses.
-  The gate passes when `~/.cache/sunstoneos/build/gate-LABEL/summary.txt` has a
-  `PASS selected` line and no `FAIL` line; a refusal quotes the failing lines.
+  The gate's output goes to `~/.cache/sunstoneos/build/land-LABEL-gate.log`. The gate passes when it exits 0 and
+  `~/.cache/sunstoneos/build/gate-LABEL/summary.txt` has a `PASS selected` line and no `FAIL` line; a refusal quotes the failing
+  lines and the last 30 lines of the log, which is all there is when the gate exits at argument validation and writes no summary.
 
 The gate runs in the integration worktree `~/.cache/sunstoneos/land-integration`,
 which the tool detaches at the commit to land. Every code landing gates there,
