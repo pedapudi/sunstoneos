@@ -18,14 +18,22 @@ association, and what it reports to the host.
 | `enumerated` | CMD5, CMD3, CMD7 and the CCCR and tuple reads complete | OCR offered and selected, RCA, CCCR, SDIO and SD revisions, capabilities, function count, each function's manufacturer and device identity, bus width and card clock |
 | `firmware` | The firmware is loaded and started | Firmware flags |
 | `identified` | The chip and subrevision words are read | Both words |
-| `scanned` | A scan completes | Up to 16 access points: BSSID, SSID, channel, frequency and RSSI, one per BSSID with the strongest kept when the list is full, and the count reported by the firmware |
+| `scanned` | A scan completes | Every access point found: BSSID, SSID, channel, frequency and RSSI, one entry per BSSID (the latest sighting), the count the firmware reported and the count dropped for lack of memory |
 | `associated` | Association completes | Open work |
 
 A failure keeps the stage reached and names the stage that did not complete. A
-later stage implies every earlier one. The result is the fixed 928-byte record
-in `include/a733_radio_result.h`, which `tools/radio_result.py` decodes.
-`a733_radio_result_platform()` fills the platform's part from its own state;
-the later stages add their facts through the setters in the same header.
+later stage implies every earlier one.
+
+The service keeps a report object (`include/a733_radio_result.h`). Its scan list
+is allocated from memory, through an allocator the build supplies (the FreeRTOS
+heap in the radio build), and grows with what the scan finds. The only counts
+fixed in the record are protocol or topology counts: SDIO function numbers 0 to
+7, and the four observed supplies. A report encodes to a variable-length record:
+a 232-byte head that gives the total length and the access point count, then one
+44-byte entry per access point. `tools/radio_result.py` reads the length from the
+head (`record_length()` on the first 232 bytes tells a reader how much more to
+fetch). `a733_radio_report_platform()` fills the platform's part from its own
+state; the later stages add their facts through the setters in the same header.
 
 ## The first-run guard stops before any write unless the board matches
 
@@ -54,9 +62,9 @@ returns normally; its result is the record up to `scanned`.
 ## What remains before a board run
 
 1. **Scan results.** The management layer holds one scan result at a time. The
-   session must copy each result into the record through
-   `a733_radio_result_ap()` as it arrives, then call
-   `a733_radio_result_scan_done()` with the firmware's reported count.
+   session must copy each result into the report through
+   `a733_radio_report_ap()` as it arrives, then call
+   `a733_radio_report_scan_done()` with the firmware's reported count.
 2. **A radio build without entropy.** `board_radio_startup()` refuses
    construction without CE entropy qualification, and the radio profile carries
    the WPA2 target. A scan-only profile must construct the platform and session
@@ -70,8 +78,11 @@ returns normally; its result is the record up to `scanned`.
    design and a host check; until it exists a radio run ends by watchdog reset
    and power removal, as the supervised build does.
 4. **A host channel for the record.** The radio result is not part of the USB0
-   output today. The record must travel in the generic application result
-   (`ss_finish()`), or the OS must add an operation for it.
+   output today, and the record's length is known only when the service ends.
+   The service copies the encoded record into retained memory sized to its
+   length and publishes a small fixed descriptor (magic, address, length) at a
+   known symbol. The host reads the descriptor, then the record in transfers of
+   the channel's measured maximum, so no record is truncated.
 5. **Host preparation.** `apps/os/prepare.py` and `radio-assets.py` require the
    entropy facts and a WPA2 target in the profile; a scan-only profile needs the
    same admission without them, and the preparation must accept the first-run

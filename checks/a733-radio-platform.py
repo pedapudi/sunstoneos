@@ -79,8 +79,14 @@ assert scanned['stage'] == 'scanned' and scanned['scan']['listed'] == 2 and scan
 assert [a['ssid'] for a in scanned['scan']['aps']] == ['guest', 'lab'] and scanned['scan']['aps'][0]['channel'] == 36
 assert scanned['scan']['aps'][1]['rssi_dbm'] == -55 and scanned['scan']['aps'][1]['channel'] == 6
 assert scanned['identity']['chip_word'] == 0x00080001
+many = records['ready-many']
+assert many['scan']['listed'] == 302 and many['scan']['reported'] == 303 and many['scan']['dropped'] == 0
+assert len(many['scan']['aps']) == 302 and many['stage'] == 'scanned'
+for name in ('ready', 'ready-scanned', 'ready-many'): # The decoder reads the length from the head.
+    raw = [bytes.fromhex(l.split()[2]) for l in ''.join(outputs).splitlines() if l.startswith('RESULT ' + name + ' ')][0]
+    assert radio_result.record_length(raw[:radio_result.HEAD_BYTES]) == len(raw)
 guard = records['guard-ready']
-assert guard['guard']['enabled'] and guard['pad_power']['pg'] == 'invalid' and guard['pad_power']['pm'] == '1.8V'
+assert guard['guard']['asked'] and guard['pad_power']['pg'] == 'invalid' and guard['pad_power']['pm'] == '1.8V'
 assert [r['rail'] for r in guard['rails']] == ['dcdc1', 'dcdc8', 'bldo5', 'cldo1'] and guard['rails'][1]['selector'] == 100
 refused = records['guard-pg-supplied']
 assert refused['failed'] and refused['stage'] == 'rails-observed' and refused['failed_at'] == 'guard-passed'
@@ -93,7 +99,7 @@ run(['patch', '--silent', '-o', smp_port/'portmacro.h',
      kernel/'portable/GCC/ARM_CR82/portmacro.h', root/'patches/freertos-smp-macro.patch'])
 native = [compiler, '--target=aarch64-none-elf', '-std=c11', '-O2', '-ffreestanding',
           '-fno-builtin', '-Wall', '-Wextra', '-Werror']
-for source in ['drivers/net/a733_radio_platform.c', 'drivers/net/a733_radio_platform_native.c']:
+for source in ['drivers/net/a733_radio_platform.c', 'drivers/net/a733_radio_platform_native.c', 'drivers/net/a733_radio_result.c']:
     variants = ['single', 'smp'] if source.endswith('_native.c') else ['single']
     for variant in variants:
         obj = args.evidence/(pathlib.Path(source).stem+'-'+variant+'.o')

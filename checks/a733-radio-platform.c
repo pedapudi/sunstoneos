@@ -1,6 +1,7 @@
 /* Actual PMIC, rail, pin, clock, SDIO and card composition on modeled MMIO. */
 #define PMIC_MODEL_NO_MAIN
 #include "a733-pmic.c"
+#include <stdlib.h>
 #include <string.h>
 #include "a733_radio_platform_native.h"
 #include "a733_radio_result.h"
@@ -15,23 +16,6 @@ struct radio_model {
     unsigned fraction,gpio_cost;
 };
 static struct radio_model r;
-/* One line per record for the host decoder check: RESULT name hex. */
-static void emit_result(const char *name,const struct a733_radio_platform *p,unsigned scan)
-{
-    static struct a733_radio_result record;memset(&record,0,sizeof(record));
-    a733_radio_result_platform(&record,p);
-    if(scan){
-        static const uint8_t bssid_a[6]={0x02,0x11,0x22,0x33,0x44,0x55},bssid_b[6]={0x02,0xaa,0xbb,0xcc,0xdd,0xee};
-        a733_radio_result_firmware(&record);a733_radio_result_identity(&record,0x00080001,0x20);
-        a733_radio_result_ap(&record,bssid_a,(const uint8_t *)"lab",3,2437,-61);
-        a733_radio_result_ap(&record,bssid_b,(const uint8_t *)"guest",5,5180,-48);
-        a733_radio_result_ap(&record,bssid_a,(const uint8_t *)"lab",3,2437,-55);
-        a733_radio_result_scan_done(&record,3);
-    }
-    printf("RESULT %s ",name);
-    for(size_t i=0;i<sizeof(record);++i)printf("%02x",((const uint8_t *)&record)[i]);
-    printf("\n");
-}
 /* Every PMIC register data write, with the PM1 level and time at which it happened. */
 static struct {uint8_t reg,value;unsigned pm1;uint64_t at;} pmic_log[16];
 static unsigned pmic_log_count,stuck_enable,guard_config;
@@ -42,6 +26,40 @@ static void pmic_logged(void *v,uint8_t reg,uint8_t value)
     pmic_log[pmic_log_count].pm1=!!(*pmic_model_word(&m->power,0x07025040)&2);
     pmic_log[pmic_log_count++].at=m->power.now;
     if(stuck_enable&&reg==0x21)m->power.pmic[0x21]&=(uint8_t)~4u; /* The output refuses to turn on. */
+}
+/* One line per record for the host decoder check: RESULT name hex. */
+static void *report_allocate(void *context,size_t bytes){++*(unsigned *)context;return malloc(bytes);}
+static void report_release(void *context,void *memory){(void)context;free(memory);}
+static void emit_result(const char *name,const struct a733_radio_platform *p,unsigned scan)
+{
+    static unsigned allocations;
+    struct a733_radio_report report;
+    const struct a733_radio_allocator memory={report_allocate,report_release,&allocations};
+    assert(a733_radio_report_init(&report,&memory));
+    a733_radio_report_platform(&report,p);
+    if(scan){
+        static const uint8_t bssid_a[6]={0x02,0x11,0x22,0x33,0x44,0x55},bssid_b[6]={0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+        a733_radio_report_firmware(&report);a733_radio_report_identity(&report,0x00080001,0x20);
+        a733_radio_report_ap(&report,bssid_a,(const uint8_t *)"lab",3,2437,-61);
+        a733_radio_report_ap(&report,bssid_b,(const uint8_t *)"guest",5,5180,-48);
+        a733_radio_report_ap(&report,bssid_a,(const uint8_t *)"lab",3,2437,-55);
+        a733_radio_report_scan_done(&report,3);
+    }
+    if(scan==2){ /* Far more access points than any fixed list: 300, then the record is longer than its head. */
+        for(unsigned i=0;i<300;++i){
+            uint8_t bssid[6]={2,0,0,0,(uint8_t)(i>>8),(uint8_t)i};char ssid[8];ssid[0]='n';ssid[1]=(char)('0'+i%10);ssid[2]=0;
+            a733_radio_report_ap(&report,bssid,(const uint8_t *)ssid,2,(uint16_t)(2412+5*(i%11)),(int8_t)(-30-(int)(i%60)));
+        }
+        a733_radio_report_scan_done(&report,303);
+    }
+    size_t bytes=a733_radio_report_bytes(&report);
+    uint8_t *record=malloc(bytes);
+    assert(!a733_radio_report_encode(&report,record,bytes-1)); /* Too small a buffer writes nothing. */
+    assert(a733_radio_report_encode(&report,record,bytes)==bytes);
+    printf("RESULT %s ",name);
+    for(size_t i=0;i<bytes;++i)printf("%02x",record[i]);
+    printf("\n");
+    free(record);a733_radio_report_release(&report);
 }
 static int radio_pin_write(void *v,uintptr_t a,uint32_t value)
 {
@@ -227,7 +245,7 @@ int main(void)
     enum a733_radio_platform_result status=A733_RADIO_PENDING;
     for(unsigned i=0;i<4000 && status!=A733_RADIO_READY;++i){status=radio_step();assert(status!=A733_RADIO_RETAINED);}
     assert(status==A733_RADIO_READY && r.radio.card.function_count==2 && r.radio.host.card_hz==400000);
-    emit_result("ready",&r.radio,0);emit_result("ready-scanned",&r.radio,1);
+    emit_result("ready",&r.radio,0);emit_result("ready-scanned",&r.radio,1);emit_result("ready-many",&r.radio,2);
     assert(r.radio.rail_count==3 && r.radio.rail_index==3 && !r.radio.pmic_request.id && !r.radio.power_on);
     assert(r.radio.snapshots[0].programmed_uv==3300000 && r.radio.snapshots[1].programmed_uv==1800000 &&
         r.radio.snapshots[2].programmed_uv==1800000);
