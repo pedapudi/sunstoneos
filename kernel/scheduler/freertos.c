@@ -704,6 +704,12 @@ static __attribute__((noinline)) void ssKernelObjectSuspendAt(uintptr_t object, 
     portCLEAR_INTERRUPT_MASK(irq);
 }
 __attribute__((noinline)) void ssKernelObjectSuspend(void) { ssKernelObjectSuspendAt(0, (uintptr_t)__builtin_return_address(0)); }
+#ifdef SS_OBJECT_LOCKS_GLOBAL
+/* Control build: the object sources use the global locks, as before the object locks, but pass their object. */
+__attribute__((noinline)) void ssKernelObjectEnterOnGlobal(const void *object) { ssKernelObjectEnterAt((uintptr_t)object, (uintptr_t)__builtin_return_address(0)); }
+__attribute__((noinline)) UBaseType_t ssKernelObjectEnterFromISROnGlobal(const void *object) { return ssKernelObjectEnterFromISRAt((uintptr_t)object, (uintptr_t)__builtin_return_address(0)); }
+__attribute__((noinline)) void ssKernelObjectSuspendOnGlobal(const void *object) { ssKernelObjectSuspendAt((uintptr_t)object, (uintptr_t)__builtin_return_address(0)); }
+#endif
 BaseType_t ssKernelObjectResume(void)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
@@ -829,6 +835,11 @@ void ssKernelObjectLeave(void)
     ssKernelCommandsFinish(true);
     if (yield && ssKernelCanPreempt()) portYIELD();
 }
+#ifdef SS_OBJECT_LOCKS_GLOBAL
+static UBaseType_t ssObjectIsrEnterSlot(unsigned slot, const void *object, uintptr_t site)
+{ (void)slot; (void)object; (void)site; return ssKernelObjectEnterFromISR(); }
+static void ssObjectIsrLeave(UBaseType_t irq) { ssKernelObjectExitFromISR(irq); }
+#else
 /* The interrupt-side section of a slot. Also used by the owner to repair or time out a waiter on the slot's lists. */
 static __attribute__((noinline)) UBaseType_t ssObjectIsrEnterSlot(unsigned slot, const void *object, uintptr_t site)
 {
@@ -850,6 +861,7 @@ static void ssObjectIsrLeave(UBaseType_t irq)
     }
     portCLEAR_INTERRUPT_MASK(irq);
 }
+#endif
 __attribute__((noinline)) UBaseType_t ssKernelObjectEnterFromISROn(const void *object)
 {
     return ssObjectIsrEnterSlot(ssObjectSlot(object), object, (uintptr_t)__builtin_return_address(0));
@@ -897,6 +909,10 @@ BaseType_t ssKernelObjectResumeOn(void)
     if (yield && ssKernelCanPreempt()) portYIELD();
     return yield ? pdTRUE : pdFALSE;
 }
+#ifdef SS_OBJECT_LOCKS_GLOBAL
+static UBaseType_t ssDonationEnter(void) { return ssKernelObjectEnterFromISR(); }
+static void ssDonationLeave(UBaseType_t irq) { ssKernelObjectExitFromISR(irq); }
+#else
 /* The leaf lock of priority donation, taken with the mask raised. */
 static UBaseType_t ssDonationEnter(void)
 {
@@ -910,6 +926,7 @@ static void ssDonationLeave(UBaseType_t irq)
     ssKernelFlush(); /* publishes a donation repair now unless an enclosing section does it at its exit */
     portCLEAR_INTERRUPT_MASK(irq);
 }
+#endif
 
 /* Owner-local state transitions. Event-list metadata alone is protected by the
  * compatibility object lock. Only the selected owner touches ready/deadlines. */
@@ -1337,15 +1354,19 @@ static void ssKernelEventBlock(List_t *list, TickType_t value, TickType_t ticks,
     /* The caller holds its object's task-side lock (a suspension or a critical section). Insert under the interrupt-side
      * lock of the same slot as well, so that an owner timing out another waiter of this list cannot edit it at the same
      * moment, and record the slot for that owner and for priority repair. */
+#ifndef SS_OBJECT_LOCKS_GLOBAL
     struct ssKernelCPU *self = &ssKernelCPUs[ssKernelCPUId()];
     configASSERT(self->o_depth);
     s->event_slot = self->t_slot;
     UBaseType_t irq = ssObjectIsrEnterSlot(self->t_slot, list, (uintptr_t)__builtin_return_address(0));
+#endif
     if (unordered) {
         listSET_LIST_ITEM_VALUE(&t->xEventListItem, value | taskEVENT_LIST_ITEM_VALUE_IN_USE);
         vListInsertEnd(list, &t->xEventListItem);
     } else vListInsert(list, &t->xEventListItem);
+#ifndef SS_OBJECT_LOCKS_GLOBAL
     ssObjectIsrLeave(irq);
+#endif
     ssKernelBlock(ticks, indefinite, SS_K_EVENT);
 }
 static BaseType_t ssKernelEventWake(ListItem_t *item, TickType_t value, bool unordered)

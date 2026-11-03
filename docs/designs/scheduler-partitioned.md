@@ -1073,6 +1073,35 @@ Prediction for the entry/gap split (soaks of the unmodified fork, 25 s, task pat
 
 Prediction for the lock attribution: the waits over 5 us are on the task lock and the interrupt lock in comparable shares, more than 60% of them are charged to a holder acting on a different object than the waiter, and the rest are the same object (the allocator's recursive mutex and one or two queues). If so, most of the tail is serialization of independent objects, which per-object locks remove; if instead the same object dominates, a per-object lock cannot help and the tail needs shorter holds.
 
+### Object locks: queues, event groups and stream buffers lock their own object
+
+Before this change every queue, event group and stream buffer section took the two global locks (the task lock and the interrupt lock), the same two locks as a public `taskENTER_CRITICAL()`. Operations on unrelated objects therefore queued behind each other with the interrupt mask raised.
+
+Mechanism. An object hashes, by its address, to one of 64 slots (`SS_OBJECT_SLOTS`). Each slot has a task-side ticket lock T and an interrupt-side ticket lock I, the roles of the two global locks:
+
+| Section | Holds | Mask |
+| --- | --- | --- |
+| Critical section of an object source (`taskENTER_CRITICAL`) | T and I of the slot | raised |
+| Suspension of an object source (`vTaskSuspendAll`), across the blocking path | T of the slot | open |
+| `FromISR` section | I of the slot | raised |
+| Owner timing out or repairing a waiter | I of the slot recorded when the waiter blocked | raised |
+| Priority donation (`xTaskPriorityInherit` and its inverse) | the donation lock, a leaf | raised |
+
+The slot needs no field in the object, so `StaticQueue_t` and its siblings keep their layout. A task that blocks on an event list records the slot (`event_slot`) under the object's lock; the owner that later times the waiter out takes I of that slot, so it excludes the senders and receivers of the same object and nothing else. The insertion into the event list now also holds I of the slot, which closes a race the global scheme had: a waiter placing itself on a list under T alone while the owner of another waiter of that list removed it under the global I alone.
+
+The public `taskENTER_CRITICAL()` family keeps the global locks and no longer excludes object sections. Application critical sections protect application data, not kernel objects, and the kernel took no application lock inside an object section. The timer source keeps the global locks because its sections enclose queue creation; with the timers disabled in the OS image it is not on the hot path.
+
+Invariants.
+
+- **Lock order.** Global locks, then at most one task-side slot and one interrupt-side slot per CPU (nesting is on the same object or one in the same slot, asserted), then the donation lock. No section waits for an owner acknowledgment while holding a lock; commands and publications defer to the outermost release, as before.
+- **No lost or duplicated task.** A waiter leaves an event list by exactly one of: the waker's `xTaskRemoveFromEventList` under the object's lock, or the owner's timeout under the same slot's I; the outcome compare-and-swap that arbitrates them, the wait generation, the pins and the deferred publication are unchanged. The interrupt-side lock of the slot orders list edits (insert, remove, priority reorder) against each other.
+- **No priority inversion.** Locks are FIFO tickets, so a holder is never overtaken. Donation and its removal still hold the donation lock across the read-modify-write of the donated priority and the mutex count, and publish the repair at the outermost release. A mutex shares a slot with other objects only as a longer queue, never with an unbounded wait: every holder runs a bounded section.
+- **Affinity masks.** Placement, publication, migration and idle pull are untouched; the change adds no path that moves or queues a task.
+- **Event-driven.** Waiting is `WFE` on the ticket, release is `SEV`; there is no polling and no tick dependency.
+- **Idle.** The idle task is still `wfi`; the change adds nothing to its path.
+
+Host check (`scheduler-objects-qemu`, eight cores on the instruction counter). Phase 1 holds the lock of one queue open inside its critical section until six other cores have each completed twenty operations on queues of their own, or a budget of the holder's loop iterations runs out. It counts operations and iterations, not time. With the global locks the others cannot run, so the budget runs out on all 40 holds and the check fails; with object locks none runs out. Phase 2 mixes producers, consumers with one-tick timeouts, interrupt-level senders on every core, a mutex with inheritance, an event group, a stream buffer and a counting semaphore, and checks that no message is lost, duplicated or reordered and that the mutex excludes. The linked-kernel check and the other emulator cases (kernel, concurrent, soak, yield, storm, heap, runtime) pass with the change.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag

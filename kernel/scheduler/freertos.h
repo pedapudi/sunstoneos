@@ -16,6 +16,9 @@ UBaseType_t ssKernelObjectEnterFromISROn(const void *object);
 void ssKernelObjectLeaveFromISR(UBaseType_t);
 void ssKernelObjectSuspendOn(const void *object);
 BaseType_t ssKernelObjectResumeOn(void);
+void ssKernelObjectEnterOnGlobal(const void *object);
+UBaseType_t ssKernelObjectEnterFromISROnGlobal(const void *object);
+void ssKernelObjectSuspendOnGlobal(const void *object);
 BaseType_t ssKernelObjectResume(void);
 BaseType_t ssKernelOwnerIRQExit(void);
 void ssKernelOwnerYield(void);
@@ -33,6 +36,15 @@ void ssKernelOwnerYieldTail(void);
 #define taskENTER_CRITICAL_FROM_ISR() ssKernelObjectEnterFromISR()
 #define taskEXIT_CRITICAL_FROM_ISR(mask) ssKernelObjectExitFromISR(mask)
 #define vTaskSuspendAll() ssKernelObjectSuspend()
+#define xTaskResumeAll() ssKernelObjectResume()
+#elif defined(SS_OBJECT_LOCKS_GLOBAL)
+/* Control build (SUNSTONE_OBJECT_LOCKS=global): object sources take the two global locks, as they did before the
+ * object locks, and name their object for the lock trace. */
+#define taskENTER_CRITICAL() ssKernelObjectEnterOnGlobal((const void *)(SS_FREERTOS_OBJECT_EXPR))
+#define taskEXIT_CRITICAL() ssKernelObjectExit()
+#define taskENTER_CRITICAL_FROM_ISR() ssKernelObjectEnterFromISROnGlobal((const void *)(SS_FREERTOS_OBJECT_EXPR))
+#define taskEXIT_CRITICAL_FROM_ISR(mask) ssKernelObjectExitFromISR(mask)
+#define vTaskSuspendAll() ssKernelObjectSuspendOnGlobal((const void *)(SS_FREERTOS_OBJECT_EXPR))
 #define xTaskResumeAll() ssKernelObjectResume()
 #else
 /* Object sources lock the object they work on and nothing else, so operations on different objects do not wait
