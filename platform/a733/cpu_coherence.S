@@ -120,7 +120,9 @@ a733_cpu_coherence_publish:
     cbz x1, .Lrefuse
     adds x1, x0, x1
     b.cs .Lrefuse
-    mov x3, #0x48000000
+    // The installed memory ends at 0x340000000 (12 GiB from 0x40000000): a manifest region may lie anywhere in it.
+    mov x3, #0x40000000
+    movk x3, #0x3, lsl #32
     cmp x1, x3
     b.hi .Lrefuse
     mrs x3, ctr_el0

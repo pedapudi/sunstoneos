@@ -599,11 +599,23 @@ def main():
         application = image.application('notify-test', ['checks/qemu-os/notify-main.c'], ROOT / 'checks/qemu-os/notify-manifest.json')
         return image.build(application)
 
+    def build_wake_race():
+        """An application whose waits are given their event between the test and the registration."""
+        image = Image(out / 'build-wake-race', extra_sources=['checks/qemu-os/wake-race.c'])
+        application = image.application('wake-race', ['checks/qemu-os/wake-race-main.c'], ROOT / 'checks/qemu-os/wake-race-manifest.json')
+        return image.build(application, wraps=['board_service_blocked_until'])
+
     def build_heap(name, manifest):
         """An application whose heap is above the linked limit, so that the ledger serves it (step 1 of
         docs/designs/application-memory-layout.md). The C library's sbrk is linked in; its allocator is not."""
         image = Image(out / name, extra_defines=['-DQEMU_OS_UPPER=1'], extra_sources=['runtime/newlib.c'])
         application = image.application('heap-test', ['checks/qemu-os/heap-main.c'], manifest)
+        return image.build(application)
+
+    def build_heap_ctor(name, manifest):
+        """The heap application whose static constructor takes a block from sbrk before the main task runs."""
+        image = Image(out / name, extra_defines=['-DQEMU_OS_UPPER=1', '-DSUNSTONE_NEWLIB=1'], extra_sources=['runtime/newlib.c'])
+        application = image.application('heap-test', ['checks/qemu-os/heap-ctor-main.c'], manifest)
         return image.build(application)
 
     def build_heap_early(name, manifest):
@@ -623,6 +635,12 @@ def main():
         """An application with a manifest region in level-1 slot 1 above the EL0 window."""
         image = Image(out / 'build-slot1', extra_defines=['-DQEMU_OS_UPPER=1'])
         application = image.application('slot1-test', ['checks/qemu-os/slot1-main.c'], ROOT / 'checks/qemu-os/slot1-manifest.json')
+        return image.build(application)
+
+    def build_upper():
+        """The same application with its region in level-1 slot 2, above the unmapped hole (step 6b)."""
+        image = Image(out / 'build-upper', extra_defines=['-DQEMU_OS_UPPER=1'])
+        application = image.application('slot1-test', ['checks/qemu-os/slot1-main.c'], ROOT / 'checks/qemu-os/upper-manifest.json')
         return image.build(application)
 
     def build_facts():
@@ -660,10 +678,13 @@ def main():
         heap_elf = pool.submit(build_heap, 'build-heap', ROOT / 'checks/qemu-os/heap-manifest.json')
         heap_big_elf = pool.submit(build_heap, 'build-heap-too-big', ROOT / 'checks/qemu-os/heap-too-big-manifest.json')
         heap_early = pool.submit(build_heap_early, 'build-heap-early', ROOT / 'checks/qemu-os/heap-manifest.json')
+        heap_ctor = pool.submit(build_heap_ctor, 'build-heap-ctor', ROOT / 'checks/qemu-os/heap-manifest.json')
         slot1_elf = pool.submit(build_slot1).result()
         heap_elf, heap_big_elf, heap_early_elf = heap_elf.result(), heap_big_elf.result(), heap_early.result()
         notify_elf = pool.submit(build_notify).result()
+        upper_elf = pool.submit(build_upper).result()
         usb_race_elf = pool.submit(build_usb_race).result()
+        wake_race_elf = pool.submit(build_wake_race).result()
         storage_write_space_elf = pool.submit(build_storage_write_space).result()
         (out / 'build-reverted-owner').mkdir()
         reverted_owner_elf = pool.submit(build_storage_write, reverted_owner(out / 'build-reverted-owner'))
@@ -960,6 +981,13 @@ def main():
     # make it: the heap of the ledger cannot replace it, so the application does not start.
     c = run_case('heap-after-early-sbrk', heap_early_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G', [(0x50000000, stale)])
     c.require(c.main is None and c.failure is not None, 'the application started although the linked heap was already in use')
+    # A static constructor that takes memory from sbrk runs after the admission attached the region as the heap: its block is
+    # the first 4096 bytes of the region, zero although the memory held a pattern, and the main task's block follows it.
+    c = run_case('heap-constructor-allocates', heap_ctor.result(), scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G', [(0x50000000, stale)])
+    c.clean()
+    tag, block, dirty, own, peak = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
+    c.require(tag == 0x4354524f48454150 and block == 0x50000000 and dirty == 0 and own == 0x50001000 and peak == 8192,
+              'constructor result tag %#x block %#x dirty %d main block %#x peak %d' % (tag, block, dirty, own, peak))
     # A manifest region above the 48 MiB window lies in level-1 slot 1 and is mapped for its application alone.
     c = run_case('region-in-slot-1', slot1_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G')
     c.clean()
@@ -974,6 +1002,19 @@ def main():
     c.failed_with('APPLICATION', 0xe24)
     c.require(int(c.failure['value'], 16) == 0x55000000, 'the byte after the slot 1 region faults at %s' % c.failure['value'])
 
+    # A manifest region from 0x80000000: level-1 slot 2, mapped for its application alone; the byte after it is a kernel block.
+    c = run_case('region-in-upper', upper_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G')
+    c.clean()
+    tag, address, size, fold = struct.unpack('<4Q', bytes.fromhex(c.finished['result']))
+    expected_fold = 0xffffffffffffffff
+    for i in range(0, (64 << 20) // 8, 512):
+        expected_fold ^= (0x9e3779b97f4a7c15 * (i + 1)) & (2 ** 64 - 1)
+    c.require(tag == 0x534c4f5431 and address == 0x88000000 and size == 64 << 20 and fold == expected_fold,
+              'upper region result %#x at %#x, %#x bytes, fold %#x' % (tag, address, size, fold))
+    c = run_case('region-in-upper-end-faults', upper_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(1), '4G')
+    c.failed_with('APPLICATION', 0xe24)
+    c.require(int(c.failure['value'], 16) == 0x8c000000, 'the byte after the upper region faults at %s' % c.failure['value'])
+
     # The main stack comes from upper memory with an unmapped guard block below it: an overflow is an EL0 fault in the guard.
     c = run_case('main-stack-overflow-hits-guard', slot1_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(2), '4G')
     c.failed_with('APPLICATION', 0xe24)
@@ -987,6 +1028,16 @@ def main():
     c.require(c.main is not None and c.main['live'] == '1' and int(c.main['t_us']) < 2_000_000,
               'the application did not start after the transport became ready between its test and its wait')
     c.require(c.finished is not None and c.finished['status'] == '1', 'the application did not finish')
+
+    # An OS wake-up between the test and the registration of the wait is kept: a host request offered there, and a USB
+    # state change there, end ss_host_recv and ss_usb_wait at the event and not at their two-second timeout.
+    for mode, what in ((0, 'host-request'), (1, 'usb-change')):
+        c = run_case('wake-between-test-and-wait-' + what, wake_race_elf, scenario(usb_ready_ms=usb_delay_ms),
+                     struct.pack('<Q', mode) + bytes(4088))
+        c.clean()
+        tag, result, e = struct.unpack('<3Q', bytes.fromhex(c.finished['result']))
+        c.require(tag == 0x57414b45 and result == 1 and e < 500000,
+                  '%s between the test and the wait ended the call after %d us with result %d' % (what, e, result))
 
     # The OS gives the main task its usb-ready and live-state notifications while the main task sleeps in the deadline
     # wait and in ss_host_recv: each ends at its own condition (the deadline; the timeout), not at the OS's notification.

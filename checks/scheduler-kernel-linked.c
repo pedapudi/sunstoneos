@@ -35,6 +35,8 @@ static unsigned fixture_admin;
 void ss_kernel_test_admin_enter(unsigned cpu)
 { assert(!ssKernelCPUs[cpu].selecting); ++fixture_admin; }
 static unsigned fixture_cpu, fixture_sgi[configNUMBER_OF_CORES], fixture_locks;
+unsigned fixture_insert_depth;
+void ss_kernel_test_event_insert(unsigned depth) { fixture_insert_depth = depth; }
 static unsigned fixture_cleanup, fixture_task_masks, fixture_isr_masks;
 static UBaseType_t fixture_api_mask[configNUMBER_OF_CORES];
 static void (*fixture_unmask_action)(void);
@@ -616,9 +618,13 @@ int main(int argc, char **argv)
     assert(!record(task)->event_reference.descriptor);
     assert(!record(task)->deadline.owner);
     /* Timeout removes an event registration before making the task ready. */
-    ssKernelObjectEnterOn(&event);
+    /* A queue blocks under a suspension, which holds the object's task lock only: the insertion must still hold the
+     * interrupt lock of the slot, which excludes the owner that times out another waiter of the same list. */
+    fixture_insert_depth = 0;
+    ssKernelObjectSuspendOn(&event);
     vTaskPlaceOnEventList(&event, 1);
-    ssKernelObjectLeave();
+    (void)ssKernelObjectResumeOn();
+    assert(fixture_insert_depth >= 1);
     enter(0);
     (void)xTaskIncrementTick();
     enter(0);

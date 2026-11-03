@@ -1101,9 +1101,9 @@
 +UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
 +struct ss_kernel_pin pin;
 +if (!ssKernelPin(xTask, &pin)) { portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskSetApplicationTaskTag(); return; }
-+UBaseType_t irq = ssKernelObjectEnterFromISR();
++UBaseType_t irq = ssKernelObjectEnterFromISROn(pin.descriptor->task);
 +((TCB_t *)pin.descriptor->task)->pxTaskTag = pxHookFunction;
-+ssKernelObjectExitFromISR(irq);
++ssKernelObjectLeaveFromISR(irq);
 +ss_kernel_handle_put(&pin);
 +portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskSetApplicationTaskTag();
 +#else
@@ -1131,9 +1131,9 @@
 +UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
 +struct ss_kernel_pin pin;
 +if (!ssKernelPin(xTask, &pin)) { TaskHookFunction_t ss_trace_result = (NULL); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_xTaskGetApplicationTaskTag(ss_trace_result); return ss_trace_result; }
-+UBaseType_t irq = ssKernelObjectEnterFromISR();
++UBaseType_t irq = ssKernelObjectEnterFromISROn(pin.descriptor->task);
 +TaskHookFunction_t result = ((TCB_t *)pin.descriptor->task)->pxTaskTag;
-+ssKernelObjectExitFromISR(irq);
++ssKernelObjectLeaveFromISR(irq);
 +ss_kernel_handle_put(&pin);
 +{ TaskHookFunction_t ss_trace_result = (result); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_xTaskGetApplicationTaskTag(ss_trace_result); return ss_trace_result; }
 +#else
@@ -1161,9 +1161,9 @@
 +UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
 +struct ss_kernel_pin pin;
 +if (!ssKernelPin(xTask, &pin)) { TaskHookFunction_t ss_trace_result = (NULL); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_xTaskGetApplicationTaskTagFromISR(ss_trace_result); return ss_trace_result; }
-+UBaseType_t irq = ssKernelObjectEnterFromISR();
++UBaseType_t irq = ssKernelObjectEnterFromISROn(pin.descriptor->task);
 +TaskHookFunction_t result = ((TCB_t *)pin.descriptor->task)->pxTaskTag;
-+ssKernelObjectExitFromISR(irq);
++ssKernelObjectLeaveFromISR(irq);
 +ss_kernel_handle_put(&pin);
 +{ TaskHookFunction_t ss_trace_result = (result); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_xTaskGetApplicationTaskTagFromISR(ss_trace_result); return ss_trace_result; }
 +#else
@@ -1460,9 +1460,9 @@
 +UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
 +struct ss_kernel_pin pin;
 +if (!ssKernelPin(xTask, &pin)) { UBaseType_t ss_trace_result = (0); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_uxTaskGetTaskNumber(ss_trace_result); return ss_trace_result; }
-+UBaseType_t irq = ssKernelObjectEnterFromISR();
++UBaseType_t irq = ssKernelObjectEnterFromISROn(pin.descriptor->task);
 +UBaseType_t result = ((TCB_t *)pin.descriptor->task)->uxTaskNumber;
-+ssKernelObjectExitFromISR(irq);
++ssKernelObjectLeaveFromISR(irq);
 +ss_kernel_handle_put(&pin);
 +{ UBaseType_t ss_trace_result = (result); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_uxTaskGetTaskNumber(ss_trace_result); return ss_trace_result; }
 +#else
@@ -1490,9 +1490,9 @@
 +UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
 +struct ss_kernel_pin pin;
 +if (!ssKernelPin(xTask, &pin)) { portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskSetTaskNumber(); return; }
-+UBaseType_t irq = ssKernelObjectEnterFromISR();
++UBaseType_t irq = ssKernelObjectEnterFromISROn(pin.descriptor->task);
 +((TCB_t *)pin.descriptor->task)->uxTaskNumber = uxHandle;
-+ssKernelObjectExitFromISR(irq);
++ssKernelObjectLeaveFromISR(irq);
 +ss_kernel_handle_put(&pin);
 +portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskSetTaskNumber();
 +#else
@@ -1546,9 +1546,9 @@
 +if (xIndex < 0 || xIndex >= configNUM_THREAD_LOCAL_STORAGE_POINTERS) { portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskSetThreadLocalStoragePointer(); return; }
 +struct ss_kernel_pin pin;
 +if (!ssKernelPin(xTaskToSet, &pin)) { portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskSetThreadLocalStoragePointer(); return; }
-+UBaseType_t irq = ssKernelObjectEnterFromISR();
++UBaseType_t irq = ssKernelObjectEnterFromISROn(pin.descriptor->task);
 +((TCB_t *)pin.descriptor->task)->pvThreadLocalStoragePointers[xIndex] = pvValue;
-+ssKernelObjectExitFromISR(irq);
++ssKernelObjectLeaveFromISR(irq);
 +ss_kernel_handle_put(&pin);
 +portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskSetThreadLocalStoragePointer();
 +#else
@@ -1577,9 +1577,9 @@
 +if (xIndex < 0 || xIndex >= configNUM_THREAD_LOCAL_STORAGE_POINTERS) { void * ss_trace_result = (NULL); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_pvTaskGetThreadLocalStoragePointer(ss_trace_result); return ss_trace_result; }
 +struct ss_kernel_pin pin;
 +if (!ssKernelPin(xTaskToQuery, &pin)) { void * ss_trace_result = (NULL); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_pvTaskGetThreadLocalStoragePointer(ss_trace_result); return ss_trace_result; }
-+UBaseType_t irq = ssKernelObjectEnterFromISR();
++UBaseType_t irq = ssKernelObjectEnterFromISROn(pin.descriptor->task);
 +void *result = ((TCB_t *)pin.descriptor->task)->pvThreadLocalStoragePointers[xIndex];
-+ssKernelObjectExitFromISR(irq);
++ssKernelObjectLeaveFromISR(irq);
 +ss_kernel_handle_put(&pin);
 +{ void * ss_trace_result = (result); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_pvTaskGetThreadLocalStoragePointer(ss_trace_result); return ss_trace_result; }
 +#else
@@ -2047,12 +2047,12 @@
  {
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +traceENTER_uxTaskResetEventItemValue();
-+UBaseType_t irq = ssKernelObjectEnterFromISR();
++UBaseType_t irq = ssKernelObjectEnterWaitSlot();
 +TCB_t *t = ssKernelSelf();
 +TickType_t result = listGET_LIST_ITEM_VALUE(&t->xEventListItem);
 +listSET_LIST_ITEM_VALUE(&t->xEventListItem, configMAX_PRIORITIES - atomic_load_explicit(&ssKernelCurrent()->effective, memory_order_acquire));
 +ssKernelCurrent()->unordered = false;
-+ssKernelObjectExitFromISR(irq);
++ssKernelObjectLeaveFromISR(irq);
 +{ TickType_t ss_trace_result = (result); traceRETURN_uxTaskResetEventItemValue(ss_trace_result); return ss_trace_result; }
 +#else
 +

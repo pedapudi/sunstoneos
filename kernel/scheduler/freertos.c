@@ -30,6 +30,9 @@ _Static_assert(configMAX_PRIORITIES == SS_OWNER_PRIORITIES,
 #define SS_OBJECT_SLOTS 64u
 #endif
 
+#ifndef SS_PULL_MOVES_PER_PASS
+#define SS_PULL_MOVES_PER_PASS 0u /* transfers one idle-pull pass may start; 0 is unlimited */
+#endif
 enum ssKernelExecution { SS_K_READY, SS_K_RUNNING, SS_K_BLOCKED, SS_K_SUSPENDED, SS_K_DEAD, SS_K_TRANSFERRING };
 enum ssKernelWait { SS_K_NONE, SS_K_DELAY, SS_K_EVENT, SS_K_NOTIFICATION };
 enum ssKernelOutcome { SS_K_WAITING, SS_K_EVENT_READY, SS_K_TIMED_OUT, SS_K_ABORTED };
@@ -59,7 +62,7 @@ struct ssKernelTask {
 struct ssKernelCPU {
     struct ss_owner run;
     struct ss_deadline_heap deadlines;
-    unsigned preempt, object_depth, critical_depth, suspend_depth, isr_depth;
+    unsigned preempt, object_depth, critical_depth, isr_depth;
     UBaseType_t object_mask;
     /* The per-object lock domain (SS_OBJECT_SLOTS). o_depth counts the holds of the task-side lock (critical sections
      * and suspensions), o_critical the critical sections, o_suspend the suspensions and o_isr the interrupt-side regions.
@@ -203,6 +206,19 @@ static __attribute__((noinline)) void ssKernelSGI(void *context, unsigned cpu)
     if (xSchedulerRunning) ssKernelSgiCount((uintptr_t)__builtin_return_address(0), cpu);
 #endif
     if (xSchedulerRunning) portYIELD_CORE((BaseType_t)cpu);
+}
+/* True when PSTATE.I is set on this CPU (an exception handler, or code that masked all interrupts). */
+static inline bool ssKernelIrqsDisabled(void)
+{
+#if defined(__aarch64__)
+    /* DAIF is not readable at EL0; the interrupt and supervisor entries mark the task register as EL1. */
+    if (!((ullPortGetTaskRegister() >> portTASK_REGISTER_EL1_BIT) & 1U)) return false;
+    uint64_t daif;
+    __asm__ volatile("mrs %0, daif" : "=r"(daif));
+    return (daif & 0x80) != 0;
+#else
+    return false;
+#endif
 }
 static const struct ss_owner_backend ssKernelBackend = { .sgi = ssKernelSGI };
 static unsigned ssKernelCPUId(void) { return (unsigned)portGET_CORE_ID(); }
@@ -639,8 +655,7 @@ uint64_t ulSunstoneObjectTraceOverflow(unsigned core, unsigned which)
 
 /* ---- Global compatibility sections --------------------------------------------------------------------------------
  * The public critical sections (vTaskEnterCritical and its FromISR form) keep the two global locks of the port: lock 0
- * is the task lock, lock 1 the interrupt lock in the trace. Callers pass the object they operate on, when they have one,
- * and their own call site for the trace. */
+ * is the task lock, lock 1 the interrupt lock in the trace. The kernel's own sources do not use them. */
 static __attribute__((noinline)) void ssKernelObjectEnterAt(uintptr_t object, uintptr_t site)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
@@ -661,7 +676,6 @@ static __attribute__((noinline)) void ssKernelObjectEnterAt(uintptr_t object, ui
     ++cpu->object_depth;
     ++cpu->critical_depth;
 }
-__attribute__((noinline)) void ssKernelObjectEnter(void) { ssKernelObjectEnterAt(0, (uintptr_t)__builtin_return_address(0)); }
 __attribute__((noinline)) void ssKernelObjectEnterFor(const void *object, uintptr_t site) { ssKernelObjectEnterAt((uintptr_t)object, site); }
 void ssKernelObjectExit(void)
 {
@@ -711,51 +725,6 @@ void ssKernelObjectExitFromISR(UBaseType_t irq)
         ssKernelFlush();
     }
     portCLEAR_INTERRUPT_MASK(irq);
-}
-static __attribute__((noinline)) void ssKernelObjectSuspendAt(uintptr_t object, uintptr_t site)
-{
-    /* Queue retry bookkeeping retains T with local preemption disabled. API
-     * IRQs remain enabled outside its separate inner I-protected sections. */
-    UBaseType_t irq = portSET_INTERRUPT_MASK();
-    unsigned c = ssKernelCPUId();
-    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
-    if (!cpu->object_depth) {
-        ++cpu->preempt;
-        SS_TR_START(c, 0, 0);
-        portGET_TASK_LOCK((BaseType_t)c);
-        SS_TR_LOCKED(c, 0, 0, object, site);
-    }
-    ++cpu->object_depth;
-    ++cpu->suspend_depth;
-    portCLEAR_INTERRUPT_MASK(irq);
-}
-__attribute__((noinline)) void ssKernelObjectSuspend(void) { ssKernelObjectSuspendAt(0, (uintptr_t)__builtin_return_address(0)); }
-#ifdef SS_OBJECT_LOCKS_GLOBAL
-/* Control build: the object sources use the global locks, as before the object locks, but pass their object. */
-__attribute__((noinline)) void ssKernelObjectEnterOnGlobal(const void *object) { ssKernelObjectEnterAt((uintptr_t)object, (uintptr_t)__builtin_return_address(0)); }
-__attribute__((noinline)) UBaseType_t ssKernelObjectEnterFromISROnGlobal(const void *object) { return ssKernelObjectEnterFromISRAt((uintptr_t)object, (uintptr_t)__builtin_return_address(0)); }
-__attribute__((noinline)) void ssKernelObjectSuspendOnGlobal(const void *object) { ssKernelObjectSuspendAt((uintptr_t)object, (uintptr_t)__builtin_return_address(0)); }
-#endif
-BaseType_t ssKernelObjectResume(void)
-{
-    UBaseType_t irq = portSET_INTERRUPT_MASK();
-    unsigned c = ssKernelCPUId();
-    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
-    configASSERT(cpu->suspend_depth && cpu->object_depth && !cpu->critical_depth);
-    --cpu->suspend_depth;
-    if (!--cpu->object_depth) {
-        SS_TR_RELEASED(c, 0);
-        portRELEASE_TASK_LOCK((BaseType_t)c);
-        ssKernelFlush();
-        configASSERT(cpu->preempt);
-        --cpu->preempt;
-    }
-    bool yield = !cpu->preempt && cpu->reschedule;
-    ssKernelCommandsDetach();
-    portCLEAR_INTERRUPT_MASK(irq);
-    ssKernelCommandsFinish(true);
-    if (yield && ssKernelCanPreempt()) portYIELD();
-    return yield ? pdTRUE : pdFALSE;
 }
 
 /* ---- Object sections ------------------------------------------------------------------------------------------------
@@ -861,11 +830,6 @@ void ssKernelObjectLeave(void)
     ssKernelCommandsFinish(true);
     if (yield && ssKernelCanPreempt()) portYIELD();
 }
-#ifdef SS_OBJECT_LOCKS_GLOBAL
-static UBaseType_t ssObjectIsrEnterSlot(unsigned slot, const void *object, uintptr_t site)
-{ (void)slot; (void)object; (void)site; return ssKernelObjectEnterFromISR(); }
-static void ssObjectIsrLeave(UBaseType_t irq) { ssKernelObjectExitFromISR(irq); }
-#else
 /* The interrupt-side section of a slot. Also used by the owner to repair or time out a waiter on the slot's lists. */
 static __attribute__((noinline)) UBaseType_t ssObjectIsrEnterSlot(unsigned slot, const void *object, uintptr_t site)
 {
@@ -887,12 +851,17 @@ static void ssObjectIsrLeave(UBaseType_t irq)
     }
     portCLEAR_INTERRUPT_MASK(irq);
 }
-#endif
 __attribute__((noinline)) UBaseType_t ssKernelObjectEnterFromISROn(const void *object)
 {
     return ssObjectIsrEnterSlot(ssObjectSlot(object), object, (uintptr_t)__builtin_return_address(0));
 }
 void ssKernelObjectLeaveFromISR(UBaseType_t irq) { ssObjectIsrLeave(irq); }
+/* The interrupt-side section of the slot of the object this task last waited on: the section that excludes the waker and
+ * the owner while they edit the task's event-list item. */
+__attribute__((noinline)) UBaseType_t ssKernelObjectEnterWaitSlot(void)
+{
+    return ssObjectIsrEnterSlot(ssKernelCurrent()->event_slot, NULL, (uintptr_t)__builtin_return_address(0));
+}
 static __attribute__((noinline)) void ssKernelObjectSuspendOnAt(const void *object, uintptr_t site)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
@@ -935,10 +904,6 @@ BaseType_t ssKernelObjectResumeOn(void)
     if (yield && ssKernelCanPreempt()) portYIELD();
     return yield ? pdTRUE : pdFALSE;
 }
-#ifdef SS_OBJECT_LOCKS_GLOBAL
-static UBaseType_t ssDonationEnter(void) { return ssKernelObjectEnterFromISR(); }
-static void ssDonationLeave(UBaseType_t irq) { ssKernelObjectExitFromISR(irq); }
-#else
 /* The leaf lock of priority donation, taken with the mask raised. */
 static UBaseType_t ssDonationEnter(void)
 {
@@ -952,7 +917,6 @@ static void ssDonationLeave(UBaseType_t irq)
     ssKernelFlush(); /* publishes a donation repair now unless an enclosing section does it at its exit */
     portCLEAR_INTERRUPT_MASK(irq);
 }
-#endif
 
 /* Owner-local state transitions. Event-list metadata alone is protected by the
  * compatibility object lock. Only the selected owner touches ready/deadlines. */
@@ -1396,6 +1360,8 @@ static BaseType_t ssKernelTick(void)
     SS_OWNER_COUNT(tick_work);
     return ssKernelOwnerIRQExitWork();
 }
+/* Test hook: the depth of the interrupt-lock sections when a waiter is inserted into an event list. */
+extern void ss_kernel_test_event_insert(unsigned isr_depth) __attribute__((weak));
 static void ssKernelEventBlock(List_t *list, TickType_t value, TickType_t ticks,
                                bool unordered, bool indefinite)
 {
@@ -1407,19 +1373,16 @@ static void ssKernelEventBlock(List_t *list, TickType_t value, TickType_t ticks,
     /* The caller holds its object's task-side lock (a suspension or a critical section). Insert under the interrupt-side
      * lock of the same slot as well, so that an owner timing out another waiter of this list cannot edit it at the same
      * moment, and record the slot for that owner and for priority repair. */
-#ifndef SS_OBJECT_LOCKS_GLOBAL
     struct ssKernelCPU *self = &ssKernelCPUs[ssKernelCPUId()];
     configASSERT(self->o_depth);
     s->event_slot = self->t_slot;
     UBaseType_t irq = ssObjectIsrEnterSlot(self->t_slot, list, (uintptr_t)__builtin_return_address(0));
-#endif
+    if (ss_kernel_test_event_insert) ss_kernel_test_event_insert(self->o_isr + self->o_critical);
     if (unordered) {
         listSET_LIST_ITEM_VALUE(&t->xEventListItem, value | taskEVENT_LIST_ITEM_VALUE_IN_USE);
         vListInsertEnd(list, &t->xEventListItem);
     } else vListInsert(list, &t->xEventListItem);
-#ifndef SS_OBJECT_LOCKS_GLOBAL
     ssObjectIsrLeave(irq);
-#endif
     ssKernelBlock(ticks, indefinite, SS_K_EVENT);
 }
 static BaseType_t ssKernelEventWake(ListItem_t *item, TickType_t value, bool unordered)
@@ -1454,10 +1417,14 @@ static BaseType_t ssKernelNotify(TaskHandle_t task, UBaseType_t index,
     };
     configASSERT((unsigned)action < sizeof(actions) / sizeof(actions[0]));
     SS_PH_BEGIN;
-    UBaseType_t irq = from_isr ? portSET_INTERRUPT_MASK_FROM_ISR() : portSET_INTERRUPT_MASK();
+    /* An interrupt handler runs with PSTATE.I set, so no API-level interrupt can enter the section and raising the priority
+     * mask would only cost two data synchronization barriers and two instruction barriers on each side. Interrupts above
+     * the API mask never call the kernel. */
+    const bool masked_by_exception = from_isr && ssKernelIrqsDisabled();
+    UBaseType_t irq = masked_by_exception ? 0 : from_isr ? portSET_INTERRUPT_MASK_FROM_ISR() : portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
     if (!ss_kernel_handle_pin(&ssKernelRegistry, task, &pin)) {
-        if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
+        if (masked_by_exception) {} else if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
         return pdFAIL;
     }
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
@@ -1472,7 +1439,7 @@ static BaseType_t ssKernelNotify(TaskHandle_t task, UBaseType_t index,
         ssKernelPublishReference(pin);
         if (woken && ssKernelCPUs[ssKernelCPUId()].reschedule) *woken = pdTRUE;
     } else ss_kernel_handle_put(&pin);
-    if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
+    if (masked_by_exception) {} else if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
     SS_PH_END(0);
     return result.accepted ? pdPASS : pdFAIL;
 }
@@ -1946,6 +1913,9 @@ static void ssKernelPullServe(unsigned c)
     if (atomic_load_explicit(&cpu->pull_requests, memory_order_relaxed))
         requests = atomic_exchange_explicit(&cpu->pull_requests, 0, memory_order_acq_rel);
     uint64_t serve = (requests | atomic_load_explicit(&ssKernelIdleMask, memory_order_acquire)) & targets;
+#if SS_PULL_MOVES_PER_PASS
+    unsigned moved = 0;
+#endif
     while (serve) {
         const unsigned target = (unsigned)__builtin_ctzll(serve);
         serve &= serve - 1;
@@ -1960,6 +1930,10 @@ static void ssKernelPullServe(unsigned c)
         if (move.changed) {
             atomic_fetch_add_explicit(&ssKernelIdlePulls, 1, memory_order_relaxed);
             ssKernelControlDrain();
+#if SS_PULL_MOVES_PER_PASS
+            /* Bound the transfer work of one pass; an idle core stays in the idle mask and the next pass serves it. */
+            if (++moved >= SS_PULL_MOVES_PER_PASS) break;
+#endif
         }
         if (cpu->run.ready_bitmap == 0) break;
     }
@@ -2311,7 +2285,7 @@ static void ssKernelInfo(TaskHandle_t handle, TaskStatus_t *status, bool stack)
     }
     TCB_t *t = pin.descriptor->task;
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
-    UBaseType_t irq = ssKernelObjectEnterFromISR();
+    UBaseType_t irq = ssKernelObjectEnterFromISROn(t);
     *status = (TaskStatus_t){0};
     status->xHandle = t;
     status->pcTaskName = t->pcTaskName;
@@ -2331,7 +2305,7 @@ static void ssKernelInfo(TaskHandle_t handle, TaskStatus_t *status, bool stack)
 #endif
     static const eTaskState states[] = { eReady, eRunning, eBlocked, eSuspended, eDeleted };
     status->eCurrentState = states[ssKernelLogicalExecution(s)];
-    ssKernelObjectExitFromISR(irq);
+    ssKernelObjectLeaveFromISR(irq);
     if (stack) {
 #if ( portSTACK_GROWTH > 0 )
         status->usStackHighWaterMark = prvTaskCheckFreeStackSpace((uint8_t *)t->pxEndOfStack);

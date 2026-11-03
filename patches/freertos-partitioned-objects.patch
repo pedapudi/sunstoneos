@@ -63,16 +63,35 @@
  /* The MPU ports require MPU_WRAPPERS_INCLUDED_FROM_API_FILE to be defined
 --- timers.c
 +++ timers.c
-@@ -36,6 +36,12 @@
+@@ -36,6 +36,13 @@
  
  #include "FreeRTOS.h"
  #include "task.h"
 +
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +#define SS_FREERTOS_OBJECT_TRANSLATION 1
-+#define SS_FREERTOS_OBJECT_GLOBAL 1
++#define SS_FREERTOS_OBJECT_EXPR pxTimer
++#define SS_FREERTOS_OBJECT_KEEP_SUSPEND 1
 +#include "freertos.h"
 +#endif
  #include "queue.h"
  #include "timers.h"
+ 
+@@ -1118,7 +1125,7 @@
+         /* Check that the list from which active timers are referenced, and the
+          * queue used to communicate with the timer service, have been
+          * initialised. */
+-        taskENTER_CRITICAL();
++        ssTimerInitEnter();
+         {
+             if( xTimerQueue == NULL )
+             {
+@@ -1160,7 +1167,7 @@
+                 mtCOVERAGE_TEST_MARKER();
+             }
+         }
+-        taskEXIT_CRITICAL();
++        ssTimerInitExit();
+     }
+ /*-----------------------------------------------------------*/
  

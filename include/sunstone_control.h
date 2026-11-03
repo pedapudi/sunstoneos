@@ -32,6 +32,8 @@ unsigned ulSunstoneTaskEntryWorst(unsigned core, unsigned rank, struct ss_contro
  * 3 count over 5 us, in counter ticks. Phases: 0 notification, 1 interrupt-exit work, 2 service pass, 3 control drain, 4 incoming
  * hints, 5 idle pull, 6 deadline expiry, 7 slice refresh, 8 yield tail, 9 task switch. */
 uint64_t ulSunstonePhase(unsigned cpu, unsigned phase, unsigned field);
+/* Refills of the woken task's wake, by gap class (see runtime/control_irq.c): field 0 wakes, 1 L1D refills, 2 L2D refills. */
+uint64_t ulSunstoneTaskRefills(unsigned core, unsigned klass, unsigned field);
 /* Owner-work drains of a CPU: which 0 from interrupt exit, 1 skipped at exit by the mask guard, 2 from the tick, 3 service passes run. */
 uint64_t ulSunstoneOwnerCounters(unsigned cpu, unsigned which);
 unsigned ulSunstoneControlWfi(unsigned core, uint64_t *count, uint64_t *max_ticks, uint64_t *over5, const uint32_t **bins);

@@ -13,7 +13,7 @@ from pathlib import Path
 import struct
 import zlib
 from elftools.elf.elffile import ELFFile
-from harness import Image, hook_addresses
+from harness import machine as harness_machine, Image, hook_addresses
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_PC, UC_ARM64_REG_LR
 
@@ -37,7 +37,7 @@ def main():
     assert struct.unpack_from('<IHHII', manifest, 88) == (16000, 1, 16, 1, 320)
     source, capacity, kind, access = struct.unpack_from('<QQII', manifest, 104)
     assert capacity == 684 and kind == 1 and access & 1
-    uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+    uc = harness_machine()
     pages = set()
 
     def allocate(address, size):

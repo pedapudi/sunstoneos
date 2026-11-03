@@ -59,6 +59,9 @@ def record():
         # the first byte of the A733 profile that the kernel table leaves unmapped; the OS maps it for its
         # application alone (docs/designs/application-memory-layout.md).
         'slot1_area': (0x48000000, 0x79000000),
+        # The upper memory above the unmapped hole 0x79000000..0x80000000: level-1 slots 2 to 12, to the end of the installed
+        # memory. A manifest region may lie here too, in 2 MiB blocks (docs/designs/application-memory-layout.md, step 6b).
+        'upper_area': (0x80000000, 0x340000000),
         'npu_pool': {
             'legacy': (0x47400000, 0x47c00000),
             'top': 0x47000000, 'min': 0xa00000, 'max': 0x3000000, 'block': BLOCK,

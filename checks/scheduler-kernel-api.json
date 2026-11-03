@@ -48,8 +48,8 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_pvTaskGetThreadLocalStoragePointer( xTaskToQuery, xIndex );",
       "definition_helpers": [
-        "ssKernelObjectEnterFromISR",
-        "ssKernelObjectExitFromISR",
+        "ssKernelObjectEnterFromISROn",
+        "ssKernelObjectLeaveFromISR",
         "ssKernelPin"
       ]
     },
@@ -190,8 +190,8 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_uxTaskGetTaskNumber( xTask );",
       "definition_helpers": [
-        "ssKernelObjectEnterFromISR",
-        "ssKernelObjectExitFromISR",
+        "ssKernelObjectEnterFromISROn",
+        "ssKernelObjectLeaveFromISR",
         "ssKernelPin"
       ]
     },
@@ -220,8 +220,8 @@
       "definition_route": "traceENTER_uxTaskResetEventItemValue();",
       "definition_helpers": [
         "ssKernelCurrent",
-        "ssKernelObjectEnterFromISR",
-        "ssKernelObjectExitFromISR",
+        "ssKernelObjectEnterWaitSlot",
+        "ssKernelObjectLeaveFromISR",
         "ssKernelSelf"
       ]
     },
@@ -457,8 +457,8 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_vTaskSetApplicationTaskTag( xTask, pxHookFunction );",
       "definition_helpers": [
-        "ssKernelObjectEnterFromISR",
-        "ssKernelObjectExitFromISR",
+        "ssKernelObjectEnterFromISROn",
+        "ssKernelObjectLeaveFromISR",
         "ssKernelPin"
       ]
     },
@@ -468,8 +468,8 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_vTaskSetTaskNumber( xTask, uxHandle );",
       "definition_helpers": [
-        "ssKernelObjectEnterFromISR",
-        "ssKernelObjectExitFromISR",
+        "ssKernelObjectEnterFromISROn",
+        "ssKernelObjectLeaveFromISR",
         "ssKernelPin"
       ]
     },
@@ -479,8 +479,8 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_vTaskSetThreadLocalStoragePointer( xTaskToSet, xIndex, pvValue );",
       "definition_helpers": [
-        "ssKernelObjectEnterFromISR",
-        "ssKernelObjectExitFromISR",
+        "ssKernelObjectEnterFromISROn",
+        "ssKernelObjectLeaveFromISR",
         "ssKernelPin"
       ]
     },
@@ -698,8 +698,8 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_xTaskGetApplicationTaskTag( xTask );",
       "definition_helpers": [
-        "ssKernelObjectEnterFromISR",
-        "ssKernelObjectExitFromISR",
+        "ssKernelObjectEnterFromISROn",
+        "ssKernelObjectLeaveFromISR",
         "ssKernelPin"
       ]
     },
@@ -709,8 +709,8 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_xTaskGetApplicationTaskTagFromISR( xTask );",
       "definition_helpers": [
-        "ssKernelObjectEnterFromISR",
-        "ssKernelObjectExitFromISR",
+        "ssKernelObjectEnterFromISROn",
+        "ssKernelObjectLeaveFromISR",
         "ssKernelPin"
       ]
     },
