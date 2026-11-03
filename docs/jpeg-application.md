@@ -92,7 +92,7 @@ resource acquisition.
 In a version 3 session, `fixture` holds the SHA-256 of a sequence manifest and
 `reference` must be zero. The manifest is a 16-byte header (little-endian
 32-bit magic `0x5347504a`, version 1, image count from one to eight, zero) and
-one 80-byte entry per image: 32-bit JPEG length, oracle length, width and
+one 80-byte entry per image. Each entry is a 32-bit JPEG length, oracle length, width and
 height, then the JPEG SHA-256 and the oracle SHA-256, zero without an oracle.
 Each entry must fit the single-image capacities on its own.
 
@@ -206,38 +206,8 @@ assembles bounded response fragments and preserves copied output durably.
 
 ## Offline evidence does not qualify physical operation
 
-`checks/jpeg-sequence.py` covers sequence sessions. It builds four images of
-64-by-48, 48-by-32 with an independent oracle, 640-by-480 with an oracle and
-33-by-17 pixels. It feeds their uploads through the actual input code under
-address and undefined-behavior sanitizers in fragments of 1, 17 and 512 bytes.
-It also refuses each of these uploads: an image before the previous result was
-delivered, an out-of-order image, changed image bytes, dimensions that differ
-from the manifest, an image beyond the count, a sequence upload in a version 2
-session, a version 3 session with a session oracle, a single upload in a version
-3 session, a changed manifest and a nine-image manifest. The linked image then
-executes USB ingestion, the version 3 serializer, delivery tracking, the owner
-task's buffer refill and the executor's next-job entry for all four images,
-with device pixels written by the model. It checks the refilled input and its
-guard pages, the restored poison, the copied pixels and every result header.
-Frames after the last image or before delivery stop the lifetime, a recorded
-failure survives the next image, and an inconsistent job count fails.
-`checks/jpeg-application-retained.c` runs a second job through the actual
-executor and platform binding with modeled registers: no second admission,
-mapping or preparation occurs, the register writes repeat those of the first
-job, and changed spans or oversized files are refused. These results are under
-`~/.cache/sunstoneos/build/audit-codec-streaming/checks/` and have not been
-frozen into the evidence store.
+No host check covers sequence sessions, the retained second job, the runtime input capacities, the chunked native copy path, the 640-by-480 capture or the IOMMU translation of the largest spans. Earlier host runs fed four sequence images (64-by-48, 48-by-32 with an independent oracle, 640-by-480 with an oracle and 33-by-17 pixels) through the actual input code under address and undefined-behavior sanitizers in fragments of 1, 17 and 512 bytes. They refused out-of-order, changed, mismatched and surplus images and mismatched session versions. They also executed USB ingestion, the version 3 serializer, delivery tracking, the owner task's buffer refill and the executor's next-job entry with device pixels written by the model. A second job through the executor and platform binding repeated the register writes of the first job without a second admission, mapping or preparation. Padded planes beyond 307,200 bytes are refused, and a 1920-by-160 image was covered. These results are under `~/.cache/sunstoneos/build/audit-codec-streaming/checks/` and `~/.cache/sunstoneos/evidence/jpeg-runtime-input-20261018/` and are not frozen into the evidence store.
 
-Focused evidence for the earlier 4 KiB capacities is under
-`~/.cache/sunstoneos/evidence/jpeg-runtime-input-20261018/`. The same checks
-cover the current capacities: `checks/jpeg-runtime-input.py` adds 640-by-480
-images with and without an oracle and a 1920-by-160 image, and
-`checks/jpeg-runtime-input.c` refuses padded planes beyond 307,200 bytes.
-`checks/jpeg-runtime-native.py` copies those images through the chunked native
-path and serializes their results, `checks/jpeg-runtime-host.py` prepares and
-captures the 640-by-480 oracle case, and `checks/jpeg-application-iommu.c`
-builds and translates the largest spans. These results have not yet been
-frozen into the evidence store.
 Sanitizer checks use actual Python upload packets and the unchanged parser. They
 cover fragmented input, ordinary and oracle modes, odd dimensions, maximum plane
 capacity, identity and digest refusal, clock bounds and immutable publication.
@@ -259,3 +229,5 @@ independent FFmpeg reference; that evidence does not establish general JPEG
 rounding conformance. No board, USB device, test queue or persistent storage was
 accessed for runtime-input integration. Physical execution, copied-pixel
 correctness, confinement and recovery remain outstanding.
+
+Results of host checks that no longer exist are kept in the evidence record [jpeg-application.jsonl](evidence/jpeg-application.jsonl).

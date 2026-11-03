@@ -1,9 +1,11 @@
 # Per-workgroup GPU local memory
 
+Status: qualified on the board (generic tiled GEMM with 384 bytes of local memory, four jobs) and host-tested.
+
 The GPU queue implements bounded on-chip local memory for trusted compute
-programs with 32 work items per workgroup. Host checks pass; physical execution
-of this capability is unqualified. The independent floating-point numerical
-qualification must pass before the coordinator runs the local-memory test.
+programs with 32 work items per workgroup. Board results: the local GEMM entry
+`1793566602125877874-e604614d` and its global-memory control
+`1793566402339564949-f2aad6a6` in [gpu.jsonl](../evidence/gpu.jsonl).
 
 The reader is assumed to understand compute workgroups, GPU command streams,
 and C memory ownership. A coefficient is a word in the PowerVR Unified Shading
@@ -167,12 +169,10 @@ work item accumulates its output directly from global A and B values.
 the default selects local memory. The result reports zero local bytes for the
 control and 384 for the local case.
 
-The coordinator must first run the returning direct control through the
-existing supervised launcher after independent floating-point qualification.
-A successful direct control is required before the local-memory image. Physical acceptance
-requires four successful jobs, every output and guard check, a normal return,
-and the existing device cleanup evidence. A timeout retains the existing
-service's resource and recovery obligations.
+Physical acceptance requires four successful jobs, every output and guard
+check, a normal return and the device cleanup evidence. A timeout retains the
+service's resource and recovery obligations. The direct control passes before
+the local-memory image is run.
 
 ## Source provenance and execution boundaries
 

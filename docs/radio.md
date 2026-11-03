@@ -294,10 +294,11 @@ The [wpa_supplicant release archive][wpa-archive] SHA-256 is
 Its README contains the BSD terms; that file's SHA-256 is
 `29631e03453491eeefe2ae894b8af47d7e38e64ef3495837e7b8529c6bbf2e2f`.
 
-Host evidence is in `~/.cache/sunstoneos/evidence/radio-20261016/`.
-The focused [check](../checks/radio-patch.py) passed against the published
-table, six malformed structures, an extended information record, unknown-type
-retention, and unspecified padding. `results.json` records tool/check hashes;
+Host evidence for the patch-table decoder is in
+`~/.cache/sunstoneos/evidence/radio-20261016/`; no retained check repeats it.
+The decoder matched the published table and handled six malformed structures,
+an extended information record, unknown-type retention, and unspecified
+padding. `results.json` records tool/check hashes;
 `published-table.json` records decoded artifact metadata. Source manifests and
 cached downloads are in `~/.cache/sunstoneos/sources/radio/`.
 

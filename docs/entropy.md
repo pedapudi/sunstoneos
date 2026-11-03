@@ -47,7 +47,7 @@ examples are insufficient to characterize this board and are not used as default
 `checks/crypto-health-cutoffs.py` evaluates both formulas with exact integer
 and 80-digit decimal arithmetic. Given an assessed `H`, `alpha = 2^-k` with
 `20 <= k <= 40` and the source type, it prints the four register words in the
-form the controller accepts: the two cutoffs, a zero delay for continuous
+form the controller accepts. They are the two cutoffs, a zero delay for continuous
 testing and both enables with `W` of 1024 for a binary source or 512
 otherwise. For example, a binary source assessed at 0.5 bits per sample with
 `alpha = 2^-20` gives `{0x29, 0x319, 0x0, 0x30400}`. Each run first reproduces
@@ -125,27 +125,19 @@ independent engine-drain protocol.
 
 ## Evidence and remaining qualification
 
-The focused model in `checks/a733-ce-entropy.c` composes the real service, CE
-controller, memory pool and clock registry. It uses deterministic DMA fixtures
-to cover secure-write uncertainty, repeated requests, partial-result failure,
-rearm refusal, stale binding and deadline failure with busy retention. These
-fixtures do not characterize hardware randomness.
-
-`checks/a733-ce-entropy.py` checks the pinned health/completion references and
-native constructor calls to the existing singleton pool and CE operations.
-The unchanged descriptor, initial admission and cache-operation behavior retain
-the evidence recorded in the CE driver record.
-
-The initial entropy-service sanitizer model, source checks and native AArch64
-compilation passed. The shared-session extraction is covered by the focused
-[hash composition model](crypto-hash.md), including both client orders and
-deferred health provisioning.
+No host check composes the real service, CE controller, memory pool and clock
+registry with deterministic DMA fixtures to cover secure-write uncertainty,
+repeated requests, partial-result failure, rearm refusal, stale binding and
+deadline failure with busy retention. No host check covers the pinned health and completion
+references and the native constructor calls. The shared-session extraction is
+covered by the [hash composition model](crypto-hash.md), including both client
+orders and deferred health provisioning.
 A relocatable link resolves the CE service against the actual pool, registry
 and translation implementations. Final image linker symbols, runtime `memset`
 and the pool module's separate DMA constructor remain external link inputs;
-this is not a bootable-image check. The initial three CE objects contained 16,264 bytes
+this is not a bootable-image check. The three CE objects contain 16,264 bytes
 of code and no static data or BSS. Their largest direct compiler-reported stack
-frame was 352 bytes, without a whole-call-chain bound.
+frame is 352 bytes, without a whole-call-chain bound.
 
 Exact executed inputs, objects and logs are preserved in
 `~/.cache/sunstoneos/evidence/ce-service-20261016/batch1/`.
@@ -155,3 +147,5 @@ profile, successful startup testing for each enable epoch, actual secure access,
 clock/supply/mapping authority, recovery qualification and physical CE operation.
 The engine's remaining cipher modes and its asymmetric, key-ladder and
 secure-key APIs remain separate hardware coverage requirements.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/entropy.jsonl).

@@ -1,6 +1,6 @@
 # GPU firmware compatibility, health, and event service
 
-The native firmware control component is **implemented and host-tested**. It connects
+The native firmware control component is **implemented**; no host check remains. It connects
 completed startup to queue activation, a bounded health command, interrupt
 acknowledgement, and limited event batches. It has not run on the GPU. Physical
 interrupt delivery, firmware publication, event-specific resource handlers, and
@@ -107,43 +107,31 @@ READY establishes layout/revision agreement and one executed health command.
 It does not establish graphics/compute execution, application command admission,
 GPU job completion, or physical qualification. Those remain separate requirements.
 
-## Focused checks cover transitions and interrupt races
+## No host check covers transitions and interrupt races
 
-One [ASan/UBSan integration check](../checks/pvr-gpu-control.c) exercises the native
-worker with the command transport. It covers compatibility publication, mismatched
-layouts/revisions, health success and error status, startup deadlines, bounded
-batches, and work arriving during acknowledgement. It verifies handling without
-an interrupt and continued service after the initial boot deadline.
+No host check exercises the native worker with the command transport for
+compatibility publication, mismatched layouts and revisions, health success
+and error status, startup deadlines, bounded batches, work arriving during
+acknowledgement, handling without an interrupt, continued service after the
+initial boot deadline, or failure at each callback in the successful
+activation path. By design both components stop I/O after a fault, unknown,
+restart and page-fault events are retained, and an already recorded command
+result can still be collected after an unrelated service fault. No host check
+compares the 64-byte compatibility structure, layout assertions, revision
+initializer or MIPS interrupt functions with the pinned source. The
+processor and build fields of any fixture are synthetic and do not establish
+physical firmware identity.
 
-The check passes 78 retained-failure cases, including failure at each callback
-in the successful activation path. It verifies that both components stop I/O,
-that unknown/restart/page-fault events are retained, and that an already recorded
-command result can still be collected after an unrelated service fault.
-The startup state and firmware responses are simulated; no firmware image executes.
-
-The [reference comparison](../checks/pvr-gpu-control-reference.py) compiles the
-original compatibility structures, layout assertions, revision initializer, and
-MIPS interrupt functions. The complete 64-byte synthetic compatibility fixture
-and observed interrupt operations match. Processor/build fields in that fixture
-are synthetic and do not establish physical firmware identity. The health command
-matches the saved queue-publication reference, whose hash is checked before reuse.
-Source hashes are verified against the pinned board-source manifest.
-
-Clang 21 compiled the worker and changed queue component for AArch64 with strict
-alignment and freestanding options. That checked revision contains 1,868 bytes of code/read-only
-data, and its queue contains 3,372 bytes. Neither has writable static data.
-The worker's individual frames are 64 bytes for initialization, 144 for polling,
-and 32 for each clock/status helper. Total stack accounting must also include
-nested queue operations and platform callbacks.
-
-Commands, input snapshots, hashes, fixture bytes, interrupt traces, comparison,
-and objects are under `~/.cache/sunstoneos/evidence/gpu-control-20261016/`.
-Existing queue internals are unchanged apart from the added abort API; their
-publication, cache, and malformed-input evidence was reused. No broader OS,
-mimus, accelerator, or performance checks were repeated. No device access occurred.
+The worker and queue compile for AArch64 with strict alignment and freestanding
+options. The worker contains 1,868 bytes of code/read-only data, and its queue
+contains 3,372 bytes. Neither has writable static data. The worker's individual
+frames are 64 bytes for initialization, 144 for polling, and 32 for each
+clock/status helper. Total stack accounting must also include nested queue
+operations and platform callbacks. No device access has occurred.
 
 [Shutdown integration](gpu-stop.md) adds retirement and external-abort APIs.
 Retirement closes the READY control component and its transport without I/O;
-it does not establish device isolation. The current control component compiles
-to 2,060 bytes of code/read-only data, with no writable static data. Its affected
-integration check and current artifacts are recorded with shutdown evidence.
+it does not establish device isolation. The control component compiles
+to 2,060 bytes of code/read-only data, with no writable static data.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-control.jsonl).

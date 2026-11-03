@@ -216,13 +216,13 @@ The resident 120 s bound remains unchanged. Neither the bus-time lower bound
 nor these configured deadlines establish measured startup time. The Bluetooth
 image itself remains supervised.
 
-[bluetooth-startup-deadline.py](../checks/bluetooth-startup-deadline.py)
-checks the first-readiness boundary, a query crossing the boundary, clock and
-generation refusal, UART/wake/module waits through HCI expiry, the resident anchor, and pending firmware beyond the provisional HCI offset. Its 17 startup cases execute the application with modeled module
-readiness and real UART/H4/HCI code. One additional case checks the resident
-headset stage arithmetic, lifetime cap and unchanged supervised offsets. These
-checks do not establish physical startup time or change the six-command HCI
-identity required for success.
+No host check covers the first-readiness boundary, a query crossing the
+boundary, clock and generation refusal, UART/wake/module waits through HCI
+expiry, the resident anchor, pending firmware beyond the provisional HCI
+offset, or the resident headset stage arithmetic, lifetime cap and supervised
+offsets. Physical startup time is not established, and the six-command HCI
+identity required for success is unchanged. Recorded software results are in
+[bluetooth-native.jsonl](evidence/bluetooth-native.jsonl).
 
 [bluetooth-application.py](../checks/bluetooth-application.py) runs
 [bluetooth-module-owner.c](../checks/bluetooth-module-owner.c) with the real
@@ -468,11 +468,6 @@ It retains the authenticated session and profile before provider initialization.
 Earlier integration reconciled its 210 compiled repository inputs. The capture,
 conversion and recognition evidence remains applicable.
 
-The [shared USB emulator](../checks/bluetooth-usb-native.py) supplies task,
-endpoint and architectural counter models for playback, repeated capture and
-mSBC checks. The application check imports it and adds recognition-specific
-fixtures and clock hooks.
-
 The [application USB check](https://github.com/pedapudi/mimus/blob/c2dcb5a92b527e850a1cb7a380b07bd125d3d70b/sunstoneos/checks/bluetooth-usb-native.py) executes that frozen
 image's recognition copy, serializer, USB task and TinyUSB device stack without
 rebuilding it. Five cases pass: fragmented output with a queued repeated request,
@@ -702,14 +697,11 @@ cases build with the call-control option. A speech case records two
 `checks/bluetooth-recognition-repeated.cc` passes those segments through the
 unchanged recognizer with the borrowed slot.
 
-The actual native USB task, serializer, result APIs and TinyUSB pass delivery,
-early/stale acknowledgment, revocation and publication-order checks in
-[bluetooth-repeated-usb.py](../checks/bluetooth-repeated-usb.py). The host
-uses their produced frames to check two-result collection, backlog,
+No host check covers the native USB task, serializer, result APIs and TinyUSB
+for delivery, early or stale acknowledgment, revocation and publication order,
+or the host's use of their frames (two-result collection, backlog,
 durable-store failure, wrong identity, sample gaps, missing disconnect and a
-512-byte first USB packet. Scheduler progress, device registers,
-radio/controller events and USB device effects are modeled. No hardware
-transaction was performed. Physical headset operation, the headset's button
+512-byte first USB packet). No hardware transaction was performed. Physical headset operation, the headset's button
 behavior, receive-service bounds, recognition within the session deadline and
 wideband mSBC remain unqualified.
 

@@ -1,13 +1,14 @@
 # Per-core cycle and event counts for measurement regions
 
 Status: **implemented** and checked under instruction emulation and on QEMU
-Cortex-A55 and Cortex-A76 cores. Board bundle 4 links its single-core form, and core 0 of
-port 3-3 measured it on 2026-10-24 (section "Board measurement on core 0" of
-[the measurements](designs/cpu-pmu-measurements.md)). Event counting needs a change to the EL3
-continuation, described under [Prerequisite](#prerequisite-mdcr_el2-gives-el1-the-event-counters),
-before any image uses it. The design and its budgets are in
+Cortex-A55 and Cortex-A76 cores. The board-bundle applications
+`apps/board-bundles-cpu` and `apps/board-bundles-power` link the module, and
+core 0 of port 3-3 measured it on 2026-10-24 (record `cpu-pmu-board-core0` in
+[the evidence file](evidence/cpu-pmu.jsonl)). Both EL3 continuation paths give
+EL1 the event counters, as described under
+[Prerequisite](#prerequisite-mdcr_el2-gives-el1-the-event-counters). The design and its budgets are in
 [designs/cpu-pmu.md](designs/cpu-pmu.md), and the measured figures in
-[designs/cpu-pmu-measurements.md](designs/cpu-pmu-measurements.md).
+[evidence/cpu-pmu.jsonl](evidence/cpu-pmu.jsonl).
 
 [platform/a733/cpu_pmu.c](../platform/a733/cpu_pmu.c) measures a region of
 code on one core. At the start of the region it zeroes six event counters
@@ -166,19 +167,15 @@ core alike, so a moved task still reads an existing register.
 ## Prerequisite: MDCR_EL2 gives EL1 the event counters
 
 `MDCR_EL3` is `0x10000000` in both continuation paths: `TPM` is 0, so EL1 PMU
-accesses do not trap to EL3. `MDCR_EL2` is written as zero in
+accesses do not trap to EL3. Both
 [platform/a733/cpu_continue.S](../platform/a733/cpu_continue.S) and
-[platform/a733-smp-cached/continue.S](../platform/a733-smp-cached/continue.S).
-That sets `HPMN` to 0, which reserves every event counter for EL2 and is
-CONSTRAINED UNPREDICTABLE on Armv8.2 cores. The vendor monitor instead writes
-`PMCR_EL0.N` into `HPMN`. Both continuation files must read `PMCR_EL0.N` at EL3
-and write it into `MDCR_EL2.HPMN` with `TPM`, `TPMCR` and `HPME` zero, and
-`checks/a733-cpu-continue.py` must expect `MDCR_EL2` = 6. Those files belong to
-the CPU startup work. Until the change lands, `checks/cpu-pmu.py` reports the
-module cases and then fails on the continuation sources. No image may call the
-module before then. With `HPMN` = 0, `PMCR_EL0.N` should read 0 at EL1, which
-begin refuses. Because `HPMN` = 0 is CONSTRAINED UNPREDICTABLE, an
-event-counter access could instead trap and end in a panic.
+[platform/a733-smp-cached/continue.S](../platform/a733-smp-cached/continue.S)
+read `PMCR_EL0.N` at EL3 and write it into `MDCR_EL2.HPMN` with `TPM`,
+`TPMCR` and `HPME` zero, as the vendor monitor does. `HPMN` = 0 would reserve
+every event counter for EL2 and is CONSTRAINED UNPREDICTABLE on Armv8.2 cores.
+`checks/a733-cpu-continue.py` expects `MDCR_EL2` = 6 for the modeled
+`PMCR_EL0`. An access trapped at EL2 or EL3 ends in the EL1
+synchronous-exception panic rather than a refusal.
 
 ## Validation
 
@@ -227,12 +224,11 @@ On both cores the check requires:
 requires the nested-region, cleared-enable, two-core-mask and moved-task
 refusals. QEMU implements `INST_RETIRED` and none of the other five events.
 
-Results are in [designs/cpu-pmu-measurements.md](designs/cpu-pmu-measurements.md).
+Results are in [evidence/cpu-pmu.jsonl](evidence/cpu-pmu.jsonl).
 
 ## Physical evidence still needed
 
-Each item needs a scheduled board session under [validation.md](validation.md),
-after the `MDCR_EL2` change:
+Each item needs a scheduled board session under [validation.md](validation.md):
 
 1. Configure on cores 0 and 6 in a supervised session; record `PMCR_EL0`,
    `PMCEID0_EL0` and `PMCEID1_EL0`, and confirm that no exception occurs.

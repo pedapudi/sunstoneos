@@ -2,8 +2,8 @@
 
 SunstoneOS implements bounded analog and low-power host preparation for either
 A733 DSI controller. It requires an already enabled display PLL whose factors,
-gates and reference clock match an explicit plan. Host/source comparison and
-AArch64 compilation pass. Physical signaling remains unqualified.
+gates and reference clock match an explicit plan. AArch64
+compilation passes; no host check remains. Physical signaling remains unqualified.
 
 The [PHY API](../include/a733_dsi_phy.h) prepares the registers required by the
 [command transport](dsi.md). Cold PLL activation, retuning, shared platform
@@ -105,52 +105,31 @@ reads remain required supported modes where the physical route permits them.
 Panel power, reset, initialization commands, timing, backlight and touch remain
 separate configuration and driver responsibilities.
 
-## Validation covers preparation and one composed command
+## No host check covers preparation or the composed command
 
-One AddressSanitizer/UndefinedBehaviorSanitizer session compares four distinct
-clock plans with unchanged published clock functions. The cases cover both
-controller addresses and all lane counts. It compares the complete PHY
-register image with unchanged analog/configuration functions and every affected
-LP host field with unchanged host preparation.
+No host check covers the following, for both controller addresses and all lane
+counts. The driver does not prove analog behavior, PLL frequency, panel
+reception or physical register access.
 
-The model checks the analog delay, repeated lock sampling, restart after an
-unlocked sample, unrelated-bit preservation and copied configuration. Focused
-failed/late operations cover authority, initial reads, lock polling, partial
-analog activation, host enable and the final barrier. Additional cases cover
-unsupported cold PLL state, factor/modulation mismatch, active consumers,
-failed readback, missing lock, clock regression and quiet retained failures.
-
-Six focused admission checks also reject inherited manual transmitter, analog
-test and host-control bits before any write. Their four strengthened masks
-leave the accepted source-comparison inputs and all programming sequences
-unchanged. The successful sequence evidence is preserved and reused.
-
-One composition case prepares the PHY/host and submits a DCS packet through the
-existing command controller. The packet corpus was not repeated. The check
-reuses the preserved, hashed source reference from the command component and
-adds unchanged PHY/clock functions. Its model does not prove analog behavior,
-PLL frequency, panel reception or physical register access.
+- Four distinct clock plans compared with the unchanged published clock
+  functions.
+- The complete PHY register image compared with the unchanged analog and
+  configuration functions, and every affected LP host field compared with
+  unchanged host preparation.
+- The analog delay, repeated lock sampling, restart after an unlocked sample,
+  unrelated-bit preservation and copied configuration.
+- Failed or late operations at authority, initial reads, lock polling, partial
+  analog activation, host enable and the final barrier.
+- Unsupported cold PLL state, factor or modulation mismatch, active consumers,
+  failed readback, missing lock, clock regression and quiet retained failures.
+- Rejection of inherited manual transmitter, analog test and host-control bits
+  before any write.
+- A DCS packet submitted to the command controller after preparation.
 
 The freestanding AArch64 object contains 3,088 bytes of code/read-only data.
 Its largest direct stack frame is 64 bytes; nested and callback frames are
-additional. It requires `memcpy` and `memset`.
-
-Evidence and preserved inputs are in
-`~/.cache/sunstoneos/evidence/dsi-phy-20261016/`. `results.json` records source,
-fixture, runtime and executable identities; `target.json` records the native
-object, stack usage and undefined symbols. The final admission checks and
-native object are recorded under `admission/`; the earlier successful source
-comparison and artifact remain in the initial snapshot. No physical board access or
-performance measurement ran.
-
-Reproduce only when relevant inputs change:
-
-```sh
-python3 checks/a733-dsi-phy-reference.py \
-  --source-root ~/.cache/sunstoneos/sources/display \
-  --command-reference ~/.cache/sunstoneos/evidence/dsi-command-20261016/reference.c \
-  --evidence /path/to/new/evidence
-```
+additional. It requires `memcpy` and `memset`. No physical board access or
+performance measurement has run.
 
 The PHY/clock references use Linux revision
 `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`. The independent bootloader inspection
@@ -158,3 +137,5 @@ uses U-Boot revision `b791be842935b27268ae3d00e943a9075495f30a`.
 The A733 User Manual V1.00, sections 15.5.1–15.5.5, supplies capability and clock
 limits. Its PDF SHA-256 is
 `cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d`.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/dsi-phy.jsonl).

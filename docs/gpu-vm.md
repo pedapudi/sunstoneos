@@ -4,7 +4,7 @@ Native GPU page-table construction is **implemented and host-tested** for the
 A733 firmware profile. It prepares mappings for command buffers, shader code,
 and workload data. These tables have not been attached to a physical GPU.
 The [translation-cache invalidation protocol](gpu-flush.md) has host integration
-evidence. [Native table publication](gpu-vm-memory.md) now has FreeRTOS emulator
+evidence. [Native table publication](gpu-vm-memory.md) has FreeRTOS emulator
 evidence for CPU mappings, cache maintenance, and retained faults. Allocation,
 live mapping changes, job submission, and physical recovery remain outstanding.
 
@@ -82,26 +82,9 @@ tables cannot be replaced or released until GPU access has stopped or the requir
 invalidation and completion protocol has passed. Firmware command acceptance
 alone does not prove that GPU memory accesses have finished.
 
-## Translation and reference checks cover complete outputs
+## Translation tables have no host check
 
-One [ASan/UBSan check](../checks/pvr-gpu-vm.c) builds eleven spans using all six
-page sizes, eighteen mapped pages, and seventeen table pages. It walks the start,
-middle, and end of each mapped page and checks unmapped holes. The fixture crosses
-2 MiB and 1 GiB boundaries, includes program-execution heap addresses, and reaches
-the highest supported virtual and physical pages.
-
-The check verifies permission bits, discontiguous backing above 4 GiB, unaligned
-CPU outputs, allocation guards, empty contexts, and 34 atomic refusals.
-Rejected cases include table backing inside a larger mapped span, conflicting
-page sizes within one directory entry, malformed ranges, and output/input overlap.
-
-The [reference check](../checks/pvr-gpu-vm-reference.py) compiles the pinned
-original root, directory, leaf, and permission encoders. It selects each page-size
-constant in turn. The original firmware-context structure, layout assertions,
-and initializer supply the context reference. Complete native table and context
-bytes match, including invalid entries and padding. Source hashes are verified
-against the pinned board-source manifest. This comparison proves format agreement;
-it does not prove physical translation or cache behavior.
+No host check builds spans of the six page sizes, walks the mapped pages, or compares the table and context encoders with the pinned original functions. The table format, the 2 MiB and 1 GiB boundary handling, the refusal of conflicting page sizes and the context layout rest on the source. Physical translation and cache behavior are not covered by any host evidence.
 
 Clang 21 compiled the component for AArch64 with strict alignment and freestanding
 options. It contains 1,828 bytes of code/read-only data and no writable static
@@ -113,3 +96,5 @@ Commands, input snapshots, hashes, output buffers, reference code, and objects
 are under `~/.cache/sunstoneos/evidence/gpu-vm-20261016/`. Existing firmware,
 queue, OS, mimus, and NPU evidence was reused. No device access or performance
 measurement occurred.
+
+Results of host checks that no longer exist are kept in the evidence record [gpu-vm.jsonl](evidence/gpu-vm.jsonl).

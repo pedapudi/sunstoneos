@@ -1,8 +1,12 @@
 # Three NPU starts in one board lifetime
 
-Status: **runbook only**. No set is frozen and nothing here has run. The
-coordinator freezes a set from the images and host this runbook names, then
-runs it on port 3-3, whose speed bin (code 4, vf0400) admits 852 MHz.
+Status: **runbook only**. No set is frozen, and the three-start sequence has
+not run. The NPU already runs on the board at 852 MHz and 800 mV after a
+default start, with matching outputs ([NPU status](../status/npu.md)). The
+untested steps are the adoption of a 492 MHz PLL_NPU and the retune from 492
+to 852 MHz in one lifetime ([852 MHz design](../designs/npu-852mhz-plan.md)).
+The coordinator freezes a set from the images and host this runbook names,
+then runs it on port 3-3, whose speed bin (code 4, vf0400) admits 852 MHz.
 
 ## What the run qualifies
 

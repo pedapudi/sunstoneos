@@ -356,56 +356,8 @@ original allocation proof and page table byte for byte. Completion resumes the
 saved context with an identical final session. The fixture models its prepared
 board deadline and counter before allocation; it excludes bootstrap timing.
 
-Selectable strength is checked by `checks/deinterlace-strength.py`. Host plan
-generation under ASan/UBSan produces all four strengths with the pinned DI301
-code, confirms that only the strength word differs among submitted TNR words,
-and refuses strength 4, strength outside mode 3 and an unknown strength word.
-The linked AArch64 image, SHA-256
-`9a4c1c388770184a5ce52079bd4583e5883c47e0aa4c2f84bb8c14a297bbc7d2`, produces
-identical register plans for strengths 0 to 3 and refuses strengths 4 and 5.
-Host preparation mirrors the strength rule for every mode, refuses a selected
-strength for the accepted revision-3 image and labels each captured mode. A
-rebuilt 2536-byte SRAM launcher admits strengths 0 to 3 and refuses an
-out-of-range strength and strength outside TNR in the shared AArch32 model,
-using an earlier TNR bundle's identities. The earlier WEAVE, motion and TNR
-launcher cases, plan checks and TNR host capture pass with the changed code.
-No device effect, filtering arithmetic or physical operation is modeled.
-
-Repeated jobs are checked by two host checks against the linked image with
-SHA-256 `3d5acdf6bcdbd2653b2e0537f4a8169235cbb83fe0be5b33e2b6fe0e6007d25e`.
-Their results are not yet frozen as evidence.
-
-- `checks/deinterlace-jobs.py` generates 54 sequences, 162 job plans in all,
-  with the pinned DI301 code under ASan/UBSan. Each later job's statistics come
-  from a fixed generator, including all-zero counters. The check recomputes
-  each of the 72 later TNR strengths from those statistics with the source's
-  integer widths; the gain both falls and rises within its level. It confirms
-  that submitted words change between jobs only in input and flag addresses,
-  the TNR strength and the cleared accumulators. Single-job plans of every
-  mode and strength equal those of the parent revision. The linked image
-  produces byte-identical plans from the same statistics. The check also
-  covers host preparation and capture rules, the admission fact a sequence
-  needs, and a rebuilt 2536-byte SRAM launcher that admits repeats 0 to 3 and
-  refuses 4.
-- `checks/deinterlace-jobs-native.py` runs the linked task through WEAVE,
-  motion and TNR sequences with a synthetic device. The device model reads
-  each job's inputs through the actual IOMMU table and requires the job's
-  uploaded frames and the previous job's flags. It keeps busy set for three
-  status reads and returns per-job statistics. A memory hook refuses any CPU
-  write to a DMA input or the output while a job is in flight. Every later TNR
-  strength must equal the independently recomputed gain. The native USB
-  serializer, host capture and ACK receipt run on each reply, and the actual
-  allocation rows and page table pass host preparation's allocation check.
-  Failure cases cover a refused statistics read, the two refused statistic
-  patterns, a missing finish on the third job, busy with finish, a changed
-  input, a changed guard and an IOMMU fault. Each ends with every allocation
-  retained and the finished-job count in the reply.
-
-`checks/deinterlace-usb.py` also replays the four-job TNR result through the
-actual TinyUSB stack at full and high speed: 1,843,392 bytes with FIFO refill,
-terminal ZLP and ACK ordering. The earlier WEAVE, motion, TNR, strength,
-launcher, boot-guard and host-capture checks pass with this image. Its
-single-job TNR reply, ACK receipt, output and page table equal the earlier
-`deinterlace-tnr-20261020` evidence byte for byte. None of these checks
-establishes DI arithmetic, the statistics hardware produces, buffer access
-after finish or any other physical behavior.
+Selectable strength (0 to 3, refused outside TNR mode) and repeated jobs have
+no host check. Recorded software results, with the image identities they used,
+are in [deinterlace-native.jsonl](evidence/deinterlace-native.jsonl). None of
+them establishes DI arithmetic, the statistics the hardware produces, buffer
+access after finish or any other physical behavior.

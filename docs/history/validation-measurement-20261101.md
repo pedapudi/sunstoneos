@@ -1,6 +1,6 @@
 # Host validation measurement, 2026-11-01
 
-This record measures which host checks catch defects that later fail on the board, and classifies the checks that the full gate runs. The coordinator uses it to decide which checks leave the gate. Judgments that could not be confirmed from commits, check diffs or logs are marked "unconfirmed". The classifications were produced by reading each check and what it builds; no check was re-run on pre-fix code, so every "reproduces" entry means that the fix commit adds or changes a check case that fails on the old code according to the commit and its diff.
+This record measures which host checks catch defects that later fail on the board, and classifies the checks that the full gate runs. The coordinator uses it to decide which checks leave the gate. Judgments that could not be confirmed from commits, check diffs or logs are marked "unconfirmed". The classifications were produced by reading each check and what it builds. No check was re-run on pre-fix code, so every "reproduces" entry means that the fix commit adds or changes a check case that fails on the old code according to the commit and its diff.
 
 ## Method
 
@@ -21,7 +21,7 @@ Causes of the 48 image failures: hardware view or inherited state unknown to the
 
 No failure had a host check that fully covered it before the run. In the cases where a check existed, the fixture or model shared the code's assumption. The clearest cases are the four in the brief (GIC priority view 0xb0 against 0xd8, OPEN reply BOOTING, WAIT refused) and these, all documented in the detail file:
 
-- A fixture echoed the written value for the GPU reset register (`checks/pvr-gpu-stop.c`); the board reads 0xe8000020.
+- A fixture echoed the written value for the GPU reset register (the GPU stop host check, since removed); the board reads 0xe8000020.
 - Probe entry checks required cold-boot values (secondary CPU static OFF, VIDEO_IN reset bit 16 clear, ISP_AHB_CFG0 zero, AUDIO1 reserved bit 24 clear) where the board inherits other values.
 - The deadline fixture used a nonzero sealed session deadline where the board has zero (`checks/deadline-host.c`).
 - The QEMU board entered cores with a different SP_EL0 than the real launch.
@@ -63,7 +63,7 @@ All three confirmed catches are build, link or configure failures (structure lay
 
 ## Gate checks by class
 
-Classes: (a) own logic; (b) linked real code on both sides; (c) safety before a board run; (d) hardware or vendor model with a citation for each behavior; (e) hardware or vendor model without such citations; (f) other. A "+e" mark means the primary class is (a) or (b) and the check also relies on an uncited model of a device, card, register layer or service reply; these are candidates for the same review as class (e), but they carry the real code on both sides. Owners: NPU is the NPU owner, SCHED is the scheduler stream, OTHER is anyone else.
+Classes: (a) own logic; (b) linked real code on both sides; (c) safety before a board run; (d) hardware or vendor model with a citation for each behavior; (e) hardware or vendor model without such citations; (f) other. A "+e" mark means the primary class is (a) or (b) and the check also relies on an uncited model of a device, card, register layer or service reply. These are candidates for the same review as class (e), but they carry the real code on both sides. Owners: NPU is the NPU owner, SCHED is the scheduler stream, OTHER is anyone else.
 
 | Class | Checks | Gate seconds |
 | --- | --- | --- |
@@ -199,4 +199,4 @@ The classification of the checks in the NPU and scheduler streams is listed abov
 
 ## Outcome of the class (e) review
 
-The coordinator reviewed the class (e) list on 2026-11-01. Citations were searched for the eight checks outside the NPU stream; none could cite every modeled behavior, so `a733-pcie-trace`, `pcie-qemu`, `a733-xhci-detach`, `a733-xhci-dma` (returned to the gate later the same day), `io-native-ordering`, `memtest-machine`, `power-write-order` and `provider-clock-reference` are pending re-qualification and no longer run in the full gate. `npu-idle` stays in the gate until the NPU stream changes idle gating. [The rules and the pending table](../validation.md#checks-pending-re-qualification) hold the uncited behaviors.
+The coordinator reviewed the class (e) list on 2026-11-01. Citations were searched for the eight checks outside the NPU stream. None could cite every modeled behavior, so `a733-pcie-trace`, `pcie-qemu`, `a733-xhci-detach`, `a733-xhci-dma` (returned to the gate later the same day), `io-native-ordering`, `memtest-machine`, `power-write-order` and `provider-clock-reference` are pending re-qualification and no longer run in the full gate. `npu-idle` stays in the gate until the NPU stream changes idle gating. [The rules and the pending table](../validation.md#checks-pending-re-qualification) hold the uncited behaviors.

@@ -132,7 +132,7 @@ The host supplied one sealed model session and the coordinator supplied its
 exact armed contract. No physical admission records were manufactured for a
 board run; these inputs are explicitly MODEL evidence.
 
-`checks/hdmi-audio-native.py` executed the linked admission and constructor,
+An earlier host run executed the linked admission and constructor,
 then resumed the three actual PMIC, HDMI-output and DMA task bodies. An immutable
 2049-frame caller file crossed three source pages and ended with a partial DMA
 burst. The actual native path completed its FIFO job, observed DMA completion
@@ -143,9 +143,7 @@ drain. Its PCM and session hashes match the supplied inputs.
 
 The positive execution is saved in `native-run/`. Its runner source hash is
 `fc9c0ca68687099021c0b6e525f4a9ab54e94eab66995bb3debad6b7d61370a7`.
-A later runner fixed a Python byte-array conversion and terminal-state
-bookkeeping, restored that verified terminal checkpoint, and executed only two
-previously unexecuted failure continuations. `native-faults-final/` records a
+`native-faults-final/` records two failure continuations: a
 sink without the required LPCM capability and interruption after DMA submission
 but before FIFO requests. Both publish retained failure without claiming source
 consumption or drain, performing later device writes, or releasing the allocation.
@@ -343,3 +341,5 @@ correction; its seven affected cases supply the additional evidence.
 `final-evidence-reuse.json` records that boundary. The successor host bundle
 and supervisor-entry check bind the final image separately. Neither image has
 physical streaming qualification.
+
+Results of host checks that no longer exist are kept in the evidence record [hdmi-audio.jsonl](evidence/hdmi-audio.jsonl).

@@ -162,36 +162,23 @@ independent watchdog recovery remains a prerequisite for board execution.
 
 ## Validation composes the real software components
 
-The [focused runner](../checks/a733-uart-platform.py) links the actual UART
-controller, shared pin manager and widened clock registry to modeled registers.
-It checks configuration and byte transfer, conflicting UART1 routes, coexistence
-of separate controllers, parent stability, shared S_UART word preservation,
-GIC masking, shift-register drain, completed release and retained faults.
-It also checks pin-manager health refusal and a late live transmit access.
-Through the binding's callbacks, UART1 enters loopback and RS-485, transmits
-a ninth bit and returns to UART mode, and S_UART0 enters IrDA SIR and refuses
-RS-485. Both ports then run a DMA lease: prepare, enable and disable the
-requests, and release.
-The native address restrictions cover every selected route.
-
-The runner pins source hashes, checks local clock declarations, executes the
-composition once with AddressSanitizer and UndefinedBehaviorSanitizer, and
-compiles the native adapter for single-core and SMP configurations.
-Compiler dependency files identify the exact headers preserved with evidence.
-The accepted composition and native objects are under
-`~/.cache/sunstoneos/evidence/uart-platform-20261016/checked-2/`.
-Its manifest preserves 87 inputs. The composed executable SHA-256 is
-`1b9aee7e234d157ca6046608b681fc14d6e11ee23e1f02d1f9bf0d033f7b37dc`.
-The runtime check passed once; native compiler setup corrections did not repeat it.
-Existing UART format/FIFO/interrupt, pin-manager and I2S evidence remains valid;
-this binding does not rerun those component workloads.
-
-The focused [deferred IRQ check](../checks/a733-uart-irq-platform.c) reuses the
-accepted provider fixture and runs only the added branches. It covers disabled,
-active and RWP observations, THRE arming without FIFO transmission, actual IIR
-TX/RX-timeout/overrun service and retained uncertain interrupt-enable writes.
-The application evidence is under `uart-irq-20261019/`; prior polling component
-evidence remains applicable to unchanged behavior.
+A host composition links the actual UART controller, shared pin manager and
+widened clock registry to modeled registers under AddressSanitizer and
+UndefinedBehaviorSanitizer. It checks configuration and byte transfer,
+conflicting UART1 routes, coexistence of separate controllers, parent
+stability, shared S_UART word preservation, GIC masking, shift-register drain,
+completed release and retained faults, pin-manager health refusal and a late
+live transmit access. Through the binding's callbacks, UART1 enters loopback and
+RS-485, transmits a ninth bit and returns to UART mode, and S_UART0 enters IrDA
+SIR and refuses RS-485. Both ports then run a DMA lease: prepare, enable and
+disable the requests, and release. The native address restrictions cover every
+selected route, and the native adapter compiles for single-core and SMP
+configurations. The deferred IRQ cases (disabled, active and RWP observations,
+THRE arming without FIFO transmission, IIR TX/RX-timeout/overrun service and
+retained uncertain interrupt-enable writes) ran in the same way. Neither has a
+retained check; the runs are in [the evidence file](evidence/uart-platform.jsonl).
+Existing UART format, FIFO and interrupt, pin-manager and I2S evidence applies to
+unchanged behavior.
 
 The [finite header application](uart-application.md) integrates UART2 with
 deferred IRQ service, a passive PB0/PB1 loopback, copied USB output and complete
@@ -208,4 +195,4 @@ The source basis is A733 User Manual V1.00 sections 4.1, 4.2, 9.1.7.16,
 header and Bluetooth wiring. The published kernel revision
 `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f` supplies the matching main and
 always-on clock declarations, SoC device tree and pin-controller tables.
-The runner records exact document and source identities in its evidence.
+The evidence records exact document and source identities.

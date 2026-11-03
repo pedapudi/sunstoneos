@@ -1,26 +1,19 @@
 # Thermal transitions and E902 management need separate ownership proofs
 
-Status: reference analysis and proposed qualification sequence. This document
-authorizes no voltage, power-domain, sleep or board operation. It is intended
-for the coordinator and the processor lifecycle owners.
+Status: **open**. The thermal driver is implemented (see below) and finite acquisition is board-qualified; thermal transitions, protection, top-point transitions and E902 management are a proposed qualification sequence. This document authorizes no voltage, power-domain, sleep or board operation. It is for the coordinator and the processor lifecycle owners.
 
 ## Reuse finite acquisition evidence before testing protection
 
-The hardware matrix already records physical acquisition and normal return
-from the finite thermal image. Its earlier statement that acquisition remains
-unqualified is stale. That result establishes a finite observation; calibrated
-accuracy, interrupt delivery, thermal transitions and sustained behavior remain
-open. The returning CPU image can also capture its existing thermal window
-without starting USB, as described in [the capture design](cpu-return-thermal.md).
+The hardware matrix records physical acquisition and normal return from the finite thermal image. That result establishes a finite observation; calibrated accuracy, interrupt delivery, thermal transitions and sustained behavior remain open. The returning CPU image can also capture its existing thermal window without starting USB, as described in [the capture design](cpu-return-thermal.md).
 
-The current driver implements all five sensors, factory calibration, alarm and
+The driver implements all five sensors, factory calibration, alarm and
 critical status, deferred interrupt handling and stale-sample protection.
 [The thermal reference](../thermal.md) pins the five-channel layout and IRQ71.
 The OS CPU limit can lower the critical trip, and cannot raise the normal
 110 °C critical threshold. The existing qualification limit is 70 °C.
 These are implemented mechanisms; physical transitions remain unqualified.
 
-Before another thermal image, compare the current driver's complete startup,
+Before another thermal image, compare the driver's complete startup,
 threshold, IRQ acknowledgement and configured-disable sequences against the
 pinned Linux source and manual sections 7.1.6 and 7.1.8. Carry the effective
 26 MHz oscillator and normalized reference route through that comparison.
@@ -51,7 +44,7 @@ uncertainty is a failed protection case.
 ## Qualify existing top points and transitions after lifecycle acceptance
 
 Both saved speed-bin words select vendor bin 4. The source-backed points are
-already implemented in [performance modes](../performance-modes.md):
+implemented in [performance modes](performance-modes.md):
 
 | Block | Default high point | Optional low point |
 | --- | --- | --- |
@@ -68,7 +61,7 @@ for each interval. Then compare fixed CPU, GPU and NPU jobs individually and
 concurrently. Concurrency requires the shared clock/rail registry and each
 owner's accepted fault behavior; CPU fallback cannot satisfy either accelerator.
 
-Retain the existing operation deadlines until the owners establish tighter
+Retain the operation deadlines until the owners establish tighter
 measured bounds. Before implementation, a design panel must set measurable
 limits for thermal notification-to-stop, processor drain, voltage settling and
 normal return. The same three reviewers must review the resulting code.
@@ -77,7 +70,7 @@ Unexplained regressions block integration.
 
 ## Starting the vendor E902 firmware conflicts with the runtime provider
 
-Current SunstoneOS excludes the E902 as a remote writer. There is no native
+SunstoneOS excludes the E902 as a remote writer. There is no native
 mailbox owner or system suspend implementation. The
 [SCP analysis](../vendor-firmware/scp-firmware.md) derives the vendor sequence
 from firmware SHA-256 `07e6b97628101963e7944e012948c4bdf721f914bad347acd7dfbde89db42749`

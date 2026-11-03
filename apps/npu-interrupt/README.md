@@ -88,7 +88,6 @@ The same host commands prepare and capture this profile. Its admission adds a
 hashed restart review for the exact retained owners and lifetime, explicitly
 marked `under-test`; built manifests retain `physical_admission=false`.
 See the [returning restart admission](../../docs/npu-startup.md#returning-restart-diagnostic-requires-a-separate-admission-review)
-for required records, validation evidence and physical limits. Run the linked
-client check with `checks/npu-interrupt-client.py --restart`, then the host
-check with `--native IMAGE_DIRECTORY --client-logs CLIENT_CHECK_DIRECTORY
---evidence NEW_DIRECTORY`. No physical same-instance restart has run.
+for required records, validation evidence and physical limits. Run the host
+check with `--native IMAGE_DIRECTORY --evidence NEW_DIRECTORY`. No physical
+same-instance restart has run.

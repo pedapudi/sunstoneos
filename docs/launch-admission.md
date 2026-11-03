@@ -84,7 +84,6 @@ that an image meets the runner's return contract.
 
 ## Validation and limits
 
-Host evidence lives under `~/.cache/sunstoneos/build/admission-1031/`.
 The active runner fixtures cover watchdog expiry before entry, missing and
 wrong-session return breadcrumbs, transfer failures, invalid native reports,
 decoder failures, rail deadlines and post-return restoration. CPU/GPU offline
@@ -92,29 +91,8 @@ preparation and native watchdog instruction checks complement those fixtures.
 The bundle fixture retains conditional MMIO, SRAM restoration, native monitor
 limits, object equivalence and controlled-outcome validation.
 
-For the admission consolidation ending at `78888bb6`, the measured
-runner/development check pair replaces duplicate transport cases
-with active-runner failure cases. Its total remains 56 named cases; elapsed time
-falls from 18.55 to 4.29 seconds on this host. Its check index contains 762
-scripts. Across changed code and build files, line count falls from 12,912 to
-9,928, excluding documentation. Raw counts and timings are in `metrics.json`
-and the `before-*`, `check-runner-4` and `check-dev-final` logs.
-
-The OS-only, hello-compute and external mimus baseline builds pass. The selected
-integration gate passes its kernel build/runtime check and check-index
-verification. Native watchdog checks pass 19 cases; real CPU/GPU offline
-preparation passes both cases. The full bundle fixture passes in 1.73 seconds.
-After the DDR evidence-directory adjustment, both affected owner-injection
-cases pass separately.
-
-Correctness, hardware-safety and recovery reviewers inspect the runner change.
-The manifest change has separate correctness review and a safety audit of the
-removed process checks. Review fixes preserve decoder failure handling, queued
-input bytes, source-relative decoder paths, the probe-check default, unresolved
-return quarantine and separate evidence for both rail-helper invocations.
-
-No physical run or new hardware qualification is recorded here. Existing images
-without a compatible watchdog, finite cleanup and return receipt remain blocked
+No physical run or new hardware qualification is recorded here. Images
+without a compatible watchdog, finite cleanup and return receipt are blocked
 at runner admission. Historical cached READMEs are retained as evidence; new
 builds use the shared renderer.
 
@@ -124,5 +102,3 @@ frozen at submission; optional stopped-state capture precedes verified DRAM
 restoration. Thermal decode failure or incomplete evidence yields a result
 mismatch after normal return and preserves every raw capture. Resuming a port
 does not collect orphan jobs; daemon recovery skips live runner processes.
-The merge checks and three baseline builds are recorded under the evidence
-directory's `resume-merge/` subdirectory.

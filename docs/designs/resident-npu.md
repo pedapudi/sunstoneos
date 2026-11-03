@@ -1,5 +1,7 @@
 # Resident OS NPU application and card assets
 
+Status: **host-tested**; the resident cold-boot path has no board run (open).
+
 The resident recorded-audio OS can run its existing finite NPU catalogue
 application alongside CPU recognition. Enable `SUNSTONE_A733_OS_NPU` and
 `SUNSTONE_A733_OS_RESIDENT`; the resident profile also accepts
@@ -100,35 +102,8 @@ The `--model-fixture` path only exercises the producer and admission checks.
 It cannot qualify a physical installation, even when every software check
 passes.
 
-## Software evidence
+## Evidence and limits
 
-`~/.cache/sunstoneos/evidence/resident-npu-1026` contains the selected ShuffleNet
-resident build and focused checks. The component build uses CPU clock grants,
-A76 admission and the default two recognition workers. Its stage-2 binary is
-32,608 bytes, leaving 160 bytes under the fixed limit. The failed CODE-only
-placement and its symbol sizes are preserved alongside the corrected layout.
+The resident build, card producer, linked stage-2 entry, cold-policy validator and the late-IRQ, runtime-fault and stopped-exemption cases are host-tested with modeled RTOS replies, counters, SID and watchdog registers. Stage-2 is 32,608 bytes with two recognition workers (160 bytes under the fixed limit) and the CPU monitor build with eight workers is 32,688 bytes (80 bytes under). The checks execute no NPU inference, reset or physical card operation, and earlier ShuffleNet inference and local-stop results do not qualify the resident cold-boot path. Figures and case counts are in [resident-npu.jsonl](../evidence/resident-npu.jsonl), records `resident-npu-selected-shufflenet-build` and `resident-npu-cpu8-build`.
 
-The actual card producer and sanitizer-backed native admission pass 32 cases.
-That record inherits the case label `actual-eight-worker-bundle`; its image
-manifest and linked capability establish two workers. The checker now uses
-`actual-linked-worker-bundle`, and seven focused named refusals confirm the
-NPU summary binding and actual model-byte authentication.
-The linked stage-2 entry passes 20 cases, including both NPU session sizes,
-fresh epoch publication and rejected grant mutations. The linked NPU code and
-cold-policy validator pass 18 focused cases covering the finite work cap,
-OPEN and stopped-wait expiry, terminal health and mismatched cold authority.
-RTOS replies, counters, SID and watchdog registers are modeled. These checks
-execute no NPU inference, reset or physical card operation. Earlier successful
-ShuffleNet inference and normal local-stop evidence remain unchanged; they do
-not qualify this resident cold-boot path.
-
-The combined resident build in
-`~/.cache/sunstoneos/evidence/resident-npu-cpu8-1026` selects eight recognition
-workers, CPU clock grants, A76 admission and the same ShuffleNet entry. Its
-monitor includes the reviewed CPU static-OFF owner and is 32,688 bytes, leaving
-80 bytes. The final image passes card production and 20 linked entry cases.
-Three focused linked cases verify late-IRQ revocation, persistent atomic
-runtime fault and the pre-activation stopped exemption. The initial late-IRQ
-fixture targeted an unlinked helper; the corrected check invokes the actual
-`board_resident_renew` path with only watchdog reload modeled. CPU-owner checks
-use this same final artifact. No inference or physical test is repeated.
+Open work: a physical resident cold-boot run of the NPU application, and the cold records that establish cross-PLL disturbance qualification, watchdog-reset retirement and remote-writer exclusion.

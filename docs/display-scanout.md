@@ -3,7 +3,7 @@
 The scanout coordinator runs the existing A733 PHY, DSI video, LCD1, and display
 engine controllers as one lifecycle. It admits one immutable XRGB8888 framebuffer
 for the implemented UCH3 → DE1 → LCD1 → DSI1 path. Its orchestration is
-implemented and checked in a host model. Physical scanout remains unqualified.
+implemented; no host check remains. Physical scanout remains unqualified.
 
 The interface is `include/display_scanout.h`; the implementation is
 `drivers/display/display_scanout.c`. One privileged FreeRTOS owner supplies
@@ -181,49 +181,25 @@ release memory, or authorize another session. Physical signaling, panel receptio
 and safe transaction/output drain remain unqualified. No MIPI display is attached
 and the panel remains undecided.
 
-## Native provider validation uses the actual producers
+## No host check covers the provider and the composed lifecycle
 
-`checks/display-native.py` reuses the media-clock/PLL producer fixture and links
-the actual allocator, IOMMU tables, handoff, coordinator and leaf controllers.
-Its ASan/UBSan model passed preparation and start, refusal of an invalid CPU
-mapping before publication, and refusal of a changed live IOMMU mapping before
-DE arming. Unsupported drain preserved active LCD1 and retained both memory
-allocations. Wrong-task admission had no effects. An uncertain native write
-retained the common mutex; terminal polling made no further MMIO accesses.
-Native register accesses, CPU translation, mutexes and the panel are modeled;
-these results do not establish physical operation.
+No host check links the actual allocator, IOMMU tables, handoff, coordinator
+and leaf controllers to exercise preparation and start, refusal of an invalid
+CPU mapping before publication, refusal of a changed live IOMMU mapping before
+DE arming, unsupported drain with LCD1 left active and both memory allocations
+retained, wrong-task admission, or an uncertain native write that retains the
+common mutex. Likewise no host check runs the composed lifecycle (preparation,
+start, observation and stop with pending acquisitions and drain proofs), the
+resource-token mutation, frame-extent, authority, uncertain-write,
+post-write-deadline, reentry, DSI-stop, drain-generation and pending-drain
+faults, or the model panel's DCS NOP command. No hardware access or
+performance measurement has run.
 
-The provider core and native MMIO adapter compiled for freestanding AArch64.
-The adapter used the existing FreeRTOS headers and configured cached-port
-headers. The exact commands, dependencies, results and objects are preserved in
-`~/.cache/sunstoneos/evidence/display-native-20261018/final/`; the immutable
-snapshot is its sibling `snapshot/`. Existing leaf and ownership-publication
-evidence was reused. No hardware access or performance measurement occurred.
-
-## Validation exercises the composed implementations once
-
-`checks/display-scanout.py` builds one ASan/UBSan model linking the actual PHY,
-LP command, DSI video, LCD1, and DE implementations. One lifecycle runs
-preparation, start, observation, and stop with pending acquisitions and drain
-proofs. The model panel executes a native DCS NOP command; this is a controller
-composition fixture, not a production panel initialization sequence.
-
-Fault cases restore checkpoints from that successful lifecycle. They cover
-resource-token mutation, mismatched frame extents, authority denial, uncertain
-writes, post-write deadlines, reentry, DSI stop failure, wrong drain generation,
-drain failure, and an indefinitely pending drain. They verify retained tokens
-and that LCD1 stays active until independent DE drain succeeds.
-
-The composed model and freestanding AArch64 compile passed in one batch. The
-coordinator object is 4709 bytes. Direct stack frames are 624 bytes for
-initialization, 48 for polling, and 176 for leaf initialization. Task sizing
-must also include the nested controller planners and provider callbacks.
-
-Exact executed inputs, executable, commands, native object, stack report, and
-results are preserved under
-`~/.cache/sunstoneos/evidence/display-scanout-20261016/initial-snapshot/`.
-Existing leaf source-comparison evidence was reused. No physical hardware or
-performance benchmark was run.
+The provider core and native MMIO adapter compile for freestanding AArch64
+against the FreeRTOS headers and cached-port headers. The coordinator object is
+4709 bytes. Direct stack frames are 624 bytes for initialization, 48 for
+polling and 176 for leaf initialization. Task sizing must also include the
+nested controller planners and provider callbacks.
 
 ## Standalone retained DSI application
 
@@ -410,8 +386,7 @@ observations; they do not prove that the old pixels are no longer being fetched.
 The core retirement query therefore refuses every slot.
 
 The pinned references below are already recorded in `sources.lock.json`.
-Their cached bytes matched the recorded SHA256 values during the 2026-10-28
-audit. Linux sources use revision
+Their cached bytes match the recorded SHA256 values. Linux sources use revision
 `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`; they are host references, not
 additional native runtime dependencies.
 
@@ -466,3 +441,5 @@ scanout or retirement.
 Generic pixel timing, connector discovery and selected panel descriptions follow
 the [display class contract](display-classes.md). Board wiring and authenticated
 panel selection remain separate from the retained scanout ownership contract.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/display-scanout.jsonl).

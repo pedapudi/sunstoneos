@@ -143,5 +143,4 @@ pinned files.
 
 The tables and the adapter run in `checks/npu-startup-host.c` and
 `checks/npu-startup.c` through the sequencer, and in the linked images through
-`checks/npu-application-clock-reference.py` and `checks/npu-stop-native.py`
-([npu-startup.md](npu-startup.md#checks)).
+`checks/npu-stop-native.py` ([npu-startup.md](npu-startup.md#checks)).

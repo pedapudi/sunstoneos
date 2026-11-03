@@ -69,22 +69,20 @@ transpose operations, coefficient streams, burst alignment, and prefetch
 still require analysis. Output callers must also be traced to establish
 how they calculate channel offsets and apply circular-buffer wrapping.
 
-## One bounded check preserves the interpretation
+## No host check preserves the interpretation
 
-The [reference check](../checks/nbg-stride-reference.py) pins the simulator and
-both saved model hashes. It confines execution to selected instruction ranges
-with time and instruction limits. It checks the target lookup and predicates,
+No host check covers the stride interpretation. A bounded one-time comparison pinned the simulator and
+both saved model hashes and confined execution to selected instruction ranges
+with time and instruction limits. It checked the target lookup and predicates,
 two saved descriptor stride pairs, and two synthetic pairs with nonzero high
-halves. Address samples use synthetic state for the two saved descriptors.
-No inference, external-memory helper, or device access executes.
-
-The first attempt stopped on an incorrect assumption that a simulator feature
-field represented the board's SRAM capacity. Inspection found the field was
-zero for the target. The corrected check makes its synthetic branch selection
-explicit and passes. An intervening invocation refused an existing output
-directory before instruction execution.
+halves. Address samples used synthetic state for the two saved descriptors.
+No inference, external-memory helper, or device access executed. The simulator
+feature field is zero for the target and does not represent the board's SRAM
+capacity.
 
 Raw extraction records, disassembly, the check copy, and results are under
 `~/.cache/sunstoneos/evidence/nbg-access-research-20261016/`.
 The passing result is `stride-check-corrected/comparison.json`.
 Native assembly, inference, and performance checks were not repeated.
+
+Results of host checks that no longer exist are kept in the evidence record [nbg-strides.jsonl](evidence/nbg-strides.jsonl).

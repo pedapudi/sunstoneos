@@ -166,41 +166,15 @@ releases the client slot or resets hardware. Successful task completion permits
 reuse of the same reserved memory; global drain, shutdown and reclamation remain
 separate requirements.
 
-## Focused evidence covers composition and stream boundaries
+## The hash path has recorded software results only
 
-`checks/a733-ce-hash.c` runs the actual session, entropy, hash, controller, pool
-and registry code against a descriptor-driven SHA compression model. Its cache
-model separates published input from mutable caller storage. Python's independent
-`hashlib` implementation checks the returned digests in `checks/a733-ce-hash.py`.
-The model covers empty input, padding boundaries, multiple tasks, both client
-orders, deferred TRNG provisioning, native construction exclusion and retained
-failures. Modeled digest equality does not qualify physical hardware output.
-
-The focused ASan/UBSan model, independent digest comparison, pinned-source
-checks and native AArch64 compilation pass. The existing entropy fixture also
-compiles with the extracted private fields; its full suite was not rerun. A
-relocatable native link resolves the actual session, pool, registry and translation
-implementations. Final linker symbols, runtime `memset` and the pool module's
-separate DMA constructor remain external image inputs. This is not a boot check.
-
-`checks/a733-ce-modes.c`, driven by `checks/a733-ce-modes.py`, runs the same
-real code against a descriptor-driven model engine for all five methods. The
-model's SHA round constants and initial values come from the script, which
-derives them from prime square and cube roots with exact integer arithmetic.
-The script compares 155 streams with Python `hashlib` and `hmac`: 13 message
-lengths from 0 to 5003 bytes for each method, and HMAC keys of 0, 20, 64, 100,
-131 and 1024 bytes with three message lengths for each method. The model also
-checks each descriptor's selector, state length and continuation state. It
-covers refusal of unknown methods, wrong block multiples, over-long keys,
-aliased keys and wrong digest lengths, and retention after a failed HMAC task.
-These checks, run on 2026-10-21 under ASan and UBSan, pass. They do not qualify
-physical hash output. In the board image build with these methods, the six CE
-objects contain 37,680 bytes of code and eight bytes of BSS.
-
-For the initial SHA-256 stream, the five CE objects contained 28,736 bytes of
-code and eight bytes of BSS for the native owner pointer. The largest direct
-compiler-reported stack frame was 352 bytes; no whole-call-chain bound is claimed. Exact executed inputs and
-artifacts are preserved in
+No host check runs the actual session, entropy, hash, controller, pool and
+registry code against a descriptor-driven SHA model, compares digests with an
+independent implementation, or exercises the five hash methods over message lengths from 0 to 5003 bytes and HMAC keys up to
+1024 bytes. Modeled digest equality does not qualify physical hardware output.
+In the board image built with these methods, the six CE objects contain 37,680
+bytes of code and eight bytes of BSS. The recorded results and exact inputs are
+in [crypto-hash.jsonl](evidence/crypto-hash.jsonl) and
 `~/.cache/sunstoneos/evidence/ce-hash-20261016/batch1/`.
 
 MD5, SM3, the engine's hardware padding and HMAC modes, asymmetric operations,

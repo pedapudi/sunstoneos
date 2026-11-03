@@ -240,32 +240,19 @@ The reference check verifies its three Linux input hashes before compiling
 isolated source functions. Pin proposals for central integration accompany the
 external evidence; this component does not modify the central source lock.
 
-The changed risks are incorrect permissions or addresses, publishing incomplete
-tables, overwriting inherited global state, and releasing resources after an
-unproven flush. The focused [host check](../checks/a733-iommu.c) independently
-walks published page tables, including a physical-address transition across
-4 GiB. It checks adjacent unmapped pages, permissions, atomic refusal, all-master
-admission, cache publication, dropped writes, deadlines, time regression,
-partial admission and retained faults. AddressSanitizer and UndefinedBehaviorSanitizer
-pass. The core also compiles freestanding for AArch64.
-
-The [source comparison](../checks/a733-iommu-reference.py) compiles unchanged
-Linux initialization, bypass, flush and leaf-encoding functions. All 128 KiB of
-modeled registers match except the explicit polled interrupt masks. All 180
-leaf entries match across physical-address extensions and permissions.
+No host check walks the published page tables or compares the driver with the Linux initialization, bypass, flush and leaf-encoding functions. The risks are incorrect permissions or addresses, publishing incomplete tables, overwriting inherited global state, and releasing resources after an unproven flush. Earlier host runs walked the published page tables, including a physical-address transition across 4 GiB, with adjacent unmapped pages, permissions, atomic refusal, all-master admission, cache publication, dropped writes, deadlines, time regression, partial admission and retained faults under AddressSanitizer and UndefinedBehaviorSanitizer. The core also compiled freestanding for AArch64. A compilation of unchanged Linux functions matched all 128 KiB of modeled registers except the explicit polled interrupt masks, and all 180 leaf entries across physical-address extensions and permissions.
 
 Raw sources, executables, generated reference harnesses, logs and snapshots are
-under `~/.cache/sunstoneos/evidence/iommu-20261016/`. The source comparison in
-`reference1` remains valid after the admission and fault-reporting changes;
-the compared table and initialization operations did not change. Final host
-and AArch64 evidence is recorded in `snapshot2`. The focused
-`walk-refusal/snapshot` evidence adds initial refusal for isolated directory or
-leaf walk faults in either bank, before publication or register writes.
-Existing encoding and initialization comparisons remain valid. No physical
-accesses ran.
+under `~/.cache/sunstoneos/evidence/iommu-20261016/`. The source comparison is in
+`reference1`. Final host and AArch64 evidence is recorded in `snapshot2`.
+The `walk-refusal/snapshot` evidence covers initial refusal for isolated
+directory or leaf walk faults in either bank, before publication or register
+writes. No physical accesses ran.
 
 Integration must provide native memory/cache/MMIO operations and global
 resource admission before connecting the camera. Qualification must then cover
 translation faults, recovery, every other master, shared-bank concurrent traffic,
 power transitions, buffer lifetime, and an independently established invalidation
 completion contract. These remain hardware-support requirements.
+
+Results of host checks that no longer exist are kept in the evidence record [iommu.jsonl](evidence/iommu.jsonl).

@@ -11,7 +11,7 @@ handlers and FreeRTOS task switching; CPU0 services the timer. After all
 eight workers finish, each core stops timer generation and interrupt
 delivery, cleans the 145-page owned writable interval, and the monitor
 returns to the ROM after the seven secondaries reach OFF. The USB observer
-task is suppressed. [The supervised SMP record](../a733-smp-supervised.md#the-complete-returning-workload-passes-instruction-checks)
+task is suppressed. [The supervised SMP record](../a733-smp-supervised.md#returning-diagnostics)
 describes it. It has never run on a board.
 
 ## What the current runner refused, and the refreeze

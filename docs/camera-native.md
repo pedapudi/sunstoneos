@@ -167,10 +167,9 @@ The native camera-bus provider drives TWI11 for CAM1 (pins PE7/PE8) or TWI9 for
 CAM2 (pins PE14/PE15, function 8 in the pinned manual and device tree). One
 instance exists per image, and its transactions hold the camera bus mutex
 `A733_PLATFORM_I2C11_LOCK` on either controller. The camera binding selects
-the matching native provider and byte engine from the authenticated connector. On modeled registers, `checks/twi-busy.c`
-runs the same prepare, write and read through a TWI9 binding and finds the
-same store sequence at the TWI9 controller and gate word. No board run covers
-TWI9.
+the matching native provider and byte engine from the authenticated connector.
+The TWI9 binding runs the same prepare, write and read as TWI11 at the TWI9
+controller and gate word. No host check or board run covers TWI9.
 
 The provider authenticates real clock, pin and rail leases. It observes the
 leased APB1 source and divider, releases the initially asserted local reset,

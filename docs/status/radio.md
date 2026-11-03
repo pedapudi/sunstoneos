@@ -7,6 +7,15 @@ Native SDC1 CMD52/CMD53 transport, immutable firmware staging, AIC8800D80 bootst
 
 **Board-qualified scope:** None.
 
+## Capabilities
+
+| Capability | Status | Key figure | Evidence or design |
+| --- | --- | --- | --- |
+| SDC1 CMD52/CMD53 transport, firmware staging, AIC8800D80 bootstrap | host-tested | none | [radio.md](../radio.md) |
+| Wi-Fi scan, association, WPA2, IPv4, DHCP and DNS, reconnect | host-tested | none | [radio-wifi.md](../radio-wifi.md) |
+| Bluetooth HFP audio gateway with voice-recognition activation | host-tested | `bt_hfp_ag.c` 11,572 B with call control off | [design](../designs/bluetooth-voice-recognition.md), `bluetooth-voice-recognition-budgets` |
+| WPA3 SAE association, top-rate SDIO, headset interoperability | open | none | open work 2 to 4 |
+
 ## Open work
 
 1. Establish the fitted supply topology: the schematic DCDC8 conflicts with the DTS BLDO5 and CLDO1.
@@ -16,6 +25,8 @@ Native SDC1 CMD52/CMD53 transport, immutable firmware staging, AIC8800D80 bootst
 5. Qualify physical entropy and key-state observations, shutdown, RF drain, sustained receive deadlines, broader modes and fault recovery.
 
 ## Evidence
+
+Design: [headset voice recognition](../designs/bluetooth-voice-recognition.md) (`docs/evidence/bluetooth-voice-recognition.jsonl`).
 
 Board results are records in `docs/evidence/radio.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-radio-20261101.md).
 

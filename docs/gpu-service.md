@@ -214,8 +214,7 @@ firmware startup or publication.
 
 Three asynchronous cases passed. One lifecycle case with the
 [native memory adapter](gpu-memory.md) also passed through synchronous enable.
-The original source comparisons and unchanged resource/interrupt checks were
-reused. Evidence is in `~/.cache/sunstoneos/evidence/gpu-power-service-20261016/`.
+Evidence is in `~/.cache/sunstoneos/evidence/gpu-power-service-20261016/`.
 These checks do not exercise the native PMIC backend, physical power, GPU
 firmware instructions, or device isolation.
 
@@ -229,8 +228,8 @@ initialization and physical qualification remain required.
 
 Free-list integration has separate focused evidence for construction, event
 responses, shutdown draining, and retained deadline/publication failures.
-See [free-list service evidence](gpu-freelist-service.md). The original disabled
-path retains its reopen behavior and passed one affected lifecycle check.
+See [free-list service evidence](gpu-freelist-service.md). The disabled path
+retains its reopen behavior.
 
 The [fixture](../checks/pvr-gpu-service.c) connects the actual firmware builders,
 queue transport, startup, control, shutdown, and service to a software device
@@ -261,15 +260,10 @@ reach shutdown and control failure independently. Each has a ten-second host
 limit. The [runner](../checks/pvr-gpu-service.py) changes only the initialized
 fixture-selection word in derived ELF files and verifies the reported case.
 
-The first link exposed a compiler-generated `memmove` dependency. A freestanding
-implementation now supplies that operation; overlapping copies in both directions,
-self-copy, and a zero-length copy pass in the integration fixture. An initial
-QEMU loader selector was overwritten at startup and repeated the first case.
-Those launches do not count as evidence for the other cases. Explicit derived
-images subsequently passed both remaining cases.
-
-Existing component reference checks, NPU checks, mimus, and physical board tests
-were not repeated. No performance measurement occurred. The model does not
+A freestanding implementation supplies the compiler-generated `memmove`
+operation; overlapping copies in both directions, self-copy, and a zero-length
+copy pass in the integration fixture. No performance measurement has occurred.
+The model does not
 qualify physical coherency, interconnect behavior, interrupt delivery, firmware
 publication, or isolation. The synthetic event handler does not implement
 resource-specific firmware requests.
@@ -328,8 +322,8 @@ The fixtures assert these worker counters:
   and from the admission of a RENDER request to its kick: 0 timed waits and 0
   tick blocks. The compute and render fixtures check this at every kick.
 - From a 1920x1080 TEXTURE submission to its geometry kick: at least one tick
-  block, because texture preparation takes them. The batch fixture
-  (`checks/gpu-batch.c`) checks this for each frame.
+  block, because texture preparation takes them. No host check covers this
+  per frame.
 - A COMPUTE_INPUT request refused while a job runs, with a longer timeout than
   the job, leaves the job deadline that bounds the worker's wait unchanged.
 
@@ -381,3 +375,5 @@ The next implementation work is the board backend: reserved allocations and
 native memory integration, power/reset/isolation services, resource-specific events, and
 physical interrupt delivery. Watchdog recovery remains a prerequisite for new
 peripheral access.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-service.jsonl).

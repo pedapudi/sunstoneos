@@ -126,56 +126,22 @@ The transport keeps partial receive bytes, cursor, pending request, and all
 resource ownership. Subsequent polls perform no backend access after fault.
 There is no automatic reset, retry, rollback, or disposal.
 
-## Focused model and source evidence
+## Model and source evidence
 
-[checks/aic8800-runtime.py](../checks/aic8800-runtime.py) pins the published
-verifier, sender, message definitions, startup caller, and receive implementation.
-It compiles the unmodified verifier outside Git with a host identity stub and
-compares eight challenge/reply vectors against an independent Python SHA-256
-calculation. The native worker matches those same vectors.
-
-The integrated register model uses the real controller, card, codec, transport,
-firmware handoff, and runtime implementations under address/undefined-behavior
-sanitizers. It starts from a simulated completed-start boundary. That checkpoint
-assumes the preceding firmware execution; it does not demonstrate firmware
-execution or replay the upload model. The focused paths passed:
-
-- Binding after a later receive aggregate and an imported early challenge.
-- Raw data framing, print/TX-confirmation retention, stale pre-request
-  confirmations, duplicate binding indications, and consumer backpressure.
-- Platform callback failure and overrun, invalid challenge, malformed challenge
-  or status lengths, truncated data, and nonzero binding status.
-- Missing confirmation, partial transmission, retained state after fault,
-  idle lease renewal, refusal to revive expiry, and first-challenge retention.
-
-An initial fixture compile used an incorrect request member name; it executed no
-native model. Correcting the fixture allowed the single integrated run to pass.
-The already-passing source/vector comparison was reused. Evidence, source/header
-hashes, compiler commands, and executable identities are under
-`~/.cache/sunstoneos/evidence/radio-runtime-20261016/model-corrected/`; the original
-source/vector evidence is in the adjacent `model/` directory. Unchanged SDIO,
-bootstrap, and firmware upload suites were not rerun.
-
-A focused follow-up passes invalid platform callback returns `-1` and `2`, which
-must fail under the callback's exact-success contract. Its evidence is in the
-adjacent `invalid-platform/` directory. The corrected condition preserves the
-already-tested results for 0 and 1; the complete model was not repeated.
-
-The runtime, transport, and changed firmware worker compile once for freestanding
-AArch64 with Clang 21.1.8 and warnings as errors. The adjacent
-`aarch64/results.json` records commands, source/object hashes, and symbols.
-Dependencies beyond native radio/card/controller APIs are `memcpy` and `memset`.
-Final source identities, archived inputs, and the evidence-reuse rationale are
-recorded in `final-inputs.json` at the evidence root.
-
-```sh
-python3 checks/aic8800-runtime.py \
-  --reference-dir /path/to/pinned/aic8800 \
-  --evidence /path/outside/repository/radio-runtime-evidence
-```
+The runtime has no retained host check. A host model compared eight
+challenge/reply vectors from the unmodified vendor verifier with the native
+worker, and ran the real controller, card, codec, transport, firmware handoff and
+runtime under address/undefined-behavior sanitizers from a simulated
+completed-start boundary. That checkpoint assumes the preceding firmware
+execution. The paths covered binding after a later receive aggregate, raw data
+framing, confirmation retention, backpressure, callback failure (including
+returns `-1` and `2`), malformed lengths, partial transmission, lease renewal
+and refusal to revive expiry. The runtime, transport and firmware worker compile
+for freestanding AArch64. Details are in
+[the evidence file](evidence/radio-runtime.jsonl).
 
 All protocol references use published kernel revision
-`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`. New inspection inputs have these hashes;
+`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`. Inspection inputs have these hashes;
 existing source and firmware identities remain recorded in
 [radio-firmware.md](radio-firmware.md).
 

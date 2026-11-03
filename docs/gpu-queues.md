@@ -1,10 +1,10 @@
 # GPU firmware command transport
 
-The native firmware queue transport is **implemented and host-tested**.
+The native firmware queue transport is **implemented**; no host check remains.
 It formats shared queues, submits commands, collects firmware return statuses,
 and receives firmware events. It has not communicated with a physical GPU.
-The [firmware initialization records](gpu-fw-state.md) now have native
-preparation and host evidence. The [FreeRTOS service](gpu-service.md) integrates
+The [firmware initialization records](gpu-fw-state.md) have native
+preparation. The [FreeRTOS service](gpu-service.md) integrates
 the queue into firmware preparation, startup, control, and shutdown in an
 emulator. Physical memory operations and application GPU job completion remain
 outstanding.
@@ -87,43 +87,25 @@ and the scheduler-register write. They must preserve firmware-owned data during
 cache maintenance. CPU/physical mappings, cache coherence, power, interrupts,
 and recovery remain platform responsibilities.
 
-## Focused checks cover ordering, wrap, deadlines, and retained failures
+## No host check covers ordering, wrap, deadlines or retained failures
 
-The [host check](../checks/pvr-ccb.c) passes address and undefined-behavior
-sanitizers. Its model separates CPU and device memory and checks that command
-bytes and the cleared return word are visible before producer-index publication.
-It checks that event reads complete before consumer-index publication.
-
-The same check covers ring capacity, both queue wraps, delayed result
-collection, stale tokens, completion flags, restart/page-fault events, corrupt
-metadata, monotonic time, and deadline expiry. It injects failures at twelve
-submission callbacks, ten event callbacks, seven polling callbacks, and one
-formatting callback. Each failure stops subsequent device access, including
-when the failed write changed device-visible memory.
-
-The [reference check](../checks/pvr-ccb-reference.py) verifies ABI sizes and
-offsets against the pinned source assertions. It compiles the original queue
-initialization and submission functions with host substitutes for kernel locks
-and register writes. All five shared regions match byte-for-byte after a health
-command. Source hashes are checked against the pinned download manifest.
-
-The host check passed before and after strengthening its publication-order
-assertions. Only that affected check was repeated. The native implementation,
-reference comparison, and AArch64 compilation were unchanged and their evidence
-was reused. That queue revision compiled to 3,320 bytes of code/read-only data
-and no writable static data with freestanding and strict-alignment options.
-
-Commands, logs, shared-memory snapshots, source copies, hashes, and compiled
-objects are in `~/.cache/sunstoneos/evidence/gpu-ccb-20261016/`. No physical
-device access, broader OS regression run, or performance measurement occurred.
+No host check separates CPU and device memory to verify that command bytes and
+the cleared return word are visible before producer-index publication and that
+event reads complete before consumer-index publication. Nor does one cover ring
+capacity, both queue wraps, delayed result collection, stale tokens, completion
+flags, restart and page-fault events, corrupt metadata, monotonic time,
+deadline expiry, failures injected at twelve submission callbacks, ten event
+callbacks, seven polling callbacks and one formatting callback, or the ABI sizes,
+offsets and byte-for-byte shared regions after a health command against the
+pinned source. By design each failure stops subsequent device access, including
+when the failed write changed device-visible memory. No physical device access
+or performance measurement has occurred.
 
 The [firmware control worker](gpu-control.md) uses the added `pvr_ccb_abort()`
 operation to stop queue I/O after external faults. Abort preserves recorded
-results and retains all device backing. Its integration evidence supplements
-the unchanged queue publication and completion checks above.
-With abort included, that queue revision compiled to 3,372 bytes of
-code/read-only data and no writable static data. The current component also
+results and retains all device backing. The component also
 supports [retirement during shutdown](gpu-stop.md), which closes I/O while
 preserving recorded results. It compiles to 3,440 bytes of code/read-only data
-and no writable static data; current object and input identities are recorded
-with the shutdown evidence.
+and no writable static data.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-queues.jsonl).

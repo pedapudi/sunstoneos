@@ -3,7 +3,7 @@
 SunstoneOS implements a bounded low-power transmit path for the A733 DSI
 controllers. It constructs generic and Display Command Set (DCS) write packets,
 loads command SRAM, starts the instruction engine, and observes local completion.
-Host checks and AArch64 compilation pass. Physical signaling and panel operation
+AArch64 compilation passes; no host check remains. Physical signaling and panel operation
 remain unqualified. No panel has been selected.
 
 The [controller API](../include/a733_dsi.h) requires a prepared host and physical
@@ -122,50 +122,36 @@ It rejects inherited test controls that could force transmitter output.
 The A733 manual specifies an operating oscillator range of 1.26–2.4 GHz,
 a high-speed output limit of 1 GHz and a low-speed output limit of 1.2 GHz.
 Those specified limits do not establish a qualified board or panel lane rate.
-Source comparisons cover complete analog and host images; focused admission
-checks and native compilation pass. Physical signaling remains unqualified.
+Native compilation passes. Physical signaling remains unqualified.
 
 Required work includes cold PLL setup, shared power/clock/reset admission,
 video transmission, TCON routing/timing, display-engine buffer ownership and
 scanout, interrupts, panel power/reset and commands, and backlight control.
 Panel timings and power requirements remain separate configuration inputs.
 
-## Validation compares complete packets and register images
+## No host check compares packets and register images
 
-The focused host check uses unchanged published functions for host preparation,
-packet header construction, both ECC implementations, CRC and command loading.
-It compares all 256 packet bytes and the complete 1 KiB host register image
-for 84 cases covering both controller addresses, all lane counts and virtual
-channels, supported short writes and long-packet alignment/capacity boundaries.
-The reference models hardware clearing the start bit after transmission.
-
-The same AddressSanitizer/UndefinedBehaviorSanitizer session checks failure,
-late return and reentry at each of 28 operations in a representative long
-transfer. It checks malformed profiles, failed readback, missing authority,
-an engine that never completes, clock regression, copied inputs, atomic
-refusal, retained leases and quiet terminal states. These are host models;
-they do not prove PHY signaling, panel behavior or physical register access.
+No host check compares the packet header construction, ECC implementations, CRC
+and command loading with the unchanged published functions. No host check
+compares the 256 packet bytes and the 1 KiB host register image for both controller addresses, all lane
+counts and virtual channels, supported short writes and long-packet
+alignment and capacity boundaries. The driver is designed to model hardware
+clearing the start bit after transmission. It is also designed to handle
+failure, late return
+and reentry at each operation of a long transfer, malformed profiles, failed
+readback, missing authority, an engine that never completes, clock regression,
+copied inputs, atomic refusal, retained leases and quiet terminal states. None
+of these has a host check. Physical PHY signaling, panel behavior and register
+access are unproven.
 
 The freestanding AArch64 object contains 2,678 bytes of code/read-only data.
 Its largest direct stack frame is 96 bytes; callback and nested-call frames
-are additional. It requires the runtime's `memcpy` and `memset`.
-
-Evidence is in `~/.cache/sunstoneos/evidence/dsi-command-20261016/`.
-`results.json` records the host command, compiler, source hashes and artifact;
-`target.json` records the native object and stack/undefined-symbol inspection.
-The source snapshot, generated reference, executable and native object are
-preserved for reuse. No physical board access or performance measurement ran.
-
-Reproduce only when relevant inputs change:
-
-```sh
-python3 checks/a733-dsi-reference.py \
-  --source-root ~/.cache/sunstoneos/sources/display \
-  --evidence /path/to/new/evidence
-```
+are additional. It requires the runtime's `memcpy` and `memset`. No physical
+board access or performance measurement has run.
 
 Published reference files are pinned to Linux revision
 `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`. The cache's
 `display/manifest.json` records URLs and hashes for the device tree, clock,
-host, PHY, TCON and packet references. The test verifies the hashes of its
-six source dependencies before compiling extracted functions.
+host, PHY, TCON and packet references.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/dsi.jsonl).

@@ -136,16 +136,13 @@ a modeled TinyUSB vendor stream, controller and host. It covers status, a
 rejected header forms, recovery from a truncated request and from an
 abandoned response through the reset request, and one recovery-timer renewal
 per tick. It models no controller registers.
-`checks/audit-device-minors-usb-control.py` uses the same model to offer the
-reset request with standard, class, vendor-interface, vendor-endpoint, reserved
-and IN request types. Each one must stall without resetting the channel, and
-request type `0x40` must then reset it once.
-
-The compiled-driver check in `checks/usb-zlp.py` uses Unicorn to verify that
-zero-length IN submission arms the transmit register. It resolves that specific
-regression; it is not a USB controller model. The separate
+The reset request stalls for standard, class, vendor-interface,
+vendor-endpoint, reserved and IN request types without resetting the channel,
+and request type `0x40` resets it once; zero-length IN submission arms the
+transmit register. Neither has a retained check (see
+[the evidence file](evidence/usb-service.jsonl)). The separate
 `a733-monitor-model` target checks recovery-timer renewal and subsequent expiry
-in QEMU. Reuse their evidence while the relevant inputs remain unchanged.
+in QEMU. Reuse this evidence while the relevant inputs remain unchanged.
 
 ## Physical evidence and limits
 
@@ -226,13 +223,12 @@ USB0. An image that reuses the board's USB0 source can add its own revocation
 by defining `BOARD_USB0_STOP()`; the mimus board image uses it to fail the
 board and revoke Type-C.
 
-`checks/usb0-service-burst.py` runs the actual service loop against a modeled
-vendor stream, controller and host. With a 20 µs host turnaround it moves a
-64 KiB response in 13 ticks, a 1,160-byte board frame within one tick and a
-2,064-byte request within two ticks. A 256-byte response completes within
-one tick; it takes two ticks if armed-endpoint progress is not counted. A
-one-pass loop needs one tick per packet: 128 ticks for the 64 KiB response. The model also checks that idle
-and abandoned hosts cost one pass per tick and that no burst exceeds its
-budget. `checks/usb0-service-descriptors.py` runs the descriptor callbacks of
-two linked images under Unicorn and compares their bytes; it confirms that
-the shared descriptors match the earlier per-application copies.
+In a model of the actual service loop with a modeled vendor stream, controller
+and host and a 20 µs host turnaround, a 64 KiB response moves in 13 ticks, a
+1,160-byte board frame within one tick and a 2,064-byte request within two
+ticks. A 256-byte response completes within one tick, and takes two ticks if
+armed-endpoint progress is not counted. A one-pass loop needs one tick per
+packet: 128 ticks for the 64 KiB response. Idle and abandoned hosts cost one pass
+per tick and no burst exceeds its budget. The shared descriptors of two linked
+images match the per-application copies they replaced. These models have no
+retained check; they are recorded in [the evidence file](evidence/usb-service.jsonl).

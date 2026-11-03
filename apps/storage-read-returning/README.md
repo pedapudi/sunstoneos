@@ -282,7 +282,7 @@ captured MBUS restore result must be zero; results 8, 9 and 10 retain an active
 predecessor and are refused. Other warm-image profiles need their own reviewed
 peripheral compatibility. Continuity does not authorize SD commands, pin access
 or supply changes; all current lifetime approval fields and native guards remain
-required. The focused host-only check is `checks/sd-return-continuity.py`.
+required. Continuity has no host check.
 
 ## Time window
 
@@ -362,8 +362,6 @@ PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python apps/storage-read-
   --platform-build /absolute/central-build --evidence /absolute/new/directory
 PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/sd-return-native.py \
   --image /absolute/new/directory/build/probe.elf --output /absolute/new/check
-PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/sd-return-host.py \
-  --native /absolute/new/check --output /absolute/new/host-check
 python3 checks/sd-return-close.py --output /absolute/new/provider-check
 ```
 

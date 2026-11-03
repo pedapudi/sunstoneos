@@ -57,7 +57,7 @@ physically unqualified.
 The design and its budgets are in [designs/npu-board.md](designs/npu-board.md),
 the routing, power order and adoption in
 [designs/npu-sram-route.md](designs/npu-sram-route.md), and the software-model
-counts in [designs/npu-board-measurements.md](designs/npu-board-measurements.md).
+counts in [evidence/npu-board.jsonl](evidence/npu-board.jsonl).
 Both boards are speed bin 4, whose vendor maximum is 852 MHz at 800 mV.
 
 ## Construction before the scheduler
@@ -161,7 +161,7 @@ starts, in 4 calls, each advancing a stage. It makes 61 register reads besides
 the LOCK samples (56 by the sequencer and 5 by the owner's domain check), 13
 writes and 4 lock acquisitions. With domain 4 ON at entry, as both boards
 read it at boot, READY follows at 4,615 µs with the same 13 writes and no
-PCK600 write. [The measurements](designs/npu-board-measurements.md#startup-latency-change-by-change)
+PCK600 write. [The measurements](evidence/npu-board.jsonl)
 list each change's effect.
 
 ### Two operating points
@@ -544,8 +544,6 @@ admission. No board or queue access was performed for this change.
   with real FreeRTOS tasks and the real counter, registry, ledger and register
   lock. The success mode reaches service activation; the readback mode shows a
   wrong readback retaining the register lock and every token.
-- `checks/npu-application-clock-reference.py` drives the linked image's
-  sequencer through its register pass for six reference-clock cases.
 - `checks/npu-stop-native.py` exercises the linked allowlist adapter's stop
   writes, PLL rules, routing-word rule and PCK600 refusals.
 - `apps/npu-finite/sram-route-check.py` runs the finite image's linked

@@ -66,5 +66,4 @@ The coordinator's working notes, including resume commands for each worker, are 
 Build commands belong in [the image guide](os-image.md).
 Use [the validation policy](validation.md) and [reference index](reference-index.md).
 [The hardware worklog](hardware-worklog-20261031.md) preserves frozen-input and
-fault records; [the earlier handoff worklog](handoff-history-20261031.md) retains
-older board results. Historical claims do not authorize a new launch.
+fault records. Historical claims do not authorize a new launch.

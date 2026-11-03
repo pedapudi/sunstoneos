@@ -236,20 +236,15 @@ cover later conversions during configured disable. Equality at either boundary,
 voltage accuracy, reference accuracy and physical interrupt delivery remain
 unqualified. The mode adds no calibration, board identification or strap change.
 
-`checks/adc-compare-native.py` executes the linked application, actual GPADC
-core, native register policy and USB serializer with modeled MMIO effects,
-clock/rail/PMIC service results, time, RTOS calls, GIC outcomes and USB transport.
-Seven cases cover accumulated events including threshold-only service, zero
-events, changed windows, unselected pending status, failed stop, cancellation
-and deadline expiry. The original version-1 linked cases pass on the same image.
-Both versions pass actual producer, session admission, sealed bundle and host
-capture checks. The version-3 host also refuses rehashed reports carrying
-unselected event bits. These checks provide software evidence only.
+No host check executes the linked compare application, the GPADC core, the
+native register policy and the USB serializer together; the software results
+recorded for them are in [adc-application.jsonl](evidence/adc-application.jsonl).
 
 Counted on the linked image with selected mask 5, startup controller accesses
-increase from 31 reads and 6 writes to 43 reads and 10 writes. A four-channel
-service without threshold events increases from 18 reads and 1 write to 20 reads
-and 1 write because it verifies the selected windows. Each nonzero low/high
+are 43 reads and 10 writes (31 reads and 6 writes without compare mode). A
+four-channel service without threshold events takes 20 reads and 1 write
+(18 reads and 1 write without compare mode) because it verifies the selected
+windows. Each nonzero low/high
 status adds one acknowledgement. Consuming the latch adds no MMIO. Completion
 adds 22 reads and 5 writes for configured disable. The session and USB extents,
 heap allocations, task count and service cadence remain unchanged. The native
@@ -258,16 +253,9 @@ alignment. Linked text grows by 2,792 bytes and linked BSS remains unchanged.
 Evidence is under `~/.cache/sunstoneos/evidence/adc-compare-20261028/`;
 `costs.json` records the counted comparison. No board timing was measured.
 
-`checks/adc-threshold.c` links the actual driver and clock registry with
-modeled MMIO. Nine cases cover programmed windows, latched events with and
-without fresh data, configured disable, window refusals, unselected-channel
-status, changed windows or enables, inherited compare enables, a failed window
-write and a non-owner query. Mutating the window verification, the high-status
-acknowledgement, the disable of high interrupts or the startup programming
-makes the check fail. The passive GPADC, clock-reference, configured-disable
-and LRADC host checks still pass, as does the linked ADC application model
-(`checks/adc-application-native.py`) on a rebuilt image. Physical comparison,
-boundary behavior and interrupt delivery remain unqualified.
+No host check links the threshold driver and clock registry against modeled
+MMIO. Physical comparison, boundary behavior and interrupt delivery remain
+unqualified.
 
 ## Build and capture one authenticated report
 

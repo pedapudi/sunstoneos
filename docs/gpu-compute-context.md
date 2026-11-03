@@ -1,8 +1,8 @@
 # Offline GPU compute contexts
 
-The compute-context initializer is **implemented and host-tested**. It constructs
+The compute-context initializer is **implemented**; no host check remains. It constructs
 the firmware record that connects one compute queue to its register state,
-client command buffer and GPU virtual address space. Complete output bytes match
+client command buffer and GPU virtual address space. Its output bytes follow
 the pinned driver initializers. Publication, firmware attachment, executable
 context-switch programs and physical compute execution remain outstanding.
 
@@ -90,33 +90,18 @@ cleanup. A KICK return acknowledges notification acceptance; it does not prove
 GPU completion or permit buffer reuse. Never rebuild a device-visible context
 or overwrite register state that firmware owns.
 
-## Focused evidence compares complete source bytes
+## No host check compares source bytes
 
-The [host check](../checks/pvr-compute-context.py) verifies cached source hashes
-before extracting the unchanged queue initializer, register-state initializer,
-compute-context initializer and static stream decoding functions. The fixture
-compares every context/state byte for all three priorities, including zero and
-maximum context identifiers. Source ABI structures verify sizes and offsets.
-
-One sanitizer fixture connects the real native VM builder, compute initializer,
-kernel queue formatting and client control formatting. It verifies the resulting
-references and initial control cursors without attaching a context or sending
-a notification. Forty-two refusal cases cover profile, priority, size,
-alignment, range, overlap and VM-record errors; all output guards remain intact.
-
-The first sanitizer/reference run passed. A separate focused refusal check
-passed after aligning the root-address exclusion with native memory admission;
-the full byte/reference and integration evidence remains reusable. Clang 21 also compiled the component
-for freestanding AArch64 with strict alignment. Existing VM, client-transport,
-GPU service, emulator and physical checks were not repeated.
-
-Evidence is under `~/.cache/sunstoneos/evidence/gpu-compute-context-20261016/`.
-`results.json` records source hashes, reference identity and the host result;
-`target.json` records the target command and object identity. The later root
-refusal result and final AArch64 object identity are under
-`~/.cache/sunstoneos/evidence/gpu-compute-context-root-20261016/`.
-The references are
+No host check compares every context and state byte with the pinned queue,
+register-state and compute-context initializers for all three priorities,
+including zero and maximum context identifiers. No host check verifies the source ABI sizes and offsets. No host check connects the native VM builder, compute initializer, kernel queue
+formatting and client control formatting, or covers the 42 refusal cases
+(profile, priority, size, alignment, range, overlap and VM-record errors) with
+output guards intact. The component compiles for freestanding AArch64 with
+strict alignment. The references are
 [pvr_queue.c](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_queue.c),
 [pvr_context.c](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_context.c),
 and their pinned stream/ABI dependencies. No physical request or performance
-measurement was made.
+measurement has been made.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-compute-context.jsonl).

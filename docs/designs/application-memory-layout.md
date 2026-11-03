@@ -1,223 +1,131 @@
 # Design: application memory sized from the build and the manifest
 
-Status: **design**, with the migration steps through step 5 implemented and host and
-emulator checked. Board runs pass for the heap from the ledger, manifest regions and the main
-stack in slot 1, the preserving run of a scratch region, and the NPU pool in the slot 1 area.
-See "Implemented so far" below.
-Readers are assumed to know AArch64 stage-1 translation (Arm ARM DDI 0487,
-D8), the FreeRTOS SMP port, [memory-architecture.md](memory-architecture.md)
-and [large-app-regions.md](large-app-regions.md).
+Status: **qualified on the board** for the heap from the ledger, the main stack in the ledger, manifest regions in the 48 MiB window, the slot 1 area and the upper memory. Also qualified: preserving runs of those regions, and an NPU pool in the slot 1 area. **Implemented**, host and emulator checked: the layout record, scratch regions, the preservation estimate and budget, and constructors that run after the heap is attached. **Open**: the application image area above `0x4800_0000`, a layout record that writes the linker script, run-time memory requests, a stack pool with a guard block per worker, and removal of the heap threshold `heap_link_max`.
 
-An application on SunstoneOS meets five memory limits that come from constants
-in the build, the tools and the boot tables. None comes from the hardware. This
-note places every kind of application memory so that the build and the manifest
-size it, and the only bounds left are the installed memory and the address
-widths of the bus masters.
+Readers are assumed to know AArch64 stage-1 translation (Arm ARM DDI 0487, D8), the FreeRTOS SMP port, [memory-architecture.md](memory-architecture.md) and [large-app-regions.md](large-app-regions.md).
 
-## Where the limits are today
+An application on SunstoneOS meets memory limits that come from constants in the build, the tools and the boot tables. None comes from the hardware. This design places every kind of application memory so that the build and the manifest size it, and the only bounds left are the installed memory and the address widths of the bus masters. Board runs of this design are evidence records in [the evidence file](../evidence/application-memory-layout.jsonl).
 
-Each limit below was checked in the tree.
+## Limits
 
-| # | Limit | Where it is set | Effect |
+| # | Limit | Where it is set | State |
 | --- | --- | --- | --- |
-| 1 | Code and read-only data: 2 MiB | `CODE ... LENGTH = 2M` in `platform/a733-smp-cached/link.ld:4`, `apps/board-single-core/link.ld`, `apps/os/usb-memory-link.patch`; `IMAGE_RAM = (0x41000000, 0x1200000)` in `apps/os/cpu-return-host.py:38` | The OS and the application share the 2 MiB. An OS image built for the board in `~/.cache/sunstoneos/build` has 0.75 MB of code and read-only data. |
-| 2 | Data, bss, static stacks and heap: about 10 MiB | `RAM ... LENGTH = 14M`, `ASSERT(__bss_end <= 0x42000000)` in `link.ld`; `__heap_end <= 0x41c00000` in `cpu-return-host.py:87`; heap size is a link-time symbol | The same OS image has 6.7 MB of data and bss, of which 2 MiB is heap, 2 MiB the device pool and 2 MiB the uncached pool. The manifest accepts `heap_bytes` up to 64 MiB (`tools/sunstone-manifest.py:101`), which cannot link. |
-| 3 | Input, work and output regions, GPU buffers, NPU pool: one 48 MiB window | `WINDOW = (0x44000000, 0x47000000)` in `tools/sunstone-manifest.py:40`, `apps/os/identity.c:47`, `apps/cpu-runtime-qualification/host.py:129`; NPU pool top `0x47000000` in `cpu-return-host.py` | A region, a GPU buffer set or an NPU pool larger than 48 MiB in total is refused. |
-| 4 | EL0 reaches only `0x40000000..0x48000000` | `platform/a733/platform.c:152` maps 64 blocks for EL0 and every other block for EL1 only; [npu-resources.md](npu-resources.md) states the limit under Backlog | Everything an EL0 task touches must lie in 128 MiB. |
-| 5 | Large regions exist only at build time | [status/large-regions.md](../status/large-regions.md), open item 6 | The ledger and the table arena are sized from the manifest, so an application cannot ask for memory while it runs. |
+| 1 | Code and read-only data: 2 MiB | `CODE ... LENGTH = 2M` in `platform/a733-smp-cached/link.ld`, `apps/board-single-core/link.ld`, `apps/os/usb-memory-link.patch`; `IMAGE_RAM` in `apps/os/cpu-return-host.py` | Open. The OS and the application share the 2 MiB; an OS image has 0.75 MB of code and read-only data. |
+| 2 | Data, bss, static stacks and heap: about 10 MiB | `RAM ... LENGTH = 14M` and `ASSERT(__bss_end <= 0x42000000)` in `link.ld`; `__heap_end <= 0x41c00000` in `cpu-return-host.py` | A heap above `heap_link_max` (4 MiB) comes from the ledger, so the manifest accepts up to 11 GiB of `heap_bytes`; linked data, bss and static stacks stay in the 10 MiB. |
+| 3 | Input, work and output regions, GPU buffers, NPU pool: one 48 MiB window | `window` in `tools/memory_layout.py` | Lifted. Regions continue into the slot 1 area (`0x4800_0000..0x7900_0000`) and the upper memory (`0x8000_0000` to the installed memory). |
+| 4 | EL0 reaches only `0x4000_0000..0x4800_0000` through the shared table | `platform/a733/platform.c` maps 64 blocks for EL0 | Lifted for regions the application is granted: its own tables map them (see "What EL0 reaches"). |
+| 5 | Large regions exist only at build time | [status/large-regions.md](../status/large-regions.md) | Open: run-time requests. |
 
-Other constants follow from these: the board runner uploads and backs up only
-`0x40000000..0x80000000` (`tools/board_images.py:482`), the boot-slot planner
-loads below `0x47000000` (`tools/boot-slots.py:23`), the ledger holds 16
-regions with a quota of four per application, and `SS_REGIONS` is 8 in the
-manifest format.
+Other constants: the board runner uploads and backs up the FEL reach, `0x4000_0000..0x1_0000_0000` (`tools/board_images.py`); the boot-slot planner loads below `0x4700_0000` (`tools/boot-slots.py`). The ledger's entry storage is sized at build time from the regions the manifests declare (no fixed count). A space needs at most `APP_SPACE_PAGES` (13) table pages, and `SS_REGIONS` is 8 in the manifest format.
 
 ## Decisions
 
 | Question | Decision |
 | --- | --- |
-| What sets an address | One planner, `tools/memory_layout.py`, reads the link sizes and the manifest and writes a layout record. The linker script, the boot-table builder, the manifest tool, the runner and the stage-2 loader read the record. No other file holds an address constant for application memory. |
+| What sets an address | One record, `tools/memory_layout.py`, holds the addresses and bounds of the images. The manifest tool, the CPU-return host, `tools/board_images.py` and `tools/boot-slots.py` import it; `checks/memory-layout.py` compares it with the linker scripts, `apps/os/identity.c`, `platform/a733/platform.c` and the importing tools, and with `--image` places a linked image against it. A planner that writes the linker script from the record is open. |
 | What stays fixed | Addresses that the boot ROM, the monitor or the card format name: boot0 and launcher, the entry at `0x41000000`, the session at `0x41f00000`, the monitor interval `0x42000000..0x42200000`, the uncached block at `0x41c00000` and the device pools. They belong to the OS and do not grow with an application. |
-| Where the application lives | In an application area that starts above the OS core and above the image's device zone, and that the planner extends upward as far as the memory goes. |
-| How the application is mapped | By its own page tables at EL0, as [large-app-regions.md](large-app-regions.md) already designs for upper memory, extended to the part of the first 4 GiB that lies above `0x48000000`. |
-| How the image is loaded | The FEL upload and the stage-2 loader write each ELF load segment to the address where it links, anywhere below 4 GiB. A first-stage loader that places data above 4 GiB is not built until a consumer needs it. |
-| Heap, stacks and large regions | Obtained from the region ledger when the application is admitted. After this note they can also be obtained while the application runs. |
-| Hardware bounds | Checked by the planner against `include/dma_address_width.h` for each region from the devices the manifest names. |
+| Where the application lives | Regions, heap and stacks in the slot 1 area and the upper memory, by the ledger. The image area (text, read-only data, data) above the OS core is open. |
+| How the application is mapped | By its own page tables at EL0, as [large-app-regions.md](large-app-regions.md) designs for upper memory. |
+| How the image is loaded | The FEL upload and the stage-2 loader write each ELF load segment to the address where it links, anywhere below 4 GiB. A first-stage loader that places data above 4 GiB is not built until a consumer needs it; loading an application as a code region (card speed, relocation, instruction-cache maintenance) waits for a plug-in consumer. |
+| Heap, stacks and large regions | Obtained from the region ledger when the application is admitted; run-time acquisition is open. |
+| Hardware bounds | Checked against `include/dma_address_width.h` for each region from the devices the manifest names. |
 
 ## The memory map
 
-Physical DRAM is `0x4000_0000..0x3_4000_0000` (12 GiB). Application memory is
-identity mapped: a virtual address equals its physical address, so DMA
-addresses and cache maintenance need no translation table.
+Physical DRAM is `0x4000_0000..0x3_4000_0000` (12 GiB). Application memory is identity mapped: a virtual address equals its physical address, so DMA addresses and cache maintenance need no translation table.
 
 | Range | Contents | Sized by |
 | --- | --- | --- |
 | `0x4000_0000..0x4100_0000` | boot0 and launcher | fixed |
 | `0x4100_0000..0x4200_0000` | OS core: entry and vectors, the OS code and data, OS heap, device pool, uncached block at `0x41c0_0000`, session at `0x41f0_0000` | the OS build; fixed addresses |
 | `0x4200_0000..0x4220_0000` | monitor, result, contract, boot tables | fixed |
-| `0x4220_0000..0x4800_0000` | USB arena, boot assets and the pinned-address window that existing manifests use | existing manifests; shrinks as manifests move to placed regions |
-| `0x4800_0000..D` | the image's device zone (extended layout only), where D is the end of the largest linked device pool | the image link |
-| `D..` | the application area, in the order below | the planner |
+| `0x4220_0000..0x4800_0000` | USB arena, boot assets and the pinned-address window | existing manifests |
+| `0x4800_0000..0x7900_0000` | slot 1 area: the extended layout's `dma32` and `uncached` pools when the image links them, manifest regions, NPU pool, stacks, heap | the ledger and the manifest tool |
+| `0x8000_0000..0x3_4000_0000` | upper memory: manifest regions, heap, large regions | the ledger and the manifest tool |
 
-The application area holds, each starting on a 2 MiB boundary:
+The planned application image area follows the image's device zone and holds, each on a 2 MiB boundary: text (read-only, executable at EL0), read-only data, data and bss, and the stack pool (the main stack and each worker stack, `stack_bytes` each, with an unmapped guard block below every stack). After those come the heap, the regions in manifest order (INPUT, WORK and OUTPUT, GPU buffers, the NPU pool), and large regions (each of 1 GiB or more on a 1 GiB boundary).
 
-1. **Application text**: read-only, executable at EL0. Sized from the link.
-2. **Application read-only data**: read-only, not executable.
-3. **Application data and bss**: read-write, not executable.
-4. **Stack pool**: the main stack and each worker stack, `stack_bytes` each, with an unmapped guard block below every stack so that an overflow faults.
-5. **Heap**: `heap_bytes` from the manifest.
-6. **Regions** in manifest order: INPUT, WORK and OUTPUT, GPU buffers (WORK or OUTPUT with a GPU access flag), and the NPU pool.
-7. **Large regions**: from the ledger, each region of 1 GiB or more on a 1 GiB boundary, as designed today.
+A region with an address of 0 in the manifest is placed by the manifest tool: first fit in the window, then the slot 1 area, then the upper memory (`upper_area` of the record, `0x8000_0000` to the installed 12 GiB). A region with a nonzero address stays where the manifest puts it, and the tool checks that it lies in installed memory, does not cross the unmapped hole and overlaps no other extent. The ledger holds every placed region from `0x4800_0000` up by its address (`apps/os/large.c`), so the heap, the large records, the NPU pool and the stack take what is left.
 
-A region with an address of 0 in the manifest is placed by the planner. A
-region with a nonzero address stays where the manifest puts it, which keeps
-existing manifests valid, and the planner checks that it lies in installed
-memory and does not overlap another extent.
+### Hardware bounds
 
-The first-fit rule of `app_region_acquire()` places everything from item 4
-onward. Items 1 to 3 are placed by the linker from the layout record because
-their sizes come from the link.
-
-### Hardware bounds the planner enforces
-
-Each bound comes from [dma-address-width.md](../dma-address-width.md) or a
-driver check. The planner takes, for each region, the smallest limit over the
-devices its access flags and the manifest's device list name, and places the
-region below it.
+Each bound comes from [dma-address-width.md](../dma-address-width.md) or a driver check. A region is placed below the smallest limit over the devices its access flags and the manifest's device list name.
 
 | Consumer | Bound on a buffer's physical address | Other bound |
 | --- | --- | --- |
 | CPU at EL0 and EL1 | the installed memory; the 39-bit input range of TCR_EL1 covers 512 GiB | none |
-| FEL upload and stage-2 loader | below 4 GiB. The FEL request record has a 32-bit address and a 32-bit length (`struct aw_fel_request` in `fel_lib.c` of the pinned sunxi-tools revision `b92f4ed3`, whose 16-byte request has no room for more), and `fel.c` takes `uint32_t` offsets. Upper memory is reachable only by code that runs on the board | none |
+| FEL upload and stage-2 loader | below 4 GiB. The FEL request record has a 32-bit address and a 32-bit length (`struct aw_fel_request` in `fel_lib.c` of the pinned sunxi-tools revision `b92f4ed3`), and `fel.c` takes `uint32_t` offsets. Upper memory is reachable only by code that runs on the board | none |
 | GPU | below 2^36 (`platform/a733/gpu_vm_memory.c:7`) | 40-bit GPU virtual addresses |
-| NPU | below 2^40 | device addresses are 32 bits, so the tensors of one graph lie in one 4 GiB device span; the MMU image does not cross a 4 GiB boundary |
+| NPU | below 2^40 | device addresses are 32 bits, so the tensors of one graph lie in one 4 GiB device span |
 | IOMMU masters (display, G2D, codecs, camera) | below 2^34 | IOVA below 2^32 |
 | DMA0 | below 2^35 | descriptors below `0xfffff800` |
 | xHCI | below 2^34 with 64-bit addressing, else below 4 GiB | none |
 | PCIe endpoint DMA (NVMe) | below 4 GiB | none |
 | SD and MMC, USB0 | no DMA | none |
 
-With 12 GiB installed, every application region fits under the GPU, NPU,
-IOMMU and DMA0 limits, so those limits constrain placement only for the
-masters below 4 GiB (xHCI without 64-bit addressing and PCIe). Buffers of those
-masters stay in the OS device pools, which are below 4 GiB, unless the manifest
-grants the device a region, in which case the planner places that region below
-4 GiB. A region the planner cannot place fails the build or the admission with
-a message that names the region and the limit.
+With 12 GiB installed, every region fits under the GPU, NPU, IOMMU and DMA0 limits, so those limits constrain placement only for masters below 4 GiB (xHCI without 64-bit addressing, PCIe). Their buffers stay in the OS device pools, which are below 4 GiB, unless the manifest grants the device a region, which the tool then places below 4 GiB.
 
-## The layout planner
+## Layout record and image loading
 
-The planner replaces the constants listed under "Where the limits are today".
-Its inputs are the sizes of the linked sections of the OS core and of the
-application, the manifest, the devices and device pools the image links, and
-the DRAM ranges that the decode check can pass. Its output is a layout record
-that lists every extent with its address, size, kind, access, the master limit
-that applies, and whether the runner preserves it.
+The layout record is the single source of the constants in the table above. A host check links the current images with it and compares the section addresses with the build; the linked hello, hello (CPU return) and large-region images are byte-identical to the images built from the earlier constants, including the generated manifest tables.
 
-The build runs in three steps. A first link measures section sizes. The planner
-writes `layout.ld`, which defines `__app_text_base`, `__app_data_base` and the
-other bases as symbols. A second link places the sections. A host check
-compares the two links' section sizes so that a placement change cannot move a
-size.
+The application is linked into the OS image, which is one ELF with several load segments. The runner uploads each segment to its link address, and the stage-2 loader of the card boot copies each extent of a slot to its load address. The FEL upload runs at about 0.55 MB/s ([board-runner.md](../board-runner.md)), so 64 MiB of initialized image takes two minutes. Bss, heap, stacks and regions are not uploaded, and data of that size belongs in INPUT or large regions that the card loader fills at card speed ([large-app-regions.md](large-app-regions.md)).
 
-Consumers of the record:
-
-- the linker script, in place of `LENGTH = 2M` and `LENGTH = 14M` for the application's sections (the OS core keeps its own limit, reported with the OS core's size when it overflows);
-- `tools/sunstone-manifest.py`, in place of `WINDOW`;
-- `apps/os/identity.c`, which validates the region records against the record;
-- `platform/a733/platform.c`, which builds the boot tables from the extents;
-- `apps/os/cpu-return-host.py` and `tools/board_images.py`, in place of `IMAGE_RAM`, `0x41c00000`, `0x42000000` and `0x80000000`;
-- `tools/boot-slots.py`, in place of `LOAD_LIMIT`.
-
-For an unchanged manifest and image the record is identical to today's
-constants. A host check shows this by linking the current images with the
-planner and comparing the section addresses with the current build.
-
-## How the image gets there
-
-The application is linked into the OS image, which is one ELF with several
-load segments. The runner uploads each segment to its link address, and the
-stage-2 loader of the card boot copies each extent of a slot to its load
-address.
-
-| Option | What it needs | Cost |
-| --- | --- | --- |
-| **A. Link each segment where it belongs, upload or copy it there.** | The runner and the slot planner accept segments at any address below 4 GiB that the layout record lists. The entry stays at `0x41000000`. | No new code runs on the board. The FEL upload runs at about 0.55 MB/s ([board-runner.md](../board-runner.md)), so 64 MiB of initialized image takes two minutes. Bss, heap, stacks and regions are not uploaded. |
-| **B. A first stage in image RAM that places the rest.** | A loader in the OS core that reads the remaining segments from a staging area (uploaded or on the card) and copies them to their addresses, then jumps to the entry. | It reaches addresses above 4 GiB. It uploads the image at the same rate as A and adds a copy and a second verification of the digest. The loader is another program to qualify, and it runs before the OS has set up its tables. |
-| **C. Load the application from the card or from runner inputs as a region.** | A code region type that is executable at EL0, an instruction-cache maintenance step after the load, a relocation story (the image is linked at fixed addresses), and the large-region loader. | It loads at card speed (about 22 MB/s predicted) instead of 0.55 MB/s. It makes the application a loadable module, which the SDK does not have. |
-
-**Recommendation: A for the image, and the card loader of
-[large-app-regions.md](large-app-regions.md) for data.** The code, read-only
-data and initialized data that an application links stay moderate because
-anything large and read-only (model weights, tables) already belongs in an
-INPUT or large region that the card loader fills at card speed. Option A needs
-no new board code and loses nothing that the existing flow provides. Option B
-is added only when an image segment must lie above 4 GiB, which needs an
-initialized image of more than about 3 GiB and has no consumer. Option C is
-the right tool for plug-in code and waits for a plug-in consumer.
-
-Details for A:
+For the open image area:
 
 - **Segment table.** The runner reads the load segments from the ELF and refuses any that lies outside the extents of the layout record or at or above 4 GiB. The stage-2 loader receives the same list in the slot header.
-- **Zeroing.** The OS zeroes bss, the heap, the stack pool and every region it hands out before the application runs. After a reset DRAM contains the previous contents, and a region must not expose them.
-- **Branch range.** A `BL` reaches 128 MiB. With the OS core at `0x4100_0000` and a large application text far above, calls between them may exceed that. `ld.lld` inserts range-extension thunks for AArch64, and a host check links an image with a 200 MiB gap to show the thunks appear and the image runs in QEMU.
-- **Data addressing.** `ADRP` reaches 4 GiB from the instruction. Data and bss stay below `0x1_0000_0000`. The heap and large regions are reached through a pointer the OS stores at admission, so they can lie anywhere.
+- **Zeroing.** The OS zeroes bss, the heap, the stack pool and every region it hands out before the application runs, because DRAM keeps the previous contents after a reset.
+- **Branch range.** A `BL` reaches 128 MiB. `ld.lld` inserts range-extension thunks for AArch64; a host check links an image with a 200 MiB gap and runs it in QEMU.
+- **Data addressing.** `ADRP` reaches 4 GiB from the instruction, so data and bss stay below `0x1_0000_0000`. The heap and large regions are reached through a pointer the OS stores at admission and can lie anywhere.
+
+## Heap, stacks and constructors
+
+A manifest whose `heap_bytes` exceeds `heap_link_max` in the record (4 MiB) gets its heap from the ledger. The threshold keeps the image of mimus, whose manifest asks for exactly 4 MiB, and every image without the upper memory map on their linked heap until a board run of mimus qualifies the ledger heap. It is not a limit, and removing it is open work. The ledger heap works like this:
+
+- The manifest tool appends one more large record, the last, with the flag `SS_LARGE_HEAP`: read-write, no source, no digest, a size of `heap_bytes` plus the OS's 1 MiB share rounded up to 2 MiB. The manifest cap on `heap_bytes` is the 11 GiB of upper memory.
+- The image links only the OS's 1 MiB share of the heap, and the build refuses such a manifest unless the image maps upper memory (`-DSUNSTONE_A733_DRAM_DECODE_PROBE=ON`).
+- At admission the ledger takes the region, the loader skips it (a heap alone opens no card and authorizes no card pins), and `runtime_heap_attach()` makes it the C library's heap before the C library initializes. Attachment fails, and with it the admission, when the linked heap has already handed out a byte.
+- `_sbrk` zeroes each range it hands out of an attached heap, so memory that an earlier run left in DRAM never reaches the application.
+- The static constructors of the application and the C library run once, in `runtime_init`, which `os_application_prepare` calls after `os_large_prepare` has attached the heap; no boot code runs the `.init_array`. A constructor that takes memory from `sbrk` takes it from the ledger's region, zeroed.
+- Every task of the application starts in its space with no call: a new task takes the address-space tag of the task that creates it (`traceTASK_CREATE` in `FreeRTOSConfig.h` with `os_space_inherit()` in `include/os_space.h`; both the stock SMP scheduler and the partitioned scheduler call it before the task becomes ready). The main task is tagged at admission. A task of the OS stays in the kernel's table. `ss_large_attach` remains for a task that other code created.
+- An application with upper memory also takes its main stack from the ledger: a 2 MiB block that the guard owner holds below it, so that an overflow is an EL0 fault in memory no space maps. Where no extent is free the static stack stays. Worker stacks and guard blocks per worker are open.
+
+A manifest with `heap_bytes` of 4 MiB or less links its heap as before.
 
 ## What EL0 reaches and what changes in the tables
 
-**Per-application tables.** `app_space_build()` copies the kernel's level-1
-table and gives the application's regions EL0 access. The application area
-starts at `0x4800_0000`, which is inside level-1 slot 1 (`0x4000_0000..0x8000_0000`).
-That slot is a shared level-2 table today. The builder therefore also gives
-each application its own copy of slot 1's level-2 page (4 KiB), copies the
-kernel's 64 EL0 blocks below `0x4800_0000` unchanged, and rewrites the blocks
-at and above `0x4800_0000` from the application's extents. Blocks below
-`0x4800_0000` stay byte-identical to the kernel's, so the uncached block at
-`0x41c0_0000`, the device pools and the monitor interval keep their attributes.
-A host check compares them entry by entry. The ledger's lowest slot changes
-from 2 to 1, and its usable range starts at `D`.
+**Per-application tables.** `app_space_build()` copies the kernel's level-1 table and gives the application's regions EL0 access. Slots 2 and above map as 1 GiB blocks where a slot is one region's, or as 2 MiB blocks where a gigabyte is shared. Slot 1 (`0x4000_0000..0x8000_0000`) is built from `base_l2`, the kernel's 512 level-2 entries (`include/app_region.h`). Each application gets its own copy of slot 1's level-2 page (4 KiB) that keeps the kernel's 64 EL0 blocks below `0x4800_0000` unchanged and rewrites the blocks at and above from the application's extents, so the uncached block at `0x41c0_0000`, the device pools and the monitor interval keep their attributes; a host check compares them entry by entry.
 
-**Permissions.** Text is EL0 read-only and executable (UXN clear, PXN set), read-only data
-is read-only and non-executable, and data, heap, stacks and regions are
-read-write and non-executable. Every entry stays non-global, as in
-[large-app-regions.md](large-app-regions.md). The context switch hook already
-writes TTBR0 when the incoming task belongs to another application.
+**Permissions.** Text is EL0 read-only and executable (UXN clear, PXN set), read-only data is read-only and non-executable, and data, heap, stacks and regions are read-write and non-executable. Every entry is non-global, as in [large-app-regions.md](large-app-regions.md). The context switch hook writes TTBR0 when the incoming task belongs to another application.
 
-**Boot tables.** `platform_init()` maps `0x4800_0000..` and above for EL1 only,
-from the extents of the layout record, when the decode check passes. Today it
-does this only for images built with `SUNSTONE_PLATFORM_UPPER_MAP` or
-`SUNSTONE_MEMTEST`, and no OS image links the check. Two additions:
+**Boot tables.** `platform_init()` maps `0x4800_0000..` and above for EL1 only, from the `dram_map` list of `platform/a733-smp-cached/memory.c`, when the decode check passes: level-2 blocks below `0x8000_0000`, 1 GiB blocks from there. Application functions that run at EL1 (`dram_nsi_worker` and `dram_qos_worker` in `apps/os/application.c`) need the application text mapped read-only and executable at EL1 as well; that belongs to the open image area. The kernel's slot 1 level-2 page covers `0x4800_0000..0x8000_0000` and slots 2 to 12 are 1 GiB blocks, so the boot tables gain no page and stay within `0x421f_0000..0x4220_0000`.
 
-- **Text at EL1.** Some application functions run at EL1 (`dram_nsi_worker` and `dram_qos_worker` in `apps/os/application.c` are the existing cases). The kernel table therefore maps the application text read-only and executable at EL1 as well.
-- **Table size.** The kernel's slot 1 level-2 page already covers `0x4800_0000..0x8000_0000`, and slots 2 to 12 are 1 GiB blocks, so the boot tables gain no page and stay within `0x421f_0000..0x4220_0000`.
+**EL3 tables for the normal-return terminal.** The EL3 level-2 table covers `0x4000_0000..0x8000_0000`. `platform/a733-smp-cached/memory.c` gives the EL3 level-1 table a 1 GiB block for each gigabyte that holds a work or output region, only where the boot's decode check passed. The terminal (`apps/os/cpu-return/terminal.patch`) reads that block for an address from `0x8000_0000` and applies the test it applies to a level-2 block (NS, write-back, inner-shareable, access flag), cleans the region and parks on a block the tables do not map that way. The EL3 publication of the identity step (`platform/a733/cpu_coherence.S`) accepts the installed memory.
 
-**DRAM decode check.** The check runs at EL3 with the MMU off and covers the
-ranges it is given. The planner passes all of the installed memory above
-`0x4800_0000` (the ranges `platform.c` already lists), so every address the
-application area or a run-time request can use has passed. The check never
-runs after boot, so a run-time request draws only from checked memory. If a
-range fails, the ledger omits it and the planner's build-time placement for an
-image that needs it fails at admission with a message that names the range.
+**DRAM decode check.** The check runs at EL3 with the MMU off over the ranges `platform.c` lists, so every address the application can use has passed. It never runs after boot, so a run-time request draws only from checked memory. If a range fails, the ledger omits it and an image that needs it fails at admission with a message that names the range.
 
-**CPU-return backup and restore.** `apps/os/cpu-return-host.py` and
-`tools/board_images.py` preserve only extents inside `0x40000000..0x80000000`,
-and a preserving run reads and writes each byte at about 0.55 MB/s. Both
-change:
+**CPU-return backup and restore.** Extents come from the layout record, and the runner's reach is the FEL reach of 4 GiB. A manifest region of kind work or output may take the access name `scratch` (bit 4 of the region's access word, which no OS code reads): `apps/os/host.py` leaves it out of the backup list, while the CPU-return terminal still cleans it. An input cannot be scratch, since the runner uploads it. An extent that reaches or passes 4 GiB is refused for a preserving run, with a message naming the extent and the reach. `tools/board_images.py` estimates the transfer of a preserving plan as two passes of the preserved bytes at the recorded FEL rate (550 kB/s); the runner prints the estimate before the backup, and `tools/board.py submit --preserve-budget-s N` refuses a plan whose estimate exceeds N seconds. A development run makes no preservation claim and transfers nothing. `checks/runner-preservation.py` covers the reach, the scratch attribute, the estimate and the budget; six mutations of the runner each fail it.
 
-- The extents come from the layout record. The `0x80000000` ceiling becomes the FEL reach of 4 GiB, since the runner can address nothing higher.
-- Each region carries a `preserve` attribute in the record, true by default. A region the manifest marks as scratch is excluded. A run that preserves memory above 4 GiB, or any extent the runner cannot address, is refused with the reason. The runner prints the estimated transfer time of the plan before it starts, and refuses a plan that exceeds the time budget the submission names.
-- A development run keeps its present rule: it makes no preservation claim and transfers nothing.
+**Uncached and device pools** stay in the OS core below 4 GiB, outside the application area, because their masters have 32-bit limits and the uncached pool must be a whole 2 MiB block with no cached alias ([memory-architecture.md](memory-architecture.md)).
 
-**Uncached and device pools.** They stay in the OS core below 4 GiB, outside
-the application area, because their masters have 32-bit limits and the
-uncached pool must be a whole 2 MiB block with no cached alias
-([memory-architecture.md](memory-architecture.md)). The extended layout's
-`dma32` and `uncached` pools sit at `0x4800_0000..0x7900_0000`; the planner
-starts the application area above the end of any such pool the image links.
+## NPU pool and GPU buffers
 
-## Memory requests while the application runs
+| | Memory | Who maps it | What contains the device |
+| --- | --- | --- | --- |
+| NPU pool | 8 MiB at `0x47400000`, or 10 to 48 MiB of whole blocks ending at `0x47000000` (`OS_NPU_POOL_BYTES`, linker symbols `__os_npu_pool_start` and `__os_npu_pool_end`, bound into the session record by `apps/os/host.py` and compared by `apps/os/admission.c`); or, when the image sets `SUNSTONE_OS_NPU_POOL_BASE`, 10 to 768 MiB in the slot 1 area | The CPU: EL1 read-write write-back blocks of the kernel table, none in an application's space. EL3: cleaned by the terminal, which parks on an extent it does not know. The NPU: only through its own page tables, built once at admission in an arena inside the pool (`drivers/npu/a733_npu_runtime.c`, `a733_npu_memory.c`, `a733_npu_mmu.c`) | The NPU MMU. The tables map the bootstrap stream and each slot's command, constant, read and write buffers at 4 KiB granularity, with an unmapped guard page after each; they map neither the arena, the runtime's own tables, the CPU-only staging area nor any unused byte of the pool. The write bit follows the buffer's role. The graphs run as compiled |
+| GPU buffers | Manifest regions with a GPU access bit, 2 MiB aligned, in the window, the slot 1 area or the upper memory | The CPU: a GPU-written region has no writable alias (EL1 read-only blocks) and an application sees it through its own space. The GPU: only through its own MMU, one mapping per lease (`platform/a733/gpu_queue.c`) | The GPU MMU maps the leases the application asked for, rounded to 2 MiB; the admission refuses a region that overlaps the image, the device pools or another lease and one that is not identity mapped write-back |
 
-**Call.**
+The GPU admission accepts any 2 MiB aligned region below 2^36, so GPU buffers take their placement from the manifest tool and the ledger.
+
+An image built with `SUNSTONE_OS_NPU_POOL_BASE` places the NPU pool in the slot 1 area: any whole-block size from 10 to 768 MiB, below 4 GiB so that the device memory class (DMA32) and the one-span rule of the table builder hold. The linker symbols still carry the address, so the session record, the runner's preservation list and the terminal need no second source. At admission `os_large_prepare` holds the pool in the ledger for the kernel (`APP_REGION_KERNEL_OWNER`) before any region of the application, so a manifest region, the heap or a stack cannot overlap it and no application space maps it; `npu.c` refuses to start the NPU unless the ledger holds exactly that extent. The platform maps the pool's blocks at EL3 for the terminal's clean, and the terminal accepts a pool in the slot 1 area (block aligned, 10 to 768 MiB).
+
+`tools/npu-pool-plan.py` takes the slot count and the bounds for graphs registered later from the manifest's npu section, runs the production runtime's own reservation for the linked models (`checks/npu-pool-size.py`), and rounds up to whole 2 MiB blocks (at least 10 MiB). It places the pool at the top of the slot 1 area, refuses a layout in which a region the manifest tool placed there would overlap it, and prints the two cmake arguments. The default `npu-graphs` manifest with `models-a1.json` gives 10 MiB at `0x78600000`.
+
+`checks/npu-pool-isolation.py` builds the tables with the production memory layer at the legacy pool, a declared-size pool, two pools in slot 1 and one above 4 GiB. It walks them with an independent walker over the whole 32-bit device space, and requires exactly the declared pages and no page of the arena, the staging area, the unused bytes or the 2 MiB beside the pool. `checks/app-region.py` shows the kernel's hold of the pool, and `checks/os-cpu-return.py` runs the terminal on images with the pool at 8 MiB, 96 MiB at `0x60000000`, the 768 MiB maximum and the last 10 MiB of the area. The EL3 table entries that `memory.c` writes for the pool and the NPU itself with a pool in slot 1 are covered by the board run only.
+
+## Memory requests while the application runs (open)
+
+No SDK call exists yet; this is the design.
 
 ```c
 struct ss_memory_request {
@@ -230,620 +138,59 @@ int ss_memory_acquire(const struct ss_memory_request *, void **base, uint64_t *b
 int ss_memory_release(void *base);
 ```
 
-Like the other `ss_*` calls, these are plain calls at EL0. Each posts a
-request to an EL1 service task and blocks the caller on a task notification.
-They are not for time-critical paths: a request waits for the service task and
-for zeroing.
+Like the other `ss_*` calls, these are plain calls at EL0. Each posts a request to an EL1 service task and blocks the caller on a task notification. They are setup and teardown operations, not for time-critical paths.
 
-**Ledger.** The ledger replaces its fixed 16-entry array and per-application
-quota by entries kept in pages of 170 entries (24 bytes each). When a page
-fills, the ledger takes a new 4 KiB page from the metadata arena. A request
-fails with `NO_SPACE` only when no free extent of the size exists, or with
-`NO_TABLES` when no table page is available. The manifest's `SS_REGIONS` is the
-count of regions declared at admission and stays 8; run-time requests do not
-use it.
+**Ledger.** The ledger's entry storage is caller storage sized at build time from the manifests, so it cannot grow while the system runs. Run-time requests need entries kept in pages of 170 entries (24 bytes each) that the ledger extends from the metadata arena when a page fills. A request fails with `NO_SPACE` only when no free extent of the size exists, or with `NO_TABLES` when no table page is available. `SS_REGIONS` (8) counts regions declared at admission; run-time requests do not use it.
 
-**Table pages.** Instead of the static `APP_SPACE_PAGES` array, the arena
-takes a 2 MiB extent from the ledger as kernel-owned, EL1-only metadata when
-it is empty, giving 512 pages. A request costs at most two pages (one for each
-slot a region partly covers), so one extent serves 256 requests. The walker
-reads tables through the data cache (TCR_EL1 IRGN0 and ORGN0 are 1), and the
-service task writes them with cacheable stores followed by `DSB ISH`.
+**Table pages.** In place of the arena sized at build time, the arena takes a 2 MiB extent from the ledger as kernel-owned, EL1-only metadata when it is empty, giving 512 pages. A request costs at most two pages, so one extent serves 256 requests. The walker reads tables through the data cache (TCR_EL1 IRGN0 and ORGN0 are 1), and the service task writes them with cacheable stores followed by `DSB ISH`.
 
-**Update protocol.** The service task works on the application's root and
-level-2 pages while its tasks run on other cores.
+**Update protocol.** The service task works on the application's root and level-2 pages while its tasks run on other cores.
 
-- **Acquire.** The entries covered are invalid, so no earlier translation can be in a TLB. The task writes the new level-2 page contents, then the level-1 entry that points to it, cleans and invalidates the lines of every page it wrote (`DC CIVAC` and `DSB SY`), and replies. The cleaning is required: the eight-core images walk their tables without the data caches, so a descriptor that is only in the writer's cache is invisible to the walker. The first board run of the heap faulted at the first store for this reason, because the tables were used a few milliseconds after they were built; the admission now cleans them. The requesting core executes an `ISB` before it first touches the memory. Another core that faults on an address that was invalid retries and finds the entry.
-- **Release.** Break before make: write the entry invalid and `DSB ISH`. The extent stays reserved in the ledger until the invalidation described under "Real-time cost of the broadcast invalidation" has completed for every core that could hold an entry, which for the preferred form is until teardown. A release of a region with a device grant is refused.
-- **Change of mapping other than acquire.** None exists. Resizing in place and changing permissions are not offered.
+- **Acquire.** The entries covered are invalid, so no earlier translation can be in a TLB. The task writes the new level-2 page contents, then the level-1 entry that points to it, cleans and invalidates the lines of every page it wrote (`DC CIVAC` and `DSB SY`), and replies. The cleaning is required: the eight-core images walk their tables without the data caches, so a descriptor only in the writer's cache is invisible to the walker. The requesting core executes an `ISB` before it first touches the memory. Another core that faults on an address that was invalid retries and finds the entry.
+- **Release.** Break before make: write the entry invalid and `DSB ISH`. The extent stays reserved in the ledger until the invalidation described below has completed for every core that could hold an entry. A release of a region with a device grant is refused.
+- Resizing in place and changing permissions are not offered.
 
 ### Real-time cost of the broadcast invalidation
 
-`TLBI ...IS` is broadcast to every core of the inner shareable domain, and the
-receiving cores stall their translations until it completes. The robots run
-control loops above 1 kHz with a highest-priority wake latency target of 10 µs
-or less and a control-path jitter target of 5% of the period, so the design
-limits when one can be issued:
+`TLBI ...IS` is broadcast to every core of the inner shareable domain, and the receiving cores stall their translations until it completes. The robots run control loops above 1 kHz with a highest-priority wake latency target of 10 µs or less and a control-path jitter target of 5% of the period, so the design limits when one can be issued:
 
-- **When one can happen.** Only inside `ss_memory_release()` and
-  `ss_memory_acquire()` calls of the application itself, executed by the service task. No interrupt handler, context switch, driver, fault handler or timer issues one. A context switch writes TTBR0 and needs no invalidation because every entry is non-global and carries an ASID. The static path (regions granted before the main task starts) issues none after boot.
-- **Never on a hot path.** The SDK documents both calls as setup and teardown operations. An application's control loop acquires its memory before it enters the loop and releases it after it leaves.
+- **When one can happen.** Only inside `ss_memory_release()` and `ss_memory_acquire()` calls of the application itself, executed by the service task. No interrupt handler, context switch, driver, fault handler or timer issues one. A context switch writes TTBR0 and needs no invalidation because every entry is non-global and carries an ASID. The static path (regions granted before the main task starts) issues none after boot.
+- **Never on a hot path.** An application's control loop acquires its memory before it enters the loop and releases it after it leaves.
 - **Acquire needs none.** The entries are invalid before the call, and Armv8 does not cache invalid entries, so acquire needs `DSB ISH` only.
 - **Release prefers the weaker forms**, in this order:
-  1. The kernel does not need the invalidation until the extent is reused, because the extent stays reserved in the ledger. The service task therefore keeps a released extent reserved, with its entries invalid, until the application's teardown or until another request needs the space. The application's own tasks have stopped using it by the release contract, and a stale entry can only be reached by a bug of the application, which then reads memory that still belongs to it.
-  2. When the extent must be reused before teardown, the task invalidates locally with `TLBI ASIDE1` (not broadcast) on each core that runs a task of the application, by an inter-processor request to exactly those cores, and skips the cores that run other applications. The cores are known from the application's affinity masks in the manifest.
+  1. The kernel does not need the invalidation until the extent is reused, because the extent stays reserved in the ledger. The service task keeps a released extent reserved, with its entries invalid, until the application's teardown or until another request needs the space. A stale entry can only be reached by a bug of the application, which then reads memory that still belongs to it.
+  2. When the extent must be reused before teardown, the task invalidates locally with `TLBI ASIDE1` (not broadcast) on each core that runs a task of the application, by an inter-processor request to exactly those cores, known from the application's affinity masks in the manifest.
   3. The broadcast form `TLBI ASIDE1IS` or `TLBI VAE1IS` is the fallback if the local form cannot be shown correct.
-- **Measurement before it is relied on.** The board step that first issues a broadcast invalidation (step 7 below) measures its effect on the control path with the existing scheduler latency harness (`apps/latency`, metrics `wake_idle` and `wake_busy`, and the workload of eight pinned tasks released by the CPU0 timer). The run uses a 10 kHz release period, issues a release every 100 ms from the A55 cluster while the harness runs on the A76 cores, and reports the worst case and the 99.9th percentile of both wake metrics against a run without releases. The result decides between the three forms above; a measurable cost (more than 5% of the 100 µs period at the 99.9th percentile, or any worst case above 10 µs) selects the local form or the deferred reuse.
-
-**Fragmentation.** The mapping stays identity for now, because device DMA uses
-physical addresses and a CPU-visible address must equal the address a master
-sees. A request therefore needs contiguous physical memory. First fit with
-1 GiB alignment for large requests keeps large gaps whole. A request that
-fails for fragmentation reports the largest free extent so that the
-application can retry with less. The remedy, when fragmentation shows in
-practice, is to separate virtual from physical addresses for CPU-only memory:
-the tables then map discontiguous 2 MiB extents at consecutive virtual
-addresses. Memory that a master reads or writes stays identity mapped, or is
-reached by the masters that sit behind the IOMMU (display, G2D, codecs and the
-camera) through IOVA mappings, which already give them a contiguous view of
-scattered pages. Masters without an IOMMU (the NPU through its own MMU aside, DMA0, xHCI
-and the PCIe endpoint) need physical contiguity or a per-transfer scatter list.
-This step is not scheduled.
-
-**Zeroing.** The service task zeroes a granted extent in 2 MiB steps at a
-priority below the application's and before it signals the reply. At 5 GB/s,
-the single-core read rate in [dram-bandwidth.md](dram-bandwidth.md), 1 GiB
-takes about 0.2 s. The write rate is not measured and is a board
-measurement of the step that adds the call.
-
-## Checks and evidence for each change
-
-Each row gives the checks that change, and how the change is shown: on the
-host, then in QEMU, then once on the board.
-
-| Change | Host check | QEMU | One board run |
-| --- | --- | --- | --- |
-| Planner and layout record | New `checks/memory-layout.py`: record equals the current constants for every current manifest and image; section sizes equal between the two links; every placement obeys the hardware bounds; overlaps and out-of-memory placements are refused | `checks/qemu-os-boot.py` boots the image linked with the record | None. The linked images are byte-identical, which the check shows by hash |
-| Heap and stacks from the ledger | `checks/app-region.py` gains heap-sized and stack-sized acquisitions; newlib `sbrk` against a runtime base and limit; guard block faults | Boot with a 1 GiB heap, touch every 2 MiB, free and reallocate, fault below a stack | Large-region OS image with a 1 GiB heap: a pattern written and read back over every 2 MiB, and the first board run of the per-application tables (open items 1, 3 and 5 of the large-regions status) |
-| Manifest regions anywhere, window lifted | `checks/sunstone-app-abi.py` with regions above `0x4800_0000` and at address 0; the manifest tool, `identity.c` and `host.py` read the record | An EL0 task reads and writes each region and faults one byte outside it | A run with an INPUT of 256 MiB at `0x5000_0000` uploaded by FEL, EL0 checksum equals the host's, and a neighbouring byte faults |
-| Slot 1 per-application page | `checks/app-region.py` model walks slot 1; blocks below `0x4800_0000` are byte-identical to the kernel's; the `device-memory-capacity` golden still matches the kernel table | `checks/region-el0.py` in two spaces | Covered by the run above |
-| Runner and backup/restore | `checks/os-cpu-return.py` and `tools/board_images.py` checks with extents above `0x80000000`; a plan above 4 GiB is refused; the time estimate | none | A preserving run of the image above with an 8 MiB OUTPUT and a 16 MiB WORK at `0x8800_0000`: the restored bytes hash equal to the backup |
-| NPU pool from the ledger, sized by declaration | `checks/npu-session-runtime.c` and `checks/cpu-npu-geometry.py` with a pool above 48 MiB; the 4 GiB span rule | The existing NPU fixtures with the pool at the new address | One NPU graph run from a 96 MiB pool above `0x4800_0000`, output equal to the 48 MiB pool run |
-| Application image area | Link checks: text above `0x4800_0000`, thunks present; boot-table builder golden for the extents; `checks/standalone-boot-loader.py` and `checks/microsd-boot-package.py` with the new extents | `qemu-os-boot.py` with a 100 MiB text | A returning image whose text is 40 MiB, run to a normal return; an EL1 call into the text |
-| Run-time requests | `checks/app-region.py` with a TLB model for the acquire and release order (a stale entry is detected); the ledger page chaining; `NO_TABLES` leaves state unchanged | A task acquires, uses, releases and re-acquires from two cores; a use after release faults | One run acquiring and releasing 256 MiB and 1 GiB regions from the A76 and A55 clusters, with the release latency and zeroing rate recorded |
-
-All of these checks and runs use the existing board runner and queue
-([board-runner.md](../board-runner.md)). Performance figures come from OS images at the approved top
-operating points, not from probe images.
-
-## Migration in small landable steps
-
-1. **Heap from the ledger.** The heap becomes an application region obtained at admission when `heap_bytes` exceeds what is linked, the manifest's cap becomes the ledger's free space, and `runtime/newlib.c` takes the heap base and limit from the region. This has the most application impact for the least risk: heap size is the limit that today fails at link time, the change reuses the large-region ledger and tables that already pass host and QEMU checks, and an image that asks for no heap above the linked size behaves as before. The step also supplies the first board run of the per-application tables.
-2. **Planner and layout record**, producing today's constants. Host only, with no image change. (Implemented before step 1.)
-2b. **Constructors after the heap is attached, and every application heap from the ledger.** The first part is implemented; the second waits as described.
-    **Every application heap from the ledger.** Remove `heap_link_max`: the heap of any manifest is a ledger region when the image maps upper memory, and an image whose decode check fails falls back to the linked heap. This changes the mimus image, so it waits for the qualified board run of step 1 and for a board run of mimus.
-3. **Manifest regions placed by the planner, and the 48 MiB window lifted**, with the slot 1 per-application page and the ledger's lowest slot at 1. Stack pool with guard blocks in the same step.
-4. **Runner and backup/restore from the record**, with the `preserve` attribute and the time estimate.
-5. **NPU pool and GPU buffers from the ledger**, using the hardware bounds table.
-6. **Application image area**: renamed application sections, `layout.ld`, boot-table text mapping at EL1 and EL0, stage-2 loader extents.
-6b. **Manifest regions anywhere the ledger has room** (part of step 6, because both change the EL3 tables and the
-    normal-return terminal). Today the manifest tool places a WORK, OUTPUT or INPUT region only in the 48 MiB window or in
-    the slot 1 area (`AREAS` in `tools/sunstone-manifest.py`, `0x48000000..0x79000000`); that is a fixed limit and it
-    leaves the runner's reach above 2 GiB unproven. The change, in order:
-    1. *Planner.* `assign` continues first-fit into the upper memory (`0x80000000` up to the installed memory) when the window
-       and the slot 1 area are full, and accepts a pinned address there; every address stays 2 MiB aligned from the floor
-       up. The large records and the heap are not placed at build time: at admission they take the ledger's remaining gaps,
-       so one ledger serves the manifest regions (held first, by address), the NPU pool, the large records and the heap. A
-       host check places regions across all three areas and shows that none overlaps, that the large records and the heap
-       find room around them, and that a manifest that needs more than the installed memory is refused with the sizes.
-    2. *Identity and admission.* `apps/os/identity.c` and `apps/os/large.c` stop assuming that a placed region lies below
-       `0x80000000` (`APP_REGION_BASE`): the held-by-address loop takes every region from the floor up. `checks/app-region.c`
-       gains regions in slots 2 and above, mapped as 1 GiB blocks where a slot is one region's and as 2 MiB blocks where it is shared.
-    3. *EL3 tables and the terminal.* The terminal cleans every WORK and OUTPUT region through the EL3 tables and parks on
-       a block that the tables do not map as normal write-back memory. The EL3 level-2 table covers `0x40000000..0x80000000`
-       only, so a region at `0x88000000` would index past it. The platform gives the EL3 level-1 table a 1 GiB block entry
-       for each gigabyte that holds such a region and only where the decode check passed (the same condition as the
-       EL1 entries), the terminal reads the level-1 entry for an address at or above `0x80000000` and applies the same
-       test as for a level-2 block, and `checks/os-cpu-return.py` gains cases for a region in slot 2, a region whose gigabyte
-       has no entry (parks) and one whose entry has the wrong attributes (parks).
-    4. *Runner.* A preserving run keeps its 4 GiB reach: a region at or above `0x100000000` is refused by name, so the
-       reach is a property of FEL and not of the planner. `checks/runner-preservation.py` covers a placed region at `0x88000000`.
-    5. *Board.* One preserving run of `slot1-test` with an 8 MiB OUTPUT and a 16 MiB WORK pinned at `0x88000000`: the restored
-       bytes hash equal to the backup. This is the run the table of checks lists for step 4 and could not make before.
-
-7. **Run-time requests**: SDK call, ledger pages, table-page extents and the release protocol.
-
-Steps 3 to 5 each depend on step 2, and step 6 on step 3. Step 7 depends on
-step 1 and on the tables of step 3.
-
-## Implemented so far
-
-**Layout record (step 2).** `tools/memory_layout.py` holds the addresses and
-bounds of the images built today. The manifest tool, the CPU-return host,
-`tools/board_images.py` and `tools/boot-slots.py` import them from it, and
-`checks/memory-layout.py` compares the record with the numbers of the earlier
-images, the linker scripts, `apps/os/identity.c`, `platform/a733/platform.c`
-and the importing tools, and with `--image` places a linked image against it.
-The linked hello, hello (CPU return) and large-region images are byte-identical
-before and after, including the generated manifest tables.
-
-**Heap from the ledger (step 1).** A manifest whose `heap_bytes` exceeds
-`heap_link_max` in the record (4 MiB) gets its heap from the ledger. The
-threshold exists only so that the image of mimus, whose manifest asks for exactly
-4 MiB, and every image without the upper memory map keep their current heap while
-step 1 is qualified on a board. It is not a limit and a later step removes it
-(migration step 2 below): every application heap then comes from the ledger
-whenever the decode check passes, and the linked heap remains only as the
-fallback of an image whose decode check fails. The heap from the ledger works
-like this:
-
-- The manifest tool appends one more large record, the last, with the flag `SS_LARGE_HEAP`: read-write, no source, no digest, a size of `heap_bytes` plus the OS's 1 MiB share rounded up to 2 MiB. The manifest cap on `heap_bytes` is the 11 GiB of upper memory.
-- The image links only the OS's 1 MiB share of the heap, and the build refuses such a manifest unless the image maps upper memory (`-DSUNSTONE_A733_DRAM_DECODE_PROBE=ON`).
-- At admission the ledger takes the region, the loader skips it (a heap alone opens no card and authorizes no card pins), and `runtime_heap_attach()` makes it the C library's heap before the C library initializes. Attachment fails, and with it the admission, when the linked heap has already handed out a byte.
-- `_sbrk` zeroes each range it hands out of an attached heap, so memory that an earlier run left in DRAM never reaches the application. The cost is one pass over the memory the application takes, and none for memory it never takes.
-- Every task of the application starts in its space with no call: a new task takes the address-space tag of the task that creates it (`traceTASK_CREATE` in `FreeRTOSConfig.h` with `os_space_inherit()` in `include/os_space.h`; both the stock SMP scheduler and the partitioned scheduler call it before the task becomes ready). The main task is tagged at admission. A task of the OS is created from boot code or from an OS task, neither of which has a tag, so it stays in the kernel's table. `ss_large_attach` remains for a task that other code created. Neither scheduler prevents this.
-
-A manifest with `heap_bytes` of 4 MiB or less links its heap as before. The
-OS core code differs in every image (the admission, the loader loop and
-`_sbrk` changed), so those images are not byte-identical; their generated
-tables are.
-
-**Runner preservation (step 4).** The runner's DRAM range in the record is now
-the FEL reach, `0x40000000` to `0x100000000`, instead of the first 2 GiB, and a
-preserving run of an application with a WORK or OUTPUT region above
-`0x80000000` is accepted. An extent that reaches or passes 4 GiB is refused, and
-the refusal names the extent and the reach. A manifest region of kind work or
-output takes the access name `scratch` (bit 4 of the region's access word, which
-no OS code reads): `apps/os/host.py` leaves it out of the backup list, while the
-CPU-return terminal still cleans it, because the terminal does not depend on what
-the runner saves. An input cannot be scratch, since the runner uploads it.
-`tools/board_images.py` estimates the transfer of a preserving plan as two passes
-of the preserved bytes at the recorded FEL rate (550 kB/s), the runner prints the
-estimate before the backup, and `tools/board.py submit --preserve-budget-s N`
-refuses a plan whose estimate exceeds N seconds. `checks/runner-preservation.py`
-covers the reach, the scratch attribute, the estimate and the budget; six
-mutations (the old ceiling, no scratch filter, no budget test, one pass in the
-estimate, scratch allowed on an input, no upper bound) each fail it. The board
-run listed for this step (an 8 MiB OUTPUT and a 16 MiB WORK at `0x88000000`,
-restored bytes equal to the backup) is not yet done.
-
-**Constructors after the heap is attached (step 2b, first part).** The static constructors of the application and the C library run
-once, in `runtime_init`, which `os_application_prepare` calls after `os_large_prepare` has attached the ledger's heap region, and no
-boot code runs the `.init_array`. A constructor that takes memory from `sbrk` therefore takes it from the ledger's region, zeroed.
-`checks/qemu-os-boot.py` shows this with a constructor that takes 4096 bytes (`heap-constructor-allocates`: the block is the
-first 4096 bytes of the region at `0x50000000`, zero although the memory held a pattern, and the main task's block follows it),
-and the case fails, ending in the startup panic, when `runtime_init` is called before `os_large_prepare`. The emulated board's link
-script gained an `.init_array` for this. The second part, taking `heap_link_max` away so that every heap comes from the ledger,
-still waits for a board run of the mimus image.
-
-**Regions above 2 GiB (step 6b).** Implemented and checked on the host and the emulated board; the board run is listed under its
-prediction below. The manifest tool places a region in the upper memory (`upper_area` of the record, `0x80000000` to the end of the
-installed 12 GiB) when the window and the slot 1 area are full, accepts a pinned address there, and refuses a region that crosses
-the unmapped hole or runs past the installed memory. `apps/os/large.c` holds every placed region from `0x48000000` up in the
-ledger by its address, so the heap, the large records, the NPU pool and the stack take what is left. The per-application tables
-already mapped slots 2 and above as 1 GiB blocks, or as 2 MiB blocks where a gigabyte is shared. The EL3 level-2 table covers only
-`0x40000000..0x80000000`, so `platform/a733-smp-cached/memory.c` gives the EL3 level-1 table a 1 GiB block for each gigabyte that
-holds a work or output region, only when the boot's decode check passed. The terminal (`apps/os/cpu-return/terminal.patch`) reads
-that block for an address from `0x80000000` and applies the test of a level-2 block. The EL3 publication of the identity step
-(`platform/a733/cpu_coherence.S`) accepts the installed memory, which an input region above `0x48000000` needed already. Checks:
-`checks/memory-layout.py` places regions across the three areas, `checks/a733-cpu-coherence.py` covers the publication range,
-`checks/os-cpu-return.py` shows the cleaning of regions in slot 2 and the three parking cases, `checks/qemu-os-boot.py` runs an
-application that uses a region at `0x88000000` and faults one byte past it, and `checks/runner-preservation.py` covers the
-preservation plan for it. The runner keeps its 4 GiB reach, so a region at or above `0x100000000` is refused for a preserving run.
-The emulated board's stack check now accepts the installed memory, because the ledger takes the smallest gap that holds the stack,
-which can lie beside a region above 2 GiB.
-
-**NPU pool and GPU buffers (step 5).** What each reaches today, before the change:
-
-| | Memory | Who maps it | What contains the device |
-| --- | --- | --- | --- |
-| NPU pool | 8 MiB at `0x47400000`, or 10 to 48 MiB of whole blocks ending at `0x47000000` (`OS_NPU_POOL_BYTES`, linker symbols `__os_npu_pool_start` and `__os_npu_pool_end`, bound into the session record by `apps/os/host.py` and compared by `apps/os/admission.c`) | The CPU: EL1 read-write write-back blocks of the kernel table, none in an application's space. EL3: cleaned by the normal-return terminal, which parks on an extent it does not know (`apps/os/cpu-return/terminal.patch`). The NPU: only through its own page tables, built once at admission in an arena inside the pool (`drivers/npu/a733_npu_runtime.c`, `place`; `a733_npu_memory.c`; `a733_npu_mmu.c`) | The NPU MMU. The tables map the bootstrap stream and each slot's command, constant, read and write buffers at 4 KiB granularity, with an unmapped guard page after each; they do not map the arena, the runtime's own tables, the CPU-only staging area or any byte of the pool the layout leaves unused. The write bit follows the buffer's role. The graphs run as compiled |
-| GPU buffers | Manifest regions with a GPU access bit, 2 MiB aligned (`tools/sunstone-manifest.py`), in the window or, since step 3, in the slot 1 area | The CPU: a GPU-written region has no writable alias (EL1 read-only blocks, `platform/a733-smp-cached/memory.c`) and an application sees it through its own space. The GPU: only through its own MMU, one mapping per lease (`platform/a733/gpu_queue.c`) | The GPU MMU maps the leases the application asked for, rounded to 2 MiB; the admission refuses a region that overlaps the image, the device pools or another lease and one that is not identity mapped write-back |
-
-The GPU buffers already come from the ledger's placement (step 3: the manifest
-tool places them, the ledger holds them for the application at admission), and
-the GPU admission accepts any 2 MiB aligned region below 2^36, so no GPU change
-was needed.
-
-The NPU pool changes only where its memory comes from. An image built with
-`SUNSTONE_OS_NPU_POOL_BASE` places the pool in the slot 1 area instead of below
-`0x47000000`: any whole-block size from 10 to 768 MiB, below 4 GiB so that the
-device memory class (DMA32) and the one-span rule of the table builder stay
-true. The linker symbols still carry the address, so the session record, the
-runner's preservation list (the runner reaches 4 GiB since step 4) and the
-terminal need no second source. At admission `os_large_prepare` holds the pool
-in the ledger for the kernel (`APP_REGION_KERNEL_OWNER`) before any region of the
-application, so a manifest region, the heap or a stack cannot overlap it and no
-application space maps it; `npu.c` refuses to start the NPU unless the ledger
-holds exactly that extent. The platform maps the pool's blocks at EL3 for the
-terminal's clean, as it does for manifest regions in slot 1, and the terminal
-accepts a pool in the slot 1 area (block aligned, 10 to 768 MiB). Nothing about
-the table builder, the loader, the graph formats or the buffers' layout inside
-the pool changes, and an image without the option is unchanged.
-
-Size and place are not choices. `tools/npu-pool-plan.py` takes the slot count
-and the bounds for graphs registered later from the manifest's npu section (as
-`apps/os/npu.c` does at admission), runs the production runtime's own reservation
-for the linked models (`checks/npu-pool-size.py`, which builds the runtime for the
-host), rounds up to whole 2 MiB blocks (at least 10 MiB), and places the pool at
-the top of the slot 1 area, refusing a layout in which a region the manifest tool
-placed there would overlap it. It prints the two cmake arguments. For the default
-`npu-graphs` manifest and the `models-a1.json` list it gives 10 MiB at
-`0x78600000`. `checks/npu-pool-plan.py` covers the rules with a stand-in for the
-measurement and fails under five mutations of the tool.
-
-Evidence: `checks/npu-pool-isolation.py` builds the tables with the production
-memory layer at the legacy pool, a declared-size pool, two pools in slot 1 and
-one above 4 GiB, walks them with an independent walker over the whole 32-bit
-device space, and requires exactly the declared pages (addresses, physical
-pages, write permission by role), no page of the arena, the staging area, the
-unused bytes or the 2 MiB beside the pool, and no page after a buffer. Four
-mutations of the builder (a page past each buffer, every page writable, the
-high physical bits dropped, a buffer allowed over the tables) each fail it.
-`checks/app-region.py` shows the kernel's hold: no request overlaps the pool,
-the application's space faults at its first and last byte, EL1 keeps access, and
-dropping that rule fails the check. The linked terminal model
-(`checks/os-cpu-return.py`) runs 16 cases on images with the pool at 8 MiB, 96 MiB
-at `0x60000000`, the 768 MiB maximum and the last 10 MiB of the area, and the old
-terminal parks on the ledger image. Not covered on the host: the EL3 table
-entries that `memory.c` writes for the pool at boot (the model does not execute
-that code) and the NPU itself with a pool in slot 1; both need the board.
-`checks/memory-layout.py` ties the bounds in the build, the header, the terminal and the platform to the record.
-
-**Result: mode 3 with the notification wait, after the notification index change (port 3-1, entry
-`1793650900758260472-be096b75`, bringup `5d93918e`).** The image returned normally and its 128-byte output is
-byte-identical to the predicted result: `worker_ran` 1 on core 3, `same_tag` 1, `main_tag_set` 1, `notify_count` 1, and the
-fold of the worker's write equal to the main task's read of it over the 1 GiB heap at `0x80000000`. The wait on index 0
-that the OS's wake-ups used to end now lasts until the worker's own give, so the change holds on the board. The mode's
-other results (modes 0 to 2) were recorded earlier.
-
-### Predicted board run of the preserving runner (step 4)
-
-Hypothesis: a preserving run (`--preserve-dram`, development off) of `slot1-test` mode 0 with the manifest
-`apps/slot1-test/manifest-preserve.json` (a 16 MiB WORK region at `0x48000000`, an 8 MiB OUTPUT region at `0x4a000000`
-and an 8 MiB scratch WORK region at `0x4b000000`, all in the slot 1 area above the old 48 MiB window) backs up the image
-RAM, the 16 MiB and the 8 MiB regions and not the scratch region, prints its estimate, completes inside the budget the
-submission names, and restores every saved byte.
-
-- **Expected.** The runner prints a preservation line of about 42 MiB and an estimate of about 160 s, under the budget of
-  240 s; the backup inventory in the run's record lists extents inside `0x41000000..0x42200000`, `0x48000000..0x49000000`
-  and `0x4a000000..0x4a800000` and none at `0x4b000000`; the session returns normally with the 32-byte result `{SLOT1
-  tag, 0x48000000, 16 MiB, fold}` of `~/.cache/sunstoneos/memlim-handoff-1102/expected-slot1-preserve.bin`; the record says
-  `dram_restored` true and the restoration's readback hashes equal the backup's.
-- **A different result and what it means.** A refusal before launch naming the estimate and the budget would mean the
-  estimate is above the budget (the rate or the extents differ from the record). Preservation extents that include
-  `0x4b000000` mean the scratch bit did not reach the backup list. A restore hash that differs from the backup is a defect of the
-  runner's transfer above `0x48000000`; the old range (below `0x80000000`) already contained those addresses, so this run
-  tests the new bookkeeping, the scratch attribute and the estimate, not a new reach.
-
-**Result: the preserving run (port 3-1, entry `1793652142808675717-ffd657dd`, bringup `69d0b3b9`).** As predicted: the
-runner backed up 44,040,192 bytes (42 MiB: the image RAM, the 16 MiB region at `0x48000000` and the 8 MiB region at
-`0x4a000000`) in 11 chunks with none at `0x4b000000`, so the scratch region was left out; it printed the estimate of 160.1 s
-against the budget of 240 s; the session returned normally (`RETURN_ROM`), its 32-byte output equals
-`expected-slot1-preserve.bin`, and the record says `dram_mode` preserved and `dram_restored` true. This shows the scratch
-attribute, the estimate, the budget and the backup and restore of regions in slot 1 on a board. It does not show the reach
-above 2 GiB, which step 6b is for.
-
-### Predicted board run of the preserving runner above 2 GiB (step 6b)
-
-The manifest tool places a work, output or input region in the upper memory (`0x80000000` up to the installed memory) when the
-window and the slot 1 area are full, or where the manifest pins it. The admission holds every such region in the ledger by its
-address. The platform gives the EL3 level-1 table one 1 GiB block for each gigabyte that holds a work or output region, only where
-this boot's decode check passed. The normal-return terminal reads that block for an address from `0x80000000` and applies the test
-that it applies to a level-2 block (the gigabyte's own block, NS, write-back, inner-shareable, access flag). The EL3 publication of
-the identity step accepts the installed memory. The emulated board maps and uses such a region from EL0 and faults one byte past
-it, and `checks/os-cpu-return.py` shows the terminal cleaning the regions and parking when the block is missing, belongs to
-another gigabyte, or has the wrong attributes.
-
-Hypothesis: a preserving run (`--preserve-dram`, development off) of `slot1-test` mode 0 with the manifest
-`apps/slot1-test/manifest-upper.json` (a 16 MiB WORK region at `0x88000000`, an 8 MiB OUTPUT region at `0x89000000` and an 8 MiB
-scratch WORK region at `0x8a000000`, all in level-1 slot 2) behaves as the run of the same shape in the slot 1 area did.
-
-- **Expected.** The runner backs up the image RAM, the 16 MiB and the 8 MiB regions (about 42 MiB, estimate about 160 s under a
-  budget of 240 s) and leaves out `0x8a000000`; the session returns normally with the 32-byte result `{SLOT1 tag, 0x88000000,
-  16 MiB, fold}`; the record says `dram_restored` true and the restoration's readback hashes equal the backup's. The terminal
-  cleaning the regions through the EL3 level-1 block is what lets the session reach `RETURN_ROM`.
-- **A different result and what it means.** A watchdog end after the `TERMINAL` stage means the terminal parked on the level-1
-  block (the platform's entry is missing or its attributes differ from the test), because the host model does not run the
-  platform code that writes it. A bus hang or a fault at the first store to `0x88000000` would be a property of the decode check
-  or the interconnect; the heap run reached `0x80000000` already. A restore hash that differs from the backup is a defect of the
-  runner's transfer above 2 GiB, which this run is the first to exercise.
-
-**Result: the preserving run above 2 GiB (port 3-1, entry `1793670225972455043-c4f45b62`).** As predicted. The runner backed up
-44,040,192 bytes (the image RAM, the 16 MiB region at `0x88000000` and the 8 MiB region at `0x89000000`, in 4 MiB chunks) and
-none at `0x8a000000`; it printed the estimate of 160.1 s against the budget of 240 s; the session returned normally (`RETURN_ROM`
-last), so the terminal's cleaning through the EL3 level-1 block of gigabyte 2 completed; the 32-byte output equals the expected
-`{SLOT1 tag, 0x88000000, 16 MiB, fold}` byte for byte; the record says `dram_mode` preserved, `dram_restored` true and
-`dram_dirty` false. The first submission of this image (`1793670172396930064-8d844757`) ended at pre-flight with a `KeyError` for
-`upper_area`: the runner had already imported its own `memory_layout`, which shadowed the host tree's. The manifest tool now loads
-the record that sits beside it. Host-side stage durations of this run (DRAM 54.9 s, capture 190 s) come from a period of heavy
-disk load and are not comparable with other runs.
-
-### Predicted board run of the NPU pool in the slot 1 area
-
-Hypothesis: an `npu-graphs` image built from the recipe of the passing run `1793599845892192862-30dc9323` (seven
-single-operation graphs, `apps/npu-graphs/models-a2.json`, 852 MHz at 800 mV, kind `npu`), with the pool that
-`tools/npu-pool-plan.py` places (10 MiB at `0x78600000`, the top of the slot 1 area, where that run's pool was 8 MiB
-at `0x47400000`), runs every graph through that pool and returns as that run did. Nothing else differs: the session
-record names the placed pool, the OS holds it in the ledger for the kernel, the platform maps its blocks at EL3, and
-the terminal cleans it.
-
-Condition: one run on port 3-1, no card, development DRAM mode.
-
-- **Expected.** Normal return, the receipt of that run's `expect.json`: seven records each with status `match` and no
-  differing byte, `completed` and `matched` equal to 7, the SDK closed. The per-graph times equal the earlier run's within
-  its spread, because the pool is write-back memory in both places and the maintenance is the same.
-- **A different result and what it means.**
-  - No receipt and no `RETURN_ROM` breadcrumb after the graphs ran: the terminal parked, so the EL3 entries of the pool
-    (`platform/a733-smp-cached/memory.c`) are missing or wrong. The host model does not run that code.
-  - The OS refuses the NPU at its start (the failure record names the NPU site): the ledger did not hold the extent
-    (`os_large_kernel_reserved`), which is a decode-check or capacity failure, and no job ran.
-  - A job faults or the NPU hangs: the NPU's reach of memory above `0x48000000` differs from what its page tables say.
-    The host check shows the tables are right, so this would be a property of the interconnect and would be new.
-  - Every graph `mismatch` with the same differing count: the device read or wrote another copy than the CPU, a cache
-    maintenance or attribute difference of the slot 1 blocks.
-
-### Predicted board run of the NPU pool below 0x48000000 with the upper memory mapped
-
-The first run of the pool in the slot 1 area (entry `1793652334060640370-11f14671`, the image built from commit `8c4508c3` with the
-pool at `0x78600000`) ended at the watchdog. The only failure it recorded is the supervisor's cutoff test in
-`os_cpu_return_supervise` (`apps/os/cpu-return.c`, detail `0x73c`): the application had not asked for the return by the session
-deadline minus the 5 s return reserve, about 55 s after launch. No NPU, board or application failure came first, and the board
-live test never failed, so no service's progress window expired. The passing run that this one repeated took 5 s. That run was built without the DRAM decode check, so the new image differs in two ways, not one: the pool
-address, and the check, which maps the upper memory at EL1, gives the application an address space and takes its main stack from
-the ledger. The prediction of the first run named only the pool.
-
-Hypothesis: the pool address is the cause. A pool at `0x78600000` leaves the NPU service waiting for a job that does not complete,
-or for a stop that does not finish, while the same image with the pool below `0x48000000` completes. The control is the same
-source tree and recipe with one change, `SUNSTONE_OS_NPU_POOL_BASE` empty: a 10 MiB pool ending at `0x47000000`, which is
-`0x46600000..0x47000000`. The decode check, the application space, the main stack in the ledger and the A76 main core stay as in the
-failed image. A build of the failed recipe from the same tree reproduces the failed image byte for byte, so the control differs
-from it in the pool symbols and the code they select (the ledger reservation, the start test of the reservation, the EL3 pool
-entries and the terminal's clean of a sized pool).
-
-Condition: one run on port 3-1, no card, development DRAM mode, 852 MHz at 800 mV as before.
-
-- **Hypothesis true.** Normal return with the receipt of `expect.json`: seven records with status `match` and no differing byte,
-  `completed` and `matched` equal to 7, the SDK closed, `RETURN_ROM` as the last breadcrumb, about 10 s of launch.
-- **Hypothesis false.** The same watchdog end: last stage `EL3_STOP`, first failure `0x73c`, about 55 s of launch. The cause is then
-  in the composition of the decode check with the NPU service (the application space and TTBR0 switching, the ledger main stack, or an
-  application space on core 6 beside the NPU service on core 1), and the next image must name what the application waits for.
-
-Host evidence before this run. The image's own start code (`checks/os-npu-start.py`, with the kernel tables seeded as the decode check
-leaves them) accepts the session of the failed run and starts the NPU service with the pool at `0x78600000`. An application with no
-regions, a main stack in the ledger and an application space starts and finishes on core 6 and on core 2 in the emulated board.
-No host model contains the NPU's reach of memory, so neither can show a pool-address failure.
-
-**Result.** The control (entry `1793663710033568998-bec104fe`, pool at `0x46600000`) ended exactly as the failed image did: last stage
-`EL3_STOP`, first failure `0x73c` at the supervisor's cutoff, no earlier failure. The hypothesis is false. The pool address is not
-the cause, and the cause lies in running the NPU service in an image whose decode check is on.
-
-### Predicted board run that names what the session waits on
-
-A session that reaches the supervisor's cutoff now records what it was waiting on. The NPU retirement wait in `ss_finish`, the
-only wait of the application that lasts until the cutoff, gives up one second earlier with failure `0x75f`, whose value is the set of
-unmet retirement conditions (`OS_NPU_STATE_*` in `apps/os/npu.h`). The supervisor's cutoff failure `0x73c` carries the return
-address of the application's latest `ss_progress` call as its value and the same conditions in the auxiliary field of its site.
-`tools/a733-crumbs.py` names both.
-
-Hypothesis: the session waits in `ss_finish` for the NPU to retire. The run uses the control image (pool at `0x46600000`, decode
-check on) built from the tree with this change. Nothing else differs from the control.
-
-Condition: one run on port 3-1, no card, development DRAM mode, 852 MHz at 800 mV.
-
-- **Hypothesis true.** First failure `0x75f` in the application group, about 54 s after launch, with a value that lists the unmet
-  conditions. Which of them are unmet says where retirement stops: the report not published points at the client task or the
-  close, the report published but `os_npu_stopped` false points at the bootstrap's local stop or the interrupt state.
-- **Hypothesis false, application elsewhere.** First failure `0x73c` with a progress site inside the graph loop or the close loop of
-  `npu_graphs_main`, which the decoder reports as an address to symbolize against the image.
-- **Hypothesis false, application never ran.** First failure `0x73c` with progress site `0`, and the NPU conditions show whether
-  the service started. The main task did not reach its first `ss_progress` call.
-- **Normal return.** The change alters timing and the cause is a race. The receipt then decides.
-
-**Result.** The run (entry `1793664765522129781-2eeb4b7e`) ended at the cutoff with first failure `0x73c`, not `0x75f`, so the
-session was not waiting in `ss_finish`. The record names the wait. Its value is `0x41089608`, the return address of the
-`ss_progress` call in the first loop of `main_entry` (`apps/os/application.c`), which waits until `ss_live()` is not zero. That
-loop never ended, so the application's main entry never ran. `ss_live()` stays zero while `ss_grant()` is null or the USB service
-task has not marked the transport ready (`os_application_usb_ready`, called first thing by `board_usb0_task` in this profile). The
-NPU state in the site's auxiliary field, `0x41cb`, says the service started and became active, the SDK was never opened, and no
-report was published. The next image must say which of the two terms of `ss_live()` is unmet.
-
-**Cause.** `main_entry` tests `ss_live()`, finds the application not live, and waits for the transport with
-`application_wait_until(deadline - 10 ms)`. A wake-up (`os_wake`) reaches only a task that has registered its wait. When the USB
-service task marks the transport ready after the test and before the registration, the wake-up finds no waiter, and the main
-task sleeps to the session deadline, which the supervisor's cutoff then ends. The wait also extended the application's progress
-window to the deadline, which is why no service window expired. The emulated board reproduces it
-(`usb-ready-between-test-and-wait` in `checks/qemu-os-boot.py`): on the earlier code the application never enters. The wait now
-registers first and tests `ss_live()` again once registered, so the event is either seen by that test or delivered.
-
-### Predicted board run of the NPU pool in the slot 1 area, repeated with the wait fixed
-
-Hypothesis: the failed run of the pool at `0x78600000` (entry `1793652334060640370-11f14671`) was this lost wake-up, and the pool is
-not at fault. The same recipe built from the tree with the wait fixed returns normally with the receipt of `expect.json`: seven
-graphs `match`, `completed` and `matched` equal to 7, the SDK closed, `RETURN_ROM` last, about 10 s of launch. The image differs from
-the failed one in the fix and in the cutoff diagnostics. If the run ends at `0x73c` again, the record's progress site and NPU state
-say where the application waits, and the lost wake-up was not the whole cause.
-
-**Result.** Entry `1793665367809526758-0a66d342` returned normally (`RETURN_ROM` last, about 39 s of launch on a busy queue). Its
-receipt equals the expectation word for word: seven graphs `match` with no differing byte, `completed` and `matched` 7, the SDK
-closed. The queue labelled it `result-mismatch` because my submission passed an expectation file that was already converted,
-which the runner compared as bytes. Entry `1793665683000181061-de31a526` repeats the run with the correct file and has outcome
-`returned`, with the same receipt, in 5.9 s of launch. The pool at `0x78600000` works: the failed run of the pool was the lost
-wake-up, not the pool. The NPU's reach above `0x48000000` is shown by those seven graphs (a pool at the top of the slot 1 area).
-
-### Predicted board soaks of the broadcast invalidation on the control path (step 7, second measurement)
-
-The scheduler latency diagnostic cannot resolve a stall of a few microseconds (its wake times spread over tens of microseconds). The
-scheduler's soak can: the mimus recognition on eight workers repeats for 25 s on the partitioned kernel with control interrupts
-above the API mask, the control path at 10 kHz on core 4 (about 250 000 periods per soak, maximum 3.1 to 3.7 us today) and the task
-path at 1, 2 and 4 kHz on cores 1 to 3. The image is that soak, built from this tree with the control and task code unchanged, and one
-addition: `SUNSTONE_TLBI_ISSUER` (`apps/os/tlbi-issuer.c`) adds an OS task on core 5, a Cortex-A55 of the cluster that holds the
-interrupt cores, that sleeps between invalidations and issues one at each wake, followed by `DSB ISH`. Forms: 1 `TLBI VAE1IS`, 2
-`TLBI ASIDE1IS`, 3 `TLBI VMALLE1IS`; form 0 is the same task waking and issuing nothing, so that the wake of the task is separated
-from the instruction. A further image has no task.
-
-Rates. A region release or a reuse of a released extent is one request to the ledger's service task, which edits two table pages and
-issues one invalidation. An acquire also zeroes 2 MiB, about 0.4 ms at the 5 GB/s read rate of the DRAM measurement (the write rate is
-not measured), so the ledger cannot serve more than about 2 400 acquire-release pairs per second. The task runs at 1 000 per second,
-one per kernel tick, which is the finest rate the kernel offers and lies within a factor of 2.4 of that bound; and at 100 per second,
-an application that releases one region per 10 ms control cycle. At 1 000 per second a soak sees 25 000 invalidations, and an
-invalidation that held a core for 5 us would overlap 0.5% of the control path's periods, over a thousand per soak.
-
-Hypothesis: a broadcast invalidation holds the other cores for less than 2 us, so the control path's maximum latency rises by less
-than 2 us over the form-0 control in every soak of every form, at both rates, and its jitter stays within the 5 us bound.
-
-- **Expected.** Every soak returns exact with `missed=0 gaps=0 dropped=0`. The control path's `lat_max_ns` is 2.8 to 3.8 us in the
-  controls and at most 5.8 us in every soak of the forms (the control's largest maximum plus 2 us); `lat_p9999_ns` stays within 0.5 us of
-  the controls; `jit_max_ns` at most 5 us. The task path's maxima (22 to 31 us for the three rates) stay within the spread of the
-  controls plus 5 us. The recognition time stays within 0.5% of the controls. Two soaks of the image without the task and three of
-  form 0 give the spread to compare with, three soaks per form at 1 000 per second and two per form at 100 per second give the
-  forms.
-- **A different result and what it means.** A control path maximum above 5.8 us in every soak of a form, or a rise of the 99.99th
-  percentile of more than 0.5 us, means the invalidation holds the other cores of the cluster for that long, and the design's
-  broadcast form is out: the local form on the cores of the application, or the deferred reuse. A rise only in the task path's
-  maximum would show the invalidation lengthening kernel spans and is inconclusive against that path's own spread. A difference
-  between the image without the task and form 0 is the cost of the task's wake, not of the instruction.
-
-**Result of the soaks (port 3-1; 21 soaks of 25 s at 1 000 invalidations per second submitted, 20 usable).** All returned exact
-(`FORMATTED There was silence.`) with `missed=0 gaps=0 dropped=0`, 250 000 control periods each, 5.0 million in all. One soak
-(form 1, first attempt) was a host error, the USB node vanished in the DRAM stage, and was repeated. The first five entries carry an
-expectation file that the runner compared as bytes, so the queue labels all of them `result-mismatch`; the output of each is the one
-the prediction names and the figures below come from it. Control path, core 4, in microseconds:
-
-| Image | Soaks | `lat_max` of each soak | `lat_p9999` | `jit_max` of each soak | Recognition (ms) |
-| --- | --- | --- | --- | --- | --- |
-| No task | 2 | 3.33 3.29 | 2.83 to 3.00 | 3.04 3.04 | 110.72 to 110.74 |
-| Form 0, wake only | 6 | 3.08 3.12 3.12 3.25 3.21 3.29 | 2.83 to 3.00 | 2.79 to 3.04 | 110.68 to 110.82 |
-| Form 1, `TLBI VAE1IS` | 3 | 3.42 3.33 3.17 | 2.83 to 3.00 | 3.12 3.04 2.92 | 110.87 to 110.99 |
-| Form 2, `TLBI ASIDE1IS` | 3 | 3.54 3.50 3.21 | 3.00 | 3.25 3.21 2.92 | 110.95 to 110.97 |
-| Form 3, `TLBI VMALLE1IS` | 6 | 3.08 3.38 **5.62** 3.17 3.33 3.38 | 2.83 to 3.00 | 2.79 3.12 **5.38** 2.92 3.04 3.12 | 110.88 to 111.03 |
-
-Against the prediction. Every maximum lies within 2 us of the largest control maximum (3.29 us) except the one soak of form 3 at
-5.62 us, which exceeds that by 2.3 us and stays under the 5.8 us the prediction states; the 99.99th percentile stays within 0.5 us
-of the controls in all of them; recognition time is 0.1 to 0.3% above the controls, inside the 0.5% allowed; the task path maxima
-(15 to 33 us at the three rates) lie inside the spread of the controls (17 to 31 us). The prediction fails in one place: that
-soak's control path jitter was 5.38 us against the bound of 5 us. Its two largest latencies (5.625 us, 7 s apart) were both taken
-with the interrupted code at the same address, in `ssKernelObjectResume` of the partitioned kernel's object section; no other soak
-of any image has a latency above 3.6 us. The soak is one of 12 with an invalidation (one of 6 with form 3) against none of 8 without
-one (Fisher's exact test, one-sided, p of 0.43 for form 3 against the eight controls), so the data neither show nor exclude an effect
-of that form. The earlier pooled soaks of the same path without any invalidation include a 12.8 us maximum over five soaks, so
-single outliers of this size occur without one.
-
-Decision. At 1 000 invalidations per second from one Cortex-A55 core, the page form (`TLBI VAE1IS`) and the ASID form
-(`TLBI ASIDE1IS`) cost the control path at 10 kHz on a neighbouring core nothing that 750 000 periods per form can show: the
-largest maximum is 3.54 us against 3.33 us without a task, and the criterion of this design (a 99.9th percentile above 5 us or any
-worst case above 10 us selects the local or deferred form) is not met. The broadcast form is therefore allowed as the fallback of the
-release protocol, in these two forms, at up to 1 000 per second; the order of the protocol stays: deferred reuse first, the local
-form second. `TLBI VMALLE1IS` is not used by the protocol and is not cleared: it met the criterion in all six soaks but gave the one
-jitter value above the bound. The task path's wake latency of 15 to 33 us is dominated by the kernel's own spans, and no
-invalidation form moved it outside the controls. Not measured: 100 invalidations per second (the soaks were withdrawn; at that rate
-a stall costs a tenth of the periods), invalidations whose entries the receiving cores are using (the ASID and page used here are
-not the ones the recognition touches, so the receivers lose nothing and refill nothing), and receivers on the Cortex-A76 cores,
-which ran recognition workers but no control interrupt.
-
-### Predicted board runs of the broadcast invalidation (step 7)
-
-The design limits where a broadcast TLB invalidation can happen and requires a measurement before one is used. The scheduler latency
-diagnostic (`apps/latency`) now has a build option, `SUNSTONE_LATENCY_TLBI`: 0 none, 1 `TLBI VAE1IS` of the traffic buffer's page,
-2 `TLBI ASIDE1IS` of ASID 1, 3 `TLBI VMALLE1IS`. CPU0's tick hook, the interrupt that releases the eight pinned wake tasks, issues
-the chosen invalidation, followed by `DSB ISH`, immediately before every release of the idle and busy phases. Every wake sample is
-therefore taken beside an invalidation, which bounds the effect of one release every 100 ms from above. The diagnostic keeps the
-largest time the issuing core spent from the instruction to the end of the `DSB`; that time is also an upper bound on how long any
-other core can be held, because the barrier completes only when all cores have completed the invalidation. The report's `dma_jobs`
-word carries it in this image, which has no DMA client. `checks/latency-tlbi.py` shows that the images of the four forms differ
-only by that one instruction. `apps/latency/tlbi-report.py` summarizes a report.
-
-The harness releases at the tick, 1 kHz, not at 10 kHz, and takes 64 idle and 128 busy samples per core. That is too few for a 99.9th
-percentile, which equals the maximum of a core's busy samples, and the control's own busy wake time is large (an earlier report of
-the same diagnostic: busy maximum 135 us on the Cortex-A55 cores and 34 us on the Cortex-A76 cores). The wake metrics can therefore
-show only a cost that is large against that spread. The issuing core's time is the sensitive figure.
-
-Hypothesis: a broadcast invalidation costs the issuing core less than 5 us in the worst case under the harness's memory load for
-the page and ASID forms, and less than 10 us for the form that invalidates everything, and it moves neither wake metric's maximum
-outside the spread of two runs of the control. Five runs on port 3-1 with the same session: the control twice, then forms 1, 2 and 3.
-
-- **Expected.** All five return normally. The control reports no invalidation. Forms 1 and 2 report at most 5 us for the issuing core,
-  form 3 at most 10 us. For each of idle and busy and each cluster, the maximum of every form lies within the range of the two
-  controls' maxima plus 5 us.
-- **A different result and what it means.** An issuing time above 10 us says that a core running other work can be held for that
-  long by a release, so the design's local or deferred forms are needed. A wake maximum that rises by more than the spread of the
-  two controls says the same through the scheduler. A watchdog end or a failure record would mean the invalidation in the tick hook
-  broke the harness (it runs in interrupt context at EL1), not that it is costly.
-
-**Result of the five runs (port 3-1, entries `1793671134053745086-10f06621` and `1793671142888118311-6d401880` for the control,
-`1793671155101547801-f4fdd008` for `TLBI VAE1IS`, `1793671164171009720-be7dc135` for `TLBI ASIDE1IS`,
-`1793671172712527319-915ef621` for `TLBI VMALLE1IS`).** All five returned normally. Every run took 199 ticks of the application.
-The memory sweeps of each core (38 to 74 in the control) are equal in the runs of the page and ASID forms; in the run of the form
-that invalidates everything, core 1 made 42 sweeps against 52 and core 3 made 47 against 38, one lower and one higher, so no
-throughput cost shows. (The host-side
-stage durations differ widely between the runs because of disk load, and the launch time of the runs of the three forms, 18.7 to
-31.0 s against 5.4 s, is a host-side figure from slow periods, not a property of the application.) In microseconds:
-
-| | issuing core, largest | busy A55 max | busy A76 max | idle A55 max | idle A76 max |
-| --- | --- | --- | --- | --- | --- |
-| control, first run | none | 172.7 | 36.0 | 20.0 | 6.3 |
-| control, second run | none | 159.0 | 32.8 | 21.4 | 7.4 |
-| `TLBI VAE1IS` | 9.79 | 160.5 | 34.8 | 20.1 | 7.5 |
-| `TLBI ASIDE1IS` | 8.62 | 154.2 | 37.3 | 20.4 | 6.6 |
-| `TLBI VMALLE1IS` | 6.83 | 158.7 | 30.5 | 20.5 | 7.1 |
-
-The wake half of the prediction held: no maximum of a form lies outside the range of the two controls plus 5 us. The issuing-time
-half did not: the page and ASID forms took 9.8 and 8.6 us against the predicted 5 us (the form that invalidates everything took
-6.8 us, under its 10 us); all stay under 10 us. The figure includes the wait of `DSB ISH` for every earlier access of the issuing
-core, issued from the tick interrupt while the other cores sweep memory, so it overstates what an idle receiver is held for.
-
-What the runs decide. The busy wake maxima of the control itself are 33 to 173 us, far above the design's 10 us worst case and 5 us
-at the 99.9th percentile, and two runs of the control differ by up to 14 us. A cost of a few microseconds cannot show in that
-spread, with 192 samples per core and the 1 kHz tick instead of the 10 kHz release the design assumed. What the data show is an
-upper bound on the stall a broadcast invalidation imposes: under the full memory load of the harness the issuing core waited at most
-9.8 us for every core to complete it, and no wake or sweep count moved outside the control's spread. That does not clear the
-broadcast form against the 5 us criterion of the design, so the design's order stands: the deferred reuse and the local form come
-first, and the broadcast form needs a measurement on the control path at 10 kHz (the interrupt latency histograms of the control
-interrupts in `runtime/control_irq.c`) before an application call uses it.
-
-### Predicted board run of the NPU graphs with the end wait driven by events
-
-An OS wake-up of the main task that finds no registered wait is now kept for its next wait, `ss_host_recv` tests its mailbox again
-after registering, and the NPU retirement wait in `ss_finish` sleeps in the deadline wait until the client's report or the
-bootstrap's local stop wakes it, instead of polling with `vTaskDelay(1)`. The wait ends one second before the supervisor's cutoff.
-
-Hypothesis: the NPU graphs image with the 10 MiB pool at `0x78600000`, built from this tree, returns normally with the receipt of
-`expect.json`, as the run before the change did (seven graphs `match`, `completed` and `matched` 7, the SDK closed, `RETURN_ROM`
-last, about 6 s of launch). A watchdog end with `0x75f` would mean the stop did not wake the main task in time, and the value of the
-failure lists the unmet retirement conditions.
-
-**Result.** Entry `1793668814201417903-92757416` returned normally (`RETURN_ROM` last): seven graphs `match`, `completed` and
-`matched` 7, the SDK closed, no failure record. Its launch took 32.7 s of queue time against 5.9 s for the run before the change,
-so the board run shows the event-driven end wait is correct, and says nothing about its latency.
-
-### Predicted board run of the heap
-
-Hypothesis: with the OS image built with the address-test decode check
-(`sunstone-a733-os-heap-test`, four modes), upper memory at `0x8000_0000` is
-mapped, the ledger grants the application a 1 GiB heap there, and its EL0 tasks
-reach exactly that region through its own tables.
-
-Condition: a CPU-return run on one board in development DRAM mode (no
-preservation claim: the runner does not back up the heap), the image's default
-CPU grant, no card.
-
-- **Mode 0 (use the heap).** Returns normally. The result equals the file written by `apps/heap-test/host.py expected 0`: heap base `0x8000_0000`, size `0x4000_0000`, a 512 MiB block inside the region that read as zero in every word, a pattern that read back equal over all 64 Mi words, a failed request for the whole region, and a block that was freed and taken again. The decode check passing is a precondition; if it fails the image refuses the application before any task runs.
-- **Mode 1 (a task in no application space reads the first heap byte).** The session ends with an application failure record whose fault is a level 1 permission fault on a read at `0x8000_0000`.
-- **Mode 2 (the application reads the first byte after the region).** The session ends with a permission fault at `0xc000_0000`, a kernel-only 1 GiB block.
-- **Mode 3 (an attached worker writes, the main task reads).** Returns normally with the result of `apps/heap-test/host.py expected 3`.
-
-What the run does not show: the rate at which `_sbrk` zeroes memory (the result holds no time) and the cost of the task-switch hook with the heap's space. Both belong to the OS image at the approved top operating points and are measured by the large-region test and the dram-bandwidth application.
-
-## Risks and open questions
-
-- **Decode check coverage.** The check proves linear decode, not that the memory firewall passes Non-secure accesses or that no other master writes. Upper memory above `0x4800_0000` has the board-recorded result for the address test only; a bus error there resets the board through the watchdog. Step 1's board run is also the first OS-image run of it.
-- **FEL address width.** The protocol limit is verified on the host from the pinned tool source (see the bounds table); whether this ROM implements a wider private extension is irrelevant, because the tool cannot send one. The runner check in step 4 refuses higher addresses.
-- **Upload time.** An initialized image above tens of megabytes costs minutes per run at 0.55 MB/s. Data of that size belongs in INPUT or large regions.
-- **Start-up order.** The heap of the ledger replaces the linked heap only if the linked heap has handed out no byte. A static constructor that calls `malloc` before admission therefore refuses the application at admission (the QEMU case `heap-after-early-sbrk` shows the refusal and that the application does not start). The constructors run after the heap is attached (step 2b, implemented: `runtime_init` is called in `os_application_prepare` after `os_large_prepare`, and nothing else runs the `.init_array`); only another caller of `sbrk` before the admission still refuses the application.
-- **Stale memory.** Every extent handed out must be zeroed, and boot-time zeroing of the heap and bss has to be measured against the supervision window.
-- **EL1 execution of application text.** The kernel tables must map it, and the application's EL1 worker functions have to be listed in the layout record. A function at an unmapped address faults at EL1.
-- **Branch thunks and code model.** The thunk check must run for the application's real size. An application that places more than 4 GiB of bss in link-time symbols is outside the code model; it uses the heap or a region instead.
-- **Fragmentation of an identity-mapped space.** No remapping exists, so a long-running application can fail a large request that enough free memory in total could serve.
-- **ASIDs.** The pool hands out 255 and never returns one ([large-regions status](../status/large-regions.md), items 7 and 8). Release of an application space is out of scope here.
-- **Real-time cost of invalidation.** Measured at 1 000 per second from a Cortex-A55 core (step 7, the soaks above): the page and ASID forms stay inside the criterion on the control path of a neighbouring core, and the all-entries form gave one jitter value of 5.38 us in six soaks. Open: the rate of 100 per second, invalidations of entries that the receiving cores use, and receivers on the Cortex-A76 cores.
-- **Left open by the memory-limits work.** The application image area (step 6: renamed application sections, `layout.ld`, boot-table text mapping at EL1 and EL0, stage-2 loader extents) is not started. Run-time requests (step 7: the SDK call, ledger pages, table-page extents and the release protocol) are not started; the invalidation measurement only bounds their cost. Taking `heap_link_max` away so that every heap comes from the ledger (the second part of step 2b) waits for a board run of the mimus image. A preserving run above 4 GiB is refused by design, so a region there is never backed up. The hardware bounds of the NPU above `0x48000000` are shown for one pool of 10 MiB; a pool of several hundred megabytes and the 4 GiB span rule are host-checked only.
+- **Measured.** Soaks of 25 s on port 3-1 run the mimus recognition on eight workers with the control path at 10 kHz on core 4 (250,000 periods per soak) and an OS task on core 5 that issues 1,000 invalidations per second (`SUNSTONE_TLBI_ISSUER`, `apps/os/tlbi-issuer.c`; forms 1 `TLBI VAE1IS`, 2 `TLBI ASIDE1IS`, 3 `TLBI VMALLE1IS`). The page and ASID forms raise the control path's maximum latency from 3.33 us (no task) to 3.54 us at most, and the 99.99th percentile stays within 0.5 us. The all-entries form gave one soak of six at 5.62 us with a jitter of 5.38 us against the 5 us bound, which the data neither tie to the invalidation nor exclude. The page and ASID forms are therefore allowed as the fallback of the release protocol up to 1,000 per second; the all-entries form is not used. The record is `application-memory-layout-tlbi-soaks`. The earlier latency-diagnostic runs (issuing core waits at most 9.8, 8.6 and 6.8 us) could not resolve a few microseconds. Unmeasured: 100 per second, invalidations of entries the receiving cores use, and receivers on the Cortex-A76 cores.
+
+**Fragmentation.** The mapping stays identity, because device DMA uses physical addresses. A request therefore needs contiguous physical memory. First fit with 1 GiB alignment for large requests keeps large gaps whole. A request that fails for fragmentation reports the largest free extent so that the application can retry with less. If fragmentation shows in practice, the remedy is to separate virtual from physical addresses for CPU-only memory (discontiguous 2 MiB extents at consecutive virtual addresses). Memory that a master reads or writes stays identity mapped, or is reached through IOVA mappings by the masters behind the IOMMU (display, G2D, codecs, camera). Masters without an IOMMU (DMA0, xHCI, the PCIe endpoint, and the NPU aside from its own MMU) need physical contiguity or a per-transfer scatter list. This step is not scheduled.
+
+**Zeroing.** The service task zeroes a granted extent in 2 MiB steps at a priority below the application's and before it signals the reply. At 5 GB/s, the single-core read rate in [dram-bandwidth.md](dram-bandwidth.md), 1 GiB takes about 0.2 s. The write rate is a board measurement of the step that adds the call.
+
+## Qualified runs
+
+| Run | Figure | Record |
+| --- | --- | --- |
+| Heap from the ledger, 1 GiB heap at `0x8000_0000`, modes 0 to 3 | mode 3 returns the expected 128-byte result | `application-memory-layout-heap-modes`, `1793650900758260472-be096b75` |
+| Preserving run, regions in the slot 1 area | 44,040,192 bytes backed up, estimate 160.1 s under a 240 s budget, scratch region left out | `1793652142808675717-ffd657dd` |
+| Preserving run, regions above 2 GiB | same plan at `0x88000000`, `dram_restored` true | `1793670225972455043-c4f45b62` |
+| NPU graphs with the pool at `0x78600000` | seven graphs `match` | `1793665683000181061-de31a526`, `1793668814201417903-92757416` |
+
+The records are in [the evidence file](../evidence/application-memory-layout.jsonl).
+
+## Limitations and open work
+
+1. **Application image area** (text, read-only data, data above the OS core): renamed application sections, a `layout.ld` produced from the record by a two-link build, boot-table text mapping at EL1 and EL0, stage-2 loader extents and thunk checks for the real size. Board run: a returning image whose text is 40 MiB, run to a normal return, with an EL1 call into the text.
+2. **Run-time requests** (`ss_memory_acquire`, `ss_memory_release`): ledger pages, table-page extents and the release protocol, with a board run that acquires and releases 256 MiB and 1 GiB regions from the A76 and A55 clusters and records the release latency and zeroing rate. It depends on the heap and on the slot 1 tables.
+3. **Heap for every application**: remove `heap_link_max` so that every heap comes from the ledger when the decode check passes, with the linked heap as the fallback of an image whose decode check fails. This changes the mimus image, so it waits for a board run of mimus.
+4. **Stack pool**: worker stacks from the ledger with a guard block below each.
+5. **Planned checks** for the open items: `checks/memory-layout.py` equality of the record with the constants for every manifest and image and equal section sizes between the two links. Then `qemu-os-boot.py` with a 100 MiB text; a 256 MiB INPUT at `0x5000_0000` uploaded by FEL whose EL0 checksum equals the host's; one NPU graph from a 96 MiB pool above `0x4800_0000` with output equal to the 48 MiB pool run.
+6. **Decode check coverage.** The check proves linear decode, not that the memory firewall passes Non-secure accesses or that no other master writes. A bus error resets the board through the watchdog.
+7. **FEL address width.** The protocol limit is verified from the pinned tool source; the runner refuses higher addresses.
+8. **Upload time.** An initialized image above tens of megabytes costs minutes per run at 0.55 MB/s.
+9. **Start-up order.** A static constructor that calls `malloc` before admission refuses the application at admission (QEMU case `heap-after-early-sbrk`); the constructors run after the heap is attached, so only another caller of `sbrk` before admission still refuses it.
+10. **Stale memory.** Every extent handed out must be zeroed, and boot-time zeroing of the heap and bss has to be measured against the supervision window.
+11. **EL1 execution of application text.** The kernel tables must map it, and the application's EL1 worker functions have to be listed in the layout record.
+12. **Fragmentation** of an identity-mapped space: a long-running application can fail a large request that enough free memory in total could serve.
+13. **ASIDs.** The pool hands out 255 and never returns one ([large-regions status](../status/large-regions.md), items 7 and 8); release of an application space is out of scope.
+14. **Real-time cost of invalidation:** measured at 1,000 per second from a Cortex-A55 core (above). Open: 100 per second, invalidations of entries that the receiving cores use, and receivers on the Cortex-A76 cores.

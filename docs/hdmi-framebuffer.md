@@ -93,19 +93,7 @@ qualification. No MIPI camera or display is connected; neither accessory is
 used here. Other HDMI modes, formats, audio, CEC, HDCP, live frame replacement
 and the broader DSI/display requirements remain separate required work.
 
-The focused check is `checks/hdmi-framebuffer.py`. It builds the affected native
-image, reuses its compiled objects in one composition, and continues four faults
-from saved CPU/memory checkpoints. The nominal run powers DE_SYS from OFF and
-must write the delay row and ON request in order. A second complete run starts
-from an inherited ON domain and must reach DE start without any PCK write. The
-hook sites and HDMI native structure offsets come from the fixture ELF and its
-debug information. Hardware and scheduling are modeled; the
-prepared HDMI PHY/EDID checkpoint reuses prior component evidence. The new path
-runs actual allocation, table construction, ownership managers, media clocks,
-DE, TV0 and application start/stop code. Source expectations for the new RGB565
-format and TV0 route come from the already pinned published driver and device
-tree. This check does not replay the old HDMI or DSI test matrices and does not
-establish physical output.
+No host check covers the framebuffer path. A one-time host composition of the native image ran the actual allocation, table construction, ownership managers, media clocks, DE, TV0 and application start/stop code with modeled hardware and scheduling, and continued four faults from saved CPU/memory checkpoints. Its nominal run powered DE_SYS from OFF and wrote the delay row and ON request in order; a second run from an inherited ON domain reached DE start without any PCK write. The prepared HDMI PHY/EDID checkpoint reuses earlier component evidence. Source expectations for the RGB565 format and the TV0 route come from the pinned published driver and device tree. The composition does not establish physical output.
 
 The native image build and the five selected composition outcomes passed. The
 artifact is preserved in `~/.cache/sunstoneos/evidence/hdmi-framebuffer-20261017`;
@@ -115,11 +103,4 @@ The outcomes cover normal start/stop, immutable-authority mutation, registry
 failure before TV0 enable, uncertain DE disable, and cancellation during a
 pending DE start. Each failure keeps the full memory allocation reserved.
 
-The evidence preserves a fixture qualifier compilation error and an overbroad
-trace assertion separately from passing results. Only the unfinished fixture
-work continued. A corrected cancellation assertion required one fixture-only
-relink; all native runtime objects and the image were reused. One bounded
-prerequisite reconstruction supplied durable checkpoints for the four remaining
-faults. The successful nominal stop path was not repeated. The registry header's
-VO1 ownership clarification changes comments only; its compiled C tokens match
-the image's archived header.
+Results of host checks that no longer exist are kept in the evidence record [hdmi-framebuffer.jsonl](evidence/hdmi-framebuffer.jsonl).

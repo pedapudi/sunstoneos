@@ -110,9 +110,7 @@ The directory-specific ASan/UBSan check passes the compiled convolution and
 84 atomic refusals. It covers truncated allocations, malformed subheaders and
 sections, overlap, duplicate IDs, record widths, scalar memory requirements,
 quantization, reference bounds, and accessor aliases. A relocated, reversed
-directory also passes. Assembly now has separate profile checks; the obsolete
-blanket-refusal assertion was removed from the decoder check when directory
-assembly was implemented.
+directory also passes. Assembly has separate profile checks.
 
 One comparison with the saved directory reference matches thirteen sections,
 two operations, five patches, two tensors, and three payload ranges. Its initial
@@ -134,11 +132,8 @@ The 64-bit view occupies 480 bytes. Disassembly shows a 736-byte open frame,
 path uses 944 bytes before memory-helper stack use. The isolated CMake target
 is `nbg-model`; the affected assembler target also builds.
 
-The checks are [nbg-model.c](../checks/nbg-model.c),
-[nbg-directory.c](../checks/nbg-directory.c), and
-[nbg-directory-native.py](../checks/nbg-directory-native.py). The directory
-comparison accepts the pinned model, native shared library, saved reference
-JSON, and a new output directory. Current commands, results, artifacts, and
+The check is [nbg-model.c](../checks/nbg-model.c). No host check compares the
+directory path with the saved reference JSON. Earlier commands, results, artifacts, and
 input identities are under
 `~/.cache/sunstoneos/evidence/nbg-directory-native-20261016/`.
 Earlier fixed-format evidence remains under
@@ -148,6 +143,8 @@ The [native assembler](nbg-assembly.md) resolves caller-owned allocations and
 assembles the observed command profile from these views. Descriptor access extents, device padding,
 relocation destinations, software-operation semantics, command permissions,
 and SRAM placement remain separate admission requirements. Directory checksum
-verification and assembly with an empty working pool now have host evidence.
+verification and assembly with an empty working pool have host evidence.
 Complete admission remains required before numerical execution.
 The assembler adapts the completion event and reserves the controller's full fetch span.
+
+Results of host checks that no longer exist are kept in the evidence record [nbg-model.jsonl](evidence/nbg-model.jsonl).

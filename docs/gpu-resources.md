@@ -170,48 +170,35 @@ enablement, and native I²C binding. The relevant risks are releasing resources
 after uncertain I/O, admitting conflicting clients, changing unrelated clocks,
 and activating a bus for an inherited live GPU.
 
-The [host check](../checks/a733-gpu-resources.c), compiled with AddressSanitizer
-and UndefinedBehaviorSanitizer, passes shared leases, change guards, stale-token
-refusal, partial acquisition, concurrent admission, and 86 retained faults.
-Concurrent callers cannot enter hardware callbacks during another admission.
-A live GPU is rejected before gate writes. Shared GPU-gate requests cannot
+No host check covers shared leases, change guards, stale-token refusal, partial
+acquisition, concurrent admission or the 86 retained faults. By design
+concurrent callers cannot enter hardware callbacks during another admission, a
+live GPU is rejected before gate writes, and shared GPU-gate requests cannot
 activate a disabled gate without exclusive GPU ownership.
 
 The [reference comparison](../checks/a733-gpu-resources-reference.py) compiles
-original clock-gate, PLL-rate, and PMIC voltage-decoding functions. Their outputs
+clock-gate, PLL-rate, and PMIC voltage-decoding functions. Their outputs
 match the native gate values, 400 MHz parent rate, and 800 mV DCDC4 interpretation.
 Source assertions verify field positions, multiplier/divisor offsets, oscillator
 selection, and modulation controls.
 
 The A733 User Manual V1.00, section 4.1.6.6, additionally defines the peripheral
-PLL input divider omitted from the kernel clock profile. The focused
-`--pll-input-only` host case admits the unchanged divide-by-one configuration
-and refuses divide-by-two before writes, retaining ownership. It passes with
-sanitizers; the changed runtime compiles for AArch64. Evidence is in
-`~/.cache/sunstoneos/evidence/peri0-input-divider-20261016/`.
-Earlier gate, lifetime and native-adapter checks remain reusable.
+PLL input divider omitted from the kernel clock profile. The driver admits the
+divide-by-one configuration and refuses divide-by-two before writes, retaining
+ownership. It checks each required No-Auto, software enable and
+effective-status bit, failed or late reads, unrelated branches, and retained
+ownership without writes. No host check covers these cases; the changed runtime
+compiles for AArch64. Earlier evidence is in
+`~/.cache/sunstoneos/evidence/peri0-input-divider-20261016/` and
+`~/.cache/sunstoneos/evidence/peri0-gates-20261016/`.
 
-The focused `--parent-gates-only` case checks each required No-Auto, software
-enable and effective-status bit, failed or late reads, unrelated branches, and
-retained ownership without writes. Evidence is in
-`~/.cache/sunstoneos/evidence/peri0-gates-20261016/`. The focused host check passes with address
-and undefined-behavior sanitizers; both affected native units compile for AArch64. The native harness
-fixture now supplies enabled inherited PERI0 gates. Its earlier I²C, lock and
-resource lifecycle results remain applicable; those paths were not repeated.
-
-The [AArch64 harness](../checks/a733-gpu-resources-native.c) and
-[emulator runner](../checks/a733-gpu-resources-emulate.py) execute the native
-adapter's register operations and I²C binding. MMIO registers, counter time,
-locks, and the I²C transport are modeled. The harness verifies the six-register
-snapshot, retained failures at each transport read, wrong-page refusal, and
-register-lock refusal, and ignored or incomplete I²C restoration. It executes no
-physical I²C controller or GPU firmware.
-
-Evidence is `~/.cache/sunstoneos/evidence/gpu-resources-20261016/`, including
-commands, input hashes, host and emulator results, original reference outputs,
-and AArch64 objects. The manager uses 4,308 bytes of object text; the native
-adapter uses 1,626 bytes. Each has a maximum individual static frame of 96 bytes.
-These counts describe the compiled build.
+No AArch64 harness or emulator runner executes the native adapter's register
+operations and I²C binding with the six-register snapshot, retained failures at
+each transport read, wrong-page refusal, register-lock refusal, or ignored or
+incomplete I²C restoration. The manager uses 4,308 bytes of object text; the
+native adapter uses 1,626 bytes. Each has a maximum individual static frame of
+96 bytes. These counts describe the compiled build; evidence is in
+`~/.cache/sunstoneos/evidence/gpu-resources-20261016/`.
 
 Reference sources are the [pinned board kernel](https://github.com/orangepi-xunlong/linux-orangepi/tree/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f)
 clock definitions and helpers, plus the [pinned bootloader](https://github.com/orangepi-xunlong/u-boot-orangepi/tree/b791be842935b27268ae3d00e943a9075495f30a)
@@ -220,7 +207,7 @@ sources and compiled reference extracts. The source identity manifests record
 individual hashes and download paths.
 
 No board executable or physical queue submission exists for this resource
-backend. The first board trial requires qualified independent watchdog recovery,
+backend. A first board trial requires qualified independent watchdog recovery,
 shared lock integration, an inherited I²C bus, and a stopped GPU. It should
 capture the clock and rail baseline, acquire all GPU resources once, perform the
 bounded power/identity/shutdown trial, and release the lease. An unsupported
@@ -232,12 +219,14 @@ read MMIO, or establish a voltage. Updating parent admission therefore does not
 change the SD rail path. Clock admission samples settings at acquisition under
 held ownership; it does not provide continuous frequency monitoring.
 
-The focused detected-reference checks are preserved under
+The detected-reference results are preserved under
 `~/.cache/sunstoneos/evidence/accelerator-clock-reference-20261018/`.
-Actual provider code accepts exact 26 MHz N96/M104 and 19.2 MHz N100/M80
+The provider code accepts exact 26 MHz N96/M104 and 19.2 MHz N100/M80
 profiles and retains wrong ratios, lost reference lock, and disabled or unstable
 DCXO before writes. GPU/NPU PERI0 cases preserve reserved bit24; the NPU PLL
 case also retains final control corruption without opening the output.
 These modeled-register checks do not establish physical operation. No native
 image was rebuilt; accelerator launch still requires a final image built from
 the accepted startup and providers, plus actual resource and recovery admission.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-resources.jsonl).

@@ -1,6 +1,6 @@
 # GPU implementation and remaining graphics work
 
-GPU support is **partially implemented with host and emulator evidence**.
+GPU support is **partially implemented**.
 SunstoneOS has native firmware preparation, lifecycle control, retained memory
 reservations, free-list management, and a fixed numerical compute submission.
 The GPU has not booted firmware or executed a graphics or compute workload in
@@ -12,10 +12,9 @@ matching epochs and command serials, and the completed job and transport
 identities. It also requires the uncached firmware timeline to match the
 completed job, as described in [compiled programs](gpu-compiled-programs.md).
 Repeated execution on hardware remains unqualified. The frozen two-job
-returning image predates this callback and still rejects its second
-submission, so a corrected image must be built and qualified before hardware
-testing. That image's publication and host-capture evidence remain valid within
-their recorded scope.
+returning image rejects its second submission, so hardware testing needs an image
+built with this callback. That image's publication and host-capture evidence
+stay valid within their recorded scope.
 
 | Implemented component | Evidence and remaining boundary |
 | --- | --- |
@@ -123,9 +122,9 @@ two feature-mask words, and 29 feature-parameter words.
 | Stack | `0xcf600000` | Data | 16,384 | 4,096 |
 
 Code totals 102,400 bytes and data totals 20,480 bytes. These are CPU staging
-buffers. The [MIPS preparation component](gpu-mips.md) now constructs firmware
+buffers. The [MIPS preparation component](gpu-mips.md) constructs firmware
 page tables and boot parameters from caller-supplied physical pages. Platform
-allocation now exists through the reserved firmware constructor. Physical GPU
+allocation exists through the reserved firmware constructor. Physical GPU
 startup remains outstanding.
 
 ## Native staging validates bounds before changing buffers
@@ -159,19 +158,12 @@ Staging performs no MMIO, cache maintenance, allocation, or firmware execution.
 It does not write the MIPS boot configuration. Loading these buffers into a
 running GPU requires the remaining initialization and recovery work below.
 
-## Focused checks cover staging and malformed-image refusal
+## No host check covers staging and malformed-image refusal
 
-The [C check](../checks/pvr-firmware.c) passes under address and undefined-behavior
-sanitizers. It covers the pinned firmware, unaligned input, allocation guards,
-39 malformed-image refusals, unchanged results on refusal, and invalid buffer
-sizes and overlaps. Both complete output buffers remain unchanged on the
-malformed-image cases.
-
-The [independent comparison](../checks/pvr-firmware-reference.py) uses pyelftools
-to read ELF segments and compares every byte of both native allocations,
-including zero-fill and padding. Its first invocation found an incorrectly
-transcribed exception-code address in the reference table. Correcting that
-table produced a match without changing or repeating the native sanitizer check.
+No host check covers the pinned firmware, unaligned input, allocation guards,
+39 malformed-image refusals with both output buffers unchanged, invalid buffer
+sizes and overlaps, or compares every byte of both native allocations
+(including zero-fill and padding) with the ELF segments read by pyelftools.
 
 Clang 21 compiles the component for AArch64 with strict alignment and
 freestanding options. The object contains 6,708 bytes of code/read-only data
@@ -179,10 +171,9 @@ and no writable static data. The plan occupies 976 bytes; calls use stack
 scratch, with no heap allocation. These sizes describe the standalone component;
 the [FreeRTOS service](gpu-service.md) records the integrated emulator build.
 
-Input copies, hashes, commands, sanitizer output, staged buffers, comparison,
-and object are under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
-No device access or performance measurement occurred. Existing OS, mimus,
-NPU, and recovery evidence was reused.
+Earlier input copies, hashes, commands, staged buffers and the object are under
+`~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`. No device access or
+performance measurement has occurred.
 
 ## Device boot and workload submission remain outstanding
 
@@ -212,3 +203,5 @@ The remaining work is:
 
 [Issue 8](https://github.com/pedapudi/sunstoneos/issues/8) retains full display
 and GPU acceptance requirements. Firmware staging is an intermediate component.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-implementation.jsonl).

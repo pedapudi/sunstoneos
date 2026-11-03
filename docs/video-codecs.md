@@ -176,55 +176,25 @@ completion evidence.
 
 ## Instruction comparisons verify preparation and programming
 
-The checks run original AArch64 library instructions in Unicorn with bounded
-memory and explicit service stubs. They do not emulate the codec hardware.
-`a733-video-jpeg-reference.py` executes the package's DQT, DHT, SOF, SOS and DRI
-parsers, `SetJpegFormat`, `InitJpegHw` and `JpegHwDec`.
-
-The comparison passed for a 48-by-32 FFmpeg baseline JPEG and a constructed
-restart/table-selection case. Quantization writes, Huffman SRAM words, geometry
-and restart settings matched. Every prefix truncation of the baseline fixture
-was reported refused; selected malformed metadata cases were also reported
-refused. The original parser-check script was not archived, which limits
-reconstruction of that historical malformed-input result.
-The complete pre-trigger register byte image, table streams and byte trigger
-matched for planar YU12 with 32-byte stride/row alignment.
-
-The executor's sanitizer model passed success, pending completion, preparation
-failure, unknown identity, stale interrupt status, device error, late trigger,
-write failure, completion failure, unexpected read result, backward time and
-invalid span cases. Unknown identity never calls preparation. Successful output
-requires the completion callback; failures retain the ownership token.
-Parser and executor compile with warnings treated as errors for
-`aarch64-none-elf`. No board or device was accessed.
-
-Saved source, fixture, object files, traces and SHA256 identities are under
-`~/.cache/sunstoneos/video-codecs/review-20261016/`. Its `sha256.json` has SHA256
-`2f103cc434bb5f7244f9906e08656787544990b495449be8e644bcc85251c4e1`.
-`evidence/preparation-1/` contains table traces;
-`evidence/execution-1/` contains native and reference register images;
-`evidence/routing-2/routing.json` records codec selection and register routing.
-The identity-before-preparation change preserves the previously compared write
-trace byte for byte. The historical preparation manifest binds the native shared library
-(`7d439f06fea91a77258666dc1e47da6e54b17e607b2cb606f1d05f2bfa2935f6`),
-the reference JPEG library and the baseline fixture
-(`6522f2719f1f05e23a95aa71a18d52f2e91b19b4b6c94381b4100de4c79fd573`).
-All three artifacts remain available with matching hashes. Quantization/Huffman
-outputs and reference write traces remain inspectable for both preparation cases.
-
-The original Python runner has recorded hash
-`54496026d71d4bcedbb5eeb4e270948510b343d316acf482206822d9c5402927`,
-but its exact source was not retained. The synthetic input bytes and individual
-malformed-case outcomes were also not archived. Consequently the original
-malformed-input execution cannot be fully reconstructed from the record.
-The preserved extended runner adds an optional executor-trace argument,
-group/wait/alignment service stubs and a branch comparing planar programming.
-That branch exits before the existing synthetic/refusal cases. The native parser
-and table builder remained unchanged. The extended runner and executor model
-source are preserved, along with native objects, the sanitizer executable and
-register traces. This preserves the executor comparison without claiming a
-byte-identical reconstruction of the earlier Python runner. `results.txt` records that limitation and the
-corrected harness/model failures.
+A host comparison ran original vendor AArch64 library instructions in Unicorn
+with bounded memory and explicit service stubs, without emulating the codec
+hardware. It executed the package's DQT, DHT, SOF, SOS and DRI parsers,
+`SetJpegFormat`, `InitJpegHw` and `JpegHwDec` for a 48-by-32 baseline JPEG and
+a constructed restart/table-selection case. Quantization writes, Huffman SRAM
+words, geometry, restart settings and, for planar YU12 with 32-byte stride and
+row alignment, the complete pre-trigger register image and trigger matched.
+Every prefix truncation of the baseline fixture and the selected malformed
+metadata cases were refused. The executor's sanitizer model covers success,
+pending completion, preparation failure, unknown identity, stale interrupt
+status, device error, late trigger, write failure, completion failure,
+unexpected read result, backward time and invalid span. Unknown identity never
+calls preparation, successful output requires the completion callback, and
+failures retain the ownership token. The comparison needs the vendor shared
+libraries, which are not in the repository, so no retained check repeats it; the
+original malformed-input run cannot be reconstructed because its script was not
+archived. Artifacts, hashes and the limitation are in
+[the evidence file](evidence/video-codecs.jsonl). No board or device was
+accessed.
 
 ## Full codec support remains required
 

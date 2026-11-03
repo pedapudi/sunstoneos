@@ -93,7 +93,7 @@ pool and applies the existing privileged-task patch to a private cached port.
 It must rebuild all consumers against the same FreeRTOS and DMA service layouts.
 The copy application does not replace the full hardware and mimus requirements.
 
-The standalone target now links the complete cached eight-core boot, scheduler,
+The standalone target links the complete cached eight-core boot, scheduler,
 pool constructor, privileged bootstrap/worker and EL0 copy client. Configure it
 with an explicit source file defining the immutable handoff:
 
@@ -128,16 +128,11 @@ completion after all selected channels finish. The USB service acquires
 completion before reading the mask and counters. Partial progress produces a
 pending frame; it cannot report a successful subset of the selected channels.
 
-On 17 October 2026, the target linked once with no undefined symbols and a
-2 MiB write-back pool at `0x4126b000..0x4146b000`. That link used an explicit
-all-zero handoff fixture that grants no authority and must not be deployed.
-Seven focused instruction cases on the same ELF passed for the changed
-exception routes, stack/register preservation and EL0/EL1t return modes.
-They did not execute the boot, complete application or physical DMA.
-The ELF hash is
-`220156f455bd2a59926f0801fa0b480c02ebd5659e8d502920965d89369f5151`.
-Build inputs and results are in `~/.cache/sunstoneos/evidence/dma-copy-image-20261017/`;
-instruction evidence is in `~/.cache/sunstoneos/evidence/dma-copy-vectors-20261017/`.
+The target links with no undefined symbols and a 2 MiB write-back pool at
+`0x4126b000..0x4146b000`, using an explicit all-zero handoff fixture that grants
+no authority and must not be deployed. No host check exercises the changed
+exception routes, stack and register preservation, or the EL0 and EL1t return
+modes; the boot, the complete application and physical DMA have not executed.
 
 ## USB observation binds the completed copy to one boot session
 
@@ -272,26 +267,14 @@ the security record would create a digest cycle and is not required.
 HDMI audio admission also names the reviewed board `identity` and `port`.
 Its result decoder remains an offline observation entry and supplies no physical
 execution authority. No wire layout, register access or native image changes.
-Earlier frozen images and evidence retain their original admission scope.
+Frozen images keep the admission scope they were sealed with.
 
-The focused consumer check passed 30 host cases using the preserved UART DMA,
-I2S duplex and HDMI audio images. It covers added authority refusals, UART's
-actual ID-adoption producer, and HDMI's evidence loader and frozen bundle.
-Model positives replace only explicit modeled/nonphysical decisions; production
-refuses modeled security records. Evidence is under
-`~/.cache/sunstoneos/evidence/dma-consumer-security-20261020/`.
-Declared input digests and imported source bytes were checked before use and
-verified unchanged afterward. No native instructions, launcher build, device
-access or earlier component matrix ran for this host-only change.
-
-The focused `checks/dma-copy-security.py` check passes eight host cases against
-the immutable profile in the preserved `49397dc7…` image. Missing authority,
-modeled production evidence, absent channel coverage, differing controller or
-session, a boolean mask and missing post-reset validity are refused. Positive
-validation substitutes only the physical-authority decision in the checker;
-the production path accepts no modeled override. Records are preserved under
-`dma0-security-admission-20261020/`. No native, capture, launcher or device case
-was replayed.
+Production refuses modeled security records. The validator refuses missing
+authority, modeled production evidence, absent channel coverage, a differing
+controller or session, a boolean mask and missing post-reset validity; it
+accepts no modeled override. No host check covers these refusals for the UART
+DMA, I2S duplex and HDMI audio images (UART's ID-adoption producer, HDMI's
+evidence loader and frozen bundle) or for the copy image's immutable profile.
 
 The command reuses sealed uploads, SRAM preservation, qualification checks,
 refusal recovery and quarantine helpers. It holds the existing board flock,
@@ -300,24 +283,12 @@ stops transport after the first failure. It retains ownership when a live launch
 has an unresolved outcome. Successful pending replies allow bounded observation;
 they do not authorize retries after a failed transfer.
 
-[The focused check](../checks/dma-copy-observe.py) links the complete compact
-image with handoff assertion masks set to zero. Actual client instructions
-process modeled completed service replies and verify modeled copies before
-publishing their result. The native encoder produces pending and completed
-frames for the host capture path. A corrupted payload must reach the existing
-fatal path without publishing completion. The fixture also checks new SVC
-routing, preserved launcher reuse and offline launch refusal. It does not
-execute physical USB, DMA, cache coherence, boot or watchdog recovery.
-
-On 17 October 2026, this observer target linked once and the focused composition
-passed on ELF SHA-256
-`49397dc736e9b8f47c3a56632b7b0d1f5230404eef006aaa272524585ded4b96`.
-The image retains refused handoffs. A fixture stop-hook correction preceded
-completion of the instruction cases on that same ELF; no rebuild or completed
-case replay followed. Inputs include generated assembly and its generation
-sources. The exact original and corrected runners, refusal bundle, captured
-frames and tool identities are preserved under
-`~/.cache/sunstoneos/evidence/dma-copy-observe-20261017/`.
+The compact image links with handoff assertion masks set to zero and retains
+refused handoffs. No host check runs the client instructions on modeled completed
+service replies, verifies modeled copies before the result is published, drives
+the native encoder's pending and completed frames through the host capture path, or sends a corrupted payload to the fatal path. No host check covers SVC routing, launcher
+reuse and offline launch refusal. Physical USB, DMA, cache coherence, boot and
+watchdog recovery are unexecuted.
 
 ## Capacity and remaining hardware work
 
@@ -346,35 +317,26 @@ interrupts, IOMMU operation and wider peripheral modes remain part of the
 [DMA scope](dma.md). Physical cache coherence, descriptor
 fetches, bus completion, external-user exclusion and recovery need board evidence.
 
-## Selected composition check
+## No composed execution check remains
 
-[The focused runner](../checks/dma-pool-session.py) builds one two-core FreeRTOS
-image using the actual linker pool, native address translation, cache operations,
-counter, clock registry, shared locks, startup, controller and copied-job service.
-Only A733 registers and DMA bus movement are modeled.
+No host check builds a two-core FreeRTOS image with the actual linker pool,
+native address translation, cache operations, counter, clock registry, shared
+locks, startup, controller and copied-job service, so these behaviors have no
+composed host execution:
 
-One channel completes a copy and returns its buffer through the result/reap
-protocol. A second channel retains a busy condition after disable and must
-preserve its transfer and destination ownership. The same run checks adjacent
-allocation refusal, full-page role checks, lease/copy refusal, the startup
-authority requirement and absence of constructor MMIO. It does not rerun the
-earlier DMA protocol or scheduler suites.
+- One channel completes a copy and returns its buffer through the result/reap
+  protocol.
+- A second channel retains a busy condition after disable and preserves its
+  transfer and destination ownership.
+- Adjacent allocations, full-page role mismatches, lease/copy conflicts and a
+  missing startup authority are refused, and the constructor performs no MMIO.
+- After activation retains the clock registry, the next worker operation fails
+  before further DMA or cache work and preserves the uncertain channel's
+  transfer and buffer hold.
 
-The final step retains the actual clock registry after activation. The next
-worker operation must fail before further DMA or cache work and preserve the
-uncertain channel's transfer and buffer hold.
+The production application entry and constructor compile with the cached
+eight-core configuration and retain the unresolved real handoff and platform
+guard requirements. Neither the native image, A733 cache coherence nor physical
+DMA completion is qualified, and no board or performance operation has run.
 
-The runner also compiles the production application entry and constructor with
-the cached eight-core configuration. Those objects retain the unresolved real
-handoff and platform guard requirements. The emulator execution does not qualify
-the complete native image, A733 cache coherence or physical DMA completion.
-
-The composed execution and production compilation passed on 16 October 2026.
-The selected target built once and executed once, with no compile or runtime
-correction. The executed ELF has SHA-256
-`c2994c7a9f1de4825051742c0f4160f024dc53db256c53a3e87c76b15fd2feff`.
-Input snapshots, build commands, production objects, linker layout and execution
-logs are under
-`~/.cache/sunstoneos/evidence/dma-pool-session-20261016/batch1/`.
-The parent directory records the frozen stream dependency import and its
-unused-helper removal before this build. No board or performance operation ran.
+The recorded results of the removed host checks are in [the evidence record](evidence/dma-pool-session.jsonl).

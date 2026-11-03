@@ -1,6 +1,8 @@
 # Scheduler ownership, delegation and heterogeneous placement
 
-Status: **research; the partitioned kernel is not implemented or qualified.**
+Status: **research** (a literature and source review). Its conclusion is
+implemented as [the partitioned kernel](scheduler-partitioned.md), which
+[scheduler status](../status/scheduler.md) qualifies.
 
 The intended reader knows operating systems, concurrency and basic real-time scheduling.
 A priority inversion is time when lower-priority work prevents a ready higher-priority
@@ -8,7 +10,7 @@ task from running. A hard real-time claim requires a bound under stated workload
 assumptions, beyond observed percentiles. [Brandenburg, dissertation, chapters
 2–3][dissertation]
 
-The proposed direction is owner-only per-core ready queues, queued remote wakeups, short
+The direction the review supports is owner-only per-core ready queues, queued remote wakeups, short
 per-object locking, one-shot timers and topology-driven placement. This is a SunstoneOS
 engineering conclusion from the evidence below. It is not a performance result from
 another operating system.
@@ -24,25 +26,27 @@ licenses are recorded in [the source inventory](scheduler-research-sources.json)
 References are read-only research inputs; no implementation from these papers is
 imported.
 
-The current FreeRTOS SMP port shares ready lists, a recursive task lock and a recursive
-ISR lock across eight cores. Task switching takes both locks. [Current port and
-scheduler audit](scheduler-realtime.md#the-global-tick-already-has-one-owner)
+The global-lock FreeRTOS SMP kernel shares ready lists, a recursive task lock and a
+recursive ISR lock across eight cores, and task switching takes both locks
+([port and scheduler audit](scheduler-realtime.md#the-global-tick-has-one-owner)).
+Its board observations are the baseline that motivates partitioning:
 
-| Board observation | Measured value | Scope and evidence |
+| Board observation | Measured value | Scope |
 | --- | ---: | --- |
-| Task-lock wait | 177.875 µs maximum | Bounded-traversal CPU image, entry `1793560934366050732-4e45b5ea`; includes initialization |
+| Task-lock wait | 177.875 µs maximum | Bounded-traversal CPU image; includes initialization |
 | Task-lock outer hold | 11.500 µs maximum | Same image and recording window |
 | Ready to running under eight-core load | 133.333 µs maximum | Same image; highest-priority pinned probes |
-| Interrupt-masked duration during workload | 62.750 µs maximum on core 6 | CPU control, entry `1793559978973913698-7f7e36e0` |
+| Interrupt-masked duration during workload | 62.750 µs maximum on core 6 | CPU control |
 | Task-lock wait during workload | 73.417 µs maximum on core 6 | Same control; other cores' initialization maxima obscure their workload maxima |
 
-The [scheduler evidence](scheduler-realtime.md) and [latency worker's source
-decode](../status/latency.md) identify the images, counter frequency and measurement
-boundaries. Notification-take opens the 62.750 µs mask interval; that interval includes
-kernel-lock waiting. Recorded hold intervals omit part of the unlock tail. These are
-observed prefixes, not complete worst-case bounds. Percentiles are unavailable for these
-records. No table in this document substitutes another system's latency for SunstoneOS
-latency. [Latency recorder boundaries](../status/latency.md)
+The runs are records `1793560934366050732-4e45b5ea` and `1793559978973913698-7f7e36e0`
+in [scheduler.jsonl](../evidence/scheduler.jsonl) and [latency.jsonl](../evidence/latency.jsonl);
+[latency status](../status/latency.md) gives the counter frequency and measurement
+boundaries. Notification-take opens the 62.750 µs mask interval, which includes
+kernel-lock waiting, and recorded hold intervals omit part of the unlock tail.
+These are observed prefixes, not complete worst-case bounds, and the records
+carry no percentiles. No table in this document substitutes another system's
+latency for SunstoneOS latency.
 
 ## Partitioning removes contention by giving each scheduler exclusive state
 
@@ -513,7 +517,7 @@ The board report needs p50, p99 and maximum ready-to-running and IRQ-to-task lat
 each lock's hold and wait, interrupt masking, context-switch cost and per-core idle
 wakeups. It also needs the measured A76/A55 capacity ratio, weighted-versus-equal mimus
 CPU time and exact recognition output. [Validation and real-time
-requirements](../../AGENTS.md), [existing scheduler evidence](scheduler-realtime.md).
+requirements](../../AGENTS.md), [the global-lock kernel's priorities and timekeeping](scheduler-realtime.md).
 
 ## References and verification anchors
 

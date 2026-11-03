@@ -86,7 +86,7 @@ GPU output buffers.
 
 ## Retirement closes normal service without discarding diagnostics
 
-The command transport now has a RETIRED state. It refuses new I/O while allowing
+The command transport has a RETIRED state. It refuses new I/O while allowing
 collection of already recorded results. An unresolved token returns failure
 because retirement permits no further device polling. Retirement alone does not
 stop the GPU or authorize buffer reuse.
@@ -132,44 +132,9 @@ path when its control failed or the firmware acknowledged neither request,
 in the last 100 ms of the stop's 300 ms; set 27 on port 3-1 showed why it is
 needed ([first GPU job](designs/gpu-first-job.md)).
 
-## Focused integration checks cover failure and retirement
+## Failure and retirement have no host check
 
-One [ASan/UBSan check](../checks/pvr-gpu-stop.c) links shutdown, control, queue,
-and firmware decoding. It starts from a simulated READY control state and uses
-the pinned firmware's feature record. Both power requests, separate sync-word
-clears, the interrupt acknowledgement with and without a pending event, idle
-ordering, and isolation are exercised through callbacks. A synthetic feature
-variant checks omission of the external BIF read-status operation; it does not
-establish another board profile.
-
-The check passes 122 retained-failure cases. These include callback failures,
-each distinct idle-register wait, missing acknowledgements, clock regression,
-command errors, and late isolation. A held idle register and a missing
-acknowledgement are each re-read for at least 50 µs within one poll. With a
-stopped clock, both re-reads return without advancing and shutdown completes
-once the clock runs. The stop without acknowledgements is refused while the
-control is READY, after a register step and after the power-off
-acknowledgement, completes from NEW and after a failed handshake without
-sending a command and with the soft reset last, and fails before isolation
-on a held idle poll. The reference comparison checks that its plan is the
-acknowledged plan followed by upstream's final reset. It verifies that terminal states make no
-callbacks, that recorded results survive retirement, and that a power acknowledgement
-can arrive without a command-return flag.
-
-The focused [control integration check](../checks/pvr-gpu-control.c) also passes
-its 78 retained-failure cases with the changed lifecycle APIs. This regression
-was selected because queue retirement changes result collection and admission.
-Unchanged firmware staging, cache-publication, OS, mimus, and NPU evidence was reused.
-
-The [reference comparison](../checks/pvr-gpu-stop-reference.py) compiles the
-original power-request and firmware-stop functions. Both defined command payloads
-match. The idle plan matches the upstream function's after four vendor
-differences, each checked: the interrupt acknowledgement first, the early
-system-level cache poll, no thread-1 association writes, and no soft reset. The
-capture shim clears unused command bytes while copying only fields assigned by
-the original request functions. Platform isolation
-has no reference substitute in this check. Source hashes are verified against
-the pinned board-source manifest.
+No host check covers the shutdown, control and queue-retirement failure cases or compares the idle plan with the upstream stop function. The stop sequence, the retained-failure behaviour and the difference from upstream (the interrupt acknowledgement first, the early system-level cache poll, no thread-1 association writes, and no soft reset in the upstream plan) are not verified by any host check.
 
 Clang 21 compiled shutdown, control, and queue components for AArch64 with strict
 alignment and freestanding options. Shutdown's code and read-only data are
@@ -178,7 +143,9 @@ bytes for initialization, 176 for polling, and 32 for the clock helper. Total st
 and platform callbacks.
 
 Commands, input snapshots, hashes, command bytes, register traces, regression
-output, reference comparison, and objects are under
+output, reference comparison, and objects from the earlier host runs are under
 `~/.cache/sunstoneos/evidence/gpu-stop-20261025/` (the upstream sequence's run
 is under `gpu-stop-20261016/`). No device access or performance measurement
 occurred.
+
+Results of host checks that no longer exist are kept in the evidence record [gpu-stop.jsonl](evidence/gpu-stop.jsonl).

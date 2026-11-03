@@ -94,20 +94,12 @@ does not establish any of these physical conditions by itself.
 
 ## Focused validation
 
-[The composed check](../checks/display-clock-handoff.c) executes actual native
-media and PLL preparation once. It restores that completed model at the same
-addresses for subsequent handoff cases. Existing scanout register and LP-command
-fixture helpers are reused; their old test entry point is not executed.
-
-The selected cases exercise publication into actual media state followed by
-PHY, panel-command, DSI, LCD and DE preparation and start. They also cover copied
-and duplicate consumers, pending admission, registry contention, source mutation
-before and after publication, and a late deadline with BUSY fault retention.
-
-The focused sanitizer composition and native dependency compilation passed.
-The runner archives its source and header closure before execution, runs the
-focused composition with address and undefined-behavior sanitizers, and compiles
-the native dependency closure. Existing register-sequence evidence remains
-applicable to unchanged controller behavior. The model's analog profile, panel,
-memory and physical-admission callbacks are fixtures; they do not qualify the
-board or supply production providers.
+No host check composes the native media and PLL preparation with the display
+handoff. The recorded composition published into actual media state and then
+prepared and started the PHY, panel command, DSI, LCD and DE. It covered copied and duplicate consumers, pending admission, registry contention, source
+mutation before and after publication, and a late deadline with BUSY fault
+retention ([display-clock-handoff.jsonl](evidence/display-clock-handoff.jsonl)).
+Existing register-sequence evidence remains applicable to unchanged controller
+behavior. The model's analog profile, panel, memory and physical-admission
+callbacks were fixtures; they do not qualify the board or supply production
+providers.

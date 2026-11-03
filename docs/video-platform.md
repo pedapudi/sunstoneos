@@ -55,13 +55,12 @@ registers described in [the HEVC document](hevc-native.md). The encoder layer,
 H.264 encoder bindings. The cold NS-ROM start, the JPEG drain and the
 retained-copy gate remain decoder-specific.
 
-`checks/a733-video-unit.c` drives the JPEG and H.264 decoder bindings and both
-encoder bindings through nominal, cold-start, identity, contention,
-uncertain-write, refused-mutex, parent-selection and job-mismatch cases. It records every
-callback, register access and clock observation. The recorded digests match
-those of the separate decoder and encoder implementations that preceded the
-shared core. The encoder native checks also produce identical programmed
-writes and encoded pictures.
+A host fixture drove the JPEG and H.264 decoder bindings and both encoder
+bindings through nominal, cold-start, identity, contention, uncertain-write,
+refused-mutex, parent-selection and job-mismatch cases, and recorded digests
+that match those of the separate decoder and encoder implementations that
+preceded the shared core. The fixture has no retained check (see
+[the evidence file](evidence/video-platform.jsonl)).
 
 ## Admission authenticates existing resource ownership
 
@@ -238,26 +237,16 @@ drain is pending leave the write trace unchanged. A clock registry that stays
 busy past the retry interval retains the fault without holding the register
 mutex.
 
-`checks/a733-video-platform-reference.py` executes the original `libVE.so`
-`VeReset` instructions with the matching policy-table index. It records both
-reference and native preparation traces. Kernel reset operations are explicitly
-modeled from `cedar_ve.c` and `ccu_reset.c`; hardware reset effects are not
-simulated. Complete final register images and ordered reset pulses match for all
-three admitted identities. The gate-status correction preserves the previously
-compared preparation writes byte for byte. AArch64 compilation passes with
-warnings treated as errors.
-
-The original reviewed source and evidence are frozen under
-`~/.cache/sunstoneos/video-platform/review-20261016/`.
-The effective-gate correction is frozen under
-`~/.cache/sunstoneos/video-platform/review-gates-20261016/`. Both preserve the exact external media-clock dependency used to compile
-and execute the checks. Source, fixtures, binaries, reference input hashes and
-results remain outside Git with SHA256 manifests.
-
-The earlier JPEG parser check's historical archival gap remains documented in
-`video-codecs.md`. This component check uses the preserved baseline fixture and
-current native parser source. Its result establishes the composed software path;
-it does not reconstruct the earlier malformed-input run or qualify hardware.
+A host comparison executed the original `libVE.so` `VeReset` instructions with the
+matching policy-table index and compared reference and native preparation traces;
+complete final register images and ordered reset pulses match for all three
+admitted identities, with kernel reset operations modeled from `cedar_ve.c` and
+`ccu_reset.c`. It needs the vendor libraries, which are not in the repository,
+so no retained check repeats it. Its result establishes the composed software
+path; it does not qualify hardware or reconstruct the JPEG
+malformed-input run described in [video codecs](video-codecs.md). Source,
+fixtures, binaries, reference input hashes and results remain outside Git with
+SHA256 manifests; see [the evidence file](evidence/video-platform.jsonl).
 
 ## Memory authority and physical qualification remain required
 

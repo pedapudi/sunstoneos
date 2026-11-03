@@ -16,7 +16,7 @@ released between them.
 ## Prerequisites
 
 1. **CPU top points.** Steps 1 to 7 of
-   [the CPU top-point plan](../designs/cpu-top-opp.md#board-steps-on-port-3-3)
+   [the CPU top-point plan](../designs/cpu-top-opp.md#board-qualification)
    have passed on port 3-3, one step at a time. They are the CPU-B relock, the
    CPU-L park, the first DCDC3 write, the top points of CPU-B and CPU-L with
    the DSU, the all-core workload at the top points, and B1 with the OS image

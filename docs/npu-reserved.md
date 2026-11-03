@@ -101,22 +101,8 @@ unchanged and creates no allocation. Neighboring CPU storage remains intact.
 The fixture does not execute the NPU, synthesize an inference result, run the
 existing service lifecycle cases or establish physical cache visibility.
 
-Run the focused composition after relevant inputs change:
-
-```sh
-~/.cache/sunstoneos/venv/bin/python checks/npu-reserved.py \
-  --freertos /path/to/pinned/FreeRTOS-Kernel \
-  --fixtures /path/to/authenticated/convolution-fixtures \
-  --qemu ~/.cache/sunstoneos/host/usr/bin/qemu-system-aarch64 \
-  --lld ~/.cache/sunstoneos/host/usr/bin/ld.lld-21 \
-  --output ~/.cache/sunstoneos/evidence/npu-reserved-local
-```
-
-The runner preserves compiler dependencies, fixture bytes, executable identity,
-commands and logs. The separate reservation linker check passed 2 MiB acceptance and refusal
-of one additional page. Earlier default-layout evidence remains applicable:
-only the existing pool-capacity assertion changed. Numerical, startup and
-service evidence remains applicable to unchanged behavior.
+No host check runs the composition. The preserved evidence records compiler dependencies, fixture bytes, executable identity, commands and logs. A linker check passed 2 MiB acceptance and refusal
+of one additional page.
 
 Evidence is under `~/.cache/sunstoneos/evidence/npu-reserved-20261016/`.
 `batch2/selected-modes/results.json` records the successful native modes;
@@ -125,8 +111,4 @@ compiler dependencies, fixture and executable identify the tested composition.
 The declared model remains SHA-256
 `db42d815100417f4b8913896462ed031beafae35fb4ee1c28569ac950a9e8fca`.
 
-The build driver needed linker configuration and dependency corrections before
-execution. An initial mode-selector failure occurred before preparation;
-patching the selector in the preserved ELF's data selected each case correctly.
-The successful image was reused. The final runner incorporates those corrections;
-the evidence also preserves the separate driver used for the successful modes.
+Results of host checks that no longer exist are kept in the evidence record [npu-reserved.jsonl](evidence/npu-reserved.jsonl).

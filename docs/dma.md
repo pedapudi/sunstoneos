@@ -1,16 +1,14 @@
 # DMA controller implementation and qualification requirements
 
 The native [descriptor encoder](../drivers/dma/a733_dma.c) builds finite DMA
-chains for incrementing memory and fixed peripheral FIFO ports. Its
-[host execution model](../checks/dma-descriptors.c) passes memory copies,
-FIFO streams, address-boundary checks, and refusal without output mutation.
-The encoder compiles for AArch64. It has not executed on physical hardware.
+chains for incrementing memory and fixed peripheral FIFO ports. It has no host
+execution model. The encoder compiles for AArch64 and has not executed on
+physical hardware.
 
 The [polled controller core](../drivers/dma/a733_dma_controller.c) implements
 channel claims, mapped-buffer ownership, cache-operation callbacks, completion,
-and bounded cancellation. Its host model passes noncoherent memory/FIFO transfers
-and fault handling checks. The [RAM admission policy and native cache/MMIO
-adapter](dma-memory.md) now pass host and FreeRTOS emulator checks.
+and bounded cancellation. It has no host model. The [RAM admission policy and
+native cache/MMIO adapter](dma-memory.md) have host and FreeRTOS emulator checks.
 The [DMA pool session](dma-pool-session.md) registers board RAM, and the native
 policy admits the UART2, I2S0 and HDMI-audio FIFO routes their images use. The
 [DMA service](dma-service.md) serializes production access, and the
@@ -142,8 +140,7 @@ The audit used the existing cached primary sources:
 
 Cache paths are relative to `~/.cache/sunstoneos/`. Source URLs and hashes are
 also preserved in `sources/dma-platform/manifest.json` and the existing source
-lock. No driver, application, startup, register access, build or runtime check
-was changed or executed for this audit.
+lock.
 
 ## The implemented encoder preserves DMA0 address fields
 
@@ -293,7 +290,7 @@ so controller access requires a privileged service. Physical tests must establis
 that enable/busy observations and cache operations provide the assumed drain
 and visibility guarantees.
 
-The I2S application now uses [fixed cyclic rings](i2s-stream.md#hardware-linked-repeated-streaming)
+The I2S application uses [fixed cyclic rings](i2s-stream.md#hardware-linked-repeated-streaming)
 with immutable TX and checked RX staging. RX device ordering and physical
 visibility remain unqualified.
 
@@ -303,80 +300,53 @@ integration, and concurrent peripheral workloads remain required.
 Data addresses crossing 4 GiB boundaries and transfers near the upper address
 limit need physical tests; software representation does not establish bus behavior.
 
-## Descriptor evidence and reproduction
+## Descriptor encoder build
 
-One host session passed under AddressSanitizer and UndefinedBehaviorSanitizer.
-The execution model follows descriptor links and moves bytes through simulated
-RAM and FIFO ports. Memory cases cover all eight values of the upper address
-bits, all supported widths and bursts, guarded destinations, and a full chain
-sharing one read-only source. FIFO cases verify stream order in both directions.
+No host check follows descriptor links through simulated RAM and FIFO ports,
+covers all eight values of the upper address bits, all supported widths and
+bursts, FIFO order in both directions, field packing against a fixed byte
+vector, the last permitted descriptor slot, the 35-bit data limit or a range
+crossing 4 GiB. The encoder is designed so that an invalid later segment leaves
+the whole descriptor pool unchanged. The AArch64 compilation passes with
+warnings treated as errors.
 
-Invalid later segments leave the entire descriptor pool unchanged. The cases
-include unsupported formats, overflow, misalignment, descriptor/data conflicts,
-overlapping writes, and copies that depend on earlier writes in the chain.
-A fixed byte vector independently checks field packing. Boundary cases cover
-the last permitted descriptor slot, the 35-bit data limit, and a range crossing
-4 GiB. The AArch64 compilation passed with warnings treated as errors.
+No board requests have been issued. Physical transfer, cache coherence,
+interrupt and recovery qualification remain outstanding.
 
-Commands, results, input hashes, compiler identity, and artifacts are in
-`~/.cache/sunstoneos/evidence/dma-descriptors-20261016/`.
-`build.json`, `result.json`, and `manifest.json` hold the reusable evidence.
-No board requests were issued. Physical transfer, cache coherence, interrupt,
-and recovery qualification remain outstanding.
-
-Reproduce only when relevant inputs change:
+The AArch64 object builds with:
 
 ```sh
-mkdir -p ~/.cache/sunstoneos/build
-clang -std=c11 -O2 -g -Wall -Wextra -Werror -Iinclude \
-  -fsanitize=address,undefined -fno-omit-frame-pointer \
-  checks/dma-descriptors.c drivers/dma/a733_dma.c \
-  -o ~/.cache/sunstoneos/build/dma-descriptors-check
-~/.cache/sunstoneos/build/dma-descriptors-check
 clang -std=c11 -O2 -g -Wall -Wextra -Werror -Iinclude \
   --target=aarch64-none-elf -march=armv8-a -mstrict-align \
   -ffreestanding -fno-builtin -c drivers/dma/a733_dma.c \
   -o ~/.cache/sunstoneos/build/dma-a733.o
 ```
 
-## Controller evidence and reproduction
+## Controller build
 
-The [controller host model](../checks/dma-controller.c) maintains separate CPU and
-device copies of RAM. Descriptor execution reads device-visible memory; CPU
-results change only through cache invalidation. This exposes missing source or
-descriptor cleaning and preserves destination bytes outside the requested ranges.
-
-The final candidate passed one session under AddressSanitizer and
-UndefinedBehaviorSanitizer. Cases cover memory and FIFO streams, two channels
-sharing source data, conflicts between writable cache lines, and completion
-before bus drain. Faults cover ignored start/stop writes, descriptor configuration
-and restoration failures, uncleared events, and changed processor routing.
-A chain whose second descriptor crosses `0xfffff800` is refused with no
-descriptor, cache or register change; on a channel that is not quiet the same
-chain enters recovery. A chain that ends at that limit completes.
-The model also checks cancellation, timeout precedence, counter wrap, and a
-deadline consumed by cache preparation. It checks the interrupt-wait margin
-across counter wrap and that a pending half-package event, which is not
-interrupt-enabled, leaves the event counter unchanged. It rejects writes to
-global registers or channels assigned to the always-on processor.
+No host check models the controller with separate CPU and device copies of RAM
+(so that missing source or descriptor cleaning shows up), or covers memory and
+FIFO streams, shared sources, conflicts between writable cache lines,
+completion before bus drain, ignored start/stop writes, descriptor
+configuration and restoration failures, uncleared events, changed processor
+routing, cancellation, timeout precedence, counter wrap, a deadline consumed by
+cache preparation, the interrupt-wait margin, a pending half-package event, or
+writes to global registers or to channels assigned to the always-on processor.
+The controller refuses a chain whose second descriptor crosses `0xfffff800`
+with no descriptor, cache or register change; on a channel that is not quiet
+the same chain enters recovery. A chain that ends at that limit completes. No
+host check covers these paths either.
 
 The AArch64 object compiles with warnings treated as errors. With the pinned
-Clang 21 toolchain its code occupies 7,216 bytes, with no static data or BSS. The object references the descriptor
-encoder and `memcpy`; final platform linkage remains outstanding.
-Commands, results, input hashes, compiler identity, and artifacts are in
-`~/.cache/sunstoneos/evidence/dma-controller-20261016/final/`.
-The unchanged descriptor encoder retains its separate evidence above.
-No physical device requests were issued.
+Clang 21 toolchain its code occupies 7,216 bytes, with no static data or BSS.
+The object references the descriptor encoder and `memcpy`; final platform
+linkage remains outstanding. No physical device requests have been issued.
 
 ```sh
-mkdir -p ~/.cache/sunstoneos/build
-clang -std=c11 -O2 -g -Wall -Wextra -Werror -Iinclude \
-  -fsanitize=address,undefined -fno-omit-frame-pointer \
-  checks/dma-controller.c drivers/dma/a733_dma_controller.c \
-  drivers/dma/a733_dma.c -o ~/.cache/sunstoneos/build/dma-controller-check
-~/.cache/sunstoneos/build/dma-controller-check
 clang -std=c11 -O2 -g -Wall -Wextra -Werror -Iinclude -Iruntime/include \
   --target=aarch64-none-elf -march=armv8-a -mstrict-align \
   -ffreestanding -fno-builtin -c drivers/dma/a733_dma_controller.c \
   -o ~/.cache/sunstoneos/build/dma-controller-a733.o
 ```
+
+The recorded results of the removed host checks are in [the evidence record](evidence/dma.jsonl).

@@ -370,49 +370,7 @@ batch. Two initial fixture failures, caused by an incorrect GPIO-bank address,
 remain archived; the PCIe runtime did not change during validation. No physical
 PCIe result is claimed.
 
-`checks/a733-pcie-trace.py` builds the core and endpoint-test host models with
-address and undefined-behavior sanitizers and runs every case of both. The core
-model includes a directed change to 5 GT/s, an endpoint that stays at 2.5 GT/s,
-a negotiated speed above the target, a change that never completes, a later
-retrain and outbound-region write permissions. The script also prints every
-register write of the nominal Gen1 core and endpoint-test flows. Given an
-earlier revision with `--baseline-rev`, it builds the same trace driver against
-that revision and requires identical write sequences. Controller and endpoint
-responses, including the speed change, are modeled.
-
-The same script builds `checks/a733-pcie-nvme.c` with the function client and
-NVMe driver and runs its selected cases. The model supplies an NVMe controller with
-a 16 KiB 64-bit BAR0, a 4 KiB BAR2, an I/O BAR and an eight-entry MSI-X table.
-It also models the DesignWare MSI and SII latches, PCI power-management resets
-and link loss after PERST.
-
-- **Nominal.** Polling, INTx, MSI-X, and MSI-X at 5 GT/s each identify the
-  controller and read three 4096-byte ranges against a fixed pattern. Each then shuts
-  down to PERST, with memory, decode, windows and the MSI target checked
-  afterwards.
-- **NVMe refusals.** An enabled inherited controller, a fatal status during
-  enable, an identify error and a missing completion each retain the port. So
-  do an unconfigured MSI-X vector, an INTB assert and a shutdown that never
-  completes. A forged write command and an out-of-range read are refused
-  before submission.
-- **Function cases.** D3hot and resume run both with and without an internal
-  reset. A multifunction scan is checked, as are refusals for a bridge, a
-  sibling with decode set, a 128 MiB BAR, a preassigned BAR, an MSI-X table
-  outside its BAR and a class mismatch.
-- **Port stop.** A configuration-only stop succeeds, the endpoint test client
-  cannot stop the port, and a link that stays up retains it.
-- **Pool at 4 GiB.** A pool that ends at 4 GiB reads three ranges with every
-  queue base and PRP high half zero. A pool that ends one page above 4 GiB is
-  refused with no configuration or BAR access, unchanged pool bytes and its
-  pages free again. These two cases map the pool inside AddressSanitizer's
-  shadow gap on x86-64, so the script builds them a second time with only
-  the undefined-behavior sanitizer.
-
-Every modeled DMA requires function bus mastering and device-owned memory,
-and every write passes the native filter's decisions. The endpoint, its
-controller and interrupt delivery are software models; no NVMe device or
-function power transition has run on hardware.
-
+No host check builds the core, endpoint-test and NVMe host models and runs their cases. Earlier sanitizer runs covered the core model's directed change to 5 GT/s, an endpoint that stays at 2.5 GT/s, a negotiated speed above the target, a change that never completes, a later retrain and outbound-region write permissions. They also covered the NVMe model with a 16 KiB 64-bit BAR0, a 4 KiB BAR2, an I/O BAR, an eight-entry MSI-X table, the DesignWare MSI and SII latches, PCI power-management resets and link loss after PERST. The NVMe cases were polling, INTx, MSI-X and MSI-X at 5 GT/s (each identifying the controller and reading three 4096-byte ranges). Further cases were refusals that retain the port (enabled inherited controller, fatal status during enable, identify error, missing completion, unconfigured MSI-X vector, INTB assert, a shutdown that never completes, a forged write command and an out-of-range read), function cases (D3hot and resume with and without internal reset, multifunction scan, refusals for a bridge, a sibling with decode set, a 128 MiB BAR, a preassigned BAR, an MSI-X table outside its BAR and a class mismatch), port stop, and a pool ending at 4 GiB (three ranges read with every queue base and PRP high half zero) against a pool ending one page above 4 GiB (refused with no configuration or BAR access). Every modeled DMA required function bus mastering and device-owned memory, and every write passed the native filter's decisions. The endpoint, its controller and interrupt delivery are software models; no NVMe device or function power transition has run on hardware.
 
 ## Reference comparison and host evidence for 26 MHz and Gen3
 
@@ -462,3 +420,5 @@ Its images are **host-validation only**. The shared probe contract requires
 actual device/IRQ/DMA retirement, interrupt restoration and watchdog return.
 These retained PCIe/USB lifetimes cannot advertise that return. No PCIe board
 run is requested while the endpoint and reviewed retirement path are absent.
+
+Results of host checks that no longer exist are kept in the evidence record [pcie-design.jsonl](evidence/pcie-design.jsonl).

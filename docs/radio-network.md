@@ -238,23 +238,12 @@ the old offered address and server. A queued event in the parked state only
 disables its timer (lines 798–801). The existing transaction-ID checks protect
 against an old ACK; the DHCP wire format carries no native association epoch.
 
-The focused [DHCP reconnect check](../checks/radio-dhcp-reconnect.c) passed two
-cases on one AArch64 image with actual FreeRTOS IP-task and owned socket-service
-execution. The healthy case checks the processed offline epoch, closed DHCP
-socket and stopped timer, an event processed while parked, old lease expiry
-during offline, a fresh transaction that rejects an old ACK, a changed address,
-and a new UDP exchange followed by CLOSE. The acquisition-timeout case restores
-the same pre-offline checkpoint and suppresses only the modeled server replies;
-clients stay closed and failed address authority cannot be restored. Initial
-DORA is setup for the healthy case and is not repeated by the timeout case.
-
-Firmware and both authorized association generations are modeled checkpoints;
-this check does not repeat WPA2 handshakes or execute board startup, the radio
-session loop, or `board_radio_poll`. The previously completed reconnect evidence
-covers those separate radio/security boundaries. Wire responses, SDIO hardware
-and entropy remain modeled; physical DHCP reconnection remains unqualified.
-Exact image, source/tool closure, setup stops and checkpoint-bound results are in
-`~/.cache/sunstoneos/evidence/radio-dhcp-reconnect-20261020/`.
+A host run of the reconnect path on one AArch64 image, with actual FreeRTOS
+IP-task and socket-service execution, covered the healthy case and the
+acquisition-timeout case; it has no retained check and models firmware, both
+association generations, wire responses, SDIO hardware and entropy. Physical
+DHCP reconnection remains unqualified. The run is in
+[the evidence file](evidence/radio-network.jsonl).
 
 `SUNSTONE_NET_ADDRESS` waits for address authority and copies sixteen bytes:
 IPv4 address, netmask, gateway, and DNS server, each in network byte order.
@@ -283,23 +272,13 @@ become a later request's result. Neither a software deadline nor cancellation
 establishes physical transport drain or permits reuse of an unresolved SDIO
 transfer.
 
-The focused checker, `checks/radio-network-dhcp-dns.py`, builds one AArch64
-composition and runs DHCP acquisition, renewal and expiry; acquisition failure;
-fixed IPv4 DNS and cancellation; and renewal without a fresh lease option.
-These four cases pass with actual stack parsing and callbacks over the SDIO
-model. The fixture requires an actual ARP cache entry before DNS and an
-IP-task cancellation acknowledgement before reusing a DNS slot. Standard
-string routines required by enabled DNS also pass focused semantics checks.
-Compiler evidence covers all 92 linked objects and 255 source dependencies.
-The preserved batch is under
-`~/.cache/sunstoneos/evidence/radio-dhcp-dns-20261017/batch3/`.
-
-Earlier setup and fixture failures remain preserved beside the final image.
-One earlier DHCP composition missed a 500-tick DNS deadline after ARP became
-ready; the final composition passes, but does not establish timing robustness.
-These checks do not qualify physical RF, network credentials, entropy or radio
-operation. Run the focused checker's `--help` for pinned-source and tool inputs,
-including TinyUSB required by the root build configuration.
+DHCP acquisition, renewal and expiry, acquisition failure, fixed IPv4 DNS with
+cancellation, and renewal without a fresh lease option passed in a host run with
+actual stack parsing and callbacks over the SDIO model. No retained check
+repeats it, and the timing margin of the DNS deadline is not established. The
+run does not qualify physical RF, network credentials, entropy or radio
+operation. The cases and figures are in
+[the evidence file](evidence/radio-network.jsonl).
 
 ## One IPv4 listener retains pending and accepted children
 
@@ -451,14 +430,11 @@ the client. `radio-network-model` compiles it for AArch64.
 [checks/radio-sntp.py](../checks/radio-sntp.py) builds a host fixture with
 address and undefined-behavior sanitizers against scripted socket replies,
 and compiles the client freestanding for the board CPU. It checks reply
-validation in both eras and every refusal above, RTC requests at midnight, at
+validation in both eras and every refusal above. It also checks RTC requests at midnight, at
 the last admitted day and past it, the ignored datagrams, a resend with a
 fresh nonce, a late reply that is still valid, and that each failure closes an
-open socket. The `sntp` case of
-[checks/radio-network-dhcp-dns.py](../checks/radio-network-dhcp-dns.py) runs
-the client with the actual socket service, FreeRTOS+TCP and DNS over the SDIO
-model. The modeled server does not answer the first DNS query. It answers ARP
-for the resolved time-server address, sends a datagram from another port and
-one for another nonce before each valid reply, and the resulting RTC request
-names the expected day and second. The emulator has no real network, so
-physical time accuracy remains unqualified.
+open socket. A host run of the client with the actual socket service,
+FreeRTOS+TCP and DNS over the SDIO model also passed (see
+[the evidence file](evidence/radio-network.jsonl)); it has no retained check.
+The emulator has no real network, so physical time accuracy remains
+unqualified.

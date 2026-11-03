@@ -193,7 +193,7 @@ evidence is reused. Physical PWM waveform, interrupt delivery, USB timing and
 LED operation remain unqualified.
 
 Constant endpoints, prescaled rates and active-low polarity are implemented
-in the driver and pass the host check described below; only the full-speed
+in the driver; only the full-speed
 endpoint is reachable through the fan application. Other routed channels,
 S_PWM output, complementary/dead-zone/group operation, capture and input
 counting remain required modes. S_PWM0 channel 5 can drive the fitted LED
@@ -203,16 +203,14 @@ Capture and input counting have no board input to observe. Controller support
 does not establish attached accessories, actual component population or
 physical qualification.
 
-The driver host check, `checks/pwm-service.c`, links the actual PWM, PMIC,
-rail, pin and clock cores with modeled MMIO. It covers 0 and 600 ticks at
-40 kHz, a 100 Hz active-low profile at prescale 4 with 0, 30,000 and 60,000
-ticks, a 1 kHz active-low profile, and refusal of out-of-range ticks, cycle
-periods above 10 ms, inexact duty and periods that need more than 256x
-prescale. The native instruction-model check, `checks/pwm-service-native.py`,
-runs a rebuilt fan image with a 600-tick duty change and refuses 601 ticks in
-the image's own request check. The rebuilt image and its outputs are under
-`~/.cache/sunstoneos/build/audit-pwm-adc-rtc/`. These are software checks;
-waveform, polarity and constant-level behavior at the pin remain unqualified.
+The driver has no host check of its duty arithmetic. The implemented cases are
+0 and 600 ticks at 40 kHz, a 100 Hz active-low profile at prescale 4 with 0,
+30,000 and 60,000 ticks, a 1 kHz active-low profile. The cases also include refusal of
+out-of-range ticks, cycle periods above 10 ms, inexact duty and periods that
+need more than 256x prescale. A rebuilt fan image with a 600-tick duty change
+refused 601 ticks in its own request check; its outputs are under
+`~/.cache/sunstoneos/build/audit-pwm-adc-rtc/`. Waveform, polarity and
+constant-level behavior at the pin remain unqualified.
 
 ## Source adaptation
 

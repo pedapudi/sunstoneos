@@ -8,6 +8,15 @@ I2S0 capture, playback, cyclic cancellation and drain run through the FreeRTOS D
 cancellation and drain, and raw-ring overrun pass a returning board diagnostic
 on port 3-3. External microphone and headset operation remain unqualified.
 
+## Capabilities
+
+| Capability | Status | Key figure | Evidence or design |
+| --- | --- | --- | --- |
+| I2S0 loopback capture and playback, cyclic cancellation and drain, raw-ring overrun | qualified on the board | 10.5 to 11.7 s per returning diagnostic | [audio.jsonl](../evidence/audio.jsonl) |
+| HDMI audio streaming through I2S3, four 4,096-byte periods, up to 576,000 frames | host-tested | 50,177 frames and 50 periods in the modeled run | [design](../designs/hdmi-audio-streaming.md), `hdmi-audio-streaming-software` |
+| Bluetooth headset voice-recognition capture (CVSD and mSBC segments) | host-tested | 2,090,169 owner instructions per 48,000-byte segment | [design](../designs/bluetooth-voice-recognition.md), `bluetooth-voice-recognition-measure` |
+| External microphone and headset operation | open | none | open work 2 |
+
 ## Open work
 
 1. Measure the unguarded DMA ordering margin.
@@ -15,6 +24,8 @@ on port 3-3. External microphone and headset operation remain unqualified.
 3. Keep the generic capture and paced or recorded input services independent of the external recognition application.
 
 ## Evidence
+
+Designs: [HDMI audio streaming](../designs/hdmi-audio-streaming.md) (records in `docs/evidence/hdmi-audio-streaming.jsonl`) and [headset voice recognition](../designs/bluetooth-voice-recognition.md) (records in `docs/evidence/bluetooth-voice-recognition.jsonl`).
 
 Board results are records in `docs/evidence/audio.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-audio-20261101.md).
 

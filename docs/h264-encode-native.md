@@ -176,23 +176,7 @@ identity/truncation/duplicate refusal and copied-output backpressure. Private
 packaging/capture and actual supervisor entry also pass. Root separately checks
 the protected contract, full session lifetime and final linked layout.
 
-The sequence image passes the same native cases with byte-identical two-picture
-programming and outputs. Further cases of `checks/h264-encode-native.py` run
-longer sequences on it:
-
-- `gop` encodes 30 pictures through the controller; `checks/h264-encode-registers.py`
-  then matches all writes and headers against the 32-picture library reference.
-- `task-wakes` with four pictures drives the actual task loop through each ACK.
-- `ring-reuse` models 900,000-byte outputs; the fourth picture restarts at ring
-  offset zero and both WB outputs keep their pictures.
-- `unacked-copy` withdraws the ACK of picture 0 before picture 2; its copy is
-  refused, the session faults and picture 0 stays intact.
-
-`checks/h264-encode-usb.py` refuses a query of acknowledged picture 0 in a
-six-picture sequence and still serves it in a two-picture sequence. These
-results are under `~/.cache/sunstoneos/build/audit-h264-gop/checks/` and are not
-frozen into the evidence store. Root integration has not been rerun for the
-sequence image.
+No host check covers the sequence image's longer sequences (30-picture group of pictures, task wakes through each acknowledgement, output ring reuse, withdrawn acknowledgement of picture 0) or the refusal of a query of an acknowledged picture in a six-picture sequence. The sequence behaviour rests on the source. Root integration has not been run for the sequence image.
 
 The models inject entropy, completion and resource observations. FFmpeg parses
 independent SPS/PPS/slice metadata for the copied sequence, but its decoder reports
@@ -211,3 +195,5 @@ numerical qualification claim. A longer sequence on the board additionally needs
 the supervised capture tool to request and acknowledge more than two pictures. All resources remain retained afterward. Fault
 recovery, DMA confinement and memory visibility require physical evidence;
 cancellation or software timeouts do not prove drain.
+
+Results of host checks that no longer exist are kept in the evidence record [h264-encode-native.jsonl](evidence/h264-encode-native.jsonl).

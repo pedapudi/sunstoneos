@@ -101,9 +101,8 @@ three initial requests and one close request. Thermal transitions can consume
 the remaining grant; exhaustion, or a lowering that is refused or expires,
 retains the session with its first-failure record. Before close, the owner
 reads CPU-B back at 1014 MHz on its PLL and requires no held clock lease, rail
-lease or PMIC request. `checks/os-cpu-return-entry-owner.py` runs the linked
-owner with a return requested during inspection, before the first request,
-with a request in flight and after every raise.
+lease or PMIC request. A return requested during inspection, before the first
+request, with a request in flight and after every raise has no host check.
 
 An expired raise can leave DCDC3 at 1050 mV without changing CPU-B's 1014 MHz
 clock. Thermal lowering also preserves the higher voltage. These states return

@@ -86,12 +86,11 @@ for CPU-L, the DSU shared. Rail voltage remains a separate ledger lease.
 TWI9 uses bit 77 for the CAM2 sensor bus controller at `0x02519000` and its
 CCU+0xea4 gate0/reset16. Like TWI11, it is exclusive-only and holds FABRIC
 shared to prevent APB1 retuning. Bits 78–127 remain invalid.
-The focused `checks/a733-media-clock.c --encoder-ownership` case passes
-encoder/decoder coexistence, parent conflicts and IOMMU exclusion in both
-directions before register access. Time and hardware callbacks are modeled.
-The two affected clock units compile for freestanding AArch64 with their
-existing ABI assertions. Evidence: `encoder-clock-scope-20261020/` in the local
-evidence cache. No encoder operation or physical behavior is qualified.
+Encoder/decoder coexistence, parent conflicts and IOMMU exclusion in both
+directions are refused before register access; no host check covers this. The
+two affected clock units compile for freestanding AArch64 with their existing
+ABI assertions (evidence: `encoder-clock-scope-20261020/` in the local evidence
+cache). No encoder operation or physical behavior is qualified.
 The three affected application units also compile with their existing feature
 configurations. Earlier frozen images retain their recorded scope policy; they
 do not establish coexistence with the new encoder.
@@ -148,37 +147,13 @@ Tokens remain private runtime metadata and have no wire or persistent format.
 Historical evidence remains valid for its recorded sources and ABI; it does not
 establish execution of a rebuilt image.
 
-The focused `checks/clock-wide.c` check covers independent TWI11, TWI9 and VO1
-ownership, FABRIC conflicts, upper-half token authentication, stable publication
-and retained faults. It also checks refusal of every unassigned high bit.
-The check passed once with AddressSanitizer and UndefinedBehaviorSanitizer.
-
-The focused `checks/pwm-adc-clock.c` case covers the added controller scopes,
-their parent dependencies, thermal/ADC coexistence and parent-change conflicts.
-It passes with the same sanitizers under
-`~/.cache/sunstoneos/evidence/pwm-native-20261018/clock/`. Initial integration matched
-the tested registry, header and original case. A subsequent boundary assertion
-checks refusal of the first unassigned scope; its result is preserved separately
-under `clock-boundary/` without replacing the original evidence. Fixture boundaries
-now derive from `A733_CLOCK_ALL`; reconciliation records their equivalent tested
-value and the unchanged registry/header hashes. The older suites were not rerun.
-`checks/clock-wide.py` compiled 61 production consumers reached through the
-common clock header with the cached eight-core configuration. The radio session
-also used its existing networking allocation options and pinned TCP headers.
-Older
-MMC, PCIe and width fixtures receive compatible width or invalid-bit assertions
-and are compiled without replaying their scenarios. Results and input identities
-are recorded under `~/.cache/sunstoneos/evidence/clock-wide-20261017/`.
-
-The focused `checks/clock-usb-scopes.c` case covers the two additional USB-path
-scopes. It checks coexistence with PMIC, camera and USB0 ownership, conflicts
-with shared parent changes, exclusive-only local admission and token identity.
-One AddressSanitizer/UndefinedBehaviorSanitizer execution and the changed core's
-AArch64 compilation passed. Inputs, executable and logs are preserved under
-`~/.cache/sunstoneos/evidence/clock-usb-scopes-20261017/`. These assignments
-preserve the mask and token layout; earlier width and peripheral workloads
-were not repeated. The Type-C and USB host providers retain their own pending
-integration and physical qualification requirements.
+No host check covers the wide-mask scopes: independent TWI11, TWI9 and VO1
+ownership, FABRIC conflicts, upper-half token authentication, stable
+publication, retained faults, refusal of every unassigned high bit, the PWM0 and
+GPADC scopes with their parent dependencies and thermal/ADC coexistence. No host check covers the two USB-path scopes with PMIC, camera and USB0 ownership. These assignments
+preserve the mask and token layout. The Type-C and USB host providers retain
+their own pending integration and physical qualification requirements. Recorded
+results are in [clock-leases.jsonl](evidence/clock-leases.jsonl).
 
 An expired release keeps its reservation. Clock failure or regression prevents
 further registry mutations and preserves existing tokens. An owner can also
@@ -296,42 +271,15 @@ Publication does not itself initialize the clock or authorize a new consumer.
 Local THS ownership is exclusive. Native thermal
 admission also verifies APB1 and the selected source under the register mutex.
 
-## Focused evidence covers ownership composition
+## Ownership composition has no host check
 
-`checks/a733-clock-leases.c` combines registry cases with the existing I2S
-platform fixture. AddressSanitizer and UndefinedBehaviorSanitizer pass parent
-conflicts, publication, stale-token refusal, capacity and identity exhaustion,
-deadlines, and two concurrent exclusive claimants. Actual I2S cold startup,
-active adoption, close/reopen and retained failure use the common binding.
-
-`checks/a733-gpu-clock-parent.c` uses the actual GPU resource manager. Its
-sanitizer check passes paired parent acquisition, change refusal through both
-managers, local close/reopen, contention, wrong-profile retention and deadlines.
-The existing lower-layer suites were not repeated.
-
-The focused `checks/dma-clock-leases.c` extension passes shared-DMA refusal,
-fabric change conflicts and peripheral/reference-parent protection. The changed
-registry compiles for AArch64. Evidence is in
-`~/.cache/sunstoneos/evidence/dma-platform-20261016/clock-evidence.json`;
-unchanged GPU/audio cases retain their earlier results.
-
-Commands, observed results, source snapshots and AArch64 object identities are
-under `~/.cache/sunstoneos/evidence/clock-leases-20261016/`. The first GPU fixture
-compile required a diagnostic adjustment for an included, unused legacy test
-entry point. The corrected fixture passed; runtime behavior did not change.
-
-These checks establish software ownership behavior. Board startup still needs
-to create the shared registry, complete GPU parent admission and supply the
-audio binding to its parent controller. Physical clocks, reset recovery and
-concurrent workloads require separate qualification.
-
-The APBS0 reservation and GPADC24M publication changes pass one new focused
-registry case under `pwm-service-20261018/prerequisite/`. A second case executes
-the actual PMIC provider against modeled registers and checks its APBS0 ownership,
-source/divider validation, reference dependency and refusal after a profile change.
-Both frozen artifacts were reconciled during integration without another run.
-Existing native images retain their earlier provider layout; these host results
-do not establish new native or physical operation.
+No host check combines the registry with the I2S platform fixture, the GPU
+resource manager's paired parent acquisition or the DMA clock extension. Board
+startup still needs to create the shared registry, complete GPU parent
+admission and supply the audio binding to its parent controller. Physical
+clocks, reset recovery and concurrent workloads require separate
+qualification. Recorded software results are in
+[clock-leases.jsonl](evidence/clock-leases.jsonl).
 
 ## Detected oscillator and normalized reference
 
