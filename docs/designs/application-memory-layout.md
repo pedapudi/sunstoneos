@@ -526,6 +526,22 @@ task has not marked the transport ready (`os_application_usb_ready`, called firs
 NPU state in the site's auxiliary field, `0x41cb`, says the service started and became active, the SDK was never opened, and no
 report was published. The next image must say which of the two terms of `ss_live()` is unmet.
 
+**Cause.** `main_entry` tests `ss_live()`, finds the application not live, and waits for the transport with
+`application_wait_until(deadline - 10 ms)`. A wake-up (`os_wake`) reaches only a task that has registered its wait. When the USB
+service task marks the transport ready after the test and before the registration, the wake-up finds no waiter, and the main
+task sleeps to the session deadline, which the supervisor's cutoff then ends. The wait also extended the application's progress
+window to the deadline, which is why no service window expired. The emulated board reproduces it
+(`usb-ready-between-test-and-wait` in `checks/qemu-os-boot.py`): on the earlier code the application never enters. The wait now
+registers first and tests `ss_live()` again once registered, so the event is either seen by that test or delivered.
+
+### Predicted board run of the NPU pool in the slot 1 area, repeated with the wait fixed
+
+Hypothesis: the failed run of the pool at `0x78600000` (entry `1793652334060640370-11f14671`) was this lost wake-up, and the pool is
+not at fault. The same recipe built from the tree with the wait fixed returns normally with the receipt of `expect.json`: seven
+graphs `match`, `completed` and `matched` equal to 7, the SDK closed, `RETURN_ROM` last, about 10 s of launch. The image differs from
+the failed one in the fix and in the cutoff diagnostics. If the run ends at `0x73c` again, the record's progress site and NPU state
+say where the application waits, and the lost wake-up was not the whole cause.
+
 ### Predicted board run of the heap
 
 Hypothesis: with the OS image built with the address-test decode check

@@ -137,7 +137,10 @@ uint64_t ss_counter_ticks(void)
 }
 void os_application_usb_changed(void)
 {os_wake(main_task);}
-static int application_wait_until(uint64_t until)
+/* A wake-up reaches only a task that has registered its wait (os_wake). An event that happens after the caller tested its
+ * condition and before it registered finds no waiter, and the wait would last to its deadline. unless() tests the
+ * condition again once the wait is registered: the event is then either seen by that test or delivered to the waiter. */
+static int application_wait_until_unless(uint64_t until,int (*unless)(void))
 {
     if(xTaskGetCurrentTaskHandle()==main_task){
         uint64_t limit=board.session.deadline_us;
@@ -147,10 +150,12 @@ static int application_wait_until(uint64_t until)
         if(!board_service_blocked_until(OS_SERVICE_APPLICATION,health))return SUNSTONE_DEADLINE_ERROR;
     }
     const unsigned slot=os_wait_begin(xTaskGetCurrentTaskHandle());
-    const int result=sunstone_deadline_wait_until(until);
+    const int result=unless&&unless()?0:sunstone_deadline_wait_until(until);
     os_wait_end(slot);
     return result;
 }
+static int application_wait_until(uint64_t until){return application_wait_until_unless(until,NULL);}
+static int live_changed(void){return ss_live()!=0;}
 void ss_usb_wait(uint32_t wait_us)
 {
     uint64_t now=a733_smp_counter()/24;
@@ -298,7 +303,7 @@ static void main_entry(void *unused)
     int live;
     while(!(live=ss_live())){
         ss_progress();
-        if(application_wait_until(board.session.deadline_us-10000)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
+        if(application_wait_until_unless(board.session.deadline_us-10000,live_changed)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
         if(a733_smp_counter()/24>=board.session.deadline_us-10000&&ss_live()!=1)ss_fail(0x750);
     }
     if(live<0)ss_fail(0x750);
