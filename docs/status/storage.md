@@ -64,7 +64,7 @@ on the platform source of v12. The same check applies to any other service that 
 Board results are records in `docs/evidence/storage.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-storage-20261101.md).
 
 <!-- evidence-table:begin -->
-27 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+28 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -95,4 +95,5 @@ Board results are records in `docs/evidence/storage.jsonl`; add one with `tools/
 | `1793650854687556052-db9aee9e` | 2026-11-02 | 3-3 | `9f261cc92409` | watchdog-reset | failed | run_total 75.048 s |
 | `1793651292191500240-5493408d` | 2026-11-02 | 3-3 | `31aba5df4dc3` | watchdog-reset | failed | run_total 29.309 s |
 | `1793652351260245353-286b63df` | 2026-11-02 | 3-3 | `851a4859bdd6` | result-mismatch | passed | run_total 43.543 s, run_total 43.543 s, card_clock 150 MHz, tuning_window 47, chosen_delay 40, phase_a_mean 5.27 ms, phase_b_mean 5.42 ms, phase_c_mean 6.73 ms, phase_d_mean 4.82 ms, phase_e_mean 1.93 ms, phase_f_mean 2.44 ms, phase_g_mean 3.21 ms, phase_h_mean 6.66 ms, bytes_read 1.25829e+08 B, sustained_rate_all_phases 20.4 MB/s |
+| `1793663873502474507-76c206d4` | 2026-11-02 | 3-3 | `15c9d9cdc98d` | result-mismatch | passed | run_total 13.171 s, run_total 0 s, identify_time 0.299 s, s18a 0, group1_support_bits 32799, per_read_rate_median 21.43 MB/s, reads_done 32 |
 <!-- evidence-table:end -->

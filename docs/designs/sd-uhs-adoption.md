@@ -50,13 +50,15 @@ Steps:
 | 3-1, Phison SD64G, never switched | 3.3 V bank, CMD0, CMD8, ACMD41 with S18R | R7 answered; **S18A set** (OCR `0xc1ff8000`); CMD6 group 1 support `0x8003` (functions 0 and 1; functions 2 to 4 read as 0 at 3.3 V) | `1793639891731890732-2700d966` |
 | 3-3, Phison SD32G, at 3.3 V (before its first switch) | 3.3 V bank | identified and switched to 1.8 V; S18A was set (the switch followed) but the entry did not keep the OCR | `1793648082135831049-05f70d50` (lifetime 1) |
 | 3-3, card at 1.8 V | **1.8 V bank**, CMD0, CMD8, ACMD41 with S18R, no CMD11 | R7 and ACMD41 answered; **S18A clear**; CMD6 group 1 support `0x801f` (SDR12 to SDR104 and DDR50) | `1793649204965774597-d1ed3e86`, `1793649661736969334-9742cb48`, `1793650532228649180-1fb49397` and the experiment `1793652351260245353-286b63df` |
-| 3-3, card at 1.8 V | **3.3 V bank** | **not recorded**: no run has put a 3.3 V host in front of a card at 1.8 V | none |
+| 3-3, card at 1.8 V | **3.3 V bank** | CMD0, CMD8 and ACMD41 answered (OCR `0xc0ff8000`: ready, CCS, **S18A clear**); identified at 3.3 V high speed, 32 reads at 21.4 MB/s, CRCs equal to the earlier runs; **CMD6 group 1 support `0x801f`** (SDR12 to SDR104 and DDR50) | `1793663873502474507-76c206d4` |
 
-So the one case the rule needs, a card at 1.8 V seen from a 3.3 V host, has never been measured, and the recorded answers cannot choose between "silent" and "S18A clear". What the records do support: a card that answers at 3.3 V with S18A set is at 3.3 V
-(3-1, and 3-3 before its first switch); S18A clear has only been seen from a card at 1.8 V with the bank at 1.8 V. The rule below is therefore the simplest one that is correct under either outcome of the missing measurement, and one read-only run of the
-existing mode 0 on 3-3 (card at 1.8 V, bank at 3.3 V, CMD0, CMD8, ACMD41 with S18R, no CMD11) records the missing row; its result simplifies the rule if the card is silent or never answers S18A clear.
+So a 3.3 V host does read a card at 1.8 V (the run on 3-3 measured it), and the card answers S18A **clear**, exactly as it does to a 1.8 V host; S18A alone cannot tell a card at 1.8 V from a card that declines UHS. What does tell them apart is
+the CMD6 group 1 support field: a card at 3.3 V reports functions 2 to 4 as 0 (3-1: `0x8003`, and the specification's Table 4-11 text), a card at 1.8 V reports them (3-3: `0x801f`, read through a 3.3 V host and through a 1.8 V host alike).
+The rule these records support, with no 1.8 V probe: **at 3.3 V, S18A set means switch with CMD11; S18A clear with SDR50, SDR104 or DDR50 in the group 1 support field means the card is already at 1.8 V, so move the bank to 1.8 V and re-enter;
+S18A clear with only functions 0 and 1 is a card without UHS-I and stays at 3.3 V high speed; no answer to CMD8 at 3.3 V means re-enter at 1.8 V** (not observed from this card, kept because a different card could be silent and the ROM
+treatment of a silent card is the same). The re-entry costs one more identification (about 0.3 s) once per power cycle.
 
-**The measurement that settles step 2.** Whether a 3.3 V host reads a 1.8 V card is unmeasured. One read-only run on 3-3 with the card at 1.8 V and the bank at 3.3 V (the existing mode 0: CMD0,
+**The measurement that settled step 2 (done; its design follows).** Whether a 3.3 V host reads a 1.8 V card is unmeasured. One read-only run on 3-3 with the card at 1.8 V and the bank at 3.3 V (the existing mode 0: CMD0,
 CMD8, ACMD41 with S18R, no CMD11) answers it: an answer, with its S18A value, or a stop at identification. If the card is silent at 3.3 V (K1 false), step 2 needs no discriminator: silence means 1.8 V
 or absent, and the OS goes straight to step 4. If it answers with S18A clear, the discriminator above applies. The run is safe (it only reads and never sends CMD11); it is not yet submitted.
 
@@ -138,3 +140,9 @@ trials did; the board returns to FEL by itself. The run does not change the card
 | Garbled answers (CRC errors, partial) | unlikely (about one in ten) | stop at identification with response CRC error; treated like silence |
 
 Not predicted to happen: S18A set from a card at 1.8 V; any change of the card's state; a lifetime that cannot return.
+
+### Result (entry `1793663873502474507-76c206d4`, 3-3, image `15c9d9cd`)
+
+The second outcome of the prediction: CMD8 and ACMD41 answered, OCR `0xc0ff8000` (S18A clear), identification at 3.3 V high speed took 0.299 s, 32 reads of 128 KiB ran at 21.43 MB/s median (the first eight slow, as at 1.8 V), the CRCs match, the bank stayed at 3.3 V,
+the card stayed at 1.8 V, and the lifetime returned normally. The CMD6 support field was `0x801f`. This was also the first board run of the 400 kHz setup with data drive 90 degrees: identification and reads are unchanged. A card at 1.8 V read by a 3.3 V host is
+out of its signalling specification and happened to work here; the OS therefore re-enters at 1.8 V as soon as the rule above says the card is there, and does not read it at 3.3 V.
