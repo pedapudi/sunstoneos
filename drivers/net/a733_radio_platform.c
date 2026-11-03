@@ -5,7 +5,7 @@
 #define SDC UINT32_C(0x04021000)
 #define GIC UINT32_C(0x03400000)
 #define BIT(n) (UINT32_C(1)<<(n))
-enum { ACQUIRE, RESERVE_RAILS, WAIT_RAILS, ADMIT, RAILS, BASELINE, GIC_WAIT, PINS, POWER_ON, POWER_WAIT,
+enum { ACQUIRE, RESERVE_RAILS, WAIT_RAILS, ADMIT, RAILS, BASELINE, GIC_WAIT, GUARD, PINS, POWER_ON, POWER_WAIT,
        VERIFY_RAILS, SUPPLY_WAIT, ENABLE_MODULE, MODULE_SETTLE, BUS_GATE, RESET_WAIT, RESET_RELEASE, PREPARE,
        PREPARING, ENUMERATE, ENUMERATING, WIDE_READ, WIDE_WRITE, WIDEN, WIDENING, WIDE_VERIFY, READY };
 #define MODULE_24M (BIT(31)|29) /* SYS24M, N=1, M=30: 800 kHz module clock. */
@@ -35,6 +35,7 @@ int a733_radio_platform_rails(const struct a733_radio_platform_config *c,a733_ra
         c->topology.vbat!=A733_RADIO_DCDC1||c->topology.pg!=A733_RADIO_BLDO5||c->topology.pm!=A733_RADIO_CLDO1||
         (c->topology.vddio!=A733_RADIO_BLDO5&&c->topology.vddio!=A733_RADIO_CLDO1))return 0;
     *out=rail_scope(c->topology.vbat)|rail_scope(c->topology.pg)|rail_scope(c->topology.pm)|rail_scope(c->topology.vddio);
+    if(c->first_run_guard)*out|=rail_scope(A733_RADIO_DCDC8); /* Observed and recorded only. */
     return 1;
 }
 int a733_radio_platform_scopes(const struct a733_radio_platform_config *c,a733_clock_mask_t *out)
@@ -184,7 +185,8 @@ static int supply_poll(struct a733_radio_platform *p)
     /* Before power-on, BLDO5 may be off at any selector; the radio power-on
      * then programs it. Every other supply, and BLDO5 once on, must be enabled
      * at its programmed voltage. */
-    if(rail==A733_RAIL_BLDO5&&!p->rail_verify&&!snapshot->enabled)p->power_on=1;
+    if(rail==A733_RAIL_DCDC8)/* Guard observation: the raw bytes are recorded, never required. */;
+    else if(rail==A733_RAIL_BLDO5&&!p->rail_verify&&!snapshot->enabled)p->power_on=1;
     else if(snapshot->enabled!=1||snapshot->decoded!=1||
         snapshot->programmed_uv!=(rail==A733_RAIL_DCDC1?3300000u:1800000u))return -1;
     status=a733_pmic_reap(p->pmic,&p->pmic_request);
@@ -408,7 +410,23 @@ static enum a733_radio_platform_result registers(struct a733_radio_platform *p)
             rd(p,CCU+0xd1c,&p->initial_bus)&&!(p->initial_bus&0x10001u)&&wr(p,GIC+0x198,4);
         if(ok)p->stage=GIC_WAIT;
     } else if(p->stage==GIC_WAIT) {
-        r=masked(p);ok=r>=0;if(r==1)p->stage=PINS;
+        r=masked(p);ok=r>=0;if(r==1)p->stage=p->config.first_run_guard?GUARD:PINS;
+    } else if(p->stage==GUARD) {
+        /* Read-only: pad power words, then every condition before any write. */
+        static const uintptr_t words[4]={UINT32_C(0x02000040),UINT32_C(0x02000048),UINT32_C(0x07025340),UINT32_C(0x07025348)};
+        for(unsigned i=0;ok&&i<4;++i)ok=rd(p,words[i],&p->pad_power[i]);
+        if(ok) {
+            p->guard_done=1;
+            unsigned met=((p->pad_power[1]>>12)&3)<2;
+            for(unsigned i=0;i<p->rail_count;++i) {
+                const struct a733_pmic_snapshot *s=&p->snapshots[i];
+                if(s->rail==A733_RAIL_DCDC1)met&=s->enabled&&(s->selector&31u)==23;
+                else if(s->rail==A733_RAIL_BLDO5)met&=!s->enabled;
+                else if(s->rail==A733_RAIL_CLDO1)met&=s->enabled&&s->decoded&&s->programmed_uv==1800000;
+            }
+            if(!met)ok=0; /* Observations stay in the object; nothing was written. */
+            else p->stage=PINS;
+        }
     } else if(p->stage==BUS_GATE) {
         ok=update(p,CCU+0xd10,0x87001f1f,p->initial_module&0x87001f1f,29)&&
             update(p,CCU+0xd1c,0x10001,0,1)&&update(p,CCU+0xd10,0x87001f1f,29,MODULE_24M);

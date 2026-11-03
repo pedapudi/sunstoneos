@@ -15,7 +15,7 @@ struct radio_model {
 static struct radio_model r;
 /* Every PMIC register data write, with the PM1 level and time at which it happened. */
 static struct {uint8_t reg,value;unsigned pm1;uint64_t at;} pmic_log[16];
-static unsigned pmic_log_count,stuck_enable;
+static unsigned pmic_log_count,stuck_enable,guard_config;
 static void pmic_logged(void *v,uint8_t reg,uint8_t value)
 {
     struct radio_model *m=v;assert(pmic_log_count<16);
@@ -144,7 +144,8 @@ static int radio_try_setup(enum a733_radio_rail supply)
         .deadline_us=500000,.lifetime_deadline_us=10000000,
         .topology={201,A733_RADIO_DCDC1,supply,A733_RADIO_CLDO1,supply},
         .fabric={0,1u<<31,1u<<31},.fabric_hz={24000000,24000000,24000000},
-        .card={.supported_ocr=0x00300000,.command_timeout=20000,.ready_poll_interval=100}};
+        .card={.supported_ocr=0x00300000,.command_timeout=20000,.ready_poll_interval=100},
+        .first_run_guard=guard_config};
     for(unsigned i=0;i<8;++i)config.desired[i].function=i<6?2:i==6?0:1;
     const struct a733_radio_platform_ops ops={radio_now,radio_current,radio_admit,radio_enter,
         radio_leave,radio_retain,radio_read,radio_write,radio_barrier};
@@ -185,16 +186,16 @@ static void minimum_power_intervals(void)
 {
     for(unsigned costly=0;costly<2;++costly){
         radio_setup();r.fraction=23;r.gpio_cost=costly?17:0;
-        for(unsigned i=0;i<2000&&r.radio.stage!=11;++i)assert(radio_step()!=A733_RADIO_RETAINED);
-        assert(r.radio.stage==11&&r.radio.pin_lease.id);
+        for(unsigned i=0;i<2000&&r.radio.stage!=12;++i)assert(radio_step()!=A733_RADIO_RETAINED);
+        assert(r.radio.stage==12&&r.radio.pin_lease.id);
         r.power.now=r.radio.wait_since+10000;r.fraction=0;
-        assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_PENDING&&r.radio.stage==11&&!r.enabled_at);
-        ++r.power.now;assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_PENDING&&r.radio.stage==12);
-        r.fraction=23;assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_PENDING&&r.radio.stage==13);
+        assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_PENDING&&r.radio.stage==12&&!r.enabled_at);
+        ++r.power.now;assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_PENDING&&r.radio.stage==13);
+        r.fraction=23;assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_PENDING&&r.radio.stage==14);
         assert(r.enabled_at&&r.radio.wait_since==r.enabled_at);
         r.power.now=r.radio.wait_since+50000;r.fraction=0;
-        assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_PENDING&&r.radio.stage==13&&!r.module_at);
-        ++r.power.now;assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_PENDING&&r.radio.stage==14);
+        assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_PENDING&&r.radio.stage==14&&!r.module_at);
+        ++r.power.now;assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_PENDING&&r.radio.stage==15);
         r.power.now=r.radio.config.deadline_us;
         assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_RETAINED&&!r.module_at);
     }
@@ -254,6 +255,35 @@ int main(void)
     assert(r.radio.power_on && r.radio.rail_verify && r.enabled_at>=pmic_log[1].at+10000);
     assert(r.first_host_at>=r.enabled_at+50000);
     assert(r.radio.snapshots[1].rail==A733_RAIL_BLDO5 && r.radio.snapshots[1].enabled && r.radio.snapshots[1].programmed_uv==1800000);
+    /* First-run guard: observes DCDC8 and the pad power words before any write and
+     * proceeds only if BLDO5 is off, PG is unsupplied, CLDO1 is 1.8V and DCDC1 is code 23. */
+    guard_config=1;
+    radio_setup();r.power.pmic[0x21]&=(uint8_t)~4u;r.power.pmic[0x2e]=0x3a;
+    *pmic_model_word(&r.power,0x02000048)=1u<<12;*pmic_model_word(&r.power,0x07025348)=3u<<2;
+    status=A733_RADIO_PENDING;
+    for(unsigned i=0;i<4000 && status!=A733_RADIO_READY;++i){status=radio_step();assert(status!=A733_RADIO_RETAINED);}
+    assert(pmic_log_count==2 && r.radio.rail_count==4 && r.radio.guard_done);
+    assert(((r.radio.pad_power[1]>>12)&3)==1 && ((r.radio.pad_power[3]>>2)&3)==3);
+    {unsigned seen=0;for(unsigned i=0;i<4;++i)if(r.radio.snapshots[i].rail==A733_RAIL_DCDC8){
+        seen=1;assert(r.radio.snapshots[i].selector==100 && !r.radio.snapshots[i].decoded);}
+     assert(seen);}
+    for(unsigned mismatch=0;mismatch<4;++mismatch) {
+        radio_setup();r.power.pmic[0x21]&=(uint8_t)~4u;r.power.pmic[0x2e]=0x3a;
+        if(mismatch==0)*pmic_model_word(&r.power,0x02000048)=2u<<12; /* PG supplied at 3.3V */
+        if(mismatch==1){r.power.pmic[0x21]|=4;r.power.pmic[0x2e]=13;} /* BLDO5 already on, 1.8V */
+        if(mismatch==2)r.power.pmic[0x2f]=14;                        /* CLDO1 at 1.9V */
+        if(mismatch==3)r.power.pmic[0x12]=22;                        /* DCDC1 at code 22 */
+        status=A733_RADIO_PENDING;
+        for(unsigned i=0;i<2000 && status!=A733_RADIO_RETAINED;++i)status=radio_step();
+        /* Every observation is kept and nothing is written, PM1 stays low. */
+        assert(status==A733_RADIO_RETAINED && !pmic_log_count && !r.first_host_at && !r.radio.pin_lease.id);
+        assert(!(*pmic_model_word(&r.power,0x07025040)&2));
+        if(mismatch==0){assert(r.radio.guard_done && ((r.radio.pad_power[1]>>12)&3)==2);}
+        if(mismatch==1)assert(r.radio.guard_done && !r.radio.power_on);
+        if(mismatch==3)assert(!r.radio.guard_done); /* The earlier DCDC1 check refuses first. */
+        if(mismatch==2)assert(!r.radio.guard_done);
+    }
+    guard_config=0;
     /* A rail that refuses to turn on stops before PM1 rises; no host access follows. */
     radio_setup();r.power.pmic[0x21]&=(uint8_t)~4u;stuck_enable=1;
     status=A733_RADIO_PENDING;

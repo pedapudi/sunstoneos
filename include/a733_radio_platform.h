@@ -27,6 +27,12 @@ struct a733_radio_platform_config {
     struct a733_pin_config expected[8],desired[8];
     /* Fixed3.3V supply: supported OCR is a nonempty subset of bits20/21. */
     struct sdio_card_config card;
+    /* Nonzero: the first power-on run. Before any write the platform also
+     * observes DCDC8 (recorded, never required) and the pad power words, and
+     * proceeds only if BLDO5 is off, PG reads unsupplied, CLDO1 is on at 1.8V
+     * and DCDC1 is on at selector code 23. Otherwise it records and retains
+     * with no PMIC write. */
+    uint32_t first_run_guard;
 };
 enum a733_radio_platform_result { A733_RADIO_PENDING, A733_RADIO_BUSY,
     A733_RADIO_READY, A733_RADIO_RETAINED, A733_RADIO_INVALID };
@@ -87,7 +93,10 @@ struct a733_radio_platform {
     uint64_t deadline,last_now,wait_since;
     uint32_t selected_mhz[3],initial_module,initial_bus,running_module;
     unsigned initialized,stage,fault,held,retained,core_call,rail_count,rail_index,rail_retained;
-    unsigned four_bit,card_pending,bus_interface,power_on,rail_verify;
+    unsigned four_bit,card_pending,bus_interface,power_on,rail_verify,guard_done;
+    /* GPIO_POW_MOD_SEL, GPIO_POW_VAL, SGPIO_POW_MOD_SEL, SGPIO_POW_VAL as read
+     * by the first-run guard; valid once guard_done is set. */
+    uint32_t pad_power[4];
 };
 /* Pure scope planning and init; no MMIO. Fresh private storage only. All inputs,
  * managers, provider objects and callback contexts remain disjoint and live. */
