@@ -18,7 +18,7 @@ import struct
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X30, UC_ARM64_REG_PC, UC_ARM64_REG_SP
-from harness import Image, save
+from harness import machine as harness_machine, Image, save
 
 
 def main():
@@ -61,7 +61,7 @@ def main():
                  'thermal-level': (1000, 1050, 'thermal level')}
     rows = []
     for case, (dcdc5, dcdc3, expected) in cases.items():
-        uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+        uc = harness_machine()
         uc.mem_map(0x40000000, 0x4000000)
         uc.mem_map(0x02000000, 0x10000)
         uc.mem_map(0x03400000, 0x200000)

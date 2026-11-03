@@ -234,7 +234,7 @@ def worker(args):
     refs = {p.name: p.read_bytes() for p in (Path(work).parent.parent / 'ref').iterdir()}
     entries = load_log(log)
     prefix = work / 'prefix.img'
-    shutil.copyfile(base_img, prefix)
+    harness.copy_image(base_img, prefix)
     apply(prefix, entries[:lo])
     rng = random.Random(seed + lo)
     done = recovered_clusters = doubles = subsets = 0
@@ -242,9 +242,9 @@ def worker(args):
         if k > lo:
             apply(prefix, entries[k - 1:k])
         cut = work / 'cut.img'
-        shutil.copyfile(prefix, cut)
+        harness.copy_image(prefix, cut)
         pre = work / 'pre.img'
-        shutil.copyfile(cut, pre)
+        harness.copy_image(cut, pre)
         check_hint(pre, cut, recover(binary, cut))
         verify(cut, groups, k, refs, work, f'cut after {k} sector writes')
         again = recover(binary, cut)
@@ -257,7 +257,7 @@ def worker(args):
             first = next(i for i, e in enumerate(entries) if e[1] == call)
             for _ in range(2):
                 keep = [e for e in members if rng.random() < 0.5]
-                shutil.copyfile(base_img, cut)
+                harness.copy_image(base_img, cut)
                 apply(cut, entries[:first])
                 apply(cut, keep)
                 recover(binary, cut)
@@ -265,11 +265,11 @@ def worker(args):
                 subsets += 1
         if double_every and k % double_every == 0:
             relog = work / 'recovery.log'
-            shutil.copyfile(pre, cut)
+            harness.copy_image(pre, cut)
             out = recover(binary, cut, relog)
             rentries = load_log(relog)
             for j in range(len(rentries) + 1):
-                shutil.copyfile(pre, cut)
+                harness.copy_image(pre, cut)
                 apply(cut, rentries[:j])
                 recover(binary, cut)
                 verify(cut, groups, k, refs, work, f'recovery cut after {j} of {len(rentries)} sector writes (initial cut {k})')
@@ -282,7 +282,7 @@ def static_checks(binary, base, out):
     results = {}
     for name in ('guard', 'posix', 'accounting'):
         img = out / f'{name}.img'
-        shutil.copyfile(base, img)
+        harness.copy_image(base, img)
         r = subprocess.run([str(binary), name, str(img), str(BASE), str(PART_SECTORS), str(AU)], capture_output=True,
                            text=True, env=harness.environment())
         assert r.returncode == 0, f'{name}: {r.stdout}{r.stderr}'
@@ -322,7 +322,7 @@ def main():
     subprocess.run(['/usr/sbin/mkfs.fat', '-F', '32', '-s', '1', '-n', 'SUNSTONE', '--offset', str(BASE), str(base),
                     str(PART_SECTORS // 2)], check=True, capture_output=True)
     img = out / 'run.img'
-    shutil.copyfile(base, img)
+    harness.copy_image(base, img)
     log, marks = out / 'write.log', out / 'marks.txt'
     others = static_checks(binary, base, out)
     snap = out / 'setup.img'

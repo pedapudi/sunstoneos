@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import struct
 
-from harness import Image, refused
+from harness import machine as harness_machine, Image, refused
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_PC, UC_ARM64_REG_X0, UC_ARM64_REG_X1
 
@@ -27,7 +27,7 @@ a.output.mkdir(parents=True, exist_ok=False)
 layout = thermal.geometry(a.image)
 period_us = thermal.report.PERIOD_US if layout['window']['members']['first'] == thermal.report.HEADER_BYTES else 100000
 image = Image(a.image, {'os_thermal_service', 'a733_thermal_policy', 'board_application', 'a733_board_session'})
-m = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+m = harness_machine()
 m.mem_map(0x41000000, 0x1200000)
 for address, data in image.parts:
     if 0x41000000 <= address and address + len(data) <= 0x42200000:

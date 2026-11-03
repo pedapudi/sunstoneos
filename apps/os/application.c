@@ -426,6 +426,10 @@ int os_application_prepare(void)
     void runtime_smp_init(void);runtime_smp_init();
 #endif
 #ifdef SUNSTONE_NEWLIB
+    /* The static constructors run only here, after os_large_prepare attached the ledger's region as the C library's
+     * heap: a constructor that allocates takes its memory from that heap (checks/qemu-os-boot.py,
+     * heap-constructor-allocates). Calling runtime_init earlier would take the block from the linked heap and refuse the
+     * region. */
     runtime_init();
 #endif
     if(ss_application.init)ss_application.init();

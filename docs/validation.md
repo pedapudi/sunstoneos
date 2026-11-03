@@ -110,6 +110,42 @@ successful evidence from the earlier invocation. The soak defaults to one
 trial; `--trials N` declares a repeatability sample in advance and needs a
 reason for that sample count. It does not retry failures.
 
+### Checks that need a built image
+
+A check that executes an integrated OS image needs the image. The gate does not leave such a check pending: for each affected
+check that is not pure-host, [checks/gate-inputs.json](../checks/gate-inputs.json) says what the gate does.
+
+- **Supplied.** The check is registered with the command to run and the images it takes. `{elf:NAME}` and `{build:NAME}` name the
+  ELF and the build directory of a gate variant (`sup`, `resaud`, `headset`, `cpu-clock` and the others of `VARIANTS`) or of a
+  recipe under `images` (the CPU-return NPU image, the CPU-return GPU image, the latency image). The gate builds each image once
+  per tree state, keyed by the revision, the tracked diff and the untracked files, and passes it to the check.
+- **Board.** A check that needs a board or USB access is reported with a `BOARD` line and does not refuse.
+- **Waived.** The registry lists the check with `category | reason`. The gate counts waived checks and writes their reasons to
+  `waived.txt` in its output. A waiver states what input is missing and what would supply it.
+- **Unsupplied.** An affected check in none of these groups makes the gate refuse before building anything (exit 2), naming the
+  check, in `--full` and in `--affected` or `--changed` alike.
+
+`checks/gate-inputs.py` checks the registry: every registered check exists and is not pure-host, every non-pure-host check has an
+answer, and each image-executing check builds its emulated machine with `harness.machine()`, the one machine with the maximal core
+that the images' atomics need. Register or waive a new image-needing check in the same change that adds it.
+
+### The gate yields the disk to board runs
+
+The gate and the landing run at nice +10 and the idle I/O class, and image-copying checks copy sparsely
+([board runner](board-runner.md#board-runs-keep-their-timing-while-the-gate-runs)). A check that copies a disk image calls
+`harness.copy_image`, not `shutil.copyfile`; `checks/host-priority.py` checks the priorities and the sparse copy.
+
+### The gate keeps its temporary files off /tmp
+
+/tmp is a memory-backed volume with a per-user quota, and it has stopped work twice: it ran out of inodes on 2026-11-01, and on 2026-11-02
+scratch directories filled 46 GB of it, so a landing gate failed at `central-build` with "Disk quota exceeded".
+[host_space.py](../tools/host_space.py) sets `TMPDIR`, `TMP` and `TEMP` to `tmp` under the build root (the landing: under the cache's
+`build` directory; the board runner: under the cache) at the start of `main()` in `tools/integration-gate.py`, `tools/land.py` and
+`tools/board.py`, so the compilers, CMake, the checks and the helpers all write on the main disk. A base under `/tmp`, `/var/tmp` or
+`/dev/shm` is refused. The gate and the landing also refuse to start, naming the volume, when the build root has less than 30 GiB or
+500,000 inodes free, or `/tmp` has less than 2 GiB or 20,000 inodes free. Fixtures that run the gate or the landing against a scratch
+sandbox set `SUNSTONE_HOST_SPACE=off`; nothing else does. `checks/host-space.py` runs the gate's environment setup and checks all of this.
+
 ### Failure handling, parallelism and prose checks
 
 `--full` keeps going. It runs every selected step, writes one `PASS`, `WARN`,

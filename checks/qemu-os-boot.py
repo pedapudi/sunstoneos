@@ -612,6 +612,12 @@ def main():
         application = image.application('heap-test', ['checks/qemu-os/heap-main.c'], manifest)
         return image.build(application)
 
+    def build_heap_ctor(name, manifest):
+        """The heap application whose static constructor takes a block from sbrk before the main task runs."""
+        image = Image(out / name, extra_defines=['-DQEMU_OS_UPPER=1', '-DSUNSTONE_NEWLIB=1'], extra_sources=['runtime/newlib.c'])
+        application = image.application('heap-test', ['checks/qemu-os/heap-ctor-main.c'], manifest)
+        return image.build(application)
+
     def build_heap_early(name, manifest):
         """The same application, with a call of sbrk before the admission, as a static constructor would make."""
         image = Image(out / name, extra_defines=['-DQEMU_OS_UPPER=1'],
@@ -672,6 +678,7 @@ def main():
         heap_elf = pool.submit(build_heap, 'build-heap', ROOT / 'checks/qemu-os/heap-manifest.json')
         heap_big_elf = pool.submit(build_heap, 'build-heap-too-big', ROOT / 'checks/qemu-os/heap-too-big-manifest.json')
         heap_early = pool.submit(build_heap_early, 'build-heap-early', ROOT / 'checks/qemu-os/heap-manifest.json')
+        heap_ctor = pool.submit(build_heap_ctor, 'build-heap-ctor', ROOT / 'checks/qemu-os/heap-manifest.json')
         slot1_elf = pool.submit(build_slot1).result()
         heap_elf, heap_big_elf, heap_early_elf = heap_elf.result(), heap_big_elf.result(), heap_early.result()
         notify_elf = pool.submit(build_notify).result()
@@ -974,6 +981,13 @@ def main():
     # make it: the heap of the ledger cannot replace it, so the application does not start.
     c = run_case('heap-after-early-sbrk', heap_early_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G', [(0x50000000, stale)])
     c.require(c.main is None and c.failure is not None, 'the application started although the linked heap was already in use')
+    # A static constructor that takes memory from sbrk runs after the admission attached the region as the heap: its block is
+    # the first 4096 bytes of the region, zero although the memory held a pattern, and the main task's block follows it.
+    c = run_case('heap-constructor-allocates', heap_ctor.result(), scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G', [(0x50000000, stale)])
+    c.clean()
+    tag, block, dirty, own, peak = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
+    c.require(tag == 0x4354524f48454150 and block == 0x50000000 and dirty == 0 and own == 0x50001000 and peak == 8192,
+              'constructor result tag %#x block %#x dirty %d main block %#x peak %d' % (tag, block, dirty, own, peak))
     # A manifest region above the 48 MiB window lies in level-1 slot 1 and is mapped for its application alone.
     c = run_case('region-in-slot-1', slot1_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G')
     c.clean()
