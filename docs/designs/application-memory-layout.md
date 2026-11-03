@@ -406,6 +406,23 @@ estimate, scratch allowed on an input, no upper bound) each fail it. The board
 run listed for this step (an 8 MiB OUTPUT and a 16 MiB WORK at `0x88000000`,
 restored bytes equal to the backup) is not yet done.
 
+**Regions above 2 GiB (step 6b).** Implemented and checked on the host and the emulated board; the board run is listed under its
+prediction below. The manifest tool places a region in the upper memory (`upper_area` of the record, `0x80000000` to the end of the
+installed 12 GiB) when the window and the slot 1 area are full, accepts a pinned address there, and refuses a region that crosses
+the unmapped hole or runs past the installed memory. `apps/os/large.c` holds every placed region from `0x48000000` up in the
+ledger by its address, so the heap, the large records, the NPU pool and the stack take what is left. The per-application tables
+already mapped slots 2 and above as 1 GiB blocks, or as 2 MiB blocks where a gigabyte is shared. The EL3 level-2 table covers only
+`0x40000000..0x80000000`, so `platform/a733-smp-cached/memory.c` gives the EL3 level-1 table a 1 GiB block for each gigabyte that
+holds a work or output region, only when the boot's decode check passed. The terminal (`apps/os/cpu-return/terminal.patch`) reads
+that block for an address from `0x80000000` and applies the test of a level-2 block. The EL3 publication of the identity step
+(`platform/a733/cpu_coherence.S`) accepts the installed memory, which an input region above `0x48000000` needed already. Checks:
+`checks/memory-layout.py` places regions across the three areas, `checks/a733-cpu-coherence.py` covers the publication range,
+`checks/os-cpu-return.py` shows the cleaning of regions in slot 2 and the three parking cases, `checks/qemu-os-boot.py` runs an
+application that uses a region at `0x88000000` and faults one byte past it, and `checks/runner-preservation.py` covers the
+preservation plan for it. The runner keeps its 4 GiB reach, so a region at or above `0x100000000` is refused for a preserving run.
+The emulated board's stack check now accepts the installed memory, because the ledger takes the smallest gap that holds the stack,
+which can lie beside a region above 2 GiB.
+
 **NPU pool and GPU buffers (step 5).** What each reaches today, before the change:
 
 | | Memory | Who maps it | What contains the device |
