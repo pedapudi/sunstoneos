@@ -138,6 +138,24 @@ launch. Status includes running entries, eligible queued entries and the last
 start, result, withdrawal, pause and resume. Entry files and earlier evidence are retained.
 `--queue DIR`, before the subcommand, selects an isolated queue.
 
+## Deliver a Wi-Fi credential
+
+`--wifi NAME` selects a credential that the user stored with `tools/wifi-credential.py`
+([Wi-Fi credentials](wifi-credentials.md)). The password never enters the queue:
+
+- `submit` loads the file to compute its fingerprint and refuses a missing file or a file with unsafe modes before it
+  creates an entry. The entry, `state.json`, the ledger line and the command line of the runner carry only
+  `wifi: {name, fingerprint}`.
+- When the daemon claims the entry, and again in the runner process before any device work, it reads the file from
+  `~/.config/sunstoneos/wifi`. A missing file, a directory that is not mode 0700, a file that is not a plain mode 0600
+  file owned by the user, or a fingerprint that differs from the submitted one refuses the run as
+  `refused-before-launch` with the reason. The result carries `wifi: {name, fingerprint}`.
+- The image must link `ss_wifi_credential`; any other image is refused before device access.
+- At launch the runner uploads the 256-byte record to `0x43004000` as a separate transfer, after the image's uploads.
+  The source and the readback are anonymous memory files, so the record is written to no file, and it is compared
+  in memory. The host copy is zeroed after the upload and the result records `wifi_delivered`. A preserving run
+  includes the record's extent in its saved and restored DRAM.
+
 ## The runner checks the image's own admission before the board
 
 `check` and `submit` run, on the host, the same EL3 admission code the image runs
