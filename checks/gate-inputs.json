@@ -1914,6 +1914,16 @@
     }
    ]
   },
+  "qemu-os-boot.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
   "queue-add.py": {
    "runs": [
     {
