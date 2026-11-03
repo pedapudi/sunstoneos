@@ -405,17 +405,17 @@ def inspect(raw, image=None, host=None):
     return report
 
 
-def admit(image, raw, build=None, source=None):
+def admit(image, raw, build=None):
     """The image's own EL3 admission on the session and the launch contract the runner would send; returns its verdict dictionary.
 
-    The admission code is built from the CMake build directory of the image (found from its path, or the cached harness of a queued copy);
-    build names that directory for an image copied away from it, and source the source tree whose admission sources are compiled
-    (default: the tree the build was configured from)."""
+    The admission code is compiled from the image's own source tree, the one its CMake build directory was configured from
+    (tools/host_admission.py refuses a tree that has moved or an image that is not that build's). An image under its build directory
+    needs no argument; build names the directory for an image copied away from it. A queued copy finds the harness built at submission."""
     import re
     located = None
     if build:
         home = re.search(r'^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$', (Path(build) / 'CMakeCache.txt').read_text(), re.M)
-        located = (Path(build).resolve(), Path(source) if source else Path(home.group(1)))
+        located = (Path(build).resolve(), Path(home.group(1)))
     from_prepare = load('session_tool_prepare', ROOT / 'apps/os/prepare.py')
     admission = load('session_tool_admission', ROOT / 'tools/host_admission.py')
     base = load('session_tool_image', ROOT / 'tools/check-a733-smp.py')
@@ -471,7 +471,6 @@ def main(argv=None):
     c.add_argument('--image', type=Path, help='compare the session with this image; default: the image session.json names')
     c.add_argument('--admit', action='store_true', help='run the image\'s EL3 admission on the session (needs the image)')
     c.add_argument('--build', type=Path, help='the CMake build directory of an image that was copied away from it (for --admit)')
-    c.add_argument('--source', type=Path, help='with --build: the source tree whose admission sources are compiled (default: the build\'s own tree)')
     c.add_argument('--json', action='store_true', help='print the fields as JSON')
     args = parser.parse_args(argv)
     try:
@@ -492,7 +491,7 @@ def main(argv=None):
         if args.admit:
             if image is None:
                 raise SessionError('admit: --admit needs the image (--image, or a directory with session.json)')
-            report['admission'] = admit(image, raw, args.build, args.source)
+            report['admission'] = admit(image, raw, args.build)
         if args.json:
             print(json.dumps(report, indent=2, sort_keys=True))
         else:
