@@ -693,6 +693,14 @@ static int command_step(struct sunxi_mmc *h)
             uint32_t t;
             if (!rd(h, 0x100, &t) || !wr(h, 0x100, ((t & ~0x0fff0001u) | (512u << 16) | 4u))) return 0;
         }
+        /* A tuned card's write runs with the sample delay at SUNXI_MMC_WRITE_SAMPLE_DELAY, not at the delay the read sweep chose: the CRC status token that the card returns for
+         * each block is sampled by the same circuit as read data (SAMP_DL, manual 11.3.8.37), and the first block's token is not seen at 100 and 150 MHz with the read-tuned
+         * delay, while it is at 50 MHz with delay 0. The board kernel's own write retry starts at delay 0 and steps by 2 (sunxi-mmc-v4p5x.c:1086-1090). The tuned delay returns
+         * when the data and the automatic stop are done (P_WRITE_DMA below). */
+        if (UHS_ON && h->protocol == P_WRITE_DMA && h->config.sd_profile == UHS && h->card.timing >= 2) {
+            if (!wr(h, 0x144, 0x80u | SUNXI_MMC_WRITE_SAMPLE_DELAY)) return 0;
+            h->write_delay_set = 1;
+        }
         if ((h->command & AUTO) && !wr(h, 0x58, 0)) return 0;
         if (dma_command(h) && !dma_start(h)) return 0;
         /* Interrupt mask for a DMA command (board kernel sunxi_mmc_parse_cmd): the error bits, and the one completion bit
@@ -1308,7 +1316,9 @@ static void protocol(struct sunxi_mmc *h)
         return;
     case P_WRITE_DMA:
         /* The data, the automatic CMD12 and the controller teardown are done; the card may still program. */
-        if(card_response(h)){h->result.submitted=h->borrowed_bytes;ready_status(h,P_WRITE_DMA_STATUS);}
+        if(card_response(h)){
+            if(UHS_ON&&h->write_delay_set){if(!wr(h,0x144,0x80u|h->card.sample_delay))return;h->write_delay_set=0;}
+            h->result.submitted=h->borrowed_bytes;ready_status(h,P_WRITE_DMA_STATUS);}
         return;
     case P_WRITE_DMA_STATUS:
         if(!card_response(h))return;

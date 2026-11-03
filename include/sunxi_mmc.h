@@ -37,6 +37,8 @@ enum sunxi_mmc_mode_reason { SUNXI_MMC_MODE_NONE, SUNXI_MMC_MODE_NO_WINDOW, SUNX
  * it was in and the low 16 bits of the controller's raw interrupt status, so a session that steps down and completes still says why. Zero for a step with no fault. */
 struct sunxi_mmc_mode_event { uint8_t from, to, reason, signal_1v8, error, protocol; uint16_t interrupts; uint16_t blocks; uint8_t descriptor; /* where a write fault stopped: 512-byte blocks the card side had taken (SMHC_TBC0) and the descriptor reached */ };
 #define SUNXI_MMC_MODE_LOG 6u
+/* The sample delay (SMHC_SAMP_DL software field) a tuned card's data write runs with; the read sweep's delay returns afterwards. */
+#define SUNXI_MMC_WRITE_SAMPLE_DELAY 0u
 /* sd_signal operations and QUERY capability bits. */
 #define SUNXI_MMC_SIGNAL_QUERY 0u
 #define SUNXI_MMC_SIGNAL_SET 1u
@@ -212,7 +214,7 @@ struct sunxi_mmc {
     /* UHS-I switch and tuning progress. */
     uint64_t signal_us, attempt_us;
     unsigned sd_sig, tune_delay, tune_repeat, tune_recover, tune_forced, tune_hung;
-    uint8_t s18r, signal_window, tuning, tune_failed, tune_attempt, after_clock, observe_s18, reenter, sdr25_only, uhs_func, ceil1, restart, restarted;
+    uint8_t write_delay_set, s18r, signal_window, tuning, tune_failed, tune_attempt, after_clock, observe_s18, reenter, sdr25_only, uhs_func, ceil1, restart, restarted;
     uint8_t tuning_block[64];
 };
 /* Zero storage before its first use. Single task owner; no concurrent ISR or
