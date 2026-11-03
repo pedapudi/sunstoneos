@@ -599,6 +599,13 @@ def main():
         application = image.application('notify-test', ['checks/qemu-os/notify-main.c'], ROOT / 'checks/qemu-os/notify-manifest.json')
         return image.build(application)
 
+    def build_tlbi(name, form, period):
+        """The invalidation task of apps/os/tlbi-issuer.c, on core 5."""
+        image = Image(out / name, extra_defines=['-DSUNSTONE_TLBI_ISSUER=%d' % form, '-DSUNSTONE_TLBI_PERIOD_TICKS=%d' % period,
+                                                 '-DSUNSTONE_TLBI_CORE=5'], extra_sources=['apps/os/tlbi-issuer.c'])
+        application = image.application('tlbi-test', ['checks/qemu-os/tlbi-main.c'], ROOT / 'checks/qemu-os/tlbi-manifest.json')
+        return image.build(application)
+
     def build_heap(name, manifest):
         """An application whose heap is above the linked limit, so that the ledger serves it (step 1 of
         docs/designs/application-memory-layout.md). The C library's sbrk is linked in; its allocator is not."""
@@ -663,6 +670,7 @@ def main():
         slot1_elf = pool.submit(build_slot1).result()
         heap_elf, heap_big_elf, heap_early_elf = heap_elf.result(), heap_big_elf.result(), heap_early.result()
         notify_elf = pool.submit(build_notify).result()
+        tlbi_elfs = {k: pool.submit(build_tlbi, 'build-tlbi-%d-%d' % k, *k).result() for k in ((0, 1), (1, 1), (2, 10), (3, 1))}
         usb_race_elf = pool.submit(build_usb_race).result()
         storage_write_space_elf = pool.submit(build_storage_write_space).result()
         (out / 'build-reverted-owner').mkdir()
@@ -987,6 +995,18 @@ def main():
     c.require(c.main is not None and c.main['live'] == '1' and int(c.main['t_us']) < 2_000_000,
               'the application did not start after the transport became ready between its test and its wait')
     c.require(c.finished is not None and c.finished['status'] == '1', 'the application did not finish')
+
+    # The invalidation task of the scheduler soak (apps/os/tlbi-issuer.c): one wake per period on core 5, at the EL1 the TLBI needs,
+    # an invalidation at each wake in the forms 1 to 3 and none in the control (form 0).
+    for (form, period), elf in tlbi_elfs.items():
+        c = run_case('tlbi-issuer-form-%d-period-%d' % (form, period), elf, scenario(usb_ready_ms=usb_delay_ms), bytes(4096))
+        c.clean()
+        tag, wakes, issued, core, largest = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
+        expected = 200 // period
+        c.require(tag == 0x54424c49 and core == 5 and expected * 0.6 <= wakes <= expected * 1.2,
+                  'form %d: %d wakes on core %d in 200 ms, expected about %d on core 5' % (form, wakes, core, expected))
+        c.require(issued == (wakes if form else 0) and (largest > 0) == bool(form),
+                  'form %d: %d invalidations for %d wakes, largest %d ticks' % (form, issued, wakes, largest))
 
     # The OS gives the main task its usb-ready and live-state notifications while the main task sleeps in the deadline
     # wait and in ss_host_recv: each ends at its own condition (the deadline; the timeout), not at the OS's notification.
