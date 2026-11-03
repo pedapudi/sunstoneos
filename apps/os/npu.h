@@ -94,6 +94,8 @@ void os_npu_queue_end(void);
 int os_npu_queue_sdk_bind(void);
 int os_npu_queue_prepare_edges(struct npu_runtime *);
 int os_npu_queue_tables(struct npu_runtime *);
+/* Bind the queue and carve its tables: what the admission-time preparation of the NPU does for the queue (apps/os/npu.c). */
+int os_npu_queue_prepare(struct npu_runtime *);
 int os_npu_queue_sdk_step(void);
 int os_npu_queue_sdk_closed(void);
 void os_npu_queue_sdk_fail(void);
