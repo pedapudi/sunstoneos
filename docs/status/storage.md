@@ -64,7 +64,7 @@ on the platform source of v12. The same check applies to any other service that 
 Board results are records in `docs/evidence/storage.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-storage-20261101.md).
 
 <!-- evidence-table:begin -->
-28 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+31 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -96,4 +96,7 @@ Board results are records in `docs/evidence/storage.jsonl`; add one with `tools/
 | `1793651292191500240-5493408d` | 2026-11-02 | 3-3 | `31aba5df4dc3` | watchdog-reset | failed | run_total 29.309 s |
 | `1793652351260245353-286b63df` | 2026-11-02 | 3-3 | `851a4859bdd6` | result-mismatch | passed | run_total 43.543 s, run_total 43.543 s, card_clock 150 MHz, tuning_window 47, chosen_delay 40, phase_a_mean 5.27 ms, phase_b_mean 5.42 ms, phase_c_mean 6.73 ms, phase_d_mean 4.82 ms, phase_e_mean 1.93 ms, phase_f_mean 2.44 ms, phase_g_mean 3.21 ms, phase_h_mean 6.66 ms, bytes_read 1.25829e+08 B, sustained_rate_all_phases 20.4 MB/s |
 | `1793663873502474507-76c206d4` | 2026-11-02 | 3-3 | `15c9d9cdc98d` | result-mismatch | passed | run_total 13.171 s, run_total 0 s, identify_time 0.299 s, s18a 0, group1_support_bits 32799, per_read_rate_median 21.43 MB/s, reads_done 32 |
+| `1793666413836584828-d698c21f` | 2026-11-02 | 3-3 | `4ba6d98e7c85` | watchdog-reset | failed | run_total 145.493 s, run_total 0 s |
+| `1793666839062917650-d5d01b71` | 2026-11-02 | 3-3 | `5beae9c6b263` | watchdog-reset | failed | run_total 123.102 s, run_total 0 s |
+| `1793667245855934208-55d19b3c` | 2026-11-02 | 3-3 | `ea5720010089` | result-mismatch | passed | run_total 148.541 s, run_total 0 s, sdr104_request 2.445 ms, sdr104_retuned_request 2.445 ms, sdr50_request 3.342 ms, sdr25_request 6.059 ms, sdr104_window 48, sdr50_window 64, reads_done 128 |
 <!-- evidence-table:end -->

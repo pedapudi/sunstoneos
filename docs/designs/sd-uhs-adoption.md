@@ -178,3 +178,17 @@ Stop word `0x48872607`, site 17: the first register refused was SMHC offset `0x1
 function 3 only; the restart under the SDR50 ceiling sends the function 2 switch (`0x00fffff2`, `0x80fffff2`), which the adapter refused. That is the restart of phase 2; the report of the first run, which had the same stop, is lost, so its stop at the same place is consistent with this
 and not proved. The host models did not cover it because their restarts used the ceiling SDR104 only, and no check had put a card with SDR50 through the adapter filter. The adapter now admits the function 2 switch in the UHS-I profile, and the lifetimes model walks a card with SDR50
 through the ceilings SDR104, SDR50 and SDR25 with every write offered to the real filter: it fails with the old rule (the restart under SDR50 is refused) and passes with the new one. The prediction above is unchanged.
+
+### Result of the third submission (entry `1793667245855934208-55d19b3c`, 3-3, image `ea572001`)
+
+The run completed: 128 reads without error, the lifetime closed with the bank back at 3.3 V, and the board returned normally. Every restart re-entered at 1.8 V with the bank untouched and reached READY. The first run to pass; the first two stopped at the function 2 switch (above).
+
+| Phase | Mode | Window | Delay | Mean per 128 KiB request | Predicted | Mode steps |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | SDR104, 150 MHz | 16 to 63 (48) | 40 | 2.445 ms (53.6 MB/s) | 2.4 to 2.8 ms: met | 0 |
+| 1, same ceiling (new tuning) | SDR104, 150 MHz | 16 to 63 (48) | 40 | 2.445 ms | within 10 percent of phase 0: met | 1 (retune) |
+| 2, ceiling SDR50 | SDR50, 100 MHz | 0 to 63 (all 64 delays pass) | 32 | 3.342 ms (39.2 MB/s) | 3.3 to 4.2 ms: met, at the fast end | 2 |
+| 3, ceiling SDR25 | SDR25, 50 MHz | none (not tuned) | 0 | 6.059 ms (21.6 MB/s) | 6.0 to 6.2 ms: met | 3 |
+
+One prediction missed: the SDR50 window was predicted at 30 to 50 delays and every one of the 64 passed, so the sample point is not constrained at 100 MHz on this card. No request in the 4 MiB region was slow in any phase (the largest was 6.065 ms at SDR25), so the earlier slow
+requests are not in this region, whatever the mode. This is the first board run of SDR50 and of the corrected data drive phase (90 degrees) in the tuned modes: both read correctly. The data drive phase for writes is still untested on a board.
