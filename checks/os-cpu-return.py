@@ -18,6 +18,7 @@ from elftools.elf.elffile import ELFFile
 from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_LR
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['{elf:ret-npu-load}', '--out', '{output}']]
 spec = importlib.util.spec_from_file_location('os_return_prior_check', ROOT / 'checks/cpu-runtime-qualification.py')
 prior = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(prior)

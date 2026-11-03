@@ -5,6 +5,9 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+GATE_RUNS = [
+    ['--sources', '{cache}/sources/rng', '--manual', '{cache}/sources/camera-research/A733_User_Manual_V1.00.txt', '--uboot', '{cache}/sources/u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a/drivers/sunxi_crypto/sunxi_crypto_3.0.c', '--native-object', '{build:sup}/CMakeFiles/sunstone-a733-os-core.dir/drivers/crypto/a733_ce_native.c.obj'],
+]
 
 p = argparse.ArgumentParser()
 p.add_argument('--sources', type=Path, required=True)

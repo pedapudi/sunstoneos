@@ -29,6 +29,9 @@ selection is not proof that no check covers a change.
 CHECK_INPUTS supplies supplementary literal repository paths. The hook fixture
 uses its complete declared inventory plus the hook, harness and fixture itself,
 matching the pre-push hook's conditional fixture policy.
+GATE_RUNS, GATE_BOARD and GATE_WAIVED are the check's own answer to tools/integration-gate.py (checks/gate-inputs.py):
+the argument lists of the runs the gate makes ({output}, {cache}/..., {elf:IMAGE}, {build:IMAGE}, {session:IMAGE},
+{bundle:NAME}); a reason the check needs a board; or "category | reason" for a helper module the gate never runs.
 """
 import argparse
 import ast
@@ -204,6 +207,12 @@ def scan(path, seen=()):
     return required, areas, usb
 
 
+def literals(tree, prefix):
+    """The literal top-level assignments whose names start with prefix: GATE_RUNS, GATE_BOARD and GATE_WAIVED."""
+    return {target.id: ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
+            for target in node.targets if isinstance(target, ast.Name) and target.id.startswith(prefix)}
+
+
 def entry(path, documents):
     text = path.read_text()
     tree = ast.parse(text)
@@ -217,7 +226,8 @@ def entry(path, documents):
     pure = (not is_library and not usb and not uses_argv and not set(areas) - NEUTRAL_AREAS
             and set(required) <= {HOST_ONLY.get(path.name, '--output')} and path.name not in NOT_PURE and path.name not in REQUALIFICATION)
     option = HOST_ONLY.get(path.name, '--output')
-    return {'summary': doc.splitlines()[0] if doc else '', 'docs': documents(path.name),
+    gate = {n[5:].lower(): v for n, v in literals(tree, 'GATE_').items()}
+    return {'gate': gate, 'summary': doc.splitlines()[0] if doc else '', 'docs': documents(path.name),
             'required_arguments': required + (['sys.argv'] if uses_argv else []), 'cache_areas': areas,
             'usb': usb, 'library': is_library, 'pure_host': pure, 'input_reason': NOT_PURE.get(path.name) or REQUALIFICATION.get(path.name),
             'output_option': option if option in required else None,
@@ -283,6 +293,12 @@ def declarations(path, revision=None):
 def named(path, includes_only, revision=None):
     """Repository files and subdirectories one file names; only #include targets for non-check sources."""
     text = revision.text(path) if revision else path.read_text(errors='replace')
+    if path.suffix == '.py' and not includes_only:
+        lines = text.split('\n')           # the gate declarations name no repository inputs
+        for node in ast.parse(text).body:
+            if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id.startswith('GATE_') for t in node.targets):
+                lines[node.lineno - 1:node.end_lineno] = [''] * (node.end_lineno - node.lineno + 1)
+        text = '\n'.join(lines)
     tokens = set(INCLUDE.findall(text)) if includes_only else set(PATH_TOKEN.findall(text)) | set(INCLUDE.findall(text))
     found = set()
     for token in tokens:

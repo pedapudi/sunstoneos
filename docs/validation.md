@@ -82,8 +82,9 @@ the OS build verifies every file it names against
 build when the map is missing, and the summary records its SHA-256.
 The optional GPU linear, mSBC, Cortex-A76 and CPU clock options are not
 variants of the gate; build them directly with `cfg.sh` when a change
-affects them. Run the full set once for integration acceptance. Worker iteration uses affected
-checks plus one baseline build. Run all three baseline images, the integration
+affects them. Run the full set once for integration acceptance. A worker builds and runs the checks it changed while it
+works and does not run the affected gate after each commit; the gate runs at landing ([landing](landing.md#the-gate-runs-once)).
+A worker may run `--affected bringup..HEAD` once on a clean tree before it asks for a landing, and the landing reuses that pass. Run all three baseline images, the integration
 gate and the check index once before the final integration report; reuse their
 results while relevant inputs remain unchanged.
 
@@ -112,21 +113,24 @@ reason for that sample count. It does not retry failures.
 ### Checks that need a built image
 
 A check that executes an integrated OS image needs the image. The gate does not leave such a check pending: for each affected
-check that is not pure-host, [checks/gate-inputs.json](../checks/gate-inputs.json) says what the gate does.
+check that is not pure-host, the check's own file says what the gate does, in a literal near the top that
+[checks/check-index.py](../checks/check-index.py) reads.
 
-- **Supplied.** The check is registered with the command to run and the images it takes. `{elf:NAME}` and `{build:NAME}` name the
+- **Supplied.** `GATE_RUNS = [[ARGUMENT, ...], ...]` lists one argument list for each run. `{output}` is the run's new evidence
+  directory and `{cache}/...` a path under the cache. The check takes the images it names. `{elf:NAME}` and `{build:NAME}` name the
   ELF and the build directory of a gate variant (`sup`, `resaud`, `headset`, `cpu-clock` and the others of `VARIANTS`) or of a
-  recipe under `images` (the CPU-return NPU image, the CPU-return GPU image, the latency image). The gate builds each image once
+  recipe in [tools/gate_images.py](../tools/gate_images.py) (the CPU-return NPU image, the CPU-return GPU image, the latency image). The gate builds each image once
   per tree state, keyed by the revision, the tracked diff and the untracked files, and passes it to the check.
-- **Board.** A check that needs a board or USB access is reported with a `BOARD` line and does not refuse.
-- **Waived.** The registry lists the check with `category | reason`. The gate counts waived checks and writes their reasons to
+- **Board.** A check that needs a board or USB access is reported with a `BOARD` line and does not refuse. One that needs a
+  board without a USB or `--fel` argument declares `GATE_BOARD = 'reason'`.
+- **Waived.** A helper module declares `GATE_WAIVED = 'category | reason'`. The gate counts waived checks and writes their reasons to
   `waived.txt` in its output. A waiver states what input is missing and what would supply it.
 - **Unsupplied.** An affected check in none of these groups makes the gate refuse before building anything (exit 2), naming the
   check, in `--full` and in `--affected` or `--changed` alike.
 
-`checks/gate-inputs.py` checks the registry: every registered check exists and is not pure-host, every non-pure-host check has an
-answer, and each image-executing check builds its emulated machine with `harness.machine()`, the one machine with the maximal core
-that the images' atomics need. Register or waive a new image-needing check in the same change that adds it.
+`checks/gate-inputs.py` checks the declarations: no pure-host check declares one, no check declares two, every non-pure-host check
+has an answer, and each image-executing check builds its emulated machine with `harness.machine()`, the one machine with the maximal core
+that the images' atomics need. Declare the answer in the same file that adds an image-needing check.
 
 ### The gate yields the disk to board runs
 
@@ -193,9 +197,9 @@ the option that receives each check's new output directory. Every other check
 that reaches a device keeps its USB classification and is reported as PENDING;
 a name in `HOST_ONLY` that is not pure-host fails `check-index.py --verify`.
 
-The host's existing `~/.cache/sunstoneos/bin/integration-gate.sh SOURCE LABEL`
-command delegates to this repository tool and accepts the same selection
-options. Host dependency configuration remains in `~/.cache/sunstoneos/bin/cfg.sh`.
+Run the gate as `python3 tools/integration-gate.py SOURCE LABEL`; it takes the
+host-wide gate lock itself. `tools/configure.py` holds the host dependency
+configuration.
 `--build-root` selects a separate directory for new builds and gate evidence.
 The gate builds and checks software only; board runs remain separately queued.
 

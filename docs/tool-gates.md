@@ -42,4 +42,4 @@ SD profile 3 requires `--allow-sd-1v8` when preparing inputs and when launching 
 | [tools/land.py](../tools/land.py) | Merges a worker branch into `bringup`, runs the gate and the validators, fast-forwards and pushes. |
 | [tools/git-hooks/pre-push](../tools/git-hooks/pre-push) | Refuses a push whose outgoing commits add secrets, credential files, session paths or assistant credits. |
 | [tools/evidence.py](../tools/evidence.py) | Validates evidence records against the schema, the queue and the status files. See [evidence](evidence.md). |
-| [checks/check-index.py](../checks/check-index.py), [checks/affected.py](../checks/affected.py), [checks/gate-inputs.json](../checks/gate-inputs.json) | Classify checks as pure-host or input-needing and select the checks a change affects; register the images that image-executing checks take. |
+| [checks/check-index.py](../checks/check-index.py), [checks/affected.py](../checks/affected.py), [checks/gate-inputs.py](../checks/gate-inputs.py) | Classify checks as pure-host or input-needing and select the checks a change affects; check that each input-needing check declares its gate runs. |

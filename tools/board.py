@@ -1055,8 +1055,78 @@ def finish_result(result, evidence, started, stage):
     return summary
 
 
+def result_summary(result, limit=1500):
+    """The lines a waiting `submit --wait` prints: outcome, stage, first failure and the decoded application summary."""
+    def short(value):
+        text = json.dumps(value, sort_keys=True)
+        return text if len(text) <= limit else text[:limit] + f'... ({len(text)} bytes of JSON in the result)'
+    lines = [f"outcome: {result.get('outcome')}", f"stage: {result.get('stage')}",
+             'first failure: ' + (short(result['first_failure']) if result.get('first_failure') else 'none')]
+    if 'decoded' in result:
+        decoded = result['decoded']
+        if isinstance(decoded, dict) and 'passed' in decoded:
+            lines.append(f"passed: {decoded['passed']}")
+        lines.append('decoded: ' + short(decoded))
+    else:
+        lines.append('decoded: none (no decoder, or the image did not return a result)')
+    if result.get('decoder_failures'):
+        lines.append('decoder failures: ' + short(result['decoder_failures']))
+    return lines
+
+
+SESSION_LITERAL = re.compile(r"""['"]([A-Za-z0-9_./-]+\.(?:py|c|h|S|inc|json))['"]""")
+SESSION_IMPORT = re.compile(r'^\s*(?:import|from)\s+([A-Za-z_]\w*)', re.M)
+SESSION_INCLUDE = re.compile(r'^\s*#\s*include\s+"([^"]+)"', re.M)
+
+
+def session_files():
+    """The repository files that prepare or admit a session: what tools/board.py and tools/board_images.py import, load and run.
+
+    Derived, not listed: the closure over the modules they import and the repository paths their sources name, followed
+    through included headers."""
+    seen, stack = set(), ['tools/board.py', 'tools/board_images.py', 'tools/session.py']
+    while stack:
+        name = stack.pop()
+        path = ROOT/name
+        if name in seen or not path.is_file():
+            continue
+        seen.add(name)
+        text = path.read_text(errors='replace')
+        candidates = []
+        if path.suffix == '.py':
+            candidates += [os.path.normpath(m) for m in SESSION_LITERAL.findall(text) if not m.startswith('/')]
+            candidates += ['tools/%s.py' % m for m in SESSION_IMPORT.findall(text)]
+        elif path.suffix in ('.c', '.h', '.S', '.inc'):
+            candidates += ['include/'+m for m in SESSION_INCLUDE.findall(text)]
+            candidates += [os.path.relpath(os.path.normpath(path.parent/m), ROOT) for m in SESSION_INCLUDE.findall(text)]
+        stack += [c for c in candidates if (ROOT/c).is_file()]
+    return sorted(seen)
+
+
+def require_daemon_code(queue_root):
+    """Refuse a pre-flight that ran code the daemon will not run.
+
+    serve() records its checkout in daemon.json. The runner the daemon starts prepares and admits the session with that
+    checkout's files, so a check or submission from another checkout is valid only if every session file is the same."""
+    record = Path(queue_root)/'daemon.json'
+    if not record.is_file():
+        return
+    daemon = Path(json.loads(record.read_text())['root'])
+    if daemon.resolve() == ROOT.resolve():
+        return
+    revision = subprocess.run(['git', '-C', str(daemon), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+    differing = []
+    for name in session_files():
+        shown = subprocess.run(['git', '-C', str(daemon), 'show', revision+':'+name], capture_output=True)
+        if shown.returncode or shown.stdout != (ROOT/name).read_bytes():
+            differing.append(name)
+    require(not differing, 'the daemon runs %s; these session files differ: %s; land them and restart the daemon first'
+            % (revision[:12], ', '.join(differing)))
+
+
 def check_image(args):
     """Apply launch admission and prepare uploads without constructing a USB owner."""
+    require_daemon_code(getattr(args, 'queue', CACHE/'board-queue'))
     descriptor = args.descriptor or Path(str(args.image)+'.board.json')
     manifest = None
     if args.kind == 'npu' and 'ss_result_record' not in images.symbols(args.image):
@@ -1352,6 +1422,7 @@ class Queue:
     def submit(self, args):
         require(re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', args.worker), 'Invalid worker name.')
         require(bool(args.hypothesis.strip()), 'A nonempty hypothesis is required.')
+        require_daemon_code(self.root)
         reference = check_reference(args)
         wifi = None
         if getattr(args, 'wifi', None):
@@ -1633,6 +1704,9 @@ class Queue:
     def serve(self, once=False):
         with (self.root/'daemon.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
+            # The checkout whose files every runner this daemon starts will use (require_daemon_code).
+            save(self.root/'daemon.json', {'root': str(ROOT), 'pid': os.getpid(), 'started_revision': subprocess.run(
+                ['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()})
             self.recover()
             active = {}
             try:
@@ -1734,7 +1808,11 @@ def main(argv=None):
     run_options(submit,True)
     submit.add_argument('--worker',required=True)
     submit.add_argument('--hypothesis',required=True)
-    submit.add_argument('--no-wait',action='store_true')
+    waiting = submit.add_mutually_exclusive_group()
+    waiting.add_argument('--no-wait',action='store_true',help='Print the result path without waiting for the result.')
+    waiting.add_argument('--wait',action='store_true',
+                         help='Wait for the result, then print its outcome, stage, first failure and decoded summary before the path; '
+                              'exit 0 only for a returned image.')
     commands.add_parser('status')
     watch = commands.add_parser('watch')
     watch.add_argument('entry',nargs='?',help='Entry ID to wait for, or display status on changes.')
@@ -1761,8 +1839,17 @@ def main(argv=None):
         job = queue.submit(args)
         path = Path(job['result_path'])
         if not args.no_wait:
-            while not path.exists():
-                time.sleep(.2)
+            try:
+                while not path.exists():
+                    time.sleep(.2)
+            except KeyboardInterrupt:
+                print(f"still queued: {job['id']} (board.py watch {job['id']}); result will be {path}",file=sys.stderr)
+                return 130
+        if args.wait:
+            result = json.loads(path.read_text())
+            print('\n'.join(result_summary(result)))
+            print(path)
+            return 0 if result.get('outcome')=='returned' and not result.get('decoder_failures') else 1
         print(path)
     elif args.command=='status':
         print(json.dumps(queue.status(),indent=2))

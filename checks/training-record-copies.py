@@ -16,6 +16,9 @@ import shutil
 import struct
 
 ROOT=Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--restore-set', '{cache}/evidence/dram-restore-v5-1031/restore-set-v5.json', '--boot0', '{cache}/sources/board-boot/boot0_sdcard_orangepizero3w.fex', '--output', '{output}'],
+]
 def module(name,file):
     spec=importlib.util.spec_from_file_location(name,ROOT/'tools'/file)
     result=importlib.util.module_from_spec(spec);spec.loader.exec_module(result);return result

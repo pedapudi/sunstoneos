@@ -192,8 +192,8 @@ static int parents(struct a733_video_unit *u,int entry)
     if(!(u->config.program_pll&&entry&&u->pll_state!=PLL_ADOPTED)&&
        (n<53||n>105||24000000u*n%m||24000000u*n/m!=u->config.module_hz))return 0;
     if(!(u->shared&A733_CLOCK_PERI0))return 1;
-    if(a733_video_unit_read(u,CCU+0xa0,&pll)!=1||(pll&0xfe000000u)!=0xfe000000u||
-       (pll&(BIT(24)|BIT(1)))||a733_video_unit_read(u,CCU+0xa8,&pat)!=1||(pat&BIT(31))||
+    if(a733_video_unit_read(u,CCU+0xa0,&pll)!=1||!a733_clock_peri0_valid(pll)||
+       a733_video_unit_read(u,CCU+0xa8,&pat)!=1||(pat&BIT(31))||
        a733_video_unit_read(u,CCU+0xac,&pat)!=1||(pat&BIT(27))||
        a733_video_unit_read(u,CCU+0x1908,&gate)!=1||a733_video_unit_read(u,CCU+0x1988,&status)!=1)return 0;
     n=((pll>>8)&255)+1;if(n<53||n>105)return 0;

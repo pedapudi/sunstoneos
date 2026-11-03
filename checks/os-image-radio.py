@@ -32,6 +32,7 @@ from harness import machine as harness_machine
 from unicorn.arm64_const import UC_ARM64_REG_SP
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--build', '{build:resradio}', '--output', '{output}']]
 
 
 def main():

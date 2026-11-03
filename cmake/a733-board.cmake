@@ -59,7 +59,7 @@ foreach(source IN ITEMS
   drivers/usb/a733_typec.c drivers/usb/a733_typec_pd.c platform/a733/typec_native.c drivers/i2c/a733_twi.c drivers/i2c/a733_twi_native.c
   drivers/usb/a733_usb2_platform.c drivers/usb/a733_usb2_native.c drivers/usb/a733_xhci.c drivers/usb/a733_usb3_phy.c
   platform/a733/memory_uncached.c platform/a733/memory_reservations.c runtime/device_memory_pool.c
-  apps/board/radio.c drivers/net/a733_radio_session.c drivers/net/a733_radio_platform.c
+  apps/board/radio.c drivers/net/a733_radio_session.c drivers/net/a733_radio_platform.c drivers/net/a733_radio_result.c
   drivers/net/a733_radio_platform_native.c drivers/net/a733_radio_entropy.c
   drivers/net/aic8800_network.c drivers/net/aic8800_sdio_transport.c drivers/net/aic8800_sdio_codec.c
   drivers/net/aic8800_runtime.c drivers/net/aic8800_data.c drivers/net/aic8800_dispatch.c

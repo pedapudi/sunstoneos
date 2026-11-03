@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import struct
 import sys
+GATE_RUNS = [['{cache}/sources/radio/firmware/aic8800d80/fw_patch_table_8800d80_u02.bin']]
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]

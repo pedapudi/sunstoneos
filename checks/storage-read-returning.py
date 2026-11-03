@@ -77,6 +77,7 @@ from unicorn.arm64_const import (UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_
                                  UC_ARM64_REG_PSTATE, UC_ARM64_REG_CP_REG)
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by sd-return-native.py'
 sys.path.insert(0, str(ROOT / 'checks'))
 import harness  # noqa: E402
 

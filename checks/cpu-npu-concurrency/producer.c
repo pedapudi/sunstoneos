@@ -16,14 +16,14 @@ static uint64_t began;
 static const char *scenario,*destination;
 static struct ss_grant grant={.main_core=6,.worker_cores=0xbf};
 static uint64_t ns(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (uint64_t)t.tv_sec*1000000000+t.tv_nsec;}
-uint64_t ss_counter_ticks(void){return UINT64_C(24000000)+(ns()-began)*24/1000*4;}
+uint64_t ss_counter_ticks(void){return UINT64_C(24000000)+(ns()-began)*24/1000;}
 unsigned host_core(void){return !strcmp(scenario,"wrong-core")&&core==3?2:core;}
 const struct ss_grant *ss_grant(void){return &grant;}
 int ss_live(void){return 1;}
 /* Model the OS: throttled until the clock grant completes 30 ms after start,
  * as the initial THROTTLE state holds until every sensor has been read. */
 static int ready_now(void){return (ns()-began)>30000000;}
-static atomic_uint started;
+static atomic_uint started,thaw;
 int ss_throttled(void){return !ready_now()||(!strcmp(scenario,"throttle-after-ready")&&(ns()-began)>120000000)||(!strcmp(scenario,"throttle")&&atomic_load(&started));}
 
 void ss_thermal_status(struct ss_thermal_status *s)
@@ -40,7 +40,8 @@ void ss_activity_end(int success){if(!success)abort();}
 _Noreturn void ss_fail_value(uint32_t detail,uint32_t value){fprintf(stderr,"FIRST_FAULT detail=%08x value=%08x\n",detail,value);fflush(stderr);_Exit(2);}
 _Noreturn void ss_fail(uint32_t detail){ss_fail_value(detail,detail);}
 _Noreturn void ss_finish(const void *data,size_t bytes){FILE *f=fopen(destination,"wb");if(!f||fwrite(data,1,bytes,f)!=bytes||fclose(f))abort();_Exit(0);}
-static void *entry(void *argument){StaticTask_t *task=argument;core=task->core;if(!strcmp(scenario,"frozen-cpu1")&&core==1){struct timespec pause={0,200000000};nanosleep(&pause,NULL);}task->entry(task->argument);return NULL;}
+static void *entry(void *argument){StaticTask_t *task=argument;core=task->core;/* A frozen core makes no progress until the first busy window has closed. */
+    if(!strcmp(scenario,"frozen-cpu1")&&core==1){struct timespec pause={0,1000000};while(!atomic_load(&thaw))nanosleep(&pause,NULL);}task->entry(task->argument);return NULL;}
 TaskHandle_t xTaskCreateStaticAffinitySet(void (*fn)(void *),const char *name,unsigned words,void *arg,unsigned priority,StackType_t *stack,StaticTask_t *task,unsigned mask)
 {(void)name;(void)words;(void)priority;(void)stack;task->core=__builtin_ctz(mask);task->entry=fn;task->argument=arg;if(pthread_create(&task->thread,NULL,entry,task))return NULL;return task;}
 TaskHandle_t xTaskGetCurrentTaskHandle(void){return NULL;}
@@ -49,7 +50,7 @@ void vTaskDelay(unsigned ticks){struct timespec t={0,(long)(ticks?ticks:1)*10000
 void vTaskSuspend(void *unused){(void)unused;pthread_exit(NULL);}
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t condition=PTHREAD_COND_INITIALIZER;
-static atomic_uint request,answer,completions,busy;
+static atomic_uint request,answer,completions,busy,idle_reads;
 static unsigned jobs,kicks;
 static uint64_t irq_tick;
 static struct npu_runtime runtime;
@@ -69,7 +70,7 @@ int npu_service_observe(struct npu_service *s,void (*fn)(void *,const struct npu
 unsigned npu_service_irq_completions(const struct npu_service *s){(void)s;return atomic_load(&completions);}
 uint64_t npu_application_irq_ticks(void){return irq_tick;}
 unsigned npu_application_irq_count(void){return atomic_load(&completions);}
-static int idle(void *cookie,unsigned offset,uint32_t *value){(void)cookie;if(offset!=4)abort();*value=atomic_load(&busy)?0:0x7fffffff;return 1;}
+static int idle(void *cookie,unsigned offset,uint32_t *value){(void)cookie;if(offset!=4)abort();atomic_fetch_add(&idle_reads,1);*value=atomic_load(&busy)?0:0x7fffffff;return 1;}
 static void *service(void *unused)
 {
     (void)unused;core=1;
@@ -79,12 +80,20 @@ static void *service(void *unused)
         pthread_mutex_unlock(&lock);
         runtime.service.controller.state=3;runtime.service.controller.job.token=(void *)(uintptr_t)0x12340000;
         runtime.service.trigger_ticks=ss_counter_ticks();runtime.service.member[0].wait.ticket=++jobs;
-        atomic_store(&busy,1);observer(observer_cookie,&runtime.service,1);
+        atomic_store(&idle_reads,0);atomic_store(&busy,1);observer(observer_cookie,&runtime.service,1);
         if(!strcmp(scenario,"early-complete"))atomic_store(&busy,0);
-        uint64_t until=ns()+10000000;
+        /* The busy window is defined by events, not host time. The application reads the idle register
+         * again only after it accepted a candidate sample, that is after every worker core finished a chunk
+         * while the job was busy. A passing run holds the job busy until that second read, however long a
+         * loaded host takes to run the workers. A scenario that removes the overlap (early completion, a changed
+         * ticket or token, a frozen core) has none to wait for, so its window is ten polls. A hang guard of ten seconds only bounds a defective run. */
+        const int expect_overlap=strcmp(scenario,"early-complete")&&strcmp(scenario,"changed-ticket")&&
+            strcmp(scenario,"changed-token")&&strcmp(scenario,"frozen-cpu1");
+        const uint64_t guard=ns()+10000000000ull;unsigned polls=0;
         for(;;){
             pthread_mutex_lock(&lock);
-            if(ns()>=until){pthread_mutex_unlock(&lock);break;}
+            if((expect_overlap?atomic_load(&idle_reads)>=2:polls>=10)||ns()>=guard){pthread_mutex_unlock(&lock);break;}
+            ++polls;
             struct timespec deadline;clock_gettime(CLOCK_REALTIME,&deadline);
             deadline.tv_nsec+=1000000;if(deadline.tv_nsec>=1000000000){++deadline.tv_sec;deadline.tv_nsec-=1000000000;}
             pthread_cond_timedwait(&condition,&lock,&deadline);
@@ -93,7 +102,7 @@ static void *service(void *unused)
             if(!strcmp(scenario,"changed-token"))runtime.service.controller.job.token=(void *)(uintptr_t)0x56780000;
             observer(observer_cookie,&runtime.service,0);
         }
-        atomic_store(&busy,0);irq_tick=ss_counter_ticks();atomic_fetch_add(&completions,1);
+        atomic_store(&thaw,1);atomic_store(&busy,0);irq_tick=ss_counter_ticks();atomic_fetch_add(&completions,1);
         observer(observer_cookie,&runtime.service,2);
         atomic_store(&request,2);
     }

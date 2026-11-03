@@ -101,7 +101,7 @@ static void prepare_sources(void)
 {
     memset(&n,0,sizeof(n));memset(&m,0,sizeof(m));m.now=1;n.setup=1;n.pck=1;n.osc=0x10000002;
     n.ccu[0]=0xf8000000u|(99u<<8)|(99u<<16);
-    n.ccu[0xa0/4]=0xfe000000u|(99u<<8)|(1u<<20)|(2u<<16)|(4u<<2);
+    n.ccu[0xa0/4]=0xff000000u|(99u<<8)|(1u<<20)|(2u<<16)|(4u<<2);
     n.ccu[0x2e0/4]=0xf4000000u|(99u<<8)|(3u<<16);
     n.ccu[0x1908/4]=0x0fff0fff;n.ccu[0x1988/4]=0x0fff0000;
     n.ccu[0x1928/4]=0x00030003;n.ccu[0x19a8/4]=0x00030000;

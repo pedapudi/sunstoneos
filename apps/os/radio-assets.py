@@ -134,7 +134,7 @@ def validate(record, raw, flags, cache, board, bluetooth, require, *, frozen=Fal
         facts[group] = fact
     names = ('dcdc1', 'dcdc8', 'bldo5', 'cldo1')
     rails = struct.unpack_from('<4I', platform, 40)
-    require(rails[0] == 0 and all(v in (1, 2, 3) for v in rails[1:]) and
+    require(rails[0] == 0 and rails[1] == 2 and rails[2] == 3 and rails[3] in (2, 3) and
             facts['topology'].get('rails') == dict(zip(('vbat', 'pg', 'pm', 'vddio'), (names[v] for v in rails))), 'Fitted rail routing absent or different.')
     pins = facts['pins']
     for key, offset in [('expected', 80), ('desired', 104)]:

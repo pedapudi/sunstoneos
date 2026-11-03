@@ -10,6 +10,9 @@ import shutil
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--output', '{output}', '--freertos', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tcp', '{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7', '--headers', '{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include'],
+]
 
 
 def digest(path):
@@ -33,7 +36,7 @@ def main():
     def preserve():
         dependencies = {Path(__file__).resolve(), ROOT / 'docs/board-radio.md'}
         dependencies.update(ROOT / path for path in [
-            'apps/board/radio.c', 'apps/board/radio.h', 'apps/board/identity.h',
+            'apps/board/radio.c', 'apps/board/radio.h', 'drivers/net/a733_radio_result.c', 'include/a733_radio_result.h', 'apps/board/identity.h',
             'checks/board-radio.c', 'checks/board-radio-session.c','checks/board-radio-listener.c','apps/board/radio_profile.c',
             'drivers/net/a733_radio_session.c', 'include/a733_radio_session.h',
             'drivers/net/aic8800_sdio_transport.c', 'include/aic8800_sdio_transport.h',
@@ -103,7 +106,7 @@ def main():
             artifacts.append(artifact)
         for index, source in enumerate([] if a.listener_only else ['apps/board/radio.c', 'drivers/net/a733_radio_session.c',
                                         'drivers/net/aic8800_sdio_transport.c',
-                                        'drivers/net/a733_radio_entropy.c','drivers/net/a733_radio_platform.c']):
+                                        'drivers/net/a733_radio_entropy.c','drivers/net/a733_radio_platform.c','drivers/net/a733_radio_result.c']):
             artifact = out / ('native-' + str(index) + '.o')
             run('native-' + str(index), [a.cc, '--target=aarch64-none-elf', '-mcpu=cortex-a55',
                 '-ffreestanding', '-fno-builtin', '-mgeneral-regs-only', *common,

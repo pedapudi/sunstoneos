@@ -8,6 +8,9 @@ import re
 import shutil
 import subprocess
 import sys
+GATE_RUNS = [
+    ['--output', '{output}', '--typec', '.', '--twi', '.', '--port', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2/portable/GCC/ARM_AARCH64_SRE'],
+]
 
 
 def block(text, name):

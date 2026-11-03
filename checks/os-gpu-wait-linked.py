@@ -13,6 +13,7 @@ from elftools.elf.elffile import ELFFile
 from harness import machine as harness_machine, Image, hook_addresses, skip_crumbs
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_PC
+GATE_RUNS = [['--image', '{elf:ret-gpu}', '--output', '{output}']]
 
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--image',type=Path,required=True)

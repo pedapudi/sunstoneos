@@ -34,6 +34,8 @@ static inline int a733_radio_platform_native_address(uintptr_t a,unsigned writin
         }
     }
     if(a==UINT32_C(0x07090160))return !writing;
+    /* GPIO_POW_MOD_SEL/VAL and SGPIO_POW_MOD_SEL/VAL: read-only pad power words. */
+    if(a==UINT32_C(0x02000040)||a==UINT32_C(0x02000048)||a==UINT32_C(0x07025340)||a==UINT32_C(0x07025348))return !writing;
     if(a==UINT32_C(0x03400198))return 1; /* INTID194 disable word. */
     return !writing&&(a==UINT32_C(0x03400000)||a==UINT32_C(0x03400118)||
         a==UINT32_C(0x03400218)||a==UINT32_C(0x03400318));

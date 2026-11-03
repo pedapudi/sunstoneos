@@ -7,6 +7,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+GATE_RUNS = [['--evidence', '{output}']]
 if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 parser=argparse.ArgumentParser(description=__doc__)

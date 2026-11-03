@@ -6,6 +6,7 @@ from elftools.elf.elffile import ELFFile
 from unicorn import UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0
 ROOT=Path(__file__).resolve().parents[1]
+GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by storage-read-sd-modes.py'
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 base=module('storage_read_service_model',ROOT/'checks/storage-read-native.py')

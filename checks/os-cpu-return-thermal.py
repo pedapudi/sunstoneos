@@ -16,6 +16,7 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_PC, UC_ARM64_REG_X0, UC_ARM64_REG_X1
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--image', '{elf:ret-npu-load}', '--output', '{output}']]
 spec = importlib.util.spec_from_file_location('return_thermal', ROOT / 'apps/os/cpu-return-thermal.py')
 thermal = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(thermal)

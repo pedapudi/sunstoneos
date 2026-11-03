@@ -7,6 +7,7 @@ import pathlib
 import subprocess
 import shutil
 import sys
+GATE_RUNS = [['--evidence', '{output}']]
 
 root = pathlib.Path(__file__).resolve().parents[1]
 ap = argparse.ArgumentParser()

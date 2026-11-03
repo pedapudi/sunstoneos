@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Check the gate's input registry and its refusal of an affected check it cannot supply.
 
-tools/integration-gate.py runs the checks that need a built image, and must not skip them silently. checks/gate-inputs.json lists
-the images the gate builds, the checks it runs on them, the checks that need a board, and the affected checks it may leave
-unrun, each waived with a reason. Cases:
-  registry   every named check exists and is not pure-host; every image a command names is a gate variant or a recipe; each
-             recipe has a configure list, a target and an ELF name; no check is registered and waived at once; every waiver has
-             a reason; no waiver names a check that no longer exists or that runs without inputs;
-  coverage   every non-pure-host check of the index is registered, waived, or needs a board (so the gate has an answer for it);
+tools/integration-gate.py runs the checks that need a built image, and must not skip them silently. Each check that is not
+pure-host declares its answer at the top of its own file: GATE_RUNS (the argument lists of the gate's runs), GATE_BOARD (a
+reason it needs a board) or GATE_WAIVED ("category | reason", for a helper module). tools/gate_images.py holds the image
+recipes. Cases:
+  registry   no pure-host check declares an answer; every image a run names is a gate variant or a recipe; each recipe has a
+             configure list, a target and an ELF name; no check declares two answers; every waiver has a category and a reason;
+  coverage   every non-pure-host check of the index declares an answer, or needs only a board or USB access;
   refusal    a check that is affected but in no list is unsupplied, naming the check, and a registered one is supplied; a check
              needing USB access is reported as a board check and does not refuse; removing a registry entry makes its check
              unsupplied (mutation);
@@ -28,7 +28,7 @@ import harness
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))      # tools/integration-gate.py imports host_evidence
-CHECK_INPUTS = ['tools/integration-gate.py', 'checks/gate-inputs.json', 'checks/harness.py']
+CHECK_INPUTS = ['tools/integration-gate.py', 'tools/gate_images.py', 'checks/harness.py']
 # Checks that execute an integrated OS image under Unicorn. Each uses the one machine of checks/harness.py.
 IMAGE_EXECUTING = ('fault-capture os-gpu-return os-gpu-quiesce os-gpu-untouched os-gpu-unconstructed os-gpu-wait-linked '
                    'os-image-audio os-image-headset os-image-identity os-image-radio os-audio-replay '
@@ -51,20 +51,17 @@ def main():
     gate = load('gate_inputs_gate', ROOT / 'tools/integration-gate.py')
     affected = load('gate_inputs_affected', ROOT / 'checks/affected.py')
     index = affected.indexer.generate()
-    inputs = gate.load_gate_inputs(ROOT)
+    inputs = gate.load_gate_inputs(index)
     for name, recipe in inputs['images'].items():
         assert recipe['configure'] and recipe['target'] and recipe['elf'].endswith('.elf') and name not in gate.VARIANTS, name
-    for name, record in inputs['checks'].items():
-        assert name in index and not index[name]['pure_host'], (name, 'registered check is absent or runs without inputs')
-        assert record['runs'], name
-        for run in record['runs']:
-            for kind, image in gate.placeholders(run['args']):
+    for name, entry in index.items():
+        answers = [key for key in ('runs', 'board', 'waived') if key in entry['gate']]
+        assert len(answers) <= 1 and not (answers and entry['pure_host']), (name, answers, 'declares more than one answer, or runs without inputs')
+        for run in entry['gate'].get('runs', ()):
+            assert run and all(isinstance(a, str) for a in run), (name, 'a run needs string arguments')
+            for kind, image in gate.placeholders(run):
                 assert (image in inputs['bundles'] if kind == 'bundle' else image in gate.VARIANTS or image in inputs['images']), (name, image)
-            assert run['args'], (name, 'a run needs arguments')
-    assert not set(inputs['checks']) & set(inputs['waived']), 'a check is registered and waived'
-    assert not set(inputs['board']) & (set(inputs['checks']) | set(inputs['waived']))
-    for name, reason in inputs['waived'].items():
-        assert name in index and not index[name]['pure_host'] and ' | ' in reason, (name, 'stale waiver, or no "category | reason"')
+        assert ' | ' in entry['gate'].get('waived', ' | '), (name, 'a waiver needs "category | reason"')
     unanswered = []
     for name, entry in sorted(index.items()):
         if entry['pure_host'] or entry.get('library'):
@@ -73,7 +70,7 @@ def main():
         if name in inputs['checks'] or name in inputs['waived'] or name in inputs['board'] or entry.get('usb') or set(needs) <= gate.BOARD_NEEDS:
             continue
         unanswered.append(name)
-    assert not unanswered, ('checks with no registry answer; register or waive them', unanswered[:10])
+    assert not unanswered, ('checks with no registry answer; declare GATE_RUNS, GATE_BOARD or GATE_WAIVED in them', unanswered[:10])
     # refusal
     probe = {'check': 'os-failure-return.py', 'needs': ['elf', '--out']}
     assert gate.classify_affected([probe], index, inputs)['supplied'] == ['os-failure-return.py']

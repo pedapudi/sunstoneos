@@ -24,6 +24,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['{output}']]
 CACHE = Path.home() / '.cache/sunstoneos'
 ROM = CACHE / 'evidence/rom-copy-20261016-084055/physical-rom.bin'
 ROM_SHA = 'a8e31821e8a1611d'

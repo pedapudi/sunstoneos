@@ -11,6 +11,9 @@ CHECK_INPUTS = ['runtime/gpu_call.S', 'include/pvr_gpu_call.h',
                 'patches/freertos-gpu-call.patch', 'patches/freertos-smp-asm.patch',
                 'patches/freertos-smp-c.patch', 'patches/freertos-smp-macro.patch',
                 'platform/qemu-smp', 'checks/gpu-call.c', 'checks/gpu-call-abi.S']
+GATE_RUNS = [
+    ['--freertos', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--clang', '/usr/lib/llvm-21/bin/clang', '--linker', '{cache}/host/usr/lib/llvm-21/bin/ld.lld', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64', '--output', '{output}'],
+]
 
 
 def main():
@@ -95,7 +98,7 @@ def main():
         run([a.linker, '-T', root / 'platform/qemu-smp/link.ld', '--gc-sections',
              '-Map=' + str(case_dir / 'gpu-call.map'), *linked, '-o', elf])
         command = [a.qemu, '-machine', 'virt,gic-version=3,secure=off,virtualization=off',
-                   '-cpu', 'cortex-a55', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
+                   '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a55', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
                    '-semihosting-config', 'enable=on,target=native', '-kernel', elf]
         output = run(command, timeout=15)
         (case_dir / 'run.log').write_text(output)

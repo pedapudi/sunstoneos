@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+GATE_RUNS = [['--evidence', '{output}', '--watchdog-include', 'include']]
 if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 

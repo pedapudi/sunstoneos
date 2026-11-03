@@ -9,6 +9,7 @@ import shutil
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['{cache}/sources/u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a', '{output}']]
 
 
 def block(text, pattern):

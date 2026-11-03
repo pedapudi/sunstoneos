@@ -230,7 +230,7 @@ static void model_setup(void)
     cis(0,1);cis(1,0);cis(2,1);m.card[0][0]=0x43;m.card[0][1]=3;m.card[0][8]=2;
     m.card[0][2]=4;m.card[0][3]=4;m.card[0][4]=0x80;m.card[1][0]=0x40;m.card[0][0x110]=64;
     struct a733_radio_platform_config p={.owner=42,.handoff=200,.deadline_us=50000000,.lifetime_deadline_us=120000000,
-        .topology={201,A733_RADIO_DCDC1,A733_RADIO_DCDC8,A733_RADIO_DCDC8,A733_RADIO_DCDC8},
+        .topology={201,A733_RADIO_DCDC1,A733_RADIO_BLDO5,A733_RADIO_CLDO1,A733_RADIO_BLDO5},
         .fabric={0,1u<<31,1u<<31},.fabric_hz={24000000,24000000,24000000},
         .card={.supported_ocr=0x00300000,.command_timeout=20000,.ready_poll_interval=1000}};
     for(unsigned i=0;i<8;++i)p.desired[i].function=i<6?2:i==6?0:1;

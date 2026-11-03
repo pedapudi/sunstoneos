@@ -7,8 +7,11 @@
 #include "sdio_card.h"
 #include <stdatomic.h>
 
-/* Rail identity describes authenticated wiring, not a selectable voltage.
- * The provider observes enabled 3.3V VBAT and 1.8V I/O profiles read-only. */
+/* The vendor wlan power path: VBAT is DCDC1 (3.3V, always on); PG is BLDO5 and
+ * PM is CLDO1, both 1.8V; module VDDIO is one of those two. Admission refuses
+ * any other map. If BLDO5 is off, the platform powers it on at 1.8V after PM1
+ * is low, then reads every supply back before the 10ms interval to PM1 high.
+ * DCDC1 and CLDO1 are never written. See docs/designs/radio-vendor-power-sequence.md. */
 enum a733_radio_rail { A733_RADIO_DCDC1, A733_RADIO_DCDC8,
     A733_RADIO_BLDO5, A733_RADIO_CLDO1 };
 struct a733_radio_topology {
@@ -25,8 +28,18 @@ struct a733_radio_platform_config {
     /* Fixed3.3V supply: supported OCR is a nonempty subset of bits20/21. */
     struct sdio_card_config card;
 };
+/* Platform startup stages, in order; READY is the last. Public so a result record can name the stage reached. */
+enum a733_radio_platform_stage {
+    RSTAGE_ACQUIRE, RSTAGE_RESERVE_RAILS, RSTAGE_WAIT_RAILS, RSTAGE_ADMIT, RSTAGE_RAILS, RSTAGE_BASELINE, RSTAGE_GIC_WAIT, RSTAGE_GUARD, RSTAGE_PINS, RSTAGE_POWER_ON, RSTAGE_POWER_WAIT, RSTAGE_VERIFY_RAILS, RSTAGE_SUPPLY_WAIT, RSTAGE_ENABLE_MODULE, RSTAGE_MODULE_SETTLE, RSTAGE_BUS_GATE, RSTAGE_RESET_WAIT, RSTAGE_RESET_RELEASE, RSTAGE_PREPARE, RSTAGE_PREPARING, RSTAGE_ENUMERATE, RSTAGE_ENUMERATING, RSTAGE_WIDE_READ, RSTAGE_WIDE_WRITE, RSTAGE_WIDEN, RSTAGE_WIDENING, RSTAGE_WIDE_VERIFY, RSTAGE_READY,
+    /* Shutdown, in order: PM1 low, controller quiesce, module and bus clocks off, BLDO5 off, DOWN. */
+    RSTAGE_SHUTDOWN_PM1, RSTAGE_SHUTDOWN_CONTROLLER, RSTAGE_SHUTDOWN_CONTROLLER_WAIT, RSTAGE_SHUTDOWN_CLOCKS,
+    RSTAGE_SHUTDOWN_POWER, RSTAGE_SHUTDOWN_POWER_WAIT, RSTAGE_DOWN,
+    /* Failure shutdown: after the power-on writes, a failure first drives PM1 low, stops the SDC1 clocks and
+     * turns BLDO5 off, each read back where the hardware still answers, and only then retains. */
+    RSTAGE_ABORT_PM1, RSTAGE_ABORT_CLOCKS, RSTAGE_ABORT_POWER, RSTAGE_ABORT_POWER_WAIT
+};
 enum a733_radio_platform_result { A733_RADIO_PENDING, A733_RADIO_BUSY,
-    A733_RADIO_READY, A733_RADIO_RETAINED, A733_RADIO_INVALID };
+    A733_RADIO_READY, A733_RADIO_RETAINED, A733_RADIO_INVALID, A733_RADIO_DOWN };
 /* Bounded, non-reentrant callbacks. Physical admission authenticates the exact
  * handoff, board topology and scope token; excludes console/storage/card/DMA,
  * remote firmware, GIC handlers and all independent module reset/power writers.
@@ -84,7 +97,20 @@ struct a733_radio_platform {
     uint64_t deadline,last_now,wait_since;
     uint32_t selected_mhz[3],initial_module,initial_bus,running_module;
     unsigned initialized,stage,fault,held,retained,core_call,rail_count,rail_index,rail_retained;
-    unsigned four_bit,card_pending,bus_interface;
+    unsigned four_bit,card_pending,bus_interface,power_on,rail_verify,guard_done,first_run_guard;
+    /* already_on: the first-run guard found BLDO5 on at 1.8V with PG at 1.8V (a reset left it on), so the two
+     * power-on writes are skipped. aborting/abort_done/abort_flags: the failure shutdown (bit0 ran, bit1 PM1 low,
+     * bit2 clocks off, bit3 BLDO5 off; all of bits 1 to 3 that applied read back matched sets bit4). */
+    unsigned already_on,aborting,abort_done,abort_flags,abort_from;
+    /* Where the first failure was decided: the source line of the fail call and the stage then. Zero while healthy. */
+    unsigned fail_line,fail_stage;
+    /* The first-run guard refused before any write: nothing is powered and nothing needs undoing, so the failure
+     * releases the register lock instead of retaining it and the lifetime can end normally. fail_line then holds
+     * 0x400 | PG bits (13:12 of GPIO_POW_VAL) << 4 | the unmet conditions (1 PG, 2 DCDC1, 4 BLDO5, 8 CLDO1). */
+    unsigned refused;
+    /* GPIO_POW_MOD_SEL, GPIO_POW_VAL, SGPIO_POW_MOD_SEL, SGPIO_POW_VAL as read
+     * by the first-run guard; valid once guard_done is set. */
+    uint32_t pad_power[4];
 };
 /* Pure scope planning and init; no MMIO. Fresh private storage only. All inputs,
  * managers, provider objects and callback contexts remain disjoint and live. */
@@ -101,6 +127,24 @@ int a733_radio_platform_bluetooth(struct a733_radio_platform *,const struct a733
  * lock, verifies the controller, and rereads CCCR before READY: a 25 MHz card
  * clock. A low-speed card stays at one bit. Physically unqualified. */
 int a733_radio_platform_four_bit(struct a733_radio_platform *);
+/* Request the first-run guard before the first poll (kept out of the wire
+ * profile's configuration). Before any PMIC write the platform also observes
+ * DCDC8 (recorded, never required) and the pad power words, and proceeds only
+ * if BLDO5 is off, PG reads unsupplied, CLDO1 is on at 1.8V and DCDC1 is on at
+ * selector code 23. Otherwise it keeps every observation and retains with no
+ * PMIC write. */
+int a733_radio_platform_first_run_guard(struct a733_radio_platform *);
+/* Shut the module down, with a readback for every step, so that the board can
+ * return normally. Only from READY, by the downstream owner that holds the borrow
+ * token and has stopped all card use: the host controller must be idle. Poll
+ * then runs, in order, PM1 low (read back from DATA), the controller quiesce (card
+ * clock stopped, interrupts masked, read back), the SDC1 module clock gate off and
+ * the bus gate and reset asserted (read back, INTID 194 still masked), and, if this
+ * run powered BLDO5 on, BLDO5 off with its enable byte read back. The result is
+ * A733_RADIO_DOWN when every readback matched; any mismatch retains. After DOWN the
+ * card and borrow are unusable. The deadline must lie after the current time and
+ * within the lifetime deadline. Physical operation unqualified. */
+int a733_radio_platform_shutdown(struct a733_radio_platform *,const struct a733_radio_borrow *,uint64_t deadline);
 /* Sample PM4 host-wake through the actual shared pin owner. Its level does
  * not establish controller readiness or acknowledge an interrupt. */
 enum a733_radio_platform_result a733_radio_platform_bluetooth_wake(struct a733_radio_platform *,

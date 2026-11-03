@@ -109,6 +109,39 @@ stored with the entry and the result.
 `submit` copies the image, inputs and session template into
 `~/.cache/sunstoneos/board-queue/entries/`. It blocks until a result exists and
 prints its JSON path. `--no-wait` prints the future result path immediately.
+`--wait` also prints the outcome, the stage, the first failure and the decoded
+summary before the path, and exits 0 only for a returned image whose decoder
+reports no failure.
+
+### Build, package, submit and wait
+
+Four commands take a source tree to a board result. None needs a script of its own:
+
+```sh
+python3 tools/configure.py SRC BUILD -DSUNSTONE_A733_OS=ON ...        # every pinned dependency path
+PATH=~/.cache/sunstoneos/host/usr/lib/llvm-21/bin:$PATH cmake --build BUILD --target sunstone-a733-os -j8
+python3 tools/session.py build BUILD/sunstone-a733-os.elf --out DIR --input IN0 --input IN1 \
+    [--npu-declaration MANIFEST.json] [--decoder FILE]
+python3 tools/board.py submit BUILD/sunstone-a733-os.elf --kind cpu-return --port any --worker NAME \
+    --template DIR/template --hypothesis TEXT --reference PATH#ANCHOR --wait
+```
+
+`tools/configure.py` takes the dependency paths from `sources.lock.json` through
+`checks/image_dependencies.py`, and refuses with the fetch command when one is
+missing. `tools/session.py build` writes the typed session of the image: the
+image identity and manifest digest, the service records the image links (thermal,
+CPU clock grant, NPU), the NPU catalogue digest, client model and pool from the
+image's symbols, and the board and evidence facts of `tools/session-facts.json`.
+It uses the encoder of `apps/os/host.py`, which the runner and the host admission
+also use, and it reads no earlier queue entry. A field that no source determines
+is an error that names it; an image with an audio, DMA or radio service, and a
+grant of any device, are refused because the facts file pins nothing for them.
+`tools/session.py check DIR [--admit]` decodes the session, compares it with the
+image and, with `--admit`, runs the image's own EL3 admission on it. An NPU image
+needs `--npu-declaration` (a manifest with an `npu` section, or a JSON object of
+`slots`, `in_flight`, `graphs` and `links`), because the image does not carry it.
+`--decoder` copies the application's decoder, which the application's own tool writes (for the graph study,
+`apps/npu-graphs/host.py`).
 `watch ENTRY_ID` waits for that entry; `watch` prints status when it changes.
 `--port 3-1` or `--port 3-3` fixes the target. `any` selects the first eligible
 board, respecting submission order among entries eligible for that board.
@@ -194,6 +227,18 @@ reason is stored in the entry's `preflight.override` and in the result, and the
 run is queued. An empty reason is refused. An image that is not a typed-session
 OS image (a probe, a USB class or rail-helper image, a finite NPU image) has no
 host admission; its entry records `preflight: not applicable` with the reason.
+
+A pre-flight is valid only if it ran the host code the daemon will run. The daemon
+records its checkout in `daemon.json` in the queue directory, and the runner it
+starts prepares and admits the session with that checkout's files. `submit` and
+`check` from another checkout compare every file that prepares or admits a
+session with the daemon checkout's `HEAD`. The set is derived, not listed:
+`board.session_files` follows what `tools/board.py`, `tools/board_images.py` and
+`tools/session.py` import, load and run, and the headers the C sources include.
+If any file differs, the tool refuses with `the daemon runs REVISION; these
+session files differ: ...; land them and restart the daemon first`. The daemon
+keeps running only the code on `bringup`. A daemon started before this record
+existed has no `daemon.json` and is not compared until it restarts.
 
 ### The recorded board words
 

@@ -506,6 +506,12 @@ def prepare(args, info, live, out, *, dma_binding=None):
     struct.pack_into('<3Q', prefix, 24, epoch, generation, lease)
     parts, address, identity = base.image_parts(Path(args.image))
     prefix[48:80] = identity
+    radio_profile = None
+    if 'os_radio_result_descriptor' in (info.get('symbols') or {}):
+        # The scanning radio image: a workload 3 session, a scan-only radio profile and the firmware it names.
+        scan = load('radio_scan_prepare', ROOT/'tools/radio_scan_prepare.py')
+        reference = (ROOT/'docs/designs/radio-vendor-power-sequence.md').read_bytes()
+        radio_profile = scan.apply(prefix, hashlib.sha256(reference).digest())
     if records.JPEG in services:
         # The JPEG service embeds the same board prefix. Rebind its session
         # identity together with the outer prefix, preserving its evidence.
@@ -551,6 +557,11 @@ def prepare(args, info, live, out, *, dma_binding=None):
         if part['data']:
             uploads.append((part['address'], write(out/f'segment-{i}.bin', part['data'])))
     uploads += [(u['address'], out/u['name']) for u in meta['uploads']]
+    radio_regions = []
+    if radio_profile is not None:
+        for radio_address, radio_name, radio_data in radio_profile[1]:
+            uploads.append((radio_address, write(out/radio_name, radio_data)))
+            radio_regions.append({'address': radio_address, 'bytes': len(radio_data)})
     # The launcher checks both sentinel words in this page before entry.
     blank = bytearray(16384)
     struct.pack_into('<I', blank, 0, 0x73307330)
@@ -560,7 +571,7 @@ def prepare(args, info, live, out, *, dma_binding=None):
     returning = load('prepare_return_geometry', tree/'apps/os/cpu-return-host.py')
     plan = dict(meta, epoch=epoch, generation=generation, uploads=uploads, launch=['exe', '0x52000'],
                 host_admission=host_admission, watchdog=info['watchdog'], format='generic', geometry=info['report_geometry'],
-                return_host=returning, input_regions=meta['uploads'], image_ram=returning.IMAGE_RAM)
+                return_host=returning, input_regions=list(meta['uploads']) + radio_regions, image_ram=returning.IMAGE_RAM)
     if getattr(args, 'wifi', None):
         # The credential is a separate input, uploaded by the runner from memory (Live.deliver_credential); it is not
         # a file of the bundle. Only its extent is known here, so the preservation list can cover it.
@@ -722,6 +733,8 @@ def capture(owner, plan, args):
         reads.append(('npu-stop', geo['npu_stop']['address'], geo['npu_stop']['bytes']))
     if 'cpu_rails' in geo:
         reads.append(('cpu-rails', geo['cpu_rails']['address'], geo['cpu_rails']['bytes']))
+    if 'radio_result' in geo:
+        reads.append(('radio-descriptor', geo['radio_result']['address'], geo['radio_result']['bytes']))
     # Preserve every returned object before decoding any of them. A malformed
     # application result must not hide the native retirement or GPU receipt.
     copied = {name: owner.read(address, size, out/(name + '.bin'))
@@ -749,6 +762,19 @@ def capture(owner, plan, args):
             except (ValueError, KeyError, struct.error) as error:
                 valid = False
                 decoded.update(npu_capture_status='malformed', npu_error=str(error))
+        if 'radio_result' in geo:
+            # The record is as long as its scan list: read it whole from where the descriptor says.
+            decoded['radio_descriptor_sha256'] = hashlib.sha256(copied['radio-descriptor']).hexdigest()
+            try:
+                channel = load('radio_result_channel', ROOT/'tools/radio_result_channel.py')
+                decoded['radio'], raw_radio = channel.read_record(
+                    lambda address, size, name: owner.read(address, size, out/(name + '.bin')),
+                    copied['radio-descriptor'], records.RAM)
+                decoded['radio_capture_sha256'] = hashlib.sha256(raw_radio).hexdigest()
+                decoded['radio_capture_status'] = 'decoded'
+            except (ValueError, KeyError, struct.error) as error:
+                valid = False
+                decoded.update(radio_capture_status='malformed', radio_error=str(error))
         if 'cpu_rails' in geo:
             decoded['cpu_rail_capture_sha256'] = hashlib.sha256(copied['cpu-rails']).hexdigest()
             try:

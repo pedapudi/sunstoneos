@@ -249,6 +249,37 @@ static void widen_step(struct sunxi_sdio *h)
         h->card_hz = 400000000u / (2u * divisor); h->wide = 1; h->state = SUNXI_SDIO_READY; return;
     }
 }
+int sunxi_sdio_quiesce(struct sunxi_sdio *h, uint64_t deadline)
+{
+    if (!h || h->entered || h->state != SUNXI_SDIO_READY || deadline <= h->last_now) return 0;
+    h->deadline = deadline; h->step = 0;
+    h->request = (struct sunxi_sdio_request){0}; h->result = (struct sunxi_sdio_result){0};
+    h->state = SUNXI_SDIO_QUIESCING; return 1;
+}
+static void quiesce_step(struct sunxi_sdio *h)
+{
+    uint32_t value;
+    switch (h->step) {
+    case 0:
+        if (!rd(h, CMD, &value) || (value & START) || !rd(h, STATUS, &value)) return;
+        h->result.status = value;
+        if (value & SUNXI_SMHC_STATUS_BUSY) return;
+        if (!controller_errors(h) || !wr(h, CLKCR, 0) || !barrier(h) || !wr(h, CMD, UPDATE)) return;
+        h->step = 1; return;
+    case 1:
+        if (!rd(h, CMD, &value) || (value & START)) return;
+        if (!rd(h, CLKCR, &value)) return;
+        if (value) { sunxi_sdio_stop(h, SUNXI_SDIO_SETUP_ERROR); return; }
+        if (!wr(h, IMASK, 0) || !wr(h, IDIE, 0) || !barrier(h)) return;
+        h->step = 2; return;
+    default: {
+        uint32_t clock, mask, dma;
+        if (!rd(h, CLKCR, &clock) || !rd(h, IMASK, &mask) || !rd(h, IDIE, &dma)) return;
+        if (clock || mask || dma) { sunxi_sdio_stop(h, SUNXI_SDIO_SETUP_ERROR); return; }
+        h->card_hz = 0; h->deadline = 0; h->state = SUNXI_SDIO_QUIESCED; return;
+    }
+    }
+}
 static void transfer_step(struct sunxi_sdio *h)
 {
     uint32_t raw, status, word;
@@ -309,7 +340,8 @@ static void transfer_step(struct sunxi_sdio *h)
 }
 void sunxi_sdio_poll(struct sunxi_sdio *h)
 {
-    if (!h || h->entered || h->state == SUNXI_SDIO_FAULT || h->state == SUNXI_SDIO_UNPREPARED || h->state == SUNXI_SDIO_DONE) return;
+    if (!h || h->entered || h->state == SUNXI_SDIO_FAULT || h->state == SUNXI_SDIO_UNPREPARED || h->state == SUNXI_SDIO_DONE ||
+        h->state == SUNXI_SDIO_QUIESCED) return;
     h->entered = 1;
     enum sunxi_sdio_state state = h->state;
     uint8_t step = h->step, seen = h->response_seen;
@@ -318,6 +350,7 @@ void sunxi_sdio_poll(struct sunxi_sdio *h)
     switch (h->state) {
     case SUNXI_SDIO_PREPARING: prepare_step(h); break;
     case SUNXI_SDIO_WIDENING: widen_step(h); break;
+    case SUNXI_SDIO_QUIESCING: quiesce_step(h); break;
     case SUNXI_SDIO_QUEUED: issue_step(h); break;
     case SUNXI_SDIO_ACTIVE: transfer_step(h); break;
     case SUNXI_SDIO_READY: {

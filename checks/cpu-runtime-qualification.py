@@ -17,6 +17,7 @@ from unicorn import UC_HOOK_CODE, UC_HOOK_MEM_WRITE, UC_HOOK_MEM_READ
 from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_LR
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by os-cpu-return-services.py'
 spec = importlib.util.spec_from_file_location('fault_capture', ROOT/'checks/fault-capture.py')
 fault = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fault)

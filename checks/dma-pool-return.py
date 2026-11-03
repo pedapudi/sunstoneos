@@ -8,6 +8,9 @@ import shlex
 from pathlib import Path
 import shutil
 import subprocess
+GATE_RUNS = [
+    ['--output', '{output}', '--freertos', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64', '--lld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld'],
+]
 
 HERE = Path(__file__).resolve().parent
 CASES = ('normal', 'changed-route', 'registry-busy', 'registry-transient')
@@ -112,7 +115,7 @@ set_target_properties(dma-pool-return PROPERTIES SUFFIX ".elf" LINK_DEPENDS "{li
             binary = out / (case + '.elf')
             shutil.copy2(build / 'dma-pool-return.elf', binary)
             output = run(case + '-execute', [str(args.qemu.resolve()), '-machine', 'virt,gic-version=3',
-                '-cpu', 'cortex-a53', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
+                '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a53', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
                 '-semihosting-config', 'enable=on,target=native', '-kernel', str(binary)], timeout=30)
             if 'PASS DMA pool return:' not in output or 'FAIL ' in output:
                 raise RuntimeError(f'{case} missed terminal result: {output}')

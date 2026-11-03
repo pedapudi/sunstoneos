@@ -1,6 +1,7 @@
 /* One finite staged CPU recognition. Service callbacks run on their existing
  * owners. Only the final per-core terminal stops the scheduler context. */
 #include "cpu-return.h"
+#include "sunstone_wifi_credential.h"
 #include "cpu-return-el0.h"
 #include "application.h"
 #include "os.h"
@@ -99,7 +100,11 @@ int os_cpu_return_task_privileged(void (*entry)(void *),void *argument)
 {(void)argument;return entry==terminal;}
 int os_cpu_return_start(void)
 {
+#ifdef SUNSTONE_A733_OS_RADIO_SCAN
+    if(board.session.workload!=3||board.session.deadline_us<=OS_CPU_RETURN_RESERVE_US+10000)return 0;
+#else
     if(board.session.workload!=2||board.session.deadline_us<=OS_CPU_RETURN_RESERVE_US+10000)return 0;
+#endif
     for(unsigned c=0;c<8;++c){
         terminal_handle[c]=xTaskCreateStaticAffinitySet(terminal,"os-cpu-return",1024,(void *)(uintptr_t)c,
             configMAX_PRIORITIES-1,terminal_stack[c],&terminal_state[c],(UBaseType_t)1<<c);
@@ -273,6 +278,16 @@ void os_cpu_return_supervise(void)
     if(!atomic_load_explicit(&thermal_done,memory_order_acquire))return;
 #ifdef SUNSTONE_A733_OS_DMA
     if(!os_dma_return_ready())return;
+#endif
+#ifdef SUNSTONE_A733_OS_RADIO
+    /* The credential leaves RAM, at EL1, before the return proceeds. */
+    os_wifi_credential_poll();
+    if(!os_wifi_credential_wiped())return;
+#endif
+#ifdef SUNSTONE_A733_OS_RADIO_SCAN
+    /* The module is shut down, with its readbacks, while the PMIC service can still turn BLDO5 off. */
+    os_radio_scan_return_request();
+    if(!os_radio_scan_return_ready())return;
 #endif
     if(!atomic_exchange_explicit(&pmic_stop,1,memory_order_acq_rel))xTaskNotifyGive(board.handles[0]);
     if(!atomic_load_explicit(&pmic_done,memory_order_acquire))return;

@@ -11,6 +11,9 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--output', '{output}', '--freertos', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--firmware', '{cache}/sources/gpu/rogue_36.56.104.183_v1.fw', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64', '--lld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld'],
+]
 
 
 def sha(path):
@@ -137,7 +140,7 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
             selected.write_bytes(payload)
             log = run('mode-' + str(mode), [str(args.qemu.resolve()),
                 '-machine', 'virt,gic-version=3,secure=off,virtualization=off',
-                '-cpu', 'cortex-a55', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
+                '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a55', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
                 '-semihosting-config', 'enable=on,target=native', '-kernel', str(selected)], timeout=15)
             assert 'PASS compute reservations:' in log, log
             results[str(mode)] = {'result': log.strip(), 'elf_sha256': sha(selected), 'selector_offset': selector_offset}

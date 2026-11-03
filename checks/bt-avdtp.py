@@ -7,6 +7,9 @@ import pathlib
 import re
 import shutil
 import subprocess
+GATE_RUNS = [
+    ['--source', '{cache}/sources/bluetooth-hci', '--l2cap-source', '{cache}/sources/bluetooth-l2cap', '--sdp-source', '{cache}/sources/bluetooth-sdp', '--sbc-source', '{cache}/sources/bluetooth-msbc', '--output', '{output}'],
+]
 p=argparse.ArgumentParser()
 p.add_argument('--source',type=pathlib.Path,required=True)
 p.add_argument('--l2cap-source',type=pathlib.Path,required=True)

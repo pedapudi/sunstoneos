@@ -17,6 +17,7 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_RE
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_LR, UC_ARM64_REG_PC
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--build', '{build:cpu-clock}', '--output', '{output}']]
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--build', type=Path, required=True)
 p.add_argument('--output', type=Path, required=True)

@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--reference-dir', '{cache}/sources/radio-sdio', '--evidence', '{output}']]
 REFERENCES = {
     "bsp/drivers/mmc/sunxi-mmc.c": "52c7f92db77290437b7818f3c3a92a2956c1ab637214794e56220d0dde99ce16",
     "bsp/drivers/mmc/sunxi-mmc.h": "0945ee0ea5e47082c2ff159e578380671f86f4cd797f4fb3a853bc6f8cde0da3",
@@ -30,7 +31,7 @@ def main():
     parser.add_argument("--reference-dir", required=True, type=Path)
     parser.add_argument("--evidence", required=True, type=Path)
     parser.add_argument("--cc", default="cc")
-    parser.add_argument("--case", choices=["all", "select-io", "cis-shape", "reinit", "widen"], default="all")
+    parser.add_argument("--case", choices=["all", "select-io", "cis-shape", "reinit", "widen", "quiesce"], default="all")
     args = parser.parse_args()
     evidence = args.evidence.resolve()
     if evidence == ROOT or ROOT in evidence.parents:

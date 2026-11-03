@@ -17,6 +17,7 @@ from unicorn.arm64_const import (UC_ARM64_REG_X0, UC_ARM64_REG_X1,
                                 UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_LR)
 
 CHECK_INPUTS = ['apps/latency/native.c', 'apps/latency/workload.c', 'include/sunstone_app.h']
+GATE_RUNS = [['--image', '{elf:ret-latency}', '--output', '{output}']]
 SCRATCH, SCRATCH_BYTES = 0x81000000, 0x10000
 RETURN = SCRATCH + 0x100
 CLOCK = b'CLOCK cpu_l_mhz=1794 cpu_b_mhz=2002 cpu_l_mv=1000 cpu_b_mv=1050 '

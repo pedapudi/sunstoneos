@@ -15,6 +15,9 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR
 from unicorn import arm64_const as registers
 from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_X0
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--output', '{output}', '--freertos', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973'],
+]
 def sha(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
 

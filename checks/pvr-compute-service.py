@@ -6,6 +6,9 @@ import json
 from pathlib import Path
 import struct
 import subprocess
+GATE_RUNS = [
+    ['--output', '{output}', '--freertos', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--firmware', '{cache}/sources/gpu/rogue_36.56.104.183_v1.fw', '--lld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64'],
+]
 
 
 def run(command, out, name, timeout=120):
@@ -125,7 +128,7 @@ set_target_properties(compute-model PROPERTIES SUFFIX ".elf")
         data = bytearray(original); struct.pack_into('<I', data, offsets[0], case)
         path = out / f'case-{case}.elf'; path.write_bytes(data)
         command = [str(a.qemu.resolve()), '-machine', 'virt,gic-version=3,secure=off,virtualization=off',
-                   '-cpu', 'cortex-a55', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
+                   '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a55', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
                    '-semihosting-config', 'enable=on,target=native', '-kernel', str(path)]
         output = run(command, out, f'case-{case}', 15)
         assert f'PASS compute service case 0x{case:016x};' in output, output

@@ -24,6 +24,10 @@ import json
 from pathlib import Path
 import re
 import sys
+GATE_RUNS = [
+    ['--firmware', '{cache}/sources/radio/firmware/aic8800d80', '--four-bit', '--profile', 'radio'],
+    ['--firmware', '{cache}/sources/radio/firmware/aic8800d80', '--four-bit', '--profile', 'headset'],
+]
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
@@ -97,7 +101,7 @@ def main():
     # Minimum waits the radio platform holds before the first card command.
     power_up_us = sum(int(source("drivers/net/a733_radio_platform.c",
                                  r"p->last_now-p->wait_since>=?(\d+)\)p->stage=" + stage).group(1))
-                      for stage in ("ENABLE_MODULE", "BUS_GATE", "RESET_RELEASE"))
+                      for stage in ("RSTAGE_ENABLE_MODULE", "RSTAGE_BUS_GATE", "RSTAGE_RESET_RELEASE"))
 
     spec = importlib.util.spec_from_file_location("radio_patch", ROOT / "tools/inspect-radio-patch.py")
     patch = importlib.util.module_from_spec(spec)

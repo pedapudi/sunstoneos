@@ -6,6 +6,7 @@ import json
 import pathlib
 import shutil
 import subprocess
+GATE_RUNS = [['--evidence', '{output}']]
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--sources', type=pathlib.Path, default=pathlib.Path.home()/'.cache/sunstoneos/sources')
@@ -31,6 +32,7 @@ references = {
 for name, digest in references.items():
     assert hashlib.sha256((args.sources/name).read_bytes()).hexdigest() == digest, name
 commands = []
+outputs = []
 compiler = shutil.which('clang-21') or shutil.which('clang')
 assert compiler
 
@@ -42,10 +44,11 @@ def run(command):
         f.write(result.stdout)
     (args.evidence/'commands.json').write_text(json.dumps(commands, indent=2)+'\n')
     print(result.stdout, end='')
+    outputs.append(result.stdout)
     if result.returncode:
         raise SystemExit(result.returncode)
 
-host_sources = ['drivers/net/a733_radio_platform.c', 'drivers/storage/sunxi_sdio.c',
+host_sources = ['drivers/net/a733_radio_platform.c', 'drivers/net/a733_radio_result.c', 'drivers/storage/sunxi_sdio.c',
                 'drivers/storage/sdio_card.c', 'drivers/clock/a733_clock_leases.c',
                 'drivers/power/a733_rail_leases.c', 'drivers/power/a733_pmic.c',
                 'drivers/gpu/a733_gpu_resources.c', 'drivers/pinctrl/a733_pins.c',
@@ -60,6 +63,40 @@ for source in host_sources:
 binary = args.evidence/'composed-radio'
 run(flags+objects+['-o', binary])
 run([binary])
+# The host decoder reads the records that the composition emitted.
+import sys
+sys.path.insert(0, str(root/'tools'))
+import radio_result
+records = {}
+for line in ''.join(outputs).splitlines():
+    if line.startswith('RESULT '):
+        _, name, hexdata = line.split()
+        records[name] = radio_result.decode(bytes.fromhex(hexdata))
+ready, scanned = records['ready'], records['ready-scanned']
+assert ready['stage'] == 'enumerated' and not ready['failed'] and ready['card']['function_count'] == 2
+assert ready['card']['rca'] == 0x1234 and ready['card']['ocr'] and ready['card']['functions']
+assert [r['rail'] for r in ready['rails']] == ['dcdc1', 'bldo5', 'cldo1'] and all(r['enabled'] for r in ready['rails'])
+assert scanned['stage'] == 'scanned' and scanned['scan']['listed'] == 2 and scanned['scan']['reported'] == 3
+assert [a['ssid'] for a in scanned['scan']['aps']] == ['guest', 'lab'] and scanned['scan']['aps'][0]['channel'] == 36
+assert scanned['scan']['aps'][1]['rssi_dbm'] == -55 and scanned['scan']['aps'][1]['channel'] == 6
+assert scanned['identity']['chip_word'] == 0x00080001
+many = records['ready-many']
+assert many['scan']['listed'] == 302 and many['scan']['reported'] == 303 and many['scan']['dropped'] == 0
+assert len(many['scan']['aps']) == 302 and many['stage'] == 'scanned'
+for name in ('ready', 'ready-scanned', 'ready-many'): # The decoder reads the length from the head.
+    raw = [bytes.fromhex(l.split()[2]) for l in ''.join(outputs).splitlines() if l.startswith('RESULT ' + name + ' ')][0]
+    assert radio_result.record_length(raw[:radio_result.HEAD_BYTES]) == len(raw)
+guard = records['guard-ready']
+assert guard['guard']['asked'] and guard['pad_power']['pg'] == 'invalid' and guard['pad_power']['pm'] == '1.8V'
+assert [r['rail'] for r in guard['rails']] == ['dcdc1', 'dcdc8', 'bldo5', 'cldo1'] and guard['rails'][1]['selector'] == 100
+on = records['already-on']
+assert on['bldo5_already_on'] and on['shutdown_readbacks_matched'] and not on['guard']['bldo5_powered_on']
+shut = records['failure-shutdown']   # the last of the failure cases: a failing PM1 write after power-on
+assert shut['failed'] and shut['failure_shutdown']['ran'] and not shut['failure_shutdown']['matched']
+refused = records['guard-pg-supplied']
+assert refused['failed'] and refused['stage'] == 'rails-observed' and refused['failed_at'] == 'guard-passed'
+assert refused['pad_power']['pg'] == '3.3V' and refused['guard']['observed']
+assert refused['platform_failure'] and refused['platform_failure']['line'] > 0 and records['ready']['platform_failure'] is None
 
 kernel = args.sources/'FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2'
 smp_port = args.evidence/'smp-port'
@@ -68,7 +105,7 @@ run(['patch', '--silent', '-o', smp_port/'portmacro.h',
      kernel/'portable/GCC/ARM_CR82/portmacro.h', root/'patches/freertos-smp-macro.patch'])
 native = [compiler, '--target=aarch64-none-elf', '-std=c11', '-O2', '-ffreestanding',
           '-fno-builtin', '-Wall', '-Wextra', '-Werror']
-for source in ['drivers/net/a733_radio_platform.c', 'drivers/net/a733_radio_platform_native.c']:
+for source in ['drivers/net/a733_radio_platform.c', 'drivers/net/a733_radio_platform_native.c', 'drivers/net/a733_radio_result.c']:
     variants = ['single', 'smp'] if source.endswith('_native.c') else ['single']
     for variant in variants:
         obj = args.evidence/(pathlib.Path(source).stem+'-'+variant+'.o')

@@ -58,10 +58,16 @@ __attribute__((noinline)) void board_fail_note(uint32_t site,uint32_t value,cons
     (void)site;(void)value;(void)caller;
 #endif
 }
+#ifdef SUNSTONE_A733_OS_RADIO
+/* Set by an application failure (ss_fail), which runs at EL0, where the wipe's cache maintenance traps: the radio
+ * owner then wipes at EL1 (os_wifi_credential_poll). */
+_Atomic unsigned board_fail_from_el0;
+#endif
 __attribute__((noinline)) void board_fail(void *context)
 {
 #ifdef SUNSTONE_A733_OS_RADIO
-    os_wifi_credential_wipe();   /* a fault ends the session: the Wi-Fi credential leaves RAM first (EL1 only) */
+    /* A fault ends the session: the Wi-Fi credential leaves RAM first (EL1 callers only). */
+    if(!atomic_load_explicit(&board_fail_from_el0,memory_order_acquire))os_wifi_credential_wipe();
 #endif
  board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD)|SUNSTONE_CRUMB_FAIL_RETURN,(uint32_t)(uintptr_t)context,
     __builtin_return_address(0));fail_close();}
@@ -143,15 +149,24 @@ static void power(void *unused)
 static void radio_owner(void *unused)
 {
     (void)unused;for(;;){
+#ifdef SUNSTONE_A733_OS_RADIO
+        os_wifi_credential_poll(); /* EL1: the credential leaves RAM once the application has finished */
+#endif
         if(!board_live(NULL)){
             (void)board_radio_external_failure(&radio);
             atomic_store_explicit(&board.radio_result,3,memory_order_release);
         }else if(atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)){
             enum board_radio_result r=board_radio_poll(&radio);
+#ifdef SUNSTONE_A733_OS_RADIO_SCAN
+            os_radio_scan_step(&radio,(int)r);
+#endif
             if(r==BOARD_RADIO_RETAINED||r==BOARD_RADIO_INVALID){
                 atomic_store_explicit(&board.radio_result,3,memory_order_release);
-                atomic_fetch_or_explicit(&board.watchdog_state,4,memory_order_release);
-                a733_typec_revoke(&board.typec.provider);
+                /* A guard refusal before any write is not a board failure: nothing was powered. */
+                if(!radio.platform.refused){
+                    atomic_fetch_or_explicit(&board.watchdog_state,4,memory_order_release);
+                    a733_typec_revoke(&board.typec.provider);
+                }
             }
         }
         vTaskDelay(1);
@@ -260,13 +275,16 @@ static const struct board_radio_profile *radio_profile(void)
     if(!board_radio_profile_runtime(&runtime_profile,p,s,runtime_profile_digest))return NULL;
     p=&runtime_profile;
 #endif
+    /* A scan-only profile builds no crypto engine, so its CE facts are not checked. */
+    unsigned scan=board_radio_profile_scan_only(p);
     if(p->platform.handoff!=s->generation||
        p->platform.topology.identity!=s->topology||p->platform.lifetime_deadline_us>s->deadline_us-10000||
-       p->ce.handoff!=s->generation||memcmp(p->platform.fabric,s->fabric,sizeof(s->fabric))||
-       memcmp(p->platform.fabric_hz,s->fabric_hz,sizeof(s->fabric_hz))||
-       memcmp(p->ce.fabric,s->fabric,sizeof(s->fabric))||memcmp(p->ce.fabric_hz,s->fabric_hz,sizeof(s->fabric_hz)))return NULL;
+       (!scan&&(p->ce.handoff!=s->generation||
+       memcmp(p->ce.fabric,s->fabric,sizeof(s->fabric))||memcmp(p->ce.fabric_hz,s->fabric_hz,sizeof(s->fabric_hz))))||
+       memcmp(p->platform.fabric,s->fabric,sizeof(s->fabric))||
+       memcmp(p->platform.fabric_hz,s->fabric_hz,sizeof(s->fabric_hz)))return NULL;
     uint64_t owners[]={s->pmic_owner,s->usb0_owner,s->typec_owner,s->usb2_owner,p->platform.owner,p->ce.owner};
-    for(unsigned i=0;i<6;++i){
+    for(unsigned i=0;i<(scan?5u:6u);++i){
         if(!owners[i]){if(i==2||i==3){if(!a733_board_host_workload(s->workload))continue;}return NULL;}
         for(unsigned j=0;j<i;++j)if(owners[i]==owners[j])return NULL;
     }

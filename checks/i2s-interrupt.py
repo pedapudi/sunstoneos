@@ -9,6 +9,9 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--output', '{output}', '--freertos', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64', '--lld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld'],
+]
 LABELS = {0: 'queue-end-wake-bridges-each-period', 1: 'one-tick-fallback-without-delivery'}
 
 
@@ -89,7 +92,7 @@ set_target_properties(i2s-interrupt-model PROPERTIES SUFFIX ".elf"
         for case in map(int, args.cases.split(',')):
             label = LABELS[case]
             result = run(f'{case}-{label}', [str(args.qemu.resolve()),
-                '-machine', 'virt,gic-version=3,secure=off,virtualization=off', '-cpu', 'cortex-a55',
+                '-machine', 'virt,gic-version=3,secure=off,virtualization=off', '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a55',
                 '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
                 '-semihosting-config', 'enable=on,target=native', '-kernel', str(binary),
                 '-device', f'loader,addr=0x47fff008,data={case},data-len=4'], timeout=30)

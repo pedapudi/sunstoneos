@@ -367,6 +367,7 @@ static void phase_cases(void)
            "late publication retained; STOP spin ends %llu us after the STOP time read\n",
            cases,(unsigned long long)stop_spin_us);
 }
+static void count_data_write(void *count,uint8_t reg,uint8_t value){(void)reg;(void)value;++*(unsigned *)count;}
 int main(int argc,char **argv)
 {
     if(argc==2 && !strcmp(argv[1],"--decode")) {
@@ -407,6 +408,38 @@ int main(int argc,char **argv)
             assert(!refused.id && m.reads==reads && m.writes==writes);
         }
         assert(a733_rail_release(&m.rails,&supply,m.now+1000000)==A733_RAIL_READY);
+    }
+    /* Power-on of an enabled BLDO5 never writes: its programmed voltage stays. */
+    {
+        static unsigned data_writes;data_writes=0;
+        pmic_model_setup(&m);ready(&m);m.observer=&data_writes;
+        m.pmic_written=count_data_write;
+        struct a733_rail_token io={0};struct a733_pmic_request request;
+        assert(a733_rail_acquire(&m.rails,10,0,A733_RAIL_BIT(A733_RAIL_BLDO5),m.now+1000000,&io)==A733_RAIL_PENDING);
+        assert(a733_pmic_submit_power_on(&m.provider,10,&io,A733_RAIL_BLDO5,13,m.now+1000000,&request)==A733_PMIC_PENDING);
+        for(unsigned i=0;i<200 && !m.provider.failed;++i)pmic_model_step(&m);
+        assert(m.provider.failed && m.retained && !data_writes && m.pmic[0x2e]==13);
+        pmic_model_setup(&m);ready(&m);m.observer=&data_writes;m.pmic_written=count_data_write;
+        m.pmic[0x21]&=(uint8_t)~4u;m.pmic[0x2e]=0x3a;
+        assert(a733_rail_acquire(&m.rails,10,0,A733_RAIL_BIT(A733_RAIL_BLDO5),m.now+1000000,&io)==A733_RAIL_PENDING);
+        assert(a733_pmic_submit_power_on(&m.provider,10,&io,A733_RAIL_BLDO5,13,m.now+1000000,&request)==A733_PMIC_PENDING);
+        struct a733_pmic_snapshot got;finish(&m,&request,&got);
+        assert(data_writes==2 && m.pmic[0x2e]==0x2d && m.pmic[0x21]==0xff && got.enabled && got.decoded &&
+            got.programmed_uv==1800000 && got.selector==0x2d && got.enable==0xff && !m.i2c_held);
+        assert(a733_pmic_reap(&m.provider,&request)==A733_PMIC_COMPLETE);
+        /* The reverse: only the output this driver turned on, at its code; the selector is not written. */
+        data_writes=0;
+        assert(a733_pmic_submit_power_off(&m.provider,10,&io,A733_RAIL_CLDO1,13,m.now+1000000,&request)==A733_PMIC_INVALID);
+        assert(a733_pmic_submit_power_off(&m.provider,10,&io,A733_RAIL_BLDO5,12,m.now+1000000,&request)==A733_PMIC_INVALID);
+        assert(a733_pmic_submit_power_off(&m.provider,10,&io,A733_RAIL_BLDO5,13,m.now+1000000,&request)==A733_PMIC_PENDING);
+        finish(&m,&request,&got);
+        assert(data_writes==1 && m.pmic[0x21]==0xfb && m.pmic[0x2e]==0x2d && !got.enabled && got.enable==0xfb && !m.i2c_held);
+        assert(a733_pmic_reap(&m.provider,&request)==A733_PMIC_COMPLETE);
+        /* Already off: nothing to turn off, no write. */
+        data_writes=0;
+        assert(a733_pmic_submit_power_off(&m.provider,10,&io,A733_RAIL_BLDO5,13,m.now+1000000,&request)==A733_PMIC_PENDING);
+        for(unsigned i=0;i<200 && !m.provider.failed;++i)pmic_model_step(&m);
+        assert(m.provider.failed && !data_writes && m.pmic[0x21]==0xfb);
     }
     /* Independent DMA/autonomous engines refuse before pin transition. */
     const uintptr_t dirty[]={0x07083200,0x07083314,0x07083218,0x0340011c};

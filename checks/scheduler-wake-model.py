@@ -10,6 +10,7 @@ import resource
 import subprocess
 import sys
 import time
+GATE_RUNS = [['--tlc-jar', '{cache}/host/tla/tla2tools.jar', '--build-dir', '{output}']]
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]

@@ -11,6 +11,7 @@ import shutil
 import struct
 import subprocess
 import sys
+GATE_RUNS = [['--evidence', '{output}']]
 
 
 def pattern(size,seed):

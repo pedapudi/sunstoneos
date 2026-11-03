@@ -323,6 +323,25 @@ static void widen(void)
     for (unsigned i = 0; i < 20 && host.state == SUNXI_SDIO_WIDENING; ++i) tick_host();
     assert(host.result.error == SUNXI_SDIO_SETUP_ERROR && !host.wide); retained();
 }
+/* Controller shutdown: card clock stopped and interrupts masked, each read back. */
+static void quiesce(void)
+{
+    reset_model(); prepare(); enumerate();
+    assert(m.regs[0x04 / 4] == 1u << 16);
+    assert(!sunxi_sdio_quiesce(&host, m.now) && sunxi_sdio_quiesce(&host, m.now + 100) && !sunxi_sdio_quiesce(&host, m.now + 100));
+    struct sunxi_sdio_request request = { .command = 52, .argument = 0 };
+    assert(!sunxi_sdio_submit(&host, &request, m.now + 100)); /* No request while shutting down. */
+    for (unsigned i = 0; i < 6 && host.state == SUNXI_SDIO_QUIESCING; ++i) tick_host();
+    assert(host.state == SUNXI_SDIO_QUIESCED && !host.deadline && host.card_hz == 0);
+    assert(m.regs[0x04 / 4] == 0 && m.regs[0x30 / 4] == 0 && m.regs[0x8c / 4] == 0);
+    unsigned accesses = m.accesses; tick_host(); assert(m.accesses == accesses); /* Poll does nothing more. */
+    assert(!sunxi_sdio_submit(&host, &request, m.now + 100) && !sunxi_sdio_widen(&host, 8, m.now + 100));
+    /* A command still loading stops the shutdown from clearing the clock. */
+    reset_model(); prepare(); enumerate(); m.regs[0x18 / 4] |= 1u << 31; /* A command still loading. */
+    assert(sunxi_sdio_quiesce(&host, m.now + 100));
+    for (unsigned i = 0; i < 4; ++i) tick_host();
+    assert(host.state == SUNXI_SDIO_QUIESCING && m.regs[0x04 / 4] == 1u << 16);
+}
 static void cis_shape(void)
 {
     const uint8_t payloads[][3] = {{0x22, 0, 0}, {0x22, 1, 1}, {0x22, 1, 4}};
@@ -366,13 +385,15 @@ int main(int argc, char **argv)
         reinit_refusal(); puts("SDIO model: active and fault reinitialization refused without mutation or I/O");
     } else if (argc == 2 && strcmp(argv[1], "select-io") == 0) {
         select_and_io_fault(); puts("SDIO model: CMD7 status and partial FIFO I/O failure passed");
+    } else if (argc == 2 && strcmp(argv[1], "quiesce") == 0) {
+        quiesce(); puts("SDIO model: controller shutdown passed");
     } else if (argc == 2 && strcmp(argv[1], "widen") == 0) {
         widen(); puts("SDIO model: four-bit widening, level-sized bursts and module failure passed");
     } else if (argc == 2 && strcmp(argv[1], "cis-shape") == 0) {
         cis_shape(); puts("SDIO model: malformed function-extension tuple shapes rejected");
     } else {
         assert(argc == 1);
-        success(); faults(); select_and_io_fault(); cis_shape(); reinit_refusal(); widen();
+        success(); faults(); select_and_io_fault(); cis_shape(); reinit_refusal(); widen(); quiesce();
         puts("SDIO model: enumeration, identity transfer, byte/block PIO, IRQ ownership, four-bit widening and retained faults passed");
     }
     return 0;

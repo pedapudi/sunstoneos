@@ -4,7 +4,7 @@
 #ifndef SUNSTONE_AIC8800_RSN
 #error "Native radio session requires the actual RSN integration"
 #endif
-enum { PLATFORM,ADOPT,SETUP,IDENTITY,FIRMWARE,START_RUNTIME,DISPATCH,WIFI,DATA,MANAGEMENT,NETWORK,BOOTSTRAP,RECONNECT };
+enum { PLATFORM,ADOPT,SETUP,IDENTITY,FIRMWARE,START_RUNTIME,DISPATCH,WIFI,DATA,MANAGEMENT,NETWORK,BOOTSTRAP,RECONNECT,ENUMERATED };
 static int platform_outside(struct a733_radio_platform *b,const void *p,size_t n)
 {
     return a733_ranges_disjoint(b,sizeof(*b),p,n)&&a733_ranges_disjoint(b->clocks,sizeof(*b->clocks),p,n)&&
@@ -205,9 +205,15 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
             struct sdio_card *card;
             if(!a733_radio_platform_borrow(s->platform,s->config.owner,&s->borrow,&card)||
                 card!=&s->platform->card)return leave(s,fail(s));
-            s->stage=ADOPT;
+            s->stage=(s->config.enumeration_only&&!s->config.identity_only)?ENUMERATED:ADOPT;
+            if(s->stage==ENUMERATED)return leave(s,A733_SESSION_ENUMERATED);
         }
         return leave(s,r==A733_RADIO_BUSY?A733_SESSION_BUSY:A733_SESSION_PENDING);
+    }
+    if(s->stage==ENUMERATED){
+        /* Nothing runs on the card: only the platform's own health is observed. */
+        enum a733_radio_session_result held=live(s);
+        return leave(s,held==A733_SESSION_PENDING?A733_SESSION_ENUMERATED:held);
     }
     enum a733_radio_session_result health=live(s);
     if(health!=A733_SESSION_PENDING)return leave(s,health);
@@ -228,6 +234,7 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
     case IDENTITY:
         aic8800_transport_poll(t);
         if(t->state==AIC8800_TRANSPORT_COMPLETE){
+            if(s->config.identity_only){s->stage=ENUMERATED;return leave(s,A733_SESSION_ENUMERATED);}
             if(!aic8800_transport_load_firmware(t,&s->firmware,s->deadline))return leave(s,fail(s));
             s->stage=FIRMWARE;
         }

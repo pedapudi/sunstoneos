@@ -171,6 +171,13 @@ void ss_usb_wait(uint32_t wait_us)
     if(application_wait_until(now+(wait_us?wait_us:1))==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
 }
 int ss_throttled(void){return os_thermal_throttled();}
+#ifdef SUNSTONE_A733_OS_RADIO
+void os_wifi_credential_poll(void)
+{if((os_application_finished()||!board_live(NULL))&&!os_wifi_credential_wiped())os_wifi_credential_wipe();}
+#endif
+#ifndef SUNSTONE_A733_OS_RADIO_SCAN
+void ss_radio_status(struct ss_radio_status *status){*status=(struct ss_radio_status){0};}
+#endif
 int ss_clock_ready(void)
 {
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
@@ -441,14 +448,24 @@ int os_application_prepare(void)
     return 1;
 }
 /* The first-failure record names the detail and the caller of ss_fail. */
+/* The application fails at EL0: board_fail must not run the credential wipe (dc civac traps at EL0). The radio owner
+ * wipes at EL1 once the board is no longer live (os_wifi_credential_poll). */
+#ifdef SUNSTONE_A733_OS_RADIO
+extern _Atomic unsigned board_fail_from_el0;
+#define OS_FAIL_FROM_EL0() atomic_store_explicit(&board_fail_from_el0,1,memory_order_release)
+#else
+#define OS_FAIL_FROM_EL0() ((void)0)
+#endif
 __attribute__((noinline)) _Noreturn void ss_fail_value(uint32_t detail,uint32_t value)
 {
+    OS_FAIL_FROM_EL0();
     board_fail_at(SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_APPLICATION<<12|
         (detail&UINT32_C(0x7fff0fff)),value,__builtin_return_address(0));
     for(;;)vTaskSuspend(NULL);
 }
 __attribute__((noinline)) _Noreturn void ss_fail(uint32_t detail)
 {
+    OS_FAIL_FROM_EL0();
     board_fail_at(SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_APPLICATION<<12|(detail&0xfff),detail,
         __builtin_return_address(0));
     for(;;)vTaskSuspend(NULL);
@@ -497,8 +514,9 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
     }
 #endif
 #ifdef SUNSTONE_A733_OS_RADIO
-    /* The session is over: the Wi-Fi credential record leaves RAM before the result is published. */
-    os_wifi_credential_wipe();
+    /* The Wi-Fi credential does not leave RAM here: the wipe's cache maintenance (dc civac) traps at EL0, where
+     * this task runs. The radio owner and the return supervisor, both EL1, wipe once os_application_finished()
+     * holds (os_wifi_credential_poll); board_fail wipes directly. */
 #endif
     struct ss_result *r=(void *)ss_result_record;
     r->magic=SS_RESULT_MAGIC;r->version=SS_RESULT_VERSION;r->bytes=sizeof(*r)+ss_result_capacity;

@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 from harness import SANITIZE, environment
+GATE_RUNS = [['--evidence', '{output}']]
 
 p = argparse.ArgumentParser()
 p.add_argument('--evidence', type=pathlib.Path, required=True)

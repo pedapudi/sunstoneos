@@ -10,6 +10,12 @@
 #include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
 #include <string.h>
+/* The scanning station runs in workload 3 (radio without the USB host); the full station in 1. */
+#ifdef SUNSTONE_A733_OS_RADIO_SCAN
+#define OS_RADIO_WORKLOAD 3u
+#else
+#define OS_RADIO_WORKLOAD 1u
+#endif
 static struct board_radio_profile profile;
 static unsigned admitted;
 /* The board's own radio tasks are privileged by main.c. */
@@ -17,7 +23,7 @@ int os_radio_task_privileged(void (*entry)(void *),void *context){(void)entry;(v
 int os_radio_pins(struct a733_pin_handoff *pins)
 {
     const struct os_session *s=os_session_admitted();
-    if(!pins||!s||s->board.workload!=1||s->board.radio_profile_address!=UINT64_C(0x43000000)||
+    if(!pins||!s||s->board.workload!=OS_RADIO_WORKLOAD||s->board.radio_profile_address!=UINT64_C(0x43000000)||
        s->board.radio_profile_bytes!=sizeof(profile))return 0;
     static const struct a733_mapping_rule wb={A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
     if(!a733_mapping_check_pages(aarch64_device_translate,0x43000000,0x43000000,sizeof(profile),&wb))return 0;
@@ -40,5 +46,5 @@ const struct board_radio_profile *os_radio_profile(void){return admitted?&profil
 int os_radio_start(void)
 {
     const struct os_session *s=os_session_admitted();
-    return s&&s->board.workload==1&&board.handles[5]&&board.handles[6];
+    return s&&s->board.workload==OS_RADIO_WORKLOAD&&board.handles[5]&&board.handles[6];
 }

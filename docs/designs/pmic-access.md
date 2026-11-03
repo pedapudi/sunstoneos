@@ -3,7 +3,9 @@
 Status: **implemented and host-tested; qualified on the board for snapshots
 with an earlier barrier placement.** The current barrier placement (a `DSB SY`
 after every S_TWI0 `DATA` and `CNTR` store) has host evidence only. A DCDC3
-selector write through this provider is open.
+selector write through this provider is open. The provider also accepts one
+power-on request, for BLDO5 at 1.8 V; see
+[the radio power sequence](radio-vendor-power-sequence.md).
 
 The PMIC provider (`drivers/power/a733_pmic.c`) reads the AXP8191 over the
 always-on I2C controller S_TWI0. Its worker in five images is the power

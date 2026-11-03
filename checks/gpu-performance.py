@@ -8,6 +8,9 @@ from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--output', '{output}', '--sources', '{cache}/sources/gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination'],
+]
 
 
 def module(name):

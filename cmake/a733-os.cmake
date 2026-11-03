@@ -27,6 +27,15 @@ elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest.json")
   add_sunstone_image(sunstone-a733-os-hello LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION hello-compute)
+elseif(SUNSTONE_APPLICATION STREQUAL "radio-scan")
+  if(NOT SUNSTONE_A733_OS_RADIO_SCAN)
+    message(FATAL_ERROR "radio-scan needs SUNSTONE_A733_OS_RADIO_SCAN=ON (with RADIO, CPU_RETURN, CPU_CLOCK and A733_A76_ADMITTED)")
+  endif()
+  add_sunstone_application(radio-scan
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/radio-scan/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/radio-scan/manifest.json")
+  add_sunstone_image(sunstone-a733-os-radio-scan LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION radio-scan)
 elseif(SUNSTONE_APPLICATION STREQUAL "large-region-test")
   # The 1 GiB region needs the upper memory mapped, which the table builder does only after the address-test
   # decode check (cmake/a733-smp-cached.cmake).

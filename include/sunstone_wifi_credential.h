@@ -38,4 +38,13 @@ int ss_wifi_credential(const uint8_t **ssid, size_t *ssid_len, const uint8_t **p
  * Idempotent. */
 void os_wifi_credential_wipe(void);
 
+/* 1 once the record has been wiped. */
+int os_wifi_credential_wiped(void);
+
+/* EL1 only, from a task that every session end passes: wipe once the application has finished. The wipe
+ * executes cache maintenance (dc civac), which EL0 may not do, so ss_finish never calls it; the radio owner
+ * polls this every pass, the return supervisor before it lets the return proceed, and board_fail wipes
+ * directly. */
+void os_wifi_credential_poll(void);
+
 #endif

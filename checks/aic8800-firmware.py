@@ -9,6 +9,9 @@ import struct
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [
+    ['--artifacts', '{cache}/sources/radio/firmware/aic8800d80', '--reference-dir', '{cache}/sources/radio/kernel/drivers/net/wireless/aic8800/aic8800_bsp', '--evidence', '{output}'],
+]
 ARTIFACTS = {
     "fw_adid_8800d80_u02.bin": "a526cbd02fcdc495f049f3ad6b5933cb08cd984b16790c716a060d582fee1a56",
     "fw_patch_8800d80_u02.bin": "4ad4eede4d347c45ed61b23508e7843dc884f0e411bf957f95410001d0cfc4d0",
