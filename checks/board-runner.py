@@ -1259,6 +1259,35 @@ def removed_cases(out):
     passed('no-expectation-option-file-or-outcome')
 
 
+def daemon_code_cases(out):
+    """A check or submission whose session files differ from the daemon's checkout is refused, naming the files."""
+    import shutil, subprocess
+    root=out/'daemon-code';root.mkdir()
+    daemon=root/'daemon'
+    for name in board.session_files():
+        (daemon/name).parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(board.ROOT/name,daemon/name)
+    env={**os.environ,'GIT_AUTHOR_NAME':'c','GIT_AUTHOR_EMAIL':'c@e.invalid','GIT_COMMITTER_NAME':'c','GIT_COMMITTER_EMAIL':'c@e.invalid',
+         'GIT_CONFIG_GLOBAL':os.devnull,'GIT_CONFIG_SYSTEM':os.devnull}
+    def git(*a):subprocess.run(['git','-C',str(daemon),*a],check=True,capture_output=True,env=env)
+    git('init','-q');git('add','-A');git('commit','-qm','daemon checkout')
+    queue=board.Queue(root/'state');(queue.root/'daemon.json').write_text(json.dumps({'root':str(daemon)}))
+    args=arguments(root,submit=True);args.queue=queue.root
+    with patch.object(images,'inspect',return_value={'generic':False}),patch.object(board,'port_idle',return_value=True):
+        queue.submit(args);board.require_daemon_code(queue.root)
+        passed('daemon-code-identical-files-pass-submit-and-check')
+        (daemon/'tools/board_images.py').write_text('# an older copy\n');(daemon/'apps/os/host.py').write_text('# an older copy\n')
+        git('commit','-qam','older session files')
+        for action in (lambda:queue.submit(args),lambda:board.check_image(args)):
+            try:action()
+            except ValueError as error:
+                message=str(error)
+                assert 'the daemon runs' in message and 'apps/os/host.py, tools/board_images.py;' in message and 'apps/os/host.py' in message,message
+                assert message.endswith('land them and restart the daemon first'),message
+            else:raise AssertionError('a pre-flight on files the daemon does not run was accepted')
+        assert len(list((queue.root/'entries').glob('*/entry.json')))==1,'a refused submission was queued'
+        passed('daemon-code-differing-session-files-refuse-submit-and-check')
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out',type=Path,required=True)
@@ -1285,6 +1314,7 @@ def main():
         with patch.object(board,'port_idle',return_value=True):queue_integrity_cases(args.out)
     if 'policy' in groups:policy_cases(args.out)
     if 'preflight' in groups:preflight_cases(args.out)
+    if 'preflight' in groups:daemon_code_cases(args.out)
     if 'daemon' in groups:
         with patch.object(board,'port_idle',return_value=True):daemon_cases(args.out)
     if 'artifacts' in groups:artifacts(args.out)
