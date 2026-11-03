@@ -48,6 +48,8 @@ static uint64_t read_word(uint64_t pa)
     abort();
 }
 
+static uint64_t read_word_ctx(void *ctx, uint64_t pa) { (void)ctx; return read_word(pa); }
+
 /* ttbr0: table base | ASID << 48. kind: 0 EL0 read, 1 EL0 write, 2 EL1 read, 3 EL1 write. */
 static struct result walk(uint64_t ttbr0, uint64_t va, int kind)
 {
@@ -361,6 +363,18 @@ static void slot1_cases(void)
     /* The second owner has its blocks read-only, and none of the first owner's. */
     EXPECT(walk(tb, b0, 0), FAULT_NONE); EXPECT(walk(tb, b0, 1), FAULT_PERMISSION);
     EXPECT(walk(tb, a0, 0), FAULT_PERMISSION); EXPECT(walk(tn, a0, 0), FAULT_PERMISSION); EXPECT(walk(tn, b0, 0), FAULT_PERMISSION);
+    /* The OS's own walk of a space (app_space_el0_descriptor_with) gives the model walker's verdict for every address. */
+    {
+        struct app_space *spaces[3] = {&sa, &sb, &sn};
+        uint64_t points[] = {a0, a0 + 6 * MIB - 1, a0 - 1, a0 + 6 * MIB, a0 + 10 * MIB, b0, b0 + 4 * MIB - 1, 0x44000000, 0x80000000, 0x100000000};
+        for (unsigned i = 0; i < 3; ++i)
+            for (unsigned k = 0; k < sizeof points / sizeof points[0]; ++k)
+                for (int write = 0; write < 2; ++write) {
+                    struct result m = walk(app_space_ttbr0(spaces[i]), points[k], write);
+                    uint64_t d = app_space_el0_descriptor_with(spaces[i], points[k], write, read_word_ctx, 0);
+                    assert((d != 0) == (m.fault == FAULT_NONE));
+                }
+    }
     /* EL1 keeps read and write access to the owners' blocks, except to the read-only one. */
     EXPECT(walk(ta, a0, 3), FAULT_NONE); EXPECT(walk(tn, a0, 3), FAULT_NONE); EXPECT(walk(tn, a0, 2), FAULT_NONE);
     /* Below the floor every space is byte-identical to the kernel's table, entry by entry. */

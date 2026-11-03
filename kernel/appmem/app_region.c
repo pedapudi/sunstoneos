@@ -249,3 +249,27 @@ int app_space_build_l2(struct app_space *s, struct app_table_arena *a, const uin
     a->used = used;
     return APP_REGION_OK;
 }
+
+static uint64_t read_identity(void *ctx, uint64_t pa) { (void)ctx; return *(const volatile uint64_t *)(uintptr_t)pa; }
+
+uint64_t app_space_el0_descriptor_with(const struct app_space *s, uint64_t va, int write,
+                                       uint64_t (*read)(void *, uint64_t), void *ctx)
+{
+    if (!s || !s->root_physical || (va >> 39)) return 0;
+    uint64_t d = read(ctx, s->root_physical + ((va >> 30) & 511) * 8);
+    if ((d & 3) == 3) {
+        d = read(ctx, (d & APP_PTE_ADDR_MASK) + ((va >> 21) & 511) * 8);
+        if ((d & 3) == 3) {
+            d = read(ctx, (d & APP_PTE_ADDR_MASK) + ((va >> 12) & 511) * 8);
+            if ((d & 3) != 3) return 0;                    /* a level-3 leaf has bits [1:0] = 0b11 */
+        } else if ((d & 3) != 1) return 0;
+    } else if ((d & 3) != 1) return 0;                     /* a level-1 block */
+    if (!(d & APP_PTE_AF)) return 0;
+    unsigned ap = (unsigned)(d >> 6) & 3;
+    if (ap == 1) return d;                                 /* read-write at EL0 */
+    if (ap == 3 && !write) return d;                       /* read-only at both levels */
+    return 0;
+}
+
+uint64_t app_space_el0_descriptor(const struct app_space *s, uint64_t va, int write)
+{ return app_space_el0_descriptor_with(s, va, write, read_identity, 0); }

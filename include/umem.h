@@ -139,6 +139,13 @@ int umem_unmap(struct umem *, const struct umem_buf *, const struct umem_space_o
 
 /* The handle of the allocated extent that starts at base (a kernel path that knows the address, not the handle). */
 int umem_lookup(struct umem *, uint64_t base, struct umem_buf *out);
+/* Give the tail of a buffer back to the ledger: the buffer keeps its first new_bytes (a page multiple, at least a page).
+ * Refused with UMEM_BUSY unless the buffer is CPU-held and unmapped. The caller's handle keeps the old size; read the
+ * new one with umem_describe. */
+int umem_trim(struct umem *, const struct umem_buf *, uint64_t new_bytes);
+/* The largest extent a request with these constraints (policy, align, phys_max, window, device_mask) could take:
+ * *base is where it starts and *bytes its length. A following umem_alloc with UMEM_AT at *base takes exactly that. */
+int umem_largest(struct umem *, const struct umem_request *constraints, uint64_t *base, uint64_t *bytes);
 /* Owner of the byte at pa (0 when free or outside the ledger). */
 uint16_t umem_owner_of(struct umem *, uint64_t pa);
 /* The extents of one owner in address order; returns the count, calls out for the first `capacity`. */

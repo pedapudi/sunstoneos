@@ -570,6 +570,61 @@ int umem_unmap(struct umem *u, const struct umem_buf *b, const struct umem_space
     return r;
 }
 
+int umem_trim(struct umem *u, const struct umem_buf *b, uint64_t new_bytes)
+{
+    if (!u || !live(b) || !new_bytes || (new_bytes & (UMEM_PAGE - 1))) return UMEM_INVALID;
+    lock(u);
+    C *c = b->cell;
+    int r = UMEM_OK;
+    if (!live(b)) r = UMEM_NOT_OWNED;
+    else if (new_bytes > c->e.bytes) r = UMEM_INVALID;
+    else if (new_bytes == c->e.bytes) r = UMEM_OK;
+    else if (c->e.state != UMEM_CPU || c->e.maps || !(c->e.flags & E_READY)) r = UMEM_BUSY;
+    else if ((r = ensure(u, 4)) == UMEM_OK) {
+        C *tail = cell_get(u);
+        tail->e.kind = KIND_EXTENT;
+        tail->e.base = c->e.base + new_bytes;
+        tail->e.bytes = c->e.bytes - new_bytes;
+        tail->e.policy = c->e.policy;
+        tail->e.prio = next_prio(u);
+        uint64_t dirty = c->e.policy == UMEM_WB && (c->e.flags & (E_DIRTY | E_TOUCHED));
+        uint16_t owner = c->e.owner;
+        c->e.bytes = new_bytes;
+        tree_insert(u, tail);
+        release_extent(u, tail, dirty, owner);
+    }
+    unlock(u);
+    return r;
+}
+
+int umem_largest(struct umem *u, const struct umem_request *rq, uint64_t *base, uint64_t *bytes)
+{
+    if (!u || !rq || !base || !bytes || rq->policy > UMEM_NC || (rq->align && !pow2(rq->align)) || (rq->window && !pow2(rq->window)) ||
+        (rq->device_mask >> UMEM_DEVICES)) return UMEM_INVALID;
+    uint64_t align = rq->align > UMEM_PAGE ? rq->align : UMEM_PAGE, phys_max = rq->phys_max;
+    for (unsigned d = 0; d < UMEM_DEVICES; ++d)
+        if ((rq->device_mask >> d) & 1u && (!phys_max || u->device_limit[d] < phys_max)) phys_max = u->device_limit[d];
+    if ((rq->device_mask & UMEM_DEV_NPU) && align < (16u << 20)) align = 16u << 20;   /* the alignment of a large NPU buffer */
+    uint64_t best = 0, best_base = 0;
+    lock(u);
+    for (unsigned c = 0; c < UMEM_CELL_CLASSES; ++c)
+        for (C *f = u->free_head[rq->policy][c]; f; f = f->e.next) {
+            uint64_t s = align_up(f->e.base, align), end = f->e.base + f->e.bytes;
+            if (phys_max && end > phys_max) end = phys_max;
+            if (s >= end) continue;
+            if (rq->window) {
+                uint64_t w_end = (s & ~(rq->window - 1)) + rq->window;
+                if (end > w_end) end = w_end;
+            }
+            if (end - s > best) { best = end - s; best_base = s; }
+        }
+    unlock(u);
+    best &= ~(UMEM_PAGE - 1);
+    if (!best) return UMEM_NO_SPACE;
+    *base = best_base; *bytes = best;
+    return UMEM_OK;
+}
+
 int umem_lookup(struct umem *u, uint64_t base, struct umem_buf *out)
 {
     lock(u);

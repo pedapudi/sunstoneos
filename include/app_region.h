@@ -144,6 +144,14 @@ int app_space_build_view(struct app_space *, struct app_table_arena *, const uin
  * floor must be the kernel's EL1-only block with nG set, or unmapped. A null base_l2 refuses any region in slot 1. */
 int app_space_build_l2(struct app_space *, struct app_table_arena *, const uint64_t base_l1[512], const uint64_t base_l2[512],
                        const struct app_region_ledger *, uint16_t owner, uint16_t asid, unsigned flags);
+/* The descriptor through which EL0 reaches va in the space (a 1 GiB, 2 MiB or 4 KiB leaf), or 0 when EL0 cannot make the
+ * access: no valid leaf, or an access-permission field that denies it (a write needs read-write, AP[2:1] = 0b01). This
+ * is the walk the hardware makes for an EL0 access under the space's TTBR0, without needing the space installed. */
+uint64_t app_space_el0_descriptor(const struct app_space *, uint64_t va, int write);
+/* The same walk with the table words read through `read` (a host model's memory); the table addresses in the
+ * descriptors are physical addresses that `read` resolves, and root_physical names the root. */
+uint64_t app_space_el0_descriptor_with(const struct app_space *, uint64_t va, int write,
+                                       uint64_t (*read)(void *ctx, uint64_t physical), void *ctx);
 /* The TTBR0_EL1 word that installs the space: table base and ASID in bits 63:48. */
 static inline uint64_t app_space_ttbr0(const struct app_space *s)
 { return s->root_physical | ((uint64_t)s->asid << 48); }
