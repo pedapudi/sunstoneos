@@ -50,5 +50,11 @@ int main(int argc, char **argv)
         stop = (unsigned)a733_smp_refusal_detail(1, 1);
     }
     printf("refusal=0x%x decode=%u stop=0x%x\n", refusal, ok ? 0 : why, stop);
+#ifdef SUNSTONE_A733_OS_NPU
+    /* A refused NPU session says which declaration rule refused it (enum npu_declaration_result). */
+    if (!ok && why == A733_DECODE_SERVICE)
+        fprintf(stderr, "npu declaration result %d, client model %u (image %u)\n", (int)os_npu_declaration_admitted(&decoded.npu),
+                (unsigned)decoded.npu.client_model, (unsigned)os_npu_client_model);
+#endif
     return 0;
 }

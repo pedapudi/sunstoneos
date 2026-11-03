@@ -29,6 +29,34 @@ CLANG = Path(os.environ.get('SUNSTONE_HOST_CLANG', '/usr/bin/clang-21'))
 LLD = Path(os.environ.get('SUNSTONE_HOST_LLD', CACHE / 'host/usr/bin/ld.lld-21'))
 
 
+def copy_image(source, destination):
+    """Copy a disk image without writing its empty blocks.
+
+    The sweeps of fat32-rw.py copy a 52 MiB card image tens of thousands of times, and the zero blocks are almost all of it
+    (55 of 13,312 blocks hold data). A dense copy writes the whole file each time and saturated the disk of the host the
+    board runner shares; `cp --sparse=always --reflink=auto` clones the file where the filesystem can and otherwise writes only
+    the blocks with data."""
+    subprocess.run(['cp', '--sparse=always', '--reflink=auto', '--', str(source), str(destination)], check=True)
+    log = os.environ.get('SUNSTONE_COPY_LOG')            # a measurement hook: one line per copy, "apparent allocated" in bytes
+    if log:
+        info = os.stat(destination)
+        with open(log, 'a') as stream:
+            stream.write(f'{info.st_size} {info.st_blocks * 512}\n')
+
+
+def machine():
+    """The one emulated machine for checks that execute an integrated OS image.
+
+    The images use the large-system atomics (CAS, LDADD) that the default emulated core lacks, so a check on the default core
+    stops at the first such instruction. The core model must be chosen before any memory is mapped, so the machine is made here
+    and the caller maps and loads it. checks/fault-capture.py builds its machine the same way."""
+    from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM
+    from unicorn.arm64_const import UC_CPU_ARM64_MAX
+    uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+    uc.ctl_set_cpu_model(UC_CPU_ARM64_MAX)
+    return uc
+
+
 def environment():
     """Child environment: no bytecode files in source snapshots, halting sanitizers."""
     return {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1', **SANITIZER_ENV}
@@ -95,8 +123,12 @@ class Image:
             self.functions = {}
             self.variables = {}
             self.layouts = {}
+            self.read_only = set()
             for s in e.get_section_by_name('.symtab').iter_symbols():
                 self.symbols.setdefault(s.name, set()).add(int(s['st_value']))
+                index = s['st_shndx']
+                if isinstance(index, int) and not e.get_section(index)['sh_flags'] & 1:       # SHF_WRITE clear
+                    self.read_only.add((s.name, int(s['st_value'])))
             for cu in dwarf.iter_CUs():
                 unit = cu.get_top_DIE().attributes['DW_AT_name'].value.decode()
                 for d in cu.iter_DIEs():
@@ -131,6 +163,12 @@ class Image:
     def address(self, n, unit=None):
         """The one nonzero address of symbol n, or of function or static variable n in the unit whose name ends with unit."""
         values = self.symbols.get(n, set()) - {0}
+        if len(values) > 1 and not unit:
+            # Several objects share a short name (the read-only board description beside the writable board application
+            # state): when exactly one is writable, the name means that one, which is what the checks poke.
+            writable = {v for v in values if (n, v) not in self.read_only}
+            if len(writable) == 1:
+                values = writable
         if unit:
             values = set().union(*(v for table in (self.functions, self.variables)
                                    for (u, name), v in table.items() if name == n and u.endswith(unit)))

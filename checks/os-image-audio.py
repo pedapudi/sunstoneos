@@ -25,6 +25,7 @@ import shlex
 import subprocess
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR
+from harness import machine as harness_machine
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,7 +59,7 @@ def image(command, out, name):
 
 
 def run(segments, symbols, mode, samples, read=()):
-    uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+    uc = harness_machine()
     pages = set()
     for address, data, size in segments:
         for page in range(address & ~4095, (address + size + 4095) & ~4095, 4096):

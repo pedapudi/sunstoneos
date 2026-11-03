@@ -10,7 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
-from harness import Image, hook_addresses, skip_crumbs
+from harness import machine as harness_machine, Image, hook_addresses, skip_crumbs
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_PC
 
@@ -31,7 +31,7 @@ def ev(name):return enums[name]
 results=[]
 for case in ('timely-record','timeout-then-late-record','owed-fault-record','wrong-caller','stale-handle',
              'parked-submit','revoked-submit','invalid-bindings','create-ticket-timeout','create-ready-timeout'):
-    u=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
+    u=harness_machine()
     u.mem_map(0x41000000,0x1200000)
     for address,data in image.parts:
         if data:u.mem_write(address,data)
