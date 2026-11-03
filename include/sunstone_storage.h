@@ -1,6 +1,6 @@
 #ifndef SUNSTONE_STORAGE_H
 #define SUNSTONE_STORAGE_H
-/* Card writes for an application, in an image built with SUNSTONE_A733_OS_SD_WRITE (docs/designs/storage-write.md). The
+/* Card writes for an application, in an image built with SUNSTONE_A733_OS_SD_WRITE (docs/sd-card.md). The
  * application links the FAT32 service (fat32_rw.h) and the POSIX-like calls (sunstone_fs.h) into itself; these calls give it
  * the block device. Callable at EL0 from the application's task; the card is owned by the OS's SD owner task. */
 #include <stddef.h>

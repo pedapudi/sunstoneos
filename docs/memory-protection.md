@@ -175,6 +175,6 @@ software filter, which an EL0 task can bypass by writing the registers itself wh
 application can therefore reach the runner-admitted bounds object of the storage-write service, the private copy of its
 blob, the DMA descriptors and the flush buffer, and any driver structure. The bounded-write design does not depend on this
 protection: it copies the blob once and re-hashes it on every use, which detects a change but cannot prevent one made in the
-microseconds between the check and the use (docs/designs/storage-write.md). Closing the gap is wider than the storage work:
+microseconds between the check and the use (docs/sd-card.md). Closing the gap is wider than the storage work:
 kernel and driver data, stacks of privileged tasks and controller state must be mapped EL1-only, with the shared exceptions
 (the `ss_*` call tables, application regions) mapped explicitly, so that no EL0 application can reach another owner's state.

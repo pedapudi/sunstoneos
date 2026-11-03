@@ -14,7 +14,7 @@ Input, run and decode (the ranges are the sectors the bounded write will back up
 
     python3 apps/sd-backup-probe/input.py input --output IN.bin --ranges 0:1 32768:2 62656:128
     python3 tools/board.py submit IMAGE.elf --port 3-1 --kind probe --input IN.bin --worker NAME \
-        --hypothesis TEXT --reference docs/designs/storage-write.md#bounded-first-write-on-the-625-gb-card-design
+        --hypothesis TEXT --reference docs/sd-card.md
     python3 apps/sd-backup-probe/input.py decode --report run/output.bin --ranges 0:1 32768:2 62656:128 --backup BACKUP.bin
 
 `decode` writes the backup file (records of a little-endian u64 sector and its 512 bytes, in increasing order) and prints its

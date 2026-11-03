@@ -1,4 +1,4 @@
-/* Native storage controller. Source anchors: docs/mmc.md and docs/mmc-write.md. */
+/* Native storage controller; the mechanisms are described in docs/sd-card.md. */
 #include "sunxi_mmc.h"
 #include "sunxi_smhc.h"
 #include "a733_range.h"
@@ -701,7 +701,7 @@ static int command_step(struct sunxi_mmc *h)
             }
         }
         /* A DMA write sets the write threshold as the board kernel's thld_ctl does for every 512-byte
-         * write (sunxi-mmc-v5p3x.c:647-701; docs/designs/mmc-multiblock-write.md): the block size in
+         * write (sunxi-mmc-v5p3x.c:647-701; docs/sd-card.md, section 4): the block size in
          * bits 27:16, the write enable (bit 2) set and the read enable (bit 0) clear. */
         if (h->protocol == P_WRITE_DMA) {
             uint32_t t;
@@ -1081,7 +1081,6 @@ static void sd_signal(struct sunxi_mmc *h)
 /* After a failed CMD19, as the board kernel's tuning loop (sunxi_mmc_execute_tuning) recovers: no wait for the command or the data state machine and no abort,
  * the controller is reset at once, its registers are restored, and the clock is updated with DAT0 masked (sunxi_mmc_oclk_onoff passes ignore_dat0 and clears
  * the mask after the update), then the next delay. The reset is the vendor's sunxi_mmc_reset_host write (GCTRL soft reset, FIFO reset and DMA reset together).
- * Differences kept on purpose, with the reasons, are in docs/designs/sd-uhs-recovery.md ("The sweep against the vendor's tuning loop").
  * TUNE_FORCED_RESETS caps the consecutive recoveries that did not complete in 10 ms (reset bits still set, or the clock update still pending): the
  * recovery is then repeated, and after the cap the sweep stops with TIMEOUT. A recovery that completes clears the count. */
 #define TUNE_FORCED_RESETS 12u

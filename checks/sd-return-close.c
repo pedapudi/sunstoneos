@@ -74,7 +74,7 @@ static void setup_read(void)
 }
 static enum a733_mmc_platform_result close_step(void)
 {m.power.now+=100;return a733_mmc_platform_close(&m.platform,9000000);}
-/* The UHS-I lifetimes of docs/designs/sd-uhs-recovery.md. Lifetime 1 switches the card to 1.8 V, runs SDR25, reads and closes with the bank
+/* The UHS-I lifetimes of docs/sd-card.md. Lifetime 1 switches the card to 1.8 V, runs SDR25, reads and closes with the bank
  * put back at 3.3 V; lifetime 2 starts with the card already at 1.8 V, moves the bank to 1.8 V before the core opens, identifies without
  * CMD11, reads and closes the same way. run_lifetime stops ("a cut") after `cut` polls and checks the state a watchdog reset leaves. */
 /* variant 0 SDR25 only; 1 SDR104 at 150 MHz; 2 SDR104 at 100 MHz (no 300 MHz branch); 3 SDR104 with no passing delay, which falls back to SDR25 at 50 MHz. */

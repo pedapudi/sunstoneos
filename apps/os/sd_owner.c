@@ -1,4 +1,4 @@
-/* The single SD0 owner task of a write-capable OS image (OS_SD_WRITE; docs/designs/storage-write.md).
+/* The single SD0 owner task of a write-capable OS image (OS_SD_WRITE; docs/sd-card.md).
  *
  * The native adapter admits register access only from the task that opened the card, so one task, the owner, performs
  * every card operation. It serves two mailboxes, each holding at most one request: the loader's reads (high priority)

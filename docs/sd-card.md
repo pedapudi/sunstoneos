@@ -1,0 +1,244 @@
+# The microSD card path
+
+This is the developer reference for how SunstoneOS reads and writes the microSD card on the Orange Pi A733 board. It describes the code as it is. Each mechanism cites the file and function that implements it, and each measured claim cites a record in `docs/evidence/storage.jsonl` by entry identifier. Status and open items are in [the storage status](status/storage.md).
+
+**Status.** Reads and writes at SDR104 (UHS-I, 150 MHz, 1.8 V) are qualified on the board for the scratch card on port 3-3, with a 512 MiB file written and read back without a mismatch. Writes at 3.3 V, 50 MHz are qualified on port 3-1. A card that is not a scratch card is writable only inside a range backed up beforehand (section 9). Neither board has eMMC or UFS fitted.
+
+## 1. Hardware
+
+The card is served by **SMHC0**, the first of the SoC's SD/MMC host controllers (SMHC, "secure digital and multimedia card host controller", version 5.3 or later; the core refuses another version in `drivers/storage/sunxi_mmc.c:setup`). Register offsets and fields are in `include/sunxi_smhc.h`, taken from the A733 user manual, sections 11.3.8 and 11.3.9.
+
+- **Registers.** SMHC0's registers are at `0x04020000` (`include/a733_mmc_platform.h:A733_MMC_BASE`). The command register (`0x18`) starts a command; the raw interrupt status `RINTSTS` (`0x38`) reports completion and errors; `STATUS` (`0x3c`) reports the FIFO, the data and command state machines and the level of DAT0 (the card holds DAT0 low while it is busy); `THLD` (`0x100`) sets the card read and write thresholds; `NTSR` (`0x5c`) selects the sample timing mode and phases; `DRV_DL` (`0x140`) selects the drive phases; `SAMP_DL` (`0x144`) sets the sample delay; `CSDC` (`0x54`) sets how the controller detects the card's CRC status token.
+- **Pins.** `PF0` to `PF5` carry the SD clock (`PF2`), the command line and the four data lines, and `PF6` is the card-detect input (`apps/os/large_sd.c:configure`, `os_large_sd_pins`). The OS drives all six at function 2 (SDC0), pulled up, with pad drive code 1 (20 mA). The board kernel drives the command and data pins at 10 mA and the clock at 30 mA (`sun60iw2p1.dtsi`, `sdc0_pins_a` and `sdc0_pins_f`); running with those strengths changed no result, so the OS keeps 20 mA.
+- **Card supply and signalling voltage.** The platform holds three PMIC rails while the card is open: `DCDC1`, `DC1SW2` and `CLDO5` (`drivers/storage/a733_mmc_platform.c:metadata`, stages `RAIL` and `SUPPLIES`). The card's 3.3 V supply is not switched during a session; no code removes card power, and a card keeps its 1.8 V signalling state until board power is removed. The signalling level of the pin bank (the PF bank) is a selector at `0x02000070` bit 0 (1 selects 1.8 V) and a status at `0x02000048` bits 11:10 (value 3: the bank reports 1.8 V); `a733_mmc_platform.c:core_sd_signal` writes and polls them.
+- **Clocks.** The module clock register is at `0x02002d00` and the bus gate and reset at `0x02002d0c` (`A733_MMC_MODULE`, `A733_MMC_BUS`). The module clock selects its source in bits 26:24 and a divider in 4:0. Identification uses the 24 MHz oscillator divided by 30, which gives a 400 kHz card clock because the card clock is half the module clock (`include/sunxi_mmc.h:SUNXI_MMC_MODULE_IDENT`). Data transfers use `PERI0_400M` divided by 4 to 32, or by 2 for 100 MHz, and `PERI0_300M` divided by 1 for 150 MHz. `PERI0_300M` is `PERI0_2X` divided by 4; the platform proves that clock stable and its gates open before it admits 150 MHz (`a733_mmc_platform.c:peri300`).
+- **Interrupt.** SMHC0 is GIC SPI 161, INTID 193 (161 + 32), level high (`apps/os/large_sd.c:os_sd_irq`). The platform requires the line masked at open (`a733_mmc_platform.c:masked`) and again whenever the controller is not running a command in interrupt mode (`gic_ok`); the owner unmasks it only after interrupt completion is switched on (section 2).
+- **Internal DMA (IDMAC).** The controller moves data between its FIFO and memory by itself, following a chain of 16-byte descriptors in memory: four 32-bit words `config`, `size`, `buffer` and `next` (`include/sunxi_mmc.h:sunxi_mmc_dma_descriptor`). `buffer` and `next` hold physical addresses shifted right by two. `config` carries: `OWN` (bit 31, set by software, cleared by the IDMAC when it has used the descriptor), `CH` (bit 4, chained), `FD` (bit 3, first), `LD` (bit 2, last) and `DIC` (bit 1, no interrupt on completion). Each descriptor covers up to 4 KiB (`SUNXI_MMC_DMA_SEGMENT`); a transfer of up to 256 blocks (128 KiB) uses at most 32 descriptors, in a list of 33 slots whose last slot is a zero terminator (`SUNXI_MMC_DMA_DESCRIPTORS`). `sunxi_mmc.c:dma_start` builds the chain and `DLBA` (`0x84`) points at it. The descriptors live in uncached memory; the data buffers are cached, so the owner cleans or invalidates them around each transfer (section 5). `FTRGL` (`0x40`) is `0x200700f8` (8-word bursts, receive watermark 7, transmit watermark 248), the board kernel's value for SDC0 (`sunxi-mmc.c:3630`).
+
+## 2. Layers and ownership
+
+Each layer owns one thing and calls only the layer below it.
+
+| Layer | Source | Owns | Calls |
+| --- | --- | --- | --- |
+| SDK file API | `include/sunstone_fs.h`, `drivers/storage/sunstone_fs.c` | file descriptors, per-file RAM buffers | the FAT32 service |
+| FAT32 service | `include/fat32_rw.h`, `drivers/storage/fat32_rw.c` | the volume layout, the write order, recovery at mount | a block device (`struct fwr_device`: read, write, sector count, allocation unit) |
+| OS owner | `apps/os/sd_owner.c`, `apps/os/large_sd.c` | the one task that touches the controller; the open, the mode record, the retry loops | the platform |
+| Platform | `drivers/storage/a733_mmc_platform.c`, `a733_mmc_platform_native.c` | clock, pin and rail leases; the pin-bank voltage; the GIC line; the register filter; deadlines | the core |
+| Core | `drivers/storage/sunxi_mmc.c` | the command and protocol state machine, the controller registers through callbacks | register callbacks supplied by the platform |
+
+- **Core.** `sunxi_mmc.c:sunxi_mmc_poll` advances a state machine (`sunxi_mmc.c:command_step` for one command, `protocol` for the sequence) by bounded steps, and never blocks. It has no hardware ownership: every register access goes through `struct sunxi_mmc_ops`, which the platform supplies. It reports a state (`SUNXI_MMC_IDENTIFY`, `READY`, `READING`, `WRITING`, `DONE`, `FAULT`) and a wait hint (`sunxi_mmc_wait_hint`: none, an interrupt, or a timer) so that the caller can sleep instead of polling.
+- **Platform.** `a733_mmc_platform.c` leases the clocks, pins and rails from the OS providers, checks before every poll that the clock, rails, pin bank and GIC line are in the state the core assumes (`running`), and gives every operation an absolute deadline. A violated check retains the platform: it keeps its leases and refuses all further operations (`fail_at`). Register accesses pass through `a733_mmc_platform_native.c:a733_mmc_platform_native_address_selected`, which admits only the SMHC0 registers the core uses and, in a write-capable image, CMD25 and the write threshold only after a verified bounds object is bound (`a733_mmc_platform_native_bind_bounds`). A read-only build (`SUNXI_MMC_READ_ONLY`) contains no write command; `checks/sd-read-only.py` verifies that in the linked image.
+- **OS owner.** One FreeRTOS task, the owner, performs every card operation, because the register filter admits only the task that opened the card (`sd_owner.c:owner_main`). It serves two mailboxes of one request each: the loader's reads (higher priority) and the application's reads and write pieces. A write piece is at most 256 sectors, and the owner looks at the loader's mailbox between pieces, so a read waits at most for the piece in flight. Callers sleep on a task notification until the owner finishes. `large_sd.c:os_sd_open_owner_device` configures and opens the platform; `os_sd_open_owner` then registers the interrupt and arms it; `os_sd_close_owner` restores the clock, pins and rails.
+- **Interrupt completion.** `large_sd.c:os_sd_irq` reads the masked status `MINTSTS`, accumulates it for the core (`irq_taken`), writes the same bits back to `RINTSTS` to acknowledge them, and wakes the owner. `storage_wait.c:storage_wait_run` polls, then sleeps on the interrupt or a one-shot timer as the core's wait hint says; a recheck timer bounds each interrupt sleep, so a lost interrupt delays a request and never hangs it.
+- **Application side.** The application links the FAT32 service and the SDK file calls into itself and receives a block device from the owner: `include/sunstone_storage.h:ss_storage_enable` (verifies the bounds and opens writes), `ss_storage_open_read` (reads only), `ss_storage_region` (registers the flush buffer, so the service writes from it without a copy), `ss_storage_device` (fills the `fwr_device`), `ss_storage_close`, `ss_storage_diagnostic` and `ss_storage_mode` (the failure and mode records of section 8).
+
+An eMMC card uses the same core with `SUNXI_MMC_EMMC` (CMD1 identification, `P_MMC_QUERY` and `P_MMC_OCR` in `sunxi_mmc.c:protocol`); no eMMC is fitted, so that path is exercised only on the host.
+
+## 3. Identification
+
+`sunxi_mmc.c:setup` runs once, before any command: it checks the controller version, soft-resets the controller, clears the interrupt masks, writes the timing registers (`NTSR` to the old mode with zero phases, `CSDC` to 3, `DRV_DL` command 180 and data 90 degrees, `SAMP_DL` to `0x80`, `TMOUT` to its maximum), and starts the 400 kHz clock with `DAT0` masked during every clock update. A clock update commands the controller to latch a new clock; while a card holds DAT0 low (busy), an update without the mask waits for it, so every update in the core sets the mask, as the board kernel's `sunxi_mmc_oclk_onoff` does.
+
+`sunxi_mmc.c:protocol` then sends, in order:
+
+1. **CMD0** (go idle) with the initialization clocks, then **CMD8** (interface condition, pattern `0x1aa`). A different pattern is `SUNXI_MMC_UNSUPPORTED`.
+2. **CMD55 and ACMD41** (operating condition), repeated about once a millisecond until the card reports ready, within the deadline. ACMD41's argument requests high capacity and, in the UHS-I profile, the 1.8 V switch (S18R) when the platform offers it (`core_sd_signal`, `SUNXI_MMC_SIGNAL_QUERY`).
+3. **CMD11** (switch to 1.8 V), only when the card answered ready with S18A (accepts 1.8 V) set. See below.
+4. **CMD2** (CID, the card's 128-bit identity), **CMD3** (relative card address), **CMD9** (CSD, the card's capacity and capabilities), **CMD7** (select), **CMD13** (status, until the card is in the transfer state). `sunxi_mmc.c:sunxi_mmc_capacity` decodes the capacity from the CSD.
+5. **CMD55 and ACMD51** (SCR, the card's supported features) and **CMD55 and ACMD6** (four-bit bus). The SCR must report a supported specification version and four-bit support, or the card is `SUNXI_MMC_UNSUPPORTED`.
+6. **CMD6** (switch function), checking and then setting group 1. At 3.3 V the function is high speed (function 1). At 1.8 V the core selects SDR104 (function 3) when the card supports it, the ceiling allows it, and the card is not busy with it, else SDR50 (function 2), else SDR25 (`protocol`, cases `P_SD_UHS_CHECK` and `P_SD_UHS_SET`).
+7. **The clock change** (`sunxi_mmc.c:sd_clock`): stop the card clock with DAT0 masked, set the module divider, write the timing registers of the chosen mode (section 4), restart the clock.
+8. **Tuning** at SDR50 and SDR104, then **CMD13** to confirm the card is ready, which ends identification (`P_SD_MODE_STATUS`).
+
+**The 1.8 V switch (CMD11).** A UHS-I card accepts CMD11 only after it has answered ACMD41 with S18A set. The core follows the Linux and board kernel sequence in `sunxi_mmc.c:sd_signal`: check that the card holds DAT3 low, send CMD11, stop the clock with the voltage-switch update, let the platform move the pin bank to 1.8 V and wait up to 10 ms for the bank to report it, keep the clock stopped 10 ms, restart it, then require DAT3 high and the controller's voltage-switch-done and command-done bits within 10 ms (the vendor's 1 ms plus 10 ms). A failure after the card accepted CMD11 is `SUNXI_MMC_SIGNAL`: the card is left in an undefined voltage state, and only removing board power restores it.
+
+**A card already at 1.8 V.** A card keeps 1.8 V signalling until power is removed, so after a watchdog reset the card may still be at 1.8 V. At 3.3 V such a card answers CMD8 and ACMD41 normally but with S18A clear, and its CMD6 group 1 support field (status byte 13) reports SDR50 or SDR104, which a card without UHS-I never reports. `include/sunxi_mmc.h:sunxi_mmc_card_found_at_1v8` encodes that rule. The owner then reads one sector so that the platform may close, closes it with the bank at 3.3 V, and opens again with the bank moved to 1.8 V first and the core told to re-enter (`large_sd.c:os_sd_open_owner_device`, the `start18` loop; `sunxi_mmc.c:sunxi_mmc_reenter`). In re-entry the core sends CMD0, CMD8 and ACMD41 with S18R, accepts the answer with S18A clear, and skips CMD11 (`protocol`, case `P_SD_OCR`, flag `reenter`). CMD0 does not change a card's signalling level (SD Physical Layer specification 4.2.1).
+
+**Tuning (CMD19).** At 100 and 150 MHz the sample point of the card's output must be chosen. The controller can delay its sampling by 0 to 63 steps (`SAMP_DL` bits 5:0, bit 7 enables the software delay). `sunxi_mmc.c:tune_advance` runs the sweep, as the board kernel's `sunxi_mmc_execute_tuning` does (`sunxi-mmc.c:2432-2640`): for each delay it sends CMD19 twenty times (`TUNE_REPEATS`; `sunxi-mmc.h:611`) and compares each 64-byte block with the fixed tuning pattern; the delay passes when all twenty match. After delay 63 it takes the first longest run of passing delays and chooses its midpoint, `start + width / 2` (`sunxi-mmc.c:get_best_sdly`, line 2406). A run shorter than 12 delays (`TUNE_WINDOW`; `sunxi-mmc.c:2448`) is no window: the mode steps down (SDR104 to SDR50 when the card has it, else to SDR25) without a power cycle. A command aborted by a failed attempt is recovered as the vendor does: reset the controller at once, restore the registers, update the clock with DAT0 masked (`sunxi_mmc.c:tune_recover`). On card 3-3 the SDR104 window is 18 to 63 and the chosen delay 41 (entry `1793692075400545011-09988217`); at SDR50 every delay passes and the chosen delay is 32.
+
+## 4. Modes
+
+The OS owner opens the card in the UHS-I profile (`SUNXI_MMC_SD_UHS_SDR104`), which selects the fastest mode the card, the platform and the current ceiling allow. `card.timing` numbers the modes: 3 SDR104, 2 SDR50, 1 SDR25 or high speed, 0 SDR12 or default speed. The boot-time readers use older profiles (default speed or high speed at 3.3 V) with fixed registers.
+
+The vendor sources are the board kernel at the commit pinned in `checks/sunxi-mmc-uhs.py`: `sunxi-mmc.c`, `sunxi-mmc.h` and `sunxi-mmc-v5p3x.c` under `bsp/drivers/mmc/`, and `sunxi-mmc-v4p5x.c` (the file that holds the `v4p6x` method) under `mmc-sdc3/`. The board kernel starts SDC0 in the first method; its in-kernel tuning then switches the host to the second and never switches back, so a tuned mode runs with the second method's rules. `checks/sunxi-mmc-uhs.py` parses the pinned sources and `checks/sunxi-mmc-uhs.c` compares every mode's registers with them.
+
+| Mode | Voltage | Module clock, card clock | Timing registers, reads | Timing registers, writes | Vendor source |
+| --- | --- | --- | --- | --- | --- |
+| identification | 3.3 V or 1.8 V | 24 MHz / 30 = 800 kHz, 400 kHz | `NTSR` old mode (bit 31 clear), phases 0; `DRV_DL` command 180, data 90; `SAMP_DL` `0x80` (delay 0); `CSDC` 3 | same | `sunxi-mmc-v5p3x.c:820-828` (400 kHz row), `:610-630` (`CSDC`) |
+| DS (default speed) | 3.3 V | 400 MHz / 8 = 50 MHz, 25 MHz | `NTSR` bit 31 set, phases 0; `DRV_DL` command 180, data 90; `SAMP_DL` `0x80`; read threshold off | the same; write threshold per CMD25 | `sunxi-mmc-v5p3x.c:829-837` (26 MHz row) |
+| HS (high speed) | 3.3 V | 400 MHz / 4 = 100 MHz, 50 MHz | `NTSR` `0x80000110` (bit 31 set, data and command phase 1); `DRV_DL` command and data 180; `SAMP_DL` `0x80`; read threshold off | the same | `sunxi-mmc-v5p3x.c:838-846` (52 MHz row) |
+| SDR12 | 1.8 V | as DS | as DS | as DS | as DS |
+| SDR25 | 1.8 V | as HS | as HS | as HS | as HS |
+| SDR50 | 1.8 V | 400 MHz / 2 = 200 MHz, 100 MHz | `NTSR` old mode, phases 0; `DRV_DL` command and data 180; `SAMP_DL` `0x80` and the tuned delay; read threshold 512 bytes on | see below | `sunxi-mmc-v4p5x.c:302-306` (data drive 180), `:810-814` (old mode), `:425-429` (delay), `:854-908` (threshold) |
+| SDR104 | 1.8 V | 300 MHz / 1 = 300 MHz, 150 MHz | as SDR50 | see below | as SDR50 |
+
+- **Registers common to every mode.** `CSDC` is 3 (the CRC-status detect parameter for every mode but HS400, `sunxi-mmc-v5p3x.c:610-630`, `sunxi-mmc-v4p5x.c:820-833`); `EDSD` bit 31 is clear; `FTRGL` is `0x200700f8`; the bus width register is 4-bit; `TMOUT` is the maximum outside tuning; the automatic CMD12 argument register `A12A` is 0.
+- **Thresholds.** For a read in a tuned mode the core sets the card read threshold to the block size with the enable bit (`THLD` = `block << 16 | 1`, write threshold bit clear), as the vendor's `thld_ctl` does for SDR50 and SDR104 reads (`sunxi_mmc.c:command_step`, `sunxi-mmc-v4p5x.c:854-908`). For a CMD25 it sets `THLD` = `512 << 16 | 4` (write threshold enable, read threshold off); the vendor does the same for every 512-byte write (`sunxi-mmc-v5p3x.c:647-701`).
+- **Tuned writes run in the new timing mode.** The old timing mode with the read sweep's delay does not see the card's CRC status token at 100 and 150 MHz (section 6). Every write that completes on a board, SDR25 at 1.8 V and high speed at 3.3 V, runs in the new mode. At the CMD25 of a tuned card the core therefore writes `NTSR` bit 31 set with data and command sample phase `SUNXI_MMC_WRITE_NTSR_PHASE` (0, the board kernel's row for 104 and 208 MHz, `sunxi-mmc-v5p3x.c:865-882`) and `SAMP_DL` `0x80` (delay 0), and when the data and the automatic stop are done it writes the old mode and `0x80 | tuned delay` back (`sunxi_mmc.c:command_step`, `protocol` case `P_WRITE_DMA`). This write mode is not copied from the vendor: the vendor writes in the old mode and, on a write error, retries the request with `SAMP_DL` set to 0 and then raised by 2 per retry (`sunxi-mmc-v4p5x.c:1026-1095`).
+- **Mode changes.** A clock change is: stop the clock, set the divider through the platform, write the registers, restart (`sunxi_mmc.c:sd_clock`); `uhs_registers` writes the tuned-mode set and reads it back to verify.
+
+## 5. Read protocol
+
+`sunxi_mmc.c:sunxi_mmc_read` accepts a request of 1 to 256 blocks (1 to 8 without DMA) into a 64-byte-aligned buffer that does not overlap the controller state or the descriptor list, inside the card's capacity. It sends **CMD17** for one block and **CMD18** with the automatic stop for more (`WAIT` set so the controller waits for the previous data to finish).
+
+1. **Before the command** (`command_step` cases 0 and 1): wait until the controller is idle and DAT0 is not busy; acknowledge stale status; reset the FIFO, the DMA interface and the IDMAC; program the block size and byte count; set the read threshold (tuned modes); set `A12A` to 0 when there is an automatic stop.
+2. **The chain** (`dma_start`): write `FTRGL`, `DLBA` and clear `IDST`, build the descriptors, fence, **clean** the buffer's cache lines (`dma_sync` with `SUNXI_MMC_DMA_BEFORE`; the clean makes the lines safe for the controller to overwrite), enable DMA in `GCTRL`, and write `DMAC` `0x82` (fixed burst, IDMAC on).
+3. **Completion.** The core arms `IMASK` for the error bits and the completion bit that ends the command (automatic-stop-done for a CMD18, data-over for a CMD17) when interrupts are on; otherwise it polls `RINTSTS`. The command is complete when command-done, data-over and, with an automatic stop, auto-command-done have all been seen, and every used descriptor has its `OWN` bit clear (`dma_closed`: the done bits first, then the OWN bits, which are uncached reads).
+4. **After the command** (`command_step` case 3, `dma_finish`): require the controller idle and the FIFO empty, check the automatic stop's response, **invalidate** the buffer (`SUNXI_MMC_DMA_AFTER`), and return the buffer to the caller. No CMD13 follows a read, as in the board kernel's block driver, except after an open-ended CMD18 that reaches the card's last sector, whose `OUT_OF_RANGE` status is expected and ignored.
+5. **What the caller may rely on.** When the state is `DONE`, the buffer holds exactly the requested sectors as the card sent them (`result.received` equals the byte count), and the buffer's cache lines are the memory's. A request that ends in `FAULT` leaves the buffer contents undefined.
+
+**Errors in a read.** The core raises, with the source line of the check kept in `result.fault_line`: `SUNXI_MMC_CONTROLLER` for any `RINTSTS` error bit (response error or CRC, data CRC, response or data timeout, FIFO under- or overrun, command busy, start-bit or end-bit error; mask `SUNXI_SMHC_ERRORS`, `0xbbc2`), for an IDMAC error (`IDST` bits 2, 4, 5, 9) and for a register that does not read back as written; `SUNXI_MMC_CARD` for an R1 status with an error bit (`CARD_ERRORS`, `0xffffa088`); `SUNXI_MMC_TIMEOUT` when the request deadline passes (`sunxi_mmc.c:time_ok`); `SUNXI_MMC_IO` when a register callback or the cache callback fails; `SUNXI_MMC_ADMISSION` when ownership of the card is lost. Section 7 says which are recoverable.
+
+## 6. Write protocol
+
+A write is a bounded request of 1 to 256 blocks from a 64-byte-aligned source: `sunxi_mmc.c:sunxi_mmc_write_dma` (CMD25, descriptor DMA) or `sunxi_mmc_write` (CMD24, one to eight blocks by programmed I/O). Both require the card's CSD to allow 512-byte writes, class 4 commands and no whole-card write protection (`sunxi_mmc.c:writable`), and a **write authority**: a callback that the core calls on every poll to confirm that this exact request, on this exact card, is still allowed (`sunxi_mmc.c:write_admitted`; `a733_storage_bounds.c:a733_storage_bounds_authority` supplies it, section 9). A callback that refuses ends the request with `SUNXI_MMC_ADMISSION`.
+
+The sequence for one CMD25 piece (`sunxi_mmc.c:command_step` and `protocol`):
+
+1. **CMD13** to confirm the card is in the transfer state and ready (`P_WRITE_PRE`).
+2. **Registers.** Block size 512 and the byte count; `THLD` `512 << 16 | 4`; for a tuned card, the new-mode data phase of section 4; `A12A` 0; the chain, with the source cleaned (`DMA_BEFORE`).
+3. **CMD25** with the automatic CMD12 (`AUTO`) and `WAIT`; the controller sends the blocks from the IDMAC. The command register is exactly `START | WAIT | AUTO_STOP | WRITE | DATA | CRC | RESP | 25`, which the register filter requires (`a733_storage_bounds.h:a733_storage_bounds_cmd25_ok`).
+4. **The CRC status token.** After each 512-byte block the card answers on DAT0 with a five-bit token (start bit, three status bits, end bit): positive status means the block's CRC was good. The controller detects it (`CSDC`) and samples it with the same input circuit as read data. A token that is not seen sets `RINTSTS` bit 15 (end-bit error while transmitting); a negative token sets bit 7 (data CRC error). Both raise `SUNXI_MMC_CONTROLLER`.
+5. **Busy.** After a block the card pulls DAT0 low while it programs. The core does not wait for the busy period with an interrupt; it reads `STATUS`, and while DAT0 is busy it sleeps on a timer that starts at 100 microseconds and doubles to 2 ms (`sunxi_mmc.c:busy_wait`). The wait ends with the request deadline: `time_ok` faults `SUNXI_MMC_TIMEOUT` once the deadline passes, and the OS gives each piece 2 s (`large_sd.c:hw_write_piece`, `WRITE_US`), so a card that never releases DAT0 ends in a recoverable timeout fault and not in a hang. The board kernel's wait on DAT0 is `sunxi-mmc.c:1127-1133` and `:1556-1582`.
+6. **The controller's write-busy timeout.** The controller times the card's busy period itself (`SMHC_WR_BUSY_TMOUT`, `0x15c`, default `0xffffff` card clocks: 112 ms at 150 MHz, 168 ms at 100 MHz, 336 ms at 50 MHz) and raises `RINTSTS` bit 18 when it expires. The board kernel's error mask does not contain bit 18 (`sunxi-mmc.h:215-218`). During a DMA write the core clears the bit, counts it in `result.busy_timeouts` and keeps waiting under item 5; in every other command bit 18 is a terminal error (`sunxi_mmc.c:interrupts`). A card whose 128 KiB piece takes longer than the limit to program is slow, not faulty: 15 timeouts were counted writing 512 MiB at 150 MHz (entry `1793692393910115727-f58db0e9`).
+7. **After the data** (`protocol`, case `P_WRITE_DMA`): the data, the automatic CMD12 and the controller teardown are done. The core restores the tuned registers (section 4), then sends **CMD13** until the card reports ready for data in the transfer state; a card still programming (state 7) or not yet ready is polled again after 1 ms, and any other status is `SUNXI_MMC_CARD` (`P_WRITE_DMA_STATUS`). The source cache lines are invalidated after the transfer (`DMA_AFTER`).
+
+**What the calls guarantee.**
+
+- **`fwr_device.write` returns 1** only when the platform's result is ready, the core error is `SUNXI_MMC_OK` and `confirmed_blocks` equals the piece's block count (`large_sd.c:hw_write_piece`). That is: CMD25 and the automatic stop were accepted, the controller saw no error, DAT0 was released, and CMD13 reported the transfer state. The card reports it has finished programming those sectors. The service issues the sectors of one request in ascending order, and the card is assumed to program them in order, so a power cut during a piece leaves a prefix of its sectors.
+- **A write that fails.** If the card faults the piece, the owner may write the same sectors again after a restart (section 7); the bounds that admitted the request still apply. The call returns 0 only when the ladder is exhausted or the platform is retained; the piece's sectors are then in an unknown state.
+- **Nothing outside the admitted ranges is written.** The register filter admits CMD25 only when the whole sector range lies in a write range of the verified bounds object, checked at the moment of the command (`a733_storage_bounds_cmd25_ok`).
+
+## 7. Errors and recovery
+
+**Which errors are recoverable.** `sunxi_mmc.c:sunxi_mmc_recoverable` is true for a core in `FAULT` whose error is `SUNXI_MMC_CONTROLLER`, `SUNXI_MMC_CARD` or `SUNXI_MMC_TIMEOUT`, in the UHS-I profile, on reads and on writes. The platform then returns `A733_MMC_ERROR` instead of retaining itself. Every other error (`IO`, `TIME`, `ADMISSION`, `VARIANT`, `UNSUPPORTED`, `SIGNAL`) is terminal: the platform retains its leases (`RETAINED`) and the card is left as it is. The failed request raises a failure note and the session ends in a watchdog reset, which returns the board to FEL with the card still at 1.8 V; the next session re-enters it (section 3).
+
+**The restart.** `a733_mmc_platform.c:a733_mmc_platform_recover` implements the policy; the owner calls it from `large_sd.c:recover_blocking`.
+
+- **First error since the last completed request:** identify again at the same ceiling, which tunes again (`SUNXI_MMC_MODE_RETUNE`).
+- **Second error in a row:** identify again one mode lower (`SUNXI_MMC_MODE_ERRORS`): SDR104, SDR50, SDR25, SDR12. An error at SDR12 is final (`A733_MMC_INVALID`).
+- **What the restart does** (`sunxi_mmc.c:sunxi_mmc_restart`, `restart_step`): soft-reset the controller and clear the DMA state; stop the clock with DAT0 masked (a card left programming holds it low); return the module to the identification clock; run the cold setup again. The identification then sends CMD0, which ends any programming state and returns the card to idle in every state without changing its signalling level, and re-enters at 1.8 V with no CMD11 (section 3). While the restart runs, the platform tolerates the level interrupt of the fault still pending in the GIC, and requires it clear afterwards (`a733_mmc_platform.c:gic_ok`).
+- **Interrupt mode.** The platform refuses a restart while interrupt mode is on; the owner masks INTID 193 and leaves interrupt mode first (`large_sd.c:irq_suspend`), and enters it again after the restart (`irq_resume`).
+- **The retry budget.** A request may use `A733_MMC_RECOVERIES` recoveries, 8: two per mode through SDR104, SDR50, SDR25 and SDR12, and the refusal at SDR12 (`include/a733_mmc_platform.h`; `checks/a733-mmc-uhs.c:recovery_budget` walks the ladder against the same constant). The owner repeats the request with the same sectors and data after each restart (`large_sd.c:hw_write_piece`, `read_blocking`), bounded also by the owner's lifetime deadline.
+- **A stepped-down mode persists.** A restart sets the core's ceiling to the lower mode (`sunxi_mmc.c:sunxi_mmc_restart`, `fresh.ceil1`), and the platform keeps it, so no later request climbs the ladder again. A new session opens at SDR104 again.
+
+## 8. Failure records and the report
+
+A failure survives a watchdog reset only as two words in RTC memory: a value word and an aux field of 15 bits. The application's report (512 bytes, returned at a normal return) carries more. Each layout is defined here once.
+
+**Failure note.** `apps/os/sd_owner.c:serve` raises it when a request fails, through `board_fail_note`: the site word is the call site with `aux << 16`, and the value is `sd_owner.c:diag_word`. The stage is in bits 5:0 of the value and the stage's detail in bits 31:6 (`apps/os/sd_note.h:os_sd_note_value`). `os_sd_diag[0..3]` hold the first stop (`large_sd.c:diag_set`; the first stop wins), readable at normal return through `ss_storage_diagnostic`.
+
+| Stage | Meaning | Detail |
+| --- | --- | --- |
+| 1 to 12 | open: already open, PMIC service, descriptor memory, configure, native binding, platform init, identification, card query, interrupt registration (detail 1 platform, 2 or 3 GIC re-arm), owner task creation, owner wait, GIC mask | open-stage layout: stage in 7:0, detail in 23:8, INTID 193 state (enabled, pending, active) before the mask in 26:24 and after in 30:28 |
+| 20 to 24 | enable: preconditions, blob copy, blob parse, bounds verify (detail: object state), write binding | results the application reports, not notes |
+| 25 | the card's CID differs from the blob's | detail: the CID's last word; raises a note |
+| 30, 31, 32, 35, 36 | a refused request: read start, read incomplete, read result, SD Status incomplete, SD Status result | result 2:0, `fault_why` 5:3, fault line 16:6, refused register 24:17, fault 25 (`large_sd.c:PLATX`) |
+| 33, 34 | a write that was refused at its start (33) or ran out of retries (34) | below |
+| 37 to 40 | a recovery that did not finish: restart refused, identification again, card query, interrupt re-armed | below |
+| 41, 42 | the re-opening of a card found at 1.8 V: its read, its close | |
+
+- **Stages 33 and 34, detail** (`sd_note.h:os_sd_where_detail`, 26 bits): the `RINTSTS` bits 15:1 of both reads taken at the fault in 14:0; the bus timing in 16:15; the IDMAC descriptor reached in 22:17 (62 unreadable, 63 outside the list); the core error, clamped to 7, in 25:23. **Aux** (`os_sd_where_aux`): the 512-byte blocks the card side had taken, `SMHC_TBC0 / 512`, in 8:0; the IDMAC error bits (`sunxi_mmc.h:sunxi_mmc_idst4`: fatal bus error, descriptor unavailable, card-error summary, abnormal summary) in 12:9; the piece's size class (0: one sector, 1: two to 32, 2: 33 to 255, 3: 256) in 14:13. The core reads `TBC0` (`0x48`), `TBC1` (`0x4c`) and the current host descriptor (`0x90`) in `sunxi_mmc.c:write_where`.
+- **Stages 37 to 40, value** (`sd_note.h:os_sd_first_fault`, the session's first fault): `RINTSTS` bits 15:2 of both reads in 13:0; bit 18 (write-busy timeout) in bit 14; the source line of the check that raised the fault (`result.fault_line`, `sunxi_mmc.c:fault_at`) in 25:15. **Aux** (`os_sd_recover_aux`): the platform's result in 2:0 and its fault flag in 3; the `board_live` refusal bits (fatal, service window, session deadline) in 6:4; the owner's lifetime deadline passed in 7; the first fault's size class in 9:8 and IDMAC bits in 13:10; in 14, whether the loop ended on a platform result and not on `board_live()` or the lifetime. The aux of the first stop is kept (`large_sd.c:write_fail` does not overwrite it).
+- **The maintenance hook.** A stop with a non-zero status that left no other note writes one with value `0xfc01` (EL1) or `0xfc03` (EL3); a clean exit leaves none (`apps/board/stop_note.h`).
+
+**Report words.** `ss_storage_mode` returns `os_sd_mode[5]` (`large_sd.c:record_mode`), which `apps/storage-write-test/host.py:decode_mode` decodes as `sd_mode`:
+
+- Word 0: bit 0 valid; 7:4 the card timing; 8 the card signals 1.8 V; 15:12 the UHS-I outcome (`sunxi_mmc_uhs_outcome`); 23:20 the mode steps taken; 31:28 the ceiling; 32 the card was re-entered with no CMD11; 36 the owner opened the platform a second time; 47:40 the recovery restarts.
+- Word 1: the card clock in Hz.
+- Word 2: 7:0 the sample delay; 15:8 the window start; 23:16 its width; 31:24 the group 1 support bits; 32 S18A; 47:40 the write-busy timeouts waited out, saturating at 255 (`busy_timeouts`).
+- Word 3: the first four mode-log steps in 31:0, one byte each (from in 1:0, to in 3:2, reason in 7:4); in 63:32, 16 bits for each of the first two faults (first in 47:32, second in 63:48): the card-side blocks in 8:0, the IDMAC error bits in 12:9, the piece's size class in 14:13.
+- Word 4: 32 bits for each of the first two faults the recovery acted on: the core error in 3:0, the protocol step in 9:4, `RINTSTS` bits 15:0 in 25:10, the descriptor in 31:26 (`sd_note.h:os_sd_fault_events`); `decode_mode` returns them as `faults`.
+
+The same file's `decode` also returns the write rate, the flush latency percentiles, the wear counters and the owner task's busy time; `failures` applies the pass rule, and `guard_stop` accepts a write that ended at its time guard after a clean sync and close.
+
+## 9. Write admission
+
+A write-capable image cannot write until `ss_storage_enable` receives a **bounds blob**, an object that names the card and the sectors that may be written. The runner admits a blob only for a card and an image the coordinator has approved (`tools/storage_bounds.py:admit`, called from `tools/board_images.py`); the owner verifies it again on the card (`large_sd.c:hw_enable_writes`).
+
+- **The blob** (`include/a733_storage_bounds.h`, `drivers/storage/a733_storage_bounds.c:a733_storage_bounds_parse`): an eight-byte magic, the counts of write ranges and backup ranges, a 32-byte SHA-256 digest, the ranges (each a first sector and a sector count, 64-bit), and the card's 16-byte CID. The owner copies it into private memory, re-hashes the copy on every use (`a733_storage_bounds_intact`), and refuses a blob whose CID is not the identified card's (stage 25).
+- **Valuable cards: restore point.** The magic `SSBW0003`. The digest covers the contents of the backup ranges as captured by a read-only probe before any write (`apps/sd-backup-probe`). `a733_storage_bounds_verify` reads the backup ranges from the card and requires the digest to match: the card still holds what was backed up, so the backup can undo the session. The first full capture of a card is its **restore point** and is never replaced (`tools/storage_bounds.py:register_restore_point`; the registry is `restore-points.json`, keyed by CID with the port). Every write session needs a fresh capture, blob and approval record, because a session changes the backed-up sectors.
+- **Scratch cards: partition only.** The magic `SSBW0004`. The coordinator lists a card as a scratch card, one that holds nothing of value, with its CID, port and FAT32 partition in `scratch-cards.json`, and approves it once with a record per card. The blob holds one write range, the partition, no backup range and a zero digest, and verification reads nothing (`a733_storage_bounds_verify`, `scratch`). The register filter still admits CMD25 only inside the partition, and only for that CID. A scratch card is restored by reformatting its partition: mode 9 of `apps/storage-write-test` zeroes both FATs and the root cluster, sets FAT entries 0 to 2 and rewrites the FSInfo sector and the boot sector's label (`apps/storage-write-test/main.c:format_partition`). Port 3-3's card is the scratch card.
+- **Read-only open.** `ss_storage_open_read` binds no bounds; the controller then refuses every write command.
+- **The FAT32 layer's own guard.** `fat32_rw.c:guard` allows writes only to both FATs, the FSInfo sector, and the data area at or after an optional floor, whatever the blob admits.
+
+## 10. The FAT32 layer
+
+`fat32_rw.c` is a write service for one FAT32 volume with 512-byte sectors, used by one task at a time (calls do not nest). Files are append-only: a file opened for writing continues at its end; replacing a file is a new file published by one directory-entry switch.
+
+**Calls.** `fwr_mount`, `fwr_checkpoint`, `fwr_unmount`; `fwr_open` (create, append or replace), `fwr_write`, `fwr_service`, `fwr_sync`, `fwr_close`, `fwr_preallocate`, `fwr_truncate`; `fwr_read` and `fwr_read_cursor` (sequential reads that do not rescan the directory or the chain); `fwr_mkdir`, `fwr_unlink`, `fwr_rename`, `fwr_exists`. `include/sunstone_fs.h` wraps them in POSIX-like calls that return a non-negative value or a negated errno value: `ss_open`, `ss_write` (blocks for the card), `ss_write_nowait` (copies into the file's buffer and never touches the card), `ss_fs_service` (a writer task flushes every buffer that holds an allocation unit), `ss_read`, `ss_fsync`, `ss_close`, `ss_lseek`, `ss_ftruncate`, `ss_posix_fallocate`, `ss_rename`, `ss_unlink`, `ss_mkdir`, `ss_stat`; `drivers/storage/sunstone_fs_syscalls.c` maps newlib's `open`, `write`, `fsync` and `close` onto them.
+
+**The write order.** `fwr_write` copies bytes into the file's RAM buffer and returns; the card is not touched. The service writes in pieces that end on **allocation unit** boundaries (the card's erase and program unit, read with ACMD13 from the SD Status register; 4 MiB, 8,192 sectors, on both cards), so that the card never programs a partial unit more than it must (`fat32_rw.c:flush_data`, `flush_unit`, `dev_write`). Clusters for a file are reserved in memory in advance (`reserve`, `ensure_reserved`); the FAT does not change until a sync. `fwr_sync` (`fat32_rw.c:fwr_sync`) writes, in this order:
+
+1. **The volume dirty flag**, before the first metadata write of a session: bit 27 of FAT entry 1 is cleared in FAT 1 and then in FAT 2 (`set_flag`, `begin_meta`).
+2. **The data**, padded to a sector, into the reserved clusters. Those clusters are still free in the FAT, so a cut here loses only unsynced bytes (`flush_data`).
+3. **The FAT chain** of the clusters that now hold data: the new entries in FAT 1 and then FAT 2, and then the link from the file's old last cluster to the first new cluster, FAT 1 and then FAT 2 (`chain_new`). The new chain is unreachable until the link is written, and the link is written after the chain is complete.
+4. **The directory entry** with the new size and first cluster, in one sector write; a new file's entry is created here, at its first sync (`entry_create`, `entry_update`; for a replace, `publish_replace`).
+5. **FSInfo and the clean flag**, only at `fwr_checkpoint` and `fwr_unmount`: the free count and next-free hint, then the clean flag set in FAT 2 and then FAT 1. Mount reads the flag from FAT 1, so FAT 1 is set to dirty first and set to clean last.
+
+**What each call guarantees.**
+
+- `fwr_write` returns: the bytes are in RAM. Nothing is on the card.
+- `fwr_service` returns: whole allocation units of the buffer are on the card in reserved clusters that no FAT entry references, so a power cut loses them.
+- `fwr_sync` returns: every byte accepted so far is on the card, the FAT chain is complete in both copies, and the directory entry holds the new size. The volume is still marked dirty and FSInfo may be stale.
+- `fwr_close` is a sync, then the file is released. `fwr_unmount` and `fwr_checkpoint` finish with FSInfo and the clean flag.
+- **After a power cut**, everything up to the last completed sync is intact. A cut before step 3 leaves the file as it was; a cut inside step 3 leaves entries no chain reaches; a cut before step 4 leaves a longer chain than the entry's size, or an orphan chain for a new file. The next mount sees the dirty flag and recovers.
+
+**Recovery at mount.** `fwr_mount` validates the boot sector (512-byte sectors, power-of-two cluster size, one or two FATs, at least 65,525 clusters, FAT[0] media byte, FAT[1] not below the end-of-chain value) and, if the clean flag is clear and a recovery bitmap was supplied, calls `fat32_rw.c:recover`. Recovery walks the directory tree from the root, marking each cluster chain in a bitmap; truncates a chain that is longer than its entry's size needs (`mark_chain`) and a size that exceeds its chain (`entry_fix`); resets a file whose chain is empty to size 0 and deletes a directory whose chain is invalid; resolves an interrupted rename (the tagged entry is the source: delete it if its twin exists, else clear the tag); frees every cluster no entry claims; makes the two FAT copies equal; recounts the free clusters and rebuilds the next-free hint so allocation does not restart at the beginning of the FAT; writes FSInfo; and sets the clean flag. `FWR_NEEDS_RECOVERY` is returned when the volume is dirty and no bitmap was supplied. The interruption test on port 3-1 cut a session mid-flush and recovered a 40 MiB file with 1,536 bytes of metadata written (entries `1793635810117434075-86ece323`, `1793636210564944400-a065537e`).
+
+## 11. Measured performance and limits
+
+| Measurement | Result | Entry |
+| --- | --- | --- |
+| reads, 3.3 V, 50 MHz, per 128 KiB request (3-1) | 21.4 to 21.9 MB/s | `1793602100319385552-a0551753` |
+| reads, SDR104 at 150 MHz, in the OS owner (3-3) | 46.5 and 46.8 MB/s, 0 mismatches over 440 MiB and 512 MiB | `1793689311355151182-d43861f7`, `1793692075400545011-09988217` |
+| reads, SDR50 at 100 MHz and SDR25 at 50 MHz at 1.8 V (3-3) | 39.2 and 21.6 MB/s per request | `1793667245855934208-55d19b3c` |
+| writes, 3.3 V, 50 MHz, 128 KiB pieces (3-1) | 14.7 MB/s flushed; flush p50 256 ms, p99 803 ms | `1793632378497932347-1618d4a8` |
+| writes, SDR25 at 1.8 V (3-3) | 440,401,920 bytes at 9.8 MB/s (the ladder cost about four restarts) | `1793689196470444588-1be26413` |
+| writes, SDR104 at 150 MHz (3-3) | 512 MiB in 42.0 s, 13.2 and 13.5 MB/s flushed, flush p50 326 to 336 ms, 0 restarts, 0 mode steps | `1793692002289431339-7dfb06bb`, `1793692393910115727-f58db0e9` |
+| mount recovery after a cut (3-1) | 1,536 bytes of metadata written | `1793636210564944400-a065537e` |
+
+**Limits.**
+- **Write rate.** The write rate at SDR104 is the card's programming rate, about 13 MB/s on the 3-3 card; the bus runs at 150 MHz and idles. Larger caches or other cards may program faster or slower.
+- **Cards.** Only port 3-3's card (Phison SD32G) has been written at 1.8 V, and only as a scratch card. Port 3-1's card has run at 3.3 V only.
+- **Not implemented.** DDR50, GPT, multiple volumes, a power cycle of the card, the busy-clear interrupt in place of the DAT0 timer.
+
+## 12. How to test a change
+
+**Host checks.** Each runs without the board; run `python3 checks/<name>.py --output DIR` (or `--evidence DIR` for those that take it). Each contains mutations that must fail the check.
+
+| Layer | Check |
+| --- | --- |
+| core, identification and modes | `checks/sunxi-mmc.py`, `checks/sunxi-mmc-uhs.py` (UHS-I switch, tuning, the mode ladder, the restart, the registers of every mode against the vendor source) |
+| core, writes | `checks/sunxi-mmc-write.py` (CMD24 and CMD25 against a strict controller model: the register sequence, the chain, busy, the new-mode data phase, faults) |
+| platform | `checks/a733-mmc-platform.py`, `a733-mmc-platform-write.py`, `a733-mmc-dma-chain.py`, `a733-mmc-gic-irq.py`, `a733-mmc-adaptive-voltage.py`, `a733-mmc-sdc3.py` |
+| read-only builds | `checks/sd-read-only.py` |
+| admission | `checks/storage-card-identity.py` (blob, restore point, scratch card, CID), `checks/storage-bounds.py` |
+| records | `checks/a733-mmc-uhs.c` (the failure words and the report fields), `checks/board-stop-note.py` |
+| FAT32 service | `checks/fat32-rw.py` (every write order, power-loss sweep at write boundaries, recovery), `checks/storage-write-guard.py` (the time guard, formatting), `checks/storage-write-interrupt.py` |
+| whole image | `checks/qemu-os-boot.py` (the write-capable image boots and opens the card in QEMU) |
+
+`tools/integration-gate.py --affected bringup..HEAD` runs the checks a change affects.
+
+**Building an image.** Configure with the cross toolchain and the dependency directories (see `checks/image_dependencies.py`, which prints them), then `-DSUNSTONE_A733_OS=ON -DSUNSTONE_A733_OS_CPU_RETURN=ON -DSUNSTONE_A733_OS_SD_WRITE=ON -DSUNSTONE_APPLICATION=storage-write-test` and the scheduler options of `docs/os-image-history.md`, and build the target `sunstone-a733-os-storage-write-test`. The image is `sunstone-a733-os-storage-write-test.elf`.
+
+**A board test on the scratch card (port 3-3), worked.** The example reformats the card and writes the 512 MiB test file.
+
+1. *Prediction first.* Write what the run should show, with the record's `reference` and hypothesis: for the format, `status 0`, `written_bytes 15,286,272`, SDR104 at 150 MHz, no restart and no fault.
+2. *Inputs.* The bounds blob for the scratch card, the mode input and the descriptor:
+
+   ```python
+   import hashlib, json, sys
+   sys.path[:0] = ['tools', 'apps/storage-write-test']
+   import storage_bounds, host
+   CID, PARTITION = '2750485344333247120000029d014c47', [2048, 61065216]
+   open('blob.bin', 'wb').write(storage_bounds.encode_scratch(tuple(PARTITION), CID))
+   open('mode9.bin', 'wb').write(host.mode_input(9))            # 9 format, 0 create the file, 3 verify it
+   image_sha = hashlib.sha256(open('image.elf', 'rb').read()).hexdigest()
+   json.dump({'image_sha256': image_sha, 'storage_scratch': {'card_cid': CID, 'partition': PARTITION}}, open('image.board.json', 'w'))
+   ```
+3. *Pre-flight.* `tools/board.py check --kind cpu-return --port 3-3 --storage-write --input blob.bin --input mode9.bin --descriptor image.board.json --state STATE --evidence DIR image.elf` runs the runner's own admission on the host.
+4. *Submit.* The same arguments with `submit --worker NAME --no-wait --reference DOC#ANCHOR --hypothesis "…"`. The hypothesis states the predicted result, such as the mode record's fields and the file's size; the runner compares nothing with it, and the decode in step 5 gives the result that the coordinator reviews against it. The submission needs the coordinator's approval for the card (`scratch-cards.json` and `storage-card-<cid>.json` in the coordinator's directory) and for the image's new hypothesis text.
+5. *Decode.* `python3 -c` with `host.decode(open('run/output.bin', 'rb').read()[:512])` from `apps/storage-write-test/host.py`, then `host.failures(...)`; a watchdog reset has no report, so read the failure note from `run/result.json` (`first_failure.value` and `aux`) with the tables of section 8.
+6. *Record.* `tools/evidence.py add ENTRY --subsystem storage --verdict … --prediction … --conclusion … --measure …`, then `tools/evidence.py validate` and `sync --check`.
+7. Repeat with mode 0 (the 512 MiB file), then mode 3 (the verify read, which needs the file to be exactly 512 MiB). A failed or interrupted session on the scratch card is undone by running mode 9 again.
