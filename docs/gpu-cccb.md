@@ -1,9 +1,9 @@
 # GPU client command transport
 
-The native client command transport is **implemented and host-tested**. It
-writes command sequences into a context's shared ring and submits a firmware
-notification through the existing kernel command queue. Complete ring and
-notification bytes match pinned driver functions. Physical GPU execution,
+The native client command transport is **implemented**; no host check
+remains. It writes command sequences into a context's shared ring and submits a
+firmware notification through the existing kernel command queue. Its ring and
+notification bytes follow the pinned driver functions. Physical GPU execution,
 context construction, job validation, and completion fences remain outstanding.
 
 This document assumes familiarity with device drivers and shared-memory queues.
@@ -93,30 +93,23 @@ contexts, or cleanup records. Job completion, device cache visibility, context
 cleanup, and resource reclamation require separate protocols. Integration with
 the GPU service and physical qualification remain open.
 
-## Focused checks compare real transport bytes
+## No host check compares transport bytes
 
-The [host check](../checks/pvr-cccb.py) compiles extracted, unchanged ring-writing,
-space, control-initialization, and notification-fill functions from the pinned
-driver. Its sanitizer fixture links the native client transport to the actual
-kernel queue implementation. Eighteen successive sequences vary payload sizes,
-cross ring boundaries, and compare complete ring and notification bytes.
+No host check compares the ring-writing, space, control-initialization and
+notification-fill functions with the pinned driver, connects the native client
+transport to the kernel queue implementation, or covers sequences of varying
+payload sizes across ring boundaries, empty payloads, client-ring pressure, a
+full kernel queue, delayed returns, a KICK consumed without a return word,
+malformed cursors, writes that take effect before failing, late completion,
+clock regression, changed epochs, unsuccessful returns or terminal refusal. The
+design is that invalid admission preserves state and performs no I/O.
 
-The same fixture checks empty payloads, client-ring pressure, a full kernel
-queue, delayed returns, and a KICK consumed without a return word. Focused faults cover malformed cursors, writes that take effect
-before failing, late completion, clock regression, changed epochs, unsuccessful
-returns, and terminal refusal. Invalid admission preserves state and performs
-no I/O. Guard bytes remain intact.
-
-The first build exposed a host-header macro collision in the reference shim.
-After that fixture correction, the sanitizer check passed. Clang 21 also
-compiled the component for freestanding AArch64 with strict alignment. The
-object has 2,976 bytes of code/read-only data and no writable static data.
-The largest direct frame is 96 bytes; called functions add their own frames.
-
-Evidence is under `~/.cache/sunstoneos/evidence/gpu-cccb-20261016/`.
-`results.json` records the host inputs and result; `target.json` records the
-target command, inputs, object identity, and frame sizes. The reference uses
+The component compiles for freestanding AArch64 with strict alignment. The
+object has 2,976 bytes of code/read-only data and no writable static data. The
+largest direct frame is 96 bytes; called functions add their own frames. The
+reference is
 [pvr_cccb.c](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_cccb.c)
-and associated headers checked against the cached source manifest. Existing
-GPU, emulator, board, and mimus checks were not repeated. No performance
-measurement or physical request was made.
+and associated headers. No performance measurement or physical request has been
+made.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-cccb.jsonl).

@@ -233,6 +233,10 @@ void __wrap_vApplicationIRQHandler(uint64_t interrupt)
     __real_vApplicationIRQHandler(interrupt);
 }
 
+#ifdef SUNSTONE_CONTROL_TASK_EL1
+/* Measurement: the woken task runs at EL1, so its masks are direct register writes and not supervisor calls. */
+int ulSunstoneControlTaskPrivileged(void (*entry)(void *), void *context) { (void)context; return entry == task_path; }
+#endif
 static StaticTask_t consumer_task, path_task[CORES];
 static StackType_t path_stack[CORES][512];
 static StackType_t consumer_stack[512];

@@ -116,26 +116,12 @@ A physical launch remains the board coordinator's operation under the existing
 lock, admission and one-attempt policy. The current board's failed-instance
 record must be resolved before any launch.
 
-## Focused validation covers new application boundaries
+## Application boundaries have no host check
 
-`checks/hdmi-application.py` builds the affected native image and checks its linked
-providers. The application fixture scripts previously checked leaf completion to
-exercise PMIC readiness, start publication, scheduled stop, expired sessions,
-health/stop faults, wrong-task refusal and clock regression. Separate cases use
-the actual session validator, controller reservation admission and native
-constructor to check independent and supervised recovery identities.
-
-The native-constructor cases supply modeled provider metadata and perform no
-MMIO. The launcher packing check uses synthetic session bytes only to inspect
-its wire encoding. Neither fixture grants physical authority. Existing native
-HDMI register-sequence, EDID, PHY, CSC and TV timing evidence is reused rather
-than replayed. The native image and reused launcher compile successfully. All seventeen new
-application, session and recovery-admission cases pass, together with offline
-encoding and input-snapshot checks. No physical operation was attempted.
-Preserved evidence is under
+No host check builds the application image and exercises its linked providers, PMIC readiness, start publication, scheduled stop, expired sessions, health and stop faults, wrong-task refusal, clock regression, or the independent and supervised recovery identities. Existing native HDMI register-sequence, EDID, PHY, CSC and TV timing evidence applies to the register sequences. No physical operation was attempted. Earlier host results are under
 `~/.cache/sunstoneos/evidence/hdmi-application-20261017/`.
 
-An optional retained framebuffer image now extends this application. Configure
+An optional retained framebuffer image extends this application. Configure
 `SUNSTONE_HDMI_FRAMEBUFFER=ON` for the fixed 720p RGB565 DE1→TV0 path. The default
 remains the non-DMA hardware pattern. The framebuffer image requires additional
 initial-isolation and memory admission, and retains its complete DMA allocation
@@ -166,3 +152,5 @@ publication, and verify the retained copy at the first counter-initialization
 boundary. Publication includes readiness as well as every session byte. The
 counter, cache publication and provider entry are modeled. The sole generated
 HDMI boot seals before cached setup. No display bring-up or output was replayed.
+
+Results of host checks that no longer exist are kept in the evidence record [hdmi-application.jsonl](evidence/hdmi-application.jsonl).

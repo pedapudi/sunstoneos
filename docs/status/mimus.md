@@ -2,8 +2,6 @@
 
 **Status: implemented.**
 
-Mimus runs through the SunstoneOS application kit from its own repository. The acceptance branch `port/sunstoneos-acceptance-on-split` is based on CPU engine revision `0cbc96950`; the recorded result uses SunstoneOS `e124d65f` and the paced image uses `8008acb1`.
-
 **Software evidence:** host.
 
 **Board-qualified scope:** One recorded 57,440-sample input on port 3-1 returns
@@ -13,6 +11,16 @@ A paced replay of the same input passes six fresh native sessions with full
 segmented parity, complete version 2 thermal reports and rail cleanup; median
 compute is 92.670 ms. These runs do not qualify corpus latency, retained-state
 replay, sustained multi-utterance capture or thermal and fault recovery.
+
+Mimus runs through the SunstoneOS application kit from its own repository ([apps/mimus/source.json](../../apps/mimus/source.json)).
+
+| Capability | Status | Key figure | Evidence and design |
+| --- | --- | --- | --- |
+| Recorded input through the application kit, CPU engine | qualified on the board | 135.673 ms compute against the 179.5 ms limit; 90 frames; exact transcript | `mimus-acceptance-summary` in [mimus.jsonl](../evidence/mimus.jsonl) |
+| Paced replay, six fresh native sessions | qualified on the board | Median compute 92.670 ms; full segmented parity | [mimus.jsonl](../evidence/mimus.jsonl) |
+| Eight CPU workers | host-tested | No hardware run | [mimus-eight-workers.md](../designs/mimus-eight-workers.md); [mimus-os-eight-workers.md](../designs/mimus-os-eight-workers.md) |
+| Accelerator-assisted recognition | host-tested | GPU: see [GPU status](gpu.md); NPU: see [NPU status](npu.md) | [gpu-recognition.md](../designs/gpu-recognition.md) |
+| Sustained replay, multi-utterance capture, live input, session expiry, retained-state replay, thermal and fault recovery | open | None | None |
 
 ## Open work
 
@@ -24,13 +32,14 @@ replay, sustained multi-utterance capture or thermal and fault recovery.
 
 ## Evidence
 
-Board results with a queue entry are records in `docs/evidence/mimus.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-mimus-20261101.md).
+Board results with a queue entry are records in [mimus.jsonl](../evidence/mimus.jsonl), added with `tools/evidence.py add`; the revisions and queue entries of the acceptance runs are in the record `mimus-acceptance-summary`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-mimus-20261101.md).
 
 <!-- evidence-table:begin -->
-7 records in `docs/evidence/mimus.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+8 records in `docs/evidence/mimus.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
+| `mimus-acceptance-summary` |  |  | `` | returned | passed | recorded_samples 57440 samples, frames 90 frames, recorded_compute 135.673 ms, compute_limit 179.5 ms, paced_sessions 6 sessions, paced_compute_median 92.67 ms |
 | `1793516356151336408-cac6790a` | 2026-11-01 | 3-1 | `3f94df4af6e2` | returned | passed | run_total 69.532 s, compute 135673 µs, total 135715 µs, load_and_pack 92095 µs, frames 90 frames |
 | `1793560017211439012-ff8c6091` | 2026-11-01 | 3-1 | `d789333c6090` | returned | passed | run_total 71.663 s, compute 92585 µs, pacing_lateness_max 415 µs, thermal_slot_lateness_max 891 µs |
 | `1793560102532814944-02caa432` | 2026-11-01 | 3-1 | `d789333c6090` | returned | passed | run_total 71.563 s, compute 92670 µs, pacing_lateness_max 932 µs, thermal_slot_lateness_max 887 µs |

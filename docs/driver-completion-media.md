@@ -164,8 +164,7 @@ completion indication.
 
 Native barriers also need a model that delays write visibility. Current media
 host callbacks commonly update register dictionaries immediately; for example,
-`checks/a733-display-pll.c:barrier` only counts calls and the DE fixture's barrier
-only accounts an operation. The minimum-hold checks charge callback cost and
+the DE fixture's barrier only accounts an operation. The minimum-hold checks charge callback cost and
 fractional time but still publish writes immediately. Their passing results
 establish neither posted-write completion nor the presence of native `DSB SY`.
 
@@ -182,20 +181,13 @@ when a later status read would otherwise return success. Linked instruction
 checks must observe the actual barrier; generic driver callbacks alone cannot
 prove native adapter behavior.
 
-The earlier `checks/displayport-controller.py:Model.read` returned `0x111` for
-every PHY status read. READY, clock acknowledgment and A0 acknowledgment were
-present before their requests. The source comparison fixture in
-`checks/displayport-top-rate.py` uses the same constant for its trace oracle.
-The constant-status models can compare register writes. They cannot detect a
-missing wait, a wrong nonzero acknowledgment, or a request issued before its
-prerequisite.
-
-The linked controller fixture now uses separate write-armed transitions. Reset
-release arms READY; the PLL clock request arms its acknowledgment. An A0 request
-leaves any prior A2 acknowledgment visible until the A0 transition completes.
-Cases cover delayed success, stale A2 forever, each missing acknowledgment,
-deadline expiry, and no MMIO after terminal failure. The controller polls A0
-equality while preserving the existing request sequence and timeout budgets.
+Models that return a constant PHY status can compare register writes. They
+cannot detect a missing wait, a wrong nonzero acknowledgment, or a request issued
+before its prerequisite. No host check models the DisplayPort controller with
+write-armed transitions: reset release should arm READY, the PLL clock request
+its acknowledgment, and an A0 request should leave any prior A2 acknowledgment
+visible until the A0 transition completes. The controller polls A0 equality
+under its request sequence and timeout budgets.
 
 The DSI command fixture already clears instruction enable after several reads
 and tests a stuck engine. Camera calibration already delays FLAG/result and
@@ -223,51 +215,19 @@ failed clears and frame boundaries racing status acknowledgment.
 The write-ordering inspection records all 45 driver files, their native provider
 inputs and inspected cached source hashes in
 `~/.cache/sunstoneos/build/model-fidelity-1031/ordering-followup/media/source-inspection.json`.
-Every inventoried filename appears in this audit. This documentation extension
-adds source evidence; the earlier host checks below retain their stated scope.
+Every inventoried filename appears in this audit.
 
 Focused sanitizer, pinned-source comparison and native compilation records are
 under `~/.cache/sunstoneos/build/model-fidelity-1031/media/`: `pll/results.json`
-for delayed and stuck DISPLL lock, `de/results.json` for unreadable READY and
-replay status, and `dp-controller4/summary.json` for linked DisplayPort transitions.
-The DisplayPort PHY cases use the existing 1000-attempt limits for missing READY
-and clock acknowledgment. Stale A2 and missing A0 cases expire under a 20 ms
-outer deadline; a separate case expires under a 10 ms deadline. These cases do
-not exercise exhaustion of the 100000-attempt A0 loop.
-
-`dp-reference3/result.json` compares both polarities and all ten legal signal-level
-pairs with pinned vendor functions. Its zero-delay trace mode isolates register
-programming; the linked controller suite supplies delayed completion coverage.
-`metrics/results.json` compiles the original and corrected display translation
-units with identical native compiler flags and headers. DP text increases from
-26,480 to 26,484 bytes; DE text remains 5,998 bytes. Both retain zero data/BSS and
-maximum stack sizes of 784 and 592 bytes respectively. The original DE driver
-fails the strengthened read-as-zero READY fixture, as recorded in
-`metrics/de-before-result.json`.
-
-`metrics/dp-phy-latency-final.json` runs the PHY entry with the same modeled
-6 ms READY, 35 µs clock and 40 µs A0 delays. Nominal completion takes 27,092 µs
-in the previous linked image and 27,137 µs after correction, with five additional
-status reads and the same 447 writes. The additional 45 µs observes the requested
-A0 acknowledgment. The previous image accepts permanently stale A2; the
-corrected image refuses it under its 20 ms deadline. This is modeled timing,
-not a measured hardware regression. The previous ELF contains other dependencies;
-the identical-flag object comparison isolates the changed translation units.
+for delayed and stuck DISPLL lock and `de/results.json` for unreadable READY and
+replay status. No host check remains for the DisplayPort PHY and controller
+transitions; the recorded results are in
+[the evidence record](evidence/driver-completion-media.jsonl).
 
 `holds-final3/results.json` records all eight fractional-counter sequencer cases.
-`holds-dp-tick/results.json` refines the DP helper model so `vTaskDelay(1)`
-advances to the next 1 kHz scheduler boundary. At an exact wake boundary, the
-extra reported microsecond can require another scheduler tick. The unchanged
-absolute deadline still refuses a late wake.
 Every compiled translation unit has a dependency file; the result hashes its
 consumed headers, sources, generated fixtures and compiler commands. The check
 uses the shared assertion guard, configured compiler and non-recovering address
 and undefined-behavior sanitizers. Original PLL source/native checks pass under
 `pll-holds/`, and both-port camera composition and retained rearm checks pass
 under `capture-holds/`.
-
-`metrics-holds/results.json` compares the same eight native translation units
-before and after the minimum-wait correction, with identical flags and headers.
-Framebuffer text grows by 8 bytes and sensor text by 16 bytes for checked target
-arithmetic. Other text sizes and all maximum stack, data and BSS sizes are
-unchanged. No new image was prepared or queued for physical execution.

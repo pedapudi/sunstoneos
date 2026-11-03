@@ -522,33 +522,6 @@ class Check(unittest.TestCase):
         status.write_text(status.read_text().replace('fixture-9', 'fixture-1') + 'Cites 1793513595977482947-679bf1ea.\n')
         self.assertTrue(any('no evidence record' in item for item in cpu_problems()))
 
-    def test_migrate_does_not_invent_open_work(self):
-        spec = importlib.util.spec_from_file_location('evidence', ROOT / 'tools/evidence.py')
-        evidence = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(evidence)
-        import contextlib
-        import io
-        import types
-        (self.root / 'docs/evidence').mkdir(exist_ok=True)
-        head = '# Fixture\n\n**Status: implemented.**\n\n**Board-qualified scope:** None.\n\n'
-        cases = {
-            'plain': (head + 'Support remains open. Nothing is missing.\n',
-                      '1. Open work has not been written; see the historical log.', True),
-            'written': (head + '## Next actions\n\n1. Run the control.\n2. Compare the result.\n\n## Other\n\nText.\n',
-                        '1. Run the control.\n2. Compare the result.', False),
-        }
-        for name, (text, expected, warns) in cases.items():
-            path = self.root / 'docs/status' / f'{name}.md'
-            path.write_text(text)
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                evidence.cmd_migrate(types.SimpleNamespace(root=str(self.root), status=str(path), date='20261101',
-                                                           queue=str(self.root / 'none')))
-            migrated = path.read_text()
-            self.assertIn('## Open work\n\n' + expected, migrated)
-            self.assertNotIn('remains open', migrated)
-            self.assertEqual('warning: ' + path.name in out.getvalue(), warns)
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)

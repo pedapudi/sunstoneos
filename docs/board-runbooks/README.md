@@ -167,9 +167,8 @@ Without the patch, ranks 6 and 9 have two options:
   link is the thermal run's kernel-mode return, or none for rank 9. Each
   repeat retrains a board whose DDR is already trained, which has not been
   demonstrated, and carries rank 3's risk of an unbounded hang inside the
-  vendor routine. Earlier handoffs direct that DDR continuity be preserved
-  rather than retrained
-  ([handoff history](../handoff-history-20261019.md)).
+  vendor routine. Earlier handoffs directed that DDR continuity be preserved
+  rather than retrained.
 - **The runner's signature path.** Without `--ddr-evidence`, the kernel
   runner reads 128 bytes at `0x42000000` and admits the run if they start
   with a probe signature. The forced-stall result left `0x534b4552` there

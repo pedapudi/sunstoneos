@@ -1,6 +1,6 @@
 # GPU firmware memory and boot configuration
 
-The native MIPS preparation component is **implemented and host-tested**.
+The native MIPS preparation component is **implemented**; no host check remains.
 It prepares firmware memory and wrapper register values for the A733 GPU.
 It does not access the device. Firmware startup and physical qualification
 remain outstanding.
@@ -75,34 +75,21 @@ now connect firmware resources to the queues. The
 [FreeRTOS service](gpu-service.md) integrates firmware preparation and the
 checked startup controller in an emulator; physical backend work remains.
 
-## Focused evidence compares complete outputs with pinned source functions
+## No host check compares outputs with pinned source functions
 
-One [sanitizer check](../checks/pvr-mips.c) passed discontiguous physical pages
-above 4 GiB, the highest 36-bit page, both cache policies, unaligned CPU byte
-buffers, allocation guards, and removal of optional mappings on reconstruction.
-It also passed 61 refusal cases with every output unchanged.
+No host check covers discontiguous physical pages above 4 GiB, the highest
+36-bit page, both cache policies, unaligned CPU byte buffers, allocation guards,
+removal of optional mappings on reconstruction or the 61 refusal cases with
+every output unchanged. Nor does one compare the code and data bytes, the 16 KiB
+of page-table entries and the eleven ordered register writes with the
+page-mapping, boot-data and wrapper-initialization functions of the pinned
+board driver. A 33-page fixture would not prove physical translation, cache
+coherence or firmware execution.
 
-The [reference comparison](../checks/pvr-mips-reference.py) extracts and compiles
-the original page-mapping, boot-data, and wrapper-initialization functions from
-the pinned board driver. It uses independent ELF staging and supplies physical
-addresses through host substitutes for kernel memory objects. Cache flushes
-are stubbed, and register writes are captured without device access.
-
-All code/data bytes, all 16 KiB of page-table entries, and all eleven ordered
-register writes match. An independent table walk checks the highest physical
-address and both cache policies. The source manifest and firmware hash are
-verified before comparison. The fixture maps 33 pages; it does not prove
-physical translation, cache coherence, or firmware execution.
-
-The reference harness initially failed to compile because a check header was
-missing and its warning macro returned no value. Both fixes affected only
-the harness. Native sanitizer and AArch64 compilation evidence remained valid.
-Clang 21 compiled the native component with strict alignment and freestanding
+Clang 21 compiles the native component with strict alignment and freestanding
 options: 4,607 bytes of code/read-only data, no writable static data, and a
 1,488-byte preparation stack frame. Calls into firmware decoding and staging
-require additional stack space.
+require additional stack space. No hardware access or performance measurement
+has occurred.
 
-Commands, outputs, input copies, hashes, reference source, and objects are in
-`~/.cache/sunstoneos/evidence/gpu-mips-20261016/`. Existing firmware staging,
-OS, mimus, NPU, and recovery evidence was reused. No hardware access or
-performance measurement occurred.
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-mips.jsonl).

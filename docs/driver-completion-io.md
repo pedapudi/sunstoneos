@@ -124,7 +124,7 @@ memory attributes; these drivers do not independently admit that mapping.
 | Returning RTC source/alarm operations | `apps/rtc-source-returning/main.c` and `apps/rtc-alarm-returning/main.c`: DSB after reads/writes | Same RTC predicates and holds. `apps/rtc-returning/main.c` is read-only and refuses its write callback; it adds no pending store. |
 | SPI local reset, GCR/FCR reset→poll, setup→XCH and completion→hold | `spi/a733_spi_platform_native.c`: byte/word DSB both | Manual 18.9 and cached `spi/ng/spi-sunxi.c:347–378/543–555`: reset self-clear. Vendor 5µs poll spacing is cadence. Its 100µs ready-GPIO holds at 1032/1065 are slave-only; the native path is master. Caller setup/hold minima use post-access origins. |
 | UART local reset, HALT/LCR/divisor→UPDATE→poll, FCR command/config and drain | `uart/a733_uart_platform_native.c`: DSB both, including each divisor/update write | Manual 18.10.6.4 and cached `uart/sunxi-uart-ng-core.c:sunxi_uart_force_lcr` preserve update ordering with no fixed configuration hold. The vendor 1µs console polling pauses at 721/738 are cadence. Local reset holds 10µs. |
-| Watchdog policy→MODE enable→RESTART, disable→restoration and feed→return | `watchdog/a733_watchdog.c` uses DSB both; `checks/a733-watchdog-configuration.c` uses the same accessors for its CONFIG/OUTPUT-only trial | Manual 8.3.6.4–.7 and cached `board-kernel/sunxi_wdt.c:sunxi_wdt_set_timeout/start/ping`. Architectural completion precedes the next operation. RESTART has no acknowledgment field; the vendor's reset loop `mdelay(5)` follows restart and is not an inter-write hold. |
+| Watchdog policy→MODE enable→RESTART, disable→restoration and feed→return | `watchdog/a733_watchdog.c` uses DSB both | Manual 8.3.6.4–.7 and cached `board-kernel/sunxi_wdt.c:sunxi_wdt_set_timeout/start/ping`. Architectural completion precedes the next operation. RESTART has no acknowledgment field; the vendor's reset loop `mdelay(5)` follows restart and is not an inter-write hold. |
 | ROM redirect ENTRY→FLAG publication and FLAG invalidation→ENTRY restoration | `watchdog/a733_rom_return.c` uses DSB both | [Captured ROM/boot0 inventory](vendor-firmware/boot-rom-and-boot0.md) records entry/flag dispatch. Readbacks check stored values; DSB supplies architectural completion between publication steps. No documented fixed hold exists. |
 | Maintenance watchdog reload | `watchdog/a733_maintenance_watchdog.c` delegates to `platform/a733/maintenance_watchdog.c:a733_watchdog_hw_reload`: DSB both | Same watchdog register contract; configuration readback and counter guard validate admission and elapsed time. They do not acknowledge restart internally. |
 
@@ -211,23 +211,7 @@ The maintenance watchdog delegates the hardware reload to its native provider.
 
 ## Models preserve pending hardware state
 
-The baseline fixtures at `5e0737ea` could not establish these waits:
-
-- `checks/a733-spi.c` clears GCR and FIFO reset bits in the next `now()` call.
-  The first poll sees completed reset. A driver that omits either wait can pass.
-- `checks/i2s-platform.c` sets PLL LOCK during the ENABLE write and effective
-  gate status during output enable. It exercises stuck lock and gate status,
-  but a normal delayed lock and unstable lock sequence are absent.
-- `checks/i2s-stream.c` clears FIFO flush bits inside the write callback.
-  DMA-before-flush and permanently stuck flush are not covered.
-- `checks/a733-uart.c` exposes an explicit `update_pending` switch but writing
-  CHANGE_UPDATE does not start a timed operation. Normal startup can finish
-  without a pending interval. Its separate busy case remains useful.
-- `checks/a733-pwm.c` stores PPR directly and leaves PERIOD_RDY zero. Finite
-  pulse completion is manually injected. This covers caller state, but does
-  not establish readiness timing or a controller-driven start transition.
-
-The repaired C fixtures use the shared virtual-time transition helper
+The C fixtures use the shared virtual-time transition helper
 [`register_latency.h`](../checks/register_latency.h). Writing a request
 must retain its active bit until its scheduled completion. Reads before that
 time return the old active state; readback of configuration must not advance
@@ -238,7 +222,7 @@ delayed lock, an interrupted sequence of lock samples, the 20µs settle interval
 delayed gate status and delayed FIFO flush. A separate FreeRTOS case retains
 the stream on stuck-flush timeout before DMA or direction enable.
 
-PWM startup now keeps its progress in a private `configure_step` field. It
+PWM startup keeps its progress in a private `configure_step` field. It
 admits the baseline once, waits before programming control, then waits before
 writing PPR. Its report layout and numeric phase values remain unchanged.
 The model tests initial busy, busy following the driver's control write,
@@ -246,11 +230,8 @@ stuck-busy deadline expiry and foreign control bits. The busy cases prohibit
 PPR, pin acquisition and waveform start. The constructed delays exercise
 ordering; the manual does not establish those particular durations.
 
-Existing transfer, interrupt, cache, alias, contention, output and ownership
-cases remain. Source comparisons of register offsets remain valuable, but
-they establish layout agreement rather than asynchronous completion. The
-three reviewers approved the PWM design and final code before commit. No
-voltage, rail, clock-point, thermal or storage-write behavior changed.
+Source comparisons of register offsets establish layout agreement, not
+asynchronous completion.
 
 ## Focused verification
 
@@ -319,8 +300,8 @@ snapshot retained and no radio MMIO or pin acquisition. Constructed supply
 evidence does not qualify the fitted board's DCDC8 route.
 
 One execution of the same four focused host closures measured the following
-wall times, including process and sanitizer startup. The corrected fixtures
-include the additional completion cases; these times are check costs, with no
+wall times, including process and sanitizer startup. The fixtures
+include the completion cases; these times are check costs, with no
 inference about device throughput.
 
 | Closure | Baseline milliseconds | Corrected milliseconds |
@@ -335,8 +316,7 @@ under `~/.cache/sunstoneos/build/model-fidelity-1031/io/`. Test binaries used
 the same compiler and sanitizer flags before and after.
 
 The final minimum guards add fractional-time and callback-cost cases to the
-SPI and I2S closures. Their final necessary rerun updates the table above;
-unchanged UART/PWM timings are reused. The combined host cost is 18.727ms,
+SPI and I2S closures. The combined host cost is 18.727ms,
 against 17.583ms for the baseline. Process startup and the added cases are
 included; these small host timings do not measure hardware performance.
 All six changed driver translation units compile for AArch64. The RTC,

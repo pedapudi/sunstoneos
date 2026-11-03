@@ -280,12 +280,11 @@ channel and status bit, every listed reset bit, read failures and missing
 callbacks. Each case also checks that the function writes no register and reads
 no unexpected address.
 
-[checks/remote-writers-sources.py](../checks/remote-writers-sources.py) pins
-boot0, the captured board ROM, the manual text and the datasheet text by
-SHA-256. It repeats the literal-pool survey, decodes the ROM's CE and DMA0
-sequences, and confirms the manual and datasheet statements cited above.
+The survey that pins boot0, the captured board ROM, the manual text and the
+datasheet text by SHA-256, repeats the literal-pool survey and decodes the ROM's
+CE and DMA0 sequences has no retained check. The statements cited above rest on
+that survey and on the manual and datasheet text.
 
 ```sh
 ~/.cache/sunstoneos/venv/bin/python checks/remote-writers-model.py --output /new/directory/model
-~/.cache/sunstoneos/venv/bin/python checks/remote-writers-sources.py --output /new/directory/sources
 ```

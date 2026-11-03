@@ -6,39 +6,29 @@ Native mappings, privileged reservation pools, cache maintenance, DMA0 services 
 
 **Software evidence:** host, emulator.
 
-**Board-qualified scope:** Full training and explicit-record restores on both
-boards report 12,288 MiB and pass two 4 KiB page comparisons. SID-selected
-restoration on 3-1 passes twice with 879 PHY writes and quick checks of 34.116
-and 34.117 ms. CPU-L/DSU boot clocks restore. EL3 entry restores MBUS to 600 MHz
-on both boards while preserving the checked pattern. The runner's default DDR builds run boot0's post-DRAM
-interconnect step (nine NSI words, boot0 order), and the 12,224 MiB memory probe passes through them on 3-1.
-Sustained DRAM reads on 3-1 (development mode): one A76 core 14.8 GB/s, all eight cores 8.25 GB/s.
+**Board-qualified scope:** Full training and explicit-record restores on both boards report 12,288 MiB and pass two 4 KiB page comparisons. SID-selected restoration on 3-1 passes twice with 879 PHY writes and quick checks of 34.116 and 34.117 ms. CPU-L/DSU boot clocks restore. EL3 entry restores MBUS to 600 MHz on both boards while preserving the checked pattern. The runner's default DDR builds run boot0's post-DRAM interconnect step (nine NSI words, boot0 order), and the 12,224 MiB memory probe passes through them on 3-1. Sustained DRAM reads on 3-1 (development mode): one A76 core 14.8 GB/s, all eight cores 8.25 GB/s.
 
-**Final state of the DRAM scaling stream (2026-11-02).**
-
-- *Found.* The falling aggregate read rate is a property of the memory system under several independent streams, not of
-  SunstoneOS configuration. The sum of per-core rates equals the old last-finish rate; the old pass-based figures understated the
-  A76 sets by 14 to 19 percent. Start offsets, chunk size, software prefetch and boot0's nine NSI words change the total by
-  under 8 percent (the words by 0.3 percent). Refill traffic equals consumed bytes (no prefetch waste); backend stalls rise from 0.40
-  to 0.89 (A55) with eight cores. No counter sees row hits; locality is supported by exclusion and by the address dependence of
-  barrier-synchronized runs, not proven. No NSI counter observes CPU traffic. All 21 initiator ports start at priority 0 with no limit.
-- *Changed.* `boot/a733/ddr-entry.S` calls boot0 routine `0x49050` after `init_DRAM` (case `checks/ddr-nsi-words.py`). The
-  runner's default DDR builds were rebuilt from it (old builds in `~/.cache/sunstoneos/trash/ddr-defaults-20261102/`). New
-  `ddr-entry.bin` SHA-256 prefixes: plain `24031cba`, restore `896cf767`; `ddr-restore.bin` `364ba9f1` (unchanged);
-  manifests `f28e5175` (plain) and `b5302bf4` (restore). A memtest through the default path froze these hashes and passed.
-  Apps `dram-scaling`, `dram-nsi` and `dram-qos` hold the studies. CPU port priorities are unchanged from the inherited defaults.
-- *Backlog.* (1) CPU memory latency with the NPU job stream alongside the control loop and the CPU port priorities raised: the
-  scheduler's robot table owns it; the probes in `apps/dram-qos` are available to link. Unmeasured; the decision rule is in
-  `docs/designs/dram-bandwidth.md`. (2) Lead, not investigated: the A55 pointer chase on core 0 has a 99.99th percentile of 2.6 µs
-  and a maximum of 9 µs with no load, and 16.6 µs and 32 µs with the cores streaming, against 0.64 µs for the A76. The OS tick on
-  core 0 is the candidate. (3) DMA-engine load needs a captured DMA session record. (4) Row-hit and bank-conflict
-  counters of the controller are undocumented; locality stays unproven.
+| Capability | Status | Key figure | Evidence and design |
+| --- | --- | --- | --- |
+| Full DRAM training, both boards | qualified on the board | 12,288 MiB, two 4 KiB page comparisons | [fast boot](../designs/dram-fast-boot.md), `dram-fast-boot-training-timing` |
+| Explicit-record training restore | qualified on the board | 879 PHY writes | [training restore](../designs/dram-training-restore.md), [records](../evidence/dram-training-restore.jsonl) |
+| SID-selected restore by default | qualified on the board | quick check 34.116 and 34.117 ms | `dram-training-restore-default-1031` |
+| Card-boot restore variant and paired records | host-tested | 20 card cases, 32 selector cases | `dram-training-restore-card-offline`, `dram-training-restore-host-selection` |
+| CPU-L and DSU boot-clock return | qualified on the board | ROM clock point (494 MHz) | [training restore](../designs/dram-training-restore.md#the-wrapper-returns-cpu-l-and-the-dsu-to-the-rom-clock-point) |
+| MBUS at 600 MHz at EL3 entry | qualified on the board | 600 MHz, pattern preserved | [MBUS restore](../designs/mbus-restore.md), [records](../evidence/mbus-restore.jsonl) |
+| Boot0 interconnect step in the DDR wrapper | qualified on the board | nine NSI words in boot0 order; 12,224 MiB probe passes | [bandwidth](../designs/dram-bandwidth.md), `1793603309777289754-ca40363d` |
+| Sustained DRAM read bandwidth | qualified on the board | one A76 core 14.8 GB/s, eight cores 8.25 GB/s of 16.32 GB/s | `1793600409082394041-436818e2` |
+| CPU memory latency, CPU-only load | qualified on the board | A76 chase 152 ns idle, 416 ns streaming; no deadline miss | `1793604009213366498-b525353f` |
+| CPU memory latency, NPU and DMA load | open | not run | `dram-bandwidth-qos-knobs` |
+| Memory-bus priority hook, latency window, DDR trip | host-tested | no image links the hook | [controller](../designs/dram-controller.md), [bus priority](../designs/dram-bus-priority.md) |
+| Native mappings, reservation pools, cache maintenance | host-tested | emulator | [memory map](../memory-protection.md) |
+| Full-capacity memory and device visibility | open | | [memory qualification](../memory-qualification.md) |
 
 ## Open work
 
-1. Measure CPU memory latency with the NPU and DMA masters loading memory and the CPU port priorities raised ([result](../designs/dram-bandwidth.md#cpu-memory-latency-under-device-load-the-npu-and-dma-conditions-are-not-run)); the probes in `apps/dram-qos` need a finite NPU image or a captured DMA session record. CPU-only runs show no effect.
+1. Measure CPU memory latency with the NPU job stream and DMA masters loading memory and the CPU port priorities raised ([DRAM bandwidth open work](../designs/dram-bandwidth.md#open-work)); the probes in `apps/dram-qos` need a finite NPU image or a captured DMA session record. CPU-only runs show no effect. Separate the A55 core 0 latency tail from the OS tick.
 2. Qualify full-capacity memory and device visibility, and physical range ownership with external-pool mapping.
-3. Cover restore temperature, lower DRAM points, card deployment and decoding of the boot0 memory configuration.
+3. Cover restore temperature, lower DRAM points, card deployment and decoding of the boot0 memory configuration ([training restore open work](../designs/dram-training-restore.md#open-work)). Read the controller's row-hit and bank-conflict counters if documented.
 4. Establish physical static secondary-OFF ownership for the [native probe contract](../board-probe-contract.md).
 5. Qualify physical DMA and USB return.
 
@@ -50,11 +40,11 @@ Sustained DRAM reads on 3-1 (development mode): one A76 core 14.8 GB/s, all eigh
 
 DMA0, DMA1 and IOMMU operations have no physical qualification. Host checks pass for descriptor bounds, DMA0 admission, retained-allocation exclusion and IOMMU table construction. FreeRTOS emulator checks pass for DMA service ownership and cyclic shutdown ordering. DMA0 supports bounded descriptor chains, 35-bit addressing, polled and interrupt completion, copied and cyclic receive services.
 
-DMA0 needs physical channel, controller and data-access authority and transfer tests. DMA1 is blocked by an unresolved CPUS request and DRAM encoding. Native master exclusion, drain, installation and translation need physical evidence; no transfer above 4 GiB is qualified. See [memory map](../memory-protection.md), [DMA](../dma.md), [IOMMU](../iommu.md) and [storage](storage.md) for the physical SD DMA reads.
+DMA0 needs physical channel, controller and data-access authority and transfer tests. DMA1 is blocked by an unresolved CPUS request and DRAM encoding. Native master exclusion, drain, installation and translation need physical evidence; no transfer above 4 GiB is qualified. DMA-engine load on the memory system needs a captured DMA session record. See [memory map](../memory-protection.md), [DMA](../dma.md), [IOMMU](../iommu.md) and [storage](storage.md) for the physical SD DMA reads.
 
 ## Evidence
 
-Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-memory-dma-20261101.md).
+Board results are records in [memory-dma.jsonl](../evidence/memory-dma.jsonl); add one with `tools/evidence.py add`. Related records: [dram-bandwidth.jsonl](../evidence/dram-bandwidth.jsonl), [dram-training-restore.jsonl](../evidence/dram-training-restore.jsonl), [mbus-restore.jsonl](../evidence/mbus-restore.jsonl), [dram-fast-boot.jsonl](../evidence/dram-fast-boot.jsonl), [dram-controller.jsonl](../evidence/dram-controller.jsonl) and [dram-bus-priority.jsonl](../evidence/dram-bus-priority.jsonl). Earlier prose evidence is in [the historical log](../history/status-memory-dma-20261101.md).
 
 <!-- evidence-table:begin -->
 27 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.

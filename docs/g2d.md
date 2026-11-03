@@ -195,162 +195,28 @@ Physical qualification must compare fill, copy and source-over output, including
 source alpha, nonzero origins and untouched padding, with the CPU reference.
 It must also establish actual MMIO and DMA
 reachability, parent stability and retained failure handling. INTID83 is
-identified by the pinned device tree; this first path polls its enabled RCQ
+identified by the pinned device tree; this path polls its enabled RCQ
 status while retaining interrupt routing exclusion. Interrupt delivery remains
 unqualified.
 
-The image with DE_SYS initialization has SHA256
-`819165376f652c8353dc53aebee9d9c842d44957ea806c2e9bb0cbaac428e0c5`.
-Evidence under `g2d-power-20261020/` records five focused cases on that image.
-The linked task passes coherent OFF-to-ON initialization followed by RCQ source
-copy, and adopts coherent ON without domain writes. Initial incoherence, status
-timeout and uncertainty after the first delay write produce retained terminal
-failures without submitting G2D work. The timeout keeps its original request
-bound, and clean pending polls release the shared register mutex.
+## Host verification
 
-These cases use fresh function-call boundaries at EL1t. PMIC read-service
-results, task identity, counter, Device translations, mutexes and peripheral
-effects are modeled. They establish neither actual scheduling nor SMP behavior.
-Every stopped case preserves CPU context, RAM, MMIO and model state. Root's
-static comparison confirms unchanged boot object sections and symbolic
-relocations; accepted startup checks retain their original scope.
+No host check remains for this application. The recorded results of the linked
+image cases (DE_SYS initialization, normal completion, the saved task cases,
+source copy through the allocator and IOMMU validator, twofold enlargement,
+source-over-solid blending, general scaling and conversion, and the USB
+transport), with their image hashes and evidence directories, are in
+[the G2D evidence](evidence/g2d.jsonl). They model the pixels, scheduling and
+devices; physical G2D, USB and interrupt operation remain unqualified.
 
-Broader unchanged evidence is preserved under `g2d-native-20261020/` for image
-SHA256 `4e043dad7e691ad50c4164dd9085ae118a0e0911d7fd8aea93e16610e7966328`.
-Its frozen closure contains 169 linked objects and 448 compiled dependencies.
-Focused source review covers RCQ layout, DMA ownership, clock fields, retained
-IOMMU admission and TinyUSB packet completion.
-
-The actual linked allocator, pool getters, upload constructor, G2D constructor
-and IOMMU validator pass a model-only 64 by 64 source-copy fixture. The check
-confirms exact source bytes, a zero destination, three bounded permission spans
-and intact guards. Separate cases refuse differing CPU/physical addresses and
-corrupted guards while retaining allocations. Prepared-pool authority and time
-are modeled; no peripheral MMIO is mapped. Host execution also checks actual
-RCQ fields, fragmented upload authentication and master10-only IOMMU programming
-and fault scans. These checks establish software behavior under their stated
-models. Physical G2D, USB and interrupt operation remain unqualified.
-
-Twelve saved task cases execute that image's linked AArch64 task, clock and rail
-registries, GPU resource manager, native clock accesses, IOMMU and copied-output
-logic. They cover fresh completion, stale status refusal, global and master10
-faults, configuration-only timeout, failure after copying, unchanged terminal
-polling and two 32768-byte copy chunks. Separate fill and copy cases interpret
-the actual emitted RCQ and mixer words with an ARGB8888 hardware-effect model,
-then compare copied output with the sealed caller reference. Every trace excludes
-other masters' micro registers. PMIC service results, scheduler mutexes,
-translation observations and hardware effects remain explicit model boundaries.
-
-The transport check reuses the terminal copied checkpoint. Actual configured
-TinyUSB vendor, FIFO and endpoint code passes full-speed and high-speed streams
-and an exact high-speed packet-length case with modeled DCD completions.
-The raw constructor table, task checkpoints and case records are preserved
-beside the frozen image. These models do not establish physical pixels,
-interrupt delivery, USB operation or recovery.
-
-
-The source-over image has SHA256
-`b27476caef23ad7cd378552efcc5a919420c8e801f6f658466290d6b1bbfe710`, with evidence
-under `g2d-blend-20261020/`. A source comparison check matches the complete UI2
-and blender register images against unchanged pinned Linux setters under
-ASan/UBSan. One linked native job interprets emitted RCQ words with explicit
-ideal blending effects, then checks the retained copy, full session binding,
-master10-only scans and guards. Its source origin and destination origin differ,
-and a 60-pixel image with 256-byte stride exercises untouched row padding.
-
-Two changed SRAM entry cases admit this operation and refuse a nonopaque
-background. The changed inline geometry predicate requires the new launcher;
-its source and binary are retained. Root confirms all twelve boot-object
-sections and symbolic relocations, generated boot source and FreeRTOS port
-source match the accepted power image. Existing boot and TinyUSB evidence keeps
-its recorded scope without replay. The operation model consumes root-published
-contract bytes as supplied state at the actual private and live record addresses;
-it does not execute startup or establish cache publication. New host cases use
-the saved native copied bytes with the identical sealed session and check ideal
-reference-difference reporting, durable capture and ACK refusal on a corrupted
-output digest.
-
-
-The normal-completion image has SHA256
-`01b71b3f3248f8f7e5dc6ace268abaa70e249933e3fad7084bf83058cb01e1b9`, with evidence
-under `g2d-success-20261020/`. Six linked native completion cases restore one
-submitted-job checkpoint. Normal completion acknowledges task-end, preserves
-configuration status during acknowledgment, pulses only mixer reset and copies
-16384 bytes. Stuck acknowledgment, an unexpectedly asserted reset, uncertainty
-after either reset write and a later task-end each return native failure without
-reading or copying output pixels. Every case retains its DMA extents. The four
-failures within the completion sequence leave completion readiness clear.
-
-The check reuses accepted RCQ words and modeled pixels as data. It supplies the
-root-derived runtime contract at the actual private and live record addresses;
-prepared pools, scheduler services and device effects remain modeled. It does
-not execute startup, requalify pixel arithmetic or prove physical write
-visibility. The earlier blend model omitted the normal-success reset and retains
-only that earlier implementation's scope. The unchanged launcher binary and
-prior boot and transport evidence retain their recorded scopes without replay.
-
-
-The twofold-enlargement image has SHA256
-`f77be8b28ef7283658c4d5e80bff37392a3cd90c6b6033703b2caa0881522ce4`, with evidence
-under `g2d-scale-20261020/`. A sanitizer check compares complete video-overlay,
-scaler and writeback register images with the pinned setters at minimum,
-asymmetric and maximum geometry. It also refuses odd destination dimensions,
-source half-extent overflow and nonzero color.
-
-One linked native job consumes the final producer session and root-published
-runtime contract. Its RCQ bytes match the source comparison artifact; actual
-acknowledgment, reset, IOMMU scans and guarded copy retain 16384 bytes. Device
-pixels are explicitly injected tagged data confined to the destination rectangle.
-They establish no interpolation, filtered-alpha, edge-handling or rounding rule.
-Host capture checks authenticated output and exact zero bytes outside the target
-rectangle, including padding, without comparing interpolated pixels.
-
-
-One high-speed transport case restores that exact copied checkpoint and executes
-the linked C serializer and TinyUSB vendor, FIFO and endpoint code. It emits the
-16576-byte authenticated response and final receipt while gating ACK processing
-on completed transfers. DCD effects, provider readiness and scheduling are
-modeled; no G2D job, full-speed matrix or earlier completion cases replay.
-
-
-## General scaling, image-over-image and RGB order conversion checks
+## General scaling, image-over-image and RGB order conversion
 
 These operations write the RCQ fields named by the pinned setters. Video
 layer0 carries the source format in `lay_fbfmt`, writeback carries the output
 format in `fmt`, and the blender alpha mode stays 0, as the pinned
 `bld_cs_set` selects for every RGB format. No buffer, mapping, clock, power or
-completion step changes. Rebuilt image SHA-256
-`08e56fc59dca1f9f148dc217649e78453944c9a7a81a143cd5b31a47ff30351b` passes four
-focused checks. None executes a G2D job or establishes physical pixels.
-
-- `checks/g2d-modes-reference.py` runs unchanged pinned scaler, overlay,
-  blender and writeback setters under ASan/UBSan beside the native builder. It
-  matches 1369 scaling cases, including enlargement, reduction, mixed axes
-  and both decimation paths, all 64 format pairs for copy and scaling, and four
-  image-over-image geometries. Given `--previous f99e356`, it compiles the
-  builder from that revision and confirms identical commands for earlier fill,
-  copy, source-over-solid and twofold enlargement sessions. Twenty-nine refusal
-  cases and ten admitted cases also run through host preparation, which agrees
-  on every verdict.
-- `checks/g2d-modes-native.py` executes the linked AArch64 session validator
-  and RCQ builder on those 39 cases. Every verdict matches, and the ten admitted
-  command pages equal the host builder's bytes.
-- `checks/g2d-modes-launcher.py` runs the rebuilt 3008-byte SRAM launcher in
-  the shared AArch32 model inside an earlier prepared bundle. It admits four new
-  operation sessions and refuses eight invalid ones. The launcher's geometry
-  predicate reads each session word once and checks each axis with one compare,
-  which keeps it within the 3072-byte SRAM region. The earlier launcher cases
-  pass with the rebuilt binary.
-- `checks/g2d-modes-host.py` seals new sessions with the actual producer from an
-  accepted earlier session's board prefix. It checks seven refusals, the ideal
-  references and capture policy: blending and conversion differences still
-  receive ACK, while a differing plain copy and a scaled write outside the
-  destination rectangle are refused before ACK. Response frames are synthetic.
-
-The earlier scaling and blending register checks and host capture checks pass
-with the changed code. Physical pixels, interpolation, X-channel handling,
-alpha rounding, DMA visibility and performance remain unqualified.
-
+completion step changes. No check executes a G2D job or establishes physical
+pixels.
 
 ## CPU command construction rejects overlapping inputs
 

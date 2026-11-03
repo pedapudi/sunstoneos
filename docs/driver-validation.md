@@ -32,7 +32,6 @@ can latch a fault during a valid transition.
 5. **Establish a control first.** Run the same image and input with the new
    subsystem disabled before diagnosing inside it. Compare the first divergent
    checkpoint. A failing control leaves startup or shared resources unresolved.
-
 6. **Keep the vendor's write ordering.** Complete device writes with DSB before
    the next dependent write or poll. Preserve every vendor inter-write delay.
    CPU boot0 waits 20 µs between writing PLL N and requesting UPDATE; removing

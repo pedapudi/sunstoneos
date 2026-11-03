@@ -94,13 +94,14 @@ limiting relocation scratch to the five recognized pointer fields. Other caller
 and helper frames are additional. Current object identities are recorded in
 [nbg-relocation.md](nbg-relocation.md) and [nbg-assembly.md](nbg-assembly.md).
 
-The checks are [nbg-ring-reference.py](../checks/nbg-ring-reference.py),
-[nbg-relocation.c](../checks/nbg-relocation.c), and the existing assembly checks.
-The Python field comparison accepts the pinned HAL library, a host shared library
-containing the native encoder, and a new output directory. Raw evidence, range
+The checks are [nbg-relocation.c](../checks/nbg-relocation.c) and the existing
+assembly checks. No host check compares the ring fields with the pinned HAL
+library. Raw evidence, range
 inventory, disassembly, commands, and hashes are under
 `~/.cache/sunstoneos/evidence/nbg-rings-20261016/`.
 
 Unchanged kernel, controller, service, DMA, and mimus suites were not repeated.
 No board request occurred. Ring geometry validation is one prerequisite for
 admission; it cannot authorize submission on its own.
+
+Results of host checks that no longer exist are kept in the evidence record [nbg-rings.jsonl](evidence/nbg-rings.jsonl).

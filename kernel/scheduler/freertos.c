@@ -26,6 +26,10 @@ _Static_assert(configNUMBER_OF_CORES > 1 && configNUMBER_OF_CORES <= 8,
 _Static_assert(configMAX_PRIORITIES == SS_OWNER_PRIORITIES,
                "owner priorities must match FreeRTOS priorities");
 
+#ifndef SS_OBJECT_SLOTS
+#define SS_OBJECT_SLOTS 64u
+#endif
+
 #ifndef SS_PULL_MOVES_PER_PASS
 #define SS_PULL_MOVES_PER_PASS 0u /* transfers one idle-pull pass may start; 0 is unlimited */
 #endif
@@ -51,6 +55,8 @@ struct ssKernelTask {
     uint64_t resume_generation, abort_generation, offcpu_ack;
     uint64_t object_sequence, object_requested;
     unsigned object_priority, object_requested_priority;
+    /* The lock slot of the object whose event list this task waits on; set when it blocks, under that object's lock. */
+    unsigned event_slot;
     bool object_detach;
 };
 struct ssKernelCPU {
@@ -58,6 +64,11 @@ struct ssKernelCPU {
     struct ss_deadline_heap deadlines;
     unsigned preempt, object_depth, critical_depth, suspend_depth, isr_depth;
     UBaseType_t object_mask;
+    /* The per-object lock domain (SS_OBJECT_SLOTS). o_depth counts the holds of the task-side lock (critical sections
+     * and suspensions), o_critical the critical sections, o_suspend the suspensions and o_isr the interrupt-side regions.
+     * The interrupt-side lock is held while o_critical + o_isr is nonzero. t_slot and i_slot name the slots held. */
+    unsigned o_depth, o_critical, o_suspend, o_isr, t_slot, i_slot;
+    UBaseType_t o_mask;
     bool yield_tail, reschedule, irq_drained, command_finishing, control_draining, selecting;
     bool command_no_wait[SS_OWNER_SLOTS], command_delete[SS_OWNER_SLOTS];
     uint64_t publication[2];
@@ -89,6 +100,11 @@ struct ssKernelTaskCommands {
 static struct ssKernelTaskCommands ssKernelTaskCommands[SS_OWNER_SLOTS];
 static struct ssKernelTask ssKernelTasks[SS_OWNER_SLOTS];
 static struct ssKernelCPU ssKernelCPUs[configNUMBER_OF_CORES];
+/* True while this CPU is inside a compatibility section or an object section of either domain. */
+static inline bool ssKernelHolds(const struct ssKernelCPU *cpu)
+{
+    return cpu->object_depth || cpu->isr_depth || cpu->o_depth || cpu->o_isr;
+}
 static struct ss_kernel_registry ssKernelRegistry;
 static struct ss_control ssKernelControl;
 static _Atomic uint64_t ssKernelTime;
@@ -474,7 +490,7 @@ static void ssKernelPublishReference(struct ss_kernel_pin pin)
 static void ssKernelFlush(void)
 {
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
-    if (cpu->object_depth || cpu->isr_depth) return;
+    if (ssKernelHolds(cpu)) return;
     ssKernelCommandsFinish(false);
     for (unsigned w = 0; w < 2; ++w) {
         uint64_t bits = cpu->publication[w];
@@ -507,22 +523,161 @@ static void ssKernelDefer(struct ss_kernel_pin pin)
     cpu->reference[slot] = pin;
     cpu->publication[slot / 64] |= UINT64_C(1) << (slot % 64);
 }
-void ssKernelObjectEnter(void)
+
+#ifdef SUNSTONE_OBJECT_TRACE
+/* Measurement: who waits for, and who holds, the object locks. Each CPU keeps a direct-mapped table keyed by
+ * (object, caller) of the lock acquisitions it made: count, wait and hold of the task-side lock (lock 0) and the
+ * interrupt-side lock (lock 1), and waits over 5 us. A second table keyed by (waiter, holder) counts the waits over
+ * 5 us against the acquisition that last took that lock before the waiter arrived. A CPU writes only its own tables;
+ * the holder words are the one shared line per lock, written once per acquisition. Read after the measured interval. */
+#define SS_TRACE_ENTRIES 128u
+#define SS_TRACE_PAIRS 64u
+#define SS_TRACE_LONG 120u /* 5 us in counter ticks */
+struct ssTraceEntry {
+    uintptr_t object, site, valid;
+    uint64_t count[2], wait_sum[2], wait_max[2], hold_sum[2], hold_max[2], long_wait[2];
+};
+struct ssTracePair {
+    uintptr_t object, site, holder_object, holder_site;
+    uint64_t count, wait_sum, wait_max, valid, lock, holder_core;
+};
+struct ssTraceHolder { uintptr_t object, site; uint64_t core; };
+/* Holder words: the two global locks, then a pair per object lock slot. */
+static struct { _Alignas(SS_CACHE_LINE) struct ssTraceHolder h; } ssTraceHolders[2 + 2 * (SS_OBJECT_SLOTS + 1)];
+static struct {
+    _Alignas(SS_CACHE_LINE) struct ssTraceEntry entry[SS_TRACE_ENTRIES];
+    struct ssTracePair pair[SS_TRACE_PAIRS];
+    uint64_t overflow, pair_overflow;
+    struct ssTraceEntry *current[2];
+    uint64_t acquired[2];
+} ssTrace[configNUMBER_OF_CORES];
+static inline uint64_t ssTraceNow(void)
+{
+    uint64_t t;
+    __asm__ volatile("isb\n mrs %0, cntvct_el0" : "=r"(t) :: "memory");
+    return t;
+}
+static struct ssTraceEntry *ssTraceFind(unsigned c, uintptr_t object, uintptr_t site)
+{
+    unsigned index = (unsigned)((((object >> 4) * 0x9e3779b1u) ^ ((site >> 2) * 0x85ebca6bu)) >> 7) % SS_TRACE_ENTRIES;
+    struct ssTraceEntry *e = &ssTrace[c].entry[index];
+    if (e->valid && (e->object != object || e->site != site)) { ++ssTrace[c].overflow; return NULL; }
+    if (!e->valid) { e->valid = 1; e->object = object; e->site = site; }
+    return e;
+}
+static inline struct ssTraceHolder ssTraceArrive(unsigned holder)
+{
+    return ssTraceHolders[holder].h;
+}
+/* The lock is held; start is the counter before the lock call. */
+static inline void ssTraceLocked(unsigned c, int lock, unsigned holder, uint64_t start, struct ssTraceHolder arrived,
+                                 uintptr_t object, uintptr_t site)
+{
+    const uint64_t now = ssTraceNow();
+    const uint64_t wait = now - start;
+    struct ssTraceEntry *e = ssTraceFind(c, object, site);
+    ssTrace[c].current[lock] = e;
+    ssTrace[c].acquired[lock] = now;
+    if (e) {
+        ++e->count[lock];
+        e->wait_sum[lock] += wait;
+        if (wait > e->wait_max[lock]) e->wait_max[lock] = wait;
+        if (wait > SS_TRACE_LONG) ++e->long_wait[lock];
+    }
+    if (wait > SS_TRACE_LONG) {
+        unsigned index = (unsigned)(((((object >> 4) * 0x9e3779b1u) ^ ((site >> 2) * 0x85ebca6bu) ^
+                                      ((arrived.object >> 4) * 0xc2b2ae35u) ^ ((arrived.site >> 2) * 0x27d4eb2fu)) >> 5) + (unsigned)lock) % SS_TRACE_PAIRS;
+        struct ssTracePair *pr = &ssTrace[c].pair[index];
+        if (pr->valid && (pr->object != object || pr->site != site || pr->holder_object != arrived.object ||
+                          pr->holder_site != arrived.site || pr->lock != (uint64_t)lock)) ++ssTrace[c].pair_overflow;
+        else {
+            if (!pr->valid) { pr->valid = 1; pr->object = object; pr->site = site; pr->holder_object = arrived.object;
+                              pr->holder_site = arrived.site; pr->lock = (uint64_t)lock; pr->holder_core = arrived.core; }
+            ++pr->count; pr->wait_sum += wait;
+            if (wait > pr->wait_max) pr->wait_max = wait;
+        }
+    }
+    ssTraceHolders[holder].h = (struct ssTraceHolder){ object, site, c };
+}
+static inline void ssTraceReleased(unsigned c, int lock)
+{
+    struct ssTraceEntry *e = ssTrace[c].current[lock];
+    if (!e) return;
+    const uint64_t hold = ssTraceNow() - ssTrace[c].acquired[lock];
+    e->hold_sum[lock] += hold;
+    if (hold > e->hold_max[lock]) e->hold_max[lock] = hold;
+}
+/* Rows of one CPU's entries: index 0 to SS_TRACE_ENTRIES - 1. Returns 0 past the table or for an empty row. */
+unsigned ulSunstoneObjectTraceEntry(unsigned core, unsigned index, uint64_t out[14])
+{
+    if (core >= configNUMBER_OF_CORES || index >= SS_TRACE_ENTRIES || !ssTrace[core].entry[index].valid) return 0;
+    const struct ssTraceEntry *e = &ssTrace[core].entry[index];
+    out[0] = e->object; out[1] = e->site;
+    for (unsigned l = 0; l < 2; ++l) {
+        out[2 + 6 * l] = e->count[l]; out[3 + 6 * l] = e->wait_sum[l]; out[4 + 6 * l] = e->wait_max[l];
+        out[5 + 6 * l] = e->hold_sum[l]; out[6 + 6 * l] = e->hold_max[l]; out[7 + 6 * l] = e->long_wait[l];
+    }
+    return 1;
+}
+unsigned ulSunstoneObjectTracePair(unsigned core, unsigned index, uint64_t out[9])
+{
+    if (core >= configNUMBER_OF_CORES || index >= SS_TRACE_PAIRS || !ssTrace[core].pair[index].valid) return 0;
+    const struct ssTracePair *p = &ssTrace[core].pair[index];
+    out[0] = p->object; out[1] = p->site; out[2] = p->holder_object; out[3] = p->holder_site; out[4] = p->holder_core;
+    out[5] = p->lock; out[6] = p->count; out[7] = p->wait_sum; out[8] = p->wait_max;
+    return 1;
+}
+uint64_t ulSunstoneObjectTraceOverflow(unsigned core, unsigned which)
+{
+    return core >= configNUMBER_OF_CORES ? 0 : which ? ssTrace[core].pair_overflow : ssTrace[core].overflow;
+}
+#define SS_TR_START(c, lock, holder) const uint64_t tr_start_##lock = ssTraceNow(); \
+    const struct ssTraceHolder tr_arrived_##lock = ssTraceArrive(holder); (void)(c)
+#define SS_TR_LOCKED(c, lock, holder, object, site) ssTraceLocked(c, lock, holder, tr_start_##lock, tr_arrived_##lock, object, site)
+#define SS_TR_RELEASED(c, lock) ssTraceReleased(c, lock)
+#else
+#define SS_TR_START(c, lock, holder) ((void)0)
+#define SS_TR_LOCKED(c, lock, holder, object, site) ((void)0)
+#define SS_TR_RELEASED(c, lock) ((void)0)
+#endif
+
+#ifdef SUNSTONE_LATENCY
+#include "sunstone_latency.h"
+/* The recorder pairs an acquisition with a release per lock; lock 0 is the interrupt lock, lock 1 the task lock. */
+#define SS_LAT_START(lock) const uint64_t lat_start_##lock = ss_latency_now()
+#define SS_LAT_ACQUIRED(c, lock, site) ss_latency_lock_acquired(c, lock, lat_start_##lock, site)
+#define SS_LAT_RELEASING(c, lock, site) ss_latency_lock_releasing(c, lock, site)
+#else
+#define SS_LAT_START(lock) ((void)0)
+#define SS_LAT_ACQUIRED(c, lock, site) ((void)0)
+#define SS_LAT_RELEASING(c, lock, site) ((void)0)
+#endif
+
+/* ---- Global compatibility sections --------------------------------------------------------------------------------
+ * The public critical sections (vTaskEnterCritical and its FromISR form) keep the two global locks of the port: lock 0
+ * is the task lock, lock 1 the interrupt lock in the trace. Only the public critical sections and the timer service's
+ * suspension use them. */
+static __attribute__((noinline)) void ssKernelObjectEnterAt(uintptr_t object, uintptr_t site)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
     if (!cpu->object_depth) {
         ++cpu->preempt;
+        SS_TR_START(c, 0, 0);
         portGET_TASK_LOCK((BaseType_t)c);
+        SS_TR_LOCKED(c, 0, 0, object, site);
     }
     if (!cpu->critical_depth) {
         cpu->object_mask = irq;
+        SS_TR_START(c, 1, 1);
         portGET_ISR_LOCK((BaseType_t)c);
+        SS_TR_LOCKED(c, 1, 1, object, site);
     }
     ++cpu->object_depth;
     ++cpu->critical_depth;
 }
+__attribute__((noinline)) void ssKernelObjectEnterFor(const void *object, uintptr_t site) { ssKernelObjectEnterAt((uintptr_t)object, site); }
 void ssKernelObjectExit(void)
 {
     unsigned c = ssKernelCPUId();
@@ -530,8 +685,10 @@ void ssKernelObjectExit(void)
     configASSERT(cpu->object_depth && cpu->critical_depth && cpu->preempt);
     --cpu->object_depth;
     if (--cpu->critical_depth) return;
+    SS_TR_RELEASED(c, 1);
     portRELEASE_ISR_LOCK((BaseType_t)c);
     if (!cpu->object_depth) {
+        SS_TR_RELEASED(c, 0);
         portRELEASE_TASK_LOCK((BaseType_t)c);
         ssKernelFlush();
         --cpu->preempt;
@@ -543,28 +700,34 @@ void ssKernelObjectExit(void)
     ssKernelCommandsFinish(true);
     if (yield && ssKernelCanPreempt()) portYIELD();
 }
-UBaseType_t ssKernelObjectEnterFromISR(void)
+static __attribute__((noinline)) UBaseType_t ssKernelObjectEnterFromISRAt(uintptr_t object, uintptr_t site)
 {
     /* Also used for metadata repair from task APIs. The port's execution tag
      * selects direct privileged masking in IRQ/SVC and SVC masking at EL0. */
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
-    if (!cpu->isr_depth++) portGET_ISR_LOCK((BaseType_t)c);
+    if (!cpu->isr_depth++) {
+        SS_TR_START(c, 1, 1);
+        portGET_ISR_LOCK((BaseType_t)c);
+        SS_TR_LOCKED(c, 1, 1, object, site);
+    }
     return irq;
 }
+__attribute__((noinline)) UBaseType_t ssKernelObjectEnterFromISR(void) { return ssKernelObjectEnterFromISRAt(0, (uintptr_t)__builtin_return_address(0)); }
 void ssKernelObjectExitFromISR(UBaseType_t irq)
 {
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
     configASSERT(cpu->isr_depth);
     if (!--cpu->isr_depth) {
+        SS_TR_RELEASED(c, 1);
         portRELEASE_ISR_LOCK((BaseType_t)c);
         ssKernelFlush();
     }
     portCLEAR_INTERRUPT_MASK(irq);
 }
-void ssKernelObjectSuspend(void)
+static __attribute__((noinline)) void ssKernelObjectSuspendAt(uintptr_t object, uintptr_t site)
 {
     /* Queue retry bookkeeping retains T with local preemption disabled. API
      * IRQs remain enabled outside its separate inner I-protected sections. */
@@ -573,12 +736,15 @@ void ssKernelObjectSuspend(void)
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
     if (!cpu->object_depth) {
         ++cpu->preempt;
+        SS_TR_START(c, 0, 0);
         portGET_TASK_LOCK((BaseType_t)c);
+        SS_TR_LOCKED(c, 0, 0, object, site);
     }
     ++cpu->object_depth;
     ++cpu->suspend_depth;
     portCLEAR_INTERRUPT_MASK(irq);
 }
+__attribute__((noinline)) void ssKernelObjectSuspend(void) { ssKernelObjectSuspendAt(0, (uintptr_t)__builtin_return_address(0)); }
 BaseType_t ssKernelObjectResume(void)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
@@ -587,6 +753,7 @@ BaseType_t ssKernelObjectResume(void)
     configASSERT(cpu->suspend_depth && cpu->object_depth && !cpu->critical_depth);
     --cpu->suspend_depth;
     if (!--cpu->object_depth) {
+        SS_TR_RELEASED(c, 0);
         portRELEASE_TASK_LOCK((BaseType_t)c);
         ssKernelFlush();
         configASSERT(cpu->preempt);
@@ -598,6 +765,197 @@ BaseType_t ssKernelObjectResume(void)
     ssKernelCommandsFinish(true);
     if (yield && ssKernelCanPreempt()) portYIELD();
     return yield ? pdTRUE : pdFALSE;
+}
+
+/* ---- Object sections ------------------------------------------------------------------------------------------------
+ * The queue, event group, stream buffer and timer sources enter and leave through these. An object hashes to one of
+ * SS_OBJECT_SLOTS slots; each slot has a task-side ticket lock (held across a suspension, with the mask open) and an
+ * interrupt-side ticket lock (held with the mask raised), the roles of the two global locks. Operations on objects of
+ * different slots do not wait for each other. The slots need no storage in the object, so the public static
+ * layouts are unchanged.
+ *
+ * Rules, checked by assertions. A CPU holds at most one task-side slot and at most one interrupt-side slot at a time:
+ * nesting inside a section is on the same object (or one that hashes to the same slot). No object section takes a
+ * global compatibility lock, so the order is global locks, then one slot, then the donation lock. The donation lock is a
+ * leaf. */
+struct ssObjectTicket { _Atomic uint32_t next, serving; };
+static struct {
+    _Alignas(SS_CACHE_LINE) struct ssObjectTicket task;
+    _Alignas(SS_CACHE_LINE) struct ssObjectTicket isr;
+} ssObjectLocks[SS_OBJECT_SLOTS];
+/* The leaf lock of priority donation: one writer at a time to a holder's donated priority and mutex count. */
+static struct { _Alignas(SS_CACHE_LINE) struct ssObjectTicket lock; } ssDonation;
+static inline unsigned ssObjectSlot(const void *object)
+{
+#if SS_OBJECT_SLOTS == 1
+    (void)object;
+    return 0;
+#else
+    return (unsigned)((((uint64_t)(uintptr_t)object >> 4) * UINT64_C(0x9e3779b97f4a7c15)) >> 40) % SS_OBJECT_SLOTS;
+#endif
+}
+static inline void ssTicketAcquire(struct ssObjectTicket *lock)
+{
+    const uint32_t ticket = atomic_fetch_add_explicit(&lock->next, 1, memory_order_relaxed);
+    while (atomic_load_explicit(&lock->serving, memory_order_acquire) != ticket) ss_owner_wait(&ssKernelBackend);
+}
+static inline void ssTicketRelease(struct ssObjectTicket *lock)
+{
+    atomic_store_explicit(&lock->serving, atomic_load_explicit(&lock->serving, memory_order_relaxed) + 1, memory_order_release);
+    ss_owner_event(&ssKernelBackend);
+}
+#ifdef SS_KERNEL_TEST_ADMIN_ENTER
+/* The slot of an object, so that a check can pick objects that share no lock. */
+unsigned ss_kernel_test_object_slot(const void *object);
+unsigned ss_kernel_test_object_slot(const void *object) { return ssObjectSlot(object); }
+#endif
+/* Take the interrupt-side lock of a slot, if this CPU does not hold it already; the mask is raised. */
+static inline void ssObjectIAcquire(struct ssKernelCPU *cpu, unsigned c, unsigned slot, const void *object, uintptr_t site)
+{
+    if (!(cpu->o_critical + cpu->o_isr)) {
+        cpu->i_slot = slot;
+        SS_TR_START(c, 1, 2 + 2 * slot + 1);
+        SS_LAT_START(0);
+        ssTicketAcquire(&ssObjectLocks[slot].isr);
+        SS_TR_LOCKED(c, 1, 2 + 2 * slot + 1, (uintptr_t)object, site);
+        SS_LAT_ACQUIRED(c, 0, site);
+    } else configASSERT(cpu->i_slot == slot);
+}
+static inline void ssObjectIRelease(struct ssKernelCPU *cpu, unsigned c, uintptr_t site)
+{
+    SS_TR_RELEASED(c, 1);
+    SS_LAT_RELEASING(c, 0, site);
+    ssTicketRelease(&ssObjectLocks[cpu->i_slot].isr);
+}
+static __attribute__((noinline)) void ssKernelObjectEnterOnAt(const void *object, uintptr_t site)
+{
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
+    unsigned c = ssKernelCPUId();
+    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    const unsigned slot = ssObjectSlot(object);
+    if (!cpu->o_depth) {
+        ++cpu->preempt;
+        cpu->t_slot = slot;
+        SS_TR_START(c, 0, 2 + 2 * slot);
+        SS_LAT_START(1);
+        ssTicketAcquire(&ssObjectLocks[slot].task);
+        SS_TR_LOCKED(c, 0, 2 + 2 * slot, (uintptr_t)object, site);
+        SS_LAT_ACQUIRED(c, 1, site);
+    } else configASSERT(cpu->t_slot == slot);
+    if (!cpu->o_critical) cpu->o_mask = irq;
+    ssObjectIAcquire(cpu, c, slot, object, site);
+    ++cpu->o_depth;
+    ++cpu->o_critical;
+}
+__attribute__((noinline)) void ssKernelObjectEnterOn(const void *object) { ssKernelObjectEnterOnAt(object, (uintptr_t)__builtin_return_address(0)); }
+void ssKernelObjectLeave(void)
+{
+    unsigned c = ssKernelCPUId();
+    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    configASSERT(cpu->o_depth && cpu->o_critical && cpu->preempt);
+    --cpu->o_depth;
+    if (--cpu->o_critical) return;
+    if (!cpu->o_isr) ssObjectIRelease(cpu, c, 0);
+    if (!cpu->o_depth) {
+        SS_TR_RELEASED(c, 0);
+        SS_LAT_RELEASING(c, 1, 0);
+        ssTicketRelease(&ssObjectLocks[cpu->t_slot].task);
+        ssKernelFlush();
+        --cpu->preempt;
+    }
+    UBaseType_t irq = cpu->o_mask;
+    bool yield = !cpu->preempt && cpu->reschedule;
+    ssKernelCommandsDetach();
+    portCLEAR_INTERRUPT_MASK(irq);
+    ssKernelCommandsFinish(true);
+    if (yield && ssKernelCanPreempt()) portYIELD();
+}
+/* The interrupt-side section of a slot. Also used by the owner to repair or time out a waiter on the slot's lists. */
+static __attribute__((noinline)) UBaseType_t ssObjectIsrEnterSlot(unsigned slot, const void *object, uintptr_t site)
+{
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
+    unsigned c = ssKernelCPUId();
+    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    ssObjectIAcquire(cpu, c, slot, object, site);
+    ++cpu->o_isr;
+    return irq;
+}
+static void ssObjectIsrLeave(UBaseType_t irq)
+{
+    unsigned c = ssKernelCPUId();
+    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    configASSERT(cpu->o_isr);
+    if (!--cpu->o_isr && !cpu->o_critical) {
+        ssObjectIRelease(cpu, c, 0);
+        ssKernelFlush();
+    }
+    portCLEAR_INTERRUPT_MASK(irq);
+}
+__attribute__((noinline)) UBaseType_t ssKernelObjectEnterFromISROn(const void *object)
+{
+    return ssObjectIsrEnterSlot(ssObjectSlot(object), object, (uintptr_t)__builtin_return_address(0));
+}
+void ssKernelObjectLeaveFromISR(UBaseType_t irq) { ssObjectIsrLeave(irq); }
+/* The interrupt-side section of the slot of the object this task last waited on: the section that excludes the waker and
+ * the owner while they edit the task's event-list item. */
+__attribute__((noinline)) UBaseType_t ssKernelObjectEnterWaitSlot(void)
+{
+    return ssObjectIsrEnterSlot(ssKernelCurrent()->event_slot, NULL, (uintptr_t)__builtin_return_address(0));
+}
+static __attribute__((noinline)) void ssKernelObjectSuspendOnAt(const void *object, uintptr_t site)
+{
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
+    unsigned c = ssKernelCPUId();
+    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    const unsigned slot = ssObjectSlot(object);
+    if (!cpu->o_depth) {
+        ++cpu->preempt;
+        cpu->t_slot = slot;
+        SS_TR_START(c, 0, 2 + 2 * slot);
+        SS_LAT_START(1);
+        ssTicketAcquire(&ssObjectLocks[slot].task);
+        SS_TR_LOCKED(c, 0, 2 + 2 * slot, (uintptr_t)object, site);
+        SS_LAT_ACQUIRED(c, 1, site);
+    } else configASSERT(cpu->t_slot == slot);
+    ++cpu->o_depth;
+    ++cpu->o_suspend;
+    portCLEAR_INTERRUPT_MASK(irq);
+}
+__attribute__((noinline)) void ssKernelObjectSuspendOn(const void *object) { ssKernelObjectSuspendOnAt(object, (uintptr_t)__builtin_return_address(0)); }
+BaseType_t ssKernelObjectResumeOn(void)
+{
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
+    unsigned c = ssKernelCPUId();
+    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    configASSERT(cpu->o_suspend && cpu->o_depth && !cpu->o_critical);
+    --cpu->o_suspend;
+    if (!--cpu->o_depth) {
+        SS_TR_RELEASED(c, 0);
+        SS_LAT_RELEASING(c, 1, 0);
+        ssTicketRelease(&ssObjectLocks[cpu->t_slot].task);
+        ssKernelFlush();
+        configASSERT(cpu->preempt);
+        --cpu->preempt;
+    }
+    bool yield = !cpu->preempt && cpu->reschedule;
+    ssKernelCommandsDetach();
+    portCLEAR_INTERRUPT_MASK(irq);
+    ssKernelCommandsFinish(true);
+    if (yield && ssKernelCanPreempt()) portYIELD();
+    return yield ? pdTRUE : pdFALSE;
+}
+/* The leaf lock of priority donation, taken with the mask raised. */
+static UBaseType_t ssDonationEnter(void)
+{
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
+    ssTicketAcquire(&ssDonation.lock);
+    return irq;
+}
+static void ssDonationLeave(UBaseType_t irq)
+{
+    ssTicketRelease(&ssDonation.lock);
+    ssKernelFlush(); /* publishes a donation repair now unless an enclosing section does it at its exit */
+    portCLEAR_INTERRUPT_MASK(irq);
 }
 
 /* Owner-local state transitions. Event-list metadata alone is protected by the
@@ -725,7 +1083,7 @@ static void ssKernelExpired(void *context, const struct ss_deadline_result *resu
         ssKernelMakeReady(s);
         ss_notification_gate_end(&guard);
     } else if (s->wait_kind == SS_K_EVENT) {
-        UBaseType_t irq = ssKernelObjectEnterFromISR();
+        UBaseType_t irq = ssObjectIsrEnterSlot(s->event_slot, NULL, (uintptr_t)__builtin_return_address(0));
         unsigned expected = SS_K_WAITING;
         if (atomic_compare_exchange_strong_explicit(&s->outcome, &expected, SS_K_TIMED_OUT,
                                                     memory_order_acq_rel, memory_order_acquire)) {
@@ -738,7 +1096,7 @@ static void ssKernelExpired(void *context, const struct ss_deadline_result *resu
         }
         /* This entry already runs with API IRQs excluded. Restoring that mask
          * cannot enable IRQs; the lock is released before ready-link writes. */
-        ssKernelObjectExitFromISR(irq);
+        ssObjectIsrLeave(irq);
         ssKernelMakeReady(s);
     } else {
         atomic_store_explicit(&s->outcome, SS_K_TIMED_OUT, memory_order_release);
@@ -1001,7 +1359,7 @@ static BaseType_t ssKernelOwnerIRQExitWork(void)
 BaseType_t ssKernelOwnerIRQExit(void)
 {
 #if !defined(__aarch64__)
-    /* The host fixture has no priority mask. */
+    /* The host fixture has no priority mask, so the exit work runs as it did before the mask guard existed. */
     return ssKernelOwnerIRQExitWork();
 #else
     uint64_t pmr;
@@ -1052,15 +1410,19 @@ static void ssKernelEventBlock(List_t *list, TickType_t value, TickType_t ticks,
     configASSERT(!s->event_reference.descriptor);
     configASSERT(ss_kernel_handle_pin(&ssKernelRegistry, t, &s->event_reference));
     s->unordered = unordered;
-    /* The caller holds only the task lock (a suspension). Another CPU's owner timing out a waiter of this list removes
-     * its item under the interrupt lock alone, so the insertion needs that lock too. */
-    UBaseType_t irq = ssKernelObjectEnterFromISR();
-    if (ss_kernel_test_event_insert) ss_kernel_test_event_insert(ssKernelCPUs[ssKernelCPUId()].isr_depth);
+    /* The caller holds its object's task-side lock (a suspension or a critical section). Insert under the interrupt-side
+     * lock of the same slot as well, so that an owner timing out another waiter of this list cannot edit it at the same
+     * moment, and record the slot for that owner and for priority repair. */
+    struct ssKernelCPU *self = &ssKernelCPUs[ssKernelCPUId()];
+    configASSERT(self->o_depth);
+    s->event_slot = self->t_slot;
+    UBaseType_t irq = ssObjectIsrEnterSlot(self->t_slot, list, (uintptr_t)__builtin_return_address(0));
+    if (ss_kernel_test_event_insert) ss_kernel_test_event_insert(self->o_isr + self->o_critical);
     if (unordered) {
         listSET_LIST_ITEM_VALUE(&t->xEventListItem, value | taskEVENT_LIST_ITEM_VALUE_IN_USE);
         vListInsertEnd(list, &t->xEventListItem);
     } else vListInsert(list, &t->xEventListItem);
-    ssKernelObjectExitFromISR(irq);
+    ssObjectIsrLeave(irq);
     ssKernelBlock(ticks, indefinite, SS_K_EVENT);
 }
 static BaseType_t ssKernelEventWake(ListItem_t *item, TickType_t value, bool unordered)
@@ -1175,8 +1537,8 @@ static void ssKernelControlDrain(void)
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
-    configASSERT(!cpu->critical_depth);
-    configASSERT(!cpu->isr_depth);
+    configASSERT(!cpu->critical_depth && !cpu->o_critical);
+    configASSERT(!cpu->isr_depth && !cpu->o_isr);
     configASSERT(!cpu->control_draining);
     /* Object unlock flushes publications. Keep deferred command consumption
      * outside this whole maintenance interval so its final ack cannot retire
@@ -1199,7 +1561,9 @@ static void ssKernelControlDrain(void)
             unsigned slot = w * 64 + b;
             struct ssKernelTask *s = &ssKernelTasks[slot];
             TCB_t *t = s->ready.context;
-            UBaseType_t irq = ssKernelObjectEnterFromISR();
+            /* The waiter's list belongs to the object it blocked on; its slot was recorded when it blocked. */
+            const bool waiting = s->wait_kind == SS_K_EVENT;
+            UBaseType_t irq = waiting ? ssObjectIsrEnterSlot(s->event_slot, NULL, (uintptr_t)__builtin_return_address(0)) : 0;
             List_t *list = listLIST_ITEM_CONTAINER(&t->xEventListItem);
             if (s->object_detach && s->wait_kind == SS_K_EVENT) {
                 if (list) {
@@ -1213,7 +1577,7 @@ static void ssKernelControlDrain(void)
             }
             s->object_sequence = s->object_requested;
             s->object_priority = s->object_requested_priority;
-            ssKernelObjectExitFromISR(irq);
+            if (waiting) ssObjectIsrLeave(irq);
             ss_control_repair(&ssKernelControl, slot);
         }
     }
@@ -1427,7 +1791,7 @@ static void ssKernelCleanup(void)
 {
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
     configASSERT(!cpu->control_draining && !cpu->selecting && !cpu->preempt &&
-                 !cpu->object_depth && !cpu->isr_depth);
+                 !ssKernelHolds(cpu));
     for (unsigned w = 0; w < 2; ++w) for (;;) {
         UBaseType_t irq = portSET_INTERRUPT_MASK();
         uint64_t bits = atomic_load_explicit(&ssKernelCleanupPending[w], memory_order_acquire);
@@ -1665,7 +2029,7 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
     bool self = handle == current;
     unsigned slot = pin.slot;
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
-    if (cpu->object_depth || cpu->isr_depth) {
+    if (ssKernelHolds(cpu)) {
         /* Logical desired state is committed now. Owner consumption and task
          * acknowledgments wait until the caller releases compatibility I. */
         if (cpu->command_reference[slot].descriptor) ss_kernel_handle_put(&pin);
@@ -1717,7 +2081,7 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
 static void ssKernelCommandsDetach(void)
 {
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
-    if (cpu->control_draining || cpu->preempt || cpu->object_depth || cpu->isr_depth) return;
+    if (cpu->control_draining || cpu->preempt || ssKernelHolds(cpu)) return;
     TCB_t *caller = ssKernelSelf();
     if (!caller) return;
     struct ssKernelTaskCommands *batch = &ssKernelTaskCommands[caller->uxOwnerSlot];
@@ -1746,7 +2110,7 @@ static void ssKernelCommandsFinish(bool can_wait)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
-    if (cpu->control_draining || cpu->preempt || cpu->object_depth || cpu->isr_depth) {
+    if (cpu->control_draining || cpu->preempt || ssKernelHolds(cpu)) {
         portCLEAR_INTERRUPT_MASK(irq);
         return;
     }
@@ -1892,10 +2256,10 @@ static void ssKernelDonationDefer(struct ss_kernel_pin pin)
 static BaseType_t ssKernelInherit(TaskHandle_t holder)
 {
     if (!holder) return pdFALSE;
-    UBaseType_t irq = ssKernelObjectEnterFromISR();
+    UBaseType_t irq = ssDonationEnter();
     struct ss_kernel_pin pin;
     if (!ssKernelPin(holder, &pin)) {
-        ssKernelObjectExitFromISR(irq);
+        ssDonationLeave(irq);
         return pdFALSE;
     }
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
@@ -1906,16 +2270,16 @@ static BaseType_t ssKernelInherit(TaskHandle_t holder)
         atomic_store_explicit(&s->donation, priority, memory_order_release);
         ssKernelDonationDefer(pin);
     } else ss_kernel_handle_put(&pin);
-    ssKernelObjectExitFromISR(irq);
+    ssDonationLeave(irq);
     return base < priority ? pdTRUE : pdFALSE;
 }
 static BaseType_t ssKernelDisinherit(TaskHandle_t holder, bool timeout, unsigned waiting)
 {
     if (!holder) return pdFALSE;
-    UBaseType_t irq = ssKernelObjectEnterFromISR();
+    UBaseType_t irq = ssDonationEnter();
     struct ss_kernel_pin pin;
     if (!ssKernelPin(holder, &pin)) {
-        ssKernelObjectExitFromISR(irq);
+        ssDonationLeave(irq);
         return pdFALSE;
     }
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
@@ -1934,7 +2298,7 @@ static BaseType_t ssKernelDisinherit(TaskHandle_t holder, bool timeout, unsigned
         atomic_store_explicit(&s->donation, target, memory_order_release);
         ssKernelDonationDefer(pin);
     } else ss_kernel_handle_put(&pin);
-    ssKernelObjectExitFromISR(irq);
+    ssDonationLeave(irq);
     return lowered ? pdTRUE : pdFALSE;
 }
 static TaskHandle_t ssKernelMutexTaken(void)
@@ -1961,7 +2325,7 @@ static void ssKernelInfo(TaskHandle_t handle, TaskStatus_t *status, bool stack)
     }
     TCB_t *t = pin.descriptor->task;
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
-    UBaseType_t irq = ssKernelObjectEnterFromISR();
+    UBaseType_t irq = ssKernelObjectEnterFromISROn(t);
     *status = (TaskStatus_t){0};
     status->xHandle = t;
     status->pcTaskName = t->pcTaskName;
@@ -1981,7 +2345,7 @@ static void ssKernelInfo(TaskHandle_t handle, TaskStatus_t *status, bool stack)
 #endif
     static const eTaskState states[] = { eReady, eRunning, eBlocked, eSuspended, eDeleted };
     status->eCurrentState = states[ssKernelLogicalExecution(s)];
-    ssKernelObjectExitFromISR(irq);
+    ssKernelObjectLeaveFromISR(irq);
     if (stack) {
 #if ( portSTACK_GROWTH > 0 )
         status->usStackHighWaterMark = prvTaskCheckFreeStackSpace((uint8_t *)t->pxEndOfStack);

@@ -145,19 +145,16 @@ separate apply, busy, lock, ready or settling requirement.
 
 ## Model evidence and remaining gaps
 
-- The [native ordering check](../checks/power-write-order.py) passes nine
-  cases in `ordering-followup/power/native-order-3/`. PMIC DATA/CNTR execute
-  two DSBs; the modeled bus status remains pending for 500 µs afterward.
-  Removing DATA's barrier fails before CNTR. Legacy USB executes five stores
-  and six DSBs, including entry, and verifies each minimum from its completed
-  trigger with 25.023 µs write callbacks and fractional counter origins.
-  Missing entry/release barriers and a removed release hold fail their intended
-  checks. Frozen, backward and overflowing counters panic before preparation
-  writes. The frozen case takes 1,000,001 counter samples including its origin.
-  The added cost is one DSB per PMIC DATA phase and four DSBs in USB preparation;
-  coarse waits retain at most one tick of nominal tail per long hold, plus the
-  40 µs release interval. The shared posted-store model describes architectural
-  completion; it does not substitute for endpoint status or peripheral drain.
+- No host check executes the native PMIC and legacy USB write sequences with a
+  posted-store model. The design is: PMIC DATA/CNTR execute two DSBs while the
+  modeled bus status stays pending for 500 µs afterward. Legacy USB executes
+  five stores and six DSBs, including entry, and verifies each minimum from its
+  completed trigger. Frozen, backward and overflowing counters panic before
+  preparation writes. The added cost is one DSB per PMIC DATA phase and four
+  DSBs in USB preparation; coarse waits retain at most one tick of nominal tail
+  per long hold, plus the 40 µs release interval. The shared posted-store model
+  describes architectural completion; it does not substitute for endpoint
+  status or peripheral drain.
 - The CPU owner's complete check passes for the merged implementation. It
   covers delayed N readback and the restored N-to-UPDATE hold; [CPU
   clocks](cpu-clock.md) records its evidence and limits.
@@ -204,3 +201,5 @@ SuperSpeed read and PMA-timeout cases and six native objects pass in
 The final hub/PMA batch passes seven cases and six native objects in
 `power/hub-pma-final/`. Both PCIe PM transition modes, nominal NVMe and stuck
 ATU1 shutdown pass in `power/pcie-pm-hold-2/`.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/driver-completion-power.jsonl).

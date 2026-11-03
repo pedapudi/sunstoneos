@@ -12,7 +12,7 @@ in the vendor-state GPU image on port 3-1 (2026-10-25), without write 11
 monitor. This lifetime runs them through the single-core monitor with
 write 11 and then through the SMP cached image's own setup function, in
 the six runs of the refreeze sequence, whose native image is now
-`6fd7af86…` ([the second refreeze](../designs/native-refreeze-1025.md#the-second-refreeze-adds-the-el3-security-writes)).
+`6fd7af86…` ([the second refreeze](../designs/native-refreeze-1025.md#the-native-image)).
 
 No returning image enters EL1 through `a733_smp_boot` itself: the returning
 diagnostics start the secondaries from their own overlay, and the native

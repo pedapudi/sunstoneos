@@ -226,36 +226,20 @@ Downstream firmware, runtime and packet objects remain alive through fault and
 external recovery. A future shutdown path must first close every borrower and
 prove card/controller quiescence before restoring pins or changing module power.
 
-## Validation targets the new composition
+## Validation
 
-The [focused check](../checks/a733-radio-platform.py) composes the real shared
-PMIC provider, rail ledger, clock registry, pin manager, SDIO controller and
-card worker against modeled registers. AddressSanitizer and UndefinedBehaviorSanitizer
-report no errors. The check verifies:
+A host run composed the real shared PMIC provider, rail ledger, clock registry,
+pin manager, SDIO controller and card worker against modeled registers under
+address and undefined-behavior sanitizers. It covered resource acquisition,
+the 10 ms, 50 ms and 10 µs power and reset delays, SDC1 preparation and card
+enumeration, single-borrower and forged-token refusal, deadline renewal and
+retention, wrong supply voltage and the common mutex after an uncertain clock
+write. No retained check repeats it; the run is in
+[the evidence file](evidence/radio-platform.jsonl). The platform core and its
+adapter compile for AArch64 against the single-core and SMP FreeRTOS
+configurations. No physical board execution or performance measurement has been
+done.
 
-- Actual resource acquisition, copied PMIC results and request reap.
-- Ten milliseconds between PM1-low admission and enable, fifty milliseconds
-  before module clocks and card access, and ten microseconds before reset release.
-- SDC1 preparation and card enumeration, with exclusive controller/module scopes.
-- One downstream borrower, PM0 input, forged-token and aliased-output refusal.
-- Fresh deadlines after consumed completion and retention after active expiry.
-- Wrong observed supply voltage before pin or controller changes, and retained
-  common-mutex ownership after an uncertain clock write.
-
-The platform core compiles for native AArch64. Its adapter compiles against the
-actual single-core and SMP FreeRTOS configurations. Existing PMIC, SDIO transfer,
-firmware upload and radio protocol checks were reused without repetition.
-No physical board execution or performance measurement was performed.
-
-The evidence directory is
-`~/.cache/sunstoneos/evidence/radio-platform-20261016/initial/`.
-Its input manifest preserves 101 source, dependency and compiler identities.
-The executed sanitizer binary has SHA-256
-`35ad80c227752dc6415e8805efac2b1c70272feead2f655eec071cca7f838542`.
-The saved commands, log and native objects record the focused batch.
-
-Source identities and the inspected board design are recorded outside Git in
-`~/.cache/sunstoneos/evidence/radio-platform-design-20261016/`.
 The primary references are A733 User Manual V1.00 sections 4.1 and 11.3,
 the pin-function tables, board schematic V1.2 sheets 6, 9 and 14, and the pinned
 board device tree. Published clock, GPIO power sequencing and AXP8191 register
@@ -277,7 +261,7 @@ later output priming, inherited-output restoration and first-write failure.
 Sanitizer admission checks cover supervised, resident and returning board
 records, plus OS and standalone Bluetooth profiles. The existing returning
 constructor and CMD53 evidence is reused for its unchanged application path;
-it does not establish physical radio operation or execute the new PM mode.
+it does not establish physical radio operation or execute the PM mode.
 
 The native supervised radio/headset OS profile builds with the current pinned
 Mimus source and rebuilt pin-manager consumers. The manager grows by eight

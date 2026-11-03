@@ -516,19 +516,11 @@ NPU_STAGE=QUIESCENT; NPU_OUTPUT= (one byte per line);
 NPU_INFERENCE=MATCH or MISMATCH; inference_jobs=1
 ```
 
-`apps/npu-first-inference/reference.py` computes the expected output on the
-host CPU in integer arithmetic from the network's generating formulas and the
-compiler's recorded quantization. Its `reference` operation checks that the
-image's linked input equals the regenerated quantized input and that the
-linked SDK simulator output equals the CPU result. Its `compare` operation takes
-the host session record or the returned log and reports byte agreement, the
-first differing element and the dequantized error against the float network.
-
 Each client stage calls `sunstone_crumb` from `crumb.h`. The call compiles to
 nothing until a progress-record implementation defines it; a retained client
 failure also records its reason. Use the same preparation and capture as
-startup-only, with this profile in the manifest. Status: software-checked and
-staged; no board run.
+startup-only, with this profile in the manifest. Status: staged; no board
+run, and no host check of the expected output.
 
 ### Return after one job of each of two networks on the NPU runtime
 

@@ -51,9 +51,9 @@ admission, DRAM training and cache cleanup are outside its executed interval.
 It models the identity source and reset-mode control; register writes do not
 establish a physical reset or entry at EL3. Omitting an SCP item also does not
 prove that remote processors remain stopped throughout cold boot.
-The reusable check is [boot0-monitor-handoff.py](../checks/boot0-monitor-handoff.py);
-its result is `microsd-boot-package-20261020/boot0-monitor-handoff.json`
-under the evidence directory.
+No host check remains; the recorded result is
+`microsd-boot-package-20261020/boot0-monitor-handoff.json` under the evidence
+directory.
 
 The repository packer, `tools/toc_package.py`, produces a sole-monitor TOC1
 package from synthetic bytes, byte for byte as the vendor packer does. Its output
@@ -72,7 +72,7 @@ and recovery remain required. No storage write or physical cold boot has occurre
 
 ## SRAM probe result
 
-The 60-byte probe in [checks/a733-sram.S](../checks/a733-sram.S) executes in
+The 60-byte SRAM probe executes in
 AArch32 at `0x52000`, records CPU registers at `0x52200`, and returns to FEL.
 The recovery tool reserves `0x71000` for its instruction-cache workaround. The session
 saved 64 bytes at each address before loading code and restored those bytes after

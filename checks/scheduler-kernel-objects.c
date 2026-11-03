@@ -81,39 +81,40 @@ static void fixture_objects(void)
     printf("linked FreeRTOS objects: queue retry, event wait/set, stream wait/send, timer command enqueue; no global suspension\n");
 }
 
+static int fixture_mutex_object; /* the mutex whose object section these calls stand for */
 static void fixture_inheritance(TaskHandle_t holder, TaskHandle_t donor)
 {
     fixture_cpu = 0;
     vTaskPrioritySet(holder, 2);
     enter(0);
     assert(uxTaskPriorityGet(holder) == 2);
-    ssKernelObjectEnter();
+    ssKernelObjectEnterOn(&fixture_mutex_object);
     assert(pvTaskIncrementMutexHeldCount() == holder);
     assert(pvTaskIncrementMutexHeldCount() == holder);
-    ssKernelObjectExit();
+    ssKernelObjectLeave();
     fixture_cpu = 1;
     assert(pxCurrentTCBs[1] == donor && uxTaskPriorityGet(donor) == 5);
-    ssKernelObjectEnter();
+    ssKernelObjectEnterOn(&fixture_mutex_object);
     assert(xTaskPriorityInherit(holder));
     /* Publication is deferred until the object metadata lock is released. */
     assert(uxTaskPriorityGet(holder) == 2);
-    ssKernelObjectExit();
+    ssKernelObjectLeave();
     enter(0);
     assert(uxTaskPriorityGet(holder) == 5 && uxTaskBasePriorityGet(holder) == 2);
-    ssKernelObjectEnter();
+    ssKernelObjectEnterOn(&fixture_mutex_object);
     assert(!xTaskPriorityDisinherit(holder));
-    ssKernelObjectExit();
+    ssKernelObjectLeave();
     enter(0);
     assert(uxTaskPriorityGet(holder) == 5); /* Nested mutex retains donation. */
     fixture_cpu = 1;
-    ssKernelObjectEnter();
+    ssKernelObjectEnterOn(&fixture_mutex_object);
     vTaskPriorityDisinheritAfterTimeout(holder, 3);
-    ssKernelObjectExit();
+    ssKernelObjectLeave();
     enter(0);
     assert(uxTaskPriorityGet(holder) == 3);
-    ssKernelObjectEnter();
+    ssKernelObjectEnterOn(&fixture_mutex_object);
     assert(xTaskPriorityDisinherit(holder));
-    ssKernelObjectExit();
+    ssKernelObjectLeave();
     enter(0);
     assert(uxTaskPriorityGet(holder) == 2 && !atomic_load(&record(holder)->mutexes));
     vTaskPrioritySet(holder, 5);

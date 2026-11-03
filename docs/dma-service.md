@@ -243,9 +243,7 @@ buffer/session retention and absence of later failed-channel accesses. Startup
 refuses a physical alias of service storage and a raw FIFO job.
 
 The fixture uses the native adapter for CPU translation, FIFO admission and
-cache maintenance. Existing controller, memory-policy, I2S format, clock/pin
-and full worker-register migration evidence is reused. No lower-layer suite,
-physical board test or performance measurement was repeated.
+cache maintenance. No physical board test or performance measurement has run.
 
 The root build includes the [CMake fragment](../cmake/dma-service.cmake) after
 the existing SMP setup. It builds `dma-service-model` with a private generated
@@ -267,24 +265,21 @@ input identities and the private build overlay are under
 `~/.cache/sunstoneos/evidence/dma-service-20261016/`. The implementation has not
 accessed the physical board.
 
-## Interrupt wake evidence is modeled in the emulator
+## The interrupt wake has no host check
 
-[The interrupt runner](../checks/dma-interrupt.py) builds the
-[interrupt check](../checks/dma-interrupt.c) on the duplex cyclic I2S fixture
-and runs each case in a fresh two-core emulator process. The service, stream
-driver, controller, native cache operations and audio clock and pin providers
-are the production code. DMA and I2S registers, the GIC SPI and its interrupt
-handler are modeled. The modeled handler runs in a privileged task, so the
-check does not exercise exception entry. The binding uses a fallback of 200 ticks, so an interrupt wake is
-distinguishable from a fallback or tick wake.
+No host check runs the duplex cyclic I2S fixture with the production service,
+stream driver, controller, native cache operations and audio clock and pin
+providers and a modeled GIC SPI. The binding is designed to behave as follows,
+with a fallback of 200 ticks so that an interrupt wake is distinguishable from a
+fallback or tick wake:
 
-- Package-end wake: a first receive period wakes the worker, which waits
-  for the next interrupt without copying it. Four further receive and
-  transmit periods each wake the worker through the interrupt and produce
-  the copy of the preceding receive period within 20 ticks without any
-  client request. Between events the worker reads no DMA register for 10
-  to 30 ticks. Every rearm happens with no enabled event pending, and each
-  interrupt is followed by one rearm.
+- Package-end wake: after a first receive period wakes the worker, it waits for
+  the next interrupt without copying it. Each further receive and transmit
+  period wakes the worker through the interrupt and produces the copy of the
+  preceding receive period within 20 ticks without any client request. Between
+  events the worker reads no DMA register for 10 to 30 ticks. Every rearm
+  happens with no enabled event pending, and each interrupt is followed by one
+  rearm.
 - Spurious interrupt: an interrupt without a pending event leaves the SPI
   masked and returns the worker to tick polling. The next event, observed by
   polling, enables the SPI again.
@@ -294,19 +289,10 @@ distinguishable from a fallback or tick wake.
   worker reads no register between fallback wakes and polls every tick once
   the deadline is within twice the fallback interval.
 
-The polled path without a binding keeps the evidence of the service, startup
-and I2S stream emulator checks, which pass unchanged. The
-[controller host model](../checks/dma-controller.c) checks the deadline margin
-of `a733_dma_event_wait()` across counter wrap and that only
-interrupt-enabled acknowledgements advance the controller event count.
-
-```sh
-PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/dma-interrupt.py \
-  --output NEW_OUTPUT_DIRECTORY --freertos FREERTOS_DIRECTORY \
-  --tinyusb TINYUSB_DIRECTORY --lld LLD_PATH \
-  --qemu ~/.cache/sunstoneos/host/usr/bin/qemu-system-aarch64
-```
-
-The runner must print `PASS DMA interrupt cases`. Physical interrupt delivery,
+No host check covers the deadline margin of `a733_dma_event_wait()` across
+counter wrap or that only interrupt-enabled acknowledgements advance the
+controller event count. Physical interrupt delivery,
 GIC routing to the worker's core and the CPU time saved during capture have
 not been measured on the board.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/dma-service.jsonl).

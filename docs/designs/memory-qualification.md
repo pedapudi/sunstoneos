@@ -1,24 +1,15 @@
 # Design: returning memory qualification image
 
-Status: **implemented** and host-modeled, except the DMA0 cases;
-[memory-qualification.md](../memory-qualification.md) describes the image and
-[the measurements](memory-qualification-measurements.md) compare it with the
-budgets below. No figure has been measured on the board, and figures marked
-*estimated* come from the cost model stated beside them.
-Readers are assumed to know AArch64 caches, translation and Advanced SIMD
-(NEON), the returning platform in [a733-kernel.md](../a733-kernel.md) and
-[performance-architecture.md](../performance-architecture.md).
+Status: **implemented** and host-modeled (Unicorn emulation, planner and table checks). **Qualified on the board** for the data-line, address-line, window-scan and page-signature tests over the 12,224 MiB tested map: a run of mask data+address+signature on port 3-1 passed with no alias and no beacon (record `1793600664425885881-a871e54d` in [the memory-dma evidence](../evidence/memory-dma.jsonl)). The march, the bandwidth and latency harness and the full multi-run session have not run on a board, and every time figure for them is *estimated* from the cost model in the record `memory-qualification-cost-model` of [the evidence file](../evidence/memory-qualification.jsonl). The DMA0 cache-maintenance and reachability cases (test 7) are **open**: they are not built, and admission refuses their contract bits. [memory-qualification.md](../memory-qualification.md) describes the image as built.
 
-The board has 12,288 MiB of LPDDR5 at physical `0x4000_0000`–`0x3_4000_0000`.
-Board evidence covers transfers to two 4 KiB pages
-([hardware.md](../hardware.md), DDR row), and the returning platform maps the
-first 128 MiB at EL1. This image runs on the boot Cortex-A55, tests all DRAM
-outside the 64 MiB it occupies, and returns to the ROM's FEL interface, where
+Readers are assumed to know AArch64 caches, translation and Advanced SIMD (NEON), the returning platform in [a733-kernel.md](../a733-kernel.md) and [performance-architecture.md](../performance-architecture.md).
+
 the host reads the result block over USB0. *Offset* means physical address
 minus `0x4000_0000`. A *board session* is the sequence of runs between one
 boot0 upload, which initializes DRAM, and the next. The host counts boot0
 uploads in its run log and treats any run after an unexplained disconnect or
 reset as the first of a new session.
+
 
 ## Data flow and ownership
 
@@ -26,7 +17,7 @@ reset as the first of a new session.
   linker-placed address: a sequence number, slice start and end, test mask,
   time budget in counter ticks, data seed, and the excluded-range list. The
   list holds a count and up to ten ranges, each a 32-bit start and end 2 MiB
-  block index; it is empty today. The image digest excludes the contract.
+  block index; it is empty in the first plan. The image digest excludes the contract.
   The host run log links each run to its DMA admission record, and host
   admission refuses a mask with a DMA bit unless that record exists.
 - **Admission** runs before any write outside the window. It refuses unknown
@@ -159,24 +150,11 @@ reset as the first of a new session.
    `LD1` issues one line, 20–33 cycles, before its first use. One
    `PRFM PLDL1STRM` per line, 16 lines (1 KiB) ahead in the direction of
    travel, hides a DRAM miss in both directions without relying on the
-   hardware prefetcher (appendix B). Expected values sit in v16–v19 and
-   advance by v20 (±64 per lane). One read-and-write line, x1 = x0 ± 64:
+   hardware prefetcher (cost model in the record `memory-qualification-cost-model`). Expected values sit in v16–v19 and
+   advance by v20 (±64 per lane). The kernels are in `apps/memtest/kernels.S`: per line, one `LD1` of the next line, one `PRFM`, an `EOR` against the expected values, a tree of `ORR` into the v24 accumulator, `MVN` and an `ST1` of the complement, and an `ADD` of the next expected values.
 
-   ```
-   ld1  {v8.2d-v11.2d}, [x1]           // line n+1, used next half-iteration
-   prfm pldl1strm, [x0, #±1024]        // line n+16 in the travel direction
-   eor  v4..v7, v0..v3, v16..v19       // line n, loaded one line earlier
-   orr  v4, v4, v5                     // accumulate as a tree
-   orr  v6, v6, v7
-   orr  v4, v4, v6
-   orr  v24, v24, v4
-   mvn  v0..v3, v0..v3                 // complement of data read
-   st1  {v0.2d-v3.2d}, [x0]
-   add  v16..v19, v16..v19, v20        // next line's expected values
-   ```
-
-   The second half repeats this with v0–v3 and v8–v11 exchanged. Appendix B
-   derives the per-line cycle budgets from a cost model.
+   The second half of each iteration repeats this with v0–v3 and v8–v11
+   exchanged.
 
    Once per 2 MiB block `UMAXV` tests v24; a hit rescans the block with
    scalar loads. A word that reads P(b) or ¬P(b) for an address b other than
@@ -229,12 +207,6 @@ reset as the first of a new session.
    line with `DSB SY` before the start write, leaves them alone during the
    transfer and invalidates them before readback.
 
-Per-run split: the scan takes 0.7 s *estimated* with two misses overlapped
-and 1.25 s with none; the budget logic absorbs the difference by shortening
-the march. The first run of a session adds 1.5 s of signature, 1.9 s of
-harness and 0.1 s of DMA0, leaving about 15.8 s for the march; later runs
-give the march about 19.3 s. Data and address lines take under 10 ms
-*estimated*.
 
 ## Interrupts, barriers, cache policy and cores
 
@@ -274,62 +246,39 @@ bound on DRAM bandwidth. The image keeps the boot clock, because each clock
 change needs the user's approval ([cpu-clock.md](../cpu-clock.md)); at
 1794 MHz the march would take about two runs.
 
+
 ## Reuse and changes outside the package
 
-Reused unchanged: the returning platform (monitor, exit and renewal `SMC`s,
-exception capture, result block); `a733-returning-host.py` with a profile in
-`apps/memtest/check.py`; `aarch64_device_cache`; `a733_range.h`;
-`a733_mapping_check.h`; `a733_remote_writers_excluded`; the DMA0 driver and
-admission record; `a733_cpu_clock_report`. No existing code is removed.
+Reused unchanged: the returning platform (monitor, exit and renewal `SMC`s, exception capture, result block); `a733-returning-host.py` with a profile in `apps/memtest/check.py`; `aarch64_device_cache`; `a733_range.h`; `a733_mapping_check.h`; `a733_remote_writers_excluded`; the DMA0 driver and admission record; `a733_cpu_clock_report`.
 
-A host check compares every table word the builder emits with the shared
-golden descriptor once per build, since the tables are fixed output of the
-build. Admission adds one `a733_mapping_check` write translation per
-descriptor kind (`0x4400_0000`, `0x8000_0000`, `0x3_3FFF_F000`), which sees
-live state the host cannot: `TTBR0_EL1`, the MAIR index and the `TCR_EL1`
-sizes.
+A host check compares every table word the builder emits with the shared golden descriptor once per build. Admission adds one `a733_mapping_check` write translation per descriptor kind (`0x4400_0000`, `0x8000_0000`, `0x3_3FFF_F000`), which sees live state the host cannot: `TTBR0_EL1`, the MAIR index and the `TCR_EL1` sizes.
 
-Changes outside the package, all selected by the memtest build definition
-`SUNSTONE_MEMTEST`:
+Changes outside the package, all selected by the memtest build definition `SUNSTONE_MEMTEST`:
 
-- `platform/a733/platform.c` writes level-2 entries 64–511 and level-1
-  entries 2–12 as `PA | UXN | PXN | AF | SH=0b11 | AttrIndx=1 | 1` with AP =
-  0b00, the word from `docs/designs/memory-architecture.md`. Both builders
-  take it from `A733_EL1_DRAM_BLOCK` in
-  `include/a733_device_memory_layout.h`. Entries 0–63 and the 8 KiB of tables
-  stay. `platform_puts` stops the log at `0x3000`.
-- The monitor samples the remote-writer mask as described above; other images
-  keep their current admission until their own designs adopt the check.
-- The monitor's linker placement follows the recovery region layout:
-  `monitor_sync` and `monitor_reset` sit in the section
-  `.text.monitor_recovery`, which `apps/memtest/link.ld` places in the
-  recovery code page. `cmake/a733-memtest.cmake` defines
-  `SUNSTONE_USB_RUNTIME`, which compiles the 0x734 renewal in `monitor.S`; a
-  Unicorn case checks that a renewal returns and moves `CNTPS_CVAL_EL1`
-  forward.
-- `CMakeLists.txt` includes `cmake/a733-memtest.cmake`, whose target is
-  excluded from the default build, and `docs/remote-writers.md` names this
-  image's acceptance of OR100, CE and USB0.
+- `platform/a733/platform.c` writes level-2 entries 64–511 and level-1 entries 2–12 as `PA | UXN | PXN | AF | SH=0b11 | AttrIndx=1 | 1` with AP = 0b00, taken from `A733_EL1_DRAM_BLOCK` in `include/a733_device_memory_layout.h`. Entries 0–63 and the 8 KiB of tables stay. `platform_puts` stops the log at `0x3000`. `platform_init` cleans and invalidates both table pages before the first table write and after the last ([cpu-table-walks.md](cpu-table-walks.md)).
+- The monitor samples the remote-writer mask as described above; other images keep their admission until their own designs adopt the check.
+- `monitor_sync` and `monitor_reset` sit in the section `.text.monitor_recovery`, which `apps/memtest/link.ld` places in the recovery code page. `cmake/a733-memtest.cmake` defines `SUNSTONE_USB_RUNTIME`, which compiles the 0x734 renewal in `monitor.S`; a Unicorn case checks that a renewal returns and moves `CNTPS_CVAL_EL1` forward.
+- `CMakeLists.txt` includes `cmake/a733-memtest.cmake`, whose target is excluded from the default build, and `docs/remote-writers.md` names this image's acceptance of OR100, CE and USB0.
 
-## Budgets and measurement
+## Qualified figures
 
-| Metric | Baseline | Budget | Measured by |
-| --- | --- | --- | --- |
-| DRAM tested per board | 8 KiB | 12,224 MiB less the contract's excluded ranges | Planner model `checks/memtest-plan.py`: slices and every fixed write extent, harness and chase included, inside the tested map and outside excluded ranges |
-| DRAM mapped at EL1 | 128 MiB; 8 KiB of tables | 12,288 MiB; 8 KiB of tables. Measured 12,286 MiB write-back and 2 MiB non-cacheable in 8 KiB, every tested-map entry equal to the golden word, from the tables the image's own `platform_init` writes. The image's mapping check accepts this map in `checks/memtest-emulate.py` and refuses it with the tested-map entries cleared | Host comparison with the golden word, once per build |
-| Translations | none | 3 at admission; none afterwards | `AT` count in Unicorn |
-| March cycles per line, A55 model | none | write ≤ 12; read-verify ≤ 21; read-verify-write ≤ 33.5; each `LD1` at least one line before its use; one `PRFM` per loaded line, 16 lines ahead in the travel direction. Measured 12.19, 21.19 and 33.19. The per-line work is 12, 21 and 33 cycles; each kernel's loop adds one `SUBS` and one `B.NE`, 1.5 cycles per eight lines, or 0.19 cycles per line. The write and read bounds omit that loop cost, which the read-and-write bound includes as half a cycle. A 2 MiB block holds 32,768 lines, so the kernels need a loop; a 16-line unroll would leave 12.09 and 21.09 cycles and a 32-line unroll 12.05 and 21.05, still above the bounds, for 1.2 KiB and 3.6 KiB more text across the three kernels | Unicorn trace and load-to-use trace over 1 MiB in each direction, priced by the cost model |
-| March work per 2 MiB block outside the loop | none | one `ISB` and counter read, one `UMAXV` test, one progress store, ≤ one `SMC` per 200 ms; no call, cache maintenance, `DSB` or `DMB` | Unicorn counters |
-| March rate at 494 MHz | none | write 2–3, read-verify 1.5–1.9, read-verify-write 0.94–1.6 GB/s *estimated*; 0.91–1.45 s per 256 MiB. Estimated from the measured cycles: 2.59, 1.49 and 0.95 GB/s; 1.41 s per 256 MiB. The read rate falls 0.01 GB/s below its lower bound by the same 0.19 cycles of loop cost per line as the row above. A 32-line unroll would reach 1.50 GB/s for 3.6 KiB more kernel text; the pass time, which sets the number of runs, stays inside its bound | Cost model; board figures replace it |
-| Runs for March C- | none | 3–5 *estimated* (appendix B) | Planner |
-| Window scan, every run | none | 6,258,688 loads; ≤ 9 instructions per page; ≥ 15 instructions from each load to its use; 0.7 s *estimated*, 1.25 s with no overlap | Unicorn counters and load-to-use trace |
-| Address lines, bits 6–25 | none | 21 writes, 21 reads | Unicorn counters |
-| Page signature, first run | none | 3,129,344 each of `DC ZVA`, store, `DC CIVAC` and load; 6,113 `DSB SY`; no linefill read; ≤ 7 instructions per page per pass; ≤ 1.5 s *estimated* | Unicorn counters and load-to-use trace |
-| Recovery digest | none | 192 `DC CIVAC`, one `DSB SY`, 12 KiB of loads, per group and after the signature write pass | Unicorn counters |
-| Harness, first run | none | read ≤ 2, write ≤ 3, copy ≤ 5 instructions per line; chase ≤ 1.25 per load; ≤ 1.9 s *estimated*; samples ≥ 50 ms; read ascending and descending | Unicorn count over 1 MiB |
-| Wall time per run | none | ≤ 20 s, with a fault in every march block too; renewal gap ≤ 200 ms plus one block, sample or chase point | Budget logic in Unicorn with a modeled counter |
-| March eviction distance | none | ≥ 256 MiB between each write and the next read of a line | Element, member and block walk over the board plan in `checks/memtest-plan.py` |
-| DMA0 cases | none | ≤ 8 transfers of ≤ 1 MiB; maintenance on buffer and guard lines only; phase marker set across every transfer | Case code with the `checks/dma-controller.c` model |
+All figures come from host models ([record](../evidence/memory-qualification.jsonl) `memory-qualification-host-models`); none is a board measurement.
+
+| Metric | Figure |
+| --- | --- |
+| DRAM tested per board | 12,224 MiB less excluded ranges; 48 march members in 23 groups |
+| DRAM mapped at EL1 | 12,288 MiB (12,286 MiB write-back, 2 MiB non-cacheable) in 8 KiB of tables |
+| Translations | 3 at admission, none afterwards |
+| March cycles per line (write, read-verify, read-verify-write) | 12.19, 21.19, 33.19 |
+| March rate at 494 MHz (estimated) | 2.59, 1.49, 0.95 GB/s; 1.41 s per 256 MiB; 3 to 5 runs for March C- |
+| Window scan | 6,258,688 loads, 6.58 instructions per page |
+| Page signature | 3,129,344 each of `DC ZVA`, store, `DC CIVAC`, load; 6,112 `DSB SY` |
+| March eviction distance | 128 blocks (256 MiB) in every group of the board plan |
+| Image size | 41,256 bytes text, 8,416 data, 79,840 BSS; 57,512-byte upload |
+
+The loop's `SUBS` and `B.NE` add 0.19 cycles per line, so the write and read elements exceed their 12 and 21 cycle per-line work by 1.6% and 0.9%; a 2 MiB block holds 32,768 lines, so the kernels need a loop. The read rate of 1.49 GB/s sits 0.01 GB/s below the 1.5 GB/s lower bound for the same reason; a 32-line unroll would reach 1.50 GB/s for 3.6 KiB more text.
+
+## Host checks
 
 Unicorn memory hooks inject a stuck and an open bit in 6–25; a single-bit
 wrap at each of bits 26–33; a multi-bit fold onto a recovery page; an alias
@@ -344,6 +293,7 @@ run in the scan, and a march decode fault before the next write. Contract
 cases cover each admission refusal and a non-empty excluded-range list. An
 exception and a secure-timer exit during a DMA0 transfer must leave the phase
 marker set.
+
 
 ## Failure classes
 
@@ -396,6 +346,7 @@ overwrite the monitor and lose the board. The run log's acceptance record
 names this residual alongside OR100, CE and USB0 and the bus stall, and
 `prepared.json` carries a copy.
 
+
 ## Left out
 
 - **Scanning every line of every page in each run:** it would close the
@@ -419,17 +370,6 @@ names this residual alongside OR100, CE and USB0 and the bus stall, and
   same guard matrix after their own bring-up.
 - **Native USB0 results:** FEL reads the result block after return.
 
-## Board evidence that would confirm the design
-
-Every record of a session shows a remote-writer mask of OR100, CE and USB0
-only,
-SError unmasked, a passing scan and address-line result for bits 6–33, no
-mismatch, no unconfirmed hit and no digest change. The first run passes the
-signature with no abort, and the resume addresses chain across the tested map.
-With a DMA admission record, both cache cases pass with stale controls, and the
-guard matrix passes for bits 32 and 33. The first record carries the harness
-table and clock words, and measured scan and march times replace the
-estimates.
 
 ## Appendix A: boot0 configures no secure-memory region
 
@@ -446,40 +386,10 @@ and the formatter's two character sinks; none loads a literal in SMC0 or SMC1
 Non-secure EL1, so the controller's reset state does not deny Non-secure
 access.
 
-## Appendix B: time arithmetic
 
-- **March cost model.** Eight cycles for each four-register Q-form `LD1` or
-  `ST1` (64 bits per cycle), one per Q-form integer instruction and per
-  `PRFM`, no dual issue. A read-and-write line costs
-  8 + 1 + 4 + 4 + 4 + 8 + 4 = 33 cycles plus half a cycle of branch: 0.94 GB/s
-  at 494 MHz. With 128 bits per cycle and some pairing, the line costs about
-  20 cycles: 1.6 GB/s. The write element costs 8–12 cycles and is bounded by
-  DRAM at 2–3 GB/s; the read element costs 17–21 cycles, 1.5–1.9 GB/s. These
-  two figures count the per-line work only. The kernels loop over eight lines
-  per iteration, and the loop's `SUBS` and `B.NE` add 0.19 cycles per line:
-  12.19 and 21.19 cycles, 2.59 and 1.49 GB/s at the slow end.
-- **Latency term.** A miss costs 150–200 ns. The `PRFM` runs 16 lines, at
-  least 320 cycles or 650 ns, ahead of the load, so the model's latency term,
-  miss latency less lookahead, is zero. If prefetching failed, the one-line
-  lookahead (40–68 ns) would leave each read line latency-bound at about
-  0.43 GB/s, and the march would take about 155 s, nine runs or more. The
-  harness's descending sample and the measured march times show which holds.
-- **March.** A 256 MiB sub-slice takes one write element (0.09–0.13 s), four
-  read-and-write elements (0.68–1.14 s) and one read element (0.14–0.18 s):
-  0.91–1.45 s. The 47.75 sub-slices take 43.5–69.2 s.
-- **Runs.** The slowest-group rule loses at most one group of three
-  sub-slices, 2.7–4.35 s, per run. At the fast rate, three runs (15.8, 19.3
-  and 19.3 s, less one group each) cover 43.5 s. At the slow rate, four runs
-  suffice without loss and five in the worst case.
-- **Scan.** 6,258,688 loads at 200 ns with two misses overlapped take 0.63 s,
-  with four 0.31 s. With no overlap the scan takes 1.25 s, and the budget
-  logic shortens the march.
-- **Signature.** The read pass costs one line read per page, 0.31 s at the
-  scan's rate. The write pass costs one 64-byte write per page and no read;
-  at 100 cycles per page it takes 0.63 s. Barriers: one per 2 MiB block of
-  12,224 MiB plus one, 6,113.
-- **Harness.** Read 0.40 s in each direction, write 0.30 s, copy 0.40 s
-  (1.0 GB/s over twice the copied bytes), chase 0.33 s (150 ns per load):
-  1.83 s.
-- **Digest.** 32 vector and code lines in each of two pages plus 32 beacon
-  lines in each of four pages: 192 lines.
+## Open work
+
+1. **Return path for the full session.** The image uses the legacy secure-timer monitor, which has no host-armed WDT0 contract or RTC breadcrumbs; the development runner has no memory-test kind. The owner supplies both before the march runs on a board.
+2. **DMA0 cases** (test 7): build the cache-maintenance and reachability cases and the admission-record link.
+3. **Board evidence that would confirm the design.** Every record of a session shows a remote-writer mask of OR100, CE and USB0 only, SError unmasked, a passing scan and address-line result for bits 6–33, no mismatch, no unconfirmed hit and no digest change. The first run passes the signature with no abort, and the resume addresses chain across the tested map. With a DMA admission record, both cache cases pass with stale controls and the guard matrix passes for bits 32 and 33. The first record carries the harness table and clock words, and measured scan and march times replace the estimates. The prediction is the record `memory-qualification-board-session`.
+4. The user's acceptance of the remote-writer, bus-stall and recovery-region residuals must be in the run log before any contract is prepared.

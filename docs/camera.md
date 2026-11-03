@@ -216,52 +216,20 @@ established independently. Lower-resolution modes remain candidates. Hawkeye
 sensor/actuator programming, firmware terms and physical module compatibility
 remain separate work; OwlSight documentation describes a different product.
 
-## Validation evidence is reusable for unchanged inputs
+## Sensor configuration matches the pinned reference driver
 
 The changed behavior is bounded sensor configuration and stream ownership.
 The principal risks are wrong clock/timing bytes, premature transmission,
-skipped settling delays and resource reuse after partial failure. One combined
-host batch resolves the software aspects of those risks:
-
-```sh
-python3 checks/ov5640-reference.py \
-  --source "$HOME/.cache/sunstoneos/sources/camera/drivers/media/i2c/ov5640.c" \
-  --evidence "$HOME/.cache/sunstoneos/evidence/ov5640-20261016"
-```
-
-The fixture passes under AddressSanitizer and UndefinedBehaviorSanitizer.
-It checks minimum delays, chip mismatch before writes, bounded polls,
-pending admissions, normal stop/restart/close, receiver retention, uncertain
-GPIO/register/release operations, clock failure/regression, deadline expiry,
-changed lease identity, readback mismatch and terminal silence. A block-write
-run must reproduce the single-write access sequence register for register, with
-no masked or delayed entry inside a block; failed and overdue block writes
-retain the lease.
-An independent harness executes unchanged Linux clock, timing and control
-functions with the pinned initialization tables. Its complete modeled 65,536-byte
-sensor image matches the native driver for the selected color-bar profile.
-The reference harness supplies transport and Linux-type stubs; it does not
-execute a Linux kernel or simulate sensor electronics.
-
-A second harness checks every mode against the reference driver itself:
-
-```sh
-python3 checks/ov5640-modes-reference.py \
-  --source "$HOME/.cache/sunstoneos/sources/camera/drivers/media/i2c/ov5640.c" \
-  --evidence <output directory>
-```
-
-It compiles the pinned driver's mode table, format table, pixel-rate selection
-and its `ov5640_set_mode` path with the default frame length, then applies the
-same controls and frame length as the native driver. For each of 36 modes,
-covering all ten sizes in all three formats and six frame lengths including
-both ends of the admitted range, the complete 65,536-byte register image at
-`READY` and the derived link clock, timing clock, line length and frame length
-must match. The native side also replays each mode with block writes, which must
-reproduce the single-write access sequence, starts and stops the stream, and
-checks that the receiver callback receives the selected mode. Invalid sizes,
-formats and frame lengths, selection after open and a mode with altered derived
-values are refused without changing the driver.
+skipped settling delays and resource reuse after partial failure. A software
+comparison against the pinned Linux OV5640 driver, using its unchanged clock,
+timing and control functions and initialization tables, covered them. The complete modeled 65,536-byte sensor image matches the native driver for the selected color-bar profile. For each of 36 modes (all ten sizes in all
+three formats and six frame lengths, including both ends of the admitted range)
+the register image at `READY` and the derived link clock, timing clock, line
+length and frame length match. Block writes reproduce the single-write access
+sequence register for register. The harnesses supply transport and Linux-type
+stubs and do not execute a Linux kernel or simulate sensor electronics; they
+are not in the tree, so no host check reproduces the comparison. The
+results are in [camera.jsonl](evidence/camera.jsonl).
 
 The AArch64 freestanding object compiles with Clang 21 and contains 9,612 bytes
 of code and read-only data, with no writable static data. It requires the

@@ -99,19 +99,13 @@ file, unaligned input, 64 corruption cases, and 18 invalid-input cases. This che
 was repeated because the byte-update helper and version dispatch changed. The
 existing isolated SDK CRC comparison was reused.
 
-The original directory ASan/UBSan result covers corruption, repaired-primary
-section corruption, duplicate references, metadata bounds and output aliasing.
-Its synthetic whole-tail gap and appended zero-CRC assumptions were superseded
-by the pinned writer's declared-payload coverage. The fixture producer now uses
-that coverage and creates zero CRC inside a declared payload.
-
-[nbg-directory-padding.c](../checks/nbg-directory-padding.c) passes fifteen
-focused ASan/UBSan cases: the actual padded graph, prior emitted model, corrected
-synthetic gap and zero CRC, nonzero gap endpoints, trailer, reordered payloads,
-overlap, coefficient-relative escape, independently corrupted payloads after
-primary repair, and the actual two-operation assembly requirements. Unchanged
-fixed-format and controller checks were reused. Current results and exact inputs
-are in `~/.cache/sunstoneos/evidence/npu-two-stage-20261019/`.
+The pinned writer's declared-payload coverage defines the CRC; the fixture
+producer creates zero CRC inside a declared payload. No host check covers directory corruption, repaired-primary
+section corruption, duplicate references, metadata bounds, output aliasing,
+nonzero gap endpoints, trailers, reordered payloads, overlap, coefficient-relative
+escape, or independently corrupted payloads after primary repair. Earlier
+ASan/UBSan runs of these cases and the actual padded graph and two-operation
+assembly requirements are in `~/.cache/sunstoneos/evidence/npu-two-stage-20261019/`.
 
 The earlier AArch64 verifier contained 1,128 bytes of text and read-only data,
 no writable static data, and one external reference to `nbg_model_open`. Its
@@ -124,12 +118,12 @@ Current commands, artifacts, input identities, and results are under
 `~/.cache/sunstoneos/evidence/nbg-directory-checksum-20261016/`. The fixed-header
 reference evidence remains under `~/.cache/sunstoneos/evidence/nbg-checksum-20261016/`.
 [nbg-checksum.c](../checks/nbg-checksum.c) consumes the two published models and
-saved zero-CRC fixture. [nbg-checksum-reference.py](../checks/nbg-checksum-reference.py)
-records the earlier isolated SDK comparison; it need not run when those inputs
-and CRC semantics remain unchanged.
+saved zero-CRC fixture. No host check repeats the isolated SDK comparison.
 
 The separate [convolution loader capture](nbg-conv-loader.md) records SDK preparation
-for the newly verified model. It stops before device submission and supplies
-allocation and command evidence now matched by native assembly. That loader capture stopped before device submission.
+for the verified model. It stops before device submission and supplies
+allocation and command evidence matched by native assembly.
 Descriptor access bounds, SRAM routing, command admission, and physical inference
 remain outstanding.
+
+Results of host checks that no longer exist are kept in the evidence record [nbg-checksum.jsonl](evidence/nbg-checksum.jsonl).

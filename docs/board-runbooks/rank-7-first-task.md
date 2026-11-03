@@ -10,7 +10,7 @@ restores its first FreeRTOS task context; an SVC at the first idle-task
 instruction records the context. No task body, timer interrupt or SGI
 workload runs. Every core then cleans the 145-page owned writable interval,
 CPU0 restores its controls, the seven secondaries reach OFF and the monitor
-returns to the ROM. [The supervised SMP record](../a733-smp-supervised.md#all-eight-cpus-reach-their-first-task-context-and-return-safely)
+returns to the ROM. [The supervised SMP record](../a733-smp-supervised.md#returning-diagnostics)
 describes it. It passed once on port 3-1 on 2026-10-18
 (`all-core-first-task-20261018/physical-010/`).
 

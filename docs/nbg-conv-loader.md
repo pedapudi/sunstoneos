@@ -3,11 +3,11 @@
 SDK preparation of the [compiled convolution](npu-compiler.md) is **captured in a
 host instruction emulator**. The trace stops at the submission call before any
 device operation. It supplies allocation and command bytes for extending native
-assembly. The [native assembler](nbg-assembly.md) now matches these saved bytes
+assembly. The [native assembler](nbg-assembly.md) matches these saved bytes
 after address and completion-event adjustments. Physical execution remains outstanding.
 
 The reader is assumed to understand device buffers and address relocation.
-[nbg-conv-loader-reference.py](../checks/nbg-conv-loader-reference.py) reuses the
+The capture reuses the
 synthetic HAL and bounded calls from the [earlier loader trace](nbg-loader-trace.md).
 It initializes the SDK, creates and prepares the network, binds tensors using
 the directory format's quantization union, and intercepts submission.

@@ -294,12 +294,11 @@ The focused `checks/a733-storage-update.py --dma-only` selection runs a
 67-sector DMA backup in batches of 64 and three, followed by 67 one-sector PIO
 writes with DMA readback. It checks cache failure, transport loss and deadline
 retention, and preserves the eight-sector PIO stride. The linked maintenance
-image check, `checks/storage-maintenance-dma.py`, executes its private DMA
-admission/cache adapter and USB task with modeled provider and transport edges.
-It checks every mapped page, supplied-pointer refusal, both incoming request
-bounds, a 32 KiB streamed response and final-IN progress publication. The host
-parser consumes that native-produced frame. These checks establish software
-composition, not physical DMA coherence, USB throughput or recovery.
+image's private DMA admission/cache adapter and USB task (mapped pages,
+supplied-pointer refusal, both request bounds, a 32 KiB streamed response and
+final-IN progress publication) have no retained image check. These checks
+establish software composition, not physical DMA coherence, USB throughput or
+recovery.
 
 The card model holds only the granted range of an SD card whose capacity
 equals the grant's. Planning cases build a 64 MiB card image with a partition
@@ -321,17 +320,12 @@ USB and watchdog execution remain outside that result. The
 [watchdog composition](maintenance-watchdog.md) has separate focused evidence;
 it does not establish complete image execution.
 
-The additive check `checks/a733-storage-native.py` covers the new supply
-profiles, native C write-admission guards and USB framing/provider guards. It
-models CPU privilege, task ownership, register access and completed USB
-preparation. It compiles the original AArch64 adapter and native task units.
-It does not execute bootstrap or establish physical recovery. The full host
-backup, update and restoration workload is reused from the connected batch.
+The supply profiles, native C write-admission guards and USB framing/provider
+guards were covered by host runs that modeled CPU privilege, task ownership,
+register access and completed USB preparation and compiled the original
+AArch64 adapter and native task units. They have no retained check; see
+[the evidence file](evidence/storage-update.jsonl). They do not execute
+bootstrap or establish physical recovery.
 
-The additive cases pass under AddressSanitizer and UndefinedBehaviorSanitizer.
-Evidence in `~/.cache/sunstoneos/evidence/storage-update-20261017/native1`
-contains the successful PMIC and MMC guard checks. The successful USB guard
-check and four original AArch64 compilations are preserved in `native2`.
-The USB fixture uses aborting stubs for unexecuted task entry points retained by
-sanitizer metadata. The merged PMIC source includes
+The merged PMIC source includes
 the display supply profile alongside the two new USB supply profiles.

@@ -4,10 +4,22 @@
 
 Native internal buses, GPIO, UART, SPI, PWM, ADC and RTC paths have software evidence. Exposed I2C resource bindings are missing.
 
-
 **Board-qualified scope:** Inherited PMIC reads, RTC RC-mode progression,
 watchdog reset, retained breadcrumbs and returning FEL execution have physical
 records. These results do not qualify every exposed bus or reset scenario.
+
+| Capability | Status | Key figure | Evidence and design |
+| --- | --- | --- | --- |
+| Shared PMIC provider, DCDC1 read | qualified on the board | register observation only | `buses-rtc-pmic-dcdc1-read` |
+| Exposed I2C controllers (TWI0-3, S_TWI2) | open | no clock, mutex or resource bindings | [controller inventory](../../drivers/i2c/README.md) |
+| GPIO, mux, pull, drive, interrupt, debounce | host-tested | bank-qualified ownership | [pins](../pins.md) |
+| UART (nine controllers; UART2 IRQ and DMA applications) | host-tested | | [UART](../uart.md) |
+| SPI0-4 and S_SPI FIFO paths; SPI3 DMA command-response | host-tested | 4096-byte response; 65.792 ms of clocks at 500 kHz | [SPI](../spi.md), [native SPI DMA](../designs/spi-native-dma.md) |
+| PWM (fan, LED) and GPADC0-3 | host-tested | LRADC electrically blocked | [PWM](../pwm.md), [ADC](../adc-application.md) |
+| RTC RC-mode progression | qualified on the board | 1 s in about 1.1 s | `buses-rtc-rtc-rc-progression` |
+| RTC calendar, crystal initialization, non-waking alarms | host-tested | | [RTC](../rtc-application.md) |
+| Watchdog expiry, retained breadcrumbs, FEL recovery | qualified on the board | | `buses-rtc-watchdog-fel-return`; [watchdog](../watchdog.md) |
+| LEDs, buttons, infrared, Ethernet, debug | open | | [board wiring](../board-wiring.md) |
 
 ## Open work
 
@@ -17,7 +29,7 @@ records. These results do not qualify every exposed bus or reset scenario.
 4. Qualify ADC values, accuracy, IRQs and recovery; resolve the LRADC electrical block.
 5. Audit the remaining board functions (LEDs, buttons, infrared, Ethernet and debug) against the wiring record.
 
-Records for each area are in the sections below.
+The sections below hold each area's scope.
 
 ## Pins
 
@@ -55,7 +67,7 @@ Fan and LED PWM, and GPADC0-3 divider observations with threshold windows, are i
 
 **Board-qualified scope:** None.
 
-SPI0-4 and S_SPI master FIFO paths and selected DMA are implemented. Peer wiring, IRQ, DMA and cache behavior, and recovery are unqualified. SPI4 activation refuses its unproven package mapping, and the manual supplies no SPI4 DMA request. See [SPI](../spi.md) and [platform](../spi-platform.md).
+SPI0-4 and S_SPI master FIFO paths and selected DMA are implemented; the SPI3 command-response DMA application is host-tested ([design](../designs/spi-native-dma.md)). Peer wiring, IRQ, DMA and cache behavior, and recovery are unqualified. SPI4 activation refuses its unproven package mapping, and the manual supplies no SPI4 DMA request. See [SPI](../spi.md) and [platform](../spi-platform.md).
 
 ## RTC and watchdog
 
@@ -75,8 +87,14 @@ Audit fitted LEDs, buttons, infrared, Ethernet, debug and other blocks against [
 
 ## Evidence
 
-Board results are records in `docs/evidence/buses-rtc.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-buses-rtc-20261101.md).
+Board results are records in [`docs/evidence/buses-rtc.jsonl`](../evidence/buses-rtc.jsonl); add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-buses-rtc-20261101.md).
 
 <!-- evidence-table:begin -->
-No board result is recorded in `docs/evidence/buses-rtc.jsonl`.
+3 records in `docs/evidence/buses-rtc.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+
+| Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
+| --- | --- | --- | --- | --- | --- | --- |
+| `buses-rtc-pmic-dcdc1-read` | 2026-10-18 |  | `` | returned | passed |  |
+| `buses-rtc-rtc-rc-progression` | 2026-10-18 |  | `` | returned | passed | rtc_second_duration 1.1 s |
+| `buses-rtc-watchdog-fel-return` | 2026-10-31 |  | `` | watchdog-reset | passed |  |
 <!-- evidence-table:end -->

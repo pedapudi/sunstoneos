@@ -63,22 +63,15 @@ immutable under the existing cooperative platform contract. Ordinary EL0 access
 is not isolated by these mappings. Other pool users remain idle during construction
 and serialize every later pool mutation through a common owner or lock.
 
-The [focused instruction fixture](../checks/cached-device-reservations.py) uses
-this linker, table constructor, cold enable helpers, actual eight-core barrier
-and actual NPU/GPU constructors. Its QEMU reset harness replaces A733 CPU release
-and power admission. It executes architectural address translations on every core
-and stops before scheduler or device activation. Constructors acquire and retain
-leases under the kernel critical section before the scheduler starts; the
-harness's EL1 vectors service its interrupt-mask and core-identifier supervisor
-calls (`SVC #107`, `#108` and `#109`) in place of the port's handler, which needs
-the GIC CPU interface the harness does not configure. Preparation evidence does not
-qualify physical cache coherence, watchdog recovery or device completion.
-
-The focused check passes with eight emulated Cortex-A53 CPUs. Every core executes
-read and write translations across both complete pools at EL3 and EL1. The check
-also passes cold-regime refusal, protected-range checks, primary/barrier/deadline
-admission, actual constructor preparation and release publication. It verifies
-that all six parent leases remain device-owned and unreleasable.
+No host check remains for the reservations. A QEMU reset harness with eight
+emulated Cortex-A53 CPUs executed read and write translations across both
+complete pools at EL3 and EL1 on every core, the cold-regime refusal, the
+protected-range checks, primary/barrier/deadline admission, actual NPU and GPU
+constructor preparation and release publication. It showed that all six parent
+leases remain device-owned and unreleasable
+([cached-device-reservations.jsonl](evidence/cached-device-reservations.jsonl)).
+Preparation evidence does not qualify physical cache coherence, watchdog
+recovery or device completion.
 
 Relinking identical objects with the prior and current default linker scripts
 produces identical allocated sections, load-segment bytes and geometry, and symbol

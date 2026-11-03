@@ -29,7 +29,6 @@
       "bytes": 69632,
       "cache_path": "sources/brom/fixs-brom.bin",
       "used_by": [
-        "checks/a733-rom-recovery.py",
         "docs/watchdog.md"
       ],
       "analysis": "boot-rom-and-boot0.md",
@@ -69,7 +68,6 @@
       "cache_path": "sources/brom/ns-brom.bin",
       "used_by": [
         "apps/usb-returning/build.py",
-        "checks/a733-video-unit.c",
         "docs/usb-platform.md",
         "docs/designs/usb-session-takeover.md"
       ],
@@ -90,9 +88,6 @@
       "bytes": 69632,
       "cache_path": "evidence/rom-copy-20261016-084055/physical-rom.bin",
       "used_by": [
-        "checks/a733-rom-recovery.py",
-        "checks/remote-writers-sources.py",
-        "checks/watchdog-rom-reset-log.py",
         "tools/check-a733-smp.py",
         "tools/check-fel-input.py",
         "tools/check-watchdog-configuration.py",
@@ -131,9 +126,6 @@
         "tools/prepare-microsd-boot.py",
         "tools/prepare-ddr.py",
         "checks/cold-entry.py",
-        "checks/boot0-monitor-handoff.py",
-        "checks/remote-writers-sources.py",
-        "checks/cold-boot-cache.py",
         "docs/boot.md",
         "docs/microsd-boot-package.md",
         "docs/cold-entry.md"
@@ -348,7 +340,6 @@
       "used_by": [
         "cmake/gpu.cmake",
         "cmake/a733-os.cmake",
-        "checks/pvr-firmware-reference.py",
         "docs/gpu.md",
         "docs/gpu-service.md",
         "docs/gpu-application.md"
@@ -399,7 +390,6 @@
       "bytes": 39416,
       "cache_path": "sources/npu/ai-sdk-fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libVIPhal.so",
       "used_by": [
-        "checks/nbg-ring-reference.py",
         "docs/nbg-rings.md"
       ],
       "analysis": "gpu-and-npu-binaries.md",
@@ -419,7 +409,6 @@
       "cache_path": "sources/npu/ai-sdk-fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libNBGlinker.so",
       "used_by": [
         "checks/nbg-loader-reference.py",
-        "checks/nbg-relocation-reference.py",
         "docs/nbg-relocation.md",
         "docs/nbg-conv-loader.md"
       ],
@@ -456,7 +445,6 @@
       "bytes": 964224,
       "cache_path": "sources/npu/ai-sdk-fc90006d0f6569da2f6726c2d8395877686f5aca/examples/vpm_run/operator/v3/network_binary.nb",
       "used_by": [
-        "checks/nbg-inspection.py",
         "checks/nbg-loader-reference.py",
         "docs/npu.md",
         "docs/nbg-checksum.md",
@@ -508,7 +496,6 @@
       "license": "MIT (https://github.com/VeriSilicon/TIM-VX/blob/702715d714277376d7ff466b7b72833ff57564c1/LICENSE, Vivante Corporation)",
       "cache_path": "sources/npu/tim-vx-702715d714277376d7ff466b7b72833ff57564c1/samples/nbg_runner_pybind/examples/models/conv2d_relu_maxpool2d_fp32.nbg",
       "used_by": [
-        "checks/nbg-checksum-reference.py",
         "docs/nbg-checksum.md"
       ],
       "analysis": "gpu-and-npu-binaries.md"
@@ -548,8 +535,6 @@
       "used_by": [
         "drivers/net/aic8800_firmware.c",
         "checks/aic8800-firmware.py",
-        "checks/board-single-core-host.py",
-        "checks/radio-bootstrap-budget.py",
         "docs/radio-firmware.md"
       ],
       "analysis": "radio-firmware.md"
@@ -567,8 +552,6 @@
       "used_by": [
         "drivers/net/aic8800_firmware.c",
         "checks/aic8800-firmware.py",
-        "checks/board-single-core-host.py",
-        "checks/radio-bootstrap-budget.py",
         "docs/radio-firmware.md"
       ],
       "analysis": "radio-firmware.md"
@@ -586,8 +569,6 @@
       "used_by": [
         "drivers/net/aic8800_firmware.c",
         "checks/aic8800-firmware.py",
-        "checks/board-single-core-host.py",
-        "checks/radio-bootstrap-budget.py",
         "docs/radio-firmware.md"
       ],
       "analysis": "radio-firmware.md"
@@ -605,7 +586,6 @@
       "used_by": [
         "drivers/net/aic8800_firmware.c",
         "checks/aic8800-firmware.py",
-        "checks/radio-bootstrap-budget.py",
         "docs/radio-firmware.md"
       ],
       "analysis": "radio-firmware.md"
@@ -623,8 +603,6 @@
       "used_by": [
         "drivers/net/aic8800_firmware.c",
         "checks/aic8800-firmware.py",
-        "checks/board-single-core-host.py",
-        "checks/radio-bootstrap-budget.py",
         "docs/radio-firmware.md"
       ],
       "analysis": "radio-firmware.md"

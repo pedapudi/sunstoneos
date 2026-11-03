@@ -228,12 +228,8 @@ memory checks are reused. Startup health is a modeled boundary in the
 convolution lifecycle cases; the sequencer itself runs in
 `checks/npu-startup-host.c` and `checks/npu-startup.c`. No previous suite, simulator inference or performance campaign was rerun.
 
-Generate authenticated fixture headers with
-[`checks/npu-convolution.py`](../checks/npu-convolution.py), passing the binary,
-saved input/output, recorded assembly directory and a fresh external destination.
-Configure `NPU_CONVOLUTION_FIXTURES` to that destination and build
-`npu-convolution-model`; its semihosting arguments are `composition`, `mutation`,
-`close`, `close-fault` and `job-command`. Archive executable and input identities before execution. The
+The `npu-convolution-model` target takes the semihosting arguments `composition`, `mutation`,
+`close`, `close-fault` and `job-command`; it needs authenticated fixture headers that no maintained host check generates. The
 private CMake fragment also defines the independent `npu-convolution` native
 object target.
 
@@ -260,7 +256,7 @@ output are modeled. Injected reference output checks copying, lifetime and resul
 verification; it does not execute numerical inference. No peripheral MMIO or board
 communication occurred. Earlier fixed-model and constituent checks were reused.
 
-The [live runtime client](../apps/npu-runtime/README.md) now supplies arbitrary
+The [live runtime client](../apps/npu-runtime/README.md) supplies arbitrary
 same-shape inputs to that unchanged selected model and copies numerical output
 through this API. Its USB task owns one mailbox; the designated NPU client owns
 all service calls, REAP and terminal CLOSE. The compiled-model catalogue and
@@ -270,3 +266,5 @@ model upload, shape switching or broader operator support.
 The separate [fixed FP32 relative-attention shift profile](npu-relative-shift.md)
 adds authenticated SH/NT execution, an external working pool and chunked live
 input/output in a retained single-core IRQ application.
+
+Results of host checks that no longer exist are kept in the evidence record [npu-convolution.jsonl](evidence/npu-convolution.jsonl).

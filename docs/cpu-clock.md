@@ -270,8 +270,7 @@ before N only. Both native write adapters now complete PLL writes with DSB SY,
 then the driver waits at least 20 us between N and UPDATE. The native sequence
 still retains a wrong N after UPDATE; the delay does not replace verification.
 The extra settle adds 21 us in the model, with two additional completion
-barriers and unchanged register and PMIC write counts. Three reviewers
-approved the design and implementation before its physical experiment.
+barriers and unchanged register and PMIC write counts.
 
 The short hello application can finish before the top-point raises. Its
 successful control reports DCDC5 at 800 mV, rather than CPU-L's 1000 mV top

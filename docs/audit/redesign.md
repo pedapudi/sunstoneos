@@ -1394,11 +1394,8 @@ headers and patches, with no shared module.
 - **Evidence directories as test inputs** (`checks-harness-2`, medium). Fifty-six
   checks read baselines from dated directories under
   `~/.cache/sunstoneos/evidence/`. Most are hash-pinned and fail loudly. A few
-  are not: `radio-reconnect-wpa.py` runs a QEMU command line read from an
-  evidence file, `dsi-replay.py` rebuilds a compile command from one, and
-  `bluetooth-mimus.py` builds against an unpinned mimus worktree. Proposal:
-  move the QEMU and compile command templates into source, make
-  `bluetooth-mimus.py` assert the worktree revision from
+  are not: `bluetooth-mimus.py` builds against an unpinned mimus worktree.
+  Proposal: make `bluetooth-mimus.py` assert the worktree revision from
   [apps/mimus/source.json](../../apps/mimus/source.json), and report missing
   evidence as a distinct status. Committing the small hashed baselines under
   `checks/fixtures/` with their producer is optional, because the documented
@@ -1415,7 +1412,7 @@ headers and patches, with no shared module.
 - **A test file as a library** (`checks-harness-7`). The ELF and DWARF layout
   class lives in the SD0 check `checks/storage-read-native.py`, and 46 files
   load it, including application build scripts that snapshot it into
-  evidence. A second copy exists in `checks/jpeg-encode-native.py`. Proposal:
+  evidence. Proposal:
   one side-effect-free `tools/elf_layout.py`, still snapshotted into evidence.
 - **Hardcoded paths** (`checks-harness-13`). About 37 files embed
   `/home/sunil/...` paths and 55 embed `/usr/bin/clang-21`. Proposal: resolve

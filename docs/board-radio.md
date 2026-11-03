@@ -108,10 +108,7 @@ the absolute client deadline. The same TCP connection continues after recovery
 when the address is unchanged, because the pinned stack's network-down
 processing clears ARP but leaves sockets open. Every other non-OK reply,
 including a CONNECT or ACCEPT timeout, still ends the exchange.
-`checks/board-radio.py` covers this with modeled socket replies: SEND and
-RECEIVE each time out once with nothing moved and once with one late byte, and
-both modes complete the four-byte exchange. A CONNECT timeout still fails the
-client. Physical loss timing and TCP retransmission across a real recovery
+No host check covers this retry. Physical loss timing and TCP retransmission across a real recovery
 remain unqualified.
 
 Application tasks submit requests and receive results through the existing
@@ -140,11 +137,11 @@ setting up the firmware transport. A low-speed fallback cannot silently enter
 an upload that misses its deadline. The platform retains its existing PERI0
 parent lease and rate/gate/status checks; it never enables a shared parent.
 
-[`checks/radio-bootstrap-budget.py`](../checks/radio-bootstrap-budget.py)
-computes this lower bound from the pinned artifacts, the engine framing, the
-admitted module clock and the profile's bootstrap offset. The slow-path check
-fails. With `--four-bit`, the bus lower bound is 0.242 seconds;
-`--profile headset` compares it with the 30-second recognition-headset bound. The deadlines
+The lower bound is computed from the pinned artifacts, the engine framing, the
+admitted module clock and the profile's bootstrap offset; no host check
+computes it. The slow path fails the bound. With four-bit width, the bus lower
+bound is 0.242 seconds; the recognition-headset profile compares it with a
+30-second bound. The deadlines
 and source-default per-pair writes remain unchanged. The result excludes actual
 controller, firmware and scheduling latency and cannot establish completion.
 Electrical operation still needs the [SDIO qualification](radio-sdio-qualification.md).
@@ -198,20 +195,13 @@ boundaries abort if invoked. These checks do not execute the native startup
 constructor or qualify physical CE, SID, RF, WPA2 or IPv4 operation. The complete
 native board image supplies the real constructor and provider linkage.
 
-The focused addressing check is `checks/board-addressing.py`. It compiles its
-host fixture before execution and tests authenticated fixed and DHCP profiles,
-reserved bytes, missing timers, incompatible sizes and versions, supervised
-conversion, DNS digest coverage and copied-result decoding. Lower providers
-remain explicit unused fixtures. DHCP acquisition, DNS traffic and physical
-radio operation require separate network and board evidence.
-
-The addressing fixture passed with AddressSanitizer and UndefinedBehaviorSanitizer;
-the host admission and result-decoding cases also passed. Evidence is under
-`~/.cache/sunstoneos/evidence/board-addressing-20261017/profile2/`.
-The initial compile exposed an incorrect response-offset assertion and reuse
-of the earlier structure's tail padding. The corrected layout preserves the
-response at byte 1,596 and aligns the appended policy to byte 1,856.
-The failed compilation remains in `profile/`.
+No host check covers the authenticated fixed and DHCP profiles, reserved
+bytes, missing timers, incompatible sizes and versions, supervised conversion,
+DNS digest coverage or copied-result decoding. The layout preserves the response
+at byte 1,596 and aligns the appended policy to byte 1,856. DHCP acquisition,
+DNS traffic and physical radio operation require separate network and board
+evidence. Recorded software results are in
+[board-radio.jsonl](evidence/board-radio.jsonl).
 
 The combined supervised board image links the actual DHCP/DNS implementation.
 Its linked DNS source uses the native IP-task bind and close helpers. The

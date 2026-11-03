@@ -470,8 +470,7 @@ clears bit 0 and step 17 faults if it is set again
 Each step is a separate poll, and every app polls once per tick
 ([gpu-display/display.c:501](../../apps/gpu-display/display.c#L501)). A
 frame-end in the roughly 1 ms between a clear and its check is therefore a
-fault. Both host models set bit 0 only when the step-16 write arms it
-([checks/dsi-replay-native.c:33](../../checks/dsi-replay-native.c#L33)).
+fault.
 
 **Failure scenario.** Each clear-and-check pair has about a 6% chance
 (1 ms / 16.7 ms) of catching a frame-end. Two pairs per replay give about 12%,
@@ -482,16 +481,14 @@ Contention on the register mutex widens the window.
 at step 4 or step 17, return to the clear (step 3, or step 15/16) and try
 again, bounded by the existing deadline. Accepting bit 0 at step 17 as the
 awaited frame-end is unsafe: it would accept a stale bit if the W1C clear
-failed. Give both host models a frame-end source that sets bit 0 on a
-periodic read count, independent of the driver's step.
+failed.
 [apps/displayport/memory.c](../../apps/displayport/memory.c) (around lines
 344-347) has the same race and should get the same retry.
 
-**Verification.** Change
-[checks/dsi-replay-native.c](../../checks/dsi-replay-native.c) and
-[checks/gpu-display-replay.py](../../checks/gpu-display-replay.py) to set bit
-0 on reads at steps 4 and 17. The current code fails with VERIFY; the fixed
-code completes with `replay_frame_end >= replay_rcq_done`.
+**Verification.** No host model of the DSI replay exists. A model whose
+frame-end sets bit 0 on a periodic read count, independent of the driver's
+step, and on reads at steps 4 and 17 should fail the current code with VERIFY
+and let the fixed code complete with `replay_frame_end >= replay_rcq_done`.
 
 **Review corrections.** The original primary fix (accept bit 0 at step 17)
 was replaced with the retry above. One reviewer rated the defect medium
@@ -590,10 +587,8 @@ the descriptor page and PCM span only if each page translates with attribute
 SH as 0b10 for Device memory and for Normal non-cacheable memory, whatever the
 descriptor says. Every other non-cacheable validator accepts 2, for example
 [memory_uncached.c:27](../../platform/a733/memory_uncached.c#L27) and
-[gpu_vm_memory.c:20](../../platform/a733/gpu_vm_memory.c#L20). The passing
-evidence comes from the Unicorn stub in
-[checks/hdmi-audio-native.py:136](../../checks/hdmi-audio-native.py#L136),
-which returns SH=3 for every non-Device address.
+[gpu_vm_memory.c:20](../../platform/a733/gpu_vm_memory.c#L20). No host
+check exercises the validator against SH=2.
 
 **Failure scenario.** The non-cacheable pool initializes with SH=2 and the
 audio allocation is created. `a733_dma_submit` then calls `nc_mapping()`,
@@ -609,9 +604,9 @@ to return 2 for 0x44 and Device pages, and add a case that returns 3. Change
 [docs/hdmi-audio.md](../hdmi-audio.md) to describe the accepted shareability
 the same way [docs/usb2-host.md](../usb2-host.md) does.
 
-**Verification.** With the corrected stub,
-[checks/hdmi-audio-native.py](../../checks/hdmi-audio-native.py) fails before
-the fix and passes after it.
+**Verification.** No host check covers the audio allocation. A model that
+returns SH=2 for non-cacheable addresses must fail before the fix and pass
+after it.
 
 **Review corrections.** Older Arm ARM text says PAR.SH "can be" the resulting
 attribute for non-cacheable memory; newer text mandates 0b10. Accepting both
@@ -994,8 +989,7 @@ timeout. Apply it once in a shared VE platform core. Update
 should change too.
 
 **Verification.** In
-[checks/a733-video-platform.c](../../checks/a733-video-platform.c) and
-[checks/h264-encode-ownership.c](../../checks/h264-encode-ownership.c), make
+[checks/a733-video-platform.c](../../checks/a733-video-platform.c), make
 the registry report BUSY once during PROGRAM and once during COPY; assert the
 run reaches DONE with `failed` clear.
 
@@ -1134,7 +1128,6 @@ libstdc++ and libgcc, and the `-T` linker script, are dropped silently, so the
 
 **Failure scenario.** A change to a mimus recognizer source changes the
 recognition ELF, but the frozen dependency manifest written by
-[checks/i2s-application.py](../../checks/i2s-application.py) or
 [checks/board-session-seal-recognition.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/board-session-seal-recognition.py)
 does not change. Reviewers cannot tell which recognizer sources the evidence
 covers.
@@ -1151,8 +1144,8 @@ libstdc++ hashes appear.
 **Review corrections.** Other mechanisms partly cover the gap: the build ID
 hashes the ASR inputs, the recognition seal pins earlier mimus and newlib
 files, and some checks capture `*.ld` files separately. `checks/bluetooth-application.py`
-does not build the mimus-enabled image, so the clearer examples are the two
-checks cited above. Whether reuse checks accept stale evidence was not shown.
+does not build the mimus-enabled image, so the clearer example is the check
+cited above. Whether reuse checks accept stale evidence was not shown.
 
 ### checks-harness-1: UBSan recovers, so checks pass with undefined behavior
 
@@ -1162,11 +1155,9 @@ report a pass when the code under test executes undefined behavior.
 **Root cause.** No check passes `-fno-sanitize-recover` or sets
 `UBSAN_OPTIONS=halt_on_error=1`. With both GCC and Clang defaults, a UBSan
 diagnostic prints `runtime error:` and the program exits 0. Several runners
-set `ASAN_OPTIONS=halt_on_error=1`
-([checks/board-radio.py:62](../../checks/board-radio.py#L62)), which does not
+set `ASAN_OPTIONS=halt_on_error=1`, which does not
 affect UBSan. A one-line signed overflow built this way printed the diagnostic
-and exited 0. Only `h264-high-bounds.py`, `gpu-display-preparation.py` and
-`h264-sequence-oracle.py` inspect stderr.
+and exited 0. Only `gpu-display-preparation.py` inspects stderr.
 
 **Failure scenario.** A driver change introduces signed overflow in a DMA
 length or an over-wide shift in a register helper. The check logs the
@@ -1179,8 +1170,7 @@ affected checks once and grep existing evidence logs for `runtime error:`.
 
 **Verification.** A one-line UB program built with the shared flags exits
 nonzero; `rg` finds no `-fsanitize=...undefined` without the recover flag;
-[checks/rail-leases.py](../../checks/rail-leases.py) and
-[checks/i2s-reference.py](../../checks/i2s-reference.py) still pass.
+the affected checks still pass.
 
 **Review corrections.** Lowered from high: no undefined behavior was found in
 project code.
@@ -1314,9 +1304,7 @@ an already terminal camera failure.
 **Fix.** Add `A733_PLATFORM_I2C11_LOCK` and use it in the adapter's enter,
 leave, held and access paths. Update the "common I2C mutex" wording in
 [docs/camera-native.md](../camera-native.md). Rebuild every embedder of
-`struct a733_platform_locks` and update checks that assume three locks, such
-as [checks/a733-pmic-consumers.c](../../checks/a733-pmic-consumers.c) and
-[checks/a733-typec.c](../../checks/a733-typec.c). This does not keep the USB
+`struct a733_platform_locks` and update checks that assume three locks. This does not keep the USB
 evidence channel alive, because `native_usb.c` refuses on any retained bit;
 that needs a separate change.
 
@@ -1455,8 +1443,8 @@ marked device-owned at line 377. Read the DMA line counter (0x258) and require
 Do not reject a frame for having uniform first or last lines; the native
 profile captures the live sensor, so that heuristic can reject valid images.
 
-**Verification.** In [checks/a733-camera-native.c](../../checks/a733-camera-native.c),
-model a 400-line DMA write and assert a fault before READABLE.
+**Verification.** No host check covers the camera DMA line count. Model a
+400-line DMA write and assert a fault before READABLE.
 
 **Review corrections.** Lowered from medium; the original claim that a short
 frame passes every check ignored the DMA error bits.
@@ -1483,8 +1471,7 @@ without datasheet or hardware evidence. Reconcile
 packet-quiescence step that the retained path skips.
 
 **Verification.** Assert the new sample order in the capture model and that
-the final register image in
-[checks/ov5640-reference.py](../../checks/ov5640-reference.py) is unchanged.
+the final OV5640 register image is unchanged.
 
 **Review corrections.** The original fix (reorder and wait 33 ms) diverges
 from the reference driver on unverified semantics and was replaced. Skipping
@@ -1536,8 +1523,7 @@ LRADC `read()` return `fault(p)` for `!deadline` or `stage!=ACTIVE`
 deadline.
 
 **Failure scenario.** None today: every caller passes a session-wide deadline
-and polls to READY before reading. Expired-deadline retention is asserted by
-[checks/lradc-core.c](../../checks/lradc-core.c) and documented in
+and polls to READY before reading. Expired-deadline retention is documented in
 [docs/thermal.md](../thermal.md).
 
 **Fix.** Make GPADC and LRADC `read()` return INVALID for `!deadline` and
@@ -1566,7 +1552,7 @@ cannot complete within microseconds. Simply accepting the reasserted bit would
 remove the only proof the acknowledge worked. Document the tolerance in
 [docs/adc-application.md](../adc-application.md).
 
-**Verification.** In `checks/lradc-core.c`, reassert DATA0 between the
+**Verification.** In a model of the LRADC core, reassert DATA0 between the
 acknowledge and readback and assert a sample, not retention.
 
 ### security-misc-4: watchdog compares RTC control including write-busy bits
@@ -1788,8 +1774,7 @@ documented flow runs runners as root.
 **Symptom.** A refusal case passes when any exception is raised, including a
 `TypeError` from a regression.
 
-**Root cause.** The H.264 and JPEG cases use `except Exception: pass`
-([h264-application-cases.py:214-218](../../checks/h264-application-cases.py#L214)),
+**Root cause.** The H.264 and JPEG cases use `except Exception: pass`,
 and other `refused()` helpers accept broad exception sets. Each case validates
 the unmodified baseline first and changes one field, so deleting the targeted
 check still makes the case fail.
@@ -1803,13 +1788,12 @@ Keep the `OSError` catch where an injected durable-write failure needs it.
 **Symptom.** Rerunning a failed `--run-only` step loses the earlier failure
 log and truncates the command record.
 
-**Root cause.** [rtc-runtime.py:57-64](../../checks/rtc-runtime.py#L57),
-`rtc-calendar.py`, `rtc-application.py` and `board-session-seal.py` reset
-`commands` and write `<label>.log` unconditionally, while
-[rtc-service.py](../../checks/rtc-service.py) appends and numbers attempts.
+**Root cause.** A resumed driver that resets `commands` and writes
+`<label>.log` unconditionally loses the earlier record; a driver that appends
+and numbers attempts keeps it.
 
-**Fix.** Load the existing commands file and number logs by attempt in the four
-affected drivers, or move `rtc-service.py`'s semantics into a shared helper.
+**Fix.** Load the existing commands file and number logs by attempt in each
+resuming driver, or move the append-and-number behavior into a shared helper.
 
 **Review corrections.** `a733-storage-maintenance.py` uses a fresh directory
 per run and is unaffected.
@@ -1843,8 +1827,7 @@ and the client also retains on a count above one
 
 **Fix.** In the ISR, treat a delivery while OBSERVED as benign: re-issue the
 mask, set no fault and leave the event count unchanged. Keep faulting before
-ARMED, after CLOSED or on a failed mask. Update
-[checks/pcie-root-irq.c:45](../../checks/pcie-root-irq.c#L45) and the
+ARMED, after CLOSED or on a failed mask. Update the
 duplicate-MSI wording in
 [docs/pcie-test-application.md](../pcie-test-application.md). Do not add an
 RWP spin in the ISR; [docs/gpu-interrupts.md](../gpu-interrupts.md) rules it

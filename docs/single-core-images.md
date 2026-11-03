@@ -102,7 +102,4 @@ PWM image with `SUNSTONE_A733_PWM=ON` and the crypto image with
 
 The startup checks `checks/<name>-single-core.py` run the linked image in a
 modeled machine and exercise admission, retention, interrupt routing and the
-refusal cases. `checks/single-core-variants-equivalence.py` compares an image
-built from two source trees. It requires identical object code for every
-unit, and identical linked sections when the link order is unchanged. Use it
-when a recipe or shared-source change should not change generated code.
+refusal cases.

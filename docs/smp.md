@@ -87,17 +87,22 @@ shared data:
   `ullPortInterruptNestings` and `ullPortYieldRequired` keep their names and
   8-byte stride because drivers and checks outside the port read them.
 
-The lock gate keeps its `DMB SY` after a successful trylock and its `DMB SY`,
-`DSB SY`, `SEV` and `ISB` around the release store. The recursion count and
+Kernel locks are FIFO ticket locks. A task takes a lock with `LDAXR` or
+`LDADDA` and releases it with `STLRH`, so acquire and release ordering come
+from the instructions instead of separate barriers. Waiters
+loop on `WFE` and `LDAXRH` after `SEVL`; the releasing store clears their
+exclusive monitors, which sets the event register. The test-and-set lock
+that `SUNSTONE_LOCK_TAS_CONTROL` builds is the control and keeps the `DMB SY`
+after a successful trylock and the `DMB SY`, `DSB SY`, `SEV` and `ISB` around
+its release store. The recursion count and
 ownership bits that only the holder or its core touches are read and written
 without `DSB`, and the IRQ exit, wake placement and late ticks have lighter
-paths. These four changes are implemented and checked in emulation only; they
-merge after the board session in
-[the multicore performance runbook](board-runbooks/multicore-performance-session.md),
-and the [multicore performance design](designs/multicore-performance-1025.md)
-gives their references and measurements. Weaker acquire and release ordering
-of the gate, and `PMR` writes without `DSB`, wait for a supervised eight-core
-board session, as [the design](designs/smp-heterogeneous.md) requires.
+paths. [The scheduler locks status](status/scheduler-locks.md) records the
+board qualification, and the
+[multicore performance design](designs/multicore-performance-1025.md) gives the
+references and measurements. `PMR` writes without `DSB` stay open until a
+supervised eight-core board session, as
+[the design](designs/smp-heterogeneous.md) requires.
 
 ### Measured cost
 
@@ -198,12 +203,10 @@ On a tick that wakes nothing the base sent five time-slice SGIs to cores
 whose same-priority peers are pinned elsewhere; the changed tick sends none.
 Skipping the scan when a priority's list is no longer than the cores running
 it was tried and left out: the zero-wake median rose to 618 instructions in
-that run. [checks/smp-sgi-send.py](../checks/smp-sgi-send.py)
-runs the linked `vInterruptCore` under Unicorn: an EL0 task while another
-core is in a handler takes `SVC 117`, a handler that interrupted an EL0 task
-writes the register without `ISB`, an EL1 task writes it with `ISB`, and a
-core without a resumed task takes the supervisor call. The base image fails
-the second case.
+that run. In the changed `vInterruptCore`, an EL0 task while another core is
+in a handler takes `SVC 117`. A handler that interrupted an EL0 task writes
+the register without `ISB`, an EL1 task writes it with `ISB`, and a core
+without a resumed task takes the supervisor call.
 
 In QEMU (`checks/smp-port-cost.py`), the EL1 cross-core round trip falls from
 12,191 to 11,994 instructions and every other operation is unchanged. The new

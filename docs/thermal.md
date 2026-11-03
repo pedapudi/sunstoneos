@@ -251,17 +251,15 @@ direct stack frame is 240 bytes in initialization; nested calls and callbacks
 have additional stack requirements. Exact inputs, commands, logs and artifacts
 are under `~/.cache/sunstoneos/evidence/thermal-20261016/batch1/`.
 
-The separate `checks/a733-thermal-lease-wait.c` check covers token failure and
-transient registry contention during mutex acquisition, for both startup and
-sampling. All four cases pass with sanitizers; the changed core compiles for
-AArch64. Inputs and results are under
-`~/.cache/sunstoneos/evidence/thermal-lease-wait-20261017/`. The earlier conversion
-and controller workloads were not repeated.
+Token failure and transient registry contention during mutex acquisition, for
+both startup and sampling, passed in four host cases under sanitizers; the
+changed core compiles for AArch64. No retained check repeats them (see
+[the evidence file](evidence/thermal.jsonl)).
 
 The policy check at `checks/thermal-policy.c` drives the policy from the
 actual controller through modeled MMIO. It covers each passive trip and its
 hysteresis, channels without a passive trip, alarm and critical events that do
-not change the level, a stale channel and its recovery, a channel with no reading
+not change the level. It also covers a stale channel and its recovery, a channel with no reading
 for 5 s, a critical trip, repeated and uncertain stop requests, a controller
 failure, replayed samples and backward time. A modeled consumer runs one worker
 while throttled and records continuing progress. The check also requires the
@@ -279,18 +277,16 @@ unchanged.
 
 ## Detected reference-clock compatibility has focused evidence
 
-The focused clock check at `checks/a733-thermal-clock-reference.c` executes the
-changed actual-driver paths with accepted callback fixtures and ASan/UBSan. It
-covers 24/26/19.2 MHz clock startup, normalized adoption, preserved direct 24 MHz
-adoption, PERI0 reserved bit 24, and retained refusal of wrong ratios, lock loss,
-unstable/disabled oscillator, mismatched APB1 and raw non-24 MHz GPADC input. Cold
-configuration preserves unrelated fields; adoption performs no GPADC writes.
-PLL and APB1 registers remain read-only. Existing conversion, calibration,
-threshold and controller-service evidence is reused without replay.
+The changed actual-driver paths ran with accepted callback fixtures and ASan/UBSan
+in a host run that covered 24/26/19.2 MHz clock startup, normalized adoption,
+preserved direct 24 MHz adoption, and PERI0 reserved bit 24. It also covered retained refusal of
+wrong ratios, lock loss, unstable/disabled oscillator, mismatched APB1 and raw
+non-24 MHz GPADC input. It has no retained check. Cold configuration preserves
+unrelated fields; adoption performs no GPADC writes. PLL and APB1 registers
+remain read-only.
 
 The second board's preserved `OSC=0x983fb0f7` and `REF=0xf8675f00` decode 26 MHz
-with N=96 and M=104, producing normalized 24 MHz. The earlier frozen thermal image
-refuses this clock profile. Its replacement and exact inputs are retained under
-`~/.cache/sunstoneos/evidence/thermal-clock-reference-20261018/`. Focused
-source review accepted source selection, arithmetic and ownership. These
+with N=96 and M=104, producing normalized 24 MHz. A frozen thermal image built
+before the normalized adoption refuses this clock profile. The run and exact
+inputs are recorded in [the evidence file](evidence/thermal.jsonl). These
 register observations do not establish clock ownership or physical acquisition.

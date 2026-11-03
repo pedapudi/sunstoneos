@@ -17,12 +17,7 @@ For one supervised RAM-only physical attempt, use the copied returning host runn
 
 The complete inference adapter uses `SUNSTONE_NPU_FINITE_RETURN=1` when compiling the existing `apps/npu-convolution/main.c` and `native.c`. It reuses the authenticated boot record, original service, fixed model, two input-copy/submit/completion/output/compare/REAP operations and terminal CLOSE. The original bootstrap polls local shutdown and publishes stopped with release ordering. The client waits with acquire ordering, suspends worker and bootstrap, then requests PMIC parking outside active requests and borrows. It suspends the parked PMIC task and checks empty slots, released mutexes and disabled, clear, inactive NPU interrupt 97. After reporting copied output, it validates quiescence again and enters a task critical section before return. CLOSE failure or an unobserved stop retains the session. A numerical mismatch exits nonzero after successful device shutdown. The USB service is not started in this mode.
 
-The development ELF under `npu-finite-quiescence-20261018` links that adapter using the existing full single-core monitor. It is not a physical candidate. Six client instruction cases cover matched outputs, a numerical mismatch, failed CLOSE, an uncompleted stop, failed task quiescence and lost final quiescence. They model service, bootstrap and quiescence replies. Nineteen native instruction cases in `checks/npu-finite-quiescence.py` exercise the actual task quiescence and PMIC checkpoint, with scheduler and hardware boundaries modeled. The checkpoint fixture constructs the actual power-domain owner over an
-already-ready modeled PMIC provider. It runs the owner's idle and step
-callbacks and models task-notification waits. The three checkpoint cases
-cover immediate parking, completion of an active PMIC request, and refusal
-to park with an unreaped slot. `--case` selects these cases without replaying
-the sixteen unchanged quiescence cases. The separate FreeRTOS CLOSE and local-stop cases exercise the production lower layers; the complete physical path remains outstanding.
+The development ELF under `npu-finite-quiescence-20261018` links that adapter using the existing full single-core monitor. It is not a physical candidate. Six client instruction cases cover matched outputs, a numerical mismatch, failed CLOSE, an uncompleted stop, failed task quiescence and lost final quiescence. They model service, bootstrap and quiescence replies. No host check covers the actual task quiescence and PMIC checkpoint (immediate parking, completion of an active PMIC request, refusal to park with an unreaped slot). The separate FreeRTOS CLOSE and local-stop cases exercise the production lower layers; the complete physical path remains outstanding.
 
 The returning platform must preserve these existing interfaces before enabling that mode:
 
@@ -36,7 +31,6 @@ The supply fixture executes the real counter constructor and clock queries.
 It models the architectural counter instruction so the PMIC adapter's direct
 counter reads and the shared clock use the same time and initialized frequency.
 A no-op counter constructor would leave the adapter unable to sample time.
-The six supply cases and three updated checkpoint cases pass under
-`~/.cache/sunstoneos/build/npu-resume-1024/`, in `supply-returning/` and
-`checkpoints-final/`. Earlier failure logs remain beside those directories.
+The six supply cases pass under
+`~/.cache/sunstoneos/build/npu-resume-1024/supply-returning/`.
 No physical execution or return is established by these checks.

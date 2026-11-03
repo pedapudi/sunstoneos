@@ -102,45 +102,19 @@ entropy client's retained path to erase partial conditioned bytes. Pending
 retention retries metadata only. The device-owned page is never cleared or
 released while DMA access may remain possible.
 
-Previously completed consumer calls cannot be revoked. Concurrent fault and
+Completed consumer calls cannot be revoked. Concurrent fault and
 consumer calls are ordered at the short reservoir admission check. A later
 fault cannot authorize another consumption. The current cooperative mappings
 do not protect private state from arbitrary privileged corruption.
 
-## The selected check exercises only the new connection
+## Validation scope
 
-[The focused fixture](../checks/a733-radio-entropy.c) reuses existing CE model
-helpers with the actual entropy service, CE session, controller, clock registry
-and pool. It does not execute the earlier CE test functions. Task identity,
-mutex dispatch, the counter, MMIO and DMA-produced bytes are explicit model inputs.
-
-The selected cases cover refill and circular-buffer consumption, copied and
-wrong-task refusal, output aliases, exhaustion, mutex contention, final-token
-contention, late authority loss and deadline retention. They also check that
-supplicant byte requests stop at the sequence reserve and that only the
-sequence hook drains it.
-
-A separate [contention fixture](../checks/a733-radio-entropy-contention.c),
-selected with `--fixture contention`, does not run a CE request. The owner
-thread places a completed refill in staging and runs the actual adapter poll,
-which publishes it under the reservoir lock. An IP-task thread consumes words
-concurrently. Every call must copy a word or return a temporary refusal, the
-adapter must not fault, and the published bytes must equal the copied bytes
-plus the remaining count. Single-threaded cases cover a held lock, the sequence
-reserve, wrong-task refusal and session fault. The
-[runner](../checks/a733-radio-entropy.py) preserves compiled input dependencies,
-the executable and native objects before one sanitizer execution. It compiles
-the adapter against the actual single-core and cached eight-core task headers.
-Existing CE protocol and network-stack evidence remains separate and reusable.
-The five direct native consumers of the session header are compiled once to
-cover atomic fault publication; assertions preserve the prior field layout.
-
-The preserved evidence is under
-`~/.cache/sunstoneos/evidence/radio-entropy-20261017/batch2/`.
-It includes the successful sanitizer result, compiled source dependencies,
-executable and seven native objects. One earlier build stopped before execution
-because renaming the archived fixture's `main` removed its implicit return rule;
-the scoped diagnostic adjustment leaves those unexecuted cases unchanged.
-
-Execution does not establish random-source quality, physical CE behavior,
-native radio application execution, or physical network operation.
+The adapter has no retained host check. A sanitizer run of fixtures that
+composed the actual entropy service, CE session, controller, clock registry
+and pool covered refill and circular-buffer consumption, copied and wrong-task
+refusal, output aliases, exhaustion, mutex contention, final-token contention,
+late authority loss, deadline retention, the sequence reserve and concurrent
+publication. The fixtures and the run are described in
+[the evidence file](evidence/radio-entropy.jsonl). Execution does not establish
+random-source quality, physical CE behavior, native radio application
+execution, or physical network operation.

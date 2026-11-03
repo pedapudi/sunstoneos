@@ -57,8 +57,7 @@
    "registers": 2,
    "sunstoneos_touches_block": true,
    "example_files": [
-    "checks/remote-writers-model.py",
-    "checks/remote-writers-sources.py"
+    "checks/remote-writers-model.py"
    ]
   },
   {
@@ -105,22 +104,15 @@
    "registers": 24,
    "sunstoneos_touches_block": true,
    "example_files": [
-    "checks/a733-usb-platform.c",
-    "checks/a733-usb-platform.py",
-    "checks/gpu-display-capture-native.py"
+    "checks/a733-usb-platform.c"
    ]
   },
   {
    "peripheral": "DRAM controller 1",
    "base": "0x0a500000",
    "registers": 22,
-   "sunstoneos_touches_block": true,
-   "example_files": [
-    "checks/a733-ce-cipher.c",
-    "checks/a733-ce-entropy.c",
-    "checks/a733-ce-hash.c",
-    "checks/a733-ce.c"
-   ]
+   "sunstoneos_touches_block": false,
+   "example_files": []
   },
   {
    "peripheral": "DRAMC common",
@@ -147,10 +139,7 @@
    "registers": 2,
    "sunstoneos_touches_block": true,
    "example_files": [
-    "checks/a733-camera-native.c",
-    "checks/a733-gpu-power-reference.py",
-    "checks/a733-media-clock.c",
-    "checks/camera-supervised-native.c"
+    "checks/a733-gpu-power-reference.py"
    ]
   },
   {
@@ -282,7 +271,6 @@
    "registers": 4,
    "sunstoneos_touches_block": true,
    "example_files": [
-    "checks/a733-rom-recovery.py",
     "checks/npu-stop-native.py"
    ]
   },
@@ -292,10 +280,7 @@
    "registers": 2,
    "sunstoneos_touches_block": true,
    "example_files": [
-    "checks/deinterlace-native.py",
-    "checks/deinterlace-plan.c",
-    "checks/nbg-loader-reference.py",
-    "checks/npu-controller.c"
+    "checks/nbg-loader-reference.py"
    ]
   },
   {
@@ -379,7 +364,6 @@
     ],
     "sunstoneos_files": [
      "apps/storage-read/native.c",
-     "checks/a733-camera-native.c",
      "checks/a733-clock-reference-sd.c",
      "checks/a733-mmc-platform.c",
      "checks/a733-pcie.c",
@@ -424,7 +408,6 @@
     "sunstoneos_files": [
      "apps/board-bundles-cpu/main.c",
      "apps/storage-read/native.c",
-     "checks/a733-camera-native.c",
      "checks/a733-clock-reference-sd.c",
      "checks/a733-mmc-platform.c",
      "checks/a733-pcie.c"
@@ -476,9 +459,7 @@
      "0x4000d2d0",
      "0x4000d522"
     ],
-    "sunstoneos_files": [
-     "checks/npu-supervised.py"
-    ],
+    "sunstoneos_files": [],
     "status": "observed"
    },
    {
@@ -496,9 +477,7 @@
      "0x4000d2d0",
      "0x4000d522"
     ],
-    "sunstoneos_files": [
-     "checks/npu-supervised.py"
-    ],
+    "sunstoneos_files": [],
     "status": "observed"
    },
    {
@@ -516,9 +495,6 @@
     ],
     "sunstoneos_files": [
      "apps/usb-returning/check.py",
-     "checks/a733-smp-observe.py",
-     "checks/gpu-display-capture-native.py",
-     "checks/usb-first-fault.py",
      "apps/dma-copy/a733_dma_copy_application.h"
     ],
     "status": "observed"
@@ -538,10 +514,6 @@
     ],
     "sunstoneos_files": [
      "apps/usb-returning/check.py",
-     "checks/a733-smp-observe.py",
-     "checks/a733-usb-platform.py",
-     "checks/gpu-display-capture-native.py",
-     "checks/usb-first-fault.py",
      "apps/dma-copy/a733_dma_copy_application.h"
     ],
     "status": "observed"
@@ -591,10 +563,7 @@
      "0x400095a0"
     ],
     "sunstoneos_files": [
-     "apps/usb-returning/check.py",
-     "checks/a733-usb-platform.py",
-     "checks/gpu-display-capture-native.py",
-     "checks/usb-first-fault.py"
+     "apps/usb-returning/check.py"
     ],
     "status": "observed"
    }
@@ -1041,7 +1010,6 @@
      "apps/gpu-finite/return-check.py",
      "apps/npu-finite/check.py",
      "boot/a733/stage2/loader.c",
-     "checks/a64-entry-probe.py",
      "checks/a733-cpu-entry.c"
     ],
     "status": "observed"
@@ -4721,12 +4689,7 @@
      "0x400095a0"
     ],
     "sunstoneos_files": [
-     "checks/a733-camera-native.c",
-     "checks/a733-gpu-power-reference.py",
-     "checks/a733-media-clock.c",
-     "checks/camera-supervised-native.c",
-     "checks/deinterlace-native.py",
-     "checks/display-clock-handoff.c"
+     "checks/a733-gpu-power-reference.py"
     ],
     "status": "observed"
    },
@@ -4739,11 +4702,7 @@
     "functions": [
      "0x400095a0"
     ],
-    "sunstoneos_files": [
-     "checks/a733-camera-native.c",
-     "checks/camera-supervised-native.c",
-     "checks/isp0-native.py"
-    ],
+    "sunstoneos_files": [],
     "status": "observed"
    }
   ],
@@ -4782,9 +4741,6 @@
     ],
     "sunstoneos_files": [
      "apps/rtc-returning/check.py",
-     "checks/lradc-core.c",
-     "checks/lradc-native.py",
-     "checks/rtc-service-native-cases.py",
      "checks/rtc-single-core.py",
      "drivers/adc/a733_adc_native.c"
     ],
@@ -4803,7 +4759,6 @@
     ],
     "sunstoneos_files": [
      "apps/rtc-returning/check.py",
-     "checks/lradc-native.py",
      "drivers/adc/a733_adc_native.c"
     ],
     "status": "observed"
@@ -4834,7 +4789,6 @@
     ],
     "sunstoneos_files": [
      "apps/rtc-returning/check.py",
-     "checks/rtc-service-native-cases.py",
      "checks/rtc-single-core.py"
     ],
     "status": "observed"
@@ -4936,9 +4890,7 @@
      "0x4000956e",
      "0x400095a0"
     ],
-    "sunstoneos_files": [
-     "checks/a733-rom-recovery.py"
-    ],
+    "sunstoneos_files": [],
     "status": "observed"
    }
   ],
@@ -5212,9 +5164,6 @@
      "0x4000d45c"
     ],
     "sunstoneos_files": [
-     "checks/a733-hdmi.c",
-     "checks/hdmi-audio-native.py",
-     "checks/hdmi-clock-native.py",
      "drivers/display/a733_hdmi_phy.c",
      "platform/a733/hdmi_native.c"
     ],
@@ -5347,10 +5296,7 @@
     "sunstoneos_files": [
      "apps/npu-returning/check.py",
      "apps/pwm/native.c",
-     "apps/thermal-returning/adc-check.py",
-     "checks/hdmi-audio-native.py",
-     "checks/npu-supervised.py",
-     "checks/provider-clock-reference.py"
+     "apps/thermal-returning/adc-check.py"
     ],
     "status": "observed"
    },
@@ -5491,9 +5437,6 @@
     "sunstoneos_files": [
      "apps/npu-returning/check.py",
      "apps/thermal-returning/adc-check.py",
-     "checks/a733-camera-native.c",
-     "checks/a733-hdmi-native.c",
-     "checks/a733-pmic-consumers.c",
      "checks/a733-pmic.c"
     ],
     "status": "observed"
@@ -5564,9 +5507,7 @@
     "functions": [
      "0x400095a0"
     ],
-    "sunstoneos_files": [
-     "checks/remote-writers-sources.py"
-    ],
+    "sunstoneos_files": [],
     "status": "observed"
    },
    {
@@ -5814,8 +5755,6 @@
      "apps/board-bundles-power/trace.h",
      "apps/npu-returning/check.py",
      "apps/thermal-returning/adc-check.py",
-     "checks/a733-pmic-cost.c",
-     "checks/a733-pmic-mmc.c",
      "checks/a733-pmic-parent.c"
     ],
     "status": "observed"
@@ -5843,8 +5782,7 @@
      "apps/npu-returning/check.py",
      "apps/npu-returning/main.c",
      "apps/thermal-returning/adc-check.py",
-     "apps/thermal-returning/adc.c",
-     "checks/a733-camera-native.c"
+     "apps/thermal-returning/adc.c"
     ],
     "status": "observed"
    },
@@ -5863,8 +5801,7 @@
      "apps/npu-returning/check.py",
      "apps/npu-returning/main.c",
      "apps/thermal-returning/adc-check.py",
-     "apps/thermal-returning/adc.c",
-     "checks/a733-camera-native.c"
+     "apps/thermal-returning/adc.c"
     ],
     "status": "observed"
    },
@@ -5884,7 +5821,6 @@
      "apps/npu-returning/main.c",
      "apps/thermal-returning/adc-check.py",
      "apps/thermal-returning/adc.c",
-     "checks/a733-camera-native.c",
      "checks/a733-clock-reference-pmic.c"
     ],
     "status": "observed"
@@ -5902,10 +5838,7 @@
      "0x40006a84"
     ],
     "sunstoneos_files": [
-     "checks/a733-pmic-cost.c",
      "checks/a733-pmic.c",
-     "checks/hdmi-audio-native.py",
-     "checks/npu-supervised.py",
      "include/a733_pmic_native.h"
     ],
     "status": "observed"
@@ -5922,9 +5855,6 @@
      "0x40006c44"
     ],
     "sunstoneos_files": [
-     "checks/a733-pmic-cost.c",
-     "checks/hdmi-audio-native.py",
-     "checks/npu-supervised.py",
      "include/a733_pmic_native.h"
     ],
     "status": "observed"
@@ -5952,8 +5882,7 @@
      "apps/npu-returning/check.py",
      "apps/npu-returning/main.c",
      "apps/thermal-returning/adc-check.py",
-     "apps/thermal-returning/adc.c",
-     "checks/a733-camera-native.c"
+     "apps/thermal-returning/adc.c"
     ],
     "status": "observed"
    }
@@ -6130,9 +6059,7 @@
      "0x40005604",
      "0x400095a0"
     ],
-    "sunstoneos_files": [
-     "checks/a733-rom-recovery.py"
-    ],
+    "sunstoneos_files": [],
     "status": "observed"
    },
    {

@@ -119,9 +119,10 @@ slice-header bit 21, which Cedrus and CedarC both set for a P or B slice whose
 references all precede it in output order. GStreamer leaves the unsignaled PCM
 fields zero, so the PCM word is zero while PCM is disabled.
 
-`checks/hevc-decode-model.py` compares the IDR picture's programming with the
+The IDR picture's programming was compared with the
 effective A733 `libawh265.so` instruction trace for the same clip,
-`~/.cache/sunstoneos/evidence/hevc-decode-20261020/stream-adapted-registers/result.json`.
+`~/.cache/sunstoneos/evidence/hevc-decode-20261020/stream-adapted-registers/result.json`;
+no host check repeats the comparison.
 That trace ends at the library's first decode trigger. The comparison shows:
 
 - Equal final values for the VE mode register, registers `0x500`–`0x528`
@@ -224,32 +225,15 @@ memory, electrical and supervision evidence that the admission schema lists.
 
 ## Checks
 
-- `checks/hevc-decode-model.py` builds `checks/hevc-decode-model.c` under
-  AddressSanitizer and UBSan with the generated parser, `apps/hevc/parse.c`,
-  `apps/hevc/storage.c`, the controller, the real decoder binding and the real
-  clock and power lease managers. On the recorded clip
-  `hevc-decode-20261020/two-pictures.hevc` it checks header lengths, POCs and
-  slice fields against FFmpeg's `trace_headers` output, and makes the register
-  comparison above. Parser cases refuse invalid escapes, forbidden bits, wrong
-  layers, NAL order, ranges and workspace; a storage case maps physical
-  addresses that differ from CPU addresses. Controller cases cover the nominal
-  IDR then P sequence, error, data request, short CTB count, deadline,
-  unsupported identity, copy refusal, flush error and a busy P entry. Every
-  failure stays terminal with all leases retained.
+- No host check covers the parser, storage mapping, controller sequence or
+  failure cases, the native VE access functions, the built image's manifest
+  against the ELF rules of `apps/hevc/prepare.py`, or session range admission.
 - `checks/hevc-pixel-reference.py` compares both copied NV12 pictures with an
   independent software decode. `checks/hevc-pixel-reference-host.py` checks
   equality, altered samples, frame order, extents and tool failures using
   CPU-generated copies.
-- `checks/hevc-native-access.py` runs the AArch64 build of the lowest native VE
-  access functions in Unicorn for every register write recorded by the model
-  and for both status reads. It also checks refusal of neighboring offsets,
-  byte writes and pages without a Device-nGnRnE identity mapping.
-- `checks/hevc-image.py` checks a built image and its manifest against the ELF
-  rules of `apps/hevc/prepare.py`.
-- `checks/hevc-session.c` checks session range admission with synthetic
-  provider identities.
 
-These checks model MMIO, translation and completion. They do not establish
+The pixel-reference checks use copied pictures. They do not establish
 that the VE decodes the pictures correctly, that the A733 accepts every Cedrus
 control bit, or that copied output implies drained device transactions.
 
@@ -261,3 +245,5 @@ control bit, or that copied output implies drained device transactions.
   independent decoder's output for the same clip.
 - Main10, larger pictures, multiple slices, tiles, wavefront parallel
   processing, B pictures, more references and compressed output.
+
+Results of host checks that no longer exist are kept in the evidence record [hevc-native.jsonl](evidence/hevc-native.jsonl).

@@ -11,6 +11,18 @@ thermal acquisition and normal return pass on both boards. Development runs
 normalize CPU rails to 800 mV at verified boot clocks before guarded launch and
 after validated normal return. Selector readback does not measure analog voltage.
 
+## Capabilities
+
+| Capability | Status | Key figure | Evidence or design |
+| --- | --- | --- | --- |
+| PMIC provider and rail ledger | qualified on the board (selector reads) | DCDC1 3.3 V, DCDC2 800 mV, CLDO3 1.8 V | [PMIC](../pmic-runtime.md) |
+| Power-domain owner | qualified on the board | Domain 1 adopted ON | [power domains](../power-domains.md) |
+| Finite thermal acquisition and normal return | qualified on the board | Both boards | [thermal](../thermal.md) |
+| Thermal protection, throttling and critical shutdown | host-tested | 70 °C CPU stop, 90 °C throttle, 110 °C critical | [thermal qualification plan](../designs/thermal-management-qualification.md); [capture](../designs/cpu-return-thermal.md) |
+| CPU rails at the top points | qualified on the board | DCDC3 1050 mV, DCDC5 1000 mV, lowered to 800 mV by the rail helper | [top points](../designs/cpu-top-opp.md); [records](../evidence/cpu-top-opp.jsonl) |
+| Performance modes | host-tested | 3 CPU requests and 2 PMIC writes per switch | [design](../designs/performance-modes.md); [records](../evidence/performance-modes.jsonl) |
+| Management processor (E902), suspend and resume | open | Blocked by firmware and shared-resource ownership | [qualification plan](../designs/thermal-management-qualification.md) |
+
 ## Open work
 
 1. Qualify thermal accuracy, IRQ delivery, throttling, critical shutdown, restore, and concurrent CPU, GPU and NPU heat.

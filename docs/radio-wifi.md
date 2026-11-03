@@ -109,18 +109,13 @@ The pinned driver defines `ME_SET_PS_MODE_REQ` but never sends it, and its
 mode change; the mode stays fixed for the management lifetime. The firmware
 handles doze and wake itself, so the host data path does not change.
 
-`checks/aic8800-wifi-power.py` compiles the source `me_config_req` for each mode
-and drives the actual worker through management startup. The request bytes
-match for every mode; without the feature bit, both enabled modes send the
-power-off bytes and report `power_mode` 0. An out-of-range mode and a nonzero
-reserved byte are refused. Physical doze behavior and its effect on latency
-remain unqualified.
-
-```sh
-python3 checks/aic8800-wifi-power.py \
-  --reference-dir /path/to/pinned/aic8800_fdrv \
-  --evidence /path/outside/repository/radio-wifi-power
-```
+[`checks/aic8800-wifi.py`](../checks/aic8800-wifi.py) compares the
+management configuration request bytes with the source structure. A host run
+that compiled the source `me_config_req` for each mode and drove the actual
+worker through management startup matched the request bytes for every mode. Without the feature bit, both enabled modes sent the power-off bytes and
+reported `power_mode` 0, and an out-of-range mode and a nonzero reserved byte
+were refused. That run has no retained check of its own. Physical doze behavior
+and its effect on latency remain unqualified.
 
 ## Binding and Wi-Fi share one outstanding command
 

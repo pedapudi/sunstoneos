@@ -83,29 +83,35 @@ The review a change needs depends on what it touches:
   simplicity, hardware performance and correctness. The same three review the
   code. Measure before and after; an unexplained regression blocks the merge.
 
-The record of a board run is its log, the image hash and the Git revision.
+Run the checks that cover the change, in a build whose feature flags select the
+changed branches ([docs/validation.md](docs/validation.md)). A commit, rebase or
+handoff does not invalidate test evidence. Driver and fixture authors follow
+[completion and timing validation](docs/driver-validation.md).
 
-Apply [docs/validation.md](docs/validation.md) here and in application ports:
-run the checks that cover the change, in a build whose feature flags select the
-changed branches. A commit, rebase or handoff does not invalidate test evidence.
-Driver and fixture authors follow [completion and timing validation](docs/driver-validation.md).
+## Documents and evidence
+
+Design and status documents describe the current state only: what is
+implemented and how, interfaces, invariants, qualified figures with a pointer
+to their record, limitations and open work. A board run's prediction and result
+go in an evidence record in `docs/evidence/` ([the record format](docs/evidence.md)),
+never in a design or status document: queue entry ID, image, conditions,
+prediction, measurement and conclusion, one record per run. Add it with
+`tools/evidence.py add` and check it with `tools/evidence.py validate`. When a
+result changes a design, edit the design to the new state and delete the
+superseded text. Keep no chronology, rejected attempt or "before" description
+in a design or status document.
 
 ## Parallel work and tool use
 
 - Run parallel streams, each in its own worktree with its own build and
   evidence directories. Assign file ownership first; two streams never edit the
-  same file.
-- Several goals may be in progress at once. Size the number of streams by
-  independent file ownership and the coordinator's integration capacity. Do not
-  split a task only to raise the worker count.
+  same file. Size the number of streams by independent file ownership and the
+  coordinator's integration capacity, not to raise the worker count.
 - Give implementation to one agent and review to another, each with concise
-  task-specific context. Use Sol 6.1 for both until the user changes the model.
-- Waiting for a board blocks only work whose next decision depends on the
-  physical result.
+  task-specific context.
 - Before assigning a missing function, confirm in the current code that it is
-  missing, and correct stale overview claims.
+  missing. The code decides when a document contradicts it.
 - Keep handoffs concise: changed behaviour, inputs, result and remaining gap.
-  Use the existing records and add no parallel reporting system.
 - Find guidance and cached sources through
   [the reference index](docs/reference-index.md), and search cached manual text
   before opening a PDF or browsing. Record the URL, revision, section and hash
@@ -125,27 +131,25 @@ Driver and fixture authors follow [completion and timing validation](docs/driver
 - Neither A733 board has populated eMMC or UFS; do not probe these devices.
   Keep the failed UFS probe disabled until its failure and recovery path are
   resolved. Do not make USB power automation a prerequisite for other work.
-- Only the coordinator operates the boards. Workers use host checks and
-  emulation and hand the coordinator an image with its expected result.
-- Identify the target before any device command, and open no other board.
-  Hold the per-port lock (`tools/usb-access.py:board_lock`,
-  `/tmp/sunstoneos-a733-<USB-port>.lock`) during every device operation, and
-  no project-wide application lock. Share a controller or acoustic resource only
-  through the existing shared-board tooling.
+- All board access goes through the queue: workers submit frozen images with
+  `tools/board.py` and never open a USB device. Identify the target before any
+  device command, and open no other board. The runner holds the per-port lock
+  (`tools/usb-access.py:board_lock`) during every device operation.
 - Before a board run of a subsystem, derive its complete sequence from the
   vendor reference (vendor source and binaries, upstream Linux, TF-A, manuals)
   and diff SunstoneOS against it, including checks the reference lacks. A run
   tests a prediction from that diff and changes one variable against a
-  known-good image and input. Never guess one power cycle at a time.
+  known-good image and input. Write the prediction in the run's evidence
+  record before the run. Never guess one power cycle at a time.
 - Make every failure observable. Returning images, which hand the board back to
   the USB boot ROM when they finish, run under the host-armed WDT0 watchdog
   and record progress in RTC breadcrumbs that survive its reset
   ([include/sunstone_crumb.h](include/sunstone_crumb.h), decoded by
   `tools/a733-crumbs.py`). Run development images with `tools/dev-run.py`.
   The [board runner and run queue](docs/board-runner.md) provide fresh-FEL
-  preparation, bounded recovery and frozen submissions through `tools/board.py`.
-  Native diagnostics use the [probe contract](docs/board-probe-contract.md);
-  `board.py check` validates their marker, inputs and result layout without USB.
+  preparation, bounded recovery and frozen submissions. Native diagnostics use
+  the [probe contract](docs/board-probe-contract.md); `board.py check`
+  validates their marker, inputs and result layout without USB.
 - Start with identity queries and RAM-only execution. Write paths may be
   implemented and host-checked at any time; images refuse writes unless their
   session grants them. Physical writes follow section 4 of
@@ -165,9 +169,6 @@ Driver and fixture authors follow [completion and timing validation](docs/driver
   connection window, the run most likely to lose the board runs last. Without
   physical recovery, exclude runs whose normal completion requires power
   removal. A normal return does not prove recovery from a fault.
-- Before intentional USB re-enumeration, require a reconnect access rule for the
-  port and user, and wait for udev permissions. Do not reset again to work
-  around missing host permissions.
 - Do not send keyboard events into the user's desktop. Record missing
   peripherals as qualification blockers. Source inspection and emulation are
   not physical qualification.
@@ -190,8 +191,8 @@ Driver and fixture authors follow [completion and timing validation](docs/driver
 ## Evidence and completion
 
 The [progress dashboard](docs/progress-ui.md) reads the hardware matrix, the
-handoff, application evidence, the validation policy, Git activity and the test
+handoff, the evidence records, the validation policy, Git activity and the test
 queue. Update those records; keep no second status summary in dashboard code.
-Keep concise summaries in the repository and raw evidence in the local cache.
+Keep raw logs in the local cache; the evidence record points to them.
 No driver is qualified because it compiles. Completion requires the entire
 accepted objective; label intermediate milestones as such.

@@ -1,23 +1,8 @@
 # Design: concurrent GPU sessions, recovery and power management
 
-Status: **partly implemented**. Worker pacing (the "Interrupts and worker
-pacing" section) is implemented and host-modeled, except park;
-[gpu-service.md](../gpu-service.md) records its measurements. Explicit healthy
-mimus CLOSE/reopen and its thermal caller are implemented and model-checked
-in [gpu-mimus-service.md](../gpu-mimus-service.md). Automatic idle parking,
-concurrent sessions and full fault recovery remain design. Each item ends at implemented
-and host-modeled; physical behavior stays pending until the board evidence at
-the end exists. Firmware events and failure classes are in
-[gpu-recovery.md](../gpu-recovery.md).
+Status: partly implemented. Worker pacing and explicit PARK are implemented and host-modeled; explicit healthy mimus CLOSE/reopen and its thermal caller are implemented and model-checked ([gpu-mimus-service.md](../gpu-mimus-service.md)); the shared compute clients, fault recovery and the retained-close lifecycle are in [the compute queue design](gpu-compute-queue.md). Concurrent render and compute sessions with range classes, display hand-off, automatic idle parking, firmware loading from the FAT volume and the budget rows below remain open. Firmware events and failure classes are in [gpu-recovery.md](../gpu-recovery.md); service measurements are in [gpu-service.md](../gpu-service.md).
 
-Today the GPU service runs one job at a time, polls STATUS every tick and
-retains the device after any fault. This design adds two isolated sessions
-with jobs in flight together, interrupt completion, buffer hand-off by
-ownership state, a reset bounded by a job deadline, firmware loaded from the
-FAT volume and idle power-off. It depends on the unmerged memory architecture
-design (`docs/designs/memory-architecture.md`) for
-`device_memory_set_state()`, the holder rule and the 2 MiB-aligned `gpu`
-class.
+The design has two isolated sessions with jobs in flight together, interrupt completion, buffer hand-off by ownership state, a reset bounded by a job deadline, firmware loaded from the FAT volume and idle power-off. It depends on the memory architecture design (`docs/designs/memory-architecture.md`) for `device_memory_set_state()`, the holder rule and the 2 MiB-aligned `gpu` class.
 
 ## Data flow and ownership
 
@@ -74,12 +59,10 @@ counts only while its job or render is in flight; a free-list operation uses
 its own deadline. With nothing in flight it blocks 50 ms and then parks;
 parked, it blocks without a timeout. The 4 ms bound covers a lost interrupt
 until SPI 63 delivery is qualified, and completes jobs in an image without
-`platform/a733-smp-cached/irq_table.c`. The per-tick mode in
-`pvr_gpu_service.c` is removed. Until park exists, an image without interrupt
+`platform/a733-smp-cached/irq_table.c`. `pvr_gpu_service.c` has no per-tick mode. An image without interrupt
 callbacks wakes every 50 ms when idle (`PVR_GPU_SERVICE_IDLE_POLL_US`) to
 drain unsolicited FWCCB events, and an image with armed delivery blocks without
-a timeout. That 50 ms wait becomes the park delay, and park replaces the
-constant.
+a timeout. Automatic idle parking would use that 50 ms as the park delay.
 
 Start, stop and job preparation are paced by the hardware:
 
@@ -89,7 +72,7 @@ Start, stop and job preparation are paced by the hardware:
   start by more than the delay.
 - A register `POLL` in `pvr_gpu_stop.c`, the readiness-byte read and a
   firmware acknowledgement re-read for up to 50 µs from their first read, then
-  return AGAIN; the worker then waits one tick, as section 1.3 of
+  return AGAIN. The worker then waits one tick, as section 1.3 of
   performance-architecture.md allows for a hardware wait of a tick or more.
 - The power controller in `a733_gpu_power.c` runs its register steps back to
   back in one poll. It waits on the clock for the 1 µs settling delay and
@@ -107,8 +90,7 @@ Start, stop and job preparation are paced by the hardware:
   to a client ring. With CPU work left, it checks the request queue without
   waiting and calls `taskYIELD()`. After 1 ms of such bursts it blocks for one
   tick, so tasks below its priority on core 0 (the GPU, NPU, PMIC and USB
-  clients at priority 2) still run during long preparation or disposal; core 0
-  is idle for that tick when none is ready.
+  clients at priority 2) still run during long preparation or disposal. Core 0 is idle for that tick when none is ready.
 - Only the ring writes before a kick are exempt from the 1 ms bound: a compute
   job from admission to its kick and a render from geometry formatting to its
   kick. No tick wait lies between a request and its kick. The fixed submission
@@ -143,10 +125,10 @@ The pinned board driver documents per-job device cache flushing and orders
 each task before its timeline UPDATE
 ([gpu-compiled-programs.md](../gpu-compiled-programs.md) cites both).
 
-**Compute output guard.** Each compute job today fills its output region with
+**Compute output guard.** Each compute job fills its output region with
 guard and poison words, then cleans and invalidates the output page. Only the
 fixed evidence programs compare results with known values, so only they
-detect a job that wrote no output. The fill becomes a session option set by
+detect a job that wrote no output. The fill is to become a session option set by
 the evidence images (`apps/gpu-finite`, `apps/gpu-program`, the accelerator
 evidence mode), where the result check in `pvr_compute_job.c` still runs.
 Production sessions such as mimus skip it; their validation image compares
@@ -162,7 +144,7 @@ because an admitted span's CPU mapping changes only through
 mapping check for that lease; the platform pins every other mapping. That
 removal waits for the memory architecture design. Each free-list grow or
 reconstruction batch gets one `a733_extent_within` against the render
-session's pool. A new host check, `checks/gpu-session-isolation.c`, asserts
+session's pool. A planned host check, `checks/gpu-session-isolation.c`, asserts
 each catalogue entry, free-list entry and command address against its
 session.
 
@@ -213,7 +195,7 @@ reclaims buffers 0–2. Sessions, page tables and leases stay.
 **Unpark** powers domain 5 on, enables the clock and runs the existing start
 sequence. Its first step, `a733_gpu_memory_publish`, runs only in the OFFLINE
 phase before reset is released and ends with `DSB SY`. Before that barrier it
-now clears the readiness byte (system-init offset 352, uncached), so every
+clears the readiness byte (system-init offset 352, uncached), so every
 start waits for a fresh boot; the pinned driver never clears it after the
 first boot. The publish cleans and invalidates buffers 0–2 only when the CPU
 wrote them since the last reclaim (first start, restage, reset). Otherwise
@@ -243,33 +225,20 @@ yet recorded ([handoff.md](../handoff.md)); if its SHA2 field is set, SHA-256
 instructions are a follow-up for the storage owner. A failed boot-time
 exclusion check refuses the GPU ([remote-writers.md](../remote-writers.md)).
 
-## Performance budgets
+## Performance budgets (open rows)
 
-Counts come from `checks/pvr-gpu-service.{c,py}`,
-`checks/pvr-compute-service.{c,py}`, `checks/a733-gpu-backend-emulate.py`,
-`checks/pvr-gpu-vm.c`, `checks/device-memory-capacity.c` and disassembly. The
-change adds counters to the first two: worker ticks and wake-ups per phase,
-timed waits, `memcpy` bytes, and `--wrap` counters on `aarch64_device_cache`
-(lines = bytes / 64) and `aarch64_device_translate`. Baselines marked "code"
-are counted from the step lists and cache calls; the counters confirm them
-before the change.
+Counts come from `checks/pvr-gpu-service.{c,py}`, `checks/pvr-compute-service.{c,py}`, `checks/a733-gpu-backend-emulate.py`, `checks/device-memory-capacity.c` and disassembly. The worker-pacing rows are met in the host models ([record](../evidence/gpu-runtime.jsonl) `gpu-runtime-pacing-host`). The rows below keep their baseline:
 
 | Metric | Baseline | Target |
 | --- | --- | --- |
 | Jobs in flight | 1 | Render 1 + compute 2 |
 | Client wake-ups per compute job | 1 per tick + 32 | 2 |
-| Worker timed wake-ups per second, job running | 1,000 | 250 without qualified SPI 63; 0 after |
-| Worker ticks, unpark to first kick | Code: at least 4 (two delays, one burst limit in 27–35 steps, one boot read) + 1 per further boot read | 0 when every wait ends within 50 µs; 1 wake-up |
-| Worker ticks, park to STOPPED | Code: at least 2 (two acknowledgements) + 1 per unsatisfied poll | 0 when every wait ends within 50 µs; 1 wake-up |
-| Worker ticks, full reset | No reset exists | Park + unpark; 0 for CPU rebuild |
-| Ticks from send to kick | Code: 0 within 16 steps; +1 per further 16 render steps | 0; at most one context switch |
-| Unpark wall clock | Not measured | 5 ms (board) |
 | `DC` lines per park and unpark | 2,176 + 2,176 | 2,176 + 0 |
 | Queue round trips, 3,968-byte result | 31 | 0 beyond completion |
 | Copies per input byte; per result byte | 2; at least 5 | 0 for EL1 clients, 1 for EL0 |
 | Copies per rendered frame byte | 2 (slot copy, RGB565) | 0 for scanout |
 | `DC` lines per display frame, 720p | 329,152 (profile 2); 591,552 (profile 4) | Written input bytes / 64 |
-| Compute job cache work | Code: 132 lines (fixed program) or 192 (package); 256- or 4,096-byte fill; 2 extra `DSB SY` | Written input / 64 + read output / 64; no fill; no extra `DSB SY` |
+| Compute job cache work | 132 lines (fixed program) or 192 (package); 256- or 4,096-byte fill; 2 extra `DSB SY` | Written input / 64 + read output / 64; no fill; no extra `DSB SY` |
 | `DSB SY` per submit, one input range | 16 transport + 2 per cache call | 5; 4 with the new cache entry point; 2 after qualification |
 | `DSB SY` per FWCCB drain, n events | 11n + 5 | 2, then 2 `DMB OSHLD` |
 | `AT` per register read | 5 | 0 |
@@ -278,21 +247,11 @@ before the change.
 | Hang detection | None | `max_job_us` + 4 ms |
 | Firmware header decodes | 1 per call at 5 sites | 1 per boot |
 | Firmware hashes | 0 (linked) | 1 per boot + 1 per reset; 1 per boot after read-only mapping |
+| Unpark wall clock | Not measured | 5 ms (board) |
 
-The compute baseline is 64 lines for the input page, 64 for the filled output
-page and 4 or 64 for the output read. Submit barriers: 2 `DSB SY` in the cache
-call plus 3 on the transport (before the write-offset store, before and after
-the doorbell). A cache entry point without the trailing `DSB SY` lets the
-write-offset barrier complete the maintenance; its leading barrier stays,
-because the client wrote the bytes on another core. After the board
-qualification in [shared-helpers.md](../shared-helpers.md), a `DMB OSHST`
-replaces the doorbell barriers.
+The compute baseline is 64 lines for the input page, 64 for the filled output page and 4 or 64 for the output read. Submit barriers: 2 `DSB SY` in the cache call plus 3 on the transport (before the write-offset store, before and after the doorbell). A cache entry point without the trailing `DSB SY` lets the write-offset barrier complete the maintenance; its leading barrier stays, because the client wrote the bytes on another core. After the board qualification in [shared-helpers.md](../shared-helpers.md), a `DMB OSHST` replaces the doorbell barriers.
 
-New host cases: resubmission after RESET with correct output; refusal after
-LOST; PENDING_RELEASE until an acknowledged stop; close and reset while a
-target is DISPLAY; a full reply queue making only its session LOST; an
-injected cross-session span; completion through the 4 ms bound without
-interrupt callbacks.
+Host cases still to add: resubmission after RESET with correct output; refusal after LOST; PENDING_RELEASE until an acknowledged stop; close and reset while a target is DISPLAY; a full reply queue making only its session LOST; an injected cross-session span; completion through the 4 ms bound without interrupt callbacks.
 
 ## Left out
 
@@ -327,7 +286,7 @@ interrupt callbacks.
   writes guard and poison words over the full output with 4-byte stores and
   cleans each step by address. Writing only the guard bands once the board
   shows full tile coverage, or filling with `DC ZVA` or NEON stores, would
-  shorten it; it moves to an A76 core once the multicore work admits those
+  shorten it. It moves to an A76 core once the multicore work admits those
   cores, and is then budgeted and measured on the board.
 - `apps/accelerators/gpu.c` and the render applications use completion
   messages.

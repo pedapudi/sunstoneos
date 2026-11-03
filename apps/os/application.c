@@ -251,9 +251,13 @@ extern void dram_nsi_worker(void *) __attribute__((weak));
 extern void dram_qos_worker(void *) __attribute__((weak));
 /* The SD owner task of a write-capable image touches the CCU and the controller, so it runs at EL1 (apps/os/sd_owner.c). */
 extern int os_sd_owner_task_privileged(void (*)(void *),void *) __attribute__((weak));
+/* The task of the control-interrupt measurement (runtime/control_irq.c, SUNSTONE_CONTROL_TASK_EL1) runs at EL1 to separate the
+ * cost of the supervisor calls that an EL0 task makes to mask interrupts. The symbol is weak. */
+extern int ulSunstoneControlTaskPrivileged(void (*)(void *),void *) __attribute__((weak));
 int os_application_task_privileged(void (*entry)(void *),void *context)
 {return (dram_nsi_worker&&entry==dram_nsi_worker)||(dram_qos_worker&&entry==dram_qos_worker)||
-        (os_sd_owner_task_privileged&&os_sd_owner_task_privileged(entry,context));}
+        (os_sd_owner_task_privileged&&os_sd_owner_task_privileged(entry,context))||
+        (ulSunstoneControlTaskPrivileged&&ulSunstoneControlTaskPrivileged(entry,context));}
 int os_application_pins(struct a733_pin_handoff *pins)
 {
     const struct ss_manifest *m=ss_application.manifest;

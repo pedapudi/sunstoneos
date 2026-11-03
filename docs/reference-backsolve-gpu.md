@@ -342,8 +342,7 @@ resolved differences for this path; they do not identify the current failure.
 
 **Observed board scope:** standalone firmware start/health/stop/restart,
 eight compute jobs and two exact-sum shapes pass under their frozen inputs.
-The [handoff history](handoff-history-20261031.md#qualified-on-the-boards) indexes
-those records, including `sol-resume-20261028/port-3-1/gpu-exact-sum/` under
+The records include `sol-resume-20261028/port-3-1/gpu-exact-sum/` under
 `~/.cache/sunstoneos/evidence/`. Complete GPU recognition and non-idle recovery remain open.
 
 ## The firmware-only diagnostic stops in its compatibility callback

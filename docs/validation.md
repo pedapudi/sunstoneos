@@ -4,8 +4,7 @@ Driver and fixture authors follow [completion and timing validation](driver-vali
 wait for documented completion before verification, preserve vendor barriers and
 inter-write delays, and model delayed completion with stale readback.
 
-Record every board result with `tools/evidence.py add`, as [the evidence rules](evidence.md)
-describe, instead of writing prose; `checks/progress.py` validates the records.
+Board runs are recorded as [evidence records](evidence.md), not prose.
 
 Before a test batch, state the changed behavior, credible failure risk, and
 smallest check that resolves that risk. Run focused checks during iteration.
@@ -137,8 +136,7 @@ The gate and the landing run at nice +10 and the idle I/O class, and image-copyi
 
 ### The gate keeps its temporary files off /tmp
 
-/tmp is a memory-backed volume with a per-user quota, and it has stopped work twice: it ran out of inodes on 2026-11-01, and on 2026-11-02
-scratch directories filled 46 GB of it, so a landing gate failed at `central-build` with "Disk quota exceeded".
+/tmp is a memory-backed volume with a per-user inode and size quota; scratch there stops builds with "Disk quota exceeded".
 [host_space.py](../tools/host_space.py) sets `TMPDIR`, `TMP` and `TEMP` to `tmp` under the build root (the landing: under the cache's
 `build` directory; the board runner: under the cache) at the start of `main()` in `tools/integration-gate.py`, `tools/land.py` and
 `tools/board.py`, so the compilers, CMake, the checks and the helpers all write on the main disk. A base under `/tmp`, `/var/tmp` or
@@ -155,9 +153,8 @@ build it needs did not pass: the kernel and soak checks need `central-build`,
 and an application check needs its application build. A failed configure step
 skips only its own build. The last lines of the summary count the steps and
 name every failure; the line `PASS selected integration checks` appears only
-when none failed. `--fail-fast` restores the earlier behavior: the steps run one
-at a time in their fixed order, the gate stops at the first failure and writes
-`Stopped at first failure`. The targeted selections (`--target`, `--variant`,
+when none failed. `--fail-fast` runs the steps one at a time in their fixed
+order, stops at the first failure and writes `Stopped at first failure`. The targeted selections (`--target`, `--variant`,
 `--check`, `--affected`, `--changed`) are fail-fast unless `--keep-going` is
 given.
 
@@ -202,14 +199,6 @@ options. Host dependency configuration remains in `~/.cache/sunstoneos/bin/cfg.s
 `--build-root` selects a separate directory for new builds and gate evidence.
 The gate builds and checks software only; board runs remain separately queued.
 
-A warm-build RTC workflow comparison uses the same driver source and cache.
-The previous seven generic core checks plus one OS build take 12.714 seconds;
-one selected RTC ownership check plus the same baseline takes 9.586 seconds.
-Four RTC checks still require cached inputs. The coverage differs, so this
-measures workflow latency rather than equal-coverage acceleration. Raw commands,
-results and timings are under
-`~/.cache/sunstoneos/build/check-selection-1031/code/paired-final-timing.json`.
-
 ## Match coverage to the change
 
 | Change | Initial verification | Broaden when |
@@ -245,11 +234,8 @@ calls. Audit these prerequisites together before running the remaining cases;
 assigning a later state does not establish the effects of earlier states.
 
 Keep these checks under `checks/` with the shared policy described in the next
-section, and reuse their outputs. Reject empty
-dependency inventories when recording build evidence. Routine setup repairs
-require owner verification; request another substantive review only when the
-repair changes coverage, modeled boundaries or production behavior. Preserve
-completed results and resume only failed or affected steps.
+section. Reject empty dependency inventories when recording build evidence.
+Resume only failed or affected steps.
 
 Collect an executable's dependency inventory from its actual linked objects.
 A compilation database can also contain unrelated targets. Report entries outside
@@ -392,9 +378,7 @@ Each finding names the file and line, or the commit message line, and the rule.
 
 A line containing `pre-push: allow` is skipped; use it on test fixtures that
 must contain a sample. A credential file has no such marker, so a fixture
-needs a different name. The scan of the 73 commits in the last 50 first-parent
-steps of `bringup`, about 20,000 added lines, takes 0.2 seconds; the full
-history of 2,764 commits takes under 4 seconds.
+needs a different name.
 
 The hook is installed once for every worktree of the clone:
 
@@ -494,28 +478,8 @@ Repeated trials need a purpose and a sample count or stopping rule. Examples
 include boot reliability, timing variance, race reproduction, and reconnect
 behavior. A failed attempt is not permission to retry indefinitely.
 
-For each batch, record the purpose, command or procedure, artifact identity,
-hardware state, result, and raw-evidence location. Keep raw logs outside Git.
-Record an untested requirement as untested, even when a related check passes.
-
-## Schedule performance work after functional hardware support
-
-Defer CPU, GPU, and NPU optimization until every required board hardware function
-works. During bring-up, measure only what is needed to diagnose a failure,
-establish functional deadlines, validate recovery, or satisfy a specific
-functional acceptance condition. Do not run recurring benchmark suites or
-optimization experiments alongside unfinished hardware support.
-
-After functional coverage, qualify CPU, GPU, and NPU performance separately.
-Include application latency, sustained throughput, memory and transfer costs,
-multicore scaling, concurrent workloads, and thermal behavior where relevant.
-Compare equivalent workloads at recorded clock rates, precision, and correctness
-requirements. Existing mimus latency requirements remain in force.
-
-Every measurement batch needs a concrete question, relevant input identities,
-and a declared sample count or stopping rule. Reuse valid baseline and candidate
-results. Repeat only when changed inputs or unresolved variance require new
-evidence; commits, handoffs, and documentation changes do not justify reruns.
+Keep raw logs outside Git. Record an untested requirement as untested, even
+when a related check passes.
 
 ## Host validation rules
 
@@ -534,11 +498,11 @@ A Non-secure view of the GIC differs from the stored one: a priority stored as 0
 
 ### Strict register model and host link
 
-`checks/host/strict_mmio.h` defines a register table in which each register names its source and its write hook. The model refuses an offset that is not defined, an access of another width, a value that the write hook does not define, and a definition without a source. `checks/host_link.py` builds a driver module from its unchanged source with `checks/host/mmio/a733_mmio.h` ahead of `include/a733_mmio.h`, so the accessors reach the strict model and nothing else is replaced; it verifies that the host header defines every accessor of the real header. `checks/watchdog-ownership.py` is the first use: the real `drivers/watchdog/a733_watchdog.c` against `checks/watchdog.c`, which cites the register map, the write key and the reload word and refuses the rest.
+`checks/host/strict_mmio.h` defines a register table in which each register names its source and its write hook. The model refuses an offset that is not defined, an access of another width, a value that the write hook does not define, and a definition without a source. `checks/host_link.py` builds a driver module from its unchanged source with `checks/host/mmio/a733_mmio.h` ahead of `include/a733_mmio.h`, so the accessors reach the strict model and nothing else is replaced; it verifies that the host header defines every accessor of the real header. `checks/watchdog-ownership.py` uses it: the real `drivers/watchdog/a733_watchdog.c` against `checks/watchdog.c`, which cites the register map, the write key and the reload word and refuses the rest.
 
 ### Checks pending re-qualification
 
-`a733-xhci-detach` and `a733-xhci-dma` returned to the gate after their three uncited behaviors (port power at start, port reset duration and completion, TR Dequeue Pointer while running) were replaced by xHCI 1.2 behaviors that carry line citations in `checks/a733-xhci-detach.c`; the reset duration is a stimulus and not a claim. The checks below keep their files and run by hand, but the full gate lists them as pending (`REQUALIFICATION` in `checks/check-index.py`) because their models include behaviors that cite neither a measurement nor a reference. They return to the gate when each uncited behavior is replaced by a measured or cited one.
+The checks below run by hand, but the full gate lists them as pending (`REQUALIFICATION` in `checks/check-index.py`) because their models include behaviors that cite neither a measurement nor a reference. They return to the gate when each uncited behavior is replaced by a measured or cited one.
 
 | Check | Uncited behaviors |
 | --- | --- |
@@ -552,7 +516,7 @@ The protection for rails and clocks is coordinator approval and the runner, not 
 
 ### Uncited layers in checks that stay in the gate
 
-These checks link real code but rely on an uncited model of a device, card, register layer or service. They get citations, or the real counterpart, when their owner next changes them.
+These checks link real code but rely on an uncited model of a device, card, register layer or service. A change to one adds citations or links the real counterpart.
 
 | Check | Uncited layer |
 | --- | --- |
@@ -569,7 +533,3 @@ These checks link real code but rely on an uncited model of a device, card, regi
 | `gpu-texture-frame` | device progress and ring model |
 | `jpeg-advance` | completion delay values |
 | `npu-queue`, `npu-board-capture`, `npu-idle` (class e, stays) | NPU device model, USB device stub, idle gating registers |
-
-### Measurement of 2026-11-01
-
-No behavior model has a confirmed catch. All three confirmed catches were build, link or configure failures. The [measurement](history/validation-measurement-20261101.md) lists the 117 checks of the full gate by class and time; the [failure table](history/validation-failures-20261101.md) lists the 66 board runs that did not pass since 2026-10-25, of which 48 were image defects and none had a host check that fully covered the failing behavior.

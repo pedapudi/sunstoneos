@@ -270,8 +270,7 @@ stencil-reference word, the stencil word, the fragment program address and
 the cull mode. Blended batches use the translucent pass so the framebuffer
 fetch observes earlier batches in submission order.
 
-The resident programs come from the pinned compiler through
-`checks/pvr-batch-producer.py`. The vertex shader and descriptor program are
+The resident programs come from the pinned compiler. The vertex shader and descriptor program are
 the profile-2 programs. One coefficient program loads W and the perspective
 UV pair. The opaque fragment shader has 200 instruction bytes; the four
 blending shaders have 344, 312, 296 and 296 bytes. Each has 32 temporaries,
@@ -280,18 +279,12 @@ spills, barriers or atomics. The fragment programs occupy USC offsets 2560,
 3072, 3584, 1344 and 1920, with PDS kick programs at 2304, 2560, 2688, 2816
 and 2944.
 
-`checks/pvr-batch.py` compares the native programs with the producer output.
-With sanitizers, it unpacks the PPP blocks, VDM stream, sampler and image
-words and depth/stencil registers using pinned Mesa packers, enumeration
-helpers and firmware structure offsets. It also covers refusals for every
-batch field, frame-state field and vertex bound. `checks/gpu-batch.py` runs the
-actual native owner, VM, allocator and service in QEMU. It covers two 1080p
-frames with stencil, perspective and sampler state, refused uploads that keep
-the previous frame, and a 63 × 17 session. `checks/gpu-texture-runtime.py
---profile 4` drives the linked application and host helpers through modeled
-TinyUSB transfers. GPU, firmware and USB effects are modeled; none of these
-checks establishes physical rasterization, stencil, blending or cache
-visibility.
+No host check compares the native programs with the producer output, or unpacks the PPP blocks, VDM stream, sampler and image words and depth/stencil registers
+with pinned Mesa packers, enumeration helpers and firmware structure offsets. No host check covers refusals for every batch field, frame-state field and vertex bound. None runs the native owner, VM, allocator and service in QEMU for two 1080p frames with
+stencil, perspective and sampler state, refused uploads that keep the previous
+frame and a 63 × 17 session. None drives the linked application through modeled
+TinyUSB transfers. Physical rasterization, stencil, blending and cache
+visibility are unqualified.
 
 Arbitrary trusted shaders, arbitrary blend factor combinations, clipping,
 other topologies, mipmaps, other texture formats, more than one texture,
@@ -319,8 +312,8 @@ with the PRESENT ticket, the frame number and offset zero.
 The display consumer supplies its own translation for the physical range and
 its own proof that scanout has stopped before RELEASE. The GPU-to-HDMI
 application still copies frames through READ slots, and the USB protocol does
-not expose PRESENT. `checks/gpu-batch.py` covers lending, refusal while lent,
-release and healthy CLOSE in QEMU.
+not expose PRESENT. No host check covers lending, refusal while lent, release
+or healthy CLOSE.
 
 ## CPU work per frame
 
@@ -400,9 +393,7 @@ their exact serials before reuse. An uncertain final kick faults both rings.
 This follows `pvr_drm_job_render.c:488–604`, pinned Linux `pvr_queue.c:699–705`
 and the cleanup rule in `pvr_cccb.c:257`.
 
-Earlier frozen rendering evidence used one combined final-fragment kick. It
-remains historical software evidence; the corrected native legacy-profile case
-covers the changed sequencing. Compute queues retain their separate behavior.
+Compute queues retain their separate behavior.
 
 ## Compiler contract and evidence
 
@@ -541,9 +532,8 @@ pool reclamation still needs shared serialization.
 All queued mutations and copied outputs bind their queue epoch at service
 consumption. Optional wire versions are compute 6, triangle 7, texture 8,
 depth/blend 9 and batches 10. The default transports use versions 2 through 6
-with their own layouts. `checks/gpu-resource-disposal.py --profile 4` runs the
-same native disposal and reconstruction for a 64 × 64 batch-profile owner; the
-application protocol checks do not cover that profile. Render OPEN
+with their own layouts. The same native disposal and reconstruction serve a 64 × 64
+batch-profile owner; no host check covers that profile. Render OPEN
 publishes frame/generation zero and requires fresh submission before READ.
 Compute OPEN executes the original sealed input and publishes sequence one.
 Texture replies use a separate 72-byte header, followed by the existing copied
@@ -563,9 +553,8 @@ model boundaries. Separate linked consumers cover texture/depth and compute. The
 [three-parent lifecycle check](gpu-compute-service.md#compute-only-disposal-and-reopening)
 also exercises copied output across reopening. With the owner supplied through
 the service configuration and bursts of worker steps, both native owner checks
-passed again on rebuilt texture and compute lifecycle images; their models stop
-publication at the same power admission boundary between burst steps. The
-application protocol checks were not repeated. Triangle lifecycle runtime remains
+pass on the texture and compute lifecycle images; their models stop
+publication at the same power admission boundary between burst steps. Triangle lifecycle runtime remains
 outside these checks. These checks do not establish physical cache visibility,
 firmware execution, rasterized pixels, SMP scheduling or mixed-device disposal.
 
@@ -697,7 +686,7 @@ substituted context and exhausted frame/ticket/serial counters while preserving
 prior output. Second-frame guard damage and an uncertain kick retain owners.
 The linked native application, fragmented USB framing and host consumer process
 twelve frames on one ELF. Pinned firmware-structure comparisons cover timeline
-values and render-target addresses. Compiler and shader evidence above is reused.
+values and render-target addresses.
 GPU writes, firmware replies and transport effects remain modeled.
 
 ## Fixed clear profile
@@ -794,27 +783,18 @@ and register-image SHA-256
 
 ## Validation and remaining hardware work
 
-`checks/pvr-render.py` compares native programs against retained compiler output,
-context and command records against published firmware structures, and register
-fields against pinned XML. It also checks preservation on overlapping-address
-refusal. `checks/gpu-render.py` composes the actual FreeRTOS worker, native parent
-allocators, VM publication, firmware memory adapter and paired command transport.
-
-The native fixture models register responses and firmware acknowledgement. Its
-injected timelines are explicit model inputs. Every case leaves the device color
-buffer poisoned. The cases cover rejection after modeled completion, missing
-timelines, uncertain combined kick and a kick that returns after the deadline.
-The source comparison passed with address and undefined-behavior sanitizers.
-All four native cases passed in one batch. The reference harness needed complete
-upstream headers, an alignment macro, and complete dependency capture before its
-first execution. Native and shader execution were not repeated.
-
-Evidence is retained outside Git under
-`~/.cache/sunstoneos/evidence/gpu-render-20261017/`: `producer1` holds the actual
-compiler outputs, `reference1` holds the source comparison, and `native1` holds
-the four emulator executables and logs. The final input manifest distinguishes
-executed inputs from later harness-only archival corrections.
-These checks establish software behavior; they do not establish rendering.
+No host check compares the native programs with retained compiler output,
+the context and command records with published firmware structures, or the
+register fields with pinned XML. No host check composes the FreeRTOS worker, native parent
+allocators, VM publication, firmware memory adapter and paired command
+transport, or covers preservation on overlapping-address refusal. A native
+fixture would model register responses and firmware acknowledgement with
+explicit timeline inputs, leave the device color buffer poisoned in every case,
+and cover rejection after modeled completion, missing timelines, an uncertain
+combined kick and a kick that returns after the deadline. The evidence for the
+earlier runs is retained outside Git under
+`~/.cache/sunstoneos/evidence/gpu-render-20261017/`. Software behavior does not
+establish rendering.
 
 Physical qualification requires native platform startup, admitted power and
 clock resources, firmware identity and execution, interrupts, completed GPU
@@ -879,7 +859,7 @@ Its failure record, partial bytes, copied outputs and lifecycle receipts remain
 available; no retry, reconnect or relaunch follows. DISPOSED is a native disposal
 receipt, not independent physical drain or memory lease qualification.
 
-The 2026-10-20 depth-mode software checks use fourteen actual producer
+The depth-mode software checks use fourteen actual producer
 exchanges from native image SHA-256
 `780d954475aba09f7823cfb9559e379834818d746c30d513b3d625d00c6fbea5`.
 One healthy lifecycle and twelve modeled failure cases passed. They compare
@@ -894,3 +874,5 @@ End-to-end GPU/firmware execution remains unqualified. Its depth OPEN receipt is
 synchronous; pending texture OPEN publication through STATUS remains source-reviewed.
 Triangle and version-8 texture producer-backed runtime coverage remain pending.
 Physical disposal, memory reuse, visibility and timing remain unqualified.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/gpu-render.jsonl).

@@ -355,10 +355,9 @@ the cost model.
   checks the five service tasks and their priorities, and rejects critical
   sections, scheduler suspension or waits in the owner's code.
 - `checks/rail-leases-cost.py` measures the row read, counting load/store
-  exclusive and LSE atomic instructions as exclusive accesses;
-  `checks/rail-leases.c` covers the rail pin.
-- `checks/g2d-power-native.py` runs the G2D task of a linked G2D image with
-  the row answered by the model: ON, REFUSED, FAILED and never answered.
+  exclusive and LSE atomic instructions as exclusive accesses.
+- The G2D task's handling of the row answers ON, REFUSED, FAILED and never
+  answered has no host check.
 
 The [live accelerator composition check](../checks/accelerator-shared-owner.py)
 exercises the actual NPU startup, GPU power and resource manager, PMIC consumers,

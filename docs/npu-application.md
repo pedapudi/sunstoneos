@@ -104,11 +104,11 @@ That ROM response alone does not establish watchdog causation.
 
 ## Focused validation
 
-The application builds only as a supervised image. The supervised instruction
-check, `checks/npu-supervised.py`, constructs the image's providers, the power
-service and the startup sequencer under Unicorn and runs four cases: the
+The application builds only as a supervised image. No host check runs the
+image's providers, power service and startup sequencer under Unicorn; an earlier
+run covered four cases: the
 startup reaching READY, a wrong rail, domain 4 already on, and a PLL_NPU LOCK
-timeout; the three refusals retain their tokens. `checks/npu-supervised-host.py`
+timeout, and the three refusals retained their tokens. `checks/npu-supervised-host.py`
 covers packaging, admission, capture and the launcher's contract publication
 in 33 cases with USB, FEL and the queue mocked. Physical NPU execution remains
 unqualified.
@@ -178,9 +178,7 @@ USB disappearance or cable reconnection alone does not prove power removal or
 release ownership. No automatic reset, cold provisioning or voltage writer is
 introduced.
 
-`checks/npu-supervised.py` links the supervised image and executes its
-constructor, power service, startup sequencer and refusal cases with modeled
-architectural state and device responses. It does not run inference or
+The host evidence does not run inference or
 establish physical readiness.
 
 The supervised host tools prepare an immutable bundle and capture the existing
@@ -240,7 +238,7 @@ The ordinary RAM path has a concrete source contract. The pinned VIPLite
 [`vip_drv_hardware.c`](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/npu/aw_nna_vip/vip2/vip_drv_hardware.c)
 function `vipdrv_hw_pdmode_setup_mmu` programs directory register `+0x3b4`
 with `(physical_root >> 12) << 4 | 1` and control register `+0x388` with `0x21`.
-The native controller now requires the complete control word to equal `0x21`
+The native controller requires the complete control word to equal `0x21`
 before triggering, accepting completion or closing. Additional bits cause a
 retained fault. This conservative supported-state check does not identify the
 meaning of unspecified bits or establish effective translation.
@@ -391,11 +389,10 @@ success. Physical translation, provider state and NPU inference remain unresolve
 
 The startup sequencer's register pass validates the normalized reference with
 the shared decoder and applies the PERI0 control policy of the canonical NPU
-provider. PERI0 bit 24 is permitted. `checks/npu-application-clock-reference.py`
-runs six reference-clock cases through the linked image's sequencer: 26 MHz
-and 24 MHz oscillators normalized to the 24 MHz reference are admitted; wrong
-factors, an unstable or disabled reference and a PERI0 input-divider bit are
-refused before any write.
+provider. PERI0 bit 24 is permitted. No host check runs the linked image's
+sequencer: 26 MHz and 24 MHz oscillators normalized to the 24 MHz reference are
+admitted; wrong factors, an unstable or disabled reference and a PERI0
+input-divider bit are refused before any write, by construction of the decoder.
 
 The first physical attempt used the trusted convolution, observed clock/power
 configuration, and reviewed MMU/SRAM ownership. It produced no native USB frames;
@@ -533,3 +530,5 @@ input/output in a retained single-core IRQ application.
 The [complete published NN graph profile](npu-complete-nn.md) uses the same
 retained IRQ owner for a fixed 125-operation weight-bearing network with an
 external working pool and bounded copied UINT8 caller data.
+
+Results of host checks that no longer exist are kept in the evidence record [npu-application.jsonl](evidence/npu-application.jsonl).

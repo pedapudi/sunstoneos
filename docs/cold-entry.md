@@ -105,12 +105,11 @@ The loop reads cache levels and geometry, skips instruction-only levels, restore
 the cache selector to zero and executes `DSB ST` followed by `ISB`. The separate
 main-tail cleanup described above occurs later.
 
-[The cache-wrapper check](../checks/cold-boot-cache.py) executes both actual
-wrappers, including their Thumb-to-Arm transition. One synthetic cache hierarchy
-produces all twenty expected set/way operations before the barrier and cache
-disable. System registers, cache effects and the delay remain modeled. The
-earlier parser check substituted these wrappers; its unchanged header-mutation
-and handoff results retain their original scope.
+No host check executes the two actual cache wrappers, including their
+Thumb-to-Arm transition, against a synthetic cache hierarchy; the expected
+twenty set/way operations before the barrier and cache disable are recorded in
+[cold-entry.jsonl](evidence/cold-entry.jsonl). System registers, cache effects
+and the delay were modeled there.
 
 Evidence is under `~/.cache/sunstoneos/evidence/cold-boot-cache-20261020/`.
 This establishes the pinned instruction sequence, not physical publication.

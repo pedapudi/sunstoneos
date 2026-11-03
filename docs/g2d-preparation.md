@@ -155,24 +155,18 @@ interrupt delivery, recovery or performance.
 `checks/g2d-preparation.py` consumes the frozen native evidence directory and raw
 page-table artifact from the actual allocator case. It produces typed modeled
 facts, checks allocation and descriptor refusals, and compiles the SRAM launcher
-once. `checks/g2d-host.py` consumes that modeled bundle and checks fill/copy/source-over-solid bytes,
-FS/HS framing, durable output before ACK, identity refusal and partial failures.
-Both checkers record physical authority as false. The operational caller rejects
-the modeled bundle.
+once. The checker records physical authority as false. The operational
+caller rejects the modeled bundle. No host check consumes that bundle to check
+fill, copy and source-over-solid bytes, FS/HS framing, durable output before
+ACK, identity refusal and partial failures, or the supervisor entry readiness
+boundary (which stops before queue or device access).
 
-The supervisor entry check uses
-`checks/h264-supervisor-entry.py --caller tools/check-a733-g2d-supervised.py --case actual`.
-It stops at readiness before queue or device access.
-
-The preserved host evidence is
-`~/.cache/sunstoneos/evidence/g2d-host-20261020/`. Modeled preparation passed
-against native ELF SHA-256
-`4e043dad7e691ad50c4164dd9085ae118a0e0911d7fd8aea93e16610e7966328`.
-The checks passed thirteen capture cases, four geometry refusals, five
-allocation/table refusals and the actual supervisor entry readiness boundary.
-Production refused modeled authority. The single preserved SRAM launcher has
-SHA-256 `1f0fa59aacced824403a7d0b380b59e47629ce3c19c805bfc7a43c28dd184f84`.
-These results establish software behavior only; physical admission remains absent.
+Modeled preparation was run against native ELF SHA-256
+`4e043dad7e691ad50c4164dd9085ae118a0e0911d7fd8aea93e16610e7966328`, with
+host evidence in `~/.cache/sunstoneos/evidence/g2d-host-20261020/`. The single
+preserved SRAM launcher has SHA-256
+`1f0fa59aacced824403a7d0b380b59e47629ce3c19c805bfc7a43c28dd184f84`.
+Physical admission remains absent.
 
 The DE_SYS-capable image is separately bound in
 `g2d-power-20261020/host-authority/`. Seven focused checks cover the accepted
@@ -190,7 +184,7 @@ an opaque `--color`, such as `0xff315a93`. Source coordinates and destination
 rectangle retain the copy bounds. Input pixels use straight per-pixel alpha;
 output and padding outside the rectangle remain zero. This operation adds no
 second upload or buffer mapping. It requires the launcher built with the changed
-geometry header; the earlier fill/copy launcher rejects operation 3.
+geometry header; the fill/copy launcher rejects operation 3.
 
 The host compares RGB against ideal nearest-integer `/255` source-over arithmetic
 and expects opaque output alpha. Hardware rounding remains unqualified, and the
@@ -230,7 +224,7 @@ saved durably. Source authentication, complete-session and output digests,
 completion, master-10 scans, guards and ACK receipt remain strict. An accepted
 copy establishes no numerical interpolation or physical pixel qualification.
 
-The scaling host checks passed on 20 October 2026 with the actual native image,
+The scaling host checks pass with the actual native image,
 its exact sealed session and copied response and receipt. Five geometry
 boundaries include the minimum and maximum extents, asymmetric origins and
 source windows ending at the canvas edge. Twelve geometry refusals cover odd
@@ -285,6 +279,7 @@ their meanings; no second upload or mapping is added.
   an ideal channel reordering that treats X channels as 255. That comparison is
   an unqualified diagnostic; a plain copy remains an exact, ACK-gating check.
 
-`checks/g2d-modes-host.py` exercises these rules with sessions resealed from an
-accepted earlier session and synthetic response frames. The register, linked
-image and launcher checks are described in [the component document](g2d.md).
+No host check exercises these rules. The register, linked image and launcher
+results are in [the component document](g2d.md) and its evidence.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/g2d-preparation.jsonl).

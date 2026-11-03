@@ -13,6 +13,15 @@ records 32.500 microseconds wait and 38.458 masking, so it is reverted.
 The 25 microsecond budget remains unmet. These finite runs do not qualify
 worst-case timing, sustained operation or power behavior.
 
+## Capabilities
+
+| Capability | Status | Key figure | Evidence and design |
+| --- | --- | --- | --- |
+| FIFO ticket kernel task and ISR locks | qualified on the board | Worst loaded task-lock wait 137.625 to 29.625 µs; masking 127.667 to 33.792 µs (three finite runs on port 3-1) | `1793575947324491365-4f50a160`, `1793576137408460593-a3232b16`; [design](../designs/smp-heterogeneous.md) |
+| Interrupt-mask and lock-hold attribution by entry and exit site | qualified on the board | Dominant masked path `ulTaskGenericNotifyTake` to `FreeRTOS_Yield`, 33.792 µs | `1793576137408460593-a3232b16` |
+| Thermal rearm fast path | host-tested; reverted | Wait 32.500 µs, masking 38.458 µs, worse than the ticket locks alone | `1793576768527805851-5709adc9` |
+| 25 µs task-lock wait and masking budget | open | 29.625 µs wait, 33.792 µs masking | [partitioned scheduler](../designs/scheduler-partitioned.md) |
+
 ## Open work
 
 1. Meet the 25 microsecond budget for task-lock wait and interrupt masking. The ticket locks reach 29.625 microseconds of wait and 33.792 of masking.

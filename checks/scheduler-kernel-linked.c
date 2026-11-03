@@ -605,25 +605,25 @@ int main(int argc, char **argv)
     fixture_cpu = 0;
     List_t event;
     vListInitialise(&event);
-    ssKernelObjectEnter();
+    ssKernelObjectEnterOn(&event);
     vTaskPlaceOnEventList(&event, 4);
-    ssKernelObjectExit();
+    ssKernelObjectLeave();
     enter(0);
     fixture_cpu = 1;
-    UBaseType_t irq = ssKernelObjectEnterFromISR();
+    UBaseType_t irq = ssKernelObjectEnterFromISROn(&event);
     (void)xTaskRemoveFromEventList(&event);
-    ssKernelObjectExitFromISR(irq);
+    ssKernelObjectLeaveFromISR(irq);
     enter(0);
     assert(pxCurrentTCBs[0] == task && listLIST_IS_EMPTY(&event));
     assert(!record(task)->event_reference.descriptor);
     assert(!record(task)->deadline.owner);
     /* Timeout removes an event registration before making the task ready. */
-    /* A queue blocks under a suspension, which holds the task lock only: the insertion must still hold the interrupt
-     * lock, which excludes the owner that times out another waiter of the same list. */
+    /* A queue blocks under a suspension, which holds the object's task lock only: the insertion must still hold the
+     * interrupt lock of the slot, which excludes the owner that times out another waiter of the same list. */
     fixture_insert_depth = 0;
-    ssKernelObjectSuspend();
+    ssKernelObjectSuspendOn(&event);
     vTaskPlaceOnEventList(&event, 1);
-    (void)ssKernelObjectResume();
+    (void)ssKernelObjectResumeOn();
     assert(fixture_insert_depth >= 1);
     enter(0);
     (void)xTaskIncrementTick();

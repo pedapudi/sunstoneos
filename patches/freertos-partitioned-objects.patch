@@ -1,26 +1,46 @@
 --- queue.c
 +++ queue.c
-@@ -36,6 +36,11 @@
+@@ -36,6 +36,12 @@
  
  #include "FreeRTOS.h"
  #include "task.h"
 +
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +#define SS_FREERTOS_OBJECT_TRANSLATION 1
++#define SS_FREERTOS_OBJECT_EXPR pxQueue
 +#include "freertos.h"
 +#endif
  #include "queue.h"
  
  #if ( configUSE_CO_ROUTINES == 1 )
+@@ -703,7 +709,7 @@
+          * calling task is the mutex holder, but not a good way of determining the
+          * identity of the mutex holder, as the holder may change between the
+          * following critical section exiting and the function returning. */
+-        taskENTER_CRITICAL();
++        ssKernelObjectSectionEnter( pxSemaphore );
+         {
+             if( pxSemaphore->uxQueueType == queueQUEUE_IS_MUTEX )
+             {
+@@ -2205,7 +2211,7 @@
+ 
+     configASSERT( xQueue );
+ 
+-    portBASE_TYPE_ENTER_CRITICAL();
++    ssKernelObjectSectionEnter( xQueue );
+     {
+         uxReturn = ( ( Queue_t * ) xQueue )->uxMessagesWaiting;
+     }
 --- event_groups.c
 +++ event_groups.c
-@@ -37,6 +37,11 @@
+@@ -37,6 +37,12 @@
  /* FreeRTOS includes. */
  #include "FreeRTOS.h"
  #include "task.h"
 +
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +#define SS_FREERTOS_OBJECT_TRANSLATION 1
++#define SS_FREERTOS_OBJECT_EXPR pxEventBits
 +#include "freertos.h"
 +#endif
  #include "timers.h"
@@ -28,13 +48,14 @@
  
 --- stream_buffer.c
 +++ stream_buffer.c
-@@ -37,6 +37,11 @@
+@@ -37,6 +37,12 @@
  /* FreeRTOS includes. */
  #include "FreeRTOS.h"
  #include "task.h"
 +
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +#define SS_FREERTOS_OBJECT_TRANSLATION 1
++#define SS_FREERTOS_OBJECT_EXPR pxStreamBuffer
 +#include "freertos.h"
 +#endif
  #include "stream_buffer.h"
@@ -42,15 +63,70 @@
  /* The MPU ports require MPU_WRAPPERS_INCLUDED_FROM_API_FILE to be defined
 --- timers.c
 +++ timers.c
-@@ -36,6 +36,11 @@
+@@ -36,6 +36,12 @@
  
  #include "FreeRTOS.h"
  #include "task.h"
 +
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +#define SS_FREERTOS_OBJECT_TRANSLATION 1
++#define SS_FREERTOS_OBJECT_EXPR pxTimer
 +#include "freertos.h"
 +#endif
  #include "queue.h"
  #include "timers.h"
+ 
+@@ -783,7 +789,7 @@
+         TickType_t xTimeNow;
+         BaseType_t xTimerListsWereSwitched;
+ 
+-        vTaskSuspendAll();
++        ssTimerServiceSuspend();
+         {
+             /* Obtain the time now to make an assessment as to whether the timer
+              * has expired or not.  If obtaining the time causes the lists to switch
+@@ -797,7 +803,7 @@
+                 /* The tick count has not overflowed, has the timer expired? */
+                 if( ( xListWasEmpty == pdFALSE ) && ( xNextExpireTime <= xTimeNow ) )
+                 {
+-                    ( void ) xTaskResumeAll();
++                    ( void ) ssTimerServiceResume();
+                     prvProcessExpiredTimer( xNextExpireTime, xTimeNow );
+                 }
+                 else
+@@ -817,7 +823,7 @@
+ 
+                     vQueueWaitForMessageRestricted( xTimerQueue, ( xNextExpireTime - xTimeNow ), xListWasEmpty );
+ 
+-                    if( xTaskResumeAll() == pdFALSE )
++                    if( ssTimerServiceResume() == pdFALSE )
+                     {
+                         /* Yield to wait for either a command to arrive, or the
+                          * block time to expire.  If a command arrived between the
+@@ -833,7 +839,7 @@
+             }
+             else
+             {
+-                ( void ) xTaskResumeAll();
++                ( void ) ssTimerServiceResume();
+             }
+         }
+     }
+@@ -1118,7 +1124,7 @@
+         /* Check that the list from which active timers are referenced, and the
+          * queue used to communicate with the timer service, have been
+          * initialised. */
+-        taskENTER_CRITICAL();
++        ssTimerInitEnter();
+         {
+             if( xTimerQueue == NULL )
+             {
+@@ -1160,7 +1166,7 @@
+                 mtCOVERAGE_TEST_MARKER();
+             }
+         }
+-        taskEXIT_CRITICAL();
++        ssTimerInitExit();
+     }
+ /*-----------------------------------------------------------*/
  

@@ -219,62 +219,16 @@ resumes and socket submission reopens. Firmware key and port state after a
 disconnection indication has not been observed on hardware. Loss with
 outstanding work or unresolved roaming still retains the complete graph.
 
-[checks/radio-recovery-loss.c](../checks/radio-recovery-loss.c), built and run
-with `checks/radio-reconnect.py --fixture loss`, executes the actual session,
-network adapter, socket service and IP task on the modeled MMIO of the reconnect
-composition. An idle fixed-address OPEN association with one open UDP socket
-receives a source-layout disconnection indication. The session reports LOST
-without fault, the network is offline, and submissions are refused while the
-socket survives. Recovery refuses another SSID, another security mode, a
-channel outside the admitted list, missing beacon evidence and missing OPEN
-authority. It admits a second access point of the same network with its own
-BSSID and beacon evidence. Its first reassociation fails in the indication; the
-retry associates with that access point at association generation three.
-Received frames then carry the new BSSID, and the address and a new TCP exchange
-follow. A separate
-part of the same image retires a WPA2 security pair after loss: no port command,
-the pairwise key wiped locally, one group-key KEY_DEL with its hardware index,
-and rearm accepted for a later generation. Key state there is a modeled input,
-and the WPA2 handshake after recovery is not executed.
-
-The focused AArch64 composition in [checks/radio-reconnect.c](../checks/radio-reconnect.c)
-passed once with actual FreeRTOS tasks, providers, session workers, disconnect and
-connect parsing, socket disposal, an IP-task FIFO receipt and a new TCP exchange.
-It refused expired admission, unread replies and live sockets, then rejected the
-disposed old handle after reconnect. Separate cases in that image refused rearm
-with a live key, fault or attached worker; they exercised fresh RSN creation and
-controlled-port retirement without resetting the data sequence. Their initial
-retired pair is modeled. That OPEN composition links the board owner wrapper
-without executing it.
-
-A separate WPA2 composition in
-[checks/radio-reconnect-wpa.c](../checks/radio-reconnect-wpa.c) executed the actual
-`board_radio_reconnect` wrapper and session polling. Preserved terminal RAM shows
-confirmed old port closure, two key deletions, detach, disconnect, reassociation,
-fresh RSN rearm, M1–M4 processing against cached peer vectors, two new keys and
-port authorization, generation-two address restoration and a new TCP exchange.
-The client suspended only after its successful receive and CLOSE assertions.
-The borrowed generation still equals the retained platform clock token.
-Board startup and `board_radio_poll` were not executed by this fixture. Firmware
-upload, initial association and the old authorized security state are explicit
-modeled checkpoints; register, peer firmware, entropy and RF effects remain modeled.
-
-The WPA2 fixture reached its loop assertion because its readiness publication
-overwrote the client's completion value. It emitted no PASS. The operation's
-completion was instead verified from the saved terminal RAM, exact executable
-and client suspension; the corrected reporting source has not been executed.
-Earlier vector-format setup and request-after-poll refusals remain preserved.
-Four distinct linked images cover the OPEN result and these WPA2 attempts; the
-101 production objects were reused unchanged for each WPA2 image. Frozen inputs,
-images, attempt history and terminal classification are under
-`~/.cache/sunstoneos/evidence/radio-reconnect-20261020/`.
-
-The later [DHCP extension](radio-network.md#address-acquisition-and-dns-ownership)
-passed its two changed IP-task boundary cases without repeating radio or WPA2
-reconnection. A separate native `sunstone-a733-board` build covers the actual
-board caller, session and changed network structure layout. That image was not
-executed. These results and exact compiled closures are retained under
-`~/.cache/sunstoneos/evidence/radio-dhcp-reconnect-20261020/`.
+Host compositions of the actual session, network adapter, socket service and
+IP task on modeled MMIO exercised link-loss recovery of an idle OPEN association
+(including refusal of another SSID, security mode, channel or missing evidence,
+and reassociation to a second access point of the same network). They also exercised reconnect of an OPEN session and reconnect of a WPA2 session through `board_radio_reconnect`
+with a fresh four-way handshake and a new TCP exchange. They have no retained
+checks. Firmware upload, initial association, security state, peer firmware,
+entropy and RF effects are modeled, and board startup and `board_radio_poll`
+were not executed. The runs and their figures are in
+[the evidence file](evidence/radio-session.jsonl). The DHCP boundary after
+reconnect is in [radio network](radio-network.md#address-acquisition-and-dns-ownership).
 
 ## A Bluetooth client shares the firmware generation
 
@@ -296,9 +250,8 @@ the owner's own admission accepts, and both must accept. A Bluetooth client
 that adds the wake pins to a platform another owner built authenticates them
 there.
 
-The reconnect model (`checks/radio-reconnect.py`) requests the firmware
-generation right after a healthy reconnect is admitted and requires the
-current borrow generation.
+After a healthy reconnect is admitted, the session requests the firmware
+generation and requires the current borrow generation.
 
 ## Faults close admission and preserve outstanding work
 

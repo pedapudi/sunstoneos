@@ -208,7 +208,7 @@ and both pools with the read-only GPU output view. Each runs on one core with
 the check passing and failing under an execution trace. It compares every
 EL1 and EL3 entry, checks EL1 and EL0 read and write translations of the text
 block, the GPU output region, the new blocks and the unmapped ranges, runs the
-boot preparation of both pools and one getter call, and traces
+boot preparation of both pools and one getter call. It also traces
 `aarch64_device_translate()` and `aarch64_device_translate_el0()`.
 
 The check also scans the sources for writes to the cached tables outside
@@ -248,24 +248,21 @@ alignment and ends at `0x48088000`, so that range would miss two pages. The
 composition links frozen pool objects today; a rebuild against this pool must
 derive the range from the actual extents first.
 
-`checks/memory-architecture-smp.py` runs the pool in a two-core QEMU image
-with the FreeRTOS SMP port and the real kernel critical section. It measures
-describe, an xHCI register read and the camera memory check against the pool
-source before this profile, and measures the worst-case acquire hold. It
-checks that an acquire and a release inside an enclosing critical section keep
-the GIC priority mask raised. It then runs 200,000 rounds of release and
-retain on one core against long acquires on the other, followed by 100,000
-rounds in which one core describes a released lease while the other gives
-its slot to another owner and extent. An execution trace counts the
-barriers per call: each acquire, release or retain adds a critical-section
-pair of 485 instructions with 5 supervisor calls, 27 `DSB` and 7 `ISB`. A
-local pool getter call after preparation costs 5 instructions, one acquire
-load and no barrier; it cost 17 when the getter also ran the preparation's
-fast path.
+A two-core QEMU image with the FreeRTOS SMP port and the real kernel critical
+section measured the pool's critical sections; no host check reproduces the
+run. An execution trace counts the barriers per call: each acquire, release or
+retain adds a critical-section pair of 485 instructions with 5 supervisor
+calls, 27 `DSB` and 7 `ISB`. A local pool getter call after preparation costs 5
+instructions, one acquire load and no barrier. The run also checked that an
+acquire and a release inside an enclosing critical section keep the GIC
+priority mask raised. The run also exercised 200,000 rounds of release and retain
+against long acquires and 100,000 rounds of describing a released lease while
+its slot changes owner and extent
+([device-memory-capacity.jsonl](evidence/device-memory-capacity.jsonl)).
 
 These results do not qualify physical DRAM, coherence, device transactions,
 sustained workloads or any cycle count on the board. Every cycle budget in
-the [design](designs/memory-architecture.md#performance-budgets) remains
+the [design](designs/memory-architecture.md#qualified-figures) remains
 provisional and unqualified until the board runs listed there, on cores 0
 and 6 with the CPU-L, CPU-B and DSU rates recorded, exist.
 

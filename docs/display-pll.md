@@ -1,9 +1,8 @@
 # Display PLL activation and retuning
 
 SunstoneOS implements the published A733 display PLL 1 enable-and-retune
-sequence, with exact clock plans and shared clock ownership. Host comparison
-with unchanged source, retained-failure checks and AArch64 compilation pass.
-Physical activation remains unqualified because no initial A733 analog profile
+sequence, with exact clock plans and shared clock ownership. Status:
+implemented; no host check remains. Physical activation remains unqualified because no initial A733 analog profile
 has established provenance.
 
 The [PLL API](../include/a733_display_pll.h) accepts an authenticated initial
@@ -177,18 +176,13 @@ obvious display-PLL routine in the available disassemblies. This does not rule
 out computed addresses or initialization in other firmware. Neither binary
 currently supplies a traced cold-start sequence.
 
-One AddressSanitizer/UndefinedBehaviorSanitizer session compares complete PHY
-register images with unchanged Linux functions at enable, multiplier update
-and final retune. It covers disabled and enabled initial states, two rate
-transitions, recovery of the lock filter after a low sample, and minimum delays.
-The same model uses the real common-clock registry to verify that retained
-ownership excludes a second PLL consumer.
-
-Focused cases cover an unauthenticated profile, altered initial words, stale
-tokens, busy registry/mutex, uncertain writes, failed readback, late completion
-and retained terminal behavior. Planner cases reject missing provenance,
-modulation, partial activation and an excessive intermediate LS rate.
-These model profiles are synthetic fixtures, not qualified hardware profiles.
+No host check compares the PHY register images with the unchanged Linux
+functions at enable, multiplier update and final retune, or exercises the
+retained-ownership, unauthenticated-profile, altered-word, stale-token,
+uncertain-write, failed-readback, late-completion and planner-rejection paths
+(missing provenance, modulation, partial activation, an excessive intermediate
+LS rate). The earlier comparison used synthetic initial profiles, which were not
+qualified hardware profiles.
 
 The native AArch64 object contains 3,426 bytes of code/read-only data. Direct
 stack frames are 288 bytes for planning, 240 for initialization and 48 for
@@ -196,28 +190,10 @@ polling; nested planning and callback frames are additional. The object depends
 on the existing PLL planner, common-clock token status/retention, `memcpy` and
 `memset`.
 
-The source/model/native batch passed. A separate focused case injects a time
-failure after mutex release while registry retention is busy. It verifies
-that readiness stays unpublished and that metadata polling completes fault
-retention after the registry becomes available.
-
-Evidence and exact executed inputs are preserved in
-`~/.cache/sunstoneos/evidence/display-pll-20261016/`. The terminal publication
-correction reuses the initial source comparison because register sequencing
-and factor arithmetic are unchanged. Its focused case and native object are
-preserved under `final-retain/` and `final-retain-snapshot/`.
-No board access or performance measurement ran, and earlier DSI,
-timing-controller and display-engine checks were not repeated.
-
-Reproduce only when relevant inputs change:
-
-```sh
-python3 checks/a733-display-pll.py \
-  --source-root ~/.cache/sunstoneos/sources/display \
-  --evidence /path/to/new/evidence
-```
-
-Use `--case final-retain` for the isolated terminal-retention case.
+When a time failure occurs after mutex release while registry retention is
+busy, the driver leaves readiness unpublished, and metadata polling completes
+fault retention after the registry becomes available. No host check covers this
+case. No board access or performance measurement has run.
 
 The inspected sources are:
 
@@ -238,3 +214,5 @@ Source paths and hashes for the additional U-Boot and Radxa inspection are in
 `~/.cache/sunstoneos/sources/display-pll-research/research-inputs.json`.
 The next source investigation must resolve the initial analog image and factor
 write ordering before a physical cold-start request can be defined.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/display-pll.jsonl).

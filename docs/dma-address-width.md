@@ -1,7 +1,7 @@
 # DMA address widths and the path above 4 GiB
 
 Status: **implemented** for DMA0, the system IOMMU, the native camera, NVMe and
-xHCI, with host checks. No transfer above 4 GiB has run on hardware, so every
+xHCI, with host checks of the limit values and the NVMe pool. No transfer above 4 GiB has run on hardware, so every
 rule below is unqualified until the board evidence at the end exists.
 
 DRAM occupies physical `0x4000_0000`–`0x3_4000_0000`: 3 GiB below 4 GiB and
@@ -124,7 +124,7 @@ from AArch64 emulation of one call per scenario, with the image's C flags.
 Raw records are under
 `~/.cache/sunstoneos/evidence/dma-address-width-20261022/` and
 `~/.cache/sunstoneos/build/dma-address-width-measure/`; the
-[measurement record](designs/dma-address-width-measurements.md) gives the
+[measurement record](evidence/dma-address-width.jsonl) gives the
 method and every figure.
 
 | Metric | Before | After |
@@ -138,7 +138,7 @@ method and every figure.
 | IOMMU leaf words per 307,200-byte plane at physical `0xffff_f000` and `0x1_8000_0000` | 75 and 75 | 75 and 75 |
 
 The camera and NVMe rules have their own
-[measurement record](designs/dma-high-memory-measurements.md), which compares
+[measurement record](evidence/dma-high-memory.jsonl), which compares
 them with their parent commit:
 
 | Metric | Before | After |
@@ -195,15 +195,14 @@ implemented.
 The [width check](../checks/dma-address-width.c) asserts the limit values and
 counts IOMMU leaf words for one plane below and above 4 GiB. It admits an IOMMU
 span that ends at 4 GiB, refuses one that ends a page later, and sums the named
-pool sizes. The [native camera fixture](../checks/a733-camera-native.c)
-captures an image from an allocation at physical `0x1_8000_0000` and refuses
-one across 2^34. The [NVMe model](../checks/a733-pcie-nvme.c) admits a pool
-that ends at 4 GiB and refuses one that ends a page later. The [controller check](../checks/dma-controller.c) refuses a
-chain whose second descriptor crosses `0xfffff800` with no descriptor, cache or
-register change, enters recovery for the same chain on a channel that is not
-quiet, and completes a chain that ends at the limit. Removing the builder's
-descriptor compare, or moving the IOVA policy one page higher, fails these
-cases.
+pool sizes. The [NVMe model](../checks/a733-pcie-nvme.c) admits a pool
+that ends at 4 GiB and refuses one that ends a page later.
+
+No host check covers the DMA0 controller's refusal of a chain whose second
+descriptor crosses `0xfffff800`, its recovery on a channel that is not quiet,
+or completion of a chain that ends at the limit. No host check captures a
+camera image from an allocation at physical `0x1_8000_0000` or refuses one
+across 2^34.
 
 ```sh
 F="-std=c11 -O2 -g -Wall -Wextra -Werror -Iinclude \
@@ -211,13 +210,7 @@ F="-std=c11 -O2 -g -Wall -Wextra -Werror -Iinclude \
 clang-21 $F checks/dma-address-width.c drivers/iommu/a733_iommu.c \
   -o ~/.cache/sunstoneos/build/dma-address-width-check
 ~/.cache/sunstoneos/build/dma-address-width-check
-clang-21 $F checks/dma-controller.c drivers/dma/a733_dma_controller.c \
-  drivers/dma/a733_dma.c -o ~/.cache/sunstoneos/build/dma-controller-check
-~/.cache/sunstoneos/build/dma-controller-check
 ```
-
-The descriptor, cyclic, memory-policy, IOMMU and supervised-camera IOMMU host
-checks, and the DMA0 service, startup and I2S emulator models, pass unchanged.
 
 ## Board evidence that would confirm the rules
 

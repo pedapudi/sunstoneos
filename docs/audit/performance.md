@@ -922,8 +922,7 @@ upload over USB affects only the USB mimus image.
 changes.
 
 **How to measure.** Extend the modeled-endpoint USB0 cases
-([checks/board-application.py](../../checks/board-application.py),
-`checks/usb-zlp.py`) with a transmit model that completes after N µs. Assert
+([checks/board-application.py](../../checks/board-application.py)) with a transmit model that completes after N µs. Assert
 more than one packet per pass, unchanged request and acknowledgement order, and
 completion of a 4168-byte response in one or two modeled ticks. Physical
 throughput is timed by the host in a later bounded board session.
@@ -955,8 +954,7 @@ one compression on the A55; about one eighth of that for the plain runtime.
 
 **Prerequisites.** None.
 
-**How to measure.** In the host USB poll checks (`npu-runtime-host.py`,
-`npu-large-host.py`), assert that expiry of an abandoned upload still latches,
+**How to measure.** In the host USB poll check (`npu-runtime-host.py`), assert that expiry of an abandoned upload still latches,
 that sent frames are byte-identical, and that idle polls make no digest calls.
 
 ### Journal host sessions per buffer
@@ -1059,8 +1057,7 @@ tick, under 1% of a core.
 
 **Prerequisites.** None.
 
-**How to measure.** Run [checks/dma-controller.c](../../checks/dma-controller.c),
-`dma-service.c` and the pool-session check; count callbacks per poll from the
+**How to measure.** Run `dma-service.c` and the pool-session check; count callbacks per poll from the
 model's MMIO trace.
 
 ### Trim cyclic I2S receive and verified writes
@@ -1172,7 +1169,7 @@ cross-core lock traffic on the data path.
 **Prerequisites.** `storage-1`.
 
 **How to measure.** Extend [checks/a733-mmc-platform.c](../../checks/a733-mmc-platform.c)
-and `checks/a733-storage-native-mmc.c` to refuse a wrong task, an unowned mutex,
+to refuse a wrong task, an unowned mutex,
 an out-of-aperture address and an oversize burst, and assert callback counts per
 step.
 
@@ -1664,10 +1661,9 @@ H.264 programming by over 100 times; DSI preparation from an estimated 1.5 s of
 CPU to milliseconds; the PLL mutex hold from about 150 ms to a few milliseconds.
 
 **How to measure.** Drive the task loops in
-[checks/a733-video-h264.c](../../checks/a733-video-h264.c) and
 `checks/a733-video-jpeg-run.c` with a fake tick counter and require byte-identical
-register traces. Count mapping and validation calls in `checks/display-native.py`.
-Count polls between enter and leave in `checks/a733-display-pll.c`.
+register traces. Count mapping and validation calls in a display model, and
+polls between enter and leave in a display-PLL model.
 
 # Part 3. Boot time and build time
 
@@ -1804,8 +1800,7 @@ reused-slot case with a stale token.
 camera bring-up.
 
 **How to measure.** Poll counts in the PCIe, HDMI and display-engine models with
-unchanged write traces; an identical 65,536-byte modeled register image in
-`checks/ov5640-reference.py`.
+unchanged write traces; an identical 65,536-byte modeled OV5640 register image.
 
 ## Build and check time
 
@@ -1841,20 +1836,17 @@ content edit must still change `build-id.txt`.
 ### Hook only the addresses that matter in emulated checks
 
 **Finding:** `checks-harness-8` (medium).
-**Files:** [checks/storage-read-single-core.py](../../checks/storage-read-single-core.py),
-[checks/pwm-native.py](../../checks/pwm-native.py),
-[checks/hdmi-framebuffer.py](../../checks/hdmi-framebuffer.py).
+**Files:** [checks/storage-read-single-core.py](../../checks/storage-read-single-core.py).
 
 **Current behavior.** 120 of the 176 Unicorn code-hook registrations in
 `checks/` have no address range, so Python runs on every emulated instruction.
 Most callbacks act only at a few addresses. The storage-read hook also reads
 memory and runs two regular expressions per instruction. A measured empty global
 hook costs 0.31 s per two million instructions, against about 1 ms with a ranged
-hook. `hdmi-framebuffer.py` gives all cases a shared 120-second wall-clock budget.
+hook.
 
 **Proposed change.** Add a shared helper that registers one ranged hook per
-address, and a scanner for system-register access encodings, as
-`hdmi-framebuffer.py` already does. Migrate hooks whose callbacks dispatch only
+address, and a scanner for system-register access encodings. Migrate hooks whose callbacks dispatch only
 on address, after confirming each has no per-instruction side effects. Give
 budgets as instruction counts only.
 
@@ -1868,11 +1860,7 @@ wall time.
 ### Stop duplicating toolchains and raw RAM in evidence
 
 **Finding:** `checks-harness-9` (low).
-**Files:** [checks/hdmi-application.py](../../checks/hdmi-application.py),
-[checks/displayport-native.py](../../checks/displayport-native.py),
-[checks/hdmi-audio-native.py](../../checks/hdmi-audio-native.py),
-[checks/hdmi-clock-native.py](../../checks/hdmi-clock-native.py),
-[tools/evidence-snapshot.py](../../tools/evidence-snapshot.py).
+**Files:** [tools/evidence-snapshot.py](../../tools/evidence-snapshot.py).
 
 **Current behavior.** The evidence cache is 33 GB. It holds, for example,
 18 copies of `libLLVM.so.21.1` (2.49 GB) and 127 copies of the Python binary.

@@ -197,33 +197,16 @@ FreeRTOS CPU; Linux supplies no runtime service. The combined adaptation uses
 
 ## Evidence and remaining integration
 
-The original fixed-host focused check passed with the actual native Type-C, TWI, PMIC, pin, rail,
-clock, counter, translation and lock implementations. FreeRTOS task/queue
-behavior, MMIO responses and electrical qualification were modeled. Both cable
-orientations completed attachment and detach. Saved execution checkpoints also
-covered pre-pin authority loss, external VBUS refusal, retained I2C failure,
-stale observation, invalid tokens and brief registry contention. Delayed STOP
-completion preserved the observation's request-start timestamp.
-
-The compiled native adapter passed both single-core and SMP configuration
-checks. The executed trace preserved S_TWI0's shared clock/reset bits, selected
-100 kHz I2C, held VCONN off, selected source/data-host role, and waited more than
-120 ms before enabling power. The evidence is under
-`~/.cache/sunstoneos/evidence/typec-native-20261017/`.
-
-The initial execution reached its instruction cap during normal interrupt
-configuration. It resumed from preserved CPU, memory and modeled-hardware state
-on the same executable. Startup and successful cases were not replayed. The
-canonical runner uses the established bounded allowance; its trace assertions
-were checked against the preserved execution without another emulation run.
-
-The check requires the pinned local toolchain, FreeRTOS sources, Python Unicorn
-and pyelftools dependencies. It refuses to overwrite an evidence directory:
-
-```sh
-~/.cache/sunstoneos/venv/bin/python checks/a733-typec-native.py \
-  --output /path/to/new-evidence-directory
-```
+A host composition of the actual native Type-C, TWI, PMIC, pin, rail, clock,
+counter, translation and lock implementations completed attachment and detach in
+both cable orientations. FreeRTOS task and queue behavior, MMIO responses and
+electrical qualification were modeled. Saved checkpoints also covered pre-pin
+authority loss, external VBUS refusal, retained I2C failure, stale observation,
+invalid tokens and brief registry contention, and the compiled adapter passed
+both single-core and SMP configurations. The trace preserved S_TWI0's shared
+clock/reset bits, selected 100 kHz I2C, held VCONN off, selected source/data-host
+role, and waited more than 120 ms before enabling power. The composition has no
+retained check; it is in [the evidence file](evidence/typec.jsonl).
 
 The USB2 host application must pin the first token generation, snapshot and
 validate before protocol progress, and retain its DMA objects on provider loss.

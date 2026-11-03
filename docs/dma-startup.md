@@ -35,7 +35,7 @@ counter again, so a caller interrupted or stalled between its sample and its
 update can neither lower the history nor delay another caller. Every caller
 therefore observes nondecreasing time. Each sample is taken after the history
 that it is compared with was loaded, so a sample below the history shows only
-the skew between cores' counter reads: up to 100 microseconds of it reports
+the skew between cores' counter reads. Up to 100 microseconds of it reports
 the history, and a larger backward step permanently faults the provider, as do
 a frequency change and a conversion overflow. Failure preserves the caller's
 output. All consumers must retain their outstanding resources when time
@@ -45,14 +45,11 @@ At the native 24 MHz rate, conversion to microseconds divides by the constant
 24 and cannot overflow; other admitted rates, such as the emulator's, keep the
 checked general conversion. The history word is at least 64 bytes from the
 fault flag that every caller reads, so the two never share a cache line.
-The [host contention check](../checks/clock-counter-contention.c) runs the
-provider with modeled counter reads on 16 threads, 200,000 calls each; the
-thread count and the call count are command-line parameters. No caller faults
-and each caller observes nondecreasing time, also when the threads' counters
-differ by up to 21 ticks. A caller stopped after its counter sample delays and
-faults no other caller, and returns current time when it resumes. An injected
-regression, a step one tick beyond the skew bound and a changed counter
-frequency each latch the fault.
+No host contention check remains. The provider is designed so that no
+caller faults and each caller observes nondecreasing time, also when the
+threads' counters differ by up to 21 ticks. A caller stopped after its counter
+sample delays and faults no other caller and returns current time when it resumes. An injected regression, a step one tick beyond the skew bound and
+a changed counter frequency each latch the fault.
 
 This provider is for privileged platform operations. It requires a stable,
 synchronized architectural physical counter across participating CPUs. The
@@ -168,7 +165,7 @@ registers; this check does not execute physical MMIO or DMA transfers.
 
 One image runs in two bounded modes because the singleton service cannot both
 activate successfully and enter permanent failure during one lifetime. Both
-modes passed on their first executions:
+modes pass:
 
 - Successful startup checks copied handoff authentication, a regression observed
   inside registry admission, mutex contention across cores, preactivation silence,
@@ -179,19 +176,14 @@ modes passed on their first executions:
 
 A separate focused mode checks aliased activation metadata, read-only token
 observation, registry contention, and refusal after the registry or shared
-register authority becomes uncertain. That mode passed without repeating the
-successful startup or partial-write cases.
+register authority becomes uncertain.
 
 The [CMake fragment](../cmake/dma-startup.cmake) is included by the central build.
 The integrated `dma-startup-model` target compiles and links; component emulator
 results are reused after matching source and generated-port identities.
-Integration records are in `hardware-integration-20261016d`.
-Raw logs, commands, artifact identity, and input
-hashes are in `~/.cache/sunstoneos/evidence/dma-startup-20261016/`.
-The final observer/refusal check has an archived executable and hash. The earlier
-success and partial-write checks retain logs and source snapshots; their original
-executable was replaced by the targeted rebuild before its hash was recorded.
-The earlier DMA transfer, cache/memory admission, I2S capture, clock, and lock
-evidence remains applicable to unchanged lower-layer behavior. Those suites
-were not repeated. Physical controller handoff, counter synchronization, bus-stall
+Raw logs, commands, artifact identity, and input hashes are in
+`~/.cache/sunstoneos/evidence/dma-startup-20261016/`; integration records are in
+`hardware-integration-20261016d`. Physical controller handoff, counter synchronization, bus-stall
 recovery, transfer completion, and microphone capture remain unqualified here.
+
+The recorded results of the removed host checks are in [the evidence record](evidence/dma-startup.jsonl).

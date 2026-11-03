@@ -1,243 +1,70 @@
 # Partitioned scheduler integration
 
-**Status: complete for this stream. The partitioned fork is the default kernel in SMP images.** `-DSUNSTONE_PARTITIONED_SCHEDULER=OFF` builds the global FIFO-lock kernel as a control. The design is [the scheduler design](../designs/scheduler-partitioned.md); hardware values the interrupt and mask paths assert (GIC priority views, routes, CPU identity) are in [the A733 hardware facts](../hardware/a733-facts.md). Earlier status is in [the history](../history/status-scheduler-20261101.md).
+**Status: implemented.**
 
-**Software evidence:** host, emulator, source. **Board evidence:** CPU-return images on port 3-3 running the recorded mimus recognition with the OS services and drivers linked; every run below returned with exact output.
+The partitioned fork is the default kernel in SMP images, and `-DSUNSTONE_PARTITIONED_SCHEDULER=OFF` builds the global FIFO-lock kernel as a control. The design is [the scheduler design](../designs/scheduler-partitioned.md); the priority map and tick are in [the scheduler timekeeping design](../designs/scheduler-realtime.md); hardware values that the interrupt and mask paths assert (GIC priority views, routes, CPU identity) are in [the A733 hardware facts](../hardware/a733-facts.md). The lock status is in [FIFO kernel locks](scheduler-locks.md), the timing budgets in [latency](latency.md) and the topology queries in [CPU topology](cpu-topology.md).
 
-## Result against the robot targets
+**Software evidence:** host, emulator, source.
 
-The robot's hard real-time work runs in interrupt handlers above the kernel API mask (the control path); its fusion and logic run as tasks woken by interrupts (the task path). Targets: wake latency at most 10 us, jitter at most 5% of the period, no missed period, model within 2% of its run alone. All figures are maxima over the periods named, in microseconds, from board soaks of 25 s under the full mimus load; the 99.99th percentile is a histogram bin's upper edge.
+**Board-qualified scope:** CPU-return images on port 3-3 run the recorded mimus recognition (eight workers, engine `bcaf39ff5`, output exact) with the OS services and drivers linked. The fork, the control interrupts above the kernel API mask (1, 2, 4, 8 and 10 kHz, one rate per core), the unmasked task-lock wait and idle pull return normally with exact output in 25 s soaks and single runs. The control path meets the 10 microsecond wake target at 10 kHz over 1 254 587 periods (maximum 3.6, 99.99th percentile 3.0 microseconds); the task path does not (maximum 23.5 to 31.5 microseconds at 1, 2 and 4 kHz). Figures are maxima of finite runs; they establish no worst-case bound, sustained operation, power behavior, heterogeneous placement or tickless timing.
 
-| Target | Control path (above the API mask) | Task path (woken task) |
-| --- | --- | --- |
-| Wake latency at most 10 us | Met: maximum 3.6, 99.99th percentile 3.0 at 10 kHz over 1 254 587 periods (fork, five soaks after the exit change) | Not met: maximum 23.5 to 31.5, 99.99th percentile 19.7 to 24.5 at 1, 2 and 4 kHz over 125 000 to 504 000 periods per rate; with per-object locks the same (see the next section) |
-| Jitter at most 5% of the period | Met at 10 kHz: maximum 3.4 against 5 | Met at 1 kHz (maximum 18.5 against 50) and 2 kHz (20.9 against 25); not met at 4 kHz (28.3 maximum, 21.8 at the 99.99th percentile, against 12.5) |
-| No missed period | Met: none in any soak | Met: none in any soak |
-| Model within 2% | Met: the interrupts cost 0.02 to 0.06 percent of recognition time per kHz | Same |
+## Capabilities
 
-The control path has been measured with long runs at 10 kHz only; at 1 to 8 kHz the short runs (200 to 2000 periods) show 0.5 to 6.1 us. The task path is the open target (backlog item 1).
+| Capability | Status | Key figure | Evidence and design |
+| --- | --- | --- | --- |
+| Owner scheduler: per-core queues, remote wake, notifications, migration, descriptors | qualified on the board | Exact recognition in all soaks; no stop in 16 soaks after the exit fix | `scheduler-owner-exit-guard-validation`; [design](../designs/scheduler-partitioned.md) |
+| Control path above the API mask | qualified on the board | Wake latency maximum 3.6 µs, jitter maximum 3.4 µs at 10 kHz | `scheduler-owner-exit-guard-validation`, `scheduler-robot-target-results` |
+| Task path (woken task) wake latency | qualified on the board; target not met | Maximum 23.5 to 31.5 µs, p99.99 19.7 to 24.5 µs | `scheduler-long-runs-kernel-verdict`, `scheduler-task-path-wake-tail` |
+| Model cost of the interrupts | qualified on the board | 0.02 to 0.06 percent of recognition time per kHz | `scheduler-robot-target-results` |
+| Owner exit work under the API mask, exit guard | qualified on the board | 3.6 µs control maximum; QEMU storm case 18 of 18 passes | `scheduler-owner-exit-guard-validation`, `scheduler-partitioned-storm-qemu` |
+| Unmasked task-lock wait (`SUNSTONE_LOCK_PREWAIT`, off by default) | qualified on the board | Long-span time halved; recognition +0.14% (stock), +0.97% (fork) | `1793603800991531488-e4485ccd`, `1793603872067351594-076593c9` |
+| Idle pull | qualified on the board for activity only | 3939 to 6722 pulls per 25 s; a missed pull is unmeasurable | `1793617020998598953-a6ecdfc1` |
+| Notification from the handler without the mask round trip, event-list race fix | qualified on the board | 4 kHz wakes of 10 µs or more fall from 1.43% to 0.17% | `scheduler-task-path-wake-tail` |
+| Per-object locks for queues, event groups and stream buffers (the only scheme) | qualified on the board | Six soaks of the merged kernel returned exact output; the task path is unchanged within the run-to-run spread; independent objects do not wait for each other (`objects` emulator case) | `1793685079986070508-ab781052`, `1793684142662104594-42dca3b9`; [design](../designs/scheduler-partitioned.md#object-locks-queues-event-groups-and-stream-buffers-lock-their-own-object) |
+| Wake and publication models | host-tested | Finite abstractions | [design](../designs/scheduler-partitioned.md#validation-exercises-ownership-transitions-and-hardware-completion) |
+| One-shot timers, capacity hints, topology-driven placement, EDF/CBS | open | None | [design](../designs/scheduler-partitioned.md#open-work) |
 
-Kernel choice. Pooled over five soaks per kernel (fork before the exit change, stock unchanged), the stock kernel's task path reached 40.8 us at 1 kHz and 41.8 us at 2 kHz against the fork's 23.5 and 25.3, and met the jitter bound at 1 kHz only; its control path reached 15.1 us (jitter 14.8) at 10 kHz against 12.8 (12.5) for the fork then, and 3.6 (3.4) after the exit change. Recognition time: stock 110.853 ms, fork 110.394 ms over the soak; without interrupts 109.975 and 110.023 ms. The fork is the default.
+## Known limits
 
-Model cost of the interrupts, as a share of recognition time per kHz of interrupt rate: fork 0.020 (17 kHz of control and task interrupts cost 0.34%), stock 0.047 (0.80%); with 25 kHz of each path on five cores, +2.73% on the fork and +4.55% on stock, 0.055 and 0.091 per kHz, about 0.5 and 0.9 us of recognition time per interrupt. A robot should budget 0.02 to 0.1 percent of model throughput per kHz, spread over the cores that take the interrupts.
-
-Idle wake cost on the control core. The idle task is `dsb sy; wfi` and nothing else (`a733_cpu_idle`); there is no retention or clock-gating step. On the fork, 170 000 wake-ups per soak on core 4 took a median of 0.33 us from interrupt to handler, 0.5 to 0.7 us at the 99th percentile, 3.2 us at the 99.99th and at most 3.6 us, so the control core can stay in plain `wfi`. The stock kernel's `wfi` wake tail reached 10.9 us, because its interrupts waited behind `PSTATE.I` held by its yield handler.
-
-## The task path's time is in the wake path, not in lock waits
-
-Split of each task-path wake at the handler (`SUNSTONE_CONTROL_IRQ` images; entry delay is the handler start minus the deadline, gap is the task start minus the handler start). Two unmodified-fork soaks pooled, microseconds: entry delay p99.99 6.3 / 8.3 / 9.2 and maximum 10.0 / 8.8 / 11.3 at 1 / 2 / 4 kHz; gap median 4.8 / 4.2 / 3.7, p99.99 21.3 / 19.0 / 24.2, maximum 22.7 / 24.7 / 25.2. The gap carries the tail. Phase timers show the wake path (notification 1 us, interrupt-exit owner work 1.6 to 2 us, task switch 1.4 us on average) and its tail events (control drains and idle-pull transfers of 5 to 17 us, task switches to 11 us); none of them waits for a global lock. Per-object kernel locks (design: [object locks](../designs/scheduler-partitioned.md#object-locks-queues-event-groups-and-stream-buffers-lock-their-own-object)) leave the figures unchanged within the run-to-run spread: entry delay maxima 5.3 / 4.8 / 5.5 against 5.7 / 5.0 / 5.7, gap maxima 15.7 / 25.0 / 19.8 against 16.0 / 25.8 / 16.0. A prefetch of the woken task's lines with idle pull deferred past a pending switch changed nothing and was removed. The 10 us target cannot be reached by locking changes; the wake path itself must shorten. The object locks are kept: operations on independent objects no longer wait for each other (the `objects` emulator case fails on the global locks and passes on object locks) and the event-list insertion race is closed.
-
-Present result of the task-path work, in five points.
-
-1. Notification change (kept). `ssKernelNotify` no longer raises and lowers the priority mask when it runs in an exception with `PSTATE.I` already set, which removes about four data and four instruction barriers per wake. Five soaks against three unmodified-fork soaks, pooled, task latency at 4 kHz: 99th percentile 11.5 to 7.5 us, 99.9th 19.8 to 11.5 us, wakes of 10 us or more 1.43% to 0.17% (989 to 2071 per soak before, 116 to 246 after). The 99.99th percentile (26.3 to 22.8 us) and the maximum (31.0 to 26.5 us) barely move, and the 1 and 2 kHz tails are unchanged. One qualification: the five "after" soaks were measured on images with the per-object locks (point 2, `work/sched-tasklock-1102`), and the three "before" soaks on images with the global locks. The tree that carries this document has the notification change on the global locks, which no soak set has measured. Two phase-timed single soaks showed no difference between the two lock schemes, so the improvement is attributed to the notification change, but no soak set isolates it; a five-soak set of the global-lock images with the notification change would.
-2. Per-object locks (measured negative result for the task path). Queues, event groups and stream buffers lock their own hashed slot instead of the two global locks. A host check proves unrelated objects no longer wait for each other. On the board the global locks serialized independent queues heavily (99% of waits over 5 us were charged to a holder working on a different object), but removing that serialization did not change the task path's entry delay or gap. The code is only on branch `work/sched-tasklock-1102`; this tree keeps the global locks. Its value would be the closed race in point 3 (which the global-lock fix below also closes) and lower lock contention for the recognition workers, not task-path latency.
-3. Event-list race (fixed, commit `21614e95` on `work/event-list-race-1103`). A blocking task inserted itself into an event list under the task lock alone, while the owner timing out another waiter of the same list removed its item under the interrupt lock alone. The insertion now holds the interrupt lock too. The race exists on the global-lock code; a linked-kernel host case fails without the fix.
-4. The 10 us task-path target is not met: the 99.99th percentile is 19 to 26 us at 1, 2 and 4 kHz after the change, and the maximum 25 to 27 us. The measured cause is not lock waits. Entry delay is 5 to 11 us at most. The gap from handler to task start carries the tail: control drains and idle-pull transfers of 5 to 17 us (about 600 drains over 5 us per soak on cores 1 and 2), and task switches of up to 11 us. A cap of one idle-pull transfer per pass shortened the pull phase but not the drains, and is an off-by-default option. Locking changes alone cannot meet the target. Not done: a breakdown of one long drain into its records, which was the next step planned.
-5. Task path on A76 cores (a single soak, entry `8d56d9aa`; not repeated). Core 7 at 4 kHz reached 8.8 us at most and core 6 at 1 kHz 12.3 us, against 14.8 to 20.6 us on the A55 cores 1 to 3. Slow wakes on the A55 cores refill two to three times as many L2 lines as fast ones. This suggests that running the real-time tasks on the A76 cores may help, but one soak does not establish it, and the recognition time with the task path on those cores (the 2% rule) was not measured.
-
-## Intervals with PSTATE.I set on the control core
-
-Only `PSTATE.I` holds off an interrupt above the API mask; kernel spans do not. Inventory of the fork's port, in instructions:
-
-| Interval | Length | Status |
-| --- | --- | --- |
-| Interrupt entry to the C handler | 64 (33 register stores) | Needed: saves the frame |
-| Interrupt exit after the handler (`DAIFSET`, `DSB SY`, EOI, restore, `ERET`) | about 70, one `DSB SY` | Needed |
-| Owner work at interrupt exit (`ssKernelService`) | C, up to 11 us on core 4, 300 to 670 exits per soak over 5 us | Fixed: runs under the API mask with `PSTATE.I` clear (design: the exit work runs under the API mask) |
-| Yield supervisor call: save, `ssKernelOwnerYieldTail`, `vTaskSwitchContext`, restore | 187 in the handler; the tail takes at most 3.7 us (5.0 us once) | Open (backlog) |
-| Mask and unmask supervisor calls | 9 to 25 each, two `DSB SY` and two `ISB` | Open (backlog) |
-| `uxPortSetInterruptMaskFromISR` and `vPortClearInterruptMaskFromISR` | seven instructions each, two `DSB SY`; `PSTATE.I` is set between the first `DAIFSET` and the `DAIFCLR` | Open (backlog) |
-
-After the exit change the largest control latency per soak is 3.3 to 3.7 us, from the compute kernel's own memory stalls, so the open intervals do not reach the target on this load.
-
-## Open defects and limits
-
-- **Idle pull is on in the default fork** and every fork number here was measured with it on; only the linked test fixtures turn it off (`SS_KERNEL_TEST_NO_IDLE_PULL`). Its defect is a missed pull, a performance defect: a ready migratable task can wait behind a running task on its own core while an allowed core idles. It cannot lose or duplicate a task (a move is the acknowledged transfer of set-affinity, covered by the mixed-affinity stress and eight-core soak), cannot move a pinned task or break an affinity mask (a candidate is taken only when its mask holds the idle target) and cannot invert priority (only waiting tasks are candidates). The eight-core check's stranding phase fails on the wall clock about 1 run in 50 at host load 30 (`scheduler-partitioned-qemu.c:386`) and in none of 43 runs on the instruction counter. On the board three soaks show 3939 to 6722 pulls per 25 s (`1793617020998598953-a6ecdfc1`, `1793617131735748473-bef01b84`, `1793617277487733781-666ca5a4`); a miss cannot be seen there, and recognition time is unchanged. The cost of a miss is unmeasured.
-- **Panic fixed.** One fork soak panicked before the fix (`1793608348858278119-8f8e4282`): the patched interrupt exit ran owner work inside masked kernel sections after a control interrupt. Reproduced in QEMU, fixed, and sixteen clean soaks follow (item 0d below).
-- **Known limits of the unmasked task-lock wait** (`runtime/lock_prewait.c`, off by default): an EL0 task cannot read the mask, so it infers an open mask from a zero critical nesting count; a bare `portSET_INTERRUPT_MASK` outside a critical section can wait with the mask raised for at most 100 us; the limit is checked only when an event wakes the core, so a wait behind a long holder can last as long as the holder (914 us once).
+- **Idle pull is on in the default fork** and every fork figure was measured with it on. A missed pull is a performance defect only: it cannot lose or duplicate a task, move a pinned task or invert priority. The cost of a miss is unmeasured. The eight-core check's stranding phase fails on the wall clock about 1 run in 50 at host load 30 and in none of 43 runs on the instruction counter.
+- **Unmasked task-lock wait.** An EL0 task cannot read the mask, so the wait infers an open mask from a zero critical nesting count. A bare `portSET_INTERRUPT_MASK` outside a critical section can wait with the mask raised for at most 100 µs. The limit is checked only when an event wakes the core, so a wait behind a long holder can last as long as the holder (914 µs once).
+- **Panic fixed.** One fork soak panicked before the exit guard existed (`1793608348858278119-8f8e4282`). A QEMU case reproduces it, and the fixed image ran 16 clean soaks. Board hours with control interrupts stay a watched item.
 - Heterogeneous placement and tickless timing have no physical qualification.
 
-0d. Panic confirmation (entries). Cause and design: [the design](../designs/scheduler-partitioned.md#the-owner-exit-work-must-not-run-after-an-interrupt-above-the-api-mask). A QEMU case reproduces it (4 of 4 failing before, 18 of 18 passing after). Board runs on the fixed image, all returned with exact output and no stop: five soaks (`1793612412507235041-e4633398`, `1793612556768525405-1c62fd5e`, `1793612765449252497-9a99b817`, `1793612995483833917-501eefc5`, `1793613102942277574-dfc0978e`), two with the list integrity bytes (`1793613285642527139-50993bfe`, `1793613482426622002-7cef3e33`; `1793613226184327517-be4330b8` was a host error when the board's USB node vanished), four after the exit change (`1793615594715919660-cd3ee23f`, `1793615747063569155-173a0d54`, `1793615873648308943-3eabd2f7`, `1793616048963593965-e8fc961d`; `1793616227806453788-839592bb` was a host error of the same kind) and five with the switch-request counters (`1793616388485243353-0fb2da02`, `1793616500737293739-0207eacf`, `1793616666248085091-827a73a9`, `1793616794846609508-07db9f51`, `1793616907929869657-01e648b2`).
+## Per-object locks
 
-## Backlog
+2. Per-object locks (measured negative result for the task path). Queues, event groups and stream buffers lock their own hashed slot instead of the two global locks. A host check proves unrelated objects no longer wait for each other. On the board the global locks serialized independent queues heavily (99% of waits over 5 us were charged to a holder working on a different object), but removing that serialization did not change the task path's entry delay or gap. The code is only on branch `work/sched-tasklock-1102`; this tree keeps the global locks. Its value would be the closed race in point 3 (which the global-lock fix below also closes) and lower lock contention for the recognition workers, not task-path latency.
 
-1. Task-path wake latency to the 10 us target (about 20 to 26 us at the 99.99th percentile after the notification change). The gap from handler to task start carries the tail; shorten the wake path (fewer supervisor calls and barriers, no owner pass before the switch, bounded idle-pull and control-drain work per exit).
-2. Per-object locking: done for queues, event groups and stream buffers; no effect on the task path.
-3. Shorter lock holds and prefetch: the prefetch of the wake path's lines was tried and gave nothing.
-4. The abortable queue lock: a waiter that can take its place in line with the mask open.
-5. Tickless idle on the stock-derived kernel (work on `work/tickless-idle-1101`; changes the protected `patches/freertos-smp-*.patch`): measure control-period jitter with and without it.
-6. The 11 us owner-work time at interrupt exit on the control core. It no longer holds off the control interrupt, but it still delays ordinary interrupts and the task-path wake; bound the work per exit.
-7. The stock kernel's yield handler holds `PSTATE.I` through its context switch (the source of its 13 to 16 us control tail); and the fork's remaining intervals in the inventory above (yield supervisor call, mask supervisor calls, the FromISR mask pair).
-8. The soak sweep that includes the earlier 95 to 206 us stock spans.
-9. Idle pull: fix the missed pull or measure it on against off on the board.
-10. Control-path long runs at 1 to 8 kHz (10^6 periods each); only 10 kHz has them.
+## Open work
 
-## Masked-span sweep under the mimus load
-
-One board run per kernel on port 3-3 (queue entries `1793601405518603317-ea30c713` stock and `1793601476379926752-0c3dd3cd` fork), the mimus OS image with the OS services and drivers linked, engine bcaf39ff5, eight workers, the three recorded inputs, output exact. The recorder lists every distinct (open call, close call) pair of masked spans on each core; the tables keep pairs whose longest span exceeds 5 microseconds. Sites are return addresses shown as function and offset. The count is spans over all cores in the recognition, and the p99.99 is the upper edge of the histogram bin that holds that rank (the maximum when a pair has fewer than 10^4 spans on a core, as most do). No table overflowed. The design section is [the span sweep](../designs/scheduler-partitioned.md#the-span-sweep-lists-every-masked-pair-before-any-span-is-fixed).
-
-Stock kernel, 17 pairs above 5 microseconds (68 distinct pairs in all):
-
-| max us | p99.99 us | count | open site | close site | max by core |
-|---|---|---|---|---|---|
-| 31 | 31 | 18148 | xTaskGetSchedulerState+0x1c | xTaskGetSchedulerState+0x34 | 0:17 1:18 2:22 3:31 4:30 5:25 6:28 7:9 |
-| 30 | 30 | 2823 | vTaskYieldWithinAPI+0x10 | FreeRTOS_Yield+0x1fc | 0:24 1:30 2:24 3:23 4:14 5:9 6:9 7:11 |
-| 30 | 30 | 7195 | xQueueGenericSend+0x60 | xQueueGenericSend+0x160 | 0:14 1:15 2:17 3:23 4:23 5:30 6:18 7:8 |
-| 29 | 29 | 2415 | xQueueReceive+0x44 | xQueueReceive+0xcc | 0:13 1:18 2:24 3:29 4:28 5:19 6:11 |
-| 29 | 29 | 2885 | vTaskSuspendAll+0x20 | xQueueReceive+0xd0 | 0:20 1:18 2:22 3:21 4:29 5:22 6:12 7:7 |
-| 28 | 28 | 2431 | xQueueReceive+0x44 | xQueueReceive+0xa0 | 6:28 |
-| 28 | 28 | 1392 | board_service_progress+0x3c | _ZN12_GLOBAL__N_110yield_hookEv+0xc | 6:28 |
-| 26 | 26 | 250 | vTaskSuspendAll+0x20 | vTaskDelay+0x18 | 0:26 2:9 3:14 4:22 5:15 |
-| 26 | 26 | 250 | vTaskDelay+0x4c | FreeRTOS_Yield+0x1fc | 0:16 2:8 3:19 4:17 5:26 |
-| 23 | 23 | 1 | xTaskGetSchedulerState+0x1c | xTaskGetSchedulerState+0x1c | 4:23 |
-| 20 | 20 | 1591 | xQueueReceive+0x1ac | xQueueReceive+0xa0 | 2:7 3:14 4:18 5:20 6:12 |
-| 20 | 20 | 238 | os_thermal_task+0x544 | os_thermal_task+0x60c | 0:13 2:15 3:16 4:9 5:20 |
-| 19 | 19 | 20 | xQueueGetMutexHolder+0x18 | xQueueGetMutexHolder+0x30 | 4:13 5:19 |
-| 16 | 16 | 470 | board_service_progress+0x3c | _ZN12_GLOBAL__N_18dispatchEmPFvPvmmiES0_b+0x1f0 | 6:16 |
-| 13 | 13 | 2 | xQueueSemaphoreTake+0x3c | xQueueSemaphoreTake+0x7c | 5:13 |
-| 10 | 10 | 470 | board_service_progress+0x3c | _ZN12_GLOBAL__N_18dispatchEmPFvPvmmiES0_b+0x1f8 | 6:10 |
-| 6 | 6 | 470 | board_service_progress+0x3c | _ZN12_GLOBAL__N_18dispatchEmPFvPvmmiES0_b+0x64 | 6:6 |
-
-Partitioned fork, 4 pairs above 5 microseconds:
-
-| max us | p99.99 us | count | open site | close site | max by core |
-|---|---|---|---|---|---|
-| 33 | 33 | 17362 | ssKernelObjectEnter+0x14 | ssKernelObjectExit+0xd8 | 0:17 1:15 2:22 3:27 4:33 5:30 6:32 7:11 |
-| 33 | 33 | 3077 | vTaskEnterCritical+0x20 | ssKernelObjectExit+0xd8 | 3:17 6:33 |
-| 27 | 27 | 2459 | ssKernelObjectSuspend+0x10 | xQueueReceive+0xd0 | 0:18 1:15 2:20 3:27 4:26 5:23 6:8 |
-| 6 | 6 | 826 | xTaskGetSchedulerState+0x24 | xTaskGetSchedulerState+0x58 | 0:6 |
-
-Findings. Every pair on both kernels exceeds the 10 microsecond wake target and the 5 microsecond defect line, and the longest are 31 microseconds (stock) and 33 microseconds (fork). The earlier 95 to 206 microsecond stock spans did not recur under the mimus load; they came from the eight-core soak and are not in this table, so the soak needs its own sweep before those spans are called fixed. The stock kernel's longest span is the scheduler-state critical section, spread over every core, and the queue send and receive paths; the fork's are the object enter and exit pair and the critical section that ends in the object exit. A span is not a function: the same function appears as open and close sites on several rows, so a fix must change the memory touched inside the masked region, not one function.
-
-### Lock wait inside each span
-
-Second pair of runs on the same image and load (queue entries `1793601953161313034-b1ecfb62` stock and `1793602023862614320-8f9bd37f` fork, output exact). The recorder now adds the time spent acquiring a kernel lock after the mask rose. Columns: the longest span, the lock wait inside that span, the longest lock wait in any span, the number of spans above 5 us, and lock wait as a share of the total length of the spans above 5 us.
-
-Stock kernel:
-
-| max us | wait in longest us | max wait us | spans>5us | wait share of spans>5us | open | close |
-|---|---|---|---|---|---|---|
-| 30 | 27 | 27 | 1362 | 82% | vTaskYieldWithinAPI+0x10 | FreeRTOS_Yield+0x1fc |
-| 30 | 28 | 29 | 3410 | 89% | xTaskGetSchedulerState+0x1c | xTaskGetSchedulerState+0x34 |
-| 29 | 28 | 28 | 1221 | 89% | xQueueReceive+0x44 | xQueueReceive+0xcc |
-| 29 | 28 | 28 | 1015 | 92% | vTaskSuspendAll+0x20 | xQueueReceive+0xd0 |
-| 29 | 28 | 28 | 978 | 93% | xQueueReceive+0x44 | xQueueReceive+0xa0 |
-| 29 | 27 | 27 | 44 | 92% | board_service_progress+0x3c | _ZN12_GLOBAL__N_110yield_hookEv+0xc |
-| 27 | 26 | 26 | 1450 | 88% | xQueueGenericSend+0x60 | xQueueGenericSend+0x160 |
-| 25 | 24 | 24 | 25 | 92% | vTaskSuspendAll+0x20 | vTaskDelay+0x18 |
-| 24 | 23 | 23 | 227 | 89% | xQueueReceive+0x1ac | xQueueReceive+0xa0 |
-| 24 | 22 | 22 | 31 | 87% | os_thermal_task+0x544 | os_thermal_task+0x60c |
-| 17 | 15 | 15 | 20 | 84% | vTaskDelay+0x4c | FreeRTOS_Yield+0x1fc |
-| 17 | 15 | 15 | 34 | 88% | board_service_progress+0x3c | _ZN12_GLOBAL__N_18dispatchEmPFvPvmmiES0_b+0x1f0 |
-| 16 | 15 | 15 | 1 | 94% | xQueueReceive+0x1ac | xQueueReceive+0x1ac |
-| 13 | 11 | 11 | 3 | 83% | xQueueGetMutexHolder+0x18 | xQueueGetMutexHolder+0x30 |
-| 11 | 10 | 10 | 99 | 87% | board_service_progress+0x3c | _ZN12_GLOBAL__N_18dispatchEmPFvPvmmiES0_b+0x1f8 |
-| 8 | 7 | 7 | 2 | 87% | board_service_progress+0x3c | _ZN12_GLOBAL__N_18dispatchEmPFvPvmmiES0_b+0x64 |
-| 7 | 6 | 6 | 1 | 86% | xQueueSemaphoreTake+0x3c | xQueueSemaphoreTake+0x7c |
-
-Partitioned fork:
-
-| max us | wait in longest us | max wait us | spans>5us | wait share of spans>5us | open | close |
-|---|---|---|---|---|---|---|
-| 34 | 33 | 33 | 1225 | 96% | ssKernelObjectSuspend+0x10 | xQueueReceive+0xd0 |
-| 34 | 32 | 32 | 3714 | 88% | ssKernelObjectEnter+0x14 | ssKernelObjectExit+0xd8 |
-| 34 | 32 | 32 | 237 | 85% | vTaskEnterCritical+0x20 | ssKernelObjectExit+0xd8 |
-
-Result. The hypothesis holds on both kernels: lock wait is 82 to 96% of every span above 5 us, and in the longest span of each pair all but 1 to 3 us is wait. The held part is 1 to 3 us for the longest spans. The prediction's exception was wrong: the core 6 service and dispatch pairs wait for the lock as much as the rest (87 to 92%). The memory-work account of the earlier rounds explains the length of the holder's own span, which each waiter then adds to its wait, so shortening held work still shortens waits, but the first fix is to stop waiting with the mask raised. The fix goes into the lock acquisition in the port's task lock and interrupt lock, which sits in the protected `patches/freertos-smp-*.patch` and the fork's object enter; the protected diff goes to the coordinator.
-
-### Unmasked wait for the task lock
-
-`runtime/lock_prewait.c` (`SUNSTONE_LOCK_PREWAIT`, design: [waiting for the task lock with the mask open](../designs/scheduler-partitioned.md#waiting-for-the-task-lock-with-the-mask-open)) makes kernel entry points wait, mask open, until at most one core holds or waits for the task lock, then mask and queue as before. It needs no change to a protected patch. Same image and load as the sweep above; queue entries `1793603800991531488-e4485ccd` (stock) and `1793603872067351594-076593c9` (fork), output exact.
-
-Three board attempts preceded it. The first never waited because the open mask reads back as 0xf0, not the 0xff written. The second waited for under 1% of entries because nearly all kernel callers are EL0 tasks, which cannot read the mask. A third image deadlocked on the stock kernel (watchdog reset): a task that had suspended the scheduler held the task lock with the mask open and waited for its own hold, which the guard now skips.
-
-| | stock before | stock after | fork before | fork after |
-| --- | --- | --- | --- | --- |
-| Spans above 5 us | 9923 | 5206 | 5176 | 3291 |
-| Lock wait inside those spans, all cores | 99.7 ms | 48.8 ms | 57.4 ms | 25.6 ms |
-| Longest span | 30 us | 30 us | 35 us | 30 us |
-| Longest masked lock wait per core 0 to 7 (us) | 22 21 22 28 28 29 29 12 | 26 27 25 27 28 29 29 11 | 25 15 27 26 33 32 32 6 | 15 18 12 19 20 19 19 7 |
-| Longest unmasked wait (us) | 0 | 82 | 0 | 914 on core 3, 77 on core 0, at most 19 elsewhere |
-| Recognition time (ms) | 136.388 | 136.574 (+0.14%) | 127.188 | 128.427 (+0.97%) |
-
-The wait is no more than 100 us: it ended by the limit 0 times on the fork and 4 times on the stock kernel. The 914 us on the fork is one wait that slept in `WFE` while another core held the lock through a long section; it waited unmasked and no later than the holder, but the limit is checked only when an event wakes the core, so it is not enforced there.
-
-Result. The wait halves the time spent in long masked spans on both kernels and keeps the recognition within 2% of the image without it, but it does not reach the 1 to 3 us goal: the longest spans and the longest masked waits are unchanged on the stock kernel and 13 to 14 us lower on the fork. Cores that see the lock nearly free queue together, so a burst of eight still queues seven holds. A waiter cannot take a ticket with the mask open: an interrupt that switches tasks would leave the new task queued behind a ticket held by a descheduled one.
-
-Convoy. The lock is the task lock (`xPortLocks[1]`), the same one every kernel call takes. Lock wait in the long spans by caller before and after (ms, all cores): stock `xTaskGetSchedulerState` 33.5 to 14.3, `xQueueReceive` 26.4 to 10.9, `xQueueGenericSend` 14.2 to 5.4, `vTaskYieldWithinAPI` 12.4 to 10.2, `vTaskSuspendAll` 10.9 to 6.5. Fork `ssKernelObjectEnter` 42.2 to 18.2, `ssKernelObjectSuspend` 13.2 to 6.0, `vTaskEnterCritical` 2.0 to 1.4. On the fork the contended object is the global task lock taken by every object enter and suspend, not a per-owner object. The next fixes are shorter holds (each hold is about 3.5 us of dependent DRAM refills) or less sharing: per-queue or per-owner locking in place of the task lock, and an abortable queue lock so a waiter can take its place in line with the mask open.
-
-## Robot table: control path and task path, same image and load
-
-One board run per kernel on port 3-3 (queue entries `1793605058169799359-f2420456` stock and `1793605129875013399-cf0da02e` fork), the mimus OS image with the control interrupts (`SUNSTONE_CONTROL_IRQ`), engine bcaf39ff5, eight workers under the recognition, output exact. On cores 1 to 5 the two paths run at the same time at 1, 2, 4, 8 and 10 kHz, one rate per core. Design: [control interrupts above the API mask](../designs/scheduler-partitioned.md#control-interrupts-above-the-api-mask-do-not-wait-for-kernel-spans). Latency is the handler or task start minus the programmed deadline; jitter is the error of the interval between starts against the periods that passed. Each cell is the maximum in microseconds; the 99.99th percentile equals the maximum because a core sees 200 to 2000 periods in the 0.2 s recognition, so it supports no tighter tail than that (the 10^6-period runs were not made). No sample was dropped, no sequence gap, no missed period in either path on either kernel.
-
-| Rate | Jitter bound (5%) | Control path latency stock / fork | Control path jitter stock / fork | Task path latency stock / fork | Task path jitter stock / fork |
-| --- | --- | --- | --- | --- | --- |
-| 1 kHz | 50 | 1.5 / 0.5 | 1.2 / 0.2 | 15.9 / 8.2 | 12.5 / 4.2 |
-| 2 kHz | 25 | 1.5 / 0.7 | 1.3 / 0.3 | 28.6 / 11.4 | 25.8 / 7.6 |
-| 4 kHz | 12.5 | 6.1 / 3.0 | 5.8 / 2.7 | 23.8 / 30.9 | 19.3 / 27.2 |
-| 8 kHz | 6.25 | 5.3 / 2.5 | 5.0 / 2.2 | 28.9 / 17.2 | 25.5 / 13.7 |
-| 10 kHz | 5 | 3.5 / 2.5 | 3.2 / 2.2 | 32.0 / 12.0 | 26.5 / 8.4 |
-
-| | Stock | Fork |
-| --- | --- | --- |
-| Recognition time, image with control interrupts | 114.838 ms | 113.398 ms |
-| Recognition time, plain image (no recorder, no interrupts) | 109.629 ms | 110.178 ms (+0.50%) |
-| Longest masked span (sweep image, with the recorder) | 30 us | 35 us (30 us with the unmasked task-lock wait) |
-
-Result. The control path meets the 10 us wake target and the 5% jitter bound at every rate on both kernels, including 10 kHz (3.2 us stock, 2.2 us fork against 5 us). The task path meets neither on either kernel: wake latency 8 to 32 us, and jitter 4 to 27 us against the bound, which at 4 kHz (12.5 us) is missed by both (19.3 and 27.2 us). The task path's latency tracks the longest masked span and the task-lock convoy; the control path does not. The fork's task path is better at four of five rates and worse at 4 kHz, and neither is near the target, so the fork does not change which path serves a 4 kHz loop: the control path does.
-
-Mimus. The instrumented sweep images showed the fork 6.8% faster (127.2 against 136.4 ms); the plain images show the fork 0.50% slower (110.178 against 109.629 ms), as in the speed stream. The span recorder explains the difference: it adds 26 ms to the stock recognition and 17 ms to the fork's. The control interrupts add 4.7 ms (4.4%) to stock and 3.2 ms (2.9%) to the fork while five handlers run at up to 10 kHz.
-
-## Long runs, verdict inputs
-
-Five boots per kernel on port 3-3, each a 25 s soak of the recognition (225 to 226 recognitions) with the interrupts running throughout: the task path alone at 1, 2 and 4 kHz on cores 1 to 3 and the control path alone at 10 kHz on core 4. Stock is `sw-off` images of the second long set; the fork is the fixed image (the interrupt-exit guard of [the design](../designs/scheduler-partitioned.md#the-owner-exit-work-must-not-run-after-an-interrupt-above-the-api-mask)); runs on the earlier fork image are not pooled. Every run returned with exact output and no sample dropped, no sequence gap and no missed period. Pooled from the printed histograms (0.167 us bins; the p99.99 is a bin's upper edge); maxima in microseconds. One run on a fixed fork image with the list integrity bytes was a host error (the USB node of the board vanished), not a scheduler failure; the other two ran clean (`1793613285642527139-50993bfe`, `1793613482426622002-7cef3e33`).
-
-| Kernel | Path | Rate | Runs | Periods | Latency max | Latency p99.99 | Jitter max | Jitter p99.99 | Jitter bound (5%) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| stock | task | 1 kHz | 5 | 125 951 | 40.8 | 26.7 | 37.8 | 24.7 | 50 |
-| fork | task | 1 kHz | 5 | 125 550 | 23.5 | 22.0 | 18.5 | 16.8 | 50 |
-| stock | task | 2 kHz | 5 | 251 723 | 41.8 | 25.8 | 38.4 | 23.7 | 25 |
-| fork | task | 2 kHz | 5 | 251 855 | 25.3 | 19.7 | 20.9 | 16.8 | 25 |
-| stock | task | 4 kHz | 5 | 503 452 | 38.4 | 24.3 | 34.2 | 22.8 | 12.5 |
-| fork | task | 4 kHz | 5 | 503 711 | 31.5 | 24.5 | 28.3 | 21.8 | 12.5 |
-| stock | control | 10 kHz | 5 | 1 259 472 | 15.1 | 9.3 | 14.8 | 10.0 | 5 |
-| fork | control | 10 kHz | 5 | 1 254 602 | 12.8 | 6.2 | 12.5 | 7.2 | 5 |
-
-The pooled counts exceed 100 000 periods per task-path rate and 1.25 million at 10 kHz, so the 3 MiB heap dropped no sample (the heap peak in the output stays near 107 KB). The control path was measured at 10 kHz only in the long runs; at 1 to 8 kHz the short runs above (200 to 2000 periods) show 0.5 to 6.1 us.
-
-Recognition time over the soak: stock 110.853 ms, fork 110.394 ms (0.4% faster); the plain soak images without interrupts: stock 109.975 ms, fork 110.023 ms. The control and task interrupts of the long set (17 kHz in all) therefore cost 0.80% on stock and 0.34% on the fork, which is 0.047 and 0.020 percent of recognition time per kHz of interrupts. The both-paths image (25 kHz of each, five cores) costs +4.55% on stock (114.979 ms) and +2.73% on the fork (113.024 ms, run on the earlier fork image): 0.091 and 0.055 percent per kHz, or about 0.9 and 0.5 us of recognition time per interrupt. A robot budgets 0.05 to 0.1 percent of model throughput per kHz of interrupt rate, spread over the cores that take them.
-
-Targets. The wake latency of 10 us is met by neither task path on either kernel (p99.99 20 to 27 us). The jitter bound is met on the task path at 1 kHz by both and at 2 kHz by the fork alone (maximum 20.9 us against 25), and at 4 kHz by neither (21.8 against 12.5 us at p99.99). The control path meets the wake target at the 99.99th percentile on both (6.2 and 9.3 us) and misses it at the maximum on both (12.8 and 15.1 us over 1.25 million periods); at 10 kHz neither meets the 5 us jitter bound, the fork's p99.99 is 7.2 us and stock's 10.0 us.
-
-### The panic, after the fix
-
-The fixed fork image ran five clean soaks and two clean soaks with `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES` on (stack pattern checks were on). Earlier fork images ran 14 soaks with one panic. Seven clean board runs after a fix that a QEMU case reproduces deterministically (4 of 4 failing before, 18 of 18 passing after) is evidence, not proof; the fork's board hours with control interrupts stay a watched item.
-
-Owner-work counters on the board (fixed fork, two runs): drains from interrupt exit are 77 600 to 140 200 on cores 1, 2, 3, 5, 6 and 7, 119 700 on core 0 with 25 300 from the tick, and 317 700 on core 4, where 11 800 to 12 300 exits (about 4%) were skipped by the guard. Cores without a control interrupt skip none, so the guard leaves the owner work running after ordinary interrupts. The same holds in QEMU (232 to 444 drains per CPU from interrupt exit, none skipped, without the control interrupt).
-
-### Why the stock control path has a 15 us tail
-
-The recorder keeps the four largest latencies of the control core with the interrupted context (`ICC_PMR_EL1` open at 0xf0, running priority 0x40 in every case, critical nesting zero). Three stock runs, core 4: the largest, 15.8 us at 66.425 s, was taken at `vTaskDelay+0x80`, the instruction after the yield supervisor call (`svc #0x69`), with the task at EL0; 13.7, 12.8 and 12.6 us were taken at the same address, and 14.3, 13.6, 12.3 and 12.0 us in the second run likewise. The third run's four largest (13.7, 13.4, 12.4, 11.9 us) were taken at `prvPassiveIdleTask+0x14`, the instruction after `wfi`. So the tail is not a kernel span, which the control interrupt ignores: it is the time `DAIF.I` stayed set while the stock yield handler ran its context switch under the task and ISR locks (the convoy of the earlier sweep), and, on a core that was idle, the wake-up from `wfi`. The fork shows no such instance: its four largest per run are 3.5 to 5.1 us, all inside the user-mode compute kernel. The recorder cannot show what the supervisor handler waited for, so the lock wait inside the yield handler is inferred from the address and from the sweep, not observed.
-
-### Verdict by the rule
-
-1. Control path on both kernels: neither meets the maximum (12.8 and 15.1 us) nor the 10 kHz jitter bound; both meet the 99.99th-percentile wake target. Equal on this rule.
-2. Task path: the fork meets the jitter bound at 2 kHz and stock at 1 kHz only; neither meets the 10 us wake target. The fork is ahead.
-3. Model time: within 0.5% in both directions (fork 0.4% faster over the soak, 0.04% slower plain).
-
-The rule chose the fork, and it is the default.
+1. Task-path wake latency to the 10 µs target (99.99th percentile 19 to 26 µs after the notification change). The gap from handler to task start carries the tail; shorten the wake path (fewer supervisor calls and barriers, no owner pass before the switch, bounded idle-pull and control-drain work per exit).
+2. Measure one control drain broken into its records, and batch the per-record `dsb ishst; sev` pairs.
+3. Run five soaks of the global-lock images with the notification change to isolate its 4 kHz effect; repeat the A76 task-path soak and measure recognition time with the task path on those cores.
+4. Bound the owner work at interrupt exit (up to 11 µs on the control core); shorten the yield supervisor call, the mask supervisor calls and the FromISR mask pair.
+5. An abortable queue lock so a waiter takes its place in line with the mask open; tickless idle (`work/tickless-idle-1101`, changes the protected `patches/freertos-smp-*.patch`) with control-period jitter measured with and without it.
+6. Sweep the eight-core soak for masked spans; the earlier 95 to 206 µs stock spans did not recur under the mimus load.
+7. Idle pull: fix the missed pull or measure it on against off on the board.
+8. Control-path long runs (10^6 periods) at 1 to 8 kHz; only 10 kHz has them.
+9. Qualify heterogeneous placement and tickless timing.
 
 ## Evidence
 
-Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-scheduler-20261101.md).
+Board results are records in `docs/evidence/scheduler.jsonl` (runs and their summaries); host results and unrun predictions of the design are in `docs/evidence/scheduler-partitioned.jsonl` and `docs/evidence/scheduler-realtime.jsonl`. Earlier prose evidence is in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-89 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+107 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
+| `scheduler-long-runs-kernel-verdict` |  |  | `` | returned | passed |  |
+| `scheduler-masked-span-intervals-psw-i` |  |  | `` | returned | inconclusive |  |
+| `scheduler-owner-exit-guard-validation` |  |  | `` | returned | passed |  |
+| `scheduler-robot-target-results` |  |  | `` | returned | inconclusive |  |
+| `scheduler-stock-control-tail` |  |  | `` | returned | passed |  |
+| `scheduler-task-path-wake-tail` |  |  | `` | returned | failed |  |
 | `1793560470911857163-ce5f22bf` | 2026-11-01 | 3-3 | `478364d6e009` | result-mismatch | failed | run_total 16.523 s, task_lock_wait_max 122.917 us, loaded_wake_max 111.458 us |
 | `1793560934366050732-4e45b5ea` | 2026-11-01 | 3-3 | `21c8564d781a` | result-mismatch | failed | run_total 16.408 s, task_lock_wait_max 177.875 us, loaded_wake_max 133.333 us |
+| `1793561131232973768-80ec5a72` | 2026-11-01 | 3-3 | `fcd54263c3e0` | watchdog-reset | failed |  |
 | `1793561595474856811-579a99b6` | 2026-11-01 | 3-3 | `312b33297d79` | returned | passed | run_total 68.716 s, compute_time 334670 us, frames 90, samples 57440 |
 | `1793566204991504422-8a47d893` | 2026-11-01 | 3-3 | `49c60251609c` | result-mismatch | failed | run_total 16.587 s, loaded_wake_c6_p50 69.292 us, loaded_wake_c6_p99 159.958 us, loaded_wake_c6_max 159.167 us, task_lock_wait_c6_p50 10.625 us, task_lock_wait_c6_p99 111.958 us, task_lock_wait_c6_max 139.333 us, masked_c7_max 115.833 us |
 | `1793585573653883302-e2093283` | 2026-11-02 | 3-3 | `a8fcb1064226` | watchdog-reset | failed | run_total 66.115 s, launch_duration 52.5342 s |
@@ -317,6 +144,10 @@ Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`,
 | `1793669877242530330-39c2dcac` | 2026-11-03 | 3-3 | `422d047168aa` | returned | failed | run_total 280.539 s, gap_p50_1khz 6.5 us |
 | `1793669888246106384-74781dfd` | 2026-11-03 | 3-3 | `422d047168aa` | returned | failed | run_total 278.983 s, gap_p50_1khz 6.5 us |
 | `1793671006348692345-8b3ce66b` | 2026-11-03 | 3-3 | `e7a4f58229a1` | returned | passed | run_total 260.588 s, task_latency_max_4khz 31.1 us, recognition_mean 110.551 ms |
+| `1793671391990525254-df58070a` | 2026-11-03 | 3-3 | `90aa07324150` | returned | passed | waits_over_5us 300379 waits, waits_charged_to_other_object_share 99 percent |
+| `1793671424920136475-cbd24f77` | 2026-11-03 | 3-3 | `e7a4f58229a1` | returned | passed |  |
+| `1793671435684062826-73139482` | 2026-11-03 | 3-3 | `e7a4f58229a1` | returned | passed |  |
+| `1793671452362557846-e1dbbee1` | 2026-11-03 | 3-3 | `e7a4f58229a1` | returned | passed |  |
 | `1793672779737331795-9c485d61` | 2026-11-03 | 3-3 | `72b12109513e` | returned | passed | run_total 138.924 s, p99_4khz 7.67 us, wakes_ge10us_4khz 145 |
 | `1793672791833556437-3d0beaf0` | 2026-11-03 | 3-3 | `72b12109513e` | returned | passed | run_total 416.477 s, p99_4khz 7.67 us, wakes_ge10us_4khz 246 |
 | `1793674399585324316-78758903` | 2026-11-03 | 3-3 | `72b12109513e` | returned | passed | run_total 304.397 s, p99_4khz 7.67 us, wakes_ge10us_4khz 121 |
@@ -325,4 +156,11 @@ Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`,
 | `1793676328926858188-8d56d9aa` | 2026-11-03 | 3-3 | `0d5bdbfd73f1` | returned | inconclusive | run_total 96.879 s, core7_max_4khz 8.83 us, core6_max_1khz 12.29 us |
 | `1793676331839315084-eb658d1e` | 2026-11-03 | 3-3 | `5a3dfb486054` | returned | inconclusive | run_total 97.391 s, pull_over5us_core1 676, drains_over5us_core1 622 |
 | `1793676334897453864-1c03391a` | 2026-11-03 | 3-3 | `b172a440f124` | returned | failed | run_total 96.658 s, pull_over5us_core1 428, drains_over5us_core1 688 |
+| `1793684142662104594-42dca3b9` | 2026-11-03 | 3-3 | `aca28760e0e6` | returned | passed | run_total 219.069 s, run_total 219.069 s, p99_4khz 7.83 us, p999_4khz 10.5 us, max_4khz 14.88 us, wakes_ge10us_4khz 157, soak_mean 107.81 ms, control_max 3.458 us |
+| `1793684160697248601-2973f979` | 2026-11-03 | 3-3 | `aca28760e0e6` | returned | passed | run_total 196.081 s, run_total 196.081 s, p99_4khz 7.33 us, p999_4khz 20.5 us, max_4khz 26.29 us, wakes_ge10us_4khz 286, soak_mean 107.883 ms, control_max 3.166 us |
+| `1793684562050406573-f43d1754` | 2026-11-03 | 3-3 | `ae33b03334be` | returned | passed | run_total 250.752 s, run_total 250.752 s, p99_4khz 7.83 us, p999_4khz 10.83 us, max_4khz 16.33 us, wakes_ge10us_4khz 205, soak_mean 107.939 ms, control_max 3.416 us |
+| `1793685032694851617-d90ee02a` | 2026-11-03 | 3-1 | `ae33b03334be` | returned | passed | run_total 144.175 s, run_total 144.175 s, p99_4khz 8 us, p999_4khz 11.17 us, max_4khz 15.5 us, wakes_ge10us_4khz 239, soak_mean 107.864 ms, control_max 3.333 us |
+| `1793685044692933691-b170207f` | 2026-11-03 | 3-1 | `d6266b6d0843` | returned | passed | run_total 71.875 s, run_total 71.875 s, recognition_alone 106.997 ms |
+| `1793685079986070508-ab781052` | 2026-11-03 | 3-1 | `c73c4017ec3f` | returned | passed | run_total 122.634 s, run_total 122.634 s, p99_4khz 7.67 us, p999_4khz 10.17 us, max_4khz 15.33 us, wakes_ge10us_4khz 110, soak_mean 107.426 ms, control_max 3.25 us |
+| `1793685086096699705-1b726ad3` | 2026-11-03 | 3-1 | `c73c4017ec3f` | returned | passed | run_total 252.401 s, run_total 252.401 s, p99_4khz 7.67 us, p999_4khz 16.83 us, max_4khz 26.17 us, wakes_ge10us_4khz 224, soak_mean 107.691 ms, control_max 3.291 us |
 <!-- evidence-table:end -->

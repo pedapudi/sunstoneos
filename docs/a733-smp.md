@@ -290,74 +290,30 @@ failure, 3 means deadline expiry, and 4 means a scheduler diagnostic failure.
 Secondary faults also retain per-core continuation or diagnostic records.
 Their ELF symbol addresses appear in the image-check evidence.
 
-## Focused evidence preserves the executed inputs
+## The launcher check covers admission and refusal
 
-Run the separate checker after integrating the continuation dependency:
-
-```sh
-~/.cache/sunstoneos/venv/bin/python checks/a733-smp-image.py \
-  --freertos ~/.cache/sunstoneos/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2 \
-  --evidence /absolute/new/evidence-directory
-```
-
-The checker snapshots the repository dependencies and pinned FreeRTOS inputs,
-builds outside the repository, and refuses an existing evidence directory.
-It checks contract tampering, deadline refusal, watchdog-source refusal and
-per-core MMIO boundaries under AddressSanitizer and UndefinedBehaviorSanitizer.
-It inspects ELF segments and reserved symbols, then executes the linked scheduler
-interrupt calls for all eight destinations. Linked shared-lock checks cover primary
-and secondary completion, a missing peer and a held lock with deadline expiry.
-The instruction model does not reproduce physical inter-core contention.
-
-Reusable evidence is in
-`~/.cache/sunstoneos/evidence/a733-smp-image-20261016`.
-The initial configure needed the available Make generator and explicit linker
-propagation into compiler checks. Linking then required the runtime `memmove`,
-task-delete configuration and vector-table alias. Those failures and corrected
-commands remain in the evidence directory. The successful host admission result
-was reused throughout. The continuation's corrected EL3 reset constants required
-only its assembly object, build identity and final link to change.
-The image manifest records executed and final artifact identities separately.
-
-## Launcher and host evidence cover the new preparation protocol
-
-The launcher instruction checker executes the linked AArch32 bytes with modeled
-registers and counter reads. Its cases cover admission, contract mismatch,
-ignored register writes, counter rollback, overflow and elapsed-time refusal.
-The host checker uses a fake transport and a private SQLite queue to cover every
-request failure point, corrupt readback, changed claims and missing prerequisites.
-It verifies one execution request and an unobserved scheduler result after ROM
-observation. Neither checker discovers or opens a board.
+The launcher instruction check, `checks/a733-smp-launch.py`, executes the linked
+AArch32 bytes with modeled registers and counter reads. Its cases cover
+admission, contract mismatch, ignored register writes, counter rollback,
+overflow, elapsed-time refusal, caller-state restoration, ARM and Thumb returns,
+pre-mutation refusals, unsafe-context parking and the first-write boundary.
+`--focus-refusal` selects the refusal cases. The check never discovers or opens
+a board.
 
 ```sh
 ~/.cache/sunstoneos/venv/bin/python checks/a733-smp-launch.py \
   --bundle /absolute/prepared-directory --output /absolute/launcher-results.json
-python3 checks/a733-smp-host.py \
-  --bundle /absolute/prepared-directory --output /absolute/host-results.json
 ```
 
-Reusable evidence is in
-`~/.cache/sunstoneos/evidence/a733-smp-launch-20261016`.
-The earlier 2,036-byte launcher passed 28 instruction cases; its host adapter passed
-41 protocol cases. Focused host checks also cover ownership retention when
-evidence flushing or quarantine fails. Host checks were repeated for durable
-backup flushes, source-identical evidence after integration and failure retention.
-The successful launcher cases were reused. These checks do not model oscillators,
-interconnect stalls, warm reset completion, AArch64 entry or physical scheduling.
-The earlier image, SGI and CPU-entry evidence remains valid and was not rerun.
-
-The current 2,220-byte launcher and refusal adapter have separate evidence in
-`~/.cache/sunstoneos/evidence/a733-smp-refusal-20261016`.
-Sixteen focused instruction cases verify caller-state restoration, ARM and Thumb
-returns, pre-mutation refusals, unsafe-context parking and the first-write boundary.
-Seventeen focused host cases verify fresh refusal reports, failure stopping,
-SRAM restoration, obsolete-layout refusal and upload changes after admission.
-Use `--focus-refusal` with either checker to select those cases.
-The unchanged reset, deadline and scheduler evidence was reused; the current
-launcher received a native compile and link. No physical request occurred.
-
-Six additional host cases cover source growth and replacement before and after
-sealing, replacement of restoration backups, and descriptor inheritance by an
-actual child process. Select them with `--focus-freeze`.
-Their evidence is `freeze-results.json` in the refusal evidence directory.
-The passing native and refusal-protocol cases were reused for this host-only change.
+The image (contract tampering, deadline refusal, watchdog-source refusal,
+per-core MMIO boundaries, the linked scheduler interrupt calls to all eight
+destinations and the shared-lock cases) has no host check. Neither does the host
+adapter (request failure
+points, corrupt readback, changed claims, missing prerequisites, ownership
+retention when evidence flushing or quarantine fails, source growth and
+replacement around sealing, and descriptor inheritance by a child process). Neither the launcher check nor any other check models
+oscillators, interconnect stalls, warm reset completion, AArch64 entry or
+physical scheduling, and the instruction model does not reproduce physical
+inter-core contention. No physical request has occurred for the launcher
+described here. Recorded results and case counts are in
+[a733-smp.jsonl](evidence/a733-smp.jsonl).

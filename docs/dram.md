@@ -13,21 +13,35 @@ budgets for the code in `drivers/dram/` and the decode check.
 Status:
 
 - **Priority hook, latency window and copy pass: implemented and
-  host-modeled; no image links them.** The framebuffer, gpu-display and build
-  edits that call them belong to other owners and have not merged. The
-  integration host cases in the DRAM controller design are a merge condition
-  for that change, and the hook is not recorded as tested before they pass.
-- **Decode check: implemented; it refuses; no image links it.** No pinned
-  source documents the DRAM controller or firewall registers, so the check
-  makes no access and returns 0. Its caller, the cached table builder in
-  `platform/a733-smp-cached/memory.c`, links a weak definition with the same
-  result in every image.
+  host-modeled.** The returning board application `apps/board-bundles-dram`
+  is the only image that links the hook, through its own register pair; its
+  board run was inconclusive. No image links the latency window or the copy
+  pass. The framebuffer, gpu-display and build edits that would call them
+  have not merged. The integration host cases in the DRAM controller design
+  are a merge condition for that change, and the hook's writes are not
+  recorded as tested before they pass.
+- **Decode check: two definitions.** `drivers/dram/a733_dram_decode.c`
+  refuses. No pinned source documents the DRAM controller or firewall
+  registers, so it makes no access and returns 0. The cached table builder in
+  `platform/a733-smp-cached/memory.c` links a weak definition with the same
+  result. Images built with `SUNSTONE_A733_DRAM_DECODE_PROBE` link
+  `drivers/dram/a733_dram_decode_probe.c` instead, which tests the addresses
+  by writing and reading back a distinct token at each probe address and
+  returns 1 only when every token returns intact.
 - **DDR passive trip: implemented and host-modeled** in the thermal policy
   that the OS and thermal images link. Its board cost is unmeasured, and
   connecting THROTTLE to the CPU clock driver waits for the DDR trip
   measurement in the design.
-- **Physical behavior: unqualified.** No board run has read the NSI ports,
-  written the table or collected a latency window.
+- **Non-secure NSI reads: qualified on the board.** The `apps/dram-nsi`
+  records show that Non-secure EL1 reads the mode, priority, select and limit
+  words of all 21 initiator ports, the nine target-agent words and the CCU
+  NSI words without an abort. They also show that the nine target-agent words accept
+  writes that read back
+  ([memory-bus priority design](designs/dram-bus-priority.md),
+  [measurement records](evidence/dram-bus-priority.jsonl)).
+- **Priority table writes and latency windows: unqualified.** No completed
+  board run has written the table to ports 2, 14 and 15 or collected a
+  latency window.
 
 DRAM training, frequency scaling, voltage and the boot0 DRAM firewall stay
 inside boot0's opaque routine, which the OS depends on. The memory
@@ -157,9 +171,12 @@ No pinned source documents the DRAMC Common, controller, SMC0 or SMC1
 registers that would show the decode. The function therefore makes no access
 and returns 0. It may return 1 only after a trace of boot0's DRAM
 initialization names those registers and an EL3 board read on both boards
-matches the trace. No image links this file yet; `memory.c` links a weak
+matches the trace. No image links this file; `memory.c` links a weak
 definition that returns 0, and the declaration in `include/a733_dram.h` is
-the one both definitions use.
+the one every definition uses. The address-test definition in
+`a733_dram_decode_probe.c` is the other option for an image that opts in. It
+does not read the controller registers, and it does not show that Non-secure
+accesses pass the firewall or that no other master writes there.
 
 ## Host checks and measurements
 
@@ -205,10 +222,11 @@ register callbacks.
 | Decode check | At most 16 B | 8 B |
 | Load code | Load images only | 3,000 B text in C, 32 B of assembly |
 
-No image links the component, so the gpu-display, HDMI, DisplayPort and
-integrated OS images contain no `a733_dram_` symbol and match the integrated
-tree's images in size and text. The
-[measurement record](designs/dram-controller-measurements.md) gives the
+Only `apps/board-bundles-dram` links the hook, and no image links the window
+or the copy pass, so the gpu-display, HDMI, DisplayPort and integrated OS
+images contain no hook, window or copy symbol and match the integrated tree's
+images in size and text. The
+[measurement records](evidence/dram-bus-priority.jsonl) give the
 conditions, the per-case figures and the board-only rows. The scan-out
 comparison, with its rules on image order and inherited fields, and the DDR
 trip measurement are listed in the design's board evidence.

@@ -2,13 +2,23 @@
 
 **Status: implemented.**
 
-**Board-qualified scope:** Engine `bcaf39ff5` preserves all 32 original corpus
+**Board-qualified scope:** The CPU engine preserves all 32 original corpus
 references on the merged OS at vendor maximum CPU and DSU operating points.
 Aggregate real-time factor is 0.027888 and the maximum is 0.032916. The
-29.84-second clip takes 982.227 ms; the reference takes 109.551 ms. Default-build
-entry `1793570213701678324-a3d8ee82` confirms the pins on merged OS `4c48bce0`:
-exact long-clip output in 990.664 ms (0.033199x), complete thermal evidence and
-normal return. Physical long-duration worker stress is pending.
+29.84-second clip takes 982.227 ms; the reference takes 109.551 ms. A default
+build confirms the application and engine pins with exact long-clip output in
+990.664 ms (0.033199x), complete thermal evidence and normal return. Physical
+long-duration worker stress is pending.
+
+## Capabilities
+
+| Capability | Status | Key figure | Evidence and design |
+| --- | --- | --- | --- |
+| Corpus parity at vendor maximum clocks | qualified on the board | 32 of 32 references; aggregate real-time factor 0.027888, maximum 0.032916 | `mimus-cpu-corpus-summary` in [mimus-cpu.jsonl](../evidence/mimus-cpu.jsonl) |
+| Long clip (29.84 s) | qualified on the board | 982.227 ms against a 109.551 ms reference; default build 990.664 ms | `mimus-cpu-corpus-summary` |
+| Paced segmented output with version 2 thermal slots | qualified on the board | Maximum slot lateness 957 and 951 microseconds | `mimus-cpu-corpus-summary` |
+| Per-core diagnostic at vendor maximum clocks | qualified on the board | Exact output at unchanged maximum clocks | `mimus-cpu-corpus-summary` |
+| Long-duration worker stress | open | None | None |
 
 ## Open work
 
@@ -20,13 +30,14 @@ Writable constructor and GOT metadata stay in image RAM; the storage linker patc
 
 ## Evidence
 
-Board results are records in `docs/evidence/mimus-cpu.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-mimus-cpu-20261101.md).
+Board results are records in [mimus-cpu.jsonl](../evidence/mimus-cpu.jsonl); add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-mimus-cpu-20261101.md).
 
 <!-- evidence-table:begin -->
-6 records in `docs/evidence/mimus-cpu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+7 records in `docs/evidence/mimus-cpu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
+| `mimus-cpu-corpus-summary` |  |  | `` | returned | passed | aggregate_real_time_factor 0.027888 x, maximum_real_time_factor 0.032916 x, long_clip_time 982.227 ms, reference_long_clip_time 109.551 ms, corpus_references_preserved 32 references, thermal_slot_lateness_control 957 µs, thermal_slot_lateness_paced 951 µs, default_build_long_clip_time 990.664 ms |
 | `1793563566905223485-7d25a24b` | 2026-11-01 | 3-1 | `3480a88fa7fa` | returned | passed | run_total 72.162 s |
 | `1793563703824318733-0c21b2b6` | 2026-11-01 | 3-1 | `522874a27101` | returned | passed | run_total 71.388 s |
 | `1793567533946545503-823190b1` | 2026-11-01 | 3-1 | `80b3056a23b7` | returned | passed | run_total 72.698 s |

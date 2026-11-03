@@ -1904,7 +1904,7 @@ to the stated scope:
   per multiply-accumulate against the budgeted 1.75, so the modeled linear
   stage takes at least 0.535 s on the A76 pair against 0.396 s, and 0.664 s
   if GPU loads take 200 clocks
-  ([measurements](designs/gpu-mimus-compute-measurements.md)). The GPU
+  ([measurements](evidence/gpu-mimus-compute.jsonl)). The GPU
   runtime's session, worker and interrupt are implemented in
   [the GPU service](gpu-mimus-service.md), and local mimus `9c57286b7` supplies
   the exact-sum hook. Healthy thermal CLOSE and reopen retain the allocated
@@ -2576,7 +2576,7 @@ to the stated scope:
   runs acquisition steps until one waits, and EL3 admission hashes one private
   copy of the session page. In the modeled two-core startup, PLL preparation and
   startup take 17 calls instead of 41 and 18 ticks instead of 40 to 42
-  ([measurements](designs/npu-platform-measurements.md)). Physical behavior
+  ([evidence records](evidence/npu-platform.jsonl)). Physical behavior
   remains unqualified.
   The [startup adapter](npu-startup.md) binds shared clocks, stable DCDC2 supply
   ownership, native PMIC reads and deferred service activation.

@@ -10,6 +10,14 @@ Shared-resource root-port preparation, COMB1 PHY, direct-endpoint configuration,
 
 No endpoint or NVMe device is available.
 
+## Capabilities
+
+| Capability | Status | Key figure | Evidence or design |
+| --- | --- | --- | --- |
+| Root-port preparation, COMB1 PHY, BAR and iATU setup | host-tested | none | [pcie.md](../pcie.md) |
+| Endpoint DMA COPY and bounded NVMe reads | host-tested | none | [pcie-nvme.md](../pcie-nvme.md) |
+| Physical link, endpoint power, interrupts, recovery | open | none; no endpoint is available | open work 1 |
+
 ## Open work
 
 1. Qualify the link, endpoint power, DMA visibility and confinement, interrupts, power transitions and recovery once an endpoint is available.
@@ -17,6 +25,8 @@ No endpoint or NVMe device is available.
 3. Cover bridges and switches, ASPM, root DMA and physical Gen3 and fallback qualification.
 
 ## Evidence
+
+Component documents: [PCIe](../pcie.md), [NVMe](../pcie-nvme.md) and [the PCIe application](../pcie-application.md).
 
 Board results are records in `docs/evidence/pcie.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-pcie-20261101.md).
 
