@@ -53,7 +53,7 @@ static int draw_kick(void *ctx,uint32_t off,uint32_t value)
     if(type==(PVR_CCB_MAGIC|117) && gpu_render_case==1) {
         uintptr_t timelines=a733_gpu_graphics_memory_render_shared(&graphics)+1408;
         __atomic_store_n((uint32_t *)timelines,1,__ATOMIC_RELEASE);
-        __atomic_store_n((uint32_t *)(timelines+4),1,__ATOMIC_RELEASE);
+        __atomic_store_n((uint32_t *)(timelines+4),2,__ATOMIC_RELEASE);
     }
     return result;
 }
@@ -86,7 +86,7 @@ static void draw_client(void *unused)
     configASSERT(!atomic_load(&graphics.submission.draw_state));service.owner=0;
     vTaskSuspend(service.worker);
     struct pvr_gpu_service_message filler={0};
-    for(unsigned i=0;i<PVR_GPU_SERVICE_CLIENTS;++i)configASSERT(xQueueSend(service.requests,&filler,0)==pdTRUE);
+    for(unsigned i=0;i<PVR_GPU_SERVICE_REQUESTS;++i)configASSERT(xQueueSend(service.requests,&filler,0)==pdTRUE);
     configASSERT(!pvr_gpu_service_draw(&service,1,source,sizeof(source),126,1000000,0,&ticket));
     configASSERT(!atomic_load(&graphics.submission.draw_state) && !service.clients[0].pending);
     configASSERT(xQueueReset(service.requests)==pdPASS);vTaskResume(service.worker);
@@ -115,7 +115,9 @@ static void draw_client(void *unused)
     }
     make_vertices(126);
     configASSERT(pvr_gpu_service_draw(&service,1,source,sizeof(source),126,1000000,0,&ticket));
-    configASSERT(pvr_gpu_service_collect(&service,ticket,&r,1000) && r.result==PVR_GPU_SERVICE_BUSY);
+    /* Since 08ec0001 a finished frame is followed by pvr_gpu_service_draw_next with that frame's sequence; the first-frame entry
+     * (previous 0) is refused as INVALID, no longer BUSY, once a frame exists. */
+    configASSERT(pvr_gpu_service_collect(&service,ticket,&r,1000) && r.result==PVR_GPU_SERVICE_INVALID);
     configASSERT(!atomic_load(&graphics.submission.draw_state));
     r=request(PVR_GPU_SERVICE_CLOSE,1000000);configASSERT(r.result==PVR_GPU_SERVICE_OK);
     for(unsigned i=0;i<2000;++i){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);if(r.phase==PVR_GPU_SERVICE_STOPPED)break;configASSERT(r.phase!=PVR_GPU_SERVICE_FAILED);}

@@ -1199,6 +1199,26 @@
     }
    ]
   },
+  "gpu-draw.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--firmware",
+      "{cache}/evidence/gpu-render-20261017/native1/fixtures/gpu.fw",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
   "gpu-graphics-memory.py": {
    "runs": [
     {
@@ -2590,7 +2610,6 @@
   "cold-entry.py": "helper module of a runnable check (not run on its own) | loaded by standalone-boot-loader.py",
   "cpu-runtime-qualification.py": "helper module of a runnable check (not run on its own) | loaded by os-cpu-return-services.py",
   "fault-decode.py": "helper module of a runnable check (not run on its own) | loaded by fault-capture.py",
-  "gpu-draw.py": "real defect or unexplained failure, reported to the coordinator | draw_state stays nonzero after the BUSY collect (gpu-draw.c:118); service defect or stale expectation, reported",
   "h264-stream.py": "helper module of a runnable check (not run on its own) | loaded by tools/check-a733-h264-supervised.py",
   "hevc-pixel-reference.py": "helper module of a runnable check (not run on its own) | loaded by hevc-pixel-reference-host.py",
   "i2s-rates-reference.py": "helper module of a runnable check (not run on its own) | loaded by os-image-audio.py",
