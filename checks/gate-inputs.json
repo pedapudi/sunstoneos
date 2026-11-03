@@ -41,6 +41,22 @@
    "target": "sunstone-a733-os-latency",
    "elf": "sunstone-a733-os-latency.elf",
    "uses": "the CPU-return latency diagnostic image"
+  },
+  "storage-read": {
+   "configure": [
+    "-DSUNSTONE_A733_STORAGE_READ=ON"
+   ],
+   "target": "sunstone-a733-storage-read",
+   "elf": "sunstone-a733-storage-read.elf",
+   "uses": "the supervised SD0 read image (apps/storage-read); the host session is modeled by checks/storage-read-fixture.py (tools/gate_session.py), at profile 2, or the profile in the image name (storage-read-p1: profile 1)"
+  },
+  "storage-read-p1": {
+   "configure": [
+    "-DSUNSTONE_A733_STORAGE_READ=ON"
+   ],
+   "target": "sunstone-a733-storage-read",
+   "elf": "sunstone-a733-storage-read.elf",
+   "uses": "the supervised SD0 read image (apps/storage-read); the host session is modeled by checks/storage-read-fixture.py (tools/gate_session.py), at profile 2, or the profile in the image name (storage-read-p1: profile 1)"
   }
  },
  "checks": {
@@ -317,6 +333,56 @@
      "args": [
       "{bundle:opp33-dcdc3}",
       "--out",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "storage-read-dma.py": {
+   "runs": [
+    {
+     "args": [
+      "--image",
+      "{elf:storage-read}",
+      "--session",
+      "{session:storage-read}",
+      "--output",
+      "{output}",
+      "--case",
+      "single-read",
+      "--case",
+      "two-clients",
+      "--case",
+      "usb-final-in",
+      "--case",
+      "bounds-alias",
+      "--case",
+      "mapping-descriptor",
+      "--case",
+      "mapping-buffer",
+      "--case",
+      "cache-contract",
+      "--case",
+      "cache-before-fail",
+      "--case",
+      "cache-after-fail",
+      "--case",
+      "loss-active",
+      "--case",
+      "deadline-active"
+     ]
+    }
+   ]
+  },
+  "storage-read-sd-modes.py": {
+   "runs": [
+    {
+     "args": [
+      "--image",
+      "{elf:storage-read-p1}",
+      "--session",
+      "{session:storage-read-p1}",
+      "--output",
       "{output}"
      ]
     }
@@ -911,7 +977,7 @@
   "scheduler-route.py": "an application image, session or bundle the gate does not build | needs --build-dir",
   "scheduler-timeslice.py": "an application image, session or bundle the gate does not build | needs --image, --output",
   "scheduler-wake-model.py": "an application image, session or bundle the gate does not build | needs --tlc-jar, --build-dir",
-  "sd-return-native.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "sd-return-native.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | fails on the current image: the monitor_vectors symbol it reads is not in the image (the returning monitor moved); a stale check, not yet rewritten",
   "sdio-controller.py": "recorded evidence or fixture captures | needs --reference-dir, --evidence",
   "secondary-cache-host.py": "recorded evidence or fixture captures | needs --build, --bundle, --model, --fel, --output, --local-model",
   "secondary-cache-probe.py": "an application image, session or bundle the gate does not build | needs --image, --bundle, --prefix, --output",
@@ -937,19 +1003,17 @@
   "standalone-boot-loader.py": "an application image, session or bundle the gate does not build | needs --build, --boot0, --output",
   "storage-maintenance-dma.py": "an application image, session or bundle the gate does not build | needs --image, --observed-session, --output",
   "storage-maintenance-usb-burst.py": "other arguments | needs --before, --after, --output",
-  "storage-read-binding.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "storage-read-binding.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | fails on the current image at a733_smp_contract_valid on the contract the check builds by hand (its layout of the 224-byte contract is older than the image's): a stale check, not yet rewritten against the image's own contract builder",
   "storage-read-client-completion.py": "recorded evidence or fixture captures | needs --evidence, --output",
   "storage-read-dma-host.py": "recorded evidence or fixture captures | needs --image, --fixture, --native, --output, --emmc, --emmc-evidence",
-  "storage-read-dma.py": "an application image, session or bundle the gate does not build | needs --case, --image, --session, --output",
   "storage-read-fixture.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
   "storage-read-host.py": "recorded evidence or fixture captures | needs --image, --manifest, --fixture, --frame, --output, --clang, --lld",
   "storage-read-initialization-policy.py": "recorded evidence or fixture captures | needs --fixture, --output",
-  "storage-read-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "storage-read-native.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | fails on the current image: with the machine and the PERI0 and uncached-pool models brought up to date it reaches the identification and stops at stage 2, because it never submits the client request the image now waits for (a stale check: the image's task reads through slots and the DMA profile since 59a6945c); to be rewritten on the model of storage-read-dma.py",
   "storage-read-queue-plan.py": "an application image, session or bundle the gate does not build | needs --bundle, --output",
   "storage-read-returning.py": "other arguments | needs '--' + name.replace('_', '-')",
   "storage-read-rom-pins.py": "recorded evidence or fixture captures | needs --fixture, --output",
   "storage-read-sd-modes-host.py": "recorded evidence or fixture captures | needs --image, --manifest, --evidence",
-  "storage-read-sd-modes.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
   "storage-read-service-host.py": "recorded evidence or fixture captures | needs --image, --manifest, --fixture, --native, --output, --clang, --lld",
   "storage-read-service.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
   "storage-read-single-core-package.py": "recorded evidence or fixture captures | needs --image, --manifest, --fixture, --native, --output, --clang, --lld",
@@ -993,7 +1057,10 @@
   "watchdog-expiry.py": "an application image, session or bundle the gate does not build | needs image, elf",
   "watchdog-rom-reset-log.py": "ROM, boot0 or device captures | needs rom",
   "workload-bisect-host.py": "an application image, session or bundle the gate does not build | needs --build, --bundle, --models, --fel, --output",
-  "workload-bisect-probe.py": "an application image, session or bundle the gate does not build | needs --case, --image, --bundle, --output"
+  "workload-bisect-probe.py": "an application image, session or bundle the gate does not build | needs --case, --image, --bundle, --output",
+  "sd-return-host.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | needs the output of sd-return-native.py, which does not run on the current image",
+  "sd-return-continuity.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | needs the output of sd-return-native.py, which does not run on the current image",
+  "storage-write-geometry-33.py": "cached builds or images of earlier work (cache/build) | needs --output, cache/build, cache/sd-backup"
  },
  "bundles": {
   "opp33": [

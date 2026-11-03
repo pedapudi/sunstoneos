@@ -24,7 +24,7 @@ def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 class Machine:
  def __init__(self,image,session,variant):
-  self.image=image;self.session=session;self.variant=variant;self.cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM);self.cpu.reg_write(UC_ARM64_REG_PSTATE,5)
+  self.image=image;self.session=session;self.variant=variant;self.cpu=harness.machine();self.cpu.reg_write(UC_ARM64_REG_PSTATE,5)
   for a,n in [(0x02000000,0x06000000),(0x40000000,0x04000000),(0x50000000,0x01000000)]:self.cpu.mem_map(a,n)
   for a,data in image.parts:self.cpu.mem_write(a,data)
   # This fixture bypasses scheduler entry. The SRE port starts with9999 to
@@ -46,6 +46,8 @@ class Machine:
   pl=image.layouts['a733_pmic'];po=image.layouts['a733_pmic_ops'];self.write(pmic+pl['clocks'],clock,8);self.write(pmic+pl['pins'],pins,8);self.write(pmic+pl['rails'],rails,8);self.write(pmic+pl['cookie'],self.native,8);self.write(pmic+pl['pmic_bus_ops']+po['outside'],image.address('outside','/drivers/storage/a733_mmc_platform_native.c'),8)
   self.regs={0x07090160:(1<<28)|2,0x02002000:0xf8000000|(99<<8)|(99<<16),0x02002580:1<<31,0x02002588:1<<31,0x020025c0:1<<24,0x020025e0:1<<30,0x0200259c:0x30001,0x02000040:2<<10,0x02000048:2<<10,0x02000070:1,
    0x04020300:0x03050530,0x0402005c:0x81710331,0x0402010c:0x80001234,0x04020054:0x12345676,0x04020058:0xffff,0x04020104:7,0x04020140:0xa5a40000}
+  # The profile-2 read checks the PERI0 clock tree and the PF bank selector: PERI0 at 2.4 GHz (400 MHz branch), its auto gates and the selector at 3.3 V.
+  self.regs.update({0x020020a0:0xfe000000|(99<<8)|(1<<20),0x02003908:((1<<11)|(1<<2)|(1<<1))*0x10001,0x02003988:((1<<11)|(1<<2)|(1<<1))<<16,0x02000070:1})
   csd=(1<<126)|(9<<80)|(5<<84)|(0x7fff<<48);self.csd=[(csd>>(96-32*i))&0xffffffff for i in range(4)];self.cid=[0x12345678+i for i in range(4)]
   names=['board_live','a733_smp_counter','a733_counter_clock_now','aarch64_device_translate','xTaskGetCurrentTaskHandle','xTaskGetSchedulerState','xQueueGetMutexHolder','xQueueSemaphoreTake','xQueueGenericSend','vTaskDelay','a733_platform_lock_enter','a733_platform_lock_leave','a733_platform_lock_retain','a733_rail_acquire','a733_rail_poll','a733_rail_status','a733_rail_retain','a733_pmic_identity','a733_pmic_live','a733_pmic_submit','a733_pmic_result','a733_pmic_reap','a733_pins_acquire_banked','a733_pins_held_banked','a733_pins_read_inputs_banked','a733_native_usb_step','a733_native_usb_health','tusb_rhport_init','tud_task_ext','tud_vendor_n_available','tud_vendor_n_read','tud_vendor_n_write','tud_vendor_n_write_flush','a733_cpu_coherence_publish']
   self.hooks={image.address(n):n for n in names}
@@ -66,7 +68,7 @@ class Machine:
   if name=='board_live':self.ret(1)
   elif name=='a733_smp_counter':self.ret(self.time*24)
   elif name=='a733_counter_clock_now':self.write(args[1],self.time,8);self.ret(1)
-  elif name=='aarch64_device_translate':self.cpu.mem_write(args[2],struct.pack('<Q2I',args[0],0xff if args[0]>=0x40000000 else 0,3 if args[0]>=0x40000000 else 2));self.ret(1)
+  elif name=='aarch64_device_translate':self.cpu.mem_write(args[2],struct.pack('<Q2I',args[0],(0x44 if 0x41c00000<=args[0]<0x41e00000 else 0xff) if args[0]>=0x40000000 else 0,3 if args[0]>=0x40000000 else 2));self.ret(1)
   elif name=='xTaskGetCurrentTaskHandle':self.ret(1)
   elif name=='xTaskGetSchedulerState':self.ret(2)
   elif name=='xQueueGetMutexHolder':self.ret(1 if self.held else 0)
