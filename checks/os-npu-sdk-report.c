@@ -51,6 +51,7 @@ int os_npu_progress(void){return 1;}
 int os_npu_stopping(void){return 0;}
 unsigned os_npu_stopped(void){return native_closed;}
 int board_live(void *context){assert(!context);return 1;}
+void os_application_wake_main(void){}   /* the application's end wait (apps/os/application.c); no application runs here */
 void board_fail_note(uint32_t site,uint32_t value,const void *caller)
 {(void)caller;if(!first_site){first_site=site;first_value=value;}}
 void board_fail(void *context)

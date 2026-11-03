@@ -197,6 +197,15 @@ def emulate(path, selected):
         assert clean==([] if failure in ('range','expired') else [0x42000000] if failure else [0x42000000,0x42000040,0x42000080])
         if not failure:assert ('dsb','sy',0) in trace
         results.append({'kind':'publication','failure':failure,'trace':trace})
+    # Memory above the window and the slot 1 area is installed memory too: publication accepts it up to the end of the 12 GiB.
+    for name,base,size,expect in (('upper',0x80000000,130,[0x80000000,0x80000040,0x80000080]),
+                                  ('last-line',0x33fffffc0,64,[0x33fffffc0]),
+                                  ('past-the-end',0x340000000,64,None),('crosses-the-end',0x33fffffc0,65,None)):
+        model,trace,patches,call=context()
+        result=call('a733_cpu_coherence_publish',base,size,240000)
+        assert result==(1 if expect else 0xffffffff),(name,hex(result))
+        assert [x[2] for x in trace if x[0]=='dc']==(expect or []),name
+        results.append({'kind':'publication','range':name,'trace':trace})
     return results
 
 def main():

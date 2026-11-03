@@ -214,7 +214,22 @@ def check_placement(record):
             'a region that does not fit the rest of the window is not at the slot 1 area start')
     require(placed([work('a', 64)]) == [area[0]], 'a region larger than the window is not at the slot 1 area start')
     require(placed([work('a', 64, address=area[0] + (16 << 20))]) == [area[0] + (16 << 20)], 'a pinned slot 1 region moved')
-    for bad in (dict(address=window[1] - (2 << 20)), dict(address=area[0] + 4096), dict(address=area[1] - (2 << 20))):
+    # The upper memory (step 6b): first fit continues there when the slot 1 area is full, a pinned region may lie there, and
+    # nothing may cross the unmapped hole below it or run past the installed memory.
+    upper = record['upper_area']
+    area_mib = (area[1] - area[0]) >> 20
+    require(placed([work('a', area_mib - 8), work('b', 100)]) == [area[0], upper[0]],
+            'a region that does not fit the slot 1 area is not at the start of the upper memory')
+    require(placed([work('a', area_mib - 8), work('b', 100), work('c', 100)]) == [area[0], upper[0], upper[0] + (100 << 20)],
+            'the second region of the upper memory does not follow the first')
+    require(placed([work('a', 64, address=upper[0] + (8 << 30))]) == [upper[0] + (8 << 30)], 'a pinned upper region moved')
+    require(placed([work('a', 64, address=upper[1] - (64 << 20))]) == [upper[1] - (64 << 20)],
+            'a pinned region at the end of the installed memory was refused')
+    require(placed([work('a', 64, address=upper[0] + (8 << 20)), work('b', 8)]) == [upper[0] + (8 << 20), window[0]],
+            'an unpinned region does not take the window beside a pinned upper region')
+    require(upper[0] == 0x80000000 and upper[1] == record['dram'][1], 'the upper memory is not from 0x80000000 to the installed memory')
+    for bad in (dict(address=window[1] - (2 << 20)), dict(address=area[0] + 4096), dict(address=area[1] - (2 << 20)),
+                dict(address=upper[0] - (32 << 20)), dict(address=upper[1] - (32 << 20)), dict(address=upper[0] + 4096)):
         try:
             placed([work('a', 64, **bad)])
         except SystemExit:

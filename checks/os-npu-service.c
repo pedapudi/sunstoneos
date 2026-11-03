@@ -59,6 +59,9 @@ int board_live(void *context) { assert(!context); return (int)live_value; }
 uint32_t board_live_refusal(void) { return live_value ? 0 : UINT32_C(1) << 28; }
 static unsigned board_failures;
 static uint32_t first_site, first_value, first_caller;
+/* The wake of the application's end wait (apps/os/application.c); no application runs here. */
+unsigned os_wake_main_calls;
+void os_application_wake_main(void) { ++os_wake_main_calls; }
 void board_fail_note(uint32_t site, uint32_t value, const void *caller)
 {
     if (!first_site) { first_site = site; first_value = value; first_caller = (uint32_t)(uintptr_t)caller; }
