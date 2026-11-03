@@ -1,6 +1,7 @@
 /* Execute the actual OS request predicates. RTOS waits and runtime replies
  * are modeled; no MMIO or accelerator work occurs. */
 #include "../apps/os/npu.c"
+#include "../apps/os/npu-declaration.c"
 #include <assert.h>
 #include <setjmp.h>
 #include <stdlib.h>

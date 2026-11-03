@@ -15,7 +15,7 @@ import argparse, re, subprocess, os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-UNITS = ('apps/os/npu.c', 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/a733_npu_runtime_interim.c', 'drivers/npu/npu_pool.c', 'drivers/npu/npu_service.c',
+UNITS = ('apps/os/npu.c', 'apps/os/npu-declaration.c', 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/a733_npu_runtime_interim.c', 'drivers/npu/npu_pool.c', 'drivers/npu/npu_service.c',
          'drivers/npu/a733_npu_controller.c', 'drivers/npu/a733_npu_memory.c', 'drivers/npu/a733_npu_mmu.c',
          'drivers/npu/nbg_model.c', 'drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_checksum.c', 'drivers/npu/nbg_relocation.c',
          'drivers/npu/npu_declaration.c', 'drivers/storage/storage_digest.c')

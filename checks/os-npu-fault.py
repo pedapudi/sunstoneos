@@ -25,7 +25,7 @@ from harness import environment
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / '.cache/sunstoneos'
-CHECK_INPUTS = ('apps/os/npu.c', 'apps/os/npu.h', 'apps/npu-graphs/models-r.json', 'drivers/npu/a733_npu_controller.c',
+CHECK_INPUTS = ('apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu.h', 'apps/npu-graphs/models-r.json', 'drivers/npu/a733_npu_controller.c',
                 'drivers/npu/npu_service.c', 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/nbg_assembly.c',
                 'checks/os-npu-service.c', 'checks/os-npu-fault.py', 'runtime/npu_app.c')
 UNITS = ('checks/os-npu-service.c', 'drivers/npu/npu_declaration.c', 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/a733_npu_runtime_interim.c', 'drivers/npu/npu_pool.c',

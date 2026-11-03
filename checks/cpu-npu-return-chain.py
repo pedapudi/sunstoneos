@@ -33,7 +33,7 @@ from harness import Image, environment, save
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['apps/cpu-npu-concurrency/main.c', 'apps/cpu-npu-concurrency/gemm.h',
  'apps/cpu-npu-concurrency/host.py', 'apps/cpu-npu-concurrency/receipt.h',
- 'apps/os/npu-observe.c', 'apps/os/npu-client.c', 'apps/os/npu.c',
+ 'apps/os/npu-observe.c', 'apps/os/npu-client.c', 'apps/os/npu.c', 'apps/os/npu-declaration.c',
  'apps/os/application.c', 'apps/os/cpu-return.c', 'apps/os/cpu-return-host.py',
  'apps/os/cpu-return-followup.py', 'apps/os/cpu-return/terminal.patch',
  'apps/os/cpu-return/thermal.patch', 'drivers/npu/npu_service.c',
