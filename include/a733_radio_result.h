@@ -26,7 +26,7 @@ struct a733_radio_result_ap { uint8_t bssid[6], ssid_bytes; int8_t rssi_dbm; uin
 struct a733_radio_result_head {
     uint64_t magic;
     uint32_t version, bytes, head_bytes, ap_entry_bytes;
-    uint32_t stage, failed, failure_stage, flags; /* flags: bit0 guard asked, bit1 guard observed, bit2 BLDO5 powered on */
+    uint32_t stage, failed, failure_stage, flags; /* flags: bit0 guard asked, bit1 guard observed, bit2 BLDO5 powered on, bit3 shut down with every readback matched */
     uint32_t pad_power[4];                         /* GPIO_POW_MOD_SEL, GPIO_POW_VAL, SGPIO_POW_MOD_SEL, SGPIO_POW_VAL */
     struct a733_radio_result_rail rails[A733_RADIO_RESULT_RAILS];
     uint32_t rail_count, platform_stage, ocr, selected_ocr;

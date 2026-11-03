@@ -120,6 +120,12 @@ static void *arena_allocate(void *context,size_t bytes)
     void *p=report_arena+report_used;report_used+=bytes;return p;
 }
 static void arena_release(void *context,void *memory){assert(context==&allocations);(void)memory;}
+/* Shutdown model: the platform steps PENDING twice, then DOWN. */
+static unsigned shutdown_calls,shutdown_ok=1,platform_steps;
+int a733_radio_platform_shutdown(struct a733_radio_platform *p,const struct a733_radio_borrow *t,uint64_t d)
+{assert(p==&app.platform&&t==&app.session.borrow&&d);++shutdown_calls;return shutdown_ok;}
+enum a733_radio_platform_result a733_radio_platform_poll(struct a733_radio_platform *p)
+{assert(p==&app.platform);return ++platform_steps<3?A733_RADIO_PENDING:A733_RADIO_DOWN;}
 /* The scan-only startup never reaches the crypto engine or its mutex: these must not run. */
 QueueHandle_t xQueueCreateMutexStatic(const uint8_t t,StaticQueue_t *q){(void)t;(void)q;assert(0);return NULL;}
 BaseType_t xQueueSemaphoreTake(QueueHandle_t q,TickType_t t){(void)q;(void)t;assert(0);return 0;}
@@ -274,6 +280,24 @@ int main(void)
         assert(bytes==sizeof(report->head)+2*sizeof(struct a733_radio_result_ap));
     }
     assert(entropy_calls==entropy_before&&connects==connects_before&&network_calls==network_before&&security_calls==security_before);
+    /* Shutdown: refused unless the transport is quiet, then only the platform is polled until DOWN. */
+    {
+        uint64_t before=app.session.transport.completed_transfers;(void)before;
+        app.session.transport.pending=1;app.platform.host.state=SUNXI_SDIO_READY;
+        assert(!board_radio_shutdown(&app,5000)&&shutdown_calls==0&&app.stage==SCANNED);
+        app.session.transport.pending=0;app.session.transport.held=1;
+        assert(!board_radio_shutdown(&app,5000)&&shutdown_calls==0);
+        app.session.transport.held=0;shutdown_ok=0;
+        assert(!board_radio_shutdown(&app,5000)&&shutdown_calls==1&&app.stage==SCANNED);
+        shutdown_ok=1;
+        assert(board_radio_shutdown(&app,5000)&&shutdown_calls==2&&app.stage==SHUTTING_DOWN);
+        unsigned polls_before=session_calls;
+        assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED&&app.stage==SHUTTING_DOWN); /* Still shutting down. */
+        assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED&&app.stage==SHUTTING_DOWN);
+        assert(board_radio_poll(&app)==BOARD_RADIO_DOWN&&app.stage==DOWN);
+        assert(board_radio_poll(&app)==BOARD_RADIO_DOWN&&session_calls==polls_before&&platform_steps>=3);
+        assert(!board_radio_shutdown(&app,5000)); /* Once. */
+    }
     /* A scan that does not finish in time retains the radio with no entropy involved. */
     a733_radio_report_release(&app.report);
     memset(&app,0,sizeof(app));scan_events_left=0;scan_finished=0;report_used=0;scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);

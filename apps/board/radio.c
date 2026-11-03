@@ -3,7 +3,7 @@
 #include "a733_range.h"
 #include "a733_storage_digest.h"
 #include <string.h>
-enum { STARTING,CONNECTING,SECURING,ONLINE,SCANNING,SCANNED };
+enum { STARTING,CONNECTING,SECURING,ONLINE,SCANNING,SCANNED,SHUTTING_DOWN,DOWN };
 /* Elapsed time before an owner stops repeating advancing session steps. At
  * 25 MHz four-bit SDIO this covers the largest 4,096-byte receive. */
 #define BOARD_RADIO_POLL_BUDGET_US 500u
@@ -130,6 +130,17 @@ static int advanced(const struct board_radio *r,const struct progress *before)
     return now.host!=before->host||now.transport!=before->transport||
         now.platform!=before->platform||now.session!=before->session;
 }
+int board_radio_shutdown(struct board_radio *r,uint64_t deadline)
+{
+    if(!r||r->self!=r||!r->constructed||r->stage!=SCANNED||xTaskGetCurrentTaskHandle()!=r->config.session.owner_task||
+       atomic_load_explicit(&r->failed,memory_order_acquire)||
+       (atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4))return 0;
+    const struct aic8800_sdio_transport *t=&r->session.transport;
+    /* The transport must be quiet: nothing in flight on the bus and no record held. */
+    if(t->pending||t->held||r->session.fault||r->platform.host.state!=SUNXI_SDIO_READY)return 0;
+    if(!a733_radio_platform_shutdown(&r->platform,&r->session.borrow,deadline))return 0;
+    r->stage=SHUTTING_DOWN;return 1;
+}
 const struct a733_radio_report *board_radio_report(const struct board_radio *r)
 {return r&&r->self==r&&r->constructed&&r->config.report_memory.allocate?&r->report:NULL;}
 /* Keep the report current: the platform's stages and card facts every pass,
@@ -159,6 +170,13 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
     }
     uint64_t now;
     if(!a733_counter_clock_now(&r->config.shared->counter,&now))return retain(r);
+    if(r->stage==SHUTTING_DOWN||r->stage==DOWN){
+        /* Only the platform's shutdown runs; the session and transport are not polled again. */
+        enum a733_radio_platform_result down=a733_radio_platform_poll(&r->platform);
+        if(down==A733_RADIO_RETAINED||down==A733_RADIO_INVALID)return retain(r);
+        if(down==A733_RADIO_DOWN){r->stage=DOWN;report_progress(r);return BOARD_RADIO_DOWN;}
+        return publish(r,BOARD_RADIO_SCANNED);
+    }
     if(r->stage!=ONLINE&&r->stage!=SCANNED&&now>=r->config.startup_deadline_us)return retain(r);
     /* Repeat whole session polls, each with its own platform and deadline
      * checks, while a step advances. Yield on the first call that only waits:

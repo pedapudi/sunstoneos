@@ -30,7 +30,7 @@ struct board_radio_config {
     unsigned scan_only,first_run_guard;
 };
 enum board_radio_result { BOARD_RADIO_PENDING,BOARD_RADIO_NETWORK,
-    BOARD_RADIO_RETAINED,BOARD_RADIO_INVALID,BOARD_RADIO_SCANNED };
+    BOARD_RADIO_RETAINED,BOARD_RADIO_INVALID,BOARD_RADIO_SCANNED,BOARD_RADIO_DOWN };
 struct board_radio {
     struct board_radio *self;
     struct board_radio_config config;
@@ -160,6 +160,13 @@ int board_radio_init(struct board_radio *,const struct board_radio_config *);
  * and credentials, bounded by the association, security and DHCP address
  * timeouts; PENDING is reported until the address returns. */
 enum board_radio_result board_radio_poll(struct board_radio *);
+/* Begin shutting the module down, for a normal return. Owner task only, from the
+ * terminal scanned stage of a scan-only session, with the transport idle: no
+ * pending host request, no held record. From then on the owner polls only the
+ * platform's shutdown, whose every step is read back (a733_radio_platform_shutdown),
+ * and board_radio_poll reports BOARD_RADIO_DOWN when it is done. Returns 0 and
+ * changes nothing if the session is not in that state. */
+int board_radio_shutdown(struct board_radio *,uint64_t deadline_us);
 /* The staged service's report: the stage reached and what was observed on the way.
  * Valid after init when report_memory was supplied, else NULL. Owner task only;
  * a host reads it through a733_radio_report_encode. */
