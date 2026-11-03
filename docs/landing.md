@@ -35,7 +35,7 @@ The tool compares the diff against `bringup` with the glob `docs/**`.
   validate`, `tools/evidence.py sync --check` and `checks/docs-links.py` in the
   worker's worktree, and no gate. The landing record names the gate `docs-only`.
   A Markdown file outside `docs/` is code for this purpose.
-- **Anything else.** The tool starts the gate in its affected mode, `integration-gate.sh
+- **Anything else.** The tool starts the gate in its affected mode, `tools/integration-gate.py
   TREE LABEL --reason TEXT --affected BASE..TIP --keep-going`, and runs the
   registry check (`checks/gate-inputs.py`) beside it. The gate selects the
   checks whose inputs the diff touches and reports every failure. If the registry

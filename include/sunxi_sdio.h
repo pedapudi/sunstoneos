@@ -13,7 +13,8 @@
 
 enum sunxi_sdio_state { SUNXI_SDIO_UNPREPARED, SUNXI_SDIO_PREPARING,
     SUNXI_SDIO_READY, SUNXI_SDIO_QUEUED, SUNXI_SDIO_ACTIVE,
-    SUNXI_SDIO_DONE, SUNXI_SDIO_FAULT, SUNXI_SDIO_WIDENING };
+    SUNXI_SDIO_DONE, SUNXI_SDIO_FAULT, SUNXI_SDIO_WIDENING,
+    SUNXI_SDIO_QUIESCING, SUNXI_SDIO_QUIESCED };
 enum sunxi_sdio_error { SUNXI_SDIO_NO_ERROR, SUNXI_SDIO_IO_ERROR,
     SUNXI_SDIO_TIMEOUT, SUNXI_SDIO_CLOCK_ERROR, SUNXI_SDIO_VARIANT_ERROR,
     SUNXI_SDIO_SETUP_ERROR, SUNXI_SDIO_CONTROLLER_ERROR,
@@ -98,4 +99,11 @@ int sunxi_sdio_time(struct sunxi_sdio *, uint64_t *);
 /* Stop admission without further hardware access. Retain the active request,
  * partial read bytes and first error. External recovery owns eventual disposal. */
 void sunxi_sdio_stop(struct sunxi_sdio *, enum sunxi_sdio_error);
+/* Shutdown of an idle controller. Only in READY, with no command pending and the
+ * card not busy: polls stop the card clock (CLKCR zero and its update command,
+ * read back), clear the interrupt mask and DMA interrupt enable (read back), and
+ * end in QUIESCED, where poll does nothing and no request is accepted. The module
+ * and bus clocks, reset and pins belong to the platform. A refused or failed
+ * step is an ordinary retained fault. */
+int sunxi_sdio_quiesce(struct sunxi_sdio *, uint64_t deadline);
 #endif

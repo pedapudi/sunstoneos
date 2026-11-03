@@ -260,13 +260,16 @@ static const struct board_radio_profile *radio_profile(void)
     if(!board_radio_profile_runtime(&runtime_profile,p,s,runtime_profile_digest))return NULL;
     p=&runtime_profile;
 #endif
+    /* A scan-only profile builds no crypto engine, so its CE facts are not checked. */
+    unsigned scan=board_radio_profile_scan_only(p);
     if(p->platform.handoff!=s->generation||
        p->platform.topology.identity!=s->topology||p->platform.lifetime_deadline_us>s->deadline_us-10000||
-       p->ce.handoff!=s->generation||memcmp(p->platform.fabric,s->fabric,sizeof(s->fabric))||
-       memcmp(p->platform.fabric_hz,s->fabric_hz,sizeof(s->fabric_hz))||
-       memcmp(p->ce.fabric,s->fabric,sizeof(s->fabric))||memcmp(p->ce.fabric_hz,s->fabric_hz,sizeof(s->fabric_hz)))return NULL;
+       (!scan&&(p->ce.handoff!=s->generation||
+       memcmp(p->ce.fabric,s->fabric,sizeof(s->fabric))||memcmp(p->ce.fabric_hz,s->fabric_hz,sizeof(s->fabric_hz))))||
+       memcmp(p->platform.fabric,s->fabric,sizeof(s->fabric))||
+       memcmp(p->platform.fabric_hz,s->fabric_hz,sizeof(s->fabric_hz)))return NULL;
     uint64_t owners[]={s->pmic_owner,s->usb0_owner,s->typec_owner,s->usb2_owner,p->platform.owner,p->ce.owner};
-    for(unsigned i=0;i<6;++i){
+    for(unsigned i=0;i<(scan?5u:6u);++i){
         if(!owners[i]){if(i==2||i==3){if(!a733_board_host_workload(s->workload))continue;}return NULL;}
         for(unsigned j=0;j<i;++j)if(owners[i]==owners[j])return NULL;
     }

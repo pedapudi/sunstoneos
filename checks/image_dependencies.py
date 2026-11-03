@@ -1,50 +1,107 @@
 #!/usr/bin/env python3
-"""The pinned sources that the board and OS images need beyond FreeRTOS and TinyUSB, in one place.
+"""The pinned sources and host tools that the board and OS images need, in one place.
 
-A native board image (cmake/a733-board.cmake) refuses to configure without the FreeRTOS+TCP and wpa_supplicant sources it was pinned to
-(sources.lock.json) and the freestanding toolchain's C headers. Checks that build such an image from a clean tree, and the gate's image recipes,
-take the paths and the CMake arguments from here instead of each assembling their own.
+An image configures against the sources that sources.lock.json pins (FreeRTOS, TinyUSB, FreeRTOS+TCP, wpa_supplicant, the freestanding
+toolchain and its C headers, the GPU firmware), the host linker, the SMP C and C++ runtime that tools/build-newlib-smp.py builds and the Zephyr
+BR/EDR security sources. This module derives every path from the lock file's revisions and directories, never from a second copy of a hash, and
+names the command that fetches or builds whatever is missing. tools/configure.py and the checks that build an image from a clean tree take the
+CMake arguments from here.
 
     python3 checks/image_dependencies.py            print the -D arguments, one per line
     from image_dependencies import cmake_arguments  the same, as a list
+    from image_dependencies import missing          what is absent, each with the command that provides it
 """
+import json
 from pathlib import Path
-import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / '.cache/sunstoneos'
+LOCK = ROOT / 'sources.lock.json'
+LLVM_BIN = 'host/usr/lib/llvm-21/bin'
+
+
+class MissingDependency(FileNotFoundError):
+    """One or more image dependencies are absent; the message names each with the command that provides it."""
+
+
+def _lock():
+    return json.loads(LOCK.read_text())
+
+
+def _newest(directories):
+    return next(iter(sorted((d for d in directories if d.is_dir()), key=lambda d: d.stat().st_mtime, reverse=True)), None)
+
+
+def locations(cache=CACHE):
+    """name -> (directory or file, kind, the command that provides it); the path is only a location, it may not exist."""
+    cache = Path(cache)
+    lock = _lock()
+    sources = cache / 'sources'
+    stacks = sources / 'radio/stacks'
+    toolchain = cache / 'host' / lock['aarch64-newlib-toolchain']['directory']
+    fetch = 'python3 tools/fetch-sources.py '
+    return {
+        'freertos': (sources / lock['freertos']['directory'], 'directory', fetch + 'freertos'),
+        'tinyusb': (sources / lock['tinyusb']['directory'], 'directory', fetch + 'tinyusb'),
+        # The radio stacks are fetched as archives (the lock names no directory for them) and extracted next to them.
+        'tcp': (stacks / ('FreeRTOS-Plus-TCP-' + lock['freertos-tcp']['revision']), 'directory',
+                fetch + 'freertos-tcp  # then extract %s in %s' % (lock['freertos-tcp']['archive'], stacks)),
+        'rsn': (stacks / ('wpa_supplicant-' + lock['wpa-supplicant']['revision']), 'directory',
+                fetch + 'wpa-supplicant  # then extract %s in %s' % (lock['wpa-supplicant']['archive'], stacks)),
+        'newlib': (toolchain, 'directory', fetch + 'aarch64-newlib-toolchain'),
+        'headers': (toolchain / 'aarch64-none-elf/include', 'directory', fetch + 'aarch64-newlib-toolchain'),
+        # The OS kit's SMP C and C++ runtime: the most recently built distribution (its name is a hash of the builder and sources).
+        'newlib_smp': (_newest((cache / 'host').glob('newlib-smp-*')) or cache / 'host/newlib-smp-<key>', 'directory',
+                       'python3 tools/build-newlib-smp.py'),
+        'lld': (cache / LLVM_BIN / 'ld.lld', 'file',
+                'the host LLVM 21 tools live under %s (docs/build.md)' % (cache / 'host/usr')),
+        'gpu_firmware': (sources / lock['gpu-firmware']['archive'], 'file', fetch + 'gpu-firmware'),
+        # No lock entry pins these Zephyr files; the directory's own sources.json names each file's URL and SHA-256 (docs/bluetooth-native.md).
+        'bt_security': (sources / 'bluetooth-security-zephyr-v4.2.1', 'directory',
+                        'populate %s from the files in its sources.json (docs/bluetooth-native.md)' % (sources / 'bluetooth-security-zephyr-v4.2.1')),
+    }
+
+
+def missing(cache=CACHE):
+    """[(name, path, command)] for every dependency that is not present."""
+    return [(name, path, command) for name, (path, kind, command) in locations(cache).items()
+            if not (path.is_dir() if kind == 'directory' else path.is_file())]
 
 
 def paths(cache=CACHE):
-    """The dependency directories, each checked to exist; raises FileNotFoundError naming the missing one."""
-    cache = Path(cache)
-    stacks = cache / 'sources/radio/stacks'
-    found = {
-        'freertos': next(iter(sorted((cache / 'sources').glob('FreeRTOS-Kernel-*'))), None),
-        'tinyusb': next(iter(sorted((cache / 'sources').glob('tinyusb-*'))), None),
-        'tcp': next(iter(sorted(d for d in stacks.glob('FreeRTOS-Plus-TCP-*') if d.is_dir())), None),
-        'rsn': next(iter(sorted(d for d in stacks.glob('wpa_supplicant-*') if d.is_dir())), None),
-        'headers': next(iter(sorted((cache / 'host').glob('arm-gnu-toolchain-*/aarch64-none-elf/include'))), None),
-        'newlib': next(iter(sorted(d for d in (cache / 'host').glob('arm-gnu-toolchain-*') if d.is_dir())), None),
-        # The OS kit's SMP C and C++ runtime (tools/build-newlib-smp.py): the most recently built distribution.
-        'newlib_smp': next(iter(sorted((d for d in (cache / 'host').glob('newlib-smp-*') if d.is_dir()), key=lambda d: d.stat().st_mtime, reverse=True)), None),
-    }
-    for name, path in found.items():
-        if path is None or not path.is_dir():
-            raise FileNotFoundError('image dependency %s is not under %s' % (name, cache))
-    return found
+    """The dependency paths, each checked to exist; raises MissingDependency (a FileNotFoundError) naming every missing one."""
+    absent = missing(cache)
+    if absent:
+        raise MissingDependency('image dependencies missing under %s:\n%s' % (
+            cache, '\n'.join('  %s: %s\n    provide it with: %s' % (name, path, command) for name, path, command in absent)))
+    return {name: path for name, (path, _, _) in locations(cache).items()}
 
 
-def cmake_arguments(cache=CACHE, supervised=True):
-    """-D arguments for any image: FREERTOS_DIR, TINYUSB_DIR, the network sources and headers, the C and C++ runtimes (NEWLIB_ROOT, NEWLIB_SMP_ROOT) and the
-    supervised board switch the board images need."""
-    p = paths(cache)
-    arguments = ['-DFREERTOS_DIR=%s' % p['freertos'], '-DTINYUSB_DIR=%s' % p['tinyusb'], '-DSUNSTONE_TCP_DIR=%s' % p['tcp'],
-                 '-DSUNSTONE_RSN_DIR=%s' % p['rsn'], '-DSUNSTONE_NETWORK_C_HEADERS=%s' % p['headers'], '-DNEWLIB_ROOT=%s' % p['newlib'],
-                 '-DNEWLIB_SMP_ROOT=%s' % p['newlib_smp']]
-    if supervised:
+# CMake cache variable of each dependency.
+OPTIONS = {'freertos': 'FREERTOS_DIR', 'tinyusb': 'TINYUSB_DIR', 'tcp': 'SUNSTONE_TCP_DIR', 'rsn': 'SUNSTONE_RSN_DIR',
+           'headers': 'SUNSTONE_NETWORK_C_HEADERS', 'newlib': 'NEWLIB_ROOT', 'newlib_smp': 'NEWLIB_SMP_ROOT',
+           'lld': 'SUNSTONE_LLD', 'gpu_firmware': 'SUNSTONE_GPU_FIRMWARE', 'bt_security': 'SUNSTONE_BT_SECURITY_DIR'}
+
+
+def cmake_arguments(cache=CACHE, supervised=True, skip=()):
+    """-D arguments for any image: the dependency directories, the linker, the GPU firmware, the C and C++ runtimes and the supervised board
+    switch the board images need. skip names options (such as SUNSTONE_BT_SECURITY_DIR) that the caller sets itself; a skipped dependency
+    need not exist."""
+    wanted = {name: option for name, option in OPTIONS.items() if option not in skip}
+    found = locations(cache)
+    absent = [(n, found[n][0], found[n][2]) for n in wanted if not (found[n][0].is_dir() if found[n][1] == 'directory' else found[n][0].is_file())]
+    if absent:
+        raise MissingDependency('image dependencies missing under %s:\n%s' % (
+            cache, '\n'.join('  %s: %s\n    provide it with: %s' % item for item in absent)))
+    arguments = ['-D%s=%s' % (option, found[name][0]) for name, option in wanted.items()]
+    if supervised and 'SUNSTONE_BOARD_SUPERVISED' not in skip:
         arguments.append('-DSUNSTONE_BOARD_SUPERVISED=ON')
     return arguments
+
+
+def host_path(cache=CACHE):
+    """The directory of the host LLVM tools that the configure and the build put first on PATH."""
+    return str(Path(cache) / LLVM_BIN)
 
 
 if __name__ == '__main__':

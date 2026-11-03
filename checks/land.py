@@ -247,6 +247,7 @@ def run(root):
     full_gate(fx)
     union_merge(root / 'union')
     gate_lock(root / 'gatelock')
+    default_gate(root / 'defaultgate')
 
 
 def docs_only(fx):
@@ -345,6 +346,21 @@ def gate_lock(root):
         full = subprocess.run(gate + ['--full'], capture_output=True, text=True, env=env)
         assert 'waiting for' not in full.stdout + full.stderr, 'the full suite waited behind the landing gate'
     passed('every gate waits for the host-wide gate lock; the full suite has its own')
+
+
+def default_gate(root):
+    """With no --gate-command the landing and the full gate start tools/integration-gate.py of the worktree they gate, with no wrapper."""
+    import importlib.util
+    import types
+    spec = importlib.util.spec_from_file_location('land_default_gate', LAND)
+    land = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(land)
+    tree = root / 'tree'
+    assert land.gate_argv(types.SimpleNamespace(gate_command=None), tree) == [sys.executable, str(tree / 'tools/integration-gate.py')]
+    assert land.gate_argv(types.SimpleNamespace(gate_command=['gate.py']), tree) == ['gate.py']
+    for name in ('tools/land.py', 'tools/full-gate.py'):
+        assert 'integration-gate.sh' not in (ROOT / name).read_text(), name
+    passed('the default gate command is tools/integration-gate.py of the gated worktree, not a wrapper script')
 
 
 def union_merge(root):

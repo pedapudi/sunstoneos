@@ -3,6 +3,7 @@
 #include "a733_native_usb.h"
 #include "a733_radio_entropy.h"
 #include "a733_radio_platform_native.h"
+#include "a733_radio_result.h"
 #include "a733_radio_session.h"
 #include "identity.h"
 struct board_radio_config {
@@ -18,9 +19,18 @@ struct board_radio_config {
     void *admission_context;
     atomic_uint *recovery_state; /* Same latch as actual hardware reload CAS. */
     uint64_t startup_deadline_us,association_timeout_us,security_timeout_us;
+    /* The staged service. A nonnull report_memory.allocate makes the owner scan
+     * once the management layer is ready, before any association, and record
+     * every stage in the report (board_radio_report). scan_timeout_us bounds the
+     * scan. scan_only runs no association and needs no entropy, target,
+     * credential or network profile: the owner stops at BOARD_RADIO_SCANNED.
+     * first_run_guard asks the platform for its first-run guard. */
+    struct a733_radio_allocator report_memory;
+    uint64_t scan_timeout_us;
+    unsigned scan_only,first_run_guard;
 };
 enum board_radio_result { BOARD_RADIO_PENDING,BOARD_RADIO_NETWORK,
-    BOARD_RADIO_RETAINED,BOARD_RADIO_INVALID };
+    BOARD_RADIO_RETAINED,BOARD_RADIO_INVALID,BOARD_RADIO_SCANNED,BOARD_RADIO_DOWN };
 struct board_radio {
     struct board_radio *self;
     struct board_radio_config config;
@@ -46,7 +56,8 @@ struct board_radio {
     struct aic8800_dispatch_event startup_event;
     struct aic8800_dispatch_record diagnostic;
     uint64_t startup_events,diagnostic_records;
-    unsigned stage,constructed;
+    unsigned stage,constructed,scan_started,scan_done;
+    struct a733_radio_report report;
     uint64_t operation_deadline;
     /* Link recovery: owner-drained events while reassociating, and the bound
      * for admitting recovery after a clean loss is first reported. */
@@ -60,6 +71,9 @@ struct board_radio {
 #define BOARD_RADIO_PROFILE_SUPERVISED_VERSION 4u
 #define BOARD_RADIO_PROFILE_LISTENER_VERSION 5u
 #define BOARD_RADIO_PROFILE_LISTENER_SUPERVISED_VERSION 6u
+/* Scan-only: no WPA2 target, crypto engine or TCP exchange. Version 8 is the supervised upload. */
+#define BOARD_RADIO_PROFILE_SCAN_VERSION 7u
+#define BOARD_RADIO_PROFILE_SCAN_SUPERVISED_VERSION 8u
 #define BOARD_RADIO_PROFILE_BYTES 1872u
 #define BOARD_RADIO_PROFILE_RESPONSE_BYTES_OFFSET 1336u
 #define BOARD_RADIO_PROFILE_NETWORK_OFFSET 1856u
@@ -91,12 +105,17 @@ struct board_radio_profile {
     uint8_t network_dns[4],network_reserved[3];
     uint32_t address_timeout_ticks,lease_cap_ticks;
 };
+/* Profile version 7 is a scan-only session; see radio.c. Inline so that every image that
+ * links the board composition has it without linking the radio owner. */
+static inline int board_radio_profile_scan_only(const struct board_radio_profile *f)
+{return f&&f->version==BOARD_RADIO_PROFILE_SCAN_VERSION;}
 /* Wire timing fields are 32-bit ticks, widened into the actual TickType_t.
  * Fixed addressing has no acquisition/lease timer; optional DNS is independent. */
 static inline int board_radio_profile_network_valid(const struct board_radio_profile *p)
 {
     if(!p||p->network_dhcp>1||p->network_reserved[0]||p->network_reserved[1]||p->network_reserved[2])return 0;
-    if(p->version==BOARD_RADIO_PROFILE_VERSION||p->version==BOARD_RADIO_PROFILE_SUPERVISED_VERSION){if(p->tcp_mode)return 0;}
+    if(p->version==BOARD_RADIO_PROFILE_VERSION||p->version==BOARD_RADIO_PROFILE_SUPERVISED_VERSION||
+       p->version==BOARD_RADIO_PROFILE_SCAN_VERSION||p->version==BOARD_RADIO_PROFILE_SCAN_SUPERVISED_VERSION){if(p->tcp_mode)return 0;}
     else if(p->version==BOARD_RADIO_PROFILE_LISTENER_VERSION||p->version==BOARD_RADIO_PROFILE_LISTENER_SUPERVISED_VERSION){
         if(p->tcp_mode!=1||!(p->peer_address[0]|p->peer_address[1]|p->peer_address[2]|p->peer_address[3]))return 0;
     }else return 0;
@@ -143,6 +162,17 @@ int board_radio_init(struct board_radio *,const struct board_radio_config *);
  * and credentials, bounded by the association, security and DHCP address
  * timeouts; PENDING is reported until the address returns. */
 enum board_radio_result board_radio_poll(struct board_radio *);
+/* Begin shutting the module down, for a normal return. Owner task only, from the
+ * terminal scanned stage of a scan-only session, with the transport idle: no
+ * pending host request, no held record. From then on the owner polls only the
+ * platform's shutdown, whose every step is read back (a733_radio_platform_shutdown),
+ * and board_radio_poll reports BOARD_RADIO_DOWN when it is done. Returns 0 and
+ * changes nothing if the session is not in that state. */
+int board_radio_shutdown(struct board_radio *,uint64_t deadline_us);
+/* The staged service's report: the stage reached and what was observed on the way.
+ * Valid after init when report_memory was supplied, else NULL. Owner task only;
+ * a host reads it through a733_radio_report_encode. */
+const struct a733_radio_report *board_radio_report(const struct board_radio *);
 /* Existing copied bounded socket queues; call from configured client tasks. */
 /* Existing radio owner task only. Quiescent sockets, healthy IPv4
  * WPA2 profile (fixed or DHCP); same admitted target/credentials, new association/RSN state.

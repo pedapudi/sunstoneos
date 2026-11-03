@@ -725,6 +725,8 @@ def capture(owner, plan, args):
         reads.append(('npu-stop', geo['npu_stop']['address'], geo['npu_stop']['bytes']))
     if 'cpu_rails' in geo:
         reads.append(('cpu-rails', geo['cpu_rails']['address'], geo['cpu_rails']['bytes']))
+    if 'radio_result' in geo:
+        reads.append(('radio-descriptor', geo['radio_result']['address'], geo['radio_result']['bytes']))
     # Preserve every returned object before decoding any of them. A malformed
     # application result must not hide the native retirement or GPU receipt.
     copied = {name: owner.read(address, size, out/(name + '.bin'))
@@ -752,6 +754,19 @@ def capture(owner, plan, args):
             except (ValueError, KeyError, struct.error) as error:
                 valid = False
                 decoded.update(npu_capture_status='malformed', npu_error=str(error))
+        if 'radio_result' in geo:
+            # The record is as long as its scan list: read it whole from where the descriptor says.
+            decoded['radio_descriptor_sha256'] = hashlib.sha256(copied['radio-descriptor']).hexdigest()
+            try:
+                channel = load('radio_result_channel', ROOT/'tools/radio_result_channel.py')
+                decoded['radio'], raw_radio = channel.read_record(
+                    lambda address, size, name: owner.read(address, size, out/(name + '.bin')),
+                    copied['radio-descriptor'], records.RAM)
+                decoded['radio_capture_sha256'] = hashlib.sha256(raw_radio).hexdigest()
+                decoded['radio_capture_status'] = 'decoded'
+            except (ValueError, KeyError, struct.error) as error:
+                valid = False
+                decoded.update(radio_capture_status='malformed', radio_error=str(error))
         if 'cpu_rails' in geo:
             decoded['cpu_rail_capture_sha256'] = hashlib.sha256(copied['cpu-rails']).hexdigest()
             try:

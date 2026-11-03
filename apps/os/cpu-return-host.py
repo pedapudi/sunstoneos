@@ -116,6 +116,13 @@ def geometry(image):
                 symbols['__bss_start'][0] <= address < address + size <= symbols['__bss_end'][0],
                 'CPU rail readback object differs from writable image BSS.')
         result['cpu_rails'] = {'address': address, 'bytes': size}
+    if 'os_radio_result_descriptor' in symbols:
+        address, size = symbols['os_radio_result_descriptor']
+        low, high = result['cached_writable']
+        require(size == 24 and address % 8 == 0 and low <= address < address + size <= high and
+                symbols['__bss_start'][0] <= address < address + size <= symbols['__bss_end'][0],
+                'Radio result descriptor differs from writable image BSS.')
+        result['radio_result'] = {'address': address, 'bytes': size}
     pool_names = ('__os_npu_pool_start', '__os_npu_pool_end')
     present = [name in symbols for name in pool_names]
     require(present[0] == present[1], 'Partial NPU pool geometry.')
