@@ -210,13 +210,14 @@ void kernel_main(void)
         model.bootstrap_completion=npu_irq_case==20?BOOTSTRAP_CANCEL_EVENT:BOOTSTRAP_NO_EVENT;
         set(&model.allow_cancel_idle,1);
     }
+    static _Alignas(8) uint8_t memory_tables[A733_NPU_MEMORY_TABLES_BYTES(4)],service_tables[NPU_SERVICE_TABLES_BYTES(1,3)];
     struct a733_npu_buffer buffers[4];
     for(unsigned i=0;i<3;++i)buffers[i]=(struct a733_npu_buffer){(uintptr_t)command_memory[i],
         (uintptr_t)command_memory[i],sizeof(command_memory[i]),0x10000000+i*524288,
         i?A733_NPU_BUFFER_COMMAND:A733_NPU_BUFFER_BOOTSTRAP};
     buffers[3]=(struct a733_npu_buffer){(uintptr_t)data+4096,(uintptr_t)data+4096,4096,0x10180000,A733_NPU_BUFFER_WRITE};
     configASSERT(a733_npu_bootstrap(command_memory[0],sizeof(command_memory[0])));
-    configASSERT(a733_npu_native_init(&native,0x09000000,0x09000000,arena,sizeof(arena),(uintptr_t)arena,buffers,4,fatal,NULL));
+    configASSERT(a733_npu_native_init(&native,0x09000000,0x09000000,arena,sizeof(arena),(uintptr_t)arena,buffers,4,fatal,NULL,memory_tables,sizeof(memory_tables)));
     struct a733_npu_command commands[3];
     for(unsigned i=0;i<3;++i)configASSERT(a733_npu_memory_command(&native.memory,buffers[i].device,&commands[i]));
     model.regs[0x20/4]=0x9000;model.regs[0x24/4]=0x9202;model.regs[0x30/4]=0x1000003b;
@@ -224,6 +225,7 @@ void kernel_main(void)
     irq_route=npu_irq_case==9 ? 2 : 1;
     struct a733_npu_ops selected_ops=model_ops;
     if(npu_irq_case==16)selected_ops.microseconds=stationary_clock;
+    configASSERT(npu_service_tables(&service,1,3,service_tables,sizeof(service_tables)));
     configASSERT(npu_service_init(&service,&selected_ops,NULL,&native.memory.image,commands,3,4,irq_route));
     if(shared_case())configASSERT(npu_service_share(&service));
     if(runtime_case())configASSERT(npu_service_runtime(&service,&runtime_hooks,&service));

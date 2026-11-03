@@ -17,14 +17,8 @@ set(SUNSTONE_OS_NPU_POOL_BASE "" CACHE STRING "Address of an NPU pool placed in 
 set(SUNSTONE_OS_NPU_QUEUE_MODELS "" CACHE STRING "Comma-separated resident model indices, client model first")
 set(SUNSTONE_OS_NPU_POOL_BYTES "8388608" CACHE STRING "Bytes of the NPU pool: 8 MiB at 0x47400000, or 10 to 48 MiB in blocks of 2 MiB ending at 0x47000000 (size it from the declaration with checks/npu-pool-size.py)")
 set(SUNSTONE_OS_NPU_EXTERNAL_MODELS "" CACHE FILEPATH "JSON {name: {address, bytes, sha256}} of models given by address, length and digest instead of linked bytes (runner input region or card)")
+set(SUNSTONE_OS_NPU_LINKS "0" CACHE STRING "Tensor links the application may ask for at run time (its declared npu.links), which the NPU queue's tables reserve room for")
 set(SUNSTONE_OS_NPU_QUEUE_DEPTH "" CACHE STRING "Ring depth of the NPU queue: the application's declared in-flight jobs (empty: 64)")
-set(SUNSTONE_OS_NPU_MAX_TENSORS "" CACHE STRING "Most inputs, and most outputs, of one NPU graph that the loader admits (empty: 8)")
-if(NOT SUNSTONE_OS_NPU_MAX_TENSORS STREQUAL "")
-  if(NOT SUNSTONE_OS_NPU_MAX_TENSORS MATCHES "^[1-9][0-9]*$")
-    message(FATAL_ERROR "SUNSTONE_OS_NPU_MAX_TENSORS is a positive number")
-  endif()
-  add_compile_definitions(NBG_ASSEMBLY_MAX_TENSORS=${SUNSTONE_OS_NPU_MAX_TENSORS}u SS_NPU_QUEUE_MAX_TENSORS=${SUNSTONE_OS_NPU_MAX_TENSORS}u)
-endif()
 if(NOT SUNSTONE_OS_NPU_QUEUE_DEPTH STREQUAL "")
   if(NOT SUNSTONE_OS_NPU_QUEUE_DEPTH MATCHES "^[1-9][0-9]*$")
     message(FATAL_ERROR "SUNSTONE_OS_NPU_QUEUE_DEPTH is a positive number")
@@ -227,7 +221,7 @@ set(os_generated "${os_build}/boot.c")
 if(SUNSTONE_A733_OS_RADIO)
   # The board's own radio composition serves workload 1; its owner and client
   # report resident progress through the patched main.c.
-  list(APPEND os_added apps/os/radio.c)
+  list(APPEND os_added apps/os/radio.c apps/os/wifi_credential.c)
   apply_build_patch("${os_build}/main.c" "${os_root}/apps/board/main.c" "${os_root}/apps/os/main.patch")
   list(REMOVE_ITEM os_sources "${os_root}/apps/board/main.c")
   list(APPEND os_sources "${os_build}/main.c")
@@ -272,8 +266,27 @@ if(SUNSTONE_A733_OS_NPU)
     --artifacts "${SUNSTONE_OS_NPU_CATALOGUE}" --models "${SUNSTONE_OS_NPU_MODELS}" ${os_npu_select}
     --output "${os_build}/npu-models.c" COMMAND_ERROR_IS_FATAL ANY)
   list(APPEND os_sources "${os_build}/npu-models.c")
+  # The EL1 metadata arena is linked at exactly the size the declaration needs: the sizing call of the runtime, run on the host
+  # for this image's graphs (tools/npu-meta-header.py). The image refuses at start if its session declares more.
+  # Models given by address (external) are sized from their linked bytes: the layout depends on the graph alone.
+  set(os_npu_meta_select ${os_npu_select})
+  list(FIND os_npu_meta_select --external os_npu_external_at)
+  if(NOT os_npu_external_at EQUAL -1)
+    math(EXPR os_npu_external_end "${os_npu_external_at} + 1")
+    list(REMOVE_AT os_npu_meta_select ${os_npu_external_at} ${os_npu_external_end})
+  endif()
+  if(SUNSTONE_A733_OS_NPU_QUEUE)
+    set(os_npu_meta_shape --queue "${SUNSTONE_OS_NPU_LINKS},0")
+  else()
+    set(os_npu_meta_shape --uniform --slots 1)
+  endif()
+  execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/tools/npu-meta-header.py"
+    --artifacts "${SUNSTONE_OS_NPU_CATALOGUE}" --models "${SUNSTONE_OS_NPU_MODELS}" ${os_npu_meta_shape}
+    --output "${os_build}/os-npu-meta.h" --work "${os_build}/npu-meta-work"
+    --select --model 0 ${os_npu_meta_select} COMMAND_ERROR_IS_FATAL ANY)
+  list(APPEND os_external_inputs "${os_build}/os-npu-meta.h" "${os_root}/tools/npu-meta-header.py" "${os_root}/checks/npu-pool-size.py")
   list(APPEND os_added apps/os/npu.c apps/os/npu-client.c apps/os/npu-irq.c
-    platform/a733/npu_native.c runtime/counter_clock.c drivers/npu/a733_npu_runtime.c drivers/npu/a733_npu_runtime_interim.c drivers/npu/npu_declaration.c
+    platform/a733/npu_native.c runtime/counter_clock.c drivers/npu/a733_npu_runtime.c drivers/npu/a733_npu_runtime_interim.c drivers/npu/npu_pool.c drivers/npu/npu_declaration.c
     drivers/npu/npu_service.c drivers/npu/npu_queue.c drivers/npu/npu_runtime_queue.c drivers/npu/npu_idle.c drivers/npu/a733_npu_sequence.c
     drivers/npu/a733_npu_controller.c drivers/npu/a733_npu_memory.c
     drivers/npu/a733_npu_mmu.c drivers/npu/nbg_model.c drivers/npu/nbg_assembly.c drivers/npu/nbg_checksum.c

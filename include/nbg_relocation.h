@@ -3,8 +3,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define NBG_RELOCATION_MAX_PATCHES 4096u
-
 enum nbg_address_encoding {
     NBG_ADDRESS_WORD = 0,
     NBG_ADDRESS_SHIFT6 = 1,
@@ -36,7 +34,7 @@ struct nbg_relocation {
  *
  * Refuse empty/out-of-range allocations and accesses, address zero, unknown
  * encodings, duplicate destinations, metadata/buffer aliases, wrapping CPU
- * ranges, and counts outside 1..MAX_PATCHES. Refusal leaves the buffer unchanged.
+ * ranges, and a count of zero or beyond the buffer's destination words (distinct four-byte words, so its size is the only bound). Refusal leaves the buffer unchanged.
  * Caller keeps the buffer and metadata stable throughout validation and write.
  * No allocation, cache operations, MMIO, or synchronization occurs here.
  *

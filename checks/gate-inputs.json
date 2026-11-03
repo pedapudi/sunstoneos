@@ -925,6 +925,28 @@
     }
    ]
   },
+  "cached-device-reservations.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--fixtures",
+      "{cache}/evidence/npu-reserved-20261016/batch2/fixtures",
+      "--firmware",
+      "{cache}/evidence/gpu-render-20261017/native1/fixtures/gpu.fw",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
   "camera-application.py": {
    "runs": [
     {
@@ -1518,6 +1540,16 @@
     }
    ]
   },
+  "npu-nocaps.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
   "npu-pool-size.py": {
    "runs": [
     {
@@ -1843,6 +1875,16 @@
      "args": [
       "--native-flags",
       "{build:npu}/CMakeFiles/sunstone-a733-os.dir/flags.make",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-npu-service.py": {
+   "runs": [
+    {
+     "args": [
       "--output",
       "{output}"
      ]
@@ -2633,7 +2675,6 @@
  "waived": {
   "a733-smp-cached.py": "helper module of a runnable check (not run on its own) | loaded by deadline.py",
   "aic8800-supplicant.py": "helper module of a runnable check (not run on its own) | loaded by aic8800-security.py",
-  "cached-device-reservations.py": "real defect or unexplained failure, reported to the coordinator | convolution service passes a fixed 524,288-byte command buffer; the assembler requires the graph-sized allocation (87afaecf); fixed by the NPU cap removal",
   "cold-entry.py": "helper module of a runnable check (not run on its own) | loaded by standalone-boot-loader.py",
   "cpu-runtime-qualification.py": "helper module of a runnable check (not run on its own) | loaded by os-cpu-return-services.py",
   "fault-decode.py": "helper module of a runnable check (not run on its own) | loaded by fault-capture.py",

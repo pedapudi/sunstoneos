@@ -69,9 +69,10 @@ uint32_t a733_npu_startup_wait_ticks(struct a733_npu_startup *s)
 {(void)s;abort();}
 static void emit_record(void)
 {printf("%u %u %u %u\n",first_site,first_value,(uint32_t)os_npu_first_failure.ticket,os_npu_first_failure.operation);}
+static struct npu_runtime_slot slot_zero; /* the slot table is carved at prepare; no runtime is prepared here */
 int main(int argc,char **argv)
 {
-    assert(argc==2);mode=(unsigned)strtoul(argv[1],NULL,10);
+    assert(argc==2);npu.runtime.slot=&slot_zero;mode=(unsigned)strtoul(argv[1],NULL,10);
     npu.started=1;npu.end=1000000;npu.initial_deadline=2000;
     atomic_store(&npu.gate,(UINT64_C(900000)<<3)|ALLOW);
     atomic_store(&npu.runtime.slot[0].state,NPU_RUNTIME_READY);

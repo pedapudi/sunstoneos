@@ -79,6 +79,9 @@ struct npu_convolution {
     unsigned char stream_digest[NPU_CONVOLUTION_STREAMS][32];
     struct a733_npu_native native;
     struct a733_npu_command commands[NPU_CONVOLUTION_COMMANDS];
+    /* The tables of the memory layer and of the service, for this driver's one client and its fixed buffers. */
+    _Alignas(8) uint8_t memory_tables[A733_NPU_MEMORY_TABLES_BYTES(NPU_CONVOLUTION_BUFFERS)];
+    _Alignas(8) uint8_t service_tables[NPU_SERVICE_TABLES_BYTES(1, NPU_CONVOLUTION_COMMANDS)];
     struct npu_service service;
     struct a733_npu_startup *startup;
     TaskHandle_t client;
@@ -112,6 +115,10 @@ struct npu_convolution {
     uint64_t job_submit_ticks, job_publish_ticks, job_doorbell_ticks;
 };
 
+/* The command allocation the graph needs, in bytes (its own stream, rounded to a page), or 0 when the model is not
+ * admissible. The caller sizes the command buffer of the configuration with it; the layout table's size for that slot is
+ * the span it may use, not its size. */
+size_t npu_convolution_command_bytes(const void *model, size_t model_bytes);
 /* EL1, before scheduling, zero once. Copies then hashes the complete model;
  * accepts only the reviewed complete UINT8 compiled models in the private
  * catalogue. Select once for the context lifetime; no runtime upload or switch.

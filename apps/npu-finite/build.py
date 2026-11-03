@@ -247,7 +247,7 @@ if a.runtime:
   compile_like('/apps/npu-convolution/main.c',root/('apps/npu-finite/queue-client.c' if a.latency else 'apps/npu-sdk/finite-client.c' if a.sdk else 'apps/npu-finite/runtime-client.c'),'runtime-client'),
   compile_like('/platform/a733/npu_irq.c',root/'apps/npu-finite/runtime-irq.c','runtime-irq'),
   compile_like('/apps/npu-convolution/native.c',generated/'networks.c','networks')]
- for n in ('a733_npu_runtime','a733_npu_runtime_interim','npu_job'):
+ for n in ('a733_npu_runtime','a733_npu_runtime_interim','npu_pool','npu_job'):
   runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/'drivers/npu'/(n+'.c'),n))
  if a.latency:
   for n in ('npu_queue','npu_runtime_queue','npu_idle'):
@@ -261,7 +261,7 @@ if a.runtime:
  runtime_identity={'runtime_sources':{str(x.relative_to(root)):sha(x) for x in sorted([root/'apps/npu-convolution/native-runtime.c',root/'apps/npu-convolution/native-runtime.h',
   root/'apps/npu-finite/runtime-client.c',root/'apps/npu-finite/runtime-irq.c',root/'apps/npu-finite/networks.h',root/'apps/npu-finite/runtime-models.json',
   root/'apps/npu-finite/startup.h',root/'apps/npu-finite/crumb.h',root/'platform/a733/npu_irq.c',root/'include/a733_npu_irq.h',
-  root/'drivers/npu/a733_npu_runtime.c',root/'drivers/npu/a733_npu_runtime_interim.c',root/'drivers/npu/npu_job.c',root/'include/npu_job.h',root/'include/npu_crumb.h',
+  root/'drivers/npu/a733_npu_runtime.c',root/'drivers/npu/a733_npu_runtime_interim.c',root/'drivers/npu/npu_pool.c',root/'drivers/npu/npu_job.c',root/'include/npu_job.h',root/'include/npu_crumb.h',
   root/'include/npu_admitted_models.h',root/'include/npu_runtime.h',root/'tools/npu-session-catalogue.py',root/'tools/npu-session-models.json',runtime_list]+([job_plan] if a.model_switch else [])+([root/'apps/npu-sdk/finite-client.c',root/'runtime/npu_app.c',root/'include/sunstone_app.h',root/'include/sunstone_npu_service.h'] if a.sdk else []))},
   'networks':[{'name':n['name'],'model_sha256':hashlib.sha256(n['model']).hexdigest(),'input_sha256':hashlib.sha256(n['input']).hexdigest(),
    'reference_sha256':hashlib.sha256(n['reference']).hexdigest()} for n in networks],

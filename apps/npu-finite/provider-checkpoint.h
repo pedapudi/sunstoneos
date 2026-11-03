@@ -26,7 +26,7 @@ static int provider_checkpoint_ready(void)
         const struct a733_power_domain *d=&app.domains.domain[i];
         if(d->state || d->count || d->delays_ready || d->command_at || d->deadline)return 0;
     }
-    for(unsigned i=0;i<NPU_SERVICE_CLIENTS;++i)
+    for(unsigned i=0;i<v->client_count;++i)
         if(v->clients[i].pending)return 0;
     return xTaskGetSchedulerState()==taskSCHEDULER_NOT_STARTED &&
         app.used==1 && !app.creating && app.client && app.pmic_task && app.bootstrap_task &&

@@ -22,8 +22,10 @@ void board_fail_at(uint32_t site,uint32_t value,const void *where)
 static int run(unsigned model,const void *in,size_t ni,void *out,size_t no,uint64_t timeout)
 {(void)model;(void)in;(void)ni;(void)out;(void)no;(void)timeout;return 1;}
 static int close_backend(void){return 1;}
+static struct npu_runtime_slot slot_zero; /* the runtime's slot table is carved at prepare; no runtime is prepared here */
 int main(void)
 {
+    npu.runtime.slot=&slot_zero;
     npu.started=1;npu.end=10000000;
     npu.client=(TaskHandle_t)&npu.client;npu.bootstrap=(TaskHandle_t)&npu.bootstrap;
     atomic_store(&npu.gate,(UINT64_C(1000000)<<3)|ALLOW);

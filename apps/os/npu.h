@@ -3,7 +3,9 @@
 #include "npu_runtime.h"
 #include "sunstone_app.h"
 /* The immutable linked catalogue (apps/os/npu-catalogue.py). */
+#ifndef OS_NPU_CORE /* the host build of the queue's open path (checks/os-npu-service.py) has one core */
 #define OS_NPU_CORE 1u
+#endif
 /* The pool is sized from the application's declaration (cmake SUNSTONE_OS_NPU_POOL_BYTES, docs/designs/npu-resources.md,
  * "The pool"): 8 MiB at 0x47400000 as always, or a larger multiple of 2 MiB that ends at 0x47000000, the bottom of the
  * monitor interval, so that it stays inside the write-back RAM that EL0 reaches and below the application regions.
@@ -103,6 +105,7 @@ int os_npu_queue_begin(void);
 void os_npu_queue_end(void);
 int os_npu_queue_sdk_bind(void);
 int os_npu_queue_prepare_edges(struct npu_runtime *);
+int os_npu_queue_tables(struct npu_runtime *);
 int os_npu_queue_sdk_step(void);
 int os_npu_queue_sdk_closed(void);
 void os_npu_queue_sdk_fail(void);

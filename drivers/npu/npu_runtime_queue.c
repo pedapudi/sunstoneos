@@ -182,7 +182,7 @@ int npu_runtime_queue_claim(struct npu_runtime_queue *q, struct npu_runtime *rt)
         xTaskGetCurrentTaskHandle() != rt->slot[0].client || !rt->slot[0].opened ||
         rt->slot[0].closed || rt->slot[0].pending || rt->service.direct || rt->service.direct_request ||
         rt->service.controller.state != A733_NPU_READY ||
-        rt->service.running != NPU_SERVICE_CLIENTS || rt->service.has_deferred ||
+        rt->service.running != NPU_SERVICE_NONE || rt->service.has_deferred ||
         !a733_npu_startup_window_open(rt->startup) ||
         !npu_runtime_tables_intact(rt)) return 0;
     uint64_t el;

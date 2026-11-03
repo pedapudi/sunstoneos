@@ -21,7 +21,7 @@ MUTATIONS = {
     # The memory layer and the table builder each refuse a buffer that overlaps the tables; only both removed expose them.
     'tables-may-be-mapped-as-a-buffer': [
         ('drivers/npu/a733_npu_memory.c',
-         'a733_extents_intersect(b->cpu, b->bytes, (uintptr_t)arena, capacity) ||\n            a733_extents_intersect(b->physical, b->bytes, physical, capacity) ||', ''),
+         'a733_extents_intersect(b->cpu, b->bytes, (uintptr_t)arena, capacity) ||\n            a733_extents_intersect(b->cpu, b->bytes, (uintptr_t)tables, table_bytes) ||\n            a733_extents_intersect(b->physical, b->bytes, physical, capacity) ||', ''),
         ('drivers/npu/a733_npu_mmu.c',
          '            a733_extents_intersect(r->physical, r->bytes, physical, capacity)) return 0;', '            0) return 0;')],
 }

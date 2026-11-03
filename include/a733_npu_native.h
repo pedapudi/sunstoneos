@@ -34,6 +34,7 @@ struct a733_npu_native {
 int a733_npu_native_init(struct a733_npu_native *, uintptr_t register_cpu,
                          uint64_t register_physical, void *arena, size_t capacity,
                          uint64_t arena_physical, const struct a733_npu_buffer *, size_t,
-                         void (*fatal)(void *), void *cookie);
+                         void (*fatal)(void *), void *cookie,
+                         void *tables, size_t table_bytes);
 extern const struct a733_npu_ops a733_npu_native_operations;
 #endif

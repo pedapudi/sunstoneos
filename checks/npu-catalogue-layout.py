@@ -35,7 +35,7 @@ have = [c.sizeof(mirror), c.sizeof(tool.Requirement)] + [getattr(getattr(mirror,
 for index, label in enumerate(labels):
     assert have[index] == native.nbg_layout_abi(index), \
         'the Layout mirror differs from struct nbg_assembly_layout in %s: %d against %d' % (label, have[index], native.nbg_layout_abi(index))
-assert mirror.buffers.size // c.sizeof(tool.Requirement) == native.nbg_layout_abi(12), 'different number of buffers'
+assert mirror.capacity.offset == native.nbg_layout_abi(12), 'the table capacity is placed differently'
 if hasattr(tool, 'check_abi'):
     tool.check_abi(native)
-print('PASS the catalogue tool mirror matches struct nbg_assembly_layout: size %d, %d buffers' % (have[0], native.nbg_layout_abi(12)))
+print('PASS the catalogue tool mirror matches struct nbg_assembly_layout: size %d, capacity at %d' % (have[0], native.nbg_layout_abi(12)))

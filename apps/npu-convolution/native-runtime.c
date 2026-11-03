@@ -301,6 +301,9 @@ struct npu_runtime *a733_npu_application_runtime(void)
     return app.used && xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
         xTaskGetCurrentTaskHandle()==app.client && a733_npu_application_ready() ? &app.runtime : NULL;
 }
+/* This application's own arenas: the sizing call's work memory and the EL1 metadata of its one runtime. */
+static _Alignas(64) uint8_t sizing_scratch[65536], meta_memory[262144];
+static struct npu_meta_window meta_window;
 static int runtime_prepare(const struct npu_runtime_model *models,unsigned count)
 {
     static const struct a733_mapping_rule wb={A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
@@ -309,11 +312,13 @@ static int runtime_prepare(const struct npu_runtime_model *models,unsigned count
     for(unsigned m=0;m<count;++m)if(!image(models[m].data,models[m].bytes,0))return 0;
     const unsigned resident=a733_npu_runtime_resident_slots();
     const unsigned slots=resident?resident:1;
-    const size_t need=npu_runtime_requirements(models,count,slots);
+    const struct npu_runtime_bounds sizing={.scratch=sizing_scratch,.scratch_bytes=sizeof sizing_scratch};
+    const size_t need=npu_runtime_requirements_with(models,count,slots,&sizing);
+    npu_meta_window_init(&meta_window,meta_memory,sizeof meta_memory);
     if(!need || need>end-start ||
        !a733_mapping_check_stride(aarch64_device_translate,start,start,need,NPU_RUNTIME_GROUP_BYTES,&wb))return 0;
     struct npu_runtime_config config={.models=models,.count=count,.slots=slots,.cpu=start,.physical=start,.bytes=need,
-        .register_cpu=0x03600000,.register_physical=0x03600000,.fatal=runtime_fatal};
+        .register_cpu=0x03600000,.register_physical=0x03600000,.fatal=runtime_fatal,.meta=&meta_window.meta};
     return npu_runtime_prepare(&app.runtime,&config)&&
         (!resident||a733_npu_runtime_resident_prepare(&app.runtime));
 }

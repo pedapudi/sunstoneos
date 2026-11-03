@@ -3,7 +3,7 @@ enum npu_declaration_result npu_declaration_check(const struct npu_declaration *
                                                   const struct npu_tables *t)
 {
     if (!d->slots && !d->in_flight && !d->graphs && !d->links) return NPU_DECLARATION_MISSING;
-    if (!d->slots || d->slots > NPU_MAX_SLOTS) return NPU_DECLARATION_SLOTS;
+    if (!d->slots) return NPU_DECLARATION_SLOTS;
     if (!d->in_flight) return NPU_DECLARATION_DEPTH;
     if (!d->graphs) return NPU_DECLARATION_GRAPHS;
     if (d->slots < n->slots) return NPU_DECLARATION_IMAGE_SLOTS;
