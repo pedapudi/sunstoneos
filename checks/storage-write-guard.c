@@ -96,7 +96,7 @@ static int dev_write(void *c, uint64_t s, uint32_t n, const uint8_t *buf)
 int ss_storage_device(struct fwr_device *d)
 {
     *d = (struct fwr_device){.context = NULL, .read = dev_read, .write = dev_write, .yield = NULL, .sectors = dev_sectors,
-                             .au_sectors = 256, .max_write_sectors = 256};
+                             .au_sectors = getenv("AU_SECTORS") ? (uint32_t)strtoul(getenv("AU_SECTORS"), 0, 0) : 256, .max_write_sectors = 256};
     return 1;
 }
 
