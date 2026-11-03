@@ -145,6 +145,9 @@ _Static_assert(offsetof(struct os_session,cpu_critical_millicelsius)==804&&
 size_t os_session_wire_bytes(unsigned granted);
 /* The row (from 1) of the refused composition table that the granted set matches, or 0 (apps/os/admission.c). */
 unsigned os_composition_refused(unsigned granted);
+/* ORs the cores of this many workers of a main task on main_core into *mask; 0 when the manifest asks for more than its
+ * cluster order holds (apps/os/grants.c). */
+int os_worker_cores(unsigned main_core,unsigned workers,uint32_t *mask);
 const char *os_composition_reason(unsigned row);
 #define OS_SESSION_VERSION 1u
 int os_session_valid(const struct os_session *);
@@ -153,8 +156,10 @@ const struct os_session *os_session(void);
 /* The sealed session when it extends exactly the board prefix that main.c
  * admitted and names this image; NULL otherwise. Each entry starts from it. */
 const struct os_session *os_session_admitted(void);
-/* 1 when the admitted session grants every service in the OS_GRANT_* mask; 0 before admission. EL0-safe: it reads the
- * sealed copy and touches no hardware. */
+/* The full validation behind os_session_admitted; called until it succeeds, then never again (apps/os/start.c). */
+const struct os_session *os_session_validated(void);
+/* 1 when the admitted session grants every service in the OS_GRANT_* mask; 0 before admission. EL0-safe: after the first
+ * admission it is one load of a word that holds the granted set, and it touches no hardware. */
 int os_granted(unsigned mask);
 
 /* Fixed start list entries; each runs at the board hook of the same name. */
@@ -181,6 +186,8 @@ int os_cpu_admit(void);
  * reading: one bounded CPU clock step. -1 ends the session. */
 struct a733_thermal_policy;
 int os_cpu_clock_step(const struct a733_thermal_policy *);
+/* Thermal task: 1 when the next owner pass is due within a tick (apps/os/cpu.c). */
+int os_cpu_clock_busy(void);
 /* EL0-safe: 1 once the grant's requests have finished, whatever their result. */
 int os_cpu_clock_ready(void);
 #endif

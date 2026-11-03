@@ -103,6 +103,7 @@ def one_build(build, out):
     crumbs = load('admission_preflight_crumbs', ROOT / 'tools/a733-crumbs.py')
     board = load('admission_preflight_board', ROOT / 'tools/board.py')
     manifests = load('admission_preflight_manifest', ROOT / 'tools/sunstone-manifest.py')
+    host = load('admission_preflight_session_records', ROOT / 'apps/os/host.py')
     found = list(build.glob('sunstone-a733-os-*.elf'))
     assert len(found) == 1, f'{build}: expected one sunstone-a733-os-*.elf, found {len(found)}'
     image = found[0]
@@ -119,10 +120,12 @@ def one_build(build, out):
     assert report['admitted'] and report['lifetime_seconds'] == seconds, report
     cases = ['accepted']
 
-    def run(label, expected, run_us=None, reserve_us=None, launcher_seconds=None, edit=None, delay=0):
+    def run(label, expected, run_us=None, reserve_us=None, launcher_seconds=None, edit=None, delay=0, edit_session=None):
         """Run the admission of a variant; expected is None (admitted) or (term, sub) of the board's stop."""
         target, digest = mutated_image(image, work / label.replace(' ', '-'), run_us, reserve_us)
         variant = bytearray(session)
+        if edit_session:
+            edit_session(variant)
         if run_us is not None or reserve_us is not None:
             variant[SESSION_MANIFEST_HASH:SESSION_MANIFEST_HASH + 32] = digest
         binary = admission.build_harness(target, located, cache)
@@ -145,6 +148,14 @@ def one_build(build, out):
     run('reserve of the whole lifetime', ('session_decode', 'return_reserve'), reserve_us=seconds * 1_000_000)
     run('another build ID', ('build_id', None), edit=lambda c: c.__setitem__(CONTRACT_BUILD_ID, c[CONTRACT_BUILD_ID] ^ 1))
     run('another contract magic', ('magic_version', 'magic'), edit=lambda c: c.__setitem__(CONTRACT_MAGIC, c[CONTRACT_MAGIC] ^ 1))
+    # A CPU clock grant that names clusters names this boot's epoch: another value is refused, and the zero of an
+    # unassigned card grant takes the board's epoch (apps/os/session.c).
+    grant = host.session_decode(session)['offsets'].get(host.CPU_GRANT)
+    if grant is not None and struct.unpack_from('<I', session, grant + 48)[0]:
+        def grant_epoch(value):
+            return lambda s: struct.pack_into('<Q', s, grant + 32, value(struct.unpack_from('<Q', s, grant + 32)[0]))
+        run('grant names another epoch', ('session_decode', 'service'), edit_session=grant_epoch(lambda e: e ^ 1))
+        run('grant with an unassigned epoch', None, edit_session=grant_epoch(lambda e: 0))
     run('another epoch', ('contract_field', 'identity'), edit=lambda c: c.__setitem__(CONTRACT_EPOCH, c[CONTRACT_EPOCH] ^ 1))
     run('another session digest', ('session_bind', 'digest'), edit=lambda c: c.__setitem__(CONTRACT_DIGEST, c[CONTRACT_DIGEST] ^ 1))
     run('launcher arms another lifetime', ('timing', 'diagnostic'), launcher_seconds=seconds + 30)

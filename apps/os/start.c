@@ -39,7 +39,10 @@ int board_application_start(void)
             board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD),i,(const void *)os_applications[i].start);return 0;}
     return 1;
 }
-const struct os_session *os_session_admitted(void)
+/* The admitted session, validated in full: the sealed copy, the board prefix the EL3 contract bound, the service
+ * records and the build identity. os_session_admitted (apps/os/grants.c) calls this until it succeeds and then
+ * keeps the answer: the session is sealed for the boot. */
+const struct os_session *os_session_validated(void)
 {
     const struct os_session *s=os_session();
     return s&&!memcmp(&s->board,&board.admitted_session,sizeof(s->board))&&os_session_valid(s)&&

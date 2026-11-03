@@ -9,7 +9,7 @@
  #include "../board/application.h"
  #include "../board/session.h"
  #include "a733_thermal.h"
-@@ -123,6 +125,23 @@
+@@ -155,6 +157,23 @@
  #else
  #define record_reading(now,level) ((void)0)
  #endif
@@ -33,13 +33,10 @@
  static uint64_t deadline(void){return board.session.deadline_us-10000;}
  static int live(void)
  {return board_live(NULL)&&os_application_deadline()&&!atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)&&
-@@ -286,7 +305,23 @@
- void os_thermal_task(void *unused)
- {
+@@ -372,6 +391,19 @@
      (void)unused;
--    for(;;){if(step()==1)BOARD_PROGRESS(OS_SERVICE_THERMAL);vTaskDelay(1);}
-+    for(;;){
-+        if(step()==1)BOARD_PROGRESS(OS_SERVICE_THERMAL);
+     for(;;){
+         if(step()==1)BOARD_PROGRESS(OS_SERVICE_THERMAL);
 +        if(os_cpu_return_requested()&&os_cpu_return_clock_done()){
 +            if(!os_cpu_return_devices_ready()){cancel();platform_exit(6);}
 +            if(!mask()){cancel();platform_exit(6);}
@@ -53,8 +50,6 @@
 +            if(result!=A733_THERMAL_STOPPED||!live()){cancel();platform_exit(6);}
 +            else{os_cpu_return_thermal_done();for(;;)vTaskSuspend(NULL);}
 +        }
-+        vTaskDelay(1);
-+    }
- }
- static int construct(const struct os_session *s)
- {
+         TickType_t wait=idle_ticks();
+         if(wait>1)(void)ulTaskNotifyTake(pdTRUE,wait);else vTaskDelay(1);
+     }

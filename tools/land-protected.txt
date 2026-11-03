@@ -74,6 +74,16 @@ tools/prepare-microsd-boot.py
 tools/prepare-card-ddr.py
 tools/boot-slots.py
 
+# The grants that decide which services run and which CPU clock and rail writes a session may request: the session
+# decode, the admission checks, the granted set and its cache, the CPU clock owner, the session builder and the manifest
+# generator that writes the grant's bounds.
+apps/os/cpu.c
+apps/os/admission.c
+apps/os/session.c
+apps/os/grants.c
+tools/session.py
+tools/sunstone-manifest.py
+
 # The landing tool and its protected list.
 tools/land.py
 tools/land-protected.txt

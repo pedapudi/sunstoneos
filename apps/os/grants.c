@@ -1,11 +1,51 @@
 /* The services a session grants: the wire size of the records it carries and the compositions that admission refuses.
  * Pure functions of the granted set, shared by the EL3 admission, the host pre-flight and checks/os-session-grants.py. */
 #include "os.h"
+#include <stdatomic.h>
+/* The admitted session is sealed for the boot, so one successful validation holds: the pointer and the granted set are
+ * kept, and every later call is a load. Before the first success the full validation runs on each call (the session is
+ * not sealed yet, so nothing is cached). */
+#define GRANTED_VALID UINT32_C(0x80000000)
+static _Atomic(const struct os_session *) admitted;
+static atomic_uint granted_word;
+const struct os_session *os_session_admitted(void)
+{
+    const struct os_session *s=atomic_load_explicit(&admitted,memory_order_acquire);
+    if(s)return s;
+    s=os_session_validated();
+    if(s){
+        atomic_store_explicit(&granted_word,GRANTED_VALID|s->granted,memory_order_relaxed);
+        atomic_store_explicit(&admitted,s,memory_order_release);
+    }
+    return s;
+}
+int os_granted(unsigned mask)
+{
+    unsigned word=atomic_load_explicit(&granted_word,memory_order_acquire);
+    if(!(word&GRANTED_VALID)){
+        if(!os_session_admitted())return 0;
+        word=atomic_load_explicit(&granted_word,memory_order_acquire);
+    }
+    return mask&&(word&mask)==mask;
+}
 size_t os_session_wire_bytes(unsigned granted)
 {
     return A733_OS_SESSION_BYTES+((granted&OS_GRANT_AUDIO)?OS_AUDIO_SESSION_BYTES:0)+
         ((granted&OS_GRANT_NPU)?OS_NPU_SESSION_BYTES:0)+((granted&OS_GRANT_CPU_CLOCK)?OS_CPU_CLOCK_SESSION_BYTES:0)+
         ((granted&OS_GRANT_DMA)?OS_DMA_SESSION_BYTES:0);
+}
+/* The cores of an application's workers. They fill the main task's cluster first, its pair before any other core. Cores 0
+ * and 1 carry the shared interrupts, the PMIC task and the NPU interrupt, so they come last: a manifest takes them only by
+ * asking for more workers than the other cores hold. An A55 manifest never reaches the A76 cores. A manifest that asks for
+ * more workers than its order holds is refused, not placed on cores it did not name. The mask is ORed into *mask. */
+int os_worker_cores(unsigned main_core,unsigned workers,uint32_t *mask)
+{
+    static const uint8_t order_a76[]={7,2,3,4,5,0,1},order_a55[]={3,4,5,0,1},order_queue[]={2,3,4,5,0};
+    const uint8_t *order=main_core==6?order_a76:main_core==1?order_queue:order_a55;
+    const unsigned count=main_core==6?sizeof(order_a76):main_core==1?sizeof(order_queue):sizeof(order_a55);
+    if(workers>count)return 0;
+    for(unsigned i=0;i<workers;++i)*mask|=1u<<order[i];
+    return 1;
 }
 /* The compositions of services that admission refuses, with the reason of each. A row that is a convenience may be
  * removed once a measurement covers the combination; a row that names a shared hardware resource stays. The services

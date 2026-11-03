@@ -93,7 +93,7 @@ static int clock_read(void *v,uintptr_t a,uint32_t *out){return v==&owner&&read_
  * (section 1.2 of docs/performance-architecture.md). */
 static int clock_write(void *v,uintptr_t a,uint32_t value)
 {
-    if(v!=&owner||!a733_cpu_clock_address(a,1))return 0;
+    if(v!=&owner||!a733_cpu_clock_write_allowed(a,value))return 0;
     a733_mmio_write32(a,value);
     a733_mmio_dsb_sy();
     return 1;
@@ -113,6 +113,13 @@ static void publish(void)
     atomic_store_explicit(&parked_max_us,c->parked_max_us,memory_order_relaxed);
     atomic_store_explicit(&record,pack(points,mv,owner.count),memory_order_release);
 }
+/* Thermal task: 1 while the owner has work that needs its next pass within a tick (a session that grants the clock and
+ * a driver that is not idle, or an owner that has not reached FOLLOW). An ungranted session, or a granted one that is
+ * following the thermal level, lets the task sleep until its next reading. */
+int os_cpu_clock_busy(void)
+{
+    return os_granted(OS_GRANT_CPU_CLOCK)&&(owner.phase!=FOLLOW||owner.driver.state!=0);
+}
 /* EL0-safe: the recognizer waits for this before each timed run. */
 int os_cpu_clock_ready(void){return (int)atomic_load_explicit(&owner.ready,memory_order_acquire);}
 static uint64_t later(uint64_t us)
@@ -125,8 +132,9 @@ static int refused(uint32_t site,const void *here,uint32_t status)
 int os_cpu_clock_step(const struct a733_thermal_policy *policy)
 {
     struct a733_cpu_clock *c=&owner.driver;
-    const struct os_session *s=os_session_admitted();
     if(owner.phase==START){
+        /* The session is read once, here: later steps (1 kHz while the driver works) need nothing from it. */
+        const struct os_session *s=os_session_admitted();
         struct a733_cpu_clock_config config;
         if(!s||!a733_cpu_clock_grant_load(&s->cpu_clock,s->board.epoch,s->board.generation,&config)||
            !a733_cpu_clock_init(c,&config,&clock_ops,&owner,&providers.shared.clocks,&providers.shared.rails,
