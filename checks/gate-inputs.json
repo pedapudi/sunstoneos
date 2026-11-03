@@ -966,6 +966,7 @@
   "thermal-application-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
   "thermal-single-core-host.py": "recorded evidence or fixture captures | needs --image, --manifest, --session, --output, cache/evidence",
   "thermal-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "tlbi-issuer-image.py": "an application image, session or bundle the gate does not build | needs --none, --f0, --f1, --f2, --f3",
   "training-record-capture.py": "ROM, boot0 or device captures | needs --restore-set, --boot0, --output",
   "training-record-copies.py": "ROM, boot0 or device captures | needs --restore-set, --boot0, --output",
   "uart-dma-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
