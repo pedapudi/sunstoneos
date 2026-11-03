@@ -323,14 +323,15 @@ class Terminal(terminal.Model):
             self.put64(self.s['a733_cached_el3_l3']+index*8, (0x42000000+index*4096)|(1<<54)|0x443)
         self.put64(self.s['a733_cached_el3_l2']+128, self.s['a733_cached_el3_l3']|3)
         self.uc.mem_map(POOL, POOL_BYTES)
+        # The OS published the reservation before the run: the word is part of the image RAM that the phases share.
+        owner.put64(self.s['os_device_ranges_head'], 0x70000000)
         self.uc.mem_write(0x41200000, bytes(owner.uc.mem_read(0x41200000, 0xe00000)))
         self.uc.mem_write(POOL, bytes(owner.uc.mem_read(POOL, POOL_BYTES)))
         self.uc.mem_write(0x07090000,bytes(owner.uc.mem_read(0x07090000,4096)))
         # The NPU's reservation is a published device range (apps/os/device-ranges.h): the terminal cleans the ranges of the
         # list at EL3, whose tables map all DRAM.
-        self.uc.mem_map(0x70000000, 0x1000)
+        # The page is mapped by the terminal model (checks/os-cpu-return.py Model.pages).
         self.put64(0x70000000, 0); self.put64(0x70000008, 1); self.put64(0x70000010, POOL); self.put64(0x70000018, POOL_BYTES)
-        self.put64(self.s['os_device_ranges_head'], 0x70000000)
         for g in range(2, 13):
             self.put64(self.s['a733_cached_el3_l1']+g*8, (g<<30)|(1<<54)|0x765)
         self.time = owner.time
