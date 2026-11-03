@@ -213,9 +213,11 @@ static void write_recovery(uint8_t *buffer)
     {
         uint64_t events = os_sd_fault_events(&m.platform.core.card);
         for (unsigned k = 0; k < 2; ++k) {
-            uint64_t f = events >> (32 * k) & 0x3ffffffu;
-            assert((f & 15) == SUNXI_MMC_CARD && ((f >> 4) & 63) == 27 && (f >> 10) == 0x8080u);
+            uint64_t f = events >> (32 * k) & 0xffffffffu;
+            assert((f & 15) == SUNXI_MMC_CARD && ((f >> 4) & 63) == 27 && ((f >> 10) & 0xffff) == 0x8080u && ((f >> 26) & 63) == 12);       /* and the descriptor the IDMAC had reached */
         }
+        uint64_t where = os_sd_fault_blocks(&m.platform.core.card);
+        assert((where >> 32 & 511) == 96 && (where >> 48 & 511) == 96);                                                                     /* the card-side blocks of each */
     }
     read_ok(buffer);                                                                    /* the retry completes and clears the count */
     assert(m.platform.recover_errors == 0 && !m.platform.core.writing);

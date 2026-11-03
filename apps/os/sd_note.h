@@ -26,7 +26,18 @@ static inline uint64_t os_sd_fault_events(const struct sunxi_mmc_card *c)
     for (unsigned i = 0; i < c->mode_steps && i < SUNXI_MMC_MODE_LOG && seen < 2; ++i) {
         if (c->mode_log[i].reason != SUNXI_MMC_MODE_RETUNE && c->mode_log[i].reason != SUNXI_MMC_MODE_ERRORS) continue;
         const struct sunxi_mmc_mode_event *e = &c->mode_log[i];
-        word |= ((uint64_t)(e->error & 15u) | (uint64_t)(e->protocol & 63u) << 4 | (uint64_t)e->interrupts << 10) << (32 * seen++);
+        word |= ((uint64_t)(e->error & 15u) | (uint64_t)(e->protocol & 63u) << 4 | (uint64_t)e->interrupts << 10 | (uint64_t)(e->descriptor & 63u) << 26) << (32 * seen++);
+    }
+    return word;
+}
+/* Where each of those two faults stopped, for the upper half of os_sd_mode word 3: the 512-byte blocks the card side had taken (SMHC_TBC0 / 512) in 8:0 of each 16-bit half, the first
+ * fault in bits 40:32 and the second in 56:48; the descriptor the IDMAC had reached is in bits 31:26 of each fault in word 4 (62 unreadable, 63 outside the list). */
+static inline uint64_t os_sd_fault_blocks(const struct sunxi_mmc_card *c)
+{
+    uint64_t word = 0; unsigned seen = 0;
+    for (unsigned i = 0; i < c->mode_steps && i < SUNXI_MMC_MODE_LOG && seen < 2; ++i) {
+        if (c->mode_log[i].reason != SUNXI_MMC_MODE_RETUNE && c->mode_log[i].reason != SUNXI_MMC_MODE_ERRORS) continue;
+        word |= (uint64_t)(c->mode_log[i].blocks & 511u) << (32 + 16 * seen++);
     }
     return word;
 }

@@ -178,7 +178,8 @@ static int configure(unsigned start18)
             (uint8_t)((*(volatile uint32_t *)f.pull_address >> f.pull_shift) & 3u),
             (uint8_t)((*(volatile uint32_t *)f.drive_address >> f.drive_shift) & 15u)};
     }
-    for (unsigned i = 0; i < 6; ++i) config.desired[i] = (struct a733_pin_config){2, 1, 1};
+    /* The board kernel's pad drive for SDC0 (sun60iw2p1.dtsi sdc0_pins_a/b and _f/_g): the clock (PF2) at 30 mA, code 2, command and data at 10 mA, code 0, all pulled up. */
+    for (unsigned i = 0; i < 6; ++i) config.desired[i] = (struct a733_pin_config){2, 1, i == 2 ? 2u : 0u};
     config.desired[6] = (struct a733_pin_config){0, 1, 1};
     a733_clock_mask_t scopes;
     return a733_mmc_platform_scopes(&config, &scopes);
@@ -200,7 +201,7 @@ static void record_mode(void)
     os_sd_mode[1] = c->card_hz;
     os_sd_mode[2] = (uint64_t)c->sample_delay | (uint64_t)c->tuning_start << 8 | (uint64_t)c->tuning_width << 16 | (uint64_t)c->group1_support << 24 |
                     (uint64_t)(c->ocr >> 24 & 1u) << 32;
-    os_sd_mode[3] = log;
+    os_sd_mode[3] = log | os_sd_fault_blocks(c);
     os_sd_mode[4] = os_sd_fault_events(c);
     os_sd_mode[0] = 1u | (uint64_t)(c->timing & 3u) << 4 | (uint64_t)(c->signal_1v8 ? 1u : 0u) << 8 | (uint64_t)(c->uhs_outcome & 15u) << 12 |
                     (uint64_t)(c->mode_steps & 15u) << 20 | (uint64_t)(c->ceiling & 15u) << 28 | (uint64_t)(c->reentered ? 1u : 0u) << 32 |
