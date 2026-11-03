@@ -8,7 +8,6 @@ option(SUNSTONE_A733_OS_USB_JPEG "OS camera MJPEG hardware decoder" OFF)
 option(SUNSTONE_A733_OS_AUDIO "OS I2S capture service" OFF)
 option(SUNSTONE_A733_OS_DMA "Adopted DMA0 RAM-copy service with normal retirement" OFF)
 option(SUNSTONE_A733_OS_RADIO "Integrated OS with the board's radio station" OFF)
-option(SUNSTONE_A733_OS_RADIO_ENUMERATE "The scanning radio station stops after SDIO enumeration: the smallest probe (needs SUNSTONE_A733_OS_RADIO_SCAN)" OFF)
 option(SUNSTONE_A733_OS_RADIO_SCAN "Radio station that scans and returns: board workload 3, no USB host, scan-only profile, normal return" OFF)
 option(SUNSTONE_A733_OS_HEADSET "OS Bluetooth headset capture service" OFF)
 option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
@@ -563,7 +562,6 @@ target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICAT
   "$<$<BOOL:${SUNSTONE_A733_OS_AUDIO}>:SUNSTONE_A733_OS_AUDIO=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO}>:SUNSTONE_A733_OS_RADIO=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_SCAN}>:SUNSTONE_A733_OS_RADIO_SCAN=1>"
-  "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_ENUMERATE}>:SUNSTONE_A733_OS_RADIO_ENUMERATE=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_HEADSET}>:SUNSTONE_A733_OS_HEADSET=1>")
 if(SUNSTONE_A733_OS_NPU)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_NPU=1)

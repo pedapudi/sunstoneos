@@ -27,6 +27,10 @@ SCAN_SUPERVISED_VERSION = 8
 # The identity the profile expects (raw words, decoded again by the firmware engine): non-H revision 3, subrevision 2.
 # The module's real words are unknown until a run reads them; a mismatch ends the run after the identity stage and the
 # record carries the words that were read.
+# How far the session runs (BOARD_RADIO_STAGE_* in apps/board/radio.h): 0 scan, 1 enumeration, 2 enumeration plus
+# the chip-ID words. One stage per board run; this is the only line that moves the stop point.
+STAGE_LIMIT = 2
+STAGE_LIMIT_OFFSET = 1861
 IDENTITY = {'chip_word': 0x00030001, 'subrevision_word': 0x20}
 # Offsets of struct board_radio_profile (apps/board/radio.h) and its members.
 PROFILE = {'magic': 0, 'version': 8, 'bytes': 12, 'platform_authority': 16, 'platform_evidence': 88, 'platform': 184,
@@ -88,6 +92,7 @@ def profile_bytes(prefix, evidence, firmware):
         function, pull, drive = (2, 1, 1 if i == 0 else 0) if i < 6 else (0, 0, 1) if i == 6 else (1, 0, 1)
         struct.pack_into('<3B', raw, p + PLATFORM['desired'] + 3 * i, function, pull, drive)
     struct.pack_into('<I4xQQ', raw, p + PLATFORM['card'], 0x00300000, 100000, 1000)  # supported OCR, then timeout and poll interval
+    raw[STAGE_LIMIT_OFFSET] = STAGE_LIMIT
     struct.pack_into('<II4B', raw, PROFILE['radio_identity'], IDENTITY['chip_word'], IDENTITY['subrevision_word'],
                      (IDENTITY['chip_word'] >> 16) & 0x3f, IDENTITY['subrevision_word'] >> 4, 0, 1)
     # Transport: D80 bootstrap variant 1, pad policy KEEP (1), 1,000 ticks per millisecond, timeouts in microseconds.

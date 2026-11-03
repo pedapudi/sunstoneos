@@ -403,15 +403,14 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
         struct board_radio_config sc={.shared=shared,.platform=f->platform,.chip_id=id,.recovery_state=recovery_state,
             .admit=radio_authorize,.admission_context=p,.startup_deadline_us=f->startup_deadline_us,
             .scan_only=1,.first_run_guard=1,.scan_timeout_us=f->association_timeout_us,
-#ifdef SUNSTONE_A733_OS_RADIO_ENUMERATE
-            .enumeration_only=1,
-#endif
+            .enumeration_only=board_radio_profile_stage_limit(f)!=BOARD_RADIO_STAGE_SCAN,
             .report_memory={report_allocate,report_release,NULL}};
         sc.session=(struct a733_radio_session_config){.owner_task=owner,.owner=f->session_owner,
             .bootstrap_deadline=f->bootstrap_deadline_us,.runtime_lease_us=f->runtime_lease_us,
             .renew_margin_us=f->renew_margin_us,.transport=f->transport,.bootstrap=f->bootstrap,
             .firmware={.identity=f->radio_identity,.profile=1},.runtime={.binding_timeout=f->binding_timeout_us},.wifi=f->wifi,
-            .enumeration_only=sc.enumeration_only};
+            .enumeration_only=sc.enumeration_only,
+            .identity_only=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_IDENTITY};
         for(unsigned i=0;i<4;++i)sc.session.firmware.blobs[i]=(struct aic8800_firmware_blob){
             (const uint8_t *)(uintptr_t)f->firmware_address[i],(size_t)f->firmware_bytes[i]};
         if(!board_radio_init(r,&sc))return 0;
