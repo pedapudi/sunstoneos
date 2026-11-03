@@ -1173,7 +1173,7 @@ def development(argv=None):
         command += ['--records', str(args.records or state.RECORDS)]
     elif args.records:
         command += ['--records', str(args.records)]
-    for name in ('template', 'manifest', 'descriptor', 'host_tree', 'objcopy', 'approved_by'):
+    for name in ('template', 'manifest', 'descriptor', 'host_tree', 'objcopy', 'approved_by', 'no_preflight'):
         if getattr(args, name):
             command += ['--'+name.replace('_','-'), str(getattr(args, name))]
     if args.restore_rails and args.kind not in ('npu', 'usb-class'):

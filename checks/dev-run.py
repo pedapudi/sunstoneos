@@ -103,6 +103,7 @@ def offline(out):
     captured=out/'captured.json';captured.write_text(json.dumps({'words':words}))
     with patch.object(board, 'Live', side_effect=AssertionError('Offline preparation touched USB')), contextlib.redirect_stdout(io.StringIO()):
         assert board.development(['cpu-return','--image',str(dev.CONTROL_IMAGE),'--state',str(captured),
+                                  '--no-preflight','the control image is a cached build whose admission sources are not in this tree',
                                   '--evidence',str(out/'offline')]) == 0
     report=json.loads((out/'offline/admission.json').read_text())
     assert report['admitted'] and report['physical_access'] is False
@@ -113,6 +114,7 @@ def offline(out):
     try:
         with patch.object(board, 'Live', side_effect=AssertionError('Offline refusal touched USB')), contextlib.redirect_stdout(io.StringIO()):
             board.development(['cpu-return','--image',str(dev.CONTROL_IMAGE),'--state',str(captured),
+                               '--no-preflight','the control image is a cached build whose admission sources are not in this tree',
                                '--force','--evidence',str(out/'unsafe')])
     except ValueError as error:
         assert 'CPU-L PLL/mux' in str(error)
