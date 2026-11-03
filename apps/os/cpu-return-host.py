@@ -47,6 +47,24 @@ OUTPUT = 'recorded-output'
 
 
 
+def device_ranges_geometry(symbols, cached_writable):
+    """The word of image RAM that heads the list of published device ranges (apps/os/device-ranges.h), or None for a probe.
+
+    An OS image owns the unified memory ledger (its admission, os_large_prepare, is linked) and its terminal cleans the
+    published ranges, so it must carry the head: an OS image without it would return without cleaning any range, and is
+    refused. A returning probe has no ledger and no published range, and is the only kind that may omit it."""
+    is_os_image = 'os_large_prepare' in symbols
+    if 'os_device_ranges_head' not in symbols:
+        require(not is_os_image, 'OS image without the device range list head: the return would clean no published range.')
+        return None
+    require(is_os_image, 'Device range list head in an image without the OS ledger.')
+    address, size = symbols['os_device_ranges_head']
+    begin, end = cached_writable
+    require(size == 8 and address % 8 == 0 and begin <= address < address + size <= end,
+            'Device range list head outside preserved image RAM.')
+    return {'address': address, 'bytes': size}
+
+
 def linked_symbols(image):
     """Defined global symbols of the image: name -> (address, bytes)."""
     elf = ELFFile(io.BytesIO(Path(image).read_bytes()))
@@ -108,11 +126,9 @@ def geometry(image):
     # terminal cleans them from the list whose head is this word of image RAM. Nothing about them is known at link time, and
     # the runner neither backs them up nor restores them: their contents are scratch, as a manifest region marked scratch is.
     begin, end = result['cached_writable']
-    if 'os_device_ranges_head' in symbols:     # an OS image; the returning probes clean no published range
-        address, size = symbols['os_device_ranges_head']
-        require(size == 8 and address % 8 == 0 and begin <= address < address + size <= end,
-                'Device range list head outside preserved image RAM.')
-        result['device_ranges_head'] = {'address': address, 'bytes': size}
+    ranges = device_ranges_geometry(symbols, result['cached_writable'])
+    if ranges:
+        result['device_ranges_head'] = ranges
     if 'os_npu_published_report' in symbols:
         address, size = symbols['os_npu_published_report']
         require(size == npu_capture.REPORT_BYTES and begin <= address < address + size <= end,

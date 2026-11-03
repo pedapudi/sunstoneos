@@ -143,6 +143,21 @@ def check_consumers(record):
         print('memory-layout: cpu-return-host not loaded (%s); skipped' % error)
         return
     require(returning.IMAGE_RAM == memory_layout.extent(record['image']['image_ram']), 'CPU-return image RAM differs')
+    # The published-range head: an OS image must carry it, a probe may omit it, and nothing else is accepted.
+    ram = (0x41200000, 0x42000000)
+    head = {'os_device_ranges_head': (0x41800000, 8)}
+    os_image = {'os_large_prepare': (0x41000000, 64)}
+    require(returning.device_ranges_geometry({**os_image, **head}, ram) == {'address': 0x41800000, 'bytes': 8}, 'an OS image with its list head is refused')
+    require(returning.device_ranges_geometry({}, ram) is None, 'a probe without a list head is refused')
+    for name, symbols in (('an OS image without the list head', os_image),
+                          ('a list head outside image RAM', {**os_image, 'os_device_ranges_head': (0x42100000, 8)}),
+                          ('a list head of the wrong size', {**os_image, 'os_device_ranges_head': (0x41800000, 16)}),
+                          ('a list head in a probe', head)):
+        try:
+            returning.device_ranges_geometry(symbols, ram)
+        except ValueError:
+            continue
+        require(False, name + ' is accepted')
 
 
 def check_shape(record):
