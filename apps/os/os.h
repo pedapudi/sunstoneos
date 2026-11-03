@@ -16,32 +16,22 @@ int os_thermal_throttled(void);
 #if defined(SUNSTONE_A733_OS_MSBC) && !defined(SUNSTONE_A733_OS_HEADSET)
 #error Wideband speech is a headset option
 #endif
-/* Workloads 0/4 require storage; the radio build selects 1. Recorded images
- * in either lifetime also admit storage-free workload 2. The resident
- * supervisor requires progress only from tasks selected by that workload. */
-#if defined(SUNSTONE_BOARD_SUPERVISED) && \
-    !defined(SUNSTONE_A733_OS_AUDIO) && !defined(SUNSTONE_A733_OS_HEADSET) && !defined(SUNSTONE_A733_OS_RADIO)
-#define OS_STAGED_WORKLOAD 1
-#else
-#define OS_STAGED_WORKLOAD 0
-#endif
+/* Workloads 0 and 4 require storage, 1 selects the radio station and 2 is the storage-free recorded
+ * mode. The session decode ties the workload to the device grant (apps/os/session.c). */
 static inline int os_workload_valid(unsigned workload)
 {
-#ifdef SUNSTONE_A733_OS_RADIO
-    return workload==1;
-#else
-    return workload==0||workload==4||(OS_STAGED_WORKLOAD&&workload==2);
-#endif
+    return workload==0||workload==1||workload==2||workload==4;
 }
-/* The microphone build appends 184 bytes of I2S receive facts to the
- * 808-byte session. The stage-2 loader admits either size, so these
- * definitions do not depend on the build. */
+/* Service records of the typed session (docs/designs/app-abi.md). The wire form carries a record only for a
+ * service the session grants; the decoded session holds every record and a mask of the granted ones. */
 #include "npu-session.h"
+#include "npu.h"
+#include "a733_dma_platform.h"
+#include "a733_dma_startup.h"
+#include "a733_cpu_clock.h"
 #define OS_AUDIO_SESSION_MAGIC UINT64_C(0x415337334f415531)
 #define OS_AUDIO_SESSION_VERSION 1u
 #define OS_AUDIO_SESSION_BYTES 184u
-#ifdef SUNSTONE_A733_OS_AUDIO
-#include "a733_dma_platform.h"
 /* I2S0 receive facts after the thermal facts. The DMA fields are the I2S
  * image's DMA0 handoff (struct a733_dma_handoff, which audio.c builds from
  * them) and follow its rules (docs/i2s-application.md). The evidence hash
@@ -74,26 +64,6 @@ _Static_assert(sizeof(struct os_audio_session)==OS_AUDIO_SESSION_BYTES&&
 /* The capture client's admission of its session parameter, bound by the
  * image composition (start.c). */
 int os_audio_client_admit(uint32_t capture_samples);
-#define OS_SESSION_BASE_BYTES (A733_OS_SESSION_BYTES+OS_AUDIO_SESSION_BYTES)
-#else
-#define OS_SESSION_BASE_BYTES A733_OS_SESSION_BYTES
-#endif
-#ifdef SUNSTONE_A733_OS_NPU
-#include "npu.h"
-#undef OS_SESSION_BASE_BYTES
-#define OS_SESSION_BASE_BYTES (A733_OS_SESSION_BYTES+OS_NPU_SESSION_BYTES)
-#endif
-#ifdef SUNSTONE_A733_OS_CPU_CLOCK
-/* With A76 admission, the decoded grant names this boot's epoch. The loader
- * requires a zero persisted grant epoch; OS admission stamps its private copy
- * after the loader stamps the board epoch. */
-#include "a733_cpu_clock.h"
-#define OS_SESSION_BYTES (OS_SESSION_BASE_BYTES+96u)
-#else
-#define OS_SESSION_BYTES OS_SESSION_BASE_BYTES
-#endif
-#ifdef SUNSTONE_A733_OS_DMA
-#include "a733_dma_startup.h"
 #define OS_DMA_SESSION_MAGIC UINT64_C(0x41533733444d4131)
 #define OS_DMA_SESSION_BYTES 160u
 struct os_dma_session {
@@ -102,10 +72,40 @@ struct os_dma_session {
     struct a733_dma_handoff handoff;
 };
 _Static_assert(sizeof(struct os_dma_session)==OS_DMA_SESSION_BYTES,"DMA service record");
-#define OS_SESSION_TOTAL_BYTES (OS_SESSION_BYTES+OS_DMA_SESSION_BYTES)
+/* The CPU clock grant record is 96 bytes on the wire (include/a733_cpu_clock.h). With A76 admission, the decoded grant
+ * names this boot's epoch. The loader requires a zero persisted grant epoch; OS admission stamps its private copy
+ * after the loader stamps the board epoch. */
+#define OS_CPU_CLOCK_SESSION_BYTES 96u
+/* Whether this image has the code of a service. Until the option that selects it is removed, a session cannot grant a
+ * service whose code the image lacks. */
+#ifdef SUNSTONE_A733_OS_AUDIO
+#define OS_LINKED_AUDIO 1
 #else
-#define OS_SESSION_TOTAL_BYTES OS_SESSION_BYTES
+#define OS_LINKED_AUDIO 0
 #endif
+#ifdef SUNSTONE_A733_OS_NPU
+#define OS_LINKED_NPU 1
+#else
+#define OS_LINKED_NPU 0
+#endif
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+#define OS_LINKED_CPU_CLOCK 1
+#else
+#define OS_LINKED_CPU_CLOCK 0
+#endif
+#ifdef SUNSTONE_A733_OS_RADIO
+#define OS_LINKED_RADIO 1
+#else
+#define OS_LINKED_RADIO 0
+#endif
+#ifdef SUNSTONE_A733_OS_DMA
+#define OS_LINKED_DMA 1
+#else
+#define OS_LINKED_DMA 0
+#endif
+/* The services a session grants, decided once at admission from the device grant, the board prefix and the service
+ * extents that validated. A service that is not granted touches no hardware. */
+enum { OS_GRANT_NPU=1u<<0, OS_GRANT_AUDIO=1u<<1, OS_GRANT_CPU_CLOCK=1u<<2, OS_GRANT_DMA=1u<<3, OS_GRANT_RADIO=1u<<4 };
 /* Immutable little-endian session: the board session (workload 0 or 4)
  * followed by the thermal owner's facts. The evidence hashes identify
  * externally reviewed records; they do not establish those facts. */
@@ -120,22 +120,20 @@ struct os_session {
     uint8_t reserved[2];
     /* Zero keeps the vendor trip; otherwise a lower CPU-only CRITICAL trip. */
     uint32_t cpu_critical_millicelsius;
-#ifdef SUNSTONE_A733_OS_NPU
     struct os_npu_session npu;
-#endif
-#ifdef SUNSTONE_A733_OS_AUDIO
     struct os_audio_session audio;
-#endif
-#ifdef SUNSTONE_A733_OS_CPU_CLOCK
     /* The CPU clock driver's grant record (include/a733_cpu_clock.h). */
     struct a733_cpu_clock_grant_record cpu_clock;
-#endif
-#ifdef SUNSTONE_A733_OS_DMA
     struct os_dma_session dma;
-#endif
+    uint32_t granted;  /* OS_GRANT_* */
 };
-_Static_assert(sizeof(struct os_session)==OS_SESSION_TOTAL_BYTES&&
-    offsetof(struct os_session,cpu_critical_millicelsius)==804,"OS session geometry");
+_Static_assert(offsetof(struct os_session,cpu_critical_millicelsius)==804&&
+    offsetof(struct os_session,npu)==A733_OS_SESSION_BYTES,"OS session geometry");
+/* The bytes the thermal record names on the wire: the board prefix and the service records the session carries. */
+size_t os_session_wire_bytes(unsigned granted);
+/* The row (from 1) of the refused composition table that the granted set matches, or 0 (apps/os/admission.c). */
+unsigned os_composition_refused(unsigned granted);
+const char *os_composition_reason(unsigned row);
 #define OS_SESSION_VERSION 1u
 int os_session_valid(const struct os_session *);
 /* The admitted complete session after EL3 sealing; NULL before. */
@@ -143,6 +141,9 @@ const struct os_session *os_session(void);
 /* The sealed session when it extends exactly the board prefix that main.c
  * admitted and names this image; NULL otherwise. Each entry starts from it. */
 const struct os_session *os_session_admitted(void);
+/* 1 when the admitted session grants every service in the OS_GRANT_* mask; 0 before admission. EL0-safe: it reads the
+ * sealed copy and touches no hardware. */
+int os_granted(unsigned mask);
 
 /* Fixed start list entries; each runs at the board hook of the same name. */
 struct a733_pin_handoff;
@@ -262,20 +263,9 @@ int os_capture(unsigned g,const uint8_t **wav,size_t *bytes);
 #endif
 
 /* Resident services after the board's own (apps/board/application.h). The
- * linked application reports as the first of them; the microphone
- * build adds its capture client, the radio build the board's radio owner
- * and network client, and the headset build the Bluetooth owner and the
- * headset capture client. */
-enum { OS_SERVICE_APPLICATION=5, OS_SERVICE_THERMAL,
-#ifdef SUNSTONE_A733_OS_NPU
-    OS_SERVICE_NPU,
-#endif
-#ifdef SUNSTONE_A733_OS_AUDIO
-    OS_SERVICE_AUDIO,
-#endif
-#ifdef SUNSTONE_A733_OS_RADIO
-    OS_SERVICE_RADIO, OS_SERVICE_NETWORK,
-#endif
+ * linked application reports as the first of them. Every service has its id in every image; the supervisor requires
+ * progress only from the services the session grants (apps/os/services.c). */
+enum { OS_SERVICE_APPLICATION=5, OS_SERVICE_THERMAL, OS_SERVICE_NPU, OS_SERVICE_AUDIO, OS_SERVICE_RADIO, OS_SERVICE_NETWORK,
 #ifdef SUNSTONE_A733_OS_HEADSET
     OS_SERVICE_BLUETOOTH, OS_SERVICE_HEADSET,
 #endif

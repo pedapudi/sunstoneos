@@ -79,6 +79,9 @@ int os_audio_client_admit(uint32_t frames)
 static struct {unsigned stage,sequence,requested;uint32_t bytes,periods,total;struct os_audio_stream_config config;} capture;
 int os_capture_start(void)
 {
+    /* Admission granted the I2S service with the I2S device and its record; without them no pin, clock, DMA channel or
+     * interrupt is touched. */
+    if(!os_granted(OS_GRANT_AUDIO))return 1;
     if(!ss_application.manifest)return 0;
     const struct os_session *s=os_session_admitted();const struct ss_audio_format *f=&ss_application.manifest->audio;
     if(!s||capture.total||!os_audio_client_admit(s->audio.capture_samples)||!f->rate_hz||

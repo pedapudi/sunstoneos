@@ -15,10 +15,12 @@ static const struct ss_grant grant={.devices=SS_DEVICE_AUDIO_I2S};
 const struct ss_grant *ss_grant(void){return &grant;}
 int ss_live(void){return board_up&&!board_failed?1:-1;}
 const struct os_session *os_session_admitted(void){return &session;}
+int os_granted(unsigned mask){return mask&&(session.granted&mask)==mask;}
 /* The provider, pin and DMA-pool constructors are outside this model, as in
  * the earlier stream fixture. Preserve the actual client's validation and
  * stream state machine while supplying their configured provider boundary. */
-int __wrap_os_audio_stream_open(const struct os_audio_stream_config *c){return configure(c);}
+static unsigned stream_opens;
+int __wrap_os_audio_stream_open(const struct os_audio_stream_config *c){++stream_opens;return configure(c);}
 /* Mode 5: candidate rates and whether the stream accepts each one for
  * 16-bit mono capture with 4,096-byte periods; the runner compares them with
  * the vendor's table. */
@@ -88,6 +90,17 @@ void os_check_run(unsigned selected,unsigned samples)
 {
     mode=selected;reset();
     void *pcm;size_t bytes;
+    if(mode==11){
+        /* A session that does not grant the I2S service: the start entry succeeds without opening the stream, which is
+         * the only path to the pins, the clocks, the DMA channel and the interrupt. The device bit and the record are the
+         * grant (apps/os/session.c); neither is present. */
+        session.audio.capture_samples=samples;session.granted=0;
+        stream_opens=0;check(os_capture_start()==1&&stream_opens==0,150);
+        check(ss_capture(1,&pcm,&bytes)<0,151);
+        session.granted=OS_GRANT_AUDIO;
+        check(os_capture_start()==1&&stream_opens==1,152);
+        os_check_result=1;return;
+    }
     if(mode==5){
         /* Rates: exactly those whose bit clock divides 24.576 MHz. */
         for(unsigned i=0;i<sizeof(os_check_rates)/sizeof(os_check_rates[0]);++i){
@@ -162,7 +175,7 @@ void os_check_run(unsigned selected,unsigned samples)
         check(os_audio_stream_stop()==1&&logged==before,136);
         os_check_result=1;return;
     }
-    session.audio.capture_samples=samples;
+    session.audio.capture_samples=samples;session.granted=OS_GRANT_AUDIO;
     memset(ss_capture_buffer,0xa5,SS_CAPTURE_HEADROOM);
     check(os_capture_start()&&!os_capture_start(),20);
     if(mode==4){

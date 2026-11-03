@@ -83,13 +83,7 @@ int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,un
 #endif
     if(!(h->devices&SS_DEVICE_USB_STORAGE)){
         if(capture||!(h->flags&SS_SESSION_BIND_SID))REFUSE(A733_DECODE_DEVICES);
-#ifdef SUNSTONE_A733_OS_RADIO
-        REFUSE(A733_DECODE_DEVICES);
-#endif
     }
-#ifndef SUNSTONE_A733_OS_AUDIO
-    if(h->devices&SS_DEVICE_AUDIO_I2S)REFUSE(A733_DECODE_DEVICES);
-#endif
 #ifndef SUNSTONE_A733_OS_HEADSET
     if(h->devices&SS_DEVICE_AUDIO_HEADSET)REFUSE(A733_DECODE_DEVICES);
 #endif
@@ -103,34 +97,42 @@ int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,un
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
     if(h->devices&(SS_DEVICE_USB_KEYBOARD|SS_DEVICE_USB_MOUSE|SS_DEVICE_USB_SERIAL|SS_DEVICE_USB_CAMERA))workload=0;
 #endif
-#ifdef SUNSTONE_A733_OS_RADIO
-    workload=1;
-#endif
+    /* The radio station has no device bit yet: the board prefix's workload 1 grants it, and it needs storage. */
+    const int radio=out->board.workload==1;
+    if(radio){
+        if(!OS_LINKED_RADIO||!(h->devices&SS_DEVICE_USB_STORAGE))REFUSE(A733_DECODE_DEVICES);
+        workload=1;
+    }
     if(out->board.workload!=workload)REFUSE(A733_DECODE_WORKLOAD);
     if(!extent_copy(raw,SS_EXTENT_THERMAL,&out->magic,A733_OS_SESSION_BYTES-SS_SESSION_PREFIX_BYTES))REFUSE(A733_DECODE_EXTENT);
-    /* On the wire this service record's bytes still names its original
-     * complete record, so the existing service validator sees its layout. */
-    if(out->bytes!=sizeof(*out))REFUSE(A733_DECODE_EXTENT);
-#ifdef SUNSTONE_A733_OS_AUDIO
-    if(!extent_copy(raw,SS_EXTENT_AUDIO,&out->audio,sizeof(out->audio)))REFUSE(A733_DECODE_EXTENT);
-    if(capture&&(out->audio.capture_samples<m->audio.min_frames||out->audio.capture_samples>m->audio.max_frames))REFUSE(A733_DECODE_AUDIO_FRAMES);
-#else
-    if(os_session_extent(raw,SS_EXTENT_AUDIO,NULL))REFUSE(A733_DECODE_EXTENT);
-#endif
-#ifdef SUNSTONE_A733_OS_NPU
-    if(!extent_copy(raw,SS_EXTENT_NPU,&out->npu,sizeof(out->npu)))REFUSE(A733_DECODE_EXTENT);
-#else
-    if(os_session_extent(raw,SS_EXTENT_NPU,NULL))REFUSE(A733_DECODE_EXTENT);
-#endif
-#ifdef SUNSTONE_A733_OS_CPU_CLOCK
-    if(!extent_copy(raw,SS_EXTENT_CPU_GRANT,&out->cpu_clock,sizeof(out->cpu_clock)))REFUSE(A733_DECODE_EXTENT);
-    if(out->cpu_clock.clusters)out->cpu_clock.epoch=out->board.epoch;
-#else
-    if(os_session_extent(raw,SS_EXTENT_CPU_GRANT,NULL))REFUSE(A733_DECODE_EXTENT);
-#endif
-#ifdef SUNSTONE_A733_OS_DMA
-    if(!extent_copy(raw,SS_EXTENT_DMA,&out->dma,sizeof(out->dma)))REFUSE(A733_DECODE_EXTENT);
-#endif
+    /* Each service extent that the session carries is copied and grants its service. A service is granted only when
+     * the image has it, and the I2S receive record only with the I2S device. An absent record grants nothing. */
+    if(radio)out->granted|=OS_GRANT_RADIO;
+    {
+        const struct {uint32_t type,grant;size_t bytes;void *target;int linked,required;} services[]={
+            {SS_EXTENT_AUDIO,OS_GRANT_AUDIO,sizeof(out->audio),&out->audio,OS_LINKED_AUDIO,!!(h->devices&SS_DEVICE_AUDIO_I2S)},
+            {SS_EXTENT_NPU,OS_GRANT_NPU,sizeof(out->npu),&out->npu,OS_LINKED_NPU,0},
+            {SS_EXTENT_CPU_GRANT,OS_GRANT_CPU_CLOCK,sizeof(out->cpu_clock),&out->cpu_clock,OS_LINKED_CPU_CLOCK,0},
+            {SS_EXTENT_DMA,OS_GRANT_DMA,sizeof(out->dma),&out->dma,OS_LINKED_DMA,OS_LINKED_DMA},
+        };
+        for(unsigned i=0;i<sizeof(services)/sizeof(services[0]);++i){
+            const int present=os_session_extent(raw,services[i].type,NULL)!=NULL;
+            if(present&&!services[i].linked)REFUSE(A733_DECODE_EXTENT);
+            if(services[i].required&&!present)REFUSE(A733_DECODE_EXTENT);
+            if(present){
+                if(!extent_copy(raw,services[i].type,services[i].target,services[i].bytes))REFUSE(A733_DECODE_EXTENT);
+                out->granted|=services[i].grant;
+            }
+        }
+    }
+    if(out->granted&OS_GRANT_AUDIO){
+        if(!(h->devices&SS_DEVICE_AUDIO_I2S))REFUSE(A733_DECODE_DEVICES);
+        if(out->audio.capture_samples<m->audio.min_frames||out->audio.capture_samples>m->audio.max_frames)REFUSE(A733_DECODE_AUDIO_FRAMES);
+    }
+    if(out->granted&OS_GRANT_CPU_CLOCK&&out->cpu_clock.clusters)out->cpu_clock.epoch=out->board.epoch;
+    /* On the wire the thermal record's bytes names the board prefix and every service record the session carries, so
+     * the existing service validator sees its layout. */
+    if(out->bytes!=os_session_wire_bytes(out->granted))REFUSE(A733_DECODE_EXTENT);
 #ifdef SUNSTONE_A733_OS_USB_JPEG
     size_t jpeg_bytes=0;const struct a733_jpeg_session *jpeg=os_session_extent(raw,SS_EXTENT_JPEG,&jpeg_bytes);
     if(!jpeg||jpeg_bytes!=sizeof(*jpeg)||memcmp(&jpeg->board,&out->board,sizeof(out->board))||
@@ -179,6 +181,8 @@ const struct os_session *os_session(void)
         if(!os_session_decode(raw,h->bytes,&decoded))return NULL;ready=1;}
     return &decoded;
 }
+int os_granted(unsigned mask)
+{const struct os_session *s=os_session_admitted();return s&&mask&&(s->granted&mask)==mask;}
 uint32_t os_session_devices(void)
 {const uint8_t *raw=board_session_sealed();return raw?((const struct ss_session_header *)(raw+SS_SESSION_PREFIX_BYTES))->devices:0;}
 const struct ss_input_fact *os_session_inputs(unsigned *count)

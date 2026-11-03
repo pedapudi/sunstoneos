@@ -256,7 +256,7 @@ unsigned os_npu_retirement_state(void)
     return s;
 }
 int os_npu_retirement_check(void)
-{return !retirement_fault()&&os_npu_complete();}
+{return !os_granted(OS_GRANT_NPU)||(!retirement_fault()&&os_npu_complete());}
 #ifdef SUNSTONE_A733_OS_PERF
 /* Performance modes: the request number and rate in one word, the answer
  * number and result in another; the bootstrap serves requests only after the
@@ -492,6 +492,7 @@ failed:
 int os_npu_task_privileged(void (*entry)(void *),void *context)
 {return (creating&&!context&&(entry==bootstrap||entry==os_npu_client_task))||
     npu_service_task_privileged(entry,context)==pdTRUE;}
+/* A session that does not grant the NPU leaves its entries without effect: no pin, task, interrupt or register. */
 int os_npu_pins(struct a733_pin_handoff *pins){return pins&&os_session_admitted();}
 /* Each start refusal records its own source line (group NPU, value 0). */
 static int refused(uint32_t site,const void *here){board_fail_note(site,0,here);return 0;}
@@ -512,6 +513,8 @@ int os_npu_start(void)
 {
     extern int os_npu_sdk_bind(const struct npu_runtime *);
     extern int os_npu_diagnostic_bind(struct npu_runtime *) __attribute__((weak));
+    /* Not granted: no binding, task, interrupt or register access. */
+    if(!os_granted(OS_GRANT_NPU))return 1;
     if(!ss_npu_service_bind_event(sdk_notify,NULL))return REFUSE();
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
     if(!os_npu_queue_sdk_bind())return REFUSE();

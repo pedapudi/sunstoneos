@@ -1837,6 +1837,18 @@
     }
    ]
   },
+  "os-session-grants.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{build:all}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
   "os-image-radio.py": {
    "runs": [
     {

@@ -18,7 +18,7 @@ from harness import environment
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / '.cache/sunstoneos'
-CHECK_INPUTS = ('apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-queue.c', 'apps/os/npu-catalogue.py', 'drivers/npu/a733_npu_runtime.c',
+CHECK_INPUTS = ('checks/os-npu-ungranted-traps.c', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-queue.c', 'apps/os/npu-catalogue.py', 'drivers/npu/a733_npu_runtime.c',
                 'drivers/npu/npu_service.c', 'drivers/npu/nbg_assembly.c', 'runtime/npu_app_queue.c',
                 'checks/os-npu-service.c', 'checks/os-npu-service.py', 'checks/nbg_wide.py')
 sys.path.insert(0, str(ROOT / 'checks'))
@@ -89,6 +89,14 @@ exe = host_rtos.build(out / 'exe', [*UNITS, generated / 'npu-models.c'], 'os-npu
 done = subprocess.run([str(exe), '30', str(out)], capture_output=True, text=True, env={**environment(), **({'EXPECT_WIDE': '1'} if EXPECT_WIDE else {})}, timeout=1800)
 (out / 'case30.log').write_text(done.stdout + done.stderr)
 assert done.returncode == 0, ('case 30', done.stdout[-600:], done.stderr[-1500:])
+print(done.stdout.strip().splitlines()[-1])
+# Case 32 links the real os_npu_start. Every service call it makes after its first test is left unresolved, so that
+# reaching one (a binding, a pool, a platform call) stops the program: an ungranted session must return before them.
+exe32 = host_rtos.build(out / 'exe32', [*UNITS, 'checks/os-npu-ungranted-traps.c', generated / 'npu-models.c'], 'os-npu-service-ungranted', defines=[*DEFINES, 'UNGRANTED_CASE=1'], includes=includes,
+                        flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'],
+                        link=['-Wl,--gc-sections'])
+done = subprocess.run([str(exe32), '32', str(out)], capture_output=True, text=True, env=environment(), timeout=600)
+assert done.returncode == 0, ('case 32', done.stdout[-600:], done.stderr[-1500:])
 print(done.stdout.strip().splitlines()[-1])
 # Mutation: the same declaration with the metadata allocator handing out the pool's own memory. The trust-boundary check (every
 # table the EL1 code trusts is outside the pool EL0 can write, outside the buffers the NPU maps and outside its page tables)
