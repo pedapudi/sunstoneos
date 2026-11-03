@@ -117,7 +117,8 @@ def main():
     refusal(lambda: session.build(npu[0], out / 'r2', inputs=npu[2]), 'npu declaration')
     refusal(lambda: session.build(npu[0], out / 'r3', npu_declaration=npu[3], inputs=npu[2], devices=1), 'devices')
     refusal(lambda: session.build(control[0], out / 'r4', inputs=control[2], devices=1), 'devices')
-    refusal(lambda: session.build(control[0], out / 'r5', inputs=control[2] + control[2]), 'inputs')
+    (out / 'extra-input.bin').write_bytes(b'x')
+    refusal(lambda: session.build(control[0], out / 'r5', inputs=control[2] + [out / 'extra-input.bin']), 'inputs')   # one more file than the manifest has regions
     refusal(lambda: session.pack('thermal', {'magic': 1}), 'thermal field')
     passed.append('a field no source gives is an error naming it (thermal apb1, npu declaration, devices, inputs)')
     # one source tree
