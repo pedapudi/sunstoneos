@@ -796,6 +796,7 @@
   "latency-percentiles.py": "other arguments | needs --log, --output",
   "latency-phase-close.py": "an application image, session or bundle the gate does not build | needs --image",
   "latency-production.py": "recorded evidence or fixture captures | needs --reference, --current, --reference-cache, --current-cache, --objdump, --output",
+  "latency-tlbi.py": "an application image, session or bundle the gate does not build | needs --tlbi0, --tlbi1, --tlbi2, --tlbi3",
   "latency.py": "an application image, session or bundle the gate does not build | needs --image, --output",
   "launch-survey.py": "an application image, session or bundle the gate does not build | needs --build, --output",
   "lradc-boot.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
