@@ -26,6 +26,9 @@ _Static_assert(configNUMBER_OF_CORES > 1 && configNUMBER_OF_CORES <= 8,
 _Static_assert(configMAX_PRIORITIES == SS_OWNER_PRIORITIES,
                "owner priorities must match FreeRTOS priorities");
 
+#ifndef SS_PULL_MOVES_PER_PASS
+#define SS_PULL_MOVES_PER_PASS 0u /* transfers one idle-pull pass may start; 0 is unlimited */
+#endif
 enum ssKernelExecution { SS_K_READY, SS_K_RUNNING, SS_K_BLOCKED, SS_K_SUSPENDED, SS_K_DEAD, SS_K_TRANSFERRING };
 enum ssKernelWait { SS_K_NONE, SS_K_DELAY, SS_K_EVENT, SS_K_NOTIFICATION };
 enum ssKernelOutcome { SS_K_WAITING, SS_K_EVENT_READY, SS_K_TIMED_OUT, SS_K_ABORTED };
@@ -1574,6 +1577,9 @@ static void ssKernelPullServe(unsigned c)
     if (atomic_load_explicit(&cpu->pull_requests, memory_order_relaxed))
         requests = atomic_exchange_explicit(&cpu->pull_requests, 0, memory_order_acq_rel);
     uint64_t serve = (requests | atomic_load_explicit(&ssKernelIdleMask, memory_order_acquire)) & targets;
+#if SS_PULL_MOVES_PER_PASS
+    unsigned moved = 0;
+#endif
     while (serve) {
         const unsigned target = (unsigned)__builtin_ctzll(serve);
         serve &= serve - 1;
@@ -1588,6 +1594,10 @@ static void ssKernelPullServe(unsigned c)
         if (move.changed) {
             atomic_fetch_add_explicit(&ssKernelIdlePulls, 1, memory_order_relaxed);
             ssKernelControlDrain();
+#if SS_PULL_MOVES_PER_PASS
+            /* Bound the transfer work of one pass; an idle core stays in the idle mask and the next pass serves it. */
+            if (++moved >= SS_PULL_MOVES_PER_PASS) break;
+#endif
         }
         if (cpu->run.ready_bitmap == 0) break;
     }
