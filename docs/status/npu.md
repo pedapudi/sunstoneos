@@ -46,7 +46,7 @@ Designs: [platform](../designs/npu-platform.md), [fast path](../designs/npu-fast
 Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` records hold the results that earlier status prose described. Earlier prose evidence is in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-74 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+75 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -124,4 +124,5 @@ Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` recor
 | `1793719329671640562-91b56adc` | 2026-11-03 | 3-1 | `0419095357aa` | returned | passed | run_total 26.278 s, flat_width 65400 elements, gather_bytes 523200 bytes, output_bytes_differing 0 bytes |
 | `1793719431661400089-4f6a7d7e` | 2026-11-03 | 3-1 | `61ee14873aae` | returned | passed | run_total 27.385 s, flat_width 32640 elements, gather_bytes 522240 bytes, output_bytes_differing 0 bytes |
 | `1793719534250914902-0b709b24` | 2026-11-03 | 3-1 | `6cc60b2a4044` | returned | passed | run_total 25.056 s, flat_width 32640 elements, gather_bytes 261120 bytes, output_bytes_differing 0 bytes |
+| `1793720834073494547-a97df65a` | 2026-11-03 | 3-1 | `7b1cbb57fd41` | returned | passed | run_total 28.842 s, jobs 48 jobs, job_time 14582.9 µs, copy_time 24285.1 µs, total_time 49733.9 µs, output_bytes_differing 0 bytes |
 <!-- evidence-table:end -->
