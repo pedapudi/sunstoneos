@@ -127,28 +127,28 @@ static int clock_live(struct a733_radio_platform *p)
     enum a733_clock_result r=a733_clock_token_status(p->clocks,&p->clock);
     return r==A733_CLOCK_OK?1:r==A733_CLOCK_BUSY?0:-1;
 }
-static int profile(struct a733_radio_platform *p)
+static unsigned profile_line(struct a733_radio_platform *p)
 {
     uint32_t osc,ref,pll,a,b,gate,status;
     /* Selected fabric and SMHC1 routes use SYS24M/PERI0, not raw DCXO. */
-    if(!rd(p,UINT32_C(0x07090160),&osc)||!rd(p,CCU,&ref)||!a733_clock_ref24_valid(osc,ref))return 0;
+    if(!rd(p,UINT32_C(0x07090160),&osc)||!rd(p,CCU,&ref)||!a733_clock_ref24_valid(osc,ref))return __LINE__;
     unsigned n;
     for(unsigned i=0;i<3;++i)
-        if(!rd(p,CCU+fabric_off[i],&a)||(a&fabric_mask[i])!=p->config.fabric[i])return 0;
+        if(!rd(p,CCU+fabric_off[i],&a)||(a&fabric_mask[i])!=p->config.fabric[i])return __LINE__;
     if(!rd(p,CCU+0x5c0,&a)||(a&(BIT(29)|BIT(24)))!=BIT(24)||
         !rd(p,CCU+0x5e0,&a)||!(a&BIT(30))||
-        !rd(p,CCU+0x59c,&a)||(a&0x30001u)!=0x30001u)return 0;
-    if(!(p->shared&A733_CLOCK_PERI0))return 1;
+        !rd(p,CCU+0x59c,&a)||(a&0x30001u)!=0x30001u)return __LINE__;
+    if(!(p->shared&A733_CLOCK_PERI0))return 0;
     if(!rd(p,CCU+0xa0,&pll)||(pll&0xfe000000u)!=0xfe000000u||(pll&(BIT(24)|BIT(1)))||
         !rd(p,CCU+0xa8,&a)||(a&BIT(31))||!rd(p,CCU+0xac,&b)||(b&BIT(27))||
-        !rd(p,CCU+0x1908,&gate)||!rd(p,CCU+0x1988,&status))return 0;
-    n=((pll>>8)&255)+1;if(n<53||n>105)return 0;
+        !rd(p,CCU+0x1908,&gate)||!rd(p,CCU+0x1988,&status))return __LINE__;
+    n=((pll>>8)&255)+1;if(n<53||n>105)return __LINE__;
     if(p->four_bit) {
         /* The four-bit profile's SMHC1 parent is the same 400 MHz branch the
          * SD/eMMC platform requires for its negotiated rates. */
         uint32_t required=BIT(11)|BIT(2)|BIT(1);unsigned div=(((pll>>20)&7)+1)*3;
         if((gate&(required|(required<<16)))!=(required|(required<<16))||
-            (status&(required<<16))!=(required<<16)||24u*n!=400u*div)return 0;
+            (status&(required<<16))!=(required<<16)||24u*n!=400u*div)return __LINE__;
     }
     for(unsigned i=0;i<3;++i) {
         unsigned mhz=p->selected_mhz[i],div,branches;
@@ -158,12 +158,18 @@ static int profile(struct a733_radio_platform *p)
         case 400:div=(((pll>>20)&7)+1)*3;branches=BIT(11)|BIT(2)|BIT(1);break;
         case 800:div=((pll>>16)&7)+1;branches=BIT(10);break;
         case 480:div=((pll>>2)&7)+1;branches=BIT(8)|BIT(7);break;
-        default:return 0;
+        default:return __LINE__;
         }
         uint32_t enabled=branches<<16,required=branches|enabled;
-        if((gate&required)!=required||(status&enabled)!=enabled||24u*n!=mhz*div)return 0;
+        if((gate&required)!=required||(status&enabled)!=enabled||24u*n!=mhz*div)return __LINE__;
     }
-    return 1;
+    return 0;
+}
+static int profile(struct a733_radio_platform *p)
+{
+    unsigned line=profile_line(p);
+    if(line&&!p->fail_line){p->fail_line=line;p->fail_stage=p->stage;}
+    return !line;
 }
 static int masked(struct a733_radio_platform *p)
 {
