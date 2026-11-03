@@ -153,7 +153,7 @@ def main():
     # apps/os/os.h: every image admits workloads 0, 1, 2 and 4 here; the session decode ties the workload to the device grant
     # and refuses a radio session in an image without the radio. The radio's publications and chip-ID read happen only for
     # workload 1.
-    admitted = (0, 1, 2, 4)
+    admitted = (0, 1, 2, 3, 4)
     n = len(assets)        # the manifest's INPUT regions, published first; an image with no application has none
     for workload in (0, 1, 2, 3, 4, 6, 8):
         cpu, calls, returned, checked, profile = run(workload)
@@ -167,7 +167,7 @@ def main():
             assert calls[:n] == assets and calls[n][1:] == (832, DEADLINE) and calls[n + 1] == (0x43000000, 0x100000, DEADLINE)
             assert bytes(cpu.mem_read(copy, 832)) == profile
             record(cpu, calls)
-        elif radio and workload == 1:
+        elif radio and workload in (1, 3):
             assert calls[:n + 2] == assets + [(0x43000000, 1872, DEADLINE), (0x43010000, 0xf0000, DEADLINE)], calls
             assert len(calls) == n + 3, calls
             record(cpu, calls)

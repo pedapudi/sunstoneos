@@ -16,12 +16,24 @@ int os_thermal_throttled(void);
 #if defined(SUNSTONE_A733_OS_MSBC) && !defined(SUNSTONE_A733_OS_HEADSET)
 #error Wideband speech is a headset option
 #endif
-/* Workloads 0 and 4 require storage, 1 selects the radio station and 2 is the storage-free recorded
- * mode. The session decode ties the workload to the device grant (apps/os/session.c). */
+/* Workloads 0 and 4 require storage, 2 is the storage-free recorded mode, and the radio has two: 1 the full
+ * station with USB storage and 3 the scanning station without the USB host. The session decode ties the workload
+ * to the device grant (apps/os/session.c). */
 static inline int os_workload_valid(unsigned workload)
 {
-    return workload==0||workload==1||workload==2||workload==4;
+    return workload==0||workload==1||workload==2||workload==3||workload==4;
 }
+/* A radio workload grants the radio station. */
+static inline int os_radio_workload(unsigned workload)
+{
+    return workload==1||workload==3;
+}
+/* The radio workload this image's station serves: the scanning image 3, the full station 1. */
+#ifdef SUNSTONE_A733_OS_RADIO_SCAN
+#define OS_RADIO_WORKLOAD 3u
+#else
+#define OS_RADIO_WORKLOAD 1u
+#endif
 /* Service records of the typed session (docs/designs/app-abi.md). The wire form carries a record only for a
  * service the session grants; the decoded session holds every record and a mask of the granted ones. */
 #include "npu-session.h"

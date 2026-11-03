@@ -19,7 +19,7 @@ int os_radio_pins(struct a733_pin_handoff *pins)
     const struct os_session *s=os_session_admitted();
     if(!pins||!s)return 0;
     if(!(s->granted&OS_GRANT_RADIO))return 1; /* no radio session: the pins and the profile stay unread */
-    if(s->board.workload!=1||s->board.radio_profile_address!=UINT64_C(0x43000000)||
+    if(s->board.workload!=OS_RADIO_WORKLOAD||s->board.radio_profile_address!=UINT64_C(0x43000000)||
        s->board.radio_profile_bytes!=sizeof(profile))return 0;
     static const struct a733_mapping_rule wb={A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
     if(!a733_mapping_check_pages(aarch64_device_translate,0x43000000,0x43000000,sizeof(profile),&wb))return 0;
@@ -39,5 +39,5 @@ int os_radio_start(void)
 {
     const struct os_session *s=os_session_admitted();
     if(s&&!(s->granted&OS_GRANT_RADIO))return 1;
-    return s&&s->board.workload==1&&board.handles[5]&&board.handles[6];
+    return s&&s->board.workload==OS_RADIO_WORKLOAD&&board.handles[5]&&board.handles[6];
 }

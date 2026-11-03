@@ -77,7 +77,7 @@ int board_identity_prepare(uint64_t deadline)
 #if defined(SUNSTONE_A733_OS_RADIO) || defined(SUNSTONE_A733_OS_HEADSET)
 #ifndef SUNSTONE_A733_OS_HEADSET
     /* Only the radio station reads the profile span and the chip ID; any other workload leaves them unread. */
-    if(s->workload!=1)return 1;
+    if(!os_radio_workload(s->workload))return 1;
 #endif
 #ifdef SUNSTONE_A733_OS_HEADSET
     const volatile struct bluetooth_profile *source=(const void *)OS_HEADSET_PROFILE_ADDRESS;
