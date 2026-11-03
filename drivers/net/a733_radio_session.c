@@ -29,8 +29,9 @@ static int enter(struct a733_radio_session *s)
 }
 static enum a733_radio_session_result leave(struct a733_radio_session *s,enum a733_radio_session_result r)
 {atomic_store_explicit(&s->busy,0,memory_order_release);return r;}
-static enum a733_radio_session_result fail(struct a733_radio_session *s)
+static enum a733_radio_session_result fail_at(struct a733_radio_session *s,unsigned line)
 {
+    if(line&&!s->fail_line){s->fail_line=line;s->fail_stage=s->stage;}
     s->fault=1;
     sunxi_sdio_stop(&s->platform->host,SUNXI_SDIO_CARD_ERROR);
     if(s->dispatcher.initialized)aic8800_transport_fault_receive(&s->transport,&s->dispatcher);
@@ -44,6 +45,7 @@ static enum a733_radio_session_result fail(struct a733_radio_session *s)
     }
     return A733_SESSION_RETAINED;
 }
+#define fail(s) fail_at((s),(unsigned)__LINE__)
 static int now(struct a733_radio_session *s,uint64_t *out)
 {
     return s->platform->ops.now_us(s->platform->cookie,out)==1&&
@@ -52,7 +54,7 @@ static int now(struct a733_radio_session *s,uint64_t *out)
 enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_session *s)
 {
     if(!enter(s))return A733_SESSION_INVALID;
-    return leave(s,fail(s));
+    return leave(s,fail_at(s,0)); /* An outside retain is not a session failure site. */
 }
 static enum a733_radio_session_result live(struct a733_radio_session *s)
 {

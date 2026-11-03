@@ -2,8 +2,15 @@
 
 IMAGES are CMake recipes built once per tree state; the gate's OS variants (VARIANTS) are named directly and need no recipe.
 {elf:X} and {build:X} are an image's ELF and build directory, {session:X} the session bytes tools/gate_session.py builds for
-image X, {bundle:X} the probe ELF that apps/board-bundles-power/build-opp.py builds for bundle X (BUNDLES lists its arguments).
+image X, {bundle:X} the probe ELF that apps/board-bundles-power/build-opp.py builds for bundle X (BUNDLES lists its arguments),
+{fixture:X} the directory of fixture X (FIXTURES). A fixture is host data that checks read and that a cleanup of the cache may delete,
+so the gate runs its idempotent build command before the checks that name it and a build that is current does nothing.
 """
+
+FIXTURES = {
+    # the compiled test graphs and their input and simulator reference tensors (tools/npu-graph-build.py, tools/npu-graph-specs.json)
+    'npu-graphs': {'directory': 'build/npu-graph-variants', 'build': ['tools/npu-graph-build.py', '--output', '{directory}']},
+}
 
 IMAGES = {
     # the CPU-return NPU image of apps/cpu-npu-concurrency (apps/cpu-npu-concurrency/README.md)

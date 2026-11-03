@@ -240,13 +240,18 @@ def verify(args, worktree, base, tip, names, label):
     # The gate starts beside the registry check, which refuses in seconds what the gate would refuse at its
     # end. If the registry check refuses, the gate is stopped by its own process group.
     command = gate_argv(args, tree) + [str(tree), label, '--reason', args.reason, '--keep-going', *scope]
-    gate = subprocess.Popen(command, cwd=tree, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    log = args.cache / 'build' / ('land-%s-gate.log' % label)
+    with log.open('w') as output:
+        gate = subprocess.Popen(command, cwd=tree, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
     try:
         run_step('checks/gate-inputs.py', args.registry_command + ['--output', str(args.cache / 'build' / ('registry-' + label + '.json'))], tree)
         gate.wait()
         summary = args.cache / 'build' / ('gate-' + label) / 'summary.txt'
-        if not gate_passes(summary):
-            raise Refused('the gate did not pass; read %s\n%s' % (summary, '\n'.join(gate_failures(summary))[-1500:]))
+        if not gate_passes(summary) or gate.returncode:
+            tail = '\n'.join(log.read_text(errors='replace').splitlines()[-30:])
+            raise Refused('the gate did not pass (exit %s); read %s%s\n%s\nlast 30 lines of %s:\n%s' % (
+                gate.returncode, summary, '' if summary.is_file() else ' (the gate wrote no summary)',
+                '\n'.join(gate_failures(summary))[-1500:], log, tail))
     finally:
         if gate.poll() is None:
             os.killpg(gate.pid, signal.SIGTERM)
