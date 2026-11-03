@@ -21,6 +21,7 @@ The NPU path is implemented: native model decoding, mappings, shared-provider st
 | Run-time graph registration and links | qualified on the board | five graphs registered after start | `npu-status-runs-and-queue` |
 | Externally supplied models | qualified on the board | 18 graphs, 22.75 ms per pass | `npu-resources-external-models` |
 | Long attention layers (184 to 276 frames in 92-row blocks) | qualified on the board | 4.83 ms and 8.00 ms per job | `npu-status-long-attention-layers` |
+| Cause of the long-attention failures | qualified on the board | a flat gather width of 65,536 or more, not the bytes or the index table | [long tensors](../hardware/npu-command-formats.md#shader-operations-kind-1) |
 | Attention step of the tiled encoder | qualified on the board | 458.8 µs as two jobs | [tiled execution](../designs/npu-tiled-execution.md) |
 | Idle clock gating | qualified on the board | resume at most 25 µs; no gating at 9 ms gaps | `npu-status-board-scope` |
 | Combined CPU and NPU image | qualified on the board | four jobs, overlap mask 15 | `npu-status-board-scope` |
