@@ -192,9 +192,9 @@ struct sunxi_mmc {
     uint32_t wait_us;
     unsigned sd_ios;
     /* UHS-I switch and tuning progress. */
-    uint64_t signal_us;
-    unsigned sd_sig, tune_delay, tune_repeat, tune_recover, tune_forced;
-    uint8_t s18r, signal_window, tuning, tune_failed, after_clock, observe_s18, reenter, sdr25_only;
+    uint64_t signal_us, attempt_us;
+    unsigned sd_sig, tune_delay, tune_repeat, tune_recover, tune_forced, tune_hung;
+    uint8_t s18r, signal_window, tuning, tune_failed, tune_attempt, after_clock, observe_s18, reenter, sdr25_only;
     uint8_t tuning_block[64];
 };
 /* Zero storage before its first use. Single task owner; no concurrent ISR or
