@@ -1,8 +1,9 @@
 # Design: application memory sized from the build and the manifest
 
-Status: **design**, with two steps of the migration implemented and host and
-emulator checked: the layout record (step 2) and the heap from the ledger
-(step 1). No part is board-qualified. See "Implemented so far" below.
+Status: **design**, with the migration steps through step 5 implemented and host and
+emulator checked. Board runs pass for the heap from the ledger, manifest regions and the main
+stack in slot 1, the preserving run of a scratch region, and the NPU pool in the slot 1 area.
+See "Implemented so far" below.
 Readers are assumed to know AArch64 stage-1 translation (Arm ARM DDI 0487,
 D8), the FreeRTOS SMP port, [memory-architecture.md](memory-architecture.md)
 and [large-app-regions.md](large-app-regions.md).
@@ -324,6 +325,31 @@ operating points, not from probe images.
 4. **Runner and backup/restore from the record**, with the `preserve` attribute and the time estimate.
 5. **NPU pool and GPU buffers from the ledger**, using the hardware bounds table.
 6. **Application image area**: renamed application sections, `layout.ld`, boot-table text mapping at EL1 and EL0, stage-2 loader extents.
+6b. **Manifest regions anywhere the ledger has room** (part of step 6, because both change the EL3 tables and the
+    normal-return terminal). Today the manifest tool places a WORK, OUTPUT or INPUT region only in the 48 MiB window or in
+    the slot 1 area (`AREAS` in `tools/sunstone-manifest.py`, `0x48000000..0x79000000`); that is a fixed limit and it
+    leaves the runner's reach above 2 GiB unproven. The change, in order:
+    1. *Planner.* `assign` continues first-fit into the upper memory (`0x80000000` up to the installed memory) when the window
+       and the slot 1 area are full, and accepts a pinned address there; every address stays 2 MiB aligned from the floor
+       up. The large records and the heap are not placed at build time: at admission they take the ledger's remaining gaps,
+       so one ledger serves the manifest regions (held first, by address), the NPU pool, the large records and the heap. A
+       host check places regions across all three areas and shows that none overlaps, that the large records and the heap
+       find room around them, and that a manifest that needs more than the installed memory is refused with the sizes.
+    2. *Identity and admission.* `apps/os/identity.c` and `apps/os/large.c` stop assuming that a placed region lies below
+       `0x80000000` (`APP_REGION_BASE`): the held-by-address loop takes every region from the floor up. `checks/app-region.c`
+       gains regions in slots 2 and above, mapped as 1 GiB blocks where a slot is one region's and as 2 MiB blocks where it is shared.
+    3. *EL3 tables and the terminal.* The terminal cleans every WORK and OUTPUT region through the EL3 tables and parks on
+       a block that the tables do not map as normal write-back memory. The EL3 level-2 table covers `0x40000000..0x80000000`
+       only, so a region at `0x88000000` would index past it. The platform gives the EL3 level-1 table a 1 GiB block entry
+       for each gigabyte that holds such a region and only where the decode check passed (the same condition as the
+       EL1 entries), the terminal reads the level-1 entry for an address at or above `0x80000000` and applies the same
+       test as for a level-2 block, and `checks/os-cpu-return.py` gains cases for a region in slot 2, a region whose gigabyte
+       has no entry (parks) and one whose entry has the wrong attributes (parks).
+    4. *Runner.* A preserving run keeps its 4 GiB reach: a region at or above `0x100000000` is refused by name, so the
+       reach is a property of FEL and not of the planner. `checks/runner-preservation.py` covers a placed region at `0x88000000`.
+    5. *Board.* One preserving run of `slot1-test` with an 8 MiB OUTPUT and a 16 MiB WORK pinned at `0x88000000`: the restored
+       bytes hash equal to the backup. This is the run the table of checks lists for step 4 and could not make before.
+
 7. **Run-time requests**: SDK call, ledger pages, table-page extents and the release protocol.
 
 Steps 3 to 5 each depend on step 2, and step 6 on step 3. Step 7 depends on
@@ -379,6 +405,23 @@ mutations (the old ceiling, no scratch filter, no budget test, one pass in the
 estimate, scratch allowed on an input, no upper bound) each fail it. The board
 run listed for this step (an 8 MiB OUTPUT and a 16 MiB WORK at `0x88000000`,
 restored bytes equal to the backup) is not yet done.
+
+**Regions above 2 GiB (step 6b).** Implemented and checked on the host and the emulated board; the board run is listed under its
+prediction below. The manifest tool places a region in the upper memory (`upper_area` of the record, `0x80000000` to the end of the
+installed 12 GiB) when the window and the slot 1 area are full, accepts a pinned address there, and refuses a region that crosses
+the unmapped hole or runs past the installed memory. `apps/os/large.c` holds every placed region from `0x48000000` up in the
+ledger by its address, so the heap, the large records, the NPU pool and the stack take what is left. The per-application tables
+already mapped slots 2 and above as 1 GiB blocks, or as 2 MiB blocks where a gigabyte is shared. The EL3 level-2 table covers only
+`0x40000000..0x80000000`, so `platform/a733-smp-cached/memory.c` gives the EL3 level-1 table a 1 GiB block for each gigabyte that
+holds a work or output region, only when the boot's decode check passed. The terminal (`apps/os/cpu-return/terminal.patch`) reads
+that block for an address from `0x80000000` and applies the test of a level-2 block. The EL3 publication of the identity step
+(`platform/a733/cpu_coherence.S`) accepts the installed memory, which an input region above `0x48000000` needed already. Checks:
+`checks/memory-layout.py` places regions across the three areas, `checks/a733-cpu-coherence.py` covers the publication range,
+`checks/os-cpu-return.py` shows the cleaning of regions in slot 2 and the three parking cases, `checks/qemu-os-boot.py` runs an
+application that uses a region at `0x88000000` and faults one byte past it, and `checks/runner-preservation.py` covers the
+preservation plan for it. The runner keeps its 4 GiB reach, so a region at or above `0x100000000` is refused for a preserving run.
+The emulated board's stack check now accepts the installed memory, because the ledger takes the smallest gap that holds the stack,
+which can lie beside a region above 2 GiB.
 
 **NPU pool and GPU buffers (step 5).** What each reaches today, before the change:
 
@@ -437,6 +480,75 @@ entries that `memory.c` writes for the pool at boot (the model does not execute
 that code) and the NPU itself with a pool in slot 1; both need the board.
 `checks/memory-layout.py` ties the bounds in the build, the header, the terminal and the platform to the record.
 
+**Result: mode 3 with the notification wait, after the notification index change (port 3-1, entry
+`1793650900758260472-be096b75`, bringup `5d93918e`).** The image returned normally and its 128-byte output is
+byte-identical to the predicted result: `worker_ran` 1 on core 3, `same_tag` 1, `main_tag_set` 1, `notify_count` 1, and the
+fold of the worker's write equal to the main task's read of it over the 1 GiB heap at `0x80000000`. The wait on index 0
+that the OS's wake-ups used to end now lasts until the worker's own give, so the change holds on the board. The mode's
+other results (modes 0 to 2) were recorded earlier.
+
+### Predicted board run of the preserving runner (step 4)
+
+Hypothesis: a preserving run (`--preserve-dram`, development off) of `slot1-test` mode 0 with the manifest
+`apps/slot1-test/manifest-preserve.json` (a 16 MiB WORK region at `0x48000000`, an 8 MiB OUTPUT region at `0x4a000000`
+and an 8 MiB scratch WORK region at `0x4b000000`, all in the slot 1 area above the old 48 MiB window) backs up the image
+RAM, the 16 MiB and the 8 MiB regions and not the scratch region, prints its estimate, completes inside the budget the
+submission names, and restores every saved byte.
+
+- **Expected.** The runner prints a preservation line of about 42 MiB and an estimate of about 160 s, under the budget of
+  240 s; the backup inventory in the run's record lists extents inside `0x41000000..0x42200000`, `0x48000000..0x49000000`
+  and `0x4a000000..0x4a800000` and none at `0x4b000000`; the session returns normally with the 32-byte result `{SLOT1
+  tag, 0x48000000, 16 MiB, fold}` of `~/.cache/sunstoneos/memlim-handoff-1102/expected-slot1-preserve.bin`; the record says
+  `dram_restored` true and the restoration's readback hashes equal the backup's.
+- **A different result and what it means.** A refusal before launch naming the estimate and the budget would mean the
+  estimate is above the budget (the rate or the extents differ from the record). Preservation extents that include
+  `0x4b000000` mean the scratch bit did not reach the backup list. A restore hash that differs from the backup is a defect of the
+  runner's transfer above `0x48000000`; the old range (below `0x80000000`) already contained those addresses, so this run
+  tests the new bookkeeping, the scratch attribute and the estimate, not a new reach.
+
+**Result: the preserving run (port 3-1, entry `1793652142808675717-ffd657dd`, bringup `69d0b3b9`).** As predicted: the
+runner backed up 44,040,192 bytes (42 MiB: the image RAM, the 16 MiB region at `0x48000000` and the 8 MiB region at
+`0x4a000000`) in 11 chunks with none at `0x4b000000`, so the scratch region was left out; it printed the estimate of 160.1 s
+against the budget of 240 s; the session returned normally (`RETURN_ROM`), its 32-byte output equals
+`expected-slot1-preserve.bin`, and the record says `dram_mode` preserved and `dram_restored` true. This shows the scratch
+attribute, the estimate, the budget and the backup and restore of regions in slot 1 on a board. It does not show the reach
+above 2 GiB, which step 6b is for.
+
+### Predicted board run of the preserving runner above 2 GiB (step 6b)
+
+The manifest tool places a work, output or input region in the upper memory (`0x80000000` up to the installed memory) when the
+window and the slot 1 area are full, or where the manifest pins it. The admission holds every such region in the ledger by its
+address. The platform gives the EL3 level-1 table one 1 GiB block for each gigabyte that holds a work or output region, only where
+this boot's decode check passed. The normal-return terminal reads that block for an address from `0x80000000` and applies the test
+that it applies to a level-2 block (the gigabyte's own block, NS, write-back, inner-shareable, access flag). The EL3 publication of
+the identity step accepts the installed memory. The emulated board maps and uses such a region from EL0 and faults one byte past
+it, and `checks/os-cpu-return.py` shows the terminal cleaning the regions and parking when the block is missing, belongs to
+another gigabyte, or has the wrong attributes.
+
+Hypothesis: a preserving run (`--preserve-dram`, development off) of `slot1-test` mode 0 with the manifest
+`apps/slot1-test/manifest-upper.json` (a 16 MiB WORK region at `0x88000000`, an 8 MiB OUTPUT region at `0x89000000` and an 8 MiB
+scratch WORK region at `0x8a000000`, all in level-1 slot 2) behaves as the run of the same shape in the slot 1 area did.
+
+- **Expected.** The runner backs up the image RAM, the 16 MiB and the 8 MiB regions (about 42 MiB, estimate about 160 s under a
+  budget of 240 s) and leaves out `0x8a000000`; the session returns normally with the 32-byte result `{SLOT1 tag, 0x88000000,
+  16 MiB, fold}`; the record says `dram_restored` true and the restoration's readback hashes equal the backup's. The terminal
+  cleaning the regions through the EL3 level-1 block is what lets the session reach `RETURN_ROM`.
+- **A different result and what it means.** A watchdog end after the `TERMINAL` stage means the terminal parked on the level-1
+  block (the platform's entry is missing or its attributes differ from the test), because the host model does not run the
+  platform code that writes it. A bus hang or a fault at the first store to `0x88000000` would be a property of the decode check
+  or the interconnect; the heap run reached `0x80000000` already. A restore hash that differs from the backup is a defect of the
+  runner's transfer above 2 GiB, which this run is the first to exercise.
+
+**Result: the preserving run above 2 GiB (port 3-1, entry `1793670225972455043-c4f45b62`).** As predicted. The runner backed up
+44,040,192 bytes (the image RAM, the 16 MiB region at `0x88000000` and the 8 MiB region at `0x89000000`, in 4 MiB chunks) and
+none at `0x8a000000`; it printed the estimate of 160.1 s against the budget of 240 s; the session returned normally (`RETURN_ROM`
+last), so the terminal's cleaning through the EL3 level-1 block of gigabyte 2 completed; the 32-byte output equals the expected
+`{SLOT1 tag, 0x88000000, 16 MiB, fold}` byte for byte; the record says `dram_mode` preserved, `dram_restored` true and
+`dram_dirty` false. The first submission of this image (`1793670172396930064-8d844757`) ended at pre-flight with a `KeyError` for
+`upper_area`: the runner had already imported its own `memory_layout`, which shadowed the host tree's. The manifest tool now loads
+the record that sits beside it. Host-side stage durations of this run (DRAM 54.9 s, capture 190 s) come from a period of heavy
+disk load and are not comparable with other runs.
+
 ### Predicted board run of the NPU pool in the slot 1 area
 
 Hypothesis: an `npu-graphs` image built from the recipe of the passing run `1793599845892192862-30dc9323` (seven
@@ -460,6 +572,109 @@ Condition: one run on port 3-1, no card, development DRAM mode.
     The host check shows the tables are right, so this would be a property of the interconnect and would be new.
   - Every graph `mismatch` with the same differing count: the device read or wrote another copy than the CPU, a cache
     maintenance or attribute difference of the slot 1 blocks.
+
+### Predicted board run of the NPU pool below 0x48000000 with the upper memory mapped
+
+The first run of the pool in the slot 1 area (entry `1793652334060640370-11f14671`, the image built from commit `8c4508c3` with the
+pool at `0x78600000`) ended at the watchdog. The only failure it recorded is the supervisor's cutoff test in
+`os_cpu_return_supervise` (`apps/os/cpu-return.c`, detail `0x73c`): the application had not asked for the return by the session
+deadline minus the 5 s return reserve, about 55 s after launch. No NPU, board or application failure came first, and the board
+live test never failed, so no service's progress window expired. The passing run that this one repeated took 5 s. That run was built without the DRAM decode check, so the new image differs in two ways, not one: the pool
+address, and the check, which maps the upper memory at EL1, gives the application an address space and takes its main stack from
+the ledger. The prediction of the first run named only the pool.
+
+Hypothesis: the pool address is the cause. A pool at `0x78600000` leaves the NPU service waiting for a job that does not complete,
+or for a stop that does not finish, while the same image with the pool below `0x48000000` completes. The control is the same
+source tree and recipe with one change, `SUNSTONE_OS_NPU_POOL_BASE` empty: a 10 MiB pool ending at `0x47000000`, which is
+`0x46600000..0x47000000`. The decode check, the application space, the main stack in the ledger and the A76 main core stay as in the
+failed image. A build of the failed recipe from the same tree reproduces the failed image byte for byte, so the control differs
+from it in the pool symbols and the code they select (the ledger reservation, the start test of the reservation, the EL3 pool
+entries and the terminal's clean of a sized pool).
+
+Condition: one run on port 3-1, no card, development DRAM mode, 852 MHz at 800 mV as before.
+
+- **Hypothesis true.** Normal return with the receipt of `expect.json`: seven records with status `match` and no differing byte,
+  `completed` and `matched` equal to 7, the SDK closed, `RETURN_ROM` as the last breadcrumb, about 10 s of launch.
+- **Hypothesis false.** The same watchdog end: last stage `EL3_STOP`, first failure `0x73c`, about 55 s of launch. The cause is then
+  in the composition of the decode check with the NPU service (the application space and TTBR0 switching, the ledger main stack, or an
+  application space on core 6 beside the NPU service on core 1), and the next image must name what the application waits for.
+
+Host evidence before this run. The image's own start code (`checks/os-npu-start.py`, with the kernel tables seeded as the decode check
+leaves them) accepts the session of the failed run and starts the NPU service with the pool at `0x78600000`. An application with no
+regions, a main stack in the ledger and an application space starts and finishes on core 6 and on core 2 in the emulated board.
+No host model contains the NPU's reach of memory, so neither can show a pool-address failure.
+
+**Result.** The control (entry `1793663710033568998-bec104fe`, pool at `0x46600000`) ended exactly as the failed image did: last stage
+`EL3_STOP`, first failure `0x73c` at the supervisor's cutoff, no earlier failure. The hypothesis is false. The pool address is not
+the cause, and the cause lies in running the NPU service in an image whose decode check is on.
+
+### Predicted board run that names what the session waits on
+
+A session that reaches the supervisor's cutoff now records what it was waiting on. The NPU retirement wait in `ss_finish`, the
+only wait of the application that lasts until the cutoff, gives up one second earlier with failure `0x75f`, whose value is the set of
+unmet retirement conditions (`OS_NPU_STATE_*` in `apps/os/npu.h`). The supervisor's cutoff failure `0x73c` carries the return
+address of the application's latest `ss_progress` call as its value and the same conditions in the auxiliary field of its site.
+`tools/a733-crumbs.py` names both.
+
+Hypothesis: the session waits in `ss_finish` for the NPU to retire. The run uses the control image (pool at `0x46600000`, decode
+check on) built from the tree with this change. Nothing else differs from the control.
+
+Condition: one run on port 3-1, no card, development DRAM mode, 852 MHz at 800 mV.
+
+- **Hypothesis true.** First failure `0x75f` in the application group, about 54 s after launch, with a value that lists the unmet
+  conditions. Which of them are unmet says where retirement stops: the report not published points at the client task or the
+  close, the report published but `os_npu_stopped` false points at the bootstrap's local stop or the interrupt state.
+- **Hypothesis false, application elsewhere.** First failure `0x73c` with a progress site inside the graph loop or the close loop of
+  `npu_graphs_main`, which the decoder reports as an address to symbolize against the image.
+- **Hypothesis false, application never ran.** First failure `0x73c` with progress site `0`, and the NPU conditions show whether
+  the service started. The main task did not reach its first `ss_progress` call.
+- **Normal return.** The change alters timing and the cause is a race. The receipt then decides.
+
+**Result.** The run (entry `1793664765522129781-2eeb4b7e`) ended at the cutoff with first failure `0x73c`, not `0x75f`, so the
+session was not waiting in `ss_finish`. The record names the wait. Its value is `0x41089608`, the return address of the
+`ss_progress` call in the first loop of `main_entry` (`apps/os/application.c`), which waits until `ss_live()` is not zero. That
+loop never ended, so the application's main entry never ran. `ss_live()` stays zero while `ss_grant()` is null or the USB service
+task has not marked the transport ready (`os_application_usb_ready`, called first thing by `board_usb0_task` in this profile). The
+NPU state in the site's auxiliary field, `0x41cb`, says the service started and became active, the SDK was never opened, and no
+report was published. The next image must say which of the two terms of `ss_live()` is unmet.
+
+**Cause.** `main_entry` tests `ss_live()`, finds the application not live, and waits for the transport with
+`application_wait_until(deadline - 10 ms)`. A wake-up (`os_wake`) reaches only a task that has registered its wait. When the USB
+service task marks the transport ready after the test and before the registration, the wake-up finds no waiter, and the main
+task sleeps to the session deadline, which the supervisor's cutoff then ends. The wait also extended the application's progress
+window to the deadline, which is why no service window expired. The emulated board reproduces it
+(`usb-ready-between-test-and-wait` in `checks/qemu-os-boot.py`): on the earlier code the application never enters. The wait now
+registers first and tests `ss_live()` again once registered, so the event is either seen by that test or delivered.
+
+### Predicted board run of the NPU pool in the slot 1 area, repeated with the wait fixed
+
+Hypothesis: the failed run of the pool at `0x78600000` (entry `1793652334060640370-11f14671`) was this lost wake-up, and the pool is
+not at fault. The same recipe built from the tree with the wait fixed returns normally with the receipt of `expect.json`: seven
+graphs `match`, `completed` and `matched` equal to 7, the SDK closed, `RETURN_ROM` last, about 10 s of launch. The image differs from
+the failed one in the fix and in the cutoff diagnostics. If the run ends at `0x73c` again, the record's progress site and NPU state
+say where the application waits, and the lost wake-up was not the whole cause.
+
+**Result.** Entry `1793665367809526758-0a66d342` returned normally (`RETURN_ROM` last, about 39 s of launch on a busy queue). Its
+receipt equals the expectation word for word: seven graphs `match` with no differing byte, `completed` and `matched` 7, the SDK
+closed. The queue labelled it `result-mismatch` because my submission passed an expectation file that was already converted,
+which the runner compared as bytes. Entry `1793665683000181061-de31a526` repeats the run with the correct file and has outcome
+`returned`, with the same receipt, in 5.9 s of launch. The pool at `0x78600000` works: the failed run of the pool was the lost
+wake-up, not the pool. The NPU's reach above `0x48000000` is shown by those seven graphs (a pool at the top of the slot 1 area).
+
+### Predicted board run of the NPU graphs with the end wait driven by events
+
+An OS wake-up of the main task that finds no registered wait is now kept for its next wait, `ss_host_recv` tests its mailbox again
+after registering, and the NPU retirement wait in `ss_finish` sleeps in the deadline wait until the client's report or the
+bootstrap's local stop wakes it, instead of polling with `vTaskDelay(1)`. The wait ends one second before the supervisor's cutoff.
+
+Hypothesis: the NPU graphs image with the 10 MiB pool at `0x78600000`, built from this tree, returns normally with the receipt of
+`expect.json`, as the run before the change did (seven graphs `match`, `completed` and `matched` 7, the SDK closed, `RETURN_ROM`
+last, about 6 s of launch). A watchdog end with `0x75f` would mean the stop did not wake the main task in time, and the value of the
+failure lists the unmet retirement conditions.
+
+**Result.** Entry `1793668814201417903-92757416` returned normally (`RETURN_ROM` last): seven graphs `match`, `completed` and
+`matched` 7, the SDK closed, no failure record. Its launch took 32.7 s of queue time against 5.9 s for the run before the change,
+so the board run shows the event-driven end wait is correct, and says nothing about its latency.
 
 ### Predicted board run of the heap
 

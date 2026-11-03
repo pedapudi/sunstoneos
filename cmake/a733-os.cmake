@@ -64,9 +64,11 @@ elseif(SUNSTONE_APPLICATION STREQUAL "slot1-test")
     message(FATAL_ERROR "slot1-test needs -DSUNSTONE_A733_DRAM_DECODE_PROBE=ON")
   endif()
   set(SUNSTONE_SLOT1_TEST_MODE "0" CACHE STRING "0: use the region; 1: use it, then read the byte after it; 2: overflow the main stack")
+  set(SUNSTONE_SLOT1_TEST_MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/slot1-test/manifest.json" CACHE FILEPATH
+    "The manifest of slot1-test (apps/slot1-test/manifest-preserve.json: small regions, one of them scratch, for the preserving run)")
   add_sunstone_application(slot1-test
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/slot1-test/main.c"
-    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/slot1-test/manifest.json")
+    MANIFEST "${SUNSTONE_SLOT1_TEST_MANIFEST}")
   target_compile_definitions(slot1-test PRIVATE SLOT1_TEST_MODE=${SUNSTONE_SLOT1_TEST_MODE})
   add_sunstone_image(sunstone-a733-os-slot1-test LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION slot1-test)

@@ -12,7 +12,7 @@ from pathlib import Path
 import shlex
 
 from register_latency import PostedWrites
-from harness import Image, LLD, Steps
+from harness import machine as harness_machine, Image, LLD, Steps
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MEM_READ, UC_HOOK_INTR
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_LR, UC_ARM64_REG_PC
 
@@ -41,7 +41,7 @@ elf = a.output / 'adapter.elf'
 stamp = hashlib.sha256(b''.join(p.read_bytes() for p in objects)).hexdigest()[:12]
 steps.command('link-' + stamp, [LLD, '-Ttext=0x41000000', '--entry=os_cpu_adapter_check', '--gc-sections', *objects, '-o', elf])
 image = Image(elf)
-m = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+m = harness_machine()
 m.mem_map(0x200000, 0x10000)
 m.mem_map(0x41000000, 0x400000)
 for addr, data in image.parts: m.mem_write(addr, data)
@@ -127,7 +127,7 @@ steps.command('link-bundle-'+hashlib.sha256(bundle_obj.read_bytes()).hexdigest()
 os_image = image
 image=Image(bundle_elf)
 bank=PostedWrites(registers)
-m=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
+m=harness_machine()
 m.mem_map(0x200000,0x10000)
 m.mem_map(0x41000000,0x400000);m.mem_map(0x42000000,0x10000)
 for page in sorted({x&~4095 for x in registers}):m.mem_map(page,4096)
@@ -153,7 +153,7 @@ cases.append('bundle-six-writes-complete-and-out-of-policy-refusal')
 # the adapter's accepted write outstanding at return. Endpoint UPDATE/LOCK
 # latency is exercised separately by the real driver transition fixture.
 def fresh_write(program, entry, revert):
-    cpu = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+    cpu = harness_machine()
     cpu.mem_map(0x200000, 0x10000)
     cpu.mem_map(0x41000000, 0x400000)
     cpu.mem_map(0x42000000, 0x10000)
@@ -219,7 +219,7 @@ steps.command('link-owner-' + hashlib.sha256(owner_obj.read_bytes() + policy_obj
                owner_obj, policy_obj, *objects[1:], '-o', owner_elf])
 owner_image = Image(owner_elf)
 for mode, name in enumerate(('both-clusters-big-little-dsu', 'no-grant-read-only', 'retained-request-not-ready')):
-    cpu = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+    cpu = harness_machine()
     cpu.mem_map(0x41000000, 0x400000)
     cpu.mem_map(0x200000, 0x10000)
     for address, data in owner_image.parts: cpu.mem_write(address, data)

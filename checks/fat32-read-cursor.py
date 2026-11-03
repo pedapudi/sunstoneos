@@ -43,7 +43,7 @@ def main():
     figures = {}
     for size in (256 << 10, 1 << 20):
         img = out / f'run-{size}.img'
-        shutil.copyfile(base, img)
+        harness.copy_image(base, img)
         r = subprocess.run([str(binary), 'cursor', str(img), str(BASE), str(PART_SECTORS), str(AU), str(size)], capture_output=True, text=True,
                            env=harness.environment())
         assert r.returncode == 0 and 'bad=0' in r.stdout, f'cursor check failed ({size}): {r.stdout}{r.stderr}'

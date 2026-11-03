@@ -208,8 +208,15 @@ def main():
     options = fixture.arguments(root)
     for port, approved, allowed in (('3-1', None, False), ('3-3', 'coordinator', False), ('3-1', 'coordinator', True)):
         options.port, options.approved_by = port, approved
-        try: board.images.policy(info, options)
-        except ValueError: assert not allowed
+        # The fixture image is a model file, which the storage classification refuses by default; this case tests the VBUS
+        # probe policy, so the classification is answered 'no-core' (an image without an SD core).
+        real_load = board.images.load
+        stub = types.SimpleNamespace(classify=lambda image: 'no-core')
+        try:
+            with patch.object(board.images, 'load', lambda name, path: stub if name == 'storage_bounds' else real_load(name, path)):
+                board.images.policy(info, options)
+        except ValueError as refusal:
+            assert not allowed, str(refusal)
         else: assert allowed
     passed('vbus-probe-marker-requires-coordinator-and-port-3-1')
     for fault in ('write-failure', 'stuck-high', 'unknown-source'):

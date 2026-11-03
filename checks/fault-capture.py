@@ -27,6 +27,7 @@ from pathlib import Path
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
+from harness import machine as harness_machine
 from unicorn.arm64_const import (UC_ARM64_REG_X0, UC_ARM64_REG_X29, UC_ARM64_REG_LR, UC_ARM64_REG_SP,
                                  UC_ARM64_REG_PC)
 
@@ -60,7 +61,7 @@ class Image:
         self.decoded = {}
 
     def machine(self):
-        uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+        uc = harness_machine()          # the maximal emulated core (CAS, LDADD) chosen before memory is mapped: checks/harness.py
         uc.mem_map(0x41000000, 0x1200000)
         uc.mem_map(STAGE2 & ~0xfff, 0x1000)
         for address, data in self.segments:

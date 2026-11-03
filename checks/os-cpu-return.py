@@ -91,6 +91,9 @@ class Model(prior.Model):
             self.put64(self.s['a733_cached_el3_l2'] + i * 8, (0x40000000 + i * 0x200000) | 0x725)
             self.put64(self.s['a733_cached_el3_l3'] + i * 8, (0x42000000 + i * 4096) | (1 << 54) | 0x443)
         self.put64(self.s['a733_cached_el3_l2'] + 128, self.s['a733_cached_el3_l3'] | 3)
+        # The platform's level-1 blocks for the gigabytes above 0x80000000 that hold a work or output region.
+        for g in sorted({a >> 30 for low, high in self.regions if low >= 0x80000000 for a in (low, high - 1)}):
+            self.put64(self.s['a733_cached_el3_l1'] + g * 8, (g << 30) | (1 << 54) | 0x765)
         if 'os_npu_published_report' in self.s:
             # Terminal-only fixture: preceding service close/local stop and
             # worker park are supplied inputs; their real functions have a
@@ -160,8 +163,12 @@ def main():
     cases = ('success', 'ordinary-exit-zero', 'wrong-core', 'missing-peer', 'active-interrupt',
              'unrelated-pending', 'wrong-image-alias', 'expired-deadline',
              'restore-readback', 'ack-without-off', 'ths-active', 'spi-restore-readback', 'service-not-ready')
-    if regions:
+    if any(low < 0x80000000 for low, _ in regions):
         cases += ('wrong-region-alias',)
+    if any(low >= 0x80000000 for low, _ in regions):
+        # Regions from 0x80000000 are cleaned through the EL3 level-1 table: a gigabyte with no block, with another
+        # gigabyte's block, or with the wrong attributes parks the return before any of those regions is cleaned.
+        cases += ('upper-region-no-block', 'upper-region-wrong-block', 'upper-region-wrong-alias')
     if '__os_npu_pool_start' in image.symbols:
         cases += ('wrong-npu-pool-alias', 'npu-pool-deadline', 'npu-late-irq')
         # The pool is the legacy 8 MiB or one sized from the declaration (22 MiB in the encoder timing image): the host rule
@@ -196,9 +203,18 @@ def main():
         elif case == 'unrelated-pending':
             model.put32(0x03460000 + 3 * 0x20000 + 0x10200, 0x40000003)
         elif case in ('wrong-image-alias', 'wrong-region-alias'):
-            block = 9 if case == 'wrong-image-alias' else (regions[0][0] - 0x40000000) >> 21
+            block = 9 if case == 'wrong-image-alias' else (next(low for low, _ in regions if low < 0x80000000) - 0x40000000) >> 21
             entry = image.symbols['a733_cached_el3_l2'] + block * 8
             model.put64(entry, model.u64(entry) & ~32)
+        elif case in ('upper-region-no-block', 'upper-region-wrong-block', 'upper-region-wrong-alias'):
+            g = next(low for low, _ in regions if low >= 0x80000000) >> 30
+            entry = image.symbols['a733_cached_el3_l1'] + g * 8
+            if case == 'upper-region-no-block':
+                model.put64(entry, 0)
+            elif case == 'upper-region-wrong-block':
+                model.put64(entry, model.u64(entry) + (1 << 30))
+            else:
+                model.put64(entry, model.u64(entry) & ~32)
         elif case == 'expired-deadline':
             model.put64(model.report + 32, model.time)
         elif case == 'restore-readback':

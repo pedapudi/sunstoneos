@@ -11,6 +11,7 @@ static int action_result;
 static jmp_buf finished;
 int board_live(void *v){assert(!v);return (int)model_live;}
 void board_fail(void *v){assert(!v);++failures;model_live=0;}
+void os_application_wake_main(void){}   /* the application's end wait (apps/os/application.c); no application runs here */
 void board_fail_note(uint32_t site,uint32_t value,const void *caller)
 {(void)site;(void)value;(void)caller;}
 void board_fail_at(uint32_t site,uint32_t value,const void *caller)

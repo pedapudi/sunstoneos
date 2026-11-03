@@ -90,13 +90,20 @@ unsigned sunstone_deadline_notify_index(void)
 extern const unsigned os_wake_capacity;
 extern TaskHandle_t os_wake_task[];
 extern unsigned os_wake_gave[];
+/* A wake-up of the main task that finds it with no registered wait is kept here, and the main task's next OS wait
+ * consumes it right after it registers, so an event between the caller's test and the registration is not lost. */
+static atomic_uint main_wake_pending;
 static void os_wake(TaskHandle_t task)
 {
     if(!task)return;
+    unsigned found=0;
     taskENTER_CRITICAL();
-    for(unsigned i=0;i<os_wake_capacity;++i)if(os_wake_task[i]==task){os_wake_gave[i]=1;xTaskNotifyGiveIndexed(task,SS_NOTIFY_DEADLINE);}
+    for(unsigned i=0;i<os_wake_capacity;++i)if(os_wake_task[i]==task){found=1;os_wake_gave[i]=1;xTaskNotifyGiveIndexed(task,SS_NOTIFY_DEADLINE);}
+    if(!found&&task==main_task)atomic_store_explicit(&main_wake_pending,1,memory_order_release);
     taskEXIT_CRITICAL();
 }
+/* The OS services that the application's end waits for (the NPU's retirement) wake the main task through here. */
+void os_application_wake_main(void){os_wake(main_task);}
 static unsigned os_wait_begin(TaskHandle_t task)
 {
     unsigned slot=os_wake_capacity;
@@ -124,14 +131,23 @@ int ss_live(void)
     if(!(grant.devices&SS_DEVICE_USB_STORAGE))return atomic_load_explicit(&board.result,memory_order_acquire)==3;
     return a733_smp_counter()/24<atomic_load_explicit(&observed_until,memory_order_acquire);
 }
-void ss_progress(void){board_service_progress(OS_SERVICE_APPLICATION);}
+static _Atomic uint32_t progress_site;
+__attribute__((noinline)) void ss_progress(void)
+{
+    atomic_store_explicit(&progress_site,(uint32_t)(uintptr_t)__builtin_return_address(0),memory_order_relaxed);
+    board_service_progress(OS_SERVICE_APPLICATION);
+}
+uint32_t os_application_progress_site(void){return atomic_load_explicit(&progress_site,memory_order_relaxed);}
 uint64_t ss_counter_ticks(void)
 {
     uint64_t now;__asm__ volatile("isb\n mrs %0,cntpct_el0":"=r"(now)::"memory");return now;
 }
 void os_application_usb_changed(void)
 {os_wake(main_task);}
-static int application_wait_until(uint64_t until)
+/* A wake-up reaches only a task that has registered its wait (os_wake). An event that happens after the caller tested its
+ * condition and before it registered finds no waiter, and the wait would last to its deadline. unless() tests the
+ * condition again once the wait is registered: the event is then either seen by that test or delivered to the waiter. */
+static int application_wait_until_unless(uint64_t until,int (*unless)(void))
 {
     if(xTaskGetCurrentTaskHandle()==main_task){
         uint64_t limit=board.session.deadline_us;
@@ -141,10 +157,13 @@ static int application_wait_until(uint64_t until)
         if(!board_service_blocked_until(OS_SERVICE_APPLICATION,health))return SUNSTONE_DEADLINE_ERROR;
     }
     const unsigned slot=os_wait_begin(xTaskGetCurrentTaskHandle());
-    const int result=sunstone_deadline_wait_until(until);
+    const int kept=xTaskGetCurrentTaskHandle()==main_task&&atomic_exchange_explicit(&main_wake_pending,0,memory_order_acq_rel);
+    const int result=kept||(unless&&unless())?0:sunstone_deadline_wait_until(until);
     os_wait_end(slot);
     return result;
 }
+static int application_wait_until(uint64_t until){return application_wait_until_unless(until,NULL);}
+static int live_changed(void){return ss_live()!=0;}
 void ss_usb_wait(uint32_t wait_us)
 {
     uint64_t now=a733_smp_counter()/24;
@@ -292,7 +311,7 @@ static void main_entry(void *unused)
     int live;
     while(!(live=ss_live())){
         ss_progress();
-        if(application_wait_until(board.session.deadline_us-10000)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
+        if(application_wait_until_unless(board.session.deadline_us-10000,live_changed)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
         if(a733_smp_counter()/24>=board.session.deadline_us-10000&&ss_live()!=1)ss_fail(0x750);
     }
     if(live<0)ss_fail(0x750);
@@ -425,6 +444,9 @@ __attribute__((noinline)) _Noreturn void ss_fail(uint32_t detail)
         __builtin_return_address(0));
     for(;;)vTaskSuspend(NULL);
 }
+#if defined(SUNSTONE_A733_OS_CPU_RETURN) && defined(SUNSTONE_A733_OS_NPU)
+static int npu_retired(void){return os_npu_complete();}
+#endif
 _Noreturn void ss_finish(const void *data,size_t bytes)
 {
     if(xTaskGetCurrentTaskHandle()!=main_task || (!data&&bytes)||bytes>ss_result_capacity||os_application_finished()||
@@ -452,9 +474,17 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
     /* SDK CLOSE transfers no bootstrap/local-stop authority. Wait for its
      * immutable client report and revalidate the live IRQ/runtime state. */
     while(!os_npu_retirement_check()){
-        if(ss_live()<0||a733_smp_counter()>=os_cpu_return_cutoff()||
-           (grant.finish_by_us&&a733_smp_counter()/24>=grant.finish_by_us))ss_fail(0x75f);
-        ss_progress();vTaskDelay(1);
+        /* Give up one second before the supervisor's cutoff, so that this failure, which names the unmet conditions,
+         * is the first one recorded rather than the supervisor's. The stop takes milliseconds. */
+        if(ss_live()<0||a733_smp_counter()+OS_NPU_RETIREMENT_MARGIN_TICKS>=os_cpu_return_cutoff()||
+           (grant.finish_by_us&&a733_smp_counter()/24+OS_NPU_RETIREMENT_MARGIN_TICKS/24>=grant.finish_by_us))
+            ss_fail_value(0x75f,os_npu_retirement_state());
+        ss_progress();
+        /* The client's report and the bootstrap's local stop wake the main task (os_application_wake_main); the wait
+         * ends one second before the supervisor's cutoff, where the check above names the unmet conditions. */
+        uint64_t giveup=os_cpu_return_cutoff()/24-OS_NPU_RETIREMENT_MARGIN_TICKS/24;
+        if(grant.finish_by_us&&grant.finish_by_us-OS_NPU_RETIREMENT_MARGIN_TICKS/24<giveup)giveup=grant.finish_by_us-OS_NPU_RETIREMENT_MARGIN_TICKS/24;
+        if(application_wait_until_unless(giveup,npu_retired)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
     }
 #endif
     struct ss_result *r=(void *)ss_result_record;
@@ -473,6 +503,7 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
  * The USB owner serializes its next offer after delivery. */
 static struct { atomic_uint state;_Atomic(TaskHandle_t) waiter;struct ss_host_request request;
     struct ss_host_reply reply;uint8_t payload[SS_HOST_PAYLOAD_BYTES]; } mailbox;
+static int host_request_pending(void){return atomic_load_explicit(&mailbox.state,memory_order_seq_cst)!=0;}
 int os_host_offer(const struct ss_host_request *request)
 {
     const struct ss_manifest *m=ss_application.manifest;
@@ -491,7 +522,8 @@ int ss_host_recv(struct ss_host_request *request,uint32_t wait_us)
     /* Sleep until a request arrives, the session ends or wait_us has passed; a wake-up for another reason, such as
      * a USB event the OS reports, does not end the call. */
     for(uint64_t until=a733_smp_counter()/24+wait_us;state==0&&wait_us&&a733_smp_counter()/24<until&&board_live(NULL);){
-        if(application_wait_until(until)==SUNSTONE_DEADLINE_ERROR)return -1;
+        /* The offer wakes only a registered waiter: test the mailbox again once registered. */
+        if(application_wait_until_unless(until,host_request_pending)==SUNSTONE_DEADLINE_ERROR)return -1;
         state=atomic_load_explicit(&mailbox.state,memory_order_seq_cst);
     }
     if(!board_live(NULL))return -1;

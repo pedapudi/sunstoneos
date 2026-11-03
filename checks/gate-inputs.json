@@ -1,0 +1,1009 @@
+{
+ "comment": "The images the gate builds for checks that need one, the checks it runs on them, and the affected checks it may skip. A check that is affected by a change, is not pure-host, needs no board and is in none of the lists makes the gate refuse (tools/integration-gate.py). \"images\" are CMake recipes built once per tree state; the variants of the gate (VARIANTS) are named directly. {elf:X} and {build:X} are an image's ELF and build directory, {output} a new evidence directory. {session:X} is the session bytes tools/gate_session.py builds for image X; {bundle:X} the probe ELF that apps/board-bundles-power/build-opp.py builds for the bundle X (\"bundles\" lists its arguments).",
+ "images": {
+  "ret-npu-load": {
+   "configure": [
+    "-DSUNSTONE_MIMUS_BOARD_APPLICATION=ON",
+    "-DSUNSTONE_APPLICATION=cpu-npu-load",
+    "-DSUNSTONE_APPLICATION_cpu-npu-load_ROOT={source}/apps/cpu-npu-concurrency",
+    "-DA733_A76_ADMITTED=ON",
+    "-DSUNSTONE_A733_OS_CPU_CLOCK=ON",
+    "-DSUNSTONE_A733_OS_CPU_RETURN=ON",
+    "-DSUNSTONE_A733_OS_NPU=ON",
+    "-DSUNSTONE_A733_OS_NPU_OBSERVE=ON",
+    "-DSUNSTONE_OS_NPU_CATALOGUE={cache}/build/npu-board/session-artifacts.json",
+    "-DSUNSTONE_OS_NPU_MODEL_NAME=shufflenet-v2-published"
+   ],
+   "target": "sunstone-a733-os",
+   "elf": "sunstone-a733-os.elf",
+   "uses": "the CPU-return NPU image of apps/cpu-npu-concurrency (apps/cpu-npu-concurrency/README.md)"
+  },
+  "ret-gpu": {
+   "configure": [
+    "-DSUNSTONE_APPLICATION=gpu-lifecycle",
+    "-DSUNSTONE_A733_OS_GPU=ON",
+    "-DSUNSTONE_A733_OS_CPU_RETURN=ON",
+    "-DSUNSTONE_A733_OS_CPU_CLOCK=ON",
+    "-DA733_A76_ADMITTED=ON"
+   ],
+   "target": "sunstone-a733-os-gpu-lifecycle",
+   "elf": "sunstone-a733-os-gpu-lifecycle.elf",
+   "uses": "the CPU-return GPU image of apps/gpu-lifecycle (apps/gpu-lifecycle/README.md)"
+  },
+  "ret-latency": {
+   "configure": [
+    "-DSUNSTONE_LATENCY=ON",
+    "-DSUNSTONE_APPLICATION=latency",
+    "-DSUNSTONE_A733_OS_CPU_RETURN=ON",
+    "-DSUNSTONE_A733_OS_CPU_CLOCK=ON",
+    "-DA733_A76_ADMITTED=ON"
+   ],
+   "target": "sunstone-a733-os-latency",
+   "elf": "sunstone-a733-os-latency.elf",
+   "uses": "the CPU-return latency diagnostic image"
+  }
+ },
+ "checks": {
+  "os-failure-return.py": {
+   "runs": [
+    {
+     "args": [
+      "{elf:ret-npu-load}",
+      "--out",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "cpu-npu-integration.py": {
+   "runs": [
+    {
+     "args": [
+      "{elf:ret-npu-load}",
+      "--out",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "cpu-npu-return-chain.py": {
+   "runs": [
+    {
+     "args": [
+      "--elf",
+      "{elf:ret-npu-load}",
+      "--out",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-cpu-return-thermal.py": {
+   "runs": [
+    {
+     "args": [
+      "--image",
+      "{elf:ret-npu-load}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "latency-startup.py": {
+   "runs": [
+    {
+     "args": [
+      "--image",
+      "{elf:ret-latency}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-image-audio.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{build:resaud}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-image-headset.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{build:headset}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-image-radio.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{build:resradio}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-audio-replay.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{build:sup}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-cpu-clock-native.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{build:cpu-clock}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-gpu-return.py": {
+   "runs": [
+    {
+     "args": [
+      "--image",
+      "{elf:ret-gpu}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-gpu-quiesce.py": {
+   "runs": [
+    {
+     "args": [
+      "--image",
+      "{elf:ret-gpu}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-gpu-untouched.py": {
+   "runs": [
+    {
+     "args": [
+      "--image",
+      "{elf:ret-gpu}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-gpu-unconstructed.py": {
+   "runs": [
+    {
+     "args": [
+      "--image",
+      "{elf:ret-gpu}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-gpu-wait-linked.py": {
+   "runs": [
+    {
+     "args": [
+      "--image",
+      "{elf:ret-gpu}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-image-identity.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{build:sup}",
+      "--output",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--build",
+      "{build:res}",
+      "--output",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--build",
+      "{build:resaud}",
+      "--output",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--build",
+      "{build:resradio}",
+      "--output",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--build",
+      "{build:headset}",
+      "--output",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--build",
+      "{build:resheadset}",
+      "--output",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--build",
+      "{build:radio-headset}",
+      "--output",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--build",
+      "{build:resradio-headset}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-npu-start.py": {
+   "runs": [
+    {
+     "args": [
+      "--image",
+      "{elf:ret-npu-load}",
+      "--session",
+      "{session:ret-npu-load}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-cpu-return-rails.py": {
+   "runs": [
+    {
+     "args": [
+      "{bundle:opp33}",
+      "--out",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "{bundle:opp33-dcdc3}",
+      "--out",
+      "{output}"
+     ]
+    }
+   ]
+  }
+ },
+ "board": [],
+ "waived": {
+  "a733-accelerator-clock-reference.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
+  "a733-camera-capture.py": "recorded evidence or fixture captures | needs --evidence",
+  "a733-camera-dma-reference.py": "recorded evidence or fixture captures | needs --sources, --evidence",
+  "a733-camera-native.py": "recorded evidence or fixture captures | needs --evidence",
+  "a733-camera-platform.py": "recorded evidence or fixture captures | needs --sources, --manual, --text, --evidence",
+  "a733-camera-route-reference.py": "recorded evidence or fixture captures | needs --sources, --vipp, --evidence",
+  "a733-camera-stream.py": "recorded evidence or fixture captures | needs --evidence",
+  "a733-ce-cipher.py": "vendor or cached sources, toolchain paths | needs --sources, --manual, --model-log, --native-object",
+  "a733-ce-entropy.py": "vendor or cached sources, toolchain paths | needs --sources, --manual, --uboot, --native-object",
+  "a733-ce-hash.py": "vendor or cached sources, toolchain paths | needs --sources, --manual, --model-log, --native-object",
+  "a733-ce-modes.py": "recorded evidence or fixture captures | needs --sources, --manual, --model, --out",
+  "a733-ce.py": "vendor or cached sources, toolchain paths | needs --sources, --manual, --ccu, --rtc, --object",
+  "a733-cpu-coherence.py": "recorded evidence or fixture captures | needs --evidence",
+  "a733-cpu-continue.py": "recorded evidence or fixture captures | needs --evidence",
+  "a733-cpu-entry.py": "recorded evidence or fixture captures | needs --evidence",
+  "a733-cpu-start.py": "recorded evidence or fixture captures | needs --firmware, --evidence",
+  "a733-csi-receiver-reference.py": "recorded evidence or fixture captures | needs --sources, --evidence",
+  "a733-device-launch.py": "recorded evidence or fixture captures | needs --image, --evidence",
+  "a733-display-engine.py": "recorded evidence or fixture captures | needs --source-root, --evidence",
+  "a733-display-pll.py": "recorded evidence or fixture captures | needs --source-root, --evidence",
+  "a733-dsi-phy-reference.py": "recorded evidence or fixture captures | needs --source-root, --command-reference, --evidence",
+  "a733-dsi-reference.py": "recorded evidence or fixture captures | needs --source-root, --evidence",
+  "a733-dsi-video-reference.py": "recorded evidence or fixture captures | needs --source-root, --command-reference, --evidence",
+  "a733-first-task-entry.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "a733-gpu-backend-emulate.py": "an application image, session or bundle the gate does not build | needs elf",
+  "a733-gpu-backend-reference.py": "other arguments | needs source, start_evidence, stop_evidence, output",
+  "a733-gpu-core-native.py": "other arguments | needs --output, --libc-include",
+  "a733-gpu-platform-emulate.py": "an application image, session or bundle the gate does not build | needs elf",
+  "a733-gpu-power-reference.py": "recorded evidence or fixture captures | needs sources, evidence, ddk",
+  "a733-gpu-resources-emulate.py": "an application image, session or bundle the gate does not build | needs elf",
+  "a733-gpu-resources-reference.py": "recorded evidence or fixture captures | needs power_sources, resource_sources, uboot, evidence",
+  "a733-hdmi-reference.py": "vendor or cached sources, toolchain paths | needs --sources, --manifest, --manual, --board-dts, --trace",
+  "a733-iommu-reference.py": "other arguments | needs source, output, native_registers",
+  "a733-launch-scr.py": "an application image, session or bundle the gate does not build | needs --bundle, --baseline, --output",
+  "a733-media-clock.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
+  "a733-mmc-dma-chain.py": "recorded evidence or fixture captures | needs --evidence",
+  "a733-mmc-gic-irq.py": "recorded evidence or fixture captures | needs --evidence",
+  "a733-mmc-platform-write.py": "recorded evidence or fixture captures | needs --evidence",
+  "a733-mmc-platform.py": "recorded evidence or fixture captures | needs --evidence",
+  "a733-mmc-sdc3.py": "recorded evidence or fixture captures | needs --evidence",
+  "a733-monitor-are.py": "vendor or cached sources, toolchain paths | needs --build, --output, --clang, --lld, --objdump",
+  "a733-pcie-reference.py": "recorded evidence or fixture captures | needs kernel, uboot, evidence, cache/evidence",
+  "a733-pcie-trace.py": "other arguments | needs --output, pending re-qualification against board measurements: PCIe controller, PHY, link-training and NVMe latencies and responses are uncited",
+  "a733-pins-reference.py": "an application image, session or bundle the gate does not build | needs --source-dir, --soc-source, --build-dir",
+  "a733-pmic-mmc.py": "recorded evidence or fixture captures | needs uboot, evidence",
+  "a733-pmic-reference.py": "recorded evidence or fixture captures | needs uboot, native, evidence",
+  "a733-provider-fixture-host.py": "recorded evidence or fixture captures | needs --output, cache/crypto-single-core-20261018, cache/evidence, cache/pwm-service-20261018, cache/pwm-single-core-20261018",
+  "a733-radio-entropy.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tcp",
+  "a733-radio-platform.py": "recorded evidence or fixture captures | needs --evidence",
+  "a733-radio-session.py": "recorded evidence or fixture captures | needs --firmware, --tcp, --rsn, --kernel, --tinyusb, --headers, --linker, --qemu, --reference-dir, --evidence",
+  "a733-rom-recovery.py": "ROM, boot0 or device captures | needs rom",
+  "a733-smp-cached.py": "recorded evidence or fixture captures | needs --evidence",
+  "a733-smp-host.py": "an application image, session or bundle the gate does not build | needs --bundle, --output, sys.argv",
+  "a733-smp-image.py": "recorded evidence or fixture captures | needs --evidence, --freertos",
+  "a733-smp-launch.py": "an application image, session or bundle the gate does not build | needs --bundle, --output",
+  "a733-smp-observe-host.py": "recorded evidence or fixture captures | needs --observer-source, --evidence",
+  "a733-smp-observe.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "a733-smp-supervised-launch.py": "an application image, session or bundle the gate does not build | needs --bundle, --output",
+  "a733-smp-supervised-refusal.py": "recorded evidence or fixture captures | needs --prior-evidence, --evidence",
+  "a733-storage-native.py": "recorded evidence or fixture captures | needs --evidence, --watchdog-include",
+  "a733-storage-update.py": "recorded evidence or fixture captures | needs --evidence",
+  "a733-supervised-publication.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "a733-supervised-scheduler.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "a733-tcon-lcd.py": "recorded evidence or fixture captures | needs --source-root, --manual, --text, --evidence",
+  "a733-thermal.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
+  "a733-typec-native.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
+  "a733-uart-platform.py": "recorded evidence or fixture captures | needs --evidence",
+  "a733-uart.py": "vendor or cached sources, toolchain paths | needs --source, --output",
+  "a733-usb-platform.py": "vendor or cached sources, toolchain paths | needs --output, --source-cache, --lld",
+  "a733-usb2-host.py": "ROM, boot0 or device captures | needs --output, --typec, --twi, --port",
+  "a733-video-h264-reference.py": "other arguments | needs libraries, fixture, output",
+  "a733-video-jpeg-reference.py": "an application image, session or bundle the gate does not build | needs native, reference, fixture, output",
+  "a733-video-platform-reference.py": "an application image, session or bundle the gate does not build | needs libraries, native, output",
+  "a733-video-routing-reference.py": "other arguments | needs libraries, output",
+  "accelerator-host.py": "an application image, session or bundle the gate does not build | needs --image, --root-session, --output, --package, --npu-input-one, --npu-input-two, --npu-reference-one, --npu-reference-two",
+  "accelerator-ownership.py": "an application image, session or bundle the gate does not build | needs --image, --package, --output",
+  "accelerator-providers.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
+  "accelerator-runtime.py": "recorded evidence or fixture captures | needs --input, --reference, --model, --image, --package, --output",
+  "adc-application-fixture.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
+  "adc-application-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output, --nominal",
+  "adc-compare-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --nominal, --output",
+  "admission-preflight.py": "an application image, session or bundle the gate does not build | needs --build, --output",
+  "aic8800-association.py": "recorded evidence or fixture captures | needs --reference-dir, --evidence",
+  "aic8800-data.py": "recorded evidence or fixture captures | needs --reference-dir, --evidence",
+  "aic8800-dispatch.py": "recorded evidence or fixture captures | needs --tcp, --rsn, --kernel, --tinyusb, --headers, --linker, --qemu, --reference-dir, --evidence",
+  "aic8800-firmware.py": "recorded evidence or fixture captures | needs --artifacts, --reference-dir, --evidence",
+  "aic8800-runtime.py": "recorded evidence or fixture captures | needs --reference-dir, --evidence",
+  "aic8800-sdio-codec.py": "recorded evidence or fixture captures | needs --reference-dir, --evidence",
+  "aic8800-sdio-transport.py": "recorded evidence or fixture captures | needs --reference-dir, --evidence",
+  "aic8800-security.py": "ROM, boot0 or device captures | needs --upstream",
+  "aic8800-supplicant.py": "recorded evidence or fixture captures | needs --upstream, --evidence",
+  "aic8800-wifi-power.py": "recorded evidence or fixture captures | needs --reference-dir, --evidence",
+  "aic8800-wifi.py": "recorded evidence or fixture captures | needs --reference-dir, --binding-vectors, --evidence",
+  "all-core-first-task-host.py": "recorded evidence or fixture captures | needs --build, --bundle, --model, --fel, --output",
+  "all-core-first-task-probe.py": "an application image, session or bundle the gate does not build | needs --image, --bundle, --prefix, --output",
+  "all-core-pre-scheduler-host.py": "recorded evidence or fixture captures | needs --build, --bundle, --model, --fel, --output",
+  "all-core-pre-scheduler-probe.py": "an application image, session or bundle the gate does not build | needs --image, --bundle, --prefix, --output",
+  "all-core-task-workload-probe.py": "an application image, session or bundle the gate does not build | needs --image, --bundle, --prefix, --output",
+  "audit-device-minors-usb-control.py": "vendor or cached sources, toolchain paths | needs --tinyusb, --headers, --output",
+  "audit-security-watchdog-rtc.py": "other arguments | needs --object, --output",
+  "bluetooth-a2dp-host.py": "ROM, boot0 or device captures | needs --capture, --output",
+  "bluetooth-a2dp.py": "recorded evidence or fixture captures | needs --build, --output, cache/evidence",
+  "bluetooth-application.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tcp, --hci-reference, --image, --build-dir",
+  "bluetooth-headset-host.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
+  "bluetooth-headset.py": "recorded evidence or fixture captures | needs --output, --build, cache/evidence",
+  "bluetooth-host-capture.py": "recorded evidence or fixture captures | needs --inputs, --evidence",
+  "bluetooth-msbc-native.py": "recorded evidence or fixture captures | needs --image, --encoded, --copied, --output, cache/evidence",
+  "bluetooth-msbc-prepare.py": "an application image, session or bundle the gate does not build | needs --manifest, --profile, --session, --output",
+  "bluetooth-playback-native.py": "recorded evidence or fixture captures | needs --image, --producer, --output, cache/evidence",
+  "bluetooth-playback-prepare.py": "an application image, session or bundle the gate does not build | needs --manifest, --producer, --session, --output",
+  "bluetooth-repeated-usb.py": "recorded evidence or fixture captures | needs --image, --recognizer, --output, cache/evidence",
+  "bluetooth-startup-deadline.py": "other arguments | needs --output, --native-recipe, --hci-reference, --native-build",
+  "board-addressing.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tcp",
+  "board-application.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --tcp, --rsn, --headers",
+  "board-bundle-retention.py": "recorded evidence or fixture captures | needs --wrapper, --output, cache/evidence",
+  "board-dma-return.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "board-npu-cancel-profile.py": "other arguments | needs --active-elf, --active-manifest, --legacy-elf, --legacy-manifest, --output",
+  "board-park.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "board-probe.py": "an application image, session or bundle the gate does not build | needs --elf, --out",
+  "board-radio.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tcp, --headers",
+  "board-session-fields.py": "recorded evidence or fixture captures | needs --recorded, --radio, --output",
+  "board-session-seal.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
+  "board-single-core-host.py": "recorded evidence or fixture captures | needs --image, --session, --profile, --output, cache/evidence",
+  "board-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --session, --profile, --output",
+  "boot0-monitor-handoff.py": "ROM, boot0 or device captures | needs --boot0, --output",
+  "bt-acl-incoming.py": "vendor or cached sources, toolchain paths | needs --source, --output, --spec",
+  "bt-acl.py": "vendor or cached sources, toolchain paths | needs --source, --output",
+  "bt-avdtp.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --sdp-source, --sbc-source, --output",
+  "bt-config.py": "vendor or cached sources, toolchain paths | needs --source, --output, --spec",
+  "bt-hci.py": "vendor or cached sources, toolchain paths | needs --source, --output",
+  "bt-hfp-ag.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --sdp-source, --rfcomm-source, --hfp-source, --output",
+  "bt-l2cap-retry.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --output",
+  "bt-l2cap.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --output",
+  "bt-rfcomm-server.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --sdp-source, --rfcomm-source, --output",
+  "bt-rfcomm.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --sdp-source, --rfcomm-source, --output",
+  "bt-sco.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --sdp-source, --rfcomm-source, --hfp-source, --audio-source, --core-source, --output",
+  "bt-sdp-server.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --sdp-source, --output",
+  "bt-sdp.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --sdp-source, --output",
+  "build-identity.py": "other arguments | needs --work",
+  "cached-device-reservations.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --fixtures, --firmware, --qemu, --lld",
+  "camera-application.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb",
+  "camera-sealing.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "camera-sensor.py": "recorded evidence or fixture captures | needs --evidence",
+  "camera-stream-application.py": "an application image, session or bundle the gate does not build | needs --build, --output",
+  "camera-supervised.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --clang, --lld, --objcopy",
+  "card-ddr-host.py": "an application image, session or bundle the gate does not build | needs --build, --boot0, --allocation, --backup, --packer, --monitor-input, --output",
+  "card-ddr-pio.py": "ROM, boot0 or device captures | needs build, --boot0, --output",
+  "card-ddr.py": "ROM, boot0 or device captures | needs build, --record, --other-record, --boot0, --output",
+  "ce-clock-launcher.py": "an application image, session or bundle the gate does not build | needs --bundle, --output",
+  "ce-clock-native.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
+  "clock-token-retention.py": "recorded evidence or fixture captures | needs --evidence",
+  "clock-wide.py": "recorded evidence or fixture captures | needs --evidence, --freertos-port",
+  "cold-boot-cache.py": "ROM, boot0 or device captures | needs --boot0, --output",
+  "cold-entry.py": "an application image, session or bundle the gate does not build | needs --build, --boot0, --output",
+  "cpu-idle-wake.py": "an application image, session or bundle the gate does not build | needs elf, --out",
+  "cpu-local-timer.py": "an application image, session or bundle the gate does not build | needs elf, --out",
+  "cpu-npu-geometry.py": "an application image, session or bundle the gate does not build | needs elf, --native-result, --out",
+  "cpu-power-states.py": "recorded evidence or fixture captures | needs --evidence, --freertos",
+  "cpu-reliability.py": "an application image, session or bundle the gate does not build | needs elf, --out",
+  "cpu-runtime-qualification.py": "an application image, session or bundle the gate does not build | needs elf, --out",
+  "cpu-table-walks.py": "an application image, session or bundle the gate does not build | needs --output, --image",
+  "crypto-application-host.py": "recorded evidence or fixture captures | needs --session, --frame, --output",
+  "crypto-application-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "crypto-digests.py": "recorded evidence or fixture captures | needs --output, --host-request, --sources, --manual, --model, --out",
+  "crypto-modes-host.py": "an application image, session or bundle the gate does not build | needs --native, --vectors, --output",
+  "crypto-modes-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --vectors, --output",
+  "crypto-modes.py": "recorded evidence or fixture captures | needs --output, --sources, --manual, --model, --out",
+  "crypto-runtime-host.py": "recorded evidence or fixture captures | needs --fixture, --output, cache/evidence",
+  "crypto-runtime-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "crypto-sealing-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "crypto-single-core-host.py": "recorded evidence or fixture captures | needs --image, --manifest, --session, --output, cache/evidence",
+  "crypto-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "crypto-upload-erasure.py": "an application image, session or bundle the gate does not build | needs --image, --session, --request, --output",
+  "ddr-nsi-words.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
+  "ddr-restore-survey-set.py": "other arguments | needs --survey, --record, --set",
+  "deinterlace-boot.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
+  "deinterlace-host-preparation.py": "an application image, session or bundle the gate does not build | needs --stage, --native, --output",
+  "deinterlace-host.py": "an application image, session or bundle the gate does not build | needs --bundle, --reply, --output",
+  "deinterlace-jobs-native.py": "an application image, session or bundle the gate does not build | needs --image, --template, --output",
+  "deinterlace-jobs.py": "an application image, session or bundle the gate does not build | needs --generated, --image, --previous-image, --bundle, --base, --output",
+  "deinterlace-launcher.py": "an application image, session or bundle the gate does not build | needs --bundle, --output",
+  "deinterlace-motion-host.py": "an application image, session or bundle the gate does not build | needs --bundle, --reply, --receipt, --output",
+  "deinterlace-motion-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --input, --output",
+  "deinterlace-motion-preparation.py": "an application image, session or bundle the gate does not build | needs --stage, --native, --output",
+  "deinterlace-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --input, --output",
+  "deinterlace-strength.py": "an application image, session or bundle the gate does not build | needs --generated, --image, --previous-image, --bundle, --launcher, --output",
+  "deinterlace-tnr-host.py": "an application image, session or bundle the gate does not build | needs --bundle, --reply, --receipt, --output",
+  "deinterlace-tnr-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --input, --output",
+  "deinterlace-tnr-preparation.py": "an application image, session or bundle the gate does not build | needs --stage, --native, --output",
+  "deinterlace-usb.py": "recorded evidence or fixture captures | needs --speed, --image, --checkpoint, --output",
+  "dev-run.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs --out",
+  "device-memory-capacity.py": "vendor or cached sources, toolchain paths | needs --output, --clang, --ld, --qemu, --freertos",
+  "display-classes.py": "recorded evidence or fixture captures | needs --evidence",
+  "display-clock-handoff.py": "recorded evidence or fixture captures | needs --evidence",
+  "display-native.py": "recorded evidence or fixture captures | needs --evidence",
+  "display-scanout.py": "recorded evidence or fixture captures | needs --evidence",
+  "displayport-admission.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
+  "displayport-boot.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
+  "displayport-composed.py": "recorded evidence or fixture captures | needs --checkpoint-manifest-sha256, --image, --session, --contract, --checkpoint, --checkpoint-manifest, --hardware-source, --output",
+  "displayport-controller.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "displayport-launcher.py": "an application image, session or bundle the gate does not build | needs --bundle, --output",
+  "displayport-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
+  "displayport-top-rate.py": "recorded evidence or fixture captures | needs --image, --previous-image, --reference, --output, --preparer",
+  "displayport-typec-native.py": "recorded evidence or fixture captures | needs --image-sha256, --constructor-manifest-sha256, --repository, --image, --fixture, --contract, --constructor, --output",
+  "displayport-usb-stack.py": "recorded evidence or fixture captures | needs --image, --checkpoint, --reply, --output",
+  "dma-authority-control.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "dma-consumer-security.py": "other arguments | needs --uart, --i2s, --hdmi, --output",
+  "dma-copy-security.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "dma-copy-vectors.py": "recorded evidence or fixture captures | needs --image, --evidence",
+  "dma-interrupt.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --qemu, --lld",
+  "dma-platform-reference.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
+  "dma-pool-return.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --qemu, --lld",
+  "dma-pool-session.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --qemu, --lld",
+  "dma-retirement.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --qemu, --lld",
+  "dma-return-mask.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "dsi-replay-launch.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "dsi-replay-linked.py": "an application image, session or bundle the gate does not build | needs --image, --application, --output",
+  "dsi-replay.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
+  "dsi-scanout-host.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "dsi-scanout-launch.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "dsi-scanout-linked.py": "an application image, session or bundle the gate does not build | needs --image, --application, --output",
+  "dsi-scanout.py": "recorded evidence or fixture captures | needs --output, --image, cache/evidence",
+  "el3-mbus.py": "recorded evidence or fixture captures | needs sys.argv, cache/evidence",
+  "elf-memory-hazards.py": "other arguments | needs images",
+  "fatfs-port.py": "recorded evidence or fixture captures | needs --evidence",
+  "fault-capture.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "fault-decode.py": "other arguments | needs path",
+  "fel-receive.py": "other arguments | needs source",
+  "fetch-sources.py": "other arguments | needs --work, cache/bad, cache/pair, cache/tree-1",
+  "g2d-admission.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
+  "g2d-blend-fixture.py": "vendor or cached sources, toolchain paths | needs --image, --profile, --output, --clang, --lld",
+  "g2d-blend-native.py": "recorded evidence or fixture captures | needs --image, --session, --input, --reference, --output, --case, --inputs, cache/evidence",
+  "g2d-blend-preparation.py": "an application image, session or bundle the gate does not build | needs --native, --entry, --output",
+  "g2d-blend-reference.py": "recorded evidence or fixture captures | needs --reference, --output",
+  "g2d-boot.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
+  "g2d-host.py": "an application image, session or bundle the gate does not build | needs --bundle, --output",
+  "g2d-launcher.py": "an application image, session or bundle the gate does not build | needs --bundle, --output",
+  "g2d-modes-host.py": "an application image, session or bundle the gate does not build | needs --session, --output",
+  "g2d-modes-launcher.py": "an application image, session or bundle the gate does not build | needs --bundle, --launcher, --output",
+  "g2d-modes-native.py": "recorded evidence or fixture captures | needs --image, --session, --reference, --output",
+  "g2d-modes-reference.py": "recorded evidence or fixture captures | needs --reference, --output, --previous",
+  "g2d-power-admission.py": "recorded evidence or fixture captures | needs --image, --fixture, --output",
+  "g2d-power-native.py": "recorded evidence or fixture captures | needs --image, --session, --input, --reference, --output, --case, --inputs, sys.argv, cache/evidence",
+  "g2d-preparation.py": "vendor or cached sources, toolchain paths | needs --native, --table, --output, --clang, --lld",
+  "g2d-scale-native.py": "recorded evidence or fixture captures | needs --image, --session, --input, --reference, --output, --case, --inputs, cache/evidence",
+  "g2d-scale-reference.py": "recorded evidence or fixture captures | needs --reference, --output",
+  "g2d-scale2x-fixture.py": "vendor or cached sources, toolchain paths | needs --image, --profile, --output, --clang, --lld",
+  "g2d-scale2x-host.py": "other arguments | needs --entry, --response, --receipt, --output",
+  "g2d-scale2x-preparation.py": "an application image, session or bundle the gate does not build | needs --native, --entry, --output",
+  "g2d-success-native.py": "recorded evidence or fixture captures | needs --image, --session, --input, --reference, --output, --case, --inputs, cache/evidence",
+  "g2d-usb-stack.py": "recorded evidence or fixture captures | needs --speed, --image, --checkpoint, --output",
+  "gpu-batch.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
+  "gpu-call.py": "vendor or cached sources, toolchain paths | needs --freertos, --clang, --linker, --qemu, --output",
+  "gpu-close-ordering.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "gpu-compute-lifecycle-native.py": "an application image, session or bundle the gate does not build | needs case, --image, --package, --output",
+  "gpu-compute-reserved.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
+  "gpu-display-boot-usb.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
+  "gpu-display-capture-framing.py": "recorded evidence or fixture captures | needs --image, --old-image, --session, --contract, --checkpoint, --output",
+  "gpu-display-capture-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
+  "gpu-display-client.py": "recorded evidence or fixture captures | needs --image, --checkpoint, --output",
+  "gpu-display-launcher.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "gpu-display-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
+  "gpu-display-observation.py": "an application image, session or bundle the gate does not build | needs --image, --session, --pending, --terminal, --output",
+  "gpu-display-preparation.py": "an application image, session or bundle the gate does not build | needs --image, --root-session, --output",
+  "gpu-display-replay.py": "recorded evidence or fixture captures | needs --image, --checkpoint, --client, --output",
+  "gpu-display-retention.py": "recorded evidence or fixture captures | needs --image, --checkpoint, --client, --output",
+  "gpu-display-usb-admission.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
+  "gpu-draw-repeat-runtime.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "gpu-draw-repeat.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
+  "gpu-draw-runtime.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "gpu-draw.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
+  "gpu-fast-path.py": "other arguments | needs --plain, --timed, --output",
+  "gpu-graphics-memory.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
+  "gpu-lifecycle-host.py": "recorded evidence or fixture captures | needs --fixture, --output",
+  "gpu-lifecycle-native.py": "an application image, session or bundle the gate does not build | needs --image, --leaf-proof, --client, --output",
+  "gpu-linked-lifecycle.py": "an application image, session or bundle the gate does not build | needs --image, --profile, --output",
+  "gpu-local.py": "recorded evidence or fixture captures | needs --build, --mesa-build, --mesa-source, --producer, --control-producer, --ld, cache/evidence",
+  "gpu-peer-native.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "gpu-performance-linked.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "gpu-performance.py": "vendor or cached sources, toolchain paths | needs --output, --sources",
+  "gpu-queue-crumbs.py": "vendor or cached sources, toolchain paths | needs --compile-commands, --lld, --output",
+  "gpu-queue-program.py": "an application image, session or bundle the gate does not build | needs --build",
+  "gpu-queue.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
+  "gpu-render-cleanup.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
+  "gpu-render.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
+  "gpu-reserved.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --fixtures, --firmware, --qemu, --lld",
+  "gpu-resource-disposal.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "gpu-runtime-input.py": "an application image, session or bundle the gate does not build | needs --image, --package, --output",
+  "gpu-single-core-entry.py": "an application image, session or bundle the gate does not build | needs --image, --bundle, --output",
+  "gpu-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --bundle, --output",
+  "gpu-software-failure.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "gpu-supervised.py": "vendor or cached sources, toolchain paths | needs --image, --manifest, --output, --clang, --lld",
+  "gpu-texture-runtime.py": "an application image, session or bundle the gate does not build | needs --image, --output, --speed",
+  "gpu-texture.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
+  "gpu-transport-only.py": "an application image, session or bundle the gate does not build | needs --image, --manifest, --compute-image, --output",
+  "gpu-usb-ordering.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "h264-application.py": "vendor or cached sources, toolchain paths | needs --output, --fixture-evidence, --reference-trace, --freertos, --tinyusb, --tcp, --rsn, --headers",
+  "h264-encode-host.py": "an application image, session or bundle the gate does not build | needs --image, --session, --input, --pictures, --manifest, --launcher, --output",
+  "h264-encode-launcher.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "h264-encode-native.py": "an application image, session or bundle the gate does not build | needs --case, --image, --input, --session, --output",
+  "h264-encode-reference.py": "other arguments | needs --libraries, --fixtures, --output",
+  "h264-encode-registers.py": "recorded evidence or fixture captures | needs --evidence, --output",
+  "h264-encode-usb.py": "recorded evidence or fixture captures | needs --image, --session, --checkpoint, --output",
+  "h264-fullhd-entry.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "h264-fullhd-host.py": "an application image, session or bundle the gate does not build | needs --image, --inputs, --native, --launcher, --output",
+  "h264-fullhd-native.py": "an application image, session or bundle the gate does not build | needs --image, --inputs, --output",
+  "h264-fullhd-oracle.py": "recorded evidence or fixture captures | needs --evidence, --parser",
+  "h264-fullhd-reference.py": "recorded evidence or fixture captures | needs --evidence, --libraries, --native",
+  "h264-fullhd-seal.py": "an application image, session or bundle the gate does not build | needs --image, --entry, --output",
+  "h264-high-allocation.py": "an application image, session or bundle the gate does not build | needs --image, --inputs, --output",
+  "h264-high-bounds.py": "recorded evidence or fixture captures | needs --evidence, --output",
+  "h264-high-entry.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "h264-high-host.py": "an application image, session or bundle the gate does not build | needs --image, --inputs, --native, --launcher, --output",
+  "h264-high-modes.py": "other arguments | needs --producer, --output",
+  "h264-high-native-access.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "h264-high-native.py": "an application image, session or bundle the gate does not build | needs --image, --inputs, --output",
+  "h264-high-oracle.py": "recorded evidence or fixture captures | needs --evidence",
+  "h264-high-register-oracle.py": "recorded evidence or fixture captures | needs --evidence, --native, --output",
+  "h264-host.py": "other arguments | needs batch",
+  "h264-input-host.py": "other arguments | needs --output, the default run needs --image, --inputs, --native and --launcher",
+  "h264-input-native.py": "an application image, session or bundle the gate does not build | needs --image, --inputs, --output",
+  "h264-launcher.py": "other arguments | needs --prior-freeze, --output",
+  "h264-sequence-host.py": "an application image, session or bundle the gate does not build | needs --image, --inputs, --native, --launcher, --output",
+  "h264-sequence-native.py": "an application image, session or bundle the gate does not build | needs --image, --inputs, --output",
+  "h264-sequence-oracle.py": "recorded evidence or fixture captures | needs --evidence, --parser, --libraries",
+  "h264-stream.py": "other arguments | needs --output, --ffmpeg, --parser, --executor",
+  "h264-supervisor-entry.py": "other arguments | needs --fel, --output",
+  "h264-vga-host.py": "an application image, session or bundle the gate does not build | needs --image, --inputs, --native, --launcher, --output",
+  "h264-vga-iommu-read.py": "an application image, session or bundle the gate does not build | needs --image, --inputs, --native, --output",
+  "h264-vga-native.py": "an application image, session or bundle the gate does not build | needs --image, --inputs, --output",
+  "h264-vga-oracle.py": "recorded evidence or fixture captures | needs --evidence, --parser",
+  "h264-vga-reference.py": "recorded evidence or fixture captures | needs --evidence, --libraries, --native",
+  "hdmi-application.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --clang, --lld, --objcopy",
+  "hdmi-audio-boot.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
+  "hdmi-audio-host-preparation.py": "an application image, session or bundle the gate does not build | needs --stage, --image, --session, --pcm, --edid, --output",
+  "hdmi-audio-host.py": "an application image, session or bundle the gate does not build | needs --bundle, --result, --ready, --output",
+  "hdmi-audio-launcher.py": "an application image, session or bundle the gate does not build | needs --bundle, --output",
+  "hdmi-audio-native.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "hdmi-audio-stream-host.py": "an application image, session or bundle the gate does not build | needs --session, --pcm, --output",
+  "hdmi-audio-stream-native.py": "an application image, session or bundle the gate does not build | needs --image, --output, --inputs-dir",
+  "hdmi-audio-stream-usb.py": "recorded evidence or fixture captures | needs --image, --session, --pcm, --checkpoint, --output",
+  "hdmi-audio-usb-host.py": "an application image, session or bundle the gate does not build | needs --bundle, --response, --output",
+  "hdmi-audio-usb-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --pcm, --edid, --prior-result, --output",
+  "hdmi-audio-usb-preparation.py": "an application image, session or bundle the gate does not build | needs --stage, --image, --session, --pcm, --edid, --output",
+  "hdmi-clock-native.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --clang, --lld, --objcopy, --sources",
+  "hdmi-framebuffer.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --clang, --lld, --objcopy, --sources",
+  "hdmi-preparation-host.py": "vendor or cached sources, toolchain paths | needs --pattern, --audio, --usb, --output, --clang, --lld, --objcopy",
+  "hdmi-sealing.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "hevc-decode-model.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
+  "hevc-host.py": "vendor or cached sources, toolchain paths | needs --image, --manifest, --session, --input, --admission, --output, --clang, --lld",
+  "hevc-image.py": "an application image, session or bundle the gate does not build | needs --image, --manifest, --output",
+  "hevc-native-access.py": "other arguments | needs --trace, --output",
+  "hevc-pixel-reference-host.py": "other arguments | needs --clip, --output",
+  "hevc-pixel-reference.py": "other arguments | needs --clip, --picture0, --picture1, --output",
+  "i2s-application.py": "recorded evidence or fixture captures | needs --output, --freertos, --tinyusb, --wav, --qemu, cache/evidence",
+  "i2s-cyclic.py": "an application image, session or bundle the gate does not build | needs --elf, --output",
+  "i2s-file-host.py": "recorded evidence or fixture captures | needs --fixture, --session, --output",
+  "i2s-interrupt.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --qemu, --lld",
+  "i2s-platform-reference.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
+  "i2s-probe-cpu.py": "an application image, session or bundle the gate does not build | needs --elf, --out",
+  "i2s-probe.py": "an application image, session or bundle the gate does not build | needs --build, --out",
+  "i2s-rates-reference.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
+  "i2s-reference.py": "an application image, session or bundle the gate does not build | needs --source-dir, --build-dir",
+  "i2s-repeated-host.py": "recorded evidence or fixture captures | needs --fixture, --session, --output",
+  "i2s-runtime-host.py": "recorded evidence or fixture captures | needs --fixture, --session, --output",
+  "i2s-sealing.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "io-native-ordering.py": "other arguments | needs --output, pending re-qualification against board measurements: TWI status sequence, reset values and delays and posted-store completion are uncited",
+  "isp0-boot.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
+  "isp0-fixture.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "isp0-host.py": "an application image, session or bundle the gate does not build | needs --bundle, --output",
+  "isp0-irq-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --input, --output",
+  "isp0-launcher.py": "an application image, session or bundle the gate does not build | needs --bundle, --output",
+  "isp0-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --input, --output",
+  "isp0-pixel-reference.py": "an application image, session or bundle the gate does not build | needs --input, --output, --range",
+  "isp0-preparation.py": "vendor or cached sources, toolchain paths | needs --image, --session, --input, --allocation, --table, --output, --clang, --lld",
+  "isp0-replay-host.py": "an application image, session or bundle the gate does not build | needs --host-source, --session, --input, --responses, --output",
+  "isp0-replay.py": "recorded evidence or fixture captures | needs --image, --session, --contract, --input, --checkpoint, --output",
+  "isp0-usb-copy.py": "recorded evidence or fixture captures | needs --image, --session, --contract, --input, --checkpoint, --output",
+  "jpeg-application.py": "recorded evidence or fixture captures | needs --output, --freertos, --tinyusb, --tcp, --rsn, --headers, --fixture",
+  "jpeg-encode-host.py": "recorded evidence or fixture captures | needs --image, --session, --input, --frame, --manifest, --launcher, --output",
+  "jpeg-encode-launcher.py": "an application image, session or bundle the gate does not build | needs --image, --producer, --output",
+  "jpeg-encode-native.py": "recorded evidence or fixture captures | needs --case, --image, --input, --session, --output, cache/evidence",
+  "jpeg-encode-reference.py": "other arguments | needs --libraries, --fixtures, --output",
+  "jpeg-encode-trace-report.py": "recorded evidence or fixture captures | needs --checkpoint, --output",
+  "jpeg-encode-usb.py": "recorded evidence or fixture captures | needs --image, --session, --checkpoint, --output",
+  "jpeg-encode-zlp.py": "recorded evidence or fixture captures | needs --bundle, --frame, --output",
+  "jpeg-nonconstant-host.py": "an application image, session or bundle the gate does not build | needs --native, --oracle, --output",
+  "jpeg-nonconstant-native.py": "an application image, session or bundle the gate does not build | needs --image, --oracle, --output",
+  "jpeg-nonconstant.py": "other arguments | needs --oracle-output",
+  "jpeg-runtime-host.py": "vendor or cached sources, toolchain paths | needs --image, --manifest, --inputs, --native, --output, --clang, --lld",
+  "jpeg-runtime-input.py": "recorded evidence or fixture captures | needs --image, --output, --executable, cache/evidence",
+  "jpeg-runtime-native.py": "an application image, session or bundle the gate does not build | needs --image, --inputs, --output",
+  "jpeg-sealing-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "jpeg-sequence.py": "recorded evidence or fixture captures | needs --image, --output, --executable, cache/evidence",
+  "jpeg-supervised-host.py": "recorded evidence or fixture captures | needs --evidence",
+  "land.py": "cached builds or images of earlier work (cache/build) | needs --output, sys.argv, cache/advance, cache/build, cache/gate-fail, cache/gate-runs, cache/land, cache/landings",
+  "latency-cost-model.py": "other arguments | needs --on-image, --off-image, --on-log, --off-log, --output",
+  "latency-cost-tail.py": "other arguments | needs --enabled, --disabled, --output",
+  "latency-cost.py": "other arguments | needs --enabled, --disabled, --output",
+  "latency-layout.py": "other arguments | needs --object",
+  "latency-percentiles.py": "other arguments | needs --log, --output",
+  "latency-phase-close.py": "an application image, session or bundle the gate does not build | needs --image",
+  "latency-production.py": "recorded evidence or fixture captures | needs --reference, --current, --reference-cache, --current-cache, --objdump, --output",
+  "latency.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "launch-survey.py": "an application image, session or bundle the gate does not build | needs --build, --output",
+  "lradc-boot.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
+  "lradc-host.py": "an application image, session or bundle the gate does not build | needs --bundle, --reply, --output",
+  "lradc-launcher.py": "an application image, session or bundle the gate does not build | needs --bundle, --output",
+  "lradc-native.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
+  "maintenance-watchdog.py": "recorded evidence or fixture captures | needs --evidence, --native-tree",
+  "media-minimum-holds.py": "recorded evidence or fixture captures | needs --evidence, --dsi-reference",
+  "memory-architecture-smp.py": "vendor or cached sources, toolchain paths | needs --output, --clang, --lld, --qemu, --freertos",
+  "memtest-emulate.py": "an application image, session or bundle the gate does not build | needs --elf, --binary, --out",
+  "memtest-image.py": "an application image, session or bundle the gate does not build | needs --elf, --out",
+  "memtest-machine.py": "other arguments | needs pending re-qualification against board measurements: SCTLR_EL1 reset, translation walk, DC ZVA and counter step are uncited",
+  "monitor-application-fixture.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
+  "monitor-application-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --nominal, --output",
+  "nbg-assembly.py": "an application image, session or bundle the gate does not build | needs model, native, capture, output",
+  "nbg-checksum-reference.py": "an application image, session or bundle the gate does not build | needs sdk, model, second_model, native, output",
+  "nbg-command-link.py": "cached builds or images of earlier work (cache/build) | needs --output, cache/build",
+  "nbg-conv-loader-reference.py": "an application image, session or bundle the gate does not build | needs sdk, model, output",
+  "nbg-directory-checksum-fixtures.py": "an application image, session or bundle the gate does not build | needs model, output",
+  "nbg-directory-native.py": "an application image, session or bundle the gate does not build | needs model, native, reference, output",
+  "nbg-directory-reference.py": "an application image, session or bundle the gate does not build | needs model, inspector, output",
+  "nbg-graph-admission.py": "cached builds or images of earlier work (cache/build) | needs --output, cache/build",
+  "nbg-inspection.py": "an application image, session or bundle the gate does not build | needs model, reference",
+  "nbg-layout-reference.py": "an application image, session or bundle the gate does not build | needs sdk, model, native, output",
+  "nbg-loader-reference.py": "an application image, session or bundle the gate does not build | needs sdk, model, native, output",
+  "nbg-model.py": "an application image, session or bundle the gate does not build | needs model, native, capture, output",
+  "nbg-relocation-reference.py": "an application image, session or bundle the gate does not build | needs sdk, model, native",
+  "nbg-ring-reference.py": "an application image, session or bundle the gate does not build | needs hal, native, output",
+  "nbg-sh-nt.py": "recorded evidence or fixture captures | needs --model, --native, --capture, --output",
+  "nbg-stride-reference.py": "other arguments | needs simulator, older_model, convolution, output",
+  "net-inbound-host.py": "other arguments | needs --native-build, --output",
+  "npu-app-queue-native.py": "an application image, session or bundle the gate does not build | needs --build-dir, --output",
+  "npu-application-clock-reference.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "npu-board-host.py": "recorded evidence or fixture captures | needs --output, cache/build, cache/evidence",
+  "npu-board-providers.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "npu-board-thermal.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "npu-board-usb-stack.py": "an application image, session or bundle the gate does not build | needs --image, --output, --speed",
+  "npu-catalogue-compat.py": "other arguments | needs --artifacts, --output, cache/bin",
+  "npu-conv-reference.py": "other arguments | needs fixture, report",
+  "npu-convolution.py": "recorded evidence or fixture captures | needs --model, --input, --output-reference, --assembly-reference, --fixtures",
+  "npu-deadline-setup.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
+  "npu-dual-reference.py": "other arguments | needs fixture, report",
+  "npu-failure-return.py": "recorded evidence or fixture captures | needs --output, --failure-image, --plain-image, cache/evidence",
+  "npu-finite-client.py": "recorded evidence or fixture captures | needs --elf, --evidence",
+  "npu-finite-quiescence.py": "recorded evidence or fixture captures | needs --elf, --evidence",
+  "npu-finite-thermal-client.py": "recorded evidence or fixture captures | needs --elf, --evidence",
+  "npu-finite-thermal.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
+  "npu-graph-native.py": "recorded evidence or fixture captures | needs --image, --input, --reference, --output",
+  "npu-idle-producer.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
+  "npu-image-checks.py": "recorded evidence or fixture captures | needs --accelerators, --output, cache/evidence",
+  "npu-interrupt-client.py": "recorded evidence or fixture captures | needs --elf, --evidence",
+  "npu-interrupt-service.py": "an application image, session or bundle the gate does not build | needs --elf, --output",
+  "npu-irq-route.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "npu-job-cost.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "npu-large-memory.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "npu-large-native.py": "recorded evidence or fixture captures | needs --input, --reference, --case, --image, --assembly, --output",
+  "npu-latency.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
+  "npu-native-ordering.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "npu-nn-pool-admission.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "npu-nn-pool-native.py": "recorded evidence or fixture captures | needs --input, --reference, --case, --image, --assembly, --output",
+  "npu-pipeline-output.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs --output, sys.argv",
+  "npu-pool-size.py": "other arguments | needs --artifacts, --models, --output",
+  "npu-queue-handoff.py": "an application image, session or bundle the gate does not build | needs --build-dir, --output",
+  "npu-reserved.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --fixtures, --qemu, --lld",
+  "npu-runtime-link.py": "other arguments | needs --output, --catalogue, --producer, --consumer",
+  "npu-runtime.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "npu-session.py": "other arguments | needs build, output, --mode",
+  "npu-single-core-host.py": "recorded evidence or fixture captures | needs --image, --manifest, --session, --reference, --output, --clang, --lld, --objcopy",
+  "npu-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "npu-stop-native.py": "recorded evidence or fixture captures | needs --elf, --evidence",
+  "os-audio-replay-linked.py": "os image with a session | needs the full OS ELF of an application whose manifest has no devices and a 16 kHz, 16-bit, mono audio format of 1 to 320 frames in one 684-byte input region. The mimus applications this tree builds have 16,000 to 80,000 frames (recorded recognition, with or without SUNSTONE_A733_OS_AUDIO) and the a733-mimus-usb and replay model targets carry no manifest. What would supply it: the mimus replay application at an engine revision that builds against this tree, as a recipe",
+  "os-cpu-return-entry-owner.py": "an application image, session or bundle the gate does not build | needs elf, --out",
+  "os-cpu-return-entry.py": "an application image, session or bundle the gate does not build | needs elf, --out",
+  "os-cpu-return-services.py": "an application image, session or bundle the gate does not build | needs elf, --out",
+  "os-cpu-return.py": "an application image, session or bundle the gate does not build | needs elf, --out",
+  "os-gpu-bisect.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "os-gpu-memory.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "os-gpu-return-followup.py": "other arguments | needs --output, --return-captures, --untouched-captures",
+  "os-npu-fault.py": "cached builds or images of earlier work (cache/build) | needs --output, cache/build",
+  "os-npu-graphs.py": "cached builds or images of earlier work (cache/build) | needs --output, cache/build",
+  "os-npu-sdk-contract.py": "vendor or cached sources, toolchain paths | needs --native-flags, --output",
+  "os-npu-service.py": "cached builds or images of earlier work (cache/build) | needs --output, cache/build",
+  "os-radio-staging.py": "vendor or cached sources, toolchain paths | needs --firmware, --output",
+  "os-region-initialization.py": "os image with a session | needs a GPU image with one application region initializer and an image with none. Only the mimus GPU recognition image registers one. Its model files are on this machine (inputs/mimus-bench: base.mimus, overlay.mimus), but no mimus checkout builds against this tree: the pinned engine checkout (apps/mimus/source.json) needs include/pvr_mimus_job.h, which commit 468c2b75 removed, and the generic-queue checkout (work/gpu-overlap-1101) differs from its own pinned engine revision under firmware/. What would supply it: a mimus checkout on the generic GPU compute queue at its pinned engine revision, then a recipe with SUNSTONE_A733_OS_MODEL_DIR; the empty image builds with the queue-add recipe",
+  "ov5640-modes-reference.py": "recorded evidence or fixture captures | needs --source, --evidence",
+  "ov5640-reference.py": "recorded evidence or fixture captures | needs --source, --evidence",
+  "pcie-application-fixture.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
+  "pcie-application-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "pcie-irq-route.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "pcie-link-decode.py": "other arguments | needs --output, --pcie, --pcie-test, --pcie-nvme",
+  "pcie-nvme-fixture.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "pcie-nvme-host.py": "recorded evidence or fixture captures | needs --image, --fixture, --frame, --output",
+  "pcie-nvme-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "pcie-pd-rail.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
+  "pcie-qemu.py": "other arguments | needs --output, pending re-qualification against board measurements: the PCIe, PHY, endpoint and NVMe models it runs are uncited",
+  "pcie-test-fixture.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "pcie-test-host.py": "recorded evidence or fixture captures | needs --evidence",
+  "pcie-test-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --registers, --output",
+  "pins-expanded.py": "recorded evidence or fixture captures | needs --evidence",
+  "pmic-supply-native.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "power-write-order.py": "other arguments | needs --output, pending re-qualification against board measurements: the PMIC bus event latency and status after START, USB reset minimums and initial register values are uncited",
+  "primary-cache-host.py": "an application image, session or bundle the gate does not build | needs --build, --bundle, --fel, --output",
+  "provider-clock-reference.py": "other arguments | needs --output, pending re-qualification against board measurements: bit-level healthy values of the USB2, radio, CE and TWI clock and pin fixtures are uncited",
+  "pvr-batch-producer.py": "recorded evidence or fixture captures | needs --mesa-source, --mesa-archive, --mesa-build, --evidence",
+  "pvr-batch.py": "other arguments | needs --mesa-source, --mesa-archive, --mesa-build, --producer, --firmware-headers, --output",
+  "pvr-ccb-reference.py": "recorded evidence or fixture captures | needs sources, evidence",
+  "pvr-cccb.py": "vendor or cached sources, toolchain paths | needs --sources, --output",
+  "pvr-compute-context.py": "vendor or cached sources, toolchain paths | needs --sources, --output",
+  "pvr-compute-job.py": "other arguments | needs --mesa-source, --mesa-build, --board-source, --output",
+  "pvr-compute-mode.py": "vendor or cached sources, toolchain paths | needs elf, --sources",
+  "pvr-compute-package.py": "recorded evidence or fixture captures | needs --evidence, --mesa-source, --mesa-build, cache/evidence",
+  "pvr-compute-programs.py": "recorded evidence or fixture captures | needs --mesa-source, --mesa-build, --evidence",
+  "pvr-compute-service.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --lld, --qemu",
+  "pvr-draw-producer.py": "recorded evidence or fixture captures | needs --mesa-source, --mesa-archive, --mesa-build, --evidence",
+  "pvr-firmware-reference.py": "other arguments | needs firmware, code, data, report",
+  "pvr-free-list.py": "vendor or cached sources, toolchain paths | needs --sources, --output",
+  "pvr-fw-state-reference.py": "recorded evidence or fixture captures | needs sources, evidence",
+  "pvr-gpu-control-reference.py": "recorded evidence or fixture captures | needs sources, queue_evidence, evidence",
+  "pvr-gpu-events.py": "vendor or cached sources, toolchain paths | needs --sources, --output",
+  "pvr-gpu-flush-reference.py": "recorded evidence or fixture captures | needs sources, evidence",
+  "pvr-gpu-freelist-service.py": "vendor or cached sources, toolchain paths | needs --elf, --qemu, --nm, --output",
+  "pvr-gpu-irq.py": "vendor or cached sources, toolchain paths | needs --elf, --qemu, --nm, --output",
+  "pvr-gpu-service.py": "vendor or cached sources, toolchain paths | needs --elf, --qemu, --nm, --output",
+  "pvr-gpu-start-reference.py": "recorded evidence or fixture captures | needs sources, firmware, evidence",
+  "pvr-gpu-stop-reference.py": "recorded evidence or fixture captures | needs sources, firmware, evidence",
+  "pvr-gpu-vm-reference.py": "recorded evidence or fixture captures | needs sources, evidence",
+  "pvr-mips-reference.py": "recorded evidence or fixture captures | needs sources, firmware, evidence",
+  "pvr-render-producer.py": "recorded evidence or fixture captures | needs --mesa-source, --mesa-archive, --mesa-build, --evidence",
+  "pvr-render-target.py": "vendor or cached sources, toolchain paths | needs --sources, --mesa, --output, --mesa-archive",
+  "pvr-render.py": "vendor or cached sources, toolchain paths | needs --sources, --mesa, --mesa-archive, --producer, --output",
+  "pvr-texture-producer.py": "recorded evidence or fixture captures | needs --mesa-source, --mesa-archive, --mesa-build, --evidence",
+  "pwm-fixture.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
+  "pwm-host.py": "recorded evidence or fixture captures | needs --image, --manifest, --fixture, --frame, --output, --clang, --lld",
+  "pwm-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "pwm-service-fixture.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
+  "pwm-service-host.py": "recorded evidence or fixture captures | needs --image, --manifest, --fixture, --frame, --output, --clang, --lld",
+  "pwm-service-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "pwm-single-core-fixture.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "pwm-single-core-host.py": "recorded evidence or fixture captures | needs --image, --manifest, --fixture, --output, cache/evidence",
+  "pwm-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "qemu-os-boot.py": "other arguments | needs --output, cache/sd-backup",
+  "queue-add.py": "an application image, session or bundle the gate does not build | needs --build",
+  "radio-bootstrap-budget.py": "vendor or cached sources, toolchain paths | needs --firmware",
+  "radio-bootstrap-rate.py": "other arguments | needs --output, --native-recipe, --hci-reference",
+  "radio-dhcp-reconnect.py": "recorded evidence or fixture captures | needs --phase, --evidence, cache/evidence",
+  "radio-network-dhcp-dns.py": "recorded evidence or fixture captures | needs --tcp, --rsn, --kernel, --tinyusb, --headers, --clang, --linker, --qemu, --evidence",
+  "radio-network.py": "other arguments | needs every case needs the optional --tcp, --kernel, --headers and --evidence paths",
+  "radio-patch.py": "other arguments | needs table",
+  "radio-poll-batching.py": "recorded evidence or fixture captures | needs --evidence",
+  "radio-reconnect-wpa.py": "recorded evidence or fixture captures | needs --evidence, --phase, cache/evidence",
+  "radio-reconnect.py": "recorded evidence or fixture captures | needs --evidence, --phase, cache/evidence",
+  "radio-session-rate.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "radio-sntp.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tcp, --headers",
+  "radio-transport-aggregate.py": "recorded evidence or fixture captures | needs --evidence",
+  "rail-leases.py": "recorded evidence or fixture captures | needs --evidence, --freertos-port, --pmic-source, --compile-commands",
+  "rtc-application.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
+  "rtc-calendar-host.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
+  "rtc-calendar.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
+  "rtc-host-proof.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
+  "rtc-host.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
+  "rtc-runtime-host.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
+  "rtc-runtime.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
+  "rtc-service-host.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
+  "rtc-service.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
+  "rtc-single-core-host.py": "recorded evidence or fixture captures | needs --image, --manifest, --session, --output, cache/evidence",
+  "rtc-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "rtc-usb-native.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
+  "sae-openssl.py": "other arguments | needs the default run needs --openssl, --upstream and --evidence; --verify-source needs a pinned source tree",
+  "scheduler-control.py": "cached builds or images of earlier work (cache/build) | needs cache/build",
+  "scheduler-cpu-observation.py": "an application image, session or bundle the gate does not build | needs --build",
+  "scheduler-deadline.py": "cached builds or images of earlier work (cache/build) | needs cache/build",
+  "scheduler-kernel-adapter.py": "vendor or cached sources, toolchain paths | needs --freertos, --build-dir, --sysroot",
+  "scheduler-kernel-layout.py": "vendor or cached sources, toolchain paths | needs --freertos, --build-dir, --cc, --sysroot",
+  "scheduler-kernel-registry.py": "an application image, session or bundle the gate does not build | needs --build-dir",
+  "scheduler-masked-spans.py": "an application image, session or bundle the gate does not build | needs --build-dir, --output",
+  "scheduler-masked-stalls.py": "an application image, session or bundle the gate does not build | needs --image, --output, --function",
+  "scheduler-notification.py": "cached builds or images of earlier work (cache/build) | needs cache/build",
+  "scheduler-owner.py": "cached builds or images of earlier work (cache/build) | needs cache/build",
+  "scheduler-partitioned-abi.py": "vendor or cached sources, toolchain paths | needs --build-dir, --output, --freertos, --sysroot, --cc",
+  "scheduler-partitioned-qemu.py": "vendor or cached sources, toolchain paths | needs --build-dir, --output, --qemu",
+  "scheduler-route.py": "an application image, session or bundle the gate does not build | needs --build-dir",
+  "scheduler-timeslice.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "scheduler-wake-model.py": "an application image, session or bundle the gate does not build | needs --tlc-jar, --build-dir",
+  "sd-return-native.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "sdio-controller.py": "recorded evidence or fixture captures | needs --reference-dir, --evidence",
+  "secondary-cache-host.py": "recorded evidence or fixture captures | needs --build, --bundle, --model, --fel, --output, --local-model",
+  "secondary-cache-probe.py": "an application image, session or bundle the gate does not build | needs --image, --bundle, --prefix, --output",
+  "secondary-coherence-host.py": "recorded evidence or fixture captures | needs --build, --bundle, --model, --fel, --output",
+  "secondary-coherence-probe.py": "an application image, session or bundle the gate does not build | needs --image, --bundle, --prefix, --output",
+  "secondary-identity-host.py": "an application image, session or bundle the gate does not build | needs --build, --bundle, --fel, --output",
+  "secondary-identity-probe.py": "an application image, session or bundle the gate does not build | needs --image, --bundle, --output",
+  "secondary-interrupt-host.py": "recorded evidence or fixture captures | needs --build, --bundle, --model, --fel, --output",
+  "secondary-interrupt-probe.py": "an application image, session or bundle the gate does not build | needs --image, --bundle, --prefix, --output",
+  "secondary-local-host.py": "recorded evidence or fixture captures | needs --build, --bundle, --model, --fel, --output",
+  "secondary-local-probe.py": "an application image, session or bundle the gate does not build | needs --image, --bundle, --prefix, --output",
+  "single-core-variants-equivalence.py": "other arguments | needs --before, --before-source, --after, --after-source, --target, --output",
+  "smp-sgi-send.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "spi-application-fixture.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
+  "spi-application-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output, --nominal",
+  "spi-dma-host.py": "recorded evidence or fixture captures | needs --bundle, --frame, --output",
+  "spi-dma-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output, --nominal",
+  "spi-interrupt-host.py": "recorded evidence or fixture captures | needs --bundle, --frame, --old-session, --old-frame, --output",
+  "spi-interrupt-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output, --nominal",
+  "spi-irq-boot.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
+  "spi-irq-route.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "stage2-session.py": "an application image, session or bundle the gate does not build | needs --build, --output",
+  "standalone-boot-loader.py": "an application image, session or bundle the gate does not build | needs --build, --boot0, --output",
+  "storage-maintenance-dma.py": "an application image, session or bundle the gate does not build | needs --image, --observed-session, --output",
+  "storage-maintenance-usb-burst.py": "other arguments | needs --before, --after, --output",
+  "storage-read-binding.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "storage-read-client-completion.py": "recorded evidence or fixture captures | needs --evidence, --output",
+  "storage-read-dma-host.py": "recorded evidence or fixture captures | needs --image, --fixture, --native, --output, --emmc, --emmc-evidence",
+  "storage-read-dma.py": "an application image, session or bundle the gate does not build | needs --case, --image, --session, --output",
+  "storage-read-fixture.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
+  "storage-read-host.py": "recorded evidence or fixture captures | needs --image, --manifest, --fixture, --frame, --output, --clang, --lld",
+  "storage-read-initialization-policy.py": "recorded evidence or fixture captures | needs --fixture, --output",
+  "storage-read-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "storage-read-queue-plan.py": "an application image, session or bundle the gate does not build | needs --bundle, --output",
+  "storage-read-returning.py": "other arguments | needs '--' + name.replace('_', '-')",
+  "storage-read-rom-pins.py": "recorded evidence or fixture captures | needs --fixture, --output",
+  "storage-read-sd-modes-host.py": "recorded evidence or fixture captures | needs --image, --manifest, --evidence",
+  "storage-read-sd-modes.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "storage-read-service-host.py": "recorded evidence or fixture captures | needs --image, --manifest, --fixture, --native, --output, --clang, --lld",
+  "storage-read-service.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "storage-read-single-core-package.py": "recorded evidence or fixture captures | needs --image, --manifest, --fixture, --native, --output, --clang, --lld",
+  "storage-read-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "storage-write-geometry.py": "cached builds or images of earlier work (cache/build) | needs --output, cache/build, cache/sd-backup",
+  "storage-write-read-cost.py": "cached builds or images of earlier work (cache/build) | needs --output, cache/build",
+  "sunstone-app-abi.py": "an application image, session or bundle the gate does not build | needs --build",
+  "sunstone-image-link.py": "an application image, session or bundle the gate does not build | needs --image, --manifest, --application, --build-id, --lifetime, --output",
+  "sunxi-mmc-uhs.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
+  "sunxi-mmc-write.py": "recorded evidence or fixture captures | needs --evidence, cache/evidence",
+  "sunxi-mmc.py": "recorded evidence or fixture captures | needs --sources, --evidence",
+  "supervised-bundle-binding.py": "recorded evidence or fixture captures | needs --evidence",
+  "thermal-application-fixture.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
+  "thermal-application-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "thermal-single-core-host.py": "recorded evidence or fixture captures | needs --image, --manifest, --session, --output, cache/evidence",
+  "thermal-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "training-record-capture.py": "ROM, boot0 or device captures | needs --restore-set, --boot0, --output",
+  "training-record-copies.py": "ROM, boot0 or device captures | needs --restore-set, --boot0, --output",
+  "uart-dma-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "uart-irq-route.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "uart-native-fcr.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
+  "usb-first-fault.py": "recorded evidence or fixture captures | needs --evidence, cache/evidence",
+  "usb-hid.py": "other arguments | needs --output, --captures",
+  "usb-host-audio-native.py": "recorded evidence or fixture captures | needs --image, --block, --output, cache/evidence",
+  "usb-host-classes.py": "ROM, boot0 or device captures | needs --output, --port",
+  "usb-host-dual-native.py": "recorded evidence or fixture captures | needs --order, --image, --reports, --sector, --output, cache/evidence",
+  "usb-host-hid-native.py": "recorded evidence or fixture captures | needs --image, --reports, --output, cache/evidence",
+  "usb-host-irq-native.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "usb-host-irq-route.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "usb-host-ss-hid-admission.py": "an application image, session or bundle the gate does not build | needs --image, --old-image, --session, --output",
+  "usb-host-superspeed-admission.py": "an application image, session or bundle the gate does not build | needs --session, --output",
+  "usb-host-superspeed-native.py": "recorded evidence or fixture captures | needs --image, --sector, --output, cache/evidence",
+  "usb-uvc-c270-extract.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
+  "usb-uvc-capture-extract.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
+  "usb-zlp.py": "cached builds or images of earlier work (cache/build) | needs image",
+  "usb0-service-burst.py": "vendor or cached sources, toolchain paths | needs --tinyusb, --output",
+  "usb0-service-descriptors.py": "other arguments | needs --pair, --output",
+  "usb0-service-npu-expiry.py": "an application image, session or bundle the gate does not build | needs --image, --output",
+  "video-pll.py": "recorded evidence or fixture captures | needs --output, --app-compile-commands, cache/evidence, cache/video-codecs",
+  "watchdog-configuration.py": "cached builds or images of earlier work (cache/build) | needs image",
+  "watchdog-expiry.py": "an application image, session or bundle the gate does not build | needs image, elf",
+  "watchdog-rom-reset-log.py": "ROM, boot0 or device captures | needs rom",
+  "workload-bisect-host.py": "an application image, session or bundle the gate does not build | needs --build, --bundle, --models, --fel, --output",
+  "workload-bisect-probe.py": "an application image, session or bundle the gate does not build | needs --case, --image, --bundle, --output"
+ },
+ "bundles": {
+  "opp33": [
+   "--bundle",
+   "33"
+  ],
+  "opp33-dcdc3": [
+   "--bundle",
+   "33",
+   "--cpu-return-dcdc3-800"
+  ]
+ }
+}
