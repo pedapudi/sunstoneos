@@ -2427,6 +2427,18 @@
     }
    ]
   },
+  "sd-return-native.py": {
+   "runs": [
+    {
+     "args": [
+      "--image",
+      "{bundle:storage-read-returning}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
   "sdio-controller.py": {
    "runs": [
     {
@@ -2620,9 +2632,9 @@
   "nbg-model.py": "helper module of a runnable check (not run on its own) | loaded by tools/npu-nbg-census.py",
   "pcie-application-native.py": "helper module of a runnable check (not run on its own) | loaded by pcie-pd-rail-native.py",
   "pvr-gpu-flush-reference.py": "helper module of a runnable check (not run on its own) | loaded by pvr-gpu-flush.py",
-  "sd-return-native.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | fails on the current image: the monitor_vectors symbol it reads is not in the linked image; the only guard of terminal SD close, kept by the coordinator",
   "storage-read-fixture.py": "helper module of a runnable check (not run on its own) | loaded by tools/gate_session.py",
   "storage-read-native.py": "helper module of a runnable check (not run on its own) | loaded by npu-stop-native.py",
+  "storage-read-returning.py": "helper module of a runnable check (not run on its own) | loaded by sd-return-native.py",
   "storage-read-service.py": "helper module of a runnable check (not run on its own) | loaded by storage-read-sd-modes.py",
   "sunstone-image-link.py": "helper module of a runnable check (not run on its own) | run by cmake/sunstone-image.cmake at every OS image link"
  },
@@ -2635,6 +2647,10 @@
    "--bundle",
    "33",
    "--cpu-return-dcdc3-800"
-  ]
+  ],
+  "storage-read-returning": {
+   "builder": "apps/storage-read-returning/build.py",
+   "args": []
+  }
  }
 }

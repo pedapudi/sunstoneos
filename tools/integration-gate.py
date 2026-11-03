@@ -663,7 +663,11 @@ def main(argv=None):
             elif results.get('central-configure') != 'PASS':
                 skip('bundle-' + name + '-build', 'central-configure did not pass')
             else:
-                run('bundle-' + name + '-build', [python, 'apps/board-bundles-power/build-opp.py', *bundle_args,
+                # A bundle is a list of build-opp.py arguments, or {"builder": script, "args": [...]} for another builder
+                # that takes --platform-build and --evidence and writes build/probe.elf (apps/storage-read-returning/build.py).
+                builder, builder_args = ((bundle_args['builder'], bundle_args.get('args', [])) if isinstance(bundle_args, dict)
+                                         else ('apps/board-bundles-power/build-opp.py', bundle_args))
+                run('bundle-' + name + '-build', [python, builder, *builder_args,
                                                    '--platform-build', build_dir, '--evidence', output_dir])
         for image in sessions:
             if results.get('img-' + image + '-build') == 'PASS':
