@@ -112,6 +112,10 @@ struct npu_convolution {
     uint64_t job_submit_ticks, job_publish_ticks, job_doorbell_ticks;
 };
 
+/* The command allocation the graph needs, in bytes (its own stream, rounded to a page), or 0 when the model is not
+ * admissible. The caller sizes the command buffer of the configuration with it; the layout table's size for that slot is
+ * the span it may use, not its size. */
+size_t npu_convolution_command_bytes(const void *model, size_t model_bytes);
 /* EL1, before scheduling, zero once. Copies then hashes the complete model;
  * accepts only the reviewed complete UINT8 compiled models in the private
  * catalogue. Select once for the context lifetime; no runtime upload or switch.
