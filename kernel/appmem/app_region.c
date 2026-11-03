@@ -249,3 +249,33 @@ int app_space_build_l2(struct app_space *s, struct app_table_arena *a, const uin
     a->used = used;
     return APP_REGION_OK;
 }
+
+static uint64_t read_identity(void *ctx, uint64_t pa) { (void)ctx; return *(const volatile uint64_t *)(uintptr_t)pa; }
+
+uint64_t app_space_el0_descriptor_with(const struct app_space *s, uint64_t va, int write, uint64_t *physical,
+                                       uint64_t (*read)(void *, uint64_t), void *ctx)
+{
+    if (!s || !s->root_physical || (va >> 39)) return 0;
+    unsigned shift = 30;
+    uint64_t d = read(ctx, s->root_physical + ((va >> 30) & 511) * 8);
+    if ((d & 3) == 3) {
+        shift = 21;
+        d = read(ctx, (d & APP_PTE_ADDR_MASK) + ((va >> 21) & 511) * 8);
+        if ((d & 3) == 3) {
+            shift = 12;
+            d = read(ctx, (d & APP_PTE_ADDR_MASK) + ((va >> 12) & 511) * 8);
+            if ((d & 3) != 3) return 0;                    /* a level-3 leaf has bits [1:0] = 0b11 */
+        } else if ((d & 3) != 1) return 0;
+    } else if ((d & 3) != 1) return 0;                     /* a level-1 block */
+    if (!(d & APP_PTE_AF)) return 0;
+    unsigned ap = (unsigned)(d >> 6) & 3;
+    if (!(ap == 1 || (ap == 3 && !write))) return 0;       /* read-write at EL0, or read-only at both levels */
+    if (physical) {
+        uint64_t leaf = UINT64_C(1) << shift;
+        *physical = (d & APP_PTE_ADDR_MASK & ~(leaf - 1)) | (va & (leaf - 1));
+    }
+    return d;
+}
+
+uint64_t app_space_el0_descriptor(const struct app_space *s, uint64_t va, int write, uint64_t *physical)
+{ return app_space_el0_descriptor_with(s, va, write, physical, read_identity, 0); }

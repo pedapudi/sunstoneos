@@ -11,6 +11,7 @@
 #include "app_region.h"
 #include "app_large.h"
 #include "umem.h"
+#include "aarch64_device_memory.h"
 #include "sunstone_notify.h"
 #include <stdint.h>
 #include <string.h>
@@ -76,6 +77,18 @@ static unsigned slot_count;
 static int admitted;
 static void *main_stack;
 static uint64_t kernel_base, kernel_bytes;
+/* An EL0 translation of address in the application's own tables, for a task that is not in them (the NPU service's tasks run
+ * in the kernel's table, where upper memory is EL1-only). Without an application space it is the current regime's. */
+int os_large_translate_el0(uintptr_t address, int write, struct aarch64_translation *out)
+{
+    if (!admitted) return aarch64_device_translate_el0(address, write, out);
+    uint64_t physical;
+    uint64_t d = app_space_el0_descriptor(&space, address, write, &physical);
+    if (!d || !out) return 0;
+    const unsigned index = (unsigned)(d >> 2) & 7;
+    *out = (struct aarch64_translation){physical, index == 1 ? 0xffu : index == 2 ? 0x44u : 0u, (unsigned)(d >> 8) & 3};
+    return 1;
+}
 int os_large_kernel_reserved(uint64_t base, uint64_t bytes) { return admitted && kernel_bytes && kernel_base == base && kernel_bytes == bytes; }
 void *os_large_main_stack(void) { return main_stack; }
 
@@ -182,9 +195,11 @@ int os_large_prepare(void)
         umem_init(&ledger, &umem_boot_hooks, umem_cells, sizeof umem_cells / umem_cell_bytes(), chunk_policy, APP_REGION_FLOOR,
                   sizeof chunk_policy, umem_ranges, ranges)) return large_failed(2 + (!owner_asid ? 0 : !ranges ? 1 : 2));
 #ifdef OS_NPU_POOL_BASE
-    /* The NPU pool of an image that places it in the slot 1 area: held for the kernel before any application region, so
-     * that a manifest region, the heap or the stack cannot take it, and no application space maps it. */
-    if (region_take_at(APP_REGION_KERNEL_OWNER, OS_NPU_POOL_BASE, OS_NPU_POOL_BYTES, APP_REGION_READ | APP_REGION_WRITE)) return large_failed(5);
+    /* The NPU pool of an image that places it in the slot 1 area: held before any application region, so that a manifest
+     * region, the heap or the stack cannot take it. It belongs to the application and is mapped in its space: the tensor
+     * and ring windows of the NPU queue are in it, and the application reads and writes them at EL0. The EL1-private
+     * metadata of the NPU service is not in the pool. */
+    if (region_take_at(owner_asid, OS_NPU_POOL_BASE, OS_NPU_POOL_BYTES, APP_REGION_READ | APP_REGION_WRITE)) return large_failed(5);
     kernel_base = OS_NPU_POOL_BASE; kernel_bytes = OS_NPU_POOL_BYTES;
 #endif
     for (unsigned i = 0; manifest && i < manifest->region_count; ++i) {

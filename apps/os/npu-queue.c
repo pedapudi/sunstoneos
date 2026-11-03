@@ -5,6 +5,9 @@
 #include "sunstone_npu_queue_service.h"
 #include "aarch64_device_memory.h"
 #include "a733_mapping_check.h"
+#include "sunstone_crumb.h"
+#include "../board/application.h"
+#include "app_large.h"
 #include <string.h>
 /* The CPU's own instructions of the adapter: on the board they are the real ones; a host build of the open path (the check
  * checks/os-npu-service.py) has no CPU to configure, so they do nothing there. */
@@ -104,7 +107,7 @@ static int mapped(struct npu_runtime_region r)
     static const struct a733_mapping_rule wb={A733_MAPPING_WRITE,1,
         {{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
     return r.cpu&&r.bytes&&!((r.cpu|r.bytes)&63)&&
-        a733_mapping_check_stride(aarch64_device_translate_el0,r.cpu,r.physical,r.bytes,4096,&wb);
+        a733_mapping_check_stride(os_large_translate_el0,r.cpu,r.physical,r.bytes,4096,&wb);
 }
 /* Tensor links the application chose at open, after the scheduler started (ss_npu_queue_open_linked). The table is copied
  * once from the queue, which the application can write; every edge is checked against the loaded graphs and against the
@@ -132,36 +135,42 @@ static int link_requested(struct npu_runtime *rt)
     }
     return 1;
 }
+/* Each refusal of the open names itself: the failure record carries the statement's line and a detail unique to it. */
+#define QFAIL(detail) (board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),(detail),SUNSTONE_CRUMB_HERE()),-1)
 static int open_queue(void *unused,unsigned depth)
 {
     (void)unused;
     /* The ring was admitted at the declared depth; a deeper one is refused, never silently shortened. */
-    if(depth>os_npu_in_flight())return -1;
-    if(opened||os_npu_stopping()||!os_npu_queue_begin())return -1;
+    if(depth>os_npu_in_flight())return QFAIL(0x701);
+    if(opened||os_npu_stopping()||!os_npu_queue_begin())return QFAIL(0x702);
     struct npu_runtime *rt=os_npu_queue_runtime();
     /* Slot i holds graph i of the image catalogue: load them now (the first open), then make the image's own links. */
     if(rt&&edges_ready&&!edges_prepared){
-        for(unsigned i=0;i<rt->slots;++i){const int r=npu_runtime_load_resident(rt,i,i);if(r<0)return -1;if(!r){os_npu_queue_end();return 0;}}
-        if(!os_npu_queue_prepare_edges(rt))return -1;
+        for(unsigned i=0;i<rt->slots;++i){const int r=npu_runtime_load_resident(rt,i,i);if(r<0)return QFAIL(0x703);if(!r){os_npu_queue_end();return 0;}}
+        if(!os_npu_queue_prepare_edges(rt))return QFAIL(0x704);
     }
     if(!rt||!edges_prepared||
-       (cache_stride=aarch64_device_cache_stride())!=64)return -1;
-    if(!link_requested(rt))return -1;
+       (cache_stride=aarch64_device_cache_stride())!=64)return QFAIL(0x705);
+    if(!link_requested(rt))return QFAIL(0x706);
     for(unsigned i=0;i<rt->slots;++i){
         struct npu_runtime_slot *s=&rt->slot[i];
         /* The tensors of the handle, staged in the runtime's scratch (as many as the slot's graph has). */
         struct ss_npu_tensor *in=rt->scratch,*out=in+s->layout.inputs;
-        if((size_t)(s->layout.inputs+s->layout.outputs)*sizeof(*in)>rt->scratch_bytes||!mapped(s->read)||!mapped(s->write))return -1;
+        if((size_t)(s->layout.inputs+s->layout.outputs)*sizeof(*in)>rt->scratch_bytes)return QFAIL(0x707);
+        /* The slot's read and write regions must be reachable by the application at EL0, in the application's own tables
+         * (the detail carries the slot). */
+        if(!mapped(s->read))return QFAIL(0x70c|(i<<16));
+        if(!mapped(s->write))return QFAIL(0x70d|(i<<16));
         for(unsigned j=0;j<s->layout.inputs;++j)in[j]=(struct ss_npu_tensor){s->tensors[j].data,s->tensors[j].bytes};
         for(unsigned j=0;j<s->layout.outputs;++j)out[j]=(struct ss_npu_tensor){s->tensors[s->layout.inputs+j].data,s->tensors[s->layout.inputs+j].bytes};
         if(!ss_npu_queue_service_handle(&ring,in,s->layout.inputs,out,s->layout.outputs,
             (struct ss_npu_cache_span){s->read.cpu,s->read.bytes},
-            (struct ss_npu_cache_span){s->write.cpu,s->write.bytes}))return -1;
+            (struct ss_npu_cache_span){s->write.cpu,s->write.bytes}))return QFAIL(0x708);
     }
-    if(!ss_npu_queue_service_edges(&ring,edges,edge_count))return -1;
-    if(npu_runtime_queue_claim(&direct,rt)!=1)return -1;
+    if(!ss_npu_queue_service_edges(&ring,edges,edge_count))return QFAIL(0x709);
+    if(npu_runtime_queue_claim(&direct,rt)!=1)return QFAIL(0x70a);
     for(unsigned i=0;i<rt->slots;++i)
-        if(!npu_queue_register(&direct.queue,&commands[i],&rt->commands[i+1]))return -1;
+        if(!npu_queue_register(&direct.queue,&commands[i],&rt->commands[i+1]))return QFAIL(0x70b);
     /* Only the pinned producer on this core performs CIVAC. The same WB
      * identity view is used at EL0 and EL1; no NC alias is introduced. */
     CPU_READ_SCTLR(original_sctlr);

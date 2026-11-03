@@ -355,8 +355,45 @@ static void client_all(void)
  * host stands in for its claim and return with the same preconditions, and links the generic queue (drivers/npu/npu_queue.c)
  * that the adapter registers each handle's command with. EL0 translation and the cache stride are the model's. */
 BaseType_t npu_runtime_queue_task_privileged(TaskFunction_t entry, void *argument) { (void)entry; (void)argument; return pdFALSE; }
-int aarch64_device_translate_el0(uintptr_t cpu, int write, struct aarch64_translation *out)
-{ return memory_translate(NULL, cpu, write, out); }
+/* The application's EL0 reach, as the OS builds it. The queue's open path asks apps/os/npu-queue.c mapped(), which asks
+ * os_large_translate_el0() (apps/os/large.c: a walk of the application's own tables). The model builds the application's space
+ * with the production ledger and table builder (kernel/appmem/app_region.c): the pool the check allocated stands at
+ * 0x77000000 in the application's tables when the application owns it, and an address outside the pool is one the tables
+ * do not map. The walk is the one the OS runs (app_space_el0_descriptor_with) over those tables, not a stub that accepts. */
+#include <unistd.h>
+#include "app_region.h"
+#include "app_large.h"
+static uint8_t *model_pool; static size_t model_pool_bytes; static int model_space_ready;
+static struct app_space model_space;
+static _Alignas(4096) uint64_t model_l1[512], model_l2[512], model_arena[4][512];
+static uint64_t model_read(void *ctx, uint64_t pa) { (void)ctx; return *(const uint64_t *)(uintptr_t)pa; }
+#define MODEL_BLOCK(pa) ((pa) | APP_PTE_VALID | APP_PTE_ATTR_WB | APP_PTE_SH_INNER | APP_PTE_AF | APP_PTE_NG | APP_PTE_PXN | APP_PTE_UXN)
+static void model_space_build(void *pool, size_t bytes, int owned)
+{
+    model_pool = pool; model_pool_bytes = bytes;
+    for (unsigned slot = 2; slot < 13; ++slot) model_l1[slot] = MODEL_BLOCK((uint64_t)slot << 30);
+    model_l1[1] = (uint64_t)(uintptr_t)model_l2 | APP_PTE_TABLE;
+    for (unsigned j = 0; j < 512; ++j) model_l2[j] = MODEL_BLOCK(UINT64_C(0x40000000) + (uint64_t)j * 0x200000);
+    static struct app_region_range usable[1]; static struct app_region_entry entries[8]; static struct app_region_ledger l;
+    const struct app_region_range range = {APP_REGION_FLOOR, 0x31000000};
+    assert(app_region_ledger_init(&l, usable, 1, entries, 8, &range, 1) == 0);
+    /* The application owns the pool at 0x77000000, or (the mutation) a block elsewhere and not the pool. */
+    assert(app_region_acquire_at(&l, 1, owned ? UINT64_C(0x77000000) : UINT64_C(0x70000000), bytes, APP_REGION_READ | APP_REGION_WRITE) == 0);
+    struct app_table_arena arena = {model_arena, (uintptr_t)model_arena, 4, 0};
+    assert(app_space_build_l2(&model_space, &arena, model_l1, model_l2, &l, 1, 1, 0) == 0);
+    model_space_ready = 1;
+}
+int os_large_translate_el0(uintptr_t cpu, int write, struct aarch64_translation *out)
+{
+    if (!model_space_ready) return 0;
+    const uint64_t va = cpu >= (uintptr_t)model_pool && cpu - (uintptr_t)model_pool < model_pool_bytes
+        ? UINT64_C(0x77000000) + (cpu - (uintptr_t)model_pool) : UINT64_C(0x60000000) + (cpu & 0xfffff);
+    uint64_t physical;
+    const uint64_t d = app_space_el0_descriptor_with(&model_space, va, write, &physical, model_read, NULL);
+    if (!d) return 0;
+    *out = (struct aarch64_translation){cpu, A733_MAIR_NORMAL_WB, 3};   /* the pool is identity in the host's address space */
+    return 1;
+}
 unsigned aarch64_device_cache_stride(void) { return 64; }
 static int fake_validate(void *context, const struct a733_npu_command *c)
 {
@@ -393,6 +430,23 @@ static void queue_client(void *unused)
         if (opened == 1) break;
         assert(opened == 0);
         (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(25));
+    }
+    if (getenv("MUTATE_POOL_UNMAPPED")) {
+        /* The pool is outside the application's mappings: the open must be refused, and the failure record must name the
+         * statement that refused it (the mapped() test of a slot's read region: detail 0x70c). */
+        struct ss_npu_queue *m = NULL;
+        for (unsigned spin = 0;; ++spin) {
+            const int r = ss_npu_queue_open(os_npu_in_flight(), &m);
+            if (r == 1) { fprintf(stderr, "the queue opened with its pool outside the application's mappings\n"); abort(); }
+            if (r < 0) break;
+            assert(spin < 100000);
+            (void)os_npu_queue_sdk_step();
+            (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
+        }
+        assert(first_site && (first_value & 0xffff) == 0x70c);
+        puts("PASS the open is refused, with its own failure detail, when the pool is outside the application's mappings");
+        fflush(stdout);
+        _exit(0);
     }
     for (unsigned pass = 0; pass < 2; ++pass) {
         struct npu_service_request r = {NPU_SERVICE_SUBMIT, pass ? 5u : npu.runtime.slots + 1u, 1000000};
@@ -843,6 +897,7 @@ int main(int argc, char **argv)
     check_trust(&npu.runtime, (uintptr_t)pool, (uintptr_t)pool + need + slack);
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
     if (mode == 33) {
+        model_space_build(pool, need, !getenv("MUTATE_POOL_UNMAPPED"));
         session_record.npu.in_flight = 64;
         assert(os_npu_queue_sdk_bind());
         assert(os_npu_queue_tables(&npu.runtime));

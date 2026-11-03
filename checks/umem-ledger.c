@@ -368,6 +368,43 @@ static void case_raw_lookup(void)
     CHECK(umem_free(&ledger, &again) == 0 && umem_describe(&ledger, &a, &e[0], 0) == UMEM_STALE, "free through the looked-up handle", 0, 0);
 }
 
+static void case_trim_largest(void)
+{
+    model_reset(UMEM_MIN_CELLS);
+    struct umem_request c = req(1, 1);
+    c.device_mask = UMEM_DEV_NPU;
+    c.window = 4 * GIB;
+    uint64_t base, bytes;
+    CHECK(umem_largest(&ledger, &c, &base, &bytes) == 0, "largest", 0, 0);
+    CHECK(!(base & (16 * MIB - 1)) && bytes <= 4 * GIB && base + bytes <= 4 * GIB + 0, "largest under the NPU limit", base, bytes);
+    /* Take it, then trim it to what a user needed: the tail is free again and merges. */
+    struct umem_request take = req(bytes, 1);
+    take.device_mask = UMEM_DEV_NPU; take.flags = UMEM_AT | UMEM_RAW; take.base = base; take.window = 4 * GIB;
+    struct umem_buf b;
+    CHECK(umem_alloc(&ledger, &take, &b) == 0 && b.base == base && b.bytes == bytes, "take the largest", 0, 0);
+    model_take(&b, &take);
+    uint64_t free_before = umem_free_bytes(&ledger);
+    CHECK(umem_trim(&ledger, &b, 6 * MIB) == 0, "trim", 0, 0);
+    struct umem_extent e;
+    CHECK(umem_describe(&ledger, &b, &e, 0) == 0 && e.bytes == 6 * MIB, "trimmed size", e.bytes, 0);
+    CHECK(umem_free_bytes(&ledger) == free_before + bytes - 6 * MIB, "tail is free", 0, 0);
+    mark(base + 6 * MIB, bytes - 6 * MIB, 0);
+    CHECK(umem_check(&ledger) == 0, "check", umem_check(&ledger), 0);
+    CHECK(umem_trim(&ledger, &b, 8 * MIB) == UMEM_INVALID && umem_trim(&ledger, &b, 4097) == UMEM_INVALID, "trim cannot grow or misalign", 0, 0);
+    struct fake_space sp = {0, 0, 0, 0, 0x4000};
+    uint64_t va;
+    CHECK(umem_map(&ledger, &b, &cpu_ops, &sp, 0, 4096, UMEM_PROT_READ, &va) == 0, "map", 0, 0);
+    CHECK(umem_trim(&ledger, &b, 4 * MIB) == UMEM_BUSY, "no trim of a mapped buffer", 0, 0);
+    CHECK(umem_unmap(&ledger, &b, &cpu_ops, &sp, va) == 0 && umem_trim(&ledger, &b, 4 * MIB) == 0, "trim after unmap", 0, 0);
+    mark(base + 4 * MIB, 2 * MIB, 0);
+    /* The freed tail is allocatable again. */
+    struct umem_buf again;
+    struct umem_request t2 = req(2 * MIB, 2);
+    t2.flags = UMEM_AT; t2.base = base + 4 * MIB;
+    CHECK(alloc_ready(t2, &again) == 0, "reuse of the tail", 0, 0);
+    CHECK(umem_largest(&ledger, &(struct umem_request){.policy = UMEM_NC}, &base, &bytes) == UMEM_NO_SPACE, "no NC memory yet", 0, 0);
+}
+
 static void case_policy(void)
 {
     model_reset(UMEM_MIN_CELLS);
@@ -555,7 +592,7 @@ int main(void)
 {
     static const struct { const char *name; void (*run)(void); } cases[] = {
         {"basic", case_basic}, {"handles", case_handles}, {"prepare", case_prepare}, {"handoff", case_handoff},
-        {"maps", case_maps}, {"raw-lookup", case_raw_lookup}, {"policy", case_policy}, {"convert-back", case_convert_back},
+        {"maps", case_maps}, {"raw-lookup", case_raw_lookup}, {"trim-largest", case_trim_largest}, {"policy", case_policy}, {"convert-back", case_convert_back},
         {"random", case_random}, {"scale", case_scale},
     };
     for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; ++i) {
