@@ -3,7 +3,7 @@
 #include "a733_range.h"
 #include "a733_storage_digest.h"
 #include <string.h>
-enum { STARTING,CONNECTING,SECURING,ONLINE };
+enum { STARTING,CONNECTING,SECURING,ONLINE,SCANNING,SCANNED };
 /* Elapsed time before an owner stops repeating advancing session steps. At
  * 25 MHz four-bit SDIO this covers the largest 4,096-byte receive. */
 #define BOARD_RADIO_POLL_BUDGET_US 500u
@@ -21,10 +21,14 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
     if(!r||r->self||!input||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED||
         !a733_ranges_disjoint(r,sizeof(*r),input,sizeof(*input)))return 0;
     const struct board_radio_config *c=input;
+    unsigned staged=c->report_memory.allocate!=NULL;
+    if(c->scan_only&&(!staged||!c->scan_timeout_us))return 0;
+    if(staged&&(!c->report_memory.release||!c->scan_timeout_us))return 0;
     if(!c->shared||!c->shared->used||!c->admit||!c->chip_id||!c->chip_id->secure_read_record||
         !c->recovery_state||!a733_ranges_disjoint(r,sizeof(*r),c->recovery_state,sizeof(*c->recovery_state))||
         !a733_ranges_disjoint(r,sizeof(*r),c->shared,sizeof(*c->shared))||
         !a733_ranges_disjoint(r,sizeof(*r),c->chip_id,sizeof(*c->chip_id))||
+        (!c->scan_only&&(
         c->session.owner_task!=c->entropy.owner||c->network.bootstrap!=c->session.owner_task||
         c->entropy.clock!=&c->shared->counter||!c->entropy.source||!c->entropy.source->engine||
         c->entropy.source->engine->binding.registry!=&c->shared->clocks||
@@ -32,7 +36,7 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
         !c->target.beacon_evidence||c->target.beacon_evidence!=c->security.beacon_record||
         c->security.entropy_record!=c->entropy.qualification_record||
         c->network.network.entropy_record!=c->entropy.qualification_record||
-        !c->association_timeout_us||!c->security_timeout_us||
+        !c->association_timeout_us||!c->security_timeout_us))||
         c->startup_deadline_us<c->session.bootstrap_deadline||
         c->startup_deadline_us>c->platform.lifetime_deadline_us)return 0;
     r->self=r;r->config=*c;atomic_init(&r->failed,1);atomic_init(&r->network_started,0);
@@ -48,12 +52,14 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
     p->network.network.entropy_context=&r->entropy;
     p->network.network.transport=&r->session.transport;
     p->network.network.dispatcher=&r->session.dispatcher;
-    if(!a733_radio_entropy_init(&r->entropy,&p->entropy)||
+    if(staged&&!a733_radio_report_init(&r->report,&p->report_memory))return 0;
+    if((!p->scan_only&&!a733_radio_entropy_init(&r->entropy,&p->entropy))||
         !a733_radio_platform_native_init(&r->native,&p->shared->locks,p->session.owner_task,
             p->admit,p->admission_context)||
         !a733_radio_platform_init(&r->platform,&p->platform,&r->native.operations,&r->native,
             &p->shared->clocks,&p->shared->pins,&p->shared->rails,&p->shared->pmic)||
         !a733_radio_platform_four_bit(&r->platform)||
+        (p->first_run_guard&&!a733_radio_platform_first_run_guard(&r->platform))||
         !a733_radio_session_init(&r->session,&r->platform,&p->session))return 0;
     r->constructed=1;atomic_store_explicit(&r->failed,0,memory_order_release);return 1;
 }
@@ -61,8 +67,9 @@ static enum board_radio_result retain(struct board_radio *r)
 {
     atomic_fetch_or_explicit(r->config.recovery_state,4,memory_order_acq_rel);
     atomic_store_explicit(&r->failed,1,memory_order_release);
-    (void)a733_radio_entropy_retain(&r->entropy);
+    if(!r->config.scan_only)(void)a733_radio_entropy_retain(&r->entropy);
     (void)a733_radio_session_retain(&r->session);
+    if(r->config.report_memory.allocate)a733_radio_report_platform(&r->report,&r->platform);
     return BOARD_RADIO_RETAINED;
 }
 static uint64_t bounded_deadline(struct board_radio *r,uint64_t now,uint64_t duration)
@@ -120,19 +127,36 @@ static int advanced(const struct board_radio *r,const struct progress *before)
     return now.host!=before->host||now.transport!=before->transport||
         now.platform!=before->platform||now.session!=before->session;
 }
+const struct a733_radio_report *board_radio_report(const struct board_radio *r)
+{return r&&r->self==r&&r->constructed&&r->config.report_memory.allocate?&r->report:NULL;}
+/* Keep the report current: the platform's stages and card facts every pass,
+ * the firmware and identity once the management layer exists. */
+static void report_progress(struct board_radio *r)
+{
+    if(!r->config.report_memory.allocate)return;
+    a733_radio_report_platform(&r->report,&r->platform);
+    if(r->session.transport.have[0]&&r->session.transport.have[1])
+        a733_radio_report_identity(&r->report,r->session.transport.identity.chip_word,
+            r->session.transport.identity.subrevision_word);
+    if(r->session.firmware.state==AIC8800_FW_START_CONFIRMED)a733_radio_report_firmware(&r->report);
+    /* Identity is read before the firmware loads; keep the later stage. */
+}
 enum board_radio_result board_radio_poll(struct board_radio *r)
 {
     if(!r||r->self!=r||!r->constructed||
         xTaskGetCurrentTaskHandle()!=r->config.session.owner_task)return BOARD_RADIO_INVALID;
     if(atomic_load_explicit(&r->failed,memory_order_acquire)||
         (atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4))return retain(r);
-    enum a733_radio_entropy_result entropy=a733_radio_entropy_poll(&r->entropy);
-    if(entropy==A733_RADIO_ENTROPY_RETAINED||entropy==A733_RADIO_ENTROPY_INVALID||
-        atomic_load_explicit(&r->entropy.fault,memory_order_acquire)||
-        atomic_load_explicit(&r->config.entropy.source->engine->fault,memory_order_acquire))return retain(r);
+    enum a733_radio_entropy_result entropy=A733_RADIO_ENTROPY_PENDING;
+    if(!r->config.scan_only){
+        entropy=a733_radio_entropy_poll(&r->entropy);
+        if(entropy==A733_RADIO_ENTROPY_RETAINED||entropy==A733_RADIO_ENTROPY_INVALID||
+            atomic_load_explicit(&r->entropy.fault,memory_order_acquire)||
+            atomic_load_explicit(&r->config.entropy.source->engine->fault,memory_order_acquire))return retain(r);
+    }
     uint64_t now;
     if(!a733_counter_clock_now(&r->config.shared->counter,&now))return retain(r);
-    if(r->stage!=ONLINE&&now>=r->config.startup_deadline_us)return retain(r);
+    if(r->stage!=ONLINE&&r->stage!=SCANNED&&now>=r->config.startup_deadline_us)return retain(r);
     /* Repeat whole session polls, each with its own platform and deadline
      * checks, while a step advances. Yield on the first call that only waits:
      * an in-flight bus operation without FIFO progress, a poll interval, an
@@ -148,11 +172,22 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
     }
     if(result==A733_SESSION_RETAINED||result==A733_SESSION_INVALID)return retain(r);
     if(result==A733_SESSION_BUSY)return publish(r,BOARD_RADIO_PENDING);
+    report_progress(r);
     if(r->session.dispatcher.initialized){
         /* Station events of a reconnect or recovery would otherwise fill the
-         * event queue and stop receive parsing. */
-        if((r->stage!=ONLINE||r->recovering)&&a733_radio_session_take_event(&r->session,&r->startup_event)&&
-            r->stage!=ONLINE&&r->startup_events!=UINT64_MAX)++r->startup_events;
+         * event queue and stop receive parsing. A staged owner records every
+         * scan result as it arrives: the queue holds one result at a time and
+         * applies backpressure, so none is lost. */
+        while((r->stage!=ONLINE||r->recovering)&&
+            a733_radio_session_take_event(&r->session,&r->startup_event)){
+            if(r->stage!=ONLINE&&r->startup_events!=UINT64_MAX)++r->startup_events;
+            if(r->startup_event.kind==AIC8800_DISPATCH_SCAN&&r->config.report_memory.allocate)
+                a733_radio_report_ap(&r->report,r->startup_event.metadata.scan.bssid,
+                    r->startup_event.metadata.scan.has_ssid?r->startup_event.metadata.scan.ssid:NULL,
+                    r->startup_event.metadata.scan.has_ssid?r->startup_event.metadata.scan.ssid_bytes:0,
+                    r->startup_event.metadata.scan.frequency,r->startup_event.metadata.scan.rssi_dbm);
+            if(!r->config.report_memory.allocate)break; /* One event per pass, as before. */
+        }
         if(a733_radio_session_take_record(&r->session,&r->diagnostic)&&
             r->diagnostic_records!=UINT64_MAX)++r->diagnostic_records;
     }
@@ -164,7 +199,21 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
     }
     if(result!=A733_SESSION_MANAGEMENT)return publish(r,BOARD_RADIO_PENDING);
     if(now>=r->session.deadline)return retain(r);
-    if(r->stage==STARTING){
+    if(r->stage==SCANNED)return publish(r,BOARD_RADIO_SCANNED);
+    if(r->stage==STARTING&&r->config.report_memory.allocate&&!r->scan_started){
+        uint64_t deadline=bounded_deadline(r,now,r->config.scan_timeout_us);
+        if(a733_radio_session_scan(&r->session,deadline)){
+            r->scan_started=1;r->operation_deadline=deadline;r->stage=SCANNING;
+        }
+    }else if(r->stage==SCANNING){
+        if(now>=r->operation_deadline)return retain(r);
+        struct aic8800_wifi_scan_summary summary;
+        if(a733_radio_session_take_scan(&r->session,&summary)){
+            a733_radio_report_scan_done(&r->report,summary.reported_results);
+            r->scan_done=1;r->stage=r->config.scan_only?SCANNED:STARTING;
+            if(r->stage==SCANNED)return publish(r,BOARD_RADIO_SCANNED);
+        }
+    }else if(r->stage==STARTING){
         if(entropy!=A733_RADIO_ENTROPY_READY)return publish(r,BOARD_RADIO_PENDING);
         uint64_t deadline=bounded_deadline(r,now,r->config.association_timeout_us);
         if(a733_radio_session_connect(&r->session,&r->config.target,deadline)){

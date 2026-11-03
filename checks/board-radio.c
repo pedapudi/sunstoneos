@@ -1,6 +1,8 @@
 /* Application orchestration only. Lower protocol proofs are reused; their
  * observations below are explicit checkpoints, not RF or entropy evidence. */
 #include "../apps/board/radio.c"
+#include "../drivers/net/a733_radio_result.c"
+#include <stdlib.h>
 #include <assert.h>
 #include <stdio.h>
 static struct board_radio app;
@@ -72,7 +74,7 @@ int a733_radio_session_init(struct a733_radio_session *s,struct a733_radio_platf
     s->deadline=9000;return 1;
 }
 enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session *s)
-{assert(s==&app.session&&entropy_calls>session_calls);++session_calls;return session_result;}
+{assert(s==&app.session&&(app.config.scan_only||entropy_calls>session_calls));++session_calls;return session_result;}
 enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_session *s)
 {assert(s==&app.session);++retained;s->fault=1;return A733_SESSION_RETAINED;}
 int a733_radio_session_connect(struct a733_radio_session *s,const struct aic8800_wifi_target *t,uint64_t deadline)
@@ -85,8 +87,32 @@ int a733_radio_session_start_network(struct a733_radio_session *s,const struct s
  c->network.random32==a733_radio_entropy_random32&&c->network.sequence==a733_radio_entropy_sequence&&
  c->network.entropy_context==&app.entropy);++network_calls;return 1;}
 int aic8800_network_ready(const struct aic8800_network *n){assert(n==&app.session.sockets.network);return 1;}
+/* Staged-service model: scan results delivered as events, then a finished scan. */
+static unsigned staged,guard_calls,scan_calls,take_scan_calls,scan_events_left,scan_finished,scan_admit=1,allocations;
+int a733_radio_platform_first_run_guard(struct a733_radio_platform *p)
+{assert(p==&app.platform);++guard_calls;return 1;}
+int a733_radio_session_scan(struct a733_radio_session *s,uint64_t deadline)
+{assert(s==&app.session&&deadline==1100);++scan_calls;return scan_admit;}
+int a733_radio_session_take_scan(struct a733_radio_session *s,struct aic8800_wifi_scan_summary *out)
+{
+    assert(s==&app.session);++take_scan_calls;
+    if(!scan_finished)return 0;
+    *out=(struct aic8800_wifi_scan_summary){.received=3,.reported_results=3,.accepted=1};return 1;
+}
 int a733_radio_session_take_event(struct a733_radio_session *s,struct aic8800_dispatch_event *e)
-{assert(s==&app.session&&e==&app.startup_event);return 1;}
+{
+    assert(s==&app.session&&e==&app.startup_event);
+    if(!staged)return 1;
+    if(!scan_events_left)return 0;
+    unsigned n=scan_events_left--; /* 3, 2, 1: the third sighting repeats the first access point. */
+    memset(e,0,sizeof(*e));e->kind=AIC8800_DISPATCH_SCAN;
+    e->metadata.scan.frequency=n==2?5180:2437;e->metadata.scan.rssi_dbm=(int8_t)(-40-(int)n);
+    e->metadata.scan.has_ssid=1;e->metadata.scan.ssid_bytes=3;memcpy(e->metadata.scan.ssid,n==2?"b-5":"a-2",3);
+    memcpy(e->metadata.scan.bssid,n==2?"\x02\x00\x00\x00\x00\x02":"\x02\x00\x00\x00\x00\x01",6);
+    return 1;
+}
+static void *report_allocate(void *context,size_t bytes){assert(context==&allocations);++allocations;return malloc(bytes);}
+static void report_release(void *context,void *memory){assert(context==&allocations);free(memory);}
 int a733_radio_session_take_record(struct a733_radio_session *s,struct aic8800_dispatch_record *d)
 {assert(s==&app.session&&d==&app.diagnostic);return 1;}
 int sunstone_net_submit(struct sunstone_net *s,const struct sunstone_net_request *r,uint64_t *ticket)
@@ -200,6 +226,43 @@ int main(void)
     unsigned expected=1;assert(!atomic_compare_exchange_strong(&recovery_state,&expected,3));
     assert((expected&4)&&atomic_load(&app.failed));
     assert(board_radio_external_failure(&app)==BOARD_RADIO_RETAINED&&entropy_calls==polls&&entropy_retains==3);
-    puts("PASS board radio: provider wiring, observed WPA2 checkpoints, copied sockets, repeated exchange timeouts and retained entropy fault");
+    /* The staged service with no credential: guard request, scan before anything else, no
+     * entropy, connect or network, and a terminal SCANNED result with every access point recorded. */
+    memset(&app,0,sizeof(app));staged=1;scan_events_left=3;scan_finished=0;
+    unsigned entropy_before=entropy_calls,connects_before=connects,network_before=network_calls,security_before=security_calls;
+    struct board_radio_config scan_only={.shared=&shared,.chip_id=&id,.admit=admission,.recovery_state=&recovery_state,
+        .platform={.lifetime_deadline_us=10000},.session={.owner_task=task,.bootstrap_deadline=500},
+        .startup_deadline_us=8000,.scan_timeout_us=1000,.scan_only=1,.first_run_guard=1,
+        .report_memory={report_allocate,report_release,&allocations}};
+    atomic_store(&recovery_state,1);atomic_store(&app.failed,0);scheduler=taskSCHEDULER_NOT_STARTED;
+    scan_only.scan_timeout_us=0;assert(!board_radio_init(&app,&scan_only)&&!app.self);scan_only.scan_timeout_us=1000;
+    scan_only.report_memory.allocate=NULL;assert(!board_radio_init(&app,&scan_only)&&!app.self);
+    scan_only.report_memory.allocate=report_allocate;
+    assert(board_radio_init(&app,&scan_only)&&guard_calls==1&&board_radio_report(&app));
+    scheduler=taskSCHEDULER_RUNNING;app.session.dispatcher.initialized=1;time_us=100;
+    assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&scan_calls==1&&app.stage==SCANNING);
+    assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==SCANNING&&take_scan_calls==1);
+    assert(board_radio_report(&app)->ap_count==2&&board_radio_report(&app)->head.aps_reported==3);
+    scan_finished=1;
+    assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED&&app.stage==SCANNED);
+    assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED&&scan_calls==1);
+    {
+        const struct a733_radio_report *report=board_radio_report(&app);
+        assert(report->head.stage==A733_RADIO_STAGE_SCANNED&&!report->head.failed&&report->head.aps_reported==3);
+        assert(report->ap_count==2&&!memcmp(report->aps[0].ssid,"a-2",3)&&report->aps[0].rssi_dbm==-41&&report->aps[0].channel==6);
+        assert(!memcmp(report->aps[1].ssid,"b-5",3)&&report->aps[1].channel==36);
+        uint8_t record[512];size_t bytes=a733_radio_report_encode(report,record,sizeof(record));
+        assert(bytes==sizeof(report->head)+2*sizeof(struct a733_radio_result_ap));
+    }
+    assert(entropy_calls==entropy_before&&connects==connects_before&&network_calls==network_before&&security_calls==security_before);
+    /* A scan that does not finish in time retains the radio with no entropy involved. */
+    a733_radio_report_release(&app.report);
+    memset(&app,0,sizeof(app));scan_events_left=0;scan_finished=0;scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);
+    assert(board_radio_init(&app,&scan_only));scheduler=taskSCHEDULER_RUNNING;time_us=100;app.session.dispatcher.initialized=1;
+    assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==SCANNING);
+    unsigned retains_before=entropy_retains;time_us=1100;
+    assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED&&entropy_retains==retains_before&&board_radio_report(&app)->head.failed==0);
+    a733_radio_report_release(&app.report);
+    puts("PASS board radio: provider wiring, observed WPA2 checkpoints, copied sockets, repeated exchange timeouts, retained entropy fault and the scan-only staged service");
     return 0;
 }

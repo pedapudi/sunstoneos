@@ -3,6 +3,7 @@
 #include "a733_native_usb.h"
 #include "a733_radio_entropy.h"
 #include "a733_radio_platform_native.h"
+#include "a733_radio_result.h"
 #include "a733_radio_session.h"
 #include "identity.h"
 struct board_radio_config {
@@ -18,9 +19,18 @@ struct board_radio_config {
     void *admission_context;
     atomic_uint *recovery_state; /* Same latch as actual hardware reload CAS. */
     uint64_t startup_deadline_us,association_timeout_us,security_timeout_us;
+    /* The staged service. A nonnull report_memory.allocate makes the owner scan
+     * once the management layer is ready, before any association, and record
+     * every stage in the report (board_radio_report). scan_timeout_us bounds the
+     * scan. scan_only runs no association and needs no entropy, target,
+     * credential or network profile: the owner stops at BOARD_RADIO_SCANNED.
+     * first_run_guard asks the platform for its first-run guard. */
+    struct a733_radio_allocator report_memory;
+    uint64_t scan_timeout_us;
+    unsigned scan_only,first_run_guard;
 };
 enum board_radio_result { BOARD_RADIO_PENDING,BOARD_RADIO_NETWORK,
-    BOARD_RADIO_RETAINED,BOARD_RADIO_INVALID };
+    BOARD_RADIO_RETAINED,BOARD_RADIO_INVALID,BOARD_RADIO_SCANNED };
 struct board_radio {
     struct board_radio *self;
     struct board_radio_config config;
@@ -46,7 +56,8 @@ struct board_radio {
     struct aic8800_dispatch_event startup_event;
     struct aic8800_dispatch_record diagnostic;
     uint64_t startup_events,diagnostic_records;
-    unsigned stage,constructed;
+    unsigned stage,constructed,scan_started,scan_done;
+    struct a733_radio_report report;
     uint64_t operation_deadline;
     /* Link recovery: owner-drained events while reassociating, and the bound
      * for admitting recovery after a clean loss is first reported. */
@@ -143,6 +154,10 @@ int board_radio_init(struct board_radio *,const struct board_radio_config *);
  * and credentials, bounded by the association, security and DHCP address
  * timeouts; PENDING is reported until the address returns. */
 enum board_radio_result board_radio_poll(struct board_radio *);
+/* The staged service's report: the stage reached and what was observed on the way.
+ * Valid after init when report_memory was supplied, else NULL. Owner task only;
+ * a host reads it through a733_radio_report_encode. */
+const struct a733_radio_report *board_radio_report(const struct board_radio *);
 /* Existing copied bounded socket queues; call from configured client tasks. */
 /* Existing radio owner task only. Quiescent sockets, healthy IPv4
  * WPA2 profile (fixed or DHCP); same admitted target/credentials, new association/RSN state.

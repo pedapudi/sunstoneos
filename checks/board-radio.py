@@ -33,7 +33,7 @@ def main():
     def preserve():
         dependencies = {Path(__file__).resolve(), ROOT / 'docs/board-radio.md'}
         dependencies.update(ROOT / path for path in [
-            'apps/board/radio.c', 'apps/board/radio.h', 'apps/board/identity.h',
+            'apps/board/radio.c', 'apps/board/radio.h', 'drivers/net/a733_radio_result.c', 'include/a733_radio_result.h', 'apps/board/identity.h',
             'checks/board-radio.c', 'checks/board-radio-session.c','checks/board-radio-listener.c','apps/board/radio_profile.c',
             'drivers/net/a733_radio_session.c', 'include/a733_radio_session.h',
             'drivers/net/aic8800_sdio_transport.c', 'include/aic8800_sdio_transport.h',
@@ -103,7 +103,7 @@ def main():
             artifacts.append(artifact)
         for index, source in enumerate([] if a.listener_only else ['apps/board/radio.c', 'drivers/net/a733_radio_session.c',
                                         'drivers/net/aic8800_sdio_transport.c',
-                                        'drivers/net/a733_radio_entropy.c','drivers/net/a733_radio_platform.c']):
+                                        'drivers/net/a733_radio_entropy.c','drivers/net/a733_radio_platform.c','drivers/net/a733_radio_result.c']):
             artifact = out / ('native-' + str(index) + '.o')
             run('native-' + str(index), [a.cc, '--target=aarch64-none-elf', '-mcpu=cortex-a55',
                 '-ffreestanding', '-fno-builtin', '-mgeneral-regs-only', *common,
