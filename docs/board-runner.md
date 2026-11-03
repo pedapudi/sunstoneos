@@ -170,6 +170,24 @@ their sub-terms are in [a733_admission_refusal.h](../include/a733_admission_refu
 stop (`last.admission_refusal`). [admission-preflight.py](../checks/admission-preflight.py)
 checks the refusals of a built image.
 
+## Board runs keep their timing while the gate runs
+
+The host stages of a run (DRAM bring-up, preparation) are timed against the disk and CPUs the integration gate also uses. When the
+gate's power-loss sweep wrote 170 to 290 MB/s, those stages took 29 to 74 s and 11 to 18 s instead of about 2.3 s and 0.6 s, on both ports
+and for every worker. [host_priority.py](../tools/host_priority.py) sets the priorities, in code, so a restart keeps them:
+
+| Process | Where it is set | Setting |
+| --- | --- | --- |
+| The gate and everything it starts (builds, checks, sweeps) | first statement of `main()` in `tools/integration-gate.py` and `tools/land.py` | nice +10, idle I/O class (`ionice -c3`) |
+| The runner, its run processes and the queue daemon | first statement of `main()` in `tools/board.py` | best-effort I/O class at level 0 (the default is 4); CPU niceness unchanged |
+
+The gate's image-copying checks write sparse copies (`harness.copy_image`, `cp --sparse=always --reflink=auto`): the `fat32-rw` sweep wrote
+271 GiB in 5,339 copies of a 52 MiB image of which 55 of 13,312 blocks hold data, and writes about 1.4 GiB now.
+
+Every result carries `host_pressure.start` and `host_pressure.end`: the kernel's `/proc/pressure/io`, `cpu` and `memory` figures
+(`some` and `full`, `avg10`, `avg60`, `avg300` and `total`) read when the run began and when it finished. The totals are microseconds of
+stall, so their difference is the stall time of the run itself, which attributes a slow host stage to the host.
+
 ## A run establishes its prerequisites
 
 ```sh

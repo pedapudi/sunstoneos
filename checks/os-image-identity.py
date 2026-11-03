@@ -8,8 +8,8 @@ does not run. The build's link check names its options:
 
 - every build publishes its manifest INPUT regions, and a second call
   publishes nothing;
-- supervised recorded audio admits workloads 0, 2 and 4; microphone and
-  resident builds admit 0 and 4;
+- a build with no audio, radio or headset admits workloads 0, 2 and 4 in either
+  lifetime; microphone builds admit 0 and 4;
 - the radio build admits workload 1 only, publishes the radio profile and
   firmware span, reads the four chip-ID words and publishes them with the
   session's SID authority;
@@ -30,6 +30,7 @@ import struct
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
+from harness import machine as harness_machine
 from unicorn import arm64_const as reg
 
 SESSION = 0x50001000
@@ -53,7 +54,7 @@ def main():
         # images with no application section.
         section = elf.get_section_by_name('sunstone_manifest')
         assets = []
-        if section is not None:
+        if section is not None and section['sh_size']:          # an image with no application has an empty section
             import importlib.util
             spec = importlib.util.spec_from_file_location('manifest', Path(__file__).resolve().parents[1] / 'tools/sunstone-manifest.py')
             manifest_tool = importlib.util.module_from_spec(spec)
@@ -79,7 +80,7 @@ def main():
         hooks[symbol('os_headset_profile_valid')] = 'profile'
 
     def run(workload, profile_bytes=832, profile_valid=1, calls_made=1):
-        cpu = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+        cpu = harness_machine()
         cpu.mem_map(0x41000000, 0x7000000)
         cpu.mem_map(0x50000000, 0x100000)
         cpu.mem_map(0x03006000, 0x1000)
@@ -149,7 +150,9 @@ def main():
         assert authority == 0x5151 and tuple(words) == SID_WORDS, (authority, words)
 
     cases = []
-    admitted = (1,) if radio else (0, 2, 4) if config['lifetime'] == 'supervised' and not config['audio'] and not headset else (0, 4)
+    # apps/os/os.h: workload 2 (storage-free) is admitted in either lifetime by a build with no audio, radio or headset.
+    admitted = (1,) if radio else (0, 2, 4) if not config['audio'] and not headset else (0, 4)
+    n = len(assets)        # the manifest's INPUT regions, published first; an image with no application has none
     for workload in (0, 1, 2, 3, 4, 6, 8):
         cpu, calls, returned, checked, profile = run(workload)
         accepted = workload in admitted
@@ -157,14 +160,14 @@ def main():
         if not accepted:
             assert calls == [] and not checked, (workload, calls)
         elif headset:
-            assert checked == [True] and len(calls) == 6, (checked, calls)
-            copy = calls[3][0]
-            assert calls[:3] == assets and calls[3][1:] == (832, DEADLINE) and calls[4] == (0x43000000, 0x100000, DEADLINE)
+            assert checked == [True] and len(calls) == n + 3, (checked, calls)
+            copy = calls[n][0]
+            assert calls[:n] == assets and calls[n][1:] == (832, DEADLINE) and calls[n + 1] == (0x43000000, 0x100000, DEADLINE)
             assert bytes(cpu.mem_read(copy, 832)) == profile
             record(cpu, calls)
         elif radio:
-            assert calls[:5] == assets + [(0x43000000, 1872, DEADLINE), (0x43010000, 0xf0000, DEADLINE)], calls
-            assert len(calls) == 6, calls
+            assert calls[:n + 2] == assets + [(0x43000000, 1872, DEADLINE), (0x43010000, 0xf0000, DEADLINE)], calls
+            assert len(calls) == n + 3, calls
             record(cpu, calls)
         else:
             assert calls == assets, calls

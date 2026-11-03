@@ -55,6 +55,7 @@ import shlex
 import subprocess
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR
+from harness import machine as harness_machine
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,7 +92,7 @@ def main():
         symbols = {s.name: int(s['st_value']) for s in elf.get_section_by_name('.symtab').iter_symbols()}
     results = {}
     for mode, case in enumerate(CASES):
-        uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+        uc = harness_machine()
         pages = set()
         for address, data, size in segments:
             for page in range(address & ~4095, (address + size + 4095) & ~4095, 4096):
