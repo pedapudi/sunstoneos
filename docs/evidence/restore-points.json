@@ -1,0 +1,14 @@
+{
+ "2750485344333247120000029d014c47": {
+  "backup": "/home/sunil/.cache/sunstoneos/sd-backup/backup-3-3-restore-point.bin",
+  "backup_sha256": "69987b9a3334086fa441534fe22ad4c4b203132ebc084de5a66689cb4baff247",
+  "port": "3-3",
+  "sectors": 589
+ },
+ "2750485344363447606832ea2f01a61d": {
+  "backup": "/home/sunil/.cache/sunstoneos/sd-backup/backup-395-sectors.bin",
+  "backup_sha256": "b2b408c6d7156e2a81e7b0cfa92b801ccd2bc51f884cbb4a39fe5bb0ac402ae4",
+  "port": "3-1",
+  "sectors": 395
+ }
+}

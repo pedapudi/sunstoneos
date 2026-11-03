@@ -146,7 +146,8 @@ struct result {
     uint64_t app_core, irq_cores, owner_cores, caller_cores, sha_ce;   /* irq_cores: mask | stray entries << 32 */
     uint64_t diag[4], isar0, observed;               /* where an open or enable stopped (ss_storage_diagnostic); the core's ISAR0 */
     uint32_t irq_entries[8];                         /* handler entries of INTID 193 per core */
-    uint64_t reserved[512 / 8 - 36 - FWR_HIST / 2 - 5 - 6 - 4];
+    uint64_t sdmode[4];                              /* the bus speed mode and its steps (ss_storage_mode; apps/os/large_sd.c, os_sd_mode) */
+    uint64_t reserved[512 / 8 - 36 - FWR_HIST / 2 - 5 - 6 - 4 - 4];
 };
 _Static_assert(sizeof(struct result) == 512, "result is the manifest's output_limit");
 static struct result r;
@@ -249,6 +250,7 @@ static void collect(void)
     r.wear_aligned = w->au_aligned_writes; r.wear_unaligned = w->unaligned_writes; r.wear_syncs = w->syncs; r.wear_flushes = w->flushes;
     r.recoveries = w->recoveries; r.recovered_clusters = w->recovered_clusters;
     for (unsigned i = 0; i < FWR_HIST; ++i) r.histogram[i] = (uint32_t)(w->size_histogram[i] > UINT32_MAX ? UINT32_MAX : w->size_histogram[i]);
+    (void)ss_storage_mode(r.sdmode);
     struct ss_storage_owner_stats s;
     if (ss_storage_owner_stats(&s)) {
         r.owner_elapsed_us = s.elapsed_us; r.owner_asleep_us = s.asleep_us; r.owner_wakes = s.wakes | (uint64_t)s.irq_recheck << 32;   /* high half: interrupt waits that ended on the recheck timer */

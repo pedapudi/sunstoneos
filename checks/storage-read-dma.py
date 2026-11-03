@@ -119,7 +119,9 @@ def run(path,session,out,cases):
     if m.read(e.address('storage_read_consumer')+e.layouts['storage_read_consumer']['result']):break
    assert m.read(e.address('storage_read_consumer')+e.layouts['storage_read_consumer']['result'])==1
    assert m.read(e.address('storage_read_consumer')+e.layouts['storage_read_consumer']['completed'])==2
-   assert [x['blocks'] for x in m.dma_reads]==[64,64] and m.state_of(1)==3
+   # The native client asks for the session's application range (apps/storage-read/client.c: .blocks = session.application_blocks), whatever the fixture chose.
+   blocks=m.read(e.address('storage_read')+e.layouts['storage_read_application']['session']+e.layouts['storage_read_session']['application_blocks'],4)
+   assert [x['blocks'] for x in m.dma_reads]==[blocks,blocks] and m.state_of(1)==3
    (out/'host-idle-frame.bin').write_bytes(m.frame())
    assert m.submit(2,19,64,1)[0]==1;m.finish(0)
    frame=m.frame();assert observe.decode(frame,raw)['application_reads']==2
