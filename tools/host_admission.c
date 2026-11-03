@@ -22,6 +22,8 @@ void host_out(const char *format, ...);
 void host_perror(const char *what);
 /* The session mapping lives in host_admission_io.c: the system memory-mapping headers conflict with the image's own types. */
 void *host_map_session(uintptr_t address, size_t bytes);
+/* The first-failure record is not kept on the host: a refused declaration names its reason in the harness output instead. */
+void board_fail_note(uint32_t site, uint32_t value, const void *caller) { (void)site; (void)value; (void)caller; }
 
 static size_t slurp(const char *path, void *buffer, size_t capacity)
 {

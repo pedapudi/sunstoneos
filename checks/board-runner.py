@@ -1163,6 +1163,84 @@ def finite_npu_cases(out, image_root, state, fixture, host_tree=None, cases=()):
         passed('finite-npu-frozen-preparation-'+name)
 
 
+def preflight_cases(out):
+    """An unavailable host pre-flight refuses; only a recorded --no-preflight reason lets it through."""
+    root=out/'preflight';root.mkdir()
+    typed={'generic':True,'symbols':{'os_npu_client_model':(0,4)}}
+    cache=root/'cache';cache.mkdir()           # no capture and no recorded words here, as on a machine without the evidence cache
+    on={'status':'ON','words':{hex(a):m for a,m in images.NPU_ENTRY_GATES.items()}|{hex(a):8 for a in images.NPU_PCK4}}
+    def prepare(args,info,live,out_dir,**kw):
+        images.validate_npu_on(live['words'])
+        return {'host_admission':{'admitted':True}}
+    def count(queue):
+        with queue.locked() as state:return len(state['jobs'])+len(state['history'])
+    def submit(name,*extra):
+        (root/name).mkdir(exist_ok=True);queue=board.Queue(root/name/'state');args=arguments(root/name,*extra,submit=True);args.hypothesis=name
+        return queue,args
+    def refuses(queue,args):
+        before=count(queue)
+        try:queue.submit(args)
+        except board.PreflightUnavailable as error:
+            assert 'Pre-flight cannot run' in str(error) and '--no-preflight' in str(error),str(error)
+        else:raise AssertionError('an unavailable pre-flight queued the image')
+        assert count(queue)==before,'a refused submission was queued'
+        assert not [d for d in (queue.root/'entries').glob('*') if not (d/'entry.json').exists()],'a refusal left a half-built entry'
+    with patch.object(images,'CACHE',cache),patch.object(board,'CACHE',cache),patch.object(images,'inspect',return_value=typed),\
+         patch.object(images,'prepare',side_effect=prepare),patch.object(board,'port_idle',return_value=True):
+        # An image with a typed session and no recorded board words: the pre-flight cannot run, and nothing is queued.
+        queue,args=submit('unavailable');assert images.offline_words() is None
+        refuses(queue,args)
+        passed('preflight-unavailable-refuses-submit')
+        # The old path (warn and continue) must fail this check.
+        with patch.object(board,'apply_override',lambda a,record:record):
+            try:refuses(queue,args)
+            except AssertionError:pass
+            else:raise AssertionError('restoring warn-and-continue did not fail the check')
+        passed('preflight-warn-and-continue-mutation-fails-the-check')
+        # An explicit override queues, records its reason in the entry, and carries it into the result.
+        queue,args=submit('override','--no-preflight','the recorded words are being rebuilt');job=queue.submit(args)
+        assert job['preflight']['override']=='the recorded words are being rebuilt' and job['preflight']['unavailable'],job['preflight']
+        assert json.loads((Path(job['directory'])/'entry.json').read_text())['preflight']['override']
+        assert queue.claim('3-1');queue.complete(job['id'],{'outcome':'returned','first_failure':None})
+        result=json.loads(Path(job['result_path']).read_text())
+        assert result['preflight']['override']=='the recorded words are being rebuilt',result
+        queue,args=submit('override-empty','--no-preflight','  ')
+        try:queue.submit(args)
+        except board.PreflightUnavailable as error:assert 'needs a reason' in str(error)
+        else:raise AssertionError('an empty override reason was accepted')
+        passed('preflight-override-needs-and-records-a-reason')
+        # check: a typed session with no host admission refuses; an override records.
+        plan={'host_admission':{'admitted':None,'unavailable':'no cached harness'}}
+        (root/'check').mkdir(exist_ok=True);probe_args=arguments(root/'check')
+        try:board.check_preflight(probe_args,typed,plan)
+        except board.PreflightUnavailable:pass
+        else:raise AssertionError('check accepted an unavailable pre-flight')
+        probe_args.no_preflight='harness is built by the gate';assert board.check_preflight(probe_args,typed,plan)['override']
+        passed('preflight-unavailable-refuses-check')
+        # A run that read the NPU entry state refreshes the recorded words; the next submission pre-flights.
+        before=images.offline_words();assert before is None
+        queue,args=submit('refresh');refuses(queue,args)
+        donor,donor_args=submit('donor','--no-preflight','seed');donor_job=donor.submit(donor_args);assert donor.claim('3-1')
+        donor.complete(donor_job['id'],{'outcome':'returned','npu_on_admission':dict(on,status='refused'),'sid':'a'})
+        assert images.offline_words() is None,'a refused NPU entry state refreshed the words'
+        queue,args=submit('refresh');refuses(queue,args)
+        donor2,donor2_args=submit('donor2','--no-preflight','seed');donor2_job=donor2.submit(donor2_args);assert donor2.claim('3-1')
+        donor2.complete(donor2_job['id'],{'outcome':'watchdog-reset','npu_on_admission':on,'sid':'b'})
+        assert images.offline_words()==on['words']
+        queue,args=submit('refreshed');job=queue.submit(args)
+        assert job['preflight']=={'admitted':True},job['preflight']
+        passed('preflight-passes-with-words-refreshed-from-a-run')
+    # A probe image is not a typed-session image: its entry says so, and it queues.
+    root2=root/'probe';root2.mkdir()
+    queue=board.Queue(root2/'state');args=arguments(root2,submit=True)
+    job=queue.submit(args)
+    assert job['preflight'].get('preflight')=='not applicable' and not job['preflight'].get('unavailable'),job['preflight']
+    with patch.object(images,'inspect',return_value={'generic':False}):
+        args.hypothesis='probe not typed';job=queue.submit(args)
+    assert job['preflight']['preflight']=='not applicable'
+    passed('preflight-probe-records-not-applicable')
+
+
 def removed_cases(out):
     """The hypothesis is the prediction: no expectation option, file or outcome, and no host-code refusal."""
     for option in ('--expect','--expect-result'):
@@ -1193,7 +1271,7 @@ def main():
     parser.add_argument('--npu-case',action='append',default=[],
                         choices=('local-restart','model-switch','sdk-access','power-cycle'),
                         help='Run only selected finite NPU cases; repeat to resume unfinished cases.')
-    parser.add_argument('--only',default='transport,queue,queue-integrity,policy,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
+    parser.add_argument('--only',default='transport,queue,queue-integrity,policy,preflight,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
     args=parser.parse_args()
     args.out.mkdir(parents=True,exist_ok=False)
     groups=args.only.split(',')
@@ -1206,6 +1284,7 @@ def main():
     if 'queue-integrity' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_integrity_cases(args.out)
     if 'policy' in groups:policy_cases(args.out)
+    if 'preflight' in groups:preflight_cases(args.out)
     if 'daemon' in groups:
         with patch.object(board,'port_idle',return_value=True):daemon_cases(args.out)
     if 'artifacts' in groups:artifacts(args.out)

@@ -51,6 +51,7 @@ static TaskHandle_t create_static(TaskFunction_t entry, const char *name, uint32
 #define OS_NPU_SOURCE "../apps/os/npu.c"
 #endif
 #include OS_NPU_SOURCE
+#include "../apps/os/npu-declaration.c"
 
 struct board_application board;
 struct board_provider providers;

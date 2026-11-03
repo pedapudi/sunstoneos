@@ -12,7 +12,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = [
     'runtime/npu_app.c', 'include/sunstone_npu_service.h', 'include/sunstone_app.h',
-    'apps/os/npu.c', 'apps/os/npu-client.c', 'apps/npu-sdk/host-check.c',
+    'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-client.c', 'apps/npu-sdk/host-check.c',
     'apps/npu-sdk/interleave-check.c', 'apps/npu-sdk/event-check.c',
     'checks/os-npu-sdk-events.c', 'checks/os-npu-health-events.c',
 ]
