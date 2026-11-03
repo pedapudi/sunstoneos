@@ -263,8 +263,7 @@ def main():
         # ... and a swap inside the queue entry stops the claim.
         frozen_input.write_bytes(other.read_bytes())
         assert queue.claim('3-1') is None, 'a queue entry with a swapped input was claimed'
-        state = json.loads((queue_root / 'state.json').read_text())
-        assert any('Queued input bytes changed' in json.dumps(j) for j in state['jobs']), 'the swap was not recorded as a refusal'
+        assert 'Queued input bytes changed' in json.dumps(queue.job(job['id'])), 'the swap was not recorded as a refusal'
         # A resubmission with other bytes is a new entry whose own blob needs its own record.
         second = queue.submit(parser.parse_args(argv + ['--input', str(other), '--hypothesis', 'a different blob']))
         assert Path(second['directory']) != entry and Path(second['options']['input'][0]).read_bytes() == other.read_bytes()

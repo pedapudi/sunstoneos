@@ -7,7 +7,10 @@ and runs the reader through a strict file-backed device model (checks/fat32-ro.c
 variant must be refused with its own status.
 """
 import argparse
+import atexit
+import shutil
 import hashlib
+import mmap
 from pathlib import Path
 import random
 import struct
@@ -186,12 +189,11 @@ def build(out, name, spc, size_mib, base, bigdir=False):
         'models': {'deep': {'Weights File.bin': rng.randbytes(150000)}},
     }
     total = size_mib * 2048
-    part = out / f'{name}.part'
-    run(['truncate', '-s', str((total - base) * SECTOR), part])
-    run(['/usr/sbin/mkfs.fat', '-F', '32', '-s', str(spc), '-n', 'SUNSTONE', '-i', '5a733002', '-h', str(base), part])
-    img = bytearray(total * SECTOR)
-    img[base * SECTOR:] = part.read_bytes()
-    part.unlink()
+    path = out / f'{name}.img'
+    run(['truncate', '-s', str(total * SECTOR), path])         # a sparse file: only the written sectors take memory
+    run(['/usr/sbin/mkfs.fat', '-F', '32', '-s', str(spc), '-n', 'SUNSTONE', '-i', '5a733002', '-h', str(base),
+         '--offset', str(base), path, str((total - base) // 2)])
+    img = mapped(path)
     fs = Fat32(img, base)
     if bigdir:
         fs.extend_root(3)
@@ -206,16 +208,23 @@ def build(out, name, spc, size_mib, base, bigdir=False):
     if bigdir:
         for i in range(30):                    # push the root directory into its second cluster
             fs.place(fs.root_slots(), fs.entries(f'filler{i:02d}.dat', 0x20, 0, 0, set()))
-    path = out / f'{name}.img'
-    path.write_bytes(img)
+    img.flush()
     return path, fs, files, info
 
 
+def mapped(path):
+    """The image as a writable memory map: a view that slices and packs like a bytearray, with no copy of the whole image."""
+    with open(path, 'r+b') as stream:
+        return mmap.mmap(stream.fileno(), 0)
+
+
 def mutate(base_path, out, name, change):
-    img = bytearray(base_path.read_bytes())
-    change(img)
+    """A sparse copy of the image with one change applied (the copy holds only the sectors that hold data)."""
     path = out / f'{name}.img'
-    path.write_bytes(img)
+    run(['cp', '--reflink=auto', '--sparse=auto', base_path, path])       # holes stay holes, found without reading them
+    img = mapped(path)
+    change(img)
+    img.close()
     return path
 
 
@@ -223,8 +232,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    out = args.output
-    out.mkdir(parents=True, exist_ok=True)
+    record_dir = args.output                              # the result record; the case images (hundreds of megabytes) live in RAM
+    record_dir.mkdir(parents=True, exist_ok=True)
+    out = harness.ram_directory('fat32-ro-')
+    atexit.register(shutil.rmtree, out, True)
     binary = out / 'fat32-ro'
     run(['clang-21', '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
          '-fno-omit-frame-pointer', f'-I{ROOT}/include', ROOT / 'checks/fat32-ro.c', ROOT / 'drivers/storage/fat32_ro.c',
@@ -249,7 +260,9 @@ def main():
         free = sum(1 for c in range(2, fs.count + 2) if fs.get(c) == 0)
         assert facts['status'] == 'ok' and int(facts['counted_free']) == free and int(facts['clusters']) == fs.count, facts
         assert int(facts['spc']) == spc and int(facts['data_start']) == fs.data
-        raw = image.read_bytes()[base * SECTOR:(base + 4) * SECTOR]
+        with open(image, 'rb') as stream:
+            stream.seek(base * SECTOR)
+            raw = stream.read(4 * SECTOR)
         hint = u32(raw, SECTOR + 488)
         assert int(facts['hint_free']) == hint and int(facts['hint_next']) == u32(raw, SECTOR + 492) or hint == 0xffffffff, facts
         ok(f'{label}-volume-and-free-space')
@@ -399,7 +412,7 @@ def main():
     facts = dict(zip(*[iter(tool('info', p, 0).split())] * 2))
     assert facts['status'] == 'ok' and facts['hint_free'] == '4294967295'
     ok('fsinfo-corrupt-drops-hints')
-    harness.save(out / 'result.json', {'physical_access': False, 'cases': results})
+    harness.save(record_dir / 'result.json', {'physical_access': False, 'cases': results})
     print(len(results), 'FAT32 reader checks passed')
 
 
