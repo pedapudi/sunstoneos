@@ -38,11 +38,16 @@ import re
 import struct
 
 MAGIC = b'SSBW0003'
+SCRATCH_MAGIC = b'SSBW0004'
 ROOT = Path(__file__).resolve().parents[1]
 APPROVALS = Path(os.environ.get('SUNSTONE_STORAGE_APPROVALS') or Path.home() / '.cache/sunstoneos/coordinator-1031/approvals')
 # The restore points: for each card (by CID) the first full capture of it, with the port it was captured on. A write is admitted for a card only when its
 # restore point is recorded, and only on the port the capture was made on; the runner's enable refuses when the card in the port has another CID.
 RESTORE_POINTS = Path(os.environ.get('SUNSTONE_RESTORE_POINTS') or Path.home() / '.cache/sunstoneos/coordinator-1031/restore-points.json')
+# Scratch cards: cards the coordinator lists as holding nothing of value ({cid: {"port", "partition": [first sector, sector count]}}). A write to one is admitted on the card's
+# CID and its FAT32 partition alone, by one approval record per card (storage-card-<cid>.json, {"card_cid", "port"}), with no backup, no restore point and no per-image record.
+# The image's enable checks the CID and that every write lies inside the partition. A scratch card is restored by formatting its test partition, not by writing sectors back.
+SCRATCH_CARDS = Path(os.environ.get('SUNSTONE_SCRATCH_CARDS') or Path.home() / '.cache/sunstoneos/coordinator-1031/scratch-cards.json')
 ANY_IMAGE = 'any-image-from-tree'
 BASE_SOURCE = ROOT / 'include/a733_mmc_platform.h'   # A733_MMC_BASE(slot): SMHC0 is slot 0
 
@@ -174,6 +179,44 @@ def restore_point(card_cid, port, path=None):
     return point
 
 
+def encode_scratch(partition, card_cid):
+    """Version 4 (scratch card): MAGIC, 1, 0, 32 zero bytes, the partition as one (first sector, sector count) range, the card's CID."""
+    require(re.fullmatch(r'[0-9a-f]{32}', card_cid), 'The card identity must be 32 lowercase hexadecimal digits (the CID).')
+    first, count = partition
+    require(type(first) is int and type(count) is int and first > 0 and count > 0, 'The partition must be a positive (first sector, sector count).')
+    return SCRATCH_MAGIC + struct.pack('<II', 1, 0) + bytes(32) + struct.pack('<QQ', first, count) + bytes.fromhex(card_cid)
+
+
+def scratch_cards(path=None):
+    path = Path(path) if path else SCRATCH_CARDS
+    return json.loads(path.read_text()) if path.is_file() else {}
+
+
+def card_approval_path(card_cid, root=None):
+    return (Path(root) if root else APPROVALS) / ('storage-card-' + card_cid + '.json')
+
+
+def admit_scratch(descriptor, args, approvals=None, scratch=None):
+    """Admission of a write to a scratch card: the card is listed, on this port, with this partition; the coordinator has one record for the card; the first input is the
+    version 4 blob of the partition and the CID. Returns the blob."""
+    s = descriptor.get('storage_scratch')
+    require(isinstance(s, dict) and set(s) == {'card_cid', 'partition'}, 'storage_scratch needs card_cid and partition.')
+    cid, partition = s['card_cid'], s['partition']
+    require(isinstance(partition, list) and len(partition) == 2, 'The partition must be [first sector, sector count].')
+    entry = scratch_cards(scratch).get(cid) or {}
+    require(entry, f'The card {cid} is not listed as a scratch card.')
+    require(entry.get('port') == args.port, f'The scratch card {cid} is on port {entry.get("port")}, not on port {args.port}.')
+    require(entry.get('partition') == partition, 'The partition differs from the scratch card\'s listed partition.')
+    blob = encode_scratch(tuple(partition), cid)
+    require(args.input and Path(args.input[0]).read_bytes() == blob, 'The first input must be the encoding of storage_scratch.')
+    record = card_approval_path(cid, approvals)
+    require(record.is_file(), f'No coordinator approval record for the scratch card ({record.name}).')
+    data = json.loads(record.read_text())
+    require(data.get('card_cid') == cid and data.get('port') == args.port, 'The scratch card\'s record is for another card or port.')
+    args.storage_admission = hashlib.sha256(blob).hexdigest()
+    return blob
+
+
 def approval_path(blob, root=None):
     return (Path(root) if root else APPROVALS) / ('storage-' + hashlib.sha256(blob).hexdigest() + '.json')
 
@@ -269,6 +312,9 @@ def admit(descriptor, args, image_sha256, approvals=None):
     require(args.storage_write, 'Image can write the card (or a write was requested); it needs --storage-write, '
             'a coordinator approval record and descriptor storage_bounds.')
     require(args.port in ('3-1', '3-3'), 'Storage write runs on a known port only.')
+    if 'storage_scratch' in descriptor:
+        require('storage_bounds' not in descriptor, 'A descriptor names storage_bounds or storage_scratch, not both.')
+        return admit_scratch(descriptor, args, approvals)
     bounds = descriptor.get('storage_bounds')
     require(isinstance(bounds, dict) and set(bounds) == {'ranges', 'backup_ranges', 'backup_sha256', 'card_cid'},
             'Storage write requires descriptor storage_bounds with ranges, backup_ranges, backup_sha256 and card_cid.')
