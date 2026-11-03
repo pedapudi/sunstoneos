@@ -539,6 +539,16 @@ scratch WORK region at `0x8a000000`, all in level-1 slot 2) behaves as the run o
   or the interconnect; the heap run reached `0x80000000` already. A restore hash that differs from the backup is a defect of the
   runner's transfer above 2 GiB, which this run is the first to exercise.
 
+**Result: the preserving run above 2 GiB (port 3-1, entry `1793670225972455043-c4f45b62`).** As predicted. The runner backed up
+44,040,192 bytes (the image RAM, the 16 MiB region at `0x88000000` and the 8 MiB region at `0x89000000`, in 4 MiB chunks) and
+none at `0x8a000000`; it printed the estimate of 160.1 s against the budget of 240 s; the session returned normally (`RETURN_ROM`
+last), so the terminal's cleaning through the EL3 level-1 block of gigabyte 2 completed; the 32-byte output equals the expected
+`{SLOT1 tag, 0x88000000, 16 MiB, fold}` byte for byte; the record says `dram_mode` preserved, `dram_restored` true and
+`dram_dirty` false. The first submission of this image (`1793670172396930064-8d844757`) ended at pre-flight with a `KeyError` for
+`upper_area`: the runner had already imported its own `memory_layout`, which shadowed the host tree's. The manifest tool now loads
+the record that sits beside it. Host-side stage durations of this run (DRAM 54.9 s, capture 190 s) come from a period of heavy
+disk load and are not comparable with other runs.
+
 ### Predicted board run of the NPU pool in the slot 1 area
 
 Hypothesis: an `npu-graphs` image built from the recipe of the passing run `1793599845892192862-30dc9323` (seven
