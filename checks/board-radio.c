@@ -113,13 +113,25 @@ int a733_radio_session_take_event(struct a733_radio_session *s,struct aic8800_di
 /* A bump arena: the freestanding image headers used by sibling checks provide no malloc. */
 static _Alignas(16) uint8_t report_arena[8192];
 static size_t report_used;
-static void *report_allocate(void *context,size_t bytes)
+static void *arena_allocate(void *context,size_t bytes)
 {
     assert(context==&allocations);++allocations;
     bytes=(bytes+15u)&~15u;if(bytes>sizeof(report_arena)-report_used)return NULL;
     void *p=report_arena+report_used;report_used+=bytes;return p;
 }
-static void report_release(void *context,void *memory){assert(context==&allocations);(void)memory;}
+static void arena_release(void *context,void *memory){assert(context==&allocations);(void)memory;}
+/* The scan-only startup never reaches the crypto engine or its mutex: these must not run. */
+QueueHandle_t xQueueCreateMutexStatic(const uint8_t t,StaticQueue_t *q){(void)t;(void)q;assert(0);return NULL;}
+BaseType_t xQueueSemaphoreTake(QueueHandle_t q,TickType_t t){(void)q;(void)t;assert(0);return 0;}
+BaseType_t xQueueGenericSend(QueueHandle_t q,const void *i,TickType_t t,const BaseType_t p){(void)q;(void)i;(void)t;(void)p;assert(0);return 0;}
+enum a733_clock_result a733_clock_acquire(struct a733_clock_leases *l,uint64_t o,a733_clock_mask_t s,a733_clock_mask_t e,uint64_t d,struct a733_clock_token *t)
+{(void)l;(void)o;(void)s;(void)e;(void)d;(void)t;assert(0);return A733_CLOCK_FAULT;}
+int a733_ce_entropy_native_init(struct a733_ce_entropy *e,const struct a733_ce_config *c,const struct a733_ce_ops *o,void *x,
+    struct a733_clock_leases *l,const struct a733_clock_token *t)
+{(void)e;(void)c;(void)o;(void)x;(void)l;(void)t;assert(0);return 0;}
+/* The profile-level startup takes its scan list from the FreeRTOS heap. */
+void *pvPortMalloc(size_t bytes){return arena_allocate(&allocations,bytes);}
+void vPortFree(void *memory){arena_release(&allocations,memory);}
 int a733_radio_session_take_record(struct a733_radio_session *s,struct aic8800_dispatch_record *d)
 {assert(s==&app.session&&d==&app.diagnostic);return 1;}
 int sunstone_net_submit(struct sunstone_net *s,const struct sunstone_net_request *r,uint64_t *ticket)
@@ -240,11 +252,11 @@ int main(void)
     struct board_radio_config scan_only={.shared=&shared,.chip_id=&id,.admit=admission,.recovery_state=&recovery_state,
         .platform={.lifetime_deadline_us=10000},.session={.owner_task=task,.bootstrap_deadline=500},
         .startup_deadline_us=8000,.scan_timeout_us=1000,.scan_only=1,.first_run_guard=1,
-        .report_memory={report_allocate,report_release,&allocations}};
+        .report_memory={arena_allocate,arena_release,&allocations}};
     atomic_store(&recovery_state,1);atomic_store(&app.failed,0);scheduler=taskSCHEDULER_NOT_STARTED;
     scan_only.scan_timeout_us=0;assert(!board_radio_init(&app,&scan_only)&&!app.self);scan_only.scan_timeout_us=1000;
     scan_only.report_memory.allocate=NULL;assert(!board_radio_init(&app,&scan_only)&&!app.self);
-    scan_only.report_memory.allocate=report_allocate;
+    scan_only.report_memory.allocate=arena_allocate;
     assert(board_radio_init(&app,&scan_only)&&guard_calls==1&&board_radio_report(&app));
     scheduler=taskSCHEDULER_RUNNING;app.session.dispatcher.initialized=1;time_us=100;
     assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&scan_calls==1&&app.stage==SCANNING);
@@ -270,6 +282,27 @@ int main(void)
     unsigned retains_before=entropy_retains;time_us=1100;
     assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED&&entropy_retains==retains_before&&board_radio_report(&app)->head.failed==0);
     a733_radio_report_release(&app.report);
+    /* The profile-level entry: no WPA2 target makes a scan-only session with no crypto engine. */
+    {
+        struct board_radio_profile sp=admitted;sp.version=BOARD_RADIO_PROFILE_SCAN_VERSION;
+        for(unsigned i=0;i<4;++i)sp.firmware_address[i]=0x43010000+0x10000*i; /* The overlap test above altered admitted. */
+        memset(&sp.target,0,sizeof(sp.target));
+        sp.ce_authority=sp.secure_ce_authority=0;memset(sp.ce_evidence,0,sizeof(sp.ce_evidence));
+        memset(sp.entropy_evidence,0,sizeof(sp.entropy_evidence));sp.entropy_record=sp.characterization_record=0;
+        sp.startup_test_record=sp.health_enable_epoch=0;sp.peer_port=sp.request_bytes=sp.response_bytes=0;
+        sp.client_timeout_ticks=0;sp.client_deadline_us=0;sp.association_timeout_us=1000;sp.bootstrap_deadline_us=500;
+        uint8_t sd[32];storage_digest_bytes(&sp,sizeof(sp),sd);
+        assert(board_radio_profile_scan_only(&sp));assert(board_radio_profile_network_valid(&sp));assert(startup_profile_valid(&sp,sd,&id));assert(!board_radio_profile_scan_only(&admitted));
+        sp.association_timeout_us=0;storage_digest_bytes(&sp,sizeof(sp),sd);assert(!startup_profile_valid(&sp,sd,&id));
+        sp.association_timeout_us=1000;sp.tcp_mode=1;storage_digest_bytes(&sp,sizeof(sp),sd);assert(!startup_profile_valid(&sp,sd,&id));
+        sp.tcp_mode=0;storage_digest_bytes(&sp,sizeof(sp),sd);
+        memset(&app,0,sizeof(app));scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);report_used=0;
+        struct board_radio_ce_provider ce={0};uint8_t providers[16]={0};unsigned guards=guard_calls,entropy_at=entropy_calls;
+        assert(board_radio_startup(&app,&shared,&ce,providers,sizeof(providers),&sp,sd,&id,task,(TaskHandle_t)(uintptr_t)3,&recovery_state));
+        assert(app.config.scan_only&&app.config.first_run_guard&&guard_calls==guards+1&&ce.used&&!ce.pool_mutex);
+        assert(app.config.scan_timeout_us==1000&&app.startup_profile==&sp&&board_radio_report(&app)&&entropy_calls==entropy_at);
+        a733_radio_report_release(&app.report);
+    }
     puts("PASS board radio: provider wiring, observed WPA2 checkpoints, copied sockets, repeated exchange timeouts, retained entropy fault and the scan-only staged service");
     return 0;
 }

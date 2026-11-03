@@ -16,6 +16,9 @@ static int platform_id(void *context,uint8_t id[16])
         id[4*i+j]=(uint8_t)(source->words[i]>>(8*j));
     return 1;
 }
+/* The report's scan list comes from the FreeRTOS heap that the network stack already uses. */
+static void *report_allocate(void *context,size_t bytes){(void)context;return pvPortMalloc(bytes);}
+static void report_release(void *context,void *memory){(void)context;vPortFree(memory);}
 int board_radio_init(struct board_radio *r,const struct board_radio_config *input)
 {
     if(!r||r->self||!input||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED||
@@ -325,15 +328,26 @@ static int radio_authorize(void *cookie,const struct a733_radio_platform_config 
     return p->used&&f->platform_authority&&evidence(f->platform_evidence)&&
         token->owner==f->platform.owner&&memcmp(c,&f->platform,sizeof(*c))==0;
 }
+/* A scan-only profile (version 7) needs no entropy qualification, crypto engine,
+ * credential or TCP exchange, and association_timeout_us bounds its scan. Every
+ * other field keeps its meaning. */
+int board_radio_profile_scan_only(const struct board_radio_profile *f)
+{return f&&f->version==BOARD_RADIO_PROFILE_SCAN_VERSION;}
 static int startup_profile_valid(const struct board_radio_profile *f,const uint8_t expected[32],
     const struct board_radio_chip_id *id)
 {
+    unsigned scan=board_radio_profile_scan_only(f);
     if(!f||!expected||!id||
-        f->magic!=BOARD_RADIO_PROFILE_MAGIC||(f->version!=BOARD_RADIO_PROFILE_VERSION&&f->version!=BOARD_RADIO_PROFILE_LISTENER_VERSION)||f->bytes!=sizeof(*f)||!board_radio_profile_network_valid(f)||
-        !f->platform_authority||!f->ce_authority||!f->secure_ce_authority||
-        !evidence(f->platform_evidence)||!evidence(f->ce_evidence)||!evidence(f->entropy_evidence)||
+        f->magic!=BOARD_RADIO_PROFILE_MAGIC||(f->version!=BOARD_RADIO_PROFILE_VERSION&&f->version!=BOARD_RADIO_PROFILE_LISTENER_VERSION&&f->version!=BOARD_RADIO_PROFILE_SCAN_VERSION)||f->bytes!=sizeof(*f)||!board_radio_profile_network_valid(f)||
+        !f->platform_authority||
+        !evidence(f->platform_evidence)||
+        memcmp(f->chip_id,id->words,sizeof(f->chip_id))||!id->secure_read_record)return 0;
+    if(scan){
+        if(f->tcp_mode||!f->association_timeout_us||f->startup_deadline_us<f->bootstrap_deadline_us||
+            f->startup_deadline_us>f->platform.lifetime_deadline_us)return 0;
+    }else if(!f->ce_authority||!f->secure_ce_authority||
+        !evidence(f->ce_evidence)||!evidence(f->entropy_evidence)||
         !f->entropy_record||!f->characterization_record||!f->startup_test_record||!f->health_enable_epoch||
-        memcmp(f->chip_id,id->words,sizeof(f->chip_id))||!id->secure_read_record||
         f->ce.configure_health||f->ce.profile!=A733_CE_TRNG_ONLY||
         !f->peer_port||!f->request_bytes||f->request_bytes>sizeof(f->request)||
         !f->response_bytes||f->response_bytes>sizeof(f->response)||!f->client_timeout_ticks||
@@ -359,6 +373,23 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
         owner==client||!recovery_state||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED||
         !startup_profile_valid(f,expected,id)||!a733_ranges_disjoint(r,sizeof(*r),providers,provider_bytes)||
         !a733_ranges_disjoint(r,sizeof(*r),f,sizeof(*f)))return 0;
+    if(board_radio_profile_scan_only(f)){
+        /* Scan-only: no crypto engine or entropy source is built, and the first-run guard is asked for
+         * until the supply route is confirmed on the board. */
+        p->used=1;p->shared=shared;p->profile=f;
+        struct board_radio_config sc={.shared=shared,.platform=f->platform,.chip_id=id,.recovery_state=recovery_state,
+            .admit=radio_authorize,.admission_context=p,.startup_deadline_us=f->startup_deadline_us,
+            .scan_only=1,.first_run_guard=1,.scan_timeout_us=f->association_timeout_us,
+            .report_memory={report_allocate,report_release,NULL}};
+        sc.session=(struct a733_radio_session_config){.owner_task=owner,.owner=f->session_owner,
+            .bootstrap_deadline=f->bootstrap_deadline_us,.runtime_lease_us=f->runtime_lease_us,
+            .renew_margin_us=f->renew_margin_us,.transport=f->transport,.bootstrap=f->bootstrap,
+            .firmware={.identity=f->radio_identity,.profile=1},.runtime={.binding_timeout=f->binding_timeout_us},.wifi=f->wifi};
+        for(unsigned i=0;i<4;++i)sc.session.firmware.blobs[i]=(struct aic8800_firmware_blob){
+            (const uint8_t *)(uintptr_t)f->firmware_address[i],(size_t)f->firmware_bytes[i]};
+        if(!board_radio_init(r,&sc))return 0;
+        r->startup_profile=f;return 1;
+    }
     p->used=1;p->shared=shared;p->profile=f;p->source=&r->ce_source;
     p->pool_mutex=xSemaphoreCreateMutexStatic(&p->mutex_storage);
     if(!p->pool_mutex)return 0;

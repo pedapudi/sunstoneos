@@ -71,6 +71,9 @@ struct board_radio {
 #define BOARD_RADIO_PROFILE_SUPERVISED_VERSION 4u
 #define BOARD_RADIO_PROFILE_LISTENER_VERSION 5u
 #define BOARD_RADIO_PROFILE_LISTENER_SUPERVISED_VERSION 6u
+/* Scan-only: no WPA2 target, crypto engine or TCP exchange. Version 8 is the supervised upload. */
+#define BOARD_RADIO_PROFILE_SCAN_VERSION 7u
+#define BOARD_RADIO_PROFILE_SCAN_SUPERVISED_VERSION 8u
 #define BOARD_RADIO_PROFILE_BYTES 1872u
 #define BOARD_RADIO_PROFILE_RESPONSE_BYTES_OFFSET 1336u
 #define BOARD_RADIO_PROFILE_NETWORK_OFFSET 1856u
@@ -102,12 +105,15 @@ struct board_radio_profile {
     uint8_t network_dns[4],network_reserved[3];
     uint32_t address_timeout_ticks,lease_cap_ticks;
 };
+/* Profile versions 7 and 8 are scan-only sessions; see radio.c. */
+int board_radio_profile_scan_only(const struct board_radio_profile *);
 /* Wire timing fields are 32-bit ticks, widened into the actual TickType_t.
  * Fixed addressing has no acquisition/lease timer; optional DNS is independent. */
 static inline int board_radio_profile_network_valid(const struct board_radio_profile *p)
 {
     if(!p||p->network_dhcp>1||p->network_reserved[0]||p->network_reserved[1]||p->network_reserved[2])return 0;
-    if(p->version==BOARD_RADIO_PROFILE_VERSION||p->version==BOARD_RADIO_PROFILE_SUPERVISED_VERSION){if(p->tcp_mode)return 0;}
+    if(p->version==BOARD_RADIO_PROFILE_VERSION||p->version==BOARD_RADIO_PROFILE_SUPERVISED_VERSION||
+       p->version==BOARD_RADIO_PROFILE_SCAN_VERSION||p->version==BOARD_RADIO_PROFILE_SCAN_SUPERVISED_VERSION){if(p->tcp_mode)return 0;}
     else if(p->version==BOARD_RADIO_PROFILE_LISTENER_VERSION||p->version==BOARD_RADIO_PROFILE_LISTENER_SUPERVISED_VERSION){
         if(p->tcp_mode!=1||!(p->peer_address[0]|p->peer_address[1]|p->peer_address[2]|p->peer_address[3]))return 0;
     }else return 0;
