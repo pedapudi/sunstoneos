@@ -155,16 +155,45 @@ and names the term the board's stop would name:
     245000000 us; the decoder needs a lifetime of at least 305 s, and the build derives 308 s with the 1 s startup
     and 2 s setup allowance
 
-`submit` builds the session from the frozen inputs with the captured board
-words (`board_images.offline_words`) in place of a live read. The result, or the
-reason the check could not run (an image outside its build directory with no
-cached harness, a write-capable image without its approval record, a missing
-capture), is stored in the queue entry as `preflight` and printed. The harness
-is cached by the image's SHA-256, so the queued copy reuses it. The terms and
-their sub-terms are in [a733_admission_refusal.h](../include/a733_admission_refusal.h);
+`submit` builds the session from the frozen inputs with the recorded board words
+(`board_images.offline_words`) in place of a live read. The result is stored in
+the queue entry as `preflight`, copied into the run's `result.json`, and printed.
+The harness is cached by the image's SHA-256, so the queued copy reuses it. The
+terms and their sub-terms are in
+[a733_admission_refusal.h](../include/a733_admission_refusal.h);
 `tools/a733-crumbs.py` decodes the same table from the breadcrumbs of a board
 stop (`last.admission_refusal`). [admission-preflight.py](../checks/admission-preflight.py)
 checks the refusals of a built image.
+
+The pre-flight is never skipped silently. When it cannot run for an image that
+has a typed session, `submit` and `check` refuse with exit status 2 and queue
+nothing. The reasons are an image the tool cannot inspect, no recorded board
+words on this machine, a session the offline build cannot complete (for
+example a missing NPU entry gate), an image outside its build directory with no
+cached harness, a write-capable image without its approval record, and a plan
+without a host admission. `--no-preflight REASON` records an override: the
+reason is stored in the entry's `preflight.override` and in the result, and the
+run is queued. An empty reason is refused. An image that is not a typed-session
+OS image (a probe, a USB class or rail-helper image, a finite NPU image) has no
+host admission; its entry records `preflight: not applicable` with the reason.
+
+### The recorded board words
+
+The offline build needs board words that a live run reads under the port lock:
+the CPU, thermal and clock state words of the session, and the NPU entry state (the
+three entry gates at `0x070101ac`, `0x020025c0`, `0x020025e0` and the two PCK4
+words at `0x07064000` and `0x07064008`). The runner keeps them in
+`~/.cache/sunstoneos/board-words.json`, each with the run that read it, and
+refreshes the file whenever a run completes: the NPU entry state from the
+result's `npu_on_admission` when its status is ON, and the session state words
+from `live_words` when the run returned. A refused entry state never refreshes
+the file. When the file does not exist, the first pre-flight builds it from the
+finished runs already in the queue. The evidence capture of the CPU thermal state
+is the base the recorded words are laid over. The words are consistency inputs,
+not liveness: admission validates them against each other. A machine with no
+finished run that read the NPU entry state, and so no recorded gate words, has
+to take one fresh read from the board (the first NPU run, with
+`--no-preflight`) before its NPU images pre-flight.
 
 ## Board runs keep their timing while the gate runs
 

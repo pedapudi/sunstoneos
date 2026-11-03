@@ -79,19 +79,82 @@ class AdmissionRefusal(ValueError):
     """The image's own EL3 admission code refuses the session; raised before any device access."""
 
 
-def offline_words():
-    """Captured board words that stand in for a live read when a submission is checked without the board.
+BOARD_WORDS = 'board-words.json'
 
-    The session's thermal fields derive from them (apb1 and its rate); admission validates their consistency, not their
-    liveness. Returns None when the capture is not on this machine."""
-    path = CACHE/'evidence/sol-resume-20261031/port-3-3/cpu-thermal-state/session.json'
+
+def board_words_path():
+    return CACHE/BOARD_WORDS
+
+
+def record_board_words(result, path=None):
+    """Refresh the recorded board words from a completed run's result; returns the words it added or changed.
+
+    Two kinds of word are read from the board under the port lock and kept in the result: the NPU entry state
+    (`npu_on_admission`, kept when its status is ON and validate_npu_on accepts it) and the CPU, thermal and clock state
+    words of the session (`live_words`, kept when the run returned). Each is a fact the board showed, with the run that
+    showed it. The offline session build (offline_words) reads them in place of a live read."""
+    path = path or board_words_path()
+    found = {}
+    proof = result.get('npu_on_admission') or {}
+    if proof.get('status') == 'ON':
+        try:
+            validate_npu_on(proof.get('words', {}))
+            found.update(proof['words'])
+        except (ValueError, KeyError):
+            pass
+    if result.get('outcome') == 'returned':
+        found.update({a: v for a, v in (result.get('live_words') or {}).items() if type(v) is int and 0 <= v <= 0xffffffff})
+    if not found:
+        return {}
+    try:
+        record = json.loads(path.read_text())
+    except (OSError, ValueError):
+        record = {'schema': 'board-words-v1', 'words': {}, 'runs': {}}
+    changed = {a: v for a, v in found.items() if record['words'].get(a) != v}
+    if changed:
+        record['words'].update(found)
+        record['runs'].update({a: {'sid': result.get('sid'), 'time': result.get('time'), 'port': result.get('port')} for a in changed})
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix('.tmp')
+        temporary.write_text(json.dumps(record, indent=1, sort_keys=True))
+        temporary.replace(path)
+    return changed
+
+
+def seed_board_words(entries=None, path=None):
+    """Build the recorded words from the finished runs already on this machine (newest last); used when none are recorded."""
+    root = entries or CACHE/'board-queue/entries'
+    for result in sorted(root.glob('*/run/result.json')):
+        try:
+            record_board_words(json.loads(result.read_text()), path)
+        except (OSError, ValueError):
+            continue
+
+
+def offline_words(path=None):
+    """Board words that stand in for a live read when a submission is checked without the board.
+
+    The session's thermal fields derive from them (apb1 and its rate) and the NPU entry check reads the gates and PCK4
+    state; admission validates their consistency, not their liveness. The base is the CPU thermal capture of the evidence
+    cache; the recorded words (record_board_words, refreshed by the runner from every completed run that read them) are
+    laid over it. Returns None when neither is on this machine."""
+    path = path or board_words_path()
     if not path.is_file():
-        return None
-    words = {}
-    for transaction in json.loads(path.read_text())['transactions']:
-        command = transaction['command']
-        addresses = [int(command[i+1], 16) for i, item in enumerate(command) if item == 'readl']
-        words.update({hex(a): int(v, 16) for a, v in zip(addresses, transaction['stdout'].split())})
+        seed_board_words(path=path)
+    capture = CACHE/'evidence/sol-resume-20261031/port-3-3/cpu-thermal-state/session.json'
+    words = None
+    if capture.is_file():
+        words = {}
+        for transaction in json.loads(capture.read_text())['transactions']:
+            command = transaction['command']
+            addresses = [int(command[i+1], 16) for i, item in enumerate(command) if item == 'readl']
+            words.update({hex(a): int(v, 16) for a, v in zip(addresses, transaction['stdout'].split())})
+    try:
+        recorded = json.loads(path.read_text())['words']
+    except (OSError, ValueError, KeyError):
+        recorded = None
+    if recorded:
+        words = {**(words or {}), **recorded}
     return words
 
 
