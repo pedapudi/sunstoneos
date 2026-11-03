@@ -1077,6 +1077,16 @@
     }
    ]
   },
+  "elf-memory-hazards.py": {
+   "runs": [
+    {
+     "args": [
+      "{elf:sup}",
+      "{elf:ret-gpu}"
+     ]
+    }
+   ]
+  },
   "fatfs-port.py": {
    "runs": [
     {
@@ -2558,7 +2568,6 @@
   "cached-device-reservations.py": "real defect or unexplained failure, reported to the coordinator | a733_cached_devices_prepare() returns 0 against the frozen fixtures at line 137; stale fixture or regression, reported",
   "cold-entry.py": "helper module of a runnable check (not run on its own) | loaded by standalone-boot-loader.py",
   "cpu-runtime-qualification.py": "helper module of a runnable check (not run on its own) | loaded by os-cpu-return-services.py",
-  "elf-memory-hazards.py": "real defect or unexplained failure, reported to the coordinator | the EL3 session seal now reaches SIMD SHA-256 code in the OS image, reported",
   "fault-decode.py": "helper module of a runnable check (not run on its own) | loaded by fault-capture.py",
   "gpu-draw.py": "real defect or unexplained failure, reported to the coordinator | draw_state stays nonzero after the BUSY collect (gpu-draw.c:118); service defect or stale expectation, reported",
   "h264-stream.py": "helper module of a runnable check (not run on its own) | loaded by tools/check-a733-h264-supervised.py",

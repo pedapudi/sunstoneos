@@ -84,7 +84,7 @@ DRIVER_SOURCES = ['drivers/thermal/a733_thermal.c', 'drivers/thermal/a733_therma
                   'drivers/power/a733_power_domains_native.c', 'drivers/pinctrl/a733_pins.c',
                   'drivers/pinctrl/a733_pin_tables.c', 'drivers/pinctrl/a733_pins_native.c',
                   'drivers/gpu/a733_gpu_resources.c', 'drivers/i2c/a733_i2c.c', 'drivers/usb/a733_usb_platform.c',
-                  'drivers/storage/storage_digest.c', 'drivers/storage/storage_digest_ce.S', 'platform/a733/shared_locks.c', 'platform/a733/native_usb.c',
+                  'drivers/storage/storage_digest.c', 'drivers/storage/storage_digest_extensions.c', 'drivers/storage/storage_digest_ce.S', 'platform/a733/shared_locks.c', 'platform/a733/native_usb.c',
                   'platform/a733/counter_clock.c', 'arch/aarch64/device_memory.c', 'runtime/memory.c',
                   'runtime/memmove.c', 'runtime/gpu_call.S']
 # Units that include the A733 platform's boot.h.

@@ -37,7 +37,7 @@ static int sink_consume(void *unused, const uint8_t *data, uint64_t bytes, uint6
     for (uint64_t i = 0; i < bytes / 8; ++i) dst[i] = src[i];
     for (uint64_t i = bytes & ~7ull; i < bytes; ++i) ((uint8_t *)dst)[i] = data[i];
     uint64_t t1 = counter_ticks();
-    if (hashing) storage_digest_add(&digest, data, bytes);
+    if (hashing) storage_digest_add_extensions(&digest, data, bytes);
     uint64_t t2 = counter_ticks();
     copy_ticks += t1 - t0; digest_ticks += t2 - t1;
     loaded_offset += bytes;
