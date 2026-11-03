@@ -29,7 +29,10 @@ struct ss_npu_queue_handle {
     /* One-based producer handle for an aliased input; zero for own read. */
     struct { unsigned handle, output; } alias[SS_NPU_QUEUE_MAX_TENSORS];
 };
-struct ss_npu_queue_group { unsigned members, device_owned; uint64_t last_use; };
+/* A group is the set of handles that share tensors; its members are a bitmap with one bit for each handle. */
+#define SS_NPU_QUEUE_MEMBER_WORDS ((SS_NPU_QUEUE_MAX_HANDLES + 31u) / 32u)
+struct ss_npu_queue_group { uint32_t members[SS_NPU_QUEUE_MEMBER_WORDS]; unsigned device_owned; uint64_t last_use; };
+static inline int ss_npu_queue_member(const struct ss_npu_queue_group *g, unsigned handle) { return g->members[handle / 32u] >> (handle % 32u) & 1u; }
 struct ss_npu_queue_entry { unsigned handle; uint64_t after, timeout; };
 struct ss_npu_queue {
     struct ss_npu_queue_backend backend;

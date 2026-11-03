@@ -69,7 +69,7 @@ int ss_npu_queue_service_edges(struct ss_npu_queue *q,const struct ss_npu_queue_
             if(overlaps(h->read,p->read)||overlaps(h->read,p->write)||
                overlaps(h->write,p->read)||overlaps(h->write,p->write))return 0;
         }
-        h->group=i;q->group[i].members=1u<<i;
+        h->group=i;memset(q->group[i].members,0,sizeof q->group[i].members);q->group[i].members[i/32u]=UINT32_C(1)<<(i%32u);
     }
     for(size_t i=0;i<count;++i){
         const struct ss_npu_queue_edge *e=&edges[i];
@@ -83,7 +83,7 @@ int ss_npu_queue_service_edges(struct ss_npu_queue *q,const struct ss_npu_queue_
         c->dirty[SS_NPU_INPUT][e->input]=(struct ss_npu_dirty_range){0};
         unsigned from=c->group,to=p->group;
         if(from!=to){
-            q->group[to].members|=q->group[from].members;q->group[from].members=0;
+            for(unsigned w=0;w<SS_NPU_QUEUE_MEMBER_WORDS;++w){q->group[to].members[w]|=q->group[from].members[w];q->group[from].members[w]=0;}
             for(unsigned j=0;j<q->handles;++j)if(q->handle[j].group==from)q->handle[j].group=to;
         }
     }
@@ -161,7 +161,7 @@ int ss_npu_queue_submit(struct ss_npu_queue *q,ss_npu_handle handle,struct ss_np
     if(!g->device_owned){
         /* Component membership is fixed at admission. Clean every CPU-dirty
          * member before starting any job that can touch a shared tensor. */
-        for(unsigned i=0;i<q->handles;++i)if(g->members&(1u<<i)){
+        for(unsigned i=0;i<q->handles;++i)if(ss_npu_queue_member(g,i)){
             clean_dirty(q,&q->handle[i],SS_NPU_INPUT);clean_dirty(q,&q->handle[i],SS_NPU_OUTPUT);
         }
         g->device_owned=1;
@@ -221,7 +221,7 @@ int ss_npu_queue_acquire_handle(struct ss_npu_queue *q,ss_npu_handle handle)
     struct ss_npu_queue_group *g=&q->group[q->handle[handle-1].group];
     if(atomic_load_explicit(&q->completed,memory_order_acquire)<g->last_use)return 0;
     if(g->device_owned){
-        for(unsigned h=0;h<q->handles;++h)if(g->members&(1u<<h)){
+        for(unsigned h=0;h<q->handles;++h)if(ss_npu_queue_member(g,h)){
             struct ss_npu_queue_handle *member=&q->handle[h];
             for(unsigned i=0;i<member->outputs;++i)
                 q->backend.cache(q->context,(uintptr_t)member->output[i].data,
