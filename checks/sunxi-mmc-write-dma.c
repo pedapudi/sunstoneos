@@ -412,7 +412,7 @@ int main(void)
         if (h.result.error != faults[i].error) { fprintf(stderr, "%s: error %d expected %d\n", faults[i].name, h.result.error, faults[i].error); return 1; }
         assert(h.borrowed == source && h.result.confirmed_blocks == 0);
         /* A data error in the transfer says where it stopped: the bytes the card side took and the descriptor the IDMAC had reached. */
-        if (faults[i].knob == &m.crc_error) assert(h.result.where_valid && h.result.tbc0 == (uint32_t)m.next_desc * 4096u && h.result.desc_index == m.next_desc && m.next_desc > 0);
+        if (faults[i].knob == &m.crc_error) assert(h.result.where_valid && h.result.tbc0 == (uint32_t)h.result.desc_index * 4096u && h.result.desc_index > 0 && (h.result.rint_late & (1u << 7)));   /* and RINTSTS read again as the fault was raised (the model's extra read moves the DMA on, so the count is compared with the descriptor, not with the model's later position) */    /* and RINTSTS read again as the fault was raised */
         unsigned calls = m.reads_seen, auth = m.authority_calls;
         sunxi_mmc_poll(&h); assert(calls == m.reads_seen && auth == m.authority_calls);                    /* retained: no more access */
         media_untouched_outside(9);

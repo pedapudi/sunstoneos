@@ -464,8 +464,9 @@ static void write_where(struct sunxi_mmc *h)
     uint32_t t0 = 0, t1 = 0, chda = 0;
     int ok = h->config.ops.read32(h->config.context, 0x48, &t0) == 1 && h->config.ops.read32(h->config.context, 0x4c, &t1) == 1;
     int have_chda = h->config.ops.read32(h->config.context, 0x90, &chda) == 1;
-    uint32_t idst = 0;
+    uint32_t idst = 0, late = 0;
     if (h->config.ops.read32(h->config.context, SUNXI_SMHC_IDST, &idst) == 1) h->result.dma_status = idst;
+    if (h->config.ops.read32(h->config.context, 0x38, &late) == 1) h->result.rint_late = late & 0xffffu;   /* the error that the IDST card-error summary shows may have arrived after the first read */
     h->result.tbc0 = t0; h->result.tbc1 = t1; h->result.where_valid = (uint8_t)ok;
     uint32_t base = (uint32_t)(uintptr_t)h->config.dma;
     h->result.desc_index = !have_chda ? 62u : (chda >= base && chda - base < SUNXI_MMC_DMA_DESCRIPTORS * sizeof(struct sunxi_mmc_dma_descriptor)) ?
@@ -727,7 +728,7 @@ static int command_step(struct sunxi_mmc *h)
         if (!interrupts(h)) return 0;
         if (dma_command(h)) {
             if (!rd(h, SUNXI_SMHC_IDST, &h->result.dma_status)) return 0;
-            if (h->result.dma_status & SUNXI_SMHC_IDST_ERRORS) { fault(h, SUNXI_MMC_CONTROLLER); return 0; }
+            if (h->result.dma_status & SUNXI_SMHC_IDST_ERRORS) { if (h->protocol == P_WRITE_DMA && !h->result.where_valid) write_where(h); fault(h, SUNXI_MMC_CONTROLLER); return 0; }
             if (!h->result.first_byte_us) {
                 if (!rd(h, SUNXI_SMHC_CBCR, &v)) return 0;
                 if (v && !since_read(h,&h->result.first_byte_us)) return 0;

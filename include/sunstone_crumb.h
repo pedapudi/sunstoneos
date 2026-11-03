@@ -278,6 +278,18 @@ static inline void sunstone_crumb_fail(uint32_t site, uint32_t value, const void
     __asm__ volatile("mov x0, %0\n mov x1, %1\n mov x2, %2\n svc #0x5c0e"
         :: "r"((uint64_t)site), "r"((uint64_t)value), "r"((uint64_t)(uintptr_t)caller) : "x0", "x1", "x2", "memory");
 }
+/* EL3 only: a failure note from a path that cannot use the SVC. It fills FAULT, ESR, ELR and FAR as the first board failure does, with level 3 in FAULT, and only while FAULT is
+ * still clear: the first fault or failure of a session keeps its record. */
+static inline void sunstone_crumb_el3_fail(uint32_t site, uint32_t value, const void *caller)
+{
+    uint64_t mpidr;
+    __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
+    volatile uint32_t *rtc = (volatile uint32_t *)(uintptr_t)SUNSTONE_CRUMB_RTC;
+    if (rtc[SUNSTONE_CRUMB_FAULT / 4]) return;
+    rtc[SUNSTONE_CRUMB_ESR / 4] = site; rtc[SUNSTONE_CRUMB_ELR / 4] = (uint32_t)(uintptr_t)caller; rtc[SUNSTONE_CRUMB_FAR / 4] = value;
+    rtc[SUNSTONE_CRUMB_FAULT / 4] = SUNSTONE_CRUMB_FAULT_MAGIC << 24 | (uint32_t)((mpidr >> 8) & 7) << 20 | 3u << 16;
+    __asm__ volatile("dsb sy" ::: "memory");
+}
 /* EL1 or EL3 only (the Device map of 0-1 GiB is privileged): restart WDT0. */
 static inline void sunstone_watchdog_restart(void)
 {
@@ -300,5 +312,6 @@ static inline void sunstone_crumb_el3(uint32_t stage, uint32_t value) { (void)st
 static inline void sunstone_crumb_el3_start(uint64_t epoch) { (void)epoch; }
 static inline void sunstone_watchdog_restart(void) {}
 static inline void sunstone_crumb_fail(uint32_t site, uint32_t value, const void *caller) { (void)site; (void)value; (void)caller; }
+static inline void sunstone_crumb_el3_fail(uint32_t site, uint32_t value, const void *caller) { (void)site; (void)value; (void)caller; }
 #endif
 #endif

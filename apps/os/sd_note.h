@@ -3,8 +3,6 @@
 /* What a failed bounded write leaves in the failure record that survives the watchdog reset (apps/os/large_sd.c write_fail, apps/os/sd_owner.c). Stage 34 (and 33) carry where the
  * transfer stopped (os_sd_where_detail and os_sd_where_aux below). The report that a session returns carries the mode log with the same position per fault. */
 #include "sunxi_mmc.h"
-static inline uint64_t os_sd_write_detail(const struct sunxi_mmc *core)
-{ return (uint64_t)(core->result.error & 15u) | (uint64_t)(core->protocol & 63u) << 4 | (uint64_t)(core->result.interrupts & 0xffffu) << 10; }
 /* Where a write fault stopped, for the failure record of stages 33 and 34 (a watchdog reset loses the report). The detail's 26 bits: the raw interrupt status bits 15:1 in 14:0, the bus
  * timing in 16:15, the descriptor the IDMAC had reached in 22:17 (62 unreadable, 63 outside the list) and the core's error (clamped to 7) in 25:23. The record's aux field (15 bits): in
  * 8:0 the 512-byte blocks the card side had taken at the fault (SMHC_TBC0 / 512), in 12:9 the IDMAC error bits (sunxi_mmc_idst4) and in 14:13 the piece's size class
@@ -12,11 +10,19 @@ static inline uint64_t os_sd_write_detail(const struct sunxi_mmc *core)
 static inline uint64_t os_sd_where_detail(const struct sunxi_mmc *core, unsigned timing)
 {
     unsigned e = (unsigned)core->result.error; if (e > 7u) e = 7u;
-    return (uint64_t)((core->result.interrupts >> 1) & 0x7fffu) | (uint64_t)(timing & 3u) << 15 | (uint64_t)(core->result.desc_index & 63u) << 17 | (uint64_t)e << 23;
+    return (uint64_t)(((core->result.interrupts | core->result.rint_late) >> 1) & 0x7fffu) | (uint64_t)(timing & 3u) << 15 | (uint64_t)(core->result.desc_index & 63u) << 17 | (uint64_t)e << 23;
 }
 static inline uint64_t os_sd_where_aux(const struct sunxi_mmc *core)
 {
     return (uint64_t)((core->result.tbc0 / 512u) & 511u) | (uint64_t)sunxi_mmc_idst4(core->result.dma_status) << 9 | (uint64_t)sunxi_mmc_piece_class(core->write_request.blocks) << 13;
+}
+/* The first fault of a session, for the failure record of stages 37 to 40 (26 bits): the status bits 15:1 of both reads of RINTSTS (the one that raised the fault and the one taken as it was
+ * raised) in 14:0, the IDMAC error bits in 18:15, the piece's size class in 20:19, the bus timing in 22:21 and the core's error (clamped to 7) in 25:23. The descriptor is in the aux. */
+static inline uint64_t os_sd_first_fault(const struct sunxi_mmc *core, unsigned timing)
+{
+    unsigned e = (unsigned)core->result.error; if (e > 7u) e = 7u;
+    return (uint64_t)(((core->result.interrupts | core->result.rint_late) >> 1) & 0x7fffu) | (uint64_t)sunxi_mmc_idst4(core->result.dma_status) << 15 |
+           (uint64_t)sunxi_mmc_piece_class(core->write_request.blocks) << 19 | (uint64_t)(timing & 3u) << 21 | (uint64_t)e << 23;
 }
 /* The value word of the record for a stage and a detail, as sd_owner.c's diag_word builds it. */
 static inline uint32_t os_sd_note_value(unsigned stage, uint64_t detail) { return (uint32_t)(stage & 0x3fu) | (uint32_t)(detail & 0x3ffffffu) << 6; }

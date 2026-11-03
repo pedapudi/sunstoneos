@@ -65,8 +65,18 @@ __attribute__((noinline)) void board_fail_at(uint32_t site,uint32_t value,const 
 /* This hook is used by the existing cached EL1/EL3 fatal paths. It only closes
  * atomic admission; those paths record their own fault, and EL3 cannot use
  * the breadcrumb SVC. The independent watchdog owns recovery from stopped CPUs. */
+/* The hook that every EL3 stop and every privileged exit calls (platform/a733-storage-maintenance, continue.S and platform.c), from EL1 or from EL3 on any core. It closes admission
+ * for the whole board, so it records the first failure itself when nothing has: a fatal stop with no record is a defect. From EL1 the note goes through the SVC like board_fail's;
+ * EL3 cannot use the SVC and writes the words directly (sunstone_crumb_el3_fail). The value 0xfc00 | level says which. */
 void a733_storage_maintenance_stop(void)
-{fail_close();a733_typec_revoke(&board.typec.provider);}
+{
+    uint64_t el;
+    __asm__ volatile("mrs %0, CurrentEL":"=r"(el));
+    const uint32_t site=SUNSTONE_CRUMB_FAIL_SITE(BOARD)|SUNSTONE_CRUMB_FAIL_RETURN;
+    if(((el>>2)&3)==3)sunstone_crumb_el3_fail(site,0xfc03,__builtin_return_address(0));
+    else board_fail_note(site,0xfc01,__builtin_return_address(0));
+    fail_close();a733_typec_revoke(&board.typec.provider);
+}
 static _Noreturn void park(void){for(;;)vTaskSuspend(NULL);}
 void vApplicationStackOverflowHook(TaskHandle_t task,char *name)
 {
