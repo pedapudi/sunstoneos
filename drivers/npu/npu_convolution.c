@@ -199,6 +199,16 @@ static size_t allocation_bytes(unsigned i)
     unsigned slot=npu_convolution_allocation[i];
     return slot<NPU_CONVOLUTION_BUFFERS ? npu_convolution_layout[slot].bytes : 0;
 }
+/* The layout's command allocation follows the graph (87afaecf); this service keeps its fixed hardware-maximum command buffer, which
+ * the assembler accepts for the command buffer only. Every other allocation is exactly the layout's. */
+static int allocations_fit(const struct nbg_assembly_plan *p)
+{
+    for(unsigned i=0;i<NBG_ALLOCATION_COUNT;++i){
+        size_t want=allocation_bytes(i),have=p->buffers[i].allocation_bytes;
+        if(i==NBG_ALLOC_COMMAND?(have>want||!have!=!want):have!=want)return 0;
+    }
+    return 1;
+}
 static int profile(const struct nbg_model *m,const struct nbg_assembly_plan *p,
     const struct supported_model *v)
 {
@@ -213,8 +223,7 @@ static int profile(const struct nbg_model *m,const struct nbg_assembly_plan *p,
        v->state_patches!=125 || v->command_body_bytes!=3056 ||
        !nbg_model_tensor(m,NBG_INPUT,0,&input)||!nbg_model_tensor(m,NBG_OUTPUT,0,&output)||
        !tensor_profile(&input,v->input,v->input_bytes)||!tensor_profile(&output,v->output,v->output_bytes))return 0;
-    for(unsigned i=0;i<NBG_ALLOCATION_COUNT;++i)if(p->buffers[i].allocation_bytes!=allocation_bytes(i))return 0;
-    return 1;
+    return allocations_fit(p);
 #elif defined(SUNSTONE_NPU_LARGE_GRAPH)
     if(v->family!=1 || v->nn_operations!=3 || v->descriptor_patches!=6 ||
        v->state_patches!=6 || v->command_body_bytes!=656 ||
@@ -227,8 +236,7 @@ static int profile(const struct nbg_model *m,const struct nbg_assembly_plan *p,
     if(!nbg_model_tensor(m,NBG_INPUT,0,&input)||!nbg_model_tensor(m,NBG_OUTPUT,0,&output)||
        !tensor_profile(&input,v->input,v->input_bytes)||
        !tensor_profile(&output,v->output,v->output_bytes))return 0;
-    for(unsigned i=0;i<NBG_ALLOCATION_COUNT;++i)if(p->buffers[i].allocation_bytes!=allocation_bytes(i))return 0;
-    return 1;
+    return allocations_fit(p);
 #else
     struct nbg_tensor input,output;
     if(m->header.version!=0x20000 || m->header.target!=0x1000003b ||
@@ -241,9 +249,9 @@ static int profile(const struct nbg_model *m,const struct nbg_assembly_plan *p,
        !nbg_model_tensor(m,NBG_INPUT,0,&input) || !nbg_model_tensor(m,NBG_OUTPUT,0,&output) ||
        !tensor_profile(&input,v->input,v->input_bytes) ||
        !tensor_profile(&output,v->output,v->output_bytes))return 0;
+    if(!allocations_fit(p))return 0;
     for(unsigned i=0;i<NBG_ALLOCATION_COUNT;++i)
-        if(p->buffers[i].allocation_bytes!=allocation_bytes(i) ||
-           p->buffers[i].minimum_bytes>allocation_bytes(i) ||
+        if(p->buffers[i].minimum_bytes>allocation_bytes(i) ||
            p->buffers[i].payload_bytes>p->buffers[i].minimum_bytes)return 0;
     return 1;
 #endif

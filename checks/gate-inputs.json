@@ -897,6 +897,28 @@
     }
    ]
   },
+  "cached-device-reservations.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--fixtures",
+      "{cache}/build/memory-architecture/hostchecks/cached-devices/fixtures",
+      "--firmware",
+      "{cache}/evidence/gpu-render-20261017/native1/fixtures/gpu.fw",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
   "camera-application.py": {
    "runs": [
     {
@@ -2565,7 +2587,6 @@
   "a733-radio-session.py": "real defect or unexplained failure, reported to the coordinator | its model aborts at checks/a733-radio-session.c:304 after the retained clock fault; shipped regression or stale check, reported",
   "a733-smp-cached.py": "helper module of a runnable check (not run on its own) | loaded by deadline.py",
   "aic8800-supplicant.py": "helper module of a runnable check (not run on its own) | loaded by aic8800-security.py",
-  "cached-device-reservations.py": "real defect or unexplained failure, reported to the coordinator | a733_cached_devices_prepare() returns 0 against the frozen fixtures at line 137; stale fixture or regression, reported",
   "cold-entry.py": "helper module of a runnable check (not run on its own) | loaded by standalone-boot-loader.py",
   "cpu-runtime-qualification.py": "helper module of a runnable check (not run on its own) | loaded by os-cpu-return-services.py",
   "fault-decode.py": "helper module of a runnable check (not run on its own) | loaded by fault-capture.py",
