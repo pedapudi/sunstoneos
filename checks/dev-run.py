@@ -194,6 +194,7 @@ def queued_decoder(out):
     parser=argparse.ArgumentParser()
     board.run_options(parser, submit=True)
     args=parser.parse_args([str(dev.CONTROL_IMAGE),'--kind','cpu-return','--port','3-1',
+                           '--no-preflight','cached control image; its admission sources are not in this tree',
                            '--decode-application','--decoder',str(decoder),
                            '--reference','docs/board-runner.md#submit-a-frozen-image-and-hypothesis'])
     args.worker='compatibility';args.hypothesis='Frozen decoder inputs retain submission bytes'

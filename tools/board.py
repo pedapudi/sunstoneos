@@ -1139,6 +1139,7 @@ def development(argv=None):
     parser.add_argument('--template', type=Path)
     parser.add_argument('--manifest', type=Path)
     parser.add_argument('--descriptor', type=Path)
+    parser.add_argument('--no-preflight', metavar='REASON')
     parser.add_argument('--approved-by', choices=('coordinator',))
     parser.add_argument('--host-tree', type=Path)
     parser.add_argument('--objcopy', type=Path)
