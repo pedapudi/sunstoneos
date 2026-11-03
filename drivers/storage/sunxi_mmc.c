@@ -207,28 +207,30 @@ int sunxi_mmc_set_ceiling(struct sunxi_mmc *h, unsigned timing)
 }
 /* The ceiling in force: 3 unless lowered (ceil1 holds ceiling + 1, zero for none). */
 static unsigned ceiling_of(const struct sunxi_mmc *h) { return h->ceil1 ? (unsigned)h->ceil1 - 1u : 3u; }
-static void mode_note(struct sunxi_mmc *h, unsigned from, unsigned to, enum sunxi_mmc_mode_reason why)
+static void mode_note(struct sunxi_mmc *h, unsigned from, unsigned to, enum sunxi_mmc_mode_reason why, const struct sunxi_mmc *fault)
 {
     if (h->card.mode_steps < SUNXI_MMC_MODE_LOG)
-        h->card.mode_log[h->card.mode_steps] = (struct sunxi_mmc_mode_event){(uint8_t)from, (uint8_t)to, (uint8_t)why, h->card.signal_1v8};
+        h->card.mode_log[h->card.mode_steps] = (struct sunxi_mmc_mode_event){(uint8_t)from, (uint8_t)to, (uint8_t)why, h->card.signal_1v8,
+            fault ? (uint8_t)fault->result.error : 0u, fault ? (uint8_t)fault->protocol : 0u, fault ? (uint16_t)(fault->result.interrupts & 0xffffu) : 0u};
     if (h->card.mode_steps < 255) ++h->card.mode_steps;
 }
 
 int sunxi_mmc_recoverable(const struct sunxi_mmc *h)
 {
-    return UHS_ON && h && h->initialized && h->state == SUNXI_MMC_FAULT && !h->writing && h->config.kind == SUNXI_MMC_SD &&
+    return UHS_ON && h && h->initialized && h->state == SUNXI_MMC_FAULT && h->config.kind == SUNXI_MMC_SD &&
            h->config.sd_profile == UHS && (h->result.error == SUNXI_MMC_CONTROLLER || h->result.error == SUNXI_MMC_CARD || h->result.error == SUNXI_MMC_TIMEOUT);
 }
 int sunxi_mmc_restart(struct sunxi_mmc *h, unsigned ceiling, enum sunxi_mmc_mode_reason why, uint64_t deadline)
 {
     if (!UHS_ON || !h || !h->initialized || h->entered || h->config.kind != SUNXI_MMC_SD || h->config.sd_profile != UHS || ceiling > 3 ||
-        deadline <= h->last_us || h->writing || !h->config.ops.sd_module || (h->state != SUNXI_MMC_READY && !sunxi_mmc_recoverable(h))) return 0;
+        deadline <= h->last_us || !h->config.ops.sd_module || (h->state != SUNXI_MMC_READY && !sunxi_mmc_recoverable(h))) return 0;
     struct sunxi_mmc fresh = {0};
     fresh.config = h->config; fresh.initialized = 1; fresh.irq_taken = h->irq_taken; fresh.irq_context = h->irq_context; fresh.last_us = h->last_us;
     fresh.card.signal_1v8 = h->card.signal_1v8; fresh.card.mode_steps = h->card.mode_steps;
     for (unsigned i = 0; i < SUNXI_MMC_MODE_LOG; ++i) fresh.card.mode_log[i] = h->card.mode_log[i];
     fresh.reenter = h->card.signal_1v8; fresh.ceil1 = (uint8_t)(ceiling + 1); fresh.sdr25_only = ceiling < 2;
-    mode_note(&fresh, h->card.timing, ceiling < 3 && ceiling < h->card.timing ? ceiling : h->card.timing, why);
+    mode_note(&fresh, h->card.timing, ceiling < 3 && ceiling < h->card.timing ? ceiling : h->card.timing, why,
+              h->state == SUNXI_MMC_FAULT ? h : NULL);
     fresh.restart = 1; fresh.deadline_us = deadline; fresh.state = SUNXI_MMC_IDENTIFY;
     *h = fresh; return 1;
 }
@@ -901,7 +903,7 @@ static void tune_advance(struct sunxi_mmc *h,unsigned passed)
     {
         unsigned from=h->card.timing,to=1;
         if(from==3&&(h->card.group1_support&4))to=2;
-        mode_note(h,from,to,SUNXI_MMC_MODE_NO_WINDOW);
+        mode_note(h,from,to,SUNXI_MMC_MODE_NO_WINDOW,NULL);
         h->ceil1=(uint8_t)(to+1);
         h->card.timing=1;h->card.module_divisor=4;h->after_clock=to==2?2:1;
     }

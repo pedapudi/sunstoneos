@@ -3,6 +3,7 @@
  * fixture's own test main is absent. */
 #include "mmc-platform-fixture.h"
 #include "sunxi-mmc-uhs-card.h"
+#include "sd_note.h"
 #define PERI400 ((1u << 11) | (1u << 2) | (1u << 1))
 #define PERI300 ((1u << 11) | (1u << 9) | (1u << 5) | (1u << 4))
 #include <sys/mman.h>
@@ -170,6 +171,63 @@ static void recover_to_ready(void)
     if (r != A733_MMC_READY) fprintf(stderr, "recover: result %d platform stage %u fault line %u refused %u core state %d error %d protocol %u setup %u restart %u step %u\n", (int)r, m.platform.stage, m.platform.fault_line, m.platform.refused, (int)m.platform.core.state, (int)m.platform.core.result.error, m.platform.core.protocol, m.platform.core.setup, m.platform.core.restart, m.platform.core.command_step);
     assert(r == A733_MMC_READY);
 }
+/* A write that faulted: the core is in FAULT with a write running, the way the platform meets a CRC status error or a busy timeout of a bounded write. The platform
+ * reports it as recoverable, with the failure record's fields intact until a restart; a restart abandons the piece and the owner writes it again. */
+static void write_fault(uint8_t *buffer, enum sunxi_mmc_error error)
+{
+    struct sunxi_mmc *c = &m.platform.core;
+    c->state = SUNXI_MMC_FAULT; c->result.error = error; c->writing = 1; c->dma_write = 1; c->borrowed = buffer; c->borrowed_bytes = 512;
+    c->protocol = 27; c->result.interrupts = 0x8080u;               /* a data CRC error and an end-bit error, as a CRC status failure raises them */
+    enum a733_mmc_platform_result r = uhs_step();
+    assert(r == A733_MMC_ERROR && m.platform.stage == 15 && !m.platform.fault);
+}
+static void write_recovery(uint8_t *buffer)
+{
+    /* A write CRC error at SDR104 steps down to SDR50 and the retry completes (a read is the stand-in for the retried write: the platform's recovery does not tell them apart). */
+    begin(1, 1, 3); u.sdr50 = 1; assert(settle() == A733_MMC_READY); assert(m.platform.core.card.timing == 3);
+    /* The write owner runs in interrupt mode (the third write session on 3-3 stopped because it could not leave it with the core faulted): the platform restart refuses
+     * while the mode is on, and the owner's call to leave it must work in that state. */
+    assert(a733_mmc_platform_irq(&m.platform, 1) && m.platform.irq_mode);
+    write_fault(buffer, SUNXI_MMC_CARD);
+    assert(a733_mmc_platform_recover(&m.platform, 9000000) == A733_MMC_INVALID);        /* the mode is still on */
+    assert(a733_mmc_platform_irq(&m.platform, 0) && !m.platform.irq_mode);
+    m.platform.recover_errors = 0;
+    /* The record's fields while the fault stands: the core's error, protocol step and interrupt status, the pieces written and the timing. */
+    {
+        uint64_t detail = os_sd_write_detail(&m.platform.core), aux = os_sd_write_aux(1234, m.platform.core.card.timing);
+        uint32_t value = os_sd_note_value(34, detail);
+        assert((value & 0x3f) == 34 && ((value >> 6) & 15) == SUNXI_MMC_CARD && ((value >> 10) & 63) == 27 && (value >> 16) == 0x8080u);
+        assert((aux & 0x1fff) == 1234 && ((aux >> 13) & 3) == 3);
+    }
+    recover_to_ready(); assert(m.platform.core.card.timing == 3);                       /* the first error: tuned again */
+    assert(m.platform.core.card.mode_log[0].error == SUNXI_MMC_CARD && m.platform.core.card.mode_log[0].protocol == 27 && m.platform.core.card.mode_log[0].interrupts == 0x8080u);
+    write_fault(buffer, SUNXI_MMC_CARD); recover_to_ready();                           /* the second in a row: one step down */
+    assert(m.platform.core.card.timing == 2 && m.platform.core.card.uhs_outcome == SUNXI_MMC_UHS_SDR50 && m.platform.core.card.mode_steps == 2);
+    assert(m.platform.core.card.mode_log[1].reason == SUNXI_MMC_MODE_ERRORS && m.platform.core.card.mode_log[1].from == 3);
+    /* The session that stepped down and completed still carries both faults: the report word has them, with the core's error and interrupt status of each. */
+    {
+        uint64_t events = os_sd_fault_events(&m.platform.core.card);
+        for (unsigned k = 0; k < 2; ++k) {
+            uint64_t f = events >> (32 * k) & 0x3ffffffu;
+            assert((f & 15) == SUNXI_MMC_CARD && ((f >> 4) & 63) == 27 && (f >> 10) == 0x8080u);
+        }
+    }
+    read_ok(buffer);                                                                    /* the retry completes and clears the count */
+    assert(m.platform.recover_errors == 0 && !m.platform.core.writing);
+    /* Down to the lowest mode (SDR12 on a card at 1.8 V), and a stop there is a clean fault: the record is intact and the platform is not restarted. */
+    for (unsigned i = 0; i < 4; ++i) { write_fault(buffer, SUNXI_MMC_TIMEOUT); recover_to_ready(); }
+    assert(m.platform.core.card.timing == 1 || m.platform.core.card.timing == 0);
+    for (unsigned i = 0; i < 4 && m.platform.core.card.timing; ++i) { write_fault(buffer, SUNXI_MMC_CONTROLLER); recover_to_ready(); }
+    assert(m.platform.core.card.timing == 0 && m.platform.core.card.card_hz == 25000000);
+    write_fault(buffer, SUNXI_MMC_CARD); recover_to_ready();
+    write_fault(buffer, SUNXI_MMC_CARD);
+    assert(a733_mmc_platform_recover(&m.platform, 9000000) == A733_MMC_INVALID);
+    assert(m.platform.core.state == SUNXI_MMC_FAULT && m.platform.core.result.error == SUNXI_MMC_CARD && m.platform.core.result.interrupts == 0x8080u && m.platform.core.protocol == 27);
+    /* An unrecoverable error (a lost register, a deadline in the platform) is not offered for a restart. */
+    begin(1, 1, 3); assert(settle() == A733_MMC_READY);
+    m.platform.core.state = SUNXI_MMC_FAULT; m.platform.core.result.error = SUNXI_MMC_IO; m.platform.core.writing = 1;
+    assert(uhs_step() == A733_MMC_RETAINED);
+}
 static void runtime_recovery(uint8_t *buffer)
 {
     /* One error: identify again at the same ceiling, SDR104 tuned again, with no PF write, CMD11 or bank restore. */
@@ -231,6 +289,7 @@ int main(void)
     assert(!a733_mmc_platform_native_address_selected(SUNXI_MMC_EMMC, A733_MMC_EMMC_SDC2, 0x04022100, 1));
     assert(!a733_mmc_platform_native_address_selected(SUNXI_MMC_EMMC, A733_MMC_EMMC_SDC3, 0x04023100, 0));
     runtime_recovery(buffer);
+    write_recovery(buffer);
     puts("PASS UHS-I platform: one adaptive-mode PF write, 150 MHz from PERI0_300M, 100 MHz without it, "
          "3.3 V high speed in manual PF mode, retained bank timeout and three retained losses after the switch");
     return 0;

@@ -16,7 +16,9 @@
  *      middle of a flush. It never touches PATH. No result is returned: the session is cut;
  *   8  interruption, lifetime 2: mount with recovery (the writer is enabled), report what recovery did, read the interrupted file back against the
  *      stream up to the size the volume holds, and report the size of PATH (written_bytes), which must be unchanged;
- *   2  read back the file at PATH against the stream and report (read-only open).
+ *   2  read back the file at PATH against the stream and report (read-only open);
+ *   9  format the card's FAT32 partition in place (scratch cards only; the bounds admit writes inside the partition and nothing else): zero both FATs and the root
+ *      cluster, set FAT entries 0 to 2, rewrite the FSInfo sector. The boot sector and the geometry are kept. written_bytes is the bytes zeroed; no file is created.
  * The result (512 bytes) carries the write rate, the flush latency percentiles, the wear counters, the owner task's busy
  * time, and the measured CPU clock. Rates are figures only for an image at the approved top operating points. */
 #include "storage_write-app.h"
@@ -146,8 +148,7 @@ struct result {
     uint64_t app_core, irq_cores, owner_cores, caller_cores, sha_ce;   /* irq_cores: mask | stray entries << 32 */
     uint64_t diag[4], isar0, observed;               /* where an open or enable stopped (ss_storage_diagnostic); the core's ISAR0 */
     uint32_t irq_entries[8];                         /* handler entries of INTID 193 per core */
-    uint64_t sdmode[4];                              /* the bus speed mode and its steps (ss_storage_mode; apps/os/large_sd.c, os_sd_mode) */
-    uint64_t reserved[512 / 8 - 36 - FWR_HIST / 2 - 5 - 6 - 4 - 4];
+    uint64_t sdmode[5];                              /* the bus speed mode and its steps (ss_storage_mode; apps/os/large_sd.c, os_sd_mode) */
 };
 _Static_assert(sizeof(struct result) == 512, "result is the manifest's output_limit");
 static struct result r;
@@ -259,6 +260,55 @@ static void collect(void)
     }
 }
 
+static uint32_t le32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
+static void put32(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24); }
+
+/* Zero `count` sectors from `first` with the flush buffer; returns 1 on success. */
+static int zero_sectors(uint64_t first, uint64_t count)
+{
+    uint32_t piece = (uint32_t)(scratch_bytes / 512u); if (piece > 256u) piece = 256u;
+    memset(scratch, 0, (size_t)piece * 512u);
+    for (uint64_t done = 0; done < count; ) {
+        uint32_t n = count - done < piece ? (uint32_t)(count - done) : piece;
+        if (device.write(device.context, first + done, n, scratch) != 1) return 0;
+        done += n; ss_progress();
+    }
+    return 1;
+}
+
+/* Mode 9: reformat the FAT32 partition at base (scratch cards). Returns 0, or an error status with r.detail set. */
+static int format_partition(uint64_t base, uint64_t sectors)
+{
+    static uint8_t boot[512] __attribute__((aligned(64)));
+    if (device.read(device.context, base, 1, boot) != 1 || boot[510] != 0x55 || boot[511] != 0xaa) return E_MOUNT;
+    uint32_t bps = boot[11] | boot[12] << 8, spc = boot[13], reserved = boot[14] | boot[15] << 8, nfats = boot[16], fat16 = boot[22] | boot[23] << 8;
+    uint32_t fatsz = le32(boot + 36), root = le32(boot + 44), fsinfo = boot[48] | boot[49] << 8;
+    uint64_t data = (uint64_t)reserved + (uint64_t)nfats * fatsz;
+    if (bps != 512 || !spc || (spc & (spc - 1)) || !reserved || nfats < 1 || nfats > 2 || fat16 || !fatsz || root < 2 || data + spc > sectors) return E_MOUNT;
+    if (fsinfo >= reserved || !fsinfo) fsinfo = 0;
+    uint64_t zeroed = 0;
+    for (uint32_t f = 0; f < nfats; ++f) {
+        if (!zero_sectors(base + reserved + (uint64_t)f * fatsz, fatsz)) { r.detail = f + 1; return E_WRITE; }
+        zeroed += (uint64_t)fatsz * 512u;
+    }
+    memset(scratch, 0, 512);
+    put32(scratch, 0x0ffffff8u); put32(scratch + 4, 0x0fffffffu); put32(scratch + 4 * root, 0x0fffffffu);   /* the media entry, the clean flag, the root cluster's end */
+    for (uint32_t f = 0; f < nfats; ++f)
+        if (device.write(device.context, base + reserved + (uint64_t)f * fatsz, 1, scratch) != 1) { r.detail = 8 + f; return E_WRITE; }
+    if (!zero_sectors(base + data + (uint64_t)(root - 2) * spc, spc)) { r.detail = 16; return E_WRITE; }
+    zeroed += (uint64_t)spc * 512u;
+    if (fsinfo) {
+        memset(scratch, 0, 512);
+        uint32_t total = le32(boot + 32), clusters = total > data ? (uint32_t)((total - data) / spc) : 0;
+        put32(scratch, 0x41615252u); put32(scratch + 484, 0x61417272u); put32(scratch + 488, clusters - 1); put32(scratch + 492, 3); put32(scratch + 508, 0xaa550000u);   /* the root cluster is the only one in use */
+        if (device.write(device.context, base + fsinfo, 1, scratch) != 1) { r.detail = 17; return E_WRITE; }
+    }
+    memcpy(boot + 71, "NO NAME    ", 11);                           /* the volume label entry went with the root cluster */
+    if (device.write(device.context, base, 1, boot) != 1) { r.detail = 18; return E_WRITE; }
+    r.written_bytes = zeroed;
+    return OK;
+}
+
 void storage_write_main(const struct ss_grant *grant)
 {
     const struct ss_span *bounds = &grant->regions[STORAGE_WRITE_REGION_BOUNDS], *mode = &grant->regions[STORAGE_WRITE_REGION_MODE],
@@ -306,6 +356,7 @@ void storage_write_main(const struct ss_grant *grant)
     if (!mbr_partition(&base, &sectors)) { r.status = E_MBR; finish_report(); }
     guard_set(grant);
     uint64_t t_start = ss_counter_ticks();
+    if (mode_id == 9) { r.status = (uint64_t)format_partition(base, sectors); collect(); r.total_ticks = ss_counter_ticks() - t_start; finish_report(); }
     int rc = mount(base, sectors);
     if (rc) { r.status = E_MOUNT; r.detail = (uint64_t)-rc; finish_report(); }
     if (mode_id == 2 || mode_id == 3) {                              /* read back the finished file: any size (2) or exactly FILE_BYTES (3) */
