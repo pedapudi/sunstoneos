@@ -518,6 +518,14 @@ Condition: one run on port 3-1, no card, development DRAM mode, 852 MHz at 800 m
   the service started. The main task did not reach its first `ss_progress` call.
 - **Normal return.** The change alters timing and the cause is a race. The receipt then decides.
 
+**Result.** The run (entry `1793664765522129781-2eeb4b7e`) ended at the cutoff with first failure `0x73c`, not `0x75f`, so the
+session was not waiting in `ss_finish`. The record names the wait. Its value is `0x41089608`, the return address of the
+`ss_progress` call in the first loop of `main_entry` (`apps/os/application.c`), which waits until `ss_live()` is not zero. That
+loop never ended, so the application's main entry never ran. `ss_live()` stays zero while `ss_grant()` is null or the USB service
+task has not marked the transport ready (`os_application_usb_ready`, called first thing by `board_usb0_task` in this profile). The
+NPU state in the site's auxiliary field, `0x41cb`, says the service started and became active, the SDK was never opened, and no
+report was published. The next image must say which of the two terms of `ss_live()` is unmet.
+
 ### Predicted board run of the heap
 
 Hypothesis: with the OS image built with the address-test decode check
