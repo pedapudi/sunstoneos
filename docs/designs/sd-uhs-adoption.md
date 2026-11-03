@@ -207,3 +207,8 @@ sends CMD11, moves the PF bank to 1.8 V, identifies at 1.8 V, runs the mode ladd
 | Throughput | 128 KiB per request in 1.9 to 2.8 ms (47 to 68 MB/s); 64 reads without error; no slow requests expected in this region |
 | Close | bank back at 3.3 V, clocks and pins restored, normal return; the card at 1.8 V afterwards |
 | Risk | the card has never been at 1.8 V. About one chance in five that CMD11 or the sweep behaves unlike 3-3's card (a stop at the switch, or no window). Any stop returns the board to FEL by watchdog reset; the card stays at 3.3 V if CMD11 was not completed, or at 1.8 V if it was. No power cycle is needed for either |
+
+## Prediction for the capture of 3-3's partition layout (written before the run)
+
+Run: the read-only probe in mode 0 (3.3 V host, high speed) on 3-3 with the card at 1.8 V, capturing sector 0 and eight sectors at 2048, 8192 and 32768 (the usual partition starts), the first step of the write procedure (the host backup and a fresh capture). It reads the MBR and the boot sector at the start the MBR names;
+predicted: sector 0 is an MBR with one FAT32 entry (type 0x0B or 0x0C) starting at 8192 or 32768 (the 3-1 card starts at 32768), the boot sector at that start has 512 bytes per sector, a power-of-two cluster size and two FATs, and the card reads as it did in the earlier mode 0 run (OCR `0xc0ff8000`, support `0x801f`, normal return, the card unchanged at 1.8 V).
