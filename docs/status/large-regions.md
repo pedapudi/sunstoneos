@@ -78,3 +78,12 @@ Board results are records in `docs/evidence/memory-dma.jsonl` and `docs/evidence
 <!-- evidence-table:begin -->
 No board result is recorded in `docs/evidence/large-regions.jsonl`.
 <!-- evidence-table:end -->
+
+Broadcast TLB invalidation (memory-limits work, step 7). Twenty soaks of 25 s on port 3-1, each 250 000 control periods at 10 kHz under the
+mimus recognition, measured the cost of a broadcast invalidation issued from a Cortex-A55 core 1 000 times per second. `TLBI VAE1IS` and `TLBI
+ASIDE1IS` raised the control path's maximum from 3.33 us (no task) to 3.54 us at most; `TLBI VMALLE1IS` gave one soak of six at 5.62 us, with a jitter of
+5.38 us against the bound of 5 us, which the data neither tie to the invalidation nor exclude. The page and ASID forms are allowed as the fallback of the
+release protocol up to that rate; the all-entries form is not. Unmeasured: 100 per second, entries in use by the receivers, receivers on the Cortex-A76
+cores. Evidence: `docs/designs/application-memory-layout.md`, "Predicted board soaks of the broadcast invalidation on the control path" and its result;
+the diagnostic with the wake metrics (`apps/latency`, `SUNSTONE_LATENCY_TLBI`) could not resolve the stall.
+

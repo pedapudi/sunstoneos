@@ -599,6 +599,13 @@ def main():
         application = image.application('notify-test', ['checks/qemu-os/notify-main.c'], ROOT / 'checks/qemu-os/notify-manifest.json')
         return image.build(application)
 
+    def build_tlbi(name, form, period):
+        """The invalidation task of apps/os/tlbi-issuer.c, on core 5."""
+        image = Image(out / name, extra_defines=['-DSUNSTONE_TLBI_ISSUER=%d' % form, '-DSUNSTONE_TLBI_PERIOD_TICKS=%d' % period,
+                                                 '-DSUNSTONE_TLBI_CORE=5'], extra_sources=['apps/os/tlbi-issuer.c'])
+        application = image.application('tlbi-test', ['checks/qemu-os/tlbi-main.c'], ROOT / 'checks/qemu-os/tlbi-manifest.json')
+        return image.build(application)
+
     def build_wake_race():
         """An application whose waits are given their event between the test and the registration."""
         image = Image(out / 'build-wake-race', extra_sources=['checks/qemu-os/wake-race.c'])
@@ -682,6 +689,7 @@ def main():
         slot1_elf = pool.submit(build_slot1).result()
         heap_elf, heap_big_elf, heap_early_elf = heap_elf.result(), heap_big_elf.result(), heap_early.result()
         notify_elf = pool.submit(build_notify).result()
+        tlbi_elfs = {k: pool.submit(build_tlbi, 'build-tlbi-%d-%d' % k, *k).result() for k in ((0, 1), (1, 1), (2, 10), (3, 1))}
         upper_elf = pool.submit(build_upper).result()
         usb_race_elf = pool.submit(build_usb_race).result()
         wake_race_elf = pool.submit(build_wake_race).result()
@@ -1029,6 +1037,17 @@ def main():
               'the application did not start after the transport became ready between its test and its wait')
     c.require(c.finished is not None and c.finished['status'] == '1', 'the application did not finish')
 
+    # The invalidation task of the scheduler soak (apps/os/tlbi-issuer.c): one wake per period on core 5, at the EL1 the TLBI needs,
+    # an invalidation at each wake in the forms 1 to 3 and none in the control (form 0).
+    for (form, period), elf in tlbi_elfs.items():
+        c = run_case('tlbi-issuer-form-%d-period-%d' % (form, period), elf, scenario(usb_ready_ms=usb_delay_ms), bytes(4096))
+        c.clean()
+        tag, wakes, issued, core, largest = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
+        expected = 200 // period
+        c.require(tag == 0x54424c49 and core == 5 and expected * 0.6 <= wakes <= expected * 1.2,
+                  'form %d: %d wakes on core %d in 200 ms, expected about %d on core 5' % (form, wakes, core, expected))
+        c.require(issued == (wakes if form else 0) and (largest > 0) == bool(form),
+                  'form %d: %d invalidations for %d wakes, largest %d ticks' % (form, issued, wakes, largest))
     # An OS wake-up between the test and the registration of the wait is kept: a host request offered there, and a USB
     # state change there, end ss_host_recv and ss_usb_wait at the event and not at their two-second timeout.
     for mode, what in ((0, 'host-request'), (1, 'usb-change')):

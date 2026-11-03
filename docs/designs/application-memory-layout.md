@@ -671,6 +671,76 @@ which the runner compared as bytes. Entry `1793665683000181061-de31a526` repeats
 `returned`, with the same receipt, in 5.9 s of launch. The pool at `0x78600000` works: the failed run of the pool was the lost
 wake-up, not the pool. The NPU's reach above `0x48000000` is shown by those seven graphs (a pool at the top of the slot 1 area).
 
+### Predicted board soaks of the broadcast invalidation on the control path (step 7, second measurement)
+
+The scheduler latency diagnostic cannot resolve a stall of a few microseconds (its wake times spread over tens of microseconds). The
+scheduler's soak can: the mimus recognition on eight workers repeats for 25 s on the partitioned kernel with control interrupts
+above the API mask, the control path at 10 kHz on core 4 (about 250 000 periods per soak, maximum 3.1 to 3.7 us today) and the task
+path at 1, 2 and 4 kHz on cores 1 to 3. The image is that soak, built from this tree with the control and task code unchanged, and one
+addition: `SUNSTONE_TLBI_ISSUER` (`apps/os/tlbi-issuer.c`) adds an OS task on core 5, a Cortex-A55 of the cluster that holds the
+interrupt cores, that sleeps between invalidations and issues one at each wake, followed by `DSB ISH`. Forms: 1 `TLBI VAE1IS`, 2
+`TLBI ASIDE1IS`, 3 `TLBI VMALLE1IS`; form 0 is the same task waking and issuing nothing, so that the wake of the task is separated
+from the instruction. A further image has no task.
+
+Rates. A region release or a reuse of a released extent is one request to the ledger's service task, which edits two table pages and
+issues one invalidation. An acquire also zeroes 2 MiB, about 0.4 ms at the 5 GB/s read rate of the DRAM measurement (the write rate is
+not measured), so the ledger cannot serve more than about 2 400 acquire-release pairs per second. The task runs at 1 000 per second,
+one per kernel tick, which is the finest rate the kernel offers and lies within a factor of 2.4 of that bound; and at 100 per second,
+an application that releases one region per 10 ms control cycle. At 1 000 per second a soak sees 25 000 invalidations, and an
+invalidation that held a core for 5 us would overlap 0.5% of the control path's periods, over a thousand per soak.
+
+Hypothesis: a broadcast invalidation holds the other cores for less than 2 us, so the control path's maximum latency rises by less
+than 2 us over the form-0 control in every soak of every form, at both rates, and its jitter stays within the 5 us bound.
+
+- **Expected.** Every soak returns exact with `missed=0 gaps=0 dropped=0`. The control path's `lat_max_ns` is 2.8 to 3.8 us in the
+  controls and at most 5.8 us in every soak of the forms (the control's largest maximum plus 2 us); `lat_p9999_ns` stays within 0.5 us of
+  the controls; `jit_max_ns` at most 5 us. The task path's maxima (22 to 31 us for the three rates) stay within the spread of the
+  controls plus 5 us. The recognition time stays within 0.5% of the controls. Two soaks of the image without the task and three of
+  form 0 give the spread to compare with, three soaks per form at 1 000 per second and two per form at 100 per second give the
+  forms.
+- **A different result and what it means.** A control path maximum above 5.8 us in every soak of a form, or a rise of the 99.99th
+  percentile of more than 0.5 us, means the invalidation holds the other cores of the cluster for that long, and the design's
+  broadcast form is out: the local form on the cores of the application, or the deferred reuse. A rise only in the task path's
+  maximum would show the invalidation lengthening kernel spans and is inconclusive against that path's own spread. A difference
+  between the image without the task and form 0 is the cost of the task's wake, not of the instruction.
+
+**Result of the soaks (port 3-1; 21 soaks of 25 s at 1 000 invalidations per second submitted, 20 usable).** All returned exact
+(`FORMATTED There was silence.`) with `missed=0 gaps=0 dropped=0`, 250 000 control periods each, 5.0 million in all. One soak
+(form 1, first attempt) was a host error, the USB node vanished in the DRAM stage, and was repeated. The first five entries carry an
+expectation file that the runner compared as bytes, so the queue labels all of them `result-mismatch`; the output of each is the one
+the prediction names and the figures below come from it. Control path, core 4, in microseconds:
+
+| Image | Soaks | `lat_max` of each soak | `lat_p9999` | `jit_max` of each soak | Recognition (ms) |
+| --- | --- | --- | --- | --- | --- |
+| No task | 2 | 3.33 3.29 | 2.83 to 3.00 | 3.04 3.04 | 110.72 to 110.74 |
+| Form 0, wake only | 6 | 3.08 3.12 3.12 3.25 3.21 3.29 | 2.83 to 3.00 | 2.79 to 3.04 | 110.68 to 110.82 |
+| Form 1, `TLBI VAE1IS` | 3 | 3.42 3.33 3.17 | 2.83 to 3.00 | 3.12 3.04 2.92 | 110.87 to 110.99 |
+| Form 2, `TLBI ASIDE1IS` | 3 | 3.54 3.50 3.21 | 3.00 | 3.25 3.21 2.92 | 110.95 to 110.97 |
+| Form 3, `TLBI VMALLE1IS` | 6 | 3.08 3.38 **5.62** 3.17 3.33 3.38 | 2.83 to 3.00 | 2.79 3.12 **5.38** 2.92 3.04 3.12 | 110.88 to 111.03 |
+
+Against the prediction. Every maximum lies within 2 us of the largest control maximum (3.29 us) except the one soak of form 3 at
+5.62 us, which exceeds that by 2.3 us and stays under the 5.8 us the prediction states; the 99.99th percentile stays within 0.5 us
+of the controls in all of them; recognition time is 0.1 to 0.3% above the controls, inside the 0.5% allowed; the task path maxima
+(15 to 33 us at the three rates) lie inside the spread of the controls (17 to 31 us). The prediction fails in one place: that
+soak's control path jitter was 5.38 us against the bound of 5 us. Its two largest latencies (5.625 us, 7 s apart) were both taken
+with the interrupted code at the same address, in `ssKernelObjectResume` of the partitioned kernel's object section; no other soak
+of any image has a latency above 3.6 us. The soak is one of 12 with an invalidation (one of 6 with form 3) against none of 8 without
+one (Fisher's exact test, one-sided, p of 0.43 for form 3 against the eight controls), so the data neither show nor exclude an effect
+of that form. The earlier pooled soaks of the same path without any invalidation include a 12.8 us maximum over five soaks, so
+single outliers of this size occur without one.
+
+Decision. At 1 000 invalidations per second from one Cortex-A55 core, the page form (`TLBI VAE1IS`) and the ASID form
+(`TLBI ASIDE1IS`) cost the control path at 10 kHz on a neighbouring core nothing that 750 000 periods per form can show: the
+largest maximum is 3.54 us against 3.33 us without a task, and the criterion of this design (a 99.9th percentile above 5 us or any
+worst case above 10 us selects the local or deferred form) is not met. The broadcast form is therefore allowed as the fallback of the
+release protocol, in these two forms, at up to 1 000 per second; the order of the protocol stays: deferred reuse first, the local
+form second. `TLBI VMALLE1IS` is not used by the protocol and is not cleared: it met the criterion in all six soaks but gave the one
+jitter value above the bound. The task path's wake latency of 15 to 33 us is dominated by the kernel's own spans, and no
+invalidation form moved it outside the controls. Not measured: 100 invalidations per second (the soaks were withdrawn; at that rate
+a stall costs a tenth of the periods), invalidations whose entries the receiving cores are using (the ASID and page used here are
+not the ones the recognition touches, so the receivers lose nothing and refill nothing), and receivers on the Cortex-A76 cores,
+which ran recognition workers but no control interrupt.
+
 ### Predicted board runs of the broadcast invalidation (step 7)
 
 The design limits where a broadcast TLB invalidation can happen and requires a measurement before one is used. The scheduler latency
@@ -775,4 +845,5 @@ What the run does not show: the rate at which `_sbrk` zeroes memory (the result 
 - **Branch thunks and code model.** The thunk check must run for the application's real size. An application that places more than 4 GiB of bss in link-time symbols is outside the code model; it uses the heap or a region instead.
 - **Fragmentation of an identity-mapped space.** No remapping exists, so a long-running application can fail a large request that enough free memory in total could serve.
 - **ASIDs.** The pool hands out 255 and never returns one ([large-regions status](../status/large-regions.md), items 7 and 8). Release of an application space is out of scope here.
-- **Real-time cost of invalidation.** The effect of a TLB invalidation on other cores' worst-case latency is unmeasured. Step 7 measures it at 10 kHz with the scheduler latency harness before any broadcast form is used (see the subsection on the real-time cost).
+- **Real-time cost of invalidation.** Measured at 1 000 per second from a Cortex-A55 core (step 7, the soaks above): the page and ASID forms stay inside the criterion on the control path of a neighbouring core, and the all-entries form gave one jitter value of 5.38 us in six soaks. Open: the rate of 100 per second, invalidations of entries that the receiving cores use, and receivers on the Cortex-A76 cores.
+- **Left open by the memory-limits work.** The application image area (step 6: renamed application sections, `layout.ld`, boot-table text mapping at EL1 and EL0, stage-2 loader extents) is not started. Run-time requests (step 7: the SDK call, ledger pages, table-page extents and the release protocol) are not started; the invalidation measurement only bounds their cost. Taking `heap_link_max` away so that every heap comes from the ledger (the second part of step 2b) waits for a board run of the mimus image. A preserving run above 4 GiB is refused by design, so a region there is never backed up. The hardware bounds of the NPU above `0x48000000` are shown for one pool of 10 MiB; a pool of several hundred megabytes and the 4 GiB span rule are host-checked only.
