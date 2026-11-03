@@ -18,7 +18,7 @@ Native SDC1 CMD52/CMD53 transport, immutable firmware staging, AIC8800D80 bootst
 
 ## Open work
 
-1. Establish the fitted supply topology: the schematic DCDC8 conflicts with the DTS BLDO5 and CLDO1.
+1. Confirm the supply route on the board. The native platform follows the vendor sequence: BLDO5 and CLDO1 at 1.8 V, with DCDC8 outside the radio path ([design](../designs/radio-vendor-power-sequence.md)). One read-only run of the PG detected voltage confirms it; the first rail-enabling run needs approval.
 2. Qualify radio identity, firmware loading, RF traffic, coexistence and headset interoperability.
 3. Add capability reads, CMD5 and CMD11 voltage negotiation, drive and speed selection, PERI1 UHS clocks, CMD19 tuning and INTID194 completion for top-rate SDIO.
 4. Complete WPA3 SAE: the arithmetic exists, while external authentication, protected management frames and SAE association remain.

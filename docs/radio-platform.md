@@ -78,15 +78,16 @@ addition to the shared fabric. No rate follows from a token alone.
 
 ## Rail observations require authenticated board wiring
 
-The schematic and device tree do not supply one consistent radio I/O rail map.
-Schematic V1.2 sheet 6 connects DCDC1 to `VCC-3V3-WIFI` and DCDC8 to the global
-1.8 V supply. Sheets 9 and 14 connect PG/PM and module VDDIO to that supply.
-The board device tree instead names BLDO5 and CLDO1 for PG/PM power.
+The vendor kernel powers the module from DCDC1 (VBAT, always on at 3.3 V) and
+from BLDO5 and CLDO1 at 1.8 V (the PG and PM pin banks). The topology fields
+therefore admit one map: VBAT is DCDC1, PG is BLDO5, PM is CLDO1 and module
+VDDIO is BLDO5 or CLDO1. DCDC8 is refused. The
+[power sequence design](designs/radio-vendor-power-sequence.md) gives the
+sources, including why DCDC8 is outside the radio supply path.
 
-Physical admission must identify the installed board topology and its VBAT,
-PG, PM and module VDDIO supplies. The binding verifies only that admitted map.
-DCDC1 must be enabled at a programmed 3.3 V; each admitted I/O supply must be
-enabled at a programmed 1.8 V. The selected rail scopes remain stable for the
+The binding observes DCDC1 enabled at a programmed 3.3 V and CLDO1 enabled at
+1.8 V. BLDO5 must be enabled at 1.8 V or be off; if it is off, the binding
+powers it on as described below. The rail lease holds BLDO5 exclusively for the
 complete radio lifetime. Register values establish programmed settings, not
 measured voltages or electrical connectivity.
 
@@ -98,9 +99,16 @@ ownership of the PMIC pins or executes the early boot blocking reader.
 
 The PMIC address is `0x36`. The AXP8191 profile requires page zero, chip ID 3
 and revision zero. DCDC1 uses enable register `0x10` bit 0 and selector `0x12`.
-DCDC8 uses `0x10` bit 7 and selector `0x19`. BLDO5 uses `0x21` bit 2 and
-selector `0x2e`; CLDO1 uses `0x21` bit 3 and selector `0x2f`.
-The binding performs no PMIC voltage or enable writes.
+BLDO5 uses `0x21` bit 2 and selector `0x2e`; CLDO1 uses `0x21` bit 3 and
+selector `0x2f`. Selector code 13 is 1.8 V on both.
+
+When BLDO5 is off, the binding acquires the pins first, so that PM1 is low,
+and then submits `a733_pmic_submit_power_on()`. The provider writes selector
+code 13 (bits 7:5 preserved), reads it back, sets enable bit 2 and reads that
+back. A mismatch retains the request and the leases, and PM1 stays low. The
+provider refuses without a write when BLDO5 is already on. It never writes
+CLDO1, which also supplies the LPDDR 1.8 V rail, or DCDC1. After the write the
+binding reads all three supplies again before the 10 ms interval starts.
 
 Card operating-condition register (OCR) admission is limited to bits 20 and 21, the ranges bordering 3.3 V.
 The existing card worker intersects that mask with the card's response.
@@ -150,9 +158,11 @@ PM2 and requires its inherited reset/oscillator behavior to be suitable.
 Schematic sheet 14 labels the PM2-derived net `HOST_WAKE_WLAN`. R61 connects it
 to module pin 34, `BT_RST_N`; R1130 connects it to pin 23, `LPO`. Both are drawn
 as zero-ohm resistors. The schematic does not establish their fitted population
-or the module's electrical response. Likewise, the schematic's DCDC8 supply
-map and the DTS's BLDO5/CLDO1 declarations cannot identify the fitted assembly.
-No default rail map or PM2 level follows from these sources.
+or the module's electrical response. The schematic does not draw the source of `VCCIO_1V8_WIFI`, and it gives
+`VCC-PG` no supply; the vendor device tree names BLDO5 and CLDO1. The
+[power sequence design](designs/radio-vendor-power-sequence.md) describes a
+read-only observation of the detected PG voltage that confirms the reading.
+No PM2 level follows from these sources.
 
 The normal PM ownership contract avoids an unrelated requirement to recover
 dormant latch history. Its effect on each neighboring pin is explicit:

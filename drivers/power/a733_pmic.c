@@ -12,6 +12,11 @@ enum { P_START,P_WAIT_START,P_ADDRESS,P_WAIT_ADDRESS,P_REGISTER,P_WAIT_REGISTER,
     P_RESTART,P_WAIT_RESTART,P_READ_ADDRESS,P_WAIT_READ_ADDRESS,P_RECEIVE,
     P_WAIT_RECEIVE,P_DATA,P_STOP,P_WAIT_STOP,P_PUBLISH,P_WRITE,P_WAIT_WRITE };
 #define WRITE_INDEX 6u /* Byte index of the selector write; 7 reads it back. */
+#define ENABLE_INDEX 8u /* Power-on requests then write the enable byte; 9 reads it back. */
+/* Request kinds held in the slot's write field. */
+enum { REQUEST_READ,REQUEST_SELECTOR,REQUEST_POWER_ON };
+#define RADIO_IO_SELECTOR 13u /* BLDO5 code for 1.8 V: 500 mV + 100 mV * 13. */
+static unsigned request_bytes(unsigned kind){return kind==REQUEST_POWER_ON ? 10u : kind==REQUEST_SELECTOR ? 8u : 6u;}
 struct profile { uint8_t enable,bit,selector,mask; };
 static int profile(enum a733_rail rail,struct profile *p)
 {
@@ -248,7 +253,9 @@ static enum a733_pmic_status submit(struct a733_pmic *p,uint64_t owner,
     const struct a733_rail_token parent=*rail;
     if(!owner || parent.owner!=owner || !profile(which,&f) ||
        !((write ? parent.exclusive : parent.shared|parent.exclusive)&A733_RAIL_BIT(which)) ||
-       (write && (!writable(which,target) || expected>f.mask)) || !outside(p,rail,sizeof(*rail)) ||
+       (write==REQUEST_SELECTOR && (!writable(which,target) || expected>f.mask)) ||
+       (write==REQUEST_POWER_ON && (which!=A733_RAIL_BLDO5 || target!=RADIO_IO_SELECTOR || expected)) ||
+       !outside(p,rail,sizeof(*rail)) ||
        !outside(p,out,sizeof(*out)) || !a733_ranges_disjoint(rail,sizeof(*rail),out,sizeof(*out)))return A733_PMIC_INVALID;
     if(!enter(p))return A733_PMIC_BUSY;
     if(p->failed)return leave(p,A733_PMIC_RETAINED);
@@ -277,7 +284,11 @@ enum a733_pmic_status a733_pmic_submit(struct a733_pmic *p,uint64_t owner,
 enum a733_pmic_status a733_pmic_submit_write(struct a733_pmic *p,uint64_t owner,
     const struct a733_rail_token *rail,enum a733_rail which,uint8_t expected,uint8_t target,
     uint64_t deadline,struct a733_pmic_request *out)
-{return submit(p,owner,rail,which,1,expected,target,deadline,out);}
+{return submit(p,owner,rail,which,REQUEST_SELECTOR,expected,target,deadline,out);}
+enum a733_pmic_status a733_pmic_submit_power_on(struct a733_pmic *p,uint64_t owner,
+    const struct a733_rail_token *rail,enum a733_rail which,uint8_t target,
+    uint64_t deadline,struct a733_pmic_request *out)
+{return submit(p,owner,rail,which,REQUEST_POWER_ON,0,target,deadline,out);}
 static struct a733_pmic_slot *request(struct a733_pmic *p,const struct a733_pmic_request *r)
 {
     if(!same(p,&r->lifetime) || !r->id)return 0;
@@ -327,8 +338,10 @@ static int waits(unsigned phase)
 static enum a733_pmic_status phase(struct a733_pmic *p)
 {
     struct a733_pmic_slot *s=&p->slots[p->active];struct profile f;profile(s->snapshot.rail,&f);
-    const uint8_t regs[]={0xff,0x0e,0x0f,f.enable,f.selector,0xff,f.selector,f.selector};
+    const uint8_t regs[]={0xff,0x0e,0x0f,f.enable,f.selector,0xff,f.selector,f.selector,f.enable,f.enable};
     const uint8_t written=(uint8_t)((p->values[4]&~f.mask)|s->target);
+    const uint8_t enabled=(uint8_t)(p->values[3]|BIT(f.bit));
+    const unsigned count=request_bytes(s->write);
     int ok=1;uint32_t value;
     switch(p->phase) {
     case P_START:case P_RESTART:ok=wr(p,TWI+0xc,0x68);break;
@@ -342,7 +355,7 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
     case P_WAIT_RESTART:ok=await_status(p,0x10);break;
     case P_WAIT_READ_ADDRESS:ok=await_status(p,0x40);break;
     case P_WAIT_RECEIVE:ok=await_status(p,0x58);break;
-    case P_WRITE:ok=wr(p,TWI+8,written) && wr(p,TWI+0xc,0x48);break;
+    case P_WRITE:ok=wr(p,TWI+8,p->byte_index==ENABLE_INDEX ? enabled : written) && wr(p,TWI+0xc,0x48);break;
     case P_WAIT_WRITE:ok=await_status(p,0x28);break;
     case P_DATA:if(!rd(p,TWI+8,&value))return fault(p);p->values[p->byte_index]=(uint8_t)value;break;
     case P_STOP:ok=wr(p,TWI+0xc,0x58);break;
@@ -358,22 +371,29 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
         if(value&0x10)return A733_PMIC_PENDING;
         if((value&0xff)!=0x40 || !rd(p,TWI+0x10,&value))return fault(p);
         if((value&0xff)!=0xf8)return A733_PMIC_PENDING;
-        if(p->byte_index+1==(s->write ? 8u : 6u) && !match(p,TWI+0x20,0x35,0x30))return fault(p);
+        if(p->byte_index+1==count && !match(p,TWI+0x20,0x35,0x30))return fault(p);
         if((p->byte_index==0 && p->values[0]!=0) || (p->byte_index==1 && p->values[1]!=3) ||
            (p->byte_index==2 && p->values[2]!=0) || (p->byte_index==5 && p->values[5]!=0))return fault(p);
         /* A write needs the enabled output at the selector the client read.
          * After the data byte, only an exact readback ends the request. */
-        if(s->write && p->byte_index==5 && (!(p->values[3]&BIT(f.bit)) ||
+        if(s->write==REQUEST_SELECTOR && p->byte_index==5 && (!(p->values[3]&BIT(f.bit)) ||
            (p->values[4]&f.mask)!=s->expected))return fault(p);
-        if(p->byte_index==WRITE_INDEX)p->values[WRITE_INDEX]=written;
-        if(p->byte_index==WRITE_INDEX+1 && p->values[WRITE_INDEX+1]!=p->values[WRITE_INDEX])return fault(p);
-        if(++p->byte_index<(s->write ? 8u : 6u)){p->phase=P_START;return A733_PMIC_PENDING;}break;
+        /* A power-on request starts from a disabled output only. An enabled
+         * output keeps its programmed voltage: its consumers may already
+         * depend on it. Nothing is written when the output is not off. */
+        if(s->write==REQUEST_POWER_ON && p->byte_index==5 && (p->values[3]&BIT(f.bit)))return fault(p);
+        if(p->byte_index==WRITE_INDEX && s->write)p->values[WRITE_INDEX]=written;
+        if(p->byte_index==WRITE_INDEX+1 && s->write && p->values[WRITE_INDEX+1]!=p->values[WRITE_INDEX])return fault(p);
+        if(p->byte_index==ENABLE_INDEX)p->values[ENABLE_INDEX]=enabled;
+        if(p->byte_index==ENABLE_INDEX+1 && p->values[ENABLE_INDEX+1]!=p->values[ENABLE_INDEX])return fault(p);
+        if(++p->byte_index<count){p->phase=P_START;return A733_PMIC_PENDING;}break;
     case P_PUBLISH: {
         /* The bus was idle after the last STOP; startup verified the rest.
          * The state word and the deadline were checked after that STOP, or
          * at the entry of this poll. */
         struct a733_pmic_snapshot snapshot;
-        a733_pmic_decode(s->snapshot.rail,p->values[3],p->values[s->write ? 7 : 4],&snapshot);
+        a733_pmic_decode(s->snapshot.rail,p->values[s->write==REQUEST_POWER_ON ? 9 : 3],
+            p->values[s->write ? 7 : 4],&snapshot);
         snapshot.page_before=p->values[0];snapshot.chip=p->values[1];snapshot.revision=p->values[2];snapshot.page_after=p->values[5];
         p->pmic_bus_ops.leave(p->cookie);p->held=0;
         if(!timely(p))return fault(p);
@@ -383,7 +403,8 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
     }
     if(ok<0 || (!ok && !waits(p->phase)))return fault(p);
     /* The write byte sends its data after the register index, then STOP. */
-    if(ok>0)p->phase=p->phase==P_WAIT_REGISTER && p->byte_index==WRITE_INDEX ? P_WRITE :
+    if(ok>0)p->phase=p->phase==P_WAIT_REGISTER && (p->byte_index==WRITE_INDEX ||
+        (p->byte_index==ENABLE_INDEX && s->write==REQUEST_POWER_ON)) ? P_WRITE :
         p->phase==P_WAIT_WRITE ? P_STOP : p->phase+1;
     return A733_PMIC_PENDING;
 }

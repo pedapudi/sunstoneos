@@ -56,9 +56,10 @@ Any new clock point needs a design and coordinator approval before a board run.
 
 The schematic routes PM2 through R61 to Bluetooth reset and through R1130 to
 the module's low-power oscillator input. Their fitted population is unknown.
-The schematic also names DCDC8 for radio I/O, while the device tree names
-BLDO5 and CLDO1. The [platform admission contract](radio-platform.md) retains
-these uncertainties and preserves PM2.
+The vendor device tree and its power helpers use BLDO5 and CLDO1 for radio I/O;
+the schematic does not assign DCDC8 to the radio. The
+[power sequence design](designs/radio-vendor-power-sequence.md) gives the
+sources. The [platform admission contract](radio-platform.md) preserves PM2.
 
 The [radio observation list](../apps/board/radio-facts.json) uses the existing
 read-only bundle reader. It contains SID identity, speed-bin and clock words,
@@ -98,8 +99,9 @@ No PM/PG pin configuration or RTC fanout value is predicted.
 Use port 3-1 and a separate evidence directory for an independently needed batch.
 No board command was executed for this audit.
 
-Physical inspection or an authoritative fitted BOM must establish the radio
-supply routes, R61/R1130 population and module reset/LPO requirements.
+Physical inspection or an authoritative fitted BOM must establish the
+R61/R1130 population and module reset/LPO requirements. The detected PG voltage
+confirms the radio I/O supply route.
 Measured I/O voltage and any required LPO waveform complete that evidence.
 The user need not identify the PCB revision from memory.
 

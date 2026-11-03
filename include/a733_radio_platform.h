@@ -7,8 +7,11 @@
 #include "sdio_card.h"
 #include <stdatomic.h>
 
-/* Rail identity describes authenticated wiring, not a selectable voltage.
- * The provider observes enabled 3.3V VBAT and 1.8V I/O profiles read-only. */
+/* The vendor wlan power path: VBAT is DCDC1 (3.3V, always on); PG is BLDO5 and
+ * PM is CLDO1, both 1.8V; module VDDIO is one of those two. Admission refuses
+ * any other map. If BLDO5 is off, the platform powers it on at 1.8V after PM1
+ * is low, then reads every supply back before the 10ms interval to PM1 high.
+ * DCDC1 and CLDO1 are never written. See docs/designs/radio-vendor-power-sequence.md. */
 enum a733_radio_rail { A733_RADIO_DCDC1, A733_RADIO_DCDC8,
     A733_RADIO_BLDO5, A733_RADIO_CLDO1 };
 struct a733_radio_topology {
@@ -84,7 +87,7 @@ struct a733_radio_platform {
     uint64_t deadline,last_now,wait_since;
     uint32_t selected_mhz[3],initial_module,initial_bus,running_module;
     unsigned initialized,stage,fault,held,retained,core_call,rail_count,rail_index,rail_retained;
-    unsigned four_bit,card_pending,bus_interface;
+    unsigned four_bit,card_pending,bus_interface,power_on,rail_verify;
 };
 /* Pure scope planning and init; no MMIO. Fresh private storage only. All inputs,
  * managers, provider objects and callback contexts remain disjoint and live. */

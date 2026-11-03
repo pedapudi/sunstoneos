@@ -371,6 +371,34 @@
     }
    ]
   },
+  "a733-radio-session.py": {
+   "runs": [
+    {
+     "args": [
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--rsn",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--kernel",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--reference-dir",
+      "{cache}/sources/radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv",
+      "--firmware",
+      "{cache}/sources/radio/firmware/aic8800d80",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
   "a733-smp-image.py": {
    "runs": [
     {
@@ -2603,7 +2631,6 @@
  },
  "board": [],
  "waived": {
-  "a733-radio-session.py": "real defect or unexplained failure, reported to the coordinator | fails at checks/a733-radio-session.c:304: 55ec8993 stopped decoding DCDC8 and DCDC9 selector codes above 87 (docs/designs/pmic-reference-reconciliation.md), so the shared PMIC model's DCDC8 code 100 is undecoded and the radio platform's 1.8 V rail check (drivers/net/a733_radio_platform.c:186) refuses; the fix is a voltage decision, awaiting approval",
   "a733-smp-cached.py": "helper module of a runnable check (not run on its own) | loaded by deadline.py",
   "aic8800-supplicant.py": "helper module of a runnable check (not run on its own) | loaded by aic8800-security.py",
   "cached-device-reservations.py": "real defect or unexplained failure, reported to the coordinator | convolution service passes a fixed 524,288-byte command buffer; the assembler requires the graph-sized allocation (87afaecf); fixed by the NPU cap removal",

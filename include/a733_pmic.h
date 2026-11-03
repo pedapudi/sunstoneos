@@ -72,7 +72,7 @@ struct a733_pmic {
     uint32_t bit_ns; /* S_TWI0 bit time from the admitted divisor; immutable after startup. */
     unsigned stage, held, retained, failed, active, phase, byte_index;
     unsigned waiting; /* The last poll ended at a bus phase whose flag was still clear. */
-    uint8_t values[8]; /* Six snapshot bytes, written selector, readback. */
+    uint8_t values[10]; /* Six snapshot bytes, written selector and readback, written enable and readback. */
     /* Service binding, set once before concurrency. */
     void (*kick)(void *);
     void *kick_context;
@@ -133,7 +133,8 @@ enum a733_pmic_status a733_pmic_identity(struct a733_pmic *,struct a733_pmic_lif
 enum a733_pmic_status a733_pmic_live(struct a733_pmic *,const struct a733_pmic_lifetime *);
 /* One designated task advances one bounded state per call. No busy waits,
  * retries, clock/reset writes or bus-recovery pulses. The only PMIC data
- * write is an admitted selector write (a733_pmic_submit_write). An
+ * writes are an admitted selector write (a733_pmic_submit_write) and the
+ * BLDO5 power-on (a733_pmic_submit_power_on). An
  * accepted transaction retains the common I2C mutex across worker calls.
  * Startup verifies the S_TWI0 gate and reset and the idle engines once, and
  * sets A733_POWER_PROVIDER_READY. A request is admitted once against the
@@ -177,6 +178,21 @@ enum a733_pmic_status a733_pmic_submit(struct a733_pmic *,uint64_t owner,
  * DCDC4, before the GPU's first ON. */
 enum a733_pmic_status a733_pmic_submit_write(struct a733_pmic *,uint64_t owner,
     const struct a733_rail_token *,enum a733_rail,uint8_t expected,uint8_t target,
+    uint64_t deadline,struct a733_pmic_request *);
+/* Power-on of the radio I/O supply BLDO5 at 1.8 V (selector code 13), the
+ * order the pinned vendor wlan power helper uses: set the voltage, read it
+ * back, enable the output, with a readback of each written register. Only BLDO5
+ * is accepted, under an exclusive lease of it. Under one mutex the request reads
+ * the six snapshot bytes and requires the output disabled: an enabled output
+ * keeps its programmed voltage and the request retains without a write. It then
+ * writes target to the selector, preserving bits 7:5, reads it back, sets the
+ * output's enable bit in a read-modify-write of the enable byte and reads that
+ * back. Any mismatch retains the request: the output state is then uncertain.
+ * The result snapshot carries both readbacks. It proves programmed bytes only;
+ * the caller waits for the output to settle (the vendor DTS gives 1 ms of
+ * enable ramp delay) before using it. */
+enum a733_pmic_status a733_pmic_submit_power_on(struct a733_pmic *,uint64_t owner,
+    const struct a733_rail_token *,enum a733_rail,uint8_t target,
     uint64_t deadline,struct a733_pmic_request *);
 enum a733_pmic_status a733_pmic_result(struct a733_pmic *,const struct a733_pmic_request *,
     struct a733_pmic_snapshot *);

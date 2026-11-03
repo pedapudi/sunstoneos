@@ -69,7 +69,7 @@ unqualified. Figures, hashes and result locations are in
    for each board and writes no selector. The run is described in
    [pmic-supply-observation.md](pmic-supply-observation.md).
 2. Choosing a disputed transfer function needs authoritative documentation for
-   the identified fitted PMIC. Radio admission also needs the fitted supply
-   route and measured pad and rail voltage. PMIC readbacks cannot resolve the
-   schematic and DTS disagreement. Preserve PM2 and all rail settings until
-   that evidence exists.
+   the identified fitted PMIC. The radio does not depend on it: the vendor
+   radio power path uses BLDO5 and CLDO1, whose tables do not disagree
+   ([design](radio-vendor-power-sequence.md)). Preserve PM2 and the DCDC8 and
+   DCDC9 settings.

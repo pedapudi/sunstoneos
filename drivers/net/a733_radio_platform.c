@@ -5,10 +5,11 @@
 #define SDC UINT32_C(0x04021000)
 #define GIC UINT32_C(0x03400000)
 #define BIT(n) (UINT32_C(1)<<(n))
-enum { ACQUIRE, RESERVE_RAILS, WAIT_RAILS, ADMIT, RAILS, BASELINE, GIC_WAIT, PINS, SUPPLY_WAIT,
-       ENABLE_MODULE, MODULE_SETTLE, BUS_GATE, RESET_WAIT, RESET_RELEASE, PREPARE,
+enum { ACQUIRE, RESERVE_RAILS, WAIT_RAILS, ADMIT, RAILS, BASELINE, GIC_WAIT, PINS, POWER_ON, POWER_WAIT,
+       VERIFY_RAILS, SUPPLY_WAIT, ENABLE_MODULE, MODULE_SETTLE, BUS_GATE, RESET_WAIT, RESET_RELEASE, PREPARE,
        PREPARING, ENUMERATE, ENUMERATING, WIDE_READ, WIDE_WRITE, WIDEN, WIDENING, WIDE_VERIFY, READY };
 #define MODULE_24M (BIT(31)|29) /* SYS24M, N=1, M=30: 800 kHz module clock. */
+#define RADIO_IO_CODE 13u /* BLDO5 selector for 1.8 V, as the vendor wlan_power_vol = 1800000. */
 #define WIDE_DIVISOR 8u /* PERI0 400 MHz / 8: 50 MHz module, 25 MHz card clock. */
 static const uint32_t fabric_off[]={0x500,0x580,0x588};
 static const uint32_t fabric_mask[]={0x0300001f,0x8700001f,0x8700001f};
@@ -31,10 +32,8 @@ static a733_rail_mask_t rail_scope(enum a733_radio_rail rail)
 int a733_radio_platform_rails(const struct a733_radio_platform_config *c,a733_rail_mask_t *out)
 {
     if(!c||!out||!c->owner||!c->handoff||!c->deadline_us||c->lifetime_deadline_us<c->deadline_us||!c->topology.identity||
-        c->topology.vbat!=A733_RADIO_DCDC1||
-        (unsigned)c->topology.pg<A733_RADIO_DCDC8||(unsigned)c->topology.pg>A733_RADIO_CLDO1||
-        (unsigned)c->topology.pm<A733_RADIO_DCDC8||(unsigned)c->topology.pm>A733_RADIO_CLDO1||
-        (unsigned)c->topology.vddio<A733_RADIO_DCDC8||(unsigned)c->topology.vddio>A733_RADIO_CLDO1)return 0;
+        c->topology.vbat!=A733_RADIO_DCDC1||c->topology.pg!=A733_RADIO_BLDO5||c->topology.pm!=A733_RADIO_CLDO1||
+        (c->topology.vddio!=A733_RADIO_BLDO5&&c->topology.vddio!=A733_RADIO_CLDO1))return 0;
     *out=rail_scope(c->topology.vbat)|rail_scope(c->topology.pg)|rail_scope(c->topology.pm)|rail_scope(c->topology.vddio);
     return 1;
 }
@@ -181,8 +180,12 @@ static int supply_poll(struct a733_radio_platform *p)
     status=a733_pmic_result(p->pmic,&p->pmic_request,snapshot);
     if(status==A733_PMIC_PENDING||status==A733_PMIC_BUSY)return 0;
     if(status!=A733_PMIC_COMPLETE||snapshot->rail!=rail||snapshot->page_before||
-        snapshot->page_after||snapshot->chip!=3||snapshot->revision||
-        snapshot->enabled!=1||snapshot->decoded!=1||
+        snapshot->page_after||snapshot->chip!=3||snapshot->revision)return -1;
+    /* Before power-on, BLDO5 may be off at any selector; the radio power-on
+     * then programs it. Every other supply, and BLDO5 once on, must be enabled
+     * at its programmed voltage. */
+    if(rail==A733_RAIL_BLDO5&&!p->rail_verify&&!snapshot->enabled)p->power_on=1;
+    else if(snapshot->enabled!=1||snapshot->decoded!=1||
         snapshot->programmed_uv!=(rail==A733_RAIL_DCDC1?3300000u:1800000u))return -1;
     status=a733_pmic_reap(p->pmic,&p->pmic_request);
     if(status==A733_PMIC_BUSY)return 0;
@@ -304,7 +307,9 @@ static enum a733_radio_platform_result metadata(struct a733_radio_platform *p)
     if(live<0)return fail(p);
     if(!live)return A733_RADIO_BUSY;
     if(p->stage==RESERVE_RAILS) {
-        enum a733_rail_result r=a733_rail_acquire(p->rails,p->config.owner,p->rail_scopes,0,p->deadline,&p->rail);
+        /* BLDO5 is exclusive: only an exclusive holder may program it. */
+        const a733_rail_mask_t io=A733_RAIL_BIT(A733_RAIL_BLDO5);
+        enum a733_rail_result r=a733_rail_acquire(p->rails,p->config.owner,p->rail_scopes&~io,p->rail_scopes&io,p->deadline,&p->rail);
         if(r==A733_RAIL_BUSY)return A733_RADIO_BUSY;
         if(r!=A733_RAIL_PENDING||!p->rail.id||!timely(p))return fail(p);
         p->stage=WAIT_RAILS;return A733_RADIO_PENDING;
@@ -343,7 +348,37 @@ static enum a733_radio_platform_result metadata(struct a733_radio_platform *p)
         if(!timely(p))return fail(p);
         if(r==A733_PINS_BUSY||r==A733_PINS_CONFLICT)return A733_RADIO_BUSY;
         if(r!=A733_PINS_OK)return fail(p);
-        p->wait_since=p->last_now;p->stage=SUPPLY_WAIT;return A733_RADIO_PENDING;
+        /* Vendor order: PM1 is low before any supply is enabled. */
+        p->wait_since=p->last_now;p->stage=p->power_on?POWER_ON:SUPPLY_WAIT;return A733_RADIO_PENDING;
+    }
+    if(p->stage==POWER_ON) {
+        enum a733_pmic_status r=a733_pmic_submit_power_on(p->pmic,p->config.owner,&p->rail,A733_RAIL_BLDO5,
+            RADIO_IO_CODE,p->deadline,&p->pmic_request);
+        if(!timely(p))return fail(p);
+        if(r==A733_PMIC_BUSY)return A733_RADIO_BUSY;
+        if(r!=A733_PMIC_PENDING||!p->pmic_request.id)return fail(p);
+        p->stage=POWER_WAIT;return A733_RADIO_PENDING;
+    }
+    if(p->stage==POWER_WAIT) {
+        struct a733_pmic_snapshot written;
+        enum a733_pmic_status r=a733_pmic_result(p->pmic,&p->pmic_request,&written);
+        if(!timely(p))return fail(p);
+        if(r==A733_PMIC_PENDING||r==A733_PMIC_BUSY)return A733_RADIO_PENDING;
+        if(r!=A733_PMIC_COMPLETE||written.rail!=A733_RAIL_BLDO5||written.page_before||written.page_after||
+            written.chip!=3||written.revision||written.enabled!=1||written.decoded!=1||
+            (written.selector&31u)!=RADIO_IO_CODE)return fail(p);
+        r=a733_pmic_reap(p->pmic,&p->pmic_request);
+        if(r==A733_PMIC_BUSY)return A733_RADIO_PENDING;
+        if(r!=A733_PMIC_COMPLETE)return fail(p);
+        p->pmic_request=(struct a733_pmic_request){0};
+        /* Read every supply back once more, now strictly, before PM1 rises. */
+        p->rail_verify=1;p->rail_index=0;p->stage=VERIFY_RAILS;return A733_RADIO_PENDING;
+    }
+    if(p->stage==VERIFY_RAILS) {
+        int r=supply_poll(p);
+        if(r<0||!timely(p))return fail(p);
+        if(r==1){p->wait_since=p->last_now;p->stage=SUPPLY_WAIT;}
+        return A733_RADIO_PENDING;
     }
     if(p->stage==SUPPLY_WAIT) {
         if(p->last_now-p->wait_since>10000)p->stage=ENABLE_MODULE;
@@ -462,7 +497,7 @@ enum a733_radio_platform_result a733_radio_platform_poll(struct a733_radio_platf
     }
     enum a733_radio_platform_result result;
     if(p->stage==ACQUIRE||p->stage==RESERVE_RAILS||p->stage==WAIT_RAILS||p->stage==ADMIT||p->stage==RAILS||p->stage==PINS||
-        p->stage==SUPPLY_WAIT||p->stage==ENABLE_MODULE||p->stage==MODULE_SETTLE)result=metadata(p);
+        p->stage==POWER_ON||p->stage==POWER_WAIT||p->stage==VERIFY_RAILS||p->stage==SUPPLY_WAIT||p->stage==ENABLE_MODULE||p->stage==MODULE_SETTLE)result=metadata(p);
     else {
         int live=clock_live(p);
         result=live<0?fail(p):!live?A733_RADIO_BUSY:p->stage>=PREPARE?controller(p):registers(p);
