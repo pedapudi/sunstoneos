@@ -91,7 +91,6 @@ The card is never left in a state that needs a human, except the terminal case o
 
 ## Open work
 
-1. Explain why the restart loop gave up with the platform healthy in the first two mode 0 faults (`1793690551898353510-7e2b465d`, `1793690890150131786-bfd9daeb`: aux 0, `board_live` true, lifetime not passed): the aux that would have said was overwritten, and no fault has occurred since the record was fixed. Provoke a fault (a card or a bus that times out) and read the aux.
-2. Run the read-only switch to 1.8 V on port 3-1, which has never been at 1.8 V (prediction in record `sd-uhs-adoption-3-1-switch`, not run).
-3. The runner: approval of the 150 MHz point and of CMD11 for OS images, and the image classification for UHS-I.
-4. Five image-level SD checks (`storage-read-native.py`, `storage-read-binding.py`, `sd-return-native.py`, `sd-return-host.py`, `sd-return-continuity.py`) are stale models of the current image and are waived in `checks/gate-inputs.json`; rewrite them against the image.
+1. Run the read-only switch to 1.8 V on port 3-1, which has never been at 1.8 V (prediction in record `sd-uhs-adoption-3-1-switch`, not run).
+2. The runner: approval of the 150 MHz point and of CMD11 for OS images, and the image classification for UHS-I.
+3. Five image-level SD checks (`storage-read-native.py`, `storage-read-binding.py`, `sd-return-native.py`, `sd-return-host.py`, `sd-return-continuity.py`) are stale models of the current image and are waived in `checks/gate-inputs.json`; rewrite them against the image.
