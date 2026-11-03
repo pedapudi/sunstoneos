@@ -1,7 +1,9 @@
 /* Host model for the FAT32 write service: a file-backed card with a write log and an independent
  * write guard. Commands (see checks/fat32-rw.py):
- *   scenario IMAGE BASE SECTORS LOG MARKS REFDIR AU MAXW SNAPSHOT   run the create/append/replace/rename scenario
+ *   session IMAGE BASE SECTORS LOG AU SIZE                create, write SIZE bytes, sync, close and unmount one file, logging every sector write
  *   recover IMAGE BASE SECTORS AU [LOG [CUT]]             mount (recovering), unmount; optional log and cut
+ *   serve IMAGE BASE SECTORS AU                           the same recovery, repeatedly, on one open image: reads
+ *                                                         "recover [LOG [CUT]]" and "undo" lines from standard input
  *   accounting IMAGE BASE SECTORS AU                      small appends become allocation-unit writes
  *   guard IMAGE BASE SECTORS AU                           the write guard at every region boundary */
 #define _FILE_OFFSET_BITS 64
@@ -27,6 +29,12 @@ static uint32_t call_id;
 static int expect_yield;
 static uint64_t call_log[1 << 17][2]; static unsigned calls;
 static int log_calls;
+/* serve mode: the sectors a recovery changed, with their earlier contents, so that "undo" restores the image. */
+#define UNDO_MAX 8192
+static uint64_t undo_sector[UNDO_MAX];
+static uint8_t (*undo_data)[512];
+static unsigned undo_count;
+static int undo_on;
 
 /* The model parses the boot sector itself and refuses any write outside the FAT copies, the
  * FSInfo sector and the data area, whatever the service decides. */
@@ -70,6 +78,15 @@ static int dev_write(void *c, uint64_t s, uint32_t n, const uint8_t *buf)
             fwrite(&sec, 8, 1, wlog); fwrite(&head, 8, 1, wlog);
             fwrite(buf + (size_t)i * 512, 512, 1, wlog);
         }
+        if (undo_on) {
+            unsigned j = 0;
+            while (j < undo_count && undo_sector[j] != s + i) ++j;
+            if (j == undo_count) {
+                assert(undo_count < UNDO_MAX);
+                assert(pread(image_fd, undo_data[j], 512, (off_t)(s + i) * 512) == 512);
+                undo_sector[undo_count++] = s + i;
+            }
+        }
         assert(pwrite(image_fd, buf + (size_t)i * 512, 512, (off_t)(s + i) * 512) == 512);
         ++sector_writes;
     }
@@ -102,24 +119,6 @@ static uint8_t stream_byte(uint64_t seed, uint64_t i)
 static void stream_fill(uint8_t *p, uint64_t seed, uint64_t offset, size_t n)
 { for (size_t i = 0; i < n; ++i) p[i] = stream_byte(seed, offset + i); }
 
-static FILE *marks; static const char *refdir; static unsigned mark_seq;
-static void ref_write(const char *name, uint64_t seed, uint64_t size)
-{
-    char path[512]; snprintf(path, sizeof path, "%s/%s", refdir, name);
-    FILE *f = fopen(path, "wb"); assert(f);
-    uint8_t buf[4096];
-    for (uint64_t o = 0; o < size; o += sizeof buf) {
-        size_t n = size - o < sizeof buf ? (size_t)(size - o) : sizeof buf;
-        stream_fill(buf, seed, o, n); fwrite(buf, 1, n, f);
-    }
-    fclose(f);
-}
-/* One alternative of the constraint on `path` from the current write index on. */
-static void constraint(const char *path, uint64_t min, uint64_t max, const char *ref, int absent_ok)
-{ fprintf(marks, "C %u %llu %s %llu %llu %s %d\n", mark_seq, (unsigned long long)sector_writes, path,
-          (unsigned long long)min, (unsigned long long)max, ref, absent_ok); }
-static void group(void) { ++mark_seq; }
-
 #define CHECK(x) do { int r_ = (x); if (r_ < 0 && !cut_hit) { fprintf(stderr, "%s:%d: %s = %d\n", __FILE__, __LINE__, #x, r_); exit(2); } \
                       if (r_ < 0) return 1; } while (0)
 
@@ -144,110 +143,85 @@ static int write_all(struct fwr_file *f, uint64_t seed, uint64_t offset, uint64_
 
 static uint8_t fbuf1[1 << 18] __attribute__((aligned(64))), fbuf2[8192];
 
-static int fill_file(struct fwr_volume *v, const char *path, unsigned mode, uint64_t seed, uint64_t size)
-{
-    struct fwr_file f;
-    int r = fwr_open(v, &f, path, mode, 0, fbuf2, sizeof fbuf2);
-    if (r) return r;
-    if ((r = write_all(&f, seed, 0, size, 1000))) return r;
-    return fwr_close(&f);
-}
-
-static int cmd_scenario(const char *img, uint64_t base, uint64_t sectors, const char *logp, const char *markp,
-                        const char *rd, uint32_t au, uint32_t maxw, const char *snapshot)
+static void open_image(const char *img, uint64_t base)
 {
     image_fd = open(img, O_RDWR); assert(image_fd >= 0);
     dev_sectors = (uint64_t)lseek(image_fd, 0, SEEK_END) / 512; part_base = base;
     model_regions();
-    struct fwr_config cfg = make_config(base, sectors, au, maxw);
-    refdir = rd;
-    marks = fopen(markp, "w"); assert(marks);
+}
+
+static int cmd_session(const char *img, uint64_t base, uint64_t sectors, const char *logp, uint32_t au, uint64_t size)
+{
+    open_image(img, base);
+    struct fwr_config cfg = make_config(base, sectors, au, 0);
     static struct fwr_volume v;
     int r = fwr_mount(&v, &cfg); assert(!r);
-    /* Setup, not logged. */
-    CHECK(fill_file(&v, "settings.cfg", FWR_O_CREATE, 11, 3000));
-    CHECK(fill_file(&v, "old.bin", FWR_O_CREATE, 12, 50000));
-    CHECK(fill_file(&v, "gone.txt", FWR_O_CREATE, 13, 7000));
-    CHECK(fwr_unmount(&v));
-    {   /* The card as the logged part starts. */
-        char cmd[1100]; snprintf(cmd, sizeof cmd, "cp --sparse=always '%s' '%s'", img, snapshot);
-        assert(system(cmd) == 0);
-    }
-    ref_write("settings-old", 11, 3000); ref_write("settings-new", 21, 5000);
-    ref_write("old", 12, 50000); ref_write("tmp1", 22, 20000); ref_write("gone", 13, 7000);
-    ref_write("cap", 31, 520000); ref_write("trunc", 41, 100000);
     wlog = fopen(logp, "wb"); assert(wlog);
     sector_writes = 0;
-    CHECK(fwr_mount(&v, &cfg));
-    group(); constraint("settings.cfg", 3000, 3000, "settings-old", 0);
-    constraint("old.bin", 50000, 50000, "old", 0); constraint("gone.txt", 7000, 7000, "gone", 0);
-    group();
-    /* Directory and a long-named preallocated file with two syncs and a close. */
-    CHECK(fwr_mkdir(&v, "/sunstone-test"));
     struct fwr_file f;
-    CHECK(fwr_open(&v, &f, "/sunstone-test/Capture-Data.bin", FWR_O_CREATE, 1u << 20, fbuf1, sizeof fbuf1));
-    group(); constraint("sunstone-test/Capture-Data.bin", 0, 0, "cap", 1);
-    CHECK(write_all(&f, 31, 0, 150000, 7001));
-    group(); constraint("sunstone-test/Capture-Data.bin", 0, 150000, "cap", 1);
+    CHECK(fwr_open(&v, &f, "SESSION.BIN", FWR_O_CREATE, 0, fbuf2, sizeof fbuf2));
+    CHECK(write_all(&f, 7, 0, size, 1000));
     CHECK(fwr_sync(&f));
-    group(); constraint("sunstone-test/Capture-Data.bin", 150000, 150000, "cap", 0);
-    CHECK(write_all(&f, 31, 150000, 300000, 12345));
-    group(); constraint("sunstone-test/Capture-Data.bin", 150000, 450000, "cap", 0);
-    CHECK(fwr_sync(&f));
-    group(); constraint("sunstone-test/Capture-Data.bin", 450000, 450000, "cap", 0);
-    CHECK(write_all(&f, 31, 450000, 70000, 999));
-    group(); constraint("sunstone-test/Capture-Data.bin", 450000, 520000, "cap", 0);
     CHECK(fwr_close(&f));
-    group(); constraint("sunstone-test/Capture-Data.bin", 520000, 520000, "cap", 0);
-    /* Atomic replace of a settings file. */
-    group(); constraint("settings.cfg", 3000, 3000, "settings-old", 0); constraint("settings.cfg", 5000, 5000, "settings-new", 0);
-    CHECK(fwr_open(&v, &f, "settings.cfg", FWR_O_REPLACE, 0, fbuf2, sizeof fbuf2));
-    CHECK(write_all(&f, 21, 0, 5000, 1000));
-    CHECK(fwr_close(&f));
-    group(); constraint("settings.cfg", 5000, 5000, "settings-new", 0);
-    /* Rename over an existing file. */
-    CHECK(fill_file(&v, "tmp1.bin", FWR_O_CREATE, 22, 20000));
-    group();
-    constraint("old.bin", 50000, 50000, "old", 0); constraint("old.bin", 20000, 20000, "tmp1", 0);
-    constraint("tmp1.bin", 20000, 20000, "tmp1", 1);
-    CHECK(fwr_rename(&v, "tmp1.bin", "old.bin"));
-    group(); constraint("old.bin", 20000, 20000, "tmp1", 0); constraint("tmp1.bin", 0, 0, "tmp1", 1);
-    /* Unlink. */
-    group(); constraint("gone.txt", 7000, 7000, "gone", 1);
-    CHECK(fwr_unlink(&v, "gone.txt"));
-    group(); constraint("gone.txt", 0, 0, "gone", 1);
-    /* Truncate. */
-    CHECK(fill_file(&v, "trunc.bin", FWR_O_CREATE, 41, 100000));
-    group(); constraint("trunc.bin", 100000, 100000, "trunc", 0); constraint("trunc.bin", 33333, 33333, "trunc", 0);
-    CHECK(fwr_open(&v, &f, "trunc.bin", FWR_O_APPEND, 0, fbuf2, sizeof fbuf2));
-    CHECK(fwr_truncate(&f, 33333));
-    CHECK(fwr_close(&f));
-    group(); constraint("trunc.bin", 33333, 33333, "trunc", 0);
     CHECK(fwr_unmount(&v));
-    fprintf(marks, "END %llu\n", (unsigned long long)sector_writes);
-    fclose(marks); fclose(wlog);
-    const struct fwr_wear *w = fwr_wear(&v);
-    printf("scenario sector_writes=%llu writes=%llu syncs=%llu\n", (unsigned long long)sector_writes,
-           (unsigned long long)w->writes, (unsigned long long)w->syncs);
+    fclose(wlog);
+    printf("session bytes=%llu sector_writes=%llu\n", (unsigned long long)size, (unsigned long long)sector_writes);
     return 0;
 }
 
-static int cmd_recover(const char *img, uint64_t base, uint64_t sectors, uint32_t au, const char *logp, uint64_t cut)
+static int recover_once(uint64_t base, uint64_t sectors, uint32_t au, const char *logp, uint64_t cut)
 {
-    image_fd = open(img, O_RDWR); assert(image_fd >= 0);
-    dev_sectors = (uint64_t)lseek(image_fd, 0, SEEK_END) / 512; part_base = base;
-    model_regions();
+    sector_writes = 0; cut_hit = 0; yields = 0; writes_without_yield = 0; call_id = 0; expect_yield = 0;
     if (logp) wlog = fopen(logp, "wb");
     cut_at = cut;
     struct fwr_config cfg = make_config(base, sectors, au, 0);
     static struct fwr_volume v;
+    memset(&v, 0, sizeof v);
     int r = fwr_mount(&v, &cfg);
-    if (r) { printf("mount failed %d cut=%d\n", r, cut_hit); return cut_hit ? 0 : 1; }
-    r = fwr_unmount(&v);
-    if (r && !cut_hit) { printf("unmount failed %d\n", r); return 1; }
-    if (wlog) fclose(wlog);
-    printf("recover sector_writes=%llu recoveries=%llu freed=%llu cut=%d\n", (unsigned long long)sector_writes,
-           (unsigned long long)v.wear.recoveries, (unsigned long long)v.wear.recovered_clusters, cut_hit);
+    int status = 0;
+    if (r) {
+        printf("mount failed %d cut=%d\n", r, cut_hit);
+        status = cut_hit ? 0 : 1;
+    } else {
+        r = fwr_unmount(&v);
+        if (r && !cut_hit) { printf("unmount failed %d\n", r); status = 1; }
+        else printf("recover sector_writes=%llu recoveries=%llu freed=%llu cut=%d\n", (unsigned long long)sector_writes,
+                    (unsigned long long)v.wear.recoveries, (unsigned long long)v.wear.recovered_clusters, cut_hit);
+    }
+    if (wlog) { fclose(wlog); wlog = NULL; }
+    free(bitmap); bitmap = NULL;
+    return status;
+}
+
+static int cmd_recover(const char *img, uint64_t base, uint64_t sectors, uint32_t au, const char *logp, uint64_t cut)
+{
+    open_image(img, base);
+    return recover_once(base, sectors, au, logp, cut);
+}
+
+static int cmd_serve(const char *img, uint64_t base, uint64_t sectors, uint32_t au)
+{
+    char line[4096];
+    open_image(img, base);
+    undo_data = malloc((size_t)UNDO_MAX * 512); assert(undo_data);
+    undo_on = 1;
+    while (fgets(line, sizeof line, stdin)) {
+        char verb[16] = "", logp[3000] = "";
+        unsigned long long cut = UINT64_MAX;
+        int n = sscanf(line, "%15s %2999s %llu", verb, logp, &cut);
+        if (n >= 1 && !strcmp(verb, "undo")) {
+            while (undo_count) {
+                --undo_count;
+                assert(pwrite(image_fd, undo_data[undo_count], 512, (off_t)undo_sector[undo_count] * 512) == 512);
+            }
+            puts("undone");
+        } else if (n >= 1 && !strcmp(verb, "recover")) {
+            if (recover_once(base, sectors, au, n >= 2 ? logp : NULL, n >= 3 ? cut : UINT64_MAX)) puts("recover failed");
+        } else {
+            puts("unknown command");
+        }
+        fflush(stdout);
+    }
     return 0;
 }
 
@@ -532,12 +506,14 @@ static int cmd_cursor(const char *img, uint64_t base, uint64_t sectors, uint32_t
 
 int main(int argc, char **argv)
 {
-    if (argc >= 11 && !strcmp(argv[1], "scenario"))
-        return cmd_scenario(argv[2], strtoull(argv[3], 0, 0), strtoull(argv[4], 0, 0), argv[5], argv[6], argv[7],
-                            (uint32_t)strtoul(argv[8], 0, 0), (uint32_t)strtoul(argv[9], 0, 0), argv[10]);
+    if (argc >= 8 && !strcmp(argv[1], "session"))
+        return cmd_session(argv[2], strtoull(argv[3], 0, 0), strtoull(argv[4], 0, 0), argv[5], (uint32_t)strtoul(argv[6], 0, 0),
+                           strtoull(argv[7], 0, 0));
     if (argc >= 6 && !strcmp(argv[1], "recover"))
         return cmd_recover(argv[2], strtoull(argv[3], 0, 0), strtoull(argv[4], 0, 0), (uint32_t)strtoul(argv[5], 0, 0),
                            argc > 6 ? argv[6] : NULL, argc > 7 ? strtoull(argv[7], 0, 0) : UINT64_MAX);
+    if (argc >= 6 && !strcmp(argv[1], "serve"))
+        return cmd_serve(argv[2], strtoull(argv[3], 0, 0), strtoull(argv[4], 0, 0), (uint32_t)strtoul(argv[5], 0, 0));
     if (argc >= 6 && !strcmp(argv[1], "accounting"))
         return cmd_accounting(argv[2], strtoull(argv[3], 0, 0), strtoull(argv[4], 0, 0), (uint32_t)strtoul(argv[5], 0, 0));
     if (argc >= 7 && !strcmp(argv[1], "cursor"))

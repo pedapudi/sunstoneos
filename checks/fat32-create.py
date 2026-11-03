@@ -11,6 +11,8 @@ run that is not free), a volume without a contiguous free run, an existing name,
 a write that fails part way. mtools is not installed on this host; the independent parser stands in for it.
 """
 import argparse
+import os
+import atexit
 import hashlib
 import importlib.util
 from pathlib import Path
@@ -34,6 +36,52 @@ gen = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gen)
 u16 = lambda b, o: struct.unpack_from('<H', b, o)[0]
 u32 = lambda b, o: struct.unpack_from('<I', b, o)[0]
+
+
+def extents(path):
+    """The (start, end) byte ranges of a sparse file that hold data."""
+    ranges = []
+    with open(path, 'rb') as stream:
+        fd, offset, size = stream.fileno(), 0, os.fstat(stream.fileno()).st_size
+        while offset < size:
+            try:
+                start = os.lseek(fd, offset, os.SEEK_DATA)
+            except OSError:
+                break
+            end = os.lseek(fd, start, os.SEEK_HOLE)
+            ranges.append((start, end))
+            offset = end
+    return ranges
+
+
+def digest(path):
+    """A digest of the file's size and its data ranges: equal digests mean equal contents, and holes cost nothing."""
+    h = hashlib.sha256(str(os.path.getsize(path)).encode())
+    with open(path, 'rb') as stream:
+        for start, end in extents(path):
+            stream.seek(start)
+            h.update(b'%d:%d:' % (start, end))
+            while end > stream.tell():
+                h.update(stream.read(min(1 << 20, end - stream.tell())))
+    return h.digest()
+
+
+def changed_sectors(before, after):
+    """The sectors that differ between two same-sized sparse images, found by reading only their data ranges."""
+    sectors = set()
+    ranges = sorted(extents(before) + extents(after))
+    with open(before, 'rb') as a, open(after, 'rb') as b:
+        done = set()
+        for start, end in ranges:
+            for sector in range(start // SECTOR, (end + SECTOR - 1) // SECTOR):
+                if sector in done:
+                    continue
+                done.add(sector)
+                a.seek(sector * SECTOR)
+                b.seek(sector * SECTOR)
+                if a.read(SECTOR) != b.read(SECTOR):
+                    sectors.add(sector)
+    return sectors
 
 
 def stream_bytes(size):
@@ -96,9 +144,7 @@ class Volume:
 
 def fsck(path, base, total_sectors, out, tag):
     part = out / f'{tag}.fsck.part'
-    with open(path, 'rb') as src, open(part, 'wb') as dst:
-        src.seek(base * SECTOR)
-        shutil.copyfileobj(src, dst)
+    ro.run(['dd', f'if={path}', f'of={part}', 'bs=1M', 'iflag=skip_bytes', f'skip={base * SECTOR}', 'conv=sparse', 'status=none'])
     r = subprocess.run(['/usr/sbin/fsck.fat', '-n', str(part)], capture_output=True, text=True)
     part.unlink()
     return r.returncode, r.stdout + r.stderr
@@ -108,8 +154,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    out = args.output
-    out.mkdir(parents=True, exist_ok=True)
+    record_dir = args.output                              # the result record; the volume images live in RAM
+    record_dir.mkdir(parents=True, exist_ok=True)
+    out = harness.ram_directory('fat32-create-')
+    atexit.register(shutil.rmtree, out, True)
     binary = out / 'fat32-create'
     ro.run(['clang-21', '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
             f'-I{ROOT}/include', ROOT / 'checks/fat32-create.c', ROOT / 'drivers/storage/fat32_ro.c',
@@ -130,22 +178,20 @@ def main():
     def make(tag, spc, size_mib, base, populated):
         if populated:
             path, fs, files, info = ro.build(out, tag, spc, size_mib, base, True)
-            img = bytearray(path.read_bytes())
+            img = ro.mapped(path)
         else:
             total = size_mib * 2048
-            part = out / f'{tag}.part'
-            ro.run(['truncate', '-s', str((total - base) * SECTOR), part])
-            ro.run(['/usr/sbin/mkfs.fat', '-F', '32', '-s', str(spc), '-n', 'SUNSTONE', '-i', '5a733003', '-h', str(base), part])
-            img = bytearray(total * SECTOR)
-            img[base * SECTOR:] = part.read_bytes()
-            part.unlink()
             path = out / f'{tag}.img'
+            ro.run(['truncate', '-s', str(total * SECTOR), path])         # sparse: only written sectors take memory
+            ro.run(['/usr/sbin/mkfs.fat', '-F', '32', '-s', str(spc), '-n', 'SUNSTONE', '-i', '5a733003', '-h', str(base),
+                    '--offset', str(base), path, str((total - base) // 2)])
+            img = ro.mapped(path)
         v = Volume(img, base)
         # FSInfo: the writer of the populated image leaves mkfs's hints; make them true.
         free = sum(1 for c in range(2, v.clusters + 2) if v.fat(0, c) == 0)
         info_off = (base + v.info) * SECTOR
         struct.pack_into('<II', img, info_off + 488, free, 2)
-        path.write_bytes(img)
+        img.flush()
         return path, img, v
 
     cases = [('empty-spc1', 1, 68, 0, False, 1 * 1024 * 1024 + 13), ('empty-spc8-offset', 8, 320, 32768, False, 3 * 1024 * 1024),
@@ -153,7 +199,8 @@ def main():
              ('one-cluster-spc8', 8, 320, 32768, False, 4096), ('exact-cluster-multiple', 8, 320, 32768, False, 8 * 4096 * 5)]
     for tag, spc, mib, base, populated, size in cases:
         path, img, v = make(tag, spc, mib, base, populated)
-        original = bytes(img)
+        original = out / f'{tag}.orig'
+        ro.run(['cp', '--reflink=auto', '--sparse=auto', path, original])
         NAME = 'created on the board.bin' if populated else GLOBAL_NAME
         code, text = fsck(path, base, mib * 2048, out, tag + '-before')
         assert code == 0, (tag, text)
@@ -165,7 +212,7 @@ def main():
         log = out / f'{tag}.log'
         result = tool('create', path, base, NAME, size, log)
         assert result.rstrip().endswith('create ok'), result
-        new = bytearray(path.read_bytes())
+        new = ro.mapped(path)
         # Expected bounded set, from the geometry alone.
         csz = v.spc
         data = (v.sector(first_cluster), clusters * csz)
@@ -178,7 +225,7 @@ def main():
         writes = [tuple(map(int, line.split())) for line in log.read_text().splitlines()]
         written = [s for sector, n in writes for s in range(sector, sector + n)]
         assert written and set(written) <= allowed and len(set(written)) == len(written), tag
-        changed = {s for s in range(len(original) // SECTOR) if original[s * SECTOR:(s + 1) * SECTOR] != new[s * SECTOR:(s + 1) * SECTOR]}
+        changed = changed_sectors(original, path)
         assert changed <= allowed, (tag, sorted(changed - allowed)[:5])
         # Order: data, then FAT copy 0, FAT copy 1, the directory, FSInfo.
         def stage(s):
@@ -208,15 +255,11 @@ def main():
         # The loader's reader streams the same digest.
         s = subprocess.run([str(out / 'fat32-ro'), 'stream', str(path), str(base), NAME, str(out / 'x.bin')], capture_output=True, text=True) \
             if (out / 'fat32-ro').exists() else None
-        # Backup and restore: the sectors outside the data extent return to the original.
-        backup = {s_: original[s_ * SECTOR:(s_ + 1) * SECTOR] for s_ in sorted(allowed - set(range(data[0], data[0] + data[1])))}
-        assert base * 1 in backup or True
-        restored = bytearray(new)
-        for s_, blob in backup.items():
-            restored[s_ * SECTOR:(s_ + 1) * SECTOR] = blob
-        keep = bytearray(restored)
-        keep[data[0] * SECTOR:(data[0] + data[1]) * SECTOR] = original[data[0] * SECTOR:(data[0] + data[1]) * SECTOR]
-        assert bytes(keep) == original, tag
+        # Restoring the original sectors outside the data extent returns the original volume: every sector that changed outside
+        # the data extent is one the plan names, and the data extent itself lies in the file's clusters.
+        outside = {s_ for s_ in changed if not data[0] <= s_ < data[0] + data[1]}
+        assert outside <= allowed - set(range(data[0], data[0] + data[1])), tag
+        new.close()
         ok(f'{tag}-restore-returns-every-sector-outside-the-data-extent')
         # The allowed set the C guard reports equals the Python set.
         ranges = [tuple(map(int, line.split())) for line in tool('allowed', path, base, NAME, size).splitlines() if line[0].isdigit()]
@@ -228,7 +271,7 @@ def main():
     first_cluster, clusters = int(plan[plan.index('first_cluster') + 1]), int(plan[plan.index('clusters') + 1])
     ranges = [tuple(map(int, line.split())) for line in tool('allowed', path, 32768, NAME, 9 * 1024 * 1024).splitlines()]
     got = set(s for a, n in ranges for s in range(a, a + n))
-    v = Volume(bytearray(path.read_bytes()), 32768)
+    v = Volume(ro.mapped(path), 32768)
     want = set(range(v.sector(first_cluster), v.sector(first_cluster) + clusters * v.spc))
     for copy in range(v.fats):
         want |= set(32768 + v.reserved + copy * v.fatsz + i for i in range(first_cluster * 4 // SECTOR, (first_cluster + clusters - 1) * 4 // SECTOR + 1))
@@ -243,25 +286,25 @@ def main():
     # Tampered plans write nothing.
     for tamper in ('tamper-root', 'tamper-beyond', 'tamper-count', 'tamper-slots', 'stale-fat', 'stale-slot'):
         path, img, v = make('t-' + tamper, 8, 320, 32768, False)
-        before = path.read_bytes()
+        before = digest(path)
         log = out / f'{tamper}.log'
         result = tool('create', path, 32768, NAME, 1024 * 1024, log, tamper)
         assert not result.rstrip().endswith('create ok'), (tamper, result)
         if tamper in ('tamper-root', 'tamper-beyond', 'tamper-count', 'tamper-slots'):
-            assert path.read_bytes() == before and log.read_text() == '', (tamper, result)
+            assert digest(path) == before and log.read_text() == '', (tamper, result)
         else:        # the volume changed after the plan: nothing is written, the chain entry or slot is reported
             assert result.rstrip().endswith('create not-free') and log.read_text() == '', (tamper, result)
         ok(f'refuses-{tamper}')
     # No contiguous space: allocated single clusters every 200 clusters leave no run of 300.
     path, img, v = make('fragmented', 1, 68, 0, False)
-    blocked = bytearray(path.read_bytes())
+    blocked = ro.mapped(path)
     for c in range(100, v.clusters, 200):
         struct.pack_into('<I', blocked, (v.reserved) * SECTOR + 4 * c, 0x0ffffff8)
         struct.pack_into('<I', blocked, (v.reserved + v.fatsz) * SECTOR + 4 * c, 0x0ffffff8)
-    path.write_bytes(blocked)
-    before = path.read_bytes()
+    blocked.flush()
+    before = digest(path)
     r = tool('create', path, 0, NAME, 300 * 512, out / 'frag.log')
-    assert r.strip() == 'plan no-space' and path.read_bytes() == before
+    assert r.strip() == 'plan no-space' and digest(path) == before
     assert 'plan ok' in tool('plan', path, 0, NAME, 150 * 512)
     ok('refuses-a-volume-without-a-contiguous-free-run')
 
@@ -272,62 +315,62 @@ def main():
     assert again.strip() == 'plan exists', again
     ok('refuses-an-existing-name')
     path, img, v = make('full-root', 1, 68, 0, False)
-    full = bytearray(path.read_bytes())
+    full = ro.mapped(path)
     root = v.sector(v.root) * SECTOR
     for i in range(16):
         e = bytearray(32)
         e[0:11] = f'F{i:02d}     DAT'.encode()
         e[11] = 0x20
         full[root + 32 * i:root + 32 * i + 32] = e
-    path.write_bytes(full)
+    full.flush()
     r = tool('create', path, 0, NAME, 1024, out / 'f.log')
     assert r.strip() == 'plan no-slot', r
     ok('refuses-a-full-root-cluster')
 
     # Slots across a sector boundary: slots 0 to 14 used, the three new entries take slots 15 to 17.
     path, img, v = make('span', 8, 320, 32768, False)
-    span = bytearray(path.read_bytes())
+    span = ro.mapped(path)
     root = v.sector(v.root) * SECTOR
     for i in range(14):                      # slot 0 keeps the volume label; the new entries start at slot 15
         e = bytearray(32)
         e[0:11] = f'G{i:02d}     DAT'.encode()
         e[11] = 0x20
         span[root + 32 * (i + 1):root + 32 * (i + 1) + 32] = e
-    path.write_bytes(span)
+    span.flush()
     r = tool('create', path, 32768, NAME, 2 * 1024 * 1024, out / 'span.log')
     assert r.rstrip().endswith('create ok'), r
     code, text = fsck(path, 32768, 320 * 2048, out, 'span')
     assert code == 0, text
-    nv = Volume(bytearray(path.read_bytes()), 32768)
+    nv = Volume(ro.mapped(path), 32768)
     assert nv.read(NAME)[0] == stream_bytes(2 * 1024 * 1024)
     ok('directory-entries-spanning-two-sectors')
 
     # The same creation in six calls (data in three slices, then FAT, directory, FSInfo) gives the identical image.
     path, img, v = make('phases', 8, 320, 32768, False)
     path2 = out / 'phases-whole.img'
-    shutil.copy(path, path2)
+    ro.run(['cp', '--reflink=auto', '--sparse=auto', path, path2])
     size = 3 * 1024 * 1024 + 77
     assert tool('create', path, 32768, NAME, size, out / 'p1.log', 'none', 'phases').rstrip().endswith('create ok')
     assert tool('create', path2, 32768, NAME, size, out / 'p2.log').rstrip().endswith('create ok')
-    assert path.read_bytes() == path2.read_bytes()
+    assert digest(path) == digest(path2)
     code, text = fsck(path, 32768, 320 * 2048, out, 'phases')
     assert code == 0, text
     ok('creation-in-phases-equals-creation-in-one-call')
 
     # A write that fails part way leaves only allowed sectors changed, and the next run is refused or repairs nothing silently.
     path, img, v = make('interrupt', 8, 320, 32768, False)
-    original = path.read_bytes()
+    original = out / 'interrupt.orig'
+    ro.run(['cp', '--reflink=auto', '--sparse=auto', path, original])
     r = tool('create', path, 32768, NAME, 2 * 1024 * 1024, out / 'i.log', 'fail-3')
     assert r.rstrip().endswith('create io'), r
-    after = path.read_bytes()
     log = [tuple(map(int, l.split())) for l in (out / 'i.log').read_text().splitlines()]
     assert len(log) == 3
-    changed = [s for s in range(len(original) // SECTOR) if original[s * SECTOR:(s + 1) * SECTOR] != after[s * SECTOR:(s + 1) * SECTOR]]
+    changed = changed_sectors(original, path)
     assert all(v.sector(3) <= s < v.sector(3) + 4096 for s in changed)     # only data clusters, which are still free
     code, text = fsck(path, 32768, 320 * 2048, out, 'interrupt')
     assert code == 0, text
     ok('a-failed-write-before-the-chain-leaves-a-clean-volume')
-    harness.save(out / 'result.json', {'physical_access': False, 'cases': passed})
+    harness.save(record_dir / 'result.json', {'physical_access': False, 'cases': passed})
     print(len(passed), 'FAT32 create checks passed')
 
 

@@ -182,7 +182,7 @@ static int voltage(struct a733_mmc_platform *p,unsigned initial)
 }
 static uint32_t irq_bit(const struct a733_mmc_platform *p)
 {return A733_MMC_GIC_BIT(a733_mmc_slot(p->config.kind,p->config.emmc_host));}
-static int masked(struct a733_mmc_platform *p)
+static int masked_pending(struct a733_mmc_platform *p,int tolerate_pending)
 {
     uint32_t v,mask=irq_bit(p);
     if(!rd(p,GIC,&v))return -1;
@@ -192,13 +192,17 @@ static int masked(struct a733_mmc_platform *p)
     if(!rd(p,GIC+0x318,&v))return -1;
     if(v&mask)return 0;
     if(!rd(p,GIC+0x218,&v))return -1;
-    return (v&mask)?-1:1; /* Preserve an unexplained inherited pending interrupt. */
+    return (v&mask)&&!tolerate_pending?-1:1; /* Preserve an unexplained inherited pending interrupt. */
 }
+static int masked(struct a733_mmc_platform *p){return masked_pending(p,0);}
 /* The controller's interrupt as the running checks want it: masked, or, once the owner completes by interrupt, enabled with the
  * distributor settled. */
 static int gic_ok(struct a733_mmc_platform *p)
 {
-    if(!p->irq_mode)return masked(p);
+    /* A level interrupt stays pending in the distributor while the controller's status asserts it. After a fault in interrupt mode the owner has masked the line, but
+     * the status that raised it is cleared only by the restart's own reset (restart_step), which runs after this check: until that reset has run the pending bit is
+     * the fault's, not an unexplained inheritance. The third write session's restart failed here, before its first controller access. */
+    if(!p->irq_mode)return masked_pending(p,p->core.restart!=0);
     uint32_t v;
     return rd(p,GIC,&v)&&!(v&BIT(31))?1:-1;
 }
@@ -741,6 +745,9 @@ static int close_idle(struct a733_mmc_platform *p)
 }
 int a733_mmc_platform_irq(struct a733_mmc_platform *p,int enable)
 {
+    /* Leaving interrupt mode is always allowed: a failed transfer (a core in FAULT, a borrowed buffer) must be able to give the mode up before its restart, which
+     * refuses while the mode is on (the third write session on 3-3 stopped there: its owner could not clear the mode with the core faulted). */
+    if(p&&p->initialized&&!enable){p->irq_mode=0;return 1;}
     if(!p||!p->initialized||p->update||p->config.kind!=SUNXI_MMC_SD||p->stage!=READY||p->fault||
        p->core.state!=SUNXI_MMC_READY||p->core.borrowed||p->ops.current(p->cookie)!=1)return 0;
     p->irq_mode=enable?1u:0u;return 1;

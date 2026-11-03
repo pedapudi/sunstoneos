@@ -1063,8 +1063,7 @@
   "workload-bisect-host.py": "an application image, session or bundle the gate does not build | needs --build, --bundle, --models, --fel, --output",
   "workload-bisect-probe.py": "an application image, session or bundle the gate does not build | needs --case, --image, --bundle, --output",
   "sd-return-host.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | needs the output of sd-return-native.py, which does not run on the current image",
-  "sd-return-continuity.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | needs the output of sd-return-native.py, which does not run on the current image",
-  "storage-write-geometry-33.py": "cached builds or images of earlier work (cache/build) | needs --output, cache/build, cache/sd-backup"
+  "sd-return-continuity.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | needs the output of sd-return-native.py, which does not run on the current image"
  },
  "bundles": {
   "opp33": [

@@ -39,6 +39,23 @@ int main(void)
     assert(a733_storage_bounds_parse(&b, blob, sizeof blob) && a733_storage_bounds_verify(&b, read_card, NULL));
     assert(a733_storage_bounds_card_is(&b, CID31) && !a733_storage_bounds_card_is(&b, CID33));
     memset(&b, 0, sizeof b); assert(!a733_storage_bounds_parse(&b, blob, sizeof blob - 16));
-    puts("PASS: the bounds blob names its card; only that CID is accepted (every single-bit difference refused), the identity is unreadable before the hash matches and cannot be edited after parse, a blob without one does not parse");
+    /* A scratch blob (version 4): one partition range, no backup, a zero digest. It verifies without a read, allows writes inside the partition only, names its card, and
+     * is refused with a backup range, a second write range, a non-zero digest or the strict magic over its shape. */
+    {
+        uint8_t s[16 + 32 + 16 + 16]; memset(s, 0, sizeof s); memcpy(s, A733_BOUNDS_MAGIC_SCRATCH, 8); s[8] = 1;
+        put64(s + 48, 2048); put64(s + 56, 1000);
+        for (unsigned i = 0; i < 4; ++i) for (unsigned k = 0; k < 4; ++k) s[64 + 4 * i + k] = (uint8_t)(CID33[i] >> (24 - 8 * k));
+        memset(&b, 0, sizeof b);
+        assert(a733_storage_bounds_parse(&b, s, sizeof s) && !a733_storage_bounds_card_is(&b, CID33) && !a733_storage_bounds_allows(&b, 2048, 1));
+        assert(a733_storage_bounds_verify(&b, read_card, NULL));
+        assert(a733_storage_bounds_card_ok(&b, 1, 1, CID33) && !a733_storage_bounds_card_ok(&b, 1, 1, CID31));
+        assert(a733_storage_bounds_allows(&b, 2048, 1000) && a733_storage_bounds_allows(&b, 3047, 1));
+        assert(!a733_storage_bounds_allows(&b, 2047, 1) && !a733_storage_bounds_allows(&b, 3048, 1) && !a733_storage_bounds_allows(&b, 3047, 2) && !a733_storage_bounds_allows(&b, 0, 1));
+        s[40] = 1; memset(&b, 0, sizeof b); assert(!a733_storage_bounds_parse(&b, s, sizeof s)); s[40] = 0;            /* a digest is not allowed */
+        s[12] = 1; memset(&b, 0, sizeof b); assert(!a733_storage_bounds_parse(&b, s, sizeof s)); s[12] = 0;            /* nor a backup count */
+        s[8] = 2; memset(&b, 0, sizeof b); assert(!a733_storage_bounds_parse(&b, s, sizeof s)); s[8] = 1;             /* nor two write ranges */
+        s[7] = '3'; memset(&b, 0, sizeof b); assert(!a733_storage_bounds_parse(&b, s, sizeof s));                      /* the strict magic over this shape: no backup, refused */
+    }
+    puts("PASS: the bounds blob names its card; only that CID is accepted (every single-bit difference refused), the identity is unreadable before the hash matches and cannot be edited after parse, a blob without one does not parse, and a scratch blob verifies without a read and bounds writes to its partition");
     return 0;
 }

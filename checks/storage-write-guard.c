@@ -15,7 +15,7 @@
 static int image_fd;
 static uint64_t dev_sectors, part_base, part_sectors, delay_us;
 static const char *result_path;
-static uint64_t region_fat1, region_fat2, region_data, region_end, region_fsinfo;
+static uint64_t region_fat1, region_fat2, region_data, region_end, region_fsinfo, region_boot = UINT64_MAX;   /* the boot sector is writable only in the format mode */
 
 /* The model's clock is virtual: it advances only by the waits the application asks for (ss_usb_wait) and by the modeled card's
  * time per write call. Host load therefore never moves a deadline relative to the writes: a session that must be cut after N
@@ -42,7 +42,7 @@ int ss_storage_region(void *b, size_t n) { (void)b; (void)n; return 1; }
 int ss_storage_close(void) { return 1; }
 int ss_storage_open_read(void) { return 1; }
 int ss_storage_diagnostic(uint64_t out[4]) { memset(out, 0, 32); return 1; }
-int ss_storage_mode(uint64_t out[4]) { memset(out, 0, 32); return 1; }
+int ss_storage_mode(uint64_t out[5]) { memset(out, 0, 40); return 1; }
 int ss_storage_owner_stats(struct ss_storage_owner_stats *s) { memset(s, 0, sizeof *s); s->irq_cores = s->owner_cores = s->caller_cores = 1; return 1; }
 void ss_finish(const void *res, size_t bytes)
 {
@@ -73,7 +73,7 @@ static int dev_read(void *c, uint64_t s, uint32_t n, uint8_t *buf)
 static int allowed(uint64_t s)
 {
     uint64_t fsz = region_fat2 - region_fat1;
-    return (s >= region_fat1 && s < region_fat2 + fsz) || s == region_fsinfo || (s >= region_data && s < region_end);
+    return (s >= region_fat1 && s < region_fat2 + fsz) || s == region_fsinfo || s == region_boot || (s >= region_data && s < region_end);
 }
 static int dev_write(void *c, uint64_t s, uint32_t n, const uint8_t *buf)
 {
@@ -118,6 +118,7 @@ int main(int argc, char **argv)
     uint32_t info = b[48] | b[49] << 8;
     region_fat1 = part_base + reserved; region_fat2 = region_fat1 + fsz;
     region_fsinfo = info ? part_base + info : UINT64_MAX;
+    if (mode_blob[0] == 9) region_boot = part_base;
     region_data = part_base + reserved + (uint64_t)fats * fsz; region_end = part_base + part_sectors;
     struct ss_grant g = {0};
     if (getenv("FINISH_AFTER_US")) { finish_by_us = now_us() + strtoull(getenv("FINISH_AFTER_US"), 0, 0); cut_enabled = getenv("CUT") != NULL; g.finish_by_us = finish_by_us; }

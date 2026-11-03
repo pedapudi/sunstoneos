@@ -194,7 +194,7 @@ def submit(board, admission, image, refused_image, located, cache, work, cases):
         assert job['preflight'].get('admitted') is True, job['preflight']
         cases.append('submit admits the image')
         with queue.locked() as state:
-            before = len(state['jobs'])
+            before = len(state['jobs']) + len(state['history'])
         try:
             queue.submit(arguments(refused_image, 'the changed manifest is refused'))
         except board.images.AdmissionRefusal as error:
@@ -202,7 +202,7 @@ def submit(board, admission, image, refused_image, located, cache, work, cases):
         else:
             raise AssertionError('submit queued an image the board would refuse')
         with queue.locked() as state:
-            after = len(state['jobs'])
+            after = len(state['jobs']) + len(state['history'])
         assert before == after, 'a refused submission was queued'
         leftover = [d for d in (queue.root / 'entries').iterdir() if not (d / 'entry.json').exists()]
         assert not leftover, f'a refused submission left a half-built entry directory: {leftover}'
