@@ -174,6 +174,9 @@ def land(args):
                               '--approved-by coordinator:\n' + '\n'.join(hits))
             label = 'land-%s-%s' % (re.sub(r'[^A-Za-z0-9._-]', '-', branch.replace('work/', '')),
                                     datetime.datetime.now().strftime('%m%d-%H%M%S'))
+            # The registry check takes seconds; a check the gate has no answer for would otherwise fail the gate at its end.
+            run_step('checks/gate-inputs.py', args.registry_command + ['--output', str(cache / 'build' / ('registry-' + label + '.json'))],
+                     worktree)
             gate = args.gate_command + [str(worktree), label, '--reason', args.reason, '--full']
             subprocess.run(gate, cwd=worktree, capture_output=True, text=True)
             summary = cache / 'build' / ('gate-' + label) / 'summary.txt'
@@ -220,6 +223,7 @@ def main(argv=None):
                         help='gate command; WORKTREE LABEL --reason TEXT --full are appended')
     parser.add_argument('--evidence-command', default=os.environ.get('LAND_EVIDENCE_COMMAND'))
     parser.add_argument('--progress-command', default=os.environ.get('LAND_PROGRESS_COMMAND'))
+    parser.add_argument('--registry-command', default=os.environ.get('LAND_REGISTRY_COMMAND'))
     args = parser.parse_args(argv)
     try:
         host_space.preflight(args.cache / 'build')
@@ -230,6 +234,7 @@ def main(argv=None):
     args.gate_command = shlex.split(args.gate_command or str(args.cache / 'bin/integration-gate.sh'))
     args.evidence_command = shlex.split(args.evidence_command or '%s tools/evidence.py' % sys.executable)
     args.progress_command = shlex.split(args.progress_command or '%s checks/progress.py' % sys.executable)
+    args.registry_command = shlex.split(args.registry_command or '%s -B checks/gate-inputs.py' % sys.executable)
     try:
         land(args)
     except Refused as error:

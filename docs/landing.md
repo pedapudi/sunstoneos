@@ -19,10 +19,11 @@ coordinator passes it.
 
 Further options serve the check: `--cache`, `--bringup-worktree`, `--remote`,
 `--wait SECONDS` (wait for the lock instead of refusing at once),
-`--gate-command`, `--evidence-command` and `--progress-command`. The three
-command options also read `LAND_GATE_COMMAND`, `LAND_EVIDENCE_COMMAND` and
-`LAND_PROGRESS_COMMAND`. They exist so that the check can replace the gate; a
-real landing uses the defaults.
+`--gate-command`, `--evidence-command`, `--progress-command` and
+`--registry-command`. The four command options also read `LAND_GATE_COMMAND`,
+`LAND_EVIDENCE_COMMAND`, `LAND_PROGRESS_COMMAND` and `LAND_REGISTRY_COMMAND`.
+They exist so that the check can replace the gate; a real landing uses the
+defaults.
 
 ## Sequence
 
@@ -39,7 +40,11 @@ real landing uses the defaults.
    the tool again.
 5. It requires that `bringup` is an ancestor of the merge result and that the
    branch holds at least one commit beyond `bringup`.
-6. It compares the diff against `bringup` with the protected paths (below).
+6. It compares the diff against `bringup` with the protected paths (below),
+   then runs `checks/gate-inputs.py`. That check refuses, in about ten seconds,
+   a check that the gate registry (`checks/gate-inputs.json`) neither runs nor
+   waives with a reason. The gate would otherwise fail on that check after its
+   full run.
 7. It runs `~/.cache/sunstoneos/bin/integration-gate.sh WORKTREE LABEL --reason
    TEXT --full` with the label `land-BRANCH-MMDD-HHMMSS`. The gate passes when
    `~/.cache/sunstoneos/build/gate-LABEL/summary.txt` has a `PASS selected`
@@ -91,6 +96,7 @@ coordinator.
 `checks/land.py --output DIR` builds a bare origin, a `bringup` worktree and
 worker worktrees in the new directory `DIR`, and replaces the gate with a stub.
 It covers a clean landing, a landing when `bringup` moves during the gate, and
-the refusals for unmerged paths, a failed gate, protected paths, a dirty
+the refusals for unmerged paths, a failed gate, an unregistered check,
+protected paths, a dirty
 worktree, a branch with nothing to land and a held lock. It also covers the
 coordinator approval.
