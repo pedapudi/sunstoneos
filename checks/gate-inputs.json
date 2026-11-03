@@ -369,7 +369,9 @@
       "--case",
       "loss-active",
       "--case",
-      "deadline-active"
+      "deadline-active",
+      "--case",
+      "native-client"
      ]
     }
    ]
