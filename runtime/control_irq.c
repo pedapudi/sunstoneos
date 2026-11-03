@@ -342,6 +342,7 @@ unsigned ulSunstoneControlWorst(unsigned core, unsigned rank, struct ss_control_
     return 1;
 }
 /* Present only in a fork image built with SUNSTONE_OWNER_COUNTERS; the weak copy keeps other images linking. */
+__attribute__((weak)) uint64_t ulSunstonePhase(unsigned cpu, unsigned phase, unsigned field) { (void)cpu; (void)phase; (void)field; return 0; }
 __attribute__((weak)) uint64_t ulSunstoneOwnerCounters(unsigned cpu, unsigned which) { (void)cpu; (void)which; return 0; }
 /* Interrupts of a control core that ended a wfi: count, longest and count over 5 us, and the histogram. */
 unsigned ulSunstoneControlWfi(unsigned core, uint64_t *count, uint64_t *max_ticks, uint64_t *over5, const uint32_t **bins)
