@@ -19,7 +19,13 @@ import struct
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import memory_layout
+# The layout record of this tree, whatever another tool of the process imported under the same name: the board runner
+# runs the tools of its own tree and loads a host tree's tools beside them.
+import importlib.util
+_spec = importlib.util.spec_from_file_location('memory_layout_of_' + Path(__file__).resolve().parent.name,
+                                               Path(__file__).resolve().parent / 'memory_layout.py')
+memory_layout = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(memory_layout)
 
 MAGIC = 0x5453464e4d505041
 VERSION = 1
