@@ -508,7 +508,7 @@ def prepare(args, info, live, out, *, dma_binding=None):
     parts, address, identity = base.image_parts(Path(args.image))
     prefix[48:80] = identity
     radio_profile = None
-    if 'os_radio_result_descriptor' in info['symbols']:
+    if 'os_radio_result_descriptor' in (info.get('symbols') or {}):
         # The scanning radio image: a workload 3 session, a scan-only radio profile and the firmware it names.
         scan = load('radio_scan_prepare', ROOT/'tools/radio_scan_prepare.py')
         reference = (ROOT/'docs/designs/radio-vendor-power-sequence.md').read_bytes()
