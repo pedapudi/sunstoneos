@@ -94,6 +94,27 @@ def image_facts(image):
                 'seconds': struct.unpack_from('<5Q', marker)[4]}
 
 
+def npu_data_source(image):
+    """C definitions of the NPU data the admission reads from the linked image: the client model, the catalogue (model count
+    and digest) and the queue's link table. They are the image's own bytes, read from its ELF."""
+    import struct
+    with Path(image).open('rb') as stream:
+        elf = ELFFile(stream)
+        model = symbol_bytes(elf, 'os_npu_client_model')
+        count = symbol_bytes(elf, 'os_npu_model_count')
+        digest = symbol_bytes(elf, 'os_npu_catalogue_digest')
+        edges = symbol_bytes(elf, 'ss_npu_queue_edges')
+    if model is None or count is None or digest is None or len(digest) != 32:
+        raise Unavailable('the image has no NPU catalogue data (os_npu_client_model, os_npu_model_count, os_npu_catalogue_digest)')
+    links = struct.unpack_from('<Q', edges, 8)[0] if edges is not None and len(edges) >= 16 else 0
+    return ('#include "os.h"\n#include "npu.h"\n#include "sunstone_npu_queue.h"\n'
+            'const unsigned os_npu_client_model = %du;\nconst unsigned os_npu_model_count = %du;\n'
+            'const uint8_t os_npu_catalogue_digest[32] = {%s};\n'
+            'const struct ss_npu_queue_edges ss_npu_queue_edges = {0, %du};\n'
+            % (struct.unpack('<I', model[:4])[0], struct.unpack('<I', count[:4])[0],
+               ','.join(str(b) for b in digest), links))
+
+
 def harness_key(image, sources):
     h = hashlib.sha256(Path(image).read_bytes())
     for path in sources:
@@ -129,6 +150,12 @@ def build_harness(image, build=None, cache=None):
              (ROOT / 'tools/host_admission.c', defines)]
     if '-DSUNSTONE_A733_OS_CPU_CLOCK=1' in defines:
         units.append((source / 'drivers/clock/a733_cpu_clock.c', [d for d in defines if d != '-DSUNSTONE_CRUMBS=1']))
+    npu = '-DSUNSTONE_A733_OS_NPU=1' in defines
+    if npu:
+        # The declaration check of the image (apps/os/npu-declaration.c) with the image's own NPU data, read from its ELF.
+        # Without the breadcrumb writes: they are aarch64 assembly, and the host keeps no failure record.
+        quiet = [d for d in defines if d != '-DSUNSTONE_CRUMBS=1']
+        units += [(source / 'apps/os/npu-declaration.c', quiet), (source / 'drivers/npu/npu_declaration.c', quiet)]
     for path, _ in units:
         if not path.is_file():
             raise Unavailable('missing admission source %s' % path)
@@ -147,6 +174,12 @@ def build_harness(image, build=None, cache=None):
         if done.returncode:
             raise Unavailable('cannot compile %s with the image definitions: %s' % (path.name, done.stderr.strip()[:400]))
         objects.append(obj)
+    if npu:
+        (out / 'image-npu.c').write_text(npu_data_source(image))
+        done = run([*cc, *defines, *includes, '-I' + str(source / 'apps/os'), '-c', out / 'image-npu.c', '-o', out / 'image-npu.o'])
+        if done.returncode:
+            raise Unavailable('cannot compile the image NPU data: %s' % done.stderr.strip()[:400])
+        objects.append(out / 'image-npu.o')
     (out / 'manifest.bin').write_bytes(facts['manifest'])
     (out / 'manifest.c').write_text(
         '#include "application.h"\n__asm__(".section sunstone_manifest,\\"a\\"\\n.balign 8\\n.global __start_sunstone_manifest\\n'

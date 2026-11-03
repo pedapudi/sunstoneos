@@ -94,6 +94,7 @@ struct os_npu_session;
 /* The session's NPU declaration checked against what this image links and holds. NPU_DECLARATION_OK admits it; the
  * memory it reserves is checked at start. A session without a declaration is refused. */
 enum npu_declaration_result os_npu_declaration_admitted(const struct os_npu_session *);
+struct npu_declaration os_npu_declaration_of(const struct os_npu_session *);
 /* The in-flight depth the session declares: the deepest queue the application may open. */
 unsigned os_npu_in_flight(void);
 unsigned os_npu_links(void);
