@@ -3,8 +3,8 @@
 `tools/land.py` lands a worker branch on `bringup` without the coordinator. It
 merges `bringup` into the branch, runs the checks that the change earns,
 fast-forwards `bringup` and pushes it. The checks scale with risk: a change to
-`docs/` runs three quick checks and no gate, and any other change runs the gate in
-its affected mode. The full suite runs afterwards on the `bringup` tip, in its
+`docs/` runs three quick checks and no gate, and any other change runs the gate at landing, reusing
+a passing gate when one exists (below). The full suite runs afterwards on the `bringup` tip, in its
 own process, and blocks nothing. `checks/land.py` checks the tool against a
 temporary origin.
 
@@ -21,10 +21,11 @@ coordinator passes it.
 
 Further options serve the check: `--cache`, `--bringup-worktree`, `--remote`,
 `--wait SECONDS` (wait for the lock instead of refusing at once),
-`--gate-command`, `--evidence-command`, `--links-command`, `--registry-command`
-and `--full-gate-command`. Each command option also reads an environment
-variable (`LAND_GATE_COMMAND`, `LAND_EVIDENCE_COMMAND`, `LAND_LINKS_COMMAND`,
-`LAND_REGISTRY_COMMAND`, `LAND_FULL_GATE_COMMAND`). They exist so that the check
+`--gate-command`, `--evidence-command`, `--links-command`, `--registry-command`,
+`--affected-command` and `--full-gate-command`. Each command option also reads an
+environment variable (`LAND_GATE_COMMAND`, `LAND_EVIDENCE_COMMAND`,
+`LAND_LINKS_COMMAND`, `LAND_REGISTRY_COMMAND`, `LAND_AFFECTED_COMMAND`,
+`LAND_FULL_GATE_COMMAND`). They exist so that the check
 can replace the gate; a real landing uses the defaults.
 
 ## Checks by risk
@@ -35,19 +36,40 @@ The tool compares the diff against `bringup` with the glob `docs/**`.
   validate`, `tools/evidence.py sync --check` and `checks/docs-links.py` in the
   worker's worktree, and no gate. The landing record names the gate `docs-only`.
   A Markdown file outside `docs/` is code for this purpose.
-- **Anything else.** The tool starts the gate in its affected mode, `tools/integration-gate.py
-  TREE LABEL --reason TEXT --affected BASE..TIP --keep-going`, and runs the
-  registry check (`checks/gate-inputs.py`) beside it. The gate selects the
-  checks whose inputs the diff touches and reports every failure. If the registry
-  check refuses a check that the gate registry (`checks/gate-inputs.json`)
-  neither runs nor waives with a reason, the tool stops the gate and refuses. The
-  gate passes when `~/.cache/sunstoneos/build/gate-LABEL/summary.txt` has a
+- **Anything else.** The tool starts the gate, `integration-gate.sh TREE LABEL
+  --reason TEXT --keep-going` with `--affected BASE..TIP` or, when it reuses a
+  gate (below), `--changed PATH...`, and runs the check of the gate declarations
+  (`checks/gate-inputs.py`) beside it. The gate selects the checks whose inputs
+  the diff touches and reports every failure. If that check finds a check that
+  declares no `GATE_RUNS`, `GATE_BOARD` or `GATE_WAIVED`, the tool stops the gate and refuses.
+  The gate passes when `~/.cache/sunstoneos/build/gate-LABEL/summary.txt` has a
   `PASS selected` line and no `FAIL` line; a refusal quotes the failing lines.
 
 The gate runs in the integration worktree `~/.cache/sunstoneos/land-integration`,
 which the tool detaches at the commit to land. Every code landing gates there,
 so the build directories persist from one landing to the next and a gate rebuilds
 only what changed, and a worker cannot move the tree under the gate.
+
+## The gate runs once
+
+A worker builds and runs the checks it changed while it works. It does not run
+the affected gate after each commit: the gate runs at landing. A worker that wants
+an early result runs `integration-gate.sh TREE LABEL --affected bringup..HEAD` once
+on a clean tree before it asks for a landing.
+
+A passing `--affected` gate on a clean tree writes `gate-record.json` in its
+output: the git tree it ran on, the commit its range starts at, and the checks it
+selected with their inputs. At landing, the tool picks the recorded gate whose
+range starts at a commit already on `bringup` and whose tree differs least from the
+merged tip, and applies one rule: **every check affected by any file that differs
+from that gate's tree is run on the landed tree.**
+
+- If no check is affected by those files, the gate is the landing's evidence and
+  nothing reruns. The landing record names the gate `reused-` and the gate's
+  directory; the check of the gate declarations still runs.
+- Otherwise the tool runs the gate with `--changed` over the differing files: those
+  checks and the build of every image they use.
+- With no such gate, the tool runs `--affected BASE..TIP`, every check the branch affects.
 
 ## Sequence
 
@@ -139,10 +161,11 @@ coordinator.
 
 `checks/land.py --output DIR` builds a bare origin, a `bringup` worktree and
 worker worktrees in the new directory `DIR`, and replaces the gate with a stub.
-It covers a code landing in affected mode, the `docs/`-only landing that runs the
+It covers a code landing in affected mode, the three cases of the rule above
+(a reused gate, a partial rerun and the full run when no gate exists), the `docs/`-only landing that runs the
 evidence and link checks and no gate, the full suite starting after a code
 landing, a landing when `bringup` moves during the gate, the refusals for unmerged
-paths, a failed gate, a missing registry entry, protected paths, a dirty
+paths, a failed gate, a check without gate declarations, protected paths, a dirty
 worktree, a branch with nothing to land and a held lock, and the coordinator
 approval. It also covers `tools/full-gate.py`, the union merge of two appended
 evidence records and the gate lock of `tools/integration-gate.py`.

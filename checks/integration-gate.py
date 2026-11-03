@@ -88,9 +88,8 @@ def plan(value=None, changed=None, index=None):
         checks.append({'check': 'image.py', 'status': 'pending', 'needs': ['--image'], 'output': False})
     if set(changed or []) & {'tools/git-hooks/pre-push', 'checks/harness.py', 'checks/pre-push-hook.py', 'untracked-hook-input.txt'}:
         checks.append({'check': 'pre-push-hook.py', 'status': 'runnable', 'needs': [], 'output': True})
-    return {'baseline': 'sup', 'range': value, 'changed': changed, 'checks': checks}
+    return {'baseline': 'sup', 'revisions': ['base', 'head'], 'range': value, 'changed': changed, 'checks': checks}
 ''')
-        (selector.parent / 'gate-inputs.json').write_text('{"images": {}, "bundles": {}, "checks": {}, "board": [], "waived": {}}\n')
         (selector.parent / 'pre-push-hook.py').write_text('CHECK_INPUTS = ("untracked-hook-input.txt",)\nprint("fake hook fixture")\n')
         hook = source / 'tools/git-hooks/pre-push'
         hook.parent.mkdir(parents=True)
@@ -257,6 +256,10 @@ def plan(value=None, changed=None, index=None):
         self.assertEqual([call[1] for call in runs], ['checks/progress.py', 'checks/focused.py'])
         self.assertIn('--output', runs[1])
         self.assertTrue((self.sandbox / 'build/gate-case/affected.json').is_file())
+        record = json.loads((self.sandbox / 'build/gate-case/gate-record.json').read_text())    # tools/land.py reuses this pass
+        self.assertEqual(record['base'], 'base')
+        self.assertEqual(record['tree'], subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=self.source, text=True).strip())
+        self.assertEqual(sorted(record['checks']), ['focused.py', 'progress.py'])
 
     def test_pending_affected_checks_are_reported_and_incomplete(self):
         result = self.run_gate('--changed', 'pending')

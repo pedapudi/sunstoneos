@@ -131,7 +131,7 @@ BOARD_NEEDS = {'USB access', '--fel'}
 
 def load_gate_inputs(index):
     """What the checks declare for the gate (GATE_RUNS, GATE_BOARD, GATE_WAIVED; checks/check-index.py) and the images it builds."""
-    gate = {name: entry['gate'] for name, entry in index.items()}
+    gate = {name: entry.get('gate', {}) for name, entry in index.items()}
     return {'images': gate_images.IMAGES, 'bundles': gate_images.BUNDLES,
             'checks': {n: {'runs': [{'args': a} for a in g['runs']]} for n, g in gate.items() if 'runs' in g},
             'board': [n for n, g in gate.items() if 'board' in g],
@@ -802,6 +802,12 @@ def main(argv=None):
     if failed or skipped:
         note('FAIL selected integration checks: ' + ', '.join(failed + skipped))
         return 1
+    if affected_plan and affected_plan.get('revisions') and not changes:
+        # tools/land.py reuses this pass for a landing: the tree it ran on and the checks it selected with their inputs.
+        tree_hash = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=source, text=True).strip()
+        selected = [c['check'] for c in affected_plan['checks']]
+        (output / 'gate-record.json').write_text(json.dumps({'tree': tree_hash, 'base': affected_plan['revisions'][0], 'checks': {
+            name: index[name].get('inputs', []) for name in selected if name in index}}, indent=1) + '\n')
     note('PASS selected integration checks; unselected behavior is not revalidated')
     return 0
 
