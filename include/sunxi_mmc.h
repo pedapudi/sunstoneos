@@ -37,8 +37,9 @@ enum sunxi_mmc_mode_reason { SUNXI_MMC_MODE_NONE, SUNXI_MMC_MODE_NO_WINDOW, SUNX
  * it was in and the low 16 bits of the controller's raw interrupt status, so a session that steps down and completes still says why. Zero for a step with no fault. */
 struct sunxi_mmc_mode_event { uint8_t from, to, reason, signal_1v8, error, protocol; uint16_t interrupts; uint16_t blocks; uint8_t descriptor; /* where a write fault stopped: 512-byte blocks the card side had taken (SMHC_TBC0) and the descriptor reached */ };
 #define SUNXI_MMC_MODE_LOG 6u
-/* The sample delay (SMHC_SAMP_DL software field) a tuned card's data write runs with; the read sweep's delay returns afterwards. */
-#define SUNXI_MMC_WRITE_SAMPLE_DELAY 0u
+/* The sample phase (SMHC_NTSR data and command phase fields, 0: 90 degrees, 1: 180 degrees) of the new timing mode that a tuned card's data write runs in; the tuned old mode
+ * and the read sweep's delay return afterwards. 0 is the board kernel's v5p3x row for 104 and 208 MHz. */
+#define SUNXI_MMC_WRITE_NTSR_PHASE 0u
 /* sd_signal operations and QUERY capability bits. */
 #define SUNXI_MMC_SIGNAL_QUERY 0u
 #define SUNXI_MMC_SIGNAL_SET 1u

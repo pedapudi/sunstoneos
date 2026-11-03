@@ -40,6 +40,7 @@ struct model {
     uint32_t pending_taken;
     unsigned writes_seen, reads_seen;
     unsigned samp_n, samp_value[8], samp_at[8];       /* writes of SAMP_DL (0x144): the value and how many commands had been issued */
+    unsigned ntsr_n, ntsr_value[8], ntsr_at[8];       /* the same for NTSR (0x5c) */
 };
 static struct model m;
 static struct sunxi_mmc h;
@@ -114,7 +115,7 @@ static int read32(void *ctx, uint32_t off, uint32_t *out)
         if (m.start_pending_reads && !--m.start_pending_reads) m.reg[off / 4] &= ~SUNXI_SMHC_CMD_START;
         return 1;
     case SUNXI_SMHC_MISTA: *out = irq_line(); return 1;
-    case SUNXI_SMHC_IMASK: *out = m.reg[off / 4]; return 1;
+    case SUNXI_SMHC_IMASK: case 0x5c: *out = m.reg[off / 4]; return 1;
     case SUNXI_SMHC_RESP0: case SUNXI_SMHC_RESP1: case SUNXI_SMHC_DMAC: case SUNXI_SMHC_THLD:
         *out = off == SUNXI_SMHC_DMAC ? m.reg[off / 4] & ~SUNXI_SMHC_DMAC_RESET : m.reg[off / 4]; return 1;
     case SUNXI_SMHC_RINT:
@@ -195,6 +196,7 @@ static int write32(void *ctx, uint32_t off, uint32_t value)
     case SUNXI_SMHC_A12A: case SUNXI_SMHC_DLBA: case SUNXI_SMHC_IDIE: m.reg[off / 4] = value;
         if (off == SUNXI_SMHC_GCTRL && (value & SUNXI_SMHC_GCTRL_DMA_ENABLE)) assert(m.cache_before == 1);
         return 1;
+    case 0x5c: assert(m.ntsr_n < 8); m.ntsr_value[m.ntsr_n] = value; m.ntsr_at[m.ntsr_n++] = m.command_count; m.reg[off / 4] = value; return 1;
     case 0x144: assert(m.samp_n < 8); m.samp_value[m.samp_n] = value; m.samp_at[m.samp_n++] = m.command_count; m.reg[off / 4] = value; return 1;
     case SUNXI_SMHC_THLD: m.reg[off / 4] = value; return 1;
     case SUNXI_SMHC_IMASK: m.reg[off / 4] = value; return 1;
@@ -357,18 +359,20 @@ int main(void)
             /* The controller is left quiescent: no DMA active, resets complete. */
             assert(!m.dma_on && !(m.reg[0] & SUNXI_SMHC_GCTRL_DMA_ENABLE));
         }
-    /* A tuned card's data write runs with the sample delay at SUNXI_MMC_WRITE_SAMPLE_DELAY and gets the sweep's delay back for the status commands: SAMP_DL is written once
-     * before the CMD25 (after the first CMD13) and once after the data and the automatic stop, before the next CMD13; a legacy card never touches it. */
+    /* A tuned card's data write runs in the new timing mode with the vendor's sample phase and delay 0, and gets the tuned old mode and the sweep's delay back for the status
+     * commands: NTSR and SAMP_DL are written once each before the CMD25 (after the first CMD13) and once each after the data and the automatic stop, before the next CMD13. */
     setup(1, 8, 20); csd_writable();
+    m.reg[0x5c / 4] = 0x01710000u;                                          /* the old mode the tuned card runs in */
     h.config.sd_profile = SUNXI_MMC_SD_UHS_SDR104; h.card.timing = 3; h.card.sample_delay = 41; h.card.signal_1v8 = 1;
     assert(start(8)); finish();
-    assert(h.state == SUNXI_MMC_DONE && m.samp_n == 2);
-    assert(m.samp_value[0] == (0x80u | SUNXI_MMC_WRITE_SAMPLE_DELAY) && m.samp_at[0] == 1 && m.commands[0] == 13 && m.commands[1] == 25);
-    assert(m.samp_value[1] == (0x80u | 41u) && m.samp_at[1] == 2 && m.commands[2] == 13);
+    assert(h.state == SUNXI_MMC_DONE && m.samp_n == 2 && m.ntsr_n == 2);
+    assert(m.ntsr_value[0] == (0x01710000u | 0x80000000u | (SUNXI_MMC_WRITE_NTSR_PHASE << 8) | (SUNXI_MMC_WRITE_NTSR_PHASE << 4)) && m.ntsr_at[0] == 1 && m.samp_value[0] == 0x80u && m.samp_at[0] == 1);
+    assert(m.commands[0] == 13 && m.commands[1] == 25 && m.commands[2] == 13);
+    assert(m.ntsr_value[1] == 0x01710000u && m.ntsr_at[1] == 2 && m.samp_value[1] == (0x80u | 41u) && m.samp_at[1] == 2);
     { struct sunxi_mmc_result res; assert(sunxi_mmc_take(&h, &res)); }
     setup(1, 8, 20); csd_writable();
     h.config.sd_profile = SUNXI_MMC_SD_UHS_SDR104; h.card.timing = 1; h.card.signal_1v8 = 1;       /* SDR25 is not tuned: its delay is already 0 */
-    assert(start(8)); finish(); assert(h.state == SUNXI_MMC_DONE && m.samp_n == 0);
+    assert(start(8)); finish(); assert(h.state == SUNXI_MMC_DONE && m.samp_n == 0 && m.ntsr_n == 0);
     /* Validation is pure: no register access, no authority call, no borrow. */
     setup(1, 2, 10); csd_writable();
     struct sunxi_mmc_write_request r = request(2);
