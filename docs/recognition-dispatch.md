@@ -8,17 +8,17 @@ The GPU option of the image moves those exact sums, for some or all output
 channels of each layer, to the GPU. mimus's own CPU code still converts and
 scales every sum, so recognized text stays bit-identical to the host
 reference. The [design](designs/recognition-dispatch.md) states the budgets;
-[the measurements](designs/recognition-dispatch-measurements.md) compare
+[its evidence records](evidence/recognition-dispatch.jsonl) compare
 the result with them.
 
 Status: **implemented** and host-modeled. The image with the option
 configures, links and passes its link check; the GPU
 runtime and its session component are described in
 [gpu-mimus-service.md](gpu-mimus-service.md) and measured in
-[the GPU recognition measurements](designs/gpu-recognition-measurements.md).
+[the GPU recognition evidence records](evidence/gpu-recognition.jsonl).
 The image build's [pinned mimus engine](../apps/mimus/source.json) declares
 the exact-sum hook; supervised admission verifies that hook is linked. The design's
-["Changes needed in the mimus engine"](designs/gpu-recognition.md#changes-needed-in-the-mimus-engine)
+["Engine requirements"](designs/gpu-recognition.md#engine-requirements)
 gives the hook's original integration. No board has run integrated OS GPU
 recognition. The option is off by default. It supports the existing resident
 compositions and supervised recorded recognition with two or eight inference
@@ -103,7 +103,7 @@ measurements replace, are:
 | A55 NEON rate | 4,167,910,560 MACs in 14.894 s at 494 MHz, 0.280 G MAC/s per core |
 | A76 NEON rate | Twice the A55's per clock |
 | Historical placement-model GPU rate | 32 lanes at 400 MHz, 3.39 instructions per MAC (217 instruction groups per 64 MACs, the built program), over a grid padded to 32 rows by 16 channels; `--load-cycles` adds a load-latency bound. The current hardware clock is 1008 MHz; this unchanged model is not a measurement of it. |
-| Read-out | 3.0 instructions per GPU output, the engine's compiled read-out counted on the placed shapes ([measurements](designs/gpu-recognition-measurements.md#with-the-engines-hook)); 1 per clock on an A55, 2 on an A76 |
+| Read-out | 3.0 instructions per GPU output, the engine's compiled read-out counted on the placed shapes ([evidence record](evidence/gpu-recognition.jsonl), id `gpu-recognition-engine-hook`); 1 per clock on an A55, 2 on an A76 |
 | Cache maintenance | 20 cycles per 64-byte line |
 | Per-job overhead | 25 µs submit, 25 µs firmware, 25 µs wake; 10 µs to hand work to the second worker |
 

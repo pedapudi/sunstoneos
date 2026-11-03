@@ -5,7 +5,7 @@ sums the products exactly, then converts each sum to float once and scales it
 in a fixed order (the **read-out**). This component computes the exact sums on
 the PowerVR GPU and gives the CPU a read-out whose results are bit-identical
 to mimus's CPU path. The [design](designs/gpu-mimus-compute.md) states the
-budgets and [the measurements](designs/gpu-mimus-compute-measurements.md)
+budgets and [the measurements](evidence/gpu-mimus-compute.jsonl)
 compare the result with them. The OS image's
 [placement of linear layers](recognition-dispatch.md) decides which output
 channels of each layer run here.

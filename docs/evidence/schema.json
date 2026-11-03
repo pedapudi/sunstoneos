@@ -30,6 +30,11 @@
     },
     "conditions": {"type": "object", "additionalProperties": {"type": "string"}, "$comment": "Clocks, voltages, inputs and other settings, as named strings."},
     "evidence": {"type": "array", "items": {"type": "string", "minLength": 1}, "$comment": "Paths to the run directory and other artifacts."},
+    "design": {"type": ["string", "null"], "$comment": "Path of the design or status document that describes the feature the run tested."},
+    "image": {"type": ["string", "null"], "$comment": "The image name or build target, for a run whose hash is not recorded."},
+    "prediction": {"type": "string", "minLength": 1, "$comment": "What the run was expected to show, written before the run: the expected figures and the reasoning from the reference. Absent from older records."},
+    "conclusion": {"type": "string", "minLength": 1, "$comment": "What the result establishes about the prediction and the design. Required when a prediction is present."},
+    "narrative": {"type": "string", "minLength": 1, "$comment": "Run description, superseded attempts and figures that no measurement field holds. Required when a record has neither a queue entry nor measurements."},
     "note": {"type": "string"}
   }
 }

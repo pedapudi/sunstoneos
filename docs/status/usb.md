@@ -9,11 +9,20 @@ Native USB0 device transport and bounded xHCI and TinyUSB host classes have host
 **Board-qualified scope:** High-speed inherited-clock USB0 PIO status, echo,
 logging and return pass: native takeover clears SoftConn, completes a 40-byte
 exchange, quiesces USB and returns responsively
-(`board-session-20261023/port-3-3/r9-v3-usb/` and `r9-v4-usb/`). On port 3-1,
-with TYPEC24 physically empty, the source-disabled control, a one-second VBUS
-pulse and a ten-second VBUS hold return normally; VBUS rises within 6.8 ms and
-falls within 2.0 ms (three records below). Loaded-port operation and attached
+(record `usb-session-takeover-r9-v3`). On port 3-1, with TYPEC24 physically
+empty, the source-disabled control, a one-second VBUS pulse and a ten-second
+VBUS hold return normally; VBUS rises within 6.8 ms and falls within 2.0 ms
+(records in the table below). Loaded-port operation and attached
 peripherals remain unqualified.
+
+## Capabilities
+
+| Capability | Status | Key figure | Evidence or design |
+| --- | --- | --- | --- |
+| USB0 takeover from the ROM device session (port 3-3) | qualified on the board | exchange of 40 bytes sent, 1 packet received | [design](../designs/usb-session-takeover.md), `usb-session-takeover-r9-v3` |
+| Type-C source-disabled control, one-second VBUS pulse, ten-second VBUS hold (port 3-1, TYPEC24 empty) | qualified on the board | VBUS rise at most 6.8 ms, fall at most 2.0 ms | [usb.jsonl](../evidence/usb.jsonl) |
+| Host classes: HID, BOT sector reads, serial bridges, UVC, UAC1 microphone | host-tested | 640 by 480 YUYV at 30 frames/s needs 18.432 MB/s | [design](../designs/usb-host-classes.md) |
+| Loaded-port operation, attached peripherals, higher modes | open | none | open work 1 to 6 |
 
 ## Open work
 
@@ -32,6 +41,8 @@ peripherals remain unqualified.
 TYPEC24, the USB-C and DisplayPort connector, requires a USB-C adapter or hub. The native stack supplies Type-C ownership, USB2 and selected Gen1 profiles, bounded hubs, HID, BOT sector reads and recovery, serial bridges, UVC and UAC1 microphone capture. Hot-plug inside an admitted adapter or hub connection is implemented; removing TYPEC24 requires a new source session. The runner accepts finite `usb-class` probes through the watchdog marker, quiescence hook and normal-return receipt; the four OS images still lack real host drain and a returning lifetime. Image hashes and superseded queue entries are in [the image guide](../usb-host-images.md). See [host USB](../usb2-host.md) and [Type-C](../typec.md).
 
 ## Evidence
+
+Designs: [USB0 takeover](../designs/usb-session-takeover.md) (`docs/evidence/usb-session-takeover.jsonl`) and [host classes](../designs/usb-host-classes.md).
 
 Board results are records in `docs/evidence/usb.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-usb-20261101.md).
 

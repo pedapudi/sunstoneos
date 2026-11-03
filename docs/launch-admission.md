@@ -107,12 +107,6 @@ preparation passes both cases. The full bundle fixture passes in 1.73 seconds.
 After the DDR evidence-directory adjustment, both affected owner-injection
 cases pass separately.
 
-Correctness, hardware-safety and recovery reviewers inspect the runner change.
-The manifest change has separate correctness review and a safety audit of the
-removed process checks. Review fixes preserve decoder failure handling, queued
-input bytes, source-relative decoder paths, the probe-check default, unresolved
-return quarantine and separate evidence for both rail-helper invocations.
-
 No physical run or new hardware qualification is recorded here. Existing images
 without a compatible watchdog, finite cleanup and return receipt remain blocked
 at runner admission. Historical cached READMEs are retained as evidence; new

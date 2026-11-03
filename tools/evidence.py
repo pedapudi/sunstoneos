@@ -24,7 +24,7 @@ DEFAULT_QUEUE = Path('~/.cache/sunstoneos/board-queue').expanduser()
 ENTRY = re.compile(r'\b\d{19}-[0-9a-f]{8}\b')
 BEGIN, END = '<!-- evidence-table:begin -->', '<!-- evidence-table:end -->'
 FIELD_ORDER = ('id', 'subsystem', 'date', 'entry_id', 'port', 'image_sha256', 'git_revision',
-               'hypothesis', 'reference', 'outcome', 'verdict', 'measurements', 'conditions', 'evidence', 'note')
+               'design', 'image', 'hypothesis', 'prediction', 'reference', 'outcome', 'verdict', 'measurements', 'conditions', 'conclusion', 'narrative', 'evidence', 'note')
 
 
 def load_schema():
@@ -101,12 +101,26 @@ def validate_records(root, queue=None):
             if record.get('id') in seen:
                 problems.append(f'{where}: duplicate id {record.get("id")} (also {seen[record["id"]]})')
             seen[record.get('id')] = where
+            problems += extension_problems(root, where, record)
             if record.get('entry_id'):
                 for need in ('port', 'image_sha256', 'git_revision'):
                     if not record.get(need):
                         problems.append(f'{where}: a queue record requires {need}')
                 if queue and (Path(queue) / 'entries' / record['entry_id'] / 'run/result.json').exists():
                     problems += queue_disagreements(record, Path(queue), where)
+    return problems
+
+
+def extension_problems(root, where, record):
+    """Rules for the prediction, conclusion and narrative fields."""
+    problems = []
+    if record.get('prediction') and not record.get('conclusion'):
+        problems.append(f'{where}: a record with a prediction requires a conclusion')
+    if not record.get('entry_id') and not record.get('measurements') and not record.get('narrative'):
+        problems.append(f'{where}: a record without a queue entry needs measurements or a narrative')
+    design = record.get('design')
+    if design and not (Path(root) / design.split('#')[0]).exists():
+        problems.append(f'{where}: design {design} does not exist')
     return problems
 
 
@@ -201,6 +215,9 @@ def cmd_add(args):
         record['verdict'] = args.verdict
     if args.note:
         record['note'] = args.note
+    for field in ('prediction', 'conclusion', 'design'):
+        if getattr(args, field):
+            record[field] = getattr(args, field)
     if args.date:
         record['date'] = args.date
     record['measurements'] += [parse_measure(item) for item in args.measure]
@@ -441,6 +458,9 @@ def main():
     add.add_argument('--verdict', choices=('passed', 'failed', 'inconclusive'))
     add.add_argument('--hypothesis')
     add.add_argument('--note')
+    add.add_argument('--prediction')
+    add.add_argument('--conclusion')
+    add.add_argument('--design')
     add.add_argument('--date')
     add.add_argument('--replace', action='store_true')
     add.set_defaults(run=cmd_add)

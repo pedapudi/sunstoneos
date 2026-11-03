@@ -10,6 +10,15 @@ The SunstoneOS image starts on a virtual eight-core board in QEMU and runs throu
 
 No board was used. The virtual board shares the OS, board application and driver sources with the A733 images and replaces the hardware, so it finds software startup faults and cannot qualify the hardware behind a provider.
 
+## Capabilities
+
+| Capability | Status | Key figure | Evidence and design |
+| --- | --- | --- | --- |
+| Supervised and resident OS start to the first application task | host-tested | about 8 s per `checks/qemu-os-boot.py` run | `qemu-os-boot-cases` in [qemu-os-boot.jsonl](../evidence/qemu-os-boot.jsonl) |
+| Thermal, PMIC and resident-supervision faults | host-tested | sensor lost ends the session after 5 s | same record |
+| Latency CPU control | host-tested | reaches main entry, ends with failure `0xb03` | same record |
+| Applications that need the CPU clock owner, DMA, GPU, NPU, USB host or C++ runtime | open | not modeled | `qemu-os-boot-unmodeled-applications` (not run) |
+
 ## Open work
 
 1. Model the CPU clock owner so the latency CPU control passes; it reaches its main entry and ends with failure `0xb03` because the clock owner's record lacks the top operating points.
@@ -23,5 +32,10 @@ No board was used. The virtual board shares the OS, board application and driver
 Board results with a queue entry are records in `docs/evidence/qemu-os-boot.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-qemu-os-boot-20261101.md).
 
 <!-- evidence-table:begin -->
-No board result is recorded in `docs/evidence/qemu-os-boot.jsonl`.
+2 records in `docs/evidence/qemu-os-boot.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+
+| Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
+| --- | --- | --- | --- | --- | --- | --- |
+| `qemu-os-boot-cases` | 2026-11-01 |  | `` | not-run | passed | check_duration 8 s, zero_deadline_failure_code 1879 code, sensor_late_answer 900 ms, sensor_lost_timeout 5 s, service_fault_report_bound 1 s, resident_watchdog 4 s, transport_stall_after_ready 100 ms, usb_ready_delay 30 ms, stall_status 5 |
+| `qemu-os-boot-unmodeled-applications` | 2026-11-01 |  | `` | not-run | inconclusive |  |
 <!-- evidence-table:end -->

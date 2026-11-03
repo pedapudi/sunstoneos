@@ -1,23 +1,24 @@
 # Design: UHS-I SDR104 on the microSD slot
 
 Status:
-- **High speed (profile 2): qualified for returning reads** on port 3-3 by
-  lifetime A (`board-session-20261025-30/port-3-3/sd-ret-a`): 256 reads, every
-  CRC recorded, card clock stopped at exit.
-- **UHS-I SDR104 (profile 3): not qualified.** Lifetime B
-  (`board-session-20261025-32/port-3-3/sd-ret-b`) stopped at CMD11 before any
-  read; "Lifetime B: CMD11 completion" below gives the diagnosis. The fix is
-  in the driver and its emulation, with no board run yet.
+- **High speed (profile 2): qualified on the board** for returning reads
+  ([the DMA read design](sd-dma.md)).
+- **UHS-I SDR104 (profile 3): qualified on the board** for read-only
+  lifetimes on port 3-3, reached by re-entering a card already at 1.8 V
+  ([recovery design](sd-uhs-recovery.md)): 150 MHz, tuning window found, reads
+  match the SDR25 CRCs. The first switch of a card from 3.3 V to 1.8 V
+  (CMD11) ran on port 3-3 with SDR25 reads; the switch followed by SDR104
+  tuning in one lifetime is host-tested only.
+- **Writes at 1.8 V or 150 MHz and OS adoption: open** ([adoption design](sd-uhs-adoption.md)).
 
-The user approved switching the microSD signalling to 1.8 V on 2026-10-25
-([handoff](../handoff.md)).
+The user approved switching the microSD signalling to 1.8 V ([handoff](../handoff.md)).
 
-The read-only SD service gains a fourth bus profile, UHS-I SDR104 (profile 3).
+The read-only SD service has a fourth bus profile, UHS-I SDR104 (profile 3).
 It asks the card for 1.8 V signalling during identification, switches the
 SoC's PF pin bank to 1.8 V, selects SDR104 and runs the card at 150 MHz after
 sweeping the controller's sample delay with CMD19. Any failure before the card
 accepts the switch, and any SDR104 or tuning failure after it, leaves a
-working high-speed card. Failures in between are terminal, because the SD
+working high-speed or SDR25 card. Failures in between are terminal, because the SD
 specification then requires a card power cycle, which this board provides
 only by removing board power.
 
@@ -96,9 +97,13 @@ timing, blank.
    (bit 24) admits CMD11 before CMD2 (`sd.c:890–891`). Linux does not also
    require CCS (`sd.c:884–889`).
 2. **CMD11.** The board kernel sets the controller's voltage-switch flag,
-   `SMHC_CMD` bit 28 (`sunxi-mmc.c:2656–2659`; manual 11.3.8.7). An R1 error
-   aborts (`core.c:1228`). No response requires a power cycle (specification
-   4.2.4.4; `core.c:1224–1225`, `1262–1265`).
+   `SMHC_CMD` bit 28 (`sunxi-mmc.c:2656–2659`; manual 11.3.8.7). The command
+   completes on the voltage-switch interrupt (bit 10), not on command done:
+   the interrupt mask leaves command done off for CMD11, and command done
+   arrives only at the end of the switch in step 8 (`sunxi-mmc.c:1333–1345`,
+   `sunxi-mmc.h:221–227`). An R1 error aborts (`core.c:1228`). No response
+   requires a power cycle (specification 4.2.4.4; `core.c:1224–1225`,
+   `1262–1265`).
 3. **Card holds DAT low.** After at least 1 ms, the host checks that the card
    drives DAT low (`core.c:1235–1239`). The board kernel reads `SMHC_STATUS`
    bit 8, the DAT3 level (`sunxi-mmc.c:2291–2311`; manual 11.3.8.16).
@@ -152,67 +157,60 @@ Upstream Linux `sunxi-mmc` supports no A733 controller. It switches only
 through a VQMMC regulator (`drivers/mmc/host/sunxi-mmc.c:957–972`) and has no
 tuning; it confirms the core sequence only.
 
-## Differences from the previous SunstoneOS path
+## What SunstoneOS checks beyond the references
 
-| Step | Before this change | After |
-| --- | --- | --- |
-| ACMD41 | No S18R; a response with bit 24 faulted | Profile 3 requests S18R when the platform reports the switch available; bit 24 then means S18A |
-| CMD11 | Not issued; the native filter refused it | Issued with bit 28, exact form admitted only for profile 3 |
-| RINTSTS bit 10 | Always terminal | Expected during the switch, terminal elsewhere |
-| PF bank | Read-only checks of 3.3 V | One write of 0 to `0x070` with the card clock stopped; live checks then require 1.8 V |
-| CMD6 | Function 1 (high speed) only | Function 3 (SDR104), then function 1 as the fallback |
-| Module clock | PERI0_400M / 4..32 | Adds PERI0_300M / 1 and PERI0_400M / 2 for profile 3 |
-| Sampling | New mode, fixed phases | Old mode, CMD19 sweep of `SAMP_DL_SW` |
-| Read threshold | Reset value | SDR104 reads: the block size (64 bytes for CMD6 and CMD19, 512 for sectors); disabled in the profile's other timings, including the `NO_WINDOW` fallback; untouched in profiles 0–2 |
-| `DRV_DL` bit 7 | Not written | Not written: the vendor sets it only in FPGA builds, and the manual marks it reserved |
-| Data timeout | `0xffffffff` | 1.7 ms during tuning, then `0xffffffff` |
-
-SunstoneOS also performs checks that the references do not: it requires
-adaptive PF mode, sensed 3.3 V and CLDO5 programmed to 1.8 V before offering
-the switch; it reads back the selector and every SMHC timing register; it
-verifies the PERI0_300M gates and PLL ratio on every platform poll while
-running from that parent; and it refuses a tuning sweep without a window of 12
-delays instead of continuing with an unset delay. It uses PERI0_300M where the
-vendor selects PERI1_300M (`sun60iw2p1.dtsi:4496–4497`), because PERI0 is
+SunstoneOS requires adaptive PF mode, sensed 3.3 V and CLDO5 programmed to
+1.8 V before offering the switch; reads back the selector and every SMHC timing
+register; verifies the PERI0_300M gates and PLL ratio on every platform poll
+while running from that parent; and refuses a tuning sweep without a window of
+12 delays instead of continuing with an unset delay. It uses PERI0_300M where
+the vendor selects PERI1_300M (`sun60iw2p1.dtsi:4496–4497`), because PERI0 is
 already the reserved and checked parent of the negotiated profiles; both give
 300 MHz. It requires the switch-done bit and DAT3 high but not command done,
 because clearing the clock update's flags could remove a command-done bit that
-an early completion raised; the record keeps `RINTSTS` for comparison.
+an early completion raised; the record keeps `RINTSTS` for comparison. The
+vendor's `SMHC_DRV_DL` bit 7 write is left out (see step 10). The data timeout
+is 1.7 ms during tuning and `0xffffffff` otherwise.
 
-## Change
+## Implementation
 
 - **MMC core** (`drivers/storage/sunxi_mmc.c`). Profile 3 queries the
   platform once after CMD8, fixes S18R for every ACMD41, and on S18A runs the
   switch in steps 2–8 above as a non-blocking state machine with absolute
-  deadlines. After ACMD6 it checks and sets SDR104, changes the clock, sweeps
-  the sample delay with CMD19 and resets the controller FIFO and state
-  machines after each failed block. The card record gains the outcome, the
-  capability bits, the chosen delay and the passing window.
-- **Storage platform** (`drivers/storage/a733_mmc_platform.c`). A new
-  callback reports the capability, writes the selector once and polls the
-  bank. The live voltage check follows the bank through 3.3 V, switching and
-  1.8 V. The module callback admits the two new rates.
+  deadlines. CMD11 completes on bit 10 and reads its R1 then; after the clock
+  restart the core clears every flag the update set, and the switch ends on
+  DAT3 high with bit 10 and command done arriving afterwards. After ACMD6 it
+  checks and sets SDR104, changes the clock, sweeps the sample delay with CMD19
+  and resets the controller FIFO and state machines after each failed block
+  ([sweep rules](sd-uhs-recovery.md#the-tuning-sweep-follows-the-vendor-loop)).
+  The card record holds the outcome, the capability bits, the chosen delay and
+  the passing window. The read threshold is the block size in SDR104 reads
+  (64 bytes for CMD6 and CMD19, 512 for sectors), disabled in the profile's other timings including the
+  `NO_WINDOW` fallback, and untouched in profiles 0–2. Re-entry (`sunxi_mmc_reenter`) and SDR25-only
+  (`sunxi_mmc_sdr25_only`) options serve the recovery lifetimes.
+- **Storage platform** (`drivers/storage/a733_mmc_platform.c`). A callback
+  reports the capability, writes the selector once and polls the bank. The live
+  voltage check follows the bank through 3.3 V, switching and 1.8 V. The module
+  callback admits PERI0_300M / 1 and PERI0_400M / 2 for profile 3 in addition
+  to PERI0_400M / 4..32. The close puts the bank back at 3.3 V.
 - **Native filters** (`a733_mmc_platform_native.c` and its header). The
-  default aperture filter still refuses the selector; the adapter admits one
-  write of 0 only for profile 3. CMD11 and CMD19 are admitted in their exact
-  forms with zero arguments, and CMD6 with `0x00fffff3` and `0x80fffff3`.
-  `THLD` at `0x100` becomes a selected SMHC register for SD only, and the
-  adapter writes it only in profile 3; eMMC still refuses it.
+  default aperture filter refuses the selector; the adapter admits one write of
+  0 only for profile 3 (and the single write back, see the recovery design).
+  CMD11 and CMD19 are admitted in their exact forms with zero arguments, and
+  CMD6 with `0x00fffff3` and `0x80fffff3`. `THLD` at `0x100` is a selected SMHC
+  register for SD only, written only in profile 3; eMMC refuses it.
 - **Stage-2 loader.** It builds the core with `SUNXI_MMC_NO_UHS`, which puts
   every UHS-I path behind a constant false condition so that the compiler
   drops the code.
 - **Read-only SD service** (`apps/storage-read`). Sessions may select profile
-  3. Negotiated profiles poll an active read for up to 1 ms in one wake,
-  as USB0 does within its 200 µs budget, so that each read's time measures the
-  controller path rather than tick pacing. This also changes profiles 1 and
-  2, which must use the same polling for the high-speed reads to be a fair
-  comparison; profile 0 and the eMMC build keep one poll per tick. Records become version 4: fact
-  words 6 and 7, which hold write diagnostics that this read-only service
-  never sets, carry the read's elapsed microseconds and the UHS-I state, and
-  the divisor byte's bit 7 marks the 300 MHz parent. The supervised launcher
-  gains a read-only throughput plan.
+  3. Negotiated profiles poll an active read for up to 1 ms in one wake, so
+  each read's time measures the controller path rather than tick pacing;
+  profile 0 and the eMMC build keep one poll per tick. Records are version 4:
+  fact words 6 and 7 carry the read's elapsed microseconds and the UHS-I state,
+  and bit 7 of the divisor byte marks the 300 MHz parent. The supervised
+  launcher has a read-only throughput plan.
 
-## Fallback without a power cycle, unless the specification requires one
+## Failure handling
 
 | Failure | Card state | Action |
 | --- | --- | --- |
@@ -234,59 +232,23 @@ every supervised SD lifetime.
 After a successful switch the card keeps 1.8 V signalling through CMD0 until
 it loses power (specification 3.9.4). DC1SW2 also supplies `VCC-IO`, so only
 whole-board power removal restores 3.3 V. Until then, the boot ROM's microSD
-boot, the stage-2 loader's cold SD admission and any later SD lifetime would
-meet a 1.8 V card with a 3.3 V bank. The runbook therefore removes board power
-after every profile-3 lifetime.
+boot, the stage-2 loader's cold SD admission and any later SD lifetime meet a
+1.8 V card with a 3.3 V bank. The runbook therefore removes board power after
+every profile-3 lifetime. A session that finds a card still at 1.8 V re-enters
+it ([recovery design](sd-uhs-recovery.md)).
 
-## Measured goal and budgets
+## Qualified figures
 
-The goal is sequential and random read throughput, in MB/s (10^6 bytes per
-second), from the native per-read time. The same image and card run first in
-profile 2 (high speed, 50 MHz, 3.3 V) and then in profile 3. The
-launcher's plan reads 128 consecutive 4 KiB requests, 96 4 KiB requests at
-fixed pseudo-random 4 KiB-aligned offsets and 32 single sectors. The
-single-sector reads give the per-request cost; the difference from the 4 KiB
-mean gives the per-block cost.
-
-Each 4 KiB request is one CMD18 with automatic CMD12, then CMD13. The model
-below uses two unmeasured costs: a guarded register access through the
-platform (about 0.6–1.0 µs, extrapolated from the PMIC adapter's measured 0.42–0.5 µs plus
-the time and task checks), and one FIFO word load (assumed 0.10–0.25 µs). A
-request costs about 50–110 µs of commands and platform polls, the card's
-first-block latency (assumed 100 µs sequential, 300 µs random), and per block
-the larger of the bus time and the PIO time.
-
-| Per 512-byte block | High speed, 50 MHz | SDR104, 150 MHz |
+| Result | Value | Record |
 | --- | --- | --- |
-| Bus time | 20.8 µs | 6.9 µs |
-| PIO time, 128 loads and two accesses | 14–34 µs | 14–34 µs |
+| High-speed returning reads, port 3-3 | 256 reads, every CRC recorded, card clock stopped at exit | `sd-dma.jsonl` `sd-dma-lifetime-a` |
+| SDR104 at 150 MHz, port 3-3, 64 MiB read | window 16 to 63, delay 40, 47.6 MB/s median per request, 27.4 MB/s sustained | `storage.jsonl` `1793650532228649180-1fb49397` |
+| Request-pattern experiment, port 3-3 | 20.4 MB/s over eight phases; card-dependent stalls | `storage.jsonl` `1793652351260245353-286b63df` |
+| CMD11 completion defect (fixed in the core) | the core waited for command done after CMD11 | `sd-uhs.jsonl` `sd-uhs-lifetime-b` |
 
-| Prediction | High speed | SDR104 |
-| --- | --- | --- |
-| Sequential 4 KiB reads | 8.5–13.0 MB/s | 8.5–15.6 MB/s |
-| Random 4 KiB reads | 6.0–7.9 MB/s | 6.0–8.9 MB/s |
-| Per-block cost | 20.8–34 µs | 14–34 µs |
-
-The programmed I/O path limits the gain to 1.0–1.2 times for sequential and
-1.0–1.12 times for random reads, against the bus's 3 times. If the SDR104 per-block cost equals the high-speed one, PIO bounds
-both, and the next change is the controller's descriptor DMA with larger
-requests; [the follow-up note](sd-dma.md) plans both. Acceptance: SDR104 throughput is at least the
-high-speed throughput in both patterns, with identical sector digests. An
-unexplained shortfall blocks the merge.
-
-Other budgets:
-
-- **Identification.** The switch takes 13–23 ms. Tuning issues about 520
-  CMD19 (20 for each passing delay, one for each failing delay) at about 1.6
-  per tick, plus up to 2 ms per failing delay: 0.4–0.6 s. Sessions allow up to
-  10 s; the runbook uses 5 s.
-- **CPU.** The 1 ms read budget keeps the MMC task busy for each read's
-  duration in profiles 1–3, at most about 0.7 ms per 4 KiB read; profile 0
-  keeps one poll per tick.
-- **Memory.** `struct sunxi_mmc` grows by 136 bytes, 16 of them in the card
-  record, and `struct a733_mmc_platform` by 160 bytes; each read-service client
-  slot gains 12 bytes of fields. `sunxi_mmc_init`'s frame grows from 864 to
-  992 bytes (AArch64, `-O2`), and `command_step` from 560 to 576 bytes.
+The programmed-I/O throughput model (about 1.0 to 1.2 times gain from SDR104)
+is in `sd-uhs.jsonl` `sd-uhs-throughput-model`; descriptor DMA ([sd-dma](sd-dma.md))
+removes that limit.
 
 ## Board qualification reads every card area and writes none
 
@@ -295,93 +257,19 @@ The qualification writes nothing to the card, including its protected areas
 touch media, and only for reads; CMD6, CMD11 and CMD19 change volatile card
 state. Goal section 4 therefore needs no host backup and no data-partition
 confinement for this test; the existing host backup remains the preservation
-record. [The board runbook](../board-runbooks/sd-uhs.md) gives the commands
-and predictions.
+record. [The board runbook](../board-runbooks/sd-uhs.md) gives the commands.
 
-## Lifetime B: CMD11 completion
+## Limitations and open work
 
-Port 3-3 ran profile 3 on 2026-10-25 in the returning image
-(`board-session-20261025-32/port-3-3/sd-ret-b`). The image stopped after
-1.16 s, before any read. Its report, decoded from the code:
-
-| Field | Value | Meaning |
-| --- | --- | --- |
-| `SD_REASON`, `SD_STAGE` | 3, 1 | The provider returned RETAINED while the image polled identification (`apps/storage-read-returning/main.c`, `stop(3)`); reason 3 covers every identification failure, including the fabric refusal |
-| `SD_PLATFORM_STAGE`, `SD_PLATFORM_FAULT` | `0xd`, 1 | Stage IDENTIFY; the provider failed at its identification deadline (1.15 s) |
-| `SD_SIGNAL` | 0 | The PF selector was never written; the bank stayed at 3.3 V |
-| `SD_CORE_STATE`, `SD_RESULT_ERROR` | 1, 0 | The core was still identifying and had not faulted |
-| `SD_CORE_COMMAND`, `SD_CORE_ARGUMENT` | `0x9000014b`, 0 | CMD11 with START, VOLTAGE_SWITCH (bit 28), CRC and response |
-| `SD_CORE_PROTOCOL`, `SD_CORE_STEP` | `0x1b`, 2 | `P_SD_VOLTAGE`, waiting for the command's completion bits |
-| `SD_RESULT_INTERRUPTS` | `0x10400` | Raw interrupts: voltage switch (bit 10) and SDIO (bit 16); no command done (bit 2), no error |
-| `SD_RESULT_STATUS` | `0x1f906` | Read before CMD11 was written: response index `0x3f` (ACMD41's R3), DAT3 high, FIFO empty, no busy |
-| `SD_RESULT_RESPONSE` | `0x120` | The last response the core stored: CMD55's R1 (APP_CMD, READY_FOR_DATA), not CMD11's |
-| `SD_CLOCK_OFF` | 3 | The clock update did not complete; the module clock was gated |
-
-The reference sequence, step by step ("K" is the board kernel's
-`bsp/drivers/mmc/sunxi-mmc.c`, "V" its `sunxi-mmc-v5p3x.c`, "H" its
-`sunxi-mmc.h`, "C" its `drivers/mmc/core/core.c`, at `2ac08e8c`; mainline
-`core.c` at v6.12 has the same lines):
-
-1. **CMD11.** The core sends it with R1 (C:1220-1226). The host adds
-   VOLTAGE_SWITCH (bit 28) to the command and masks only the errors and the
-   voltage-switch bit (10) (K:2656-2659). The interrupt handler finishes the
-   request when a done bit is set; the done bits include bit 10
-   (K:1333-1338, H:221-223), and command done is not unmasked for CMD11.
-   **CMD11 therefore completes on bit 10**, and the handler clears it by
-   writing the bits back (K:1345).
-2. **DAT[3:0] low.** The core waits 1 ms and requires the card busy
-   (C:1235-1239); the host's busy check reads DAT3 low while switching
-   (K:2291-2311).
-3. **Card clock stop.** `mmc_host_set_uhs_voltage` sets the clock to 0
-   (C:1190-1192); the host's clock update carries VOLTAGE_SWITCH and masks
-   DAT0 (V:364-379).
-4. **1.8 V.** The PF pin state and selector change (K:2161-2246; on this
-   board, `GPIO_POW_VAL_SET_CTL`, as the design's PF section describes).
-5. **Clock gated at least 10 ms, then restarted** (C:1194-1200), again with
-   VOLTAGE_SWITCH in the update (V:378-379).
-6. **DAT[3:0] high, 1 ms later** (C:1250-1258): the host's busy check waits
-   up to 10 ms for both bit 10 and command done (H:226-227, K:2283-2311).
-   Command done arrives only here, at the end of the switch.
-7. **Failure** after CMD11 power-cycles the card (C:1262-1265).
-
-**The failed step is 1.** The core waited for command done after CMD11
-(`drivers/storage/sunxi_mmc.c`, command step 2), as for every other command.
-The controller had reported CMD11 with bit 10 and withholds command done
-until step 6, which the core never reached, so the wait ran until the
-identification deadline. The emulation's card model reported command done at
-CMD11, so the checks passed; the model now reports bit 10 there, as the board
-did, and command done with bit 10 again at the end of the switch.
-
-**State left.** The PF bank stayed at 3.3 V. No error or timeout bit was
-set, so the card most likely answered CMD11 and then drove its lines low,
-waiting for the clock to stop. The clock ran at the identification rate until
-the image's clock stop gated the module clock, 1.16 s after start. A card that
-had accepted CMD11 may then have switched its outputs to 1.8 V while the bank
-stayed at 3.3 V. The specification allows only a power cycle to leave this
-state (C:1262-1265), so whole-board power removal is the right recovery.
-
-**Fix (driver and emulation, not run on a board).**
-- CMD11 completes on bit 10 and reads its R1 then; nothing else is checked
-  after it, as in the vendor driver (`sunxi_mmc.c`, command steps 2 and 3).
-- After the clock restart the core clears every flag the update set, as the
-  vendor does after each clock update (V:386-388), and the switch ends only
-  on DAT3 high with both bit 10 and command done arriving afterwards
-  (`sd_signal`, steps 4 and 5), as K:2296-2307 requires.
-- The returning image's clock stop carries VOLTAGE_SWITCH while a switch is
-  in progress (V:378-379).
-- `checks/storage-read-sd-modes.py`'s UHS card model reports CMD11 as the
-  board did, and the switch's end only after the clock restart;
-  `checks/storage-read-returning.py` profile 3 passes with the fix, and the
-  image of set 28 stops in that model at CMD11, as on the board.
-
-**Still open.** The fix has not run on a board, so the board's own behavior
-at the switch's end is not confirmed: whether bit 10 and command done arrive
-after the restarted clock as K:2296-2307 expects, and whether this card
-accepts the switch at all.
+1. The card at 1.8 V needs board power removal before the ROM, boot0 or the stage-2 loader read it.
+2. Writes at 1.8 V or at 150 MHz are not qualified; the write service is qualified at 3.3 V, 50 MHz only.
+3. SDR50 and DDR50 are not implemented.
+4. Port 3-1's card (Phison SD64G) has only been seen at 3.3 V.
+5. The OS adopting SDR104 is open ([adoption design](sd-uhs-adoption.md)).
 
 ## Sources
 
-The cache `~/.cache/sunstoneos/sources/sd-uhs/` holds the new downloads, and
+The cache `~/.cache/sunstoneos/sources/sd-uhs/` holds the downloads, and
 its `sources.json` records each file's URL, revision, SHA-256 and license.
 `checks/sunxi-mmc-uhs.py` pins every reference it reads by SHA-256.
 
@@ -392,54 +280,16 @@ its `sources.json` records each file's URL, revision, SHA-256 and license.
 | Board kernel MMC core and vendor `sunxi-mmc` (GPL-2.0) | `orangepi-xunlong/linux-orangepi` at `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f` (Linux 6.6.98): `drivers/mmc/core/{core,sd,sd_ops,mmc_ops}.c`, `bsp/drivers/mmc/sunxi-mmc{.c,.h,-v5p3x.c}` | per file in `sources.json` |
 
 The board kernel's pin control, clock and device-tree files, the v4p5x timing
-file, the A733 manual, datasheet and schematic are the existing pinned copies
+file, the A733 manual, datasheet and schematic are the pinned copies
 under `sources/pins/`, `sources/board-kernel/`, `sources/mmc-sdc3/`,
 `sources/camera-research/` and `sources/board-documents/`.
 
 ## Checks
 
-- `checks/sunxi-mmc-uhs.py` pins the references above and asserts the cited
-  facts, then runs two models under AddressSanitizer and
-  UndefinedBehaviorSanitizer. `checks/sunxi-mmc-uhs.c` drives the MMC core
-  against a modeled UHS-I card: the switch order and its 1 ms and 10 ms
-  waits, SDR104 at 150 and 100 MHz, the window rules, eight declines or
-  fallbacks and eight terminal failures. `checks/a733-mmc-uhs.c` runs the
-  actual storage platform and shared providers: one selector write in adaptive
-  mode, both rates, no write in manual mode, a bank timeout and three losses
-  after the switch, each retained.
-- `checks/storage-read-uhs-host.py` decodes version-4 records with the
-  unchanged observer, accepts eight consistent records and refuses ten
-  inconsistent ones, and checks the throughput plan and summary.
-- The existing core, write, SD-mode, idle-timing, platform, adaptive-voltage,
-  ROM-pin, SDC3 and storage-update checks pass unchanged.
-
-The native SD-read emulation checks fail on the current image before reaching
-this change (a repeated structure name with two layouts in the DWARF); the
-same check fails identically on the base image, and the
-[handoff](../handoff.md) already lists these checks as failing on current
-images.
-
-The integration gate `sd-uhs-1025-b4bc04d0` passed on the clean tree at
-`b4bc04d0`: the storage-maintenance, board, mimus-native, GPU render, HDMI,
-camera and storage-probe images, the supervised OS image and the check index.
-Evidence is under `~/.cache/sunstoneos/build/gate-sd-uhs-1025-b4bc04d0/`.
-
-Images built from clean archives of `3c17aeca` and `b4bc04d0` at one shared
-path differ as follows:
-
-| Image | Change |
-| --- | --- |
-| Read-only SD service (`sunstone-a733-storage-read`) | `.text` +7,380 B, `.rodata` +296 B, `.bss` +192 B: the UHS-I core and platform functions, the filters and the record |
-| Storage maintenance | `.text` +6,144 B, `.rodata` +296 B, `.bss` +128 B: the same core and platform code |
-| Stage-2 slot loader (`a733-stage2`) | `.text` +152 B and `.bss` +128 B with `SUNXI_MMC_NO_UHS`: larger `protocol`, `command_step` and `sunxi_mmc_init` from the shared structure and the high-speed refactor; no UHS-I function remains |
-| Board, mimus-native, GPU render, HDMI, camera, supervised and resident OS | Only the 32-byte build identity in `.rodata`; `.text` identical, because their links discard the MMC code |
-
-The standalone single-core SD and eMMC read projects fail to link on both
-revisions in the board application's TinyUSB sources, as the handoff records.
-Their storage objects compile on both; against the base, the eMMC build's
-`native.c` grows from 7,324 to 7,436 B and its `sunxi_mmc.c` from 11,758 to
-17,248 B, and the single-core SD build's `native.c` from 7,348 to 7,704 B.
-
-Evidence: `~/.cache/sunstoneos/evidence/sd-uhs-20261025/`, with the host
-checks, the image comparison and the standalone objects of the reviewed
-revision in `review-fixes/`.
+- `checks/sunxi-mmc-uhs.py` pins the references and asserts the cited facts,
+  then runs the core against a modeled UHS-I card (`checks/sunxi-mmc-uhs.c`)
+  and the storage platform with the shared providers (`checks/a733-mmc-uhs.c`).
+- `checks/storage-read-uhs-host.py` decodes version-4 records and checks the
+  throughput plan and summary.
+- Results, image-size comparison and the integration gate are in the record
+  `sd-uhs-host-checks`.

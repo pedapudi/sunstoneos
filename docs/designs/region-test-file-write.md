@@ -1,101 +1,42 @@
-# Design: creating the region test file on the card
+# Design: creating a file in an empty FAT32 volume
 
-Scope. The module here creates one file in the root directory's first cluster and is host-checked as such. The
-general storage-write path of the OS image, which a separate worker owns, builds on it and creates the file at the
-path above, so its directory handling (creating or finding `sunstone-test` and placing the entry there) and its write
-bounds replace the root-directory rows below. The probe image does not write the card; the earlier probe-lifetime
-plan in the open points is superseded by that path.
+Status: **host-tested.** The file-create module (`drivers/storage/fat32_create.c`, `include/fat32_create.h`) is checked on the host by `checks/fat32-create.py` and is linked by no image. The board created the large-region test file with the general [storage write service](storage-write.md) instead, which also creates the directory `sunstone-test`.
 
-Status: the file-create module is **implemented** and checked on the host (`checks/fat32-create.py`). The
-storage-write image and its runner admission are **design**. Nothing is written to a card; the write needs the
-coordinator's approval with `--storage-write` on port 3-1.
-
-The large application region test loads `/sunstone-test/sunstone-region-test.bin` (512 MiB) from the card's FAT32 volume,
-in the directory `sunstone-test` below the root. A PC
-cannot put the file there, so the board creates it: it generates the content with the counter-mode SHA-256 stream
-of `tools/region_test_file.py`, so nothing is uploaded, and writes one file into the empty volume.
+The large application region test loads `/sunstone-test/sunstone-region-test.bin` (512 MiB) from the card's FAT32 volume. A PC cannot put the file there, so the board creates it: it generates the content with the counter-mode SHA-256 stream of `tools/region_test_file.py`, so nothing is uploaded, and writes one file into the empty volume.
 
 ## What the module writes
 
-`drivers/storage/fat32_create.c` plans from reads only, then writes in this order:
+`fat32_create` plans from reads only, then writes in this order:
 
 1. the data clusters of one contiguous run (the first free run of the file's size, searching from cluster 3);
 2. the cluster chain in every FAT copy, one copy after the other;
-3. the directory entries in the root directory's first cluster: long-name entries and the short entry
-   (`SUNSTO~1BIN`), with the size and the first cluster, in the first free run of slots;
+3. the directory entries in the root directory's first cluster: long-name entries and the short entry (`SUNSTO~1BIN`), with the size and the first cluster, in the first free run of slots;
 4. the FSInfo sector: the free-cluster count and the next-free hint.
 
-Every sector passes one guard, `fat32_create_allowed()`, which recomputes the allowed set from the volume's geometry
-and the plan's first cluster and cluster count, and refuses a write outside it before the device sees it. The plan
-fields that carry sector numbers are not trusted. Before the first write the module re-reads every chain entry and
-every directory slot it will use and refuses if any is no longer free. A call can perform one phase, so the data may
-be written over several lifetimes (the data clusters are free space until the chain is written).
+Every sector passes one guard, `fat32_create_allowed()`, which recomputes the allowed set from the volume's geometry and the plan's first cluster and cluster count, and refuses a write outside it before the device sees it. The plan fields that carry sector numbers are not trusted. Before the first write the module re-reads every chain entry and every directory slot it will use and refuses if any is no longer free. A call performs one phase, so the data may be written over several lifetimes (the data clusters are free space until the chain is written). The directory entry carries the fixed date 2026-11-02 and time 00:00:00.
 
-## The bounded sector list for this card
+## The bounded sector set for the 62.5 GB card
 
-The card has one FAT32 partition from sector 32,768 (122,105,856 sectors): 64 sectors per cluster, 64 reserved
-sectors, two FATs of 14,912 sectors, FSInfo at partition sector 1, root cluster 2, 1,907,437 clusters, an empty
-root directory (read on 2026-11-02). The module's plan on a model volume of this geometry, made by `mkfs.fat` with
-the same parameters, for a file of 536,870,912 bytes (16,384 clusters):
+The card has one FAT32 partition from sector 32,768 (64 sectors per cluster, 64 reserved sectors, two FATs of 14,912 sectors, FSInfo at partition sector 1, root cluster 2). For a 536,870,912-byte file (16,384 clusters) the module writes:
 
-| Set | Absolute sectors | Count | Written |
-| --- | --- | --- | --- |
-| Data, clusters 3 to 16,386 | 62,720 to 1,111,295 | 1,048,576 | all |
-| FAT copy 1, indexes 0 to 128 | 32,832 to 32,960 | 129 | all |
-| FAT copy 2, indexes 0 to 128 | 47,744 to 47,872 | 129 | all |
-| FSInfo | 32,769 | 1 | 1 |
-| Root directory cluster 2 | 62,656 to 62,719 | 64 | sector 62,656 (slots 0 to 3) |
+- the data clusters 3 to 16,386 (1,048,576 sectors, 62,720 to 1,111,295);
+- FAT indexes 0 to 128 in each copy (129 sectors each, 32,832 to 32,960 and 47,744 to 47,872);
+- FSInfo (sector 32,769);
+- the first sector of the root directory cluster (62,656; the guard allows its 64 sectors).
 
-Nothing else is allowed: not the boot sector (32,768), its backup (32,774), the backup FSInfo (32,775), the rest of
-either FAT, any other cluster, and nothing below sector 32,768. The exact slots follow from the directory read at
-run time; the allowed root sectors are the 64 of the cluster.
+It writes nothing else: not the boot sector (32,768), its backup (32,774), the backup FSInfo (32,775), the rest of either FAT, any other cluster, or anything below sector 32,768.
 
-## Backup plan
+## Backup and restore
 
-A read-only lifetime (the probe's mode, read-only core) returns the bytes of every sector the create may change
-or whose neighbour it may confuse, in one payload, and the host keeps them with their SHA-256:
+A read-only lifetime returns the 326 sectors (166,912 bytes) the create may change or whose neighbour it may confuse: the boot sector, its backup, FSInfo and its backup (4), both FAT starts (129 each) and the root directory cluster (64). The host keeps them with their SHA-256. The data clusters need no backup, because they are free space on a volume with no file. A write lifetime carries the backup's SHA-256 in its input, reads the same sectors again before the first write and refuses to write unless the hash matches. Restore writes the backed-up FAT, FSInfo and root sectors back; afterwards every sector outside the data extent equals the backup, and the data clusters keep the generated bytes but are free space again.
 
-| Sectors | Count |
-| --- | --- |
-| Boot sector 32,768, backup boot 32,774, FSInfo 32,769, backup FSInfo 32,775 | 4 |
-| FAT copy 1, 32,832 to 32,960 | 129 |
-| FAT copy 2, 47,744 to 47,872 | 129 |
-| Root directory cluster, 62,656 to 62,719 | 64 |
-
-That is 326 sectors, 166,912 bytes. The data clusters need no backup: they are free space on a volume with no
-file. The write lifetimes carry the backup's SHA-256 in their input, read the same sectors again before the first
-write and refuse to write unless the hash matches, so the write always starts from the backed-up state.
-
-Restore writes the backed-up FAT, FSInfo and root sectors back (the same bounded sets without the data extent) in a
-lifetime of the same image. Afterwards every sector outside the data extent equals the backup; the data clusters keep
-the generated bytes but are free space again. `checks/fat32-create.py` checks this on every image it creates.
+The plan and the full table are in the record `region-test-file-write-plan` of [the evidence file](../evidence/region-test-file-write.jsonl).
 
 ## Host checks
 
-`checks/fat32-create.py` creates the file on `mkfs.fat` images (512-byte and 4 KiB clusters, one inside a card image
-at sector 32,768, with and without other files, exact and inexact cluster multiples) and requires: `fsck.fat -n` clean
-before and after; every written sector inside the bounded set the Python side computes from the geometry, in the
-required order; the file read back by an independent Python parser with the right digest, and the chain equal in both
-FATs; a consistent volume (FSInfo equal to the counted free clusters, FATs equal); the guard's allowed set equal to
-the geometry, and sectors next to it refused; restore returning every sector outside the data extent; the same image
-from six phased calls as from one. Refusals, each with no write: a first cluster in the root directory, past the
-volume, a cluster count of the whole volume, slots outside the root cluster, a chain entry or slot that changed
-after the plan, a volume without a contiguous free run, an existing name, a full root cluster. A write that fails
-part way before the chain leaves a clean volume. mtools is not installed on this host, so the independent parser
-stands in for it.
+`checks/fat32-create.py` creates the file on `mkfs.fat` images and requires: `fsck.fat -n` clean before and after; every written sector inside the bounded set computed from the geometry, in order; the file read back with the right digest and the chain equal in both FATs; a consistent volume; the guard's allowed set equal to the geometry; restore returning every sector outside the data extent; the same image from six phased calls as from one. The module refuses, without a write, a first cluster in the root directory, past the volume, a cluster count of the whole volume, slots outside the root cluster, a chain entry or slot that changed after the plan, a volume without a contiguous free run, an existing name and a full root cluster. A write that fails part way before the chain leaves a clean volume. The details are in the record `region-test-file-write-host-checks`.
 
-## Open points for review
+## Limitations and open work
 
-1. **Write speed.** The core writes one sector per CMD24 with a CMD13 after it; no write rate is measured. At 0.5 to
-   1.5 ms per sector the 1,048,576 data sectors take 9 to 26 minutes, beyond one probe session (at most 600 s). The
-   phased module allows several data lifetimes of about 8 minutes each; a CMD25 multiple-block write in the separate
-   write core would cut that to a few minutes but is new, unproven code. The first write lifetime should measure the
-   rate on a small slice (for example 16 MiB of the data extent) before the rest is committed.
-2. **Generation cost.** The stream costs one SHA-256 compression per 32 bytes: about 50 cycles per byte, so
-   about 10 MB/s at the probe's 494 MHz and 54 s for the whole file, overlapped with nothing in a PIO write.
-3. **Runner admission.** The runner refuses every storage write today (`policy()` in `tools/board_images.py`), and
-   `tools/board.py` has no write session. A write lifetime needs a runner change that the coordinator reviews: a
-   probe marker flag for a bounded write image, admitted only with `--approved-by coordinator` and `--storage-write`,
-   whose input carries the allowed sector ranges and the backup hash, and which the image enforces through the
-   module's guard.
-4. **Timestamps.** The entry carries the fixed date 2026-11-02 and time 00:00:00.
+1. The module has no board run.
+2. It creates the file in the root directory's first cluster only; directory creation and placement under `sunstone-test` belong to the write service.

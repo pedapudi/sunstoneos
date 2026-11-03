@@ -187,9 +187,7 @@ barriers shown above. This audit adds no undocumented vendor delay.
   deadline. Ordinary CE task waits required no production change.
 
 The fixes preserve operating points, supply settings and hard timeouts.
-The design panel approved the GPU shutdown change and NPU timing changes
-before implementation; the same reviewers approved their code and focused
-failure evidence. Physical timing and recovery remain unqualified.
+Physical timing and recovery remain unqualified.
 
 ## Executed native ordering check
 

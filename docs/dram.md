@@ -208,7 +208,7 @@ register callbacks.
 No image links the component, so the gpu-display, HDMI, DisplayPort and
 integrated OS images contain no `a733_dram_` symbol and match the integrated
 tree's images in size and text. The
-[measurement record](designs/dram-controller-measurements.md) gives the
+[measurement records](evidence/dram-bus-priority.jsonl) give the
 conditions, the per-case figures and the board-only rows. The scan-out
 comparison, with its rules on image order and inherited fields, and the DDR
 trip measurement are listed in the design's board evidence.

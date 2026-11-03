@@ -780,7 +780,7 @@ and the PMIC task are on core 0; other unplaced tasks may run on any A55
 core, including the recognition pair. The
 options below are off by
 default; the [design](designs/cpu-a76-dvfs.md) and its
-[measurements](designs/cpu-a76-dvfs-measurements.md) give the budgets.
+[measurements](evidence/cpu-a76-dvfs.jsonl) give the budgets.
 
 - **`A733_A76_ADMITTED`**, a CMake option and compile definition. The
   recognizer moves to core 6 and the inference worker to core 7, and

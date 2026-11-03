@@ -2,12 +2,12 @@
 
 Status: **implemented** and checked under instruction emulation and on QEMU
 Cortex-A55 and Cortex-A76 cores. Board bundle 4 links its single-core form, and core 0 of
-port 3-3 measured it on 2026-10-24 (section "Board measurement on core 0" of
-[the measurements](designs/cpu-pmu-measurements.md)). Event counting needs a change to the EL3
+port 3-3 measured it on 2026-10-24 (record `cpu-pmu-board-core0` in
+[the evidence file](evidence/cpu-pmu.jsonl)). Event counting needs a change to the EL3
 continuation, described under [Prerequisite](#prerequisite-mdcr_el2-gives-el1-the-event-counters),
 before any image uses it. The design and its budgets are in
 [designs/cpu-pmu.md](designs/cpu-pmu.md), and the measured figures in
-[designs/cpu-pmu-measurements.md](designs/cpu-pmu-measurements.md).
+[evidence/cpu-pmu.jsonl](evidence/cpu-pmu.jsonl).
 
 [platform/a733/cpu_pmu.c](../platform/a733/cpu_pmu.c) measures a region of
 code on one core. At the start of the region it zeroes six event counters
@@ -227,7 +227,7 @@ On both cores the check requires:
 requires the nested-region, cleared-enable, two-core-mask and moved-task
 refusals. QEMU implements `INST_RETIRED` and none of the other five events.
 
-Results are in [designs/cpu-pmu-measurements.md](designs/cpu-pmu-measurements.md).
+Results are in [evidence/cpu-pmu.jsonl](evidence/cpu-pmu.jsonl).
 
 ## Physical evidence still needed
 

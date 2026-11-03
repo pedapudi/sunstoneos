@@ -1,37 +1,12 @@
 # Starting the GPU firmware from the open-source host driver
 
-Status: **step 1 passed on port 3-1; step 2 implemented, host-checked and
-frozen for port 3-1, not yet run on a board.**
+Status: qualified on the board (port 3-1). The start runs in the firmware-stop, first-job and job-session images; the secure-configuration probe-read passed on its own. Host-tested for the 29-step controller.
 
-The GPU powers on and off on the board in the vendor's state
-([the default GPU power path](gpu-vendor-default.md)). This note derives what
-the vendor's host driver does between "CORE6 status 8, identity readable"
-and "firmware started", compares it with SunstoneOS's start
-([docs/gpu-start.md](../gpu-start.md)), and gives the two board steps that
-start the firmware: the probe-read with the secure configuration, then the
-firmware start itself.
+The GPU powers on and off on the board in the vendor's state ([the default GPU power path](gpu-vendor-default.md)). This note derives what the vendor's host driver does between "CORE6 status 8, identity readable" and "firmware started", compares it with SunstoneOS's start ([docs/gpu-start.md](../gpu-start.md)), and describes the firmware-start image.
 
-**Sources.** Every step comes from the open-source host driver and its
-interface headers: the Imagination DDK as shipped in orangepi
-`linux-orangepi` `2ac08e8c`, with the vendor platform glue `rgx_sunxi/`, its
-build configuration `binary_sunxi_linux_nulldrmws_release/config_kernel.h`
-and the register-access macros of `services/server/include/osfunc.h`. All
-are cached in `~/.cache/sunstoneos/sources/gpu-fw-start-ddk-2ac08e8c/`, and
-`manifest.json` there gives each file's URL and SHA-256; paths below are
-relative to `rogue_km/`. The firmware binary is never disassembled or
-decompiled (`LICENSE.powervr` line 14); only the container fields that the
-host driver itself parses are used.
+**Sources.** Every step comes from the open-source host driver and its interface headers: the Imagination DDK as shipped in Orange Pi `linux-orangepi` `2ac08e8c`, with the vendor platform glue `rgx_sunxi/`, its build configuration `binary_sunxi_linux_nulldrmws_release/config_kernel.h` and the register-access macros of `services/server/include/osfunc.h`. All are cached in `~/.cache/sunstoneos/sources/gpu-fw-start-ddk-2ac08e8c/`; `manifest.json` there gives each file's URL and SHA-256. Paths below are relative to `rogue_km/`. The firmware binary is never disassembled or decompiled (`LICENSE.powervr` line 14); only the container fields that the host driver itself parses are used.
 
-**The vendor driver cannot load our firmware.** The vendor driver is DDK
-24.2 (`include/pvrversion.h:47–48`) and requests its own unpublished
-`rgx.fw.36.56.104.183` (`services/server/devices/rogue/rgxinit.c:1892–1944`).
-Its container check requires the firmware version to equal 24.2
-(`services/server/devices/rgxfwimageutils.c:828–844`). SunstoneOS runs the
-open firmware `rogue_36.56.104.183_v1.fw` (version 1.1, container header
-version 3, open-source flag set;
-[gpu-firmware-container.json](../vendor-firmware/data/gpu-firmware-container.json)),
-whose structure layouts are upstream Linux's. The vendor's register sequence
-and platform steps carry over; its structure offsets do not.
+**The vendor driver cannot load our firmware.** The vendor driver is DDK 24.2 (`include/pvrversion.h:47–48`) and requests its own unpublished `rgx.fw.36.56.104.183` (`services/server/devices/rogue/rgxinit.c:1892–1944`). Its container check requires the firmware version to equal 24.2 (`services/server/devices/rogue/rgxfwimageutils.c:828–844`). SunstoneOS runs the open firmware `rogue_36.56.104.183_v1.fw` (version 1.1, container header version 3, open-source flag set; [gpu-firmware-container.json](../vendor-firmware/data/gpu-firmware-container.json)), whose structure layouts are upstream Linux's. The vendor's register sequence and platform steps carry over; its structure offsets do not.
 
 ## The vendor's sequence
 
@@ -137,38 +112,19 @@ the power-off request at line 220), and only then stops it with `RGXStop`
 
 ## SMC0 +0xb0 is written 2 and left there
 
-Step 1 on port 3-1 read SMC0 `0x0a0000b0` as 0 at entry and again as 0
-immediately after writing 2. The word therefore either clears itself or
-ignores the write. A self-clearing word fits the vendor's name for it,
-`SMC_DRM_GPU_HW_RST`, a GPU reset control, and fits a driver that writes it
-on every power-on and never restores it. The A733 user manual places SMC0 at
-`0x0A000000`–`0x0A00FFFF` in the memory-controller block and describes none
-of its registers. The vendor's register map names bit 0 of `drm_ctrl`
-`drm_bypass` (`rgx_sunxi/sunxi_dvfs_ctrl.c:76–84`); the board's entry value
-1 is that bit, and the write of 0 clears it.
+SMC0 `0x0a0000b0` reads 0 at entry and 0 immediately after writing 2, so the word either clears itself or ignores the write. A self-clearing word fits the vendor's name for it, `SMC_DRM_GPU_HW_RST`, and a driver that writes it on every power-on and never restores it. The vendor's register map names bit 0 of `drm_ctrl` `drm_bypass` (`rgx_sunxi/sunxi_dvfs_ctrl.c:76–84`); its value 1 at entry is that bit, and the write of 0 clears it.
 
-Step 2 therefore follows the vendor exactly: it writes 2 and then
-`drm_ctrl` 0 before the first GPU register write, and writes neither back.
-It reads each word back only to record the value; neither read-back is a
-condition of the start.
-
-Step 1 wrote both words back to their entry values, SMC0 last, and then
-powered the GPU off. If writing 0 to SMC0 `+0xb0` holds the GPU in a reset,
-the GPU sat in that reset from the restore until the OFF. That path stays
-controlled: the OFF writes only the CCU, the CORE6 power policy unit and
-the TOP5 row, never a GPU-window register, and on the board the OFF, the
-supply end and the provider park all completed after the restore.
+The firmware start follows the vendor: it writes 2 and then `drm_ctrl` 0 before the first GPU register write and writes neither back. It reads each word back only to record the value; neither read-back is a condition of the start.
 
 ## What SunstoneOS changes for the vendor start
 
 SunstoneOS's start ([gpu-start.md](../gpu-start.md),
-[pvr_gpu_start.c](../../drivers/gpu/pvr_gpu_start.c)) was derived from
+[pvr_gpu_start.c](../../drivers/gpu/pvr_gpu_start.c)) derives from
 upstream Linux. It writes `SYS_BUS_SECURE`, the three `SOFT_RESET` values,
 `SLC_CTRL_MISC`, the eleven wrapper writes in their order and the AXI value,
 waits 3 µs on each side of the release, and sets up no BIF, as the vendor
 does. Its container parsing, section placement and boot data match the
-DDK's and are stricter. Six items differed; the A733 start now takes the
-vendor's choice in each:
+DDK's and are stricter. The A733 start takes the vendor's choice for six items:
 
 | Item | Vendor DDK | A733 start |
 | --- | --- | --- |
@@ -181,7 +137,7 @@ vendor's choice in each:
 
 Dropping `SOFT_RESET2` removes the six accesses that upstream makes at the
 three reset stages; a stall at a register the vendor never touches could
-only be recovered by a power removal. The reference comparison now checks
+only be recovered by a power removal. The reference comparison checks
 that the upstream function makes exactly those six and that every other
 access matches ([gpu-start.md](../gpu-start.md)).
 
@@ -193,150 +149,37 @@ firmware. The runtime fields the DDK also sets (active power latency 10 ms,
 HCS deadline, firmware watchdog 2 s, `rgxfwutils.c:2333–2357`) stay zero;
 the host source does not say whether the open firmware needs them.
 
-## Board steps
+## Firmware-start image
 
-Each step is one bounded, returning image on port 3-1, after a power
-removal, the cold DDR start and the frozen provider-readiness checkpoint.
+The firmware-start image (`apps/gpu-power-id/fw-start.c`, build and check option `--fw-start`, bundle row 19) starts the pinned open firmware with the vendor's prerequisites:
 
-### Step 1: the probe-read with the secure configuration (passed)
+1. Before any power change it prepares the firmware. Code (102,400 bytes), data (20,480 bytes) and the 16 KiB MIPS page table lie in write-back image RAM; the nineteen shared resources take the first 45 pages of the image's Normal-NC block at `0x41c00000`, which the image zeroes. System init and the runtime configuration carry the 1,008 MHz core clock. The queues are formatted and the 29-step start plan is built. A refusal ends the run before the ON.
+2. It powers the GPU on to CORE6 status 8 within 200 ms, checks the wrapper, SMC0 and three GPU register pages as identity Device-nGnRnE mappings, and reads the identity, which must be `36.56.104.183`, then `drm_ctrl` and SMC0 `+0xb0`.
+3. It starts only while the 1 s start bound and a 100 ms report fit before the 1.5 s session deadline, which also keeps the start's end 500 ms before the monitor's 2 s recovery. Otherwise it returns status 7 with nothing written.
+4. It reads `RGX_CR_TIMER` and writes one timer-correlation record into slot 1, then sequence 1.
+5. It writes SMC0 `+0xb0` = 2 and `drm_ctrl` = 0, and records both read-backs.
+6. It runs the 29 steps of `pvr_gpu_start.c`: publication (cache clean of the write-back firmware memory), a check that the started word is 0, the vendor's register sequence with every 64-bit register as two 32-bit accesses, and a wait of at most 1 s for the 32-bit started word, yielding one scheduler tick after each 50 µs of reads.
+7. It reports the controller's result, the started word, the marker and start timestamp, system data's flags and power state, the connection states, the executed command count, and read-backs of `SOFT_RESET` and the eleven MIPS wrapper registers.
 
-The probe-read diagnostic (bundle 17, `apps/gpu-power-id/probe-read.c`) on
-the default path powers the GPU on to CORE6 status 8, required within
-200 ms. It reads `drm_ctrl`, `irq_ctrl` and SMC0 `+0xb0`, then the identity.
-It makes the two secure-configuration writes in the vendor's order, each
-read back, reads the identity again, and writes both words back to their
-entry values. It then powers the GPU off, ends its supply sample and parks
-the provider.
+Every GPU, wrapper and SMC0 access is one 32-bit access, made after the progress record at result offset 128 (magic `GPUFWS01`) names it and after a `GPU FWS reading` or `writing` log line.
 
-It ran on port 3-1 in `board-session-20261025-14` from set
-`board-bundles-20261025-18` (`s15-gpq-run`) and completed:
+Controlled failures: a started word that is not 1 by the deadline (error 2), is already set (error 4) or holds another value (error 5) fails with the shared state and registers reported and the firmware processor released; an identity other than `36.56.104.183` fails before any write with the GPU powered; a refused preparation, mapping or time budget fails before any GPU, wrapper or SMC0 access. A register access that never completes stops the CPU, the monitor does not return, and only a power removal recovers the board.
 
-- CORE6 reached status 8 10,341 µs after the ON began;
-- `drm_ctrl` read 1 at entry, 0 after the write of 0, and 1 after the restore;
-- `irq_ctrl` read 0;
-- SMC0 `+0xb0` read 0 at entry and 0 after the write of 2;
-- both identities read `36.56.104.183`, `GPU PROBE window serror_pending=0`;
-- the OFF, the supply end and the provider park completed, with
-  `COMPLETE GPU probe read: identity 36.56.104.183 before and after the
-  secure configuration, restored, OFF and provider parked`.
+The standalone image leaves the GPU powered with the firmware running. The vendor stops the firmware only after the firmware's own forced-idle and power-off handshake, which needs the command queue and interrupt service that this image does not carry; the [firmware-stop design](gpu-firmware-stop.md) adds them. The firmware's MIPS page table maps only the image's own firmware and shared pages.
 
-The run, from monitor entry to exit, took 19.9 ms.
+## Checks and qualified figures
 
-### Step 2: the firmware start
+- `checks/pvr-gpu-start.c` and `checks/pvr-gpu-start-reference.py` cover the 29-step controller (36 retained faults, 40 refusals, and the reference traces less `SOFT_RESET2`).
+- `apps/gpu-power-id/check.py --fw-start` runs eleven cases on the linked image with only the ON, the clock, translations, cache maintenance and the log modeled: the complete start, timeout, started word already set or 2, CORE6 not reaching 8, unexpected identity, wrong SMC0 mapping, a write-back translation of a shared page, a start refused by the deadlines, and a seeded mutant of the SMC0 write value.
+- The start adds two 32-bit reads and one 40-byte write for the timer record, two writes and two reads for the secure configuration, and 18 accesses from splitting 64-bit accesses (24 in all). A complete run's log is 8,047 of 16,128 bytes.
 
-The firmware-start image (`apps/gpu-power-id/fw-start.c`, build and check
-option `--fw-start`, bundle row 19) starts the pinned open firmware with
-the vendor's prerequisites. It is frozen for port 3-1 in set
-`board-bundles-20261025-20`, after the provider-readiness checkpoint, in a
-lifetime of its own (`board-session-20261025-16`):
+| Figure | Value | Record |
+| --- | --- | --- |
+| Probe-read with the secure configuration | CORE6 status 8 after 10,341 µs; identity `36.56.104.183` before and after; run 19.9 ms | [gpu-firmware-start.jsonl](../evidence/gpu-firmware-start.jsonl) `gpu-firmware-start-probe-read` |
+| Firmware start inside the first job | 29 steps, started word within 669 µs | [gpu-first-job.jsonl](../evidence/gpu-first-job.jsonl) `gpu-first-job-set29` |
+| Host checks | 36 faults, 40 refusals, 11 image cases | `gpu-firmware-start-host-checks` |
 
-1. Before any power change it prepares the firmware. Code (102,400 bytes),
-   data (20,480 bytes) and the 16 KiB MIPS page table lie in write-back
-   image RAM; the nineteen shared resources take the first 45 pages of the
-   image's Normal-NC block at `0x41c00000`, which the image zeroes. System
-   init and the runtime configuration carry the 1,008 MHz core clock. The
-   queues are formatted and the 29-step start plan is built. A refusal ends
-   the run before the ON.
-2. It powers the GPU on to CORE6 status 8 within 200 ms, as step 1 does,
-   checks the wrapper, SMC0 and three GPU register pages as identity
-   Device-nGnRnE mappings, and reads the identity, which must be
-   `36.56.104.183`, then `drm_ctrl` and SMC0 `+0xb0`.
-3. It starts only while the 1 s start bound and a 100 ms report fit before
-   the 1.5 s session deadline, which also keeps the start's end 500 ms
-   before the monitor's 2 s recovery. Otherwise it returns status 7 with
-   nothing written.
-4. It reads `RGX_CR_TIMER` and writes one timer-correlation record into
-   slot 1, then sequence 1.
-5. It writes SMC0 `+0xb0` = 2 and `drm_ctrl` = 0, records both read-backs
-   and never writes either back.
-6. It runs the 29 steps of `pvr_gpu_start.c`: publication (cache clean of
-   the write-back firmware memory), a check that the started word is 0,
-   then the vendor's register sequence, every 64-bit register as two
-   32-bit accesses, and a wait of at most 1 s for the 32-bit started word.
-   During the wait it yields one scheduler tick after each 50 µs of reads.
-7. It reports the controller's result, the started word, the marker and
-   start timestamp, system data's flags and power state, the connection
-   states, the executed command count, and read-backs of `SOFT_RESET` and
-   the eleven MIPS wrapper registers.
+## Limitations
 
-The image leaves the GPU powered with the firmware running, and the
-lifetime ends there with a power removal. The vendor stops the firmware and
-powers the GPU off only after the firmware's own forced-idle and power-off
-handshake, which needs the command queue and interrupt service that this
-image does not carry; a reset or OFF under running firmware is outside the
-vendor's flow. The firmware's MIPS page table maps only the image's own
-firmware and shared pages, so whatever it writes after the image returns
-stays inside them.
-
-Every GPU, wrapper and SMC0 access is one 32-bit access, made after the
-progress record at result offset 128 (magic `GPUFWS01`) names it and after
-a `GPU FWS reading` or `writing` log line.
-
-Predictions: the started word becomes 1 within 0.5 s, the vendor's bound;
-the run prints `COMPLETE GPU firmware start: started word 1 after the timer
-record and the secure configuration, GPU left running for the power
-removal`.
-
-Controlled failure states:
-
-- a start whose started word is not 1 by the deadline (error 2), is already
-  set before the start (error 4) or holds a value other than 0 or 1
-  (error 5) reports the shared state and the registers and fails with
-  `GPU firmware start: started word not 1, GPU left running`; the firmware
-  processor stays released;
-- an identity other than `36.56.104.183` fails before any write, with the
-  GPU powered;
-- a refused preparation, mapping or time budget fails before any GPU,
-  wrapper or SMC0 access;
-- a start that would end too near the deadlines returns status 7 with
-  nothing written.
-
-A register access that never completes stops the CPU; the monitor does not
-return, and only a power removal recovers the board. The progress record
-then names the access in flight, but it survives only on a return.
-
-## Design gate
-
-**Cost.** The start runs once per GPU power-on. The timer record adds two
-32-bit reads (four after a low-word wrap) and one 40-byte write; the secure
-configuration adds two writes and two observation reads; splitting the
-fourteen 64-bit register writes and four 64-bit reads of the start into
-32-bit halves adds 18 accesses to its 24. The log of a complete run in the host check is 8,047
-bytes of the 16,128-byte log area.
-
-**Checks.**
-
-- `checks/pvr-gpu-start.c` and `checks/pvr-gpu-start-reference.py` cover
-  the 29-step controller: 36 retained faults, 40 refusals, and the
-  reference traces less `SOFT_RESET2`
-  (`~/.cache/sunstoneos/evidence/gpu-start-20261025/`).
-- `apps/gpu-power-id/check.py --fw-start` runs eleven cases on the linked
-  image, with only the ON, the clock, translations, cache maintenance and
-  the log modeled; the preparation, the controller and the shared-memory
-  adapter run as linked. Every access must be the next of the case's
-  expected sequence, with its progress record and log line. The cases are:
-  - the complete start, with the CR timer read once and, after a low-word
-    wrap, twice;
-  - a start that times out, finds the started word already set, or reads 2;
-  - a CORE6 that does not reach 8, an unexpected identity, a wrong SMC0
-    mapping, a write-back translation of a shared page, and a start
-    refused by the deadlines;
-  - a seeded mutant of the SMC0 write value.
-
-  The complete case also requires the timer record before the first secure
-  write, publication of exactly the three firmware buffers before the first
-  GPU register write, the record's CR value, K and clock, and system init's
-  clock and marker.
-- The GPU service host checks that link the controller and the shared-memory
-  adapter pass at the controller change: the backend reference, native and
-  emulation checks, the service, memory-model, interrupt and mimus-service
-  cases, and the reserved-memory check
-  (`~/.cache/sunstoneos/evidence/gpu-fw-start-regress-20261025/`). The
-  power-service model's case 1 fails at its fixture's `power_update`, which
-  refuses the CORE6 bank; it fails identically before the change.
-
-**Image comparison.** At this branch the power-only (`cec1c309…`),
-identity (`9dc33dd8…`), wrapper-read (`1ab2f6d4…`) and probe-read
-(`8a1c1b8a…`) images are byte-identical to those of set
-`board-bundles-20261025-18`; the probe-read image is the one that passed
-step 1.
+- The standalone firmware-start image has not run on its own; the start is qualified through the images that include it.
+- The runtime fields the DDK also sets (active power latency 10 ms, HCS deadline, firmware watchdog 2 s, `rgxfwutils.c:2333–2357`) stay zero; the host source does not say whether the open firmware needs them.

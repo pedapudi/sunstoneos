@@ -1,58 +1,43 @@
 # Native SPI3 command-response transfers through DMA0
 
-The supervised SPI application will send one authenticated command of 1–16 bytes
-and receive exactly 4096 bytes under one CS0 assertion. Its existing owner task
-will control SPI3 and two DMA0 channels. The existing polling and FIFO interrupt
-profiles remain available. No peer opcode or electrical compatibility is assumed.
+Status: **host-tested.** The DMA application profile (`apps/spi/dma.c`, `apps/spi/dma.h`, option `SUNSTONE_SPI_DMA` in `cmake/a733-spi.cmake`) is implemented and checked on the host (`checks/spi-dma-host.py`, `checks/spi-dma-native.py`). No board run exists; an identified 1.8 V-compatible peer, physical interrupt, DMA and cache behaviour, and recovery are unqualified.
 
-This design targets the current native gap at `78c36b2b`:
-`apps/spi/native.c` constructs only a CPU-buffer WRITE_READ transfer, while
-`a733_spi_platform_interrupt_start` explicitly rejects DMA. The SPI core already
-implements DMA request gating and terminal wire checks. The DMA controller,
-startup adapter, native memory policy, and allocator already provide the required
-channel ownership and cache operations. No common DMA, power, or memory change is
-proposed.
+The supervised SPI application sends one authenticated command of 1-16 bytes and receives exactly 4096 bytes under one CS0 assertion. Its owner task controls SPI3 and two DMA0 channels. The polling and FIFO interrupt profiles remain available. No peer opcode or electrical compatibility is assumed. The SPI core implements DMA request gating and terminal wire checks; the DMA controller, startup adapter, native memory policy and allocator provide channel ownership and cache operations, so no common DMA, power or memory change is needed. `a733_spi_platform_interrupt_start` admits a valid active DMA transfer.
 
 ## Source authority and sequence
 
-The pinned Allwinner Linux revision is
-`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`. Its cached
-`bsp/drivers/spi-ng/spi-sunxi.c` SHA-256 is
-`ea68e8672fe8e0c963605faf8892022c12bca25597f91953051da8ebfbfd2d47`;
-`spi-sunxi.h` is
-`ba5ef54e3e97f9306f68d8fce1196adaf9cf499dbd2ddf2b82dc66c28f2aa722`.
-Both match `sources.lock.json`.
+The reference is the pinned Allwinner Linux revision `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`: `bsp/drivers/spi-ng/spi-sunxi.c` (SHA-256 `ea68e8672fe8e0c963605faf8892022c12bca25597f91953051da8ebfbfd2d47`) and `spi-sunxi.h` (SHA-256 `ba5ef54e3e97f9306f68d8fce1196adaf9cf499dbd2ddf2b82dc66c28f2aa722`), both matching `sources.lock.json`.
 
 The reference's `sunxi_spi_config_dma_rx` and `sunxi_spi_config_dma_tx` select
 FIFO addresses at controller offsets `0x300` and `0x200`.
 `sunxi_spi_xfer_master` starts the required DMA directions before exchange.
 Its RX callback checks FIFO emptiness. Linux uses the DMA RX callback instead
-of SPI transfer-complete notification for DMA reads. This application will
-require both the SPI notification and independently verified DMA completion;
+of SPI transfer-complete notification for DMA reads. This application
+requires both the SPI notification and independently verified DMA completion;
 neither event alone publishes output.
 
 A733 manual V1.00 table 13-2 assigns request 26 to SPI3 RX and TX. Sections
 18.8.8.15–17 define normal DMA handshake `0xe5` and byte-accessible FIFO ports.
 The current SPI core admits one-byte accesses and single-beat bursts, enables
-TX request bit 24 and RX request bit 8, and verifies their readback. This
-extension uses those existing bounds; it does not expand burst or lane support.
+TX request bit 24 and RX request bit 8, and verifies their readback. The DMA profile
+uses those bounds and does not expand burst or lane support.
 
-The board route remains PE0 CS0, PE1 clock, PE2 MOSI, and PE3 MISO, function 5.
+The board route is PE0 CS0, PE1 clock, PE2 MOSI, and PE3 MISO, function 5.
 Board schematic V1.2 sheets 2, 9, and 18 establish the route and BLDO1 1.8 V
 supply. The existing read-only PMIC snapshot, four-pin lease, alternate-route
-exclusion, peer/translator evidence, and exact command-effect authority remain
-mandatory. The fixed wire profile stays mode 0, MSB first, active-low CS,
+exclusion, peer/translator evidence, and exact command-effect authority are
+mandatory. The fixed wire profile is mode 0, MSB first, active-low CS,
 500 kHz, with minimum 2 microsecond setup and hold intervals.
 
 ## One image profile and an authenticated DMA handoff
 
-A build option in `cmake/a733-spi.cmake` selects the DMA application. Its
+The build option `SUNSTONE_SPI_DMA` in `cmake/a733-spi.cmake` selects the DMA application. Its
 session version 3 extends the existing 832-byte record with a 128-byte,
 pointer-free DMA authority record, for 960 bytes total. Polling version 1 and
 FIFO IRQ version 2 retain their existing record and output layouts. The DMA
 image accepts only version 3; existing images reject it.
 
-The extension uses the field layout already implemented by the UART DMA
+The record uses the field layout already implemented by the UART DMA
 application: fabric words and rates, expected/desired CPU and MCU channel
 routing, allowed route changes, cold/adopt selection, owner, handoff/controller
 identities, establishment flags, channel masks, startup duration, and an
@@ -69,7 +54,7 @@ rate, and routing combinations before any allocation or provider access.
 All-channel ownership is required by the existing startup adapter even though
 this application transfers only on channels 0 and 1.
 
-Host preparation binds the new DMA authority evidence to the exact image and
+Host preparation binds the DMA authority evidence to the exact image and
 target, verifies its routing and memory facts, and freezes it with the session.
 The initial peer record must authorize the exact command and 4096-byte response.
 A larger response is not inferred from authority for the former 32-byte limit.
@@ -99,7 +84,7 @@ must remain below the existing `0xfffff800` boundary, and data addresses below
 FIFO endpoints: RX `0x02543300` and TX `0x02543200`, request 26, width 1, burst 1.
 Driver state, stacks, sessions, page tables, and USB staging remain outside them.
 
-The existing SPI task is already privileged. It will bind the existing DMA
+The existing SPI task is already privileged. It binds the existing DMA
 startup adapter and directly serialize the two-channel DMA controller. No DMA
 service worker, queue, extra task, or generic bus service is needed. The DMA
 adapter checks the immutable allocation, owner task, live startup reservation,
@@ -108,8 +93,8 @@ masked throughout, although the channel event bits remain enabled for polling.
 Read/write/cache/barrier/ticks callbacks cannot report errors to the controller;
 any callback failure enters a nonreturning retained-failure path and closes
 output before further DMA access. COMPLETE and a released transfer pointer
-therefore cannot override a callback failure. Complete policy and
-translation checks occur at construction/submission, not per payload byte.
+therefore cannot override a callback failure. Policy and
+translation checks occur at construction and submission, not per payload byte.
 
 ## Completion requires wire idle, gated requests, and both drained channels
 
@@ -164,49 +149,23 @@ capture deadline. Pending and failed frames remain header-only. One request
 fetches one complete response; fragmentation cannot restart the deadline or
 publish a truncated result.
 
-Design budgets, to be measured in the focused compiled checks:
-
-- One 16 KiB pool allocation; no per-transfer allocation or extra task stack.
-  Total added pool and static storage stays below 48 KiB, including DMA state,
-  the 4192-byte payload, and the 4320-byte USB response. Text growth stays below
-  32 KiB relative to the current SPI image.
-- One command copy of at most 16 bytes into DMA RAM. One 4096-byte RX copy into
-  the payload, then one 4192-byte payload copy into USB staging. No intermediate
-  RX buffer and no per-byte CPU FIFO access.
-- Five page-sized cache operations on a successful transfer: two descriptor
-  cleans, one TX clean, RX clean/invalidate before DMA, and RX invalidate after
-  verified drain. No cache operation covers unrelated storage.
-- At most one finite-state observation per channel per owner wake. During wire
-  activity, SPI IRQ wakes the owner and a maximum 10 ms fallback bounds DMA
-  fault observation. Startup, IRQ-route deferral, and drain advance at one tick
-  per step. Drain is bounded by 100 ms and the remaining operation deadline.
-- At 500 kHz, 16 command bytes plus 4096 response bytes require 65.792 ms of
-  serial clocks, excluding gaps and setup/hold. This is arithmetic, not measured
-  throughput. Count register accesses, wakeups, cache bytes, and copies in the
-  model; report physical timing as unqualified.
+The design budgets (one 16 KiB pool allocation, total added storage below 48 KiB, text growth below 32 KiB, one command copy of at most 16 bytes, one 4096-byte RX copy and one 4192-byte payload copy, five page-sized cache operations per transfer, one finite-state observation per channel per owner wake with a 10 ms fallback, drain bounded by 100 ms, and 65.792 ms of serial clocks at 500 kHz for 16 command bytes plus 4096 response bytes) are in the record `spi-native-dma-budgets` in [the evidence file](../evidence/spi-native-dma.jsonl). They are arithmetic and model counts, not measured throughput.
 
 ## Focused validation and ownership
 
-Build one DMA image with the accepted native toolchain. Use existing SPI linked
-fixtures, extended to execute the actual application, SPI platform/core, DMA
+The host checks build one DMA image with the accepted native toolchain and use SPI linked
+fixtures extended to execute the actual application, SPI platform/core, DMA
 controller, startup binding, native mapping/cache callbacks, and copied output.
-Model only hardware effects, scheduling, and unavailable peer/physical authority.
-Cover success, delayed RX completion after the SPI event, missing IRQ, DMA error,
+They model only hardware effects, scheduling, and unavailable peer/physical authority.
+They cover success, delayed RX completion after the SPI event, missing IRQ, DMA error,
 failed drain, and output revocation. Assert no request enable before both ACTIVE
 channels, no DMA stop before request shutdown, and no RX copy before both drains.
 
-Add cheap admission cases for wrong channels, routing, fabric, memory extent,
+Admission cases cover wrong channels, routing, fabric, memory extent,
 request count, exact command, truncated authority, and mismatched image profile.
-Exercise actual offline prepare/freeze/verification and fragmented host capture.
-Check the private launcher/session/IRQ-route boundary on the same image. Reuse
-existing FIFO polling/IRQ evidence; run one narrow preserved-profile compatibility
-case for the changed interrupt admission instead of repeating the old suites.
-Reuse source-table, descriptor encoder, DMA controller, and native cache evidence
-where their production inputs remain unchanged.
+The checks also run the offline prepare, freeze and verification and the fragmented host capture, and the private launcher, session and IRQ-route boundary on the same image. One preserved-profile compatibility case covers the changed interrupt admission; the FIFO polling and IRQ suites, source table, descriptor encoder, DMA controller and native cache evidence are reused where their production inputs are unchanged.
 
-Owned changes are `apps/spi/`, `cmake/a733-spi.cmake`, the narrow SPI platform
+The files that implement the profile are `apps/spi/`, `cmake/a733-spi.cmake`, the narrow SPI platform
 interrupt admission and its header/documentation, existing SPI checks, and this
 design. No common DMA, power, memory, storage, radio, board-status, or queue file
-is included. Source and compiled artifact closure will use the existing evidence
-snapshot tool. No board access is planned; an identified 1.8 V-compatible peer,
-physical interrupt/DMA/cache behavior, and recovery remain unqualified.
+is involved.

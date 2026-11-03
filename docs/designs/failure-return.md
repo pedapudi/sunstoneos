@@ -1,5 +1,11 @@
 # Return to the boot ROM after a failure
 
+Status: **implemented** and **host-tested** for every row below that returns;
+**qualified on the board** for a forced application failure and an EL0 data
+abort (records `1793579984604886693-7d81d397` and
+`1793582514152160909-ecc5988b` in [application.jsonl](../evidence/application.jsonl)).
+The other paths are executed only in host models and on the virtual board.
+
 A returning SunstoneOS image ends a failed run at the boot ROM, with its
 first-failure record and the DRAM that the host saved before launch, instead of
 at a watchdog reset. A watchdog reset loses DRAM. After a reset the runner
@@ -11,14 +17,14 @@ resident and supervised lifetimes keep their endings.
 
 ## Where failures end
 
-Before this change, every row below ended at the independent watchdog. An image
-recorded the first failure in the RTC breadcrumb words, then closed admission
-(`board_fail`, which sets `board.fatal`). The CPU0 supervisor then saw
-`board_live()` false and stopped the watchdog restarts through `platform_exit`.
-That is a supervisor call to EL3 (`a733_smp_stop`), which shortens the watchdog
-to 0.5 s. The runner classified the result `watchdog-reset`.
+An image records the first failure in the RTC breadcrumb words. A failure that
+cannot return closes admission (`board_fail`, which sets `board.fatal`); the CPU0
+supervisor then sees `board_live()` false and stops the watchdog restarts
+through `platform_exit`, a supervisor call to EL3 (`a733_smp_stop`) that
+shortens the watchdog to 0.5 s. The runner classifies that result
+`watchdog-reset`.
 
-| Path | Evidence the runner gets | Ending now |
+| Path | Evidence the runner gets | Ending |
 | --- | --- | --- |
 | `ss_fail`, `ss_fail_value` after the scheduler started | Level 0xb record in the RTC words: site, value, caller | Failure return |
 | `ss_fail` in an application's `init`, before the scheduler | Same | Failure return, all eight cores |
@@ -35,10 +41,10 @@ to 0.5 s. The runner classified the result `watchdog-reset`.
 | Secondary-core fault at EL1 or EL3 | Same; the faulting secondary parks and core 0 stops | Watchdog |
 | EL3 startup refusals (`a733_smp_stop` in `boot.c`, `a733_cached_smc` before the image runs) | Fault words | Watchdog |
 
-Exception-vector faults taken at EL1 or EL3 keep the watchdog. At such a fault
-the faulting context's stack pointer and caches are unknown, and the vectors
-run before any task exists to take over the core. An SError keeps the watchdog
-because it is asynchronous and may report a lost write.
+Exception-vector faults taken at EL1 or EL3 end at the watchdog: the faulting
+context's stack pointer and caches are unknown, and the vectors run before any
+task exists to take over the core. An SError ends at the watchdog because it is
+asynchronous and may report a lost write.
 
 ## Exceptions from an application task at EL0
 
@@ -77,7 +83,7 @@ reserved stack.
 
 If the claim is refused, because a device failure closed admission or the
 return window has passed, the function closes admission through `board_fail`
-and the failure keeps its watchdog ending.
+and the failure ends at the watchdog.
 
 ## The failure return
 
@@ -99,8 +105,8 @@ through each service's own stop path:
    step 5 applies.
 4. The PMIC owner stops after its slots and locks are idle.
 5. If the sequence has not finished 3 s after the claim
-   (`OS_FAILURE_RETURN_US`), the supervisor ends the failure at the watchdog,
-   as before. The session deadline bounds it in any case.
+   (`OS_FAILURE_RETURN_US`), the supervisor ends the failure at the watchdog.
+   The session deadline bounds it in any case.
 6. The supervisor wakes one terminal task per core. Each runs at the highest
    priority, so it takes the core from any application task. The terminals
    clean the caches, restore the interrupt controller and power state, disarm
@@ -113,8 +119,8 @@ device failure during it closes admission and ends at the watchdog.
 `ss_fail` or `platform_panic`, writes the record, marks the return ready and
 enters the terminal itself. No service task has run, so no device was opened
 and nothing needs stopping. Cores 1 to 7 wait in the start sequence for core 0
-to finish its shared initialization; that wait now also checks the claim and
-enters the terminal. Only core 0 before it releases the others can claim.
+to finish its shared initialization; that wait also checks the claim and enters
+the terminal. Only core 0 before it releases the others can claim.
 
 **Software-detected faults** (`platform_panic`, an unexpected interrupt) record
 group `board` and the line (or the interrupt number plus 0x800) as the site.
@@ -129,14 +135,14 @@ through its normal stop path after the failure. The stop sequence needs the
 owner's stop path to complete with no retained resource: `os_cpu_return_pmic`
 refuses a held, retained or failed PMIC slot, the thermal stop refuses after
 `cancel()`, and `os_npu_retirement_check` and `os_gpu_return_ready` refuse a
-failed service. None of the callers qualifies, so every device failure keeps the
-watchdog ending.
+failed service. None of the callers qualifies, so every device failure ends at the
+watchdog.
 
 | Owner and caller | State after the failure | Stop path | Ending |
 | --- | --- | --- | --- |
 | PMIC task, `apps/board/main.c` `pmic` (authority or ledger fault) | Task parks with the slot ownership held; `pmic.failed` | `os_cpu_return_pmic` refuses (0x739) | Watchdog |
 | Thermal owner, driver fault, lost owner, interrupt re-arm or mask failure (`apps/os/thermal.c` `fault`, `cancel`) | `thermal.failed` and `retaining` set; the clock token is retained | The stop requires `live()`, which `thermal.failed` clears | Watchdog |
-| Thermal owner, critical temperature (`fault` after `A733_THERMAL_CRITICAL`) | The converter is healthy, but the owner takes the same state as above | `a733_thermal_stop` could stop it; the owner refuses. The watchdog ending is kept on purpose: the 0.5 s stop shortens the time at the critical temperature, and the return sequence can take 3 s | Watchdog |
+| Thermal owner, critical temperature (`fault` after `A733_THERMAL_CRITICAL`) | The converter is healthy, but the owner takes the same state as above | `a733_thermal_stop` could stop it; the owner refuses. The watchdog ending is deliberate: the 0.5 s stop shortens the time at the critical temperature, and the return sequence can take 3 s | Watchdog |
 | CPU clock owner refusal (`apps/os/cpu.c` `refused`, reached through the thermal owner's `fault`) | A retained or invalid driver state holds the clock, rail or request; a refusal at the start phase holds nothing but still fails the thermal owner | The clock return step refuses a retained or invalid driver (`REFUSED`) | Watchdog |
 | DMA, `apps/os/dma.c` `fatal` through `platform_panic` | The pool service is retained | `os_cpu_return_panic` claims the return, `os_dma_return_ready` never becomes true, and the 3 s bound ends at the watchdog | Watchdog after 3 s |
 | NPU, `apps/os/npu.c` `fail_at`, `apps/os/npu-client.c` `retained` | `npu.failed`; every NPU resource stays held | `os_npu_retirement_check` refuses | Watchdog |
@@ -164,12 +170,12 @@ when it stops.
 The host accepts `finished` 2 only for a failure return whose CPU return
 report is valid, and only with the failure record's generation (zero when the
 failure preceded the sealed session). A missing, stale, retained or
-other-generation report is refused and the port is quarantined as before.
+other-generation report is refused and the port is quarantined.
 
 ## The record
 
-The breadcrumb record is unchanged: level 0xb in the RTC fault word, with the
-site, caller and value words. `tools/a733-crumbs.py` decodes it as before. The
+The breadcrumb record is level 0xb in the RTC fault word, with the site, caller
+and value words; `tools/a733-crumbs.py` decodes it. The
 DRAM record repeats the same site, value and caller, with the core, the failure
 context (running, startup or fault) and the counter at the failure. It reaches
 the host through the existing result read, so the runner reads it after the
@@ -178,15 +184,15 @@ an image that does not link the failure return and returns with a failure
 record in the breadcrumbs is still refused as an unresolved return.
 
 If a device failure already closed admission, the failure return does not
-start, and the failure keeps its watchdog ending.
+start, and the failure ends at the watchdog.
 
 ## Runner
 
 `tools/board_images.py` marks an image that links `os_cpu_return_failure`.
 For such an image `tools/board.py` accepts a normal return that carries a board
 failure in its breadcrumbs, and the capture path decodes a failed result
-instead of an application result. Retirement is still validated, DRAM is
-restored, and with `--restore-rails` the rail helper still runs. The outcome is
+instead of an application result. Retirement is validated, DRAM is
+restored, and with `--restore-rails` the rail helper runs. The outcome is
 `failure-return`: a failed result (the command exits 1) with the failure record
 in `first_failure`. The port is not quarantined and is not paused; the three
 same-site repeats rule still applies to repeated `failure-return` results. An
@@ -198,49 +204,50 @@ same-site repeats rule still applies to repeated `failure-return` results. An
 `checks/os-failure-return.py ELF [--baseline-elf ELF]` executes the linked image
 in each context with modeled peripherals. It runs the real failure sites,
 breadcrumb SVC, claim, result record, supervisor, secondary wait and the
-EL1/EL3 terminal. It supplies the service completions, the task notifications
-and the scheduler state words, and stubs three kernel entry points. It checks:
+EL1/EL3 terminal, and supplies the service completions, the task notifications
+and the scheduler state words. It covers:
 
-- startup: a failure before the scheduler returns to the ROM from all eight
-  cores, with the RTC record, the DRAM record and every core restored.
-- running: the claim, a record with admission left open, the supervisor
-  notifying one terminal per core, and the ROM return.
-- a later failure keeps the first record; a device failure during the return,
-  an unfinished return, and a device failure that closed admission first all
-  end at the EL3 stop, which is the watchdog path.
-- `platform_panic` returns on a core that can schedule and keeps the watchdog
-  when masked; an unexpected interrupt is masked and returns.
-- exceptions from EL0 (a data abort on core 6, an instruction abort, an
-  undefined instruction, PC and SP alignment faults, a store on a secondary
-  core) enter the real vector with the exception state, return to EL0 on a
-  reserved stack with the arguments, record the failure, return from the
-  supervisor and the terminals to the ROM, and a second fault on another core
-  takes a second stack and keeps the first record;
-- negative controls keep the watchdog ending: an exception from EL1, an EL0
+- a failure before the scheduler, which returns to the ROM from all eight cores
+  with the RTC record, the DRAM record and every core restored;
+- a failure while running: the claim, a record with admission left open, the
+  supervisor notifying one terminal per core, and the ROM return;
+- a later failure, which keeps the first record; a device failure during the
+  return, an unfinished return, and a device failure that closed admission
+  first, which end at the EL3 stop (the watchdog path);
+- `platform_panic`, which returns on a core that can schedule and keeps the
+  watchdog when masked, and an unexpected interrupt, which is masked and
+  returns;
+- exceptions from EL0 (data abort on core 6, instruction abort, undefined
+  instruction, PC and SP alignment faults, a store on a secondary core), which
+  enter the real vector, return to EL0 on a reserved stack with the arguments,
+  record the failure and reach the ROM; a second fault on another core takes a
+  second stack and keeps the first record;
+- negative controls that keep the watchdog ending: an exception from EL1, an EL0
   exception with interrupts masked, with the priority mask raised to the API
   level, from AArch32, of an unlisted class, after the last stack, and after a
   device failure closed admission;
-- for an NPU image, a startup failure with a service that never ran publishes
-  the never-started report, and a report of a service that ran is kept;
-- with `--baseline-elf`, an EL0 exception ends at the watchdog, and the same startup failure on an image without the
-  failure return does not reach the ROM.
+- for an NPU image, the never-started report after a startup failure, and the
+  kept report of a service that ran;
+- with `--baseline-elf`, an EL0 exception that ends at the watchdog, and a
+  startup failure on an image without the failure return that does not reach
+  the ROM.
 
-`checks/qemu-os-boot.py` adds a case on the virtual board, where the MMU
-raises a real translation fault: the application's store to an unmapped address
-reaches the same vector source, the task continues on a reserved stack, the
-board records group application with detail 0xe24, the faulting address and
+`checks/qemu-os-boot.py` runs a case on the virtual board, where the MMU raises
+a real translation fault: the application's store to an unmapped address reaches
+the same vector source, the task continues on a reserved stack, the board
+records group application with detail 0xe24, the faulting address and
 instruction, and the task is suspended while the other cores run. The returning
 lifetime is not linked on that board, so its `os_cpu_return_el0_fault` records
 and suspends without the claim.
 
-`checks/board-return-preservation.py` adds three runner cases: a failure return
-(outcome `failure-return`, DRAM and rails restored, not quarantined), the same
-with a differing expectation (`result-mismatch`, still restored), and a failure
-record returned by an image that does not link the failure return (host error,
-quarantined, as before). Five NPU cases cover the never-started report: valid
-with a failure return (restored, not quarantined), and refused for a normal
-return, a stale epoch, a missing report, `retained` 1 and another generation.
+`checks/board-return-preservation.py` covers three runner cases: a failure
+return (outcome `failure-return`, DRAM and rails restored, not quarantined), the
+same with a differing expectation (`result-mismatch`, still restored), and a
+failure record returned by an image that does not link the failure return (host
+error, quarantined). Five NPU cases cover the never-started report: valid with a
+failure return (restored, not quarantined), and refused for a normal return, a
+stale epoch, a missing report, `retained` 1 and another generation.
 
 The model does not execute FreeRTOS task switching, the service stop paths
-themselves, or physical clocks and power. The physical evidence is the single
-run recorded in [the CPU status](../status/cpu.md).
+themselves, or physical clocks and power. The board evidence is the two runs
+named in the status line.

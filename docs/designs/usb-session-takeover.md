@@ -1,65 +1,25 @@
 # USB0 takeover from the boot ROM's device session
 
-Status: **implemented and qualified on one board**. The admission rule and
-the takeover sequence below run in the USB platform provider
-(`drivers/usb/a733_usb_platform.c`); its one native write path for USB0
-registers is `a733_usb_platform_native_write`
-(`drivers/usb/a733_usb_platform_native.c`). On 2026-10-24 the bundle
-`board-bundles-20261023/rank-9-usb-v3/` passed on port 3-3
-(`board-session-20261023/port-3-3/r9-v3-usb/`): its PCTL byte store cleared
-SoftConn, the OUT/IN exchange completed with received 1 and sent 40, the
-USB task quiesced and the monitor returned to a responsive ROM, with
-`native_usb.functional_success` true. That image issued the same `strb` to
-the same register as the remaining path. The later changes below (the
-detach interval timed from the first clear SoftConn read, and the admission
-mask without LSDEV and FSDEV) are host-modeled; `rank-9-usb-v4/` carries
-them on the current platform and has not run on a board
-([rank 9 runbook](../board-runbooks/rank-9-usb.md)).
+Status: implemented; qualified on the board on one board (port 3-3), with
+later changes host-modeled. The admission rule and the takeover sequence run
+in the USB platform provider (`drivers/usb/a733_usb_platform.c`); its one
+native write path for USB0 registers is `a733_usb_platform_native_write`
+(`drivers/usb/a733_usb_platform_native.c`). The bundle `rank-9-usb-v3` passed:
+the PCTL byte store cleared SoftConn, the exchange completed, the USB task
+quiesced and the monitor returned to a responsive ROM
+(`usb-session-takeover-r9-v3` in
+[usb-session-takeover.jsonl](../evidence/usb-session-takeover.jsonl)). The
+detach interval timed from the first clear SoftConn read and the admission mask
+without LSDEV and FSDEV are carried by `rank-9-usb-v4`, which has not run on a
+board ([rank 9 runbook](../board-runbooks/rank-9-usb.md)).
 
-When the native USB returning image starts, the boot ROM's recovery-mode
-(FEL) driver still owns USB0: the controller is enumerated by the host, in
-device role, with its D+ pull-up enabled. The provider's ROM device mode
-(`A733_USB_ROM_DEVICE`) admits that state, disconnects from the host,
-resets the device controller and then runs the same PHY preparation as a
-cold start. This document gives the admission rule for the inherited
-state, the sequence and its sources, and what remains unproven.
-
-## The refusal on 2026-10-23
-
-The rank 9 bundle `board-bundles-20261023/rank-9-usb-v2/` ran on port 3-3
-and returned to the ROM with monitor status 1. Its log
-(`board-session-20261023/port-3-3/r9-v2-usb/kernel.log`) records:
-
-| Field | Value | Meaning |
-| --- | --- | --- |
-| `USB_STEP`, `PMIC_STAGE` | 5, 4 | All four supply snapshots matched; the PMIC provider is ready |
-| `USB_FAULT_KIND` | 4 | A register value failed its mask and expected value |
-| `USB_FAULT_STAGE` | `0x16` | `ROM_DISCONNECT`, value 22 of the provider's stage enumeration |
-| `USB_FAULT_ADDRESS`, `MASK`, `EXPECTED` | `0x04100040`, `0x40`, 0 | SoftConn must read clear |
-| `USB_FAULT_OBSERVED` | `0x00029940` | The word read back after the write |
-| `USB_FAULT_WRITES_ATTEMPTED`, `COMPLETED` | 3, 3 | Every write callback returned success |
-| `USB_IO_DENIAL`, `USB_PROVIDER_DENIAL` | 0, 0 | No native guard or provider-health refusal |
-
-In that image, `ROM_DISCONNECT` called `update(p, USB+0x40, BIT(6), 0, 0)`:
-read the word, write it back with bit 6 clear, and read it again. The
-readback still had bit 6 set, so the provider recorded the value failure
-and retained ownership. The three writes are the disconnect write and,
-by inference from the count, the two `ROM_MASK` writes that cleared the
-endpoint interrupt enables at `0x04100048` and the bus interrupt enables
-at `0x04100050`, the two of its four registers that the matched ROM sets
-(see below).
-
-The 2026-10-18 refusal on the second board was a different check. It
-failed in `ROM_CHECK` (stage `0x14`) under mask `0x700` with no write,
-because the guard then required DEVCTL SESSION (word bit 8) clear. The
-correction that permits SESSION changed the `ROM_CHECK` mask to `0x8600`
-with expected value `0x8000`. The rank 9 image contained that correction:
-its provider source in `compiled-inputs/28/a733_usb_platform.c` is
-byte-identical to the tree, and `rom_pio` in its `build/probe.elf` tests
-the word with `mov w9,#0x8600` and `cmp w9,#0x8,lsl #12` at
-`0x410057ac`. The 2026-10-23 run passed that check and `ROM_MASK`, and
-then failed at the next stage. The correction was exercised; it does not
-cover the SoftConn write, because that is a separate defect.
+When the native USB returning image starts, the boot ROM's recovery-mode (FEL)
+driver still owns USB0: the controller is enumerated by the host, in device
+role, with its D+ pull-up enabled. The provider's ROM device mode
+(`A733_USB_ROM_DEVICE`) admits that state, disconnects from the host, resets the
+device controller and then runs the same PHY preparation as a cold start. This
+document gives the admission rule for the inherited state, the sequence and its
+sources, and what remains unproven.
 
 ## The packed word at USB0+0x40
 
@@ -85,7 +45,7 @@ BSP lines 405 to 412, 606 to 613 and 624 to 625. Bit 6 of the word is PCTL
 bit 6, `USBC_BP_POWER_D_SOFT_CONNECT`: while it is set, the controller
 enables the D+ pull-up and the host sees a connected device.
 
-The observed word `0x00029940` decodes as:
+The word `0x00029940` that the matched ROM leaves decodes as:
 
 - PCTL `0x40`: SoftConn set. High-speed enable, high-speed mode, reset,
   resume and suspend are clear.
@@ -102,20 +62,7 @@ at `0x1d68`, sets INTTxE bit 0 with `ldrb`/`strb` at `0x1d70` to `0x1d78`,
 and clears VEND0 bit 0 with `strb` at `0x2458`. Its device test at
 `0x23bc` to `0x23e8` requires BDEVICE and VBUS level 3.
 
-## Why the disconnect write did not take effect
-
-Established by the record and the image:
-
-- The write was one 32-bit `str` of `0x00029900` to `0x04100040`
-  (`a733_usb_platform_native_write`, `str w2,[x1]` at `0x4100686c`),
-  followed by `dsb sy`, and it returned without a bus fault.
-- The 32-bit readback, also after `dsb sy`, returned `0x00029940`: no byte
-  of the word changed.
-- The two other completed writes were the `ROM_MASK` stores to
-  `0x04100048` and `0x04100050`, and their readbacks passed. This is an
-  inference from the write count: of the four `ROM_MASK` registers, only
-  these two are left nonzero by the matched ROM. So a 32-bit store did
-  take effect at those two addresses.
+## PCTL is written with an 8-bit store
 
 Every pinned source writes PCTL with an 8-bit store:
 
@@ -123,8 +70,7 @@ Every pinned source writes PCTL with an 8-bit store:
   `USBC_REG_clear_bit_b`, an 8-bit read-modify-write (`musb_def.h`, lines
   18 and 63). `dcd_init` calls it first (line 841); with the A733 patch
   (`patches/tinyusb-a733-dcd.patch`) it then calls `a733_usb_prepare`,
-  whose 150 ms detach and reset sequence ran on the board in earlier TinyUSB
-  images.
+  which holds the 150 ms detach and reset sequence.
 - BSP `USBC_Dev_ConectSwitch` (`usbc/usbc_dev.c`, lines 681 to 694) uses
   `USBC_REG_set_bit_b` and `USBC_REG_clear_bit_b`, which are `readb` and
   `writeb` (`sunxi_usb_bsp.h`, lines 23 to 47). The BSP's one 32-bit write
@@ -132,15 +78,11 @@ Every pinned source writes PCTL with an 8-bit store:
   which sets bit 0.
 - The matched ROM writes PCTL, EPIND, VEND0 and INTUSBE only with `strb`.
 
-No source states how the A733 handles a 32-bit store that spans PCTL,
-DEVCTL, EPIND and VEND0. One candidate is that such a store does not update
-PCTL, although a 32-bit store did take effect at INTUSBE (`0x50`), also a
-byte register, in the same run. A second candidate is that the bit reads
-back clear only some time after the write; no source states such a delay.
-A third, an agent that sets SoftConn again, has no candidate: the ROM was
-not running, the USB interrupts were disabled at the GIC and TinyUSB had
-not started. The 2026-10-24 run shows that the byte store clears the bit;
-it does not separate the first two candidates.
+A 32-bit store of the word to `0x04100040` did not clear SoftConn on the
+board (`usb-session-takeover-r9-v2`), and one 8-bit store did
+(`usb-session-takeover-r9-v3`); the board results do not show why. No source
+states how the A733 handles a 32-bit store spanning PCTL, DEVCTL, EPIND and
+VEND0.
 
 ## Admission rule for the inherited state
 
@@ -152,7 +94,7 @@ Each later takeover stage that writes (`ROM_MASK`, `ROM_DISCONNECT`,
 | --- | --- | --- | --- |
 | 0 to 5, 7 | PCTL except SoftConn | inherited | The device reset in `ROM_RESET_ASSERT` returns them to reset values; none selects host role or DMA |
 | 6 | SoftConn | inherited, then removed | The ROM sets it to stay enumerated; the takeover clears it and requires it clear before the reset |
-| 8 | SESSION | inherited | A B-device session; it selects neither host role nor DMA (2026-10-18 correction) |
+| 8 | SESSION | inherited | A B-device session; it selects neither host role nor DMA |
 | 9 | HOSTREQ | refused | Host-role request |
 | 10 | HOSTMODE | refused | Host role |
 | 11, 12 | VBUS level | inherited | Status from the PHY |
@@ -161,6 +103,7 @@ Each later takeover stage that writes (`ROM_MASK`, `ROM_DISCONNECT`,
 | 16 to 23 | EPIND | inherited | Selects which endpoint's registers appear at `0x80`; reset clears it |
 | 24 | VEND0 bus selection | inherited | `USBC_SelectBus` (`usbc/usbc.c`, lines 543 to 577) sets it for PIO as well |
 | 25 to 31 | VEND0 DMA request selection | refused | `USBC_SelectBus` sets these bits only for DMA transfers |
+
 
 The provider tests the refused and required bits with mask `0xfe008600`
 and expected value `0x8000`. The VEND0 test does not detect every DMA
@@ -201,87 +144,82 @@ MMIO.
 The provider issues the disconnect as one write callback for the word
 `old & ~0x40`. `a733_usb_platform_native_write` accepts only that word: it
 reads the current word, refuses any other change, and stores the low byte,
-with `dsb sy` before and after. Reads of the word stay 32-bit; the
-2026-10-23 readbacks decode consistently with the ROM's writes. Every
-consumer reaches the store through that function: gpu-display, hdmi-audio
-and npu-convolution call it directly, and usb-returning and the other
+with `dsb sy` before and after. Reads of the word stay 32-bit. Every consumer
+reaches the store through that function: gpu-display, hdmi-audio and
+npu-convolution call it directly, and usb-returning and the other
 `a733_native_usb` images call it through `platform/a733/native_usb.c`.
 
 `ROM_DISCONNECT` reads the word right after the store. When SoftConn reads
-clear, the 150 ms detach interval starts. When it still reads set, the
-provider enters `ROM_WAIT_SOFTCONN` and re-reads on later polls without
-writing; the interval starts at the first clear read. A bit that never
-clears exhausts the provider deadline at stage `0x1d`; no reset is
-written. The provider would record a time failure (kind 1) whose observed
-value is the last word read, but in the returning image the USB task's
-`live()` check uses the same deadline and runs first, so the board almost
-always reports `startup deadline/provider` with `USB_STAGE=0x1d` and an
-empty fault record. `ROM_RESET_ASSERT` checks SoftConn clear again
-before the reset write.
+clear, the 150 ms detach interval starts. When it still reads set, the provider
+enters `ROM_WAIT_SOFTCONN` and re-reads on later polls without writing; the
+interval starts at the first clear read, which adds at most one read per poll
+while SoftConn still reads set. A bit that never clears exhausts the provider
+deadline at stage `0x1d`; no reset is written. The provider would record a time
+failure (kind 1) whose observed value is the last word read, but in the
+returning image the USB task's `live()` check uses the same deadline and runs
+first, so the board almost always reports `startup deadline/provider` with
+`USB_STAGE=0x1d` and an empty fault record. `ROM_RESET_ASSERT` checks SoftConn
+clear again before the reset write.
 
-The returning application's shutdown in `apps/usb-returning/main.c`
-removes SoftConn through the same function, then checks it after its
-150 ms detach interval.
-
-The takeover issues at most seven writes before the cold sequence: four in
-`ROM_MASK`, one PCTL byte and two CCU writes for the reset. No stage loops
-on hardware; waits are absolute counter deadlines that the polling caller
+The returning application's shutdown in `apps/usb-returning/main.c` removes
+SoftConn through the same function, then checks it after its 150 ms detach
+interval. The takeover issues at most seven writes before the cold sequence:
+four in `ROM_MASK`, one PCTL byte and two CCU writes for the reset. No stage
+loops on hardware; waits are absolute counter deadlines that the polling caller
 observes.
 
-## Performance and simplicity
+## Performance
 
 The provider runs one stage per poll. The USB task in
 `apps/usb-returning/main.c` calls `a733_native_usb_step` and waits
-`vTaskDelay(1)`, one tick of 1 ms (`configTICK_RATE_HZ` 1000), after each
-poll that does not finish. The takeover baseline is about 166 polls, about
-166 ms, from `BASELINE` to `PREPARED`: 16 polls run non-wait stages, and
-the rest are tick polls during the 150 ms detach, 1 ms reset and 40 µs
-release intervals. The linked check counts the polls of its modeled
-takeover at the same tick and records them in `check-result.json`.
+`vTaskDelay(1)`, one tick of 1 ms (`configTICK_RATE_HZ` 1000), after each poll
+that does not finish. The takeover baseline is about 166 polls, about 166 ms,
+from `BASELINE` to `PREPARED`: 16 polls run non-wait stages, and the rest are
+tick polls during the 150 ms detach, 1 ms reset and 40 µs release intervals.
+The linked check counts the polls of its modeled takeover at the same tick.
 
 These tick waits meet the condition of
-[section 1.3](../performance-architecture.md#13-one-step-per-1-ms-tick):
-the USB0 interrupt is not qualified, and the 150 ms and 1 ms waits are at
-least one tick each. The waits during those intervals stay. The 16
-non-wait stages cost about 16 ms of tick latency; running consecutive
-non-wait stages back to back in one poll while they report progress would
-remove it. That change is not made here.
+[section 1.3](../performance-architecture.md#13-one-step-per-1-ms-tick): the
+USB0 interrupt is not qualified, and the 150 ms and 1 ms waits are at least one
+tick each. The 16 non-wait stages cost about 16 ms of tick latency; running
+consecutive non-wait stages back to back in one poll while they report progress
+would remove it.
 
-Timing the detach interval from the first clear read adds at most one read
-per poll while SoftConn still reads set, and removes the time between the
-store and that read from the takeover when the bit clears late.
+## Qualified figures
+
+| Figure | Value | Record |
+| --- | --- | --- |
+| Takeover and return on port 3-3 | received 1, sent 40; `native_usb.functional_success` true | [usb-session-takeover.jsonl](../evidence/usb-session-takeover.jsonl) `usb-session-takeover-r9-v3` |
+| Baseline polls, `BASELINE` to `PREPARED` | about 166 (16 non-wait) | `usb-session-takeover-r9-v4` (host model) |
 
 ## Unproven
 
-- How the A733 handles a 32-bit store across the four byte registers; the
-  2026-10-24 run shows only that the byte store clears SoftConn.
+- How the A733 handles a 32-bit store across the four byte registers; the board
+  shows only that the byte store clears SoftConn.
 - That 150 ms is long enough for every host to observe the disconnect. One
   Linux host on port 3-3 did.
 - That LSDEV and FSDEV never matter in device role.
 - Completion of DMA issued earlier in the powered lifetime; the PIO-only
   history remains a coordinator prerequisite.
-- The detach timing from the first clear read and the 12 GiB EL1 map
-  platform of `rank-9-usb-v4/` on a board.
+- The detach timing from the first clear read and the 12 GiB EL1 map platform
+  of `rank-9-usb-v4/` on a board.
 
 ## Checks
 
 All checks are offline and model register behavior:
 
 - `checks/a733-usb-platform.py` builds and runs the host-compiled provider
-  checks. `checks/a733-usb-rom-handoff.c` takes over from the observed
-  word with the ROM's interrupt enables. It checks SoftConn reading clear
-  30 ms after its write, with the 150 ms interval starting at that read,
-  and SoftConn never clearing, which retains at the deadline before any
-  reset write. It also checks six inherited variants, including LSDEV and
-  FSDEV, and ten refused variants, each refused before any write.
-- `apps/usb-returning/check.py` runs the linked provider and native
-  callbacks of the returning image from the 2026-10-23 input, clock capture
-  and observed word. Its register model leaves PCTL unchanged on a word
-  store and updates it on a byte store. On the image refused on 2026-10-23
-  the model reproduces the board's fault record field for field; on the
-  built image the takeover reaches `PREPARED` with one byte store. It also
-  checks the never-clearing SoftConn and five admission refusals.
-- `apps/usb-returning/host-check.py` requires that the 2026-10-23 session
-  record never classifies as functional success.
-- `checks/usb-first-fault.py` runs the native callback, BUSY and
-  first-fault cases on the built image.
+  checks. `checks/a733-usb-rom-handoff.c` takes over from the observed word
+  with the ROM's interrupt enables, checks SoftConn reading clear 30 ms after
+  its write with the 150 ms interval starting at that read, and SoftConn never
+  clearing, which retains at the deadline before any reset write. It also
+  checks six inherited variants, including LSDEV and FSDEV, and ten refused
+  variants, each refused before any write.
+- `apps/usb-returning/check.py` runs the linked provider and native callbacks
+  of the returning image. Its register model leaves PCTL unchanged on a word
+  store and updates it on a byte store. It checks the never-clearing SoftConn
+  and five admission refusals.
+- `apps/usb-returning/host-check.py` requires that the 2026-10-23 session record
+  never classifies as functional success.
+- `checks/usb-first-fault.py` runs the native callback, BUSY and first-fault
+  cases on the built image.

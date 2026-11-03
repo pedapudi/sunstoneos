@@ -248,8 +248,7 @@ ordering; the manual does not establish those particular durations.
 
 Existing transfer, interrupt, cache, alias, contention, output and ownership
 cases remain. Source comparisons of register offsets remain valuable, but
-they establish layout agreement rather than asynchronous completion. The
-three reviewers approved the PWM design and final code before commit. No
+they establish layout agreement rather than asynchronous completion. No
 voltage, rail, clock-point, thermal or storage-write behavior changed.
 
 ## Focused verification

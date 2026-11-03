@@ -150,8 +150,8 @@ They come from the observed median plus approximately 20 µs, not an
 independent model prediction. At the measured access costs, including a
 plain write of 198 ns, no placement reaches 110% while the provider polls
 each bus phase. With the native adapter's barrier placement a bundle 6 run
-measured a median 1.9 µs below the run with `DSB SY` pairs. Section "Board result" of [the access design](designs/pmic-access.md)
-gives the windows, model limitations and provisional bound. The other images keep their
+measured a median 1.9 µs below the run with `DSB SY` pairs. [The access design](designs/pmic-access.md) and its
+[evidence records](evidence/pmic-access.jsonl) give the windows, model limitations and provisional bound. The other images keep their
 per-tick loops.
 `a733_pmic_work()` reads faults from the state word. When a
 client latches a fault while the provider task holds the I2C mutex for a
@@ -195,7 +195,7 @@ snapshot and one DCDC3 selector write through the same model. The snapshot
 makes 200 register accesses, 137 time reads and one bus acquisition; the
 selector write 255 accesses and 174 time reads. With `--limits` the check
 asserts those budgets. `docs/designs/power-authority.md` and
-`docs/designs/pmic-access-measurements.md` record the counts against the
+[the PMIC access evidence records](evidence/pmic-access.jsonl) record the counts against the
 earlier providers.
 
 The native adapter reads S_TWI0 and writes its `DATA` register with plain
@@ -211,8 +211,7 @@ placement on port 3-3 passed with the same snapshots, `XADDR` window and
 bus-idle reads as a run with `DSB SY` pairs, which **qualifies it for
 snapshots**. Its byte phases' completing polls were 0.33 µs shorter, and
 its median 1.9 µs shorter, because a step moves in whole microseconds per
-bus phase ([pmic-access.md](designs/pmic-access.md), section "Board
-result"). A DCDC3 selector-write run would also cover the write of the
+bus phase ([pmic-access.md](designs/pmic-access.md), evidence record `pmic-access-bb6-run4-plain-data`). A DCDC3 selector-write run would also cover the write of the
 selector byte. The native USB image of rank 9 needs a rerun on this adapter
 before it relies on it.
 

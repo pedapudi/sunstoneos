@@ -1,193 +1,135 @@
 # Design: idle cores wait in WFI; core power-off waits for a consumer
 
-Status: **WFI idle is merged in the cached runtime and checked in the
-instruction model.** Core 0 has physical single-core WFI evidence. The
-bounded all-core idle/wake application is implemented but awaits its own
-physical result; see [cpu-power.md](../cpu-power.md). Core power-off remains
-deferred. The proposal and measurements below describe the original
-integration; section numbers refer to `docs/performance-architecture.md`.
-
-The implementation differs from the text below in three points. The idle
-function is `static inline` in `include/a733_cpu_power.h`, and the image
-configuration maps the passive idle hook to it, because the kernel calls that
-hook from both idle loops; enabling both hooks would execute two `WFI` per
-active idle iteration. `configIDLE_AFFINITY` is set, so the active idle task
-stays on core 0, which the tick wakes; a self-deleted task is reclaimed within
-one tick of core 0 becoming idle. The time-slice condition is a patch to the kernel's
-`tasks.c`, `patches/freertos-smp-tasks.patch`, because
-`patches/freertos-smp-c.patch` changes only the port.
-
-Before this integration, an idle core never slept. The cached image disabled both
-FreeRTOS idle hooks, so idle tasks spun. Core 0 alone took the 1 ms tick, and
-its time-slice check in `xTaskIncrementTick` yielded every core that runs an
-idle task, because the idle-priority ready list always holds all eight idle
-tasks: 7 SGI0 interrupts and 7 context switches per tick with no work
-(counted).
-
-This design ships one change: idle cores execute `WFI`. Powering secondary
-cores off and on through EL3 is deferred until a consumer needs it; the last
-section keeps the hardware record and the conditions for its return.
+Status: **WFI idle is implemented and host-tested** in the cached runtime and
+the instruction model. **Core 0 single-core WFI is qualified on the board.**
+The all-core idle and wake run is open. Core power-off through EL3 is open and
+deferred. The mechanism and its configuration are in
+[cpu-power.md](../cpu-power.md); section numbers refer to
+[performance-architecture.md](../performance-architecture.md).
 
 ## Idle tasks execute WFI
 
-Both idle hooks call `a733_cpu_idle()` in `platform/a733/cpu_power.c`:
-`DSB SY` then `WFI`, as section 1.2 permits. Idle tasks run at EL0, so
-`SCTLR_EL1.nTWI` (bit 16) must be set beside `nTWE`, or EL0 `WFI` traps with
-exception class `0x01` (Arm DDI0616A.a, section E3.2).
+Every FreeRTOS idle task calls `a733_cpu_idle()`, a `static inline` function in
+`include/a733_cpu_power.h`: `DSB SY` then `WFI`, as section 1.2 permits. The
+kernel calls the passive idle hook from both idle loops, so the image
+configuration maps only that hook to the function; enabling both hooks would
+execute two `WFI` per active idle iteration.
 
-`prvYieldForTask` treats a core running an idle task as preemptible by any
-task, so new work reaches an idle core as SGI0; core 0 also wakes on timer
-PPI30. The time-slice check changes to yield a core running an idle task only
-when more than `configNUMBER_OF_CORES` tasks are ready at idle priority, the
-test `configIDLE_SHOULD_YIELD` already uses. Round-robin among application
-tasks is unchanged. The spinning idle loop is removed. No EL3 code changes,
-and the image's EL3 vectors keep treating every SMC as a terminal report.
+- **EL0 WFI.** Idle tasks run at EL0, so `SCTLR_EL1.nTWI` (bit 16) is set
+  beside `nTWE` in `platform/a733-smp-cached/continue.S`; otherwise EL0 `WFI`
+  traps with exception class `0x01` (Arm DDI0616A.a, section E3.2).
+- **Wake sources.** New work reaches an idle core as SGI0, because
+  `prvYieldForTask` treats a core running an idle task as preemptible by any
+  task. Core 0 also wakes on timer PPI30.
+- **Idle affinity.** `configIDLE_AFFINITY` is 1, so the active idle task stays
+  on core 0, which the tick wakes; a self-deleted task is reclaimed within one
+  tick of core 0 becoming idle.
+- **Time slice.** `patches/freertos-smp-tasks.patch` changes the time-slice
+  check in `xTaskIncrementTick` to yield a core running an idle task only when
+  more than `configNUMBER_OF_CORES` tasks are ready at idle priority, the test
+  `configIDLE_SHOULD_YIELD` already uses. The idle-priority list always holds
+  all eight idle tasks, so without the patch each tick sends SGI0 to seven idle
+  cores. Round-robin among application tasks is unchanged.
 
-## Performance budgets
+No EL3 code changes, and the image's EL3 vectors keep treating every SMC as a
+terminal report. The images that build the patched `tasks.c` are
+`cmake/a733-smp-cached.cmake`, `cmake/a733-smp-observe.cmake` and
+`cmake/a733-smp-supervised.cmake`.
 
-| Metric | Baseline | Budget | Measurement |
+## Qualified figures
+
+| Figure | Budget | Result | Evidence |
 | --- | --- | --- | --- |
-| SGIs to idle secondaries per tick, no ready task | 7 (counted) | 0 | `sgis` counters in `checks/a733-smp-cached.py` and the QEMU eight-core model, over 64 ticks |
-| Instructions per idle secondary between wake-ups | Its full emulation quantum (counted: spin) | 0 in `WFI`; idle loop grows by at most 6 instructions | Per-core instruction count added to the same model |
-| Core 0 idle wake-ups per second | 1,000 | 1,000 | Same model |
-| Added work per tick in `xTaskIncrementTick` | 0 | One list-length compare | Disassembly |
+| SGIs to idle secondaries per tick, no ready task | 0 | 0 in 64 ticks (model) | `cpu-power-states.jsonl`: `cpu-power-states-model-budgets` |
+| Instructions per idle secondary in the window | 0 | 0 (model) | same record |
+| Core 0 timer wake-ups per second | 1,000 | 1,000.7 (model) | same record |
+| Idle loop growth per iteration | at most 6 instructions | 2 | same record |
+| `xTaskIncrementTick` static instructions | one compare | 265 against 241; 24 register instructions replace seven SGIs and seven context switches per tick | same record |
+| Core 0 single-core `WFI` on the board | wake every tick | 1,000 wakes in 1.0 s, longest gap 1.0 ms, active cycles 0.17% | `cpu-power-states.jsonl`: `cpu-power-states-wfi-core0-board` |
 
-## Changes outside this package
+The model has no A733 power, cache or interconnect timing, so its figures show
+interrupts sent and instructions executed, not energy or wake-up latency.
+`PMCCNTR_EL0` stops while the core waits in `WFI`, so it measures only active
+time.
 
-For the primary agent, as implemented and measured:
+## Limitations and open work
 
-- `platform/a733-smp-cached/FreeRTOSConfig.h`: enable the passive idle hook,
-  map it to `a733_cpu_idle` and set `configIDLE_AFFINITY`.
-- `platform/a733-smp-cached/continue.S`: set `SCTLR_EL1.nTWI`.
-- `patches/freertos-smp-tasks.patch` (new): the idle time-slice condition in
-  `tasks.c`.
-- `cmake/a733-smp-cached.cmake`, `cmake/a733-smp-observe.cmake` and
-  `cmake/a733-smp-supervised.cmake`: build the patched `tasks.c`.
-- `cmake/a733-smp-observe.cmake`, `cmake/a733-smp-supervised.cmake` and
-  `cmake/a733-storage-maintenance.cmake`: record the new `continue.S` digest
-  that each compares before applying its private `continue.patch`. All three
-  private patches still apply.
-
-## Board evidence needed
-
-In a scheduled board session: EL0 `WFI` with `nTWI`, woken by SGI0 and PPI30,
-on all eight cores under the scheduler, with the SGI counts above.
-
-## Board result: single-core WFI on core 0
-
-Port 3-3 ran `a733_cpu_idle()` (`DSB SY`, `WFI`) on core 0 on 2026-10-24, in
-bundle 4 of [board-bundles-next.md](board-bundles-next.md); raw log
-`~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/bb4-run/kernel.log`.
-One task at EL1 called it with IRQs unmasked on the single-core platform,
-so the 1 ms scheduler tick woke the core each time.
-
-- **Wakes.** 1,000 wakes over 1,000 ticks, in 23,979,258 ticks of the
-  24 MHz counter (1.0 s). The longest gap between wakes was 24,001 counter
-  ticks (1.0 ms), so no tick was missed.
-- **Cycle counter.** `PMCCNTR_EL0` advanced 841,417 cycles over that second,
-  0.17% of the 494 million cycles that core 0 runs per second at 494 MHz:
-  the A55's cycle counter stops while the core waits in `WFI`. Each wake
-  costs about 841 cycles and 316 instructions for the tick handler and the
-  task's loop.
-
-The cycle counter therefore measures only the active time of a core that
-idles in `WFI`; idle time is the elapsed counter time less the active
-cycles. This run does not cover EL0 `WFI` with `nTWI`, SGI0 wakes or the
-eight-core scheduler, which remain the board evidence above.
-
-## Left out
-
-- **Tickless idle on core 0:** services still poll on ticks (section 1.3).
-- **Core retention, PPU policy and GIC hardware wake from OFF:** the manual
-  documents neither the PPU nor the hotplug registers, and the A733 TF-A port
-  defines no idle states.
-- **L3 partial power-down:** no consumer.
-- **Cluster and DSU power-down:** the A733 has one DynamIQ cluster holding all
-  eight cores (user manual section 5.1.5.4, printed page 250: `C0_CPU0` to
-  `C0_CPU7` under one `C0_RST_CTRL`; figure 5-1 shows one L3 and snoop
-  filter). Cluster power-down needs core 0 off, which the running OS never
-  allows.
+1. The all-core run (record `cpu-power-states-all-core-idle-wake`): EL0 `WFI`
+   with `nTWI`, woken by SGI0 and PPI30 on all eight cores under the
+   scheduler, with the SGI counts above. The application is
+   `apps/cpu-runtime-qualification`.
+2. Tickless idle on core 0 waits for services that poll on ticks (section 1.3).
+3. Core retention, PPU policy and GIC hardware wake from OFF are undocumented
+   in the manual, and the A733 TF-A port defines no idle states.
+4. L3 partial power-down has no consumer. Cluster and DSU power-down needs
+   core 0 off, which the running OS never allows: the A733 has one DynamIQ
+   cluster holding all eight cores.
 
 ## Deferred: core power-off and power-on through EL3
 
 **Why deferred.** No image has a caller. The recognition core pair (cores 6
-and 7) stays in use until the boot ends (`docs/recognition-dispatch.md`: "the
-session lasts until the boot ends"), and no other consumer powers a core off
-and on again within one boot. The power gain over `WFI` idle is not measured.
-The merged power-authority design relies on the OS issuing no PSCI `CPU_OFF`
-(`docs/designs/power-authority.md`, supply verification), and
-`checks/pmic-tree.py` fails if that function identifier appears in the
-sources.
+and 7) stays in use until the boot ends (`docs/recognition-dispatch.md`), and no
+other consumer powers a core off and on again within one boot. The gain over
+`WFI` idle is not measured. The merged power-authority design relies on the OS
+issuing no PSCI `CPU_OFF` (`docs/designs/power-authority.md`), and
+`checks/pmic-tree.py` fails if that function identifier appears in the sources.
 
-**Trigger for return.** All of: a named consumer that powers a core off and
-on again within one boot and runs on a core it never powers off; a power or
+**Trigger for return.** All of: a named consumer that powers a core off and on
+again within one boot and runs on a core it never powers off; a power or
 leakage budget per core measured against `WFI` idle; and a change to the
 power-authority design and `checks/pmic-tree.py` agreed with their owner.
 
-**Hardware record.** No sequence below is qualified from a running scheduler.
-
-| Step | Sequence | Source | Board status |
-| --- | --- | --- | --- |
-| `CPU_ON` | Require PPU status OFF (`0x07052008 + n*0x1000`, bits 3:0 = 0); write and verify entry words (`0x08001004`, `0x08001008 + n*0x1000`) and AArch64 bit 0 of `0x08001000 + n*0x1000`; set mode bit 0 (`0x07050220 + n*4`), then control bit 0 (`0x07050200 + n*4`); wait for status 8 (ON); restore control and mode | Published board monitor helpers at file offsets `0xc4a0`, `0xc298`, `0xc314`; TF-A A733 `sunxi_pwr_domain_on` (`InfernoEmbedded/arm-trusted-firmware@5bc9605`, `plat/allwinner/common/sunxi_native_pm_ncat2.c`); implemented as `platform/a733/cpu_start.c` | First power-on passes on every secondary. A second power-on in one boot is **unproven** |
-| `CPU_OFF`, GIC | Disable CPU-interface groups; set `GICR_WAKER.ProcessorSleep`; wait for `ChildrenAsleep` | Arm IHI 0069G, `GICR_WAKER`; TF-A `gicv3_rdistif_mark_core_asleep` | Passes with delivery disabled (`native-wake-sleep-20261018`) |
-| `CPU_OFF`, core | Set `CPUPWRCTLR_EL1.CORE_PWRDN_EN`, `DSB`, `ISB` (Cortex-A76 erratum 2743102); clear mode bit 0; set control bit 1 (GIC wake-up disable); `DSB SY`; `WFI` | TF-A `cortex_a55_core_pwr_dwn`, `cortex_a76_core_pwr_dwn` (`ARM-software/arm-trusted-firmware@0892ad4`); TF-A A733 `sunxi_cpu_off`; monitor helper at `0xc2f0` | Passes in startup diagnostics on every secondary (`secondary-local-probe-20261018/physical-110`) |
-| Warm entry, GIC | Clear control bit 1; wake the redistributor; configure SGI0 | `platform/a733/cpu_continue.c`; TF-A `sunxi_pwr_domain_on_finish`; monitor helper at `0xc224` | Passes for cold entry only |
-
-Both TF-A power-down functions issue no cache maintenance before `WFI`, so
-they rely on hardware cleaning of the private caches; the Cortex-A55 r2p0 and
-Cortex-A76 r4p1 manuals must confirm this before any code. The published
-monitor also clears the low four bits of nine undocumented registers at
-`0x07051000`–`0x07059000` (file offset `0x4e88`).
+**Hardware record.** The register sequences, sources and per-step board status
+are in the record `cpu-power-states-core-power-off-hardware`. First power-on
+passes on every secondary through `platform/a733/cpu_start.c`; a second
+power-on in one boot is unproven. The GIC and core power-down sequences pass in
+startup diagnostics, and warm entry passes for cold entry only. No sequence is
+qualified from a running scheduler.
 
 **Requirements on a returning design.**
 
 - **One state machine.** Only the EL1 per-core word tracks a transition, and
   each transition has one named writer. EL3 keeps no compare-and-swap state:
-  `a733_cached_records` and the rest of the monitor section are
-  Device-nGnRnE at EL3 (AttrIndx 0 under `MAIR_EL3`), where exclusives and
-  atomics are not guaranteed, and that mapping keeps MMU-off warm entry
-  consistent with MMU-on access. EL3 records use plain stores ordered by
-  `DSB`, with one writer per word. PSCI `ALREADY_ON` and `ON_PENDING` are not
-  returned.
-- **Off request.** `configIDLE_AFFINITY` is 1, so each passive idle task
-  stays on its own core. The request transition happens inside the port SVC
-  with IRQs masked, for the core named by `tpidr_el1`. The SVC refuses unless
-  the current task is that core's idle task and `ullCriticalNestings[core]`
-  is 0. After writing the request, the owner sends one SGI0 with release
-  ordering, because an idle core waits in `WFI` and nothing else wakes it.
+  the monitor section is Device-nGnRnE at EL3 (AttrIndx 0 under `MAIR_EL3`),
+  where exclusives and atomics are not guaranteed. EL3 records use plain
+  stores ordered by `DSB`, with one writer per word. PSCI `ALREADY_ON` and
+  `ON_PENDING` are not returned.
+- **Off request.** The request transition happens inside the port SVC with
+  IRQs masked, for the core named by `tpidr_el1`. The SVC refuses unless the
+  current task is that core's idle task and `ullCriticalNestings[core]` is 0.
+  After writing the request, the owner sends one SGI0 with release ordering,
+  because an idle core waits in `WFI` and nothing else wakes it.
 - **Scheduler.** Every remote-yield path skips a core that is not online:
   `prvYieldCore`, the affinity search in `prvSelectHighestPriorityTask` and
-  the time-slice loop in `xTaskIncrementTick`. A displaced task whose
-  affinity includes an off core runs on an online core within one tick.
-- **Admission.** Before the request, the owner disables every SPI routed to
-  the core (`GICD_ICENABLER`, checked against the route table) and confirms
-  that every task pinned only to that core is blocked or suspended with no
-  open service window. A build check refuses an unconditional SPI route to a
-  core that can power off.
+  the time-slice loop in `xTaskIncrementTick`. A displaced task whose affinity
+  includes an off core runs on an online core within one tick.
+- **Admission.** Before the request, the owner disables every SPI routed to the
+  core (`GICD_ICENABLER`, checked against the route table) and confirms that
+  every task pinned only to that core is blocked or suspended with no open
+  service window. A build check refuses an unconditional SPI route to a core
+  that can power off.
 - **`CPU_OFF` failure.** The target records OFF only after `ChildrenAsleep`
   succeeds. On a timeout, EL3 clears `ProcessorSleep`, re-enables the
   CPU-interface groups and returns `DENIED`; the SVC resumes the saved idle
   context, and the target writes ONLINE itself. The owner calls `CPU_ON` only
-  after it observes OFF, so `DENIED` and `CPU_ON` cannot interleave.
-- **`CPU_ON` caller.** EL3 accepts `CPU_ON` only from core 0. Core 0 meets
-  the core-0 admission of `a733_cpu_start_init` with its true MPIDR and
-  serializes all callers; the design names the lease value it passes. EL3
-  never waits for OFF: before OFF it returns not-ready, and the owner retries
-  from EL1 with a blocking delay. The worst interrupt-masked time per SMC on
-  core 0, with the delayed and catch-up ticks it causes, gets a budget row.
-- **Warm path.** `CPU_ON` stores a warm deadline and the epoch in the
-  target's EL3 record. Warm entry uses that deadline for coherence, continue
-  and the EL3 and EL1 enables, and skips the all-core record barriers and the
-  mailbox checks. Warm entry keeps the cold path's handoff: it waits in `WFE`,
-  bounded, for core 0's POWERED record and `SEV` before it touches
-  `0x07050200 + n*4`. SMC entry and warm entry set `SP_EL3` to a per-core
-  monitor stack. PSCI identifiers dispatch before the vector stub writes
-  `x18`, and the SMC preserves registers as SMCCC requires.
-- **Unreturned core.** WDT0 does not reset the board when a pinned core
-  stops, because core 0 keeps renewing it. The owner calls `board_fail` when
-  `CPU_ON` fails or the core is not ONLINE within a stated bound.
-- **Budgets and checks.** Budget rows cover power per core against `WFI`,
-  SGIs per off request (1) and the masked time above.
-  `checks/cpu-power-states.c` models each refusal, the `DENIED` path and the
-  warm handoff. The QEMU eight-core model shows a core in `WFI` powering off
-  after one SGI.
+  after it observes OFF.
+- **`CPU_ON` caller.** EL3 accepts `CPU_ON` only from core 0, which meets the
+  core-0 admission of `a733_cpu_start_init` with its true MPIDR and serializes
+  all callers. EL3 never waits for OFF: before OFF it returns not-ready, and
+  the owner retries from EL1 with a blocking delay. The worst interrupt-masked
+  time per SMC on core 0, with the delayed and catch-up ticks it causes, gets a
+  budget row.
+- **Warm path.** `CPU_ON` stores a warm deadline and the epoch in the target's
+  EL3 record. Warm entry uses that deadline for coherence, continue and the EL3
+  and EL1 enables, skips the all-core record barriers and the mailbox checks,
+  and waits in `WFE`, bounded, for core 0's POWERED record and `SEV` before it
+  touches `0x07050200 + n*4`. SMC entry and warm entry set `SP_EL3` to a
+  per-core monitor stack. PSCI identifiers dispatch before the vector stub
+  writes `x18`, and the SMC preserves registers as SMCCC requires.
+- **Unreturned core.** WDT0 does not reset the board when a pinned core stops,
+  because core 0 keeps renewing it. The owner calls `board_fail` when `CPU_ON`
+  fails or the core is not ONLINE within a stated bound.
+- **Budgets and checks.** Budget rows cover power per core against `WFI`, SGIs
+  per off request (1) and the masked time above. A host check
+  models each refusal, the `DENIED` path and the warm handoff. The QEMU
+  eight-core model shows a core in `WFI` powering off after one SGI.

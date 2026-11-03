@@ -10,8 +10,8 @@ Status:
   (`board-session-20261025-32/port-3-3/sd-ret-b`) stopped at CMD11 before
   any read; the driver waited for command done, which the controller
   withholds until the switch ends. The fix is in the driver and the
-  emulation, not yet run on a board ([the UHS-I design](../designs/sd-uhs.md),
-  "Lifetime B: CMD11 completion").
+  emulation, not yet run on a board ([the UHS-I design](../designs/sd-uhs.md); record
+  `sd-uhs-lifetime-b` in [the evidence file](../evidence/sd-uhs.jsonl)).
 - **DMA reads: implemented and checked in software, not physically qualified**
   ([the DMA design](../designs/sd-dma.md)).
 

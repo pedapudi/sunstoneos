@@ -9,7 +9,7 @@ host-armed WDT0 contract or RTC breadcrumbs, and the development runner has no
 memory-test kind. Porting that return path is required before a board launch.
 
 The [design](designs/memory-qualification.md) gives the reasoning and the
-budgets; [the measurements](designs/memory-qualification-measurements.md)
+budgets; [the evidence records](evidence/memory-qualification.jsonl)
 compare this implementation with the budgets. This page describes the image
 as built.
 

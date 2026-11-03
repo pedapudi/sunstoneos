@@ -265,7 +265,7 @@ fast path.
 
 These results do not qualify physical DRAM, coherence, device transactions,
 sustained workloads or any cycle count on the board. Every cycle budget in
-the [design](designs/memory-architecture.md#performance-budgets) remains
+the [design](designs/memory-architecture.md#qualified-figures) remains
 provisional and unqualified until the board runs listed there, on cores 0
 and 6 with the CPU-L, CPU-B and DSU rates recorded, exist.
 

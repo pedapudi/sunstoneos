@@ -6,16 +6,19 @@ The native CPU control returns normally on port 3-3 and completes every wake sam
 
 **Board-qualified scope:** None.
 
-The measured maxima come from entry `1793559978973913698-7f7e36e0` (CPU-L 1794 MHz at 1000 mV, CPU-B 2002 MHz at 1050 mV):
+## Capabilities
 
-| Region | Budget | Board maximum |
-| --- | ---: | ---: |
-| CPU0 timer assertion to C handler entry | 50 us | 6.583 us |
-| IRQ-masked or kernel critical region | 25 us | 268.125 us |
-| Kernel ISR lock acquisition / outer hold | 25 us each | 9.042 / 19.792 us |
-| Kernel task lock acquisition / outer hold | 25 us each | 238.750 / 12.625 us |
-| Highest-priority ready task, idle / busy core | 100 / 250 us | 66.625 / 104.542 us |
-| DMA, GPU and NPU completion | 250 / 1,000 / 1,000 us | Unmeasured |
+| Capability | Status | Key figure | Evidence and design |
+| --- | --- | --- | --- |
+| Eight-core CPU latency control (wake samples, lock and mask recording) | implemented | Returns normally on port 3-3 with every wake sample; the strict timing expectation fails | `1793559978973913698-7f7e36e0` |
+| CPU0 timer assertion to C handler entry | implemented | 6.583 µs against a 50 µs budget | same record |
+| IRQ-masked or kernel critical region | open | 268.125 µs against 25 µs | same record |
+| Kernel ISR lock acquisition / outer hold | open | 9.042 / 19.792 µs against 25 µs each | same record |
+| Kernel task lock acquisition / outer hold | open | 238.750 / 12.625 µs against 25 µs each | same record |
+| Highest-priority ready task, idle / busy core | implemented | 66.625 / 104.542 µs against 100 / 250 µs | same record |
+| DMA, GPU and NPU completion timing | open | Unmeasured (budgets 250, 1,000 and 1,000 µs) | none |
+
+The maxima come from one run at CPU-L 1794 MHz and 1000 mV, CPU-B 2002 MHz and 1050 mV. The budgets, with the basis of each, are in the note of the record; the two largest overruns precede the top-point workload by 132 ms.
 
 ## Open work
 

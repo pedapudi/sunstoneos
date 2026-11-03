@@ -124,7 +124,7 @@ from AArch64 emulation of one call per scenario, with the image's C flags.
 Raw records are under
 `~/.cache/sunstoneos/evidence/dma-address-width-20261022/` and
 `~/.cache/sunstoneos/build/dma-address-width-measure/`; the
-[measurement record](designs/dma-address-width-measurements.md) gives the
+[measurement record](evidence/dma-address-width.jsonl) gives the
 method and every figure.
 
 | Metric | Before | After |
@@ -138,7 +138,7 @@ method and every figure.
 | IOMMU leaf words per 307,200-byte plane at physical `0xffff_f000` and `0x1_8000_0000` | 75 and 75 | 75 and 75 |
 
 The camera and NVMe rules have their own
-[measurement record](designs/dma-high-memory-measurements.md), which compares
+[measurement record](evidence/dma-high-memory.jsonl), which compares
 them with their parent commit:
 
 | Metric | Before | After |
