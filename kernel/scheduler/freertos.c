@@ -188,6 +188,19 @@ static __attribute__((noinline)) void ssKernelSGI(void *context, unsigned cpu)
 #endif
     if (xSchedulerRunning) portYIELD_CORE((BaseType_t)cpu);
 }
+/* True when PSTATE.I is set on this CPU (an exception handler, or code that masked all interrupts). */
+static inline bool ssKernelIrqsDisabled(void)
+{
+#if defined(__aarch64__)
+    /* DAIF is not readable at EL0; the interrupt and supervisor entries mark the task register as EL1. */
+    if (!((ullPortGetTaskRegister() >> portTASK_REGISTER_EL1_BIT) & 1U)) return false;
+    uint64_t daif;
+    __asm__ volatile("mrs %0, daif" : "=r"(daif));
+    return (daif & 0x80) != 0;
+#else
+    return false;
+#endif
+}
 static const struct ss_owner_backend ssKernelBackend = { .sgi = ssKernelSGI };
 static unsigned ssKernelCPUId(void) { return (unsigned)portGET_CORE_ID(); }
 static TaskHandle_t ssKernelCurrentSnapshot(unsigned cpu)
@@ -1067,10 +1080,14 @@ static BaseType_t ssKernelNotify(TaskHandle_t task, UBaseType_t index,
     };
     configASSERT((unsigned)action < sizeof(actions) / sizeof(actions[0]));
     SS_PH_BEGIN;
-    UBaseType_t irq = from_isr ? portSET_INTERRUPT_MASK_FROM_ISR() : portSET_INTERRUPT_MASK();
+    /* An interrupt handler runs with PSTATE.I set, so no API-level interrupt can enter the section and raising the priority
+     * mask would only cost two data synchronization barriers and two instruction barriers on each side. Interrupts above
+     * the API mask never call the kernel. */
+    const bool masked_by_exception = from_isr && ssKernelIrqsDisabled();
+    UBaseType_t irq = masked_by_exception ? 0 : from_isr ? portSET_INTERRUPT_MASK_FROM_ISR() : portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
     if (!ss_kernel_handle_pin(&ssKernelRegistry, task, &pin)) {
-        if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
+        if (masked_by_exception) {} else if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
         return pdFAIL;
     }
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
@@ -1085,7 +1102,7 @@ static BaseType_t ssKernelNotify(TaskHandle_t task, UBaseType_t index,
         ssKernelPublishReference(pin);
         if (woken && ssKernelCPUs[ssKernelCPUId()].reschedule) *woken = pdTRUE;
     } else ss_kernel_handle_put(&pin);
-    if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
+    if (masked_by_exception) {} else if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
     SS_PH_END(0);
     return result.accepted ? pdPASS : pdFAIL;
 }
