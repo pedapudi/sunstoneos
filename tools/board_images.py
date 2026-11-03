@@ -386,23 +386,22 @@ def policy(info, args, session=None):
     bounds = load('storage_bounds', ROOT/'tools/storage_bounds.py')
     if storage or bounds.classify(args.image) == 'write-capable':
         bounds.admit(d, args, sha(args.image))
-    reviewed = {'cpu-l': (1794, 1000), 'cpu-b': (2002, 1050),
-                'gpu': (1008, 960), 'npu': (852, 800), 'rails': (0, 800)}
+    # The reviewed operating points are data (tools/cpu-reviewed-points.json, protected), shared with tools/session.py.
+    reviewed = {k: tuple(v) for k, v in json.loads((ROOT / 'tools/cpu-reviewed-points.json').read_text())['points'].items()}
     for point in d.get('operating_points', []):
         require(isinstance(point, dict) and set(point) == {'block', 'mhz', 'mv'}, 'Invalid operating point.')
         require(approved or reviewed.get(point['block']) == (point['mhz'], point['mv']),
                 'Operating point requires --approved-by coordinator.')
-    if session is not None and len(session) >= 96:
+    if session is not None and info['generic']:
+        # Only a typed session carries a CPU clock grant, and its extent says so: no image symbol and no trailing bytes.
         host = load('board_policy_records', (args.host_tree or ROOT) / 'apps/os/host.py')
-        if info['generic']:
-            grant = host.session_decode(session)['extents'].get(host.CPU_GRANT)
-        else:
-            grant = session[-96:] if struct.unpack_from('<Q', session, len(session)-96)[0] == 0x4153373343505531 else None
+        grant = host.session_decode(session)['extents'].get(host.CPU_GRANT)
         if grant:
-            clusters, little, big, changes = struct.unpack_from('<4I', grant, 48)
-            require(0 <= clusters <= 3 and changes <= 64, 'Invalid CPU grant limits.')
-            require(approved or ((little == 1794 if clusters & 1 else little == 0) and
-                                (big == 2002 if clusters & 2 else big == 0)),
+            clusters, little, big, changes, perf = struct.unpack_from('<5I', grant, 48)
+            require(0 <= clusters <= 3 and changes <= 64 and perf <= 2 and (not perf or clusters == 3), 'Invalid CPU grant limits.')
+            require(not any(grant[68:96]), 'A CPU grant has no approval bytes: the approval is recorded by --approved-by, not in the session.')
+            require(approved or ((little == reviewed['cpu-l'][0] if clusters & 1 else little == 0) and
+                                (big == reviewed['cpu-b'][0] if clusters & 2 else big == 0)),
                     'CPU grant outside reviewed operating points requires --approved-by coordinator.')
 
 
@@ -526,6 +525,10 @@ def prepare(args, info, live, out, *, dma_binding=None):
         grant = bytearray(services[records.CPU_GRANT])
         if struct.unpack_from('<I', grant, 48)[0]:
             struct.pack_into('<2Q', grant, 32, epoch, generation)
+        # A session prepared from a template written before the approval bytes left the record (a 32-byte digest after the
+        # change count) carries no perf and no reserved bytes: the digest is cleared, and the runner records the approval.
+        if struct.unpack_from('<I', grant, 64)[0] > 2 or any(grant[68:96]):
+            grant[64:96] = bytes(32)
         services[records.CPU_GRANT] = grant
     if DMA_EXTENT in services:
         dma = bytearray(services[DMA_EXTENT])

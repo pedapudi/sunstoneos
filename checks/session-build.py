@@ -83,7 +83,7 @@ def main():
             declaration = out / 'npu-declaration.json'
             declaration.write_text(json.dumps({'slots': 1, 'in_flight': 1, 'graphs': models, 'links': 0}))
         inputs = placeholders(host, image, directory)
-        record = session.build(image, directory, npu_declaration=declaration, inputs=inputs)
+        record = session.build(image, directory, npu_declaration=declaration, inputs=inputs, clock_grant=True)
         raw = (directory / 'template/session.bin').read_bytes()
         assert record['profile'] == name, record['profile']
         report = session.inspect(raw, image, host)
@@ -108,6 +108,24 @@ def main():
     verdict = session.admit(image, bytes(wrong))
     assert verdict['admitted'] is False and verdict['term'] == 'session_decode', verdict
     passed.append('a wrong manifest digest is refused by decode and by the EL3 admission')
+    # The CPU clock grant is written only on request. A session built without one carries no grant record, and the returning
+    # image, which needs the grant for its return path, refuses it at EL3 admission.
+    image, raw, inputs, _ = built['control']
+    bare = out / 'no-clock-declaration'
+    session.build(image, bare, inputs=inputs)
+    plain = (bare / 'template/session.bin').read_bytes()
+    assert host.CPU_GRANT not in host.session_decode(plain)['extents']
+    verdict = session.admit(image, plain)
+    assert verdict['admitted'] is False and verdict['term'] == 'session_decode' or verdict['admitted'] is False, verdict
+    passed.append('a session built without --clock-grant has no grant record and the returning image refuses it')
+    # The grant may ask only for what the manifest declares: perf needs cpu.perf, and the builder says so.
+    refusal(lambda: session.build(image, out / 'perf-undeclared', inputs=inputs, clock_grant=True, perf='high'), 'perf', 'cpu.perf')
+    perfed = bytearray(raw)
+    grant_at = host.session_decode(raw)['offsets'][host.CPU_GRANT]
+    struct.pack_into('<I', perfed, grant_at + 64, 1)         # perf: the high boot mode, which the manifest does not declare
+    verdict = session.admit(image, bytes(perfed))
+    assert verdict['admitted'] is False and verdict['term'] == 'session_decode', verdict
+    passed.append('a grant that carries perf for a manifest without cpu.perf is refused by the EL3 admission')
     # refusals that name the field
     control, npu = built['control'], built['npu']
     facts = json.loads(session.FACTS.read_text())

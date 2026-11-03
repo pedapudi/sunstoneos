@@ -28,11 +28,6 @@
 #else
 #define OS_WITH_AUDIO(...)
 #endif
-#ifdef SUNSTONE_A733_OS_CPU_CLOCK
-#define OS_WITH_CPU_CLOCK(...) __VA_ARGS__
-#else
-#define OS_WITH_CPU_CLOCK(...)
-#endif
 #ifdef SUNSTONE_A733_OS_DMA
 #define OS_WITH_DMA(...) __VA_ARGS__
 #else
@@ -64,7 +59,7 @@
 #define OS_GRANT_ROWS(X) \
     X(NPU, 0, OS_WITH_NPU) \
     X(AUDIO, 1, OS_WITH_AUDIO) \
-    X(CPU_CLOCK, 2, OS_WITH_CPU_CLOCK) \
+    X(CPU_CLOCK, 2, OS_ALWAYS) \
     X(DMA, 3, OS_WITH_DMA) \
     X(RADIO, 4, OS_WITH_RADIO)
 

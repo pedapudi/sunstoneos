@@ -148,29 +148,28 @@ void os_thermal_task(void *);
 int os_thermal_task_privileged(void (*)(void *),void *);
 int os_thermal_pins(struct a733_pin_handoff *);
 int os_thermal_start(void);
-#if defined(SUNSTONE_A733_OS_PERF) && defined(SUNSTONE_A733_OS_GPU_LINEAR)
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
 struct tskTaskControlBlock;
 /* Published before gpu-linear startup; immutable after task creation. */
 struct tskTaskControlBlock *os_thermal_task_handle(void);
 #endif
 /* IRQ context, from the fixed interrupt table on CPU0. */
 void os_thermal_irq(void);
-#ifdef A733_A76_ADMITTED
 /* Before the scheduler, after the thermal mappings: reads the CPU clock
  * configuration once (apps/os/cpu.c); 0 when CPU-B is not on its locked PLL
- * with a decodable rate. */
+ * with a decodable rate. Run only when os_cpu_boot_point_needed says so. */
 int os_cpu_admit(void);
-#endif
-#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+int os_cpu_boot_point_needed(void);
+int os_cpu_boot_point_ok(void);
 /* Thermal task, after each thermal step once the policy has its first
- * reading: one bounded CPU clock step. -1 ends the session. */
+ * reading: one bounded CPU clock step. -1 ends the session; 0 when the session
+ * does not grant the CPU clock. */
 struct a733_thermal_policy;
 int os_cpu_clock_step(const struct a733_thermal_policy *);
 /* Thermal task: 1 when the next owner pass is due within a tick (apps/os/cpu.c). */
 int os_cpu_clock_busy(void);
-/* EL0-safe: 1 once the grant's requests have finished, whatever their result. */
+/* EL0-safe: 1 once the grant's requests have finished, whatever their result, and in a session without a grant. */
 int os_cpu_clock_ready(void);
-#endif
 #ifdef SUNSTONE_A733_OS_DMA
 int os_dma_task_privileged(void (*)(void *),void *);
 int os_dma_pins(struct a733_pin_handoff *);

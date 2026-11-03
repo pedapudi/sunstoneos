@@ -56,8 +56,7 @@ VARIANTS = {
     # series converges on. Each series removes its options from the variants above and from this list.
     'all': ['-DSUNSTONE_A733_OS_AUDIO=ON', '-DSUNSTONE_A733_OS_RADIO=ON', '-DSUNSTONE_A733_OS_NPU=ON',
             '-DSUNSTONE_A733_OS_NPU_QUEUE=ON', '-DSUNSTONE_OS_NPU_CLIENT_MODEL=0', '-DSUNSTONE_OS_NPU_QUEUE_MODELS=0,1',
-            '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE, '-DA733_A76_ADMITTED=ON',
-            '-DSUNSTONE_A733_OS_CPU_CLOCK=ON', '-DSUNSTONE_A733_OS_PERF=ON'],
+            '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
     'res': ['-DSUNSTONE_A733_OS_RESIDENT=ON'],
     'resaud': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_AUDIO=ON'],
     'resradio': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON'],
@@ -70,14 +69,8 @@ VARIANTS = {
     # The supervised NPU profile. The OS build verifies its host inputs against
     # tools/npu-fixtures.json. {cache} is the --cache directory.
     'npu': ['-DSUNSTONE_A733_OS_NPU=ON', '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
-    # The NPU queue and the performance-mode service with the high boot mode are built in 'all', which no check needs
-    # without the other services; they have no variant of their own.
-    # The supervised A76 CPU clock build without the performance-mode service (checks/os-cpu-clock-native.py).
-    'cpu-clock': ['-DA733_A76_ADMITTED=ON', '-DSUNSTONE_A733_OS_CPU_CLOCK=ON'],
-    # The performance-mode service (docs/designs/performance-modes.md) with the NPU profile and the low boot mode.
-    'perf-npu-low': ['-DA733_A76_ADMITTED=ON', '-DSUNSTONE_A733_OS_CPU_CLOCK=ON', '-DSUNSTONE_A733_OS_PERF=ON',
-                     '-DSUNSTONE_A733_OS_PERF_BOOT=low', '-DSUNSTONE_A733_OS_NPU=ON',
-                     '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
+    # The NPU queue and the performance-mode service are built in 'all'. The CPU clock owner and the performance service are
+    # in every image, and a session grants them (docs/designs/one-os-image-cpu.md).
 }
 # OS-core checks and the central target each needs. The core central build is
 # configured without external applications.

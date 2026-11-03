@@ -22,12 +22,8 @@ static _Noreturn void stop(void){board_fail(NULL);for(;;)vTaskSuspend(NULL);}
 #ifdef SUNSTONE_A733_FAULT_PAGE
 #include "a733_fault.h"
 #endif
-#ifdef SUNSTONE_A733_OS_CPU_CLOCK
 #include "thermal-report.h"
-#endif
-#ifdef SUNSTONE_A733_OS_PERF
 #include "perf.h"
-#endif
 static _Alignas(8) uint8_t frame[1160];
 static struct ss_host_request request;
 static unsigned used,frame_bytes,sent,transferred,waiting,app_frame,app_success;
@@ -65,8 +61,8 @@ static int os_request(void)
     if(request.op==6){if(request.flags||request.offset||request.count||request.argument)stop();
         os_npu_report_copy(frame);queue(OS_NPU_REPORT_BYTES);return 1;}
 #endif
-#ifdef SUNSTONE_A733_OS_CPU_CLOCK
-    if(request.op==7){if(request.flags||!request.count||request.count>1024)stop();
+    /* Operations 7 and 8 exist for a session that grants the CPU clock, and the second for one that grants perf. */
+    if(request.op==7&&os_granted(OS_GRANT_CPU_CLOCK)){if(request.flags||!request.count||request.count>1024)stop();
         memset(frame,0,sizeof(frame));size_t copied=0;uint32_t total=0;
         int r=os_thermal_report_copy(request.argument,request.offset,request.count,frame+64,&copied,&total);
         if(r!=1)copied=0;
@@ -74,13 +70,10 @@ static int os_request(void)
         h->magic=SS_FRAME_MAGIC;h->version=1;h->state=r<0?2:r?1:0;h->bytes=copied;h->total=total;
         h->offset=request.offset;h->op=request.op;h->epoch=board.session.epoch;h->generation=board.session.generation;
         queue(64+copied);return 1;}
-#endif
-#ifdef SUNSTONE_A733_OS_PERF
-    if(request.op==8){unsigned command=request.flags;
+    if(request.op==8&&os_perf_enabled()){unsigned command=request.flags;
         if(request.count||command>OS_PERF_SWITCH||(command!=OS_PERF_SWITCH&&(request.offset||request.argument))||
            (request.offset&~OS_PERF_SELECTION_MASK))stop();
         os_perf_usb(command,request.offset,request.argument,frame);queue(OS_PERF_REPORT_BYTES);return 1;}
-#endif
     return 0;
 }
 static void exchange(void)

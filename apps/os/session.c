@@ -139,6 +139,12 @@ int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,un
      * epoch is zero, which means "this boot": only that form takes the board epoch. Any other value must be the board's,
      * or the grant is refused (a733_cpu_clock_grant_load compares it). */
     if(out->granted&OS_GRANT_CPU_CLOCK&&out->cpu_clock.clusters&&!out->cpu_clock.epoch)out->cpu_clock.epoch=out->board.epoch;
+    /* The manifest is the upper bound of what the application may be granted: clock changes only if it declares
+     * cpu.clock_grants, and the performance service only if it declares cpu.perf. */
+    if(out->granted&OS_GRANT_CPU_CLOCK){
+        if(out->cpu_clock.clusters&&!(m->clock_use&SS_CLOCK_GRANTS))REFUSE(A733_DECODE_EXTENT);
+        if(out->cpu_clock.perf&&!(m->clock_use&SS_CLOCK_PERF))REFUSE(A733_DECODE_EXTENT);
+    }
     /* On the wire the thermal record's bytes names the board prefix and every service record the session carries, so
      * the existing service validator sees its layout. */
     if(out->bytes!=os_session_wire_bytes(out->granted))REFUSE(A733_DECODE_EXTENT);

@@ -1,0 +1,25 @@
+{
+ "comment": "The CPU and block operating points the board runner admits without --approved-by coordinator, as (MHz, mV): the points of the reviewed board runs. A CPU clock grant whose maxima differ from the CPU-L and CPU-B rows needs the coordinator's approval; tools/board_images.py and tools/session.py read this file. It is protected (tools/land-protected.txt).",
+ "points": {
+  "cpu-l": [
+   1794,
+   1000
+  ],
+  "cpu-b": [
+   2002,
+   1050
+  ],
+  "gpu": [
+   1008,
+   960
+  ],
+  "npu": [
+   852,
+   800
+  ],
+  "rails": [
+   0,
+   800
+  ]
+ }
+}

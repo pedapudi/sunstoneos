@@ -241,7 +241,7 @@ static void retained(void)
     assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_RETAINED && cm.writes==writes && cm.count==count);
     assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,416,pm.now+1000000)==A733_CPU_CLOCK_RETAINED);
 }
-static const struct a733_cpu_clock_grant both={77,3,{1404,1508},8};
+static const struct a733_cpu_clock_grant both={77,3,{1404,1508},8,0};
 /* Exercise adoption through the same read-only inspection used by the OS.
  * Only the register and thermal samples are modeled; leases, PMIC snapshots,
  * bin/OPP admission and transition control execute their actual providers. */
@@ -414,7 +414,7 @@ static unsigned pmic_writes(void){unsigned n=0;for(unsigned i=0;i<cm.count;++i)n
  * at least one UPDATE read sees N=77 while N=39 is staged. */
 static void close_update_setup(void)
 {
-    const struct a733_cpu_clock_grant g={77,2,{0,2002},4};
+    const struct a733_cpu_clock_grant g={77,2,{0,2002},4,0};
     board33(&g);
     assert(a733_cpu_clock_inspect(&cpu,A733_CPU_BIG,pm.now+120000)==A733_CPU_CLOCK_PENDING);
     assert(run(400)==A733_CPU_CLOCK_COMPLETE && pm.rails.floor_uv[0]==800000);
@@ -436,7 +436,7 @@ static void update_cases(void)
     for(unsigned i=0;i<cm.count;++i)if(!cm.events[i].pmic)last_clock=i;
     assert(last_clock<first(1));covered();
     /* The same staged-readback rule applies to a raise at sufficient voltage. */
-    const struct a733_cpu_clock_grant g={77,2,{0,2002},2};
+    const struct a733_cpu_clock_grant g={77,2,{0,2002},2,0};
     board33(&g);pm.pmic[REG_DCDC3]=55;
     cm.ramp[1].from_uv=cm.ramp[1].to_uv=1050000;
     assert(a733_cpu_clock_request(&cpu,A733_CPU_BIG,2002,pm.now+120000)==A733_CPU_CLOCK_PENDING);
@@ -529,7 +529,7 @@ static void top_cases(void)
     /* Step 1: CPU-B 1,014 -> 1,404 -> 1,014 MHz at the inherited 800 mV, with
      * a lock that reads clear twice after it first sets: the driver selects
      * the PLL only after three consecutive lock reads and 20 us. */
-    const struct a733_cpu_clock_grant step1={77,2,{0,1404},2};
+    const struct a733_cpu_clock_grant step1={77,2,{0,1404},2,0};
     board33(&step1);cm.glitch=2;
     assert(a733_cpu_clock_inspect(&cpu,A733_CPU_BIG,pm.now+120000)==A733_CPU_CLOCK_PENDING);
     assert(run(400)==A733_CPU_CLOCK_COMPLETE && cpu.rail_uv[1]==800000 && !cm.writes);
@@ -542,7 +542,7 @@ static void top_cases(void)
     printf("BUDGET step1 clock_writes=%u pmic_writes=%u model_parked_us=%llu,%llu\n",cm.writes,pmic_writes(),
         (unsigned long long)parked,(unsigned long long)cpu.parked_max_us);
     /* A 10 mV raise still waits the vendor's whole millisecond. */
-    const struct a733_cpu_clock_grant ten={77,2,{0,1508},1};
+    const struct a733_cpu_clock_grant ten={77,2,{0,1508},1,0};
     board33(&ten);pm.pmic[REG_DCDC3]=31;cm.ramp[1].from_uv=cm.ramp[1].to_uv=810000;
     assert(settle_run(A733_CPU_BIG,1508)==A733_CPU_CLOCK_COMPLETE && pm.pmic[REG_DCDC3]==32);
     assert(first(1)<first(0) && cm.events[first(0)].at-cm.events[first(1)].at>=1000);
@@ -550,7 +550,7 @@ static void top_cases(void)
      * CPU-L to 1,794 MHz; then the DSU to 1,274 MHz with no voltage write. The
      * DSU is refused first, while three quarters of the faster cluster is
      * below it, and while DCDC5 does not cover it. */
-    const struct a733_cpu_clock_grant top={77,3,{1794,2002},8};
+    const struct a733_cpu_clock_grant top={77,3,{1794,2002},8,0};
     board33(&top);
     /* 910 MHz needs only 800 mV, but three quarters of 1,014 MHz is 754 MHz. */
     assert(settle_run(A733_CPU_DSU,910)==A733_CPU_CLOCK_REFUSED && !cm.writes && !pmic_writes() && released());
@@ -573,13 +573,13 @@ static void top_cases(void)
     assert(settle_run(A733_CPU_DSU,780)==A733_CPU_CLOCK_COMPLETE && pm.pmic[REG_DCDC5]==50 && rate(2)==780000000);
     /* A CPU-L grant at 800 mV bounds the DSU at 800 mV points even with a
      * higher DCDC5; without a CPU-L grant the DSU is refused before access. */
-    const struct a733_cpu_clock_grant low={77,3,{1196,2002},4};
+    const struct a733_cpu_clock_grant low={77,3,{1196,2002},4,0};
     board33(&low);pm.pmic[REG_DCDC5]=50;cm.ramp[0].from_uv=cm.ramp[0].to_uv=1000000;
     assert(settle_run(A733_CPU_BIG,2002)==A733_CPU_CLOCK_COMPLETE);
     events=cm.count;
     assert(settle_run(A733_CPU_DSU,1066)==A733_CPU_CLOCK_REFUSED && cm.count==events);
     assert(settle_run(A733_CPU_DSU,910)==A733_CPU_CLOCK_COMPLETE && rate(2)==910000000 && cm.count-events==5);
-    const struct a733_cpu_clock_grant big_only={77,2,{0,2002},4};
+    const struct a733_cpu_clock_grant big_only={77,2,{0,2002},4,0};
     board33(&big_only);
     assert(a733_cpu_clock_request(&cpu,A733_CPU_DSU,598,pm.now+120000)==A733_CPU_CLOCK_REFUSED && !cm.reads);
     /* At THROTTLE the DSU is held to 780 MHz. */
@@ -609,7 +609,7 @@ static void regrant(const struct a733_cpu_clock_grant *grant)
  * (apps/board-bundles-power/cpu-opp-step.c), then a thermal stop of step 5. */
 static void lifetime_cases(void)
 {
-    const struct a733_cpu_clock_grant g22={1,1,{1196,0},5},g23={1,3,{1196,2002},7},g24={1,1,{1794,0},5};
+    const struct a733_cpu_clock_grant g22={1,1,{1196,0},5,0},g23={1,3,{1196,2002},7,0},g24={1,1,{1794,0},5,0};
     board33(&g22);cm.count=0;
     assert(settle_run(A733_CPU_LITTLE,1196)==A733_CPU_CLOCK_COMPLETE && *word(PLL(0))==L0(46) &&
         *word(SEL(0))==0x03000000);
@@ -638,7 +638,7 @@ static void lifetime_cases(void)
      * would leave it (the FEL ROM return does not reset CPU-B). With DCDC3 at
      * 1050 mV, inspection applies the point and a lowering to 1014 MHz keeps
      * DCDC3 at the image's first reading, with no PMIC write. */
-    const struct a733_cpu_clock_grant g27={1,2,{0,1014},2};
+    const struct a733_cpu_clock_grant g27={1,2,{0,1014},2,0};
     board33(&g27);pm.pmic[REG_DCDC3]=55;pm.pmic[REG_DCDC5]=50;cm.ramp[1].from_uv=cm.ramp[1].to_uv=1050000;
     cm.ramp[0].from_uv=cm.ramp[0].to_uv=1000000;*word(PLL(1))=LOCKED|(77u<<8);cm.count=0;
     assert(a733_cpu_clock_inspect(&cpu,A733_CPU_BIG,pm.now+120000)==A733_CPU_CLOCK_PENDING);
@@ -708,7 +708,7 @@ int main(int argc,char **argv)
      * not admit the little cluster. */
     assert(heat(50000)==A733_THERMAL_NORMAL);
     assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,1196,pm.now+1000000)==A733_CPU_CLOCK_REFUSED);
-    const struct a733_cpu_clock_grant little={77,1,{1196,0},2};
+    const struct a733_cpu_clock_grant little={77,1,{1196,0},2,0};
     setup(0x00000100,1,30,30,30,&little);
     assert(a733_thermal_policy_level(&policy)==A733_THERMAL_NORMAL);
     assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,1196,pm.now+1000000)==A733_CPU_CLOCK_REFUSED);
@@ -953,17 +953,17 @@ int main(int argc,char **argv)
 
     /* Grant records: nothing granted, a grant bound to its session, and one
      * refusal per field, each leaving the output unchanged. */
-    struct a733_cpu_clock_grant_record g={A733_CPU_CLOCK_GRANT_MAGIC,1,96,4242,0,0,0,{0,0},0,{0}};
+    struct a733_cpu_clock_grant_record g={A733_CPU_CLOCK_GRANT_MAGIC,1,96,4242,0,0,0,{0,0},0,0,{0}};
     struct a733_cpu_clock_config loaded;memset(&loaded,0x5a,sizeof(loaded));
     assert(a733_cpu_clock_grant_load(&g,11,12,&loaded) && loaded.owner==4242 && !loaded.grant.session &&
         !loaded.grant.clusters && !loaded.grant.max_mhz[0] && !loaded.grant.max_mhz[1] && !loaded.grant.changes);
-    g.epoch=11;g.generation=12;g.clusters=3;g.max_mhz[0]=1196;g.max_mhz[1]=2002;g.changes=64;g.approval[31]=1;
+    g.epoch=11;g.generation=12;g.clusters=3;g.max_mhz[0]=1196;g.max_mhz[1]=2002;g.changes=64;
     assert(a733_cpu_clock_grant_load(&g,11,12,&loaded) && loaded.grant.session==11 && loaded.grant.clusters==3 &&
         loaded.grant.max_mhz[0]==1196 && loaded.grant.max_mhz[1]==2002 && loaded.grant.changes==64);
     g.clusters=1;g.max_mhz[1]=0;g.changes=2;
     assert(a733_cpu_clock_grant_load(&g,11,12,&loaded) && loaded.grant.clusters==1 && !loaded.grant.max_mhz[1]);
     const struct a733_cpu_clock_config kept=loaded;
-    for(unsigned i=0;i<16;++i) {
+    for(unsigned i=0;i<20;++i) {
         struct a733_cpu_clock_grant_record r=g;uint64_t epoch=11,generation=12;
         switch(i) {
         case 0:r.magic^=1;break;            case 1:r.version=2;break;
@@ -973,10 +973,20 @@ int main(int argc,char **argv)
         case 8:r.clusters=5;break;          case 9:r.max_mhz[0]=1100;break;
         case 10:r.max_mhz[1]=1014;break;    case 11:r.clusters=2;break; /* 1196 kept for LITTLE. */
         case 12:r.changes=0;break;          case 13:r.changes=65;break;
-        case 14:r.approval[31]=0;break;
-        case 15:r=(struct a733_cpu_clock_grant_record){A733_CPU_CLOCK_GRANT_MAGIC,1,96,4242,11,0,0,{0,0},0,{0}};break;
+        case 14:r.reserved[27]=1;break;
+        case 15:r=(struct a733_cpu_clock_grant_record){A733_CPU_CLOCK_GRANT_MAGIC,1,96,4242,11,0,0,{0,0},0,0,{0}};break;
+        case 16:r.perf=1;break;             /* the performance service needs both clusters: g names one */
+        case 17:r.clusters=3;r.max_mhz[1]=2002;r.perf=3;break;
+        case 18:r=(struct a733_cpu_clock_grant_record){A733_CPU_CLOCK_GRANT_MAGIC,1,96,4242,0,0,0,{0,0},0,1,{0}};break; /* perf with no clusters */
+        case 19:r.reserved[0]=0x80;break;   /* the former approval bytes are not used */
         }
         assert(!a733_cpu_clock_grant_load(&r,epoch,generation,&loaded) && !memcmp(&loaded,&kept,sizeof(kept)));
+    }
+    {   /* Performance service: both clusters, boot mode 1 or 2, carried into the configuration. */
+        struct a733_cpu_clock_grant_record both=g;struct a733_cpu_clock_config c2;
+        both.clusters=3;both.max_mhz[1]=2002;both.perf=2;
+        assert(a733_cpu_clock_grant_load(&both,11,12,&c2) && c2.grant.perf==2 && c2.grant.clusters==3);
+        both.perf=0;assert(a733_cpu_clock_grant_load(&both,11,12,&c2) && !c2.grant.perf);
     }
     assert(!a733_cpu_clock_grant_load(0,11,12,&loaded) && !a733_cpu_clock_grant_load(&g,11,12,0));
     /* The loaded grant admits its point through the actual driver. */
@@ -1028,7 +1038,7 @@ int main(int argc,char **argv)
     /* A2 on board 3-3: CPU-B 1014 -> 2002 MHz at 1,050 mV with the OS owner's
      * 120 ms deadline, one burst per 1 ms tick with a 200 us budget. A lock of
      * 20 us leaves no tick boundary inside the parked window. */
-    const struct a733_cpu_clock_grant a2={77,2,{0,2002},1};
+    const struct a733_cpu_clock_grant a2={77,2,{0,2002},1,0};
     setup(0x00000496,4,35,40,30,&a2);assert(heat(50000)==A733_THERMAL_NORMAL);
     assert(a733_cpu_clock_request(&cpu,A733_CPU_BIG,2002,pm.now+120000)==A733_CPU_CLOCK_PENDING);
     unsigned ticks=0,parked_ticks=0;enum a733_cpu_clock_status r2=A733_CPU_CLOCK_PENDING;

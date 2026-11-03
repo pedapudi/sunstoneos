@@ -110,13 +110,7 @@
    },
    "cpu_grant": {
     "owner": 109,
-    "clusters": 3,
-    "max_mhz": [
-     1794,
-     2002
-    ],
-    "changes": 4,
-    "approval": "661c0ca913fb9907f95ac2e5f0eeeb255a2936ac87777b4960d441b27998d118"
+    "changes": 4
    }
   },
   "npu": {
@@ -223,13 +217,7 @@
    },
    "cpu_grant": {
     "owner": 109,
-    "clusters": 3,
-    "max_mhz": [
-     1794,
-     2002
-    ],
-    "changes": 4,
-    "approval": "4cb9601d4cd36fae19ebab860bb6d832b3f7d836cd45ef53881377c91058c9f1"
+    "changes": 4
    },
    "npu": {
     "owner": 8504805823118237562,

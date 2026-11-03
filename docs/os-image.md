@@ -146,13 +146,19 @@ image and a mask, `granted`, of the services that this session carries:
   without the device bit, or the device bit without the record, is refused.
 - **Radio station:** the board prefix's workload 1 (and, in a build that has the
   radio, only with USB storage).
-- **NPU, CPU clock grant, DMA:** the service's record.
+- **CPU clock grant and the performance service:** the grant record
+  ([cpu-clock.md](cpu-clock.md)), for an application whose manifest declares
+  `cpu.clock_grants` (and `cpu.perf` for the performance service). Every image
+  has this code; a session without the record reads nothing of the CPU clock tree.
+  A cluster on the A76 cores and a grant both need CPU-B on its boot PLL point,
+  which the thermal start checks once.
+- **NPU, DMA:** the service's record.
 
 The wire form is unchanged: a record is present only for a granted service, and
 the thermal record's size field names the board prefix plus the records present.
 A service whose code the image does not link cannot be granted; the build options
-`SUNSTONE_A733_OS_AUDIO`, `_RADIO`, `_NPU`, `_NPU_QUEUE`, `_CPU_CLOCK`, `_PERF`,
-`_HEADSET` and `_RESIDENT` decide which code is linked until each is replaced by
+`SUNSTONE_A733_OS_AUDIO`, `_RADIO`, `_NPU`, `_NPU_QUEUE`, `_HEADSET` and `_RESIDENT`
+decide which code is linked (the A76, CPU clock and performance code is in every image) until each is replaced by
 its run-time form ([the design](designs/one-os-image.md)). The `all` gate variant
 links every service that is already a run-time option.
 

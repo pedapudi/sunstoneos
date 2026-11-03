@@ -1,6 +1,9 @@
 /* Optional OS catalogue runtime. The board owns every power/clock provider;
  * this consumer owns one fixed RAM reservation, startup row and client slot. */
 #include "os.h"
+#ifdef SUNSTONE_A733_OS_PERF
+#include "perf.h"
+#endif
 #include "npu.h"
 #include "../board/application.h"
 #include "a733_mapping_check.h"
@@ -328,7 +331,7 @@ static void perf_serve(void)
         if(r<0){(void)FAIL_REQUEST(NPU_SERVICE_STATUS,UINT32_MAX,0,NULL,1,r);vTaskSuspend(NULL);}
     }
 }
-#define STOPPED_WAIT() perf_serve()
+#define STOPPED_WAIT() do{if(os_perf_enabled())perf_serve();else vTaskSuspend(NULL);}while(0)
 #else
 #define STOPPED_WAIT() vTaskSuspend(NULL)
 #endif
@@ -690,9 +693,9 @@ int os_npu_start(void)
     const struct a733_npu_startup_providers p={&providers.shared.counter,&providers.shared.clocks,
         &providers.shared.locks,&providers.shared.gpu,&providers.shared.rails,&providers.domains};
     if(!a733_npu_startup_init(&npu.startup,&startup,&p,NULL,NULL))return REFUSE();
-#if defined(SUNSTONE_A733_OS_PERF) && OS_PERF_BOOT_MODE==2
-    /* The low boot mode: the NPU starts at its 492 MHz point. */
-    if(!a733_npu_startup_rate(&npu.startup,492))return REFUSE();
+#ifdef SUNSTONE_A733_OS_PERF
+    /* The low boot mode of the grant's performance service: the NPU starts at its 492 MHz point. */
+    if(os_perf_enabled()&&os_perf_boot_mode()==2&&!a733_npu_startup_rate(&npu.startup,492))return REFUSE();
 #endif
     creating=1;
     npu.bootstrap=xTaskCreateStaticAffinitySet(bootstrap,"os-npu-boot",STACK,NULL,4,npu.stacks[0],&npu.tasks[0],2);

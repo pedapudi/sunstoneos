@@ -653,7 +653,8 @@ static void advance_locked(struct pvr_gpu_service *s)
     if (s->phase==PVR_GPU_SERVICE_READY && s->config.compute_queue && s->config.job_irq_ack &&
         !s->irq_masked && !s->recovery_stage &&
 #ifdef SUNSTONE_A733_OS_PERF
-        !s->performance.ticket && !performance_controlling(s) &&
+        /* A session without the performance service has no begin hook: one pointer test, nothing more. */
+        (!s->config.performance_begin || (!s->performance.ticket && !performance_controlling(s))) &&
 #endif
         atomic_load_explicit(&s->config.compute_queue->fast.enabled,memory_order_acquire)) {
         /* The periodic safety deadline reads CPU fence state only. Successful

@@ -102,9 +102,10 @@ CPU-B.
 carries a grant with a nonzero session, the cluster's bit, a maximum rate at
 or above the target, and an unused change. A grant of CPU-L also admits the
 DSU, which shares DCDC5, under the DSU rules below. Each admitted request consumes one
-change, whatever its outcome. No current image or session supplies a grant.
-A supervised session that grants one must record the user's approval for
-that specific change.
+change, whatever its outcome. A session carries a grant only when the board runner
+admits it for an application whose manifest declares `cpu.clock_grants`, and the
+runner records the user's approval for that change in its evidence record
+(`--approved-by coordinator`); the session does not carry it.
 
 An OS session carries the grant as a 96-byte little-endian record, which
 `a733_cpu_clock_grant_load` checks and converts into the driver's
@@ -118,18 +119,24 @@ configuration:
 | 48..51 | Cluster bits: 1 for CPU-L, 2 for CPU-B |
 | 52..59 | Highest admitted operating point of CPU-L and of CPU-B, in MHz |
 | 60..63 | Number of admitted changes |
-| 64..95 | SHA-256 of the reviewed record of the user's approval |
+| 64..67 | `perf`: 0 none, 1 the performance-mode service with the high boot mode, 2 with the low boot mode; needs both clusters |
+| 68..95 | Zero |
 
 A record that grants nothing has zero cluster bits, and its epoch,
-generation, maxima, change count and approval hash are also zero. The driver
+generation, maxima, change count and `perf` are also zero. The driver
 then refuses every request. A record that grants changes must name the
 carrying session's nonzero epoch and generation, so it cannot admit changes in
-another session. Each admitted cluster's maximum must be a row of that
+another session; an epoch of zero is the unassigned form of a grant written to a
+card, which the OS binds to the board's epoch, and any other epoch must be the
+board's. Each admitted cluster's maximum must be a row of that
 cluster's table, the other cluster's maximum must be zero, the change count
-must be 1 to 64, and the approval hash must be nonzero. The epoch becomes the
-grant's session. The hash identifies the approval record; preparing the
-session must check that record, because the driver cannot. A record that
-fails any rule leaves the configuration unchanged.
+must be 1 to 64, `perf` is at most 2 and needs both clusters, and the 28 bytes
+after it are zero. The epoch becomes the grant's session. A record that
+fails any rule leaves the configuration unchanged. The OS also refuses a grant
+that names clusters unless the application's manifest declares `cpu.clock_grants`,
+and one that carries `perf` unless it declares `cpu.perf`. Whatever a session holds,
+`a733_cpu_clock_write_allowed` refuses a PLL word whose N field exceeds the top row of
+its domain, and the PMIC driver repeats its voltage check on the byte that goes to the bus.
 
 ## The thermal policy selects operating points
 

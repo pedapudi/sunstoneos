@@ -10,9 +10,9 @@
  #include "../board/session.h"
  #include "a733_thermal.h"
 @@ -155,6 +157,23 @@
- #else
- #define record_reading(now,level) ((void)0)
- #endif
+     !atomic_load_explicit(&thermal.failed,memory_order_acquire)&&a733_smp_counter()/24<deadline();}
+ static int owner(void)
+ {return thermal.handle&&xTaskGetCurrentTaskHandle()==thermal.handle&&live();}
 +/* 1 ready, 0 not ready, 2 ready except that another core is inside the clock lease registry at this moment (the status
 + * is a try-lock): that is a retry, not a refusal. */
 +int os_cpu_return_thermal_ready(void)
@@ -30,10 +30,10 @@
 +        (a733_clock_token_status(&providers.shared.clocks,&thermal.token)==A733_CLOCK_OK?0:32)|(board_live(NULL)?0:64)|
 +        (os_application_deadline()?0:128)|(atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)?256:0);
 +}
- static uint64_t deadline(void){return board.session.deadline_us-10000;}
- static int live(void)
- {return board_live(NULL)&&os_application_deadline()&&!atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)&&
-@@ -372,6 +391,19 @@
+ static int now(void *v,uint64_t *n)
+ {return v==&thermal?a733_counter_clock_now(&providers.shared.counter,n):0;}
+ static int enter(void *v,uint64_t d)
+@@ -362,6 +381,19 @@
      (void)unused;
      for(;;){
          if(step()==1)BOARD_PROGRESS(OS_SERVICE_THERMAL);

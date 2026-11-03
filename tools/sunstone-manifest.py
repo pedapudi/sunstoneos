@@ -151,11 +151,15 @@ def load(path):
     require(not wanted or (listed == wanted and bin(wanted).count('1') == 1),
             name + ': a required capture device excludes the other')
     cpu = raw['cpu']
-    require(set(cpu) <= {'cluster', 'workers', 'priority', 'stack_bytes', 'heap_bytes'},
-            name + ': unknown cpu keys %s' % sorted(set(cpu) - {'cluster', 'workers', 'priority', 'stack_bytes', 'heap_bytes'}))
+    cpu_keys = {'cluster', 'workers', 'priority', 'stack_bytes', 'heap_bytes', 'clock_grants', 'perf'}
+    require(set(cpu) <= cpu_keys, name + ': unknown cpu keys %s' % sorted(set(cpu) - cpu_keys))
+    for key in ('clock_grants', 'perf'):
+        require(isinstance(cpu.get(key, False), bool), name + ': cpu.%s is true or false' % key)
+    require(not cpu.get('perf', False) or cpu.get('clock_grants', False), name + ': cpu.perf needs cpu.clock_grants')
     require(cpu.get('cluster', 'a55') in CLUSTER, name + ': cluster is a55 or a76')
     m = {'name': name, 'devices_required': required, 'devices_optional': optional,
          'cluster': CLUSTER[cpu.get('cluster', 'a55')],
+         'clock_use': (1 if cpu.get('clock_grants', False) else 0) | (2 if cpu.get('perf', False) else 0),
          # An A55 application's workers stay off the A76 cores: its main task and five workers fill cores 0 to 5
          # (apps/os/grants.c, os_worker_cores). An A76 application may use every core.
          'workers': integer(cpu.get('workers', 0), name + ' workers', 0, 7 if cpu.get('cluster', 'a55') == 'a76' else 5),
@@ -390,7 +394,7 @@ def pack(m):
                     m['devices_optional'], m['cluster'], m['workers'], m['priority'], 0,
                     m['stack_bytes'], m['heap_bytes'], m['run_deadline_us'], m['return_reserve_us'],
                     m['progress_window_us'], m['output_limit'], m['host_op_first'],
-                    m['host_op_count'], len(m['regions']), 0)
+                    m['host_op_count'], len(m['regions']), m['clock_use'])
     a = m['audio']
     out += AUDIO.pack(a['rate_hz'], a['channels'], a['bits'], a['min_frames'], a['max_frames'])
     for r in m['regions']:
@@ -408,14 +412,14 @@ def unpack(raw):
         b = raw[base:base + MANIFEST_BYTES]
         (magic, version, size, name, required, optional, cluster, workers, priority, reserved0, stack, heap,
          run, reserve, window, output, first, count, regions, reserved1) = HEAD.unpack_from(b)
-        require((magic, version, size) == (MAGIC, VERSION, MANIFEST_BYTES) and not reserved0 and not reserved1 and
-                regions <= REGIONS, 'manifest at %d: header differs' % base)
+        require((magic, version, size) == (MAGIC, VERSION, MANIFEST_BYTES) and not reserved0 and reserved1 <= 3 and
+                (reserved1 & 2 == 0 or reserved1 & 1) and regions <= REGIONS, 'manifest at %d: header differs' % base)
         rate, channels, bits_, low, high = AUDIO.unpack_from(b, HEAD.size)
         m = {'name': name.rstrip(b'\0').decode(), 'devices_required': required, 'devices_optional': optional,
              'cluster': cluster, 'workers': workers, 'priority': priority,
              'stack_bytes': stack, 'heap_bytes': heap, 'run_deadline_us': run, 'return_reserve_us': reserve,
              'progress_window_us': window, 'output_limit': output,
-             'host_op_first': first, 'host_op_count': count,
+             'host_op_first': first, 'host_op_count': count, 'clock_use': reserved1,
              'audio': {'rate_hz': rate, 'channels': channels, 'bits': bits_, 'min_frames': low, 'max_frames': high},
              'regions': []}
         for i in range(REGIONS):
@@ -453,8 +457,8 @@ def c_source(m):
              '    .return_reserve_us = UINT64_C(%d), .progress_window_us = UINT64_C(%d),' % (
                  m['return_reserve_us'], m['progress_window_us']),
              '    .output_limit = %du,' % m['output_limit'],
-             '    .host_op_first = %d, .host_op_count = %d, .region_count = %d,' % (
-                 m['host_op_first'], m['host_op_count'], len(m['regions'])),
+             '    .host_op_first = %d, .host_op_count = %d, .region_count = %d, .clock_use = %d,' % (
+                 m['host_op_first'], m['host_op_count'], len(m['regions']), m['clock_use']),
              '    .audio = {%du, %du, %du, %du, %du},' % (
                  a['rate_hz'], a['channels'], a['bits'], a['min_frames'], a['max_frames']),
              '    .regions = {']
@@ -552,9 +556,7 @@ def c_tables(m):
              '__attribute__((used,retain)) const uint32_t os_gpu_configuration[8]={',
              '    1,OS_GPU_REPLY_US,OS_GPU_OPEN_US,OS_GPU_WAIT_TICKS,OS_GPU_PRIORITY,',
              ('    A733_SMP_APPLICATION_CORE,' if m.get('cluster', 0) else '    2,'),
-             '#if defined(SUNSTONE_A733_OS_PERF) && OS_PERF_BOOT_MODE == 2',
-             '    A733_GPU_LOW_HZ,A733_GPU_LOW_UV};', '#else',
-             '    A733_GPU_CORE_HZ,A733_GPU_SUPPLY_UV};', '#endif', '#endif', '']
+             '    A733_GPU_CORE_HZ,A733_GPU_SUPPLY_UV};', '#endif', '']
     # Placement is an OS setting; the GPU route uses the same admitted pair.
     if noapp:
         lines=[line for line in lines if not any(key in line for key in ('os_core-app.h','os_core_init','app_stack','app_task','{\"os-core\",os_application'))]

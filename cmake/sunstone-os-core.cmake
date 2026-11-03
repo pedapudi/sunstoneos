@@ -90,32 +90,11 @@ endif()
 if(SUNSTONE_A733_OS_MSBC AND NOT SUNSTONE_A733_OS_HEADSET)
   message(FATAL_ERROR "Wideband mSBC speech is a headset option")
 endif()
-# A76 admission permits application placement on cores 6 and 7. Device owners
-# retain their existing A55 affinity.
-option(A733_A76_ADMITTED "Admit Cortex-A76 cores for application placement" OFF)
-# CPU operating points granted by the sealed supervised or resident session
-# policy (docs/cpu-clock.md).
-option(SUNSTONE_A733_OS_CPU_CLOCK "Integrated OS with granted CPU operating-point changes" OFF)
-# Compositions of the I2S and radio services with CPU grants, and with the NPU, are refused at session admission
-# (refused_compositions in apps/os/admission.c). The headset still has its build-time rules.
-if(SUNSTONE_A733_OS_CPU_CLOCK AND SUNSTONE_A733_OS_RESIDENT AND SUNSTONE_A733_OS_HEADSET)
-  message(FATAL_ERROR "Resident CPU grants require the recorded-card session profile")
-endif()
-if(SUNSTONE_A733_OS_CPU_CLOCK AND NOT A733_A76_ADMITTED)
-  message(FATAL_ERROR "CPU operating-point grants need A733_A76_ADMITTED")
-endif()
-# High and low performance modes (docs/designs/performance-modes.md): the
-# thermal task's CPU clock owner switches the CPU domains, and the NPU when
-# the image has it, between the speed bin's vendor points. The boot mode is
-# the image manifest's perf_boot_mode.
-option(SUNSTONE_A733_OS_PERF "Integrated OS with the high and low performance-mode service" OFF)
-set(SUNSTONE_A733_OS_PERF_BOOT "high" CACHE STRING "Performance mode at boot: high or low")
-if(SUNSTONE_A733_OS_PERF AND NOT SUNSTONE_A733_OS_CPU_CLOCK)
-  message(FATAL_ERROR "The performance-mode service runs in the CPU clock owner; it needs SUNSTONE_A733_OS_CPU_CLOCK")
-endif()
-if(NOT SUNSTONE_A733_OS_PERF_BOOT STREQUAL "high" AND NOT SUNSTONE_A733_OS_PERF_BOOT STREQUAL "low")
-  message(FATAL_ERROR "SUNSTONE_A733_OS_PERF_BOOT is high or low")
-endif()
+# A76 placement, CPU operating-point grants and the performance-mode service are not build options: every image has them,
+# and a session grants them (docs/designs/one-os-image-cpu.md). The variables stay for the build rules that name them.
+set(A733_A76_ADMITTED ON)
+set(SUNSTONE_A733_OS_CPU_CLOCK ON)
+set(SUNSTONE_A733_OS_PERF ON)
 if(SUNSTONE_A733_OS_NPU)
   if(SUNSTONE_A733_OS_HEADSET)
     message(FATAL_ERROR "The NPU OS profile requires recorded recognition and a supported GPU/CPU composition")
@@ -579,10 +558,7 @@ if(A733_A76_ADMITTED)
   target_compile_definitions(sunstone-a733-os-core PRIVATE A733_A76_ADMITTED=1
     "$<$<BOOL:${SUNSTONE_A733_OS_CPU_CLOCK}>:SUNSTONE_A733_OS_CPU_CLOCK=1>")
 endif()
-if(SUNSTONE_A733_OS_PERF)
-  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_PERF=1
-    OS_PERF_BOOT_MODE=$<IF:$<STREQUAL:${SUNSTONE_A733_OS_PERF_BOOT},low>,2,1>)
-endif()
+target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_PERF=1)
 if(SUNSTONE_A733_OS_MSBC)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_MSBC=1 SUNSTONE_BLUETOOTH_MSBC=1)
   set_source_files_properties(${os_sbc_sources} TARGET_DIRECTORY sunstone-a733-os-core

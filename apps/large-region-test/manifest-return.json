@@ -4,7 +4,7 @@
     "required": [],
     "optional": []
   },
-  "cpu": {
+  "cpu": {"clock_grants": true, 
     "cluster": "a76",
     "workers": 1,
     "priority": 2,

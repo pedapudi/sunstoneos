@@ -59,9 +59,6 @@ static const struct {unsigned services;const char *reason;} refused_compositions
     {OS_GRANT_CPU_CLOCK|OS_GRANT_AUDIO,"resident CPU grants require the recorded-card session profile"},
     {OS_GRANT_CPU_CLOCK|OS_GRANT_RADIO,"resident CPU grants require the recorded-card session profile"},
 #endif
-#if !defined(SUNSTONE_A733_OS_PERF)&&!defined(SUNSTONE_BOARD_RESIDENT)&&!defined(SUNSTONE_A733_OS_GPU)&&!defined(SUNSTONE_A733_OS_CPU_RETURN)
-    {OS_GRANT_NPU|OS_GRANT_CPU_CLOCK,"CPU grants compose with the NPU only in a recorded resident, GPU or returning image, or with performance modes"},
-#endif
 };
 unsigned os_composition_refused(unsigned granted)
 {

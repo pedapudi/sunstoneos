@@ -84,6 +84,7 @@ apps/os/grants.c
 apps/os/os-services.h
 tools/session.py
 tools/sunstone-manifest.py
+tools/cpu-reviewed-points.json
 
 # The landing tool and its protected list.
 tools/land.py

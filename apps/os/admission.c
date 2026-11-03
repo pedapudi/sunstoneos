@@ -53,24 +53,17 @@ int os_session_valid(const struct os_session *s)
             return 0;
         for(unsigned i=0;i<4;++i)if(owners[i]==d->owner)return 0;
     }
-#ifdef SUNSTONE_A733_OS_CPU_CLOCK
     if(s->granted&OS_GRANT_CPU_CLOCK){
-        /* The grant names this session; its owner holds only the CPU clock and rail leases. */
+        /* The grant names this session; its owner holds only the CPU clock and rail leases. The performance service
+         * switches both clusters, or none, and a grant without clusters carries no perf (a733_cpu_clock_grant_load). */
         struct a733_cpu_clock_config cpu;
         if(!a733_cpu_clock_grant_load(&s->cpu_clock,s->board.epoch,s->board.generation,&cpu)||
            cpu.owner==s->thermal_owner)return 0;
-#ifdef SUNSTONE_A733_OS_PERF
-        /* The performance-mode service switches both clusters, or none. */
-        if(cpu.grant.clusters==1||cpu.grant.clusters==2)return 0;
-#endif
         for(unsigned i=0;i<4;++i)if(owners[i]==cpu.owner)return 0;
         cpu_owner=cpu.owner;
-#ifdef SUNSTONE_A733_OS_NPU
         if((s->granted&OS_GRANT_NPU)&&cpu.owner==s->npu.owner)return 0;
-#endif
         if((s->granted&OS_GRANT_AUDIO)&&cpu.owner==s->audio.dma.owner)return 0;
     }
-#endif
 #ifdef SUNSTONE_A733_OS_NPU
     if(s->granted&OS_GRANT_NPU){
         const struct os_npu_session *n=&s->npu;
