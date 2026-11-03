@@ -10,7 +10,7 @@ int camera_live(void *unused)
 void camera_fail(void *unused)
 {(void)unused;atomic_store_explicit(&app.fatal,1,memory_order_release);
  atomic_store_explicit(&app.shared.counter.failed,1,memory_order_release);}
-void a733_storage_maintenance_stop(void){camera_fail(NULL);}
+void a733_storage_maintenance_stop(unsigned status){(void)status;camera_fail(NULL);}
 void vApplicationStackOverflowHook(TaskHandle_t task,char *name)
 {(void)task;platform_panic(name,2);}
 static void pmic(void *unused)

@@ -19,7 +19,7 @@ void i2s_fail(void *unused)
   * also refuse subsequent time samples. Keep every active reservation held. */
  atomic_store_explicit(&app.shared.counter.failed,1,memory_order_release);
 }
-void a733_storage_maintenance_stop(void){i2s_fail(NULL);}
+void a733_storage_maintenance_stop(unsigned status){(void)status;i2s_fail(NULL);}
 void vApplicationStackOverflowHook(TaskHandle_t task,char *name){(void)task;platform_panic(name,2);}
 static _Noreturn void dma_fatal(void *unused)
 {(void)unused;i2s_fail(NULL);platform_panic("I2S retained DMA",1);}

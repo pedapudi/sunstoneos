@@ -21,7 +21,7 @@ int hdmi_live(void *unused)
 {(void)unused;return !atomic_load_explicit(&app.fatal,memory_order_acquire)&&a733_smp_counter()/24<app.deadline;}
 void hdmi_fail(void *unused)
 {(void)unused;atomic_store_explicit(&app.fatal,1,memory_order_release);}
-void a733_storage_maintenance_stop(void){hdmi_fail(NULL);}
+void a733_storage_maintenance_stop(unsigned status){(void)status;hdmi_fail(NULL);}
 void vApplicationStackOverflowHook(TaskHandle_t task,char *name)
 {(void)task;platform_panic(name,2);}
 static int now(void *v,uint64_t *out)
