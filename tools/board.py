@@ -44,6 +44,26 @@ import board_usb_power as usb_power
 require = images.require
 
 
+def wifi_module():
+    """tools/wifi-credential.py: the one definition of the stored credential, its fingerprint and the board record."""
+    return images.load('wifi_credential', ROOT/'tools/wifi-credential.py')
+
+
+def load_wifi(name, fingerprint=None):
+    """The stored credential NAME, after its directory and file modes pass and, when given, its fingerprint matches.
+
+    The refusal text names the credential and the fingerprints, never a value."""
+    wifi = wifi_module()
+    try:
+        entry = wifi.load(name)
+    except wifi.CredentialError as error:
+        raise ValueError('Wi-Fi credential %r refused: %s' % (name, error)) from None
+    now = wifi.fingerprint(entry['pmk'])
+    require(fingerprint is None or now == fingerprint,
+            'Wi-Fi credential %r changed since submit (fingerprint %s then, %s now); resubmit the run.' % (name, fingerprint, now))
+    return entry
+
+
 def save(path, value):
     """Durable replacement; keep the previous bytes until replacement succeeds."""
     path = Path(path)
@@ -169,6 +189,7 @@ class Live:
         self.recovery_deadline = None
         self.recovering = False
         self.dma_binding = None
+        self.credential = None  # bytearray: the Wi-Fi record, held in this process only and zeroed once delivered
 
     @staticmethod
     def watchdog_reset_seen(before):
@@ -316,6 +337,33 @@ class Live:
             raise Mismatch(f'Upload readback differs at {address:#x}; execution refused.')
         with path.open('rb') as stream:
             os.fsync(stream.fileno())
+
+    def upload_credential(self, address, data):
+        """Write the credential record and verify it by readback without any file: the source and the readback are
+        anonymous memory files, so no byte of the record reaches the evidence directory, the queue or the disk."""
+        base = images.load('board_sealed', ROOT/'tools/check-a733-smp.py')
+        readback = os.memfd_create('wifi-readback', os.MFD_CLOEXEC)
+        try:
+            with base.sealed_source(bytes(data)) as (sealed, fd):
+                self.sequence += 1
+                self.tx('write', hex(address), sealed, 'read', hex(address), len(data), f'/proc/self/fd/{readback}',
+                        timeout=max(30, len(data)*2/100000+10), pass_fds=(fd, readback))
+            returned = os.pread(readback, len(data)+1, 0)
+        finally:
+            os.close(readback)
+        if returned != bytes(data):
+            raise Mismatch('Wi-Fi credential readback differs; execution refused.')
+
+    def deliver_credential(self, plan):
+        """Upload the credential as its own input, then zero the host copy. Only the name and fingerprint are recorded."""
+        if self.credential is None:
+            return
+        region = plan.get('credential')
+        require(region and region['bytes'] == len(self.credential), 'The session has no Wi-Fi credential region.')
+        self.upload_credential(region['address'], self.credential)
+        self.credential[:] = bytes(len(self.credential))
+        self.credential = None
+        self.record['wifi_delivered'] = True
 
     def sanity(self):
         require('soc=00001903(A733)' in self.tx('version'), 'Target is not A733.')
@@ -722,6 +770,7 @@ class Live:
                 self.journal()
         for address, source in plan['uploads']:
             self.upload(address, source)
+        self.deliver_credential(plan)
         if plan.get('format') == 'npu':
             self.sanity()
             plan['finite'].require_entry_state(self.tx)
@@ -829,7 +878,16 @@ def run_image(args, backend=Live):
             return value
         finally:
             result['durations'][name] = round(time.monotonic()-begin,6)
+    credential = None
     try:
+        if getattr(args, 'wifi', None):
+            # Read the user's file here, in this process, before any other work: a missing file, a bad mode or a changed
+            # fingerprint refuses the run before the device is touched. The result carries the name and fingerprint only.
+            result['wifi'] = {'name': args.wifi, 'fingerprint': getattr(args, 'wifi_fingerprint', None)}
+            entry = load_wifi(args.wifi, result['wifi']['fingerprint'])
+            result['wifi']['fingerprint'] = wifi_module().fingerprint(entry['pmk'])
+            credential = bytearray(wifi_module().board_record(entry))
+            del entry
         data = args.image.read_bytes()
         result['image_sha256'] = hashlib.sha256(data).hexdigest()
         frozen = evidence/('image.elf' if data[:4] == b'\x7fELF' else 'image.bin')
@@ -860,10 +918,14 @@ def run_image(args, backend=Live):
             if info['entry_guard'] and args.restore_rails:
                 require(POST_RAIL_HELPER.is_file() and images.sha(POST_RAIL_HELPER) == POST_RAIL_HELPER_SHA256,
                         'Approved post-ROM rail helper is absent or changed; refused before device access.')
+            if credential is not None:
+                require(info.get('generic') and 'ss_wifi_credential' in images.symbols(frozen),
+                        'The image does not receive a Wi-Fi credential (it does not link ss_wifi_credential); refused before device access.')
             dma_binding = images.dma_admission(args, info)
             application_inputs(args, info, evidence)
             images.load('storage_bounds', ROOT/'tools/storage_bounds.py').verify_delivered(args)
         owner = backend(args, evidence, result)
+        owner.credential = credential
         with owner.locked():
             try:
                 timed('identity', owner.sanity)
@@ -972,6 +1034,9 @@ def run_image(args, backend=Live):
         result['outcome'] = 'host-error'
         result['first_failure'] = {'site': stage, 'detail': f'{type(error).__name__}: {error}'}
         (evidence/'host-error.txt').write_text(traceback.format_exc())
+    finally:
+        if credential is not None:
+            credential[:] = bytes(len(credential))
     return finish_result(result, evidence, started, stage)
 
 
@@ -1238,7 +1303,7 @@ class Queue:
                   'image_sha256': job['image_sha256'], 'port': job['port'], 'kind': job['kind'],
                   'first_failure': {'site': 'queue', 'detail': detail}, 'quarantined': False,
                   'launch_attempted': False, 'durations': {}, 'evidence_path': job['directory'],
-                  'reference': job.get('reference')}
+                  'reference': job.get('reference'), 'wifi': job.get('wifi')}
         save(job['result_path'], result)
         job.update(state='done', result=result, completed=time.time())
         self.event('result', job=job['id'], outcome='refused-before-launch', detail=detail)
@@ -1248,6 +1313,10 @@ class Queue:
         require(re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', args.worker), 'Invalid worker name.')
         require(bool(args.hypothesis.strip()), 'A nonempty hypothesis is required.')
         reference = check_reference(args)
+        wifi = None
+        if getattr(args, 'wifi', None):
+            # Only the name and the fingerprint are recorded; the value stays in the user's config directory.
+            wifi = {'name': args.wifi, 'fingerprint': wifi_module().fingerprint(load_wifi(args.wifi)['pmk'])}
         identifier = f'{time.time_ns()}-{uuid.uuid4().hex[:8]}'
         directory = self.root/'entries'/identifier
         directory.mkdir(parents=True, exist_ok=False)
@@ -1282,6 +1351,8 @@ class Queue:
                 options[name] = str(target)
         if getattr(args, 'decoder_origin', None):
             options['decoder_origin'] = str(args.decoder_origin)
+        if wifi:
+            options['wifi'], options['wifi_fingerprint'] = wifi['name'], wifi['fingerprint']
         options['input'] = []
         for i,path in enumerate(args.input):
             target = directory/f'input-{i}.bin'
@@ -1335,6 +1406,8 @@ class Queue:
                'worker': args.worker, 'hypothesis': args.hypothesis.strip(), 'state': 'queued', 'reference': reference,
                'directory': str(directory), 'result_path': str(directory/'run/result.json'), 'options': options, 'frozen': frozen,
                'preflight': preflight}
+        if wifi:
+            job['wifi'] = wifi
         with self.locked() as state:
             state['jobs'].append(job)
             save(directory/'entry.json', job)
@@ -1355,6 +1428,12 @@ class Queue:
             if any(not (directory/name).is_file() or images.sha(directory/name) != digest for name,digest in job['frozen'].items()):
                 self.refused(state, job, 'Queued input bytes changed; execution refused.')
                 return None
+            if job.get('wifi'):
+                try:
+                    load_wifi(job['wifi']['name'], job['wifi']['fingerprint'])
+                except ValueError as error:
+                    self.refused(state, job, str(error))
+                    return None
             job.update(state='running', assigned_port=port, started=time.time())
             self.event('running', job=job['id'], port=port)
             return dict(job)
@@ -1492,6 +1571,22 @@ class Queue:
                 'results':[j for j in state['history'] if (j.get('assigned_port') or j['port'])==port][-20:]}
                 for port in PORTS}}
 
+    @staticmethod
+    def runner_command(job, port):
+        """The runner process for a claimed job. A Wi-Fi credential appears as its name and fingerprint only."""
+        command = [str(PYTHON),'-B',str(ROOT/'tools/board.py'),'run',job['image'],'--port',port,
+                   '--evidence',str(Path(job['directory'])/'run'),
+                   '--process-record',str(Path(job['directory'])/'runner-process.json')]
+        for name,value in job['options'].items():
+            flag = '--'+name.replace('_','-')
+            if isinstance(value,bool):
+                if value: command.append(flag)
+            elif isinstance(value,list):
+                for item in value: command += [flag,str(item)]
+            elif value is not None:
+                command += [flag,str(value)]
+        return command
+
     def serve(self, once=False):
         with (self.root/'daemon.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -1516,17 +1611,7 @@ class Queue:
                             del active[port]
                         job = self.claim(port)
                         if job is not None:
-                            command = [str(PYTHON),'-B',str(ROOT/'tools/board.py'),'run',job['image'],'--port',port,
-                                       '--evidence',str(Path(job['directory'])/'run'),
-                                       '--process-record',str(Path(job['directory'])/'runner-process.json')]
-                            for name,value in job['options'].items():
-                                flag = '--'+name.replace('_','-')
-                                if isinstance(value,bool):
-                                    if value: command.append(flag)
-                                elif isinstance(value,list):
-                                    for item in value: command += [flag,str(item)]
-                                elif value is not None:
-                                    command += [flag,str(value)]
+                            command = self.runner_command(job,port)
                             log = (Path(job['directory'])/'runner.log').open('a')
                             process = subprocess.Popen(command,stdout=log,stderr=subprocess.STDOUT)
                             with self.locked() as state:
@@ -1573,6 +1658,9 @@ def run_options(parser, submit=False):
     parser.add_argument('--template', type=Path, help='Typed-session bundle, or legacy bundle with board/ and assets/.')
     parser.add_argument('--host-tree', type=Path, help='Host source tree for image geometry, session preparation and return validation.')
     parser.add_argument('--input', action='append', type=Path, default=[])
+    parser.add_argument('--wifi', metavar='NAME', help='Deliver the Wi-Fi credential NAME (created by tools/wifi-credential.py) to the board as a separate input. '
+                        'The job records the name and the credential fingerprint; the daemon reads the file at launch.')
+    parser.add_argument('--wifi-fingerprint', help=argparse.SUPPRESS)
     parser.add_argument('--fel', type=Path, default=state.FEL)
     parser.add_argument('--rail-helper', type=Path, default=state.RAIL_HELPER)
     parser.add_argument('--ddr-build', type=Path, default=CACHE/'build/a733-ddr')

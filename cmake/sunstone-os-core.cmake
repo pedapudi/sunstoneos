@@ -227,7 +227,7 @@ set(os_generated "${os_build}/boot.c")
 if(SUNSTONE_A733_OS_RADIO)
   # The board's own radio composition serves workload 1; its owner and client
   # report resident progress through the patched main.c.
-  list(APPEND os_added apps/os/radio.c)
+  list(APPEND os_added apps/os/radio.c apps/os/wifi_credential.c)
   apply_build_patch("${os_build}/main.c" "${os_root}/apps/board/main.c" "${os_root}/apps/os/main.patch")
   list(REMOVE_ITEM os_sources "${os_root}/apps/board/main.c")
   list(APPEND os_sources "${os_build}/main.c")

@@ -5,6 +5,7 @@
 #include "session.h"
 #include "sunstone_crumb.h"
 #include "stop_note.h"
+#include "sunstone_wifi_credential.h"
 #include "../os/cpu-return-el0.h"
 #include "cached.h"
 #include "a733_memory_uncached.h"
@@ -58,7 +59,11 @@ __attribute__((noinline)) void board_fail_note(uint32_t site,uint32_t value,cons
 #endif
 }
 __attribute__((noinline)) void board_fail(void *context)
-{board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD)|SUNSTONE_CRUMB_FAIL_RETURN,(uint32_t)(uintptr_t)context,
+{
+#ifdef SUNSTONE_A733_OS_RADIO
+    os_wifi_credential_wipe();   /* a fault ends the session: the Wi-Fi credential leaves RAM first (EL1 only) */
+#endif
+ board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD)|SUNSTONE_CRUMB_FAIL_RETURN,(uint32_t)(uintptr_t)context,
     __builtin_return_address(0));fail_close();}
 /* Every failure still passes through board_fail, after its own record. */
 __attribute__((noinline)) void board_fail_at(uint32_t site,uint32_t value,const void *caller)

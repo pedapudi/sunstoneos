@@ -10,6 +10,7 @@
 #include "a733_storage_digest.h"
 #include "sunstone_crumb.h"
 #include "sunstone_deadline.h"
+#include "sunstone_wifi_credential.h"
 #ifdef SUNSTONE_A733_OS_GPU
 #include "gpu-share.h"
 #include "pvr_compute_queue.h"
@@ -494,6 +495,10 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
         if(grant.finish_by_us&&grant.finish_by_us-OS_NPU_RETIREMENT_MARGIN_TICKS/24<giveup)giveup=grant.finish_by_us-OS_NPU_RETIREMENT_MARGIN_TICKS/24;
         if(application_wait_until_unless(giveup,npu_retired)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
     }
+#endif
+#ifdef SUNSTONE_A733_OS_RADIO
+    /* The session is over: the Wi-Fi credential record leaves RAM before the result is published. */
+    os_wifi_credential_wipe();
 #endif
     struct ss_result *r=(void *)ss_result_record;
     r->magic=SS_RESULT_MAGIC;r->version=SS_RESULT_VERSION;r->bytes=sizeof(*r)+ss_result_capacity;
