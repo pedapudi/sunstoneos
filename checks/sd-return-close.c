@@ -96,7 +96,7 @@ static int run_lifetime(unsigned start18,int cut,unsigned variant)
                m.platform.core.card.uhs_outcome==SUNXI_MMC_UHS_NO_WINDOW&&m.platform.core.card.reentered==start18&&u.cmd19&&pf_writes==1&&m.platform.signal==2);
     }else if(sdr104){
         /* SDR104 after the CMD19 sweep (150 MHz, or 100 MHz without the 300 MHz branch): the window of the card model is delays 20 to 43, midpoint 32. */
-        assert(m.platform.core.card.signal_1v8&&m.platform.core.card.timing==3&&m.platform.core.card.card_hz==(variant==1?150000000u:100000000u)&&
+        assert(m.platform.core.card.signal_1v8&&m.platform.core.card.timing==3&&m.platform.core.card.card_hz==(variant==2?100000000u:150000000u)&&
                m.platform.core.card.uhs_outcome==SUNXI_MMC_UHS_SDR104&&m.platform.core.card.sample_delay==32&&
                m.platform.core.card.reentered==start18&&u.cmd11==(start18?0u:1u)&&pf_writes==1&&m.platform.signal==2&&u.cmd19&&u.cmd6_uhs==2);       /* CMD6 SDR104 check, then set */
     }else
@@ -108,6 +108,19 @@ static int run_lifetime(unsigned start18,int cut,unsigned variant)
     r=A733_MMC_PENDING;
     for(unsigned i=0;i<400&&r!=A733_MMC_COMPLETE;++i){TICK();r=uhs_step();assert(r!=A733_MMC_RETAINED);}
     assert(r==A733_MMC_COMPLETE&&a733_mmc_platform_take(&m.platform,&result,9000000)==A733_MMC_READY&&result.received==4096);
+    if(variant==4){
+        /* A restart of the identification (what the recovery policy does after a failed read), with every register write offered to the real adapter filter:
+         * the card is re-entered at 1.8 V with no CMD11 and no new PF write, tuned again, and read again. */
+        assert(a733_mmc_platform_restart(&m.platform,9000000,3,SUNXI_MMC_MODE_RETUNE)==A733_MMC_PENDING);
+        r=A733_MMC_PENDING;
+        for(unsigned i=0;i<40000&&r!=A733_MMC_READY;++i){TICK();r=uhs_step();assert(r==A733_MMC_PENDING||r==A733_MMC_READY);}
+        assert(r==A733_MMC_READY&&m.platform.core.card.timing==3&&m.platform.core.card.reentered&&u.cmd11==(start18?0u:1u)&&pf_writes==1&&m.platform.signal==2&&
+               u.cmd6_uhs==4&&m.platform.core.card.mode_steps==1&&m.platform.core.card.sample_delay==32);
+        assert(a733_mmc_platform_read(&m.platform,8,8,buffer,sizeof(buffer),9000000)==A733_MMC_PENDING);
+        r=A733_MMC_PENDING;
+        for(unsigned i=0;i<400&&r!=A733_MMC_COMPLETE;++i){TICK();r=uhs_step();assert(r!=A733_MMC_RETAINED);}
+        assert(r==A733_MMC_COMPLETE&&a733_mmc_platform_take(&m.platform,&result,9000000)==A733_MMC_READY&&result.received==4096);
+    }
     closing=1;
     for(unsigned i=0;i<40&&r!=A733_MMC_CLOSED;++i){TICK();r=close_step();
         if(r!=A733_MMC_PENDING&&r!=A733_MMC_CLOSED&&getenv("PF_RESTORE"))fprintf(stderr,"close retained: stage %u fault line %u why %u signal %u\n",m.platform.stage,m.platform.fault_line,m.platform.fault_why,m.platform.signal);
@@ -134,7 +147,7 @@ int main(int argc,char **argv)
     assert(argc==1||(argc==2&&(!strcmp(argv[1],"--failures-only")||!strcmp(argv[1],"--admission")||!strcmp(argv[1],"--lifetimes"))));
     if(argc==2&&!strcmp(argv[1],"--lifetimes")){
         unsigned cuts=0;
-        for(unsigned variant=0;variant<4;++variant)for(unsigned start18=0;start18<2;++start18){
+        for(unsigned variant=0;variant<5;++variant)for(unsigned start18=0;start18<2;++start18){
             unsigned sdr104=variant!=0;
             int total=run_lifetime(start18,-1,variant);assert(total>0);
             /* every poll for SDR25; for SDR104 every poll except inside the 520-command sweep, where every 9th */

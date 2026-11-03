@@ -164,3 +164,10 @@ first board run of the SDR50 mode and of the corrected data drive phase (90 degr
 | Risk | the restart is new on hardware. About one chance in three that it fails the first time. A stop reads: reason 17 (the platform refused the restart), or reason 6 or 7 with a core protocol in the identification steps (the cold setup after the restart did not accept the controller), or no stop word and a watchdog reset (a wait in the restart that never ended: reset bits, clock update or module change) |
 
 A clear difference between phase 0 and phase 1 at the same ceiling would mean that the restart leaves the controller in a different state from a cold start. SDR50 slower than SDR25 would point at its phases or its sample delay.
+
+### First submission of the restart probe (entry `1793666413836584828-d698c21f`): stopped at the first restart
+
+Stop word `0x48873f00`, site 17: the platform faulted at the register write of `core_write` (source line 290 of `a733_mmc_platform.c`, which refuses a write when the core guard, the IDMAC value rule, the chain walk or the adapter denies it) while identifying
+again after the restart before phase 1, in platform stage IDENTIFY; the card was at 1.8 V and reported group 1 support `0x1f`. The word did not say which register. The host checks that exercise the restart (the platform model, and the lifetimes model with every write
+offered to the real adapter filter) pass, and the IDMAC value rule accepts every write of the restart for a configuration with and without a descriptor area; what differs on the board is that this probe configures descriptor DMA, which the host models of the restart do not.
+The next submission is the same run with the stop word extended for site 17: the first register the adapter refused, the core's setup step and its restart step, so a second stop names the access (apps/sd-backup-probe/input.py, `stop` with site 17).

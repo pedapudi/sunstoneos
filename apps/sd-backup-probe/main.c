@@ -660,6 +660,11 @@ static void sd_task(void *unused)
         stop_word = (uint64_t)((line << 22) | ((s.platform.fault_why & 3u) << 20) | ((s.platform.stage & 31u) << 15) |
             ((s.card_valid && (s.card.ocr >> 24 & 1) ? 1u : 0u) << 14) | ((s.card_valid ? (s.card.switch_status[13] & 31u) : 0u) << 9) |
             ((s.card_valid && s.card.signal_1v8 ? 1u : 0u) << 8) | (crc8 & 255u));
+        /* A restart that stopped (reason 17) has no read CRCs to fold: the low byte names the first register the adapter refused (SMHC offset / 4 + 1,
+         * 0xff for another address, 0 none), so the stop says which access the restart was denied; bits 10:8 are the core's setup step, 13:11 its restart step, bit 13 whether the core faulted. */
+        if (s.reason == 17)
+            stop_word = (stop_word & ~(uint64_t)0x3fffu) | (s.platform.refused & 255u) | ((uint64_t)(s.platform.core.setup & 7u) << 8) |
+                        ((uint64_t)(s.platform.core.restart & 7u) << 11) | ((uint64_t)(s.platform.core.state & 1u) << 13);
         /* A lifetime that failed before the card was identified (reason 3) has no results to carry; its stop word names the core's own state instead: the
          * fault line, why and stage as above, then the core's error (4 bits), its protocol step (6 bits) and half the CMD19 sample delay it had reached (5 bits). */
         if (s.reason == 3 || !s.card_valid)

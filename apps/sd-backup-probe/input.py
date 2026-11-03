@@ -44,6 +44,13 @@ def stop_fields_identification(w):
                                                     other_error=low >> 4 & 1))
 
 
+def stop_fields_restart(w):
+    """The stop word of a restart that failed (probe reason 17): fault line 10 bits, why 2, platform stage 5 (above 8 bits), then the first register the adapter
+    refused (SMHC offset / 4 + 1, 0xff another address, 0 none) in the low byte, the core's setup step in bits 10:8 and its restart step in bits 13:11."""
+    return dict(fault_line=w >> 22 & 1023, why=w >> 20 & 3, platform_stage=w >> 15 & 31, refused=w & 255, refused_offset=((w & 255) - 1) * 4 if 0 < (w & 255) < 0xff else None,
+                setup_step=w >> 8 & 7, restart_step=w >> 11 & 7)
+
+
 def stop_fields(w):
     """The stop word of a failed lifetime (esr of the fault record): fault line 10 bits, why 2, platform stage 5, S18A 1, support bits 5,
     card at 1.8 V 1, fold of the read CRCs 8."""
@@ -137,7 +144,7 @@ def main():
     k.add_argument('--esr', type=lambda x: int(x, 0), required=True)
     a = p.parse_args()
     if a.cmd == 'stop':
-        print(json.dumps(dict(reason=a.site, **(stop_fields_identification(a.esr) if a.site == 3 else stop_fields(a.esr))), indent=1)); return
+        print(json.dumps(dict(reason=a.site, **(stop_fields_identification(a.esr) if a.site == 3 else stop_fields_restart(a.esr) if a.site == 17 else stop_fields(a.esr))), indent=1)); return
     sectors = sorted({s for r in a.ranges for s in range(int(r.split(':')[0]), int(r.split(':')[0]) + int(r.split(':')[1]))})
     if a.cmd == 'input':
         with a.output.open('xb') as f:
