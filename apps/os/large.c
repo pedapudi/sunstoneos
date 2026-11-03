@@ -3,6 +3,8 @@
  * "sunstone_large_regions"; the usable upper memory comes from the board: the ranges that the DRAM
  * decode check passed. */
 #include "app_large.h"
+#include "../board/application.h"
+#include "sunstone_crumb.h"
 #include "application.h"
 #include "sunstone_app.h"
 #include "os_space.h"
@@ -83,6 +85,13 @@ unsigned os_large_count(void) { return slot_count; }
 const struct large_slot *os_large_slot(unsigned index) { return index < slot_count ? &slots[index] : 0; }
 const struct app_space *os_large_space(void) { return admitted ? &space : 0; }
 
+/* A refusal leaves the reason in the failure record (the value is 0x2000 + the number of the refusing step). */
+int os_large_prepare(void);
+static int large_failed(unsigned step)
+{
+    board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD), 0x2000u + step, (const void *)os_large_prepare);
+    return 0;
+}
 int os_large_prepare(void)
 {
     unsigned count = __start_sunstone_large_regions ? (unsigned)(__stop_sunstone_large_regions - __start_sunstone_large_regions) : 0;
@@ -91,7 +100,7 @@ int os_large_prepare(void)
     unsigned placed = 0;
     for (unsigned i = 0; manifest && i < manifest->region_count; ++i)
         placed += manifest->regions[i].address >= APP_REGION_FLOOR;
-    if (admitted) return 0;
+    if (admitted) return large_failed(1);
     uint64_t ttbr;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));
     /* The table's pages may be unmapped at EL1, so its entries come from the platform's copy (os_space.h). */
@@ -107,21 +116,21 @@ int os_large_prepare(void)
     app_asid_pool_init(&asids, mmfr0, tcr);
     owner_asid = app_asid_alloc(&asids);
     if (!owner_asid || !ranges || count > os_large_capacity ||
-        app_region_ledger_init(&ledger, usable_storage, APP_REGION_SLOTS, os_large_entry_storage, os_ledger_capacity, usable, ranges)) return 0;
+        app_region_ledger_init(&ledger, usable_storage, APP_REGION_SLOTS, os_large_entry_storage, os_ledger_capacity, usable, ranges)) return large_failed(2 + (!owner_asid ? 0 : !ranges ? 1 : 2));
 #ifdef OS_NPU_POOL_BASE
     /* The NPU pool of an image that places it in the slot 1 area: held for the kernel before any application region, so
      * that a manifest region, the heap or the stack cannot take it, and no application space maps it. */
     if (app_region_acquire_at(&ledger, APP_REGION_KERNEL_OWNER, OS_NPU_POOL_BASE, OS_NPU_POOL_BYTES,
-                              APP_REGION_READ | APP_REGION_WRITE)) return 0;
+                              APP_REGION_READ | APP_REGION_WRITE)) return large_failed(5);
     kernel_base = OS_NPU_POOL_BASE; kernel_bytes = OS_NPU_POOL_BYTES;
 #endif
     for (unsigned i = 0; manifest && i < manifest->region_count; ++i) {
         const struct ss_region *r = &manifest->regions[i];
         if (r->address < APP_REGION_FLOOR) continue;
         if (app_region_acquire_at(&ledger, owner_asid, r->address, r->bytes,
-                                  APP_REGION_READ | (r->access & SS_ACCESS_WRITE ? APP_REGION_WRITE : 0))) return 0;
+                                  APP_REGION_READ | (r->access & SS_ACCESS_WRITE ? APP_REGION_WRITE : 0))) return large_failed(6);
     }
-    if (large_admit(&ledger, owner_asid, __start_sunstone_large_regions, count, slots, os_large_capacity)) return 0;
+    if (large_admit(&ledger, owner_asid, __start_sunstone_large_regions, count, slots, os_large_capacity)) return large_failed(7);
     /* The main stack: a 2 MiB block that the guard owner holds below it, so that an overflow is an EL0 fault in memory
      * no space maps. The stack is at the bottom of its own block. Where no extent is free the static stack stays. */
     if (manifest) {
@@ -147,7 +156,7 @@ int os_large_prepare(void)
     if (!built) {
         for (unsigned i = 0; i < count; ++i) if (slots[i].bytes) app_region_release(&ledger, owner_asid, slots[i].base);
         memset(slots, 0, sizeof *slots * count);
-        return 0;
+        return large_failed(8);
     }
     clean_tables(arena_pages, sizeof arena_pages);
     slot_count = count;
