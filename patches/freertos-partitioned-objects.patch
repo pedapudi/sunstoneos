@@ -18,7 +18,7 @@
           * identity of the mutex holder, as the holder may change between the
           * following critical section exiting and the function returning. */
 -        taskENTER_CRITICAL();
-+        ssKernelObjectEnterOn( pxSemaphore );
++        ssKernelObjectSectionEnter( pxSemaphore );
          {
              if( pxSemaphore->uxQueueType == queueQUEUE_IS_MUTEX )
              {
@@ -27,7 +27,7 @@
      configASSERT( xQueue );
  
 -    portBASE_TYPE_ENTER_CRITICAL();
-+    ssKernelObjectEnterOn( xQueue );
++    ssKernelObjectSectionEnter( xQueue );
      {
          uxReturn = ( ( Queue_t * ) xQueue )->uxMessagesWaiting;
      }

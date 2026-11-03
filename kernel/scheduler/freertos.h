@@ -28,6 +28,14 @@ void ssKernelOwnerYieldTail(void);
 #undef taskEXIT_CRITICAL
 #undef taskENTER_CRITICAL_FROM_ISR
 #undef taskEXIT_CRITICAL_FROM_ISR
+/* A section opened by name, where the source cannot use the translated macro: it follows the same locking mode. */
+#if defined(SS_FREERTOS_OBJECT_GLOBAL)
+#define ssKernelObjectSectionEnter(object) ssKernelObjectEnter()
+#elif defined(SS_OBJECT_LOCKS_GLOBAL)
+#define ssKernelObjectSectionEnter(object) ssKernelObjectEnterOnGlobal((const void *)(object))
+#else
+#define ssKernelObjectSectionEnter(object) ssKernelObjectEnterOn((const void *)(object))
+#endif
 #ifdef SS_FREERTOS_OBJECT_GLOBAL
 /* The timer source keeps the global locks: its sections enclose queue creation and queue sections, so they sit
  * outside the object locks in the lock order. */
