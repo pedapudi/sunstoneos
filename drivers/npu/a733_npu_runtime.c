@@ -418,6 +418,7 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     rt->command_bytes = z.command; rt->constant_bytes = z.constant; rt->read_bytes = z.read; rt->write_bytes = z.write;
     rt->staging_bytes = z.staging; rt->staging = v.cpu + p.staging;
     rt->parent_cpu = v.cpu; rt->parent_bytes = v.bytes;
+    rt->placed_bytes = p.bytes;
     if (!npu_service_tables(&rt->service, v.slots, v.slots + 1, rt->service_tables,
                             npu_service_tables_bytes(v.slots, v.slots + 1))) return fault(rt);
     struct a733_npu_buffer *const all = rt->buffers;
@@ -1322,4 +1323,11 @@ int npu_runtime_tensor(const struct npu_runtime *rt, unsigned slot, enum nbg_sec
         private_overlap(rt, (uintptr_t)out, sizeof(*out))) return 0;
     *out = s->tensors[(section == NBG_INPUT ? 0 : s->layout.inputs) + index];
     return 1;
+}
+
+size_t npu_runtime_trim_parent(struct npu_runtime *rt)
+{
+    if (!rt || !rt->prepared || !rt->placed_bytes || rt->placed_bytes > rt->parent_bytes) return 0;
+    rt->parent_bytes = rt->placed_bytes;
+    return rt->parent_bytes;
 }

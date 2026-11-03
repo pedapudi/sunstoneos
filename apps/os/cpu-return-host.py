@@ -47,17 +47,23 @@ OUTPUT = 'recorded-output'
 
 
 
-# The NPU pool (docs/designs/npu-resources.md, "The pool"). Either the extent every image has had so far, 8 MiB at
-# 0x47400000, or a pool sized from the session's declaration: a multiple of 2 MiB between 10 and 48 MiB that ends at
-# 0x47000000, the bottom of the monitor interval. Both lie in the write-back RAM that EL0 reaches (0x40000000 to
-# 0x48000000), above the application regions' lowest address 0x44000000, and clear of the image RAM below 0x42200000.
-NPU_POOL_LEGACY = tuple(LAYOUT['npu_pool']['legacy'])
-NPU_POOL_TOP, NPU_POOL_MIN, NPU_POOL_MAX, NPU_POOL_BLOCK = (LAYOUT['npu_pool'][k] for k in ('top', 'min', 'max', 'block'))
+def device_ranges_geometry(symbols, cached_writable):
+    """The word of image RAM that heads the list of published device ranges (apps/os/device-ranges.h), or None for a probe.
 
+    An OS image owns the unified memory ledger (its admission, os_large_prepare, is linked) and its terminal cleans the
+    published ranges, so it must carry the head: an OS image without it would return without cleaning any range, and is
+    refused. A returning probe has no ledger and no published range, and is the only kind that may omit it."""
+    is_os_image = 'os_large_prepare' in symbols
+    if 'os_device_ranges_head' not in symbols:
+        require(not is_os_image, 'OS image without the device range list head: the return would clean no published range.')
+        return None
+    require(is_os_image, 'Device range list head in an image without the OS ledger.')
+    address, size = symbols['os_device_ranges_head']
+    begin, end = cached_writable
+    require(size == 8 and address % 8 == 0 and begin <= address < address + size <= end,
+            'Device range list head outside preserved image RAM.')
+    return {'address': address, 'bytes': size}
 
-def npu_pool_extent_valid(low, high):
-    """True for the legacy extent and for a sized one."""
-    return memory_layout.npu_pool_valid(low, high)
 
 def linked_symbols(image):
     """Defined global symbols of the image: name -> (address, bytes)."""
@@ -123,25 +129,18 @@ def geometry(image):
                 symbols['__bss_start'][0] <= address < address + size <= symbols['__bss_end'][0],
                 'Radio result descriptor differs from writable image BSS.')
         result['radio_result'] = {'address': address, 'bytes': size}
-    pool_names = ('__os_npu_pool_start', '__os_npu_pool_end')
-    present = [name in symbols for name in pool_names]
-    require(present[0] == present[1], 'Partial NPU pool geometry.')
-    if all(present):
-        low, high = [symbols[name][0] for name in pool_names]
-        require(npu_pool_extent_valid(low, high), 'NPU pool extent differs.')
-        manifest = host.image_manifest(image)['manifest']
-        for region in manifest['regions'] if manifest else []:
-            a, n = region['address'], region['bytes']
-            require(a + n <= low or a >= high, 'Application region overlaps the NPU pool.')
-        require('os_npu_published_report' in symbols, 'NPU stop producer absent.')
+    # The OS publishes the DRAM ranges that a device reads or writes when it allocates them (apps/os/device-ranges.h); the EL3
+    # terminal cleans them from the list whose head is this word of image RAM. Nothing about them is known at link time, and
+    # the runner neither backs them up nor restores them: their contents are scratch, as a manifest region marked scratch is.
+    begin, end = result['cached_writable']
+    ranges = device_ranges_geometry(symbols, result['cached_writable'])
+    if ranges:
+        result['device_ranges_head'] = ranges
+    if 'os_npu_published_report' in symbols:
         address, size = symbols['os_npu_published_report']
-        begin, end = result['cached_writable']
         require(size == npu_capture.REPORT_BYTES and begin <= address < address + size <= end,
                 'NPU stop report outside preserved image RAM.')
-        result['npu_pool'] = {'address': low, 'bytes': high-low}
         result['npu_stop'] = {'address': address, 'bytes': size}
-    else:
-        require('os_npu_published_report' not in symbols, 'NPU stop producer without owned pool.')
     thermal_producers = [name in symbols for name in ('os_thermal_record_begin', 'os_thermal_record_end')]
     require(thermal_producers[0] == thermal_producers[1], 'Partial thermal producer presence.')
     if all(thermal_producers):
@@ -260,10 +259,6 @@ def run_once(tx, launch, ready, bundle, p, evidence, record, journal, *, extents
     # SRAM; only these copied DRAM bytes may be restored after native return.
     if extents is None:
         extents = [(r['address'], r['bytes']) for r in q['application_regions']]
-    if 'npu_pool' in q:
-        pool = q['npu_pool']
-        require(npu_pool_extent_valid(pool['address'], pool['address'] + pool['bytes']), 'NPU backup extent differs.')
-        extents = [*extents, (pool['address'], pool['bytes'])]
     extents = [IMAGE_RAM, *extents] + [(item['address'], item['bytes']) for item in p['_inputs']]
     backups = []
     record.update(dirty=True, dram_restored=False, cpu_rail_restoration_pending=True)

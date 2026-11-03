@@ -52,14 +52,13 @@ def main():
            'output_address':0x41200000, 'output_bytes':64,
            'monitor':[0x42000000,0x42010000], 'cached_writable':[0x41200000,0x41201000],
            'application_regions':[{'address':0x45000000,'bytes':4096}],
-           'npu_pool':{'address':0x47400000,'bytes':0x800000},
            'npu_stop':{'address':0x41200100,'bytes':104}, 'thermal':{}}
     has_npu = not args.legacy_host
     if has_npu:
         assert callable(getattr(records,'mandatory_return',None)), 'Mandatory native return validator is missing.'
         assert callable(getattr(records,'decode_npu_stop',None)), 'Mandatory native NPU stop validator is missing.'
     if not has_npu:
-        geo.pop('npu_pool'); geo.pop('npu_stop')
+        geo.pop('npu_stop')
     stop = struct.pack('<4I2Q10I', 0x5255504e, 1, 104, 1, epoch, generation,
                        0, 0, 0, 0, 0, 0, 1, 0, 0, 0xc35a3ca5) + bytes(32)
     # apps/os/npu.h OS_NPU_REPORT_NOT_STARTED: the failure return before the NPU service ran.

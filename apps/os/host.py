@@ -107,32 +107,18 @@ def upgrade_services(extents, declaration):
     return services
 
 
-NPU_POOL_OFFSET = 64  # pool_start, pool_bytes: two u64 after the owner words and the four u32 (apps/os/npu-session.h)
+NPU_RETIRED_POOL_OFFSET = 64  # two u64 after the owner words and the four u32 (apps/os/npu-session.h): zero, the OS takes its NPU pool from the ledger
 
 
-def npu_pool_symbols(image):
-    """(start, end) of the NPU pool that the image links, or None for an image without one."""
-    elf = ELFFile(io.BytesIO(Path(image).read_bytes() if isinstance(image, (str, Path)) else bytes(image)))
-    table = elf.get_section_by_name('.symtab')
-    found = {s.name: s['st_value'] for s in table.iter_symbols() if s.name in ('__os_npu_pool_start', '__os_npu_pool_end')}
-    require(len(found) in (0, 2), 'Partial NPU pool geometry.')
-    return (found['__os_npu_pool_start'], found['__os_npu_pool_end']) if found else None
-
-
-def bind_npu_pool(image, services):
-    """The services with the NPU record's pool_start and pool_bytes set from the pool the image links.
-
-    The session names the pool and the image refuses a session that differs (apps/os/admission.c), so the two are made
-    from one source: the linker symbols. An image without an NPU pool, or a session without an NPU record, is unchanged."""
-    pool = npu_pool_symbols(image)
-    if pool is None or NPU not in services:
+def retire_npu_pool(services):
+    """The services with the NPU record's retired pool words zeroed. A session made from an earlier template names a pool
+    there; the image refuses any nonzero value (apps/os/admission.c), because it chooses the pool when it admits the
+    application (docs/designs/unified-memory.md). A session without an NPU record is unchanged."""
+    if NPU not in services:
         return services
-    start, end = pool
-    require(memory_layout.npu_pool_valid(start, end) and not (start | end) & 0x1fffff,
-            'The NPU pool must be whole 2 MiB blocks: the legacy pool, one ending at 0x47000000, or one in the slot 1 area.')
     services = dict(services)
     npu = bytearray(services[NPU])
-    struct.pack_into('<QQ', npu, NPU_POOL_OFFSET, start, end - start)
+    struct.pack_into('<QQ', npu, NPU_RETIRED_POOL_OFFSET, 0, 0)
     services[NPU] = bytes(npu)
     return services
 

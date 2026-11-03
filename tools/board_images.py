@@ -291,8 +291,7 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
         if kind=='npu':
             require('os_npu_client_model' in names, 'NPU kind requires the linked OS NPU service.')
         if generic and 'os_npu_client_model' in names:
-            require('npu_pool' in geometry and 'npu_stop' in geometry,
-                    'NPU image requires its linked pool and mandatory stop receipt.')
+            require('npu_stop' in geometry, 'NPU image requires its mandatory stop receipt.')
     else:
         require(descriptor.get('purpose')=='watchdog-reset-diagnostic','Raw probes admit only the intentional watchdog-reset diagnostic; use the native ELF contract.')
         require(descriptor.get('schema') == 'sunstone-board-probe-v1', 'Probe requires a hash-bound .board.json descriptor.')
@@ -599,8 +598,6 @@ def preservation_regions(plan):
     extents += [(r['address'], r['bytes']) for r in plan['input_regions']]
     if plan.get('credential'):
         extents.append((plan['credential']['address'], plan['credential']['bytes']))
-    if 'npu_pool' in geo:
-        extents.append((geo['npu_pool']['address'], geo['npu_pool']['bytes']))
     merged = []
     for address, size in sorted(extents):
         require(type(address) is int and type(size) is int and size > 0 and
@@ -748,7 +745,7 @@ def capture(owner, plan, args):
         decoded = records.mandatory_return(copied, geo, plan['epoch'], plan['generation'],
                                            failure_return=bool(owner.record.get('failure_return')))
     else:
-        require('npu_pool' not in geo and 'npu_stop' not in geo, 'NPU retirement parser is missing.')
+        require('npu_stop' not in geo, 'NPU retirement parser is missing.')
         decoded = records.decode_return_report(copied['return-report'], plan['epoch'])
     owner.record['native_retirement_validated'] = True
     owner.journal()
