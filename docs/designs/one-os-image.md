@@ -1,6 +1,6 @@
 # Design: one OS image, with services chosen at run time
 
-Status: **proposed**. Nothing in this document is implemented. The sizes were measured on existing single-option builds; the all-in size is an estimate until the first implementation commit links it (see "Size").
+Status: the foundation (granted set, session records, fixed service ids, refusal table, ungranted-service checks) is **implemented and host checked**. The service, CPU, NPU and lifetime series are **proposed**. The sizes in "Size" are measured on the all-in link.
 
 Readers are assumed to know [os-image.md](../os-image.md), [app-abi.md](app-abi.md) (manifest, session extents, device bitmap) and [application-memory-layout.md](application-memory-layout.md).
 
@@ -25,9 +25,9 @@ EL3 admission computes the **granted set** once: a service is granted when the m
 The compile flag guaranteed that an unqualified driver contained no code that could run. The run-time form has to guarantee that no register of an ungranted service is accessed, even though its code is in the image. Four layers provide that:
 
 1. **Start entries return first.** Every service start entry (`os_radio_start`, `os_audio_*`, `os_headset_start`, `os_npu_start`, `os_cpu_clock_step`, the perf owner) begins with `os_granted(SERVICE)` and returns success without creating a task, unmasking an interrupt or reading a register when the service is not granted. The test is a read of the sealed set; it costs one load at start and nothing afterwards.
-2. **Task and route tables carry a granted flag.** The generated tables list every service. The start list creates tasks only for granted rows. The interrupt route table is applied only for granted rows, so an ungranted INTID (97 NPU, 143 I2S and DMA0, 95 GPU) stays masked. INTID 143 is shared by I2S and DMA0; the admission rules below grant at most one of them.
+2. **Task creation and interrupt enabling follow the grant.** The generated tables list every service. The interrupt route table (`a733_irq_routes`) only sets the group, priority and target core of an INTID in the GIC distributor; the enable of the INTID is in the granted service's own start entry, so an ungranted INTID (97 NPU, 143 I2S and DMA0, 95 GPU) is routed but never enabled. INTID 143 is shared by I2S and DMA0; the refusal table below grants at most one of them.
 3. **Approvals stay in the session.** Writes that need a coordinator approval stay behind the record that already authenticates them: the CPU grant record (`a733_cpu_clock_grant_load`: board epoch and generation, change count, approval hash binding the image, board, session and step), the radio profile digest and first-run BLDO5 guard, the NPU `command_admission` and thermal ALLOW. A service with no valid extent cannot be granted, so a session without a CPU grant cannot write DCDC3, DCDC5 or a CPU PLL, and a session without a radio profile cannot power the module. The record check moves nowhere: it still runs at EL3 admission (`os_session_valid`), now keyed by the granted set instead of by `#ifdef`.
-4. **A host check proves it.** `checks/` gets a check that runs the OS on the host model with a trap on every MMIO range of each service. For each service it admits a session that does not grant it and asserts zero accesses to that service's ranges and zero PMIC writes. The compile flag could not be tested this way; the run-time gate can, and must be.
+4. **Host checks prove it.** For each service a check runs the real start entries against a session that does not grant it, and every call into the service stops the program (an unresolved-call trap in `checks/os-npu-service.py` case 32, a counted wrapper of the stream open in `checks/os-image-audio.py`, an unreadable profile and zero authorized pins in `checks/os-image-radio.py`). A mutation of the NPU guard fails case 32. The compile flag could not be tested this way; the run-time gate is.
 
 One gap is closed by this work. Today the A76 cores are released by the cached SMP boot loop for every image (`platform/a733-smp-cached/boot.c`), so "A76 admitted" is a placement permission, not a power-on. The run-time form keeps that: the permission is the board description plus the manifest's `cluster`, and a manifest that asks for the A76 cluster on a board or session that does not allow it is refused at admission. (Today it is silently placed on core 2.)
 
@@ -51,13 +51,13 @@ Counts are tracked files that mention the option, including docs.
 - **Compiles in or out:** `SUNSTONE_BOARD_RESIDENT`: the contract magic (`A733_OS_RESIDENT_CONTRACT_MAGIC` against the supervised one) and the board timing validator in `apps/board/admission.c` (resident: no deadline, expiry at armed time plus 4 s, watchdog fields set; supervised: 60 s, zero watchdog fields); the `supervise()` renewal task and `apps/os/watchdog.c`; the manifest lifetime and return-reserve checks (`session.c:161`) and `grant.finish_by_us` (`application.c:409`); the USB0 product id; the audio DMA established flag (0x3f against 0x5f); the NPU end-of-work cap; `radio_profile.c` timing (120 s and 130 s offsets against 60 s); extra held-policy steps in `platform/a733/cpu_start.c`; `boot-resident.patch` (drops one EL3 readback). The stage-2 loader builds only the resident contract.
 - **Why an option:** commit 5be126a5 says every board image ended at a fixed deadline and `SUNSTONE_BOARD_RESIDENT` admitted a contract with its own magic that arms the four-second watchdog. `os-image-history.md` keeps the supervised lifetime "for the first physical runs". It is risk containment, not a size or ISA reason.
 - **Run-time form:** the lifetime is already encoded in the contract the loader or host writes: the magic. EL3 admission accepts the set of magics, and selects the timing validator and the watchdog expectation from the verified magic before any readback. Application, session decode, NPU, audio and radio code read the admitted lifetime from a sealed field, not a macro. The choice never comes from session or application bytes: a wrong choice would leave a watchdog armed with no renewer.
-- **Stays a build option:** the stage-2 loader (a separate program, 32,608 bytes against a fixed limit). `boot-resident.patch` is the only EL3 boot difference and folds into a run-time branch on the magic.
+- **Stays a build option:** the stage-2 loader (a separate program, 32,608 bytes against a fixed limit). `boot-resident.patch` is the only EL3 boot difference and folds into a run-time branch on the magic. The lifetime series does not touch the EL3 stop handler.
 
 ### `SUNSTONE_A733_OS_CPU_RETURN` (lifetime, not among the 16 variants)
 
 - **Compiles in or out:** 12 patch files (about 800 lines) over 11 units, including the EL3 stop handler (WDT0 shortened to 0.5 s and restarted so the board returns to FEL), the vector and terminal code and the boot; `cpu-return*.c`, `cpu-return-el0.S`; the GPU park and retire path; the NPU retirement wait in `ss_finish`.
 - **Why an option:** commit 6976bc48 keeps other lifetimes unchanged while it is qualified.
-- **Run-time form:** a third contract magic, handled like resident. This is the largest and riskiest piece, so it is the last series. If its EL3 patches cannot become branches without changing the supervised and resident EL3 code paths, it stays a second OS image and the gate builds two. I will report that before building it rather than decide it silently.
+- **Run-time form:** a third contract magic, handled like resident. It is the last piece. If its EL3 patches cannot become branches without changing the EL3 stop handler or the supervised and resident EL3 stop paths, it stays a second OS image and the gate builds two, and the reason is recorded here.
 
 ### `SUNSTONE_A733_OS_AUDIO` (I2S capture)
 
@@ -77,7 +77,7 @@ Counts are tracked files that mention the option, including docs.
 
 - **Compiles in or out:** the Bluetooth stack, UART driver and headset capture client: +151,616 bytes `.text` and +940,928 bytes `.bss` over `sup`. The 832-byte Bluetooth profile at 0x43000000, or 0x43008000 with the radio. Services `bluetooth` and `headset`. MSBC adds libsbc, `msbc.c`, `playback.c` (about 147 KiB, 6 KiB `.bss`, measured on an older build) and capture mode 3.
 - **Why an option:** commit 5a5672c1 ("supervised only, because the Bluetooth application ends 60 seconds after it starts"); 61321c21 lifted the pairing with the radio by sharing one module owner. External pinned sources (`SUNSTONE_BT_SECURITY_DIR`, `SUNSTONE_BT_SBC_DIR`) were optional inputs.
-- **Run-time form:** granted when `SS_DEVICE_AUDIO_HEADSET` is declared and the profile at the fixed address hashes to the SID evidence in the board prefix. The profile address is 0x43008000 in every image, removing the radio dependence. Mode 3 is data in the profile. Both external source trees become required inputs of every build; libsbc is LGPL, which I will record in the third-party notices.
+- **Run-time form:** the one OS image has no headset code. A headset is not a current priority (the USB priorities are HID, UVC webcams and USB serial), and its sources (Zephyr Bluetooth security, libsbc) must not become inputs of every build. The Bluetooth stack, the headset client and MSBC form an object library linked by the application's manifest, like `sunstone-a733-os-sd`, into an image whose manifest requests the headset. The library's directory records the libsbc LGPL notice where it is built. Until that series, the headset stays a build option with its present rules (`headset_workload_valid` in `apps/os/headset.c` keeps the narrower workload rule that `os_workload_valid` no longer expresses).
 - **Real constraint:** the radio and the headset share one AIC8800 module owner. Run time picks the owner from the granted set; it is a hardware fact, not an option.
 
 ### `SUNSTONE_A733_OS_NPU`, `_NPU_QUEUE`, `_NPU_OBSERVE`
@@ -130,7 +130,8 @@ I propose retiring it: delete `npu_session.c`, `apps/npu-board`, `npu_admitted_m
 - **Why options:** `cpu-a76-dvfs.md`: "Both options are off by default. Without the second option no image writes a CPU clock register or a CPU rail voltage." `cpu-clock.md`: a grant must record the user's approval for that change. Commit af049839 for A76 placement; d3a44665 for the grant; 580e6e8b for performance modes (whose design records "loadable bytes equal to the base" for default images, a size argument that no longer holds under one image).
 - **Hardware first touched and protection:** the first rail and PLL writes happen in `a733_cpu_clock_request`, called from the thermal task. Protected today by the compile flag and by the grant record (magic, version, size, epoch and generation equal to the session's, 1 to 64 changes, cluster maxima in the table, nonzero approval hash). A grant with `clusters == 0` already means "inspect only", so the record check is partly run time.
 - **Run-time form:** granted when the manifest declares a `cpu` clock section, the session carries the CPU grant extent, and the board description lists the cluster. Without a grant the thermal task does the read-only inspection that `clusters == 0` gives today and nothing else. `PERF` is granted by the manifest's `perf` declaration with its boot mode (`high` or `low`), carried in the grant extent. The speed bin is read from the SID word 0x0300624c as today.
-- **Gap, found while reading:** `docs/designs/cpu-a76-dvfs.md` says the approval and B1 record tools are not implemented in `apps/os/prepare.py`, while `os-image-history.md` says preparation writes them. I found no `cpu_clock_approval` code in `apps/` or `tools/`. The gate for this family must not rely on an approval tool that may not exist; I will verify before the series starts.
+- **Defect to fix in this series:** a manifest that asks for the A76 cluster must be refused when the board description or the grant does not allow it; today `application.c` places it on core 2.
+- **Gap, found while reading:** `docs/designs/cpu-a76-dvfs.md` says the approval and B1 record tools are not implemented in `apps/os/prepare.py`, while `os-image-history.md` says preparation writes them. I found no `cpu_clock_approval` code in `apps/` or `tools/`. The series design says whether the approval record exists and, if not, what replaces it, and goes to the design panel (it changes how the DCDC3, DCDC5 and CPU PLL writes are granted) before any code.
 - **EL3 against EL1:** no code today checks the grant at EL3. `os_session_valid` runs there and calls `a733_cpu_clock_grant_load`, so the check happens at EL3 admission; the register writes happen at EL1. The design keeps that split.
 
 ## Mutual exclusions
@@ -164,15 +165,22 @@ Existing builds from the wifi-stages gate (`~/.cache/sunstoneos/build/gate-os-*-
 | npu | 742,788 | 5,000 | 1,866,944 |
 | cpu-clock | 651,076 | 2,680 | 1,793,920 |
 
-The union: I summed the largest size of each function and object symbol across the sup, radio-headset, resaud, npu, cpu-clock, npu-queue and perf-npu-low ELFs. That gives about 883 KB of function and read-only symbols (the symbol sum is 8 percent below the ELF text) and about 2.94 MB of `.bss`. Scaled, an image with all of these is about 0.96 MB of code and read-only data plus about 0.15 MB for MSBC, and about 3.1 MB of `.bss`. That is an estimate: the options exclude each other today, so a real all-in link does not exist. The first implementation commit links one and replaces this paragraph with the measured numbers.
+The all-in link (`all` in `VARIANTS`): audio, radio, NPU with the queue, A76 admission, CPU clock grants and performance modes in one supervised image, with no application. Measured with `aarch64-none-elf-size` and the linker symbols:
+
+| Image | text + rodata | data | bss | RAM end |
+| --- | --- | --- | --- | --- |
+| `sup` | 635,284 | 2,680 | 1,759,872 | 0x416af000 |
+| `all` | 867,100 | 7,944 | 2,038,912 | 0x416f4000 |
+| `headset` (separate, for comparison) | 788,476 | 2,680 | 2,700,800 | 0x41795000 |
+
+The symbol-union estimate in the first version of this document (0.96 MB) was high; the link is 0.87 MB.
 
 Fit:
 
-- **Code and read-only data:** the `CODE` region is 2 MiB, shared with the application. About 1.1 MB for the OS leaves about 0.9 MB. mimus and the in-tree applications must be measured against that before the series ends.
-- **Data, bss, heap, device pool:** `RAM` is 10 MiB (0x41200000 to 0x41c00000). `sup` ends at 0x416af000 (4.7 MiB). `resradio-headset` ends at 0x4178d000. Adding the audio, NPU and queue deltas to the headset image gives about 6.1 MiB. It fits with about 4 MiB to spare.
+- **Code and read-only data:** the `CODE` region is 2 MiB, shared with the application. The all-in OS takes 0.83 MiB and leaves 1.17 MiB. The headset library, when an image links it, adds about 0.15 MB (0.30 MB with MSBC).
+- **Data, bss, heap and device pool:** `RAM` is 10 MiB (0x41200000 to 0x41c00000). The all-in image ends at 0x416f4000, 5.0 MiB in. The headset adds 0.94 MB of `.bss`, which still ends below 0x41800000.
 - **Fixed regions untouched:** the NPU pool, the monitor interval and the uncached block keep their addresses. The pool is sized by the umem branch.
-- **If something does not fit,** the first candidates are the headset state (about 0.94 MB of `.bss`) and the audio ring, both of which the "no artificial caps" section already moves to allocation at the grant, and then object libraries linked by manifest like `sunstone-a733-os-sd`.
-- The gate builds, today, `sup` plus 15 others. One image removes 15 OS builds and the check duplication they cause.
+- **If something does not fit,** the first candidates are the headset state and the audio ring, both of which the "no artificial caps" section moves to allocation at the grant, and then object libraries linked by manifest like `sunstone-a733-os-sd`.
 
 ## Real-time cost
 
@@ -180,11 +188,11 @@ A disabled service costs one load at start and its code size. Nothing polls. Gra
 
 ## Implementation order
 
-One option family per commit series, each landable, each removing its variants from `VARIANTS`:
+One option family per commit series. Each series lands on its own, passes its checks and removes its variants from `VARIANTS` before the next is built on it:
 
-1. **Foundation.** The granted set, the extent decode by type, the fixed service-id enum, the admission refusal table, the host trap check. No option removed yet.
-2. **CPU family** (`A76_ADMITTED`, `CPU_CLOCK`, `PERF`): removes `cpu-clock`, `perf` and `perf-npu-low`.
-3. **Services** (`AUDIO`, `RADIO`, `HEADSET`, `MSBC`): removes `resaud`, `resradio`, `resradioaud`, `headset`, `resheadset`, `radio-headset`, `resradio-headset`.
+1. **Foundation (done).** The granted set (`struct os_session` holds every record and `granted`; the wire form carries a record only for a granted service and the thermal record's size follows the records present), the fixed service ids, the refusal table (`apps/os/grants.c`), the start-entry guards of the NPU, I2S and radio, the EL3 identity hook reading the radio profile and chip ID only for workload 1, the `all` variant and the ungranted-service checks. No option removed yet; the options now decide only which code is linked.
+2. **CPU family** (`A76_ADMITTED`, `CPU_CLOCK`, `PERF`): removes `cpu-clock`, `perf` and `perf-npu-low`. Its design goes to the three-reviewer panel before any code.
+3. **Services** (`AUDIO`, `RADIO`, `HEADSET`, `MSBC`): removes `resaud`, `resradio`, `resradioaud`, `headset`, `resheadset`, `radio-headset`, `resradio-headset`. The radio gets its device bit and extent, the I2S gate becomes a real admission check (device bit and record together, done in the foundation), and the headset and MSBC become the manifest-linked object library.
 4. **NPU** (`NPU`, `NPU_QUEUE`, `NPU_OBSERVE`, the catalogue): removes `npu` and `npu-queue`. Builds on the umem dynamic-pool branch.
 5. **Lifetime** (`RESIDENT`, then `CPU_RETURN`): removes `res` and, if it folds, the returning variants.
 
@@ -195,10 +203,10 @@ After the series the gate builds one OS image (`sup` becomes `os`). The images t
 - `ret-gpu`, `ret-latency`, `ret-npu-load`: returning application images. They are the one-OS image plus an application, not other OS builds, once series 5 is done. Until then they carry their option flags.
 - The probe and diagnostic images built by `cmake/a733-*.cmake` (standalone boot, memtest, SMP observe, hw-facts and similar) stay as probe programs under the [probe contract](../board-probe-contract.md), because each is a raw program with its own interrupt table and cannot share the OS's.
 
-Options outside the 16 variants (`GPU`, `DMA`, `USB_CLASSES`, `USB_JPEG`, `SD_WRITE`, `GPU_RECOVERY_TEST`) follow the same mechanism. They are not in this series; `GPU`, `DMA` and `USB_CLASSES` are compiled in returning images that the series leaves as they are.
+Options outside the 16 variants (`GPU`, `DMA`, `USB_CLASSES`, `USB_JPEG`, `SD_WRITE`, `GPU_RECOVERY_TEST`) follow the same mechanism and are the next series after these. `GPU`, `DMA` and `USB_CLASSES` are compiled in returning images that this series leaves as they are.
 
 ## Risks
 
 - The session layout change touches the EL3 admission code and the host tools that build sessions (`apps/os/host.py`, `tools/gate_session.py`, `tools/host_admission.py`). Every session format change has to be checked against the stage-2 loader's rules (656 to 4,096 bytes, no extent read).
-- Lifetime selection from the contract magic puts a branch in EL3 code that arms or leaves the watchdog. It needs the three-reviewer panel: it changes a storage-adjacent power and reset path.
+- Lifetime selection from the contract magic puts a branch in EL3 code that arms or leaves the watchdog. It does not change the EL3 stop handler.
 - Two other streams change files this work touches: `work/gate-streamline-1103` (`checks/gate-inputs.json`, `tools/land.py`) and `work/timing-checks-1103` (QEMU checks). I merge `bringup` before each series.
