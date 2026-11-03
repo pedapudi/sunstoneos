@@ -579,6 +579,35 @@ outside the spread of two runs of the control. Five runs on port 3-1 with the sa
   two controls says the same through the scheduler. A watchdog end or a failure record would mean the invalidation in the tick hook
   broke the harness (it runs in interrupt context at EL1), not that it is costly.
 
+**Result of the five runs (port 3-1, entries `1793671134053745086-10f06621` and `1793671142888118311-6d401880` for the control,
+`1793671155101547801-f4fdd008` for `TLBI VAE1IS`, `1793671164171009720-be7dc135` for `TLBI ASIDE1IS`,
+`1793671172712527319-915ef621` for `TLBI VMALLE1IS`).** All five returned normally. Every run took 199 ticks of the application
+and the same traffic sweeps within noise, so the invalidation changed no throughput that these counters show. (The host-side
+stage durations differ widely between the runs because of disk load, and the launch time of the runs of the three forms, 18.7 to
+31.0 s against 5.4 s, is a host-side figure from slow periods, not a property of the application.) In microseconds:
+
+| | issuing core, largest | busy A55 max | busy A76 max | idle A55 max | idle A76 max |
+| --- | --- | --- | --- | --- | --- |
+| control, first run | none | 172.7 | 36.0 | 20.0 | 6.3 |
+| control, second run | none | 159.0 | 32.8 | 21.4 | 7.4 |
+| `TLBI VAE1IS` | 9.79 | 160.5 | 34.8 | 20.1 | 7.5 |
+| `TLBI ASIDE1IS` | 8.62 | 154.2 | 37.3 | 20.4 | 6.6 |
+| `TLBI VMALLE1IS` | 6.83 | 158.7 | 30.5 | 20.5 | 7.1 |
+
+The wake half of the prediction held: no maximum of a form lies outside the range of the two controls plus 5 us. The issuing-time
+half did not: the page and ASID forms took 9.8 and 8.6 us against the predicted 5 us (the form that invalidates everything took
+6.8 us, under its 10 us); all stay under 10 us. The figure includes the wait of `DSB ISH` for every earlier access of the issuing
+core, issued from the tick interrupt while the other cores sweep memory, so it overstates what an idle receiver is held for.
+
+What the runs decide. The busy wake maxima of the control itself are 33 to 173 us, far above the design's 10 us worst case and 5 us
+at the 99.9th percentile, and two runs of the control differ by up to 14 us. A cost of a few microseconds cannot show in that
+spread, with 192 samples per core and the 1 kHz tick instead of the 10 kHz release the design assumed. What the data show is an
+upper bound on the stall a broadcast invalidation imposes: under the full memory load of the harness the issuing core waited at most
+9.8 us for every core to complete it, and no wake or sweep count moved outside the control's spread. That does not clear the
+broadcast form against the 5 us criterion of the design, so the design's order stands: the deferred reuse and the local form come
+first, and the broadcast form needs a measurement on the control path at 10 kHz (the interrupt latency histograms of the control
+interrupts in `runtime/control_irq.c`) before an application call uses it.
+
 ### Predicted board run of the heap
 
 Hypothesis: with the OS image built with the address-test decode check
