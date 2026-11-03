@@ -50,7 +50,7 @@ def main():
         ('__asm__ volatile("msr daifset, #2" ::: "memory");','atomic_signal_fence(memory_order_seq_cst);',1),
         ('__asm__ volatile("mrs %0, tpidr_el1" : "=r"(core));','core=0;',1),
         ('__asm__ volatile("msr daif, %0" :: "r"(flags) : "memory");','atomic_signal_fence(memory_order_seq_cst);',1),
-        ('__asm__ volatile("dsb sy" ::: "memory");','atomic_signal_fence(memory_order_seq_cst);',6)])
+        ('#define BARRIER() __asm__ volatile("dsb sy" ::: "memory")','#define BARRIER() atomic_signal_fence(memory_order_seq_cst)',1)])
     (out/'transformations.json').write_text(json.dumps(transforms,indent=2))
     compiler=shutil.which('clang-21') or shutil.which('clang');assert compiler
     kernel=a.sources/'FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2'
@@ -96,7 +96,7 @@ def main():
         records.append(dict(path=str(path),sha256=sha,snapshot=str(snapshot.relative_to(out))))
     (out/'inputs.json').write_text(json.dumps(records,indent=2))
     for name,sources in cases.items():
-        binary=out/name;run(flags+sources+['-Wl,--gc-sections','-o',binary],name+'-build.log')
+        binary=out/name;run(flags+sources+['-Wl,--gc-sections','-Wl,--defsym=__uncached_pool_start=0x41c00000','-Wl,--defsym=__uncached_pool_end=0x41e00000','-o',binary],name+'-build.log')
         print(run([binary],name+'-run.log').strip())
     for i,source in enumerate(native_sources):run(native+['-c',source,'-o',out/f'native-{i}.o'],f'native-{i}.log')
     assert all(hashlib.sha256(Path(r['path']).read_bytes()).hexdigest()==r['sha256'] for r in records)

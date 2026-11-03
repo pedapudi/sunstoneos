@@ -3,6 +3,8 @@
  * This does not execute the target bootstrap or qualify a maintenance lease. */
 #define PMIC_MODEL_NO_MAIN
 #include "a733-pmic.c"
+#include "../include/aarch64_device_memory.h"
+int aarch64_device_translate(uintptr_t a, int w, struct aarch64_translation *t) { (void)w; t->physical = a; t->attributes = 0xff; t->shareability = 3; return 1; }
 #include "../platform/a733-storage-update/bootstrap.c"
 #include "../platform/a733-storage-update/usb.c"
 #include "../platform/a733/native_usb.c"

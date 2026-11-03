@@ -269,7 +269,7 @@ def main():
         run('configure-production', ['cmake', '-S', str(ROOT / 'platform/a733-smp-cached-devices'),
             '-B', str(production), '-DCMAKE_TOOLCHAIN_FILE=' + str(ROOT / 'cmake/aarch64-clang.cmake'),
             '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', '-DCMAKE_TRY_COMPILE_PLATFORM_VARIABLES=SUNSTONE_LLD', '-DFREERTOS_DIR=' + str(a.freertos.resolve()),
-            '-DSUNSTONE_LLD=' + str(a.ld.resolve()), '-DCMAKE_C_COMPILER=' + str(a.clang.resolve()),
+            '-DSUNSTONE_LLD=' + str(a.ld.absolute()), '-DCMAKE_C_COMPILER=' + str(a.clang.resolve()),
             '-DCMAKE_ASM_COMPILER=' + str(a.clang.resolve())])
     configured_compilers = {}
     for language in ('C', 'ASM'):
@@ -333,7 +333,7 @@ def main():
     counting_path = out / 'device-memory-capacity-counting.elf'
     for name, path, extra in (('link-native', elf_path, []),
                               ('link-counting', counting_path, ['--wrap=aarch64_device_translate'])):
-        run(name, [str(a.ld.resolve()), '-static', '--gc-sections', *extra, '-T',
+        run(name, [str(a.ld.absolute()), '-static', '--gc-sections', *extra, '-T',
             str(ROOT / 'platform/a733-smp-cached/link-devices.ld'), '-Map=' + str(path.with_suffix('.map')),
             *map(str, native), '-o', str(path)])
     # Compile real startup callers and direct/transitive reservation consumers once.
@@ -395,7 +395,7 @@ def main():
         path = out / (name + '.elf')
         # GNU ld evaluates DEFINED() in the script only for symbols defined
         # before it, so the pool sizes come first.
-        run('link-' + name, [str(a.ld.resolve()), '-static', '--gc-sections',
+        run('link-' + name, [str(a.ld.absolute()), '-static', '--gc-sections',
             '--defsym=__device_pool_size=' + str(wb_bytes), '--defsym=__uncached_pool_size=' + str(nc_bytes),
             '-T', str(local_script),
             '-Map=' + str(path.with_suffix('.map')), *map(str, objs), '-o', str(path)])

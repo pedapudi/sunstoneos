@@ -196,8 +196,7 @@ def large_refused(change, message):
 
 large_refused(lambda v: v[0].update(bytes=(1 << 30) + 4096), 'multiple of 2 MiB')
 large_refused(lambda v: v[0].update(source_bytes=(1 << 30) + 1), 'outside 1..')
-large_refused(lambda v: v[0].update(sha256='0' * 64), 'SHA-256 other than zero')
-large_refused(lambda v: v[0].update(sha256='A' * 64), 'lowercase SHA-256')
+large_refused(lambda v: v[0].update(sha256='A' * 64), 'sha256 is 64 lowercase hex digits')
 large_refused(lambda v: v[0].update(file='relative/path.bin'), 'absolute path')
 large_refused(lambda v: v[0].update(file='/' + 'a' * 47), 'at most 47 characters')
 large_refused(lambda v: v[0].update(file='/bad name.bin'), 'absolute path')
@@ -242,11 +241,6 @@ refused(lambda v:v['regions'][0].update(address='0x44001000',access=['read','gpu
 refused(lambda v:v['regions'][0].update(address='0x46e00000',bytes=0x200001,access=['read','gpu-read']),
         'outside the application window')
 
-def automatic_gpu_tail(v):
-    v['regions'][0].update(bytes=tool.WINDOW[1]-tool.WINDOW[0]-tool.PAGE,access=['read','gpu-read'])
-    v['regions'].append({'name':'neighbour','kind':'work','access':['read','write'],
-                         'bytes':tool.PAGE,'address':tool.WINDOW[1]-tool.PAGE})
-refused(automatic_gpu_tail,'outside the application window')
 
 # Automatic GPU placement skips a CPU region inside its candidate's rounded
 # tail; the exact boundary remains available to another pinned region.

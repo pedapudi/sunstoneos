@@ -589,7 +589,7 @@ def main(argv=None):
         def one(match):
             kind, name = match.group(1), match.group(2)
             return str({'elf': image_file, 'build': image_directory, 'bundle': bundle_file, 'session': session_file}[kind](name))
-        return re.sub(r'\{(elf|build|session|bundle):([A-Za-z0-9_-]+)\}', one, argument)
+        return re.sub(r'\{(elf|build|session|bundle):([A-Za-z0-9_-]+)\}', one, argument).replace('{cache}', str(cache))
 
     def discover(name, directory):
         """The build targets that CMake lists, or None after a failure."""

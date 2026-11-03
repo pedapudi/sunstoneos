@@ -96,7 +96,7 @@ def main():
     bus_hz = module_hz // 2   # sunxi_sdio selects the SDR divide-by-two path.
     # Minimum waits the radio platform holds before the first card command.
     power_up_us = sum(int(source("drivers/net/a733_radio_platform.c",
-                                 r"p->last_now-p->wait_since>=(\d+)\)p->stage=" + stage).group(1))
+                                 r"p->last_now-p->wait_since>=?(\d+)\)p->stage=" + stage).group(1))
                       for stage in ("ENABLE_MODULE", "BUS_GATE", "RESET_RELEASE"))
 
     spec = importlib.util.spec_from_file_location("radio_patch", ROOT / "tools/inspect-radio-patch.py")

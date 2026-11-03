@@ -46,7 +46,7 @@ def main():
     text=(ROOT/'platform/qemu-smp/link.ld').read_text()
     text=text.replace('    RAM (rw) : ORIGIN = 0x41200000, LENGTH = 14M',
         '    RAM (rw) : ORIGIN = 0x41200000, LENGTH = 14M\n    DEVICE_WB (rw) : ORIGIN = 0x48000000, LENGTH = 768M\n    DEVICE_NC (rw) : ORIGIN = 0x78000000, LENGTH = 16M')
-    text=text.replace('    /DISCARD/', '    __heap_end = .;\n    .device_pool (NOLOAD) : { __device_pool_start = .; . += LENGTH(DEVICE_WB); __device_pool_end = .; } > DEVICE_WB\n    .uncached_pool (NOLOAD) : { __uncached_pool_start = .; . += LENGTH(DEVICE_NC); __uncached_pool_end = .; } > DEVICE_NC\n    /DISCARD/')
+    text=text.replace('    /DISCARD/', '    .got : { *(.got*) } > RAM\n    __heap_end = .;\n    .device_pool (NOLOAD) : { __device_pool_start = .; . += LENGTH(DEVICE_WB); __device_pool_end = .; } > DEVICE_WB\n    .uncached_pool (NOLOAD) : { __uncached_pool_start = .; . += LENGTH(DEVICE_NC); __uncached_pool_end = .; } > DEVICE_NC\n    /DISCARD/')
     write(linker,text)
     platform = project / 'platform.c'
     platform_text = (ROOT / 'platform/qemu-smp/platform.c').read_text()
