@@ -31,12 +31,18 @@ def decode(data):
     if total != HEAD_BYTES + ap_count * AP_BYTES:
         raise ValueError('radio result length does not match its access point count')
     stage, failed, failure_stage, flags = struct.unpack_from('<4I', data, 24)
+    # Records from images before flag bit 7 carry the same refusal in fail_site: stage 7 (guard) with a 0x4xx code.
+    fail_site = struct.unpack_from('<I', data, 212)[0]
+    if (fail_site & 0xffff) == 7 and (fail_site >> 24) == 4:
+        flags |= 128
     if stage >= len(STAGES) or failure_stage > len(STAGES):
         raise ValueError('stage out of range')
     result = {
         'stage': STAGES[stage], 'stage_code': stage, 'failed': bool(failed),
-        'failed_at': STAGES[failure_stage] if failed and failure_stage < len(STAGES) else None,
-        'guard': {'asked': bool(flags & 1), 'observed': bool(flags & 2), 'bldo5_powered_on': bool(flags & 4)},
+        'failed_at': ('guard' if flags & 128 else STAGES[failure_stage] if failure_stage < len(STAGES) else None) if failed else None,
+        'guard': {'asked': bool(flags & 1), 'observed': bool(flags & 2), 'refused': bool(flags & 128)},
+        # The rails showed BLDO5 off, so the power-on writes were needed; they ran only if the stage reached 'powered'.
+        'bldo5_needs_power_on': bool(flags & 4),
         'shutdown_readbacks_matched': bool(flags & 8),
         'bldo5_already_on': bool(flags & 16),
         'failure_shutdown': {'ran': bool(flags & 32), 'matched': bool(flags & 64)},
@@ -64,6 +70,12 @@ def decode(data):
     chip, sub, fw_flags, fail_site = struct.unpack_from('<4I', data, 200)
     result['identity'] = {'chip_word': chip, 'subrevision_word': sub}
     result['platform_failure'] = {'line': fail_site >> 16, 'stage': fail_site & 0xffff} if fail_site else None
+    if flags & 128:
+        # A guard refusal: the 'line' is 0x400 | PG bits (GPIO_POW_VAL 13:12) << 4 | the unmet conditions.
+        code = fail_site >> 16
+        result['platform_failure']['guard_refusal'] = {
+            'code': code, 'pg_bits': (code >> 4) & 3,
+            'unmet': [name for bit, name in ((1, 'pg'), (2, 'dcdc1'), (4, 'bldo5'), (8, 'cldo1')) if code & bit]}
     reported, dropped = struct.unpack_from('<2I', data, 220)
     aps = []
     for i in range(ap_count):

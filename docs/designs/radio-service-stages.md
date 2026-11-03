@@ -43,12 +43,13 @@ rails and pad power words are read, and before any PMIC write, it proceeds only
 if all of these hold:
 
 - BLDO5 is off;
-- PG reads unsupplied (`GPIO_POW_VAL` bits 13:12 are `00` or `01`);
+- PG reads `00` or `01` in `GPIO_POW_VAL` bits 13:12 (the manual calls these values "Invalid"; the board read `11` for PG with BLDO5 both off and on, see the vendor power sequence note, so this condition refused the run of 2026-11-03);
 - CLDO1 is on at 1.8 V;
 - DCDC1 is on at selector code 23.
 
-Otherwise the platform keeps every observation, writes nothing and retains. The
-record carries the observed values either way. DCDC8 is observed and recorded
+Otherwise the platform keeps every observation, writes nothing and ends without
+retaining anything; the code `0x400 | PG bits << 4 | unmet mask` (1 PG, 2 DCDC1,
+4 BLDO5, 8 CLDO1) is the record's failure line. The record carries the observed values either way. DCDC8 is observed and recorded
 but never required.
 
 ## Entropy and credentials gate association only
