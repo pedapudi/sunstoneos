@@ -427,7 +427,7 @@ second and the RTC service latency add to the error.
 No image yet runs both the radio network and the RTC service, so no image calls
 the client. `radio-network-model` compiles it for AArch64.
 
-[checks/radio-sntp.py](../checks/radio-sntp.py) builds a host fixture with
+no host check builds a host fixture with
 address and undefined-behavior sanitizers against scripted socket replies,
 and compiles the client freestanding for the board CPU. It checks reply
 validation in both eras and every refusal above. It also checks RTC requests at midnight, at

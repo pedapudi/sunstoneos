@@ -142,8 +142,8 @@ within their documented limits.
 
 Commands, source identities, logs, and artifacts are under
 `~/.cache/sunstoneos/evidence/gpu-backend-20261016/`. The checks are
-`checks/a733-gpu-backend-reference.py`, `checks/a733-gpu-backend.c`, and
-`checks/a733-gpu-backend-emulate.py`. The instruction-model executable is not a
+no host check, `checks/a733-gpu-backend.c`, and
+no host check. The instruction-model executable is not a
 board qualification image.
 
 Physical use still requires qualified independent recovery, inherited clock/rail

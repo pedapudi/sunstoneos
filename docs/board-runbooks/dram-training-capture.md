@@ -69,13 +69,13 @@ Both sets come from `work/dram-fast-boot-1025` at `84de8552`, whose tree is
 Each set's `freeze.json` holds the full hashes and the check results. On
 each build `checks/ddr-capture.py` passed: every stage reads each listed
 register once, in table order, and writes only the two controls; a wrong
-magic, a bad width and a zero count refuse. `checks/ddr-capture-host.py`
+magic, a bad width and a zero count refuse. no host check
 passed: the runner binds to the DDR mailbox before any execution, honours
 `--stages` and `--allow-untrained`, and stops at the first incomplete
-stage. `checks/ddr-wrapper.py` passed on both variant wrappers: each copies
+stage. no host check passed on both variant wrappers: each copies
 the selected parameters and patches only `dram_tpr13` bit 2 and, for the
 initialization-only variant, `dram_tpr10` bits 28:16 to `0x0001`.
-`checks/ddr-host-retention.py` passed with the two new cases.
+no host check passed with the two new cases.
 `checks/ddr-capture-analysis.py` passed on synthetic captures.
 
 | Stage | Content | Registers | Output bytes |

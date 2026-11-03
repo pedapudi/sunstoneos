@@ -96,7 +96,7 @@ EL0 tasks through a preemptible EL1 worker and passes an SMP emulator check.
 
 ## Focused evidence and physical limits
 
-One [host counter check](../checks/counter-clock.c) passed with AddressSanitizer
+One host counter check (since removed) passed with AddressSanitizer
 and UndefinedBehaviorSanitizer. It compares the converter against 128-bit
 arithmetic across six frequencies, fractional accumulation, large increments,
 counter wrap, and microsecond wrap. It also checks atomic refusal of backward

@@ -75,7 +75,7 @@ non-idle priorities occur, each examined once, so a tick visits at most 112 entr
 Timeout expiry and task selection keep their task-count-dependent work, so the
 bound does not cover the complete tick or context switch.
 
-[The linked-kernel fixture](../../checks/scheduler-timeslice.py) executes
+no host check executes
 `xTaskIncrementTick` from the native ELF with substituted core identity and SGI
 publication, and checks yield flags and tick advancement over ten cases (exact
 termination, a last-added affinity, unrelated running priorities, excluded

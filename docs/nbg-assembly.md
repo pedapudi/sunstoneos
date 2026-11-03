@@ -226,7 +226,7 @@ neural-network operation and a second transpose step with INT16 tensors. It also
 refused a buffer count that differs from the plan. Results are
 under `~/.cache/sunstoneos/build/audit-npu-runtime/evidence/layout-*/`.
 
-The focused checks are [nbg-assembly.c](../checks/nbg-assembly.c) and
+The focused checks are nbg-assembly.c (since removed) and
 [nbg-assembly.py](../checks/nbg-assembly.py). Build the host shared library from
 `nbg_assembly.c`, `nbg_model.c`, `nbg_relocation.c`, and `nbg_checksum.c` with
 `-shared -fPIC -Iinclude`.

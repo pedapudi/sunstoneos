@@ -222,7 +222,7 @@ fields, the full PCM digest and the immutable result identity. It writes a
 file named for the actual rate and channels. No device output or acoustic
 quality is inferred from copied PCM.
 
-`checks/bluetooth-a2dp.py` compiles the actual application, security and
+no host check compiles the actual application, security and
 transport workers with address and undefined-behavior sanitizers. It extracts
 the production USB serialization function directly from `apps/bluetooth/usb0.c`.
 The passing evidence is under

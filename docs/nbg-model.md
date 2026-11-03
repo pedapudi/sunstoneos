@@ -132,7 +132,7 @@ The 64-bit view occupies 480 bytes. Disassembly shows a 736-byte open frame,
 path uses 944 bytes before memory-helper stack use. The isolated CMake target
 is `nbg-model`; the affected assembler target also builds.
 
-The check is [nbg-model.c](../checks/nbg-model.c). No host check compares the
+The check is nbg-model.c (since removed). No host check compares the
 directory path with the saved reference JSON. Earlier commands, results, artifacts, and
 input identities are under
 `~/.cache/sunstoneos/evidence/nbg-directory-native-20261016/`.

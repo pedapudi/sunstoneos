@@ -39,7 +39,7 @@ The identity application retains hardware after success and requires power
 removal. Its zero-authority form only refuses before provider construction.
 No reusable returning identity image is admitted. See
 [qualification](../radio-sdio-qualification.md) and
-[the identity image](../../apps/radio-sdio-id/README.md).
+the identity image (since removed).
 
 Bluetooth implements UART1 H4/HCI, BR/EDR ACL, L2CAP, SDP, RFCOMM, secure headset
 admission, HFP/CVSD, optional mSBC playback/capture/duplex and SBC A2DP sink.

@@ -444,7 +444,7 @@ controller lifetime faults. The modeled checks never inject these events.
   needs its own scan because `bt_l2cap_other` returns the lowest serial.
 
 **Verification.** In
-[checks/bluetooth-headset.c](../../checks/bluetooth-headset.c), inject the
+checks/bluetooth-headset.c (since removed), inject the
 informational events listed above plus a vendor 0xff event after Connection
 Complete, and an unexpected eSCO Connection Request during audio. Assert that
 capture completes and every H4 record returns to free before DONE.
@@ -633,7 +633,7 @@ object does not know.
 
 **Failure scenario.** The old `a733_platform_locks_init` writes at the
 two-lock offsets. The new
-[npu-returning/main.c:157](../../apps/npu-returning/main.c#L157) reads
+npu-returning/main.c:157 (since removed) reads
 `locks.mutex[0]` at the three-lock offset, and
 [thermal-returning/main.c:55](../../apps/thermal-returning/main.c#L55) passes
 a NULL mutex to `xSemaphoreGetMutexHolder`, which stops at a `configASSERT`.
@@ -878,8 +878,8 @@ small bound, resynchronize once and count it. Keep one or two frames queued
 ahead within the eight SCO transmit slots.
 
 **Verification.** In
-[checks/bluetooth-playback.c](../../checks/bluetooth-playback.c) and
-[checks/bluetooth-headset.c](../../checks/bluetooth-headset.c), step the model
+checks/bluetooth-playback.c (since removed) and
+checks/bluetooth-headset.c (since removed), step the model
 clock in 1 ms ticks with jitter; over 10 s, assert the mSBC frame count is
 `floor(t / 7.5 ms)` within one and the CVSD byte count is 16,000 × t within
 one packet.

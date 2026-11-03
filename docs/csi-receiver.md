@@ -195,7 +195,7 @@ One focused host batch checks register-field correctness, status handling and
 partial-operation failures:
 
 ```sh
-python3 checks/a733-csi-receiver-reference.py \
+python3 no host check \
   --sources "$HOME/.cache/sunstoneos/sources/camera/bsp/drivers/vin" \
   --evidence "$HOME/.cache/sunstoneos/evidence/csi-receiver-20261016"
 ```

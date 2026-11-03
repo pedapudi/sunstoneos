@@ -127,10 +127,10 @@ valid for the unchanged free-list, event, queue, startup, control, and shutdown
 implementations.
 
 Build `gpu-freelist-service-model` with the pinned firmware, then run selected
-cases using the [runner](../checks/pvr-gpu-freelist-service.py):
+cases using the no host check:
 
 ```sh
-python3 checks/pvr-gpu-freelist-service.py \
+python3 no host check \
   --elf /path/to/gpu-freelist-service-model.elf \
   --qemu /path/to/qemu-system-aarch64 --nm /path/to/llvm-nm \
   --output /path/to/private/evidence --cases 1 2 3 4

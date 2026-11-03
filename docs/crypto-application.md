@@ -145,9 +145,9 @@ The image links the shared boot-CPU entry, monitor and runtime of
 The monitor checks every secondary power, control and mode word, then seals
 both the board prefix and the complete 824-byte crypto session at EL3. Two
 crypto-local patches change the board sources for this image:
-[session.patch](../apps/crypto-single-core/session.patch) keeps the sealed
+session.patch (since removed) keeps the sealed
 board session in `.crypto_runtime_retained`, and
-[main.patch](../apps/crypto-single-core/main.patch) masks all exceptions after
+main.patch (since removed) masks all exceptions after
 static task creation and again before the scheduler starts. The retained EL1
 copies survive BSS clearing, while the EL1 translation tables deny access to
 the monitor contract, saved state and tables. The SRE kernel runs the trusted

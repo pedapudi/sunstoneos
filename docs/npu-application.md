@@ -422,7 +422,7 @@ with this image. A new launch must bind its actual image and board lifetime.
 
 ## Returning supply observation and inference integration
 
-The [finite supply observer](../apps/npu-returning/README.md) runs production
+The finite supply observer (since removed) runs production
 PMIC startup and two DCDC2 snapshots using the accepted returning FreeRTOS
 objects. It requires enabled, stable 800 mV configuration for a supported
 result and completes request cleanup before return. Its six linked checks

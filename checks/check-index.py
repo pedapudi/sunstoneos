@@ -101,7 +101,6 @@ NEUTRAL_AREAS = {'host', 'sources', 'venv'}
 # Checks the text scan would call pure-host but that cannot run without arguments.
 NOT_PURE = {
     'radio-network.py': 'every case needs the optional --tcp, --kernel, --headers and --evidence paths',
-    'h264-input-host.py': 'the default run needs --image, --inputs, --native and --launcher',
     'sae-openssl.py': 'the default run needs --openssl, --upstream and --evidence; --verify-source needs a pinned source tree',
 }
 # Checks whose hardware or vendor-service model has behaviors that cite neither a board measurement nor a

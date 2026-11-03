@@ -267,7 +267,7 @@ measurement method.
 
 ## Host tests
 
-The host models `bt-hfp-ag.py`, `bluetooth-headset.py` and
+The host models `bt-hfp-ag.py`, no host check and
 `os-image-headset.py` run in both call-control settings, for the Bluetooth
 image with recognition (with and without mSBC) and the OS headset image. They
 cover a window or stop at each setup and link stage, requests around

@@ -156,7 +156,7 @@ material are absent from the present API and evidence.
 
 ## Focused source and host evidence
 
-[checks/aic8800-association.py](../checks/aic8800-association.py) verifies the
+no host check verifies the
 same pinned source hashes as Wi-Fi initialization. It compiles the unmodified
 full-MAC headers with fixed-width type shims and constructs source-layout
 requests and an association indication outside Git. Independent framing produces
@@ -187,7 +187,7 @@ the changed worker and transport. `final-inputs.json` ties final file identities
 to the retained evidence. Source and artifact hashes accompany each result.
 
 ```sh
-python3 checks/aic8800-association.py \
+python3 no host check \
   --reference-dir /path/to/pinned/aic8800_fdrv \
   --evidence /path/outside/repository/radio-association-evidence
 ```

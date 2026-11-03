@@ -109,7 +109,7 @@ The initial isolated comparison remains under
 Existing kernel, service, DMA, and application evidence was reused; no board
 request or kernel rebuild occurred.
 
-The focused check is [nbg-relocation.c](../checks/nbg-relocation.c). No host
+The focused check is nbg-relocation.c (since removed). No host
 check compares the encoder with the pinned SDK library. The isolated AArch64 CMake target is `nbg-relocation`.
 
 The native assembler resolves the observed profile's sources and validates

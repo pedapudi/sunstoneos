@@ -35,7 +35,7 @@ below; their board evidence does not qualify the new idle policy.
    owner treats a busy interrupt controller as "not now" and rearms, charges no
    wake to completions, and measures the quiet state again after a resume.
    `npu_runtime_queue_submit()` admits and submits in one lock span. The native
-   owner cases (`checks/npu-queue-handoff.py`) cover start refusals, gating and
+   owner cases (no host check) cover start refusals, gating and
    resume on admission, the control policy, stale alarms, a busy and an invalid
    interrupt controller, partial failure between suspend writes, suspended close
    with and without a resume failure, cancellation by STOP, an interrupt while

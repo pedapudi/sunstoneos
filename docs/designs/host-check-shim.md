@@ -58,7 +58,7 @@ Coverage notes:
 - `gpu-texture-frame` runs the image's worker, burst, wait computation and CPU-run block. The wait computation blocks for one tick when a step makes no progress.
 - `os-gpu-thermal` asserts more than one close when the model reports the queue busy, because `apps/os/gpu.c` retries the close every tick. The GPU owner reviews that expectation.
 - `apps/os/gpu-timing.c` has a host seam: on a target other than AArch64 the counter read and barriers use the shim's clock and compiler barriers. The AArch64 instructions are unchanged.
-- The GPU emulator `checks/a733-gpu-backend-emulate.py` selects its isolation and application entry points by `--isolation-only` (`checks/a733-gpu-isolation.c`) and `--application-only` (`checks/gpu-application.c`), for a run with a hand-built ELF.
+- The GPU emulator no host check selects its isolation and application entry points by `--isolation-only` (`checks/a733-gpu-isolation.c`) and `--application-only` (`checks/gpu-application.c`), for a run with a hand-built ELF.
 
 ## Limits and open work
 

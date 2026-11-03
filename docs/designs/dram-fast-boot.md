@@ -88,7 +88,7 @@ The measured quantity is boot0's `DRAM BOOT DRIVE INFO` to `Actual DRAM SIZE` in
 - [`tools/prepare-ddr-capture.py`](../../tools/prepare-ddr-capture.py): builds the reader and six stage tables, ordered by risk: the SID chip ID and thermal calibration (7 words), boot0's own save window (72 registers), the controller (1,842 words), the PHY blocks over boot0's address extents (32,007 registers) and the firmware message block (1,233 registers), then PHY registers `0x0000`–`0xbfff` (49,152), where the published PHY keeps address/command delays. Every range except the last is bounded by addresses that boot0 accesses.
 - [`tools/run-ddr-capture.py`](../../tools/run-ddr-capture.py): requires the DDR run's mailbox in SRAM, reads the 2 KiB boot parameter buffer, then runs each stage with one FEL execution and stops at the first failure. It records the port and the coordinator's temperature note. Its only register writes are `MicroContMuxSel` and `UcclkHclkEnables`, each restored; boot0 itself clears and sets `MicroContMuxSel` around PHY reads after every training (`0x5767a`–`0x5768a`).
 - [`tools/analyse-ddr-captures.py`](../../tools/analyse-ddr-captures.py): classifies each register across captures as constant, board, lifetime or status; [`checks/ddr-capture-analysis.py`](../../checks/ddr-capture-analysis.py) checks it on synthetic captures.
-- [`checks/ddr-capture.py`](../../checks/ddr-capture.py) runs the reader in Unicorn against every stage table, and [`checks/ddr-capture-host.py`](../../checks/ddr-capture-host.py) runs the runner against a modeled FEL device.
+- [`checks/ddr-capture.py`](../../checks/ddr-capture.py) runs the reader in Unicorn against every stage table, and no host check runs the runner against a modeled FEL device.
 
 ## Open work
 

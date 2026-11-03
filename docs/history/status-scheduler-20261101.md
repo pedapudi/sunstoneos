@@ -190,7 +190,7 @@ CPU0's periodic tick remains; remote due deadlines request their owner.
 Control and registry modules provide fixed storage and lifetime references.
 These are partial implementation results, not complete public API coverage.
 
-The [API inventory](../../checks/scheduler-kernel-api.json) lists 94 public
+The API inventory (since removed) lists 94 public
 task entry points: 82 have private routes, including all 81 selected by the
 validation configuration. Definition checks verify the intended helper at each
 function definition. The Clang audit follows calls and address-taken callbacks;

@@ -94,7 +94,7 @@ limiting relocation scratch to the five recognized pointer fields. Other caller
 and helper frames are additional. Current object identities are recorded in
 [nbg-relocation.md](nbg-relocation.md) and [nbg-assembly.md](nbg-assembly.md).
 
-The checks are [nbg-relocation.c](../checks/nbg-relocation.c) and the existing
+The checks are nbg-relocation.c (since removed) and the existing
 assembly checks. No host check compares the ring fields with the pinned HAL
 library. Raw evidence, range
 inventory, disassembly, commands, and hashes are under

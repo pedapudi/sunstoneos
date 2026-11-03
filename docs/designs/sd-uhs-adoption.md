@@ -93,4 +93,4 @@ The card is never left in a state that needs a human, except the terminal case o
 
 1. Run the read-only switch to 1.8 V on port 3-1, which has never been at 1.8 V (prediction in record `sd-uhs-adoption-3-1-switch`, not run).
 2. The runner: approval of the 150 MHz point and of CMD11 for OS images, and the image classification for UHS-I.
-3. Five image-level SD checks (`storage-read-native.py`, `storage-read-binding.py`, `sd-return-native.py`, `sd-return-host.py`, `sd-return-continuity.py`) are stale models of the current image and are waived in `checks/gate-inputs.json`; rewrite them against the image.
+3. Five image-level SD checks (`storage-read-native.py`, no host check, `sd-return-native.py`, no host check, no host check) are stale models of the current image and are waived in `checks/gate-inputs.json`; rewrite them against the image.

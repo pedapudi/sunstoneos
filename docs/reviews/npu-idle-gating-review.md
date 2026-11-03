@@ -87,7 +87,7 @@ Directories are under `~/.cache/sunstoneos/build/npu-fastpath-1101/review-eviden
 | Check | Result |
 | --- | --- |
 | `npu-idle/` (`checks/npu-idle.py`) | Nine portable groups: delayed MMIO, access-limited suspended reads, every injected failure, and over-budget resumes in both modes |
-| `npu-queue-handoff/` (`checks/npu-queue-handoff.py`) | The existing handoff cases plus sixteen owner cases and nine relink-based regression mutations |
+| `npu-queue-handoff/` (no host check) | The existing handoff cases plus sixteen owner cases and nine relink-based regression mutations |
 | `npu-idle-report/` (`checks/npu-idle-report.py`) | Baseline, control and gating decoding, the three-way comparison, and twenty corrupted reports; the producer is not executed |
 
 ## Limits of the evidence

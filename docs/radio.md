@@ -228,10 +228,10 @@ Wi-Fi station/network path and Bluetooth profiles are implemented and
 software-tested. Their component documents hold the current API and test
 contracts. Physical radio identity and operation remain unqualified.
 
-The [native identity application](../apps/radio-sdio-id/README.md) connects
+The native identity application (since removed) connects
 shared providers, the controller/card and transport. Its fixed bootstrap write
 and address-correlated CMD53 replies precede firmware loading. The
-[return design](../apps/radio-sdio-id/RETURNING.md) requires fitted-supply and
+return design (since removed) requires fitted-supply and
 PM2 evidence and a reviewed lifetime; reusable shutdown remains unqualified.
 The [SDIO reference audit](radio-sdio-reference.md) identifies the vendor's
 208 MHz target, nominal 200 MHz rounding and missing native UHS sequence.

@@ -63,7 +63,7 @@ Offsets in this table are relative to the named register bank.
 | Same | CCU `+0xb24` reset and bus gate; PLL disable control fields. | Manual §4.1.6.16,122 and CCU disable source. Each control write has its own readback; no separate local reset-done field is documented. CORE/TOP retirement precedes clock removal. |
 | `a733_gpu_performance.c`, `a733_gpu_platform_performance_poll`, `a733_gpu_platform_performance_off` | CCU `+0xb20` source/divider update. | Manual §4.1.6.121. Both paths poll UPD clear, then verify the resulting selector/divider/rate under a deadline. Correct completion condition. |
 | `a733_gpu_platform.c`, `supply_raise`; `a733_gpu_performance.c`, voltage stages | PMIC DCDC4 request, completed snapshot, supply settle. | [GPU operating-point design](designs/gpu-performance.md), [GPU power](gpu-power.md), PMIC provider pins. Both refresh their validated clock after completed PMIC result collection and reap, then wait strictly beyond that timestamp plus `A733_GPU_SUPPLY_SETTLE_US`. No direct PMIC MMIO occurs in these files. Rail sequencing is protected review scope. |
-| `a733_gpu_resources.c`, `gate`; native adapter | Shared PCK/fabric gates at RCCU `+0x1ac`, CCU `+0x5c0/+0x5e0`; parent verification. | Manual §4.1.6.82–83 and [shared resource source comparison](../checks/a733-gpu-resources-reference.py). Control readbacks verify retained gate fields; selected PLL branches also check effective gate status. No new PLL transition is started here. |
+| `a733_gpu_resources.c`, `gate`; native adapter | Shared PCK/fabric gates at RCCU `+0x1ac`, CCU `+0x5c0/+0x5e0`; parent verification. | Manual §4.1.6.82–83 and no host check. Control readbacks verify retained gate fields; selected PLL branches also check effective gate status. No new PLL transition is started here. |
 | `pvr_gpu_start.c`, `pvr_gpu_start_poll` | SYS_BUS_SECURE `+0xa100`, SOFT_RESET `+0x100`: write then read fence. | GPU host start source. Read fences drain writes; their return values are intentionally not equality checks. Reset is followed by documented 3 µs delays, implemented with rounding allowance, then a fresh firmware-started word. |
 | Same | SLC_CTRL_MISC `+0x3800`, MIPS remaps `+0x810…+0x8c8`, SLC coherency `+0x38c0`; GARTEN release. | GPU host start source; `pvr_mips.c` constructs the remaps. No documented per-write busy flag. Publication and ordered register writes precede release; firmware readiness is the completion condition. |
 | `pvr_gpu_stop.c`, `pvr_gpu_stop_poll` | IRQ clear `+0x8b0`, thread associations `+0xb40/+0xb30`, optional unacknowledged SOFT_RESET `+0x100`. | DDK `RGXStop:992–1241`, `RGXAckIrqMIPS:420–462`. Stop polls SIDEKICK `+0x3c8`, SLC idle `+0x3898`, MMU/read status `+0x1358/+0x1350/+0x1320/+0x1338/+0x3870` before platform isolation. Bounded polls preserve ownership on failure. Unacknowledged reset has no separate read fence; subsequent platform isolation must remain ordered. |
@@ -184,7 +184,7 @@ Physical timing and recovery remain unqualified.
 
 ## Executed native ordering check
 
-`checks/npu-native-ordering.py` executes the linked QEMU model's actual
+no host check executes the linked QEMU model's actual
 native write, read and delay callbacks in Unicorn. Its shared posted-write
 model completes CPU transactions only at an executed DSB instruction. A
 separate deferred effect leaves readiness delayed or permanently pending.

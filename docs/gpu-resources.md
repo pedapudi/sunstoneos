@@ -176,7 +176,7 @@ concurrent callers cannot enter hardware callbacks during another admission, a
 live GPU is rejected before gate writes, and shared GPU-gate requests cannot
 activate a disabled gate without exclusive GPU ownership.
 
-The [reference comparison](../checks/a733-gpu-resources-reference.py) compiles
+The no host check compiles
 clock-gate, PLL-rate, and PMIC voltage-decoding functions. Their outputs
 match the native gate values, 400 MHz parent rate, and 800 mV DCDC4 interpretation.
 Source assertions verify field positions, multiplier/divisor offsets, oscillator

@@ -69,7 +69,7 @@ requires both callers to quiesce. Physical thermal response, repeated queue
 startup and fault recovery remain unqualified.
 
 [checks/gpu-queue.py](../checks/gpu-queue.py) exercises the queue and service
-model; [checks/gpu-peer-native.py](../checks/gpu-peer-native.py) covers native
+model; no host check covers native
 second-caller construction. The mimus repository owns shader, readout and
 recognition checks. Host evidence includes 204 exact-sum jobs and ten modeled
 open/close cycles, with queued-peer recovery and final quiescence. These results

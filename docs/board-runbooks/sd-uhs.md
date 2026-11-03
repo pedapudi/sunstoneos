@@ -113,7 +113,7 @@ the earlier storage-read bundles.
    59-second capture window, the refusal path and 60 seconds of setup. It is
    638 s for the bundles of 2026-10-25. After the capture window every outcome
    but a clean refusal holds the port lock and claim, so the timeout ends that
-   hold. `checks/storage-read-queue-plan.py` builds the queue row in a scratch
+   hold. no host check builds the queue row in a scratch
    database and requires the checker's claim check to refuse it without the
    artifacts and accept it with them.
 3. Remove board power, restore it, and bring the board to FEL and DDR again.

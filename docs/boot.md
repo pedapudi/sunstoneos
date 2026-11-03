@@ -150,7 +150,7 @@ checks complete uploads before execution, and stops at the first failure.
 The separate wrapper check uses Unicorn 2.1.4:
 
 ```sh
-~/.cache/sunstoneos/venv/bin/python checks/ddr-wrapper.py ~/.cache/sunstoneos/build/a733-ddr
+~/.cache/sunstoneos/venv/bin/python no host check ~/.cache/sunstoneos/build/a733-ddr
 ```
 
 That check passed success and failure returns, FEL register/code preservation,
@@ -194,7 +194,7 @@ tracks the physical kernel milestone and remaining CPU platform work.
 
 ## EL1 handoff and automatic reconnect access
 
-The probe in [checks/a733-el1.S](../checks/a733-el1.S) configures nonsecure
+The probe in checks/a733-el1.S (since removed) configures nonsecure
 AArch64 EL1 with MMU and caches disabled. It declares the device tree's 24 MHz
 counter frequency, permits EL1 counter/timer access, and installs exception
 vectors. EL1 records its state and uses a secure monitor call (SMC) to return

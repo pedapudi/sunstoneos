@@ -161,7 +161,7 @@ native compilation includes the actual MMIO and cache implementation. Existing
 lower-layer checks are reused. These checks do not qualify physical AES output,
 DMA visibility, security-world exclusion or recovery.
 
-`checks/a733-ce-modes.c`, driven by `checks/a733-ce-modes.py`, runs the real
+`checks/a733-ce-modes.c`, driven by no host check, runs the real
 controller, session and services against a model engine that implements
 AES-128/192/256 in ECB, CBC and CTR with both counter widths. The model writes
 an unusable value to the next-counter line, so correct chained output shows that

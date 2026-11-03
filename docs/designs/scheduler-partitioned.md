@@ -811,7 +811,7 @@ Instruction budgets for the owner paths are provisional until linked-code counts
 board samples replace them: ready enqueue or remove at most 64 retired instructions,
 pick or yield 96, untimed local notification-give 160 before an optional switch.
 Remote wake, incoming scan (at most 256 slot-word loads), timed block, timeout,
-migration and context switch are counted on the linked path. `checks/scheduler-masked-spans.py`
+migration and context switch are counted on the linked path. no host check
 reports every interrupt-masked span of the CPU latency workload on eight emulated
 cores as scheduler atomic stores, read-modify-writes and atomic loads; the counts
 do not convert to time because the emulator has no cache misses.

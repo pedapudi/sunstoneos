@@ -47,7 +47,7 @@ changes require a diagnostic, explicit application selection or private fork.
 Evidence paths in this section are beneath
 `~/.cache/sunstoneos/build/scheduler-rt-1101/`.
 The cached `timeslice-after.log` records a successful execution of
-`checks/scheduler-timeslice.py` against
+no host check against
 `control-after/sunstone-a733-os-latency.elf`.
 The corresponding `timeslice-after.json` names image SHA-256
 `21c8564d781a1b62614e4201e0f92ad01d37a0cc72c2c7945998be9e09dc466c`.

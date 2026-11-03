@@ -105,7 +105,7 @@ The user need not identify the PCB revision from memory.
 
 ## Physical identity needs a different runnable image
 
-The existing [identity application](../apps/radio-sdio-id/README.md) has a
+The existing identity application (since removed) has a
 strict authority producer and a zero-authority refusal image. The refusal image
 prints `REFUSED radio SDIO identity` and exits with status 7 before constructing
 providers. It is useful for host instruction checks and grants no board access.

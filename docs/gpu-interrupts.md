@@ -108,7 +108,7 @@ the pinned GPU firmware and AArch64 toolchain, run only after relevant inputs ch
 
 ```sh
 cmake --build ~/.cache/sunstoneos/build/gpu-irq --target gpu-irq-model -j 4
-python3 checks/pvr-gpu-irq.py \
+python3 no host check \
   --elf ~/.cache/sunstoneos/build/gpu-irq/gpu-irq-model.elf \
   --qemu ~/.cache/sunstoneos/host/usr/bin/qemu-system-aarch64 \
   --nm /usr/lib/llvm-21/bin/llvm-nm \

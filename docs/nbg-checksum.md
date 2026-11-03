@@ -117,7 +117,7 @@ The isolated target is `nbg-checksum`. Host links now require `nbg_model.c` too.
 Current commands, artifacts, input identities, and results are under
 `~/.cache/sunstoneos/evidence/nbg-directory-checksum-20261016/`. The fixed-header
 reference evidence remains under `~/.cache/sunstoneos/evidence/nbg-checksum-20261016/`.
-[nbg-checksum.c](../checks/nbg-checksum.c) consumes the two published models and
+nbg-checksum.c (since removed) consumes the two published models and
 saved zero-CRC fixture. No host check repeats the isolated SDK comparison.
 
 The separate [convolution loader capture](nbg-conv-loader.md) records SDK preparation

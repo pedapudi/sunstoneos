@@ -192,7 +192,7 @@ implemented.
 
 ## Host checks
 
-The [width check](../checks/dma-address-width.c) asserts the limit values and
+The width check (since removed) asserts the limit values and
 counts IOMMU leaf words for one plane below and above 4 GiB. It admits an IOMMU
 span that ends at 4 GiB, refuses one that ends a page later, and sums the named
 pool sizes. The [NVMe model](../checks/a733-pcie-nvme.c) admits a pool

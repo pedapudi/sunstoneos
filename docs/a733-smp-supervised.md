@@ -169,7 +169,7 @@ return convention and preservation; it cannot establish physical register-access
 permission or real counter progress.
 
 Build with `run-launch-survey.py prepare --build DIR --clang CLANG --lld LLD
---objcopy OBJCOPY`, then run `checks/launch-survey.py --build DIR --output
+--objcopy OBJCOPY`, then run `no host check --build DIR --output
 SOFTWARE.json` with bytecode disabled. A physical `run` requires `--build`,
 `--software`, `--fel`, `--database`, `--claim`, `--owner` and a fresh `--evidence`
 directory. The queue prerequisites are `supervised-ram-recovery` and

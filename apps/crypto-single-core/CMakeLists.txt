@@ -1,8 +1,0 @@
-cmake_minimum_required(VERSION 3.24)
-project(a733_crypto_single_core LANGUAGES C ASM)
-get_filename_component(SUNSTONE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-set(FREERTOS_DIR "" CACHE PATH "Pinned FreeRTOS source")
-set(TINYUSB_DIR "" CACHE PATH "Pinned TinyUSB source")
-include("${SUNSTONE_SOURCE_ROOT}/cmake/patch.cmake")
-include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-crypto.cmake")
-

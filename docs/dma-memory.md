@@ -102,7 +102,7 @@ establish that interface or physical multicore coherence.
 
 ## Focused validation and its limits
 
-The [host check](../checks/dma-memory.c) passed with AddressSanitizer and
+The host check (since removed) passed with AddressSanitizer and
 UndefinedBehaviorSanitizer. It covers a mapping spanning three pages, a failing
 middle page, write-permission refusal, physical-address mismatch, Device memory,
 non-shareable RAM, aliases, address limits, FIFO admission, and cache geometry.
@@ -130,7 +130,7 @@ Current native evidence is under
 The earlier host admission evidence remains under
 `~/.cache/sunstoneos/evidence/dma-native-20261016/`; its admission logic is
 unchanged. The extracted cache-geometry calculation also passes the
-[host counter/geometry check](../checks/counter-clock.c).
+host counter/geometry check (since removed).
 
 Reproduce after relevant inputs change, using the configured development build:
 

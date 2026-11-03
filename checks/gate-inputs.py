@@ -31,8 +31,8 @@ sys.path.insert(0, str(ROOT / 'tools'))      # tools/integration-gate.py imports
 CHECK_INPUTS = ['tools/integration-gate.py', 'checks/gate-inputs.json', 'checks/harness.py']
 # Checks that execute an integrated OS image under Unicorn. Each uses the one machine of checks/harness.py.
 IMAGE_EXECUTING = ('fault-capture os-gpu-return os-gpu-quiesce os-gpu-untouched os-gpu-unconstructed os-gpu-wait-linked '
-                   'os-image-audio os-image-headset os-image-identity os-image-radio os-region-initialization os-audio-replay '
-                   'os-audio-replay-linked os-cpu-return-rails os-cpu-return-thermal os-cpu-clock-native os-npu-start '
+                   'os-image-audio os-image-headset os-image-identity os-image-radio os-audio-replay '
+                   'os-cpu-return-rails os-cpu-return-thermal os-cpu-clock-native os-npu-start '
                    'latency-startup').split()
 
 

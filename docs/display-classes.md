@@ -78,7 +78,7 @@ hardware limits and do not establish that either panel works on this board.
 
 ## Host evidence and remaining physical work
 
-`checks/display-classes.py` checks recorded Dell DP/HDMI, Acer DisplayID and Apple
+no host check checks recorded Dell DP/HDMI, Acer DisplayID and Apple
 DisplayID EDIDs, malformed lengths/checksums, generation changes, exact mode
 admission, both panel descriptions and bounded panel sequences. Downloaded bytes,
 URLs, revisions, SHA-256 values and licenses are recorded in

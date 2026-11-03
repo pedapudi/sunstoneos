@@ -4,7 +4,7 @@
 
 The NPU path is implemented: native model decoding, mappings, shared-provider startup, interrupt 97 service, runtime clients, resident EL0 queue, loader admission, run-time graph registration, thermal policy and opt-in internal clock gating of the idle NPU. Repeated start and stop reliability is unqualified. Hardware values these paths assert (GIC priority views, interrupt routes, CPU identity) are in [the A733 hardware facts](../hardware/a733-facts.md).
 
-**Software evidence:** `checks/npu-idle.py`, `checks/npu-queue-handoff.py` (production owner, queue and idle code with modeled devices and nine regression mutations), `checks/npu-idle-report.py`, `checks/npu-job-cost.py`, `checks/npu-mmu.c`, `checks/os-npu-service.c`.
+**Software evidence:** `checks/npu-idle.py`, no host check (production owner, queue and idle code with modeled devices and nine regression mutations), `checks/npu-idle-report.py`, `checks/npu-job-cost.py`, `checks/npu-mmu.c`, `checks/os-npu-service.c`.
 
 **Board-qualified scope:** At 852 MHz and 800 mV on ports 3-1 and 3-3: finite startup (4.0 ms) and ShuffleNetV2 inference (2.91 ms doorbell to interrupt) with matching outputs, CLOSE, local stop and normal ROM return; the resident command queue (1,000 matched jobs at 10.25 µs p50); the combined image of four NPU jobs under eight CPU workers; the idle benchmark with baseline, control and clock-gating images (61,231 matching jobs each); 15 single-operation graphs, two layer-normalization graphs and shader graphs byte-equal to the SDK simulator; NPU MMU faults on unmapped descriptor and program addresses with recovery in about 32 ms; 31 resident slots at ring depth 64 with backpressure, run-time graph registration and a run-time tensor link; 18 compiled graphs resident from a runner input region. Repeated transitions are not qualified.
 
@@ -37,7 +37,7 @@ Designs: [platform](../designs/npu-platform.md), [fast path](../designs/npu-fast
 4. Qualify the EL0 queue with larger graphs (ShuffleNetV2 size) under several slots, several tensor links at once, the public-ring predicate in the power owner, and the saved generic sequence registration and returning diagnostic (`npu-el0-next-1101`). Repeat the add queue image with the clock record, so its figure is measured and not only granted.
 5. Run larger command windows with the smaller doorbell word. A reservation that includes run-time graphs uses 512 KiB per command allocation; the manifest could declare a command size to shrink it.
 6. Add exact per-job deadline interrupts through the scheduler's deadline facility (`work/scheduler-rt-1101`); do not add a device timer.
-7. Run the `restart-*` cases of `checks/npu-irq-route.py` on a restart image; the other cases pass.
+7. Run the `restart-*` cases of no host check on a restart image; the other cases pass.
 8. The mimus encoder on the NPU, on the mimus branch.
 
 ## Evidence

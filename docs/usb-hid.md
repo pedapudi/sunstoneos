@@ -67,7 +67,7 @@ Run the focused check with cached public captures:
 
 ```sh
 cache="$HOME/.cache/sunstoneos"
-"$cache/venv/bin/python3" checks/usb-hid.py \
+"$cache/venv/bin/python3" no host check \
   --output "$cache/build/usb-hid-check" \
   --captures "$cache/sources/usb-host-1031/captures"
 ```

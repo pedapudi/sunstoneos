@@ -2024,7 +2024,7 @@ to the stated scope:
   native frame/panel binding, read transactions and
   physical qualification remain outstanding.
 
-- Radio: **implemented** a [returning SDIO diagnostic](../apps/radio-sdio-id/README.md)
+- Radio: **implemented** a returning SDIO diagnostic (since removed)
   and host-tested deadline checks for public record consumption. The full
   sanitizer transport model, native dispatcher traffic/deadline cases and
   OS/radio/headset build pass under `~/.cache/sunstoneos/build/radio-1031/`.

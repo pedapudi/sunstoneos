@@ -142,7 +142,7 @@ host protocol through injected transport callbacks.
 "$HOME/.cache/sunstoneos/venv/bin/python" checks/watchdog-expiry.py \
   "$HOME/.cache/sunstoneos/build/watchdog-expiry/probe.bin" \
   "$HOME/.cache/sunstoneos/build/watchdog-expiry/probe.elf"
-python3 checks/watchdog-expiry-host.py
+python3 no host check
 ```
 
 The instruction model passed fifteen cases covering enable/disarm, the masked

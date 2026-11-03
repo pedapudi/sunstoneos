@@ -146,7 +146,7 @@ two kinds are:
 
 Both return through the monitor's warm reset with DDR powered and trained,
 as a kernel-mode return does. The patch also adds 13 cases to
-`checks/kernel-platform-admission.py`. With port 3-3's saved records, all 50
+no host check. With port 3-3's saved records, all 50
 cases pass (`common/kernel-admission-check/results.json`), including the
 actual saved DDR → kernel → forced-stall chain and its five refusals and a
 modeled native link and its six refusals. The rank 6 and rank 9 bundles

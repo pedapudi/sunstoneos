@@ -47,7 +47,7 @@ of the counter, mutexes, clock leases, pins, rail leases and shared PMIC service
 That constructor authorizes PL0 and PL1 for PMIC access. It does not supply the
 radio's required pin or power authority.
 
-The [returning SDIO identity application](../apps/radio-sdio-id/README.md)
+The returning SDIO identity application (since removed)
 now supplies the native constructor and bounded transport caller. Its producer
 requires reviewed board/lifetime evidence before supplying pin authority,
 the complete PM latch and a rail map. An explicit zero-authority image refuses

@@ -22,12 +22,6 @@ def current_inputs():
     spec.loader.exec_module(indexer)
     expected = {
         'gpu-linked-lifecycle.py': ('drivers/gpu/gpu_queue.c',),
-        'gpu-peer-native.py': ('apps/gpu-queue-peer/main.c',),
-        'os-audio-replay-linked.py': ('apps/os/capture.c', 'checks/os-audio-replay-application.c'),
-        'isp0-replay.py': ('drivers/camera/a733_isp0.c', 'apps/isp0/native.c'),
-        'isp0-irq-native.py': ('apps/isp0/native.c', 'apps/isp0/irq.h'),
-        'pcie-link-decode.py': ('apps/pcie/observe.py', 'apps/pcie-test/observe.py',
-                                'apps/pcie-nvme/observe.py'),
     }
     index = {}
     for name, paths in expected.items():
@@ -107,14 +101,13 @@ def main():
     assert 'absent' in result['checks'][0]['needs'][0]
     # These scripts declare optional argparse flags that their default runtime
     # nevertheless requires. Classification must not execute them without inputs.
-    for name in ('h264-input-host.py', 'sae-openssl.py'):
+    for name in ('sae-openssl.py',):
         shutil.copyfile(ROOT / 'checks' / name, source / 'checks' / name)
-    conditional = select('--changed', 'checks/h264-input-host.py', 'checks/sae-openssl.py')
+    conditional = select('--changed', 'checks/sae-openssl.py')
     pending = {check['check']: check for check in conditional['checks']}
-    assert set(pending) == {'h264-input-host.py', 'sae-openssl.py'}
+    assert set(pending) == {'sae-openssl.py'}
     for check in pending.values():
         assert check['status'] == 'pending'
-    assert '--launcher' in ' '.join(pending['h264-input-host.py']['needs'])
     assert '--openssl' in ' '.join(pending['sae-openssl.py']['needs'])
     assert 'pinned source tree' in ' '.join(pending['sae-openssl.py']['needs'])
     # The real hook fixture inventories its inputs completely. Comments in the

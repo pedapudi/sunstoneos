@@ -62,7 +62,7 @@ unverified. The image byte and failure tests use synthetic payloads.
 
 Raw reports and captures remain outside source control. The source record
 `usb-uvc-sources.json` pins their URLs, revisions, hashes and license boundaries.
-`checks/usb-uvc-c270-extract.py` and `checks/usb-uvc-capture-extract.py` reproduce
+no host check and no host check reproduce
 the numerical fixtures from those pinned files. Pass the descriptor source's
 SHA-256 as the descriptor extractor's second argument. Format the resulting
 headers with clang-format before comparing them with the tracked fixtures.

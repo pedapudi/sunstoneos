@@ -234,7 +234,7 @@ without touching the module or the board latch, the added admission after
 that client failure, identification on the
 module's generation in the resident lifetime with the moved origin, and a
 module fault that ends the client. The repeated headset model
-(`checks/bluetooth-headset.py --repeated --case resident`) runs resident
+(`no host check --repeated --case resident`) runs resident
 recognition activations past the supervised window and checks the 2 s close
 bound. Its `stop-in-poll` case requests cancellation from inside an owner
 poll, after that poll's first stop check, as the owner publishes a segment
@@ -664,7 +664,7 @@ used mSBC. A CVSD segment in a requested wideband session reports fallback.
 
 ### Software evidence and remaining qualification
 
-[bluetooth-headset.py](../checks/bluetooth-headset.py) with `--repeated` runs
+no host check with `--repeated` runs
 the production UART, H4, HCI, security, AG and synchronous-audio code against
 a modeled headset and controller. Its cases cover:
 
