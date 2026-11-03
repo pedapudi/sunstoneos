@@ -254,10 +254,10 @@ static int setup(void)
         .kind = SUNXI_MMC_SD, .voltage_mask = 0x00300000, .sd_profile = SUNXI_MMC_SD_HIGH_SPEED4, .dma = DESCRIPTORS,
         .observe_s18 = 1};          /* ACMD41 carries S18R and the card's S18A is kept in the OCR; CMD11 is never sent */
     if (!s.config.topology) return 0;
-    if (c->uhs_mode > 4) return 0;
+    if (c->uhs_mode > 5) return 0;
     if (c->uhs_mode) {              /* a UHS-I lifetime: the profile that moves the bank, SDR25 only, no S18A observation */
         s.config.sd_profile = SUNXI_MMC_SD_UHS_SDR104; s.config.observe_s18 = 0; s.config.sdr25_only = 1;
-        s.config.start_1v8 = c->uhs_mode >= 2;       /* mode 4: mode 3, then between phases a restart of the identification under a lower ceiling */
+        s.config.start_1v8 = c->uhs_mode >= 2 && c->uhs_mode != 5;   /* mode 5: a card at 3.3 V is switched with CMD11, then the ladder runs */       /* mode 4: mode 3, then between phases a restart of the identification under a lower ceiling */
         if (c->uhs_mode >= 3) s.config.sdr25_only = 0;       /* SDR104 and the CMD19 sweep; the core falls back to SDR25 without a window */
     }
     /* Establish entry state, do not require it: the pins carry whatever the boot ROM and the runner left

@@ -131,7 +131,7 @@ def main():
     i = sub.add_parser('input')
     i.add_argument('--output', type=Path, required=True)
     i.add_argument('--ranges', nargs='+', required=True, help='FIRST:COUNT pairs, for example 0:1 32768:2')
-    i.add_argument('--uhs-mode', type=int, default=0, choices=(0, 1, 2, 3, 4), help='0 high speed with S18A observed, 1 UHS-I lifetime 1, 2 UHS-I lifetime 2, 3 re-entry then SDR104 with tuning, 4 mode 3 with a restart of the identification between phases (phase 1 same ceiling, 2 SDR50, 3 SDR25)')
+    i.add_argument('--uhs-mode', type=int, default=0, choices=(0, 1, 2, 3, 4, 5), help='5 CMD11 from 3.3 V, then the mode ladder (SDR104, SDR50, SDR25) with tuning; 0 high speed with S18A observed, 1 UHS-I lifetime 1, 2 UHS-I lifetime 2, 3 re-entry then SDR104 with tuning, 4 mode 3 with a restart of the identification between phases (phase 1 same ceiling, 2 SDR50, 3 SDR25)')
     i.add_argument('--reads', type=int, default=1)
     i.add_argument('--phase', action='append', default=[], metavar='FIRST_SECTOR:BLOCKS:READS[:quick]', help='one phase of a multi-phase plan (up to 8), run in order in one lifetime')
     i.add_argument('--blocks', type=int, default=8)

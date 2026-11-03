@@ -192,3 +192,18 @@ The run completed: 128 reads without error, the lifetime closed with the bank ba
 
 One prediction missed: the SDR50 window was predicted at 30 to 50 delays and every one of the 64 passed, so the sample point is not constrained at 100 MHz on this card. No request in the 4 MiB region was slow in any phase (the largest was 6.065 ms at SDR25), so the earlier slow
 requests are not in this region, whatever the mode. This is the first board run of SDR50 and of the corrected data drive phase (90 degrees) in the tuned modes: both read correctly. The data drive phase for writes is still untested on a board.
+
+## Prediction for the read-only switch to 1.8 V on 3-1 (written before the run; not submitted until the coordinator has seen it)
+
+Run: the read-only probe in mode 5 on 3-1 (Phison SD64G, 2026, U3, V30), image built from `work/sd-adopt-1102`, with one phase of 64 reads of 128 KiB from 4 MiB. The card has only ever been at 3.3 V (S18A set, group 1 support `0x8003`). The probe identifies it at 3.3 V,
+sends CMD11, moves the PF bank to 1.8 V, identifies at 1.8 V, runs the mode ladder with tuning, reads, and closes with the bank back at 3.3 V; no write. The card then stays at 1.8 V until board power is removed (as 3-3's does), which the OS handles by its rule
+(S18A clear with SDR50 or SDR104 in the group 1 support field: close, open again with the bank at 1.8 V). Nothing in the run writes to the card.
+
+| Item | Prediction |
+| --- | --- |
+| Identification at 3.3 V | S18A set (OCR bit 24), CMD11 accepted, DAT low during the switch and high within 10 ms of the restart, the bank reports 1.8 V; as on 3-3's lifetime 1 |
+| CMD6 group 1 support at 1.8 V | `0x801f` (SDR12 to SDR104 and DDR50), as 3-3; at least bit 3 (SDR104) set. A card without SDR104 would show `0x8007` or `0x8003` and the ladder would end at SDR50 or SDR25 |
+| Mode | SDR104 at 150 MHz with a tuning window of 30 to 60 delays (3-3: 48); the chosen delay near the middle of the window. If no window of 12 delays: SDR50 at 100 MHz, then SDR25 |
+| Throughput | 128 KiB per request in 1.9 to 2.8 ms (47 to 68 MB/s); 64 reads without error; no slow requests expected in this region |
+| Close | bank back at 3.3 V, clocks and pins restored, normal return; the card at 1.8 V afterwards |
+| Risk | the card has never been at 1.8 V. About one chance in five that CMD11 or the sweep behaves unlike 3-3's card (a stop at the switch, or no window). Any stop returns the board to FEL by watchdog reset; the card stays at 3.3 V if CMD11 was not completed, or at 1.8 V if it was. No power cycle is needed for either |
