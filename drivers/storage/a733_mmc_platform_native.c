@@ -192,7 +192,7 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
              if((v&SUNXI_SMHC_CMD_INDEX)==51){if(v!=(flags|SUNXI_SMHC_CMD_DATA|51u)||argument)return 0;}
              else if(v==(flags|6u)){if(argument!=2)return 0;}
              else if(v==(flags|SUNXI_SMHC_CMD_DATA|6u)){if(n->sd_profile<SUNXI_MMC_SD_HIGH_SPEED4||
-                 (argument!=0x00fffff1&&argument!=0x80fffff1&&(!uhs||(argument!=0x00fffff3&&argument!=0x80fffff3))))return 0;}
+                 (argument!=0x00fffff1&&argument!=0x80fffff1&&(!uhs||(argument!=0x00fffff3&&argument!=0x80fffff3&&argument!=0x00fffff2&&argument!=0x80fffff2))))return 0;}
              else return 0;}
             break;
         case 24:if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;break;

@@ -86,6 +86,7 @@ static int run_lifetime(unsigned start18,int cut,unsigned variant)
     closing=stall_update=fail_gate=gate_order=0;
 #define TICK() do{if((int)n++==cut)goto cut_point;}while(0)
     if(variant==2)begin(1,0,1);else begin(1,1,3);
+    if(variant==4)u.sdr50=1;       /* a card with SDR50 as well: the restarts walk SDR104, SDR50, SDR25 */
     shadow_begin();shadow_refusals=0;m.platform.ops.write=shadow_write;
     enum a733_mmc_platform_result r=A733_MMC_PENDING;
     for(unsigned i=0;i<40000&&r!=A733_MMC_READY;++i){TICK();r=uhs_step();assert(r==A733_MMC_PENDING||r==A733_MMC_READY);}
@@ -123,6 +124,21 @@ static int run_lifetime(unsigned start18,int cut,unsigned variant)
         r=A733_MMC_PENDING;
         for(unsigned i=0;i<400&&r!=A733_MMC_COMPLETE;++i){TICK();r=uhs_step();assert(r!=A733_MMC_RETAINED);}
         assert(r==A733_MMC_COMPLETE&&a733_mmc_platform_take(&m.platform,&result,9000000)==A733_MMC_READY&&result.received==4096);
+        }
+    }
+    if(variant==4){
+        /* The ceilings SDR50 and then SDR25: the CMD6 for function 2 must pass the adapter's command rule (the first restart probe on the board stopped on it). */
+        static const unsigned ceilings[2]={2,1};
+        for(unsigned step=0;step<2;++step){
+            assert(a733_mmc_platform_restart(&m.platform,9000000,ceilings[step],SUNXI_MMC_MODE_ERRORS)==A733_MMC_PENDING);
+            r=A733_MMC_PENDING;
+            for(unsigned i=0;i<40000&&r!=A733_MMC_READY;++i){TICK();r=uhs_step();assert(r==A733_MMC_PENDING||r==A733_MMC_READY);}
+            assert(r==A733_MMC_READY&&m.platform.core.card.signal_1v8&&u.cmd11==(start18?0u:1u)&&pf_writes==1&&m.platform.signal==2);
+            assert(m.platform.core.card.timing==(step?1u:2u)&&m.platform.core.card.card_hz==(step?50000000u:100000000u));
+            assert(a733_mmc_platform_read(&m.platform,8,8,buffer,sizeof(buffer),9000000)==A733_MMC_PENDING);
+            r=A733_MMC_PENDING;
+            for(unsigned i=0;i<400&&r!=A733_MMC_COMPLETE;++i){TICK();r=uhs_step();assert(r!=A733_MMC_RETAINED);}
+            assert(r==A733_MMC_COMPLETE&&a733_mmc_platform_take(&m.platform,&result,9000000)==A733_MMC_READY&&result.received==4096);
         }
     }
     if(variant==5){assert(!shadow_refusals&&!commands_at_mismatch);return (int)n;}   /* no read happened, so the platform does not close (close_ready) */
