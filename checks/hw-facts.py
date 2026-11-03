@@ -23,8 +23,7 @@ hw = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(hw)
 
 # Host models that stand in for the GIC. Each reads GicModel instead of restating the values.
-MODELS = ('checks/a733-smp-cached.py', 'checks/a733-supervised-scheduler.py',
-          'checks/cpu-local-timer.py', 'checks/cpu-idle-wake.py', 'checks/cpu-power-states.py', 'checks/storage-read-single-core.py')
+MODELS = ('checks/a733-smp-cached.py',)
 # The literals that encoded the priority mask and the Non-secure views.
 FORBIDDEN = (
     (re.compile(r'&\s*0xf8\b'), 'a priority mask literal'),
@@ -320,9 +319,6 @@ LITERAL_COMPARISONS = {
     'apps/spi/irq.c': (2, 'single-core SPI image: compares with 0xb0 in its own monitor view'),
     'drivers/pwm/a733_pwm.c': (1, 'single-core PWM image: compares with 0xd8 in its own monitor view'),
     'checks/a733-irq-table.c': (1, 'model of the route installer: stored priority'),
-    'checks/gpu-single-core.py': (1, 'single-core GPU image model'), 'checks/hdmi-audio-boot.py': (1, 'single-core image model'),
-    'checks/pwm-single-core.py': (1, 'single-core PWM image model'), 'checks/thermal-single-core.py': (1, 'single-core thermal image model'),
-    'checks/sunstone-image-link.py': (1, 'route floor: the stored API floor 0xd8 compared with the stored priority'),
 }
 PRIORITY_LITERAL = re.compile(r'(?:==|!=|<=|>=|(?<![<])<(?![<])|(?<![>])>(?![>]))\s*(?:UINT32_C\()?0x(?:b0|d8)(?:0{6})?u?\b|'
                               r'\b0x(?:b0|d8)(?:0{6})?u?\)?\s*(?:==|!=|<=|>=)')

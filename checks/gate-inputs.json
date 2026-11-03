@@ -60,12 +60,832 @@
   }
  },
  "checks": {
-  "os-failure-return.py": {
+  "a733-accelerator-clock-reference.py": {
    "runs": [
     {
      "args": [
-      "{elf:ret-npu-load}",
-      "--out",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-camera-capture.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-camera-native.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-camera-platform.py": {
+   "runs": [
+    {
+     "args": [
+      "--sources",
+      "{cache}/sources/camera/bsp/drivers/vin/vin-mipi/combo_csi",
+      "--manual",
+      "{cache}/sources/camera-research/A733_User_Manual_V1.00.pdf",
+      "--text",
+      "{cache}/sources/camera-research/A733_User_Manual_V1.00.txt",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-camera-stream.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-ce-entropy.py": {
+   "runs": [
+    {
+     "args": [
+      "--sources",
+      "{cache}/sources/rng",
+      "--manual",
+      "{cache}/sources/camera-research/A733_User_Manual_V1.00.txt",
+      "--uboot",
+      "{cache}/sources/u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a/drivers/sunxi_crypto/sunxi_crypto_3.0.c",
+      "--native-object",
+      "{build:sup}/CMakeFiles/sunstone-a733-os-core.dir/drivers/crypto/a733_ce_native.c.obj"
+     ]
+    }
+   ]
+  },
+  "a733-ce.py": {
+   "runs": [
+    {
+     "args": [
+      "--sources",
+      "{cache}/sources/rng",
+      "--manual",
+      "{cache}/sources/camera-research/A733_User_Manual_V1.00.txt",
+      "--ccu",
+      "{cache}/sources/board-kernel/ccu-sun60iw2.c",
+      "--rtc",
+      "{cache}/sources/board-kernel/ccu-sun60iw2-rtc.c",
+      "--object",
+      "{build:sup}/CMakeFiles/sunstone-a733-os-core.dir/drivers/crypto/a733_ce_native.c.obj"
+     ]
+    }
+   ]
+  },
+  "a733-cpu-coherence.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-cpu-continue.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-cpu-entry.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-cpu-start.py": {
+   "runs": [
+    {
+     "args": [
+      "--firmware",
+      "{cache}/sources/cpu-startup/monitor.fex",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-display-engine.py": {
+   "runs": [
+    {
+     "args": [
+      "--source-root",
+      "{cache}/sources/display",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-display-pll.py": {
+   "runs": [
+    {
+     "args": [
+      "--source-root",
+      "{cache}/sources/display",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-gpu-core-native.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--libc-include",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include"
+     ]
+    }
+   ]
+  },
+  "a733-mmc-dma-chain.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-mmc-gic-irq.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-mmc-platform-write.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-mmc-platform.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-mmc-sdc3.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-monitor-are.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{output}/build",
+      "--output",
+      "{output}/result.json",
+      "--clang",
+      "/usr/lib/llvm-21/bin/clang",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--objdump",
+      "/usr/lib/llvm-21/bin/llvm-objdump"
+     ]
+    }
+   ]
+  },
+  "a733-pcie-reference.py": {
+   "runs": [
+    {
+     "args": [
+      "{cache}/sources/pcie/kernel",
+      "{cache}/sources/u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-pcie-trace.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-pmic-mmc.py": {
+   "runs": [
+    {
+     "args": [
+      "{cache}/sources/u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-radio-entropy.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7"
+     ]
+    },
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--fixture",
+      "contention",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7"
+     ]
+    }
+   ]
+  },
+  "a733-radio-platform.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-smp-image.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2"
+     ]
+    }
+   ]
+  },
+  "a733-storage-native.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}",
+      "--watchdog-include",
+      "include"
+     ]
+    }
+   ]
+  },
+  "a733-storage-update.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-tcon-lcd.py": {
+   "runs": [
+    {
+     "args": [
+      "--source-root",
+      "{cache}/sources/display",
+      "--manual",
+      "{cache}/sources/camera-research/A733_User_Manual_V1.00.pdf",
+      "--text",
+      "{cache}/sources/camera-research/A733_User_Manual_V1.00.txt",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-typec-native.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-uart-platform.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-uart.py": {
+   "runs": [
+    {
+     "args": [
+      "--source",
+      "{cache}/sources/uart",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "a733-usb-platform.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--source-cache",
+      "{cache}/sources/usb-platform",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
+  "a733-usb2-host.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--typec",
+      ".",
+      "--twi",
+      ".",
+      "--port",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2/portable/GCC/ARM_AARCH64_SRE"
+     ]
+    }
+   ]
+  },
+  "admission-preflight.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{build:ret-latency}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "aic8800-data.py": {
+   "runs": [
+    {
+     "args": [
+      "--reference-dir",
+      "{cache}/sources/radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "aic8800-dispatch.py": {
+   "runs": [
+    {
+     "args": [
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--rsn",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--kernel",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--reference-dir",
+      "{cache}/sources/radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "aic8800-firmware.py": {
+   "runs": [
+    {
+     "args": [
+      "--artifacts",
+      "{cache}/sources/radio/firmware/aic8800d80",
+      "--reference-dir",
+      "{cache}/sources/radio/kernel/drivers/net/wireless/aic8800/aic8800_bsp",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "aic8800-runtime.py": {
+   "runs": [
+    {
+     "args": [
+      "--reference-dir",
+      "{cache}/sources/radio/kernel/drivers/net/wireless/aic8800",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "aic8800-sdio-codec.py": {
+   "runs": [
+    {
+     "args": [
+      "--reference-dir",
+      "{cache}/sources/radio/kernel/drivers/net/wireless/aic8800/aic8800_bsp",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "aic8800-sdio-transport.py": {
+   "runs": [
+    {
+     "args": [
+      "--reference-dir",
+      "{cache}/sources/radio-transport",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "aic8800-security.py": {
+   "runs": [
+    {
+     "args": [
+      "--upstream",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "aic8800-wifi-power.py": {
+   "runs": [
+    {
+     "args": [
+      "--reference-dir",
+      "{cache}/sources/radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "aic8800-wifi.py": {
+   "runs": [
+    {
+     "args": [
+      "--reference-dir",
+      "{cache}/sources/radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv",
+      "--binding-vectors",
+      "{cache}/evidence/radio-runtime-20261016/model/binding-vectors.bin",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "audit-device-minors-usb-control.py": {
+   "runs": [
+    {
+     "args": [
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "board-addressing.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7"
+     ]
+    }
+   ]
+  },
+  "board-radio.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include"
+     ]
+    }
+   ]
+  },
+  "bt-acl-incoming.py": {
+   "runs": [
+    {
+     "args": [
+      "--source",
+      "{cache}/sources/bluetooth-hci",
+      "--output",
+      "{output}",
+      "--spec",
+      "{cache}/sources/bluetooth-incoming/hci-Core-54.html"
+     ]
+    }
+   ]
+  },
+  "bt-acl.py": {
+   "runs": [
+    {
+     "args": [
+      "--source",
+      "{cache}/sources/bluetooth-hci",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "bt-avdtp.py": {
+   "runs": [
+    {
+     "args": [
+      "--source",
+      "{cache}/sources/bluetooth-hci",
+      "--l2cap-source",
+      "{cache}/sources/bluetooth-l2cap",
+      "--sdp-source",
+      "{cache}/sources/bluetooth-sdp",
+      "--sbc-source",
+      "{cache}/sources/bluetooth-msbc",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "bt-config.py": {
+   "runs": [
+    {
+     "args": [
+      "--source",
+      "{cache}/sources/bluetooth-hci",
+      "--output",
+      "{output}",
+      "--spec",
+      "{cache}/sources/bluetooth-incoming/hci-Core-54.html"
+     ]
+    }
+   ]
+  },
+  "bt-hci.py": {
+   "runs": [
+    {
+     "args": [
+      "--source",
+      "{cache}/sources/bluetooth-hci",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "bt-hfp-ag.py": {
+   "runs": [
+    {
+     "args": [
+      "--source",
+      "{cache}/sources/bluetooth-hci",
+      "--l2cap-source",
+      "{cache}/sources/bluetooth-l2cap",
+      "--sdp-source",
+      "{cache}/sources/bluetooth-sdp",
+      "--rfcomm-source",
+      "{cache}/sources/bluetooth-rfcomm",
+      "--hfp-source",
+      "{cache}/sources/bluetooth-hfp",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "bt-l2cap-retry.py": {
+   "runs": [
+    {
+     "args": [
+      "--source",
+      "{cache}/sources/bluetooth-hci",
+      "--l2cap-source",
+      "{cache}/sources/bluetooth-l2cap",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "bt-l2cap.py": {
+   "runs": [
+    {
+     "args": [
+      "--source",
+      "{cache}/sources/bluetooth-hci",
+      "--l2cap-source",
+      "{cache}/sources/bluetooth-l2cap",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "bt-rfcomm-server.py": {
+   "runs": [
+    {
+     "args": [
+      "--source",
+      "{cache}/sources/bluetooth-hci",
+      "--l2cap-source",
+      "{cache}/sources/bluetooth-l2cap",
+      "--sdp-source",
+      "{cache}/sources/bluetooth-sdp",
+      "--rfcomm-source",
+      "{cache}/sources/bluetooth-rfcomm",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "bt-rfcomm.py": {
+   "runs": [
+    {
+     "args": [
+      "--source",
+      "{cache}/sources/bluetooth-hci",
+      "--l2cap-source",
+      "{cache}/sources/bluetooth-l2cap",
+      "--sdp-source",
+      "{cache}/sources/bluetooth-sdp",
+      "--rfcomm-source",
+      "{cache}/sources/bluetooth-rfcomm",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "bt-sco.py": {
+   "runs": [
+    {
+     "args": [
+      "--source",
+      "{cache}/sources/bluetooth-hci",
+      "--l2cap-source",
+      "{cache}/sources/bluetooth-l2cap",
+      "--sdp-source",
+      "{cache}/sources/bluetooth-sdp",
+      "--rfcomm-source",
+      "{cache}/sources/bluetooth-rfcomm",
+      "--hfp-source",
+      "{cache}/sources/bluetooth-hfp",
+      "--audio-source",
+      "{cache}/sources/bluetooth-audio",
+      "--core-source",
+      "{cache}/sources/bluetooth-incoming",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "bt-sdp-server.py": {
+   "runs": [
+    {
+     "args": [
+      "--source",
+      "{cache}/sources/bluetooth-hci",
+      "--l2cap-source",
+      "{cache}/sources/bluetooth-l2cap",
+      "--sdp-source",
+      "{cache}/sources/bluetooth-sdp",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "bt-sdp.py": {
+   "runs": [
+    {
+     "args": [
+      "--source",
+      "{cache}/sources/bluetooth-hci",
+      "--l2cap-source",
+      "{cache}/sources/bluetooth-l2cap",
+      "--sdp-source",
+      "{cache}/sources/bluetooth-sdp",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "camera-application.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973"
+     ]
+    }
+   ]
+  },
+  "clock-token-retention.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
       "{output}"
      ]
     }
@@ -94,12 +914,421 @@
     }
    ]
   },
-  "os-cpu-return-thermal.py": {
+  "cpu-table-walks.py": {
    "runs": [
     {
      "args": [
       "--image",
-      "{elf:ret-npu-load}",
+      "{elf:sup}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "dev-run.py": {
+   "runs": [
+    {
+     "args": [
+      "--out",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "device-memory-capacity.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--clang",
+      "/usr/lib/llvm-21/bin/clang",
+      "--ld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2"
+     ]
+    }
+   ]
+  },
+  "display-clock-handoff.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "display-native.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "display-scanout.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "dma-pool-return.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
+  "dma-pool-session.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
+  "dma-retirement.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
+  "el3-mbus.py": {
+   "runs": [
+    {
+     "args": [
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "fatfs-port.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "fault-capture.py": {
+   "runs": [
+    {
+     "args": [
+      "--image",
+      "{elf:sup}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "fetch-sources.py": {
+   "runs": [
+    {
+     "args": [
+      "--work",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "gpu-batch.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--firmware",
+      "{cache}/evidence/gpu-render-20261017/native1/fixtures/gpu.fw",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
+  "gpu-call.py": {
+   "runs": [
+    {
+     "args": [
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--clang",
+      "/usr/lib/llvm-21/bin/clang",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "gpu-compute-reserved.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--firmware",
+      "{cache}/sources/gpu/rogue_36.56.104.183_v1.fw",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
+  "gpu-graphics-memory.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--firmware",
+      "{cache}/sources/gpu/rogue_36.56.104.183_v1.fw",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
+  "gpu-linked-lifecycle.py": {
+   "runs": [
+    {
+     "args": [
+      "--image",
+      "{elf:ret-gpu}",
+      "--profile",
+      "os",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "gpu-performance.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--sources",
+      "{cache}/sources/gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination"
+     ]
+    }
+   ]
+  },
+  "gpu-queue-program.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{output}",
+      "--ld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
+  "gpu-queue.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--firmware",
+      "{cache}/sources/gpu/rogue_36.56.104.183_v1.fw",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
+  "gpu-render-cleanup.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--firmware",
+      "{cache}/sources/gpu/rogue_36.56.104.183_v1.fw",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
+  "gpu-render.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--firmware",
+      "{cache}/sources/gpu/rogue_36.56.104.183_v1.fw",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
+  "gpu-texture.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--firmware",
+      "{cache}/evidence/gpu-render-20261017/native1/fixtures/gpu.fw",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
+  "hevc-decode-model.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "hevc-pixel-reference-host.py": {
+   "runs": [
+    {
+     "args": [
+      "--clip",
+      "{cache}/evidence/hevc-decode-20261020/two-pictures.hevc",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "i2s-interrupt.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld"
+     ]
+    }
+   ]
+  },
+  "io-native-ordering.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "land.py": {
+   "runs": [
+    {
+     "args": [
       "--output",
       "{output}"
      ]
@@ -118,37 +1347,111 @@
     }
    ]
   },
-  "os-image-audio.py": {
+  "maintenance-watchdog.py": {
    "runs": [
     {
      "args": [
-      "--build",
-      "{build:resaud}",
+      "--evidence",
+      "{output}",
+      "--native-tree",
+      "{source}"
+     ]
+    }
+   ]
+  },
+  "media-minimum-holds.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}",
+      "--dsi-reference",
+      "{cache}/evidence/dsi-phy-20261016/reference.c"
+     ]
+    }
+   ]
+  },
+  "memory-architecture-smp.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--clang",
+      "/usr/lib/llvm-21/bin/clang",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2"
+     ]
+    }
+   ]
+  },
+  "nbg-command-link.py": {
+   "runs": [
+    {
+     "args": [
       "--output",
       "{output}"
      ]
     }
    ]
   },
-  "os-image-headset.py": {
+  "nbg-graph-admission.py": {
    "runs": [
     {
      "args": [
-      "--build",
-      "{build:headset}",
       "--output",
       "{output}"
      ]
     }
    ]
   },
-  "os-image-radio.py": {
+  "npu-application-clock-reference.py": {
    "runs": [
     {
      "args": [
-      "--build",
-      "{build:resradio}",
+      "--image",
+      "{elf:npu}",
       "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "npu-deadline-setup.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "npu-pool-size.py": {
+   "runs": [
+    {
+     "args": [
+      "--artifacts",
+      "{cache}/build/npu-board/session-artifacts.json",
+      "--models",
+      "apps/os/npu-models.json",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "npu-stop-native.py": {
+   "runs": [
+    {
+     "args": [
+      "--elf",
+      "{elf:ret-npu-load}",
+      "--evidence",
       "{output}"
      ]
     }
@@ -178,13 +1481,86 @@
     }
    ]
   },
-  "os-gpu-return.py": {
+  "os-cpu-return-entry-owner.py": {
+   "runs": [
+    {
+     "args": [
+      "{elf:ret-npu-load}",
+      "--out",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-cpu-return-entry.py": {
+   "runs": [
+    {
+     "args": [
+      "{elf:ret-npu-load}",
+      "--out",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-cpu-return-rails.py": {
+   "runs": [
+    {
+     "args": [
+      "{bundle:opp33}",
+      "--out",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "{bundle:opp33-dcdc3}",
+      "--out",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-cpu-return-services.py": {
+   "runs": [
+    {
+     "args": [
+      "{elf:ret-gpu}",
+      "--out",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-cpu-return-thermal.py": {
    "runs": [
     {
      "args": [
       "--image",
-      "{elf:ret-gpu}",
+      "{elf:ret-npu-load}",
       "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-cpu-return.py": {
+   "runs": [
+    {
+     "args": [
+      "{elf:ret-npu-load}",
+      "--out",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-failure-return.py": {
+   "runs": [
+    {
+     "args": [
+      "{elf:ret-npu-load}",
+      "--out",
       "{output}"
      ]
     }
@@ -202,7 +1578,7 @@
     }
    ]
   },
-  "os-gpu-untouched.py": {
+  "os-gpu-return.py": {
    "runs": [
     {
      "args": [
@@ -226,12 +1602,48 @@
     }
    ]
   },
+  "os-gpu-untouched.py": {
+   "runs": [
+    {
+     "args": [
+      "--image",
+      "{elf:ret-gpu}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
   "os-gpu-wait-linked.py": {
    "runs": [
     {
      "args": [
       "--image",
       "{elf:ret-gpu}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-image-audio.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{build:resaud}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-image-headset.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{build:headset}",
       "--output",
       "{output}"
      ]
@@ -306,6 +1718,50 @@
     }
    ]
   },
+  "os-image-radio.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{build:resradio}",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-npu-fault.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-npu-graphs.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "os-npu-sdk-contract.py": {
+   "runs": [
+    {
+     "args": [
+      "--native-flags",
+      "{build:npu}/CMakeFiles/sunstone-a733-os.dir/flags.make",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
   "os-npu-start.py": {
    "runs": [
     {
@@ -320,19 +1776,582 @@
     }
    ]
   },
-  "os-cpu-return-rails.py": {
+  "pcie-qemu.py": {
    "runs": [
     {
      "args": [
-      "{bundle:opp33}",
-      "--out",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "pins-expanded.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "power-write-order.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "provider-clock-reference.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "pvr-cccb.py": {
+   "runs": [
+    {
+     "args": [
+      "--sources",
+      "{cache}/sources/gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "pvr-compute-context.py": {
+   "runs": [
+    {
+     "args": [
+      "--sources",
+      "{cache}/sources/gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "pvr-compute-programs.py": {
+   "runs": [
+    {
+     "args": [
+      "--mesa-source",
+      "{cache}/gpu-producer-build/mesa",
+      "--mesa-build",
+      "{cache}/gpu-producer-build/build",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "pvr-compute-service.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--freertos",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--firmware",
+      "{cache}/sources/gpu/rogue_36.56.104.183_v1.fw",
+      "--lld",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64"
+     ]
+    }
+   ]
+  },
+  "pvr-free-list.py": {
+   "runs": [
+    {
+     "args": [
+      "--sources",
+      "{cache}/sources/gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "pvr-gpu-events.py": {
+   "runs": [
+    {
+     "args": [
+      "--sources",
+      "{cache}/sources/gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "pvr-render-target.py": {
+   "runs": [
+    {
+     "args": [
+      "--sources",
+      "{cache}/sources/gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination",
+      "--mesa",
+      "{cache}/gpu-producer-build/mesa",
+      "--mesa-archive",
+      "{cache}/sources/gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6.tar.gz",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "queue-add.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "radio-bootstrap-budget.py": {
+   "runs": [
+    {
+     "args": [
+      "--firmware",
+      "{cache}/sources/radio/firmware/aic8800d80",
+      "--four-bit",
+      "--profile",
+      "radio"
+     ]
+    },
+    {
+     "args": [
+      "--firmware",
+      "{cache}/sources/radio/firmware/aic8800d80",
+      "--four-bit",
+      "--profile",
+      "headset"
+     ]
+    }
+   ]
+  },
+  "radio-network-dhcp-dns.py": {
+   "runs": [
+    {
+     "args": [
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--rsn",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--kernel",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--clang",
+      "/usr/bin/clang-21",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "radio-network.py": {
+   "runs": [
+    {
+     "args": [
+      "--case",
+      "generation",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--rsn",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--kernel",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--evidence",
       "{output}"
      ]
     },
     {
      "args": [
-      "{bundle:opp33-dcdc3}",
-      "--out",
+      "--case",
+      "entropy",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--rsn",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--kernel",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--evidence",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--case",
+      "late",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--rsn",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--kernel",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--evidence",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--case",
+      "alias",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--rsn",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--kernel",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--evidence",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--case",
+      "inbound",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--rsn",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--kernel",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--evidence",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--case",
+      "inbound-cancel",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--rsn",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--kernel",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--evidence",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--case",
+      "inbound-timeout",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--rsn",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--kernel",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--evidence",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--case",
+      "inbound-queue",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--rsn",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--kernel",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--evidence",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--case",
+      "inbound-late-child",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--rsn",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--kernel",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--evidence",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--case",
+      "inbound-lost-child",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--rsn",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--kernel",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--evidence",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--case",
+      "inbound-pending",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--rsn",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--kernel",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--evidence",
+      "{output}"
+     ]
+    },
+    {
+     "args": [
+      "--case",
+      "rekey",
+      "--tcp",
+      "{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+      "--rsn",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--kernel",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--headers",
+      "{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include",
+      "--linker",
+      "{cache}/host/usr/lib/llvm-21/bin/ld.lld",
+      "--qemu",
+      "{cache}/host/usr/bin/qemu-system-aarch64",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "radio-patch.py": {
+   "runs": [
+    {
+     "args": [
+      "{cache}/sources/radio/firmware/aic8800d80/fw_patch_table_8800d80_u02.bin"
+     ]
+    }
+   ]
+  },
+  "radio-poll-batching.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "radio-transport-aggregate.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "sae-openssl.py": {
+   "runs": [
+    {
+     "args": [
+      "--openssl",
+      "{cache}/sources/radio/stacks/openssl-3.5.9",
+      "--upstream",
+      "{cache}/sources/radio/stacks/wpa_supplicant-2.12",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "scheduler-control.py": {
+   "runs": [
+    {
+     "args": [
+      "--build-dir",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "scheduler-deadline.py": {
+   "runs": [
+    {
+     "args": [
+      "--build-dir",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "scheduler-notification.py": {
+   "runs": [
+    {
+     "args": [
+      "--build-dir",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "scheduler-owner.py": {
+   "runs": [
+    {
+     "args": [
+      "--build-dir",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "scheduler-route.py": {
+   "runs": [
+    {
+     "args": [
+      "--build-dir",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "scheduler-wake-model.py": {
+   "runs": [
+    {
+     "args": [
+      "--tlc-jar",
+      "{cache}/build/scheduler-rt-1101/wake-model-build/tla2tools.jar",
+      "--build-dir",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "sdio-controller.py": {
+   "runs": [
+    {
+     "args": [
+      "--reference-dir",
+      "{cache}/sources/radio-sdio",
+      "--evidence",
       "{output}"
      ]
     }
@@ -389,294 +2408,118 @@
      ]
     }
    ]
+  },
+  "sunstone-app-abi.py": {
+   "runs": [
+    {
+     "args": [
+      "--build",
+      "{output}",
+      "--cc",
+      "/usr/bin/clang",
+      "--clang",
+      "/usr/bin/clang"
+     ]
+    }
+   ]
+  },
+  "sunxi-mmc-uhs.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "sunxi-mmc-write.py": {
+   "runs": [
+    {
+     "args": [
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "sunxi-mmc.py": {
+   "runs": [
+    {
+     "args": [
+      "--sources",
+      "{cache}/sources",
+      "--evidence",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "training-record-copies.py": {
+   "runs": [
+    {
+     "args": [
+      "--restore-set",
+      "{cache}/evidence/dram-restore-v5-1031/restore-set-v5.json",
+      "--boot0",
+      "{cache}/sources/board-boot/boot0_sdcard_orangepizero3w.fex",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
+  },
+  "usb-host-classes.py": {
+   "runs": [
+    {
+     "args": [
+      "--output",
+      "{output}",
+      "--port",
+      "{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2/portable/GCC/AArch64"
+     ]
+    }
+   ]
+  },
+  "usb0-service-burst.py": {
+   "runs": [
+    {
+     "args": [
+      "--tinyusb",
+      "{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "--output",
+      "{output}"
+     ]
+    }
+   ]
   }
  },
  "board": [],
  "waived": {
-  "a733-accelerator-clock-reference.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
-  "a733-camera-capture.py": "recorded evidence or fixture captures | needs --evidence",
-  "a733-camera-native.py": "recorded evidence or fixture captures | needs --evidence",
-  "a733-camera-platform.py": "recorded evidence or fixture captures | needs --sources, --manual, --text, --evidence",
-  "a733-camera-stream.py": "recorded evidence or fixture captures | needs --evidence",
-  "a733-ce-cipher.py": "vendor or cached sources, toolchain paths | needs --sources, --manual, --model-log, --native-object",
-  "a733-ce-entropy.py": "vendor or cached sources, toolchain paths | needs --sources, --manual, --uboot, --native-object",
-  "a733-ce-hash.py": "vendor or cached sources, toolchain paths | needs --sources, --manual, --model-log, --native-object",
-  "a733-ce.py": "vendor or cached sources, toolchain paths | needs --sources, --manual, --ccu, --rtc, --object",
-  "a733-cpu-coherence.py": "recorded evidence or fixture captures | needs --evidence",
-  "a733-cpu-continue.py": "recorded evidence or fixture captures | needs --evidence",
-  "a733-cpu-entry.py": "recorded evidence or fixture captures | needs --evidence",
-  "a733-cpu-start.py": "recorded evidence or fixture captures | needs --firmware, --evidence",
-  "a733-device-launch.py": "recorded evidence or fixture captures | needs --image, --evidence",
-  "a733-display-engine.py": "recorded evidence or fixture captures | needs --source-root, --evidence",
-  "a733-display-pll.py": "recorded evidence or fixture captures | needs --source-root, --evidence",
-  "a733-gpu-core-native.py": "other arguments | needs --output, --libc-include",
-  "a733-gpu-power-reference.py": "recorded evidence or fixture captures | needs sources, evidence, ddk",
-  "a733-hdmi-reference.py": "vendor or cached sources, toolchain paths | needs --sources, --manifest, --manual, --board-dts, --trace",
-  "a733-media-clock.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
-  "a733-mmc-dma-chain.py": "recorded evidence or fixture captures | needs --evidence",
-  "a733-mmc-gic-irq.py": "recorded evidence or fixture captures | needs --evidence",
-  "a733-mmc-platform-write.py": "recorded evidence or fixture captures | needs --evidence",
-  "a733-mmc-platform.py": "recorded evidence or fixture captures | needs --evidence",
-  "a733-mmc-sdc3.py": "recorded evidence or fixture captures | needs --evidence",
-  "a733-monitor-are.py": "vendor or cached sources, toolchain paths | needs --build, --output, --clang, --lld, --objdump",
-  "a733-pcie-reference.py": "recorded evidence or fixture captures | needs kernel, uboot, evidence, cache/evidence",
-  "a733-pcie-trace.py": "other arguments | needs --output, pending re-qualification against board measurements: PCIe controller, PHY, link-training and NVMe latencies and responses are uncited",
-  "a733-pmic-mmc.py": "recorded evidence or fixture captures | needs uboot, evidence",
-  "a733-radio-entropy.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tcp",
-  "a733-radio-platform.py": "recorded evidence or fixture captures | needs --evidence",
-  "a733-radio-session.py": "recorded evidence or fixture captures | needs --firmware, --tcp, --rsn, --kernel, --tinyusb, --headers, --linker, --qemu, --reference-dir, --evidence",
-  "a733-smp-cached.py": "recorded evidence or fixture captures | needs --evidence",
-  "a733-smp-image.py": "recorded evidence or fixture captures | needs --evidence, --freertos",
-  "a733-smp-launch.py": "an application image, session or bundle the gate does not build | needs --bundle, --output",
-  "a733-smp-observe-host.py": "recorded evidence or fixture captures | needs --observer-source, --evidence",
-  "a733-smp-observe.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "a733-smp-supervised-launch.py": "an application image, session or bundle the gate does not build | needs --bundle, --output",
-  "a733-storage-native.py": "recorded evidence or fixture captures | needs --evidence, --watchdog-include",
-  "a733-storage-update.py": "recorded evidence or fixture captures | needs --evidence",
-  "a733-supervised-scheduler.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "a733-tcon-lcd.py": "recorded evidence or fixture captures | needs --source-root, --manual, --text, --evidence",
-  "a733-thermal.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
-  "a733-typec-native.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
-  "a733-uart-platform.py": "recorded evidence or fixture captures | needs --evidence",
-  "a733-uart.py": "vendor or cached sources, toolchain paths | needs --source, --output",
-  "a733-usb-platform.py": "vendor or cached sources, toolchain paths | needs --output, --source-cache, --lld",
-  "a733-usb2-host.py": "ROM, boot0 or device captures | needs --output, --typec, --twi, --port",
-  "accelerator-providers.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
-  "admission-preflight.py": "an application image, session or bundle the gate does not build | needs --build, --output",
-  "aic8800-data.py": "recorded evidence or fixture captures | needs --reference-dir, --evidence",
-  "aic8800-dispatch.py": "recorded evidence or fixture captures | needs --tcp, --rsn, --kernel, --tinyusb, --headers, --linker, --qemu, --reference-dir, --evidence",
-  "aic8800-firmware.py": "recorded evidence or fixture captures | needs --artifacts, --reference-dir, --evidence",
-  "aic8800-runtime.py": "recorded evidence or fixture captures | needs --reference-dir, --evidence",
-  "aic8800-sdio-codec.py": "recorded evidence or fixture captures | needs --reference-dir, --evidence",
-  "aic8800-sdio-transport.py": "recorded evidence or fixture captures | needs --reference-dir, --evidence",
-  "aic8800-security.py": "ROM, boot0 or device captures | needs --upstream",
-  "aic8800-supplicant.py": "recorded evidence or fixture captures | needs --upstream, --evidence",
-  "aic8800-wifi-power.py": "recorded evidence or fixture captures | needs --reference-dir, --evidence",
-  "aic8800-wifi.py": "recorded evidence or fixture captures | needs --reference-dir, --binding-vectors, --evidence",
-  "audit-device-minors-usb-control.py": "vendor or cached sources, toolchain paths | needs --tinyusb, --headers, --output",
-  "bluetooth-application.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tcp, --hci-reference, --image, --build-dir",
-  "board-addressing.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tcp",
-  "board-application.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --tcp, --rsn, --headers",
-  "board-npu-cancel-profile.py": "other arguments | needs --active-elf, --active-manifest, --legacy-elf, --legacy-manifest, --output",
-  "board-probe.py": "an application image, session or bundle the gate does not build | needs --elf, --out",
-  "board-radio.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tcp, --headers",
-  "board-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --session, --profile, --output",
-  "bt-acl-incoming.py": "vendor or cached sources, toolchain paths | needs --source, --output, --spec",
-  "bt-acl.py": "vendor or cached sources, toolchain paths | needs --source, --output",
-  "bt-avdtp.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --sdp-source, --sbc-source, --output",
-  "bt-config.py": "vendor or cached sources, toolchain paths | needs --source, --output, --spec",
-  "bt-hci.py": "vendor or cached sources, toolchain paths | needs --source, --output",
-  "bt-hfp-ag.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --sdp-source, --rfcomm-source, --hfp-source, --output",
-  "bt-l2cap-retry.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --output",
-  "bt-l2cap.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --output",
-  "bt-rfcomm-server.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --sdp-source, --rfcomm-source, --output",
-  "bt-rfcomm.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --sdp-source, --rfcomm-source, --output",
-  "bt-sco.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --sdp-source, --rfcomm-source, --hfp-source, --audio-source, --core-source, --output",
-  "bt-sdp-server.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --sdp-source, --output",
-  "bt-sdp.py": "vendor or cached sources, toolchain paths | needs --source, --l2cap-source, --sdp-source, --output",
-  "build-identity.py": "other arguments | needs --work",
-  "cached-device-reservations.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --fixtures, --firmware, --qemu, --lld",
-  "camera-application.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb",
-  "camera-sensor.py": "recorded evidence or fixture captures | needs --evidence",
-  "camera-supervised.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --clang, --lld, --objcopy",
-  "card-ddr.py": "ROM, boot0 or device captures | needs build, --record, --other-record, --boot0, --output",
-  "clock-token-retention.py": "recorded evidence or fixture captures | needs --evidence",
-  "clock-wide.py": "recorded evidence or fixture captures | needs --evidence, --freertos-port",
-  "cold-entry.py": "an application image, session or bundle the gate does not build | needs --build, --boot0, --output",
-  "cpu-idle-wake.py": "an application image, session or bundle the gate does not build | needs elf, --out",
-  "cpu-local-timer.py": "an application image, session or bundle the gate does not build | needs elf, --out",
-  "cpu-npu-geometry.py": "an application image, session or bundle the gate does not build | needs elf, --native-result, --out",
-  "cpu-power-states.py": "recorded evidence or fixture captures | needs --evidence, --freertos",
-  "cpu-reliability.py": "an application image, session or bundle the gate does not build | needs elf, --out",
-  "cpu-runtime-qualification.py": "an application image, session or bundle the gate does not build | needs elf, --out",
-  "cpu-table-walks.py": "an application image, session or bundle the gate does not build | needs --output, --image",
-  "deinterlace-host-preparation.py": "an application image, session or bundle the gate does not build | needs --stage, --native, --output",
-  "deinterlace-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --input, --output",
-  "dev-run.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs --out",
-  "device-memory-capacity.py": "vendor or cached sources, toolchain paths | needs --output, --clang, --ld, --qemu, --freertos",
-  "display-clock-handoff.py": "recorded evidence or fixture captures | needs --evidence",
-  "display-native.py": "recorded evidence or fixture captures | needs --evidence",
-  "display-scanout.py": "recorded evidence or fixture captures | needs --evidence",
-  "displayport-admission.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
-  "dma-authority-control.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "dma-pool-return.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --qemu, --lld",
-  "dma-pool-session.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --qemu, --lld",
-  "dma-retirement.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --qemu, --lld",
-  "dsi-replay.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
-  "dsi-scanout-host.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
-  "dsi-scanout-launch.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
-  "dsi-scanout-linked.py": "an application image, session or bundle the gate does not build | needs --image, --application, --output",
-  "dsi-scanout.py": "recorded evidence or fixture captures | needs --output, --image, cache/evidence",
-  "el3-mbus.py": "recorded evidence or fixture captures | needs sys.argv, cache/evidence",
-  "elf-memory-hazards.py": "other arguments | needs images",
-  "fatfs-port.py": "recorded evidence or fixture captures | needs --evidence",
-  "fault-capture.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "fault-decode.py": "other arguments | needs path",
-  "fetch-sources.py": "other arguments | needs --work, cache/bad, cache/pair, cache/tree-1",
-  "g2d-admission.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
-  "g2d-preparation.py": "vendor or cached sources, toolchain paths | needs --native, --table, --output, --clang, --lld",
-  "gpu-batch.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
-  "gpu-call.py": "vendor or cached sources, toolchain paths | needs --freertos, --clang, --linker, --qemu, --output",
-  "gpu-close-ordering.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "gpu-compute-reserved.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
-  "gpu-display-observation.py": "an application image, session or bundle the gate does not build | needs --image, --session, --pending, --terminal, --output",
-  "gpu-display-preparation.py": "an application image, session or bundle the gate does not build | needs --image, --root-session, --output",
-  "gpu-draw-repeat.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
-  "gpu-draw.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
-  "gpu-graphics-memory.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
-  "gpu-linked-lifecycle.py": "an application image, session or bundle the gate does not build | needs --image, --profile, --output",
-  "gpu-local.py": "recorded evidence or fixture captures | needs --build, --mesa-build, --mesa-source, --producer, --control-producer, --ld, cache/evidence",
-  "gpu-performance.py": "vendor or cached sources, toolchain paths | needs --output, --sources",
-  "gpu-queue-program.py": "an application image, session or bundle the gate does not build | needs --build",
-  "gpu-queue.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
-  "gpu-render-cleanup.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
-  "gpu-render.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
-  "gpu-reserved.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --fixtures, --firmware, --qemu, --lld",
-  "gpu-single-core-entry.py": "an application image, session or bundle the gate does not build | needs --image, --bundle, --output",
-  "gpu-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --bundle, --output",
-  "gpu-texture.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --qemu, --lld",
-  "gpu-usb-ordering.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "h264-application.py": "vendor or cached sources, toolchain paths | needs --output, --fixture-evidence, --reference-trace, --freertos, --tinyusb, --tcp, --rsn, --headers",
-  "h264-high-host.py": "an application image, session or bundle the gate does not build | needs --image, --inputs, --native, --launcher, --output",
-  "h264-host.py": "other arguments | needs batch",
-  "h264-stream.py": "other arguments | needs --output, --ffmpeg, --parser, --executor",
-  "h264-supervisor-entry.py": "other arguments | needs --fel, --output",
-  "hdmi-application.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --clang, --lld, --objcopy",
-  "hdmi-audio-boot.py": "an application image, session or bundle the gate does not build | needs --image, --session, --contract, --output",
-  "hdmi-audio-native.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "hdmi-clock-native.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --clang, --lld, --objcopy, --sources",
-  "hdmi-framebuffer.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --clang, --lld, --objcopy, --sources",
-  "hevc-decode-model.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
-  "hevc-pixel-reference-host.py": "other arguments | needs --clip, --output",
-  "hevc-pixel-reference.py": "other arguments | needs --clip, --picture0, --picture1, --output",
-  "i2s-application.py": "recorded evidence or fixture captures | needs --output, --freertos, --tinyusb, --wav, --qemu, cache/evidence",
-  "i2s-interrupt.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --qemu, --lld",
-  "i2s-probe.py": "an application image, session or bundle the gate does not build | needs --build, --out",
-  "i2s-rates-reference.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
-  "io-native-ordering.py": "other arguments | needs --output, pending re-qualification against board measurements: TWI status sequence, reset values and delays and posted-store completion are uncited",
-  "isp0-pixel-reference.py": "an application image, session or bundle the gate does not build | needs --input, --output, --range",
-  "isp0-preparation.py": "vendor or cached sources, toolchain paths | needs --image, --session, --input, --allocation, --table, --output, --clang, --lld",
-  "jpeg-application.py": "recorded evidence or fixture captures | needs --output, --freertos, --tinyusb, --tcp, --rsn, --headers, --fixture",
-  "jpeg-encode-native.py": "recorded evidence or fixture captures | needs --case, --image, --input, --session, --output, cache/evidence",
-  "jpeg-runtime-native.py": "an application image, session or bundle the gate does not build | needs --image, --inputs, --output",
-  "land.py": "cached builds or images of earlier work (cache/build) | needs --output, sys.argv, cache/advance, cache/build, cache/gate-fail, cache/gate-runs, cache/land, cache/landings",
-  "latency-cost-model.py": "other arguments | needs --on-image, --off-image, --on-log, --off-log, --output",
-  "latency-cost.py": "other arguments | needs --enabled, --disabled, --output",
-  "maintenance-watchdog.py": "recorded evidence or fixture captures | needs --evidence, --native-tree",
-  "media-minimum-holds.py": "recorded evidence or fixture captures | needs --evidence, --dsi-reference",
-  "memory-architecture-smp.py": "vendor or cached sources, toolchain paths | needs --output, --clang, --lld, --qemu, --freertos",
-  "memtest-emulate.py": "an application image, session or bundle the gate does not build | needs --elf, --binary, --out",
-  "memtest-image.py": "an application image, session or bundle the gate does not build | needs --elf, --out",
-  "memtest-machine.py": "other arguments | needs pending re-qualification against board measurements: SCTLR_EL1 reset, translation walk, DC ZVA and counter step are uncited",
-  "nbg-assembly.py": "an application image, session or bundle the gate does not build | needs model, native, capture, output",
-  "nbg-command-link.py": "cached builds or images of earlier work (cache/build) | needs --output, cache/build",
-  "nbg-directory-reference.py": "an application image, session or bundle the gate does not build | needs model, inspector, output",
-  "nbg-graph-admission.py": "cached builds or images of earlier work (cache/build) | needs --output, cache/build",
-  "nbg-loader-reference.py": "an application image, session or bundle the gate does not build | needs sdk, model, native, output",
-  "nbg-model.py": "an application image, session or bundle the gate does not build | needs model, native, capture, output",
-  "npu-application-clock-reference.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "npu-board-host.py": "recorded evidence or fixture captures | needs --output, cache/build, cache/evidence",
-  "npu-board-providers.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "npu-board-thermal.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
-  "npu-conv-reference.py": "other arguments | needs fixture, report",
-  "npu-convolution.py": "recorded evidence or fixture captures | needs --model, --input, --output-reference, --assembly-reference, --fixtures",
-  "npu-deadline-setup.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
-  "npu-dual-reference.py": "other arguments | needs fixture, report",
-  "npu-failure-return.py": "recorded evidence or fixture captures | needs --output, --failure-image, --plain-image, cache/evidence",
-  "npu-finite-thermal.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
-  "npu-graph-native.py": "recorded evidence or fixture captures | needs --image, --input, --reference, --output",
-  "npu-idle-producer.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
-  "npu-image-checks.py": "recorded evidence or fixture captures | needs --accelerators, --output, cache/evidence",
-  "npu-interrupt-client.py": "recorded evidence or fixture captures | needs --elf, --evidence",
-  "npu-job-cost.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "npu-large-native.py": "recorded evidence or fixture captures | needs --input, --reference, --case, --image, --assembly, --output",
-  "npu-latency.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
-  "npu-nn-pool-native.py": "recorded evidence or fixture captures | needs --input, --reference, --case, --image, --assembly, --output",
-  "npu-pool-size.py": "other arguments | needs --artifacts, --models, --output",
-  "npu-reserved.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --fixtures, --qemu, --lld",
-  "npu-runtime.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "npu-session.py": "other arguments | needs build, output, --mode",
-  "npu-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
-  "npu-stop-native.py": "recorded evidence or fixture captures | needs --elf, --evidence",
-  "os-cpu-return-entry-owner.py": "an application image, session or bundle the gate does not build | needs elf, --out",
-  "os-cpu-return-entry.py": "an application image, session or bundle the gate does not build | needs elf, --out",
-  "os-cpu-return-services.py": "an application image, session or bundle the gate does not build | needs elf, --out",
-  "os-cpu-return.py": "an application image, session or bundle the gate does not build | needs elf, --out",
-  "os-npu-fault.py": "cached builds or images of earlier work (cache/build) | needs --output, cache/build",
-  "os-npu-graphs.py": "cached builds or images of earlier work (cache/build) | needs --output, cache/build",
-  "os-npu-sdk-contract.py": "vendor or cached sources, toolchain paths | needs --native-flags, --output",
-  "os-npu-service.py": "cached builds or images of earlier work (cache/build) | needs --output, cache/build",
-  "pcie-application-fixture.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
-  "pcie-application-native.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
-  "pcie-pd-rail.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
-  "pcie-qemu.py": "other arguments | needs --output, pending re-qualification against board measurements: the PCIe, PHY, endpoint and NVMe models it runs are uncited",
-  "pins-expanded.py": "recorded evidence or fixture captures | needs --evidence",
-  "pmic-supply-native.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "power-write-order.py": "other arguments | needs --output, pending re-qualification against board measurements: the PMIC bus event latency and status after START, USB reset minimums and initial register values are uncited",
-  "provider-clock-reference.py": "other arguments | needs --output, pending re-qualification against board measurements: bit-level healthy values of the USB2, radio, CE and TWI clock and pin fixtures are uncited",
-  "pvr-cccb.py": "vendor or cached sources, toolchain paths | needs --sources, --output",
-  "pvr-compute-context.py": "vendor or cached sources, toolchain paths | needs --sources, --output",
-  "pvr-compute-job.py": "other arguments | needs --mesa-source, --mesa-build, --board-source, --output",
-  "pvr-compute-mode.py": "vendor or cached sources, toolchain paths | needs elf, --sources",
-  "pvr-compute-package.py": "recorded evidence or fixture captures | needs --evidence, --mesa-source, --mesa-build, cache/evidence",
-  "pvr-compute-programs.py": "recorded evidence or fixture captures | needs --mesa-source, --mesa-build, --evidence",
-  "pvr-compute-service.py": "vendor or cached sources, toolchain paths | needs --output, --freertos, --tinyusb, --firmware, --lld, --qemu",
-  "pvr-free-list.py": "vendor or cached sources, toolchain paths | needs --sources, --output",
-  "pvr-gpu-events.py": "vendor or cached sources, toolchain paths | needs --sources, --output",
-  "pvr-gpu-flush-reference.py": "recorded evidence or fixture captures | needs sources, evidence",
-  "pvr-gpu-service.py": "vendor or cached sources, toolchain paths | needs --elf, --qemu, --nm, --output",
-  "pvr-render-target.py": "vendor or cached sources, toolchain paths | needs --sources, --mesa, --output, --mesa-archive",
-  "pwm-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "qemu-os-boot.py": "other arguments | needs --output, cache/sd-backup",
-  "queue-add.py": "an application image, session or bundle the gate does not build | needs --build",
-  "radio-bootstrap-budget.py": "vendor or cached sources, toolchain paths | needs --firmware",
-  "radio-network-dhcp-dns.py": "recorded evidence or fixture captures | needs --tcp, --rsn, --kernel, --tinyusb, --headers, --clang, --linker, --qemu, --evidence",
-  "radio-network.py": "other arguments | needs every case needs the optional --tcp, --kernel, --headers and --evidence paths",
-  "radio-patch.py": "other arguments | needs table",
-  "radio-poll-batching.py": "recorded evidence or fixture captures | needs --evidence",
-  "radio-transport-aggregate.py": "recorded evidence or fixture captures | needs --evidence",
-  "rail-leases.py": "recorded evidence or fixture captures | needs --evidence, --freertos-port, --pmic-source, --compile-commands",
-  "rtc-application.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
-  "rtc-calendar-host.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
-  "rtc-calendar.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
-  "rtc-host-proof.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
-  "rtc-host.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
-  "rtc-service-host.py": "an output directory plus an argument the index cannot supply (a second path, sys.argv or evidence files the check writes first) | needs sys.argv",
-  "rtc-service.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
-  "rtc-usb-native.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
-  "sae-openssl.py": "other arguments | needs the default run needs --openssl, --upstream and --evidence; --verify-source needs a pinned source tree",
-  "scheduler-control.py": "cached builds or images of earlier work (cache/build) | needs cache/build",
-  "scheduler-deadline.py": "cached builds or images of earlier work (cache/build) | needs cache/build",
-  "scheduler-notification.py": "cached builds or images of earlier work (cache/build) | needs cache/build",
-  "scheduler-owner.py": "cached builds or images of earlier work (cache/build) | needs cache/build",
-  "scheduler-partitioned-qemu.py": "vendor or cached sources, toolchain paths | needs --build-dir, --output, --qemu",
-  "scheduler-route.py": "an application image, session or bundle the gate does not build | needs --build-dir",
-  "scheduler-wake-model.py": "an application image, session or bundle the gate does not build | needs --tlc-jar, --build-dir",
-  "sd-return-native.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | fails on the current image: the monitor_vectors symbol it reads is not in the image (the returning monitor moved); a stale check, not yet rewritten",
-  "sdio-controller.py": "recorded evidence or fixture captures | needs --reference-dir, --evidence",
-  "spi-irq-route.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "stage2-session.py": "an application image, session or bundle the gate does not build | needs --build, --output",
-  "standalone-boot-loader.py": "an application image, session or bundle the gate does not build | needs --build, --boot0, --output",
-  "storage-read-fixture.py": "recorded evidence or fixture captures | needs --image, --output, cache/evidence",
-  "storage-read-native.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | fails on the current image: with the machine and the PERI0 and uncached-pool models brought up to date it reaches the identification and stops at stage 2, because it never submits the client request the image now waits for (a stale check: the image's task reads through slots and the DMA profile since 59a6945c); to be rewritten on the model of storage-read-dma.py",
-  "storage-read-returning.py": "other arguments | needs '--' + name.replace('_', '-')",
-  "storage-read-service.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
-  "storage-read-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --session, --output",
-  "sunstone-app-abi.py": "an application image, session or bundle the gate does not build | needs --build",
-  "sunstone-image-link.py": "an application image, session or bundle the gate does not build | needs --image, --manifest, --application, --build-id, --lifetime, --output",
-  "sunxi-mmc-uhs.py": "recorded evidence or fixture captures | needs --output, cache/evidence",
-  "sunxi-mmc-write.py": "recorded evidence or fixture captures | needs --evidence, cache/evidence",
-  "sunxi-mmc.py": "recorded evidence or fixture captures | needs --sources, --evidence",
-  "thermal-single-core.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "training-record-copies.py": "ROM, boot0 or device captures | needs --restore-set, --boot0, --output",
-  "uart-irq-route.py": "an application image, session or bundle the gate does not build | needs --image, --output",
-  "usb-first-fault.py": "recorded evidence or fixture captures | needs --evidence, cache/evidence",
-  "usb-host-classes.py": "ROM, boot0 or device captures | needs --output, --port",
-  "usb-host-hid-native.py": "recorded evidence or fixture captures | needs --image, --reports, --output, cache/evidence",
-  "usb0-service-burst.py": "vendor or cached sources, toolchain paths | needs --tinyusb, --output",
-  "video-pll.py": "recorded evidence or fixture captures | needs --output, --app-compile-commands, cache/evidence, cache/video-codecs",
-  "watchdog-configuration.py": "cached builds or images of earlier work (cache/build) | needs image",
-  "watchdog-expiry.py": "an application image, session or bundle the gate does not build | needs image, elf"
+  "a733-radio-session.py": "real defect or unexplained failure, reported to the coordinator | its model aborts at checks/a733-radio-session.c:304 after the retained clock fault; shipped regression or stale check, reported",
+  "a733-smp-cached.py": "helper module of a runnable check (not run on its own) | loaded by deadline.py",
+  "aic8800-supplicant.py": "helper module of a runnable check (not run on its own) | loaded by aic8800-security.py",
+  "build-identity.py": "real defect or unexplained failure, reported to the coordinator | configuring with -DSUNSTONE_BOARD_USB2_IRQ=ON fails: apps/board/host_irq_platform.patch no longer applies, reported",
+  "cached-device-reservations.py": "real defect or unexplained failure, reported to the coordinator | a733_cached_devices_prepare() returns 0 against the frozen fixtures at line 137; stale fixture or regression, reported",
+  "cpu-runtime-qualification.py": "helper module of a runnable check (not run on its own) | loaded by os-cpu-return-services.py",
+  "elf-memory-hazards.py": "real defect or unexplained failure, reported to the coordinator | the EL3 session seal now reaches SIMD SHA-256 code in the OS image, reported",
+  "fault-decode.py": "helper module of a runnable check (not run on its own) | loaded by fault-capture.py",
+  "gpu-draw.py": "real defect or unexplained failure, reported to the coordinator | draw_state stays nonzero after the BUSY collect (gpu-draw.c:118); service defect or stale expectation, reported",
+  "h264-stream.py": "helper module of a runnable check (not run on its own) | loaded by tools/check-a733-h264-supervised.py",
+  "hevc-pixel-reference.py": "helper module of a runnable check (not run on its own) | loaded by hevc-pixel-reference-host.py",
+  "i2s-rates-reference.py": "helper module of a runnable check (not run on its own) | loaded by os-image-audio.py",
+  "isp0-pixel-reference.py": "helper module of a runnable check (not run on its own) | loaded by isp0-pixel-reference-check.py",
+  "memtest-emulate.py": "helper module of a runnable check (not run on its own) | loaded by memtest-map-admission.py",
+  "memtest-machine.py": "helper module of a runnable check (not run on its own) | loaded by board-probe-abort.py",
+  "nbg-model.py": "helper module of a runnable check (not run on its own) | loaded by tools/npu-nbg-census.py",
+  "pcie-application-native.py": "helper module of a runnable check (not run on its own) | loaded by pcie-pd-rail-native.py",
+  "pvr-gpu-flush-reference.py": "helper module of a runnable check (not run on its own) | loaded by pvr-gpu-flush.py",
+  "sd-return-native.py": "a check that does not run on the current image (stale, tracked in docs/status/storage.md) | fails on the current image: the monitor_vectors symbol it reads is not in the linked image; the only guard of terminal SD close, kept by the coordinator",
+  "stage2-session.py": "real defect or unexplained failure, reported to the coordinator | a733-stage2 no longer links: .text ends at 0x47008D10, past the 0x47008000 limit, reported",
+  "standalone-boot-loader.py": "real defect or unexplained failure, reported to the coordinator | a733-stage2 no longer links: .text ends at 0x47008D10, past the 0x47008000 limit, reported",
+  "storage-read-fixture.py": "helper module of a runnable check (not run on its own) | loaded by tools/gate_session.py",
+  "storage-read-native.py": "helper module of a runnable check (not run on its own) | loaded by npu-stop-native.py",
+  "storage-read-service.py": "helper module of a runnable check (not run on its own) | loaded by storage-read-sd-modes.py"
  },
  "bundles": {
   "opp33": [

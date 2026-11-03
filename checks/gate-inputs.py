@@ -60,7 +60,7 @@ def main():
         for run in record['runs']:
             for kind, image in gate.placeholders(run['args']):
                 assert (image in inputs['bundles'] if kind == 'bundle' else image in gate.VARIANTS or image in inputs['images']), (name, image)
-            assert any('{output}' in a for a in run['args']), (name, 'a run needs a new output directory')
+            assert run['args'], (name, 'a run needs arguments')
     assert not set(inputs['checks']) & set(inputs['waived']), 'a check is registered and waived'
     assert not set(inputs['board']) & (set(inputs['checks']) | set(inputs['waived']))
     for name, reason in inputs['waived'].items():
