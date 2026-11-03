@@ -3,6 +3,9 @@
 #include <stddef.h>
 #include <stdint.h>
 #define OS_CPU_RETURN_RESERVE_US UINT64_C(5000000)
+/* The application's NPU retirement wait in ss_finish gives up this many counter ticks (one second) before the supervisor's
+ * cutoff, so its failure, which names the unmet conditions, is recorded first. */
+#define OS_NPU_RETIREMENT_MARGIN_TICKS UINT64_C(24000000)
 /* Longest a failure return may take before the failure ends at the watchdog. */
 #define OS_FAILURE_RETURN_US UINT64_C(3000000)
 uint64_t a733_smp_counter(void);

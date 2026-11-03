@@ -1,0 +1,12 @@
+{
+  "name": "slot1-test",
+  "devices": {"required": [], "optional": []},
+  "cpu": {"cluster": "a55", "workers": 0, "priority": 2, "stack_bytes": 8192},
+  "regions": [
+    {"name": "big", "kind": "work", "access": ["read", "write"], "bytes": 16777216, "address": "0x48000000"},
+    {"name": "out", "kind": "output", "access": ["read", "write"], "bytes": 8388608, "address": "0x4a000000"},
+    {"name": "tmp", "kind": "work", "access": ["read", "write", "scratch"], "bytes": 8388608, "address": "0x4b000000"}
+  ],
+  "deadlines": {"run_us": 30000000, "return_reserve_us": 5000000, "progress_window_us": 2000000},
+  "output_limit": 64
+}

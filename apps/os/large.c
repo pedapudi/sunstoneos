@@ -90,7 +90,7 @@ int os_large_prepare(void)
     const struct ss_manifest *manifest = ss_application.manifest;
     unsigned placed = 0;
     for (unsigned i = 0; manifest && i < manifest->region_count; ++i)
-        placed += manifest->regions[i].address >= APP_REGION_FLOOR && manifest->regions[i].address < APP_REGION_BASE;
+        placed += manifest->regions[i].address >= APP_REGION_FLOOR;
     if (admitted) return 0;
     uint64_t ttbr;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));
@@ -117,7 +117,7 @@ int os_large_prepare(void)
 #endif
     for (unsigned i = 0; manifest && i < manifest->region_count; ++i) {
         const struct ss_region *r = &manifest->regions[i];
-        if (r->address < APP_REGION_FLOOR || r->address >= APP_REGION_BASE) continue;
+        if (r->address < APP_REGION_FLOOR) continue;
         if (app_region_acquire_at(&ledger, owner_asid, r->address, r->bytes,
                                   APP_REGION_READ | (r->access & SS_ACCESS_WRITE ? APP_REGION_WRITE : 0))) return 0;
     }

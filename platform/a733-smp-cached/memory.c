@@ -201,7 +201,15 @@ int a733_cached_memory_prepare(void)
         for (unsigned r = 0; placed && r < placed->region_count; ++r) {
             const struct ss_region *region = &placed->regions[r];
             if ((region->kind != SS_REGION_WORK && region->kind != SS_REGION_OUTPUT) ||
-                region->address < UINT64_C(0x48000000) || region->address >= UINT64_C(0x80000000)) continue;
+                region->address < UINT64_C(0x48000000)) continue;
+            if (region->address >= UINT64_C(0x80000000)) {
+                /* Upper memory: the EL3 level-2 table covers only 0x40000000..0x80000000, so each gigabyte that holds such
+                 * a region gets a level-1 block entry (the decode check passed for all of it, as for the EL1 entries). The
+                 * attributes are those of a level-2 block, which the terminal tests the same way. */
+                for (uint64_t g = region->address >> 30; g <= (region->address + region->bytes - 1) >> 30; ++g)
+                    a733_cached_el3_l1[g] = (g << 30) | BIT(54) | BIT(10) | (UINT64_C(3) << 8) | 4 | 1 | BIT(5) | BIT(6);
+                continue;
+            }
             for (uint64_t a = region->address & ~UINT64_C(0x1fffff); a < region->address + region->bytes; a += 0x200000) {
                 uint64_t common = a | BIT(54) | BIT(10) | (UINT64_C(3) << 8) | 4 | 1;
                 a733_cached_el3_l2[(a - UINT64_C(0x40000000)) >> 21] = common | BIT(5) | BIT(6);

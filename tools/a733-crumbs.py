@@ -21,6 +21,12 @@ KEY = 0x16aa0000
 RETURN_ROM = 0x0503  # SUNSTONE_CRUMB_RETURN_ROM: value is the WDT0 mode after the disarm
 EL3_STOP = 0x0111    # SUNSTONE_CRUMB_EL3_STOP: value is min(status, 15) << 12 | detail & 0xfff
 FAIL_LEVEL = 0xb     # SUNSTONE_CRUMB_FAIL_LEVEL: the first board failure, from EL0 or EL1
+CUTOFF = 0x73c       # cpu-return fail_cutoff(): the session reached the supervisor's cutoff without a return request
+NPU_RETIREMENT_FAILED = 0x75f  # application ss_finish: the NPU retirement wait gave up before the cutoff
+# OS_NPU_STATE_* of apps/os/npu.h, bit by bit (os_npu_retirement_state).
+NPU_RETIREMENT_STATE = ('report not published', 'report not stopped', 'report retains a failure', 'os_npu_stopped false',
+                        'SDK closed', 'local stop done', 'active', 'started', 'opened', 'failed', 'runtime failed',
+                        'irq pending', 'irq stopped', 'worker parked', 'NPU service linked')
 BOUNDED = 0x736      # cpu-return bounded(): its value carries board_live_refusal() bits
 # The entry guard's rail refusal (apps/os/cpu-return-entry.c), whose detail is
 # DCDC5 << 10 | DCDC3, each in 10 mV units.
@@ -219,6 +225,13 @@ def board_failure(words, defines, elf):
                  'register_lock_retained')
         record['thermal_liveness_lost'] = [n for i, n in enumerate(names) if value >> i & 1]
         record['board_live_refusal_bits'] = value >> 8 & 7
+    if record['group'] == 'cpu_return' and record['site'] == CUTOFF:
+        # value: low 32 bits of the return address of the application's latest ss_progress call (its waiting loop);
+        # aux: the NPU retirement state, 15 bits, zero in an image without the NPU service.
+        record['application_progress_site'] = hex(value)
+        record['npu_retirement_state'] = [t for i, t in enumerate(NPU_RETIREMENT_STATE) if record['aux'] >> i & 1]
+    if record['group'] == 'application' and record['site'] == NPU_RETIREMENT_FAILED:
+        record['npu_retirement_state'] = [t for i, t in enumerate(NPU_RETIREMENT_STATE) if value >> i & 1]
     if record['group'] == 'cpu_return' and record['site'] == BOUNDED:
         record['deadline_seconds'] = record['aux']
         record['refusal'] = [text for bit, text in LIVE_REFUSAL if value >> bit & 1]
