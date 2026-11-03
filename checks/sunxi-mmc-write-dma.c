@@ -134,7 +134,8 @@ static int read32(void *ctx, uint32_t off, uint32_t *out)
         else if (m.busy_left > 0 || m.hang_busy) { *out |= 1u << 9; if (m.busy_left > 0) --m.busy_left; }
         else if (!m.timed && m.cmd_active && m.data_cmd == 25 && m.ticks_dtc) *out |= 1u << 10;
         return 1;
-    case SUNXI_SMHC_CBCR: *out = (uint32_t)((size_t)m.next_desc * 4096 < m.bytes ? (size_t)m.next_desc * 4096 : m.bytes); return 1;
+    case SUNXI_SMHC_CBCR: case 0x4c: *out = (uint32_t)((size_t)m.next_desc * 4096 < m.bytes ? (size_t)m.next_desc * 4096 : m.bytes); return 1;   /* TBC0 and TBC1 */
+    case 0x90: *out = (uint32_t)(uintptr_t)desc + m.next_desc * (uint32_t)sizeof(struct sunxi_mmc_dma_descriptor); return 1;                     /* the current host descriptor */
     case SUNXI_SMHC_IDST:
         *out = m.reg[off / 4];
         if (m.dma_on && m.next_desc < m.descs) *out |= 1u << 13;          /* IDMAC state: busy */
@@ -392,6 +393,8 @@ int main(void)
         if (!(h.state == SUNXI_MMC_FAULT)) { fprintf(stderr, "no fault: %s\n", faults[i].name); return 1; }
         if (h.result.error != faults[i].error) { fprintf(stderr, "%s: error %d expected %d\n", faults[i].name, h.result.error, faults[i].error); return 1; }
         assert(h.borrowed == source && h.result.confirmed_blocks == 0);
+        /* A data error in the transfer says where it stopped: the bytes the card side took and the descriptor the IDMAC had reached. */
+        if (faults[i].knob == &m.crc_error) assert(h.result.where_valid && h.result.tbc0 == (uint32_t)m.next_desc * 4096u && h.result.desc_index == m.next_desc && m.next_desc > 0);
         unsigned calls = m.reads_seen, auth = m.authority_calls;
         sunxi_mmc_poll(&h); assert(calls == m.reads_seen && auth == m.authority_calls);                    /* retained: no more access */
         media_untouched_outside(9);

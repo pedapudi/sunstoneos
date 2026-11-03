@@ -179,6 +179,9 @@ enum a733_mmc_platform_result a733_mmc_platform_restart(struct a733_mmc_platform
  * SDR50 to SDR25 to SDR12 at 1.8 V, high speed to default speed at 3.3 V); an error at the lowest mode is final. Returns PENDING when a restart began,
  * otherwise INVALID, and the owner retains the platform. The mode and every step are in the card record (card.mode_log). */
 enum a733_mmc_platform_result a733_mmc_platform_recover(struct a733_mmc_platform *,uint64_t deadline);
+/* The recoveries a request can use before the ladder ends: two per mode (identify again, then step down) through SDR104, SDR50 and SDR25 to SDR12 at 1.8 V, and the one at SDR12
+ * that is refused. An owner's retry loop is bounded by this and by its lifetime deadline; checks/a733-mmc-uhs.c walks the ladder and requires the same count. */
+#define A733_MMC_RECOVERIES 8u
 /* Private service composition. A copied pointer cannot establish ownership:
  * the service authenticates its self, exact platform and complete grant. */
 int a733_mmc_platform_storage(struct a733_mmc_platform *,const void *,size_t);

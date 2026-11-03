@@ -35,7 +35,7 @@ enum sunxi_mmc_mode_reason { SUNXI_MMC_MODE_NONE, SUNXI_MMC_MODE_NO_WINDOW, SUNX
     SUNXI_MMC_MODE_ERRORS, SUNXI_MMC_MODE_RETUNE_FAILED, SUNXI_MMC_MODE_RETUNE };
 /* from and to are card.timing values. A step taken after a failed request keeps what the core saw at the fault: its error code (sunxi_mmc_error), the protocol step
  * it was in and the low 16 bits of the controller's raw interrupt status, so a session that steps down and completes still says why. Zero for a step with no fault. */
-struct sunxi_mmc_mode_event { uint8_t from, to, reason, signal_1v8, error, protocol; uint16_t interrupts; };
+struct sunxi_mmc_mode_event { uint8_t from, to, reason, signal_1v8, error, protocol; uint16_t interrupts; uint16_t blocks; uint8_t descriptor; /* where a write fault stopped: 512-byte blocks the card side had taken (SMHC_TBC0) and the descriptor reached */ };
 #define SUNXI_MMC_MODE_LOG 6u
 /* sd_signal operations and QUERY capability bits. */
 #define SUNXI_MMC_SIGNAL_QUERY 0u
@@ -154,6 +154,10 @@ struct sunxi_mmc_result {
      * durations (DMA reads only); and the number of polls. */
     uint32_t command_us, first_byte_us, done_us, clean_us, invalidate_us, polls;
     uint32_t dma_status; /* Last IDST read of a DMA read. */
+    /* Where a DMA write stopped, read when the controller reported an error in the data phase: SMHC_TBC0 (0x48, bytes between card and FIFO) and SMHC_TBC1 (0x4c, bytes
+     * between memory and FIFO), and the index of the descriptor the IDMAC had reached (the current host descriptor address, vendor sunxi-mmc.h REG_CHDA 0x90, against
+     * the list base; 62 when unreadable, 63 when outside the list). */
+    uint32_t tbc0, tbc1; uint8_t desc_index, where_valid;
 };
 struct sunxi_mmc_write_request {
     uintptr_t policy_token;

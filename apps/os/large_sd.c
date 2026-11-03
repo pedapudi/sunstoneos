@@ -213,6 +213,7 @@ static int found_at_1v8(void)
     return sunxi_mmc_card_found_at_1v8(&platform.core.card);
 }
 #define RECOVER_US 3000000u
+static unsigned first_fault_units, saved_blocks, saved_timing; static uint64_t saved_where;   /* where the last write fault stopped, kept across the restart that discards the core's result */
 static uint64_t first_fault_detail;       /* the core's error, protocol step and interrupt status at the first failed request (apps/os/sd_note.h), kept for the failure record */
 static uint64_t last_sector; static uint32_t last_count; static uint8_t *last_dma;
 #ifdef OS_SD_WRITE
@@ -231,7 +232,8 @@ static int recover_fail(unsigned stage, enum a733_mmc_platform_result r)
 static int recover_blocking(void)
 {
     enum a733_mmc_platform_result r;
-    if (!first_fault_detail) first_fault_detail = os_sd_write_detail(&platform.core);
+    if (!first_fault_detail) { first_fault_detail = os_sd_write_detail(&platform.core); first_fault_units = platform.core.result.tbc0 / 4096u; }
+    saved_where = os_sd_where_detail(&platform.core, platform.core.card.timing); saved_blocks = (platform.core.result.tbc0 / 512u) & 511u;
 #ifdef OS_SD_WRITE
     irq_suspend();
 #endif
@@ -275,7 +277,7 @@ static int read_blocking(uint64_t sector, uint32_t count, uint8_t *dma)
 #else
         do { r = a733_mmc_platform_poll(&platform); } while ((r == A733_MMC_PENDING || r == A733_MMC_BUSY) && board_live(NULL));
 #endif
-        if (r == A733_MMC_ERROR && attempt < 3 && recover_blocking()) continue;      /* identify again or step down, then the same request again */
+        if (r == A733_MMC_ERROR && attempt < A733_MMC_RECOVERIES && recover_blocking()) continue;      /* identify again or step down, then the same request again */
         break;
     }
     if (r != A733_MMC_COMPLETE) return DIAG(31, PLATX(r));
@@ -622,8 +624,9 @@ static int write_fail(unsigned stage, enum a733_mmc_platform_result r, uint64_t 
 {
     (void)count;
     const struct sunxi_mmc *c = &platform.core;
-    int rc = DIAG(stage, os_sd_write_detail(c));
-    if (!os_sd_diag[2]) os_sd_diag[2] = os_sd_write_aux(os_sd_write_pieces, c->card.timing);
+    int live = c->state == SUNXI_MMC_FAULT;       /* else the restart has replaced the core: the snapshot taken before it */
+    int rc = DIAG(stage, live ? os_sd_where_detail(c, c->card.timing) : saved_where);
+    os_sd_diag[2] = (live ? os_sd_where_aux(c, first_fault_units) : (uint64_t)(saved_blocks | (first_fault_units & 63u) << 9));
     if (!os_sd_diag[3]) os_sd_diag[3] = sector;
     (void)r;
     return rc;
@@ -644,7 +647,7 @@ static int hw_write_piece(uint64_t sector, uint32_t count, const uint8_t *src)
         while (r == A733_MMC_BUSY && board_live(NULL));
         if (r != A733_MMC_PENDING) return write_fail(33, r, sector, count);
         r = drive_platform(now_us() + WRITE_US, recheck_for(count, 1));
-        if (r == A733_MMC_ERROR && attempt < 3 && recover_blocking()) continue;
+        if (r == A733_MMC_ERROR && attempt < A733_MMC_RECOVERIES && recover_blocking()) continue;
         break;
     }
     if (r != A733_MMC_COMPLETE) return write_fail(34, r, sector, count);
