@@ -24,9 +24,11 @@ FIRMWARE = [('fw_adid_8800d80_u02.bin', 1708, 'a526cbd02fcdc495f049f3ad6b5933cb0
             ('fw_patch_table_8800d80_u02.bin', 23288, '5ff184105fdc4c4679e026418f4da293efec8df02a3a3ca22cee723c17df4a60'),
             ('fmacfw_8800d80_u02.bin', 341212, '55b5a20865aca7cd2edaae1733a36da45d2b0b29060bc243d8e9ec212e139f6c')]
 SCAN_SUPERVISED_VERSION = 8
-# How far the session runs (BOARD_RADIO_STAGE_* in apps/board/radio.h): 0 scan, 1 enumeration, 2 enumeration plus
-# the chip-ID words, 3 through the firmware upload, 4 the CE entropy stage alone (the module stays unpowered). One stage per board run; this is the only line that moves the stop point.
-STAGE_LIMIT = 4
+# How far the session runs (BOARD_RADIO_STAGE_* in apps/board/radio.h): 0 a full run (the scan), 1 enumeration, 2
+# enumeration plus the chip-ID words, 3 through the firmware upload, 4 the CE entropy stage alone (the module stays
+# unpowered). It is a submit-time option (board.py submit --radio-stage-limit N), frozen in the queue entry, so a new stage
+# needs no landing of this file.
+STAGE_LIMITS = (0, 1, 2, 3, 4)
 STAGE_LIMIT_OFFSET = 1861
 # The identity the profile expects (raw words, decoded again by the firmware engine): the words the board's module
 # returned at the identity stage (run 1793750775070389039-2a278fd8, port 3-1): chip word 0xfb078820, revision 7 (U03,
@@ -69,7 +71,14 @@ def firmware_files(directory=None):
     return result
 
 
-def profile_bytes(prefix, evidence, firmware):
+def check_stage_limit(limit):
+    """The limit as an int; ValueError for a value the profile does not define."""
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit not in STAGE_LIMITS:
+        raise ValueError('radio stage limit %r is not one of %s' % (limit, STAGE_LIMITS))
+    return limit
+
+
+def profile_bytes(prefix, evidence, firmware, stage_limit=0):
     """The 1,872-byte scan-only profile for this board session prefix. evidence is 32 bytes naming the reviewed
     reference; it fills the platform evidence and authority fields, which only have to be nonzero."""
     require(len(evidence) == 32 and any(evidence), 'Evidence digest required.')
@@ -92,7 +101,7 @@ def profile_bytes(prefix, evidence, firmware):
         function, pull, drive = (2, 1, 1 if i == 0 else 0) if i < 6 else (0, 0, 1) if i == 6 else (1, 0, 1)
         struct.pack_into('<3B', raw, p + PLATFORM['desired'] + 3 * i, function, pull, drive)
     struct.pack_into('<I4xQQ', raw, p + PLATFORM['card'], 0x00300000, 100000, 1000)  # supported OCR, then timeout and poll interval
-    raw[STAGE_LIMIT_OFFSET] = STAGE_LIMIT
+    raw[STAGE_LIMIT_OFFSET] = check_stage_limit(stage_limit)
     struct.pack_into('<II4B', raw, PROFILE['radio_identity'], IDENTITY['chip_word'], IDENTITY['subrevision_word'],
                      (IDENTITY['chip_word'] >> 16) & 0x3f, IDENTITY['subrevision_word'] >> 4, 0, 1)
     # Transport: D80 bootstrap variant 1, pad policy KEEP (1), 1,000 ticks per millisecond, timeouts in microseconds.
@@ -114,12 +123,12 @@ def profile_bytes(prefix, evidence, firmware):
     return bytes(raw)
 
 
-def apply(prefix, evidence, firmware_dir=None):
+def apply(prefix, evidence, firmware_dir=None, stage_limit=0):
     """Patch a 592-byte board session prefix for the scanning radio image. Returns (profile, uploads) where uploads are
     [(address, name, data)] for the profile and the four firmware images."""
     require(len(prefix) == 592, 'Board prefix size differs.')
     firmware = firmware_files(firmware_dir)
-    profile = profile_bytes(prefix, evidence, firmware)
+    profile = profile_bytes(prefix, evidence, firmware, stage_limit)
     struct.pack_into('<I', prefix, SESSION['workload'], 3)
     struct.pack_into('<Q', prefix, SESSION['sid_authority'], int.from_bytes(evidence[:8], 'little') | 1)
     prefix[SESSION['sid_evidence']:SESSION['sid_evidence'] + 32] = evidence

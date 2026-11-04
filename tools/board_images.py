@@ -372,6 +372,9 @@ def policy(info, args, session=None):
     """Approval adds authority; it never creates a storage grant or a backup."""
     d = info['descriptor']
     approved = args.approved_by == 'coordinator'
+    # The radio stage limit shapes the radio profile; an image without the radio's result channel has none.
+    require(not getattr(args, 'radio_stage_limit', 0) or 'os_radio_result_descriptor' in (info.get('symbols') or {}),
+            '--radio-stage-limit applies only to the radio scan image.')
     if 'usb_vbus_probe_profile' in info.get('symbols', {}):
         require(approved and args.port == '3-1', 'PL8 VBUS probe requires coordinator approval on port 3-1.')
     if info.get('usb_class'):
@@ -511,7 +514,8 @@ def prepare(args, info, live, out, *, dma_binding=None):
         # The scanning radio image: a workload 3 session, a scan-only radio profile and the firmware it names.
         scan = load('radio_scan_prepare', ROOT/'tools/radio_scan_prepare.py')
         reference = (ROOT/'docs/designs/radio-vendor-power-sequence.md').read_bytes()
-        radio_profile = scan.apply(prefix, hashlib.sha256(reference).digest())
+        radio_profile = scan.apply(prefix, hashlib.sha256(reference).digest(),
+                                   stage_limit=getattr(args, 'radio_stage_limit', 0))
     if records.JPEG in services:
         # The JPEG service embeds the same board prefix. Rebind its session
         # identity together with the outer prefix, preserving its evidence.

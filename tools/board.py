@@ -1455,7 +1455,7 @@ class Queue:
         options = {'reference': 'none' if reference.get('none') else f"{reference['path']}#{reference['anchor']}"}
         if reference.get('none'):
             options['reference_reason'] = reference['reason']
-        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool'):
+        for name in FROZEN_OPTIONS:
             value = getattr(args,name)
             options[name] = str(value.resolve()) if isinstance(value,Path) else value
         for name in ('records', 'decoder', 'manifest'):
@@ -1756,6 +1756,19 @@ class Queue:
                         self.complete(job['id'],json.loads(path.read_text()))
 
 
+# The caller-controlled launch options a submission freezes in its queue entry.
+FROZEN_OPTIONS = ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool','radio_stage_limit')
+
+
+def radio_stage_limit(text):
+    """Argument type of --radio-stage-limit: a stage the radio profile defines (tools/radio_scan_prepare.py)."""
+    prepare = images.load('radio_scan_prepare', ROOT/'tools/radio_scan_prepare.py')
+    try:
+        return prepare.check_stage_limit(int(text, 10))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error))
+
+
 def run_options(parser, submit=False):
     parser.add_argument('image', type=Path)
     parser.add_argument('--port', choices=('any',*PORTS) if submit else PORTS, required=True)
@@ -1764,6 +1777,8 @@ def run_options(parser, submit=False):
     parser.add_argument('--objcopy', type=Path, default=Path('/usr/bin/llvm-objcopy-21'))
     parser.add_argument('--npu-pool', default='0:0', metavar='BASE:BYTES',
                         help='Ask for the NPU reservation at this base and size (default 0:0: the allocator chooses). The ledger refuses an extent that is not free DRAM above the image or that crosses a 4 GiB window.')
+    parser.add_argument('--radio-stage-limit', type=radio_stage_limit, default=0, metavar='N',
+                        help='How far the radio scan image runs: 0 a full run (default), 1 enumeration, 2 plus the chip-ID words, 3 through the firmware upload, 4 the CE entropy stage alone. Frozen in the queue entry and written into the prepared radio profile.')
     parser.add_argument('--approved-by', choices=('coordinator',))
     parser.add_argument('--reference', help='PATH#ANCHOR of the tracked docs heading that derives the subsystem vendor sequence and the diff against it; '
                         '"none" needs --approved-by coordinator and --reference-reason.')
