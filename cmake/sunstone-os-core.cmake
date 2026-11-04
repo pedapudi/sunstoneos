@@ -96,8 +96,9 @@ option(A733_A76_ADMITTED "Admit Cortex-A76 cores for application placement" OFF)
 # CPU operating points granted by the sealed supervised or resident session
 # policy (docs/cpu-clock.md).
 option(SUNSTONE_A733_OS_CPU_CLOCK "Integrated OS with granted CPU operating-point changes" OFF)
-if(SUNSTONE_A733_OS_CPU_CLOCK AND SUNSTONE_A733_OS_RESIDENT AND
-   (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET))
+# Compositions of the I2S and radio services with CPU grants, and with the NPU, are refused at session admission
+# (refused_compositions in apps/os/admission.c). The headset still has its build-time rules.
+if(SUNSTONE_A733_OS_CPU_CLOCK AND SUNSTONE_A733_OS_RESIDENT AND SUNSTONE_A733_OS_HEADSET)
   message(FATAL_ERROR "Resident CPU grants require the recorded-card session profile")
 endif()
 if(SUNSTONE_A733_OS_CPU_CLOCK AND NOT A733_A76_ADMITTED)
@@ -116,9 +117,7 @@ if(NOT SUNSTONE_A733_OS_PERF_BOOT STREQUAL "high" AND NOT SUNSTONE_A733_OS_PERF_
   message(FATAL_ERROR "SUNSTONE_A733_OS_PERF_BOOT is high or low")
 endif()
 if(SUNSTONE_A733_OS_NPU)
-  # CPU grants compose with recorded resident/supervised GPU/NPU, or performance modes.
-  if(SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR
-     SUNSTONE_A733_OS_HEADSET OR (SUNSTONE_A733_OS_CPU_CLOCK AND NOT SUNSTONE_A733_OS_PERF AND NOT SUNSTONE_A733_OS_RESIDENT AND NOT SUNSTONE_A733_OS_GPU AND NOT SUNSTONE_A733_OS_CPU_RETURN))
+  if(SUNSTONE_A733_OS_HEADSET)
     message(FATAL_ERROR "The NPU OS profile requires recorded recognition and a supported GPU/CPU composition")
   endif()
   set(SUNSTONE_OS_NPU_CATALOGUE "" CACHE FILEPATH "Authenticated NPU artifacts map for apps/os/npu-models.json")
@@ -200,7 +199,7 @@ apply_build_patch("${os_build}/boot.c" "${os_boot_base}" "${os_root}/apps/os/boo
 # (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
 set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
   runtime/cpu_topology_app.c
-  apps/os/usb-service.c apps/os/large.c apps/os/large_load.c drivers/storage/sunxi_mmc.c drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c drivers/storage/fat32_ro.c drivers/storage/storage_digest.c drivers/storage/storage_digest_extensions.c drivers/storage/storage_digest_ce.S kernel/appmem/app_region.c kernel/appmem/large_admit.c kernel/umem/umem.c apps/os/application.c apps/os/session.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
+  apps/os/usb-service.c apps/os/large.c apps/os/large_load.c drivers/storage/sunxi_mmc.c drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c drivers/storage/fat32_ro.c drivers/storage/storage_digest.c drivers/storage/storage_digest_extensions.c drivers/storage/storage_digest_ce.S kernel/appmem/app_region.c kernel/appmem/large_admit.c kernel/umem/umem.c apps/os/application.c apps/os/session.c apps/os/grants.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
   runtime/deadline.c runtime/deadline-a733.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
   apps/os/thermal.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c

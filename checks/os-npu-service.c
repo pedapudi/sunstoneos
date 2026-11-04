@@ -301,6 +301,15 @@ uint32_t a733_npu_startup_wait_ticks(struct a733_npu_startup *s) { (void)s; abor
 /* The sealed session grants one job. */
 static struct os_session session_record;
 const struct os_session *os_session(void) { return &session_record; }
+int os_granted(unsigned mask) { return mask && (session_record.granted & mask) == mask; }
+#ifdef UNGRANTED_CASE
+/* Case 32 links the real os_npu_start. Everything it reaches before it touches the service is a trap: an ungranted
+ * session must return before the SDK binding, the session read and the pool. */
+static unsigned start_reached;
+const struct os_session *os_session_admitted(void) { ++start_reached; return &session_record; }
+int ss_npu_service_bind_event(void (*f)(void *), void *c) { (void)f; (void)c; ++start_reached; return 1; }
+unsigned char __os_npu_pool_start[1], __os_npu_pool_end[1];
+#endif
 
 /* The client: the sequence of the OS application mailbox, through the wrapper. */
 static unsigned result_open, result_load, result_submit, result_close, finished;
@@ -746,6 +755,23 @@ int main(int argc, char **argv)
 {
     assert(argc == 2 || argc == 3);
     const unsigned mode = (unsigned)strtoul(argv[1], NULL, 10);
+#ifdef UNGRANTED_CASE
+    if (mode == 32) {
+        /* Case 32: a session that does not grant the NPU. The start entry succeeds without binding the SDK, creating a
+         * task, or reaching the platform: the service stays unstarted and the thermal and retirement hooks have nothing
+         * to act on. */
+        session_record.granted = 0;
+        /* The admission-time preparation returns before it reads the session or the ledger: no reservation, published
+         * range or guard extent. The ledger is never initialized, so any use of it would also show. */
+        static uint64_t unused_ledger[64];
+        assert(os_npu_pool_prepare((struct umem *)unused_ledger, 1) == 1 && !npu.prepared && !start_reached);
+        assert(os_npu_start() == 1 && !npu.started && !npu.attempted && !start_reached);
+        os_npu_thermal(1, 0, 1000000, 1);
+        assert(!npu.started && os_npu_retirement_check() == 1);
+        printf("PASS case 32: an ungranted NPU service touches nothing\n");
+        return 0;
+    }
+#endif
     if (mode == 27) {
         /* Case 27: declarations and reservations (docs/designs/npu-resources.md). The image links one graph and no
          * queue, so it needs one slot, one graph and no links. */

@@ -66,9 +66,17 @@ static void fail(void)
 /* The Bluetooth image's own startup rules (apps/bluetooth/application.c) for
  * the OS workloads, limited to the repeated capture modes. The board
  * session's SID evidence is the profile's SHA-256, as in the Bluetooth image. */
+static int headset_workload_valid(unsigned workload)
+{
+#ifdef SUNSTONE_A733_OS_RADIO
+    return workload==1;
+#else
+    return workload==0||workload==4;
+#endif
+}
 int os_headset_profile_valid(const struct a733_board_session *s,const struct bluetooth_profile *p)
 {
-    if(!s||!p||!os_workload_valid(s->workload)||!s->sid_authority||s->sid_authority!=p->sid_authority||
+    if(!s||!p||!headset_workload_valid(s->workload)||!s->sid_authority||s->sid_authority!=p->sid_authority||
        p->version!=3||!os_headset_mode_valid(p->headset.mode)||!bluetooth_profile_valid(p,s->sid_evidence)||p->topology!=s->topology||
        memcmp(p->radio.fabric,s->fabric,sizeof(s->fabric))||memcmp(p->radio.fabric_hz,s->fabric_hz,sizeof(s->fabric_hz)))
         return 0;

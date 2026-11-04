@@ -62,7 +62,8 @@ int a733_ce_clock_provision(struct a733_ce_clock *p,const struct a733_ce_config 
     const struct a733_clock_token *t)
 {
     if(!p||p->state!=A733_CE_CLOCK_NEW||!c||!o||!r||!t||!cookie||
-       !c->owner||!c->handoff||!c->deadline_us||c->profile!=A733_CE_SHA256_AES128||
+       !c->owner||!c->handoff||!c->deadline_us||
+       (c->profile!=A733_CE_SHA256_AES128&&c->profile!=A733_CE_TRNG_ONLY)||
        c->health_profile||c->configure_health||!t->id||t->owner!=c->owner||
        t->exclusive!=A733_CLOCK_CE||t->shared!=STABLE||
        !o->authorize||!o->now_us||!o->enter||!o->leave||!o->retain||!o->read||!o->write)return 0;
@@ -75,6 +76,17 @@ int a733_ce_clock_provision(struct a733_ce_clock *p,const struct a733_ce_config 
         .cookie=cookie,.state=A733_CE_CLOCK_ATTEMPTING};
     if(!live(p)||p->ops.enter(cookie,c->deadline_us)!=1)return failed(p);
     p->held=1;
+    /* The CE is found enabled at entry on the board (CE_CLK_REG 0x81000000, CE_BGR_REG 0x00030003, runs
+     * 1793756349340594212-e9227edb): nothing says the boot ROM left its DMA idle, so an enabled CE is first taken
+     * down by the exact reverse of the bring-up below, each step read back. That reset-and-gate cycle (CE_BGR_REG
+     * CE_SYS_RST bit 17, CE_RST bit 16, gates bits 1 and 0; U-Boot clock_autogen.h:2506-2517) is the exclusion of
+     * the predecessor's DMA. A CE that is already held in reset and gated is brought up directly. */
+    if(parents(p)&&bits(p,CCU+0xac0,0x8700001f,0x81000000)&&bits(p,CCU+0xac4,0x30003,0x30003)&&
+       bits(p,CCU+0x5e4,0x40306,0x40306)){
+        if(!update(p,CCU+0xac4,2,0)||!update(p,CCU+0x5e4,4,0)||!update(p,CCU+0xac0,BIT(31),0)||
+           !update(p,CCU+0xac4,1,0)||!update(p,CCU+0xac4,0x30000,0)||
+           !update(p,CCU+0xac0,0x8700001f,0))return failed(p);
+    }
     /* MBUS40302 is real neighboring gate state, not a write-only key. */
     if(!parents(p)||!bits(p,CCU+0xac0,0x8700001f,0)||
        !bits(p,CCU+0xac4,0x30003,0)||!bits(p,CCU+0x5e4,0x40306,0x40302))return failed(p);

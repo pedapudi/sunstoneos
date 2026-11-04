@@ -26,11 +26,11 @@ static void nominal(void)
     PROFILE->magic=BOARD_RADIO_PROFILE_MAGIC;PROFILE->version=BOARD_RADIO_PROFILE_LISTENER_SUPERVISED_VERSION;
     PROFILE->bytes=sizeof(*PROFILE);PROFILE->platform.owner=31;PROFILE->ce.owner=32;
     PROFILE->tcp_mode=1;PROFILE->peer_address[0]=10;
-    session.board.workload=1;session.board.generation=9;
+    session.board.workload=1;session.board.generation=9;session.granted=OS_GRANT_RADIO;
     session.board.radio_profile_address=UINT64_C(0x43000000);session.board.radio_profile_bytes=sizeof(*PROFILE);
     session.thermal_owner=15;
 #ifdef SUNSTONE_A733_OS_AUDIO
-    session.audio.dma.owner=17;
+    session.audio.dma.owner=17;session.granted|=OS_GRANT_AUDIO;
 #endif
     storage_digest_bytes(PROFILE,sizeof(*PROFILE),session.board.radio_profile_digest);
     attributes=0xff;
@@ -59,6 +59,12 @@ void os_check_run(void)
     board.handles[5]=(TaskHandle_t)&board.tasks[5];check(!os_radio_start(),22);
     board.handles[6]=(TaskHandle_t)&board.tasks[6];check(os_radio_start()==1,23);
     session.board.workload=0;check(!os_radio_start(),24);
+    /* A session that does not grant the radio: no pin is authorized, no profile byte is read (a changed profile and an
+     * unreadable translation do not matter) and the start entry has nothing to do. */
+    for(unsigned w=1;w<=3;w+=2){   /* both radio workloads: the full station (1) and the scanning station (3) */
+        nominal();session.board.workload=w;session.granted=0;attributes=0x44;PROFILE->ce.owner=33;
+        check(os_radio_pins(&pins)==1&&!pins.authorized[A733_PIN_B]&&os_radio_start()==1,25);
+    }
 #ifdef SUNSTONE_BOARD_RESIDENT
     /* Resident bounds: fixed bootstrap and startup offsets from the session
      * start, and the session's unbounded lifetime for the radio and client. */

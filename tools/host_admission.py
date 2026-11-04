@@ -170,7 +170,7 @@ def build_harness(image, build=None, cache=None):
     includes = re.search(r'^C_INCLUDES = (.*)$', text, re.M).group(1).split()
     returning = '-DSUNSTONE_A733_OS_CPU_RETURN=1' in defines
     admission = build_dir / 'os-image/return-admission.c' if returning else source / 'apps/os/admission.c'
-    units = [(admission, defines), (source / 'apps/os/session.c', defines),
+    units = [(admission, defines), (source / 'apps/os/session.c', defines), (source / 'apps/os/grants.c', defines),
              (source / 'drivers/storage/storage_digest.c', defines), (build_id, defines),
              (ROOT / 'tools/host_admission.c', defines)]
     if '-DSUNSTONE_A733_OS_CPU_CLOCK=1' in defines:

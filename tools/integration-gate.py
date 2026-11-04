@@ -52,6 +52,12 @@ from concurrent.futures import ThreadPoolExecutor
 NPU_CATALOGUE = 'build/npu-board/session-artifacts.json'
 VARIANTS = {
     'sup': [],
+    # Every service of the one OS image that is not yet a run-time option (docs/designs/one-os-image.md): the image the
+    # series converges on. Each series removes its options from the variants above and from this list.
+    'all': ['-DSUNSTONE_A733_OS_AUDIO=ON', '-DSUNSTONE_A733_OS_RADIO=ON', '-DSUNSTONE_A733_OS_NPU=ON',
+            '-DSUNSTONE_A733_OS_NPU_QUEUE=ON', '-DSUNSTONE_OS_NPU_CLIENT_MODEL=0', '-DSUNSTONE_OS_NPU_QUEUE_MODELS=0,1',
+            '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE, '-DA733_A76_ADMITTED=ON',
+            '-DSUNSTONE_A733_OS_CPU_CLOCK=ON', '-DSUNSTONE_A733_OS_PERF=ON'],
     'res': ['-DSUNSTONE_A733_OS_RESIDENT=ON'],
     'resaud': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_AUDIO=ON'],
     'resradio': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON'],

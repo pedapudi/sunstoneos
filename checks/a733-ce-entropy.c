@@ -4,7 +4,7 @@
 #include <string.h>
 #define CCU UINT32_C(0x02002000)
 #define NS UINT32_C(0x04603000)
-#define SEC UINT32_C(0x04603800)
+#define SEC UINT32_C(0x04603800) /* Only the model's upper bound for the non-secure bank. */
 struct reg {uintptr_t a;uint32_t v;};
 struct model {
     struct a733_clock_leases registry;
@@ -27,7 +27,7 @@ static uint32_t *reg(struct model *m,uintptr_t a)
 static int now(void *v,uint64_t *n) {struct model *m=v;*n=m->now;return 1;}
 static int authorize(void *v,const struct a733_ce_config *c,const struct a733_clock_token *t,const struct a733_ce_memory *mem)
 {
-    struct model *m=v;assert(c->owner==5 && c->handoff==7 && c->health_profile==8);
+    struct model *m=v;assert(c->owner==5 && c->handoff==7 && !c->health_profile && !c->configure_health);
     assert(t->id==m->token.id && mem==(void *)m->pages);
     assert(c->descriptor_physical==0x41000000 && c->output_physical==0x41000100);
     ++m->authorizations;return 1;
@@ -50,15 +50,6 @@ static uint64_t le(const uint8_t *p,unsigned n)
 static int write_reg(void *v,uintptr_t a,uint32_t value)
 {
     struct model *m=v;assert(m->held);++m->writes;
-    if (a>=SEC+0x90 && a<=SEC+0x9c) {
-        assert(!(*reg(m,SEC+0x9c)&0x30000) && (*reg(m,NS+0xd0)&3)==2);
-        const uintptr_t order[]={SEC+0x90,SEC+0x94,SEC+0x98,SEC+0x9c,SEC+0x9c};
-        assert(m->health_writes<5 && a==order[m->health_writes]);
-        if (m->health_writes==3) assert(value==512);
-        if (m->health_writes==4) assert(value==0x30200);
-        ++m->health_writes;*reg(m,a)=value;
-        return m->fail_health_write==m->health_writes ? -1:1;
-    }
     assert(a>=NS && a<SEC);
     if (a==NS+12) {*reg(m,a)&=~value;m->pending=0;}
     else if (a==NS+0x10) {
@@ -98,16 +89,16 @@ static void setup(struct model *m,unsigned cold)
     assert(device_memory_pool_init(&m->pool,(uintptr_t)m->pages,0x41000000,sizeof(m->pages)));
     struct device_memory_extent e;
     assert(device_memory_acquire(&m->pool,5,4096,&m->lease,&e));
-    m->config=(struct a733_ce_config){.owner=5,.handoff=7,.health_profile=8,.deadline_us=10000,
+    m->config=(struct a733_ce_config){.owner=5,.handoff=7,.deadline_us=10000,
         .fabric={0x03000001,0x83000000,0x84000000},.fabric_hz={300000000,600000000,400000000},
-        .health={9,325,0,0x30200},.configure_health=cold};
+        };
+    (void)cold; /* No health register is programmed: the vendor non-secure driver has none to set. */
     /* Artificial model values: no production threshold or entropy assertion. */
     *reg(m,0x07090160)=0x10000003;*reg(m,CCU)=0xf8000000|79u<<8|79u<<16;
     *reg(m,CCU+0xa0)=0xfe000000|99u<<8|1u<<20;
     *reg(m,CCU+0x1908)=0x0a060a06;*reg(m,CCU+0x1988)=0x0a060000;
     *reg(m,CCU+0xac0)=0x81000000;*reg(m,CCU+0xac4)=0x30003;*reg(m,CCU+0x5e4)=4;
     for (unsigned i=0;i<3;++i) *reg(m,CCU+(unsigned[]){0x500,0x580,0x588}[i])=m->config.fabric[i];
-    for (unsigned i=0;i<4;++i) *reg(m,SEC+0x90+4*i)=cold?0:m->config.health[i];
     *reg(m,NS+4)=0xa5000099;
     assert(a733_ce_entropy_bind(&m->service,&m->pool,m->lease,&m->config,&ops,m,&m->registry,&m->token));
     assert(!device_memory_release(&m->pool,m->lease));
@@ -158,32 +149,25 @@ int main(void)
     setup(&m,1);g=request(&m,65,10000);
     assert(pump(&m,g,out,65,1)==A733_CE_ENTROPY_BYTES);
     for (unsigned i=0;i<65;++i) assert(out[i]==(uint8_t)(32+i));
-    assert(m.starts==3 && m.scrubs==3 && m.health_writes==5 && m.authorizations==1);empty_staging(&m);
+    assert(m.starts==3 && m.scrubs==3 && m.authorizations==1);empty_staging(&m);
     memset(out,0xa5,sizeof(out));assert(a733_ce_entropy_poll(&m.service,g,out,65)==A733_CE_ENTROPY_CONSUMED);unchanged(out,65);
     old=g;g=request(&m,33,20000);assert(g!=old);
     assert(a733_ce_entropy_poll(&m.service,old,out,33)==A733_CE_ENTROPY_INVALID);
     assert(pump(&m,g,out,33,1)==A733_CE_ENTROPY_BYTES);
     for (unsigned i=0;i<33;++i) assert(out[i]==(uint8_t)(128+i));
-    assert(m.starts==5 && m.health_writes==5 && m.authorizations==1);empty_staging(&m);
+    assert(m.starts==5 && m.authorizations==1);empty_staging(&m);
     memset(out,0xa5,sizeof(out));
-    for (unsigned i=1;i<=5;++i) {
-        setup(&m,1);m.fail_health_write=i;g=request(&m,32,10000);
-        assert(pump(&m,g,out,32,1)==A733_CE_ENTROPY_RETAINED);
-        assert(!m.starts && m.health_writes==i);terminal(&m,g,out,32);
-    }
-    setup(&m,1);*reg(&m,SEC+0x9c)=0x30200;g=request(&m,32,10000);
-    assert(pump(&m,g,out,32,1)==A733_CE_ENTROPY_RETAINED);assert(!m.writes);terminal(&m,g,out,32);
-    setup(&m,0);g=request(&m,32,10000);assert(pump(&m,g,out,32,1)==A733_CE_ENTROPY_BYTES);assert(!m.health_writes);
+    setup(&m,0);g=request(&m,32,10000);assert(pump(&m,g,out,32,1)==A733_CE_ENTROPY_BYTES);
     memset(out,0xa5,sizeof(out));
     /* Failed second tasks must erase accumulated private bytes, leaving caller output intact. */
-    for (unsigned i=0;i<3;++i) {
+    for (unsigned i=0;i<2;++i) {
         setup(&m,0);g=request(&m,65,10000);until_start(&m,g,out,65,2);assert(m.service.filled==32);complete(&m);
-        if (!i) *reg(&m,SEC+0x90)=10;
-        else *reg(&m,(i==1?NS:SEC)+0x18)=0x43u<<16;
+        if (!i) *reg(&m,NS+0xd0)=0; /* The double-entropy source was disabled. */
+        else *reg(&m,NS+0x18)=0x43u<<16;
         assert(a733_ce_entropy_poll(&m.service,g,out,65)==A733_CE_ENTROPY_RETAINED);terminal(&m,g,out,65);
     }
     /* Rearm refuses stale completion, errors, health changes and uncleared launch state. */
-    const uintptr_t stale[]={NS+12,SEC+12,NS+0x18,SEC+0x18,SEC+0x90,NS+0x10,SEC+0x10,NS+8,SEC+8};
+    const uintptr_t stale[]={NS+12,NS+0x18,NS+0x10,NS+8};
     for (unsigned i=0;i<sizeof(stale)/sizeof(stale[0]);++i) {
         setup(&m,0);g=request(&m,64,10000);until_start(&m,g,out,64,1);complete(&m);
         assert(a733_ce_entropy_poll(&m.service,g,out,64)==A733_CE_ENTROPY_PENDING);

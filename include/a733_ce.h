@@ -78,9 +78,9 @@ struct a733_ce_config {
     uint64_t owner, handoff, health_profile, deadline_us;
     uint64_t descriptor_physical, output_physical;
     uint32_t fabric[3], fabric_hz[3]; /* AHB0500, NSI0580, MBUS0588. */
-    uint32_t health[4]; /* Secure RCTC, APTC, APTWP, HTCR at 90..9c. */
+    uint32_t health[4]; /* Reserved, zero: the vendor's non-secure driver programs no health register. */
     enum a733_ce_profile profile; /* Immutable admitted capabilities; zero preserves TRNG. */
-    unsigned configure_health; /* 0 adopt; 1 program with both tests initially disabled. */
+    unsigned configure_health; /* Reserved, zero. */
 };
 enum a733_ce_sync { A733_CE_PUBLISH, A733_CE_ACQUIRE,
     A733_CE_CIPHER_PUBLISH,A733_CE_CIPHER_ACQUIRE,A733_CE_KEY_CLEAN,A733_CE_SCRUB,
@@ -89,10 +89,9 @@ struct a733_ce_ops {
     int (*now_us)(void *,uint64_t *);
     /* Authenticate owner, handoff, actual token and the complete memory mapping.
      * Require independent prior CE DMA drain; exclusion of ALL secure/nonsecure
-     * clients, remote firmware, IRQ handlers and clock/reset/health writers;
-     * For TRNG capability: immutable characterized health profile bound to this silicon, RC16M,
-     * supplies and the double-entropy-source mode enabled here; native secure-read permissions and, for configure_health, secure-write
-     * authority while both tests are disabled; stable AHB/NSI/MBUS paths; both
+     * clients, remote firmware, IRQ handlers and clock/reset writers;
+     * For TRNG capability: RC16M, supplies and the double-entropy-source mode enabled here (non-secure bank only, as
+     * the vendor sunxi-ce driver does); stable AHB/NSI/MBUS paths; both
      * GIC routes owned/masked; qualified recovery. A supervised RAM-only image
      * may bind confirmed whole-board power removal as terminal recovery while
      * retaining the DEVICE page, descriptors, keys and all authority forever
@@ -153,8 +152,8 @@ struct a733_ce {
  * token: CE exclusive; PERI0/REF/OSC/FABRIC stable, plus RC16M for TRNG. All overlapping writers
  * use the same registry and common register mutex. Callbacks are bounded and
  * non-reentrant; exactly 1 means success, authorize/enter may return 0 pending.
- * Uses adopted enabled CE400 clocks; TRNG requires an assessed secure health profile.
- * Optional cold provisioning programs real cutoffs/window and enables last.
+ * Uses adopted enabled CE400 clocks. It follows the vendor's non-secure sunxi-ce driver: the secure bank is not
+ * touched and no health-test register is programmed or read, so the TRNG health tests run at hardware defaults.
  * No startup-test completion or physical entropy qualification is inferred.
  * Never supplies threshold defaults, seed fallback or an entropy-credit claim.
  * TRNG output is UNQUALIFIED for production security use: characterization of the raw source

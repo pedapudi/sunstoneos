@@ -160,8 +160,10 @@ def main():
         assert authority == 0x5151 and tuple(words) == SID_WORDS, (authority, words)
 
     cases = []
-    # apps/os/os.h: workload 2 (storage-free) is admitted in either lifetime by a build with no audio, radio or headset.
-    admitted = (1,) if radio else (0, 2, 4) if not config['audio'] and not headset else (0, 4)
+    # apps/os/os.h: every image admits workloads 0, 1, 2 and 4 here; the session decode ties the workload to the device grant
+    # and refuses a radio session in an image without the radio. The radio's publications and chip-ID read happen only for
+    # workload 1.
+    admitted = (0, 1, 2, 3, 4)
     n = len(assets)        # the manifest's INPUT regions, published first; an image with no application has none
     for workload in (0, 1, 2, 3, 4, 6, 8):
         cpu, calls, returned, checked, profile = run(workload)
@@ -175,14 +177,14 @@ def main():
             assert calls[:n] == assets and calls[n][1:] == (832, DEADLINE) and calls[n + 1] == (0x43000000, 0x100000, DEADLINE)
             assert bytes(cpu.mem_read(copy, 832)) == profile
             record(cpu, calls)
-        elif radio:
+        elif radio and workload in (1, 3):
             assert calls[:n + 2] == assets + [(0x43000000, 1872, DEADLINE), (0x43010000, 0xf0000, DEADLINE)], calls
             assert len(calls) == n + 3, calls
             record(cpu, calls)
         else:
             assert calls == assets, calls
         cases.append({'workload': workload, 'accepted': accepted, 'publications': len(calls)})
-    workload = admitted[0]
+    workload = 1 if radio else admitted[0]
     _, calls, returned, _, _ = run(workload, calls_made=2)
     assert returned[0] == 1 and returned[1] == 0 and len(calls) == len(assets) + (3 if radio or headset else 0), returned
     cases.append({'workload': workload, 'second-call-refused': True})

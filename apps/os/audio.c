@@ -245,7 +245,9 @@ int os_audio_task_privileged(void (*entry)(void *),void *context)
 /* PB5, PB6 and PB8 join the board pin manager's authority. */
 int os_audio_pins(struct a733_pin_handoff *pins)
 {
-    if(!pins||!os_session_admitted()||(pins->authorized[A733_PIN_B]&((1u<<5)|(1u<<6)|(1u<<8))))return 0;
+    if(!pins||!os_session_admitted())return 0;
+    if(!os_granted(OS_GRANT_AUDIO))return 1; /* the pins stay with the board pin manager */
+    if(pins->authorized[A733_PIN_B]&((1u<<5)|(1u<<6)|(1u<<8)))return 0;
     pins->authorized[A733_PIN_B]|=(1u<<5)|(1u<<6)|(1u<<8);return 1;
 }
 /* Validate the client's configuration without I/O and keep it. The stream

@@ -23,6 +23,16 @@ CE cryptographic and entropy operations have no physical qualification; read-onl
 2. Establish entropy: no A733 raw-source export or startup completion counter is known, and other `sunxi-trng` layouts do not establish the selected CE node. Entropy assessment, raw-source checks and current-enable startup tests are missing.
 3. Add native CE GCM and further AES modes, DES, 3DES, SM4, RC4, RSA, ECC, SM2, PRNG and DRBG, key-ladder operations, eFuse provisioning and mutable secure storage. Internal key erasure is unproven.
 
+## CE board probe
+
+The first board result for the CE is small and goes in this order, one board run each.
+
+1. **State at entry (read-only).** Every run now captures `CE_CLK_REG` (`0x02002ac0`) and `CE_BGR_REG` (`0x02002ac4`) in FEL before the image loads. If the CE is gated or held in reset (`CE_RST` bit 16 or `CE_SYS_RST` bit 17 low, gates in bits 1:0 clear), nothing before the image can have left CE DMA running, and the image's reset-and-gate cycle at admission is the exclusion. The CE's own registers are not read in FEL: a gated or reset-held CE can stall the bus.
+2. **Secure-bank access from the image.** Map only the CE register page (`0x04603000`, the nonsecure bank at `+0x000` and the secure bank at `+0x800`) and read the bank registers the driver reads (`a733_ce_native_read`), with no write. This shows whether the OS, running nonsecure at EL1 under our monitor, can read the secure bank at all, or whether the peripheral firewall (SPC at `0x02054000`, whose register layout the manual does not give) must be opened first.
+3. **CE-only probe.** Health tests programmed through the secure bank, one 32-byte TRNG request, a normal return. The record holds the byte count and the health status, never the bytes. It proves only that the CE runs on the board under the vendor clock (CE 400 MHz, `CE_CLK_REG` as in `a733_ce_clock.c`) and that the health tests accept a request. It does not qualify the entropy ([entropy](../entropy.md)).
+
+Association follows once step 3 passes.
+
 See [engine inventory](../security-engines.md), [entropy](../entropy.md), [identity](../board-application.md) and [source provenance](../../apps/crypto/security-sources.json).
 
 ## Evidence

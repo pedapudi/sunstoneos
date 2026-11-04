@@ -5,7 +5,6 @@
 #include <stddef.h>
 #define CCU UINT32_C(0x02002000)
 #define NS UINT32_C(0x04603000)
-#define SEC UINT32_C(0x04603800)
 static int readable(uintptr_t a)
 {
     if (a==UINT32_C(0x07090160)) return 1;
@@ -13,12 +12,6 @@ static int readable(uintptr_t a)
         switch (a-CCU) {
         case 0:case 0xa0:case 0xa8:case 0xac:case 0x500:case 0x580:case 0x588:
         case 0x5e4:case 0xac0:case 0xac4:case 0x1908:case 0x1988:return 1;
-        default:return 0;
-        }
-    }
-    if (a>=SEC && a<=SEC+0x9c) {
-        switch (a-SEC) {
-        case 8:case 12:case 0x10:case 0x18:case 0x90:case 0x94:case 0x98:case 0x9c:return 1;
         default:return 0;
         }
     }
@@ -35,15 +28,6 @@ int a733_ce_native_write(void *cookie,uintptr_t a,uint32_t v)
 {
     (void)cookie;
     uint32_t mask=0;
-    if (a>=SEC+0x90 && a<=SEC+0x9c && !(a&3)) {
-        a733_mmio_dsb_sy();
-        uint32_t control=a733_mmio_read32(SEC+0x9c);
-        /* No live reconfiguration, including a write that would disable tests. */
-        if (control&0x30000u) return 0;
-        if (a==SEC+0x9c && ((control^v)&~UINT32_C(0x307ff))) return 0;
-        a733_mmio_write32(a,v);
-        a733_mmio_dsb_sy();return 1;
-    }
     if (a<NS || a>NS+0xd0) return 0;
     switch (a-NS) {
     case 0:mask=UINT32_MAX;break;
@@ -74,15 +58,20 @@ int a733_ce_clock_native_write(void *cookie,uintptr_t a,uint32_t value)
     if(a==CCU+0xac0){
         mask=0x8700001f;
         uint32_t from=old&mask,to=value&mask;
-        if(!((from==0&&to==0x01000000)||(from==0x01000000&&to==0x81000000)))return 0;
+        /* Up: select the source, then open the gate. Down, for the reset-and-gate cycle: the reverse. */
+        if(!((from==0&&to==0x01000000)||(from==0x01000000&&to==0x81000000)||
+             (from==0x81000000&&to==0x01000000)||(from==0x01000000&&to==0)))return 0;
     }else if(a==CCU+0xac4){
         mask=0x30003;
         uint32_t from=old&mask,to=value&mask;
         if(!((from==0&&to==0x30000)||(from==0x30000&&to==0x30001)||
-             (from==0x30001&&to==0x30003)))return 0;
+             (from==0x30001&&to==0x30003)||
+             (from==0x30003&&to==0x30001)||(from==0x30001&&to==0x30000)||(from==0x30000&&to==0)))return 0;
     }else{
         mask=4;
-        if((old&0x40306)!=0x40302||(value&4)!=4)return 0;
+        /* Bit 2 of the neighboring MBUS gate word is set going up and cleared coming down, never with a
+         * neighbor changed. */
+        if(!(((old&0x40306)==0x40302&&(value&4)==4)||((old&0x40306)==0x40306&&!(value&4))))return 0;
     }
     if((old^value)&~mask)return 0;
     a733_mmio_write32(a,value);

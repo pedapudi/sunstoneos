@@ -33,7 +33,8 @@ GATE_RUNS = [['--build', '{build:resaud}', '--output', '{output}']]
 CASES = ['two-generations-pcm-headroom-and-stream-reuse', 'discontinuous-period-refused',
          'self-stopped-stream-refused', 'request-rules', 'progress-reports',
          'formats-periods-and-buffers', 'rates-and-period-sizes', 'full-ring-and-handshakes',
-         'cyclic-staging-and-reopen', 'cyclic-copy-refusal-retains-lease', 'reversed-timestamps-retain-lease']
+         'cyclic-staging-and-reopen', 'cyclic-copy-refusal-retains-lease', 'reversed-timestamps-retain-lease',
+         'ungranted-service-touches-nothing']
 LENGTHS = [16000, 20480, 80000]
 if not __debug__:
     raise RuntimeError('checks require assertions')

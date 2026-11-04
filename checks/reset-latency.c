@@ -45,7 +45,7 @@ const struct ss_application ss_application={.manifest=&model_manifest};
 int os_application_finished(void){return 0;}
 const struct os_session *os_session_admitted(void)
 {
-    static const struct os_session session={.board={.workload=4}};
+    static const struct os_session session={.board={.workload=4},.granted=OS_GRANT_NPU|OS_GRANT_AUDIO|OS_GRANT_RADIO};
     return &session;
 }
 /* The runtime deadline is the board's own, beyond the longest case here. */
@@ -53,9 +53,10 @@ uint64_t board_runtime_deadline_us(void){return UINT64_C(3600)*1000000;}
 const struct os_service os_services[OS_SERVICES]={
     {"board-pmic",1000000},{"board-usb0",1000000},{"board-typec",1000000},
     {"board-power",1000000},{"board-usb2",1000000},
-    {"application",1000000},{"thermal",1000000}
+    {"application",1000000},{"thermal",1000000},{"npu",5000000},{"audio",1000000},{"radio",1000000},{"network",1000000}
 };
-_Static_assert(OS_SERVICES==7,"reset model covers every selected service");
+/* The model's session grants the NPU, I2S and the radio, so the supervisor requires all eleven. */
+_Static_assert(OS_SERVICES==11,"reset model covers every service of the image");
 #endif
 
 struct outcome { uint64_t expired,refused,detail,reloads; };
