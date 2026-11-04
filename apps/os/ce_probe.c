@@ -113,6 +113,12 @@ static int op_bring_up(void *v)
         {ce.detail=(ce.clock.fail_line&0xfffu)|(ce.denied&0x1ffu)<<12;return -1;} /* a write-free refusal keeps the token and the lock; after a write the provision retained them */
     return 1;
 }
+static void clean(const void *base,size_t bytes)
+{
+    for(uintptr_t a=(uintptr_t)base&~(uintptr_t)63;a<(uintptr_t)base+bytes;a+=64)
+        __asm__ volatile("dc civac, %0"::"r"(a):"memory");
+    __asm__ volatile("dsb sy":::"memory");
+}
 /* One 4 KiB device-reachable page: the descriptor object (3,520 bytes) from the unified ledger with the crypto
  * device's address limit; zeroed and cleaned by the ledger, then handed to the device. */
 static int op_alloc(void *v,uint64_t *descriptor,uint64_t *output)
@@ -121,16 +127,17 @@ static int op_alloc(void *v,uint64_t *descriptor,uint64_t *output)
     struct umem *ledger=os_large_umem();
     if(!ledger){ce.detail=1;return -1;}
     if(!ce.buffer.generation){
+        /* The OS ledger has no cache-maintenance hook (apps/os/large.c), so the page is raw, as every kernel user's is:
+         * zeroed and cleaned here before the device sees it. */
         struct umem_request r={.bytes=4096,.align=4096,.window=4096,.device_mask=UMEM_DEV_CRYPTO,
-                               .owner=UMEM_OWNER_KERNEL,.policy=UMEM_WB};
+                               .owner=UMEM_OWNER_KERNEL,.policy=UMEM_WB,.flags=UMEM_RAW};
         int status=umem_alloc(ledger,&r,&ce.buffer);
         if(status!=UMEM_OK){ce.detail=2|(unsigned)(-status)<<4;return -1;}
+        volatile uint8_t *page=(volatile uint8_t *)(uintptr_t)ce.buffer.base;
+        for(unsigned i=0;i<4096;++i)page[i]=0;
+        clean((const void *)(uintptr_t)ce.buffer.base,4096);
     }
-    if(!umem_ready(ledger,&ce.buffer)){
-        int s=umem_prepare_step(ledger,&ce.buffer,4096);
-        if(s<0){ce.detail=3|(unsigned)(-s)<<4;return -1;}
-        if(!s)return 0;
-    }
+    if(!umem_ready(ledger,&ce.buffer)){ce.detail=3;return -1;}
     if(!ce.buffer_state){
         int status=umem_handoff(ledger,&ce.buffer,UMEM_CPU,UMEM_DEVICE,NULL,0);
         if(status!=UMEM_OK){ce.detail=4|(unsigned)(-status)<<4;return -1;}
@@ -168,12 +175,6 @@ static void op_retain(void *v){(void)v;if(ce.token.id&&ce.engine.initialized)(vo
  * 4 handoff) and the negative umem status (bits 11:4). */
 static unsigned op_detail(void *v){(void)v;return ce.detail;}
 
-static void clean(const void *base,size_t bytes)
-{
-    for(uintptr_t a=(uintptr_t)base&~(uintptr_t)63;a<(uintptr_t)base+bytes;a+=64)
-        __asm__ volatile("dc civac, %0"::"r"(a):"memory");
-    __asm__ volatile("dsb sy":::"memory");
-}
 static void publish(void)
 {
     if(ce.finished)return;
