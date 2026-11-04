@@ -196,7 +196,8 @@ def check_consumers(record):
                        ('a head below the image', 0x41000000)):
         try:
             returning.require_listable_head(head)
-        except ValueError:
+        except ValueError as error:
+            require(('4 GiB' in str(error)) == (head >= 1 << 32), name + ' is refused for the wrong reason: ' + str(error))
             continue
         require(False, name + ' is accepted')
     # The published-range head: an OS image must carry it, a probe may omit it, and nothing else is accepted.
