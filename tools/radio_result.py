@@ -69,7 +69,17 @@ def decode(data):
         if present:
             result['card']['functions'].append({'function': i, 'manufacturer': man, 'device': dev, 'class': cls})
     chip, sub, fw_flags, fail_site = struct.unpack_from('<4I', data, 200)
+    fw_progress = struct.unpack_from('<I', data, 228)[0]
     result['identity'] = {'chip_word': chip, 'subrevision_word': sub}
+    # Firmware engine progress (zero before it claims the module). The time is the clock at the last confirmation,
+    # in milliseconds modulo 65536.
+    states = ['new', 'verifying', 'validating', 'preparing', 'request', 'waiting', 'delay', 'start-confirmed', 'fault']
+    phases = ['adid', 'patch', 'table', 'wifi-image', 'read-pointers', 'wifi-patch', 'start']
+    result['firmware'] = {'state': states[fw_flags & 15] if (fw_flags & 15) < len(states) else fw_flags & 15,
+                          'error': (fw_flags >> 4) & 15,
+                          'phase': phases[(fw_flags >> 8) & 255] if ((fw_flags >> 8) & 255) < len(phases) else (fw_flags >> 8) & 255,
+                          'last_confirmation_ms_mod_65536': fw_flags >> 16,
+                          'image_bytes_sent': fw_progress & 0x7ffff, 'table_pairs_done': fw_progress >> 19} if fw_flags else None
     # fail_site: source line << 16 | 0x100 when the session decided the failure (the platform decided none) | stage.
     result['platform_failure'] = {'line': fail_site >> 16, 'stage': fail_site & 0xff,
                                   'source': 'session' if fail_site & 0x100 else 'platform'} if fail_site else None

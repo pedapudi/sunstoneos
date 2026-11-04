@@ -254,6 +254,8 @@ int main(int argc, char **argv)
     assert(transport.state == AIC8800_TRANSPORT_START_CONFIRMED && firmware.state == AIC8800_FW_START_CONFIRMED);
     assert(transcript_at == transcript_size && firmware_commands == 3256 && fw_block_commands == 361);
     assert(firmware.bt_patch_applied && firmware.binding_required && held_events == 2);
+    /* Progress for the record: about 2,500 table pair writes of the 3,256 commands, and a nonzero confirmation time. */
+    assert(firmware.pairs_done > 2000 && firmware.pairs_done <= 2888 && firmware.last_confirm);
     assert(firmware.binding_challenge[0] == 0xa0 && firmware.binding_challenge[15] == 0xaf);
     assert(firmware.bootstatus == 0xa501 && firmware.first_nonzero_block_status == 0x80000003);
 

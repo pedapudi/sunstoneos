@@ -185,7 +185,7 @@ static void block_status(struct aic8800_firmware *f,const struct aic8800_sdio_re
 }
 static void advance(struct aic8800_firmware *f,uint64_t now,const struct aic8800_sdio_response *r)
 {
-    f->state=AIC8800_FW_PREPARING;
+    f->state=AIC8800_FW_PREPARING;f->last_confirm=now;
     if(f->phase==LOAD_ADID||f->phase==LOAD_BT_PATCH||f->phase==LOAD_WIFI){
         unsigned role=f->phase==LOAD_ADID?AIC8800_BT_ADID:f->phase==LOAD_BT_PATCH?AIC8800_BT_PATCH:AIC8800_WIFI_IMAGE;
         size_t left=f->config.blobs[role].bytes-f->image_offset;f->image_offset+=left>1024?1024:left;
@@ -193,6 +193,7 @@ static void advance(struct aic8800_firmware *f,uint64_t now,const struct aic8800
         if(f->image_offset==f->config.blobs[role].bytes){f->image_offset=0;++f->phase;}
     }else if(f->phase==APPLY_BT_TABLE){
         if(f->table_burst)block_status(f,r);
+        f->pairs_done+=f->table_burst?f->table_burst:1;
         f->pair_index+=f->table_burst?f->table_burst:1;f->table_burst=0;
         if(f->pair_index==f->table_pairs){
             f->pair_index=0;f->table_offset+=24+(size_t)f->table_pairs*8;

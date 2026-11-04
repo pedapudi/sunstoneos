@@ -31,6 +31,7 @@ struct board_radio_config {
     /* Stop after enumeration (no four-bit widening, no transport, no firmware), for the smallest
      * probe; the owner then reports BOARD_RADIO_SCANNED with the report at stage enumerated. */
     unsigned enumeration_only;
+    unsigned four_bit; /* With enumeration_only: still widen to four bits at 25 MHz (the firmware upload needs it). */
 };
 enum board_radio_result { BOARD_RADIO_PENDING,BOARD_RADIO_NETWORK,
     BOARD_RADIO_RETAINED,BOARD_RADIO_INVALID,BOARD_RADIO_SCANNED,BOARD_RADIO_DOWN };
