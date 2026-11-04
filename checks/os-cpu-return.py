@@ -6,7 +6,8 @@ validates the mapping of every 2 MiB block of image RAM, of the WORK and OUTPUT
 regions of the image's application manifest and of the published device ranges,
 and both ends of each range; an image without such regions skips the region alias
 case. The caches are cleaned by set/way as each core goes down: the model supplies
-the Cortex-A55 and DSU geometry (CLIDR and CCSIDR, from boot/a733/stage2/cpu.c),
+the measured geometry of each core (CLIDR and CCSIDR from docs/hardware/a733-facts.json:
+Cortex-A55 on cores 0 to 5, Cortex-A76 on 6 and 7),
 records every DC CISW operand per core and checks that each secondary covers its
 L1 and L2, that core 0 covers L1, L2 and L3, that core 0's L3 sweep follows every
 secondary's last operation, and that no core stores to Normal memory after its own

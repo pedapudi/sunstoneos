@@ -143,8 +143,10 @@ recognizer arena at 0x46000000 and of every published device range (2 MiB or 1 G
 block by block), and then goes down with its caches cleaned by set/way: a secondary
 cleans its L1 and L2 before it acknowledges, and CPU0 cleans its L1 and L2 and the
 shared L3 after every secondary is off, as the boot monitor does before its reset.
-The cost is bounded by the cache sizes (about 21,000 operations for CPU0 and 2,560
-for each secondary), not by the size of the ranges; each core's sweep time is in the
+The sweep reads CLIDR and CCSIDR on the core that runs it, so the Cortex-A76 cores
+(64 KiB L1D, 256 KiB 8-way L2) clean their own shape. The cost is bounded by the
+cache sizes (18,944 operations for CPU0, 2,560 for each Cortex-A55 secondary and
+5,120 for each Cortex-A76), not by the size of the ranges; each core's sweep time is in the
 `reserved` word of its report slot. The earlier line-by-line clean took 227 ms per
 32 MiB range on every core. No Normal-memory writer executes after the sweep. Permitted architectural
 controls are restored while enabled SRE bits remain set. CPU0 requires matching
