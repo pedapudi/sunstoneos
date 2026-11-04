@@ -271,7 +271,8 @@ int os_device_range_publish(uint64_t base, uint64_t bytes)
     int ok = 1;
     if (!range_tail || range_tail->count == OS_DEVICE_RANGES_PER_PAGE) {
         struct umem_buf b;
-        struct umem_request r = {.bytes = sizeof(struct os_device_range_page), .align = 4096, .owner = UMEM_OWNER_KERNEL, .flags = UMEM_RAW};
+        struct umem_request r = {.bytes = sizeof(struct os_device_range_page), .align = 4096, .owner = UMEM_OWNER_KERNEL, .flags = UMEM_RAW,
+                                  .phys_max = UINT64_C(1) << 32};   /* the runner reads the pages over FEL, which has 32-bit addresses */
         if (umem_alloc(&ledger, &r, &b) == 0) {
             struct os_device_range_page *page = (struct os_device_range_page *)(uintptr_t)b.base;
             memset(page, 0, sizeof *page);

@@ -208,6 +208,17 @@ def decode_npu_stop(raw, epoch, generation, failure_generation=None):
                                          'generation')}
 
 
+def require_listable_head(head):
+    """The address of the first device range page, which the runner reads over FEL before the DRAM restoration.
+
+    FEL addresses are 32 bits wide (sunxi-fel reads with a uint32_t offset), so a page at or above 4 GiB would be read from
+    the truncated address: the OS keeps these pages below 4 GiB (os_device_range_publish) and the runner refuses any other."""
+    if head >= 1 << 32:
+        raise ValueError('The device range list head %#x is at or above 4 GiB, which FEL cannot read.' % head)
+    if head % 4096 or not 0x42200000 <= head <= (1 << 32) - 4096:
+        raise ValueError('The device range list head %#x is not a page of the DRAM above the image.' % head)
+
+
 COUNTER_HZ = 24_000_000      # the generic counter (include/a733_smp_counter.h)
 
 
