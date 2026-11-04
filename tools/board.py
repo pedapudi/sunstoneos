@@ -1455,7 +1455,7 @@ class Queue:
         options = {'reference': 'none' if reference.get('none') else f"{reference['path']}#{reference['anchor']}"}
         if reference.get('none'):
             options['reference_reason'] = reference['reason']
-        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight'):
+        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool'):
             value = getattr(args,name)
             options[name] = str(value.resolve()) if isinstance(value,Path) else value
         for name in ('records', 'decoder', 'manifest'):
@@ -1762,6 +1762,8 @@ def run_options(parser, submit=False):
     parser.add_argument('--kind', choices=('cpu-return','gpu-return','npu','probe','usb-class','rail-helper'), default='cpu-return', required=submit)
     parser.add_argument('--manifest', type=Path, help='Exact finite NPU build manifest.')
     parser.add_argument('--objcopy', type=Path, default=Path('/usr/bin/llvm-objcopy-21'))
+    parser.add_argument('--npu-pool', default='0:0', metavar='BASE:BYTES',
+                        help='Ask for the NPU reservation at this base and size (default 0:0: the allocator chooses). The ledger refuses an extent that is not free DRAM above the image or that crosses a 4 GiB window.')
     parser.add_argument('--approved-by', choices=('coordinator',))
     parser.add_argument('--reference', help='PATH#ANCHOR of the tracked docs heading that derives the subsystem vendor sequence and the diff against it; '
                         '"none" needs --approved-by coordinator and --reference-reason.')

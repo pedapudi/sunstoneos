@@ -15,7 +15,8 @@ struct os_npu_session {
     uint32_t pck_client,client_model,jobs,reserved;
     /* A placement request for the NPU's reservation: its base and size, both zero when the allocator chooses (the normal case).
      * Any image accepts a request; the ledger reserves exactly that extent and refuses it unless it is free DRAM above the image
-     * that stays inside one 4 GiB window. Which sessions may carry one is the runner's policy. */
+     * that stays inside one 4 GiB window. Only an explicit request sets these words: tools/session.py --npu-pool and the runner's
+     * --npu-pool option write them, and the session preparation zeroes them otherwise (apps/os/host.py set_npu_pool_request). */
     uint64_t pool_request[2];
     uint8_t catalogue[32],admission[32],clock[32],power[32],supervision[32],ddr[32];
     /* What the application declares: concurrent graphs (slots), jobs kept in flight, graphs kept resident and tensor

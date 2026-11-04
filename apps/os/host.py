@@ -107,6 +107,33 @@ def upgrade_services(extents, declaration):
     return services
 
 
+NPU_POOL_REQUEST_OFFSET = 64  # pool_base, pool_bytes: two u64 after the owner words and the four u32 (apps/os/npu-session.h)
+
+
+def set_npu_pool_request(services, base=0, size=0):
+    """The services with the NPU record's placement request set to (base, size), zero when nobody asks.
+
+    A request exists only when someone asks for one: whatever a template holds in those two words is replaced, so a session
+    made from an older template or another run's session never carries a stale request. A session without an NPU record is
+    unchanged."""
+    require(type(base) is int and type(size) is int and base >= 0 and size >= 0 and (base == 0) == (size == 0),
+            'An NPU pool request names both a base and a size, or neither.')
+    if NPU not in services:
+        return services
+    services = dict(services)
+    npu = bytearray(services[NPU])
+    struct.pack_into('<QQ', npu, NPU_POOL_REQUEST_OFFSET, base, size)
+    services[NPU] = bytes(npu)
+    return services
+
+
+def parse_npu_pool(text):
+    """(base, size) from 'BASE:BYTES' (decimal or 0x), (0, 0) for an empty or zero request."""
+    base, size = (int(part, 0) for part in str(text or '0:0').split(':'))
+    require(base >= 0 and size >= 0 and (base == 0) == (size == 0), 'An NPU pool request names both a base and a size, or neither.')
+    return base, size
+
+
 def input_facts(manifest, inputs):
     declared = regions(manifest, (manifest_tool.KIND['input'],))
     require(len(inputs) == len(declared), 'Input count differs from manifest.')

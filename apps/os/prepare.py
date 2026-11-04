@@ -85,12 +85,14 @@ def build_launcher(out, session_bytes, clang, lld, watchdog_mode=None):
     require(0 < (out / 'launch.bin').stat().st_size <= 0xc00, 'OS launcher exceeds reserved SRAM.')
 
 
-def prepare(image, prefix, services, inputs, output, *, devices, flags=0):
+def prepare(image, prefix, services, inputs, output, *, devices, flags=0, npu_pool=(0, 0)):
     image = Path(image).read_bytes()
     info = host.image_manifest(image)
     prefix = bytes(prefix)
     values = [bytes(data) for data in inputs]
     facts, uploads = host.input_facts(info['manifest'], values)
+    # A placement request exists only when the caller passes one; the template's own words never carry over.
+    services = host.set_npu_pool_request(services, *npu_pool)
     session = host.session_bytes(prefix, services, info['manifest'], info['sha256'], devices, flags, values)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)

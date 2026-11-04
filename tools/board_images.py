@@ -540,7 +540,8 @@ def prepare(args, info, live, out, *, dma_binding=None):
     elif not inputs:
         inputs = [(template/f'input-{i}.bin').read_bytes() for i, _ in enumerate(records.regions(image_info['manifest'], (1,)))]
     producer = load('runner_session_prepare', tree/'apps/os/prepare.py')
-    meta = producer.prepare(args.image, prefix, services, inputs, out, devices=devices, flags=flags)
+    meta = producer.prepare(args.image, prefix, services, inputs, out, devices=devices, flags=flags,
+                            npu_pool=records.parse_npu_pool(getattr(args, 'npu_pool', None)))
     if dma_authority is not None:
         write(out/'dma-authority.json', dma_authority)
     session = (out/'session.bin').read_bytes()
