@@ -377,9 +377,11 @@ when the PLL locks quickly, and a stopped time source ends in RETAINED.
 
 ## The integrated OS image owns the driver in its thermal task
 
-With `SUNSTONE_A733_OS_CPU_CLOCK` (supervised lifetime and `A733_A76_ADMITTED`
-only), the OS session carries the grant record after its other facts, and the
-OS admission loads it against the session's epoch and generation. The thermal
+Every OS image has the owner. A session that grants the CPU clock carries the
+grant record after its other facts, and the OS admission loads it against the
+session's epoch and generation; a session without the record reaches no CPU
+clock, SID, oscillator or PMIC register
+([the one OS image design](designs/one-os-image-cpu.md)). The thermal
 task, which runs every tick, calls the driver after each thermal step, so a
 CRITICAL reading ends the session before any clock step. It inspects CPU-L
 and CPU-B, requests each granted cluster's highest point once with a 120 ms
@@ -389,6 +391,13 @@ Automatic thermal transitions have a 500 ms deadline. The register adapter in
 `apps/os/cpu.c` issues `DSB SY` after each mux write. The recognizer prints a `CLOCK` line before and after each recognition with the
 applied points, the rail voltages, the transition count and the largest
 parked time ([design](designs/cpu-a76-dvfs.md)).
+After a CPU-return run the board runner reads the owner's last publication from
+image RAM and reports it as `cpu_clock` in the return report: the applied CPU-L
+and CPU-B points and voltages, the completed transition count, the DSU point,
+the pattern bits and the longest park (`decode_clock` in
+`apps/os/cpu-return-host.py`). `published: false` means the owner closed in
+START, before its first inspection. `cpu_rails` holds the DCDC5 and DCDC3
+readbacks the owner last confirmed before the close.
 
 ## Failure handling keeps ownership after any write
 

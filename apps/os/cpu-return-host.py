@@ -78,6 +78,32 @@ def linked_symbols(image):
     return found
 
 
+# The CPU clock owner's publication (apps/os/cpu.c, compiled into the return image as return-cpu.c): file-scope statics
+# that a reader of ss_clock_info() sees, and their sizes.
+CLOCK_SYMBOLS = {'record': 8, 'dsu_mhz': 4, 'pattern_bits': 4, 'parked_max_us': 8}
+
+
+def clock_symbols(image):
+    """The clock owner's publication: name -> (address, bytes), from the local symbols of the one source file that
+    defines all of CLOCK_SYMBOLS. None when no file does."""
+    elf = ELFFile(io.BytesIO(Path(image).read_bytes()))
+    table = elf.get_section_by_name('.symtab')
+    require(table is not None, 'CPU return image has no symbol table.')
+    groups, current = {}, None
+    for s in table.iter_symbols():
+        if s['st_info']['type'] == 'STT_FILE':
+            current = s.name
+        elif (current and s.name in CLOCK_SYMBOLS and s['st_info']['bind'] == 'STB_LOCAL' and
+              s['st_info']['type'] == 'STT_OBJECT' and s['st_shndx'] != 'SHN_UNDEF'):
+            groups.setdefault(current, {})[s.name] = (int(s['st_value']), int(s['st_size']))
+    found = [group for group in groups.values() if set(group) == set(CLOCK_SYMBOLS)]
+    if not found:
+        return None
+    require(len(found) == 1, 'More than one source file defines the CPU clock publication.')
+    require(all(found[0][name][1] == size for name, size in CLOCK_SYMBOLS.items()), 'CPU clock publication sizes differ.')
+    return found[0]
+
+
 def layout(image):
     """The monitor's return report and cleanup stacks, and the cached writable range."""
     symbols = linked_symbols(image)
@@ -122,6 +148,14 @@ def geometry(image):
                 symbols['__bss_start'][0] <= address < address + size <= symbols['__bss_end'][0],
                 'CPU rail readback object differs from writable image BSS.')
         result['cpu_rails'] = {'address': address, 'bytes': size}
+    clock = clock_symbols(image)
+    if clock is not None:
+        low, high = result['cached_writable']
+        for name, (address, size) in clock.items():
+            require(address % size == 0 and low <= address < address + size <= high and
+                    symbols['__bss_start'][0] <= address < address + size <= symbols['__bss_end'][0],
+                    'CPU clock publication %s differs from writable image BSS.' % name)
+        result['cpu_clock'] = {name: {'address': address, 'bytes': size} for name, (address, size) in clock.items()}
     if 'os_radio_result_descriptor' in symbols:
         address, size = symbols['os_radio_result_descriptor']
         low, high = result['cached_writable']
@@ -298,6 +332,23 @@ def decode_rails(raw):
     dcdc5, dcdc3 = struct.unpack('<2I', raw)
     return {'dcdc5_uv': dcdc5 or None, 'dcdc3_uv': dcdc3 or None,
             'source': 'last confirmed PMIC readbacks at CPU clock close'}
+
+
+def decode_clock(record, dsu, pattern, parked):
+    """The clock owner's last publication, read from image RAM after the return.
+
+    record packs the applied CPU-L and CPU-B points in MHz and their rail voltages in mV, 11 bits each, then a 20-bit
+    count of completed transitions (pack() in apps/os/cpu.c); a zero voltage was not read. A zero record was never
+    published: the owner closed in START, before its first inspection. pattern has bit 0 for CPU-L and bit 1 for CPU-B
+    when their pattern or frequency-modulation enables were seen; parked is the longest park of any transition."""
+    word = struct.unpack('<Q', record)[0]
+    if not word:
+        return {'published': False, 'source': 'CPU clock owner publication at return'}
+    return {'published': True, 'cpu_l_mhz': word & 0x7ff, 'cpu_b_mhz': word >> 11 & 0x7ff,
+            'cpu_l_mv': (word >> 22 & 0x7ff) or None, 'cpu_b_mv': (word >> 33 & 0x7ff) or None,
+            'transitions': word >> 44 & 0xfffff, 'dsu_mhz': struct.unpack('<I', dsu)[0],
+            'pattern_bits': struct.unpack('<I', pattern)[0], 'parked_max_us': struct.unpack('<Q', parked)[0],
+            'source': 'CPU clock owner publication at return'}
 
 
 def run_once(tx, launch, ready, bundle, p, evidence, record, journal, *, extents=None, captures=(),
