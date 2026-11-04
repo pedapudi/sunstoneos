@@ -68,11 +68,13 @@ static int masked(void)
     if(!device(0x03400118))return 0;
     return !(a733_mmio_read32_dsb_sy_both(0x03400118)&0x300); /* INTIDs 200 and 201 */
 }
+/* a733_ce_request moves the controller's deadline to the request's, which is earlier than the session's: any deadline
+ * up to the session's is the same authority. */
 static int authorize(void *v,const struct a733_ce_config *c,const struct a733_clock_token *t,const struct a733_ce_memory *m)
 {
     if(v!=&ce||!board_live(NULL)||!mappings()||!masked()||!ce.engine.initialized||m!=ce.memory||
        c->owner!=CE_OWNER||c->handoff!=board.session.generation||c->profile!=A733_CE_TRNG_ONLY||
-       c->deadline_us!=deadline_us()||c->health_profile||c->configure_health||
+       c->deadline_us>deadline_us()||c->health_profile||c->configure_health||
        t->id!=ce.token.id||t->owner!=ce.token.owner||t->shared!=ce.token.shared||t->exclusive!=ce.token.exclusive)return 0;
     for(unsigned i=0;i<4;++i)if(c->health[i])return 0;
     for(unsigned i=0;i<3;++i)if(c->fabric[i]!=board.session.fabric[i]||c->fabric_hz[i]!=board.session.fabric_hz[i])return 0;
