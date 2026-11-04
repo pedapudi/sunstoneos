@@ -40,7 +40,7 @@ sunstone_board_application(npu-board BOOT "${npub_build}/boot.c" LINK_SCRIPT "${
   drivers/npu/a733_npu_platform.c drivers/npu/a733_npu_platform_native.c
  INPUTS platform/a733/npu_irq.c include/a733_npu_irq.h apps/npu-board/boot.patch apps/npu-board/extended-boot.patch apps/npu-board/extended-link.patch
   apps/npu-board/catalogue.py apps/npu-board/npu-models.json tools/npu-session-catalogue.py
-  tools/npu-session-models.json platform/a733-smp-cached/link-devices.ld
+  tools/npu-fixtures.json platform/a733-smp-cached/link-devices.ld
   "${SUNSTONE_NPU_BOARD_CATALOGUE}" include/npu_runtime.h include/npu_admitted_models.h include/a733_npu_startup.h)
 # apps/npu-board/tusb_config.h, first in the image's include path, replaces the
 # board's TinyUSB configuration. A build that compiled the TinyUSB sources

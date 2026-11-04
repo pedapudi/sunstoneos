@@ -13,8 +13,8 @@ apps/npu-graphs/host.py writes) to DIR/decoder.py, the file that `board.py submi
   image identity, manifest digest   the image's build ID (tools/check-a733-smp.py) and its sunstone_manifest section
   devices, flags, workload          the manifest's required devices; --devices adds optional ones (only 0 has pinned board facts)
   which service records             what the image links: the thermal record always, the CPU clock grant (a733_cpu_clock_grant_load),
-                                    the NPU service (os_npu_catalogue_digest); an audio, DMA or radio service is refused
-  NPU catalogue and client model the image's os_npu_catalogue_digest and os_npu_client_model
+                                    the NPU service (os_npu_client_model); an audio, DMA or radio service is refused
+  NPU client model                  the image's os_npu_client_model
   NPU pool request                  --npu-pool BASE:BYTES (default 0:0: the allocator chooses)
   NPU declaration                   --npu-declaration D (a manifest with an npu section, or a bare slots/in_flight/graphs/links object),
                                     or the npu section of --manifest M; the image does not carry it
@@ -81,9 +81,9 @@ GRANT = [('magic', 'Q'), ('version', 'Q'), ('bytes', 'Q'), ('owner', 'Q'), ('epo
          ('max_mhz', '2I'), ('changes', 'I'), ('approval', '32s')]
 NPU = [('magic', 'Q'), ('version', 'Q'), ('bytes', 'Q'), ('owner', 'Q'), ('command_admission', 'Q'), ('supervisor', 'Q'),
        ('pck_client', 'I'), ('client_model', 'I'), ('jobs', 'I'), ('reserved', 'I'), ('pool_base', 'Q'), ('pool_bytes', 'Q'),
-       ('catalogue', '32s'), ('admission', '32s'), ('clock', '32s'), ('power', '32s'), ('supervision', '32s'), ('ddr', '32s'),
+       ('admission', '32s'), ('clock', '32s'), ('power', '32s'), ('supervision', '32s'), ('ddr', '32s'),
        ('slots', 'I'), ('in_flight', 'I'), ('graphs', 'I'), ('links', 'I'), ('graph_bytes', 'I'), ('tensor_bytes', 'I')]
-LAYOUTS = {'prefix': (PREFIX, 592), 'thermal': (THERMAL, 216), 'cpu_grant': (GRANT, 96), 'npu': (NPU, 296)}
+LAYOUTS = {'prefix': (PREFIX, 592), 'thermal': (THERMAL, 216), 'cpu_grant': (GRANT, 96), 'npu': (NPU, 264)}
 SESSION_MAGIC, SESSION_VERSION = 0x4153373342535332, 2          # the board prefix (apps/board/prepare.py SESSION_MAGIC)
 GRANT_MAGIC = 0x4153373343505531                                # A733_CPU_CLOCK_GRANT_MAGIC
 OS_MAGIC = 0x415337334f534131                                   # the thermal record's magic (A733_OS_SESSION_MAGIC)
@@ -91,10 +91,10 @@ OS_MAGIC = 0x415337334f534131                                   # the thermal re
 DERIVED = {'prefix': {'magic', 'version', 'bytes', 'epoch', 'generation', 'lease', 'image', '_pad'},
            'thermal': {'magic', 'version', 'bytes'},
            'cpu_grant': {'magic', 'version', 'bytes', 'epoch', 'generation'},
-           'npu': {'magic', 'version', 'bytes', 'client_model', 'reserved', 'pool_base', 'pool_bytes', 'catalogue',
+           'npu': {'magic', 'version', 'bytes', 'client_model', 'reserved', 'pool_base', 'pool_bytes',
                    'slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes'}}
 # Symbols that tell which services an OS image links (the CMake options SUNSTONE_A733_OS_*).
-SYMBOLS = {'cpu_grant': 'a733_cpu_clock_grant_load', 'npu': 'os_npu_catalogue_digest'}
+SYMBOLS = {'cpu_grant': 'a733_cpu_clock_grant_load', 'npu': 'os_npu_client_model'}
 UNSUPPORTED = {'os_audio_task': 'audio service record (devices audio-i2s or audio-headset)',
                'os_dma_profile': 'DMA service record and its physical authority',
                'os_radio_start': 'radio profile, SID evidence and radio latch facts of the board prefix (workload 1)',
@@ -259,7 +259,6 @@ def describe(image, manifest_path=None, npu_declaration=None, devices=None, host
             raise SessionError('npu declaration (slots, in_flight, graphs, links): the image does not carry it; pass --npu-declaration D '
                                '(a manifest with an npu section, or a JSON object of those fields) or --manifest M with an npu section')
         plan['npu_client_model'] = struct.unpack('<I', symbol_bytes(elf, symbols, 'os_npu_client_model')[:4])[0]
-        plan['npu_catalogue'] = symbol_bytes(elf, symbols, 'os_npu_catalogue_digest')
     plan['profile'] = 'npu' if 'npu' in plan['services'] else 'control'
     return plan
 
@@ -299,7 +298,7 @@ def build_session(plan, inputs, fact_file=FACTS, host=None, entropy=secrets.rand
         npu = profile_values(profile, 'npu', {
             'magic': host.SERVICE_MAGIC[host.NPU], 'version': host.SERVICE_VERSION[host.NPU], 'bytes': host.SERVICE_BYTES[host.NPU],
             'client_model': plan['npu_client_model'], 'reserved': 0, 'pool_base': plan['npu_pool_request'][0], 'pool_bytes': plan['npu_pool_request'][1],
-            'catalogue': plan['npu_catalogue'], 'slots': slots, 'in_flight': in_flight, 'graphs': graphs, 'links': links,
+            'slots': slots, 'in_flight': in_flight, 'graphs': graphs, 'links': links,
             'graph_bytes': graph_bytes, 'tensor_bytes': tensor_bytes})
         services[host.NPU] = pack('npu', npu)
     ordered = {k: services[k] for k in (host.THERMAL, host.CPU_GRANT, host.NPU) if k in services}
@@ -387,8 +386,6 @@ def inspect(raw, image=None, host=None):
         if npu and SYMBOLS['npu'] not in symbols:
             problems.append('npu: the session has an NPU record and the image does not link the NPU service')
         if npu and SYMBOLS['npu'] in symbols:
-            if bytes.fromhex(npu['catalogue']) != symbol_bytes(elf, symbols, 'os_npu_catalogue_digest'):
-                problems.append('npu catalogue: %s differs from the image\'s os_npu_catalogue_digest' % npu['catalogue'])
             if npu['client_model'] != struct.unpack('<I', symbol_bytes(elf, symbols, 'os_npu_client_model')[:4])[0]:
                 problems.append('npu client_model: %d differs from the image\'s os_npu_client_model' % npu['client_model'])
             if bool(npu['pool_base']) != bool(npu['pool_bytes']):
@@ -436,8 +433,8 @@ def show(report, stream=sys.stdout):
             for i, item in enumerate(value):
                 print('input %d: %d bytes sha256 %s' % (i, item['bytes'], item['sha256']), file=stream)
         elif name == 'npu':
-            print('npu: catalogue %s client_model %d jobs %d pool request %#x+%#x declaration slots %d in_flight %d graphs %d links %d '
-                  'graph_bytes %d tensor_bytes %d' % (value['catalogue'], value['client_model'], value['jobs'], value['pool_base'],
+            print('npu: client_model %d jobs %d pool request %#x+%#x declaration slots %d in_flight %d graphs %d links %d '
+                  'graph_bytes %d tensor_bytes %d' % (value['client_model'], value['jobs'], value['pool_base'],
                                                       value['pool_bytes'], value['slots'], value['in_flight'], value['graphs'],
                                                       value['links'], value['graph_bytes'], value['tensor_bytes']), file=stream)
         elif name == 'cpu_grant':

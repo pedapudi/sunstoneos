@@ -75,7 +75,7 @@ The pool is the DRAM that the NPU runtime reserves for its slots: per slot a com
 
 ## Graphs from the graph
 
-The runtime takes every fact about a graph from the graph itself: tensor counts, shapes, formats and quantization through `nbg_model_tensor`, operation counts and sizes through the loader's layout. A graph loaded from a file needs no entry in `tools/npu-session-models.json` and no rebuild of the operating system:
+The runtime takes every fact about a graph from the graph itself: tensor counts, shapes, formats and quantization through `nbg_model_tensor`, operation counts and sizes through the loader's layout. A graph loaded from a file needs no entry in `tools/npu-fixtures.json` and no rebuild of the operating system:
 
 1. The manifest declares the graphs and the bounds of those it loads at run time. The reservation covers `graphs` minus the linked ones more entries, each model of at most `graph_bytes` with no tensor beyond `tensor_bytes`, so a registered graph cannot fail on memory.
 2. The application calls `ss_npu_register_graph(bytes, size, &index)`; `os_npu_register` calls `npu_runtime_register`, which admits the bytes like a linked graph (structure, commands, addresses), checks that the regions fit what was reserved, takes the SHA-256 and publishes the entry with release order. `ss_npu_run(index, ...)` then runs it. The OS compares the tensor sizes of a run-time graph with the request, because the application-side description table holds only the linked ones.

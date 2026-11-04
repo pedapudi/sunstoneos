@@ -47,7 +47,7 @@ the run's files.
 
 The model set is the models of the
 [reference table](../tools/npu-conformance-references.json), each an entry of
-the [session catalogue](../tools/npu-session-models.json):
+the [session catalogue](../tools/npu-fixtures.json):
 
 | Model | Tensor types | Reference | Pinned files |
 | --- | --- | --- | --- |

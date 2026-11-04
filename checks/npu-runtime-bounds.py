@@ -237,7 +237,7 @@ def main():
     ap.add_argument('--evidence', type=Path, help='result.json of checks/npu-session.py --mode runtime')
     args = ap.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
-    catalogue = {m['name']: m for m in json.loads((ROOT / 'tools/npu-session-models.json').read_text())['models']}
+    catalogue = {m['name']: m for m in json.loads((ROOT / 'tools/npu-fixtures.json').read_text())['models']}
     results = [bounds(image, catalogue) for image in images()]
     # Negative case: an image whose collect timeout is one microsecond short.
     short = dict(images()[1]); short['name'] += ' with a short collect timeout'

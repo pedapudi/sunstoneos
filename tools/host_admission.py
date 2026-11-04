@@ -95,24 +95,21 @@ def image_facts(image):
 
 
 def npu_data_source(image):
-    """C definitions of the NPU data the admission reads from the linked image: the client model, the catalogue (model count
-    and digest) and the queue's link table. They are the image's own bytes, read from its ELF."""
+    """C definitions of the NPU data the admission reads from the linked image: the client model, the model count and the
+    queue's link table. They are the image's own bytes, read from its ELF."""
     import struct
     with Path(image).open('rb') as stream:
         elf = ELFFile(stream)
         model = symbol_bytes(elf, 'os_npu_client_model')
         count = symbol_bytes(elf, 'os_npu_model_count')
-        digest = symbol_bytes(elf, 'os_npu_catalogue_digest')
         edges = symbol_bytes(elf, 'ss_npu_queue_edges')
-    if model is None or count is None or digest is None or len(digest) != 32:
-        raise Unavailable('the image has no NPU catalogue data (os_npu_client_model, os_npu_model_count, os_npu_catalogue_digest)')
+    if model is None or count is None:
+        raise Unavailable('the image has no NPU data (os_npu_client_model, os_npu_model_count)')
     links = struct.unpack_from('<Q', edges, 8)[0] if edges is not None and len(edges) >= 16 else 0
     return ('#include "os.h"\n#include "npu.h"\n#include "sunstone_npu_queue.h"\n'
             'const unsigned os_npu_client_model = %du;\nconst unsigned os_npu_model_count = %du;\n'
-            'const uint8_t os_npu_catalogue_digest[32] = {%s};\n'
             'const struct ss_npu_queue_edges ss_npu_queue_edges = {0, %du};\n'
-            % (struct.unpack('<I', model[:4])[0], struct.unpack('<I', count[:4])[0],
-               ','.join(str(b) for b in digest), links))
+            % (struct.unpack('<I', model[:4])[0], struct.unpack('<I', count[:4])[0], links))
 
 
 def harness_key(image, sources):

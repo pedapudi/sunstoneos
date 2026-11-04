@@ -3,7 +3,6 @@
 
 The default profile links only the diagnostic selection. --all links every
 listed model in data order. Vectors belong to the selected diagnostic model.
-The session digest remains SHA-256 of the linked model SHA-256 digests.
 """
 import argparse
 import hashlib
@@ -46,7 +45,7 @@ def generate(artifacts, output, model=0, model_list=MODELS, all_models=False, mo
     else:
         linked = catalogue if all_models else [catalogue[model]]
     text = '#include "npu.h"\n'
-    digests, rows = b'', []
+    rows = []
     def blob(name, path, expected):
         nonlocal text
         data = Path(path).read_bytes()
@@ -71,12 +70,10 @@ def generate(artifacts, output, model=0, model_list=MODELS, all_models=False, mo
                 raise ValueError(f'{name}: external address must be a 64-byte aligned number')
             text += f'static const unsigned char model_{i}_sha256[32]={{' + ','.join(map(str, bytes.fromhex(ex['sha256']))) + '};\n'
             rows.append(f'{{(const void *)UINT64_C({ex["address"]}),{ex["bytes"]},model_{i}_sha256}}')
-            digests += bytes.fromhex(ex['sha256'])
         else:
             files = catalogue_tool().artifact_files(paths, name)
             data = blob(f'model_{i}', files['model'], entry['model'])
             rows.append(f'{{model_{i},sizeof(model_{i}),0}}')
-            digests += hashlib.sha256(data).digest()
         sizes = [sum(t['logical_bytes'] for t in entry[field]) for field in ('inputs', 'outputs')]
         if not all(0 < n <= 1024 * 1024 for n in sizes):
             raise ValueError('Model tensors exceed SS_NPU_MAX_TENSOR_BYTES capacity')
@@ -89,7 +86,6 @@ def generate(artifacts, output, model=0, model_list=MODELS, all_models=False, mo
     files = catalogue_tool().artifact_files(paths, selected['name'])
     if len(files['inputs']) != len(selected['inputs']) or len(files['references']) != len(selected['outputs']):
         raise ValueError('One artifact is required per selected model tensor')
-    text += 'const uint8_t os_npu_catalogue_digest[32]={' + ','.join(map(str, hashlib.sha256(digests).digest())) + '};\n'
     for section, field in [('inputs', 'inputs'), ('references', 'outputs')]:
         rows = []
         for i, tensor in enumerate(selected[field]):

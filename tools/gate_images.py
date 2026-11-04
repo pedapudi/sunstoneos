@@ -8,7 +8,7 @@ so the gate runs its idempotent build command before the checks that name it and
 """
 
 FIXTURES = {
-    # the compiled test graphs and their input and simulator reference tensors (tools/npu-graph-build.py, tools/npu-graph-specs.json)
+    # the compiled test graphs and their input and simulator reference tensors (tools/npu-graph-build.py, tools/npu-fixtures.json)
     'npu-graphs': {'directory': 'build/npu-graph-variants', 'build': ['tools/npu-graph-build.py', '--output', '{directory}']},
 }
 

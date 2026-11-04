@@ -19,7 +19,7 @@ p.add_argument('--output', type=Path, required=True, help='a directory for model
 a = p.parse_args()
 if not 1 <= a.count <= 31:
     p.error('the command mask allows 1 to 31 slots')
-database = json.loads((ROOT / 'tools/npu-session-models.json').read_text())
+database = json.loads((ROOT / 'tools/npu-fixtures.json').read_text())
 entry = next(m for m in database['models'] if m['name'] == a.graph)
 artifacts = json.loads(a.artifacts.read_text())
 names = ['%s-%02d' % (a.graph, i) for i in range(a.count)]

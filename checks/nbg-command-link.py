@@ -16,7 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--output', '{output}', '--graphs', '{fixture:npu-graphs}']]
-CHECK_INPUTS = ('tools/npu-graph-specs.json',)
+CHECK_INPUTS = ('tools/npu-fixtures.json',)
 FETCH = 524280
 GRAPHS = ('deep', 'chainB', 'ln176', 'sm64', 'sh-gather', 'sh-exp', 'mm', 'glu')
 LIMITS = (192, 256, 384, 512, 768, 1100)

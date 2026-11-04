@@ -2,7 +2,7 @@
 """Link the board application's NPU models into the board image.
 
 Reads the application's model list (apps/npu-board/npu-models.json) for the
-model order and tools/npu-session-models.json for each model's SHA-256 and
+model order and tools/npu-fixtures.json for each model's SHA-256 and
 size, verifies the model file that the artifacts map names for each entry,
 and writes C arrays, the npu_board_models table with npu_board_model_count
 and npu_board_catalogue_digest: SHA-256 over the model digests in list order.

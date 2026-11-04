@@ -148,7 +148,7 @@ model record cannot authorize a board launch.
 
 The catalogue is the five models of `apps/npu-board/npu-models.json`, from which
 the build generates the image's admitted table. `apps/npu-board/catalogue.py`
-checks each model file against `tools/npu-session-models.json` and links it
+checks each model file against `tools/npu-fixtures.json` and links it
 read-only, with `npu_board_catalogue_digest`, the SHA-256 over the model digests
 in list order, which the record must carry. One slot and one client serve every
 board step.

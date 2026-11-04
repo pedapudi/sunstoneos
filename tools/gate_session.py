@@ -29,7 +29,7 @@ import board_images as images
 
 
 NPU_MAGIC = 0x415337334f4e5031
-CLIENT_MODEL, CATALOGUE, DECLARATION = 52, 80, 272          # offsets in struct os_npu_session (apps/os/npu-session.h)
+CLIENT_MODEL, DECLARATION = 52, 240          # offsets in struct os_npu_session (apps/os/npu-session.h)
 
 
 def symbol_bytes(image, name):
@@ -45,7 +45,7 @@ def symbol_bytes(image, name):
 
 
 def npu_template(image, scratch):
-    """A template directory whose session carries this image's NPU client model and catalogue digest."""
+    """A template directory whose session carries this image's NPU client model."""
     import shutil
     import struct
     raw = bytearray((ROOT / 'checks/data/npu-session-template/session.bin').read_bytes())
@@ -53,7 +53,6 @@ def npu_template(image, scratch):
     if at < 0:
         raise SystemExit('the NPU session template has no NPU extent')
     raw[at + CLIENT_MODEL:at + CLIENT_MODEL + 4] = symbol_bytes(image, 'os_npu_client_model')[:4]
-    raw[at + CATALOGUE:at + CATALOGUE + 32] = symbol_bytes(image, 'os_npu_catalogue_digest')
     # The synchronous wrapper has one slot and one job in flight, and the image needs one graph for each catalogue entry.
     models = int.from_bytes(symbol_bytes(image, 'os_npu_model_count'), 'little')
     struct.pack_into('<6I', raw, at + DECLARATION, 1, 1, models, 0, 0, 0)
