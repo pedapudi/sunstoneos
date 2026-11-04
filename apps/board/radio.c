@@ -61,7 +61,7 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
             p->admit,p->admission_context)||
         !a733_radio_platform_init(&r->platform,&p->platform,&r->native.operations,&r->native,
             &p->shared->clocks,&p->shared->pins,&p->shared->rails,&p->shared->pmic)||
-        (!p->enumeration_only&&!a733_radio_platform_four_bit(&r->platform))||
+        ((!p->enumeration_only||p->four_bit)&&!a733_radio_platform_four_bit(&r->platform))||
         (p->first_run_guard&&!a733_radio_platform_first_run_guard(&r->platform))||
         !a733_radio_session_init(&r->session,&r->platform,&p->session))return 0;
     r->constructed=1;atomic_store_explicit(&r->failed,0,memory_order_release);return 1;
@@ -90,6 +90,7 @@ static enum board_radio_result retain(struct board_radio *r)
     if(waiting)return BOARD_RADIO_PENDING;
     if(r->config.report_memory.allocate){
         a733_radio_report_platform(&r->report,&r->platform);
+        a733_radio_report_firmware_progress(&r->report,&r->session.firmware,r->session.transport.config.ticks_per_ms);
         a733_radio_report_session_failure(&r->report,r->session.fail_line,r->session.fail_stage);
     }
     return BOARD_RADIO_RETAINED;
@@ -171,6 +172,7 @@ static void report_progress(struct board_radio *r)
     if(r->session.transport.have[0]&&r->session.transport.have[1])
         a733_radio_report_identity(&r->report,r->session.transport.identity.chip_word,
             r->session.transport.identity.subrevision_word);
+    a733_radio_report_firmware_progress(&r->report,&r->session.firmware,r->session.transport.config.ticks_per_ms);
     if(r->session.firmware.state==AIC8800_FW_START_CONFIRMED)a733_radio_report_firmware(&r->report);
     /* Identity is read before the firmware loads; keep the later stage. */
 }
@@ -423,6 +425,7 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
             .admit=radio_authorize,.admission_context=p,.startup_deadline_us=f->startup_deadline_us,
             .scan_only=1,.first_run_guard=1,.scan_timeout_us=f->association_timeout_us,
             .enumeration_only=board_radio_profile_stage_limit(f)!=BOARD_RADIO_STAGE_SCAN,
+            .four_bit=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_FIRMWARE, /* the firmware upload needs 4 bits at 25 MHz */
             .report_memory={report_allocate,report_release,NULL}};
         sc.session=(struct a733_radio_session_config){.owner_task=owner,.owner=f->session_owner,
             .bootstrap_deadline=f->bootstrap_deadline_us,.runtime_lease_us=f->runtime_lease_us,

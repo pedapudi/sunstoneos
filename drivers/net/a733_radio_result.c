@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "a733_radio_result.h"
+#include "aic8800_firmware.h"
 #include <string.h>
 static unsigned platform_stage(const struct a733_radio_platform *p)
 {
@@ -59,6 +60,13 @@ void a733_radio_report_platform(struct a733_radio_report *r,const struct a733_ra
 }
 void a733_radio_report_session_failure(struct a733_radio_report *r,unsigned line,unsigned stage)
 {if(line&&!r->head.fail_site)r->head.fail_site=(line<<16)|0x100u|(stage&0xfeffu);}
+void a733_radio_report_firmware_progress(struct a733_radio_report *r,const struct aic8800_firmware *f,uint64_t ticks_per_ms)
+{
+    if(f->state==AIC8800_FW_NEW)return;
+    unsigned ms=ticks_per_ms?(unsigned)((f->last_confirm/ticks_per_ms)&0xffffu):0;
+    r->head.firmware_flags=((unsigned)f->state&15u)|(((unsigned)f->error&15u)<<4)|((unsigned)f->phase<<8)|(ms<<16);
+    r->head.firmware_progress=((unsigned)f->image_offset&0x7ffffu)|((f->pairs_done&0xfffu)<<19);
+}
 void a733_radio_report_firmware(struct a733_radio_report *r)
 {if(r->head.stage<A733_RADIO_STAGE_FIRMWARE)r->head.stage=A733_RADIO_STAGE_FIRMWARE;}
 void a733_radio_report_identity(struct a733_radio_report *r,uint32_t chip,uint32_t sub)

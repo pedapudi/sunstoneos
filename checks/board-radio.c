@@ -333,6 +333,14 @@ int main(void)
         assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED);
         session_result=saved;a733_radio_report_release(&app.report);
     }
+    /* The firmware stage widens: enumeration_only with four_bit asks for four bits at 25 MHz exactly once. */
+    {
+        memset(&app,0,sizeof(app));scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);report_used=0;
+        unsigned widen_before=fast_requests;
+        struct board_radio_config probe=scan_only;probe.enumeration_only=1;probe.four_bit=1;probe.session.enumeration_only=1;
+        assert(board_radio_init(&app,&probe)&&fast_requests==widen_before+1&&app.platform.four_bit);
+        a733_radio_report_release(&app.report);
+    }
     /* A failure with the failure shutdown running: each retain drives it, the failure is final (the board's failure
      * bit set, the session's site in the record) only when it is done, and a shutdown that never finishes is
      * given up on at the board's bound. A guard refusal is final at once and leaves the failure bit alone. */

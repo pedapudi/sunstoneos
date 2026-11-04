@@ -34,8 +34,12 @@ struct a733_radio_result_head {
     uint32_t rca, function_count, cccr_revision, sdio_revision;
     uint32_t sd_revision, capabilities, wide, card_hz;
     struct a733_radio_result_function functions[A733_RADIO_RESULT_FUNCTIONS];
+    /* firmware_flags: bits 3:0 the engine state (enum aic8800_firmware_state), 7:4 its error, 15:8 its phase (0 adid,
+     * 1 patch, 2 table, 3 Wi-Fi image, 4 read pointers, 5 Wi-Fi patch, 6 start), 31:16 the clock reading at the last
+     * confirmation in milliseconds, modulo 65536. firmware_progress: bits 18:0 bytes of the current image sent, 30:19
+     * Bluetooth table pairs written in all. Both are zero before the engine has claimed the module. */
     uint32_t chip_word, subrevision_word, firmware_flags, fail_site; /* fail_site: source line << 16 | stage of the first platform failure */
-    uint32_t ap_count, aps_reported, aps_dropped, reserved1; /* dropped: results not kept because memory ran out */
+    uint32_t ap_count, aps_reported, aps_dropped, firmware_progress; /* dropped: results not kept because memory ran out */
 };
 _Static_assert(sizeof(struct a733_radio_result_rail)==8,"rail record");
 _Static_assert(sizeof(struct a733_radio_result_function)==8,"function record");
@@ -64,6 +68,8 @@ void a733_radio_report_platform(struct a733_radio_report *,const struct a733_rad
  * stage. Call after a733_radio_report_platform. */
 void a733_radio_report_session_failure(struct a733_radio_report *,unsigned line,unsigned stage);
 void a733_radio_report_firmware(struct a733_radio_report *);
+struct aic8800_firmware;
+void a733_radio_report_firmware_progress(struct a733_radio_report *,const struct aic8800_firmware *,uint64_t ticks_per_ms);
 void a733_radio_report_identity(struct a733_radio_report *,uint32_t chip_word,uint32_t subrevision_word);
 /* One scan result; the list keeps one entry per BSSID (the latest sighting) and
  * grows as needed. When memory runs out the result is counted in aps_dropped. */

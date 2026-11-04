@@ -29,7 +29,16 @@ def main():
     bldo5 = [x for x in r['rails'] if x['rail'] == 'bldo5'][0]
     assert not bldo5['enabled'] and bldo5['selector'] == 13 and bldo5['enable_byte'] == 0xb8
     assert r['identity'] == {'chip_word': 0, 'subrevision_word': 0} and not r['scan']['aps']
-    print('PASS radio result decode: guard refusal with PG at 1.8 V and BLDO5 off')
+    assert r['firmware'] is None
+    # Firmware progress words (offsets 208 and 228): state waiting (5), phase table (2), 1,234 ms, 2,000 pairs, 512 bytes.
+    import struct
+    raw = bytearray(RECORD)
+    struct.pack_into('<I', raw, 208, 5 | 2 << 8 | 1234 << 16)
+    struct.pack_into('<I', raw, 228, 512 | 2000 << 19)
+    f = radio_result.decode(bytes(raw))['firmware']
+    assert f == {'state': 'waiting', 'error': 0, 'phase': 'table', 'last_confirmation_ms_mod_65536': 1234,
+                 'image_bytes_sent': 512, 'table_pairs_done': 2000}, f
+    print('PASS radio result decode: guard refusal with PG at 1.8 V and BLDO5 off, and firmware progress')
 
 
 if __name__ == '__main__':
