@@ -40,21 +40,37 @@ def cleaned_regions(path):
     return [(r['address'], r['address'] + r['bytes']) for r in records.backup_regions(path, scratch=True)]
 
 
-# Cortex-A55 L1D 32 KiB, L2 128 KiB and DSU L3 1 MiB, 64-byte lines: CCSIDR by cache level, and CLIDR with LoC 3.
-CLIDR = 0x03000123
-CCSIDR = (0x000fe01a, 0x003fe01a, 0x007fe07a)
-GEOMETRY = ((4, 128), (4, 512), (16, 1024))      # ways, sets
+# The caches as measured on the board (docs/hardware/a733-facts.json, facts cpu.clidr_el1 and cache.ccsidr_el1.selN, status
+# measured): cores 0 to 5 are Cortex-A55 (L1D 32 KiB 4 ways, L2 128 KiB 4 ways), cores 6 and 7 Cortex-A76 (L1D 64 KiB 4 ways,
+# L2 256 KiB 8 ways), and the DSU L3 is 1 MiB with 16 ways. CCSIDR is indexed by the CSSELR value the sweep writes.
+FACTS = json.loads((ROOT / 'docs/hardware/a733-facts.json').read_text())['facts']
+CLIDR = {f['core']: f['value'] for f in FACTS if f['name'] == 'cpu.clidr_el1'}
+CCSIDR = {core: {sel: next(f['value'] for f in FACTS if f['name'] == 'cache.ccsidr_el1.sel%d' % sel and f['core'] == core)
+                 for sel in range(8)} for core in range(8)}
+assert len(set(CLIDR.values())) == 1 and (CLIDR[0] >> 24) & 7 == 3
 
 
-def sweep_operands(level):
-    ways, sets = GEOMETRY[level]
+def sweep_operands(core, level, table=None):
+    """Every DC CISW operand that cleans cache `level` of `core` with the given CCSIDR table (the measured one by default)."""
+    value = (table or CCSIDR)[core][level * 2]
+    ways, sets, line = ((value >> 3) & 0x3ff) + 1, ((value >> 13) & 0x7fff) + 1, (value & 7) + 4
     shift = 32 - (ways - 1).bit_length()
-    return {(way << shift) | (set_ << 6) | (level << 1) for way in range(ways) for set_ in range(sets)}
+    return {(way << shift) | (set_ << line) | (level << 1) for way in range(ways) for set_ in range(sets)}
+
+
+def assert_sweeps(model):
+    """Each secondary cleans exactly its own L1 and L2, core 0 also the L3, each at the geometry of its own core type."""
+    for core in range(8):
+        levels = (0, 1, 2) if core == 0 else (0, 1)
+        expected = sorted(op for level in levels for op in sweep_operands(core, level))
+        assert sorted(model.sweeps[core]) == expected, (core, len(model.sweeps[core]), len(expected))
+        assert len(set(model.sweeps[core])) == len(model.sweeps[core]), core
 
 
 class Model(prior.Model):
-    def __init__(self, image):
+    def __init__(self, image, ccsidr=None):
         super().__init__(image)
+        self.ccsidr = ccsidr or CCSIDR
         self.sweeps = [[] for _ in range(8)]
         self.sweep_order = []
         self.swept = set()
@@ -80,9 +96,9 @@ class Model(prior.Model):
 
     def get(self, name):
         if name == 'clidr_el1':
-            return CLIDR
+            return CLIDR[self.core]
         if name == 'ccsidr_el1':
-            return CCSIDR[self.reg[self.core].get('csselr_el1', 0) >> 1]
+            return self.ccsidr[self.core][self.reg[self.core].get('csselr_el1', 0)]
         if name == 'id_aa64mmfr2_el1':
             return 0
         return super().get(name)
@@ -312,11 +328,7 @@ def main():
         if case == 'success':
             # Each secondary cleans its own L1 and L2 by set/way, exactly once per set and way; core 0 also cleans L3, and only
             # after every secondary's last operation.
-            for core in range(8):
-                levels = (0, 1, 2) if core == 0 else (0, 1)
-                expected = [op for level in levels for op in sorted(sweep_operands(level))]
-                assert sorted(model.sweeps[core]) == sorted(expected), (core, len(model.sweeps[core]), len(expected))
-                assert len(set(model.sweeps[core])) == len(model.sweeps[core]), core
+            assert_sweeps(model)
             l3 = [i for i, (c, level) in enumerate(model.sweep_order) if c == 0 and level == 2]
             last_secondary = max(i for i, (c, _) in enumerate(model.sweep_order) if c)
             assert l3 and min(l3) > last_secondary, 'core 0 cleaned L3 before a secondary finished'
@@ -336,6 +348,18 @@ def main():
             (args.out / 'return-report.bin').write_bytes(raw)
         rows.append({'name': case, 'outcome': outcome, 'instructions': model.count,
                      'sweep_operations': [len(x) for x in model.sweeps]})
+    # A sweep fixed to the Cortex-A55 shape would leave dirty lines in a Cortex-A76 core: present cores 6 and 7 with the A55
+    # geometry, and the check of the operands must fail.
+    if not args.case:
+        a55 = {**CCSIDR, 6: CCSIDR[0], 7: CCSIDR[0]}
+        model = Model(image, ccsidr=a55)
+        assert model.execute(model.initialize(), budget=4000000) == 'rom'
+        try:
+            assert_sweeps(model)
+        except AssertionError:
+            rows.append({'name': 'a76-with-a55-geometry', 'outcome': 'refused', 'sweep_operations': [len(x) for x in model.sweeps]})
+        else:
+            raise AssertionError('cores 6 and 7 swept with the A55 geometry and the check accepted it')
     save(args.out / 'results.json', {'physical_access': False, 'cases': rows,
          'image_sha256': hashlib.sha256(args.elf.read_bytes()).hexdigest(),
          'checker_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

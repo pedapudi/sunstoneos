@@ -165,12 +165,16 @@
      dsb sy
      add x2, x23, #688
      add x2, x2, x20, lsl #10
-@@ -348,6 +466,13 @@
+@@ -348,6 +466,17 @@
  
  a733_qualification_power_down:
      // x0 core, x1 epoch; use only Device report/register stores from here.
-+    // The core's own L1 and L2 reach the point of coherence before it goes down; the shared L3 is cleaned by core 0 once every
-+    // secondary has acknowledged. The sweep touches no memory, and its time goes to the core's report slot.
++    // SCTLR_EL3.C is already clear (the caller disabled EL3 translation and caches), so nothing allocates during the sweep, and
++    // EL1 does not run. The core cleans its own L1 and L2 by set/way, at the geometry it reads from CLIDR and CCSIDR (Cortex-A55
++    // and Cortex-A76 differ), before it requests power-down. The Cortex-A55 and Cortex-A76 TRMs (100442 A4.8, 100798 A4.9)
++    // also flush L1 and L2 and remove the core from coherence in hardware once CPUPWRCTLR.CORE_PWRDN_EN is set and WFI runs;
++    // neither core has a software coherency bit (no SMPEN), so there is none to clear. The shared L3 is cleaned by core 0 once
++    // every secondary has acknowledged. The sweep touches no memory, and its time goes to the core's report slot.
 +    mrs x16, cntpct_el0
 +    mov x15, #2
 +    bl a733_qualification_sweep
@@ -179,7 +183,7 @@
      address x2, a733_qualification_report
      add x2, x2, #688
      add x2, x2, x0, lsl #10
-@@ -367,11 +492,109 @@
+@@ -367,11 +496,109 @@
      orr w4, w4, #2
      str w4, [x3]
      dsb sy

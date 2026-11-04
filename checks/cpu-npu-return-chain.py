@@ -599,7 +599,7 @@ def main():
     assert all(returns.u64(returns.local['arrived']+core*8)==epoch for core in range(8))
     # The caches are cleaned by set/way, one sweep per core (checks/os-cpu-return.py checks every operand); the published NPU
     # range is walked and validated by each core, whose counters are in image RAM.
-    assert [len(x) for x in returns.sweeps] == [18944]+[2560]*7
+    assert [len(x) for x in returns.sweeps] == [18944]+[2560]*5+[5120]*2
     walk = image.symbols['os_cpu_return_walk']
     assert all(returns.u64(walk+16*core) and returns.u64(walk+16*core+8) >= returns.u64(walk+16*core) for core in range(8))
     record = layout.address('ss_result_record')
