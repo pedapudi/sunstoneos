@@ -157,7 +157,7 @@ endforeach()
             'rom_sha256': sha(rom), 'qemu_sha256': sha(args.qemu.resolve())}, indent=2) + '\n')
         if not args.build_only:
             run('execute', [str(args.qemu.resolve()), '-machine', 'virt,secure=on,virtualization=on',
-                '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a53', '-smp', '8', '-m', '128M', '-nographic', '-monitor', 'none',
+                '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a55', '-smp', '8', '-m', '128M', '-nographic', '-monitor', 'none',
                 '-serial', 'none', '-semihosting-config', 'enable=on,target=native',
                 '-bios', str(rom), '-device', 'loader,file=' + str(binary)], timeout=60)
             (out / 'result.json').write_text(json.dumps({'passed': True, 'cores': 8,

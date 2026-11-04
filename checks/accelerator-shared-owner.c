@@ -270,7 +270,7 @@ static void cpu_setup(void)
     struct a733_thermal_sample sample={.observed_us=m.now,.sequence=1,.valid=31};
     for(unsigned i=0;i<5;++i)sample.millicelsius[i]=50000;
     assert(a733_thermal_policy_update(&cpu_policy,m.now,A733_THERMAL_SAMPLE,&sample)==A733_THERMAL_NORMAL);
-    const struct a733_cpu_clock_config config={4242,{77,3,{1794,2002},8}};
+    const struct a733_cpu_clock_config config={4242,{77,3,{1794,2002},8,0}};
     const struct a733_cpu_clock_ops ops={cpu_time,cpu_read,cpu_write};
     assert(a733_cpu_clock_init(&cpu_owner,&config,&ops,&cpu_owner,&m.clocks,&m.rails,&m.provider,&cpu_policy));
 }

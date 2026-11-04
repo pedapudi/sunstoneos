@@ -43,7 +43,7 @@ cmake --build "$build/hello" --target sunstone-a733-os-hello -j12
 cmake --build "$build/mimus" --target sunstone-a733-os -j12
 
 "$cfg" "$os" "$build/control-hello" -DMIMUS_DIR= -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=hello-compute \
-  -DSUNSTONE_A733_OS_CPU_RETURN=ON -DA733_A76_ADMITTED=ON -DSUNSTONE_A733_OS_CPU_CLOCK=ON
+  -DSUNSTONE_A733_OS_CPU_RETURN=ON
 cmake --build "$build/control-hello" --target sunstone-a733-os-hello -j12
 ```
 

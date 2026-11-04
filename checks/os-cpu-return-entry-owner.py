@@ -29,6 +29,7 @@ class Model(entry.Model):
   self.c=self.owner;self.put32(self.owner+owner_fields['phase'],2)
   self.hooks={layout.address('a733_cpu_clock_burst'):lambda:0,
    layout.address('os_session_admitted'):lambda:0,
+   layout.address('os_granted'):lambda:1,   # the modeled session grants the CPU clock (admission is not under test)
    layout.address('os_cpu_return_requested'):lambda:0,
    layout.address('a733_cpu_clock_request'):self.request,
    layout.address('a733_counter_clock_now'):self.now,

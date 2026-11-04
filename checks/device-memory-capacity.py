@@ -247,7 +247,7 @@ def main():
                     if address<=symbols['fixture_mode']<address+len(value):struct.pack_into('<I',value,symbols['fixture_mode']-address,mode)
                     path=out/(name+'-'+str(i)+'.bin');path.write_bytes(value)
                     loaders+=['-device',f'loader,file={path},addr={address},force-raw=on']
-                run('native-'+name,[str(a.qemu),'-machine','virt,secure=on,virtualization=on','-cpu','cortex-a53','-smp','1',
+                run('native-'+name,[str(a.qemu),'-machine','virt,secure=on,virtualization=on','-cpu','cortex-a55','-smp','1',
                     '-icount','shift=0','-m','1024M','-nographic','-monitor','none','-serial','none',
                     '-semihosting-config','enable=on,target=native','-bios',str(rom),*loaders],timeout=60)
                 results[name]=(out/('native-'+name+'.log')).read_text()
@@ -432,7 +432,7 @@ def main():
         log = out / ('trace-' + label + '.log')
         tracing = ['-d', 'int,exec,nochain,in_asm', '-D', str(log)] if trace else []
         run('native-' + label, [str(a.qemu.resolve()), '-machine', 'virt,secure=on,virtualization=on',
-            '-cpu', 'cortex-a53', '-smp', str(cores), *tracing, '-icount', 'shift=0', '-m', '1024M',
+            '-cpu', 'cortex-a55', '-smp', str(cores), *tracing, '-icount', 'shift=0', '-m', '1024M',
             '-nographic', '-monitor', 'none', '-serial', 'none', '-semihosting-config', 'enable=on,target=native',
             '-bios', str(rom), *loaders], timeout=900)
         output = (out / ('native-' + label + '.log')).read_text()

@@ -6,9 +6,8 @@ lane exits before input or output access. The zero-job input opens and closes
 the same context as a control.
 
 Select `SUNSTONE_APPLICATION=gpu-fast`, `SUNSTONE_A733_OS_GPU=ON`,
-`SUNSTONE_GPU_FAST_TIMING=ON`, `SUNSTONE_A733_OS_CPU_RETURN=ON`,
-`SUNSTONE_A733_OS_CPU_CLOCK=ON` and `A733_A76_ADMITTED=ON` through the cached
-configuration helper. The target is `sunstone-a733-os-gpu-fast`.
+`SUNSTONE_GPU_FAST_TIMING=ON` and `SUNSTONE_A733_OS_CPU_RETURN=ON` through the
+cached configuration helper. The target is `sunstone-a733-os-gpu-fast`.
 
 `prepare.py --jobs 0|10000 --cache writeback|uncached --output DIRECTORY` writes
 the 16-byte input. Submit through the board
