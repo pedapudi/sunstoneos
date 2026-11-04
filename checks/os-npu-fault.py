@@ -24,16 +24,16 @@ import host_rtos
 from harness import environment
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--output', '{output}']]
+GATE_RUNS = [['--output', '{output}', '--graphs', '{fixture:npu-graphs}']]
 CACHE = Path.home() / '.cache/sunstoneos'
-CHECK_INPUTS = ('apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu.h', 'apps/npu-graphs/models-r.json', 'drivers/npu/a733_npu_controller.c',
+CHECK_INPUTS = ('tools/npu-graph-specs.json', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu.h', 'apps/npu-graphs/models-r.json', 'drivers/npu/a733_npu_controller.c',
                 'drivers/npu/npu_service.c', 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/nbg_assembly.c',
                 'checks/os-npu-service.c', 'checks/os-npu-fault.py', 'runtime/npu_app.c')
-UNITS = ('checks/os-npu-service.c', 'drivers/npu/npu_declaration.c', 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/a733_npu_runtime_interim.c', 'drivers/npu/npu_pool.c',
+UNITS = ('checks/os-npu-service.c', 'kernel/umem/umem.c', 'drivers/npu/npu_declaration.c', 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/a733_npu_runtime_interim.c', 'drivers/npu/npu_pool.c',
          'drivers/npu/npu_service.c', 'drivers/npu/a733_npu_controller.c', 'drivers/npu/a733_npu_memory.c',
          'drivers/npu/a733_npu_mmu.c', 'drivers/npu/nbg_model.c', 'drivers/npu/nbg_assembly.c',
          'drivers/npu/nbg_checksum.c', 'drivers/npu/nbg_relocation.c', 'drivers/storage/storage_digest.c')
-DEFINES = ['OS_NPU_META_BYTES=64ULL', 'A733_A76_ADMITTED=1', 'SUNSTONE_A733_OS=1', 'SUNSTONE_A733_OS_NPU=1', 'SUNSTONE_A733_OS_NPU_OBSERVE=1',
+DEFINES = ['A733_A76_ADMITTED=1', 'SUNSTONE_A733_OS=1', 'SUNSTONE_A733_OS_NPU=1', 'SUNSTONE_A733_OS_NPU_OBSERVE=1',
            'SUNSTONE_BOARD_APPLICATION=1', 'SUNSTONE_BOARD_SUPERVISED=1', 'SUNSTONE_A733_OS_CPU_CLOCK=1',
            'SUNSTONE_NPU_FAULT_HOOK=1', 'SUNSTONE_NPU_MMU_CAPTURE_ON_TIMEOUT=1',
            'SUNSTONE_NPU_CASE_SLOTS=1,2,1,2,1,-1', 'SUNSTONE_NPU_CASE_ADDRESSES=0,0,0,0,0x180,0']

@@ -102,10 +102,22 @@ struct a733_radio_platform {
      * power-on writes are skipped. aborting/abort_done/abort_flags: the failure shutdown (bit0 ran, bit1 PM1 low,
      * bit2 clocks off, bit3 BLDO5 off; all of bits 1 to 3 that applied read back matched sets bit4). */
     unsigned already_on,aborting,abort_done,abort_flags,abort_from;
+    /* Where the first failure was decided: the source line of the fail call and the stage then. Zero while healthy. */
+    unsigned fail_line,fail_stage;
+    /* The first-run guard refused before any write: nothing is powered and nothing needs undoing, so the failure
+     * releases the register lock instead of retaining it and the lifetime can end normally. fail_line then holds
+     * 0x400 | PG bits (13:12 of GPIO_POW_VAL) << 4 | the unmet conditions (1 PG, 2 DCDC1, 4 BLDO5, 8 CLDO1). */
+    unsigned refused;
     /* GPIO_POW_MOD_SEL, GPIO_POW_VAL, SGPIO_POW_MOD_SEL, SGPIO_POW_VAL as read
      * by the first-run guard; valid once guard_done is set. */
     uint32_t pad_power[4];
 };
+/* The failure left nothing powered, so no reset is needed to release anything: the first-run guard refused before
+ * any write, or the failure shutdown finished with every readback matched (PM1 low, clocks off, BLDO5 off). Such a
+ * failure keeps the board alive: it leaves the register lock and the leases as they are, sets no failure bit, and the
+ * session ends with a normal return and its record. A watchdog reset loses DRAM, and with it the record. */
+static inline int a733_radio_platform_clean(const struct a733_radio_platform *p)
+{return p->refused||(p->abort_done&&(p->abort_flags&16u));}
 /* Pure scope planning and init; no MMIO. Fresh private storage only. All inputs,
  * managers, provider objects and callback contexts remain disjoint and live. */
 int a733_radio_platform_scopes(const struct a733_radio_platform_config *,a733_clock_mask_t *);

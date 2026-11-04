@@ -86,7 +86,7 @@ static void setup(struct model *m,struct a733_dma_platform *p,struct a733_dma_pl
     assert(a733_clock_leases_init(&m->leases,now,m));
     for(unsigned i=0;i<3;++i) m->ccu[(unsigned[]){0x500/4,0x580/4,0x588/4}[i]]=c.fabric[i]|0x00400000;
     m->ccu[0]=0xf8000000|(99<<16)|(99<<8);
-    m->ccu[0xa0/4]=0xfe000000|(1<<20)|(2<<16)|(99<<8)|(4<<2);
+    m->ccu[0xa0/4]=0xff000000|(1<<20)|(2<<16)|(99<<8)|(4<<2);
     m->ccu[0x1908/4]=0x8fff0fff; m->ccu[0x1988/4]=0x0fff0000;
     m->ccu[0x704/4]=0x200002|(c.cold?0:0x10001);
     m->ccu[0x5e4/4]=0x40302|0x1000|(c.cold?0:1);

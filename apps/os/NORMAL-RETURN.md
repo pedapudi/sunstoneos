@@ -332,7 +332,7 @@ phases without retry, fallback helper or recovery guarantee.
 A reference mismatch or malformed optional thermal report remains a qualification
 failure. After independently validated native cleanup and normal return, the
 continuation records that failure and completes the mandatory rail helper once.
-Its final receipt distinguishes `qualification_passed` from cleanup completion
+Its final receipt distinguishes the recorded failure from cleanup completion
 and ownership release. Invalid native cleanup, changed authority or a transport
 failure still stops the continuation and retains ownership.
 

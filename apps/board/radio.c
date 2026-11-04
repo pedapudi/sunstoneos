@@ -61,18 +61,38 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
             p->admit,p->admission_context)||
         !a733_radio_platform_init(&r->platform,&p->platform,&r->native.operations,&r->native,
             &p->shared->clocks,&p->shared->pins,&p->shared->rails,&p->shared->pmic)||
-        (!p->enumeration_only&&!a733_radio_platform_four_bit(&r->platform))||
+        ((!p->enumeration_only||p->four_bit)&&!a733_radio_platform_four_bit(&r->platform))||
         (p->first_run_guard&&!a733_radio_platform_first_run_guard(&r->platform))||
         !a733_radio_session_init(&r->session,&r->platform,&p->session))return 0;
     r->constructed=1;atomic_store_explicit(&r->failed,0,memory_order_release);return 1;
 }
+/* The board's failure bound on the failure shutdown, past the platform's own 2 s deadline. */
+#define FAILURE_SHUTDOWN_BOUND_US 3000000u
 static enum board_radio_result retain(struct board_radio *r)
 {
-    atomic_fetch_or_explicit(r->config.recovery_state,4,memory_order_acq_rel);
+    uint64_t now=0;
+    int have=a733_counter_clock_now(&r->config.shared->counter,&now);
+    if(!r->failing){r->failing=1;r->failing_since=now;}
     atomic_store_explicit(&r->failed,1,memory_order_release);
-    if(!r->config.scan_only)(void)a733_radio_entropy_retain(&r->entropy);
+    /* The first retain starts the failure shutdown when the module is powered; a later one never cuts it short. */
     (void)a733_radio_session_retain(&r->session);
-    if(r->config.report_memory.allocate)a733_radio_report_platform(&r->report,&r->platform);
+    unsigned waiting=r->platform.aborting&&!r->platform.abort_done&&!r->platform.fault&&have&&
+        now-r->failing_since<FAILURE_SHUTDOWN_BOUND_US;
+    if(waiting){
+        (void)a733_radio_platform_poll(&r->platform);
+        waiting=r->platform.aborting&&!r->platform.abort_done&&!r->platform.fault;
+    }
+    /* The board's failure bit waits for the failure shutdown. A failure that left nothing powered (a
+     * refusal before any write, or a failure shutdown that finished with every readback matched) leaves it alone, so
+     * the session ends normally and the record can be read; a watchdog reset would lose DRAM. */
+    if(!waiting&&!a733_radio_platform_clean(&r->platform))atomic_fetch_or_explicit(r->config.recovery_state,4,memory_order_acq_rel);
+    if(!r->config.scan_only)(void)a733_radio_entropy_retain(&r->entropy);
+    if(waiting)return BOARD_RADIO_PENDING;
+    if(r->config.report_memory.allocate){
+        a733_radio_report_platform(&r->report,&r->platform);
+        a733_radio_report_firmware_progress(&r->report,&r->session.firmware,r->session.transport.config.ticks_per_ms);
+        a733_radio_report_session_failure(&r->report,r->session.fail_line,r->session.fail_stage);
+    }
     return BOARD_RADIO_RETAINED;
 }
 static uint64_t bounded_deadline(struct board_radio *r,uint64_t now,uint64_t duration)
@@ -152,6 +172,7 @@ static void report_progress(struct board_radio *r)
     if(r->session.transport.have[0]&&r->session.transport.have[1])
         a733_radio_report_identity(&r->report,r->session.transport.identity.chip_word,
             r->session.transport.identity.subrevision_word);
+    a733_radio_report_firmware_progress(&r->report,&r->session.firmware,r->session.transport.config.ticks_per_ms);
     if(r->session.firmware.state==AIC8800_FW_START_CONFIRMED)a733_radio_report_firmware(&r->report);
     /* Identity is read before the firmware loads; keep the later stage. */
 }
@@ -403,15 +424,16 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
         struct board_radio_config sc={.shared=shared,.platform=f->platform,.chip_id=id,.recovery_state=recovery_state,
             .admit=radio_authorize,.admission_context=p,.startup_deadline_us=f->startup_deadline_us,
             .scan_only=1,.first_run_guard=1,.scan_timeout_us=f->association_timeout_us,
-#ifdef SUNSTONE_A733_OS_RADIO_ENUMERATE
-            .enumeration_only=1,
-#endif
+            .enumeration_only=board_radio_profile_stage_limit(f)!=BOARD_RADIO_STAGE_SCAN,
+            .four_bit=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_FIRMWARE, /* the firmware upload needs 4 bits at 25 MHz */
             .report_memory={report_allocate,report_release,NULL}};
         sc.session=(struct a733_radio_session_config){.owner_task=owner,.owner=f->session_owner,
             .bootstrap_deadline=f->bootstrap_deadline_us,.runtime_lease_us=f->runtime_lease_us,
             .renew_margin_us=f->renew_margin_us,.transport=f->transport,.bootstrap=f->bootstrap,
             .firmware={.identity=f->radio_identity,.profile=1},.runtime={.binding_timeout=f->binding_timeout_us},.wifi=f->wifi,
-            .enumeration_only=sc.enumeration_only};
+            .enumeration_only=sc.enumeration_only,
+            .identity_only=board_radio_profile_stage_limit(f)>=BOARD_RADIO_STAGE_IDENTITY,
+            .firmware_only=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_FIRMWARE};
         for(unsigned i=0;i<4;++i)sc.session.firmware.blobs[i]=(struct aic8800_firmware_blob){
             (const uint8_t *)(uintptr_t)f->firmware_address[i],(size_t)f->firmware_bytes[i]};
         if(!board_radio_init(r,&sc))return 0;
@@ -531,6 +553,9 @@ static int listener_poll(struct board_radio *r)
 }
 int board_radio_client_poll(struct board_radio *r)
 {
+    /* A scan-only session has no network and no client exchange: the client task idles. Reporting failure
+     * here would revoke the owner's recovery state before its first poll. */
+    if(r&&r->self==r&&r->constructed&&r->config.scan_only)return 0;
     if(!r||r->self!=r||!r->constructed||!r->startup_profile||
         xTaskGetCurrentTaskHandle()!=r->config.network.clients[0])return -1;
     if(atomic_load_explicit(&r->failed,memory_order_acquire)||

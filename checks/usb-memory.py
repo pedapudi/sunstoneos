@@ -85,13 +85,11 @@ def main():
     run('usb-link-patch', ['patch', '--fuzz=0', '-o', out/'usb.ld',
         out/'storage.ld', ROOT/'apps/os/usb-memory-link.patch'])
     run('production-link', [ld, '-T', out/'usb.ld', '--entry=a733_cached_memory_prepare',
-        '--gc-sections', '--defsym=__os_npu_pool_start=0x47400000',
-        '--defsym=__os_npu_pool_end=0x47c00000', *objects, '-o', out/'production.elf'])
+        '--gc-sections', *objects, '-o', out/'production.elf'])
     # A pool sized from the declaration (22 MiB below the monitor interval) links with the same arena and sections, and both
     # pools lie in the write-back windows that the walks below prove (the application window and the legacy pool).
     run('production-link-sized', [ld, '-T', out/'usb.ld', '--entry=a733_cached_memory_prepare',
-        '--gc-sections', '--defsym=__os_npu_pool_start=0x45a00000',
-        '--defsym=__os_npu_pool_end=0x47000000', *objects, '-o', out/'production-sized.elf'])
+        '--gc-sections', *objects, '-o', out/'production-sized.elf'])
     from elftools.elf.elffile import ELFFile
     for name in ('production.elf', 'production-sized.elf'):
         with (out/name).open('rb') as stream:

@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /* Copyright(c) 2020 - 2023 Allwinner Technology Co.,Ltd. All rights reserved. */
-/* Register/descriptor definitions adapted from the A733 CE v5 source. */
+/* Register/descriptor definitions adapted from the A733 CE v5 source.
+ *
+ * The driver follows the vendor's non-secure Linux driver for this SoC (sunxi-ce, SUN60IW2): it uses only the
+ * non-secure bank (rng/v5/sunxi_ce_reg.h, CE_REG_*), enables the TRNG's double entropy source in CE_REG_LPC bit 1
+ * (sunxi_ce_reg.c:40-49, sunxi_ce.c:1218-1221) and programs no health-test register: the vendor driver has no access to
+ * the secure bank for the TRNG (sun60iw2p1.dtsi:2401-2411 lists it, the TRNG path never touches it; the secure monitor
+ * calls in smc_process/ are for key blobs). The TRNG health tests therefore run at the hardware's reset defaults and
+ * this driver neither programs nor reads them. */
 #include "a733_clock_reference.h"
 #include "a733_ce.h"
 #include "a733_ce_digest_methods.h"
 #include <stddef.h>
 #define CCU UINT32_C(0x02002000)
 #define NS UINT32_C(0x04603000)
-#define SEC UINT32_C(0x04603800)
 #define BIT(n) (UINT32_C(1)<<(n))
 enum { ADMIT,PREPARE,SUBMIT,WAIT,DONE,FAILED };
 static const unsigned fabric_offset[]={0x500,0x580,0x588};
@@ -22,7 +28,7 @@ int a733_ce_init(struct a733_ce *p,const struct a733_ce_config *c,const struct a
     void *cookie,struct a733_clock_leases *r,const struct a733_clock_token *t,struct a733_ce_memory *m)
 {
     if (!p || p->initialized || !c || !o || !r || !t || !m || ((uintptr_t)m&63) ||
-        !c->owner || !c->handoff || !c->deadline_us || c->configure_health>1 ||
+        !c->owner || !c->handoff || !c->deadline_us ||
         !a733_ce_capabilities(c->profile) ||
         !t->id || t->owner!=c->owner || !o->now_us || !o->authorize || !o->enter ||
         !o->leave || !o->retain || !o->read || !o->write || !o->sync) return 0;
@@ -37,14 +43,9 @@ int a733_ce_init(struct a733_ce *p,const struct a733_ce_config *c,const struct a
         !(c->descriptor_physical+256<=c->output_physical || c->output_physical+64<=c->descriptor_physical)) return 0;
     if ((a733_ce_capabilities(c->profile)&(A733_CE_CAP_SHA256|A733_CE_CAP_AES128)) &&
         (!extent(c->descriptor_physical,sizeof(*m)) || c->output_physical!=c->descriptor_physical+256)) return 0;
-    if (!(a733_ce_capabilities(c->profile)&A733_CE_CAP_TRNG)) {
-        if (c->health_profile || c->configure_health) return 0;
-        for (unsigned i=0;i<4;++i) if (c->health[i]) return 0;
-    } else {
-        uint32_t window=c->health[3]&2047;
-        if (!c->health_profile || !c->health[0] || !c->health[1] || c->health[1]>window || c->health[2] ||
-            (window!=512 && window!=1024) || c->health[3]!=(UINT32_C(0x30000)|window)) return 0;
-    }
+    /* The health fields are reserved: nothing programs or checks the secure health registers. */
+    if (c->health_profile || c->configure_health) return 0;
+    for (unsigned i=0;i<4;++i) if (c->health[i]) return 0;
     for (unsigned i=0;i<3;++i) {
         uint32_t v=c->fabric[i];unsigned mhz=parent_mhz[i][(v>>24)&7],div=(v&31)+1;
         if ((v&~fabric_mask[i]) || (i && !(v&BIT(31))) || !mhz ||
@@ -88,40 +89,21 @@ static int clocks(struct a733_ce *p)
         bits(p,CCU+0xac0,0x8700001f,0x81000000) &&
         bits(p,CCU+0xac4,0x30003,0x30003) && bits(p,CCU+0x5e4,4,4);
 }
-static int health(struct a733_ce *p)
-{
-    for (unsigned i=0;i<4;++i) if (!bits(p,SEC+0x90+4*i,UINT32_MAX,p->config.health[i])) return 0;
-    return 1;
-}
-static int provision(struct a733_ce *p)
-{
-    if (!p->config.configure_health || p->health_programmed) return health(p);
-    uint32_t control;
-    if (!rd(p,SEC+0x9c,&control) || (control&0x30000u)) return 0;
-    for (unsigned i=0;i<3;++i)
-        if (!update(p,SEC+0x90+4*i,UINT32_MAX,p->config.health[i])) return 0;
-    /* Preserve reserved fields; install the window before enabling either test. */
-    if (!update(p,SEC+0x9c,0x307ff,p->config.health[3]&2047) ||
-        !update(p,SEC+0x9c,0x307ff,p->config.health[3]) || !health(p)) return 0;
-    p->health_programmed=1;return 1;
-}
+/* The TRNG double-entropy source stays enabled (non-secure CE_REG_LPC bit 1, low-power bit 0 clear). */
 static int task_health(struct a733_ce *p)
-{return p->operation || (health(p) && bits(p,NS+0xd0,3,2));}
+{return p->operation || bits(p,NS+0xd0,3,2);}
 static void little(uint8_t *p,uint64_t v,unsigned n)
 {for (unsigned i=0;i<n;++i) p[i]=(uint8_t)(v>>(8*i));}
 static int prepare(struct a733_ce *p)
 {
     uint32_t lpc;
-    if (!p->operation && p->config.configure_health && !p->health_programmed &&
-        !bits(p,SEC+0x9c,0x30000,0)) return 0;
-    if (!clocks(p) || !bits(p,NS+8,15,0) || !bits(p,SEC+8,15,0) ||
-        !bits(p,NS+12,255,0) || !bits(p,SEC+12,255,0) ||
-        !bits(p,NS+0x18,UINT32_MAX,0) || !bits(p,SEC+0x18,UINT32_MAX,0) ||
-        !bits(p,NS+0x10,0x8421,0) || !bits(p,SEC+0x10,0x8421,0)) return 0;
+    if (!clocks(p) || !bits(p,NS+8,15,0) ||
+        !bits(p,NS+12,255,0) ||
+        !bits(p,NS+0x18,UINT32_MAX,0) ||
+        !bits(p,NS+0x10,0x8421,0)) return 0;
     if (!p->operation) {
         if (!rd(p,NS+0xd0,&lpc) || (lpc&1)) return 0;
         if (!(lpc&2) && (!wr(p,NS+0xd0,lpc|2) || !bits(p,NS+0xd0,UINT32_MAX,lpc|2))) return 0;
-        if (!provision(p)) return 0;
     }
     for (unsigned i=0;i<256;++i) p->memory->descriptor[i]=0;
     for (unsigned i=0;i<64;++i) p->memory->output[i]=0;
@@ -196,16 +178,15 @@ static enum a733_ce_result poll(struct a733_ce *p,uint8_t *output,size_t output_
         next=SUBMIT;
     } else if (p->stage==SUBMIT) {
         if (!clocks(p) || !task_health(p) ||
-            !bits(p,NS+12,255,0) || !bits(p,SEC+12,255,0) ||
-            !bits(p,NS+0x18,UINT32_MAX,0) || !bits(p,SEC+0x18,UINT32_MAX,0) ||
+            !bits(p,NS+12,255,0) ||
+            !bits(p,NS+0x18,UINT32_MAX,0) ||
             !wr(p,NS,(uint32_t)p->config.descriptor_physical) ||
             !update(p,NS+4,255,(uint32_t)(p->config.descriptor_physical>>32)) ||
             !update(p,NS+8,4,4) || !bits(p,NS+8,15,4) || !wr(p,NS+0x10,p->operation==2?1:0x400)) goto fail;
         next=WAIT;
     } else {
-        if (!rd(p,NS+12,&p->status_ns) || !rd(p,SEC+12,&p->status_secure) ||
-            !rd(p,NS+0x18,&p->error_ns) || !rd(p,SEC+0x18,&p->error_secure) ||
-            p->error_ns || p->error_secure || (p->status_ns&~0x30u) || p->status_secure) goto fail;
+        if (!rd(p,NS+12,&p->status_ns) || !rd(p,NS+0x18,&p->error_ns) ||
+            p->error_ns || (p->status_ns&~0x30u)) goto fail;
         uint32_t status=(p->status_ns>>4)&3;
         if (status>1) goto fail;
         if (status==1) {
@@ -289,10 +270,10 @@ static enum a733_ce_result request(struct a733_ce *p,uint64_t deadline,unsigned 
     if (!lock) {if (!timely(p)) return failed(p);return finish(p,A733_CE_BUSY);}
     p->held=1;
     if (lock!=1 || !timely(p) || !clocks(p) || !task_health(p) ||
-        !bits(p,NS+8,15,0) || !bits(p,SEC+8,15,0) ||
-        !bits(p,NS+12,255,0) || !bits(p,SEC+12,255,0) ||
-        !bits(p,NS+0x18,UINT32_MAX,0) || !bits(p,SEC+0x18,UINT32_MAX,0) ||
-        !bits(p,NS+0x10,0x8421,0) || !bits(p,SEC+0x10,0x8421,0)) return failed(p);
+        !bits(p,NS+8,15,0) ||
+        !bits(p,NS+12,255,0) ||
+        !bits(p,NS+0x18,UINT32_MAX,0) ||
+        !bits(p,NS+0x10,0x8421,0)) return failed(p);
     if (!timely(p)) return failed(p);
     p->ops.leave(p->cookie);p->held=0;
     if (!timely(p)) return failed(p);

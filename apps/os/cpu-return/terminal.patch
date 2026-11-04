@@ -9,7 +9,15 @@
  #include "a733_fault.h"
  .section .text.qualification,"ax"
  .balign 4
-@@ -220,7 +220,11 @@
+@@ -208,6 +208,7 @@
+ a733_qualification_system_restore:
+     mov x20, x0
+     mov x21, x1
++    mov x22, #0
+     address x23, a733_qualification_report
+     // Current EL3 translation must still select the production NS WB alias.
+     mrs x2, sctlr_el3
+@@ -220,7 +221,11 @@
      cmp x2, x3
      b.ne qualification_park
      mov x24, #0x41200000
@@ -22,7 +30,7 @@
      add x25, x25, #63
      and x25, x25, #-64
      mov x2, #0x42000000
-@@ -229,8 +233,21 @@
+@@ -229,8 +234,21 @@
      // Linker RAM is mapped by 2MiB blocks. Require the NS bit, WB index1,
      // inner-shareable field and access flag before cleaning each block.
      address x26, a733_cached_el3_l2
@@ -44,7 +52,7 @@
      mov x2, #0x40000000
      sub x2, x24, x2
      lsr x2, x2, #21
-@@ -244,10 +261,97 @@
+@@ -244,10 +262,106 @@
      mov x4, #0x725
      cmp x3, x4
      b.ne qualification_park
@@ -72,6 +80,7 @@
 +    b.ne qualification_park
 +    b .Lclean_line
 +.Lnext_region:
++    cbnz x22, .Lranges_next
 +    cbz x28, .Lclean_finished
 +    sub x28, x28, #1
 +    ldr w2, [x27, #16]
@@ -85,64 +94,72 @@
 +    add x25, x24, x25
 +    b .Lclean
 +.Lclean_finished:
-+#ifdef SUNSTONE_A733_OS_NPU
-+    // After every manifest extent, clean the complete owned pool: the 8 MiB pool of every image so far, or one sized from
-+    // the declaration (apps/os/cpu-return-host.py npu_pool_extent_valid): whole 2 MiB blocks, 10 to 48 MiB, ending at the
-+    // monitor interval 0x47000000. x27 is zero only on the second arrival, after the pool loop completes.
-+    cbz x27, .Lpool_cleaned
-+    mov x27, #0
-+    address x24, __os_npu_pool_start
-+    address x25, __os_npu_pool_end
-+    mov x2, #0x47400000
-+    cmp x24, x2
-+    b.ne .Lpool_sized
-+    mov x2, #0x47c00000
-+    cmp x25, x2
-+    b.ne qualification_park
-+    b .Lclean
-+.Lpool_sized:
-+    mov x2, #0x47000000
-+    cmp x25, x2
-+    b.ne .Lpool_slot1
-+    sub x28, x25, x24
-+    tst x28, #0x1fffff
-+    b.ne qualification_park
-+    mov x2, #0x3000000
-+    cmp x28, x2
-+    b.hi qualification_park
-+    mov x2, #0xa00000
-+    cmp x28, x2
++    // After every manifest extent, clean every range that the OS published as visible to a device or written by one
++    // (apps/os/device-ranges.h). The head of the list is a word in image RAM; each page is a 4 KiB block of DRAM that the
++    // OS owns: the next page, the count, then {base, bytes} pairs. x22 selects this phase for .Lnext_region; x27 is the
++    // page and x28 the next entry in it. A page or a range outside the DRAM above the image, or one that a block of the EL3
++    // table does not map as normal write-back memory, parks the core with the report unchanged.
++    mov x22, #1
++    // The counter at the start of this walk, for the core in x20, in the image RAM word the runner copies out
++    // (os_cpu_return_walk: start and end for each core). The line is cleaned so that the copy sees it.
++    mrs x2, cntpct_el0
++    address x3, os_cpu_return_walk
++    add x3, x3, x20, lsl #4
++    str x2, [x3]
++    dc civac, x3
++    address x2, os_device_ranges_head
++    ldr x27, [x2]
 +    mov x28, #0
++.Lranges_next:
++    cbz x27, .Lranges_done
++    check_time
++    tst x27, #0xfff
++    b.ne qualification_park
++    mov x2, #0x42200000
++    cmp x27, x2
 +    b.lo qualification_park
-+    b .Lclean
-+.Lpool_slot1:
-+    // A pool that the build placed in the slot 1 area (docs/designs/application-memory-layout.md, step 5): whole 2 MiB
-+    // blocks, 10 MiB to 768 MiB, inside 0x48000000..0x79000000, which the platform maps at EL3 for this clean.
-+    mov x2, #0x48000000
++    mov x2, #0x34
++    lsl x2, x2, #28
++    cmp x27, x2
++    b.hs qualification_park
++    ldr x3, [x27, #8]
++    cmp x3, #255
++    b.hi qualification_park
++    cmp x28, x3
++    b.lo .Lranges_entry
++    ldr x27, [x27]
++    mov x28, #0
++    b .Lranges_next
++.Lranges_entry:
++    add x2, x27, x28, lsl #4
++    ldp x24, x25, [x2, #16]
++    add x28, x28, #1
++    add x25, x24, x25
++    cmp x25, x24
++    b.lo qualification_park
++    b.eq .Lranges_next
++    tst x24, #0x3f
++    b.ne qualification_park
++    tst x25, #0x3f
++    b.ne qualification_park
++    mov x2, #0x42200000
 +    cmp x24, x2
 +    b.lo qualification_park
-+    mov x2, #0x79000000
++    mov x2, #0x34
++    lsl x2, x2, #28
 +    cmp x25, x2
 +    b.hi qualification_park
-+    tst x24, #0x1fffff
-+    b.ne qualification_park
-+    sub x28, x25, x24
-+    tst x28, #0x1fffff
-+    b.ne qualification_park
-+    mov x2, #0x30000000
-+    cmp x28, x2
-+    b.hi qualification_park
-+    mov x2, #0xa00000
-+    cmp x28, x2
-+    mov x28, #0
-+    b.lo qualification_park
 +    b .Lclean
-+.Lpool_cleaned:
-+#endif
++.Lranges_done:
++    mrs x2, cntpct_el0
++    address x3, os_cpu_return_walk
++    add x3, x3, x20, lsl #4
++    str x2, [x3, #8]
++    dc civac, x3
      dsb sy
      add x2, x23, #688
      add x2, x2, x20, lsl #10
-@@ -369,9 +473,40 @@
+@@ -369,9 +483,40 @@
      dsb sy
      str x1, [x2, #40]
      dsb sy

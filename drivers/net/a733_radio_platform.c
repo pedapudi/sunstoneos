@@ -59,8 +59,18 @@ static int abort_possible(struct a733_radio_platform *p)
        a733_pmic_live(p->pmic,&p->pmic_lifetime)!=A733_PMIC_READY)return 0;
     return 1;
 }
-static enum a733_radio_platform_result fail(struct a733_radio_platform *p)
+static enum a733_radio_platform_result fail_at(struct a733_radio_platform *p,unsigned line)
 {
+    if(line&&!p->fail_line){p->fail_line=line;p->fail_stage=p->stage;}
+    /* An abort is never cut short: while it runs inside its deadline the failure waits for it. */
+    if(p->aborting&&p->last_now<p->deadline)return A733_RADIO_PENDING;
+    if(a733_radio_platform_clean(p)){
+        /* Nothing is powered: leave the register lock and keep every lease as it is. */
+        p->fault=1;
+        if(p->host.initialized)sunxi_sdio_stop(&p->host,SUNXI_SDIO_IO_ERROR);
+        if(p->held){p->ops.leave(p->cookie);p->held=0;}
+        return A733_RADIO_RETAINED;
+    }
     if(abort_possible(p)){
         /* The module is powered: undo that before retaining. The controller is stopped now (software
          * only); the abort steps run from the next polls with a fresh deadline. */
@@ -82,6 +92,7 @@ static enum a733_radio_platform_result fail(struct a733_radio_platform *p)
     }
     return A733_RADIO_RETAINED;
 }
+#define fail(p) fail_at((p),(unsigned)__LINE__)
 static int observe(struct a733_radio_platform *p)
 {
     uint64_t now;
@@ -107,7 +118,7 @@ enum a733_radio_platform_result a733_radio_platform_retain(struct a733_radio_pla
     if(!p||!p->initialized||p->ops.current(p->cookie)!=1)return A733_RADIO_INVALID;
     unsigned expected=0;
     if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return A733_RADIO_BUSY;
-    return finish(p,fail(p));
+    return finish(p,fail_at(p,0)); /* An outside retain is not a platform failure site. */
 }
 static int rd(struct a733_radio_platform *p,uintptr_t a,uint32_t *v)
 {return timely(p)&&p->ops.read(p->cookie,a,v)==1&&timely(p);}
@@ -125,28 +136,29 @@ static int clock_live(struct a733_radio_platform *p)
     enum a733_clock_result r=a733_clock_token_status(p->clocks,&p->clock);
     return r==A733_CLOCK_OK?1:r==A733_CLOCK_BUSY?0:-1;
 }
-static int profile(struct a733_radio_platform *p)
+static unsigned profile_line(struct a733_radio_platform *p)
 {
     uint32_t osc,ref,pll,a,b,gate,status;
     /* Selected fabric and SMHC1 routes use SYS24M/PERI0, not raw DCXO. */
-    if(!rd(p,UINT32_C(0x07090160),&osc)||!rd(p,CCU,&ref)||!a733_clock_ref24_valid(osc,ref))return 0;
+    if(!rd(p,UINT32_C(0x07090160),&osc)||!rd(p,CCU,&ref)||!a733_clock_ref24_valid(osc,ref))return __LINE__;
     unsigned n;
     for(unsigned i=0;i<3;++i)
-        if(!rd(p,CCU+fabric_off[i],&a)||(a&fabric_mask[i])!=p->config.fabric[i])return 0;
+        if(!rd(p,CCU+fabric_off[i],&a)||(a&fabric_mask[i])!=p->config.fabric[i])return __LINE__;
     if(!rd(p,CCU+0x5c0,&a)||(a&(BIT(29)|BIT(24)))!=BIT(24)||
         !rd(p,CCU+0x5e0,&a)||!(a&BIT(30))||
-        !rd(p,CCU+0x59c,&a)||(a&0x30001u)!=0x30001u)return 0;
-    if(!(p->shared&A733_CLOCK_PERI0))return 1;
-    if(!rd(p,CCU+0xa0,&pll)||(pll&0xfe000000u)!=0xfe000000u||(pll&(BIT(24)|BIT(1)))||
+        !rd(p,CCU+0x59c,&a)||(a&0x30001u)!=0x30001u)return __LINE__;
+    if(!(p->shared&A733_CLOCK_PERI0))return 0;
+    /* The shared validator ignores the reserved bits 24:23; bit 24 reads 1 on both boards (0xff126310). */
+    if(!rd(p,CCU+0xa0,&pll)||!a733_clock_peri0_valid(pll)||
         !rd(p,CCU+0xa8,&a)||(a&BIT(31))||!rd(p,CCU+0xac,&b)||(b&BIT(27))||
-        !rd(p,CCU+0x1908,&gate)||!rd(p,CCU+0x1988,&status))return 0;
-    n=((pll>>8)&255)+1;if(n<53||n>105)return 0;
+        !rd(p,CCU+0x1908,&gate)||!rd(p,CCU+0x1988,&status))return __LINE__;
+    n=((pll>>8)&255)+1;if(n<53||n>105)return __LINE__;
     if(p->four_bit) {
         /* The four-bit profile's SMHC1 parent is the same 400 MHz branch the
          * SD/eMMC platform requires for its negotiated rates. */
         uint32_t required=BIT(11)|BIT(2)|BIT(1);unsigned div=(((pll>>20)&7)+1)*3;
         if((gate&(required|(required<<16)))!=(required|(required<<16))||
-            (status&(required<<16))!=(required<<16)||24u*n!=400u*div)return 0;
+            (status&(required<<16))!=(required<<16)||24u*n!=400u*div)return __LINE__;
     }
     for(unsigned i=0;i<3;++i) {
         unsigned mhz=p->selected_mhz[i],div,branches;
@@ -156,12 +168,18 @@ static int profile(struct a733_radio_platform *p)
         case 400:div=(((pll>>20)&7)+1)*3;branches=BIT(11)|BIT(2)|BIT(1);break;
         case 800:div=((pll>>16)&7)+1;branches=BIT(10);break;
         case 480:div=((pll>>2)&7)+1;branches=BIT(8)|BIT(7);break;
-        default:return 0;
+        default:return __LINE__;
         }
         uint32_t enabled=branches<<16,required=branches|enabled;
-        if((gate&required)!=required||(status&enabled)!=enabled||24u*n!=mhz*div)return 0;
+        if((gate&required)!=required||(status&enabled)!=enabled||24u*n!=mhz*div)return __LINE__;
     }
-    return 1;
+    return 0;
+}
+static int profile(struct a733_radio_platform *p)
+{
+    unsigned line=profile_line(p);
+    if(line&&!p->fail_line){p->fail_line=line;p->fail_stage=p->stage;}
+    return !line;
 }
 static int masked(struct a733_radio_platform *p)
 {
@@ -444,15 +462,22 @@ static enum a733_radio_platform_result registers(struct a733_radio_platform *p)
         for(unsigned i=0;ok&&i<4;++i)ok=rd(p,words[i],&p->pad_power[i]);
         if(ok) {
             p->guard_done=1;
-            /* BLDO5 off with PG unsupplied, or (left on by a reset) on at 1.8V with PG reading 1.8V. */
-            unsigned pg=(p->pad_power[1]>>12)&3,met=p->already_on?pg==3:pg<2;
+            /* Refuse only a PG reading of 3.3 V (10): the manual defines no "unsupplied" reading (00 and 01 are Invalid),
+             * the board reads 11 with BLDO5 off and on, and 3.3 V would be another supply that could fight BLDO5.
+             * BLDO5 must be off, or (left on by a reset) on at 1.8V. */
+            unsigned pg=(p->pad_power[1]>>12)&3,unmet=pg!=2?0u:1u;
             for(unsigned i=0;i<p->rail_count;++i) {
                 const struct a733_pmic_snapshot *s=&p->snapshots[i];
-                if(s->rail==A733_RAIL_DCDC1)met&=s->enabled&&(s->selector&31u)==23;
-                else if(s->rail==A733_RAIL_BLDO5)met&=p->already_on?s->enabled:!s->enabled;
-                else if(s->rail==A733_RAIL_CLDO1)met&=s->enabled&&s->decoded&&s->programmed_uv==1800000;
+                if(s->rail==A733_RAIL_DCDC1)unmet|=(s->enabled&&(s->selector&31u)==23)?0u:2u;
+                else if(s->rail==A733_RAIL_BLDO5)unmet|=(p->already_on?s->enabled:!s->enabled)?0u:4u;
+                else if(s->rail==A733_RAIL_CLDO1)unmet|=(s->enabled&&s->decoded&&s->programmed_uv==1800000)?0u:8u;
             }
-            if(!met)ok=0; /* Observations stay in the object; nothing was written. */
+            if(unmet){
+                /* Observations stay in the object; nothing was written. The refusal names the PG bits and the
+                 * unmet conditions, and ends without retaining anything. */
+                if(!p->fail_line){p->fail_line=0x400u|pg<<4|unmet;p->fail_stage=p->stage;}
+                p->refused=1;ok=0;
+            }
             else p->stage=RSTAGE_PINS;
         }
     } else if(p->stage==RSTAGE_BUS_GATE) {
@@ -551,7 +576,7 @@ static enum a733_radio_platform_result abort_end(struct a733_radio_platform *p,u
 {
     if((p->abort_flags&wanted)==wanted)p->abort_flags|=ABORT_MATCHED;
     p->aborting=0;p->abort_done=1;
-    return fail(p); /* Now the ordinary retention. */
+    return fail_at(p,0); /* Now the ordinary retention. */
 }
 static enum a733_radio_platform_result abort_poll(struct a733_radio_platform *p)
 {

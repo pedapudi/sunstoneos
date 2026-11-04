@@ -16,7 +16,7 @@ its admission, polling, and message-consumption API.
 ## Protocol selection and the fixed setup write require explicit admission
 
 The caller selects the AIC8800D80 bootstrap variant explicitly. Completed SDIO
-enumeration must report function 1 as `c8a1:0182`, at least two functions,
+enumeration must report function 2 as `c8a1:0182` (the vendor driver matches that identity on function 2, aicsdio.c:213, and then runs all I/O on function 1, aicsdio.c:218; the board's function 1 reads `c8a1:0082`), at least two functions,
 512-byte block capability, and multi-block support. These checks establish
 compatibility with the selected source protocol. They do not establish the
 installed silicon revision or choose a firmware image.

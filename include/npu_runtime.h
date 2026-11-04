@@ -151,6 +151,7 @@ struct npu_runtime {
     size_t command_bytes, constant_bytes, read_bytes, write_bytes, staging_bytes;
     uintptr_t parent_cpu, staging;
     size_t parent_bytes;
+    size_t placed_bytes;   /* the end of the placement in the parent, a multiple of NPU_RUNTIME_GROUP_BYTES: what prepare used */
     struct a733_npu_buffer bootstrap;
     uint32_t table_crc, bootstrap_crc;
     struct a733_npu_native native;
@@ -289,4 +290,8 @@ int npu_runtime_reference_step(struct npu_runtime *, struct npu_runtime_slot *);
 /* H, after each job: one step over the slot's read-only bytes with the same
  * cursor rule. Returns 0 while bytes remain, then 1 on a match, -1 otherwise. */
 int npu_runtime_check_step(struct npu_runtime *, struct npu_runtime_slot *);
+/* After a successful prepare: the part of the parent beyond placed_bytes is not used and the owner may give it back; this
+ * makes parent_bytes the placed bytes (nothing may lie beyond them afterwards). Returns the new parent_bytes, or 0 when the
+ * runtime is not prepared. */
+size_t npu_runtime_trim_parent(struct npu_runtime *);
 #endif

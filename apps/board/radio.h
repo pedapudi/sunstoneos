@@ -31,6 +31,7 @@ struct board_radio_config {
     /* Stop after enumeration (no four-bit widening, no transport, no firmware), for the smallest
      * probe; the owner then reports BOARD_RADIO_SCANNED with the report at stage enumerated. */
     unsigned enumeration_only;
+    unsigned four_bit; /* With enumeration_only: still widen to four bits at 25 MHz (the firmware upload needs it). */
 };
 enum board_radio_result { BOARD_RADIO_PENDING,BOARD_RADIO_NETWORK,
     BOARD_RADIO_RETAINED,BOARD_RADIO_INVALID,BOARD_RADIO_SCANNED,BOARD_RADIO_DOWN };
@@ -60,6 +61,10 @@ struct board_radio {
     struct aic8800_dispatch_record diagnostic;
     uint64_t startup_events,diagnostic_records;
     unsigned stage,constructed,scan_started,scan_done;
+    /* A failure in progress: the first retain starts the failure shutdown, and each later one drives it until it
+     * is done or its bound passes; only then is the failure final. */
+    unsigned failing;
+    uint64_t failing_since;
     struct a733_radio_report report;
     uint64_t operation_deadline;
     /* Link recovery: owner-drained events while reassociating, and the bound
@@ -110,13 +115,24 @@ struct board_radio_profile {
 };
 /* Profile version 7 is a scan-only session; see radio.c. Inline so that every image that
  * links the board composition has it without linking the radio owner. */
+/* How far a scan-only session runs before it shuts down: the scan itself (0), SDIO enumeration with the
+ * vendor and device ID read (1), enumeration plus the module's chip-ID words (2), or through the firmware upload to the module's start confirmation (3). The profile carries it
+ * in the first reserved byte after the network fields, so no wire layout changes. */
+#define BOARD_RADIO_STAGE_SCAN 0u
+#define BOARD_RADIO_STAGE_ENUMERATE 1u
+#define BOARD_RADIO_STAGE_IDENTITY 2u
+#define BOARD_RADIO_STAGE_FIRMWARE 3u
+static inline unsigned board_radio_profile_stage_limit(const struct board_radio_profile *f){return f->network_reserved[0];}
 static inline int board_radio_profile_scan_only(const struct board_radio_profile *f)
 {return f&&f->version==BOARD_RADIO_PROFILE_SCAN_VERSION;}
 /* Wire timing fields are 32-bit ticks, widened into the actual TickType_t.
  * Fixed addressing has no acquisition/lease timer; optional DNS is independent. */
 static inline int board_radio_profile_network_valid(const struct board_radio_profile *p)
 {
-    if(!p||p->network_dhcp>1||p->network_reserved[0]||p->network_reserved[1]||p->network_reserved[2])return 0;
+    if(!p||p->network_dhcp>1||p->network_reserved[1]||p->network_reserved[2])return 0;
+    /* Byte 0 is the stage limit of a scan-only profile; every other profile keeps it zero. */
+    if(p->network_reserved[0]&&(!(p->version==BOARD_RADIO_PROFILE_SCAN_VERSION||p->version==BOARD_RADIO_PROFILE_SCAN_SUPERVISED_VERSION)||
+        p->network_reserved[0]>BOARD_RADIO_STAGE_FIRMWARE))return 0;
     if(p->version==BOARD_RADIO_PROFILE_VERSION||p->version==BOARD_RADIO_PROFILE_SUPERVISED_VERSION||
        p->version==BOARD_RADIO_PROFILE_SCAN_VERSION||p->version==BOARD_RADIO_PROFILE_SCAN_SUPERVISED_VERSION){if(p->tcp_mode)return 0;}
     else if(p->version==BOARD_RADIO_PROFILE_LISTENER_VERSION||p->version==BOARD_RADIO_PROFILE_LISTENER_SUPERVISED_VERSION){

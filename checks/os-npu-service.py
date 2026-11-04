@@ -17,9 +17,9 @@ import host_rtos
 from harness import environment
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--output', '{output}']]
+GATE_RUNS = [['--output', '{output}', '--graphs', '{fixture:npu-graphs}']]
 CACHE = Path.home() / '.cache/sunstoneos'
-CHECK_INPUTS = ('checks/os-npu-ungranted-traps.c', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-queue.c', 'apps/os/npu-catalogue.py', 'drivers/npu/a733_npu_runtime.c',
+CHECK_INPUTS = ('tools/npu-graph-specs.json', 'checks/os-npu-ungranted-traps.c', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-queue.c', 'apps/os/npu-catalogue.py', 'drivers/npu/a733_npu_runtime.c',
                 'drivers/npu/npu_service.c', 'drivers/npu/nbg_assembly.c', 'runtime/npu_app_queue.c',
                 'checks/os-npu-service.c', 'checks/os-npu-service.py', 'checks/nbg_wide.py')
 sys.path.insert(0, str(ROOT / 'checks'))
@@ -79,11 +79,11 @@ subprocess.run([sys.executable, str(ROOT / 'apps/os/npu-catalogue.py'), '--artif
                check=True, env=env)
 includes = [ROOT / 'apps/os', generated, ROOT / 'apps/board', ROOT / 'platform/a733-storage-update', ROOT / 'platform/a733-smp-cached',
             ROOT / 'drivers/usb', ROOT / 'network/include', ROOT / 'platform/qemu-smp', NETWORK / 'include', NETWORK / 'portable/Compiler/GCC']
-UNITS = ('checks/os-npu-service.c', 'drivers/npu/npu_declaration.c', 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/a733_npu_runtime_interim.c',
+UNITS = ('checks/os-npu-service.c', 'kernel/umem/umem.c', 'drivers/npu/npu_declaration.c', 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/a733_npu_runtime_interim.c',
          'drivers/npu/npu_pool.c', 'drivers/npu/npu_service.c', 'drivers/npu/a733_npu_controller.c', 'drivers/npu/a733_npu_memory.c',
          'drivers/npu/a733_npu_mmu.c', 'drivers/npu/nbg_model.c', 'drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_checksum.c',
          'drivers/npu/nbg_relocation.c', 'drivers/storage/storage_digest.c')
-DEFINES = ['OS_NPU_META_BYTES=64ULL', 'A733_A76_ADMITTED=1', 'SUNSTONE_A733_OS=1', 'SUNSTONE_A733_OS_NPU=1', 'SUNSTONE_A733_OS_NPU_OBSERVE=1',
+DEFINES = ['A733_A76_ADMITTED=1', 'SUNSTONE_A733_OS=1', 'SUNSTONE_A733_OS_NPU=1', 'SUNSTONE_A733_OS_NPU_OBSERVE=1',
            'SUNSTONE_BOARD_APPLICATION=1', 'SUNSTONE_BOARD_SUPERVISED=1', 'SUNSTONE_A733_OS_CPU_CLOCK=1']
 exe = host_rtos.build(out / 'exe', [*UNITS, generated / 'npu-models.c'], 'os-npu-service', defines=DEFINES, includes=includes,
                       flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'], link=['-Wl,--gc-sections'])

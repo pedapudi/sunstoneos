@@ -128,6 +128,25 @@ static void begin_ticks(enum aic8800_transport_pad pad,uint64_t ticks_per_ms)
         .pad = pad, .ticks_per_ms = ticks_per_ms, .command_timeout = 100, .poll_interval = 5 };
     m.card[0][2] = 4; m.card[0][3] = 4; m.card[0][4] = 0x80; m.card[1][0] = 0x40;
     m.card[0][0x110] = 64;
+    /* The vendor matches c8a1:0182 on function 2 and runs I/O on function 1: an identity only on function 1, or none
+     * on function 2, is refused; the board's shape (function 1 c8a1:0082, function 2 c8a1:0182) is admitted. */
+    {
+        struct sdio_card saved = card;
+        card.functions[2].device = 0x0082; card.functions[1].device = 0x0182;
+        assert(!aic8800_transport_init(&transport, &card, &tc));
+        card.functions[2].has_manufacturer = 0; card.functions[2].device = 0x0182;
+        assert(!aic8800_transport_init(&transport, &card, &tc));
+        card = saved; card.functions[1].device = 0x0082; card.functions[2].device = 0x0182;
+        /* A refusal names its group: function 1's block size under 512, no enable timeout, a wrong function 2. */
+        assert(!aic8800_transport_init_refusals(&transport, &card, &tc));
+        card.functions[1].max_block_bytes = 256;
+        assert(aic8800_transport_init_refusals(&transport, &card, &tc) == 32u);
+        card.functions[1].max_block_bytes = saved.functions[1].max_block_bytes; card.functions[1].enable_timeout_ms = 0;
+        assert(aic8800_transport_init_refusals(&transport, &card, &tc) == 64u);
+        card.functions[1].enable_timeout_ms = saved.functions[1].enable_timeout_ms; card.functions[2].device = 0x0082;
+        assert(aic8800_transport_init_refusals(&transport, &card, &tc) == 8u);
+        card = saved; card.functions[1].device = 0x0082; card.functions[2].device = 0x0182;
+    }
     assert(aic8800_transport_init(&transport, &card, &tc));
     assert(!aic8800_transport_init(&transport, &card, &tc));
     assert(aic8800_transport_setup(&transport, m.now + 2000));

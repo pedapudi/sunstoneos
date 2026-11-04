@@ -79,45 +79,32 @@ checks RC16M enable at RTC `0x07090160` bit 0 and retains its separate resource
 scope. That bit does not establish oscillator quality or frequency. Supply,
 clock-path and remote-firmware authority remain physical binding requirements.
 
-Hardware health configuration resides in the secure register bank:
+## The driver follows the vendor's non-secure sequence
 
-| Offset | Meaning |
-| --- | --- |
-| `0x90` | Repetition-count cutoff |
-| `0x94` | Adaptive-proportion cutoff |
-| `0x98` | Delay between test windows |
-| `0x9c` | Test enables and adaptive-proportion window size |
+The driver does what the vendor's non-secure Linux driver for this SoC does (`sunxi-ce`, SUN60IW2, in the pinned
+BSP sources under `rng/`), and nothing more. It uses the non-secure bank only. It enables the TRNG's second entropy
+source in `CE_REG_LPC` (nonsecure `0xd0`) bit 1 (`v5/sunxi_ce_reg.c:40-49`, `v5/sunxi_ce_reg.h:38-61`,
+`sunxi_ce.c:1218-1221`), and programs no health-test register: the device tree lists a secure bank at `0x04603800`
+(`sun60iw2p1.dtsi:2401-2411`) but the vendor driver's TRNG path never touches it, and the secure monitor calls in
+`smc_process/` serve key blobs only. The TRNG health tests therefore run at the hardware's reset defaults, and this
+driver neither programs nor reads them. The health fields of `struct a733_ce_config` are reserved and must be zero. If
+a later stage needs the secure bank (key storage), it comes back with a board result.
 
-Both tests are disabled at reset. The manual's threshold calculations require
-an entropy-source bound, and the inspected A733 kernel and U-Boot paths supply
-no characterized threshold profile. The API therefore requires an authenticated
-profile for this silicon, supplies, RC16M and double-entropy-source mode. It reads the actual registers and rejects mismatches. It accepts
-continuous testing with the manual's 512- or 1024-sample window encodings. It
-provides no threshold defaults. Optional cold provisioning requires both tests
-initially disabled, writes supplied cutoffs and the window, then enables tests
-last. Native writes refuse live reconfiguration and preserve reserved bits.
-These operations establish neither startup-test completion nor entropy quality.
-Output remains unqualified for production security use; counting conditioned
-requests cannot prove successful startup testing for the current enable epoch.
-The controller enables the source-defined second entropy source at nonsecure
-offset `0xd0` bit 1 while the engine is excluded and quiescent.
-
-Native secure-register access requires actual security permissions. A platform
-that cannot provide those permissions must supply a trusted secure service
-before using this driver. No existing SMC entropy service is assumed. The MMIO
-adapter exposes only the needed queue/status and health registers; it does not
-read keys, eFuses, secure-debug configuration or key-ladder state.
+The vendor bring-up order is: deassert the reset, enable the bus gate, enable the module clock with its parent
+`PLL_PERI0_400M` at 400 MHz, enable the MBUS gate and the system gate, then set the second entropy source
+(`sunxi_ce.c:1150-1225`). `a733_ce_clock.c` follows it from a CE held in reset and gated. The board's CE is not: at FEL
+entry it reads `CE_CLK_REG` `0x81000000` and `CE_BGR_REG` `0x00030003` (queue entry 1793756349340594212-e9227edb), so an
+enabled CE is first taken down by the exact reverse of the bring-up, each step read back. That reset-and-gate cycle
+(`CE_BGR_REG` bits 17 and 16 for the resets, 1 and 0 for the gates) is the exclusion of whatever DMA the boot ROM left.
 
 ## Completion and faults
 
-Channel-2 status must equal successful completion, and both banks' error words
-must remain zero. Any failure status or error prevents output publication.
-The secure error definitions include `0x43` for repetition-count failure,
-`0x4c` for adaptive-proportion failure and `0x4f` for both. The driver also rejects
-unrecognized errors because the nonsecure manual table omits those health codes.
+Channel-2 status must equal successful completion, and the non-secure error word
+must remain zero. Any failure status or error prevents output publication. The driver
+rejects every unrecognized error because the nonsecure manual table omits the health codes.
 
-Inherited queue activity, enabled IRQ ownership, stale errors or disabled health
-tests cause refusal. GIC INTIDs 200 and 201 must already be owned and masked;
+Inherited queue activity, enabled IRQ ownership, stale errors or a disabled second
+entropy source cause refusal. GIC INTIDs 200 and 201 must already be owned and masked;
 the controller polls status without routing an interrupt. It acknowledges only
 its channel's completion and restores its interrupt-enable bit while preserving
 other register fields.

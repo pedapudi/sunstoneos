@@ -12,6 +12,10 @@
 #include "app_large.h"
 #include "umem.h"
 #include "aarch64_device_memory.h"
+#include "device-ranges.h"
+#ifdef SUNSTONE_A733_OS_NPU
+#include "npu.h"
+#endif
 #include "sunstone_notify.h"
 #include <stdint.h>
 #include <string.h>
@@ -74,9 +78,8 @@ static struct app_table_arena arena;
 static struct large_slot *const slots = os_large_slot_storage;
 static struct app_space space;
 static unsigned slot_count;
-static int admitted;
+static int admitted, ledger_ready;
 static void *main_stack;
-static uint64_t kernel_base, kernel_bytes;
 /* An EL0 translation of address in the application's own tables, for a task that is not in them (the NPU service's tasks run
  * in the kernel's table, where upper memory is EL1-only). Without an application space it is the current regime's. */
 int os_large_translate_el0(uintptr_t address, int write, struct aarch64_translation *out)
@@ -89,14 +92,15 @@ int os_large_translate_el0(uintptr_t address, int write, struct aarch64_translat
     *out = (struct aarch64_translation){physical, index == 1 ? 0xffu : index == 2 ? 0x44u : 0u, (unsigned)(d >> 8) & 3};
     return 1;
 }
-int os_large_kernel_reserved(uint64_t base, uint64_t bytes) { return admitted && kernel_bytes && kernel_base == base && kernel_bytes == bytes; }
 void *os_large_main_stack(void) { return main_stack; }
 
 /* The ledger's allocation interface for large_admit_with, and the one-call forms the admission below uses. Every extent
  * is a whole number of 2 MiB blocks on a block boundary, as the space builder maps blocks. Admission runs before the
  * scheduler on one core, so the ledger takes no lock; the memory is raw because the loader fills a region, the heap
  * allocator zeroes what it hands out, and a region with a source is overwritten up to the source's length. */
-static const struct umem_hooks umem_boot_hooks = {0};
+static void ledger_lock(void *ctx);
+static void ledger_unlock(void *ctx);
+static const struct umem_hooks umem_boot_hooks = {.lock = ledger_lock, .unlock = ledger_unlock};
 static int region_take(void *ctx, uint16_t owner, uint64_t bytes, unsigned access, uint64_t *base, uint64_t *rounded)
 {
     (void)ctx;
@@ -194,20 +198,19 @@ int os_large_prepare(void)
     if (!owner_asid || !ranges || count > os_large_capacity ||
         umem_init(&ledger, &umem_boot_hooks, umem_cells, sizeof umem_cells / umem_cell_bytes(), chunk_policy, APP_REGION_FLOOR,
                   sizeof chunk_policy, umem_ranges, ranges)) return large_failed(2 + (!owner_asid ? 0 : !ranges ? 1 : 2));
-#ifdef OS_NPU_POOL_BASE
-    /* The NPU pool of an image that places it in the slot 1 area: held before any application region, so that a manifest
-     * region, the heap or the stack cannot take it. It belongs to the application and is mapped in its space: the tensor
-     * and ring windows of the NPU queue are in it, and the application reads and writes them at EL0. The EL1-private
-     * metadata of the NPU service is not in the pool. */
-    if (region_take_at(owner_asid, OS_NPU_POOL_BASE, OS_NPU_POOL_BYTES, APP_REGION_READ | APP_REGION_WRITE)) return large_failed(5);
-    kernel_base = OS_NPU_POOL_BASE; kernel_bytes = OS_NPU_POOL_BYTES;
-#endif
+    ledger_ready = 1;
     for (unsigned i = 0; manifest && i < manifest->region_count; ++i) {
         const struct ss_region *r = &manifest->regions[i];
         if (r->address < APP_REGION_FLOOR) continue;
         if (region_take_at(owner_asid, r->address, r->bytes, APP_REGION_READ | (r->access & SS_ACCESS_WRITE ? APP_REGION_WRITE : 0))) return large_failed(6);
     }
     if (large_admit_with(&region_allocator, owner_asid, __start_sunstone_large_regions, count, slots, os_large_capacity)) return large_failed(7);
+#ifdef SUNSTONE_A733_OS_NPU
+    /* The NPU's reservation comes from what the regions left: the largest extent it can address, trimmed to what the runtime
+     * places. It belongs to the application and is mapped in its space. A refusal is recorded and leaves the NPU unprepared
+     * (os_npu_start refuses); it does not stop the application. */
+    if (!os_npu_pool_prepare(&ledger, owner_asid)) return large_failed(9);
+#endif
     /* The main stack: a 2 MiB block that the guard owner holds below it, so that an overflow is an EL0 fault in memory
      * no space maps. The stack is at the bottom of its own block. Where no extent is free the static stack stays. */
     if (manifest) {
@@ -247,6 +250,48 @@ int os_large_prepare(void)
 #include "os_space.h"
 #include "sunstone_app.h"
 #include <stdatomic.h>
+
+/* The ledger's lock: the kernel's critical section, which also works before the scheduler starts. Run-time allocations (the NPU
+ * service's tables, a published device range) take it; admission takes it too, uncontended. */
+static void ledger_lock(void *ctx) { (void)ctx; taskENTER_CRITICAL(); }
+static void ledger_unlock(void *ctx) { (void)ctx; taskEXIT_CRITICAL(); }
+struct umem *os_large_umem(void) { return admitted || ledger_ready ? &ledger : 0; }
+
+/* ---- The device ranges the EL3 terminal cleans (apps/os/device-ranges.h) ---- */
+uint64_t os_device_ranges_head;
+/* The counter at the start and end of each core's walk of the published ranges in the return terminal (cores 0 to 7, two words each);
+ * the terminal writes and cleans them, the runner copies them out. */
+uint64_t os_cpu_return_walk[16];
+static struct os_device_range_page *range_tail;
+int os_device_range_publish(uint64_t base, uint64_t bytes)
+{
+    if (!ledger_ready || !bytes || ((base | bytes) & 63) || base < UINT64_C(0x42200000) || base + bytes < base ||
+        base + bytes > APP_REGION_LIMIT) return 0;
+    taskENTER_CRITICAL();
+    int ok = 1;
+    if (!range_tail || range_tail->count == OS_DEVICE_RANGES_PER_PAGE) {
+        struct umem_buf b;
+        struct umem_request r = {.bytes = sizeof(struct os_device_range_page), .align = 4096, .owner = UMEM_OWNER_KERNEL, .flags = UMEM_RAW};
+        if (umem_alloc(&ledger, &r, &b) == 0) {
+            struct os_device_range_page *page = (struct os_device_range_page *)(uintptr_t)b.base;
+            memset(page, 0, sizeof *page);
+            if (range_tail) {
+                range_tail->next = b.base;
+                if (!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE, (uintptr_t)range_tail, sizeof *range_tail)) ok = 0;
+            } else os_device_ranges_head = b.base;
+            range_tail = page;
+        } else ok = 0;
+    }
+    if (ok) {
+        range_tail->range[range_tail->count] = (struct os_device_range){base, bytes};
+        __atomic_store_n(&range_tail->count, range_tail->count + 1, __ATOMIC_RELEASE);
+        __asm__ volatile("dsb sy" ::: "memory");
+        /* The runner reads the page over FEL after the return; cached lines do not survive it. */
+        if (!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE, (uintptr_t)range_tail, sizeof *range_tail)) ok = 0;
+    }
+    taskEXIT_CRITICAL();
+    return ok;
+}
 
 uint64_t os_space_kernel_ttbr;
 uint8_t os_space_active;

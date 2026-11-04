@@ -43,7 +43,7 @@ CHECK_INPUTS = ['apps/cpu-npu-concurrency/main.c', 'apps/cpu-npu-concurrency/gem
  'apps/os/cpu-return-thermal.py', 'tools/board.py', 'tools/board_images.py']
 GATE_RUNS = [['--elf', '{elf:ret-npu-load}', '--out', '{output}']]
 MAIN, CLIENT, BOOTSTRAP, WORKER = 0x5000, 0x3000, 0x4000, 0x9000
-POOL, POOL_BYTES = 0x47400000, 0x800000  # replaced by the image's own pool symbols in main()
+POOL, POOL_BYTES = 0x47400000, 0x800000  # the model's own NPU reservation; the OS publishes the range it takes from the ledger
 
 
 def module(name, path):
@@ -325,9 +325,17 @@ class Terminal(terminal.Model):
             self.put64(self.s['a733_cached_el3_l3']+index*8, (0x42000000+index*4096)|(1<<54)|0x443)
         self.put64(self.s['a733_cached_el3_l2']+128, self.s['a733_cached_el3_l3']|3)
         self.uc.mem_map(POOL, POOL_BYTES)
+        # The OS published the reservation before the run: the word is part of the image RAM that the phases share.
+        owner.put64(self.s['os_device_ranges_head'], 0x70000000)
         self.uc.mem_write(0x41200000, bytes(owner.uc.mem_read(0x41200000, 0xe00000)))
         self.uc.mem_write(POOL, bytes(owner.uc.mem_read(POOL, POOL_BYTES)))
         self.uc.mem_write(0x07090000,bytes(owner.uc.mem_read(0x07090000,4096)))
+        # The NPU's reservation is a published device range (apps/os/device-ranges.h): the terminal cleans the ranges of the
+        # list at EL3, whose tables map all DRAM.
+        # The page is mapped by the terminal model (checks/os-cpu-return.py Model.pages).
+        self.put64(0x70000000, 0); self.put64(0x70000008, 1); self.put64(0x70000010, POOL); self.put64(0x70000018, POOL_BYTES)
+        for g in range(2, 13):
+            self.put64(self.s['a733_cached_el3_l1']+g*8, (g<<30)|(1<<54)|0x765)
         self.time = owner.time
         # Exact cross-phase copies, including readiness, park, local stop,
         # immutable report and copied application envelope; no healthy flag seeds.
@@ -358,7 +366,7 @@ def producer(args):
     shutil.copyfile(ROOT/'apps/os/npu-observe.c', adapter)
     executable = directory/'producer'
     command = [args.cc, '-std=c11', '-O2', '-ffp-contract=off', '-pthread',
-        '-DOS_NPU_META_BYTES=64ULL', '-DSUNSTONE_A733_OS_NPU=1', '-DSUNSTONE_A733_OS_NPU_OBSERVE=1',
+         '-DSUNSTONE_A733_OS_NPU=1', '-DSUNSTONE_A733_OS_NPU_OBSERVE=1',
         '-I'+str(ROOT/'checks/cpu-npu-concurrency'), '-I'+str(ROOT/'include'),
         '-I'+str(ROOT/'apps/cpu-npu-concurrency'), str(ROOT/'apps/cpu-npu-concurrency/main.c'),
         str(adapter), str(ROOT/'checks/cpu-npu-concurrency/producer.c'), '-o', str(executable)]
@@ -471,6 +479,9 @@ def runner_cleanup(args, machine, geometry_host, epoch, generation, frozen):
             self.memory = [(address, bytearray(bytes([17+index])*size)) for index,(address,size)
                            in enumerate(plan['preserve_regions'])]
             self.saved = {address:bytes(data) for address,data in self.memory}
+            # Not preserved, only read: the first page of the published device range list, which the OS took from the ledger at run
+            # time. FEL reads any DRAM; the OS cleans the page to DRAM when it publishes (apps/os/large.c).
+            self.readable = [(0x70000000, bytes(machine.uc.mem_read(0x70000000, 4096)))]
             self.elapsed_now = lambda:self.clock
             owners_seen.append(self)
         @contextlib.contextmanager
@@ -485,7 +496,7 @@ def runner_cleanup(args, machine, geometry_host, epoch, generation, frozen):
             return plan
         def quarantine(self, reason):self.quarantined=True;self.record['quarantined']=True
         def read(self, address, size, path):
-            for begin,data in self.memory:
+            for begin,data in self.memory+self.readable:
                 if begin<=address and address+size<=begin+len(data):
                     raw=bytes(data[address-begin:address-begin+size]);path.write_bytes(raw);return raw
             raise AssertionError(('read outside preserved native geometry',hex(address),size))
@@ -568,13 +579,6 @@ def main():
     parser.add_argument('--cc', default='/usr/bin/cc')
     parser.add_argument('--payload', type=Path, help='Reuse an unchanged successful actual producer payload.')
     args = parser.parse_args();args.out.mkdir(parents=True, exist_ok=False)
-    # The pool is the one the image links: the legacy 8 MiB or a pool sized from the declaration (host rule of the normal
-    # return, apps/os/cpu-return-host.py npu_pool_extent_valid).
-    global POOL, POOL_BYTES
-    host_rule = module('chain_pool_rule', ROOT/'apps/os/cpu-return-host.py')
-    symbols = host_rule.linked_symbols(args.elf)
-    POOL, POOL_BYTES = symbols['__os_npu_pool_start'][0], symbols['__os_npu_pool_end'][0] - symbols['__os_npu_pool_start'][0]
-    assert host_rule.npu_pool_extent_valid(POOL, POOL+POOL_BYTES), 'unsupported NPU pool extent'
     payload = args.payload.read_bytes() if args.payload else producer(args)
     names = {'board_application', 'a733_board_session', 'board_provider', 'a733_native_usb',
         'a733_pmic', 'a733_pmic_slot', 'a733_platform_locks', 'os_thermal_service',

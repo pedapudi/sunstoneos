@@ -20,20 +20,20 @@
  static struct board_radio_profile admitted_profile;
  #ifdef SUNSTONE_BOARD_SUPERVISED
  static struct board_radio_profile runtime_profile;
-@@ -100,6 +107,12 @@
-                 a733_typec_revoke(&board.typec.provider);
+@@ -101,6 +108,12 @@
+                 }
              }
          }
 +#ifdef SUNSTONE_A733_OS_HEADSET
 +        /* The same owner task serves the module's Bluetooth client. */
 +        os_module_poll();
 +#endif
-+        /* A failed radio stops reporting, so the resident watchdog resets the board. */
-+        if(atomic_load_explicit(&board.radio_result,memory_order_acquire)!=3)BOARD_PROGRESS(OS_SERVICE_RADIO);
++        /* A failed radio stops reporting, so the resident watchdog resets the board; a guard refusal changed nothing and keeps reporting. */
++        if(atomic_load_explicit(&board.radio_result,memory_order_acquire)!=3||a733_radio_platform_clean(&radio.platform))BOARD_PROGRESS(OS_SERVICE_RADIO);
          vTaskDelay(1);
      }
  }
-@@ -121,6 +134,8 @@
+@@ -121,6 +135,8 @@
                      memory_order_release,memory_order_relaxed);
              }
          }

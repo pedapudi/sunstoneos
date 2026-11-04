@@ -158,7 +158,8 @@ static void checkpoint(void)
     reset_model();host.state=SUNXI_SDIO_READY;host.card_hz=375000;host.config.ops.read32=transport_read;
     host.config.ops.write32=network_write;host.config.ops.now=network_clock;
     card.host=&host;card.initialized=1;card.state=SDIO_CARD_READY;card.function_count=2;card.capabilities=2;
-    card.functions[1].has_manufacturer=1;card.functions[1].manufacturer=0xc8a1;card.functions[1].device=0x0182;
+    card.functions[1].has_manufacturer=1;card.functions[1].manufacturer=0xc8a1;card.functions[1].device=0x0082;
+    card.functions[2].has_manufacturer=1;card.functions[2].manufacturer=0xc8a1;card.functions[2].device=0x0182;
     card.functions[1].max_block_bytes=512;card.functions[1].enable_timeout_ms=100;m.card[1][3]=3;
     struct aic8800_transport_config tc={.variant=AIC8800_TRANSPORT_D80_BOOTSTRAP,.pad=AIC8800_PAD_KEEP,
         .ticks_per_ms=1,.command_timeout=2000,.poll_interval=1};assert(aic8800_transport_init(&transport,&card,&tc));

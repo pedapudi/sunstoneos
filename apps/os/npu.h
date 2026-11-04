@@ -6,28 +6,16 @@
 #ifndef OS_NPU_CORE /* the host build of the queue's open path (checks/os-npu-service.py) has one core */
 #define OS_NPU_CORE 1u
 #endif
-/* The pool is sized from the application's declaration (cmake SUNSTONE_OS_NPU_POOL_BYTES, docs/designs/npu-resources.md,
- * "The pool"): 8 MiB at 0x47400000 as always, or a larger multiple of 2 MiB that ends at 0x47000000, the bottom of the
- * monitor interval, so that it stays inside the write-back RAM that EL0 reaches and below the application regions.
- * A pool that the build places in the slot 1 area (cmake SUNSTONE_OS_NPU_POOL_BASE, OS_NPU_POOL_BASE here) may be larger:
- * the ledger holds it for the kernel at admission, so no application region, heap or stack can take it and no
- * application space maps it (docs/designs/application-memory-layout.md, step 5). */
-#ifndef OS_NPU_POOL_BYTES
-#define OS_NPU_POOL_BYTES UINT64_C(0x800000)
-#endif
-#define OS_NPU_POOL_LEGACY_BYTES UINT64_C(0x800000)
-#ifdef OS_NPU_POOL_BASE
-#define OS_NPU_POOL_START ((uint64_t)OS_NPU_POOL_BASE)
-_Static_assert((uint64_t)OS_NPU_POOL_BASE>=UINT64_C(0x48000000)&&(uint64_t)OS_NPU_POOL_BASE+OS_NPU_POOL_BYTES<=UINT64_C(0x79000000)&&
-               !((uint64_t)OS_NPU_POOL_BASE&(UINT64_C(0x200000)-1))&&OS_NPU_POOL_BYTES<=UINT64_C(0x30000000)&&
-               OS_NPU_POOL_BYTES>=UINT64_C(0xa00000)&&!(OS_NPU_POOL_BYTES&(UINT64_C(0x200000)-1)),
-               "a ledger NPU pool is 10 MiB to 768 MiB of whole 2 MiB blocks inside the slot 1 area");
-#else
-#define OS_NPU_POOL_START (OS_NPU_POOL_BYTES==OS_NPU_POOL_LEGACY_BYTES?UINT64_C(0x47400000):UINT64_C(0x47000000)-OS_NPU_POOL_BYTES)
-_Static_assert(OS_NPU_POOL_BYTES>=OS_NPU_POOL_LEGACY_BYTES&&OS_NPU_POOL_BYTES<=UINT64_C(0x3000000)&&
-               !(OS_NPU_POOL_BYTES&(UINT64_C(0x200000)-1)),"the NPU pool is 8 to 48 MiB in blocks of 2 MiB");
-#endif
 #include "npu-session.h"
+/* The NPU's reservation is taken from the unified memory ledger when the application is admitted (os_npu_pool_prepare, called
+ * by os_large_prepare): the largest extent the NPU can address inside one 4 GiB window is reserved, the runtime places its
+ * tables and regions from the start of it, and the part beyond what it placed goes back to the ledger. The extent belongs to
+ * the application (its tensor and ring windows are in it) and is published for the EL3 terminal (apps/os/device-ranges.h). The
+ * EL1-private metadata comes from kernel-owned ledger chunks. 1 when prepared, or when this image has no session for an NPU
+ * (os_npu_start then refuses); 0 when the declaration or the memory does not fit, with the reason in the failure record. */
+struct umem;
+int os_npu_pool_prepare(struct umem *, uint16_t owner);
+/* Check the guard extent of a placement request (apps/os/npu.c); called when the NPU client ends. */
 extern const struct npu_runtime_model os_npu_models[];
 extern const unsigned os_npu_model_count,os_npu_client_entry;
 extern const struct ss_npu_model os_npu_model_info[];
@@ -107,6 +95,8 @@ void os_npu_queue_end(void);
 int os_npu_queue_sdk_bind(void);
 int os_npu_queue_prepare_edges(struct npu_runtime *);
 int os_npu_queue_tables(struct npu_runtime *);
+/* Bind the queue and carve its tables: what the admission-time preparation of the NPU does for the queue (apps/os/npu.c). */
+int os_npu_queue_prepare(struct npu_runtime *);
 int os_npu_queue_sdk_step(void);
 int os_npu_queue_sdk_closed(void);
 void os_npu_queue_sdk_fail(void);

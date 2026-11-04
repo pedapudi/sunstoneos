@@ -77,6 +77,8 @@ int ss_wifi_credential(const uint8_t **ssid, size_t *ssid_len, const uint8_t **p
     return 0;
 }
 
+int os_wifi_credential_wiped(void){return atomic_load_explicit(&wiped, memory_order_acquire);}
+
 void os_wifi_credential_wipe(void)
 {
     atomic_store_explicit(&wiped, 1, memory_order_release);

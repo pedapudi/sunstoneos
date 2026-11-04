@@ -41,9 +41,6 @@ const struct os_large_device *os_large_device(void);
 void os_large_device_close(void);
 /* The loader's access to the admitted regions (apps/os/large.c). */
 unsigned os_large_count(void);
-/* 1 when the ledger holds [base, base + bytes) for the kernel (APP_REGION_KERNEL_OWNER): the NPU pool of an image that
- * places it in the slot 1 area. The pool is used only when this says so. */
-int os_large_kernel_reserved(uint64_t base, uint64_t bytes);
 struct aarch64_translation;
 /* The EL0 translation of address in the application's tables (a733_translate_fn); the current regime's when the image has no
  * application space. */

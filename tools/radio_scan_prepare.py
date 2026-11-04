@@ -24,10 +24,14 @@ FIRMWARE = [('fw_adid_8800d80_u02.bin', 1708, 'a526cbd02fcdc495f049f3ad6b5933cb0
             ('fw_patch_table_8800d80_u02.bin', 23288, '5ff184105fdc4c4679e026418f4da293efec8df02a3a3ca22cee723c17df4a60'),
             ('fmacfw_8800d80_u02.bin', 341212, '55b5a20865aca7cd2edaae1733a36da45d2b0b29060bc243d8e9ec212e139f6c')]
 SCAN_SUPERVISED_VERSION = 8
-# The identity the profile expects (raw words, decoded again by the firmware engine): non-H revision 3, subrevision 2.
-# The module's real words are unknown until a run reads them; a mismatch ends the run after the identity stage and the
-# record carries the words that were read.
-IDENTITY = {'chip_word': 0x00030001, 'subrevision_word': 0x20}
+# How far the session runs (BOARD_RADIO_STAGE_* in apps/board/radio.h): 0 scan, 1 enumeration, 2 enumeration plus
+# the chip-ID words, 3 through the firmware upload. One stage per board run; this is the only line that moves the stop point.
+STAGE_LIMIT = 0
+STAGE_LIMIT_OFFSET = 1861
+# The identity the profile expects (raw words, decoded again by the firmware engine): the words the board's module
+# returned at the identity stage (run 1793750775070389039-2a278fd8, port 3-1): chip word 0xfb078820, revision 7 (U03,
+# which the vendor drives with the u02 firmware set, aic_bsp_8800d80.c:676-690), not an H part, subrevision word 0x821.
+IDENTITY = {'chip_word': 0xfb078820, 'subrevision_word': 0x821}
 # Offsets of struct board_radio_profile (apps/board/radio.h) and its members.
 PROFILE = {'magic': 0, 'version': 8, 'bytes': 12, 'platform_authority': 16, 'platform_evidence': 88, 'platform': 184,
            'radio_identity': 496, 'transport': 512, 'bootstrap': 544, 'wifi': 568, 'firmware_address': 432,
@@ -88,6 +92,7 @@ def profile_bytes(prefix, evidence, firmware):
         function, pull, drive = (2, 1, 1 if i == 0 else 0) if i < 6 else (0, 0, 1) if i == 6 else (1, 0, 1)
         struct.pack_into('<3B', raw, p + PLATFORM['desired'] + 3 * i, function, pull, drive)
     struct.pack_into('<I4xQQ', raw, p + PLATFORM['card'], 0x00300000, 100000, 1000)  # supported OCR, then timeout and poll interval
+    raw[STAGE_LIMIT_OFFSET] = STAGE_LIMIT
     struct.pack_into('<II4B', raw, PROFILE['radio_identity'], IDENTITY['chip_word'], IDENTITY['subrevision_word'],
                      (IDENTITY['chip_word'] >> 16) & 0x3f, IDENTITY['subrevision_word'] >> 4, 0, 1)
     # Transport: D80 bootstrap variant 1, pad policy KEEP (1), 1,000 ticks per millisecond, timeouts in microseconds.

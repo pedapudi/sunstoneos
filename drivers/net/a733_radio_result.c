@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "a733_radio_result.h"
+#include "aic8800_firmware.h"
 #include <string.h>
 static unsigned platform_stage(const struct a733_radio_platform *p)
 {
@@ -9,6 +10,26 @@ static unsigned platform_stage(const struct a733_radio_platform *p)
     if(p->stage>RSTAGE_RAILS||(p->stage==RSTAGE_RAILS&&p->rail_count&&p->rail_index==p->rail_count))
         return A733_RADIO_STAGE_RAILS_OBSERVED;
     return A733_RADIO_STAGE_NONE;
+}
+/* The stage numbers are stored in records and never change, so they do not order the stages: identified is stored
+ * as 6 and firmware as 5, though the module is identified first. Order and succession come from these two. */
+static unsigned rank(unsigned stage)
+{
+    switch(stage) {
+    case A733_RADIO_STAGE_IDENTIFIED:return A733_RADIO_STAGE_ENUMERATED+1;
+    case A733_RADIO_STAGE_FIRMWARE:return A733_RADIO_STAGE_ENUMERATED+2;
+    case A733_RADIO_STAGE_SCANNED:case A733_RADIO_STAGE_ASSOCIATED:return stage+1;
+    default:return stage;
+    }
+}
+static unsigned next_stage(unsigned stage)
+{
+    switch(stage) {
+    case A733_RADIO_STAGE_ENUMERATED:return A733_RADIO_STAGE_IDENTIFIED;
+    case A733_RADIO_STAGE_IDENTIFIED:return A733_RADIO_STAGE_FIRMWARE;
+    case A733_RADIO_STAGE_FIRMWARE:return A733_RADIO_STAGE_SCANNED;
+    default:return stage+1;
+    }
 }
 int a733_radio_report_init(struct a733_radio_report *r,const struct a733_radio_allocator *m)
 {
@@ -26,15 +47,16 @@ void a733_radio_report_release(struct a733_radio_report *r)
 void a733_radio_report_platform(struct a733_radio_report *r,const struct a733_radio_platform *p)
 {
     struct a733_radio_result_head *h=&r->head;
-    unsigned later=h->stage>A733_RADIO_STAGE_ENUMERATED;
+    unsigned later=rank(h->stage)>rank(A733_RADIO_STAGE_ENUMERATED);
     unsigned stage=platform_stage(p);
     if(!later)h->stage=stage;
     h->failed=p->fault!=0;
-    if(h->failed&&!h->failure_stage)h->failure_stage=h->stage+1; /* The stage that did not complete. */
+    if(h->failed&&!h->failure_stage)h->failure_stage=next_stage(h->stage); /* The stage that did not complete. */
     h->flags=(p->first_run_guard?1u:0)|(p->guard_done?2u:0)|(p->power_on?4u:0)|(p->stage==RSTAGE_DOWN?8u:0)|(p->already_on?16u:0)|
-        (p->abort_done?32u:0)|((p->abort_flags&16u)?64u:0);
+        (p->abort_done?32u:0)|((p->abort_flags&16u)?64u:0)|(p->refused?128u:0)|(a733_radio_platform_clean(p)?256u:0);
     memcpy(h->pad_power,p->pad_power,sizeof(h->pad_power));
     h->platform_stage=p->stage;
+    h->fail_site=p->fail_line?(p->fail_line<<16)|(p->fail_stage&0xffffu):0;
     h->rail_count=0;
     for(unsigned i=0;i<p->rail_count&&i<A733_RADIO_RESULT_RAILS;++i) {
         /* A snapshot is meaningful once its request has been reaped. */
@@ -56,12 +78,21 @@ void a733_radio_report_platform(struct a733_radio_report *r,const struct a733_ra
         }
     }
 }
+void a733_radio_report_session_failure(struct a733_radio_report *r,unsigned line,unsigned stage)
+{if(line&&!r->head.fail_site)r->head.fail_site=(line<<16)|0x100u|(stage&0xfeffu);}
+void a733_radio_report_firmware_progress(struct a733_radio_report *r,const struct aic8800_firmware *f,uint64_t ticks_per_ms)
+{
+    if(f->state==AIC8800_FW_NEW)return;
+    unsigned ms=ticks_per_ms?(unsigned)((f->last_confirm/ticks_per_ms)&0xffffu):0;
+    r->head.firmware_flags=((unsigned)f->state&15u)|(((unsigned)f->error&15u)<<4)|((unsigned)f->phase<<8)|(ms<<16);
+    r->head.firmware_progress=((unsigned)f->image_offset&0x7ffffu)|((f->pairs_done&0xfffu)<<19);
+}
 void a733_radio_report_firmware(struct a733_radio_report *r)
-{if(r->head.stage<A733_RADIO_STAGE_FIRMWARE)r->head.stage=A733_RADIO_STAGE_FIRMWARE;}
+{if(rank(r->head.stage)<rank(A733_RADIO_STAGE_FIRMWARE))r->head.stage=A733_RADIO_STAGE_FIRMWARE;}
 void a733_radio_report_identity(struct a733_radio_report *r,uint32_t chip,uint32_t sub)
 {
     r->head.chip_word=chip;r->head.subrevision_word=sub;
-    if(r->head.stage<A733_RADIO_STAGE_IDENTIFIED)r->head.stage=A733_RADIO_STAGE_IDENTIFIED;
+    if(rank(r->head.stage)<rank(A733_RADIO_STAGE_IDENTIFIED))r->head.stage=A733_RADIO_STAGE_IDENTIFIED;
 }
 static unsigned channel(uint16_t mhz)
 {
@@ -102,7 +133,7 @@ void a733_radio_report_ap(struct a733_radio_report *r,const uint8_t bssid[6],con
 void a733_radio_report_scan_done(struct a733_radio_report *r,unsigned reported)
 {
     if(reported>r->head.aps_reported)r->head.aps_reported=reported;
-    if(r->head.stage<A733_RADIO_STAGE_SCANNED)r->head.stage=A733_RADIO_STAGE_SCANNED;
+    if(rank(r->head.stage)<rank(A733_RADIO_STAGE_SCANNED))r->head.stage=A733_RADIO_STAGE_SCANNED;
 }
 size_t a733_radio_report_bytes(const struct a733_radio_report *r)
 {return sizeof(r->head)+r->ap_count*sizeof(struct a733_radio_result_ap);}

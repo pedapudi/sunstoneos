@@ -32,11 +32,9 @@ def decode(raw, epoch, generation, require, allow_untouched=False):
                 'GPU untouched return is incomplete or not admitted by this image.')
         # Reason zero covers skipped or successful construction without OPEN.
         if uv == 0:
-            return {'jobs': 0, 'gpu_untouched': True, 'device_never_opened': True,
-                    'qualification_passed': False}
+            return {'jobs': 0, 'gpu_untouched': True, 'device_never_opened': True}
         return {'jobs': 0, 'gpu_untouched': True, 'constructor_refusal': uv,
-                'constructor_stage': CONSTRUCTOR_STAGES[uv],
-                'qualification_passed': False}
+                'constructor_stage': CONSTRUCTOR_STAGES[uv]}
     if version == 3:
         # A bisect image (SUNSTONE_A733_OS_GPU_BISECT) stopped GPU use at a
         # build-time limit. Only those images write version 3; they also carry
@@ -48,7 +46,7 @@ def decode(raw, epoch, generation, require, allow_untouched=False):
                 'GPU bisect retirement is incomplete or belongs to another session.')
         return {'jobs': jobs, 'gpu_bisect': {'stage': BISECT_STAGES[stage], 'limit': limit},
                 'gpu_off': flags == 63, 'gpu_never_powered': stage == 1,
-                'worker_parked': flags == 63, 'qualification_passed': False}
+                'worker_parked': flags == 63}
     require((magic, version, size, actual, gen, flags, uv) ==
             (MAGIC, 1, BYTES, epoch, generation, 63, 960000) and 0 <= jobs < 0xffffffff,
             'GPU retirement is incomplete or belongs to another session.')
@@ -148,6 +146,5 @@ def decode_captured(raw, layout, epoch, generation):
     if 'recovery_test' in layout:
         require(version == 1, 'GPU recovery-test image returned without completed recovery.')
         result['recovery_test'] = layout['recovery_test']
-    result['qualification_passed'] = False
     result['completed_gpu_work'] = version == 1 and result['jobs'] > 0
     return result

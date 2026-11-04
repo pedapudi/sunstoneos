@@ -10,6 +10,7 @@ board-queue entry names, because runners verify those files by hash.
   clean-generated.py build NAME [NAME...]      # named build directories
   clean-generated.py stale-builds DAYS         # unreferenced builds untouched for DAYS
   clean-generated.py path PATH [PATH...]       # files or directories under an allowed root
+  clean-generated.py slim-gates                # bulky outputs of passing gate directories (slim_gate)
 Refuses anything changed within the last 6 hours unless --recent is given, so a
 name pattern cannot remove a directory that a running agent is using.
 Add --apply to delete; without it the tool only reports what it would delete."""
@@ -37,8 +38,24 @@ RECENT_OK = False
 REFERENCE = re.compile(r"\.cache/sunstoneos/build/([^/\"'\s]+)")
 
 
+DECLARED = (re.compile(r"""(?<![\w.-])build/([A-Za-z0-9][\w.-]*)"""), re.compile(r"""['"]build['"]\s*/\s*['"]([A-Za-z0-9][\w.-]*)['"]"""))
+
+
+def declared_inputs():
+    """Build directories that checks and tools name as inputs or defaults, as `.../build/NAME` or `'build' / 'NAME'` in their sources.
+
+    Derived from the repository this tool belongs to, so a new default input is protected without a list to keep."""
+    root = Path(__file__).resolve().parents[1]
+    names = set()
+    for path in [*(root / "checks").glob("*.py"), *(root / "tools").glob("*.py"), *(root / "tools").glob("*.json")]:
+        text = path.read_text(errors="ignore")
+        for pattern in DECLARED:
+            names.update(pattern.findall(text))
+    return names
+
+
 def referenced_builds():
-    names = set(PINNED_BUILDS)
+    names = set(PINNED_BUILDS) | declared_inputs()
     for path in EVIDENCE.rglob("*.json"):
         try:
             names.update(REFERENCE.findall(path.read_text(errors="ignore")))
@@ -71,6 +88,20 @@ def check(path, references):
     return real
 
 
+def remove(path):
+    """Delete a file, link or directory tree. A read-only directory (a fixture copied with mode r-x), the one holding the path
+    included, gets owner write permission first, so that its contents can go."""
+    os.chmod(path.parent, os.stat(path.parent).st_mode | 0o300)      # removing an entry needs write on its directory
+    if path.is_dir() and not path.is_symlink():
+        for root, dirs, _ in os.walk(path):
+            for name in [root, *[os.path.join(root, d) for d in dirs]]:
+                if not os.path.islink(name):
+                    os.chmod(name, os.stat(name).st_mode | 0o700)
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
 def size(path):
     if path.is_file() or path.is_symlink():
         return path.lstat().st_size
@@ -82,9 +113,60 @@ def newest(path):
     return max(stamps)
 
 
+SLIM_FILE_BYTES = 8 << 20
+
+
+def slim_candidates(gate):
+    """A gate's bulky outputs: fixture build trees and input copies, and files over 8 MiB, under its evidence directory."""
+    found = []
+    for root, dirs, files in os.walk(gate / "evidence"):
+        for name in list(dirs):
+            if name == "build" or name.startswith("build-") or name == "inputs":
+                found.append(Path(root) / name)
+                dirs.remove(name)
+        found += [Path(root) / f for f in files if (Path(root) / f).lstat().st_size > SLIM_FILE_BYTES]
+    return found
+
+
+def gate_passed(gate):
+    summary = gate / "summary.txt"
+    lines = summary.read_text(errors="replace").splitlines() if summary.is_file() else []
+    return any("PASS selected" in line for line in lines) and not any(re.search(r"\bFAIL\b", line) for line in lines)
+
+
+def slim_gate(gate, references, apply=True):
+    """Delete a gate directory's bulky outputs by the rules of check(); the summary, timing, commands, gate-record.json, disk-peak.json,
+    step logs and every other file stay. Returns the bytes freed (or that would be)."""
+    total = 0
+    for path in slim_candidates(gate):
+        try:
+            check(path, references)
+        except SystemExit:
+            continue
+        total += size(path)
+        if apply:
+            try:
+                remove(path)
+            except OSError:
+                pass
+    return total
+
+
+def slim_after_pass(output, label):
+    """What a passing gate does at its end: slim its own directory and the earlier gates of the same landing label, which
+    may have failed and been kept for diagnosis."""
+    global RECENT_OK
+    RECENT_OK = True
+    references = referenced_builds()
+    base = re.sub(r"-\d{4}-\d{6}(-\d+)?$", "", label)
+    older = [d for d in output.parent.glob("gate-*") if d != output and d.is_dir() and
+             re.fullmatch("gate-" + re.escape(base) + r"-\d{4}-\d{6}(-\d+)?", d.name)]
+    return sum(slim_gate(d, references) for d in [output, *older])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("mode", choices=("trash", "build", "stale-builds", "path"))
+    parser.add_argument("mode", choices=("trash", "build", "stale-builds", "path", "slim-gates"))
     parser.add_argument("items", nargs="*")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--recent", action="store_true", help="allow paths changed within the last 6 hours")
@@ -92,6 +174,12 @@ def main():
     global RECENT_OK
     RECENT_OK = args.recent
     references = referenced_builds()
+    if args.mode == "slim-gates":
+        gates = [g for g in sorted(BUILD.glob("gate-*")) if g.is_dir() and gate_passed(g)]
+        total = sum(slim_gate(g, references, args.apply) for g in gates)
+        print(f"{'Freed' if args.apply else 'Would free'} {total / 2**30:.1f} GiB in {len(gates)} passing gate directories"
+              f"{'' if args.apply else ' (dry run; add --apply)'}")
+        return
     if args.mode == "trash":
         targets = list(TRASH.iterdir()) if TRASH.exists() else []
     elif args.mode == "build":
@@ -118,10 +206,10 @@ def main():
         total += bytes_
         print(f"{'delete' if args.apply else 'would delete'} {target} ({bytes_ / 2**20:.0f} MiB)")
         if args.apply:
-            if target.is_dir() and not target.is_symlink():
-                shutil.rmtree(target)
-            else:
-                target.unlink()
+            try:
+                remove(target)
+            except OSError as error:
+                print(f"failed to delete {target}: {error}; carrying on")
     print(f"{'Deleted' if args.apply else 'Would delete'} {len(targets)} items, {total / 2**30:.1f} GiB"
           f"{'' if args.apply else ' (dry run; add --apply)'}; {len(references)} build directories protected")
 

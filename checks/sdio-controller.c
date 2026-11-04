@@ -103,20 +103,23 @@ static int write_cb(void *context, uint32_t offset, uint32_t value)
     }
     return 1;
 }
-static void cis(unsigned function, int identity)
+/* The module's CIS as the board reads it (runs 1793739986203659373 and later): function 0 and 1 c8a1:0082, function 2
+ * c8a1:0182, class 7 on function 1 and 2, and a function-extension enable timeout of 0 on function 1. identity is the
+ * device ID, 0 for none (the function inherits function 0's). */
+static void cis(unsigned function, unsigned identity)
 {
     unsigned address = 0x1000 + function * 0x100;
     for (unsigned i = 0; i < 3; ++i) m.card[0][function * 256 + 9 + i] = (uint8_t)(address >> (8 * i));
     m.card[0][function * 256] = 7;
     uint8_t *p = m.card[0] + address;
     if (identity) {
-        *p++ = 0x20; *p++ = 4; *p++ = 0xa1; *p++ = 0xc8; *p++ = 0x82; *p++ = 1;
+        *p++ = 0x20; *p++ = 4; *p++ = 0xa1; *p++ = 0xc8; *p++ = (uint8_t)identity; *p++ = (uint8_t)(identity >> 8);
     }
     *p++ = 0; /* NULL tuple. */
     *p++ = 0x80; *p++ = 2; *p++ = 0x67; *p++ = 0x89;
     *p++ = 0x22;
     if (function) {
-        *p++ = 42; p[0] = 1; p[12] = 0; p[13] = 2; p[28] = 50; p += 42;
+        *p++ = 42; p[0] = 1; p[12] = 0; p[13] = 2; p[28] = function == 1 ? 0 : 50; p += 42;
     } else {
         *p++ = 4; *p++ = 0; *p++ = 0; *p++ = 2; *p++ = 0x32;
     }
@@ -129,7 +132,7 @@ static void reset_model(void)
     memset(&m, 0, sizeof(m));
     m.now = 100; m.regs[0x300 / 4] = 0x03050530;
     m.regs[0x5c / 4] = 0x81710000;
-    cis(0, 1); cis(1, 0); cis(2, 1);
+    cis(0, 0x0082); cis(1, 0); cis(2, 0x0182);
     m.card[0][0] = 0x43; m.card[0][1] = 3; m.card[0][8] = 2;
     struct sunxi_sdio_config cfg = { .ops = {read_cb, write_cb, barrier_cb, now_cb, module_cb},
         .context = &m, .module_hz = 750000 };
@@ -162,10 +165,12 @@ static void enumerate(void)
     assert(card.state == SDIO_CARD_READY && host.state == SUNXI_SDIO_READY);
     assert(card.function_count == 2 && card.rca == 0x1234 && m.ready_requests == 2);
     for (unsigned i = 0; i <= 2; ++i) {
-        assert(card.functions[i].manufacturer == 0xc8a1 && card.functions[i].device == 0x0182);
+        assert(card.functions[i].manufacturer == 0xc8a1 && card.functions[i].device == (i == 2 ? 0x0182 : 0x0082));
         assert(card.functions[i].max_block_bytes == 512);
     }
-    assert(card.functions[1].enable_timeout_ms == 500 && card.skipped_tuples == 3);
+    /* Function 1 declares no enable timeout (0): the default of one second applies, as for SDIO 1.00 in Linux
+     * (sdio_cis.c:204); function 2 declares 500 ms. */
+    assert(card.functions[1].enable_timeout_ms == 1000 && card.functions[2].enable_timeout_ms == 500 && card.skipped_tuples == 3);
 }
 static void complete_after(struct sunxi_sdio_request *request)
 {

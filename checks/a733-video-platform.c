@@ -130,7 +130,7 @@ int main(int argc,char**argv)
             c.fabric[0]=0x03000000;c.fabric[1]=0x83000000;c.fabric[2]=0x81000000;
             for(unsigned i=0;i<3;++i)c.fabric_hz[i]=600000000;
             m.ccu[0x500/4]=c.fabric[0];m.ccu[0x580/4]=c.fabric[1];m.ccu[0x588/4]=c.fabric[2];
-            m.ccu[0xa0/4]=0xfe000000|(99u<<8)|(1u<<20)|(2u<<16)|(4u<<2);
+            m.ccu[0xa0/4]=0xff000000|(99u<<8)|(1u<<20)|(2u<<16)|(4u<<2);
             m.ccu[0x1908/4]=0x0fff0fff;m.ccu[0x1988/4]=0x0fff0000;
         }
         a733_clock_mask_t scopes;assert(a733_video_platform_scopes(&c,&scopes));

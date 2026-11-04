@@ -1106,15 +1106,19 @@ def session_files():
 def require_daemon_code(queue_root):
     """Refuse a pre-flight that ran code the daemon will not run.
 
-    serve() records its checkout in daemon.json. The runner the daemon starts prepares and admits the session with that
-    checkout's files, so a check or submission from another checkout is valid only if every session file is the same."""
+    serve() records its checkout and the revision it started from in daemon.json. The runner the daemon starts prepares and admits
+    the session with the files of that revision, so a check or submission from another checkout is valid only if every session file is
+    the same as in the started revision, whatever the checkout's HEAD has advanced to since."""
     record = Path(queue_root)/'daemon.json'
     if not record.is_file():
         return
-    daemon = Path(json.loads(record.read_text())['root'])
+    running = json.loads(record.read_text())
+    daemon = Path(running['root'])
     if daemon.resolve() == ROOT.resolve():
         return
-    revision = subprocess.run(['git', '-C', str(daemon), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+    # The revision the daemon started from, not the checkout's HEAD now: bringup advances while a daemon keeps running.
+    revision = running.get('started_revision') or ''
+    require(revision, 'daemon.json names no started_revision; restart the daemon')
     differing = []
     for name in session_files():
         shown = subprocess.run(['git', '-C', str(daemon), 'show', revision+':'+name], capture_output=True)
@@ -1275,6 +1279,7 @@ def development(argv=None):
     parser.add_argument('--manifest', type=Path)
     parser.add_argument('--descriptor', type=Path)
     parser.add_argument('--no-preflight', metavar='REASON')
+    parser.add_argument('--queue', type=Path, help='the queue root the command reads (default: the live queue)')
     parser.add_argument('--approved-by', choices=('coordinator',))
     parser.add_argument('--host-tree', type=Path)
     parser.add_argument('--objcopy', type=Path)
@@ -1323,7 +1328,7 @@ def development(argv=None):
     command += ['--decode-application']
     for path in args.input:
         command += ['--input', str(path)]
-    return main(command)
+    return main(['--queue', str(args.queue), *command] if args.queue else command)
 
 
 def legacy_run(args, kind='probe', image=None, storage_write=False):
@@ -1450,7 +1455,7 @@ class Queue:
         options = {'reference': 'none' if reference.get('none') else f"{reference['path']}#{reference['anchor']}"}
         if reference.get('none'):
             options['reference_reason'] = reference['reason']
-        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight'):
+        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool'):
             value = getattr(args,name)
             options[name] = str(value.resolve()) if isinstance(value,Path) else value
         for name in ('records', 'decoder', 'manifest'):
@@ -1757,6 +1762,8 @@ def run_options(parser, submit=False):
     parser.add_argument('--kind', choices=('cpu-return','gpu-return','npu','probe','usb-class','rail-helper'), default='cpu-return', required=submit)
     parser.add_argument('--manifest', type=Path, help='Exact finite NPU build manifest.')
     parser.add_argument('--objcopy', type=Path, default=Path('/usr/bin/llvm-objcopy-21'))
+    parser.add_argument('--npu-pool', default='0:0', metavar='BASE:BYTES',
+                        help='Ask for the NPU reservation at this base and size (default 0:0: the allocator chooses). The ledger refuses an extent that is not free DRAM above the image or that crosses a 4 GiB window.')
     parser.add_argument('--approved-by', choices=('coordinator',))
     parser.add_argument('--reference', help='PATH#ANCHOR of the tracked docs heading that derives the subsystem vendor sequence and the diff against it; '
                         '"none" needs --approved-by coordinator and --reference-reason.')

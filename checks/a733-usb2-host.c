@@ -126,7 +126,7 @@ static void setup(void)
     pmic_model_setup(&m);
     m.pmic[0x11]=0x11;if(ss_mode){m.pmic[0x10]|=2;m.pmic[0x13]=30;}m.pmic[0x1a]=30;m.pmic[0x23]=8;m.pmic[0x3f]=12;m.pmic[0x33]=13;
     *pmic_model_word(&m,0x02002000)=0xf8636300;
-    *pmic_model_word(&m,0x020020a0)=0xfe106310;
+    *pmic_model_word(&m,0x020020a0)=0xff106310;
     *pmic_model_word(&m,0x02003908)=0x0b860b86;*pmic_model_word(&m,0x02003988)=0x0b860000;
     *pmic_model_word(&m,0x02002580)=0x83000002;*pmic_model_word(&m,0x02002588)=0x84000001;
     *pmic_model_word(&m,0x020025c0)=1u<<8;*pmic_model_word(&m,0x020025e0)=1u<<28;

@@ -31,12 +31,19 @@ def decode(data):
     if total != HEAD_BYTES + ap_count * AP_BYTES:
         raise ValueError('radio result length does not match its access point count')
     stage, failed, failure_stage, flags = struct.unpack_from('<4I', data, 24)
+    # Records from images before flag bit 7 carry the same refusal in fail_site: stage 7 (guard) with a 0x4xx code.
+    fail_site = struct.unpack_from('<I', data, 212)[0]
+    if (fail_site & 0xffff) == 7 and (fail_site >> 24) == 4:
+        flags |= 128
     if stage >= len(STAGES) or failure_stage > len(STAGES):
         raise ValueError('stage out of range')
     result = {
         'stage': STAGES[stage], 'stage_code': stage, 'failed': bool(failed),
-        'failed_at': STAGES[failure_stage] if failed and failure_stage < len(STAGES) else None,
-        'guard': {'asked': bool(flags & 1), 'observed': bool(flags & 2), 'bldo5_powered_on': bool(flags & 4)},
+        'failed_at': ('guard' if flags & 128 else STAGES[failure_stage] if failure_stage < len(STAGES) else None) if failed else None,
+        'guard': {'asked': bool(flags & 1), 'observed': bool(flags & 2), 'refused': bool(flags & 128)},
+        # The rails showed BLDO5 off, so the power-on writes were needed; they ran only if the stage reached 'powered'.
+        'bldo5_needs_power_on': bool(flags & 4),
+        'clean_failure': bool(flags & 256),
         'shutdown_readbacks_matched': bool(flags & 8),
         'bldo5_already_on': bool(flags & 16),
         'failure_shutdown': {'ran': bool(flags & 32), 'matched': bool(flags & 64)},
@@ -61,8 +68,31 @@ def decode(data):
         man, dev, cls, present = struct.unpack_from('<2H2B', data, 136 + 8 * i)
         if present:
             result['card']['functions'].append({'function': i, 'manufacturer': man, 'device': dev, 'class': cls})
-    chip, sub, fw_flags = struct.unpack_from('<3I', data, 200)
+    chip, sub, fw_flags, fail_site = struct.unpack_from('<4I', data, 200)
+    fw_progress = struct.unpack_from('<I', data, 228)[0]
     result['identity'] = {'chip_word': chip, 'subrevision_word': sub}
+    # Firmware engine progress (zero before it claims the module). The time is the clock at the last confirmation,
+    # in milliseconds modulo 65536.
+    states = ['new', 'verifying', 'validating', 'preparing', 'request', 'waiting', 'delay', 'start-confirmed', 'fault']
+    phases = ['adid', 'patch', 'table', 'wifi-image', 'read-pointers', 'wifi-patch', 'start']
+    result['firmware'] = {'state': states[fw_flags & 15] if (fw_flags & 15) < len(states) else fw_flags & 15,
+                          'error': (fw_flags >> 4) & 15,
+                          'phase': phases[(fw_flags >> 8) & 255] if ((fw_flags >> 8) & 255) < len(phases) else (fw_flags >> 8) & 255,
+                          'last_confirmation_ms_mod_65536': fw_flags >> 16,
+                          'image_bytes_sent': fw_progress & 0x7ffff, 'table_pairs_done': fw_progress >> 19} if fw_flags else None
+    # fail_site: source line << 16 | 0x100 when the session decided the failure (the platform decided none) | stage.
+    result['platform_failure'] = {'line': fail_site >> 16, 'stage': fail_site & 0xff,
+                                  'source': 'session' if fail_site & 0x100 else 'platform'} if fail_site else None
+    if fail_site & 0x100 and (fail_site >> 9) & 0x7f:
+        # A refused transport adoption: bit 0 pointers/state, 1 config, 2 function count, 3 function 2 identity,
+        # 4 function 1 manufacturer, 5 function 1 block size, 6 function 1 enable timeout.
+        result['platform_failure']['refusal_groups'] = [i for i in range(7) if (fail_site >> 9) >> i & 1]
+    if flags & 128:
+        # A guard refusal: the 'line' is 0x400 | PG bits (GPIO_POW_VAL 13:12) << 4 | the unmet conditions.
+        code = fail_site >> 16
+        result['platform_failure']['guard_refusal'] = {
+            'code': code, 'pg_bits': (code >> 4) & 3,
+            'unmet': [name for bit, name in ((1, 'pg'), (2, 'dcdc1'), (4, 'bldo5'), (8, 'cldo1')) if code & bit]}
     reported, dropped = struct.unpack_from('<2I', data, 220)
     aps = []
     for i in range(ap_count):

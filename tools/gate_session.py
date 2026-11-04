@@ -5,7 +5,7 @@ Usage: gate_session.py IMAGE.elf OUTPUT.bin
 
 An NPU image takes its NPU extent from checks/data/npu-session-template (a queue entry's typed session), and the extent is made
 to describe this image: the client model and the catalogue digest are read from the image's own os_npu_client_model and
-os_npu_catalogue_digest, and the pool from its linker symbols (apps/os/host.py bind_npu_pool). The declaration is the synchronous
+os_npu_catalogue_digest; the session names no pool, because the image takes it from the ledger when it admits the application. The declaration is the synchronous
 wrapper's: one slot, one job in flight, one graph for each catalogue entry (os_npu_model_count).
 
 The session is built by tools/board_images.py exactly as `board.py check` builds it: the same preparation, the same typed

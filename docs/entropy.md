@@ -17,60 +17,12 @@ The service interfaces are in `include/a733_ce_entropy.h`; the implementation is
 `drivers/crypto/a733_ce_native.c`. The underlying command format, clock checks
 and security boundaries are described in [the CE driver record](crypto-engine.md).
 
-## Health provisioning requires an assessed profile
+## Health tests run at hardware defaults
 
-The secure health controls provide a repetition-count cutoff, an
-adaptive-proportion cutoff, a delay between windows and test enables. The
-controller accepts continuous testing with a 512- or 1024-sample window.
-It requires an authenticated profile bound to the actual silicon, supplies,
-RC16M clock and enabled double-source mode. It supplies no default thresholds.
-
-With cold provisioning selected, the controller first refuses either enabled
-test. Under complete CE exclusion and independent prior DMA drain, it selects
-double-source mode and writes the supplied cutoffs and window. It enables both
-tests last and verifies readback. Native writes preserve reserved control bits
-and refuse reconfiguration once either test is enabled. Any uncertain operation
-retains ownership. Existing enabled profiles can instead be adopted after exact
-readback verification.
-
-The manual gives these cutoff formulas:
-
-- Repetition count: `C = 1 + ceil(-log2(alpha) / H)`.
-- Adaptive proportion: `C = 1 + CRITBINOM(W, 2^-H, 1-alpha)`.
-
-Here `C` is the cutoff, `H` is assessed minimum entropy per raw sample, `alpha`
-is the selected false-alarm probability and `W` is the test window length.
-`CRITBINOM` denotes a binomial quantile. The manual's example prose associates
-169-bit samples with inconsistent values for entropy and window length. Those
-examples are insufficient to characterize this board and are not used as defaults.
-
-`checks/crypto-health-cutoffs.py` evaluates both formulas with exact integer
-and 80-digit decimal arithmetic. Given an assessed `H`, `alpha = 2^-k` with
-`20 <= k <= 40` and the source type, it prints the four register words in the
-form the controller accepts. They are the two cutoffs, a zero delay for continuous
-testing and both enables with `W` of 1024 for a binary source or 512
-otherwise. For example, a binary source assessed at 0.5 bits per sample with
-`alpha = 2^-20` gives `{0x29, 0x319, 0x0, 0x30400}`. Each run first reproduces
-the adaptive-proportion cutoffs in SP 800-90B Table 2 for `alpha = 2^-20`
-(941, 840, 748, 664 and 589 for binary sources at `H` from 0.2 to 1, and 410,
-311, 177, 62 and 13 for non-binary sources at `H` of 0.5, 1, 2, 4 and 8) and
-the standard's repetition-count example. The script never chooses `H`. The
-values it prints are only as valid as the raw-source assessment that supplies
-`H`, and no such assessment of this silicon exists.
-
-[NIST SP 800-90B](https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-90B.pdf)
-describes raw-source assessment and health testing before conditioning. Its
-startup requirement covers at least 1024 raw samples. The A733 command returns
-SHA-256-conditioned output, so output statistics or a chosen discard count do
-not demonstrate that requirement. The
-[2025 errata](https://csrc.nist.gov/files/pubs/sp/800/90/b/final/docs/sp800-90b_errata_potential_updates.pdf)
-do not supply an A733 profile or startup protocol. No standards-compliance claim
-is made.
-
-Inspection of the board's published monitor firmware identified security setup
-but did not identify a CE health profile. That bounded inspection does not
-exclude indirect firmware paths. Secure MMIO access still requires actual
-platform authorization; no existing secure-monitor entropy service is assumed.
+The CE driver follows the vendor's non-secure sequence ([crypto-engine.md](crypto-engine.md)): it programs no
+health-test register and reads none, so the TRNG's repetition-count and adaptive-proportion tests run at whatever the
+hardware resets to. Nothing in this service establishes that they run, what their cutoffs are, or that the source
+passes any assessment. Output remains **unqualified**.
 
 ## One reserved page supports sequential tasks
 

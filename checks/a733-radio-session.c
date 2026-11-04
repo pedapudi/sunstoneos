@@ -227,7 +227,7 @@ static void model_setup(void)
     *pmic_model_word(&r.power,0x020025c0)=1u<<24;*pmic_model_word(&r.power,0x020025e0)=1u<<30;
     *pmic_model_word(&r.power,0x0200259c)=0x30001;
     m.regs[0x300/4]=0x03050530;m.regs[0x5c/4]=0x81710000;
-    cis(0,1);cis(1,0);cis(2,1);m.card[0][0]=0x43;m.card[0][1]=3;m.card[0][8]=2;
+    cis(0,0x0082);cis(1,0);cis(2,0x0182);m.card[0][0]=0x43;m.card[0][1]=3;m.card[0][8]=2;
     m.card[0][2]=4;m.card[0][3]=4;m.card[0][4]=0x80;m.card[1][0]=0x40;m.card[0][0x110]=64;
     struct a733_radio_platform_config p={.owner=42,.handoff=200,.deadline_us=50000000,.lifetime_deadline_us=120000000,
         .topology={201,A733_RADIO_DCDC1,A733_RADIO_BLDO5,A733_RADIO_CLDO1,A733_RADIO_BLDO5},
@@ -363,6 +363,7 @@ static void client_worker(void *unused)
     r.operation=SUNSTONE_NET_SEND;r.bytes=sizeof(payload)-1;memcpy(r.payload,payload,r.bytes);assert(request(&r).result==SUNSTONE_NET_OK);
     r.operation=SUNSTONE_NET_RECEIVE;r.bytes=1472;reply=request(&r);assert(reply.result==SUNSTONE_NET_LINK_LOST);
     assert(session.fault&&!aic8800_network_ready(&session.sockets.network));
+    assert(session.fail_line&&session.fail_stage<=12); /* The session names the line that decided the failure. */
     assert(session.sockets.sockets[0].socket&&session.borrow.generation==session.platform->clock.id);
     platform_puts("PASS actual radio session ownership, staged lease renewal, pre-network broadcast discard, native TCP queues and retained live-guard failure; firmware/association checkpoints and entropy are modeled\n");
     platform_exit(0);

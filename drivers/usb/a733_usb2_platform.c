@@ -138,7 +138,7 @@ static int parents(struct a733_usb2_platform *p)
     if(!rd(p,0x07090160,&osc)||!rd(p,CCU,&ref)||!a733_clock_ref24_valid(osc,ref))return 0;
     unsigned n;
     for(unsigned i=0;i<3;++i)if(!ck(p,CCU+fabric_off[i],fabric_mask[i],p->config.fabric[i]))return 0;
-    if(!rd(p,CCU+0xa0,&pll)||(pll&0xfe000000u)!=0xfe000000u||(pll&(B(24)|B(1)))||
+    if(!rd(p,CCU+0xa0,&pll)||!a733_clock_peri0_valid(pll)||
         !rd(p,CCU+0xa8,&a)||(a&B(31))||!rd(p,CCU+0xac,&b)||(b&B(27))||
         !rd(p,CCU+0x1908,&g)||!rd(p,CCU+0x1988,&s))return 0;
     n=((pll>>8)&255)+1;if(n<53||n>105)return 0;

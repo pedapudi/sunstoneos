@@ -112,7 +112,7 @@ static int stable(struct a733_media_clock *p)
         if (!rd(p,CCU,&v) || !a733_clock_ref24_valid(osc,v)) return 0;
     } else if (a733_clock_dcxo_hz(osc)!=24000000) return 0;
     if (p->shared&A733_CLOCK_PERI0) {
-        if (!integer_pll(p,0xa0,0xfe000000,&v) || (v&BIT(24))) return 0;
+        if (!integer_pll(p,0xa0,0xfe000000,&v) || !a733_clock_peri0_valid(v)) return 0;
         for (unsigned i=0;i<3;++i) if (!peri_rate(p,v,p->selected_mhz[i])) return 0;
         if ((p->config.groups&VO) && !peri_rate(p,v,150)) return 0;
     }

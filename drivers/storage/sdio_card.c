@@ -77,8 +77,13 @@ static void tuple_done(struct sdio_card *c)
             unsigned minimum = c->function ? (c->sdio_revision == 0 ? 28u : 42u) : 4u;
             if (c->tuple_length < minimum) { fail(c, SUNXI_SDIO_CARD_ERROR); return; }
             f->max_block_bytes = le16(c->tuple + (c->function ? 12 : 1));
-            if (c->function)
+            if (c->function) {
                 f->enable_timeout_ms = c->sdio_revision == 0 ? 1000u : (unsigned)le16(c->tuple + 28) * 10u;
+                /* A function that declares none (the AIC8800 module's function 1 does) gets the SDIO 1.00 default of
+                 * one second, which is only the bound of the ready poll: the vendor's enable (sdio_io.c, sdio_enable_func)
+                 * runs with the value read as zero and ends when the function is ready. */
+                if (!f->enable_timeout_ms) f->enable_timeout_ms = 1000u;
+            }
             f->has_function_extension = 1;
         } else {
             if (subtype == 4 && c->tuple_length < 8) { fail(c, SUNXI_SDIO_CARD_ERROR); return; }

@@ -49,7 +49,7 @@ def main():
 
     common = [args.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
               '-fsanitize=address,undefined', '-ffunction-sections', '-fdata-sections']
-    os_flags = ['-DOS_NPU_META_BYTES=64ULL', '-DSUNSTONE_A733_OS_NPU=1', '-Wno-unused-function', '-Iapps/board',
+    os_flags = [ '-DSUNSTONE_A733_OS_NPU=1', '-Wno-unused-function', '-Iapps/board',
                 '-Iplatform/a733-smp-cached', '-Inetwork/include',
                 '-I' + str(args.freertos / 'include'),
                 '-I' + str(args.freertos / 'portable/GCC/ARM_CR82'),

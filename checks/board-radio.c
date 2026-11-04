@@ -12,6 +12,7 @@ static const struct board_radio_chip_id id={7,{0x11223344,0x55667788,0x99aabbcc,
 static TaskHandle_t task=(TaskHandle_t)(uintptr_t)1;
 static BaseType_t scheduler=taskSCHEDULER_NOT_STARTED;
 static uint64_t time_us=100;
+static unsigned abort_model,abort_steps_left;
 static unsigned entropy_calls,session_calls,retained,connects,security_calls,network_calls,submitted,received;
 static unsigned entropy_retains;
 static atomic_uint recovery_state;
@@ -75,7 +76,10 @@ int a733_radio_session_init(struct a733_radio_session *s,struct a733_radio_platf
 enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session *s)
 {assert(s==&app.session&&(app.config.scan_only||entropy_calls>session_calls));++session_calls;return session_result;}
 enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_session *s)
-{assert(s==&app.session);++retained;s->fault=1;return A733_SESSION_RETAINED;}
+{assert(s==&app.session);++retained;s->fault=1;
+ if(app.platform.refused)app.platform.fault=1;
+ if(abort_model&&!app.platform.aborting&&!app.platform.abort_done){app.platform.aborting=1;app.platform.deadline=time_us+2000000;}
+ return A733_SESSION_RETAINED;}
 int a733_radio_session_connect(struct a733_radio_session *s,const struct aic8800_wifi_target *t,uint64_t deadline)
 {assert(s==&app.session&&t==&app.config.target&&deadline==1100);++connects;s->wifi.link=AIC8800_WIFI_CONNECTING;return 1;}
 int a733_radio_session_start_security(struct a733_radio_session *s,const struct aic8800_supplicant_config *c,uint64_t d)
@@ -125,7 +129,12 @@ static unsigned shutdown_calls,shutdown_ok=1,platform_steps;
 int a733_radio_platform_shutdown(struct a733_radio_platform *p,const struct a733_radio_borrow *t,uint64_t d)
 {assert(p==&app.platform&&t==&app.session.borrow&&d);++shutdown_calls;return shutdown_ok;}
 enum a733_radio_platform_result a733_radio_platform_poll(struct a733_radio_platform *p)
-{assert(p==&app.platform);return ++platform_steps<3?A733_RADIO_PENDING:A733_RADIO_DOWN;}
+{assert(p==&app.platform);
+ if(p->aborting){
+     if(abort_steps_left&&--abort_steps_left==0){p->aborting=0;p->abort_done=1;p->abort_flags|=16u;p->fault=1;return A733_RADIO_RETAINED;}
+     return A733_RADIO_PENDING;
+ }
+ return ++platform_steps<3?A733_RADIO_PENDING:A733_RADIO_DOWN;}
 /* The scan-only startup never reaches the crypto engine or its mutex: these must not run. */
 QueueHandle_t xQueueCreateMutexStatic(const uint8_t t,StaticQueue_t *q){(void)t;(void)q;assert(0);return NULL;}
 BaseType_t xQueueSemaphoreTake(QueueHandle_t q,TickType_t t){(void)q;(void)t;assert(0);return 0;}
@@ -265,6 +274,11 @@ int main(void)
     scan_only.report_memory.allocate=arena_allocate;
     assert(board_radio_init(&app,&scan_only)&&guard_calls==1&&board_radio_report(&app));
     scheduler=taskSCHEDULER_RUNNING;app.session.dispatcher.initialized=1;time_us=100;
+    /* The net client task has nothing to do and must not fail the session: the first probe run retained the radio
+     * at its first poll because this returned -1 and revoked the owner's recovery state. */
+    task=(TaskHandle_t)(uintptr_t)5;
+    assert(board_radio_client_poll(&app)==0&&!(atomic_load(&recovery_state)&4)&&!atomic_load(&app.failed));
+    task=scan_only.session.owner_task;
     assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&scan_calls==1&&app.stage==SCANNING);
     assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==SCANNING&&take_scan_calls==1);
     assert(board_radio_report(&app)->ap_count==2&&board_radio_report(&app)->head.aps_reported==3);
@@ -319,6 +333,49 @@ int main(void)
         assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED);
         session_result=saved;a733_radio_report_release(&app.report);
     }
+    /* The firmware stage widens: enumeration_only with four_bit asks for four bits at 25 MHz exactly once. */
+    {
+        memset(&app,0,sizeof(app));scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);report_used=0;
+        unsigned widen_before=fast_requests;
+        struct board_radio_config probe=scan_only;probe.enumeration_only=1;probe.four_bit=1;probe.session.enumeration_only=1;
+        assert(board_radio_init(&app,&probe)&&fast_requests==widen_before+1&&app.platform.four_bit);
+        /* The stored stage numbers do not order the stages: identified (6) comes before firmware (5) in time. */
+        a733_radio_report_identity(&app.report,1,2);
+        assert(app.report.head.stage==A733_RADIO_STAGE_IDENTIFIED);
+        a733_radio_report_firmware(&app.report);
+        assert(app.report.head.stage==A733_RADIO_STAGE_FIRMWARE);
+        a733_radio_report_identity(&app.report,1,2);
+        assert(app.report.head.stage==A733_RADIO_STAGE_FIRMWARE); /* Not lowered by a repeat. */
+        a733_radio_report_release(&app.report);
+    }
+    /* A failure with the failure shutdown running: each retain drives it, the failure is final (the board's failure
+     * bit set, the session's site in the record) only when it is done, and a shutdown that never finishes is
+     * given up on at the board's bound. A guard refusal is final at once and leaves the failure bit alone. */
+    for(unsigned model=0;model<3;++model) {
+        memset(&app,0,sizeof(app));scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);report_used=0;
+        struct board_radio_config probe=scan_only;probe.enumeration_only=1;probe.session.enumeration_only=1;
+        assert(board_radio_init(&app,&probe));scheduler=taskSCHEDULER_RUNNING;time_us=100;
+        app.session.fail_line=777;app.session.fail_stage=3; /* The session decided: line 777, stage 3. */
+        abort_model=model!=2;abort_steps_left=model==0?3:0;  /* 0: finishes in three polls; 1: never finishes. */
+        app.platform.refused=model==2;
+        if(model==0) {
+            assert(board_radio_external_failure(&app)==BOARD_RADIO_PENDING&&!(atomic_load(&recovery_state)&4));
+            assert(app.platform.aborting&&!app.platform.abort_done);
+            assert(board_radio_external_failure(&app)==BOARD_RADIO_PENDING&&!(atomic_load(&recovery_state)&4));
+            assert(board_radio_external_failure(&app)==BOARD_RADIO_RETAINED&&!(atomic_load(&recovery_state)&4)); /* Clean: nothing is powered, so no failure bit. */
+            assert(app.platform.abort_done);
+        } else if(model==1) {
+            assert(board_radio_external_failure(&app)==BOARD_RADIO_PENDING&&!(atomic_load(&recovery_state)&4));
+            time_us+=2900000;assert(board_radio_external_failure(&app)==BOARD_RADIO_PENDING);
+            time_us+=200000;assert(board_radio_external_failure(&app)==BOARD_RADIO_RETAINED&&(atomic_load(&recovery_state)&4));
+            assert(!app.platform.abort_done);
+        } else {
+            assert(board_radio_external_failure(&app)==BOARD_RADIO_RETAINED&&!(atomic_load(&recovery_state)&4));
+        }
+        assert(board_radio_report(&app)->head.fail_site==((777u<<16)|0x100u|3u)&&(model==1||board_radio_report(&app)->head.failed));
+        a733_radio_report_release(&app.report);
+    }
+    abort_model=0;
     /* The profile-level entry: no WPA2 target makes a scan-only session with no crypto engine. */
     {
         struct board_radio_profile sp=admitted;sp.version=BOARD_RADIO_PROFILE_SCAN_VERSION;

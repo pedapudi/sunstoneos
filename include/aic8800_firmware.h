@@ -40,6 +40,9 @@ struct aic8800_firmware {
     uint32_t table_type, table_pairs, pair_index, last_status, bootstatus;
     uint32_t table_burst; /* Pairs in the outstanding table block write, else 0. */
     uint32_t expected_address, last_response[2], first_nonzero_block_status;
+    /* Progress for the record: Bluetooth table pairs written so far, and the clock reading at the last confirmation. */
+    uint32_t pairs_done;
+    uint64_t last_confirm;
     uint16_t last_response_message;
     uint16_t expected_message;
     uint8_t initialized, hash_role, h_variant, phase, patch_index;
