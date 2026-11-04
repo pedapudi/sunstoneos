@@ -259,6 +259,9 @@ struct umem *os_large_umem(void) { return admitted || ledger_ready ? &ledger : 0
 
 /* ---- The device ranges the EL3 terminal cleans (apps/os/device-ranges.h) ---- */
 uint64_t os_device_ranges_head;
+/* The counter at the start and end of each core's walk of the published ranges in the return terminal (cores 0 to 7, two words each);
+ * the terminal writes and cleans them, the runner copies them out. */
+uint64_t os_cpu_return_walk[16];
 static struct os_device_range_page *range_tail;
 int os_device_range_publish(uint64_t base, uint64_t bytes)
 {
@@ -272,7 +275,10 @@ int os_device_range_publish(uint64_t base, uint64_t bytes)
         if (umem_alloc(&ledger, &r, &b) == 0) {
             struct os_device_range_page *page = (struct os_device_range_page *)(uintptr_t)b.base;
             memset(page, 0, sizeof *page);
-            if (range_tail) range_tail->next = b.base; else os_device_ranges_head = b.base;
+            if (range_tail) {
+                range_tail->next = b.base;
+                if (!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE, (uintptr_t)range_tail, sizeof *range_tail)) ok = 0;
+            } else os_device_ranges_head = b.base;
             range_tail = page;
         } else ok = 0;
     }
@@ -280,6 +286,8 @@ int os_device_range_publish(uint64_t base, uint64_t bytes)
         range_tail->range[range_tail->count] = (struct os_device_range){base, bytes};
         __atomic_store_n(&range_tail->count, range_tail->count + 1, __ATOMIC_RELEASE);
         __asm__ volatile("dsb sy" ::: "memory");
+        /* The runner reads the page over FEL after the return; cached lines do not survive it. */
+        if (!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE, (uintptr_t)range_tail, sizeof *range_tail)) ok = 0;
     }
     taskEXIT_CRITICAL();
     return ok;

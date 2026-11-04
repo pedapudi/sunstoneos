@@ -478,6 +478,9 @@ def runner_cleanup(args, machine, geometry_host, epoch, generation, frozen):
             self.memory = [(address, bytearray(bytes([17+index])*size)) for index,(address,size)
                            in enumerate(plan['preserve_regions'])]
             self.saved = {address:bytes(data) for address,data in self.memory}
+            # Not preserved, only read: the first page of the published device range list, which the OS took from the ledger at run
+            # time. FEL reads any DRAM; the OS cleans the page to DRAM when it publishes (apps/os/large.c).
+            self.readable = [(0x70000000, bytes(machine.uc.mem_read(0x70000000, 4096)))]
             self.elapsed_now = lambda:self.clock
             owners_seen.append(self)
         @contextlib.contextmanager
@@ -492,7 +495,7 @@ def runner_cleanup(args, machine, geometry_host, epoch, generation, frozen):
             return plan
         def quarantine(self, reason):self.quarantined=True;self.record['quarantined']=True
         def read(self, address, size, path):
-            for begin,data in self.memory:
+            for begin,data in self.memory+self.readable:
                 if begin<=address and address+size<=begin+len(data):
                     raw=bytes(data[address-begin:address-begin+size]);path.write_bytes(raw);return raw
             raise AssertionError(('read outside preserved native geometry',hex(address),size))

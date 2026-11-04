@@ -540,7 +540,8 @@ def prepare(args, info, live, out, *, dma_binding=None):
     elif not inputs:
         inputs = [(template/f'input-{i}.bin').read_bytes() for i, _ in enumerate(records.regions(image_info['manifest'], (1,)))]
     producer = load('runner_session_prepare', tree/'apps/os/prepare.py')
-    meta = producer.prepare(args.image, prefix, services, inputs, out, devices=devices, flags=flags)
+    meta = producer.prepare(args.image, prefix, services, inputs, out, devices=devices, flags=flags,
+                            npu_pool=records.parse_npu_pool(getattr(args, 'npu_pool', None)))
     if dma_authority is not None:
         write(out/'dma-authority.json', dma_authority)
     session = (out/'session.bin').read_bytes()
@@ -733,6 +734,9 @@ def capture(owner, plan, args):
         reads.append(('npu-stop', geo['npu_stop']['address'], geo['npu_stop']['bytes']))
     if 'cpu_rails' in geo:
         reads.append(('cpu-rails', geo['cpu_rails']['address'], geo['cpu_rails']['bytes']))
+    for name, key in (('device-ranges-head', 'device_ranges_head'), ('return-walk', 'return_walk'), ('npu-guard', 'npu_guard')):
+        if key in geo:
+            reads.append((name, geo[key]['address'], geo[key]['bytes']))
     if 'radio_result' in geo:
         reads.append(('radio-descriptor', geo['radio_result']['address'], geo['radio_result']['bytes']))
     # Preserve every returned object before decoding any of them. A malformed
@@ -741,12 +745,23 @@ def capture(owner, plan, args):
               for name, address, size in reads}
     require(owner.record.get('normal_return') and not owner.record.get('dram_lost'),
             'DRAM restoration requires a verified normal return.')
+    if 'device-ranges-head' in copied:
+        # The first page of the published list is in DRAM that the OS chose at run time, so its address comes from the copied head.
+        head = struct.unpack('<Q', copied['device-ranges-head'])[0]
+        if head:
+            require(head % 4096 == 0 and 0x42200000 <= head <= 0x340000000 - 4096, 'The device range list head is outside DRAM.')
+            copied['device-ranges-page'] = owner.read(head, 4096, out/'device-ranges-page.bin')
     if hasattr(records, 'mandatory_return'):
         decoded = records.mandatory_return(copied, geo, plan['epoch'], plan['generation'],
                                            failure_return=bool(owner.record.get('failure_return')))
     else:
         require('npu_stop' not in geo, 'NPU retirement parser is missing.')
         decoded = records.decode_return_report(copied['return-report'], plan['epoch'])
+    if hasattr(records, 'decode_published'):
+        try:
+            decoded.update(records.decode_published(copied, geo))
+        except (ValueError, struct.error) as error:     # a malformed publication does not hide the native retirement
+            decoded['device_ranges_error'] = str(error)
     owner.record['native_retirement_validated'] = True
     owner.journal()
     try:
@@ -820,7 +835,6 @@ def capture(owner, plan, args):
             try:
                 decoded['thermal'] = records.thermal_capture.decode(geo['thermal'], copied,
                                                                     plan['epoch'], plan['generation'])
-                decoded['thermal']['qualification_passed'] = False
                 decoded['thermal_capture_status'] = 'decoded'
                 if decoded['thermal'].get('classification') != 'complete':
                     valid = False
@@ -830,7 +844,6 @@ def capture(owner, plan, args):
                 decoded.update(thermal_capture_status='malformed', thermal_error=str(error))
         else:
             decoded['thermal_capture_status'] = 'absent'
-        decoded['qualification_passed'] = False
         return {'valid': valid, 'payload': payload, 'report': decoded}
     finally:
         require(plan['preserve_regions'] == preservation_regions(plan),

@@ -143,6 +143,54 @@ def check_consumers(record):
         print('memory-layout: cpu-return-host not loaded (%s); skipped' % error)
         return
     require(returning.IMAGE_RAM == memory_layout.extent(record['image']['image_ram']), 'CPU-return image RAM differs')
+    # A placement request exists only when someone asks for one: a template whose NPU record holds stale pool words produces a
+    # session with zero words, and an explicit request sets exactly them.
+    import struct
+    host_records = load_module('layout_os_host', ROOT / 'apps/os/host.py')
+    stale = bytearray(host_records.SERVICE_BYTES[host_records.NPU])
+    struct.pack_into('<QQ', stale, host_records.NPU_POOL_REQUEST_OFFSET, 0x47400000, 0x800000)
+    stale[0] = 0x5a; stale[200] = 0xa5
+    services = {host_records.NPU: bytes(stale)}
+    clean = host_records.set_npu_pool_request(services, 0, 0)[host_records.NPU]
+    require(struct.unpack_from('<QQ', clean, host_records.NPU_POOL_REQUEST_OFFSET) == (0, 0) and clean[0] == 0x5a and clean[200] == 0xa5 and
+            len(clean) == len(stale), 'a template with stale pool words does not produce a session with zero words')
+    asked = host_records.set_npu_pool_request(services, 0x180000000, 0x4000000)[host_records.NPU]
+    require(struct.unpack_from('<QQ', asked, host_records.NPU_POOL_REQUEST_OFFSET) == (0x180000000, 0x4000000), 'an explicit request is not written')
+    require(struct.unpack_from('<QQ', services[host_records.NPU], host_records.NPU_POOL_REQUEST_OFFSET) == (0x47400000, 0x800000),
+            'the services were changed in place')
+    for bad in ((0x180000000, 0), (0, 0x4000000), (-1, 5)):
+        try:
+            host_records.set_npu_pool_request(services, *bad)
+        except ValueError:
+            continue
+        require(False, 'a half-formed request %r is accepted' % (bad,))
+    require(host_records.parse_npu_pool('0x180000000:0x4000000') == (0x180000000, 0x4000000) and host_records.parse_npu_pool(None) == (0, 0),
+            'the request text does not parse')
+    require('set_npu_pool_request' in (ROOT / 'apps/os/prepare.py').read_text() and
+            'npu_pool=records.parse_npu_pool' in (ROOT / 'tools/board_images.py').read_text(),
+            'the session preparation does not set the request from its explicit argument')
+    # What the run publishes: the list head and first page, the terminal walk's counters and the placement guard.
+    import struct
+    page = struct.pack('<2Q', 0, 2) + struct.pack('<2Q', 0x180000000, 0x4000000) + struct.pack('<2Q', 0x80000000, 0x4000000)
+    page += bytes(4096 - len(page))
+    walk = b''.join(struct.pack('<2Q', 1000 + core, 1000 + core + 24000) for core in range(8))
+    guard = struct.pack('<8Q', 0x180000000, 0x4000000, 0x80000000, 0x4000000, 1, 0, 0, 0xa5a5a5a5a5a5a5a5)
+    out = returning.decode_published({'device-ranges-head': struct.pack('<Q', 0x70000000), 'device-ranges-page': page,
+                                      'return-walk': walk, 'npu-guard': guard}, {})
+    require(out['device_ranges']['ranges'] == [{'base': 0x180000000, 'bytes': 0x4000000}, {'base': 0x80000000, 'bytes': 0x4000000}] and
+            out['return_walk'][3]['ticks'] == 24000 and abs(out['return_walk'][3]['microseconds'] - 1000.0) < 1e-6 and
+            out['npu_guard']['differing_words'] == 0 and out['npu_guard']['checked'] == 1, 'the published ranges and the walk do not decode')
+    require(returning.decode_published({'device-ranges-head': bytes(8)}, {})['device_ranges'] == {'head': 0, 'ranges': []},
+            'an empty range list does not decode')
+    for name, bad in (('a range below the image', struct.pack('<2Q', 0, 1) + struct.pack('<2Q', 0x41000000, 4096)),
+                      ('an unaligned range', struct.pack('<2Q', 0, 1) + struct.pack('<2Q', 0x60000001, 4096)),
+                      ('a count over a page', struct.pack('<2Q', 0, 256))):
+        try:
+            returning.decode_published({'device-ranges-head': struct.pack('<Q', 0x70000000),
+                                        'device-ranges-page': bad + bytes(4096 - len(bad))}, {})
+        except ValueError:
+            continue
+        require(False, name + ' decodes')
     # The published-range head: an OS image must carry it, a probe may omit it, and nothing else is accepted.
     ram = (0x41200000, 0x42000000)
     head = {'os_device_ranges_head': (0x41800000, 8)}

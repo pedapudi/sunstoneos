@@ -127,7 +127,7 @@ def run_image(path,output):
                     56+get(image.address('ss_result_capacity'),8),123,456,1,len(payload))
                 assert result[56:]==payload
                 decoded=decoder.decode(receipt,123,456,require,allow_untouched=True)
-                assert decoded=={'jobs':0,'gpu_untouched':True,'device_never_opened':True,'qualification_passed':False}
+                assert decoded=={'jobs':0,'gpu_untouched':True,'device_never_opened':True}
                 refused(lambda:decoder.decode(receipt,123,456,require),'not admitted')
                 (output/(path.stem+'-'+case+'-receipt.bin')).write_bytes(receipt)
                 (output/(path.stem+'-'+case+'-result.bin')).write_bytes(result)

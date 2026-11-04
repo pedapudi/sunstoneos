@@ -461,6 +461,7 @@ int os_npu_close(void)
     npu.opened=0;atomic_store_explicit(&npu.closed,1,memory_order_release);
     xTaskNotifyGive(npu.bootstrap);return 1;
 }
+static void guard_check(void);
 static void bootstrap(void *unused)
 {
     (void)unused;unsigned begun=0;
@@ -472,7 +473,7 @@ static void bootstrap(void *unused)
             if(now>=npu.initial_deadline)os_npu_thermal(0,1,0,now);
             if(os_npu_stopping()) {
                 /* No startup step or activation has occurred. */
-                atomic_store_explicit(&npu.stopped,1,memory_order_release);os_application_wake_main();
+                guard_check();atomic_store_explicit(&npu.stopped,1,memory_order_release);os_application_wake_main();
                 xTaskNotifyGive(npu.client);STOPPED_WAIT();return;
             }
             if(!claim()){(void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));continue;}
@@ -500,7 +501,7 @@ static void bootstrap(void *unused)
                         r=npu_runtime_stop_poll(&npu.runtime);
                         if(r==A733_NPU_PLATFORM_RETAINED){(void)FAIL_REQUEST(NPU_SERVICE_CLOSE,0,0,NULL,A733_NPU_PLATFORM_READY,r);goto failed;}
                         if(r==A733_NPU_PLATFORM_READY) {
-                            atomic_store_explicit(&npu.stopped,1,memory_order_release);os_application_wake_main();
+                            guard_check();atomic_store_explicit(&npu.stopped,1,memory_order_release);os_application_wake_main();
                             xTaskNotifyGive(npu.client);STOPPED_WAIT();return;
                         }
                         vTaskDelay(1);
@@ -547,6 +548,44 @@ int os_npu_queue_prepare(struct npu_runtime *rt)
     return os_npu_queue_sdk_bind()&&os_npu_queue_tables(rt);
 }
 #endif
+/* A pool placed above 4 GiB is tested against an alias: if the NPU drops the high physical bits, its accesses land at the same low
+ * 32 bits. The OS fills a kernel-owned extent at that alias with a pattern, publishes it, and checks it when the NPU client ends, so
+ * a stray write is seen. An alias below DRAM (the both-bits placement) is the SoC's own address space and cannot be guarded. The
+ * runner copies the record out of image RAM. */
+struct os_npu_guard_record{uint64_t pool_base,pool_bytes,guard_base,guard_bytes,checked,differing_words,first_difference,pattern;};
+struct os_npu_guard_record os_npu_guard_record;
+#define GUARD_PATTERN UINT64_C(0xa5a5a5a5a5a5a5a5)
+static struct umem_buf guard_buf;
+/* Reserved before the runtime prepares, so that nothing else takes the alias; trimmed and filled once the pool is trimmed. */
+static int guard_reserve(struct umem *led,uint64_t base,uint64_t bytes)
+{
+    const uint64_t alias=base&UINT64_C(0xffffffff);
+    if(alias==base||alias<UINT64_C(0x42200000)||alias+bytes>UINT64_C(0x340000000))return 1;   /* nothing to guard */
+    const struct umem_request r={.bytes=bytes,.align=4096,.base=alias,.owner=UMEM_OWNER_KERNEL,.flags=UMEM_RAW|UMEM_AT};
+    return umem_alloc(led,&r,&guard_buf)==UMEM_OK;
+}
+static int guard_finish(struct umem *led,uint64_t base,uint64_t kept)
+{
+    os_npu_guard_record.pool_base=base;os_npu_guard_record.pool_bytes=kept;os_npu_guard_record.pattern=GUARD_PATTERN;
+    if(!guard_buf.cell)return 1;
+    if(umem_trim(led,&guard_buf,kept)!=UMEM_OK)return 0;
+    const uint64_t alias=guard_buf.base;
+    memset((void *)(uintptr_t)alias,0xa5,(size_t)kept);
+    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,(uintptr_t)alias,(size_t)kept))return 0;
+    os_npu_guard_record.guard_base=alias;os_npu_guard_record.guard_bytes=kept;
+    return os_device_range_publish(alias,kept);
+}
+/* Called when the NPU has stopped, before the stopped proof is published: how many words of the guard changed. */
+static void guard_check(void)
+{
+    struct os_npu_guard_record *r=&os_npu_guard_record;
+    if(!r->guard_bytes||r->checked)return;
+    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,(uintptr_t)r->guard_base,(size_t)r->guard_bytes))return;
+    const volatile uint64_t *w=(const volatile uint64_t *)(uintptr_t)r->guard_base;
+    uint64_t differing=0,first=0;
+    for(uint64_t i=0;i<r->guard_bytes/8;++i)if(w[i]!=GUARD_PATTERN){if(!differing)first=r->guard_base+i*8;++differing;}
+    r->differing_words=differing;r->first_difference=first;r->checked=1;
+}
 /* Each refusal of the admission-time preparation records its source line in group NPU, with the detail that says what did not
  * fit; os_npu_start then refuses (the application is not stopped by an NPU it cannot use). */
 static int unprepared(uint32_t detail,const void *here){board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),detail,here);return 1;}
@@ -577,13 +616,25 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
      * back what it did not use. Sizing the reservation first would admit every graph twice before the scheduler, which the
      * secondary cores wait for one second at most: a layout takes tens of milliseconds on a Cortex-A55 at the boot clock. */
     uint64_t base,bytes;
-    const struct umem_request shape={.policy=UMEM_WB,.device_mask=UMEM_DEV_NPU,.window=UINT64_C(1)<<32};
-    if(umem_largest(led,&shape,&base,&bytes)!=UMEM_OK)return UNPREPARED(0x801);
-    bytes&=~(uint64_t)(NPU_RUNTIME_GROUP_BYTES-1);
-    if(!bytes)return UNPREPARED(0x802);
+    const uint64_t request_base=g->pool_request[0],request_bytes=g->pool_request[1];
+    const int requested=request_base||request_bytes;
+    if(requested){
+        /* A placement request: exactly this extent, or a refusal. The ledger refuses it unless it is free DRAM above the image,
+         * and refuses one that crosses a 4 GiB window. The NPU's working limit in the device-width table is raised to its source
+         * width for this boot, so an extent above 4 GiB is allowed; the table itself keeps 4 GiB. */
+        if(!request_base||!request_bytes||((request_base|request_bytes)&(NPU_RUNTIME_GROUP_BYTES-1)))return UNPREPARED(0x810);
+        if(umem_device_limit_set(led,0,UINT64_C(1)<<40)!=UMEM_OK)return UNPREPARED(0x811);
+        base=request_base;bytes=request_bytes;
+    }else{
+        const struct umem_request shape={.policy=UMEM_WB,.device_mask=UMEM_DEV_NPU,.window=UINT64_C(1)<<32};
+        if(umem_largest(led,&shape,&base,&bytes)!=UMEM_OK)return UNPREPARED(0x801);
+        bytes&=~(uint64_t)(NPU_RUNTIME_GROUP_BYTES-1);
+        if(!bytes)return UNPREPARED(0x802);
+    }
     const struct umem_request take={.bytes=bytes,.align=NPU_RUNTIME_GROUP_BYTES,.base=base,.owner=owner,.flags=UMEM_RAW|UMEM_AT,
         .access=UMEM_PROT_READ|UMEM_PROT_WRITE,.device_mask=UMEM_DEV_NPU,.window=UINT64_C(1)<<32};
-    if(umem_alloc(led,&take,&npu.pool)!=UMEM_OK)return UNPREPARED(0x803);
+    if(umem_alloc(led,&take,&npu.pool)!=UMEM_OK)return UNPREPARED(requested?0x812:0x803);
+    if(requested&&!guard_reserve(led,base,bytes))return UNPREPARED(0x814);
     struct npu_runtime_config config={.models=os_npu_models,.count=os_npu_model_count,.slots=slots,.bounds=bounds,.cpu=(uintptr_t)base,
         .physical=base,.bytes=bytes,.register_cpu=0x03600000,
         .register_physical=0x03600000,.fatal=fatal,.meta=meta_init(led)};
@@ -597,6 +648,7 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
     if(!a733_mapping_check_stride(aarch64_device_translate,(uintptr_t)base,base,kept,0x200000,&wb))return UNPREPARED(0x806);
     /* The reservation is visible to the NPU from here: published before anything can use it. */
     if(!os_device_range_publish(base,kept))return UNPREPARED(0x807);
+    if(requested&&!guard_finish(led,base,kept))return UNPREPARED(0x813);
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
     /* The queue's tables are in the reservation: take them before the scheduler starts, so the application's first open
      * finds its ring sized for the declaration. */

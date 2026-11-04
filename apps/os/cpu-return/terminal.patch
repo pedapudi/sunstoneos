@@ -52,7 +52,7 @@
      mov x2, #0x40000000
      sub x2, x24, x2
      lsr x2, x2, #21
-@@ -244,10 +262,94 @@
+@@ -244,10 +262,106 @@
      mov x4, #0x725
      cmp x3, x4
      b.ne qualification_park
@@ -100,6 +100,13 @@
 +    // page and x28 the next entry in it. A page or a range outside the DRAM above the image, or one that a block of the EL3
 +    // table does not map as normal write-back memory, parks the core with the report unchanged.
 +    mov x22, #1
++    // The counter at the start of this walk, for the core in x20, in the image RAM word the runner copies out
++    // (os_cpu_return_walk: start and end for each core). The line is cleaned so that the copy sees it.
++    mrs x2, cntpct_el0
++    address x3, os_cpu_return_walk
++    add x3, x3, x20, lsl #4
++    str x2, [x3]
++    dc civac, x3
 +    address x2, os_device_ranges_head
 +    ldr x27, [x2]
 +    mov x28, #0
@@ -144,10 +151,15 @@
 +    b.hi qualification_park
 +    b .Lclean
 +.Lranges_done:
++    mrs x2, cntpct_el0
++    address x3, os_cpu_return_walk
++    add x3, x3, x20, lsl #4
++    str x2, [x3, #8]
++    dc civac, x3
      dsb sy
      add x2, x23, #688
      add x2, x2, x20, lsl #10
-@@ -369,9 +471,40 @@
+@@ -369,9 +483,40 @@
      dsb sy
      str x1, [x2, #40]
      dsb sy
