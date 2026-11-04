@@ -138,9 +138,17 @@ SGI0/PPI30. The GIC-600 erratum 2384374 workaround toggles DPG bits after group
 disable and before redistributor sleep; THS SPI delivery prevents using the
 older timer-only erratum exclusion.
 
-Each CPU cleans writable image RAM through `__heap_end` and the 16 MiB
-recognizer arena at 0x46000000 through the validated Nonsecure write-back mapping.
-No Normal-memory writer executes after the final barrier. Permitted architectural
+Each CPU validates the mapping of writable image RAM through `__heap_end`, of the 16 MiB
+recognizer arena at 0x46000000 and of every published device range (2 MiB or 1 GiB
+block by block), and then goes down with its caches cleaned by set/way: a secondary
+cleans its L1 and L2 before it acknowledges, and CPU0 cleans its L1 and L2 and the
+shared L3 after every secondary is off, as the boot monitor does before its reset.
+The sweep reads CLIDR and CCSIDR on the core that runs it, so the Cortex-A76 cores
+(64 KiB L1D, 256 KiB 8-way L2) clean their own shape. The cost is bounded by the
+cache sizes (18,944 operations for CPU0, 2,560 for each Cortex-A55 secondary and
+5,120 for each Cortex-A76), not by the size of the ranges; each core's sweep time is in the
+`reserved` word of its report slot. The earlier line-by-line clean took 227 ms per
+32 MiB range on every core. No Normal-memory writer executes after the sweep. Permitted architectural
 controls are restored while enabled SRE bits remain set. CPU0 requires matching
 secondary acknowledgments and independently observed PPU OFF before restoring
 THS interrupt fields and shared GIC state. RVBAR 0x20 and RMR_EL3 2 then enter
@@ -177,7 +185,7 @@ The inference fast path receives no extra recurring operations. The thermal
 owner adds three atomic close-state reads per existing pass, two in its clock
 step. The existing supervisor checks completion every 20 ms. Normal
 completion adds seven stop jobs and seven acknowledgments, owner acknowledgments,
-eight terminal notifications and one clean of each owned cached range per CPU.
+eight terminal notifications and one set/way cache sweep per CPU.
 There is no recurring terminal-task polling and no native USB detach interval.
 The full native close must fit the fixed five-second reserve; physical timing
 remains unmeasured.

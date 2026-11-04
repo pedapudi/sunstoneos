@@ -749,7 +749,7 @@ def capture(owner, plan, args):
         # The first page of the published list is in DRAM that the OS chose at run time, so its address comes from the copied head.
         head = struct.unpack('<Q', copied['device-ranges-head'])[0]
         if head:
-            require(head % 4096 == 0 and 0x42200000 <= head <= 0x340000000 - 4096, 'The device range list head is outside DRAM.')
+            records.require_listable_head(head)   # a ValueError naming the head, as every runner requirement
             copied['device-ranges-page'] = owner.read(head, 4096, out/'device-ranges-page.bin')
     if hasattr(records, 'mandatory_return'):
         decoded = records.mandatory_return(copied, geo, plan['epoch'], plan['generation'],

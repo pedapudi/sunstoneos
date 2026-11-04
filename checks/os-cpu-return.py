@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """Execute the linked OS success terminal with modeled service completion and GIC.
 
-The source owners' completion acknowledgments are fixture inputs. Cache-line
-maintenance is modeled in contiguous batches ending at each 2 MiB boundary;
-the actual loop validates every visited block's mapping and both range ends.
-The terminal cleans image RAM and the WORK and OUTPUT regions of the image's
-application manifest; an image without such regions skips the region alias case.
-Images linked before the application manifest clean the fixed recognizer arena.
+The source owners' completion acknowledgments are fixture inputs. The terminal
+validates the mapping of every 2 MiB block of image RAM, of the WORK and OUTPUT
+regions of the image's application manifest and of the published device ranges,
+and both ends of each range; an image without such regions skips the region alias
+case. The caches are cleaned by set/way as each core goes down: the model supplies
+the measured geometry of each core (CLIDR and CCSIDR from docs/hardware/a733-facts.json:
+Cortex-A55 on cores 0 to 5, Cortex-A76 on 6 and 7),
+records every DC CISW operand per core and checks that each secondary covers its
+L1 and L2, that core 0 covers L1, L2 and L3, that core 0's L3 sweep follows every
+secondary's last operation, and that no core stores to Normal memory after its own
+first operation. Images linked before the application manifest use the fixed
+recognizer arena.
 """
 import argparse
 import importlib.util
@@ -35,10 +41,40 @@ def cleaned_regions(path):
     return [(r['address'], r['address'] + r['bytes']) for r in records.backup_regions(path, scratch=True)]
 
 
+# The caches as measured on the board (docs/hardware/a733-facts.json, facts cpu.clidr_el1 and cache.ccsidr_el1.selN, status
+# measured): cores 0 to 5 are Cortex-A55 (L1D 32 KiB 4 ways, L2 128 KiB 4 ways), cores 6 and 7 Cortex-A76 (L1D 64 KiB 4 ways,
+# L2 256 KiB 8 ways), and the DSU L3 is 1 MiB with 16 ways. CCSIDR is indexed by the CSSELR value the sweep writes.
+FACTS = json.loads((ROOT / 'docs/hardware/a733-facts.json').read_text())['facts']
+CLIDR = {f['core']: f['value'] for f in FACTS if f['name'] == 'cpu.clidr_el1'}
+CCSIDR = {core: {sel: next(f['value'] for f in FACTS if f['name'] == 'cache.ccsidr_el1.sel%d' % sel and f['core'] == core)
+                 for sel in range(8)} for core in range(8)}
+assert len(set(CLIDR.values())) == 1 and (CLIDR[0] >> 24) & 7 == 3
+
+
+def sweep_operands(core, level, table=None):
+    """Every DC CISW operand that cleans cache `level` of `core` with the given CCSIDR table (the measured one by default)."""
+    value = (table or CCSIDR)[core][level * 2]
+    ways, sets, line = ((value >> 3) & 0x3ff) + 1, ((value >> 13) & 0x7fff) + 1, (value & 7) + 4
+    shift = 32 - (ways - 1).bit_length()
+    return {(way << shift) | (set_ << line) | (level << 1) for way in range(ways) for set_ in range(sets)}
+
+
+def assert_sweeps(model):
+    """Each secondary cleans exactly its own L1 and L2, core 0 also the L3, each at the geometry of its own core type."""
+    for core in range(8):
+        levels = (0, 1, 2) if core == 0 else (0, 1)
+        expected = sorted(op for level in levels for op in sweep_operands(core, level))
+        assert sorted(model.sweeps[core]) == expected, (core, len(model.sweeps[core]), len(expected))
+        assert len(set(model.sweeps[core])) == len(model.sweeps[core]), core
+
+
 class Model(prior.Model):
-    def __init__(self, image):
+    def __init__(self, image, ccsidr=None):
         super().__init__(image)
-        self.ranges = [[] for _ in range(8)]
+        self.ccsidr = ccsidr or CCSIDR
+        self.sweeps = [[] for _ in range(8)]
+        self.sweep_order = []
+        self.swept = set()
         self.regions = cleaned_regions(image.path)
         with image.path.open('rb') as stream:
             elf = ELFFile(stream)
@@ -52,38 +88,45 @@ class Model(prior.Model):
         # The ranges that the OS publishes for the terminal to clean (apps/os/device-ranges.h): two pages, the first with a range in
         # level-1 slot 1 and one in upper memory, the second with one range from another gigabyte, so that the walk crosses a page.
         self.published = [(0x60000000, 0x400000), (0x100000000, 0x200000), (0x140000000, 0x200000)]
+        self.walk_symbol = image.symbols['os_cpu_return_walk']
         self.pages = (0x70000000, 0x70001000)
         for page in self.pages:
             self.uc.mem_map(page, 0x1000)
         self.spi_corrupt = False
         self.gpu_spi_corrupt = False
 
+    def get(self, name):
+        if name == 'clidr_el1':
+            return CLIDR[self.core]
+        if name == 'ccsidr_el1':
+            return self.ccsidr[self.core][self.reg[self.core].get('csselr_el1', 0)]
+        if name == 'id_aa64mmfr2_el1':
+            return 0
+        return super().get(name)
+
     def code(self, uc, address, size, unused):
         ins = self.image.insn(uc, address)
         if ins.mnemonic == 'dc':
             args = ins.op_str.split(', ')
-            if args == ['civac', 'x3']:
-                # The cleaning of a walk-counter word (os_cpu_return_walk), not of a range.
-                super().code(uc, address, size, unused)
-                return
-            assert args == ['civac', 'x24'], ins.op_str
-            start = self.gpr('x24')
-            end = min((start + 0x200000) & ~0x1fffff, self.gpr('x25'))
-            assert end > start and (end - start) % 64 == 0
-            self.ranges[self.core].append((start, end))
-            if self.pool_deadline and start >= self.published[0][0]:
-                self.put64(self.report + 32, self.time)
-            # Execute the real next-loop arithmetic/branch at the end of a
-            # modeled contiguous cache-maintenance batch.
-            uc.reg_write(prior.fault.REGS[24], end - 64)
+            assert args[0] == 'cisw', ins.op_str
+            for c in range(8):
+                assert self.u64(self.report + 688 + c * 1024 + 8) == prior.EPOCH, ('sweep before all captures', c)
+                assert self.u64(self.report + 688 + c * 1024 + 104) == prior.EPOCH, ('sweep before all drains', c)
+            self.sweeps[self.core].append(self.gpr(args[1]))
+            self.sweep_order.append((self.core, (self.gpr(args[1]) >> 1) & 7))
+            self.swept.add(self.core)
+            self.count += 1
+            self.advance(address)
+            return
         super().code(uc, address, size, unused)
 
     def write(self, uc, access, address, size, value, unused):
         super().write(uc, access, address, size, value, unused)
-        walk = self.image.symbols['os_cpu_return_walk']
-        # The terminal's own counter words are written after the clean and cleaned again by the terminal (dc civac, x3).
-        self.postclean = [w for w in self.postclean if not walk <= w[1] < walk + 128]
-        if self.clean_started and any(low <= address < high for low, high in self.regions + [(a, a + n) for a, n in self.published]):
+        if self.pool_deadline and self.walk_symbol <= address < self.walk_symbol + 128 and address == self.walk_symbol + 16 * self.core:
+            # The walk of the published ranges has begun: the deadline expires now.
+            self.put64(self.report + 32, self.time)
+        regions = self.regions + [(a, a + n) for a, n in self.published]
+        if self.core in self.swept and (0x41200000 <= address < 0x42000000 or any(low <= address < high for low, high in regions)):
             self.postclean.append((self.core, address, size, value))
         if 0x03400180 <= address < 0x03400200 or 0x03400280 <= address < 0x03400300:
             dst = address - 0x80
@@ -284,18 +327,16 @@ def main():
         assert outcome == ('rom' if case == 'success' else 'retained'), (case, outcome)
         assert not model.postclean, (case, model.postclean[:4])
         if case == 'success':
-            for ranges in model.ranges:
-                expected = [(0x41200000, image.symbols['__device_pool_end'] if 'os_gpu_return_report' in image.symbols else image.symbols['__heap_end']), *regions]
-                expected += [(a, a + n) for a, n in model.published]
-                merged = []
-                for lo, hi in ranges:
-                    if merged and merged[-1][1] == lo:
-                        merged[-1] = (merged[-1][0], hi)
-                    else:
-                        merged.append((lo, hi))
-                assert merged == expected, (merged, expected)
-            # Every core recorded the counter at the start and end of its walk of the published ranges, in the image RAM word
-            # that the runner copies out.
+            # Each secondary cleans its own L1 and L2 by set/way, exactly once per set and way; core 0 also cleans L3, and only
+            # after every secondary's last operation.
+            assert_sweeps(model)
+            l3 = [i for i, (c, level) in enumerate(model.sweep_order) if c == 0 and level == 2]
+            last_secondary = max(i for i, (c, _) in enumerate(model.sweep_order) if c)
+            assert l3 and min(l3) > last_secondary, 'core 0 cleaned L3 before a secondary finished'
+            # Every core recorded the counter at the start and end of its walk of the published ranges, and the duration of its
+            # sweep, in the image RAM and report words that the runner copies out.
+            for core in range(8):
+                assert model.u64(model.report + 688 + core * 1024 + 56) > 0, core
             walk = image.symbols['os_cpu_return_walk']
             for core in range(8):
                 start, end = model.u64(walk + 16 * core), model.u64(walk + 16 * core + 8)
@@ -307,12 +348,23 @@ def main():
             raw = bytes(model.uc.mem_read(model.report, 8880))
             (args.out / 'return-report.bin').write_bytes(raw)
         rows.append({'name': case, 'outcome': outcome, 'instructions': model.count,
-                     'cache_batches': [len(x) for x in model.ranges],
-                     'published_lines_per_core': [sum((hi-lo)//64 for lo,hi in ranges if lo >= model.published[0][0]) for ranges in model.ranges]})
+                     'sweep_operations': [len(x) for x in model.sweeps]})
+    # A sweep fixed to the Cortex-A55 shape would leave dirty lines in a Cortex-A76 core: present cores 6 and 7 with the A55
+    # geometry, and the check of the operands must fail.
+    if not args.case:
+        a55 = {**CCSIDR, 6: CCSIDR[0], 7: CCSIDR[0]}
+        model = Model(image, ccsidr=a55)
+        assert model.execute(model.initialize(), budget=4000000) == 'rom'
+        try:
+            assert_sweeps(model)
+        except AssertionError:
+            rows.append({'name': 'a76-with-a55-geometry', 'outcome': 'refused', 'sweep_operations': [len(x) for x in model.sweeps]})
+        else:
+            raise AssertionError('cores 6 and 7 swept with the A55 geometry and the check accepted it')
     save(args.out / 'results.json', {'physical_access': False, 'cases': rows,
          'image_sha256': hashlib.sha256(args.elf.read_bytes()).hexdigest(),
          'checker_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-         'model_boundary': 'Service completion is supplied; contiguous cache batches execute block/range checks.'})
+         'model_boundary': 'Service completion and the cache geometry are supplied; the terminal executes the block and range checks and the set/way sweep.'})
     print('PASS linked OS CPU terminal:', len(rows), 'cases')
 
 

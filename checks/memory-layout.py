@@ -191,6 +191,15 @@ def check_consumers(record):
         except ValueError:
             continue
         require(False, name + ' decodes')
+    returning.require_listable_head(0x48000000)
+    for name, head in (('a head at 12 GiB', 0x301380000), ('a head just above 4 GiB', 1 << 32), ('an unaligned head', 0x48000010),
+                       ('a head below the image', 0x41000000)):
+        try:
+            returning.require_listable_head(head)
+        except ValueError as error:
+            require(('4 GiB' in str(error)) == (head >= 1 << 32), name + ' is refused for the wrong reason: ' + str(error))
+            continue
+        require(False, name + ' is accepted')
     # The published-range head: an OS image must carry it, a probe may omit it, and nothing else is accepted.
     ram = (0x41200000, 0x42000000)
     head = {'os_device_ranges_head': (0x41800000, 8)}

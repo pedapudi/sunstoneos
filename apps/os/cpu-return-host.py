@@ -208,6 +208,17 @@ def decode_npu_stop(raw, epoch, generation, failure_generation=None):
                                          'generation')}
 
 
+def require_listable_head(head):
+    """The address of the first device range page, which the runner reads over FEL before the DRAM restoration.
+
+    FEL addresses are 32 bits wide (sunxi-fel reads with a uint32_t offset), so a page at or above 4 GiB would be read from
+    the truncated address: the OS keeps these pages below 4 GiB (os_device_range_publish) and the runner refuses any other."""
+    if head >= 1 << 32:
+        raise ValueError('The device range list head %#x is at or above 4 GiB, which FEL cannot read.' % head)
+    if head % 4096 or not 0x42200000 <= head <= (1 << 32) - 4096:
+        raise ValueError('The device range list head %#x is not a page of the DRAM above the image.' % head)
+
+
 COUNTER_HZ = 24_000_000      # the generic counter (include/a733_smp_counter.h)
 
 
@@ -216,7 +227,8 @@ def decode_published(copied, geometry):
 
     device-ranges-head is the word of image RAM, device-ranges-page the first 4 KiB page it names (apps/os/device-ranges.h).
     A second page, if any, is reported by its address only. return-walk holds the counter at the start and end of each core's
-    walk; npu-guard the placement request's pool, its alias guard and the result of checking it."""
+    walk of them (the validation of every block, not a cleaning), return-report the time of each core's cache sweep; npu-guard
+    the placement request's pool, its alias guard and the result of checking it."""
     out = {}
     if 'device-ranges-head' in copied:
         (head,) = struct.unpack('<Q', copied['device-ranges-head'])
@@ -240,6 +252,11 @@ def decode_published(copied, geometry):
                          'ticks': end - start if start and end >= start else None,
                          'microseconds': (end - start) * 1e6 / COUNTER_HZ if start and end >= start else None})
         out['return_walk'] = walk
+    if 'return-report' in copied and len(copied['return-report']) == 8880:
+        # Each core's report slot holds the ticks of its cache sweep by set/way (terminal.patch, a733_qualification_sweep): the
+        # secondaries clean their L1 and L2, core 0 cleans L1, L2 and the shared L3 after every secondary is off.
+        ticks = [struct.unpack_from('<Q', copied['return-report'], 688 + 1024 * core + 56)[0] for core in range(8)]
+        out['return_sweep'] = [{'core': core, 'ticks': t, 'microseconds': t * 1e6 / COUNTER_HZ} for core, t in enumerate(ticks)]
     if 'npu-guard' in copied:
         names = ('pool_base', 'pool_bytes', 'guard_base', 'guard_bytes', 'checked', 'differing_words', 'first_difference', 'pattern')
         out['npu_guard'] = dict(zip(names, struct.unpack('<8Q', copied['npu-guard'])))
