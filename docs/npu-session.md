@@ -26,7 +26,7 @@ and addresses and takes a digest of each model for its own copy check
 ([loader admission](designs/npu-loader-admission.md)). The OS build links no `npu_admitted_models` table.
 
 Executable models come only from the reviewed catalogue
-[npu-session-models.json](../tools/npu-session-models.json). Each image links
+[npu-fixtures.json](../tools/npu-fixtures.json). Each image links
 one admitted table, the `npu_admitted_models` array of
 [npu_admitted_models.h](../include/npu_admitted_models.h), which
 [npu-session-catalogue.py](../tools/npu-session-catalogue.py) `generate`

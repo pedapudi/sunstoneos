@@ -400,7 +400,7 @@ and client checks, and distinct combined clock authority.
 [Resident GPU integration](designs/resident-gpu.md) carries the same composition
 through the existing card format, with cold reset and shared-clock prerequisites.
 `SUNSTONE_OS_NPU_CLIENT_MODEL` selects the catalogue entry of
-`tools/npu-session-models.json` that the client runs (default 0, the
+`tools/npu-fixtures.json` that the client runs (default 0, the
 192-byte to 72-byte convolution). Only that model and its input and
 reference vectors are linked; the other four entries have no caller in the
 OS. `SUNSTONE_OS_NPU_CATALOGUE` names the artifact map;

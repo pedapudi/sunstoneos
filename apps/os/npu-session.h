@@ -2,10 +2,12 @@
 #define SUNSTONE_OS_NPU_SESSION_H
 #include <stdint.h>
 #define OS_NPU_SESSION_MAGIC UINT64_C(0x415337334f4e5031)
-#define OS_NPU_SESSION_BYTES 296u
+#define OS_NPU_SESSION_BYTES 264u
 /* Version 2 added the application's declaration of NPU resources, four full-width fields (docs/designs/npu-resources.md);
- * version 3 adds the bounds of the graphs it loads at run time. Versions 1 and 2 are no longer admitted. */
-#define OS_NPU_SESSION_VERSION 3u
+ * version 3 adds the bounds of the graphs it loads at run time; version 4 drops the digest of the image's model catalogue:
+ * a graph runs as compiled, admitted by its structure and isolated by the page tables and the NPU MMU, so the session
+ * names no list of models. Earlier versions are no longer admitted. */
+#define OS_NPU_SESSION_VERSION 4u
 /* Fixed optional profile; the supervisor grants this exact private interval.
  * Evidence hashes bind external facts, never manufacture those facts. */
 struct os_npu_session {
@@ -18,7 +20,7 @@ struct os_npu_session {
      * that stays inside one 4 GiB window. Only an explicit request sets these words: tools/session.py --npu-pool and the runner's
      * --npu-pool option write them, and the session preparation zeroes them otherwise (apps/os/host.py set_npu_pool_request). */
     uint64_t pool_request[2];
-    uint8_t catalogue[32],admission[32],clock[32],power[32],supervision[32],ddr[32];
+    uint8_t admission[32],clock[32],power[32],supervision[32],ddr[32];
     /* What the application declares: concurrent graphs (slots), jobs kept in flight, graphs kept resident and tensor
      * links. All must be declared; none has a width limit below the memory they need. */
     uint32_t slots,in_flight,graphs,links;

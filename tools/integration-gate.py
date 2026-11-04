@@ -68,7 +68,7 @@ VARIANTS = {
     'resradio-headset': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON',
                          '-DSUNSTONE_A733_OS_HEADSET=ON'],
     # The supervised NPU profile. The OS build verifies its host inputs against
-    # tools/npu-session-models.json. {cache} is the --cache directory.
+    # tools/npu-fixtures.json. {cache} is the --cache directory.
     'npu': ['-DSUNSTONE_A733_OS_NPU=ON', '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
     'npu-queue': ['-DSUNSTONE_A733_OS_NPU=ON', '-DSUNSTONE_A733_OS_NPU_QUEUE=ON',
                   '-DSUNSTONE_OS_NPU_CLIENT_MODEL=0',

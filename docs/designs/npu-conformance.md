@@ -39,7 +39,7 @@ output-producing descriptor reads with the bytes the client submitted.
 ## Models, inputs and references
 
 The model set is the session catalogue
-([npu-session-models.json](../../tools/npu-session-models.json)). Each model
+([npu-fixtures.json](../../tools/npu-fixtures.json)). Each model
 gets five base vectors of raw tensor codes, so the harness performs no
 quantization: the catalogued reference input, every code at the zero point,
 every code at the minimum, every code at the maximum, and one seeded vector.

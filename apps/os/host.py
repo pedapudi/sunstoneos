@@ -38,12 +38,10 @@ RECORDS = {EXTENTS[extent[len('SS_EXTENT_'):]]: {'grant': grant, 'bytes': manife
                                                   'magic': manifest_tool.c_constant(magic), 'version': manifest_tool.c_constant(version)}
            for grant, extent, _field, size, magic, version, _need in manifest_tool.os_service_rows('OS_RECORD_ROWS')}
 SERVICE_BYTES = {THERMAL: 216, **{kind: r['bytes'] for kind, r in RECORDS.items()}}
-# The NPU record is version 3: it carries the application's declaration of NPU resources and the bounds of its run-time
-# graphs (apps/os/npu-session.h). Versions 1 (272 bytes) and 2 (288) are read only to be upgraded.
+# The NPU record is version 4: it carries the application's declaration of NPU resources and the bounds of its run-time
+# graphs, and no digest of a model list (apps/os/npu-session.h).
 SERVICE_VERSION = {kind: r['version'] for kind, r in RECORDS.items()}
-NPU_V1_BYTES = 272
-NPU_V2_BYTES = 288
-NPU_DECLARATION_OFFSET = 272  # slots, in_flight, graphs, links: four u32
+NPU_DECLARATION_OFFSET = 240  # slots, in_flight, graphs, links: four u32
 SERVICE_MAGIC = {THERMAL: 0x415337334f534131, **{kind: r['magic'] for kind, r in RECORDS.items()}}
 RESULT_MAGIC, RESULT_VERSION, RESULT_FINISHED = 0x31544c5553455241, 1, 1
 RESULT_FAILED = 2
@@ -90,26 +88,6 @@ def npu_declaration(manifest_path):
     return (n['slots'], n['in_flight'], n['graphs'], n['links'], n.get('graph_bytes', 0), n.get('tensor_bytes', 0))
 
 
-def upgrade_services(extents, declaration):
-    """Services with the NPU record in version 2 carrying declaration, and the thermal record's size field updated.
-
-    extents is the dictionary session_decode(..., legacy=True) returns; a version 1 NPU record gains the declaration, a
-    version 2 record has it replaced."""
-    declaration = tuple(declaration) + (0,) * (6 - len(declaration))
-    require(len(declaration) == 6 and all(isinstance(x, int) and 0 <= x < 1 << 32 for x in declaration),
-            'The declaration is four to six 32-bit values.')
-    require(declaration[0] and declaration[1] and declaration[2], 'The declaration needs slots, depth and graphs.')
-    services = {k: v for k, v in extents.items() if k != INPUTS}
-    npu = bytearray(services[NPU][:NPU_V1_BYTES]) + bytearray(SERVICE_BYTES[NPU] - NPU_V1_BYTES)
-    struct.pack_into('<QQ', npu, 8, SERVICE_VERSION[NPU], SERVICE_BYTES[NPU])
-    struct.pack_into('<6I', npu, NPU_DECLARATION_OFFSET, *declaration)
-    services[NPU] = bytes(npu)
-    thermal = bytearray(services[THERMAL])
-    struct.pack_into('<Q', thermal, 16, PREFIX_BYTES + sum(SERVICE_BYTES[k] for k in services if k in SERVICE_BYTES))
-    services[THERMAL] = bytes(thermal)
-    return services
-
-
 NPU_POOL_REQUEST_OFFSET = 64  # pool_base, pool_bytes: two u64 after the owner words and the four u32 (apps/os/npu-session.h)
 
 
@@ -154,9 +132,8 @@ def input_facts(manifest, inputs):
     return bytes(facts), uploads
 
 
-def session_decode(raw, manifest=None, manifest_sha256=None, legacy=False):
-    """Decode a typed session. legacy accepts an NPU record of version 1 (272 bytes, no declaration) so that it can be
-    upgraded with upgrade_services; the operating system admits version 2 only."""
+def session_decode(raw, manifest=None, manifest_sha256=None):
+    """Decode a typed session."""
     raw = bytes(raw)
     require(PREFIX_BYTES + HEADER.size <= len(raw) <= MAX_BYTES, 'Invalid typed session size.')
     magic, version, size, count, devices, flags, digest = HEADER.unpack_from(raw, PREFIX_BYTES)
@@ -176,10 +153,6 @@ def session_decode(raw, manifest=None, manifest_sha256=None, legacy=False):
     require(offset == len(raw), 'Unconsumed typed session bytes.')
     sizes = dict(SERVICE_BYTES)
     versions = {kind: SERVICE_VERSION.get(kind, 1) for kind in SERVICE_BYTES}
-    if legacy and NPU in extents and len(extents[NPU]) == NPU_V1_BYTES:
-        sizes[NPU], versions[NPU] = NPU_V1_BYTES, 1
-    elif legacy and NPU in extents and len(extents[NPU]) == NPU_V2_BYTES:
-        sizes[NPU], versions[NPU] = NPU_V2_BYTES, 2
     for kind, size in sizes.items():
         require(kind not in extents or len(extents[kind]) == size, 'Invalid service extent size.')
     require(THERMAL in extents, 'Missing thermal service extent.')
@@ -189,7 +162,7 @@ def session_decode(raw, manifest=None, manifest_sha256=None, legacy=False):
             size = legacy_bytes if kind == THERMAL else sizes[kind]
             require(struct.unpack_from('<3Q', extents[kind]) == (SERVICE_MAGIC[kind], versions[kind], size),
                     'Invalid service record header.')
-    if NPU in extents and sizes[NPU] == SERVICE_BYTES[NPU]:
+    if NPU in extents:
         declaration = struct.unpack_from('<6I', extents[NPU], NPU_DECLARATION_OFFSET)
         require(declaration[0] and declaration[1] and declaration[2],
                 'The NPU record declares no slots, in-flight depth or graphs.')

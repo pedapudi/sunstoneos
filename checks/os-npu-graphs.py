@@ -17,9 +17,9 @@ from harness import environment
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--output', '{output}', '--graphs', '{fixture:npu-graphs}']]
 CACHE = Path.home() / '.cache/sunstoneos'
-CHECK_INPUTS = ('tools/npu-graph-specs.json', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-catalogue.py', 'apps/npu-graphs/models-a1.json', 'apps/npu-graphs/models-a2.json', 'apps/npu-graphs/models-b.json', 'apps/npu-graphs/models-sh.json',
+CHECK_INPUTS = ('tools/npu-fixtures.json', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-catalogue.py', 'apps/npu-graphs/models-a1.json', 'apps/npu-graphs/models-a2.json', 'apps/npu-graphs/models-b.json', 'apps/npu-graphs/models-sh.json',
                 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/nbg_assembly.c',
-                'checks/os-npu-service.c', 'checks/os-npu-graphs.py', 'tools/npu-session-models.json')
+                'checks/os-npu-service.c', 'checks/os-npu-graphs.py', 'tools/npu-fixtures.json')
 sys.path.insert(0, str(ROOT / 'checks'))
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path, required=True)
@@ -85,7 +85,7 @@ relu = Path(artifacts['graph-relu']['model']).read_bytes()
 graph = admission_module.Graph(relu, native).with_bytes(23, 0, bytes([relu[admission_module.Graph(relu, native).section(23).offset] ^ 0xff]))
 assert graph.data != relu
 (work / 'unseen.nb').write_bytes(graph.data)
-database = json.loads((ROOT / 'tools/npu-session-models.json').read_text())
+database = json.loads((ROOT / 'tools/npu-fixtures.json').read_text())
 entry = json.loads(json.dumps(next(m for m in database['models'] if m['name'] == 'graph-relu')))
 entry['name'] = 'graph-relu-unseen'
 entry['model'] = {'bytes': len(graph.data), 'sha256': hashlib.sha256(graph.data).hexdigest()}

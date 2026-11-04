@@ -21,7 +21,8 @@ enum a733_ce_probe_stage { A733_CE_PROBE_NEW, A733_CE_PROBE_ENTRY, A733_CE_PROBE
 
 /* flags: bit 0 the health tests are at hardware defaults and were not programmed (always set), bit 1 the CE was found
  * enabled at admission and was taken down first, bit 2 the task completed, bit 3 the 32 bytes were not all zero,
- * bit 4 the engine's non-secure double-entropy source was set (CE_REG_LPC bit 1) when the task finished. */
+ * bit 4 the engine's non-secure double-entropy source was set (CE_REG_LPC bit 1) when the task finished.
+ * failure_stage: bits 7:0 the stage that did not complete, bits 31:8 the failing step's own detail. */
 struct a733_ce_probe_record {
     uint64_t magic;
     uint32_t version, bytes;
@@ -44,6 +45,7 @@ struct a733_ce_probe_ops {
     int (*request)(void *,uint64_t deadline_us);      /* 1 started, 0 busy, negative failure */
     int (*poll)(void *,uint8_t block[A733_CE_PROBE_BYTES]); /* 1 block copied, 0 pending, negative failure */
     void (*retain)(void *);                           /* called once on failure */
+    unsigned (*detail)(void *);                       /* optional: why the failing stage failed, 24 bits, into failure_stage bits 31:8 */
 };
 struct a733_ce_probe {
     struct a733_ce_probe_ops ops;

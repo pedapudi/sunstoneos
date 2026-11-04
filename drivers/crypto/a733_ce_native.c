@@ -69,9 +69,9 @@ int a733_ce_clock_native_write(void *cookie,uintptr_t a,uint32_t value)
              (from==0x30003&&to==0x30001)||(from==0x30001&&to==0x30000)||(from==0x30000&&to==0)))return 0;
     }else{
         mask=4;
-        /* Bit 2 of the neighboring MBUS gate word is set going up and cleared coming down, never with a
-         * neighbor changed. */
-        if(!(((old&0x40306)==0x40302&&(value&4)==4)||((old&0x40306)==0x40306&&!(value&4))))return 0;
+        /* Bit 2 of the MBUS gate word is the CE's own gate: set going up and cleared coming down. Its neighbors belong to
+         * other modules and never change (the mask check below). */
+        if((old&4)==(value&4))return 0;
     }
     if((old^value)&~mask)return 0;
     a733_mmio_write32(a,value);

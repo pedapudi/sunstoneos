@@ -15,7 +15,7 @@ from harness import environment
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--output', '{output}', '--graphs', '{fixture:npu-graphs}']]
 CACHE = Path.home() / '.cache/sunstoneos'
-CHECK_INPUTS = ('tools/npu-graph-specs.json', 'checks/npu-nocaps.c', 'checks/nbg_wide.py', 'drivers/npu/npu_service.c', 'drivers/npu/nbg_assembly.c',
+CHECK_INPUTS = ('tools/npu-fixtures.json', 'checks/npu-nocaps.c', 'checks/nbg_wide.py', 'drivers/npu/npu_service.c', 'drivers/npu/nbg_assembly.c',
                 'drivers/npu/a733_npu_mmu.c', 'drivers/npu/nbg_relocation.c', 'runtime/npu_app_queue.c')
 sys.path.insert(0, str(ROOT / 'checks'))
 parser = argparse.ArgumentParser(description=__doc__)

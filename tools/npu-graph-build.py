@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the compiled test graphs of the NPU checks (build/npu-graph-variants) from tools/npu-graph-specs.json.
+"""Build the compiled test graphs of the NPU checks (build/npu-graph-variants) from tools/npu-fixtures.json.
 
 For each graph the specification names, one container of the pinned compiler image (offline, with a memory limit) runs
   1. the graph generator, tools/npu-graph-variants.py or tools/npu-shader-variants.py, which writes fragment.onnx and the
@@ -12,7 +12,7 @@ catalogue name (graph-NAME) to its model, input and reference files, the form to
 
 The build is idempotent. A graph is skipped when its directory holds build.json with the digest of its specification, the
 three tools above and the compiler image. Every result is checked against the reviewed identity in
-tools/npu-session-models.json (model size and SHA-256, SHA-256 of each input and output tensor); a graph that differs is not
+tools/npu-fixtures.json (model size and SHA-256, SHA-256 of each input and output tensor); a graph that differs is not
 installed. Staging happens in OUTPUT/.staging (a failed graph stays there for inspection); a replaced directory moves to CACHE/trash.
 
 Usage: npu-graph-build.py [--output DIR] [--jobs N] [--memory 12g] [--cpus N] [GRAPH ...]
@@ -53,7 +53,7 @@ def numbered(directory, pattern):
 
 
 def identity(name):
-    models = {m['name']: m for m in json.loads((ROOT / 'tools/npu-session-models.json').read_text())['models']}
+    models = {m['name']: m for m in json.loads((ROOT / 'tools/npu-fixtures.json').read_text())['models']}
     return models.get('graph-' + name)
 
 
@@ -154,7 +154,7 @@ def main():
     parser.add_argument('graphs', nargs='*', help='build only these graphs (default: all)')
     args = parser.parse_args()
     output = args.output.resolve()
-    entries = json.loads((ROOT / 'tools/npu-graph-specs.json').read_text())['graphs']
+    entries = json.loads((ROOT / 'tools/npu-fixtures.json').read_text())['graphs']
     names = [e['name'] for e in entries]
     unknown = sorted(set(args.graphs) - set(names))
     if unknown:

@@ -19,7 +19,7 @@ from harness import environment
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--output', '{output}', '--graphs', '{fixture:npu-graphs}']]
 CACHE = Path.home() / '.cache/sunstoneos'
-CHECK_INPUTS = ('tools/npu-graph-specs.json', 'checks/os-npu-ungranted-traps.c', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-queue.c', 'apps/os/npu-catalogue.py', 'drivers/npu/a733_npu_runtime.c',
+CHECK_INPUTS = ('tools/npu-fixtures.json', 'checks/os-npu-ungranted-traps.c', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-queue.c', 'apps/os/npu-catalogue.py', 'drivers/npu/a733_npu_runtime.c',
                 'drivers/npu/npu_service.c', 'drivers/npu/nbg_assembly.c', 'runtime/npu_app_queue.c',
                 'checks/os-npu-service.c', 'checks/os-npu-service.py', 'checks/nbg_wide.py')
 sys.path.insert(0, str(ROOT / 'checks'))
@@ -33,7 +33,7 @@ args = parser.parse_args()
 out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
 import nbg_wide
 artifacts = json.loads((args.graphs / 'artifacts.json').read_text())
-database = json.loads((ROOT / 'tools/npu-session-models.json').read_text())
+database = json.loads((ROOT / 'tools/npu-fixtures.json').read_text())
 by_name = {m['name']: m for m in database['models']}
 NETWORK = CACHE / 'sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source'
 # The wide graph: the add graph with 12 inputs and 10 outputs; each tensor of the catalogue entry is the add graph's own.

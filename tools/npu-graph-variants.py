@@ -28,7 +28,7 @@ def save(name, nodes, inputs, outputs, inits, arrays, opset=17):
 SKIP = 0
 def stream():
     """The generator every graph draws from: the fixed seed, after SKIP draws. Graphs that were first made one after another from
-    a single stream differ from the same graph made alone only in SKIP (tools/npu-graph-specs.json)."""
+    a single stream differ from the same graph made alone only in SKIP (tools/npu-fixtures.json)."""
     rng = np.random.default_rng(7)
     rng.standard_normal(SKIP)
     return rng
