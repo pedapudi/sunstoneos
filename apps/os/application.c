@@ -392,11 +392,7 @@ int os_application_prepare(void)
     if(m->cluster==SS_CLUSTER_A76)return 0;
     grant.main_core=1;
 #endif
-    unsigned workers=m->workers;
-    unsigned pair=grant.main_core+1;
-    if(workers){grant.worker_cores=1u<<pair;--workers;}
-    for(unsigned core=0;workers&&core<8;++core)
-        if(core!=grant.main_core&&core!=pair){grant.worker_cores|=1u<<core;--workers;}
+    if(!os_worker_cores(grant.main_core,m->workers,&grant.worker_cores))return 0;
     unsigned count=0,input=0;const struct ss_input_fact *facts=os_session_inputs(&count);
     for(unsigned i=0;i<m->region_count;++i){grant.regions[i].base=(void *)(uintptr_t)m->regions[i].address;
         grant.regions[i].bytes=m->regions[i].kind==SS_REGION_INPUT?facts[input++].bytes:m->regions[i].bytes;}

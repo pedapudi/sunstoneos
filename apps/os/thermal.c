@@ -233,6 +233,10 @@ void os_thermal_irq(void)
     if(!thermal.masked){thermal.masked=1;if(!gicv3_spi_mask(&thermal.irq))atomic_store_explicit(&thermal.failed,1,memory_order_release);}
     atomic_store_explicit(&thermal.pending,1,memory_order_release);
     taskEXIT_CRITICAL_FROM_ISR(saved);
+    /* The owner sleeps between readings; the interrupt wakes it for the reading it announces. */
+    BaseType_t woken=pdFALSE;
+    if(thermal.handle)vTaskNotifyGiveFromISR(thermal.handle,&woken);
+    portYIELD_FROM_ISR(woken);
 }
 static int mask(void)
 {
@@ -346,10 +350,31 @@ static int step(void)
 #endif
     return 1;
 }
+/* Ticks (1 ms) the owner may sleep after a step. It steps on the next tick while it has work that cannot wait: it is
+ * starting or retaining, an interrupt is still masked and awaits its rearm, or the CPU clock driver is working. Otherwise
+ * it sleeps until its next reading or the end of the clock admission, at most 20 ms, and the thermal interrupt wakes it
+ * earlier. An idle session therefore wakes about 40 times a second, not 1000. */
+static TickType_t idle_ticks(void)
+{
+    if(!thermal.active||thermal.retaining||thermal.masked||!live())return 1;
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+    if(os_cpu_clock_busy())return 1;
+#endif
+    uint64_t now=a733_smp_counter()/24,until=thermal.next_read;
+    uint64_t state=atomic_load_explicit(&load_state,memory_order_relaxed);
+    if((state&3)==A733_THERMAL_NORMAL&&(state>>2)+1<until)until=(state>>2)+1;
+    if(until<=now)return 1;
+    uint64_t ticks=(until-now)/(1000000u/configTICK_RATE_HZ);
+    return ticks<1?1:ticks>20?20:(TickType_t)ticks;
+}
 void os_thermal_task(void *unused)
 {
     (void)unused;
-    for(;;){if(step()==1)BOARD_PROGRESS(OS_SERVICE_THERMAL);vTaskDelay(1);}
+    for(;;){
+        if(step()==1)BOARD_PROGRESS(OS_SERVICE_THERMAL);
+        TickType_t wait=idle_ticks();
+        if(wait>1)(void)ulTaskNotifyTake(pdTRUE,wait);else vTaskDelay(1);
+    }
 }
 static int construct(const struct os_session *s)
 {

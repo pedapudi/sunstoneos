@@ -30,7 +30,9 @@ int board_live(void *v){(void)v;return 1;}
 uint32_t board_live_refusal(void){return 0;}
 int os_application_deadline(void){return 1;}
 unsigned os_application_activity_generation(void){return 7;}
+static unsigned clock_busy;
 int os_cpu_clock_step(const struct a733_thermal_policy *p){(void)p;++clocks;return 1;}
+int os_cpu_clock_busy(void){return (int)clock_busy;}
 void board_fail_at(uint32_t site,uint32_t value,const void *caller)
 {(void)site;(void)value;(void)caller;++failures;}
 int gicv3_spi_mask(const struct gicv3_spi *irq){(void)irq;return 1;}
@@ -77,7 +79,7 @@ int cadence_control(unsigned op,uint64_t at,uint64_t value)
         memset(&board,0,sizeof(board));memset(cadence_state,0,sizeof(cadence_state));
         memset(cadence_report,0,sizeof(cadence_report));
         thermal_record_origin_us=0;
-        reads=clocks=failures=0;read_delay=0;poll_ready=0;rearm_ok=1;temperature=40000;valid_mask=31;
+        clock_busy=0;reads=clocks=failures=0;read_delay=0;poll_ready=0;rearm_ok=1;temperature=40000;valid_mask=31;
         thermal.handle=xTaskGetCurrentTaskHandle();thermal.active=1;thermal.masked=1;
         thermal.driver.initialized=1;board.session.deadline_us=at+60000000;
         board.session.epoch=11;board.session.generation=12;
@@ -104,6 +106,8 @@ int cadence_control(unsigned op,uint64_t at,uint64_t value)
     else if(op==9)valid_mask=(unsigned)value;
     else if(op==10)thermal.driver.fault=(unsigned)value;
     else if(op==11)atomic_store_explicit(&thermal.pending,1,memory_order_release);
+    else if(op==12)result=(int)idle_ticks();
+    else if(op==13)clock_busy=(unsigned)value;
     cadence_state[0]=atomic_load_explicit(&readings.count,memory_order_acquire);
     cadence_state[1]=readings.next;cadence_state[2]=reads;cadence_state[3]=clocks;
     cadence_state[4]=failures;cadence_state[5]=thermal.active;

@@ -16,4 +16,4 @@
 +        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD),0xfffe,(const void *)os_cpu_return_start);return 0;}
      return 1;
  }
- const struct os_session *os_session_admitted(void)
+ /* The admitted session, validated in full: the sealed copy, the board prefix the EL3 contract bound, the service

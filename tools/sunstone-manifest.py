@@ -119,7 +119,9 @@ def load(path):
     require(cpu.get('cluster', 'a55') in CLUSTER, name + ': cluster is a55 or a76')
     m = {'name': name, 'devices_required': required, 'devices_optional': optional,
          'cluster': CLUSTER[cpu.get('cluster', 'a55')],
-         'workers': integer(cpu.get('workers', 0), name + ' workers', 0, 7),
+         # An A55 application's workers stay off the A76 cores: its main task and five workers fill cores 0 to 5
+         # (apps/os/grants.c, os_worker_cores). An A76 application may use every core.
+         'workers': integer(cpu.get('workers', 0), name + ' workers', 0, 7 if cpu.get('cluster', 'a55') == 'a76' else 5),
          'priority': integer(cpu['priority'], name + ' priority', 1, 30),
          'stack_bytes': integer(cpu['stack_bytes'], name + ' stack_bytes', 1024, 1 << 20),
          'heap_bytes': integer(cpu.get('heap_bytes', 0), name + ' heap_bytes', 0, LARGE_GIB)}

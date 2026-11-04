@@ -131,7 +131,10 @@ int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,un
         if(!(h->devices&SS_DEVICE_AUDIO_I2S))REFUSE(A733_DECODE_DEVICES);
         if(out->audio.capture_samples<m->audio.min_frames||out->audio.capture_samples>m->audio.max_frames)REFUSE(A733_DECODE_AUDIO_FRAMES);
     }
-    if(out->granted&OS_GRANT_CPU_CLOCK&&out->cpu_clock.clusters)out->cpu_clock.epoch=out->board.epoch;
+    /* A grant names this boot's epoch. A grant on a card is written before the loader stamps the board epoch, so its
+     * epoch is zero, which means "this boot": only that form takes the board epoch. Any other value must be the board's,
+     * or the grant is refused (a733_cpu_clock_grant_load compares it). */
+    if(out->granted&OS_GRANT_CPU_CLOCK&&out->cpu_clock.clusters&&!out->cpu_clock.epoch)out->cpu_clock.epoch=out->board.epoch;
     /* On the wire the thermal record's bytes names the board prefix and every service record the session carries, so
      * the existing service validator sees its layout. */
     if(out->bytes!=os_session_wire_bytes(out->granted))REFUSE(A733_DECODE_EXTENT);
@@ -183,8 +186,6 @@ const struct os_session *os_session(void)
         if(!os_session_decode(raw,h->bytes,&decoded))return NULL;ready=1;}
     return &decoded;
 }
-int os_granted(unsigned mask)
-{const struct os_session *s=os_session_admitted();return s&&mask&&(s->granted&mask)==mask;}
 uint32_t os_session_devices(void)
 {const uint8_t *raw=board_session_sealed();return raw?((const struct ss_session_header *)(raw+SS_SESSION_PREFIX_BYTES))->devices:0;}
 const struct ss_input_fact *os_session_inputs(unsigned *count)

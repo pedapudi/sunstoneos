@@ -694,6 +694,15 @@ int main(int argc,char **argv)
         !a733_cpu_clock_address(0x08870000,1) && !a733_cpu_clock_address(0x0300624c,1) &&
         !a733_cpu_clock_address(0x07090160,1));
 
+    /* The last check before a PLL write holds whatever the grant says: N up to the top row's rate over 26 MHz is
+     * written, one more is refused, other bits do not matter, and no other word changes. */
+    for(unsigned d=0;d<A733_CPU_DOMAINS;++d){
+        unsigned count=0,top=0;const struct a733_cpu_opp *o=a733_cpu_clock_opps((enum a733_cpu_domain)d,&count);
+        for(unsigned i=0;i<count;++i)if(o[i].mhz>top)top=o[i].mhz;
+        assert(top && a733_cpu_clock_write_allowed(PLL(d),(top/26u)<<8|UINT32_C(0xc0000000)) &&
+            !a733_cpu_clock_write_allowed(PLL(d),(top/26u+1u)<<8) && !a733_cpu_clock_write_allowed(PLL(d),255u<<8) &&
+            a733_cpu_clock_write_allowed(SEL(d),UINT32_C(0xffffffff)) && !a733_cpu_clock_write_allowed(PLL(d)+0x18,0));
+    }
     /* No grant, no CPUL reading, ungranted cluster or point: refused, no access.
      * The policy is NORMAL before its first reading. A CPUB reading alone does
      * not admit the little cluster. */
@@ -895,6 +904,19 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<400 && !cpu.from_uv;++i)run(1);
     assert(cpu.from_uv==800000);pm.pmic[REG_DCDC5]=31;
     assert(run(400)==A733_CPU_CLOCK_RETAINED && pm.provider.failed && !cm.writes && first(1)==cm.count);
+    retained();
+
+    /* A queued slot's target changed after submit() reaches no rail: the check is repeated on the byte that goes to the bus
+     * (the slot is ordinary memory between the two). 87 is 1,540 mV. */
+    setup(0x00000100,1,30,30,30,&both);assert(heat(50000)==A733_THERMAL_NORMAL);
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,1196,pm.now+1000000)==A733_CPU_CLOCK_PENDING);
+    unsigned queued_write=0;
+    for(unsigned n=0;n<400 && !queued_write;++n){
+        run(1);
+        for(unsigned i=0;i<A733_PMIC_REQUESTS;++i)if(pm.provider.slots[i].write==1 && pm.provider.slots[i].state){pm.provider.slots[i].target=87;queued_write=1;}
+    }
+    assert(queued_write);
+    assert(run(400)==A733_CPU_CLOCK_RETAINED && pm.provider.failed && !cm.writes && pm.pmic[REG_DCDC5]!=87);
     retained();
 
     /* PMIC write admission: CPU rails, exclusive lease, 800-1050 mV only. */

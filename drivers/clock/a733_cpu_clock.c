@@ -169,6 +169,19 @@ int a733_cpu_clock_address(uintptr_t a,int write)
     }
     return !write && (a==OSC || a==SID_DVFS);
 }
+/* A write that stays inside the vendor envelope whatever the grant holds: an address of a733_cpu_clock_address, and for
+ * a PLL word an N field that no row of the domain's table needs. The PLL runs at 26 MHz * N >> P, with P 0 at and above
+ * 676 MHz and 1 below, so N is at most the top row's rate over 26 MHz. */
+int a733_cpu_clock_write_allowed(uintptr_t a,uint32_t value)
+{
+    if(!a733_cpu_clock_address(a,1))return 0;
+    for(unsigned d=0;d<A733_CPU_DOMAINS;++d)if(a==pll_word(d)){
+        unsigned count=0,top=0;const struct a733_cpu_opp *o=a733_cpu_clock_opps((enum a733_cpu_domain)d,&count);
+        for(unsigned i=0;o&&i<count;++i)if(o[i].mhz>top)top=o[i].mhz;
+        return top && ((value>>8)&255u)<=top/26u;
+    }
+    return 1;
+}
 /* Core identity as the secondary-core coherence check requires it: MPIDR
  * with only RES1, U, MT and Aff1 set, and the core type that Aff1 implies. */
 static int core_of(const struct a733_cpu_cycle_sample *s,unsigned *core)
@@ -329,7 +342,7 @@ static enum a733_cpu_clock_status finish(struct a733_cpu_clock *c,enum a733_cpu_
 static int rd(struct a733_cpu_clock *c,uintptr_t a,uint32_t *v)
 {return a733_cpu_clock_address(a,0) && c->ops.read(c->cookie,a,v)==1;}
 static int put(struct a733_cpu_clock *c,uintptr_t a,uint32_t v)
-{return a733_cpu_clock_address(a,1) && c->ops.write(c->cookie,a,v)==1;}
+{return a733_cpu_clock_write_allowed(a,v) && c->ops.write(c->cookie,a,v)==1;}
 static int wr(struct a733_cpu_clock *c,uintptr_t a,uint32_t v)
 {uint32_t back;return put(c,a,v) && rd(c,a,&back) && back==v;}
 /* Spin on the time source for at least us microseconds. The time source

@@ -365,7 +365,12 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
     case P_WAIT_RESTART:ok=await_status(p,0x10);break;
     case P_WAIT_READ_ADDRESS:ok=await_status(p,0x40);break;
     case P_WAIT_RECEIVE:ok=await_status(p,0x58);break;
-    case P_WRITE:ok=wr(p,TWI+8,p->byte_index==ENABLE_INDEX ? enabled : written) && wr(p,TWI+0xc,0x48);break;
+    case P_WRITE:
+        /* The check of submit() is repeated on the byte that goes to the bus: a slot is ordinary memory between the
+         * submit and this write, and a changed target must not reach the rail whatever the grant says. */
+        if(s->write==REQUEST_SELECTOR && p->byte_index!=ENABLE_INDEX &&
+           (((written^p->values[4])&~f.mask) || !writable(s->snapshot.rail,(uint8_t)(written&f.mask))))return fault(p);
+        ok=wr(p,TWI+8,p->byte_index==ENABLE_INDEX ? enabled : written) && wr(p,TWI+0xc,0x48);break;
     case P_WAIT_WRITE:ok=await_status(p,0x28);break;
     case P_DATA:if(!rd(p,TWI+8,&value))return fault(p);p->values[p->byte_index]=(uint8_t)value;break;
     case P_STOP:ok=wr(p,TWI+0xc,0x58);break;

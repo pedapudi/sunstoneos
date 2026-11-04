@@ -54,6 +54,9 @@ int a733_cpu_clock_report(int (*read)(void *,uintptr_t,uint32_t *),void *,struct
  * CPU-L, CPU-B and DSU PLL and mux/P words. PLL_CPU_BACK is never
  * written. */
 int a733_cpu_clock_address(uintptr_t,int write);
+/* The same, for a write of this value: a PLL word whose N field exceeds what the top row of its domain needs is refused.
+ * The last check before the register in apps/os/cpu.c, independent of any grant. */
+int a733_cpu_clock_write_allowed(uintptr_t,uint32_t value);
 
 /* Physical use needs the user's approval for each change. A supervised
  * session states that approval here; no current image supplies a grant, so

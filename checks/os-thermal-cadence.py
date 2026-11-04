@@ -157,6 +157,17 @@ for label,op in [('inactive',8),('retaining',6),('rearm-fault',7)]:
     m.call(op,1127000,1);step(m,1127000)
     assert m.state()[0]==before,label
     cases.append('no-cached-publication-'+label)
+# The owner sleeps between readings (at most 20 ms, to the next reading, the interrupt wakes it) and steps on the next tick
+# only while it has work that cannot wait: starting, retaining, a masked interrupt awaiting its rearm, or the CPU clock
+# driver working.
+m.call(0,1000000);step(m,1000000)
+assert m.call(12,1000000)==20 and m.call(12,1015000)==10 and m.call(12,1024500)==1 and m.call(12,1030000)==1
+for label,change in [('inactive',(8,1)),('retaining',(6,1)),('rearm-pending',(7,1)),('clock-busy',(13,1))]:
+    m.call(0,1000000);step(m,1000000);assert m.call(12,1000000)==20,label
+    m.call(*change[:1],1000000,change[1]);assert m.call(12,1000000)==1,label
+    cases.append('wakes-next-tick-'+label)
+m.call(0,1000000);step(m,1000000);m.call(13,1000000,1);m.call(13,1000000,0);assert m.call(12,1000000)==20
+cases.append('idle-sleep-to-next-reading')
 controls={}
 if not a.no_control:
     # Negative control: a read that restarts the 25 ms sensor period from its own completion
