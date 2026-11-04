@@ -115,11 +115,12 @@ struct board_radio_profile {
 /* Profile version 7 is a scan-only session; see radio.c. Inline so that every image that
  * links the board composition has it without linking the radio owner. */
 /* How far a scan-only session runs before it shuts down: the scan itself (0), SDIO enumeration with the
- * vendor and device ID read (1), or enumeration plus the module's chip-ID words (2). The profile carries it
+ * vendor and device ID read (1), enumeration plus the module's chip-ID words (2), or through the firmware upload to the module's start confirmation (3). The profile carries it
  * in the first reserved byte after the network fields, so no wire layout changes. */
 #define BOARD_RADIO_STAGE_SCAN 0u
 #define BOARD_RADIO_STAGE_ENUMERATE 1u
 #define BOARD_RADIO_STAGE_IDENTITY 2u
+#define BOARD_RADIO_STAGE_FIRMWARE 3u
 static inline unsigned board_radio_profile_stage_limit(const struct board_radio_profile *f){return f->network_reserved[0];}
 static inline int board_radio_profile_scan_only(const struct board_radio_profile *f)
 {return f&&f->version==BOARD_RADIO_PROFILE_SCAN_VERSION;}
@@ -130,7 +131,7 @@ static inline int board_radio_profile_network_valid(const struct board_radio_pro
     if(!p||p->network_dhcp>1||p->network_reserved[1]||p->network_reserved[2])return 0;
     /* Byte 0 is the stage limit of a scan-only profile; every other profile keeps it zero. */
     if(p->network_reserved[0]&&(!(p->version==BOARD_RADIO_PROFILE_SCAN_VERSION||p->version==BOARD_RADIO_PROFILE_SCAN_SUPERVISED_VERSION)||
-        p->network_reserved[0]>BOARD_RADIO_STAGE_IDENTITY))return 0;
+        p->network_reserved[0]>BOARD_RADIO_STAGE_FIRMWARE))return 0;
     if(p->version==BOARD_RADIO_PROFILE_VERSION||p->version==BOARD_RADIO_PROFILE_SUPERVISED_VERSION||
        p->version==BOARD_RADIO_PROFILE_SCAN_VERSION||p->version==BOARD_RADIO_PROFILE_SCAN_SUPERVISED_VERSION){if(p->tcp_mode)return 0;}
     else if(p->version==BOARD_RADIO_PROFILE_LISTENER_VERSION||p->version==BOARD_RADIO_PROFILE_LISTENER_SUPERVISED_VERSION){

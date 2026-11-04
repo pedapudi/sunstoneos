@@ -34,10 +34,10 @@ int main(int argc,char **argv)
     f.platform.lifetime_deadline_us=59990000;f.startup_deadline_us=50000000;
     assert(board_radio_profile_scan_only(&f));
     /* The stage limit rides in the first reserved network byte: valid up to identity, only on scan-only profiles. */
-    assert(board_radio_profile_stage_limit(&f)<=BOARD_RADIO_STAGE_IDENTITY);
+    assert(board_radio_profile_stage_limit(&f)<=BOARD_RADIO_STAGE_FIRMWARE);
     {
         struct board_radio_profile g=f;
-        g.network_reserved[0]=BOARD_RADIO_STAGE_IDENTITY+1;assert(!board_radio_profile_network_valid(&g));
+        g.network_reserved[0]=BOARD_RADIO_STAGE_FIRMWARE+1;assert(!board_radio_profile_network_valid(&g));
         g=f;g.network_reserved[0]=BOARD_RADIO_STAGE_ENUMERATE;assert(board_radio_profile_network_valid(&g));
         g.version=BOARD_RADIO_PROFILE_VERSION;assert(!board_radio_profile_network_valid(&g));
     }

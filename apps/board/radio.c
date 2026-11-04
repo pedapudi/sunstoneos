@@ -429,7 +429,8 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
             .renew_margin_us=f->renew_margin_us,.transport=f->transport,.bootstrap=f->bootstrap,
             .firmware={.identity=f->radio_identity,.profile=1},.runtime={.binding_timeout=f->binding_timeout_us},.wifi=f->wifi,
             .enumeration_only=sc.enumeration_only,
-            .identity_only=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_IDENTITY};
+            .identity_only=board_radio_profile_stage_limit(f)>=BOARD_RADIO_STAGE_IDENTITY,
+            .firmware_only=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_FIRMWARE};
         for(unsigned i=0;i<4;++i)sc.session.firmware.blobs[i]=(struct aic8800_firmware_blob){
             (const uint8_t *)(uintptr_t)f->firmware_address[i],(size_t)f->firmware_bytes[i]};
         if(!board_radio_init(r,&sc))return 0;
