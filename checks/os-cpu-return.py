@@ -62,6 +62,10 @@ class Model(prior.Model):
         ins = self.image.insn(uc, address)
         if ins.mnemonic == 'dc':
             args = ins.op_str.split(', ')
+            if args == ['civac', 'x3']:
+                # The cleaning of a walk-counter word (os_cpu_return_walk), not of a range.
+                super().code(uc, address, size, unused)
+                return
             assert args == ['civac', 'x24'], ins.op_str
             start = self.gpr('x24')
             end = min((start + 0x200000) & ~0x1fffff, self.gpr('x25'))
@@ -76,6 +80,9 @@ class Model(prior.Model):
 
     def write(self, uc, access, address, size, value, unused):
         super().write(uc, access, address, size, value, unused)
+        walk = self.image.symbols['os_cpu_return_walk']
+        # The terminal's own counter words are written after the clean and cleaned again by the terminal (dc civac, x3).
+        self.postclean = [w for w in self.postclean if not walk <= w[1] < walk + 128]
         if self.clean_started and any(low <= address < high for low, high in self.regions + [(a, a + n) for a, n in self.published]):
             self.postclean.append((self.core, address, size, value))
         if 0x03400180 <= address < 0x03400200 or 0x03400280 <= address < 0x03400300:
@@ -287,6 +294,12 @@ def main():
                     else:
                         merged.append((lo, hi))
                 assert merged == expected, (merged, expected)
+            # Every core recorded the counter at the start and end of its walk of the published ranges, in the image RAM word
+            # that the runner copies out.
+            walk = image.symbols['os_cpu_return_walk']
+            for core in range(8):
+                start, end = model.u64(walk + 16 * core), model.u64(walk + 16 * core + 8)
+                assert start and end >= start, (core, start, end)
             assert model.u32(0x03400088) == model.u32(0x03400444) == model.u32(0x03400208) == 0
             if 'os_gpu_return_report' in image.symbols:
                 assert model.u32(0x0340045c)==0

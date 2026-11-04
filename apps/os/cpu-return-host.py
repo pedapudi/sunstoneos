@@ -136,6 +136,13 @@ def geometry(image):
     ranges = device_ranges_geometry(symbols, result['cached_writable'])
     if ranges:
         result['device_ranges_head'] = ranges
+    # What a run publishes about where its device memory went and how long the terminal's walk of it took (apps/os/device-ranges.h).
+    for symbol, key, bytes_ in (('os_cpu_return_walk', 'return_walk', 128), ('os_npu_guard_record', 'npu_guard', 64)):
+        if symbol in symbols:
+            address, size = symbols[symbol]
+            require(size == bytes_ and address % 8 == 0 and begin <= address < address + size <= end,
+                    '%s outside preserved image RAM.' % symbol)
+            result[key] = {'address': address, 'bytes': size}
     if 'os_npu_published_report' in symbols:
         address, size = symbols['os_npu_published_report']
         require(size == npu_capture.REPORT_BYTES and begin <= address < address + size <= end,
@@ -199,6 +206,44 @@ def decode_npu_stop(raw, epoch, generation, failure_generation=None):
     # operands survive restoration and are classified by the application.
     return {key: report[key] for key in ('finished', 'stopped', 'retained', 'mismatches', 'refused', 'jobs', 'jobs_selected',
                                          'generation')}
+
+
+COUNTER_HZ = 24_000_000      # the generic counter (include/a733_smp_counter.h)
+
+
+def decode_published(copied, geometry):
+    """The device ranges the OS published, the terminal's walk of them and the placement guard, from the returned objects.
+
+    device-ranges-head is the word of image RAM, device-ranges-page the first 4 KiB page it names (apps/os/device-ranges.h).
+    A second page, if any, is reported by its address only. return-walk holds the counter at the start and end of each core's
+    walk; npu-guard the placement request's pool, its alias guard and the result of checking it."""
+    out = {}
+    if 'device-ranges-head' in copied:
+        (head,) = struct.unpack('<Q', copied['device-ranges-head'])
+        ranges = {'head': head, 'ranges': []}
+        if head:
+            page = copied.get('device-ranges-page')
+            require(page is not None and len(page) == 4096, 'The first device range page was not copied.')
+            following, count = struct.unpack_from('<2Q', page)
+            require(count <= 255, 'Device range page count differs.')
+            ranges['ranges'] = [dict(zip(('base', 'bytes'), struct.unpack_from('<2Q', page, 16 + 16 * i))) for i in range(count)]
+            ranges['next_page'] = following
+            for entry in ranges['ranges']:
+                require(memory_layout.device_range_valid(entry['base'], entry['bytes']), 'A published device range is malformed.')
+        out['device_ranges'] = ranges
+    if 'return-walk' in copied:
+        words = struct.unpack('<16Q', copied['return-walk'])
+        walk = []
+        for core in range(8):
+            start, end = words[2 * core], words[2 * core + 1]
+            walk.append({'core': core, 'start': start, 'end': end,
+                         'ticks': end - start if start and end >= start else None,
+                         'microseconds': (end - start) * 1e6 / COUNTER_HZ if start and end >= start else None})
+        out['return_walk'] = walk
+    if 'npu-guard' in copied:
+        names = ('pool_base', 'pool_bytes', 'guard_base', 'guard_bytes', 'checked', 'differing_words', 'first_difference', 'pattern')
+        out['npu_guard'] = dict(zip(names, struct.unpack('<8Q', copied['npu-guard'])))
+    return out
 
 
 def mandatory_return(copied, qualification, epoch, generation, failure_return=False):

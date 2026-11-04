@@ -259,6 +259,9 @@ struct umem *os_large_umem(void) { return admitted || ledger_ready ? &ledger : 0
 
 /* ---- The device ranges the EL3 terminal cleans (apps/os/device-ranges.h) ---- */
 uint64_t os_device_ranges_head;
+/* The counter at the start and end of each core's walk of the published ranges in the return terminal (cores 0 to 7, two words each);
+ * the terminal writes and cleans them, the runner copies them out. */
+uint64_t os_cpu_return_walk[16];
 static struct os_device_range_page *range_tail;
 int os_device_range_publish(uint64_t base, uint64_t bytes)
 {

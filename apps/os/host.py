@@ -107,22 +107,6 @@ def upgrade_services(extents, declaration):
     return services
 
 
-NPU_RETIRED_POOL_OFFSET = 64  # two u64 after the owner words and the four u32 (apps/os/npu-session.h): zero, the OS takes its NPU pool from the ledger
-
-
-def retire_npu_pool(services):
-    """The services with the NPU record's retired pool words zeroed. A session made from an earlier template names a pool
-    there; the image refuses any nonzero value (apps/os/admission.c), because it chooses the pool when it admits the
-    application (docs/designs/unified-memory.md). A session without an NPU record is unchanged."""
-    if NPU not in services:
-        return services
-    services = dict(services)
-    npu = bytearray(services[NPU])
-    struct.pack_into('<QQ', npu, NPU_RETIRED_POOL_OFFSET, 0, 0)
-    services[NPU] = bytes(npu)
-    return services
-
-
 def input_facts(manifest, inputs):
     declared = regions(manifest, (manifest_tool.KIND['input'],))
     require(len(inputs) == len(declared), 'Input count differs from manifest.')

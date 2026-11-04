@@ -197,9 +197,9 @@ for name,fail_step,mutation in cases:
    stage,limit=diagnostic[1:]
    assert struct.unpack('<8Q',raw)==(decoder.MAGIC,3,64,epoch,generation,0,0,(stage<<32)|limit)
    expected={'jobs':0,'gpu_bisect':{'stage':decoder.BISECT_STAGES[stage],'limit':limit},
-             'gpu_off':False,'gpu_never_powered':True,'worker_parked':False,'qualification_passed':False}
+             'gpu_off':False,'gpu_never_powered':True,'worker_parked':False}
   else:
-   expected={'jobs':0,'gpu_untouched':True,'qualification_passed':False}
+   expected={'jobs':0,'gpu_untouched':True}
    expected.update({'device_never_opened':True} if fail_step==0 else {'constructor_refusal':fail_step,'constructor_stage':decoder.CONSTRUCTOR_STAGES[fail_step]})
   assert decoded==expected
   assert get(field(gpu,'gpu_private','constructor_refusal'))==fail_step

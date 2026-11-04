@@ -791,7 +791,7 @@ def gpu_capture_cases(out, gpu_images):
             invalid=variant != 'normal'
             assert result['outcome']==('failure-return' if invalid else 'returned'),(variant,result)
             report=result['return_report']
-            assert report['secondaries_off']==7 and not report['qualification_passed']
+            assert report['secondaries_off']==7 and 'qualification_passed' not in report
             assert result['normal_return'] and not model.lock and not model.quarantined
             assert (root/'run/return-report.bin').read_bytes()==copied_return_report(epoch)
             assert (root/'run/output-record.bin').read_bytes()==output
@@ -808,9 +808,9 @@ def gpu_capture_cases(out, gpu_images):
                 assert 'thermal_error' in report
             else:
                 assert report['thermal']['classification']=='complete'
-                assert not report['thermal']['qualification_passed']
+                assert 'qualification_passed' not in report['thermal']
             if variant=='normal':
-                assert report['gpu_capture_status']=='decoded' and not report['gpu']['qualification_passed']
+                assert report['gpu_capture_status']=='decoded' and 'qualification_passed' not in report['gpu']
                 if diagnostic:assert report['gpu']['jobs']==0 and not report['gpu']['completed_gpu_work']
                 else:assert report['gpu']['jobs']==7 and report['gpu']['completed_gpu_work']
             passed(f'generic-gpu-{index}-{variant}-preserves-native-return-and-raw-captures')
