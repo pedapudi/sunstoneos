@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <string.h>
 struct board_application board;
+/* The guard check of the stop step reads memory that the model keeps coherent; this run reserves no guard. */
+int aarch64_device_cache(enum aarch64_cache_op op,uintptr_t cpu,size_t bytes){(void)op;return cpu&&bytes;}
 struct board_provider providers;
 static unsigned mode,live_value=1,send_calls,collect_calls,board_failures;
 static uint32_t first_site,first_value;
