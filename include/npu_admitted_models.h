@@ -6,7 +6,7 @@
 /* The compiled models an image may execute on the NPU. Each image links one
  * table, which tools/npu-session-catalogue.py generates into the image build
  * directory from the model lists of the applications the image contains;
- * every entry comes from the reviewed catalogue tools/npu-session-models.json.
+ * every entry comes from the reviewed catalogue tools/npu-fixtures.json.
  * The runtime and session drivers admit a model only when its SHA-256 and
  * size match an entry and the decoder and assembler derive the entry's
  * counts and tensor sizes from it. The digest fixes descriptors,

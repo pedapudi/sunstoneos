@@ -12,7 +12,7 @@ import struct, argparse, ctypes as c, importlib.util, struct, subprocess, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECK_INPUTS = ('tools/npu-graph-specs.json', 'drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_relocation.c', 'drivers/npu/nbg_model.c',
+CHECK_INPUTS = ('tools/npu-fixtures.json', 'drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_relocation.c', 'drivers/npu/nbg_model.c',
                 'include/nbg_assembly.h', 'tools/npu-nbg-mutate.py', 'checks/nbg-graph-admission.py')
 GATE_RUNS = [['--output', '{output}', '--graphs', '{fixture:npu-graphs}']]
 GRAPHS = ('add', 'sub', 'mul', 'relu', 'sig', 'tanh', 'swish', 'ln176', 'ln64', 'sm64', 'sm32', 'chainA', 'chainB',

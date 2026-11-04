@@ -59,7 +59,7 @@ buffers; recovery and other graph layouts remain unqualified.
 The models and raw evidence stay outside tracked source under
 `~/.cache/sunstoneos/build/npu-fastpath-1101/chain-compiler-work/consumer/`.
 `chain-reference.json` records the compared files. The producer is pinned in
-the [runtime catalogue](../../tools/npu-session-models.json); its cached compiler
+the [runtime catalogue](../../tools/npu-fixtures.json); its cached compiler
 directory is `~/.cache/sunstoneos/evidence/npu-models-20261018/conv12/`.
 
 The proprietary compiler and SDK run only on the development host. Their URL,

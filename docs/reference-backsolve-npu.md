@@ -712,7 +712,7 @@ A normal return with the receipt of `expect.json` ends the run.
 ### Test graphs through the OS NPU service
 
 SunstoneOS holds 17 single-operation graphs here (23 with the shader graphs below), built by the pinned compiler from the model
-descriptions of `tools/npu-graph-variants.py` (rebuilt by `tools/npu-graph-build.py`) and catalogued in `tools/npu-session-models.json` (names `graph-*`). The OS session grants at most eight
+descriptions of `tools/npu-graph-variants.py` (rebuilt by `tools/npu-graph-build.py`) and catalogued in `tools/npu-fixtures.json` (names `graph-*`). The OS session grants at most eight
 jobs (`apps/os/admission.c`), so run A1 sends eight graphs through the OS NPU service one after another, run A2
 sends seven and run B sends the last two. The application
 (`apps/npu-graphs`) loads each graph, submits one job with the graph's input and compares the output with the SDK

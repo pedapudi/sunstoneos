@@ -17,10 +17,10 @@ that user-space code builds and never interprets them, so the facts here come fr
 
 Variants are compiled by the pinned compiler offline, from model descriptions that this repository holds
 (`tools/npu-graph-variants.py`, `tools/npu-shader-variants.py`). The compiled graphs are not committed. The list of graphs is
-`tools/npu-graph-specs.json`; `tools/npu-graph-build.py` generates, compiles and simulates each graph that is missing or out of date
+`tools/npu-fixtures.json`; `tools/npu-graph-build.py` generates, compiles and simulates each graph that is missing or out of date
 in a container with no network, writes the input and reference tensors and `artifacts.json` under
 `~/.cache/sunstoneos/build/npu-graph-variants`, and checks each result against the size and SHA-256 digests in
-`tools/npu-session-models.json`. The integration gate runs it before the checks that read the graphs.
+`tools/npu-fixtures.json`. The integration gate runs it before the checks that read the graphs.
 
 ## Prior art
 

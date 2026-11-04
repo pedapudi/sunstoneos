@@ -11,7 +11,7 @@
 
 The model set is the models of tools/npu-conformance-references.json, which
 pins their references and the files those read; each must be an entry of
-tools/npu-session-models.json, in whose order the models run. Every
+tools/npu-fixtures.json, in whose order the models run. Every
 comparison requires bit-for-bit equality. docs/npu-conformance.md describes
 the vectors, the references and the report. The harness performs no device
 I/O and never contacts USB devices or the board.
@@ -36,7 +36,7 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-CATALOGUE = 'tools/npu-session-models.json'
+CATALOGUE = 'tools/npu-fixtures.json'
 REFERENCES = 'tools/npu-conformance-references.json'
 RUNNER = 'tools/npu-conformance-runner.c'
 CACHE = Path(os.environ.get('SUNSTONE_CACHE', str(Path.home() / '.cache/sunstoneos')))

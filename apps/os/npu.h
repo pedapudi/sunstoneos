@@ -19,7 +19,6 @@ int os_npu_pool_prepare(struct umem *, uint16_t owner);
 extern const struct npu_runtime_model os_npu_models[];
 extern const unsigned os_npu_model_count,os_npu_client_entry;
 extern const struct ss_npu_model os_npu_model_info[];
-extern const uint8_t os_npu_catalogue_digest[32];
 struct os_npu_vector { const uint8_t *data; size_t bytes; };
 extern const struct os_npu_vector os_npu_inputs[],os_npu_references[];
 extern const unsigned os_npu_client_model,os_npu_input_count,os_npu_output_count;

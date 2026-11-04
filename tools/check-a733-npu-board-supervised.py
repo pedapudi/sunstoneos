@@ -105,7 +105,7 @@ def source_files():
     return [('npu-board-host-tool.py',Path(__file__)),('npu-board-preparation.py',Path(preparation.__file__)),
         ('npu-board-usb.c',ROOT/'apps/npu-board/usb.c'),('board-preparation.py',Path(preparation.board.__file__)),
         ('thermal-preparation.py',Path(preparation.thermal.__file__)),
-        ('npu-session-models.json',ROOT/'tools/npu-session-models.json'),
+        ('npu-fixtures.json',ROOT/'tools/npu-fixtures.json'),
         ('usb-access.py',ROOT/'tools/usb-access.py')]
 
 def freeze_bundle(bundle):
