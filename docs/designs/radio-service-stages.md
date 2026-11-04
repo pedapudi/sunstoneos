@@ -59,6 +59,33 @@ retaining anything; the code `0x400 | PG bits << 4 | unmet mask` (1 PG, 2 DCDC1,
 4 BLDO5, 8 CLDO1) is the record's failure line. The record carries the observed values either way. DCDC8 is observed and recorded
 but never required.
 
+## The association stage joins the stored network and stops at the four-way handshake
+
+`--radio-stage-limit 5` runs the full radio path through association (`BOARD_RADIO_STAGE_ASSOCIATE`). It needs
+`--wifi NAME`; `board.py submit` refuses a run without a name, and refuses a name with no stored credential, before the
+device is touched. The sequence after the passive 2.4 GHz scan is:
+
+1. The owner picks the strongest scan result whose SSID equals the credential's and whose RSN element offers PSK and CCMP
+   (and does not require protected management frames). None found ends the stage as a clean radio failure.
+2. It waits for the CE reservoir (at least 128 bytes), which fills beside the radio from the first poll. The entropy is
+   unqualified and bring-up only ([entropy](../entropy.md)); the profile declares this in `network_reserved[1]`.
+3. It builds the target (BSSID, SSID, the scan channel's index) and the supplicant configuration (the PMK from
+   `ss_wifi_credential()` at EL1, the AP's RSN element) and calls connect. The PMK copy in the board's configuration is
+   zeroed once the supplicant has taken it; the supplicant struct is zeroed when the module is down.
+4. Link `SECURITY_PENDING` starts the supplicant, which runs the four-way handshake. Supplicant `AUTHORIZED` with link
+   `SECURED` ends the stage; the owner then shuts the module down as after a scan. No address is requested: DHCP is a later
+   stage.
+
+Time budget, against the 50 s startup deadline (firmware confirmed near 16.7 s of session time): scan 10 s, authentication
+and association 8 s, four-way handshake 8 s, supplicant command 1 s. A normal run should need about 3 s of scan, well under
+1 s to join, and tens of milliseconds per handshake message. Each bound also stops at the session deadline.
+
+The record carries a 48-byte association tail after the access point list (head flags bit 9): the stage reached, the link
+state, the association status code, the supplicant and RSN states, the EAPOL frames received and sent (messages 1 and 3 are
+received, 2 and 4 sent), flags (unqualified entropy, SSID matched, RSN offers PSK and CCMP, target built, entropy ready,
+credential present, entropy failed), the count of matching scan results, the chosen frequency and RSSI, and connect and
+authorize times. It holds no SSID, key or credential byte, and the access point list in this stage carries no SSIDs.
+
 ## Entropy and credentials gate association only
 
 Enumeration, firmware loading and the scan need neither entropy qualification

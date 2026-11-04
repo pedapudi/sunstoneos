@@ -28,7 +28,7 @@ struct a733_radio_result_head {
     uint64_t magic;
     uint32_t version, bytes, head_bytes, ap_entry_bytes;
     uint32_t stage, failed, failure_stage, flags; /* flags: bit0 guard asked, bit1 guard observed, bit2 BLDO5 needs power-on (the rails showed it off; the writes ran only once the stage reaches powered), bit3 shut down with every readback matched, bit4 BLDO5 was already on (guard
- * accepted it), bit5 the failure shutdown ran, bit6 every step of it that applied read back matched, bit7 the first-run guard refused before any write (fail_site then holds 0x400 | PG bits << 4 | unmet mask, shifted into the line field), bit8 the failure left nothing powered (a refusal, or a failure shutdown that finished with every readback matched) and ended without a reset */
+ * accepted it), bit5 the failure shutdown ran, bit6 every step of it that applied read back matched, bit7 the first-run guard refused before any write (fail_site then holds 0x400 | PG bits << 4 | unmet mask, shifted into the line field), bit9 an association tail follows the access point list (struct a733_radio_assoc), bit8 the failure left nothing powered (a refusal, or a failure shutdown that finished with every readback matched) and ended without a reset */
     uint32_t pad_power[4];                         /* GPIO_POW_MOD_SEL, GPIO_POW_VAL, SGPIO_POW_MOD_SEL, SGPIO_POW_VAL */
     struct a733_radio_result_rail rails[A733_RADIO_RESULT_RAILS];
     uint32_t rail_count, platform_stage, ocr, selected_ocr;
@@ -46,6 +46,21 @@ _Static_assert(sizeof(struct a733_radio_result_rail)==8,"rail record");
 _Static_assert(sizeof(struct a733_radio_result_function)==8,"function record");
 _Static_assert(sizeof(struct a733_radio_result_ap)==44,"AP record");
 _Static_assert(sizeof(struct a733_radio_result_head)%4==0,"head alignment");
+/* The association stage's progress, appended after the access point list when head flags bit 9 is set (the record's
+ * length covers it). It holds counts, codes and times only: no SSID, BSSID, key or credential byte.
+ * stage: 0 none, 1 candidate found, 2 entropy ready, 3 connecting, 4 security pending, 5 securing, 6 authorized.
+ * link: enum aic8800_wifi_link. status: the association status code of the station event. supplicant, rsn: enum
+ * aic8800_supplicant_state and the WPA state machine's state. eapol_rx and eapol_tx: EAPOL frames received from and sent
+ * to the access point (the four-way handshake is received 1 and 3, sent 2 and 4). flags: bit 0 entropy unqualified (bring-up
+ * only), 1 a scan result carried the credential's SSID, 2 its RSN element offers PSK and CCMP, 3 a target was built, 4 the CE
+ * entropy reservoir was ready, 5 the credential was present at EL1, 6 the CE entropy source failed or is missing. candidates: scan results with the credential's SSID.
+ * frequency_rssi: low 16 bits the matched access point's frequency in MHz, high 16 bits its RSSI in dBm as int16.
+ * ms_connect and ms_authorized: the clock reading in milliseconds, modulo 65536, when connect started and when the
+ * supplicant authorized. */
+struct a733_radio_assoc {
+    uint32_t stage, link, status, supplicant, rsn, eapol_rx, eapol_tx, flags, candidates, frequency_rssi, ms_connect, ms_authorized;
+};
+_Static_assert(sizeof(struct a733_radio_assoc)==48,"association tail");
 /* Memory comes from the caller: the radio build supplies the FreeRTOS heap. */
 struct a733_radio_allocator {
     void *(*allocate)(void *context,size_t bytes);
@@ -57,6 +72,8 @@ struct a733_radio_report {
     struct a733_radio_result_ap *aps;
     size_t ap_count,ap_capacity;
     struct a733_radio_allocator memory;
+    struct a733_radio_assoc assoc;
+    unsigned has_assoc;
 };
 /* Zero storage. Returns 0 if the allocator is incomplete. */
 int a733_radio_report_init(struct a733_radio_report *,const struct a733_radio_allocator *);
@@ -68,6 +85,8 @@ void a733_radio_report_platform(struct a733_radio_report *,const struct a733_rad
 /* The session's failure site, when the platform decided none (its fail_site is zero): source line << 16 | 0x100 |
  * stage. Call after a733_radio_report_platform. */
 void a733_radio_report_session_failure(struct a733_radio_report *,unsigned line,unsigned stage);
+/* Set the association tail (and head flags bit 9). */
+void a733_radio_report_association(struct a733_radio_report *,const struct a733_radio_assoc *);
 void a733_radio_report_firmware(struct a733_radio_report *);
 struct aic8800_firmware;
 void a733_radio_report_firmware_progress(struct a733_radio_report *,const struct aic8800_firmware *,uint64_t ticks_per_ms);

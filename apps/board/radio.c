@@ -2,7 +2,15 @@
 #include "a733_ce_native.h"
 #include "a733_range.h"
 #include "a733_storage_digest.h"
+#include "sunstone_wifi_credential.h"
 #include <string.h>
+/* Present in the OS image only (apps/os); the association stage fails cleanly without them. */
+extern void os_ce_entropy_begin(void) __attribute__((weak));
+extern void os_ce_entropy_step(void) __attribute__((weak));
+extern int os_ce_entropy_ready(void) __attribute__((weak));
+extern int os_ce_entropy_failed(void) __attribute__((weak));
+extern int os_ce_entropy_bytes(void *,uint8_t *,size_t) __attribute__((weak));
+extern int ss_wifi_credential(const uint8_t **,size_t *,const uint8_t **,const uint8_t **,size_t *) __attribute__((weak));
 enum { STARTING,CONNECTING,SECURING,ONLINE,SCANNING,SCANNED,SHUTTING_DOWN,DOWN };
 /* Elapsed time before an owner stops repeating advancing session steps. At
  * 25 MHz four-bit SDIO this covers the largest 4,096-byte receive. */
@@ -26,6 +34,8 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
     const struct board_radio_config *c=input;
     unsigned staged=c->report_memory.allocate!=NULL;
     if(c->scan_only&&(!staged||!c->scan_timeout_us))return 0;
+    if(c->associate&&(!c->scan_only||c->enumeration_only||!c->connect_timeout_us||!c->security_timeout_us||
+        !c->security.command_timeout))return 0;
     if(staged&&(!c->report_memory.release||!c->scan_timeout_us))return 0;
     if(!c->shared||!c->shared->used||!c->admit||!c->chip_id||!c->chip_id->secure_read_record||
         !c->recovery_state||!a733_ranges_disjoint(r,sizeof(*r),c->recovery_state,sizeof(*c->recovery_state))||
@@ -49,7 +59,8 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
     struct board_radio_config *p=&r->config;
     p->session.runtime.read_platform_id=platform_id;
     p->session.runtime.context=(void *)p->chip_id;
-    p->security.entropy=a733_radio_entropy_bytes;p->security.entropy_context=&r->entropy;
+    /* The association stage brings its own (unqualified) entropy callback in the configuration. */
+    if(!p->associate){p->security.entropy=a733_radio_entropy_bytes;p->security.entropy_context=&r->entropy;}
     p->network.network.random32=a733_radio_entropy_random32;
     p->network.network.sequence=a733_radio_entropy_sequence;
     p->network.network.entropy_context=&r->entropy;
@@ -66,6 +77,8 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
         !a733_radio_session_init(&r->session,&r->platform,&p->session))return 0;
     r->constructed=1;atomic_store_explicit(&r->failed,0,memory_order_release);return 1;
 }
+static void assoc_update(struct board_radio *r);
+static void wipe_pmk(struct board_radio *r);
 /* The board's failure bound on the failure shutdown, past the platform's own 2 s deadline. */
 #define FAILURE_SHUTDOWN_BOUND_US 3000000u
 static enum board_radio_result retain(struct board_radio *r)
@@ -92,7 +105,9 @@ static enum board_radio_result retain(struct board_radio *r)
         a733_radio_report_platform(&r->report,&r->platform);
         a733_radio_report_firmware_progress(&r->report,&r->session.firmware,r->session.transport.config.ticks_per_ms);
         a733_radio_report_session_failure(&r->report,r->session.fail_line,r->session.fail_stage);
+        assoc_update(r);
     }
+    if(r->config.associate)wipe_pmk(r);
     return BOARD_RADIO_RETAINED;
 }
 static uint64_t bounded_deadline(struct board_radio *r,uint64_t now,uint64_t duration)
@@ -163,6 +178,78 @@ int board_radio_shutdown(struct board_radio *r,uint64_t deadline)
 }
 const struct a733_radio_report *board_radio_report(const struct board_radio *r)
 {return r&&r->self==r&&r->constructed&&r->config.report_memory.allocate?&r->report:NULL;}
+/* The association stage's record tail: counters and codes only, never an SSID, BSSID, key or credential byte. */
+static void assoc_update(struct board_radio *r)
+{
+    if(!r->config.associate||!r->config.report_memory.allocate)return;
+    struct a733_radio_assoc *a=&r->assoc;
+    a->flags|=1u; /* the entropy is unqualified: bring-up only */
+    a->link=(uint32_t)r->session.wifi.link;a->status=r->session.wifi.station_event.status;
+    a->supplicant=(uint32_t)r->session.supplicant.state;a->rsn=(uint32_t)r->session.supplicant.rsn_state;
+    a->eapol_rx=r->session.supplicant.eapol_rx;a->eapol_tx=r->session.supplicant.eapol_tx;
+    if(r->cand_found)a->frequency_rssi=(uint32_t)r->cand_frequency|(uint32_t)(uint16_t)(int16_t)r->cand_rssi<<16;
+    a733_radio_report_association(&r->report,a);
+}
+static void wipe_pmk(struct board_radio *r)
+{
+    volatile uint8_t *a=r->config.security.pmk,*b=r->session.supplicant.config.pmk;
+    for(unsigned i=0;i<32;++i){a[i]=0;b[i]=0;}
+}
+/* A scan result that carries the credential's SSID and an RSN element offering PSK and CCMP. The element is found in the
+ * beacon or probe response (information elements from offset 36), copied, and kept for the strongest such result. */
+static void assoc_candidate(struct board_radio *r,const struct aic8800_wifi_scan_result *sc)
+{
+    const uint8_t *ssid,*pmk,*password;size_t ssid_bytes,password_bytes;
+    if(!sc->has_ssid||!ss_wifi_credential||ss_wifi_credential(&ssid,&ssid_bytes,&pmk,&password,&password_bytes)!=0)return;
+    r->assoc.flags|=32u;
+    if(ssid_bytes!=sc->ssid_bytes||memcmp(ssid,sc->ssid,ssid_bytes))return;
+    ++r->assoc.candidates;r->assoc.flags|=2u;
+    if(!sc->frame||sc->frame_bytes<=36)return;
+    const uint8_t *ie=sc->frame+36,*end=sc->frame+sc->frame_bytes;
+    while(end-ie>=2&&(size_t)(end-ie)>=2u+ie[1]){
+        if(ie[0]==48){
+            size_t n=2u+ie[1];
+            struct aic8800_supplicant_config *t=&r->config.security;
+            if(n<=sizeof(t->ap_rsn)){
+                memset(t->ap_rsn,0,sizeof(t->ap_rsn));memcpy(t->ap_rsn,ie,n);t->ap_rsn_bytes=(uint16_t)n;
+                if(aic8800_supplicant_config_valid(t)){
+                    r->assoc.flags|=4u;
+                    if(!r->cand_found||sc->rssi_dbm>r->cand_rssi){
+                        memcpy(r->cand_bssid,sc->bssid,6);memcpy(r->cand_rsn,t->ap_rsn,n);r->cand_rsn_bytes=(uint16_t)n;
+                        r->cand_frequency=sc->frequency;r->cand_rssi=sc->rssi_dbm;r->cand_found=1;
+                        r->assoc.stage=r->assoc.stage<1?1:r->assoc.stage;
+                    }
+                }
+            }
+            break;
+        }
+        ie+=2u+ie[1];
+    }
+    memset(r->config.security.ap_rsn,0,sizeof(r->config.security.ap_rsn));r->config.security.ap_rsn_bytes=0;
+}
+/* Build the target and the supplicant configuration from the candidate and the credential, at EL1. 0 if any piece is
+ * missing; the PMK is copied only into the supplicant configuration, which is zeroed once the supplicant has taken it. */
+static int assoc_build(struct board_radio *r)
+{
+    const uint8_t *ssid,*pmk,*password;size_t ssid_bytes,password_bytes;
+    if(!ss_wifi_credential||ss_wifi_credential(&ssid,&ssid_bytes,&pmk,&password,&password_bytes)!=0||!pmk||
+        !ssid_bytes||ssid_bytes>sizeof(r->config.target.ssid))return 0;
+    r->assoc.flags|=32u;
+    unsigned index=~0u;
+    for(unsigned i=0;i<r->config.session.wifi.channel_count;++i)
+        if(r->config.session.wifi.channels[i].frequency==r->cand_frequency){index=i;break;}
+    if(index==~0u)return 0;
+    struct aic8800_wifi_target *t=&r->config.target;
+    memset(t,0,sizeof(*t));
+    t->connection_authority=r->config.security.beacon_record;t->beacon_evidence=r->config.security.beacon_record;
+    t->channel_index=index;t->security=AIC8800_WIFI_WPA2_PSK_CCMP;
+    memcpy(t->bssid,r->cand_bssid,6);memcpy(t->ssid,ssid,ssid_bytes);t->ssid_bytes=(uint8_t)ssid_bytes;
+    struct aic8800_supplicant_config *c=&r->config.security;
+    memcpy(c->ap_rsn,r->cand_rsn,r->cand_rsn_bytes);c->ap_rsn_bytes=r->cand_rsn_bytes;memcpy(c->pmk,pmk,32);
+    if(!aic8800_supplicant_config_valid(c)){wipe_pmk(r);return 0;}
+    r->assoc.flags|=8u;
+    return 1;
+}
 /* Keep the report current: the platform's stages and card facts every pass,
  * the firmware and identity once the management layer exists. */
 static void report_progress(struct board_radio *r)
@@ -175,6 +262,7 @@ static void report_progress(struct board_radio *r)
     a733_radio_report_firmware_progress(&r->report,&r->session.firmware,r->session.transport.config.ticks_per_ms);
     if(r->session.firmware.state==AIC8800_FW_START_CONFIRMED)a733_radio_report_firmware(&r->report);
     /* Identity is read before the firmware loads; keep the later stage. */
+    assoc_update(r);
 }
 enum board_radio_result board_radio_poll(struct board_radio *r)
 {
@@ -192,13 +280,27 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
     /* The entropy stage runs outside the radio platform and session (apps/os/ce_probe.c): nothing is polled, so the
      * module stays unpowered. */
     if(r->config.entropy_only){r->stage=SCANNED;return BOARD_RADIO_SCANNED;}
+    if(r->config.associate&&r->stage!=SHUTTING_DOWN&&r->stage!=DOWN){
+        /* The unqualified CE entropy of the association stage runs in this task beside the radio. A failure ends the stage
+         * as a clean radio failure with the record. */
+        if(!os_ce_entropy_begin||!os_ce_entropy_step||!os_ce_entropy_ready||!os_ce_entropy_failed||!os_ce_entropy_bytes){
+            r->assoc.flags|=64u;return retain(r);}
+        if(!r->entropy_begun){os_ce_entropy_begin();r->entropy_begun=1;}
+        os_ce_entropy_step();
+        if(os_ce_entropy_failed()){r->assoc.flags|=64u;return retain(r);}
+    }
     uint64_t now;
     if(!a733_counter_clock_now(&r->config.shared->counter,&now))return retain(r);
     if(r->stage==SHUTTING_DOWN||r->stage==DOWN){
         /* Only the platform's shutdown runs; the session and transport are not polled again. */
         enum a733_radio_platform_result down=a733_radio_platform_poll(&r->platform);
         if(down==A733_RADIO_RETAINED||down==A733_RADIO_INVALID)return retain(r);
-        if(down==A733_RADIO_DOWN){r->stage=DOWN;report_progress(r);return BOARD_RADIO_DOWN;}
+        if(down==A733_RADIO_DOWN){
+            r->stage=DOWN;report_progress(r);
+            if(r->config.associate){ /* nothing polls the session again: drop the supplicant's keys and state */
+                aic8800_security_zero(&r->session.supplicant,sizeof(r->session.supplicant));wipe_pmk(r);}
+            return BOARD_RADIO_DOWN;
+        }
         return publish(r,BOARD_RADIO_SCANNED);
     }
     if(r->stage!=ONLINE&&r->stage!=SCANNED&&now>=r->config.startup_deadline_us)return retain(r);
@@ -226,11 +328,15 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
         while((r->stage!=ONLINE||r->recovering)&&
             a733_radio_session_take_event(&r->session,&r->startup_event)){
             if(r->stage!=ONLINE&&r->startup_events!=UINT64_MAX)++r->startup_events;
-            if(r->startup_event.kind==AIC8800_DISPATCH_SCAN&&r->config.report_memory.allocate)
+            if(r->startup_event.kind==AIC8800_DISPATCH_SCAN&&r->config.report_memory.allocate){
+                /* The association stage's record names no SSID, so the list carries none. */
+                unsigned named=r->startup_event.metadata.scan.has_ssid&&!r->config.associate;
                 a733_radio_report_ap(&r->report,r->startup_event.metadata.scan.bssid,
-                    r->startup_event.metadata.scan.has_ssid?r->startup_event.metadata.scan.ssid:NULL,
-                    r->startup_event.metadata.scan.has_ssid?r->startup_event.metadata.scan.ssid_bytes:0,
+                    named?r->startup_event.metadata.scan.ssid:NULL,
+                    named?r->startup_event.metadata.scan.ssid_bytes:0,
                     r->startup_event.metadata.scan.frequency,r->startup_event.metadata.scan.rssi_dbm);
+                if(r->config.associate&&r->stage==SCANNING)assoc_candidate(r,&r->startup_event.metadata.scan);
+            }
             if(!r->config.report_memory.allocate)break; /* One event per pass, as before. */
         }
         if(a733_radio_session_take_record(&r->session,&r->diagnostic)&&
@@ -259,8 +365,17 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
         struct aic8800_wifi_scan_summary summary;
         if(a733_radio_session_take_scan(&r->session,&summary)){
             a733_radio_report_scan_done(&r->report,summary.reported_results);
-            r->scan_done=1;r->stage=r->config.scan_only?SCANNED:STARTING;
+            r->scan_done=1;r->stage=r->config.scan_only&&!r->config.associate?SCANNED:STARTING;
             if(r->stage==SCANNED)return publish(r,BOARD_RADIO_SCANNED);
+        }
+    }else if(r->stage==STARTING&&r->config.associate){
+        if(!r->cand_found)return retain(r); /* no scan result carried the credential's SSID with a usable RSN element */
+        if(!os_ce_entropy_ready())return publish(r,BOARD_RADIO_PENDING);
+        r->assoc.stage=2;r->assoc.flags|=16u;
+        if(!assoc_build(r))return retain(r);
+        uint64_t deadline=bounded_deadline(r,now,r->config.connect_timeout_us);
+        if(a733_radio_session_connect(&r->session,&r->config.target,deadline)){
+            r->operation_deadline=deadline;r->stage=CONNECTING;r->assoc.stage=3;r->assoc.ms_connect=(uint32_t)(now/1000u)&0xffffu;
         }
     }else if(r->stage==STARTING){
         if(entropy!=A733_RADIO_ENTROPY_READY)return publish(r,BOARD_RADIO_PENDING);
@@ -273,13 +388,21 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
         if(r->session.wifi.link==AIC8800_WIFI_SECURITY_PENDING){
             uint64_t deadline=bounded_deadline(r,now,r->config.security_timeout_us);
             if(a733_radio_session_start_security(&r->session,&r->config.security,deadline)){
-                r->operation_deadline=deadline;r->stage=SECURING;
+                r->operation_deadline=deadline;r->stage=SECURING;r->assoc.stage=5;
+                if(r->config.associate)wipe_pmk(r);
             }
         }else if(r->session.wifi.link!=AIC8800_WIFI_CONNECTING)return retain(r);
+        if(r->session.wifi.link==AIC8800_WIFI_SECURITY_PENDING&&r->assoc.stage<4)r->assoc.stage=4;
     }else if(r->stage==SECURING){
         if(now>=r->operation_deadline||r->session.supplicant.state==AIC8800_SUPPLICANT_FAULT)
             return retain(r);
-        if(r->session.wifi.link==AIC8800_WIFI_SECURED&&
+        if(r->config.associate){
+            if(r->session.wifi.link==AIC8800_WIFI_SECURED&&r->session.supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED){
+                /* The stage's end: authorized, no address requested. */
+                r->assoc.stage=6;r->assoc.ms_authorized=(uint32_t)(now/1000u)&0xffffu;
+                wipe_pmk(r);r->stage=SCANNED;report_progress(r);return publish(r,BOARD_RADIO_SCANNED);
+            }
+        }else if(r->session.wifi.link==AIC8800_WIFI_SECURED&&
             r->session.supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED&&
             a733_radio_session_start_network(&r->session,&r->config.network)){
             r->stage=ONLINE;atomic_store_explicit(&r->network_started,1,memory_order_release);
@@ -390,6 +513,8 @@ static int startup_profile_valid(const struct board_radio_profile *f,const uint8
      * identity from the secure reader, and the profile's own copy is unused. */
     if(!scan&&memcmp(f->chip_id,id->words,sizeof(f->chip_id)))return 0;
     if(scan){
+        if(board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_ASSOCIATE&&
+            (!f->refill_timeout_us||!f->security_timeout_us||!f->command_timeout_us))return 0;
         if(f->tcp_mode||!f->association_timeout_us||f->startup_deadline_us<f->bootstrap_deadline_us||
             f->startup_deadline_us>f->platform.lifetime_deadline_us)return 0;
     }else if(!f->ce_authority||!f->secure_ce_authority||
@@ -427,7 +552,12 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
         struct board_radio_config sc={.shared=shared,.platform=f->platform,.chip_id=id,.recovery_state=recovery_state,
             .admit=radio_authorize,.admission_context=p,.startup_deadline_us=f->startup_deadline_us,
             .scan_only=1,.first_run_guard=1,.scan_timeout_us=f->association_timeout_us,
-            .enumeration_only=board_radio_profile_stage_limit(f)!=BOARD_RADIO_STAGE_SCAN,
+            .associate=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_ASSOCIATE,
+            .connect_timeout_us=f->refill_timeout_us,.security_timeout_us=f->security_timeout_us,
+            .enumeration_only=board_radio_profile_stage_limit(f)!=BOARD_RADIO_STAGE_SCAN&&
+                board_radio_profile_stage_limit(f)!=BOARD_RADIO_STAGE_ASSOCIATE,
+            .security={.entropy=os_ce_entropy_bytes,.entropy_record=f->platform_authority,.beacon_record=f->platform_authority,
+                .ticks_per_second=1000000,.command_timeout=f->command_timeout_us,.key_mgmt=AIC8800_SUPPLICANT_PSK},
             .entropy_only=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_ENTROPY,
             .four_bit=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_FIRMWARE, /* the firmware upload needs 4 bits at 25 MHz */
             .report_memory={report_allocate,report_release,NULL}};
@@ -436,7 +566,8 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
             .renew_margin_us=f->renew_margin_us,.transport=f->transport,.bootstrap=f->bootstrap,
             .firmware={.identity=f->radio_identity,.profile=1},.runtime={.binding_timeout=f->binding_timeout_us},.wifi=f->wifi,
             .enumeration_only=sc.enumeration_only,
-            .identity_only=board_radio_profile_stage_limit(f)>=BOARD_RADIO_STAGE_IDENTITY,
+            .identity_only=board_radio_profile_stage_limit(f)>=BOARD_RADIO_STAGE_IDENTITY&&
+                board_radio_profile_stage_limit(f)!=BOARD_RADIO_STAGE_ASSOCIATE,
             .firmware_only=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_FIRMWARE};
         for(unsigned i=0;i<4;++i)sc.session.firmware.blobs[i]=(struct aic8800_firmware_blob){
             (const uint8_t *)(uintptr_t)f->firmware_address[i],(size_t)f->firmware_bytes[i]};

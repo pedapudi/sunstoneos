@@ -14,6 +14,13 @@ session and the existing common pool mutex. It creates no allocator, CE owner,
 clock token or mutex. Other CE clients must use the same session and mutex.
 The dedicated entropy client cannot have another request owner.
 
+## The association stage's bring-up source is not this adapter
+
+The association stage (`--radio-stage-limit 5`) does not construct this adapter. It passes the supplicant a callback that
+draws from the unqualified reservoir of `apps/os/ce_probe.c` (see [entropy](entropy.md)). That is for bring-up on the board
+only, never for production: nothing in the stage qualifies the source, and the profile must declare the entropy
+unqualified before the stage runs. The qualification requirement below applies to every production use.
+
 ## Physical qualification remains an independent prerequisite
 
 Construction requires an external qualification callback bound to the actual

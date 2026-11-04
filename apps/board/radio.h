@@ -28,6 +28,13 @@ struct board_radio_config {
     struct a733_radio_allocator report_memory;
     uint64_t scan_timeout_us;
     unsigned scan_only,first_run_guard;
+    /* The association stage (BOARD_RADIO_STAGE_ASSOCIATE), on a scan-only owner: after the scan the owner picks the access
+     * point that carries the stored credential's SSID, joins it on its scan channel and runs the four-way handshake with the
+     * CE entropy of apps/os/ce_probe.c (UNQUALIFIED, bring-up only), then stops at SCANNED with the supplicant authorized.
+     * No address is requested. connect_timeout_us bounds the authentication and association exchange; security_timeout_us the
+     * four-way handshake; both stop at the session deadline. */
+    unsigned associate;
+    uint64_t connect_timeout_us;
     /* Stop after enumeration (no four-bit widening, no transport, no firmware), for the smallest
      * probe; the owner then reports BOARD_RADIO_SCANNED with the report at stage enumerated. */
     unsigned enumeration_only;
@@ -68,6 +75,13 @@ struct board_radio {
     uint64_t failing_since;
     struct a733_radio_report report;
     uint64_t operation_deadline;
+    /* The association stage: the best scan result with the credential's SSID and its RSN element, the entropy source's
+     * start, and the progress that goes into the record. Nothing here holds an SSID, a key or a credential byte. */
+    struct a733_radio_assoc assoc;
+    uint8_t cand_bssid[6],cand_rsn[256];
+    uint16_t cand_frequency,cand_rsn_bytes;
+    int8_t cand_rssi;
+    unsigned cand_found,entropy_begun;
     /* Link recovery: owner-drained events while reassociating, and the bound
      * for admitting recovery after a clean loss is first reported. */
     unsigned recovering;
@@ -126,6 +140,11 @@ struct board_radio_profile {
 /* 4: the CE entropy stage alone (apps/os/ce_probe.c): the reset-and-gate cycle, one 32-byte TRNG task and its record. The
  * radio module is not powered and the platform is not polled. Association will follow it in the stage order. */
 #define BOARD_RADIO_STAGE_ENTROPY 4u
+/* 5: the full radio run through association with the stored credential's network and the four-way handshake (profile byte
+ * network_reserved[1] must be 1: the entropy is unqualified, for bring-up only). Scan profiles use association_timeout_us for
+ * the scan, refill_timeout_us for the authentication and association exchange, security_timeout_us for the handshake and
+ * command_timeout_us for the supplicant's commands. */
+#define BOARD_RADIO_STAGE_ASSOCIATE 5u
 static inline unsigned board_radio_profile_stage_limit(const struct board_radio_profile *f){return f->network_reserved[0];}
 static inline int board_radio_profile_scan_only(const struct board_radio_profile *f)
 {return f&&f->version==BOARD_RADIO_PROFILE_SCAN_VERSION;}
@@ -133,10 +152,12 @@ static inline int board_radio_profile_scan_only(const struct board_radio_profile
  * Fixed addressing has no acquisition/lease timer; optional DNS is independent. */
 static inline int board_radio_profile_network_valid(const struct board_radio_profile *p)
 {
-    if(!p||p->network_dhcp>1||p->network_reserved[1]||p->network_reserved[2])return 0;
+    if(!p||p->network_dhcp>1||p->network_reserved[2])return 0;
+    /* Byte 1 declares unqualified entropy, on the association stage only. */
+    if(p->network_reserved[1]!=(p->network_reserved[0]==BOARD_RADIO_STAGE_ASSOCIATE?1u:0u))return 0;
     /* Byte 0 is the stage limit of a scan-only profile; every other profile keeps it zero. */
     if(p->network_reserved[0]&&(!(p->version==BOARD_RADIO_PROFILE_SCAN_VERSION||p->version==BOARD_RADIO_PROFILE_SCAN_SUPERVISED_VERSION)||
-        p->network_reserved[0]>BOARD_RADIO_STAGE_ENTROPY))return 0;
+        p->network_reserved[0]>BOARD_RADIO_STAGE_ASSOCIATE))return 0;
     if(p->version==BOARD_RADIO_PROFILE_VERSION||p->version==BOARD_RADIO_PROFILE_SUPERVISED_VERSION||
        p->version==BOARD_RADIO_PROFILE_SCAN_VERSION||p->version==BOARD_RADIO_PROFILE_SCAN_SUPERVISED_VERSION){if(p->tcp_mode)return 0;}
     else if(p->version==BOARD_RADIO_PROFILE_LISTENER_VERSION||p->version==BOARD_RADIO_PROFILE_LISTENER_SUPERVISED_VERSION){

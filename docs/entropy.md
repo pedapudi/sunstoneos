@@ -75,6 +75,15 @@ cannot resume hardware activity or publish a result. The API supplies no cancel,
 reset, retry, release or shutdown operation. Full reclamation still needs an
 independent engine-drain protocol.
 
+## The association stage uses the output for bring-up only
+
+The OS image's association stage (`apps/os/ce_probe.c`, `os_ce_entropy_*`) fills a 256-byte reservoir with 32-byte TRNG
+tasks, using the non-secure bank and the hardware's default health tests, and hands the bytes to the supplicant's nonce
+and key-generation callback. This is bring-up use: it lets the four-way handshake run on the board. It is not production
+use. No characterization or startup test exists for this source, the source is not qualified (`entropy_qualified()` is
+unchanged and still refuses), and the profile declares it with the `entropy_unqualified` byte, which only the association
+stage accepts. A key made from these bytes is not a production key.
+
 ## Evidence and remaining qualification
 
 No host check composes the real service, CE controller, memory pool and clock

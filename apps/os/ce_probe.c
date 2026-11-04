@@ -39,7 +39,10 @@ static struct {
      * first unmapped address of mappings() plus one; bit 8 the clock token was refused. */
     unsigned denied;
     unsigned detail; /* The failing step's own detail for the record, set where the step fails. */
+    unsigned quiet;  /* The bring-up runs for the association stage's entropy: no CE record is published. */
 } ce;
+/* The association stage's reservoir of CE bytes: UNQUALIFIED, for bring-up only (docs/radio-entropy.md). */
+static struct { uint8_t bytes[256]; unsigned count, requested, failed; } pool;
 
 static uint64_t deadline_us(void){return board.session.deadline_us-10000;}
 static int now(void *v,uint64_t *n){return v==&ce?a733_counter_clock_now(&providers.shared.counter,n):0;}
@@ -186,6 +189,7 @@ static void publish(void)
 {
     if(ce.finished)return;
     ce.finished=1;
+    if(ce.quiet)return;
     published=ce.probe.record;
     clean(&published,sizeof(published));
     os_radio_result_descriptor.address=(uint64_t)(uintptr_t)&published;
@@ -216,3 +220,41 @@ void os_ce_probe_step(void)
 }
 int os_ce_probe_done(void){return ce.finished;}
 int os_ce_probe_failed(void){return ce.finished&&ce.probe.record.failed;}
+
+/* The unqualified entropy source of the association stage. begin: once, in the owner task. step: one bounded step per
+ * pass (the bring-up and the one 32-byte task of the probe, then refills of the reservoir). ready: the reservoir holds at
+ * least 128 bytes. bytes: the supplicant's entropy callback, all-or-nothing, in the owner task only; consumed bytes are
+ * zeroed. failed: the engine or a task failed; nothing more is drawn. Health tests are at hardware defaults and nothing
+ * here qualifies the source. */
+void os_ce_entropy_begin(void){ce.quiet=1;os_ce_probe_start();}
+void os_ce_entropy_step(void)
+{
+    if(!ce.started||pool.failed)return;
+    if(!ce.finished){os_ce_probe_step();if(ce.finished&&ce.probe.record.failed)pool.failed=1;return;}
+    if(ce.probe.record.failed)return;
+    uint64_t t;
+    if(now(&ce,&t)!=1)return;
+    if(!pool.requested&&pool.count+A733_CE_PROBE_BYTES<=sizeof(pool.bytes)){
+        enum a733_ce_result r=a733_ce_request(&ce.engine,t+A733_CE_PROBE_STEP_LIMIT_US);
+        if(r==A733_CE_PENDING)pool.requested=1;else if(r!=A733_CE_BUSY)pool.failed=1;
+    }else if(pool.requested){
+        uint8_t block[A733_CE_PROBE_BYTES];
+        enum a733_ce_result r=a733_ce_poll(&ce.engine,block);
+        if(r==A733_CE_RANDOM){
+            for(unsigned i=0;i<sizeof(block);++i){pool.bytes[pool.count+i]=block[i];((volatile uint8_t *)block)[i]=0;}
+            pool.count+=A733_CE_PROBE_BYTES;pool.requested=0;
+        }else if(r!=A733_CE_PENDING&&r!=A733_CE_BUSY)pool.failed=1;
+    }
+}
+int os_ce_entropy_ready(void){return ce.finished&&!ce.probe.record.failed&&!pool.failed&&pool.count>=128;}
+int os_ce_entropy_failed(void){return pool.failed||(ce.finished&&ce.probe.record.failed);}
+int os_ce_entropy_bytes(void *context,uint8_t *out,size_t n)
+{
+    (void)context;
+    if(!out||!n||n>pool.count||pool.failed)return 0;
+    for(size_t i=0;i<n;++i)out[i]=pool.bytes[i];
+    for(size_t i=0;i+n<pool.count;++i)pool.bytes[i]=pool.bytes[i+n];
+    for(size_t i=pool.count-n;i<pool.count;++i)((volatile uint8_t *)pool.bytes)[i]=0;
+    pool.count-=(unsigned)n;
+    return 1;
+}

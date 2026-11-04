@@ -210,6 +210,12 @@ void os_ce_probe_start(void);
 void os_ce_probe_step(void);
 int os_ce_probe_done(void);
 int os_ce_probe_failed(void);
+/* The association stage's unqualified CE entropy (apps/os/ce_probe.c). */
+void os_ce_entropy_begin(void);
+void os_ce_entropy_step(void);
+int os_ce_entropy_ready(void);
+int os_ce_entropy_failed(void);
+int os_ce_entropy_bytes(void *,uint8_t *,size_t);
 void os_radio_scan_return_request(void);
 int os_radio_scan_return_ready(void);
 #endif
