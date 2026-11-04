@@ -80,6 +80,16 @@ Time budget, against the 50 s startup deadline (firmware confirmed near 16.7 s o
 and association 8 s, four-way handshake 8 s, supplicant command 1 s. A normal run should need about 3 s of scan, well under
 1 s to join, and tens of milliseconds per handshake message. Each bound also stops at the session deadline.
 
+Credential residue. The runner backs up image RAM before it delivers the credential, so the backups hold none. After the
+return it reads only named blocks: the return report, the output record, the radio descriptor and the record it names, and
+the device-range list; it then restores image RAM from the backup. Nothing the runner reads holds the SSID or key, and the
+record carries neither. The owner still wipes every credential-derived byte at EL1 as soon as the session is over, on every
+exit that keeps DRAM (the module down after success, and the end of a failure, deadline, refusal or board failure): the SSID
+in the target, the connect command, held records and queued events; the PMK, PTK and GTK in the supplicant and its slots (its
+only heap), the key store and the transport buffers; and the entropy reservoir. Each is zeroed with stores the compiler cannot
+remove and cleaned to DRAM. A watchdog reset loses DRAM and needs no wipe. `checks/board-radio.c` runs six exit paths with a
+test credential and scans the whole `struct board_radio` and the report arena for any 8-byte run of the SSID or PMK.
+
 The record carries a 48-byte association tail after the access point list (head flags bit 9): the stage reached, the link
 state, the association status code, the supplicant and RSN states, the EAPOL frames received and sent (messages 1 and 3 are
 received, 2 and 4 sent), flags (unqualified entropy, SSID matched, RSN offers PSK and CCMP, target built, entropy ready,

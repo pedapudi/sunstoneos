@@ -216,6 +216,7 @@ void os_ce_entropy_step(void);
 int os_ce_entropy_ready(void);
 int os_ce_entropy_failed(void);
 int os_ce_entropy_bytes(void *,uint8_t *,size_t);
+void os_ce_entropy_wipe(void);
 void os_radio_scan_return_request(void);
 int os_radio_scan_return_ready(void);
 #endif

@@ -258,3 +258,11 @@ int os_ce_entropy_bytes(void *context,uint8_t *out,size_t n)
     pool.count-=(unsigned)n;
     return 1;
 }
+/* Zero the reservoir and the blocks in flight, and clean them to DRAM: the bytes seeded the handshake's nonces. EL1 only. */
+void os_ce_entropy_wipe(void)
+{
+    volatile uint8_t *b=pool.bytes;
+    for(unsigned i=0;i<sizeof(pool.bytes);++i)b[i]=0;
+    pool.count=0;pool.requested=0;pool.failed=1;
+    clean(pool.bytes,sizeof(pool.bytes));
+}

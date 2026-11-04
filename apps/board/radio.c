@@ -10,6 +10,7 @@ extern void os_ce_entropy_step(void) __attribute__((weak));
 extern int os_ce_entropy_ready(void) __attribute__((weak));
 extern int os_ce_entropy_failed(void) __attribute__((weak));
 extern int os_ce_entropy_bytes(void *,uint8_t *,size_t) __attribute__((weak));
+extern void os_ce_entropy_wipe(void) __attribute__((weak));
 extern int ss_wifi_credential(const uint8_t **,size_t *,const uint8_t **,const uint8_t **,size_t *) __attribute__((weak));
 enum { STARTING,CONNECTING,SECURING,ONLINE,SCANNING,SCANNED,SHUTTING_DOWN,DOWN };
 /* Elapsed time before an owner stops repeating advancing session steps. At
@@ -79,6 +80,7 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
 }
 static void assoc_update(struct board_radio *r);
 static void wipe_pmk(struct board_radio *r);
+static void wipe_secrets(struct board_radio *r);
 /* The board's failure bound on the failure shutdown, past the platform's own 2 s deadline. */
 #define FAILURE_SHUTDOWN_BOUND_US 3000000u
 static enum board_radio_result retain(struct board_radio *r)
@@ -88,7 +90,7 @@ static enum board_radio_result retain(struct board_radio *r)
     if(!r->failing){r->failing=1;r->failing_since=now;}
     atomic_store_explicit(&r->failed,1,memory_order_release);
     /* The first retain starts the failure shutdown when the module is powered; a later one never cuts it short. */
-    (void)a733_radio_session_retain(&r->session);
+    if(!r->wiped)(void)a733_radio_session_retain(&r->session);
     unsigned waiting=r->platform.aborting&&!r->platform.abort_done&&!r->platform.fault&&have&&
         now-r->failing_since<FAILURE_SHUTDOWN_BOUND_US;
     if(waiting){
@@ -107,7 +109,8 @@ static enum board_radio_result retain(struct board_radio *r)
         a733_radio_report_session_failure(&r->report,r->session.fail_line,r->session.fail_stage);
         assoc_update(r);
     }
-    if(r->config.associate)wipe_pmk(r);
+    /* The failure is final: nothing polls the session again, so every credential-derived byte leaves RAM now, at EL1. */
+    wipe_secrets(r);
     return BOARD_RADIO_RETAINED;
 }
 static uint64_t bounded_deadline(struct board_radio *r,uint64_t now,uint64_t duration)
@@ -181,7 +184,7 @@ const struct a733_radio_report *board_radio_report(const struct board_radio *r)
 /* The association stage's record tail: counters and codes only, never an SSID, BSSID, key or credential byte. */
 static void assoc_update(struct board_radio *r)
 {
-    if(!r->config.associate||!r->config.report_memory.allocate)return;
+    if(!r->config.associate||r->wiped||!r->config.report_memory.allocate)return;
     struct a733_radio_assoc *a=&r->assoc;
     a->flags|=1u; /* the entropy is unqualified: bring-up only */
     a->link=(uint32_t)r->session.wifi.link;a->status=r->session.wifi.station_event.status;
@@ -189,6 +192,37 @@ static void assoc_update(struct board_radio *r)
     a->eapol_rx=r->session.supplicant.eapol_rx;a->eapol_tx=r->session.supplicant.eapol_tx;
     if(r->cand_found)a->frequency_rssi=(uint32_t)r->cand_frequency|(uint32_t)(uint16_t)(int16_t)r->cand_rssi<<16;
     a733_radio_report_association(&r->report,a);
+}
+/* Zero with stores the compiler cannot remove, then clean the lines to DRAM: the runner reads DRAM, not the cache. */
+static void scrub(void *memory,size_t bytes)
+{
+    volatile uint8_t *b=memory;
+    for(size_t i=0;i<bytes;++i)b[i]=0;
+#if defined(__aarch64__)
+    for(uintptr_t a=(uintptr_t)memory&~(uintptr_t)63;a<(uintptr_t)memory+bytes;a+=64)
+        __asm__ volatile("dc civac, %0"::"r"(a):"memory");
+    __asm__ volatile("dsb sy":::"memory");
+#endif
+}
+#define SCRUB(x) scrub(&(x),sizeof(x))
+/* Every place a credential-derived byte lives, once the module is down or the failure shutdown is done and the session is
+ * never polled again: the SSID in the target and in the management layer's request, held records and scan results; the
+ * PMK and the PTK/GTK in the supplicant (whose slots are its only heap), the key store and the transport's buffers; the
+ * dispatcher's queued events and the owner's copies of them; the entropy reservoir. Kept: what the record and the later
+ * failure notes read (the report, the platform, the session's failure site and firmware progress). EL1 only. */
+static void wipe_secrets(struct board_radio *r)
+{
+    if(!r->config.associate||r->wiped)return;
+    r->wiped=1;
+    wipe_pmk(r);
+    SCRUB(r->config.target);SCRUB(r->config.security);
+    SCRUB(r->cand_bssid);SCRUB(r->cand_rsn);SCRUB(r->startup_event);SCRUB(r->diagnostic);
+    struct a733_radio_session *s=&r->session;
+    SCRUB(s->transport.tx);SCRUB(s->transport.rx);SCRUB(s->transport.confirmations);SCRUB(s->transport.unrelated);
+    SCRUB(s->transport.setup_confirmation);SCRUB(s->transport.last_result);
+    SCRUB(s->wifi);SCRUB(s->data);SCRUB(s->security);SCRUB(s->supplicant);SCRUB(s->dispatcher);
+    SCRUB(s->reconnect_target);SCRUB(s->reconnect_security);
+    if(os_ce_entropy_wipe)os_ce_entropy_wipe();
 }
 static void wipe_pmk(struct board_radio *r)
 {
@@ -296,9 +330,8 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
         enum a733_radio_platform_result down=a733_radio_platform_poll(&r->platform);
         if(down==A733_RADIO_RETAINED||down==A733_RADIO_INVALID)return retain(r);
         if(down==A733_RADIO_DOWN){
-            r->stage=DOWN;report_progress(r);
-            if(r->config.associate){ /* nothing polls the session again: drop the supplicant's keys and state */
-                aic8800_security_zero(&r->session.supplicant,sizeof(r->session.supplicant));wipe_pmk(r);}
+            if(!r->wiped)report_progress(r);
+            r->stage=DOWN;wipe_secrets(r); /* nothing polls the session again */
             return BOARD_RADIO_DOWN;
         }
         return publish(r,BOARD_RADIO_SCANNED);
