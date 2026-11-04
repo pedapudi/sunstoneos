@@ -18,7 +18,7 @@ import subprocess
 import sys
 
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
-from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_WRITE
+from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_WRITE, UC_HOOK_MEM_READ_UNMAPPED, UC_HOOK_MEM_WRITE_UNMAPPED
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X29, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_PC
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -117,8 +117,17 @@ class Machine:
         self.counting = False
         self.executed = []
         self.uc.hook_add(UC_HOOK_CODE, self.hook)
+        # The OS image always links the address-test decode check (cmake/a733-smp-cached.cmake), which writes and reads
+        # tokens across the upper DRAM: a page mapped on first touch holds them.
+        self.uc.hook_add(UC_HOOK_MEM_READ_UNMAPPED | UC_HOOK_MEM_WRITE_UNMAPPED, self.upper_dram)
         start, end = image.address('__tables_start'), image.address('__tables_end')
         self.uc.hook_add(UC_HOOK_MEM_WRITE, self.wrote, begin=start, end=end - 1)
+
+    def upper_dram(self, uc, access, address, size, value, unused):
+        if not 0x48000000 <= address < 0x340000000:
+            return False
+        uc.mem_map(address & ~0xfff, 0x1000)
+        return True
 
     def gpr(self, name):
         return 0 if name in ('xzr', 'wzr') else self.uc.reg_read(GPR[int(name[1:])])

@@ -68,11 +68,13 @@ static int masked(void)
     if(!device(0x03400118))return 0;
     return !(a733_mmio_read32_dsb_sy_both(0x03400118)&0x300); /* INTIDs 200 and 201 */
 }
+/* a733_ce_request moves the controller's deadline to the request's, which is earlier than the session's: any deadline
+ * up to the session's is the same authority. */
 static int authorize(void *v,const struct a733_ce_config *c,const struct a733_clock_token *t,const struct a733_ce_memory *m)
 {
     if(v!=&ce||!board_live(NULL)||!mappings()||!masked()||!ce.engine.initialized||m!=ce.memory||
        c->owner!=CE_OWNER||c->handoff!=board.session.generation||c->profile!=A733_CE_TRNG_ONLY||
-       c->deadline_us!=deadline_us()||c->health_profile||c->configure_health||
+       c->deadline_us>deadline_us()||c->health_profile||c->configure_health||
        t->id!=ce.token.id||t->owner!=ce.token.owner||t->shared!=ce.token.shared||t->exclusive!=ce.token.exclusive)return 0;
     for(unsigned i=0;i<4;++i)if(c->health[i])return 0;
     for(unsigned i=0;i<3;++i)if(c->fabric[i]!=board.session.fabric[i]||c->fabric_hz[i]!=board.session.fabric_hz[i])return 0;
@@ -113,6 +115,12 @@ static int op_bring_up(void *v)
         {ce.detail=(ce.clock.fail_line&0xfffu)|(ce.denied&0x1ffu)<<12;return -1;} /* a write-free refusal keeps the token and the lock; after a write the provision retained them */
     return 1;
 }
+static void clean(const void *base,size_t bytes)
+{
+    for(uintptr_t a=(uintptr_t)base&~(uintptr_t)63;a<(uintptr_t)base+bytes;a+=64)
+        __asm__ volatile("dc civac, %0"::"r"(a):"memory");
+    __asm__ volatile("dsb sy":::"memory");
+}
 /* One 4 KiB device-reachable page: the descriptor object (3,520 bytes) from the unified ledger with the crypto
  * device's address limit; zeroed and cleaned by the ledger, then handed to the device. */
 static int op_alloc(void *v,uint64_t *descriptor,uint64_t *output)
@@ -121,16 +129,17 @@ static int op_alloc(void *v,uint64_t *descriptor,uint64_t *output)
     struct umem *ledger=os_large_umem();
     if(!ledger){ce.detail=1;return -1;}
     if(!ce.buffer.generation){
+        /* The OS ledger has no cache-maintenance hook (apps/os/large.c), so the page is raw, as every kernel user's is:
+         * zeroed and cleaned here before the device sees it. */
         struct umem_request r={.bytes=4096,.align=4096,.window=4096,.device_mask=UMEM_DEV_CRYPTO,
-                               .owner=UMEM_OWNER_KERNEL,.policy=UMEM_WB};
+                               .owner=UMEM_OWNER_KERNEL,.policy=UMEM_WB,.flags=UMEM_RAW};
         int status=umem_alloc(ledger,&r,&ce.buffer);
         if(status!=UMEM_OK){ce.detail=2|(unsigned)(-status)<<4;return -1;}
+        volatile uint8_t *page=(volatile uint8_t *)(uintptr_t)ce.buffer.base;
+        for(unsigned i=0;i<4096;++i)page[i]=0;
+        clean((const void *)(uintptr_t)ce.buffer.base,4096);
     }
-    if(!umem_ready(ledger,&ce.buffer)){
-        int s=umem_prepare_step(ledger,&ce.buffer,4096);
-        if(s<0){ce.detail=3|(unsigned)(-s)<<4;return -1;}
-        if(!s)return 0;
-    }
+    if(!umem_ready(ledger,&ce.buffer)){ce.detail=3;return -1;}
     if(!ce.buffer_state){
         int status=umem_handoff(ledger,&ce.buffer,UMEM_CPU,UMEM_DEVICE,NULL,0);
         if(status!=UMEM_OK){ce.detail=4|(unsigned)(-status)<<4;return -1;}
@@ -153,27 +162,26 @@ static int op_request(void *v,uint64_t deadline)
 {
     (void)v;
     enum a733_ce_result r=a733_ce_request(&ce.engine,deadline);
+    ce.detail=(ce.engine.fail_line&0xfffu)|((unsigned)r&7u)<<16;
     return r==A733_CE_PENDING?1:r==A733_CE_BUSY?0:-1;
 }
 static int op_poll(void *v,uint8_t block[A733_CE_PROBE_BYTES])
 {
     (void)v;
     enum a733_ce_result r=a733_ce_poll(&ce.engine,block);
+    /* For the record if this poll is the last: the controller's first failing source line (bits 11:0), its stage (14:12),
+     * its fault flag (15), this result (18:16), the status word's task bits (20:19) and the error word's low bits (23:21). */
+    ce.detail=(ce.engine.fail_line&0xfffu)|((unsigned)ce.engine.stage&7u)<<12|(ce.engine.fault?1u<<15:0)|
+        ((unsigned)r&7u)<<16|((ce.engine.status_ns>>4)&3u)<<19|(ce.engine.error_ns&7u)<<21;
     return r==A733_CE_RANDOM?1:(r==A733_CE_PENDING||r==A733_CE_BUSY)?0:-1;
 }
 /* A failure inside the controller retains its own resources. Before the engine exists the bring-up is complete and consistent (or retained by the clock code itself), no task has started, and nothing is retained, so the session returns with its record. */
 static void op_retain(void *v){(void)v;if(ce.token.id&&ce.engine.initialized)(void)a733_clock_retain(&providers.shared.clocks,&ce.token);}
 /* The failing step's own detail for the record. Bring-up: the clock provision's first failing source line (bits 11:0)
  * and the admission denial (bits 20:12). Allocation: the step that failed (bits 3:0: 1 no ledger, 2 alloc, 3 prepare,
- * 4 handoff) and the negative umem status (bits 11:4). */
+ * 4 handoff) and the negative umem status (bits 11:4). Request and poll: see op_poll. */
 static unsigned op_detail(void *v){(void)v;return ce.detail;}
 
-static void clean(const void *base,size_t bytes)
-{
-    for(uintptr_t a=(uintptr_t)base&~(uintptr_t)63;a<(uintptr_t)base+bytes;a+=64)
-        __asm__ volatile("dc civac, %0"::"r"(a):"memory");
-    __asm__ volatile("dsb sy":::"memory");
-}
 static void publish(void)
 {
     if(ce.finished)return;
