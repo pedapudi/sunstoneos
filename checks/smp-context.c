@@ -54,9 +54,17 @@ static void worker(void *argument) {
     }
 }
 
+/* How long a round takes is not asserted: under multi-threaded TCG guest time is host time, so a loaded host stretches it.
+ * A wait past its deadline reports once, as a WAIT line that does not fail the run; a migration that never happens then
+ * ends at the checker's host deadline with that report in the log. */
 static void wait_value(uint32_t *address, uint32_t value, TickType_t deadline) {
+    unsigned reported = 0;
     while (__atomic_load_n(address, __ATOMIC_ACQUIRE) != value) {
-        configASSERT(xTaskGetTickCount() < deadline);
+        if (xTaskGetTickCount() >= deadline && !reported++) {
+            platform_puts("WAIT context round="); platform_hex(round_number);
+            platform_puts(" value="); platform_hex(__atomic_load_n(address, __ATOMIC_ACQUIRE));
+            platform_puts(" want="); platform_hex(value); platform_puts("\n");
+        }
         vTaskDelay(1);
     }
 }

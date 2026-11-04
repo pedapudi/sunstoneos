@@ -168,6 +168,32 @@ with the radio, I2S with the DMA service, resident CPU grants with I2S or the
 radio, and the NPU with CPU grants outside a recorded or performance-mode image.
 `checks/os-session-grants.py` lists them and checks the wire sizes.
 
+### Adding a service
+
+The services are declared once, in `apps/os/os-services.h`. Its lists name, for
+each service, its grant bit and the build option that links it
+(`OS_GRANT_ROWS`), its session record (`OS_RECORD_ROWS`), its entry in the fixed
+start list (`OS_START_ROWS`) and the tasks the supervisor watches
+(`OS_SUPERVISED_ROWS`). The grant bits, service ids, start list, supervision
+table, record decode, wire size and the host session builder's record table
+(`apps/os/host.py`) are derived from these rows, and the host models include the
+header instead of copying it.
+
+The application ABI numbers stay where applications read them: the device bits
+in `include/sunstone_app.h` and the extent types in `include/sunstone_session.h`.
+The manifest tool and `apps/os/host.py` parse them from there, and the rows name
+them.
+
+A new service is therefore:
+
+1. its device bit or extent type, if it needs one, in the SDK header;
+2. a row in each list of `apps/os/os-services.h` that applies;
+3. its code: the start entries, the record's field in `struct os_session` and
+   its validation in `os_session_valid` (`apps/os/admission.c`), and any rows of
+   `refused_compositions` that a shared resource requires;
+4. its host check: a session that does not grant it reaches none of its
+   registers.
+
 ## Host messages and results
 
 The OS owns USB0 and the 64-byte frame header. Operations 5–8 preserve fault,

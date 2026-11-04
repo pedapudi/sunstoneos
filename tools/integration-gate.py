@@ -70,16 +70,11 @@ VARIANTS = {
     # The supervised NPU profile. The OS build verifies its host inputs against
     # tools/npu-fixtures.json. {cache} is the --cache directory.
     'npu': ['-DSUNSTONE_A733_OS_NPU=ON', '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
-    'npu-queue': ['-DSUNSTONE_A733_OS_NPU=ON', '-DSUNSTONE_A733_OS_NPU_QUEUE=ON',
-                  '-DSUNSTONE_OS_NPU_CLIENT_MODEL=0',
-                  '-DSUNSTONE_OS_NPU_QUEUE_MODELS=0,1',
-                  '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
-    # The performance-mode service (docs/designs/performance-modes.md) on the
-    # supervised A76 CPU clock build, with the high boot mode; and with the
-    # NPU profile and the low boot mode.
+    # The NPU queue and the performance-mode service with the high boot mode are built in 'all', which no check needs
+    # without the other services; they have no variant of their own.
     # The supervised A76 CPU clock build without the performance-mode service (checks/os-cpu-clock-native.py).
     'cpu-clock': ['-DA733_A76_ADMITTED=ON', '-DSUNSTONE_A733_OS_CPU_CLOCK=ON'],
-    'perf': ['-DA733_A76_ADMITTED=ON', '-DSUNSTONE_A733_OS_CPU_CLOCK=ON', '-DSUNSTONE_A733_OS_PERF=ON'],
+    # The performance-mode service (docs/designs/performance-modes.md) with the NPU profile and the low boot mode.
     'perf-npu-low': ['-DA733_A76_ADMITTED=ON', '-DSUNSTONE_A733_OS_CPU_CLOCK=ON', '-DSUNSTONE_A733_OS_PERF=ON',
                      '-DSUNSTONE_A733_OS_PERF_BOOT=low', '-DSUNSTONE_A733_OS_NPU=ON',
                      '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],

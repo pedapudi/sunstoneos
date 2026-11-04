@@ -51,7 +51,7 @@ if previous.get("passed") and previous.get("identity") == identity:
 trials = []
 for index in range(args.trials):
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=30 if args.case == "soak8" else 10)
+        result = subprocess.run(command, capture_output=True, text=True, timeout=300)  # a hang bound only; the guests assert no time
         output, code = result.stdout + result.stderr, result.returncode
     except subprocess.TimeoutExpired as error:
         output = ((error.stdout or b"") + (error.stderr or b"")).decode(errors="replace")

@@ -115,18 +115,15 @@ static void runtime_cases(void *unused)
  * exists only in board.session, so it is supplied by board_runtime_deadline_us(). */
 #define SUNSTONE_OS_H
 #define SUNSTONE_OS_APPLICATION_H
-#define OS_SERVICES 11
-#define OS_SERVICE_APPLICATION 5
-/* The services after the thermal owner exist in every image and are required only when the session grants them: this
- * session grants none (apps/os/os.h). */
-enum { OS_SERVICE_NPU=7, OS_SERVICE_AUDIO, OS_SERVICE_RADIO, OS_SERVICE_NETWORK };
-enum { OS_GRANT_NPU=1u<<0, OS_GRANT_AUDIO=1u<<1, OS_GRANT_RADIO=1u<<4 };
+/* The grant bits and service ids come from the declaration (apps/os/os-services.h), which includes nothing. The services
+ * after the thermal owner exist in every image and are required only when the session grants them: this session grants
+ * none. The board's USB0 window is shortened for the model. */
+#include "os-services.h"
 #define OS_RENEW_US 1000000u
 struct os_service { const char *name; uint32_t window_us; };
 const struct os_service os_services[OS_SERVICES]={
     {"pmic",1000000},{"usb0",100},{"typec",1000000},{"power",1000000},
-    {"usb2",1000000},{"application",1000000},{"thermal",1000000},{"npu",5000000},{"audio",1000000},{"radio",1000000},
-    {"network",1000000}};
+    {"usb2",1000000},{"application",1000000},OS_SERVICE_TABLE};
 struct os_session { struct { unsigned workload; uint64_t deadline_us; } board; unsigned granted; };
 static const struct os_session test_session={{0,0},0};
 static uint64_t board_runtime_deadline_us_value=100000;
