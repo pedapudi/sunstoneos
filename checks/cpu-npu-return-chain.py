@@ -597,8 +597,11 @@ def main():
     assert returns.execute(contexts, budget=4000000) == 'rom'
     assert not returns.postclean
     assert all(returns.u64(returns.local['arrived']+core*8)==epoch for core in range(8))
-    for ranges in returns.ranges:
-        assert sum((hi-lo)//64 for lo, hi in ranges if POOL <= lo < POOL+POOL_BYTES) == POOL_BYTES//64
+    # The caches are cleaned by set/way, one sweep per core (checks/os-cpu-return.py checks every operand); the published NPU
+    # range is walked and validated by each core, whose counters are in image RAM.
+    assert [len(x) for x in returns.sweeps] == [18944]+[2560]*7
+    walk = image.symbols['os_cpu_return_walk']
+    assert all(returns.u64(walk+16*core) and returns.u64(walk+16*core+8) >= returns.u64(walk+16*core) for core in range(8))
     record = layout.address('ss_result_record')
     envelope = bytes(returns.uc.mem_read(record, 56+len(payload)))
     stop = bytes(returns.uc.mem_read(native.report, 104))
@@ -622,7 +625,7 @@ def main():
     save(args.out/'result.json', dict(passed=True, physical_access=False, model_boundary=__doc__,
         image_sha256=hashlib.sha256(args.elf.read_bytes()).hexdigest(), binding=binding,
         epoch=epoch, generation=generation, sdk_operations=native.ops, sdk_jobs=native.submits,
-        local_stop_calls=native.stop_calls, pool_lines_per_core=POOL_BYTES//64, runner_cleanup=cleanup,
+        local_stop_calls=native.stop_calls, sweep_operations=[len(x) for x in returns.sweeps], runner_cleanup=cleanup,
         stages=['actual-host-GEMM-receipt','actual-public-SDK-mailbox-and-copy',
                 'actual-CLOSE','actual-worker-park','actual-bootstrap-local-stop',
                 'actual-immutable-report','actual-ss_finish','actual-owner-retirement',

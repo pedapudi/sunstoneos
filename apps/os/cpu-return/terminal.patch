@@ -52,13 +52,17 @@
      mov x2, #0x40000000
      sub x2, x24, x2
      lsr x2, x2, #21
-@@ -244,10 +262,106 @@
+@@ -244,10 +262,110 @@
      mov x4, #0x725
      cmp x3, x4
      b.ne qualification_park
+-    dc civac, x24
+-    add x24, x24, #64
 +.Lclean_line:
-     dc civac, x24
-     add x24, x24, #64
++    // The block is validated; the caches are cleaned by set/way when each core goes down (a733_qualification_sweep). The next
++    // block starts at the 2 MiB boundary.
++    orr x24, x24, #0x1fffff
++    add x24, x24, #1
      cmp x24, x25
      b.lo .Lclean
 +    b .Lnext_region
@@ -78,7 +82,11 @@
 +    mov x4, #0x725
 +    cmp x3, x4
 +    b.ne qualification_park
-+    b .Lclean_line
++    orr x24, x24, #0x3fffffff
++    add x24, x24, #1
++    cmp x24, x25
++    b.lo .Lclean
++    b .Lnext_region
 +.Lnext_region:
 +    cbnz x22, .Lranges_next
 +    cbz x28, .Lclean_finished
@@ -106,7 +114,6 @@
 +    address x3, os_cpu_return_walk
 +    add x3, x3, x20, lsl #4
 +    str x2, [x3]
-+    dc civac, x3
 +    address x2, os_device_ranges_head
 +    ldr x27, [x2]
 +    mov x28, #0
@@ -155,12 +162,29 @@
 +    address x3, os_cpu_return_walk
 +    add x3, x3, x20, lsl #4
 +    str x2, [x3, #8]
-+    dc civac, x3
      dsb sy
      add x2, x23, #688
      add x2, x2, x20, lsl #10
-@@ -369,9 +483,40 @@
+@@ -348,6 +466,13 @@
+ 
+ a733_qualification_power_down:
+     // x0 core, x1 epoch; use only Device report/register stores from here.
++    // The core's own L1 and L2 reach the point of coherence before it goes down; the shared L3 is cleaned by core 0 once every
++    // secondary has acknowledged. The sweep touches no memory, and its time goes to the core's report slot.
++    mrs x16, cntpct_el0
++    mov x15, #2
++    bl a733_qualification_sweep
++    mrs x17, cntpct_el0
++    sub x17, x17, x16
+     address x2, a733_qualification_report
+     add x2, x2, #688
+     add x2, x2, x0, lsl #10
+@@ -367,11 +492,109 @@
+     orr w4, w4, #2
+     str w4, [x3]
      dsb sy
++    str x17, [x2, #56]
++    dsb sy
      str x1, [x2, #40]
      dsb sy
 +    // Breadcrumb LAST/TIME (include/sunstone_crumb.h): power-down, value core.
@@ -175,7 +199,72 @@
 +    dsb sy
      b qualification_park
  
++// Clean and invalidate by set/way the data and unified caches below level x15 (at most CLIDR.LoC), as arch/aarch64/cache.S does
++// for the boot monitor's reset. Uses x2-x14 and no memory; the caller has the MMU and data caches off at EL3.
++a733_qualification_sweep:
++    dsb sy
++    mrs x2, clidr_el1
++    ubfx x3, x2, #24, #3
++    cmp x15, x3
++    csel x15, x15, x3, lo
++    mov x4, #0
++.Lsweep_level:
++    cmp x4, x15
++    b.hs .Lsweep_done
++    add x5, x4, x4, lsl #1
++    lsr x5, x2, x5
++    and x5, x5, #7
++    cmp x5, #2
++    b.lo .Lsweep_next
++    lsl x5, x4, #1
++    msr csselr_el1, x5
++    isb
++    mrs x6, ccsidr_el1
++    and x7, x6, #7
++    add x7, x7, #4
++    mrs x8, id_aa64mmfr2_el1
++    ubfx x8, x8, #20, #4
++    cbnz x8, .Lsweep_ccidx
++    ubfx x8, x6, #3, #10
++    ubfx x9, x6, #13, #15
++    b .Lsweep_geometry
++.Lsweep_ccidx:
++    ubfx x8, x6, #3, #21
++    ubfx x9, x6, #32, #24
++.Lsweep_geometry:
++    clz w10, w8
++.Lsweep_way:
++    mov x11, x9
++.Lsweep_set:
++    lsl x12, x8, x10
++    orr x12, x12, x5
++    lsl x13, x11, x7
++    orr x12, x12, x13
++    dc cisw, x12
++    subs x11, x11, #1
++    b.ge .Lsweep_set
++    subs x8, x8, #1
++    b.ge .Lsweep_way
++.Lsweep_next:
++    add x4, x4, #1
++    b .Lsweep_level
++.Lsweep_done:
++    dsb sy
++    isb
++    ret
++
  a733_qualification_rom:
++    // Every secondary is off and has cleaned its own caches: core 0 cleans its L1 and L2 and the shared L3 and records the time in
++    // its report slot (a Device store, after the last cache operation).
++    mrs x16, cntpct_el0
++    mov x15, #3
++    bl a733_qualification_sweep
++    mrs x17, cntpct_el0
++    sub x17, x17, x16
++    address x2, a733_qualification_report
++    add x2, x2, #688
++    str x17, [x2, #56]
++    dsb sy
 +    // Disarm the host-armed WDT0 (include/sunstone_crumb.h) before the only
 +    // normal return, then record the mode read back.
 +    mov x0, #0x02050000
