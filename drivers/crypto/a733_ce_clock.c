@@ -50,13 +50,17 @@ static int parents(struct a733_ce_clock *p)
     return bits(p,CCU+0x1908,gates|(gates<<16),gates|(gates<<16))&&
         bits(p,CCU+0x1988,gates<<16,gates<<16);
 }
-static int failed(struct a733_ce_clock *p)
+static int fail_at(struct a733_ce_clock *p,unsigned line)
 {
+    if(!p->fail_line)p->fail_line=line;
     p->state=A733_CE_CLOCK_RETAINED;
-    if(p->held)p->ops.retain(p->cookie); /* Never unlock uncertain local writes. */
-    (void)a733_clock_retain(p->registry,&p->token);
+    /* A failure before any write changed nothing: leave the lock and keep the token, so the owner can end the session
+     * normally with its record. Once a write was attempted its completion may be uncertain: never unlock it. */
+    if(p->held){if(p->writes)p->ops.retain(p->cookie);else{p->ops.leave(p->cookie);p->held=0;}}
+    if(p->writes)(void)a733_clock_retain(p->registry,&p->token);
     return 0;
 }
+#define failed(p) fail_at((p),(unsigned)__LINE__)
 int a733_ce_clock_provision(struct a733_ce_clock *p,const struct a733_ce_config *c,
     const struct a733_ce_clock_ops *o,void *cookie,struct a733_clock_leases *r,
     const struct a733_clock_token *t)
