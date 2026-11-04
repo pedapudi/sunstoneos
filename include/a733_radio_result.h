@@ -10,6 +10,7 @@
  * copy; the record grants nothing. A later stage implies every earlier one. */
 enum a733_radio_stage {
     A733_RADIO_STAGE_NONE, A733_RADIO_STAGE_RAILS_OBSERVED, A733_RADIO_STAGE_GUARD_PASSED,
+    /* The numbers are stored in records and are not the order: identified comes before firmware. */
     A733_RADIO_STAGE_POWERED, A733_RADIO_STAGE_ENUMERATED, A733_RADIO_STAGE_FIRMWARE,
     A733_RADIO_STAGE_IDENTIFIED, A733_RADIO_STAGE_SCANNED, A733_RADIO_STAGE_ASSOCIATED
 };

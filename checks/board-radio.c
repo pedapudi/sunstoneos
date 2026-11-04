@@ -339,6 +339,13 @@ int main(void)
         unsigned widen_before=fast_requests;
         struct board_radio_config probe=scan_only;probe.enumeration_only=1;probe.four_bit=1;probe.session.enumeration_only=1;
         assert(board_radio_init(&app,&probe)&&fast_requests==widen_before+1&&app.platform.four_bit);
+        /* The stored stage numbers do not order the stages: identified (6) comes before firmware (5) in time. */
+        a733_radio_report_identity(&app.report,1,2);
+        assert(app.report.head.stage==A733_RADIO_STAGE_IDENTIFIED);
+        a733_radio_report_firmware(&app.report);
+        assert(app.report.head.stage==A733_RADIO_STAGE_FIRMWARE);
+        a733_radio_report_identity(&app.report,1,2);
+        assert(app.report.head.stage==A733_RADIO_STAGE_FIRMWARE); /* Not lowered by a repeat. */
         a733_radio_report_release(&app.report);
     }
     /* A failure with the failure shutdown running: each retain drives it, the failure is final (the board's failure
