@@ -65,7 +65,9 @@ int a733_ce_clock_provision(struct a733_ce_clock *p,const struct a733_ce_config 
        !c->owner||!c->handoff||!c->deadline_us||
        (c->profile!=A733_CE_SHA256_AES128&&c->profile!=A733_CE_TRNG_ONLY)||
        c->health_profile||c->configure_health||!t->id||t->owner!=c->owner||
-       t->exclusive!=A733_CLOCK_CE||t->shared!=STABLE||
+       t->exclusive!=A733_CLOCK_CE||
+       /* The TRNG also holds RC16M (a733_ce_init), which the probe's one token carries. */
+       t->shared!=(c->profile==A733_CE_TRNG_ONLY?(STABLE|A733_CLOCK_RC16M):STABLE)||
        !o->authorize||!o->now_us||!o->enter||!o->leave||!o->retain||!o->read||!o->write)return 0;
     const void *objects[]={p,c,o,r,t};
     const size_t sizes[]={sizeof(*p),sizeof(*c),sizeof(*o),sizeof(*r),sizeof(*t)};

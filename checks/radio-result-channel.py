@@ -8,6 +8,7 @@ root = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root/'tools'))
 import radio_result
 import radio_result_channel as channel
+import ce_probe_result
 
 RAM = (0x40000000, 0x80000000)
 
@@ -66,4 +67,19 @@ for name, descriptor in [
     except ValueError:
         continue
     raise SystemExit('accepted: ' + name)
-print('PASS radio result channel: descriptor, length from the head, records of 0, 3 and 2000 access points read whole, six refusals')
+# The CE entropy stage publishes its fixed 96-byte record through the same descriptor.
+ce = struct.pack('<QII4I3I3I3I3IQQ', ce_probe_result.MAGIC, 1, ce_probe_result.SIZE, 6, 0, 0, 0b11101,
+                 0x81000000, 0x30003, 0x40306, 0x81000000, 0x30003, 0x40306, 0x10, 0, 2, 32, 1500, 2000000,
+                 0x41000000, 0x41000100)
+read, reads = memory_for(ce)
+decoded, raw = channel.read_record(read, channel.MAGIC + struct.pack('<2Q', 0x41234560, len(ce)), RAM)
+assert raw == ce and decoded['stage'] == 'done' and decoded['bytes_returned'] == 32 and decoded['task_us'] == 1500
+bad = bytearray(ce); bad[0] ^= 1
+read, _ = memory_for(bytes(bad))
+try:
+    channel.read_record(read, channel.MAGIC + struct.pack('<2Q', 0x41234560, len(bad)), RAM)
+except ValueError:
+    pass
+else:
+    raise SystemExit('accepted a 96-byte record with the wrong magic')
+print('PASS radio result channel: descriptor, length from the head, records of 0, 3 and 2000 access points read whole, six refusals, and the 96-byte CE entropy record')

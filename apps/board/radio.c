@@ -189,6 +189,9 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
             atomic_load_explicit(&r->entropy.fault,memory_order_acquire)||
             atomic_load_explicit(&r->config.entropy.source->engine->fault,memory_order_acquire))return retain(r);
     }
+    /* The entropy stage runs outside the radio platform and session (apps/os/ce_probe.c): nothing is polled, so the
+     * module stays unpowered. */
+    if(r->config.entropy_only){r->stage=SCANNED;return BOARD_RADIO_SCANNED;}
     uint64_t now;
     if(!a733_counter_clock_now(&r->config.shared->counter,&now))return retain(r);
     if(r->stage==SHUTTING_DOWN||r->stage==DOWN){
@@ -425,6 +428,7 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
             .admit=radio_authorize,.admission_context=p,.startup_deadline_us=f->startup_deadline_us,
             .scan_only=1,.first_run_guard=1,.scan_timeout_us=f->association_timeout_us,
             .enumeration_only=board_radio_profile_stage_limit(f)!=BOARD_RADIO_STAGE_SCAN,
+            .entropy_only=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_ENTROPY,
             .four_bit=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_FIRMWARE, /* the firmware upload needs 4 bits at 25 MHz */
             .report_memory={report_allocate,report_release,NULL}};
         sc.session=(struct a733_radio_session_config){.owner_task=owner,.owner=f->session_owner,

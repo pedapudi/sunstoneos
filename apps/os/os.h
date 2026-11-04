@@ -218,6 +218,12 @@ const struct board_radio_profile *os_radio_profile(void);
  * reports 1. The CPU return waits for it before it stops the PMIC service. */
 struct board_radio;
 void os_radio_scan_step(struct board_radio *,int result);
+/* The entropy stage's steps (apps/os/ce_probe.c), driven by os_radio_scan_step when the profile's stage limit is the
+ * entropy stage: start once, step once per pass, done once the record is published. */
+void os_ce_probe_start(void);
+void os_ce_probe_step(void);
+int os_ce_probe_done(void);
+int os_ce_probe_failed(void);
 void os_radio_scan_return_request(void);
 int os_radio_scan_return_ready(void);
 #endif

@@ -25,8 +25,8 @@ FIRMWARE = [('fw_adid_8800d80_u02.bin', 1708, 'a526cbd02fcdc495f049f3ad6b5933cb0
             ('fmacfw_8800d80_u02.bin', 341212, '55b5a20865aca7cd2edaae1733a36da45d2b0b29060bc243d8e9ec212e139f6c')]
 SCAN_SUPERVISED_VERSION = 8
 # How far the session runs (BOARD_RADIO_STAGE_* in apps/board/radio.h): 0 scan, 1 enumeration, 2 enumeration plus
-# the chip-ID words, 3 through the firmware upload. One stage per board run; this is the only line that moves the stop point.
-STAGE_LIMIT = 0
+# the chip-ID words, 3 through the firmware upload, 4 the CE entropy stage alone (the module stays unpowered). One stage per board run; this is the only line that moves the stop point.
+STAGE_LIMIT = 4
 STAGE_LIMIT_OFFSET = 1861
 # The identity the profile expects (raw words, decoded again by the firmware engine): the words the board's module
 # returned at the identity stage (run 1793750775070389039-2a278fd8, port 3-1): chip word 0xfb078820, revision 7 (U03,

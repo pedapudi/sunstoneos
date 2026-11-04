@@ -43,6 +43,15 @@ static void publish(struct board_radio *r)
 void os_radio_scan_step(struct board_radio *r, int result)
 {
     unsigned current = atomic_load_explicit(&state, memory_order_acquire);
+    if (r->config.entropy_only) {
+        /* The CE entropy stage replaces the radio's own work: no platform poll, no shutdown to do. */
+        if (current == RUNNING) {
+            os_ce_probe_start();
+            os_ce_probe_step();
+            if (os_ce_probe_done()) atomic_store_explicit(&state, os_ce_probe_failed() ? FAILED : DOWN, memory_order_release);
+        }
+        return;
+    }
     const struct a733_radio_report *seen = board_radio_report(r);
     if (seen) atomic_store_explicit(&stage_seen, seen->head.stage, memory_order_release);
     if (result == BOARD_RADIO_SCANNED && current == RUNNING) {

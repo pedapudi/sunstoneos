@@ -67,6 +67,7 @@ foreach(source IN ITEMS
   drivers/storage/sdio_card.c drivers/storage/sunxi_sdio.c
   drivers/crypto/a733_ce.c drivers/crypto/a733_ce_native.c drivers/crypto/a733_ce_entropy.c
   drivers/crypto/a733_ce_session.c drivers/crypto/a733_ce_hash.c drivers/crypto/a733_ce_cipher.c
+  drivers/crypto/a733_ce_clock.c drivers/crypto/a733_ce_probe.c
   network/allocator.c)
   list(APPEND board_sources "${board_root}/${source}")
 endforeach()

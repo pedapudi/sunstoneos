@@ -31,6 +31,7 @@ struct board_radio_config {
     /* Stop after enumeration (no four-bit widening, no transport, no firmware), for the smallest
      * probe; the owner then reports BOARD_RADIO_SCANNED with the report at stage enumerated. */
     unsigned enumeration_only;
+    unsigned entropy_only; /* The entropy stage: the radio platform and session are never polled, nothing is powered. */
     unsigned four_bit; /* With enumeration_only: still widen to four bits at 25 MHz (the firmware upload needs it). */
 };
 enum board_radio_result { BOARD_RADIO_PENDING,BOARD_RADIO_NETWORK,
@@ -122,6 +123,9 @@ struct board_radio_profile {
 #define BOARD_RADIO_STAGE_ENUMERATE 1u
 #define BOARD_RADIO_STAGE_IDENTITY 2u
 #define BOARD_RADIO_STAGE_FIRMWARE 3u
+/* 4: the CE entropy stage alone (apps/os/ce_probe.c): the reset-and-gate cycle, one 32-byte TRNG task and its record. The
+ * radio module is not powered and the platform is not polled. Association will follow it in the stage order. */
+#define BOARD_RADIO_STAGE_ENTROPY 4u
 static inline unsigned board_radio_profile_stage_limit(const struct board_radio_profile *f){return f->network_reserved[0];}
 static inline int board_radio_profile_scan_only(const struct board_radio_profile *f)
 {return f&&f->version==BOARD_RADIO_PROFILE_SCAN_VERSION;}
@@ -132,7 +136,7 @@ static inline int board_radio_profile_network_valid(const struct board_radio_pro
     if(!p||p->network_dhcp>1||p->network_reserved[1]||p->network_reserved[2])return 0;
     /* Byte 0 is the stage limit of a scan-only profile; every other profile keeps it zero. */
     if(p->network_reserved[0]&&(!(p->version==BOARD_RADIO_PROFILE_SCAN_VERSION||p->version==BOARD_RADIO_PROFILE_SCAN_SUPERVISED_VERSION)||
-        p->network_reserved[0]>BOARD_RADIO_STAGE_FIRMWARE))return 0;
+        p->network_reserved[0]>BOARD_RADIO_STAGE_ENTROPY))return 0;
     if(p->version==BOARD_RADIO_PROFILE_VERSION||p->version==BOARD_RADIO_PROFILE_SUPERVISED_VERSION||
        p->version==BOARD_RADIO_PROFILE_SCAN_VERSION||p->version==BOARD_RADIO_PROFILE_SCAN_SUPERVISED_VERSION){if(p->tcp_mode)return 0;}
     else if(p->version==BOARD_RADIO_PROFILE_LISTENER_VERSION||p->version==BOARD_RADIO_PROFILE_LISTENER_SUPERVISED_VERSION){

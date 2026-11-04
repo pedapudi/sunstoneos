@@ -80,6 +80,9 @@ enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_sessi
  if(app.platform.refused)app.platform.fault=1;
  if(abort_model&&!app.platform.aborting&&!app.platform.abort_done){app.platform.aborting=1;app.platform.deadline=time_us+2000000;}
  return A733_SESSION_RETAINED;}
+int a733_radio_session_recover(struct a733_radio_session *s,const struct aic8800_wifi_target *t,
+    const struct aic8800_supplicant_config *c,uint64_t reason,uint64_t deadline)
+{(void)s;(void)t;(void)c;(void)reason;(void)deadline;return 0;}
 int a733_radio_session_connect(struct a733_radio_session *s,const struct aic8800_wifi_target *t,uint64_t deadline)
 {assert(s==&app.session&&t==&app.config.target&&deadline==1100);++connects;s->wifi.link=AIC8800_WIFI_CONNECTING;return 1;}
 int a733_radio_session_start_security(struct a733_radio_session *s,const struct aic8800_supplicant_config *c,uint64_t d)
@@ -346,6 +349,16 @@ int main(void)
         assert(app.report.head.stage==A733_RADIO_STAGE_FIRMWARE);
         a733_radio_report_identity(&app.report,1,2);
         assert(app.report.head.stage==A733_RADIO_STAGE_FIRMWARE); /* Not lowered by a repeat. */
+        a733_radio_report_release(&app.report);
+    }
+    /* The CE entropy stage: the radio platform and session are never polled, so nothing is powered. */
+    {
+        memset(&app,0,sizeof(app));scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);report_used=0;
+        struct board_radio_config probe=scan_only;probe.enumeration_only=1;probe.entropy_only=1;probe.session.enumeration_only=1;
+        assert(board_radio_init(&app,&probe));scheduler=taskSCHEDULER_RUNNING;time_us=100;
+        unsigned calls=session_calls,steps=platform_steps,fast=fast_requests;
+        assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED&&app.stage==SCANNED);
+        assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED&&session_calls==calls&&platform_steps==steps&&fast_requests==fast);
         a733_radio_report_release(&app.report);
     }
     /* A failure with the failure shutdown running: each retain drives it, the failure is final (the board's failure

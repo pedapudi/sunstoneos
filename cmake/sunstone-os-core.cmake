@@ -223,7 +223,7 @@ if(SUNSTONE_A733_OS_RADIO)
   # report resident progress through the patched main.c.
   list(APPEND os_added apps/os/radio.c apps/os/wifi_credential.c)
   if(SUNSTONE_A733_OS_RADIO_SCAN)
-    list(APPEND os_added apps/os/radio_scan.c)
+    list(APPEND os_added apps/os/radio_scan.c apps/os/ce_probe.c)
   endif()
   if(NOT SUNSTONE_A733_OS_CPU_RETURN)
     # The returning lifetime patches main.c itself (cmake/a733-os-cpu-return.cmake); the resident
