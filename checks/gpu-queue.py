@@ -372,7 +372,11 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
                        counted_entries={k: len(v) for k, v in entries.items()},
                        modeled_job_us={'total': sum(durations), 'median': statistics.median(durations),
                                        'max': max(durations)})
+        # Guest time follows the instructions executed (-icount shift=0,sleep=off on one TCG thread), so a guest deadline
+        # never depends on how the host schedules the vCPU threads: the bounds of a case hold or fail the same way on
+        # every run. Without it, case 8's recovery bound (the job deadline plus 3 ms) failed once on a loaded host.
         qemu = [str(args.qemu.resolve()), '-machine', 'virt,gic-version=3,secure=off,virtualization=off',
+                '-accel', 'tcg,thread=single', '-icount', 'shift=0,sleep=off',
                 '-cpu', 'cortex-a55', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
                 '-semihosting-config', 'enable=on,target=native']
         for case in sorted(set(args.cases) | set(args.trace)):
@@ -393,7 +397,8 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
                 path.write_bytes(image)
                 trace = out / ('trace-%d.log' % case)
                 ranges = ','.join('0x%x+4' % a for a in sorted(set(dsb) | {a for v in entries.values() for a in v}))
-                log = run('traced-%d' % case, qemu[:2] + ['virt,gic-version=3,secure=off,virtualization=off'] + qemu[3:] +
+                traced = [a for a in qemu if a not in ('tcg,thread=single', 'shift=0,sleep=off', '-accel', '-icount')]
+                log = run('traced-%d' % case, traced +
                           ['-accel', 'tcg,thread=single,one-insn-per-tb=on', '-icount', 'shift=0,sleep=off',
                            '-d', 'exec,nochain',
                            '-dfilter', ranges, '-D', str(trace), '-kernel', str(path)], timeout=3600)
