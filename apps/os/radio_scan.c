@@ -63,7 +63,7 @@ void os_radio_scan_step(struct board_radio *r, int result)
          * cannot return still says it; the descriptor's record carries the same site. */
         board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD) | SUNSTONE_CRUMB_FAIL_RETURN,
             r->platform.fail_line ? r->platform.fail_line << 16 | (r->platform.fail_stage & 0xffffu) :
-            r->session.fail_line << 16 | 0x100u | (r->session.fail_stage & 0xffu), __builtin_return_address(0));
+            r->session.fail_line << 16 | 0x100u | (r->session.fail_stage & 0xfeffu), __builtin_return_address(0));
         publish(r);
         atomic_store_explicit(&state, FAILED, memory_order_release);
     }

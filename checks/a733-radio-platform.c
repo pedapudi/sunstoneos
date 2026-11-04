@@ -155,9 +155,9 @@ static void radio_cis(struct radio_model *m,unsigned function)
     unsigned address=0x1000+function*0x100;
     for(unsigned i=0;i<3;++i)m->card[0][function*256+9+i]=(uint8_t)(address>>(8*i));
     m->card[0][function*256]=7;uint8_t *p=m->card[0]+address;
-    *p++=0x20;*p++=4;*p++=0xa1;*p++=0xc8;*p++=0x82;*p++=1;
+    *p++=0x20;*p++=4;*p++=0xa1;*p++=0xc8;*p++=0x82;*p++=function==2?1:0; /* c8a1:0182 on function 2, c8a1:0082 elsewhere */
     *p++=0x22;
-    if(function){*p++=42;p[0]=1;p[13]=2;p[28]=50;p+=42;}
+    if(function){*p++=42;p[0]=1;p[13]=2;p[28]=function==1?0:50;p+=42;}
     else {*p++=4;*p++=0;*p++=0;*p++=2;*p++=0x32;}
     *p=0xff;
 }

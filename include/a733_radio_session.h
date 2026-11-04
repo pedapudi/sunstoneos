@@ -19,6 +19,8 @@ struct a733_radio_session_config {
     /* With enumeration_only: also run the transport setup and read the module's chip-ID words (the
      * vendor's bootstrap write and both reads), then stop. The poll reports ENUMERATED once they are in. */
     unsigned identity_only;
+    /* With enumeration_only: run through the firmware upload, stopping when the module confirms it started. */
+    unsigned firmware_only;
 };
 enum a733_radio_session_result { A733_SESSION_PENDING,A733_SESSION_BUSY,
     A733_SESSION_MANAGEMENT,A733_SESSION_NETWORK,A733_SESSION_RETAINED,A733_SESSION_INVALID,
@@ -45,7 +47,7 @@ struct a733_radio_session {
     unsigned stage,fault,renew_pending;
     /* Where the first failure was decided: the source line of the fail call and the stage then. Zero while healthy;
      * an external retain records no line. */
-    unsigned fail_line,fail_stage;
+    unsigned fail_line,fail_stage,fail_detail; /* fail_stage: the stage | detail << 9, the detail a refusal group mask */
     unsigned bootstrap_only,reconnect_phase,reconnect_lost;
     uint64_t discarded_data; /* Ordinary frames received without a consumer. */
     uint64_t reconnect_deadline,reconnect_open;

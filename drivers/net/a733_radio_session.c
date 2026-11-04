@@ -31,7 +31,7 @@ static enum a733_radio_session_result leave(struct a733_radio_session *s,enum a7
 {atomic_store_explicit(&s->busy,0,memory_order_release);return r;}
 static enum a733_radio_session_result fail_at(struct a733_radio_session *s,unsigned line)
 {
-    if(line&&!s->fail_line){s->fail_line=line;s->fail_stage=s->stage;}
+    if(line&&!s->fail_line){s->fail_line=line;s->fail_stage=s->stage|(s->fail_detail<<9);}
     s->fault=1;
     sunxi_sdio_stop(&s->platform->host,SUNXI_SDIO_CARD_ERROR);
     if(s->dispatcher.initialized)aic8800_transport_fault_receive(&s->transport,&s->dispatcher);
@@ -207,7 +207,7 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
             struct sdio_card *card;
             if(!a733_radio_platform_borrow(s->platform,s->config.owner,&s->borrow,&card)||
                 card!=&s->platform->card)return leave(s,fail(s));
-            s->stage=(s->config.enumeration_only&&!s->config.identity_only)?ENUMERATED:ADOPT;
+            s->stage=(s->config.enumeration_only&&!s->config.identity_only&&!s->config.firmware_only)?ENUMERATED:ADOPT;
             if(s->stage==ENUMERATED)return leave(s,A733_SESSION_ENUMERATED);
         }
         return leave(s,r==A733_RADIO_BUSY?A733_SESSION_BUSY:A733_SESSION_PENDING);
@@ -223,7 +223,9 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
     struct aic8800_sdio_transport *t=&s->transport;
     switch(s->stage){
     case ADOPT:
-        if(!aic8800_transport_init(t,&s->platform->card,&s->config.transport)||
+        /* A refusal names its group (aic8800_transport_init_refusals) in the failure site; a refused setup names none. */
+        s->fail_detail=aic8800_transport_init_refusals(t,&s->platform->card,&s->config.transport);
+        if(s->fail_detail||!aic8800_transport_init(t,&s->platform->card,&s->config.transport)||
             !aic8800_transport_setup(t,s->deadline))return leave(s,fail(s));
         s->stage=SETUP;break;
     case SETUP:
@@ -236,7 +238,7 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
     case IDENTITY:
         aic8800_transport_poll(t);
         if(t->state==AIC8800_TRANSPORT_COMPLETE){
-            if(s->config.identity_only){s->stage=ENUMERATED;return leave(s,A733_SESSION_ENUMERATED);}
+            if(s->config.identity_only&&!s->config.firmware_only){s->stage=ENUMERATED;return leave(s,A733_SESSION_ENUMERATED);}
             if(!aic8800_transport_load_firmware(t,&s->firmware,s->deadline))return leave(s,fail(s));
             s->stage=FIRMWARE;
         }
@@ -244,6 +246,7 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
     case FIRMWARE:
         aic8800_transport_poll(t);
         if(t->state==AIC8800_TRANSPORT_START_CONFIRMED){
+            if(s->config.firmware_only){s->stage=ENUMERATED;return leave(s,A733_SESSION_ENUMERATED);}
             uint64_t current;if(!now(s,&current)||!next_lease(s,current,&s->deadline))return leave(s,fail(s));
             s->stage=START_RUNTIME;
         }
