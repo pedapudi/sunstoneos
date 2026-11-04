@@ -203,7 +203,6 @@ done:
         r->jobs=sdk_jobs;r->output_bytes=sdk_output_bytes;r->pattern=0;
         if(!sdk_closed)ss_npu_service_fail();
     }
-    os_npu_guard_check();
     /* One publication: the copy completes before finished becomes visible. */
     r->stopped=os_npu_stopped();
     memcpy((uint8_t *)&published+16,(const uint8_t *)r+16,OS_NPU_REPORT_BYTES-16);

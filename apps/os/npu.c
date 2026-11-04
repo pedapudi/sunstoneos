@@ -461,6 +461,7 @@ int os_npu_close(void)
     npu.opened=0;atomic_store_explicit(&npu.closed,1,memory_order_release);
     xTaskNotifyGive(npu.bootstrap);return 1;
 }
+static void guard_check(void);
 static void bootstrap(void *unused)
 {
     (void)unused;unsigned begun=0;
@@ -472,7 +473,7 @@ static void bootstrap(void *unused)
             if(now>=npu.initial_deadline)os_npu_thermal(0,1,0,now);
             if(os_npu_stopping()) {
                 /* No startup step or activation has occurred. */
-                atomic_store_explicit(&npu.stopped,1,memory_order_release);os_application_wake_main();
+                guard_check();atomic_store_explicit(&npu.stopped,1,memory_order_release);os_application_wake_main();
                 xTaskNotifyGive(npu.client);STOPPED_WAIT();return;
             }
             if(!claim()){(void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));continue;}
@@ -500,7 +501,7 @@ static void bootstrap(void *unused)
                         r=npu_runtime_stop_poll(&npu.runtime);
                         if(r==A733_NPU_PLATFORM_RETAINED){(void)FAIL_REQUEST(NPU_SERVICE_CLOSE,0,0,NULL,A733_NPU_PLATFORM_READY,r);goto failed;}
                         if(r==A733_NPU_PLATFORM_READY) {
-                            atomic_store_explicit(&npu.stopped,1,memory_order_release);os_application_wake_main();
+                            guard_check();atomic_store_explicit(&npu.stopped,1,memory_order_release);os_application_wake_main();
                             xTaskNotifyGive(npu.client);STOPPED_WAIT();return;
                         }
                         vTaskDelay(1);
@@ -574,8 +575,8 @@ static int guard_finish(struct umem *led,uint64_t base,uint64_t kept)
     os_npu_guard_record.guard_base=alias;os_npu_guard_record.guard_bytes=kept;
     return os_device_range_publish(alias,kept);
 }
-/* Called when the NPU client ends, after the NPU is quiet: how many words of the guard changed. */
-void os_npu_guard_check(void)
+/* Called when the NPU has stopped, before the stopped proof is published: how many words of the guard changed. */
+static void guard_check(void)
 {
     struct os_npu_guard_record *r=&os_npu_guard_record;
     if(!r->guard_bytes||r->checked)return;

@@ -16,7 +16,6 @@
 struct umem;
 int os_npu_pool_prepare(struct umem *, uint16_t owner);
 /* Check the guard extent of a placement request (apps/os/npu.c); called when the NPU client ends. */
-void os_npu_guard_check(void);
 extern const struct npu_runtime_model os_npu_models[];
 extern const unsigned os_npu_model_count,os_npu_client_entry;
 extern const struct ss_npu_model os_npu_model_info[];
