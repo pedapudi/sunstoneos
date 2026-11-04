@@ -75,12 +75,13 @@ tools/prepare-card-ddr.py
 tools/boot-slots.py
 
 # The grants that decide which services run and which CPU clock and rail writes a session may request: the session
-# decode, the admission checks, the granted set and its cache, the CPU clock owner, the session builder and the manifest
-# generator that writes the grant's bounds.
+# decode, the admission checks, the granted set and its cache, the service declaration, the CPU clock owner, the session
+# builder and the manifest generator that writes the grant's bounds.
 apps/os/cpu.c
 apps/os/admission.c
 apps/os/session.c
 apps/os/grants.c
+apps/os/os-services.h
 tools/session.py
 tools/sunstone-manifest.py
 
