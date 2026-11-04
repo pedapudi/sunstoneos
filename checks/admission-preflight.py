@@ -150,12 +150,14 @@ def one_build(build, out):
     run('another contract magic', ('magic_version', 'magic'), edit=lambda c: c.__setitem__(CONTRACT_MAGIC, c[CONTRACT_MAGIC] ^ 1))
     # A CPU clock grant that names clusters names this boot's epoch: another value is refused, and the zero of an
     # unassigned card grant takes the board's epoch (apps/os/session.c).
+    # The session of this build carries such a grant; a session without one would skip the case, so its absence fails.
     grant = host.session_decode(session)['offsets'].get(host.CPU_GRANT)
-    if grant is not None and struct.unpack_from('<I', session, grant + 48)[0]:
-        def grant_epoch(value):
-            return lambda s: struct.pack_into('<Q', s, grant + 32, value(struct.unpack_from('<Q', s, grant + 32)[0]))
-        run('grant names another epoch', ('session_decode', 'service'), edit_session=grant_epoch(lambda e: e ^ 1))
-        run('grant with an unassigned epoch', None, edit_session=grant_epoch(lambda e: 0))
+    assert grant is not None and struct.unpack_from('<I', session, grant + 48)[0], 'the session has no CPU clock grant that names clusters'
+
+    def grant_epoch(value):
+        return lambda s: struct.pack_into('<Q', s, grant + 32, value(struct.unpack_from('<Q', s, grant + 32)[0]))
+    run('grant names another epoch', ('session_decode', 'service'), edit_session=grant_epoch(lambda e: e ^ 1))
+    run('grant with an unassigned epoch', None, edit_session=grant_epoch(lambda e: 0))
     run('another epoch', ('contract_field', 'identity'), edit=lambda c: c.__setitem__(CONTRACT_EPOCH, c[CONTRACT_EPOCH] ^ 1))
     run('another session digest', ('session_bind', 'digest'), edit=lambda c: c.__setitem__(CONTRACT_DIGEST, c[CONTRACT_DIGEST] ^ 1))
     run('launcher arms another lifetime', ('timing', 'diagnostic'), launcher_seconds=seconds + 30)
