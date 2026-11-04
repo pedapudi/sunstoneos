@@ -665,7 +665,8 @@ def main(argv=None):
             flags = [value.replace('{source}', str(source)).replace('{cache}', str(cache)) for value in recipe['configure']]
             if run('img-' + image + '-configure', [cfg, source, directory, *core_options, '-DSUNSTONE_A733_OS=ON',
                                                    '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', *flags]):
-                if run('img-' + image + '-build', ['cmake', '--build', directory, '--target', recipe['target'], '-j', '12']):
+                if run('img-' + image + '-build', ['cmake', '--build', directory, '--target',
+                                                  *([recipe['target']] if isinstance(recipe['target'], str) else recipe['target']), '-j', '12']):
                     mark_built(directory)
             else:
                 skip('img-' + image + '-build', 'img-' + image + '-configure did not pass')

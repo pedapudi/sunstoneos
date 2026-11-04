@@ -1,6 +1,7 @@
 """The images and bundles tools/integration-gate.py builds for the checks that name them in GATE_RUNS (checks/check-index.py).
 
-IMAGES are CMake recipes built once per tree state; the gate's OS variants (VARIANTS) are named directly and need no recipe.
+IMAGES are CMake recipes built once per tree state, with one target or a list of targets built in one invocation; the gate's
+OS variants (VARIANTS) are named directly and need no recipe.
 {elf:X} and {build:X} are an image's ELF and build directory, {session:X} the session bytes tools/gate_session.py builds for
 image X, {bundle:X} the probe ELF that apps/board-bundles-power/build-opp.py builds for bundle X (BUNDLES lists its arguments),
 {fixture:X} the directory of fixture X (FIXTURES). A fixture is host data that checks read and that a cleanup of the cache may delete,
@@ -48,6 +49,10 @@ IMAGES = {
     'stage2': {'configure': [
         '-DSUNSTONE_A733_STAGE2=ON',
     ], 'target': 'a733-stage2', 'elf': 'a733-stage2.elf'},
+    # the emulator models of the FreeRTOS SMP port (cmake/smp.cmake) that checks/smp-ticket-lock.py runs under QEMU
+    'smp-models': {'configure': [
+        '-DSUNSTONE_PARTITIONED_SCHEDULER=ON',
+    ], 'target': ['smp-kernel-model', 'smp-context-model', 'smp8-soak-model'], 'elf': 'smp-kernel-model.elf'},
     # the returning scanning radio image
     'ret-radio-scan': {'configure': [
         '-DSUNSTONE_APPLICATION=radio-scan',

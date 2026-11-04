@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check range selection across deleted dependencies, renames and required inputs."""
+"""Check range selection across deleted dependencies, renames, configure-step CMake files and required inputs."""
 import argparse
 import json
 import importlib.util
@@ -22,6 +22,8 @@ def current_inputs():
     spec.loader.exec_module(indexer)
     expected = {
         'gpu-linked-lifecycle.py': ('drivers/gpu/gpu_queue.c',),
+        # It builds the OS image in the gate, so the configure step's CMake files are its inputs.
+        'os-session-grants.py': ('CMakeLists.txt', 'cmake/a733-smp-cached.cmake', 'cmake/sunstone-os-core.cmake'),
     }
     index = {}
     for name, paths in expected.items():
@@ -152,12 +154,37 @@ def main():
     write('checks/legacy-consumer.py', 'CHECK_INPUTS = ()\nprint("no current input")\n')
     consumer = select(consumer_base + '..' + consumer_head)
     assert 'legacy-consumer.py' in {check['check'] for check in consumer['checks']}
-    (out / 'results.json').write_text(json.dumps({'current_inputs': current, 'paths': selected, 'range': ranged, 'removed': result,
+    # A check whose gate runs build an image covers each CMake file the configure step reads, through include() and
+    # add_subdirectory(), under any option. A check that names only a fixture does not.
+    write('CMakeLists.txt', 'include(cmake/one.cmake)\nif(OPTION)\n  add_subdirectory(apps/sub)\nendif()\n')
+    write('cmake/one.cmake', 'include("${CMAKE_CURRENT_LIST_DIR}/two.cmake")\n')
+    write('cmake/two.cmake', 'set(TWO 1)\n')
+    write('cmake/unread.cmake', 'set(UNREAD 1)\n')
+    write('apps/sub/CMakeLists.txt', 'include("${SUNSTONE_SOURCE_ROOT}/cmake/three.cmake")\n')
+    write('cmake/three.cmake', 'set(THREE 1)\n')
+    write('checks/os-image.py', '"""Image fixture."""\nGATE_RUNS = [["--build", "{build:sup}", "--output", "{output}"]]\n'
+          'print("fixture")\n')
+    write('checks/fixture-only.py', '"""Fixture-only fixture."""\nGATE_RUNS = [["--data", "{fixture:graphs}"]]\n'
+          'print("fixture")\n')
+    cmake_base = commit('Image check and the configure step')
+    cmake_selected = {}
+    for changed in ('CMakeLists.txt', 'cmake/two.cmake', 'cmake/three.cmake'):
+        cmake_selected[changed] = {check['check'] for check in select('--changed', changed)['checks']}
+        assert 'os-image.py' in cmake_selected[changed] and 'fixture-only.py' not in cmake_selected[changed], (changed, cmake_selected)
+    cmake_selected['cmake/unread.cmake'] = {check['check'] for check in select('--changed', 'cmake/unread.cmake')['checks']}
+    assert 'os-image.py' not in cmake_selected['cmake/unread.cmake'], cmake_selected
+    write('cmake/two.cmake', 'set(TWO 2)\n')
+    cmake_head = commit('Change an included CMake file')
+    cmake_range = select(cmake_base + '..' + cmake_head)
+    assert [check['check'] for check in cmake_range['checks']] == ['os-image.py'], cmake_range
+    (out / 'results.json').write_text(json.dumps({'current_inputs': current,
+                                                'cmake_paths': {k: sorted(v) for k, v in cmake_selected.items()},
+                                                'cmake_range': cmake_range, 'paths': selected, 'range': ranged, 'removed': result,
                                                 'conditional_inputs': conditional, 'hook_native': hook_native,
                                                 'hook_legacy_range': hook_range,
                                                 'hook_retired_input': retired,
                                                 'historical_consumer': consumer}, indent=2) + '\n')
-    print('PASS: declared inputs, include closure, renamed/deleted dependencies and pending inputs')
+    print('PASS: declared inputs, include closure, configure-step CMake files, renamed/deleted dependencies and pending inputs')
 
 
 if __name__ == '__main__':
