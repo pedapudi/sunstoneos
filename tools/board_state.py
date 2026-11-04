@@ -34,7 +34,11 @@ RAIL_COMPLETE = 'COMPLETE board bundle 33: DCDC3 and DCDC5 restored to 800 mV at
 
 WORDS = (0x2002000, 0x20020a0, 0x20020a8, 0x20020ac, 0x2002518, 0x2002fc0, 0x2002fe4, 0x2003908,
          0x2003988, 0x701000c, 0x7010010, 0x701019c, 0x701020c, 0x3006244, 0x3006248, 0x300624c,
-         *(0x8871000 + 0x1000 * d + o for d in range(3) for o in (0, 4, 8, 0x18, 0x1c)), 0x7090160)
+         *(0x8871000 + 0x1000 * d + o for d in range(3) for o in (0, 4, 8, 0x18, 0x1c)), 0x7090160,
+         # CE clock (CE_CLK_REG) and bus gating/reset (CE_BGR_REG: CE_RST bit 16, CE_SYS_RST bit 17, gates bits 0 and 1).
+         # CCU reads are always safe; the CE's own registers are not read here, because a gated or reset-held CE can
+         # stall the bus. They say whether anything before the image left the CE running, which could leave DMA active.
+         0x2002ac0, 0x2002ac4)
 
 
 BOOT_PLL, BOOT_MUX = (0xf8802600, 0xf8802700, 0xf8802600), (0x03010000, 0x03000000, 0x03010105)
