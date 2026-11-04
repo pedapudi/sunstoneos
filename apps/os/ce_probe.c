@@ -160,19 +160,24 @@ static int op_request(void *v,uint64_t deadline)
 {
     (void)v;
     enum a733_ce_result r=a733_ce_request(&ce.engine,deadline);
+    ce.detail=((unsigned)r&15u)|(ce.engine.fault?1u<<20:0);
     return r==A733_CE_PENDING?1:r==A733_CE_BUSY?0:-1;
 }
 static int op_poll(void *v,uint8_t block[A733_CE_PROBE_BYTES])
 {
     (void)v;
     enum a733_ce_result r=a733_ce_poll(&ce.engine,block);
+    /* For the record if this poll is the last: the controller's result, and the status and error words it last read. */
+    ce.detail=((unsigned)r&15u)|(ce.engine.status_ns&0xffu)<<4|(ce.engine.error_ns&0xffu)<<12|(ce.engine.fault?1u<<20:0)|((unsigned)ce.engine.stage&7u)<<21;
     return r==A733_CE_RANDOM?1:(r==A733_CE_PENDING||r==A733_CE_BUSY)?0:-1;
 }
 /* A failure inside the controller retains its own resources. Before the engine exists the bring-up is complete and consistent (or retained by the clock code itself), no task has started, and nothing is retained, so the session returns with its record. */
 static void op_retain(void *v){(void)v;if(ce.token.id&&ce.engine.initialized)(void)a733_clock_retain(&providers.shared.clocks,&ce.token);}
 /* The failing step's own detail for the record. Bring-up: the clock provision's first failing source line (bits 11:0)
  * and the admission denial (bits 20:12). Allocation: the step that failed (bits 3:0: 1 no ledger, 2 alloc, 3 prepare,
- * 4 handoff) and the negative umem status (bits 11:4). */
+ * 4 handoff) and the negative umem status (bits 11:4). Request and poll: the controller's result (bits 3:0), the status
+ * word (11:4) and the error word (19:12) it last read, bit 20 set when the controller is faulted, and its stage (0 admit, 1 prepare, 2 submit, 3 wait, 4 done, 5 failed) in
+ * bits 23:21. */
 static unsigned op_detail(void *v){(void)v;return ce.detail;}
 
 static void publish(void)
