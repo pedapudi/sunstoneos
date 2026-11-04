@@ -91,6 +91,9 @@ struct aic8800_sdio_transport {
  * functions, >=512-byte block capability, multi-block support, prepared host.
  * IDs only validate compatibility with the explicit variant, never firmware.
  */
+/* Why init would refuse, as a bit mask by group (see the definition); zero when it would not. */
+unsigned aic8800_transport_init_refusals(const struct aic8800_sdio_transport *, const struct sdio_card *,
+    const struct aic8800_transport_config *);
 int aic8800_transport_init(struct aic8800_sdio_transport *, struct sdio_card *,
                           const struct aic8800_transport_config *);
 /* Pure admission. Setup owns F1 block/enable, source pad/byte-mode settings and

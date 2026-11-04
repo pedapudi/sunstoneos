@@ -45,7 +45,7 @@ struct a733_radio_session {
     unsigned stage,fault,renew_pending;
     /* Where the first failure was decided: the source line of the fail call and the stage then. Zero while healthy;
      * an external retain records no line. */
-    unsigned fail_line,fail_stage;
+    unsigned fail_line,fail_stage,fail_detail; /* fail_stage: the stage | detail << 9, the detail a refusal group mask */
     unsigned bootstrap_only,reconnect_phase,reconnect_lost;
     uint64_t discarded_data; /* Ordinary frames received without a consumer. */
     uint64_t reconnect_deadline,reconnect_open;

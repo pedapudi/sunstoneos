@@ -73,6 +73,10 @@ def decode(data):
     # fail_site: source line << 16 | 0x100 when the session decided the failure (the platform decided none) | stage.
     result['platform_failure'] = {'line': fail_site >> 16, 'stage': fail_site & 0xff,
                                   'source': 'session' if fail_site & 0x100 else 'platform'} if fail_site else None
+    if fail_site & 0x100 and (fail_site >> 9) & 0x7f:
+        # A refused transport adoption: bit 0 pointers/state, 1 config, 2 function count, 3 function 2 identity,
+        # 4 function 1 manufacturer, 5 function 1 block size, 6 function 1 enable timeout.
+        result['platform_failure']['refusal_groups'] = [i for i in range(7) if (fail_site >> 9) >> i & 1]
     if flags & 128:
         # A guard refusal: the 'line' is 0x400 | PG bits (GPIO_POW_VAL 13:12) << 4 | the unmet conditions.
         code = fail_site >> 16
