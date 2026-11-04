@@ -38,6 +38,7 @@ static struct {
     /* Why the last admission was refused, for the record: bit 0 scheduler, 1 board, 2 mapping, 3 GIC mask, bits 7:4 the
      * first unmapped address of mappings() plus one; bit 8 the clock token was refused. */
     unsigned denied;
+    unsigned detail; /* The failing step's own detail for the record, set where the step fails. */
 } ce;
 
 static uint64_t deadline_us(void){return board.session.deadline_us-10000;}
@@ -101,7 +102,7 @@ static int op_bring_up(void *v)
     /* The CE clock registry token: the CE exclusive, the stable parents and RC16M shared. */
     if(a733_clock_acquire(&providers.shared.clocks,CE_OWNER,
            A733_CLOCK_PERI0|A733_CLOCK_REF|A733_CLOCK_OSC|A733_CLOCK_FABRIC|A733_CLOCK_RC16M,A733_CLOCK_CE,
-           deadline_us(),&ce.token)!=A733_CLOCK_OK){ce.denied|=1u<<8;return -1;}
+           deadline_us(),&ce.token)!=A733_CLOCK_OK){ce.denied|=1u<<8;ce.detail=(ce.denied&0x1ffu)<<12;return -1;}
     ce.config=(struct a733_ce_config){.owner=CE_OWNER,.handoff=board.session.generation,.deadline_us=deadline_us(),
         .profile=A733_CE_TRNG_ONLY};
     memcpy(ce.config.fabric,board.session.fabric,sizeof(ce.config.fabric));
@@ -109,7 +110,7 @@ static int op_bring_up(void *v)
     const struct a733_ce_clock_ops clocks={clock_authorize,now,enter,leave,retain_lock,a733_ce_native_read,a733_ce_clock_native_write};
     /* Found enabled at entry, the CE is taken down by the reverse of the bring-up first (drivers/crypto/a733_ce_clock.c). */
     if(!a733_ce_clock_provision(&ce.clock,&ce.config,&clocks,&ce,&providers.shared.clocks,&ce.token))
-        return -1; /* a write-free refusal keeps the token and the lock; after a write the provision retained them */
+        {ce.detail=(ce.clock.fail_line&0xfffu)|(ce.denied&0x1ffu)<<12;return -1;} /* a write-free refusal keeps the token and the lock; after a write the provision retained them */
     return 1;
 }
 /* One 4 KiB device-reachable page: the descriptor object (3,520 bytes) from the unified ledger with the crypto
@@ -118,19 +119,21 @@ static int op_alloc(void *v,uint64_t *descriptor,uint64_t *output)
 {
     (void)v;
     struct umem *ledger=os_large_umem();
-    if(!ledger)return -1;
+    if(!ledger){ce.detail=1;return -1;}
     if(!ce.buffer.generation){
         struct umem_request r={.bytes=4096,.align=4096,.window=4096,.device_mask=UMEM_DEV_CRYPTO,
                                .owner=UMEM_OWNER_KERNEL,.policy=UMEM_WB};
-        if(umem_alloc(ledger,&r,&ce.buffer)!=UMEM_OK)return -1;
+        int status=umem_alloc(ledger,&r,&ce.buffer);
+        if(status!=UMEM_OK){ce.detail=2|(unsigned)(-status)<<4;return -1;}
     }
     if(!umem_ready(ledger,&ce.buffer)){
         int s=umem_prepare_step(ledger,&ce.buffer,4096);
-        if(s<0)return -1;
+        if(s<0){ce.detail=3|(unsigned)(-s)<<4;return -1;}
         if(!s)return 0;
     }
     if(!ce.buffer_state){
-        if(umem_handoff(ledger,&ce.buffer,UMEM_CPU,UMEM_DEVICE,NULL,0)!=UMEM_OK)return -1;
+        int status=umem_handoff(ledger,&ce.buffer,UMEM_CPU,UMEM_DEVICE,NULL,0);
+        if(status!=UMEM_OK){ce.detail=4|(unsigned)(-status)<<4;return -1;}
         ce.buffer_state=1;
     }
     ce.physical=ce.buffer.base;
@@ -158,11 +161,12 @@ static int op_poll(void *v,uint8_t block[A733_CE_PROBE_BYTES])
     enum a733_ce_result r=a733_ce_poll(&ce.engine,block);
     return r==A733_CE_RANDOM?1:(r==A733_CE_PENDING||r==A733_CE_BUSY)?0:-1;
 }
-/* A failure inside the controller retains its own resources; this retains the clock registry token the probe holds. */
-static void op_retain(void *v){(void)v;if(ce.token.id&&(ce.clock.writes||ce.engine.initialized))(void)a733_clock_retain(&providers.shared.clocks,&ce.token);}
-/* The failing step's own detail for the record: the clock provision's first failing source line (bits 11:0), the
- * admission denial (bits 20:12). */
-static unsigned op_detail(void *v){(void)v;return (ce.clock.fail_line&0xfffu)|(ce.denied&0x1ffu)<<12;}
+/* A failure inside the controller retains its own resources. Before the engine exists the bring-up is complete and consistent (or retained by the clock code itself), no task has started, and nothing is retained, so the session returns with its record. */
+static void op_retain(void *v){(void)v;if(ce.token.id&&ce.engine.initialized)(void)a733_clock_retain(&providers.shared.clocks,&ce.token);}
+/* The failing step's own detail for the record. Bring-up: the clock provision's first failing source line (bits 11:0)
+ * and the admission denial (bits 20:12). Allocation: the step that failed (bits 3:0: 1 no ledger, 2 alloc, 3 prepare,
+ * 4 handoff) and the negative umem status (bits 11:4). */
+static unsigned op_detail(void *v){(void)v;return ce.detail;}
 
 static void clean(const void *base,size_t bytes)
 {
