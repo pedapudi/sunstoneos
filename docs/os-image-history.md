@@ -404,7 +404,7 @@ through the existing card format, with cold reset and shared-clock prerequisites
 192-byte to 72-byte convolution). Only that model and its input and
 reference vectors are linked; the other four entries have no caller in the
 OS. `SUNSTONE_OS_NPU_CATALOGUE` names the artifact map;
-[npu-catalogue.py](../apps/os/npu-catalogue.py) compares each embedded file
+`apps/os/npu-catalogue.py`, since removed with the linked catalogue, compared each embedded file
 with its size and SHA-256 hash in the catalogue. The session binds the
 SHA-256 of the linked model's SHA-256 digest.
 
