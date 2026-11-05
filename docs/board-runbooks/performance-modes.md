@@ -1,8 +1,9 @@
 # High and low performance modes in one OS lifetime
 
-Status: **runbook only**; nothing here has run, and no set is frozen. A set
-frozen from it needs the approval records below and a root approval of each
-image's identity before its claim.
+Status: **blocked**. Nothing here has run. The switches need a host sender
+for USB0 operation 8, and none exists ([performance modes](../performance-modes.md#switching-from-the-host)).
+Until one is written, only the boot row below can run: an image whose grant
+asks for the high or the low boot mode.
 
 ## What the run tests
 
@@ -10,8 +11,8 @@ The supervised OS image with the performance-mode service
 ([design](../designs/performance-modes.md)) boots in high, runs its NPU jobs,
 then switches to low and back to high while each block's rate and voltage are
 read back, and runs one recorded-audio recognition in each mode. Every switch
-goes through USB0 operation 8 from the supervised launcher; the device is not
-released between them.
+goes through USB0 operation 8 from a host sender; the device is not released
+between them.
 
 ## Prerequisites
 
@@ -31,19 +32,16 @@ released between them.
 
 ## Images and records
 
-- **Image A** (this lifetime): the supervised OS image with
-  `A733_A76_ADMITTED`, `SUNSTONE_A733_OS_CPU_CLOCK`, `SUNSTONE_A733_OS_PERF`
-  (boot mode high) and `SUNSTONE_A733_OS_NPU` with the default catalogue
-  entry and two jobs. Its manifest must record `perf_modes: true` and
-  `perf_boot_mode: "high"` and `perf_operation: 8`.
-- **Session.** The CPU grant names both clusters, 1794 MHz for CPU-L and
-  2002 MHz for CPU-B, and 64 changes. Its approval record has schema
-  `a733-os-perf-modes-approval-v1`, names port 3-3, the image's SHA-256, the
-  session's epoch, generation and lease, the user's CPU, GPU and NPU clock and
-  voltage approvals and their dates, and cites port 3-3's passed B1 record.
-  The NPU extension carries the authority records of the OS NPU profile.
-- **Launch.** `tools/check-a733-os-supervised.py ... --generations 3
-  --perf-sequence high,low,high --fault-report`.
+- **Image A** (this lifetime): the one OS image with the NPU service and an
+  application whose manifest declares `cpu.clock_grants` and `cpu.perf`, and
+  whose NPU declaration names two jobs.
+- **Session.** `tools/session.py build ... --clock-grant --perf high` writes
+  the CPU grant: both clusters, 1794 MHz for CPU-L and 2002 MHz for CPU-B,
+  with `perf` 1 (high). The record carries no approval. The board queue
+  records the approver (`--approved-by coordinator`); these are the reviewed
+  points of `tools/cpu-reviewed-points.json`.
+- **Launch.** `tools/board.py submit --kind npu --restore-rails ...` for the
+  boot row. The switch rows need the host sender first.
 
 ## Sequence and predictions
 
@@ -84,9 +82,9 @@ earlier lifetime.
 
 The OS NPU service runs one session per lifetime, before the first switch, so
 image A runs NPU jobs only at 852 MHz. NPU work at 492 MHz needs a second
-lifetime with **image B**, built as image A with
-`SUNSTONE_A733_OS_PERF_BOOT=low`. Its predictions: the boot switch lowers the
-CPU domains to the low row's words, the NPU starts at 492 MHz and its report
-is matched with the same output digest as image A's, and
-`--perf-sequence low,high,low` gives the switch rows above in the other
-order. This lifetime may follow the first only after the first passed.
+lifetime: image A with a session whose grant is built with `--perf low`. Its
+predictions: the boot switch lowers the CPU domains to the low row's words,
+the NPU starts at 492 MHz and its report is matched with the same output
+digest as in the first lifetime, and the switches low, high, low give the
+switch rows above in the other order. This lifetime may follow the first only
+after the first passed.

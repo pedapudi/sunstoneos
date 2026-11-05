@@ -54,45 +54,13 @@ and [resident authority](designs/resident-performance.md). Resident CPU grants
 and every NPU composition remain restricted to recorded input; supervised
 GPU builds also exclude microphone, radio and headset services.
 
-## Using the command
+## Switching from the host
 
-`tools/sunstone-perf.py` talks to the running image over USB0. It needs the
-board's USB port and the image manifest of the running build:
-
-```sh
-tools/sunstone-perf.py --port 3-3 --manifest BUILD/os-image/link-check.json status
-tools/sunstone-perf.py --port 3-3 --manifest BUILD/os-image/link-check.json low
-tools/sunstone-perf.py --port 3-3 --manifest BUILD/os-image/link-check.json high --block cpu-b
-```
-
-- `status` reads every block back from the hardware and prints it.
-- `high` and `low` switch the blocks the image owns, or those that `--block`
-  names (`cpu-l`, `cpu-b`, `cpu` for both clusters, `gpu`, `npu`), wait for the
-  switch to finish, and print the result.
-- `--json` prints the decoded report instead of the table.
-
-The command exits with status 0 when the command completed without a refusal
-or failure, and 1 otherwise. It takes the board lock of the port, so it
-cannot run while a supervised launch holds the board; the launcher's
-`--perf-sequence high,low,high` switches modes before each recognition
-instead.
-
-A `status` printout looks like this:
-
-```
-mode low (boot mode high), last command: read back, done
-speed bin vf0400, CPU grant changes left 58
-block  target            read back
-cpu-l  1196 MHz  800 mV  1196 MHz  800 mV
-cpu-b  1404 MHz  800 mV  1404 MHz  800 mV
-dsu     910 MHz  800 mV   910 MHz  800 mV
-gpu     600 MHz  800 mV   600 MHz  800 mV
-npu     492 MHz  800 mV   492 MHz  800 mV    clock stopped
-```
-
-The read-back values are the programmed PLL rates and PMIC selector voltages.
-"clock stopped" marks a block whose clock gate is closed; its line shows the
-rate its PLL would give.
+No host command sends operation 8. The running image switches only at boot,
+to its boot mode, and the thermal policy lowers and restores clusters on its
+own. A host switch needs a sender written against the report layout in
+`apps/os/perf.h` and the request rules in
+[the OS service](os-image.md#performance-mode-service-usb0-operation-8).
 
 ## When a switch is refused or stops
 
