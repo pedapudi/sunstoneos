@@ -337,8 +337,9 @@ int ss_npu_last_fault(struct ss_npu_fault_info *);
 /* Hand the NPU a compiled graph at run time, for example a file read into a region: no list names it and the OS image is not
  * rebuilt. Call repeatedly with identical arguments until it completes: 0 pending, 1 registered (*index is the model index
  * for ss_npu_run), -2 refused (not admissible, beyond the declared graph bounds or the declared graph count), -1
- * unavailable or retained failure. Keep the graph alive and unchanged: the OS admitted these bytes, and a changed copy
- * fails LOAD. The session must declare graph_bytes and tensor_bytes (npu section of the manifest). */
+ * unavailable or retained failure. The OS copies the graph into memory of its own before it admits it and reads only that
+ * copy afterwards: once this returns 1 the application may reuse or free its buffer. The session must declare graph_bytes
+ * and tensor_bytes (npu section of the manifest). */
 int ss_npu_register_graph(const void *graph,size_t bytes,unsigned *index);
 /* After the final run, repeat until 1 (slot closed), or a negative failure.
  * Successful CLOSE is terminal for this session. */

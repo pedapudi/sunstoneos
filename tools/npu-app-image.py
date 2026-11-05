@@ -131,6 +131,10 @@ def main():
     make_session = [sys.executable, '-B', str(ROOT / 'tools/session.py'), 'build', str(elf), '--out', str(session),
                     '--manifest', str(args.out / 'manifest.json'), '--input', str(models), '--input', str(vectors),
                     '--decoder', str(args.app / 'host.py')]
+    if manifest.get('cpu', {}).get('clock_grants'):
+        # The session grants the CPU clock when the manifest declares it (the CPU-return admission takes a grant without
+        # the performance service: --perf is for other images).
+        make_session.append('--clock-grant')
     submit = [sys.executable, '-B', str(ROOT / 'tools/board.py'), 'submit', str(elf), '--kind', 'npu', '--port', 'PORT',
               '--template', str(session / 'template'), '--decoder', str(session / 'decoder.py'), '--restore-rails',
               '--input', str(models), '--input', str(vectors), '--hypothesis', 'TEXT', '--wait']

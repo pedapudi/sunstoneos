@@ -405,10 +405,18 @@ int os_npu_open(void)
     if(call(NPU_SERVICE_OPEN,0,1000000)!=1)return -1;
     npu.opened=1;return 1;
 }
+/* What graph registration cost, for the runner to copy out of image RAM: the number of graphs, the bytes copied, and the
+ * microseconds in the copy, the container decode and the layout, summed over the graphs (npu_runtime_counters). */
+struct os_npu_register_record{uint64_t graphs,bytes,copy_us,decode_us,layout_us,reserved[3];};
+struct os_npu_register_record os_npu_register_record;
 int os_npu_register(const void *model,size_t bytes,unsigned *entry)
 {
     /* The graph is admitted like a linked one and must fit the bounds declared in the session (npu_runtime_register). */
-    return caller()&&entry&&npu_runtime_register(&npu.runtime,model,bytes,entry);
+    if(!(caller()&&entry&&npu_runtime_register(&npu.runtime,model,bytes,entry)))return 0;
+    const struct npu_runtime_counters *c=&npu.runtime.counters;
+    os_npu_register_record=(struct os_npu_register_record){c->registered,c->registered_bytes,c->register_copy_us,c->register_decode_us,
+        c->register_layout_us,{0}};
+    return 1;
 }
 int os_npu_load(unsigned entry)
 {

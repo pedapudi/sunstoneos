@@ -11,15 +11,14 @@
 #define PAGE 4096u
 #define END_PAIR UINT64_C(0x10000000)
 
-/* Worker phases. A LOAD copies the model into the staging area, hashing and
- * checksumming each chunk, opens and plans the copy, assembles it in steps,
+/* Worker phases. A LOAD opens the kernel's copy of the model (made at registration), assembles it in steps,
  * fills END pairs up to the END mark, zeroes descriptor and coefficient
- * padding, copies coefficients, checksums the staging area again, computes
+ * padding, copies coefficients, computes
  * the interim check references and cleans what it wrote. A job
  * cleans its inputs, cleans and invalidates its output lines, then zeroes,
  * cleans and invalidates its working pool. */
 enum {
-    LOAD_COPY, LOAD_OPEN, LOAD_ASSEMBLE, LOAD_END, LOAD_PAD, LOAD_COEFF, LOAD_STAGED, LOAD_SUM, LOAD_CLEAN,
+    LOAD_OPEN, LOAD_ASSEMBLE, LOAD_END, LOAD_PAD, LOAD_COEFF, LOAD_SUM, LOAD_CLEAN,
     PREPARE_INPUT, PREPARE_OUTPUT, PREPARE_POOL,
     CHECK_READONLY
 };
@@ -39,20 +38,19 @@ static void set_state(struct npu_runtime_slot *s, unsigned value)
 
 /* The plan derived from the model image. The graph is admitted by what it is, not by a table: the container and its
  * checksums are verified, every operation is checked by the assembler, and every address it patches is confined to the
- * job's buffers (docs/designs/npu-loader-admission.md). The SHA-256 taken here is the reference for LOAD, which
- * hashes the copy it stages and compares: it detects a corrupted or replaced copy, and it needs no table. The layout's
+ * job's buffers (docs/designs/npu-loader-admission.md). No digest admits anything: the graph is copied into
+ * kernel-owned memory at registration (no task of the application reaches it) and admitted and assembled from that copy,
+ * so the application cannot change what was admitted. The layout's
  * table (layout->buffers, capacity) is the caller's, sized by nbg_assembly_layout_entries. */
-static int admit(const unsigned char *data, size_t bytes, const struct nbg_model *model, unsigned char digest[32],
-                 struct nbg_assembly_layout *layout)
+static int admit(const struct nbg_model *model, struct nbg_assembly_layout *layout)
 {
-    if (digest) storage_digest_bytes(data, bytes, digest);
     /* The command allocation is the graph's own stream rounded to a page; a stream longer than one fetch continues
      * through links (nbg_assembly.c), so nothing bounds it here but the slot: a slot is sized by the largest resident
      * graph, and a graph registered later that needs a longer command region than its slot holds is refused by the
      * fit check there (npu_runtime_register, LOAD). */
     return nbg_assembly_layout(model, layout);
 }
-struct sizes { size_t command, constant, read, write, staging; };
+struct sizes { size_t command, constant, read, write; };
 static void need(const struct nbg_assembly_layout *l, size_t model_bytes, struct sizes *s)
 {
     size_t constant = l->buffers[NBG_ALLOC_NN].allocation_bytes + l->buffers[NBG_ALLOC_COEFF].allocation_bytes;
@@ -67,7 +65,7 @@ static void need(const struct nbg_assembly_layout *l, size_t model_bytes, struct
     if (constant > s->constant) s->constant = constant;
     if (read > s->read) s->read = read;
     if (write > s->write) s->write = write;
-    if (pages(model_bytes) > s->staging) s->staging = pages(model_bytes);
+    (void)model_bytes;
 }
 
 /* Every table is taken from the pool through its allocator (include/npu_pool.h); a lay_out keeps the running total, which is
@@ -94,11 +92,11 @@ static void *take_meta(struct bump *b, size_t bytes)
 struct record { struct sizes size; unsigned entries; };
 
 /* CPU offsets and device addresses. The read-only group holds the tables, the NPU table arena, the bootstrap stream, the
- * CPU-only staging area and each slot's command allocation and read-only region; then come the read windows and the write
+ * each slot's command allocation and read-only region; then come the read windows and the write
  * windows. Each group starts and ends on a 2 MiB boundary. Device addresses leave one unmapped page after every
  * allocation. */
 struct placement {
-    size_t tables_bytes, arena, arena_bytes, bootstrap, staging, bytes;
+    size_t tables_bytes, arena, arena_bytes, bootstrap, bytes;
     size_t command0, read0, write0;
     uint32_t bootstrap_device, command_device0, read_device0, write_device0;
 };
@@ -119,7 +117,7 @@ size_t npu_runtime_tables_bytes(unsigned count, unsigned slots)
 static int place(struct placement *p, const struct sizes *z, size_t tables_bytes, const struct slot_dims *total)
 {
     memset(p, 0, sizeof(*p));
-    if (!z->command || !z->constant || !z->read || !z->write || !z->staging || z->constant > UINT32_MAX ||
+    if (!z->command || !z->constant || !z->read || !z->write || z->constant > UINT32_MAX ||
         z->read > UINT32_MAX || z->write > UINT32_MAX) return 0;
     uint64_t device = NPU_RUNTIME_DEVICE_BASE;
     p->bootstrap_device = (uint32_t)device; device += (uint64_t)z->command + PAGE;
@@ -135,7 +133,6 @@ static int place(struct placement *p, const struct sizes *z, size_t tables_bytes
     p->tables_bytes = pages(tables_bytes); offset += p->tables_bytes;
     p->arena = offset; offset += p->arena_bytes;
     p->bootstrap = offset; offset += z->command;
-    p->staging = offset; offset += z->staging;
     p->command0 = offset; offset += total->command_cpu;
     offset = whole_groups(offset);
     p->read0 = offset; offset += total->read_cpu;
@@ -207,22 +204,19 @@ static enum npu_declaration_result lay_out(struct npu_runtime *rt, struct bump *
         records = (struct record *)((uint8_t *)bounds->scratch + (((size_t)max_entries * sizeof(*one_table) + 63) & ~(size_t)63));
         memset(records, 0, (size_t)count * sizeof(*records));
     }
-    /* The head: the catalogue, the plans, the digests and the slot records, whose sizes depend on counts alone. */
-    unsigned char (*digests)[32] = NULL;
+    /* The head: the catalogue, the plans and the slot records, whose sizes depend on counts alone. */
     struct nbg_assembly_layout *plans = NULL;
     if (rt) {
         rt->catalogue = take_meta(b, entries_all * sizeof(*rt->catalogue));
         plans = take_meta(b, entries_all * sizeof(*plans));
-        digests = take_meta(b, entries_all * 32);
         rt->slot = take_meta(b, (size_t)slots * sizeof(*rt->slot));
         if (b->failed) return NPU_DECLARATION_MEMORY;
-        rt->plans = plans; rt->model_digest = digests;
+        rt->plans = plans;
     } else {
         (void)take_meta(b, entries_all * sizeof(struct npu_runtime_model)); (void)take_meta(b, entries_all * sizeof(struct nbg_assembly_layout));
-        (void)take_meta(b, entries_all * 32); (void)take_meta(b, (size_t)slots * sizeof(struct npu_runtime_slot));
+        (void)take_meta(b, (size_t)slots * sizeof(struct npu_runtime_slot));
     }
     struct sizes *z = &w->z;
-    unsigned char digest[32];
     for (unsigned m = 0; m < count; ++m) {
         struct nbg_model view;
         (void)nbg_model_open(models[m].data, models[m].bytes, &view);
@@ -234,12 +228,7 @@ static enum npu_declaration_result lay_out(struct npu_runtime *rt, struct bump *
             if (b->failed) return NPU_DECLARATION_MEMORY;
             plan = &plans[m];
         } else (void)take_meta(b, (size_t)entries * sizeof(struct nbg_allocation_requirement)); /* counted, as prepare takes it */
-        /* A model given with its digest is not hashed here: the declared digest is the reference, and LOAD hashes the copy
-         * it stages and refuses a copy that differs, so the content is checked once, when it is first used (hashing
-         * megabytes takes seconds before the scheduler, where the secondary cores wait only a second for the primary). */
-        if (!admit(models[m].data, models[m].bytes, &view, models[m].sha256 ? NULL : (rt ? digests[m] : digest), plan))
-            return NPU_DECLARATION_MODEL;
-        if (models[m].sha256 && rt) memcpy(digests[m], models[m].sha256, 32);
+        if (!admit(&view, plan)) return NPU_DECLARATION_MODEL;
         need(plan, models[m].bytes, z);
         if (records) { records[m].entries = entries; need(plan, models[m].bytes, &records[m].size); }
     }
@@ -255,7 +244,6 @@ static enum npu_declaration_result lay_out(struct npu_runtime *rt, struct bump *
         if (model > z->constant) z->constant = model;
         if (tensors > z->read) z->read = tensors;
         if (tensors > z->write) z->write = tensors;
-        if (pages(bounds->graph_bytes) > z->staging) z->staging = pages(bounds->graph_bytes);
         /* Every input and output allocation is at least a page, so a graph that fits the regions has at most as many tensors
          * as they hold pages: its layout needs at most that many entries. */
         w->later_entries = (unsigned)(NBG_LAYOUT_ENTRIES(0, 0) + z->read / PAGE + z->write / PAGE);
@@ -418,7 +406,7 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     rt->later_entries = w.later_entries;
     rt->queue_links = v.bounds.queue_links; rt->queue_image_links = v.bounds.queue_image_links;
     rt->command_bytes = z.command; rt->constant_bytes = z.constant; rt->read_bytes = z.read; rt->write_bytes = z.write;
-    rt->staging_bytes = z.staging; rt->staging = v.cpu + p.staging;
+    rt->meta = v.meta;
     rt->parent_cpu = v.cpu; rt->parent_bytes = v.bytes;
     rt->placed_bytes = p.bytes;
     if (!npu_service_tables(&rt->service, v.slots, v.slots + 1, rt->service_tables,
@@ -685,31 +673,13 @@ static int load_work(struct npu_runtime *rt)
             if (state(&rt->slot[i]) == NPU_RUNTIME_LOADING) rt->loading = i;
         }
         if (rt->loading == NPU_RUNTIME_NONE) return 0;
-        next_phase(&rt->slot[rt->loading], LOAD_COPY);
-        storage_digest_init(&rt->digest);
-        rt->staging_crc = UINT32_MAX;
+        next_phase(&rt->slot[rt->loading], LOAD_OPEN);
     }
     struct npu_runtime_slot *s = &rt->slot[rt->loading];
     const struct npu_runtime_model *model = &rt->catalogue[s->model];
     ++rt->counters.steps[NPU_RUNTIME_STEP_LOAD];
     switch (s->phase) {
-    case LOAD_COPY: {
-        /* The source is read once; the hash and the CRC cover the staged
-         * bytes while they are still in the cache. */
-        size_t n = model->bytes - s->offset;
-        if (n > NPU_RUNTIME_LOAD_CHUNK) n = NPU_RUNTIME_LOAD_CHUNK;
-        void *to = (void *)(rt->staging + s->offset);
-        memcpy(to, (const unsigned char *)model->data + s->offset, n);
-        (void)storage_digest_add(&rt->digest, to, n);
-        rt->staging_crc = npu_runtime_crc32c(rt->staging_crc, to, n);
-        rt->counters.copied_bytes += n; rt->counters.digest_bytes += n;
-        s->offset += n;
-        if (s->offset == model->bytes) next_phase(s, LOAD_OPEN);
-        return 1;
-    }
     case LOAD_OPEN: {
-        unsigned char digest[32];
-        storage_digest_end(&rt->digest, digest);
         const struct nbg_assembly_layout *plan = &rt->plans[s->model];
         {   /* The graph must fit this slot's regions (they are sized by one graph when the slots are). */
             struct sizes fit = {0};
@@ -719,8 +689,7 @@ static int load_work(struct npu_runtime *rt)
                 NBG_LAYOUT_ENTRIES(plan->inputs, plan->outputs) > s->layout.capacity) { load_end(rt, s, 0); return 1; }
         }
         targets(s, plan);
-        if (memcmp(digest, rt->model_digest[s->model], 32) ||
-            nbg_model_open((const void *)rt->staging, model->bytes, &rt->view) != NBG_DECODE_OK ||
+        if (nbg_model_open(model->data, model->bytes, &rt->view) != NBG_DECODE_OK ||
             !nbg_assembly_begin(&rt->view, s->targets, nbg_layout_buffers(plan),
                                 &s->layout, &rt->cursor) || !same_plan(&s->layout, plan)) {
             load_end(rt, s, 0); return 1;
@@ -797,21 +766,7 @@ static int load_work(struct npu_runtime *rt)
         }
         rt->counters.copied_bytes += n;
         s->offset += n;
-        if (s->offset >= total) { next_phase(s, LOAD_STAGED); s->crc = UINT32_MAX; }
-        return 1;
-    }
-    case LOAD_STAGED: {
-        /* Interim: every task can write the staging area, and decoding,
-         * assembly and the coefficient copy read it after its chunks were
-         * hashed. The slot takes only bytes that still match that pass. */
-        size_t n = model->bytes - s->offset;
-        if (n > NPU_RUNTIME_READ_CHUNK) n = NPU_RUNTIME_READ_CHUNK;
-        s->crc = npu_runtime_crc32c(s->crc, (const void *)(rt->staging + s->offset), n);
-        rt->counters.staging_check_bytes += n;
-        s->offset += n;
-        if (s->offset < model->bytes) return 1;
-        if (s->crc != rt->staging_crc) { load_end(rt, s, 0); return 1; }
-        next_phase(s, LOAD_SUM); s->crc = UINT32_MAX;
+        if (s->offset >= total) { next_phase(s, LOAD_SUM); s->crc = UINT32_MAX; }
         return 1;
     }
     case LOAD_SUM:
@@ -1139,21 +1094,32 @@ int npu_runtime_register(struct npu_runtime *rt, const void *model, size_t bytes
     if (!good(rt) || !rt->prepared || !index || !model || !bytes || bytes > NBG_MODEL_MAX_BYTES ||
         !a733_span_incl_nonempty(model, bytes) || private_overlap(rt, (uintptr_t)model, bytes)) return 0;
     const unsigned n = atomic_load_explicit(&rt->count, memory_order_acquire);
-    if (n >= rt->capacity || pages(bytes) > rt->staging_bytes) return 0;
+    if (n >= rt->capacity || !rt->meta) return 0;
+    /* One copy, into kernel-owned memory that no task of the application reaches: everything after this reads the copy, so the
+     * application may reuse its buffer once this returns, and what was admitted is what LOAD assembles. */
+    const uint64_t t0 = clock_us(rt);
+    void *const copy = npu_meta_allocate(rt->meta, bytes);
+    if (!copy) return 0;
+    memcpy(copy, model, bytes);
+    const uint64_t t1 = clock_us(rt);
     struct nbg_model view;
-    if (nbg_model_open(model, bytes, &view) != NBG_DECODE_OK) return 0;
+    if (nbg_model_open(copy, bytes, &view) != NBG_DECODE_OK) { npu_meta_release(rt->meta, copy, bytes); return 0; }
+    const uint64_t t2 = clock_us(rt);
     /* The graph's layout needs as many entries as its tensors; the reservation holds the declared bound (rt->later_entries). */
     const size_t entries = nbg_assembly_layout_entries(&view);
     if (!entries || entries > rt->later_entries) return 0;
     struct nbg_assembly_layout plan = {.buffers = rt->scratch, .capacity = rt->later_entries};
-    unsigned char digest[32];
     struct sizes z = {0};
-    if (!admit(model, bytes, &view, digest, &plan)) return 0;
+    if (!admit(&view, &plan)) { npu_meta_release(rt->meta, copy, bytes); return 0; }
     need(&plan, bytes, &z);
-    if (z.command > rt->command_bytes || z.constant > rt->constant_bytes || z.read > rt->read_bytes || z.write > rt->write_bytes) return 0;
-    rt->catalogue[n] = (struct npu_runtime_model){model, bytes};
+    if (z.command > rt->command_bytes || z.constant > rt->constant_bytes || z.read > rt->read_bytes || z.write > rt->write_bytes) {
+        npu_meta_release(rt->meta, copy, bytes); return 0;
+    }
+    const uint64_t t3 = clock_us(rt);
+    rt->counters.registered++; rt->counters.registered_bytes += bytes;
+    rt->counters.register_copy_us += t1 - t0; rt->counters.register_decode_us += t2 - t1; rt->counters.register_layout_us += t3 - t2;
+    rt->catalogue[n] = (struct npu_runtime_model){copy, bytes};
     copy_layout(&rt->plans[n], &plan);
-    memcpy(rt->model_digest[n], digest, 32);
     atomic_store_explicit(&rt->count, n + 1, memory_order_release);
     *index = n;
     return 1;

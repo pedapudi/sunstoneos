@@ -743,7 +743,8 @@ def capture(owner, plan, args):
         reads.append(('cpu-rails', geo['cpu_rails']['address'], geo['cpu_rails']['bytes']))
     for name, place in geo.get('cpu_clock', {}).items():
         reads.append(('cpu-clock-' + name.replace('_', '-'), place['address'], place['bytes']))
-    for name, key in (('device-ranges-head', 'device_ranges_head'), ('return-walk', 'return_walk'), ('npu-guard', 'npu_guard')):
+    for name, key in (('device-ranges-head', 'device_ranges_head'), ('return-walk', 'return_walk'), ('npu-guard', 'npu_guard'),
+                      ('npu-register', 'npu_register')):
         if key in geo:
             reads.append((name, geo[key]['address'], geo[key]['bytes']))
     if 'radio_result' in geo:

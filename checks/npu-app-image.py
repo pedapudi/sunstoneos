@@ -15,7 +15,6 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--output', '{output}']]
 CHECK_INPUTS = ('tools/npu-app-image.py', 'tools/npu-external-pack.py')
 PAGE = 4096
 

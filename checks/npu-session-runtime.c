@@ -692,10 +692,7 @@ static void client(void *argument)
             load(slot, SHUFFLENET);
             platform_puts("COUNT load=3");
             platform_puts(" load_steps="); decimal(rt.counters.steps[NPU_RUNTIME_STEP_LOAD] - loading.steps[NPU_RUNTIME_STEP_LOAD]);
-            platform_puts(" sha256_bytes="); decimal(rt.counters.digest_bytes - loading.digest_bytes);
             platform_puts(" copied_bytes="); decimal(rt.counters.copied_bytes - loading.copied_bytes);
-            platform_puts(" staging_check_bytes=");
-            decimal(rt.counters.staging_check_bytes - loading.staging_check_bytes);
             platform_puts(" reference_bytes="); decimal(rt.counters.reference_bytes - loading.reference_bytes);
             platform_puts(" jobs_during_load="); decimal(rt.counters.jobs - loading.jobs);
             platform_puts("\n");
