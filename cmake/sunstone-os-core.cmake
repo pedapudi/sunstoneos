@@ -606,6 +606,11 @@ endif()
 if(SUNSTONE_A733_OS_DMA)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_DMA=1)
 endif()
+# Every function of the OS, its device objects and the application starts on a 16-byte boundary. Otherwise a function's
+# address modulo 8 depends on the size of all code linked before it, so an unrelated OS change can move an application's
+# hot loops to the other alignment and change their speed on the Cortex-A55. The NPU encoder's scalar conversion loops
+# ran 25% slower with its conversion function at 4 modulo 8 than at 0.
+target_compile_options(sunstone-a733-os-core PRIVATE -falign-functions=16)
 # Publish the exact OS compile configuration to application and device objects.
 foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_FEATURES)
   get_target_property(value sunstone-a733-os-core ${property})
