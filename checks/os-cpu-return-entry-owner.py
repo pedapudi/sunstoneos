@@ -117,6 +117,13 @@ def returns(image,layout,members):
     assert return_host.geometry(image.path)['cpu_rails']=={'address':address,'bytes':8}
     decoded=return_host.decode_rails(raw)
     assert (decoded['dcdc5_uv'],decoded['dcdc3_uv'])==tuple(v or None for v in readbacks),(name,decoded)
+   # The host reads the owner's publication from image RAM after the return (cpu_clock in the return geometry).
+   clock=return_host.geometry(image.path)['cpu_clock']
+   assert {n:p['address'] for n,p in clock.items()}=={n:layout.address(n,'return-cpu.c') for n in clock},(name,clock)
+   raw={n:bytes(m.uc.mem_read(p['address'],p['bytes'])) for n,p in clock.items()}
+   published=return_host.decode_clock(raw['record'],raw['dsu_mhz'],raw['pattern_bits'],raw['parked_max_us'])
+   # These cases enter the owner in a later phase without its publication: the record reads as never published.
+   assert published=={'published':False,'source':'CPU clock owner publication at return'},(name,published)
   trace=[value for stage,value in m.crumb_trace if stage==0x0204]
   assert trace and trace[0]>>12==1,(name,'missing drain breadcrumb',trace)
   assert all((value>>10&3)==m.initial_owner_phase for value in trace),(name,trace)
@@ -258,6 +265,12 @@ def main():
      members={c.attributes['DW_AT_name'].value.decode():int(c.attributes['DW_AT_data_member_location'].value) for c in d.get_DIE_from_attribute('DW_AT_type').iter_children() if c.tag=='DW_TAG_member'}
  assert members and members['driver']==0
  rows=[]
+ # The publication's packing (pack() in apps/os/cpu.c): 11-bit points and voltages, then a 20-bit transition count.
+ word=1794|2002<<11|1000<<22|1050<<33|3<<44
+ assert return_host.decode_clock(struct.pack('<Q',word),struct.pack('<I',1274),struct.pack('<I',2),struct.pack('<Q',31))=={
+  'published':True,'cpu_l_mhz':1794,'cpu_b_mhz':2002,'cpu_l_mv':1000,'cpu_b_mv':1050,'transitions':3,'dsu_mhz':1274,
+  'pattern_bits':2,'parked_max_us':31,'source':'CPU clock owner publication at return'}
+ rows.append({'name':'clock-publication-readout','passed':True})
  m=Model(image,layout,members);assert m.step()==1 and m.requests==[(1,2002)]
  m.put32(0x08873000,0);assert m.step()==1 and m.requests==[(1,2002),(0,1794)]
  rows.append({'name':'guard-before-first-request-and-once-only','passed':True})

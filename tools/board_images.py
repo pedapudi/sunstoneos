@@ -738,6 +738,8 @@ def capture(owner, plan, args):
         reads.append(('npu-stop', geo['npu_stop']['address'], geo['npu_stop']['bytes']))
     if 'cpu_rails' in geo:
         reads.append(('cpu-rails', geo['cpu_rails']['address'], geo['cpu_rails']['bytes']))
+    for name, place in geo.get('cpu_clock', {}).items():
+        reads.append(('cpu-clock-' + name.replace('_', '-'), place['address'], place['bytes']))
     for name, key in (('device-ranges-head', 'device_ranges_head'), ('return-walk', 'return_walk'), ('npu-guard', 'npu_guard')):
         if key in geo:
             reads.append((name, geo[key]['address'], geo[key]['bytes']))
@@ -801,6 +803,13 @@ def capture(owner, plan, args):
             except (ValueError, KeyError, struct.error) as error:
                 valid = False
                 decoded['cpu_rail_error'] = str(error)
+        if 'cpu_clock' in geo:
+            try:
+                decoded['cpu_clock'] = records.decode_clock(*(copied['cpu-clock-' + name.replace('_', '-')]
+                                                              for name in ('record', 'dsu_mhz', 'pattern_bits', 'parked_max_us')))
+            except (ValueError, KeyError, struct.error) as error:
+                valid = False
+                decoded['cpu_clock_error'] = str(error)
         decoded['output_capture_sha256'] = hashlib.sha256(copied['output-record']).hexdigest()
         try:
             info = records.host.image_manifest(args.image)
