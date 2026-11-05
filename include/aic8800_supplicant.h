@@ -47,6 +47,7 @@ struct aic8800_supplicant {
     int rsn_state;
     uint64_t generation,last_now,deadline;
     uint32_t dropped_eapol;
+    uint32_t eapol_rx, eapol_tx; /* EAPOL frames received from the access point and acknowledged sends, for the record. */
     struct aic8800_supplicant_action actions[AIC8800_SUPPLICANT_ACTIONS];
     struct aic8800_supplicant_timer timers[AIC8800_SUPPLICANT_TIMERS];
     uint16_t used[AIC8800_SUPPLICANT_SMALL_SLOTS+AIC8800_SUPPLICANT_LARGE_SLOTS];
