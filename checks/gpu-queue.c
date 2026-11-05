@@ -227,7 +227,7 @@ void fixture_gpu_irq(void)
 /* The client-ring KICK: both commands as the session wrote them, the update
  * naming the timeline with the next sequence; the kernel return; then the
  * job goes to the model. */
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
 static int perf_kick(void *,unsigned,unsigned,unsigned char *);
 #endif
 static int kick(void *ctx, uint32_t off, uint32_t value)
@@ -235,7 +235,7 @@ static int kick(void *ctx, uint32_t off, uint32_t value)
     unsigned next = (unsigned)word(resource(0), 4), slot = (next - 1) & 127;
     unsigned char *command = resource(1) + slot * 88;
     if (gpu_queue_case>=54 && word(command,4)==(PVR_CCB_MAGIC|101u)) return fast_kick(ctx,off,value,command);
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
     if(perf_kick(ctx,next,slot,command))return 1;
 #endif
     if (word(command, 4) != (PVR_CCB_MAGIC | 101u)) {
@@ -650,7 +650,7 @@ static void closed(void)
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
 #include "gpu-return-service.inc"
 #endif
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
 #include "gpu-performance-service.inc"
 #endif
 /* CPU maintenance does not evict GPU SLC lines. Shared mutable mappings
@@ -811,7 +811,7 @@ static void client(void *unused)
     metric("table-pages", session.requirements.table_pages);
     if(c>=39) lifecycle_cases(c);
     configASSERT(wb <= 87 && nc <= 52 && session.requirements.table_pages == 24);
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
     if(c>=25)performance_client();
 #endif
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
@@ -1138,7 +1138,7 @@ void kernel_main(void)
     configASSERT(a733_gpu_memory_init(&memory, config.firmware_buffers, config.resources));
     /* The component was bound to the reserved configuration; the service
      * copies this one, which carries the same pointer. */
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
     config.performance_clock=(struct pvr_gpu_clock_ops){boundary_now,sync_write,sync_read,perf_state,perf_publish};
     config.performance_begin=perf_begin;config.performance_poll=perf_poll;config.performance_rate=perf_current;config.performance_client=1;
 #endif
@@ -1153,7 +1153,7 @@ void kernel_main(void)
         TaskHandle_t peer=xTaskCreateStaticAffinitySet(shared_peer,"peer",4096,NULL,3,queue_stacks[2],&queue_tasks[2],1);
         configASSERT(peer && pvr_compute_queue_client_register(compute,peer));
     }
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
     TaskHandle_t thermal=xTaskCreateStaticAffinitySet(performance_owner,"thermal",4096,NULL,5,perf_stack,&perf_task,1);
     configASSERT(thermal && pvr_gpu_service_bind(&service,1,thermal));
 #endif

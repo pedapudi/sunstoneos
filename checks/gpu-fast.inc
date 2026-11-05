@@ -108,7 +108,7 @@ static void fast_cases(unsigned c)
     else if (c!=66 && c!=68) vTaskSuspend(service.worker);
     unsigned requests=uxQueueMessagesWaiting(service.requests);
     if (c>=63) configASSERT(service.queue.direct.doorbell==job_kick);
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
     if (c==68) {
         atomic_store(&perf_go,1);
         TickType_t began=xTaskGetTickCount();

@@ -158,7 +158,6 @@ struct os_npu_failure {
 extern struct os_npu_failure os_npu_first_failure;
 /* USB0 owner: copies the published report, or the pending header. */
 void os_npu_report_copy(uint8_t out[OS_NPU_REPORT_BYTES]);
-#ifdef SUNSTONE_A733_OS_PERF
 /* Performance modes (docs/designs/performance-modes.md). The NPU's rate
  * changes only after its session has stopped, on the bootstrap task.
  * ready: 1 once the startup reached READY and the NPU has not failed.
@@ -171,5 +170,4 @@ int os_npu_perf_stopped(void);
 /* Thermal task only; one outstanding request until the bootstrap answers. */
 int os_npu_perf_retune(unsigned mhz,unsigned sequence,uint64_t deadline_us);
 unsigned os_npu_perf_answer(unsigned sequence);
-#endif
 #endif

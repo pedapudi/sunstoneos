@@ -302,7 +302,7 @@ list(APPEND sources "{platform}" {extra})
 list(REMOVE_DUPLICATES sources)
 set_property(TARGET gpu-service-model PROPERTY SOURCES "${{sources}}")
 target_include_directories(gpu-service-model PRIVATE "{fixtures}" "{ROOT}/checks")
-target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1 {"SUNSTONE_A733_OS_PERF=1" if performance else "SUNSTONE_A733_OS_CPU_RETURN=1" if returning else "SUNSTONE_A733_OS_GPU_RECOVERY_TEST=1" if recovery else ""})
+target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1 {"PVR_GPU_PERFORMANCE=1" if performance else "SUNSTONE_A733_OS_CPU_RETURN=1" if returning else "SUNSTONE_A733_OS_GPU_RECOVERY_TEST=1" if recovery else ""})
 {'target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_LATENCY=1)' if args.latency else ''}
 target_compile_definitions(gpu-service-model PRIVATE INCLUDE_vTaskPrioritySet=1)
 target_compile_definitions(gpu-service-model PRIVATE {"SUNSTONE_GPU_FAST_TIMING=1" if args.timing else ""})

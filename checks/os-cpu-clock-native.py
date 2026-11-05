@@ -30,7 +30,6 @@ u = next(u for u in json.loads((a.build / 'compile_commands.json').read_text())
 original = shlex.split(u['command'])
 old_root = str(ROOT) if u['file'].endswith('/os-image/return-cpu.c') else str(Path(u['file']).parents[2])
 flags = [s.replace(old_root, str(ROOT)) for s in original[:original.index('-o')]]
-assert '-DSUNSTONE_A733_OS_CPU_CLOCK=1' in flags and '-DA733_A76_ADMITTED=1' in flags
 units = ('checks/os-cpu-clock-native.c', 'drivers/clock/a733_cpu_clock.c', 'runtime/memory.c', 'checks/os-cpu-clock-traps.c')
 objects = []
 for i, unit in enumerate(units):

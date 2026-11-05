@@ -8,7 +8,7 @@
 #include "pvr_gpu_stop.h"
 #include "pvr_gpu_flush.h"
 #include "pvr_free_list.h"
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
 #include "pvr_gpu_clock.h"
 #include "a733_perf_mode.h"
 #define PVR_GPU_PERF_READY 1u
@@ -191,7 +191,7 @@ struct pvr_gpu_service_config {
      * with the current absolute session limit; retain all resources on refusal.
      * Recovery keeps the original stop and restart deadlines across polls. */
     int (*recovery_begin)(void *,uint64_t *session_limit);
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
     /* Concrete OS GPU performance owner, using a second pre-bound client. */
     struct pvr_gpu_clock_ops performance_clock;
     int (*performance_begin)(void *,enum a733_perf_action,uint32_t,uint64_t);
@@ -220,7 +220,7 @@ struct pvr_gpu_service_reply {
     uint32_t render_sequence;
     uint64_t texture_generation;
     uint32_t texture_received;
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
     uint32_t performance_status;
     struct a733_perf_point performance_point;
 #endif
@@ -230,7 +230,7 @@ struct pvr_gpu_service_message {
     uint64_t ticket, epoch;
     unsigned client;
     uint32_t render_first_pixel, compute_first_word, compute_sequence, render_sequence;
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
     uint64_t performance_limit;
     uint32_t performance_action, performance_value;
 #endif
@@ -275,7 +275,7 @@ struct pvr_gpu_service {
     struct pvr_gpu_control control;
     struct pvr_gpu_flush flush; /* With config.flush_mmu: the MMU-cache command before READY. */
     struct pvr_gpu_stop stop;
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
     struct {
         struct pvr_gpu_clock clock;
         uint64_t ticket, deadline, limit;
@@ -329,7 +329,7 @@ struct pvr_gpu_service {
 int pvr_gpu_service_init(struct pvr_gpu_service *, const struct pvr_gpu_service_config *,
                          UBaseType_t priority, UBaseType_t affinity);
 int pvr_gpu_service_bind(struct pvr_gpu_service *, unsigned slot, TaskHandle_t);
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
 /* One deferred completion reply per action, collected through the existing
  * finite API. Absolute deadlines are copied, never restarted by the worker. */
 int pvr_gpu_service_performance(struct pvr_gpu_service *,enum a733_perf_action,uint32_t,

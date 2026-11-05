@@ -646,7 +646,7 @@ static int sync_write(void *context, uint32_t value)
     if (!active(b)) return 0;
     return memory_result(b, a733_gpu_memory_sync_write(b->memory, value));
 }
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
 static int performance_live(struct a733_gpu_backend *b)
 {
     return active(b) && b->power->perf.enabled && b->service->phase==PVR_GPU_SERVICE_READY &&
@@ -864,7 +864,7 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
      * this backend's power controller establishes. OPEN reconstructs both
      * firmware clock fields from this config before publishing them. */
     c->state.gpu_clock_hz = A733_GPU_CORE_HZ;
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
     if(p->perf.enabled) {
         c->state.gpu_clock_hz=p->perf.selected_hz;
         c->performance_clock=(struct pvr_gpu_clock_ops){now,clock_sync_write,clock_sync_read,clock_power_state,clock_publish};
