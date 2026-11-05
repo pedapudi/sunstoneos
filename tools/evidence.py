@@ -208,7 +208,7 @@ def queue_record(queue, entry_id, subsystem):
         measurements.append({'name': 'run_total', 'value': round(total, 3), 'unit': 's'})
     return {'id': entry_id, 'subsystem': subsystem,
             'date': datetime.datetime.fromtimestamp(stamp, datetime.timezone.utc).strftime('%Y-%m-%d') if stamp else None,
-            'entry_id': entry_id, 'port': entry.get('port'),
+            'entry_id': entry_id, 'port': result.get('port') or entry.get('port'),
             'image_sha256': result.get('image_sha256') or entry.get('image_sha256'),
             'git_revision': result.get('git_revision'),
             'hypothesis': entry.get('hypothesis') or '', 'outcome': outcome,
