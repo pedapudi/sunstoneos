@@ -23,11 +23,6 @@
 #else
 #define OS_WITH_NPU(...)
 #endif
-#ifdef SUNSTONE_A733_OS_AUDIO
-#define OS_WITH_AUDIO(...) __VA_ARGS__
-#else
-#define OS_WITH_AUDIO(...)
-#endif
 #ifdef SUNSTONE_A733_OS_DMA
 #define OS_WITH_DMA(...) __VA_ARGS__
 #else
@@ -58,7 +53,7 @@
  * links its code (OS_LINKED_NAME is 1 when it is linked). A session cannot grant a service whose code the image lacks. */
 #define OS_GRANT_ROWS(X) \
     X(NPU, 0, OS_WITH_NPU) \
-    X(AUDIO, 1, OS_WITH_AUDIO) \
+    X(AUDIO, 1, OS_ALWAYS) \
     X(CPU_CLOCK, 2, OS_ALWAYS) \
     X(DMA, 3, OS_WITH_DMA) \
     X(RADIO, 4, OS_WITH_RADIO)
@@ -82,7 +77,7 @@
     X("large", os_large, os_large_start, OS_ALWAYS) \
     X("tlbi", os_tlbi, os_tlbi_start, OS_WITH_TLBI) \
     X("npu", os_npu, os_npu_start, OS_WITH_NPU) \
-    X("audio", os_audio, os_capture_start, OS_WITH_AUDIO) \
+    X("audio", os_audio, os_capture_start, OS_ALWAYS) \
     X("dma", os_dma, os_dma_start, OS_WITH_DMA) \
     X("radio", os_radio, os_radio_start, OS_WITH_RADIO) \
     X("headset", os_headset, os_headset_start, OS_WITH_HEADSET) \

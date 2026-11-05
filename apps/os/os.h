@@ -10,9 +10,6 @@
 /* EL0-safe load hint. True before thermal policy initialization and while
  * throttled or failed. It grants no clock or voltage change. */
 int os_thermal_throttled(void);
-#if defined(SUNSTONE_A733_OS_HEADSET) && defined(SUNSTONE_A733_OS_AUDIO)
-#error An application takes one capture source: the I2S microphone or the headset
-#endif
 #if defined(SUNSTONE_A733_OS_MSBC) && !defined(SUNSTONE_A733_OS_HEADSET)
 #error Wideband speech is a headset option
 #endif
@@ -175,9 +172,9 @@ int os_dma_task_privileged(void (*)(void *),void *);
 int os_dma_pins(struct a733_pin_handoff *);
 int os_dma_start(void);
 void os_dma_irq(void);
+void os_dma0_irq(void);
 int os_dma_return_ready(void);
 #endif
-#ifdef SUNSTONE_A733_OS_AUDIO
 /* The capture stream (audio-stream.h); its start entry is
  * os_audio_stream_open, which the composition calls with the client's
  * configuration. */
@@ -186,7 +183,6 @@ void os_audio_task(void *);
 int os_audio_task_privileged(void (*)(void *),void *);
 int os_audio_pins(struct a733_pin_handoff *);
 void os_audio_irq(void);
-#endif
 #ifdef SUNSTONE_A733_OS_RADIO
 /* The board starts the radio owner and network client for workload 1; this
  * entry refuses radio and crypto engine owners that collide with the image's. */
@@ -279,10 +275,8 @@ int os_gpu_retire(void);
 int os_gpu_return_ready(void);
 int os_gpu_return_started(void);
 #endif
-#if defined(SUNSTONE_A733_OS_AUDIO) || defined(SUNSTONE_A733_OS_HEADSET)
 /* The recognizer's capture source: the I2S microphone or the headset. */
 int os_capture(unsigned g,const uint8_t **wav,size_t *bytes);
-#endif
 
 /* Resident services after the board's own (apps/board/application.h): the linked application reports as the first of them,
  * then the services of OS_SUPERVISED_ROWS (apps/os/os-services.h), whose ids OS_SERVICE_* are defined there. The

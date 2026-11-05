@@ -1,5 +1,6 @@
 /* Actual capture implementation; only grants, clock and liveness are modeled.
- * No I2S or headset feature is compiled into this fixture. */
+ * No headset feature is compiled into this fixture, and no grant names the I2S
+ * device: the I2S stream entries stop the check if a replay reaches them. */
 #include "../apps/os/capture.c"
 #ifdef AUDIO_REPLAY_HOST
 #include <stdlib.h>
@@ -26,6 +27,13 @@ static void check(int ok,unsigned code)
     __asm__ volatile("brk #0");
 #endif
 }
+const struct os_session *os_session_admitted(void){check(0,90);return NULL;}
+int os_granted(unsigned mask){(void)mask;check(0,91);return 0;}
+int os_audio_stream_open(const struct os_audio_stream_config *c){(void)c;check(0,92);return 0;}
+int os_audio_stream_start(void){check(0,93);return -1;}
+int os_audio_stream_read(struct os_audio_period *p){(void)p;check(0,94);return -1;}
+int os_audio_stream_release(void){check(0,95);return -1;}
+int os_audio_stream_stop(void){check(0,96);return -1;}
 static void reset(unsigned frames,unsigned channels,unsigned bits,unsigned header)
 {
     memset(&replay,0,sizeof(replay));memset(&grant,0,sizeof(grant));memset(&manifest,0,sizeof(manifest));

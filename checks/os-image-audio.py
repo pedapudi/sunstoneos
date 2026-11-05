@@ -29,7 +29,7 @@ from harness import machine as harness_machine
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--build', '{build:resaud}', '--output', '{output}']]
+GATE_RUNS = [['--build', '{build:res}', '--output', '{output}']]
 CASES = ['two-generations-pcm-headroom-and-stream-reuse', 'discontinuous-period-refused',
          'self-stopped-stream-refused', 'request-rules', 'progress-reports',
          'formats-periods-and-buffers', 'rates-and-period-sizes', 'full-ring-and-handshakes',
@@ -97,7 +97,6 @@ def main():
     compiled_root = str(Path(unit['file']).resolve().parents[2])
     flags = [flag.replace(compiled_root, str(ROOT)) for flag in flags]
     flags = flags[:flags.index('-o')]
-    assert '-DSUNSTONE_A733_OS_AUDIO=1' in flags, 'an audio OS build is required'
     link = [str(ROOT / 'runtime/memory.c'), str(ROOT / 'runtime/memmove.c'), '-nostdlib', '--ld-path=' + str(args.lld),
             '-Wl,-Ttext=0x41000000', '-Wl,-e,os_check_run', '-Wl,--gc-sections',
             '-Wl,--wrap=os_audio_stream_open']
@@ -123,6 +122,12 @@ def main():
                 assert not set(accepted) & set(families[22579200]), accepted
                 assert set(families[24576000]) <= set(rates) and set(families[22579200]) <= set(rates)
                 results['accepted-rates'] = accepted
+    # Every image links the I2S service: the OS image holds a pointer to the stream's state, which the ledger supplies
+    # when a session opens the stream, and no state of its own.
+    with (args.build / 'sunstone-a733-os.elf').open('rb') as stream:
+        state = [s for s in ELFFile(stream).get_section_by_name('.symtab').iter_symbols() if s.name == 'audio']
+    assert len(state) == 1 and state[0]['st_size'] == 8, [s['st_size'] for s in state]
+    results['state-from-the-ledger'] = 1
     record = {'passed': True, 'physical_access': False, 'cases': results, 'command': command,
               'lifetime': 'resident' if '-DSUNSTONE_BOARD_RESIDENT=1' in flags else 'supervised',
               'vendor_rate_families': {str(k): v for k, v in families.items()},

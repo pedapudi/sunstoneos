@@ -12,6 +12,9 @@ static struct device_memory_lease owned_lease;
 static struct device_memory_extent owned_extent, pool_extent;
 static struct device_memory_allocation owned_record;
 static unsigned creating_bootstrap;
+/* Storage outside the image that the OS gave the session for its state: zero bytes until it does. */
+static uintptr_t storage_base;
+static size_t storage_bytes;
 static void bootstrap(void *);
 
 static int privileged(void)
@@ -23,9 +26,23 @@ static int image(const void *p,size_t bytes,int write)
         {A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1},
         {A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1}};
     uintptr_t start=(uintptr_t)p;
-    if(start<0x41000000 || start>=0x42000000 || !bytes || bytes>0x42000000-start ||
+    const int in_image=start>=0x41000000 && start<0x42000000 && bytes && bytes<=0x42000000-start;
+    const int in_storage=storage_bytes && start>=storage_base && start-storage_base<storage_bytes && bytes &&
+        bytes<=storage_bytes-(start-storage_base);
+    if(!(in_image || in_storage) ||
        !a733_ranges_disjoint_nonempty(p,bytes,(const void *)pool_extent.cpu,pool_extent.bytes)) return 0;
     return a733_mapping_check_pages(aarch64_device_translate,start,start,bytes,&rules[write!=0]);
+}
+int a733_dma_pool_session_storage(const void *p,size_t bytes)
+{
+    static const struct a733_mapping_rule writable={A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
+    uintptr_t start=(uintptr_t)p;
+    if(!privileged() || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED || instance || storage_bytes ||
+       !bytes || start%4096 || bytes%4096 || bytes>UINTPTR_MAX-start ||
+       (start<0x42200000 && start+bytes>0x41000000)) return 0;
+    if(!a733_mapping_check_pages(aarch64_device_translate,start,start,bytes,&writable)) return 0;
+    storage_base=start;storage_bytes=bytes;
+    return 1;
 }
 static int same_extent(struct device_memory_extent a,struct device_memory_extent b)
 { return a.cpu==b.cpu && a.physical==b.physical && a.bytes==b.bytes; }
@@ -312,10 +329,11 @@ static int initialize(struct a733_dma_pool_session *s,const struct a733_dma_pool
         {0x41000000,0x41000000,pool_extent.cpu-0x41000000},
         {pool_extent.cpu+pool_extent.bytes,pool_extent.physical+pool_extent.bytes,
             0x42000000-pool_extent.cpu-pool_extent.bytes},
-        {0x42000000,0x42000000,0x200000}};
+        {0x42000000,0x42000000,0x200000},
+        {storage_base,storage_base,storage_bytes}};
     const struct dma_service_activation activation={s->bootstrap,prepared,s};
     if(!dma_service_init_deferred(&s->service,&operations,s,c->handoff->controller,
-        c->handoff->service_channels,c->drain_ticks,s->jobs,s->count,protected,3,
+        c->handoff->service_channels,c->drain_ticks,s->jobs,s->count,protected,storage_bytes?4:3,
         c->priority,c->affinity,&activation)) goto failed;
     atomic_store_explicit(&s->state,A733_DMA_POOL_WAITING,memory_order_release);
     return 1;

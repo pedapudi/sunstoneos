@@ -35,7 +35,6 @@ from unicorn import arm64_const as reg
 GATE_RUNS = [
     ['--build', '{build:sup}', '--output', '{output}'],
     ['--build', '{build:res}', '--output', '{output}'],
-    ['--build', '{build:resaud}', '--output', '{output}'],
     ['--build', '{build:resradio}', '--output', '{output}'],
     ['--build', '{build:headset}', '--output', '{output}'],
     ['--build', '{build:resheadset}', '--output', '{output}'],

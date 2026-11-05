@@ -75,7 +75,6 @@ int os_audio_client_admit(uint32_t frames)
     const struct ss_audio_format *f=&ss_application.manifest->audio;
     return frames>=f->min_frames&&frames<=f->max_frames;
 }
-#ifdef SUNSTONE_A733_OS_AUDIO
 static struct {unsigned stage,sequence,requested;uint32_t bytes,periods,total;struct os_audio_stream_config config;} capture;
 int os_capture_start(void)
 {
@@ -119,22 +118,17 @@ static int capture_step(void)
     if(capture.stage==2){r=os_audio_stream_stop();if(r<0)return -1;if(r==1)capture.stage=3;}
     return 0;
 }
-#else
-int os_capture_start(void){return 0;}
-#endif
 int ss_capture(uint32_t sequence,void **pcm,size_t *bytes)
 {
     const struct ss_grant *g=ss_grant();
     if(!g||!sequence||!pcm||!bytes||ss_live()!=1)return -1;
     if(replay.opened)return replay_read(sequence,pcm,bytes);
-#ifdef SUNSTONE_A733_OS_AUDIO
     if(g->devices&SS_DEVICE_AUDIO_I2S){
         if(capture.stage==4||!capture.total||sequence<capture.requested)return -1;
         capture.requested=sequence;if(capture_step()<0){capture.stage=4;return -1;}
         if(capture.stage!=3||capture.sequence!=sequence)return 0;
         *pcm=ss_capture_buffer+SS_CAPTURE_HEADROOM;*bytes=capture.total;return 1;
     }
-#endif
 #ifdef SUNSTONE_A733_OS_HEADSET
     if(g->devices&SS_DEVICE_AUDIO_HEADSET){
         const uint8_t *wav;size_t n;int r=os_headset_capture(sequence,&wav,&n);

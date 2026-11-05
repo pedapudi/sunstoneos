@@ -381,9 +381,7 @@ int os_application_prepare(void)
     unsigned count=0,input=0;const struct ss_input_fact *facts=os_session_inputs(&count);
     for(unsigned i=0;i<m->region_count;++i){grant.regions[i].base=(void *)(uintptr_t)m->regions[i].address;
         grant.regions[i].bytes=m->regions[i].kind==SS_REGION_INPUT?facts[input++].bytes:m->regions[i].bytes;}
-#if defined(SUNSTONE_A733_OS_AUDIO)
     if(grant.devices&SS_DEVICE_AUDIO_I2S)grant.capture_frames=s->audio.capture_samples;
-#endif
 #ifdef SUNSTONE_A733_OS_HEADSET
     if(grant.devices&SS_DEVICE_AUDIO_HEADSET){
         const struct bluetooth_profile *p=os_headset_profile();

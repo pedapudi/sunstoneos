@@ -62,6 +62,11 @@ struct a733_dma_pool_session {
  * worker before its next device/cache operation through the nonreturning fatal
  * handler. Every parent and active transfer remains reserved on that path.
  */
+/* Storage outside the image for the session's own state, its configuration and the objects it borrows: identity-mapped
+ * write-back, inner-shareable pages, outside 0x41000000 to 0x42200000, given once at EL1 before the scheduler and before
+ * any session. The session then accepts state there as it accepts image memory, and its DMA service refuses transfers
+ * into those pages as it refuses them into the image. */
+int a733_dma_pool_session_storage(const void *,size_t bytes);
 int a733_dma_pool_session_init(struct a733_dma_pool_session *,
                               const struct a733_dma_pool_config *);
 /* Fixed I2S0 consumer of the same native singleton and DMA worker. One selected

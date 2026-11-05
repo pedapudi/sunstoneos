@@ -55,6 +55,15 @@ static const struct {unsigned services;const char *reason;} refused_compositions
     {OS_GRANT_NPU|OS_GRANT_AUDIO,"the NPU profile requires the recorded recognition composition, not live I2S capture"},
     {OS_GRANT_NPU|OS_GRANT_RADIO,"the NPU profile requires the recorded recognition composition, not the radio station"},
     {OS_GRANT_AUDIO|OS_GRANT_DMA,"one DMA0 owner and INTID 143: the adopted RAM-copy service excludes the I2S stream"},
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+    {OS_GRANT_AUDIO,"the returning lifetime has no qualified drain of the I2S stream"},
+#endif
+#ifdef SUNSTONE_A733_OS_USB_JPEG
+    {OS_GRANT_AUDIO,"the USB camera decoder owns run-time non-cacheable allocation; the I2S stream needs allocator serialization"},
+#endif
+#if defined(SUNSTONE_A733_OS_GPU) && !defined(SUNSTONE_BOARD_RESIDENT)
+    {OS_GRANT_AUDIO,"the supervised GPU queue requires the recorded recognition composition, not live I2S capture"},
+#endif
 #ifdef SUNSTONE_BOARD_RESIDENT
     {OS_GRANT_CPU_CLOCK|OS_GRANT_AUDIO,"resident CPU grants require the recorded-card session profile"},
     {OS_GRANT_CPU_CLOCK|OS_GRANT_RADIO,"resident CPU grants require the recorded-card session profile"},

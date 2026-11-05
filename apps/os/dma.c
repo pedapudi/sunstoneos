@@ -63,6 +63,9 @@ int os_dma_start(void)
         dma_service_bind_retirement(&dma.pool.service,mask,&dma.irq);
 }
 void os_dma_irq(void){dma_service_i2s_irq_handler(&dma.irq);}
+/* DMA0 has one interrupt line, INTID 143, and the table one route for it. Admission grants the RAM-copy service or the
+ * I2S stream, never both (apps/os/grants.c), and only the granted one starts and enables the line. */
+void os_dma0_irq(void){if(os_granted(OS_GRANT_DMA))os_dma_irq();else os_audio_irq();}
 int os_dma_return_ready(void)
 {return atomic_load_explicit(&dma.ready,memory_order_acquire)!=0;}
 static int caller(void)

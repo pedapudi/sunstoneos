@@ -3,6 +3,7 @@
  * at the existing fixture boundary; capture receives the real stream API. */
 #include "../apps/os/audio.c"
 #include "../apps/os/application.h"
+#define AUDIO_STATE (*audio)
 #include "os-image-audio-model.h"
 enum { CAPTURE_MAX_FRAMES=80000, CAPTURE_BYTES=2*CAPTURE_MAX_FRAMES };
 uint8_t os_check_pcm[2][CAPTURE_BYTES];
@@ -31,11 +32,13 @@ static _Alignas(8) uint8_t ring_buffer[OS_AUDIO_RING_CAPACITY*OS_AUDIO_PERIOD_CA
 
 static void reset(void)
 {
-    memset(&audio,0,sizeof(audio));
+    /* The stream's state, which the image takes from the ledger at its first open (outside this model). */
+    static struct os_audio_state state;
+    audio=&state;memset(audio,0,sizeof(*audio));
     phase=DMA_SERVICE_CLOSED;produced=puts_done=reaps=closes=opens=silent=logged=0;
     sent=held_ticket=0;board_up=1;board_failed=0;parent_polls=0;
-    for(unsigned i=0;i<PERIODS;++i)audio.pool.stream_mappings[i].cpu=memory[i];
-    atomic_store(&audio.pool.state,A733_DMA_POOL_READY);
+    for(unsigned i=0;i<PERIODS;++i)audio->pool.stream_mappings[i].cpu=memory[i];
+    atomic_store(&audio->pool.state,A733_DMA_POOL_READY);
 }
 static struct os_audio_stream_config config(uint32_t rate,unsigned channels,unsigned bits,
     uint32_t period_bytes,uint32_t periods)
@@ -54,7 +57,7 @@ static int capture_run(unsigned g,void **pcm,size_t *bytes)
 static void check_pcm(unsigned g,unsigned frames,const void *data,size_t bytes)
 {
     const uint8_t *pcm=data;
-    check(bytes==2*frames&&pcm==ss_capture_buffer+SS_CAPTURE_HEADROOM&&audio.client.buffer==pcm,30);
+    check(bytes==2*frames&&pcm==ss_capture_buffer+SS_CAPTURE_HEADROOM&&audio->client.buffer==pcm,30);
     for(unsigned i=0;i<SS_CAPTURE_HEADROOM;++i)check(ss_capture_buffer[i]==0xa5,31);
     for(unsigned i=0;i<2*frames;++i)check(pcm[i]==sample(g,i/4096,i%4096),32);
     memcpy(os_check_pcm[g-1],pcm,bytes);
@@ -119,7 +122,7 @@ void os_check_run(unsigned selected,unsigned samples)
         bad[11].buffer=NULL;bad[12].buffer=ring_buffer+2;bad[13].format.reserved[1]=1;
         for(unsigned i=0;i<sizeof(bad)/sizeof(bad[0]);++i){reset();check(!configure(&bad[i]),90+i);}
         struct os_audio_stream_config inside=config(16000,1,16,4096,2);
-        inside.buffer=(uint8_t *)&audio;reset();check(!configure(&inside),110);
+        inside.buffer=(uint8_t *)audio;reset();check(!configure(&inside),110);
         /* Valid edges: the capacity, the most slots, small stereo periods. */
         struct os_audio_stream_config good[]={config(16000,1,16,4096,OS_AUDIO_RING_CAPACITY),
             config(8000,1,16,128,2),config(192000,1,16,4096,8),config(96000,2,16,4096,3)};
@@ -156,7 +159,7 @@ void os_check_run(unsigned selected,unsigned samples)
         check(os_audio_stream_release()==-1&&os_audio_stream_read(&p)==0&&os_audio_stream_stop()==1,121);
         check(os_audio_stream_start()==1&&os_audio_stream_start()==1,122);
         for(unsigned n=0;n<40&&produced<6;++n)check(step()==0,123);
-        check(produced==6&&atomic_load(&audio.written)==2,124);
+        check(produced==6&&atomic_load(&audio->written)==2,124);
         check(os_audio_stream_read(&p)==1&&p.first_frame==0&&os_audio_stream_read(&p)==1&&p.first_frame==2048,125);
         check(os_audio_stream_read(&p)==0&&os_audio_stream_release()==1,126);
         while(produced<8)check(step()==0,127);
@@ -182,15 +185,15 @@ void os_check_run(unsigned selected,unsigned samples)
         /* Each task pass without an unanswered request reports progress; a
          * pass waiting for the worker or after a failure reports none. */
         for(unsigned n=0;n<10;++n)pass();
-        check(audio.stage==IDLE&&reports==REPORTS(10),70);
+        check(audio->stage==IDLE&&reports==REPORTS(10),70);
         check(!ss_capture(1,&pcm,&bytes),71);
-        pass();check(audio.stage==OPEN&&!audio.pending&&reports==REPORTS(11),72);
+        pass();check(audio->stage==OPEN&&!audio->pending&&reports==REPORTS(11),72);
         silent=1;pass();pass();
-        check(audio.stage==OPEN&&audio.pending&&reports==REPORTS(11),73);
+        check(audio->stage==OPEN&&audio->pending&&reports==REPORTS(11),73);
         silent=0;pass();
-        check(audio.stage==OPENING&&!audio.pending&&reports==REPORTS(12),74);
+        check(audio->stage==OPENING&&!audio->pending&&reports==REPORTS(12),74);
         board_up=0;pass();pass();
-        check(board_failed&&atomic_load(&audio.failed)&&reports==REPORTS(12),75);
+        check(board_failed&&atomic_load(&audio->failed)&&reports==REPORTS(12),75);
         os_check_result=1;return;
     }
     if(mode==3){
@@ -203,7 +206,7 @@ void os_check_run(unsigned selected,unsigned samples)
     }
     /* The parent becomes ready on the third poll; nothing is requested yet. */
     for(unsigned n=0;n<10;++n)check(step()==0,50);
-    check(atomic_load(&audio.ready)&&audio.stage==IDLE&&!logged,51);
+    check(atomic_load(&audio->ready)&&audio->stage==IDLE&&!logged,51);
     int r=capture_run(1,&pcm,&bytes);
     if(mode){
         /* A discontinuous period or a stream that stopped by itself refuses

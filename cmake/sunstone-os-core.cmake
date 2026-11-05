@@ -5,7 +5,6 @@ option(SUNSTONE_A733_OS_SD_WRITE "OS image whose SD0 owner task writes the card 
 option(SUNSTONE_A733_OS_RESIDENT "Integrated OS with the resident lifetime" OFF)
 option(SUNSTONE_A733_OS_USB_CLASSES "OS input, serial and camera host services" OFF)
 option(SUNSTONE_A733_OS_USB_JPEG "OS camera MJPEG hardware decoder" OFF)
-option(SUNSTONE_A733_OS_AUDIO "OS I2S capture service" OFF)
 option(SUNSTONE_A733_OS_DMA "Adopted DMA0 RAM-copy service with normal retirement" OFF)
 option(SUNSTONE_A733_OS_RADIO "Integrated OS with the board's radio station" OFF)
 option(SUNSTONE_A733_OS_RADIO_SCAN "Radio station that scans and returns: board workload 3, no USB host, scan-only profile, normal return" OFF)
@@ -54,8 +53,8 @@ if(NOT SUNSTONE_A733_OS AND NOT SUNSTONE_A733_OS_CORE AND NOT SUNSTONE_A733_OS_H
   return()
 endif()
 include_guard(GLOBAL)
-if(SUNSTONE_A733_OS_DMA AND (SUNSTONE_A733_OS_AUDIO OR NOT SUNSTONE_A733_OS_CPU_RETURN))
-  message(FATAL_ERROR "Adopted RAM DMA currently requires the returning CPU profile without I2S")
+if(SUNSTONE_A733_OS_DMA AND NOT SUNSTONE_A733_OS_CPU_RETURN)
+  message(FATAL_ERROR "Adopted RAM DMA currently requires the returning CPU profile")
 endif()
 if(SUNSTONE_A733_OS_GPU_RECOVERY_TEST AND
    (NOT SUNSTONE_A733_OS_GPU OR NOT SUNSTONE_A733_OS_CPU_RETURN OR
@@ -69,7 +68,7 @@ if(SUNSTONE_A733_OS_USB_CLASSES AND NOT SUNSTONE_BOARD_USB2_IRQ)
   message(FATAL_ERROR "USB class services require SUNSTONE_BOARD_USB2_IRQ=ON")
 endif()
 if(SUNSTONE_A733_OS_USB_JPEG AND
-   (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR
+   (SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR
     SUNSTONE_A733_OS_NPU OR SUNSTONE_A733_OS_GPU_LINEAR))
   message(FATAL_ERROR "USB JPEG owns runtime NC allocation; other device owners need allocator serialization")
 endif()
@@ -81,9 +80,6 @@ if(NOT SUNSTONE_BOARD_SUPERVISED OR NOT TARGET sunstone-a733-board)
 endif()
 if(NOT NEWLIB_ROOT OR NOT NEWLIB_SMP_ROOT)
   message(FATAL_ERROR "The OS kit requires the pinned SMP C and C++ runtime")
-endif()
-if(SUNSTONE_A733_OS_HEADSET AND SUNSTONE_A733_OS_AUDIO)
-  message(FATAL_ERROR "An image selects one capture source: I2S or the headset")
 endif()
 if(SUNSTONE_A733_OS_MSBC AND NOT SUNSTONE_A733_OS_HEADSET)
   message(FATAL_ERROR "Wideband mSBC speech is a headset option")
@@ -120,8 +116,8 @@ if(SUNSTONE_A733_OS_GPU)
   # GPU replies retain bounded failure handling for the recorded two- and
   # eight-worker compositions.
   if(NOT SUNSTONE_A733_OS_RESIDENT AND
-     (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET))
-    message(FATAL_ERROR "Supervised GPU linear requires recorded recognition without capture/radio/headset")
+     (SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET))
+    message(FATAL_ERROR "Supervised GPU linear requires recorded recognition without the radio or the headset")
   endif()
   set(SUNSTONE_GPU_FIRMWARE "" CACHE FILEPATH "Pinned A733 GPU firmware")
   if(NOT SUNSTONE_GPU_FIRMWARE)
@@ -207,15 +203,14 @@ if(SUNSTONE_A733_OS_DMA)
     drivers/dma/dma_service_i2s.c drivers/dma/dma_service_i2s_stream.c drivers/audio/a733_i2s.c
     drivers/audio/a733_i2s_stream.c drivers/audio/dma_service_i2s_irq.c)
 endif()
-if(SUNSTONE_A733_OS_AUDIO)
-  # The I2S image's receive composition (cmake/a733-i2s-application.cmake).
-  list(APPEND os_added apps/os/audio.c platform/a733/dma_pool_session.c platform/a733/dma_startup.c
+# The I2S capture service is in every image, and a session grants it (docs/designs/one-os-image.md). Its sources are
+# the I2S image's receive composition (cmake/a733-i2s-application.cmake).
+list(APPEND os_added apps/os/audio.c platform/a733/dma_pool_session.c platform/a733/dma_startup.c
     platform/a733/dma_native.c drivers/dma/dma_memory.c drivers/dma/a733_dma.c drivers/dma/a733_dma_controller.c
     drivers/dma/a733_dma_platform.c drivers/dma/a733_dma_platform_native.c drivers/dma/dma_service.c
     drivers/dma/dma_service_i2s.c drivers/dma/dma_service_i2s_stream.c drivers/audio/a733_i2s.c
     drivers/audio/a733_i2s_stream.c drivers/audio/a733_i2s_platform.c drivers/audio/a733_i2s_platform_native.c
     drivers/audio/a733_audio_leases.c drivers/audio/dma_service_i2s_irq.c)
-endif()
 if(SUNSTONE_A733_OS_NPU)
   list(APPEND os_added apps/os/npu.c apps/os/npu-declaration.c apps/os/npu-graph-index.c apps/os/npu-client.c apps/os/npu-irq.c
     platform/a733/npu_native.c runtime/counter_clock.c drivers/npu/a733_npu_runtime.c drivers/npu/a733_npu_runtime_interim.c drivers/npu/npu_pool.c drivers/npu/npu_declaration.c
@@ -469,7 +464,6 @@ target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICAT
   "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"
   A733_SMP_CONTRACT_MAGIC=${os_contract_magic} A733_SMP_RESULT_MAGIC=${os_result_magic}
   "$<$<BOOL:${SUNSTONE_A733_OS_RESIDENT}>:SUNSTONE_BOARD_RESIDENT=1>"
-  "$<$<BOOL:${SUNSTONE_A733_OS_AUDIO}>:SUNSTONE_A733_OS_AUDIO=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO}>:SUNSTONE_A733_OS_RADIO=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_SCAN}>:SUNSTONE_A733_OS_RADIO_SCAN=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_HEADSET}>:SUNSTONE_A733_OS_HEADSET=1>")

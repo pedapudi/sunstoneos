@@ -75,14 +75,13 @@ def main():
     result = int.from_bytes(uc.mem_read(symbols['os_check_result'], 4), 'little')
     assert result == 1, 'radio entry check stopped with code %d' % result
     lifetime = 'resident' if '-DSUNSTONE_BOARD_RESIDENT=1' in flags else 'supervised'
-    audio = '-DSUNSTONE_A733_OS_AUDIO=1' in flags
     sources = ['apps/os/radio.c', 'checks/os-image-radio.c'] + (['apps/os/radio_profile.c'] if lifetime == 'resident' else [])
     (out / 'result.json').write_text(json.dumps({
-        'passed': True, 'physical_access': False, 'lifetime': lifetime, 'audio': audio, 'command': command,
+        'passed': True, 'physical_access': False, 'lifetime': lifetime, 'command': command,
         'sources': {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in sources}},
         indent=2) + '\n')
-    print('PASS OS radio entry (%s%s): owner admission and refusals, start%s' %
-          (lifetime, ', audio' if audio else '', ', resident profile bounds' if lifetime == 'resident' else ''))
+    print('PASS OS radio entry (%s): owner admission and refusals, start%s' %
+          (lifetime, ', resident profile bounds' if lifetime == 'resident' else ''))
 
 
 if __name__ == '__main__':
