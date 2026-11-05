@@ -27,8 +27,8 @@ a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
 spec=importlib.util.spec_from_file_location('thermal_report',ROOT/'apps/os/thermal-report.py')
 report=importlib.util.module_from_spec(spec);spec.loader.exec_module(report)
 NETWORK=Path.home()/'.cache/sunstoneos/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source'
-DEFINES=['A733_A76_ADMITTED=1','SUNSTONE_A733_FAULT_PAGE=1','SUNSTONE_A733_OS=1','SUNSTONE_BOARD_APPLICATION=1',
-         'SUNSTONE_BOARD_SUPERVISED=1','SUNSTONE_BOARD_USB2_DUAL=1','SUNSTONE_A733_OS_CPU_CLOCK=1']
+DEFINES=['SUNSTONE_A733_FAULT_PAGE=1','SUNSTONE_A733_OS=1','SUNSTONE_BOARD_APPLICATION=1',
+         'SUNSTONE_BOARD_SUPERVISED=1','SUNSTONE_BOARD_USB2_DUAL=1']
 INCLUDES=[ROOT/'apps/os',ROOT/'apps/board',ROOT/'platform/a733-smp-cached',ROOT/'drivers/usb',ROOT/'network/include',
           NETWORK/'include',NETWORK/'portable/Compiler/GCC']
 

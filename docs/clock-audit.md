@@ -87,7 +87,7 @@ domain; the rate on the PLL source is `26 MHz × N ÷ 2^P`
 
 | Clock | (a) Current | (b) Vendor top | (c) Hardware maximum | (d) Gap and cause |
 | --- | --- | --- | --- | --- |
-| CPU-L | 494: PLL `0xf8802600` (N=38), mux `0x03010000` (P=1), DCDC5 800 mV, read on port 3-3 (bb14-read). The driver that changes it is built only with `SUNSTONE_A733_OS_CPU_CLOCK`, off by default (`cmake/a733-os.cmake:43`) | 1794 at 1000 mV (vf.dtsi:599, 615) | DS:1059 "up to 2.0 GHz"; UM 4.1.3.2 lists the CPU PLL outputs below 2.0 GHz | 3.6×. The user approved CPU clock and voltage changes on 2026-10-24 |
+| CPU-L | 494: PLL `0xf8802600` (N=38), mux `0x03010000` (P=1), DCDC5 800 mV, read on port 3-3 (bb14-read). The driver that changes it is linked into every OS image and acts only when the session carries a CPU clock grant | 1794 at 1000 mV (vf.dtsi:599, 615) | DS:1059 "up to 2.0 GHz"; UM 4.1.3.2 lists the CPU PLL outputs below 2.0 GHz | 3.6×. The user approved CPU clock and voltage changes on 2026-10-24 |
 | CPU-B | 1014: PLL `0xf8802700` (N=39), mux `0x03000000` (P=0), DCDC3 800 mV (bb14-read) | 2002 at 1050 mV (vf.dtsi:1340, 1356) | DS:1059; UM 5.1.10 gives the CPU_B PLL range as 650 MHz to 2.26 GHz | 2.0×; same cause |
 | DSU | 494: PLL `0xf8802600`, mux `0x03010105` (bb14-read). An earlier port 3-3 capture read the mux as `0x03000105`, which decodes to 988 MHz | 1274 at 1000 mV (vf.dtsi:1989, 2005), set by the vendor's DSU frequency driver. The shipped board kernel leaves that driver out and keeps 494 | Not stated | 2.6×. CPU-L and the DSU share DCDC5, so the DSU point needs the same 1000 mV as CPU-L's top point |
 

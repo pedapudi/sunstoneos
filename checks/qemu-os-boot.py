@@ -535,7 +535,7 @@ def main():
         return image.build(application)
 
     def build_latency():
-        image = Image(out / 'build-latency', extra_defines=['-DA733_A76_ADMITTED=1', '-DSUNSTONE_LATENCY=1'],
+        image = Image(out / 'build-latency', extra_defines=['-DSUNSTONE_LATENCY=1'],
                       extra_sources=['runtime/latency.c',
                                      'runtime/latency_irq.c'], latency=True)
         application = image.application('latency', ['apps/latency/native.c', 'apps/latency/workload.c'],
@@ -545,7 +545,7 @@ def main():
     def build_partitioned(name, latency=False, scheduler=True):
         """The same board composition on the private owner scheduler (configSS_PARTITIONED_SCHEDULER)."""
         if latency:
-            image = Image(out / name, extra_defines=['-DA733_A76_ADMITTED=1', '-DSUNSTONE_LATENCY=1'],
+            image = Image(out / name, extra_defines=['-DSUNSTONE_LATENCY=1'],
                           extra_sources=['runtime/latency.c',
                                          'runtime/latency_irq.c'], latency=True, partitioned=scheduler)
             application = image.application('latency', ['apps/latency/native.c', 'apps/latency/workload.c'],

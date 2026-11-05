@@ -39,7 +39,7 @@ therefore names its view. Facts read on the virtual board (`checks/qemu-os-boot.
 ## The probe image
 
 `apps/hw-facts` is an OS application of the CPU-return lifetime. The OS configuration is
-`SUNSTONE_A733_OS_CPU_RETURN`, `A733_A76_ADMITTED`, `SUNSTONE_A733_OS_CPU_CLOCK`, `SUNSTONE_A733_CPU_TOPOLOGY`
+`SUNSTONE_A733_OS_CPU_RETURN`, `SUNSTONE_A733_CPU_TOPOLOGY`
 and `SUNSTONE_A733_HW_FACTS`, with `SUNSTONE_APPLICATION=hw-facts`. Every core calls `hwf_capture`
 (`platform/a733/hw_facts.c`) from `ss_cpu_observe_boot`, at EL1, before the scheduler starts. The application waits for all eight cores, then returns the 9792-byte table with
 `ss_finish`. The returned table has this layout (`include/a733_hw_facts.h`, little-endian).
@@ -109,7 +109,7 @@ Build the image:
 ```sh
 cfg=$HOME/.cache/sunstoneos/bin/cfg.sh; build=$HOME/.cache/sunstoneos/build/hw-facts-1101/board
 "$cfg" "$PWD" "$build" -DMIMUS_DIR= -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=hw-facts \
-  -DSUNSTONE_A733_OS_CPU_RETURN=ON -DA733_A76_ADMITTED=ON -DSUNSTONE_A733_OS_CPU_CLOCK=ON \
+  -DSUNSTONE_A733_OS_CPU_RETURN=ON \
   -DSUNSTONE_A733_CPU_TOPOLOGY=ON -DSUNSTONE_A733_HW_FACTS=ON
 cmake --build "$build" --target sunstone-a733-os-hw-facts -j12
 ```

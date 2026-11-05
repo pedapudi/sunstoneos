@@ -225,7 +225,7 @@ int a733_gpu_platform_poll(void *context)
     struct a733_gpu_platform *p = context;
     if (!p || !p->initialized || p->phase == A733_GPU_PLATFORM_FAILED) return -1;
     if (p->phase == A733_GPU_PLATFORM_ON) {
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
         if(p->perf.startup) {
             if(!clock_ok(p))return -1;
             if(p->perf.startup==1 || p->perf.startup==3) {
@@ -244,7 +244,7 @@ int a733_gpu_platform_poll(void *context)
     if (p->phase != A733_GPU_PLATFORM_ADMIT && p->phase != A733_GPU_PLATFORM_STARTING) return -1;
     if (!clock_ok(p)) return -1;
     if (p->phase == A733_GPU_PLATFORM_ADMIT) {
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
         if(p->perf.enabled) {
             int r=a733_gpu_platform_performance_parent(p,p->deadline);
             if(r!=1)return r;
@@ -310,7 +310,7 @@ int a733_gpu_platform_off_poll(struct a733_gpu_platform *p)
         p->phase = A733_GPU_PLATFORM_RELEASE;
         return 0;
     }
-#ifdef SUNSTONE_A733_OS_PERF
+#ifdef PVR_GPU_PERFORMANCE
     if(p->perf.enabled) {
         int r=a733_gpu_platform_performance_off(p);
         if(r!=1)return r;

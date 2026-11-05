@@ -40,7 +40,7 @@ All seven edit `patches/freertos-smp-c.patch`, `patches/freertos-smp-asm.patch` 
 
 ## Placement constants
 
-`include/a733_smp_placement.h` holds preprocessor constants for `xTaskCreateStaticAffinitySet`. `A733_SMP_A55_MASK` is 0x3F. `A733_SMP_APPLICATION_CORE` and `A733_SMP_APPLICATION_WORKER_CORE` are 6 and 7 when the compile definition `A733_A76_ADMITTED` is set, and 2 and 3 otherwise. The service core is 0, matching `cmake/a733-os.cmake` and [recognition-dispatch.md](../recognition-dispatch.md). A preprocessor check rejects any mask or core outside `configNUMBER_OF_CORES`. `apps/os/start.c` asserts `OS_RECOGNITION_CORE == A733_SMP_APPLICATION_CORE`, so the CMake role mapping stays the single table and the header cannot drift from it. Turning on `A733_A76_ADMITTED` (CPU-B clock and rail, A76 startup controls) belongs to the CPU clock work ([cpu-a76-dvfs.md](cpu-a76-dvfs.md)).
+`include/a733_smp_placement.h` holds preprocessor constants for `xTaskCreateStaticAffinitySet`. `A733_SMP_A55_MASK` is 0x3F. `A733_SMP_APPLICATION_CORE` and `A733_SMP_APPLICATION_WORKER_CORE` are 6 and 7 in every OS image. The service core is 0, matching `cmake/a733-os.cmake` and [recognition-dispatch.md](../recognition-dispatch.md). A preprocessor check rejects any mask or core outside `configNUMBER_OF_CORES`. `apps/os/start.c` asserts `OS_RECOGNITION_CORE == A733_SMP_APPLICATION_CORE`, so the CMake role mapping stays the single table and the header cannot drift from it. The CPU-B clock and rail and the A76 startup controls belong to the CPU clock work ([cpu-a76-dvfs.md](cpu-a76-dvfs.md)).
 
 | Hardware fact | Source | Status |
 | --- | --- | --- |

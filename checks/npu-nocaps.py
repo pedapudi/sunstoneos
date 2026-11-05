@@ -30,7 +30,7 @@ wide.write_bytes(nbg_wide.widen(Path(artifacts['graph-add']['model']).read_bytes
 units = ('checks/npu-nocaps.c', 'drivers/npu/npu_service.c', 'drivers/npu/a733_npu_controller.c', 'drivers/npu/a733_npu_mmu.c',
          'drivers/npu/nbg_model.c', 'drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_checksum.c', 'drivers/npu/nbg_relocation.c',
          'drivers/storage/storage_digest.c', 'runtime/npu_app_queue.c')
-exe = host_rtos.build(out / 'exe', units, 'npu-nocaps', defines=['A733_A76_ADMITTED=1'],
+exe = host_rtos.build(out / 'exe', units, 'npu-nocaps', defines=[],
                       flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'], link=['-Wl,--gc-sections'])
 done = subprocess.run([str(exe), str(wide)], capture_output=True, text=True, env=environment(), timeout=600)
 (out / 'run.log').write_text(done.stdout + done.stderr)

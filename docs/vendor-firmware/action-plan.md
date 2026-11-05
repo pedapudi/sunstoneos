@@ -190,10 +190,10 @@ The pinned operating-point table gives 800 mV to CPU-L at 1014 MHz and to
 CPU-B at 1196 MHz in every speed-bin column. The board reads DCDC3 and DCDC5
 at 800 mV.
 
-**SunstoneOS today.** The driver exists and has never run
-(`drivers/clock/a733_cpu_clock.c:41`–`74`; [CPU clocks](../cpu-clock.md)). It
-is compiled only with `SUNSTONE_A733_OS_CPU_CLOCK`, and no session carries a
-grant.
+**SunstoneOS today.** The driver (`drivers/clock/a733_cpu_clock.c:41`–`74`;
+[CPU clocks](../cpu-clock.md)) is linked into every OS image and acts only on
+a session that carries a CPU clock grant. Board runs with such a grant have
+raised CPU-L to 1794 MHz and CPU-B to 2002 MHz.
 
 **Change.** Neither raise needs a voltage change. Write the performance
 design with its budgets, then prepare a session whose grant names one cluster

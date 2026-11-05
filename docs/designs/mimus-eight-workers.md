@@ -22,7 +22,7 @@ In the admitted native configuration worker 0 is the recognition task on Cortex-
 
 ## Build selection
 
-`-DSUNSTONE_MIMUS_WORKERS=8` selects eight workers in the SMP engine and its linked callers, and omitting it selects two. The worker count is a build-time choice, `mimus_parallel_init(owner, worker)` is unchanged, and all linked engine and adapter translation units must agree on the capacity. These definitions reach the integrated OS through its board composition. Native eight-worker builds require `-DA733_A76_ADMITTED=ON`, with the owner on core 6 and the first worker on core 7. No OS thermal or session format changes belong to this implementation, and the build selection qualifies no physical session and changes no clock, rail or failure-recovery rule. The supported OS composition is in [mimus-os-eight-workers.md](mimus-os-eight-workers.md).
+`-DSUNSTONE_MIMUS_WORKERS=8` selects eight workers in the SMP engine and its linked callers, and omitting it selects two. The worker count is a build-time choice, `mimus_parallel_init(owner, worker)` is unchanged, and all linked engine and adapter translation units must agree on the capacity. These definitions reach the integrated OS through its board composition. Native eight-worker builds run on the A76 cluster (the default for every OS image), with the owner on core 6 and the first worker on core 7. No OS thermal or session format changes belong to this implementation, and the build selection qualifies no physical session and changes no clock, rail or failure-recovery rule. The supported OS composition is in [mimus-os-eight-workers.md](mimus-os-eight-workers.md).
 
 ## Memory and synchronization bounds
 

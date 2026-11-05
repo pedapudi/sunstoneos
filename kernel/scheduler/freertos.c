@@ -1377,6 +1377,12 @@ BaseType_t ssKernelOwnerIRQExit(void)
     /* Set PSTATE.I before restoring the mask: portCLEAR_INTERRUPT_MASK_FROM_ISR clears it after the write, and an
      * ordinary interrupt taken then would be a second outermost exit inside this one. */
     __asm__ volatile("msr daifset, #2\n dsb sy\n isb\n msr icc_pmr_el1, %0\n dsb sy\n isb" :: "r"((uint64_t)previous) : "memory");
+#ifdef SUNSTONE_LATENCY
+    /* The mask was raised through portSET_INTERRUPT_MASK_FROM_ISR, which opens the latency build's masked span; this
+     * restore bypasses portCLEAR_INTERRUPT_MASK_FROM_ISR, so close the span here, as that macro would. Otherwise it
+     * stays open until the next instrumented clear on this core, up to a tick later on an idle core. */
+    if (previous > portMAX_API_PRIORITY_MASK) ss_latency_mask_close(portGET_CORE_ID(), (uintptr_t)__builtin_return_address(0));
+#endif
     ssOwnerSpan(begin, false);
     SS_PH_END(1);
     if (result == pdTRUE) SS_OWNER_COUNT(exit_raised);

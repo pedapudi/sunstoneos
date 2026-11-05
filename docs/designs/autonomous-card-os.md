@@ -112,12 +112,11 @@ watchdog health.
 ## Preparing the ordinary-file bundle
 
 Build `sunstone-a733-os` and `a733-stage2`. The recorded performance profile
-selects `SUNSTONE_A733_OS=ON`, `SUNSTONE_A733_OS_RESIDENT=ON`,
-`A733_A76_ADMITTED=ON`, `SUNSTONE_A733_OS_CPU_CLOCK=ON` and
-`SUNSTONE_MIMUS_WORKERS=8`; audio, radio, headset, GPU, NPU and the
-performance-command service are off. The CPU clock owner's startup sequence
-requests the vendor points, so no host performance command is needed, and the
-resident performance-command build is refused. The thermal diagnostic freezes
+selects `SUNSTONE_A733_OS=ON`, `SUNSTONE_A733_OS_RESIDENT=ON` and
+`SUNSTONE_MIMUS_WORKERS=8`; audio, radio, headset, GPU and NPU are off. The
+session carries the CPU clock grant (`tools/session.py build ... --clock-grant`)
+and no performance-mode grant. The CPU clock owner's startup sequence
+requests the vendor points, so no host performance command is needed. The thermal diagnostic freezes
 its first-recognition window in the 602-row, 60-second buffer; it is bounded
 diagnostic evidence rather than lifetime telemetry.
 

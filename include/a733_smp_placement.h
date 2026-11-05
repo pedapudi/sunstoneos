@@ -6,18 +6,13 @@
  * (docs/designs/smp-heterogeneous.md, docs/designs/cpu-a76-dvfs.md). Cores
  * 0-5 are Cortex-A55 and cores 6-7 Cortex-A76; cached entry checks MIDR_EL1
  * once. Every task without explicit placement stays on the A55 cluster.
- * The application main and first worker use the A76 pair once
- * A733_A76_ADMITTED is defined, and A55 cores 2 and 3 until then. Shared
+ * An A76 application's main task and first worker use the A76 pair; the
+ * manifest's cluster chooses it at run time (apps/os/application.c). Shared
  * peripheral interrupts and the PMIC task stay on core 0. Other unplaced
  * tasks may run on any A55 core, including the default application pair. */
 #define A733_SMP_A55_MASK 0x3Fu
-#ifdef A733_A76_ADMITTED
 #define A733_SMP_APPLICATION_CORE 6u
 #define A733_SMP_APPLICATION_WORKER_CORE 7u
-#else
-#define A733_SMP_APPLICATION_CORE 2u
-#define A733_SMP_APPLICATION_WORKER_CORE 3u
-#endif
 #ifdef configNUMBER_OF_CORES
 #if (A733_SMP_A55_MASK >> configNUMBER_OF_CORES) || (A733_SMP_APPLICATION_CORE >= configNUMBER_OF_CORES) || \
     (A733_SMP_APPLICATION_WORKER_CORE >= configNUMBER_OF_CORES)

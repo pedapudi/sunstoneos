@@ -23,11 +23,9 @@
 __attribute__((used,retain)) const uint32_t os_gpu_recovery_test_configuration[5]={
     UINT32_C(0x31545247),1,20,1,200000};
 #endif
-#ifdef SUNSTONE_A733_OS_PERF
 #include "perf.h"
 __attribute__((used,retain)) const uint32_t os_gpu_performance_configuration[5]={
     1,A733_GPU_CORE_HZ,A733_GPU_SUPPLY_UV,A733_GPU_LOW_HZ,A733_GPU_LOW_UV};
-#endif
 
 extern const unsigned char gpu_firmware[], gpu_firmware_end[];
 _Static_assert(configTICK_RATE_HZ == 1000, "GPU caller wait budgets use millisecond ticks");
@@ -59,10 +57,8 @@ static struct {
      * consumed by the service API. Only the application task mutates these. */
     uint64_t accepted_ticket;
 
-#ifdef SUNSTONE_A733_OS_PERF
     /* Thermal-task private action state, independent of application fields. */
     struct {uint64_t ticket,end,outer,last;unsigned action;} performance;
-#endif
 } gpu;
 
 /* A GPU loss recorded by the previous boot's supervisor exit
@@ -89,9 +85,7 @@ static int session_owners_distinct(void)
 #ifdef SUNSTONE_A733_OS_NPU
                                os->npu.owner,
 #endif
-#ifdef SUNSTONE_A733_OS_CPU_CLOCK
                                os->cpu_clock.owner,
-#endif
     };
     for (unsigned i = 0; i < sizeof(owners) / sizeof(*owners); ++i)
         if (owners[i] == OS_GPU_FIRMWARE_OWNER || owners[i] == OS_GPU_SESSION_OWNER) return 0;
@@ -167,12 +161,10 @@ static int gpu_start_body(unsigned core)
     if(a733_pmic_identity(&providers.shared.pmic,&lifetime)!=A733_PMIC_READY)return start_refused(6);
     if(!a733_gpu_platform_bind_pmic(&gpu.power,&providers.shared.gpu_native,&providers.shared.pmic,&lifetime,
                                   OS_GPU_FIRMWARE_OWNER))return start_refused(7);
-#ifdef SUNSTONE_A733_OS_PERF
     /* The performance-mode service is the grant's: its boot mode picks the start rate; without it the GPU keeps its
      * performance hooks unbound (config.performance_begin stays null). */
     if(os_perf_enabled()&&!a733_gpu_platform_performance_enable(&gpu.power,
         os_perf_boot_mode()==A733_PERF_LOW ? A733_GPU_LOW_HZ : A733_GPU_CORE_HZ))return start_refused(8);
-#endif
     if(!a733_gpu_reserved_prepare(&gpu.firmware,OS_GPU_FIRMWARE_OWNER,gpu_firmware,
         (size_t)(gpu_firmware_end-gpu_firmware),400000000))return start_refused(9);
     if(!(gpu.component=a733_gpu_queue_prepare(&gpu.session,&gpu.firmware,&gpu.service,OS_GPU_SESSION_OWNER,
@@ -184,9 +176,7 @@ static int gpu_start_body(unsigned core)
     gpu_queue_timing_bind(gpu.component);
 #endif
     if(!pvr_gpu_service_bind(&gpu.service,0,os_gpu_client_task))return start_refused(13);
-#ifdef SUNSTONE_A733_OS_PERF
     if(!pvr_gpu_service_bind(&gpu.service,1,os_thermal_task_handle()))return start_refused(14);
-#endif
     if(!pvr_compute_queue_client_bind(gpu.component))return start_refused(3);
     if(!os_application_gpu_share_bind(gpu.component))return start_refused(3);
     gpu.started = 1;
@@ -383,9 +373,7 @@ int os_gpu_queue_quiesce(void)
         uxQueueMessagesWaiting(gpu.service.requests)) return 0;
     for (unsigned i=0;i<PVR_GPU_SERVICE_CLIENTS;++i)
         if (gpu.service.clients[i].pending || uxQueueMessagesWaiting(gpu.service.clients[i].replies)) return 0;
-#ifdef SUNSTONE_A733_OS_PERF
     if (gpu.service.performance.ticket) return 0;
-#endif
     gpu.accepted_ticket=0;
     gpu.retired=1;
     atomic_store(&gpu.waiting,0);
@@ -553,9 +541,7 @@ static int gpu_return_body(uint64_t completed)
        !a733_gpu_backend_stopped(&gpu.backend,&gpu.service) || runtime_live(&wait)!=1)return 0;
     for (unsigned i=0;i<PVR_GPU_SERVICE_CLIENTS;++i)
         if (gpu.service.clients[i].pending || uxQueueMessagesWaiting(gpu.service.clients[i].replies)) return 0;
-#ifdef SUNSTONE_A733_OS_PERF
     if (gpu.service.performance.ticket) return 0;
-#endif
     /* The priority-4 worker has blocked on this same core before priority 3
      * can collect the final reply. No other owner can resume it. */
     vTaskSuspend(gpu.service.worker);
@@ -567,7 +553,6 @@ static int gpu_return_body(uint64_t completed)
     return 1;
 }
 #endif
-#ifdef SUNSTONE_A733_OS_PERF
 int os_gpu_perf_owner(void)
 {return gpu.started && (pvr_gpu_service_performance_state(&gpu.service)&PVR_GPU_PERF_OWNER)!=0;}
 int os_gpu_perf_ready(void)
@@ -619,7 +604,6 @@ enum a733_perf_status os_gpu_perf_action(enum a733_perf_action action,uint32_t v
     if(action==A733_PERF_RELEASE && result==A733_PERF_DONE)gpu.performance.outer=0;
     return result;
 }
-#endif
 void os_gpu_queue_irq(void)
 {
 #ifdef SUNSTONE_GPU_TIMING

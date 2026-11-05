@@ -80,7 +80,7 @@ def main():
         'platform': (['checks/gpu-performance-platform.c',
                       *[p for p in model.STARTUP[1:] if not p.startswith('drivers/npu/')],
                       'drivers/gpu/a733_gpu_platform.c', 'drivers/gpu/a733_gpu_performance.c'],
-                     ['-DSUNSTONE_A733_OS_PERF=1']),
+                     ['-DPVR_GPU_PERFORMANCE=1']),
         'engine': (['checks/perf-mode-model.c', *model.ENGINE], [])}
     for name in args.cases:
         if name not in selected:
