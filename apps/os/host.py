@@ -38,8 +38,8 @@ RECORDS = {EXTENTS[extent[len('SS_EXTENT_'):]]: {'grant': grant, 'bytes': manife
                                                   'magic': manifest_tool.c_constant(magic), 'version': manifest_tool.c_constant(version)}
            for grant, extent, _field, size, magic, version, _need in manifest_tool.os_service_rows('OS_RECORD_ROWS')}
 SERVICE_BYTES = {THERMAL: 216, **{kind: r['bytes'] for kind, r in RECORDS.items()}}
-# The NPU record is version 4: it carries the application's declaration of NPU resources and the bounds of its run-time
-# graphs, and no digest of a model list (apps/os/npu-session.h).
+# The NPU record is version 4 (apps/os/npu-session.h): the declaration, the bounds of its run-time graphs and the input region
+# that holds the graphs admission copies.
 SERVICE_VERSION = {kind: r['version'] for kind, r in RECORDS.items()}
 NPU_DECLARATION_OFFSET = 240  # slots, in_flight, graphs, links: four u32
 SERVICE_MAGIC = {THERMAL: 0x415337334f534131, **{kind: r['magic'] for kind, r in RECORDS.items()}}
@@ -78,6 +78,12 @@ def image_manifest(image):
 
 def regions(manifest, kinds):
     return [dict(r) for r in (manifest or {}).get('regions', []) if r['kind'] in kinds]
+
+
+def npu_graph_region(manifest_path):
+    """The place plus one of the input region that holds the application's NPU graphs, or 0 when the application registers them."""
+    m = manifest_tool.load(manifest_path)
+    return m.get('npu', {}).get('graph_region', 0)
 
 
 def npu_declaration(manifest_path):

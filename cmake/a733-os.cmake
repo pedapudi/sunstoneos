@@ -159,12 +159,6 @@ elseif(SUNSTONE_APPLICATION STREQUAL "dram-nsi")
   endif()
   add_sunstone_image(sunstone-a733-os-dram-nsi LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION dram-nsi)
-elseif(SUNSTONE_APPLICATION STREQUAL "dram-qos")
-  set(SUNSTONE_DRAM_QOS_LOAD "0" CACHE STRING "0 none, 1 streaming cores, 2 NPU job stream (needs SUNSTONE_A733_OS_NPU), 3 DMA0 copies (needs SUNSTONE_A733_OS_DMA)")
-  include("${SUNSTONE_SOURCE_ROOT}/apps/dram-qos/cmake/application.cmake")
-  target_compile_definitions(dram-qos PRIVATE DQ_LOAD=${SUNSTONE_DRAM_QOS_LOAD})
-  add_sunstone_image(sunstone-a733-os-dram-qos LIFETIME ${os_lifetime}
-    SERVICES ${os_services} APPLICATION dram-qos)
 elseif(SUNSTONE_APPLICATION STREQUAL "hw-facts")
   if(NOT SUNSTONE_A733_HW_FACTS OR NOT SUNSTONE_A733_CPU_TOPOLOGY)
     message(FATAL_ERROR "The hardware facts image requires SUNSTONE_A733_HW_FACTS=ON and SUNSTONE_A733_CPU_TOPOLOGY=ON")

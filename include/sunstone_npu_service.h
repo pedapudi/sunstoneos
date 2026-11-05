@@ -24,6 +24,8 @@ int ss_npu_service_bind(const struct ss_npu_backend *);
 /* Optional, before bind: the callback adds a graph that the application hands over at run time; 1 with its model index, 0 when
  * the OS refuses it, negative for a retained failure. */
 int ss_npu_service_bind_register(int (*)(const void *, size_t, unsigned *));
+/* Optional, with the callback above: the reason of its last refusal, an enum ss_npu_register_refusal value. */
+int ss_npu_service_bind_register_refusal(int (*)(void));
 int ss_npu_service_bind_fault(void (*)(struct ss_npu_fault_info *));
 /* Optional owner wakeup, registered once before bind and application startup.
  * Called in the publishing task after a request or failure becomes visible.

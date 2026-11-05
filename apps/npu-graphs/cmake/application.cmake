@@ -1,23 +1,26 @@
 # SunstoneOS test graphs through the OS NPU service: every graph of the model list runs once through the SDK and its
-# output is compared with the simulator's. The OS composition is that of the CPU/NPU diagnostic.
-if(NOT SUNSTONE_A733_OS_CPU_RETURN OR NOT SUNSTONE_A733_OS_NPU OR
-   NOT SUNSTONE_OS_NPU_ALL_MODELS OR SUNSTONE_A733_OS_GPU OR
+# output is compared with the simulator's. The OS image links no graph: the application carries every graph of the model list
+# and registers it with the OS at run time (ss_npu_register_graph). The OS composition is that of the CPU/NPU diagnostic.
+if(NOT SUNSTONE_A733_OS_CPU_RETURN OR NOT SUNSTONE_A733_OS_NPU OR SUNSTONE_A733_OS_GPU OR
    SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_DMA OR
    SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_USB_CLASSES)
-  message(FATAL_ERROR "The NPU graph application requires the supervised CPU-return composition with the NPU service and all listed models")
+  message(FATAL_ERROR "The NPU graph application requires the supervised CPU-return composition with the NPU service")
 endif()
 set(npu_graph_vectors "${CMAKE_CURRENT_BINARY_DIR}/npu-graph-vectors.c")
-set(SUNSTONE_NPU_GRAPHS_RUNTIME_MODELS "" CACHE STRING "A model list of graphs the application registers with the OS at run time")
-set(npu_graph_runtime_option)
-if(NOT SUNSTONE_NPU_GRAPHS_RUNTIME_MODELS STREQUAL "")
-  set(npu_graph_runtime_option --runtime-models "${SUNSTONE_NPU_GRAPHS_RUNTIME_MODELS}")
+set(SUNSTONE_NPU_GRAPHS_ARTIFACTS "" CACHE FILEPATH "The artifacts map of the graphs in the model list (name -> model, input and reference files)")
+set(SUNSTONE_NPU_GRAPHS_MODELS "" CACHE FILEPATH "The model list ({\"npu_models\": [names]}) of the graphs the application registers with the OS at run time")
+if(NOT EXISTS "${SUNSTONE_NPU_GRAPHS_ARTIFACTS}" OR NOT EXISTS "${SUNSTONE_NPU_GRAPHS_MODELS}")
+  message(FATAL_ERROR "The NPU graph application requires SUNSTONE_NPU_GRAPHS_ARTIFACTS and SUNSTONE_NPU_GRAPHS_MODELS")
 endif()
+# No graph is linked into the OS image: the list the vectors tool takes for linked models is empty.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/npu-graphs-linked.json" "{\"npu_models\": []}\n")
+set(npu_graph_runtime_option --runtime-models "${SUNSTONE_NPU_GRAPHS_MODELS}")
 set(SUNSTONE_NPU_GRAPHS_EXTERNAL_VECTORS "" CACHE FILEPATH "Vectors held by a runner input region or the card, named by address and length (tools/npu-external-pack.py)")
 if(NOT SUNSTONE_NPU_GRAPHS_EXTERNAL_VECTORS STREQUAL "")
   list(APPEND npu_graph_runtime_option --external "${SUNSTONE_NPU_GRAPHS_EXTERNAL_VECTORS}")
 endif()
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/../vectors.py"
-  --artifacts "${SUNSTONE_OS_NPU_CATALOGUE}" --models "${SUNSTONE_OS_NPU_MODELS}" --output "${npu_graph_vectors}"
+  --artifacts "${SUNSTONE_NPU_GRAPHS_ARTIFACTS}" --models "${CMAKE_CURRENT_BINARY_DIR}/npu-graphs-linked.json" --output "${npu_graph_vectors}"
   ${npu_graph_runtime_option}
   COMMAND_ERROR_IS_FATAL ANY)
 # The backpressure study: the application opens the EL0 ring on the routed core (a Cortex-A55) and declares the 31 slots

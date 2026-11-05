@@ -1091,15 +1091,19 @@ static void copy_layout(struct nbg_assembly_layout *to, const struct nbg_assembl
 }
 int npu_runtime_register(struct npu_runtime *rt, const void *model, size_t bytes, unsigned *index)
 {
+    if (rt) rt->register_refusal = NPU_REGISTER_NOT_ADMISSIBLE;
     if (!good(rt) || !rt->prepared || !index || !model || !bytes || bytes > NBG_MODEL_MAX_BYTES ||
         !a733_span_incl_nonempty(model, bytes) || private_overlap(rt, (uintptr_t)model, bytes)) return 0;
     const unsigned n = atomic_load_explicit(&rt->count, memory_order_acquire);
-    if (n >= rt->capacity || !rt->meta) return 0;
+    /* A pool sized exactly from the graphs admission copied (no capacity for more) has nothing to give a later graph: it is
+     * refused by name. Memory is never taken from another slot, and no reserve is kept for the purpose. */
+    if (n >= rt->capacity) { rt->register_refusal = rt->capacity == n && rt->later_entries == 0 ? NPU_REGISTER_SEALED : NPU_REGISTER_FULL; return 0; }
+    if (!rt->meta) return 0;
     /* One copy, into kernel-owned memory that no task of the application reaches: everything after this reads the copy, so the
      * application may reuse its buffer once this returns, and what was admitted is what LOAD assembles. */
     const uint64_t t0 = clock_us(rt);
     void *const copy = npu_meta_allocate(rt->meta, bytes);
-    if (!copy) return 0;
+    if (!copy) { rt->register_refusal = NPU_REGISTER_MEMORY; return 0; }
     memcpy(copy, model, bytes);
     const uint64_t t1 = clock_us(rt);
     struct nbg_model view;
@@ -1107,13 +1111,13 @@ int npu_runtime_register(struct npu_runtime *rt, const void *model, size_t bytes
     const uint64_t t2 = clock_us(rt);
     /* The graph's layout needs as many entries as its tensors; the reservation holds the declared bound (rt->later_entries). */
     const size_t entries = nbg_assembly_layout_entries(&view);
-    if (!entries || entries > rt->later_entries) return 0;
+    if (!entries || entries > rt->later_entries) { npu_meta_release(rt->meta, copy, bytes); rt->register_refusal = NPU_REGISTER_TOO_LARGE; return 0; }
     struct nbg_assembly_layout plan = {.buffers = rt->scratch, .capacity = rt->later_entries};
     struct sizes z = {0};
     if (!admit(&view, &plan)) { npu_meta_release(rt->meta, copy, bytes); return 0; }
     need(&plan, bytes, &z);
     if (z.command > rt->command_bytes || z.constant > rt->constant_bytes || z.read > rt->read_bytes || z.write > rt->write_bytes) {
-        npu_meta_release(rt->meta, copy, bytes); return 0;
+        npu_meta_release(rt->meta, copy, bytes); rt->register_refusal = NPU_REGISTER_TOO_LARGE; return 0;
     }
     const uint64_t t3 = clock_us(rt);
     rt->counters.registered++; rt->counters.registered_bytes += bytes;
@@ -1121,6 +1125,7 @@ int npu_runtime_register(struct npu_runtime *rt, const void *model, size_t bytes
     rt->catalogue[n] = (struct npu_runtime_model){copy, bytes};
     copy_layout(&rt->plans[n], &plan);
     atomic_store_explicit(&rt->count, n + 1, memory_order_release);
+    rt->register_refusal = NPU_REGISTER_NONE;
     *index = n;
     return 1;
 }

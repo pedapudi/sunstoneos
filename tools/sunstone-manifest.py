@@ -186,7 +186,8 @@ def load(path):
     # the session record carries it (npu_word, apps/os/host.py), and the operating system admits it against capacity.
     if 'npu' in raw:
         n = raw['npu']
-        require(set(n) <= {'slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes'}, name + ': unknown npu keys')
+        require(set(n) <= {'slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes', 'graph_region'},
+                name + ': unknown npu keys')
         require({'slots', 'in_flight', 'graphs'} <= set(n), name + ': npu declares slots, in_flight and graphs')
 
         def count(value, label, low):
@@ -194,7 +195,10 @@ def load(path):
         m['npu'] = {'slots': count(n['slots'], 'slots', 1), 'in_flight': count(n['in_flight'], 'in_flight', 1),
                     'graphs': count(n['graphs'], 'graphs', 1), 'links': count(n.get('links', 0), 'links', 0),
                     'graph_bytes': count(n.get('graph_bytes', 0), 'graph_bytes', 0),
-                    'tensor_bytes': count(n.get('tensor_bytes', 0), 'tensor_bytes', 0)}
+                    'tensor_bytes': count(n.get('tensor_bytes', 0), 'tensor_bytes', 0), 'graph_region': 0}
+        if 'graph_region' in n:
+            require(isinstance(n['graph_region'], str), name + ': npu graph_region is the name of an input region')
+            m['npu_graph_region_name'] = n['graph_region']
     audio = raw.get('audio')
     if audio is not None or (required | optional) & CAPTURE:
         require(audio is not None, name + ': a capture device needs an audio format')
@@ -245,6 +249,14 @@ def load(path):
                         'sha256': digest or '0' * 64})
     m['regions'] = regions
     m['region_names'] = names
+    # The input region that holds the application's compiled NPU graphs, behind an index (tools/npu-external-pack.py): the
+    # session record names it by its place in this list plus one, and admission copies the graphs out of it.
+    if 'npu_graph_region_name' in m:
+        wanted = m.pop('npu_graph_region_name')
+        require(wanted in names and regions[names.index(wanted)]['kind'] == KIND['input'],
+                name + ': npu graph_region names an input region of the manifest')
+        m['npu']['graph_region'] = names.index(wanted) + 1
+        require(m['npu']['graphs'] == m['npu']['slots'], name + ': graphs taken from graph_region fill one slot each')
     m['large_regions'], m['large_names'] = load_large(name, raw.get('large_regions', []))
     add_heap_region(name, m)
     return m

@@ -17,7 +17,8 @@ a = p.parse_args()
 spec = importlib.util.spec_from_file_location('graph_catalogue', ROOT / 'tools/npu-test-models.py')
 catalogue = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(catalogue)
-entries = catalogue.models(a.models)
+# The OS image links no graph: an empty list of linked models is the normal case, and every graph is a run-time one.
+entries = catalogue.models(a.models) if json.loads(a.models.read_text()).get('npu_models') else []
 artifacts = json.loads(a.artifacts.read_text())
 text = '#include "vectors.h"\n'
 rows = []

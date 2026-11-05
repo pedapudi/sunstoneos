@@ -26,7 +26,7 @@ Native mappings, privileged reservation pools, cache maintenance, DMA0 services 
 
 ## Open work
 
-1. Measure CPU memory latency with the NPU job stream and DMA masters loading memory and the CPU port priorities raised ([DRAM bandwidth open work](../designs/dram-bandwidth.md#open-work)); the probes in `apps/dram-qos` need a finite NPU image or a captured DMA session record. CPU-only runs show no effect. Separate the A55 core 0 latency tail from the OS tick.
+1. Measure CPU memory latency with the NPU job stream and DMA masters loading memory and the CPU port priorities raised ([DRAM bandwidth open work](../designs/dram-bandwidth.md#open-work)); the probes that did this (`apps/dram-qos`, removed from the tree; see its history) need an NPU application that registers its graphs and a captured DMA session record. CPU-only runs show no effect. Separate the A55 core 0 latency tail from the OS tick.
 2. Qualify full-capacity memory and device visibility, and physical range ownership with external-pool mapping.
 3. Cover restore temperature, lower DRAM points, card deployment and decoding of the boot0 memory configuration ([training restore open work](../designs/dram-training-restore.md#open-work)). Read the controller's row-hit and bank-conflict counters if documented.
 4. Establish physical static secondary-OFF ownership for the [native probe contract](../board-probe-contract.md).

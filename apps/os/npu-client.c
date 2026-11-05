@@ -41,6 +41,8 @@ static uint32_t sdk_jobs,sdk_output_bytes;
 static const struct npu_runtime *os_npu_runtime_for_sdk; /* set by os_npu_sdk_bind: its count grows with registered graphs */
 static int sdk_register(const void *graph,size_t bytes,unsigned *entry)
 {return os_npu_register(graph,bytes,entry)?1:0;}
+static int sdk_register_refusal(void)
+{return os_npu_runtime_for_sdk?(int)os_npu_runtime_for_sdk->register_refusal:SS_NPU_REGISTER_NOT_ADMISSIBLE;}
 /* The existing privileged slot owner services the application's mailbox. */
 static unsigned sdk_loaded,sdk_model;
 static int sdk_run(unsigned model,const void *input,size_t input_bytes,
@@ -110,9 +112,10 @@ static int sdk_close(void)
 int os_npu_sdk_bind(const struct npu_runtime *runtime)
 {
     if(!runtime)return 0;
-    const struct ss_npu_backend backend={sdk_run,sdk_close,NULL,0,sdk_info};
+    /* The graphs admission took from the declared region are models 0 to count - 1; those registered later follow them. */
+    const struct ss_npu_backend backend={sdk_run,sdk_close,NULL,atomic_load_explicit(&runtime->count,memory_order_acquire),sdk_info};
     os_npu_runtime_for_sdk=runtime;
-    return ss_npu_service_bind_fault(sdk_fault)&&ss_npu_service_bind_register(sdk_register)&&ss_npu_service_bind(&backend);
+    return ss_npu_service_bind_fault(sdk_fault)&&ss_npu_service_bind_register(sdk_register)&&ss_npu_service_bind_register_refusal(sdk_register_refusal)&&ss_npu_service_bind(&backend);
 }
 /* Every path that retains the NPU resources names its reason: a record with only "retained" cannot be diagnosed. The site
  * carries the line and the detail a number that is unique to the statement. */

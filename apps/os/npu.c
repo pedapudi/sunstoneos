@@ -14,6 +14,7 @@
 #include "boot.h"
 #include "sunstone_npu_service.h"
 #include "sunstone_npu_queue.h"
+#include "npu-graph-index.h"
 #include <string.h>
 #define ALLOW UINT64_C(1)
 #define ACCEPTED UINT64_C(2)
@@ -405,17 +406,21 @@ int os_npu_open(void)
     if(call(NPU_SERVICE_OPEN,0,1000000)!=1)return -1;
     npu.opened=1;return 1;
 }
-/* What graph registration cost, for the runner to copy out of image RAM: the number of graphs, the bytes copied, and the
- * microseconds in the copy, the container decode and the layout, summed over the graphs (npu_runtime_counters). */
+/* What taking the application's graphs cost, for the runner to copy out of image RAM: the number of graphs, the bytes copied,
+ * and the microseconds in the copy, the container decode and the layout, summed over the graphs. Graphs copied out of the
+ * declared region at admission are timed there (the copy, then the runtime's prepare, whose layout includes each graph's
+ * decode: decode_us is zero for them); graphs registered later add the runtime's own counters (npu_runtime_counters). */
 struct os_npu_register_record{uint64_t graphs,bytes,copy_us,decode_us,layout_us,reserved[3];};
 struct os_npu_register_record os_npu_register_record;
+static struct os_npu_register_record sealed_record;
 int os_npu_register(const void *model,size_t bytes,unsigned *entry)
 {
     /* The graph is admitted like a linked one and must fit the bounds declared in the session (npu_runtime_register). */
     if(!(caller()&&entry&&npu_runtime_register(&npu.runtime,model,bytes,entry)))return 0;
     const struct npu_runtime_counters *c=&npu.runtime.counters;
-    os_npu_register_record=(struct os_npu_register_record){c->registered,c->registered_bytes,c->register_copy_us,c->register_decode_us,
-        c->register_layout_us,{0}};
+    os_npu_register_record=(struct os_npu_register_record){sealed_record.graphs+c->registered,sealed_record.bytes+c->registered_bytes,
+        sealed_record.copy_us+c->register_copy_us,sealed_record.decode_us+c->register_decode_us,
+        sealed_record.layout_us+c->register_layout_us,{0}};
     return 1;
 }
 int os_npu_load(unsigned entry)
@@ -608,11 +613,48 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
     if(os_npu_declaration_admitted(g)!=NPU_DECLARATION_OK)return 1;
     const struct npu_declaration declared=os_npu_declaration_of(g);
     const unsigned slots=declared.slots;
-    /* The image links no graph: the application registers every graph at run time (ss_npu_register_graph), within the bounds
-     * the session declares. A declaration of graphs without those bounds cannot be served. */
+    /* The image links no graph. Either the session names the input region that holds the application's graphs
+     * (graph_region): admission copies each one out of it and sizes the pool from the copies, and a later registration is
+     * refused (NPU_REGISTER_SEALED); or the application registers every graph at run time (ss_npu_register_graph), within the
+     * bounds the session declares, and each slot is sized by those bounds. */
     struct npu_runtime_bounds bounds={0};
-    if(!declared.graph_bytes||!declared.tensor_bytes)return UNPREPARED(0x808);
-    bounds=(struct npu_runtime_bounds){.capacity=declared.graphs,.graph_bytes=declared.graph_bytes,.tensor_bytes=declared.tensor_bytes};
+    struct npu_runtime_model *models=NULL;
+    unsigned model_count=0;
+    struct npu_meta *const meta=meta_init(led);
+    if(g->graph_region){
+#ifndef SUNSTONE_A733_OS_NPU_QUEUE
+        return UNPREPARED(0x816);       /* a wrapper image reloads one slot with different graphs: no slot is sized by one graph */
+#else
+        const struct ss_manifest *const m=ss_application.manifest;
+        if(!m||g->graph_region>m->region_count||m->regions[g->graph_region-1].kind!=SS_REGION_INPUT)return UNPREPARED(0x817);
+        const struct ss_region *const region=&m->regions[g->graph_region-1];
+        const uint8_t *const source=(const uint8_t *)(uintptr_t)region->address;
+        if(os_npu_index_check(source,region->bytes,declared.graphs,declared.graph_bytes)!=OS_NPU_INDEX_OK||
+           declared.slots!=declared.graphs)return UNPREPARED(0x818);
+        model_count=declared.graphs;
+        /* Nothing reads the application's region again after this copy: the runtime decodes and lays out the copies. */
+        uint64_t t0,t1;
+        if(!clock_now(&t0))return UNPREPARED(0x819);
+        models=npu_meta_allocate(meta,(size_t)model_count*sizeof(*models));
+        if(!models)return UNPREPARED(0x81a);
+        uint64_t total=0;
+        for(unsigned i=0;i<model_count;++i){
+            uint64_t offset,length;
+            os_npu_index_entry(source,i,&offset,&length);
+            void *const copy=npu_meta_allocate(meta,(size_t)length);
+            if(!copy)return UNPREPARED(0x81a);
+            memcpy(copy,source+offset,(size_t)length);
+            models[i]=(struct npu_runtime_model){copy,(size_t)length};
+            total+=length;
+        }
+        if(!clock_now(&t1))return UNPREPARED(0x819);
+        sealed_record.graphs=model_count;sealed_record.bytes=total;sealed_record.copy_us=t1-t0;
+        bounds.per_graph=1;
+#endif
+    }else{
+        if(!declared.graph_bytes||!declared.tensor_bytes)return UNPREPARED(0x808);
+        bounds=(struct npu_runtime_bounds){.capacity=declared.graphs,.graph_bytes=declared.graph_bytes,.tensor_bytes=declared.tensor_bytes};
+    }
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
     /* A queue image keeps graph i resident in slot i: each slot is sized by its own graph, not by the largest. The queue's
      * tables (handles, tensors, edges) are reserved with the rest, from the declared links. */
@@ -642,13 +684,26 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
         .access=UMEM_PROT_READ|UMEM_PROT_WRITE,.device_mask=UMEM_DEV_NPU,.window=UINT64_C(1)<<32};
     if(umem_alloc(led,&take,&npu.pool)!=UMEM_OK)return UNPREPARED(requested?0x812:0x803);
     if(requested&&!guard_reserve(led,base,bytes))return UNPREPARED(0x814);
-    struct npu_runtime_config config={.models=NULL,.count=0,.slots=slots,.bounds=bounds,.cpu=(uintptr_t)base,
+    struct npu_runtime_config config={.models=models,.count=model_count,.slots=slots,.bounds=bounds,.cpu=(uintptr_t)base,
         .physical=base,.bytes=bytes,.register_cpu=0x03600000,
-        .register_physical=0x03600000,.fatal=fatal,.meta=meta_init(led)};
-    if(!npu_runtime_prepare(&npu.runtime,&config)){
+        .register_physical=0x03600000,.fatal=fatal,.meta=meta};
+    uint64_t layout_begin=0,layout_end=0;
+    (void)clock_now(&layout_begin);
+    const int layout_ok=npu_runtime_prepare(&npu.runtime,&config);
+    (void)clock_now(&layout_end);
+    sealed_record.layout_us=layout_end>=layout_begin?layout_end-layout_begin:0;
+    if(!layout_ok){
         /* Name the cause: prepare says which resource did not fit (a graph that is refused, the NPU's address space, or the
          * memory for the declaration's tables and regions). The extent stays held. */
         return UNPREPARED(npu.runtime.refusal!=NPU_DECLARATION_OK?(uint32_t)npu.runtime.refusal:0x804);
+    }
+    /* The bounds are an upper limit on what the graphs need, never a size: a graph beyond them is refused. */
+    for(unsigned i=0;i<model_count&&declared.tensor_bytes;++i){
+        const struct nbg_assembly_layout *p=&npu.runtime.plans[i];
+        size_t in=0,out=0;
+        for(unsigned j=0;j<p->inputs;++j)in+=p->buffers[NBG_ALLOC_INPUT+j].payload_bytes;
+        for(unsigned j=0;j<p->outputs;++j)out+=p->buffers[NBG_ALLOC_INPUT+p->inputs+j].payload_bytes;
+        if(in>declared.tensor_bytes||out>declared.tensor_bytes)return UNPREPARED(0x81b);
     }
     const size_t kept=npu_runtime_trim_parent(&npu.runtime);
     if(!kept||umem_trim(led,&npu.pool,kept)!=UMEM_OK)return UNPREPARED(0x805);
@@ -661,6 +716,7 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
      * finds its ring sized for the declaration. */
     if(!os_npu_queue_prepare(&npu.runtime))return UNPREPARED((uint32_t)NPU_DECLARATION_MEMORY);
 #endif
+    os_npu_register_record=sealed_record;
     npu.prepared=1;
     return 1;
 }

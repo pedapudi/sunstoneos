@@ -217,7 +217,7 @@ if(SUNSTONE_A733_OS_AUDIO)
     drivers/audio/a733_audio_leases.c drivers/audio/dma_service_i2s_irq.c)
 endif()
 if(SUNSTONE_A733_OS_NPU)
-  list(APPEND os_added apps/os/npu.c apps/os/npu-declaration.c apps/os/npu-client.c apps/os/npu-irq.c
+  list(APPEND os_added apps/os/npu.c apps/os/npu-declaration.c apps/os/npu-graph-index.c apps/os/npu-client.c apps/os/npu-irq.c
     platform/a733/npu_native.c runtime/counter_clock.c drivers/npu/a733_npu_runtime.c drivers/npu/a733_npu_runtime_interim.c drivers/npu/npu_pool.c drivers/npu/npu_declaration.c
     drivers/npu/npu_service.c drivers/npu/npu_queue.c drivers/npu/npu_runtime_queue.c drivers/npu/npu_idle.c drivers/npu/a733_npu_sequence.c
     drivers/npu/a733_npu_controller.c drivers/npu/a733_npu_memory.c

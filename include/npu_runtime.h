@@ -40,6 +40,9 @@
  * and the catalogue entry names that copy; a model given at prepare (a host check's) is read where it is and must stay
  * unchanged. No digest admits a model: the runtime admits by structure and addresses, and the NPU MMU confines it. */
 struct npu_runtime_model { const void *data; size_t bytes; };
+/* Why npu_runtime_register refused a graph (the values of enum ss_npu_register_refusal in include/sunstone_app.h). */
+enum { NPU_REGISTER_NONE, NPU_REGISTER_NOT_ADMISSIBLE, NPU_REGISTER_TOO_LARGE, NPU_REGISTER_FULL, NPU_REGISTER_SEALED,
+       NPU_REGISTER_MEMORY };
 /* One parent allocation of exactly npu_runtime_requirements bytes, 2 MiB
  * aligned in CPU and physical addresses, write-back cached and mapped at EL1.
  * The catalogue models stay outside it, live and unchanged for the runtime's
@@ -149,6 +152,7 @@ struct npu_runtime {
     unsigned later_entries;          /* table entries of a graph registered after prepare */
     atomic_uint count;   /* catalogue entries in use; register publishes the next one with release order */
     unsigned capacity, slots;
+    unsigned register_refusal;   /* why the last npu_runtime_register returned 0: an NPU_REGISTER_* value */
     size_t command_bytes, constant_bytes, read_bytes, write_bytes;
     uintptr_t parent_cpu;
     size_t parent_bytes;

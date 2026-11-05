@@ -341,6 +341,14 @@ int ss_npu_last_fault(struct ss_npu_fault_info *);
  * copy afterwards: once this returns 1 the application may reuse or free its buffer. The session must declare graph_bytes
  * and tensor_bytes (npu section of the manifest). */
 int ss_npu_register_graph(const void *graph,size_t bytes,unsigned *index);
+/* Why the last ss_npu_register_graph was refused (-2); zero when it was not. A session that names its graph region
+ * (npu.graph_region in the manifest) has its pool sized exactly from those graphs at admission and has no room for another:
+ * its registration is refused with SS_NPU_REGISTER_SEALED, never by shrinking or sharing what the others hold. */
+enum ss_npu_register_refusal {
+    SS_NPU_REGISTER_NONE, SS_NPU_REGISTER_NOT_ADMISSIBLE, SS_NPU_REGISTER_TOO_LARGE, SS_NPU_REGISTER_FULL,
+    SS_NPU_REGISTER_SEALED, SS_NPU_REGISTER_MEMORY
+};
+int ss_npu_register_refusal(void);
 /* After the final run, repeat until 1 (slot closed), or a negative failure.
  * Successful CLOSE is terminal for this session. */
 int ss_npu_close(void);

@@ -35,16 +35,15 @@ repository's existing compiler and dependency configuration:
 -DSUNSTONE_A733_OS_CPU_RETURN=ON
 ```
 
-For the combined profile add NPU and observer enablement, an authenticated
-artifact map and the semantic model selection:
+For the combined profile add NPU and observer enablement and the artifact map of the reviewed
+shufflenet-v2-published graph and vectors. The application carries the graph and registers it with the OS at run time (the
+image links none):
 
 ```text
 -DSUNSTONE_A733_OS_NPU=ON -DSUNSTONE_A733_OS_NPU_OBSERVE=ON
--DSUNSTONE_OS_NPU_CATALOGUE=<artifact-map.json>
--DSUNSTONE_OS_NPU_MODEL_NAME=shufflenet-v2-published
+-DSUNSTONE_CPU_NPU_ARTIFACTS=<artifact-map.json>
 ```
 
-`SUNSTONE_OS_NPU_MODELS` optionally supplies a different model-list JSON file.
 The diagnostic rejects GPU, DMA, performance mode, audio, radio, headset and USB
 class composition. Its source enables FP instructions within the existing task
 FP context; service sources retain their general-register compilation policy.

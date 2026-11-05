@@ -81,7 +81,7 @@ THERMAL = [('magic', 'Q'), ('version', 'Q'), ('bytes', 'Q'), ('thermal_owner', '
 GRANT = [('magic', 'Q'), ('version', 'Q'), ('bytes', 'Q'), ('owner', 'Q'), ('epoch', 'Q'), ('generation', 'Q'), ('clusters', 'I'),
          ('max_mhz', '2I'), ('changes', 'I'), ('perf', 'I'), ('reserved', '28s')]
 NPU = [('magic', 'Q'), ('version', 'Q'), ('bytes', 'Q'), ('owner', 'Q'), ('command_admission', 'Q'), ('supervisor', 'Q'),
-       ('pck_client', 'I'), ('client_model', 'I'), ('jobs', 'I'), ('reserved', 'I'), ('pool_base', 'Q'), ('pool_bytes', 'Q'),
+       ('pck_client', 'I'), ('client_model', 'I'), ('jobs', 'I'), ('graph_region', 'I'), ('pool_base', 'Q'), ('pool_bytes', 'Q'),
        ('admission', '32s'), ('clock', '32s'), ('power', '32s'), ('supervision', '32s'), ('ddr', '32s'),
        ('slots', 'I'), ('in_flight', 'I'), ('graphs', 'I'), ('links', 'I'), ('graph_bytes', 'I'), ('tensor_bytes', 'I')]
 LAYOUTS = {'prefix': (PREFIX, 592), 'thermal': (THERMAL, 216), 'cpu_grant': (GRANT, 96), 'npu': (NPU, 264)}
@@ -92,7 +92,7 @@ OS_MAGIC = 0x415337334f534131                                   # the thermal re
 DERIVED = {'prefix': {'magic', 'version', 'bytes', 'epoch', 'generation', 'lease', 'image', '_pad'},
            'thermal': {'magic', 'version', 'bytes'},
            'cpu_grant': {'magic', 'version', 'bytes', 'epoch', 'generation', 'clusters', 'max_mhz', 'perf', 'reserved'},
-           'npu': {'magic', 'version', 'bytes', 'client_model', 'reserved', 'pool_base', 'pool_bytes',
+           'npu': {'magic', 'version', 'bytes', 'client_model', 'graph_region', 'pool_base', 'pool_bytes',
                    'slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes'}}
 # Symbols that tell which services an OS image links (the CMake options SUNSTONE_A733_OS_*).
 SYMBOLS = {'npu': 'os_npu_client_model'}
@@ -268,6 +268,9 @@ def describe(image, manifest_path=None, npu_declaration=None, devices=None, host
             raise SessionError('npu declaration (slots, in_flight, graphs, links): the image does not carry it; pass --npu-declaration D '
                                '(a manifest with an npu section, or a JSON object of those fields) or --manifest M with an npu section')
         plan['npu_client_model'] = struct.unpack('<I', symbol_bytes(elf, symbols, 'os_npu_client_model')[:4])[0]
+        plan['npu_graph_region'] = 0
+        if manifest_path and not npu_declaration:
+            plan['npu_graph_region'] = load('session_tool_manifest_region', ROOT / 'tools/sunstone-manifest.py').load(manifest_path).get('npu', {}).get('graph_region', 0)
     plan['profile'] = 'npu' if 'npu' in plan['services'] else 'control'
     return plan
 
@@ -309,7 +312,7 @@ def build_session(plan, inputs, fact_file=FACTS, host=None, entropy=secrets.rand
         slots, in_flight, graphs, links, graph_bytes, tensor_bytes = plan['npu_declaration']
         npu = profile_values(profile, 'npu', {
             'magic': host.SERVICE_MAGIC[host.NPU], 'version': host.SERVICE_VERSION[host.NPU], 'bytes': host.SERVICE_BYTES[host.NPU],
-            'client_model': plan['npu_client_model'], 'reserved': 0, 'pool_base': plan['npu_pool_request'][0], 'pool_bytes': plan['npu_pool_request'][1],
+            'client_model': plan['npu_client_model'], 'graph_region': plan['npu_graph_region'], 'pool_base': plan['npu_pool_request'][0], 'pool_bytes': plan['npu_pool_request'][1],
             'slots': slots, 'in_flight': in_flight, 'graphs': graphs, 'links': links,
             'graph_bytes': graph_bytes, 'tensor_bytes': tensor_bytes})
         services[host.NPU] = pack('npu', npu)

@@ -6,7 +6,8 @@
 /* Version 2 added the application's declaration of NPU resources, four full-width fields (docs/designs/npu-resources.md);
  * version 3 adds the bounds of the graphs it loads at run time; version 4 drops the digest of the image's model catalogue:
  * a graph runs as compiled, admitted by its structure and isolated by the page tables and the NPU MMU, so the session
- * names no list of models. Earlier versions are no longer admitted. */
+ * names no list of models. The last reserved word is now graph_region; the version stays 4, because an image without the field
+ * refuses a nonzero word. Earlier versions are no longer admitted. */
 #define OS_NPU_SESSION_VERSION 4u
 /* Fixed optional profile; the supervisor grants this exact private interval.
  * Evidence hashes bind external facts, never manufacture those facts. */
@@ -14,7 +15,10 @@ struct os_npu_session {
     uint64_t magic,version,bytes,owner,command_admission,supervisor;
     /* jobs: the workload of the diagnostic client (how many jobs it runs). It is not a limit: a session never fails
      * because it has run a number of jobs (docs/designs/npu-resources.md). */
-    uint32_t pck_client,client_model,jobs,reserved;
+    /* graph_region: the place plus one, in the application's manifest, of the input region that holds its compiled graphs behind
+     * an index (apps/os/npu-graph-index.h), or zero when the application registers its graphs at run time. Admission copies the
+     * graphs out of that region and sizes the pool from them. */
+    uint32_t pck_client,client_model,jobs,graph_region;
     /* A placement request for the NPU's reservation: its base and size, both zero when the allocator chooses (the normal case).
      * Any image accepts a request; the ledger reserves exactly that extent and refuses it unless it is free DRAM above the image
      * that stays inside one 4 GiB window. Only an explicit request sets these words: tools/session.py --npu-pool and the runner's
