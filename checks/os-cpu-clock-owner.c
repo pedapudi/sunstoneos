@@ -21,9 +21,6 @@ volatile unsigned os_check_result;
 static void check(int ok,unsigned code)
 {if(!ok){os_check_result=code;__asm__ volatile("brk #0");for(;;){}}}
 const struct os_session *os_session_admitted(void){return &session;}
-int os_granted(unsigned mask){return mask&&(session.granted&mask)==mask;}
-/* The performance service is not part of this model: a grant without perf never reaches it. */
-int os_perf_step(struct a733_cpu_clock *c,const struct a733_thermal_policy *p,int burst){(void)c;(void)p;(void)burst;check(0,90);return 0;}
 int a733_counter_clock_now(void *v,uint64_t *out){(void)v;*out=++time_us;return 1;}
 int model_init(struct a733_cpu_clock *c,const struct a733_cpu_clock_config *config,
     const struct a733_cpu_clock_ops *ops,void *cookie,struct a733_clock_leases *clocks,
@@ -52,11 +49,11 @@ enum a733_cpu_clock_status model_request(struct a733_cpu_clock *c,enum a733_cpu_
 void os_cpu_owner_check(unsigned mode)
 {
     selected=mode;
-    session.board.epoch=1;session.board.generation=2;session.granted=OS_GRANT_CPU_CLOCK;
+    session.board.epoch=1;session.board.generation=2;
     struct a733_cpu_clock_grant_record *g=&session.cpu_clock;
     g->magic=A733_CPU_CLOCK_GRANT_MAGIC;g->version=1;g->bytes=sizeof(*g);g->owner=10;
     if(mode!=1){g->epoch=1;g->generation=2;g->clusters=3;g->max_mhz[0]=1794;g->max_mhz[1]=2002;
-        g->changes=4;}
+        g->changes=4;memset(g->approval,1,32);}
     thermal_policy.initialized=1;atomic_init(&thermal_policy.published_seen,0);
     check(os_cpu_clock_step(&thermal_policy)==1,5);
     check(os_cpu_clock_step(&thermal_policy)==1,6);

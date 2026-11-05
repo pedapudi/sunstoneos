@@ -1,7 +1,7 @@
 {
   "name": "dram-qos",
   "devices": {"required": [], "optional": []},
-  "cpu": {"clock_grants": true, "cluster": "a76", "workers": 7, "priority": 2, "stack_bytes": 16384},
+  "cpu": {"cluster": "a76", "workers": 7, "priority": 2, "stack_bytes": 16384},
   "regions": [
     {"name": "buffer", "kind": "work", "access": ["read", "write"], "bytes": "0x3000000"}
   ],

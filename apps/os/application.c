@@ -180,21 +180,35 @@ void ss_radio_status(struct ss_radio_status *status){*status=(struct ss_radio_st
 #endif
 int ss_clock_ready(void)
 {
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
     return os_cpu_clock_ready();
+#else
+    return 1;
+#endif
 }
 void ss_activity_begin(void)
 {
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
     void os_thermal_record_begin(void);
     atomic_fetch_add_explicit(&activity_generation,1,memory_order_relaxed);
     os_thermal_record_begin();
+#endif
 }
 void ss_activity_end(int success)
 {
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
     void os_thermal_record_end(int);os_thermal_record_end(success);
+#else
+    (void)success;
+#endif
 }
 int ss_clock_info(char *line,size_t bytes)
 {
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
     int os_cpu_clock_line(char *,size_t);return os_cpu_clock_line(line,bytes);
+#else
+    (void)line;(void)bytes;return 0;
+#endif
 }
 size_t ss_heap_peak(void)
 {
@@ -368,10 +382,11 @@ int os_application_prepare(void)
         return 1;
     }
     grant.devices=os_session_devices();grant.region_count=m->region_count;
-    /* An application on the A76 cores is placed there or the start is refused: the thermal start, which runs after this
-     * and before the scheduler, checks the boot point for it (os_cpu_boot_point_needed) and refuses the start when the
-     * check fails. It is never placed on core 2. */
+#ifdef A733_A76_ADMITTED
     grant.main_core=m->cluster==SS_CLUSTER_A76?6:2;
+#else
+    grant.main_core=2;
+#endif
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
     /* The current queue route is core 1, a Cortex-A55. */
     if(m->cluster==SS_CLUSTER_A76)return 0;

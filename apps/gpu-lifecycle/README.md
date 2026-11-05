@@ -36,7 +36,8 @@ The image's existing supervised session and watchdog bound its whole lifetime.
 Only the coordinator runs a prepared returning image on a board.
 
 Build with `SUNSTONE_APPLICATION=gpu-lifecycle`,
-`SUNSTONE_A733_OS_GPU=ON` and `SUNSTONE_A733_OS_CPU_RETURN=ON`.
+`SUNSTONE_A733_OS_GPU=ON`, `SUNSTONE_A733_OS_CPU_RETURN=ON`,
+`SUNSTONE_A733_OS_CPU_CLOCK=ON` and `A733_A76_ADMITTED=ON`.
 `SUNSTONE_GPU_LIFECYCLE_PEER=ON` links the fixed peer. The recovery image also
 selects `SUNSTONE_A733_OS_GPU_RECOVERY_TEST=ON`. Dependency paths, frozen
 session inputs, image hashes and exact coordinator commands belong in the

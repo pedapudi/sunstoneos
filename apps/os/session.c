@@ -111,40 +111,30 @@ int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,un
      * the image has it, and the I2S receive record only with the I2S device. An absent record grants nothing. */
     if(radio)out->granted|=OS_GRANT_RADIO;
     {
-        /* The declared records (apps/os/os-services.h). need is 0 for an optional record, OS_RECORD_LINKED for one the
-         * image requires whenever it links the service, or the device bit that the session holds exactly when the record
-         * is present. */
-#define RECORD(GRANT,extent,field,bytes,magic,version,need) \
-            {extent,OS_GRANT_##GRANT,sizeof(out->field),&out->field,OS_LINKED_##GRANT,(uint32_t)(need)},
-        const struct {uint32_t type,grant;size_t bytes;void *target;int linked;uint32_t need;} services[]={OS_RECORD_ROWS(RECORD)};
-#undef RECORD
+        const struct {uint32_t type,grant;size_t bytes;void *target;int linked,required;} services[]={
+            {SS_EXTENT_AUDIO,OS_GRANT_AUDIO,sizeof(out->audio),&out->audio,OS_LINKED_AUDIO,!!(h->devices&SS_DEVICE_AUDIO_I2S)},
+            {SS_EXTENT_NPU,OS_GRANT_NPU,sizeof(out->npu),&out->npu,OS_LINKED_NPU,0},
+            {SS_EXTENT_CPU_GRANT,OS_GRANT_CPU_CLOCK,sizeof(out->cpu_clock),&out->cpu_clock,OS_LINKED_CPU_CLOCK,0},
+            {SS_EXTENT_DMA,OS_GRANT_DMA,sizeof(out->dma),&out->dma,OS_LINKED_DMA,OS_LINKED_DMA},
+        };
         for(unsigned i=0;i<sizeof(services)/sizeof(services[0]);++i){
-            const uint32_t need=services[i].need;
             const int present=os_session_extent(raw,services[i].type,NULL)!=NULL;
-            const int required=need==OS_RECORD_LINKED?services[i].linked:need?!!(h->devices&need):0;
             if(present&&!services[i].linked)REFUSE(A733_DECODE_EXTENT);
-            if(required&&!present)REFUSE(A733_DECODE_EXTENT);
+            if(services[i].required&&!present)REFUSE(A733_DECODE_EXTENT);
             if(present){
                 if(!extent_copy(raw,services[i].type,services[i].target,services[i].bytes))REFUSE(A733_DECODE_EXTENT);
                 out->granted|=services[i].grant;
-                /* A record that needs a device bit is refused without it. */
-                if(need&&need!=OS_RECORD_LINKED&&!(h->devices&need))REFUSE(A733_DECODE_DEVICES);
             }
         }
     }
     if(out->granted&OS_GRANT_AUDIO){
+        if(!(h->devices&SS_DEVICE_AUDIO_I2S))REFUSE(A733_DECODE_DEVICES);
         if(out->audio.capture_samples<m->audio.min_frames||out->audio.capture_samples>m->audio.max_frames)REFUSE(A733_DECODE_AUDIO_FRAMES);
     }
     /* A grant names this boot's epoch. A grant on a card is written before the loader stamps the board epoch, so its
      * epoch is zero, which means "this boot": only that form takes the board epoch. Any other value must be the board's,
      * or the grant is refused (a733_cpu_clock_grant_load compares it). */
     if(out->granted&OS_GRANT_CPU_CLOCK&&out->cpu_clock.clusters&&!out->cpu_clock.epoch)out->cpu_clock.epoch=out->board.epoch;
-    /* The manifest is the upper bound of what the application may be granted: clock changes only if it declares
-     * cpu.clock_grants, and the performance service only if it declares cpu.perf. */
-    if(out->granted&OS_GRANT_CPU_CLOCK){
-        if(out->cpu_clock.clusters&&!(m->clock_use&SS_CLOCK_GRANTS))REFUSE(A733_DECODE_EXTENT);
-        if(out->cpu_clock.perf&&!(m->clock_use&SS_CLOCK_PERF))REFUSE(A733_DECODE_EXTENT);
-    }
     /* On the wire the thermal record's bytes names the board prefix and every service record the session carries, so
      * the existing service validator sees its layout. */
     if(out->bytes!=os_session_wire_bytes(out->granted))REFUSE(A733_DECODE_EXTENT);

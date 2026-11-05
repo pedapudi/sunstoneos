@@ -1,6 +1,6 @@
 # The same arithmetic runs as a CPU control when the NPU service is absent.
 if(NOT SUNSTONE_A733_OS_CPU_RETURN OR NOT SUNSTONE_A733_OS_CPU_CLOCK OR
-   NOT A733_A76_ADMITTED OR SUNSTONE_A733_OS_GPU OR
+   NOT A733_A76_ADMITTED OR SUNSTONE_A733_OS_GPU OR SUNSTONE_A733_OS_PERF OR
    SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_DMA OR
    SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_USB_CLASSES)
   message(FATAL_ERROR "CPU/NPU diagnostic requires its supervised CPU-return composition")
@@ -10,13 +10,15 @@ if(SUNSTONE_A733_OS_NPU)
   if(NOT SUNSTONE_A733_OS_NPU_OBSERVE)
     message(FATAL_ERROR "CPU/NPU overlap diagnostic requires opt-in NPU observation")
   endif()
-  if(NOT SUNSTONE_OS_NPU_MODEL_NAME STREQUAL "shufflenet-v2-published")
-    message(FATAL_ERROR "CPU/NPU overlap diagnostic requires name-selected shufflenet-v2-published")
+  # The diagnostic carries its graph: the OS image links none, and the application registers it at run time.
+  set(SUNSTONE_CPU_NPU_ARTIFACTS "" CACHE FILEPATH "Artifacts map of the reviewed shufflenet-v2-published graph and vectors")
+  if(NOT EXISTS "${SUNSTONE_CPU_NPU_ARTIFACTS}")
+    message(FATAL_ERROR "CPU/NPU overlap diagnostic requires SUNSTONE_CPU_NPU_ARTIFACTS")
   endif()
   set(cpu_npu_vectors "${CMAKE_CURRENT_BINARY_DIR}/cpu-npu-vectors.c")
   execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/../vectors.py"
-    --artifacts "${SUNSTONE_OS_NPU_CATALOGUE}" --models "${SUNSTONE_OS_NPU_MODELS}"
-    --name "${SUNSTONE_OS_NPU_MODEL_NAME}" --output "${cpu_npu_vectors}"
+    --artifacts "${SUNSTONE_CPU_NPU_ARTIFACTS}" --models "${SUNSTONE_SOURCE_ROOT}/checks/data/npu-test-model-list.json"
+    --name shufflenet-v2-published --output "${cpu_npu_vectors}"
     COMMAND_ERROR_IS_FATAL ANY)
   list(APPEND cpu_npu_sources "${cpu_npu_vectors}")
 endif()

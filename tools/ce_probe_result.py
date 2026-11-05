@@ -15,12 +15,11 @@ def decode(data):
     (magic, version, size, stage, failed, failure_stage, flags, entry_clk, entry_bgr, entry_mbus, clocked_clk,
      clocked_bgr, clocked_mbus, status, error, lpc, returned, task_us, limit_us, descriptor, output) = \
         struct.unpack('<QII4I3I3I3I3IQQ', data)
-    if magic != MAGIC or version != 1 or size != SIZE or stage >= len(STAGES) or (failure_stage & 255) > len(STAGES):
+    if magic != MAGIC or version != 1 or size != SIZE or stage >= len(STAGES) or failure_stage > len(STAGES):
         raise ValueError('not a CE probe record')
     return {
         'stage': STAGES[stage], 'failed': bool(failed),
-        'failed_at': STAGES[failure_stage & 255] if failed and (failure_stage & 255) < len(STAGES) else None,
-        'failure_detail': failure_stage >> 8,
+        'failed_at': STAGES[failure_stage] if failed and failure_stage < len(STAGES) else None,
         'health_tests_at_hardware_defaults_not_programmed': bool(flags & 1),
         'found_enabled_and_cycled': bool(flags & 2), 'task_completed': bool(flags & 4),
         'block_not_all_zero': bool(flags & 8), 'double_entropy_source_set': bool(flags & 16),

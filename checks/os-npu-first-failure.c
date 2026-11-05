@@ -61,9 +61,6 @@ BaseType_t xTaskGenericNotify(TaskHandle_t task,UBaseType_t index,uint32_t value
 uint32_t ulTaskGenericNotifyTake(UBaseType_t index,BaseType_t clear,TickType_t wait)
 {(void)index;(void)clear;(void)wait;abort();}
 void vTaskSuspend(TaskHandle_t task){assert(!task);longjmp(suspended,1);}
-/* The modeled session grants no performance service (apps/os/perf.c), so a stopped bootstrap suspends. */
-int os_perf_enabled(void){return 0;}
-unsigned os_perf_boot_mode(void){return 0;}
 void vTaskDelay(TickType_t ticks){(void)ticks;abort();}
 enum a733_npu_platform_result npu_runtime_startup_poll(struct npu_runtime *r)
 {assert(r==&npu.runtime);return mode==11?A733_NPU_PLATFORM_RETAINED:A733_NPU_PLATFORM_READY;}

@@ -168,10 +168,8 @@ static int gpu_start_body(unsigned core)
     if(!a733_gpu_platform_bind_pmic(&gpu.power,&providers.shared.gpu_native,&providers.shared.pmic,&lifetime,
                                   OS_GPU_FIRMWARE_OWNER))return start_refused(7);
 #ifdef SUNSTONE_A733_OS_PERF
-    /* The performance-mode service is the grant's: its boot mode picks the start rate; without it the GPU keeps its
-     * performance hooks unbound (config.performance_begin stays null). */
-    if(os_perf_enabled()&&!a733_gpu_platform_performance_enable(&gpu.power,
-        os_perf_boot_mode()==A733_PERF_LOW ? A733_GPU_LOW_HZ : A733_GPU_CORE_HZ))return start_refused(8);
+    if(!a733_gpu_platform_performance_enable(&gpu.power,
+        OS_PERF_BOOT_MODE==A733_PERF_LOW ? A733_GPU_LOW_HZ : A733_GPU_CORE_HZ))return start_refused(8);
 #endif
     if(!a733_gpu_reserved_prepare(&gpu.firmware,OS_GPU_FIRMWARE_OWNER,gpu_firmware,
         (size_t)(gpu_firmware_end-gpu_firmware),400000000))return start_refused(9);

@@ -31,9 +31,9 @@ static void field(const char *name, uint32_t value) {
     platform_puts(name); platform_hex(value);
 }
 // Preserve the first failed take before later rounds can change its inputs.
-static void notify_report(const char *label, unsigned round, unsigned acknowledged, uint32_t count) {
+static void notify_failure(unsigned round, unsigned acknowledged, uint32_t count) {
     taskENTER_CRITICAL();
-    platform_puts(label);
+    platform_puts("FAIL soak notification");
     field(" round=", round); field(" received=", count); field(" acknowledged=", acknowledged);
     for (unsigned id = 0; id < 2; ++id) {
         field(" mover=", id);
@@ -44,12 +44,7 @@ static void notify_report(const char *label, unsigned round, unsigned acknowledg
         field(" phase=", __atomic_load_n(&mover_phase[id], __ATOMIC_RELAXED));
         field(" core=", __atomic_load_n(&mover_core[id], __ATOMIC_RELAXED));
     }
-    platform_puts("\n");
-    taskEXIT_CRITICAL();
-}
-static void notify_failure(unsigned round, unsigned acknowledged, uint32_t count) {
-    notify_report("FAIL soak notification", round, acknowledged, count);
-    platform_exit(1);
+    platform_puts("\n"); platform_exit(1);
 }
 extern uint64_t check_fp_context(uint64_t pattern);
 
@@ -131,18 +126,10 @@ static void control(void *unused) {
             __atomic_store_n(&targets[id], target, __ATOMIC_RELEASE);
             vTaskCoreAffinitySet(movers[id], 1U << (target % CORES));
         }
-        // Each mover acknowledges once; both may arrive before the first take. How long that takes is not asserted: under
-        // multi-threaded TCG guest time is host time, so a loaded host stretches it. A wait past one second reports the
-        // movers' state once, as a WAIT line that does not fail the run; a lost notification then ends at the checker's
-        // host deadline with that report in the log. More acknowledgements than movers fail at once.
-        unsigned reported = 0;
+        // Each mover acknowledges once; both may arrive before the first take.
         for (unsigned acknowledged = 0; acknowledged < 2;) {
             const uint32_t count = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
-            if (!count) {
-                if (!reported++) notify_report("WAIT soak notification", round, acknowledged, count);
-                continue;
-            }
-            if (acknowledged + count > 2) notify_failure(round, acknowledged, count);
+            if (count < 1 || acknowledged + count > 2) notify_failure(round, acknowledged, count);
             acknowledged += count;
         }
     }

@@ -23,7 +23,6 @@ struct a733_ce_clock {
     uint64_t last_now;
     enum a733_ce_clock_state state;
     unsigned held,writes;
-    unsigned fail_line; /* The source line of the first failure; zero while healthy. */
 };
 /* Zero once. One designated task under the existing CE pool mutex. The caller
  * already owns CE exclusively and OSC/REF/PERI0/FABRIC continuously. Initial

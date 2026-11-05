@@ -48,15 +48,13 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-# The NPU catalogue map of the npu variant, relative to the --cache directory.
-NPU_CATALOGUE = 'build/npu-board/session-artifacts.json'
 VARIANTS = {
     'sup': [],
     # Every service of the one OS image that is not yet a run-time option (docs/designs/one-os-image.md): the image the
     # series converges on. Each series removes its options from the variants above and from this list.
     'all': ['-DSUNSTONE_A733_OS_AUDIO=ON', '-DSUNSTONE_A733_OS_RADIO=ON', '-DSUNSTONE_A733_OS_NPU=ON',
-            '-DSUNSTONE_A733_OS_NPU_QUEUE=ON', '-DSUNSTONE_OS_NPU_CLIENT_MODEL=0', '-DSUNSTONE_OS_NPU_QUEUE_MODELS=0,1',
-            '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
+            '-DSUNSTONE_A733_OS_NPU_QUEUE=ON', '-DA733_A76_ADMITTED=ON',
+            '-DSUNSTONE_A733_OS_CPU_CLOCK=ON', '-DSUNSTONE_A733_OS_PERF=ON'],
     'res': ['-DSUNSTONE_A733_OS_RESIDENT=ON'],
     'resaud': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_AUDIO=ON'],
     'resradio': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON'],
@@ -66,11 +64,17 @@ VARIANTS = {
     'radio-headset': ['-DSUNSTONE_A733_OS_RADIO=ON', '-DSUNSTONE_A733_OS_HEADSET=ON'],
     'resradio-headset': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON',
                          '-DSUNSTONE_A733_OS_HEADSET=ON'],
-    # The supervised NPU profile. The OS build verifies its host inputs against
-    # tools/npu-fixtures.json. {cache} is the --cache directory.
-    'npu': ['-DSUNSTONE_A733_OS_NPU=ON', '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
-    # The NPU queue and the performance-mode service are built in 'all'. The CPU clock owner and the performance service are
-    # in every image, and a session grants them (docs/designs/one-os-image-cpu.md).
+    # The supervised NPU profile: the image links no graph.
+    'npu': ['-DSUNSTONE_A733_OS_NPU=ON'],
+    'npu-queue': ['-DSUNSTONE_A733_OS_NPU=ON', '-DSUNSTONE_A733_OS_NPU_QUEUE=ON'],
+    # The performance-mode service (docs/designs/performance-modes.md) on the
+    # supervised A76 CPU clock build, with the high boot mode; and with the
+    # NPU profile and the low boot mode.
+    # The supervised A76 CPU clock build without the performance-mode service (checks/os-cpu-clock-native.py).
+    'cpu-clock': ['-DA733_A76_ADMITTED=ON', '-DSUNSTONE_A733_OS_CPU_CLOCK=ON'],
+    'perf': ['-DA733_A76_ADMITTED=ON', '-DSUNSTONE_A733_OS_CPU_CLOCK=ON', '-DSUNSTONE_A733_OS_PERF=ON'],
+    'perf-npu-low': ['-DA733_A76_ADMITTED=ON', '-DSUNSTONE_A733_OS_CPU_CLOCK=ON', '-DSUNSTONE_A733_OS_PERF=ON',
+                     '-DSUNSTONE_A733_OS_PERF_BOOT=low', '-DSUNSTONE_A733_OS_NPU=ON'],
 }
 # OS-core checks and the central target each needs. The core central build is
 # configured without external applications.
@@ -364,8 +368,6 @@ def main(argv=None):
         prose, serial = dict(getattr(module, 'PROSE_CHECKS', {})), set(getattr(module, 'SERIAL_CHECKS', ()))
     except Exception:
         pass
-    if any('npu' in v for v in variants) and not (cache / NPU_CATALOGUE).is_file():
-        parser.error('the npu variant needs the NPU catalogue map ' + str(cache / NPU_CATALOGUE))
     selectors = compatibility_variables(source)
     paths = list(args.application)
     paths += [p for p in os.environ.get('SUNSTONE_EXTERNAL_APPLICATIONS', '').split(';') if p]
@@ -534,8 +536,6 @@ def main(argv=None):
         note(name + '-untracked-sha256: %s (%d files)' % app_state[3])
         if app_state[1]:
             (output / (name + '-status.txt')).write_text(app_state[1])
-    if any('npu' in v for v in variants):
-        note('npu-catalogue-sha256: ' + hashlib.sha256((cache / NPU_CATALOGUE).read_bytes()).hexdigest())
 
     def unchanged(when):
         """The recorded state must be complete and still describe the tree."""
@@ -665,8 +665,7 @@ def main(argv=None):
             flags = [value.replace('{source}', str(source)).replace('{cache}', str(cache)) for value in recipe['configure']]
             if run('img-' + image + '-configure', [cfg, source, directory, *core_options, '-DSUNSTONE_A733_OS=ON',
                                                    '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', *flags]):
-                if run('img-' + image + '-build', ['cmake', '--build', directory, '--target',
-                                                  *([recipe['target']] if isinstance(recipe['target'], str) else recipe['target']), '-j', '12']):
+                if run('img-' + image + '-build', ['cmake', '--build', directory, '--target', recipe['target'], '-j', '12']):
                     mark_built(directory)
             else:
                 skip('img-' + image + '-build', 'img-' + image + '-configure did not pass')

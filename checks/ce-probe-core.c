@@ -34,10 +34,9 @@ static int poll(void *v,uint8_t b[32])
     memcpy(b,f->block,32);return 1;
 }
 static void retain(void *v){((struct fake *)v)->retained++;}
-static unsigned detail(void *v){(void)v;return 0x1234;}
 static int run(struct a733_ce_probe *p,struct fake *f,unsigned limit)
 {
-    struct a733_ce_probe_ops ops={f,now,read,bring_up,alloc,configure,request,poll,retain,detail};
+    struct a733_ce_probe_ops ops={f,now,read,bring_up,alloc,configure,request,poll,retain};
     a733_ce_probe_init(p,&ops);
     for(unsigned i=0;i<limit;++i){f->now+=100;int r=a733_ce_probe_step(p);if(r)return r;}
     return 0;
@@ -66,15 +65,15 @@ int main(int argc,char **argv)
     /* Failure at each stage retains once and names the stage that did not complete. */
     for(int at=1;at<=4;++at){
         memset(&f,0,sizeof(f));f.now=1000;f.fail_at=at;
-        assert(run(&p,&f,40)<0&&f.retained==1&&p.record.failed&&(p.record.failure_stage&255)==(unsigned)at+1&&(p.record.failure_stage>>8)==0x1234);
+        assert(run(&p,&f,40)<0&&f.retained==1&&p.record.failed&&p.record.failure_stage==(unsigned)at+1);
         assert(a733_ce_probe_step(&p)<0&&f.retained==1); /* it stays failed and does not retain again */
     }
     memset(&f,0,sizeof(f));f.now=1000;f.fail_poll=1;
-    assert(run(&p,&f,40)<0&&f.retained==1&&(p.record.failure_stage&255)==A733_CE_PROBE_REQUESTED+1);
+    assert(run(&p,&f,40)<0&&f.retained==1&&p.record.failure_stage==A733_CE_PROBE_REQUESTED+1);
     /* A task that never completes ends at the 2 s bound. */
     memset(&f,0,sizeof(f));f.now=1000;f.poll_steps=1000000;
     int result=0;
-    for(unsigned i=0;i<10000&&!result;++i){if(!i){struct a733_ce_probe_ops ops={&f,now,read,bring_up,alloc,configure,request,poll,retain,detail};a733_ce_probe_init(&p,&ops);}
+    for(unsigned i=0;i<10000&&!result;++i){if(!i){struct a733_ce_probe_ops ops={&f,now,read,bring_up,alloc,configure,request,poll,retain};a733_ce_probe_init(&p,&ops);}
         f.now+=500000;result=a733_ce_probe_step(&p);}
     assert(result<0&&f.retained==1&&p.record.failed&&p.record.stage==A733_CE_PROBE_REQUESTED);
     puts("PASS CE probe state machine: found-enabled entry, vendor stage order, no random byte kept, failure at each stage, 2 s bound");

@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Pack models, inputs and references into runner input regions, and write the maps that name them.
 
-An image can take its NPU models, and the vectors of a graphs application, from RAM that something else filled instead of
-from linked bytes: a runner input region (this tool), or a large region that the large-memory loader reads from the card.
-The image names each model by address, length and SHA-256 and the runtime checks the digest at prepare; it does not care
-which source filled the memory. This tool makes the first source:
+The OS image links no graph: an application registers each compiled graph at run time (ss_npu_register_graph) from RAM that
+something else filled, such as a runner input region (this tool) or a large region that the large-memory loader reads from the
+card. The runtime admits a graph by its structure. The models region starts with an index the application reads: a 16-byte
+header (magic "NMDL", version 1, count) and then, for each graph in list order, its byte offset from the start of the region and
+its length (two little-endian u64). The graphs follow, each on a page. This tool makes the first source:
 
   npu-external-pack.py --artifacts ARTIFACTS.json --models LIST.json --models-address 0x44000000 --vectors-address 0x45000000 \\
       --output DIR
 
 It writes DIR/models.region and DIR/vectors.region (the files for the two input regions, which the manifest declares at
-those addresses with those sizes), DIR/models-map.json ({name: {address, bytes, sha256}}, for npu-catalogue.py --external
-and the cmake parameter SUNSTONE_OS_NPU_EXTERNAL_MODELS), DIR/vectors-map.json (for apps/npu-graphs/vectors.py --external)
+those addresses with those sizes), DIR/models-map.json ({name: {address, bytes, sha256}}), DIR/vectors-map.json (for apps/npu-graphs/vectors.py --external)
 and DIR/regions.json (the region names, addresses, sizes and digests for the manifest). Every item starts on 4096 bytes.
 """
 import argparse
@@ -36,12 +36,15 @@ def align(n):
     return -(-n // PAGE) * PAGE
 
 
-models, vectors, model_map, vector_map = bytearray(), bytearray(), {}, {}
+index_bytes = align(16 + 16 * len(names))
+models, vectors, model_map, vector_map = bytearray(index_bytes), bytearray(), {}, {}
+index = []
 for name in names:
     files = paths[name]
     blob = Path(files['model']).read_bytes()
     models += bytes(align(len(models)) - len(models))
     model_map[name] = {'address': a.models_address + len(models), 'bytes': len(blob), 'sha256': hashlib.sha256(blob).hexdigest()}
+    index.append((len(models), len(blob)))
     models += blob
     entry = {}
     for kind, key in (('input', 'inputs'), ('reference', 'references')):
@@ -50,6 +53,9 @@ for name in names:
         entry[kind] = {'address': a.vectors_address + len(vectors), 'bytes': len(data)}
         vectors += data
     vector_map[name] = entry
+models[:16] = b'NMDL' + (1).to_bytes(4, 'little') + len(names).to_bytes(8, 'little')
+for i, (offset, size) in enumerate(index):
+    models[16 + 16 * i:32 + 16 * i] = offset.to_bytes(8, 'little') + size.to_bytes(8, 'little')
 models += bytes(align(len(models)) - len(models))
 vectors += bytes(align(len(vectors)) - len(vectors))
 (a.output / 'models.region').write_bytes(models)

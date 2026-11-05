@@ -1,9 +1,6 @@
 /* Optional OS catalogue runtime. The board owns every power/clock provider;
  * this consumer owns one fixed RAM reservation, startup row and client slot. */
 #include "os.h"
-#ifdef SUNSTONE_A733_OS_PERF
-#include "perf.h"
-#endif
 #include "npu.h"
 #include "../board/application.h"
 #include "a733_mapping_check.h"
@@ -331,7 +328,7 @@ static void perf_serve(void)
         if(r<0){(void)FAIL_REQUEST(NPU_SERVICE_STATUS,UINT32_MAX,0,NULL,1,r);vTaskSuspend(NULL);}
     }
 }
-#define STOPPED_WAIT() do{if(os_perf_enabled())perf_serve();else vTaskSuspend(NULL);}while(0)
+#define STOPPED_WAIT() perf_serve()
 #else
 #define STOPPED_WAIT() vTaskSuspend(NULL)
 #endif
@@ -594,12 +591,13 @@ static void guard_check(void)
  * fit; os_npu_start then refuses (the application is not stopped by an NPU it cannot use). */
 static int unprepared(uint32_t detail,const void *here){board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),detail,here);return 1;}
 #define UNPREPARED(detail) unprepared((detail),SUNSTONE_CRUMB_HERE())
+const unsigned os_npu_client_model=0;
 int os_npu_pool_prepare(struct umem *led,uint16_t owner)
 {
     /* Not granted: no reservation, published range or guard. */
     if(!os_granted(OS_GRANT_NPU))return 1;
     const struct os_session *s=os_session_admitted();
-    if(!s||!os_npu_model_count||!led||npu.prepared||npu.attempted)return 1;
+    if(!s||!led||npu.prepared||npu.attempted)return 1;
     const struct os_npu_session *g=&s->npu;
     static const struct a733_mapping_rule wb={A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
     /* The application's declaration sets the slots; the reservation covers them all, so that nothing is allocated on
@@ -607,14 +605,14 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
     if(os_npu_declaration_admitted(g)!=NPU_DECLARATION_OK)return 1;
     const struct npu_declaration declared=os_npu_declaration_of(g);
     const unsigned slots=declared.slots;
-    /* Graphs beyond the linked ones are loaded at run time, within the bounds the session declares. */
+    /* The image links no graph: the application registers every graph at run time (ss_npu_register_graph), within the bounds
+     * the session declares. A declaration of graphs without those bounds cannot be served. */
     struct npu_runtime_bounds bounds={0};
-    if(declared.graph_bytes&&declared.tensor_bytes&&declared.graphs>os_npu_model_count)
-        bounds=(struct npu_runtime_bounds){.capacity=declared.graphs-os_npu_model_count,.graph_bytes=declared.graph_bytes,.tensor_bytes=declared.tensor_bytes};
+    if(!declared.graph_bytes||!declared.tensor_bytes)return UNPREPARED(0x808);
+    bounds=(struct npu_runtime_bounds){.capacity=declared.graphs,.graph_bytes=declared.graph_bytes,.tensor_bytes=declared.tensor_bytes};
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
     /* A queue image keeps graph i resident in slot i: each slot is sized by its own graph, not by the largest. The queue's
      * tables (handles, tensors, edges) are reserved with the rest, from the declared links. */
-    if(!bounds.capacity&&slots==os_npu_model_count)bounds.per_graph=1;
     bounds.queue=1;bounds.queue_links=declared.links;bounds.queue_image_links=(unsigned)ss_npu_queue_edges.count;
 #endif
     /* Reserve the largest extent the NPU can address inside one 4 GiB window (its tables share one physical window and its
@@ -641,7 +639,7 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
         .access=UMEM_PROT_READ|UMEM_PROT_WRITE,.device_mask=UMEM_DEV_NPU,.window=UINT64_C(1)<<32};
     if(umem_alloc(led,&take,&npu.pool)!=UMEM_OK)return UNPREPARED(requested?0x812:0x803);
     if(requested&&!guard_reserve(led,base,bytes))return UNPREPARED(0x814);
-    struct npu_runtime_config config={.models=os_npu_models,.count=os_npu_model_count,.slots=slots,.bounds=bounds,.cpu=(uintptr_t)base,
+    struct npu_runtime_config config={.models=NULL,.count=0,.slots=slots,.bounds=bounds,.cpu=(uintptr_t)base,
         .physical=base,.bytes=bytes,.register_cpu=0x03600000,
         .register_physical=0x03600000,.fatal=fatal,.meta=meta_init(led)};
     if(!npu_runtime_prepare(&npu.runtime,&config)){
@@ -693,9 +691,9 @@ int os_npu_start(void)
     const struct a733_npu_startup_providers p={&providers.shared.counter,&providers.shared.clocks,
         &providers.shared.locks,&providers.shared.gpu,&providers.shared.rails,&providers.domains};
     if(!a733_npu_startup_init(&npu.startup,&startup,&p,NULL,NULL))return REFUSE();
-#ifdef SUNSTONE_A733_OS_PERF
-    /* The low boot mode of the grant's performance service: the NPU starts at its 492 MHz point. */
-    if(os_perf_enabled()&&os_perf_boot_mode()==2&&!a733_npu_startup_rate(&npu.startup,492))return REFUSE();
+#if defined(SUNSTONE_A733_OS_PERF) && OS_PERF_BOOT_MODE==2
+    /* The low boot mode: the NPU starts at its 492 MHz point. */
+    if(!a733_npu_startup_rate(&npu.startup,492))return REFUSE();
 #endif
     creating=1;
     npu.bootstrap=xTaskCreateStaticAffinitySet(bootstrap,"os-npu-boot",STACK,NULL,4,npu.stacks[0],&npu.tasks[0],2);

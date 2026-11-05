@@ -139,6 +139,10 @@ class Native(owners.Model):
         self.put32(self.rt+self.rf['prepared'], 1)
         self.put32(self.rt+self.rf['bound'], 1)
         self.put32(self.rt+self.rf['count'], 1)
+        # The image links no graph; the model holds one registered graph. The SDK back end describes it from the runtime's
+        # plan (sdk_info), which this model keeps empty: the application's request is compared with the tensor windows.
+        self.put64(self.rt+self.rf['plans'], POOL+0x3f0000)
+        self.put64(layout.address('os_npu_runtime_for_sdk', 'apps/os/npu-client.c'), self.rt)
         self.put32(self.rt+self.rf['slots'], 1)
         self.put64(self.rt+self.rf['parent_cpu'], POOL)
         self.put64(self.rt+self.rf['parent_bytes'], POOL_BYTES)

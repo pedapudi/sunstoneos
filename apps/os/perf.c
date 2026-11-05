@@ -16,13 +16,10 @@
 #ifdef SUNSTONE_A733_OS_NPU
 #include "npu.h"
 #endif
-/* The session's grant decides: perf with both clusters, boot mode 1 (high) or 2 (low) (a733_cpu_clock_grant_load). */
-int os_perf_enabled(void)
-{
-    const struct os_session *s=os_session_admitted();
-    return s&&(s->granted&OS_GRANT_CPU_CLOCK)&&s->cpu_clock.perf!=0;
-}
-unsigned os_perf_boot_mode(void){return os_perf_enabled()?os_session_admitted()->cpu_clock.perf:0;}
+#ifndef OS_PERF_BOOT_MODE
+#error OS_PERF_BOOT_MODE comes from cmake/a733-os.cmake
+#endif
+__attribute__((used,retain)) const uint32_t os_perf_boot_mode=OS_PERF_BOOT_MODE;
 __attribute__((used,retain)) const uint32_t os_perf_usb_operation=OS_PERF_OP;
 
 #define CCU UINT32_C(0x02002000)
@@ -271,7 +268,7 @@ static void publish(void)
     atomic_thread_fence(memory_order_release);
     const struct os_perf_report head={OS_PERF_REPORT_MAGIC,1,OS_PERF_REPORT_BYTES,0,0,0,0,0,
         perf.accepted,perf.completed,perf.engine.phase!=0 || perf.phase!=SERVE,r->command,r->result,r->reason,
-        r->failed_block,os_perf_boot_mode(),r->mode,perf.engine.entry ? perf.engine.entry->name : 0u,
+        r->failed_block,OS_PERF_BOOT_MODE,r->mode,perf.engine.entry ? perf.engine.entry->name : 0u,
         perf.cpu->changes,r->owned,r->read_ok,perf.stopped,{{0}},r->blocks,r->mode_requested,
         (uint32_t)(r->finished_us>r->started_us ? r->finished_us-r->started_us : 0),0};
     uint32_t words[OS_PERF_REPORT_BYTES/4];
@@ -298,7 +295,7 @@ int os_perf_step(struct a733_cpu_clock *cpu,const struct a733_thermal_policy *po
         perf.thermal_level=a733_thermal_policy_level(policy);
         unsigned owned=cpu_owned();
 #ifdef SUNSTONE_A733_OS_NPU
-        if(os_granted(OS_GRANT_NPU))owned|=A733_PERF_BIT(A733_PERF_NPU);
+        owned|=A733_PERF_BIT(A733_PERF_NPU);
 #endif
 #ifdef SUNSTONE_A733_OS_GPU
         owned|=A733_PERF_BIT(A733_PERF_GPU);
@@ -335,7 +332,7 @@ int os_perf_step(struct a733_cpu_clock *cpu,const struct a733_thermal_policy *po
             else return 0;
         } else if(perf.phase==BOOT_READ) {
             perf.phase=BOOT_SWITCH;
-            (void)a733_perf_request(&perf.engine,A733_PERF_COMMAND_SWITCH,(enum a733_perf_mode)os_perf_boot_mode(),
+            (void)a733_perf_request(&perf.engine,A733_PERF_COMMAND_SWITCH,(enum a733_perf_mode)OS_PERF_BOOT_MODE,
                 cpu_owned());
             changed=1;
         } else if(perf.phase==BOOT_SWITCH) {

@@ -62,9 +62,7 @@ def main():
         objects.append(obj)
     elf = out / 'region-el0.elf'
     run([wrapper, '-nostdlib', '-static', '-T', ROOT / 'checks/region-el0.ld', *objects, '-o', elf], out / 'link.log')
-    # Guest time follows the instructions executed, so no guest wait depends on how the host schedules QEMU.
-    result = subprocess.run([str(args.qemu), '-machine', 'virt', '-accel', 'tcg,thread=single', '-icount', 'shift=0,sleep=off',
-                             '-cpu', 'max', '-m', '4G', '-nographic', '-semihosting',
+    result = subprocess.run([str(args.qemu), '-machine', 'virt', '-cpu', 'max', '-m', '4G', '-nographic', '-semihosting',
                              '-kernel', str(elf)], capture_output=True, text=True, timeout=300)
     (out / 'qemu.log').write_text(result.stdout + result.stderr)
     print(result.stdout, end='')

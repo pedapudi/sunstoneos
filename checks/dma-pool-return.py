@@ -115,7 +115,7 @@ set_target_properties(dma-pool-return PROPERTIES SUFFIX ".elf" LINK_DEPENDS "{li
             binary = out / (case + '.elf')
             shutil.copy2(build / 'dma-pool-return.elf', binary)
             output = run(case + '-execute', [str(args.qemu.resolve()), '-machine', 'virt,gic-version=3',
-                '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a55', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
+                '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a53', '-smp', '2', '-m', '128M', '-nographic', '-monitor', 'none',
                 '-semihosting-config', 'enable=on,target=native', '-kernel', str(binary)], timeout=30)
             if 'PASS DMA pool return:' not in output or 'FAIL ' in output:
                 raise RuntimeError(f'{case} missed terminal result: {output}')

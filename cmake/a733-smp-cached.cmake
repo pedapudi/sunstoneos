@@ -34,11 +34,6 @@ set(a733_sources
 # (drivers/dram/a733_dram_decode_probe.c). Without it the table builder keeps its
 # refusal, and no image maps DRAM above the boot image.
 option(SUNSTONE_A733_DRAM_DECODE_PROBE "Cached images map the upper DRAM after the address-test decode check passes" OFF)
-# The OS image always has the unified memory ledger (docs/designs/unified-memory.md): the ledger manages the DRAM that
-# this check maps, so the OS image links the check whatever the cache says. The option is for other cached images.
-if(SUNSTONE_A733_OS)
-  set(SUNSTONE_A733_DRAM_DECODE_PROBE ON CACHE BOOL "Cached images map the upper DRAM after the address-test decode check passes" FORCE)
-endif()
 if(SUNSTONE_A733_DRAM_DECODE_PROBE)
   list(APPEND a733_sources drivers/dram/a733_dram_decode_probe.c)
 endif()

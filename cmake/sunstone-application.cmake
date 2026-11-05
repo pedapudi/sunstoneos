@@ -25,7 +25,5 @@ function(add_sunstone_application name)
     SUNSTONE_APPLICATION_LIBRARIES "${APP_LIBRARIES}"
     SUNSTONE_APPLICATION_INPUTS "${manifest};${APP_INPUTS}")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${manifest}" "${SUNSTONE_SOURCE_ROOT}/tools/sunstone-manifest.py"
-    # The manifest tool reads the device bits from the SDK header.
-    "${SUNSTONE_SOURCE_ROOT}/include/sunstone_app.h")
+    "${manifest}" "${SUNSTONE_SOURCE_ROOT}/tools/sunstone-manifest.py")
 endfunction()

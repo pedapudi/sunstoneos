@@ -143,7 +143,6 @@ struct a733_ce {
     uint32_t error_ns,error_secure,status_ns,status_secure;
     uint64_t hash_total_bits;
     unsigned initialized,stage,fault,held,health_programmed;
-    unsigned fail_line; /* The source line of the first failure in a733_ce.c; zero while healthy. */
     unsigned operation,task_configured,hash_bytes,hash_continue;
     unsigned cipher_bytes,cipher_decrypt,key_dirty,key_clean_complete;
     unsigned hash_method,result_bytes,cipher_control;

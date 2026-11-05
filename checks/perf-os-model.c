@@ -22,13 +22,12 @@
 #define a733_thermal_policy_level fake_policy_level
 #define a733_thermal_policy_seen fake_policy_seen
 #define a733_counter_clock_now fake_counter_now
+#define OS_PERF_BOOT_MODE 1
 #include "perf.c"
 #include <assert.h>
 #include <stdio.h>
 
 struct board_shim board={{UINT64_C(0x1122334455667788),7}};
-/* The session grants the CPU clock with the performance service at its high boot mode, and the NPU. */
-struct os_session perf_model_session={.cpu_clock={.perf=1},.granted=OS_GRANT_CPU_CLOCK|OS_GRANT_NPU};
 struct providers_shim providers;
 enum { L, B, D, G, N };
 static struct {

@@ -67,19 +67,16 @@ struct a733_cpu_clock_grant {
                                   * LITTLE also admits the DSU, which shares DCDC5. */
     uint32_t max_mhz[2];         /* Highest admitted operating point per cluster. */
     uint32_t changes;            /* Requested transitions admitted. */
-    uint32_t perf;               /* The performance-mode service: 0 none, 1 high boot mode, 2 low (needs both clusters). */
 };
 struct a733_cpu_clock_config { uint64_t owner; struct a733_cpu_clock_grant grant; };
 
 /* Little-endian grant record that a sealed OS session carries. A record that
  * grants nothing has zero epoch, generation, clusters, maxima, changes and
- * perf. A grant names the carrying board session's epoch and generation (a zero
- * epoch is the unassigned form of a grant written to a card, which the OS binds
- * to the board's epoch), admitted clusters, a table point as each admitted
- * cluster's maximum (zero for the others), 1 to 64 changes, and the performance
- * service (0 none, 1 or 2 its boot mode, which needs both clusters). The 28
- * bytes after perf are zero. The user's approval is not in the record: the runner
- * records it in its evidence when it admits the session. */
+ * approval. A grant names the carrying board session's epoch and generation,
+ * admitted clusters, a table point as each admitted cluster's maximum (zero
+ * for the others), 1 to 64 changes and the SHA-256 of the reviewed record of
+ * the user's approval for those changes. The hash identifies that record; it
+ * does not establish the approval. */
 #define A733_CPU_CLOCK_GRANT_MAGIC UINT64_C(0x4153373343505531)
 #define A733_CPU_CLOCK_GRANT_VERSION 1u
 #define A733_CPU_CLOCK_GRANT_CHANGES 64u
@@ -88,8 +85,7 @@ struct a733_cpu_clock_grant_record {
     uint64_t owner;                    /* Clock and rail lease owner; nonzero. */
     uint64_t epoch,generation;         /* The carrying board session. */
     uint32_t clusters,max_mhz[2],changes;
-    uint32_t perf;
-    uint8_t reserved[28];              /* Zero. */
+    uint8_t approval[32];
 };
 _Static_assert(sizeof(struct a733_cpu_clock_grant_record)==96,"CPU clock grant record geometry");
 /* Pure check of a record against the carrying session's nonzero epoch and

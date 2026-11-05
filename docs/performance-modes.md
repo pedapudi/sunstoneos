@@ -32,22 +32,27 @@ gives the source of every point.
 
 ## Images that have the service
 
-Every OS image has the service, and the session grants it
-([the one OS image design](designs/one-os-image-cpu.md)). The session's CPU
-clock grant names both clusters at the bin's high points, and its `perf` word
-gives the boot mode: 1 for high, 2 for low. A grant without `perf` does not
-start the service. The application's manifest must declare `cpu.clock_grants`
-and `cpu.perf`; admission refuses a grant that asks for more. The session
-builder writes such a grant:
+The service is a build option of either integrated OS lifetime with the
+Cortex-A76 cores admitted and CPU clock grants. The recorded eight-worker
+composition supports CPU, GPU and NPU control together:
 
 ```sh
-tools/session.py build ... --clock-grant --perf high
+cmake ... -DSUNSTONE_A733_OS=ON -DA733_A76_ADMITTED=ON -DSUNSTONE_A733_OS_CPU_CLOCK=ON \
+  -DSUNSTONE_A733_OS_PERF=ON [-DSUNSTONE_A733_OS_PERF_BOOT=low] \
+  [-DSUNSTONE_A733_OS_RESIDENT=ON] [-DSUNSTONE_A733_OS_GPU_LINEAR=ON ...] \
+  [-DSUNSTONE_A733_OS_NPU=ON ...]
 ```
 
-The record carries no approval. The board runner records the approval when it
-admits the session, and a point outside `tools/cpu-reviewed-points.json`
-needs `--approved-by coordinator`. Resident card preparation binds the grant to
-the cold policy's runtime performance section, including actual linked points,
+`SUNSTONE_A733_OS_PERF_BOOT` sets the mode the image starts in, `high` unless
+you give `low`. The build's image manifest, `os-image/link-check.json`,
+records it as `perf_boot_mode`, the service as `perf_modes`, and USB operation
+8 as `perf_operation`. The host refuses older opcode-7 performance images.
+Images built without the option do not have the service.
+
+The session needs a CPU grant that names both clusters at the bin's high
+points. Supervised preparation binds it to an approval record of schema
+`a733-os-perf-modes-approval-v1`. Resident card preparation binds it to the
+cold policy's runtime performance section, including actual linked points,
 boot mode, finite change budget, GPU rail authority and combined clock evidence.
 See [the OS service](os-image.md#performance-mode-service-usb0-operation-8)
 and [resident authority](designs/resident-performance.md). Resident CPU grants

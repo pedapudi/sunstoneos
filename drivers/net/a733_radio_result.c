@@ -135,19 +135,15 @@ void a733_radio_report_scan_done(struct a733_radio_report *r,unsigned reported)
     if(reported>r->head.aps_reported)r->head.aps_reported=reported;
     if(rank(r->head.stage)<rank(A733_RADIO_STAGE_SCANNED))r->head.stage=A733_RADIO_STAGE_SCANNED;
 }
-void a733_radio_report_association(struct a733_radio_report *r,const struct a733_radio_assoc *a)
-{r->assoc=*a;r->has_assoc=1;}
 size_t a733_radio_report_bytes(const struct a733_radio_report *r)
-{return sizeof(r->head)+r->ap_count*sizeof(struct a733_radio_result_ap)+(r->has_assoc?sizeof(r->assoc):0);}
+{return sizeof(r->head)+r->ap_count*sizeof(struct a733_radio_result_ap);}
 size_t a733_radio_report_encode(const struct a733_radio_report *r,void *out,size_t capacity)
 {
     size_t bytes=a733_radio_report_bytes(r);
     if(!out||capacity<bytes)return 0;
     struct a733_radio_result_head head=r->head;
     head.bytes=(uint32_t)bytes;head.ap_count=(uint32_t)r->ap_count;
-    if(r->has_assoc)head.flags|=512u;
     memcpy(out,&head,sizeof(head));
     if(r->ap_count)memcpy((uint8_t *)out+sizeof(head),r->aps,r->ap_count*sizeof(*r->aps));
-    if(r->has_assoc)memcpy((uint8_t *)out+sizeof(head)+r->ap_count*sizeof(*r->aps),&r->assoc,sizeof(r->assoc));
     return bytes;
 }

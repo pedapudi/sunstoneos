@@ -24,8 +24,6 @@ it names (followed transitively), names that path or one of its parent
 directories, or when the path is reached through #include from a named source.
 Changed paths are relative to the repository root; a directory selects every
 check that covers a path below it.
-A check whose GATE_RUNS name an image also covers the CMake files that the
-gate's configure step for that image reads (configure_inputs).
 Paths assembled from separate string segments are not found, so an empty
 selection is not proof that no check covers a change.
 CHECK_INPUTS supplies supplementary literal repository paths. The hook fixture
@@ -101,14 +99,6 @@ USB = re.compile(r"""^\s*(?:import|from)\s+usb\b|usb-access|usb_guard|/dev/bus/u
                  r"""tools/(?:run|usb|prepare)-|sunstoneos-a733-""", re.M)
 PATH_TOKEN = re.compile(r"""[A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*""")
 INCLUDE = re.compile(r"""^\s*#\s*include\s+"([^"]+)\"""", re.M)
-# A gate run that names an image ({elf:X}, {build:X}, {session:X} or {bundle:X}) makes the gate configure the top-level
-# project for that image, so the CMake files the configure step reads are inputs of the check.
-IMAGE_RUN = re.compile(r"""\{(?:elf|build|session|bundle):""")
-CMAKE_READ = re.compile(r"""^[ \t]*(include|add_subdirectory)[ \t]*\([ \t]*"?([^\s")]+)""", re.M | re.I)
-# The files a configure starts from: the project and the toolchain file that ~/.cache/sunstoneos/bin/cfg.sh passes.
-CONFIGURE_ROOTS = ('CMakeLists.txt', 'cmake/aarch64-clang.cmake')
-# Variables that name the checkout in include() and add_subdirectory() arguments.
-SOURCE_ROOT_VARIABLES = ('SUNSTONE_SOURCE_ROOT', 'CMAKE_SOURCE_DIR', 'PROJECT_SOURCE_DIR', 'os_root', 'gd_root', 'network_root')
 # Cache areas that hold no evidence or build output: toolchains, pinned sources, the host venv.
 NEUTRAL_AREAS = {'host', 'sources', 'venv'}
 # Checks the text scan would call pure-host but that cannot run without arguments.
@@ -330,57 +320,8 @@ def named(path, includes_only, revision=None):
     return frozenset(found)
 
 
-def builds_image(path, revision=None):
-    """Whether one of the check's GATE_RUNS names an image that the gate configures and builds."""
-    text = revision.text(path) if revision else path.read_text(errors='replace')
-    runs = literals(ast.parse(text), 'GATE_RUNS').get('GATE_RUNS', ())
-    return any(IMAGE_RUN.search(argument) for run in runs for argument in run)
-
-
-@functools.lru_cache(maxsize=None)
-def configure_inputs(revision=None):
-    """The CMake files a configure of the top-level project can read: the configure roots and every file they reach
-    through include() and add_subdirectory(), under any option. An argument that still holds an unknown variable after
-    the checkout and directory variables are replaced is an application root that a configure option selects
-    (-DSUNSTONE_APPLICATION_X_ROOT=): it stands for that path below every in-repository application, apps/*/. An
-    external application's files are outside the checkout."""
-    files = revision.files if revision else {p for p in ROOT.joinpath('apps').glob('*/**/*') if p.is_file()}
-    found = set()
-    stack = [(ROOT / name, ROOT) for name in CONFIGURE_ROOTS]
-    while stack:
-        path, source_dir = stack.pop()
-        exists = path in revision.files if revision else path.is_file()
-        if path in found or not exists:
-            continue
-        found.add(path)
-        text = revision.text(path) if revision else path.read_text(errors='replace')
-        for command, argument in CMAKE_READ.findall(text):
-            value = argument.replace('${CMAKE_CURRENT_LIST_DIR}', str(path.parent))
-            value = value.replace('${CMAKE_CURRENT_SOURCE_DIR}', str(source_dir))
-            for name in SOURCE_ROOT_VARIABLES:
-                value = value.replace('${' + name + '}', str(ROOT))
-            if '${' in value:
-                suffix = value.rsplit('}', 1)[1].lstrip('/')
-                if command.lower() == 'include' and suffix:
-                    stack.extend((f, source_dir) for f in files if f.parent.parent.parent == ROOT / 'apps'
-                                 and f.relative_to(ROOT / 'apps').as_posix().split('/', 1)[1] == suffix)
-                continue
-            if command.lower() == 'include' and '/' not in value and not value.endswith('.cmake'):
-                continue                                   # a module from CMake's own path
-            target = Path(os.path.normpath(source_dir / value))
-            if not target.is_relative_to(ROOT):
-                continue
-            if command.lower() == 'add_subdirectory':
-                stack.append((target / 'CMakeLists.txt', target))
-            else:
-                stack.append((target, source_dir))
-    return frozenset(found)
-
-
 def covered(path, revision=None):
-    """Paths named by a check, followed through the checks/ files it names and their #include closure, plus the
-    CMake files of the configure step when the check's gate runs build an image."""
-    top = path
+    """Paths named by a check, followed through the checks/ files it names and their #include closure."""
     seen, stack = set(), [path]
     while stack:
         current = stack.pop()
@@ -395,8 +336,6 @@ def covered(path, revision=None):
                 continue
         if exists and current.suffix in ('.py', '.c', '.cc', '.h', '.S', '.inc'):
             stack.extend(named(current, current.parent != ROOT / 'checks', revision))
-    if top.suffix == '.py' and (top in revision.files if revision else top.is_file()) and builds_image(top, revision):
-        seen.update(configure_inputs(revision))
     return {p.relative_to(ROOT).as_posix() for p in seen}
 
 

@@ -80,44 +80,13 @@ enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_sessi
  if(app.platform.refused)app.platform.fault=1;
  if(abort_model&&!app.platform.aborting&&!app.platform.abort_done){app.platform.aborting=1;app.platform.deadline=time_us+2000000;}
  return A733_SESSION_RETAINED;}
-/* The association stage's collaborators: the stored credential, the CE reservoir and the supplicant's checks. */
-static struct aic8800_wifi_target assoc_target;
-static struct aic8800_supplicant_config assoc_security;
-static unsigned entropy_begins,entropy_steps,entropy_is_ready,entropy_is_failed;
-static const uint8_t cred_ssid[14]={'w','i','p','e','-','p','r','o','b','e','-','n','e','t'},
-    cred_pmk[32]={0x31,0x38,0x3f,0x46,0x4d,0x54,0x5b,0x62,0x69,0x70,0x77,0x7e,0x85,0x8c,0x93,0x9a,
-    0xa1,0xa8,0xaf,0xb6,0xbd,0xc4,0xcb,0xd2,0xd9,0xe0,0xe7,0xee,0xf5,0xfc,0x03,0x0a};
-static unsigned cred_present=1;
-void os_ce_entropy_begin(void){++entropy_begins;}
-void os_ce_entropy_step(void){++entropy_steps;}
-int os_ce_entropy_ready(void){return entropy_is_ready;}
-int os_ce_entropy_failed(void){return entropy_is_failed;}
-int os_ce_entropy_bytes(void *c,uint8_t *o,size_t n){(void)c;(void)o;(void)n;return 0;}
-int ss_wifi_credential(const uint8_t **ssid,size_t *n,const uint8_t **pmk,const uint8_t **pw,size_t *pn)
-{
-    *ssid=NULL;*n=0;*pmk=NULL;*pw=NULL;*pn=0;
-    if(!cred_present)return -2;
-    *ssid=cred_ssid;*n=sizeof(cred_ssid);*pmk=cred_pmk;return 0;
-}
-/* Valid: a nonzero entropy callback and records, and an RSN element whose first body byte is the version (1). */
-int aic8800_supplicant_config_valid(const struct aic8800_supplicant_config *c)
-{return c->entropy&&c->entropy_record&&c->beacon_record&&c->ap_rsn_bytes>=2&&c->ap_rsn[0]==48&&c->ap_rsn[2]==1;}
-void aic8800_security_zero(void *p,size_t n){memset(p,0,n);}
 int a733_radio_session_recover(struct a733_radio_session *s,const struct aic8800_wifi_target *t,
     const struct aic8800_supplicant_config *c,uint64_t reason,uint64_t deadline)
 {(void)s;(void)t;(void)c;(void)reason;(void)deadline;return 0;}
 int a733_radio_session_connect(struct a733_radio_session *s,const struct aic8800_wifi_target *t,uint64_t deadline)
-{if(app.config.associate){(void)deadline;assoc_target=*t;++connects;s->wifi.link=AIC8800_WIFI_CONNECTING;
- /* What the management layer and transport keep: the stored target, the connect command and the queued records. */
- s->wifi.target=*t;memcpy(s->wifi.request+20,t->ssid,t->ssid_bytes);memcpy(s->transport.tx+7,t->ssid,t->ssid_bytes);
- memcpy((uint8_t *)&s->dispatcher+16,t->ssid,t->ssid_bytes);memcpy(s->wifi.station_payload+3,t->ssid,t->ssid_bytes);return 1;}
- assert(s==&app.session&&t==&app.config.target&&deadline==1100);++connects;s->wifi.link=AIC8800_WIFI_CONNECTING;return 1;}
+{assert(s==&app.session&&t==&app.config.target&&deadline==1100);++connects;s->wifi.link=AIC8800_WIFI_CONNECTING;return 1;}
 int a733_radio_session_start_security(struct a733_radio_session *s,const struct aic8800_supplicant_config *c,uint64_t d)
-{if(app.config.associate){(void)d;assoc_security=*c;++security_calls;s->wifi.link=AIC8800_WIFI_CONNECTING;
- /* The supplicant keeps the configuration and derives keys into its slots; the transport queues key records. */
- s->supplicant.config=*c;memcpy(s->supplicant.small[0]+40,c->pmk,32);memcpy(s->supplicant.large[0]+100,c->pmk,32);
- memcpy(s->transport.rx+9,c->pmk,32);memcpy(s->security.keys,c->pmk,32);return 1;}
- assert(s==&app.session&&c->entropy==a733_radio_entropy_bytes&&c->entropy_context==&app.entropy&&d==2100);
+{assert(s==&app.session&&c->entropy==a733_radio_entropy_bytes&&c->entropy_context==&app.entropy&&d==2100);
  ++security_calls;return boundary;}
 int a733_radio_session_start_network(struct a733_radio_session *s,const struct sunstone_net_config *c)
 {assert(s==&app.session&&c->network.transport==&s->transport&&c->network.dispatcher==&s->dispatcher&&
@@ -144,18 +113,8 @@ int a733_radio_session_take_event(struct a733_radio_session *s,struct aic8800_di
     unsigned n=scan_events_left--; /* 3, 2, 1: the third sighting repeats the first access point. */
     memset(e,0,sizeof(*e));e->kind=AIC8800_DISPATCH_SCAN;
     e->metadata.scan.frequency=n==2?5180:2437;e->metadata.scan.rssi_dbm=(int8_t)(-40-(int)n);
-    e->metadata.scan.has_ssid=1;
-    if(app.config.associate&&n!=2){e->metadata.scan.ssid_bytes=sizeof(cred_ssid);memcpy(e->metadata.scan.ssid,cred_ssid,sizeof(cred_ssid));}
-    else{e->metadata.scan.ssid_bytes=3;memcpy(e->metadata.scan.ssid,n==2?"b-5":"a-2",3);}
+    e->metadata.scan.has_ssid=1;e->metadata.scan.ssid_bytes=3;memcpy(e->metadata.scan.ssid,n==2?"b-5":"a-2",3);
     memcpy(e->metadata.scan.bssid,n==2?"\x02\x00\x00\x00\x00\x02":"\x02\x00\x00\x00\x00\x01",6);
-    if(app.config.associate){
-        /* A beacon: 36 bytes of header and fixed fields, an SSID element, then the RSN element (version 1). */
-        static uint8_t frame[96];
-        memset(frame,0,sizeof(frame));frame[36]=0;frame[37]=(uint8_t)e->metadata.scan.ssid_bytes;memcpy(frame+38,e->metadata.scan.ssid,e->metadata.scan.ssid_bytes);
-        uint8_t *rsn=frame+38+e->metadata.scan.ssid_bytes;
-        rsn[0]=48;rsn[1]=4;rsn[2]=1;rsn[3]=0;rsn[4]=0x0f;rsn[5]=0xac;
-        e->metadata.scan.frame=frame;e->metadata.scan.frame_bytes=(uint16_t)(38+e->metadata.scan.ssid_bytes+6);
-    }
     return 1;
 }
 /* A bump arena: the freestanding image headers used by sibling checks provide no malloc. */
@@ -355,115 +314,6 @@ int main(void)
         assert(board_radio_poll(&app)==BOARD_RADIO_DOWN&&app.stage==DOWN);
         assert(board_radio_poll(&app)==BOARD_RADIO_DOWN&&session_calls==polls_before&&platform_steps>=3);
         assert(!board_radio_shutdown(&app,5000)); /* Once. */
-    }
-    /* The association stage: scan, pick the credential's SSID with a usable RSN element, wait for the CE entropy, join on the
-     * scan channel, start the four-way handshake and stop at SCANNED when the supplicant is authorized. The record names no
-     * SSID and no key byte. */
-    {
-        a733_radio_report_release(&app.report);
-        memset(&app,0,sizeof(app));scan_events_left=0;scan_finished=0;report_used=0;scheduler=taskSCHEDULER_NOT_STARTED;
-        atomic_store(&recovery_state,1);
-        unsigned begins=entropy_begins,secs=security_calls,conns=connects,nets=network_calls;
-        struct board_radio_config assoc=scan_only;assoc.associate=1;assoc.connect_timeout_us=500;assoc.security_timeout_us=700;
-        assoc.session.wifi.channel_count=2;assoc.session.wifi.channels[0].frequency=2412;assoc.session.wifi.channels[1].frequency=2437;
-        assoc.security=(struct aic8800_supplicant_config){.entropy=os_ce_entropy_bytes,.entropy_record=9,.beacon_record=9,
-            .ticks_per_second=1000000,.command_timeout=1000};
-        assoc.enumeration_only=1;assert(!board_radio_init(&app,&assoc)&&!app.self);assoc.enumeration_only=0;
-        assoc.connect_timeout_us=0;assert(!board_radio_init(&app,&assoc)&&!app.self);assoc.connect_timeout_us=500;
-        assert(board_radio_init(&app,&assoc));scheduler=taskSCHEDULER_RUNNING;time_us=100;app.session.dispatcher.initialized=1;
-        entropy_is_ready=0;entropy_is_failed=0;
-        assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==SCANNING&&entropy_begins==begins+1);
-        scan_events_left=3;
-        assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.assoc.candidates==2&&app.cand_found&&app.cand_frequency==2437);
-        scan_finished=1;
-        assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==STARTING&&app.assoc.stage==1);
-        assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==STARTING&&connects==conns&&entropy_begins==begins+1);
-        entropy_is_ready=1;
-        assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==CONNECTING&&connects==conns+1&&app.assoc.stage==3);
-        assert(assoc_target.channel_index==1&&assoc_target.ssid_bytes==sizeof(cred_ssid)&&
-            !memcmp(assoc_target.ssid,cred_ssid,sizeof(cred_ssid))&&
-            !memcmp(assoc_target.bssid,"\x02\x00\x00\x00\x00\x01",6)&&assoc_target.security==AIC8800_WIFI_WPA2_PSK_CCMP&&
-            assoc_target.connection_authority&&assoc_target.beacon_evidence==assoc_target.connection_authority);
-        app.session.wifi.link=AIC8800_WIFI_SECURITY_PENDING;
-        assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==SECURING&&security_calls==secs+1&&app.assoc.stage==5);
-        assert(!memcmp(assoc_security.pmk,cred_pmk,32));assert(assoc_security.ap_rsn_bytes==6);assert(assoc_security.entropy==os_ce_entropy_bytes);
-        uint8_t zero[32]={0};assert(!memcmp(app.config.security.pmk,zero,32)); /* the board's copy is gone once the supplicant has it */
-        app.session.supplicant.eapol_rx=2;app.session.supplicant.eapol_tx=2;
-        app.session.wifi.link=AIC8800_WIFI_SECURED;app.session.supplicant.state=AIC8800_SUPPLICANT_AUTHORIZED;
-        assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED&&app.stage==SCANNED&&network_calls==nets);
-        const struct a733_radio_report *report=board_radio_report(&app);
-        assert(report->has_assoc&&report->assoc.stage==6&&report->assoc.eapol_rx==2&&report->assoc.eapol_tx==2&&
-            report->assoc.link==AIC8800_WIFI_SECURED&&(report->assoc.flags&0x3f)==0x3f&&report->assoc.candidates==2);
-        assert(report->ap_count==2&&!report->aps[0].ssid_bytes&&!report->aps[1].ssid_bytes);
-        uint8_t record[512];size_t bytes=a733_radio_report_encode(report,record,sizeof(record));
-        assert(bytes==a733_radio_report_bytes(report)&&bytes==sizeof(report->head)+2*sizeof(struct a733_radio_result_ap)+sizeof(struct a733_radio_assoc));
-        for(size_t i=0;i+8<=bytes;++i)assert(memcmp(record+i,cred_ssid,8)&&memcmp(record+i,cred_pmk,8));
-        a733_radio_report_release(&app.report);
-        /* No candidate, and a missing credential, end as a retained failure with the record. */
-        memset(&app,0,sizeof(app));scan_events_left=0;scan_finished=0;report_used=0;scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);
-        cred_present=0;assert(board_radio_init(&app,&assoc));scheduler=taskSCHEDULER_RUNNING;time_us=100;app.session.dispatcher.initialized=1;
-        entropy_is_ready=1;
-        assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==SCANNING);
-        scan_events_left=3;scan_finished=1;
-        (void)board_radio_poll(&app);
-        assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED&&!app.cand_found&&connects==conns+1);
-        cred_present=1;
-        /* A CE failure ends the stage as a retained failure, flagged in the record. */
-        a733_radio_report_release(&app.report);
-        memset(&app,0,sizeof(app));scan_events_left=0;scan_finished=0;report_used=0;scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);
-        assert(board_radio_init(&app,&assoc));scheduler=taskSCHEDULER_RUNNING;time_us=100;app.session.dispatcher.initialized=1;
-        entropy_is_failed=1;
-        assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED&&(app.assoc.flags&64u));
-        entropy_is_failed=0;entropy_is_ready=0;
-
-        /* Credential residue on every exit path. Each run holds the test SSID and PMK in the places the real session keeps
-         * them (target, connect command, held records, supplicant slots and configuration, key store, owner copies), ends
-         * a different way, and then the whole board_radio object and the report arena must hold no 8-byte run of either. */
-        enum {OK,HANDSHAKE_TIMEOUT,STARTUP_DEADLINE,BOARD_FAILED,SESSION_RETAINED,CONNECT_TIMEOUT,PATHS};
-        for(unsigned path=0;path<PATHS;++path){
-            a733_radio_report_release(&app.report);
-            memset(&app,0,sizeof(app));report_used=0;scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);
-            platform_steps=0;entropy_is_ready=0;entropy_is_failed=0;scan_events_left=0;scan_finished=0;
-            assert(board_radio_init(&app,&assoc));scheduler=taskSCHEDULER_RUNNING;time_us=100;app.session.dispatcher.initialized=1;
-            assert(board_radio_poll(&app)==BOARD_RADIO_PENDING);scan_events_left=3;
-            (void)board_radio_poll(&app);scan_finished=1;(void)board_radio_poll(&app);entropy_is_ready=1;
-            (void)board_radio_poll(&app);assert(app.stage==CONNECTING&&app.cand_found);
-            app.session.wifi.link=AIC8800_WIFI_SECURITY_PENDING;
-            if(path!=CONNECT_TIMEOUT){(void)board_radio_poll(&app);assert(app.stage==SECURING);}
-            memcpy(app.diagnostic.payload,cred_ssid,sizeof(cred_ssid)); /* an owner copy of a record that carried the SSID */
-            enum board_radio_result end;
-            switch(path){
-            case OK:
-                app.session.wifi.link=AIC8800_WIFI_SECURED;app.session.supplicant.state=AIC8800_SUPPLICANT_AUTHORIZED;
-                assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED&&app.stage==SCANNED);
-                app.session.transport.pending=0;app.session.transport.held=0;app.platform.host.state=SUNXI_SDIO_READY;shutdown_ok=1;
-                assert(board_radio_shutdown(&app,5000));
-                do end=board_radio_poll(&app);while(end==BOARD_RADIO_SCANNED);
-                assert(end==BOARD_RADIO_DOWN&&app.stage==DOWN&&app.wiped);
-                assert(board_radio_poll(&app)==BOARD_RADIO_DOWN); /* polled again after the wipe */
-                break;
-            case HANDSHAKE_TIMEOUT:time_us=app.operation_deadline+1;end=board_radio_poll(&app);break;
-            case STARTUP_DEADLINE:time_us=assoc.startup_deadline_us;end=board_radio_poll(&app);break;
-            case BOARD_FAILED:end=board_radio_external_failure(&app);break;
-            case SESSION_RETAINED:{
-                enum a733_radio_session_result saved_result=session_result;session_result=A733_SESSION_RETAINED;
-                end=board_radio_poll(&app);session_result=saved_result;break;}
-            default:time_us=app.operation_deadline+1;end=board_radio_poll(&app);break; /* CONNECT_TIMEOUT */
-            }
-            if(path!=OK){assert(end==BOARD_RADIO_RETAINED);assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED);}
-            assert(app.wiped);
-            /* The report survives the wipe: the failure site and the tail were written before it. */
-            assert(board_radio_report(&app)->has_assoc);
-            const struct { const uint8_t *memory; size_t bytes; } places[]={{(const uint8_t *)&app,sizeof(app)},{report_arena,sizeof(report_arena)}};
-            for(unsigned p=0;p<2;++p){
-                const uint8_t *m=places[p].memory;size_t n=places[p].bytes;
-                for(size_t i=0;i+8<=n;++i){
-                    for(size_t k=0;k+8<=sizeof(cred_ssid);++k)if(!memcmp(m+i,cred_ssid+k,8)){fprintf(stderr,"path %u: SSID residue at %zu in %u\n",path,i,p);assert(!"credential residue");}
-                    for(size_t k=0;k+8<=sizeof(cred_pmk);++k)if(!memcmp(m+i,cred_pmk+k,8)){fprintf(stderr,"path %u: PMK residue at %zu in %u\n",path,i,p);assert(!"credential residue");}
-                }
-            }
-        }
-        scheduler=taskSCHEDULER_NOT_STARTED;
     }
     /* A scan that does not finish in time retains the radio with no entropy involved. */
     a733_radio_report_release(&app.report);

@@ -12,7 +12,7 @@ int os_gpu_share_admit(const struct ss_gpu_share *share,const struct ss_manifest
     const struct ss_manifest *m=share->manifest;
     if (m==owner || m->magic!=SS_MANIFEST_MAGIC || m->version!=SS_MANIFEST_VERSION ||
         m->bytes!=sizeof(*m) || m->devices_required!=SS_DEVICE_GPU || m->devices_optional ||
-        m->workers || m->heap_bytes || m->reserved0 || m->clock_use ||
+        m->workers || m->heap_bytes || m->reserved0 || m->reserved1 ||
         m->stack_bytes<1024u || m->stack_bytes>OS_GPU_PEER_STACK_BYTES ||
         m->stack_bytes%16u || !m->priority || m->priority>owner->priority ||
         m->cluster!=owner->cluster || m->host_op_first || m->host_op_count ||

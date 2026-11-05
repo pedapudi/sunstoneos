@@ -2,13 +2,9 @@
 """Exhaust ticket admission, recursion and monitored waits on three cores.
 
 The state model assumes coherent normal memory and Arm acquire/release ordering.
-It checks every interleaving of the modeled operations, including owner wrap.
-Every image is built for the Large System Extensions, so a ticket is taken with
-one LDADDA. The model does not cover weak-memory propagation or qualify
-hardware. QEMU then runs the compiled FreeRTOS port on the two board
-cores, Cortex-A55 and Cortex-A76, and the instruction trace must show the
-LDADDA take, the STLRH release and, under the contention that the kernel model
-forces, the SEVL, WFE and LDAXRH wait, and no exclusive-load take.
+It checks every interleaving of the modeled operations, including failed
+exclusive stores and owner wrap. It does not model weak-memory propagation or
+qualify hardware. Optional QEMU runs exercise the compiled FreeRTOS port.
 """
 import argparse
 from collections import deque
@@ -22,19 +18,17 @@ from harness import CACHE, environment
 
 CHECK_INPUTS = ['patches/freertos-smp-c.patch', 'patches/freertos-smp-macro.patch',
                 'checks/smp-kernel.c', 'checks/smp-context.c', 'checks/smp8-soak.c']
-GATE_RUNS = [['--build', '{build:smp-models}', '--output', '{output}']]
-CPUS = ("cortex-a55", "cortex-a76")
 
 MASK = 0xFFFF
 
 
-def explore(seed, rounds):
-    # Core state: phase, completed rounds, ticket.
-    initial = (seed | seed << 16, (("start", 0, 0),) * 3, ())
+def explore(seed, lse, rounds):
+    # Core state: phase, completed rounds, ticket, exclusive version, loaded word.
+    initial = (seed | seed << 16, (("start", 0, 0, -1, 0),) * 3, (), 0)
     seen, work = {initial}, deque([initial])
-    terminal = edges = waits = recursions = 0
+    terminal = edges = retries = waits = recursions = 0
     while work:
-        word, cores, queue = work.popleft()
+        word, cores, queue, version = work.popleft()
         owner, next_ticket = word & MASK, word >> 16
         held = [i for i, c in enumerate(cores) if c[0] in ("held", "recursive", "outer")]
         assert len(held) <= 1, ("mutual exclusion", word, cores)
@@ -43,15 +37,26 @@ def explore(seed, rounds):
         if held:
             assert queue[0] == held[0], ("FIFO", queue, held)
         successors = []
-        for core, (phase, done, ticket) in enumerate(cores):
-            def step(new_phase, *, new_word=word, new_queue=queue, new_done=done, new_ticket=ticket):
+        for core, (phase, done, ticket, reservation, loaded) in enumerate(cores):
+            def step(new_phase, *, new_word=word, new_queue=queue, new_version=version,
+                     new_done=done, new_ticket=ticket, new_reservation=reservation, new_loaded=loaded):
                 changed = list(cores)
-                changed[core] = (new_phase, new_done, new_ticket)
-                successors.append((new_word, tuple(changed), new_queue))
+                changed[core] = (new_phase, new_done, new_ticket, new_reservation, new_loaded)
+                successors.append((new_word, tuple(changed), new_queue, new_version))
             if phase == "start":
-                # LDADDA adds one to the next-ticket halfword and returns the old word in one access.
-                step("wait", new_word=(word + (1 << 16)) & 0xFFFFFFFF,
-                     new_queue=queue + (core,), new_ticket=next_ticket)
+                if lse[core]:
+                    step("wait", new_word=(word + (1 << 16)) & 0xFFFFFFFF,
+                         new_queue=queue + (core,), new_version=version + 1, new_ticket=next_ticket)
+                else:
+                    step("exclusive", new_reservation=version, new_loaded=word)
+            elif phase == "exclusive":
+                # STXR can fail spuriously even with an unchanged reservation.
+                retries += 1
+                step("start", new_reservation=-1)
+                if reservation == version:
+                    step("wait", new_word=(loaded + (1 << 16)) & 0xFFFFFFFF,
+                         new_queue=queue + (core,), new_version=version + 1,
+                         new_ticket=loaded >> 16, new_reservation=-1)
             elif phase == "wait":
                 waits += 1
                 if owner == ticket:
@@ -67,7 +72,8 @@ def explore(seed, rounds):
                 assert queue[0] == core
                 step("done" if done + 1 == rounds else "start",
                      new_word=(word & 0xFFFF0000) | ((owner + 1) & MASK),
-                     new_queue=queue[1:], new_done=done + 1)
+                     new_queue=queue[1:], new_version=version + 1,
+                     new_done=done + 1, new_reservation=-1)
             else:
                 assert phase == "done"
         if not successors:
@@ -81,7 +87,10 @@ def explore(seed, rounds):
                 work.append(state)
         assert len(seen) < 750000, "model exceeded its bounded state budget"
     assert terminal and recursions and waits
-    return dict(seed=seed, rounds=rounds, states=len(seen), edges=edges, terminal_states=terminal)
+    if not all(lse):
+        assert retries
+    return dict(seed=seed, lse=list(lse), rounds=rounds, states=len(seen), edges=edges,
+                terminal_states=terminal, exclusive_retry_transitions=retries)
 
 
 def monitored_wait():
@@ -198,7 +207,6 @@ def qemu_checks(build, emulator, output, cpus):
     decoder = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
     reports = []
     for cpu in cpus:
-        # The Cortex-A55 runs the two-core kernel model only; the Cortex-A76 runs all three.
         for name, cores, marker in (("smp-kernel-model", 2, "PASS SMP: 256"),
                                     ("smp-context-model", 2, "PASS SMP context: 64"),
                                     ("smp8-soak-model", 8, "PASS SMP8 soak: 64-lap")):
@@ -210,44 +218,47 @@ def qemu_checks(build, emulator, output, cpus):
                        "-accel", "tcg,thread=multi", "-cpu", cpu, "-smp", str(cores), "-m", "128M",
                        "-nographic", "-monitor", "none", "-semihosting-config", "enable=on,target=native",
                        "-device", f"loader,file={image.resolve()},cpu-num=0", "-d", "in_asm", "-D", str(trace)]
-            result = subprocess.run(command, capture_output=True, text=True, timeout=300, env=environment())  # a hang bound only; the guest asserts no time
+            result = subprocess.run(command, capture_output=True, text=True, timeout=45, env=environment())
             log = result.stdout + result.stderr
             (output / (cpu + "-" + name + ".run.log")).write_text(log)
             assert result.returncode == 0 and marker in log and "FAIL" not in log, (cpu, name, log)
-            # This QEMU build prints OBJD-T bytes instead of instruction names. Each translated block is logged once.
+            # This QEMU build prints OBJD-T bytes instead of instruction names.
             instructions = set()
+            capability_read = False
             for match in re.finditer(r"OBJD-T: ([0-9a-f]+)", trace.read_text()):
                 for instruction in decoder.disasm(bytes.fromhex(match[1]), 0):
                     instructions.add(instruction.mnemonic)
-            # vPortRecursiveLock takes a ticket with LDADDA and releases with STLRH; no exclusive-load take exists.
-            assert "ldadda" in instructions and "stlrh" in instructions, (cpu, name, sorted(instructions))
-            assert not instructions & {"ldaxr", "ldxr", "stxr", "stlxr"}, (cpu, name, sorted(instructions & {"ldaxr", "ldxr", "stxr", "stlxr"}))
-            waited = {"sevl", "wfe", "ldaxrh"} <= instructions
-            if name == "smp-kernel-model":
-                # The kernel model holds both locks until the other core has taken a ticket behind it.
-                assert waited, (cpu, "the forced contention ran no monitored wait")
+                    capability_read |= (instruction.mnemonic == "mrs" and
+                                        "id_aa64isar0_el1" in instruction.op_str)
+            assert "ldaxr" in instructions and "stlrh" in instructions
+            assert ("ldadda" in instructions) == (cpu != "cortex-a53"), (cpu, instructions)
+            assert capability_read, (cpu, "per-core LSE capability read not executed")
             reports.append(dict(cpu=cpu, image=name, image_sha256=digest(image), command=command,
-                                lse_take_executed=True, monitored_wait_executed=waited, passed=True))
+                                capability_read_executed=capability_read,
+                                lse_executed="ldadda" in instructions,
+                                monitored_wait_executed="ldaxrh" in instructions, passed=True))
+    for cpu in cpus:
+        assert any(r["monitored_wait_executed"] for r in reports if r["cpu"] == cpu), (cpu, "no contended monitored wait executed")
     return reports
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--build", type=Path, required=True,
-                        help="Build directory that holds the FreeRTOS SMP model images (tools/gate_images.py, smp-models)")
+    parser.add_argument("--build", type=Path, help="Built FreeRTOS SMP model images; enables QEMU checks")
     parser.add_argument("--qemu", type=Path, default=CACHE / "host/usr/bin/qemu-system-aarch64")
-    parser.add_argument("--cpu", action="append", choices=CPUS,
-                        help="Run only these QEMU CPUs; default runs both board cores")
+    parser.add_argument("--cpu", action="append", choices=("cortex-a53", "cortex-a55", "cortex-a76"),
+                        help="Run only these QEMU CPUs; default runs all three")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
-    cases = [explore(seed, rounds) for seed in (0, 65534) for rounds in (1, 2)]
+    cases = [explore(seed, lse, rounds) for seed in (0, 65534)
+             for lse, rounds in (((True,) * 3, 2), ((False,) * 3, 1), ((True, False, True), 2))]
     report = dict(passed=True, physical_access=False, arithmetic_cases=arithmetic(),
                   interleavings=cases, monitored_wait=monitored_wait(),
                   tas_negative_control=tas_negative_control(),
                   limitations="Coherent acquire/release model; no weak-memory propagation or physical timing qualification.",
                   checker_sha256=digest(Path(__file__)),
-                  qemu=qemu_checks(args.build, args.qemu, args.output, args.cpu or CPUS))
+                  qemu=qemu_checks(args.build, args.qemu, args.output, args.cpu or ("cortex-a53", "cortex-a55", "cortex-a76")) if args.build else [])
     (args.output / "result.json").write_text(json.dumps(report, indent=2) + "\n")
     print(f"PASS ticket locks: {sum(c['states'] for c in cases)} states; "
           f"{report['arithmetic_cases']} wrap cases; monitored waits; TAS fairness control; "

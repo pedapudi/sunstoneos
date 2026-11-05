@@ -74,7 +74,7 @@ CFLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mge
 
 # OS and board sources that run unmodified.
 OS_SOURCES = ['apps/os/application.c', 'apps/os/large.c', 'apps/os/large_load.c', 'drivers/storage/fat32_ro.c', 'kernel/appmem/app_region.c', 'kernel/appmem/large_admit.c', 'kernel/umem/umem.c', 'apps/os/services.c', 'apps/os/capture.c', 'apps/os/session.c', 'apps/os/grants.c', 'apps/os/start.c',
-              'apps/os/thermal.c', 'apps/os/cpu.c', 'apps/os/perf.c', 'drivers/clock/a733_cpu_clock.c', 'drivers/power/a733_perf_mode.c', 'apps/os/admission.c', 'apps/board/main.c', 'apps/board/session.c',
+              'apps/os/thermal.c', 'apps/os/admission.c', 'apps/board/main.c', 'apps/board/session.c',
               'runtime/deadline.c', 'runtime/deadline-a733.c', 'platform/a733-smp-cached/irq_table.c']
 # Driver cores and their adapters, unmodified. The adapters reach registers
 # through a733_mmio.h, which the virtual board replaces (platform/qemu-os).
@@ -536,7 +536,7 @@ def main():
 
     def build_latency():
         image = Image(out / 'build-latency', extra_defines=['-DA733_A76_ADMITTED=1', '-DSUNSTONE_LATENCY=1'],
-                      extra_sources=['runtime/latency.c',
+                      extra_sources=['apps/os/cpu.c', 'drivers/clock/a733_cpu_clock.c', 'runtime/latency.c',
                                      'runtime/latency_irq.c'], latency=True)
         application = image.application('latency', ['apps/latency/native.c', 'apps/latency/workload.c'],
                                          ROOT / 'apps/latency/manifest.json')
@@ -546,7 +546,7 @@ def main():
         """The same board composition on the private owner scheduler (configSS_PARTITIONED_SCHEDULER)."""
         if latency:
             image = Image(out / name, extra_defines=['-DA733_A76_ADMITTED=1', '-DSUNSTONE_LATENCY=1'],
-                          extra_sources=['runtime/latency.c',
+                          extra_sources=['apps/os/cpu.c', 'drivers/clock/a733_cpu_clock.c', 'runtime/latency.c',
                                          'runtime/latency_irq.c'], latency=True, partitioned=scheduler)
             application = image.application('latency', ['apps/latency/native.c', 'apps/latency/workload.c'],
                                              ROOT / 'apps/latency/manifest.json')

@@ -50,17 +50,13 @@ static int parents(struct a733_ce_clock *p)
     return bits(p,CCU+0x1908,gates|(gates<<16),gates|(gates<<16))&&
         bits(p,CCU+0x1988,gates<<16,gates<<16);
 }
-static int fail_at(struct a733_ce_clock *p,unsigned line)
+static int failed(struct a733_ce_clock *p)
 {
-    if(!p->fail_line)p->fail_line=line;
     p->state=A733_CE_CLOCK_RETAINED;
-    /* A failure before any write changed nothing: leave the lock and keep the token, so the owner can end the session
-     * normally with its record. Once a write was attempted its completion may be uncertain: never unlock it. */
-    if(p->held){if(p->writes)p->ops.retain(p->cookie);else{p->ops.leave(p->cookie);p->held=0;}}
-    if(p->writes)(void)a733_clock_retain(p->registry,&p->token);
+    if(p->held)p->ops.retain(p->cookie); /* Never unlock uncertain local writes. */
+    (void)a733_clock_retain(p->registry,&p->token);
     return 0;
 }
-#define failed(p) fail_at((p),(unsigned)__LINE__)
 int a733_ce_clock_provision(struct a733_ce_clock *p,const struct a733_ce_config *c,
     const struct a733_ce_clock_ops *o,void *cookie,struct a733_clock_leases *r,
     const struct a733_clock_token *t)
@@ -82,31 +78,27 @@ int a733_ce_clock_provision(struct a733_ce_clock *p,const struct a733_ce_config 
         .cookie=cookie,.state=A733_CE_CLOCK_ATTEMPTING};
     if(!live(p)||p->ops.enter(cookie,c->deadline_us)!=1)return failed(p);
     p->held=1;
-    /* The neighbors of the CE's MBUS gate (bit 2 of CCU 0x5e4) belong to other modules and are preserved as they are. */
-    uint32_t mbus;
-    if(!read32(p,CCU+0x5e4,&mbus))return failed(p);
-    const uint32_t neighbors=mbus&0x40302;
     /* The CE is found enabled at entry on the board (CE_CLK_REG 0x81000000, CE_BGR_REG 0x00030003, runs
      * 1793756349340594212-e9227edb): nothing says the boot ROM left its DMA idle, so an enabled CE is first taken
      * down by the exact reverse of the bring-up below, each step read back. That reset-and-gate cycle (CE_BGR_REG
      * CE_SYS_RST bit 17, CE_RST bit 16, gates bits 1 and 0; U-Boot clock_autogen.h:2506-2517) is the exclusion of
      * the predecessor's DMA. A CE that is already held in reset and gated is brought up directly. */
     if(parents(p)&&bits(p,CCU+0xac0,0x8700001f,0x81000000)&&bits(p,CCU+0xac4,0x30003,0x30003)&&
-       (mbus&4)){
+       bits(p,CCU+0x5e4,0x40306,0x40306)){
         if(!update(p,CCU+0xac4,2,0)||!update(p,CCU+0x5e4,4,0)||!update(p,CCU+0xac0,BIT(31),0)||
            !update(p,CCU+0xac4,1,0)||!update(p,CCU+0xac4,0x30000,0)||
            !update(p,CCU+0xac0,0x8700001f,0))return failed(p);
     }
-    /* Reset-held and gated, the CE's MBUS gate closed, the neighbors as found. */
+    /* MBUS40302 is real neighboring gate state, not a write-only key. */
     if(!parents(p)||!bits(p,CCU+0xac0,0x8700001f,0)||
-       !bits(p,CCU+0xac4,0x30003,0)||!bits(p,CCU+0x5e4,0x40306,neighbors))return failed(p);
+       !bits(p,CCU+0xac4,0x30003,0)||!bits(p,CCU+0x5e4,0x40306,0x40302))return failed(p);
     if(!update(p,CCU+0xac0,0x8700001f,0x01000000)||
        !update(p,CCU+0xac4,0x30000,0x30000)||
        !update(p,CCU+0xac4,1,1)||
        !update(p,CCU+0xac0,BIT(31),BIT(31))||
        !update(p,CCU+0x5e4,4,4)||!update(p,CCU+0xac4,2,2)||
        !parents(p)||!bits(p,CCU+0xac0,0x8700001f,0x81000000)||
-       !bits(p,CCU+0xac4,0x30003,0x30003)||!bits(p,CCU+0x5e4,0x40306,neighbors|4)||!live(p))return failed(p);
+       !bits(p,CCU+0xac4,0x30003,0x30003)||!bits(p,CCU+0x5e4,0x40306,0x40306)||!live(p))return failed(p);
     p->ops.leave(cookie);p->held=0;
     if(!live(p))return failed(p);
     p->state=A733_CE_CLOCK_READY;return 1;

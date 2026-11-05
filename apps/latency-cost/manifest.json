@@ -1,7 +1,7 @@
 {
   "name": "latency-cost",
   "devices": {"required": [], "optional": []},
-  "cpu": {"clock_grants": true, "cluster": "a76", "workers": 7, "priority": 2, "stack_bytes": 8192},
+  "cpu": {"cluster": "a76", "workers": 7, "priority": 2, "stack_bytes": 8192},
   "regions": [],
   "deadlines": {"run_us": 12000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
   "output_limit": 8192

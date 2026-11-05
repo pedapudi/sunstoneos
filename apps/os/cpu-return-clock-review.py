@@ -42,11 +42,11 @@ def validate(a, data, record, image_hash, raw, profile, grant, evidence, require
     owner, epoch, generation = struct.unpack_from('<3Q', wire_grant, 24)
     clusters, little, big, changes = struct.unpack_from('<4I', wire_grant, 48)
     require(owner and (epoch, generation) == ids[:2] and clusters == 3 and
-            (little, big) == (1794, 2002) and 4 <= changes <= 64 and not any(wire_grant[64:96]),
+            (little, big) == (1794, 2002) and 4 <= changes <= 64 and any(wire_grant[64:96]),
             'CPU return clock grant limits or owner differ.')
     require(grant['owner'] == owner and grant['clusters'] == clusters and
-            tuple(grant['max_mhz']) == (little, big) and grant['changes'] == changes,
-            'CPU return clock grant differs from session.')
+            tuple(grant['max_mhz']) == (little, big) and grant['changes'] == changes and
+            grant['approval'] == wire_grant[64:96], 'CPU return clock grant differs from session.')
     expected = {'version': 1, 'workers': 8, 'owner_core': 6, 'core_mask': 255,
                 'owner_priority': 3, 'a55_priority': 2, 'a76_priority': 3}
     require(record.get('inference') == expected, 'CPU return inference profile differs.')

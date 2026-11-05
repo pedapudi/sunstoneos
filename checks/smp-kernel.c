@@ -12,19 +12,6 @@ static QueueHandle_t queue;
 static SemaphoreHandle_t mutex;
 static uint64_t progress[2], protected_count, protected_words[32];
 extern uint64_t check_fp_context(uint64_t pattern);
-// The port's two ticket locks (port.c): the low halfword of each word is the owner, the high halfword the next ticket.
-extern struct { uint32_t word; volatile uint64_t recursion; } __attribute__((aligned(64))) xPortLocks[2];
-static uint32_t contention_phase;
-
-static unsigned waiting_tickets(void) {
-    unsigned most = 0;
-    for (unsigned i = 0; i < 2; ++i) {
-        const uint32_t word = __atomic_load_n(&xPortLocks[i].word, __ATOMIC_ACQUIRE);
-        const unsigned depth = (uint16_t)((word >> 16) - (word & 0xffff));
-        if (depth > most) most = depth;
-    }
-    return most;
-}
 
 static void background(void *argument) {
     const unsigned id = (uintptr_t)argument;
@@ -46,12 +33,6 @@ static void background(void *argument) {
 }
 static void producer(void *unused) {
     (void)unused;
-    // Hold both locks until core 1 has taken a ticket behind this core. Core 1 then finds the lock held and runs the
-    // monitored wait (SEVL, WFE, LDAXRH) whatever the relative speed of the two cores.
-    taskENTER_CRITICAL();
-    __atomic_store_n(&contention_phase, 1, __ATOMIC_RELEASE);
-    while (waiting_tickets() < 2) {}
-    taskEXIT_CRITICAL();
     for (uint64_t sequence = 1; sequence <= 256; ++sequence) {
         uint64_t payload[32];
         configASSERT(portGET_CORE_ID() == 0);
@@ -64,9 +45,6 @@ static void producer(void *unused) {
 }
 static void consumer(void *unused) {
     (void)unused;
-    while (!__atomic_load_n(&contention_phase, __ATOMIC_ACQUIRE)) {}
-    taskENTER_CRITICAL();
-    taskEXIT_CRITICAL();
     for (uint64_t sequence = 1; sequence <= 256; ++sequence) {
         uint64_t payload[32];
         configASSERT(portGET_CORE_ID() == 1);

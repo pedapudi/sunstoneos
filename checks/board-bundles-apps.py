@@ -198,9 +198,8 @@ def instructions(obj):
 
 def qemu(elf, log):
     """One run of a secure model on QEMU virt, one Cortex-A55; returns the exit status and the console."""
-    # Guest time follows the instructions executed, so no guest wait depends on how the host schedules QEMU.
     command = [str(QEMU), '-machine', 'virt,secure=on,virtualization=on,gic-version=3', '-cpu', 'cortex-a55',
-               '-accel', 'tcg,thread=single', '-icount', 'shift=0,sleep=off', '-smp', '1', '-m', '128M', '-nographic', '-monitor', 'none', '-serial', 'none',
+               '-smp', '1', '-m', '128M', '-nographic', '-monitor', 'none', '-serial', 'none',
                '-semihosting-config', 'enable=on,target=native', '-device', f'loader,file={elf},cpu-num=0']
     result = subprocess.run(command, capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
     # Semihosting writes the image's console to standard error.

@@ -50,28 +50,7 @@ def main():
     i = radio_result.decode(IDENTITY_RECORD)
     assert i['stage'] == 'identified' and i['stage_code'] == 6 and not i['failed'] and i['firmware'] is None
     assert i['identity'] == {'chip_word': 0xfb078820, 'subrevision_word': 0x821}
-    # The association tail: flags bit 9 of the head, 48 bytes after the access point list, no text field.
-    head_flags = struct.unpack_from('<I', RECORD, 36)[0]
-    tail = struct.pack('<12I', 6, 6, 0, 2, 9, 4, 4, 0x3f, 2, 2437 | (0x10000 * 0xffd7), 15000, 15900)
-    a = bytearray(RECORD)
-    struct.pack_into('<I', a, 36, head_flags | 512)
-    struct.pack_into('<I', a, 12, len(RECORD) + 48)
-    wire = bytes(a) + tail
-    assert radio_result.record_length(wire[:radio_result.HEAD_BYTES]) == len(wire)
-    assoc = radio_result.decode(wire)['association']
-    assert assoc == {'stage': 'authorized', 'link': 'secured', 'status_code': 0, 'supplicant_state': 2, 'rsn_state': 9,
-                     'eapol_received': 4, 'eapol_sent': 4, 'entropy_unqualified': True, 'ssid_matched': True,
-                     'rsn_psk_ccmp': True, 'target_built': True, 'entropy_ready': True, 'credential_present': True,
-                     'entropy_failed': False, 'candidates': 2, 'frequency_mhz': 2437, 'rssi_dbm': -41,
-                     'ms_connect_mod_65536': 15000, 'ms_authorized_mod_65536': 15900}, assoc
-    assert radio_result.decode(RECORD)['association'] is None
-    try:
-        radio_result.decode(wire[:-4])
-    except ValueError:
-        pass
-    else:
-        raise SystemExit('a truncated association tail was accepted')
-    print('PASS radio result decode: guard refusal with PG at 1.8 V and BLDO5 off, firmware progress and the association tail')
+    print('PASS radio result decode: guard refusal with PG at 1.8 V and BLDO5 off, and firmware progress')
 
 
 if __name__ == '__main__':

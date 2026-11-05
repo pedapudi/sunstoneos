@@ -87,11 +87,9 @@ shared data:
   `ullPortInterruptNestings` and `ullPortYieldRequired` keep their names and
   8-byte stride because drivers and checks outside the port read them.
 
-Kernel locks are FIFO ticket locks. A task takes a lock with `LDADDA` and
-releases it with `STLRH`, so acquire and release ordering come from the
-instructions instead of separate barriers. Every image is built for the Large
-System Extensions, which both board cores implement, so the take has no
-exclusive-load fallback. Waiters
+Kernel locks are FIFO ticket locks. A task takes a lock with `LDAXR` or
+`LDADDA` and releases it with `STLRH`, so acquire and release ordering come
+from the instructions instead of separate barriers. Waiters
 loop on `WFE` and `LDAXRH` after `SEVL`; the releasing store clears their
 exclusive monitors, which sets the event register. The test-and-set lock
 that `SUNSTONE_LOCK_TAS_CONTROL` builds is the control and keeps the `DMB SY`

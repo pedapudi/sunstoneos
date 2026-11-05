@@ -1,7 +1,7 @@
 {
   "name": "gpu-lifecycle",
   "devices": {"required": ["gpu"], "optional": []},
-  "cpu": {"clock_grants": true, "cluster": "a55", "workers": 1, "priority": 2, "stack_bytes": 4096},
+  "cpu": {"cluster": "a55", "workers": 1, "priority": 2, "stack_bytes": 4096},
   "regions": [
     {"name": "input", "kind": "work", "access": ["read", "write", "gpu-read"], "bytes": 4096},
     {"name": "output", "kind": "work", "access": ["read", "gpu-write"], "bytes": 4096}

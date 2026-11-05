@@ -12,7 +12,6 @@ void a733_ce_probe_init(struct a733_ce_probe *p,const struct a733_ce_probe_ops *
 static int fail(struct a733_ce_probe *p)
 {
     p->record.failed=1;p->record.failure_stage=p->stage+1;p->record.stage=p->stage;
-    if(p->ops.detail)p->record.failure_stage|=(p->ops.detail(p->ops.ctx)&0xffffffu)<<8;
     if(p->ops.retain)p->ops.retain(p->ops.ctx);
     return -1;
 }

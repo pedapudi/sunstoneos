@@ -1,7 +1,7 @@
 {
   "name": "dram-nsi",
   "devices": {"required": [], "optional": []},
-  "cpu": {"clock_grants": true, "cluster": "a76", "workers": 7, "priority": 2, "stack_bytes": 8192},
+  "cpu": {"cluster": "a76", "workers": 7, "priority": 2, "stack_bytes": 8192},
   "regions": [
     {"name": "buffer", "kind": "work", "access": ["read", "write"], "bytes": "0x2800000"}
   ],

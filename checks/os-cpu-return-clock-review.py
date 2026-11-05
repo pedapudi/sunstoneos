@@ -39,9 +39,9 @@ def main():
     struct.pack_into('<I', raw, 400, 2)
     struct.pack_into('<3Q', raw, 592, 0x415337334f534131, 1, 904)
     struct.pack_into('<I', raw, 804, 70000)
-    struct.pack_into('<6Q5I28s', raw, 808, 0x4153373343505531, 1, 96, 99, 11, 12,
-                     3, 1794, 2002, 32, 0, bytes(28))
-    grant = dict(owner=99, clusters=3, max_mhz=(1794, 2002), changes=32)
+    struct.pack_into('<6Q4I32s', raw, 808, 0x4153373343505531, 1, 96, 99, 11, 12,
+                     3, 1794, 2002, 32, bytes([1]) * 32)
+    grant = dict(owner=99, clusters=3, max_mhz=(1794, 2002), changes=32, approval=bytes([1]) * 32)
     def unused(*args, **kwargs):
         raise AssertionError('Review records must not be read')
     def check(wire=raw, target=record, decoded=grant, selected=profile):
@@ -78,9 +78,9 @@ def main():
         cases.append('reject-' + name)
     refused(lambda: check(raw[:-1]), 'staged workload')
     cases.append('reject-truncated-session')
-    bad = bytearray(raw); bad[872:904] = bytes([1]) * 32     # the former approval bytes are not used
+    bad = bytearray(raw); bad[872:904] = bytes(32)
     refused(lambda: check(bad), 'limits or owner')
-    cases.append('reject-nonzero-reserved-grant-bytes')
+    cases.append('reject-ungranted-native-record')
     bad = bytearray(raw); bad[48:80] = bytes(32)
     refused(lambda: check(bad), 'build identity absent')
     cases.append('reject-missing-native-build-identity')

@@ -16,7 +16,9 @@
 #include "sunstone_crumb.h"
 #include "boot.h"
 #include <string.h>
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
 #include "thermal-report.h"
+#endif
 static struct os_thermal_service {
     struct a733_thermal driver;
     struct a733_thermal_config config;
@@ -25,7 +27,7 @@ static struct os_thermal_service {
     struct a733_thermal_policy policy;
     StaticTask_t task;StackType_t stack[2048];TaskHandle_t handle;
     atomic_uint failed,pending;
-    unsigned active,retaining,masked,rearm_wait,cpu_pages;
+    unsigned active,retaining,masked,rearm_wait;
     uint64_t next_read;
     uint32_t cpu_critical_millicelsius;
     uint32_t critical_word;               /* the reading behind a CRITICAL stop, for the failure record (critical_reading) */
@@ -61,6 +63,7 @@ static uint64_t fresh_until(void)
     }
     return until+1000000;
 }
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
 /* The buffer holds the image's lifetime (tools/session_lifetime.py). One owner appends at most 8 rows/s plus
  * an initial and terminal row. Readers acquire the count; published rows
  * never change. No allocation, I/O, wait or additional THS read occurs here. */
@@ -149,6 +152,9 @@ int os_thermal_report_copy(uint64_t expected,uint32_t offset,size_t bytes,
     if(bytes>head)memcpy(out+head,(const uint8_t *)&readings.rows[window.first]+(offset+head-sizeof(*h)),bytes-head);
     *copied=bytes;return 1;
 }
+#else
+#define record_reading(now,level) ((void)0)
+#endif
 static uint64_t deadline(void){return board.session.deadline_us-10000;}
 static int live(void)
 {return board_live(NULL)&&os_application_deadline()&&!atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)&&
@@ -171,11 +177,11 @@ static int mappings(void)
     static const uintptr_t a[]={0x02002000,0x02002518,0x02002fc0,0x02002fe4,0x02522000,0x03006244,0x03006248,
         0x0300624c,0x07090160,0x03400000,0x03400108};
     for(unsigned i=0;i<sizeof(a)/sizeof(*a);++i)if(!device(a[i]))return 0;
-    if(thermal.cpu_pages){
-        /* The CPU-L, CPU-B and DSU PLL pages that os_cpu_admit reads. */
-        static const uintptr_t cpu[]={0x08871000,0x08872000,0x08873000};
-        for(unsigned i=0;i<3;++i)if(!device(cpu[i]))return 0;
-    }
+#ifdef A733_A76_ADMITTED
+    /* The CPU-L, CPU-B and DSU PLL pages that os_cpu_admit reads. */
+    static const uintptr_t cpu[]={0x08871000,0x08872000,0x08873000};
+    for(unsigned i=0;i<3;++i)if(!device(cpu[i]))return 0;
+#endif
     return 1;
 }
 static int read_register(void *v,uintptr_t a,uint32_t *out)
@@ -335,11 +341,13 @@ static int step(void)
         }
     }
     if(!rearm())return fault();
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
     /* Snapshot the cached policy at its own deadline, including passes with
      * no THS read. Quantizing this through 25 ms reads can exceed 125 ms. */
     record_reading(a733_smp_counter()/24,a733_thermal_policy_level(&thermal.policy));
     /* After the thermal step, so a CRITICAL reading ends the session first. */
     if(os_cpu_clock_step(&thermal.policy)<0)return fault();
+#endif
     return 1;
 }
 /* Ticks (1 ms) the owner may sleep after a step. It steps on the next tick while it has work that cannot wait: it is
@@ -349,7 +357,9 @@ static int step(void)
 static TickType_t idle_ticks(void)
 {
     if(!thermal.active||thermal.retaining||thermal.masked||!live())return 1;
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
     if(os_cpu_clock_busy())return 1;
+#endif
     uint64_t now=a733_smp_counter()/24,until=thermal.next_read;
     uint64_t state=atomic_load_explicit(&load_state,memory_order_relaxed);
     if((state&3)==A733_THERMAL_NORMAL&&(state>>2)+1<until)until=(state>>2)+1;
@@ -390,15 +400,13 @@ int os_thermal_pins(struct a733_pin_handoff *pins){return pins&&os_session_admit
 int os_thermal_start(void)
 {
     const struct os_session *s=os_session_admitted();
-    if(!s)return 0;
-    thermal.cpu_pages=os_cpu_boot_point_needed();
-    if(!construct(s))return 0;
-    /* A session that carries the CPU clock record, or an A76 application, starts from boot0's CPU-B point; the check is a
-     * read of the CPU PLL words. Any other session reads nothing of the clock tree. */
-    if(thermal.cpu_pages&&!os_cpu_admit())return 0;
+    if(!s||!construct(s))return 0;
+#ifdef A733_A76_ADMITTED
+    if(!os_cpu_admit())return 0;
+#endif
     thermal.handle=xTaskCreateStatic(os_thermal_task,"os-thermal",2048,NULL,4,thermal.stack,&thermal.task);
     return thermal.handle!=NULL;
 }
-#ifdef SUNSTONE_A733_OS_GPU
+#if defined(SUNSTONE_A733_OS_PERF) && defined(SUNSTONE_A733_OS_GPU)
 TaskHandle_t os_thermal_task_handle(void){return thermal.handle;}
 #endif

@@ -17,7 +17,7 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_RE
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_LR, UC_ARM64_REG_PC
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--build', '{build:sup}', '--output', '{output}']]
+GATE_RUNS = [['--build', '{build:cpu-clock}', '--output', '{output}']]
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--build', type=Path, required=True)
 p.add_argument('--output', type=Path, required=True)
@@ -31,7 +31,7 @@ original = shlex.split(u['command'])
 old_root = str(ROOT) if u['file'].endswith('/os-image/return-cpu.c') else str(Path(u['file']).parents[2])
 flags = [s.replace(old_root, str(ROOT)) for s in original[:original.index('-o')]]
 assert '-DSUNSTONE_A733_OS_CPU_CLOCK=1' in flags and '-DA733_A76_ADMITTED=1' in flags
-units = ('checks/os-cpu-clock-native.c', 'drivers/clock/a733_cpu_clock.c', 'runtime/memory.c', 'checks/os-cpu-clock-traps.c')
+units = ('checks/os-cpu-clock-native.c', 'drivers/clock/a733_cpu_clock.c', 'runtime/memory.c')
 objects = []
 for i, unit in enumerate(units):
     obj = a.output / f'{i}.o'; objects.append(obj)
@@ -116,15 +116,6 @@ for addr in (0x08870000, 0x0887001c, 0x08871004, 0x08871008, 0x08871018, 0x08873
 for mode, addr in ((0, 0x08870000), (0, 0x08871002), (1, 0x08871002), (2, 0x08871000), (3, 0x08871000)):
     assert call(mode, addr, 0) == 0 and not events
 cases.append('out-of-policy-and-wrong-owner-refusal')
-# A session without the CPU clock record: the owner returns 0 on every step, and reads and writes no word of the CPU
-# clock tree, the SID or the oscillator (the trap is every access below 0x10000000, which holds the PMIC bus too).
-for _ in range(1000):
-    assert call(5) == 0 and not events, events
-cases.append('ungranted-session-reaches-no-register')
-# The boot-point check (a read of the CPU PLL words) belongs to a session that carries the CPU clock record, including an
-# A55 application with a CPU-B grant, and to an A76 application.
-assert [call(6, g, c) for g, c in ((0, 0), (1, 0), (0, 1), (1, 1))] == [0, 1, 1, 1] and not events
-cases.append('boot-point-needed-by-grant-or-a76-manifest')
 # The returning board bundles supply the driver's other native write adapter.
 # Use its actual translation unit and the same allowlist/DSB instruction model.
 bundle_obj=a.output/'bundle.o'
@@ -226,7 +217,7 @@ steps.command('compile-owner-policy-' + hashlib.sha256((ROOT / 'drivers/thermal/
 owner_elf = a.output / 'owner.elf'
 steps.command('link-owner-' + hashlib.sha256(owner_obj.read_bytes() + policy_obj.read_bytes()).hexdigest()[:12],
               [LLD, '-Ttext=0x41000000', '--entry=os_cpu_owner_check', '--gc-sections',
-               owner_obj, policy_obj, *objects[1:3], '-o', owner_elf])
+               owner_obj, policy_obj, *objects[1:], '-o', owner_elf])
 owner_image = Image(owner_elf)
 for mode, name in enumerate(('both-clusters-big-little-dsu', 'no-grant-read-only', 'retained-request-not-ready')):
     cpu = harness_machine()

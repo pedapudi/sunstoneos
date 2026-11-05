@@ -8,8 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 #define OFFSETS(X) X(platform) X(radio_identity) X(transport) X(bootstrap) X(wifi) X(firmware_address) X(firmware_bytes) \
-    X(session_owner) X(runtime_lease_us) X(renew_margin_us) X(binding_timeout_us) X(command_timeout_us) X(refill_timeout_us) \
-    X(association_timeout_us) X(security_timeout_us) X(platform_authority) X(platform_evidence) X(network_reserved)
+    X(session_owner) X(runtime_lease_us) X(renew_margin_us) X(binding_timeout_us) X(command_timeout_us) \
+    X(association_timeout_us) X(platform_authority) X(platform_evidence) X(network_reserved)
 int main(int argc,char **argv)
 {
     if(argc==2&&!strcmp(argv[1],"offsets")){
@@ -34,14 +34,10 @@ int main(int argc,char **argv)
     f.platform.lifetime_deadline_us=59990000;f.startup_deadline_us=50000000;
     assert(board_radio_profile_scan_only(&f));
     /* The stage limit rides in the first reserved network byte: valid up to identity, only on scan-only profiles. */
-    assert(board_radio_profile_stage_limit(&f)<=BOARD_RADIO_STAGE_ASSOCIATE);
+    assert(board_radio_profile_stage_limit(&f)<=BOARD_RADIO_STAGE_ENTROPY);
     {
         struct board_radio_profile g=f;
-        g.network_reserved[0]=BOARD_RADIO_STAGE_ASSOCIATE+1;assert(!board_radio_profile_network_valid(&g));
-        /* The association stage declares its entropy unqualified; every other stage declares nothing. */
-        g=f;g.network_reserved[0]=BOARD_RADIO_STAGE_ASSOCIATE;g.network_reserved[1]=0;assert(!board_radio_profile_network_valid(&g));
-        g.network_reserved[1]=1;assert(board_radio_profile_network_valid(&g));
-        g.network_reserved[0]=BOARD_RADIO_STAGE_FIRMWARE;assert(!board_radio_profile_network_valid(&g));
+        g.network_reserved[0]=BOARD_RADIO_STAGE_ENTROPY+1;assert(!board_radio_profile_network_valid(&g));
         g=f;g.network_reserved[0]=BOARD_RADIO_STAGE_ENUMERATE;assert(board_radio_profile_network_valid(&g));
         g.version=BOARD_RADIO_PROFILE_VERSION;assert(!board_radio_profile_network_valid(&g));
     }

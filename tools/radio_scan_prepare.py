@@ -26,12 +26,10 @@ FIRMWARE = [('fw_adid_8800d80_u02.bin', 1708, 'a526cbd02fcdc495f049f3ad6b5933cb0
 SCAN_SUPERVISED_VERSION = 8
 # How far the session runs (BOARD_RADIO_STAGE_* in apps/board/radio.h): 0 a full run (the scan), 1 enumeration, 2
 # enumeration plus the chip-ID words, 3 through the firmware upload, 4 the CE entropy stage alone (the module stays
-# unpowered), 5 association with the stored network and the four-way handshake (unqualified CE entropy, bring-up only). It is a submit-time option (board.py submit --radio-stage-limit N), frozen in the queue entry, so a new stage
+# unpowered). It is a submit-time option (board.py submit --radio-stage-limit N), frozen in the queue entry, so a new stage
 # needs no landing of this file.
-STAGE_LIMITS = (0, 1, 2, 3, 4, 5)
-ASSOCIATE_STAGE = 5
+STAGE_LIMITS = (0, 1, 2, 3, 4)
 STAGE_LIMIT_OFFSET = 1861
-ENTROPY_UNQUALIFIED_OFFSET = 1862   # network_reserved[1]: 1 on the association stage, else 0
 # The identity the profile expects (raw words, decoded again by the firmware engine): the words the board's module
 # returned at the identity stage (run 1793750775070389039-2a278fd8, port 3-1): chip word 0xfb078820, revision 7 (U03,
 # which the vendor drives with the u02 firmware set, aic_bsp_8800d80.c:676-690), not an H part, subrevision word 0x821.
@@ -40,8 +38,7 @@ IDENTITY = {'chip_word': 0xfb078820, 'subrevision_word': 0x821}
 PROFILE = {'magic': 0, 'version': 8, 'bytes': 12, 'platform_authority': 16, 'platform_evidence': 88, 'platform': 184,
            'radio_identity': 496, 'transport': 512, 'bootstrap': 544, 'wifi': 568, 'firmware_address': 432,
            'firmware_bytes': 464, 'session_owner': 1224, 'runtime_lease_us': 1240, 'renew_margin_us': 1248,
-           'binding_timeout_us': 1256, 'command_timeout_us': 1264, 'refill_timeout_us': 1272, 'association_timeout_us': 1296,
-           'security_timeout_us': 1304}
+           'binding_timeout_us': 1256, 'command_timeout_us': 1264, 'association_timeout_us': 1296}
 PLATFORM = {'owner': 0, 'topology': 32, 'fabric': 56, 'fabric_hz': 68, 'expected': 80, 'desired': 104, 'card': 128}
 # Offsets of struct a733_board_session (include/a733_board_application.h).
 SESSION = {'topology': 184, 'sid_authority': 312, 'sid_evidence': 320, 'radio_profile_address': 352,
@@ -122,16 +119,6 @@ def profile_bytes(prefix, evidence, firmware, stage_limit=0):
     struct.pack_into('<Q', raw, PROFILE['session_owner'], SESSION_OWNER)
     struct.pack_into('<QQ', raw, PROFILE['runtime_lease_us'], 20000000, 5000000)
     struct.pack_into('<QQ', raw, PROFILE['binding_timeout_us'], 5000000, 1000000)
-    if stage_limit == ASSOCIATE_STAGE:
-        # The time budget against the 50 s startup deadline (firmware confirmed near 16.7 s of session time): scan 10 s,
-        # authentication and association 8 s, four-way handshake 8 s, 2 s of supplicant command bound at 1 s; the stage stops
-        # at the session deadline whichever is first. The entropy is UNQUALIFIED (bring-up only): byte 1 declares it.
-        raw[ENTROPY_UNQUALIFIED_OFFSET] = 1
-        struct.pack_into('<Q', raw, PROFILE['command_timeout_us'], 1000000)
-        struct.pack_into('<Q', raw, PROFILE['refill_timeout_us'], 8000000)     # authentication and association
-        struct.pack_into('<Q', raw, PROFILE['association_timeout_us'], 10000000)   # bounds the scan
-        struct.pack_into('<Q', raw, PROFILE['security_timeout_us'], 8000000)   # the four-way handshake
-        return bytes(raw)
     struct.pack_into('<Q', raw, PROFILE['association_timeout_us'], 20000000)   # bounds the scan
     return bytes(raw)
 

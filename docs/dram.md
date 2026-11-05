@@ -24,9 +24,8 @@ Status:
   refuses. No pinned source documents the DRAM controller or firewall
   registers, so it makes no access and returns 0. The cached table builder in
   `platform/a733-smp-cached/memory.c` links a weak definition with the same
-  result. The OS image always links the address-test definition, and other images
-  do when built with `SUNSTONE_A733_DRAM_DECODE_PROBE`:
-  `drivers/dram/a733_dram_decode_probe.c` replaces the weak one and tests the addresses
+  result. Images built with `SUNSTONE_A733_DRAM_DECODE_PROBE` link
+  `drivers/dram/a733_dram_decode_probe.c` instead, which tests the addresses
   by writing and reading back a distinct token at each probe address and
   returns 1 only when every token returns intact.
 - **DDR passive trip: implemented and host-modeled** in the thermal policy

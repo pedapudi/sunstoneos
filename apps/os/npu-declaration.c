@@ -1,7 +1,7 @@
 /* The admission of an application's NPU declaration against what the image links and holds. It is its own unit because the
  * EL3 admission (apps/os/admission.c) calls it, and the host pre-flight (tools/host_admission.py) builds the same code with
- * the image's definitions. The image's data it reads (os_npu_model_count, ss_npu_queue_edges) comes from the linked image, or,
- * on the host, from the image's ELF. */
+ * the image's definitions. The image's data it reads (ss_npu_queue_edges) comes from the linked image, or, on the host,
+ * from the image's ELF. The image links no graph. */
 #include "os.h"
 #include "npu.h"
 #include "npu_declaration.h"
@@ -13,9 +13,9 @@ static struct npu_image_needs image_needs(void)
 {
     return (struct npu_image_needs){
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
-        os_npu_model_count,os_npu_model_count,ss_npu_queue_edges.count
+        0,0,ss_npu_queue_edges.count
 #else
-        1,os_npu_model_count,0
+        1,0,0
 #endif
     };
 }

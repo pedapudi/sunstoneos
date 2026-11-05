@@ -1,7 +1,7 @@
 # SunstoneOS test graphs through the OS NPU service: every graph of the model list runs once through the SDK and its
 # output is compared with the simulator's. The OS composition is that of the CPU/NPU diagnostic.
 if(NOT SUNSTONE_A733_OS_CPU_RETURN OR NOT SUNSTONE_A733_OS_CPU_CLOCK OR NOT SUNSTONE_A733_OS_NPU OR
-   NOT SUNSTONE_OS_NPU_ALL_MODELS OR NOT A733_A76_ADMITTED OR SUNSTONE_A733_OS_GPU OR
+   NOT SUNSTONE_OS_NPU_ALL_MODELS OR NOT A733_A76_ADMITTED OR SUNSTONE_A733_OS_GPU OR SUNSTONE_A733_OS_PERF OR
    SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_DMA OR
    SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_USB_CLASSES)
   message(FATAL_ERROR "The NPU graph application requires the supervised CPU-return composition with the NPU service and all listed models")

@@ -141,15 +141,13 @@ static int prepare(struct a733_ce *p)
 }
 static enum a733_ce_result finish(struct a733_ce *p,enum a733_ce_result r)
 {atomic_store_explicit(&p->busy,0,memory_order_release);return r;}
-static enum a733_ce_result fail_at(struct a733_ce *p,unsigned line)
+static enum a733_ce_result failed(struct a733_ce *p)
 {
-    if (!p->fail_line) p->fail_line=line;
     p->fault=1;
     if (p->held) {p->ops.retain(p->cookie);p->held=0;}
     if (a733_clock_retain(p->registry,&p->token)==A733_CLOCK_BUSY) return finish(p,A733_CE_BUSY);
     p->stage=FAILED;return finish(p,A733_CE_RETAINED);
 }
-#define failed(p) fail_at((p),(unsigned)__LINE__)
 static enum a733_ce_result poll(struct a733_ce *p,uint8_t *output,size_t output_bytes)
 {
     if (!p || !p->initialized || p->self!=(uintptr_t)p || !p->task_configured || !output ||
@@ -176,7 +174,7 @@ static enum a733_ce_result poll(struct a733_ce *p,uint8_t *output,size_t output_
     if (lock!=1 || !timely(p)) return failed(p);
     unsigned next=p->stage;uint8_t bytes[64]={0};unsigned ready=0;
     if (p->stage==PREPARE) {
-        if (!prepare(p)) {if (!p->fail_line) p->fail_line=(unsigned)__LINE__;goto fail;}
+        if (!prepare(p)) goto fail;
         next=SUBMIT;
     } else if (p->stage==SUBMIT) {
         if (!clocks(p) || !task_health(p) ||
@@ -184,18 +182,18 @@ static enum a733_ce_result poll(struct a733_ce *p,uint8_t *output,size_t output_
             !bits(p,NS+0x18,UINT32_MAX,0) ||
             !wr(p,NS,(uint32_t)p->config.descriptor_physical) ||
             !update(p,NS+4,255,(uint32_t)(p->config.descriptor_physical>>32)) ||
-            !update(p,NS+8,4,4) || !bits(p,NS+8,15,4) || !wr(p,NS+0x10,p->operation==2?1:0x400)) {if (!p->fail_line) p->fail_line=(unsigned)__LINE__;goto fail;}
+            !update(p,NS+8,4,4) || !bits(p,NS+8,15,4) || !wr(p,NS+0x10,p->operation==2?1:0x400)) goto fail;
         next=WAIT;
     } else {
         if (!rd(p,NS+12,&p->status_ns) || !rd(p,NS+0x18,&p->error_ns) ||
-            p->error_ns || (p->status_ns&~0x30u)) {if (!p->fail_line) p->fail_line=(unsigned)__LINE__;goto fail;}
+            p->error_ns || (p->status_ns&~0x30u)) goto fail;
         uint32_t status=(p->status_ns>>4)&3;
-        if (status>1) {if (!p->fail_line) p->fail_line=(unsigned)__LINE__;goto fail;}
+        if (status>1) goto fail;
         if (status==1) {
             if (!clocks(p) || !task_health(p) ||
-                p->ops.sync(p->cookie,p->memory,p->operation==2?A733_CE_CIPHER_ACQUIRE:A733_CE_ACQUIRE)!=1 || !timely(p)) {if (!p->fail_line) p->fail_line=(unsigned)__LINE__;goto fail;}
+                p->ops.sync(p->cookie,p->memory,p->operation==2?A733_CE_CIPHER_ACQUIRE:A733_CE_ACQUIRE)!=1 || !timely(p)) goto fail;
             if (p->operation!=2) for (unsigned i=0;i<p->result_bytes;++i) bytes[i]=p->memory->output[i];
-            if (!wr(p,NS+12,0x30) || !update(p,NS+8,4,0) || !bits(p,NS+8,15,0)) {if (!p->fail_line) p->fail_line=(unsigned)__LINE__;goto fail;}
+            if (!wr(p,NS+12,0x30) || !update(p,NS+8,4,0) || !bits(p,NS+8,15,0)) goto fail;
             /* The task completed and its result is copied. Do not leave the
              * random block, digest or (HMAC) hash state in the retained page.
              * TRNG writes only the output; IV and input hold no TRNG data. */
@@ -206,14 +204,14 @@ static enum a733_ce_result poll(struct a733_ce *p,uint8_t *output,size_t output_
                     zero(p->memory->input,sizeof(p->memory->input));
                 }
                 if (p->ops.sync(p->cookie,p->memory,p->operation==1?A733_CE_SCRUB:A733_CE_RANDOM_SCRUB)!=1 ||
-                    !timely(p)) {if (!p->fail_line) p->fail_line=(unsigned)__LINE__;goto fail;}
+                    !timely(p)) goto fail;
             }
             ready=1;next=DONE;
         }
     }
-    if (!timely(p)) {if (!p->fail_line) p->fail_line=(unsigned)__LINE__;goto fail;}
+    if (!timely(p)) goto fail;
     p->ops.leave(p->cookie);p->held=0;
-    if (!timely(p)) {if (!p->fail_line) p->fail_line=(unsigned)__LINE__;goto fail;}
+    if (!timely(p)) goto fail;
     p->stage=next;
     if (ready) {
         if (p->operation==2) {

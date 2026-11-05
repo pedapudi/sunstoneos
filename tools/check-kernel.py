@@ -22,9 +22,8 @@ args = parser.parse_args()
 emulator = shutil.which(args.qemu)
 if emulator is None:
     sys.exit(f"Emulator not found: {args.qemu}")
-# Guest time follows the instructions executed, so no guest wait depends on how the host schedules QEMU.
 command = [emulator, "-machine", "virt,gic-version=3,secure=off,virtualization=off",
-           "-accel", "tcg,thread=single", "-icount", "shift=0,sleep=off", "-cpu", "cortex-a55", "-smp", "1", "-m", "128M", "-nographic",
+           "-cpu", "cortex-a55", "-smp", "1", "-m", "128M", "-nographic",
            "-monitor", "none", "-semihosting-config", "enable=on,target=native",
            "-kernel", str(args.image.resolve())]
 identity = {"image_sha256": digest(args.image), "qemu_sha256": digest(emulator),

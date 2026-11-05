@@ -8,7 +8,7 @@
  #include "../board/application.h"
  #include "application.h"
  #include "a733_cpu_clock.h"
-@@ -95,6 +96,55 @@
+@@ -86,6 +87,55 @@
      atomic_uint ready;
  } owner;
  enum { START, INSPECT, REQUEST, FOLLOW };
@@ -64,7 +64,7 @@
  static int clock_now(void *v,uint64_t *out)
  {return v==&owner&&a733_counter_clock_now(&providers.shared.counter,out);}
  static int clock_read(void *v,uintptr_t a,uint32_t *out){return v==&owner&&read_word(NULL,a,out);}
-@@ -127,6 +177,7 @@
+@@ -118,6 +168,7 @@
   * following the thermal level, lets the task sleep until its next reading. */
  int os_cpu_clock_busy(void)
  {
@@ -72,16 +72,16 @@
      return os_granted(OS_GRANT_CPU_CLOCK)&&(owner.phase!=FOLLOW||owner.driver.state!=0);
  }
  /* EL0-safe: the recognizer waits for this before each timed run. */
-@@ -143,7 +194,7 @@
+@@ -132,7 +183,7 @@
+ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
+ {
      struct a733_cpu_clock *c=&owner.driver;
-     /* A session without the CPU clock record reaches no register here: no read of the clock tree, no rail, no PMIC. */
-     if(!os_granted(OS_GRANT_CPU_CLOCK))return 0;
 -    if(owner.phase==START){
 +    if(owner.phase==START&&!os_cpu_return_requested()){
          /* The session is read once, here: later steps (1 kHz while the driver works) need nothing from it. */
          const struct os_session *s=os_session_admitted();
          struct a733_cpu_clock_config config;
-@@ -155,7 +206,42 @@
+@@ -143,7 +194,42 @@
          if(a733_cpu_clock_inspect(c,A733_CPU_LITTLE,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return REFUSED(0);
          return 1;
      }
@@ -122,11 +122,11 @@
 +        atomic_store_explicit(&return_done,1,memory_order_release);
 +        return_clock_progress(5);return 1;
 +    }
-     /* The performance-mode service (a grant with perf) replaces the one-request-per-cluster
+ #ifdef SUNSTONE_A733_OS_PERF
+     /* The performance-mode service replaces the one-request-per-cluster
       * start: its boot switch moves the CPU domains to the boot mode, and it
-      * then serves USB0 operation 8 (apps/os/perf.c). It sees every burst
-@@ -180,6 +266,15 @@
-         owner.phase=REQUEST;owner.cluster=0;
+@@ -173,6 +259,15 @@
+ #endif
      }
      if(owner.phase==REQUEST){
 +        if(!entry_checked){
@@ -141,7 +141,7 @@
          /* One request per granted domain once its sensor has a reading (CPUL
           * is physical channel 3, CPUB channel 0), in the default path's order
           * (docs/designs/cpu-top-opp.md): CPU-B, CPU-L, then the DSU at the
-@@ -200,12 +295,14 @@
+@@ -193,12 +288,14 @@
                  target=c->report.binned ? a733_cpu_clock_dsu_top(c->report.bin,c->applied_mhz[A733_CPU_LITTLE],big) : 0;
                  if(!target)continue;
              }

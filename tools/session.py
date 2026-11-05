@@ -12,9 +12,8 @@ apps/npu-graphs/host.py writes) to DIR/decoder.py, the file that `board.py submi
 
   image identity, manifest digest   the image's build ID (tools/check-a733-smp.py) and its sunstone_manifest section
   devices, flags, workload          the manifest's required devices; --devices adds optional ones (only 0 has pinned board facts)
-  which service records             the thermal record always; the CPU clock grant only with --clock-grant (and --perf), for a manifest
-                                    that declares cpu.clock_grants (cpu.perf); the NPU service (os_npu_client_model) as the image
-                                    links it; an audio, DMA or radio service is refused
+  which service records             what the image links: the thermal record always, the CPU clock grant (a733_cpu_clock_grant_load),
+                                    the NPU service (os_npu_client_model); an audio, DMA or radio service is refused
   NPU client model                  the image's os_npu_client_model
   NPU pool request                  --npu-pool BASE:BYTES (default 0:0: the allocator chooses)
   NPU declaration                   --npu-declaration D (a manifest with an npu section, or a bare slots/in_flight/graphs/links object),
@@ -79,7 +78,7 @@ THERMAL = [('magic', 'Q'), ('version', 'Q'), ('bytes', 'Q'), ('thermal_owner', '
            ('apb1', 'I'), ('apb1_hz', 'I'), ('configure_adc_clock', 'B'), ('alarm_mask', 'B'), ('critical_mask', 'B'),
            ('reserved0', 'B'), ('limits', '15H'), ('reserved', '2s'), ('cpu_critical_millicelsius', 'I')]
 GRANT = [('magic', 'Q'), ('version', 'Q'), ('bytes', 'Q'), ('owner', 'Q'), ('epoch', 'Q'), ('generation', 'Q'), ('clusters', 'I'),
-         ('max_mhz', '2I'), ('changes', 'I'), ('perf', 'I'), ('reserved', '28s')]
+         ('max_mhz', '2I'), ('changes', 'I'), ('approval', '32s')]
 NPU = [('magic', 'Q'), ('version', 'Q'), ('bytes', 'Q'), ('owner', 'Q'), ('command_admission', 'Q'), ('supervisor', 'Q'),
        ('pck_client', 'I'), ('client_model', 'I'), ('jobs', 'I'), ('reserved', 'I'), ('pool_base', 'Q'), ('pool_bytes', 'Q'),
        ('admission', '32s'), ('clock', '32s'), ('power', '32s'), ('supervision', '32s'), ('ddr', '32s'),
@@ -91,12 +90,11 @@ OS_MAGIC = 0x415337334f534131                                   # the thermal re
 # What each record takes from the image or the build rather than from the facts file.
 DERIVED = {'prefix': {'magic', 'version', 'bytes', 'epoch', 'generation', 'lease', 'image', '_pad'},
            'thermal': {'magic', 'version', 'bytes'},
-           'cpu_grant': {'magic', 'version', 'bytes', 'epoch', 'generation', 'clusters', 'max_mhz', 'perf', 'reserved'},
+           'cpu_grant': {'magic', 'version', 'bytes', 'epoch', 'generation'},
            'npu': {'magic', 'version', 'bytes', 'client_model', 'reserved', 'pool_base', 'pool_bytes',
                    'slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes'}}
 # Symbols that tell which services an OS image links (the CMake options SUNSTONE_A733_OS_*).
-SYMBOLS = {'npu': 'os_npu_client_model'}
-REVIEWED = ROOT / 'tools/cpu-reviewed-points.json'
+SYMBOLS = {'cpu_grant': 'a733_cpu_clock_grant_load', 'npu': 'os_npu_client_model'}
 UNSUPPORTED = {'os_audio_task': 'audio service record (devices audio-i2s or audio-headset)',
                'os_dma_profile': 'DMA service record and its physical authority',
                'os_radio_start': 'radio profile, SID evidence and radio latch facts of the board prefix (workload 1)',
@@ -217,7 +215,7 @@ def declaration_of(path):
     return values
 
 
-def describe(image, manifest_path=None, npu_declaration=None, devices=None, host=None, clock_grant=False, perf=None):
+def describe(image, manifest_path=None, npu_declaration=None, devices=None, host=None):
     """Everything about IMAGE that the session depends on, or a SessionError naming the field that cannot be determined."""
     host = host or records()
     image = Path(image)
@@ -247,15 +245,8 @@ def describe(image, manifest_path=None, npu_declaration=None, devices=None, host
         raise SessionError('devices: the session grants %#x, and tools/session-facts.json pins board facts only for a session that grants none' % granted)
     plan = {'image': str(image), 'manifest': manifest, 'manifest_sha256': info['sha256'], 'devices': granted,
             'flags': host.BIND_SID, 'services': ['thermal'], 'symbols': symbols, 'elf': elf}
-    if clock_grant or perf:
-        # A CPU clock grant is written only on request, and only for an application whose manifest declares that it may use
-        # one (and perf). The maxima are the reviewed points; the runner's approval policy sees the record.
-        if not manifest['clock_use'] & 1:
-            raise SessionError('clock grant: the manifest of %s does not declare cpu.clock_grants' % manifest['name'])
-        if perf and not manifest['clock_use'] & 2:
-            raise SessionError('perf: the manifest of %s does not declare cpu.perf' % manifest['name'])
+    if SYMBOLS['cpu_grant'] in symbols:
         plan['services'].append('cpu_grant')
-        plan['perf'] = {'high': 1, 'low': 2}[perf] if perf else 0
     if SYMBOLS['npu'] in symbols:
         plan['services'].append('npu')
         if npu_declaration:
@@ -297,11 +288,8 @@ def build_session(plan, inputs, fact_file=FACTS, host=None, entropy=secrets.rand
     thermal = profile_values(profile, 'thermal', {'magic': OS_MAGIC, 'version': 1, 'bytes': size})
     services[host.THERMAL] = pack('thermal', thermal)
     if 'cpu_grant' in plan['services']:
-        points = json.loads(REVIEWED.read_text())['points']
         grant = profile_values(profile, 'cpu_grant', {'magic': GRANT_MAGIC, 'version': 1, 'bytes': 96,
-                                                      'epoch': epoch, 'generation': generation, 'clusters': 3,
-                                                      'max_mhz': [points['cpu-l'][0], points['cpu-b'][0]],
-                                                      'perf': plan.get('perf', 0), 'reserved': bytes(28)})
+                                                      'epoch': epoch, 'generation': generation})
         if not grant['clusters']:
             grant['epoch'] = grant['generation'] = 0       # a record that grants nothing names no session
         services[host.CPU_GRANT] = pack('cpu_grant', grant)
@@ -321,11 +309,10 @@ def build_session(plan, inputs, fact_file=FACTS, host=None, entropy=secrets.rand
     return raw, {'epoch': epoch, 'generation': generation, 'lease': lease, 'address': address, 'identity': identity.hex()}
 
 
-def build(image, out, manifest=None, npu_declaration=None, inputs=(), devices=None, decoder=None, fact_file=FACTS, npu_pool=(0, 0),
-          clock_grant=False, perf=None):
+def build(image, out, manifest=None, npu_declaration=None, inputs=(), devices=None, decoder=None, fact_file=FACTS, npu_pool=(0, 0)):
     """Write OUT/template/session.bin, input files and session.json; returns the record."""
     host = records()
-    plan = describe(image, manifest, npu_declaration, devices, host, clock_grant, perf)
+    plan = describe(image, manifest, npu_declaration, devices, host)
     plan['npu_pool_request'] = tuple(npu_pool)
     values = input_values(plan, inputs, host)
     raw, ids = build_session(plan, values, fact_file, host)
@@ -403,11 +390,9 @@ def inspect(raw, image=None, host=None):
                 problems.append('npu client_model: %d differs from the image\'s os_npu_client_model' % npu['client_model'])
             if bool(npu['pool_base']) != bool(npu['pool_bytes']):
                 problems.append('npu pool request: base %#x and bytes %#x are both set or both zero' % (npu['pool_base'], npu['pool_bytes']))
-        manifest = host.image_manifest(image)['manifest'] or {}
-        if grant and not manifest.get('clock_use', 0) & 1:
-            problems.append('cpu_grant: the record is present and the manifest does not declare cpu.clock_grants')
-        if grant and grant['perf'] and not manifest.get('clock_use', 0) & 2:
-            problems.append('cpu_grant: the record carries perf and the manifest does not declare cpu.perf')
+        if bool(grant) != (SYMBOLS['cpu_grant'] in symbols):
+            problems.append('cpu_grant: the record is %s and the image %s the CPU clock grant'
+                            % ('present' if grant else 'absent', 'links' if SYMBOLS['cpu_grant'] in symbols else 'does not link'))
     report['problems'] = problems
     return report
 
@@ -453,8 +438,8 @@ def show(report, stream=sys.stdout):
                                                       value['pool_bytes'], value['slots'], value['in_flight'], value['graphs'],
                                                       value['links'], value['graph_bytes'], value['tensor_bytes']), file=stream)
         elif name == 'cpu_grant':
-            print('cpu_grant: clusters %d max_mhz %s changes %d perf %d epoch %#x generation %#x' % (
-                value['clusters'], value['max_mhz'], value['changes'], value['perf'], value['epoch'], value['generation']), file=stream)
+            print('cpu_grant: clusters %d max_mhz %s changes %d epoch %#x generation %#x' % (
+                value['clusters'], value['max_mhz'], value['changes'], value['epoch'], value['generation']), file=stream)
         elif name == 'thermal':
             print('thermal: owner %#x apb1 %d (%d Hz) size field %d' % (value['thermal_owner'], value['apb1'], value['apb1_hz'], value['bytes']),
                   file=stream)
@@ -472,8 +457,6 @@ def main(argv=None):
     b.add_argument('--npu-declaration', type=Path, help='manifest with an npu section, or a JSON object of slots, in_flight, graphs, links')
     b.add_argument('--input', type=Path, action='append', default=[], help='a manifest input region\'s content, in region order (repeat)')
     b.add_argument('--devices', type=lambda x: int(x, 0), help='optional manifest devices to grant besides the required ones')
-    b.add_argument('--clock-grant', action='store_true', help='grant the CPU clock at the reviewed points (the manifest must declare cpu.clock_grants)')
-    b.add_argument('--perf', choices=('high', 'low'), help='with --clock-grant: the performance-mode service and its boot mode (the manifest must declare cpu.perf)')
     b.add_argument('--decoder', type=Path, help='the application decoder, copied to OUT/decoder.py')
     b.add_argument('--npu-pool', type=lambda text: tuple(int(x, 0) for x in text.split(':')), default=(0, 0), metavar='BASE:BYTES',
                    help='a placement request for the NPU reservation (default 0:0, the allocator chooses; the ledger refuses an extent that is not free)')
@@ -487,7 +470,7 @@ def main(argv=None):
     try:
         if args.command == 'build':
             record = build(args.image, args.out, args.manifest, args.npu_declaration, args.input, args.devices, args.decoder,
-                           npu_pool=args.npu_pool, clock_grant=args.clock_grant, perf=args.perf)
+                           npu_pool=args.npu_pool)
             print('wrote %s (%d bytes, profile %s, services %s)' % (args.out / 'template/session.bin', record['session_bytes'],
                                                                    record['profile'], ', '.join(record['services'])))
             print('submit with: board.py submit %s --template %s%s%s ...' % (

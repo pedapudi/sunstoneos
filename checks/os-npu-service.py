@@ -19,7 +19,7 @@ from harness import environment
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--output', '{output}', '--graphs', '{fixture:npu-graphs}']]
 CACHE = Path.home() / '.cache/sunstoneos'
-CHECK_INPUTS = ('tools/npu-fixtures.json', 'checks/os-npu-ungranted-traps.c', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-queue.c', 'apps/os/npu-catalogue.py', 'drivers/npu/a733_npu_runtime.c',
+CHECK_INPUTS = ('tools/npu-fixtures.json', 'checks/os-npu-ungranted-traps.c', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-queue.c', 'tools/npu-test-models.py', 'drivers/npu/a733_npu_runtime.c',
                 'drivers/npu/npu_service.c', 'drivers/npu/nbg_assembly.c', 'runtime/npu_app_queue.c',
                 'checks/os-npu-service.c', 'checks/os-npu-service.py', 'checks/nbg_wide.py')
 sys.path.insert(0, str(ROOT / 'checks'))
@@ -74,10 +74,10 @@ if args.artifacts:
     shutil.copy(args.artifacts, out / 'artifacts.json'); shutil.copy(args.models, out / 'list.json'); EXPECT_WIDE = ''
 generated = out / 'generated'; generated.mkdir()
 env = {**os.environ} if args.artifacts else {**os.environ, 'SUNSTONE_NPU_MODEL_DB': str(out / 'models-db.json')}
-subprocess.run([sys.executable, str(ROOT / 'apps/os/npu-catalogue.py'), '--artifacts', str(out / 'artifacts.json'),
+subprocess.run([sys.executable, str(ROOT / 'tools/npu-test-models.py'), '--artifacts', str(out / 'artifacts.json'),
                 '--models', str(out / 'list.json'), '--model', '0', '--all', '--output', str(generated / 'npu-models.c')],
                check=True, env=env)
-includes = [ROOT / 'apps/os', generated, ROOT / 'apps/board', ROOT / 'platform/a733-storage-update', ROOT / 'platform/a733-smp-cached',
+includes = [ROOT / 'apps/os', ROOT / 'checks', generated, ROOT / 'apps/board', ROOT / 'platform/a733-storage-update', ROOT / 'platform/a733-smp-cached',
             ROOT / 'drivers/usb', ROOT / 'network/include', ROOT / 'platform/qemu-smp', NETWORK / 'include', NETWORK / 'portable/Compiler/GCC']
 UNITS = ('checks/os-npu-service.c', 'kernel/umem/umem.c', 'drivers/npu/npu_declaration.c', 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/a733_npu_runtime_interim.c',
          'drivers/npu/npu_pool.c', 'drivers/npu/npu_service.c', 'drivers/npu/a733_npu_controller.c', 'drivers/npu/a733_npu_memory.c',

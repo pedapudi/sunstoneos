@@ -9,15 +9,15 @@
      if(s->granted&OS_GRANT_AUDIO){
          /* The I2S image's DMA0 handoff rules, bound to this session:
           * one service channel, the board fabric, the board lease as handoff and
-@@ -59,6 +61,11 @@
-         struct a733_cpu_clock_config cpu;
-         if(!a733_cpu_clock_grant_load(&s->cpu_clock,s->board.epoch,s->board.generation,&cpu)||
-            cpu.owner==s->thermal_owner)return 0;
-+#ifdef SUNSTONE_A733_OS_RADIO_SCAN
-+        if(s->board.workload!=3||cpu.grant.clusters!=3||cpu.grant.changes<4||s->cpu_clock.perf)return 0;
-+#else
-+        if(s->board.workload!=2||cpu.grant.clusters!=3||cpu.grant.changes<4||s->cpu_clock.perf)return 0;
+@@ -62,6 +64,11 @@
+ #ifdef SUNSTONE_A733_OS_PERF
+         /* The performance-mode service switches both clusters, or none. */
+         if(cpu.grant.clusters==1||cpu.grant.clusters==2)return 0;
 +#endif
++#ifdef SUNSTONE_A733_OS_RADIO_SCAN
++        if(s->board.workload!=3||cpu.grant.clusters!=3||cpu.grant.changes<4)return 0;
++#else
++        if(s->board.workload!=2||cpu.grant.clusters!=3||cpu.grant.changes<4)return 0;
+ #endif
          for(unsigned i=0;i<4;++i)if(owners[i]==cpu.owner)return 0;
          cpu_owner=cpu.owner;
-         if((s->granted&OS_GRANT_NPU)&&cpu.owner==s->npu.owner)return 0;

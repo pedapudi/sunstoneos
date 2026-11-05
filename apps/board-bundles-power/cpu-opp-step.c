@@ -551,7 +551,7 @@ static void client(void *unused)
     for (unsigned i = 0; i < plan.count; ++i)
         transitions += plan.ops[i].kind == OP_CLOCK;
     const struct a733_cpu_clock_config config = {CPU_OWNER, {plan.clusters ? 1u : 0u, plan.clusters,
-        {plan.max_mhz[0], plan.max_mhz[1]}, plan.clusters ? transitions + UNWIND_CHANGES : 0, 0}};
+        {plan.max_mhz[0], plan.max_mhz[1]}, plan.clusters ? transitions + UNWIND_CHANGES : 0}};
     static const struct a733_cpu_clock_ops ops = {cpu_now, cpu_read, cpu_write};
     REQUIRE(a733_cpu_clock_init(&cpu, &config, &ops, NULL, &bb_power.clocks, &bb_power.rails, &bb_power.pmic,
                                 &policy), "CPU clock init");
