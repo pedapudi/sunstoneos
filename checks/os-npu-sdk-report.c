@@ -13,10 +13,8 @@ const struct ss_application ss_application={0};
 #else
 const struct ss_application ss_application={.manifest=&manifest};
 #endif
-const unsigned os_npu_model_count=1,os_npu_client_entry=0,os_npu_client_model=3;
-const unsigned os_npu_input_count=1,os_npu_output_count=1;
-static const uint8_t input[]={1,2,3,4},reference[8]={1,2,3,4,5,6,7,8};
-const struct os_npu_vector os_npu_inputs[]={{input,sizeof(input)}},os_npu_references[]={{reference,sizeof(reference)}};
+const unsigned os_npu_client_model=3;
+static const uint8_t input[]={1,2,3,4};
 static unsigned step,submits,failed,refuse_submit,after_submit,native_closed,mode,input_visits;
 static uint32_t first_site,first_value;
 static uint8_t tensor_input[4],tensor_output[8];
@@ -81,13 +79,14 @@ int main(int argc,char **argv)
 {
     assert(argc==3);mode=(unsigned)strtoul(argv[1],NULL,10);
     board.session.epoch=10;board.session.generation=20;session.npu.jobs=2;
+    static struct npu_runtime runtime;atomic_init(&runtime.count,1);os_npu_runtime_for_sdk=&runtime;
     if(!setjmp(suspended))os_npu_client_task(NULL);
     struct os_npu_report report;os_npu_report_copy((uint8_t *)&report);
     assert(atomic_load(&report.finished)&&report.jobs_selected==2&&report.model==3);
 #ifdef REPORT_BUILTIN
-    assert(!mode&&submits==2&&!failed&&os_npu_complete());
-    assert(report.stopped&&!report.retained&&report.jobs==2&&report.output_bytes==8);
-    assert(report.pattern==OS_NPU_OUTPUT_PATTERN&&!report.pattern_bytes&&!report.mismatches);
+    /* An image without an application manifest has no client: the service opens and closes, and the report says refused. */
+    assert(!mode&&!submits&&!failed&&os_npu_complete());
+    assert(report.stopped&&!report.retained&&report.refused&&!report.jobs&&!report.output_bytes&&!report.mismatches);
 #else
     const unsigned jobs=mode==0?2:mode==1||mode==4||mode==5?0:1;
     assert(report.jobs==jobs&&report.output_bytes==(jobs?8:0));

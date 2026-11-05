@@ -298,10 +298,10 @@ struct ss_key_report {
     uint8_t data[8];
 };
 int ss_key_report(struct ss_key_report *report);
-/* Immutable image-linked model metadata. Names contain at most 63 UTF-8 bytes
- * plus a terminating zero. Byte sizes describe concatenated logical tensors,
- * excluding device padding. A catalogue may contain any positive count that
- * the selected backend admits; indices are local to that image's catalogue. */
+/* Model metadata. Names contain at most 63 UTF-8 bytes plus a terminating zero; the model of a graph registered at run time
+ * (ss_npu_register_graph) has an empty name, and ss_npu_model_find reaches only named models. Byte sizes describe concatenated
+ * logical tensors, excluding device padding. The OS image links no model: every index is the one ss_npu_register_graph
+ * returned, and the counts and sizes come from the graph's own header. */
 #define SS_NPU_MODEL_NAME_BYTES 64u
 struct ss_npu_model {
     char name[SS_NPU_MODEL_NAME_BYTES];

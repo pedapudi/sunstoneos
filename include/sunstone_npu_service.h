@@ -9,10 +9,14 @@
 struct ss_npu_backend {
     int (*run)(unsigned,const void *,size_t,void *,size_t,uint64_t);
     int (*close)(void);
-    /* Immutable for the session. The backend checks these against its decoded
-     * linked models before bind; bind validates names and public capacities. */
+    /* Immutable for the session: the models the backend links, which a test backend may name. A backend that links none
+     * (the OS image) gives NULL and zero; every model is then registered at run time and reported through info. The
+     * backend checks the linked table against its decoded models before bind; bind validates names and public capacities. */
     const struct ss_npu_model *models;
     unsigned count;
+    /* Optional: the description of model index (linked or registered) from the backend's own decoded plan; 1, or 0 for an
+     * unknown index. The name of a registered model is empty. */
+    int (*info)(unsigned index,struct ss_npu_model *);
 };
 int ss_npu_service_bind(const struct ss_npu_backend *);
 /* Optional, before bind. run returns 2 when the job failed with an NPU MMU exception and the NPU was recovered; the

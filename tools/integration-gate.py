@@ -48,15 +48,12 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-# The NPU catalogue map of the npu variant, relative to the --cache directory.
-NPU_CATALOGUE = 'build/npu-board/session-artifacts.json'
 VARIANTS = {
     'sup': [],
     # Every service of the one OS image that is not yet a run-time option (docs/designs/one-os-image.md): the image the
     # series converges on. Each series removes its options from the variants above and from this list.
     'all': ['-DSUNSTONE_A733_OS_AUDIO=ON', '-DSUNSTONE_A733_OS_RADIO=ON', '-DSUNSTONE_A733_OS_NPU=ON',
-            '-DSUNSTONE_A733_OS_NPU_QUEUE=ON', '-DSUNSTONE_OS_NPU_CLIENT_MODEL=0', '-DSUNSTONE_OS_NPU_QUEUE_MODELS=0,1',
-            '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
+            '-DSUNSTONE_A733_OS_NPU_QUEUE=ON'],
     'res': ['-DSUNSTONE_A733_OS_RESIDENT=ON'],
     'resaud': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_AUDIO=ON'],
     'resradio': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON'],
@@ -66,9 +63,8 @@ VARIANTS = {
     'radio-headset': ['-DSUNSTONE_A733_OS_RADIO=ON', '-DSUNSTONE_A733_OS_HEADSET=ON'],
     'resradio-headset': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON',
                          '-DSUNSTONE_A733_OS_HEADSET=ON'],
-    # The supervised NPU profile. The OS build verifies its host inputs against
-    # tools/npu-fixtures.json. {cache} is the --cache directory.
-    'npu': ['-DSUNSTONE_A733_OS_NPU=ON', '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
+    # The supervised NPU profile: the image links no graph.
+    'npu': ['-DSUNSTONE_A733_OS_NPU=ON'],
     # The NPU queue and the performance-mode service are built in 'all'. The CPU clock owner and the performance service are
     # in every image, and a session grants them (docs/designs/one-os-image-cpu.md).
 }
@@ -364,8 +360,6 @@ def main(argv=None):
         prose, serial = dict(getattr(module, 'PROSE_CHECKS', {})), set(getattr(module, 'SERIAL_CHECKS', ()))
     except Exception:
         pass
-    if any('npu' in v for v in variants) and not (cache / NPU_CATALOGUE).is_file():
-        parser.error('the npu variant needs the NPU catalogue map ' + str(cache / NPU_CATALOGUE))
     selectors = compatibility_variables(source)
     paths = list(args.application)
     paths += [p for p in os.environ.get('SUNSTONE_EXTERNAL_APPLICATIONS', '').split(';') if p]
@@ -534,8 +528,6 @@ def main(argv=None):
         note(name + '-untracked-sha256: %s (%d files)' % app_state[3])
         if app_state[1]:
             (output / (name + '-status.txt')).write_text(app_state[1])
-    if any('npu' in v for v in variants):
-        note('npu-catalogue-sha256: ' + hashlib.sha256((cache / NPU_CATALOGUE).read_bytes()).hexdigest())
 
     def unchanged(when):
         """The recorded state must be complete and still describe the tree."""

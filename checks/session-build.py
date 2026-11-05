@@ -78,10 +78,10 @@ def main():
         directory.mkdir(exist_ok=True)
         declaration = None
         if name == 'npu':
-            symbols, elf = session.read_symbols(image)
-            models = struct.unpack('<I', session.symbol_bytes(elf, symbols, 'os_npu_model_count')[:4])[0]
+            # The image links no graph: the application registers one at run time, within the declared bounds.
             declaration = out / 'npu-declaration.json'
-            declaration.write_text(json.dumps({'slots': 1, 'in_flight': 1, 'graphs': models, 'links': 0}))
+            declaration.write_text(json.dumps({'slots': 1, 'in_flight': 1, 'graphs': 1, 'links': 0,
+                                               'graph_bytes': 1 << 20, 'tensor_bytes': 1 << 18}))
         inputs = placeholders(host, image, directory)
         record = session.build(image, directory, npu_declaration=declaration, inputs=inputs, clock_grant=True)
         raw = (directory / 'template/session.bin').read_bytes()

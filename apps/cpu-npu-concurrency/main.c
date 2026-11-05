@@ -177,8 +177,14 @@ static int observe(void *cookie,unsigned event,const struct ss_npu_observation *
 static void vectors(void)
 {
     struct ss_npu_model model;
-    require(ss_npu_model_find("shufflenet-v2-published",&selected)==1&&
-        ss_npu_model_info(selected,&model)==1,0x85,6);
+    /* The image links no graph: hand the NPU this one and read its description from its own header. */
+    int registered;
+    uint64_t begin=ss_counter_ticks();
+    while((registered=ss_npu_register_graph(cpu_npu_graph,cpu_npu_graph_bytes,&selected))==0){
+        if(ss_counter_ticks()-begin>240000000)fault(0x85,6,0,0,1);
+        live(6);vTaskDelay(1);
+    }
+    require(registered==1&&ss_npu_model_info(selected,&model)==1,0x85,6);
     input_bytes=cpu_npu_input_bytes;output_bytes=cpu_npu_reference_bytes;
     require(input_bytes==model.input_bytes&&output_bytes==model.output_bytes&&
         input_bytes<=SS_NPU_MAX_TENSOR_BYTES&&output_bytes<=sizeof(output),0x85,6);

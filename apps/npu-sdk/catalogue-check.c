@@ -1,6 +1,7 @@
 /* Host-only: decode the generated linked models, then exercise the real OS
  * metadata admission and the public mailbox without starting a device. */
 #include "npu.h"
+#include "npu-test-models.h"
 #include "sunstone_npu_service.h"
 #include <assert.h>
 #include <stdlib.h>

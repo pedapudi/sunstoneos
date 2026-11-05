@@ -52,13 +52,13 @@ NETWORK = CACHE / 'sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac1
 generated = out / 'generated'; generated.mkdir()
 models = ROOT / 'apps/npu-graphs/models-r.json'
 (out / 'artifacts.json').write_text(json.dumps(artifacts))
-subprocess.run([sys.executable, str(ROOT / 'apps/os/npu-catalogue.py'), '--artifacts', str(out / 'artifacts.json'),
+subprocess.run([sys.executable, str(ROOT / 'tools/npu-test-models.py'), '--artifacts', str(out / 'artifacts.json'),
                 '--models', str(models), '--model', '0', '--all', '--output', str(generated / 'npu-models.c')], check=True)
 inputs = out / 'inputs'; inputs.mkdir()
 for number, name in enumerate(json.loads(models.read_text())['npu_models']):
     for k, path in enumerate(artifacts[name]['inputs']):
         shutil.copy(path, inputs / ('%02d-%d.bin' % (number, k)))
-includes = [ROOT / 'apps/os', generated, ROOT / 'apps/board', ROOT / 'platform/a733-storage-update',
+includes = [ROOT / 'apps/os', ROOT / 'checks', generated, ROOT / 'apps/board', ROOT / 'platform/a733-storage-update',
             ROOT / 'platform/a733-smp-cached', ROOT / 'drivers/usb', ROOT / 'network/include', ROOT / 'platform/qemu-smp',
             NETWORK / 'include', NETWORK / 'portable/Compiler/GCC']
 exe = host_rtos.build(out / 'exe', [*UNITS, generated / 'npu-models.c'],
@@ -147,7 +147,7 @@ shader_models = ROOT / 'apps/npu-graphs/models-shr.json'
 shader_out = out / 'shader'; shader_out.mkdir()
 (shader_out / 'artifacts.json').write_text(json.dumps(artifacts))
 (shader_out / 'generated').mkdir()
-subprocess.run([sys.executable, str(ROOT / 'apps/os/npu-catalogue.py'), '--artifacts', str(shader_out / 'artifacts.json'),
+subprocess.run([sys.executable, str(ROOT / 'tools/npu-test-models.py'), '--artifacts', str(shader_out / 'artifacts.json'),
                 '--models', str(shader_models), '--model', '0', '--all', '--output', str(shader_out / 'generated/npu-models.c')], check=True)
 (shader_out / 'inputs').mkdir()
 for number, name in enumerate(json.loads(shader_models.read_text())['npu_models']):
@@ -156,7 +156,7 @@ for number, name in enumerate(json.loads(shader_models.read_text())['npu_models'
 shader_exe = host_rtos.build(shader_out / 'exe', [*UNITS, shader_out / 'generated/npu-models.c'], 'os-npu-fault-shader',
                              defines=[d for d in DEFINES if not d.startswith('SUNSTONE_NPU_CASE')] +
                              ['SUNSTONE_NPU_CASE_SLOTS=100,101,-1,-1,-1,-1', 'SUNSTONE_NPU_CASE_ADDRESSES=0,0,0,0,0,0'],
-                             includes=[ROOT / 'apps/os', shader_out / 'generated', *includes[2:]],
+                             includes=[ROOT / 'apps/os', ROOT / 'checks', shader_out / 'generated', *includes[3:]],
                              flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections', '-fno-pie'],
                              link=['-Wl,--gc-sections', '-no-pie'])
 done = subprocess.run([str(shader_exe), '25', str(shader_out / 'inputs')], capture_output=True, text=True,

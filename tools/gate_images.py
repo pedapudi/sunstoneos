@@ -22,8 +22,7 @@ IMAGES = {
         '-DSUNSTONE_A733_OS_CPU_RETURN=ON',
         '-DSUNSTONE_A733_OS_NPU=ON',
         '-DSUNSTONE_A733_OS_NPU_OBSERVE=ON',
-        '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/build/npu-board/session-artifacts.json',
-        '-DSUNSTONE_OS_NPU_MODEL_NAME=shufflenet-v2-published',
+        '-DSUNSTONE_CPU_NPU_ARTIFACTS={cache}/build/npu-board/session-artifacts.json',
     ], 'target': 'sunstone-a733-os', 'elf': 'sunstone-a733-os.elf'},
     # the CPU-return GPU image of apps/gpu-lifecycle (apps/gpu-lifecycle/README.md)
     'ret-gpu': {'configure': [
