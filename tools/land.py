@@ -148,6 +148,33 @@ def merge_bringup(worktree, branch):
         raise Refused('the merge of bringup failed: %s' % (done.stderr or done.stdout).strip())
 
 
+def restored_versions(worktree, base, tip, names):
+    """{path: bringup commit} for every path whose landed blob equals one the path had at an earlier commit on bringup's
+    first-parent history but does not have at bringup's tip: the landing would restore an older version of the file.
+
+    One bounded `git log --raw` over the paths in the diff lists the blobs each first-parent commit gave them."""
+    wanted = {}
+    for name in names:
+        landed = git(worktree, 'rev-parse', '--verify', '-q', '%s:%s' % (tip, name), check=False).stdout.strip()
+        current = git(worktree, 'rev-parse', '--verify', '-q', '%s:%s' % (base, name), check=False).stdout.strip()
+        if landed and landed != current:
+            wanted[name] = landed
+    found = {}
+    if not wanted:
+        return found
+    log = git(worktree, '-c', 'core.quotepath=off', 'log', '--first-parent', '-m', '--no-renames', '--raw', '--no-abbrev',
+              '--format=commit %H', base, '--', *wanted).stdout
+    commit = None
+    for line in log.splitlines():
+        if line.startswith('commit '):
+            commit = line[7:]
+        elif line.startswith(':'):
+            fields, _, name = line.partition('\t')
+            if wanted.get(name) == fields.split()[3] and name not in found:
+                found[name] = commit            # the newest commit that gave the path this version
+    return found
+
+
 def docs_only(names):
     expressions = [glob_regex(p) for p in DOCS_ONLY]
     return all(any(e.match(n) for e in expressions) for n in names)
@@ -296,6 +323,10 @@ def land(args):
             if hits and args.approved_by != 'coordinator':
                 raise Refused('the diff touches protected paths; the coordinator must land it with '
                               '--approved-by coordinator:\n' + '\n'.join(hits))
+            stale = {n: c for n, c in restored_versions(worktree, base, tip, names).items() if n not in args.restores}
+            if stale:
+                raise Refused('the landing would restore older versions of files; land a deliberate revert with --restores PATH:\n'
+                              + '\n'.join('%s restores the version of %s' % (n, c[:12]) for n, c in sorted(stale.items())))
             label = verify(args, worktree, base, tip, names, label_for(args, branch))
             require_clean(worktree, 'the worktree after the checks')
             if out(worktree, 'rev-parse', 'HEAD') != tip:
@@ -330,6 +361,8 @@ def main(argv=None):
     parser.add_argument('worktree', type=Path)
     parser.add_argument('--reason', required=True)
     parser.add_argument('--approved-by')
+    parser.add_argument('--restores', action='append', default=[], metavar='PATH',
+                        help='a file whose older version this landing deliberately restores; repeat for each')
     parser.add_argument('--wait', type=float, default=0, help='seconds to wait for the lock (default: refuse at once)')
     parser.add_argument('--cache', type=Path, default=CACHE)
     parser.add_argument('--bringup-worktree', type=Path, default=BRINGUP_WORKTREE)
