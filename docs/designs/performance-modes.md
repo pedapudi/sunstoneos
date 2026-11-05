@@ -87,7 +87,7 @@ The service therefore changes the NPU only after its session has ended and the l
 
 ## The host command
 
-`tools/sunstone-perf.py high|low|status [--block cpu-l,cpu-b,cpu,npu]` takes the board lock of the port, opens the running OS on USB0, checks that the image manifest records the service, and sends operation 8. `status` requests a readback, waits for its completion and prints each block's target, rate and voltage. `high` and `low` take the epoch from a report, send the switch and wait for its completion, at most 5 s. The supervised launcher holds the board until its run ends, so the same functions also serve it: `--perf-sequence high,low,high` makes one switch before each recognition.
+There is none. Operation 8 has no host sender; a switch from the host needs one written against `apps/os/perf.h`.
 
 ## Qualified figures
 
@@ -107,7 +107,7 @@ No path in the service runs per job or per frame; it uses no heavier form of sec
 
 ## Checks
 
-`checks/perf-mode.py` compares every table entry with the pinned device-tree rows, compiles `checks/perf-mode-model.c` with the engine and the CPU clock driver's tables, and runs it. It also runs the OS owner (`apps/os/perf.c`, in `checks/perf-os-model.c`) over modeled providers with and without the NPU, and drives `tools/sunstone-perf.py` against a modeled USB device. The engine model covers the order of every switch, every refusal before a write, an NPU session that ends inside the bound and one that does not, each step failing, the report after a failure, and a bin without an entry. The NPU startup host model (`checks/npu-startup-host.c`) covers the retune of a stopped NPU. The native check reuses the existing OS NPU instruction model; RTOS and device effects are modeled.
+`checks/perf-mode.py` compares every table entry with the pinned device-tree rows, compiles `checks/perf-mode-model.c` with the engine and the CPU clock driver's tables, and runs it. It also runs the OS owner (`apps/os/perf.c`, in `checks/perf-os-model.c`) over modeled providers with and without the NPU. The engine model covers the order of every switch, every refusal before a write, an NPU session that ends inside the bound and one that does not, each step failing, the report after a failure, and a bin without an entry. The NPU startup host model (`checks/npu-startup-host.c`) covers the retune of a stopped NPU. The native check reuses the existing OS NPU instruction model; RTOS and device effects are modeled.
 
 ## Limitations and open work
 

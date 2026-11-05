@@ -900,9 +900,7 @@ not settle, and any request before the first publication, is answered busy.
 USB0 accepts a read back or a switch into a one-slot mailbox only while no
 command runs and the mailbox is empty, and otherwise answers busy. A switch
 that names another epoch is answered as stale and posts nothing.
-`tools/sunstone-perf.py` sends these requests; the supervised launcher's
-`--perf-sequence` switches before each recognition and reads back after the
-capture.
+No host command sends these requests.
 
 ## Build and checks
 

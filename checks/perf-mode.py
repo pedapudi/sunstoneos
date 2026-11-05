@@ -7,21 +7,18 @@ that chooses each point (high: the column's top row; low: the fastest row at
 the column's lowest voltage). The engine model (checks/perf-mode-model.c)
 runs with the CPU clock driver's tables, the OS owner model
 (checks/perf-os-model.c) runs apps/os/perf.c with and without the NPU, and the
-NPU startup model runs the retune of a stopped NPU. tools/sunstone-perf.py runs against a modeled OS
-device, and the report layout is compared with apps/os/perf.h."""
+NPU startup model runs the retune of a stopped NPU."""
 import argparse
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
 import re
-import struct
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'checks'))
-from harness import CACHE, CLANG, SANITIZE, environment, refused  # noqa: E402
+from harness import CACHE, CLANG, SANITIZE, environment  # noqa: E402
 
 SOURCES = CACHE / 'sources'
 ENGINE = ['drivers/power/a733_perf_mode.c', 'drivers/clock/a733_cpu_clock.c', 'drivers/power/a733_pmic.c',
@@ -126,123 +123,6 @@ def build(out, name, sources, extra=()):
     return exe
 
 
-class Device:
-    """A modeled running OS on USB0: operation 7 with a mailbox, numbers,
-    busy answers and a stale-epoch refusal. Each command finishes after
-    `delay` report requests."""
-
-    def __init__(self, epoch=0x1122334455667788, busy=0, delay=2, refuse=False):
-        self.epoch, self.busy, self.delay, self.refuse = epoch, busy, delay, refuse
-        self.number, self.completed, self.running, self.pending = 0, 0, 0, None
-        self.mode, self.answer, self.sent, self.requests = 1, None, b'', []
-
-    def report(self, answer=0, number=0):
-        raw = bytearray(192)
-        struct.pack_into('<4I2Q16I', raw, 0, 0x4d465250, 1, 192, 2, self.epoch, 7, answer, number,
-                         self.number, self.completed, 1 if self.running else 0, 2, 3 if self.refuse else 2,
-                         4 if self.refuse else 0, 4 if self.refuse else 5, 1, self.mode, 0x400, 58, 0x17, 0x1f, 0x8)
-        for i, (mhz, mv) in enumerate(((1794, 1000), (2002, 1050), (1274, 1000), (0, 960), (852, 800)) if
-                                      self.mode == 1 else ((1196, 800), (1404, 800), (910, 800), (0, 960), (492, 800))):
-            struct.pack_into('<4I', raw, 96 + 16 * i, mhz, mv, mhz, mv)
-        return bytes(raw)
-
-    def write(self, endpoint, packet, timeout):
-        assert endpoint == 0x02 and len(packet) == 16 and timeout > 0
-        op, command, count, selection, epoch = struct.unpack('<BBHIQ', packet)
-        assert op == 8 and count == 0 and command <= 2 and not selection & ~0x31f
-        self.requests.append((command, selection, epoch))
-        if self.running:
-            self.running -= 1
-            if not self.running:
-                self.completed = self.number
-                if self.pending:
-                    self.mode = self.pending
-        if command == 0:
-            self.sent = self.report()
-        elif command == 2 and epoch != self.epoch:
-            self.sent = self.report(3)
-        elif self.busy or self.running:
-            self.busy = max(0, self.busy - 1)
-            self.sent = self.report(2)
-        else:
-            self.number += 1
-            self.running = self.delay
-            self.pending = selection >> 8 if command == 2 and not self.refuse else None
-            self.sent = self.report(1, self.number)
-        return len(packet)
-
-    def read(self, endpoint, size, timeout):
-        assert endpoint == 0x81 and timeout > 0
-        data, self.sent = self.sent[:size], self.sent[size:]
-        return data
-
-
-def host_tool_check(out):
-    spec = importlib.util.spec_from_file_location('sunstone_perf', ROOT / 'tools/sunstone-perf.py')
-    tool = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(tool)
-    cases = []
-    assert tool.request(2, tool.selection('low', 3), 5) == struct.pack('<BBHIQ', 8, 2, 0, 0x203, 5)
-    refused(lambda: tool.request(0, 1), 'Invalid performance-mode request')
-    refused(lambda: tool.request(2, 0x400), 'Invalid performance-mode request')
-    assert tool.parse_blocks('cpu,npu') == 0x13 and tool.parse_blocks('cpu-b') == 2
-    refused(lambda: tool.parse_blocks('dsu'), 'Unknown block')
-    cases.append('request encoding and block names')
-    manifest = {'passed': True, 'target': 'sunstone-a733-os', 'perf_modes': True, 'perf_operation': 8, 'perf_boot_mode': 'high'}
-    assert tool.manifest_check(manifest) == 'high'
-    assert tool.manifest_check({k: v for k, v in manifest.items() if k not in ('passed', 'target')}) == 'high'
-    assert tool.manifest_check({**manifest, 'passed': False}) == 'high'
-    refused(lambda: tool.manifest_check({**manifest, 'perf_modes': False}), 'no performance-mode service')
-    refused(lambda: tool.manifest_check({'passed': True, 'target': 'sunstone-a733-os'}), 'no performance-mode service')
-    refused(lambda: tool.manifest_check({**manifest, 'perf_operation': 7}), 'no performance-mode service')
-    cases.append('manifest refusal before any device access, including old opcode7')
-    clock = [0.0]
-
-    def now():
-        return clock[0]
-
-    def pause(seconds):
-        clock[0] += seconds
-    saved = []
-
-    def exchange_for(device):
-        return tool.device_exchange(device, lambda: None, 100.0, saved.append, now=now)
-    device = Device()
-    report = tool.run(exchange_for(device), tool.SWITCH, 'low', now=now, pause=pause)
-    assert report['mode'] == 2 and report['completed'] == 1 and report['blocks']['cpu-b']['mhz'] == 1404
-    # The switch named the session's epoch and, without --block, the owned
-    # selectable blocks (CPU-L, CPU-B and the NPU).
-    assert (2, 0x213, device.epoch) in device.requests
-    cases.append('switch to low waits for its completion')
-    device = Device(busy=3)
-    report = tool.run(exchange_for(device), tool.READ, now=now, pause=pause)
-    assert report['completed'] == 1 and sum(1 for r in device.requests if r[0] == 1) == 4
-    cases.append('busy answers are retried')
-    device = Device(busy=10 ** 6)
-    refused(lambda: tool.run(exchange_for(device), tool.READ, now=now, pause=pause, timeout=0.5), 'stayed busy')
-    cases.append('a device that stays busy times out')
-    device = Device(refuse=True)
-    report = tool.run(exchange_for(device), tool.SWITCH, 'low', 0x8, now=now, pause=pause)
-    assert report['result'] == 3 and tool.REASONS[report['reason']] == 'block not owned by this image'
-    assert (2, 0x208, device.epoch) in device.requests
-    text = '\n'.join(tool.describe(report))
-    assert 'refused: block not owned by this image at npu' in text and 'not owned' in text
-    cases.append('a refusal is reported, not retried')
-
-    class Stale(Device):
-        def write(self, endpoint, packet, timeout):
-            self.epoch += packet[1] == 2
-            return super().write(endpoint, packet, timeout)
-    refused(lambda: tool.run(exchange_for(Stale()), tool.SWITCH, 'high', now=now, pause=pause), 'epoch changed')
-    cases.append('a stale epoch is refused')
-    refused(lambda: tool.decode(b'\0' * 192), 'Not a performance-mode report')
-    refused(lambda: tool.decode(b'\0' * 64), 'size differs')
-    cases.append('report decoding refusals')
-    assert all(len(raw) == 192 for raw in saved)
-    (out / 'host-tool.json').write_text(json.dumps({'cases': cases, 'describe': text.splitlines()}, indent=2) + '\n')
-    return cases
-
-
 def os_model(out, npu):
     """apps/os/perf.c in one unit with checks/perf-os-model.c, over the shims
     of checks/perf-os-host, laid out as the OS tree so its includes resolve."""
@@ -258,24 +138,6 @@ def os_model(out, npu):
     lines = run(out, name, [exe]).splitlines()
     assert lines[-1].startswith('PASS'), lines
     return json.loads(lines[-2])
-
-
-def layout_check(out):
-    """apps/os/perf.h's report against the host tool's layout."""
-    probe = out / 'layout.c'
-    probe.write_text('#include <stddef.h>\n#include <stdio.h>\n#include "perf.h"\n'
-                     'int main(void){printf("%zu %zu %zu %zu %zu %zu\\n",offsetof(struct os_perf_report,epoch),'
-                     'offsetof(struct os_perf_report,answer),offsetof(struct os_perf_report,stopped),'
-                     'offsetof(struct os_perf_report,block),offsetof(struct os_perf_report,blocks),'
-                     'sizeof(struct os_perf_report));return 0;}\n')
-    exe = build(out, 'layout', [probe], ['-Iapps/os'])
-    assert run(out, 'layout', [exe]).split() == ['16', '32', '92', '96', '176', '192']
-    spec = importlib.util.spec_from_file_location('sunstone_perf_layout', ROOT / 'tools/sunstone-perf.py')
-    tool = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(tool)
-    assert tool.OP == 8 and '#define OS_PERF_OP 8u' in (ROOT / 'apps/os/perf.h').read_text()
-    assert '#define OS_THERMAL_REPORT_OP 7u' in (ROOT / 'apps/os/thermal-report.h').read_text()
-    assert struct.calcsize(tool.LAYOUT) == 96 and len(tool.FIELDS) == 22
 
 
 def main():
@@ -296,20 +158,17 @@ def main():
     for mode in ('', '--rate-852', '--second-start'):
         assert run(out, 'npu-startup' + mode, [startup] + ([mode] if mode else [])).splitlines()[-1].startswith('PASS')
     result['os_owner'] = {'cpu': os_model(out, False), 'cpu_npu': os_model(out, True)}
-    result['host_tool'] = host_tool_check(out)
-    layout_check(out)
     for path in sorted({*ENGINE, *STARTUP, 'checks/perf-mode-model.c', 'include/a733_perf_mode.h',
                         'apps/os/perf.h', 'apps/os/perf.c', 'checks/perf-os-model.c', 'checks/perf-os-host/os.h',
                         'checks/perf-os-host/npu.h', 'checks/perf-os-host/a733_mmio.h',
-                        'checks/perf-os-host/board/application.h', 'tools/sunstone-perf.py', 'checks/perf-mode.py'}):
+                        'checks/perf-os-host/board/application.h', 'checks/perf-mode.py'}):
         inputs[path] = hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
     result['inputs'] = inputs
     (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result['engine']))
     print('PASS performance modes: vf0400 table and citations against the pinned trees, the engine model '
-          '(%d cases), the OS owner model with and without the NPU (%d CPU and %d NPU cases), the stopped-NPU retune, '
-          '%d host-tool cases and the report layout'
-          % (result['engine']['cases'], result['os_owner']['cpu']['cases'], result['os_owner']['cpu_npu']['cases'], len(result['host_tool'])))
+          '(%d cases), the OS owner model with and without the NPU (%d CPU and %d NPU cases) and the stopped-NPU retune'
+          % (result['engine']['cases'], result['os_owner']['cpu']['cases'], result['os_owner']['cpu_npu']['cases']))
 
 
 if __name__ == '__main__':
