@@ -11,7 +11,7 @@ temporary origin.
 ## Use
 
 ```
-tools/land.py WORKTREE --reason TEXT [--approved-by coordinator]
+tools/land.py WORKTREE --reason TEXT [--approved-by coordinator] [--restores PATH ...]
 ```
 
 `WORKTREE` is the worker's own worktree, on its own `work/` branch, with every
@@ -88,6 +88,15 @@ from that gate's tree is run on the landed tree.**
 5. It requires that `bringup` is an ancestor of the merge result and that the
    branch holds at least one commit beyond `bringup`.
 6. It compares the diff against `bringup` with the protected paths (below).
+   It also refuses a diff that would restore an older version of a file: for each
+   path where the merged tree differs from the `bringup` tip, it looks up the
+   blobs the path had on `bringup`'s first-parent history with one `git log --raw`
+   over the diff's paths, and refuses when the merged blob equals an earlier
+   one. Each refused path is named with the `bringup` commit whose version it
+   restores. A deliberate revert names each path with `--restores PATH` (repeat
+   the option). A landing carried older copies of 167 files that
+   git merged without a conflict; this guard refuses 115 of them in 1.7 s on
+   this repository, and the rest are files with no earlier blob to match.
 7. It runs the checks of the diff's tier (above).
 8. It requires that the worktree is still clean and unchanged. If `bringup`
    moved during the checks, it merges again and checks again, up to three times.

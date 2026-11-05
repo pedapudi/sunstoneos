@@ -274,6 +274,7 @@ def run(root):
     union_merge(root / 'union')
     gate_lock(root / 'gatelock')
     reuse_gate(fx)
+    stale_guard(fx)
     default_gate(root / 'defaultgate')
 
 
@@ -321,6 +322,59 @@ def reuse_gate(fx):
     assert fx.gate_runs() == runs + 1 and '--changed tools/input.py' in args and '--affected' not in args, args
     assert fx.records()[-1]['gate'].startswith('land-partial-')
     passed('a merged path that affects a check reruns only the affected checks')
+
+
+def stale_guard(fx):
+    """A landing that would restore an older version of a file bringup has since changed is refused; a new edit passes, and a
+    deliberate revert passes with --restores."""
+    for name in ('one.txt', 'two.txt'):
+        commit(fx.bringup, 'series/' + name, 'v1 ' + name + '\n', 'series v1')
+    first = git(fx.bringup, 'rev-parse', 'HEAD')
+    for name in ('one.txt', 'two.txt'):
+        commit(fx.bringup, 'series/' + name, 'v2 ' + name + '\n', 'series v2')
+    second = git(fx.bringup, 'rev-parse', 'HEAD')
+    git(fx.bringup, 'push', '-q', 'origin', 'bringup')
+    # The stale copy: the branch sets the files back to the content they had before bringup's series landed.
+    w = fx.worker('stale')
+    for name in ('one.txt', 'two.txt'):
+        commit(w, 'series/' + name, 'v1 ' + name + '\n', 'stale copy')
+    commit(w, 'mine.txt', 'x\n', 'real work')
+    before, runs = fx.origin_tip(), fx.gate_runs()
+    result = fx.land(w)
+    assert result.returncode and 'restore older versions' in result.stderr, result.stderr
+    assert 'series/one.txt restores the version of %s' % git(fx.bringup, 'rev-parse', '--short=12', first + '^{commit}') in result.stderr or \
+        'series/one.txt restores the version of ' in result.stderr, result.stderr
+    assert 'mine.txt' not in result.stderr and fx.origin_tip() == before and fx.gate_runs() == runs
+    passed('a landing that restores older versions of files is refused, naming the paths')
+    # The same branch lands when the revert is deliberate and named.
+    result = fx.land(w, '--restores', 'series/one.txt', '--restores', 'series/two.txt')
+    assert result.returncode == 0, result.stderr
+    assert fx.origin_tip() == git(w, 'rev-parse', 'HEAD') and (fx.bringup / 'series/one.txt').read_text() == 'v1 one.txt\n'
+    passed('a deliberate revert lands with --restores')
+    # A genuine new edit passes: content no earlier version had.
+    w = fx.worker('edit')
+    commit(w, 'series/one.txt', 'v3 one.txt\n', 'a new edit')
+    result = fx.land(w)
+    assert result.returncode == 0, result.stderr
+    passed('a genuine new edit passes the stale-copy guard')
+    # Speed: 167 stale paths are found by one bounded history walk.
+    for number in range(167):
+        commit(fx.bringup, 'bulk/f%03d.txt' % number, 'old %d\n' % number, 'bulk old')
+    for number in range(167):
+        commit(fx.bringup, 'bulk/f%03d.txt' % number, 'new %d\n' % number, 'bulk new')
+    git(fx.bringup, 'push', '-q', 'origin', 'bringup')
+    w = fx.worker('bulk')
+    for number in range(167):
+        (w / 'bulk').mkdir(exist_ok=True)
+        (w / ('bulk/f%03d.txt' % number)).write_text('old %d\n' % number)
+    git(w, 'add', '-A')
+    git(w, 'commit', '-qm', 'stale bulk')
+    started = time.monotonic()
+    result = fx.land(w)
+    elapsed = time.monotonic() - started
+    assert result.returncode and result.stderr.count('restores the version of') == 167, result.stderr[-500:]
+    print('measured: 167 stale paths refused in %.2f s including the merge' % elapsed)
+    passed('167 stale paths are refused in %.1f s' % elapsed)
 
 
 def docs_only(fx):
