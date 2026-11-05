@@ -180,6 +180,11 @@ def check_consumers(record):
     require(out['device_ranges']['ranges'] == [{'base': 0x180000000, 'bytes': 0x4000000}, {'base': 0x80000000, 'bytes': 0x4000000}] and
             out['return_walk'][3]['ticks'] == 24000 and abs(out['return_walk'][3]['microseconds'] - 1000.0) < 1e-6 and
             out['npu_guard']['differing_words'] == 0 and out['npu_guard']['checked'] == 1, 'the published ranges and the walk do not decode')
+    registered = returning.decode_published({'npu-register': struct.pack('<8Q', 80, 13815360, 8000, 4000, 36000, 0, 0, 0)}, {})['npu_register']
+    require(registered['graphs'] == 80 and registered['per_graph_us'] == {'copy': 100.0, 'decode': 50.0, 'layout': 450.0},
+            'the graph registration record does not decode')
+    require(returning.decode_published({'npu-register': bytes(64)}, {})['npu_register']['per_graph_us'] is None,
+            'an empty registration record does not decode')
     require(returning.decode_published({'device-ranges-head': bytes(8)}, {})['device_ranges'] == {'head': 0, 'ranges': []},
             'an empty range list does not decode')
     for name, bad in (('a range below the image', struct.pack('<2Q', 0, 1) + struct.pack('<2Q', 0x41000000, 4096)),

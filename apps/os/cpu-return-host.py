@@ -171,7 +171,8 @@ def geometry(image):
     if ranges:
         result['device_ranges_head'] = ranges
     # What a run publishes about where its device memory went and how long the terminal's walk of it took (apps/os/device-ranges.h).
-    for symbol, key, bytes_ in (('os_cpu_return_walk', 'return_walk', 128), ('os_npu_guard_record', 'npu_guard', 64)):
+    for symbol, key, bytes_ in (('os_cpu_return_walk', 'return_walk', 128), ('os_npu_guard_record', 'npu_guard', 64),
+                              ('os_npu_register_record', 'npu_register', 64)):
         if symbol in symbols:
             address, size = symbols[symbol]
             require(size == bytes_ and address % 8 == 0 and begin <= address < address + size <= end,
@@ -294,6 +295,12 @@ def decode_published(copied, geometry):
     if 'npu-guard' in copied:
         names = ('pool_base', 'pool_bytes', 'guard_base', 'guard_bytes', 'checked', 'differing_words', 'first_difference', 'pattern')
         out['npu_guard'] = dict(zip(names, struct.unpack('<8Q', copied['npu-guard'])))
+    if 'npu-register' in copied:
+        words = struct.unpack('<8Q', copied['npu-register'])
+        graphs = words[0]
+        out['npu_register'] = {'graphs': graphs, 'bytes': words[1], 'copy_us': words[2], 'decode_us': words[3], 'layout_us': words[4],
+                               'per_graph_us': {'copy': words[2] / graphs, 'decode': words[3] / graphs, 'layout': words[4] / graphs}
+                               if graphs else None}
     return out
 
 

@@ -36,12 +36,10 @@
 #define NPU_RUNTIME_CACHE_CHUNK 16384u
 #define NPU_RUNTIME_ASSEMBLY_STEP 8u
 
-/* sha256, when set, is the digest the model's bytes must have: LOAD hashes the copy it stages and refuses a copy that
- * differs, so a model with a wrong digest fails at its first LOAD (a preload at start included). Prepare does not hash
- * such a model. A model that
- * is not linked into the image (delivered in a runner input region, or loaded from the card into upper memory) is given as
- * an address, a length and this digest, and the runtime does not care which source it came from. */
-struct npu_runtime_model { const void *data; size_t bytes; const unsigned char *sha256; };
+/* A model as an address and a length. A graph handed over at run time (npu_runtime_register) is copied into kernel-owned memory
+ * and the catalogue entry names that copy; a model given at prepare (a host check's) is read where it is and must stay
+ * unchanged. No digest admits a model: the runtime admits by structure and addresses, and the NPU MMU confines it. */
+struct npu_runtime_model { const void *data; size_t bytes; };
 /* One parent allocation of exactly npu_runtime_requirements bytes, 2 MiB
  * aligned in CPU and physical addresses, write-back cached and mapped at EL1.
  * The catalogue models stay outside it, live and unchanged for the runtime's
@@ -98,8 +96,11 @@ struct npu_runtime_counters {
      * counter; the start step includes G and the trigger, not the LOAD step
      * that follows it. */
     uint64_t steps[NPU_RUNTIME_STEP_KINDS], longest[NPU_RUNTIME_STEP_KINDS], loads, refused_loads, jobs;
-    uint64_t table_bytes, address_bytes, tail_bytes, readonly_bytes, reference_bytes, staging_check_bytes;
-    uint64_t zeroed_bytes, copied_bytes, cache_lines, digest_bytes;
+    uint64_t table_bytes, address_bytes, tail_bytes, readonly_bytes, reference_bytes;
+    uint64_t zeroed_bytes, copied_bytes, cache_lines;
+    /* Graph registrations (npu_runtime_register): how many, the bytes copied into kernel memory, and the microseconds spent in
+     * the copy, in the decode of the copy's container and in the layout (the plan). The sums over all registrations. */
+    uint64_t registered, registered_bytes, register_copy_us, register_decode_us, register_layout_us;
     /* NPU register accesses through the backend; on the board each one also
      * makes one AT translation in the native adapter's mapping check. */
     uint64_t register_reads, register_writes;
@@ -134,10 +135,10 @@ struct npu_runtime_slot {
 struct npu_runtime {
     struct npu_runtime_slot *slot;   /* slots entries, in the reservation */
     /* Per-graph tables, count entries each, placed at the start of the runtime's reservation (npu_runtime_tables_bytes):
-     * the catalogue, the plan of each graph and the SHA-256 of each model at prepare time, for LOAD's copy check. */
+     * the catalogue and the plan of each graph. */
     struct npu_runtime_model *catalogue;
     struct nbg_assembly_layout *plans;
-    unsigned char (*model_digest)[32];
+    struct npu_meta *meta;           /* the EL1-private allocator: it holds the kernel copy of each registered graph */
     struct a733_npu_buffer *buffers; /* the registered NPU buffers (1 + 4 * slots), built by prepare */
     struct npu_runtime_span *spans;  /* the worker's spans of one step: as many as the largest slot has tensors */
     void *scratch; size_t scratch_bytes; /* work memory of linking and registration (one largest layout, twice) */
@@ -148,8 +149,8 @@ struct npu_runtime {
     unsigned later_entries;          /* table entries of a graph registered after prepare */
     atomic_uint count;   /* catalogue entries in use; register publishes the next one with release order */
     unsigned capacity, slots;
-    size_t command_bytes, constant_bytes, read_bytes, write_bytes, staging_bytes;
-    uintptr_t parent_cpu, staging;
+    size_t command_bytes, constant_bytes, read_bytes, write_bytes;
+    uintptr_t parent_cpu;
     size_t parent_bytes;
     size_t placed_bytes;   /* the end of the placement in the parent, a multiple of NPU_RUNTIME_GROUP_BYTES: what prepare used */
     struct a733_npu_buffer bootstrap;
@@ -159,8 +160,6 @@ struct npu_runtime {
     struct npu_service service;
     struct a733_npu_startup *startup;
     /* Worker-private LOAD state: one load runs at a time. */
-    struct storage_digest digest;
-    uint32_t staging_crc;
     struct nbg_model view;
     struct nbg_assembly_cursor cursor;
     unsigned loading, checking, last_started;
