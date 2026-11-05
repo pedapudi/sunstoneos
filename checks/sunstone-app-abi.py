@@ -223,7 +223,13 @@ refused(lambda v: v.update(devices={'required': ['audio-i2s'], 'optional': ['aud
 refused(lambda v: v.update(devices={'required': ['audio-i2s']}), 'a capture device needs an audio format')
 refused(lambda v: v.update(devices={'required': ['audio-i2s']}, audio=dict(capture, min_frames=90000)),
         'min_frames exceeds max_frames')
-refused(lambda v: v.update(devices={'required': ['radio']}), "unknown device 'radio'")
+refused(lambda v: v.update(devices={'required': ['lidar']}), "unknown device 'lidar'")
+# The radio station is a device (SS_DEVICE_RADIO, bit 8).
+radio = json.loads(HELLO.read_text())
+radio['devices'] = {'required': ['radio'], 'optional': []}
+(a.build / 'radio.json').write_text(json.dumps(radio))
+run(*TOOL, 'emit', '--manifest', a.build / 'radio.json', '--output', a.build / 'radio')
+assert json.loads((a.build / 'radio' / 'manifest.json').read_text())[0]['devices_required'] == 1 << 8
 refused(lambda v: v['cpu'].update(privilege='el1'), 'unknown cpu keys')
 refused(lambda v: v['regions'].append({'name': 'scratch', 'kind': 'work', 'access': ['read', 'write'], 'bytes': 100}),
         'capacity is a multiple of 4 KiB')

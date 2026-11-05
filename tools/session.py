@@ -14,7 +14,7 @@ apps/npu-graphs/host.py writes) to DIR/decoder.py, the file that `board.py submi
   devices, flags, workload          the manifest's required devices; --devices adds optional ones (only 0 has pinned board facts)
   which service records             the thermal record always; the CPU clock grant only with --clock-grant (and --perf), for a manifest
                                     that declares cpu.clock_grants (cpu.perf); the NPU service (os_npu_client_model) as the image
-                                    links it; a DMA or radio service, or any device, is refused
+                                    links it; a DMA service or any device (the radio among them) is refused
   NPU client model                  the image's os_npu_client_model
   NPU pool request                  --npu-pool BASE:BYTES (default 0:0: the allocator chooses)
   NPU declaration                   --npu-declaration D (a manifest with an npu section, or a bare slots/in_flight/graphs/links object),
@@ -97,10 +97,9 @@ DERIVED = {'prefix': {'magic', 'version', 'bytes', 'epoch', 'generation', 'lease
 # Symbols that tell which services an OS image links (the CMake options SUNSTONE_A733_OS_*).
 SYMBOLS = {'npu': 'os_npu_client_model'}
 REVIEWED = ROOT / 'tools/cpu-reviewed-points.json'
-# Services whose records the facts do not pin, refused when the image links them. Every image links the I2S service; a
-# session grants it only with the audio-i2s device, which the device rule below refuses.
+# Services whose records the facts do not pin, refused when the image links them. Every image links the I2S service and
+# the radio station; a session grants them only with the audio-i2s or radio device, which the device rule below refuses.
 UNSUPPORTED = {'os_dma_profile': 'DMA service record and its physical authority',
-               'os_radio_start': 'radio profile, SID evidence and radio latch facts of the board prefix (workload 1)',
                'usb_memory_extent_valid': 'USB memory extent (USB class devices)'}
 
 

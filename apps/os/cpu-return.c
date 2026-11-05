@@ -279,11 +279,12 @@ void os_cpu_return_supervise(void)
 #ifdef SUNSTONE_A733_OS_DMA
     if(!os_dma_return_ready())return;
 #endif
-#ifdef SUNSTONE_A733_OS_RADIO
-    /* The credential leaves RAM, at EL1, before the return proceeds. */
-    os_wifi_credential_poll();
-    if(!os_wifi_credential_wiped())return;
-#endif
+    /* A session that grants the radio may hold the Wi-Fi credential: it leaves RAM, at EL1, before the return proceeds.
+     * The runner uploads a credential only for an application that declares the radio (tools/board.py). */
+    if(os_granted(OS_GRANT_RADIO)){
+        os_wifi_credential_poll();
+        if(!os_wifi_credential_wiped())return;
+    }
 #ifdef SUNSTONE_A733_OS_RADIO_SCAN
     /* The module is shut down, with its readbacks, while the PMIC service can still turn BLDO5 off. */
     os_radio_scan_return_request();

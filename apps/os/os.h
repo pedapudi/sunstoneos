@@ -183,7 +183,6 @@ void os_audio_task(void *);
 int os_audio_task_privileged(void (*)(void *),void *);
 int os_audio_pins(struct a733_pin_handoff *);
 void os_audio_irq(void);
-#ifdef SUNSTONE_A733_OS_RADIO
 /* The board starts the radio owner and network client for workload 1; this
  * entry refuses radio and crypto engine owners that collide with the image's. */
 int os_radio_task_privileged(void (*)(void *),void *);
@@ -216,16 +215,11 @@ void os_ce_entropy_wipe(void);
 void os_radio_scan_return_request(void);
 int os_radio_scan_return_ready(void);
 #endif
-#endif
 #ifdef SUNSTONE_A733_OS_HEADSET
-/* The Bluetooth profile address. With the radio, the radio profile occupies
- * 0x43000000 and the Bluetooth profile follows it in the first 64 KiB; the
- * firmware spans from 0x43010000 serve both. */
-#ifdef SUNSTONE_A733_OS_RADIO
+/* The Bluetooth profile address. The radio profile occupies 0x43000000 and
+ * the Bluetooth profile follows it in the first 64 KiB; the firmware spans
+ * from 0x43010000 serve both. */
 #define OS_HEADSET_PROFILE_ADDRESS UINT64_C(0x43008000)
-#else
-#define OS_HEADSET_PROFILE_ADDRESS UINT64_C(0x43000000)
-#endif
 /* Repeated capture modes: CVSD (2) and, with SUNSTONE_A733_OS_MSBC, wideband
  * mSBC with CVSD fallback (3). */
 static inline int os_headset_mode_valid(unsigned mode)
@@ -250,13 +244,12 @@ int os_headset_start(void);
  * headset segment recorded for generation g, which the headset button starts
  * (and, in workload 4, the request itself). */
 int os_headset_capture(unsigned g,const uint8_t **wav,size_t *bytes);
-#ifdef SUNSTONE_A733_OS_RADIO
-/* With the radio, one module owner serves Wi-Fi and Bluetooth: the board's
- * radio owner task calls this after each radio poll (apps/os/main.patch). */
+/* When the session grants the radio, one module owner serves Wi-Fi and
+ * Bluetooth: the board's radio owner task calls this after each radio poll
+ * (apps/os/main.patch). Otherwise the headset runs its own owner task. */
 struct board_radio;
 struct board_radio *os_board_radio(void);
 void os_module_poll(void);
-#endif
 #endif
 #ifdef SUNSTONE_A733_OS_GPU
 #define OS_GPU_CLIENT 7u

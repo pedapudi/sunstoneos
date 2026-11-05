@@ -32,12 +32,12 @@ from harness import machine as harness_machine
 from unicorn.arm64_const import UC_ARM64_REG_SP
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--build', '{build:resradio}', '--output', '{output}']]
+GATE_RUNS = [['--build', '{build:res}', '--output', '{output}']]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--build', type=Path, required=True, help='radio OS build with compile_commands.json')
+    parser.add_argument('--build', type=Path, required=True, help='OS build with compile_commands.json')
     parser.add_argument('--lld', type=Path, default=Path.home() / '.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
@@ -47,7 +47,6 @@ def main():
     unit = next(u for u in commands if u['file'].endswith('/apps/os/radio.c'))
     flags = shlex.split(unit['command'])
     flags = flags[:flags.index('-o')]
-    assert '-DSUNSTONE_A733_OS_RADIO=1' in flags, 'a radio OS build is required'
     image = out / 'os-image-radio.elf'
     command = flags + [str(ROOT / 'checks/os-image-radio.c'), str(ROOT / 'drivers/storage/storage_digest.c'),
                        str(ROOT / 'runtime/memory.c'), str(ROOT / 'runtime/memmove.c'), '-nostdlib',

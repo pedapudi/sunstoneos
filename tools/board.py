@@ -931,6 +931,12 @@ def run_image(args, backend=Live):
             if credential is not None:
                 require(info.get('generic') and 'ss_wifi_credential' in images.symbols(frozen),
                         'The image does not receive a Wi-Fi credential (it does not link ss_wifi_credential); refused before device access.')
+                # Every OS image links the receiver; only a session that grants the radio device reads the credential and
+                # wipes it at the session end, so the application must declare that device.
+                records = images.load('wifi_records', ROOT/'apps/os/host.py')
+                declared = records.image_manifest(frozen)['manifest'] or {}
+                require((declared.get('devices_required', 0) | declared.get('devices_optional', 0)) & records.manifest_tool.DEVICES['radio'],
+                        'The application does not declare the radio device, so no session of it reads a Wi-Fi credential; refused before device access.')
             dma_binding = images.dma_admission(args, info)
             application_inputs(args, info, evidence)
             images.load('storage_bounds', ROOT/'tools/storage_bounds.py').verify_delivered(args)

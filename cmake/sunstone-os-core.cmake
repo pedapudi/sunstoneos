@@ -6,7 +6,6 @@ option(SUNSTONE_A733_OS_RESIDENT "Integrated OS with the resident lifetime" OFF)
 option(SUNSTONE_A733_OS_USB_CLASSES "OS input, serial and camera host services" OFF)
 option(SUNSTONE_A733_OS_USB_JPEG "OS camera MJPEG hardware decoder" OFF)
 option(SUNSTONE_A733_OS_DMA "Adopted DMA0 RAM-copy service with normal retirement" OFF)
-option(SUNSTONE_A733_OS_RADIO "Integrated OS with the board's radio station" OFF)
 option(SUNSTONE_A733_OS_RADIO_SCAN "Radio station that scans and returns: board workload 3, no USB host, scan-only profile, normal return" OFF)
 option(SUNSTONE_A733_OS_HEADSET "OS Bluetooth headset capture service" OFF)
 option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
@@ -37,8 +36,8 @@ option(SUNSTONE_A733_OS_GPU_RECOVERY_TEST
 set(SUNSTONE_A733_OS_GPU_BISECT "" CACHE STRING
   "GPU diagnostic limit: constructor, firmware, jobs:N or layer:K")
 option(SUNSTONE_A733_OS_CPU_RETURN "Application result with success-only ROM return" OFF)
-if(SUNSTONE_A733_OS_RADIO_SCAN AND (NOT SUNSTONE_A733_OS_RADIO OR NOT SUNSTONE_A733_OS_CPU_RETURN))
-  message(FATAL_ERROR "The scanning radio station needs SUNSTONE_A733_OS_RADIO=ON and SUNSTONE_A733_OS_CPU_RETURN=ON")
+if(SUNSTONE_A733_OS_RADIO_SCAN AND NOT SUNSTONE_A733_OS_CPU_RETURN)
+  message(FATAL_ERROR "The scanning radio station needs SUNSTONE_A733_OS_CPU_RETURN=ON")
 endif()
 if(SUNSTONE_A733_OS_NPU_OBSERVE AND
    (NOT SUNSTONE_A733_OS_NPU OR NOT SUNSTONE_A733_OS_CPU_RETURN))
@@ -68,8 +67,7 @@ if(SUNSTONE_A733_OS_USB_CLASSES AND NOT SUNSTONE_BOARD_USB2_IRQ)
   message(FATAL_ERROR "USB class services require SUNSTONE_BOARD_USB2_IRQ=ON")
 endif()
 if(SUNSTONE_A733_OS_USB_JPEG AND
-   (SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR
-    SUNSTONE_A733_OS_NPU OR SUNSTONE_A733_OS_GPU_LINEAR))
+   (SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_NPU OR SUNSTONE_A733_OS_GPU_LINEAR))
   message(FATAL_ERROR "USB JPEG owns runtime NC allocation; other device owners need allocator serialization")
 endif()
 if(SUNSTONE_A733_OS_USB_JPEG AND NOT SUNSTONE_A733_OS_USB_CLASSES)
@@ -115,9 +113,8 @@ endif()
 if(SUNSTONE_A733_OS_GPU)
   # GPU replies retain bounded failure handling for the recorded two- and
   # eight-worker compositions.
-  if(NOT SUNSTONE_A733_OS_RESIDENT AND
-     (SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET))
-    message(FATAL_ERROR "Supervised GPU linear requires recorded recognition without the radio or the headset")
+  if(NOT SUNSTONE_A733_OS_RESIDENT AND SUNSTONE_A733_OS_HEADSET)
+    message(FATAL_ERROR "Supervised GPU linear requires recorded recognition without the headset")
   endif()
   set(SUNSTONE_GPU_FIRMWARE "" CACHE FILEPATH "Pinned A733 GPU firmware")
   if(NOT SUNSTONE_GPU_FIRMWARE)
@@ -175,26 +172,25 @@ if(SUNSTONE_A733_OS_RESIDENT)
   list(APPEND os_patches "${os_root}/apps/os/boot-resident.patch")
 endif()
 set(os_generated "${os_build}/boot.c")
-if(SUNSTONE_A733_OS_RADIO)
-  # The board's own radio composition serves workload 1; its owner and client
-  # report resident progress through the patched main.c.
-  list(APPEND os_added apps/os/radio.c apps/os/wifi_credential.c)
-  if(SUNSTONE_A733_OS_RADIO_SCAN)
-    list(APPEND os_added apps/os/radio_scan.c apps/os/ce_probe.c)
-  endif()
-  if(NOT SUNSTONE_A733_OS_CPU_RETURN)
-    # The returning lifetime patches main.c itself (cmake/a733-os-cpu-return.cmake); the resident
-    # progress reports of this patch have no use in it.
-    apply_build_patch("${os_build}/main.c" "${os_root}/apps/board/main.c" "${os_root}/apps/os/main.patch")
-    list(REMOVE_ITEM os_sources "${os_root}/apps/board/main.c")
-    list(APPEND os_sources "${os_build}/main.c")
-    list(APPEND os_patches "${os_root}/apps/os/main.patch")
-    list(APPEND os_generated "${os_build}/main.c")
-  endif()
-  if(SUNSTONE_A733_OS_RESIDENT)
-    list(REMOVE_ITEM os_sources "${os_root}/apps/board/radio_profile.c")
-    list(APPEND os_added apps/os/radio_profile.c)
-  endif()
+# The radio station is in every image: the board's own radio composition serves the radio workloads, and the session
+# grants it with the radio device (apps/os/session.c). Its owner and client report resident progress through the
+# patched main.c.
+list(APPEND os_added apps/os/radio.c apps/os/wifi_credential.c)
+if(SUNSTONE_A733_OS_RADIO_SCAN)
+  list(APPEND os_added apps/os/radio_scan.c apps/os/ce_probe.c)
+endif()
+if(NOT SUNSTONE_A733_OS_CPU_RETURN)
+  # The returning lifetime patches main.c itself (cmake/a733-os-cpu-return.cmake); the resident
+  # progress reports of this patch have no use in it.
+  apply_build_patch("${os_build}/main.c" "${os_root}/apps/board/main.c" "${os_root}/apps/os/main.patch")
+  list(REMOVE_ITEM os_sources "${os_root}/apps/board/main.c")
+  list(APPEND os_sources "${os_build}/main.c")
+  list(APPEND os_patches "${os_root}/apps/os/main.patch")
+  list(APPEND os_generated "${os_build}/main.c")
+endif()
+if(SUNSTONE_A733_OS_RESIDENT)
+  list(REMOVE_ITEM os_sources "${os_root}/apps/board/radio_profile.c")
+  list(APPEND os_added apps/os/radio_profile.c)
 endif()
 if(SUNSTONE_A733_OS_DMA)
   list(APPEND os_added apps/os/dma.c platform/a733/dma_pool_session.c platform/a733/dma_startup.c
@@ -464,7 +460,6 @@ target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICAT
   "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"
   A733_SMP_CONTRACT_MAGIC=${os_contract_magic} A733_SMP_RESULT_MAGIC=${os_result_magic}
   "$<$<BOOL:${SUNSTONE_A733_OS_RESIDENT}>:SUNSTONE_BOARD_RESIDENT=1>"
-  "$<$<BOOL:${SUNSTONE_A733_OS_RADIO}>:SUNSTONE_A733_OS_RADIO=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_SCAN}>:SUNSTONE_A733_OS_RADIO_SCAN=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_HEADSET}>:SUNSTONE_A733_OS_HEADSET=1>")
 if(SUNSTONE_A733_OS_NPU)

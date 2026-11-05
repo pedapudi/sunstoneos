@@ -158,7 +158,7 @@ class Native(owners.Model):
         self.hooks[layout.address('xTaskGetCurrentTaskHandle')] = lambda: self.current_task
         self.hooks[layout.address('xTaskGetSchedulerState')] = lambda: self.scheduler
         self.hooks[layout.address('os_session')] = lambda: self.session
-        self.hooks[layout.address('os_granted')] = lambda: 1  # the modeled session grants the NPU (admission is not under test)
+        self.hooks[layout.address('os_granted')] = lambda: int(self.uc.reg_read(prior.fault.REGS[0]) == 1)  # the modeled session grants the NPU (bit 0) alone; admission is not under test
         self.hooks[layout.address('a733_counter_clock_now')] = self.clock_now
         self.hooks[layout.address('npu_runtime_startup_poll')] = lambda: 0
         self.hooks[layout.address('npu_service_activate')] = self.activate

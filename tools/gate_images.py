@@ -55,7 +55,6 @@ IMAGES = {
     # the returning scanning radio image
     'ret-radio-scan': {'configure': [
         '-DSUNSTONE_APPLICATION=radio-scan',
-        '-DSUNSTONE_A733_OS_RADIO=ON',
         '-DSUNSTONE_A733_OS_RADIO_SCAN=ON',
         '-DSUNSTONE_A733_OS_CPU_RETURN=ON',
     ], 'target': 'sunstone-a733-os-radio-scan', 'elf': 'sunstone-a733-os-radio-scan.elf'},

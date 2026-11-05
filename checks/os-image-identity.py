@@ -4,22 +4,22 @@
 Only board_identity_prepare (apps/os/identity.c) executes, under unicorn. The
 exception level, cache state, session validation, cache publication, the
 headset profile rules and the four SID words are modeled; shared CPU startup
-does not run. The build's link check names its options:
+does not run. Every image links the radio station; the build's link check
+names whether it links the headset:
 
 - every build publishes its manifest INPUT regions, and a second call
   publishes nothing;
-- a build with no audio, radio or headset admits workloads 0, 2 and 4 in either
-  lifetime; microphone builds admit 0 and 4;
-- the radio build admits workload 1 only, publishes the radio profile and
-  firmware span, reads the four chip-ID words and publishes them with the
-  session's SID authority;
-- the headset build admits workloads 0 and 4, copies the 832-byte Bluetooth
-  profile from 0x43000000 and publishes the copy, the profile span and the
-  chip-ID record; it refuses another profile size and a profile that the
-  headset rules refuse;
-- the build with both admits workload 1 and copies the Bluetooth profile
-  from 0x43008000, after the radio profile, with the headset build's
-  publications and refusals; the 1 MiB span covers both profiles.
+- every build admits workloads 0 to 4; the session decode ties the workload to
+  the device grant;
+- for the radio workloads 1 and 3, a build without the headset publishes the
+  radio profile and firmware span, reads the four chip-ID words and publishes
+  them with the session's SID authority; it publishes only the inputs for the
+  other workloads;
+- the headset build copies the 832-byte Bluetooth profile from 0x43008000,
+  after the radio profile, and publishes the copy, the 1 MiB profile span,
+  which covers both profiles, and the chip-ID record for every admitted
+  workload; it refuses another profile size and a profile that the headset
+  rules refuse.
 """
 import argparse
 import hashlib
@@ -35,11 +35,8 @@ from unicorn import arm64_const as reg
 GATE_RUNS = [
     ['--build', '{build:sup}', '--output', '{output}'],
     ['--build', '{build:res}', '--output', '{output}'],
-    ['--build', '{build:resradio}', '--output', '{output}'],
     ['--build', '{build:headset}', '--output', '{output}'],
     ['--build', '{build:resheadset}', '--output', '{output}'],
-    ['--build', '{build:radio-headset}', '--output', '{output}'],
-    ['--build', '{build:resradio-headset}', '--output', '{output}'],
 ]
 
 SESSION = 0x50001000
@@ -56,6 +53,7 @@ def main():
     image = args.build / 'sunstone-a733-os.elf'
     config = json.loads((args.build / 'os-image/link-check.json').read_text())
     radio, headset = config.get('radio', False), config.get('headset', False)
+    assert radio, 'every OS image links the radio station'
     with image.open('rb') as source:
         elf = ELFFile(source)
         segments = [(s['p_vaddr'], s.data()) for s in elf.iter_segments() if s['p_type'] == 'PT_LOAD']
@@ -98,13 +96,12 @@ def main():
         session = bytearray(592)
         struct.pack_into('<I', session, WORKLOAD, workload)
         struct.pack_into('<Q', session, SID_AUTHORITY, 0x5151)
-        if radio:
-            struct.pack_into('<2Q', session, PROFILE_ADDRESS, 0x43000000, 1872)
+        struct.pack_into('<2Q', session, PROFILE_ADDRESS, 0x43000000, 1872)
         cpu.mem_write(SESSION, bytes(session))
         cpu.mem_write(0x03006200, struct.pack('<4I', *SID_WORDS))
         profile = bytes((i * 7 + 3) & 255 for i in range(832))
         profile = profile[:12] + struct.pack('<I', profile_bytes) + profile[16:]
-        cpu.mem_write(0x43008000 if radio and headset else 0x43000000, profile)
+        cpu.mem_write(0x43008000, profile)
         reads = {}
         for insn in Cs(CS_ARCH_ARM64, CS_MODE_ARM).disasm(bytes(cpu.mem_read(entry, length)), entry):
             if insn.mnemonic == 'mrs':
@@ -159,9 +156,8 @@ def main():
         assert authority == 0x5151 and tuple(words) == SID_WORDS, (authority, words)
 
     cases = []
-    # apps/os/os.h: every image admits workloads 0, 1, 2 and 4 here; the session decode ties the workload to the device grant
-    # and refuses a radio session in an image without the radio. The radio's publications and chip-ID read happen only for
-    # workload 1.
+    # apps/os/os.h: every image admits workloads 0 to 4 here; the session decode ties the workload to the device grant. The
+    # radio's publications and chip-ID read happen only for the radio workloads 1 and 3.
     admitted = (0, 1, 2, 3, 4)
     n = len(assets)        # the manifest's INPUT regions, published first; an image with no application has none
     for workload in (0, 1, 2, 3, 4, 6, 8):
@@ -176,16 +172,16 @@ def main():
             assert calls[:n] == assets and calls[n][1:] == (832, DEADLINE) and calls[n + 1] == (0x43000000, 0x100000, DEADLINE)
             assert bytes(cpu.mem_read(copy, 832)) == profile
             record(cpu, calls)
-        elif radio and workload in (1, 3):
+        elif workload in (1, 3):
             assert calls[:n + 2] == assets + [(0x43000000, 1872, DEADLINE), (0x43010000, 0xf0000, DEADLINE)], calls
             assert len(calls) == n + 3, calls
             record(cpu, calls)
         else:
             assert calls == assets, calls
         cases.append({'workload': workload, 'accepted': accepted, 'publications': len(calls)})
-    workload = 1 if radio else admitted[0]
+    workload = 1
     _, calls, returned, _, _ = run(workload, calls_made=2)
-    assert returned[0] == 1 and returned[1] == 0 and len(calls) == len(assets) + (3 if radio or headset else 0), returned
+    assert returned[0] == 1 and returned[1] == 0 and len(calls) == len(assets) + 3, returned
     cases.append({'workload': workload, 'second-call-refused': True})
     if headset:
         for name, change in (('profile-size-752', {'profile_bytes': 752}), ('profile-refused', {'profile_valid': 0})):
@@ -197,7 +193,7 @@ def main():
                                        'radio': radio, 'headset': headset, 'cases': cases, 'physical_access': False},
                                       indent=2) + '\n')
     print('PASS OS identity hook (%s): workloads %s admitted, others refused, %d cases' %
-          ('radio and headset' if radio and headset else 'radio' if radio else 'headset' if headset else 'base',
+          ('radio and headset' if headset else 'radio',
            list(admitted), len(cases)))
 
 

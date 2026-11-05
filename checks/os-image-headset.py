@@ -7,8 +7,9 @@ segment publication with its request word, borrow, acknowledgment and ticket
 rules. This
 runner compiles it with the exact flags of apps/os/headset.c from a configured
 headset OS build (configure it with CMAKE_EXPORT_COMPILE_COMMANDS=ON), so the
-model follows that build's radio, resident and mSBC options, and runs each
-mode under unicorn:
+model follows that build's resident and mSBC options, and runs each mode
+under unicorn. Modes 0 and 7 run twice: for a session without the radio
+(workloads 0 and 4) and for one that grants it (workload 1):
 
 - 0: the pin entry admits the nominal profile and adds PG0..PG9, PM0, PM1, PM3,
   PM4 and the profile's PM latch; it refuses pins already held, other
@@ -18,8 +19,9 @@ mode under unicorn:
   fabric rate, other memory attributes and a missing profile. With the radio
   it also refuses a module the radio entry has not admitted, missing board
   pin authority, another PM latch, other radio platform or session owners and
-  a UART owner equal to the crypto engine owner. Startup starts the Bluetooth
-  application for the session's lifetime (60 s, or unbounded when resident)
+  a UART owner equal to the crypto engine owner; without it, it refuses
+  module pins already held. Startup starts the Bluetooth application for the
+  session's lifetime (60 s, or unbounded when resident)
   and binds the client as consumer. Without the radio it creates both tasks
   and only the Bluetooth owner runs privileged; with the radio it creates the
   client only and attaches the application to the radio's module, with the
@@ -63,6 +65,10 @@ GATE_RUNS = [['--build', '{build:headset}', '--output', '{output}']]
 CASES = ['pins-and-startup', 'keyboard-generations', 'request-after-publication', 'refused-borrow',
          'request-rules', 'refused-request', 'failed-application', 'owner-iteration',
          'stopped-capture', 'wideband-segment', 'button-only-workload']
+# Bit 8 of the mode: the session grants the radio, so the headset shares the radio's module owner.
+RADIO = 0x100
+RUNS = [(mode, case) for mode, case in enumerate(CASES)] + \
+    [(RADIO | CASES.index(case), case + '-with-radio') for case in ('pins-and-startup', 'owner-iteration')]
 
 
 def main():
@@ -79,7 +85,7 @@ def main():
     flags = flags[:flags.index('-o')]
     assert '-DSUNSTONE_A733_OS_HEADSET=1' in flags, 'a headset OS build is required'
     options = {name: '-D' + macro + '=1' in flags for name, macro in
-               (('radio', 'SUNSTONE_A733_OS_RADIO'), ('resident', 'SUNSTONE_BOARD_RESIDENT'), ('msbc', 'SUNSTONE_A733_OS_MSBC'))}
+               (('resident', 'SUNSTONE_BOARD_RESIDENT'), ('msbc', 'SUNSTONE_A733_OS_MSBC'))}
     image = out / 'os-image-headset.elf'
     command = flags + [str(ROOT / 'checks/os-image-headset.c'), str(ROOT / 'apps/bluetooth/pcm.c'),
                        str(ROOT / 'drivers/storage/storage_digest.c'), str(ROOT / 'runtime/memory.c'),
@@ -92,7 +98,7 @@ def main():
                     for p in elf.iter_segments() if p['p_type'] == 'PT_LOAD']
         symbols = {s.name: int(s['st_value']) for s in elf.get_section_by_name('.symtab').iter_symbols()}
     results = {}
-    for mode, case in enumerate(CASES):
+    for mode, case in RUNS:
         uc = harness_machine()
         pages = set()
         for address, data, size in segments:
@@ -114,7 +120,7 @@ def main():
         'sources': {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
                     for name in ('apps/os/headset.c', 'apps/bluetooth/pcm.c', 'checks/os-image-headset.c')}},
         indent=2) + '\n')
-    print('PASS OS headset client (%s): ' % ', '.join(k for k, v in options.items() if v) + ', '.join(CASES))
+    print('PASS OS headset client (%s): ' % ', '.join(k for k, v in options.items() if v) + ', '.join(case for _, case in RUNS))
 
 
 if __name__ == '__main__':

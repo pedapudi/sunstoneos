@@ -10,7 +10,8 @@ A fake network lives in a temporary config directory under the output directory,
   readback, and no byte of the password or the PMK, raw, hex or base64, appears in any file of the queue, the entry, the
   ledger, state.json or the result;
 - the scan fails when the PMK or the password is written into the entry (mutation);
-- a missing file, a changed fingerprint, a bad file mode and a bad directory mode refuse the run before launch;
+- a missing file, a changed fingerprint, a bad file mode and a bad directory mode refuse the run before launch, and so
+  does an image whose application does not declare the radio device;
 - the OS receiver (apps/os/wifi_credential.c) decodes the record, refuses malformed ones and wipes it.
 
 No device is opened.
@@ -225,8 +226,9 @@ def wifi_module():
     return board.wifi_module()
 
 
-def dry_run(queue, job, wifi, entry):
-    """Claim the job and run it as the daemon's child would, with the modeled board."""
+def dry_run(queue, job, wifi, entry, radio=True):
+    """Claim the job and run it as the daemon's child would, with the modeled board. radio: the image's application
+    declares the radio device."""
     Dry.model = Board()
     with patch.object(board, 'port_idle', return_value=True):
         claimed = queue.claim('3-1')
@@ -239,10 +241,15 @@ def dry_run(queue, job, wifi, entry):
     info = {'generic': True, 'entry_guard': False, 'finite_npu': False}
     stub = types.SimpleNamespace(verify_delivered=lambda a: None)
     real_load = images.load
+    host = real_load('wifi_check_records', ROOT/'apps/os/host.py')
+    declared = host.manifest_tool.DEVICES['radio'] if radio else 0
+    records = types.SimpleNamespace(manifest_tool=host.manifest_tool,
+                                    image_manifest=lambda image: {'manifest': {'devices_required': 0, 'devices_optional': declared}})
+    stubs = {'storage_bounds': stub, 'wifi_records': records}
     with patch.object(images, 'inspect', return_value=info), patch.object(images, 'policy'), \
          patch.object(images, 'dma_admission', return_value=None), patch.object(board, 'application_inputs'), \
          patch.object(images, 'symbols', return_value={'ss_wifi_credential': (0x41000000, 4)}), \
-         patch.object(images, 'load', side_effect=lambda n, p: stub if n == 'storage_bounds' else real_load(n, p)), \
+         patch.object(images, 'load', side_effect=lambda n, p: stubs[n] if n in stubs else real_load(n, p)), \
          contextlib.redirect_stdout(io.StringIO()):
         result = board.run_image(run, backend=lambda a, e, r: Dry(a, e, r))
     queue.complete(job['id'], result)
@@ -368,6 +375,14 @@ def refusal_cases(wifi, config, work):
     (config/'home.json').unlink()
     (config/'moved').rename(config/'home.json')
     passed('bad-file-mode-bad-directory-mode-and-link-refused-before-launch')
+    # Every OS image links the receiver; an application that does not declare the radio device never reads the credential.
+    queue, job = submit('no-radio')
+    result, model = dry_run(queue, job, wifi, entry, radio=False)
+    assert result['outcome'] == 'refused-before-launch' and not result['launch_attempted'], result
+    assert 'does not declare the radio device' in result['first_failure']['detail'], result['first_failure']
+    assert model is None or not model.memory, 'the board was written before the refusal'
+    scan(queue.root, needles)
+    passed('application-without-the-radio-device-refused-before-launch')
     wifi.load('home', config)
 
 

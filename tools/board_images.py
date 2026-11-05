@@ -510,7 +510,9 @@ def prepare(args, info, live, out, *, dma_binding=None):
     prefix[48:80] = identity
     radio_profile = None
     if 'os_radio_result_descriptor' in (info.get('symbols') or {}):
-        # The scanning radio image: a workload 3 session, a scan-only radio profile and the firmware it names.
+        # The scanning radio image: a workload 3 session that grants the radio device, a scan-only radio profile and
+        # the firmware it names.
+        devices |= records.manifest_tool.DEVICES['radio']
         scan = load('radio_scan_prepare', ROOT/'tools/radio_scan_prepare.py')
         reference = (ROOT/'docs/designs/radio-vendor-power-sequence.md').read_bytes()
         radio_profile = scan.apply(prefix, hashlib.sha256(reference).digest(),
@@ -581,6 +583,10 @@ def prepare(args, info, live, out, *, dma_binding=None):
                 host_admission=host_admission, watchdog=info['watchdog'], format='generic', geometry=info['report_geometry'],
                 return_host=returning, input_regions=list(meta['uploads']) + radio_regions, image_ram=returning.IMAGE_RAM)
     if getattr(args, 'wifi', None):
+        # Only a session that grants the radio device reads the credential and wipes it at the session end or on a
+        # failure (apps/os/cpu-return.c, apps/board/main.c).
+        require(devices & records.manifest_tool.DEVICES['radio'],
+                'A Wi-Fi credential goes only to a session that grants the radio device; this session does not.')
         # The credential is a separate input, uploaded by the runner from memory (Live.deliver_credential); it is not
         # a file of the bundle. Only its extent is known here, so the preservation list can cover it.
         wifi = load('runner_wifi_credential', ROOT/'tools/wifi-credential.py')

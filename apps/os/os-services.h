@@ -28,11 +28,6 @@
 #else
 #define OS_WITH_DMA(...)
 #endif
-#ifdef SUNSTONE_A733_OS_RADIO
-#define OS_WITH_RADIO(...) __VA_ARGS__
-#else
-#define OS_WITH_RADIO(...)
-#endif
 #ifdef SUNSTONE_A733_OS_HEADSET
 #define OS_WITH_HEADSET(...) __VA_ARGS__
 #else
@@ -56,13 +51,13 @@
     X(AUDIO, 1, OS_ALWAYS) \
     X(CPU_CLOCK, 2, OS_ALWAYS) \
     X(DMA, 3, OS_WITH_DMA) \
-    X(RADIO, 4, OS_WITH_RADIO)
+    X(RADIO, 4, OS_ALWAYS)
 
 /* X(GRANT, extent, field, bytes, magic, version, need): the record a granted service carries, as the session extent of
  * that type, copied to the field of struct os_session. A record that is present grants its service. need says when the
  * record must be present: 0 never (an optional service), OS_RECORD_LINKED whenever the image links the service, or a
- * device bit, which the session must hold exactly when the record is present. The radio has no record: a radio
- * workload in the board prefix grants it (apps/os/session.c). */
+ * device bit, which the session must hold exactly when the record is present. The radio has no record: the radio
+ * device bit, with a radio workload in the board prefix, grants it (apps/os/session.c). */
 #define OS_RECORD_LINKED 0xffffffffu
 #define OS_RECORD_ROWS(X) \
     X(AUDIO, SS_EXTENT_AUDIO, audio, OS_AUDIO_SESSION_BYTES, OS_AUDIO_SESSION_MAGIC, OS_AUDIO_SESSION_VERSION, SS_DEVICE_AUDIO_I2S) \
@@ -79,7 +74,7 @@
     X("npu", os_npu, os_npu_start, OS_WITH_NPU) \
     X("audio", os_audio, os_capture_start, OS_ALWAYS) \
     X("dma", os_dma, os_dma_start, OS_WITH_DMA) \
-    X("radio", os_radio, os_radio_start, OS_WITH_RADIO) \
+    X("radio", os_radio, os_radio_start, OS_ALWAYS) \
     X("headset", os_headset, os_headset_start, OS_WITH_HEADSET) \
     X("gpu-queue", os_gpu_queue, os_gpu_queue_start_entry, OS_WITH_GPU)
 

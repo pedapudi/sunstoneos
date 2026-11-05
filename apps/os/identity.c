@@ -1,12 +1,12 @@
 /* EL3 publishes application inputs and registered initialization before CPU
- * mappings take effect. The radio build also
- * reads the four chip-ID words and publishes the radio profile span, as the
- * board image does for its radio workloads. The headset build reads the
- * Bluetooth profile and the chip-ID words and publishes both, as the
- * Bluetooth image does (apps/bluetooth/identity.c). With both, the profile
- * span holds the radio profile at 0x43000000, the Bluetooth profile at
- * OS_HEADSET_PROFILE_ADDRESS and the shared firmware from 0x43010000, and the
- * whole 1 MiB span is published. Cached start.S clears BSS before this hook,
+ * mappings take effect. For a radio workload it also reads the four chip-ID
+ * words and publishes the radio profile span, as the board image does for its
+ * radio workloads. The headset build reads the Bluetooth profile and the
+ * chip-ID words and publishes both, as the Bluetooth image does
+ * (apps/bluetooth/identity.c). The profile span holds the radio profile at
+ * 0x43000000, the Bluetooth profile at OS_HEADSET_PROFILE_ADDRESS and the
+ * shared firmware from 0x43010000; the headset build publishes the whole
+ * 1 MiB span. Cached start.S clears BSS before this hook,
  * so the records below keep their values. */
 #include "os.h"
 #include "../board/identity.h"
@@ -74,7 +74,6 @@ int board_identity_prepare(uint64_t deadline)
 #ifdef SUNSTONE_A733_OS_GPU
     if(!os_application_initialize_regions(deadline))return 0;
 #endif
-#if defined(SUNSTONE_A733_OS_RADIO) || defined(SUNSTONE_A733_OS_HEADSET)
 #ifndef SUNSTONE_A733_OS_HEADSET
     /* Only the radio station reads the profile span and the chip ID; any other workload leaves them unread. */
     if(!os_radio_workload(s->workload))return 1;
@@ -101,9 +100,6 @@ int board_identity_prepare(uint64_t deadline)
     identity.secure_read_record=s->sid_authority;
     if(a733_cpu_coherence_publish((uintptr_t)&identity,sizeof(identity),deadline)==1)return 1;
     identity.secure_read_record=0;return 0;
-#else
-    return 1;
-#endif
 }
 const struct board_radio_chip_id *board_radio_chip_id(void)
 {return identity.secure_read_record?&identity:0;}

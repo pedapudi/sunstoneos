@@ -97,11 +97,12 @@ int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,un
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
     if(h->devices&(SS_DEVICE_USB_KEYBOARD|SS_DEVICE_USB_MOUSE|SS_DEVICE_USB_SERIAL|SS_DEVICE_USB_CAMERA))workload=0;
 #endif
-    /* The radio station has no device bit yet: a radio workload in the board prefix (1 or 3) grants it. */
-    const int radio=os_radio_workload(out->board.workload);
+    /* The radio device grants the radio station. The board prefix must name this image's radio workload: the full
+     * station (1) runs with USB storage, the scanning station (3) without the USB host. Without the device bit a radio
+     * workload differs from the computed one and is refused below. */
+    const int radio=!!(h->devices&SS_DEVICE_RADIO);
     if(radio){
-        /* The full station (1) runs with USB storage, the scanning station (3) without the USB host. */
-        if(!OS_LINKED_RADIO||out->board.workload!=OS_RADIO_WORKLOAD||
+        if(out->board.workload!=OS_RADIO_WORKLOAD||
            !(h->devices&SS_DEVICE_USB_STORAGE)!=(out->board.workload==3))REFUSE(A733_DECODE_DEVICES);
         workload=out->board.workload;
     }

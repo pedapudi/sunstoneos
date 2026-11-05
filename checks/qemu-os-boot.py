@@ -82,7 +82,9 @@ OS_SOURCES = ['apps/os/application.c', 'apps/os/large.c', 'apps/os/large_load.c'
               'drivers/dma/a733_dma_platform.c', 'drivers/dma/a733_dma_platform_native.c', 'drivers/dma/dma_service.c',
               'drivers/dma/dma_service_i2s.c', 'drivers/dma/dma_service_i2s_stream.c', 'drivers/audio/a733_i2s.c',
               'drivers/audio/a733_i2s_stream.c', 'drivers/audio/a733_i2s_platform.c', 'drivers/audio/a733_i2s_platform_native.c',
-              'drivers/audio/a733_audio_leases.c', 'drivers/audio/dma_service_i2s_irq.c', 'runtime/device_memory_pool.c']
+              'drivers/audio/a733_audio_leases.c', 'drivers/audio/dma_service_i2s_irq.c', 'runtime/device_memory_pool.c',
+              # The radio station is in every image; an ungranted session reads neither its profile nor its credential.
+              'apps/os/radio.c', 'apps/os/wifi_credential.c']
 # Driver cores and their adapters, unmodified. The adapters reach registers
 # through a733_mmio.h, which the virtual board replaces (platform/qemu-os).
 DRIVER_SOURCES = ['drivers/thermal/a733_thermal.c', 'drivers/thermal/a733_thermal_native.c',
