@@ -3,8 +3,8 @@
 Status: implemented and host-modeled. The driver follows the board thermal
 policy, reads its permission from a grant record that an OS session can
 carry, and times work in cycles of the cluster that ran it. The integrated OS
-image calls it only in the supervised build with `SUNSTONE_A733_OS_CPU_CLOCK`,
-which is off by default ([the OS owner](#the-integrated-os-image-owns-the-driver-in-its-thermal-task)).
+image links it in every build and calls it only when the session carries a CPU
+clock grant ([the OS owner](#the-integrated-os-image-owns-the-driver-in-its-thermal-task)).
 No prepared OS session carries a grant that names a cluster. Board bundle 20
 runs the driver in a returning CPU0 image with a fixed grant of two CPU-B
 changes at 800 mV ([top operating points](designs/cpu-top-opp.md)); it is

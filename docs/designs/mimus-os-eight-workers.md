@@ -4,7 +4,7 @@ Status: **host-tested**. The supervised OS uses the eight-worker engine and adap
 
 ## Supported composition and placement
 
-The supported OS composition is supervised recorded recognition with `A733_A76_ADMITTED=ON`. It keeps the CPU clock and performance-mode options, including their NPU composition, and the [GPU extension](gpu-eight-workers.md) also admits supervised recorded GPU recognition. Resident recorded CPU/NPU operation uses its own cold entry contract, and resident GPU, microphone capture, radio and headset are excluded. Two-worker configurations keep their rules.
+The supported OS composition is supervised recorded recognition on the A76 cluster. It keeps the CPU clock grant and the performance-mode service, including their NPU composition, and the [GPU extension](gpu-eight-workers.md) also admits supervised recorded GPU recognition. Resident recorded CPU/NPU operation uses its own cold entry contract, and resident GPU, microphone capture, radio and headset are excluded. Two-worker configurations keep their rules.
 
 The owner runs on A76 core 6 and the first worker on A76 core 7, both at priority 3, and the remaining workers on A55 cores 0 through 5 at priority 2. The OS PMIC task runs at priority 3 on core 0, USB and thermal services at priority 4, Type-C and power services at priority 5, and the optional NPU client at priority 3 on core 1. Priority 2 keeps A55 inference below these owners while preserving every service affinity. Row partitioning is equal, with no heterogeneous speed ratio.
 

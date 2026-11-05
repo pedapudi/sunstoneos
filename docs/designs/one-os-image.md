@@ -1,6 +1,6 @@
 # Design: one OS image, with services chosen at run time
 
-Status: the foundation (granted set, session records, fixed service ids, refusal table, ungranted-service checks) is **implemented and host checked**. The service, CPU, NPU and lifetime series are **proposed**. The sizes in "Size" are measured on the all-in link.
+Status: the foundation (granted set, session records, fixed service ids, refusal table, ungranted-service checks) is **implemented and host checked**. The CPU series (series 2: CPU clock grant, A76 placement and performance modes as run-time grants) is **implemented**; the service, NPU and lifetime series are **proposed**. The sizes in "Size" are measured on the all-in link.
 
 Readers are assumed to know [os-image.md](../os-image.md), [app-abi.md](app-abi.md) (manifest, session extents, device bitmap) and [application-memory-layout.md](application-memory-layout.md).
 
@@ -125,6 +125,8 @@ I propose retiring it: delete `npu_session.c`, `apps/npu-board`, `npu_admitted_m
 
 ### `A733_A76_ADMITTED`, `SUNSTONE_A733_OS_CPU_CLOCK`, `SUNSTONE_A733_OS_PERF`, `SUNSTONE_A733_OS_PERF_BOOT`
 
+Implemented (series 2). The four options are removed: every OS image links the CPU clock owner, the performance-mode service and the A76 placement, and a session grants them at run time ([one-os-image-cpu.md](one-os-image-cpu.md)). The inventory below records what each option compiled in.
+
 - **Compiles in or out:**
   - `A733_A76_ADMITTED`: `apps/os/cpu.c` and the CPU clock driver in read-only form (`os_cpu_admit`: CPU-B on its locked PLL at 1014 MHz, else the thermal start refuses); PLL page mappings in `thermal.c`; core 6 and 7 placement constants in `a733_smp_placement.h` (2 and 3 without); `grant.main_core` in `application.c`. It does not change the FreeRTOS port, the scheduler (the default affinity is the A55 mask in every build), the GIC, the MMU tables or core bring-up; cores 6 and 7 are released by the boot loop in every image.
   - `CPU_CLOCK`: the 96-byte grant record in the session, the owner state machine (`os_cpu_clock_step`) in the thermal task, USB0 operation 7, `ss_clock_*` and `ss_activity_*`. This is the code that writes DCDC3, DCDC5 and the CPU PLLs.
@@ -201,7 +203,7 @@ A disabled service costs one load at start and its code size. Nothing polls. Gra
 One option family per commit series. Each series lands on its own, passes its checks and removes its variants from `VARIANTS` before the next is built on it:
 
 1. **Foundation (done).** The granted set (`struct os_session` holds every record and `granted`; the wire form carries a record only for a granted service and the thermal record's size follows the records present), the fixed service ids, the refusal table (`apps/os/grants.c`), the start-entry guards of the NPU, I2S and radio, the EL3 identity hook reading the radio profile and chip ID only for workload 1, the `all` variant and the ungranted-service checks. No option removed yet; the options now decide only which code is linked.
-2. **CPU family** (`A76_ADMITTED`, `CPU_CLOCK`, `PERF`): removes `cpu-clock`, `perf` and `perf-npu-low`. [Its design](one-os-image-cpu.md) goes to the three-reviewer panel before any code.
+2. **CPU family** (`A76_ADMITTED`, `CPU_CLOCK`, `PERF`): implemented. It removes `cpu-clock`, `perf` and `perf-npu-low`. See [its design](one-os-image-cpu.md).
 3. **Services** (`AUDIO`, `RADIO`, `HEADSET`, `MSBC`): removes `resaud`, `resradio`, `resradioaud`, `headset`, `resheadset`, `radio-headset`, `resradio-headset`. The radio gets its device bit and extent, the I2S gate becomes a real admission check (device bit and record together, done in the foundation), and the headset and MSBC become the manifest-linked object library.
 4. **NPU** (`NPU`, `NPU_QUEUE`, `NPU_OBSERVE`, the catalogue): removes `npu` and `npu-queue`. Builds on the umem dynamic-pool branch.
 5. **Lifetime** (`RESIDENT`, then `CPU_RETURN`): removes `res` and, if it folds, the returning variants.

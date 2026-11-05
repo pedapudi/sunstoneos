@@ -1,10 +1,12 @@
 # Design: CPU clock grants, A76 placement and performance modes at run time
 
-Status: **proposed**, for the design panel (simplicity, hardware performance, correctness) before any code. This is series 2 of [one-os-image.md](one-os-image.md). It changes how the DCDC3 and DCDC5 rail writes and the CPU, DSU PLL writes are granted, so it is a voltage and power change under the review gate in `AGENTS.md`.
+Status: **implemented** (series 2; the design panel reviewed it before the code). This is series 2 of [one-os-image.md](one-os-image.md). It changes how the DCDC3 and DCDC5 rail writes and the CPU, DSU PLL writes are granted, so it is a voltage and power change under the review gate in `AGENTS.md`.
 
 Readers are assumed to know [cpu-clock.md](../cpu-clock.md), [cpu-a76-dvfs.md](cpu-a76-dvfs.md), [performance-modes.md](performance-modes.md) and the foundation of one-os-image.md (the granted set `os_session.granted`, `os_granted()`, the refusal table in `apps/os/grants.c`).
 
-## What the build options do today
+## What the build options did, and the run-time form that replaced them
+
+This table records the inventory the series started from. All four options are removed.
 
 | Option | Effect |
 | --- | --- |
@@ -99,7 +101,7 @@ An unexplained regression in any row blocks the series.
 
 ## Effects outside the OS
 
-- The three variants `cpu-clock`, `perf` and `perf-npu-low` leave `VARIANTS`; the options `A733_A76_ADMITTED`, `SUNSTONE_A733_OS_CPU_CLOCK`, `_PERF` and `_PERF_BOOT` leave the CMake; the `ret-npu-load`, `ret-gpu` and `ret-latency` recipes drop three flags each.
+- Done: the three variants `cpu-clock`, `perf` and `perf-npu-low` leave `VARIANTS`; the options `A733_A76_ADMITTED`, `SUNSTONE_A733_OS_CPU_CLOCK`, `_PERF` and `_PERF_BOOT` leave the CMake; the `ret-npu-load`, `ret-gpu` and `ret-latency` recipes drop three flags each.
 - `include/a733_smp_placement.h` loses its `#ifdef`: the application core comes from the manifest's cluster (the generator already writes it into the GPU route and `os_gpu_configuration`), and the `_Static_assert`s in `apps/os/start.c` become the admission check.
 - Sessions prepared for earlier images do not admit (version 2 record, manifest version 2). The runner's queued entries that carry a grant must be prepared again.
 - The queue-mode NPU rule (the A76 cluster is refused because the ring's route is core 1) is an admission row of the refusal table (NPU queue with an A76 manifest), unchanged in effect.

@@ -1,6 +1,6 @@
 # GPU recognition with CPU operating-point control
 
-Status: **host-tested**. Supervised recorded GPU recognition with the CPU clock owner and two A76 inference workers is implemented across the OS tree (`apps/os/gpu.c`, `apps/os/cpu.c`) and the mimus checkout (`recognition-dispatch.patch`, `prepare.py`), and passes its software checks. It uses `SUNSTONE_A733_OS_GPU` and `SUNSTONE_A733_OS_CPU_CLOCK`. Physical integrated GPU recognition is **open**; no hardware run is authorized by this design.
+Status: **host-tested**. Supervised recorded GPU recognition with the CPU clock owner and two A76 inference workers is implemented across the OS tree (`apps/os/gpu.c`, `apps/os/cpu.c`) and the mimus checkout (`recognition-dispatch.patch`, `prepare.py`), and passes its software checks. It uses `SUNSTONE_A733_OS_GPU` and a session with the CPU clock grant. Physical integrated GPU recognition is **open**; no hardware run is authorized by this design.
 
 ## Independent CPU and GPU clocks
 

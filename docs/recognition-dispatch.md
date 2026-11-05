@@ -107,9 +107,9 @@ measurements replace, are:
 | Cache maintenance | 20 cycles per 64-byte line |
 | Per-job overhead | 25 µs submit, 25 µs firmware, 25 µs wake; 10 µs to hand work to the second worker |
 
-The recognition core pair is a build constant. Until the A76 cores are
-admitted it is cores 2 and 3 at 494 MHz; with `A733_A76_ADMITTED` it is cores
-6 and 7 at 2,002 MHz. The recognizer runs on the first core and the engine's
+The recognition core pair is a build constant: cores 6 and 7 of the A76
+cluster, at 2,002 MHz when the session grants the CPU clock and at boot0's
+1,014 MHz otherwise. The recognizer runs on the first core and the engine's
 second inference worker (`apps/mimus/parallel_runtime.cc`) on the second,
 in the two-worker GPU build. The eight-worker GPU composition keeps the
 recognizer and GPU worker on core 6 while CPU read-out work uses all eight
@@ -274,7 +274,7 @@ remain outstanding.
   the arena; the 224-row subsampling producer. The design's "Changes needed
   in the mimus engine" lists each change and the engine commit that provides
   them.
-- **Page-table owner:** A76 admission with `A733_A76_ADMITTED`.
+- **Page-table owner:** A76 admission (`os_cpu_admit` in `apps/os/cpu.c`), present in every OS image.
 - **Shared helpers:** `os_dispatch_writable` and `os_dispatch_el0_read_only`
   can move to `a733_mapping_check.h` as general stride-based rules.
 
