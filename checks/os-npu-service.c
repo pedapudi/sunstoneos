@@ -299,6 +299,11 @@ enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *s)
 int a733_npu_startup_bind_task(struct a733_npu_startup *s, TaskHandle_t task) { s->task = task; return 1; }
 
 uint32_t a733_npu_startup_wait_ticks(struct a733_npu_startup *s) { (void)s; abort(); }
+/* The performance-mode service is not granted here: the NPU starts at its default rate and is never retuned. */
+int os_perf_enabled(void) { return 0; }
+unsigned os_perf_boot_mode(void) { return 0; }
+int a733_npu_startup_retune_until(struct a733_npu_startup *s, unsigned mhz, uint64_t deadline_us)
+{ (void)s; (void)mhz; (void)deadline_us; abort(); }
 /* The sealed session grants one job. */
 static struct os_session session_record;
 const struct os_session *os_session(void) { return &session_record; }

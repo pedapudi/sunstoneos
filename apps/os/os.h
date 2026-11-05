@@ -148,9 +148,9 @@ void os_thermal_task(void *);
 int os_thermal_task_privileged(void (*)(void *),void *);
 int os_thermal_pins(struct a733_pin_handoff *);
 int os_thermal_start(void);
-#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+#if defined(SUNSTONE_A733_OS_GPU) || defined(SUNSTONE_A733_OS_GPU_LINEAR)
 struct tskTaskControlBlock;
-/* Published before gpu-linear startup; immutable after task creation. */
+/* Published before the GPU and gpu-linear startups; immutable after task creation. */
 struct tskTaskControlBlock *os_thermal_task_handle(void);
 #endif
 /* IRQ context, from the fixed interrupt table on CPU0. */
