@@ -6,7 +6,9 @@
 #include <stdio.h>
 struct board_application board;
 const struct ss_application ss_application={.manifest=(const void *)1};
-const unsigned os_npu_client_model=0;
+const unsigned os_npu_model_count=1,os_npu_client_entry=0,os_npu_client_model=0,os_npu_input_count=0,os_npu_output_count=0;
+const struct os_npu_vector os_npu_inputs[1]={{0}},os_npu_references[1]={{0}};
+const struct ss_npu_model os_npu_model_info[]={{"copy",1,1,4,4}};
 static struct os_session session;
 static char input[4]="abc",output[4],tensor_input[4],tensor_output[4];
 static unsigned loads,submits,ready,closed,waits,progresses,notifications;
@@ -54,6 +56,13 @@ void storage_digest_end(const struct storage_digest *s,uint8_t out[32])
 {(void)s;(void)out;assert(0);}
 int main(void)
 {
+    /* First use loads; another use of the same READY model reuses it. */
+    assert(sdk_run(0,input,4,output,4,100)==1&&loads==1&&submits==1);
+    assert(sdk_run(0,input,4,output,4,100)==1&&loads==1&&submits==2);
+    /* A lost READY window requires a new LOAD even for the same model. */
+    ready=0;assert(sdk_run(0,input,4,output,4,100)==1&&loads==2&&submits==3);
+    assert(sdk_run(os_npu_model_count,input,4,output,4,100)==0&&loads==2&&submits==3);
+    assert(sdk_run(0,input,3,output,4,100)==0&&loads==2&&submits==3);
     static struct nbg_assembly_layout plan_storage[1];
     static struct nbg_allocation_requirement plan_table[NBG_LAYOUT_ENTRIES(1,1)];
     plan_storage[0].buffers=plan_table;plan_storage[0].capacity=NBG_LAYOUT_ENTRIES(1,1);
@@ -63,13 +72,6 @@ int main(void)
     plan->buffers[NBG_ALLOC_INPUT].payload_bytes=4;
     plan->buffers[NBG_ALLOC_INPUT+1].payload_bytes=4;
     assert(ss_npu_service_bind_event(notify,NULL)&&os_npu_sdk_bind(&runtime));
-    /* First use loads; another use of the same READY model reuses it. */
-    assert(sdk_run(0,input,4,output,4,100)==1&&loads==1&&submits==1);
-    assert(sdk_run(0,input,4,output,4,100)==1&&loads==1&&submits==2);
-    /* A lost READY window requires a new LOAD even for the same model. */
-    ready=0;assert(sdk_run(0,input,4,output,4,100)==1&&loads==2&&submits==3);
-    assert(sdk_run(1,input,4,output,4,100)==0&&loads==2&&submits==3);
-    assert(sdk_run(0,input,3,output,4,100)==0&&loads==2&&submits==3);
     if(!setjmp(ended))os_npu_client_task(NULL);
     assert(waits==3&&progresses==5&&notifications==2&&loads==2&&submits==4);
     assert(ss_npu_close()==1&&os_npu_complete());

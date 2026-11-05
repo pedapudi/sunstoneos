@@ -30,16 +30,19 @@ BIND_SID = 1
 HEADER = struct.Struct('<QQIIII32s')
 EXTENT = struct.Struct('<II')
 INPUT = struct.Struct('<Q32s')
-THERMAL, AUDIO, NPU, CPU_GRANT, JPEG, USB_MEMORY, INPUTS = 1, 2, 3, 4, 5, 6, 16
-DMA = 7
-SERVICE_BYTES = {THERMAL: 216, AUDIO: 184, NPU: 264, CPU_GRANT: 96, DMA: 160}
+# The extent types of include/sunstone_session.h, and the records of the OS services as apps/os/os-services.h declares them.
+EXTENTS = manifest_tool.abi_enum('include/sunstone_session.h', 'SS_EXTENT_')
+THERMAL, AUDIO, NPU, CPU_GRANT, JPEG, USB_MEMORY, INPUTS, DMA = (EXTENTS[n] for n in (
+    'THERMAL', 'AUDIO', 'NPU', 'CPU_GRANT', 'JPEG', 'USB_MEMORY', 'INPUTS', 'DMA'))
+RECORDS = {EXTENTS[extent[len('SS_EXTENT_'):]]: {'grant': grant, 'bytes': manifest_tool.c_constant(size),
+                                                  'magic': manifest_tool.c_constant(magic), 'version': manifest_tool.c_constant(version)}
+           for grant, extent, _field, size, magic, version, _need in manifest_tool.os_service_rows('OS_RECORD_ROWS')}
+SERVICE_BYTES = {THERMAL: 216, **{kind: r['bytes'] for kind, r in RECORDS.items()}}
 # The NPU record is version 4: it carries the application's declaration of NPU resources and the bounds of its run-time
 # graphs, and no digest of a model list (apps/os/npu-session.h).
-SERVICE_VERSION = {NPU: 4}
+SERVICE_VERSION = {kind: r['version'] for kind, r in RECORDS.items()}
 NPU_DECLARATION_OFFSET = 240  # slots, in_flight, graphs, links: four u32
-SERVICE_MAGIC = {THERMAL: 0x415337334f534131, AUDIO: 0x415337334f415531,
-                 NPU: 0x415337334f4e5031, CPU_GRANT: 0x4153373343505531,
-                 DMA: 0x41533733444d4131}
+SERVICE_MAGIC = {THERMAL: 0x415337334f534131, **{kind: r['magic'] for kind, r in RECORDS.items()}}
 RESULT_MAGIC, RESULT_VERSION, RESULT_FINISHED = 0x31544c5553455241, 1, 1
 RESULT_FAILED = 2
 # include/sunstone_session.h struct ss_failure

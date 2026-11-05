@@ -214,21 +214,22 @@ static const struct a733_cpu_opp *row(unsigned d,uint32_t mhz)
 int a733_cpu_clock_grant_load(const struct a733_cpu_clock_grant_record *r,uint64_t epoch,
     uint64_t generation,struct a733_cpu_clock_config *out)
 {
-    unsigned approved=0;
+    unsigned reserved=0;
     if(!r || !out || !epoch || !generation || r->magic!=A733_CPU_CLOCK_GRANT_MAGIC ||
        r->version!=A733_CPU_CLOCK_GRANT_VERSION || r->bytes!=sizeof(*r) || !r->owner ||
-       (r->clusters&~UINT32_C(3)))return 0;
-    for(unsigned i=0;i<sizeof(r->approval);++i)approved|=r->approval[i];
+       (r->clusters&~UINT32_C(3)) || r->perf>2)return 0;
+    for(unsigned i=0;i<sizeof(r->reserved);++i)reserved|=r->reserved[i];
+    if(reserved)return 0;
     if(!r->clusters) {
-        if(r->epoch || r->generation || r->max_mhz[0] || r->max_mhz[1] || r->changes || approved)return 0;
+        if(r->epoch || r->generation || r->max_mhz[0] || r->max_mhz[1] || r->changes || r->perf)return 0;
         *out=(struct a733_cpu_clock_config){.owner=r->owner};return 1;
     }
     if(r->epoch!=epoch || r->generation!=generation || !r->changes ||
-       r->changes>A733_CPU_CLOCK_GRANT_CHANGES || !approved)return 0;
+       r->changes>A733_CPU_CLOCK_GRANT_CHANGES || (r->perf && r->clusters!=3))return 0;
     for(unsigned d=0;d<2;++d)
         if((r->clusters&BIT(d)) ? !row(d,r->max_mhz[d]) : r->max_mhz[d]!=0)return 0;
     *out=(struct a733_cpu_clock_config){.owner=r->owner,.grant={.session=epoch,.clusters=r->clusters,
-        .max_mhz={r->max_mhz[0],r->max_mhz[1]},.changes=r->changes}};
+        .max_mhz={r->max_mhz[0],r->max_mhz[1]},.changes=r->changes,.perf=r->perf}};
     return 1;
 }
 int a733_cpu_clock_init(struct a733_cpu_clock *c,const struct a733_cpu_clock_config *config,

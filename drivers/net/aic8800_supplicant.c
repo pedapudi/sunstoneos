@@ -187,6 +187,7 @@ void aic8800_supplicant_step(struct aic8800_supplicant *s,uint64_t now)
             const struct aic8800_data_result *r=&s->data->result;
             if(!r->bus_transferred||!r->firmware_status_valid||!r->tx_done||!r->acknowledged||r->retry_required||r->software_retry_required)
                 {aic8800_supplicant_stop(s);return;}
+            if(s->eapol_tx!=UINT32_MAX)++s->eapol_tx;
             s->data->state=AIC8800_DATA_IDLE;pop(s);
         }else if(a->kind==AIC8800_SUPPLICANT_KEY&&s->security->state==AIC8800_SECURITY_DONE){s->security->state=AIC8800_SECURITY_IDLE;pop(s);}
         return;
@@ -217,6 +218,7 @@ int aic8800_supplicant_receive(struct aic8800_supplicant *s,const struct aic8800
         s->state==AIC8800_SUPPLICANT_RETIRED)return 0;
     aic8800_supplicant_observe(s,now);if(s->state==AIC8800_SUPPLICANT_FAULT)return 0;
     if(os_memcmp(frame->ethernet+6,s->wifi->target.bssid,6))return 0;
+    if(s->eapol_rx!=UINT32_MAX)++s->eapol_rx;
     /* Retain receive order and keep the bus free for outstanding confirmations.
      * Excess AP retransmissions are discarded; the AP may retry them later. */
     if(s->deferred_bytes){if(s->dropped_eapol!=UINT32_MAX)++s->dropped_eapol;return 1;}

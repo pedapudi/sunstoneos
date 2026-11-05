@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Host-test data only: link the models of a test list into a check as the tables checks/npu-test-models.h declares. No image
-build uses it: the OS image links no graph, and an application registers each one at run time (ss_npu_register_graph).
-
-Embed verified models from a caller-supplied model list.
+"""Embed verified models from a caller-supplied application model list.
 
 The default profile links only the diagnostic selection. --all links every
 listed model in data order. Vectors belong to the selected diagnostic model.
@@ -12,8 +9,8 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
-ROOT = Path(__file__).resolve().parents[1]
-MODELS = ROOT / 'checks/data/npu-test-model-list.json'
+ROOT = Path(__file__).resolve().parents[2]
+MODELS = ROOT / 'apps/os/npu-models.json'
 
 def catalogue_tool():
     """Load the shared catalogue and historical artifact-map compatibility."""
@@ -47,7 +44,7 @@ def generate(artifacts, output, model=0, model_list=MODELS, all_models=False, mo
         linked = [catalogue[i] for i in queue_models]
     else:
         linked = catalogue if all_models else [catalogue[model]]
-    text = '#include "npu-test-models.h"\n'
+    text = '#include "npu.h"\n'
     rows = []
     def blob(name, path, expected):
         nonlocal text
@@ -98,6 +95,7 @@ def generate(artifacts, output, model=0, model_list=MODELS, all_models=False, mo
         text += f'const struct os_npu_vector os_npu_{section}[]={{' + ','.join(rows) + '};\n'
         symbol = 'input' if section == 'inputs' else 'output'
         text += f'const unsigned os_npu_{symbol}_count={len(rows)};\n'
+    text += f'const unsigned os_npu_client_model={model};\n'
     Path(output).write_text(text)
 
 if __name__ == '__main__':

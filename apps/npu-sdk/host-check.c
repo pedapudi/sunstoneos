@@ -21,7 +21,7 @@ int main(int argc,char **argv)
     char in[4]="abc",out[4]={0};
     assert(ss_npu_run(1,in,4,out,4,100)==-1);
     const struct ss_npu_model models[]={{"unused",1,1,1,1},{"copy",1,1,4,4}};
-    const struct ss_npu_backend backend={run,close_backend,models,2,NULL};
+    const struct ss_npu_backend backend={run,close_backend,models,2};
     assert(ss_npu_service_bind_fault(describe)&&!ss_npu_service_bind_fault(describe));
     if(argc>1&&argv[1][0]=='g')assert(ss_npu_service_bind_register(register_graph)&&!ss_npu_service_bind_register(register_graph));
     assert(ss_npu_service_bind(&backend));assert(!ss_npu_service_bind(&backend));

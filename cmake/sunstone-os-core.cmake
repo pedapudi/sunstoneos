@@ -11,9 +11,11 @@ option(SUNSTONE_A733_OS_RADIO "Integrated OS with the board's radio station" OFF
 option(SUNSTONE_A733_OS_RADIO_SCAN "Radio station that scans and returns: board workload 3, no USB host, scan-only profile, normal return" OFF)
 option(SUNSTONE_A733_OS_HEADSET "OS Bluetooth headset capture service" OFF)
 option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
-option(SUNSTONE_A733_OS_NPU "Integrated OS with a task-bound NPU service" OFF)
+option(SUNSTONE_A733_OS_NPU "Integrated OS with a task-bound NPU catalogue service" OFF)
 option(SUNSTONE_A733_OS_NPU_OBSERVE "Opt-in serialized NPU diagnostic sampling" OFF)
 option(SUNSTONE_A733_OS_NPU_QUEUE "EL0 resident NPU submission ring on the routed core" OFF)
+set(SUNSTONE_OS_NPU_QUEUE_MODELS "" CACHE STRING "Comma-separated resident model indices, client model first")
+set(SUNSTONE_OS_NPU_EXTERNAL_MODELS "" CACHE FILEPATH "JSON {name: {address, bytes, sha256}} of models given by address, length and digest instead of linked bytes (runner input region or card)")
 set(SUNSTONE_OS_NPU_QUEUE_DEPTH "" CACHE STRING "Ring depth of the NPU queue: the application's declared in-flight jobs (empty: 64)")
 if(NOT SUNSTONE_OS_NPU_QUEUE_DEPTH STREQUAL "")
   if(NOT SUNSTONE_OS_NPU_QUEUE_DEPTH MATCHES "^[1-9][0-9]*$")
@@ -88,35 +90,25 @@ endif()
 if(SUNSTONE_A733_OS_MSBC AND NOT SUNSTONE_A733_OS_HEADSET)
   message(FATAL_ERROR "Wideband mSBC speech is a headset option")
 endif()
-# A76 admission permits application placement on cores 6 and 7. Device owners
-# retain their existing A55 affinity.
-option(A733_A76_ADMITTED "Admit Cortex-A76 cores for application placement" OFF)
-# CPU operating points granted by the sealed supervised or resident session
-# policy (docs/cpu-clock.md).
-option(SUNSTONE_A733_OS_CPU_CLOCK "Integrated OS with granted CPU operating-point changes" OFF)
-# Compositions of the I2S and radio services with CPU grants, and with the NPU, are refused at session admission
-# (refused_compositions in apps/os/admission.c). The headset still has its build-time rules.
-if(SUNSTONE_A733_OS_CPU_CLOCK AND SUNSTONE_A733_OS_RESIDENT AND SUNSTONE_A733_OS_HEADSET)
-  message(FATAL_ERROR "Resident CPU grants require the recorded-card session profile")
-endif()
-if(SUNSTONE_A733_OS_CPU_CLOCK AND NOT A733_A76_ADMITTED)
-  message(FATAL_ERROR "CPU operating-point grants need A733_A76_ADMITTED")
-endif()
-# High and low performance modes (docs/designs/performance-modes.md): the
-# thermal task's CPU clock owner switches the CPU domains, and the NPU when
-# the image has it, between the speed bin's vendor points. The boot mode is
-# the image manifest's perf_boot_mode.
-option(SUNSTONE_A733_OS_PERF "Integrated OS with the high and low performance-mode service" OFF)
-set(SUNSTONE_A733_OS_PERF_BOOT "high" CACHE STRING "Performance mode at boot: high or low")
-if(SUNSTONE_A733_OS_PERF AND NOT SUNSTONE_A733_OS_CPU_CLOCK)
-  message(FATAL_ERROR "The performance-mode service runs in the CPU clock owner; it needs SUNSTONE_A733_OS_CPU_CLOCK")
-endif()
-if(NOT SUNSTONE_A733_OS_PERF_BOOT STREQUAL "high" AND NOT SUNSTONE_A733_OS_PERF_BOOT STREQUAL "low")
-  message(FATAL_ERROR "SUNSTONE_A733_OS_PERF_BOOT is high or low")
-endif()
+# A76 placement, CPU operating-point grants and the performance-mode service are not build options: every image has them,
+# and a session grants them (docs/designs/one-os-image-cpu.md). The variables stay for the build rules that name them.
+set(A733_A76_ADMITTED ON)
+set(SUNSTONE_A733_OS_CPU_CLOCK ON)
+set(SUNSTONE_A733_OS_PERF ON)
 if(SUNSTONE_A733_OS_NPU)
   if(SUNSTONE_A733_OS_HEADSET)
     message(FATAL_ERROR "The NPU OS profile requires recorded recognition and a supported GPU/CPU composition")
+  endif()
+  set(SUNSTONE_OS_NPU_CATALOGUE "" CACHE FILEPATH "Authenticated NPU artifacts map for apps/os/npu-models.json")
+  set(SUNSTONE_OS_NPU_MODELS "${SUNSTONE_SOURCE_ROOT}/apps/os/npu-models.json" CACHE FILEPATH "Application NPU model-list data")
+  set(SUNSTONE_OS_NPU_CLIENT_MODEL "0" CACHE STRING "Legacy numeric selection within the model-list data")
+  set(SUNSTONE_OS_NPU_MODEL_NAME "" CACHE STRING "Semantic name of the selected linked NPU model")
+  option(SUNSTONE_OS_NPU_ALL_MODELS "Link every entry in the selected NPU model list" OFF)
+  if(NOT EXISTS "${SUNSTONE_OS_NPU_MODELS}")
+    message(FATAL_ERROR "OS NPU requires SUNSTONE_OS_NPU_MODELS model-list data")
+  endif()
+  if(NOT EXISTS "${SUNSTONE_OS_NPU_CATALOGUE}")
+    message(FATAL_ERROR "OS NPU requires SUNSTONE_OS_NPU_CATALOGUE")
   endif()
 endif()
 set(os_gpu_bisect_definitions)
@@ -243,6 +235,23 @@ if(SUNSTONE_A733_OS_AUDIO)
     drivers/audio/a733_audio_leases.c drivers/audio/dma_service_i2s_irq.c)
 endif()
 if(SUNSTONE_A733_OS_NPU)
+  set(os_npu_select --model "${SUNSTONE_OS_NPU_CLIENT_MODEL}")
+  if(SUNSTONE_OS_NPU_MODEL_NAME)
+    set(os_npu_select --model-name "${SUNSTONE_OS_NPU_MODEL_NAME}")
+  endif()
+  if(SUNSTONE_OS_NPU_ALL_MODELS)
+    list(APPEND os_npu_select --all)
+  endif()
+  if(SUNSTONE_A733_OS_NPU_QUEUE AND SUNSTONE_OS_NPU_QUEUE_MODELS)
+    list(APPEND os_npu_select --queue-models "${SUNSTONE_OS_NPU_QUEUE_MODELS}")
+  endif()
+  if(NOT SUNSTONE_OS_NPU_EXTERNAL_MODELS STREQUAL "")
+    list(APPEND os_npu_select --external "${SUNSTONE_OS_NPU_EXTERNAL_MODELS}")
+  endif()
+  execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/apps/os/npu-catalogue.py"
+    --artifacts "${SUNSTONE_OS_NPU_CATALOGUE}" --models "${SUNSTONE_OS_NPU_MODELS}" ${os_npu_select}
+    --output "${os_build}/npu-models.c" COMMAND_ERROR_IS_FATAL ANY)
+  list(APPEND os_sources "${os_build}/npu-models.c")
   list(APPEND os_added apps/os/npu.c apps/os/npu-declaration.c apps/os/npu-client.c apps/os/npu-irq.c
     platform/a733/npu_native.c runtime/counter_clock.c drivers/npu/a733_npu_runtime.c drivers/npu/a733_npu_runtime_interim.c drivers/npu/npu_pool.c drivers/npu/npu_declaration.c
     drivers/npu/npu_service.c drivers/npu/npu_queue.c drivers/npu/npu_runtime_queue.c drivers/npu/npu_idle.c drivers/npu/a733_npu_sequence.c
@@ -254,9 +263,11 @@ if(SUNSTONE_A733_OS_NPU)
     list(APPEND os_added apps/os/npu-observe.c)
   endif()
   file(GLOB os_npu_headers "${os_root}/include/*npu*.h" "${os_root}/include/nbg*.h")
-  list(APPEND os_external_inputs ${os_npu_headers}
+  list(APPEND os_external_inputs ${os_npu_headers} "${os_root}/apps/os/npu-catalogue.py"
     "${os_root}/platform/a733/npu_irq.c" "${os_root}/include/a733_npu_irq.h"
-    "${os_root}/drivers/npu/nbg_command.h")
+    "${os_root}/tools/npu-fixtures.json" "${os_root}/tools/npu-session-catalogue.py"
+    "${SUNSTONE_OS_NPU_MODELS}" "${os_root}/drivers/npu/nbg_command.h" "${os_build}/npu-models.c"
+    "${SUNSTONE_OS_NPU_CATALOGUE}")
 endif()
 set(os_include_dirs)
 if(SUNSTONE_A733_OS_HEADSET)
@@ -547,10 +558,7 @@ if(A733_A76_ADMITTED)
   target_compile_definitions(sunstone-a733-os-core PRIVATE A733_A76_ADMITTED=1
     "$<$<BOOL:${SUNSTONE_A733_OS_CPU_CLOCK}>:SUNSTONE_A733_OS_CPU_CLOCK=1>")
 endif()
-if(SUNSTONE_A733_OS_PERF)
-  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_PERF=1
-    OS_PERF_BOOT_MODE=$<IF:$<STREQUAL:${SUNSTONE_A733_OS_PERF_BOOT},low>,2,1>)
-endif()
+target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_PERF=1)
 if(SUNSTONE_A733_OS_MSBC)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_MSBC=1 SUNSTONE_BLUETOOTH_MSBC=1)
   set_source_files_properties(${os_sbc_sources} TARGET_DIRECTORY sunstone-a733-os-core

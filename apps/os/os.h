@@ -78,6 +78,7 @@ _Static_assert(sizeof(struct os_audio_session)==OS_AUDIO_SESSION_BYTES&&
 int os_audio_client_admit(uint32_t capture_samples);
 #define OS_DMA_SESSION_MAGIC UINT64_C(0x41533733444d4131)
 #define OS_DMA_SESSION_BYTES 160u
+#define OS_DMA_SESSION_VERSION 1u
 struct os_dma_session {
     uint64_t magic, version, bytes;
     uint8_t evidence[32];
@@ -88,36 +89,11 @@ _Static_assert(sizeof(struct os_dma_session)==OS_DMA_SESSION_BYTES,"DMA service 
  * names this boot's epoch. The loader requires a zero persisted grant epoch; OS admission stamps its private copy
  * after the loader stamps the board epoch. */
 #define OS_CPU_CLOCK_SESSION_BYTES 96u
-/* Whether this image has the code of a service. Until the option that selects it is removed, a session cannot grant a
- * service whose code the image lacks. */
-#ifdef SUNSTONE_A733_OS_AUDIO
-#define OS_LINKED_AUDIO 1
-#else
-#define OS_LINKED_AUDIO 0
-#endif
-#ifdef SUNSTONE_A733_OS_NPU
-#define OS_LINKED_NPU 1
-#else
-#define OS_LINKED_NPU 0
-#endif
-#ifdef SUNSTONE_A733_OS_CPU_CLOCK
-#define OS_LINKED_CPU_CLOCK 1
-#else
-#define OS_LINKED_CPU_CLOCK 0
-#endif
-#ifdef SUNSTONE_A733_OS_RADIO
-#define OS_LINKED_RADIO 1
-#else
-#define OS_LINKED_RADIO 0
-#endif
-#ifdef SUNSTONE_A733_OS_DMA
-#define OS_LINKED_DMA 1
-#else
-#define OS_LINKED_DMA 0
-#endif
-/* The services a session grants, decided once at admission from the device grant, the board prefix and the service
- * extents that validated. A service that is not granted touches no hardware. */
-enum { OS_GRANT_NPU=1u<<0, OS_GRANT_AUDIO=1u<<1, OS_GRANT_CPU_CLOCK=1u<<2, OS_GRANT_DMA=1u<<3, OS_GRANT_RADIO=1u<<4 };
+/* The services, their grant bits (OS_GRANT_*), whether this image links each one (OS_LINKED_*), their records and
+ * their supervised ids (OS_SERVICE_*) come from one declaration (apps/os/os-services.h). The granted set is decided once
+ * at admission from the device grant, the board prefix and the service extents that validated. A service that is not
+ * granted touches no hardware. */
+#include "os-services.h"
 /* Immutable little-endian session: the board session (workload 0 or 4)
  * followed by the thermal owner's facts. The evidence hashes identify
  * externally reviewed records; they do not establish those facts. */
@@ -141,6 +117,10 @@ struct os_session {
 };
 _Static_assert(offsetof(struct os_session,cpu_critical_millicelsius)==804&&
     offsetof(struct os_session,npu)==A733_OS_SESSION_BYTES,"OS session geometry");
+/* Each declared record has its field, of its wire size. */
+#define OS_RECORD_SIZE_(GRANT,extent,field,bytes,magic,version,need) \
+    _Static_assert(sizeof(((struct os_session *)0)->field)==(bytes),"the " #field " record differs from its declaration");
+OS_RECORD_ROWS(OS_RECORD_SIZE_)
 /* The bytes the thermal record names on the wire: the board prefix and the service records the session carries. */
 size_t os_session_wire_bytes(unsigned granted);
 /* The row (from 1) of the refused composition table that the granted set matches, or 0 (apps/os/admission.c). */
@@ -168,29 +148,28 @@ void os_thermal_task(void *);
 int os_thermal_task_privileged(void (*)(void *),void *);
 int os_thermal_pins(struct a733_pin_handoff *);
 int os_thermal_start(void);
-#if defined(SUNSTONE_A733_OS_PERF) && defined(SUNSTONE_A733_OS_GPU_LINEAR)
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
 struct tskTaskControlBlock;
 /* Published before gpu-linear startup; immutable after task creation. */
 struct tskTaskControlBlock *os_thermal_task_handle(void);
 #endif
 /* IRQ context, from the fixed interrupt table on CPU0. */
 void os_thermal_irq(void);
-#ifdef A733_A76_ADMITTED
 /* Before the scheduler, after the thermal mappings: reads the CPU clock
  * configuration once (apps/os/cpu.c); 0 when CPU-B is not on its locked PLL
- * with a decodable rate. */
+ * with a decodable rate. Run only when os_cpu_boot_point_needed says so. */
 int os_cpu_admit(void);
-#endif
-#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+int os_cpu_boot_point_needed(void);
+int os_cpu_boot_point_ok(void);
 /* Thermal task, after each thermal step once the policy has its first
- * reading: one bounded CPU clock step. -1 ends the session. */
+ * reading: one bounded CPU clock step. -1 ends the session; 0 when the session
+ * does not grant the CPU clock. */
 struct a733_thermal_policy;
 int os_cpu_clock_step(const struct a733_thermal_policy *);
 /* Thermal task: 1 when the next owner pass is due within a tick (apps/os/cpu.c). */
 int os_cpu_clock_busy(void);
-/* EL0-safe: 1 once the grant's requests have finished, whatever their result. */
+/* EL0-safe: 1 once the grant's requests have finished, whatever their result, and in a session without a grant. */
 int os_cpu_clock_ready(void);
-#endif
 #ifdef SUNSTONE_A733_OS_DMA
 int os_dma_task_privileged(void (*)(void *),void *);
 int os_dma_pins(struct a733_pin_handoff *);
@@ -231,6 +210,13 @@ void os_ce_probe_start(void);
 void os_ce_probe_step(void);
 int os_ce_probe_done(void);
 int os_ce_probe_failed(void);
+/* The association stage's unqualified CE entropy (apps/os/ce_probe.c). */
+void os_ce_entropy_begin(void);
+void os_ce_entropy_step(void);
+int os_ce_entropy_ready(void);
+int os_ce_entropy_failed(void);
+int os_ce_entropy_bytes(void *,uint8_t *,size_t);
+void os_ce_entropy_wipe(void);
 void os_radio_scan_return_request(void);
 int os_radio_scan_return_ready(void);
 #endif
@@ -298,14 +284,9 @@ int os_gpu_return_started(void);
 int os_capture(unsigned g,const uint8_t **wav,size_t *bytes);
 #endif
 
-/* Resident services after the board's own (apps/board/application.h). The
- * linked application reports as the first of them. Every service has its id in every image; the supervisor requires
- * progress only from the services the session grants (apps/os/services.c). */
-enum { OS_SERVICE_APPLICATION=5, OS_SERVICE_THERMAL, OS_SERVICE_NPU, OS_SERVICE_AUDIO, OS_SERVICE_RADIO, OS_SERVICE_NETWORK,
-#ifdef SUNSTONE_A733_OS_HEADSET
-    OS_SERVICE_BLUETOOTH, OS_SERVICE_HEADSET,
-#endif
-    OS_SERVICES };
+/* Resident services after the board's own (apps/board/application.h): the linked application reports as the first of them,
+ * then the services of OS_SUPERVISED_ROWS (apps/os/os-services.h), whose ids OS_SERVICE_* are defined there. The
+ * supervisor requires progress only from the services the session grants (apps/os/services.c). */
 struct os_service { const char *name; uint32_t window_us; };
 extern const struct os_service os_services[OS_SERVICES];
 void board_service_progress(unsigned);

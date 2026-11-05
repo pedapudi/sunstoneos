@@ -11,6 +11,15 @@ STAGES = ['none', 'rails-observed', 'guard-passed', 'powered', 'enumerated', 'fi
 RAILS = {0: 'dcdc1', 7: 'dcdc8', 19: 'bldo5', 20: 'cldo1'}
 
 
+ASSOC_BYTES = 48
+ASSOC_FIELDS = ('stage', 'link', 'status', 'supplicant', 'rsn', 'eapol_rx', 'eapol_tx', 'flags', 'candidates',
+                'frequency_rssi', 'ms_connect', 'ms_authorized')
+
+
+def flags_of(data):
+    return struct.unpack_from('<I', data, 36)[0]
+
+
 def record_length(head):
     """Total bytes of the record, from its first HEAD_BYTES bytes (read the rest, then call decode)."""
     if len(head) < HEAD_BYTES or head[:8] != MAGIC:
@@ -28,7 +37,8 @@ def decode(data):
         raise ValueError('radio result record is shorter than its header says')
     data = data[:total]
     ap_count = struct.unpack_from('<I', data, 216)[0]
-    if total != HEAD_BYTES + ap_count * AP_BYTES:
+    tail = ASSOC_BYTES if flags_of(data) & 512 else 0
+    if total != HEAD_BYTES + ap_count * AP_BYTES + tail:
         raise ValueError('radio result length does not match its access point count')
     stage, failed, failure_stage, flags = struct.unpack_from('<4I', data, 24)
     # Records from images before flag bit 7 carry the same refusal in fail_site: stage 7 (guard) with a 0x4xx code.
@@ -106,6 +116,24 @@ def decode(data):
                     'frequency_mhz': freq, 'channel': channel, 'rssi_dbm': rssi})
     result['scan'] = {'listed': ap_count, 'reported': reported, 'dropped': dropped,
                       'aps': sorted(aps, key=lambda a: -a['rssi_dbm'])}
+    result['association'] = None
+    if flags & 512:
+        values = dict(zip(ASSOC_FIELDS, struct.unpack_from('<12I', data, total - ASSOC_BYTES)))
+        stages = ['none', 'candidate-found', 'entropy-ready', 'connecting', 'security-pending', 'securing', 'authorized']
+        links = ['down', 'connecting', 'associated-open', 'security-pending', 'disconnecting', 'unresolved', 'secured']
+        rssi = values['frequency_rssi'] >> 16
+        result['association'] = {
+            'stage': stages[values['stage']] if values['stage'] < len(stages) else values['stage'],
+            'link': links[values['link']] if values['link'] < len(links) else values['link'],
+            'status_code': values['status'], 'supplicant_state': values['supplicant'], 'rsn_state': values['rsn'],
+            'eapol_received': values['eapol_rx'], 'eapol_sent': values['eapol_tx'],
+            'entropy_unqualified': bool(values['flags'] & 1), 'ssid_matched': bool(values['flags'] & 2),
+            'rsn_psk_ccmp': bool(values['flags'] & 4), 'target_built': bool(values['flags'] & 8),
+            'entropy_ready': bool(values['flags'] & 16), 'credential_present': bool(values['flags'] & 32),
+            'entropy_failed': bool(values['flags'] & 64),
+            'candidates': values['candidates'], 'frequency_mhz': values['frequency_rssi'] & 0xffff,
+            'rssi_dbm': rssi - 65536 if rssi >= 32768 else rssi,
+            'ms_connect_mod_65536': values['ms_connect'], 'ms_authorized_mod_65536': values['ms_authorized']}
     return result
 
 

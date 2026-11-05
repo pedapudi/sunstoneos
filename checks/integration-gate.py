@@ -399,9 +399,13 @@ def plan(value=None, changed=None, index=None):
         catalogue.write_text('{}\n')
         result = self.run_gate('--reason', 'OS NPU profile', '--variant', 'npu', label='npu')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('npu-catalogue-sha256: ' + hashlib.sha256(b'{}\n').hexdigest(),
+                      (self.sandbox / 'build/gate-npu/summary.txt').read_text())
         calls = self.records()
         self.assertEqual(len(calls), 2)
         self.assertIn('-DSUNSTONE_A733_OS_NPU=ON', calls[0])
+        self.assertIn('-DSUNSTONE_OS_NPU_CATALOGUE=' + str(self.sandbox / 'build/npu-board/session-artifacts.json'),
+                      calls[0])
 
     def test_build_directory_follows_the_source(self):
         other = self.checkout('other')

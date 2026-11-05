@@ -30,9 +30,10 @@ int os_granted(unsigned mask)
 }
 size_t os_session_wire_bytes(unsigned granted)
 {
-    return A733_OS_SESSION_BYTES+((granted&OS_GRANT_AUDIO)?OS_AUDIO_SESSION_BYTES:0)+
-        ((granted&OS_GRANT_NPU)?OS_NPU_SESSION_BYTES:0)+((granted&OS_GRANT_CPU_CLOCK)?OS_CPU_CLOCK_SESSION_BYTES:0)+
-        ((granted&OS_GRANT_DMA)?OS_DMA_SESSION_BYTES:0);
+    /* The board prefix with the thermal record, and each declared record the session grants (apps/os/os-services.h). */
+#define RECORD_BYTES(GRANT,extent,field,bytes,magic,version,need) +((granted&OS_GRANT_##GRANT)?(size_t)(bytes):0)
+    return A733_OS_SESSION_BYTES OS_RECORD_ROWS(RECORD_BYTES);
+#undef RECORD_BYTES
 }
 /* The cores of an application's workers. They fill the main task's cluster first, its pair before any other core. Cores 0
  * and 1 carry the shared interrupts, the PMIC task and the NPU interrupt, so they come last: a manifest takes them only by
@@ -57,9 +58,6 @@ static const struct {unsigned services;const char *reason;} refused_compositions
 #ifdef SUNSTONE_BOARD_RESIDENT
     {OS_GRANT_CPU_CLOCK|OS_GRANT_AUDIO,"resident CPU grants require the recorded-card session profile"},
     {OS_GRANT_CPU_CLOCK|OS_GRANT_RADIO,"resident CPU grants require the recorded-card session profile"},
-#endif
-#if !defined(SUNSTONE_A733_OS_PERF)&&!defined(SUNSTONE_BOARD_RESIDENT)&&!defined(SUNSTONE_A733_OS_GPU)&&!defined(SUNSTONE_A733_OS_CPU_RETURN)
-    {OS_GRANT_NPU|OS_GRANT_CPU_CLOCK,"CPU grants compose with the NPU only in a recorded resident, GPU or returning image, or with performance modes"},
 #endif
 };
 unsigned os_composition_refused(unsigned granted)

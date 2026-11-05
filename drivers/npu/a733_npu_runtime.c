@@ -181,10 +181,8 @@ static enum npu_declaration_result lay_out(struct npu_runtime *rt, struct bump *
                                            struct walk_out *w)
 {
     memset(w, 0, sizeof(*w));
+    if (!models || !count || !slots) return NPU_DECLARATION_MODEL;
     const unsigned capacity = bounds ? bounds->capacity : 0;
-    /* Graphs are given at preparation (models, count) or registered later within the declared bounds (capacity): some graph
-     * must be possible. */
-    if ((count && !models) || (!count && !capacity) || !slots) return NPU_DECLARATION_MODEL;
     if (bounds && bounds->per_graph && (capacity || slots > count)) return NPU_DECLARATION_MODEL;
     if (capacity > UINT32_MAX - count) return NPU_DECLARATION_MODEL;
     const size_t entries_all = (size_t)count + capacity;
@@ -381,7 +379,7 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     if (!rt || !config || rt->prepared || atomic_load(&rt->failed) ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
     const struct npu_runtime_config v = *config;
-    if ((v.count && !v.models) || (!v.count && !v.bounds.capacity) || !v.slots || !v.meta ||
+    if (!v.count || !v.models || !v.slots || !v.meta ||
         v.register_physical != 0x03600000 || !v.fatal ||
         !a733_span_incl_nonempty((const void *)v.cpu, v.bytes) ||
         ((v.cpu | v.physical | v.bytes) & (NPU_RUNTIME_GROUP_BYTES - 1)) ||

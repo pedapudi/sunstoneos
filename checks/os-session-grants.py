@@ -14,10 +14,9 @@ from pathlib import Path
 from harness import CLANG, environment
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECK_INPUTS = ('apps/os/grants.c', 'apps/os/os.h', 'apps/os/host.py', 'tools/sunstone-manifest.py')
-# OS_GRANT_* in apps/os/os.h, and the record each service carries on the wire (apps/os/host.py).
-GRANTS = {'NPU': 1, 'AUDIO': 2, 'CPU_CLOCK': 4, 'DMA': 8, 'RADIO': 16}
-RECORD = {'AUDIO': 'AUDIO', 'NPU': 'NPU', 'CPU_CLOCK': 'CPU_GRANT', 'DMA': 'DMA'}
+CHECK_INPUTS = ('apps/os/grants.c', 'apps/os/os.h', 'apps/os/os-services.h', 'apps/os/host.py', 'tools/sunstone-manifest.py')
+# The grants, records and supervised ids come from the declaration (apps/os/os-services.h): the harness prints the grant
+# bits and service ids as C compiles them, and the host builder's records (apps/os/host.py) are read from the same rows.
 GATE_RUNS = [['--build', '{build:all}', '--output', '{output}']]
 HARNESS = r'''
 #include "os.h"
@@ -29,7 +28,12 @@ int main(void)
         if(m!=1&&m!=2&&m!=6)continue;
         for(unsigned w=0;w<=8;++w){uint32_t mask=0;int ok=os_worker_cores(m,w,&mask);printf("W %u %u %d %u\n",m,w,ok,mask);}
     }
-    for(unsigned g=0;g<32;++g)
+#define GRANT(NAME,bit,with) printf("G %s %u %d\n",#NAME,(unsigned)OS_GRANT_##NAME,(int)OS_LINKED_##NAME);all|=OS_GRANT_##NAME;
+    unsigned all=0;OS_GRANT_ROWS(GRANT)
+#define SERVICE(NAME,name,window,grant,with) with(printf("S %s %u %u %s\n",#NAME,(unsigned)OS_SERVICE_##NAME,(unsigned)(grant),name);)
+    OS_SUPERVISED_ROWS(SERVICE)
+    printf("N %u\n",(unsigned)OS_SERVICES);
+    for(unsigned g=0;g<=all;++g)if(!(g&~all))
         printf("%u %zu %u %s\n",g,os_session_wire_bytes(g),os_composition_refused(g),
                os_composition_refused(g)?os_composition_reason(os_composition_refused(g)):"");
     return 0;
@@ -77,10 +81,22 @@ def main():
     assert done.returncode == 0, done.stderr[-1500:]
     rows = {}
     placement = {}
+    grants, supervised, count = {}, [], 0
     for line in subprocess.run([str(exe)], capture_output=True, text=True, check=True).stdout.splitlines():
         if line.startswith('W '):
             _, main, workers, ok, mask = line.split()
             placement[(int(main), int(workers))] = (int(ok), int(mask))
+            continue
+        if line.startswith('G '):
+            _, name, bit, linked = line.split()
+            grants[name] = int(bit)
+            continue
+        if line.startswith('S '):
+            _, name, number, needs, label = line.split(' ', 4)
+            supervised.append((name, int(number), int(needs), label.strip('"')))
+            continue
+        if line.startswith('N '):
+            count = int(line.split()[1])
             continue
         granted, size, refused, reason = (line.split(' ', 3) + [''])[:4]
         rows[int(granted)] = (int(size), int(refused), reason)
@@ -119,7 +135,7 @@ def main():
     for granted, (size, refused, reason) in rows.items():
         # The size the host builder writes into the thermal record: the prefix and every service record that is present.
         expected = host.PREFIX_BYTES + host.SERVICE_BYTES[host.THERMAL] + sum(
-            host.SERVICE_BYTES[getattr(host, RECORD[name])] for name, bit in GRANTS.items() if name in RECORD and granted & bit)
+            r['bytes'] for r in host.RECORDS.values() if granted & grants[r['grant']])
         assert size == expected, (granted, size, expected)
         assert (refused != 0) == bool(reason), (granted, refused, reason)
     # A single service is never refused; every refused set holds at least two, and a superset of a refused set is refused.
@@ -128,13 +144,19 @@ def main():
             assert not refused, granted
         if refused:
             assert all(rows[g][1] for g in rows if g & granted == granted), granted
-    names = lambda g: '+'.join(n for n, b in GRANTS.items() if g & b)
+    names = lambda g: '+'.join(n for n, b in grants.items() if g & b)
     table = sorted({names(g): rows[g][2] for g in rows if rows[g][1] and not any(rows[h][1] for h in rows if h != g and h & g == h)}.items())
-    # The service ids of the supervisor are fixed (apps/os/os.h): no id depends on a build option except the headset's.
-    header = (ROOT / 'apps/os/os.h').read_text()
-    enum = re.search(r'enum \{ OS_SERVICE_APPLICATION=5,(.*?)OS_SERVICES \};', header, re.S).group(1)
-    ids = re.findall(r'OS_SERVICE_[A-Z]+', re.sub(r'#ifdef.*?#endif', '', enum, flags=re.S))
-    assert ids == ['OS_SERVICE_THERMAL', 'OS_SERVICE_NPU', 'OS_SERVICE_AUDIO', 'OS_SERVICE_RADIO', 'OS_SERVICE_NETWORK'], ids
+    # The grant bits are distinct, one per row, and every record names a grant. The supervised ids follow the application
+    # (5) in row order, every row's grant is a set of declared grants, and only the headset's rows depend on a build option:
+    # every other service has its id in every image.
+    assert len(grants) == len(set(grants.values())) and all(b and not b & (b - 1) for b in grants.values()), grants
+    assert all(r['grant'] in grants for r in host.RECORDS.values()), host.RECORDS
+    every = sum(grants.values())
+    assert [n for _, n, _, _ in supervised] == list(range(6, 6 + len(supervised))) and count == 6 + len(supervised), (supervised, count)
+    assert all(not needs & ~every for _, _, needs, _ in supervised), supervised
+    declared = host.manifest_tool.os_service_rows('OS_SUPERVISED_ROWS')
+    assert {row[0] for row in declared if row[4] != 'OS_ALWAYS'} == {'BLUETOOTH', 'HEADSET'}, declared
+    assert [s[0] for s in supervised] == [row[0] for row in declared if row[4] == 'OS_ALWAYS' or row[0] in {s[0] for s in supervised}]
     (args.output / 'result.json').write_text(json.dumps({'passed': True, 'subsets': len(rows), 'refused_minimal_sets': dict(table)}, indent=2) + '\n')
     print('PASS session grants: %d subsets, wire sizes match the host builder, %d minimal refused compositions' % (len(rows), len(table)))
 

@@ -41,8 +41,8 @@ for line in subprocess.run([str(binary), 'offsets'], capture_output=True, text=T
 assert native['size'] == prep.PROFILE_BYTES
 assert native['network_reserved'] == prep.STAGE_LIMIT_OFFSET
 for name in ('platform', 'radio_identity', 'transport', 'bootstrap', 'wifi', 'firmware_address', 'firmware_bytes',
-             'session_owner', 'runtime_lease_us', 'renew_margin_us', 'binding_timeout_us', 'command_timeout_us',
-             'association_timeout_us', 'platform_authority', 'platform_evidence'):
+             'session_owner', 'runtime_lease_us', 'renew_margin_us', 'binding_timeout_us', 'command_timeout_us', 'refill_timeout_us',
+             'association_timeout_us', 'security_timeout_us', 'platform_authority', 'platform_evidence'):
     assert prep.PROFILE[name] == native[name], name
 for name in ('owner', 'topology', 'fabric', 'fabric_hz', 'expected', 'desired', 'card'):
     assert prep.PLATFORM[name] == native['platform.' + name], name

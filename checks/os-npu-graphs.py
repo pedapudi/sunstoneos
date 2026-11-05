@@ -17,7 +17,7 @@ from harness import environment
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--output', '{output}', '--graphs', '{fixture:npu-graphs}']]
 CACHE = Path.home() / '.cache/sunstoneos'
-CHECK_INPUTS = ('tools/npu-fixtures.json', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'tools/npu-test-models.py', 'apps/npu-graphs/models-a1.json', 'apps/npu-graphs/models-a2.json', 'apps/npu-graphs/models-b.json', 'apps/npu-graphs/models-sh.json',
+CHECK_INPUTS = ('tools/npu-fixtures.json', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-catalogue.py', 'apps/npu-graphs/models-a1.json', 'apps/npu-graphs/models-a2.json', 'apps/npu-graphs/models-b.json', 'apps/npu-graphs/models-sh.json',
                 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/nbg_assembly.c',
                 'checks/os-npu-service.c', 'checks/os-npu-graphs.py', 'tools/npu-fixtures.json')
 sys.path.insert(0, str(ROOT / 'checks'))
@@ -41,14 +41,14 @@ for label, listing in (('a1', 'models-a1.json'), ('a2', 'models-a2.json'), ('b',
     generated = work / 'generated'; generated.mkdir()
     models = ROOT / 'apps/npu-graphs' / listing
     (work / 'artifacts.json').write_text(json.dumps(artifacts))
-    subprocess.run([sys.executable, str(ROOT / 'tools/npu-test-models.py'), '--artifacts', str(work / 'artifacts.json'),
+    subprocess.run([sys.executable, str(ROOT / 'apps/os/npu-catalogue.py'), '--artifacts', str(work / 'artifacts.json'),
                     '--models', str(models), '--model', '0', '--all', '--output', str(generated / 'npu-models.c')], check=True)
     names = json.loads(models.read_text())['npu_models']
     inputs = work / 'inputs'; inputs.mkdir()
     for number, name in enumerate(names):
         for k, path in enumerate(artifacts[name]['inputs']):
             shutil.copy(path, inputs / ('%02d-%d.bin' % (number, k)))
-    includes = [ROOT / 'apps/os', ROOT / 'checks', generated, ROOT / 'apps/board', ROOT / 'platform/a733-storage-update',
+    includes = [ROOT / 'apps/os', generated, ROOT / 'apps/board', ROOT / 'platform/a733-storage-update',
                 ROOT / 'platform/a733-smp-cached', ROOT / 'drivers/usb', ROOT / 'network/include', ROOT / 'platform/qemu-smp',
                 NETWORK / 'include', NETWORK / 'portable/Compiler/GCC']
     exe = host_rtos.build(work / 'exe', [*UNITS, generated / 'npu-models.c'],
@@ -96,13 +96,13 @@ unseen = dict(artifacts['graph-relu']); unseen['model'] = str(work / 'unseen.nb'
 (work / 'artifacts.json').write_text(json.dumps({'graph-relu-unseen': unseen}))
 generated = work / 'generated'; generated.mkdir()
 env = {**os.environ, 'SUNSTONE_NPU_MODEL_DB': str(work / 'models-db.json')}
-subprocess.run([sys.executable, str(ROOT / 'tools/npu-test-models.py'), '--artifacts', str(work / 'artifacts.json'),
+subprocess.run([sys.executable, str(ROOT / 'apps/os/npu-catalogue.py'), '--artifacts', str(work / 'artifacts.json'),
                 '--models', str(work / 'unseen-models.json'), '--model', '0', '--all', '--output', str(generated / 'npu-models.c')],
                check=True, env=env)
 inputs = work / 'inputs'; inputs.mkdir()
 for k, path in enumerate(unseen['inputs']):
     shutil.copy(path, inputs / ('00-%d.bin' % k))
-includes = [ROOT / 'apps/os', ROOT / 'checks', generated, ROOT / 'apps/board', ROOT / 'platform/a733-storage-update',
+includes = [ROOT / 'apps/os', generated, ROOT / 'apps/board', ROOT / 'platform/a733-storage-update',
             ROOT / 'platform/a733-smp-cached', ROOT / 'drivers/usb', ROOT / 'network/include', ROOT / 'platform/qemu-smp',
             NETWORK / 'include', NETWORK / 'portable/Compiler/GCC']
 exe = host_rtos.build(work / 'exe', [*UNITS, generated / 'npu-models.c'], 'os-npu-graphs', defines=DEFINES, includes=includes,

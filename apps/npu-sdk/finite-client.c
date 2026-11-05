@@ -70,7 +70,7 @@ static void sdk_service(void *unused)
         for(unsigned j=0;j<p->outputs;++j)outputs+=p->buffers[NBG_ALLOC_INPUT+p->inputs+j].payload_bytes;
         if(inputs!=m->input_bytes||outputs!=m->output_bytes)retained(10);
     }
-    const struct ss_npu_backend backend={npu_job_run,sdk_close,npu_finite_models,NPU_FINITE_NETWORKS,NULL};
+    const struct ss_npu_backend backend={npu_job_run,sdk_close,npu_finite_models,NPU_FINITE_NETWORKS};
     if(!ss_npu_service_bind(&backend))retained(10);
     atomic_store_explicit(&sdk_ready,1,memory_order_release);
     for(;;) {

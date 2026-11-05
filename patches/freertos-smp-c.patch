@@ -1,6 +1,6 @@
 --- port.c
 +++ port.c
-@@ -260,9 +260,18 @@
+@@ -260,9 +260,17 @@
      /* Flag to signal that the primary core has done all the shared initialisations. */
      PRIVILEGED_DATA volatile uint8_t ucPrimaryCoreInitDoneFlag = 0;
  
@@ -16,13 +16,12 @@
 +    {
 +        uint64_t ullTaskHasFPUContext;
 +        volatile uint64_t ullOwnedLocks;
-+        uint8_t ucLSEState; /* 0 unknown, 1 absent, 2 present; own-core writes. */
 +    } __attribute__( ( aligned( 64 ) ) ) PortCoreState_t;
 +    PRIVILEGED_DATA PortCoreState_t xPortCoreStates[ configNUMBER_OF_CORES ];
  
      /* Set to 1 to pend a context switch from an ISR. */
      PRIVILEGED_DATA uint64_t ullPortYieldRequired[ configNUMBER_OF_CORES ] = { pdFALSE };
-@@ -304,7 +313,7 @@
+@@ -304,7 +312,7 @@
              #if ( configNUMBER_OF_CORES == 1 )
                  ullPortTaskHasFPUContext = pdTRUE;
              #else
@@ -31,7 +30,7 @@
              #endif
          #else
              #error "Invalid configUSE_TASK_FPU_SUPPORT setting - must be 1 or 2."
-@@ -505,7 +514,7 @@
+@@ -505,7 +513,7 @@
              #if ( configNUMBER_OF_CORES == 1 )
              ullPortTaskHasFPUContext = pdTRUE;
              #else
@@ -40,7 +39,7 @@
              #endif
          }
          #else /* if ( configUSE_TASK_FPU_SUPPORT == portTASK_NO_FPU_CONTEXT_BY_DEFAULT ) */
-@@ -1228,8 +1237,8 @@
+@@ -1228,8 +1236,8 @@
          /* Start the timer that generates the tick ISR. */
          configSETUP_TICK_INTERRUPT();
          ucPrimaryCoreInitDoneFlag = 1;
@@ -51,7 +50,7 @@
                           "ISB SY                    \n"
                           ::: "memory" );
          /* Hold the primary core here until all the secondary cores are ready, this would be achieved only when
-@@ -1356,11 +1365,13 @@
+@@ -1356,11 +1364,13 @@
       * necessary to turn off interrupts in the CPU itself while the ICCPMR is being
       * updated.
       */
@@ -69,7 +68,7 @@
  
      /* Increment the RTOS tick. */
      if( xTaskIncrementTick() != pdFALSE )
-@@ -1371,12 +1382,12 @@
+@@ -1371,12 +1381,12 @@
              ullPortYieldRequired[ portGET_CORE_ID_FROM_ISR() ] = pdTRUE;
          #endif
      }
@@ -88,7 +87,7 @@
  
      /* Ok to enable interrupts after the interrupt source has been cleared. */
      configCLEAR_TICK_INTERRUPT();
-@@ -1393,7 +1404,7 @@
+@@ -1393,7 +1403,7 @@
          #if  ( configNUMBER_OF_CORES == 1 )
              ullPortTaskHasFPUContext = pdTRUE;
          #else
@@ -97,7 +96,7 @@
          #endif
  
          /* Consider initialising the FPSR here - but probably not necessary in
-@@ -1406,6 +1417,18 @@
+@@ -1406,6 +1416,18 @@
  
  void vPortClearInterruptMask( UBaseType_t uxNewMaskValue )
  {
@@ -116,7 +115,7 @@
      if( uxNewMaskValue == portUNMASK_VALUE )
      {
          /* Unmask all interrupt priorities. */
-@@ -1413,9 +1436,10 @@
+@@ -1413,9 +1435,10 @@
      }
      else
      {
@@ -129,7 +128,7 @@
              : "i" ( portSVC_UNMASK_INTERRUPTS )
              : "memory"
          );
-@@ -1444,6 +1468,26 @@
+@@ -1444,6 +1467,26 @@
  {
      UBaseType_t ullPMRValue;
  
@@ -156,7 +155,7 @@
      /* Use SVC so this can be called safely from EL0 tasks. */
      __asm volatile (
          "svc %1        \n"
-@@ -1474,7 +1518,7 @@
+@@ -1474,7 +1517,7 @@
                           "MSR DAIFCLR, #2        \n"
                           "DSB SY                 \n"
                           "ISB SY                 \n"
@@ -165,7 +164,7 @@
      }
  
      return ullPMRValue;
-@@ -1538,31 +1582,72 @@
+@@ -1538,31 +1581,72 @@
  
  #if ( configNUMBER_OF_CORES > 1 )
  
@@ -260,7 +259,7 @@
      static inline void prvSpinUnlock( uint32_t * ulLock )
      {
          /* Conservative unlock: preserve original barriers for broad HW/FVP. */
-@@ -1570,8 +1655,8 @@
+@@ -1570,8 +1654,8 @@
              "dmb sy         \n"
              "mov w1, #0     \n"
              "str w1, [%x0]  \n"
@@ -270,61 +269,25 @@
              "isb sy         \n"
              :
              : "r" ( ulLock )
-@@ -1614,21 +1699,105 @@
+@@ -1614,21 +1698,69 @@
  
  /*-----------------------------------------------------------*/
  
 -    /* Read 64b value shared between cores. */
 +    #else
 +
-+    /* Called with local scheduler interrupts masked. Only EL1 reads the ID
-+     * register. EL0 uses LL/SC until a privileged lock call caches this core's
-+     * feature; a different core's feature never selects this core's opcode. */
-+    static inline BaseType_t prvCoreHasLSE( uint8_t ucCoreID )
-+    {
-+        uint8_t ucState = xPortCoreStates[ ucCoreID ].ucLSEState;
-+
-+        if( ucState == 0U )
-+        {
-+            const uint64_t ullTaskRegister = ullPortGetTaskRegister();
-+
-+            if( ( ( ullTaskRegister & portTASK_REGISTER_TCB_MASK ) == 0U ) ||
-+                ( ( ullTaskRegister >> portTASK_REGISTER_EL1_BIT ) & 1U ) ||
-+                ( ullPortInterruptNestings[ ucCoreID ] != 0U ) )
-+            {
-+                uint64_t ullFeatures;
-+                __asm volatile ( "MRS %0, ID_AA64ISAR0_EL1" : "=r" ( ullFeatures ) );
-+                ucState = ( ( ( ullFeatures >> 20U ) & 0xFU ) >= 2U ) ? 2U : 1U;
-+                xPortCoreStates[ ucCoreID ].ucLSEState = ucState;
-+            }
-+        }
-+
-+        return ucState == 2U;
-+    }
-+
-+    static inline void prvSpinLock( uint32_t * pulLock, uint8_t ucCoreID )
++    /* Every image is built for LSE (Cortex-A55 and Cortex-A76 both have it),
++     * so the ticket take is one LDADDA at EL0 and EL1 alike. */
++    static inline void prvSpinLock( uint32_t * pulLock )
 +    {
 +        uint32_t ulOld;
 +        const uint32_t ulIncrement = 1UL << 16U;
 +
 +        /* The low halfword is owner, the high halfword is next. Adding to
 +         * next cannot carry into owner, including at ticket 65535. */
-+        if( prvCoreHasLSE( ucCoreID ) )
-+        {
-+            __asm volatile ( ".arch_extension lse       \n"
-+                             "LDADDA %w2, %w0, [%1]     \n"
-+                             : "=&r" ( ulOld ) : "r" ( pulLock ), "r" ( ulIncrement ) : "memory" );
-+        }
-+        else
-+        {
-+            uint32_t ulNew, ulFailed;
-+            __asm volatile ( "1: LDAXR %w0, [%3]        \n"
-+                             "ADD %w1, %w0, %w4         \n"
-+                             "STXR %w2, %w1, [%3]       \n"
-+                             "CBNZ %w2, 1b              \n"
-+                             : "=&r" ( ulOld ), "=&r" ( ulNew ), "=&r" ( ulFailed )
-+                             : "r" ( pulLock ), "r" ( ulIncrement ) : "memory" );
-+        }
++        __asm volatile ( ".arch_extension lse       \n"
++                         "LDADDA %w2, %w0, [%1]     \n"
++                         : "=&r" ( ulOld ) : "r" ( pulLock ), "r" ( ulIncrement ) : "memory" );
 +
 +        const uint32_t ulTicket = ulOld >> 16U;
 +
@@ -380,7 +343,7 @@
      }
  
  /*-----------------------------------------------------------*/
-@@ -1646,26 +1815,23 @@
+@@ -1646,26 +1778,23 @@
          /* Lock acquire */
          if( uxAcquire )
          {
@@ -413,7 +376,7 @@
                  {
                     /* Follow Arm's recommended way of sleeping
                      * sevl is used to prime the wait loop.
-@@ -1679,7 +1845,7 @@
+@@ -1679,7 +1808,7 @@
                          "ldr w2, [%x0]   \n"
                          "cbnz w2, 1b     \n"
                          :
@@ -422,7 +385,7 @@
                          : "memory", "w2"
                      );
                  }
-@@ -1688,30 +1854,44 @@
+@@ -1688,30 +1817,44 @@
              /* Add barrier to ensure lock is taken before we proceed. */
              __asm__ __volatile__ ( "dmb sy" ::: "memory" );
  
@@ -435,7 +398,7 @@
 +                    return;
 +                }
 +
-+                prvSpinLock( &( xPortLocks[ eLockNum ].ulGateWord ), ucCoreID );
++                prvSpinLock( &( xPortLocks[ eLockNum ].ulGateWord ) );
 +            #endif
 +
              /* Assert the lock count is 0 when the spinlock is free and is acquired. */
@@ -482,7 +445,7 @@
              }
          }
      }
-@@ -1720,6 +1900,15 @@
+@@ -1720,6 +1863,15 @@
  
      uint8_t ucPortGetCoreID( void )
      {
@@ -498,7 +461,7 @@
          /* Use SVC to obtain the core ID in a way that is safe when called
           * from EL0 tasks. ISRs and EL1 code should use
           * ucPortGetCoreIDFromIsr()/portGET_CORE_ID_FROM_ISR().
-@@ -1740,7 +1929,7 @@
+@@ -1740,7 +1892,7 @@
      uint8_t ucPortGetCoreIDFromIsr ( void ) /* PRIVILEGED_FUNCTION */
      {
          uint64_t ullMpidrEl1;
@@ -507,7 +470,7 @@
  
          return ( uint8_t ) ( ullMpidrEl1 & 0xff );
      }
-@@ -1763,22 +1952,10 @@
+@@ -1763,22 +1915,10 @@
          }
          #endif /* configASSERT_DEFINED */
  

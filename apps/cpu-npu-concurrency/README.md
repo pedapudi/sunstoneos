@@ -32,7 +32,6 @@ repository's existing compiler and dependency configuration:
 -DSUNSTONE_A733_OS=ON -DSUNSTONE_MIMUS_BOARD_APPLICATION=ON
 -DSUNSTONE_APPLICATION=cpu-npu-load
 -DSUNSTONE_APPLICATION_cpu-npu-load_ROOT=<source>/apps/cpu-npu-concurrency
--DA733_A76_ADMITTED=ON -DSUNSTONE_A733_OS_CPU_CLOCK=ON
 -DSUNSTONE_A733_OS_CPU_RETURN=ON
 ```
 

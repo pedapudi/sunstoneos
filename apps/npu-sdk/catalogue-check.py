@@ -24,7 +24,7 @@ p.add_argument('--output', type=Path, required=True)
 p.add_argument('--cc', default='/usr/bin/clang-21')
 a = p.parse_args()
 a.output.mkdir(parents=True, exist_ok=False)
-spec = importlib.util.spec_from_file_location('os_npu_catalogue', ROOT / 'tools/npu-test-models.py')
+spec = importlib.util.spec_from_file_location('os_npu_catalogue', ROOT / 'apps/os/npu-catalogue.py')
 embed = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(embed)
 flags = a.native_flags.read_text()
@@ -63,7 +63,7 @@ for label, names in variants:
     model_list.write_text(json.dumps({'npu_models': names}) + '\n')
     generated = directory / 'models.c'
     # Exercise the same CLI that CMake uses: the only changing input is data.
-    run([sys.executable, str(ROOT / 'tools/npu-test-models.py'), '--artifacts', str(a.artifacts),
+    run([sys.executable, str(ROOT / 'apps/os/npu-catalogue.py'), '--artifacts', str(a.artifacts),
          '--models', str(model_list), '--model-name', 'shufflenet-v2-published', '--all', '--output', str(generated)])
     executable = directory / 'check'
     run([a.cc, *args, str(ROOT / 'apps/npu-sdk/catalogue-check.c'), str(generated),

@@ -123,8 +123,7 @@ def main():
     passed.append('a path outside the roots, a root itself and a link out of the build directory are refused')
     slim(home, build, passed)
     # a build directory that a check names as a default input is protected, derived from the checks' sources
-    declared = {'npu-graph-variants': 'checks/os-npu-graphs.py'}
-    assert 'build/npu-graph-variants' in (ROOT / 'tools/gate_images.py').read_text()   # the gate's fixture names it too
+    declared = {'npu-graph-variants': 'checks/os-npu-graphs.py', 'npu-board': 'tools/gate_images.py'}
     for name, source in declared.items():
         assert "build/" + name in (ROOT / source).read_text(), (name, source)
         make(build / name)

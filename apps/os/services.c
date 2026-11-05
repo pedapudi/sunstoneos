@@ -73,10 +73,10 @@ static int services_state(uint64_t now,unsigned *first)
         required=(1u<<OS_SERVICES)-1;
         if(!a733_board_host_workload(session->board.workload))
             required&=~((1u<<2)|(1u<<3)|(1u<<4));
-        /* A service the session does not grant has no task and reports nothing. */
-        if(!(session->granted&OS_GRANT_NPU))required&=~(1u<<OS_SERVICE_NPU);
-        if(!(session->granted&OS_GRANT_AUDIO))required&=~(1u<<OS_SERVICE_AUDIO);
-        if(!(session->granted&OS_GRANT_RADIO))required&=~((1u<<OS_SERVICE_RADIO)|(1u<<OS_SERVICE_NETWORK));
+        /* A service the session does not grant has no task and reports nothing (the grant of each supervised task is
+         * declared in apps/os/os-services.h). */
+        static const unsigned needs[OS_SERVICES]=OS_SERVICE_GRANTS;
+        for(unsigned i=0;i<OS_SERVICES;++i)if(needs[i]&&(session->granted&needs[i])!=needs[i])required&=~(1u<<i);
     }
     for(unsigned i=0;i<OS_SERVICES;++i){
         /* main.c creates these three tasks only for host workloads. Keep

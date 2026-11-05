@@ -43,7 +43,7 @@ cmake --build "$build/hello" --target sunstone-a733-os-hello -j12
 cmake --build "$build/mimus" --target sunstone-a733-os -j12
 
 "$cfg" "$os" "$build/control-hello" -DMIMUS_DIR= -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=hello-compute \
-  -DSUNSTONE_A733_OS_CPU_RETURN=ON -DA733_A76_ADMITTED=ON -DSUNSTONE_A733_OS_CPU_CLOCK=ON
+  -DSUNSTONE_A733_OS_CPU_RETURN=ON
 cmake --build "$build/control-hello" --target sunstone-a733-os-hello -j12
 ```
 
@@ -146,13 +146,19 @@ image and a mask, `granted`, of the services that this session carries:
   without the device bit, or the device bit without the record, is refused.
 - **Radio station:** the board prefix's workload 1 (and, in a build that has the
   radio, only with USB storage).
-- **NPU, CPU clock grant, DMA:** the service's record.
+- **CPU clock grant and the performance service:** the grant record
+  ([cpu-clock.md](cpu-clock.md)), for an application whose manifest declares
+  `cpu.clock_grants` (and `cpu.perf` for the performance service). Every image
+  has this code; a session without the record reads nothing of the CPU clock tree.
+  A cluster on the A76 cores and a grant both need CPU-B on its boot PLL point,
+  which the thermal start checks once.
+- **NPU, DMA:** the service's record.
 
 The wire form is unchanged: a record is present only for a granted service, and
 the thermal record's size field names the board prefix plus the records present.
 A service whose code the image does not link cannot be granted; the build options
-`SUNSTONE_A733_OS_AUDIO`, `_RADIO`, `_NPU`, `_NPU_QUEUE`, `_CPU_CLOCK`, `_PERF`,
-`_HEADSET` and `_RESIDENT` decide which code is linked until each is replaced by
+`SUNSTONE_A733_OS_AUDIO`, `_RADIO`, `_NPU`, `_NPU_QUEUE`, `_HEADSET` and `_RESIDENT`
+decide which code is linked (the A76, CPU clock and performance code is in every image) until each is replaced by
 its run-time form ([the design](designs/one-os-image.md)). The `all` gate variant
 links every service that is already a run-time option.
 
@@ -167,6 +173,32 @@ The compositions that admission refuses are one table, `refused_compositions` in
 with the radio, I2S with the DMA service, resident CPU grants with I2S or the
 radio, and the NPU with CPU grants outside a recorded or performance-mode image.
 `checks/os-session-grants.py` lists them and checks the wire sizes.
+
+### Adding a service
+
+The services are declared once, in `apps/os/os-services.h`. Its lists name, for
+each service, its grant bit and the build option that links it
+(`OS_GRANT_ROWS`), its session record (`OS_RECORD_ROWS`), its entry in the fixed
+start list (`OS_START_ROWS`) and the tasks the supervisor watches
+(`OS_SUPERVISED_ROWS`). The grant bits, service ids, start list, supervision
+table, record decode, wire size and the host session builder's record table
+(`apps/os/host.py`) are derived from these rows, and the host models include the
+header instead of copying it.
+
+The application ABI numbers stay where applications read them: the device bits
+in `include/sunstone_app.h` and the extent types in `include/sunstone_session.h`.
+The manifest tool and `apps/os/host.py` parse them from there, and the rows name
+them.
+
+A new service is therefore:
+
+1. its device bit or extent type, if it needs one, in the SDK header;
+2. a row in each list of `apps/os/os-services.h` that applies;
+3. its code: the start entries, the record's field in `struct os_session` and
+   its validation in `os_session_valid` (`apps/os/admission.c`), and any rows of
+   `refused_compositions` that a shared resource requires;
+4. its host check: a session that does not grant it reaches none of its
+   registers.
 
 ## Host messages and results
 

@@ -33,7 +33,10 @@ struct os_perf_report {
 };
 _Static_assert(sizeof(struct os_perf_report)==OS_PERF_REPORT_BYTES,"OS performance report geometry");
 /* The image's boot mode (1 high, 2 low), which the link check records. */
-extern const uint32_t os_perf_boot_mode;
+/* The performance-mode service is on when the session grants the CPU clock with perf, and its boot mode is the grant's
+ * (1 high, 2 low). Both are loads of the admitted session. */
+int os_perf_enabled(void);
+unsigned os_perf_boot_mode(void);
 struct a733_cpu_clock;
 struct a733_thermal_policy;
 /* Thermal task, in os_cpu_clock_step after each driver burst, with that

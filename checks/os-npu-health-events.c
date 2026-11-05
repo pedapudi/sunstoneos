@@ -42,7 +42,7 @@ int main(void)
     assert(client_events==3&&bootstrap_events==2&&atomic_load(&npu.gate)==stop);
     assert(ss_npu_service_bind_event(sdk_notify,NULL));
     const struct ss_npu_model model={"copy",1,1,1,1};
-    const struct ss_npu_backend backend={run,close_backend,&model,1,NULL};assert(ss_npu_service_bind(&backend));
+    const struct ss_npu_backend backend={run,close_backend,&model,1};assert(ss_npu_service_bind(&backend));
     char input=1,output=0;
     assert(ss_npu_run(0,&input,1,&output,1,1)==0&&client_events==4);
     assert(ss_npu_run(0,&input,1,&output,1,1)==0&&client_events==4);

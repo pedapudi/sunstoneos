@@ -37,9 +37,46 @@ REGION = struct.Struct('<QQII32s')
 assert HEAD.size == 88 and AUDIO.size == 16 and REGION.size == 56
 assert HEAD.size + AUDIO.size + REGIONS * REGION.size == MANIFEST_BYTES
 
-DEVICES = {'usb-storage': 1 << 0, 'usb-keyboard': 1 << 1, 'audio-i2s': 1 << 2,
-           'audio-headset': 1 << 3, 'gpu': 1 << 4,
-           'usb-mouse': 1 << 5, 'usb-serial': 1 << 6, 'usb-camera': 1 << 7}
+SOURCE = Path(__file__).resolve().parents[1]
+
+
+def abi_enum(header, prefix):
+    """The constants PREFIX_NAME = value of an enum in an SDK header, as {NAME: value}: the ABI numbers stay written once,
+    in the header that applications include. A value is a number or 1u << n."""
+    values = {}
+    for name, value in re.findall(r'\b%s([A-Z0-9_]+)\s*=\s*([^,/}\n]+)' % prefix, (SOURCE / header).read_text()):
+        shift = re.fullmatch(r'\(?\s*1u?\s*<<\s*(\d+)\s*\)?', value.strip())
+        number = re.fullmatch(r'(0x[0-9a-fA-F]+|\d+)u?', value.strip())
+        if shift:
+            values[name] = 1 << int(shift.group(1))
+        elif number:
+            values[name] = int(number.group(1), 0)
+    return values
+
+
+def os_service_rows(name):
+    """The rows of one list of apps/os/os-services.h (OS_GRANT_ROWS, OS_RECORD_ROWS, ...): each X(...) as its arguments."""
+    text = (SOURCE / 'apps/os/os-services.h').read_text()
+    body = re.search(r'#define %s\(X\)((?:[^\n]*\\\n)*[^\n]*)' % name, text).group(1)
+    return [[a.strip() for a in row.split(',')] for row in re.findall(r'\bX\(([^()]*(?:\([^()]*\)[^()]*)*)\)', body)]
+
+
+def c_constant(name, headers=('apps/os/os.h', 'apps/os/npu-session.h', 'include/a733_cpu_clock.h')):
+    """The value of a #define of a number in the OS headers, or a number written as such."""
+    literal = re.fullmatch(r'(0x[0-9a-fA-F]+|\d+)u?', name)
+    if literal:
+        return int(literal.group(1), 0)
+    for header in headers:
+        found = re.search(r'^#define %s\s+(?:UINT64_C\()?(0x[0-9a-fA-F]+|\d+)u?\)?\s*$' % re.escape(name),
+                          (SOURCE / header).read_text(), re.M)
+        if found:
+            return int(found.group(1), 0)
+    raise SystemExit('%s: no numeric #define in %s' % (name, ', '.join(headers)))
+
+
+# The device bits of include/sunstone_app.h (SS_DEVICE_USB_STORAGE is 'usb-storage').
+DEVICES = {name.lower().replace('_', '-'): value for name, value in abi_enum('include/sunstone_app.h', 'SS_DEVICE_').items()
+           if name != 'ALL'}
 CAPTURE = DEVICES['audio-i2s'] | DEVICES['audio-headset']
 CLUSTER = {'a55': 0, 'a76': 1}
 KIND = {'input': 1, 'work': 2, 'output': 3}
@@ -114,11 +151,15 @@ def load(path):
     require(not wanted or (listed == wanted and bin(wanted).count('1') == 1),
             name + ': a required capture device excludes the other')
     cpu = raw['cpu']
-    require(set(cpu) <= {'cluster', 'workers', 'priority', 'stack_bytes', 'heap_bytes'},
-            name + ': unknown cpu keys %s' % sorted(set(cpu) - {'cluster', 'workers', 'priority', 'stack_bytes', 'heap_bytes'}))
+    cpu_keys = {'cluster', 'workers', 'priority', 'stack_bytes', 'heap_bytes', 'clock_grants', 'perf'}
+    require(set(cpu) <= cpu_keys, name + ': unknown cpu keys %s' % sorted(set(cpu) - cpu_keys))
+    for key in ('clock_grants', 'perf'):
+        require(isinstance(cpu.get(key, False), bool), name + ': cpu.%s is true or false' % key)
+    require(not cpu.get('perf', False) or cpu.get('clock_grants', False), name + ': cpu.perf needs cpu.clock_grants')
     require(cpu.get('cluster', 'a55') in CLUSTER, name + ': cluster is a55 or a76')
     m = {'name': name, 'devices_required': required, 'devices_optional': optional,
          'cluster': CLUSTER[cpu.get('cluster', 'a55')],
+         'clock_use': (1 if cpu.get('clock_grants', False) else 0) | (2 if cpu.get('perf', False) else 0),
          # An A55 application's workers stay off the A76 cores: its main task and five workers fill cores 0 to 5
          # (apps/os/grants.c, os_worker_cores). An A76 application may use every core.
          'workers': integer(cpu.get('workers', 0), name + ' workers', 0, 7 if cpu.get('cluster', 'a55') == 'a76' else 5),
@@ -353,7 +394,7 @@ def pack(m):
                     m['devices_optional'], m['cluster'], m['workers'], m['priority'], 0,
                     m['stack_bytes'], m['heap_bytes'], m['run_deadline_us'], m['return_reserve_us'],
                     m['progress_window_us'], m['output_limit'], m['host_op_first'],
-                    m['host_op_count'], len(m['regions']), 0)
+                    m['host_op_count'], len(m['regions']), m['clock_use'])
     a = m['audio']
     out += AUDIO.pack(a['rate_hz'], a['channels'], a['bits'], a['min_frames'], a['max_frames'])
     for r in m['regions']:
@@ -371,14 +412,14 @@ def unpack(raw):
         b = raw[base:base + MANIFEST_BYTES]
         (magic, version, size, name, required, optional, cluster, workers, priority, reserved0, stack, heap,
          run, reserve, window, output, first, count, regions, reserved1) = HEAD.unpack_from(b)
-        require((magic, version, size) == (MAGIC, VERSION, MANIFEST_BYTES) and not reserved0 and not reserved1 and
-                regions <= REGIONS, 'manifest at %d: header differs' % base)
+        require((magic, version, size) == (MAGIC, VERSION, MANIFEST_BYTES) and not reserved0 and reserved1 <= 3 and
+                (reserved1 & 2 == 0 or reserved1 & 1) and regions <= REGIONS, 'manifest at %d: header differs' % base)
         rate, channels, bits_, low, high = AUDIO.unpack_from(b, HEAD.size)
         m = {'name': name.rstrip(b'\0').decode(), 'devices_required': required, 'devices_optional': optional,
              'cluster': cluster, 'workers': workers, 'priority': priority,
              'stack_bytes': stack, 'heap_bytes': heap, 'run_deadline_us': run, 'return_reserve_us': reserve,
              'progress_window_us': window, 'output_limit': output,
-             'host_op_first': first, 'host_op_count': count,
+             'host_op_first': first, 'host_op_count': count, 'clock_use': reserved1,
              'audio': {'rate_hz': rate, 'channels': channels, 'bits': bits_, 'min_frames': low, 'max_frames': high},
              'regions': []}
         for i in range(REGIONS):
@@ -416,8 +457,8 @@ def c_source(m):
              '    .return_reserve_us = UINT64_C(%d), .progress_window_us = UINT64_C(%d),' % (
                  m['return_reserve_us'], m['progress_window_us']),
              '    .output_limit = %du,' % m['output_limit'],
-             '    .host_op_first = %d, .host_op_count = %d, .region_count = %d,' % (
-                 m['host_op_first'], m['host_op_count'], len(m['regions'])),
+             '    .host_op_first = %d, .host_op_count = %d, .region_count = %d, .clock_use = %d,' % (
+                 m['host_op_first'], m['host_op_count'], len(m['regions']), m['clock_use']),
              '    .audio = {%du, %du, %du, %du, %du},' % (
                  a['rate_hz'], a['channels'], a['bits'], a['min_frames'], a['max_frames']),
              '    .regions = {']
@@ -488,38 +529,17 @@ def c_tables(m):
              'const unsigned os_wake_capacity = %du;' % (m.get('workers', 0) + 1),
              'TaskHandle_t os_wake_task[%d];' % (m.get('workers', 0) + 1),
              'unsigned os_wake_gave[%d];' % (m.get('workers', 0) + 1),
-             'int os_large_task_privileged(void (*)(void *),void *);',
-             'int os_large_pins(struct a733_pin_handoff *);',
-             'int os_large_start(void);',
-             '#ifdef SUNSTONE_TLBI_ISSUER',
-             'int os_tlbi_task_privileged(void (*)(void *),void *);', 'int os_tlbi_pins(struct a733_pin_handoff *);', 'int os_tlbi_start(void);',
-             '#endif',
+             '/* The start entries and supervised tasks of the OS services (apps/os/os-services.h). */', 'OS_START_PROTOTYPES',
              '__attribute__((aligned(4))) uint8_t ss_capture_buffer[%d];' % (64 + max(8192, -(-(m['audio']['max_frames']*m['audio']['channels']*(m['audio']['bits']//8))//4096)*4096) if m['audio']['max_frames'] else 64),
              'const size_t ss_capture_capacity = sizeof(ss_capture_buffer)-SS_CAPTURE_HEADROOM;',
              '__attribute__((used,retain)) const struct os_application os_applications[] = {',
-             '    {"thermal",os_thermal_task_privileged,os_thermal_pins,os_thermal_start},',
-             '    {"large",os_large_task_privileged,os_large_pins,os_large_start},',
-             '#ifdef SUNSTONE_TLBI_ISSUER',
-             '    {"tlbi",os_tlbi_task_privileged,os_tlbi_pins,os_tlbi_start},', '#endif',
-             '#ifdef SUNSTONE_A733_OS_NPU',
-             '    {"npu",os_npu_task_privileged,os_npu_pins,os_npu_start},', '#endif',
-             '#ifdef SUNSTONE_A733_OS_AUDIO',
-             '    {"audio",os_audio_task_privileged,os_audio_pins,os_capture_start},', '#endif',
-             '#ifdef SUNSTONE_A733_OS_DMA',
-             '    {"dma",os_dma_task_privileged,os_dma_pins,os_dma_start},', '#endif',
-             '#ifdef SUNSTONE_A733_OS_RADIO',
-             '    {"radio",os_radio_task_privileged,os_radio_pins,os_radio_start},', '#endif',
-             '#ifdef SUNSTONE_A733_OS_HEADSET',
-             '    {"headset",os_headset_task_privileged,os_headset_pins,os_headset_start},', '#endif',
-             '#ifdef SUNSTONE_A733_OS_GPU',
-             '    {"gpu-queue",os_gpu_queue_task_privileged,os_gpu_queue_pins,os_gpu_queue_start_entry},', '#endif',
+             '    OS_START_TABLE',
              '    {"%s",os_application_task_privileged,os_application_pins,os_application_start},' % m['name'],
              '};', 'const unsigned os_application_count=sizeof(os_applications)/sizeof(os_applications[0]);',
              '__attribute__((used,retain)) const struct os_service os_services[OS_SERVICES] = {',
              '    {"board-pmic",1000000},{"board-usb0",1000000},{"board-typec",1000000},',
-             '    {"board-power",1000000},{"board-usb2",1000000},{"%s",%du},{"thermal",1000000},' % (m['name'],m['progress_window_us']),
-             '    {"npu",5000000},{"audio",1000000},{"radio",1000000},{"network",1000000},',
-             '#ifdef SUNSTONE_A733_OS_HEADSET', '    {"bluetooth",1000000},{"headset",1000000},', '#endif', '};',
+             '    {"board-power",1000000},{"board-usb2",1000000},{"%s",%du},' % (m['name'],m['progress_window_us']),
+             '    OS_SERVICE_TABLE', '};',
              '#ifdef SUNSTONE_BOARD_USB2_IRQ', 'extern void board_host_irq(void);', '#endif',
              '#ifdef SUNSTONE_A733_HW_FACTS', 'extern void os_hw_facts_irq(void);', '#endif',
              '#ifdef SUNSTONE_A733_OS_SD_WRITE', 'extern void os_sd_irq(void);', '#endif',
@@ -536,9 +556,7 @@ def c_tables(m):
              '__attribute__((used,retain)) const uint32_t os_gpu_configuration[8]={',
              '    1,OS_GPU_REPLY_US,OS_GPU_OPEN_US,OS_GPU_WAIT_TICKS,OS_GPU_PRIORITY,',
              ('    A733_SMP_APPLICATION_CORE,' if m.get('cluster', 0) else '    2,'),
-             '#if defined(SUNSTONE_A733_OS_PERF) && OS_PERF_BOOT_MODE == 2',
-             '    A733_GPU_LOW_HZ,A733_GPU_LOW_UV};', '#else',
-             '    A733_GPU_CORE_HZ,A733_GPU_SUPPLY_UV};', '#endif', '#endif', '']
+             '    A733_GPU_CORE_HZ,A733_GPU_SUPPLY_UV};', '#endif', '']
     # Placement is an OS setting; the GPU route uses the same admitted pair.
     if noapp:
         lines=[line for line in lines if not any(key in line for key in ('os_core-app.h','os_core_init','app_stack','app_task','{\"os-core\",os_application'))]

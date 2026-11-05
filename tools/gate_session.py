@@ -4,8 +4,9 @@
 Usage: gate_session.py IMAGE.elf OUTPUT.bin
 
 An NPU image takes its NPU extent from checks/data/npu-session-template (a queue entry's typed session), and the extent is made
-to describe this image: the client model is read from the image's own os_npu_client_model; the session names no pool, because the image takes it from the ledger when it admits the application. The declaration is the synchronous
-wrapper's: one slot, one job in flight, one graph registered at run time.
+to describe this image: the client model and the catalogue digest are read from the image's own os_npu_client_model and
+os_npu_catalogue_digest; the session names no pool, because the image takes it from the ledger when it admits the application. The declaration is the synchronous
+wrapper's: one slot, one job in flight, one graph for each catalogue entry (os_npu_model_count).
 
 The session is built by tools/board_images.py exactly as `board.py check` builds it: the same preparation, the same typed
 extents, one placeholder byte for each INPUT region. Two inputs stand in for a live read of the board, as in `submit`'s
@@ -52,9 +53,9 @@ def npu_template(image, scratch):
     if at < 0:
         raise SystemExit('the NPU session template has no NPU extent')
     raw[at + CLIENT_MODEL:at + CLIENT_MODEL + 4] = symbol_bytes(image, 'os_npu_client_model')[:4]
-    # The synchronous wrapper has one slot and one job in flight; the application registers one graph at run time, of at most
-    # 1 MiB with tensors of at most 256 KiB (the reviewed shufflenet-v2-published graph is 964,224 bytes with a 150,528-byte input).
-    struct.pack_into('<6I', raw, at + DECLARATION, 1, 1, 1, 0, 1 << 20, 1 << 18)
+    # The synchronous wrapper has one slot and one job in flight, and the image needs one graph for each catalogue entry.
+    models = int.from_bytes(symbol_bytes(image, 'os_npu_model_count'), 'little')
+    struct.pack_into('<6I', raw, at + DECLARATION, 1, 1, models, 0, 0, 0)
     directory = Path(scratch) / 'template'
     directory.mkdir()
     (directory / 'session.bin').write_bytes(bytes(raw))

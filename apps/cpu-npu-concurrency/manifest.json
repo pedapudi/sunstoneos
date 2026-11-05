@@ -1,7 +1,7 @@
 {
   "name": "cpu-npu-load",
   "devices": {"required": [], "optional": []},
-  "cpu": {"cluster": "a76", "workers": 7, "priority": 2, "stack_bytes": 16384},
+  "cpu": {"clock_grants": true, "cluster": "a76", "workers": 7, "priority": 2, "stack_bytes": 16384},
   "regions": [],
   "deadlines": {"run_us": 8000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
   "output_limit": 1728

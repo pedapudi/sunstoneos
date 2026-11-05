@@ -1,8 +1,7 @@
 # Fixed returning hardware profile. All adaptation is private to this target.
 if(SUNSTONE_A733_OS_RESIDENT OR SUNSTONE_A733_OS_AUDIO OR (SUNSTONE_A733_OS_RADIO AND NOT SUNSTONE_A733_OS_RADIO_SCAN) OR
-   SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_USB_CLASSES OR
-   SUNSTONE_A733_OS_PERF OR NOT A733_A76_ADMITTED OR NOT SUNSTONE_A733_OS_CPU_CLOCK)
-  message(FATAL_ERROR "CPU return requires the supervised A76 CPU-clock profile with optional GPU")
+   SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_USB_CLASSES)
+  message(FATAL_ERROR "CPU return requires the supervised profile with optional GPU")
 endif()
 if(SUNSTONE_A733_OS_NPU AND (SUNSTONE_A733_OS_GPU OR SUNSTONE_A733_OS_DMA))
   message(FATAL_ERROR "CPU/NPU return excludes GPU and DMA")

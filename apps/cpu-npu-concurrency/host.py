@@ -140,13 +140,19 @@ def freeze_decoder(image, destination, mode):
         return int.from_bytes(read(address, size), 'little')
     model_index, reference = None, None
     if mode == 1:
-        # The image links no graph: the application carries the diagnostic's graph and registers it, so it is model 0.
-        require('cpu_npu_graph' in symbols, 'Combined decoder requires the application to carry its NPU graph.')
+        require('os_npu_model_count' in symbols, 'Combined decoder requires a linked NPU catalogue.')
+        count = scalar('os_npu_model_count')
+        selected = scalar('os_npu_client_entry')
+        address, size = symbols['os_npu_model_info']
+        require(size == count * 88 and selected < count, 'Linked SDK metadata geometry differs.')
+        row = read(address + selected*88, 88)
+        name = row[:64].split(b'\0', 1)[0].decode('utf-8')
+        require(name == 'shufflenet-v2-published', 'Combined decoder model name differs.')
         reference = read(symbols['cpu_npu_reference'][0], scalar('cpu_npu_reference_bytes'))
         require(0 < len(reference) <= 8, 'Linked reference does not fit the receipt.')
-        model_index = 0
+        model_index = selected
     else:
-        require(mode == 0 and 'cpu_npu_graph' not in symbols, 'CPU control decoder cannot bind NPU work.')
+        require(mode == 0 and 'os_npu_model_count' not in symbols, 'CPU control decoder cannot bind NPU work.')
     binding = {'image_sha256': hashlib.sha256(Path(image).read_bytes()).hexdigest(),
                'mode': mode, 'model_index': model_index,
                'reference_hex': reference.hex() if reference is not None else None}

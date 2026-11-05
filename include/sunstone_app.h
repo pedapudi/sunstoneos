@@ -93,6 +93,8 @@ struct ss_audio_format {
     uint32_t min_frames, max_frames;
 };
 
+/* clock_use: the application may be granted CPU operating-point changes, and, with them, the performance-mode service. */
+enum { SS_CLOCK_GRANTS = 1, SS_CLOCK_PERF = 2 };
 struct ss_manifest {
     uint64_t magic;
     uint32_t version, bytes;          /* bytes == sizeof(struct ss_manifest) */
@@ -113,7 +115,7 @@ struct ss_manifest {
      * also owns 0x80..0xff. */
     uint8_t host_op_first, host_op_count;
     uint8_t region_count;
-    uint8_t reserved1;
+    uint8_t clock_use;                /* SS_CLOCK_*: what the application may ask of the CPU clock service */
     struct ss_audio_format audio;
     struct ss_region regions[SS_REGIONS];
 };
@@ -296,10 +298,10 @@ struct ss_key_report {
     uint8_t data[8];
 };
 int ss_key_report(struct ss_key_report *report);
-/* Model metadata. Names contain at most 63 UTF-8 bytes plus a terminating zero; the model of a graph registered at run time
- * (ss_npu_register_graph) has an empty name, and ss_npu_model_find reaches only named models. Byte sizes describe concatenated
- * logical tensors, excluding device padding. The OS image links no model: every index is the one ss_npu_register_graph
- * returned, and the counts and sizes come from the graph's own header. */
+/* Immutable image-linked model metadata. Names contain at most 63 UTF-8 bytes
+ * plus a terminating zero. Byte sizes describe concatenated logical tensors,
+ * excluding device padding. A catalogue may contain any positive count that
+ * the selected backend admits; indices are local to that image's catalogue. */
 #define SS_NPU_MODEL_NAME_BYTES 64u
 struct ss_npu_model {
     char name[SS_NPU_MODEL_NAME_BYTES];

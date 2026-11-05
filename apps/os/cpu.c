@@ -3,7 +3,7 @@
  * start reads the clock configuration once and refuses a CPU-B cluster that
  * is not on its PLL at boot0's 1014 MHz. Applications read the clock record through ss_clock_info().
  *
- * With SUNSTONE_A733_OS_CPU_CLOCK the thermal task also owns the CPU clock
+ * When the session grants the CPU clock the thermal task also owns the CPU clock
  * driver. It inspects both clusters read-only, then requests each cluster
  * that the session's grant names at the grant's highest point once (and, for
  * a grant of both clusters, the DSU), and afterwards lets the driver follow
@@ -15,9 +15,7 @@
 #include "application.h"
 #include "a733_cpu_clock.h"
 #include "a733_mmio.h"
-#ifdef SUNSTONE_A733_OS_PERF
 #include "perf.h"
-#endif
 #include "FreeRTOS.h"
 #include <stdatomic.h>
 #include <stdio.h>
@@ -47,6 +45,17 @@ static int read_word(void *cookie,uintptr_t a,uint32_t *v)
 }
 static uint32_t mhz(enum a733_cpu_domain d)
 {return report.domain[d].decoded?(uint32_t)(report.domain[d].hz/1000000u):0;}
+static atomic_uint boot_point;
+/* The boot-point check is needed by a session that carries the CPU clock record (the owner reads the clock tree, and a
+ * grant starts from boot0's CPU-B point) and by an application placed on the A76 cores. */
+int os_cpu_boot_point_needed(void)
+{
+    const struct os_session *s=os_session_admitted();
+    const struct ss_manifest *m=ss_application.manifest;
+    return (s&&(s->granted&OS_GRANT_CPU_CLOCK))||(m&&m->cluster==SS_CLUSTER_A76);
+}
+/* 1 once os_cpu_admit has passed; EL0-safe. */
+int os_cpu_boot_point_ok(void){return (int)atomic_load_explicit(&boot_point,memory_order_acquire);}
 int os_cpu_admit(void)
 {
     if(!a733_cpu_clock_report(read_word,NULL,&report))return 0;
@@ -59,6 +68,7 @@ int os_cpu_admit(void)
     const uint32_t points[2]={mhz(A733_CPU_LITTLE),mhz(A733_CPU_BIG)},mv[2]={0,0};
     atomic_store_explicit(&dsu_mhz,mhz(A733_CPU_DSU),memory_order_relaxed);
     atomic_store_explicit(&record,pack(points,mv,0),memory_order_release);
+    atomic_store_explicit(&boot_point,1,memory_order_release);
     return 1;
 }
 /* EL0-safe; the recognizer task. */
@@ -73,7 +83,6 @@ int os_cpu_clock_line(char *line,size_t bytes)
         (unsigned long long)atomic_load_explicit(&parked_max_us,memory_order_relaxed));
     return n>0&&(size_t)n<bytes?n:0;
 }
-#ifdef SUNSTONE_A733_OS_CPU_CLOCK
 /* Each pass runs one driver burst: further polls while a cluster is parked,
  * up to 200 us, as the USB0 service loop bounds its passes. */
 #define BURST_US 200u
@@ -82,7 +91,7 @@ int os_cpu_clock_line(char *line,size_t bytes)
 #define REQUEST_US 120000u
 static struct {
     struct a733_cpu_clock driver;
-    unsigned phase,cluster,count;
+    unsigned phase,cluster,count,perf;
     atomic_uint ready;
 } owner;
 enum { START, INSPECT, REQUEST, FOLLOW };
@@ -121,7 +130,7 @@ int os_cpu_clock_busy(void)
     return os_granted(OS_GRANT_CPU_CLOCK)&&(owner.phase!=FOLLOW||owner.driver.state!=0);
 }
 /* EL0-safe: the recognizer waits for this before each timed run. */
-int os_cpu_clock_ready(void){return (int)atomic_load_explicit(&owner.ready,memory_order_acquire);}
+int os_cpu_clock_ready(void){return !os_granted(OS_GRANT_CPU_CLOCK)||(int)atomic_load_explicit(&owner.ready,memory_order_acquire);}
 static uint64_t later(uint64_t us)
 {uint64_t now;return a733_counter_clock_now(&providers.shared.counter,&now)?now+us:0;}
 /* Each refusal records its line, phase, cluster and full status word before
@@ -132,6 +141,8 @@ static int refused(uint32_t site,const void *here,uint32_t status)
 int os_cpu_clock_step(const struct a733_thermal_policy *policy)
 {
     struct a733_cpu_clock *c=&owner.driver;
+    /* A session without the CPU clock record reaches no register here: no read of the clock tree, no rail, no PMIC. */
+    if(!os_granted(OS_GRANT_CPU_CLOCK))return 0;
     if(owner.phase==START){
         /* The session is read once, here: later steps (1 kHz while the driver works) need nothing from it. */
         const struct os_session *s=os_session_admitted();
@@ -139,13 +150,13 @@ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
         if(!s||!a733_cpu_clock_grant_load(&s->cpu_clock,s->board.epoch,s->board.generation,&config)||
            !a733_cpu_clock_init(c,&config,&clock_ops,&owner,&providers.shared.clocks,&providers.shared.rails,
                &providers.shared.pmic,policy))return REFUSED(0);
+        owner.perf=config.grant.perf!=0;
         owner.phase=INSPECT;owner.cluster=A733_CPU_LITTLE;
         if(a733_cpu_clock_inspect(c,A733_CPU_LITTLE,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return REFUSED(0);
         return 1;
     }
     enum a733_cpu_clock_status r=a733_cpu_clock_burst(c,BURST_US);
-#ifdef SUNSTONE_A733_OS_PERF
-    /* The performance-mode service replaces the one-request-per-cluster
+    /* The performance-mode service (a grant with perf) replaces the one-request-per-cluster
      * start: its boot switch moves the CPU domains to the boot mode, and it
      * then serves USB0 operation 8 (apps/os/perf.c). It sees every burst
      * result, including a retained driver, before the session ends. */
@@ -155,7 +166,6 @@ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
         if(ready && !atomic_load_explicit(&owner.ready,memory_order_relaxed))
             atomic_store_explicit(&owner.ready,1,memory_order_release);
     }
-#endif
     if(r==A733_CPU_CLOCK_RETAINED||r==A733_CPU_CLOCK_INVALID)return REFUSED(r);
     if(r==A733_CPU_CLOCK_PENDING)return 1;
     if(r==A733_CPU_CLOCK_COMPLETE&&owner.phase!=INSPECT)++owner.count;
@@ -166,11 +176,8 @@ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
             owner.cluster=A733_CPU_BIG;
             return a733_cpu_clock_inspect(c,A733_CPU_BIG,later(REQUEST_US))==A733_CPU_CLOCK_PENDING?1:REFUSED(0);
         }
-#ifdef SUNSTONE_A733_OS_PERF
-        owner.phase=FOLLOW;return 1;
-#else
+        if(owner.perf){owner.phase=FOLLOW;return 1;}
         owner.phase=REQUEST;owner.cluster=0;
-#endif
     }
     if(owner.phase==REQUEST){
         /* One request per granted domain once its sensor has a reading (CPUL
@@ -202,4 +209,3 @@ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
     }
     return 1;
 }
-#endif

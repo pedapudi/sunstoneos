@@ -1,5 +1,6 @@
-/* The OS side of the application's NPU service. The image links no graph: the application registers each one
- * (ss_npu_register_graph) and the runtime admits it by its structure. */
+/* One concrete application of the task-bound API. Every linked catalogue
+ * entry is selectable through LOAD; this caller compares one selected vector.
+ * The client exercises generic model sessions and accelerator dispatch. */
 #include "os.h"
 #include "npu.h"
 #include "application.h"
@@ -9,6 +10,17 @@
 #include <string.h>
 struct os_npu_report os_npu_published_report;
 #define published os_npu_published_report
+static uint8_t pattern_byte(size_t i){return (uint8_t)(OS_NPU_OUTPUT_PATTERN>>8*(i&3));}
+/* Whole 64-bit words where aligned, then the tail bytes. */
+static void fill(uint8_t *p,size_t bytes)
+{
+    const uint64_t word=OS_NPU_OUTPUT_PATTERN*UINT64_C(0x100000001);
+    size_t i=0;
+    if(!((uintptr_t)p&7))for(;i+8<=bytes;i+=8)memcpy(p+i,&word,8);
+    for(;i<bytes;++i)p[i]=pattern_byte(i);
+}
+static uint32_t kept(const uint8_t *p,size_t bytes)
+{uint32_t n=0;for(size_t i=0;i<bytes;++i)n+=p[i]==pattern_byte(i);return n;}
 static void header(struct os_npu_report *r)
 {
     r->magic=OS_NPU_REPORT_MAGIC;r->version=1;r->bytes=OS_NPU_REPORT_BYTES;
@@ -46,7 +58,7 @@ static unsigned sdk_loaded,sdk_model;
 static int sdk_run(unsigned model,const void *input,size_t input_bytes,
                    void *output,size_t output_bytes,uint64_t timeout)
 {
-    if(!os_npu_runtime_for_sdk||model>=atomic_load_explicit(&os_npu_runtime_for_sdk->count,memory_order_acquire))return 0;
+    if(model>=(os_npu_runtime_for_sdk?atomic_load_explicit(&os_npu_runtime_for_sdk->count,memory_order_acquire):os_npu_model_count))return 0;
     struct npu_runtime_tensor t;
     int r;
     if(!sdk_loaded||sdk_model!=model||!os_npu_tensor(NBG_INPUT,0,&t)) {
@@ -93,24 +105,21 @@ static void sdk_fault(struct ss_npu_fault_info *out)
     out->window_ms=os_npu_last_fault.window_ms;
 }
 static unsigned sdk_closed;
-/* A model's description from the plan the runtime decoded when it admitted the graph. */
-static int sdk_info(unsigned index,struct ss_npu_model *out)
-{
-    const struct npu_runtime *rt=os_npu_runtime_for_sdk;
-    if(!rt||!out||index>=atomic_load_explicit(&rt->count,memory_order_acquire))return 0;
-    const struct nbg_assembly_layout *p=&rt->plans[index];
-    size_t inputs=0,outputs=0;
-    for(unsigned j=0;j<p->inputs;++j)inputs+=p->buffers[NBG_ALLOC_INPUT+j].payload_bytes;
-    for(unsigned j=0;j<p->outputs;++j)outputs+=p->buffers[NBG_ALLOC_INPUT+p->inputs+j].payload_bytes;
-    out->inputs=p->inputs;out->outputs=p->outputs;out->input_bytes=inputs;out->output_bytes=outputs;
-    return 1;
-}
 static int sdk_close(void)
 {int r=os_npu_close();if(r==1)sdk_closed=1;return r;}
 int os_npu_sdk_bind(const struct npu_runtime *runtime)
 {
-    if(!runtime)return 0;
-    const struct ss_npu_backend backend={sdk_run,sdk_close,NULL,0,sdk_info};
+    if(!runtime||runtime->count!=os_npu_model_count)return 0;
+    for(unsigned i=0;i<os_npu_model_count;++i) {
+        const struct nbg_assembly_layout *p=&runtime->plans[i];
+        const struct ss_npu_model *m=&os_npu_model_info[i];
+        if(m->inputs!=p->inputs||m->outputs!=p->outputs)return 0;
+        size_t inputs=0,outputs=0;
+        for(unsigned j=0;j<p->inputs;++j)inputs+=p->buffers[NBG_ALLOC_INPUT+j].payload_bytes;
+        for(unsigned j=0;j<p->outputs;++j)outputs+=p->buffers[NBG_ALLOC_INPUT+p->inputs+j].payload_bytes;
+        if(inputs!=m->input_bytes||outputs!=m->output_bytes)return 0;
+    }
+    const struct ss_npu_backend backend={sdk_run,sdk_close,os_npu_model_info,os_npu_model_count};
     os_npu_runtime_for_sdk=runtime;
     return ss_npu_service_bind_fault(sdk_fault)&&ss_npu_service_bind_register(sdk_register)&&ss_npu_service_bind(&backend);
 }
@@ -150,8 +159,38 @@ void os_npu_client_task(void *unused)
         if(!os_npu_stopped())goto close;
         goto done;
     }
-    /* An image without an application manifest has no client: the service opens and closes. */
-    r->refused=1;
+    if(os_npu_stopping()){r->refused=1;goto close;}
+    /* A thermal stop after the check above makes LOAD refuse. */
+    const int loaded=os_npu_load(os_npu_client_entry);
+    if(!loaded){r->refused=1;goto close;}
+    if(loaded<0)RETAIN(0x605);
+    for(unsigned job=0;job<s->npu.jobs;++job) {
+        if(os_npu_stopping()){r->refused=1;break;}
+        for(unsigned i=0;i<os_npu_input_count;++i) {
+            struct npu_runtime_tensor tensor;
+            if(!os_npu_tensor(NBG_INPUT,i,&tensor)||tensor.bytes!=os_npu_inputs[i].bytes)RETAIN(0x606);
+            memcpy(tensor.data,os_npu_inputs[i].data,tensor.bytes);
+        }
+        for(unsigned i=0;i<os_npu_output_count;++i) {
+            struct npu_runtime_tensor tensor;
+            if(!os_npu_tensor(NBG_OUTPUT,i,&tensor)||tensor.bytes!=os_npu_references[i].bytes)RETAIN(0x607);
+            fill(tensor.data,tensor.bytes);
+        }
+        int submitted=os_npu_submit(1000000);
+        if(!submitted){r->refused=1;break;}
+        if(submitted<0)RETAIN(0x608);
+        struct storage_digest digest;storage_digest_init(&digest);
+        unsigned mismatch=0;uint32_t bytes=0,pattern=0;
+        for(unsigned i=0;i<os_npu_output_count;++i) {
+            struct npu_runtime_tensor tensor;
+            if(!os_npu_tensor(NBG_OUTPUT,i,&tensor)||tensor.bytes!=os_npu_references[i].bytes)RETAIN(0x609);
+            if(!storage_digest_add(&digest,tensor.data,tensor.bytes))RETAIN(0x60a);
+            if(memcmp(tensor.data,os_npu_references[i].data,tensor.bytes))mismatch=1;
+            bytes+=(uint32_t)tensor.bytes;pattern+=kept(tensor.data,tensor.bytes);
+        }
+        storage_digest_end(&digest,r->last_digest);++r->jobs;r->mismatches+=mismatch;
+        r->output_bytes=bytes;r->pattern_bytes=pattern;
+    }
 close:
     if(os_npu_close()!=1)RETAIN(0x60b);
 wait_stop:
