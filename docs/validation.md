@@ -42,6 +42,8 @@ A source-only check configures no build. Duplicate selections run once.
 selected declarations. Other component checks run directly with their
 required inputs.
 
+A path that a change deletes or renames also selects `checks/docs-links.py`, which runs in under a second, because a document may link to it.
+
 Use the affected-check selector for a worker's Git range:
 
 ```sh

@@ -177,6 +177,23 @@ def main():
     cmake_head = commit('Change an included CMake file')
     cmake_range = select(cmake_base + '..' + cmake_head)
     assert [check['check'] for check in cmake_range['checks']] == ['os-image.py'], cmake_range
+    # Mutation: a branch that deletes or renames a file a document links to selects the link check, and the link check fails.
+    shutil.copyfile(ROOT / 'checks/docs-links.py', source / 'checks/docs-links.py')
+    write('apps/linked.py', 'print("linked")\n')
+    write('apps/other.py', 'print("other")\n')
+    write('docs/note.md', '# Note\n\nSee [the tool](../apps/linked.py) and [another](../apps/other.py).\n')
+    links_base = commit('A document links two files')
+    assert run(sys.executable, '-B', 'checks/docs-links.py').endswith('0 broken links')
+    (source / 'apps/linked.py').unlink()
+    (source / 'apps/other.py').rename(source / 'apps/renamed.py')
+    links_head = commit('Delete and rename linked files')
+    deleted = select(links_base + '..' + links_head)
+    assert 'docs-links.py' in {check['check'] for check in deleted['checks']}, deleted
+    broken = subprocess.run([sys.executable, '-B', 'checks/docs-links.py'], cwd=source, env=env, capture_output=True, text=True)
+    assert broken.returncode != 0 and 'linked.py' in broken.stdout + broken.stderr, broken.stdout + broken.stderr
+    write('apps/new.py', 'print("new")\n')
+    added = commit('Add a file only')
+    assert 'docs-links.py' not in {check['check'] for check in select(links_head + '..' + added)['checks']}
     (out / 'results.json').write_text(json.dumps({'current_inputs': current,
                                                 'cmake_paths': {k: sorted(v) for k, v in cmake_selected.items()},
                                                 'cmake_range': cmake_range, 'paths': selected, 'range': ranged, 'removed': result,

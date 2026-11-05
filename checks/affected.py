@@ -5,6 +5,7 @@ Dependency coverage comes from check-index.py, including literal CHECK_INPUTS de
 by checks. Git ranges use both endpoint inventories, retaining dependencies
 removed by a deletion or rename. Textual inference cannot find every dynamically
 assembled path; the result is a selection aid, not proof of complete coverage.
+Any deleted or renamed path also selects docs-links.py, because a document may link to it.
 """
 import argparse
 import importlib.util
@@ -70,6 +71,10 @@ def plan(value=None, changed=None, index=None):
             selected.update(indexer.select(inventory(revision), changed))
     changed = changed or []
     selected.update(indexer.select(index, changed))
+    # A path that is gone from the checkout (deleted, or renamed away) may be one a document links to: the check of document
+    # links costs under a second, so any deletion or rename selects it.
+    if 'docs-links.py' in index and any(not (ROOT / p).exists() for p in changed):
+        selected.add('docs-links.py')
     checks = []
     for name in sorted(selected):
         entry = index.get(name)
