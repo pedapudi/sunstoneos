@@ -13,7 +13,7 @@ Native SDC1 CMD52/CMD53 transport, immutable firmware staging, AIC8800D80 bootst
 | --- | --- | --- | --- |
 | Guard, power-on, SDIO enumeration, identity, firmware upload at four bits and 25 MHz, runtime start | board-qualified | firmware confirmed about 16.7 s into the session; 2,880 table pairs | [radio.md](../radio.md), [records](../evidence/radio.jsonl) |
 | Passive Wi-Fi scan with shutdown and return | board-qualified | 22 access points, all on 2.4 GHz | [records](../evidence/radio.jsonl) |
-| CE TRNG entropy for bring-up (unqualified) | board-qualified for bring-up only | 32 bytes in about 4 ms | [records](../evidence/radio.jsonl) |
+| CE TRNG entropy for bring-up (unqualified) | board-tested, unqualified | 32 bytes in about 4 ms | [records](../evidence/radio.jsonl) |
 | Wi-Fi association, WPA2, IPv4, DHCP and DNS, reconnect | host-tested | none | [radio-wifi.md](../radio-wifi.md) |
 | Bluetooth HFP audio gateway with voice-recognition activation | host-tested | `bt_hfp_ag.c` 11,572 B with call control off | [design](../designs/bluetooth-voice-recognition.md), `bluetooth-voice-recognition-budgets` |
 | WPA3 SAE association, top-rate SDIO, headset interoperability | open | none | open work 2 to 4 |
