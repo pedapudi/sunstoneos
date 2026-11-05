@@ -172,7 +172,8 @@ def geometry(image):
         result['device_ranges_head'] = ranges
     # What a run publishes about where its device memory went and how long the terminal's walk of it took (apps/os/device-ranges.h).
     for symbol, key, bytes_ in (('os_cpu_return_walk', 'return_walk', 128), ('os_npu_guard_record', 'npu_guard', 64),
-                              ('os_npu_register_record', 'npu_register', 64)):
+                              ('os_npu_register_record', 'npu_register', 64),
+                              ('os_npu_prepare_record', 'npu_prepare', 128)):
         if symbol in symbols:
             address, size = symbols[symbol]
             require(size == bytes_ and address % 8 == 0 and begin <= address < address + size <= end,
@@ -295,6 +296,19 @@ def decode_published(copied, geometry):
     if 'npu-guard' in copied:
         names = ('pool_base', 'pool_bytes', 'guard_base', 'guard_bytes', 'checked', 'differing_words', 'first_difference', 'pattern')
         out['npu_guard'] = dict(zip(names, struct.unpack('<8Q', copied['npu-guard'])))
+    if 'npu-prepare' in copied:
+        names = ('graphs', 'bytes', 'copy_us', 'reserve_us', 'decode_us', 'layout_us', 'carve_us', 'place_us', 'fill_us', 'native_us',
+                 'finish_us', 'total_us', 'cycles', 'ticks', 'sctlr_el1', 'midr_el1')
+        record = dict(zip(names, struct.unpack('<16Q', copied['npu-prepare'])))
+        # The clock the work ran at, measured: the core's cycles over the generic counter's ticks (24 MHz), a lower bound when the
+        # core waited for an interrupt. The data cache and MMU are SCTLR_EL1.C and .M.
+        record['cpu_mhz'] = record['cycles'] * COUNTER_HZ / record['ticks'] / 1e6 if record['ticks'] and record['cycles'] else None
+        record['data_cache_on'] = bool(record['sctlr_el1'] & 4)
+        record['mmu_on'] = bool(record['sctlr_el1'] & 1)
+        record['core_part'] = (record['midr_el1'] >> 4) & 0xfff
+        parts = ('copy_us', 'reserve_us', 'decode_us', 'layout_us', 'carve_us', 'place_us', 'fill_us', 'native_us', 'finish_us')
+        record['unattributed_us'] = record['total_us'] - sum(record[k] for k in parts)
+        out['npu_prepare'] = record
     if 'npu-register' in copied:
         words = struct.unpack('<8Q', copied['npu-register'])
         graphs = words[0]

@@ -183,6 +183,11 @@ def check_consumers(record):
     registered = returning.decode_published({'npu-register': struct.pack('<8Q', 80, 13815360, 8000, 4000, 36000, 0, 0, 0)}, {})['npu_register']
     require(registered['graphs'] == 80 and registered['per_graph_us'] == {'copy': 100.0, 'decode': 50.0, 'layout': 450.0},
             'the graph registration record does not decode')
+    prepared = returning.decode_published({'npu-prepare': struct.pack('<16Q', 80, 13815360, 15000, 30, 400000, 300000, 20000, 1000, 40000,
+                                                                       20000, 5000, 801000, 3200000000, 24000000, 0x30d01805, 0x412fd050)}, {})['npu_prepare']
+    require(abs(prepared['cpu_mhz'] - 3200.0) < 1e-6 and prepared['data_cache_on'] and prepared['mmu_on'] and prepared['core_part'] == 0xd05
+            and prepared['unattributed_us'] == 801000 - 15000 - 30 - 400000 - 300000 - 20000 - 1000 - 40000 - 20000 - 5000,
+            'the admission timing record does not decode')
     require(returning.decode_published({'npu-register': bytes(64)}, {})['npu_register']['per_graph_us'] is None,
             'an empty registration record does not decode')
     require(returning.decode_published({'device-ranges-head': bytes(8)}, {})['device_ranges'] == {'head': 0, 'ranges': []},
