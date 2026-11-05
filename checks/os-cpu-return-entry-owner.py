@@ -123,8 +123,16 @@ def returns(image,layout,members):
    assert {n:p['address'] for n,p in clock.items()}=={n:layout.address(n,'return-cpu.c') for n in clock},(name,clock)
    raw={n:bytes(m.uc.mem_read(p['address'],p['bytes'])) for n,p in clock.items()}
    published=return_host.decode_clock(raw['record'],raw['dsu_mhz'],raw['pattern_bits'],raw['parked_max_us'])
-   # These cases enter the owner in a later phase without its publication: the record reads as never published.
-   assert published=={'published':False,'source':'CPU clock owner publication at return'},(name,published)
+   if requests:
+    # The close lowered CPU-B: it republishes, so the record names 1014 MHz at the rail's confirmed readback and counts
+    # the lowering, as the rails read at close do.
+    rail=m.u32(m.c+m.cf['rail_uv']+4)//1000
+    assert published['published'] and (published['cpu_b_mhz'],published['cpu_b_mv'])==(1014,rail),(name,published)
+    assert published['transitions']==1,(name,published)
+   else:
+    # These cases enter the owner in a later phase without its publication and change nothing at close: the record
+    # reads as never published.
+    assert published=={'published':False,'source':'CPU clock owner publication at return'},(name,published)
   trace=[value for stage,value in m.crumb_trace if stage==0x0204]
   assert trace and trace[0]>>12==1,(name,'missing drain breadcrumb',trace)
   assert all((value>>10&3)==m.initial_owner_phase for value in trace),(name,trace)
