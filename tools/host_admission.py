@@ -168,8 +168,7 @@ def build_harness(image, build=None, cache=None):
     units = [(admission, defines), (source / 'apps/os/session.c', defines), (source / 'apps/os/grants.c', defines),
              (source / 'drivers/storage/storage_digest.c', defines), (build_id, defines),
              (ROOT / 'tools/host_admission.c', defines)]
-    if '-DSUNSTONE_A733_OS_CPU_CLOCK=1' in defines:
-        units.append((source / 'drivers/clock/a733_cpu_clock.c', [d for d in defines if d != '-DSUNSTONE_CRUMBS=1']))
+    units.append((source / 'drivers/clock/a733_cpu_clock.c', [d for d in defines if d != '-DSUNSTONE_CRUMBS=1']))
     npu = '-DSUNSTONE_A733_OS_NPU=1' in defines
     if npu:
         # The declaration check of the image (apps/os/npu-declaration.c) with the image's own NPU data, read from its ELF.
