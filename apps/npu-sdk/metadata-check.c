@@ -13,7 +13,7 @@ int main(int argc,char **argv)
     assert(argc==2);
     unsigned mode=(unsigned)strtoul(argv[1],NULL,10);
     struct ss_npu_model models[]={{"first",1,1,4,8},{"second",2,1,8,4}};
-    struct ss_npu_backend backend={run,close_backend,models,2};
+    struct ss_npu_backend backend={run,close_backend,models,2,NULL};
     if(mode==0)backend.models=NULL;
     if(mode==1)backend.count=0;
     if(mode==2)models[0].name[0]=0;

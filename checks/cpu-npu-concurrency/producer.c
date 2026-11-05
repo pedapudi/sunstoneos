@@ -60,11 +60,13 @@ static void *observer_cookie;
 static uint8_t input_data[32],reference_data[2]={0,0xff};
 const uint8_t cpu_npu_input[32]={0},cpu_npu_reference[2]={0,0xff};
 const size_t cpu_npu_input_bytes=32,cpu_npu_reference_bytes=2;
+const uint8_t cpu_npu_graph[4]={0};
+const size_t cpu_npu_graph_bytes=4;
 const struct os_npu_vector os_npu_inputs[]={{input_data,sizeof(input_data)}};
 const struct os_npu_vector os_npu_references[]={{reference_data,sizeof(reference_data)}};
 const unsigned os_npu_input_count=1,os_npu_output_count=1;
 void xTaskNotifyGive(TaskHandle_t task){(void)task;pthread_mutex_lock(&lock);++kicks;pthread_cond_signal(&condition);pthread_mutex_unlock(&lock);}
-int ss_npu_model_find(const char *name,unsigned *index){if(strcmp(name,"shufflenet-v2-published"))return 0;*index=0;return 1;}
+int ss_npu_register_graph(const void *graph,size_t bytes,unsigned *index){if(!graph||!bytes)return -1;*index=0;return 1;}
 int ss_npu_model_info(unsigned index,struct ss_npu_model *m){if(index)return 0;memset(m,0,sizeof(*m));m->inputs=1;m->outputs=1;m->input_bytes=sizeof(input_data);m->output_bytes=2;return 1;}
 int npu_service_observe(struct npu_service *s,void (*fn)(void *,const struct npu_service *,unsigned),void *cookie){(void)s;observer=fn;observer_cookie=cookie;return 1;}
 unsigned npu_service_irq_completions(const struct npu_service *s){(void)s;return atomic_load(&completions);}

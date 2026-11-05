@@ -37,7 +37,8 @@ static int transition(unsigned expected,unsigned desired)
 int ss_npu_service_bind(const struct ss_npu_backend *backend)
 {
     if(!backend||!backend->run||!backend->close||atomic_load(&box.state)!=UNBOUND)return 0;
-    if(!backend->models||!backend->count)return 0;
+    /* Linked models are optional (the OS image links none); a backend without them describes every model through info. */
+    if((backend->count&&!backend->models)||(!backend->count&&!backend->info))return 0;
     for(unsigned i=0;i<backend->count;++i) {
         const struct ss_npu_model *m=&backend->models[i];
         if(!m->name[0]||!memchr(m->name,0,sizeof(m->name))||!m->inputs||!m->outputs||
@@ -50,18 +51,20 @@ int ss_npu_service_bind(const struct ss_npu_backend *backend)
 unsigned ss_npu_model_count(void)
 {
     unsigned state=atomic_load_explicit(&box.state,memory_order_acquire);
-    return state==UNBOUND||state==FAILED||state==CLOSED?0:box.backend.count;
+    return state==UNBOUND||state==FAILED||state==CLOSED?0:box.backend.count+box.registered;
 }
 int ss_npu_model_info(unsigned index,struct ss_npu_model *model)
 {
     if(!model||index>=ss_npu_model_count())return 0;
-    *model=box.backend.models[index];return 1;
+    if(index<box.backend.count){*model=box.backend.models[index];return 1;}
+    memset(model,0,sizeof(*model));
+    return box.backend.info&&box.backend.info(index,model)?1:0;
 }
 int ss_npu_model_find(const char *name,unsigned *index)
 {
     if(!name||!index)return 0;
     unsigned count=ss_npu_model_count();
-    for(unsigned i=0;i<count;++i)if(!strcmp(name,box.backend.models[i].name)){*index=i;return 1;}
+    for(unsigned i=0;i<count&&i<box.backend.count;++i)if(!strcmp(name,box.backend.models[i].name)){*index=i;return 1;}
     return 0;
 }
 int ss_npu_service_bind_fault(void (*describe)(struct ss_npu_fault_info *))
@@ -88,7 +91,11 @@ int ss_npu_run(unsigned model,const void *input,size_t input_bytes,
        output_bytes>SS_NPU_MAX_TENSOR_BYTES||!timeout_us||timeout_us>1000000)return -1;
     if(state==IDLE) {
         /* A graph registered at run time has no entry here: the OS compares its tensor sizes with the request. */
-        if(model>=box.backend.count+box.registered)return -2;
+        if(model>=box.backend.count+box.registered){
+            /* A model the OS holds that this mailbox did not register (the backend's own decoded plan) is still a model. */
+            struct ss_npu_model known;
+            if(!box.backend.info||!box.backend.info(model,&known))return -2;
+        }
         if(model<box.backend.count&&(input_bytes!=box.backend.models[model].input_bytes||
            output_bytes!=box.backend.models[model].output_bytes))return -2;
         box.model=model;box.input=input;box.input_bytes=input_bytes;

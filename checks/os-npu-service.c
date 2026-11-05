@@ -21,6 +21,7 @@
 #include "host_rtos.h"
 #include "os.h"
 #include "npu.h"
+#include "npu-test-models.h"
 #include "npu_arch.h"
 #include "a733_npu_native.h"
 #include "a733_npu_memory.h"
