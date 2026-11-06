@@ -19,6 +19,12 @@ Every job also requires one actual IRQ receipt and a complete output match.
 The combined profile's manifest declares `"observe": true` in its `npu` section.
 The admission refuses that declaration outside the returning lifetime, and
 `ss_npu_observe` refuses an application that does not declare it.
+The application registers its graph after admission, so the declaration's
+`tensor_bytes` must hold the graph's whole write region: its memory pool and
+its outputs, each in whole pages. For shufflenet-v2-published the OS layout
+(`nbg_assembly_layout`) gives a 1,093,632-byte pool and a 4,096-byte output, so
+the manifest declares 1,097,728 bytes; the input needs 151,552 and the
+coefficients and descriptors 917,504, inside `graph_bytes`.
 
 Work admits no new CPU unit after its five-second cutoff. NPU admission reserves
 2.2 seconds before that cutoff; CLOSE retains a separate two-second allowance.
