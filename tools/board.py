@@ -369,7 +369,7 @@ class Live:
             raise Mismatch('Wi-Fi credential readback differs; execution refused.')
 
     def residue_marker(self):
-        return CREDENTIAL_RESIDUE/f'{self.args.port}.json'
+        return (getattr(self.args, 'credential_residue', None) or CREDENTIAL_RESIDUE)/f'{self.args.port}.json'
 
     def mark_residue(self, region):
         save(self.residue_marker(), {'port': self.args.port, 'address': region['address'], 'bytes': region['bytes'],
@@ -1811,7 +1811,10 @@ class Queue:
         """The runner process for a claimed job. A Wi-Fi credential appears as its name and fingerprint only."""
         command = [str(PYTHON),'-B',str(ROOT/'tools/board.py'),'run',job['image'],'--port',port,
                    '--evidence',str(Path(job['directory'])/'run'),
-                   '--process-record',str(Path(job['directory'])/'runner-process.json')]
+                   '--process-record',str(Path(job['directory'])/'runner-process.json'),
+                   # The marker directory belongs to the queue that claimed the job (<queue>/entries/<id>), so a queue under
+                   # test, or any other root, never writes into the live queue's directory.
+                   '--credential-residue',str(Path(job['directory']).parent.parent/'credential-residue')]
         for name,value in job['options'].items():
             flag = '--'+name.replace('_','-')
             if isinstance(value,bool):
@@ -1888,6 +1891,8 @@ def radio_stage_limit(text):
 def run_options(parser, submit=False):
     parser.add_argument('image', type=Path)
     parser.add_argument('--port', choices=('any',*PORTS) if submit else PORTS, required=True)
+    if not submit:
+        parser.add_argument('--credential-residue', type=Path, default=None, help=argparse.SUPPRESS)  # the queue's marker directory
     parser.add_argument('--kind', choices=('cpu-return','gpu-return','npu','probe','usb-class','rail-helper'), default='cpu-return', required=submit)
     parser.add_argument('--manifest', type=Path, help='Exact finite NPU build manifest.')
     parser.add_argument('--objcopy', type=Path, default=Path('/usr/bin/llvm-objcopy-21'))
