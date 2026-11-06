@@ -91,6 +91,8 @@ static void delivery(struct os_audio_stream_config c,unsigned frame)
 }
 void os_check_run(unsigned selected,unsigned samples)
 {
+    /* Mode 12 is mode 4 in the supervised lifetime; every other mode runs in the resident one. */
+    if(selected==12){selected=4;model_lifetime=A733_LIFETIME_SUPERVISED;}
     mode=selected;reset();
     void *pcm;size_t bytes;
     if(mode==11){

@@ -169,9 +169,7 @@ void board_usb0_task(void *unused)
     os_application_usb_ready();
     const uint64_t stall = now_us() + 100000;
     for (;;) {
-#ifdef SUNSTONE_BOARD_RESIDENT
-        board_service_progress(BOARD_SERVICE_USB0);
-#endif
+        BOARD_PROGRESS(BOARD_SERVICE_USB0);
         if (qemu_os_scenario()->fault == QEMU_OS_FAULT_USB_STALL && now_us() >= stall) for (;;) vTaskSuspend(NULL);
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -283,17 +281,18 @@ void kernel_main(void)
     const uint64_t start = a733_smp_counter();
     c.armed_at = start;
     c.startup_deadline = start + A733_BOARD_STARTUP_SECONDS * A733_SMP_COUNTER_HZ;
-#ifdef SUNSTONE_BOARD_RESIDENT
-    /* The resident loader arms the four-second watchdog; no diagnostic deadline, no FEL return. */
-    c.diagnostic_deadline = A733_SMP_NO_DEADLINE;
-    c.expires_at = start + 4 * A733_SMP_COUNTER_HZ;
-    c.watchdog_mode = 0x41; c.watchdog_configuration = 1; c.watchdog_output = 2;
-    qemu_os_watchdog_arm();
-#else
-    c.diagnostic_deadline = start + A733_BOARD_SUPERVISED_SECONDS * A733_SMP_COUNTER_HZ;
-    c.expires_at = c.diagnostic_deadline;
-#endif
-    c.magic = A733_SMP_CONTRACT_MAGIC;
+    if (qemu_os_scenario()->lifetime == A733_LIFETIME_RESIDENT) {
+        /* The resident loader arms the four-second watchdog; no diagnostic deadline, no FEL return. */
+        c.diagnostic_deadline = A733_SMP_NO_DEADLINE;
+        c.expires_at = start + 4 * A733_SMP_COUNTER_HZ;
+        c.watchdog_mode = 0x41; c.watchdog_configuration = 1; c.watchdog_output = 2;
+        c.magic = A733_OS_RESIDENT_CONTRACT_MAGIC;
+        qemu_os_watchdog_arm();
+    } else {
+        c.diagnostic_deadline = start + A733_BOARD_SUPERVISED_SECONDS * A733_SMP_COUNTER_HZ;
+        c.expires_at = c.diagnostic_deadline;
+        c.magic = A733_OS_CONTRACT_MAGIC;
+    }
     if (!a733_smp_contract_valid(&c, a733_smp_counter())) platform_panic("launch contract refused", 1);
     if (!board_session_prepare(&c)) platform_panic("session seal refused", 2);
     a733_cached_runtime[0] = (struct a733_cached_runtime){.epoch = c.epoch, .startup_deadline = c.startup_deadline,

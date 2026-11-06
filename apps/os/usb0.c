@@ -3,17 +3,16 @@
 #include "os.h"
 #include "application.h"
 #include "../board/application.h"
+#include "../board/session.h"
 #include "boot.h"
 #include "platform.h"
 #include "tusb.h"
 #include "device/dcd.h"
 #include <string.h>
 static _Noreturn void stop(void){board_fail(NULL);for(;;)vTaskSuspend(NULL);}
-#ifdef SUNSTONE_BOARD_RESIDENT
-#define USB0_PID 0xefea
-#else
+/* The product ID names the admitted lifetime to the host: 0xefea resident, 0xefe8 supervised. */
 #define USB0_PID 0xefe8
-#endif
+#define USB0_PID_SELECT() (board_session_lifetime()==A733_LIFETIME_RESIDENT?0xefea:0xefe8)
 #define USB0_PRODUCT "sunstoneos native OS"
 #define USB0_SERIAL "sunstoneos-a733-board"
 #define USB0_LIVE() board_live(NULL)

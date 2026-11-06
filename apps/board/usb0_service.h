@@ -6,6 +6,8 @@
  *   USB0_PID, USB0_PRODUCT, USB0_SERIAL   required
  *   USB0_LIVE(), USB0_PROVIDERS          required
  *   USB0_BCD (0x0100), USB0_INTERFACE ("Capture")   optional
+ *   USB0_PID_SELECT(): the product ID chosen at run time, in place of
+ *   USB0_PID, for an image that takes it from its admitted session   optional
  * and a static _Noreturn stop(void) carrying the application's own failure
  * and retention policy. The header supplies the descriptors, the TinyUSB
  * platform hooks, provider startup and usb0_service_run().
@@ -47,7 +49,12 @@ static const tusb_desc_device_t usb0_device={.bLength=sizeof(tusb_desc_device_t)
 static const uint8_t usb0_hs[]={TUD_CONFIG_DESCRIPTOR(1,1,0,TUD_CONFIG_DESC_LEN+TUD_VENDOR_DESC_LEN,0,100),TUD_VENDOR_DESCRIPTOR(0,4,0x02,0x81,512)};
 static const uint8_t usb0_fs[]={TUD_CONFIG_DESCRIPTOR(1,1,0,TUD_CONFIG_DESC_LEN+TUD_VENDOR_DESC_LEN,0,100),TUD_VENDOR_DESCRIPTOR(0,4,0x02,0x81,64)};
 static const tusb_desc_device_qualifier_t usb0_qualifier={.bLength=sizeof(tusb_desc_device_qualifier_t),.bDescriptorType=TUSB_DESC_DEVICE_QUALIFIER,.bcdUSB=0x200,.bMaxPacketSize0=64,.bNumConfigurations=1};
+#ifdef USB0_PID_SELECT
+const uint8_t *tud_descriptor_device_cb(void)
+{static tusb_desc_device_t device;device=usb0_device;device.idProduct=USB0_PID_SELECT();return (const uint8_t *)&device;}
+#else
 const uint8_t *tud_descriptor_device_cb(void){return (const uint8_t *)&usb0_device;}
+#endif
 const uint8_t *tud_descriptor_device_qualifier_cb(void){return (const uint8_t *)&usb0_qualifier;}
 const uint8_t *tud_descriptor_configuration_cb(uint8_t i){return i?NULL:tud_speed_get()==TUSB_SPEED_HIGH?usb0_hs:usb0_fs;}
 const uint8_t *tud_descriptor_other_speed_configuration_cb(uint8_t i)

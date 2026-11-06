@@ -1,12 +1,15 @@
-/* The integrated OS image's radio entry (apps/os/radio.c) and, in a resident
- * build, its resident radio profile bounds (apps/os/radio_profile.c), against
- * a modeled sealed session, radio profile span and translation. Both sources
- * run unchanged; the runner (checks/os-image-radio.py) executes them under
- * unicorn. Each failed expectation stops with its own code. */
+/* The integrated OS image's radio entry (apps/os/radio.c) and its radio
+ * profile bounds in each lifetime (apps/os/radio_profile.c, with the
+ * supervised bounds of apps/board/radio_profile.c), against a modeled sealed
+ * session, radio profile span and translation. The sources run unchanged;
+ * the runner (checks/os-image-radio.py) executes them under unicorn. Each
+ * failed expectation stops with its own code. */
 #include "../apps/os/radio.c"
-#ifdef SUNSTONE_BOARD_RESIDENT
 #include "../apps/os/radio_profile.c"
-#endif
+#include "../apps/os/radio_profile_supervised.c"
+/* The admitted lifetime of the modeled session (enum a733_lifetime). */
+static unsigned model_lifetime=A733_LIFETIME_RESIDENT;
+unsigned board_session_lifetime(void){return model_lifetime;}
 struct board_application board;
 volatile unsigned os_check_result;
 static struct os_session session;
@@ -64,7 +67,6 @@ void os_check_run(void)
         nominal();session.board.workload=w;session.granted=0;attributes=0x44;PROFILE->ce.owner=33;
         check(os_radio_pins(&pins)==1&&!pins.authorized[A733_PIN_B]&&os_radio_start()==1,25);
     }
-#ifdef SUNSTONE_BOARD_RESIDENT
     /* Resident bounds: fixed bootstrap and startup offsets from the session
      * start, and the session's unbounded lifetime for the radio and client. */
     static struct board_radio_profile out;uint8_t digest[32],expected[32];
@@ -83,6 +85,15 @@ void os_check_run(void)
     reseal();check(!board_radio_profile_runtime(&out,PROFILE,b,digest),37);
     nominal();b->deadline_us=UINT64_MAX/24;PROFILE->version=BOARD_RADIO_PROFILE_LISTENER_VERSION;reseal();
     check(!board_radio_profile_runtime(&out,PROFILE,b,digest),38);
-#endif
+    /* A supervised session takes the board's bounds: a session that ends BOARD_RADIO_SESSION_US after it starts gets
+     * the board's offsets, where they fit before the session's end, and an unbounded session is refused. */
+    model_lifetime=A733_LIFETIME_SUPERVISED;
+    const int fits=BOARD_RADIO_STARTUP_US<BOARD_RADIO_SESSION_US-BOARD_RADIO_CLIENT_MARGIN_US;
+    nominal();b->session_start_ticks=24*UINT64_C(5000000);b->deadline_us=5000000+BOARD_RADIO_SESSION_US;
+    check(board_radio_profile_runtime(&out,PROFILE,b,digest)==fits,40);
+    check(!fits||(out.version==BOARD_RADIO_PROFILE_LISTENER_VERSION&&out.bootstrap_deadline_us==5000000+BOARD_RADIO_BOOTSTRAP_US&&
+        out.startup_deadline_us==5000000+BOARD_RADIO_STARTUP_US&&
+        out.client_deadline_us==b->deadline_us-BOARD_RADIO_CLIENT_MARGIN_US),41);
+    b->deadline_us=UINT64_MAX/24;check(!board_radio_profile_runtime(&out,PROFILE,b,digest),42);
     os_check_result=1;
 }

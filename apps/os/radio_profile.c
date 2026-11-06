@@ -1,6 +1,8 @@
-/* Resident radio profile bounds of the integrated OS image. It replaces
- * apps/board/radio_profile.c, which requires a session that ends 60 s after
- * it starts. A resident session has no end: main.c sets its deadline to
+/* Radio profile bounds of the integrated OS image, chosen by the admitted
+ * lifetime. A supervised session takes those of apps/board/radio_profile.c
+ * (compiled as board_radio_profile_supervised by
+ * apps/os/radio_profile_supervised.c), which require a session that ends 60 s
+ * after it starts. A resident session has no end: main.c sets its deadline to
  * UINT64_MAX/24 us, beyond every counter value. Bootstrap and startup keep
  * fixed offsets from the session start; the radio lifetime and the client
  * deadline follow the session's. Firmware owners request four-bit 25 MHz
@@ -10,13 +12,14 @@
 #include "../board/application.h"
 #include "a733_storage_digest.h"
 #include <string.h>
-#ifndef SUNSTONE_BOARD_RESIDENT
-#error Supervised images use apps/board/radio_profile.c
-#endif
+int board_radio_profile_supervised(struct board_radio_profile *,const struct board_radio_profile *,
+    const struct a733_board_session *,uint8_t[32]);
+int board_radio_profile_resident(struct board_radio_profile *,const struct board_radio_profile *,
+    const struct a733_board_session *,uint8_t[32]);
 #define OS_RADIO_BOOTSTRAP_US 120000000u
 #define OS_RADIO_STARTUP_US 130000000u
 #define OS_RADIO_CLIENT_MARGIN_US 10000u
-int board_radio_profile_runtime(struct board_radio_profile *out,const struct board_radio_profile *raw,
+int board_radio_profile_resident(struct board_radio_profile *out,const struct board_radio_profile *raw,
     const struct a733_board_session *session,uint8_t digest[32])
 {
     if(!out||!raw||!session||!digest||out==raw||raw->magic!=BOARD_RADIO_PROFILE_MAGIC||
@@ -37,4 +40,10 @@ int board_radio_profile_runtime(struct board_radio_profile *out,const struct boa
     out->startup_deadline_us=start+OS_RADIO_STARTUP_US;
     storage_digest_bytes(out,sizeof(*out),digest);
     return 1;
+}
+int board_radio_profile_runtime(struct board_radio_profile *out,const struct board_radio_profile *raw,
+    const struct a733_board_session *session,uint8_t digest[32])
+{
+    return BOARD_RESIDENT()?board_radio_profile_resident(out,raw,session,digest):
+        board_radio_profile_supervised(out,raw,session,digest);
 }

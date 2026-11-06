@@ -21,7 +21,7 @@ from harness import environment
 
 ROOT = Path(__file__).resolve().parents[1]
 HZ = 24000000
-DEFINES = ['SUNSTONE_BOARD_SUPERVISED=1', 'SUNSTONE_BOARD_USB2_DUAL=1', 'SUNSTONE_BOARD_RESIDENT=1']
+DEFINES = ['SUNSTONE_BOARD_SUPERVISED=1', 'SUNSTONE_BOARD_USB2_DUAL=1', 'SUNSTONE_A733_OS=1']
 
 
 def build_and_run(services, output, name, fault_page, step, compiler):

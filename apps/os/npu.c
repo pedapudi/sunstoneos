@@ -809,11 +809,11 @@ int os_npu_start(void)
     if(!os_npu_sdk_bind(&npu.runtime))return REFUSE();
     const struct a733_board_session *b=&s->board;
     npu.end=board.session.deadline_us-10000;
-#ifdef SUNSTONE_BOARD_RESIDENT
-    uint64_t begun;
-    if(!clock_now(&begun)||begun>UINT64_MAX-OS_NPU_WORK_US)return REFUSE();
-    if(npu.end>begun+OS_NPU_WORK_US)npu.end=begun+OS_NPU_WORK_US;
-#endif
+    if(os_lifetime()==A733_LIFETIME_RESIDENT){
+        uint64_t begun;
+        if(!clock_now(&begun)||begun>UINT64_MAX-OS_NPU_WORK_US)return REFUSE();
+        if(npu.end>begun+OS_NPU_WORK_US)npu.end=begun+OS_NPU_WORK_US;
+    }
     const struct a733_npu_startup_config startup={{{b->fabric[0],b->fabric[1],b->fabric[2]},
         {b->fabric_hz[0],b->fabric_hz[1],b->fabric_hz[2]}},g->owner,npu.end,g->pck_client};
     const struct a733_npu_startup_providers p={&providers.shared.counter,&providers.shared.clocks,

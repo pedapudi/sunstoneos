@@ -388,12 +388,13 @@ int os_application_prepare(void)
     }
     /* Large regions come from the ledger before any task exists; a refusal stops the application. */
     if(!os_large_prepare())return 0;
-#ifndef SUNSTONE_BOARD_RESIDENT
     /* board.session holds the contract-derived absolute deadline. The
-     * sealed session returned by os_session_admitted retains zero times. */
-    if(board.session.deadline_us<=m->return_reserve_us)return 0;
-    grant.finish_by_us=board.session.deadline_us-m->return_reserve_us;
-#endif
+     * sealed session returned by os_session_admitted retains zero times. A
+     * resident session has no end, so its application has no finish time. */
+    if(os_lifetime()!=A733_LIFETIME_RESIDENT){
+        if(board.session.deadline_us<=m->return_reserve_us)return 0;
+        grant.finish_by_us=board.session.deadline_us-m->return_reserve_us;
+    }
 #ifdef SUNSTONE_A733_OS_GPU
     if (&ss_gpu_share) {
         if (!os_gpu_share_admit(&ss_gpu_share,m,&grant,&peer_grant)) return 0;

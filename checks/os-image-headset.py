@@ -23,9 +23,9 @@ model follows that build's lifetime, and runs each mode under unicorn. Modes 0 a
   module pins already held. The capture length is twice the profile's sample
   count. A session that does not grant the headset leaves the pins untouched
   and starts no task. Startup starts the Bluetooth application for the
-  session's lifetime (60 s, or unbounded when resident)
-  and binds the client as consumer. Without the radio it creates both tasks
-  and only the Bluetooth owner runs privileged; with the radio it creates the
+  session's lifetime (60 s, or unbounded when resident; both run) and binds
+  the client as consumer. Without the radio it creates both tasks and only
+  the Bluetooth owner runs privileged; with the radio it creates the
   client only and attaches the application to the radio's module, with the
   radio owner as Bluetooth owner and the client's own recovery latch;
 - 1: keyboard generations (workload 4): no request while no generation
@@ -42,7 +42,8 @@ model follows that build's lifetime, and runs each mode under unicorn. Modes 0 a
 - 6: a failed Bluetooth application ends the session;
 - 7: one owner iteration (with the radio, the module poll that the radio
   owner runs) polls the live application, retains it once the board fails
-  and, in the resident build, reports progress only while it has not failed;
+  and, in a resident session, reports progress only while it has not
+  failed; a supervised session reports none;
 - 8: capture stopped by the supervised window continues; a stop for a
   capture deadline, backlog or loss ends the session;
 - 9: a wideband (mSBC) segment becomes a 16 kHz WAV unchanged and an unknown
@@ -69,8 +70,13 @@ CASES = ['pins-and-startup', 'keyboard-generations', 'request-after-publication'
          'stopped-capture', 'wideband-segment', 'button-only-workload']
 # Bit 8 of the mode: the session grants the radio, so the headset shares the radio's module owner.
 RADIO = 0x100
+# Bit 9: the session's admitted lifetime is resident; without it, supervised. The two cases that depend on the lifetime run
+# in both.
+RESIDENT = 0x200
 RUNS = [(mode, case) for mode, case in enumerate(CASES)] + \
-    [(RADIO | CASES.index(case), case + '-with-radio') for case in ('pins-and-startup', 'owner-iteration')]
+    [(RADIO | CASES.index(case), case + '-with-radio') for case in ('pins-and-startup', 'owner-iteration')] + \
+    [(RESIDENT | radio | CASES.index(case), case + ('-with-radio' if radio else '') + '-resident')
+     for case in ('pins-and-startup', 'owner-iteration') for radio in (0, RADIO)]
 
 
 def main():
@@ -87,7 +93,6 @@ def main():
     flags = flags[:flags.index('-o')]
     assert '-DSUNSTONE_A733_OS_HEADSET=1' in flags and '-DSUNSTONE_BLUETOOTH_MSBC=1' in flags, \
         'an OS build that links the headset library is required'
-    options = {'resident': '-DSUNSTONE_BOARD_RESIDENT=1' in flags}
     image = out / 'os-image-headset.elf'
     command = flags + [str(ROOT / 'checks/os-image-headset.c'), str(ROOT / 'apps/bluetooth/pcm.c'),
                        str(ROOT / 'drivers/storage/storage_digest.c'), str(ROOT / 'runtime/memory.c'),
@@ -118,11 +123,11 @@ def main():
         results[case] = result
         assert result == 1, (case, result)
     (out / 'result.json').write_text(json.dumps({
-        'passed': True, 'physical_access': False, 'options': options, 'cases': results, 'command': command,
+        'passed': True, 'physical_access': False, 'cases': results, 'command': command,
         'sources': {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
                     for name in ('apps/os/headset.c', 'apps/bluetooth/pcm.c', 'checks/os-image-headset.c')}},
         indent=2) + '\n')
-    print('PASS OS headset client (%s): ' % ', '.join(k for k, v in options.items() if v) + ', '.join(case for _, case in RUNS))
+    print('PASS OS headset client: ' + ', '.join(case for _, case in RUNS))
 
 
 if __name__ == '__main__':

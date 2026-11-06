@@ -25,6 +25,9 @@ __attribute__((used,retain)) const uint64_t os_contract_profile[2]={A733_OS_CONT
  * admission below writes it once, when the contract passes, and the EL3 boot reads it for the watchdog readback, the
  * result record and the cores' startup. */
 unsigned a733_smp_lifetime __attribute__((section(".bss.a733_smp_monitor")));
+/* The lifetime that the contract under admission names, while its session is decoded (os_lifetime,
+ * apps/os/lifetime.c); 0 outside a733_smp_contract_refusal. EL3 monitor memory. */
+unsigned os_admitting_lifetime __attribute__((section(".bss.a733_smp_monitor")));
 /* The lifetime that an OS contract magic names, among those this image admits; 0 for any other magic. */
 static unsigned os_contract_lifetime(uint64_t magic)
 {
@@ -65,7 +68,7 @@ int os_session_valid(const struct os_session *s)
         const struct a733_dma_platform_config *d=&a->dma;
         if(a->magic!=OS_AUDIO_SESSION_MAGIC||a->version!=OS_AUDIO_SESSION_VERSION||a->bytes!=sizeof(*a)||
            !present(a->evidence,32)||!d->owner||d->owner==s->thermal_owner||d->handoff!=s->board.lease||
-           a->dma_evidence!=s->board.lease||d->deadline_us||a->dma_established!=OS_AUDIO_DMA_ESTABLISHED||
+           a->dma_evidence!=s->board.lease||d->deadline_us||a->dma_established!=OS_AUDIO_DMA_ESTABLISHED(os_lifetime())||
            a->dma_owned_channels!=0xffff||a->dma_service_channels!=1||a->dma_controller!=0x04601000||
            memcmp(d->fabric,s->board.fabric,sizeof(d->fabric))||memcmp(d->rate_hz,s->board.fabric_hz,sizeof(d->rate_hz))||
            a->audio_cold>1||!os_audio_client_admit(a->capture_samples)||present(a->reserved,7))
@@ -113,7 +116,7 @@ int os_session_valid(const struct os_session *s)
         if(cpu_owner&&d->owner==cpu_owner)return 0;
     }
 #endif
-    if(os_composition_refused(s->granted))return 0;
+    if(os_composition_refused(s->granted,os_lifetime()))return 0;
     return 1;
 }
 /* Zero when the contract and the session at A733_BOARD_SESSION_ADDRESS are admitted; otherwise the named refusal of
@@ -128,8 +131,13 @@ unsigned a733_smp_contract_refusal(const struct a733_smp_contract *c,uint64_t no
     const unsigned lifetime=os_contract_lifetime(c->magic);
     if(!lifetime)return A733_REFUSAL(A733_REFUSAL_MAGIC_VERSION,A733_MAGIC_MAGIC);
     if(c->reserved[0]!=A733_BOARD_SESSION_ADDRESS)return A733_REFUSAL(A733_REFUSAL_SESSION_BIND,A733_BIND_CONTRACT);
+    /* The decode applies the terms of the lifetime the contract names (the manifest's fit, the DMA handoff, the
+     * refused compositions). */
     unsigned why=0;
-    if(!os_session_decode_why(raw,c->reserved[1],&decoded,&why))return A733_REFUSAL(A733_REFUSAL_SESSION_DECODE,why);
+    *(volatile unsigned *)&os_admitting_lifetime=lifetime;
+    const int decoded_ok=os_session_decode_why(raw,c->reserved[1],&decoded,&why);
+    *(volatile unsigned *)&os_admitting_lifetime=0;
+    if(!decoded_ok)return A733_REFUSAL(A733_REFUSAL_SESSION_DECODE,why);
     uint8_t hash[32];storage_digest_bytes(raw,c->reserved[1],hash);
     if(memcmp(hash,&c->reserved[2],32))return A733_REFUSAL(A733_REFUSAL_SESSION_BIND,A733_BIND_DIGEST);
     /* The board check binds every remaining field against the board prefix, under the board magic of the same

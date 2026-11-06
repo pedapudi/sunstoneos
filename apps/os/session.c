@@ -178,14 +178,15 @@ int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,un
         uint8_t pinned=0;for(unsigned j=0;j<32;++j)pinned|=r->sha256[j];
         if(f->bytes>r->bytes||(pinned&&(f->bytes!=r->bytes||memcmp(f->sha256,r->sha256,32))))REFUSE(A733_DECODE_INPUT);
     }
-#ifndef SUNSTONE_BOARD_RESIDENT
     /* The immutable supervised board prefix has zero time fields. Contract
      * admission binds the run to armed_at plus this configured lifetime;
-     * main.c derives the absolute runtime deadline only after admission. */
-    const uint64_t lifetime_us=(uint64_t)A733_BOARD_SUPERVISED_SECONDS*1000000;
-    if(m->return_reserve_us>=lifetime_us)REFUSE(A733_DECODE_RETURN_RESERVE);
-    if(m->run_deadline_us>lifetime_us-m->return_reserve_us)REFUSE(A733_DECODE_RUN_DEADLINE);
-#endif
+     * main.c derives the absolute runtime deadline only after admission. A
+     * resident session has no end. */
+    if(os_lifetime()!=A733_LIFETIME_RESIDENT){
+        const uint64_t lifetime_us=(uint64_t)A733_BOARD_SUPERVISED_SECONDS*1000000;
+        if(m->return_reserve_us>=lifetime_us)REFUSE(A733_DECODE_RETURN_RESERVE);
+        if(m->run_deadline_us>lifetime_us-m->return_reserve_us)REFUSE(A733_DECODE_RUN_DEADLINE);
+    }
     if(!os_session_valid(out))REFUSE(A733_DECODE_SERVICE);
     return 1;
 }

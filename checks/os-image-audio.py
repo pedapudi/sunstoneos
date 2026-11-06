@@ -9,9 +9,10 @@ a configured build with CMAKE_EXPORT_COMPILE_COMMANDS=ON.
 
 The cases cover two capture generations at three lengths, exact PCM bytes,
 returned buffer identity and untouched 64-byte caller headroom; discontinuous
-or stopped DMA; request refusals; resident progress; accepted formats and the
-vendor rate families; direct stream delivery and timestamps; and full-ring
-and start/stop handshakes. No device or audio hardware is opened.
+or stopped DMA; request refusals; resident progress and its absence in a
+supervised session; accepted formats and the vendor rate families; direct
+stream delivery and timestamps; and full-ring and start/stop handshakes. No
+device or audio hardware is opened.
 
 With --baseline REVISION, the historical capture fixture runs that revision's
 capture client. Its WAV payload must equal the current PCM for each generation.
@@ -29,12 +30,12 @@ from harness import machine as harness_machine
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--build', '{build:res}', '--output', '{output}']]
+GATE_RUNS = [['--build', '{build:sup}', '--output', '{output}']]
 CASES = ['two-generations-pcm-headroom-and-stream-reuse', 'discontinuous-period-refused',
          'self-stopped-stream-refused', 'request-rules', 'progress-reports',
          'formats-periods-and-buffers', 'rates-and-period-sizes', 'full-ring-and-handshakes',
          'cyclic-staging-and-reopen', 'cyclic-copy-refusal-retains-lease', 'reversed-timestamps-retain-lease',
-         'ungranted-service-touches-nothing']
+         'ungranted-service-touches-nothing', 'supervised-progress-silent']
 LENGTHS = [16000, 20480, 80000]
 if not __debug__:
     raise RuntimeError('checks require assertions')
@@ -129,7 +130,7 @@ def main():
     assert len(state) == 1 and state[0]['st_size'] == 8, [s['st_size'] for s in state]
     results['state-from-the-ledger'] = 1
     record = {'passed': True, 'physical_access': False, 'cases': results, 'command': command,
-              'lifetime': 'resident' if '-DSUNSTONE_BOARD_RESIDENT=1' in flags else 'supervised',
+              'lifetimes': ['resident', 'supervised'],
               'vendor_rate_families': {str(k): v for k, v in families.items()},
               'sources_sha256': {p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest() for p in
                                  ('apps/os/audio.c', 'apps/os/audio-stream.h', 'apps/os/capture.c',

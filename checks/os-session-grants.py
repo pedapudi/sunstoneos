@@ -3,7 +3,7 @@
 
 Compiles the production functions for the host and checks, for every subset of the granted services, that the thermal
 record's size equals what the host session builder (apps/os/host.py) computes for the same records, that exactly the rows of
-the refusal table are refused, that each row names a reason, and that every service has its own id in every image.
+the refusal table are refused in each lifetime, that each row names a reason, and that every service has its own id in every image.
 """
 import argparse
 import itertools
@@ -33,9 +33,10 @@ int main(void)
 #define SERVICE(NAME,name,window,grant,with) with(printf("S %s %u %u %s\n",#NAME,(unsigned)OS_SERVICE_##NAME,(unsigned)(grant),name);)
     OS_SUPERVISED_ROWS(SERVICE)
     printf("N %u\n",(unsigned)OS_SERVICES);
-    for(unsigned g=0;g<=all;++g)if(!(g&~all))
-        printf("%u %zu %u %s\n",g,os_session_wire_bytes(g),os_composition_refused(g),
-               os_composition_refused(g)?os_composition_reason(os_composition_refused(g)):"");
+    for(unsigned l=A733_LIFETIME_SUPERVISED;l<=A733_LIFETIME_RESIDENT;++l)for(unsigned g=0;g<=all;++g)if(!(g&~all)){
+        const unsigned row=os_composition_refused(g,l);
+        printf("%u %u %zu %u %s\n",l,g,os_session_wire_bytes(g),row,row?os_composition_reason(row):"");
+    }
     return 0;
 }
 '''
@@ -98,8 +99,8 @@ def main():
         if line.startswith('N '):
             count = int(line.split()[1])
             continue
-        granted, size, refused, reason = (line.split(' ', 3) + [''])[:4]
-        rows[int(granted)] = (int(size), int(refused), reason)
+        lifetime, granted, size, refused, reason = (line.split(' ', 4) + [''])[:5]
+        rows.setdefault(int(lifetime), {})[int(granted)] = (int(size), int(refused), reason)
 
     (args.output / 'cache.c').write_text(CACHE_HARNESS)
     cache_exe = args.output / 'cache'
@@ -132,20 +133,29 @@ def main():
     spec = importlib.util.spec_from_file_location('session_host', ROOT / 'apps/os/host.py')
     host = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(host)
-    for granted, (size, refused, reason) in rows.items():
-        # The size the host builder writes into the thermal record: the prefix and every service record that is present.
-        expected = host.PREFIX_BYTES + host.SERVICE_BYTES[host.THERMAL] + sum(
-            r['bytes'] for r in host.RECORDS.values() if granted & grants[r['grant']])
-        assert size == expected, (granted, size, expected)
-        assert (refused != 0) == bool(reason), (granted, refused, reason)
-    # A single service is never refused; every refused set holds at least two, and a superset of a refused set is refused.
-    for granted, (_, refused, _) in rows.items():
-        if bin(granted).count('1') < 2:
-            assert not refused, granted
-        if refused:
-            assert all(rows[g][1] for g in rows if g & granted == granted), granted
-    names = lambda g: '+'.join(n for n, b in grants.items() if g & b)
-    table = sorted({names(g): rows[g][2] for g in rows if rows[g][1] and not any(rows[h][1] for h in rows if h != g and h & g == h)}.items())
+    # Both lifetimes (supervised 1, resident 2) cover the same subsets.
+    assert sorted(rows) == [1, 2] and rows[1].keys() == rows[2].keys(), sorted(rows)
+    tables = {}
+    for lifetime, sets in rows.items():
+        for granted, (size, refused, reason) in sets.items():
+            # The size the host builder writes into the thermal record: the prefix and every service record that is present.
+            expected = host.PREFIX_BYTES + host.SERVICE_BYTES[host.THERMAL] + sum(
+                r['bytes'] for r in host.RECORDS.values() if granted & grants[r['grant']])
+            assert size == expected, (granted, size, expected)
+            assert (refused != 0) == bool(reason), (lifetime, granted, refused, reason)
+        # A single service is never refused; every refused set holds at least two, and a superset of a refused set is refused.
+        for granted, (_, refused, _) in sets.items():
+            if bin(granted).count('1') < 2:
+                assert not refused, (lifetime, granted)
+            if refused:
+                assert all(sets[g][1] for g in sets if g & granted == granted), (lifetime, granted)
+        names = lambda g: '+'.join(n for n, b in grants.items() if g & b)
+        tables[lifetime] = sorted({names(g): sets[g][2] for g in sets
+                                   if sets[g][1] and not any(sets[h][1] for h in sets if h != g and h & g == h)}.items())
+    # Resident CPU grants are refused beside live capture and the radio in the resident lifetime only.
+    cpu = grants['CPU_CLOCK']
+    for other in ('AUDIO', 'RADIO'):
+        assert rows[2][cpu | grants[other]][1] and not rows[1][cpu | grants[other]][1], other
     # The grant bits are distinct, one per row, and every record names a grant. The supervised ids follow the application
     # (5) in row order, every row's grant is a set of declared grants, and every service has its id in every image.
     assert len(grants) == len(set(grants.values())) and all(b and not b & (b - 1) for b in grants.values()), grants
@@ -156,8 +166,10 @@ def main():
     declared = host.manifest_tool.os_service_rows('OS_SUPERVISED_ROWS')
     assert all(row[4] == 'OS_ALWAYS' for row in declared), declared
     assert [s[0] for s in supervised] == [row[0] for row in declared]
-    (args.output / 'result.json').write_text(json.dumps({'passed': True, 'subsets': len(rows), 'refused_minimal_sets': dict(table)}, indent=2) + '\n')
-    print('PASS session grants: %d subsets, wire sizes match the host builder, %d minimal refused compositions' % (len(rows), len(table)))
+    (args.output / 'result.json').write_text(json.dumps({'passed': True, 'subsets': len(rows[1]), 'refused_minimal_sets': {
+        'supervised': dict(tables[1]), 'resident': dict(tables[2])}}, indent=2) + '\n')
+    print('PASS session grants: %d subsets in each lifetime, wire sizes match the host builder, %d supervised and %d resident '
+          'minimal refused compositions' % (len(rows[1]), len(tables[1]), len(tables[2])))
 
 
 if __name__ == '__main__':

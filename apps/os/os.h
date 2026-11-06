@@ -56,14 +56,13 @@ struct os_audio_session {
     uint8_t inherited[3][3]; /* PB5 BCLK, PB6 LRCK, PB8 DIN: function, pull, drive */
     uint8_t reserved[7];
 };
-/* The handoff's established facts follow the lifetime: in the supervised
- * image manual power removal owns recovery (A733_DMA_HANDOFF_SUPERVISED); in
- * the resident image the watchdog reset does (A733_DMA_HANDOFF_REQUIRED). */
-#ifdef SUNSTONE_BOARD_RESIDENT
-#define OS_AUDIO_DMA_ESTABLISHED UINT32_C(0x3f)
-#else
-#define OS_AUDIO_DMA_ESTABLISHED UINT32_C(0x5f)
-#endif
+/* The handoff's established facts follow the lifetime (enum a733_lifetime):
+ * in the supervised lifetime manual power removal owns recovery
+ * (A733_DMA_HANDOFF_SUPERVISED); in the resident lifetime the watchdog reset
+ * does (A733_DMA_HANDOFF_REQUIRED). */
+#define OS_AUDIO_DMA_ESTABLISHED(lifetime) ((lifetime)==A733_LIFETIME_RESIDENT?UINT32_C(0x3f):UINT32_C(0x5f))
+/* The admitted lifetime (enum a733_lifetime) at EL3 or EL1, 0 before admission (apps/os/lifetime.c). */
+unsigned os_lifetime(void);
 _Static_assert(sizeof(struct os_audio_session)==OS_AUDIO_SESSION_BYTES&&
     offsetof(struct os_audio_session,dma)==56&&offsetof(struct os_audio_session,audio_cold)==160,
     "OS audio session geometry");
@@ -117,8 +116,9 @@ _Static_assert(offsetof(struct os_session,cpu_critical_millicelsius)==804&&
 OS_RECORD_ROWS(OS_RECORD_SIZE_)
 /* The bytes the thermal record names on the wire: the board prefix and the service records the session carries. */
 size_t os_session_wire_bytes(unsigned granted);
-/* The row (from 1) of the refused composition table that the granted set matches, or 0 (apps/os/admission.c). */
-unsigned os_composition_refused(unsigned granted);
+/* The row (from 1) of the refused composition table that the granted set matches in the lifetime (enum a733_lifetime),
+ * or 0 (apps/os/grants.c). */
+unsigned os_composition_refused(unsigned granted,unsigned lifetime);
 /* ORs the cores of this many workers of a main task on main_core into *mask; 0 when the manifest asks for more than its
  * cluster order holds (apps/os/grants.c). */
 int os_worker_cores(unsigned main_core,unsigned workers,uint32_t *mask);

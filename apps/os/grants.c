@@ -50,8 +50,10 @@ int os_worker_cores(unsigned main_core,unsigned workers,uint32_t *mask)
 }
 /* The compositions of services that admission refuses, with the reason of each. A row that is a convenience may be
  * removed once a measurement covers the combination; a row that names a shared hardware resource stays. The services
- * are the session's granted set, so the table is the only place that says which pairs are refused. */
-static const struct {unsigned services;const char *reason;} refused_compositions[]={
+ * are the session's granted set, so the table is the only place that says which pairs are refused. A row applies in
+ * every lifetime unless it names the lifetimes (LIFETIME bits of enum a733_lifetime) it applies in. */
+#define LIFETIME(l) (1u<<(l))
+static const struct {unsigned services;const char *reason;unsigned lifetimes;} refused_compositions[]={
     {OS_GRANT_NPU|OS_GRANT_AUDIO,"the NPU profile requires the recorded recognition composition, not live I2S capture"},
     {OS_GRANT_NPU|OS_GRANT_RADIO,"the NPU profile requires the recorded recognition composition, not the radio station"},
     {OS_GRANT_NPU|OS_GRANT_HEADSET,"the NPU profile requires the recorded recognition composition, not live headset capture"},
@@ -73,20 +75,26 @@ static const struct {unsigned services;const char *reason;} refused_compositions
     {OS_GRANT_HEADSET,"the USB camera decoder owns run-time non-cacheable allocation; the headset needs allocator serialization"},
     {OS_GRANT_NPU,"the USB camera decoder owns run-time non-cacheable allocation; the NPU service needs allocator serialization"},
 #endif
-#if defined(SUNSTONE_A733_OS_GPU) && !defined(SUNSTONE_BOARD_RESIDENT)
-    {OS_GRANT_AUDIO,"the supervised GPU queue requires the recorded recognition composition, not live I2S capture"},
-    {OS_GRANT_RADIO,"the supervised GPU queue requires the recorded recognition composition, not the radio station"},
-    {OS_GRANT_HEADSET,"the supervised GPU queue requires the recorded recognition composition, not live headset capture"},
+#ifdef SUNSTONE_A733_OS_GPU
+    {OS_GRANT_AUDIO,"the supervised GPU queue requires the recorded recognition composition, not live I2S capture",
+        LIFETIME(A733_LIFETIME_SUPERVISED)},
+    {OS_GRANT_RADIO,"the supervised GPU queue requires the recorded recognition composition, not the radio station",
+        LIFETIME(A733_LIFETIME_SUPERVISED)},
+    {OS_GRANT_HEADSET,"the supervised GPU queue requires the recorded recognition composition, not live headset capture",
+        LIFETIME(A733_LIFETIME_SUPERVISED)},
 #endif
-#ifdef SUNSTONE_BOARD_RESIDENT
-    {OS_GRANT_CPU_CLOCK|OS_GRANT_AUDIO,"resident CPU grants require the recorded-card session profile"},
-    {OS_GRANT_CPU_CLOCK|OS_GRANT_RADIO,"resident CPU grants require the recorded-card session profile"},
-#endif
+    {OS_GRANT_CPU_CLOCK|OS_GRANT_AUDIO,"resident CPU grants require the recorded-card session profile",
+        LIFETIME(A733_LIFETIME_RESIDENT)},
+    {OS_GRANT_CPU_CLOCK|OS_GRANT_RADIO,"resident CPU grants require the recorded-card session profile",
+        LIFETIME(A733_LIFETIME_RESIDENT)},
 };
-unsigned os_composition_refused(unsigned granted)
+unsigned os_composition_refused(unsigned granted,unsigned lifetime)
 {
-    for(unsigned i=0;i<sizeof(refused_compositions)/sizeof(refused_compositions[0]);++i)
-        if((granted&refused_compositions[i].services)==refused_compositions[i].services)return i+1;
+    for(unsigned i=0;i<sizeof(refused_compositions)/sizeof(refused_compositions[0]);++i){
+        const unsigned only=refused_compositions[i].lifetimes;
+        if((granted&refused_compositions[i].services)==refused_compositions[i].services&&
+           (!only||(lifetime<32&&(only&LIFETIME(lifetime)))))return i+1;
+    }
     return 0;
 }
 const char *os_composition_reason(unsigned row)

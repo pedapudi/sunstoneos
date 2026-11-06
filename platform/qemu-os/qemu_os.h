@@ -63,7 +63,9 @@ struct qemu_os_scenario {
     uint64_t trace;
     /* A normal finish does not end the run before this guest time. */
     uint64_t hold_us;
-    uint64_t reserved[4];
+    /* The lifetime the stage-2 loader launches (enum a733_lifetime): 2 resident, any other value supervised. */
+    uint64_t lifetime;
+    uint64_t reserved[3];
 };
 const struct qemu_os_scenario *qemu_os_scenario(void);
 void qemu_os_registers_init(void);

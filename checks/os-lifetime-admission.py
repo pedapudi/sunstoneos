@@ -11,10 +11,13 @@ requires:
 
   one OS image (a build without SUNSTONE_A733_OS_CPU_RETURN; os_contract_profile names both OS magics)
     supervised   the supervised contract is admitted and sets a733_smp_lifetime to 1; the result magic is the
-                 supervised one; the power policy word 0x07052000 + core * 0x1000 is not writable;
+                 supervised one; the power policy word 0x07052000 + core * 0x1000 is not writable; the session
+                 decode ran with os_admitting_lifetime 1, which is 0 again afterwards; os_lifetime returns 1 at EL3,
+                 and at EL1 the sealed copy, without a load of either monitor word;
     resident     the resident contract (no diagnostic deadline, expiry at armed plus 4 s, WDT0 mode 0x41,
                  configuration 1, output 2, no FEL flag or redirect) is admitted and sets the word to 2; the result
-                 magic is the resident one; the policy word of cores 1 to 7 is writable;
+                 magic is the resident one; the policy word of cores 1 to 7 is writable; the decode and
+                 os_lifetime follow 2 as above;
     crossed      the resident magic with the supervised timing is refused as timing (diagnostic), the supervised
                  magic with the resident timing likewise, and either refusal leaves the word 0;
     FEL flag     a resident contract with the FEL flag set is refused as timing (watchdog_fields);
@@ -40,6 +43,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'checks'))
 import harness  # noqa: E402  Refuses to run with assertions disabled.
+from unicorn import UC_HOOK_MEM_READ  # noqa: E402
 
 GATE_RUNS = [['--image', '{elf:sup}', '--image', '{elf:res}', '--image', '{elf:ret-npu-load}', '--output', '{output}']]
 CHECK_INPUTS = ['checks/os-sealed-session.py', 'include/a733_admission_refusal.h', 'include/a733_board_application.h']
@@ -103,8 +107,11 @@ class Admission:
         decoded_board = L['os_session']['board']
         self.m.stub('a733_board_session_valid', 1)
         address = image.address('os_session_decode_why')
+        # The lifetime the decode applies (os_lifetime at EL3 reads os_admitting_lifetime first), at each decode.
+        self.decoded = []
 
         def decode(uc, address, size, unused):
+            self.decoded.append(self.word('os_admitting_lifetime'))
             out = uc.reg_read(sealed.GPR[2])
             uc.mem_write(out + decoded_board, bytes(uc.mem_read(SESSION, self.prefix_bytes)))
             uc.mem_write(uc.reg_read(sealed.GPR[3]), struct.pack('<I', 0))
@@ -139,8 +146,28 @@ class Admission:
             return 0
         return self.m.call('a733_smp_refusal_detail', 1, 1)
 
+    def word(self, name):
+        return struct.unpack('<I', self.m.uc.mem_read(self.image.address(name), 4))[0]
+
     def lifetime(self):
-        return struct.unpack('<I', self.m.uc.mem_read(self.image.address('a733_smp_lifetime'), 4))[0]
+        return self.word('a733_smp_lifetime')
+
+    def el1_lifetime(self, sealed_copy):
+        """os_lifetime at EL1, with board_session_lifetime (apps/os/sealed.c) returning sealed_copy; also the loads of the
+        two monitor words it made, which EL1 cannot map."""
+        monitor = [self.image.address(n) for n in ('a733_smp_lifetime', 'os_admitting_lifetime')]
+        loads = []
+        hooks = [self.m.uc.hook_add(UC_HOOK_MEM_READ, lambda uc, access, address, size, value, unused:
+                                    loads.append(address), begin=w, end=w + 3) for w in monitor]
+        self.m.stub('board_session_lifetime', sealed_copy)
+        el, model = self.m.el, dict(self.m.model)
+        self.m.at_el1()
+        try:
+            return self.m.call('os_lifetime'), loads
+        finally:
+            for h in hooks:
+                self.m.uc.hook_del(h)
+            self.m.el, self.m.model = el, model
 
     def result_magic(self):
         self.m.call('a733_smp_result_magic')
@@ -179,6 +206,12 @@ def one_image(path):
         assert a.result_magic() == result, (name, hex(a.result_magic()))
         assert a.policy_writable() == [int(resident)] * 7, (name, a.policy_writable())
         cases[f'{name}-admitted-sets-lifetime-{word}'] = True
+        # The decode applied the terms of the contract's lifetime; afterwards EL3 reads the admitted word and EL1 the sealed
+        # copy, without a load of monitor memory.
+        assert a.decoded == [word] and a.word('os_admitting_lifetime') == 0, (name, a.decoded)
+        assert a.m.call('os_lifetime') == word, name
+        assert a.el1_lifetime(word) == (word, []) and a.el1_lifetime(0) == (0, []), name
+        cases[f'{name}-decode-and-os-lifetime-follow-{word}'] = True
         # Once written: the other lifetime is refused; the same lifetime again is admitted.
         assert a.admit(a.contract(sup if resident else res, not resident, seconds, startup)) == magic_refused, name
         assert a.lifetime() == word
@@ -188,7 +221,7 @@ def one_image(path):
                                   ('supervised-magic-resident-timing', sup, True)):
         a = Admission(image)
         assert a.admit(a.contract(magic, resident, seconds, startup)) == diagnostic, name
-        assert a.lifetime() == 0
+        assert a.lifetime() == 0 and a.word('os_admitting_lifetime') == 0
         cases[f'{name}-refused-timing'] = True
     a = Admission(image)
     assert a.admit(a.contract(res, True, seconds, startup, fel=0x5aa5a55a)) == fields and a.lifetime() == 0

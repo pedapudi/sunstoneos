@@ -20,11 +20,8 @@
 #include "umem.h"
 #include <string.h>
 struct umem *os_large_umem(void);
-#ifdef SUNSTONE_BOARD_RESIDENT
-_Static_assert(OS_AUDIO_DMA_ESTABLISHED==A733_DMA_HANDOFF_REQUIRED,"resident DMA handoff");
-#else
-_Static_assert(OS_AUDIO_DMA_ESTABLISHED==A733_DMA_HANDOFF_SUPERVISED,"supervised DMA handoff");
-#endif
+_Static_assert(OS_AUDIO_DMA_ESTABLISHED(A733_LIFETIME_RESIDENT)==A733_DMA_HANDOFF_REQUIRED,"resident DMA handoff");
+_Static_assert(OS_AUDIO_DMA_ESTABLISHED(A733_LIFETIME_SUPERVISED)==A733_DMA_HANDOFF_SUPERVISED,"supervised DMA handoff");
 _Static_assert(A733_DMA0_INTID==143,"OS interrupt table DMA0 entry");
 _Static_assert(OS_AUDIO_PERIOD_CAPACITY==A733_I2S_PERIOD_CAPACITY,"stream period capacity");
 /* DMA periods: one page each, independent of the client's ring. */
@@ -310,12 +307,11 @@ int os_audio_stream_open(const struct os_audio_stream_config *c)
         a733_i2s_platform_stream_operations(),&audio->binding,A733_I2S_RECEIVE,10000,c->cyclic,A733_I2S_ROUTE_I2S0};
     audio->config=(struct a733_dma_pool_config){&audio->dma,&providers.shared.counter,&providers.shared.clocks,
         &providers.shared.locks,240000,4096,5,1,dma_fatal,audio};
-#ifdef SUNSTONE_BOARD_RESIDENT
-    if(!a733_dma_pool_session_stream_init(&audio->pool,&audio->config,&audio->stream,PERIODS,c->period_bytes))return 0;
-#else
-    if(!a733_dma_pool_session_stream_supervised_init(&audio->pool,&audio->config,&audio->stream,PERIODS,c->period_bytes))
+    /* The admitted lifetime chose the handoff's established facts (OS_AUDIO_DMA_ESTABLISHED); the pool takes the same. */
+    if(!(os_lifetime()==A733_LIFETIME_RESIDENT?
+         a733_dma_pool_session_stream_init(&audio->pool,&audio->config,&audio->stream,PERIODS,c->period_bytes):
+         a733_dma_pool_session_stream_supervised_init(&audio->pool,&audio->config,&audio->stream,PERIODS,c->period_bytes)))
         return 0;
-#endif
     return dma_service_bind(&audio->pool.service,0,audio->handle,1)&&
         dma_service_i2s_irq_bind(&audio->irq,&audio->pool.service,A733_SMP_COUNTER_HZ);
 }

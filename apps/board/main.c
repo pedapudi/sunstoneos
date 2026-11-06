@@ -227,22 +227,32 @@ static void supervise(void *unused)
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
-#elif defined(SUNSTONE_BOARD_RESIDENT)
+#elif defined(SUNSTONE_A733_OS) && !defined(SUNSTONE_A733_OS_CPU_RETURN)
 static void supervise(void *unused)
 {
-    (void)unused;for(;;){
-        /* The armed watchdog bounds every hang. A failure, an expired service
-         * window, a service still silent at the loader's first expiry or a
-         * refused renewal closes admission and stops renewal; the watchdog
-         * then resets the board into a cold boot. session_start_ticks is the
-         * contract's armed_at, so the first expiry is four seconds later. */
-        if(!board_live(NULL)||board_resident_renew(board.handles[7],
-           board.session.session_start_ticks+4*A733_SMP_COUNTER_HZ)!=1){
-            board_fail(NULL);
+    (void)unused;const int resident=BOARD_RESIDENT();
+    for(;;){
+        if(resident){
+            /* The armed watchdog bounds every hang. A failure, an expired
+             * service window, a service still silent at the loader's first
+             * expiry or a refused renewal closes admission and stops renewal;
+             * the watchdog then resets the board into a cold boot.
+             * session_start_ticks is the contract's armed_at, so the first
+             * expiry is four seconds later. */
+            if(!board_live(NULL)||board_resident_renew(board.handles[7],
+               board.session.session_start_ticks+4*A733_SMP_COUNTER_HZ)!=1){
+                board_fail(NULL);
+                if(a733_board_host_workload(board.session.workload))a733_typec_revoke(&board.typec.provider);
+                /* Status 5: renewal stopped. The reason reaches this core's
+                 * retained slot, and on core 0 the resident result. */
+                a733_smp_exit_privileged(5,board_resident_stop_detail());
+            }
+        }else if(!board_live(NULL)){
+            /* Software observation only. A stopped CPU/interconnect can
+             * prevent this task; confirmed whole-board power removal owns
+             * recovery. */
+            board_fail_at(SUNSTONE_CRUMB_FAIL_SITE(BOARD),board_live_refusal(),SUNSTONE_CRUMB_HERE());
             if(a733_board_host_workload(board.session.workload))a733_typec_revoke(&board.typec.provider);
-            /* Status 5: renewal stopped. The reason reaches this core's
-             * retained slot, and on core 0 the resident result. */
-            a733_smp_exit_privileged(5,board_resident_stop_detail());
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -427,12 +437,7 @@ void a733_smp_diagnostic_start(void)
     }
     /* The resident service reports progress to the watchdog (1 s window). */
     const struct a733_power_service_config service={s->pmic_owner,s->deadline_us,1000000u/configTICK_RATE_HZ,
-#ifdef SUNSTONE_BOARD_RESIDENT
-        500000u
-#else
-        0
-#endif
-    };
+        BOARD_RESIDENT()?500000u:0};
     if(!a733_power_domains_native_init(&providers.domains_native,board.handles[0])||
        !a733_power_domains_init(&providers.domains,&providers.shared.pmic,&providers.domains_native.operations,
            &providers.domains_native,&service))platform_panic("board power domains",12);

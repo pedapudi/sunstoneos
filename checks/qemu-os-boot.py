@@ -111,7 +111,7 @@ DRIVER_SOURCES = ['drivers/thermal/a733_thermal.c', 'drivers/thermal/a733_therma
 # Units that include the A733 platform's boot.h.
 QUOTE_A733 = {'drivers/gpu/a733_gpu_resources_native.c', 'drivers/i2c/a733_i2c.c'}
 # The virtual board.
-BOARD_SOURCES = ['platform/qemu-os/start.S', 'platform/qemu-os/platform.c', 'platform/qemu-os/board.c',
+BOARD_SOURCES = ['platform/qemu-os/start.S', 'platform/qemu-os/platform.c', 'platform/qemu-os/board.c', 'platform/qemu-os/lifetime.c',
                  'platform/qemu-os/mmio.c', 'platform/qemu-os/absent.c', 'platform/qemu-os/snprintf.c', 'drivers/gpu/a733_gpu_resources_native.c',
                  'apps/os/cpu-return-el0.S']
 
@@ -122,22 +122,16 @@ class Image:
     Objects are shared between the images of one run when their source and
     flags are the same."""
 
-    def __init__(self, work, services_source=None, extra_defines=(), extra_sources=(), latency=False, resident=False,
-                 partitioned=False):
+    def __init__(self, work, services_source=None, extra_defines=(), extra_sources=(), latency=False, partitioned=False):
         self.work = Path(work)
         # False, True, or the directory holding a replacement kernel/scheduler/freertos.c.
         self.partitioned = partitioned
-        self.extra_sources = list(extra_sources)
+        # Every image admits both lifetimes; the scenario's lifetime picks one at launch. The resident supervisor
+        # renews WDT0 while every service reports.
+        self.extra_sources = list(extra_sources) + ['apps/os/watchdog.c', 'platform/a733/maintenance_watchdog.c']
         self.latency = latency
         self.services_source = Path(services_source) if services_source else ROOT / 'apps/os/services.c'
         self.defines = DEFINES + list(extra_defines)
-        if resident:
-            # The resident lifetime: its own contract and result magic numbers, the supervisor
-            # that renews WDT0 while every service reports (cmake/a733-os.cmake).
-            self.defines = [d for d in self.defines if 'MAGIC' not in d] + [
-                '-DA733_SMP_CONTRACT_MAGIC=0x415337334f524331ULL', '-DA733_SMP_RESULT_MAGIC=0x415337334f525231ULL',
-                '-DSUNSTONE_BOARD_RESIDENT=1']
-            self.extra_sources += ['apps/os/watchdog.c', 'platform/a733/maintenance_watchdog.c']
         self.kernel = freertos_dir()
         self.log = self.work / 'build.log'
 
@@ -342,16 +336,16 @@ def session_for(elf, input_bytes, cpu_critical=0):
     return raw, contract + bytes(4096 - len(contract)), info
 
 
-SCENARIO = struct.Struct('<3Q2I5Q5i5iQQQQQ4Q')
+SCENARIO = struct.Struct('<3Q2I5Q5i5iQQQQQQ3Q')
 
 
 def scenario(fault=0, first_ms=(2, 2, 2, 2, 2), temperature_c=(52, 60, 48, 55, 50), slope_mc=(0,) * 5,
-             period_us=25000, usb_ready_ms=30, linger_us=0, limit_ms=8000, trace=0, hold_ms=0):
+             period_us=25000, usb_ready_ms=30, linger_us=0, limit_ms=8000, trace=0, hold_ms=0, lifetime=1):
     """The board's behavior in one run; see platform/qemu-os/qemu_os.h."""
     first = [INFINITY if t is None else t * 1000 for t in first_ms]
     raw = SCENARIO.pack(0x514f535343454e31, 1, SCENARIO.size, fault, period_us, *first,
                         *[int(t * 1000) for t in temperature_c], *slope_mc,
-                        usb_ready_ms * 1000, linger_us, limit_ms * 1000, trace, hold_ms * 1000, *([0] * 4))
+                        usb_ready_ms * 1000, linger_us, limit_ms * 1000, trace, hold_ms * 1000, lifetime, *([0] * 3))
     return raw
 
 
@@ -677,12 +671,6 @@ def main():
         application = image.application('hw-facts', ['apps/hw-facts/main.c'], ROOT / 'apps/hw-facts/manifest.json')
         return image.build(application)
 
-    def build_resident():
-        image = Image(out / 'build-resident', services_source=args.services_source, resident=True)
-        application = image.application('hello-compute', ['apps/hello-compute/main.c'],
-                                         ROOT / 'apps/hello-compute/manifest.json')
-        return image.build(application)
-
     old_scheduler = unguarded_prestart_scheduler(out / 'prestart-yield-scheduler')
     with ThreadPoolExecutor(max_workers=8) as pool:
         partitioned_elf = pool.submit(build_partitioned, 'build-partitioned')
@@ -692,7 +680,6 @@ def main():
         (out / 'build-reverted').mkdir()
         control_elf = pool.submit(build_hello, 'build-reverted-services', reverted_services(out / 'build-reverted'))
         latency_elf = pool.submit(build_latency)
-        resident_elf = pool.submit(build_resident)
         el0_elf = pool.submit(build_el0_abort)
         facts_elf = pool.submit(build_facts)
         large_elf = pool.submit(build_large, 'build-large', large_manifest_path(out / 'large-manifest.json', LARGE_DIGEST, LARGE_FILE))
@@ -720,8 +707,8 @@ def main():
         large_elf, large_big_elf, large_6g_elf, large_nodigest_elf = large_elf.result(), large_big_elf.result(), large_6g_elf.result(), large_nodigest_elf.result()
         storage_write_elf = storage_write_elf.result()
         reverted_owner_elf = reverted_owner_elf.result()
-        os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
-            os_elf.result(), control_elf.result(), latency_elf.result(), resident_elf.result(), el0_elf.result(),
+        os_elf, control_elf, latency_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
+            os_elf.result(), control_elf.result(), latency_elf.result(), el0_elf.result(),
             partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result(), facts_elf.result())
     built = time.monotonic() - started
 
@@ -801,15 +788,15 @@ def main():
     # service reports. A healthy session outlives the first expiry; a transport that stalls
     # after it was ready is named by the supervisor; a transport that never reports is
     # reset by the watchdog at the first expiry.
-    c = run_case('resident-normal-start', resident_elf, scenario(usb_ready_ms=usb_delay_ms, hold_ms=5000))
+    c = run_case('resident-normal-start', os_elf, scenario(usb_ready_ms=usb_delay_ms, hold_ms=5000, lifetime=2))
     c.clean()
     c.require(c.finished is not None and bytes.fromhex(c.finished['result']) == expected
               and int(c.finished['t_us']) >= 5_000_000, 'the resident session did not outlive the first watchdog expiry')
-    c = run_case('resident-service-stall', resident_elf, scenario(fault=5, usb_ready_ms=usb_delay_ms, hold_ms=4000))
+    c = run_case('resident-service-stall', os_elf, scenario(fault=5, usb_ready_ms=usb_delay_ms, hold_ms=4000, lifetime=2))
     c.failed_with('BOARD')
     c.require('STOP status=5 detail=2' in c.output, 'the supervisor did not name the stalled transport')
     c.require(1_000_000 <= int(c.failure['t_us']) < 2_500_000, 'the stall was reported at %s us' % c.failure['t_us'])
-    c = run_case('resident-service-silent', resident_elf, scenario(fault=4, usb_ready_ms=usb_delay_ms, limit_ms=9000))
+    c = run_case('resident-service-silent', os_elf, scenario(fault=4, usb_ready_ms=usb_delay_ms, limit_ms=9000, lifetime=2))
     # At the loader's first expiry (4 s) the supervisor, which runs every 20 ms, refuses renewal because the
     # transport never reported, and the armed watchdog expires at the same instant. Which happens first
     # depends on the phase between the two, which the deterministic clock fixes for a given image. Both
@@ -1201,7 +1188,7 @@ def main():
     summary = {'large_region_switch_cost': switch_cost, 'passed': True, 'physical_access': False, 'seconds': round(elapsed, 2), 'build_seconds': round(built, 2),
                'qemu_sha256': hashlib.sha256(QEMU.read_bytes()).hexdigest(),
                'images': {p.parent.name: hashlib.sha256(p.read_bytes()).hexdigest()
-                          for p in (os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf,
+                          for p in (os_elf, control_elf, latency_elf, el0_elf, partitioned_elf,
                                     partitioned_latency_elf, prestart_elf, facts_elf)},
                'cases': [{'name': r.name, 'status': r.status, 'wall_seconds': round(r.seconds, 3),
                           'failure': r.failure and r.failure['line'], 'main': r.main and r.main['line'],

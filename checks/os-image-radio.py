@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run the integrated OS image's radio entry against a modeled session and profile.
 
-checks/os-image-radio.c includes apps/os/radio.c unchanged and, in a resident
-build, apps/os/radio_profile.c. This runner compiles it with the exact flags of
+checks/os-image-radio.c includes apps/os/radio.c and the lifetime's radio profile
+bounds (apps/os/radio_profile.c) unchanged. This runner compiles it with the exact flags of
 apps/os/radio.c from a configured radio OS build (configure it with
 CMAKE_EXPORT_COMPILE_COMMANDS=ON) and runs it once under unicorn:
 
@@ -13,10 +13,13 @@ CMAKE_EXPORT_COMPILE_COMMANDS=ON) and runs it once under unicorn:
   another workload, another profile size or address, and a profile page with
   other memory attributes;
 - the start entry requires the board's radio owner and network client tasks;
-- in a resident build, the radio profile bounds give bootstrap and startup
+- in a resident session, the radio profile bounds give bootstrap and startup
   fixed offsets from the session start and the radio and its client the
   session's lifetime, and refuse a 60-second session, a profile that already
-  carries a deadline and a changed profile.
+  carries a deadline and a changed profile;
+- in a supervised session, the board's bounds apply: a session that ends the
+  supervised lifetime after it starts gets the board's offsets, where they
+  fit, and an unbounded session is refused.
 
 No device, radio or network is modeled.
 """
@@ -32,7 +35,7 @@ from harness import machine as harness_machine
 from unicorn.arm64_const import UC_ARM64_REG_SP
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--build', '{build:res}', '--output', '{output}']]
+GATE_RUNS = [['--build', '{build:sup}', '--output', '{output}']]
 
 
 def main():
@@ -73,14 +76,13 @@ def main():
     uc.emu_start(symbols['os_check_run'], 0, count=50000000)
     result = int.from_bytes(uc.mem_read(symbols['os_check_result'], 4), 'little')
     assert result == 1, 'radio entry check stopped with code %d' % result
-    lifetime = 'resident' if '-DSUNSTONE_BOARD_RESIDENT=1' in flags else 'supervised'
-    sources = ['apps/os/radio.c', 'checks/os-image-radio.c'] + (['apps/os/radio_profile.c'] if lifetime == 'resident' else [])
+    sources = ['apps/os/radio.c', 'checks/os-image-radio.c', 'apps/os/radio_profile.c', 'apps/os/radio_profile_supervised.c',
+               'apps/board/radio_profile.c']
     (out / 'result.json').write_text(json.dumps({
-        'passed': True, 'physical_access': False, 'lifetime': lifetime, 'command': command,
+        'passed': True, 'physical_access': False, 'lifetimes': ['resident', 'supervised'], 'command': command,
         'sources': {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in sources}},
         indent=2) + '\n')
-    print('PASS OS radio entry (%s): owner admission and refusals, start%s' %
-          (lifetime, ', resident profile bounds' if lifetime == 'resident' else ''))
+    print('PASS OS radio entry: owner admission and refusals, start, resident and supervised profile bounds')
 
 
 if __name__ == '__main__':

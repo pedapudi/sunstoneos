@@ -22,12 +22,13 @@ int board_live(void *v){(void)v;return board_up;}
 uint64_t a733_smp_counter(void){return 0;} /* Replay is not selected in this model. */
 void board_fail(void *v){(void)v;board_failed=1;}
 static void check(int ok,unsigned code){if(!ok){os_check_result=code;__asm__ volatile("brk #0");for(;;){}}}
-#ifdef SUNSTONE_BOARD_RESIDENT
+/* The admitted lifetime of the modeled session (enum a733_lifetime), at EL1 and in admission alike. */
+static unsigned model_lifetime=A733_LIFETIME_RESIDENT;
+unsigned board_session_lifetime(void){return model_lifetime;}
+unsigned os_lifetime(void){return model_lifetime;}
 void board_service_progress(unsigned service){check(service==OS_SERVICE_AUDIO,80);++reports;}
-#define REPORTS(n) (n)
-#else
-#define REPORTS(n) 0u /* The supervised lifetime keeps no progress record. */
-#endif
+/* The supervised lifetime keeps no progress record. */
+#define REPORTS(n) (model_lifetime==A733_LIFETIME_RESIDENT?(n):0u)
 _Noreturn void platform_panic(const char *file,unsigned line)
 {(void)file;os_check_result=200+line;__asm__ volatile("brk #0");for(;;){}}
 void vTaskDelay(TickType_t ticks){(void)ticks;}

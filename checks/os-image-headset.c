@@ -68,10 +68,12 @@ int bluetooth_application_init(struct bluetooth_application *a,const struct blue
 }
 static unsigned codec_ready;
 int bluetooth_msbc_init(void){++codec_ready;return 1;}
-#ifdef SUNSTONE_BOARD_RESIDENT
+/* The admitted lifetime of the modeled session (enum a733_lifetime). */
+static unsigned model_lifetime=A733_LIFETIME_SUPERVISED;
+unsigned board_session_lifetime(void){return model_lifetime;}
+unsigned os_lifetime(void){return model_lifetime;}
 static unsigned progress[OS_SERVICES];
 void board_service_progress(unsigned service){check(service==OS_SERVICE_BLUETOOTH||service==OS_SERVICE_HEADSET,84);++progress[service];}
-#endif
 int bluetooth_application_poll(struct bluetooth_application *a){check(a==&app,85);++polled;return 0;}
 int bluetooth_application_retain(struct bluetooth_application *a){check(a==&app,86);++retained;return -1;}
 
@@ -231,11 +233,7 @@ static void start_case(void)
     nominal_session();
     profile.headset.mode=3;
     board.session.session_start_ticks=24*UINT64_C(7000000);
-#ifdef SUNSTONE_BOARD_RESIDENT
-    board.session.deadline_us=UINT64_MAX/24;
-#else
-    board.session.deadline_us=7000000+60000000;
-#endif
+    board.session.deadline_us=model_lifetime==A733_LIFETIME_RESIDENT?UINT64_MAX/24:7000000+60000000;
     if(radio_granted){
         /* The radio owner (handle 5) is the Bluetooth owner; only the client is created. */
         board.handles[5]=(TaskHandle_t)&radio;
@@ -262,9 +260,8 @@ static void owner_case(void)
     SERVE();check(polled==1&&!retained,100);
     atomic_store(&app.failed,1);SERVE();check(polled==2,101);
     board_up=0;SERVE();check(polled==2&&retained==1,102);
-#ifdef SUNSTONE_BOARD_RESIDENT
-    check(progress[OS_SERVICE_BLUETOOTH]==1,103);
-#endif
+    /* A supervised session reports no progress. */
+    check(progress[OS_SERVICE_BLUETOOTH]==(model_lifetime==A733_LIFETIME_RESIDENT),103);
 }
 /* The recognizer requests generation g; the client is woken once. */
 static void generation(unsigned g)
@@ -276,6 +273,7 @@ static void generation(unsigned g)
 void os_check_run(unsigned selected)
 {
     mode=selected&0xff;radio_granted=selected>>8&1;
+    model_lifetime=selected>>9&1?A733_LIFETIME_RESIDENT:A733_LIFETIME_SUPERVISED;
     const uint8_t *wav;size_t bytes;
     if(mode==0){pins_cases();start_case();os_check_result=1;return;}
     if(mode==7){owner_case();os_check_result=1;return;}
