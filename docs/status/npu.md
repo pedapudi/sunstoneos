@@ -6,7 +6,7 @@ The NPU path is implemented: native model decoding, mappings, shared-provider st
 
 **Software evidence:** `checks/npu-idle.py`, no host check (production owner, queue and idle code with modeled devices and nine regression mutations), `checks/npu-idle-report.py`, no host check (evidence: npu-job-overhead-cost-breakdown), `checks/npu-mmu.c`, `checks/os-npu-service.c`.
 
-**Board-qualified scope:** At 852 MHz and 800 mV on ports 3-1 and 3-3: finite startup (4.0 ms) and ShuffleNetV2 inference (2.91 ms doorbell to interrupt) with matching outputs, CLOSE, local stop and normal ROM return; the resident command queue (1,000 matched jobs at 10.25 µs p50); the combined image of four NPU jobs under eight CPU workers; the idle benchmark with baseline, control and clock-gating images (61,231 matching jobs each); 15 single-operation graphs, two layer-normalization graphs and shader graphs byte-equal to the SDK simulator; NPU MMU faults on unmapped descriptor and program addresses with recovery in about 32 ms; 31 resident slots at ring depth 64 with backpressure, run-time graph registration and a run-time tensor link; 18 compiled graphs resident from a runner input region. Repeated transitions are not qualified.
+**Board-qualified scope:** At 852 MHz and 800 mV on ports 3-1 and 3-3: finite startup (4.0 ms) and ShuffleNetV2 inference (2.91 ms doorbell to interrupt) with matching outputs, CLOSE, local stop and normal ROM return; the resident command queue (1,000 matched jobs at 10.25 µs p50); the combined image of four NPU jobs under eight CPU workers; the idle benchmark with baseline, control and clock-gating images (61,231 matching jobs each); 15 single-operation graphs, two layer-normalization graphs and shader graphs byte-equal to the SDK simulator; NPU MMU faults on unmapped descriptor and program addresses with recovery in about 32 ms; 31 resident slots at ring depth 64 with backpressure, run-time graph registration and a run-time tensor link; 18 compiled graphs resident from a runner input region; 31 graphs registered by the EL0 application at run time with no graph linked into the OS; the mimus encoder at 512 frames (768 jobs, 656.5 ms per pass, exact outputs) with every NPU service linked and granted from its declaration. Repeated transitions are not qualified.
 
 ## Capabilities
 
@@ -18,13 +18,14 @@ The NPU path is implemented: native model decoding, mappings, shared-provider st
 | Loader admission and page-table containment | qualified on the board | MMU fault recovery about 32 ms | [loader admission](../designs/npu-loader-admission.md), `npu-status-admission-qualified` |
 | Graph kinds NN, SP, ACT, transpose, shader | qualified on the board | byte-equal to the simulator | `npu-status-board-scope` |
 | EL0 queue, 31 slots, depth 64, backpressure (the depth is the declared `in_flight` since the one-image NPU series) | qualified on the board | relu 5.45 µs per job, 183,400 jobs/s; add 10.4 µs | [resources](../designs/npu-resources.md), `npu-status-runs-and-queue` |
-| Run-time graph registration and links | qualified on the board | five graphs registered after start | `npu-status-runs-and-queue` |
+| Run-time graph registration and links | qualified on the board | 31 graphs registered by the application in 12.5 ms, none linked into the OS | `npu-status-runs-and-queue`, `1793935520100554658-94afd2bd` |
 | Externally supplied models | qualified on the board | 18 graphs, 22.75 ms per pass | `npu-resources-external-models` |
 | Long attention layers (184 to 276 frames in 92-row blocks) | qualified on the board | 4.83 ms and 8.00 ms per job | `npu-status-long-attention-layers` |
 | Cause of the long-attention failures | qualified on the board | a flat gather width of 65,536 or more, not the bytes or the index table | [long tensors](../hardware/npu-command-formats.md#shader-operations-kind-1) |
 | Attention step of the tiled encoder | qualified on the board | 458.8 µs as two jobs | [tiled execution](../designs/npu-tiled-execution.md) |
+| mimus encoder, 16 layers at 512 frames | qualified on the board | 656.5 ms per pass, 768 exact jobs | `1793935572311306576-e41afabe` |
 | Idle clock gating | qualified on the board | resume at most 25 µs; no gating at 9 ms gaps | `npu-status-board-scope` |
-| Combined CPU and NPU image | qualified on the board | four jobs, overlap mask 15 | `npu-status-board-scope` |
+| Combined CPU and NPU image | qualified on the board | four jobs, overlap mask 15 | `npu-status-board-scope`, `1793935467247712577-0bdb29cf` |
 | Resident NPU lifetime | host-tested | no physical resident cold boot | [resident NPU](../designs/resident-npu.md) |
 | Rebinding calls for tile loops | open | not implemented | [tiled execution](../designs/npu-tiled-execution.md) |
 
@@ -39,16 +40,15 @@ Designs: [platform](../designs/npu-platform.md), [fast path](../designs/npu-fast
 5. Run larger command windows with the smaller doorbell word. A reservation that includes run-time graphs uses 512 KiB per command allocation; the manifest could declare a command size to shrink it.
 6. Add exact per-job deadline interrupts through the scheduler's deadline facility (`work/scheduler-rt-1101`); do not add a device timer.
 7. Run the `restart-*` cases of no host check on a restart image; the other cases pass.
-8. The mimus encoder on the NPU, on the mimus branch.
+8. Bring the mimus encoder application from its port branch (mimus commit `8dee959c3`, board entry `1793935572311306576-e41afabe`) to mimus `port/sunstoneos`.
 9. Take the 102,848-byte `npu` state of `apps/os/npu.c` from the ledger at the grant, so that an image without an NPU session holds only a pointer. Every image links the NPU service since the one-image NPU series ([one OS image](../designs/one-os-image.md)).
-10. Update the mimus encoder application for the one-image NPU series: its CMake no longer needs `SUNSTONE_A733_OS_NPU` and `_NPU_QUEUE`, and its ring depth is `NPU_ENCODER_NPU_IN_FLIGHT` from its generated header in place of `SS_NPU_QUEUE_MAX_DEPTH`.
 
 ## Evidence
 
 Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` records hold the results that earlier status prose described. Earlier prose evidence is in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-75 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+78 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -127,4 +127,7 @@ Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` recor
 | `1793719431661400089-4f6a7d7e` | 2026-11-03 | 3-1 | `61ee14873aae` | returned | passed | run_total 27.385 s, flat_width 32640 elements, gather_bytes 522240 bytes, output_bytes_differing 0 bytes |
 | `1793719534250914902-0b709b24` | 2026-11-03 | 3-1 | `6cc60b2a4044` | returned | passed | run_total 25.056 s, flat_width 32640 elements, gather_bytes 261120 bytes, output_bytes_differing 0 bytes |
 | `1793720834073494547-a97df65a` | 2026-11-03 | 3-1 | `7b1cbb57fd41` | returned | passed | run_total 28.842 s, jobs 48 jobs, job_time 14582.9 µs, copy_time 24285.1 µs, total_time 49733.9 µs, output_bytes_differing 0 bytes |
+| `1793935467247712577-0bdb29cf` | 2026-11-06 | 3-1 | `0023d8c953f9` | returned | passed | run_total 32.032 s, jobs 4 jobs, jobs_mismatched 0 jobs, job_p50 2906.75 µs, job_max 2915.4 µs, thermal_row_offset_max 0.94 ms |
+| `1793935520100554658-94afd2bd` | 2026-11-06 | 3-1 | `10d71c38f5e9` | returned | passed | run_total 24.698 s, graphs_registered 31 graphs, registration_time 12.5 ms, refusals_k1_to_64 0 jobs, refusals_k128 32964 jobs, job_time 5.5 µs, linked_pair 13.5 µs, output_bytes_differing 0 bytes |
+| `1793935572311306576-e41afabe` | 2026-11-06 | 3-1 | `6830414bb9fc` | returned | passed | run_total 94.305 s, jobs 768 jobs, jobs_with_wrong_output_crc 0 jobs, output_bytes_differing 0 bytes, total_time 656532 µs, job_time 233573 µs, output_and_convolution 146788 µs, open_time 81061.9 µs, prepare_time 83950 µs, pool_bytes 3.35544e+07 bytes, tensor_bytes 253952 bytes |
 <!-- evidence-table:end -->
