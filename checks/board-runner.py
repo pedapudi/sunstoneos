@@ -918,19 +918,35 @@ def report_cases(out,hello):
             for address,data in [(geo['report_address'],copied_return_report(1)),(geo['output_address'],output)]:
                 model.memory.update({address+n:b for n,b in enumerate(data)})
             class Backend(board.Live):
+                rail_phases=()
                 def __init__(self,*values):
                     super().__init__(*values,access=model,process=model.process,now=model.now,sleep=model.sleep)
                 def dram(self):pass
-                def rails(self):pass
+                def rails(self,phase='rails'):self.rail_phases+=(phase,)
+                def live_state(self):
+                    # After hello-compute's return the board reads the boot PLL and mux words: its CPU clock owner lowers
+                    # CPU-B to 1014 MHz and the ROM return resets CPU-L and the DSU (apps/os/NORMAL-RETURN.md). The board
+                    # run 1793763471773768349-5554bd1a, with the control template's grant at the reviewed points, read
+                    # them before its rail restoration.
+                    return {'words':{hex(0x8871000+0x1000*d+o):v for d in range(3)
+                                     for o,v in ((0,board.state.BOOT_PLL[d]),(0x1c,board.state.BOOT_MUX[d]))}}
                 def prepare(self,info):
+                    # The control template's CPU grant (both clusters, four changes) admits a transition.
                     plan={'epoch':1,'generation':2,'watchdog':{'mode':0xb1,'session_seconds':1},
                             'uploads':[],'launch':['exe','0x52000'],'format':'generic','geometry':geo,'return_host':return_host,
-                            'image_ram':return_host.IMAGE_RAM,'input_regions':[]}
+                            'image_ram':return_host.IMAGE_RAM,'input_regions':[],'cpu_grant_raises':True}
                     plan['preserve_regions']=images.preservation_regions(plan)
                     return plan
+            owners=[]
+            class Recorded(Backend):
+                def __init__(self,*values):
+                    super().__init__(*values);owners.append(self)
             with patch.object(board.os,'access',return_value=True),contextlib.redirect_stdout(io.StringIO()):
-                result=board.run_image(args,Backend)
+                result=board.run_image(args,Recorded)
             assert result['outcome']==('failure-return' if foreign else 'returned'),result
+            # The rails are restored after the return whether or not the application's result is a success.
+            assert result['rail_restore_choice']=='grant admits a transition',result
+            assert owners[0].rail_phases==('rails','restore-rails') and result['rails_restored'] is True,owners[0].rail_phases
             report=result['return_report']
             assert report['secondaries_off']==7 and report['thermal_capture_status']=='absent'
             assert report['output_capture_status']==('malformed' if foreign else 'decoded')
