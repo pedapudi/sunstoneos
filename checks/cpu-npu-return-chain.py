@@ -31,8 +31,7 @@ from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_S
 from harness import Image, environment, save
 
 ROOT = Path(__file__).resolve().parents[1]
-SESSION_JOBS = json.loads((ROOT/'tools/session-facts.json').read_text())['profiles']['npu']['npu']['jobs']
-CHECK_INPUTS = ['tools/session-facts.json', 'apps/os/npu-report.py', 'apps/cpu-npu-concurrency/main.c', 'apps/cpu-npu-concurrency/gemm.h',
+CHECK_INPUTS = ['apps/os/npu-report.py', 'apps/cpu-npu-concurrency/main.c', 'apps/cpu-npu-concurrency/gemm.h',
  'apps/cpu-npu-concurrency/host.py', 'apps/cpu-npu-concurrency/receipt.h',
  'apps/os/npu-observe.c', 'apps/os/npu-client.c', 'apps/os/npu.c', 'apps/os/npu-declaration.c',
  'apps/os/application.c', 'apps/os/cpu-return.c', 'apps/os/cpu-return-host.py',
@@ -112,10 +111,6 @@ class Native(owners.Model):
         self.input_window, self.output_window = POOL, POOL+0x40000
         self.session = layout.address('decoded', 'apps/os/session.c')
         self.uc.mem_write(self.session, bytes(type_size(image.path, 'os_session')))
-        # The session's job word as tools/session.py writes it (the NPU profile of tools/session-facts.json): the session
-        # selects no job count for an SDK application, which runs as many jobs as it submits.
-        self.put32(self.session+layout.layouts['os_session']['npu']+
-                   layout.layouts['os_npu_session']['jobs'], SESSION_JOBS)
         self.put64(self.n+self.nf['client'], CLIENT)
         self.put64(self.n+self.nf['bootstrap'], BOOTSTRAP)
         self.put64(layout.address('main_task', 'apps/os/application.c'), MAIN)

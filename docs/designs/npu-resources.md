@@ -6,7 +6,10 @@ An application states what it needs from the NPU in its manifest. The operating 
 
 ## Principles
 
-1. **No count of completed jobs.** A robot submits jobs for as long as it runs. A session never fails because it has run a certain number of jobs. The job counters are statistics; the `jobs` field of the session record only sets how many jobs the diagnostic client runs.
+1. **No count of completed jobs.** A robot submits jobs for as long as it runs. A session never fails because it has run a certain number of jobs, and the session record sets no job count: the word that once set the diagnostic client's is reserved, and the OS reads nothing from it. The job counters are statistics. The OS's NPU report gives the jobs an application ran in both of its count words, and the runner's check of the report (`apps/os/npu-report.py`) refuses more jobs than selected. Whether a run did all its work is a question for the application's own receipt, which checks the count against what the application set out to do:
+   - the combined CPU and NPU receipt requires 4 completed jobs, the close and overlap mask 15 (`apps/cpu-npu-concurrency/host.py`);
+   - the queue study's receipt requires each in-flight limit's job count and the link pair word for word (`queue_expectation` in `apps/npu-graphs/host.py`);
+   - the mimus encoder's receipt is exact only when `jobs_run` equals its 768 jobs and no job's output CRC is wrong (`sunstoneos/apps/npu-encoder/host.py` in mimus).
 2. **Declare, admit, reserve.** The application declares what it keeps resident and how deep its queue is. The operating system admits it only if the declaration fits the real capacity and reserves the resources at admission. A running application cannot fail on a resource it declared, and nothing is allocated on the job path, so job latency stays deterministic.
 3. **Limits come from a source.** Each fixed array or limit derives from a bound (memory, page-table entries, command space, a hardware field) or does not exist beyond memory. A compile-time array is sized from the declarations and the bound, not from a round number.
 4. **Backpressure on a full ring.** When the declared in-flight depth is full, a blocking submit waits for a completion fence and a non-blocking submit returns busy (`ss_npu_queue_submit` returns 0). Neither ends the session.
@@ -94,7 +97,7 @@ A network compiled as several graphs runs as a chain: graph g takes the output o
 
 | Figure | Value | Record |
 | --- | --- | --- |
-| Quota-free session | 120,000 jobs on one session with the `jobs` field at 1 (host) | `npu-resources-host-cases` |
+| Quota-free session | 120,000 jobs on one session, which sets no job count (host) | `npu-resources-host-cases` |
 | Pool use, 31 slots of add or relu | 6,291,456 of 8,388,608 bytes | this document, runtime accounting |
 | 18 resident graphs, one pass | 22.75 ms | `npu-resources-external-models` |
 | 18-graph chain | 24.63 ms | `npu-resources-chain` |

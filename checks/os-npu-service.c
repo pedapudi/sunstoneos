@@ -125,7 +125,7 @@ static size_t requirements_of(const struct npu_runtime_model *models, unsigned c
     size_t bytes = 0;
     return reserve_with(models, count, slots, SIZE_MAX / 4, &bytes, (struct npu_runtime_bounds){0}) == NPU_DECLARATION_OK ? bytes : 0;
 }
-static unsigned long_run; /* case 26: many jobs through a session whose job field is 1 */
+static unsigned long_run; /* case 26: many jobs through one session, which sets no job count */
 static unsigned long_jobs_done;
 static unsigned fault_case; /* case 25: descriptors aimed at unmapped addresses; each such job must fail alone and the NPU recover */
 static unsigned gic_defer_left;
@@ -837,7 +837,6 @@ int main(int argc, char **argv)
     model.regs[0x20 / 4] = 0x9000; model.regs[0x24 / 4] = 0x9202;
     model.regs[0x30 / 4] = 0x1000003b; model.regs[0x28 / 4] = 0x20240101; model.regs[1] = IDLE;
     model.masked = 1;
-    session_record.npu.jobs = long_run ? 1 : 64;
     /* NPU_BOUNDS=capacity,graph_bytes,tensor_bytes reserves for graphs registered later (case 29 sets its own). */
     struct npu_runtime_bounds bounds = {0u, 16384, 65536};
     if (getenv("NPU_BOUNDS")) sscanf(getenv("NPU_BOUNDS"), "%u,%zu,%zu", &bounds.capacity, &bounds.graph_bytes, &bounds.tensor_bytes);

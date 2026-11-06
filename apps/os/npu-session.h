@@ -14,13 +14,13 @@
  * Evidence hashes bind external facts, never manufacture those facts. */
 struct os_npu_session {
     uint64_t magic,version,bytes,owner,command_admission,supervisor;
-    /* jobs: the workload of the diagnostic client (how many jobs it runs). It is not a limit: a session never fails
-     * because it has run a number of jobs (docs/designs/npu-resources.md). */
+    /* reserved: zero, and the OS reads nothing from it. The session sets no job count: an application runs the jobs it
+     * submits, and its receipt checks their count (docs/designs/npu-resources.md). */
     /* graph_region: the place plus one, in the application's manifest, of the input region that holds its compiled graphs behind
      * an index (apps/os/npu-graph-index.h), or zero when the application registers its graphs at run time. Admission copies the
      * graphs out of that region and sizes the pool from them. */
     /* flags: OS_NPU_OBSERVE, the manifest's npu.observe (tools/sunstone-manifest.py); no other bit is admitted. */
-    uint32_t pck_client,flags,jobs,graph_region;
+    uint32_t pck_client,flags,reserved,graph_region;
     /* A placement request for the NPU's reservation: its base and size, both zero when the allocator chooses (the normal case).
      * Any image accepts a request; the ledger reserves exactly that extent and refuses it unless it is free DRAM above the image
      * that stays inside one 4 GiB window. Only an explicit request sets these words: tools/session.py --npu-pool and the runner's

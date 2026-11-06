@@ -125,7 +125,7 @@ void os_npu_client_task(void *unused)
     (void)unused;struct os_npu_report report={0},*r=&report;
     const struct os_session *s=os_session();
     const int queued=os_npu_session_queued(&s->npu);
-    header(r);r->model=os_npu_client_model;r->jobs_selected=s->npu.jobs;r->pattern=OS_NPU_OUTPUT_PATTERN;
+    header(r);r->model=os_npu_client_model;r->pattern=OS_NPU_OUTPUT_PATTERN;
     for(;;) {
         if(os_npu_progress()!=1)RETAIN(0x601);
         int opened=os_npu_open();
@@ -161,9 +161,8 @@ wait_stop:
     }
 done:
     if(ss_application.manifest) {
-        /* The session selects no job count for an application, which runs the jobs it submits: the report gives that
-         * count in both words. The session's job word (1, as tools/session.py writes it) is reported only when no
-         * application ran. */
+        /* The session selects no job count: an application runs the jobs it submits, and the report gives that count in
+         * both words. An image without an application runs none, and both words are zero. */
         r->jobs=sdk_jobs;r->jobs_selected=sdk_jobs;r->output_bytes=sdk_output_bytes;r->pattern=0;
         if(!sdk_closed)ss_npu_service_fail();
     }
