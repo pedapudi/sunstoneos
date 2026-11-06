@@ -159,10 +159,12 @@ the thermal record's size field names the board prefix plus the records present.
 A service whose code the image does not link cannot be granted. I2S capture, the
 radio station, the A76, CPU clock and performance code are in every image. The
 headset service, with the Bluetooth stack and mSBC, is a library linked into an
-image whose application declares the `audio-headset` device. The build options
-`SUNSTONE_A733_OS_NPU`, `_NPU_QUEUE` and `_RESIDENT` decide the rest until each is
-replaced by its run-time form ([the design](designs/one-os-image.md)). The `all` gate variant
-links every service that is already a run-time option.
+image whose application declares the `audio-headset` device. The NPU service, its
+EL0 ring and its diagnostic observer are in every image too: the manifest's `npu`
+section grants the service, `in_flight` above one selects the ring, and `observe`
+admits the observer in a returning image. `SUNSTONE_A733_OS_RESIDENT` and
+`SUNSTONE_A733_OS_CPU_RETURN` decide the rest until each is replaced by its run-time
+form ([the design](designs/one-os-image.md)).
 
 A service that is not granted touches no hardware. Its start entry returns before
 it authorizes a pin, binds a callback, creates a task or reads a register, the

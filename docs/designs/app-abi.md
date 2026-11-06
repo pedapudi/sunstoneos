@@ -253,12 +253,12 @@ supplies the version word, state, total, tag and payload of its own replies.
   library of the application's sources, compiled with the core's flags and the
   generated `<name>-app.h`, and the path of its manifest. The manifest passes
   through `configure_file`, so a field may name a CMake variable.
-- **`add_sunstone_image(target LIFETIME supervised|resident|return SERVICES ... APPLICATION name)`**:
+- **`add_sunstone_image(target LIFETIME supervised|resident|return APPLICATION name)`**:
   the image. It runs the generator over the manifest and the OS device table,
-  links the core, the device services that the manifest lists, the selected OS
-  services and the application, and adds the manifest and the application
-  sources to the build identity. An image is a choice of lifetime, OS services
-  and application.
+  links the core, the device services that the manifest lists and the
+  application, and adds the manifest and the application sources to the build
+  identity. An image is a choice of lifetime and application; the session grants
+  the OS services, the NPU among them.
 
 ```cmake
 add_sunstone_application(hello-compute

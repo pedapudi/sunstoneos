@@ -17,7 +17,7 @@ The NPU path is implemented: native model decoding, mappings, shared-provider st
 | Per-job overhead removed, vendor operating point | host-tested; default point qualified | 852 MHz at 800 mV | [job overhead](../designs/npu-job-overhead.md) |
 | Loader admission and page-table containment | qualified on the board | MMU fault recovery about 32 ms | [loader admission](../designs/npu-loader-admission.md), `npu-status-admission-qualified` |
 | Graph kinds NN, SP, ACT, transpose, shader | qualified on the board | byte-equal to the simulator | `npu-status-board-scope` |
-| EL0 queue, 31 slots, depth 64, backpressure | qualified on the board | relu 5.45 µs per job, 183,400 jobs/s; add 10.4 µs | [resources](../designs/npu-resources.md), `npu-status-runs-and-queue` |
+| EL0 queue, 31 slots, depth 64, backpressure (the depth is the declared `in_flight` since the one-image NPU series) | qualified on the board | relu 5.45 µs per job, 183,400 jobs/s; add 10.4 µs | [resources](../designs/npu-resources.md), `npu-status-runs-and-queue` |
 | Run-time graph registration and links | qualified on the board | five graphs registered after start | `npu-status-runs-and-queue` |
 | Externally supplied models | qualified on the board | 18 graphs, 22.75 ms per pass | `npu-resources-external-models` |
 | Long attention layers (184 to 276 frames in 92-row blocks) | qualified on the board | 4.83 ms and 8.00 ms per job | `npu-status-long-attention-layers` |
@@ -40,6 +40,8 @@ Designs: [platform](../designs/npu-platform.md), [fast path](../designs/npu-fast
 6. Add exact per-job deadline interrupts through the scheduler's deadline facility (`work/scheduler-rt-1101`); do not add a device timer.
 7. Run the `restart-*` cases of no host check on a restart image; the other cases pass.
 8. The mimus encoder on the NPU, on the mimus branch.
+9. Take the 102,848-byte `npu` state of `apps/os/npu.c` from the ledger at the grant, so that an image without an NPU session holds only a pointer. Every image links the NPU service since the one-image NPU series ([one OS image](../designs/one-os-image.md)).
+10. Update the mimus encoder application for the one-image NPU series: its CMake no longer needs `SUNSTONE_A733_OS_NPU` and `_NPU_QUEUE`, and its ring depth is `NPU_ENCODER_NPU_IN_FLIGHT` from its generated header in place of `SS_NPU_QUEUE_MAX_DEPTH`.
 
 ## Evidence
 

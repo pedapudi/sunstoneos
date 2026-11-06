@@ -440,7 +440,8 @@ operations remain in the existing backup-first update path and must meet
 [goal section 4](goal.md). Read-only execution grants no card or NVMe writes.
 
 `--kind npu` supports two returning image formats. Generic OS images require
-both the returning watchdog contract and the linked OS NPU service, and use
+both the returning watchdog contract and an application that declares the NPU
+(`ss_application_npu`), and use
 typed service sessions. `--host-tree` selects their geometry, session producer
 and return validators; submission hashes that source tree as well as the runner.
 With `--preserve-dram`, before image uploads the runner saves the image and monitor DRAM, manifest WORK

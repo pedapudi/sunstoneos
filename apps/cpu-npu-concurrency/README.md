@@ -16,7 +16,9 @@ all NPU register reads. A first non-idle sample precedes counter snapshot A.
 Checked arithmetic wakes the existing worker after every CPU advances. The
 worker takes snapshot B and then requires the same job still RUNNING and busy.
 Every job also requires one actual IRQ receipt and a complete output match.
-The observer is compiled out unless `SUNSTONE_A733_OS_NPU_OBSERVE=ON`.
+The combined profile's manifest declares `"observe": true` in its `npu` section.
+The admission refuses that declaration outside the returning lifetime, and
+`ss_npu_observe` refuses an application that does not declare it.
 
 Work admits no new CPU unit after its five-second cutoff. NPU admission reserves
 2.2 seconds before that cutoff; CLOSE retains a separate two-second allowance.
@@ -35,12 +37,11 @@ repository's existing compiler and dependency configuration:
 -DSUNSTONE_A733_OS_CPU_RETURN=ON
 ```
 
-For the combined profile add NPU and observer enablement and the artifact map of the reviewed
+For the combined profile add the artifact map of the reviewed
 shufflenet-v2-published graph and vectors. The application carries the graph and registers it with the OS at run time (the
 image links none):
 
 ```text
--DSUNSTONE_A733_OS_NPU=ON -DSUNSTONE_A733_OS_NPU_OBSERVE=ON
 -DSUNSTONE_CPU_NPU_ARTIFACTS=<artifact-map.json>
 ```
 

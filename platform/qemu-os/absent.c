@@ -5,9 +5,9 @@
  * tasks that exist: the board starts no Type-C, power, USB host, radio or
  * network task, so none of these functions runs. An entry that does run
  * panics with its name, which turns a workload mismatch into a named stop.
- * The NPU and GPU services are not linked: their images select them with
- * build options that the virtual board does not set. The I2S capture service
- * is linked, as in every image, and its session grant is absent. */
+ * The GPU service is not linked: its images select it with a build option
+ * that the virtual board does not set. The NPU and I2S capture services are
+ * linked, as in every image, and their session grants are absent. */
 #include "FreeRTOS.h"
 #include "task.h"
 #include "platform.h"

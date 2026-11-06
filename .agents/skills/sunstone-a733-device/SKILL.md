@@ -272,7 +272,7 @@ Prevent recurring fixture failures at setup:
   invocations; copying compiler flags alone does not reproduce the configuration.
   A direct OS configure also needs `SUNSTONE_A733_OS=ON` and
   `SUNSTONE_MIMUS_BOARD_APPLICATION=ON`; options such as
-  `SUNSTONE_A733_OS_NPU=ON` do not enable the top-level target. Prefer an existing integration-gate variant
+  `SUNSTONE_A733_OS_CPU_RETURN=ON` do not enable the top-level target. Prefer an existing integration-gate variant
   when it matches the requested profile. The cached `cfg.sh` supplies dependency
   paths and reads the checkout's mimus source record, but does not select the OS.
   Resolving a linker symlink can change invocation behavior; system Python may
