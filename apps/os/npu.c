@@ -578,6 +578,11 @@ unsigned os_npu_links(void)
     const struct os_session *s=os_session();
     return s?s->npu.links:0;
 }
+int os_npu_observed(void)
+{
+    const struct os_session *s=os_session();
+    return s&&os_granted(OS_GRANT_NPU)&&(s->npu.flags&OS_NPU_OBSERVE);
+}
 int os_npu_queued(void)
 {
     const struct os_session *s=os_session();

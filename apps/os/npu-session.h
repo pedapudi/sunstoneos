@@ -7,7 +7,8 @@
  * version 3 adds the bounds of the graphs it loads at run time; version 4 drops the digest of the image's model catalogue:
  * a graph runs as compiled, admitted by its structure and isolated by the page tables and the NPU MMU, so the session
  * names no list of models. The last reserved word is now graph_region; the version stays 4, because an image without the field
- * refuses a nonzero word. Earlier versions are no longer admitted. */
+ * refuses a nonzero word. The word that named the image's client model is now flags; the version stays 4 for the same reason
+ * (the model was always zero, and zero flags is the session without them). Earlier versions are no longer admitted. */
 #define OS_NPU_SESSION_VERSION 4u
 /* Fixed optional profile; the supervisor grants this exact private interval.
  * Evidence hashes bind external facts, never manufacture those facts. */
@@ -18,7 +19,8 @@ struct os_npu_session {
     /* graph_region: the place plus one, in the application's manifest, of the input region that holds its compiled graphs behind
      * an index (apps/os/npu-graph-index.h), or zero when the application registers its graphs at run time. Admission copies the
      * graphs out of that region and sizes the pool from them. */
-    uint32_t pck_client,client_model,jobs,graph_region;
+    /* flags: OS_NPU_OBSERVE, the manifest's npu.observe (tools/sunstone-manifest.py); no other bit is admitted. */
+    uint32_t pck_client,flags,jobs,graph_region;
     /* A placement request for the NPU's reservation: its base and size, both zero when the allocator chooses (the normal case).
      * Any image accepts a request; the ledger reserves exactly that extent and refuses it unless it is free DRAM above the image
      * that stays inside one 4 GiB window. Only an explicit request sets these words: tools/session.py --npu-pool and the runner's
@@ -38,5 +40,9 @@ _Static_assert(sizeof(struct os_npu_session)==OS_NPU_SESSION_BYTES,"OS NPU sessi
  * service, with one client task and one slot; more is the EL0 ring, which keeps graph i resident in slot i and runs on the NPU
  * interrupt's core. EL3 admission, the EL1 service and the host pre-flight read the same rule. */
 static inline int os_npu_session_queued(const struct os_npu_session *n){return n->in_flight>1;}
+/* The application observes its jobs (ss_npu_observe): a diagnostic, admitted only in the returning lifetime. */
+#define OS_NPU_OBSERVE 1u
+static inline int os_npu_session_flags_admitted(const struct os_npu_session *n,int returning)
+{return !(n->flags&~OS_NPU_OBSERVE)&&(returning||!(n->flags&OS_NPU_OBSERVE));}
 #define OS_NPU_WORK_US UINT64_C(60000000)
 #endif

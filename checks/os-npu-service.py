@@ -85,7 +85,7 @@ UNITS = ('checks/os-npu-service.c', 'kernel/umem/umem.c', 'drivers/npu/npu_decla
          'drivers/npu/nbg_relocation.c', 'drivers/storage/storage_digest.c',
          # The EL0 ring is in every image; a declaration of more than one job in flight selects it (case 33).
          'kernel/appmem/app_region.c', 'apps/os/npu-queue.c', 'runtime/npu_app_queue.c', 'drivers/npu/npu_queue.c')
-DEFINES = ['SUNSTONE_A733_OS=1', 'SUNSTONE_A733_OS_NPU_OBSERVE=1',
+DEFINES = ['SUNSTONE_A733_OS=1',
            'SUNSTONE_BOARD_APPLICATION=1', 'SUNSTONE_BOARD_SUPERVISED=1', 'OS_NPU_CORE=0u']
 exe = host_rtos.build(out / 'exe', [*UNITS, generated / 'npu-models.c'], 'os-npu-service', defines=DEFINES, includes=includes,
                       flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'], link=['-Wl,--gc-sections'])

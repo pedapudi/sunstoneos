@@ -1,9 +1,11 @@
 /* Optional diagnostic sampling on the serialized runtime worker. The app
- * callback receives ordinary data; this adapter owns all register access. */
+ * callback receives ordinary data; this adapter owns all register access.
+ * Every image links it; only an application whose manifest declares
+ * npu.observe may register, and the admission refuses that declaration
+ * outside the returning lifetime (OS_NPU_OBSERVE, apps/os/npu-session.h). */
 #include "npu.h"
 #include "sunstone_app.h"
 #include "a733_npu_irq.h"
-#ifdef SUNSTONE_A733_OS_NPU_OBSERVE
 static struct npu_runtime *runtime;
 static int (*callback)(void *,unsigned,const struct ss_npu_observation *);
 static void *context;
@@ -11,7 +13,7 @@ static struct ss_npu_observation running;
 static unsigned first_irq;
 int ss_npu_observe(int (*fn)(void *,unsigned,const struct ss_npu_observation *),void *cookie)
 {
-    if(!fn||callback||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
+    if(!fn||callback||!os_npu_observed()||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
     callback=fn;context=cookie;return 1;
 }
 void ss_npu_observer_kick(void)
@@ -56,8 +58,3 @@ int os_npu_diagnostic_bind(struct npu_runtime *rt)
     if(!rt||runtime)return 0;
     runtime=rt;return npu_service_observe(&rt->service,sample,rt);
 }
-#else
-int ss_npu_observe(int (*fn)(void *,unsigned,const struct ss_npu_observation *),void *cookie)
-{(void)fn;(void)cookie;return 0;}
-void ss_npu_observer_kick(void){}
-#endif

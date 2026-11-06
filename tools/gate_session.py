@@ -4,8 +4,8 @@
 Usage: gate_session.py IMAGE.elf OUTPUT.bin
 
 An image whose application declares the NPU (ss_application_npu) takes its NPU extent from checks/data/npu-session-template (a
-queue entry's typed session), and the extent is made to describe this image: the client model is read from the image's own
-os_npu_client_model and the declaration from ss_application_npu; the session names no pool, because the image takes it from the
+queue entry's typed session), and the extent is made to describe this image: the declaration, the graph region and the flags
+are read from ss_application_npu; the session names no pool, because the image takes it from the
 ledger when it admits the application.
 
 The session is built by tools/board_images.py exactly as `board.py check` builds it: the same preparation, the same typed
@@ -29,7 +29,7 @@ import board_images as images
 
 
 NPU_MAGIC = 0x415337334f4e5031
-CLIENT_MODEL, GRAPH_REGION, DECLARATION = 52, 60, 240     # offsets in struct os_npu_session (apps/os/npu-session.h)
+FLAGS, GRAPH_REGION, DECLARATION = 52, 60, 240     # offsets in struct os_npu_session (apps/os/npu-session.h)
 
 
 def symbol_bytes(image, name):
@@ -45,17 +45,17 @@ def symbol_bytes(image, name):
 
 
 def npu_template(image, scratch):
-    """A template directory whose session carries this image's NPU client model."""
+    """A template directory whose session carries this image's NPU declaration."""
     import shutil
     import struct
     raw = bytearray((ROOT / 'checks/data/npu-session-template/session.bin').read_bytes())
     at = raw.find(struct.pack('<Q', NPU_MAGIC))
     if at < 0:
         raise SystemExit('the NPU session template has no NPU extent')
-    raw[at + CLIENT_MODEL:at + CLIENT_MODEL + 4] = symbol_bytes(image, 'os_npu_client_model')[:4]
-    declared = struct.unpack('<7I', symbol_bytes(image, images.NPU_DECLARED))
+    declared = struct.unpack('<8I', symbol_bytes(image, images.NPU_DECLARED))
     struct.pack_into('<6I', raw, at + DECLARATION, *declared[:6])
     struct.pack_into('<I', raw, at + GRAPH_REGION, declared[6])
+    struct.pack_into('<I', raw, at + FLAGS, declared[7])
     directory = Path(scratch) / 'template'
     directory.mkdir()
     (directory / 'session.bin').write_bytes(bytes(raw))

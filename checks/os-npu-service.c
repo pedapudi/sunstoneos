@@ -769,6 +769,10 @@ int main(int argc, char **argv)
         bad = n; bad.graphs = 0; assert(os_npu_declaration_admitted(&bad) == NPU_DECLARATION_GRAPHS);
         bad = n; bad.graphs = 17; assert(os_npu_declaration_admitted(&bad) == NPU_DECLARATION_OK); /* graphs have no table limit */
         bad = n; bad.graphs = 100000; assert(os_npu_declaration_admitted(&bad) == NPU_DECLARATION_OK);
+        /* The flags: observation is admitted only in the returning lifetime, and no other bit at all. */
+        bad = n; assert(os_npu_session_flags_admitted(&bad, 0) && os_npu_session_flags_admitted(&bad, 1));
+        bad.flags = OS_NPU_OBSERVE; assert(!os_npu_session_flags_admitted(&bad, 0) && os_npu_session_flags_admitted(&bad, 1));
+        bad.flags = 2; assert(!os_npu_session_flags_admitted(&bad, 0) && !os_npu_session_flags_admitted(&bad, 1));
         const struct npu_declaration good = {1, 1, 1, 0};
         const struct npu_tables small = {8, 16, 64, 256}, large = {UINT32_MAX, 100000, 1000000, 100000};
         const struct npu_image_needs none = {1, 1, 0}, two_graphs = {1, 2, 0}, queued = {3, 1, 2};

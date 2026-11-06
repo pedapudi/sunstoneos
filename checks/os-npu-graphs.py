@@ -34,7 +34,7 @@ UNITS = ('checks/os-npu-service.c', 'kernel/umem/umem.c', 'drivers/npu/npu_decla
          'drivers/npu/nbg_checksum.c', 'drivers/npu/nbg_relocation.c', 'drivers/storage/storage_digest.c',
          # checks/os-npu-service.c models the EL0 ring too (case 33), so its units are linked.
          'kernel/appmem/app_region.c', 'apps/os/npu-queue.c', 'runtime/npu_app_queue.c', 'drivers/npu/npu_queue.c')
-DEFINES = ['SUNSTONE_A733_OS=1', 'SUNSTONE_A733_OS_NPU_OBSERVE=1',
+DEFINES = ['SUNSTONE_A733_OS=1',
            'SUNSTONE_BOARD_APPLICATION=1', 'SUNSTONE_BOARD_SUPERVISED=1', 'OS_NPU_CORE=0u']
 ran = []
 for label, listing in (('a1', 'models-a1.json'), ('a2', 'models-a2.json'), ('b', 'models-b.json'), ('sh', 'models-sh.json')):

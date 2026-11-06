@@ -1219,7 +1219,7 @@ def finite_npu_cases(out, image_root, state, fixture, host_tree=None, cases=()):
 def preflight_cases(out):
     """An unavailable host pre-flight refuses; only a recorded --no-preflight reason lets it through."""
     root=out/'preflight';root.mkdir()
-    typed={'generic':True,'symbols':{'ss_application_npu':(0,28)}}
+    typed={'generic':True,'symbols':{'ss_application_npu':(0,32)}}
     cache=root/'cache';cache.mkdir()           # no capture and no recorded words here, as on a machine without the evidence cache
     on={'status':'ON','words':{hex(a):m for a,m in images.NPU_ENTRY_GATES.items()}|{hex(a):8 for a in images.NPU_PCK4}}
     def prepare(args,info,live,out_dir,**kw):

@@ -18,4 +18,5 @@ extern const struct os_npu_vector os_npu_inputs[],os_npu_references[];
 extern const unsigned os_npu_input_count,os_npu_output_count;
 int npu_service_observe(struct npu_service *,void (*)(void *,const struct npu_service *,unsigned),void *);
 unsigned npu_service_irq_completions(const struct npu_service *);
+int os_npu_observed(void);
 #endif

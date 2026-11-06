@@ -78,6 +78,16 @@ function(add_sunstone_image target)
       emit --no-application --output "${directory}" COMMAND_ERROR_IS_FATAL ANY)
     set(manifest_source)
   endif()
+  # An application that observes its NPU jobs (npu.observe, apps/os/npu-observe.c) runs a diagnostic: only a returning image
+  # links it, and the admission refuses the declaration in any other lifetime too (OS_NPU_OBSERVE, apps/os/npu-session.h).
+  if(IMAGE_APPLICATION)
+    get_target_property(observe_manifest ${IMAGE_APPLICATION} SUNSTONE_MANIFEST)
+    file(READ "${observe_manifest}" observe_manifest_text)
+    string(JSON observe ERROR_VARIABLE observe_error GET "${observe_manifest_text}" npu observe)
+    if(NOT observe_error AND observe AND NOT IMAGE_LIFETIME STREQUAL "return")
+      message(FATAL_ERROR "${IMAGE_APPLICATION} observes its NPU jobs (npu.observe), which only the returning lifetime admits")
+    endif()
+  endif()
   # The session lifetime comes from the application's manifest (tools/session_lifetime.py): startup, setup, run_us and
   # return_reserve_us. An image with no application keeps the header's default. The resident lifetime has no deadline.
   if(IMAGE_APPLICATION AND NOT IMAGE_LIFETIME STREQUAL "resident")

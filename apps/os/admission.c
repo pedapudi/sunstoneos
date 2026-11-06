@@ -14,6 +14,12 @@ _Static_assert(A733_SMP_CONTRACT_MAGIC==A733_OS_CONTRACT_MAGIC,"supervised OS co
 /* Offline card preparation reads these compiled constants, so a manifest
  * cannot relabel a supervised image or another session layout as resident. */
 __attribute__((used,retain)) const uint64_t os_contract_profile[2]={A733_SMP_CONTRACT_MAGIC,0};
+/* Whether the lifetime returns: an NPU session that observes its jobs is admitted only then (OS_NPU_OBSERVE). */
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+#define OS_RETURNING 1
+#else
+#define OS_RETURNING 0
+#endif
 int os_session_valid(const struct os_session *s)
 {
     if(!s||!a733_board_session_valid(&s->board,0)||!os_workload_valid(s->board.workload)||
@@ -66,7 +72,7 @@ int os_session_valid(const struct os_session *s)
         const struct os_npu_session *n=&s->npu;
         if(n->magic!=OS_NPU_SESSION_MAGIC||n->version!=OS_NPU_SESSION_VERSION||n->bytes!=sizeof(*n)||!n->owner||
            !n->command_admission||!n->supervisor||n->pck_client>=16||n->pck_client==s->board.pck_client||
-           n->client_model!=os_npu_client_model||n->graph_region>SS_REGIONS||os_npu_declaration_admitted(n)!=NPU_DECLARATION_OK||
+           !os_npu_session_flags_admitted(n,OS_RETURNING)||n->graph_region>SS_REGIONS||os_npu_declaration_admitted(n)!=NPU_DECLARATION_OK||
            !present(n->admission,32)||
            !present(n->clock,32)||!present(n->power,32)||!present(n->supervision,32)||!present(n->ddr,32)||
            n->owner==s->thermal_owner||n->owner==s->board.latch_owner||n->owner==s->board.latch_m_owner)

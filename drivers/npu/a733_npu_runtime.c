@@ -524,10 +524,8 @@ static int read_reg(void *cookie, unsigned offset, uint32_t *out)
     return good(rt) && a733_npu_startup_window_open(rt->startup) &&
         a733_npu_native_operations.read(&rt->native, offset, out);
 }
-static int write_reg(void *cookie, unsigned offset, uint32_t value)
+static int write_device(struct npu_runtime *rt, unsigned offset, uint32_t value)
 {
-    struct npu_runtime *rt = cookie;
-    ++rt->counters.register_writes;
     int written = good(rt) && a733_npu_startup_window_open(rt->startup) &&
         a733_npu_native_operations.write(&rt->native, offset, value);
 #ifdef SUNSTONE_NPU_QUEUE_TIMING
@@ -536,16 +534,28 @@ static int write_reg(void *cookie, unsigned offset, uint32_t value)
         __asm__ volatile("dsb sy\n isb\n mrs %0,cntpct_el0" : "=r"(rt->doorbell_ticks) :: "memory");
     }
 #endif
-#ifdef SUNSTONE_A733_OS_NPU_OBSERVE
-    if(written && offset==0x3a4 && rt->service.observe) {
+    return written;
+}
+/* Under the diagnostic observer: the same write, then the counter at the trigger write (0x3a4). It is out of line so that the
+ * ordinary write costs one load and one branch on the observer before its tail call. */
+static __attribute__((noinline, cold)) int write_observed(struct npu_runtime *rt, unsigned offset, uint32_t value)
+{
+    int written = write_device(rt, offset, value);
+    if(written && offset==0x3a4) {
 #ifdef __aarch64__
         __asm__ volatile("mrs %0,cntpct_el0":"=r"(rt->service.trigger_ticks)::"memory");
 #else
         rt->service.trigger_ticks=a733_npu_native_operations.microseconds(&rt->native)*24;
 #endif
     }
-#endif
     return written;
+}
+static int write_reg(void *cookie, unsigned offset, uint32_t value)
+{
+    struct npu_runtime *rt = cookie;
+    ++rt->counters.register_writes;
+    if(__builtin_expect(rt->service.observe!=NULL,0))return write_observed(rt, offset, value);
+    return write_device(rt, offset, value);
 }
 static uint64_t now(void *cookie)
 { struct npu_runtime *rt = cookie; return a733_npu_native_operations.microseconds(&rt->native); }

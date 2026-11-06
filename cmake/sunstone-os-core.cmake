@@ -7,7 +7,6 @@ option(SUNSTONE_A733_OS_USB_CLASSES "OS input, serial and camera host services" 
 option(SUNSTONE_A733_OS_USB_JPEG "OS camera MJPEG hardware decoder" OFF)
 option(SUNSTONE_A733_OS_DMA "Adopted DMA0 RAM-copy service with normal retirement" OFF)
 option(SUNSTONE_A733_OS_RADIO_SCAN "Radio station that scans and returns: board workload 3, no USB host, scan-only profile, normal return" OFF)
-option(SUNSTONE_A733_OS_NPU_OBSERVE "Opt-in serialized NPU diagnostic sampling" OFF)
 option(SUNSTONE_A733_OS_GPU "OS GPU compute queue" OFF)
 option(SUNSTONE_GPU_TIMING "Capture optional GPU job timing records" OFF)
 option(SUNSTONE_GPU_NSI_PMU "Capture experimental GPU master NSI traffic counters" OFF)
@@ -24,9 +23,6 @@ set(SUNSTONE_A733_OS_GPU_BISECT "" CACHE STRING
 option(SUNSTONE_A733_OS_CPU_RETURN "Application result with success-only ROM return" OFF)
 if(SUNSTONE_A733_OS_RADIO_SCAN AND NOT SUNSTONE_A733_OS_CPU_RETURN)
   message(FATAL_ERROR "The scanning radio station needs SUNSTONE_A733_OS_CPU_RETURN=ON")
-endif()
-if(SUNSTONE_A733_OS_NPU_OBSERVE AND NOT SUNSTONE_A733_OS_CPU_RETURN)
-  message(FATAL_ERROR "NPU diagnostic sampling requires the returning lifetime")
 endif()
 option(SUNSTONE_GPU_FAST_TIMING "Capture optional GPU IRQ-entry counter timestamps" OFF)
 option(SUNSTONE_A733_OS_CORE "Build the OS core without an application" OFF)
@@ -185,10 +181,7 @@ list(APPEND os_added apps/os/npu.c apps/os/npu-declaration.c apps/os/npu-graph-i
   drivers/npu/a733_npu_controller.c drivers/npu/a733_npu_memory.c
   drivers/npu/a733_npu_mmu.c drivers/npu/nbg_model.c drivers/npu/nbg_assembly.c drivers/npu/nbg_checksum.c
   drivers/npu/nbg_relocation.c drivers/npu/a733_npu_startup.c drivers/npu/a733_npu_platform.c
-  drivers/npu/a733_npu_platform_native.c)
-if(SUNSTONE_A733_OS_CPU_RETURN)
-  list(APPEND os_added apps/os/npu-observe.c)
-endif()
+  drivers/npu/a733_npu_platform_native.c apps/os/npu-observe.c)
 file(GLOB os_npu_headers "${os_root}/include/*npu*.h" "${os_root}/include/nbg*.h")
 list(APPEND os_external_inputs ${os_npu_headers}
   "${os_root}/platform/a733/npu_irq.c" "${os_root}/include/a733_npu_irq.h"
@@ -441,9 +434,6 @@ target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICAT
   A733_SMP_CONTRACT_MAGIC=${os_contract_magic} A733_SMP_RESULT_MAGIC=${os_result_magic}
   "$<$<BOOL:${SUNSTONE_A733_OS_RESIDENT}>:SUNSTONE_BOARD_RESIDENT=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_SCAN}>:SUNSTONE_A733_OS_RADIO_SCAN=1>")
-if(SUNSTONE_A733_OS_NPU_OBSERVE)
-  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_NPU_OBSERVE=1)
-endif()
 # The EL0 ring is linked too; the application's declaration selects it (apps/os/npu-session.h, os_npu_session_queued).
 target_sources(sunstone-a733-os-core PRIVATE "${os_root}/runtime/npu_app_queue.c" "${os_root}/apps/os/npu-queue.c")
 if(SUNSTONE_A733_OS_GPU)

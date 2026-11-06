@@ -20,7 +20,6 @@ IMAGES = {
         '-DSUNSTONE_APPLICATION=cpu-npu-load',
         '-DSUNSTONE_APPLICATION_cpu-npu-load_ROOT={source}/apps/cpu-npu-concurrency',
         '-DSUNSTONE_A733_OS_CPU_RETURN=ON',
-        '-DSUNSTONE_A733_OS_NPU_OBSERVE=ON',
         '-DSUNSTONE_CPU_NPU_ARTIFACTS={cache}/build/npu-board/session-artifacts.json',
     ], 'target': 'sunstone-a733-os', 'elf': 'sunstone-a733-os.elf'},
     # the CPU-return GPU image of apps/gpu-lifecycle (apps/gpu-lifecycle/README.md)

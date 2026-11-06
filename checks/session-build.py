@@ -91,12 +91,16 @@ def main():
         passed.append(f"{name} image: {len(raw)} bytes, services {', '.join(record['services'])}, decoded without disagreement, admitted: true")
     # mutation
     image, raw, inputs = built['npu']
+    flags = bytes(raw).find(struct.pack('<Q', host.SERVICE_MAGIC[host.NPU])) + 52              # os_npu_session.flags
     mutated = bytearray(raw)
-    mutated[bytes(mutated).find(struct.pack('<Q', host.SERVICE_MAGIC[host.NPU])) + 52] ^= 1      # os_npu_session.client_model
-    assert any('npu client_model' in p for p in session.inspect(bytes(mutated), image, host)['problems'])
+    mutated[flags] ^= 1                                                                             # OS_NPU_OBSERVE
+    assert any('npu flags' in p for p in session.inspect(bytes(mutated), image, host)['problems'])
+    mutated = bytearray(raw)
+    mutated[flags] ^= 2                                                                             # no such flag
+    assert any('npu flags' in p for p in session.inspect(bytes(mutated), image, host)['problems'])
     verdict = session.admit(image, bytes(mutated))
     assert verdict['admitted'] is False, verdict
-    passed.append('a client model that is not the image\'s is reported by check --image and refused by the EL3 admission (%s)' % verdict['refusal'].split(': ')[-1])
+    passed.append('NPU flags other than the application declares are reported by check --image, and an undefined flag is refused by the EL3 admission (%s)' % verdict['refusal'].split(': ')[-1])
     image, raw, _ = built['control']
     wrong = bytearray(raw)
     wrong[592 + 32 + 7] ^= 1                  # a byte of the session header's manifest digest

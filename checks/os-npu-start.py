@@ -214,8 +214,8 @@ class Start:
 
 def run(image, session_path, case='accept'):
     data = bytearray(Path(session_path).read_bytes())
-    if case == 'wrong-client-model':
-        data[1044] ^= 1                       # os_npu_session.client_model (the NPU record starts at 992 in the template, the field at 52)
+    if case == 'undefined-npu-flag':
+        data[1044] ^= 2                       # os_npu_session.flags, a bit with no meaning (the NPU record starts at 992 in the template, the field at 52)
     # The runner binds a bundle's session to the ELF it launches by writing the
     # image's build identifier into the record; do the same for this ELF.
     s = Start(image, bytes(data))
@@ -289,7 +289,7 @@ def main():
     p.add_argument('--image', type=Path, required=True)
     p.add_argument('--session', type=Path, required=True)
     p.add_argument('--output', type=Path)
-    p.add_argument('--case', default='accept', choices=('accept', 'no-route', 'wrong-client-model'))
+    p.add_argument('--case', default='accept', choices=('accept', 'no-route', 'undefined-npu-flag'))
     a = p.parse_args()
     r = run(a.image, a.session, a.case)
     print(json.dumps(r, indent=1, default=str))

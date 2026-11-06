@@ -207,11 +207,17 @@ void NPU_IRQ_HANDLER(void)
         return;
     }
 #if !defined(NPU_IRQ_EXTERNAL_BIND) || defined(NPU_IRQ_CAPTURE_TICKS)
-    uint64_t now;__asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(now) :: "memory");
-    __atomic_store_n(&delivered_ticks,now,__ATOMIC_RELEASE);
 #ifdef NPU_IRQ_CAPTURE_TICKS
-    __atomic_add_fetch(&delivered_count,1,__ATOMIC_RELEASE);
+    /* An expression of the including unit: capture only when it holds. */
+    if(__builtin_expect(NPU_IRQ_CAPTURE_TICKS,0))
 #endif
+    {
+        uint64_t now;__asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(now) :: "memory");
+        __atomic_store_n(&delivered_ticks,now,__ATOMIC_RELEASE);
+#ifdef NPU_IRQ_CAPTURE_TICKS
+        __atomic_add_fetch(&delivered_count,1,__ATOMIC_RELEASE);
+#endif
+    }
 #endif
     UBaseType_t saved=taskENTER_CRITICAL_FROM_ISR();
     int ok=gicv3_spi_mask(&source);

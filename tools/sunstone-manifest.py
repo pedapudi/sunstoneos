@@ -186,7 +186,7 @@ def load(path):
     # the session record carries it (npu_word, apps/os/host.py), and the operating system admits it against capacity.
     if 'npu' in raw:
         n = raw['npu']
-        require(set(n) <= {'slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes', 'graph_region'},
+        require(set(n) <= {'slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes', 'graph_region', 'observe'},
                 name + ': unknown npu keys')
         require({'slots', 'in_flight', 'graphs'} <= set(n), name + ': npu declares slots, in_flight and graphs')
 
@@ -196,6 +196,10 @@ def load(path):
                     'graphs': count(n['graphs'], 'graphs', 1), 'links': count(n.get('links', 0), 'links', 0),
                     'graph_bytes': count(n.get('graph_bytes', 0), 'graph_bytes', 0),
                     'tensor_bytes': count(n.get('tensor_bytes', 0), 'tensor_bytes', 0), 'graph_region': 0}
+        # observe: the application samples its running jobs (ss_npu_observe), a diagnostic that the image build and the
+        # admission refuse outside the returning lifetime. It becomes the session's OS_NPU_OBSERVE flag.
+        require(n.get('observe', False) in (True, False), name + ': npu observe is true or false')
+        m['npu']['flags'] = 1 if n.get('observe', False) else 0
         if 'graph_region' in n:
             require(isinstance(n['graph_region'], str), name + ': npu graph_region is the name of an input region')
             m['npu_graph_region_name'] = n['graph_region']
@@ -579,8 +583,8 @@ def c_tables(m):
         # The application's NPU declaration, linked for the host tools that build its session: a session grants the NPU
         # only to an application that declares it (tools/session.py, tools/board_images.py).
         n = m['npu']
-        lines += ['__attribute__((used,retain)) const uint32_t ss_application_npu[7]={%du,%du,%du,%du,%du,%du,%du};' % tuple(
-            n[k] for k in ('slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes', 'graph_region')), '']
+        lines += ['__attribute__((used,retain)) const uint32_t ss_application_npu[8]={%du,%du,%du,%du,%du,%du,%du,%du};' % tuple(
+            n[k] for k in ('slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes', 'graph_region', 'flags')), '']
     # Placement is an OS setting; the GPU route uses the same admitted pair.
     if noapp:
         lines=[line for line in lines if not any(key in line for key in ('os_core-app.h','os_core_init','app_stack','app_task','{\"os-core\",os_application'))]

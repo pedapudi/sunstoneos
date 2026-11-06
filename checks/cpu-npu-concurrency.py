@@ -33,16 +33,24 @@ def run(command,expected=0):
     return r
 adapter=a.out/'npu-observe.c';shutil.copyfile(ROOT/'apps/os/npu-observe.c',adapter)
 disabled=a.out/'observer-disabled.c'
-disabled.write_text('#include "sunstone_app.h"\nstatic int callback(void *c,unsigned e,const struct ss_npu_observation *s){(void)c;(void)e;(void)s;return 1;}\nint main(void){if(ss_npu_observe(callback,0)!=0)return 1;ss_npu_observer_kick();return 0;}\n')
+# A session that does not declare observation (OS_NPU_OBSERVE): the adapter refuses the observer and touches no register,
+# task or counter, so every one of those is a trap here.
+disabled.write_text('#include <stdlib.h>\n#include "npu.h"\n#include "sunstone_app.h"\n#include "a733_npu_irq.h"\n'
+    'static int callback(void *c,unsigned e,const struct ss_npu_observation *s){(void)c;(void)e;(void)s;return 1;}\n'
+    'int os_npu_observed(void){return 0;}\n'
+    'int xTaskGetSchedulerState(void){abort();}\nvoid xTaskNotifyGive(TaskHandle_t t){(void)t;abort();}\n'
+    'int npu_service_observe(struct npu_service *s,void (*f)(void *,const struct npu_service *,unsigned),void *c){(void)s;(void)f;(void)c;abort();}\n'
+    'uint64_t ss_counter_ticks(void){abort();}\nuint64_t npu_application_irq_ticks(void){abort();}\nunsigned npu_application_irq_count(void){abort();}\n'
+    'int main(void){if(ss_npu_observe(callback,0)!=0)return 1;ss_npu_observer_kick();return 0;}\n')
 run([a.cc,'-std=c11','-O2','-I'+str(ROOT/'checks/cpu-npu-concurrency'),'-I'+str(ROOT/'include'),
      str(disabled),str(adapter),'-o',str(a.out/'observer-disabled')])
 run([str(a.out/'observer-disabled')])
-results.append(dict(case='observer-disabled-unsupported-no-register-or-task-access',passed=True))
+results.append(dict(case='observer-undeclared-refused-no-register-or-task-access',passed=True))
 def build(label,mode,source=APP/'main.c'):
     output=a.out/label
     command=[a.cc,'-std=c11','-O2','-ffp-contract=off','-pthread',
         '-I'+str(ROOT/'checks/cpu-npu-concurrency'),'-I'+str(ROOT/'include'),'-I'+str(APP)]
-    if mode:command+=['-DCPU_NPU_WITH_NPU=1','-DSUNSTONE_A733_OS_NPU_OBSERVE=1']
+    if mode:command+=['-DCPU_NPU_WITH_NPU=1']
     run([*command,str(source),*([str(adapter)] if mode else []),str(ROOT/'checks/cpu-npu-concurrency/producer.c'),'-o',str(output)])
     return output
 if not a.disabled_only:

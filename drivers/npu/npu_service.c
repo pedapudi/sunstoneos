@@ -695,13 +695,10 @@ int npu_service_runtime_parked(const struct npu_service *s)
 int npu_service_observe(struct npu_service *s,
     void (*observe)(void *,const struct npu_service *,unsigned),void *cookie)
 {
-#ifdef SUNSTONE_A733_OS_NPU_OBSERVE
+    /* Set once, before the scheduler starts: the sites below branch on a pointer that no later code writes. */
     if(!s||!s->initialized||!s->runtime||!observe||s->observe||
        xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
     s->observe=observe;s->observe_cookie=cookie;return 1;
-#else
-    (void)s;(void)observe;(void)cookie;return 0;
-#endif
 }
 static void runtime_settle(struct npu_service *s)
 {
@@ -710,9 +707,7 @@ static void runtime_settle(struct npu_service *s)
     if (c->state == A733_NPU_DONE && s->running != NPU_SERVICE_NONE) {
         void *token; int stopped;
         unsigned client = s->running;
-#ifdef SUNSTONE_A733_OS_NPU_OBSERVE
-        if(s->observe)s->observe(s->observe_cookie,s,2);
-#endif
+        if(__builtin_expect(s->observe!=NULL,0))s->observe(s->observe_cookie,s,2);
         if (a733_npu_reap(c, &token, &stopped) && !stopped) {
             s->running = NPU_SERVICE_NONE; s->member[client].state = MEMBER_QUEUED;
             rt->hooks.finished(rt->context, client, 0);
@@ -815,9 +810,7 @@ static void runtime_worker(struct npu_service *s)
         }
         if (!controller_active(s) && s->controller.state != A733_NPU_FAULT)
             (void)s->ops.microseconds(s->cookie);
-#ifdef SUNSTONE_A733_OS_NPU_OBSERVE
-        if(s->observe&&s->controller.state==A733_NPU_RUNNING)s->observe(s->observe_cookie,s,0);
-#endif
+        if(__builtin_expect(s->observe!=NULL,0)&&s->controller.state==A733_NPU_RUNNING)s->observe(s->observe_cookie,s,0);
         int progressed = runtime_progress(s, timed_out);
         if (s->controller.state == A733_NPU_FAULT) s->runtime->marks |= NPU_MARK_PROGRESS_DONE;
         runtime_settle(s);
@@ -1136,9 +1129,7 @@ int npu_service_start(struct npu_service *s, unsigned client, unsigned command, 
     if (!a733_npu_submit(c, &s->commands[command], timeout) && c->state != A733_NPU_FAULT) return -1;
     /* A faulted start stays attributed to its member and is retained. */
     s->member[client].state = MEMBER_RUNNING; s->running = client;
-#ifdef SUNSTONE_A733_OS_NPU_OBSERVE
-    if(s->observe&&c->state==A733_NPU_RUNNING)s->observe(s->observe_cookie,s,1);
-#endif
+    if(__builtin_expect(s->observe!=NULL,0)&&c->state==A733_NPU_RUNNING)s->observe(s->observe_cookie,s,1);
     return c->state == A733_NPU_FAULT ? -1 : 1;
 }
 void npu_service_release(struct npu_service *s, unsigned client, enum npu_service_result result,

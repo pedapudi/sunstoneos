@@ -15,7 +15,7 @@ apps/npu-graphs/host.py writes) to DIR/decoder.py, the file that `board.py submi
   which service records             the thermal record always; the CPU clock grant only with --clock-grant (and --perf), for a manifest
                                     that declares cpu.clock_grants (cpu.perf); the NPU service when the application declares the NPU
                                     (ss_application_npu); a DMA service or any device (the radio among them) is refused
-  NPU client model                  the image's os_npu_client_model
+  NPU flags                         the image's ss_application_npu (the manifest's npu.observe)
   NPU pool request                  --npu-pool BASE:BYTES (default 0:0: the allocator chooses)
   NPU declaration                   the image's ss_application_npu (the manifest's npu section); --npu-declaration D (a manifest with an
                                     npu section, or a bare slots/in_flight/graphs/links object) and --manifest M must agree with it
@@ -81,7 +81,7 @@ THERMAL = [('magic', 'Q'), ('version', 'Q'), ('bytes', 'Q'), ('thermal_owner', '
 GRANT = [('magic', 'Q'), ('version', 'Q'), ('bytes', 'Q'), ('owner', 'Q'), ('epoch', 'Q'), ('generation', 'Q'), ('clusters', 'I'),
          ('max_mhz', '2I'), ('changes', 'I'), ('perf', 'I'), ('reserved', '28s')]
 NPU = [('magic', 'Q'), ('version', 'Q'), ('bytes', 'Q'), ('owner', 'Q'), ('command_admission', 'Q'), ('supervisor', 'Q'),
-       ('pck_client', 'I'), ('client_model', 'I'), ('jobs', 'I'), ('graph_region', 'I'), ('pool_base', 'Q'), ('pool_bytes', 'Q'),
+       ('pck_client', 'I'), ('flags', 'I'), ('jobs', 'I'), ('graph_region', 'I'), ('pool_base', 'Q'), ('pool_bytes', 'Q'),
        ('admission', '32s'), ('clock', '32s'), ('power', '32s'), ('supervision', '32s'), ('ddr', '32s'),
        ('slots', 'I'), ('in_flight', 'I'), ('graphs', 'I'), ('links', 'I'), ('graph_bytes', 'I'), ('tensor_bytes', 'I')]
 LAYOUTS = {'prefix': (PREFIX, 592), 'thermal': (THERMAL, 216), 'cpu_grant': (GRANT, 96), 'npu': (NPU, 264)}
@@ -92,7 +92,7 @@ OS_MAGIC = 0x415337334f534131                                   # the thermal re
 DERIVED = {'prefix': {'magic', 'version', 'bytes', 'epoch', 'generation', 'lease', 'image', '_pad'},
            'thermal': {'magic', 'version', 'bytes'},
            'cpu_grant': {'magic', 'version', 'bytes', 'epoch', 'generation', 'clusters', 'max_mhz', 'perf', 'reserved'},
-           'npu': {'magic', 'version', 'bytes', 'client_model', 'graph_region', 'pool_base', 'pool_bytes',
+           'npu': {'magic', 'version', 'bytes', 'flags', 'graph_region', 'pool_base', 'pool_bytes',
                    'slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes'}}
 # Symbols that tell which services a session grants: every OS image links the NPU service, and an application that declares
 # the NPU in its manifest records the declaration (tools/sunstone-manifest.py).
@@ -269,7 +269,7 @@ def describe(image, manifest_path=None, npu_declaration=None, devices=None, host
         plan['perf'] = {'high': 1, 'low': 2}[perf] if perf else 0
     if SYMBOLS['npu'] in symbols:
         plan['services'].append('npu')
-        linked = struct.unpack('<7I', symbol_bytes(elf, symbols, SYMBOLS['npu']))
+        linked = struct.unpack('<8I', symbol_bytes(elf, symbols, SYMBOLS['npu']))
         plan['npu_declaration'] = linked[:6]
         plan['npu_declaration_from'] = '%s (%s)' % (image, SYMBOLS['npu'])
         plan['npu_graph_region'] = linked[6]
@@ -279,7 +279,7 @@ def describe(image, manifest_path=None, npu_declaration=None, devices=None, host
         for source, values in given:
             if values != linked[:6]:
                 raise SessionError('npu declaration: %s declares %s and the image %s' % (source, values, linked[:6]))
-        plan['npu_client_model'] = struct.unpack('<I', symbol_bytes(elf, symbols, 'os_npu_client_model')[:4])[0]
+        plan['npu_flags'] = linked[7]
     elif npu_declaration or declared:
         raise SessionError('npu declaration: the application of %s declares no NPU, so its session grants none' % image)
     plan['profile'] = 'npu' if 'npu' in plan['services'] else 'control'
@@ -323,7 +323,7 @@ def build_session(plan, inputs, fact_file=FACTS, host=None, entropy=secrets.rand
         slots, in_flight, graphs, links, graph_bytes, tensor_bytes = plan['npu_declaration']
         npu = profile_values(profile, 'npu', {
             'magic': host.SERVICE_MAGIC[host.NPU], 'version': host.SERVICE_VERSION[host.NPU], 'bytes': host.SERVICE_BYTES[host.NPU],
-            'client_model': plan['npu_client_model'], 'graph_region': plan['npu_graph_region'], 'pool_base': plan['npu_pool_request'][0], 'pool_bytes': plan['npu_pool_request'][1],
+            'flags': plan['npu_flags'], 'graph_region': plan['npu_graph_region'], 'pool_base': plan['npu_pool_request'][0], 'pool_bytes': plan['npu_pool_request'][1],
             'slots': slots, 'in_flight': in_flight, 'graphs': graphs, 'links': links,
             'graph_bytes': graph_bytes, 'tensor_bytes': tensor_bytes})
         services[host.NPU] = pack('npu', npu)
@@ -413,8 +413,8 @@ def inspect(raw, image=None, host=None):
         if npu and SYMBOLS['npu'] not in symbols:
             problems.append('npu: the session has an NPU record and the application declares no NPU')
         if npu and SYMBOLS['npu'] in symbols:
-            if npu['client_model'] != struct.unpack('<I', symbol_bytes(elf, symbols, 'os_npu_client_model')[:4])[0]:
-                problems.append('npu client_model: %d differs from the image\'s os_npu_client_model' % npu['client_model'])
+            if npu['flags'] != struct.unpack('<8I', symbol_bytes(elf, symbols, SYMBOLS['npu']))[7]:
+                problems.append('npu flags: %#x differ from those the application declares (ss_application_npu)' % npu['flags'])
             if bool(npu['pool_base']) != bool(npu['pool_bytes']):
                 problems.append('npu pool request: base %#x and bytes %#x are both set or both zero' % (npu['pool_base'], npu['pool_bytes']))
         manifest = host.image_manifest(image)['manifest'] or {}
@@ -462,8 +462,8 @@ def show(report, stream=sys.stdout):
             for i, item in enumerate(value):
                 print('input %d: %d bytes sha256 %s' % (i, item['bytes'], item['sha256']), file=stream)
         elif name == 'npu':
-            print('npu: client_model %d jobs %d pool request %#x+%#x declaration slots %d in_flight %d graphs %d links %d '
-                  'graph_bytes %d tensor_bytes %d' % (value['client_model'], value['jobs'], value['pool_base'],
+            print('npu: flags %#x jobs %d pool request %#x+%#x declaration slots %d in_flight %d graphs %d links %d '
+                  'graph_bytes %d tensor_bytes %d' % (value['flags'], value['jobs'], value['pool_base'],
                                                       value['pool_bytes'], value['slots'], value['in_flight'], value['graphs'],
                                                       value['links'], value['graph_bytes'], value['tensor_bytes']), file=stream)
         elif name == 'cpu_grant':

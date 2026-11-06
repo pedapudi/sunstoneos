@@ -119,6 +119,8 @@ int ss_npu_run(unsigned model,const void *input,size_t input_bytes,void *output,
 int ss_npu_close(void){return atomic_load(&request)==1?0:1;}
 extern void cpu_npu_load_init(void),cpu_npu_load_main(const struct ss_grant *);
 extern int os_npu_diagnostic_bind(struct npu_runtime *);
+/* The session of this model declares observation (OS_NPU_OBSERVE). */
+int os_npu_observed(void){return 1;}
 int main(int argc,char **argv)
 {
     if(argc!=3)return 4;scenario=argv[1];destination=argv[2];began=ns();

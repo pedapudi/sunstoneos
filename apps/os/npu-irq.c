@@ -1,8 +1,7 @@
 /* INTID 97 on core 1; callbacks and the bind are platform/a733/npu_irq.c's. */
 #include "npu.h"
-#ifdef SUNSTONE_A733_OS_NPU_OBSERVE
-#define NPU_IRQ_CAPTURE_TICKS 1
-#endif
+/* The delivery counter and count are kept only under the diagnostic observer (apps/os/npu-observe.c), set before scheduling. */
+#define NPU_IRQ_CAPTURE_TICKS (binding.service&&binding.service->observe)
 #define NPU_IRQ_CORE OS_NPU_CORE
 #define NPU_IRQ_PRIORITY 0xd8u
 #define NPU_IRQ_HANDLER os_npu_irq

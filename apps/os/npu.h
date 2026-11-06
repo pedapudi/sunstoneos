@@ -16,8 +16,8 @@
 struct umem;
 int os_npu_pool_prepare(struct umem *, uint16_t owner);
 /* Check the guard extent of a placement request (apps/os/npu.c); called when the NPU client ends. */
-/* The image links no graph: the application registers each one (os_npu_register). The session still names a client model
- * (zero) that the admission compares. */
+/* The image links no graph: the application registers each one (os_npu_register). The report still names a client model,
+ * always zero. */
 extern const unsigned os_npu_client_model;
 
 /* One application task, bound before scheduling. These finite calls refuse
@@ -85,6 +85,8 @@ int os_npu_never_ran(void);
 void os_npu_report_unstarted(uint64_t epoch,uint64_t generation);
 /* The session grants the NPU and its declaration selects the EL0 ring (os_npu_session_queued). */
 int os_npu_queued(void);
+/* 1 when the session grants the NPU and the application declares that it observes its jobs (OS_NPU_OBSERVE). */
+int os_npu_observed(void);
 struct npu_runtime *os_npu_queue_runtime(void);
 int os_npu_queue_begin(void);
 void os_npu_queue_end(void);

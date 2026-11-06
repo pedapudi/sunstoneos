@@ -214,11 +214,10 @@ struct npu_service {
     unsigned shared, members, running, next;
     struct npu_service_member *member;   /* client_count entries */
     struct npu_service_runtime_state *runtime; /* Null outside runtime mode. */
-#ifdef SUNSTONE_A733_OS_NPU_OBSERVE
+    /* The diagnostic observer (npu_service_observe), null unless the application declares that it observes its jobs. */
     void (*observe)(void *,const struct npu_service *,unsigned);
     void *observe_cookie;
-    uint64_t trigger_ticks; /* Native adapter's counter at the trigger write. */
-#endif
+    uint64_t trigger_ticks; /* Native adapter's counter at the trigger write, kept only under an observer. */
 #ifdef SUNSTONE_NPU_ACTIVE_CANCEL
     struct npu_service_cancel_diagnostic *cancel_diagnostic;
 #endif

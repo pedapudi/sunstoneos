@@ -27,7 +27,7 @@ def main():
                 ('missing-gate', {0x070101ac:None}), ('missing-status', {0x07064008:None}),
                 ('on-high-bits', {0x07064000:0x108, 0x07064008:0x208})]
     kinds = [('finite', {'finite_npu':True, 'symbols':{}}),
-             ('generic', {'generic':True, 'symbols':{'ss_application_npu':(0,28)}})]
+             ('generic', {'generic':True, 'symbols':{'ss_application_npu':(0,32)}})]
     for profile, info in kinds:
         for variant, changed in variants:
             words = dict(good)
