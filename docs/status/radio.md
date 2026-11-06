@@ -34,7 +34,7 @@ Design: [headset voice recognition](../designs/bluetooth-voice-recognition.md) (
 Board results are records in `docs/evidence/radio.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-radio-20261101.md).
 
 <!-- evidence-table:begin -->
-6 records in `docs/evidence/radio.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+7 records in `docs/evidence/radio.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -44,4 +44,5 @@ Board results are records in `docs/evidence/radio.jsonl`; add one with `tools/ev
 | `1793752769560538673-7b89ebe1` | 2026-11-04 | 3-1 | `66f9a0bd3763` | returned | passed | run_total 24.974 s, aps_listed 22, aps_reported 31, aps_dropped 0, aps_2_4ghz 22, aps_5ghz 0, last_confirmation_ms_mod_65536 16370 ms, table_pairs_done 2880 pairs, shutdown_readbacks_matched 1, record_bytes 1200 bytes |
 | `1793761734761083932-a96b3c78` | 2026-11-04 | 3-1 | `dcd4930f6aa0` | returned | passed | run_total 19.784 s, bytes_returned 32 bytes, task_us 4001 us, task_status 0 raw, task_error 0 raw, ce_reg_lpc 2 raw, step_limit_us 2e+06 us, ce_clk_reg 2.16426e+09 raw, ce_bgr_reg 196611 raw, mbus_word 4 raw |
 | `1793925365211028755-3af212b9` | 2026-11-06 | 3-1 | `6cbe14831d82` | returned | passed | run_total 25.941 s, aps_listed 13, aps_reported 14, aps_dropped 0, aps_2_4ghz 13, aps_5ghz 0, last_confirmation_ms_mod_65536 17048 ms, table_pairs_done 2880 pairs, shutdown_readbacks_matched 1 |
+| `1793949162186791205-7bddae46` | 2026-11-06 | 3-1 | `d2db61db27dd` | returned | passed | run_total 29.606 s, run_total 29.61 s, aps_listed 15, aps_reported 16, aps_dropped 0, aps_2_4ghz 15, aps_5ghz 0, last_confirmation_ms_mod_65536 17887 ms, table_pairs_done 2880 pairs, shutdown_readbacks_matched 1 |
 <!-- evidence-table:end -->

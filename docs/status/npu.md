@@ -48,7 +48,7 @@ Designs: [platform](../designs/npu-platform.md), [fast path](../designs/npu-fast
 Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` records hold the results that earlier status prose described. Earlier prose evidence is in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-80 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+81 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -132,4 +132,5 @@ Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` recor
 | `1793935572311306576-e41afabe` | 2026-11-06 | 3-1 | `6830414bb9fc` | returned | passed | run_total 94.305 s, jobs 768 jobs, jobs_with_wrong_output_crc 0 jobs, output_bytes_differing 0 bytes, total_time 656532 µs, job_time 233573 µs, output_and_convolution 146788 µs, open_time 81061.9 µs, prepare_time 83950 µs, pool_bytes 3.35544e+07 bytes, tensor_bytes 253952 bytes |
 | `1793936685988479024-ab3ea6c2` | 2026-11-06 | 3-1 | `12b9653f0b20` | watchdog-reset | failed | run_total 107.647 s |
 | `1793937305201698413-011e3447` | 2026-11-06 | 3-1 | `9a231c3ee7bd` | returned | passed | run_total 94.352 s, jobs 768 jobs, jobs_with_wrong_output_crc 0 jobs, output_bytes_differing 0 bytes, total_time 656412 µs, job_time 233562 µs, output_and_convolution 146850 µs, open_time 81090.3 µs, prepare_time 83862 µs, pool_bytes 3.35544e+07 bytes |
+| `1793948790338851093-e0058393` | 2026-11-06 | 3-1 | `82e22b96a911` | returned | passed | run_total 94.452 s, run_total 94.45 s, jobs 768 jobs, jobs_with_wrong_output_crc 0 jobs, output_bytes_differing 0 bytes, total_time 656435 µs, job_time 233702 µs, output_and_convolution 146902 µs, open_time 81254.5 µs |
 <!-- evidence-table:end -->
