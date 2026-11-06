@@ -40,8 +40,9 @@ Designs: [platform](../designs/npu-platform.md), [fast path](../designs/npu-fast
 5. Run larger command windows with the smaller doorbell word. A reservation that includes run-time graphs uses 512 KiB per command allocation; the manifest could declare a command size to shrink it.
 6. Add exact per-job deadline interrupts through the scheduler's deadline facility (`work/scheduler-rt-1101`); do not add a device timer.
 7. Run the `restart-*` cases of no host check on a restart image; the other cases pass.
-8. Bring the mimus encoder application from its port branch (mimus commit `8dee959c3`, board entry `1793935572311306576-e41afabe`) to mimus `port/sunstoneos`.
-9. Take the NPU runtime (35,504 bytes of the `npu` static in `apps/os/npu.c`) from the ledger at the grant too. The application's task reads its stop and interrupt words at EL0 in `ss_finish`, so that wait must first read words the image holds or run at EL1 ([one OS image](../designs/one-os-image.md), NPU memory).
+8. Take the NPU runtime (35,504 bytes of the `npu` static in `apps/os/npu.c`) from the ledger at the grant too. The application's task reads its stop and interrupt words at EL0 in `ss_finish`, so that wait must first read words the image holds or run at EL1 ([one OS image](../designs/one-os-image.md), NPU memory).
+9. Explain the remaining layout time of admission. For the encoder's 80 graphs (13.8 MB) at 494 MHz on an A55, preparing the runtime takes 84 ms: copy 14.6 ms, decode 7.1 ms, layout 51.7 ms, native setup 10.1 ms. The container checksum runs with the Armv8 `CRC32` instructions, one aligned load for each eight bytes. That loop should take about 14 ms, and the operation inspection about 10 ms, so about 25 ms of layout has no measured cause. Two candidates: a stall on each cold cache line, and the inspection costing more on the A55 than the host suggests. A second timed checksum pass over the same graphs would separate them.
+10. Derive the secondary cores' startup wait from the declared graph bytes and the measured preparation rate. The wait is a fixed 1 s: the launchers set the startup deadline to the start plus one second, and the admission rule in `platform/a733-smp-cached/admission.c` refuses a deadline more than one second ahead, inside the 4 s watchdog lease. Preparation of the encoder now uses 84 ms of it.
 
 ## Evidence
 
