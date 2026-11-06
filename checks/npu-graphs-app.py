@@ -12,10 +12,10 @@ The application is built with the vectors, the manifest header and the model lis
   Its receipt must equal the board expectation (apps/npu-graphs/host.py queue_expectation for k = 1 to 128, 1,000 jobs, and
   the link), with no refusal for k up to 64 and refusals for k = 128;
 - the one-run-each image: graph-add and graph-relu with apps/npu-graphs/manifest.json. Both graphs must match.
-graph-add under 31 names is refused as a queue image: its linked pair cannot reproduce the reference. Negative and mutation
-cases: a queue list shorter than the 31 declared slots has the open refused (fault 0xb001); a main.c
-that opens the ring without registering faults the same way, and one that guards on the graphs the OS image links (none)
-faults at 0xa100.
+graph-add under 31 names is refused as a queue image: its linked pair cannot reproduce the reference. Both manifests declare
+cpu.clock_grants, without which the CPU-return admission refuses the session. Negative and mutation cases: a queue list
+shorter than the 31 declared slots has the open refused (fault 0xb001); a main.c that opens the ring without registering
+faults the same way, and one that guards on the graphs the OS image links (none) faults at 0xa100.
 """
 import argparse
 import importlib.util
@@ -31,7 +31,8 @@ CACHE = Path.home() / '.cache/sunstoneos'
 CHECK_INPUTS = ('apps/npu-graphs/main.c', 'apps/npu-graphs/vectors.py', 'apps/npu-graphs/host.py', 'apps/npu-graphs/receipt.h',
                 'apps/npu-graphs/vectors.h', 'apps/npu-graphs/queue-aliases.py', 'apps/npu-graphs/manifest-queue.json',
                 'apps/npu-graphs/manifest.json', 'include/sunstone_app.h', 'include/sunstone_npu_queue.h',
-                'tools/sunstone-manifest.py', 'tools/npu_graph_layout.py', 'checks/npu-graphs-app/sdk.c')
+                'tools/sunstone-manifest.py', 'tools/npu_graph_layout.py', 'checks/npu-graphs-app/sdk.c',
+                'apps/os/cpu-return/admission.patch')
 GATE_RUNS = [['--output', '{output}', '--graphs', '{fixture:npu-graphs}']]
 CLANG = '/usr/bin/clang-21'
 MODEL = ROOT / 'checks/npu-graphs-app'
@@ -105,6 +106,11 @@ def matches(raw, spec):
              if not (w == s if isinstance(s, int) else s['min'] <= w <= s['max'])]
     return wrong
 
+
+# The application builds only in the CPU-return composition, whose admission refuses a session without the CPU clock grant
+# (apps/os/cpu-return/admission.patch); a session carries the grant only for a manifest that declares cpu.clock_grants.
+for manifest in ('manifest.json', 'manifest-queue.json'):
+    assert json.loads((APP / manifest).read_text())['cpu'].get('clock_grants') is True, manifest + ': no cpu.clock_grants'
 
 # The queue image: graph-relu under 31 names, the database and artifacts as the board image is built from them.
 aliases = a.output / 'aliases'

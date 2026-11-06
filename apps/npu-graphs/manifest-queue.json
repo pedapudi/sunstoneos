@@ -5,6 +5,7 @@
     "optional": []
   },
   "cpu": {
+    "clock_grants": true,
     "cluster": "a55",
     "workers": 0,
     "priority": 2,
