@@ -80,6 +80,16 @@ def symbol_bytes(elf, name):
     return section.data()[offset:offset + int(found[0]['st_size'])]
 
 
+def returning_magic(profile):
+    """The contract magic of the returning lifetime in an image's os_contract_profile (apps/os/admission.c).
+
+    The profile names one magic per lifetime: supervised, resident, returning. An image built before the returning
+    lifetime had its own magic has a two-word profile and returns under the supervised magic."""
+    import struct
+    words = struct.unpack_from('<%dQ' % (len(profile) // 8), profile)
+    return words[2] if len(words) > 2 and words[2] else words[0]
+
+
 def image_facts(image):
     """Manifest section, contract magic and lifetime of a returning OS image."""
     with Path(image).open('rb') as stream:
@@ -90,7 +100,7 @@ def image_facts(image):
         if section is None or not section['sh_size'] or profile is None or marker is None:
             raise Unavailable('not a returning OS image with an application manifest')
         import struct
-        return {'manifest': section.data(), 'contract_magic': struct.unpack_from('<Q', profile)[0],
+        return {'manifest': section.data(), 'contract_magic': returning_magic(profile),
                 'seconds': struct.unpack_from('<5Q', marker)[4]}
 
 

@@ -448,8 +448,8 @@ def policy(info, args, session=None):
                     'CPU grant outside reviewed operating points requires --approved-by coordinator.')
 
 
-def launcher(out, size, mode, seconds=60, tree=ROOT):
-    """Reuse the board launcher with the OS contract, full session and armed WDT."""
+def launcher(out, size, mode, seconds=60, tree=ROOT, magic=0x415337334f534331):
+    """Reuse the board launcher with the OS contract of the given magic, full session and armed WDT."""
     board = load('runner_board_prepare', tree / 'apps/board/prepare.py')
     source = (tree / 'platform/a733-smp-supervised/launch.c').read_text()
     source = board.adapt_launcher(source, {
@@ -469,7 +469,7 @@ def launcher(out, size, mode, seconds=60, tree=ROOT):
              '-fno-builtin', '-fno-stack-protector', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables',
              '-Os', '-g', '-Wall', '-Wextra', '-Werror', '-DSUNSTONE_BOARD_SUPERVISED=1',
              f'-DA733_BOARD_SUPERVISED_SECONDS={seconds}',
-             '-DA733_SMP_CONTRACT_MAGIC=0x415337334f534331ULL', '-I' + str(out)]
+             f'-DA733_SMP_CONTRACT_MAGIC={magic:#x}ULL', '-I' + str(out)]
     commands = [[str(Path('/usr/bin/clang-21')), *flags, '-c', str(out / n), '-o', str(out / o)]
                 for n, o in [('launch.S', 'entry.o'), ('launch.c', 'launch.o')]]
     commands += [[str(CACHE / 'host/usr/bin/ld.lld-21'), '-T', str(out / 'launch.ld'),
@@ -605,7 +605,10 @@ def prepare(args, info, live, out, *, dma_binding=None):
         write(out/'dma-authority.json', dma_authority)
     session = (out/'session.bin').read_bytes()
     policy(info, args, session)
-    launcher(out, len(session), info['watchdog']['mode'], info['watchdog']['session_seconds'], tree)
+    # The image names the magic of its returning lifetime in its compiled contract profile.
+    magic = load('runner_host_admission', ROOT/'tools/host_admission.py').returning_magic(
+        symbol_bytes(args.image, 'os_contract_profile'))
+    launcher(out, len(session), info['watchdog']['mode'], info['watchdog']['session_seconds'], tree, magic)
     board = load('runner_request', ROOT/'apps/board/prepare.py')
     request, contract = board.request_bytes(address, identity, epoch, generation, lease, session)
     request = struct.pack('<Q', 0x415337334f534c31) + request[8:]

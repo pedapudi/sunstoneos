@@ -17,10 +17,11 @@
 #else
 #define OS_RETURNING 0
 #endif
-/* The OS contract magics this image admits. Offline card preparation reads these compiled constants, so a manifest
- * cannot relabel a returning image as resident. */
-__attribute__((used,retain)) const uint64_t os_contract_profile[2]={A733_OS_CONTRACT_MAGIC,
-    OS_RETURNING?0:A733_OS_RESIDENT_CONTRACT_MAGIC};
+/* The OS contract magics this image admits, by lifetime (supervised, resident, returning; 0 for a lifetime it does not
+ * admit). Offline card preparation and the runner's launcher read these compiled constants, so a manifest cannot
+ * relabel an image's lifetime. */
+__attribute__((used,retain)) const uint64_t os_contract_profile[3]={OS_RETURNING?0:A733_OS_CONTRACT_MAGIC,
+    OS_RETURNING?0:A733_OS_RESIDENT_CONTRACT_MAGIC,OS_RETURNING?A733_OS_RETURN_CONTRACT_MAGIC:0};
 /* The lifetime admission verified from the contract magic (enum a733_lifetime), 0 before. EL3 monitor memory: the
  * admission below writes it once, when the contract passes, and the EL3 boot reads it for the watchdog readback, the
  * result record and the cores' startup. */
@@ -31,13 +32,17 @@ unsigned os_admitting_lifetime __attribute__((section(".bss.a733_smp_monitor")))
 /* The lifetime that an OS contract magic names, among those this image admits; 0 for any other magic. */
 static unsigned os_contract_lifetime(uint64_t magic)
 {
-    if(magic==A733_OS_CONTRACT_MAGIC)return A733_LIFETIME_SUPERVISED;
+    if(!OS_RETURNING&&magic==A733_OS_CONTRACT_MAGIC)return A733_LIFETIME_SUPERVISED;
     if(!OS_RETURNING&&magic==A733_OS_RESIDENT_CONTRACT_MAGIC)return A733_LIFETIME_RESIDENT;
+    if(OS_RETURNING&&magic==A733_OS_RETURN_CONTRACT_MAGIC)return A733_LIFETIME_RETURN;
     return 0;
 }
 /* The EL3 result record's magic for the admitted lifetime. */
 uint64_t a733_smp_result_magic(void)
-{return a733_smp_lifetime==A733_LIFETIME_RESIDENT?A733_OS_RESIDENT_RESULT_MAGIC:A733_OS_RESULT_MAGIC;}
+{
+    return a733_smp_lifetime==A733_LIFETIME_RESIDENT?A733_OS_RESIDENT_RESULT_MAGIC:
+        a733_smp_lifetime==A733_LIFETIME_RETURN?A733_OS_RETURN_RESULT_MAGIC:A733_OS_RESULT_MAGIC;
+}
 int os_session_valid(const struct os_session *s)
 {
     if(!s||!a733_board_session_valid(&s->board,0)||!os_workload_valid(s->board.workload)||

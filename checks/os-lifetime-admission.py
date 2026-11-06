@@ -9,7 +9,8 @@ and a733_board_session_valid returns success. Every other term runs: the OS magi
 lifetime, the timing and watchdog terms, the build ID, the identity fields and both digests. For each image it
 requires:
 
-  one OS image (a build without SUNSTONE_A733_OS_CPU_RETURN; os_contract_profile names both OS magics)
+  one OS image (a build without SUNSTONE_A733_OS_CPU_RETURN; os_contract_profile names the supervised and resident
+  magics and no returning one)
     supervised   the supervised contract is admitted and sets a733_smp_lifetime to 1; the result magic is the
                  supervised one; the power policy word 0x07052000 + core * 0x1000 is not writable; the session
                  decode ran with os_admitting_lifetime 1, which is 0 again afterwards; os_lifetime returns 1 at EL3,
@@ -21,10 +22,13 @@ requires:
     crossed      the resident magic with the supervised timing is refused as timing (diagnostic), the supervised
                  magic with the resident timing likewise, and either refusal leaves the word 0;
     FEL flag     a resident contract with the FEL flag set is refused as timing (watchdog_fields);
+    returning    the returning magic is refused as magic_version (magic) with the word 0;
     once         after one lifetime is admitted, a contract of the other lifetime is refused as magic_version (magic)
                  and the word keeps its value; a second contract of the same lifetime is admitted;
-  returning image (SUNSTONE_A733_OS_CPU_RETURN): the supervised contract is admitted with the word 1, and the
-    resident contract is refused as magic_version (magic) with the word 0.
+  returning image (SUNSTONE_A733_OS_CPU_RETURN; os_contract_profile names only the returning magic): the returning
+    contract, with the supervised timing and watchdog terms, is admitted and sets the word to 3; the result magic is
+    the returning one; the policy word is not writable; the decode and os_lifetime follow 3; the supervised and
+    resident contracts are refused as magic_version (magic) with the word 0.
 The lifetime and startup seconds come from the build's compile commands for apps/os/admission.c (or the returning
 profile's patched copy, os-image/return-admission.c).
 Usage: os-lifetime-admission.py --image ELF [--image ELF ...] --output DIR
@@ -64,7 +68,8 @@ def constant(text, name):
 
 
 MAGIC = {name: constant(HEADER, name) for name in ('A733_OS_CONTRACT_MAGIC', 'A733_OS_RESIDENT_CONTRACT_MAGIC',
-                                                    'A733_OS_RESULT_MAGIC', 'A733_OS_RESIDENT_RESULT_MAGIC')}
+                                                    'A733_OS_RETURN_CONTRACT_MAGIC', 'A733_OS_RESULT_MAGIC',
+                                                    'A733_OS_RESIDENT_RESULT_MAGIC', 'A733_OS_RETURN_RESULT_MAGIC')}
 
 
 def refusal(term, sub):
@@ -181,22 +186,31 @@ def one_image(path):
     image = sealed.Image(path)
     image.layouts.update(harness.Image(path, layout_names={'os_session'}).layouts)
     seconds, startup, returning = build_seconds(path)
-    profile = struct.unpack('<2Q', bytes(sealed.Machine(image).uc.mem_read(image.address('os_contract_profile'), 16)))
-    sup, res = MAGIC['A733_OS_CONTRACT_MAGIC'], MAGIC['A733_OS_RESIDENT_CONTRACT_MAGIC']
+    profile = struct.unpack('<3Q', bytes(sealed.Machine(image).uc.mem_read(image.address('os_contract_profile'), 24)))
+    sup, res, ret = (MAGIC['A733_OS_CONTRACT_MAGIC'], MAGIC['A733_OS_RESIDENT_CONTRACT_MAGIC'],
+                     MAGIC['A733_OS_RETURN_CONTRACT_MAGIC'])
     cases = {}
     magic_refused = refusal('A733_REFUSAL_MAGIC_VERSION', 'A733_MAGIC_MAGIC')
     diagnostic = refusal('A733_REFUSAL_TIMING', 'A733_TIMING_DIAGNOSTIC')
     fields = refusal('A733_REFUSAL_TIMING', 'A733_TIMING_WATCHDOG_FIELDS')
     if returning:
-        assert profile == (sup, 0), [hex(p) for p in profile]
+        assert profile == (0, 0, ret), [hex(p) for p in profile]
         a = Admission(image)
-        assert a.admit(a.contract(sup, False, seconds, startup)) == 0 and a.lifetime() == 1
-        cases['returning-admits-supervised'] = True
-        a = Admission(image)
-        assert a.admit(a.contract(res, True, seconds, startup)) == magic_refused and a.lifetime() == 0
-        cases['returning-refuses-resident-magic'] = True
+        assert a.admit(a.contract(ret, False, seconds, startup)) == 0 and a.lifetime() == 3
+        assert a.result_magic() == MAGIC['A733_OS_RETURN_RESULT_MAGIC'], hex(a.result_magic())
+        assert a.policy_writable() == [0] * 7, a.policy_writable()
+        assert a.decoded == [3] and a.word('os_admitting_lifetime') == 0, a.decoded
+        assert a.m.call('os_lifetime') == 3 and a.el1_lifetime(3) == (3, [])
+        cases['returning-admitted-sets-lifetime-3'] = True
+        for name, magic, resident in (('supervised', sup, False), ('resident', res, True)):
+            a = Admission(image)
+            assert a.admit(a.contract(magic, resident, seconds, startup)) == magic_refused and a.lifetime() == 0, name
+            cases[f'returning-refuses-{name}-magic'] = True
         return seconds, cases
-    assert profile == (sup, res), [hex(p) for p in profile]
+    assert profile == (sup, res, 0), [hex(p) for p in profile]
+    a = Admission(image)
+    assert a.admit(a.contract(ret, False, seconds, startup)) == magic_refused and a.lifetime() == 0
+    cases['returning-magic-refused'] = True
     for name, magic, resident, word, result in (('supervised', sup, False, 1, MAGIC['A733_OS_RESULT_MAGIC']),
                                                 ('resident', res, True, 2, MAGIC['A733_OS_RESIDENT_RESULT_MAGIC'])):
         a = Admission(image)
@@ -244,7 +258,7 @@ def main():
     (a.output / 'results.json').write_text(json.dumps(report, indent=2) + '\n')
     print(f'PASS os lifetime admission: {total} cases over {len(a.image)} images; the one OS image admits both lifetimes '
           'by magic with their own terms, writes the lifetime once and derives the result magic and the policy word '
-          'from it; a returning image refuses the resident magic')
+          'from it; a returning image admits only the returning magic, under the supervised terms')
 
 
 if __name__ == '__main__':

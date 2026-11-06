@@ -24,20 +24,24 @@
  * progress. Only the OS image admits it (A733_BOARD_ADMITS_RESIDENT). */
 #define A733_BOARD_RESIDENT_CONTRACT_MAGIC UINT64_C(0x4153373342524332)
 /* The lifetime that EL3 admission verified from the contract magic. Zero
- * before admission. */
-enum a733_lifetime { A733_LIFETIME_SUPERVISED=1, A733_LIFETIME_RESIDENT=2 };
+ * before admission. The returning lifetime runs under the host-armed WDT0 and
+ * returns to the ROM after its application (apps/os/cpu-return.c). */
+enum a733_lifetime { A733_LIFETIME_SUPERVISED=1, A733_LIFETIME_RESIDENT=2, A733_LIFETIME_RETURN=3 };
 /* The OS image's EL3 lifetime word (EL3 monitor memory) and the EL3 result
  * record's magic for that lifetime (apps/os/admission.c). */
 extern unsigned a733_smp_lifetime;
 uint64_t a733_smp_result_magic(void);
 /* The integrated OS image (apps/os) extends the board session to
  * A733_OS_SESSION_BYTES and has its own contract and result magic numbers
- * for each lifetime. The stage-2 loader produces only the resident contract. */
+ * for each lifetime. The stage-2 loader produces only the resident contract;
+ * the runner's launcher only the returning one. */
 #define A733_OS_SESSION_MAGIC UINT64_C(0x415337334f534131)
 #define A733_OS_CONTRACT_MAGIC UINT64_C(0x415337334f534331)
 #define A733_OS_RESULT_MAGIC UINT64_C(0x415337334f535231)
 #define A733_OS_RESIDENT_CONTRACT_MAGIC UINT64_C(0x415337334f524331)
 #define A733_OS_RESIDENT_RESULT_MAGIC UINT64_C(0x415337334f525231)
+#define A733_OS_RETURN_CONTRACT_MAGIC UINT64_C(0x415337334f544331)
+#define A733_OS_RETURN_RESULT_MAGIC UINT64_C(0x415337334f545231)
 #define A733_OS_SESSION_BYTES 808u
 /* The session lifetime in seconds. The OS image build derives it from the application manifest
  * (tools/session_lifetime.py, cmake/sunstone-image.cmake); this default serves images with no

@@ -77,11 +77,11 @@ static const struct {unsigned services;const char *reason;unsigned lifetimes;} r
 #endif
 #ifdef SUNSTONE_A733_OS_GPU
     {OS_GRANT_AUDIO,"the supervised GPU queue requires the recorded recognition composition, not live I2S capture",
-        LIFETIME(A733_LIFETIME_SUPERVISED)},
+        LIFETIME(A733_LIFETIME_SUPERVISED)|LIFETIME(A733_LIFETIME_RETURN)},
     {OS_GRANT_RADIO,"the supervised GPU queue requires the recorded recognition composition, not the radio station",
-        LIFETIME(A733_LIFETIME_SUPERVISED)},
+        LIFETIME(A733_LIFETIME_SUPERVISED)|LIFETIME(A733_LIFETIME_RETURN)},
     {OS_GRANT_HEADSET,"the supervised GPU queue requires the recorded recognition composition, not live headset capture",
-        LIFETIME(A733_LIFETIME_SUPERVISED)},
+        LIFETIME(A733_LIFETIME_SUPERVISED)|LIFETIME(A733_LIFETIME_RETURN)},
 #endif
     {OS_GRANT_CPU_CLOCK|OS_GRANT_AUDIO,"resident CPU grants require the recorded-card session profile",
         LIFETIME(A733_LIFETIME_RESIDENT)},
