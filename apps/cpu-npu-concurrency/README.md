@@ -59,9 +59,9 @@ and this application runs the synchronous service.
 `vectors.py --artifacts <artifact-map.json> --models checks/data/npu-test-model-list.json --name shufflenet-v2-published
 --output <reference.c> --region <vectors.region>` authenticates the graph, the input and the reference against the catalogue
 and writes the reference source and the vectors region. `tools/npu-app-image.py --app apps/cpu-npu-concurrency --manifest
-manifest-npu.json --manifest-variable SUNSTONE_CPU_NPU_MANIFEST --define SUNSTONE_CPU_NPU_ARTIFACTS=<artifact-map.json>` packs
+manifest-npu.json --manifest-variable SUNSTONE_CPU_NPU_MANIFEST --freeze-decoder '--mode 1' --define SUNSTONE_CPU_NPU_ARTIFACTS=<artifact-map.json>` packs
 the models region, fills both regions' addresses, sizes and digests and the declaration into the manifest, and builds the
-image and session for a board run. The gate image (`ret-npu-load`) uses the manifest as it stands, with unpinned regions.
+image and a session built from the decoder frozen to that image (`--freeze-decoder` is required: the unfrozen decoder fails at the runner's decode), for a board run. The gate image (`ret-npu-load`) uses the manifest as it stands, with unpinned regions.
 
 The diagnostic rejects GPU, DMA, performance mode, audio, radio, headset and USB
 class composition. Its source enables FP instructions within the existing task

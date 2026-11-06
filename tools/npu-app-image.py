@@ -23,7 +23,14 @@ It writes, under --out:
                        (tools/npu_graph_layout.py). The same bound serves a graph sealed at admission and one registered later
   image/               the OS image (cfg.sh and CMake, as the integration gate builds), unless --no-build
   session/             tools/session.py build for that image, unless --no-build
+  decoder-frozen.py    with --freeze-decoder: the decoder bound to this image (see below); the session and the submit line use it
   recipe.txt           the commands, to repeat the build and to submit
+
+An application whose decoder must be bound to the image (its host.py offers --freeze-image ELF --decoder-output FILE, such as
+apps/cpu-npu-concurrency: the decode needs the mode and the linked reference) is built with --freeze-decoder 'ARGS', the
+arguments that bind it (for example '--mode 1'). The tool then runs host.py --freeze-image after the build, builds the session
+from the frozen decoder and puts it on the submit line. It refuses such an application without the option, because the unfrozen
+decoder fails at the runner's decode (host-error at restore-rails) after the board has run.
 
 Example:
 
@@ -35,6 +42,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -105,6 +113,7 @@ def main():
     p.add_argument('--vectors-address', type=lambda x: int(x, 0), default=0x45200000)
     p.add_argument('--manifest', default='manifest.json', help='the manifest template in --app')
     p.add_argument('--define', action='append', default=[], metavar='NAME=VALUE', help='an extra CMake cache entry for the image')
+    p.add_argument('--freeze-decoder', metavar='ARGS', help="the arguments that bind the application's decoder to the image (host.py --freeze-image)")
     p.add_argument('--queue-depth', type=int, default=64)
     p.add_argument('--manifest-variable', default='SUNSTONE_NPU_ENCODER_MANIFEST',
                    help='the CMake cache variable through which the application takes its manifest')
@@ -123,6 +132,11 @@ def main():
     bounds = graph_bounds(artifacts, names)
     manifest = write_manifest(args, args.out, models, vectors, len(names), bounds)
     name = manifest['name']
+    freezable = '--freeze-image' in (args.app / 'host.py').read_text()
+    if freezable and not args.freeze_decoder:
+        raise SystemExit('the application decoder binds to the image (host.py --freeze-image): pass --freeze-decoder with its arguments, for example "--mode 1"')
+    if args.freeze_decoder and not freezable:
+        raise SystemExit('--freeze-decoder: the application decoder has no --freeze-image')
     image, session = args.out / 'image', args.out / 'session'
     configure = [str(args.cfg), str(ROOT), str(image),
                  '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_MIMUS_BOARD_APPLICATION=ON', '-DSUNSTONE_APPLICATION=' + name,
@@ -133,22 +147,27 @@ def main():
                  *('-D' + d for d in args.define)]
     build = ['cmake', '--build', str(image), '--target', 'sunstone-a733-os', '-j4']
     elf = image / 'sunstone-a733-os.elf'
+    decoder = args.out / 'decoder-frozen.py' if args.freeze_decoder else args.app / 'host.py'
+    freeze = [sys.executable, '-B', str(args.app / 'host.py'), '--freeze-image', str(elf), '--decoder-output', str(decoder),
+              *shlex.split(args.freeze_decoder or '')]
     make_session = [sys.executable, '-B', str(ROOT / 'tools/session.py'), 'build', str(elf), '--out', str(session),
                     '--manifest', str(args.out / 'manifest.json'), '--input', str(models), '--input', str(vectors),
-                    '--decoder', str(args.app / 'host.py')]
+                    '--decoder', str(decoder)]
     if manifest.get('cpu', {}).get('clock_grants'):
         # The session grants the CPU clock when the manifest declares it (the CPU-return admission takes a grant without
         # the performance service: --perf is for other images).
         make_session.append('--clock-grant')
     submit = [sys.executable, '-B', str(ROOT / 'tools/board.py'), 'submit', str(elf), '--kind', 'npu', '--port', 'PORT',
-              '--template', str(session / 'template'), '--decoder', str(session / 'decoder.py'), '--restore-rails',
+              '--template', str(session / 'template'), '--decoder', str(decoder if args.freeze_decoder else session / 'decoder.py'), '--restore-rails',
               '--input', str(models), '--input', str(vectors), '--hypothesis', 'TEXT', '--wait']
-    (args.out / 'recipe.txt').write_text('\n'.join(' '.join(c) for c in (configure, build, make_session, submit)) + '\n')
+    (args.out / 'recipe.txt').write_text('\n'.join(' '.join(c) for c in (configure, build, *([freeze] if args.freeze_decoder else []), make_session, submit)) + '\n')
     print('%d graphs; models region %d bytes, graph_bytes %d, tensor_bytes %d' % (len(names), models.stat().st_size, *bounds))
     if args.no_build:
         return
     subprocess.run(configure, check=True)
     subprocess.run(build, check=True)
+    if args.freeze_decoder:
+        subprocess.run(freeze, check=True, stdout=subprocess.DEVNULL)
     subprocess.run(make_session, check=True)
     print('image', elf)
     print('submit: see', args.out / 'recipe.txt')

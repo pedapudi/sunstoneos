@@ -33,9 +33,9 @@ a = p.parse_args()
 a.output.mkdir(parents=True, exist_ok=True)
 
 
-def tool(app, graphs, data, out):
-    subprocess.run([sys.executable, str(ROOT / 'tools/npu-app-image.py'), '--app', str(app), '--graphs', str(graphs), '--data', str(data),
-                    '--out', str(out), '--no-build'], check=True, capture_output=True)
+def tool(app, graphs, data, out, *extra, check=True):
+    return subprocess.run([sys.executable, str(ROOT / 'tools/npu-app-image.py'), '--app', str(app), '--graphs', str(graphs), '--data', str(data),
+                           '--out', str(out), '--no-build', *extra], check=check, capture_output=True, text=True)
 
 
 app, graphs = a.output / 'app', a.output / 'graphs'
@@ -98,4 +98,17 @@ data.write_bytes(bytes(reversed(data.read_bytes())))
 tool(app, graphs, data, a.output / 'out3')
 changed = {r['name']: r for r in json.loads((a.output / 'out3/manifest.json').read_text())['regions']}
 assert changed['vectors']['sha256'] != regions['vectors']['sha256'] and changed['models']['sha256'] == regions['models']['sha256']
+
+# an application whose decoder binds to the image: the recipe freezes it and submits the frozen decoder; the unfrozen form is refused
+(app / 'host.py').write_text('# decoder\n# host.py --freeze-image ELF --decoder-output FILE --mode N\n')
+unfrozen = tool(app, graphs, data, a.output / 'unfrozen', check=False)
+assert unfrozen.returncode != 0 and '--freeze-decoder' in unfrozen.stderr, unfrozen
+tool(app, graphs, data, a.output / 'frozen', '--freeze-decoder', '--mode 1')
+lines = (a.output / 'frozen/recipe.txt').read_text().splitlines()
+assert len(lines) == 5, lines
+frozen = str(a.output.resolve() / 'frozen/decoder-frozen.py')
+assert '--freeze-image' in lines[2] and '--mode 1' in lines[2] and '--decoder-output ' + frozen in lines[2], lines[2]
+assert '--decoder ' + frozen in lines[3] and '--decoder ' + frozen in lines[4], lines[3:]
+assert 'session/decoder.py' not in lines[4], lines[4]
+(app / 'host.py').write_text('# decoder\n')
 print('PASS NPU application image tool: index, digests, declaration and sensitivity to the graphs and the data')
