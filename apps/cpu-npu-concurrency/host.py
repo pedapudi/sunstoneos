@@ -140,13 +140,15 @@ def freeze_decoder(image, destination, mode):
         return int.from_bytes(read(address, size), 'little')
     model_index, reference = None, None
     if mode == 1:
-        # The image links no graph: the application carries the diagnostic's graph and registers it, so it is model 0.
-        require('cpu_npu_graph' in symbols, 'Combined decoder requires the application to carry its NPU graph.')
+        # The image links no graph and neither does the application: it registers the graph it reads from its models region,
+        # so it is model 0. The combined build is the one that links the reference output.
+        require('cpu_npu_reference' in symbols and 'cpu_npu_graph' not in symbols and 'cpu_npu_input' not in symbols,
+                'Combined decoder requires the application to link its reference alone: the graph and input arrive in regions.')
         reference = read(symbols['cpu_npu_reference'][0], scalar('cpu_npu_reference_bytes'))
         require(0 < len(reference) <= 8, 'Linked reference does not fit the receipt.')
         model_index = 0
     else:
-        require(mode == 0 and 'cpu_npu_graph' not in symbols, 'CPU control decoder cannot bind NPU work.')
+        require(mode == 0 and 'cpu_npu_reference' not in symbols, 'CPU control decoder cannot bind NPU work.')
     binding = {'image_sha256': hashlib.sha256(Path(image).read_bytes()).hexdigest(),
                'mode': mode, 'model_index': model_index,
                'reference_hex': reference.hex() if reference is not None else None}

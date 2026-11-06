@@ -44,6 +44,7 @@ CHECK_INPUTS = ['apps/os/npu-report.py', 'apps/cpu-npu-concurrency/main.c', 'app
 GATE_RUNS = [['--elf', '{elf:ret-npu-load}', '--out', '{output}']]
 MAIN, CLIENT, BOOTSTRAP, WORKER = 0x5000, 0x3000, 0x4000, 0x9000
 APPLICATION_WORKER = 0x5800   # a second task of the application, also at EL0 on the board
+INPUT_REGION = 0x46000000  # the modeled vectors region of the application
 POOL, POOL_BYTES = 0x47400000, 0x800000  # the model's own NPU reservation; the OS publishes the range it takes from the ledger
 
 
@@ -105,8 +106,12 @@ class Native(terminal.KernelPages, owners.Model):
         self.put64(self.thermal+layout.layouts['os_thermal_service']['handle'], 0x6000)
         self.notify_wait = layout.address('ulTaskGenericNotifyTake')
         self.uc.mem_map(POOL, POOL_BYTES)
-        self.input_data = layout.address('cpu_npu_input')
-        self.input_bytes = self.u64(layout.address('cpu_npu_input_bytes'))
+        # The application links no input: it reads the vectors region the runner uploads. The model sees a region of the
+        # size of shufflenet-v2-published's input (150,528 bytes) with a fixed pattern, which the run must copy exactly.
+        self.input_bytes = 150528
+        self.input_data = INPUT_REGION
+        self.uc.mem_map(INPUT_REGION, 0x40000)
+        self.uc.mem_write(INPUT_REGION, bytes((7 * i + 3) & 0xff for i in range(self.input_bytes)))
         self.reference = bytes(self.uc.mem_read(layout.address('cpu_npu_reference'),
                                                self.u64(layout.address('cpu_npu_reference_bytes'))))
         self.output = layout.address('output', 'apps/cpu-npu-concurrency/main.c')

@@ -44,12 +44,24 @@ repository's existing compiler and dependency configuration:
 ```
 
 For the combined profile add the artifact map of the reviewed
-shufflenet-v2-published graph and vectors. The application carries the graph and registers it with the OS at run time (the
-image links none):
+shufflenet-v2-published graph and vectors. The application links only the reference output (at most eight bytes). The
+graph and the input arrive in the manifest's two input regions, `models` and `vectors`, which the runner uploads: `models`
+starts with the graph index that `tools/npu-external-pack.py` writes ("NMDL", version, count, then each graph's offset and
+length) and holds the graph behind it; `vectors` holds the input tensors. The application reads the index, registers the graph
+with the OS at run time (`ss_npu_register_graph`, as the declaration's `graph_bytes` and `tensor_bytes` bound it) and runs the
+input from the second region. It does not name `npu.graph_region`: that field needs the ring (more than one job in flight),
+and this application runs the synchronous service.
 
 ```text
 -DSUNSTONE_CPU_NPU_ARTIFACTS=<artifact-map.json>
 ```
+
+`vectors.py --artifacts <artifact-map.json> --models checks/data/npu-test-model-list.json --name shufflenet-v2-published
+--output <reference.c> --region <vectors.region>` authenticates the graph, the input and the reference against the catalogue
+and writes the reference source and the vectors region. `tools/npu-app-image.py --app apps/cpu-npu-concurrency --manifest
+manifest-npu.json --manifest-variable SUNSTONE_CPU_NPU_MANIFEST --define SUNSTONE_CPU_NPU_ARTIFACTS=<artifact-map.json>` packs
+the models region, fills both regions' addresses, sizes and digests and the declaration into the manifest, and builds the
+image and session for a board run. The gate image (`ret-npu-load`) uses the manifest as it stands, with unpinned regions.
 
 The diagnostic rejects GPU, DMA, performance mode, audio, radio, headset and USB
 class composition. Its source enables FP instructions within the existing task

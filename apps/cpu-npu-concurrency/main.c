@@ -139,6 +139,7 @@ static int at_top(void)
 static unsigned observation;
 static uint8_t output[8];
 static size_t input_bytes,output_bytes;
+static const uint8_t *input;
 static unsigned selected;
 /* The OS owns both busy reads and all private controller/runtime identities.
  * This callback only snapshots/publishes ordinary application memory. */
@@ -171,13 +172,29 @@ static int observe(void *cookie,unsigned event,const struct ss_npu_observation *
     }
     j->b_start=since;memcpy(j->b,candidate,sizeof(candidate));return 1;
 }
-static void vectors(void)
+static uint64_t index_word(const uint8_t *at,unsigned bytes)
+{
+    uint64_t v=0;
+    for(unsigned i=0;i<bytes;++i)v|=(uint64_t)at[i]<<(8*i);
+    return v;
+}
+/* The runner uploads two input regions (the manifest's models and vectors). The first starts with an index: "NMDL", version 1,
+ * the graph count, then each graph's offset and length (tools/npu-external-pack.py). The second holds the input tensors. */
+static void vectors(const struct ss_grant *grant)
 {
     struct ss_npu_model model;
+    require(grant->region_count>=2,0x85,6);
+    const uint8_t *const models=grant->regions[0].base;
+    const size_t models_bytes=grant->regions[0].bytes;
+    require(models_bytes>=32&&index_word(models,4)==0x4c444d4eu&&index_word(models+4,4)==1&&index_word(models+8,8)==1,0x85,6);
+    const uint64_t graph_offset=index_word(models+16,8),graph_bytes=index_word(models+24,8);
+    require(graph_bytes&&graph_offset>=32&&graph_offset<=models_bytes&&graph_bytes<=models_bytes-graph_offset,0x85,6);
+    const uint8_t *const graph=models+graph_offset;
+    input=grant->regions[1].base;
     /* The image links no graph: hand the NPU this one and read its description from its own header. */
     int registered;
     uint64_t begin=ss_counter_ticks();
-    while((registered=ss_npu_register_graph(cpu_npu_graph,cpu_npu_graph_bytes,&selected))==0){
+    while((registered=ss_npu_register_graph(graph,(size_t)graph_bytes,&selected))==0){
         if(ss_counter_ticks()-begin>240000000)fault(0x85,6,0,0,1);
         live(6);vTaskDelay(1);
     }
@@ -189,8 +206,8 @@ static void vectors(void)
         live(6);vTaskDelay(1);
     }
     require(described==1,0x85,6);
-    input_bytes=cpu_npu_input_bytes;output_bytes=cpu_npu_reference_bytes;
-    require(input_bytes==model.input_bytes&&output_bytes==model.output_bytes&&
+    input_bytes=model.input_bytes;output_bytes=cpu_npu_reference_bytes;
+    require(input_bytes<=grant->regions[1].bytes&&output_bytes==model.output_bytes&&
         input_bytes<=SS_NPU_MAX_TENSOR_BYTES&&output_bytes<=sizeof(output),0x85,6);
 }
 
@@ -251,7 +268,7 @@ void cpu_npu_load_main(const struct ss_grant *grant)
     require(at_top(),0x87,6);receipt.initial_top=1;
     atomic_store_explicit(&throttle_armed,1,memory_order_release);
 #ifdef CPU_NPU_WITH_NPU
-    vectors();receipt.mode=1;receipt.target=CPU_NPU_JOBS;
+    vectors(grant);receipt.mode=1;receipt.target=CPU_NPU_JOBS;
 #endif
     uint64_t now=ss_counter_ticks();
     require(grant->finish_by_us>now/24+2000000,0x88,6);
@@ -266,7 +283,7 @@ void cpu_npu_load_main(const struct ss_grant *grant)
         memset(output,0xa5,sizeof(output));
         for(;;){
             uint64_t now=ss_counter_ticks();if(now>=work_cutoff)fault(0x8e,6,job,now,work_cutoff);live(6);
-            int ran=ss_npu_run(selected,cpu_npu_input,input_bytes,output,output_bytes,100000);
+            int ran=ss_npu_run(selected,input,input_bytes,output,output_bytes,100000);
             if(ran<0)fault(0x8f,6,job,(uint32_t)ran,0);
             if(ran==1)break;
             unit(6);

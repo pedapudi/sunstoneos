@@ -4,15 +4,18 @@ if(NOT SUNSTONE_A733_OS_CPU_RETURN OR SUNSTONE_A733_OS_GPU OR
   message(FATAL_ERROR "CPU/NPU diagnostic requires its supervised CPU-return composition")
 endif()
 set(cpu_npu_sources "${CMAKE_CURRENT_LIST_DIR}/../main.c")
-# The diagnostic carries its graph: the OS image links none, and the application registers it at run time. With the artifacts
-# the application declares the NPU in its manifest, and its session grants the NPU service; without them it is the CPU control.
+# Neither the OS image nor the application links the graph or the input: the runner uploads them as the manifest's two input
+# regions (tools/npu-app-image.py packs them) and the application registers the graph from the first at run time. The artifacts
+# give the application its reference output. With them the application declares the NPU in its manifest, and its session
+# grants the NPU service; without them it is the CPU control.
 set(SUNSTONE_CPU_NPU_ARTIFACTS "" CACHE FILEPATH "Artifacts map of the reviewed shufflenet-v2-published graph and vectors (empty: the CPU control)")
 set(cpu_npu_manifest "${CMAKE_CURRENT_LIST_DIR}/../manifest.json")
+set(SUNSTONE_CPU_NPU_MANIFEST "${CMAKE_CURRENT_LIST_DIR}/../manifest-npu.json" CACHE FILEPATH "Manifest of the combined profile (tools/npu-app-image.py passes the one with the regions' digests)")
 if(NOT SUNSTONE_CPU_NPU_ARTIFACTS STREQUAL "")
   if(NOT EXISTS "${SUNSTONE_CPU_NPU_ARTIFACTS}")
     message(FATAL_ERROR "CPU/NPU overlap diagnostic: SUNSTONE_CPU_NPU_ARTIFACTS names no file")
   endif()
-  set(cpu_npu_manifest "${CMAKE_CURRENT_LIST_DIR}/../manifest-npu.json")
+  set(cpu_npu_manifest "${SUNSTONE_CPU_NPU_MANIFEST}")
   set(cpu_npu_vectors "${CMAKE_CURRENT_BINARY_DIR}/cpu-npu-vectors.c")
   execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/../vectors.py"
     --artifacts "${SUNSTONE_CPU_NPU_ARTIFACTS}" --models "${SUNSTONE_SOURCE_ROOT}/checks/data/npu-test-model-list.json"

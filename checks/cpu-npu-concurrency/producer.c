@@ -65,10 +65,12 @@ static StaticTask_t service_task;
 static void (*observer)(void *,const struct npu_service *,unsigned);
 static void *observer_cookie;
 static uint8_t input_data[32],reference_data[2]={0,0xff};
-const uint8_t cpu_npu_input[32]={0},cpu_npu_reference[2]={0,0xff};
-const size_t cpu_npu_input_bytes=32,cpu_npu_reference_bytes=2;
-const uint8_t cpu_npu_graph[4]={0};
-const size_t cpu_npu_graph_bytes=4;
+const uint8_t cpu_npu_reference[2]={0,0xff};
+const size_t cpu_npu_reference_bytes=2;
+/* The runner's two input regions: the models region (an index of one graph of four bytes, as tools/npu-external-pack.py
+ * writes it, and the graph on the next page) and the vectors region (the input tensor). */
+static uint8_t models_region[8192]={'N','M','D','L',1,0,0,0, 1,0,0,0,0,0,0,0, 0,0x10,0,0,0,0,0,0, 4,0,0,0,0,0,0,0};
+static uint8_t vectors_region[32];
 const struct os_npu_vector os_npu_inputs[]={{input_data,sizeof(input_data)}};
 const struct os_npu_vector os_npu_references[]={{reference_data,sizeof(reference_data)}};
 const unsigned os_npu_input_count=1,os_npu_output_count=1;
@@ -134,6 +136,9 @@ int main(int argc,char **argv)
 {
     if(argc!=3)return 4;scenario=argv[1];destination=argv[2];began=ns();
     grant.finish_by_us=ss_counter_ticks()/24+8000000;
+    grant.region_count=2;
+    grant.regions[0]=(struct ss_span){models_region,sizeof(models_region)};
+    grant.regions[1]=(struct ss_span){vectors_region,sizeof(vectors_region)};
     cpu_npu_load_init();
 #ifdef CPU_NPU_WITH_NPU
     runtime.service.ops.read=idle;runtime.service.worker=&service_task;

@@ -5,7 +5,7 @@ The OS image links no graph: the application registers each compiled graph at ru
 region. This tool makes everything a board run of such an application needs from three inputs, so that a run is reproducible
 from the repository and these inputs:
 
-  --app DIR      the application's source directory: manifest.json (the template), host.py (the result decoder) and its CMake
+  --app DIR      the application's source directory: the manifest template (manifest.json, or --manifest), host.py (the result decoder) and its CMake
                  application file. Its repository stays with its owner; the tool only reads it.
   --graphs DIR   artifacts.json (name -> {model, inputs, references} files) and list.json ({"npu_models": [names]}): the compiled
                  graphs in the order the application registers them. They come from the application's own graph pipeline.
@@ -82,7 +82,7 @@ def pack(args, out):
 
 
 def write_manifest(args, out, models, vectors, count, bounds):
-    manifest = json.loads((args.app / 'manifest.json').read_text())
+    manifest = json.loads((args.app / args.manifest).read_text())
     for name, path, address in (('models', models, args.models_address), ('vectors', vectors, args.vectors_address)):
         r = region_entry(manifest, name)
         data = path.read_bytes()
@@ -103,6 +103,8 @@ def main():
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--models-address', type=lambda x: int(x, 0), default=0x44000000)
     p.add_argument('--vectors-address', type=lambda x: int(x, 0), default=0x45200000)
+    p.add_argument('--manifest', default='manifest.json', help='the manifest template in --app')
+    p.add_argument('--define', action='append', default=[], metavar='NAME=VALUE', help='an extra CMake cache entry for the image')
     p.add_argument('--queue-depth', type=int, default=64)
     p.add_argument('--manifest-variable', default='SUNSTONE_NPU_ENCODER_MANIFEST',
                    help='the CMake cache variable through which the application takes its manifest')
@@ -127,7 +129,8 @@ def main():
                  '-DSUNSTONE_APPLICATION_%s_ROOT=%s' % (name, args.app),
                  '-DSUNSTONE_A733_OS_CPU_RETURN=ON', '-DSUNSTONE_A733_OS_PERF_BOOT=high',
                  '-DSUNSTONE_MIMUS_WORKERS=2',
-                 '-D%s=%s' % (args.manifest_variable, args.out / 'manifest.json')]
+                 '-D%s=%s' % (args.manifest_variable, args.out / 'manifest.json'),
+                 *('-D' + d for d in args.define)]
     build = ['cmake', '--build', str(image), '--target', 'sunstone-a733-os', '-j4']
     elf = image / 'sunstone-a733-os.elf'
     make_session = [sys.executable, '-B', str(ROOT / 'tools/session.py'), 'build', str(elf), '--out', str(session),
