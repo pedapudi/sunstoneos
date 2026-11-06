@@ -172,6 +172,29 @@ def preflight_admission(image, session, contract, seconds):
         return {'admitted': None, 'unavailable': str(error)}
 
 
+def credential_session(session, host_admission, radio_device):
+    """Refuse a Wi-Fi credential for a session that might not wipe it.
+
+    The wipe runs where the session is a radio session: board_fail wipes for a radio workload (apps/board/main.c,
+    a733_board_radio_workload: bit 0 of the workload at offset 400 of the board prefix), the radio owner task, which only
+    a radio workload starts, wipes once the application has finished or failed at EL0, and the returning path wipes when
+    the session grants the radio (apps/os/cpu-return.c). The session decode admits the radio device only with the radio
+    workload and refuses the radio workload without it (apps/os/session.c), and the host admission runs that decode, so
+    a credential goes only to a session that carries both and that the image's own admission accepts."""
+    # The board prefix's workload (offset 400) and the typed session header's devices (struct ss_session_header after
+    # the 592-byte prefix, devices at 24): the bytes the board reads.
+    workload = struct.unpack_from('<I', session, 400)[0]
+    devices = struct.unpack_from('<I', session, 592 + 24)[0]
+    require(devices & radio_device,
+            'A Wi-Fi credential goes only to a session that grants the radio device; this session does not.')
+    require(workload & 1,
+            'A Wi-Fi credential goes only to a radio workload (1 or 3), which wipes it on a failure; this session has '
+            'workload %d.' % workload)
+    require(host_admission.get('admitted') is True,
+            'A Wi-Fi credential goes only to a session that the image\'s own admission accepts on the host; the host '
+            'admission is unavailable (%s).' % host_admission.get('unavailable', 'no result'))
+
+
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -583,10 +606,7 @@ def prepare(args, info, live, out, *, dma_binding=None):
                 host_admission=host_admission, watchdog=info['watchdog'], format='generic', geometry=info['report_geometry'],
                 return_host=returning, input_regions=list(meta['uploads']) + radio_regions, image_ram=returning.IMAGE_RAM)
     if getattr(args, 'wifi', None):
-        # Only a session that grants the radio device reads the credential and wipes it at the session end or on a
-        # failure (apps/os/cpu-return.c, apps/board/main.c).
-        require(devices & records.manifest_tool.DEVICES['radio'],
-                'A Wi-Fi credential goes only to a session that grants the radio device; this session does not.')
+        credential_session(session, host_admission, records.manifest_tool.DEVICES['radio'])
         # The credential is a separate input, uploaded by the runner from memory (Live.deliver_credential); it is not
         # a file of the bundle. Only its extent is known here, so the preservation list can cover it.
         wifi = load('runner_wifi_credential', ROOT/'tools/wifi-credential.py')

@@ -27,6 +27,7 @@ import os
 from pathlib import Path
 import pty
 import re
+import struct
 import shutil
 import subprocess
 import sys
@@ -383,7 +384,47 @@ def refusal_cases(wifi, config, work):
     assert model is None or not model.memory, 'the board was written before the refusal'
     scan(queue.root, needles)
     passed('application-without-the-radio-device-refused-before-launch')
+    session_rule_cases(images.load('wifi_rule_records', ROOT/'apps/os/host.py'))
     wifi.load('home', config)
+
+
+def session_rule_cases(host):
+    """The session that receives a credential is one that wipes it: tools/board_images.py credential_session, which
+    prepare calls whenever a credential is named, refuses any other session before an upload."""
+    import inspect
+    radio = host.manifest_tool.DEVICES['radio']
+    admitted = {'admitted': True}
+
+    def session(workload, devices):
+        raw = bytearray(592 + 64)
+        struct.pack_into('<I', raw, 400, workload)
+        struct.pack_into('<I', raw, 592 + 24, devices)
+        return bytes(raw)
+
+    def refusal(raw, admission):
+        try:
+            images.credential_session(raw, admission, radio)
+        except ValueError as error:
+            return str(error)
+        return None
+    for workload in (1, 3):
+        assert refusal(session(workload, radio | 1), admitted) is None, workload
+    for workload, devices, admission, text in (
+            (1, 1, admitted, 'grants the radio device'),          # the radio workload without the radio grant
+            (3, 0, admitted, 'grants the radio device'),
+            (0, radio | 1, admitted, 'radio workload'),           # the radio grant with a workload whose failure does not wipe
+            (2, radio, admitted, 'radio workload'),
+            (4, radio | 1, admitted, 'radio workload'),
+            (1, radio | 1, {'admitted': None, 'unavailable': 'no harness'}, 'host admission is unavailable'),
+            (1, radio | 1, {}, 'host admission is unavailable')):
+        detail = refusal(session(workload, devices), admission)
+        assert detail and text in detail, (workload, devices, admission, detail)
+    # prepare names the rule wherever a credential is named, after the host admission of the session it uploads.
+    source = inspect.getsource(images.prepare)
+    branch = source[source.index("if getattr(args, 'wifi', None):"):]
+    assert branch.index('credential_session(session, host_admission,') < branch.index("plan['credential'] ="), branch[:400]
+    assert source.index('host_admission = preflight_admission(') < source.index('credential_session(')
+    passed('credential-refused-unless-the-session-has-the-radio-grant-a-radio-workload-and-host-admission')
 
 
 def board_side_cases(wifi, work):
