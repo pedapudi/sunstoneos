@@ -311,8 +311,10 @@ struct ss_npu_model {
     unsigned inputs,outputs;
     size_t input_bytes,output_bytes;
 };
-/* Discovery returns zero while unavailable. Info/find return 1 on success,
- * zero for an unknown index/name or invalid output. No allocation occurs. */
+/* Discovery returns zero while unavailable. Find returns 1 on success, zero for an unknown name or invalid output. Info
+ * returns 1 with the description, -1 for an unknown index, an invalid output or while another request of the mailbox is
+ * outstanding, and 0 while pending: a model the OS holds (every model of an OS image) is described by the OS's NPU task from
+ * its own plan, so call again with identical arguments until it answers. No allocation occurs. */
 unsigned ss_npu_model_count(void);
 int ss_npu_model_info(unsigned index,struct ss_npu_model *);
 int ss_npu_model_find(const char *name,unsigned *index);

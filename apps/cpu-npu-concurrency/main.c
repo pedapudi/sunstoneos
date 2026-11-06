@@ -181,7 +181,14 @@ static void vectors(void)
         if(ss_counter_ticks()-begin>240000000)fault(0x85,6,0,0,1);
         live(6);vTaskDelay(1);
     }
-    require(registered==1&&ss_npu_model_info(selected,&model)==1,0x85,6);
+    require(registered==1,0x85,6);
+    /* The OS's NPU task describes a registered graph from its own plan: the answer comes through the mailbox. */
+    int described;
+    while((described=ss_npu_model_info(selected,&model))==0){
+        if(ss_counter_ticks()-begin>240000000)fault(0x85,6,0,1,1);
+        live(6);vTaskDelay(1);
+    }
+    require(described==1,0x85,6);
     input_bytes=cpu_npu_input_bytes;output_bytes=cpu_npu_reference_bytes;
     require(input_bytes==model.input_bytes&&output_bytes==model.output_bytes&&
         input_bytes<=SS_NPU_MAX_TENSOR_BYTES&&output_bytes<=sizeof(output),0x85,6);

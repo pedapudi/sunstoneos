@@ -74,7 +74,9 @@ const struct os_npu_vector os_npu_references[]={{reference_data,sizeof(reference
 const unsigned os_npu_input_count=1,os_npu_output_count=1;
 void xTaskNotifyGive(TaskHandle_t task){(void)task;pthread_mutex_lock(&lock);++kicks;pthread_cond_signal(&condition);pthread_mutex_unlock(&lock);}
 int ss_npu_register_graph(const void *graph,size_t bytes,unsigned *index){if(!graph||!bytes)return -1;*index=0;return 1;}
-int ss_npu_model_info(unsigned index,struct ss_npu_model *m){if(index)return 0;memset(m,0,sizeof(*m));m->inputs=1;m->outputs=1;m->input_bytes=sizeof(input_data);m->output_bytes=2;return 1;}
+/* As the OS mailbox does: the description of a registered graph is pending until the NPU task answers it. */
+static atomic_uint info_asked;
+int ss_npu_model_info(unsigned index,struct ss_npu_model *m){if(index||!m)return -1;if(!atomic_fetch_add(&info_asked,1))return 0;memset(m,0,sizeof(*m));m->inputs=1;m->outputs=1;m->input_bytes=sizeof(input_data);m->output_bytes=2;return 1;}
 int npu_service_observe(struct npu_service *s,void (*fn)(void *,const struct npu_service *,unsigned),void *cookie){(void)s;observer=fn;observer_cookie=cookie;return 1;}
 unsigned npu_service_irq_completions(const struct npu_service *s){(void)s;return atomic_load(&completions);}
 uint64_t npu_application_irq_ticks(void){return irq_tick;}

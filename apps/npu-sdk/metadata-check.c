@@ -28,7 +28,7 @@ int main(int argc,char **argv)
     assert(!ss_npu_service_bind(&backend));
     struct ss_npu_model out;
     unsigned index=17;
-    assert(!ss_npu_model_count()&&!ss_npu_model_info(0,&out));
+    assert(!ss_npu_model_count()&&ss_npu_model_info(0,&out)==-1);
     assert(!ss_npu_model_find("first",&index)&&index==17);
     assert(ss_npu_service_step()==0);
 }

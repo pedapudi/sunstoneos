@@ -15,7 +15,8 @@ struct ss_npu_backend {
     const struct ss_npu_model *models;
     unsigned count;
     /* Optional: the description of model index (linked or registered) from the backend's own decoded plan; 1, or 0 for an
-     * unknown index. The name of a registered model is empty. */
+     * unknown index. The name of a registered model is empty. Like every callback it runs only in the task that calls step:
+     * ss_npu_model_info sends the request through the mailbox. */
     int (*info)(unsigned index,struct ss_npu_model *);
 };
 int ss_npu_service_bind(const struct ss_npu_backend *);

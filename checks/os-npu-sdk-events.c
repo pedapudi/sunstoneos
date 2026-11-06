@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <setjmp.h>
 #include <stdio.h>
+#include <sys/mman.h>
 struct board_application board;
 const struct ss_application ss_application={.manifest=(const void *)1};
 const unsigned os_npu_client_model=0;
@@ -36,16 +37,29 @@ void board_fail_note(uint32_t s,uint32_t v,const void *p){(void)s;(void)v;(void)
 void board_fail(void *v){(void)v;assert(0);}
 void vTaskSuspend(TaskHandle_t task){assert(!task);longjmp(ended,1);}
 static void notify(void *unused){(void)unused;++notifications;}
+/* The runtime's plans are in the OS's EL1-private memory: the application's EL0 task cannot read them. While the application
+ * runs (between the owner's waits) their pages are inaccessible, so an SDK call that reads a plan in the caller's context
+ * faults here as it does on the board (board run 1793932845997995103-2af374bc, sdk_info at EL0). */
+static void *el1_private;static size_t el1_private_bytes;
+static void application(int running)
+{assert(!mprotect(el1_private,el1_private_bytes,running?PROT_NONE:PROT_READ|PROT_WRITE));}
+static struct ss_npu_model described;
 uint32_t ulTaskGenericNotifyTake(UBaseType_t index,BaseType_t clear,TickType_t wait)
 {
     assert(!index&&clear==pdTRUE&&wait==portMAX_DELAY);
     ++waits;
     if(waits==1)return 1; /* Thermal health update while idle. */
-    if(waits==2)assert(ss_npu_run(0,input,4,output,4,100)==0);
+    application(1);
+    if(waits==2)assert(ss_npu_model_info(0,&described)==0);   /* described by the owner, from its plan */
     else if(waits==3) {
+        assert(ss_npu_model_info(0,&described)==1&&described.inputs==1&&described.outputs==1&&
+               described.input_bytes==4&&described.output_bytes==4);
+        assert(ss_npu_run(0,input,4,output,4,100)==0);
+    } else if(waits==4) {
         assert(ss_npu_run(0,input,4,output,4,100)==1&&!memcmp(input,output,4));
         assert(ss_npu_close()==0);
     } else assert(0);
+    application(0);
     return 1;
 }
 void storage_digest_init(struct storage_digest *s){(void)s;assert(0);}
@@ -55,8 +69,12 @@ void storage_digest_end(const struct storage_digest *s,uint8_t out[32])
 {(void)s;(void)out;assert(0);}
 int main(void)
 {
-    static struct nbg_assembly_layout plan_storage[1];
-    static struct nbg_allocation_requirement plan_table[NBG_LAYOUT_ENTRIES(1,1)];
+    el1_private_bytes=4096;
+    el1_private=mmap(NULL,el1_private_bytes,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+    assert(el1_private!=MAP_FAILED);
+    struct nbg_assembly_layout *plan_storage=el1_private;
+    struct nbg_allocation_requirement *plan_table=(void *)(plan_storage+1);
+    assert((uint8_t *)(plan_table+NBG_LAYOUT_ENTRIES(1,1))<=(uint8_t *)el1_private+el1_private_bytes);
     plan_storage[0].buffers=plan_table;plan_storage[0].capacity=NBG_LAYOUT_ENTRIES(1,1);
     struct npu_runtime runtime={.count=1,.plans=plan_storage};
     struct nbg_assembly_layout *plan=&runtime.plans[0];
@@ -72,7 +90,7 @@ int main(void)
     assert(sdk_run(1,input,4,output,4,100)==0&&loads==2&&submits==3);
     assert(sdk_run(0,input,3,output,4,100)==0&&loads==2&&submits==3);
     if(!setjmp(ended))os_npu_client_task(NULL);
-    assert(waits==3&&progresses==5&&notifications==2&&loads==2&&submits==4);
+    assert(waits==4&&progresses==6&&notifications==3&&loads==2&&submits==4);
     assert(ss_npu_close()==1&&os_npu_complete());
-    puts("PASS SDK READY-model reuse and owner indefinite wait, health wake, request wake and close");
+    puts("PASS SDK READY-model reuse, a description served by the owner with the plans unreadable to the application, owner indefinite wait, health wake, request wake and close");
 }

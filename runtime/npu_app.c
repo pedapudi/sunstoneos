@@ -6,6 +6,7 @@
  * application-owned but unavailable to it until completion. */
 enum { UNBOUND, IDLE, RUN, CLOSE, DONE, FAILED, CLOSED };
 #define REGISTER_OPERATION 7u /* box.operation of a graph registration, which uses the RUN state */
+#define INFO_OPERATION 8u     /* box.operation of a description the owner reads from its own plan, also in the RUN state */
 static struct {
     atomic_uint state;
     struct ss_npu_backend backend;
@@ -61,10 +62,20 @@ unsigned ss_npu_model_count(void)
 }
 int ss_npu_model_info(unsigned index,struct ss_npu_model *model)
 {
-    if(!model||index>=ss_npu_model_count())return 0;
+    if(!model||index>=ss_npu_model_count())return -1;
     if(index<box.backend.count&&box.backend.models){*model=box.backend.models[index];return 1;}
-    memset(model,0,sizeof(*model));
-    return box.backend.info&&box.backend.info(index,model)?1:0;
+    if(!box.backend.info)return -1;
+    /* Every other model is described by the owner from its own plan, which is in memory the caller cannot read (the OS keeps
+     * it EL1-private): the request goes through the mailbox, as a registration does, and the owner's step answers it. */
+    unsigned state=atomic_load_explicit(&box.state,memory_order_acquire);
+    if(state==IDLE){
+        box.model=index;box.output=model;box.output_bytes=sizeof(*model);box.operation=INFO_OPERATION;
+        if(!transition(IDLE,RUN))return -1;
+        notify_owner();return 0;
+    }
+    if(box.operation!=INFO_OPERATION||box.model!=index||box.output!=model||(state!=RUN&&state!=DONE))return -1;
+    if(state!=DONE)return 0;
+    int result=box.result;return transition(DONE,IDLE)&&result==1?1:-1;
 }
 int ss_npu_model_find(const char *name,unsigned *index)
 {
@@ -97,11 +108,9 @@ int ss_npu_run(unsigned model,const void *input,size_t input_bytes,
        output_bytes>SS_NPU_MAX_TENSOR_BYTES||!timeout_us||timeout_us>1000000)return -1;
     if(state==IDLE) {
         /* A graph registered at run time has no entry here: the OS compares its tensor sizes with the request. */
-        if(model>=box.backend.count+box.registered){
-            /* A model the OS holds that this mailbox did not register (the backend's own decoded plan) is still a model. */
-            struct ss_npu_model known;
-            if(!box.backend.info||!box.backend.info(model,&known))return -2;
-        }
+        /* A model the OS holds that this mailbox did not register (the backend's own decoded plan) is still a model: the owner,
+         * which alone reads that plan, refuses an unknown index when it serves the request. */
+        if(model>=box.backend.count+box.registered&&!box.backend.info)return -2;
         if(model<box.backend.count&&box.backend.models&&(input_bytes!=box.backend.models[model].input_bytes||
            output_bytes!=box.backend.models[model].output_bytes))return -2;
         box.model=model;box.input=input;box.input_bytes=input_bytes;
@@ -170,6 +179,9 @@ int ss_npu_service_step(void)
         result=box.register_graph(box.input,box.input_bytes,&index);
         box.refusal=result==1||!box.register_refusal?0:box.register_refusal();
         if(result==1){*(unsigned *)box.output=index;++box.registered;}
+    } else if(state==RUN&&box.operation==INFO_OPERATION){
+        memset(box.output,0,sizeof(struct ss_npu_model));
+        result=box.backend.info(box.model,box.output)?1:0;
     } else result=state==RUN?box.backend.run(box.model,box.input,box.input_bytes,
         box.output,box.output_bytes,box.timeout):box.backend.close();
     if(result<0){ss_npu_service_fail();return -1;}

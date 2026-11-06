@@ -53,7 +53,7 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<os_npu_input_count;++i)inputs+=os_npu_inputs[i].bytes;
     for(unsigned i=0;i<os_npu_output_count;++i)outputs+=os_npu_references[i].bytes;
     assert(info.input_bytes==inputs&&info.output_bytes==outputs);
-    assert(!ss_npu_model_info(expected,&info));
+    assert(ss_npu_model_info(expected,&info)==-1);
     assert(!ss_npu_model_find(NULL,&selected)&&!ss_npu_model_find("shufflenet-v2-published",NULL));
     static unsigned char input[SS_NPU_MAX_TENSOR_BYTES],output[SS_NPU_MAX_TENSOR_BYTES];
     assert(ss_npu_run(expected,input,inputs,output,outputs,100)==-2);
