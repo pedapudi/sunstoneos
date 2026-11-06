@@ -16,7 +16,7 @@ An application on SunstoneOS meets memory limits that come from constants in the
 | 4 | EL0 reaches only `0x4000_0000..0x4800_0000` through the shared table | `platform/a733/platform.c` maps 64 blocks for EL0 | Lifted for regions the application is granted: its own tables map them (see "What EL0 reaches"). |
 | 5 | Large regions exist only at build time | [status/large-regions.md](../status/large-regions.md) | Open: run-time requests. |
 
-Other constants: the board runner uploads and backs up the FEL reach, `0x4000_0000..0x1_0000_0000` (`tools/board_images.py`); the boot-slot planner loads below `0x4700_0000` (`tools/boot-slots.py`). The ledger's entry storage is sized at build time from the regions the manifests declare (no fixed count). A space needs at most `APP_SPACE_PAGES` (13) table pages, and `SS_REGIONS` is 8 in the manifest format.
+Other constants: the board runner uploads and backs up the FEL reach, `0x4000_0000..0x1_0000_0000` (`tools/board_images.py`); the boot-slot planner loads below `0x4700_0000` (`tools/boot-slots.py`). The ledger's entry storage is sized at build time from the regions the manifests declare (no fixed count). A space needs at most `APP_SPACE_PAGES` (13) table pages. The manifest holds as many regions as it declares (at most 255).
 
 ## Decisions
 
@@ -136,7 +136,7 @@ int ss_memory_release(void *base);
 
 Like the other `ss_*` calls, these are plain calls at EL0. Each posts a request to an EL1 service task and blocks the caller on a task notification. They are setup and teardown operations, not for time-critical paths.
 
-**Ledger.** The ledger's entry storage is caller storage sized at build time from the manifests, so it cannot grow while the system runs. Run-time requests need entries kept in pages of 170 entries (24 bytes each) that the ledger extends from the metadata arena when a page fills. A request fails with `NO_SPACE` only when no free extent of the size exists, or with `NO_TABLES` when no table page is available. `SS_REGIONS` (8) counts regions declared at admission; run-time requests do not use it.
+**Ledger.** The ledger's entry storage is caller storage sized at build time from the manifests, so it cannot grow while the system runs. Run-time requests need entries kept in pages of 170 entries (24 bytes each) that the ledger extends from the metadata arena when a page fills. A request fails with `NO_SPACE` only when no free extent of the size exists, or with `NO_TABLES` when no table page is available. The manifest's `region_count` counts regions declared at admission; run-time requests do not use it.
 
 **Table pages.** In place of the arena sized at build time, the arena takes a 2 MiB extent from the ledger as kernel-owned, EL1-only metadata when it is empty, giving 512 pages. A request costs at most two pages, so one extent serves 256 requests. The walker reads tables through the data cache (TCR_EL1 IRGN0 and ORGN0 are 1), and the service task writes them with cacheable stores followed by `DSB ISH`.
 

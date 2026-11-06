@@ -110,7 +110,8 @@ int os_session_valid(const struct os_session *s)
         const struct os_npu_session *n=&s->npu;
         if(n->magic!=OS_NPU_SESSION_MAGIC||n->version!=OS_NPU_SESSION_VERSION||n->bytes!=sizeof(*n)||!n->owner||
            !n->command_admission||!n->supervisor||n->pck_client>=16||n->pck_client==s->board.pck_client||
-           !os_npu_session_flags_admitted(n,returning)||n->graph_region>SS_REGIONS||os_npu_declaration_admitted(n)!=NPU_DECLARATION_OK||
+           /* A region number is 1-based into the manifest table, whose count is one byte; npu.c checks it against the manifest. */
+           !os_npu_session_flags_admitted(n,returning)||n->graph_region>UINT8_MAX||os_npu_declaration_admitted(n)!=NPU_DECLARATION_OK||
            !present(n->admission,32)||
            !present(n->clock,32)||!present(n->power,32)||!present(n->supervision,32)||!present(n->ddr,32)||
            n->owner==s->thermal_owner||n->owner==s->board.latch_owner||n->owner==s->board.latch_m_owner)
