@@ -1,14 +1,12 @@
 #include "a733_cpu_start.h"
 #include <stddef.h>
 
+/* The HELD_ and DYNAMIC_ steps run only for a held core (config.held); every other core goes from MODE to ARCH and
+ * from PUBLISH to MODE_ON, with the same register operations as before the steps existed. */
 enum { OFF, CONTROL, MODE,
-#ifdef SUNSTONE_BOARD_RESIDENT
     HELD_POLICY, HELD_STATUS,
-#endif
     ARCH, ENTRY_LO, ENTRY_HI, ENTRY_LO_CHECK, ENTRY_HI_CHECK, ARCH_WRITE, ARCH_CHECK, PUBLISH,
-#ifdef SUNSTONE_BOARD_RESIDENT
     DYNAMIC_RELEASE, DYNAMIC_POLICY, DYNAMIC_ACK,
-#endif
     MODE_ON, CONTROL_ON,
     POWER_WAIT, CONTROL_CLEAR, MODE_CLEAR, CONTROL_CHECK, MODE_CHECK, FINISH };
 static uintptr_t cfg(unsigned c) {return UINT32_C(0x08001000)+(uintptr_t)c*0x1000;}
@@ -33,7 +31,7 @@ int a733_cpu_start_init(struct a733_cpu_start *s,const struct a733_cpu_start_con
     if(!separate(s,sizeof(*s),c,sizeof(*c)) || s->initialized ||
         !c->ops.read32 || !c->ops.write32 || !c->ops.barrier || !c->ops.now_us ||
         !a733_cpu_index(c->boot_mpidr,&boot) || boot!=0 || !c->core || c->core>=A733_CPU_COUNT ||
-        !c->lease || !c->deadline || c->entry<UINT32_C(0x40000000) ||
+        !c->lease || !c->deadline || c->held>1 || c->entry<UINT32_C(0x40000000) ||
         c->entry>UINT32_MAX || (c->entry&3))return 0;
     *s=(struct a733_cpu_start){.config=*c,.state=A733_CPU_START_PENDING,.initialized=1};return 1;
 }
@@ -87,7 +85,6 @@ enum a733_cpu_start_state a733_cpu_start_poll(struct a733_cpu_start *s)
     case PUBLISH: case FINISH:
         if(s->config.ops.barrier(s->config.context)!=1)fail(s,A733_CPU_START_IO);
         break;
-#ifdef SUNSTONE_BOARD_RESIDENT
     /* Admission precedes every startup write, including RVBAR. */
     case HELD_POLICY:
         if(!(s->control&2)) {fail(s,A733_CPU_START_INITIAL_STATE);break;}
@@ -108,7 +105,6 @@ enum a733_cpu_start_state a733_cpu_start_poll(struct a733_cpu_start *s)
             advance=!!(v&0x100);
         }
         break;
-#endif
     case MODE_ON: (void)write_reg(s,mode(c),s->mode|1);break;
     case CONTROL_ON: (void)write_reg(s,ctrl(c),s->control|1);break;
     case POWER_WAIT:
@@ -126,7 +122,8 @@ enum a733_cpu_start_state a733_cpu_start_poll(struct a733_cpu_start *s)
     }
     if(s->state==A733_CPU_START_PENDING && time_ok(s) && advance) {
         if(s->step==FINISH)s->state=A733_CPU_START_POWERED;
-        else ++s->step;
+        else if(++s->step==HELD_POLICY && !s->config.held)s->step=ARCH;
+        else if(s->step==DYNAMIC_RELEASE && !s->config.held)s->step=MODE_ON;
     }
 out:
     s->entered=0;return s->state;

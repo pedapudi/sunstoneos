@@ -101,21 +101,15 @@ list(REMOVE_ITEM os_sources "$<TARGET_OBJECTS:a733-board-usb2-host>"
   "${os_root}/apps/board/admission.c" "${os_root}/apps/board/identity.c"
   "${os_root}/apps/board/client.c" "${os_root}/apps/board/usb0.c")
 if(SUNSTONE_A733_OS_RESIDENT)
-  # The armed board boot reads the watchdog, redirect and FEL registers back
-  # against the contract; the resident contract arms the first and zeroes the rest.
-  # Card reset uses the normal ROM boot selection, without a diagnostic
-  # requirement to hold BOOT low. All contract/WDT readbacks remain intact.
-  apply_build_patch("${os_build}/boot-resident.c" "${board_build}/boot.c"
-    "${os_root}/apps/os/boot-resident.patch")
-  set(os_boot_base "${os_build}/boot-resident.c")
   set(os_contract_magic 0x415337334f524331ULL)
   set(os_result_magic 0x415337334f525231ULL)
 else()
-  set(os_boot_base "${board_build}/boot-supervised.c")
   set(os_contract_magic 0x415337334f534331ULL)
   set(os_result_magic 0x415337334f535231ULL)
 endif()
-apply_build_patch("${os_build}/boot.c" "${os_boot_base}" "${os_root}/apps/os/boot.patch")
+# One EL3 boot for both lifetimes: the patch branches on the lifetime that admission verified from the contract magic
+# (a733_smp_lifetime in apps/os/admission.c) for the watchdog readback, the result magic and the cores' held startup.
+apply_build_patch("${os_build}/boot.c" "${board_build}/boot-supervised.c" "${os_root}/apps/os/boot.patch")
 # Retained per-core fault records and their previous-boot report
 # (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
 set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
@@ -134,9 +128,6 @@ if(SUNSTONE_A733_OS_USB_CLASSES)
   apply_build_patch("${os_build}/link-usb.ld" "${storage_build}/link.ld"
     "${os_root}/apps/os/usb-memory-link.patch")
   list(APPEND os_patches "${os_root}/apps/os/usb-memory-link.patch")
-endif()
-if(SUNSTONE_A733_OS_RESIDENT)
-  list(APPEND os_patches "${os_root}/apps/os/boot-resident.patch")
 endif()
 set(os_generated "${os_build}/boot.c")
 # The radio station is in every image: the board's own radio composition serves the radio workloads, and the session

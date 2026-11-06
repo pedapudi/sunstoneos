@@ -12,7 +12,7 @@ from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X29, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_PC
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--evidence', '{output}']]
+GATE_RUNS = [['--evidence', '{output}'], ['--evidence', '{output}', '--resident-owner']]
 SOURCES = ['include/a733_cpu_entry.h', 'platform/a733/cpu_entry.c', 'platform/a733/cpu_entry_native.c',
            'platform/a733/cpu_entry.S', 'include/a733_cpu_start.h', 'platform/a733/cpu_start.c',
            'checks/a733-cpu-entry.c', 'checks/a733-cpu-entry.py']
@@ -202,7 +202,7 @@ def main():
         dest = out / 'source' / source
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / source, dest)
-    run(['clang-21', *(['-DSUNSTONE_BOARD_RESIDENT=1'] if args.resident_owner else []), '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+    run(['clang-21', *(['-DCPU_START_HELD=1'] if args.resident_owner else []), '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
          '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', str(ROOT / 'include'),
          *[str(ROOT / p) for p in ['checks/a733-cpu-entry.c', 'platform/a733/cpu_entry.c', 'platform/a733/cpu_start.c']],
          '-o', str(out / 'owner-check')], 'owner-build.log')

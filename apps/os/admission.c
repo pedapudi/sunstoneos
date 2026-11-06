@@ -3,23 +3,38 @@
  * magic numbers, the extension and a digest over the complete session. */
 #include "os.h"
 #include "a733_admission_refusal.h"
+/* Every OS image other than a returning one admits the resident lifetime as well as the supervised one. */
+#ifndef SUNSTONE_A733_OS_CPU_RETURN
+#define A733_BOARD_ADMITS_RESIDENT 1
+#endif
 #define a733_smp_contract_valid os_board_contract_unused
 #include "../board/admission.c"
 #undef a733_smp_contract_valid
-#ifdef SUNSTONE_BOARD_RESIDENT
-_Static_assert(A733_SMP_CONTRACT_MAGIC==A733_OS_RESIDENT_CONTRACT_MAGIC,"resident OS contract magic");
-#else
-_Static_assert(A733_SMP_CONTRACT_MAGIC==A733_OS_CONTRACT_MAGIC,"supervised OS contract magic");
-#endif
-/* Offline card preparation reads these compiled constants, so a manifest
- * cannot relabel a supervised image or another session layout as resident. */
-__attribute__((used,retain)) const uint64_t os_contract_profile[2]={A733_SMP_CONTRACT_MAGIC,0};
-/* Whether the lifetime returns: an NPU session that observes its jobs is admitted only then (OS_NPU_OBSERVE). */
+/* Whether the lifetime returns: an NPU session that observes its jobs is admitted only then (OS_NPU_OBSERVE). The
+ * returning lifetime takes the supervised contract magic and admits no other. */
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
 #define OS_RETURNING 1
 #else
 #define OS_RETURNING 0
 #endif
+/* The OS contract magics this image admits. Offline card preparation reads these compiled constants, so a manifest
+ * cannot relabel a returning image as resident. */
+__attribute__((used,retain)) const uint64_t os_contract_profile[2]={A733_OS_CONTRACT_MAGIC,
+    OS_RETURNING?0:A733_OS_RESIDENT_CONTRACT_MAGIC};
+/* The lifetime admission verified from the contract magic (enum a733_lifetime), 0 before. EL3 monitor memory: the
+ * admission below writes it once, when the contract passes, and the EL3 boot reads it for the watchdog readback, the
+ * result record and the cores' startup. */
+unsigned a733_smp_lifetime __attribute__((section(".bss.a733_smp_monitor")));
+/* The lifetime that an OS contract magic names, among those this image admits; 0 for any other magic. */
+static unsigned os_contract_lifetime(uint64_t magic)
+{
+    if(magic==A733_OS_CONTRACT_MAGIC)return A733_LIFETIME_SUPERVISED;
+    if(!OS_RETURNING&&magic==A733_OS_RESIDENT_CONTRACT_MAGIC)return A733_LIFETIME_RESIDENT;
+    return 0;
+}
+/* The EL3 result record's magic for the admitted lifetime. */
+uint64_t a733_smp_result_magic(void)
+{return a733_smp_lifetime==A733_LIFETIME_RESIDENT?A733_OS_RESIDENT_RESULT_MAGIC:A733_OS_RESULT_MAGIC;}
 int os_session_valid(const struct os_session *s)
 {
     if(!s||!a733_board_session_valid(&s->board,0)||!os_workload_valid(s->board.workload)||
@@ -110,14 +125,17 @@ unsigned a733_smp_contract_refusal(const struct a733_smp_contract *c,uint64_t no
     const void *raw=(const void *)A733_BOARD_SESSION_ADDRESS;
     struct os_session decoded;const struct os_session *s=&decoded;
     if(!c)return A733_REFUSAL(A733_REFUSAL_CONTRACT_FIELD,0);
-    if(c->magic!=A733_SMP_CONTRACT_MAGIC)return A733_REFUSAL(A733_REFUSAL_MAGIC_VERSION,A733_MAGIC_MAGIC);
+    const unsigned lifetime=os_contract_lifetime(c->magic);
+    if(!lifetime)return A733_REFUSAL(A733_REFUSAL_MAGIC_VERSION,A733_MAGIC_MAGIC);
     if(c->reserved[0]!=A733_BOARD_SESSION_ADDRESS)return A733_REFUSAL(A733_REFUSAL_SESSION_BIND,A733_BIND_CONTRACT);
     unsigned why=0;
     if(!os_session_decode_why(raw,c->reserved[1],&decoded,&why))return A733_REFUSAL(A733_REFUSAL_SESSION_DECODE,why);
     uint8_t hash[32];storage_digest_bytes(raw,c->reserved[1],hash);
     if(memcmp(hash,&c->reserved[2],32))return A733_REFUSAL(A733_REFUSAL_SESSION_BIND,A733_BIND_DIGEST);
-    /* The board check binds every remaining field against the board prefix. */
-    struct a733_smp_contract base=*c;base.magic=A733_BOARD_CONTRACT_MAGIC;base.reserved[1]=sizeof(s->board);
+    /* The board check binds every remaining field against the board prefix, under the board magic of the same
+     * lifetime, which selects its timing and watchdog terms. */
+    struct a733_smp_contract base=*c;base.reserved[1]=sizeof(s->board);
+    base.magic=lifetime==A733_LIFETIME_RESIDENT?A733_BOARD_RESIDENT_CONTRACT_MAGIC:A733_BOARD_CONTRACT_MAGIC;
     storage_digest_bytes(&s->board,sizeof(s->board),(void *)&base.reserved[2]);
     return a733_board_contract_refusal(&base,&s->board,a733_smp_build_id,now);
 }
@@ -127,8 +145,13 @@ static struct {uint64_t magic,generation;unsigned state,why;} refusal __attribut
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
 {
     unsigned why=a733_smp_contract_refusal(c,now);
+    /* The lifetime is written once. A later contract of another lifetime is refused, so no caller can change the
+     * watchdog expectation after the first admission. */
+    if(!why&&a733_smp_lifetime&&a733_smp_lifetime!=os_contract_lifetime(c->magic))
+        why=A733_REFUSAL(A733_REFUSAL_MAGIC_VERSION,A733_MAGIC_MAGIC);
     refusal.state=why?2:1;refusal.why=why;
     if(c){refusal.magic=c->magic;refusal.generation=c->generation;}
+    if(!why)a733_smp_lifetime=os_contract_lifetime(c->magic);
     return !why;
 }
 /* The stop of a refused admission is a733_smp_stop(1,1). Name it: the refused term of the contract check, a

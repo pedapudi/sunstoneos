@@ -3,12 +3,15 @@
 #include <stdio.h>
 #include <string.h>
 
-#ifdef SUNSTONE_BOARD_RESIDENT
+/* CPU_START_HELD models a core that the stage-2 loader holds in static OFF (config.held, the resident lifetime). */
+#ifdef CPU_START_HELD
+#define HELD 1
 #define NREG 7
 #define NWRITE 8
 #define INITIAL_STATUS 0
 #define ON_STATUS 0x108
 #else
+#define HELD 0
 #define NREG 6
 #define NWRITE 7
 #define INITIAL_STATUS 0x12340000
@@ -24,7 +27,7 @@ static uintptr_t address(const struct model *m,unsigned n)
     uintptr_t b=UINT32_C(0x08001000)+m->core*0x1000u;
     const uintptr_t a[]={b,b+4,b+8,UINT32_C(0x07050200)+m->core*4u,
         UINT32_C(0x07050220)+m->core*4u,UINT32_C(0x07052008)+m->core*0x1000u
-#ifdef SUNSTONE_BOARD_RESIDENT
+#ifdef CPU_START_HELD
         ,UINT32_C(0x07052000)+m->core*0x1000u
 #endif
     };
@@ -38,7 +41,7 @@ static int read32(void *ctx,uintptr_t a,uint32_t *out)
 {
     struct model *m=ctx;unsigned r=reg(m,a);
     if(r==5 && (m->regs[3]&1) && !m->hold && ++m->waits>=2)m->regs[5]=ON_STATUS;
-#ifdef SUNSTONE_BOARD_RESIDENT
+#ifdef CPU_START_HELD
     if(r==5 && m->regs[6]==0x100 && !m->dynamic_hold)m->regs[5]|=0x100;
 #endif
     *out=m->regs[r];if(m->ops+1==m->corrupt_at)*out^=1;return action(m);
@@ -47,7 +50,7 @@ static int write32(void *ctx,uintptr_t a,uint32_t v)
 {
     struct model *m=ctx;unsigned r=reg(m,a);assert(r!=5 && m->writes<9);
     m->trace[m->writes].address=a;m->trace[m->writes++].value=v;m->regs[r]=v;
-#ifdef SUNSTONE_BOARD_RESIDENT
+#ifdef CPU_START_HELD
     if(r==6) {
         assert(m->published && (m->regs[0]&1) && m->regs[1]==0x41000000+m->core*0x4000 && !m->regs[2]);
         if(m->immediate)m->regs[5]=ON_STATUS;
@@ -63,7 +66,7 @@ static struct a733_cpu_start_config config(struct model *m,unsigned core)
     *m=(struct model){.core=core,.now=1,.regs={0xa0,0,0,0x42,0x80,INITIAL_STATUS}};
     return (struct a733_cpu_start_config){.ops={read32,write32,barrier,now_us},.context=m,
         .boot_mpidr=0x81000000,.entry=0x41000000+core*0x4000,.lease=0x12345678,
-        .deadline=1000,.core=core};
+        .deadline=1000,.core=core,.held=HELD};
 }
 static void run(struct a733_cpu_start *s,struct model *m)
 {
@@ -104,7 +107,7 @@ int main(void)
         assert(a733_cpu_start_init(&s,&c));run(&s,&m);assert(s.error==A733_CPU_START_INITIAL_STATE && !m.writes);quiet(&s,&m);
     }
     const unsigned verify[]={
-#ifdef SUNSTONE_BOARD_RESIDENT
+#ifdef CPU_START_HELD
         9,10,12,15,23,24
 #else
         7,8,10,18,19
@@ -124,7 +127,7 @@ int main(void)
         assert(a733_cpu_start_init(&s,&c));a733_cpu_start_poll(&s);m.now=0;
         a733_cpu_start_poll(&s);assert(s.error==A733_CPU_START_TIME);quiet(&s,&m);
     }
-#ifdef SUNSTONE_BOARD_RESIDENT
+#ifdef CPU_START_HELD
     for(unsigned immediate=0;immediate<2;++immediate) {
         struct a733_cpu_start s={0};struct a733_cpu_start_config c=config(&m,6);
         m.immediate=immediate;m.dynamic_hold=!immediate;c.deadline=80;
@@ -145,10 +148,11 @@ int main(void)
     }
     const uint64_t bad[]={1,0x800,0x10000,UINT64_C(1)<<32,UINT64_C(1)<<40,UINT64_C(1)<<25};
     for(unsigned i=0;i<sizeof(bad)/sizeof(*bad);++i) {unsigned out=99;assert(!a733_cpu_index(bad[i],&out)&&out==99);}
-    for(unsigned n=0;n<7;++n) {
+    for(unsigned n=0;n<8;++n) {
         struct a733_cpu_start s={0},saved=s;struct a733_cpu_start_config c=config(&m,1);
         switch(n) {case 0:c.core=0;break;case 1:c.core=8;break;case 2:c.entry=3;break;
-        case 3:c.entry=UINT64_C(1)<<32;break;case 4:c.lease=0;break;case 5:c.boot_mpidr=0x81000100;break;case 6:c.deadline=0;break;}
+        case 3:c.entry=UINT64_C(1)<<32;break;case 4:c.lease=0;break;case 5:c.boot_mpidr=0x81000100;break;case 6:c.deadline=0;break;
+        case 7:c.held=2;break;}
         assert(!a733_cpu_start_init(&s,&c));assert(!memcmp(&s,&saved,sizeof(s))&&!m.ops&&!m.clocks);
     }
     puts("PASS CPU power-on: seven secondary targets, bounded steps, retained failures/deadlines, topology and admission");

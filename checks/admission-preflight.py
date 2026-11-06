@@ -13,6 +13,7 @@ runner prepares. This check prepares the session and contract of each built imag
   reserve     a return reserve of the whole lifetime is refused as session_decode (return_reserve);
   build ID    a contract naming another build is refused as build_id;
   magic       a contract with another magic is refused as magic_version (magic);
+  resident    a contract with the resident OS magic is refused as magic_version (magic);
   identity    a contract whose epoch differs from the session's is refused as contract_field (identity);
   digest      a contract with another session digest is refused as session_bind (digest);
   launcher    a launcher that arms another lifetime than the image's is refused as timing (diagnostic);
@@ -45,6 +46,7 @@ MANIFEST_RUN, MANIFEST_RESERVE = 56, 64       # offsets of run_deadline_us and r
 SESSION_MANIFEST_HASH = 592 + 32              # prefix bytes plus the offset of manifests_sha256 in the session header
 # struct a733_smp_contract: reserved[] starts at 176; reserved[2..5] hold the session digest.
 CONTRACT_MAGIC, CONTRACT_EPOCH, CONTRACT_BUILD_ID, CONTRACT_DIGEST = 0, 24, 48, 192
+RESIDENT_CONTRACT_MAGIC = 0x415337334f524331   # A733_OS_RESIDENT_CONTRACT_MAGIC (include/a733_board_application.h)
 SESSION_DEVICES, PREFIX_WORKLOAD = 592 + 24, 400  # devices in struct ss_session_header; workload in the board prefix
 
 
@@ -152,6 +154,9 @@ def one_build(build, out):
     run('reserve of the whole lifetime', ('session_decode', 'return_reserve'), reserve_us=seconds * 1_000_000)
     run('another build ID', ('build_id', None), edit=lambda c: c.__setitem__(CONTRACT_BUILD_ID, c[CONTRACT_BUILD_ID] ^ 1))
     run('another contract magic', ('magic_version', 'magic'), edit=lambda c: c.__setitem__(CONTRACT_MAGIC, c[CONTRACT_MAGIC] ^ 1))
+    # A returning image admits the supervised OS magic alone: the resident one, which another OS image admits, is refused.
+    run('the resident contract magic', ('magic_version', 'magic'),
+        edit=lambda c: struct.pack_into('<Q', c, CONTRACT_MAGIC, RESIDENT_CONTRACT_MAGIC))
     # A CPU clock grant that names clusters names this boot's epoch: another value is refused, and the zero of an
     # unassigned card grant takes the board's epoch (apps/os/session.c).
     # The session of this build carries such a grant; a session without one would skip the case, so its absence fails.

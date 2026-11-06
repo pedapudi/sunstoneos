@@ -8,7 +8,57 @@
  #include "a733_cpu_continue.h"
  #include <stddef.h>
  static struct a733_smp_contract admission __attribute__((section(".bss.a733_smp_monitor")));
-@@ -96,6 +97,9 @@
+@@ -23,8 +24,10 @@
+     RESULT->completed_mask=status?0:255;
+     RESULT->status=status;RESULT->detail=detail;RESULT->end_counter=a733_smp_counter();
+     barrier();RESULT->stage=5;barrier();
+-    /* Supervised terminal halt retains all CPUs, registers and reservations.
+-     * No reset occurs. USB may be unavailable; manual reconnection owns recovery. */
++    /* The terminal halt retains all CPUs, registers and reservations. In the
++     * supervised lifetime no reset occurs: USB may be unavailable and manual
++     * reconnection owns recovery. In the resident lifetime the independently
++     * armed watchdog owns reset; this image never feeds, disarms or resets it. */
+     for(;;)__asm__ volatile("wfe");
+ }
+ static int boot_state(void)
+@@ -76,15 +79,32 @@
+     barrier();
+     if(!boot_state() || !a733_smp_contract_valid(&admission,a733_smp_counter()) ||
+        source->magic!=admission.magic || source->generation!=admission.generation ||
+-       (RESULT->magic==A733_SMP_RESULT_MAGIC && RESULT->generation==admission.generation))
++       (RESULT->magic==a733_smp_result_magic() && RESULT->generation==admission.generation))
+         a733_smp_stop(1,1);
+-    /* Supervised admission never arms a timer or installs a reset redirect.
++    /* The admission above verified the contract magic and recorded its
++     * lifetime (a733_smp_lifetime), which selects the watchdog readback.
+      * Configuration readback does not claim independent fault recovery. */
+-    if((read32(0x02050014)&1) || (read32(0x02050010)&0x100) ||
++    if(a733_smp_lifetime==A733_LIFETIME_RESIDENT) {
++        /* Resident: the values recorded by the qualified external arm
++         * procedure, which the contract check bound (armed WDT0, no FEL flag,
++         * no reset redirect). Readback can reject changed configuration; it
++         * cannot prove timer progress. Card reset uses the normal ROM boot
++         * selection, so BOOT is not required low (0x03000024 bit 8), unlike
++         * the board image's armed boot. */
++        if((read32(0x02050014)&0xffff)!=admission.watchdog_mode ||
++           (read32(0x02050010)&0xffff)!=admission.watchdog_configuration ||
++           (read32(0x02050018)&0xffff)!=admission.watchdog_output ||
++           read32(0x07090108)!=admission.fel_flag ||
++           read32(0x070501c0)!=admission.redirect_flag ||
++           read32(0x070501c4)!=admission.redirect_entry ||
++           read32(0x070501d4)!=admission.alternate_flag)a733_smp_stop(1,2);
++    }
++    /* Supervised: admission never arms a timer or installs a reset redirect. */
++    else if((read32(0x02050014)&1) || (read32(0x02050010)&0x100) ||
+        read32(0x070501c0) || read32(0x070501d4))a733_smp_stop(1,2);
+     volatile uint64_t *r=(volatile uint64_t *)RESULT;
+     for(unsigned i=0;i<sizeof(*RESULT)/8;++i)r[i]=0;
+-    RESULT->magic=A733_SMP_RESULT_MAGIC;RESULT->epoch=admission.epoch;
++    RESULT->magic=a733_smp_result_magic();RESULT->epoch=admission.epoch;
+     RESULT->generation=admission.generation;RESULT->start_counter=a733_smp_counter();
+     RESULT->status=UINT64_MAX;RESULT->stage=1;
+     extern int board_session_prepare(const struct a733_smp_contract *);
+@@ -108,6 +128,9 @@
      for(unsigned i=1;i<banks;++i)write32(0x03400180+i*4,UINT32_MAX);
      wait_clear(0x03400000,1u<<31);
      write32(0x03400000,(ctlr&~7u)|0x30);wait_clear(0x03400000,1u<<31);
@@ -18,3 +68,13 @@
      write32(0x03400000,(ctlr&~7u)|0x33);wait_clear(0x03400000,1u<<31);
      if((read32(0x03400000)&0x73)!=0x33)a733_smp_stop(2,3);
      uint64_t mpidr;__asm__ volatile("mrs %0, mpidr_el1":"=r"(mpidr));
+@@ -115,7 +138,8 @@
+         targets[c-1]=c;
+         struct a733_cpu_start_config config={.ops={power_read,power_write,power_barrier,now_us},
+             .context=&targets[c-1],.boot_mpidr=mpidr,.entry=(uintptr_t)a733_cpu_secondary_entry,
+-            .lease=admission.lease,.deadline=admission.startup_deadline/24,.core=c};
++            .lease=admission.lease,.deadline=admission.startup_deadline/24,.core=c,
++            .held=a733_smp_lifetime==A733_LIFETIME_RESIDENT};
+         if(!a733_cpu_start_init(&power[c-1],&config) ||
+            !a733_cpu_entry_native_init(&owners[c-1],&power[c-1],admission.epoch))a733_smp_stop(2,c+16);
+         while(a733_cpu_entry_poll(&owners[c-1])==A733_CPU_ENTRY_PENDING) {}

@@ -21,15 +21,15 @@
  * layout with zero time fields. The contract has its own magic number, arms
  * the four-second watchdog, and has no FEL return and no diagnostic deadline.
  * A supervising task renews the watchdog while every listed service makes
- * progress. */
+ * progress. Only the OS image admits it (A733_BOARD_ADMITS_RESIDENT). */
 #define A733_BOARD_RESIDENT_CONTRACT_MAGIC UINT64_C(0x4153373342524332)
-#ifdef SUNSTONE_BOARD_RESIDENT
-#ifndef SUNSTONE_BOARD_SUPERVISED
-#error The resident lifetime uses the supervised session layout
-#endif
-#undef A733_BOARD_CONTRACT_MAGIC
-#define A733_BOARD_CONTRACT_MAGIC A733_BOARD_RESIDENT_CONTRACT_MAGIC
-#endif
+/* The lifetime that EL3 admission verified from the contract magic. Zero
+ * before admission. */
+enum a733_lifetime { A733_LIFETIME_SUPERVISED=1, A733_LIFETIME_RESIDENT=2 };
+/* The OS image's EL3 lifetime word (EL3 monitor memory) and the EL3 result
+ * record's magic for that lifetime (apps/os/admission.c). */
+extern unsigned a733_smp_lifetime;
+uint64_t a733_smp_result_magic(void);
 /* The integrated OS image (apps/os) extends the board session to
  * A733_OS_SESSION_BYTES and has its own contract and result magic numbers
  * for each lifetime. The stage-2 loader produces only the resident contract. */
@@ -53,9 +53,6 @@
 #endif
 #if A733_BOARD_STARTUP_SECONDS < 1 || A733_BOARD_STARTUP_SECONDS >= A733_BOARD_SUPERVISED_SECONDS
 #error Invalid supervised board startup interval
-#endif
-#if defined(SUNSTONE_BOARD_RESIDENT) && A733_BOARD_STARTUP_SECONDS >= 4
-#error Resident startup must end before the first watchdog expiry
 #endif
 /* Existing0/1 include the USB2 source path. Supervised2/3 omit that path;
  * odd selections include radio. Supervised4 requires both USB leaf classes

@@ -79,6 +79,22 @@ int a733_board_session_valid(const struct a733_board_session *s,uint64_t now)
     for(unsigned i=0;i<3;++i)if(!s->fabric_hz[i])return 0;
     return 1;
 }
+#ifdef A733_BOARD_ADMITS_RESIDENT
+#ifndef SUNSTONE_BOARD_SUPERVISED
+#error The resident lifetime uses the supervised session layout
+#endif
+_Static_assert(A733_BOARD_STARTUP_SECONDS<4,"resident startup must end before the first watchdog expiry");
+#endif
+/* The lifetime that a board contract magic names, among those this image admits; 0 for any other magic. A board image
+ * admits its own magic alone. The OS image (apps/os/admission.c) also admits the resident magic. */
+static unsigned board_lifetime(uint64_t magic)
+{
+    if(magic==A733_BOARD_CONTRACT_MAGIC)return A733_LIFETIME_SUPERVISED;
+#ifdef A733_BOARD_ADMITS_RESIDENT
+    if(magic==A733_BOARD_RESIDENT_CONTRACT_MAGIC)return A733_LIFETIME_RESIDENT;
+#endif
+    return 0;
+}
 /* Zero when the contract binds this session; otherwise the named refusal (include/a733_admission_refusal.h),
  * checked in the order of the stop detail's terms. */
 unsigned a733_board_contract_refusal(const struct a733_smp_contract *c,const struct a733_board_session *s,
@@ -87,7 +103,8 @@ unsigned a733_board_contract_refusal(const struct a733_smp_contract *c,const str
     uint8_t digest[32];
     if(!c||!s)return A733_REFUSAL(A733_REFUSAL_CONTRACT_FIELD,0);
     if(!a733_board_session_valid(s,now))return A733_REFUSAL(A733_REFUSAL_SESSION_BIND,A733_BIND_BOARD_PREFIX);
-    if(c->magic!=A733_BOARD_CONTRACT_MAGIC)return A733_REFUSAL(A733_REFUSAL_MAGIC_VERSION,A733_MAGIC_MAGIC);
+    const unsigned lifetime=board_lifetime(c->magic);
+    if(!lifetime)return A733_REFUSAL(A733_REFUSAL_MAGIC_VERSION,A733_MAGIC_MAGIC);
     if(c->version!=A733_BOARD_CONTRACT_VERSION)return A733_REFUSAL(A733_REFUSAL_MAGIC_VERSION,A733_MAGIC_VERSION);
     if(c->bytes!=sizeof(*c))return A733_REFUSAL(A733_REFUSAL_MAGIC_VERSION,A733_MAGIC_SIZE);
     if(c->epoch!=s->epoch||c->generation!=s->generation||c->inverse_generation!=~c->generation||c->lease!=s->lease)
@@ -96,6 +113,7 @@ unsigned a733_board_contract_refusal(const struct a733_smp_contract *c,const str
     if(c->reserved[0]!=A733_BOARD_SESSION_ADDRESS||c->reserved[1]!=sizeof(*s))
         return A733_REFUSAL(A733_REFUSAL_SESSION_BIND,A733_BIND_CONTRACT);
 #ifndef SUNSTONE_BOARD_SUPERVISED
+    (void)lifetime;
     if(c->armed_at!=s->reload_before_ticks||c->armed_at>UINT64_MAX-A733_SMP_COUNTER_HZ)
         return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_ARMED);
     if(c->startup_deadline!=c->armed_at+A733_SMP_COUNTER_HZ||now>=c->startup_deadline)
@@ -106,27 +124,29 @@ unsigned a733_board_contract_refusal(const struct a733_smp_contract *c,const str
     if(c->watchdog_mode!=0x41||c->watchdog_configuration!=1||c->watchdog_output!=2||c->fel_flag!=0x5aa5a55a||
        c->redirect_flag!=0xfa50392f||c->redirect_entry!=0x20||c->alternate_flag)
         return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_WATCHDOG_FIELDS);
-#elif defined(SUNSTONE_BOARD_RESIDENT)
-    /* The stage-2 loader armed the four-second watchdog at armed_at. The
-     * watchdog is the only hang bound: no diagnostic deadline, no FEL return. */
-    if(c->armed_at>now||c->armed_at>UINT64_MAX-4*A733_SMP_COUNTER_HZ)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_ARMED);
-    if(c->startup_deadline!=c->armed_at+A733_BOARD_STARTUP_SECONDS*A733_SMP_COUNTER_HZ||now>=c->startup_deadline)
-        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_STARTUP);
-    if(c->diagnostic_deadline!=A733_SMP_NO_DEADLINE)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_DIAGNOSTIC);
-    if(c->expires_at!=c->armed_at+4*A733_SMP_COUNTER_HZ)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_EXPIRY);
-    if(c->watchdog_mode!=0x41||c->watchdog_configuration!=1||c->watchdog_output!=2||
-       c->fel_flag||c->redirect_flag||c->redirect_entry||c->alternate_flag)
-        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_WATCHDOG_FIELDS);
 #else
-    if(c->armed_at>now||c->armed_at>UINT64_MAX-A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ)
-        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_ARMED);
-    if(c->startup_deadline!=c->armed_at+A733_BOARD_STARTUP_SECONDS*A733_SMP_COUNTER_HZ||now>=c->startup_deadline)
-        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_STARTUP);
-    if(c->diagnostic_deadline!=c->armed_at+A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ)
-        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_DIAGNOSTIC);
-    if(c->expires_at!=c->diagnostic_deadline)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_EXPIRY);
-    if(c->watchdog_mode||c->watchdog_configuration||c->watchdog_output||c->fel_flag||c->redirect_flag||
-       c->redirect_entry||c->alternate_flag)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_WATCHDOG_FIELDS);
+    if(lifetime==A733_LIFETIME_RESIDENT){
+        /* The stage-2 loader armed the four-second watchdog at armed_at. The
+         * watchdog is the only hang bound: no diagnostic deadline, no FEL return. */
+        if(c->armed_at>now||c->armed_at>UINT64_MAX-4*A733_SMP_COUNTER_HZ)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_ARMED);
+        if(c->startup_deadline!=c->armed_at+A733_BOARD_STARTUP_SECONDS*A733_SMP_COUNTER_HZ||now>=c->startup_deadline)
+            return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_STARTUP);
+        if(c->diagnostic_deadline!=A733_SMP_NO_DEADLINE)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_DIAGNOSTIC);
+        if(c->expires_at!=c->armed_at+4*A733_SMP_COUNTER_HZ)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_EXPIRY);
+        if(c->watchdog_mode!=0x41||c->watchdog_configuration!=1||c->watchdog_output!=2||
+           c->fel_flag||c->redirect_flag||c->redirect_entry||c->alternate_flag)
+            return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_WATCHDOG_FIELDS);
+    }else{
+        if(c->armed_at>now||c->armed_at>UINT64_MAX-A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ)
+            return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_ARMED);
+        if(c->startup_deadline!=c->armed_at+A733_BOARD_STARTUP_SECONDS*A733_SMP_COUNTER_HZ||now>=c->startup_deadline)
+            return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_STARTUP);
+        if(c->diagnostic_deadline!=c->armed_at+A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ)
+            return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_DIAGNOSTIC);
+        if(c->expires_at!=c->diagnostic_deadline)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_EXPIRY);
+        if(c->watchdog_mode||c->watchdog_configuration||c->watchdog_output||c->fel_flag||c->redirect_flag||
+           c->redirect_entry||c->alternate_flag)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_WATCHDOG_FIELDS);
+    }
 #endif
     storage_digest_bytes(s,sizeof(*s),digest);
     if(memcmp(digest,&c->reserved[2],32))return A733_REFUSAL(A733_REFUSAL_SESSION_BIND,A733_BIND_DIGEST);
@@ -144,8 +164,10 @@ int a733_smp_power_address(unsigned core,uintptr_t address,int write)
     uintptr_t cfg=UINT32_C(0x08001000)+(uintptr_t)core*0x1000;
     if(address==cfg||address==cfg+4||address==cfg+8||address==UINT32_C(0x07050200)+core*4||
        address==UINT32_C(0x07050220)+core*4)return 1;
-#ifdef SUNSTONE_BOARD_RESIDENT
-    if(address==UINT32_C(0x07052000)+(uintptr_t)core*0x1000)return 1;
+#ifdef A733_BOARD_ADMITS_RESIDENT
+    /* The resident boot holds each secondary core in static OFF through its power policy word; startup releases it
+     * (docs/designs/cold-cpu-static-off.md). */
+    if(a733_smp_lifetime==A733_LIFETIME_RESIDENT&&address==UINT32_C(0x07052000)+(uintptr_t)core*0x1000)return 1;
 #endif
     return !write&&address==UINT32_C(0x07052008)+(uintptr_t)core*0x1000;
 }
