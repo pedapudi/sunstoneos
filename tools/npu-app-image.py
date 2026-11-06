@@ -141,7 +141,6 @@ def main():
     configure = [str(args.cfg), str(ROOT), str(image),
                  '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_MIMUS_BOARD_APPLICATION=ON', '-DSUNSTONE_APPLICATION=' + name,
                  '-DSUNSTONE_APPLICATION_%s_ROOT=%s' % (name, args.app),
-                 '-DSUNSTONE_A733_OS_PERF_BOOT=high',
                  '-DSUNSTONE_MIMUS_WORKERS=2',
                  '-D%s=%s' % (args.manifest_variable, args.out / 'manifest.json'),
                  *('-D' + d for d in args.define)]
