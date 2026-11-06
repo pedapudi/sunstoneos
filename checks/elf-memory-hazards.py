@@ -9,6 +9,11 @@ memcpy, memmove or memset, or any function reachable by direct branches from
 the EL3 boot roots, contains a SIMD/FP register operand or DC ZVA. The string
 routines must also be leaves. Indirect calls are counted but not followed;
 compiler -mstrict-align, not this check, keeps scalar accesses aligned.
+Functions are told apart by address, because static functions of different
+units share names (prepare_step, walk); a branch is followed to the address it
+names, whatever the case of its symbol. The walk stops at the EL1 entries that
+EL3 code reaches only after an exception return, because EL1 runs with its own
+translation and is outside the boot rule.
 """
 import argparse
 import json
@@ -22,22 +27,26 @@ STRING_ROUTINES = ('memcpy', 'memmove', 'memset')
 # C entries and fault handlers that EL3 assembly reaches with translation off.
 DEFAULT_ROOTS = (r'^(local_boot|monitor_init|a733_cpu_.*|a733_smp_boot|a733_cached_prepare'
                  r'|a733_cached_el3_fault|a733_cached_cold_fault|a733_stage2_main)$')
+# Entered at EL1 after the eret in a733_cached_enter_el1 (platform/a733-smp-cached/continue.S), with EL1 translation on.
+EL1_ENTRIES = ('a733_cached_el1',)
 FUNCTION = re.compile(r'^([0-9a-f]+) <([^>]+)>:$')
 INSTRUCTION = re.compile(r'^\s*([0-9a-f]+):\s+(\S+)\s*(.*)$')
 # Literal data inside a code section, such as SHA-256 round constants.
 DATA = re.compile(r'^\s*[0-9a-f]+:(?:\s+[0-9a-f]{2})+\s+\.(?:byte|short|word|long|quad)\b')
 SIMD_REGISTER = re.compile(r'\b(?:[vqdshb](?:[12]?[0-9]|3[01])(?:\.\w+)?|z[0-9]+|p[0-9]+)\b')
 TARGET = re.compile(r'<([^>+]+)(\+0x[0-9a-f]+)?>')
+BRANCH = re.compile(r'(?:0x)?([0-9a-f]+) <([^>+]+)(\+0x[0-9a-f]+)?>')
 THUNK = re.compile(r'^__AArch64\w*Thunk_(.+)$')
 
 
 def disassemble(objdump, image):
+    """{start address: (name, instructions)}."""
     output = subprocess.check_output([objdump, '-d', '--no-show-raw-insn', str(image)], text=True)
     functions, current = {}, None
     for line in output.splitlines():
         match = FUNCTION.match(line)
         if match:
-            current = functions.setdefault(match[2], [])
+            current = functions.setdefault(int(match[1], 16), (match[2], []))[1]
             continue
         match = INSTRUCTION.match(line)
         if match and current is not None and not DATA.match(line):
@@ -56,7 +65,7 @@ def hazards(instructions):
     return found
 
 
-def callees(name, instructions, functions):
+def callees(start, instructions, functions, named):
     direct, indirect = set(), 0
     for _, mnemonic, operands in instructions:
         if mnemonic in ('blr', 'br', 'blraa', 'braa'):
@@ -64,49 +73,57 @@ def callees(name, instructions, functions):
             continue
         if mnemonic not in ('bl', 'b') and not mnemonic.startswith('b.') and mnemonic not in ('cbz', 'cbnz', 'tbz', 'tbnz'):
             continue
-        match = TARGET.search(operands)
-        if not match or match[2] or match[1] == name:
+        match = BRANCH.search(operands)
+        if not match or match[3]:
             continue
-        target = match[1]
-        thunk = THUNK.match(target)
+        target = int(match[1], 16)
+        thunk = THUNK.match(match[2])
         if thunk:
-            target = thunk[1]
-        if target in functions:
+            # A range-extension thunk names its target; follow every function of that name.
+            direct |= named.get(thunk[1], set()) - {start}
+        elif target in functions and target != start:
             direct.add(target)
     return direct, indirect
 
 
 def check(image, objdump, roots):
     functions = disassemble(objdump, image)
+    named = {}
+    for start, (name, _) in functions.items():
+        named.setdefault(name, set()).add(start)
     failures, report = [], {'image': str(image), 'string_routines': {}, 'roots': [], 'reachable': 0,
                              'indirect_calls': 0}
     for name in STRING_ROUTINES:
-        if name not in functions:
+        if name not in named:
             report['string_routines'][name] = 'absent'
             continue
-        found = hazards(functions[name])
-        calls, indirect = callees(name, functions[name], functions)
-        if calls or indirect or any(m == 'bl' for _, m, _ in functions[name]):
-            found.append('calls another routine')
+        found = []
+        for start in sorted(named[name]):
+            instructions = functions[start][1]
+            found += hazards(instructions)
+            calls, indirect = callees(start, instructions, functions, named)
+            if calls or indirect or any(m == 'bl' for _, m, _ in instructions):
+                found.append('calls another routine')
         report['string_routines'][name] = found or 'clean'
         failures += [f'{name}: {item}' for item in found]
     pattern = re.compile(roots)
-    queue = sorted(name for name in functions if pattern.match(name))
-    report['roots'] = queue[:]
-    reached, parents = set(queue), {name: None for name in queue}
+    queue = sorted(start for start, (name, _) in functions.items() if pattern.match(name))
+    report['roots'] = sorted(functions[start][0] for start in queue)
+    reached, parents = set(queue), {start: None for start in queue}
     while queue:
-        name = queue.pop()
-        for item in hazards(functions[name]):
-            chain, step = [name], parents[name]
-            while step:
-                chain.append(step)
+        start = queue.pop()
+        for item in hazards(functions[start][1]):
+            chain, step = [functions[start][0]], parents[start]
+            while step is not None:
+                chain.append(functions[step][0])
                 step = parents[step]
             failures.append(f'{" <- ".join(chain)}: {item}')
-        direct, indirect = callees(name, functions[name], functions)
+        direct, indirect = callees(start, functions[start][1], functions, named)
+        direct = {target for target in direct if functions[target][0] not in EL1_ENTRIES}
         report['indirect_calls'] += indirect
         for target in sorted(direct - reached):
             reached.add(target)
-            parents[target] = name
+            parents[target] = start
             queue.append(target)
     report['reachable'] = len(reached)
     report['failures'] = failures
