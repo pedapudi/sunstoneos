@@ -29,7 +29,6 @@ import harness
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['apps/board/admission.c', 'include/a733_board_application.h', 'include/a733_admission_refusal.h',
                 'platform/a733-smp-cached/boot.h', 'drivers/storage/storage_digest.c']
-GATE_RUNS = [['--output', '{output}']]
 HARNESS = r'''
 #include "a733_board_application.h"
 #include "a733_admission_refusal.h"
