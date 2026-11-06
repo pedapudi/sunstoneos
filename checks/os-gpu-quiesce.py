@@ -10,7 +10,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP
-from harness import machine as harness_machine, Image, save, skip_crumbs
+from harness import machine as harness_machine, Image, save, skip_crumbs, seal_lifetime
 GATE_RUNS = [['--image', '{elf:ret-gpu}', '--output', '{output}']]
 
 CASES=('ready','owned-job','recovery','manual-closed','cold','refused-create','pending-create',
@@ -40,7 +40,7 @@ for case in a.case or CASES:
     u=harness_machine();u.mem_map(0x41000000,0x1200000);u.mem_map(0x80000000,0x20000)
     for address,data in image.parts:
         if data:u.mem_write(address,data)
-    skip_crumbs(u,image)
+    skip_crumbs(u,image);seal_lifetime(u,image)
     def put(address,value,n=4):u.mem_write(address,int(value).to_bytes(n,'little'))
     def get(address,n=4):return int.from_bytes(u.mem_read(address,n),'little')
     def field(base,typ,name):return base+image.layouts[typ][name]

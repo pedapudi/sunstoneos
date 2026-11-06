@@ -35,11 +35,11 @@ CHECK_INPUTS = ['apps/os/npu-report.py', 'apps/cpu-npu-concurrency/main.c', 'app
  'apps/cpu-npu-concurrency/host.py', 'apps/cpu-npu-concurrency/receipt.h',
  'apps/os/npu-observe.c', 'apps/os/npu-client.c', 'apps/os/npu.c', 'apps/os/npu-declaration.c',
  'apps/os/application.c', 'apps/os/cpu-return.c', 'apps/os/cpu-return-host.py',
- 'apps/os/cpu-return-followup.py', 'apps/os/cpu-return/terminal.patch',
- 'apps/os/cpu-return/thermal.patch', 'drivers/npu/npu_service.c',
+ 'apps/os/cpu-return-followup.py', 'apps/os/return-terminal.patch',
+ 'apps/os/thermal.c', 'drivers/npu/npu_service.c',
  'drivers/npu/a733_npu_runtime.c', 'runtime/npu_app.c',
  'checks/cpu-npu-concurrency/producer.c', 'checks/os-cpu-return-services.py',
- 'checks/os-cpu-return.py', 'apps/os/thermal.c', 'apps/os/thermal-report.py',
+ 'checks/os-cpu-return.py', 'apps/os/thermal-report.py',
  'apps/os/cpu-return-thermal.py', 'tools/board.py', 'tools/board_images.py']
 GATE_RUNS = [['--elf', '{elf:ret-npu-load}', '--out', '{output}']]
 MAIN, CLIENT, BOOTSTRAP, WORKER = 0x5000, 0x3000, 0x4000, 0x9000
@@ -224,14 +224,14 @@ class Native(terminal.KernelPages, owners.Model):
         for index in range(5):
             self.put32(policy+pf['millicelsius']+index*4, 40000)
             self.put64(policy+pf['seen_us']+index*8, now)
-        self.s['chain_thermal_reading'] = self.layout.address('record_reading', 'return-thermal.c')
+        self.s['chain_thermal_reading'] = self.layout.address('record_reading', 'apps/os/thermal.c')
         self.api('chain_thermal_reading', now, 0, task=0x6000, core=0)
-        readings=self.layout.address('readings','return-thermal.c')
+        readings=self.layout.address('readings','apps/os/thermal.c')
         self.put64(self.thermal+self.layout.layouts['os_thermal_service']['next_read'],
                    self.u64(readings+self.layout.layouts['os_thermal_readings']['next']))
 
     def advance_thermal(self, target):
-        readings = self.layout.address('readings', 'return-thermal.c')
+        readings = self.layout.address('readings', 'apps/os/thermal.c')
         next_field = self.layout.layouts['os_thermal_readings']['next']
         while self.u64(readings+next_field)*24 <= target:
             self.time = max(self.time, self.u64(readings+next_field)*24)

@@ -226,7 +226,7 @@ def run(image, session_path, case='accept'):
     s.uc.mem_write(s.sealed, s.session)
     e = s.e
     L = e.layouts
-    board = e.address('board', 'return-main-pinned.c') if ('board', ) else None
+    board = e.address('board', 'os-image/main.c') if ('board', ) else None
     fields = L['board_application']
     sf = L['a733_board_session']
     # What a733_smp_diagnostic_start leaves: the admitted copy of the snapshot,

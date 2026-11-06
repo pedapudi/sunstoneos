@@ -190,7 +190,7 @@ int a733_cached_memory_prepare(void)
         }
 #if defined(SUNSTONE_A733_OS)
         /* The return cleans, at EL3 before the board goes back to the ROM, every range that the OS published as visible to a
-         * device or written by one (apps/os/cpu-return/terminal.patch, apps/os/device-ranges.h), and it parks on a block
+         * device or written by one (apps/os/return-terminal.patch, apps/os/device-ranges.h), and it parks on a block
          * that its table does not map as normal write-back memory. Those ranges are chosen at run time, so the EL3 tables
          * map every byte of DRAM that the decode check passed, with the attributes of a level-2 block; they do not depend on
          * where the OS places a buffer. */

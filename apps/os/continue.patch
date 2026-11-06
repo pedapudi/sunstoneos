@@ -1,5 +1,5 @@
---- input
-+++ output
+--- continue.c
++++ continue-os.c
 @@ -2,6 +2,8 @@
  #include "a733_device_memory_layout.h"
  #endif
@@ -9,15 +9,16 @@
  #include "a733_cached_memory.h"
  #include "a733_memory_local.h"
  #if defined(SUNSTONE_A733_FAULT_PAGE)
-@@ -101,6 +103,7 @@
+@@ -101,6 +103,8 @@
  static void local_boot(unsigned c,uint64_t epoch)
  {
      if(c>=8 || native_core()!=c || epoch!=boot_values[0] || !epoch)park();
-+    if(!a733_qualification_local(c,epoch))failed(c,0x735);
++    /* The returning lifetime saves this core's interrupt state for the ROM return (EL3 lifetime word). */
++    if(a733_smp_lifetime==A733_LIFETIME_RETURN&&!a733_qualification_local(c,epoch))failed(c,0x735);
      if(c)prepare_core(c);
      uint64_t mpidr;__asm__ volatile("mrs %0,mpidr_el1":"=r"(mpidr));
      struct a733_cpu_continue s={0};
-@@ -174,6 +177,9 @@
+@@ -180,6 +184,9 @@
          uint64_t now=a733_smp_counter();
          if(now<last || now>=startup)a733_cached_smc(3,0x203);
          last=now;__asm__ volatile("yield");

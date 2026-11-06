@@ -57,7 +57,7 @@ GPU worker measures each duration from its kick to its observed timeline update.
 Submit-to-kick timing requires separate coordinator instrumentation.
 
 Build the returning eight-job image with `SUNSTONE_APPLICATION=queue-add`,
-`SUNSTONE_A733_OS_GPU=ON`, `SUNSTONE_A733_OS_CPU_RETURN=ON` and
+`SUNSTONE_A733_OS_GPU=ON` and
 `CMAKE_C_FLAGS=-DQUEUE_ADD_JOBS=8`. The manifest selects the A55 application
 cluster.
 The coordinator must supply the image's ordinary dependency paths and supervised

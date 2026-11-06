@@ -55,3 +55,17 @@ int board_radio_watchdog(struct board_radio *r, uint64_t *progress, uint64_t *de
 int board_radio_profile_runtime(struct board_radio_profile *o, const struct board_radio_profile *i,
     const struct a733_board_session *s, uint8_t d[32])
 { (void)o; (void)i; (void)s; (void)d; ABSENT("radio profile"); }
+
+/* The returning lifetime's units (apps/os/cpu-return*.c) are not linked: the virtual board's scenarios run the supervised
+ * and resident lifetimes, whose paths test os_returning() or os_cpu_return_requested() before any other entry. */
+#include "../../apps/os/cpu-return.h"
+uint32_t os_cpu_return_entry_refusal;
+int os_cpu_return_requested(void) { return 0; }
+uint64_t os_cpu_return_cutoff(void) { return UINT64_MAX; }
+int os_cpu_return_start(void) { ABSENT("cpu return start"); }
+void os_cpu_return_begin(const uint8_t *data, size_t bytes) { (void)data; (void)bytes; ABSENT("cpu return begin"); }
+void os_cpu_return_thermal_done(void) { ABSENT("cpu return thermal"); }
+int os_cpu_return_devices_ready(void) { ABSENT("cpu return devices"); }
+int os_cpu_return_entry_guard(const struct a733_cpu_clock *c, const struct a733_thermal_policy *p, uint64_t now,
+    int (*read)(void *, uintptr_t, uint32_t *), void *context)
+{ (void)c; (void)p; (void)now; (void)read; (void)context; ABSENT("cpu return entry guard"); }

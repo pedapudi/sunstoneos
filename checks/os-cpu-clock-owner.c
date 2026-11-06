@@ -24,6 +24,13 @@ const struct os_session *os_session_admitted(void){return &session;}
 int os_granted(unsigned mask){return mask&&(session.granted&mask)==mask;}
 /* The performance service is not part of this model: a grant without perf never reaches it. */
 int os_perf_step(struct a733_cpu_clock *c,const struct a733_thermal_policy *p,int burst){(void)c;(void)p;(void)burst;check(0,90);return 0;}
+/* The supervised lifetime: the returning units (apps/os/cpu-return*.c) are outside this owner model, and the entry guard
+ * that the returning lifetime adds is never reached. */
+unsigned board_session_lifetime(void){return A733_LIFETIME_SUPERVISED;}
+int os_cpu_return_requested(void){return 0;}
+uint32_t os_cpu_return_entry_refusal;
+int os_cpu_return_entry_guard(const struct a733_cpu_clock *c,const struct a733_thermal_policy *p,uint64_t now,
+    int (*read)(void *,uintptr_t,uint32_t *),void *context){(void)c;(void)p;(void)now;(void)read;(void)context;check(0,91);return -1;}
 int a733_counter_clock_now(void *v,uint64_t *out){(void)v;*out=++time_us;return 1;}
 int model_init(struct a733_cpu_clock *c,const struct a733_cpu_clock_config *config,
     const struct a733_cpu_clock_ops *ops,void *cookie,struct a733_clock_leases *clocks,

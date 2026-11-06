@@ -1,7 +1,7 @@
 # The same arithmetic runs as a CPU control when the application is built without its graph.
-if(NOT SUNSTONE_A733_OS_CPU_RETURN OR SUNSTONE_A733_OS_GPU OR
+if(SUNSTONE_A733_OS_GPU OR
    SUNSTONE_A733_OS_DMA OR SUNSTONE_A733_OS_USB_CLASSES)
-  message(FATAL_ERROR "CPU/NPU diagnostic requires its supervised CPU-return composition")
+  message(FATAL_ERROR "The CPU/NPU diagnostic requires an OS image without the GPU, DMA and USB class services")
 endif()
 set(cpu_npu_sources "${CMAKE_CURRENT_LIST_DIR}/../main.c")
 # Neither the OS image nor the application links the graph or the input: the runner uploads them as the manifest's two input

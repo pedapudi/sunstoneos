@@ -42,8 +42,7 @@ cmake --build "$build/hello" --target sunstone-a733-os-hello -j12
 "$cfg" "$os" "$build/mimus" -DMIMUS_DIR="$mimus" -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=mimus
 cmake --build "$build/mimus" --target sunstone-a733-os -j12
 
-"$cfg" "$os" "$build/control-hello" -DMIMUS_DIR= -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=hello-compute \
-  -DSUNSTONE_A733_OS_CPU_RETURN=ON
+"$cfg" "$os" "$build/control-hello" -DMIMUS_DIR= -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=hello-compute
 cmake --build "$build/control-hello" --target sunstone-a733-os-hello -j12
 ```
 
@@ -70,9 +69,9 @@ admits two lifetimes and selects one at run time from the contract magic
 ([the design](designs/one-os-image.md#lifetime-word-and-sealed-session)): the
 supervised lifetime uses the bounded board session, which the manifest sizes,
 and in the resident lifetime the watchdog owner renews the watchdog from
-service progress. `SUNSTONE_A733_OS_CPU_RETURN=ON` selects the success-only
-returning profile and its existing retirement requirements; it admits the
-supervised lifetime only.
+service progress. The returning lifetime has its own contract magic and ends
+with the success-only return and its retirement requirements
+([the design](designs/one-os-image.md)); the runner launches every image in it.
 Faults retain resources unless their owning path proves retirement.
 
 `tools/dev-run.py cpu-return` runs one CPU-return image on one board under
@@ -165,9 +164,8 @@ headset service, with the Bluetooth stack and mSBC, is a library linked into an
 image whose application declares the `audio-headset` device. The NPU service, its
 EL0 ring and its diagnostic observer are in every image too: the manifest's `npu`
 section grants the service, `in_flight` above one selects the ring, and `observe`
-admits the observer in a returning image. The contract magic selects the
-lifetime, and `SUNSTONE_A733_OS_CPU_RETURN` decides the rest until it is replaced by
-its run-time form ([the design](designs/one-os-image.md)).
+admits the observer in a returning session. The contract magic selects the
+lifetime ([the design](designs/one-os-image.md)).
 
 A service that is not granted touches no hardware. Its start entry returns before
 it authorizes a pin, binds a callback, creates a task or reads a register, the

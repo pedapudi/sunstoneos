@@ -32,7 +32,7 @@ CHECK_INPUTS = ('apps/npu-graphs/main.c', 'apps/npu-graphs/vectors.py', 'apps/np
                 'apps/npu-graphs/vectors.h', 'apps/npu-graphs/queue-aliases.py', 'apps/npu-graphs/manifest-queue.json',
                 'apps/npu-graphs/manifest.json', 'include/sunstone_app.h', 'include/sunstone_npu_queue.h',
                 'tools/sunstone-manifest.py', 'tools/npu_graph_layout.py', 'checks/npu-graphs-app/sdk.c',
-                'apps/os/cpu-return/admission.patch')
+                'apps/os/admission.c')
 GATE_RUNS = [['--output', '{output}', '--graphs', '{fixture:npu-graphs}']]
 CLANG = '/usr/bin/clang-21'
 MODEL = ROOT / 'checks/npu-graphs-app'
@@ -107,8 +107,8 @@ def matches(raw, spec):
     return wrong
 
 
-# The application builds only in the CPU-return composition, whose admission refuses a session without the CPU clock grant
-# (apps/os/cpu-return/admission.patch); a session carries the grant only for a manifest that declares cpu.clock_grants.
+# The application runs in the returning lifetime, whose admission refuses a session without the CPU clock grant
+# (apps/os/admission.c); a session carries the grant only for a manifest that declares cpu.clock_grants.
 for manifest in ('manifest.json', 'manifest-queue.json'):
     assert json.loads((APP / manifest).read_text())['cpu'].get('clock_grants') is True, manifest + ': no cpu.clock_grants'
 

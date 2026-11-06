@@ -884,7 +884,6 @@ static void advance_locked(struct pvr_gpu_service *s)
         }
         return;
     }
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
     case PVR_GPU_SERVICE_PARKING: {
         uint64_t now;
         if(!sample(s,&now) || now>=s->deadline) { fail(s,PVR_GPU_SERVICE_STOP);return; }
@@ -894,7 +893,6 @@ static void advance_locked(struct pvr_gpu_service *s)
         if(result==1)s->phase=PVR_GPU_SERVICE_PARKED;
         return;
     }
-#endif
     case PVR_GPU_SERVICE_STOPPING: {
         if (s->config.free_lists.count) {
             /* Stop polling can itself dispatch events. Pause before advancing
@@ -938,9 +936,8 @@ static enum pvr_gpu_service_result execute_locked(struct pvr_gpu_service *s,
 {
     const struct pvr_gpu_service_request *r = &m->request;
     if (((unsigned)r->operation > PVR_GPU_SERVICE_DISPOSE && r->operation!=PVR_GPU_SERVICE_QUEUE_CREATE
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
-         && r->operation!=PVR_GPU_SERVICE_PARK
-#endif
+         /* PARK exists only for an owner that configured a park action (the returning lifetime). */
+         && !(r->operation==PVR_GPU_SERVICE_PARK && s->config.park)
         ) ||
         ((r->operation == PVR_GPU_SERVICE_STATUS || r->operation == PVR_GPU_SERVICE_RENDER_OUTPUT ||
           r->operation == PVR_GPU_SERVICE_COMPUTE_OUTPUT || r->operation == PVR_GPU_SERVICE_COMPUTE_CANCEL) ? r->timeout_us != 0 :
@@ -948,7 +945,6 @@ static enum pvr_gpu_service_result execute_locked(struct pvr_gpu_service *s,
     if (r->operation == PVR_GPU_SERVICE_STATUS)
         return s->phase == PVR_GPU_SERVICE_FAILED ? PVR_GPU_SERVICE_FAULT : PVR_GPU_SERVICE_OK;
     if(m->epoch!=s->epoch)return PVR_GPU_SERVICE_INVALID;
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
     if(r->operation==PVR_GPU_SERVICE_PARK) {
         if(s->phase==PVR_GPU_SERVICE_FAILED)return PVR_GPU_SERVICE_FAULT;
         if(m->client!=s->closed_owner || !s->closed_epoch || m->epoch!=s->closed_epoch)return PVR_GPU_SERVICE_DENIED;
@@ -957,7 +953,6 @@ static enum pvr_gpu_service_result execute_locked(struct pvr_gpu_service *s,
         if(!deadline(s,r->timeout_us))return PVR_GPU_SERVICE_FAULT;
         s->phase=PVR_GPU_SERVICE_PARKING;return PVR_GPU_SERVICE_OK;
     }
-#endif
 #ifdef SUNSTONE_GPU_LIFECYCLE
     if(r->operation==PVR_GPU_SERVICE_DISPOSE) {
         if(s->phase==PVR_GPU_SERVICE_FAILED)return PVR_GPU_SERVICE_FAULT;
@@ -1229,9 +1224,7 @@ static TickType_t wait_ticks(struct pvr_gpu_service *s)
     switch (s->phase) {
     case PVR_GPU_SERVICE_COLD: case PVR_GPU_SERVICE_STOPPED: case PVR_GPU_SERVICE_FAILED:
     case PVR_GPU_SERVICE_DISPOSED: case PVR_GPU_SERVICE_RECONSTRUCTING:
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
     case PVR_GPU_SERVICE_PARKED:
-#endif
         return portMAX_DELAY;
     case PVR_GPU_SERVICE_READY: break;
     default: return 1;

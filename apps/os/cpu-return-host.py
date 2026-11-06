@@ -78,7 +78,7 @@ def linked_symbols(image):
     return found
 
 
-# The CPU clock owner's publication (apps/os/cpu.c, compiled into the return image as return-cpu.c): file-scope statics
+# The CPU clock owner's publication (apps/os/cpu.c): file-scope statics
 # that a reader of ss_clock_info() sees, and their sizes.
 CLOCK_SYMBOLS = {'record': 8, 'dsu_mhz': 4, 'pattern_bits': 4, 'parked_max_us': 8}
 

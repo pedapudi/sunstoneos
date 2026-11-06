@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 import struct
 from elftools.elf.elffile import ELFFile
-from harness import machine as harness_machine, Image, hook_addresses, refused, save, skip_crumbs
+from harness import machine as harness_machine, Image, hook_addresses, refused, save, skip_crumbs, seal_lifetime
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP
 
@@ -53,7 +53,7 @@ def run_image(path,output):
         u=harness_machine();u.mem_map(0x41000000,0x1200000);u.mem_map(0x80000000,0x20000)
         for address,data in image.parts:
             if data:u.mem_write(address,data)
-        skip_crumbs(u,image)
+        skip_crumbs(u,image);seal_lifetime(u,image)
         def put(address,value,size=4):u.mem_write(address,int(value).to_bytes(size,'little'))
         def get(address,size=4):return int.from_bytes(u.mem_read(address,size),'little')
         def field(base,typ,name):return base+image.layouts[typ][name]

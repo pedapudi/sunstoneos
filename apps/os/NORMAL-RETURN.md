@@ -20,7 +20,7 @@ clock-word checks, not an external analog measurement. The board returned to
 ROM without manual reconnection. The frozen ELF is
 `fba722c5e33cbdeccc41b1b09a4a91752506e884c79e5f09f8c533a4cff74b70`.
 
-The optional `SUNSTONE_A733_OS_CPU_RETURN` profile runs one recorded recognition
+The returning lifetime, which every OS image admits, runs one recorded recognition
 with eight CPU workers, the PMIC provider and the thermal service. It requires
 supervised staged workload 2, Cortex-A76 admission and CPU clock grants for both
 clusters. The optional `GPU_LINEAR` configuration also supports this return;
@@ -201,8 +201,7 @@ Build the dedicated image with the existing configured dependency wrapper:
 
 ```sh
 ~/.cache/sunstoneos/bin/cfg.sh "$PWD" BUILD \
-  -DSUNSTONE_A733_OS=ON \
-  -DSUNSTONE_A733_OS_CPU_RETURN=ON
+  -DSUNSTONE_A733_OS=ON
 cmake --build BUILD --target sunstone-a733-os
 ```
 

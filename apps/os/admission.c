@@ -3,25 +3,31 @@
  * magic numbers, the extension and a digest over the complete session. */
 #include "os.h"
 #include "a733_admission_refusal.h"
-/* Every OS image other than a returning one admits the resident lifetime as well as the supervised one. */
-#ifndef SUNSTONE_A733_OS_CPU_RETURN
+/* The OS image admits the resident lifetime as well as the supervised one; the board check below applies the resident
+ * timing terms to the resident board magic. */
 #define A733_BOARD_ADMITS_RESIDENT 1
-#endif
 #define a733_smp_contract_valid os_board_contract_unused
 #include "../board/admission.c"
 #undef a733_smp_contract_valid
-/* Whether the lifetime returns: an NPU session that observes its jobs is admitted only then (OS_NPU_OBSERVE). The
- * returning lifetime takes the supervised contract magic and admits no other. */
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
-#define OS_RETURNING 1
+/* An image built with a service whose retirement is qualified only for the returning lifetime (the RAM-copy DMA
+ * service, the scanning radio station, the GPU qualification builds) admits that lifetime alone
+ * (SUNSTONE_A733_OS_RETURN_ONLY, cmake/sunstone-os-core.cmake). An image with the USB class services, whose host stack
+ * has no returning retirement, refuses the returning lifetime. Every other image admits all three. */
+#ifdef SUNSTONE_A733_OS_RETURN_ONLY
+#define OS_RETURN_ONLY 1
 #else
-#define OS_RETURNING 0
+#define OS_RETURN_ONLY 0
+#endif
+#ifdef SUNSTONE_A733_OS_USB_CLASSES
+#define OS_RETURNS 0
+#else
+#define OS_RETURNS 1
 #endif
 /* The OS contract magics this image admits, by lifetime (supervised, resident, returning; 0 for a lifetime it does not
  * admit). Offline card preparation and the runner's launcher read these compiled constants, so a manifest cannot
  * relabel an image's lifetime. */
-__attribute__((used,retain)) const uint64_t os_contract_profile[3]={OS_RETURNING?0:A733_OS_CONTRACT_MAGIC,
-    OS_RETURNING?0:A733_OS_RESIDENT_CONTRACT_MAGIC,OS_RETURNING?A733_OS_RETURN_CONTRACT_MAGIC:0};
+__attribute__((used,retain)) const uint64_t os_contract_profile[3]={OS_RETURN_ONLY?0:A733_OS_CONTRACT_MAGIC,
+    OS_RETURN_ONLY?0:A733_OS_RESIDENT_CONTRACT_MAGIC,OS_RETURNS?A733_OS_RETURN_CONTRACT_MAGIC:0};
 /* The lifetime admission verified from the contract magic (enum a733_lifetime), 0 before. EL3 monitor memory: the
  * admission below writes it once, when the contract passes, and the EL3 boot reads it for the watchdog readback, the
  * result record and the cores' startup. */
@@ -32,9 +38,9 @@ unsigned os_admitting_lifetime __attribute__((section(".bss.a733_smp_monitor")))
 /* The lifetime that an OS contract magic names, among those this image admits; 0 for any other magic. */
 static unsigned os_contract_lifetime(uint64_t magic)
 {
-    if(!OS_RETURNING&&magic==A733_OS_CONTRACT_MAGIC)return A733_LIFETIME_SUPERVISED;
-    if(!OS_RETURNING&&magic==A733_OS_RESIDENT_CONTRACT_MAGIC)return A733_LIFETIME_RESIDENT;
-    if(OS_RETURNING&&magic==A733_OS_RETURN_CONTRACT_MAGIC)return A733_LIFETIME_RETURN;
+    if(!OS_RETURN_ONLY&&magic==A733_OS_CONTRACT_MAGIC)return A733_LIFETIME_SUPERVISED;
+    if(!OS_RETURN_ONLY&&magic==A733_OS_RESIDENT_CONTRACT_MAGIC)return A733_LIFETIME_RESIDENT;
+    if(OS_RETURNS&&magic==A733_OS_RETURN_CONTRACT_MAGIC)return A733_LIFETIME_RETURN;
     return 0;
 }
 /* The EL3 result record's magic for the admitted lifetime. */
@@ -65,6 +71,10 @@ int os_session_valid(const struct os_session *s)
        !s->limits[i][2]||s->limits[i][2]>s->limits[i][0])return 0;
     /* Each service's record is validated only when the session grants it; an absent record grants nothing. */
     uint64_t cpu_owner=0;(void)cpu_owner;
+    /* A returning session carries the CPU clock grant that its return path needs, for its board workload (2, or 3 in
+     * the scanning image), both clusters, at least four changes and no performance mode. */
+    const int returning=os_lifetime()==A733_LIFETIME_RETURN;
+    if(returning&&!(s->granted&OS_GRANT_CPU_CLOCK))return 0;
     if(s->granted&OS_GRANT_AUDIO){
         /* The I2S image's DMA0 handoff rules, bound to this session:
          * one service channel, the board fabric, the board lease as handoff and
@@ -86,6 +96,11 @@ int os_session_valid(const struct os_session *s)
         struct a733_cpu_clock_config cpu;
         if(!a733_cpu_clock_grant_load(&s->cpu_clock,s->board.epoch,s->board.generation,&cpu)||
            cpu.owner==s->thermal_owner)return 0;
+#ifdef SUNSTONE_A733_OS_RADIO_SCAN
+        if(returning&&(s->board.workload!=3||cpu.grant.clusters!=3||cpu.grant.changes<4||s->cpu_clock.perf))return 0;
+#else
+        if(returning&&(s->board.workload!=2||cpu.grant.clusters!=3||cpu.grant.changes<4||s->cpu_clock.perf))return 0;
+#endif
         for(unsigned i=0;i<4;++i)if(owners[i]==cpu.owner)return 0;
         cpu_owner=cpu.owner;
         if((s->granted&OS_GRANT_NPU)&&cpu.owner==s->npu.owner)return 0;
@@ -95,7 +110,7 @@ int os_session_valid(const struct os_session *s)
         const struct os_npu_session *n=&s->npu;
         if(n->magic!=OS_NPU_SESSION_MAGIC||n->version!=OS_NPU_SESSION_VERSION||n->bytes!=sizeof(*n)||!n->owner||
            !n->command_admission||!n->supervisor||n->pck_client>=16||n->pck_client==s->board.pck_client||
-           !os_npu_session_flags_admitted(n,OS_RETURNING)||n->graph_region>SS_REGIONS||os_npu_declaration_admitted(n)!=NPU_DECLARATION_OK||
+           !os_npu_session_flags_admitted(n,returning)||n->graph_region>SS_REGIONS||os_npu_declaration_admitted(n)!=NPU_DECLARATION_OK||
            !present(n->admission,32)||
            !present(n->clock,32)||!present(n->power,32)||!present(n->supervision,32)||!present(n->ddr,32)||
            n->owner==s->thermal_owner||n->owner==s->board.latch_owner||n->owner==s->board.latch_m_owner)

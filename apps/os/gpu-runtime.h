@@ -8,7 +8,7 @@
 #define OS_GPU_WAIT_TICKS 10u
 int os_gpu_queue_quiesce(void);
 #ifdef SUNSTONE_A733_OS_GPU_BISECT
-#if !defined(SUNSTONE_A733_OS_CPU_RETURN) || OS_GPU_BISECT_STAGE < 1 || OS_GPU_BISECT_STAGE > 4 || \
+#if !defined(SUNSTONE_A733_OS_RETURN_ONLY) || OS_GPU_BISECT_STAGE < 1 || OS_GPU_BISECT_STAGE > 4 || \
     (OS_GPU_BISECT_STAGE == 3 && OS_GPU_BISECT_LIMIT < 1)
 #error "GPU diagnostics require a returning image and a valid limit"
 #endif

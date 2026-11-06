@@ -1,14 +1,26 @@
 --- input
 +++ output
-@@ -355,6 +355,7 @@
+@@ -1,4 +1,5 @@
+ #include "a733_cpu_continue.h"
++#include "sealed-lifetime.h"
+ #include "a733_cpu_coherence.h"
+ .section .text.a733_cpu_continue,"ax"
+ .balign 4
+@@ -371,6 +372,13 @@
  1:  dsb sy
      str x2, [x1, #16]
      dsb sy
-+    cbz x20, a733_qualification_success_dispatch
++    // The EL3 lifetime word (apps/os/admission.c), loaded once and kept in x9. Under the returning lifetime a
++    // status-0 SMC is the success return, and the fault words below are stored. Every other lifetime takes neither.
++    adrp x9, a733_smp_lifetime
++    ldr w9, [x9, :lo12:a733_smp_lifetime]
++    cmp w9, #OS_LIFETIME_RETURN_WORD
++    ccmp x20, #0, #0, eq
++    b.eq a733_qualification_success_dispatch
      // All fatal paths converge here without using an EL1 stack or RAM.
      // Ordinary NS WB memory is safe only after every EL3 context adopted it.
      mrs x3, sctlr_el3
-@@ -399,6 +400,46 @@
+@@ -415,6 +423,49 @@
      add x5, x5, #128
      subs x6, x6, #1
      b.ne .Lstorage_adopted
@@ -16,6 +28,9 @@
 +    // exit after entry, in RTC words that survive a watchdog reset. Only after
 +    // the checks above proved this core's EL3 identity map; the success SMC
 +    // left earlier. x20 is 4 for an exception, as in the report. Uses x2-x7.
++    // Only under the returning lifetime (x9 above).
++    cmp w9, #OS_LIFETIME_RETURN_WORD
++    b.ne .Lcrumb_fault_done
 +    mrs x3, esr_el3
 +    lsr x4, x3, #26
 +    cmp x4, #0x17
@@ -55,7 +70,7 @@
      // Use this core's reserved Secure Device stack regardless of the fault's SP.
      adrp x3, a733_cpu_entry_stacks
      add x3, x3, :lo12:a733_cpu_entry_stacks
-@@ -497,14 +538,79 @@
+@@ -514,14 +565,102 @@
      stp x0, x1, [sp, #-16]!
      mrs x0, esr_el1
      and x0, x0, #0xffff
@@ -75,7 +90,12 @@
 +.Lcrumb:
 +    // sunstone_crumb(stage, value) (include/sunstone_crumb.h): LAST and TIME
 +    // in RTC words, interrupts masked by the exception, all registers kept.
++    // Stored only under the returning lifetime (the sealed copy).
 +    stp x2, x3, [sp, #-16]!
++    adrp x2, os_sealed+OS_SEALED_LIFETIME_OFFSET
++    ldr w2, [x2, :lo12:os_sealed+OS_SEALED_LIFETIME_OFFSET]
++    cmp w2, #OS_LIFETIME_RETURN_WORD
++    b.ne 1f
 +    ldp x0, x1, [sp, #16]
 +    bfi w1, w0, #16, #16
 +    mov x2, #0x07090000
@@ -87,15 +107,20 @@
 +    orr w3, w3, w0, lsl #29
 +    str w3, [x2, #0x10c]
 +    dsb sy
-+    ldp x2, x3, [sp], #16
++1:  ldp x2, x3, [sp], #16
 +    ldp x0, x1, [sp], #16
 +    eret
 +.Lfail_record:
 +    // sunstone_crumb_fail(site, value, caller) (include/sunstone_crumb.h):
 +    // the first board failure in the FAULT/ESR/ELR/FAR words, unless a fault
-+    // or exit already holds them. x2 is the caller, x1 the value.
++    // or exit already holds them. x2 is the caller, x1 the value. Stored
++    // only under the returning lifetime (the sealed copy).
 +    stp x2, x3, [sp, #-16]!
 +    stp x4, x5, [sp, #-16]!
++    adrp x3, os_sealed+OS_SEALED_LIFETIME_OFFSET
++    ldr w3, [x3, :lo12:os_sealed+OS_SEALED_LIFETIME_OFFSET]
++    cmp w3, #OS_LIFETIME_RETURN_WORD
++    b.ne 1f
 +    ldp x0, x1, [sp, #32]
 +    mov x3, #0x07090000
 +    ldr w4, [x3, #0x110]
@@ -118,20 +143,33 @@
 +    ldp x0, x1, [sp], #16
 +    eret
 +.Lqualification:
++    // The returning lifetime's terminal. In any other lifetime the call is
++    // not one of these and goes on to the kernel's handler.
++    adrp x0, os_sealed+OS_SEALED_LIFETIME_OFFSET
++    ldr w0, [x0, :lo12:os_sealed+OS_SEALED_LIFETIME_OFFSET]
++    cmp w0, #OS_LIFETIME_RETURN_WORD
 +    ldp x0, x1, [sp], #16
++    b.ne FreeRTOS_SWI_Handler
 +    b a733_qualification_terminal_privileged
  .Lexit:
      ldp x0, x1, [sp], #16
      b a733_smp_exit_privileged
  .Lsync_fault:
-+    // TPIDR_EL1 holds the core index again (x16 was saved there). The failure
-+    // return admits an exception from an EL0 task that was open to the
-+    // scheduler and returns the task to EL0 on a reserved stack
-+    // (apps/os/cpu-return-el0.S); it returns here for any other exception.
++    // Under the returning lifetime (the sealed copy, loaded in x16, which
++    // holds only the exception class here): TPIDR_EL1 holds the core index
++    // again (x16 was saved there). The failure return admits an exception
++    // from an EL0 task that was open to the scheduler and returns the task
++    // to EL0 on a reserved stack (apps/os/cpu-return-el0.S); it returns here
++    // for any other exception. Any other lifetime goes on to the fault record.
++    adrp x16, os_sealed+OS_SEALED_LIFETIME_OFFSET
++    ldr w16, [x16, :lo12:os_sealed+OS_SEALED_LIFETIME_OFFSET]
++    cmp w16, #OS_LIFETIME_RETURN_WORD
++    b.ne .Lsync_fault_record
 +    mrs x3, mpidr_el1
 +    ubfx x3, x3, #8, #3
 +    msr tpidr_el1, x3
 +    bl os_cpu_return_el0_try
++.Lsync_fault_record:
  #ifdef SUNSTONE_A733_FAULT_PAGE
      // The vector slot from SPSR_EL1.M: 8 from EL0t, 0 from EL1t (images
      // whose private tasks run on SP_EL0), 4 from EL1h.

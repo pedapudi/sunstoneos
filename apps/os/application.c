@@ -44,9 +44,7 @@ int os_application_gpu_share_bind(struct pvr_compute_queue *q){(void)q;return 1;
 /* The headset library's capture length: absent (null) in an image that does not link it. */
 extern int os_headset_capture_frames(uint32_t *) __attribute__((weak));
 #include "npu.h"
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
 #include "cpu-return.h"
-#endif
 static struct ss_grant grant;
 static atomic_uint prepared,finished,usb_ready,activity_generation;
 static atomic_uint_fast64_t observed_until;
@@ -442,9 +440,7 @@ __attribute__((noinline)) _Noreturn void ss_fail(uint32_t detail)
         __builtin_return_address(0));
     for(;;)vTaskSuspend(NULL);
 }
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
 static int npu_retired(void){return os_npu_complete();}
-#endif
 _Noreturn void ss_finish(const void *data,size_t bytes)
 {
     if(xTaskGetCurrentTaskHandle()!=main_task || (!data&&bytes)||bytes>ss_result_capacity||os_application_finished()||
@@ -456,10 +452,10 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
     }
     if(!os_gpu_queue_quiesce())ss_fail(0x75e);
 #endif
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
+    /* The returning lifetime retires its devices before the ROM return. */
+    const int returning=os_returning();
 #ifdef SUNSTONE_A733_OS_GPU
-    if(!os_gpu_retire())ss_fail(0x757);
-#endif
+    if(returning&&!os_gpu_retire())ss_fail(0x757);
 #endif
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
     os_usb_service_retire();
@@ -468,10 +464,9 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
         ss_progress();vTaskDelay(1);
     }
 #endif
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
     /* SDK CLOSE transfers no bootstrap/local-stop authority. Wait for its
      * immutable client report and revalidate the live IRQ/runtime state. */
-    while(!os_npu_retirement_check()){
+    while(returning&&!os_npu_retirement_check()){
         /* Give up one second before the supervisor's cutoff, so that this failure, which names the unmet conditions,
          * is the first one recorded rather than the supervisor's. The stop takes milliseconds. */
         if(ss_live()<0||a733_smp_counter()+OS_NPU_RETIREMENT_MARGIN_TICKS>=os_cpu_return_cutoff()||
@@ -484,7 +479,6 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
         if(grant.finish_by_us&&grant.finish_by_us-OS_NPU_RETIREMENT_MARGIN_TICKS/24<giveup)giveup=grant.finish_by_us-OS_NPU_RETIREMENT_MARGIN_TICKS/24;
         if(application_wait_until_unless(giveup,npu_retired)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
     }
-#endif
     /* The Wi-Fi credential does not leave RAM here: the wipe's cache maintenance (dc civac) traps at EL0, where
      * this task runs. The radio owner and the return supervisor, both EL1, wipe once os_application_finished()
      * holds (os_wifi_credential_poll); board_fail wipes directly. */
@@ -495,9 +489,7 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
     r->status=SS_RESULT_FINISHED;
     atomic_store_explicit(&finished,1,memory_order_release);
 
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
-    os_cpu_return_begin(data,bytes);
-#endif
+    if(returning)os_cpu_return_begin(data,bytes);
     for(;;)vTaskSuspend(NULL);
 }
 /* Mailbox states: empty -> offered -> received -> reply -> delivered -> empty.

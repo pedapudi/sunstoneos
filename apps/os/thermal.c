@@ -7,6 +7,8 @@
  * the clock token, the register mutex and the masked interrupt. */
 #include "os.h"
 #include "application.h"
+#include "cpu-return.h"
+#include "platform.h"
 #include "../board/application.h"
 #include "../board/session.h"
 #include "a733_thermal.h"
@@ -155,6 +157,23 @@ static int live(void)
     !atomic_load_explicit(&thermal.failed,memory_order_acquire)&&a733_smp_counter()/24<deadline();}
 static int owner(void)
 {return thermal.handle&&xTaskGetCurrentTaskHandle()==thermal.handle&&live();}
+/* 1 ready, 0 not ready, 2 ready except that another core is inside the clock lease registry at this moment (the status
+ * is a try-lock): that is a retry, not a refusal. */
+int os_cpu_return_thermal_ready(void)
+{
+    if(!(thermal.active&&thermal.driver.initialized&&!thermal.driver.fault&&!thermal.retaining&&
+         !atomic_load_explicit(&thermal.failed,memory_order_acquire)))return 0;
+    const enum a733_clock_result token=a733_clock_token_status(&providers.shared.clocks,&thermal.token);
+    return token==A733_CLOCK_OK?1:token==A733_CLOCK_BUSY?2:0;
+}
+/* Which predicates fail, one bit each, for the refusal record of the entry guard. */
+uint32_t os_cpu_return_thermal_state(void)
+{
+    return (thermal.active?0:1)|(thermal.driver.initialized?0:2)|(thermal.driver.fault?4:0)|(thermal.retaining?8:0)|
+        (atomic_load_explicit(&thermal.failed,memory_order_acquire)?16:0)|
+        (a733_clock_token_status(&providers.shared.clocks,&thermal.token)==A733_CLOCK_OK?0:32)|(board_live(NULL)?0:64)|
+        (os_application_deadline()?0:128)|(atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)?256:0);
+}
 static int now(void *v,uint64_t *n)
 {return v==&thermal?a733_counter_clock_now(&providers.shared.counter,n):0;}
 static int enter(void *v,uint64_t d)
@@ -358,6 +377,19 @@ void os_thermal_task(void *unused)
     (void)unused;
     for(;;){
         if(step()==1)BOARD_PROGRESS(OS_SERVICE_THERMAL);
+        if(os_cpu_return_requested()&&os_cpu_return_clock_done()){
+            if(!os_cpu_return_devices_ready()){cancel();platform_exit(6);}
+            if(!mask()){cancel();platform_exit(6);}
+            while((*(volatile uint32_t *)(uintptr_t)thermal.irq.distributor&(UINT32_C(1)<<31))){
+                if(!live()){cancel();platform_exit(6);}vTaskDelay(1);
+            }
+            enum a733_thermal_result result;
+            do{result=a733_thermal_stop(&thermal.driver,deadline());
+                if(result==A733_THERMAL_BUSY){if(!live()){cancel();platform_exit(6);}vTaskDelay(1);}
+            }while(result==A733_THERMAL_BUSY);
+            if(result!=A733_THERMAL_STOPPED||!live()){cancel();platform_exit(6);}
+            else{os_cpu_return_thermal_done();for(;;)vTaskSuspend(NULL);}
+        }
         TickType_t wait=idle_ticks();
         if(wait>1)(void)ulTaskNotifyTake(pdTRUE,wait);else vTaskDelay(1);
     }

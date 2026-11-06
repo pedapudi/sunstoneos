@@ -68,8 +68,7 @@ cpu_build="$HOME/.cache/sunstoneos/build/cpu-reliability-1031"
 "$HOME/.cache/sunstoneos/bin/cfg.sh" "$PWD" "$cpu_build/reliability" \
   -DMIMUS_DIR= -DSUNSTONE_A733_OS=ON \
   -DSUNSTONE_APPLICATION=cpu-reliability \
-  -DSUNSTONE_APPLICATION_cpu-reliability_ROOT="$PWD/apps/cpu-runtime-qualification" \
-  -DSUNSTONE_A733_OS_CPU_RETURN=ON
+  -DSUNSTONE_APPLICATION_cpu-reliability_ROOT="$PWD/apps/cpu-runtime-qualification"
 cmake --build "$cpu_build/reliability" --target sunstone-a733-os -j8
 ```
 

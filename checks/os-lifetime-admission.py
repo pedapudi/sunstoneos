@@ -9,8 +9,7 @@ and a733_board_session_valid returns success. Every other term runs: the OS magi
 lifetime, the timing and watchdog terms, the build ID, the identity fields and both digests. For each image it
 requires:
 
-  one OS image (a build without SUNSTONE_A733_OS_CPU_RETURN; os_contract_profile names the supervised and resident
-  magics and no returning one)
+  an OS image (os_contract_profile names the supervised, resident and returning magics)
     supervised   the supervised contract is admitted and sets a733_smp_lifetime to 1; the result magic is the
                  supervised one; the power policy word 0x07052000 + core * 0x1000 is not writable; the session
                  decode ran with os_admitting_lifetime 1, which is 0 again afterwards; os_lifetime returns 1 at EL3,
@@ -19,18 +18,17 @@ requires:
                  configuration 1, output 2, no FEL flag or redirect) is admitted and sets the word to 2; the result
                  magic is the resident one; the policy word of cores 1 to 7 is writable; the decode and
                  os_lifetime follow 2 as above;
+    returning    the returning contract, with the supervised timing and watchdog terms, is admitted and sets the word
+                 to 3; the result magic is the returning one; the policy word is not writable; the decode and
+                 os_lifetime follow 3;
     crossed      the resident magic with the supervised timing is refused as timing (diagnostic), the supervised
                  magic with the resident timing likewise, and either refusal leaves the word 0;
     FEL flag     a resident contract with the FEL flag set is refused as timing (watchdog_fields);
-    returning    the returning magic is refused as magic_version (magic) with the word 0;
-    once         after one lifetime is admitted, a contract of the other lifetime is refused as magic_version (magic)
-                 and the word keeps its value; a second contract of the same lifetime is admitted;
-  returning image (SUNSTONE_A733_OS_CPU_RETURN; os_contract_profile names only the returning magic): the returning
-    contract, with the supervised timing and watchdog terms, is admitted and sets the word to 3; the result magic is
-    the returning one; the policy word is not writable; the decode and os_lifetime follow 3; the supervised and
-    resident contracts are refused as magic_version (magic) with the word 0.
-The lifetime and startup seconds come from the build's compile commands for apps/os/admission.c (or the returning
-profile's patched copy, os-image/return-admission.c).
+    once         after one lifetime is admitted, a contract of either other lifetime is refused as magic_version
+                 (magic) and the word keeps its value; a second contract of the same lifetime is admitted;
+  returning-only image (SUNSTONE_A733_OS_RETURN_ONLY; os_contract_profile names only the returning magic): the
+    returning cases above; the supervised and resident contracts are refused as magic_version (magic) with the word 0.
+The lifetime and startup seconds come from the build's compile commands for apps/os/admission.c.
 Usage: os-lifetime-admission.py --image ELF [--image ELF ...] --output DIR
 """
 import argparse
@@ -49,7 +47,7 @@ sys.path.insert(0, str(ROOT / 'checks'))
 import harness  # noqa: E402  Refuses to run with assertions disabled.
 from unicorn import UC_HOOK_MEM_READ  # noqa: E402
 
-GATE_RUNS = [['--image', '{elf:sup}', '--image', '{elf:ret-npu-load}', '--output', '{output}']]
+GATE_RUNS = [['--image', '{elf:sup}', '--image', '{elf:ret-npu-load}', '--image', '{elf:ret-radio-scan}', '--output', '{output}']]
 CHECK_INPUTS = ['checks/os-sealed-session.py', 'include/a733_admission_refusal.h', 'include/a733_board_application.h']
 spec = importlib.util.spec_from_file_location('os_lifetime_sealed', ROOT / 'checks/os-sealed-session.py')
 sealed = importlib.util.module_from_spec(spec)
@@ -80,10 +78,9 @@ def refusal(term, sub):
 
 
 def build_seconds(image):
-    """(lifetime seconds, startup seconds) for apps/os/admission.c in the image's build (the image's directory)."""
+    """(lifetime seconds, startup seconds, returning-only) for apps/os/admission.c in the image's build (the image's directory)."""
     commands = json.loads((Path(image).parent / 'compile_commands.json').read_text())
-    # The returning profile compiles a patched copy (os-image/return-admission.c, cmake/a733-os-cpu-return.cmake).
-    rows = [r for r in commands if r['file'].endswith(('apps/os/admission.c', 'os-image/return-admission.c'))]
+    rows = [r for r in commands if r['file'].endswith('apps/os/admission.c')]
     assert len(rows) == 1, (image, len(rows))
     words = rows[0].get('arguments') or shlex.split(rows[0]['command'])
     defines = dict(w[2:].split('=', 1) for w in words if w.startswith('-D') and '=' in w)
@@ -91,7 +88,8 @@ def build_seconds(image):
     for name in seconds:
         if name in defines:
             seconds[name] = int(defines[name].rstrip('uU'), 0)
-    return seconds['A733_BOARD_SUPERVISED_SECONDS'], seconds['A733_BOARD_STARTUP_SECONDS'], 'SUNSTONE_A733_OS_CPU_RETURN' in defines
+    return (seconds['A733_BOARD_SUPERVISED_SECONDS'], seconds['A733_BOARD_STARTUP_SECONDS'],
+            'SUNSTONE_A733_OS_RETURN_ONLY' in defines)
 
 
 class Admission:
@@ -193,26 +191,19 @@ def one_image(path):
     magic_refused = refusal('A733_REFUSAL_MAGIC_VERSION', 'A733_MAGIC_MAGIC')
     diagnostic = refusal('A733_REFUSAL_TIMING', 'A733_TIMING_DIAGNOSTIC')
     fields = refusal('A733_REFUSAL_TIMING', 'A733_TIMING_WATCHDOG_FIELDS')
+    returning_case = ('returning', ret, False, 3, MAGIC['A733_OS_RETURN_RESULT_MAGIC'])
     if returning:
+        lifetimes = [returning_case]
         assert profile == (0, 0, ret), [hex(p) for p in profile]
-        a = Admission(image)
-        assert a.admit(a.contract(ret, False, seconds, startup)) == 0 and a.lifetime() == 3
-        assert a.result_magic() == MAGIC['A733_OS_RETURN_RESULT_MAGIC'], hex(a.result_magic())
-        assert a.policy_writable() == [0] * 7, a.policy_writable()
-        assert a.decoded == [3] and a.word('os_admitting_lifetime') == 0, a.decoded
-        assert a.m.call('os_lifetime') == 3 and a.el1_lifetime(3) == (3, [])
-        cases['returning-admitted-sets-lifetime-3'] = True
         for name, magic, resident in (('supervised', sup, False), ('resident', res, True)):
             a = Admission(image)
             assert a.admit(a.contract(magic, resident, seconds, startup)) == magic_refused and a.lifetime() == 0, name
-            cases[f'returning-refuses-{name}-magic'] = True
-        return seconds, cases
-    assert profile == (sup, res, 0), [hex(p) for p in profile]
-    a = Admission(image)
-    assert a.admit(a.contract(ret, False, seconds, startup)) == magic_refused and a.lifetime() == 0
-    cases['returning-magic-refused'] = True
-    for name, magic, resident, word, result in (('supervised', sup, False, 1, MAGIC['A733_OS_RESULT_MAGIC']),
-                                                ('resident', res, True, 2, MAGIC['A733_OS_RESIDENT_RESULT_MAGIC'])):
+            cases[f'returning-only-refuses-{name}-magic'] = True
+    else:
+        lifetimes = [('supervised', sup, False, 1, MAGIC['A733_OS_RESULT_MAGIC']),
+                     ('resident', res, True, 2, MAGIC['A733_OS_RESIDENT_RESULT_MAGIC']), returning_case]
+        assert profile == (sup, res, ret), [hex(p) for p in profile]
+    for i, (name, magic, resident, word, result) in enumerate(lifetimes):
         a = Admission(image)
         assert a.lifetime() == 0
         assert a.admit(a.contract(magic, resident, seconds, startup)) == 0, name
@@ -226,11 +217,14 @@ def one_image(path):
         assert a.m.call('os_lifetime') == word, name
         assert a.el1_lifetime(word) == (word, []) and a.el1_lifetime(0) == (0, []), name
         cases[f'{name}-decode-and-os-lifetime-follow-{word}'] = True
-        # Once written: the other lifetime is refused; the same lifetime again is admitted.
-        assert a.admit(a.contract(sup if resident else res, not resident, seconds, startup)) == magic_refused, name
-        assert a.lifetime() == word
+        # Once written: every other lifetime is refused; the same lifetime again is admitted.
+        for other, other_magic, other_resident, _, _ in lifetimes[:i] + lifetimes[i + 1:]:
+            assert a.admit(a.contract(other_magic, other_resident, seconds, startup)) == magic_refused, (name, other)
+            assert a.lifetime() == word
         assert a.admit(a.contract(magic, resident, seconds, startup)) == 0 and a.lifetime() == word
-        cases[f'{name}-then-other-lifetime-refused'] = True
+        cases[f'{name}-then-other-lifetimes-refused'] = True
+    if returning:
+        return seconds, cases
     for name, magic, resident in (('resident-magic-supervised-timing', res, False),
                                   ('supervised-magic-resident-timing', sup, True)):
         a = Admission(image)
@@ -256,9 +250,9 @@ def main():
         total += len(cases)
         print(f'{path}: {len(cases)} cases, supervised lifetime {seconds} s')
     (a.output / 'results.json').write_text(json.dumps(report, indent=2) + '\n')
-    print(f'PASS os lifetime admission: {total} cases over {len(a.image)} images; the one OS image admits both lifetimes '
+    print(f'PASS os lifetime admission: {total} cases over {len(a.image)} images; the OS image admits the three lifetimes '
           'by magic with their own terms, writes the lifetime once and derives the result magic and the policy word '
-          'from it; a returning image admits only the returning magic, under the supervised terms')
+          'from it; a returning-only image admits only the returning magic, under the supervised terms')
 
 
 if __name__ == '__main__':

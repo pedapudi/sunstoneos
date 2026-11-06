@@ -40,7 +40,6 @@ repository's existing compiler and dependency configuration:
 -DSUNSTONE_A733_OS=ON -DSUNSTONE_MIMUS_BOARD_APPLICATION=ON
 -DSUNSTONE_APPLICATION=cpu-npu-load
 -DSUNSTONE_APPLICATION_cpu-npu-load_ROOT=<source>/apps/cpu-npu-concurrency
--DSUNSTONE_A733_OS_CPU_RETURN=ON
 ```
 
 For the combined profile add the artifact map of the reviewed

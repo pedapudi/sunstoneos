@@ -15,16 +15,26 @@
 #include "boot.h"
 #include "a733_cpu_coherence.h"
 #include "a733_storage_digest.h"
+#include "sealed-lifetime.h"
 #include <string.h>
 #ifndef __aarch64__
 /* Host fixture supplies the cache-maintenance boundary. */
 int a733_cpu_coherence_flush(uint64_t,uint64_t,uint64_t);
 #endif
-static struct {
+/* Global so that the EL1 vectors read the lifetime copy at OS_SEALED_LIFETIME_OFFSET (platform/a733-smp-cached/continue.S,
+ * apps/os/cpu-return-el0.S). */
+struct os_sealed {
     union { uint8_t bytes[4096];struct a733_board_session prefix; } data;
     unsigned ready,lifetime;
-} sealed __attribute__((section(".bss.os_sealed"),aligned(64)));
+} os_sealed __attribute__((section(".bss.os_sealed"),aligned(64)));
+#define sealed os_sealed
 _Static_assert(sizeof(sealed)%8==0,"the sealed session is zeroed in 64-bit words");
+_Static_assert(__builtin_offsetof(struct os_sealed,lifetime)==OS_SEALED_LIFETIME_OFFSET,"the vectors' lifetime offset");
+_Static_assert(A733_LIFETIME_RETURN==OS_LIFETIME_RETURN_WORD,"the vectors' returning lifetime value");
+/* The lifetime copy under its own name, which sunstone_crumb (include/sunstone_crumb.h) reads before it takes the
+ * breadcrumb SVC: a supervised or resident session makes no trap for a progress breadcrumb. */
+__asm__(".globl os_crumb_lifetime\n.set os_crumb_lifetime, os_sealed+4100");
+_Static_assert(OS_SEALED_LIFETIME_OFFSET==4100,"os_crumb_lifetime names the lifetime copy");
 /* EL3 state: a second session in the same boot is refused. In monitor memory, which EL1 does not map, and zeroed with
  * the image's other monitor state. */
 static unsigned attempted __attribute__((section(".bss.a733_smp_monitor")));

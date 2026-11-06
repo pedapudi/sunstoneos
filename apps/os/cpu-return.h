@@ -2,6 +2,12 @@
 #define SUNSTONE_OS_CPU_RETURN_H
 #include <stddef.h>
 #include <stdint.h>
+#include "a733_board_application.h"
+/* The returning lifetime (docs/designs/one-os-image.md): every OS image links its code, and EL1 and EL0 code reaches it
+ * only when the sealed session's lifetime copy is the returning one (apps/os/sealed.c, readable at EL0). EL3 code tests
+ * a733_smp_lifetime instead. */
+unsigned board_session_lifetime(void);
+static inline int os_returning(void){return board_session_lifetime()==A733_LIFETIME_RETURN;}
 #define OS_CPU_RETURN_RESERVE_US UINT64_C(5000000)
 /* The application's NPU retirement wait in ss_finish gives up this many counter ticks (one second) before the supervisor's
  * cutoff, so its failure, which names the unmet conditions, is recorded first. */

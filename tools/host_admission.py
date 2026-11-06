@@ -91,7 +91,7 @@ def returning_magic(profile):
 
 
 def image_facts(image):
-    """Manifest section, contract magic and lifetime of a returning OS image."""
+    """Manifest section, returning contract magic, admitted magics and lifetime of an OS image with an application."""
     with Path(image).open('rb') as stream:
         elf = ELFFile(stream)
         section = elf.get_section_by_name('sunstone_manifest')
@@ -101,6 +101,7 @@ def image_facts(image):
             raise Unavailable('not a returning OS image with an application manifest')
         import struct
         return {'manifest': section.data(), 'contract_magic': returning_magic(profile),
+                'profile': [m for m in struct.unpack_from('<%dQ' % (len(profile) // 8), profile) if m],
                 'seconds': struct.unpack_from('<5Q', marker)[4]}
 
 
@@ -187,6 +188,8 @@ def build_harness(image, build=None, cache=None):
     text = flags.read_text()
     defines = re.search(r'^C_DEFINES = (.*)$', text, re.M).group(1).split()
     includes = re.search(r'^C_INCLUDES = (.*)$', text, re.M).group(1).split()
+    # A tree from before the returning lifetime became a run-time branch built returning images with
+    # SUNSTONE_A733_OS_CPU_RETURN and a patched admission unit; every later image compiles apps/os/admission.c.
     returning = '-DSUNSTONE_A733_OS_CPU_RETURN=1' in defines
     admission = build_dir / 'os-image/return-admission.c' if returning else source / 'apps/os/admission.c'
     # The image's own tree lists its admission units (apps/os/host-admission-units.txt), so the harness follows a tree that

@@ -90,9 +90,9 @@ def check_device_ranges():
     """The NPU's reservation is taken from the ledger when the application is admitted and published for the return: the terminal
     reads the published list, the EL3 tables map every DRAM block that the decode check passed, and nothing names a pool at link
     or build time."""
-    terminal = (ROOT / 'apps/os/cpu-return/terminal.patch').read_text()
+    terminal = (ROOT / 'apps/os/return-terminal.patch').read_text()
     require('os_device_ranges_head' in terminal and '.Lranges_next' in terminal and '__os_npu_pool' not in terminal,
-            'apps/os/cpu-return/terminal.patch: the return does not clean the published device ranges')
+            'apps/os/return-terminal.patch: the return does not clean the published device ranges')
     memory = (ROOT / 'platform/a733-smp-cached/memory.c').read_text()
     require('a733_cached_el3_l1[g]' in memory and 'dram_map[r]' in memory and '__os_npu_pool' not in memory,
             'platform/a733-smp-cached/memory.c: the EL3 tables do not map all DRAM for the published ranges')

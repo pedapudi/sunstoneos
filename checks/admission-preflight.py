@@ -13,7 +13,9 @@ runner prepares. This check prepares the session and contract of each built imag
   reserve     a return reserve of the whole lifetime is refused as session_decode (return_reserve);
   build ID    a contract naming another build is refused as build_id;
   magic       a contract with another magic is refused as magic_version (magic);
-  lifetimes   a contract with the supervised or the resident OS magic is refused as magic_version (magic);
+  lifetimes   a contract with the supervised or the resident OS magic is refused as magic_version (magic) by a
+              returning-only image; any other image admits the supervised contract and refuses the resident one as
+              timing (diagnostic), because the contract carries a diagnostic deadline;
   identity    a contract whose epoch differs from the session's is refused as contract_field (identity);
   digest      a contract with another session digest is refused as session_bind (digest);
   launcher    a launcher that arms another lifetime than the image's is refused as timing (diagnostic);
@@ -23,7 +25,7 @@ runner prepares. This check prepares the session and contract of each built imag
               session_decode (devices), and a session without the radio device as session_decode (manifest);
 and that the stop the board records for the unnamed (1, 1) admission stop equals the refusal in every case.
 Usage: admission-preflight.py --build BUILD_DIR [--build BUILD_DIR ...] --output DIR, where each BUILD_DIR is a configured
-build of one returning OS image (SUNSTONE_A733_OS_CPU_RETURN) built with its sunstone-a733-os-*.elf target.
+build of one OS image with an application, built with its sunstone-a733-os-*.elf target.
 """
 import argparse
 import hashlib
@@ -156,11 +158,13 @@ def one_build(build, out):
     run('reserve of the whole lifetime', ('session_decode', 'return_reserve'), reserve_us=seconds * 1_000_000)
     run('another build ID', ('build_id', None), edit=lambda c: c.__setitem__(CONTRACT_BUILD_ID, c[CONTRACT_BUILD_ID] ^ 1))
     run('another contract magic', ('magic_version', 'magic'), edit=lambda c: c.__setitem__(CONTRACT_MAGIC, c[CONTRACT_MAGIC] ^ 1))
-    # A returning image admits the returning OS magic alone: the magics of the other lifetimes are refused.
-    run('the supervised contract magic', ('magic_version', 'magic'),
-        edit=lambda c: struct.pack_into('<Q', c, CONTRACT_MAGIC, SUPERVISED_CONTRACT_MAGIC))
-    run('the resident contract magic', ('magic_version', 'magic'),
-        edit=lambda c: struct.pack_into('<Q', c, CONTRACT_MAGIC, RESIDENT_CONTRACT_MAGIC))
+    # The image admits the magics its os_contract_profile names. A returning-only image (SUNSTONE_A733_OS_RETURN_ONLY)
+    # refuses the supervised and resident ones. Any other image admits them; this contract carries the returning
+    # lifetime's diagnostic deadline, which the resident timing rule refuses (a resident session has none).
+    for name, magic, admitted in (('supervised', SUPERVISED_CONTRACT_MAGIC, None),
+                                  ('resident', RESIDENT_CONTRACT_MAGIC, ('timing', 'diagnostic'))):
+        run('the %s contract magic' % name, admitted if magic in facts['profile'] else ('magic_version', 'magic'),
+            edit=lambda c, magic=magic: struct.pack_into('<Q', c, CONTRACT_MAGIC, magic))
     # A CPU clock grant that names clusters names this boot's epoch: another value is refused, and the zero of an
     # unassigned card grant takes the board's epoch (apps/os/session.c).
     # The session of this build carries such a grant; a session without one would skip the case, so its absence fails.

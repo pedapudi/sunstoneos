@@ -10,7 +10,7 @@
  *
  * sunstone_crumb(stage, value) records a stage from EL0 or EL1, in a task or
  * an interrupt handler: it issues SVC #0x5c0d, which the returning image's EL1
- * vector stores without using RAM (apps/os/cpu-return/vectors.patch). EL3 code
+ * vector stores without using RAM (apps/os/vectors.patch). EL3 code
  * uses sunstone_crumb_el3(). Every store is one 32-bit word, so a crumb from
  * another core can replace LAST but cannot tear it. Images without
  * SUNSTONE_CRUMBS compile all calls to nothing.
@@ -75,7 +75,7 @@
  * GUARD (aux bit 14): the value is the entry guard's full refusal word,
  * detail << 12 | line of apps/os/cpu-return-entry.c. */
 #define SUNSTONE_CRUMB_FAIL_CPU_PLL 0x9u /* Mismatched PLL word; expected N/state/domain in aux. */
-#define SUNSTONE_CRUMB_FAIL_CPU_RETAINED 0x8u /* First CPU driver fault; layout in cpu-return/cpu.patch. */
+#define SUNSTONE_CRUMB_FAIL_CPU_RETAINED 0x8u /* First CPU driver fault; layout in apps/os/cpu.c. */
 #define SUNSTONE_CRUMB_CPU_AUX 0x20000000u
 #define SUNSTONE_CRUMB_CPU_GUARD 0x40000000u
 #define SUNSTONE_CRUMB_FAIL_PMIC 0x6u       /* PMIC power service; value: authority word */
@@ -256,9 +256,19 @@ enum {
 #define SUNSTONE_GPU_TIMING_CRUMB(stage,value) ((void)0)
 #endif
 #ifdef SUNSTONE_CRUMBS
+#ifdef SUNSTONE_A733_OS
+/* The OS image's sealed lifetime copy (apps/os/sealed.c), readable at EL1 and EL0. Breadcrumbs are stored only under the
+ * returning lifetime (3, A733_LIFETIME_RETURN), so another lifetime takes no SVC. Weak: a host harness that links no
+ * sealed session records no breadcrumb. */
+extern const volatile uint32_t os_crumb_lifetime __attribute__((weak));
+#define SUNSTONE_CRUMB_LIVE() (&os_crumb_lifetime && os_crumb_lifetime == 3u)
+#else
+#define SUNSTONE_CRUMB_LIVE() 1
+#endif
 static inline void sunstone_crumb(uint32_t stage, uint32_t value)
 {
     SUNSTONE_GPU_TIMING_CRUMB(stage,value);
+    if (!SUNSTONE_CRUMB_LIVE()) return;
     __asm__ volatile("mov x0, %0\n mov x1, %1\n svc #0x5c0d"
         :: "r"((uint64_t)stage), "r"((uint64_t)value) : "x0", "x1", "memory");
 }

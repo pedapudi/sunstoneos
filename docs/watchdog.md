@@ -4,7 +4,7 @@ Watchdog-reset tests are allowed and in use. Returning development images run
 under the host-armed hardware watchdog WDT0. They record progress in
 real-time clock (RTC) words that survive its reset.
 The mechanism is implemented in [the returning transport](../tools/a733-returning-host.py),
-[the image patches](../apps/os/cpu-return/) and
+[the image patches](../apps/os/) and
 [the breadcrumb interface](../include/sunstone_crumb.h).
 The coordinator uses [tools/dev-run.py](../tools/dev-run.py) and follows
 [the hardware access rules](../AGENTS.md#hardware-access).
@@ -37,7 +37,7 @@ in this order:
 
 The upper key is `0x16aa0000`. The transport reads back the lower words and
 requires mode/configuration/output to be `0xb1`, `1`, `2` before execution.
-The image's [EL3 admission](../apps/os/cpu-return/boot.patch) checks the same
+The image's [EL3 admission](../apps/os/boot.patch) checks the same
 values and requires both ROM redirect flags inactive. It does not install a
 CPU redirect for watchdog recovery.
 
@@ -55,7 +55,8 @@ The CPU0 supervisor calls `os_cpu_return_supervise()` on its existing
 A failure, expired session or stalled supervisor ends these restarts.
 WDT0 then resets the board within the remaining interval.
 
-The [EL3 stop patch](../apps/os/cpu-return/boot.patch) records `EL3_STOP`
+Under the returning lifetime (EL3 lifetime word 3), the
+[EL3 stop patch](../apps/os/boot.patch) records `EL3_STOP`
 and the stop status/detail. If the mode still equals `0xb1`, it writes
 `0x16aa0001` to mode and `0x14af` to restart. Mode `0x01` selects 0.5 seconds.
 EL3 then parks with interrupts masked. Other watchdog modes are left unchanged;
@@ -91,7 +92,7 @@ and value in the RTC failure words. Later failures preserve that record.
 [ss_fail()](../apps/os/application.c) records its detail and return address
 through that group before ending the session.
 
-The [vector patch](../apps/os/cpu-return/vectors.patch) also records an EL1/EL3
+Under the same lifetime, the [vector patch](../apps/os/vectors.patch) also records an EL1/EL3
 fault or deliberate nonzero exit when no failure is present. A successful SMC
 records no fault. For software failures, bit 31 of the site word identifies a
 return address; the decoder symbolizes the preceding call instruction.
@@ -119,7 +120,7 @@ That model support establishes no physical reset result.
 
 ## A normal return requires RETURN_ROM and mode 0
 
-The [success terminal](../apps/os/cpu-return/terminal.patch) completes native
+The [success terminal](../apps/os/return-terminal.patch) completes native
 retirement, disarms WDT0, reads its mode and records `RETURN_ROM` (`0x0503`)
 with that value. It parks if the enable bit remains set. A successful path
 returns through the reviewed CPU-local forced-FEL entry.

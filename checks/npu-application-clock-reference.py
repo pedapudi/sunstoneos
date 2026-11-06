@@ -39,6 +39,7 @@ def main():
         u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x02000000,0x07000000);u.mem_map(0x40000000,0x04000000);u.reg_write(UC_ARM64_REG_PSTATE,0x3c5)
         for at,data in e.parts:
             if data:u.mem_write(at,data)
+        harness.skip_crumbs(u,e)   # the startup's breadcrumb SVCs return as the EL1 vector would
         base=0x43000000;s=base;counter=base+0x8000;clocks=base+0x9000;locks=base+0xa000;domains=base+0xb000;pmic=base+0xc000
         cfg=base+0xd000;prov=base+0xd800;ret=0x43fff000
         def put(at,v,n=8):u.mem_write(at,int(v).to_bytes(n,'little'))

@@ -63,6 +63,11 @@ class Model:
             self.reg[c]['sp_el1:ns']=0x41f90000+c*4096
             self.reg[c]['sp_el0']=0x41f00000+c*4096
         self.report=self.s['a733_qualification_report']
+        # The returning lifetime: the EL3 word (apps/os/admission.c) and the sealed EL1 copy with its ready flag
+        # (apps/os/sealed-lifetime.h). Images that branch on neither ignore them.
+        if 'a733_smp_lifetime' in self.s:self.put32(self.s['a733_smp_lifetime'],3)
+        if 'os_sealed' in self.s:
+            self.put32(self.s['os_sealed']+4096,1);self.put32(self.s['os_sealed']+4100,3)
 
     def put32(self,a,v): self.uc.mem_write(a,struct.pack('<I',v))
     def put64(self,a,v): self.uc.mem_write(a,Q(v))

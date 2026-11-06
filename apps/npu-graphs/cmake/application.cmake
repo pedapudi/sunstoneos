@@ -1,9 +1,9 @@
 # SunstoneOS test graphs through the OS NPU service: every graph of the model list runs once through the SDK and its
 # output is compared with the simulator's. The OS image links no graph: the application carries every graph of the model list
 # and registers it with the OS at run time (ss_npu_register_graph). The OS composition is that of the CPU/NPU diagnostic.
-if(NOT SUNSTONE_A733_OS_CPU_RETURN OR SUNSTONE_A733_OS_GPU OR
+if(SUNSTONE_A733_OS_GPU OR
    SUNSTONE_A733_OS_DMA OR SUNSTONE_A733_OS_USB_CLASSES)
-  message(FATAL_ERROR "The NPU graph application requires the supervised CPU-return composition")
+  message(FATAL_ERROR "The NPU graph application requires an OS image without the GPU, DMA and USB class services")
 endif()
 set(npu_graph_vectors "${CMAKE_CURRENT_BINARY_DIR}/npu-graph-vectors.c")
 set(SUNSTONE_NPU_GRAPHS_ARTIFACTS "" CACHE FILEPATH "The artifacts map of the graphs in the model list (name -> model, input and reference files)")

@@ -220,7 +220,7 @@ A write-capable image cannot write until `ss_storage_enable` receives a **bounds
 
 `tools/integration-gate.py --affected bringup..HEAD` runs the checks a change affects.
 
-**Building an image.** Configure with the cross toolchain and the dependency directories (see `checks/image_dependencies.py`, which prints them), then `-DSUNSTONE_A733_OS=ON -DSUNSTONE_A733_OS_CPU_RETURN=ON -DSUNSTONE_A733_OS_SD_WRITE=ON -DSUNSTONE_APPLICATION=storage-write-test` and the scheduler options of `docs/os-image-history.md`, and build the target `sunstone-a733-os-storage-write-test`. The image is `sunstone-a733-os-storage-write-test.elf`.
+**Building an image.** Configure with the cross toolchain and the dependency directories (see `checks/image_dependencies.py`, which prints them), then `-DSUNSTONE_A733_OS=ON -DSUNSTONE_A733_OS_SD_WRITE=ON -DSUNSTONE_APPLICATION=storage-write-test` and the scheduler options of `docs/os-image-history.md`, and build the target `sunstone-a733-os-storage-write-test`. The image is `sunstone-a733-os-storage-write-test.elf`.
 
 **A board test on the scratch card (port 3-3), worked.** The example reformats the card and writes the 512 MiB test file.
 

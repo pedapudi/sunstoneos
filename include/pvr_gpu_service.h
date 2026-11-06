@@ -166,11 +166,9 @@ struct pvr_gpu_service_config {
      * RGXPreKickCacheCommand). With executed set, the command is judged by
      * the executed count. */
     unsigned flush_mmu;
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
     /* Optional final owner action after STOPPED; 0 pending, 1 parked, -1 fault.
-     * Called only by the worker under one fixed PARK deadline. */
+     * Called only by the worker under one fixed PARK deadline. Null: the service refuses PARK as an unknown operation. */
     int (*park)(void *,uint64_t);
-#endif
     struct pvr_gpu_service_free_list_config free_lists;
     struct pvr_compute_service *compute; /* Optional fixed native numerical job. */
     /* Mandatory with compute. Bounded worker callback, returning exactly 1

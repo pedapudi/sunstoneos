@@ -12,7 +12,7 @@ from pathlib import Path
 import shlex
 
 from register_latency import PostedWrites
-from harness import machine as harness_machine, Image, LLD, Steps
+from harness import machine as harness_machine, Image, LLD, Steps, skip_crumbs
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MEM_READ, UC_HOOK_INTR
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_LR, UC_ARM64_REG_PC
 
@@ -232,6 +232,7 @@ for mode, name in enumerate(('both-clusters-big-little-dsu', 'no-grant-read-only
     cpu.mem_map(0x41000000, 0x400000)
     cpu.mem_map(0x200000, 0x10000)
     for address, data in owner_image.parts: cpu.mem_write(address, data)
+    skip_crumbs(cpu, owner_image)   # the owner's progress breadcrumbs (SVC 0x5c0d) return as the EL1 vector would
     cpu.mem_map(0x42000000, 0x10000)
     cpu.reg_write(UC_ARM64_REG_SP, 0x4200f000);cpu.reg_write(UC_ARM64_REG_X0, mode)
     cpu.hook_add(UC_HOOK_INTR, lambda machine, interrupt, unused: machine.emu_stop())

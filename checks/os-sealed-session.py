@@ -10,7 +10,8 @@ machine with modeled system registers, counter and cache maintenance, and requir
                 store to the section and again after its last store; the EL1 entry path of every core
                 (a733_cached_enter_el1, the one caller of a733_cpu_coherence_enable_el1) issues DC CIVAC on every line
                 of the section before it enables translation; the EL1 readers store nothing to the section; and only
-                sealed.c and that entry path materialize an address inside the section (ADRP, ADR or LDR literal).
+                sealed.c and that entry path materialize an address inside the section (ADRP, ADR or LDR literal),
+                except the lifetime copy, which any code may read (the EL1 vector and the breadcrumb check).
   page tables   after a733_cached_memory_prepare, every EL1 descriptor at any level whose output range overlaps the
                 section is invalid or read-only (AP[2], or APTable[1] on a table above it). The walk covers the whole
                 level-1 table of the EL1 regime and every table below it: the level-2 blocks of 0x40000000 to
@@ -101,6 +102,30 @@ class Image(harness.Image):
         return [base + i for base, data in self.code for i in range(0, len(data) & ~3, 4)
                 for w in struct.unpack_from('<I', data, i) if w >> 26 in (0x05, 0x25) and
                 base + i + (((w & 0x3ffffff) ^ 0x2000000) - 0x2000000) * 4 == goal]
+
+    def reference_target(self, address, kind):
+        """The byte that the ADR at address names, or that the ADRP at address names together with the first ADD or 32-bit
+        LDR (unsigned offset) on its register among the next four instructions; None when there is no such instruction."""
+        for base, data in self.code:
+            if base <= address < base + len(data) - 4:
+                w = struct.unpack_from('<I', data, address - base)[0]
+                imm = ((w >> 5) & 0x7ffff) << 2 | ((w >> 29) & 3)
+                imm -= (imm & (1 << 20)) << 1
+                if kind == 'adr':
+                    return address + imm
+                page, rd = (address & ~0xfff) + (imm << 12), w & 31
+                for i in range(1, 5):
+                    if address - base + 4 * i + 4 > len(data):
+                        return None
+                    x = struct.unpack_from('<I', data, address - base + 4 * i)[0]
+                    if (x >> 5) & 31 != rd:
+                        continue
+                    if x & 0xffc00000 == 0xb9400000:
+                        return page + ((x >> 10) & 0xfff) * 4
+                    if x & 0xffc00000 == 0x91000000:
+                        return page + ((x >> 10) & 0xfff)
+                return None
+        return None
 
     def references(self, low, high):
         """(address, kind) of each ADRP, ADR and LDR literal in executable segments whose target is in [low, high)."""
@@ -309,12 +334,18 @@ def cache_order(image):
     assert not missing, ['%#x' % a for a in missing[:4]]
     cases['el1-entry-flushes-every-line-before-translation'] = True
     references = image.references(low, high)
-    owners = sorted({image.function_of(a) for a, _ in references})
+    # Any code may name the lifetime copy alone (apps/os/sealed-lifetime.h, os_crumb_lifetime): the EL1 vector's branches
+    # (the breadcrumb SVCs, SVC 0x735, the synchronous fault) and the breadcrumb check of sunstone_crumb read it. Every
+    # other address in the section is named only by sealed.c and the entry path.
+    copy = image.address('os_sealed') + 4100 if 'os_sealed' in image.symbols else None
+    lifetime_loads = [a for a, kind in references if image.reference_target(a, kind) == copy]
+    owners = sorted({image.function_of(a) or 'unnamed %#x' % a for a, _ in references if a not in lifetime_loads})
     allowed = {'board_session_prepare', 'board_session_snapshot', 'board_session_sealed', 'board_session_lifetime',
                'a733_cached_enter_el1'}
     assert set(owners) <= allowed, owners
     metrics['references'] = owners
-    cases['only-sealed-c-and-the-entry-path-address-the-section'] = True
+    metrics['lifetime_copy_references'] = len(lifetime_loads)
+    cases['only-sealed-c-and-the-entry-path-address-the-section-beside-the-lifetime-copy'] = True
 
     # Mutations, applied to the linked image in the model.
     flushes = image.calls('board_session_prepare', 'a733_cpu_coherence_flush')

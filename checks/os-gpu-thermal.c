@@ -28,6 +28,9 @@ int pvr_compute_queue_clients_idle(struct pvr_compute_queue *q){return !q->owed;
 int board_live(void *unused)
 {(void)unused;return !atomic_load(&board.fatal)&&time_us<board.session.deadline_us&&time_us<atomic_load(&board.live_until);}
 int os_thermal_throttled(void){return throttled;}
+/* The supervised lifetime: the returning cutoff (apps/os/cpu-return.c) is outside this model and its branch is not taken. */
+unsigned board_session_lifetime(void){return A733_LIFETIME_SUPERVISED;}
+uint64_t os_cpu_return_cutoff(void){return UINT64_MAX;}
 /* The delay is the kernel's; the check is on its argument. */
 void __real_vTaskDelay(TickType_t ticks);
 void __wrap_vTaskDelay(TickType_t ticks){check(ticks==1,2);__real_vTaskDelay(ticks);}

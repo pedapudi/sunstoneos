@@ -269,14 +269,18 @@ def synchronous_entry(image, faults=True):
                         {UC_ARM64_REG_SP: stack}, model,
                         ['a733_smp_stop', 'a733_storage_maintenance_stop'])
                 assert not [w for w in r['writes'] if w[4] == 1], ('EL1 store', core, vector, stack)
-                assert not [v for v in r['reads'] if v[3] == 1], ('EL1 load', core, vector, stack)
+                # The one EL1 load is the sealed lifetime copy (apps/os/sealed-lifetime.h), which selects the returning
+                # lifetime's EL0 failure return. It is in the CODE block that the vector executes from, so it cannot
+                # fault where the instruction fetch did not; any other EL1 load fails.
+                copy = image.symbols['os_sealed'] + 4100 if 'os_sealed' in image.symbols else None
+                assert not [v for v in r['reads'] if v[3] == 1 and (v[1], v[2]) != (copy, 4)], ('EL1 load', core, vector, stack)
                 slot = decode.decode_slot(bytes(uc.mem_read(SLOTS + core * 128, 128)))
                 assert slot['state'] == 'valid' and slot['kind'] == 'vector fault', slot
                 assert slot['epoch'] == epoch and slot['core'] == core and slot['vector_slot'] == vector, slot
                 assert (slot['esr'], slot['elr'], slot['far'], slot['spsr']) == tuple(
                     model[n] for n in ('esr_el1', 'elr_el1', 'far_el1', 'spsr_el1')), slot
                 rows.append(dict(core=core, vector=vector, stack=stack, kind='fault',
-                                 el1_memory_accesses=0, instructions_to_smc=r['smc_at'] + 1))
+                                 el1_memory_accesses=0, el1_lifetime_loads=len([v for v in r['reads'] if v[3] == 1]), instructions_to_smc=r['smc_at'] + 1))
             calls = [(0, 'FreeRTOS_SWI_Handler'), (119, 'a733_smp_exit_privileged')]
             if 'a733_observe_exception' in image.symbols:
                 calls.append((120, 'a733_observe_exception'))

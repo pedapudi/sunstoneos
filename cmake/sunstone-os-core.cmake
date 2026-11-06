@@ -19,10 +19,6 @@ option(SUNSTONE_A733_OS_GPU_RECOVERY_TEST
   "Withhold one completion until the ordinary job deadline in a qualification image" OFF)
 set(SUNSTONE_A733_OS_GPU_BISECT "" CACHE STRING
   "GPU diagnostic limit: constructor, firmware, jobs:N or layer:K")
-option(SUNSTONE_A733_OS_CPU_RETURN "Application result with success-only ROM return" OFF)
-if(SUNSTONE_A733_OS_RADIO_SCAN AND NOT SUNSTONE_A733_OS_CPU_RETURN)
-  message(FATAL_ERROR "The scanning radio station needs SUNSTONE_A733_OS_CPU_RETURN=ON")
-endif()
 option(SUNSTONE_GPU_FAST_TIMING "Capture optional GPU IRQ-entry counter timestamps" OFF)
 option(SUNSTONE_A733_OS_CORE "Build the OS core without an application" OFF)
 option(SUNSTONE_A733_CPU_TOPOLOGY "Expose read-only topology and per-core architectural observations" OFF)
@@ -32,16 +28,24 @@ if(NOT SUNSTONE_A733_OS AND NOT SUNSTONE_A733_OS_CORE AND NOT SUNSTONE_A733_OS_H
   return()
 endif()
 include_guard(GLOBAL)
-if(SUNSTONE_A733_OS_DMA AND NOT SUNSTONE_A733_OS_CPU_RETURN)
-  message(FATAL_ERROR "Adopted RAM DMA currently requires the returning CPU profile")
+if(SUNSTONE_A733_OS_CPU_RETURN)
+  message(FATAL_ERROR "SUNSTONE_A733_OS_CPU_RETURN is removed: every OS image links the returning lifetime, and the runner's "
+    "contract selects it (docs/designs/one-os-image.md). Configure without it.")
+endif()
+# Every OS image links the returning lifetime and selects it at run time from the contract magic. A service whose
+# retirement is qualified only for that lifetime (the RAM-copy DMA service, the scanning radio station) and the GPU
+# qualification builds make an image that admits the returning lifetime alone (SUNSTONE_A733_OS_RETURN_ONLY).
+set(os_return_only OFF)
+if(SUNSTONE_A733_OS_DMA OR SUNSTONE_A733_OS_RADIO_SCAN OR SUNSTONE_A733_OS_GPU_RECOVERY_TEST OR SUNSTONE_A733_OS_GPU_BISECT)
+  set(os_return_only ON)
 endif()
 if(SUNSTONE_A733_OS_GPU_RECOVERY_TEST AND
-   (NOT SUNSTONE_A733_OS_GPU OR NOT SUNSTONE_A733_OS_CPU_RETURN OR
-    NOT SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle"))
+   (NOT SUNSTONE_A733_OS_GPU OR NOT SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle"))
   message(FATAL_ERROR "GPU recovery qualification requires the returning GPU lifecycle image")
 endif()
-if(SUNSTONE_A733_OS_USB_CLASSES AND SUNSTONE_A733_OS_CPU_RETURN)
-  message(FATAL_ERROR "Returning USB class drain is not qualified")
+# The USB class services have no qualified drain for the returning lifetime: their image does not admit it.
+if(SUNSTONE_A733_OS_USB_CLASSES AND os_return_only)
+  message(FATAL_ERROR "The USB class services exclude the returning lifetime, which this image's options require")
 endif()
 if(SUNSTONE_A733_OS_USB_CLASSES AND NOT SUNSTONE_BOARD_USB2_IRQ)
   message(FATAL_ERROR "USB class services require SUNSTONE_BOARD_USB2_IRQ=ON")
@@ -60,8 +64,8 @@ if(NOT NEWLIB_ROOT OR NOT NEWLIB_SMP_ROOT)
 endif()
 set(os_gpu_bisect_definitions)
 if(SUNSTONE_A733_OS_GPU_BISECT)
-  if(NOT SUNSTONE_A733_OS_GPU OR NOT SUNSTONE_A733_OS_CPU_RETURN)
-    message(FATAL_ERROR "GPU diagnostics require the queue and returning profile")
+  if(NOT SUNSTONE_A733_OS_GPU)
+    message(FATAL_ERROR "GPU diagnostics require the queue")
   endif()
   if(NOT SUNSTONE_A733_OS_GPU_BISECT MATCHES "^(constructor|firmware|jobs:([1-9][0-9]*)|layer:([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-4]))$")
     message(FATAL_ERROR "GPU diagnostic limit must be constructor, firmware, jobs:N or layer:K (K < 255)")
@@ -102,8 +106,11 @@ list(REMOVE_ITEM os_sources "$<TARGET_OBJECTS:a733-board-usb2-host>"
 # One EL3 boot for both lifetimes: the patch branches on the lifetime that admission verified from the contract magic
 # (a733_smp_lifetime in apps/os/admission.c) for the watchdog readback, the result magic and the cores' held startup.
 apply_build_patch("${os_build}/boot.c" "${board_build}/boot-supervised.c" "${os_root}/apps/os/boot.patch")
-# Every core flushes the sealed session's Nonsecure alias at EL1 entry (apps/os/sealed.c).
-apply_build_patch("${os_build}/continue.S" "${storage_build}/continue.S" "${os_root}/apps/os/continue-sealed.patch")
+# Every core flushes the sealed session's Nonsecure alias at EL1 entry (apps/os/sealed.c). The vectors then add the
+# returning lifetime's success return, fault words, breadcrumb calls and EL0 fault admission, each taken only under that
+# lifetime (apps/os/vectors.patch).
+apply_build_patch("${os_build}/continue-sealed.S" "${storage_build}/continue.S" "${os_root}/apps/os/continue-sealed.patch")
+apply_build_patch("${os_build}/continue.S" "${os_build}/continue-sealed.S" "${os_root}/apps/os/vectors.patch")
 list(REMOVE_ITEM os_sources "${storage_build}/continue.S")
 list(APPEND os_sources "${os_build}/continue.S")
 # Retained per-core fault records and their previous-boot report
@@ -119,7 +126,7 @@ if(SUNSTONE_A733_OS_SD_WRITE)
   # One SD0 owner task serves the loader's reads and the FAT32 write service (apps/os/sd_owner.c); the SD core is built with its write path.
   list(APPEND os_added apps/os/sd_owner.c drivers/storage/a733_storage_bounds.c drivers/storage/a733_storage_update.c drivers/storage/storage_wait.c)
 endif()
-set(os_patches "${os_root}/apps/os/boot.patch" "${os_root}/apps/os/continue-sealed.patch")
+set(os_patches "${os_root}/apps/os/boot.patch" "${os_root}/apps/os/continue-sealed.patch" "${os_root}/apps/os/vectors.patch")
 set(os_link_base "${storage_build}/link.ld")
 if(SUNSTONE_A733_OS_USB_CLASSES)
   apply_build_patch("${os_build}/link-usb.ld" "${storage_build}/link.ld"
@@ -130,7 +137,7 @@ endif()
 # The sealed session's section, last in the read-only CODE block (apps/os/sealed.c).
 apply_build_patch("${os_build}/link-os.ld" "${os_link_base}" "${os_root}/apps/os/sealed-link.patch")
 list(APPEND os_patches "${os_root}/apps/os/sealed-link.patch")
-set(os_generated "${os_build}/boot.c" "${os_build}/continue.S")
+set(os_generated "${os_build}/boot.c" "${os_build}/continue-sealed.S" "${os_build}/continue.S")
 # The radio station is in every image: the board's own radio composition serves the radio workloads, and the session
 # grants it with the radio device (apps/os/session.c). Its owner and client report resident progress through the
 # patched main.c.
@@ -138,20 +145,16 @@ list(APPEND os_added apps/os/radio.c apps/os/wifi_credential.c)
 if(SUNSTONE_A733_OS_RADIO_SCAN)
   list(APPEND os_added apps/os/radio_scan.c apps/os/ce_probe.c)
 endif()
-if(NOT SUNSTONE_A733_OS_CPU_RETURN)
-  # The returning lifetime patches main.c itself (cmake/a733-os-cpu-return.cmake); the resident
-  # progress reports of this patch have no use in it.
-  apply_build_patch("${os_build}/main.c" "${os_root}/apps/board/main.c" "${os_root}/apps/os/main.patch")
-  list(REMOVE_ITEM os_sources "${os_root}/apps/board/main.c")
-  list(APPEND os_sources "${os_build}/main.c")
-  list(APPEND os_patches "${os_root}/apps/os/main.patch")
-  list(APPEND os_generated "${os_build}/main.c")
-endif()
-# The radio profile bounds follow the admitted lifetime (apps/os/radio_profile.c); the returning lifetime is supervised only.
-if(NOT SUNSTONE_A733_OS_CPU_RETURN)
-  list(REMOVE_ITEM os_sources "${os_root}/apps/board/radio_profile.c")
-  list(APPEND os_added apps/os/radio_profile.c apps/os/radio_profile_supervised.c)
-endif()
+# The resident progress reports and the returning lifetime's hooks (failure return, PMIC stop, supervisor).
+apply_build_patch("${os_build}/main.c" "${os_root}/apps/board/main.c" "${os_root}/apps/os/main.patch")
+list(REMOVE_ITEM os_sources "${os_root}/apps/board/main.c")
+list(APPEND os_sources "${os_build}/main.c")
+list(APPEND os_patches "${os_root}/apps/os/main.patch")
+list(APPEND os_generated "${os_build}/main.c")
+# The radio profile bounds follow the admitted lifetime (apps/os/radio_profile.c); the returning lifetime takes the
+# supervised ones.
+list(REMOVE_ITEM os_sources "${os_root}/apps/board/radio_profile.c")
+list(APPEND os_added apps/os/radio_profile.c apps/os/radio_profile_supervised.c)
 if(SUNSTONE_A733_OS_DMA)
   list(APPEND os_added apps/os/dma.c platform/a733/dma_pool_session.c platform/a733/dma_startup.c
     platform/a733/dma_native.c drivers/dma/dma_memory.c drivers/dma/a733_dma.c drivers/dma/a733_dma_controller.c
@@ -282,9 +285,31 @@ if(SUNSTONE_A733_OS_GPU)
   list(APPEND os_include_dirs "${os_build}")
 endif()
 set(os_boot_final "${os_build}/boot.c")
-if(SUNSTONE_A733_OS_CPU_RETURN)
-  include("${os_root}/cmake/a733-os-cpu-return.cmake")
-endif()
+# The returning lifetime (apps/os/cpu-return.c, docs/designs/failure-return.md) in every image: the qualification
+# runtime and terminal of apps/cpu-runtime-qualification, adapted to the OS (apps/os/return-*.patch), the per-core
+# interrupt save, and the panic and unexpected-interrupt hooks. Each hook runs only under that lifetime.
+set(os_qualification "${os_root}/apps/cpu-runtime-qualification")
+configure_file("${os_qualification}/runtime.h" "${os_build}/cpu-return-runtime.h" COPYONLY)
+foreach(pair "return-runtime.c|return-runtime|${os_qualification}/runtime.c"
+             "return-terminal.S|return-terminal|${os_qualification}/terminal.S"
+             "continue.c|continue|${os_root}/platform/a733-smp-cached/continue.c"
+             "platform.c|platform|${storage_build}/platform.c")
+  string(REPLACE "|" ";" parts "${pair}")
+  list(GET parts 0 unit)
+  list(GET parts 1 patch_name)
+  list(GET parts 2 original)
+  set(patch_file "${os_root}/apps/os/${patch_name}.patch")
+  set(patched "${os_build}/${unit}")
+  apply_build_patch("${patched}" "${original}" "${patch_file}")
+  list(REMOVE_ITEM os_sources "${original}")
+  list(APPEND os_sources "${patched}")
+  list(APPEND os_generated "${patched}")
+  list(APPEND os_patches "${patch_file}")
+  list(APPEND os_external_inputs "${original}")
+endforeach()
+list(APPEND os_added apps/os/cpu-return.c apps/os/cpu-return-el0.S apps/os/cpu-return-spi.c apps/os/cpu-return-entry.c)
+list(APPEND os_include_dirs "${os_build}")
+list(APPEND os_external_inputs "${os_qualification}/runtime.h" "${os_build}/cpu-return-runtime.h")
 if(SUNSTONE_A733_OS_USB_JPEG)
   list(APPEND os_added apps/os/usb-jpeg-native.c apps/jpeg/input.c
     drivers/video/a733_video_jpeg.c drivers/video/a733_video_jpeg_run.c
@@ -423,16 +448,14 @@ if(SUNSTONE_A733_OS_USB_CLASSES)
   endif()
 endif()
 target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_TASK_DEADLINES=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
-  "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_A733_OS_CPU_RETURN=1>"
-  "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_CRUMBS=1>"
+  SUNSTONE_CRUMBS=1
+  "$<$<BOOL:${os_return_only}>:SUNSTONE_A733_OS_RETURN_ONLY=1>"
   "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_SCAN}>:SUNSTONE_A733_OS_RADIO_SCAN=1>")
 # The EL0 ring is linked too; the application's declaration selects it (apps/os/npu-session.h, os_npu_session_queued).
 target_sources(sunstone-a733-os-core PRIVATE "${os_root}/runtime/npu_app_queue.c" "${os_root}/apps/os/npu-queue.c")
 if(SUNSTONE_A733_OS_GPU)
-  if(SUNSTONE_A733_OS_CPU_RETURN)
-    target_compile_definitions(sunstone-a733-os-core PRIVATE INCLUDE_eTaskGetState=1)
-  endif()
+  target_compile_definitions(sunstone-a733-os-core PRIVATE INCLUDE_eTaskGetState=1)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_GPU_LINEAR=1)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_GPU=1 ${os_gpu_bisect_definitions})
   if(SUNSTONE_A733_OS_GPU_RECOVERY_TEST)

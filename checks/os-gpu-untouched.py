@@ -11,7 +11,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP
-from harness import machine as harness_machine, Image, save, refused, skip_crumbs
+from harness import machine as harness_machine, Image, save, refused, skip_crumbs, seal_lifetime
 ROOT=Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--image', '{elf:ret-gpu}', '--output', '{output}']]
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--case',action='append');p.add_argument('--session',type=Path)
@@ -72,7 +72,7 @@ for name,fail_step,mutation in cases:
  u=harness_machine();u.mem_map(0x41000000,0x1200000);u.mem_map(0x80000000,0x20000)
  for address,data in im.parts:
   if data:u.mem_write(address,data)
- skip_crumbs(u,im)
+ skip_crumbs(u,im);seal_lifetime(u,im)
  def put(address,value,n=4):u.mem_write(address,int(value).to_bytes(n,'little'))
  def get(address,n=4):return int.from_bytes(u.mem_read(address,n),'little')
  def sf(base,typ,n,value,size=4):put(field(base,typ,n),value,size)
@@ -125,7 +125,7 @@ for name,fail_step,mutation in cases:
  u.hook_add(UC_HOOK_CODE,hook)
  def call(fn,arg=0,arg1=0):
   u.reg_write(UC_ARM64_REG_SP,0x8001f000);u.reg_write(UC_ARM64_REG_LR,0x80000000);u.reg_write(UC_ARM64_REG_X0,arg);u.reg_write(UC_ARM64_REG_X1,arg1)
-  u.emu_start(im.address(fn,'return-thermal.c' if fn=='record_reading' else None),0x80000000,count=2000000);assert u.reg_read(UC_ARM64_REG_PC)==0x80000000,fn
+  u.emu_start(im.address(fn,'apps/os/thermal.c' if fn=='record_reading' else None),0x80000000,count=2000000);assert u.reg_read(UC_ARM64_REG_PC)==0x80000000,fn
   return u.reg_read(UC_ARM64_REG_X0)
  client_size=sizes['pvr_gpu_service_client']
  # Constructor ownership and refusal branches execute with the actual image.
@@ -216,7 +216,7 @@ for name,fail_step,mutation in cases:
   assert call('os_cpu_return_requested')==1
   (a.output/(name+'-result.bin')).write_bytes(u.mem_read(result_address,56))
   if thermal_layout is not None:
-   policy=field(im.address('thermal','return-thermal.c'),'os_thermal_service','policy')
+   policy=field(im.address('thermal','apps/os/thermal.c'),'os_thermal_service','policy')
    sf(policy,'a733_thermal_policy','seen',31,1);sf(policy,'a733_thermal_policy','cpu_critical_millicelsius',70000)
    for i in range(5):
     put(field(policy,'a733_thermal_policy','millicelsius')+4*i,40000+1000*i)

@@ -24,7 +24,7 @@ return_host=importlib.util.module_from_spec(spec);spec.loader.exec_module(return
 prior=entry.prior
 class Model(entry.Model):
  def __init__(self,image,layout,owner_fields):
-  super().__init__(image,layout);self.requests=[];self.crumb_trace=[];self.check_ready_fixture=True;self.owner=layout.address('owner','return-cpu.c')
+  super().__init__(image,layout);self.requests=[];self.crumb_trace=[];self.check_ready_fixture=True;self.owner=layout.address('owner','apps/os/cpu.c')
   self.uc.mem_write(self.owner,bytes(self.uc.mem_read(self.c,owner_fields['phase'])))
   self.c=self.owner;self.put32(self.owner+owner_fields['phase'],2)
   self.hooks={layout.address('a733_cpu_clock_burst'):lambda:0,
@@ -91,7 +91,7 @@ class ReturnModel(Model):
   self.put32(self.c+self.cf['changes'],self.u32(self.c+self.cf['changes'])-1)
   return PENDING
  def done(self):return self.call(0,'os_cpu_return_clock_done')
- def failed(self):return self.u32(self.layout.address('fail_recorded','return-main-pinned.c'))
+ def failed(self):return self.u32(self.layout.address('fail_recorded','os-image/main.c'))
  def words(self):return tuple((self.u32(0x08871000+4096*d),self.u32(0x0887101c+4096*d)) for d in range(3))
 
 def returns(image,layout,members):
@@ -120,7 +120,7 @@ def returns(image,layout,members):
     assert (decoded['dcdc5_uv'],decoded['dcdc3_uv'])==tuple(v or None for v in readbacks),(name,decoded)
    # The host reads the owner's publication from image RAM after the return (cpu_clock in the return geometry).
    clock=return_host.geometry(image.path)['cpu_clock']
-   assert {n:p['address'] for n,p in clock.items()}=={n:layout.address(n,'return-cpu.c') for n in clock},(name,clock)
+   assert {n:p['address'] for n,p in clock.items()}=={n:layout.address(n,'apps/os/cpu.c') for n in clock},(name,clock)
    raw={n:bytes(m.uc.mem_read(p['address'],p['bytes'])) for n,p in clock.items()}
    published=return_host.decode_clock(raw['record'],raw['dsu_mhz'],raw['pattern_bits'],raw['parked_max_us'])
    if requests:
@@ -204,8 +204,8 @@ def retained_diagnostics(image,layout,members):
   m=ReturnModel(image,layout,members,3,3,raised=(0,1,2));m.closing=closing
   c=m.cf
   m.put64(m.c+c['self'],m.c)
-  m.put64(m.c+c['ops'],layout.address('clock_now','return-cpu.c'))
-  m.put64(m.c+c['ops']+8,layout.address('clock_read','return-cpu.c'))
+  m.put64(m.c+c['ops'],layout.address('clock_now','apps/os/cpu.c'))
+  m.put64(m.c+c['ops']+8,layout.address('clock_read','apps/os/cpu.c'))
   m.put64(m.c+c['cookie'],m.owner)
   m.put32(m.c+c['state'],state);m.put32(m.c+c['cluster'],domain)
   m.put32(m.c+c['thermal'],origin);m.put32(m.c+c['target_mhz'],1014)
@@ -268,7 +268,7 @@ def main():
  with a.elf.open('rb') as f:
   dwarf=ELFFile(f).get_dwarf_info();members=None
   for cu in dwarf.iter_CUs():
-   if not cu.get_top_DIE().attributes['DW_AT_name'].value.decode().endswith('return-cpu.c'):continue
+   if not cu.get_top_DIE().attributes['DW_AT_name'].value.decode().endswith('apps/os/cpu.c'):continue
    for d in cu.iter_DIEs():
     if d.tag=='DW_TAG_variable' and d.attributes.get('DW_AT_name') and d.attributes['DW_AT_name'].value==b'owner':
      members={c.attributes['DW_AT_name'].value.decode():int(c.attributes['DW_AT_data_member_location'].value) for c in d.get_DIE_from_attribute('DW_AT_type').iter_children() if c.tag=='DW_TAG_member'}
@@ -313,7 +313,7 @@ def main():
  rows.append({'name':'formatter-publishes-completed-DSU-point','passed':True})
  tf=layout.layouts['os_thermal_service'];df=layout.layouts['a733_thermal']
  for name,change,expected in [('ready',lambda m,t:None,1),('uninitialized',lambda m,t:m.put32(t+tf['driver']+df['initialized'],0),0),('faulted',lambda m,t:m.put32(t+tf['driver']+df['fault'],1),0),('retaining',lambda m,t:m.put32(t+tf['retaining'],1),0),('inactive',lambda m,t:m.put32(t+tf['active'],0),0),('failed',lambda m,t:m.put32(t+tf['failed'],1),0)]:
-  m=Model(image,layout,members);m.check_ready_fixture=False;t=layout.address('thermal','return-thermal.c')
+  m=Model(image,layout,members);m.check_ready_fixture=False;t=layout.address('thermal','apps/os/thermal.c')
   m.put32(t+tf['active'],1);m.put32(t+tf['driver']+df['initialized'],1);change(m,t)
   assert m.call(0,'os_cpu_return_thermal_ready')==expected,name
   rows.append({'name':'actual-THS-accessor-'+name,'passed':True})

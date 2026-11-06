@@ -65,10 +65,10 @@ def put(address, fmt, *values):
 
 
 # The embedded USB diagnostic has its own board; use the OS session owner.
-board = image.address('board', 'return-main-pinned.c') + image.layouts['board_application']['session']
+board = image.address('board', 'os-image/main.c') + image.layouts['board_application']['session']
 for key, value in (('epoch', 11), ('generation', 12)):
     put(board + image.layouts['a733_board_session'][key], '<Q', value)
-policy = image.address('thermal', 'return-thermal.c') + image.layouts['os_thermal_service']['policy']
+policy = image.address('thermal', 'apps/os/thermal.c') + image.layouts['os_thermal_service']['policy']
 fields = image.layouts['a733_thermal_policy']
 put(policy + fields['seen'], '<B', 31)
 put(policy + fields['cpu_critical_millicelsius'], '<I', 70000)

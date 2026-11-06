@@ -1,7 +1,7 @@
 #ifndef SUNSTONE_OS_DEVICE_RANGES_H
 #define SUNSTONE_OS_DEVICE_RANGES_H
 /* The DRAM ranges that a device reads or writes, published by the OS when it allocates them from the ledger. The CPU return
- * (apps/os/cpu-return/terminal.patch) validates every published range at EL3 (bounds, 64-byte lines, a write-back mapping for
+ * (apps/os/return-terminal.patch) validates every published range at EL3 (bounds, 64-byte lines, a write-back mapping for
  * each block) before the board goes back to the ROM. The dirty lines themselves reach DRAM by the set/way sweep of each core's
  * caches and of the shared L3, whose cost depends on the cache sizes and not on the size of any range. The ranges are chosen at
  * run time: nothing about them is known at link time, and the EL3 tables map all DRAM that the boot's decode check passed.

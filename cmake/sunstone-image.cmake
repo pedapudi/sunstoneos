@@ -74,8 +74,9 @@ function(add_sunstone_image target)
       emit --no-application --output "${directory}" COMMAND_ERROR_IS_FATAL ANY)
     set(manifest_source)
   endif()
-  # An application that observes its NPU jobs (npu.observe, apps/os/npu-observe.c) runs a diagnostic: only a returning image
-  # links it, and the admission refuses the declaration in any other lifetime too (OS_NPU_OBSERVE, apps/os/npu-session.h).
+  # An application that observes its NPU jobs (npu.observe, apps/os/npu-observe.c) runs a diagnostic: only an image that
+  # admits the returning lifetime links it, and the admission refuses the declaration in any other lifetime
+  # (OS_NPU_OBSERVE, apps/os/npu-session.h).
   if(IMAGE_APPLICATION)
     get_target_property(observe_manifest ${IMAGE_APPLICATION} SUNSTONE_MANIFEST)
     file(READ "${observe_manifest}" observe_manifest_text)

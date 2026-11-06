@@ -288,6 +288,18 @@ CRUMB_SVC = 0xd40b81a1
 FAIL_SVC = 0xd40b81c1
 
 
+SEALED_READY, SEALED_LIFETIME, LIFETIME_RETURN = 4096, 4100, 3     # apps/os/sealed-lifetime.h, include/a733_board_application.h
+
+
+def seal_lifetime(uc, image, lifetime=LIFETIME_RETURN):
+    """Give a function-level model the sealed session's lifetime copy (apps/os/sealed.c), which os_returning() and
+    BOARD_RESIDENT() read: the ready flag and the lifetime. An image without the sealed object is left as it is."""
+    if 'os_sealed' in image.symbols:
+        base = image.address('os_sealed')
+        uc.mem_write(base + SEALED_READY, (1).to_bytes(4, 'little'))
+        uc.mem_write(base + SEALED_LIFETIME, int(lifetime).to_bytes(4, 'little'))
+
+
 def skip_crumbs(uc, image, crumbs=None, failures=None):
     """Step over each breadcrumb and first-failure SVC in image as the EL1 vector would return from it.
 

@@ -58,16 +58,16 @@ static const struct {unsigned services;const char *reason;unsigned lifetimes;} r
     {OS_GRANT_NPU|OS_GRANT_RADIO,"the NPU profile requires the recorded recognition composition, not the radio station"},
     {OS_GRANT_NPU|OS_GRANT_HEADSET,"the NPU profile requires the recorded recognition composition, not live headset capture"},
     {OS_GRANT_AUDIO|OS_GRANT_DMA,"one DMA0 owner and INTID 143: the adopted RAM-copy service excludes the I2S stream"},
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
-    {OS_GRANT_AUDIO,"the returning lifetime has no qualified drain of the I2S stream"},
+    {OS_GRANT_AUDIO,"the returning lifetime has no qualified drain of the I2S stream",LIFETIME(A733_LIFETIME_RETURN)},
 #ifndef SUNSTONE_A733_OS_RADIO_SCAN
-    {OS_GRANT_RADIO,"the returning lifetime shuts down only the scanning radio station"},
+    {OS_GRANT_RADIO,"the returning lifetime shuts down only the scanning radio station",LIFETIME(A733_LIFETIME_RETURN)},
 #endif
-    {OS_GRANT_HEADSET,"the returning lifetime has no qualified shutdown of the Bluetooth module"},
-    {OS_GRANT_NPU|OS_GRANT_DMA,"the returning lifetime has no qualified retirement of the NPU beside the RAM-copy service"},
+    {OS_GRANT_HEADSET,"the returning lifetime has no qualified shutdown of the Bluetooth module",LIFETIME(A733_LIFETIME_RETURN)},
+    {OS_GRANT_NPU|OS_GRANT_DMA,"the returning lifetime has no qualified retirement of the NPU beside the RAM-copy service",
+        LIFETIME(A733_LIFETIME_RETURN)},
 #ifdef SUNSTONE_A733_OS_GPU
-    {OS_GRANT_NPU,"the returning lifetime has no qualified retirement of the NPU beside the GPU queue"},
-#endif
+    {OS_GRANT_NPU,"the returning lifetime has no qualified retirement of the NPU beside the GPU queue",
+        LIFETIME(A733_LIFETIME_RETURN)},
 #endif
 #ifdef SUNSTONE_A733_OS_USB_JPEG
     {OS_GRANT_AUDIO,"the USB camera decoder owns run-time non-cacheable allocation; the I2S stream needs allocator serialization"},

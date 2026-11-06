@@ -15,9 +15,7 @@
 #include "a733_gpu_platform_native.h"
 #include "pvr_gpu_service.h"
 #include "boot.h"
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
 #include "cpu-return.h"
-#endif
 #include <string.h>
 #ifdef SUNSTONE_A733_OS_GPU_RECOVERY_TEST
 __attribute__((used,retain)) const uint32_t os_gpu_recovery_test_configuration[5]={
@@ -45,10 +43,8 @@ static struct {
     struct pvr_compute_queue *component;
     /* Set once in start; read by the application after the scheduler starts. */
     unsigned started;
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
-    /* Written only by a refused pre-scheduler constructor, never by runtime. */
+    /* Written only by a refused pre-scheduler constructor, never by runtime. The returning lifetime reads them. */
     unsigned constructor_refusal, constructor_worker_suspended;
-#endif
     /* Application task lifecycle; job admission belongs to the queue. */
     atomic_uint opened, parked, failed, retired, manual_closed;
     atomic_uint waiting;
@@ -91,30 +87,21 @@ static int session_owners_distinct(void)
     return s->pck_client != OS_GPU_CLIENT;
 }
 
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
 static int return_park(void *context,uint64_t deadline);
-#endif
 static int service_init(unsigned core)
 {
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
-    gpu.firmware.config.park=return_park;
-#endif
+    /* The returning lifetime parks the firmware before the ROM return. */
+    if(os_returning())gpu.firmware.config.park=return_park;
     return pvr_gpu_service_init(&gpu.service,&gpu.firmware.config,OS_GPU_PRIORITY,(UBaseType_t)1<<core);
 }
 static int start_refused(unsigned reason)
 {
     if (gpu.service.worker) {
         vTaskSuspend(gpu.service.worker);
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
         gpu.constructor_worker_suspended=1;
-#endif
     }
     gpu.component=NULL;
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
     gpu.constructor_refusal=reason;
-#else
-    (void)reason;
-#endif
     return 1;
 }
 static TaskHandle_t os_gpu_client_task;
@@ -124,10 +111,10 @@ static uint64_t recovery_limit(void *unused)
     if (!board_live(NULL)) return 0;
     uint64_t end=atomic_load_explicit(&board.live_until,memory_order_acquire);
     if (board.session.deadline_us<end) end=board.session.deadline_us;
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
-    const uint64_t cutoff=os_cpu_return_cutoff()/24;
-    if (cutoff<end) end=cutoff;
-#endif
+    if (os_returning()) {
+        const uint64_t cutoff=os_cpu_return_cutoff()/24;
+        if (cutoff<end) end=cutoff;
+    }
     return end>10000 ? end-10000 : 0;
 }
 static int gpu_start_body(unsigned core);
@@ -142,9 +129,7 @@ static int gpu_start_body(unsigned core)
 {
     if (core >= configNUMBER_OF_CORES || gpu.started || !os_gpu_client_task ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
-    if(gpu.constructor_refusal)return 0;
-#endif
+    if(os_returning()&&gpu.constructor_refusal)return 0;
     /* Each refusal below leaves OPEN refused and the boot on the CPU; pages
      * acquired before it stay retained. */
     struct a733_pmic_lifetime lifetime;
@@ -388,8 +373,7 @@ static int gpu_retire_body(void)
     atomic_store(&gpu.waiting,0);
     return 1;
 }
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
-#include "cpu-return.h"
+/* The returning lifetime's GPU retirement (apps/os/cpu-return.c). */
 __attribute__((used,retain)) const uint32_t os_gpu_untouched_return_version=2;
 __attribute__((used,retain)) uint64_t os_gpu_return_report[8];
 static atomic_uint return_state;
@@ -548,7 +532,6 @@ static int gpu_return_body(uint64_t completed)
     atomic_store_explicit(&return_state,2,memory_order_release);
     return 1;
 }
-#endif
 int os_gpu_perf_owner(void)
 {return gpu.started && (pvr_gpu_service_performance_state(&gpu.service)&PVR_GPU_PERF_OWNER)!=0;}
 int os_gpu_perf_ready(void)
@@ -644,7 +627,6 @@ int pvr_compute_queue_runtime_admit(void)
     if (atomic_load(&gpu.failed) || atomic_load(&board.fatal) || !board_live(NULL)) return -1;
     return atomic_load(&gpu.opened) && !atomic_load(&gpu.component->recovering) && !os_thermal_throttled();
 }
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
 int os_gpu_retire(void)
 {
     if(os_gpu_return_ready())return 1;
@@ -652,7 +634,6 @@ int os_gpu_retire(void)
         return os_gpu_queue_return_untouched();
     return gpu.component&&os_gpu_queue_return(gpu.component->completed_jobs);
 }
-#endif
 
 unsigned os_gpu_queue_state(void)
 {
@@ -663,7 +644,7 @@ unsigned os_gpu_queue_state(void)
          (atomic_load(&gpu.component->create_pending)&&!atomic_load(&gpu.component->create_done))))?1:0;
 }
 
-#if defined(SUNSTONE_A733_OS_CPU_RETURN) && defined(SUNSTONE_A733_OS_GPU_BISECT)
+#ifdef SUNSTONE_A733_OS_GPU_BISECT
 __attribute__((used,retain)) const uint32_t os_gpu_bisect_configuration[3]={
     1,OS_GPU_BISECT_STAGE,OS_GPU_BISECT_LIMIT};
 #endif

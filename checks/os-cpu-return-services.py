@@ -44,10 +44,10 @@ class Model(prior.Model):
         self.hooks[layout.address('xTaskGenericNotify')] = self.notify
         self.hooks[layout.address('xTaskCreateStaticAffinitySet')] = self.create
         self.hooks[layout.address('vTaskDelay')] = self.delay
-        self.board = layout.address('board', 'return-main-pinned.c')
+        self.board = layout.address('board', 'os-image/main.c')
         self.shared = layout.address('providers') + layout.layouts['board_provider']['shared']
         self.pmic = self.shared + layout.layouts['a733_native_usb']['pmic']
-        self.thermal = layout.address('thermal', 'return-thermal.c')
+        self.thermal = layout.address('thermal', 'apps/os/thermal.c')
         self.flags = {name: layout.address(name, 'cpu-return.c')
                       for name in ('closing', 'thermal_done', 'pmic_done', 'pmic_stop', 'ready')}
         board_fields = layout.layouts['board_application']

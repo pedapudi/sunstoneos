@@ -87,7 +87,7 @@ uint32_t board_live_refusal(void);
  * functions and numbers its own services after BOARD_SERVICES. */
 enum { BOARD_SERVICE_PMIC, BOARD_SERVICE_USB0, BOARD_SERVICE_TYPEC, BOARD_SERVICE_POWER,
        BOARD_SERVICE_USB2, BOARD_SERVICES };
-#if defined(SUNSTONE_A733_OS) && !defined(SUNSTONE_A733_OS_CPU_RETURN)
+#ifdef SUNSTONE_A733_OS
 void board_service_progress(unsigned);
 int board_resident_renew(void *supervisor,uint64_t first_expiry);
 /* After a refusal: one plus the index of the first service that was stale,

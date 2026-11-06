@@ -6,11 +6,11 @@ if(NOT TARGET sunstone-a733-os-core)
   return()
 endif()
 include("${CMAKE_CURRENT_LIST_DIR}/sunstone-image.cmake")
-# A returning image admits the supervised lifetime only. Every other image admits the supervised and the resident
-# lifetime and selects one at run time from the contract magic (apps/os/admission.c); its manifest bounds the supervised one.
-set(os_lifetime supervised)
-if(SUNSTONE_A733_OS_CPU_RETURN)
-  set(os_lifetime return)
+# Every image admits the returning lifetime, except one with the USB class services, and selects its lifetime at run
+# time from the contract magic (apps/os/admission.c); the manifest bounds the supervised and returning ones.
+set(os_lifetime return)
+if(SUNSTONE_A733_OS_USB_CLASSES)
+  set(os_lifetime supervised)
 endif()
 if(SUNSTONE_APPLICATION STREQUAL "")
   add_sunstone_image(sunstone-a733-os LIFETIME ${os_lifetime})
@@ -27,7 +27,7 @@ elseif(SUNSTONE_APPLICATION STREQUAL "headset-fixture")
   add_sunstone_image(sunstone-a733-os LIFETIME ${os_lifetime} APPLICATION headset-fixture)
 elseif(SUNSTONE_APPLICATION STREQUAL "radio-scan")
   if(NOT SUNSTONE_A733_OS_RADIO_SCAN)
-    message(FATAL_ERROR "radio-scan needs SUNSTONE_A733_OS_RADIO_SCAN=ON (with CPU_RETURN)")
+    message(FATAL_ERROR "radio-scan needs SUNSTONE_A733_OS_RADIO_SCAN=ON")
   endif()
   add_sunstone_application(radio-scan
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/radio-scan/main.c"
@@ -39,12 +39,9 @@ elseif(SUNSTONE_APPLICATION STREQUAL "large-region-test")
   if(NOT SUNSTONE_A733_DRAM_DECODE_PROBE)
     message(FATAL_ERROR "large-region-test needs -DSUNSTONE_A733_DRAM_DECODE_PROBE=ON")
   endif()
-  # The CPU-return profile runs the A76 cluster; the resident and plain supervised images keep the original manifest.
-  # The session lifetime follows the manifest's run deadline (tools/session_lifetime.py).
-  set(large_region_manifest "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest.json")
-  if(SUNSTONE_A733_OS_CPU_RETURN)
-    set(large_region_manifest "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest-return.json")
-  endif()
+  # The test runs on the A76 cluster with CPU clock grants. The session lifetime follows the manifest's run deadline
+  # (tools/session_lifetime.py).
+  set(large_region_manifest "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest-return.json")
   add_sunstone_application(large-region
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/main.c"
     MANIFEST "${large_region_manifest}")

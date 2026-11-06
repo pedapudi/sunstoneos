@@ -4,6 +4,7 @@
  * Each hook runs every entry in list order and fails on the first refusal,
  * so main.c keeps its panic codes. Each entry validates its own session. */
 #include "os.h"
+#include "cpu-return.h"
 #include "../board/application.h"
 #include "../board/session.h"
 #include "application.h"
@@ -37,6 +38,9 @@ int board_application_start(void)
     for(unsigned i=0;i<os_application_count;++i)
         if(os_applications[i].start()!=1){
             board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD),i,(const void *)os_applications[i].start);return 0;}
+    /* The returning lifetime's per-core terminal tasks (apps/os/cpu-return.c). */
+    if(os_returning()&&!os_cpu_return_start()){
+        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD),0xfffe,(const void *)os_cpu_return_start);return 0;}
     return 1;
 }
 /* The admitted session, validated in full: the sealed copy, the board prefix the EL3 contract bound, the service

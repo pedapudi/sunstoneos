@@ -5,8 +5,8 @@ zero. Firmware executes the ordinary compute and fence commands; every shader
 lane exits before input or output access. The zero-job input opens and closes
 the same context as a control.
 
-Select `SUNSTONE_APPLICATION=gpu-fast`, `SUNSTONE_A733_OS_GPU=ON`,
-`SUNSTONE_GPU_FAST_TIMING=ON` and `SUNSTONE_A733_OS_CPU_RETURN=ON` through the
+Select `SUNSTONE_APPLICATION=gpu-fast`, `SUNSTONE_A733_OS_GPU=ON` and
+`SUNSTONE_GPU_FAST_TIMING=ON` through the
 cached configuration helper. The target is `sunstone-a733-os-gpu-fast`.
 
 `prepare.py --jobs 0|10000 --cache writeback|uncached --output DIRECTORY` writes

@@ -32,7 +32,7 @@ class Model(prior.Model):
         self.put32(self.p+p['initialized'],1);self.put32(self.p+p['cpu_critical_millicelsius'],70000)
         self.put32(self.p+p['published_seen'],31)
         for i in range(5):self.put64(self.p+p['seen_us']+i*8,1000000)
-        self.read_callback=layout.address('read_word','return-cpu.c')
+        self.read_callback=layout.address('read_word','apps/os/cpu.c')
     def code(self,uc,a,size,unused):
         if a==self.layout.address('os_cpu_return_thermal_ready'):
             uc.reg_write(prior.fault.REGS[0],self.thermal_ready);uc.reg_write(UC_ARM64_REG_PC,uc.reg_read(UC_ARM64_REG_LR));return

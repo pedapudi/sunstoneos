@@ -106,7 +106,7 @@ int __wrap_a733_gpu_backend_stopped(struct a733_gpu_backend *backend, struct pvr
     (void)backend;
     ++stopped_proofs;
     return !refuse_stopped && s == &service && (s->phase == PVR_GPU_SERVICE_STOPPED || s->phase==PVR_GPU_SERVICE_RECOVERING
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
+#ifdef GPU_QUEUE_RETURNING
         || s->phase==PVR_GPU_SERVICE_PARKING || s->phase==PVR_GPU_SERVICE_PARKED
 #endif
         ) &&
@@ -647,7 +647,7 @@ static void closed(void)
     }
 }
 
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
+#ifdef GPU_QUEUE_RETURNING
 #include "gpu-return-service.inc"
 #endif
 #ifdef PVR_GPU_PERFORMANCE
@@ -814,7 +814,7 @@ static void client(void *unused)
 #ifdef PVR_GPU_PERFORMANCE
     if(c>=25)performance_client();
 #endif
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
+#ifdef GPU_QUEUE_RETURNING
     if(c>=31)return_client();
 #endif
     if(c==38){
@@ -1142,7 +1142,7 @@ void kernel_main(void)
     config.performance_clock=(struct pvr_gpu_clock_ops){boundary_now,sync_write,sync_read,perf_state,perf_publish};
     config.performance_begin=perf_begin;config.performance_poll=perf_poll;config.performance_rate=perf_current;config.performance_client=1;
 #endif
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
+#ifdef GPU_QUEUE_RETURNING
     config.park=final_park;
 #endif
     configASSERT(pvr_gpu_service_init(&service, &config, 4, 1));

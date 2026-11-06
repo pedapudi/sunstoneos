@@ -227,7 +227,7 @@ static void supervise(void *unused)
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
-#elif defined(SUNSTONE_A733_OS) && !defined(SUNSTONE_A733_OS_CPU_RETURN)
+#elif defined(SUNSTONE_A733_OS)
 static void supervise(void *unused)
 {
     (void)unused;const int resident=BOARD_RESIDENT();

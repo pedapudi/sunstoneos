@@ -1,6 +1,7 @@
 /* The OS owns USB0. Application requests cross a task-notified mailbox; no
  * application code runs in the privileged USB owner. */
 #include "os.h"
+#include "cpu-return.h"
 #include "application.h"
 #include "../board/application.h"
 #include "../board/session.h"
@@ -100,10 +101,7 @@ static void exchange(void)
 void board_usb0_task(void *unused)
 {
     (void)unused;
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
-    /* This return profile admits no native USB ownership. */
-    os_application_usb_ready();for(;;)vTaskSuspend(NULL);
-#else
+    /* The returning lifetime admits no native USB ownership. */
+    if(os_returning()){os_application_usb_ready();for(;;)vTaskSuspend(NULL);}
     usb0_service_start();os_application_usb_ready();usb0_service_run(exchange);
-#endif
 }

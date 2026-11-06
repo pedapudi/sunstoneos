@@ -14,25 +14,22 @@ FIXTURES = {
 }
 
 IMAGES = {
-    # the CPU-return NPU image of apps/cpu-npu-concurrency (apps/cpu-npu-concurrency/README.md)
+    # the returning NPU image of apps/cpu-npu-concurrency (apps/cpu-npu-concurrency/README.md)
     'ret-npu-load': {'configure': [
         '-DSUNSTONE_MIMUS_BOARD_APPLICATION=ON',
         '-DSUNSTONE_APPLICATION=cpu-npu-load',
         '-DSUNSTONE_APPLICATION_cpu-npu-load_ROOT={source}/apps/cpu-npu-concurrency',
-        '-DSUNSTONE_A733_OS_CPU_RETURN=ON',
         '-DSUNSTONE_CPU_NPU_ARTIFACTS={cache}/build/npu-board/session-artifacts.json',
     ], 'target': 'sunstone-a733-os', 'elf': 'sunstone-a733-os.elf'},
-    # the CPU-return GPU image of apps/gpu-lifecycle (apps/gpu-lifecycle/README.md)
+    # the returning GPU image of apps/gpu-lifecycle (apps/gpu-lifecycle/README.md)
     'ret-gpu': {'configure': [
         '-DSUNSTONE_APPLICATION=gpu-lifecycle',
         '-DSUNSTONE_A733_OS_GPU=ON',
-        '-DSUNSTONE_A733_OS_CPU_RETURN=ON',
     ], 'target': 'sunstone-a733-os-gpu-lifecycle', 'elf': 'sunstone-a733-os-gpu-lifecycle.elf'},
-    # the CPU-return latency diagnostic image
+    # the returning latency diagnostic image
     'ret-latency': {'configure': [
         '-DSUNSTONE_LATENCY=ON',
         '-DSUNSTONE_APPLICATION=latency',
-        '-DSUNSTONE_A733_OS_CPU_RETURN=ON',
     ], 'target': 'sunstone-a733-os-latency', 'elf': 'sunstone-a733-os-latency.elf'},
     # the supervised SD0 read image (apps/storage-read); the host session is modeled by checks/storage-read-fixture.py (tools/gate_session.py), at profile 2, or the profile in the image name (storage-read-p1: profile 1)
     'storage-read': {'configure': [
@@ -54,7 +51,6 @@ IMAGES = {
     'ret-radio-scan': {'configure': [
         '-DSUNSTONE_APPLICATION=radio-scan',
         '-DSUNSTONE_A733_OS_RADIO_SCAN=ON',
-        '-DSUNSTONE_A733_OS_CPU_RETURN=ON',
     ], 'target': 'sunstone-a733-os-radio-scan', 'elf': 'sunstone-a733-os-radio-scan.elf'},
 }
 BUNDLES = {

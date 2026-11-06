@@ -12,7 +12,7 @@ at a watchdog reset. A watchdog reset loses DRAM. After a reset the runner
 often cannot prove DRAM ownership, quarantines the USB instance, and only a
 physical replug recovers the port.
 
-This applies to the CPU return lifetime (`SUNSTONE_A733_OS_CPU_RETURN`). The
+This applies to the returning lifetime (contract magic `A733_OS_RETURN_CONTRACT_MAGIC`). The
 resident and supervised lifetimes keep their endings.
 
 ## Where failures end
