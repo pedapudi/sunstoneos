@@ -52,17 +52,12 @@ VARIANTS = {
     'sup': [],
     # Every service of the one OS image that is not yet a run-time option (docs/designs/one-os-image.md): the image the
     # series converges on. Each series removes its options from the variants above and from this list.
-    'all': ['-DSUNSTONE_A733_OS_AUDIO=ON', '-DSUNSTONE_A733_OS_RADIO=ON', '-DSUNSTONE_A733_OS_NPU=ON',
-            '-DSUNSTONE_A733_OS_NPU_QUEUE=ON'],
+    'all': ['-DSUNSTONE_A733_OS_NPU=ON', '-DSUNSTONE_A733_OS_NPU_QUEUE=ON'],
     'res': ['-DSUNSTONE_A733_OS_RESIDENT=ON'],
-    'resaud': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_AUDIO=ON'],
-    'resradio': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON'],
-    'resradioaud': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON', '-DSUNSTONE_A733_OS_AUDIO=ON'],
-    'headset': ['-DSUNSTONE_A733_OS_HEADSET=ON'],
-    'resheadset': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_HEADSET=ON'],
-    'radio-headset': ['-DSUNSTONE_A733_OS_RADIO=ON', '-DSUNSTONE_A733_OS_HEADSET=ON'],
-    'resradio-headset': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON',
-                         '-DSUNSTONE_A733_OS_HEADSET=ON'],
+    # An application that declares the headset device links the headset library (the Bluetooth stack and mSBC).
+    'headset': ['-DSUNSTONE_APPLICATION=headset-fixture', '-DSUNSTONE_BT_SBC_DIR={cache}/sources/bluetooth-msbc'],
+    'resheadset': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_APPLICATION=headset-fixture',
+                   '-DSUNSTONE_BT_SBC_DIR={cache}/sources/bluetooth-msbc'],
     # The supervised NPU profile: the image links no graph.
     'npu': ['-DSUNSTONE_A733_OS_NPU=ON'],
     # The NPU queue and the performance-mode service are built in 'all'. The CPU clock owner and the performance service are

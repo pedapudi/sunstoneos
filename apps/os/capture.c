@@ -6,6 +6,8 @@
 #include "boot.h"
 #include <string.h>
 extern uint8_t ss_capture_buffer[];
+/* The headset library's capture: absent (null) in an image that does not link it. */
+extern int os_headset_capture(unsigned,const uint8_t **,size_t *) __attribute__((weak));
 extern const size_t ss_capture_capacity;
 /* Recorded input uses the same copied output and caller headroom as device
  * capture. Only the application task accesses this state. Input authentication
@@ -75,7 +77,6 @@ int os_audio_client_admit(uint32_t frames)
     const struct ss_audio_format *f=&ss_application.manifest->audio;
     return frames>=f->min_frames&&frames<=f->max_frames;
 }
-#ifdef SUNSTONE_A733_OS_AUDIO
 static struct {unsigned stage,sequence,requested;uint32_t bytes,periods,total;struct os_audio_stream_config config;} capture;
 int os_capture_start(void)
 {
@@ -119,30 +120,23 @@ static int capture_step(void)
     if(capture.stage==2){r=os_audio_stream_stop();if(r<0)return -1;if(r==1)capture.stage=3;}
     return 0;
 }
-#else
-int os_capture_start(void){return 0;}
-#endif
 int ss_capture(uint32_t sequence,void **pcm,size_t *bytes)
 {
     const struct ss_grant *g=ss_grant();
     if(!g||!sequence||!pcm||!bytes||ss_live()!=1)return -1;
     if(replay.opened)return replay_read(sequence,pcm,bytes);
-#ifdef SUNSTONE_A733_OS_AUDIO
     if(g->devices&SS_DEVICE_AUDIO_I2S){
         if(capture.stage==4||!capture.total||sequence<capture.requested)return -1;
         capture.requested=sequence;if(capture_step()<0){capture.stage=4;return -1;}
         if(capture.stage!=3||capture.sequence!=sequence)return 0;
         *pcm=ss_capture_buffer+SS_CAPTURE_HEADROOM;*bytes=capture.total;return 1;
     }
-#endif
-#ifdef SUNSTONE_A733_OS_HEADSET
     if(g->devices&SS_DEVICE_AUDIO_HEADSET){
-        const uint8_t *wav;size_t n;int r=os_headset_capture(sequence,&wav,&n);
+        const uint8_t *wav;size_t n;int r=os_headset_capture?os_headset_capture(sequence,&wav,&n):-1;
         if(r!=1)return r;if(n<44)return -1;
         const struct ss_audio_format *f=&ss_application.manifest->audio;
         if(f->rate_hz!=16000||f->channels!=1||f->bits!=16||!(n-44)||n%2||n-44>(size_t)g->capture_frames*2)return -1;
         *pcm=(void *)(wav+44);*bytes=n-44;return 1;
     }
-#endif
     return -1;
 }

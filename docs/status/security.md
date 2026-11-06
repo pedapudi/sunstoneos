@@ -22,6 +22,11 @@ CE cryptographic and entropy operations have no physical qualification; read-onl
 1. Unblock launch: account for predecessor DMA, exclude future secure and nonsecure clients, grant secure-bank access, reach private memory, and add IRQ, drain and stable ownership. The current application polls once per tick with INTIDs 200 and 201 masked, parks until power removal and has no CE-specific returning watchdog contract, so it is ineligible for returning runs.
 2. Establish entropy: no A733 raw-source export or startup completion counter is known, and other `sunxi-trng` layouts do not establish the selected CE node. Entropy assessment, raw-source checks and current-enable startup tests are missing.
 3. Add native CE GCM and further AES modes, DES, 3DES, SM4, RC4, RSA, ECC, SM2, PRNG and DRBG, key-ladder operations, eFuse provisioning and mutable secure storage. Internal key erasure is unproven.
+4. Check the device page tables against the sealed session. The design in [one OS image](../designs/one-os-image.md#lifetime-word-and-sealed-session) places the sealed session and the EL1 lifetime copy in the read-only CODE block (0x41000000 to 0x41200000), and its page-table check covers only the EL1 regime. The GPU and NPU page tables are built at run time from the session's manifest, the registered graphs and device-memory leases, so no host check walks the tables an image builds. Their inputs exclude CODE by construction:
+   - **NPU:** every buffer lies in the pool that `apps/os/npu.c` takes from the unified allocator, whose ranges start at `APP_REGION_FLOOR` (0x48000000, `include/app_region.h`). `a733_npu_memory_init` also requires a write translation at EL1 for every buffer the NPU writes.
+   - **GPU:** manifest regions must be disjoint from 0x41000000 to `__device_pool_end` (`platform/a733/gpu_queue.c`). Firmware, payload and table pages are device-pool leases, and the link script places the device pool in the RAM region after `.bss`.
+
+   The missing check walks the GPU and NPU tables that the builders produce from an image's actual inputs and requires no entry to map a sealed page. A mutation that adds such an entry must fail it. Device masters without an MMU (the DMA engine, USB and the SD controllers) take physical addresses from the same device-pool and allocator sources and are not covered either.
 
 ## CE board probe
 

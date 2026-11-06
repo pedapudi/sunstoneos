@@ -559,8 +559,10 @@ def c_tables(m):
              '#ifdef SUNSTONE_BOARD_USB2_IRQ', '    {187,0,0xd8,board_host_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_NPU', '    {97,OS_NPU_CORE,0xd8,os_npu_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_SD_WRITE', '    {193,0,0xd8,os_sd_irq},', '#endif',
-             '#ifdef SUNSTONE_A733_OS_AUDIO', '    {143,0,0xd8,os_audio_irq},', '#endif',
-             '#ifdef SUNSTONE_A733_OS_DMA', '    {143,0,0xd8,os_dma_irq},', '#endif',
+             # DMA0's one line: the I2S stream's, or in an image with the RAM-copy service the handler of whichever
+             # of the two the session granted. The hardware-facts probe takes the line itself.
+             '#ifndef SUNSTONE_A733_HW_FACTS', '#ifdef SUNSTONE_A733_OS_DMA', '    {143,0,0xd8,os_dma0_irq},', '#else',
+             '    {143,0,0xd8,os_audio_irq},', '#endif', '#endif',
              '#ifdef SUNSTONE_A733_OS_GPU', ('    {95,A733_SMP_APPLICATION_CORE,0xd8,os_gpu_queue_irq},' if m.get('cluster', 0) else '    {95,2,0xd8,os_gpu_queue_irq},'), '#endif',
              '#ifdef SUNSTONE_A733_HW_FACTS', '    {97,0,0xd8,os_hw_facts_irq},{143,0,0xd8,os_hw_facts_irq},{95,0,0xd8,os_hw_facts_irq},', '#endif', '};',
              'const unsigned a733_irq_route_count=sizeof(a733_irq_routes)/sizeof(a733_irq_routes[0]);',

@@ -31,8 +31,10 @@ extern "C" {
 #define SS_REGIONS 8u
 
 /* Devices an application uses. USB0, the host channel, and the thermal
- * service are always present and have no bit. The radio station and the NPU
- * client are OS services that the image selects, not application devices. */
+ * service are always present and have no bit. The NPU client is an OS service
+ * that the image selects, not an application device. The radio station is in
+ * every image; the session grants it with SS_DEVICE_RADIO and a radio
+ * workload in the board prefix (1 with USB storage, 3 without). */
 enum {
     SS_DEVICE_USB_STORAGE = 1u << 0,   /* USB2 host, mass-storage leaf */
     SS_DEVICE_USB_KEYBOARD = 1u << 1,  /* USB2 host, boot-protocol keyboard leaf */
@@ -42,7 +44,8 @@ enum {
     SS_DEVICE_USB_MOUSE = 1u << 5,
     SS_DEVICE_USB_SERIAL = 1u << 6,
     SS_DEVICE_USB_CAMERA = 1u << 7,
-    SS_DEVICE_ALL = (1u << 8) - 1
+    SS_DEVICE_RADIO = 1u << 8,         /* Wi-Fi station of the radio module */
+    SS_DEVICE_ALL = (1u << 9) - 1
 };
 /* Preferred cluster of the main task. Without A76 admission the OS grants
  * the A55 pair 2-3 instead of the A76 pair 6-7. */

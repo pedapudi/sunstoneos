@@ -52,7 +52,7 @@ def main():
               'tcp': stacks / ('FreeRTOS-Plus-TCP-' + lock['freertos-tcp']['revision']),
               'rsn': stacks / ('wpa_supplicant-' + lock['wpa-supplicant']['revision']),
               'headers': toolchain / 'aarch64-none-elf/include', 'newlib': toolchain,
-              'bt_security': sources / 'bluetooth-security-zephyr-v4.2.1'}
+              'bt_security': sources / 'bluetooth-security-zephyr-v4.2.1', 'bt_sbc': sources / 'bluetooth-msbc'}
     for path in layout.values():
         path.mkdir(parents=True, exist_ok=True)
     (host / 'newlib-smp-aaaa').mkdir(parents=True)
@@ -76,7 +76,7 @@ def main():
               'SUNSTONE_RSN_DIR': layout['rsn'], 'SUNSTONE_NETWORK_C_HEADERS': layout['headers'], 'NEWLIB_ROOT': layout['newlib'],
               'NEWLIB_SMP_ROOT': host / 'newlib-smp-bbbb', 'SUNSTONE_LLD': cache / dependencies.LLVM_BIN / 'ld.lld',
               'SUNSTONE_GPU_FIRMWARE': sources / lock['gpu-firmware']['archive'], 'SUNSTONE_BT_SECURITY_DIR': layout['bt_security'],
-              'MIMUS_DIR': mimus, 'CMAKE_TOOLCHAIN_FILE': source / 'cmake/aarch64-clang.cmake'}
+              'SUNSTONE_BT_SBC_DIR': layout['bt_sbc'], 'MIMUS_DIR': mimus, 'CMAKE_TOOLCHAIN_FILE': source / 'cmake/aarch64-clang.cmake'}
     for option, path in expect.items():
         assert '-D%s=%s' % (option, path) in command, (option, path)
     assert '-DSUNSTONE_BOARD_SUPERVISED=ON' in command

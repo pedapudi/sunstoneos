@@ -54,7 +54,25 @@ int os_worker_cores(unsigned main_core,unsigned workers,uint32_t *mask)
 static const struct {unsigned services;const char *reason;} refused_compositions[]={
     {OS_GRANT_NPU|OS_GRANT_AUDIO,"the NPU profile requires the recorded recognition composition, not live I2S capture"},
     {OS_GRANT_NPU|OS_GRANT_RADIO,"the NPU profile requires the recorded recognition composition, not the radio station"},
+    {OS_GRANT_NPU|OS_GRANT_HEADSET,"the NPU profile requires the recorded recognition composition, not live headset capture"},
     {OS_GRANT_AUDIO|OS_GRANT_DMA,"one DMA0 owner and INTID 143: the adopted RAM-copy service excludes the I2S stream"},
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+    {OS_GRANT_AUDIO,"the returning lifetime has no qualified drain of the I2S stream"},
+#ifndef SUNSTONE_A733_OS_RADIO_SCAN
+    {OS_GRANT_RADIO,"the returning lifetime shuts down only the scanning radio station"},
+#endif
+    {OS_GRANT_HEADSET,"the returning lifetime has no qualified shutdown of the Bluetooth module"},
+#endif
+#ifdef SUNSTONE_A733_OS_USB_JPEG
+    {OS_GRANT_AUDIO,"the USB camera decoder owns run-time non-cacheable allocation; the I2S stream needs allocator serialization"},
+    {OS_GRANT_RADIO,"the USB camera decoder owns run-time non-cacheable allocation; the radio station needs allocator serialization"},
+    {OS_GRANT_HEADSET,"the USB camera decoder owns run-time non-cacheable allocation; the headset needs allocator serialization"},
+#endif
+#if defined(SUNSTONE_A733_OS_GPU) && !defined(SUNSTONE_BOARD_RESIDENT)
+    {OS_GRANT_AUDIO,"the supervised GPU queue requires the recorded recognition composition, not live I2S capture"},
+    {OS_GRANT_RADIO,"the supervised GPU queue requires the recorded recognition composition, not the radio station"},
+    {OS_GRANT_HEADSET,"the supervised GPU queue requires the recorded recognition composition, not live headset capture"},
+#endif
 #ifdef SUNSTONE_BOARD_RESIDENT
     {OS_GRANT_CPU_CLOCK|OS_GRANT_AUDIO,"resident CPU grants require the recorded-card session profile"},
     {OS_GRANT_CPU_CLOCK|OS_GRANT_RADIO,"resident CPU grants require the recorded-card session profile"},

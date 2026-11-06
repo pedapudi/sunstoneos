@@ -4,8 +4,8 @@
 Usage: configure.py [--dry-run] SRC BUILD [cmake options...]
 
 Runs `cmake -S SRC -B BUILD` with the aarch64 clang toolchain file of SRC and the -D arguments of checks/image_dependencies.py: FreeRTOS,
-TinyUSB, FreeRTOS+TCP, wpa_supplicant, the freestanding toolchain headers and root, the SMP runtime, the host linker, the GPU firmware and the
-Zephyr BR/EDR sources, with the host LLVM tools first on PATH and TMPDIR on the main disk. When SRC carries apps/mimus/source.json, MIMUS_DIR is
+TinyUSB, FreeRTOS+TCP, wpa_supplicant, the freestanding toolchain headers and root, the SMP runtime, the host linker, the GPU firmware, the
+Zephyr BR/EDR sources and the libsbc sources of the headset's mSBC codec, with the host LLVM tools first on PATH and TMPDIR on the main disk. When SRC carries apps/mimus/source.json, MIMUS_DIR is
 that file's local_worktree. Options after BUILD go to cmake last, so a -D of yours wins over the pinned one (and that dependency need not exist).
 A dependency that is missing is refused with the command that provides it. --dry-run prints the cmake command and runs nothing.
 

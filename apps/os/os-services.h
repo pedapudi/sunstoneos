@@ -23,21 +23,14 @@
 #else
 #define OS_WITH_NPU(...)
 #endif
-#ifdef SUNSTONE_A733_OS_AUDIO
-#define OS_WITH_AUDIO(...) __VA_ARGS__
-#else
-#define OS_WITH_AUDIO(...)
-#endif
 #ifdef SUNSTONE_A733_OS_DMA
 #define OS_WITH_DMA(...) __VA_ARGS__
 #else
 #define OS_WITH_DMA(...)
 #endif
-#ifdef SUNSTONE_A733_OS_RADIO
-#define OS_WITH_RADIO(...) __VA_ARGS__
-#else
-#define OS_WITH_RADIO(...)
-#endif
+/* The headset is an object library that an image links when its application declares the headset device
+ * (cmake/sunstone-image.cmake): SUNSTONE_A733_OS_HEADSET is defined for that library and for the image's own tables,
+ * never for the OS core, which reaches the library through weak references. */
 #ifdef SUNSTONE_A733_OS_HEADSET
 #define OS_WITH_HEADSET(...) __VA_ARGS__
 #else
@@ -55,19 +48,21 @@
 #endif
 
 /* X(NAME, bit, with): a service that a session grants, its bit in the granted set (OS_GRANT_NAME) and the option that
- * links its code (OS_LINKED_NAME is 1 when it is linked). A session cannot grant a service whose code the image lacks. */
+ * links its code (OS_LINKED_NAME is 1 when it is linked). A session cannot grant a service whose code the image lacks.
+ * The headset's code is linked per image, so the session decode tests a weak reference instead. */
 #define OS_GRANT_ROWS(X) \
     X(NPU, 0, OS_WITH_NPU) \
-    X(AUDIO, 1, OS_WITH_AUDIO) \
+    X(AUDIO, 1, OS_ALWAYS) \
     X(CPU_CLOCK, 2, OS_ALWAYS) \
     X(DMA, 3, OS_WITH_DMA) \
-    X(RADIO, 4, OS_WITH_RADIO)
+    X(RADIO, 4, OS_ALWAYS) \
+    X(HEADSET, 5, OS_ALWAYS)
 
 /* X(GRANT, extent, field, bytes, magic, version, need): the record a granted service carries, as the session extent of
  * that type, copied to the field of struct os_session. A record that is present grants its service. need says when the
  * record must be present: 0 never (an optional service), OS_RECORD_LINKED whenever the image links the service, or a
- * device bit, which the session must hold exactly when the record is present. The radio has no record: a radio
- * workload in the board prefix grants it (apps/os/session.c). */
+ * device bit, which the session must hold exactly when the record is present. The radio has no record: the radio
+ * device bit, with a radio workload in the board prefix, grants it (apps/os/session.c). */
 #define OS_RECORD_LINKED 0xffffffffu
 #define OS_RECORD_ROWS(X) \
     X(AUDIO, SS_EXTENT_AUDIO, audio, OS_AUDIO_SESSION_BYTES, OS_AUDIO_SESSION_MAGIC, OS_AUDIO_SESSION_VERSION, SS_DEVICE_AUDIO_I2S) \
@@ -82,23 +77,23 @@
     X("large", os_large, os_large_start, OS_ALWAYS) \
     X("tlbi", os_tlbi, os_tlbi_start, OS_WITH_TLBI) \
     X("npu", os_npu, os_npu_start, OS_WITH_NPU) \
-    X("audio", os_audio, os_capture_start, OS_WITH_AUDIO) \
+    X("audio", os_audio, os_capture_start, OS_ALWAYS) \
     X("dma", os_dma, os_dma_start, OS_WITH_DMA) \
-    X("radio", os_radio, os_radio_start, OS_WITH_RADIO) \
+    X("radio", os_radio, os_radio_start, OS_ALWAYS) \
     X("headset", os_headset, os_headset_start, OS_WITH_HEADSET) \
     X("gpu-queue", os_gpu_queue, os_gpu_queue_start_entry, OS_WITH_GPU)
 
 /* X(NAME, name, window_us, grant, with): a task the supervisor watches, after the board's five and the application
  * (OS_SERVICE_NAME, in this order). It must report within window_us, and only when the session grants every service in
- * grant (0: every session). The headset's tasks exist only in a headset image; every other id is in every image. */
+ * grant (0: every session). Every id is in every image; the headset's tasks exist only in an image that links the headset. */
 #define OS_SUPERVISED_ROWS(X) \
     X(THERMAL, "thermal", 1000000, 0, OS_ALWAYS) \
     X(NPU, "npu", 5000000, OS_GRANT_NPU, OS_ALWAYS) \
     X(AUDIO, "audio", 1000000, OS_GRANT_AUDIO, OS_ALWAYS) \
     X(RADIO, "radio", 1000000, OS_GRANT_RADIO, OS_ALWAYS) \
     X(NETWORK, "network", 1000000, OS_GRANT_RADIO, OS_ALWAYS) \
-    X(BLUETOOTH, "bluetooth", 1000000, 0, OS_WITH_HEADSET) \
-    X(HEADSET, "headset", 1000000, 0, OS_WITH_HEADSET)
+    X(BLUETOOTH, "bluetooth", 1000000, OS_GRANT_HEADSET, OS_ALWAYS) \
+    X(HEADSET, "headset", 1000000, OS_GRANT_HEADSET, OS_ALWAYS)
 
 /* What the rows define. */
 #define OS_GRANT_BIT_(NAME, bit, with) OS_GRANT_##NAME = 1u << (bit),

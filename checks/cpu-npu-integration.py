@@ -30,7 +30,7 @@ class Model(owner.Model):
   self.closed_operation=None;self.stop_calls=0;self.stop_pending=0;self.publish_stop=False
   self.failures=[];self.callback_after_park=0;self.wakes=0;self.waits=[];self.delays=0
   self.hooks[layout.address('os_application_wake_main')]=self.wake_main
-  self.hooks[layout.address('os_granted')]=lambda:1 # the modeled session grants the NPU (admission is not under test)
+  self.hooks[layout.address('os_granted')]=lambda:int(self.uc.reg_read(owner.prior.fault.REGS[0])==1) # the modeled session grants the NPU (bit 0) alone; admission is not under test
   self.deadline_wait=layout.address('sunstone_deadline_wait_until')
   self.hooks[layout.address('board_service_blocked_until')]=lambda:1 # the service's health window is the board's, not under test
   self.put32(self.n+self.nf['started'],1);self.put32(self.n+self.nf['active'],1)

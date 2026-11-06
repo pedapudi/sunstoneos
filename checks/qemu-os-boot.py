@@ -75,7 +75,16 @@ CFLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mge
 # OS and board sources that run unmodified.
 OS_SOURCES = ['apps/os/application.c', 'apps/os/large.c', 'apps/os/large_load.c', 'drivers/storage/fat32_ro.c', 'kernel/appmem/app_region.c', 'kernel/appmem/large_admit.c', 'kernel/umem/umem.c', 'apps/os/services.c', 'apps/os/capture.c', 'apps/os/session.c', 'apps/os/grants.c', 'apps/os/start.c',
               'apps/os/thermal.c', 'apps/os/cpu.c', 'apps/os/perf.c', 'drivers/clock/a733_cpu_clock.c', 'drivers/power/a733_perf_mode.c', 'apps/os/admission.c', 'apps/board/main.c', 'apps/board/session.c',
-              'runtime/deadline.c', 'runtime/deadline-a733.c', 'platform/a733-smp-cached/irq_table.c']
+              'runtime/deadline.c', 'runtime/deadline-a733.c', 'platform/a733-smp-cached/irq_table.c',
+              # The I2S capture service is in every image; an ungranted session never opens its stream.
+              'apps/os/audio.c', 'platform/a733/dma_pool_session.c', 'platform/a733/dma_startup.c', 'platform/a733/dma_native.c',
+              'drivers/dma/dma_memory.c', 'drivers/dma/a733_dma.c', 'drivers/dma/a733_dma_controller.c',
+              'drivers/dma/a733_dma_platform.c', 'drivers/dma/a733_dma_platform_native.c', 'drivers/dma/dma_service.c',
+              'drivers/dma/dma_service_i2s.c', 'drivers/dma/dma_service_i2s_stream.c', 'drivers/audio/a733_i2s.c',
+              'drivers/audio/a733_i2s_stream.c', 'drivers/audio/a733_i2s_platform.c', 'drivers/audio/a733_i2s_platform_native.c',
+              'drivers/audio/a733_audio_leases.c', 'drivers/audio/dma_service_i2s_irq.c', 'runtime/device_memory_pool.c',
+              # The radio station is in every image; an ungranted session reads neither its profile nor its credential.
+              'apps/os/radio.c', 'apps/os/wifi_credential.c']
 # Driver cores and their adapters, unmodified. The adapters reach registers
 # through a733_mmio.h, which the virtual board replaces (platform/qemu-os).
 DRIVER_SOURCES = ['drivers/thermal/a733_thermal.c', 'drivers/thermal/a733_thermal_native.c',

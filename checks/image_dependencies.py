@@ -59,6 +59,9 @@ def locations(cache=CACHE):
         # No lock entry pins these Zephyr files; the directory's own sources.json names each file's URL and SHA-256 (docs/bluetooth-native.md).
         'bt_security': (sources / 'bluetooth-security-zephyr-v4.2.1', 'directory',
                         'populate %s from the files in its sources.json (docs/bluetooth-native.md)' % (sources / 'bluetooth-security-zephyr-v4.2.1')),
+        # The pinned libsbc of the headset's mSBC codec; apps/bluetooth/msbc-source.json names each file's SHA-256.
+        'bt_sbc': (sources / 'bluetooth-msbc', 'directory',
+                   'populate %s from the files in apps/bluetooth/msbc-source.json (docs/bluetooth-native.md)' % (sources / 'bluetooth-msbc')),
     }
 
 
@@ -80,7 +83,8 @@ def paths(cache=CACHE):
 # CMake cache variable of each dependency.
 OPTIONS = {'freertos': 'FREERTOS_DIR', 'tinyusb': 'TINYUSB_DIR', 'tcp': 'SUNSTONE_TCP_DIR', 'rsn': 'SUNSTONE_RSN_DIR',
            'headers': 'SUNSTONE_NETWORK_C_HEADERS', 'newlib': 'NEWLIB_ROOT', 'newlib_smp': 'NEWLIB_SMP_ROOT',
-           'lld': 'SUNSTONE_LLD', 'gpu_firmware': 'SUNSTONE_GPU_FIRMWARE', 'bt_security': 'SUNSTONE_BT_SECURITY_DIR'}
+           'lld': 'SUNSTONE_LLD', 'gpu_firmware': 'SUNSTONE_GPU_FIRMWARE', 'bt_security': 'SUNSTONE_BT_SECURITY_DIR',
+           'bt_sbc': 'SUNSTONE_BT_SBC_DIR'}
 
 
 def cmake_arguments(cache=CACHE, supervised=True, skip=()):

@@ -10,7 +10,8 @@ A fake network lives in a temporary config directory under the output directory,
   readback, and no byte of the password or the PMK, raw, hex or base64, appears in any file of the queue, the entry, the
   ledger, state.json or the result;
 - the scan fails when the PMK or the password is written into the entry (mutation);
-- a missing file, a changed fingerprint, a bad file mode and a bad directory mode refuse the run before launch;
+- a missing file, a changed fingerprint, a bad file mode and a bad directory mode refuse the run before launch, and so
+  does an image whose application does not declare the radio device;
 - the OS receiver (apps/os/wifi_credential.c) decodes the record, refuses malformed ones and wipes it.
 
 No device is opened.
@@ -26,6 +27,7 @@ import os
 from pathlib import Path
 import pty
 import re
+import struct
 import shutil
 import subprocess
 import sys
@@ -39,10 +41,18 @@ sys.path.insert(0, str(ROOT/'tools'))
 import board
 import board_images as images
 
+GATE_RUNS = [['--output', '{output}']]  # the live queue directory it reads is only compared before and after, never written
 CONFIG_ENVIRONMENT = 'SUNSTONEOS_WIFI_CONFIG_DIR'
 REAL_CONFIG = Path(os.path.expanduser('~'))/'.config/sunstoneos/wifi'
 SSID, PASSWORD = 'SunstoneCheckNet', 'fake-pass-1103-xyz'
 rows = []
+
+
+def snapshot_real_residue():
+    """The live queue's credential-residue directory: names, times and digests. A check must leave it as it found it."""
+    live = Path('~/.cache/sunstoneos/board-queue/credential-residue').expanduser()
+    return {p.name: (p.stat().st_mtime_ns, hashlib.sha256(p.read_bytes()).hexdigest())
+            for p in sorted(live.glob('*'))} if live.is_dir() else {}
 
 
 def passed(name):
@@ -225,8 +235,9 @@ def wifi_module():
     return board.wifi_module()
 
 
-def dry_run(queue, job, wifi, entry):
-    """Claim the job and run it as the daemon's child would, with the modeled board."""
+def dry_run(queue, job, wifi, entry, radio=True):
+    """Claim the job and run it as the daemon's child would, with the modeled board. radio: the image's application
+    declares the radio device."""
     Dry.model = Board()
     with patch.object(board, 'port_idle', return_value=True):
         claimed = queue.claim('3-1')
@@ -239,10 +250,15 @@ def dry_run(queue, job, wifi, entry):
     info = {'generic': True, 'entry_guard': False, 'finite_npu': False}
     stub = types.SimpleNamespace(verify_delivered=lambda a: None)
     real_load = images.load
+    host = real_load('wifi_check_records', ROOT/'apps/os/host.py')
+    declared = host.manifest_tool.DEVICES['radio'] if radio else 0
+    records = types.SimpleNamespace(manifest_tool=host.manifest_tool,
+                                    image_manifest=lambda image: {'manifest': {'devices_required': 0, 'devices_optional': declared}})
+    stubs = {'storage_bounds': stub, 'wifi_records': records}
     with patch.object(images, 'inspect', return_value=info), patch.object(images, 'policy'), \
          patch.object(images, 'dma_admission', return_value=None), patch.object(board, 'application_inputs'), \
          patch.object(images, 'symbols', return_value={'ss_wifi_credential': (0x41000000, 4)}), \
-         patch.object(images, 'load', side_effect=lambda n, p: stub if n == 'storage_bounds' else real_load(n, p)), \
+         patch.object(images, 'load', side_effect=lambda n, p: stubs[n] if n in stubs else real_load(n, p)), \
          contextlib.redirect_stdout(io.StringIO()):
         result = board.run_image(run, backend=lambda a, e, r: Dry(a, e, r))
     queue.complete(job['id'], result)
@@ -368,7 +384,55 @@ def refusal_cases(wifi, config, work):
     (config/'home.json').unlink()
     (config/'moved').rename(config/'home.json')
     passed('bad-file-mode-bad-directory-mode-and-link-refused-before-launch')
+    # Every OS image links the receiver; an application that does not declare the radio device never reads the credential.
+    queue, job = submit('no-radio')
+    result, model = dry_run(queue, job, wifi, entry, radio=False)
+    assert result['outcome'] == 'refused-before-launch' and not result['launch_attempted'], result
+    assert 'does not declare the radio device' in result['first_failure']['detail'], result['first_failure']
+    assert model is None or not model.memory, 'the board was written before the refusal'
+    scan(queue.root, needles)
+    passed('application-without-the-radio-device-refused-before-launch')
+    session_rule_cases(images.load('wifi_rule_records', ROOT/'apps/os/host.py'))
     wifi.load('home', config)
+
+
+def session_rule_cases(host):
+    """The session that receives a credential is one that wipes it: tools/board_images.py credential_session, which
+    prepare calls whenever a credential is named, refuses any other session before an upload."""
+    import inspect
+    radio = host.manifest_tool.DEVICES['radio']
+    admitted = {'admitted': True}
+
+    def session(workload, devices):
+        raw = bytearray(592 + 64)
+        struct.pack_into('<I', raw, 400, workload)
+        struct.pack_into('<I', raw, 592 + 24, devices)
+        return bytes(raw)
+
+    def refusal(raw, admission):
+        try:
+            images.credential_session(raw, admission, radio)
+        except ValueError as error:
+            return str(error)
+        return None
+    for workload in (1, 3):
+        assert refusal(session(workload, radio | 1), admitted) is None, workload
+    for workload, devices, admission, text in (
+            (1, 1, admitted, 'grants the radio device'),          # the radio workload without the radio grant
+            (3, 0, admitted, 'grants the radio device'),
+            (0, radio | 1, admitted, 'radio workload'),           # the radio grant with a workload whose failure does not wipe
+            (2, radio, admitted, 'radio workload'),
+            (4, radio | 1, admitted, 'radio workload'),
+            (1, radio | 1, {'admitted': None, 'unavailable': 'no harness'}, 'host admission is unavailable'),
+            (1, radio | 1, {}, 'host admission is unavailable')):
+        detail = refusal(session(workload, devices), admission)
+        assert detail and text in detail, (workload, devices, admission, detail)
+    # prepare names the rule wherever a credential is named, after the host admission of the session it uploads.
+    source = inspect.getsource(images.prepare)
+    branch = source[source.index("if getattr(args, 'wifi', None):"):]
+    assert branch.index('credential_session(session, host_admission,') < branch.index("plan['credential'] ="), branch[:400]
+    assert source.index('host_admission = preflight_admission(') < source.index('credential_session(')
+    passed('credential-refused-unless-the-session-has-the-radio-grant-a-radio-workload-and-host-admission')
 
 
 def board_side_cases(wifi, work):
@@ -421,11 +485,14 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     work = args.output.resolve()
     wifi = board.wifi_module()
+    real = snapshot_real_residue()
     vector_cases(wifi)
     config = tool_cases(wifi, work)
     queue_cases(wifi, config, work)
     refusal_cases(wifi, config, work)
     board_side_cases(wifi, work)
+    assert snapshot_real_residue() == real, 'the check left a file in the live credential-residue directory'
+    passed('no-file-left-in-the-live-credential-residue-directory')
     board.save(work/'results.json', rows)
     print('%d checks passed; fake credential only, no device access' % len(rows))
 

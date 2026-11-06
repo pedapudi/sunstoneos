@@ -1,7 +1,6 @@
 # The same arithmetic runs as a CPU control when the NPU service is absent.
 if(NOT SUNSTONE_A733_OS_CPU_RETURN OR SUNSTONE_A733_OS_GPU OR
-   SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_DMA OR
-   SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_USB_CLASSES)
+   SUNSTONE_A733_OS_DMA OR SUNSTONE_A733_OS_USB_CLASSES)
   message(FATAL_ERROR "CPU/NPU diagnostic requires its supervised CPU-return composition")
 endif()
 set(cpu_npu_sources "${CMAKE_CURRENT_LIST_DIR}/../main.c")

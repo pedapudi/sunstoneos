@@ -156,22 +156,28 @@ image and a mask, `granted`, of the services that this session carries:
 
 The wire form is unchanged: a record is present only for a granted service, and
 the thermal record's size field names the board prefix plus the records present.
-A service whose code the image does not link cannot be granted; the build options
-`SUNSTONE_A733_OS_AUDIO`, `_RADIO`, `_NPU`, `_NPU_QUEUE`, `_HEADSET` and `_RESIDENT`
-decide which code is linked (the A76, CPU clock and performance code is in every image) until each is replaced by
-its run-time form ([the design](designs/one-os-image.md)). The `all` gate variant
+A service whose code the image does not link cannot be granted. I2S capture, the
+radio station, the A76, CPU clock and performance code are in every image. The
+headset service, with the Bluetooth stack and mSBC, is a library linked into an
+image whose application declares the `audio-headset` device. The build options
+`SUNSTONE_A733_OS_NPU`, `_NPU_QUEUE` and `_RESIDENT` decide the rest until each is
+replaced by its run-time form ([the design](designs/one-os-image.md)). The `all` gate variant
 links every service that is already a run-time option.
 
 A service that is not granted touches no hardware. Its start entry returns before
 it authorizes a pin, binds a callback, creates a task or reads a register, the
 supervisor requires no progress from it, and the EL3 identity hook reads the radio
-profile and the chip ID only for workload 1. Every service has its id in every
+profile and the chip ID only for the radio workloads 1 and 3, or for a session
+that grants the headset. Every service has its id in every
 image (`OS_SERVICE_*`).
 
 The compositions that admission refuses are one table, `refused_compositions` in
-`apps/os/grants.c`, each row with its reason: the NPU with I2S capture, the NPU
-with the radio, I2S with the DMA service, resident CPU grants with I2S or the
+`apps/os/grants.c`, each row with its reason: the NPU with I2S capture, the radio
+or the headset, I2S with the DMA service, resident CPU grants with I2S or the
 radio, and the NPU with CPU grants outside a recorded or performance-mode image.
+Image-level rows refuse I2S capture, the radio and the headset in a returning
+image (the scanning image keeps the radio), in an image with the USB camera
+decoder and in a supervised GPU image.
 `checks/os-session-grants.py` lists them and checks the wire sizes.
 
 ### Adding a service

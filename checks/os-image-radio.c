@@ -28,10 +28,7 @@ static void nominal(void)
     PROFILE->tcp_mode=1;PROFILE->peer_address[0]=10;
     session.board.workload=1;session.board.generation=9;session.granted=OS_GRANT_RADIO;
     session.board.radio_profile_address=UINT64_C(0x43000000);session.board.radio_profile_bytes=sizeof(*PROFILE);
-    session.thermal_owner=15;
-#ifdef SUNSTONE_A733_OS_AUDIO
-    session.audio.dma.owner=17;session.granted|=OS_GRANT_AUDIO;
-#endif
+    session.thermal_owner=15;session.audio.dma.owner=17;
     storage_digest_bytes(PROFILE,sizeof(*PROFILE),session.board.radio_profile_digest);
     attributes=0xff;
 }
@@ -45,10 +42,12 @@ void os_check_run(void)
     nominal();PROFILE->ce.owner=33;check(!os_radio_pins(&pins),12);
     nominal();PROFILE->platform.owner=session.thermal_owner;reseal();check(!os_radio_pins(&pins),13);
     nominal();PROFILE->ce.owner=session.thermal_owner;reseal();check(!os_radio_pins(&pins),14);
-#ifdef SUNSTONE_A733_OS_AUDIO
-    nominal();PROFILE->platform.owner=session.audio.dma.owner;reseal();check(!os_radio_pins(&pins),15);
-    nominal();PROFILE->ce.owner=session.audio.dma.owner;reseal();check(!os_radio_pins(&pins),16);
-#endif
+    /* With the I2S service granted, its DMA owner is refused too; without the grant its record is not read. */
+    nominal();PROFILE->platform.owner=session.audio.dma.owner;reseal();check(os_radio_pins(&pins)==1,39);
+    nominal();session.granted|=OS_GRANT_AUDIO;PROFILE->platform.owner=session.audio.dma.owner;reseal();
+    check(!os_radio_pins(&pins),15);
+    nominal();session.granted|=OS_GRANT_AUDIO;PROFILE->ce.owner=session.audio.dma.owner;reseal();
+    check(!os_radio_pins(&pins),16);
     nominal();session.board.workload=4;check(!os_radio_pins(&pins),17);
     nominal();session.board.radio_profile_bytes=sizeof(*PROFILE)-8;check(!os_radio_pins(&pins),18);
     nominal();session.board.radio_profile_address=UINT64_C(0x43001000);check(!os_radio_pins(&pins),19);

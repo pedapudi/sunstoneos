@@ -2,9 +2,9 @@
 """Session fields, radio profile and firmware uploads for the scanning radio image.
 
 The image (SUNSTONE_A733_OS_RADIO_SCAN) is a returning OS image whose radio station scans and shuts the module down.
-It needs a board session with workload 3 (radio, no USB host), a fixed 1,872-byte scan-only radio profile (version 8,
-the supervised upload form of version 7) at 0x43000000, and the four firmware images the profile names, in the
-retained range from 0x43010000. The profile carries no WPA2 target, entropy or TCP exchange.
+It needs a board session with workload 3 (radio, no USB host) that grants the radio device, a fixed 1,872-byte
+scan-only radio profile (version 8, the supervised upload form of version 7) at 0x43000000, and the four firmware images
+the profile names, in the retained range from 0x43010000. The profile carries no WPA2 target, entropy or TCP exchange.
 
 Every offset below is checked against the compiled C layout by checks/radio-scan-profile.py.
 """

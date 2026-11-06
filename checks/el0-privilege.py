@@ -13,7 +13,7 @@ The check requires both functions to reference that variable before it stops at 
 
 usage: el0-privilege.py IMAGE.elf|BUILD_DIR [--allow FUNCTION ...]  (the self-test always runs first)
 """
-GATE_RUNS = [['{build:resradio}'], ['{build:ret-radio-scan}']]
+GATE_RUNS = [['{build:res}'], ['{build:ret-radio-scan}']]
 import argparse
 import re
 import subprocess

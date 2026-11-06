@@ -195,9 +195,11 @@ def session_decode(raw, manifest=None, manifest_sha256=None):
                 'Session without storage requires SID binding and no capture.')
         workload = struct.unpack_from('<I', raw, 400)[0]
         expected = 0 if devices & 0xe2 else 0 if devices & 1 else 2
-        require(workload == expected or workload == 4 and devices & 3 == 3 or workload == 1 and expected == 0 or
-                workload == 3 and expected == 2,  # the scanning radio image: radio without the USB host
-                'Board workload differs from device grant.')
+        if devices & manifest_tool.DEVICES['radio']:
+            # The radio station: the full station (1) with USB storage, the scanning station (3) without the USB host.
+            require(workload == (1 if devices & 1 else 3), 'Board workload differs from the radio grant.')
+        else:
+            require(workload == expected or workload == 4 and devices & 3 == 3, 'Board workload differs from device grant.')
         facts = extents.get(INPUTS, b'')
         declared = regions(manifest, (manifest_tool.KIND['input'],))
         require(len(facts) == INPUT.size * len(declared), 'INPUTS extent count differs from manifest.')

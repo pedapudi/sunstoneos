@@ -32,12 +32,12 @@ from harness import machine as harness_machine
 from unicorn.arm64_const import UC_ARM64_REG_SP
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--build', '{build:resradio}', '--output', '{output}']]
+GATE_RUNS = [['--build', '{build:res}', '--output', '{output}']]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--build', type=Path, required=True, help='radio OS build with compile_commands.json')
+    parser.add_argument('--build', type=Path, required=True, help='OS build with compile_commands.json')
     parser.add_argument('--lld', type=Path, default=Path.home() / '.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
@@ -47,7 +47,6 @@ def main():
     unit = next(u for u in commands if u['file'].endswith('/apps/os/radio.c'))
     flags = shlex.split(unit['command'])
     flags = flags[:flags.index('-o')]
-    assert '-DSUNSTONE_A733_OS_RADIO=1' in flags, 'a radio OS build is required'
     image = out / 'os-image-radio.elf'
     command = flags + [str(ROOT / 'checks/os-image-radio.c'), str(ROOT / 'drivers/storage/storage_digest.c'),
                        str(ROOT / 'runtime/memory.c'), str(ROOT / 'runtime/memmove.c'), '-nostdlib',
@@ -75,14 +74,13 @@ def main():
     result = int.from_bytes(uc.mem_read(symbols['os_check_result'], 4), 'little')
     assert result == 1, 'radio entry check stopped with code %d' % result
     lifetime = 'resident' if '-DSUNSTONE_BOARD_RESIDENT=1' in flags else 'supervised'
-    audio = '-DSUNSTONE_A733_OS_AUDIO=1' in flags
     sources = ['apps/os/radio.c', 'checks/os-image-radio.c'] + (['apps/os/radio_profile.c'] if lifetime == 'resident' else [])
     (out / 'result.json').write_text(json.dumps({
-        'passed': True, 'physical_access': False, 'lifetime': lifetime, 'audio': audio, 'command': command,
+        'passed': True, 'physical_access': False, 'lifetime': lifetime, 'command': command,
         'sources': {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in sources}},
         indent=2) + '\n')
-    print('PASS OS radio entry (%s%s): owner admission and refusals, start%s' %
-          (lifetime, ', audio' if audio else '', ', resident profile bounds' if lifetime == 'resident' else ''))
+    print('PASS OS radio entry (%s): owner admission and refusals, start%s' %
+          (lifetime, ', resident profile bounds' if lifetime == 'resident' else ''))
 
 
 if __name__ == '__main__':

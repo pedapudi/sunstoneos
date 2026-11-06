@@ -5,12 +5,8 @@ option(SUNSTONE_A733_OS_SD_WRITE "OS image whose SD0 owner task writes the card 
 option(SUNSTONE_A733_OS_RESIDENT "Integrated OS with the resident lifetime" OFF)
 option(SUNSTONE_A733_OS_USB_CLASSES "OS input, serial and camera host services" OFF)
 option(SUNSTONE_A733_OS_USB_JPEG "OS camera MJPEG hardware decoder" OFF)
-option(SUNSTONE_A733_OS_AUDIO "OS I2S capture service" OFF)
 option(SUNSTONE_A733_OS_DMA "Adopted DMA0 RAM-copy service with normal retirement" OFF)
-option(SUNSTONE_A733_OS_RADIO "Integrated OS with the board's radio station" OFF)
 option(SUNSTONE_A733_OS_RADIO_SCAN "Radio station that scans and returns: board workload 3, no USB host, scan-only profile, normal return" OFF)
-option(SUNSTONE_A733_OS_HEADSET "OS Bluetooth headset capture service" OFF)
-option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
 option(SUNSTONE_A733_OS_NPU "Integrated OS with a task-bound NPU service" OFF)
 option(SUNSTONE_A733_OS_NPU_OBSERVE "Opt-in serialized NPU diagnostic sampling" OFF)
 option(SUNSTONE_A733_OS_NPU_QUEUE "EL0 resident NPU submission ring on the routed core" OFF)
@@ -38,8 +34,8 @@ option(SUNSTONE_A733_OS_GPU_RECOVERY_TEST
 set(SUNSTONE_A733_OS_GPU_BISECT "" CACHE STRING
   "GPU diagnostic limit: constructor, firmware, jobs:N or layer:K")
 option(SUNSTONE_A733_OS_CPU_RETURN "Application result with success-only ROM return" OFF)
-if(SUNSTONE_A733_OS_RADIO_SCAN AND (NOT SUNSTONE_A733_OS_RADIO OR NOT SUNSTONE_A733_OS_CPU_RETURN))
-  message(FATAL_ERROR "The scanning radio station needs SUNSTONE_A733_OS_RADIO=ON and SUNSTONE_A733_OS_CPU_RETURN=ON")
+if(SUNSTONE_A733_OS_RADIO_SCAN AND NOT SUNSTONE_A733_OS_CPU_RETURN)
+  message(FATAL_ERROR "The scanning radio station needs SUNSTONE_A733_OS_CPU_RETURN=ON")
 endif()
 if(SUNSTONE_A733_OS_NPU_OBSERVE AND
    (NOT SUNSTONE_A733_OS_NPU OR NOT SUNSTONE_A733_OS_CPU_RETURN))
@@ -54,8 +50,8 @@ if(NOT SUNSTONE_A733_OS AND NOT SUNSTONE_A733_OS_CORE AND NOT SUNSTONE_A733_OS_H
   return()
 endif()
 include_guard(GLOBAL)
-if(SUNSTONE_A733_OS_DMA AND (SUNSTONE_A733_OS_AUDIO OR NOT SUNSTONE_A733_OS_CPU_RETURN))
-  message(FATAL_ERROR "Adopted RAM DMA currently requires the returning CPU profile without I2S")
+if(SUNSTONE_A733_OS_DMA AND NOT SUNSTONE_A733_OS_CPU_RETURN)
+  message(FATAL_ERROR "Adopted RAM DMA currently requires the returning CPU profile")
 endif()
 if(SUNSTONE_A733_OS_GPU_RECOVERY_TEST AND
    (NOT SUNSTONE_A733_OS_GPU OR NOT SUNSTONE_A733_OS_CPU_RETURN OR
@@ -68,9 +64,7 @@ endif()
 if(SUNSTONE_A733_OS_USB_CLASSES AND NOT SUNSTONE_BOARD_USB2_IRQ)
   message(FATAL_ERROR "USB class services require SUNSTONE_BOARD_USB2_IRQ=ON")
 endif()
-if(SUNSTONE_A733_OS_USB_JPEG AND
-   (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR
-    SUNSTONE_A733_OS_NPU OR SUNSTONE_A733_OS_GPU_LINEAR))
+if(SUNSTONE_A733_OS_USB_JPEG AND (SUNSTONE_A733_OS_NPU OR SUNSTONE_A733_OS_GPU_LINEAR))
   message(FATAL_ERROR "USB JPEG owns runtime NC allocation; other device owners need allocator serialization")
 endif()
 if(SUNSTONE_A733_OS_USB_JPEG AND NOT SUNSTONE_A733_OS_USB_CLASSES)
@@ -81,17 +75,6 @@ if(NOT SUNSTONE_BOARD_SUPERVISED OR NOT TARGET sunstone-a733-board)
 endif()
 if(NOT NEWLIB_ROOT OR NOT NEWLIB_SMP_ROOT)
   message(FATAL_ERROR "The OS kit requires the pinned SMP C and C++ runtime")
-endif()
-if(SUNSTONE_A733_OS_HEADSET AND SUNSTONE_A733_OS_AUDIO)
-  message(FATAL_ERROR "An image selects one capture source: I2S or the headset")
-endif()
-if(SUNSTONE_A733_OS_MSBC AND NOT SUNSTONE_A733_OS_HEADSET)
-  message(FATAL_ERROR "Wideband mSBC speech is a headset option")
-endif()
-if(SUNSTONE_A733_OS_NPU)
-  if(SUNSTONE_A733_OS_HEADSET)
-    message(FATAL_ERROR "The NPU OS profile requires recorded recognition and a supported GPU/CPU composition")
-  endif()
 endif()
 set(os_gpu_bisect_definitions)
 if(SUNSTONE_A733_OS_GPU_BISECT)
@@ -117,12 +100,6 @@ if(SUNSTONE_A733_OS_GPU_BISECT)
     OS_GPU_BISECT_STAGE=${os_bisect_stage} OS_GPU_BISECT_LIMIT=${os_bisect_limit}u)
 endif()
 if(SUNSTONE_A733_OS_GPU)
-  # GPU replies retain bounded failure handling for the recorded two- and
-  # eight-worker compositions.
-  if(NOT SUNSTONE_A733_OS_RESIDENT AND
-     (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET))
-    message(FATAL_ERROR "Supervised GPU linear requires recorded recognition without capture/radio/headset")
-  endif()
   set(SUNSTONE_GPU_FIRMWARE "" CACHE FILEPATH "Pinned A733 GPU firmware")
   if(NOT SUNSTONE_GPU_FIRMWARE)
     message(FATAL_ERROR "The GPU linear build requires SUNSTONE_GPU_FIRMWARE")
@@ -179,26 +156,25 @@ if(SUNSTONE_A733_OS_RESIDENT)
   list(APPEND os_patches "${os_root}/apps/os/boot-resident.patch")
 endif()
 set(os_generated "${os_build}/boot.c")
-if(SUNSTONE_A733_OS_RADIO)
-  # The board's own radio composition serves workload 1; its owner and client
-  # report resident progress through the patched main.c.
-  list(APPEND os_added apps/os/radio.c apps/os/wifi_credential.c)
-  if(SUNSTONE_A733_OS_RADIO_SCAN)
-    list(APPEND os_added apps/os/radio_scan.c apps/os/ce_probe.c)
-  endif()
-  if(NOT SUNSTONE_A733_OS_CPU_RETURN)
-    # The returning lifetime patches main.c itself (cmake/a733-os-cpu-return.cmake); the resident
-    # progress reports of this patch have no use in it.
-    apply_build_patch("${os_build}/main.c" "${os_root}/apps/board/main.c" "${os_root}/apps/os/main.patch")
-    list(REMOVE_ITEM os_sources "${os_root}/apps/board/main.c")
-    list(APPEND os_sources "${os_build}/main.c")
-    list(APPEND os_patches "${os_root}/apps/os/main.patch")
-    list(APPEND os_generated "${os_build}/main.c")
-  endif()
-  if(SUNSTONE_A733_OS_RESIDENT)
-    list(REMOVE_ITEM os_sources "${os_root}/apps/board/radio_profile.c")
-    list(APPEND os_added apps/os/radio_profile.c)
-  endif()
+# The radio station is in every image: the board's own radio composition serves the radio workloads, and the session
+# grants it with the radio device (apps/os/session.c). Its owner and client report resident progress through the
+# patched main.c.
+list(APPEND os_added apps/os/radio.c apps/os/wifi_credential.c)
+if(SUNSTONE_A733_OS_RADIO_SCAN)
+  list(APPEND os_added apps/os/radio_scan.c apps/os/ce_probe.c)
+endif()
+if(NOT SUNSTONE_A733_OS_CPU_RETURN)
+  # The returning lifetime patches main.c itself (cmake/a733-os-cpu-return.cmake); the resident
+  # progress reports of this patch have no use in it.
+  apply_build_patch("${os_build}/main.c" "${os_root}/apps/board/main.c" "${os_root}/apps/os/main.patch")
+  list(REMOVE_ITEM os_sources "${os_root}/apps/board/main.c")
+  list(APPEND os_sources "${os_build}/main.c")
+  list(APPEND os_patches "${os_root}/apps/os/main.patch")
+  list(APPEND os_generated "${os_build}/main.c")
+endif()
+if(SUNSTONE_A733_OS_RESIDENT)
+  list(REMOVE_ITEM os_sources "${os_root}/apps/board/radio_profile.c")
+  list(APPEND os_added apps/os/radio_profile.c)
 endif()
 if(SUNSTONE_A733_OS_DMA)
   list(APPEND os_added apps/os/dma.c platform/a733/dma_pool_session.c platform/a733/dma_startup.c
@@ -207,15 +183,14 @@ if(SUNSTONE_A733_OS_DMA)
     drivers/dma/dma_service_i2s.c drivers/dma/dma_service_i2s_stream.c drivers/audio/a733_i2s.c
     drivers/audio/a733_i2s_stream.c drivers/audio/dma_service_i2s_irq.c)
 endif()
-if(SUNSTONE_A733_OS_AUDIO)
-  # The I2S image's receive composition (cmake/a733-i2s-application.cmake).
-  list(APPEND os_added apps/os/audio.c platform/a733/dma_pool_session.c platform/a733/dma_startup.c
+# The I2S capture service is in every image, and a session grants it (docs/designs/one-os-image.md). Its sources are
+# the I2S image's receive composition (cmake/a733-i2s-application.cmake).
+list(APPEND os_added apps/os/audio.c platform/a733/dma_pool_session.c platform/a733/dma_startup.c
     platform/a733/dma_native.c drivers/dma/dma_memory.c drivers/dma/a733_dma.c drivers/dma/a733_dma_controller.c
     drivers/dma/a733_dma_platform.c drivers/dma/a733_dma_platform_native.c drivers/dma/dma_service.c
     drivers/dma/dma_service_i2s.c drivers/dma/dma_service_i2s_stream.c drivers/audio/a733_i2s.c
     drivers/audio/a733_i2s_stream.c drivers/audio/a733_i2s_platform.c drivers/audio/a733_i2s_platform_native.c
     drivers/audio/a733_audio_leases.c drivers/audio/dma_service_i2s_irq.c)
-endif()
 if(SUNSTONE_A733_OS_NPU)
   list(APPEND os_added apps/os/npu.c apps/os/npu-declaration.c apps/os/npu-graph-index.c apps/os/npu-client.c apps/os/npu-irq.c
     platform/a733/npu_native.c runtime/counter_clock.c drivers/npu/a733_npu_runtime.c drivers/npu/a733_npu_runtime_interim.c drivers/npu/npu_pool.c drivers/npu/npu_declaration.c
@@ -233,12 +208,15 @@ if(SUNSTONE_A733_OS_NPU)
     "${os_root}/drivers/npu/nbg_command.h")
 endif()
 set(os_include_dirs)
-if(SUNSTONE_A733_OS_HEADSET)
-  # The Bluetooth capture provider shares the radio owner when selected.
-  set(SUNSTONE_BT_SECURITY_DIR "" CACHE PATH "Pinned Zephyr BR/EDR security source directory")
-  if(NOT SUNSTONE_BT_SECURITY_DIR)
-    message(FATAL_ERROR "The headset build requires SUNSTONE_BT_SECURITY_DIR")
-  endif()
+set(os_headset_include_dirs)
+# The headset service: the Bluetooth stack, its pinned Zephyr security sources and the mSBC codec with its pinned libsbc
+# sources. They form the headset object library below, which an image links only when its application declares the
+# audio-headset device (cmake/sunstone-image.cmake); without both source directories the library does not exist and
+# such an image is refused at configure.
+set(SUNSTONE_BT_SECURITY_DIR "" CACHE PATH "Pinned Zephyr BR/EDR security source directory")
+set(SUNSTONE_BT_SBC_DIR "" CACHE PATH "Pinned BlueZ libsbc2.0 source directory")
+set(os_sbc_sources)
+if(SUNSTONE_BT_SECURITY_DIR AND SUNSTONE_BT_SBC_DIR)
   set(os_bluetooth "${os_build}/bluetooth")
   execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/apps/bluetooth/security-source.py"
     --source "${SUNSTONE_BT_SECURITY_DIR}" --output "${os_bluetooth}" RESULT_VARIABLE os_security_status)
@@ -264,32 +242,30 @@ if(SUNSTONE_A733_OS_HEADSET)
     "${os_bluetooth}/zephyr-security-wire.h")
   file(GLOB os_bluetooth_headers "${os_root}/apps/bluetooth/*.h")
   list(APPEND os_external_inputs ${os_bluetooth_headers})
-  list(APPEND os_include_dirs "${os_bluetooth}")
-  if(SUNSTONE_A733_OS_MSBC)
-    # The Bluetooth image's mSBC codec (cmake/a733-bluetooth.cmake) with its
-    # pinned libsbc sources, checked against apps/bluetooth/msbc-source.json.
-    set(SUNSTONE_BT_SBC_DIR "" CACHE PATH "Pinned BlueZ libsbc2.0 source directory")
-    if(NOT SUNSTONE_BT_SBC_DIR)
-      message(FATAL_ERROR "The mSBC headset build requires SUNSTONE_BT_SBC_DIR")
+  list(APPEND os_headset_include_dirs "${os_bluetooth}")
+  # The Bluetooth image's mSBC codec (cmake/a733-bluetooth.cmake) with its pinned libsbc sources, checked against
+  # apps/bluetooth/msbc-source.json. The profile's mode chooses CVSD or mSBC at run time, so the codec is always linked
+  # with the headset.
+  file(READ "${os_root}/apps/bluetooth/msbc-source.json" os_sbc_manifest)
+  string(JSON os_sbc_count LENGTH "${os_sbc_manifest}" sources)
+  math(EXPR os_sbc_last "${os_sbc_count}-1")
+  foreach(index RANGE 0 ${os_sbc_last})
+    string(JSON name GET "${os_sbc_manifest}" sources ${index} path)
+    string(JSON expected GET "${os_sbc_manifest}" sources ${index} sha256)
+    file(SHA256 "${SUNSTONE_BT_SBC_DIR}/${name}" actual)
+    if(NOT actual STREQUAL expected)
+      message(FATAL_ERROR "Pinned libsbc input differs: ${name}")
     endif()
-    file(READ "${os_root}/apps/bluetooth/msbc-source.json" os_sbc_manifest)
-    string(JSON os_sbc_count LENGTH "${os_sbc_manifest}" sources)
-    math(EXPR os_sbc_last "${os_sbc_count}-1")
-    foreach(index RANGE 0 ${os_sbc_last})
-      string(JSON name GET "${os_sbc_manifest}" sources ${index} path)
-      string(JSON expected GET "${os_sbc_manifest}" sources ${index} sha256)
-      file(SHA256 "${SUNSTONE_BT_SBC_DIR}/${name}" actual)
-      if(NOT actual STREQUAL expected)
-        message(FATAL_ERROR "Pinned libsbc input differs: ${name}")
-      endif()
-      list(APPEND os_external_inputs "${SUNSTONE_BT_SBC_DIR}/${name}")
-    endforeach()
-    list(APPEND os_external_inputs "${os_root}/apps/bluetooth/msbc-source.json")
-    list(APPEND os_added apps/bluetooth/msbc.c apps/bluetooth/playback.c)
-    set(os_sbc_sources "${SUNSTONE_BT_SBC_DIR}/sbc/sbc.c" "${SUNSTONE_BT_SBC_DIR}/sbc/sbc_primitives.c")
-    list(APPEND os_sources ${os_sbc_sources})
-    list(APPEND os_include_dirs "${SUNSTONE_BT_SBC_DIR}")
-  endif()
+    list(APPEND os_external_inputs "${SUNSTONE_BT_SBC_DIR}/${name}")
+  endforeach()
+  list(APPEND os_external_inputs "${os_root}/apps/bluetooth/msbc-source.json")
+  # The libsbc license (LGPL-2.1-or-later) and its pinned source record stay beside the build that links the codec.
+  file(COPY "${SUNSTONE_BT_SBC_DIR}/COPYING.LIB" "${os_root}/apps/bluetooth/msbc-source.json"
+    DESTINATION "${os_bluetooth}/msbc-license")
+  list(APPEND os_added apps/bluetooth/msbc.c apps/bluetooth/playback.c)
+  set(os_sbc_sources "${SUNSTONE_BT_SBC_DIR}/sbc/sbc.c" "${SUNSTONE_BT_SBC_DIR}/sbc/sbc_primitives.c")
+  list(APPEND os_sources ${os_sbc_sources})
+  list(APPEND os_headset_include_dirs "${SUNSTONE_BT_SBC_DIR}")
 endif()
 # A76 placement, CPU operating-point grants and the performance-mode service are in every image, and a session grants
 # them (docs/designs/one-os-image-cpu.md). The admission record reads the CPU clock words once before the scheduler.
@@ -421,8 +397,17 @@ foreach(service audio headset gpu npu radio)
     list(REMOVE_ITEM os_sources ${service_sources})
     add_library(sunstone-a733-os-${service} OBJECT EXCLUDE_FROM_ALL ${service_sources})
     target_link_libraries(sunstone-a733-os-${service} PRIVATE sunstone-os-settings)
-    list(APPEND os_service_targets sunstone-a733-os-${service})
     list(APPEND os_external_inputs ${service_sources})
+    if(service STREQUAL "headset")
+      # Linked per image, by the application's manifest (cmake/sunstone-image.cmake), not into every image.
+      target_compile_definitions(sunstone-a733-os-headset PRIVATE SUNSTONE_A733_OS_HEADSET=1
+        SUNSTONE_BLUETOOTH_HEADSET=1 SUNSTONE_BLUETOOTH_CAPTURE_PROFILE=1 SUNSTONE_BLUETOOTH_MSBC=1)
+      target_include_directories(sunstone-a733-os-headset BEFORE PRIVATE ${os_headset_include_dirs})
+      set_source_files_properties(${os_sbc_sources} TARGET_DIRECTORY sunstone-a733-os-headset
+        PROPERTIES COMPILE_DEFINITIONS SBC_HIGH_PRECISION=1)
+    else()
+      list(APPEND os_service_targets sunstone-a733-os-${service})
+    endif()
   endif()
 endforeach()
 add_library(sunstone-a733-os-core OBJECT EXCLUDE_FROM_ALL ${os_sources})
@@ -469,10 +454,7 @@ target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICAT
   "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"
   A733_SMP_CONTRACT_MAGIC=${os_contract_magic} A733_SMP_RESULT_MAGIC=${os_result_magic}
   "$<$<BOOL:${SUNSTONE_A733_OS_RESIDENT}>:SUNSTONE_BOARD_RESIDENT=1>"
-  "$<$<BOOL:${SUNSTONE_A733_OS_AUDIO}>:SUNSTONE_A733_OS_AUDIO=1>"
-  "$<$<BOOL:${SUNSTONE_A733_OS_RADIO}>:SUNSTONE_A733_OS_RADIO=1>"
-  "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_SCAN}>:SUNSTONE_A733_OS_RADIO_SCAN=1>"
-  "$<$<BOOL:${SUNSTONE_A733_OS_HEADSET}>:SUNSTONE_A733_OS_HEADSET=1>")
+  "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_SCAN}>:SUNSTONE_A733_OS_RADIO_SCAN=1>")
 if(SUNSTONE_A733_OS_NPU)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_NPU=1)
   if(SUNSTONE_A733_OS_NPU_OBSERVE)
@@ -505,15 +487,7 @@ endif()
 if(os_include_dirs)
   target_include_directories(sunstone-a733-os-core PRIVATE ${os_include_dirs})
 endif()
-if(SUNSTONE_A733_OS_HEADSET)
-  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BLUETOOTH_HEADSET=1 SUNSTONE_BLUETOOTH_CAPTURE_PROFILE=1)
-endif()
 target_compile_definitions(sunstone-a733-os-core PRIVATE PVR_GPU_PERFORMANCE=1)
-if(SUNSTONE_A733_OS_MSBC)
-  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_MSBC=1 SUNSTONE_BLUETOOTH_MSBC=1)
-  set_source_files_properties(${os_sbc_sources} TARGET_DIRECTORY sunstone-a733-os-core
-    PROPERTIES COMPILE_DEFINITIONS SBC_HIGH_PRECISION=1)
-endif()
 get_target_property(os_link sunstone-a733-os-core LINK_OPTIONS)
 list(FILTER os_link EXCLUDE REGEX "Map,")
 set_property(TARGET sunstone-a733-os-core PROPERTY LINK_OPTIONS "${os_link}")

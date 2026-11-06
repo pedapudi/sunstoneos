@@ -17,6 +17,9 @@ runner prepares. This check prepares the session and contract of each built imag
   digest      a contract with another session digest is refused as session_bind (digest);
   launcher    a launcher that arms another lifetime than the image's is refused as timing (diagnostic);
   startup     an admission check after the startup deadline is refused as timing (startup);
+  radio       for an image whose manifest requires the radio device (the scanning radio image, board workload 3): the
+              radio device with the full station's workload 1, or with the storage-free workload 2, is refused as
+              session_decode (devices), and a session without the radio device as session_decode (manifest);
 and that the stop the board records for the unnamed (1, 1) admission stop equals the refusal in every case.
 Usage: admission-preflight.py --build BUILD_DIR [--build BUILD_DIR ...] --output DIR, where each BUILD_DIR is a configured
 build of one returning OS image (SUNSTONE_A733_OS_CPU_RETURN) built with its sunstone-a733-os-*.elf target.
@@ -28,7 +31,7 @@ from pathlib import Path
 import shutil
 import struct
 import sys
-GATE_RUNS = [['--build', '{build:ret-latency}', '--output', '{output}']]
+GATE_RUNS = [['--build', '{build:ret-latency}', '--build', '{build:ret-radio-scan}', '--output', '{output}']]
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -42,6 +45,7 @@ MANIFEST_RUN, MANIFEST_RESERVE = 56, 64       # offsets of run_deadline_us and r
 SESSION_MANIFEST_HASH = 592 + 32              # prefix bytes plus the offset of manifests_sha256 in the session header
 # struct a733_smp_contract: reserved[] starts at 176; reserved[2..5] hold the session digest.
 CONTRACT_MAGIC, CONTRACT_EPOCH, CONTRACT_BUILD_ID, CONTRACT_DIGEST = 0, 24, 48, 192
+SESSION_DEVICES, PREFIX_WORKLOAD = 592 + 24, 400  # devices in struct ss_session_header; workload in the board prefix
 
 
 def load(name, path):
@@ -162,6 +166,15 @@ def one_build(build, out):
     run('another session digest', ('session_bind', 'digest'), edit=lambda c: c.__setitem__(CONTRACT_DIGEST, c[CONTRACT_DIGEST] ^ 1))
     run('launcher arms another lifetime', ('timing', 'diagnostic'), launcher_seconds=seconds + 30)
     run('check after the startup deadline', ('timing', 'startup'), delay=admission.COUNTER_HZ * 2)
+    radio = manifests.DEVICES['radio']
+    if parsed['devices_required'] & radio:
+        # The radio device grants the station only with this image's radio workload (apps/os/session.c).
+        assert struct.unpack_from('<I', session, PREFIX_WORKLOAD)[0] == 3 and struct.unpack_from('<I', session, SESSION_DEVICES)[0] & radio
+        for workload in (1, 2):
+            run('radio device with workload %d' % workload, ('session_decode', 'devices'),
+                edit_session=lambda s, w=workload: struct.pack_into('<I', s, PREFIX_WORKLOAD, w))
+        run('radio workload without the radio device', ('session_decode', 'manifest'),
+            edit_session=lambda s: struct.pack_into('<I', s, SESSION_DEVICES, struct.unpack_from('<I', s, SESSION_DEVICES)[0] & ~radio))
     # The message the runner prints names the numbers of the lifetime terms.
     target, digest = mutated_image(image, work / 'message', run_us=bound + 1)
     admission.build_harness(target, located, cache)

@@ -1,7 +1,7 @@
 /* radio-scan: the application of the scanning radio image. It waits until the radio station has scanned,
  * or failed, and finishes with a short summary. The OS then shuts the module down with a readback at each
  * step, publishes the full scan result (apps/os/radio_scan.c) and returns to the host.
- * It uses no device: the radio station is an OS service. */
+ * It requires the radio device, which grants it the OS radio station. */
 #include "radio_scan-app.h"
 
 struct radio_scan_result {

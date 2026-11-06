@@ -1,6 +1,6 @@
 # Design: one OS image, with services chosen at run time
 
-Status: the foundation (granted set, session records, fixed service ids, refusal table, ungranted-service checks) is **implemented and host checked**. The CPU series (series 2: CPU clock grant, A76 placement and performance modes as run-time grants) is **implemented**; the service, NPU and lifetime series are **proposed**. The sizes in "Size" are measured on the all-in link.
+Status: the foundation (granted set, session records, fixed service ids, refusal table, ungranted-service checks) is **implemented and host checked**. The CPU series (series 2: CPU clock grant, A76 placement and performance modes as run-time grants) and the service series (series 3: I2S capture and the radio in every image, the headset as a library linked by manifest) are **implemented**; the NPU and lifetime series are **proposed**. The sizes in "Size" are measured on the all-in link and, for the headset library, on the headset fixture image.
 
 Readers are assumed to know [os-image.md](../os-image.md), [app-abi.md](app-abi.md) (manifest, session extents, device bitmap) and [application-memory-layout.md](application-memory-layout.md).
 
@@ -38,7 +38,7 @@ Any table that varied between variants is sized from the declaration at registra
 - **Session.** `struct os_session` loses its conditional members (`npu`, `audio`, `cpu_clock`, `dma`) and the `OS_SESSION_BYTES` arithmetic. It keeps the thermal core. Each service's facts are read from its extent by `os_session_extent`. The session page limit is 4,096 bytes (the sealed copy in `apps/board/session.c`); the largest combination today, NPU with CPU grant and DMA, is well below it.
 - **Service table.** `OS_SERVICE_*` ids become a fixed enum that includes every service (today the ids shift with the options). `services_state` already keeps a `required` mask; it extends to the granted set.
 - **NPU.** Slots, graphs, links, graph bytes and tensor bytes already come from the declaration (`npu-declaration.c`). The remaining fixed pieces are removed: the model table (see NPU), the EL1 metadata arena (`os-npu-meta.h`, being deleted by `work/umem-dynamic-pool-1103`; this work builds on it once it lands and does not touch pool sizing, `SUNSTONE_OS_NPU_POOL_BASE` or `SUNSTONE_OS_NPU_POOL_BYTES`), and the queue depth. The depth sizes `entry[]` in `struct ss_npu_queue`, an ABI shared with EL0 (`SS_NPU_QUEUE_MAX_DEPTH`, default 64). The ring becomes a header with `depth` and a flexible entry array, allocated at registration to the manifest's `in_flight`.
-- **Audio.** The capture buffer already follows the manifest (`64 + max(8192, ceil(max_frames*channels*bytes/4096)*4096)`). The 119,680-byte `.bss.audio` (period ring of 64 entries, 4-page DMA pool, 8 KiB stack) becomes allocated at the grant from the period and frame counts in the audio extent.
+- **Audio.** The capture buffer already follows the manifest (`64 + max(8192, ceil(max_frames*channels*bytes/4096)*4096)`). The 119,680 bytes of stream state (period ring of 64 entries, 4-page DMA pool, 8 KiB stack) come from the unified ledger at the first open of the stream (implemented); sizing them from the period and frame counts in the audio extent is open.
 - **Headset.** `.bss.voice` (440,448 bytes), the headset application state (353,888) and the 96,044-byte WAV buffer are sized from the Bluetooth profile at the grant.
 - **Placement.** `A733_SMP_APPLICATION_CORE` and `_WORKER_CORE` become run-time values read from the grant; the `_Static_assert`s in `apps/os/start.c` become admission checks.
 
@@ -51,34 +51,68 @@ Counts are tracked files that mention the option, including docs.
 - **Compiles in or out:** `SUNSTONE_BOARD_RESIDENT`: the contract magic (`A733_OS_RESIDENT_CONTRACT_MAGIC` against the supervised one) and the board timing validator in `apps/board/admission.c` (resident: no deadline, expiry at armed time plus 4 s, watchdog fields set; supervised: 60 s, zero watchdog fields); the `supervise()` renewal task and `apps/os/watchdog.c`; the manifest lifetime and return-reserve checks (`session.c:161`) and `grant.finish_by_us` (`application.c:409`); the USB0 product id; the audio DMA established flag (0x3f against 0x5f); the NPU end-of-work cap; `radio_profile.c` timing (120 s and 130 s offsets against 60 s); extra held-policy steps in `platform/a733/cpu_start.c`; `boot-resident.patch` (drops one EL3 readback). The stage-2 loader builds only the resident contract.
 - **Why an option:** commit 5be126a5 says every board image ended at a fixed deadline and `SUNSTONE_BOARD_RESIDENT` admitted a contract with its own magic that arms the four-second watchdog. `os-image-history.md` keeps the supervised lifetime "for the first physical runs". It is risk containment, not a size or ISA reason.
 - **Run-time form:** the lifetime is already encoded in the contract the loader or host writes: the magic. EL3 admission accepts the set of magics, and selects the timing validator and the watchdog expectation from the verified magic before any readback. Application, session decode, NPU, audio and radio code read the admitted lifetime from a sealed field, not a macro. The choice never comes from session or application bytes: a wrong choice would leave a watchdog armed with no renewer.
-- **Stays a build option:** the stage-2 loader (a separate program, 32,608 bytes against a fixed limit). `boot-resident.patch` is the only EL3 boot difference and folds into a run-time branch on the magic. The lifetime series does not touch the EL3 stop handler.
+- **Stays a build option:** the stage-2 loader (a separate program, 32,608 bytes against a fixed limit). `boot-resident.patch` is the only EL3 boot difference and folds into a run-time branch on the magic. The resident lifetime adds no stop-path branch; the lifetime word it introduces is described in "Lifetime word and sealed session".
 
 ### `SUNSTONE_A733_OS_CPU_RETURN` (lifetime, not among the 16 variants)
 
 - **Compiles in or out:** 12 patch files (about 800 lines) over 11 units, including the EL3 stop handler (WDT0 shortened to 0.5 s and restarted so the board returns to FEL), the vector and terminal code and the boot; `cpu-return*.c`, `cpu-return-el0.S`; the GPU park and retire path; the NPU retirement wait in `ss_finish`.
 - **Why an option:** commit 6976bc48 keeps other lifetimes unchanged while it is qualified.
-- **Run-time form:** a third contract magic, handled like resident. It is the last piece. If its EL3 patches cannot become branches without changing the EL3 stop handler or the supervised and resident EL3 stop paths, it stays a second OS image and the gate builds two, and the reason is recorded here.
+- **Run-time form:** a third contract magic, handled like resident, built after it. The EL1 patches (main, start, CPU, thermal, admission, `continue.c`, runtime, the interrupt policy in `platform.patch`), the GPU park and retire path and the NPU retirement wait become branches on the sealed lifetime. The returning-only code (`cpu-return*.c`, `cpu-return-el0.S` and the terminal unit) is linked into every image and is reached only through SVC 0x735 or the success dispatch. Its admission rule (CPU clock grant, workload 2, or 3 in the scanning image, clusters 3, at least four changes, no performance mode) becomes a refusal-table entry keyed by the lifetime.
+- **EL3 changes:** five places branch on the EL3 lifetime word:
+  - EL3 admission's watchdog check takes three arms: supervised requires WDT0 disarmed, resident requires mode 0x41, returning requires mode 0xb1, configuration 1 and output 2.
+  - `a733_smp_stop` reads the WDT0 mode for every lifetime. Its crumb store and the WDT0 shortening (0x16aa0001 to 0x02050014, then a restart) run only when the word is returning.
+  - The EL3 fatal vector in `continue.S` loads the word once after the record store. For a returning lifetime a status-0 SMC branches to `a733_qualification_success_dispatch`, and the RTC fault words at 0x07090110 to 0x0709011c are stored. Supervised and resident continue to storage adoption and `a733_smp_stop`.
+  - `a733_qualification_boot` and the SPI save run only for a returning lifetime.
+- **Stop-path rule:** a change to the EL3 stop handler or the fatal vector is allowed when a host check proves it trace-identical for the other lifetimes. The check runs `a733_smp_stop` for every status, and the fatal vector for a status-0 SMC and for an exception, under the supervised and resident lifetimes. It compares the folded build with a reference built from the tree before the change. It requires identical MMIO write traces and identical final records, and that the stop paths load the EL3 lifetime word and never the EL1 copy. Three mutations must fail it: ungating one crumb store, dropping the returning success-dispatch branch, and pointing the stop handler at the EL1 copy. Supervised and resident stops gain one load and branches that are not taken, and no MMIO store.
 
-### `SUNSTONE_A733_OS_AUDIO` (I2S capture)
+### Lifetime word and sealed session
 
-- **Compiles in or out:** `audio.c`, the DMA service, the I2S and audio-lease drivers: about +76 KiB `.text`, +120,128 bytes `.bss` (`resaud` 670,860 against `res` 594,412 bytes of text). The 184-byte `os_audio_session` extension; `OS_SERVICE_AUDIO`; route `{143,0,0xd8,os_audio_irq}`; pins PB5, PB6, PB8; `OS_STAGED_WORKLOAD` forced to 0.
-- **Why an option:** commit d3fa6637: the loader admitted only the 808-byte session. e4005b17 allowed resident once the loader admitted 992 bytes. The exclusion with HEADSET ("an application takes one capture source") is software convenience; the manifest already refuses two capture devices.
-- **Today's gate:** `os_session_valid` demands a valid extent in an AUDIO build; I found no test of the I2S device bit in `os_capture_start`; the bit gates only `ss_capture`.
-- **Run-time form:** granted when `devices` has `SS_DEVICE_AUDIO_I2S` and the board description lists the wired microphone and the extent validates. Not granted: `os_audio_pins`, the DMA0 open and the route do nothing. The workload word is derived from the granted set.
+**Status: proposed.** The RESIDENT series introduces both pieces.
 
-### `SUNSTONE_A733_OS_RADIO` (Wi-Fi station)
+- **EL3 lifetime word:** EL3 admission writes it once, after it verifies the contract magic, in `.bss.a733_smp_monitor` inside the monitor interval at 0x42000000. EL1 has no mapping of that interval (level-2 slot 16 is invalid in the EL1 tables). The stop handler, the fatal vector, the watchdog check and the returning boot steps read only this word.
+- **EL1 copy:** the application, the session decode and the services read the lifetime from a copy in the sealed session section. EL3 writes the copy together with the session; EL1 and EL0 never write it, and EL3 never reads it back.
+- **Placement:** the `sealed` object in `apps/board/session.c` holds the 4,096-byte session copy that `board_session_sealed()` serves, its flags and the lifetime copy. It moves from `.bss` into a page-aligned NOLOAD output section, `.sealed`, placed last in the link script's CODE region (0x41000000 to 0x41200000). An `ASSERT` in the link script fails the link when `.sealed` does not end inside CODE. The text segment is 764 to 954 KB in the measured images, so the section fits. The CODE block is the 2 MiB block that `a733_cpu_coherence_tables` maps with AP = 0b11, read-only at EL1 and EL0. It is executable at EL1, and the section stays executable: splitting the block to give one page execute-never would cost TLB reach on the text, and the bytes are never writable at EL1 or EL0.
+- **Write path:** EL3 writes the section in `board_session_prepare`, before `a733_cached_prepare` builds the tables, with translation and caches off. Those stores are Device-nGnRnE and allocate no cache line. A NOLOAD section is not zeroed by any loader, and DRAM keeps the previous boot's bytes across a watchdog reset, so EL3 zeroes the section before the copy and writes the `ready` flag last. The sequence:
+  1. EL3 runs `a733_cpu_coherence_flush` (DC CIVAC, clean and invalidate to the point of coherency) over the section, so no Secure line of it can later be written back over the new bytes.
+  2. EL3 zeroes the section, copies and checks the session, writes the lifetime copy, then `ready`.
+  3. EL3 runs `a733_cpu_coherence_flush` over the section again. `a733_cpu_coherence_publish` is not enough here: it issues DC CVAC, which cleans and leaves a line valid.
+  4. Each core, at EL1 entry with translation off, flushes the Nonsecure alias of the section with DC CIVAC, in the same step that flushes the EL1 table pages ([CPU coherence](../cpu-coherence.md)). The first cached read then misses to DRAM.
+- **Stale lines:** a second session in the same boot cannot exist: `board_session_prepare` refuses a second attempt, and EL3 admission refuses a result record that already carries the contract's generation. A line from the previous boot is excluded by reset-state cache invalidity, the condition [CPU coherence](../cpu-coherence.md) already requires for all image memory. The flushes in steps 1, 3 and 4 remove a clean stale line. A dirty line surviving reset would break that condition for every page of the image, not only this section. The rules relied on are architectural: with SCTLR_ELx.M = 0, data accesses are Device-nGnRnE, and DC CIVAC by address reaches the point of coherency. No copy of the Arm Architecture Reference Manual or of the Cortex-A55 and Cortex-A76 technical reference manuals is pinned in the repository.
+- **Cache-order check:** the instruction models have no cache, so they check the order of operations: every 64-byte line of the section receives DC CIVAC at EL3 before the first store and after the last store, each core issues DC CIVAC over the Nonsecure alias before it enables translation, and no store reaches the section at EL1 or EL0. Three mutations must fail it: removing the first flush, replacing the second flush with the DC CVAC publication, and removing the EL1 flush.
+- **Page-table check:** it walks the EL1 regime's tables as admission leaves them and requires every descriptor whose output range covers the section to be invalid or to have AP[2] set (read-only). The walk covers:
+  - the level-1 table and every level-2 block from 0x40000000 to 0x48000000, including slot 14 (0x41c00000), whose attributes admission rewrites, and the GPU read-only output and GPU-written blocks;
+  - the level-3 tables of the USB memory alias (`a733_cached_usb_el1_l3`) in images with the generic USB host;
+  - the DRAM blocks above the boot image (`dram_map`), at level 1 and level 2;
+  - every application address space that `apps/os/large.c` builds from `os_kernel_l1_head` and `os_kernel_l2_slot1`, and the ranges the unified allocator maps into it.
+  
+  Two mutations must fail it: linking `sealed` back into `.bss`, and clearing AP[2] on the CODE block. Device MMU mappings (GPU, NPU, IOMMU) are outside this check.
+- **QEMU:** `platform/qemu-os` seals at EL1 under its own link script and keeps `sealed` in `.bss`. It is a host model and enforces no protection.
 
-- **Compiles in or out:** almost nothing. The board's `main.c` already links all radio code, so `.bss.radio` (354,832 bytes) is in every OS image; the option adds `radio.c`, `wifi_credential.c`, `main.patch` (progress reports for `OS_SERVICE_RADIO` and `OS_SERVICE_NETWORK`) and, for resident, `radio_profile.c`. `resradio` is +576 bytes of text over `res`. It forces workload 1 and sets the fixed addresses: radio profile at 0x43000000 (1,872 bytes), credential record 0x43004000 (256 bytes), firmware span from 0x43010000 (0xf0000 bytes).
-- **Why an option:** commit 5a5672c1 added the radio and headset as build options so the first images stayed as qualified. No size reason is recorded.
-- **Today's gate:** the board activates the radio from the session word (`a733_board_radio_workload(workload)` is `workload & 1`), so part of the gate is already run time. The module is powered only after the profile digest in the sealed board prefix matches, the `platform_authority` and owner token check, and the BLDO5 first-run guard passes. There is no device bit and no extent.
-- **Run-time form:** new device bit `SS_DEVICE_RADIO` (bit 8; `SS_DEVICE_ALL` is `(1u<<8)-1` today), a radio extent carrying the profile digest and the credential record location, and a board-description entry for the module. Workload 1 is derived from the bit. The power-on guard is unchanged.
+### I2S capture (formerly `SUNSTONE_A733_OS_AUDIO`)
 
-### `SUNSTONE_A733_OS_HEADSET` and `SUNSTONE_A733_OS_MSBC`
+- **Status: implemented.** Every OS image links `audio.c`, the DMA service and the I2S and audio-lease drivers.
+- **Grant:** the session grants the service when `devices` has `SS_DEVICE_AUDIO_I2S` and the audio record validates. When it is not granted, `os_audio_pins`, the DMA0 open and the interrupt enable do nothing.
+- **Memory:** the stream's state (119,680 bytes: the period ring, the DMA pool session and the task stack) comes from the unified ledger at the first open of the stream, so an image without a capture session holds only a pointer.
+- **Refusals:** admission refuses the grant with the DMA service, which shares INTID 143, with the NPU, in a returning image, in an image with the USB camera decoder, in a supervised GPU image and with resident CPU grants.
 
-- **Compiles in or out:** the Bluetooth stack, UART driver and headset capture client: +151,616 bytes `.text` and +940,928 bytes `.bss` over `sup`. The 832-byte Bluetooth profile at 0x43000000, or 0x43008000 with the radio. Services `bluetooth` and `headset`. MSBC adds libsbc, `msbc.c`, `playback.c` (about 147 KiB, 6 KiB `.bss`, measured on an older build) and capture mode 3.
-- **Why an option:** commit 5a5672c1 ("supervised only, because the Bluetooth application ends 60 seconds after it starts"); 61321c21 lifted the pairing with the radio by sharing one module owner. External pinned sources (`SUNSTONE_BT_SECURITY_DIR`, `SUNSTONE_BT_SBC_DIR`) were optional inputs.
-- **Run-time form:** the one OS image has no headset code. A headset is not a current priority (the USB priorities are HID, UVC webcams and USB serial), and its sources (Zephyr Bluetooth security, libsbc) must not become inputs of every build. The Bluetooth stack, the headset client and MSBC form an object library linked by the application's manifest, like `sunstone-a733-os-sd`, into an image whose manifest requests the headset. The library's directory records the libsbc LGPL notice where it is built. Until that series, the headset stays a build option with its present rules (`headset_workload_valid` in `apps/os/headset.c` keeps the narrower workload rule that `os_workload_valid` no longer expresses).
-- **Real constraint:** the radio and the headset share one AIC8800 module owner. Run time picks the owner from the granted set; it is a hardware fact, not an option.
+### Wi-Fi station (formerly `SUNSTONE_A733_OS_RADIO`)
+
+- **Status: implemented.** Every OS image links `radio.c`, `wifi_credential.c` and the progress reports of `main.patch` for `OS_SERVICE_RADIO` and `OS_SERVICE_NETWORK`; a resident image also links `radio_profile.c`. The board's `main.c` holds `.bss.radio` (354,832 bytes), so it is in every image.
+- **Grant:** the device bit `SS_DEVICE_RADIO` (bit 8; `SS_DEVICE_ALL` is `(1u<<9)-1`). The radio has no session record, because the sealed board prefix already carries the profile's address, size and digest. The decode requires the board prefix's workload to agree with the bit: workload 1, the full station, with USB storage, or, in the scanning image, workload 3 without it. A radio workload without the bit is refused.
+- **Fixed addresses:** radio profile at 0x43000000 (1,872 bytes), credential record at 0x43004000 (256 bytes), firmware span from 0x43010000 (0xf0000 bytes).
+- **Power-on:** unchanged. The module is powered only after the profile digest matches, the `platform_authority` and owner token check passes and the BLDO5 first-run guard holds.
+- **Credential:** a session that grants the radio wipes the credential record at its end and on a failure; any other session neither waits for the record nor writes it. The runner refuses a credential for an application that does not declare the radio device and for a session that does not grant it (`tools/board.py`, `tools/board_images.py`).
+- **Scanning image:** `SUNSTONE_A733_OS_RADIO_SCAN` stays a build option, because it depends on the returning lifetime: it adds the scan workload, the module shutdown with readbacks and the scan result.
+- **Refusals:** admission refuses the radio with the NPU, in a returning image other than the scanning one, in an image with the USB camera decoder, in a supervised GPU image and with resident CPU grants.
+
+### Headset and mSBC (formerly `SUNSTONE_A733_OS_HEADSET` and `SUNSTONE_A733_OS_MSBC`)
+
+- **Status: implemented.** The headset service, the Bluetooth stack, its UART driver and the mSBC codec form one object library, `sunstone-a733-os-headset`. `cmake/sunstone-image.cmake` links it into an image whose application declares the `audio-headset` device, required or optional. Only such an image compiles the external sources, so the library needs `SUNSTONE_BT_SECURITY_DIR` and `SUNSTONE_BT_SBC_DIR` only there. The build directory keeps the libsbc license (LGPL-2.1-or-later) and its source record in `os-image/bluetooth/msbc-license/`.
+- **Core interface:** the OS core reaches the library through weak references, so the core objects are the same with and without it. The session decode grants the headset (grant bit 5) when the session declares the device, and refuses the device in an image without the library. The EL3 identity hook reads the sealed session's devices: for a headset session the library copies the 832-byte Bluetooth profile from 0x43008000 and publishes it with the 1 MiB profile span; an image without the library refuses that session. Admission requires SID evidence for the grant.
+- **Codec:** mSBC is always linked, so the profile's mode chooses CVSD (2) or mSBC (3) at run time.
+- **Module owner:** the radio and the headset share one AIC8800 module. When the session grants the radio, the headset attaches to the radio owner's module; otherwise it runs its own Bluetooth owner task.
+- **Refusals:** admission refuses the headset with the NPU, in a returning image, in an image with the USB camera decoder and in a supervised GPU image.
+- **Fixture:** the `headset-fixture` application declares USB storage and the headset; the gate's `headset` and `resheadset` variants build it.
 
 ### `SUNSTONE_A733_OS_NPU`, `_NPU_QUEUE`, `_NPU_OBSERVE`
 
@@ -187,10 +221,21 @@ The all-in link (`all` in `VARIANTS`): audio, radio, NPU with the queue, A76 adm
 
 The symbol-union estimate in the first version of this document (0.96 MB) was high; the link is 0.87 MB.
 
+The headset library, measured on the service series with `aarch64-none-elf-size`: the supervised image with no application against the same image with the `headset-fixture` application, and the sum of the library's objects:
+
+| Build | text + rodata | data | bss | heap end |
+| --- | --- | --- | --- | --- |
+| `sup` at the service series | 764,028 | 2,752 | 7,144,944 | 0x414b7d80 |
+| `headset` (`sup` with `headset-fixture`) | 954,196 | 2,808 | 8,422,896 | 0x415ef500 |
+| difference | +190,168 | +56 | +1,277,952 | +0x137780 |
+| library objects | 201,421 | 8 | 948,008 | |
+
+The library's objects include sections that the link discards. Most of the `.bss` difference beyond the library is the fixture's capture buffer: 160,000 mono 16-bit frames, rounded up to 4,096-byte pages, plus a 64-byte header (323,648 bytes).
+
 Fit:
 
-- **Code and read-only data:** the `CODE` region is 2 MiB, shared with the application. The all-in OS takes 0.83 MiB and leaves 1.17 MiB. The headset library, when an image links it, adds about 0.15 MB (0.30 MB with MSBC).
-- **Data, bss, heap and device pool:** `RAM` is 10 MiB (0x41200000 to 0x41c00000). The all-in image ends at 0x416f4000, 5.0 MiB in. The headset adds 0.94 MB of `.bss`, which still ends below 0x41800000.
+- **Code and read-only data:** the `CODE` region is 2 MiB, shared with the application. The all-in OS takes 0.83 MiB and leaves 1.17 MiB. The headset library with mSBC, when an image links it, adds 0.18 MiB (measured below).
+- **Data, bss, heap and device pool:** `RAM` is 10 MiB (0x41200000 to 0x41c00000). The all-in image ends at 0x416f4000, 5.0 MiB in. The headset library adds 0.90 MiB of `.bss`; the headset fixture image ends its heap at 0x415ef500.
 - **Fixed regions untouched:** the NPU pool, the monitor interval and the uncached block keep their addresses. The pool is sized by the umem branch.
 - **If something does not fit,** the first candidates are the headset state and the audio ring, both of which the "no artificial caps" section moves to allocation at the grant, and then object libraries linked by manifest like `sunstone-a733-os-sd`.
 
@@ -204,9 +249,9 @@ One option family per commit series. Each series lands on its own, passes its ch
 
 1. **Foundation (done).** The granted set (`struct os_session` holds every record and `granted`; the wire form carries a record only for a granted service and the thermal record's size follows the records present), the fixed service ids, the refusal table (`apps/os/grants.c`), the start-entry guards of the NPU, I2S and radio, the EL3 identity hook reading the radio profile and chip ID only for workload 1, the `all` variant and the ungranted-service checks. No option removed yet; the options now decide only which code is linked.
 2. **CPU family** (`A76_ADMITTED`, `CPU_CLOCK`, `PERF`): implemented. It removes `cpu-clock`, `perf` and `perf-npu-low`. See [its design](one-os-image-cpu.md).
-3. **Services** (`AUDIO`, `RADIO`, `HEADSET`, `MSBC`): removes `resaud`, `resradio`, `resradioaud`, `headset`, `resheadset`, `radio-headset`, `resradio-headset`. The radio gets its device bit and extent, the I2S gate becomes a real admission check (device bit and record together, done in the foundation), and the headset and MSBC become the manifest-linked object library.
+3. **Services** (`AUDIO`, `RADIO`, `HEADSET`, `MSBC`): implemented. It removes `resaud`, `resradio`, `resradioaud`, `radio-headset` and `resradio-headset`; `headset` and `resheadset` build the headset fixture application. The radio has its device bit, the I2S gate is an admission check (device bit and record together), and the headset and mSBC are the manifest-linked object library.
 4. **NPU** (`NPU`, `NPU_QUEUE`, `NPU_OBSERVE`, the catalogue): removes `npu` and `npu-queue`. Builds on the umem dynamic-pool branch.
-5. **Lifetime** (`RESIDENT`, then `CPU_RETURN`): removes `res` and, if it folds, the returning variants.
+5. **Lifetime** (`RESIDENT`, then `CPU_RETURN`): removes `res` and the returning variants. The EL3 diffs (`boot.c`, `continue.S`, admission) are reviewed before any board run. After landing, one supervised, one resident and one returning run each predict their stop record from the latest record of that lifetime.
 
 After the series the gate builds one OS image (`sup` becomes `os`). The images that stay are separate programs, not OS variants:
 
@@ -220,5 +265,5 @@ Options outside the 16 variants (`GPU`, `DMA`, `USB_CLASSES`, `USB_JPEG`, `SD_WR
 ## Risks
 
 - The session layout change touches the EL3 admission code and the host tools that build sessions (`apps/os/host.py`, `tools/gate_session.py`, `tools/host_admission.py`). Every session format change has to be checked against the stage-2 loader's rules (656 to 4,096 bytes, no extent read).
-- Lifetime selection from the contract magic puts a branch in EL3 code that arms or leaves the watchdog. It does not change the EL3 stop handler.
+- Lifetime selection from the contract magic puts a branch in EL3 code that arms or leaves the watchdog, and the returning lifetime adds lifetime branches to the EL3 stop handler and fatal vector. The trace-equality check in the CPU_RETURN section guards the supervised and resident stop paths.
 - Two other streams change files this work touches: `work/gate-streamline-1103` (`checks/gate-inputs.json`, `tools/land.py`) and `work/timing-checks-1103` (QEMU checks). I merge `bringup` before each series.

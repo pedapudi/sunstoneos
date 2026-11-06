@@ -41,9 +41,8 @@ int os_application_gpu_share_bind(struct pvr_compute_queue *q){(void)q;return 1;
 #include "runtime.h"
 #endif
 #include <string.h>
-#ifdef SUNSTONE_A733_OS_HEADSET
-#include "../bluetooth/bluetooth.h"
-#endif
+/* The headset library's capture length: absent (null) in an image that does not link it. */
+extern int os_headset_capture_frames(uint32_t *) __attribute__((weak));
 #ifdef SUNSTONE_A733_OS_NPU
 #include "npu.h"
 #endif
@@ -171,10 +170,8 @@ void ss_usb_wait(uint32_t wait_us)
     if(application_wait_until(now+(wait_us?wait_us:1))==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
 }
 int ss_throttled(void){return os_thermal_throttled();}
-#ifdef SUNSTONE_A733_OS_RADIO
 void os_wifi_credential_poll(void)
 {if((os_application_finished()||!board_live(NULL))&&!os_wifi_credential_wiped())os_wifi_credential_wipe();}
-#endif
 #ifndef SUNSTONE_A733_OS_RADIO_SCAN
 void ss_radio_status(struct ss_radio_status *status){*status=(struct ss_radio_status){0};}
 #endif
@@ -381,17 +378,11 @@ int os_application_prepare(void)
     unsigned count=0,input=0;const struct ss_input_fact *facts=os_session_inputs(&count);
     for(unsigned i=0;i<m->region_count;++i){grant.regions[i].base=(void *)(uintptr_t)m->regions[i].address;
         grant.regions[i].bytes=m->regions[i].kind==SS_REGION_INPUT?facts[input++].bytes:m->regions[i].bytes;}
-#if defined(SUNSTONE_A733_OS_AUDIO)
     if(grant.devices&SS_DEVICE_AUDIO_I2S)grant.capture_frames=s->audio.capture_samples;
-#endif
-#ifdef SUNSTONE_A733_OS_HEADSET
     if(grant.devices&SS_DEVICE_AUDIO_HEADSET){
-        const struct bluetooth_profile *p=os_headset_profile();
-        if(!p||p->headset.samples>UINT32_MAX/2)return 0;
-        grant.capture_frames=2*p->headset.samples;
+        if(!os_headset_capture_frames||!os_headset_capture_frames(&grant.capture_frames))return 0;
         if(grant.capture_frames>m->audio.max_frames)return 0;
     }
-#endif
     /* Large regions come from the ledger before any task exists; a refusal stops the application. */
     if(!os_large_prepare())return 0;
 #ifndef SUNSTONE_BOARD_RESIDENT
@@ -431,12 +422,8 @@ int os_application_prepare(void)
 /* The first-failure record names the detail and the caller of ss_fail. */
 /* The application fails at EL0: board_fail must not run the credential wipe (dc civac traps at EL0). The radio owner
  * wipes at EL1 once the board is no longer live (os_wifi_credential_poll). */
-#ifdef SUNSTONE_A733_OS_RADIO
 extern _Atomic unsigned board_fail_from_el0;
 #define OS_FAIL_FROM_EL0() atomic_store_explicit(&board_fail_from_el0,1,memory_order_release)
-#else
-#define OS_FAIL_FROM_EL0() ((void)0)
-#endif
 __attribute__((noinline)) _Noreturn void ss_fail_value(uint32_t detail,uint32_t value)
 {
     OS_FAIL_FROM_EL0();
@@ -494,11 +481,9 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
         if(application_wait_until_unless(giveup,npu_retired)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
     }
 #endif
-#ifdef SUNSTONE_A733_OS_RADIO
     /* The Wi-Fi credential does not leave RAM here: the wipe's cache maintenance (dc civac) traps at EL0, where
      * this task runs. The radio owner and the return supervisor, both EL1, wipe once os_application_finished()
      * holds (os_wifi_credential_poll); board_fail wipes directly. */
-#endif
     struct ss_result *r=(void *)ss_result_record;
     r->magic=SS_RESULT_MAGIC;r->version=SS_RESULT_VERSION;r->bytes=sizeof(*r)+ss_result_capacity;
     r->epoch=board.session.epoch;r->generation=board.session.generation;

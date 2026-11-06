@@ -2,7 +2,11 @@
  * apps/os/audio.c. checks/os-image-audio.c uses it with the current capture
  * stream and generic PCM capture. checks/os-image-audio-baseline.c uses an
  * earlier capture client, so both see the same period bytes. Include it after
- * audio.c, which defines PERIODS and the audio object. */
+ * audio.c, which defines PERIODS and the audio object. AUDIO_STATE names that
+ * object: the current audio.c keeps a pointer to it, an earlier one the object. */
+#ifndef AUDIO_STATE
+#define AUDIO_STATE audio
+#endif
 struct board_application board;
 struct board_provider providers;
 volatile unsigned os_check_result;
@@ -40,13 +44,13 @@ static uint64_t model_before(unsigned n){return 1000u*n+7;}
 static uint64_t model_after(unsigned n){return 1000u*n+9;}
 int dma_service_send(struct dma_service *s,const struct dma_service_request *r,TickType_t wait,uint64_t *ticket)
 {
-    check(s==&audio.pool.service&&!wait&&r->job==0&&logged<sizeof(log)-1,10);
+    check(s==&AUDIO_STATE.pool.service&&!wait&&r->job==0&&logged<sizeof(log)-1,10);
     static const char op[]="SOMCRLGPE";
     queued=*r;*ticket=++sent;log[logged++]=op[r->operation];return 1;
 }
 int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service_reply *out,TickType_t wait)
 {
-    check(s==&audio.pool.service&&ticket==sent&&!wait,11);
+    check(s==&AUDIO_STATE.pool.service&&ticket==sent&&!wait,11);
     if(silent)return 0; /* The worker has not answered yet. */
     memset(out,0,sizeof(*out));out->ticket=ticket;out->result=DMA_SERVICE_OK;
     switch(queued.operation){
@@ -64,13 +68,13 @@ int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service
         if(mode==2&&produced==2){out->result=DMA_SERVICE_BUSY;phase=DMA_SERVICE_RESULT;break;}
         unsigned n=produced++,frames=model_bytes/model_frame;
         for(unsigned i=0;i<model_bytes;++i){
-            memory[n%PERIODS][i]=audio.client.cyclic?0xee:sample(opens,n,i);
+            memory[n%PERIODS][i]=AUDIO_STATE.client.cyclic?0xee:sample(opens,n,i);
             staging[i]=sample(opens,n,i);
         }
         out->period=(struct a733_i2s_period){.ticket=1000+sent,.slot=n%PERIODS,.frames=frames,
             .first_frame=(uint64_t)(mode==1&&n==2?n+1:n)*frames,.observed_before_us=model_before(n),
             .observed_after_us=mode==10?model_before(n)-1:model_after(n),
-            .kind=audio.client.cyclic?A733_I2S_CAPTURED_COPY:A733_I2S_CAPTURED};
+            .kind=AUDIO_STATE.client.cyclic?A733_I2S_CAPTURED_COPY:A733_I2S_CAPTURED};
         held_ticket=out->period.ticket;break;}
     case DMA_SERVICE_PERIOD_PUT:check(queued.period_ticket==held_ticket,15);++puts_done;held_ticket=0;break;
     case DMA_SERVICE_CANCEL:check(phase==DMA_SERVICE_RUNNING,16);phase=DMA_SERVICE_DRAINING;break;
@@ -82,7 +86,7 @@ int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service
 }
 int dma_service_copy_period(struct dma_service *s,unsigned job,uint64_t ticket,void *out,size_t bytes)
 {
-    check(s==&audio.pool.service&&!job&&!audio.pending&&audio.client.cyclic&&
+    check(s==&AUDIO_STATE.pool.service&&!job&&!AUDIO_STATE.pending&&AUDIO_STATE.client.cyclic&&
           ticket==held_ticket&&out&&bytes==model_bytes,19);
     if(mode==9)return 0;
     memcpy(out,staging,bytes);return 1;

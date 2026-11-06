@@ -1,12 +1,13 @@
 /* EL3 publishes application inputs and registered initialization before CPU
- * mappings take effect. The radio build also
- * reads the four chip-ID words and publishes the radio profile span, as the
- * board image does for its radio workloads. The headset build reads the
- * Bluetooth profile and the chip-ID words and publishes both, as the
- * Bluetooth image does (apps/bluetooth/identity.c). With both, the profile
- * span holds the radio profile at 0x43000000, the Bluetooth profile at
- * OS_HEADSET_PROFILE_ADDRESS and the shared firmware from 0x43010000, and the
- * whole 1 MiB span is published. Cached start.S clears BSS before this hook,
+ * mappings take effect. For a radio workload it also reads the four chip-ID
+ * words and publishes the radio profile span, as the board image does for its
+ * radio workloads. For a session that grants the headset, the headset library
+ * (os_headset_identity) reads the Bluetooth profile and publishes it, and
+ * this hook reads and publishes the chip-ID words, as the Bluetooth image
+ * does (apps/bluetooth/identity.c). The profile span holds the radio profile
+ * at 0x43000000, the Bluetooth profile at OS_HEADSET_PROFILE_ADDRESS and the
+ * shared firmware from 0x43010000; a headset session publishes the whole
+ * 1 MiB span. Cached start.S clears BSS before this hook,
  * so the records below keep their values. */
 #include "os.h"
 #include "../board/identity.h"
@@ -15,10 +16,8 @@
 #include "a733_mmio.h"
 #include "boot.h"
 #include "application.h"
-#ifdef SUNSTONE_A733_OS_HEADSET
-#include "../bluetooth/bluetooth.h"
-static struct bluetooth_profile profile;
-#endif
+/* The headset library's profile copy: absent (null) in an image that does not link it. */
+extern int os_headset_identity(const struct a733_board_session *,uint64_t) __attribute__((weak));
 static struct board_radio_chip_id identity;
 static unsigned attempted;
 #ifdef SUNSTONE_A733_OS_GPU
@@ -74,23 +73,18 @@ int board_identity_prepare(uint64_t deadline)
 #ifdef SUNSTONE_A733_OS_GPU
     if(!os_application_initialize_regions(deadline))return 0;
 #endif
-#if defined(SUNSTONE_A733_OS_RADIO) || defined(SUNSTONE_A733_OS_HEADSET)
-#ifndef SUNSTONE_A733_OS_HEADSET
-    /* Only the radio station reads the profile span and the chip ID; any other workload leaves them unread. */
-    if(!os_radio_workload(s->workload))return 1;
-#endif
-#ifdef SUNSTONE_A733_OS_HEADSET
-    const volatile struct bluetooth_profile *source=(const void *)OS_HEADSET_PROFILE_ADDRESS;
-    uint32_t bytes=source->bytes;
-    if(bytes!=sizeof(profile))return 0;
-    for(uint32_t i=0;i<bytes;++i)((uint8_t *)&profile)[i]=((const volatile uint8_t *)source)[i];
-    if(profile.bytes!=bytes||!os_headset_profile_valid(s,&profile)||
-       a733_cpu_coherence_publish((uintptr_t)&profile,sizeof(profile),deadline)!=1||
-       a733_cpu_coherence_publish(BLUETOOTH_PROFILE_ADDRESS,0x100000,deadline)!=1)return 0;
-#else
-    if(a733_cpu_coherence_publish(s->radio_profile_address,s->radio_profile_bytes,deadline)!=1||
-       a733_cpu_coherence_publish(0x43010000,0xf0000,deadline)!=1)return 0;
-#endif
+    /* The sealed session's device grant; the session decode later ties it to the workload. */
+    const uint8_t *sealed=board_session_sealed();
+    const struct ss_session_header *h=sealed?(const void *)(sealed+SS_SESSION_PREFIX_BYTES):NULL;
+    if(h&&(h->devices&SS_DEVICE_AUDIO_HEADSET)){
+        if(!os_headset_identity||!os_headset_identity(s,deadline))return 0;
+    }else{
+        /* Only the radio station and the headset read the profile span and the chip ID; any other session leaves them
+         * unread. */
+        if(!os_radio_workload(s->workload))return 1;
+        if(a733_cpu_coherence_publish(s->radio_profile_address,s->radio_profile_bytes,deadline)!=1||
+           a733_cpu_coherence_publish(0x43010000,0xf0000,deadline)!=1)return 0;
+    }
     /* The session binds secure SID ownership and exclusion evidence. These
      * four read-only words are the entire admitted access. */
     for(unsigned i=0;i<4;++i){
@@ -101,13 +95,6 @@ int board_identity_prepare(uint64_t deadline)
     identity.secure_read_record=s->sid_authority;
     if(a733_cpu_coherence_publish((uintptr_t)&identity,sizeof(identity),deadline)==1)return 1;
     identity.secure_read_record=0;return 0;
-#else
-    return 1;
-#endif
 }
 const struct board_radio_chip_id *board_radio_chip_id(void)
 {return identity.secure_read_record?&identity:0;}
-#ifdef SUNSTONE_A733_OS_HEADSET
-const struct bluetooth_profile *os_headset_profile(void)
-{return identity.secure_read_record?&profile:0;}
-#endif

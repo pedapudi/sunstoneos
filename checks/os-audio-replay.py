@@ -35,8 +35,7 @@ def main():
     unit = next(v for v in units if v['file'].endswith('/apps/os/capture.c'))
     flags = shlex.split(unit['command'])
     flags = flags[:flags.index('-o')]
-    flags = [v for v in flags if v != '-DSUNSTONE_A733_OS_AUDIO=1']
-    assert not any(v in flags for v in ('-DSUNSTONE_A733_OS_AUDIO=1', '-DSUNSTONE_A733_OS_HEADSET=1'))
+    assert '-DSUNSTONE_A733_OS_HEADSET=1' not in flags
     cross = flags + [str(ROOT / 'checks/os-audio-replay.c'), str(ROOT / 'runtime/memory.c'),
                      '-nostdlib', '--ld-path=' + str(LLD), '-Wl,-Ttext=0x41000000',
                      '-Wl,-e,audio_replay_run', '-Wl,--gc-sections', '-o', str(a.output / 'replay.elf')]
