@@ -24,6 +24,8 @@ enum {
 };
 
 static size_t pages(size_t bytes) { return (bytes + PAGE - 1) & ~(size_t)(PAGE - 1); }
+/* The clock of prepare's timing parts: zero when the runtime was given none, and for the sizing calls (rt NULL). */
+#define parts_now(rt) ((rt) && (rt)->now_us ? (rt)->now_us((rt)->now_cookie) : (uint64_t)0)
 static size_t whole_groups(size_t bytes)
 { return (bytes + NPU_RUNTIME_GROUP_BYTES - 1) & ~(size_t)(NPU_RUNTIME_GROUP_BYTES - 1); }
 static size_t lines(size_t bytes) { return (bytes + 63) & ~(size_t)63; }
@@ -187,6 +189,8 @@ static enum npu_declaration_result lay_out(struct npu_runtime *rt, struct bump *
     const size_t entries_all = (size_t)count + capacity;
     /* The graphs' tensor counts, from their headers. */
     unsigned max_entries = 0;
+    const uint64_t lay_begin = parts_now(rt);
+    uint64_t decode_pass = 0;
     for (unsigned m = 0; m < count; ++m) {
         struct nbg_model view;
         if (!a733_span_incl_nonempty(models[m].data, models[m].bytes) || models[m].bytes > NBG_MODEL_MAX_BYTES ||
@@ -195,6 +199,7 @@ static enum npu_declaration_result lay_out(struct npu_runtime *rt, struct bump *
         if (!e || e > UINT_MAX) return NPU_DECLARATION_MODEL;
         if (e > max_entries) max_entries = (unsigned)e;
     }
+    if (rt) { decode_pass = parts_now(rt) - lay_begin; rt->parts.decode_us += decode_pass; }
     struct record *records = NULL;
     struct nbg_allocation_requirement *one_table = NULL;
     if (!rt) {
@@ -217,9 +222,12 @@ static enum npu_declaration_result lay_out(struct npu_runtime *rt, struct bump *
         (void)take_meta(b, (size_t)slots * sizeof(struct npu_runtime_slot));
     }
     struct sizes *z = &w->z;
+    uint64_t open_us = 0, admit_us = 0;
     for (unsigned m = 0; m < count; ++m) {
         struct nbg_model view;
+        const uint64_t o0 = parts_now(rt);
         (void)nbg_model_open(models[m].data, models[m].bytes, &view);
+        open_us += parts_now(rt) - o0;
         const unsigned entries = (unsigned)nbg_assembly_layout_entries(&view);
         struct nbg_assembly_layout one = {.buffers = one_table, .capacity = entries}, *plan = &one;
         if (rt) {
@@ -228,10 +236,13 @@ static enum npu_declaration_result lay_out(struct npu_runtime *rt, struct bump *
             if (b->failed) return NPU_DECLARATION_MEMORY;
             plan = &plans[m];
         } else (void)take_meta(b, (size_t)entries * sizeof(struct nbg_allocation_requirement)); /* counted, as prepare takes it */
+        const uint64_t a0 = parts_now(rt);
         if (!admit(&view, plan)) return NPU_DECLARATION_MODEL;
+        admit_us += parts_now(rt) - a0;
         need(plan, models[m].bytes, z);
         if (records) { records[m].entries = entries; need(plan, models[m].bytes, &records[m].size); }
     }
+    if (rt) { rt->parts.decode_us += open_us; rt->parts.layout_us += admit_us; }
     /* Graphs registered later: a model's regions are at most its bytes (the descriptors, coefficients, dynamic-input and
      * program sections are parts of it; each allocation is rounded to a page, up to five of them) and the tensors are at
      * most tensor_bytes. */
@@ -312,7 +323,14 @@ static enum npu_declaration_result lay_out(struct npu_runtime *rt, struct bump *
         if (b->failed) return NPU_DECLARATION_MEMORY;
     }
     w->meta_bytes = b->meta_used;
+    const uint64_t place_begin = parts_now(rt);
     if (!place(&w->p, z, b->used, total)) return NPU_DECLARATION_DEVICE_SPACE;
+    if (rt) {
+        rt->parts.place_us += parts_now(rt) - place_begin;
+        const uint64_t whole = parts_now(rt) - lay_begin;
+        const uint64_t named = rt->parts.decode_us + rt->parts.layout_us + rt->parts.place_us;
+        rt->parts.carve_us = whole > named ? whole - named : 0;     /* the tables, the slot records and the shared tables */
+    }
     return NPU_DECLARATION_OK;
 }
 enum npu_declaration_result npu_runtime_reservation_with(const struct npu_runtime_model *models, unsigned count,
@@ -391,6 +409,7 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     npu_pool_window_init(&window, (void *)v.cpu, v.bytes);
     struct bump b = {&window.pool, v.meta, 0, 0, 0};
     struct walk_out w;
+    rt->now_us = v.now_us; rt->now_cookie = v.now_cookie; rt->parts = (struct npu_runtime_prepare_parts){0};
     rt->refusal = lay_out(rt, &b, v.models, v.count, v.slots, &v.bounds, &w);
     if (rt->refusal == NPU_DECLARATION_OK && w.p.bytes > v.bytes) rt->refusal = NPU_DECLARATION_MEMORY;
     if (rt->refusal != NPU_DECLARATION_OK) {
@@ -413,6 +432,7 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
                             npu_service_tables_bytes(v.slots, v.slots + 1))) return fault(rt);
     struct a733_npu_buffer *const all = rt->buffers;
     unsigned n = 0;
+    const uint64_t fill_begin = parts_now(rt);
 #define REGION(r, offset, size, dev) ((r) = (struct npu_runtime_region){v.cpu + (offset), v.physical + (offset), (size), (dev)})
     rt->bootstrap = all[n++] = (struct a733_npu_buffer){v.cpu + p.bootstrap, v.physical + p.bootstrap,
         z.command, p.bootstrap_device, A733_NPU_BUFFER_BOOTSTRAP};
@@ -442,6 +462,8 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     }
 #undef REGION
     fill_end(rt->bootstrap.cpu, rt->bootstrap.bytes);
+    const uint64_t native_begin = parts_now(rt);
+    rt->parts.fill_us = native_begin - fill_begin;
     if (!a733_npu_bootstrap((void *)rt->bootstrap.cpu, rt->bootstrap.bytes) ||
         !a733_npu_native_init(&rt->native, v.register_cpu, v.register_physical,
             (void *)(v.cpu + p.arena), p.arena_bytes, v.physical + p.arena, all, n, v.fatal, v.fatal_cookie,
@@ -453,6 +475,7 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     rt->table_crc = npu_runtime_crc32c(UINT32_MAX, (const void *)rt->native.memory.arena,
                                        rt->native.memory.image.bytes);
     rt->bootstrap_crc = npu_runtime_crc32c(UINT32_MAX, (const void *)rt->bootstrap.cpu, rt->bootstrap.bytes);
+    rt->parts.native_us = parts_now(rt) - native_begin;
     rt->loading = rt->checking = NPU_RUNTIME_NONE;
     rt->last_started = v.slots - 1;
     rt->prepared = 1;

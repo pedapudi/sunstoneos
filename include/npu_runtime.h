@@ -72,7 +72,16 @@ struct npu_runtime_config {
     void *fatal_cookie;
     /* The EL1-private allocator for the metadata (include/npu_pool.h): sized by npu_runtime_meta_bytes_with. */
     struct npu_meta *meta;
+    /* Optional clock for the timing of prepare's parts (npu_runtime_prepare_parts): microseconds, any epoch. Prepare runs
+     * before the scheduler, so the caller supplies the clock that is up then. */
+    uint64_t (*now_us)(void *);
+    void *now_cookie;
 };
+/* Where prepare's time went, in microseconds (zero without config.now_us). decode: opening and checking each graph's container
+ * (twice per graph: the entry counts, then the plan); layout: the loader's plan of each graph; carve: the tables taken from
+ * the reservation and the metadata; place: the device and CPU placement of the regions; fill: the slot regions' records and
+ * END pairs; native: the NPU controller, memory layer and page tables, the commands and the checksums. */
+struct npu_runtime_prepare_parts { uint64_t decode_us, layout_us, carve_us, place_us, fill_us, native_us; };
 /* Slot states, written by preparation before bind, then by the worker. Clients
  * read with acquire
  * ordering. A client may write its inputs and read its outputs only while its
@@ -153,6 +162,9 @@ struct npu_runtime {
     atomic_uint count;   /* catalogue entries in use; register publishes the next one with release order */
     unsigned capacity, slots;
     unsigned register_refusal;   /* why the last npu_runtime_register returned 0: an NPU_REGISTER_* value */
+    uint64_t (*now_us)(void *);
+    void *now_cookie;
+    struct npu_runtime_prepare_parts parts;
     size_t command_bytes, constant_bytes, read_bytes, write_bytes;
     uintptr_t parent_cpu;
     size_t parent_bytes;

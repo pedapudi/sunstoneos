@@ -413,6 +413,39 @@ int os_npu_open(void)
 struct os_npu_register_record{uint64_t graphs,bytes,copy_us,decode_us,layout_us,reserved[3];};
 struct os_npu_register_record os_npu_register_record;
 static struct os_npu_register_record sealed_record;
+/* Where admission's time went, for the runner to copy out of image RAM (apps/os/cpu-return-host.py decodes it as npu_prepare):
+ * microseconds of the reservation, the runtime's prepare by part (npu_runtime_prepare_parts), what follows prepare, and the
+ * whole; then the core's cycles and the generic counter's ticks over the whole, so the clock the work ran at is measured, and
+ * the core's SCTLR_EL1 and MIDR_EL1 (the data cache state and the core). */
+struct os_npu_prepare_record{uint64_t graphs,bytes,copy_us,reserve_us,decode_us,layout_us,carve_us,place_us,fill_us,native_us,
+    finish_us,total_us,cycles,ticks,sctlr_el1,midr_el1;};
+struct os_npu_prepare_record os_npu_prepare_record;
+static uint64_t prepare_clock(void *unused){(void)unused;uint64_t t;return clock_now(&t)?t:0;}
+#if defined(__aarch64__)
+/* The PMU cycle counter, enabled for EL1 (the counter is per core): 0 when it cannot be had. */
+static uint64_t cycles_now(void)
+{
+    uint64_t v;
+    __asm__ volatile("mrs %0, pmccntr_el0":"=r"(v));
+    return v;
+}
+static void cycles_enable(void)
+{
+    uint64_t pmcr;
+    __asm__ volatile("mrs %0, pmcr_el0":"=r"(pmcr));
+    pmcr=(pmcr|1u|(1u<<6))&~(2u|4u|8u);
+    __asm__ volatile("msr pmccfiltr_el0, xzr\n msr pmcntenset_el0, %0\n msr pmcr_el0, %1\n isb"::"r"(UINT64_C(1)<<31),"r"(pmcr):"memory");
+}
+static uint64_t ticks_now(void){uint64_t v;__asm__ volatile("mrs %0, cntpct_el0":"=r"(v));return v;}
+static uint64_t sctlr_now(void){uint64_t v;__asm__ volatile("mrs %0, sctlr_el1":"=r"(v));return v;}
+static uint64_t midr_now(void){uint64_t v;__asm__ volatile("mrs %0, midr_el1":"=r"(v));return v;}
+#else
+static uint64_t cycles_now(void){return 0;}
+static void cycles_enable(void){}
+static uint64_t ticks_now(void){return 0;}
+static uint64_t sctlr_now(void){return 0;}
+static uint64_t midr_now(void){return 0;}
+#endif
 int os_npu_register(const void *model,size_t bytes,unsigned *entry)
 {
     /* The graph is admitted like a linked one and must fit the bounds declared in the session (npu_runtime_register). */
@@ -608,6 +641,10 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
     if(!s||!led||npu.prepared||npu.attempted)return 1;
     const struct os_npu_session *g=&s->npu;
     static const struct a733_mapping_rule wb={A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
+    uint64_t total_begin=0,reserve_begin=0,reserve_end=0,prepare_end=0,finish_end=0;
+    cycles_enable();
+    const uint64_t cycles_begin=cycles_now(),ticks_begin=ticks_now();
+    (void)clock_now(&total_begin);
     /* The application's declaration sets the slots; the reservation covers them all, so that nothing is allocated on
      * the job path. A declaration that does not fit names the resource in the record's value. */
     if(os_npu_declaration_admitted(g)!=NPU_DECLARATION_OK)return 1;
@@ -665,6 +702,7 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
      * back what it did not use. Sizing the reservation first would admit every graph twice before the scheduler, which the
      * secondary cores wait for one second at most: a layout takes tens of milliseconds on a Cortex-A55 at the boot clock. */
     uint64_t base,bytes;
+    (void)clock_now(&reserve_begin);
     const uint64_t request_base=g->pool_request[0],request_bytes=g->pool_request[1];
     const int requested=request_base||request_bytes;
     if(requested){
@@ -684,14 +722,16 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
         .access=UMEM_PROT_READ|UMEM_PROT_WRITE,.device_mask=UMEM_DEV_NPU,.window=UINT64_C(1)<<32};
     if(umem_alloc(led,&take,&npu.pool)!=UMEM_OK)return UNPREPARED(requested?0x812:0x803);
     if(requested&&!guard_reserve(led,base,bytes))return UNPREPARED(0x814);
+    (void)clock_now(&reserve_end);
     struct npu_runtime_config config={.models=models,.count=model_count,.slots=slots,.bounds=bounds,.cpu=(uintptr_t)base,
         .physical=base,.bytes=bytes,.register_cpu=0x03600000,
-        .register_physical=0x03600000,.fatal=fatal,.meta=meta};
+        .register_physical=0x03600000,.fatal=fatal,.meta=meta,.now_us=prepare_clock};
     uint64_t layout_begin=0,layout_end=0;
     (void)clock_now(&layout_begin);
     const int layout_ok=npu_runtime_prepare(&npu.runtime,&config);
     (void)clock_now(&layout_end);
     sealed_record.layout_us=layout_end>=layout_begin?layout_end-layout_begin:0;
+    prepare_end=layout_end;
     if(!layout_ok){
         /* Name the cause: prepare says which resource did not fit (a graph that is refused, the NPU's address space, or the
          * memory for the declaration's tables and regions). The extent stays held. */
@@ -717,6 +757,11 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
     if(!os_npu_queue_prepare(&npu.runtime))return UNPREPARED((uint32_t)NPU_DECLARATION_MEMORY);
 #endif
     os_npu_register_record=sealed_record;
+    (void)clock_now(&finish_end);
+    const struct npu_runtime_prepare_parts *pt=&npu.runtime.parts;
+    os_npu_prepare_record=(struct os_npu_prepare_record){sealed_record.graphs,sealed_record.bytes,sealed_record.copy_us,
+        reserve_end-reserve_begin,pt->decode_us,pt->layout_us,pt->carve_us,pt->place_us,pt->fill_us,pt->native_us,
+        finish_end-prepare_end,finish_end-total_begin,cycles_now()-cycles_begin,ticks_now()-ticks_begin,sctlr_now(),midr_now()};
     npu.prepared=1;
     return 1;
 }
