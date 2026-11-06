@@ -17,9 +17,10 @@ It writes, under --out:
                        offset and length of each graph
   pack/vectors.region  a copy of --data
   manifest.json        the application's manifest with both regions' addresses, sizes and SHA-256 filled in and the NPU
-                       declaration derived from the graphs: slots and graphs are the count, graph_bytes the largest graph and
-                       tensor_bytes the largest tensor group, each rounded up to whole pages (plus a page of margin for the
-                       tensors)
+                       declaration derived from the graphs: slots and graphs are the count, graph_bytes the largest graph
+                       rounded up to whole pages, and tensor_bytes the largest region the OS layout gives a graph's reads
+                       (its inputs) or writes (its memory pool and outputs), from the OS's own decoder and layout
+                       (tools/npu_graph_layout.py). The same bound serves a graph sealed at admission and one registered later
   image/               the OS image (cfg.sh and CMake, as the integration gate builds), unless --no-build
   session/             tools/session.py build for that image, unless --no-build
   recipe.txt           the commands, to repeat the build and to submit
@@ -55,14 +56,16 @@ def region_entry(manifest, name):
 
 
 def graph_bounds(artifacts, names):
-    """(graph_bytes, tensor_bytes): the largest graph and the largest group of input or output tensors, from the files."""
-    graph, tensor = 0, 0
-    for name in names:
-        files = artifacts[name]
-        graph = max(graph, Path(files['model']).stat().st_size)
-        tensor = max(tensor, sum(Path(f).stat().st_size for f in files['inputs']),
-                     sum(Path(f).stat().st_size for f in files['references']))
-    return align(graph), align(tensor) + PAGE
+    """(graph_bytes, tensor_bytes): the largest graph in whole pages, and the largest read or write region of any graph by the
+    OS layout. The write region holds the graph's memory pool as well as its outputs: a graph registered after admission must
+    fit regions of tensor_bytes (drivers/npu/a733_npu_runtime.c), and a sealed graph's inputs and outputs fit inside them."""
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import npu_graph_layout
+    paths = [Path(artifacts[name]['model']) for name in names]
+    layout = npu_graph_layout.regions(paths)
+    graph = max(p.stat().st_size for p in paths)
+    tensor = max(max(r['read'], r['write']) for r in layout)
+    return align(graph), align(tensor)
 
 
 def pack(args, out):

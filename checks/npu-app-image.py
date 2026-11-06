@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """tools/npu-app-image.py packs graphs and writes the manifest of an NPU application: the index page, the digests, the bounds.
 
-The tool is run with --no-build on a synthetic application: three graphs of known sizes with known tensor files, a data region
-and a manifest template. The check reads the models region back through its index, compares every graph with its source, and
-requires the manifest to carry the regions' own digests and the declaration the graphs imply (count, largest graph and tensor
-group, each rounded to pages plus a page for the tensors). A changed graph or data file must change its region's digest.
+The tool is run with --no-build on a synthetic application with compiled graphs: graph-add and graph-relu of the test graphs
+and shufflenet-v2-published, the graph the CPU/NPU diagnostic registers. The check reads the models region back through its
+index, compares every graph with its source, and requires the manifest to carry the regions' own digests and the declaration
+the graphs imply: the count, the largest graph in whole pages, and tensor_bytes the largest read or write region of the OS
+layout. For shufflenet that is its write region, the 1,093,632-byte memory pool and the 4,096-byte output (1,097,728 bytes),
+which is also what apps/cpu-npu-concurrency/manifest-npu.json declares; graph-add and graph-relu alone give 16,384 (graph-add's
+two inputs). A changed graph or data file must change its region's digest.
 """
 import argparse
 import hashlib
@@ -15,11 +18,17 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECK_INPUTS = ('tools/npu-app-image.py', 'tools/npu-external-pack.py')
+CHECK_INPUTS = ('tools/npu-app-image.py', 'tools/npu-external-pack.py', 'tools/npu_graph_layout.py', 'tools/npu_graph_layout.c',
+                'drivers/npu/nbg_model.c', 'drivers/npu/nbg_assembly.c', 'apps/cpu-npu-concurrency/manifest-npu.json')
+GATE_RUNS = [['--output', '{output}', '--graphs', '{fixture:npu-graphs}', '--catalogue', '{cache}/build/npu-board/session-artifacts.json']]
 PAGE = 4096
+CACHE = Path.home() / '.cache/sunstoneos'
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output', type=Path, required=True)
+p.add_argument('--graphs', type=Path, default=CACHE / 'build/npu-graph-variants', help='the test graphs (artifacts.json)')
+p.add_argument('--catalogue', type=Path, default=CACHE / 'build/npu-board/session-artifacts.json',
+               help='the artifacts of shufflenet-v2-published')
 a = p.parse_args()
 a.output.mkdir(parents=True, exist_ok=True)
 
@@ -38,18 +47,18 @@ graphs.mkdir()
         {'name': 'models', 'kind': 'input', 'access': ['read'], 'bytes': 0, 'address': '0x0', 'sha256': '0' * 64},
         {'name': 'vectors', 'kind': 'input', 'access': ['read'], 'bytes': 0, 'address': '0x0', 'sha256': '0' * 64}],
     'npu': {'slots': 1, 'in_flight': 8, 'graphs': 1, 'links': 0}}))
-sizes = [(5000, 3000, 700), (40960, 4096, 300), (123, 100000, 5)]     # graph bytes, inputs bytes, references bytes
+tests = json.loads((a.graphs / 'artifacts.json').read_text())
+sources = [tests['graph-add'], tests['graph-relu'], json.loads(a.catalogue.read_text())['shufflenet-v2-published']]
 artifacts, names = {}, []
-for i, (graph, inputs, references) in enumerate(sizes):
+for i, source in enumerate(sources):
     name = 'g%d' % i
     names.append(name)
-    files = {'model': graphs / (name + '.nb'), 'inputs': [graphs / (name + '.in0')], 'references': [graphs / (name + '.ref0')]}
-    files['model'].write_bytes(bytes([i + 1]) * graph)
-    files['inputs'][0].write_bytes(bytes(inputs))
-    files['references'][0].write_bytes(bytes(references))
-    artifacts[name] = {k: str(v) if k == 'model' else [str(x) for x in v] for k, v in files.items()}
+    model = graphs / (name + '.nb')
+    model.write_bytes(Path(source['model']).read_bytes())
+    artifacts[name] = {'model': str(model), 'inputs': source['inputs'], 'references': source['references']}
 (graphs / 'artifacts.json').write_text(json.dumps(artifacts))
 (graphs / 'list.json').write_text(json.dumps({'npu_models': names}))
+sizes = [Path(artifacts[n]['model']).stat().st_size for n in names]
 data = a.output / 'vectors.region'
 data.write_bytes(bytes(range(256)) * 64)
 
@@ -58,25 +67,33 @@ tool(app, graphs, data, out)
 models = (out / 'pack/models.region').read_bytes()
 magic, version, count = struct.unpack_from('<4sIQ', models)
 assert (magic, version, count) == (b'NMDL', 1, 3), (magic, version, count)
-for i, (graph, _, _) in enumerate(sizes):
+for i, graph in enumerate(sizes):
     offset, length = struct.unpack_from('<QQ', models, 16 + 16 * i)
-    assert offset % PAGE == 0 and length == graph and models[offset:offset + length] == bytes([i + 1]) * graph, i
+    assert offset % PAGE == 0 and length == graph and models[offset:offset + length] == Path(artifacts[names[i]]['model']).read_bytes(), i
 manifest = json.loads((out / 'manifest.json').read_text())
 regions = {r['name']: r for r in manifest['regions']}
 assert regions['models']['sha256'] == hashlib.sha256(models).hexdigest() and regions['models']['bytes'] == len(models)
 assert regions['vectors']['sha256'] == hashlib.sha256(data.read_bytes()).hexdigest()
 assert regions['models']['address'] == '0x44000000' and regions['vectors']['address'] == '0x45200000'
 npu = manifest['npu']
-largest_group = max(max(i, r) for _, i, r in sizes)
 assert (npu['slots'], npu['graphs'], npu['in_flight'], npu['links']) == (3, 3, 8, 0), npu
-assert npu['graph_bytes'] == 40960 and npu['tensor_bytes'] == -(-largest_group // PAGE) * PAGE + PAGE, npu
+assert sizes[2] == 964224 and npu['graph_bytes'] == 966656 and npu['tensor_bytes'] == 1097728, npu
+diagnostic = json.loads((ROOT / 'apps/cpu-npu-concurrency/manifest-npu.json').read_text())['npu']
+assert diagnostic['tensor_bytes'] == npu['tensor_bytes'] and diagnostic['graph_bytes'] >= npu['graph_bytes'], diagnostic
+# Without shufflenet the largest region is graph-add's two inputs, 16,384 bytes in whole pages.
+(graphs / 'list.json').write_text(json.dumps({'npu_models': names[:2]}))
+tool(app, graphs, data, a.output / 'small')
+small = json.loads((a.output / 'small/manifest.json').read_text())['npu']
+assert (small['graphs'], small['tensor_bytes']) == (2, 16384), small
+(graphs / 'list.json').write_text(json.dumps({'npu_models': names}))
 assert (out / 'recipe.txt').read_text().count('\n') == 4
 
 # a changed graph or data file changes the digest of its region
-(graphs / 'g1.nb').write_bytes(bytes([9]) * 40960)
+relu = (graphs / 'g1.nb').read_bytes()
+(graphs / 'g1.nb').write_bytes(Path(tests['graph-sub']['model']).read_bytes())
 tool(app, graphs, data, a.output / 'out2')
 assert json.loads((a.output / 'out2/manifest.json').read_text())['regions'][0]['sha256'] != regions['models']['sha256']
-(graphs / 'g1.nb').write_bytes(bytes([2]) * 40960)
+(graphs / 'g1.nb').write_bytes(relu)
 data.write_bytes(bytes(reversed(data.read_bytes())))
 tool(app, graphs, data, a.output / 'out3')
 changed = {r['name']: r for r in json.loads((a.output / 'out3/manifest.json').read_text())['regions']}
