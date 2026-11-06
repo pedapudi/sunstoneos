@@ -1,0 +1,11 @@
+# The source units of the EL3 admission that tools/host_admission.py compiles for the host, beside the admission unit
+# (apps/os/admission.c, or a returning build's patched copy), the image's build ID and the tool's own driver. The tool reads
+# this list from the image's own source tree, so a tree that adds an admission unit lists it here. "quiet" compiles the unit
+# without the breadcrumb writes, which are aarch64 assembly.
+apps/os/lifetime.c
+apps/os/session.c
+apps/os/grants.c
+drivers/storage/storage_digest.c
+drivers/clock/a733_cpu_clock.c quiet
+apps/os/npu-declaration.c quiet
+drivers/npu/npu_declaration.c quiet

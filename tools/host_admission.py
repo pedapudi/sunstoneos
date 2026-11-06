@@ -141,6 +141,20 @@ def own_source(image, build_dir, source):
     return tree
 
 
+# The admission units of a source tree from before apps/os/host-admission-units.txt existed.
+LEGACY_UNITS = [('apps/os/session.c',), ('apps/os/grants.c',), ('drivers/storage/storage_digest.c',),
+                ('drivers/clock/a733_cpu_clock.c', 'quiet'), ('apps/os/npu-declaration.c', 'quiet'),
+                ('drivers/npu/npu_declaration.c', 'quiet')]
+
+
+def source_units(source):
+    """The admission units that the source tree lists, each a tuple of its path and its flags."""
+    listed = Path(source) / 'apps/os/host-admission-units.txt'
+    if not listed.is_file():
+        return LEGACY_UNITS
+    return [tuple(line.split()) for line in listed.read_text().splitlines() if line.strip() and not line.startswith('#')]
+
+
 def build_harness(image, build=None, cache=None):
     """Compile the image's admission code into a host executable; returns its path. Cached by image digest."""
     image = Path(image)
@@ -165,15 +179,13 @@ def build_harness(image, build=None, cache=None):
     includes = re.search(r'^C_INCLUDES = (.*)$', text, re.M).group(1).split()
     returning = '-DSUNSTONE_A733_OS_CPU_RETURN=1' in defines
     admission = build_dir / 'os-image/return-admission.c' if returning else source / 'apps/os/admission.c'
-    units = [(admission, defines), (source / 'apps/os/lifetime.c', defines), (source / 'apps/os/session.c', defines),
-             (source / 'apps/os/grants.c', defines),
-             (source / 'drivers/storage/storage_digest.c', defines), (build_id, defines),
-             (ROOT / 'tools/host_admission.c', defines)]
-    units.append((source / 'drivers/clock/a733_cpu_clock.c', [d for d in defines if d != '-DSUNSTONE_CRUMBS=1']))
-    # The declaration check of the image (apps/os/npu-declaration.c), which every image links, with the image's own NPU data,
-    # read from its ELF. Without the breadcrumb writes: they are aarch64 assembly, and the host keeps no failure record.
+    # The image's own tree lists its admission units (apps/os/host-admission-units.txt), so the harness follows a tree that
+    # adds one. A unit marked quiet is compiled without the breadcrumb writes: they are aarch64 assembly, and the host keeps
+    # no failure record. The NPU declaration check runs with the image's own NPU data, read from its ELF.
     quiet = [d for d in defines if d != '-DSUNSTONE_CRUMBS=1']
-    units += [(source / 'apps/os/npu-declaration.c', quiet), (source / 'drivers/npu/npu_declaration.c', quiet)]
+    units = [(admission, defines), (build_id, defines), (ROOT / 'tools/host_admission.c', defines)]
+    for unit in source_units(source):
+        units.append((source / unit[0], quiet if 'quiet' in unit[1:] else defines))
     for path, _ in units:
         if not path.is_file():
             raise Unavailable('missing admission source %s' % path)

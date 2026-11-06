@@ -25,6 +25,11 @@ _Noreturn void __assert_func(const char *file,int line,const char *function,cons
 int npu_service_runtime_parked(const struct npu_service *service)
 {assert(service==&npu.runtime.service);return 1;}
 int board_live(void *context){assert(!context);return (int)live_value;}
+/* A supervised session: the lifetime the NPU service reads (apps/os/lifetime.c, apps/os/sealed.c); it reports no
+ * resident progress. */
+unsigned board_session_lifetime(void){return A733_LIFETIME_SUPERVISED;}
+unsigned os_lifetime(void){return A733_LIFETIME_SUPERVISED;}
+void board_service_progress(unsigned service){(void)service;}
 uint32_t board_live_refusal(void){return live_value?0:UINT32_C(1)<<28;}
 void os_application_wake_main(void){}   /* the application's end wait (apps/os/application.c); no application runs here */
 int os_task_at_el1(void){return 1;}   /* the failure records are made as the NPU's own (EL1) tasks here */

@@ -20,6 +20,11 @@ int os_task_at_el1(void){return 1;}   /* the failure records are made as the NPU
 void board_fail_note(uint32_t site,uint32_t value,const void *where)
 {assert(site);(void)value;(void)where;}
 void board_fail(void *unused){assert(!unused);++failures;}
+/* A supervised session: the lifetime the NPU service reads (apps/os/lifetime.c, apps/os/sealed.c); it reports no
+ * resident progress. */
+unsigned board_session_lifetime(void){return A733_LIFETIME_SUPERVISED;}
+unsigned os_lifetime(void){return A733_LIFETIME_SUPERVISED;}
+void board_service_progress(unsigned service){(void)service;}
 void board_fail_at(uint32_t site,uint32_t value,const void *where)
 {board_fail_note(site,value,where);board_fail(NULL);}
 static int run(unsigned model,const void *in,size_t ni,void *out,size_t no,uint64_t timeout)

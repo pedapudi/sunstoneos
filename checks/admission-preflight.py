@@ -41,7 +41,8 @@ import harness
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 CHECK_INPUTS = ['tools/host_admission.py', 'tools/host_admission.c', 'tools/host_admission_io.c', 'tools/session_lifetime.py',
-                'include/a733_admission_refusal.h', 'apps/os/admission.c', 'apps/os/session.c', 'apps/board/admission.c']
+                'include/a733_admission_refusal.h', 'apps/os/admission.c', 'apps/os/session.c', 'apps/board/admission.c',
+                'apps/os/lifetime.c', 'apps/os/host-admission-units.txt']
 MANIFEST_RUN, MANIFEST_RESERVE = 56, 64       # offsets of run_deadline_us and return_reserve_us in struct ss_manifest
 SESSION_MANIFEST_HASH = 592 + 32              # prefix bytes plus the offset of manifests_sha256 in the session header
 # struct a733_smp_contract: reserved[] starts at 176; reserved[2..5] hold the session digest.

@@ -32,6 +32,11 @@ int os_npu_submit(uint64_t timeout)
 {assert(timeout==100);++submits;memcpy(tensor_output,tensor_input,4);return 1;}
 int os_npu_close(void){closed=1;return 1;}
 int board_live(void *v){assert(!v);return 1;}
+/* A supervised session: the lifetime the NPU service reads (apps/os/lifetime.c, apps/os/sealed.c); it reports no
+ * resident progress. */
+unsigned board_session_lifetime(void){return A733_LIFETIME_SUPERVISED;}
+unsigned os_lifetime(void){return A733_LIFETIME_SUPERVISED;}
+void board_service_progress(unsigned service){(void)service;}
 void os_application_wake_main(void){}   /* the application's end wait (apps/os/application.c); no application runs here */
 int os_task_at_el1(void){return 1;}   /* the failure records are made as the NPU's own (EL1) tasks here */
 void board_fail_note(uint32_t s,uint32_t v,const void *p){(void)s;(void)v;(void)p;assert(0);}

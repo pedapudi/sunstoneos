@@ -60,6 +60,11 @@ uint64_t npu_arch_stack_select(void) { return 0; }
 int npu_arch_zva_block_is_64(void) { return 1; }
 void npu_arch_zero_line(uintptr_t at) { memset((void *)at, 0, 64); }
 int board_live(void *context) { assert(!context); return (int)live_value; }
+/* A supervised session: the lifetime the NPU service reads (apps/os/lifetime.c, apps/os/sealed.c); it reports no
+ * resident progress. */
+unsigned board_session_lifetime(void){return A733_LIFETIME_SUPERVISED;}
+unsigned os_lifetime(void){return A733_LIFETIME_SUPERVISED;}
+void board_service_progress(unsigned service){(void)service;}
 uint32_t board_live_refusal(void) { return live_value ? 0 : UINT32_C(1) << 28; }
 static unsigned board_failures;
 static uint32_t first_site, first_value, first_caller;
