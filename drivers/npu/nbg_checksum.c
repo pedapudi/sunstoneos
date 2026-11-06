@@ -83,6 +83,11 @@ static enum nbg_checksum_result directory(const unsigned char *data, size_t byte
      * the admitted layout canonical: ordered payloads, zero gaps, no trailer.
      * nbg_model_open separately bounds every section and section-relative table. */
     uint32_t value = UINT32_MAX;
+    /* A listed section's own CRC is accumulated in the same walk: each chunk is fed to both CRCs while it is in the cache, so
+     * the graph is read from memory once. A listed section no entry matches exactly is read again afterwards. */
+    uint32_t part[NBG_SECTION_COUNT];
+    uint64_t done = 0;
+    for (unsigned i = 0; i < NBG_SECTION_COUNT; ++i) part[i] = UINT32_MAX;
     size_t end = start;
     for (uint32_t entry = 0; entry < word(data + 56); ++entry) {
         const unsigned char *p = data + 60 + entry * 44;
@@ -93,6 +98,12 @@ static enum nbg_checksum_result directory(const unsigned char *data, size_t byte
             if (data[i]) return NBG_CHECKSUM_INVALID;
         /* The checksum section's own stored words count as zero; everything else is read as it is, in runs. */
         const size_t stop = offset + length, sum_begin = sums->offset, sum_end = sums->offset + sums->bytes;
+        unsigned own = 0;
+        for (uint32_t at = 0; at < sums->bytes; at += 8) {
+            const unsigned kind = word(data + sums->offset + at);
+            if (model.sections[kind - 1].offset == offset && model.sections[kind - 1].bytes == length &&
+                kind != NBG_SECTION_CHECKSUM && !(done >> (kind - 1) & 1)) { own = kind; break; }
+        }
         for (size_t i = offset; i < stop;) {
             if (i >= sum_begin && i < sum_end) {
                 const unsigned char b = ((i - sum_begin) & 7) >= 4 ? 0 : data[i];
@@ -100,10 +111,19 @@ static enum nbg_checksum_result directory(const unsigned char *data, size_t byte
                 ++i;
             } else {
                 const size_t next = i < sum_begin && sum_begin < stop ? sum_begin : stop;
-                value = crc_update(value, data + i, next - i);
-                i = next;
+                if (own) {
+                    for (size_t chunk; i < next; i += chunk) {
+                        chunk = next - i < 4096 ? next - i : 4096;
+                        value = crc_update(value, data + i, chunk);
+                        part[own - 1] = crc_update(part[own - 1], data + i, chunk);
+                    }
+                } else {
+                    value = crc_update(value, data + i, next - i);
+                    i = next;
+                }
             }
         }
+        if (own && !(sum_begin < stop && offset < sum_end)) done |= UINT64_C(1) << (own - 1);
         end = stop;
     }
     if (end != bytes) return NBG_CHECKSUM_INVALID;
@@ -113,7 +133,7 @@ static enum nbg_checksum_result directory(const unsigned char *data, size_t byte
             unsigned kind = word(data + sums->offset + at);
             const struct nbg_section *s = &model.sections[kind - 1];
             struct nbg_checksum section = {word(data + sums->offset + at + 4),
-                                          crc(data + s->offset, s->bytes)};
+                                          done >> (kind - 1) & 1 ? ~part[kind - 1] : crc(data + s->offset, s->bytes)};
             if (section.stored != section.computed) {
                 *out = section;
                 return NBG_CHECKSUM_MISMATCH;
