@@ -41,10 +41,18 @@ sys.path.insert(0, str(ROOT/'tools'))
 import board
 import board_images as images
 
+GATE_RUNS = [['--output', '{output}']]  # the live queue directory it reads is only compared before and after, never written
 CONFIG_ENVIRONMENT = 'SUNSTONEOS_WIFI_CONFIG_DIR'
 REAL_CONFIG = Path(os.path.expanduser('~'))/'.config/sunstoneos/wifi'
 SSID, PASSWORD = 'SunstoneCheckNet', 'fake-pass-1103-xyz'
 rows = []
+
+
+def snapshot_real_residue():
+    """The live queue's credential-residue directory: names, times and digests. A check must leave it as it found it."""
+    live = Path('~/.cache/sunstoneos/board-queue/credential-residue').expanduser()
+    return {p.name: (p.stat().st_mtime_ns, hashlib.sha256(p.read_bytes()).hexdigest())
+            for p in sorted(live.glob('*'))} if live.is_dir() else {}
 
 
 def passed(name):
@@ -477,11 +485,14 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     work = args.output.resolve()
     wifi = board.wifi_module()
+    real = snapshot_real_residue()
     vector_cases(wifi)
     config = tool_cases(wifi, work)
     queue_cases(wifi, config, work)
     refusal_cases(wifi, config, work)
     board_side_cases(wifi, work)
+    assert snapshot_real_residue() == real, 'the check left a file in the live credential-residue directory'
+    passed('no-file-left-in-the-live-credential-residue-directory')
     board.save(work/'results.json', rows)
     print('%d checks passed; fake credential only, no device access' % len(rows))
 

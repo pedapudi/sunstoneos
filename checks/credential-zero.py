@@ -104,7 +104,8 @@ def case(work, label, shared, wifi, entry, kind='returned', session_wipes=False,
     """One credential run on the shared modeled board; returns (result, queue job)."""
     root = work/label
     root.mkdir()
-    queue = board.Queue(root/'queue')
+    queue = board.Queue(work/'queue')  # one queue root: its credential-residue directory is the marker directory
+    queue.resume('3-1')  # a no-return result pauses the port, as the daemon does; the next case resumes it
     job = queue.submit(wc.arguments(root, '--wifi', 'home'))
     ZeroDry.scenario = {'kind': kind, 'session_wipes': session_wipes}
     shared.zero_writes_stick = stuck
@@ -126,9 +127,8 @@ def cases(work):
     needles = wc.forms(wifi, entry)
     shared = Model()
     roots = []
-    residue = work/'residue'
-    with patch.object(wc, 'Board', lambda: shared), patch.object(wc, 'Dry', ZeroDry), \
-         patch.object(board, 'CREDENTIAL_RESIDUE', residue):
+    residue = work/'queue/credential-residue'
+    with patch.object(wc, 'Board', lambda: shared), patch.object(wc, 'Dry', ZeroDry):
         marker = residue/'3-1.json'
 
         def wipe_info(result, state):
@@ -219,7 +219,7 @@ def cases(work):
         passed('zero-write-that-does-not-read-zero-is-recorded-as-may-remain')
     # No credential byte in any queue file, entry, result, session log or marker: only the address, size and verdict.
     found = 0
-    for root in roots + [residue]:
+    for root in roots + [work/'queue']:  # the queue root holds the entries, state, ledger and the marker directory
         found += wc.scan(root, needles)
     assert found > 20, found
     passed('no-credential-byte-in-any-file (%d scanned)' % found)
@@ -270,8 +270,11 @@ def main():
     work = args.output.resolve()
     clean = work/'cases'
     clean.mkdir()
+    real = wc.snapshot_real_residue()
     cases(clean)
     mutations(work)
+    assert wc.snapshot_real_residue() == real, 'the check left a file in the live credential-residue directory'
+    passed('no-file-left-in-the-live-credential-residue-directory')
     board.save(work/'results.json', rows)
     print('%d checks passed; fake credential only, no device access' % len(rows))
 
