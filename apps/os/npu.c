@@ -161,9 +161,7 @@ static int fail_watch(enum npu_service_operation op,unsigned model,uint64_t tick
 {return fail_at(watch->line,op,model,ticket,reply,watch->expected,watch->observed,watch->where,watch);}
 static void sdk_notify(void *unused)
 {(void)unused;if(npu.client)xTaskNotifyGive(npu.client);}
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
 void os_npu_queue_notify(void){sdk_notify(NULL);}
-#endif
 static int fail(void)
 {sdk_notify(NULL);return FAIL_REQUEST(NPU_SERVICE_STATUS,UINT32_MAX,0,NULL,0,npu.runtime.native.failed);}
 static void fatal(void *v){(void)v;(void)fail();}
@@ -470,13 +468,11 @@ int os_npu_tensor(enum nbg_section_id section,unsigned index,struct npu_runtime_
     if(!caller()||!npu.opened)return 0;
     return npu_runtime_tensor(&npu.runtime,0,section,index,tensor);
 }
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
 struct npu_runtime *os_npu_queue_runtime(void)
-{return caller()&&npu.opened?&npu.runtime:NULL;}
+{return caller()&&npu.opened&&os_npu_queued()?&npu.runtime:NULL;}
 int os_npu_queue_begin(void)
-{return caller()&&npu.opened&&claim();}
+{return caller()&&npu.opened&&os_npu_queued()&&claim();}
 void os_npu_queue_end(void){complete();}
-#endif
 int os_npu_submit(uint64_t timeout)
 {
     const struct os_session *s=os_session();
@@ -582,14 +578,17 @@ unsigned os_npu_links(void)
     const struct os_session *s=os_session();
     return s?s->npu.links:0;
 }
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+int os_npu_queued(void)
+{
+    const struct os_session *s=os_session();
+    return s&&os_granted(OS_GRANT_NPU)&&os_npu_session_queued(&s->npu);
+}
 /* The queue adapter's tables are carved into the object that os_npu_queue_sdk_bind binds, so the bind comes first: it runs at
  * admission with the tables, not at start. The host check of the open path runs this same function. */
 int os_npu_queue_prepare(struct npu_runtime *rt)
 {
     return os_npu_queue_sdk_bind()&&os_npu_queue_tables(rt);
 }
-#endif
 /* A pool placed above 4 GiB is tested against an alias: if the NPU drops the high physical bits, its accesses land at the same low
  * 32 bits. The OS fills a kernel-owned extent at that alias with a pattern, publishes it, and checks it when the NPU client ends, so
  * a stray write is seen. An alias below DRAM (the both-bits placement) is the SoC's own address space and cannot be guarded. The
@@ -650,6 +649,7 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
     if(os_npu_declaration_admitted(g)!=NPU_DECLARATION_OK)return 1;
     const struct npu_declaration declared=os_npu_declaration_of(g);
     const unsigned slots=declared.slots;
+    const int queued=os_npu_session_queued(g);
     /* The image links no graph. Either the session names the input region that holds the application's graphs
      * (graph_region): admission copies each one out of it and sizes the pool from the copies, and a later registration is
      * refused (NPU_REGISTER_SEALED); or the application registers every graph at run time (ss_npu_register_graph), within the
@@ -659,9 +659,7 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
     unsigned model_count=0;
     struct npu_meta *const meta=meta_init(led);
     if(g->graph_region){
-#ifndef SUNSTONE_A733_OS_NPU_QUEUE
-        return UNPREPARED(0x816);       /* a wrapper image reloads one slot with different graphs: no slot is sized by one graph */
-#else
+        if(!queued)return UNPREPARED(0x816);    /* the synchronous service reloads one slot with different graphs: no slot is sized by one graph */
         const struct ss_manifest *const m=ss_application.manifest;
         if(!m||g->graph_region>m->region_count||m->regions[g->graph_region-1].kind!=SS_REGION_INPUT)return UNPREPARED(0x817);
         const struct ss_region *const region=&m->regions[g->graph_region-1];
@@ -687,16 +685,13 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
         if(!clock_now(&t1))return UNPREPARED(0x819);
         sealed_record.graphs=model_count;sealed_record.bytes=total;sealed_record.copy_us=t1-t0;
         bounds.per_graph=1;
-#endif
     }else{
         if(!declared.graph_bytes||!declared.tensor_bytes)return UNPREPARED(0x808);
         bounds=(struct npu_runtime_bounds){.capacity=declared.graphs,.graph_bytes=declared.graph_bytes,.tensor_bytes=declared.tensor_bytes};
     }
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
-    /* A queue image keeps graph i resident in slot i: each slot is sized by its own graph, not by the largest. The queue's
+    /* The ring keeps graph i resident in slot i: each slot is sized by its own graph, not by the largest. The queue's
      * tables (handles, tensors, edges) are reserved with the rest, from the declared links. */
-    bounds.queue=1;bounds.queue_links=declared.links;bounds.queue_image_links=(unsigned)ss_npu_queue_edges.count;
-#endif
+    if(queued){bounds.queue=1;bounds.queue_links=declared.links;bounds.queue_image_links=(unsigned)ss_npu_queue_edges.count;}
     /* Reserve the largest extent the NPU can address inside one 4 GiB window (its tables share one physical window and its
      * working address limit is the device-width table's), let prepare place the declaration from the start of it, then give
      * back what it did not use. Sizing the reservation first would admit every graph twice before the scheduler, which the
@@ -751,11 +746,9 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
     /* The reservation is visible to the NPU from here: published before anything can use it. */
     if(!os_device_range_publish(base,kept))return UNPREPARED(0x807);
     if(requested&&!guard_finish(led,base,kept))return UNPREPARED(0x813);
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
     /* The queue's tables are in the reservation: take them before the scheduler starts, so the application's first open
      * finds its ring sized for the declaration. */
-    if(!os_npu_queue_prepare(&npu.runtime))return UNPREPARED((uint32_t)NPU_DECLARATION_MEMORY);
-#endif
+    if(queued&&!os_npu_queue_prepare(&npu.runtime))return UNPREPARED((uint32_t)NPU_DECLARATION_MEMORY);
     os_npu_register_record=sealed_record;
     (void)clock_now(&finish_end);
     const struct npu_runtime_prepare_parts *pt=&npu.runtime.parts;
@@ -772,8 +765,6 @@ int os_npu_start(void)
     /* Not granted: no binding, task, interrupt or register access. */
     if(!os_granted(OS_GRANT_NPU))return 1;
     if(!ss_npu_service_bind_event(sdk_notify,NULL))return REFUSE();
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
-#endif
     const struct os_session *s=os_session_admitted();
     if(!s)return REFUSE();
     if(npu.attempted)return REFUSE();
@@ -801,21 +792,14 @@ int os_npu_start(void)
     npu.bootstrap=xTaskCreateStaticAffinitySet(bootstrap,"os-npu-boot",STACK,NULL,4,npu.stacks[0],&npu.tasks[0],2);
     npu.client=xTaskCreateStaticAffinitySet(os_npu_client_task,"os-npu-app",STACK,NULL,3,npu.stacks[1],&npu.tasks[1],2);
     creating=0;
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
-    /* The graphs are loaded when the ring opens, after the scheduler has started (npu_runtime_load_resident): hashing and
-     * assembling megabytes would outlast the second that the secondary cores wait for the primary core to finish. */
-#endif
-#ifndef SUNSTONE_A733_OS_NPU_QUEUE
+    /* Under the ring the graphs are loaded when it opens, after the scheduler has started (npu_runtime_load_resident):
+     * hashing and assembling megabytes would outlast the second that the secondary cores wait for the primary core. */
     TaskHandle_t clients[]={npu.client};
-#endif
     uint64_t now;
     if(!npu.bootstrap||!npu.client)return REFUSE();
     if(!a733_npu_startup_bind_task(&npu.startup,npu.bootstrap))return REFUSE();
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
-    if(!npu_runtime_bind_resident(&npu.runtime,&npu.startup,npu.client,4,2))return REFUSE();
-#else
-    if(!npu_runtime_bind(&npu.runtime,&npu.startup,clients,4,2))return REFUSE();
-#endif
+    if(!(os_npu_session_queued(g)?npu_runtime_bind_resident(&npu.runtime,&npu.startup,npu.client,4,2):
+         npu_runtime_bind(&npu.runtime,&npu.startup,clients,4,2)))return REFUSE();
     if(!os_npu_irq_bind(&npu.runtime))return REFUSE();
     if(os_npu_diagnostic_bind&&!os_npu_diagnostic_bind(&npu.runtime))return REFUSE();
     if(npu.end>(UINT64_MAX>>3)-5000000||!clock_now(&now))return REFUSE();

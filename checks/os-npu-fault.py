@@ -32,9 +32,11 @@ CHECK_INPUTS = ('tools/npu-fixtures.json', 'apps/os/npu.c', 'apps/os/npu-declara
 UNITS = ('checks/os-npu-service.c', 'kernel/umem/umem.c', 'drivers/npu/npu_declaration.c', 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/a733_npu_runtime_interim.c', 'drivers/npu/npu_pool.c',
          'drivers/npu/npu_service.c', 'drivers/npu/a733_npu_controller.c', 'drivers/npu/a733_npu_memory.c',
          'drivers/npu/a733_npu_mmu.c', 'drivers/npu/nbg_model.c', 'drivers/npu/nbg_assembly.c',
-         'drivers/npu/nbg_checksum.c', 'drivers/npu/nbg_relocation.c', 'drivers/storage/storage_digest.c')
+         'drivers/npu/nbg_checksum.c', 'drivers/npu/nbg_relocation.c', 'drivers/storage/storage_digest.c',
+         # checks/os-npu-service.c models the EL0 ring too (case 33), so its units are linked.
+         'kernel/appmem/app_region.c', 'apps/os/npu-queue.c', 'runtime/npu_app_queue.c', 'drivers/npu/npu_queue.c')
 DEFINES = ['SUNSTONE_A733_OS=1', 'SUNSTONE_A733_OS_NPU_OBSERVE=1',
-           'SUNSTONE_BOARD_APPLICATION=1', 'SUNSTONE_BOARD_SUPERVISED=1',
+           'SUNSTONE_BOARD_APPLICATION=1', 'SUNSTONE_BOARD_SUPERVISED=1', 'OS_NPU_CORE=0u',
            'SUNSTONE_NPU_FAULT_HOOK=1', 'SUNSTONE_NPU_MMU_CAPTURE_ON_TIMEOUT=1',
            'SUNSTONE_NPU_CASE_SLOTS=1,2,1,2,1,-1', 'SUNSTONE_NPU_CASE_ADDRESSES=0,0,0,0,0x180,0']
 MARK = {'captured': 1, 'progress': 2, 'settle': 4, 'finished': 8, 'reply': 16, 'cancel': 32, 'reinit': 64,

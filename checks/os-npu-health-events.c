@@ -2,6 +2,7 @@
 #include "../apps/os/npu.c"
 #include "../apps/os/npu-declaration.c"
 #include "../runtime/npu_app.c"
+#include "npu-queue-unlinked.c"
 #include <assert.h>
 #include <stdio.h>
 struct board_application board;

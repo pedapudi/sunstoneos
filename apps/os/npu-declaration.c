@@ -8,16 +8,10 @@
 #include "sunstone_crumb.h"
 #include "sunstone_npu_queue.h"
 #include "../board/application.h"
-/* What the image uses of the NPU: one slot for the synchronous wrapper, one for each graph under the queue. */
-static struct npu_image_needs image_needs(void)
+/* What the image uses of the NPU: one slot for the synchronous service, and under the ring the image's constant edges. */
+static struct npu_image_needs image_needs(const struct os_npu_session *n)
 {
-    return (struct npu_image_needs){
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
-        0,0,ss_npu_queue_edges.count
-#else
-        1,0,0
-#endif
-    };
+    return os_npu_session_queued(n)?(struct npu_image_needs){0,0,ss_npu_queue_edges.count}:(struct npu_image_needs){1,0,0};
 }
 /* The tables this image holds (fixed when it is built). */
 static struct npu_tables image_tables(void)
@@ -40,12 +34,10 @@ static enum npu_declaration_result refused_declaration(enum npu_declaration_resu
 enum npu_declaration_result os_npu_declaration_admitted(const struct os_npu_session *n)
 {
     const struct npu_declaration d=os_npu_declaration_of(n);
-    const struct npu_image_needs need=image_needs();
+    const struct npu_image_needs need=image_needs(n);
     const struct npu_tables tables=image_tables();
     const enum npu_declaration_result r=npu_declaration_check(&d,&need,&tables);
-#ifndef SUNSTONE_A733_OS_NPU_QUEUE
-    /* The synchronous wrapper has one client task, so exactly one slot. */
-    if(r==NPU_DECLARATION_OK&&d.slots!=1)return refused_declaration(NPU_DECLARATION_SLOTS);
-#endif
+    /* The synchronous service has one client task, so exactly one slot. */
+    if(r==NPU_DECLARATION_OK&&!os_npu_session_queued(n)&&d.slots!=1)return refused_declaration(NPU_DECLARATION_SLOTS);
     return r==NPU_DECLARATION_OK?r:refused_declaration(r);
 }

@@ -82,9 +82,11 @@ includes = [ROOT / 'apps/os', ROOT / 'checks', generated, ROOT / 'apps/board', R
 UNITS = ('checks/os-npu-service.c', 'kernel/umem/umem.c', 'drivers/npu/npu_declaration.c', 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/a733_npu_runtime_interim.c',
          'drivers/npu/npu_pool.c', 'drivers/npu/npu_service.c', 'drivers/npu/a733_npu_controller.c', 'drivers/npu/a733_npu_memory.c',
          'drivers/npu/a733_npu_mmu.c', 'drivers/npu/nbg_model.c', 'drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_checksum.c',
-         'drivers/npu/nbg_relocation.c', 'drivers/storage/storage_digest.c')
+         'drivers/npu/nbg_relocation.c', 'drivers/storage/storage_digest.c',
+         # The EL0 ring is in every image; a declaration of more than one job in flight selects it (case 33).
+         'kernel/appmem/app_region.c', 'apps/os/npu-queue.c', 'runtime/npu_app_queue.c', 'drivers/npu/npu_queue.c')
 DEFINES = ['SUNSTONE_A733_OS=1', 'SUNSTONE_A733_OS_NPU_OBSERVE=1',
-           'SUNSTONE_BOARD_APPLICATION=1', 'SUNSTONE_BOARD_SUPERVISED=1']
+           'SUNSTONE_BOARD_APPLICATION=1', 'SUNSTONE_BOARD_SUPERVISED=1', 'OS_NPU_CORE=0u']
 exe = host_rtos.build(out / 'exe', [*UNITS, generated / 'npu-models.c'], 'os-npu-service', defines=DEFINES, includes=includes,
                       flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'], link=['-Wl,--gc-sections'])
 done = subprocess.run([str(exe), '30', str(out)], capture_output=True, text=True, env={**environment(), **({'EXPECT_WIDE': '1'} if EXPECT_WIDE else {})}, timeout=1800)
@@ -107,11 +109,11 @@ bad = subprocess.run([str(exe), '30', str(out)], capture_output=True, text=True,
 assert bad.returncode != 0 and 'lies in the pool EL0 can write' in bad.stderr, ('mutation not refused', bad.stdout[-300:], bad.stderr[-600:])
 print('PASS mutation: metadata placed in the pool is refused by the trust-boundary check')
 
-# Case 33: the queue's open path. The queue units and the adapter of apps/os/npu-queue.c are compiled in; the CPU instructions
-# of the adapter are no-ops on the host, and the worker, the runtime and the service are the production code on the modeled device.
-queue_units = (*UNITS, 'checks/host/strict_mmio.c', 'kernel/appmem/app_region.c', 'apps/os/npu-queue.c', 'runtime/npu_app_queue.c', 'drivers/npu/npu_queue.c')
-qexe = host_rtos.build(out / 'qexe', [*queue_units, generated / 'npu-models.c'], 'os-npu-service-queue',
-                       defines=DEFINES + ['SUNSTONE_A733_OS_NPU_QUEUE=1', 'SUNSTONE_OS_NPU_QUEUE_DEPTH=64', 'OS_NPU_CORE=0u'], includes=[ROOT / 'checks/host/mmio', *includes],
+# Case 33: the queue's open path, with the MMIO of the modeled device checked strictly. The CPU instructions of the adapter
+# (apps/os/npu-queue.c) are no-ops on the host, and the worker, the runtime and the service are the production code on the
+# modeled device.
+qexe = host_rtos.build(out / 'qexe', [*UNITS, 'checks/host/strict_mmio.c', generated / 'npu-models.c'], 'os-npu-service-queue',
+                       defines=DEFINES, includes=[ROOT / 'checks/host/mmio', *includes],
                        flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'], link=['-Wl,--gc-sections'])
 done = subprocess.run([str(qexe), '33', str(out)], capture_output=True, text=True, env={**environment(), **({'EXPECT_WIDE': '1'} if EXPECT_WIDE else {})}, timeout=3000)
 (out / 'case33.log').write_text(done.stdout + done.stderr)

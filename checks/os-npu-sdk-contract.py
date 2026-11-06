@@ -18,7 +18,7 @@ from harness import SANITIZE, environment
 
 CHECK_INPUTS = ('apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu.h', 'apps/os/npu-client.c',
                 'apps/os/npu-report.py', 'include/sunstone_crumb.h',
-                'tools/a733-crumbs.py', 'checks/os-npu-first-failure.c',
+                'tools/a733-crumbs.py', 'checks/os-npu-first-failure.c', 'checks/npu-queue-unlinked.c',
                 'checks/os-npu-sdk-report.c', 'drivers/storage/storage_digest.c')
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--native-flags', '{build:sup}/CMakeFiles/sunstone-a733-os.dir/flags.make', '--output', '{output}']]
@@ -118,7 +118,8 @@ for kind in ('input', 'output'):
 red_client = a.output / 'incomplete-client.c'
 red_client.write_text(client)
 red_fixture = a.output / 'incomplete-report.c'
-red_fixture.write_text((ROOT / 'checks/os-npu-sdk-report.c').read_text().replace('../apps/os/npu-client.c', str(red_client.resolve())))
+red_fixture.write_text((ROOT / 'checks/os-npu-sdk-report.c').read_text().replace('../apps/os/npu-client.c', str(red_client.resolve()))
+                       .replace('"npu-queue-unlinked.c"', '"%s"' % (ROOT / 'checks/npu-queue-unlinked.c')))
 exe = a.output / 'incomplete-report'
 build(red_fixture, exe)
 run([str(exe), '0', str(a.output / 'red-control.bin')])
@@ -135,7 +136,8 @@ noteless = noteless.replace(note, '')
 red_client = a.output / 'noteless-client.c'
 red_client.write_text(noteless)
 red_fixture = a.output / 'noteless-report.c'
-red_fixture.write_text((ROOT / 'checks/os-npu-sdk-report.c').read_text().replace('../apps/os/npu-client.c', str(red_client.resolve())))
+red_fixture.write_text((ROOT / 'checks/os-npu-sdk-report.c').read_text().replace('../apps/os/npu-client.c', str(red_client.resolve()))
+                       .replace('"npu-queue-unlinked.c"', '"%s"' % (ROOT / 'checks/npu-queue-unlinked.c')))
 exe = a.output / 'noteless-report'
 build(red_fixture, exe)
 run([str(exe), '0', str(a.output / 'noteless-control.bin')])

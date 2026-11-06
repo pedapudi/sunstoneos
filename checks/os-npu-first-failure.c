@@ -2,6 +2,7 @@
  * are modeled; no MMIO or accelerator work occurs. */
 #include "../apps/os/npu.c"
 #include "../apps/os/npu-declaration.c"
+#include "npu-queue-unlinked.c"
 #include <assert.h>
 #include <setjmp.h>
 #include <stdlib.h>

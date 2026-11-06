@@ -50,16 +50,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 VARIANTS = {
     'sup': [],
-    # Every service of the one OS image that is not yet a run-time option (docs/designs/one-os-image.md): the image the
-    # series converges on. Each series removes its options from the variants above and from this list.
-    'all': ['-DSUNSTONE_A733_OS_NPU_QUEUE=ON'],
     'res': ['-DSUNSTONE_A733_OS_RESIDENT=ON'],
     # An application that declares the headset device links the headset library (the Bluetooth stack and mSBC).
     'headset': ['-DSUNSTONE_APPLICATION=headset-fixture', '-DSUNSTONE_BT_SBC_DIR={cache}/sources/bluetooth-msbc'],
     'resheadset': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_APPLICATION=headset-fixture',
                    '-DSUNSTONE_BT_SBC_DIR={cache}/sources/bluetooth-msbc'],
-    # The NPU queue is built in 'all'. The NPU service, the CPU clock owner and the performance service are in every image,
-    # and a session grants them (docs/designs/one-os-image.md, docs/designs/one-os-image-cpu.md).
+    # The NPU service and its EL0 ring, the CPU clock owner and the performance service are in every image, and a session
+    # grants them (docs/designs/one-os-image.md, docs/designs/one-os-image-cpu.md).
 }
 # OS-core checks and the central target each needs. The core central build is
 # configured without external applications.

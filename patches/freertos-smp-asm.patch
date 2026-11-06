@@ -285,7 +285,7 @@
 +ERET
 +13:
 +#endif
-+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
++#ifdef SUNSTONE_A733_OS
 +/* SVC120 is the fixed shared NPU ring doorbell. Kernel calls104..117
 + * retain their existing meanings; 118 is newlib and 119 is OS exit. */
 +CMP X2, #120

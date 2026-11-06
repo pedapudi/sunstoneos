@@ -23,7 +23,7 @@ execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/../ve
   ${npu_graph_runtime_option}
   COMMAND_ERROR_IS_FATAL ANY)
 # The backpressure study: the application opens the EL0 ring on the routed core (a Cortex-A55) and declares the 31 slots
-# and the 64 in-flight jobs the queue image holds. The image is built with SUNSTONE_A733_OS_NPU_QUEUE.
+# and the 64 in-flight jobs that select the ring (apps/os/npu-session.h).
 set(SUNSTONE_NPU_GRAPHS_QUEUE OFF CACHE BOOL "Run the EL0 queue backpressure study instead of the one-run-each loop")
 # A build of graphs that need other resources than the default declaration names a manifest of its own.
 set(SUNSTONE_NPU_GRAPHS_MANIFEST "" CACHE FILEPATH "Manifest for the graphs application (empty: apps/npu-graphs/manifest.json)")
@@ -32,9 +32,6 @@ if(NOT SUNSTONE_NPU_GRAPHS_MANIFEST STREQUAL "")
   set(npu_graph_manifest "${SUNSTONE_NPU_GRAPHS_MANIFEST}")
 endif()
 if(SUNSTONE_NPU_GRAPHS_QUEUE)
-  if(NOT SUNSTONE_A733_OS_NPU_QUEUE)
-    message(FATAL_ERROR "SUNSTONE_NPU_GRAPHS_QUEUE requires SUNSTONE_A733_OS_NPU_QUEUE")
-  endif()
   if(SUNSTONE_NPU_GRAPHS_MANIFEST STREQUAL "")
     set(npu_graph_manifest "${CMAKE_CURRENT_LIST_DIR}/../manifest-queue.json")
   endif()

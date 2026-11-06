@@ -93,7 +93,9 @@ OS_SOURCES = ['apps/os/application.c', 'apps/os/large.c', 'apps/os/large_load.c'
               'drivers/npu/a733_npu_sequence.c', 'drivers/npu/a733_npu_controller.c', 'drivers/npu/a733_npu_memory.c',
               'drivers/npu/a733_npu_mmu.c', 'drivers/npu/nbg_model.c', 'drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_checksum.c',
               'drivers/npu/nbg_relocation.c', 'drivers/npu/a733_npu_startup.c', 'drivers/npu/a733_npu_platform.c',
-              'drivers/npu/a733_npu_platform_native.c', 'runtime/npu_app.c']
+              'drivers/npu/a733_npu_platform_native.c', 'runtime/npu_app.c',
+              # and its EL0 ring, which a declaration of more than one job in flight selects.
+              'apps/os/npu-queue.c', 'runtime/npu_app_queue.c']
 # Driver cores and their adapters, unmodified. The adapters reach registers
 # through a733_mmio.h, which the virtual board replaces (platform/qemu-os).
 DRIVER_SOURCES = ['drivers/thermal/a733_thermal.c', 'drivers/thermal/a733_thermal_native.c',

@@ -27,10 +27,8 @@
 #include "a733_npu_memory.h"
 #include "a733_storage_digest.h"
 #include "a733_mapping_check.h"
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
 #include "sunstone_npu_queue_service.h"
 #include "npu_runtime_queue.h"
-#endif
 #include "../apps/board/application.h"
 #include <assert.h>
 #include <sys/mman.h>
@@ -366,7 +364,6 @@ static void client_all(void)
         ++graphs_run;
     }
 }
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
 /* The direct queue driver (drivers/npu/npu_runtime_queue.c) is aarch64 code (system registers, DSB, the MMIO doorbell); the
  * host stands in for its claim and return with the same preconditions, and links the generic queue (drivers/npu/npu_queue.c)
  * that the adapter registers each handle's command with. EL0 translation and the cache stride are the model's. */
@@ -491,7 +488,6 @@ static void queue_client(void *unused)
     finished = 1;
     vTaskSuspend(NULL);
 }
-#endif
 static void client(void *unused)
 {
     (void)unused;
@@ -593,14 +589,14 @@ static void verify(void *unused)
         assert(finished && !board_failures && long_jobs_done == long_run && result_close == 1 && model.triggers == 1 + long_run);
         return;
     }
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
-    printf("queue: %u handles, widest %u inputs, closed %u, command beyond the declared slots denied %u, another slot's command refused %u, failures %u\n",
-           queue_handles, queue_wide_inputs, queue_closed, queue_denied, queue_invalid, board_failures);
-    fflush(stdout);
-    assert(finished && queue_handles == npu.runtime.slots && queue_closed && queue_denied && queue_invalid && !board_failures);
-    if (getenv("EXPECT_WIDE")) assert(queue_wide_inputs == 12);
-    return;
-#endif
+    if (npu.runtime.resident) {                          /* case 33: the ring's owner holds every slot */
+        printf("queue: %u handles, widest %u inputs, closed %u, command beyond the declared slots denied %u, another slot's command refused %u, failures %u\n",
+               queue_handles, queue_wide_inputs, queue_closed, queue_denied, queue_invalid, board_failures);
+        fflush(stdout);
+        assert(finished && queue_handles == npu.runtime.slots && queue_closed && queue_denied && queue_invalid && !board_failures);
+        if (getenv("EXPECT_WIDE")) assert(queue_wide_inputs == 12);
+        return;
+    }
     printf("open %u load %u submit %u close %u finished %u failures %u site %#x value %#x triggers %u\n",
            result_open, result_load, result_submit, result_close, finished, board_failures, first_site,
            first_value, model.triggers);
@@ -875,13 +871,25 @@ int main(int argc, char **argv)
         assert(npu_runtime_register(&npu.runtime, later, sizeof later, &entry) == 0 && entry == 99);
         assert(npu.runtime.register_refusal == NPU_REGISTER_SEALED);
     }
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
     if (mode == 33) {
         model_space_build(pool, need, !getenv("MUTATE_POOL_UNMAPPED"));
+        /* A session that grants the NPU and declares more than one job in flight selects the ring (os_npu_queued): neither
+         * alone does. */
+        session_record.granted = 0; session_record.npu.in_flight = 64;
+        assert(!os_npu_queued());
+        session_record.granted = OS_GRANT_NPU; session_record.npu.in_flight = 1;
+        assert(!os_npu_queued());
+        /* The synchronous service admits exactly one slot; the ring admits the slots declared. */
+        struct os_npu_session declared = session_record.npu;
+        declared.slots = 3; declared.graphs = 3; declared.links = 0;
+        assert(os_npu_declaration_admitted(&declared) == NPU_DECLARATION_SLOTS);
+        declared.in_flight = 2;
+        assert(os_npu_declaration_admitted(&declared) == NPU_DECLARATION_OK);
+        first_site = first_value = first_caller = 0;     /* the refusal above left its note */
         session_record.npu.in_flight = 64;
+        assert(os_npu_queued());
         assert(os_npu_queue_prepare(&npu.runtime));   /* the bind and the tables, as the admission-time preparation runs them */
     }
-#endif
     if (mode == 28 || mode == 30) {
         const unsigned n = npu.runtime.slots;
         /* Thirty-one slots: every slot's regions are registered, distinct, ascending and inside the NPU's 32-bit address
@@ -924,19 +932,12 @@ int main(int argc, char **argv)
     check_constant_region_read_only();
     npu.end = long_run ? UINT64_C(1000000000000) : 60000000;
     npu.bootstrap = xTaskCreateStatic(bootstrap, "os-npu-boot", STACK, NULL, 4, npu.stacks[0], &npu.tasks[0]);
-    #ifdef SUNSTONE_A733_OS_NPU_QUEUE
     npu.client = xTaskCreateStatic(mode == 33 ? queue_client : client, "os-npu-app", STACK, NULL, 3, npu.stacks[1], &npu.tasks[1]);
-#else
-    npu.client = xTaskCreateStatic(client, "os-npu-app", STACK, NULL, 3, npu.stacks[1], &npu.tasks[1]);
-#endif
     npu.startup.initialized = 1;
     assert(a733_npu_startup_bind_task(&npu.startup, npu.bootstrap));
     TaskHandle_t clients[] = {npu.client};
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
     if (mode == 33) assert(npu_runtime_bind_resident(&npu.runtime, &npu.startup, npu.client, 4, 1));
-    else
-#endif
-    assert(npu_runtime_bind(&npu.runtime, &npu.startup, clients, 4, 1));
+    else assert(npu_runtime_bind(&npu.runtime, &npu.startup, clients, 4, 1));
     assert(npu_runtime_bind_irq(&npu.runtime, &irq_ops, &npu.runtime, 1, 0));
     npu.initial_deadline = 1000000;
     atomic_init(&npu.gate, npu.initial_deadline << 3);

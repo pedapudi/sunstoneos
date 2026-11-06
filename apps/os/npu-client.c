@@ -124,6 +124,7 @@ void os_npu_client_task(void *unused)
 {
     (void)unused;struct os_npu_report report={0},*r=&report;
     const struct os_session *s=os_session();
+    const int queued=os_npu_session_queued(&s->npu);
     header(r);r->model=os_npu_client_model;r->jobs_selected=s->npu.jobs;r->pattern=OS_NPU_OUTPUT_PATTERN;
     for(;;) {
         if(os_npu_progress()!=1)RETAIN(0x601);
@@ -138,17 +139,13 @@ void os_npu_client_task(void *unused)
          * closes this slot through its sole owner. */
         while(!os_npu_stopping()) {
             if(os_npu_progress()!=1||ss_npu_service_step()<0)RETAIN(0x603);
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
-            if(os_npu_queue_sdk_step()<0)RETAIN(0x604);
-            if(os_npu_queue_sdk_closed()){sdk_closed=1;goto wait_stop;}
-#endif
+            if(queued&&os_npu_queue_sdk_step()<0)RETAIN(0x604);
+            if(queued&&os_npu_queue_sdk_closed()){sdk_closed=1;goto wait_stop;}
             if(sdk_closed)goto wait_stop;
             if(os_npu_stopped())goto done;
             (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
         }
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
-        os_npu_queue_sdk_fail();
-#endif
+        if(queued)os_npu_queue_sdk_fail();
         ss_npu_service_fail();
         if(!os_npu_stopped())goto close;
         goto done;
@@ -174,8 +171,6 @@ done:
     atomic_store_explicit(&published.finished,1,memory_order_release);os_application_wake_main();vTaskSuspend(NULL);return;
 retained:
     /* Every NPU resource stays held; board_fail ends the lifetime. */
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
-    os_npu_queue_sdk_fail();
-#endif
+    if(queued)os_npu_queue_sdk_fail();
     ss_npu_service_fail();r->retained=1;board_fail(NULL);goto done;
 }

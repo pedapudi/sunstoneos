@@ -1,6 +1,7 @@
 /* Actual SDK adapter and owner loop; runtime and RTOS effects are modeled. */
 #include "../apps/os/npu-client.c"
 #include "../runtime/npu_app.c"
+#include "npu-queue-unlinked.c"
 #include <assert.h>
 #include <setjmp.h>
 #include <stdio.h>

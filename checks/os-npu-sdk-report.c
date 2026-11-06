@@ -1,6 +1,7 @@
 /* Run the actual OS SDK owner through refusal, successful copies and CLOSE;
  * the final immutable report must count only copied successful results. */
 #include "../apps/os/npu-client.c"
+#include "npu-queue-unlinked.c"
 #include <assert.h>
 #include <setjmp.h>
 #include <stdlib.h>

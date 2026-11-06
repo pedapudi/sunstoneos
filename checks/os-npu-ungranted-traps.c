@@ -4,6 +4,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #define TRAP(name) void name(void) { fprintf(stderr, "ungranted NPU start reached " #name "\n"); abort(); }
+/* The graph-region path of the admission-time preparation, which the ring selects: an ungranted session reads neither the
+ * application's manifest nor its graph index. */
+#include "application.h"
+const struct ss_application ss_application;
+TRAP(os_npu_index_check)
+TRAP(os_npu_index_entry)
 TRAP(a733_npu_startup_init)
 TRAP(os_npu_client_task)
 TRAP(os_npu_complete)

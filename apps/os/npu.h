@@ -83,7 +83,8 @@ unsigned os_npu_in_flight(void);
 unsigned os_npu_links(void);
 int os_npu_never_ran(void);
 void os_npu_report_unstarted(uint64_t epoch,uint64_t generation);
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+/* The session grants the NPU and its declaration selects the EL0 ring (os_npu_session_queued). */
+int os_npu_queued(void);
 struct npu_runtime *os_npu_queue_runtime(void);
 int os_npu_queue_begin(void);
 void os_npu_queue_end(void);
@@ -96,7 +97,6 @@ int os_npu_queue_sdk_step(void);
 int os_npu_queue_sdk_closed(void);
 void os_npu_queue_sdk_fail(void);
 int ss_npu_queue_svc(void);
-#endif
 void os_npu_irq(void);
 int os_npu_irq_bind(struct npu_runtime *);
 /* Existing OS thermal owner only. Freshness is the minimum of all five

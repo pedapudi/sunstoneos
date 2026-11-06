@@ -367,11 +367,12 @@ int os_application_prepare(void)
      * and before the scheduler, checks the boot point for it (os_cpu_boot_point_needed) and refuses the start when the
      * check fails. It is never placed on core 2. */
     grant.main_core=m->cluster==SS_CLUSTER_A76?6:2;
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
-    /* The current queue route is core 1, a Cortex-A55. */
-    if(m->cluster==SS_CLUSTER_A76)return 0;
-    grant.main_core=1;
-#endif
+    /* The EL0 ring's producer runs on the NPU interrupt's core, core 1, a Cortex-A55: an application that the declaration
+     * puts on the ring is placed there, and one that asks for the A76 cluster is refused. */
+    if(os_npu_queued()){
+        if(m->cluster==SS_CLUSTER_A76)return 0;
+        grant.main_core=OS_NPU_CORE;
+    }
     if(!os_worker_cores(grant.main_core,m->workers,&grant.worker_cores))return 0;
     unsigned count=0,input=0;const struct ss_input_fact *facts=os_session_inputs(&count);
     for(unsigned i=0;i<m->region_count;++i){grant.regions[i].base=(void *)(uintptr_t)m->regions[i].address;

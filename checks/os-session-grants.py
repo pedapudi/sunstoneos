@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ('apps/os/grants.c', 'apps/os/os.h', 'apps/os/os-services.h', 'apps/os/host.py', 'tools/sunstone-manifest.py')
 # The grants, records and supervised ids come from the declaration (apps/os/os-services.h): the harness prints the grant
 # bits and service ids as C compiles them, and the host builder's records (apps/os/host.py) are read from the same rows.
-GATE_RUNS = [['--build', '{build:all}', '--output', '{output}']]
+GATE_RUNS = [['--build', '{build:sup}', '--output', '{output}']]
 HARNESS = r'''
 #include "os.h"
 #include <stdio.h>

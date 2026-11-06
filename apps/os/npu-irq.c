@@ -7,9 +7,8 @@
 #define NPU_IRQ_PRIORITY 0xd8u
 #define NPU_IRQ_HANDLER os_npu_irq
 #define NPU_IRQ_EXTERNAL_BIND os_npu_irq_bind
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
-#define NPU_IRQ_IDLE_HINT 0
-#endif
+/* The ring's producer submits from EL0 on this core, so the interrupt gives no idle hint under it. */
+#define NPU_IRQ_IDLE_HINT (os_npu_queued()?0u:1u)
 /* The route table holds the Secure-view priority; bind reads the Nonsecure view. */
 #define NPU_IRQ_NS_PRIORITY ((NPU_IRQ_PRIORITY<<1)&0xffu)
 #include "../../platform/a733/npu_irq.c"

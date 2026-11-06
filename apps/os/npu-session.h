@@ -34,5 +34,9 @@ struct os_npu_session {
     uint32_t graph_bytes,tensor_bytes;
 };
 _Static_assert(sizeof(struct os_npu_session)==OS_NPU_SESSION_BYTES,"OS NPU session geometry");
+/* The declaration chooses how the application submits (docs/designs/npu-resources.md): one job in flight is the synchronous
+ * service, with one client task and one slot; more is the EL0 ring, which keeps graph i resident in slot i and runs on the NPU
+ * interrupt's core. EL3 admission, the EL1 service and the host pre-flight read the same rule. */
+static inline int os_npu_session_queued(const struct os_npu_session *n){return n->in_flight>1;}
 #define OS_NPU_WORK_US UINT64_C(60000000)
 #endif
