@@ -32,6 +32,18 @@ spec = importlib.util.spec_from_file_location('os_return_records', ROOT / 'apps/
 records = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(records)
 from harness import Image, save
+# A granted admission takes the NPU's device state (the startup and the two tasks with their stacks) from the unified ledger
+# (device_take in apps/os/npu.c), and `npu` holds its address. The models place it in mapped image RAM above the image's device
+# pool and below the fixtures at 0x41f00000.
+NPU_DEVICE = 0x41e00000
+
+
+def npu_device(model, symbols, layout, npu):
+    """Install the NPU device state of a session that grants the NPU; return its address."""
+    assert symbols['__device_pool_end'] <= NPU_DEVICE, 'the image reaches the modeled NPU device state'
+    assert layout.layouts['os_npu_device']['stacks'] + 2 * 4096 * 8 <= 0x41f00000 - NPU_DEVICE
+    model.put64(npu + layout.layouts['os_npu_application']['device'], NPU_DEVICE)
+    return NPU_DEVICE
 
 
 def cleaned_regions(path):

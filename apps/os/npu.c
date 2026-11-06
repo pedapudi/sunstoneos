@@ -20,12 +20,19 @@
 #define ACCEPTED UINT64_C(2)
 #define STOP UINT64_C(4)
 #define STACK 4096u
+/* The startup and the bootstrap and client tasks with their stacks (about 66 KiB) come from the unified ledger when a session
+ * that grants the NPU is admitted (device_take), so an image without an NPU session holds only the pointer. EL0 reads none of
+ * it. The runtime stays in the image: the application's own task reads its stop and interrupt words at EL0 (ss_finish waits on
+ * os_npu_retirement_check), and the application space maps the image but not the kernel's ledger pages. */
+struct os_npu_device {
+    struct a733_npu_startup startup;
+    StaticTask_t tasks[2];StackType_t stacks[2][STACK];
+};
 static struct os_npu_application {
     struct npu_runtime runtime;
-    struct a733_npu_startup startup;
+    struct os_npu_device *device; /* NULL until a granted admission takes it */
     struct umem_buf pool;
     int prepared;
-    StaticTask_t tasks[2];StackType_t stacks[2][STACK];
     TaskHandle_t bootstrap,client;
     atomic_uint_fast64_t gate;
     atomic_uint active,closed,stopped,failed;
@@ -321,7 +328,7 @@ static void perf_serve(void)
         uint64_t now;
         const int r=!live() || !os_npu_perf_stopped() ? -1 :
             !clock_now(&now) ? -1 : now>=perf_deadline ? 0 :
-            a733_npu_startup_retune_until(&npu.startup,request&0xffff,perf_deadline);
+            a733_npu_startup_retune_until(&npu.device->startup,request&0xffff,perf_deadline);
         atomic_store_explicit(&perf_answer,(request>>16)<<2|(r==1 ? 1u : r==0 ? 2u : 3u),memory_order_release);
         atomic_store_explicit(&perf_request,0,memory_order_release);
         if(r<0){(void)FAIL_REQUEST(NPU_SERVICE_STATUS,UINT32_MAX,0,NULL,1,r);vTaskSuspend(NULL);}
@@ -550,7 +557,7 @@ static void bootstrap(void *unused)
         /* A PENDING startup blocks until its power-service notification, its
          * deadline or the last tick of its settle; a thermal notification
          * ends the block early. */
-        (void)ulTaskNotifyTake(pdTRUE,r==A733_NPU_PLATFORM_PENDING ? a733_npu_startup_wait_ticks(&npu.startup) : 1);
+        (void)ulTaskNotifyTake(pdTRUE,r==A733_NPU_PLATFORM_PENDING ? a733_npu_startup_wait_ticks(&npu.device->startup) : 1);
     }
 failed:
     vTaskSuspend(NULL);
@@ -637,6 +644,18 @@ static void guard_check(void)
 static int unprepared(uint32_t detail,const void *here){board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),detail,here);return 1;}
 #define UNPREPARED(detail) unprepared((detail),SUNSTONE_CRUMB_HERE())
 const unsigned os_npu_client_model=0;
+/* The device state's pages, zeroed, from the ledger that admission prepares. Admission runs before the scheduler, so nothing else
+ * reads the pointer while it is set. */
+static int device_take(struct umem *led)
+{
+    if(npu.device)return 1;
+    const struct umem_request r={.bytes=(sizeof(struct os_npu_device)+UMEM_PAGE-1)&~(UMEM_PAGE-1),.align=UMEM_PAGE,
+                                 .owner=UMEM_OWNER_KERNEL,.flags=UMEM_RAW,.policy=UMEM_WB};
+    struct umem_buf b;
+    if(umem_alloc(led,&r,&b)!=UMEM_OK)return 0;
+    memset((void *)(uintptr_t)b.base,0,sizeof(struct os_npu_device));
+    npu.device=(struct os_npu_device *)(uintptr_t)b.base;return 1;
+}
 int os_npu_pool_prepare(struct umem *led,uint16_t owner)
 {
     /* Not granted: no reservation, published range or guard. */
@@ -652,6 +671,7 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
     /* The application's declaration sets the slots; the reservation covers them all, so that nothing is allocated on
      * the job path. A declaration that does not fit names the resource in the record's value. */
     if(os_npu_declaration_admitted(g)!=NPU_DECLARATION_OK)return 1;
+    if(!device_take(led))return UNPREPARED(0x81c);
     const struct npu_declaration declared=os_npu_declaration_of(g);
     const unsigned slots=declared.slots;
     const int queued=os_npu_session_queued(g);
@@ -791,21 +811,21 @@ int os_npu_start(void)
         {b->fabric_hz[0],b->fabric_hz[1],b->fabric_hz[2]}},g->owner,npu.end,g->pck_client};
     const struct a733_npu_startup_providers p={&providers.shared.counter,&providers.shared.clocks,
         &providers.shared.locks,&providers.shared.gpu,&providers.shared.rails,&providers.domains};
-    if(!a733_npu_startup_init(&npu.startup,&startup,&p,NULL,NULL))return REFUSE();
+    if(!a733_npu_startup_init(&npu.device->startup,&startup,&p,NULL,NULL))return REFUSE();
     /* The low boot mode of the grant's performance service: the NPU starts at its 492 MHz point. */
-    if(os_perf_enabled()&&os_perf_boot_mode()==2&&!a733_npu_startup_rate(&npu.startup,492))return REFUSE();
+    if(os_perf_enabled()&&os_perf_boot_mode()==2&&!a733_npu_startup_rate(&npu.device->startup,492))return REFUSE();
     creating=1;
-    npu.bootstrap=xTaskCreateStaticAffinitySet(bootstrap,"os-npu-boot",STACK,NULL,4,npu.stacks[0],&npu.tasks[0],2);
-    npu.client=xTaskCreateStaticAffinitySet(os_npu_client_task,"os-npu-app",STACK,NULL,3,npu.stacks[1],&npu.tasks[1],2);
+    npu.bootstrap=xTaskCreateStaticAffinitySet(bootstrap,"os-npu-boot",STACK,NULL,4,npu.device->stacks[0],&npu.device->tasks[0],2);
+    npu.client=xTaskCreateStaticAffinitySet(os_npu_client_task,"os-npu-app",STACK,NULL,3,npu.device->stacks[1],&npu.device->tasks[1],2);
     creating=0;
     /* Under the ring the graphs are loaded when it opens, after the scheduler has started (npu_runtime_load_resident):
      * hashing and assembling megabytes would outlast the second that the secondary cores wait for the primary core. */
     TaskHandle_t clients[]={npu.client};
     uint64_t now;
     if(!npu.bootstrap||!npu.client)return REFUSE();
-    if(!a733_npu_startup_bind_task(&npu.startup,npu.bootstrap))return REFUSE();
-    if(!(os_npu_session_queued(g)?npu_runtime_bind_resident(&npu.runtime,&npu.startup,npu.client,4,2):
-         npu_runtime_bind(&npu.runtime,&npu.startup,clients,4,2)))return REFUSE();
+    if(!a733_npu_startup_bind_task(&npu.device->startup,npu.bootstrap))return REFUSE();
+    if(!(os_npu_session_queued(g)?npu_runtime_bind_resident(&npu.runtime,&npu.device->startup,npu.client,4,2):
+         npu_runtime_bind(&npu.runtime,&npu.device->startup,clients,4,2)))return REFUSE();
     if(!os_npu_irq_bind(&npu.runtime))return REFUSE();
     if(os_npu_diagnostic_bind&&!os_npu_diagnostic_bind(&npu.runtime))return REFUSE();
     if(npu.end>(UINT64_MAX>>3)-5000000||!clock_now(&now))return REFUSE();

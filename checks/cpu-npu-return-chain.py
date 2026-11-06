@@ -81,6 +81,9 @@ class Native(owners.Model):
         self.time = self.words[8]
         self.n = layout.address('npu', 'apps/os/npu.c')
         self.nf = layout.layouts['os_npu_application']
+        self.device = terminal.npu_device(self, self.s, layout, self.n)
+        self.df = layout.layouts['os_npu_device']
+        self.device_bytes, self.el0_device = type_size(image.path, 'os_npu_device'), []
         self.rt = self.n+self.nf['runtime']
         self.rf = layout.layouts['npu_runtime']
         self.service = self.rt+self.rf['service']
@@ -90,7 +93,7 @@ class Native(owners.Model):
         # .commands, ...), not arrays inside the runtime: this model puts them in the pool, clear of the tensor windows.
         self.tables = 0x300000
         self.slot = POOL+0x300000+0x20000
-        self.startup = self.n+self.nf['startup']
+        self.startup = self.device+self.df['startup']
         self.report = layout.address('os_npu_published_report')
         self.ops, self.ticket, self.operation, self.submits = [], 0, 0, 0
         self.stop_calls, self.failures = 0, []
@@ -199,7 +202,25 @@ class Native(owners.Model):
 
     def api(self, name, *args, task=MAIN, core=6):
         self.current_task = task
-        return self.call(core, name, args)
+        result = self.call(core, name, args)
+        assert not self.el0_device, ('the application task touched the NPU device state', name, [hex(a) for a in self.el0_device[:4]])
+        return result
+
+    # The application's task runs at EL0 on the board. Its address space maps the image and its own regions but not the
+    # kernel's ledger pages, which hold the NPU's device state (device_take in apps/os/npu.c), so an access there faults. Run
+    # 1793936685988479024-ab3ea6c2 faulted so in ss_finish when the runtime was among them.
+    def el0_access(self, address):
+        if getattr(self, 'el0_device', None) is not None and self.current_task == MAIN and \
+                self.device <= address < self.device+self.device_bytes:
+            self.el0_device.append(address)
+
+    def read(self, uc, access, address, size, value, unused):
+        super().read(uc, access, address, size, value, unused)
+        self.el0_access(address)
+
+    def write(self, uc, access, address, size, value, unused):
+        super().write(uc, access, address, size, value, unused)
+        self.el0_access(address)
 
     def sample_thermal(self):
         policy = self.thermal+self.layout.layouts['os_thermal_service']['policy']
@@ -304,7 +325,7 @@ class Native(owners.Model):
                 self.uc.reg_write(UC_ARM64_REG_PC, self.uc.reg_read(UC_ARM64_REG_LR))
         else:
             index = 0 if name == 'bootstrap' else 1
-            self.uc.reg_write(UC_ARM64_REG_SP, self.n+self.nf['stacks']+(index+1)*4096*8)
+            self.uc.reg_write(UC_ARM64_REG_SP, self.device+self.df['stacks']+(index+1)*4096*8)
             self.uc.reg_write(UC_ARM64_REG_LR, prior.fault.SENTINEL)
             self.uc.reg_write(UC_ARM64_REG_PC, self.layout.address(
                 'bootstrap' if name == 'bootstrap' else 'os_npu_client_task',
@@ -589,7 +610,7 @@ def main():
     payload = args.payload.read_bytes() if args.payload else producer(args)
     names = {'board_application', 'a733_board_session', 'board_provider', 'a733_native_usb',
         'a733_pmic', 'a733_pmic_slot', 'a733_platform_locks', 'os_thermal_service',
-        'os_npu_application', 'npu_runtime', 'npu_runtime_slot', 'npu_service',
+        'os_npu_application', 'os_npu_device', 'npu_runtime', 'npu_runtime_slot', 'npu_service',
         'a733_npu_controller', 'a733_npu_startup', 'ss_grant', 'npu_service_reply',
         'os_session', 'os_npu_session', 'nbg_assembly_layout', 'npu_runtime_tensor',
         'a733_thermal_policy', 'os_thermal_readings', 'npu_service_activation', 'a733_cached_runtime'}

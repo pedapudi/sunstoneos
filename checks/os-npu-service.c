@@ -279,16 +279,16 @@ static int irq_stop(void *cookie) { assert(cookie == runtime_of_model && model.m
 static const struct npu_service_irq_ops irq_ops = {irq_mask, irq_rearm, irq_stop};
 
 /* The startup sequencer: the register window opens when the step reports ready. */
-int a733_npu_startup_prepared(struct a733_npu_startup *s) { return s == &npu.startup; }
+int a733_npu_startup_prepared(struct a733_npu_startup *s) { return s == &npu.device->startup; }
 enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
 {
-    assert(s == &npu.startup);
+    assert(s == &npu.device->startup);
     atomic_store_explicit(&s->window_open, 1, memory_order_release);
     return A733_NPU_PLATFORM_READY;
 }
 enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *s)
 {
-    assert(s == &npu.startup);
+    assert(s == &npu.device->startup);
     atomic_store_explicit(&s->window_open, 0, memory_order_release);
     return A733_NPU_PLATFORM_READY;
 }
@@ -743,7 +743,7 @@ int main(int argc, char **argv)
         /* The admission-time preparation returns before it reads the session or the ledger: no reservation, published
          * range or guard extent. The ledger is never initialized, so any use of it would also show. */
         static uint64_t unused_ledger[64];
-        assert(os_npu_pool_prepare((struct umem *)unused_ledger, 1) == 1 && !npu.prepared && !start_reached);
+        assert(os_npu_pool_prepare((struct umem *)unused_ledger, 1) == 1 && !npu.prepared && !npu.device && !start_reached);
         assert(os_npu_start() == 1 && !npu.started && !npu.attempted && !start_reached);
         os_npu_thermal(1, 0, 1000000, 1);
         assert(!npu.started && os_npu_retirement_check() == 1);
@@ -751,6 +751,10 @@ int main(int argc, char **argv)
         return 0;
     }
 #endif
+    /* The cases below prepare the runtime themselves, so they hold the device state that a granted admission takes from the
+     * ledger (device_take in apps/os/npu.c). */
+    static struct os_npu_device device;
+    npu.device = &device;
     if (mode == 27) {
         /* Case 27: declarations and reservations (docs/designs/npu-resources.md). The image links one graph and no
          * queue, so it needs one slot, one graph and no links. */
@@ -963,13 +967,13 @@ int main(int argc, char **argv)
     check_low_range_unmapped(&npu.runtime);
     check_constant_region_read_only();
     npu.end = long_run ? UINT64_C(1000000000000) : 60000000;
-    npu.bootstrap = xTaskCreateStatic(bootstrap, "os-npu-boot", STACK, NULL, 4, npu.stacks[0], &npu.tasks[0]);
-    npu.client = xTaskCreateStatic(mode == 33 ? queue_client : client, "os-npu-app", STACK, NULL, 3, npu.stacks[1], &npu.tasks[1]);
-    npu.startup.initialized = 1;
-    assert(a733_npu_startup_bind_task(&npu.startup, npu.bootstrap));
+    npu.bootstrap = xTaskCreateStatic(bootstrap, "os-npu-boot", STACK, NULL, 4, npu.device->stacks[0], &npu.device->tasks[0]);
+    npu.client = xTaskCreateStatic(mode == 33 ? queue_client : client, "os-npu-app", STACK, NULL, 3, npu.device->stacks[1], &npu.device->tasks[1]);
+    npu.device->startup.initialized = 1;
+    assert(a733_npu_startup_bind_task(&npu.device->startup, npu.bootstrap));
     TaskHandle_t clients[] = {npu.client};
-    if (mode == 33) assert(npu_runtime_bind_resident(&npu.runtime, &npu.startup, npu.client, 4, 1));
-    else assert(npu_runtime_bind(&npu.runtime, &npu.startup, clients, 4, 1));
+    if (mode == 33) assert(npu_runtime_bind_resident(&npu.runtime, &npu.device->startup, npu.client, 4, 1));
+    else assert(npu_runtime_bind(&npu.runtime, &npu.device->startup, clients, 4, 1));
     assert(npu_runtime_bind_irq(&npu.runtime, &irq_ops, &npu.runtime, 1, 0));
     npu.initial_deadline = 1000000;
     atomic_init(&npu.gate, npu.initial_deadline << 3);

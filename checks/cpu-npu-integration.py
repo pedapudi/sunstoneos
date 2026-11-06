@@ -13,18 +13,20 @@ import struct
 import hashlib
 from unicorn.arm64_const import UC_ARM64_REG_PC,UC_ARM64_REG_LR,UC_ARM64_REG_SP
 from harness import Image,save
-CHECK_INPUTS = ['apps/cpu-npu-concurrency/main.c', 'apps/cpu-npu-concurrency/gemm.h', 'apps/cpu-npu-concurrency/receipt.h', 'apps/cpu-npu-concurrency/host.py', 'apps/cpu-npu-concurrency/vectors.py', 'apps/os/npu-observe.c', 'apps/os/application.c', 'apps/os/cpu-return.c', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-irq.c', 'apps/os/cpu-return/terminal.patch', 'apps/os/cpu-return/thermal.patch', 'apps/os/cpu-return-host.py', 'drivers/npu/npu_service.c', 'drivers/npu/a733_npu_runtime.c', 'platform/a733/npu_irq.c', 'include/sunstone_app.h', 'include/npu_service.h', 'include/a733_npu_irq.h', 'cmake/sunstone-os-core.cmake', 'cmake/a733-os-cpu-return.cmake', 'checks/cpu-npu-concurrency/producer.c', 'checks/cpu-npu-concurrency/FreeRTOS.h', 'checks/cpu-npu-concurrency/task.h', 'checks/cpu-npu-concurrency/npu.h', 'checks/cpu-npu-concurrency/a733_npu_irq.h']
+CHECK_INPUTS = ['apps/cpu-npu-concurrency/main.c', 'apps/cpu-npu-concurrency/gemm.h', 'apps/cpu-npu-concurrency/receipt.h', 'apps/cpu-npu-concurrency/host.py', 'apps/cpu-npu-concurrency/vectors.py', 'apps/os/npu-observe.c', 'apps/os/application.c', 'apps/os/cpu-return.c', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-irq.c', 'apps/os/cpu-return/terminal.patch', 'apps/os/cpu-return/thermal.patch', 'apps/os/cpu-return-host.py', 'checks/os-cpu-return.py', 'drivers/npu/npu_service.c', 'drivers/npu/a733_npu_runtime.c', 'platform/a733/npu_irq.c', 'include/sunstone_app.h', 'include/npu_service.h', 'include/a733_npu_irq.h', 'cmake/sunstone-os-core.cmake', 'cmake/a733-os-cpu-return.cmake', 'checks/cpu-npu-concurrency/producer.c', 'checks/cpu-npu-concurrency/FreeRTOS.h', 'checks/cpu-npu-concurrency/task.h', 'checks/cpu-npu-concurrency/npu.h', 'checks/cpu-npu-concurrency/a733_npu_irq.h']
 ROOT=Path(__file__).resolve().parents[1]
 GATE_RUNS = [['{elf:ret-npu-load}', '--out', '{output}']]
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 owner=module('cpu_npu_return_owners',ROOT/'checks/os-cpu-return-services.py')
 prior=owner.prior
+terminal=module('cpu_npu_return_terminal',ROOT/'checks/os-cpu-return.py')
 
 class Model(owner.Model):
  def __init__(self,image,layout):
   super().__init__(image,layout)
   self.n=layout.address('npu','apps/os/npu.c');self.nf=layout.layouts['os_npu_application']
+  self.device=terminal.npu_device(self,self.s,layout,self.n);self.df=layout.layouts['os_npu_device']
   self.rt=self.n+self.nf['runtime'];self.service=self.rt+layout.layouts['npu_runtime']['service']
   self.sf=layout.layouts['npu_service'];self.report=layout.address('os_npu_published_report')
   self.closed_operation=None;self.stop_calls=0;self.stop_pending=0;self.publish_stop=False
@@ -87,7 +89,7 @@ class Model(owner.Model):
 
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('elf',type=Path);p.add_argument('--out',type=Path,required=True);p.add_argument('--payload',type=Path);p.add_argument('--late-isr-only',action='store_true');a=p.parse_args();a.out.mkdir(parents=True,exist_ok=False)
 names={'board_application','a733_board_session','board_provider','a733_native_usb','a733_pmic','a733_pmic_slot',
-'a733_platform_locks','os_thermal_service','os_npu_application','npu_runtime','npu_runtime_slot','npu_service','a733_npu_controller','a733_npu_startup','ss_grant','npu_service_reply'}
+'a733_platform_locks','os_thermal_service','os_npu_application','os_npu_device','npu_runtime','npu_runtime_slot','npu_service','a733_npu_controller','a733_npu_startup','ss_grant','npu_service_reply'}
 layout=Image(a.elf,names);image=prior.fault.Image(a.elf);results=[]
 if not a.late_isr_only:
  m=Model(image,layout)
@@ -104,7 +106,7 @@ if not a.late_isr_only:
  # retains a late runtime fault before testing that acknowledgment.
  for parked,failed,pending,expected,calls in [(0,0,0,2,0),(1,0,0,0,1),(0,1,0,3,0),(1,0,3,3,0)]:
   m=Model(image,layout);m.hooks.pop(layout.address('npu_runtime_stop_poll'))
-  startup=m.n+m.nf['startup'];rf=layout.layouts['npu_runtime']
+  startup=m.device+m.df['startup'];rf=layout.layouts['npu_runtime']
   m.put64(m.rt+rf['startup'],startup);m.put32(m.rt+rf['bound'],1);m.put32(m.rt+rf['prepared'],1)
   slots=0x41f01000 # the slot table is carved from the reservation: the runtime points to it
   m.put64(m.rt+rf['slot'],slots);m.put32(m.rt+rf['slots'],1);m.put32(slots+layout.layouts['npu_runtime_slot']['state'],8)
