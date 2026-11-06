@@ -15,7 +15,7 @@ import struct
 import subprocess
 import zlib
 
-from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UcError
+from unicorn import UC_HOOK_CODE, Uc, UC_ARCH_ARM64, UC_MODE_ARM, UcError
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_CPACR_EL1
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,7 +33,7 @@ a.output.mkdir(parents=True, exist_ok=True)
 objects = []
 for name in ('checks/nbg-checksum-device.c', 'drivers/npu/nbg_checksum.c', 'drivers/npu/nbg_model.c'):
     obj = a.output / (Path(name).stem + '.o')
-    subprocess.run([a.clang, '-target', 'aarch64-none-elf', '-ffreestanding', '-nostdlib', '-fno-builtin', '-O2', '-mgeneral-regs-only',
+    subprocess.run([a.clang, '-target', 'aarch64-none-elf', '-ffreestanding', '-nostdlib', '-fno-builtin', '-O2', '-mstrict-align', '-mgeneral-regs-only',
                     '-I' + str(ROOT / 'include'), '-c', str(ROOT / name), '-o', str(obj)], check=True)
     objects.append(obj)
 image = a.output / 'device.bin'
@@ -51,6 +51,9 @@ for line in symbols:
 code = image.read_bytes()
 
 
+stats = []
+
+
 def device(graph):
     uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     uc.mem_map(CODE, 0x100000)
@@ -64,7 +67,18 @@ def device(graph):
     uc.reg_write(UC_ARM64_REG_X0, REQUEST)
     uc.reg_write(UC_ARM64_REG_SP, STACK + 0x8000)
     uc.reg_write(UC_ARM64_REG_LR, 0xdead0000)
+    # The OS image is built for strict alignment: an eight-byte copy there becomes eight byte loads and their joins, so the
+    # byte loads executed for a graph approach one for each byte it holds. With the aligned word load they are the unaligned
+    # head and tail and the few header words, a few percent of the bytes.
+    loads = [0]
+
+    def count(u, address, size, _):
+        if int.from_bytes(u.mem_read(address, 4), 'little') & 0xffc00000 == 0x39400000:
+            loads[0] += 1
+    uc.hook_add(UC_HOOK_CODE, count)
     uc.emu_start(entry, 0xdead0000, count=400_000_000)
+    assert loads[0] < len(graph) // 4 + 2000, 'checksum of %d bytes executed %d byte loads' % (len(graph), loads[0])
+    stats.append((len(graph), loads[0]))
     _, _, result, stored, computed = struct.unpack('<5Q', bytes(uc.mem_read(REQUEST, 40)))
     return result, stored & 0xffffffff, computed & 0xffffffff
 
@@ -97,6 +111,6 @@ for f in models[:12]:
         bad[at] ^= 0x10
         assert device(bytes(bad)) == software(bytes(bad)), (f.name, at)
         rows += 1
-(a.output / 'result.json').write_text(json.dumps({'graphs': len(models[:12]), 'corrupt_cases': rows}))
+(a.output / 'result.json').write_text(json.dumps({'byte_loads': stats, 'graphs': len(models[:12]), 'corrupt_cases': rows}))
 print('PASS container checksum with the CRC32 instructions on AArch64: %d graphs match the software path, %d corrupt copies agree' %
       (len(models[:12]), rows))

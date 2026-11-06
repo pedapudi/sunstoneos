@@ -32,9 +32,10 @@ __attribute__((target("crc"))) static uint32_t crc_update(uint32_t value, const 
 {
     while (bytes && ((uintptr_t)data & 7)) { value = __crc32b(value, *data++); --bytes; }
     for (; bytes >= 8; data += 8, bytes -= 8) {
-        uint64_t word;
-        __builtin_memcpy(&word, data, 8);
-        value = __crc32d(value, word);
+        /* The head loop made the pointer 8-byte aligned, so this is one aligned load. A memcpy of eight bytes here is built, in
+         * an image that compiles for strict alignment, as eight byte loads and the shifts that join them: about 38 cycles a word
+         * on an A55 instead of 3, which kept a layout at 135 ms that the instruction alone should take 25 ms for. */
+        value = __crc32d(value, *(const uint64_t *)__builtin_assume_aligned(data, 8));
     }
     while (bytes--) value = __crc32b(value, *data++);
     return value;
