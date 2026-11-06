@@ -195,6 +195,21 @@ def credential_session(session, host_admission, radio_device):
             'admission is unavailable (%s).' % host_admission.get('unavailable', 'no result'))
 
 
+def cpu_grant_raises(grant):
+    """True when a CPU clock grant record (struct a733_cpu_clock_grant_record, include/a733_cpu_clock.h) admits a
+    transition: a cluster in its cluster mask and a change in its change count. Either cluster's transition can raise its
+    rail (DCDC5 for CPU-L and the DSU, DCDC3 for CPU-B), and the return lowers only CPU-B, so such a session can end with
+    a rail above the boot point. None for a record of another size. The field offsets come from the record's layout in tools/session.py, which
+    checks/board-runner.py compares with the header's offsetof."""
+    layout = load('board_grant_layout', ROOT/'tools/session.py')
+    size = layout.LAYOUTS['cpu_grant'][1]
+    if not grant:
+        return False
+    if len(grant) != size:
+        return None             # a record this layout does not describe: the runner restores (board.py rail_restore_choice)
+    return all(struct.unpack_from('<I', grant, layout.offset('cpu_grant', name))[0] for name in ('clusters', 'changes'))
+
+
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -611,6 +626,7 @@ def prepare(args, info, live, out, *, dma_binding=None):
         # a file of the bundle. Only its extent is known here, so the preservation list can cover it.
         wifi = load('runner_wifi_credential', ROOT/'tools/wifi-credential.py')
         plan['credential'] = {'address': wifi.RECORD_ADDRESS, 'bytes': wifi.RECORD_BYTES}
+    plan['cpu_grant_raises'] = cpu_grant_raises(services.get(records.CPU_GRANT))
     plan['preserve_regions'] = preservation_regions(plan)
     validate_uploads(plan)
     return plan

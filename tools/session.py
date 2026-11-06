@@ -111,6 +111,16 @@ for _name, (_layout, _size) in LAYOUTS.items():
     assert sum(width(f) for _, f in _layout) == _size, _name
 
 
+def offset(kind, name):
+    """The byte offset of field NAME in record KIND, from its layout above."""
+    at = 0
+    for field, fmt in LAYOUTS[kind][0]:
+        if field == name:
+            return at
+        at += width(fmt)
+    raise KeyError('%s has no field %s' % (kind, name))
+
+
 def count(fmt):
     return int(fmt[:-1]) if fmt[:-1].isdigit() and fmt[-1] != 's' and fmt[-1] != 'x' else 1
 

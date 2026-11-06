@@ -1014,7 +1014,7 @@ def run_image(args, backend=Live):
         else:
             info = images.inspect(frozen, args.kind, descriptor,args.host_tree)
             images.policy(info, args)
-            if info['entry_guard'] and args.restore_rails:
+            if info['entry_guard'] and getattr(args, 'restore_rails', None) is not False:
                 require(POST_RAIL_HELPER.is_file() and images.sha(POST_RAIL_HELPER) == POST_RAIL_HELPER_SHA256,
                         'Approved post-ROM rail helper is absent or changed; refused before device access.')
             if credential is not None:
@@ -1055,7 +1055,8 @@ def run_image(args, backend=Live):
                     (evidence/'output.bin').write_bytes(payload)
                     result['return_report'] = captured['report']
                     result['output_sha256'] = hashlib.sha256(payload).hexdigest()
-                    if info['entry_guard'] and getattr(args, 'restore_rails', False):
+                    restore, result['rail_restore_choice'] = rail_restore_choice(args, plan)
+                    if info['entry_guard'] and restore:
                         if plan.get('format') == 'generic':
                             require(result.get('native_retirement_validated') and
                                     (result.get('dram_restored') or result.get('dram_unsaved')),
@@ -1369,6 +1370,24 @@ def application_inputs(args, info, evidence):
         args.input = [images.write(evidence/f'input-{i}.bin', value) for i, value in enumerate(values)]
 
 
+def rail_restore_choice(args, plan):
+    """Whether the runner restores the CPU rails after a validated normal return, and why.
+
+    --restore-rails restores after every such return and --no-restore-rails never does, for a run that measures the
+    raised state. Without either, the runner restores after a session whose CPU clock grant admits a transition
+    (tools/board_images.py cpu_grant_raises), and after a session whose grant it did not read: the return lowers only
+    CPU-B, so such a session can leave DCDC5 raised for the next one."""
+    chosen = getattr(args, 'restore_rails', None)
+    if chosen is True:
+        return True, 'requested'
+    if chosen is False:
+        return False, 'opted out'
+    raises = plan.get('cpu_grant_raises') if isinstance(plan, dict) else None
+    if raises is None:
+        return True, 'grant not read'
+    return (True, 'grant admits a transition') if raises else (False, 'grant admits no transition')
+
+
 def load_decoder(args):
     """Execute frozen decoder bytes while retaining its source-relative resource paths."""
     origin = getattr(args, 'decoder_origin', None) or args.decoder
@@ -1400,7 +1419,7 @@ def development(argv=None):
     parser.add_argument('--check-only', action='store_true')
     parser.add_argument('--force', action='store_true')
     parser.add_argument('--normalize-rails', action=argparse.BooleanOptionalAction)
-    parser.add_argument('--restore-rails', action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--restore-rails', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--preserve-dram', action='store_true')
     parser.add_argument('--preserve-budget-s', type=float)
     parser.add_argument('--rail-helper', type=Path, default=state.RAIL_HELPER)
@@ -1428,8 +1447,8 @@ def development(argv=None):
     for name in ('template', 'manifest', 'descriptor', 'host_tree', 'objcopy', 'approved_by', 'no_preflight'):
         if getattr(args, name):
             command += ['--'+name.replace('_','-'), str(getattr(args, name))]
-    if args.restore_rails and args.kind not in ('npu', 'usb-class'):
-        command += ['--restore-rails']
+    if args.restore_rails is not None and args.kind not in ('npu', 'usb-class'):
+        command += ['--restore-rails' if args.restore_rails else '--no-restore-rails']
     if args.preserve_dram:
         command += ['--preserve-dram']
     if getattr(args, 'preserve_budget_s', None) is not None:
@@ -1816,6 +1835,7 @@ class Queue:
             flag = '--'+name.replace('_','-')
             if isinstance(value,bool):
                 if value: command.append(flag)
+                elif name in NEGATABLE_OPTIONS: command.append('--no-'+name.replace('_','-'))
             elif isinstance(value,list):
                 for item in value: command += [flag,str(item)]
             elif value is not None:
@@ -1873,6 +1893,8 @@ class Queue:
 
 
 # The caller-controlled launch options a submission freezes in its queue entry.
+# Frozen options whose False differs from leaving them out: --no-restore-rails opts out of the automatic restoration.
+NEGATABLE_OPTIONS = ('restore_rails',)
 FROZEN_OPTIONS = ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool','radio_stage_limit')
 
 
@@ -1903,7 +1925,10 @@ def run_options(parser, submit=False):
     parser.add_argument('--no-preflight', metavar='REASON',
                         help='Queue or check an image whose host pre-flight cannot run; REASON is recorded in the entry and the result.')
     parser.add_argument('--descriptor', type=Path, help='Hash-bound image metadata; defaults to IMAGE.board.json.')
-    parser.add_argument('--restore-rails', action='store_true', help='Restore guarded CPU rails after a validated normal return.')
+    parser.add_argument('--restore-rails', action=argparse.BooleanOptionalAction, default=None,
+                        help='Restore guarded CPU rails after a validated normal return. Without this option the runner restores '
+                        'them after a session whose CPU clock grant admits a transition; --no-restore-rails keeps the raised '
+                        'state for a run that measures it.')
     parser.add_argument('--preserve-dram', action='store_true',
                         help='Qualification run: save the image DRAM before launch and restore it after retirement. Development runs skip both.')
     parser.add_argument('--preserve-budget-s', type=float,

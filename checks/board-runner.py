@@ -169,7 +169,7 @@ class Model:
         return types.SimpleNamespace(returncode=0,stdout='\n'.join(out),stderr='')
 
 
-def lifecycle(root,variant,restore=False,dirty=None):
+def lifecycle(root,variant,restore=False,dirty=None,grant='absent'):
     root.mkdir()
     args=arguments(root)
     args.restore_rails=restore
@@ -195,8 +195,10 @@ def lifecycle(root,variant,restore=False,dirty=None):
             return {'words':words}
         def prepare(self,info):
             if dirty:self.record[dirty]=True
-            return {'epoch':1,'generation':2,'watchdog':{'mode':0xb1,'session_seconds':1},
-                    'uploads':[(0x41000000,args.image)],'launch':['exe','0x52000']}
+            plan={'epoch':1,'generation':2,'watchdog':{'mode':0xb1,'session_seconds':1},
+                  'uploads':[(0x41000000,args.image)],'launch':['exe','0x52000']}
+            if grant!='absent':plan['cpu_grant_raises']=grant
+            return plan
         def capture(self,plan):
             if variant=='fel-after-return':self.tx('readl','0x20')
             if variant=='host-error':raise TypeError('injected decoder bug after normal return')
@@ -218,6 +220,47 @@ def lifecycle(root,variant,restore=False,dirty=None):
     assert not model.lock
     assert json.loads(Path(result['result_path']).read_text())['outcome']==result['outcome']
     return result,model,owners[0]
+
+
+def automatic_restore_cases(out):
+    """The runner restores the CPU rails after a session whose CPU clock grant admits a transition, unless the run opts
+    out with --no-restore-rails; the option, frozen in a queue entry, reaches the runner as given."""
+    # The grant fields the rule reads sit where the header puts them: the layout in tools/session.py, from which
+    # cpu_grant_raises takes its offsets, against offsetof in include/a733_cpu_clock.h.
+    layout=images.load('runner_grant_layout',ROOT/'tools/session.py')
+    probe=out/'grant-offsets.c'
+    probe.write_text('#include <stddef.h>\n#include "a733_cpu_clock.h"\n'+''.join(
+        '_Static_assert(offsetof(struct a733_cpu_clock_grant_record,%s)==%d,"%s");\n'%(name,layout.offset('cpu_grant',name),name)
+        for name in ('clusters','changes'))+
+        '_Static_assert(sizeof(struct a733_cpu_clock_grant_record)==%d,"size");\n'%layout.LAYOUTS['cpu_grant'][1])
+    compiled=subprocess.run(['clang','-fsyntax-only','-Wall','-Werror','-I',str(ROOT/'include'),str(probe)],capture_output=True,text=True)
+    assert compiled.returncode==0,'the CPU grant layout in tools/session.py differs from include/a733_cpu_clock.h:\n'+compiled.stderr
+    record=bytearray(96)
+    struct.pack_into('<3Q',record,0,0x4153373343505531,1,96)
+    assert images.cpu_grant_raises(None) is False and images.cpu_grant_raises(bytes(record)) is False
+    assert images.cpu_grant_raises(bytes(95)) is None,'a record of another size is not read as granting nothing'
+    for clusters,changes,raises in ((1,0,False),(0,4,False),(1,4,True),(2,1,True),(3,64,True)):
+        struct.pack_into('<I',record,layout.offset('cpu_grant','clusters'),clusters)
+        struct.pack_into('<I',record,layout.offset('cpu_grant','changes'),changes)
+        assert images.cpu_grant_raises(bytes(record))==raises,(clusters,changes)
+    for restore,grant,restored,choice in (
+            (None,True,True,'grant admits a transition'),(None,False,False,'grant admits no transition'),
+            (None,'absent',True,'grant not read'),(False,True,False,'opted out'),(True,False,True,'requested')):
+        name='auto-%s-%s'%(restore,grant)
+        result,model,owner=lifecycle(out/name,'normal',restore=restore,grant=grant)
+        assert result['outcome']=='returned' and result['rail_restore_choice']==choice,(name,result.get('rail_restore_choice'))
+        assert owner.rail_phases==(['rails','restore-rails'] if restored else ['rails']),(name,owner.rail_phases)
+        assert bool(result.get('rails_restored'))==restored,name
+    job={'image':'/image.elf','directory':str(out),'options':{}}
+    for value,flags in ((True,['--restore-rails']),(False,['--no-restore-rails']),(None,[])):
+        job['options']={'restore_rails':value}
+        command=board.Queue.runner_command(job,'3-1')
+        assert [c for c in command if 'restore-rails' in c]==flags,(value,command)
+    for submit in (False,True):
+        options=argparse.ArgumentParser();board.run_options(options,submit)
+        given=lambda *extra:options.parse_args(['/image.elf','--port','3-1','--kind','cpu-return',*extra]).restore_rails
+        assert (given(),given('--restore-rails'),given('--no-restore-rails'))==(None,True,False),submit
+    passed('rails-restored-after-a-grant-that-admits-a-transition-unless-opted-out')
 
 
 def transport_cases(out):
@@ -1316,7 +1359,7 @@ def main():
     args=parser.parse_args()
     args.out.mkdir(parents=True,exist_ok=False)
     groups=args.only.split(',')
-    if 'transport' in groups:transport_cases(args.out);removed_cases(args.out)
+    if 'transport' in groups:transport_cases(args.out);removed_cases(args.out);automatic_restore_cases(args.out)
     if 'queue' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):withdraw_cases(args.out)
