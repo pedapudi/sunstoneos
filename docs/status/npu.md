@@ -41,14 +41,14 @@ Designs: [platform](../designs/npu-platform.md), [fast path](../designs/npu-fast
 6. Add exact per-job deadline interrupts through the scheduler's deadline facility (`work/scheduler-rt-1101`); do not add a device timer.
 7. Run the `restart-*` cases of no host check on a restart image; the other cases pass.
 8. Bring the mimus encoder application from its port branch (mimus commit `8dee959c3`, board entry `1793935572311306576-e41afabe`) to mimus `port/sunstoneos`.
-9. Take the 102,848-byte `npu` state of `apps/os/npu.c` from the ledger at the grant, so that an image without an NPU session holds only a pointer. Every image links the NPU service since the one-image NPU series ([one OS image](../designs/one-os-image.md)).
+9. Take the NPU runtime (35,504 bytes of the `npu` static in `apps/os/npu.c`) from the ledger at the grant too. The application's task reads its stop and interrupt words at EL0 in `ss_finish`, so that wait must first read words the image holds or run at EL1 ([one OS image](../designs/one-os-image.md), NPU memory).
 
 ## Evidence
 
 Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` records hold the results that earlier status prose described. Earlier prose evidence is in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-78 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+80 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -130,4 +130,6 @@ Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` recor
 | `1793935467247712577-0bdb29cf` | 2026-11-06 | 3-1 | `0023d8c953f9` | returned | passed | run_total 32.032 s, jobs 4 jobs, jobs_mismatched 0 jobs, job_p50 2906.75 µs, job_max 2915.4 µs, thermal_row_offset_max 0.94 ms |
 | `1793935520100554658-94afd2bd` | 2026-11-06 | 3-1 | `10d71c38f5e9` | returned | passed | run_total 24.698 s, graphs_registered 31 graphs, registration_time 12.5 ms, refusals_k1_to_64 0 jobs, refusals_k128 32964 jobs, job_time 5.5 µs, linked_pair 13.5 µs, output_bytes_differing 0 bytes |
 | `1793935572311306576-e41afabe` | 2026-11-06 | 3-1 | `6830414bb9fc` | returned | passed | run_total 94.305 s, jobs 768 jobs, jobs_with_wrong_output_crc 0 jobs, output_bytes_differing 0 bytes, total_time 656532 µs, job_time 233573 µs, output_and_convolution 146788 µs, open_time 81061.9 µs, prepare_time 83950 µs, pool_bytes 3.35544e+07 bytes, tensor_bytes 253952 bytes |
+| `1793936685988479024-ab3ea6c2` | 2026-11-06 | 3-1 | `12b9653f0b20` | watchdog-reset | failed | run_total 107.647 s |
+| `1793937305201698413-011e3447` | 2026-11-06 | 3-1 | `9a231c3ee7bd` | returned | passed | run_total 94.352 s, jobs 768 jobs, jobs_with_wrong_output_crc 0 jobs, output_bytes_differing 0 bytes, total_time 656412 µs, job_time 233562 µs, output_and_convolution 146850 µs, open_time 81090.3 µs, prepare_time 83862 µs, pool_bytes 3.35544e+07 bytes |
 <!-- evidence-table:end -->
