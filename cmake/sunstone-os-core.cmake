@@ -24,14 +24,20 @@ option(SUNSTONE_A733_OS_CORE "Build the OS core without an application" OFF)
 option(SUNSTONE_A733_CPU_TOPOLOGY "Expose read-only topology and per-core architectural observations" OFF)
 option(SUNSTONE_A733_OS_HELLO "Build the hello-compute OS image" OFF)
 option(SUNSTONE_A733_HW_FACTS "Record the hardware facts table on every core before the scheduler (docs/hardware/a733-facts-probe.md)" OFF)
+# SUNSTONE_A733_OS_CPU_RETURN is removed. A build directory configured before the removal keeps it in its cache,
+# and CMake cannot tell a cached value from one on this configure's command line, so the entry is dropped with a
+# warning instead of failing the configure. Nothing reads it.
+if(DEFINED CACHE{SUNSTONE_A733_OS_CPU_RETURN})
+  if(SUNSTONE_A733_OS_CPU_RETURN)
+    message(WARNING "SUNSTONE_A733_OS_CPU_RETURN is removed and ignored: every OS image links the returning lifetime, "
+      "and the runner's contract selects it (docs/designs/one-os-image.md)")
+  endif()
+  unset(SUNSTONE_A733_OS_CPU_RETURN CACHE)
+endif()
 if(NOT SUNSTONE_A733_OS AND NOT SUNSTONE_A733_OS_CORE AND NOT SUNSTONE_A733_OS_HELLO)
   return()
 endif()
 include_guard(GLOBAL)
-if(SUNSTONE_A733_OS_CPU_RETURN)
-  message(FATAL_ERROR "SUNSTONE_A733_OS_CPU_RETURN is removed: every OS image links the returning lifetime, and the runner's "
-    "contract selects it (docs/designs/one-os-image.md). Configure without it.")
-endif()
 # Every OS image links the returning lifetime and selects it at run time from the contract magic. A service whose
 # retirement is qualified only for that lifetime (the RAM-copy DMA service, the scanning radio station) and the GPU
 # qualification builds make an image that admits the returning lifetime alone (SUNSTONE_A733_OS_RETURN_ONLY).
