@@ -22,6 +22,7 @@ repeatability. [CPU status](cpu.md) identifies the result and failed controls.
 | Eight-worker CPU-only mimus recording | qualified on the board | 90-frame reference matched, seven secondaries off | [CPU status](cpu.md) |
 | GPU compute queue and trusted GPU peer | host-tested | none on the board | [GPU status](gpu.md) |
 | Concurrent CPU, GPU and NPU operation | host-tested | none on the board | [NPU status](npu.md) |
+| Lifetime from the contract magic in one OS image ([design](../designs/one-os-image.md#lifetime-word-and-sealed-session)) | supervised: qualified on the board; resident: host-tested, unqualified on the board | one supervised run (ret-npu-load, total 32.04 s); no resident board run | `1793940886685882479-99c7d548` below; `checks/os-lifetime-admission.py`, `checks/os-sealed-session.py`, `checks/board-lifetime-admission.py` |
 | Warm PCM-to-transcription time | open | target 0.05 times the audio duration | `application-recognition-time-target` (not run) |
 
 ## Open work
@@ -32,13 +33,18 @@ repeatability. [CPU status](cpu.md) identifies the result and failed controls.
 4. Qualify simultaneous CPU, GPU and NPU operation; the optional builds have host evidence only.
 5. Qualify returning accelerator execution; [NPU status](npu.md) lists the finite images that already pass.
 6. Add broader application inputs, native audio input, autonomous card boot, fault recovery and concurrent thermal qualification.
+7. Run the resident lifetime on the board, launched over FEL; no resident run boots from the microSD card. Four pieces are missing:
+   - the resident contract in the runner's launcher (`tools/board_images.py`): the resident OS magic, no diagnostic deadline, expiry at armed plus 4 s, WDT0 mode `0x41`, configuration 1 and output 2, no FEL flag or redirect, and a resident session;
+   - the static-OFF hold of cores 1 to 7 before entry, a power-state procedure that needs the coordinator's approval: under FEL every secondary inherits policy `0x100`, and the resident start refuses any policy but 0 (`HELD_POLICY` in `platform/a733/cpu_start.c`);
+   - a test application that stops renewal when its work ends, because the resident OS renews the watchdog after the application finishes (`apps/os/services.c`);
+   - the expected watchdog-reset outcome in the runner: DRAM is lost, the stop record is the RTC crumbs (EL3 stop `0x0111`, value `0x5000` for status 5), and the return to FEL relies on the ROM not booting the inserted card, as the recorded supervised resets did.
 
 ## Evidence
 
 Board results are records in `docs/evidence/application.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-application-20261101.md).
 
 <!-- evidence-table:begin -->
-4 records in `docs/evidence/application.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+5 records in `docs/evidence/application.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -46,4 +52,5 @@ Board results are records in `docs/evidence/application.jsonl`; add one with `to
 | `1793579984604886693-7d81d397` | 2026-11-02 | 3-1 | `5bd520a766cf` | failure-return | passed | run_total 170.794 s, secondaries_off 7, rail_return 2.09 s |
 | `1793582514152160909-ecc5988b` | 2026-11-02 | 3-1 | `1c4c195b3dce` | failure-return | passed | run_total 171.159 s, secondaries_off 7 |
 | `application-recognition-time-target` | 2026-11-02 |  | `` | not-run | inconclusive |  |
+| `1793940886685882479-99c7d548` | 2026-11-06 | 3-1 | `ec96397e0cd1` | returned | passed | run_total 32.036 s, launch 14.61 s, npu_trigger_to_irq_p50 2907.9 us, npu_trigger_to_irq_max 2913.1 us, jobs 4, mismatches 0 |
 <!-- evidence-table:end -->

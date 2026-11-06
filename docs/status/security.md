@@ -27,6 +27,7 @@ CE cryptographic and entropy operations have no physical qualification; read-onl
    - **GPU:** manifest regions must be disjoint from 0x41000000 to `__device_pool_end` (`platform/a733/gpu_queue.c`). Firmware, payload and table pages are device-pool leases, and the link script places the device pool in the RAM region after `.bss`.
 
    The missing check walks the GPU and NPU tables that the builders produce from an image's actual inputs and requires no entry to map a sealed page. A mutation that adds such an entry must fail it. Device masters without an MMU (the DMA engine, USB and the SD controllers) take physical addresses from the same device-pool and allocator sources and are not covered either.
+5. Map `.rodata` read-only and execute-never in its own 2 MiB block after CODE (0x41200000 to 0x41400000, AP = 0b11, UXN and PXN), so no constant is executable at EL1. Image RAM moves up 2 MiB. In the measured images the device pool still ends below the uncached pool at 0x41c00000 (`ret-npu-load`: 0x41703000 becomes 0x41903000); every image's layout and `tools/memory_layout.py` must be rechecked first. Splitting the CODE block at 4 KiB instead would cost TLB reach on the text.
 
 ## CE board probe
 
