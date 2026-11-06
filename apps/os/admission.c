@@ -29,11 +29,9 @@ int os_session_valid(const struct os_session *s)
     unsigned parent=s->apb1>>24,div=(s->apb1&31)+1;
     uint32_t hz=parent==0?24000000u:parent==3?600000000u:0;
     if(!hz||hz%div||s->apb1_hz!=hz/div)return 0;
-#ifdef SUNSTONE_A733_OS_HEADSET
-    /* As in the Bluetooth image, the SID authority and the SHA-256 of the
-     * headset profile at 0x43000000 (apps/os/identity.c). */
-    if(!s->board.sid_authority||!present(s->board.sid_evidence,32))return 0;
-#endif
+    /* As in the Bluetooth image, a headset session carries the SID authority and the SHA-256 of the headset profile
+     * at OS_HEADSET_PROFILE_ADDRESS (apps/os/identity.c). */
+    if((s->granted&OS_GRANT_HEADSET)&&(!s->board.sid_authority||!present(s->board.sid_evidence,32)))return 0;
     for(unsigned i=0;i<5;++i)if(!s->limits[i][0]||s->limits[i][0]>=s->limits[i][1]||s->limits[i][1]>4095||
        !s->limits[i][2]||s->limits[i][2]>s->limits[i][0])return 0;
     /* Each service's record is validated only when the session grants it; an absent record grants nothing. */

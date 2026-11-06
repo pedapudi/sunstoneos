@@ -6,21 +6,23 @@ WAV conversions (apps/bluetooth/pcm.c) and models the Bluetooth application's
 segment publication with its request word, borrow, acknowledgment and ticket
 rules. This
 runner compiles it with the exact flags of apps/os/headset.c from a configured
-headset OS build (configure it with CMAKE_EXPORT_COMPILE_COMMANDS=ON), so the
-model follows that build's resident and mSBC options, and runs each mode
-under unicorn. Modes 0 and 7 run twice: for a session without the radio
+OS build whose application declares the headset (the headset-fixture
+application; configure it with CMAKE_EXPORT_COMPILE_COMMANDS=ON), so the
+model follows that build's lifetime, and runs each mode under unicorn. Modes 0 and 7 run twice: for a session without the radio
 (workloads 0 and 4) and for one that grants it (workload 1):
 
 - 0: the pin entry admits the nominal profile and adds PG0..PG9, PM0, PM1, PM3,
   PM4 and the profile's PM latch; it refuses pins already held, other
-  workloads, other headset modes (mode 3 is admitted only with mSBC) and
+  workloads, headset modes other than CVSD (2) and mSBC (3) and
   profile versions, another SID authority or profile digest, owners that
   collide with a board, thermal or each other's owner, another topology or
   fabric rate, other memory attributes and a missing profile. With the radio
   it also refuses a module the radio entry has not admitted, missing board
   pin authority, another PM latch, other radio platform or session owners and
   a UART owner equal to the crypto engine owner; without it, it refuses
-  module pins already held. Startup starts the Bluetooth application for the
+  module pins already held. The capture length is twice the profile's sample
+  count. A session that does not grant the headset leaves the pins untouched
+  and starts no task. Startup starts the Bluetooth application for the
   session's lifetime (60 s, or unbounded when resident)
   and binds the client as consumer. Without the radio it creates both tasks
   and only the Bluetooth owner runs privileged; with the radio it creates the
@@ -43,8 +45,8 @@ under unicorn. Modes 0 and 7 run twice: for a session without the radio
   and, in the resident build, reports progress only while it has not failed;
 - 8: capture stopped by the supervised window continues; a stop for a
   capture deadline, backlog or loss ends the session;
-- 9: with mSBC, a wideband segment becomes a 16 kHz WAV unchanged and an
-  unknown capture state is refused; without it, a wideband segment is refused;
+- 9: a wideband (mSBC) segment becomes a 16 kHz WAV unchanged and an unknown
+  capture state is refused;
 - 10: workload 0 admits the headset button only (ACCEPT), also after a cancel.
 
 No device, UART, radio or Bluetooth controller is modeled.
@@ -73,7 +75,7 @@ RUNS = [(mode, case) for mode, case in enumerate(CASES)] + \
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--build', type=Path, required=True, help='headset OS build with compile_commands.json')
+    parser.add_argument('--build', type=Path, required=True, help='OS build of an application that declares the headset, with compile_commands.json')
     parser.add_argument('--lld', type=Path, default=Path.home() / '.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
@@ -83,9 +85,9 @@ def main():
     unit = next(u for u in commands if u['file'].endswith('/apps/os/headset.c'))
     flags = shlex.split(unit['command'])
     flags = flags[:flags.index('-o')]
-    assert '-DSUNSTONE_A733_OS_HEADSET=1' in flags, 'a headset OS build is required'
-    options = {name: '-D' + macro + '=1' in flags for name, macro in
-               (('resident', 'SUNSTONE_BOARD_RESIDENT'), ('msbc', 'SUNSTONE_A733_OS_MSBC'))}
+    assert '-DSUNSTONE_A733_OS_HEADSET=1' in flags and '-DSUNSTONE_BLUETOOTH_MSBC=1' in flags, \
+        'an OS build that links the headset library is required'
+    options = {'resident': '-DSUNSTONE_BOARD_RESIDENT=1' in flags}
     image = out / 'os-image-headset.elf'
     command = flags + [str(ROOT / 'checks/os-image-headset.c'), str(ROOT / 'apps/bluetooth/pcm.c'),
                        str(ROOT / 'drivers/storage/storage_digest.c'), str(ROOT / 'runtime/memory.c'),

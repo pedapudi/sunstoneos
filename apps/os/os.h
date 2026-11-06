@@ -10,9 +10,6 @@
 /* EL0-safe load hint. True before thermal policy initialization and while
  * throttled or failed. It grants no clock or voltage change. */
 int os_thermal_throttled(void);
-#if defined(SUNSTONE_A733_OS_MSBC) && !defined(SUNSTONE_A733_OS_HEADSET)
-#error Wideband speech is a headset option
-#endif
 /* Workloads 0 and 4 require storage, 2 is the storage-free recorded mode, and the radio has two: 1 the full
  * station with USB storage and 3 the scanning station without the USB host. The session decode ties the workload
  * to the device grant (apps/os/session.c). */
@@ -215,27 +212,33 @@ void os_ce_entropy_wipe(void);
 void os_radio_scan_return_request(void);
 int os_radio_scan_return_ready(void);
 #endif
-#ifdef SUNSTONE_A733_OS_HEADSET
-/* The Bluetooth profile address. The radio profile occupies 0x43000000 and
+/* The headset service (apps/os/headset.c, with the Bluetooth stack and the
+ * mSBC codec) is an object library that an image links only when its
+ * application's manifest declares the audio-headset device. The OS core
+ * reaches it through weak references: in an image without it, a session that
+ * grants the headset device is refused (apps/os/session.c).
+ *
+ * The Bluetooth profile address. The radio profile occupies 0x43000000 and
  * the Bluetooth profile follows it in the first 64 KiB; the firmware spans
  * from 0x43010000 serve both. */
 #define OS_HEADSET_PROFILE_ADDRESS UINT64_C(0x43008000)
-/* Repeated capture modes: CVSD (2) and, with SUNSTONE_A733_OS_MSBC, wideband
- * mSBC with CVSD fallback (3). */
+/* Repeated capture modes: CVSD (2) and wideband mSBC with CVSD fallback (3). */
 static inline int os_headset_mode_valid(unsigned mode)
 {
-#ifdef SUNSTONE_A733_OS_MSBC
     return mode==2||mode==3;
-#else
-    return mode==2;
-#endif
 }
 /* The Bluetooth profile that EL3 copied from OS_HEADSET_PROFILE_ADDRESS and
- * published (identity.c); NULL before. Valid for the OS workloads and the
+ * published (os_headset_identity, called by identity.c for a session that
+ * grants the headset); NULL before. Valid for the OS workloads and the
  * repeated capture modes only, with owners distinct from the board's. */
 struct bluetooth_profile;
 const struct bluetooth_profile *os_headset_profile(void);
 int os_headset_profile_valid(const struct a733_board_session *,const struct bluetooth_profile *);
+/* EL3, before CPU mappings take effect: copy and validate the profile, and
+ * publish the copy and the 1 MiB profile span. 1 on success. */
+int os_headset_identity(const struct a733_board_session *,uint64_t deadline);
+/* The capture length of the admitted profile in 16 kHz frames. 1 on success. */
+int os_headset_capture_frames(uint32_t *frames);
 void os_headset_task(void *);
 int os_headset_task_privileged(void (*)(void *),void *);
 int os_headset_pins(struct a733_pin_handoff *);
@@ -250,7 +253,6 @@ int os_headset_capture(unsigned g,const uint8_t **wav,size_t *bytes);
 struct board_radio;
 struct board_radio *os_board_radio(void);
 void os_module_poll(void);
-#endif
 #ifdef SUNSTONE_A733_OS_GPU
 #define OS_GPU_CLIENT 7u
 #define OS_GPU_FIRMWARE_OWNER UINT64_C(0x4f53475055464d31)

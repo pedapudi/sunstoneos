@@ -147,16 +147,15 @@ def main():
     names = lambda g: '+'.join(n for n, b in grants.items() if g & b)
     table = sorted({names(g): rows[g][2] for g in rows if rows[g][1] and not any(rows[h][1] for h in rows if h != g and h & g == h)}.items())
     # The grant bits are distinct, one per row, and every record names a grant. The supervised ids follow the application
-    # (5) in row order, every row's grant is a set of declared grants, and only the headset's rows depend on a build option:
-    # every other service has its id in every image.
+    # (5) in row order, every row's grant is a set of declared grants, and every service has its id in every image.
     assert len(grants) == len(set(grants.values())) and all(b and not b & (b - 1) for b in grants.values()), grants
     assert all(r['grant'] in grants for r in host.RECORDS.values()), host.RECORDS
     every = sum(grants.values())
     assert [n for _, n, _, _ in supervised] == list(range(6, 6 + len(supervised))) and count == 6 + len(supervised), (supervised, count)
     assert all(not needs & ~every for _, _, needs, _ in supervised), supervised
     declared = host.manifest_tool.os_service_rows('OS_SUPERVISED_ROWS')
-    assert {row[0] for row in declared if row[4] != 'OS_ALWAYS'} == {'BLUETOOTH', 'HEADSET'}, declared
-    assert [s[0] for s in supervised] == [row[0] for row in declared if row[4] == 'OS_ALWAYS' or row[0] in {s[0] for s in supervised}]
+    assert all(row[4] == 'OS_ALWAYS' for row in declared), declared
+    assert [s[0] for s in supervised] == [row[0] for row in declared]
     (args.output / 'result.json').write_text(json.dumps({'passed': True, 'subsets': len(rows), 'refused_minimal_sets': dict(table)}, indent=2) + '\n')
     print('PASS session grants: %d subsets, wire sizes match the host builder, %d minimal refused compositions' % (len(rows), len(table)))
 

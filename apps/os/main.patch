@@ -13,27 +13,25 @@
  struct board_application board;
  struct board_provider providers;
  static struct board_radio radio;
-+#ifdef SUNSTONE_A733_OS_HEADSET
-+/* The headset attaches its Bluetooth client to this radio's module. */
++/* The headset attaches its Bluetooth client to this radio's module. Its poll is absent (null) in an image that does
++ * not link the headset library. */
 +struct board_radio *os_board_radio(void){return &radio;}
-+#endif
++extern void os_module_poll(void) __attribute__((weak));
  static struct board_radio_profile admitted_profile;
  #ifdef SUNSTONE_BOARD_SUPERVISED
  static struct board_radio_profile runtime_profile;
-@@ -101,6 +108,12 @@
+@@ -101,6 +108,10 @@
                  }
              }
          }
-+#ifdef SUNSTONE_A733_OS_HEADSET
-+        /* The same owner task serves the module's Bluetooth client. */
-+        os_module_poll();
-+#endif
++        /* The same owner task serves the module's Bluetooth client when the session grants the headset. */
++        if(os_module_poll&&os_granted(OS_GRANT_HEADSET))os_module_poll();
 +        /* A failed radio stops reporting, so the resident watchdog resets the board; a guard refusal changed nothing and keeps reporting. */
 +        if(atomic_load_explicit(&board.radio_result,memory_order_acquire)!=3||a733_radio_platform_clean(&radio.platform))BOARD_PROGRESS(OS_SERVICE_RADIO);
          vTaskDelay(1);
      }
  }
-@@ -121,6 +135,8 @@
+@@ -121,6 +133,8 @@
                      memory_order_release,memory_order_relaxed);
              }
          }

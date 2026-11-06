@@ -1,9 +1,12 @@
 /* Bluetooth headset capture for the integrated OS image (docs/os-image.md).
  * The Bluetooth application (apps/bluetooth) runs on the board's shared
  * providers: UART1 H4/HCI, secure pairing, the hands-free audio gateway and
- * CVSD audio, or with SUNSTONE_A733_OS_MSBC wideband mSBC audio, over SCO or
- * eSCO. Its repeated profile (mode 2, or mode 3 for mSBC) publishes
- * fixed-length segments into two slots.
+ * CVSD or wideband mSBC audio, over SCO or eSCO. Its repeated profile (mode 2
+ * for CVSD, mode 3 for mSBC with CVSD fallback) publishes fixed-length
+ * segments into two slots. This file, the Bluetooth stack and the mSBC codec
+ * are one object library, linked into an image only when its application
+ * declares the audio-headset device; every entry does nothing for a session
+ * that does not grant it.
  *
  * When the session does not grant the radio (workloads 0 and 4), the
  * application owns the AIC8800 module: one Bluetooth owner task runs its
@@ -35,13 +38,14 @@
 #include "../bluetooth/bluetooth.h"
 #include "../bluetooth/headset.h"
 #include "../bluetooth/pcm.h"
-#ifdef SUNSTONE_A733_OS_MSBC
 #include "../bluetooth/msbc.h"
-#endif
+#include "a733_cpu_coherence.h"
 #include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 static struct bluetooth_application app;
+/* The profile that os_headset_identity copied at EL3; its bytes field is zero until then. */
+static struct bluetooth_profile profile;
 static struct {
     StaticTask_t owner_task;     /* the Bluetooth owner when the radio is not granted */
     StackType_t owner_stack[4096];
@@ -58,6 +62,7 @@ static struct {
 static int live(void){return board_live(NULL)&&!atomic_load_explicit(&headset.failed,memory_order_acquire);}
 /* The session grants the radio: the board's radio owner owns the module and the headset attaches to it. */
 static int shared(void){return os_granted(OS_GRANT_RADIO);}
+static int granted(void){return os_granted(OS_GRANT_HEADSET);}
 static void fail(void)
 {
     if(!atomic_exchange_explicit(&headset.failed,1,memory_order_acq_rel))(void)bluetooth_headset_segment_stop(&app);
@@ -79,6 +84,26 @@ int os_headset_profile_valid(const struct a733_board_session *s,const struct blu
     uint64_t owners[]={s->pmic_owner,s->usb0_owner,s->typec_owner,s->usb2_owner,p->radio.owner,p->uart.owner};
     for(unsigned i=0;i<6;++i){if(!owners[i])return 0;for(unsigned j=0;j<i;++j)if(owners[i]==owners[j])return 0;}
     return 1;
+}
+/* EL3 with translation and caches disabled, for a session whose device grant names the headset (apps/os/identity.c). */
+int os_headset_identity(const struct a733_board_session *s,uint64_t deadline)
+{
+    const volatile struct bluetooth_profile *source=(const void *)OS_HEADSET_PROFILE_ADDRESS;
+    uint32_t bytes=source->bytes;
+    if(bytes!=sizeof(profile))return 0;
+    for(uint32_t i=0;i<bytes;++i)((uint8_t *)&profile)[i]=((const volatile uint8_t *)source)[i];
+    if(profile.bytes!=bytes||!os_headset_profile_valid(s,&profile)||
+       a733_cpu_coherence_publish((uintptr_t)&profile,sizeof(profile),deadline)!=1||
+       a733_cpu_coherence_publish(BLUETOOTH_PROFILE_ADDRESS,0x100000,deadline)!=1){profile.bytes=0;return 0;}
+    return 1;
+}
+const struct bluetooth_profile *os_headset_profile(void)
+{return board_radio_chip_id()&&profile.bytes?&profile:NULL;}
+int os_headset_capture_frames(uint32_t *frames)
+{
+    const struct bluetooth_profile *p=os_headset_profile();
+    if(!frames||!p||p->headset.samples>UINT32_MAX/2)return 0;
+    *frames=2*p->headset.samples;return 1;
 }
 /* Called by the Bluetooth owner when it retains its transports. */
 void bluetooth_recognition_abort(void){fail();}
@@ -108,11 +133,7 @@ static int step(void)
     if(r){
         const struct bluetooth_pcm_snapshot *c=&segment.capture;
         /* State 1 is CVSD at 8 kHz; state 2 is mSBC at 16 kHz. */
-#ifdef SUNSTONE_A733_OS_MSBC
         if(c->state!=1&&c->state!=2)return -1;
-#else
-        if(c->state!=1)return -1;
-#endif
         /* Requests are made only while a generation waits, so the segment is
          * the newest one's; the WAV of a generation already captured, which
          * the recognizer may be reading, is never rewritten. */
@@ -176,6 +197,7 @@ static int same_latch(const struct a733_pin_latch_handoff *a,const struct a733_p
 int os_headset_pins(struct a733_pin_handoff *pins)
 {
     const struct os_session *s=os_session_admitted();
+    if(s&&!granted())return 1; /* no headset session: the pins stay unread */
     const struct bluetooth_profile *p=os_headset_profile();
     if(!pins||!s||!p||!os_headset_profile_valid(&s->board,p)||p->radio.owner==s->thermal_owner||
        p->uart.owner==s->thermal_owner)return 0;
@@ -193,12 +215,11 @@ int os_headset_pins(struct a733_pin_handoff *pins)
 int os_headset_start(void)
 {
     const struct os_session *s=os_session_admitted();
+    if(s&&!granted())return 1;
     const struct bluetooth_profile *p=os_headset_profile();
     if(!s||!p||headset.client||!board_live(NULL))return 0;
-#ifdef SUNSTONE_A733_OS_MSBC
     /* The recognizer's start entry ran runtime_init, so libsbc can allocate. */
     if(p->headset.mode==3&&bluetooth_msbc_init()!=1)return 0;
-#endif
     headset.client=xTaskCreateStatic(os_headset_task,"os-headset",2048,NULL,4,headset.client_stack,&headset.client_task);
     if(!headset.client)return 0;
     if(shared()){

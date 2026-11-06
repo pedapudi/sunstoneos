@@ -41,9 +41,8 @@ int os_application_gpu_share_bind(struct pvr_compute_queue *q){(void)q;return 1;
 #include "runtime.h"
 #endif
 #include <string.h>
-#ifdef SUNSTONE_A733_OS_HEADSET
-#include "../bluetooth/bluetooth.h"
-#endif
+/* The headset library's capture length: absent (null) in an image that does not link it. */
+extern int os_headset_capture_frames(uint32_t *) __attribute__((weak));
 #ifdef SUNSTONE_A733_OS_NPU
 #include "npu.h"
 #endif
@@ -380,14 +379,10 @@ int os_application_prepare(void)
     for(unsigned i=0;i<m->region_count;++i){grant.regions[i].base=(void *)(uintptr_t)m->regions[i].address;
         grant.regions[i].bytes=m->regions[i].kind==SS_REGION_INPUT?facts[input++].bytes:m->regions[i].bytes;}
     if(grant.devices&SS_DEVICE_AUDIO_I2S)grant.capture_frames=s->audio.capture_samples;
-#ifdef SUNSTONE_A733_OS_HEADSET
     if(grant.devices&SS_DEVICE_AUDIO_HEADSET){
-        const struct bluetooth_profile *p=os_headset_profile();
-        if(!p||p->headset.samples>UINT32_MAX/2)return 0;
-        grant.capture_frames=2*p->headset.samples;
+        if(!os_headset_capture_frames||!os_headset_capture_frames(&grant.capture_frames))return 0;
         if(grant.capture_frames>m->audio.max_frames)return 0;
     }
-#endif
     /* Large regions come from the ledger before any task exists; a refusal stops the application. */
     if(!os_large_prepare())return 0;
 #ifndef SUNSTONE_BOARD_RESIDENT

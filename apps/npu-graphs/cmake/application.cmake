@@ -2,8 +2,7 @@
 # output is compared with the simulator's. The OS image links no graph: the application carries every graph of the model list
 # and registers it with the OS at run time (ss_npu_register_graph). The OS composition is that of the CPU/NPU diagnostic.
 if(NOT SUNSTONE_A733_OS_CPU_RETURN OR NOT SUNSTONE_A733_OS_NPU OR SUNSTONE_A733_OS_GPU OR
-   SUNSTONE_A733_OS_DMA OR
-   SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_USB_CLASSES)
+   SUNSTONE_A733_OS_DMA OR SUNSTONE_A733_OS_USB_CLASSES)
   message(FATAL_ERROR "The NPU graph application requires the supervised CPU-return composition with the NPU service")
 endif()
 set(npu_graph_vectors "${CMAKE_CURRENT_BINARY_DIR}/npu-graph-vectors.c")

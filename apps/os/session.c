@@ -52,6 +52,8 @@ static int usb_memory_extent_valid(const void *raw)
 #endif
 /* The named refusal: *why is the A733_DECODE_* sub-term of the rule that refused the session (include/a733_admission_refusal.h). */
 #define REFUSE(sub) do{if(why)*why=(sub);return 0;}while(0)
+/* The headset library's start entry: absent (null) in an image that does not link it. */
+extern int os_headset_start(void) __attribute__((weak));
 int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,unsigned *why)
 {
     if(why)*why=0;
@@ -84,9 +86,8 @@ int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,un
     if(!(h->devices&SS_DEVICE_USB_STORAGE)){
         if(capture||!(h->flags&SS_SESSION_BIND_SID))REFUSE(A733_DECODE_DEVICES);
     }
-#ifndef SUNSTONE_A733_OS_HEADSET
-    if(h->devices&SS_DEVICE_AUDIO_HEADSET)REFUSE(A733_DECODE_DEVICES);
-#endif
+    /* The headset is linked only into an image whose application declares it. */
+    if((h->devices&SS_DEVICE_AUDIO_HEADSET)&&!os_headset_start)REFUSE(A733_DECODE_DEVICES);
 #ifndef SUNSTONE_A733_OS_GPU
     if(h->devices&SS_DEVICE_GPU)REFUSE(A733_DECODE_DEVICES);
 #endif
@@ -111,6 +112,7 @@ int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,un
     /* Each service extent that the session carries is copied and grants its service. A service is granted only when
      * the image has it, and the I2S receive record only with the I2S device. An absent record grants nothing. */
     if(radio)out->granted|=OS_GRANT_RADIO;
+    if(h->devices&SS_DEVICE_AUDIO_HEADSET)out->granted|=OS_GRANT_HEADSET;
     {
         /* The declared records (apps/os/os-services.h). need is 0 for an optional record, OS_RECORD_LINKED for one the
          * image requires whenever it links the service, or the device bit that the session holds exactly when the record

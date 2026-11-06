@@ -240,7 +240,7 @@ def plan(value=None, changed=None, index=None):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.records()
         self.assertEqual(len(calls), 2)
-        self.assertIn('-DSUNSTONE_A733_OS_HEADSET=ON', calls[0])
+        self.assertIn('-DSUNSTONE_APPLICATION=headset-fixture', calls[0])
         self.assertNotIn('-DSUNSTONE_A733_OS_NPU=ON', calls[0])
         self.assertIn('-DEXAMPLE_DIR=', calls[0])
         self.assertIn('-DSUNSTONE_APPLICATION=', calls[0])

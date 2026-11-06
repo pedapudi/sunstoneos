@@ -27,6 +27,13 @@ elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest.json")
   add_sunstone_image(sunstone-a733-os-hello LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION hello-compute)
+elseif(SUNSTONE_APPLICATION STREQUAL "headset-fixture")
+  # Declares the headset device, so the image links the headset library with the Bluetooth stack and mSBC.
+  add_sunstone_application(headset-fixture
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/headset-fixture/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/headset-fixture/manifest.json")
+  add_sunstone_image(sunstone-a733-os LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION headset-fixture)
 elseif(SUNSTONE_APPLICATION STREQUAL "radio-scan")
   if(NOT SUNSTONE_A733_OS_RADIO_SCAN)
     message(FATAL_ERROR "radio-scan needs SUNSTONE_A733_OS_RADIO_SCAN=ON (with CPU_RETURN)")

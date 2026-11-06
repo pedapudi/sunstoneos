@@ -5,8 +5,10 @@
  * startup and pin entries and the real WAV conversions (apps/bluetooth/pcm.c)
  * run unchanged. The same model covers both owner modes and the build's
  * options: a session that grants the radio attaches the Bluetooth client to
- * the radio's module, one that does not runs its own Bluetooth owner, the
- * resident build records service progress and the mSBC build admits mode 3.
+ * the radio's module, one that does not runs its own Bluetooth owner, a
+ * session that does not grant the headset leaves every entry inert, and the
+ * resident build records service progress. CVSD (mode 2) and mSBC (mode 3)
+ * are both admitted: the codec is always linked.
  * The runner (checks/os-image-headset.py) executes each mode under unicorn,
  * with bit 8 of the mode selecting the radio session. Each failed expectation
  * stops with its own code. */
@@ -19,14 +21,11 @@ static unsigned board_up=1,board_failed,stopped,bound,initialized,created,attrib
 static uint32_t segment_flags;
 static struct os_session session;
 static unsigned radio_granted; /* the session grants the radio: the headset shares the radio's module owner */
-static struct bluetooth_profile profile;
-static const struct bluetooth_profile *published=&profile;
 static uint64_t start_us,end_us;
 int board_live(void *v){(void)v;return board_up;}
 void board_fail(void *v){(void)v;board_failed=1;}
 const struct os_session *os_session_admitted(void){return &session;}
 int os_granted(unsigned mask){return mask&&(session.granted&mask)==mask;}
-const struct bluetooth_profile *os_headset_profile(void){return published;}
 const struct board_radio_chip_id *board_radio_chip_id(void){return (const void *)&board;}
 int aarch64_device_translate(uintptr_t address,int write,struct aarch64_translation *t)
 {(void)write;*t=(struct aarch64_translation){address,attributes,3};return 1;}
@@ -38,6 +37,9 @@ TaskHandle_t xTaskCreateStatic(TaskFunction_t f,const char *const name,const con
     void *const arg,UBaseType_t priority,StackType_t *const stack,StaticTask_t *const task)
 {(void)f;(void)name;(void)depth;(void)arg;(void)priority;(void)stack;++created;return (TaskHandle_t)task;}
 void vTaskDelay(TickType_t ticks){(void)ticks;}
+/* os_headset_identity runs at EL3 in the image (checks/os-image-identity.py executes it); here it is never called. */
+int a733_cpu_coherence_publish(uintptr_t address,size_t bytes,uint64_t deadline)
+{(void)address;(void)bytes;(void)deadline;check(0,99);return 0;}
 /* The radio entry's authenticated profile and the board's radio. */
 static struct board_radio_profile radio_profile;
 static struct board_radio radio;
@@ -64,10 +66,8 @@ int bluetooth_application_init(struct bluetooth_application *a,const struct blue
     check(!radio_granted,89);
     start_us=start;end_us=end;++initialized;return 1;
 }
-#ifdef SUNSTONE_A733_OS_MSBC
 static unsigned codec_ready;
 int bluetooth_msbc_init(void){++codec_ready;return 1;}
-#endif
 #ifdef SUNSTONE_BOARD_RESIDENT
 static unsigned progress[OS_SERVICES];
 void board_service_progress(unsigned service){check(service==OS_SERVICE_BLUETOOTH||service==OS_SERVICE_HEADSET,84);++progress[service];}
@@ -155,14 +155,14 @@ static void nominal_session(void)
 {
     memset(&session,0,sizeof(session));memset(&profile,0,sizeof(profile));
     struct a733_board_session *b=&session.board;
-    b->workload=radio_granted?1:4;session.granted=radio_granted?OS_GRANT_RADIO:0;
+    b->workload=radio_granted?1:4;session.granted=OS_GRANT_HEADSET|(radio_granted?OS_GRANT_RADIO:0);
     b->sid_authority=21;memset(b->sid_evidence,0x54,32);b->topology=1;
     b->pmic_owner=11;b->usb0_owner=12;b->typec_owner=13;b->usb2_owner=14;session.thermal_owner=15;
     for(unsigned i=0;i<3;++i)b->fabric_hz[i]=200000000;
-    profile.version=3;profile.headset.mode=2;profile.sid_authority=21;profile.topology=1;
+    profile.bytes=sizeof(profile);profile.version=3;profile.headset.mode=2;profile.sid_authority=21;profile.topology=1;
     profile.radio.owner=31;profile.uart.owner=32;profile.pm_latch=(struct a733_pin_latch_handoff){41,42,0x3f,0};
     memcpy(profile.radio.fabric_hz,b->fabric_hz,sizeof(b->fabric_hz));
-    board.session=*b;attributes=0xff;published=&profile;
+    board.session=*b;attributes=0xff;
     memset(&radio_profile,0,sizeof(radio_profile));radio_admitted=1;
     radio_profile.platform.owner=profile.radio.owner;radio_profile.session_owner=profile.session_owner=33;radio_profile.ce.owner=34;
 }
@@ -201,12 +201,8 @@ static void pins_cases(void)
         REFUSED(clear.authorized[A733_PIN_G]=0x3f,98);
     }
     REFUSED(profile.headset.mode=1,15);
-#ifdef SUNSTONE_A733_OS_MSBC
     nominal_session();profile.headset.mode=3;board_pins(&clear);check(os_headset_pins(&clear)==1,16);
     REFUSED(profile.headset.mode=5,16);
-#else
-    REFUSED(profile.headset.mode=3,16);
-#endif
     REFUSED(profile.version=2,17);
     REFUSED(profile.sid_authority=22,18);
     REFUSED(session.board.sid_evidence[0]=0x55,19);
@@ -218,14 +214,22 @@ static void pins_cases(void)
     REFUSED(profile.topology=2,25);
     REFUSED(profile.radio.fabric_hz[1]^=1,26);
     REFUSED(attributes=0x44,27);
-    REFUSED(published=NULL,28);
+    REFUSED(profile.bytes=0,28);
+    /* The capture length is twice the profile's 8 kHz sample count, and there is none without a copied profile. */
+    uint32_t frames=0;
+    nominal_session();profile.headset.samples=24000;
+    check(os_headset_capture_frames(&frames)==1&&frames==48000,35);
+    profile.bytes=0;check(!os_headset_capture_frames(&frames)&&!os_headset_capture_frames(NULL),36);
+    /* A session that does not grant the headset leaves the pins and the tasks alone. */
+    nominal_session();session.granted&=~OS_GRANT_HEADSET;board_pins(&clear);
+    struct a733_pin_handoff before=clear;
+    check(os_headset_pins(&clear)==1&&!memcmp(&clear,&before,sizeof(clear)),37);
+    check(os_headset_start()==1&&!created&&!initialized&&!headset.client,38);
 }
 static void start_case(void)
 {
     nominal_session();
-#ifdef SUNSTONE_A733_OS_MSBC
     profile.headset.mode=3;
-#endif
     board.session.session_start_ticks=24*UINT64_C(7000000);
 #ifdef SUNSTONE_BOARD_RESIDENT
     board.session.deadline_us=UINT64_MAX/24;
@@ -245,9 +249,7 @@ static void start_case(void)
             !os_headset_task_privileged(owner,&app),43);
     }
     check(start_us==7000000&&end_us==board.session.deadline_us,41);
-#ifdef SUNSTONE_A733_OS_MSBC
     check(codec_ready==1,44);
-#endif
     check(!os_headset_start()&&initialized==1,42);
 }
 /* One owner iteration polls a live application, retains it once the board
@@ -289,7 +291,6 @@ void os_check_run(unsigned selected)
         segment_flags=BLUETOOTH_SEGMENT_LOSS;check(step()<0,112);
         os_check_result=1;return;
     }
-#ifdef SUNSTONE_A733_OS_MSBC
     if(mode==9){
         /* A wideband segment is already 16 kHz; its WAV carries it unchanged. */
         generation(1);steps(1);publish_state(0,2);word=0;steps(1);check(tail==1,121);
@@ -300,13 +301,6 @@ void os_check_run(unsigned selected)
         generation(2);steps(1);publish_state(0,3);word=0;check(step()<0,125);
         os_check_result=1;return;
     }
-#else
-    if(mode==9){
-        /* Without mSBC, a wideband segment is refused. */
-        generation(1);steps(1);publish_state(0,2);word=0;check(step()<0,126);
-        os_check_result=1;return;
-    }
-#endif
     if(mode==4){
         check(os_headset_capture(0,&wav,&bytes)<0&&os_headset_capture(1,NULL,&bytes)<0,50);
         check(!os_headset_capture(2,&wav,&bytes)&&os_headset_capture(1,&wav,&bytes)<0&&notified==1,51);
