@@ -3,8 +3,8 @@
 Status: **host-tested**; the resident cold-boot path has no board run (open).
 
 The resident recorded-audio OS can run its existing finite NPU catalogue
-application alongside CPU recognition. Every image links the NPU service; enable
-`SUNSTONE_A733_OS_RESIDENT` and declare the NPU in the manifest. The resident profile also accepts
+application alongside CPU recognition. Every image links the NPU service and admits
+the resident lifetime; declare the NPU in the manifest and launch a resident contract. The resident profile also accepts
 a CPU clock grant in the session. The NPU application runs one selected catalogue
 entry for one to eight jobs, publishes its existing result, completes local stop
 and suspends. Mimus recognition continues on the CPU. This application does not

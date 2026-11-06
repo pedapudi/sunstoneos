@@ -65,11 +65,14 @@ routes, image identity and the application's external symbol references.
 
 ## Lifetimes
 
-`add_sunstone_image()` selects `supervised`, `resident` or `return`.
-The default supervised image uses the bounded board session. The resident
-profile sets `SUNSTONE_A733_OS_RESIDENT=ON`; its watchdog owner renews the
-lifetime from service progress. `SUNSTONE_A733_OS_CPU_RETURN=ON` selects the
-success-only returning profile and its existing retirement requirements.
+`add_sunstone_image()` selects `supervised` or `return`. A supervised image
+admits two lifetimes and selects one at run time from the contract magic
+([the design](designs/one-os-image.md#lifetime-word-and-sealed-session)): the
+supervised lifetime uses the bounded board session, which the manifest sizes,
+and in the resident lifetime the watchdog owner renews the watchdog from
+service progress. `SUNSTONE_A733_OS_CPU_RETURN=ON` selects the success-only
+returning profile and its existing retirement requirements; it admits the
+supervised lifetime only.
 Faults retain resources unless their owning path proves retirement.
 
 `tools/dev-run.py cpu-return` runs one CPU-return image on one board under
@@ -162,9 +165,9 @@ headset service, with the Bluetooth stack and mSBC, is a library linked into an
 image whose application declares the `audio-headset` device. The NPU service, its
 EL0 ring and its diagnostic observer are in every image too: the manifest's `npu`
 section grants the service, `in_flight` above one selects the ring, and `observe`
-admits the observer in a returning image. `SUNSTONE_A733_OS_RESIDENT` and
-`SUNSTONE_A733_OS_CPU_RETURN` decide the rest until each is replaced by its run-time
-form ([the design](designs/one-os-image.md)).
+admits the observer in a returning image. The contract magic selects the
+lifetime, and `SUNSTONE_A733_OS_CPU_RETURN` decides the rest until it is replaced by
+its run-time form ([the design](designs/one-os-image.md)).
 
 A service that is not granted touches no hardware. Its start entry returns before
 it authorizes a pin, binds a callback, creates a task or reads a register, the

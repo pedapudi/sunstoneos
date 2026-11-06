@@ -270,8 +270,9 @@ entries, so several applications share one board composition.
 `board_session_sealed` returns the complete sealed session span for an image
 whose session extends the 592-byte board prefix.
 
-`SUNSTONE_BOARD_RESIDENT`, which only the integrated OS image selects, keeps
-the supervised session layout and changes the contract. The board contract
+The resident lifetime, which only the integrated OS image admits (it selects
+the lifetime from the contract magic at run time), keeps the supervised
+session layout and changes the contract. The board contract
 magic becomes `0x4153373342524332`. The contract must arm WDT0 in the
 four-second mode, carry zero FEL and redirect fields, set no diagnostic
 deadline (`UINT64_MAX`) and expire four seconds after arming. The derived

@@ -22,7 +22,7 @@ repeatability. [CPU status](cpu.md) identifies the result and failed controls.
 | Eight-worker CPU-only mimus recording | qualified on the board | 90-frame reference matched, seven secondaries off | [CPU status](cpu.md) |
 | GPU compute queue and trusted GPU peer | host-tested | none on the board | [GPU status](gpu.md) |
 | Concurrent CPU, GPU and NPU operation | host-tested | none on the board | [NPU status](npu.md) |
-| Lifetime from the contract magic in one OS image ([design](../designs/one-os-image.md#lifetime-word-and-sealed-session)) | supervised: qualified on the board; resident: host-tested, unqualified on the board | one supervised run (ret-npu-load, total 32.04 s); no resident board run | `1793940886685882479-99c7d548` below; `checks/os-lifetime-admission.py`, `checks/os-sealed-session.py`, `checks/board-lifetime-admission.py` |
+| Lifetime from the contract magic in one OS image ([design](../designs/one-os-image.md#lifetime-word-and-sealed-session)) | supervised: qualified on the board; resident: host-tested at EL3 and EL1, unqualified on the board | one supervised run (ret-npu-load, total 32.04 s); no resident board run | `1793940886685882479-99c7d548` below; `checks/os-lifetime-admission.py`, `checks/os-sealed-session.py`, `checks/board-lifetime-admission.py` |
 | Warm PCM-to-transcription time | open | target 0.05 times the audio duration | `application-recognition-time-target` (not run) |
 
 ## Open work

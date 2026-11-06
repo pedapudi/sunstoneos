@@ -253,7 +253,7 @@ cmake -S . -B BUILD ... -DSUNSTONE_MIMUS_BOARD_APPLICATION=ON -DSUNSTONE_A733_OS
   -DSUNSTONE_GPU_FIRMWARE=<gpu.fw> -DSUNSTONE_A733_OS_MODEL_DIR=<models>
 ```
 
-Resident builds additionally set `SUNSTONE_A733_OS_RESIDENT=ON`. Fixed-point
+The same build runs resident when the contract carries the resident magic. Fixed-point
 GPU builds retain their permitted capture options, with the recognizer patch
 applied after the capture patch. Adding CPU grants or the NPU requires recorded
 input; the resident performance service inherits that restriction.

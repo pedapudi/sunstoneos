@@ -176,8 +176,8 @@ dormant latch history. Its effect on each neighboring pin is explicit:
 | PM5 | No external net drawn on sheet 9 | Any live GPIO-output level and its configuration are preserved |
 
 The native supervised board and OS session validators accept a nonzero PM
-record identity and owner with `known_mask=value=0`. Resident OS builds inherit
-the same `SUNSTONE_BOARD_SUPERVISED` definition and add `SUNSTONE_BOARD_RESIDENT`.
+record identity and owner with `known_mask=value=0`. The OS image inherits
+the same `SUNSTONE_BOARD_SUPERVISED` definition in both of its lifetimes.
 The session layout is unchanged. Older images reject the zero-mask form;
 complete records remain compatible. The returning identity producer still
 requires the complete mask and historical provenance. The OS Bluetooth profile

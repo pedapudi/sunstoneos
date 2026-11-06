@@ -257,9 +257,10 @@ active, and shares core 0 in turns with the GPU service worker at the same
 priority. The board evidence below includes the measured step duration.
 
 The board image is also the base of the integrated OS image, whose resident
-watchdog requires every service to report progress within 1 s. Its service
-blocks at most 500 ms when idle (`SUNSTONE_BOARD_RESIDENT`). The other images
-block until the session deadline when idle.
+watchdog requires every service to report progress within 1 s. In the resident
+lifetime its service blocks at most 500 ms when idle (`BOARD_RESIDENT()` in
+`apps/board/main.c`). The other images, and the OS image in the supervised
+lifetime, block until the session deadline when idle.
 
 Park and stop requests notify the service: the GPU display park, the GPU
 finite-return stop and the accelerator's finite quiescence. They complete only
