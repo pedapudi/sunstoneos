@@ -44,10 +44,28 @@ submission refuses that run; the submitter then resubmits.
   (`ss_finish`) and when the board fails (`board_fail`). Later calls return `-ENOENT`.
 - The value appears in no result word, failure note or diagnostic.
 
+## What the runner does when the OS cannot wipe
+
+A run that ends in a watchdog reset or a hang never reaches `board_fail` or the radio owner's wipe, so the runner zeroes the
+record itself. On every exit of a session that began the upload (a normal return, a failure return, a host error, a
+watchdog return to FEL), while it still holds the board lock, it reads the region back. If the OS wiped it, the region reads
+zero and the runner writes nothing. Otherwise it writes 256 zero bytes over `0x43004000` by FEL and reads them back as zero.
+After a watchdog return the fresh instance's DRAM is brought up again first, as at the start of any run. The result records
+`credential_wipe`: the address, the size, `wiped-by-session` or `zeroed-by-runner`, and that the readback was zero. No
+credential byte is read into a file or a log: the readback goes to an anonymous memory file.
+
+If the board does not return to FEL, or the zero write or its readback fails, the entry records `credential_may_remain`. A
+marker file for the port, `~/.cache/sunstoneos/board-queue/credential-residue/PORT.json`, is written before the upload and
+removed only after a zero readback; it holds the port, the address and the size. The next run on the port zeroes the region
+before anything else, and a credential run is refused (`refused-before-launch`) until that zero write succeeds.
+
 ## What is checked
 
 `checks/wifi-credential.py` uses a fake credential in a temporary directory, never `~/.config`. It checks the PMK
 against the test vectors, the prompts and file modes under a pseudo-terminal, the refusals (missing file, changed
 fingerprint, bad file mode, bad directory mode, link), a scan of every queue file for the password and the PMK in raw,
 hex and base64 form after a dry-run launch, the scan's failure when the PMK is written into the entry, and the OS
-receiver on the host and as an AArch64 object. No board run has exercised the receiver.
+receiver on the host and as an AArch64 object. `checks/credential-zero.py` models the board's memory and plans the zero write for
+each exit kind (session wiped, normal return, failure return, host error, watchdog return, no return, failed transport, a
+zero write that does not read back), scans every file for the credential, and fails when the final step, the zero write, the
+DRAM bring-up, the marker or the start-of-run clearing is removed. No board run has exercised the receiver.

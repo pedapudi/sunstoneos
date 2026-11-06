@@ -37,6 +37,10 @@ POST_RAIL_HELPER_SHA256 = 'f48a6be72b336c8990a124fd608bba5fddb5c8617ec62eac5642b
 # Linked __heap_end from ELF SHA-256 ae00ce1d4a1f82b77ab1e016dc1a08f795e56c9c6f4c92d166f6434d75590098.
 POST_RAIL_HELPER_DRAM = (0x41000000, 0x47300)
 DRAM_UNRESOLVED = 'DRAM ownership remains unresolved.'
+# One small file per port while a Wi-Fi credential may be in that board's DRAM: written before the upload, removed once the
+# runner has read the region back as zero. It holds the port, the region's address and size and the evidence path, never a
+# credential byte. A later run on the port zeroes the region first, and a credential run is refused if it cannot.
+CREDENTIAL_RESIDUE = Path('~/.cache/sunstoneos/board-queue/credential-residue').expanduser()
 OUTCOMES = ('returned', 'failure-return', 'watchdog-reset', 'no-return', 'refused-before-launch', 'host-error')
 crumbs = images.load('board_crumbs', ROOT/'tools/a733-crumbs.py')
 import board_state as state
@@ -198,6 +202,8 @@ class Live:
         self.recovering = False
         self.dma_binding = None
         self.credential = None  # bytearray: the Wi-Fi record, held in this process only and zeroed once delivered
+        self.credential_region = None  # {'address', 'bytes'} once an upload began: the runner must zero it on every exit
+        self.reset_since_dram = False  # a fresh FEL instance since the last DRAM bring-up: its DRAM must be brought up again to be written
 
     @staticmethod
     def watchdog_reset_seen(before):
@@ -362,12 +368,92 @@ class Live:
         if returned != bytes(data):
             raise Mismatch('Wi-Fi credential readback differs; execution refused.')
 
+    def residue_marker(self):
+        return CREDENTIAL_RESIDUE/f'{self.args.port}.json'
+
+    def mark_residue(self, region):
+        save(self.residue_marker(), {'port': self.args.port, 'address': region['address'], 'bytes': region['bytes'],
+                                     'reason': 'a Wi-Fi credential upload began; the region is not shown to be zero',
+                                     'evidence': str(self.evidence), 'time': time.time()})
+
+    def region_is_zero(self, region):
+        """Read the region into an anonymous memory file (no path, no log) and report whether every byte is zero."""
+        readback = os.memfd_create('credential-zero-check', os.MFD_CLOEXEC)
+        try:
+            self.sequence += 1
+            self.tx('read', hex(region['address']), region['bytes'], f'/proc/self/fd/{readback}', pass_fds=(readback,))
+            data = os.pread(readback, region['bytes']+1, 0)
+        finally:
+            os.close(readback)
+        require(len(data) == region['bytes'], 'Credential region readback is the wrong size.')
+        return not any(data)
+
+    def zero_credential(self, region, label='dram-zero'):
+        """Make the credential region zero and prove it by a readback: 'wiped-by-session' when it already reads zero,
+        'zeroed-by-runner' after the write. A fresh FEL instance (a watchdog return) has its DRAM brought up again first.
+        Removes the marker. Raises when it cannot: the marker then stays."""
+        require(not self.failed, 'A failed FEL transaction forbids further requests.')
+        require(not self.record.get('no_return'), 'The board did not return to FEL.')
+        if self.reset_since_dram:
+            self.dram(label)
+        if self.region_is_zero(region):
+            state = 'wiped-by-session'
+        else:
+            self.upload_credential(region['address'], bytes(region['bytes']))  # the write and its readback, which must be zero
+            require(self.region_is_zero(region), 'The credential region did not read zero after the zero write.')
+            state = 'zeroed-by-runner'
+        self.residue_marker().unlink(missing_ok=True)
+        return state
+
+    def finish_credential(self, result):
+        """On every exit of a session that began a credential upload: zero the region and read it back, and record the
+        region, the size and whether it read zero. If that cannot run, the entry records that the credential may remain and
+        the marker keeps the port's next credential run from starting until a zero write succeeds. Never raises an
+        ordinary error."""
+        region = self.credential_region
+        if region is None or self.record.get('credential_wipe'):
+            return
+        info = {'address': hex(region['address']), 'bytes': region['bytes']}
+        try:
+            info.update(state=self.zero_credential(region), readback_zero=True)
+        except BaseException as error:
+            info.update(state='may-remain', readback_zero=False, reason=f'{type(error).__name__}: {error}'[:300],
+                        residue_marker=str(self.residue_marker()))
+            result['credential_may_remain'] = True
+            self.record['credential_may_remain'] = True
+            if not isinstance(error, Exception):
+                result['credential_wipe'] = info
+                raise
+        result['credential_wipe'] = info
+        self.record['credential_wipe'] = info
+        self.journal()
+
+    def clear_stale_residue(self, required):
+        """At the start of a run: zero a region an earlier run left marked. A credential run (required) is refused when that
+        fails; another run records it and goes on."""
+        path = self.residue_marker()
+        if not path.exists():
+            return
+        try:
+            marked = json.loads(path.read_text())
+            state = self.zero_credential({'address': int(marked['address']), 'bytes': int(marked['bytes'])}, 'dram-zero-start')
+            self.record['credential_residue_cleared'] = {'address': hex(marked['address']), 'bytes': marked['bytes'], 'state': state}
+        except Exception as error:
+            self.record['credential_residue_remains'] = f'{type(error).__name__}: {error}'[:300]
+            if required:
+                raise ValueError('A Wi-Fi credential may remain in this board\'s DRAM from an earlier run and a zero write failed (%s); '
+                                 'credential runs are refused until a zero write succeeds.' % error) from None
+
     def deliver_credential(self, plan):
         """Upload the credential as its own input, then zero the host copy. Only the name and fingerprint are recorded."""
         if self.credential is None:
             return
         region = plan.get('credential')
         require(region and region['bytes'] == len(self.credential), 'The session has no Wi-Fi credential region.')
+        # The marker is durable before the first byte leaves this process: a crash, a hang or a board that never returns
+        # then leaves a record that the region may hold the credential.
+        self.credential_region = {'address': region['address'], 'bytes': region['bytes']}
+        self.mark_residue(self.credential_region)
         self.upload_credential(region['address'], self.credential)
         self.credential[:] = bytes(len(self.credential))
         self.credential = None
@@ -461,6 +547,7 @@ class Live:
                     self.adopt(node)
                     self.failed = False
                     self.deadline = None
+                    self.reset_since_dram = True
                     return
             except (FileNotFoundError, PermissionError, ValueError):
                 pass
@@ -469,6 +556,7 @@ class Live:
             if self.now() >= deadline and not (enumerated_at is not None and self.now() < enumerated_at+30):
                 break
             self.sleep(.05)
+        self.record['no_return'] = True
         raise NoReturn(f'No accessible new FEL instance within {seconds:g} seconds.')
 
     def reset(self):
@@ -488,7 +576,7 @@ class Live:
             self.disarm()
             self.usb_source_off('pending-return')
 
-    def dram(self):
+    def dram(self, label='dram'):
         owner = self
         class Access:
             def __getattr__(self, name):
@@ -533,7 +621,7 @@ class Live:
                 break
         self.record['dram_record_rejections'] = rejected
         self.ddr_arguments = ['--fel', str(self.args.fel), '--build', str(self.args.ddr_restore if selected else self.args.ddr_build),
-                              '--evidence', str(self.evidence/'dram')]
+                              '--evidence', str(self.evidence/label)]
         if selected:
             self.ddr_arguments += ['--record', str(selected), '--fallback-build', str(self.args.ddr_build)]
         self.record['dram_training_record'] = str(selected) if selected else None
@@ -541,17 +629,18 @@ class Live:
         try:
             # run-ddr keeps its checked restore/fallback sequence. Injection
             # replaces only ownership, transactions and terminal failure policy.
-            with (self.evidence/'dram.log').open('w') as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
+            with (self.evidence/(label+'.log')).open('w') as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
                 try:
                     runpy.run_path(str(ROOT/'tools/run-ddr.py'), init_globals={'BOARD_RUNNER': self})
                 except SystemExit as status:
                     if status.code not in (0, 3, None):
                         raise DramFailure(str(status)) from status
-            outcome = json.loads((self.evidence/'dram/session.json').read_text())
+            outcome = json.loads((self.evidence/label/'session.json').read_text())
             require(outcome.get('complete'), 'DRAM bring-up did not complete.')
             # Restore fallback may have changed the instance inside run-ddr.
             self.adopt(self.access.discover(self.args.port))
             self.usb_source_off('ddr-complete')
+            self.reset_since_dram = False
         except (TransportFailure, NoReturn, usb_power.PowerFault):
             raise
         except DdrPowerAbort as error:
@@ -950,12 +1039,13 @@ def run_image(args, backend=Live):
                     owner.dma_binding = timed('dma-identity', lambda: images.bind_dma_identity(dma_binding, args, owner.identity))
                 timed('reset', owner.reset)
                 timed('dram', owner.dram)
+                timed('credential-residue', lambda: owner.clear_stale_residue(credential is not None))
                 if helper_only or info['entry_guard'] or args.kind == 'npu':
                     timed('rails', owner.rails)
                 if helper_only:
                     result['outcome'] = 'returned'
                     result['return_report'] = result['rails']
-                    return finish_result(result, evidence, started, stage)
+                    return finish_result(result, evidence, started, stage, owner)
                 plan = timed('prepare', lambda: owner.prepare(info))
                 outcome = timed('launch', lambda: owner.launch(plan))
                 result['outcome'] = outcome
@@ -998,13 +1088,13 @@ def run_image(args, backend=Live):
                         result['outcome'] = 'failure-return'
                         if owner.journal_error is not None:
                             raise owner.journal_error
-                        return finish_result(result, evidence, started, stage)
+                        return finish_result(result, evidence, started, stage, owner)
                     if not captured['valid']:
                         # The image returned normally with a result record whose status or magic is not a success.
                         # Retirement, DRAM and rails are restored, so the port stays usable.
                         result['first_failure'] = {'site': 'capture', 'detail': 'The returned result record is not a success record.'}
                         result['outcome'] = 'failure-return'
-                        return finish_result(result, evidence, started, stage)
+                        return finish_result(result, evidence, started, stage, owner)
                     if getattr(args, 'decoder', None):
                         decoder = load_decoder(args)
                         try:
@@ -1037,6 +1127,11 @@ def run_image(args, backend=Live):
                         result['cleanup_failure'] = str(cleanup_error)
                         owner.journal()
                 raise
+            finally:
+                # Every exit of a session that began a credential upload ends with the region zero and read back as zero,
+                # or with the entry recording that the credential may remain (and the marker keeping the port's next
+                # credential run from starting).
+                owner.finish_credential(result)
     except NoReturn as error:
         result['outcome'] = 'no-return'
         result['first_failure'] = {'site': stage, 'detail': str(error)}
@@ -1056,7 +1151,9 @@ def run_image(args, backend=Live):
     return finish_result(result, evidence, started, stage)
 
 
-def finish_result(result, evidence, started, stage):
+def finish_result(result, evidence, started, stage, owner=None):
+    if owner is not None:
+        owner.finish_credential(result)  # before the summary is saved; a no-op once done or when nothing was uploaded
     result['stage'] = stage
     result['durations']['total'] = round(time.monotonic()-started,6)
     # The kernel's I/O, CPU and memory stall figures at both ends of the run: a slow host stage is then attributed from data
@@ -1579,6 +1676,10 @@ class Queue:
             save(job['result_path'], result)
             images.record_board_words(result)
             job.update(state='done', result=result, completed=time.time())
+            if result.get('credential_may_remain'):
+                # The runner could not read the credential region back as zero; the port's next credential run zeroes it first.
+                job['credential_may_remain'] = True
+                self.event('credential-may-remain', job=job['id'], port=job['assigned_port'])
             self.event('result', job=job['id'], outcome=result['outcome'], stage=result.get('stage'),
                        site=(result.get('first_failure') or {}).get('site'))
             self.archive(state, job)
