@@ -1,6 +1,6 @@
 # Design: one OS image, with services chosen at run time
 
-Status: the foundation (granted set, session records, fixed service ids, refusal table, ungranted-service checks) is **implemented and host checked**. The CPU series (series 2: CPU clock grant, A76 placement and performance modes as run-time grants) is **implemented**; the service, NPU and lifetime series are **proposed**. The sizes in "Size" are measured on the all-in link.
+Status: the foundation (granted set, session records, fixed service ids, refusal table, ungranted-service checks) is **implemented and host checked**. The CPU series (series 2: CPU clock grant, A76 placement and performance modes as run-time grants) and the service series (series 3: I2S capture and the radio in every image, the headset as a library linked by manifest) are **implemented**; the NPU and lifetime series are **proposed**. The sizes in "Size" are measured on the all-in link and, for the headset library, on the headset fixture image.
 
 Readers are assumed to know [os-image.md](../os-image.md), [app-abi.md](app-abi.md) (manifest, session extents, device bitmap) and [application-memory-layout.md](application-memory-layout.md).
 
@@ -38,7 +38,7 @@ Any table that varied between variants is sized from the declaration at registra
 - **Session.** `struct os_session` loses its conditional members (`npu`, `audio`, `cpu_clock`, `dma`) and the `OS_SESSION_BYTES` arithmetic. It keeps the thermal core. Each service's facts are read from its extent by `os_session_extent`. The session page limit is 4,096 bytes (the sealed copy in `apps/board/session.c`); the largest combination today, NPU with CPU grant and DMA, is well below it.
 - **Service table.** `OS_SERVICE_*` ids become a fixed enum that includes every service (today the ids shift with the options). `services_state` already keeps a `required` mask; it extends to the granted set.
 - **NPU.** Slots, graphs, links, graph bytes and tensor bytes already come from the declaration (`npu-declaration.c`). The remaining fixed pieces are removed: the model table (see NPU), the EL1 metadata arena (`os-npu-meta.h`, being deleted by `work/umem-dynamic-pool-1103`; this work builds on it once it lands and does not touch pool sizing, `SUNSTONE_OS_NPU_POOL_BASE` or `SUNSTONE_OS_NPU_POOL_BYTES`), and the queue depth. The depth sizes `entry[]` in `struct ss_npu_queue`, an ABI shared with EL0 (`SS_NPU_QUEUE_MAX_DEPTH`, default 64). The ring becomes a header with `depth` and a flexible entry array, allocated at registration to the manifest's `in_flight`.
-- **Audio.** The capture buffer already follows the manifest (`64 + max(8192, ceil(max_frames*channels*bytes/4096)*4096)`). The 119,680-byte `.bss.audio` (period ring of 64 entries, 4-page DMA pool, 8 KiB stack) becomes allocated at the grant from the period and frame counts in the audio extent.
+- **Audio.** The capture buffer already follows the manifest (`64 + max(8192, ceil(max_frames*channels*bytes/4096)*4096)`). The 119,680 bytes of stream state (period ring of 64 entries, 4-page DMA pool, 8 KiB stack) come from the unified ledger at the first open of the stream (implemented); sizing them from the period and frame counts in the audio extent is open.
 - **Headset.** `.bss.voice` (440,448 bytes), the headset application state (353,888) and the 96,044-byte WAV buffer are sized from the Bluetooth profile at the grant.
 - **Placement.** `A733_SMP_APPLICATION_CORE` and `_WORKER_CORE` become run-time values read from the grant; the `_Static_assert`s in `apps/os/start.c` become admission checks.
 
@@ -59,26 +59,31 @@ Counts are tracked files that mention the option, including docs.
 - **Why an option:** commit 6976bc48 keeps other lifetimes unchanged while it is qualified.
 - **Run-time form:** a third contract magic, handled like resident. It is the last piece. If its EL3 patches cannot become branches without changing the EL3 stop handler or the supervised and resident EL3 stop paths, it stays a second OS image and the gate builds two, and the reason is recorded here.
 
-### `SUNSTONE_A733_OS_AUDIO` (I2S capture)
+### I2S capture (formerly `SUNSTONE_A733_OS_AUDIO`)
 
-- **Compiles in or out:** `audio.c`, the DMA service, the I2S and audio-lease drivers: about +76 KiB `.text`, +120,128 bytes `.bss` (`resaud` 670,860 against `res` 594,412 bytes of text). The 184-byte `os_audio_session` extension; `OS_SERVICE_AUDIO`; route `{143,0,0xd8,os_audio_irq}`; pins PB5, PB6, PB8; `OS_STAGED_WORKLOAD` forced to 0.
-- **Why an option:** commit d3fa6637: the loader admitted only the 808-byte session. e4005b17 allowed resident once the loader admitted 992 bytes. The exclusion with HEADSET ("an application takes one capture source") is software convenience; the manifest already refuses two capture devices.
-- **Today's gate:** `os_session_valid` demands a valid extent in an AUDIO build; I found no test of the I2S device bit in `os_capture_start`; the bit gates only `ss_capture`.
-- **Run-time form:** granted when `devices` has `SS_DEVICE_AUDIO_I2S` and the board description lists the wired microphone and the extent validates. Not granted: `os_audio_pins`, the DMA0 open and the route do nothing. The workload word is derived from the granted set.
+- **Status: implemented.** Every OS image links `audio.c`, the DMA service and the I2S and audio-lease drivers.
+- **Grant:** the session grants the service when `devices` has `SS_DEVICE_AUDIO_I2S` and the audio record validates. When it is not granted, `os_audio_pins`, the DMA0 open and the interrupt enable do nothing.
+- **Memory:** the stream's state (119,680 bytes: the period ring, the DMA pool session and the task stack) comes from the unified ledger at the first open of the stream, so an image without a capture session holds only a pointer.
+- **Refusals:** admission refuses the grant with the DMA service, which shares INTID 143, with the NPU, in a returning image, in an image with the USB camera decoder, in a supervised GPU image and with resident CPU grants.
 
-### `SUNSTONE_A733_OS_RADIO` (Wi-Fi station)
+### Wi-Fi station (formerly `SUNSTONE_A733_OS_RADIO`)
 
-- **Compiles in or out:** almost nothing. The board's `main.c` already links all radio code, so `.bss.radio` (354,832 bytes) is in every OS image; the option adds `radio.c`, `wifi_credential.c`, `main.patch` (progress reports for `OS_SERVICE_RADIO` and `OS_SERVICE_NETWORK`) and, for resident, `radio_profile.c`. `resradio` is +576 bytes of text over `res`. It forces workload 1 and sets the fixed addresses: radio profile at 0x43000000 (1,872 bytes), credential record 0x43004000 (256 bytes), firmware span from 0x43010000 (0xf0000 bytes).
-- **Why an option:** commit 5a5672c1 added the radio and headset as build options so the first images stayed as qualified. No size reason is recorded.
-- **Today's gate:** the board activates the radio from the session word (`a733_board_radio_workload(workload)` is `workload & 1`), so part of the gate is already run time. The module is powered only after the profile digest in the sealed board prefix matches, the `platform_authority` and owner token check, and the BLDO5 first-run guard passes. There is no device bit and no extent.
-- **Run-time form:** new device bit `SS_DEVICE_RADIO` (bit 8; `SS_DEVICE_ALL` is `(1u<<8)-1` today), a radio extent carrying the profile digest and the credential record location, and a board-description entry for the module. Workload 1 is derived from the bit. The power-on guard is unchanged.
+- **Status: implemented.** Every OS image links `radio.c`, `wifi_credential.c` and the progress reports of `main.patch` for `OS_SERVICE_RADIO` and `OS_SERVICE_NETWORK`; a resident image also links `radio_profile.c`. The board's `main.c` holds `.bss.radio` (354,832 bytes), so it is in every image.
+- **Grant:** the device bit `SS_DEVICE_RADIO` (bit 8; `SS_DEVICE_ALL` is `(1u<<9)-1`). The radio has no session record, because the sealed board prefix already carries the profile's address, size and digest. The decode requires the board prefix's workload to agree with the bit: workload 1, the full station, with USB storage, or, in the scanning image, workload 3 without it. A radio workload without the bit is refused.
+- **Fixed addresses:** radio profile at 0x43000000 (1,872 bytes), credential record at 0x43004000 (256 bytes), firmware span from 0x43010000 (0xf0000 bytes).
+- **Power-on:** unchanged. The module is powered only after the profile digest matches, the `platform_authority` and owner token check passes and the BLDO5 first-run guard holds.
+- **Credential:** a session that grants the radio wipes the credential record at its end and on a failure; any other session neither waits for the record nor writes it. The runner refuses a credential for an application that does not declare the radio device and for a session that does not grant it (`tools/board.py`, `tools/board_images.py`).
+- **Scanning image:** `SUNSTONE_A733_OS_RADIO_SCAN` stays a build option, because it depends on the returning lifetime: it adds the scan workload, the module shutdown with readbacks and the scan result.
+- **Refusals:** admission refuses the radio with the NPU, in a returning image other than the scanning one, in an image with the USB camera decoder, in a supervised GPU image and with resident CPU grants.
 
-### `SUNSTONE_A733_OS_HEADSET` and `SUNSTONE_A733_OS_MSBC`
+### Headset and mSBC (formerly `SUNSTONE_A733_OS_HEADSET` and `SUNSTONE_A733_OS_MSBC`)
 
-- **Compiles in or out:** the Bluetooth stack, UART driver and headset capture client: +151,616 bytes `.text` and +940,928 bytes `.bss` over `sup`. The 832-byte Bluetooth profile at 0x43000000, or 0x43008000 with the radio. Services `bluetooth` and `headset`. MSBC adds libsbc, `msbc.c`, `playback.c` (about 147 KiB, 6 KiB `.bss`, measured on an older build) and capture mode 3.
-- **Why an option:** commit 5a5672c1 ("supervised only, because the Bluetooth application ends 60 seconds after it starts"); 61321c21 lifted the pairing with the radio by sharing one module owner. External pinned sources (`SUNSTONE_BT_SECURITY_DIR`, `SUNSTONE_BT_SBC_DIR`) were optional inputs.
-- **Run-time form:** the one OS image has no headset code. A headset is not a current priority (the USB priorities are HID, UVC webcams and USB serial), and its sources (Zephyr Bluetooth security, libsbc) must not become inputs of every build. The Bluetooth stack, the headset client and MSBC form an object library linked by the application's manifest, like `sunstone-a733-os-sd`, into an image whose manifest requests the headset. The library's directory records the libsbc LGPL notice where it is built. Until that series, the headset stays a build option with its present rules (`headset_workload_valid` in `apps/os/headset.c` keeps the narrower workload rule that `os_workload_valid` no longer expresses).
-- **Real constraint:** the radio and the headset share one AIC8800 module owner. Run time picks the owner from the granted set; it is a hardware fact, not an option.
+- **Status: implemented.** The headset service, the Bluetooth stack, its UART driver and the mSBC codec form one object library, `sunstone-a733-os-headset`. `cmake/sunstone-image.cmake` links it into an image whose application declares the `audio-headset` device, required or optional. Only such an image compiles the external sources, so the library needs `SUNSTONE_BT_SECURITY_DIR` and `SUNSTONE_BT_SBC_DIR` only there. The build directory keeps the libsbc license (LGPL-2.1-or-later) and its source record in `os-image/bluetooth/msbc-license/`.
+- **Core interface:** the OS core reaches the library through weak references, so the core objects are the same with and without it. The session decode grants the headset (grant bit 5) when the session declares the device, and refuses the device in an image without the library. The EL3 identity hook reads the sealed session's devices: for a headset session the library copies the 832-byte Bluetooth profile from 0x43008000 and publishes it with the 1 MiB profile span; an image without the library refuses that session. Admission requires SID evidence for the grant.
+- **Codec:** mSBC is always linked, so the profile's mode chooses CVSD (2) or mSBC (3) at run time.
+- **Module owner:** the radio and the headset share one AIC8800 module. When the session grants the radio, the headset attaches to the radio owner's module; otherwise it runs its own Bluetooth owner task.
+- **Refusals:** admission refuses the headset with the NPU, in a returning image, in an image with the USB camera decoder and in a supervised GPU image.
+- **Fixture:** the `headset-fixture` application declares USB storage and the headset; the gate's `headset` and `resheadset` variants build it.
 
 ### `SUNSTONE_A733_OS_NPU`, `_NPU_QUEUE`, `_NPU_OBSERVE`
 
@@ -187,10 +192,21 @@ The all-in link (`all` in `VARIANTS`): audio, radio, NPU with the queue, A76 adm
 
 The symbol-union estimate in the first version of this document (0.96 MB) was high; the link is 0.87 MB.
 
+The headset library, measured on the service series with `aarch64-none-elf-size`: the supervised image with no application against the same image with the `headset-fixture` application, and the sum of the library's objects:
+
+| Build | text + rodata | data | bss | heap end |
+| --- | --- | --- | --- | --- |
+| `sup` at the service series | 764,028 | 2,752 | 7,144,944 | 0x414b7d80 |
+| `headset` (`sup` with `headset-fixture`) | 954,196 | 2,808 | 8,422,896 | 0x415ef500 |
+| difference | +190,168 | +56 | +1,277,952 | +0x137780 |
+| library objects | 201,421 | 8 | 948,008 | |
+
+The library's objects include sections that the link discards. Most of the `.bss` difference beyond the library is the fixture's capture buffer: 160,000 mono 16-bit frames, rounded up to 4,096-byte pages, plus a 64-byte header (323,648 bytes).
+
 Fit:
 
-- **Code and read-only data:** the `CODE` region is 2 MiB, shared with the application. The all-in OS takes 0.83 MiB and leaves 1.17 MiB. The headset library, when an image links it, adds about 0.15 MB (0.30 MB with MSBC).
-- **Data, bss, heap and device pool:** `RAM` is 10 MiB (0x41200000 to 0x41c00000). The all-in image ends at 0x416f4000, 5.0 MiB in. The headset adds 0.94 MB of `.bss`, which still ends below 0x41800000.
+- **Code and read-only data:** the `CODE` region is 2 MiB, shared with the application. The all-in OS takes 0.83 MiB and leaves 1.17 MiB. The headset library with mSBC, when an image links it, adds 0.18 MiB (measured below).
+- **Data, bss, heap and device pool:** `RAM` is 10 MiB (0x41200000 to 0x41c00000). The all-in image ends at 0x416f4000, 5.0 MiB in. The headset library adds 0.90 MiB of `.bss`; the headset fixture image ends its heap at 0x415ef500.
 - **Fixed regions untouched:** the NPU pool, the monitor interval and the uncached block keep their addresses. The pool is sized by the umem branch.
 - **If something does not fit,** the first candidates are the headset state and the audio ring, both of which the "no artificial caps" section moves to allocation at the grant, and then object libraries linked by manifest like `sunstone-a733-os-sd`.
 
@@ -204,7 +220,7 @@ One option family per commit series. Each series lands on its own, passes its ch
 
 1. **Foundation (done).** The granted set (`struct os_session` holds every record and `granted`; the wire form carries a record only for a granted service and the thermal record's size follows the records present), the fixed service ids, the refusal table (`apps/os/grants.c`), the start-entry guards of the NPU, I2S and radio, the EL3 identity hook reading the radio profile and chip ID only for workload 1, the `all` variant and the ungranted-service checks. No option removed yet; the options now decide only which code is linked.
 2. **CPU family** (`A76_ADMITTED`, `CPU_CLOCK`, `PERF`): implemented. It removes `cpu-clock`, `perf` and `perf-npu-low`. See [its design](one-os-image-cpu.md).
-3. **Services** (`AUDIO`, `RADIO`, `HEADSET`, `MSBC`): removes `resaud`, `resradio`, `resradioaud`, `headset`, `resheadset`, `radio-headset`, `resradio-headset`. The radio gets its device bit and extent, the I2S gate becomes a real admission check (device bit and record together, done in the foundation), and the headset and MSBC become the manifest-linked object library.
+3. **Services** (`AUDIO`, `RADIO`, `HEADSET`, `MSBC`): implemented. It removes `resaud`, `resradio`, `resradioaud`, `radio-headset` and `resradio-headset`; `headset` and `resheadset` build the headset fixture application. The radio has its device bit, the I2S gate is an admission check (device bit and record together), and the headset and mSBC are the manifest-linked object library.
 4. **NPU** (`NPU`, `NPU_QUEUE`, `NPU_OBSERVE`, the catalogue): removes `npu` and `npu-queue`. Builds on the umem dynamic-pool branch.
 5. **Lifetime** (`RESIDENT`, then `CPU_RETURN`): removes `res` and, if it folds, the returning variants.
 

@@ -4,6 +4,8 @@
 
 Native SDC1 CMD52/CMD53 transport, immutable firmware staging, AIC8800D80 bootstrap, Wi-Fi scan, association and WPA2, IPv4 clients and listener, DHCP and DNS, and reconnect handling have software evidence. Wi-Fi and Bluetooth share one module owner.
 
+Every OS image links the radio station, and it starts in a session that grants the radio device (`SS_DEVICE_RADIO`, bit 8), which the application must declare. The scanning station that returns to the host is a separate returning image (`SUNSTONE_A733_OS_RADIO_SCAN`). The Bluetooth headset is a library linked into an image whose application declares the headset device ([design](../designs/one-os-image.md)).
+
 
 **Board-qualified scope:** On the Orange Pi Zero 3W's AIC8800D80 module, through the one OS radio image and its stage limit: the first-run guard (PG and PM read 1.8 V), the vendor-order power-on of BLDO5 and CLDO1 at 1.8 V with matched shutdown readbacks, SDIO enumeration (function 1 and 2 identities), the chip and subrevision words, four-bit 25 MHz widening and the firmware upload to its start confirmation, runtime start with the binding check, and a passive 2.4 GHz scan that lists the access points heard (none on 5 GHz) with a normal return. The crypto engine's TRNG delivers 32-byte blocks in the radio OS image, **unqualified and for bring-up only**: health tests at hardware defaults, no characterization, and `entropy_qualified()` still refuses, so no production key may come from it. Association and the four-way handshake (stage limit 5) are built and not yet run on the board.
 

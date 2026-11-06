@@ -120,7 +120,7 @@ check that is not pure-host, the check's own file says what the gate does, in a 
 
 - **Supplied.** `GATE_RUNS = [[ARGUMENT, ...], ...]` lists one argument list for each run. `{output}` is the run's new evidence
   directory and `{cache}/...` a path under the cache. The check takes the images it names. `{elf:NAME}` and `{build:NAME}` name the
-  ELF and the build directory of a gate variant (`sup`, `resaud`, `headset`, `cpu-clock` and the others of `VARIANTS`) or of a
+  ELF and the build directory of a gate variant (`sup`, `res`, `headset` and the others of `VARIANTS`) or of a
   recipe in [tools/gate_images.py](../tools/gate_images.py) (the CPU-return NPU image, the CPU-return GPU image, the latency image). The gate builds each image once
   per tree state, keyed by the revision, the tracked diff and the untracked files, and passes it to the check.
   `{fixture:NAME}` names a fixture of `FIXTURES` in the same file: host data that a cache cleanup may delete. The gate runs the

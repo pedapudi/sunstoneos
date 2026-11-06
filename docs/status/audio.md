@@ -4,6 +4,8 @@
 
 I2S0 capture, playback, cyclic cancellation and drain run through the FreeRTOS DMA service, the cyclic stream driver and the native cache adapter.
 
+Every OS image links I2S capture, and it starts in a session that grants the I2S device with a valid audio record. The headset capture service, with the Bluetooth stack and mSBC, is a library linked into an image whose application declares the headset device ([design](../designs/one-os-image.md)).
+
 **Board-qualified scope:** Internal I2S0 loopback capture and playback, cyclic
 cancellation and drain, and raw-ring overrun pass a returning board diagnostic
 on port 3-3. External microphone and headset operation remain unqualified.
@@ -22,6 +24,7 @@ on port 3-3. External microphone and headset operation remain unqualified.
 1. Measure the unguarded DMA ordering margin.
 2. Qualify external microphone and headset operation, including physical pairing, interoperability and safe shutdown.
 3. Keep the generic capture and paced or recorded input services independent of the external recognition application.
+4. Allocate the headset state and the capture buffer from the unified ledger at the grant, sized from the session's declared sizes. Both are static today: the headset library holds 948,008 bytes of `.bss`, and the capture buffer of the headset fixture application (160,000 mono 16-bit frames) holds 323,648 bytes.
 
 ## Evidence
 

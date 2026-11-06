@@ -115,13 +115,11 @@ returns normally; its result is the record up to `scanned`.
    the WPA2 target. A scan-only profile must construct the platform and session
    without the entropy source, and `board_radio_poll()` must stop at `scanned`
    when no credential was uploaded.
-3. **A returning lifetime with the radio.** `cmake/a733-os-cpu-return.cmake`
-   refuses `SUNSTONE_A733_OS_RADIO`, and the radio platform has no shutdown. A
-   session that returns normally must first put the module in reset (PM1 low),
-   stop the SDC1 clock and mask its interrupt, with the register readbacks that
-   prove it, before the CPU-return path retires. That sequence needs its own
-   design and a host check; until it exists a radio run ends by watchdog reset
-   and power removal, as the supervised build does.
+3. **A returning lifetime with the radio.** Only the scanning station shuts
+   the module down on return, with a readback at each step
+   (`apps/os/radio_scan.c`). Admission refuses the radio in any other returning
+   image (`apps/os/grants.c`), so a full-station run still ends by watchdog
+   reset and power removal, as the supervised build does.
 4. **A host channel for the record.** The radio result is not part of the USB0
    output today, and the record's length is known only when the service ends.
    The service copies the encoded record into retained memory sized to its
