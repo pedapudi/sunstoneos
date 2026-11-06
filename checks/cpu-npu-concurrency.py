@@ -68,7 +68,7 @@ if not a.disabled_only:
           for fault in ['early-complete','changed-ticket','changed-token','frozen-cpu1','wrong-core','throttle']:
               run([str(executable),fault,str(a.out/(fault+'.bin'))])
               record=host.decode_failure((a.out/(fault+'.bin')).read_bytes())
-              assert record['ack_mask']==255 and record['sdk_closed']==(0 if fault=='wrong-core' else 1),(fault,record)
+              assert record['ack_mask']==255 and record['sdk_closed']==1,(fault,record)
               if fault=='wrong-core':assert (record['stage'],record['core'],record['observed'])==(0x9a,3,2),record
               if fault=='throttle':assert record['stage']==0x99 and record['thermal']['causes']==['publication is stale'] and record['thermal']['millicelsius'][2]==-3000 and record['thermal']['freshness_margin_us']==-1000,record
               try:host.decode((a.out/(fault+'.bin')).read_bytes(),mode=1,model_index=0,reference=b'\0\xff')

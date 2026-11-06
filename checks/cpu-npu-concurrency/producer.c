@@ -39,7 +39,14 @@ void ss_activity_begin(void){atomic_store(&started,1);}
 void ss_activity_end(int success){if(!success)abort();}
 _Noreturn void ss_fail_value(uint32_t detail,uint32_t value){fprintf(stderr,"FIRST_FAULT detail=%08x value=%08x\n",detail,value);fflush(stderr);_Exit(2);}
 _Noreturn void ss_fail(uint32_t detail){ss_fail_value(detail,detail);}
-_Noreturn void ss_finish(const void *data,size_t bytes){FILE *f=fopen(destination,"wb");if(!f||fwrite(data,1,bytes,f)!=bytes||fclose(f))abort();_Exit(0);}
+static atomic_uint sdk_closed;
+/* The OS waits in ss_finish for the NPU client's report, which only ss_npu_close publishes: a session that grants the NPU and
+ * finishes without closing it stops there (apps/os/application.c, detail 0x75f) instead of returning its record. */
+_Noreturn void ss_finish(const void *data,size_t bytes){
+#ifdef CPU_NPU_WITH_NPU
+    if(!atomic_load(&sdk_closed))ss_fail_value(0x75f,0);
+#endif
+    FILE *f=fopen(destination,"wb");if(!f||fwrite(data,1,bytes,f)!=bytes||fclose(f))abort();_Exit(0);}
 static void *entry(void *argument){StaticTask_t *task=argument;core=task->core;/* A frozen core makes no progress until the first busy window has closed. */
     if(!strcmp(scenario,"frozen-cpu1")&&core==1){struct timespec pause={0,1000000};while(!atomic_load(&thaw))nanosleep(&pause,NULL);}task->entry(task->argument);return NULL;}
 TaskHandle_t xTaskCreateStaticAffinitySet(void (*fn)(void *),const char *name,unsigned words,void *arg,unsigned priority,StackType_t *stack,StaticTask_t *task,unsigned mask)
@@ -116,7 +123,7 @@ int ss_npu_run(unsigned model,const void *input,size_t input_bytes,void *output,
     unsigned clear=0;if(atomic_compare_exchange_strong(&request,&clear,1))xTaskNotifyGive(&service_task);
     return 0;
 }
-int ss_npu_close(void){return atomic_load(&request)==1?0:1;}
+int ss_npu_close(void){if(atomic_load(&request)==1)return 0;atomic_store(&sdk_closed,1);return 1;}
 extern void cpu_npu_load_init(void),cpu_npu_load_main(const struct ss_grant *);
 extern int os_npu_diagnostic_bind(struct npu_runtime *);
 /* The session of this model declares observation (OS_NPU_OBSERVE). */

@@ -41,9 +41,6 @@ struct { atomic_uint claimed;uint64_t stage,core,cell,job,observed_word,expected
  * fills it and then publishes failed; the main task alone finishes. */
 static struct cpu_npu_failure failure;
 static atomic_uint failed;
-#ifdef CPU_NPU_WITH_NPU
-static int npu_started;
-#endif
 
 static _Noreturn void failure_finish(void);
 static _Noreturn void raise_fault(unsigned stage,unsigned core,unsigned job,unsigned cell,
@@ -191,10 +188,12 @@ static void vectors(void)
 }
 
 #endif
-/* Main task only. Quiesce every core, close the NPU client if one ran, and
- * return the failure record through the normal finish path, so the board
- * returns with its RAM and rails restored. A check that cannot quiesce within
- * the session falls back to the recorded failure and the watchdog. */
+/* Main task only. Quiesce every core, close the NPU client, and return the
+ * failure record through the normal finish path, so the board returns with
+ * its RAM and rails restored. The client is closed even when no job ran: the
+ * session grants the NPU, and ss_finish waits for the client's report, which
+ * only the close publishes. A check that cannot quiesce within the session
+ * falls back to the recorded failure and the watchdog. */
 static _Noreturn void failure_finish(void)
 {
     while(!atomic_load_explicit(&failed,memory_order_acquire))vTaskDelay(1);
@@ -210,7 +209,7 @@ static _Noreturn void failure_finish(void)
         }
     failure.ack_mask=255;
 #ifdef CPU_NPU_WITH_NPU
-    while(npu_started){
+    for(;;){
         if(ss_live()<0||ss_counter_ticks()/24>=limit)ss_fail_value(detail,value);
         int closed=ss_npu_close();if(closed<0)ss_fail_value(detail,value);
         if(closed==1){failure.sdk_closed=1;break;}
@@ -258,7 +257,6 @@ void cpu_npu_load_main(const struct ss_grant *grant)
         uint64_t admit=ss_counter_ticks();
         if(admit>=work_cutoff||work_cutoff-admit<52800000)fault(0x89,6,job,work_cutoff>admit?work_cutoff-admit:0,52800000);
         memset(output,0xa5,sizeof(output));
-        npu_started=1;
         for(;;){
             uint64_t now=ss_counter_ticks();if(now>=work_cutoff)fault(0x8e,6,job,now,work_cutoff);live(6);
             int ran=ss_npu_run(selected,cpu_npu_input,input_bytes,output,output_bytes,100000);
