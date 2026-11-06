@@ -15,18 +15,41 @@ static uint32_t word(const unsigned char *p)
            (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
-static uint32_t byte(uint32_t value, unsigned char data)
+/* The update of the reflected 0xedb88320 CRC (the CRC-32 of zlib and the Armv8 CRC32 instructions), with no inversion of its own.
+ * On an A733 core (ID_AA64ISAR0_EL1.CRC32 is 1 on all eight, docs/hardware/a733-facts.json) the instructions take 8 bytes at a
+ * time; the table-driven update takes one byte in about 14 cycles and verifying a graph reads it twice, which was 96 percent
+ * of admission's time (783 ms of 816 for 13.8 MB at 494 MHz). The software update stays for every other target and is the
+ * reference the host checks compare the instructions with. */
+__attribute__((unused)) static uint32_t byte(uint32_t value, unsigned char data)
 {
     value ^= data;
     value = table[value & 15] ^ (value >> 4);
     return table[value & 15] ^ (value >> 4);
 }
+#if defined(__aarch64__) && !defined(NBG_CRC_SOFTWARE)
+#include <arm_acle.h>
+__attribute__((target("crc"))) static uint32_t crc_update(uint32_t value, const unsigned char *data, size_t bytes)
+{
+    while (bytes && ((uintptr_t)data & 7)) { value = __crc32b(value, *data++); --bytes; }
+    for (; bytes >= 8; data += 8, bytes -= 8) {
+        uint64_t word;
+        __builtin_memcpy(&word, data, 8);
+        value = __crc32d(value, word);
+    }
+    while (bytes--) value = __crc32b(value, *data++);
+    return value;
+}
+#else
+static uint32_t crc_update(uint32_t value, const unsigned char *data, size_t bytes)
+{
+    for (size_t i = 0; i < bytes; ++i) value = byte(value, data[i]);
+    return value;
+}
+#endif
 
 static uint32_t crc(const unsigned char *data, size_t bytes)
 {
-    uint32_t value = UINT32_MAX;
-    for (size_t i = 0; i < bytes; ++i) value = byte(value, data[i]);
-    return ~value;
+    return ~crc_update(UINT32_MAX, data, bytes);
 }
 
 static enum nbg_checksum_result directory(const unsigned char *data, size_t bytes,
@@ -68,12 +91,20 @@ static enum nbg_checksum_result directory(const unsigned char *data, size_t byte
         if (offset < end) return NBG_CHECKSUM_INVALID;
         for (size_t i = end; i < offset; ++i)
             if (data[i]) return NBG_CHECKSUM_INVALID;
-        for (size_t i = offset; i < offset + length; ++i) {
-            int normalized = i >= sums->offset && i - sums->offset < sums->bytes &&
-                             ((i - sums->offset) & 7) >= 4;
-            value = byte(value, normalized ? 0 : data[i]);
+        /* The checksum section's own stored words count as zero; everything else is read as it is, in runs. */
+        const size_t stop = offset + length, sum_begin = sums->offset, sum_end = sums->offset + sums->bytes;
+        for (size_t i = offset; i < stop;) {
+            if (i >= sum_begin && i < sum_end) {
+                const unsigned char b = ((i - sum_begin) & 7) >= 4 ? 0 : data[i];
+                value = crc_update(value, &b, 1);
+                ++i;
+            } else {
+                const size_t next = i < sum_begin && sum_begin < stop ? sum_begin : stop;
+                value = crc_update(value, data + i, next - i);
+                i = next;
+            }
         }
-        end = offset + length;
+        end = stop;
     }
     if (end != bytes) return NBG_CHECKSUM_INVALID;
     struct nbg_checksum check = {word(data + 12), ~value};
@@ -105,10 +136,10 @@ enum nbg_checksum_result nbg_checksum_verify(const void *input, size_t bytes,
     if (word(data + 4) == NBG_MODEL_DIRECTORY_VERSION) return directory(data, bytes, out);
     if (word(data + 4) != NBG_MODEL_VERSION || bytes < NBG_MODEL_HEADER_BYTES)
         return NBG_CHECKSUM_INVALID;
-    uint32_t value = UINT32_MAX;
-    for (size_t i = 0; i < bytes; ++i) {
-        value = byte(value, i < 108 || i >= 112 ? data[i] : 0);
-    }
+    static const unsigned char zero[4];
+    uint32_t value = crc_update(UINT32_MAX, data, 108);
+    value = crc_update(value, zero, 4);
+    value = crc_update(value, data + 112, bytes - 112);
     struct nbg_checksum check = {word(data + 108), ~value};
     *out = check;
     return check.stored == check.computed ? NBG_CHECKSUM_MATCH : NBG_CHECKSUM_MISMATCH;
