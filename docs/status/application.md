@@ -22,7 +22,7 @@ repeatability. [CPU status](cpu.md) identifies the result and failed controls.
 | Eight-worker CPU-only mimus recording | qualified on the board | 90-frame reference matched, seven secondaries off | [CPU status](cpu.md) |
 | GPU compute queue and trusted GPU peer | host-tested | none on the board | [GPU status](gpu.md) |
 | Concurrent CPU, GPU and NPU operation | host-tested | none on the board | [NPU status](npu.md) |
-| Lifetime from the contract magic in one OS image ([design](../designs/one-os-image.md#lifetime-word-and-sealed-session)) | supervised: qualified on the board; resident: host-tested at EL3 and EL1, unqualified on the board | two supervised runs (ret-npu-load: EL3 stage, total 32.04 s; EL1 stage, total 35.08 s); no resident board run | `1793940886685882479-99c7d548` and `1793943016757588735-a94fc5b2` below; `checks/os-lifetime-admission.py`, `checks/os-sealed-session.py`, `checks/board-lifetime-admission.py` |
+| Lifetime from the contract magic in one OS image ([design](../designs/one-os-image.md#lifetime-word-and-sealed-session)) | returning: the lifetime of every image except the USB class images; supervised: host-qualified on its EL3 stop paths, last run on the board before the returning lifetime got its own magic and lifetime word value; resident: host-tested at EL3 and EL1, unqualified on the board | two supervised runs before that change (ret-npu-load: EL3 stage, total 32.04 s; EL1 stage, total 35.08 s); no resident board run | `1793940886685882479-99c7d548` and `1793943016757588735-a94fc5b2` below; `checks/el3-stop-trace.py` shows that the supervised and resident stop paths execute the same instructions and accesses as before the change; `checks/os-lifetime-admission.py`, `checks/os-sealed-session.py`, `checks/board-lifetime-admission.py` |
 | Warm PCM-to-transcription time | open | target 0.05 times the audio duration | `application-recognition-time-target` (not run) |
 
 ## Open work
@@ -38,6 +38,8 @@ repeatability. [CPU status](cpu.md) identifies the result and failed controls.
    - the static-OFF hold of cores 1 to 7 before entry, a power-state procedure that needs the coordinator's approval: under FEL every secondary inherits policy `0x100`, and the resident start refuses any policy but 0 (`HELD_POLICY` in `platform/a733/cpu_start.c`);
    - a test application that stops renewal when its work ends, because the resident OS renews the watchdog after the application finishes (`apps/os/services.c`);
    - the expected watchdog-reset outcome in the runner: DRAM is lost, the stop record is the RTC crumbs (EL3 stop `0x0111`, value `0x5000` for status 5), and the return to FEL relies on the ROM not booting the inserted card, as the recorded supervised resets did.
+8. Make `checks/returning-watchdog.py --image` pass; the gate does not run this mode. It fails on the build before the returning-lifetime change as well, with
+   `AssertionError: ('call budget', 'ss_fail', '0x4107a850')` at `board_failure_cases` (line 261). The address is in `_freertos_vector_table` (`continue.S`).
 
 ## Evidence
 
