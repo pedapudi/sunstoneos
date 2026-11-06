@@ -54,6 +54,10 @@ static struct a733_typec_token attachment;
 static TaskHandle_t main_task;
 /* The main task, for the virtual board's tests that give it a notification the OS would not (platform/qemu-os). */
 TaskHandle_t os_application_main_task(void){return main_task;}
+/* 1 when the caller runs at EL1: a privileged task (the NPU's bootstrap, client and worker among them) or an exception
+ * handler. The port's task register, TPIDRRO_EL0, carries the bit; EL0 can read it, and the interrupt and supervisor
+ * entries set it. Every task of an application runs at EL0, so this is 0 in all of them. */
+int os_task_at_el1(void){return (int)((ullPortGetTaskRegister()>>portTASK_REGISTER_EL1_BIT)&1u);}
 static atomic_uint_fast64_t finish_by;
 const struct ss_grant *ss_grant(void)
 {

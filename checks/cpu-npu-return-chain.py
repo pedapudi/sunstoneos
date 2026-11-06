@@ -43,6 +43,7 @@ CHECK_INPUTS = ['apps/os/npu-report.py', 'apps/cpu-npu-concurrency/main.c', 'app
  'apps/os/cpu-return-thermal.py', 'tools/board.py', 'tools/board_images.py']
 GATE_RUNS = [['--elf', '{elf:ret-npu-load}', '--out', '{output}']]
 MAIN, CLIENT, BOOTSTRAP, WORKER = 0x5000, 0x3000, 0x4000, 0x9000
+APPLICATION_WORKER = 0x5800   # a second task of the application, also at EL0 on the board
 POOL, POOL_BYTES = 0x47400000, 0x800000  # the model's own NPU reservation; the OS publishes the range it takes from the ledger
 
 
@@ -159,6 +160,7 @@ class Native(terminal.KernelPages, owners.Model):
         self.put64(self.service+self.sf['worker'], WORKER)
         self.put64(self.service+self.sf['activation']+layout.layouts['npu_service_activation']['bootstrap'], BOOTSTRAP)
         self.hooks[layout.address('xTaskGetCurrentTaskHandle')] = lambda: self.current_task
+        self.el1_hook(layout)
         self.hooks[layout.address('xTaskGetSchedulerState')] = lambda: self.scheduler
         self.hooks[layout.address('os_session')] = lambda: self.session
         self.hooks[layout.address('os_granted')] = lambda: int(self.uc.reg_read(prior.fault.REGS[0]) == 1)  # the modeled session grants the NPU (bit 0) alone; admission is not under test
@@ -199,7 +201,7 @@ class Native(terminal.KernelPages, owners.Model):
 
     def api(self, name, *args, task=MAIN, core=6):
         self.current_task = task
-        self.el0 = task == MAIN   # the application's task (checks/os-cpu-return.py KernelPages)
+        self.el0 = task in (MAIN, APPLICATION_WORKER)   # the application's tasks (checks/os-cpu-return.py KernelPages)
         try:
             result = self.call(core, name, args)
         finally:
@@ -390,7 +392,7 @@ def producer(args):
     return payload.read_bytes()
 
 
-def ownership(image, layout, payload, *, fault=False):
+def ownership(image, layout, payload, *, fault=False, fault_task=MAIN):
     native = Native(image, layout, payload)
     assert native.api('os_cpu_return_start') == 1
     native.task('bootstrap');assert native.stop == 'blocked'
@@ -426,8 +428,15 @@ def ownership(image, layout, payload, *, fault=False):
         native.api('npu_service_irq_notify_from_isr', native.service, 1, native.output, task=CLIENT, core=1)
         assert native.u32(native.service+native.sf['irq_pending']) == 3
         native.uc.mem_write(native.payload_address, payload)
-        native.api('ss_finish', native.payload_address, len(payload))
+        if fault_task == MAIN:
+            native.api('ss_finish', native.payload_address, len(payload))
+        else:
+            # Another task of the application reaches the same retirement failure (fail_at in apps/os/npu.c): it is at EL0
+            # too, and must not read the slot table.
+            native.api('os_npu_retirement_check', task=fault_task)
         assert native.stop == 'failure' and native.failures[0][0]&0xf000 == 0xa000
+        assert not native.u32(native.layout.address('os_npu_first_failure')+
+                              native.layout.layouts['os_npu_failure']['slot_state'])
         assert native.failures[0][1]&3 == 3
         assert not native.u32(layout.address('finished', 'apps/os/application.c'))
         assert not native.u32(native.flags['ready']) and not native.u32(native.flags['closing'])
@@ -595,7 +604,7 @@ def main():
     payload = args.payload.read_bytes() if args.payload else producer(args)
     names = {'board_application', 'a733_board_session', 'board_provider', 'a733_native_usb',
         'a733_pmic', 'a733_pmic_slot', 'a733_platform_locks', 'os_thermal_service',
-        'os_npu_application', 'os_npu_device', 'npu_runtime', 'npu_runtime_slot', 'npu_service',
+        'os_npu_application', 'os_npu_device', 'os_npu_failure', 'npu_runtime', 'npu_runtime_slot', 'npu_service',
         'a733_npu_controller', 'a733_npu_startup', 'ss_grant', 'npu_service_reply',
         'os_session', 'os_npu_session', 'nbg_assembly_layout', 'npu_runtime_tensor',
         'a733_thermal_policy', 'os_thermal_readings', 'npu_service_activation', 'a733_cached_runtime'}
@@ -636,6 +645,7 @@ def main():
     host.mandatory_return({'return-report':cpu_report, 'npu-stop':stop}, {'npu_stop':{}}, epoch, generation)
     cleanup = runner_cleanup(args, returns, host, epoch, generation, frozen)
     failed = ownership(image, layout, payload, fault=True)
+    ownership(image, layout, payload, fault=True, fault_task=APPLICATION_WORKER)
     save(args.out/'result.json', dict(passed=True, physical_access=False, model_boundary=__doc__,
         image_sha256=hashlib.sha256(args.elf.read_bytes()).hexdigest(), binding=binding,
         epoch=epoch, generation=generation, sdk_operations=native.ops, sdk_jobs=native.submits,

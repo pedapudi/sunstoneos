@@ -66,7 +66,7 @@ static uint32_t first_site, first_value, first_caller;
 /* The wake of the application's end wait (apps/os/application.c); no application runs here. */
 unsigned os_wake_main_calls;
 void os_application_wake_main(void) { ++os_wake_main_calls; }
-TaskHandle_t os_application_main_task(void) { static int none; return (TaskHandle_t)&none; } /* no application's task runs here */
+int os_task_at_el1(void) { return 1; } /* the failure records are made as the NPU's own (EL1) tasks here */
 void board_fail_note(uint32_t site, uint32_t value, const void *caller)
 {
     if (!first_site) { first_site = site; first_value = value; first_caller = (uint32_t)(uintptr_t)caller; }

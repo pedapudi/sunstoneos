@@ -33,7 +33,7 @@ int os_npu_submit(uint64_t timeout)
 int os_npu_close(void){closed=1;return 1;}
 int board_live(void *v){assert(!v);return 1;}
 void os_application_wake_main(void){}   /* the application's end wait (apps/os/application.c); no application runs here */
-TaskHandle_t os_application_main_task(void){static int none;return (TaskHandle_t)&none;}   /* no application's task runs here */
+int os_task_at_el1(void){return 1;}   /* the failure records are made as the NPU's own (EL1) tasks here */
 void board_fail_note(uint32_t s,uint32_t v,const void *p){(void)s;(void)v;(void)p;assert(0);}
 void board_fail(void *v){(void)v;assert(0);}
 void vTaskSuspend(TaskHandle_t task){assert(!task);longjmp(ended,1);}

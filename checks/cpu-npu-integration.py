@@ -46,6 +46,7 @@ class Model(terminal.KernelPages,owner.Model):
   # The application's task has its own handle, which xTaskGetCurrentTaskHandle returns while its SDK entries run (call).
   self.put64(layout.address('main_task','apps/os/application.c'),0x5000)
   self.hooks[layout.address('xTaskGetCurrentTaskHandle')]=lambda:0x5000 if self.el0 else 0x3000
+  self.el1_hook(layout)
   grant=layout.address('grant','apps/os/application.c');self.put64(grant+layout.layouts['ss_grant']['finish_by_us'],55000000)
   # The slot table is carved from the runtime's reservation and the runtime points to it (fail_at reads slot 0).
   self.put64(self.rt+layout.layouts['npu_runtime']['slot'],0x41f01000)

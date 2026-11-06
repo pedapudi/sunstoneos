@@ -57,6 +57,11 @@ class KernelPages:
     that code touched one (el0_touched)."""
     el0 = False
 
+    def el1_hook(self, layout):
+        # os_task_at_el1 (apps/os/application.c) reads bit 56 of the board's task register, which is clear in every task of
+        # the application. The model answers from el0.
+        self.hooks[layout.address('os_task_at_el1')] = lambda: 0 if self.el0 else 1
+
     def kernel_only(self, low, high):
         self.__dict__.setdefault('kernel_ranges', []).append((low, high))
 
