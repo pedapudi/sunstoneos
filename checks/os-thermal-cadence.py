@@ -168,6 +168,19 @@ for label,change in [('inactive',(8,1)),('retaining',(6,1)),('rearm-pending',(7,
     cases.append('wakes-next-tick-'+label)
 m.call(0,1000000);step(m,1000000);m.call(13,1000000,1);m.call(13,1000000,0);assert m.call(12,1000000)==20
 cases.append('idle-sleep-to-next-reading')
+# The owner steps only when idle_ticks wakes it. The first usable row comes from an interrupt-notified read, off the 25 ms
+# read grid, and starts the 125 ms record phase there: each later record slot must wake the owner (board run
+# 1793934571637827194-6be652e2 recorded every slot after the first 19.9 ms late, on the next periodic read).
+m.call(0,1000000);m.call(9,1000000,0);step(m,1000000)
+m.call(9,1010000,31);step(m,1010000,0,True)
+assert m.state()[0]==1 and m.state()[10]==1010000
+m.call(2,1010001)
+t=1010000
+while t<1600000:
+    t+=1000*m.call(12,t);step(m,t)
+r=finish(m,t+10)
+assert r['rows']>=5 and report.classify(r)=='complete',[x['time_us'] for x in r['readings']]
+cases.append('idle-sleep-wakes-for-each-record-slot')
 controls={}
 if not a.no_control:
     # Negative control: a read that restarts the 25 ms sensor period from its own completion

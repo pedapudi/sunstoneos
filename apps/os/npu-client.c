@@ -161,7 +161,10 @@ wait_stop:
     }
 done:
     if(ss_application.manifest) {
-        r->jobs=sdk_jobs;r->output_bytes=sdk_output_bytes;r->pattern=0;
+        /* The session selects no job count for an application, which runs the jobs it submits: the report gives that
+         * count in both words. The session's job word (1, as tools/session.py writes it) is reported only when no
+         * application ran. */
+        r->jobs=sdk_jobs;r->jobs_selected=sdk_jobs;r->output_bytes=sdk_output_bytes;r->pattern=0;
         if(!sdk_closed)ss_npu_service_fail();
     }
     /* One publication: the copy completes before finished becomes visible. */

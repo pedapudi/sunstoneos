@@ -338,8 +338,9 @@ static int step(void)
 }
 /* Ticks (1 ms) the owner may sleep after a step. It steps on the next tick while it has work that cannot wait: it is
  * starting or retaining, an interrupt is still masked and awaits its rearm, or the CPU clock driver is working. Otherwise
- * it sleeps until its next reading or the end of the clock admission, at most 20 ms, and the thermal interrupt wakes it
- * earlier. An idle session therefore wakes about 40 times a second, not 1000. */
+ * it sleeps until its next reading, its next record slot or the end of the clock admission, at most 20 ms, and the thermal
+ * interrupt wakes it earlier. The record slots keep the phase of the first usable row, which an interrupt-notified read
+ * can place off the 25 ms read grid, so they are deadlines of their own. An idle session wakes about 50 times a second. */
 static TickType_t idle_ticks(void)
 {
     if(!thermal.active||thermal.retaining||thermal.masked||!live())return 1;
@@ -347,6 +348,7 @@ static TickType_t idle_ticks(void)
     uint64_t now=a733_smp_counter()/24,until=thermal.next_read;
     uint64_t state=atomic_load_explicit(&load_state,memory_order_relaxed);
     if((state&3)==A733_THERMAL_NORMAL&&(state>>2)+1<until)until=(state>>2)+1;
+    if(readings.next&&readings.next<until)until=readings.next;
     if(until<=now)return 1;
     uint64_t ticks=(until-now)/(1000000u/configTICK_RATE_HZ);
     return ticks<1?1:ticks>20?20:(TickType_t)ticks;
