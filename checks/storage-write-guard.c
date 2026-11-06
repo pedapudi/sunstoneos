@@ -122,9 +122,14 @@ int main(int argc, char **argv)
     region_data = part_base + reserved + (uint64_t)fats * fsz; region_end = part_base + part_sectors;
     struct ss_grant g = {0};
     if (getenv("FINISH_AFTER_US")) { finish_by_us = now_us() + strtoull(getenv("FINISH_AFTER_US"), 0, 0); cut_enabled = getenv("CUT") != NULL; g.finish_by_us = finish_by_us; }
-    g.regions[STORAGE_WRITE_REGION_BOUNDS] = (struct ss_span){bounds_blob, sizeof bounds_blob};
-    g.regions[STORAGE_WRITE_REGION_MODE] = (struct ss_span){mode_blob, sizeof mode_blob};
-    g.regions[STORAGE_WRITE_REGION_FLUSH] = (struct ss_span){flush_buffer, sizeof flush_buffer};
+    /* The grant points at a span table in manifest order (ABI version 2). */
+    static struct ss_span spans[] = {
+        [STORAGE_WRITE_REGION_BOUNDS] = {bounds_blob, sizeof bounds_blob},
+        [STORAGE_WRITE_REGION_MODE] = {mode_blob, sizeof mode_blob},
+        [STORAGE_WRITE_REGION_FLUSH] = {flush_buffer, sizeof flush_buffer},
+    };
+    g.regions = spans;
+    g.region_count = sizeof spans / sizeof spans[0];
     storage_write_main(&g);
     return 6;
 }
