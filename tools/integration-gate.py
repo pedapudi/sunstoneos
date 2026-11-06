@@ -49,12 +49,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 VARIANTS = {
+    # The one OS image: it admits the supervised and the resident lifetime and selects one from the contract magic.
     'sup': [],
-    'res': ['-DSUNSTONE_A733_OS_RESIDENT=ON'],
     # An application that declares the headset device links the headset library (the Bluetooth stack and mSBC).
     'headset': ['-DSUNSTONE_APPLICATION=headset-fixture', '-DSUNSTONE_BT_SBC_DIR={cache}/sources/bluetooth-msbc'],
-    'resheadset': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_APPLICATION=headset-fixture',
-                   '-DSUNSTONE_BT_SBC_DIR={cache}/sources/bluetooth-msbc'],
     # The NPU service and its EL0 ring, the CPU clock owner and the performance service are in every image, and a session
     # grants them (docs/designs/one-os-image.md, docs/designs/one-os-image-cpu.md).
 }

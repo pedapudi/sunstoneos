@@ -64,8 +64,7 @@ def run(command, log=None, **kwargs):
 # ---------------------------------------------------------------------------
 # Image construction
 
-DEFINES = ['-DA733_SMP_CONTRACT_MAGIC=0x415337334f534331ULL', '-DA733_SMP_RESULT_MAGIC=0x415337334f535231ULL',
-           '-DSUNSTONE_A733_OS=1', '-DSUNSTONE_A733_SMP_DIAGNOSTIC=1', '-DSUNSTONE_BOARD_APPLICATION=1',
+DEFINES = ['-DSUNSTONE_A733_OS=1', '-DSUNSTONE_A733_SMP_DIAGNOSTIC=1', '-DSUNSTONE_BOARD_APPLICATION=1',
            '-DSUNSTONE_BOARD_SUPERVISED=1', '-DSUNSTONE_BOARD_USB2_DUAL=1', '-DSUNSTONE_TASK_DEADLINES=1',
            '-DSUNSTONE_A733_IRQ_TABLE=1', '-DSUNSTONE_CRUMBS=1']
 CFLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mgeneral-regs-only', '-ffreestanding',

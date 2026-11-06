@@ -2,7 +2,6 @@
 include("${CMAKE_CURRENT_LIST_DIR}/latency-instrumentation.cmake")
 option(SUNSTONE_A733_OS "Build the integrated OS image" OFF)
 option(SUNSTONE_A733_OS_SD_WRITE "OS image whose SD0 owner task writes the card under runner-admitted bounds (write-capable: the runner needs a coordinator approval record)" OFF)
-option(SUNSTONE_A733_OS_RESIDENT "Integrated OS with the resident lifetime" OFF)
 option(SUNSTONE_A733_OS_USB_CLASSES "OS input, serial and camera host services" OFF)
 option(SUNSTONE_A733_OS_USB_JPEG "OS camera MJPEG hardware decoder" OFF)
 option(SUNSTONE_A733_OS_DMA "Adopted DMA0 RAM-copy service with normal retirement" OFF)
@@ -100,13 +99,6 @@ list(REMOVE_ITEM os_sources "$<TARGET_OBJECTS:a733-board-usb2-host>"
   "${board_build}/boot-host-irq.c" "${board_build}/boot-supervised.c" "${board_build}/boot.c" "${board_build}/build-id.c"
   "${os_root}/apps/board/admission.c" "${os_root}/apps/board/identity.c"
   "${os_root}/apps/board/client.c" "${os_root}/apps/board/usb0.c" "${os_root}/apps/board/session.c")
-if(SUNSTONE_A733_OS_RESIDENT)
-  set(os_contract_magic 0x415337334f524331ULL)
-  set(os_result_magic 0x415337334f525231ULL)
-else()
-  set(os_contract_magic 0x415337334f534331ULL)
-  set(os_result_magic 0x415337334f535231ULL)
-endif()
 # One EL3 boot for both lifetimes: the patch branches on the lifetime that admission verified from the contract magic
 # (a733_smp_lifetime in apps/os/admission.c) for the watchdog readback, the result magic and the cores' held startup.
 apply_build_patch("${os_build}/boot.c" "${board_build}/boot-supervised.c" "${os_root}/apps/os/boot.patch")
@@ -434,8 +426,6 @@ target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICAT
   "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_A733_OS_CPU_RETURN=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_CRUMBS=1>"
   "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"
-  A733_SMP_CONTRACT_MAGIC=${os_contract_magic} A733_SMP_RESULT_MAGIC=${os_result_magic}
-  "$<$<BOOL:${SUNSTONE_A733_OS_RESIDENT}>:SUNSTONE_BOARD_RESIDENT=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_SCAN}>:SUNSTONE_A733_OS_RADIO_SCAN=1>")
 # The EL0 ring is linked too; the application's declaration selects it (apps/os/npu-session.h, os_npu_session_queued).
 target_sources(sunstone-a733-os-core PRIVATE "${os_root}/runtime/npu_app_queue.c" "${os_root}/apps/os/npu-queue.c")

@@ -290,7 +290,7 @@ def main():
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--application', required=True)
     parser.add_argument('--build-id', type=Path, required=True)
-    parser.add_argument('--lifetime', choices=('supervised', 'resident', 'return'), required=True)
+    parser.add_argument('--lifetime', choices=('supervised', 'return'), required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--application-objects', type=Path, nargs='*', default=[])
     parser.add_argument('--application-library', type=Path, action='append', default=[])

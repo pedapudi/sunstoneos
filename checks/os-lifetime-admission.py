@@ -45,7 +45,7 @@ sys.path.insert(0, str(ROOT / 'checks'))
 import harness  # noqa: E402  Refuses to run with assertions disabled.
 from unicorn import UC_HOOK_MEM_READ  # noqa: E402
 
-GATE_RUNS = [['--image', '{elf:sup}', '--image', '{elf:res}', '--image', '{elf:ret-npu-load}', '--output', '{output}']]
+GATE_RUNS = [['--image', '{elf:sup}', '--image', '{elf:ret-npu-load}', '--output', '{output}']]
 CHECK_INPUTS = ['checks/os-sealed-session.py', 'include/a733_admission_refusal.h', 'include/a733_board_application.h']
 spec = importlib.util.spec_from_file_location('os_lifetime_sealed', ROOT / 'checks/os-sealed-session.py')
 sealed = importlib.util.module_from_spec(spec)

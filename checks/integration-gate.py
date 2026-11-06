@@ -241,14 +241,14 @@ def plan(value=None, changed=None, index=None):
         self.assertIn('-DSUNSTONE_APPLICATION=example', configured[1])
 
     def test_selected_variant_only(self):
-        result = self.run_gate('--reason', 'Resident headset wiring', '--variant', 'resheadset')
+        result = self.run_gate('--reason', 'Headset wiring', '--variant', 'headset')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.records()
         self.assertEqual(len(calls), 2)
         self.assertIn('-DSUNSTONE_APPLICATION=headset-fixture', calls[0])
         self.assertIn('-DEXAMPLE_DIR=', calls[0])
         self.assertIn('-DSUNSTONE_APPLICATION=', calls[0])
-        self.assertEqual(calls[0][2], str(self.sandbox / 'build' / ('gate-os-resheadset-' + self.tree(self.source))))
+        self.assertEqual(calls[0][2], str(self.sandbox / 'build' / ('gate-os-headset-' + self.tree(self.source))))
 
     def test_affected_runs_one_baseline_and_deduplicates_core_checks(self):
         result = self.run_gate('--affected', 'HEAD~1..HEAD', '--check', 'progress')

@@ -57,13 +57,9 @@ endfunction()
 
 function(add_sunstone_image target)
   cmake_parse_arguments(IMAGE "" "LIFETIME;APPLICATION" "" ${ARGN})
-  if(IMAGE_UNPARSED_ARGUMENTS OR NOT IMAGE_LIFETIME MATCHES "^(supervised|resident|return)$" OR
+  if(IMAGE_UNPARSED_ARGUMENTS OR NOT IMAGE_LIFETIME MATCHES "^(supervised|return)$" OR
      (IMAGE_APPLICATION AND NOT TARGET "${IMAGE_APPLICATION}"))
     message(FATAL_ERROR "add_sunstone_image requires LIFETIME and a registered APPLICATION")
-  endif()
-  if((IMAGE_LIFETIME STREQUAL "resident" AND NOT SUNSTONE_A733_OS_RESIDENT) OR
-     (NOT IMAGE_LIFETIME STREQUAL "resident" AND SUNSTONE_A733_OS_RESIDENT))
-    message(FATAL_ERROR "Image lifetime differs from the selected OS core profile")
   endif()
   if(IMAGE_APPLICATION)
   get_target_property(directory ${IMAGE_APPLICATION} SUNSTONE_MANIFEST_DIRECTORY)
@@ -89,8 +85,9 @@ function(add_sunstone_image target)
     endif()
   endif()
   # The session lifetime comes from the application's manifest (tools/session_lifetime.py): startup, setup, run_us and
-  # return_reserve_us. An image with no application keeps the header's default. The resident lifetime has no deadline.
-  if(IMAGE_APPLICATION AND NOT IMAGE_LIFETIME STREQUAL "resident")
+  # return_reserve_us. An image with no application keeps the header's default. It bounds the supervised and returning
+  # lifetimes; a resident session has no deadline and does not read it.
+  if(IMAGE_APPLICATION)
     get_target_property(manifest_json ${IMAGE_APPLICATION} SUNSTONE_MANIFEST)
     execute_process(COMMAND "${Python3_EXECUTABLE}" "${SUNSTONE_SOURCE_ROOT}/tools/session_lifetime.py"
       --manifest "${manifest_json}" OUTPUT_VARIABLE session_seconds OUTPUT_STRIP_TRAILING_WHITESPACE

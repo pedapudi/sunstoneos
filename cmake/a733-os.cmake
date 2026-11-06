@@ -6,10 +6,10 @@ if(NOT TARGET sunstone-a733-os-core)
   return()
 endif()
 include("${CMAKE_CURRENT_LIST_DIR}/sunstone-image.cmake")
+# A returning image admits the supervised lifetime only. Every other image admits the supervised and the resident
+# lifetime and selects one at run time from the contract magic (apps/os/admission.c); its manifest bounds the supervised one.
 set(os_lifetime supervised)
-if(SUNSTONE_A733_OS_RESIDENT)
-  set(os_lifetime resident)
-elseif(SUNSTONE_A733_OS_CPU_RETURN)
+if(SUNSTONE_A733_OS_CPU_RETURN)
   set(os_lifetime return)
 endif()
 if(SUNSTONE_APPLICATION STREQUAL "")

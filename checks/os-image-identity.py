@@ -35,9 +35,7 @@ from harness import machine as harness_machine
 from unicorn import arm64_const as reg
 GATE_RUNS = [
     ['--build', '{build:sup}', '--output', '{output}'],
-    ['--build', '{build:res}', '--output', '{output}'],
     ['--build', '{build:headset}', '--output', '{output}'],
-    ['--build', '{build:resheadset}', '--output', '{output}'],
 ]
 
 SESSION = 0x50001000
