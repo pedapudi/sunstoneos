@@ -1,0 +1,25 @@
+--- continue.S
++++ continue-os.S
+@@ -173,6 +173,22 @@
+     eret
+ .Lel1:
+     // No stack or ordinary RAM access until enable and readback succeed.
++    // The sealed session (apps/os/sealed.c): flush its Nonsecure alias with
++    // translation off, so that the first cached read misses to DRAM. The
++    // flush is stackless and keeps x20 to x25.
++    adrp x0, __os_sealed_start
++    add x0, x0, :lo12:__os_sealed_start
++    adrp x1, __os_sealed_end
++    add x1, x1, :lo12:__os_sealed_end
++    sub x1, x1, x0
++    mov x2, x22
++    bl a733_cpu_coherence_flush
++    cmp w0, #1
++#ifdef SUNSTONE_A733_FAULT_PAGE
++    b.ne a733_cached_el1_fault
++#else
++    b.ne a733_cached_cold_fault
++#endif
+     adrp x0, a733_cached_el1_l1
+     add x0, x0, :lo12:a733_cached_el1_l1
+     mov x1, x22

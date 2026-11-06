@@ -8,7 +8,7 @@ configure_file("${os_qualification}/runtime.h" "${os_build}/cpu-return-runtime.h
 foreach(pair "runtime.c|runtime|${os_qualification}/runtime.c"
              "terminal.S|terminal|${os_qualification}/terminal.S"
              "continue.c|continue|${os_root}/platform/a733-smp-cached/continue.c"
-             "continue.S|vectors|${storage_build}/continue.S"
+             "continue.S|vectors|${os_build}/continue.S"
              "platform.c|platform|${storage_build}/platform.c"
              "main.c|main|${os_root}/apps/board/main.c"
              "cpu.c|cpu|${os_root}/apps/os/cpu.c"

@@ -87,7 +87,12 @@ def check(image, manifest=None, application=None):
     elf = Elf(image.read_bytes())
     # Returning launchers save mutable image RAM. C++ metadata and linker
     # orphans must not introduce writable sections into the executable block.
-    writable = [s for s in elf.sections if s[2] & 3 == 3 and s[5] and s[3] < 0x42000000]
+    # The one exception is the sealed session (apps/os/sealed.c): a NOLOAD section last in the CODE block, written only by
+    # EL3 with translation off, which EL1 and EL0 map read-only.
+    sealed = [s for name, s in zip(elf.names, elf.sections) if name == '.sealed']
+    assert len(sealed) == 1 and sealed[0][1] == 8 and sealed[0][2] & 3 == 3 and \
+        0x41000000 <= sealed[0][3] < sealed[0][3] + sealed[0][5] <= 0x41200000, 'the sealed session must be NOLOAD inside CODE'
+    writable = [s for name, s in zip(elf.names, elf.sections) if s[2] & 3 == 3 and s[5] and s[3] < 0x42000000 and name != '.sealed']
     assert all(0x41200000 <= s[3] < s[3] + s[5] <= 0x42000000 for s in writable), \
         'allocated writable section outside image RAM'
     defined = [s for s in elf.symbols if s['name'] and s['shndx'] not in (0, 0xfff1)]

@@ -99,7 +99,7 @@ get_target_property(os_sources sunstone-a733-board SOURCES)
 list(REMOVE_ITEM os_sources "$<TARGET_OBJECTS:a733-board-usb2-host>"
   "${board_build}/boot-host-irq.c" "${board_build}/boot-supervised.c" "${board_build}/boot.c" "${board_build}/build-id.c"
   "${os_root}/apps/board/admission.c" "${os_root}/apps/board/identity.c"
-  "${os_root}/apps/board/client.c" "${os_root}/apps/board/usb0.c")
+  "${os_root}/apps/board/client.c" "${os_root}/apps/board/usb0.c" "${os_root}/apps/board/session.c")
 if(SUNSTONE_A733_OS_RESIDENT)
   set(os_contract_magic 0x415337334f524331ULL)
   set(os_result_magic 0x415337334f525231ULL)
@@ -110,9 +110,13 @@ endif()
 # One EL3 boot for both lifetimes: the patch branches on the lifetime that admission verified from the contract magic
 # (a733_smp_lifetime in apps/os/admission.c) for the watchdog readback, the result magic and the cores' held startup.
 apply_build_patch("${os_build}/boot.c" "${board_build}/boot-supervised.c" "${os_root}/apps/os/boot.patch")
+# Every core flushes the sealed session's Nonsecure alias at EL1 entry (apps/os/sealed.c).
+apply_build_patch("${os_build}/continue.S" "${storage_build}/continue.S" "${os_root}/apps/os/continue-sealed.patch")
+list(REMOVE_ITEM os_sources "${storage_build}/continue.S")
+list(APPEND os_sources "${os_build}/continue.S")
 # Retained per-core fault records and their previous-boot report
 # (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
-set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
+set(os_added apps/os/admission.c apps/os/sealed.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
   runtime/cpu_topology_app.c
   apps/os/usb-service.c apps/os/large.c apps/os/large_load.c drivers/storage/sunxi_mmc.c drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c drivers/storage/fat32_ro.c drivers/storage/storage_digest.c drivers/storage/storage_digest_extensions.c drivers/storage/storage_digest_ce.S kernel/appmem/app_region.c kernel/appmem/large_admit.c kernel/umem/umem.c apps/os/application.c apps/os/session.c apps/os/grants.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
   runtime/deadline.c runtime/deadline-a733.c
@@ -123,13 +127,18 @@ if(SUNSTONE_A733_OS_SD_WRITE)
   # One SD0 owner task serves the loader's reads and the FAT32 write service (apps/os/sd_owner.c); the SD core is built with its write path.
   list(APPEND os_added apps/os/sd_owner.c drivers/storage/a733_storage_bounds.c drivers/storage/a733_storage_update.c drivers/storage/storage_wait.c)
 endif()
-set(os_patches "${os_root}/apps/os/boot.patch")
+set(os_patches "${os_root}/apps/os/boot.patch" "${os_root}/apps/os/continue-sealed.patch")
+set(os_link_base "${storage_build}/link.ld")
 if(SUNSTONE_A733_OS_USB_CLASSES)
   apply_build_patch("${os_build}/link-usb.ld" "${storage_build}/link.ld"
     "${os_root}/apps/os/usb-memory-link.patch")
   list(APPEND os_patches "${os_root}/apps/os/usb-memory-link.patch")
+  set(os_link_base "${os_build}/link-usb.ld")
 endif()
-set(os_generated "${os_build}/boot.c")
+# The sealed session's section, last in the read-only CODE block (apps/os/sealed.c).
+apply_build_patch("${os_build}/link-os.ld" "${os_link_base}" "${os_root}/apps/os/sealed-link.patch")
+list(APPEND os_patches "${os_root}/apps/os/sealed-link.patch")
+set(os_generated "${os_build}/boot.c" "${os_build}/continue.S")
 # The radio station is in every image: the board's own radio composition serves the radio workloads, and the session
 # grants it with the radio device (apps/os/session.c). Its owner and client report resident progress through the
 # patched main.c.
@@ -394,12 +403,14 @@ foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE
     set_property(TARGET sunstone-a733-os-core PROPERTY ${property} "${value}")
   endif()
 endforeach()
+get_target_property(os_links sunstone-a733-os-core LINK_OPTIONS)
 if(SUNSTONE_A733_OS_USB_CLASSES)
-  get_target_property(os_links sunstone-a733-os-core LINK_OPTIONS)
   list(FILTER os_links EXCLUDE REGEX "^-Wl,-T,|__uncached_pool_size")
-  list(APPEND os_links "-Wl,-T,${os_build}/link-usb.ld")
-  set_property(TARGET sunstone-a733-os-core PROPERTY LINK_OPTIONS "${os_links}")
+else()
+  list(FILTER os_links EXCLUDE REGEX "^-Wl,-T,")
 endif()
+list(APPEND os_links "-Wl,-T,${os_build}/link-os.ld")
+set_property(TARGET sunstone-a733-os-core PROPERTY LINK_OPTIONS "${os_links}")
 get_target_property(os_includes sunstone-a733-os-core INCLUDE_DIRECTORIES)
 list(REMOVE_ITEM os_includes "${os_root}/runtime/include" "${SUNSTONE_NETWORK_C_HEADERS}")
 set_property(TARGET sunstone-a733-os-core PROPERTY INCLUDE_DIRECTORIES "${os_includes}")
@@ -555,11 +566,7 @@ list(REMOVE_ITEM os_inputs "${board_build}/build-id.c")
 list(REMOVE_DUPLICATES os_inputs)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${os_inputs})
 set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_INPUTS "${os_inputs}")
-if(SUNSTONE_A733_OS_USB_CLASSES)
-  set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_LINK_SCRIPT "${os_build}/link-usb.ld")
-else()
-  set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_LINK_SCRIPT "${storage_build}/link.ld")
-endif()
+set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_LINK_SCRIPT "${os_build}/link-os.ld")
 set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_DEVICE_OBJECTS "${os_service_targets}")
 
 if(SUNSTONE_GPU_TIMING)

@@ -125,6 +125,9 @@ int a733_smp_device_preparation_admitted(void)
 }
 int a733_cpu_coherence_publish(uint64_t base, uint64_t bytes, uint64_t deadline)
 { (void)base; (void)bytes; (void)deadline; return 1; }
+/* The virtual board has no cache to flush: it seals at EL1 and keeps the sealed session in .bss (apps/os/sealed.c). */
+int a733_cpu_coherence_flush(uint64_t base, uint64_t bytes, uint64_t deadline)
+{ (void)base; (void)bytes; (void)deadline; return 1; }
 void *pvPortMalloc(size_t size) { (void)size; platform_panic("heap allocation", 0); }
 void vPortFree(void *p) { (void)p; }
 

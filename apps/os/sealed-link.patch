@@ -1,0 +1,20 @@
+--- link.ld
++++ link-os.ld
+@@ -30,6 +30,17 @@
+         KEEP(*(sunstone_manifest))
+         __stop_sunstone_manifest = .;
+     } > CODE
++    /* The sealed session (apps/os/sealed.c), last in CODE: the 2 MiB block
++     * that EL1 and EL0 map read-only. NOLOAD, so no loader writes or zeroes
++     * it; EL3 zeroes it before the copy. */
++    .sealed (NOLOAD) : ALIGN(4096) {
++        __os_sealed_start = .;
++        *(.bss.os_sealed)
++        . = ALIGN(64);
++        __os_sealed_end = .;
++    } > CODE
++    ASSERT(__os_sealed_end > __os_sealed_start && __os_sealed_end <= ORIGIN(CODE) + LENGTH(CODE),
++           "the sealed session must end inside the read-only CODE block")
+     /* C++ metadata carries writable ELF flags. Keep it with writable RAM
+      * rather than the read-only executable block, including the GOT. */
+     .init_array : {

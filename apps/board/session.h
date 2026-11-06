@@ -11,4 +11,8 @@ const struct a733_board_session *board_session_snapshot(void);
  * board prefix. Its contract admission fixes the span length; bytes past the
  * sealed length read as zero. */
 const void *board_session_sealed(void);
+/* The OS image (apps/os/sealed.c): the lifetime that EL3 admission verified
+ * from the contract magic (enum a733_lifetime), copied with the session; 0
+ * before the session is sealed. */
+unsigned board_session_lifetime(void);
 #endif
