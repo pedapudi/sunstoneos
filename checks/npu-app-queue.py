@@ -32,12 +32,13 @@ def main():
         r.check_returncode()
     run('build', [a.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                   '-fsanitize=address,undefined', '-Iinclude', 'checks/npu-app-queue.c', '-o', exe])
-    # The ring depth is the image's: a build for 2000 jobs in flight accepts 2000 and refuses 2001, the default build 64 and 65.
-    run('build-deep', [a.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-DSS_NPU_QUEUE_MAX_DEPTH=2000u',
-                       '-fsanitize=address,undefined', '-Iinclude', 'checks/npu-app-queue.c', '-o', a.output.resolve() / 'npu-app-queue-deep'])
-    run('depth-default', [exe, '8'])
+    # The ring depth is the declaration's, carved at run time: a ring of 64 accepts 64 and refuses 65, one of 2000 accepts 2000
+    # and refuses 2001, from the same build.
+    run('depth-64', [exe, '8'])
     run('links-at-open', [exe, '9'])
-    run('depth-2000', [a.output.resolve() / 'npu-app-queue-deep', '8'])
+    env['NPU_QUEUE_DEPTH'] = '2000'
+    run('depth-2000', [exe, '8'])
+    del env['NPU_QUEUE_DEPTH']
     for label, args in [('normal', []), ('start-failure', ['1']), ('completion-failure', ['2']), ('linked', ['3']),
                         ('undeclared-alias', ['4']), ('bad-edge-index', ['5']),
                         ('duplicate-edge', ['6']), ('partial-alias', ['7'])]:

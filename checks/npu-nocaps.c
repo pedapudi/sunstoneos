@@ -112,11 +112,12 @@ static void queue(void)
     const struct ss_npu_queue_backend b = {identity, backend_i, backend_v, queue_open, backend_i, start, finish, cache, backend_i, notify, backend_v};
     assert(ss_npu_queue_service_bind(&ring, &b, NULL));
     const size_t tensors = (size_t)HANDLES * (INPUTS + OUTPUTS), links = 100;
-    const size_t need = ss_npu_queue_tables_bytes(HANDLES, tensors, links);
+    const unsigned depth = 4;
+    const size_t need = ss_npu_queue_tables_bytes(HANDLES, tensors, links, depth);
     void *memory = big(64, need);
     assert(memory);
-    assert(!ss_npu_queue_service_tables(&ring, HANDLES, tensors, links, memory, need - 64));   /* too small: refused */
-    assert(ss_npu_queue_service_tables(&ring, HANDLES, tensors, links, memory, need));
+    assert(!ss_npu_queue_service_tables(&ring, HANDLES, tensors, links, depth, memory, need - 64));   /* too small: refused */
+    assert(ss_npu_queue_service_tables(&ring, HANDLES, tensors, links, depth, memory, need));
     struct ss_npu_queue *q;
     assert(ss_npu_queue_open_linked(4, NULL, 0, &q) == 0);                                      /* request the open: state OPEN_REQUEST */
     /* 400 handles, each of 12 inputs and 10 outputs, each with its own read and write allocation. */

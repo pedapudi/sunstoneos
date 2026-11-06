@@ -9,6 +9,9 @@
 #endif
 #ifdef NPU_GRAPHS_QUEUE
 #include "sunstone_npu_queue.h"
+#include "npu_graphs-app.h"
+/* The ring's depth: the jobs the manifest declares in flight. */
+#define QUEUE_DEPTH NPU_GRAPHS_NPU_IN_FLIGHT
 #endif
 #include <string.h>
 #include <stdlib.h>
@@ -35,7 +38,7 @@ void npu_graphs_init(void) {}
 #endif
 /* The largest in-flight limit of the sweep (default: twice the ring, so that the ring refuses). */
 #ifndef QUEUE_KMAX
-#define QUEUE_KMAX (2 * SS_NPU_QUEUE_MAX_DEPTH)
+#define QUEUE_KMAX (2 * QUEUE_DEPTH)
 #endif
 #define QUEUE_TIMEOUT_US 1000000u
 static void queue_fault(unsigned stage, uint32_t value) { ss_fail_value((0xb0u << 8) | stage, value); }
@@ -64,7 +67,7 @@ static __attribute__((unused)) _Noreturn void npu_graphs_queue_main(void)
 #else
     const size_t links = 1;
 #endif
-    while ((opened = ss_npu_queue_open_linked(SS_NPU_QUEUE_MAX_DEPTH, &link, links, &q)) != 1) {
+    while ((opened = ss_npu_queue_open_linked(QUEUE_DEPTH, &link, links, &q)) != 1) {
         if (opened < 0 || (ss_counter_ticks() - begin) / 24 > 3000000) queue_fault(1, (uint32_t)opened);
         ss_progress(); vTaskDelay(1);
     }
@@ -80,7 +83,7 @@ static __attribute__((unused)) _Noreturn void npu_graphs_queue_main(void)
         offset += t.bytes;
     }
     if (offset != v->input_bytes) queue_fault(5, (uint32_t)offset);
-    static struct ss_npu_fence fences[SS_NPU_QUEUE_MAX_DEPTH];
+    static struct ss_npu_fence fences[QUEUE_DEPTH];
     unsigned records = 0;
 #ifdef NPU_GRAPHS_QUEUE_REPEAT
     int acquired_now;
@@ -157,12 +160,12 @@ static __attribute__((unused)) _Noreturn void npu_graphs_queue_main(void)
         unsigned spins = 0;
         while (completed < QUEUE_JOBS) {
             while (submitted < QUEUE_JOBS && submitted - completed < k) {
-                const int r1 = ss_npu_queue_submit(q, h, (struct ss_npu_fence){0}, QUEUE_TIMEOUT_US, &fences[submitted % SS_NPU_QUEUE_MAX_DEPTH]);
+                const int r1 = ss_npu_queue_submit(q, h, (struct ss_npu_fence){0}, QUEUE_TIMEOUT_US, &fences[submitted % QUEUE_DEPTH]);
                 if (r1 == 1) ++submitted; else if (r1 == 0) { ++refused; break; } else queue_fault(6, submitted);
             }
-            const int done = ss_npu_queue_status(q, fences[completed % SS_NPU_QUEUE_MAX_DEPTH]);
+            const int done = ss_npu_queue_status(q, fences[completed % QUEUE_DEPTH]);
             if (done == 1) {
-                if (ss_npu_queue_release(q, fences[completed % SS_NPU_QUEUE_MAX_DEPTH]) != 1) queue_fault(7, completed);
+                if (ss_npu_queue_release(q, fences[completed % QUEUE_DEPTH]) != 1) queue_fault(7, completed);
                 ++completed;
             } else if (done < 0) queue_fault(8, completed);
             if ((++spins & 0x3ff) == 0) { ss_progress(); if (ss_live() < 0) queue_fault(9, completed); }
@@ -292,11 +295,11 @@ static __attribute__((unused)) _Noreturn void npu_graphs_queue_main(void)
 static _Noreturn void npu_graphs_sequence_main(void)
 {
     const unsigned n = npu_graph_count;
-    if (n == 0 || n > SS_NPU_QUEUE_MAX_DEPTH || n > 32) queue_fault(0, n);
+    if (n == 0 || n > QUEUE_DEPTH || n > 32) queue_fault(0, n);
     struct ss_npu_queue *q = NULL;
     uint64_t begin = ss_counter_ticks();
     int opened;
-    while ((opened = ss_npu_queue_open(SS_NPU_QUEUE_MAX_DEPTH, &q)) != 1) {
+    while ((opened = ss_npu_queue_open(QUEUE_DEPTH, &q)) != 1) {
         if (opened < 0 || (ss_counter_ticks() - begin) / 24 > 6000000) queue_fault(1, (uint32_t)opened);
         ss_progress(); vTaskDelay(1);
     }
@@ -423,7 +426,7 @@ static _Noreturn void npu_graphs_chain_main(const struct ss_grant *grant)
     struct ss_npu_queue *q = NULL;
     uint64_t begin = ss_counter_ticks();
     int opened;
-    while ((opened = ss_npu_queue_open(SS_NPU_QUEUE_MAX_DEPTH, &q)) != 1) {
+    while ((opened = ss_npu_queue_open(QUEUE_DEPTH, &q)) != 1) {
         if (opened < 0 || (ss_counter_ticks() - begin) / 24 > 8000000) queue_fault(1, (uint32_t)opened);
         ss_progress(); vTaskDelay(1);
     }

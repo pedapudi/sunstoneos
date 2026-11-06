@@ -136,17 +136,21 @@ int main(int argc,char **argv)
         assert(npu_queue_register(&native_queue,&native_command[i],&cmd));
     }
     assert(ss_npu_queue_service_bind(&q,&b,NULL));
-    /* The queue's tables come from memory the OS gives it, sized by the declaration: 4 handles, 16 tensors, 4 links. */
-    static _Alignas(8) unsigned char tables[4096];
-    assert(sizeof(tables)>=ss_npu_queue_tables_bytes(4,16,4)&&!ss_npu_queue_service_tables(&q,4,16,4,tables,64));
-    assert(ss_npu_queue_service_tables(&q,4,16,4,tables,sizeof(tables)));
+    /* The queue's tables come from memory the OS gives it, sized by the declaration: 4 handles, 16 tensors, 4 links and a
+     * ring of the jobs declared in flight (NPU_QUEUE_DEPTH, 64 by default). */
+    const unsigned depth=getenv("NPU_QUEUE_DEPTH")?(unsigned)strtoul(getenv("NPU_QUEUE_DEPTH"),NULL,0):64u;
+    const size_t table_bytes=ss_npu_queue_tables_bytes(4,16,4,depth);
+    unsigned char *tables=aligned_alloc(8,(table_bytes+7)&~(size_t)7);
+    assert(tables&&!ss_npu_queue_service_tables(&q,4,16,4,depth,tables,64));
+    assert(!ss_npu_queue_service_tables(&q,4,16,4,depth,tables,table_bytes-1));   /* one byte short of the ring: refused */
+    assert(ss_npu_queue_service_tables(&q,4,16,4,depth,tables,table_bytes));
     struct ss_npu_queue *pub=NULL;
     if(argc>1&&atoi(argv[1])==8){
-        /* The ring holds the depth the image was built for, which is what the application declared: one more is refused
-         * and exactly that many is accepted, whatever that number is. */
-        assert(ss_npu_queue_open(SS_NPU_QUEUE_MAX_DEPTH+1,&pub)==-1&&requests==0);
-        assert(ss_npu_queue_open(SS_NPU_QUEUE_MAX_DEPTH,&pub)==0&&requests==1);
-        printf("PASS a ring of %u entries is accepted and one more is refused\n",(unsigned)SS_NPU_QUEUE_MAX_DEPTH);return 0;
+        /* The ring holds the depth the application declared: one more is refused and exactly that many is accepted,
+         * whatever that number is. */
+        assert(ss_npu_queue_open(depth+1,&pub)==-1&&requests==0);
+        assert(ss_npu_queue_open(depth,&pub)==0&&requests==1);
+        printf("PASS a ring of %u entries is accepted and one more is refused\n",depth);return 0;
     }
     if(argc>1&&atoi(argv[1])==9){
         /* Links chosen at open: copied once into the queue for the backend, refused when malformed, ignored when polling. */

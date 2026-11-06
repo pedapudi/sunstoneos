@@ -302,7 +302,7 @@ static enum npu_declaration_result lay_out(struct npu_runtime *rt, struct bump *
     const size_t scratch_entries = w->max_slot_entries > w->later_entries ? w->max_slot_entries : w->later_entries;
     const size_t scratch = scratch_entries * (sizeof(struct nbg_assembly_buffer) + sizeof(struct nbg_allocation_requirement));
     const size_t buffers = 1 + 4 * (size_t)slots;
-    const size_t queue = bounds && bounds->queue ? ss_npu_queue_tables_bytes(slots, w->slot_tensors, bounds->queue_links) : 0;
+    const size_t queue = bounds && bounds->queue ? ss_npu_queue_tables_bytes(slots, w->slot_tensors, bounds->queue_links, bounds->queue_depth) : 0;
     const size_t queue_meta = bounds && bounds->queue ? ss_npu_queue_meta_bytes(slots, bounds->queue_image_links, bounds->queue_links) : 0;
     if (rt) {
         rt->spans = take_meta(b, (size_t)w->max_slot_entries * sizeof(*rt->spans));
@@ -424,6 +424,7 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     atomic_init(&rt->count, v.count); rt->capacity = (unsigned)entries; rt->slots = v.slots;
     rt->later_entries = w.later_entries;
     rt->queue_links = v.bounds.queue_links; rt->queue_image_links = v.bounds.queue_image_links;
+    rt->queue_depth = v.bounds.queue_depth;
     rt->command_bytes = z.command; rt->constant_bytes = z.constant; rt->read_bytes = z.read; rt->write_bytes = z.write;
     rt->meta = v.meta;
     rt->parent_cpu = v.cpu; rt->parent_bytes = v.bytes;

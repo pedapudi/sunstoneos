@@ -507,6 +507,9 @@ def c_header(m):
     for i, n in enumerate(m['large_names']):
         lines.append('#define %s_LARGE_%s %du' % (c.upper(), n.upper(), i))
     lines.append('#define %s_LARGE_COUNT %du' % (c.upper(), len(m['large_names'])))
+    if m.get('npu'):
+        # The jobs the application keeps in flight: the depth of the ring it opens and of its own fence tables.
+        lines.append('#define %s_NPU_IN_FLIGHT %du' % (c.upper(), m['npu']['in_flight']))
     lines += ['#ifdef __cplusplus', '}', '#endif', '#endif', '']
     return '\n'.join(lines)
 

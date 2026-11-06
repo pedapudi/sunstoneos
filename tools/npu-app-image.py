@@ -124,7 +124,6 @@ def main():
                  '-DSUNSTONE_APPLICATION_%s_ROOT=%s' % (name, args.app), '-DA733_A76_ADMITTED=ON',
                  '-DSUNSTONE_A733_OS_CPU_CLOCK=ON', '-DSUNSTONE_A733_OS_CPU_RETURN=ON', '-DSUNSTONE_A733_OS_PERF_BOOT=high',
                  '-DSUNSTONE_MIMUS_WORKERS=2',
-                 '-DSUNSTONE_OS_NPU_QUEUE_DEPTH=%d' % args.queue_depth,
                  '-D%s=%s' % (args.manifest_variable, args.out / 'manifest.json')]
     build = ['cmake', '--build', str(image), '--target', 'sunstone-a733-os', '-j4']
     elf = image / 'sunstone-a733-os.elf'

@@ -690,8 +690,9 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
         bounds=(struct npu_runtime_bounds){.capacity=declared.graphs,.graph_bytes=declared.graph_bytes,.tensor_bytes=declared.tensor_bytes};
     }
     /* The ring keeps graph i resident in slot i: each slot is sized by its own graph, not by the largest. The queue's
-     * tables (handles, tensors, edges) are reserved with the rest, from the declared links. */
-    if(queued){bounds.queue=1;bounds.queue_links=declared.links;bounds.queue_image_links=(unsigned)ss_npu_queue_edges.count;}
+     * tables (handles, tensors, edges, ring entries) are reserved with the rest, from the declared links and jobs in flight. */
+    if(queued){bounds.queue=1;bounds.queue_links=declared.links;bounds.queue_image_links=(unsigned)ss_npu_queue_edges.count;
+        bounds.queue_depth=declared.in_flight;}
     /* Reserve the largest extent the NPU can address inside one 4 GiB window (its tables share one physical window and its
      * working address limit is the device-width table's), let prepare place the declaration from the start of it, then give
      * back what it did not use. Sizing the reservation first would admit every graph twice before the scheduler, which the

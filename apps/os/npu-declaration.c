@@ -16,9 +16,9 @@ static struct npu_image_needs image_needs(const struct os_npu_session *n)
 /* The tables this image holds (fixed when it is built). */
 static struct npu_tables image_tables(void)
 {
-    /* Slots, graphs and links have no table limit: their tables come from the reservation (memory bounds them). The ring's
-     * depth is the one bounded structure. */
-    return (struct npu_tables){UINT32_MAX,UINT32_MAX,SS_NPU_QUEUE_MAX_DEPTH,UINT32_MAX};
+    /* No table has a limit of its own: slots, graphs, links and the ring's entries come from the reservation, which memory
+     * bounds. */
+    return (struct npu_tables){UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX};
 }
 struct npu_declaration os_npu_declaration_of(const struct os_npu_session *n)
 {

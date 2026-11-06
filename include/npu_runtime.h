@@ -55,10 +55,11 @@ enum { NPU_REGISTER_NONE, NPU_REGISTER_NOT_ADMISSIBLE, NPU_REGISTER_TOO_LARGE, N
 /* scratch, scratch_bytes: work memory for a sizing call (npu_runtime_reservation_with, npu_runtime_requirements_with), which
  * admits the graphs without a reservation to put their layouts in: npu_runtime_scratch_bytes says how much. Prepare takes
  * its work memory from the reservation and ignores them. */
-/* queue: reserve the tables of the EL0 queue too (ss_npu_queue_reserve_bytes): the links an application may ask for at run
- * time (queue_links) and the edges the image's constant table holds (queue_image_links). */
+/* queue: reserve the tables of the EL0 queue too (ss_npu_queue_tables_bytes): the links an application may ask for at run
+ * time (queue_links), the edges the image's constant table holds (queue_image_links) and the ring's entries, one for each
+ * job the application declares in flight (queue_depth). */
 struct npu_runtime_bounds { unsigned capacity; size_t graph_bytes, tensor_bytes; unsigned per_graph;
-                            void *scratch; size_t scratch_bytes; unsigned queue, queue_links, queue_image_links; };
+                            void *scratch; size_t scratch_bytes; unsigned queue, queue_links, queue_image_links, queue_depth; };
 struct npu_runtime_config {
     const struct npu_runtime_model *models; /* count entries; the caller keeps them alive until prepare returns */
     unsigned count, slots;
@@ -156,7 +157,7 @@ struct npu_runtime {
     void *scratch; size_t scratch_bytes; /* work memory of linking and registration (one largest layout, twice) */
     void *queue_tables; size_t queue_bytes; size_t queue_tensors; /* the ring's tables (pool) */
     void *queue_meta; size_t queue_meta_bytes;                     /* the adapter's edge tables and command records (metadata) */
-     unsigned queue_links, queue_image_links; /* the queue's reservation */
+     unsigned queue_links, queue_image_links, queue_depth; /* the queue's reservation */
     void *memory_tables, *service_tables; /* the memory layer's and the service's tables, carved at prepare */
     unsigned later_entries;          /* table entries of a graph registered after prepare */
     atomic_uint count;   /* catalogue entries in use; register publishes the next one with release order */

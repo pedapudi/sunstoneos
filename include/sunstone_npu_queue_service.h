@@ -55,15 +55,17 @@ struct ss_npu_queue {
     struct ss_npu_queue_group *group;
     unsigned handle_capacity, tensor_capacity, tensors_used, member_words;
     uint8_t *tables, *at; size_t table_bytes; /* the tables and the cursor of the next carve */
-    struct ss_npu_queue_entry entry[SS_NPU_QUEUE_MAX_DEPTH];
+    struct ss_npu_queue_entry *entry;        /* entry_capacity entries, in the tables: one for each job declared in flight */
+    unsigned entry_capacity;
 };
-/* The bytes of the tables for handles handles holding tensors tensors in all (inputs and outputs) and links requested edges. */
-static inline size_t ss_npu_queue_tables_bytes(unsigned handles, size_t tensors, size_t links)
+/* The bytes of the tables for handles handles holding tensors tensors in all (inputs and outputs), links requested edges and a
+ * ring of depth entries. */
+static inline size_t ss_npu_queue_tables_bytes(unsigned handles, size_t tensors, size_t links, unsigned depth)
 {
     const size_t words = ss_npu_queue_member_words(handles);
     return 64u + (size_t)handles * (sizeof(struct ss_npu_queue_handle) + sizeof(struct ss_npu_queue_group) + words * 4u + 32u) +
            tensors * (sizeof(struct ss_npu_tensor) + 2u * sizeof(struct ss_npu_dirty_range) + sizeof(struct ss_npu_queue_alias) + 24u) +
-           links * sizeof(struct ss_npu_queue_edge) + 64u;
+           links * sizeof(struct ss_npu_queue_edge) + (size_t)depth * sizeof(struct ss_npu_queue_entry) + 64u;
 }
 /* What the runtime reserves for the queue of slots slots holding tensors tensors in all, with image_links edges in the image's
  * constant table and links more the application may ask for. The ring's tables, which EL0 writes by design, come from the
@@ -75,10 +77,11 @@ static inline size_t ss_npu_queue_meta_bytes(unsigned slots, size_t image_links,
     return (((image_links + links) * sizeof(struct ss_npu_queue_edge) + 63u) & ~(size_t)63) +
            ((links * sizeof(struct ss_npu_queue_edge) + 63u) & ~(size_t)63) + (size_t)slots * 64u;
 }
-/* After bind, before the ring opens: take memory for handles handles of up to tensors tensors in all and links requested
- * edges. 0, leaving the queue unchanged, when the memory is too small (the open is refused and says so) or the queue is not
- * waiting to open. */
-int ss_npu_queue_service_tables(struct ss_npu_queue *, unsigned handles, size_t tensors, size_t links, void *memory, size_t bytes);
+/* After bind, before the ring opens: take memory for handles handles of up to tensors tensors in all, links requested edges
+ * and a ring of depth entries. 0, leaving the queue unchanged, when the memory is too small (the open is refused and says so)
+ * or the queue is not waiting to open. */
+int ss_npu_queue_service_tables(struct ss_npu_queue *, unsigned handles, size_t tensors, size_t links, unsigned depth,
+                                void *memory, size_t bytes);
 /* Bind once before application startup. Zero queue storage once. */
 int ss_npu_queue_service_bind(struct ss_npu_queue *, const struct ss_npu_queue_backend *, void *);
 /* Called only by backend.open before ready is published. Spans cover the

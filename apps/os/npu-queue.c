@@ -63,8 +63,9 @@ int os_npu_queue_tables(struct npu_runtime *rt)
     const size_t edge_bytes=((rt->queue_image_links+rt->queue_links)*sizeof(*edges)+63u)&~(size_t)63;
     const size_t copy_bytes=(rt->queue_links*sizeof(*requested_copy)+63u)&~(size_t)63;
     if(ss_npu_queue_meta_bytes(rt->slots,rt->queue_image_links,rt->queue_links)>rt->queue_meta_bytes||
-       ss_npu_queue_tables_bytes(rt->slots,rt->queue_tensors,rt->queue_links)>rt->queue_bytes||
-       !ss_npu_queue_service_tables(&ring,rt->slots,rt->queue_tensors,rt->queue_links,rt->queue_tables,rt->queue_bytes))return 0;
+       ss_npu_queue_tables_bytes(rt->slots,rt->queue_tensors,rt->queue_links,rt->queue_depth)>rt->queue_bytes||
+       !ss_npu_queue_service_tables(&ring,rt->slots,rt->queue_tensors,rt->queue_links,rt->queue_depth,rt->queue_tables,
+                                    rt->queue_bytes))return 0;
     uint8_t *at=rt->queue_meta;
     edges=(void *)at;at+=edge_bytes;requested_copy=(void *)at;at+=copy_bytes;commands=(void *)at;
     edge_capacity=rt->queue_image_links+rt->queue_links;copy_capacity=rt->queue_links;

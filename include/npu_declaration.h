@@ -8,9 +8,8 @@
 struct npu_declaration { uint32_t slots, in_flight, graphs, links, graph_bytes, tensor_bytes; };
 /* What the image itself links: slots in use, graphs and tensor links. A declaration must cover them. */
 struct npu_image_needs { uint32_t slots, graphs, links; };
-/* What the image's tables hold. Slots, graphs and links have no table: the runtime takes those tables from the reservation
- * (docs/designs/npu-resources.md), so an image states UINT32_MAX for them. The in-flight depth is the ring of the queue, the
- * one bounded structure: a bounded ring is backpressure, and the image is built for the depth it declares. */
+/* What the image's tables hold. The OS image has no fixed table: the runtime takes the slot, graph, link and ring tables from
+ * the reservation (docs/designs/npu-resources.md), so it states UINT32_MAX for each. A full ring is backpressure. */
 struct npu_tables { uint32_t slots, graphs, in_flight, links; };
 enum npu_declaration_result {
     NPU_DECLARATION_OK,

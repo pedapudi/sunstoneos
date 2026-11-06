@@ -822,8 +822,8 @@ int main(int argc, char **argv)
         assert(slots <= os_npu_model_count && !bounds.capacity);
         bounds.per_graph = 1;
     }
-    if (mode == 30 && getenv("NPU_QUEUE")) { bounds.queue = 1; sscanf(getenv("NPU_QUEUE"), "%u,%u", &bounds.queue_links, &bounds.queue_image_links); }
-    if (mode == 33) { bounds.queue = 1; bounds.queue_links = 8; bounds.queue_image_links = 0; bounds.capacity = 0; }
+    if (mode == 30 && getenv("NPU_QUEUE")) { bounds.queue = 1; bounds.queue_depth = 64; sscanf(getenv("NPU_QUEUE"), "%u,%u", &bounds.queue_links, &bounds.queue_image_links); }
+    if (mode == 33) { bounds.queue = 1; bounds.queue_links = 8; bounds.queue_image_links = 0; bounds.queue_depth = 64; bounds.capacity = 0; }
     const size_t scratch_bytes = npu_runtime_scratch_bytes(os_npu_models, os_npu_model_count);
     assert(scratch_bytes);
     bounds.scratch = aligned_alloc(64, (scratch_bytes + 63) & ~(size_t)63); bounds.scratch_bytes = scratch_bytes;

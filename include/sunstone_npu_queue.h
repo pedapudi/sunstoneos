@@ -6,11 +6,8 @@
 extern "C" {
 #endif
 /* The ring holds as many jobs as the application declares in flight (manifest npu.in_flight, docs/designs/npu-resources.md):
- * an image is built with SS_NPU_QUEUE_MAX_DEPTH set to it (cmake -DSUNSTONE_OS_NPU_QUEUE_DEPTH=N), and a session that
- * declares more is refused as image tables. 64 is the default of an image built without a declaration. */
-#ifndef SS_NPU_QUEUE_MAX_DEPTH
-#define SS_NPU_QUEUE_MAX_DEPTH 64u
-#endif
+ * its entries are carved with its other tables when the application is admitted, and an open deeper than the declaration
+ * is refused. The application's generated header names the depth (<NAME>_NPU_IN_FLIGHT, tools/sunstone-manifest.py). */
 /* The queue has a handle for every resident graph the application declares and as many tensors in a handle as its graph has:
  * their tables, the group bitmaps and the tables of edges are allocated when the queue opens, from the NPU pool and sized by
  * the declaration (docs/designs/npu-resources.md). Only the ring's depth is fixed (above): a full ring is backpressure. */

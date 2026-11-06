@@ -18,7 +18,7 @@ int ss_npu_queue_service_bind(struct ss_npu_queue *q,const struct ss_npu_queue_b
 int ss_npu_queue_open_linked(unsigned depth,const struct ss_npu_queue_edge *links,size_t count,struct ss_npu_queue **out)
 {
     struct ss_npu_queue *q=bound;
-    if(!q||!out||!depth||depth>SS_NPU_QUEUE_MAX_DEPTH||!q->backend.on_core(q->context))return -1;
+    if(!q||!out||!depth||depth>q->entry_capacity||!q->backend.on_core(q->context))return -1;
     unsigned s=atomic_load_explicit(&q->state,memory_order_acquire);
     if(s==IDLE){
         if(count>q->requested_capacity||(count&&!links))return -1;
@@ -44,16 +44,19 @@ static void *carve(struct ss_npu_queue *q,size_t n)
     n=(n+7u)&~(size_t)7;
     void *p=q->at;q->at+=n;memset(p,0,n);return p;
 }
-int ss_npu_queue_service_tables(struct ss_npu_queue *q,unsigned handles,size_t tensors,size_t links,void *memory,size_t bytes)
+int ss_npu_queue_service_tables(struct ss_npu_queue *q,unsigned handles,size_t tensors,size_t links,unsigned depth,
+                                void *memory,size_t bytes)
 {
-    const size_t need=ss_npu_queue_tables_bytes(handles,tensors,links);
-    if(!q||q!=bound||atomic_load(&q->state)!=IDLE||q->tables||!handles||!tensors||bytes<need||!memory||((uintptr_t)memory&7))return 0;
+    const size_t need=ss_npu_queue_tables_bytes(handles,tensors,links,depth);
+    if(!q||q!=bound||atomic_load(&q->state)!=IDLE||q->tables||!handles||!tensors||!depth||bytes<need||!memory||
+       ((uintptr_t)memory&7))return 0;
     memset(memory,0,need);
     q->tables=memory;q->table_bytes=need;q->at=q->tables;
     q->handle=carve(q,(size_t)handles*sizeof(*q->handle));q->group=carve(q,(size_t)handles*sizeof(*q->group));
     q->member_words=ss_npu_queue_member_words(handles);
     for(unsigned i=0;i<handles;++i)q->group[i].members=carve(q,(size_t)q->member_words*4u);
     q->requested=carve(q,links*sizeof(*q->requested));
+    q->entry=carve(q,(size_t)depth*sizeof(*q->entry));q->entry_capacity=depth;
     q->handle_capacity=handles;q->tensor_capacity=(unsigned)tensors;q->requested_capacity=links;
     /* The per-tensor tables are carved as handles are added, from the tensor budget, in this order and sizes. */
     return 1;
