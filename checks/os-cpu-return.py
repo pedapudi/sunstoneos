@@ -46,6 +46,38 @@ def npu_device(model, symbols, layout, npu):
     return NPU_DEVICE
 
 
+class KernelPages:
+    """Model mixin: the pages that the board maps for EL1 alone.
+
+    The application's task runs at EL0 on the board. Its address space maps the image and its own regions, the NPU pool among
+    them, but not the kernel's ledger pages: the NPU's device state (device_take in apps/os/npu.c) and the runtime's EL1
+    metadata (the slot, plan, layout and tensor tables, apps/os/npu.c meta_allocate). A model maps every page it uses, so an EL0
+    access there passes in the model and faults on the board, as run 1793936685988479024-ab3ea6c2 did in ss_finish. A model
+    names those ranges with kernel_only, sets el0 while it runs code of the application's task, and fails the call in which
+    that code touched one (el0_touched)."""
+    el0 = False
+
+    def kernel_only(self, low, high):
+        self.__dict__.setdefault('kernel_ranges', []).append((low, high))
+
+    def note_el0(self, address):
+        if self.el0 and any(low <= address < high for low, high in self.__dict__.get('kernel_ranges', ())):
+            from unicorn.arm64_const import UC_ARM64_REG_PC
+            self.__dict__.setdefault('el0_hits', []).append((address, self.uc.reg_read(UC_ARM64_REG_PC)))
+
+    def el0_touched(self, name):
+        hits = self.__dict__.pop('el0_hits', [])
+        assert not hits, ('the application task touched kernel-only pages', name, ['%#x at pc %#x' % hit for hit in hits[:4]])
+
+    def read(self, uc, access, address, size, value, unused):
+        super().read(uc, access, address, size, value, unused)
+        self.note_el0(address)
+
+    def write(self, uc, access, address, size, value, unused):
+        super().write(uc, access, address, size, value, unused)
+        self.note_el0(address)
+
+
 def cleaned_regions(path):
     """The application ranges that the success terminal cleans after image RAM."""
     if records.image_manifest(path)['manifest'] is None:

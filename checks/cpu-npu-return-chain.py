@@ -70,7 +70,7 @@ def type_size(path, name):
     return sizes.pop()
 
 
-class Native(owners.Model):
+class Native(terminal.KernelPages, owners.Model):
     """An admitted runtime before OPEN; no completed/parked/stop flag is seeded."""
     def __init__(self, image, layout, payload):
         super().__init__(image, layout)
@@ -82,15 +82,17 @@ class Native(owners.Model):
         self.nf = layout.layouts['os_npu_application']
         self.device = terminal.npu_device(self, self.s, layout, self.n)
         self.df = layout.layouts['os_npu_device']
-        self.device_bytes, self.el0_device = type_size(image.path, 'os_npu_device'), []
+        self.kernel_only(self.device, self.device+type_size(image.path, 'os_npu_device'))
         self.rt = self.n+self.nf['runtime']
         self.rf = layout.layouts['npu_runtime']
         self.service = self.rt+self.rf['service']
         self.sf = layout.layouts['npu_service']
         self.slotf = layout.layouts['npu_runtime_slot']
-        # The runtime's tables are carved from its reservation and the runtime points to them (npu_runtime.slot, .plans,
-        # .commands, ...), not arrays inside the runtime: this model puts them in the pool, clear of the tensor windows.
+        # The runtime's tables are not arrays inside the runtime: it points to them (npu_runtime.slot, .plans, .commands, ...).
+        # On the board they are EL1 metadata in kernel ledger pages; this model puts them in the pool from 0x200000 to 0x400000,
+        # clear of the tensor windows, and marks that range kernel-only.
         self.tables = 0x300000
+        self.kernel_only(POOL+0x200000, POOL+0x400000)
         self.slot = POOL+0x300000+0x20000
         self.startup = self.device+self.df['startup']
         self.report = layout.address('os_npu_published_report')
@@ -197,25 +199,13 @@ class Native(owners.Model):
 
     def api(self, name, *args, task=MAIN, core=6):
         self.current_task = task
-        result = self.call(core, name, args)
-        assert not self.el0_device, ('the application task touched the NPU device state', name, [hex(a) for a in self.el0_device[:4]])
+        self.el0 = task == MAIN   # the application's task (checks/os-cpu-return.py KernelPages)
+        try:
+            result = self.call(core, name, args)
+        finally:
+            self.el0 = False
+        self.el0_touched(name)
         return result
-
-    # The application's task runs at EL0 on the board. Its address space maps the image and its own regions but not the
-    # kernel's ledger pages, which hold the NPU's device state (device_take in apps/os/npu.c), so an access there faults. Run
-    # 1793936685988479024-ab3ea6c2 faulted so in ss_finish when the runtime was among them.
-    def el0_access(self, address):
-        if getattr(self, 'el0_device', None) is not None and self.current_task == MAIN and \
-                self.device <= address < self.device+self.device_bytes:
-            self.el0_device.append(address)
-
-    def read(self, uc, access, address, size, value, unused):
-        super().read(uc, access, address, size, value, unused)
-        self.el0_access(address)
-
-    def write(self, uc, access, address, size, value, unused):
-        super().write(uc, access, address, size, value, unused)
-        self.el0_access(address)
 
     def sample_thermal(self):
         policy = self.thermal+self.layout.layouts['os_thermal_service']['policy']

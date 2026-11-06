@@ -22,11 +22,14 @@ owner=module('cpu_npu_return_owners',ROOT/'checks/os-cpu-return-services.py')
 prior=owner.prior
 terminal=module('cpu_npu_return_terminal',ROOT/'checks/os-cpu-return.py')
 
-class Model(owner.Model):
+class Model(terminal.KernelPages,owner.Model):
  def __init__(self,image,layout):
   super().__init__(image,layout)
   self.n=layout.address('npu','apps/os/npu.c');self.nf=layout.layouts['os_npu_application']
   self.device=terminal.npu_device(self,self.s,layout,self.n);self.df=layout.layouts['os_npu_device']
+  # Kernel-only on the board (checks/os-cpu-return.py KernelPages): the device state and the runtime's slot table, which is EL1
+  # metadata there and is at 0x41f01000 here.
+  self.kernel_only(self.device,self.device+layout.layouts['os_npu_device']['stacks']+2*4096*8);self.kernel_only(0x41f01000,0x41f02000)
   self.rt=self.n+self.nf['runtime'];self.service=self.rt+layout.layouts['npu_runtime']['service']
   self.sf=layout.layouts['npu_service'];self.report=layout.address('os_npu_published_report')
   self.closed_operation=None;self.stop_calls=0;self.stop_pending=0;self.publish_stop=False
@@ -40,7 +43,9 @@ class Model(owner.Model):
   self.put64(self.n+self.nf['initial_deadline'],55000000)
   self.put64(self.n+self.nf['gate'],(55000000<<3)|1)
   self.put64(self.n+self.nf['client'],0x3000);self.put64(self.n+self.nf['bootstrap'],0x4000)
-  self.put64(layout.address('main_task','apps/os/application.c'),0x3000)
+  # The application's task has its own handle, which xTaskGetCurrentTaskHandle returns while its SDK entries run (call).
+  self.put64(layout.address('main_task','apps/os/application.c'),0x5000)
+  self.hooks[layout.address('xTaskGetCurrentTaskHandle')]=lambda:0x5000 if self.el0 else 0x3000
   grant=layout.address('grant','apps/os/application.c');self.put64(grant+layout.layouts['ss_grant']['finish_by_us'],55000000)
   # The slot table is carved from the runtime's reservation and the runtime points to it (fail_at reads slot 0).
   self.put64(self.rt+layout.layouts['npu_runtime']['slot'],0x41f01000)
@@ -59,6 +64,12 @@ class Model(owner.Model):
   self.notify_wait=layout.address('ulTaskGenericNotifyTake') if 'ulTaskGenericNotifyTake' in layout.symbols else layout.address('ulTaskNotifyTake')
   self.s['host_bootstrap']=layout.address('bootstrap','apps/os/npu.c')
   self.s['host_runtime_worker']=layout.address('runtime_worker','drivers/npu/npu_service.c')
+ def call(self,c,symbol,args=(),budget=200000):
+  # The SDK entries (ss_*) on core 6 are the application's task, at EL0 on the board.
+  self.el0=c==6 and symbol.startswith('ss_')
+  try:r=super().call(c,symbol,args,budget)
+  finally:self.el0=False
+  self.el0_touched(symbol);return r
  def wake_main(self):
   self.wakes+=1;return 0
  def delay(self):

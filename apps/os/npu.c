@@ -152,8 +152,14 @@ static int fail_at(uint32_t line,enum npu_service_operation op,unsigned model,ui
         f->reply_valid=reply!=NULL;if(reply)f->reply=*reply;
         if(watch){f->watch_valid=1;f->now=watch->now;f->end=watch->end;f->gate=watch->gate;}
         /* These fields have atomic publication. A timeout does not authorize
-         * reading mutable controller fields owned by the NPU worker. */
-        f->slot_state=npu.runtime.slot?atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire):0; /* null before prepare */
+         * reading mutable controller fields owned by the NPU worker. The slot
+         * table is EL1 metadata in kernel ledger pages, which the application's
+         * task cannot read: it runs at EL0, and records a retirement failure
+         * in ss_finish with slot_state 0. The slot pointer is null before
+         * prepare. */
+        extern TaskHandle_t os_application_main_task(void);
+        f->slot_state=npu.runtime.slot&&xTaskGetCurrentTaskHandle()!=os_application_main_task()?
+            atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire):0;
         f->runtime_failed=atomic_load_explicit(&npu.runtime.failed,memory_order_acquire);
         f->irq_pending=atomic_load_explicit(&npu.runtime.service.irq_pending,memory_order_acquire);
         f->irq_stopped=atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire);
