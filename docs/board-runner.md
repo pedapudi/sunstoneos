@@ -240,6 +240,17 @@ session files differ: ...; land them and restart the daemon first`. The daemon
 keeps running only the code on `bringup`. A daemon started before this record
 existed has no `daemon.json` and is not compared until it restarts.
 
+Open work: the harness takes its list of admission sources from the daemon
+checkout's `tools/host_admission.py`, while it compiles those sources from the
+image's own tree. A series that changes that list cannot pass pre-flight until it
+lands: series 4 of the one-OS-image work links `apps/os/npu-declaration.c` into
+every image, but `bringup`'s list adds it only under `-DSUNSTONE_A733_OS_NPU=1`, so
+the harness stubs `os_npu_declaration_admitted` and stops (its board runs record
+`--no-preflight` with the branch tree's own admission result). The fix is for
+`board_images.preflight_admission` to load `host_admission.py` from `--host-tree`
+when one is given. It belongs to the gate-streamline work, because it changes the
+daemon-checkout rule above.
+
 ### The recorded board words
 
 The offline build needs board words that a live run reads under the port lock:
