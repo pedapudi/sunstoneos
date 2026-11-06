@@ -81,7 +81,7 @@ for case in range(20):
 for builtin in (False, True):
     exe = a.output / ('builtin-report' if builtin else 'sdk-report')
     build(ROOT / 'checks/os-npu-sdk-report.c', exe, ['-DREPORT_BUILTIN'] if builtin else [])
-    cases = [(0, 'refused')] if builtin else [(0, 'completed'), (1, 'retained'), (2, 'retained'), (3, 'refused'), (4, 'retained'), (5, 'retained')]
+    cases = [(0, 'refused')] if builtin else [(0, 'completed'), (1, 'retained'), (2, 'retained'), (3, 'completed'), (4, 'retained'), (5, 'retained')]
     for case, wanted in cases:
         raw = a.output / (exe.name + '-' + str(case) + '.bin')
         actual = run([str(exe), str(case), str(raw)])

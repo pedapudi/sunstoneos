@@ -79,18 +79,21 @@ void vTaskSuspend(TaskHandle_t task){assert(!task);longjmp(suspended,1);}
 int main(int argc,char **argv)
 {
     assert(argc==3);mode=(unsigned)strtoul(argv[1],NULL,10);
-    board.session.epoch=10;board.session.generation=20;session.npu.jobs=2;
+    /* The session's job word as tools/session.py writes it. */
+    board.session.epoch=10;board.session.generation=20;session.npu.jobs=1;
     static struct npu_runtime runtime;atomic_init(&runtime.count,1);os_npu_runtime_for_sdk=&runtime;
     if(!setjmp(suspended))os_npu_client_task(NULL);
     struct os_npu_report report;os_npu_report_copy((uint8_t *)&report);
-    assert(atomic_load(&report.finished)&&report.jobs_selected==2&&report.model==3);
+    assert(atomic_load(&report.finished)&&report.model==3);
 #ifdef REPORT_BUILTIN
     /* An image without an application manifest has no client: the service opens and closes, and the report says refused. */
     assert(!mode&&!submits&&!failed&&os_npu_complete());
     assert(report.stopped&&!report.retained&&report.refused&&!report.jobs&&!report.output_bytes&&!report.mismatches);
+    assert(report.jobs_selected==1);   /* no application ran: the session's word */
 #else
     const unsigned jobs=mode==0?2:mode==1||mode==4||mode==5?0:1;
-    assert(report.jobs==jobs&&report.output_bytes==(jobs?8:0));
+    /* An application's jobs are not selected by the session: the report gives the jobs it ran in both words. */
+    assert(report.jobs==jobs&&report.jobs_selected==jobs&&report.output_bytes==(jobs?8:0));
     if(mode==0)assert(step==5&&submits==3&&!failed&&os_npu_complete());
     if(mode==3)assert(step==3&&submits==1&&!failed&&os_npu_complete());
     if(mode==1||mode==2||mode==4||mode==5) {
