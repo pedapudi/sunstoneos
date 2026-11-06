@@ -388,7 +388,7 @@ static void model_space_build(void *pool, size_t bytes, int owned)
     model_l1[1] = (uint64_t)(uintptr_t)model_l2 | APP_PTE_TABLE;
     for (unsigned j = 0; j < 512; ++j) model_l2[j] = MODEL_BLOCK(UINT64_C(0x40000000) + (uint64_t)j * 0x200000);
     static struct app_region_range usable[1]; static struct app_region_entry entries[8]; static struct app_region_ledger l;
-    const struct app_region_range range = {APP_REGION_FLOOR, 0x31000000};
+    const struct app_region_range range = {APP_REGION_FLOOR, 0x37000000};   /* to 0x7f000000: room for a pool of 128 MiB */
     assert(app_region_ledger_init(&l, usable, 1, entries, 8, &range, 1) == 0);
     /* The application owns the pool at 0x77000000, or (the mutation) a block elsewhere and not the pool. */
     assert(app_region_acquire_at(&l, 1, owned ? UINT64_C(0x77000000) : UINT64_C(0x70000000), bytes, APP_REGION_READ | APP_REGION_WRITE) == 0);
@@ -435,6 +435,10 @@ int npu_runtime_queue_return(struct npu_runtime_queue *q) { q->claimed = 0; retu
  * loaded through the worker, a handle is built for each, the direct queue is claimed and the ring is ready. Before the open,
  * the service refuses a SUBMIT of a command beyond the declared slots and one of another slot's command. */
 static unsigned queue_handles, queue_wide_inputs, queue_denied, queue_invalid, queue_closed;
+/* REGISTER_LATER=n (case 33): the image links no graph, as every OS image since the one-image series; the declaration reserves
+ * n slots and n graphs of graph_bytes and tensor_bytes (NPU_BOUNDS), and the owner registers catalogue model REGISTER_MODEL n
+ * times before the open, as an application that carries its graphs does (apps/npu-graphs). One more is refused as full. */
+static unsigned register_later, register_model, queue_registered;
 static void queue_client(void *unused)
 {
     (void)unused;
@@ -443,6 +447,20 @@ static void queue_client(void *unused)
         if (opened == 1) break;
         assert(opened == 0);
         (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(25));
+    }
+    for (unsigned i = 0; i < register_later; ++i) {
+        unsigned entry = UINT32_MAX;
+        const struct npu_runtime_model *m = &os_npu_models[register_model];
+        if (os_npu_register(m->data, m->bytes, &entry) != 1 || entry != i) {
+            fprintf(stderr, "registration %u refused (%u)\n", i, npu.runtime.register_refusal);
+            abort();
+        }
+        ++queue_registered;
+    }
+    if (register_later) {
+        unsigned entry = UINT32_MAX;
+        const struct npu_runtime_model *m = &os_npu_models[register_model];
+        assert(os_npu_register(m->data, m->bytes, &entry) == 0 && npu.runtime.register_refusal == NPU_REGISTER_FULL);
     }
     if (getenv("MUTATE_POOL_UNMAPPED")) {
         /* The pool is outside the application's mappings: the open must be refused, and the failure record must name the
@@ -590,10 +608,11 @@ static void verify(void *unused)
         return;
     }
     if (npu.runtime.resident) {                          /* case 33: the ring's owner holds every slot */
-        printf("queue: %u handles, widest %u inputs, closed %u, command beyond the declared slots denied %u, another slot's command refused %u, failures %u\n",
-               queue_handles, queue_wide_inputs, queue_closed, queue_denied, queue_invalid, board_failures);
+        printf("queue: %u handles, %u registered, widest %u inputs, closed %u, command beyond the declared slots denied %u, another slot's command refused %u, failures %u\n",
+               queue_handles, queue_registered, queue_wide_inputs, queue_closed, queue_denied, queue_invalid, board_failures);
         fflush(stdout);
         assert(finished && queue_handles == npu.runtime.slots && queue_closed && queue_denied && queue_invalid && !board_failures);
+        assert(queue_registered == register_later);
         if (getenv("EXPECT_WIDE")) assert(queue_wide_inputs == 12);
         return;
     }
@@ -821,18 +840,24 @@ int main(int argc, char **argv)
     /* Case 28: the 31 slots of the command mask. Case 30: one slot for each catalogue model, each sized by its own graph
      * (the queue image's layout); environment UNIFORM sizes every slot for the largest graph, to compare the totals. */
     /* NPU_SLOTS sets the slot count of case 30, as an application's declaration does. */
-    const unsigned slots = mode == 28 ? (getenv("NPU_SLOTS") ? (unsigned)atoi(getenv("NPU_SLOTS")) : 31u) : mode == 30 || mode == 33 ? (getenv("NPU_SLOTS") ? (unsigned)atoi(getenv("NPU_SLOTS")) : os_npu_model_count) : 1;
-    if ((mode == 30 || mode == 33) && !getenv("UNIFORM")) {
+    if (mode == 33 && getenv("REGISTER_LATER")) {
+        register_later = (unsigned)atoi(getenv("REGISTER_LATER"));
+        register_model = getenv("REGISTER_MODEL") ? (unsigned)atoi(getenv("REGISTER_MODEL")) : 0;
+        assert(register_later && register_model < os_npu_model_count && bounds.graph_bytes && bounds.tensor_bytes);
+    }
+    const unsigned linked = register_later ? 0 : os_npu_model_count;
+    const unsigned slots = register_later ? register_later : mode == 28 ? (getenv("NPU_SLOTS") ? (unsigned)atoi(getenv("NPU_SLOTS")) : 31u) : mode == 30 || mode == 33 ? (getenv("NPU_SLOTS") ? (unsigned)atoi(getenv("NPU_SLOTS")) : os_npu_model_count) : 1;
+    if ((mode == 30 || mode == 33) && !getenv("UNIFORM") && !register_later) {
         assert(slots <= os_npu_model_count && !bounds.capacity);
         bounds.per_graph = 1;
     }
     if (mode == 30 && getenv("NPU_QUEUE")) { bounds.queue = 1; bounds.queue_depth = 64; sscanf(getenv("NPU_QUEUE"), "%u,%u", &bounds.queue_links, &bounds.queue_image_links); }
-    if (mode == 33) { bounds.queue = 1; bounds.queue_links = 8; bounds.queue_image_links = 0; bounds.queue_depth = 64; bounds.capacity = 0; }
+    if (mode == 33) { bounds.queue = 1; bounds.queue_links = 8; bounds.queue_image_links = 0; bounds.queue_depth = 64; bounds.capacity = register_later; }
     const size_t scratch_bytes = npu_runtime_scratch_bytes(os_npu_models, os_npu_model_count);
     assert(scratch_bytes);
     bounds.scratch = aligned_alloc(64, (scratch_bytes + 63) & ~(size_t)63); bounds.scratch_bytes = scratch_bytes;
-    const size_t need = npu_runtime_requirements_with(os_npu_models, os_npu_model_count, slots, &bounds);
-    const size_t meta_need = npu_runtime_meta_bytes_with(os_npu_models, os_npu_model_count, slots, &bounds);
+    const size_t need = npu_runtime_requirements_with(os_npu_models, linked, slots, &bounds);
+    const size_t meta_need = npu_runtime_meta_bytes_with(os_npu_models, linked, slots, &bounds);
     assert(meta_need);
     free(bounds.scratch); bounds.scratch = NULL; bounds.scratch_bytes = 0; /* prepare takes its work memory from the reservation */
     assert(need && !(need & (NPU_RUNTIME_GROUP_BYTES - 1)));
@@ -849,9 +874,12 @@ int main(int argc, char **argv)
     assert(raw != MAP_FAILED);
     void *pool = (void *)(((uintptr_t)raw + NPU_RUNTIME_GROUP_BYTES - 1) & ~(uintptr_t)(NPU_RUNTIME_GROUP_BYTES - 1));
     static struct npu_meta_window meta_window;
-    npu_meta_window_init(&meta_window, getenv("MUTATE_META_IN_POOL") ? (uint8_t *)pool + need : calloc(1, meta_need + 64), meta_need);
+    /* The OS grows its metadata from the ledger as registrations copy graphs (apps/os/npu.c meta_allocate); this window is
+     * fixed, so it is given room for the copies of the graphs registered later. */
+    const size_t meta_room = meta_need + register_later * ((os_npu_models[register_model].bytes + 63) & ~(size_t)63);
+    npu_meta_window_init(&meta_window, getenv("MUTATE_META_IN_POOL") ? (uint8_t *)pool + need : calloc(1, meta_room + 64), meta_room);
     static _Alignas(4096) uint8_t register_page[4096];
-    struct npu_runtime_config config = {.count = os_npu_model_count, .slots = slots, .bounds = bounds, .cpu = (uintptr_t)pool,
+    struct npu_runtime_config config = {.count = linked, .slots = slots, .bounds = bounds, .cpu = (uintptr_t)pool,
         .physical = (uintptr_t)pool, .bytes = need, .register_cpu = (uintptr_t)register_page,
         .register_physical = 0x03600000, .fatal = fatal, .meta = &meta_window.meta};
     config.models = os_npu_models;

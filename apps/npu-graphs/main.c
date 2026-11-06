@@ -42,6 +42,40 @@ void npu_graphs_init(void) {}
 #endif
 #define QUEUE_TIMEOUT_US 1000000u
 static void queue_fault(unsigned stage, uint32_t value) { ss_fail_value((0xb0u << 8) | stage, value); }
+/* Graph i of the model list: the OS image links none, so every graph is one the application carries and registers. */
+static unsigned graphs_listed(void) { return npu_graph_count + npu_graph_runtime_count; }
+static const struct npu_graph_vector *vector_of(unsigned i)
+{ return i < npu_graph_count ? &npu_graph_vectors[i] : &npu_graph_runtime[i - npu_graph_count].vector; }
+/* Hand every graph the application carries to the OS before the ring opens: the ring makes slot i of catalogue graph i, and
+ * the OS opens it only once every declared slot holds a graph. Registration answers 0 while the OS's NPU task works on it. */
+static void register_graphs(void)
+{
+    for (unsigned i = 0; i < npu_graph_runtime_count; ++i) {
+        const struct npu_graph_runtime *g = &npu_graph_runtime[i];
+        unsigned index = UINT32_MAX;
+        int registered;
+        const uint64_t t = ss_counter_ticks();
+        while ((registered = ss_npu_register_graph(g->model, g->model_bytes, &index)) == 0) {
+            if (ss_live() < 0 || (ss_counter_ticks() - t) / 24 > 2000000) queue_fault(19, i);
+            ss_progress(); vTaskDelay(1);
+        }
+        if (registered != 1 || index != npu_graph_count + i) queue_fault(20, (uint32_t)registered);
+    }
+}
+/* Write the inputs of a handle from the vectors of its graph. */
+static void write_inputs(struct ss_npu_queue *q, ss_npu_handle h, const struct npu_graph_vector *v)
+{
+    size_t offset = 0;
+    for (unsigned i = 0;; ++i) {
+        struct ss_npu_tensor t;
+        if (!ss_npu_queue_tensor(q, h, SS_NPU_INPUT, i, &t)) break;
+        if (offset + t.bytes > v->input_bytes) queue_fault(3, i);
+        memcpy(t.data, v->input + offset, t.bytes);
+        if (!ss_npu_queue_dirty(q, h, SS_NPU_INPUT, i, 0, t.bytes)) queue_fault(4, i);
+        offset += t.bytes;
+    }
+    if (offset != v->input_bytes) queue_fault(5, (uint32_t)offset);
+}
 /* The CPU clock record of the OS (ss_clock_info) as it is when read: the applied points of the little (Cortex-A55) and big
  * clusters in MHz, their rails in mV, the DSU point, the transitions made and the core of the caller, in three words. */
 static void clock_words(uint64_t *a, uint64_t *b, uint64_t *c)
@@ -55,10 +89,11 @@ static void clock_words(uint64_t *a, uint64_t *b, uint64_t *c)
 }
 static __attribute__((unused)) _Noreturn void npu_graphs_queue_main(void)
 {
-    const struct npu_graph_vector *v = &npu_graph_vectors[0];
+    const struct npu_graph_vector *v = vector_of(0);
     struct ss_npu_queue *q = NULL;
-    uint64_t begin = ss_counter_ticks();
     int opened;
+    register_graphs();
+    uint64_t begin = ss_counter_ticks();
     /* One tensor link chosen now, after the scheduler started: the output of the first resident graph feeds the input of the
      * second (the graph is the same one under two names, and it maps its input to an output of the same representation). */
     static const struct ss_npu_queue_edge link = {0, 0, 1, 0};
@@ -73,16 +108,8 @@ static __attribute__((unused)) _Noreturn void npu_graphs_queue_main(void)
     }
     ss_npu_handle h;
     if (!ss_npu_queue_register(q, 0, &h)) queue_fault(2, 0);
+    write_inputs(q, h, v);
     size_t offset = 0;
-    for (unsigned i = 0;; ++i) {
-        struct ss_npu_tensor t;
-        if (!ss_npu_queue_tensor(q, h, SS_NPU_INPUT, i, &t)) break;
-        if (offset + t.bytes > v->input_bytes) queue_fault(3, i);
-        memcpy(t.data, v->input + offset, t.bytes);
-        if (!ss_npu_queue_dirty(q, h, SS_NPU_INPUT, i, 0, t.bytes)) queue_fault(4, i);
-        offset += t.bytes;
-    }
-    if (offset != v->input_bytes) queue_fault(5, (uint32_t)offset);
     static struct ss_npu_fence fences[QUEUE_DEPTH];
     unsigned records = 0;
 #ifdef NPU_GRAPHS_QUEUE_REPEAT
@@ -240,8 +267,8 @@ static __attribute__((unused)) _Noreturn void npu_graphs_queue_main(void)
         if (!ss_npu_queue_tensor(q, h, SS_NPU_OUTPUT, i, &t)) break;
         for (size_t b = 0; b < t.bytes && offset + b < v->reference_bytes; ++b) wrong += ((const uint8_t *)t.data)[b] != v->reference[offset + b];
         for (size_t b = 0; b + 1 < t.bytes && offset + b + 1 < v->reference_bytes; b += 2) {
-            const int a = (int16_t)((const uint8_t *)t.data)[b] | ((int16_t)(int8_t)((const uint8_t *)t.data)[b + 1] << 8);
-            const int r = (int16_t)v->reference[offset + b] | ((int16_t)(int8_t)v->reference[offset + b + 1] << 8);
+            const uint8_t *o = (const uint8_t *)t.data + b, *e = v->reference + offset + b;
+            const int a = (int16_t)(o[0] | o[1] << 8), r = (int16_t)(e[0] | e[1] << 8);   /* no shift of a negative value */
             const uint32_t d = a > r ? (uint32_t)(a - r) : (uint32_t)(r - a);
             if (d > largest) largest = d;
             sum_abs += d; far += d > 8;
@@ -294,8 +321,9 @@ static __attribute__((unused)) _Noreturn void npu_graphs_queue_main(void)
 #endif
 static _Noreturn void npu_graphs_sequence_main(void)
 {
-    const unsigned n = npu_graph_count;
+    const unsigned n = graphs_listed();
     if (n == 0 || n > QUEUE_DEPTH || n > 32) queue_fault(0, n);
+    register_graphs();
     struct ss_npu_queue *q = NULL;
     uint64_t begin = ss_counter_ticks();
     int opened;
@@ -305,7 +333,7 @@ static _Noreturn void npu_graphs_sequence_main(void)
     }
     ss_npu_handle h[32];
     for (unsigned g = 0; g < n; ++g) {
-        const struct npu_graph_vector *v = &npu_graph_vectors[g];
+        const struct npu_graph_vector *v = vector_of(g);
         if (!ss_npu_queue_register(q, g, &h[g])) queue_fault(2, g);
         size_t offset = 0;
         for (unsigned i = 0;; ++i) {
@@ -343,7 +371,7 @@ static _Noreturn void npu_graphs_sequence_main(void)
     uint32_t wrong[32] = {0};
     uint64_t mask = 0, wrong_total = 0;
     for (unsigned g = 0; g < n; ++g) {
-        const struct npu_graph_vector *v = &npu_graph_vectors[g];
+        const struct npu_graph_vector *v = vector_of(g);
         begin = ss_counter_ticks();
         int acquired;
         while ((acquired = ss_npu_queue_acquire_handle(q, h[g])) != 1) {
@@ -419,10 +447,11 @@ static _Noreturn void npu_graphs_chain_main(const struct ss_grant *grant)
     const uint8_t *base = grant->regions[NPU_GRAPHS_CHAIN_REGION].base;
     const struct npu_chain_header *h = (const void *)base;
     if (grant->region_count <= NPU_GRAPHS_CHAIN_REGION || h->magic != NPU_CHAIN_MAGIC || h->version != NPU_CHAIN_VERSION ||
-        h->graphs != npu_graph_count || h->graphs > NPU_CHAIN_MAX_GRAPHS || h->records > NPU_CHAIN_MAX_RECORDS ||
+        h->graphs != graphs_listed() || h->graphs > NPU_CHAIN_MAX_GRAPHS || h->records > NPU_CHAIN_MAX_RECORDS ||
         h->reference_records > h->records || h->reference_records > NPU_CHAIN_MAX_STAT_RECORDS || h->rows > NPU_CHAIN_MAX_ROWS)
         queue_fault(0, h->graphs);
     const unsigned n = h->graphs;
+    register_graphs();
     struct ss_npu_queue *q = NULL;
     uint64_t begin = ss_counter_ticks();
     int opened;
@@ -525,7 +554,7 @@ void npu_graphs_main(const struct ss_grant *grant)
     }
 #ifdef NPU_GRAPHS_QUEUE
     /* One graph is aliased under many names, one resident slot each, so the list is longer than the receipt. */
-    if (npu_graph_count == 0) fault(STAGE_CATALOGUE, 0, npu_graph_count);
+    if (graphs_listed() == 0) fault(STAGE_CATALOGUE, 0, 0);
 #ifdef NPU_GRAPHS_CHAIN
     npu_graphs_chain_main(grant);
 #elif defined(NPU_GRAPHS_SEQUENCE)
@@ -534,9 +563,9 @@ void npu_graphs_main(const struct ss_grant *grant)
     npu_graphs_queue_main();
 #endif
 #endif
-    if (npu_graph_count == 0 || npu_graph_count > NPU_GRAPHS_MAX) fault(STAGE_CATALOGUE, 0, npu_graph_count);
+    /* The OS image links no graph: the list may be all graphs the application registers (npu_graph_count is then 0). */
     const unsigned total = npu_graph_count + npu_graph_runtime_count;
-    if (total > NPU_GRAPHS_MAX) fault(STAGE_CATALOGUE, 0, total);
+    if (total == 0 || total > NPU_GRAPHS_MAX) fault(STAGE_CATALOGUE, 0, total);
     receipt.count = total;
     receipt.start = ss_counter_ticks();
     unsigned failed = 0;

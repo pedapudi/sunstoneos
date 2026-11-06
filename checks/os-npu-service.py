@@ -7,7 +7,8 @@ multiply and a graph of 12 inputs and 10 outputs made from add by checks/nbg_wid
            after every region is not, and the tables of the declaration lie inside the reservation;
   case 33: the same with the queue's tables: the open path of apps/os/npu-queue.c loads all 400 graphs, links nothing, builds
            400 handles and claims the direct queue; then a SUBMIT of a command beyond the declared 400, and of another
-           slot's command by a client that was not given it, are refused by the service.
+           slot's command by a client that was not given it, are refused by the service. Run again with the queue image's
+           declaration and no linked graph: the owner registers graph-relu 31 times into 31 slots before the open.
 The limits that remain are memory and the NPU's 4 GiB of device addresses; the pool is sized from the declaration.
 """
 import argparse, json, os, re, shutil, subprocess, sys
@@ -119,6 +120,19 @@ done = subprocess.run([str(qexe), '33', str(out)], capture_output=True, text=Tru
 (out / 'case33.log').write_text(done.stdout + done.stderr)
 assert done.returncode == 0, ('case 33', done.stdout[-800:], done.stderr[-2500:])
 print(done.stdout.strip().splitlines()[-1])
+
+# Case 33 with the queue image's declaration and no linked graph (every OS image since the one-image series): 31 slots and 31
+# graphs of graph_bytes and tensor_bytes 262,144 (apps/npu-graphs/manifest-queue.json); the owner registers graph-relu 31
+# times, a 32nd registration is refused as full, and the open loads each registered graph into its slot.
+if not args.artifacts:
+    relu = next(i for i, n in enumerate(names) if n.endswith('-graph-relu'))
+    done = subprocess.run([str(qexe), '33', str(out)], capture_output=True, text=True, timeout=3000,
+                          env={**environment(), 'REGISTER_LATER': '31', 'REGISTER_MODEL': str(relu), 'NPU_BOUNDS': '31,262144,262144'})
+    (out / 'case33-registered.log').write_text(done.stdout + done.stderr)
+    assert done.returncode == 0, ('case 33 with registered graphs', done.stdout[-800:], done.stderr[-2500:])
+    line = done.stdout.strip().splitlines()[-1]
+    assert line.startswith('queue: 31 handles, 31 registered'), line
+    print('registered:', line)
 
 # Mutation: the application's tables do not map the pool. The queue's open must be refused, and the refusal must carry its own
 # failure detail (0x70c, the read region of slot 0), so a record never says only "retained".
