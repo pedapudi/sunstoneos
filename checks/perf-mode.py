@@ -134,7 +134,7 @@ def os_model(out, npu):
         (host / 'os' / Path(path).name).write_bytes((ROOT / path).read_bytes())
     (host / 'board/application.h').write_bytes((ROOT / 'checks/perf-os-host/board/application.h').read_bytes())
     name = 'perf-os-model' + ('-npu' if npu else '')
-    exe = build(out, name, [host / 'os/perf-os-model.c', *ENGINE], ['-DSUNSTONE_A733_OS_NPU=1'] if npu else [])
+    exe = build(out, name, [host / 'os/perf-os-model.c', *ENGINE], ['-DPERF_MODEL_NPU=1'] if npu else [])
     lines = run(out, name, [exe]).splitlines()
     assert lines[-1].startswith('PASS'), lines
     return json.loads(lines[-2])

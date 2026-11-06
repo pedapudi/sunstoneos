@@ -2,7 +2,8 @@
 """Exercise tools/board.py with a fake FEL and board; no USB access.
 
 The model covers ownership, transfers, WDT recovery and the durable queue.
-Optional --hello prepares a real generic CPU-return ELF without a board.
+Optional --hello prepares a real generic CPU-return ELF without a board; the generic-npu group also takes
+--npu-image, a generic ELF whose application declares the NPU.
 """
 import argparse
 import contextlib
@@ -899,7 +900,7 @@ def report_cases(out,hello):
         assert result['outcome']=='refused-before-launch' and 'CPU return Secure Device allocations differ' in result['first_failure']['detail']
         passed('malformed-report-mmio-address-refused-before-transport')
         try:images.inspect(hello,'npu')
-        except ValueError as error:assert 'NPU kind requires the linked OS NPU service' in str(error)
+        except ValueError as error:assert 'NPU kind requires an application that declares the NPU' in str(error),str(error)
         else:raise AssertionError('CPU image relabeled as NPU accepted')
         passed('npu-kind-refuses-image-without-native-npu-service')
         try:images.inspect(hello,'gpu-return')
@@ -1040,34 +1041,43 @@ def rail_cases(out):
         passed('pinned-rail-helper-'+variant)
 
 
-def generic_npu_case(out, hello):
+def generic_npu_case(out, hello, image):
+    """A generic image whose application declares the NPU (ss_application_npu), such as the gate image ret-npu-load."""
+    import gate_session
     root=out/'generic-npu';root.mkdir()
-    args=arguments(root,'--kind','npu');args.image=hello
-    original_symbols=images.symbols
-    def generic_symbols(image):
-        # The real hello ELF exercises the generic session producer; only
-        # the linked-service identity is modeled for NPU kind selection.
-        return dict(original_symbols(image),os_npu_client_model=(1,1))
-    with patch.object(images,'symbols',generic_symbols):
-        info=images.inspect(hello,'npu')
-        assert info['generic'] and not info.get('finite_npu')
-        source=json.loads((board.state.EVIDENCE/'sol-resume-20261031/port-3-3/cpu-thermal-state/session.json').read_text())
-        words={}
-        for transaction in source['transactions']:
-            command=transaction['command']
-            addresses=[int(command[i+1],16) for i,value in enumerate(command) if value=='readl']
-            words.update({hex(address):int(value,16) for address,value in zip(addresses,transaction['stdout'].split())})
-        plan=images.prepare(args,info,{'words':words},root/'bundle')
-        assert plan['format']=='generic'
-        queued=arguments(root,'--kind','npu','--template',str(root/'bundle'),submit=True);queued.image=hello
-        job=board.Queue(root/'queue').submit(queued)
-        assert (Path(job['directory'])/'template/session.bin').read_bytes()==(root/'bundle/session.bin').read_bytes()
-        reached=[]
-        def backend(*args):
-            reached.append(True)
-            raise RuntimeError('modeled stop after preflight')
-        result=board.run_image(args,backend)
-        assert reached and 'modeled stop after preflight' in result['first_failure']['detail']
+    source=json.loads((board.state.EVIDENCE/'sol-resume-20261031/port-3-3/cpu-thermal-state/session.json').read_text())
+    words={}
+    for transaction in source['transactions']:
+        command=transaction['command']
+        addresses=[int(command[i+1],16) for i,value in enumerate(command) if value=='readl']
+        words.update({hex(address):int(value,16) for address,value in zip(addresses,transaction['stdout'].split())})
+    for address,mask in images.NPU_ENTRY_GATES.items():words[hex(address)]=words.get(hex(address),0)|mask
+    for address in images.NPU_PCK4:words[hex(address)]=8
+    template=gate_session.npu_template(image,root)
+    # The session grants the NPU exactly when the application declares it. A typed NPU record for an application that
+    # declares no NPU is refused, and so is the control template, which has no NPU record, for one that declares it.
+    args=arguments(root,'--kind','cpu-return','--template',str(template));args.image=hello
+    try:images.prepare(args,images.inspect(hello,'cpu-return'),{'words':words},root/'undeclared-bundle')
+    except ValueError as error:assert 'the record is present and the application does not' in str(error),str(error)
+    else:raise AssertionError('an NPU record was prepared for an application that declares no NPU')
+    args=arguments(root,'--kind','npu');args.image=image
+    info=images.inspect(image,'npu')
+    assert info['generic'] and not info.get('finite_npu') and 'npu_stop' in info['report_geometry']
+    try:images.prepare(args,info,{'words':words},root/'control-bundle')
+    except ValueError as error:assert 'the record is absent and the application declares it' in str(error),str(error)
+    else:raise AssertionError('a session without an NPU record was prepared for an application that declares the NPU')
+    args=arguments(root,'--kind','npu','--template',str(template));args.image=image
+    plan=images.prepare(args,info,{'words':words},root/'bundle')
+    assert plan['format']=='generic'
+    queued=arguments(root,'--kind','npu','--template',str(root/'bundle'),submit=True);queued.image=image
+    job=board.Queue(root/'queue').submit(queued)
+    assert (Path(job['directory'])/'template/session.bin').read_bytes()==(root/'bundle/session.bin').read_bytes()
+    reached=[]
+    def backend(*args):
+        reached.append(True)
+        raise RuntimeError('modeled stop after preflight')
+    result=board.run_image(args,backend)
+    assert reached and 'modeled stop after preflight' in result['first_failure']['detail']
     model=Model('normal');owner=board.Live(args,root,{},access=model,process=model.process,now=model.now,sleep=model.sleep)
     read_words=[]
     def tx(*commands):
@@ -1209,7 +1219,7 @@ def finite_npu_cases(out, image_root, state, fixture, host_tree=None, cases=()):
 def preflight_cases(out):
     """An unavailable host pre-flight refuses; only a recorded --no-preflight reason lets it through."""
     root=out/'preflight';root.mkdir()
-    typed={'generic':True,'symbols':{'os_npu_client_model':(0,4)}}
+    typed={'generic':True,'symbols':{'ss_application_npu':(0,28)}}
     cache=root/'cache';cache.mkdir()           # no capture and no recorded words here, as on a machine without the evidence cache
     on={'status':'ON','words':{hex(a):m for a,m in images.NPU_ENTRY_GATES.items()}|{hex(a):8 for a in images.NPU_PCK4}}
     def prepare(args,info,live,out_dir,**kw):
@@ -1348,6 +1358,7 @@ def main():
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--hello',type=Path)
     parser.add_argument('--gpu-image',type=Path,action='append',help='Real generic GPU ELF for gpu-capture group; repeat for diagnostic and ordinary images.')
+    parser.add_argument('--npu-image',type=Path,help='Generic ELF whose application declares the NPU, for the generic-npu group (gate image ret-npu-load)')
     parser.add_argument('--npu-images',type=Path)
     parser.add_argument('--npu-state',type=Path)
     parser.add_argument('--npu-fixture',type=Path)
@@ -1378,7 +1389,7 @@ def main():
     if 'ddr' in groups:owned_ddr_cases(args.out)
     if 'rails' in groups:rail_cases(args.out)
     if args.hello and 'offline' in groups:offline(args.out,args.hello)
-    if 'generic-npu' in groups:generic_npu_case(args.out,args.hello)
+    if 'generic-npu' in groups:generic_npu_case(args.out,args.hello,args.npu_image)
     if 'npu' in groups:finite_npu_cases(args.out,args.npu_images,args.npu_state,args.npu_fixture,args.npu_host_tree,args.npu_case)
     board.save(args.out/'results.json',rows)
     print(f'{len(rows)} checks passed; no device access')

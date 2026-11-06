@@ -13,9 +13,7 @@
 #include "umem.h"
 #include "aarch64_device_memory.h"
 #include "device-ranges.h"
-#ifdef SUNSTONE_A733_OS_NPU
 #include "npu.h"
-#endif
 #include "sunstone_notify.h"
 #include <stdint.h>
 #include <string.h>
@@ -205,12 +203,10 @@ int os_large_prepare(void)
         if (region_take_at(owner_asid, r->address, r->bytes, APP_REGION_READ | (r->access & SS_ACCESS_WRITE ? APP_REGION_WRITE : 0))) return large_failed(6);
     }
     if (large_admit_with(&region_allocator, owner_asid, __start_sunstone_large_regions, count, slots, os_large_capacity)) return large_failed(7);
-#ifdef SUNSTONE_A733_OS_NPU
     /* The NPU's reservation comes from what the regions left: the largest extent it can address, trimmed to what the runtime
      * places. It belongs to the application and is mapped in its space. A refusal is recorded and leaves the NPU unprepared
      * (os_npu_start refuses); it does not stop the application. */
     if (!os_npu_pool_prepare(&ledger, owner_asid)) return large_failed(9);
-#endif
     /* The main stack: a 2 MiB block that the guard owner holds below it, so that an overflow is an EL0 fault in memory
      * no space maps. The stack is at the bottom of its own block. Where no extent is free the static stack stays. */
     if (manifest) {

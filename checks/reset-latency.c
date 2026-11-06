@@ -43,6 +43,8 @@ uint64_t a733_fault_pending;
 static const struct ss_manifest model_manifest={0};
 const struct ss_application ss_application={.manifest=&model_manifest};
 int os_application_finished(void){return 0;}
+/* The modeled NPU service never finishes, so it keeps the periodic-progress path as every other service. */
+int os_npu_complete(void){return 0;}
 const struct os_session *os_session_admitted(void)
 {
 #define EVERY(NAME,bit,with) |OS_GRANT_##NAME

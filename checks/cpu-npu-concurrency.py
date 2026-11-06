@@ -42,7 +42,7 @@ def build(label,mode,source=APP/'main.c'):
     output=a.out/label
     command=[a.cc,'-std=c11','-O2','-ffp-contract=off','-pthread',
         '-I'+str(ROOT/'checks/cpu-npu-concurrency'),'-I'+str(ROOT/'include'),'-I'+str(APP)]
-    if mode:command+=['-DSUNSTONE_A733_OS_NPU=1','-DSUNSTONE_A733_OS_NPU_OBSERVE=1']
+    if mode:command+=['-DCPU_NPU_WITH_NPU=1','-DSUNSTONE_A733_OS_NPU_OBSERVE=1']
     run([*command,str(source),*([str(adapter)] if mode else []),str(ROOT/'checks/cpu-npu-concurrency/producer.c'),'-o',str(output)])
     return output
 if not a.disabled_only:

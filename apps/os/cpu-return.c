@@ -12,9 +12,7 @@
 #include "sunstone_crumb.h"
 #include "cached.h"
 #include <string.h>
-#ifdef SUNSTONE_A733_OS_NPU
 #include "npu.h"
-#endif
 /* The host arms WDT0 in this mode before launch, waits for the session
  * length plus one interval, and reads the breadcrumbs at this address after a
  * watchdog reset (apps/os/cpu-return-host.py). */
@@ -36,13 +34,10 @@ __attribute__((noinline)) static _Noreturn void fail(unsigned detail)
 {board_fail_at(SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_CPU_RETURN<<12|(detail&0xfff),0,__builtin_return_address(0));platform_exit(detail);}
 /* The cutoff failure says what the session was waiting on: the value is the application's latest progress site (the
  * return address of its last ss_progress call) and the auxiliary field of the site holds the unmet NPU retirement
- * conditions (os_npu_retirement_state, 15 bits; zero in an image without the NPU service). */
+ * conditions (os_npu_retirement_state, 15 bits; zero for a session that does not grant the NPU). */
 __attribute__((noinline)) static _Noreturn void fail_cutoff(void)
 {
-    unsigned npu=0;
-#ifdef SUNSTONE_A733_OS_NPU
-    npu=os_npu_retirement_state()&0x7fffu;
-#endif
+    unsigned npu=os_granted(OS_GRANT_NPU)?os_npu_retirement_state()&0x7fffu:0;
     board_fail_at(SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_CPU_RETURN<<12|0x73c|(uint32_t)npu<<16,
         os_application_progress_site(),__builtin_return_address(0));
     platform_exit(0x73c);
@@ -72,21 +67,13 @@ int os_cpu_return_requested(void){return atomic_load_explicit(&closing,memory_or
  * ready() after selecting its Secure Device stack; its health read stays
  * side-effect free because breadcrumb SVC is not available at EL3. */
 int os_cpu_return_devices_ready(void)
-{
-#ifdef SUNSTONE_A733_OS_NPU
-    return os_npu_retirement_check();
-#else
-    return 1;
-#endif
-}
+{return os_npu_retirement_check();}
 int os_cpu_return_ready(void)
 {
     if(!atomic_load_explicit(&ready,memory_order_acquire))return 0;
     /* Before the scheduler no service task has run, so no device was opened. */
     if(atomic_load_explicit(&prefail,memory_order_acquire))return 1;
-#ifdef SUNSTONE_A733_OS_NPU
-    if(!os_npu_complete())return 0;
-#endif
+    if(os_granted(OS_GRANT_NPU)&&!os_npu_complete())return 0;
     return 1;
 }
 static void terminal(void *argument)
@@ -171,15 +158,14 @@ static int failure_claim(unsigned context,uint32_t site,uint32_t value,const voi
     uint64_t epoch=board.session.epoch;
     if(!epoch&&before_scheduler)epoch=a733_cached_runtime[0].epoch;
     os_application_failed(&record,epoch,board.session.generation);
-#ifdef SUNSTONE_A733_OS_NPU
-    /* The host validates the NPU stop report of every failure return. Before the
+    /* The host validates the NPU stop report of every failure return of a session that grants the NPU. Before the
      * scheduler no NPU task can run, so a service that has not run (a refusal
      * in os_npu_start, or a failure before it) publishes that nothing was
      * started. After the scheduler started, the service's own client publishes
      * the report when it stops; a bootstrap task that has not run yet could still
-     * power the NPU, so no such report is made here. */
+     * power the NPU, so no such report is made here. The session may not be decoded yet, so the report is published
+     * whatever it grants; the host reads it only for a session that grants the NPU. */
     if(before_scheduler)os_npu_report_unstarted(epoch,board.session.generation);
-#endif
     atomic_store_explicit(&failing,1,memory_order_release);
     if(!before_scheduler)return 1;
     atomic_store_explicit(&prefail,1,memory_order_release);

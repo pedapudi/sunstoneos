@@ -19,6 +19,11 @@ if not __debug__:
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / 'tools/integration-gate.py'
 OUTPUT = None
+_spec = importlib.util.spec_from_file_location('gate_under_test', GATE)
+_gate = importlib.util.module_from_spec(_spec)
+sys.path.insert(0, str(GATE.parent))
+_spec.loader.exec_module(_gate)
+OS_VARIANTS = len(_gate.VARIANTS)
 
 
 class GateTests(unittest.TestCase):
@@ -241,7 +246,6 @@ def plan(value=None, changed=None, index=None):
         calls = self.records()
         self.assertEqual(len(calls), 2)
         self.assertIn('-DSUNSTONE_APPLICATION=headset-fixture', calls[0])
-        self.assertNotIn('-DSUNSTONE_A733_OS_NPU=ON', calls[0])
         self.assertIn('-DEXAMPLE_DIR=', calls[0])
         self.assertIn('-DSUNSTONE_APPLICATION=', calls[0])
         self.assertEqual(calls[0][2], str(self.sandbox / 'build' / ('gate-os-resheadset-' + self.tree(self.source))))
@@ -388,20 +392,6 @@ def plan(value=None, changed=None, index=None):
                 external = next(call for call in runs if str(checker) in call)
                 self.assertEqual(indexed[-1], str(output / 'evidence/indexed/focused'))
                 self.assertEqual(external[-1], str(output / 'evidence/focused'))
-
-    def test_npu_variant_names_the_cached_catalogue(self):
-        refused = self.run_gate('--reason', 'OS NPU profile', '--variant', 'npu')
-        self.assertEqual(refused.returncode, 2)
-        self.assertIn('NPU catalogue map', refused.stderr)
-        self.assertEqual(self.records(), [])
-        catalogue = self.sandbox / 'build/npu-board/session-artifacts.json'
-        catalogue.parent.mkdir(parents=True, exist_ok=True)
-        catalogue.write_text('{}\n')
-        result = self.run_gate('--reason', 'OS NPU profile', '--variant', 'npu', label='npu')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        calls = self.records()
-        self.assertEqual(len(calls), 2)
-        self.assertIn('-DSUNSTONE_A733_OS_NPU=ON', calls[0])
 
     def test_build_directory_follows_the_source(self):
         other = self.checkout('other')
@@ -560,7 +550,7 @@ exec "$REAL" "$@"
         self.assertIn('other-image', central)
         self.assertNotIn('clean', central)
         self.assertNotIn('ignored.o', central)
-        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 16)  # core, example and fourteen OS variants
+        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 2 + OS_VARIANTS)  # core, example and every OS variant
         application = next(c for c in calls if c[0] == 'cmake' and 'smp-example-model' in c)
         # The fake lists the same targets in both builds; example builds only its own.
         self.assertEqual(application[application.index('--target') + 1:],
@@ -580,7 +570,7 @@ exec "$REAL" "$@"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.records()
         self.assertFalse(any('smp-example-model' in call for call in calls))
-        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 15)  # core and fourteen OS variants
+        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 1 + OS_VARIANTS)  # core and every OS variant
         self.assertTrue(all('-DEXAMPLE_DIR=' in c for c in calls if c[0] == 'cfg.sh'))
 
     def test_external_change_during_steps_fails(self):

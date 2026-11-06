@@ -13,15 +13,15 @@ apps/npu-graphs/host.py writes) to DIR/decoder.py, the file that `board.py submi
   image identity, manifest digest   the image's build ID (tools/check-a733-smp.py) and its sunstone_manifest section
   devices, flags, workload          the manifest's required devices; --devices adds optional ones (only 0 has pinned board facts)
   which service records             the thermal record always; the CPU clock grant only with --clock-grant (and --perf), for a manifest
-                                    that declares cpu.clock_grants (cpu.perf); the NPU service (os_npu_client_model) as the image
-                                    links it; a DMA service or any device (the radio among them) is refused
+                                    that declares cpu.clock_grants (cpu.perf); the NPU service when the application declares the NPU
+                                    (ss_application_npu); a DMA service or any device (the radio among them) is refused
   NPU client model                  the image's os_npu_client_model
   NPU pool request                  --npu-pool BASE:BYTES (default 0:0: the allocator chooses)
-  NPU declaration                   --npu-declaration D (a manifest with an npu section, or a bare slots/in_flight/graphs/links object),
-                                    or the npu section of --manifest M; the image does not carry it
+  NPU declaration                   the image's ss_application_npu (the manifest's npu section); --npu-declaration D (a manifest with an
+                                    npu section, or a bare slots/in_flight/graphs/links object) and --manifest M must agree with it
   inputs                            --input FILE for each manifest input region, in order (their digests go into the session)
   board and evidence facts          tools/session-facts.json: the board prefix, thermal and grant records and the NPU authority words of
-                                    the profile the image needs ("npu" for an image with the NPU service, else "control")
+                                    the profile the image needs ("npu" for an application that declares the NPU, else "control")
 
 A field that none of these determines is an error that names it; nothing is guessed. The encoder and decoder are apps/os/host.py, the code the
 runner (tools/board_images.py), the producer (apps/os/prepare.py) and the host admission use. check decodes a session with that decoder and
@@ -94,8 +94,9 @@ DERIVED = {'prefix': {'magic', 'version', 'bytes', 'epoch', 'generation', 'lease
            'cpu_grant': {'magic', 'version', 'bytes', 'epoch', 'generation', 'clusters', 'max_mhz', 'perf', 'reserved'},
            'npu': {'magic', 'version', 'bytes', 'client_model', 'graph_region', 'pool_base', 'pool_bytes',
                    'slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes'}}
-# Symbols that tell which services an OS image links (the CMake options SUNSTONE_A733_OS_*).
-SYMBOLS = {'npu': 'os_npu_client_model'}
+# Symbols that tell which services a session grants: every OS image links the NPU service, and an application that declares
+# the NPU in its manifest records the declaration (tools/sunstone-manifest.py).
+SYMBOLS = {'npu': 'ss_application_npu'}
 REVIEWED = ROOT / 'tools/cpu-reviewed-points.json'
 # Services whose records the facts do not pin, refused when the image links them. Every image links the I2S service and
 # the radio station; a session grants them only with the audio-i2s or radio device, which the device rule below refuses.
@@ -268,19 +269,19 @@ def describe(image, manifest_path=None, npu_declaration=None, devices=None, host
         plan['perf'] = {'high': 1, 'low': 2}[perf] if perf else 0
     if SYMBOLS['npu'] in symbols:
         plan['services'].append('npu')
-        if npu_declaration:
-            plan['npu_declaration'] = declaration_of(npu_declaration)
-            plan['npu_declaration_from'] = str(npu_declaration)
-        elif declared:
-            plan['npu_declaration'] = tuple(declared[k] for k in ('slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes'))
-            plan['npu_declaration_from'] = str(manifest_path)
-        else:
-            raise SessionError('npu declaration (slots, in_flight, graphs, links): the image does not carry it; pass --npu-declaration D '
-                               '(a manifest with an npu section, or a JSON object of those fields) or --manifest M with an npu section')
+        linked = struct.unpack('<7I', symbol_bytes(elf, symbols, SYMBOLS['npu']))
+        plan['npu_declaration'] = linked[:6]
+        plan['npu_declaration_from'] = '%s (%s)' % (image, SYMBOLS['npu'])
+        plan['npu_graph_region'] = linked[6]
+        given = [(str(npu_declaration), declaration_of(npu_declaration))] if npu_declaration else []
+        if declared:
+            given.append((str(manifest_path), tuple(declared[k] for k in ('slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes'))))
+        for source, values in given:
+            if values != linked[:6]:
+                raise SessionError('npu declaration: %s declares %s and the image %s' % (source, values, linked[:6]))
         plan['npu_client_model'] = struct.unpack('<I', symbol_bytes(elf, symbols, 'os_npu_client_model')[:4])[0]
-        plan['npu_graph_region'] = 0
-        if manifest_path and not npu_declaration:
-            plan['npu_graph_region'] = load('session_tool_manifest_region', ROOT / 'tools/sunstone-manifest.py').load(manifest_path).get('npu', {}).get('graph_region', 0)
+    elif npu_declaration or declared:
+        raise SessionError('npu declaration: the application of %s declares no NPU, so its session grants none' % image)
     plan['profile'] = 'npu' if 'npu' in plan['services'] else 'control'
     return plan
 
@@ -408,9 +409,9 @@ def inspect(raw, image=None, host=None):
             problems.append('prefix image: %s differs from the image build ID %s' % (prefix['image'], identity.hex()))
         npu = report['extents'].get('npu')
         if SYMBOLS['npu'] in symbols and not npu:
-            problems.append('npu: the image links the NPU service and the session has no NPU record')
+            problems.append('npu: the application declares the NPU and the session has no NPU record')
         if npu and SYMBOLS['npu'] not in symbols:
-            problems.append('npu: the session has an NPU record and the image does not link the NPU service')
+            problems.append('npu: the session has an NPU record and the application declares no NPU')
         if npu and SYMBOLS['npu'] in symbols:
             if npu['client_model'] != struct.unpack('<I', symbol_bytes(elf, symbols, 'os_npu_client_model')[:4])[0]:
                 problems.append('npu client_model: %d differs from the image\'s os_npu_client_model' % npu['client_model'])

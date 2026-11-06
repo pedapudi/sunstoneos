@@ -82,16 +82,12 @@ static int session_owners_distinct(void)
     const struct a733_board_session *s = &board.session;
     const uint64_t owners[] = {s->pmic_owner, s->usb0_owner, s->typec_owner, s->usb2_owner, s->latch_owner,
                                s->latch_m_owner, os->thermal_owner,
-#ifdef SUNSTONE_A733_OS_NPU
                                os->npu.owner,
-#endif
                                os->cpu_clock.owner,
     };
     for (unsigned i = 0; i < sizeof(owners) / sizeof(*owners); ++i)
         if (owners[i] == OS_GPU_FIRMWARE_OWNER || owners[i] == OS_GPU_SESSION_OWNER) return 0;
-#ifdef SUNSTONE_A733_OS_NPU
     if (os->npu.pck_client == OS_GPU_CLIENT) return 0;
-#endif
     return s->pck_client != OS_GPU_CLIENT;
 }
 

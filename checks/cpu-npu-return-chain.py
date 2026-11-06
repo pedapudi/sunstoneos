@@ -370,7 +370,7 @@ def producer(args):
     shutil.copyfile(ROOT/'apps/os/npu-observe.c', adapter)
     executable = directory/'producer'
     command = [args.cc, '-std=c11', '-O2', '-ffp-contract=off', '-pthread',
-         '-DSUNSTONE_A733_OS_NPU=1', '-DSUNSTONE_A733_OS_NPU_OBSERVE=1',
+         '-DCPU_NPU_WITH_NPU=1', '-DSUNSTONE_A733_OS_NPU_OBSERVE=1',
         '-I'+str(ROOT/'checks/cpu-npu-concurrency'), '-I'+str(ROOT/'include'),
         '-I'+str(ROOT/'apps/cpu-npu-concurrency'), str(ROOT/'apps/cpu-npu-concurrency/main.c'),
         str(adapter), str(ROOT/'checks/cpu-npu-concurrency/producer.c'), '-o', str(executable)]

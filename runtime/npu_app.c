@@ -36,6 +36,9 @@ static int transition(unsigned expected,unsigned desired)
     return atomic_compare_exchange_strong_explicit(&box.state,&expected,desired,
         memory_order_acq_rel,memory_order_acquire);
 }
+/* A name holds its terminating zero. Written out rather than with memchr, which the OS runtime's string.h does not declare. */
+static int terminated(const char *name,size_t bytes)
+{for(size_t i=0;i<bytes;++i)if(!name[i])return 1;return 0;}
 int ss_npu_service_bind(const struct ss_npu_backend *backend)
 {
     if(!backend||!backend->run||!backend->close||atomic_load(&box.state)!=UNBOUND)return 0;
@@ -44,7 +47,7 @@ int ss_npu_service_bind(const struct ss_npu_backend *backend)
     if(!backend->count&&!backend->info&&!box.register_graph)return 0;
     for(unsigned i=0;backend->models&&i<backend->count;++i) {
         const struct ss_npu_model *m=&backend->models[i];
-        if(!m->name[0]||!memchr(m->name,0,sizeof(m->name))||!m->inputs||!m->outputs||
+        if(!m->name[0]||!terminated(m->name,sizeof(m->name))||!m->inputs||!m->outputs||
            !m->input_bytes||m->input_bytes>SS_NPU_MAX_TENSOR_BYTES||
            !m->output_bytes||m->output_bytes>SS_NPU_MAX_TENSOR_BYTES)return 0;
         for(unsigned j=0;j<i;++j)if(!strcmp(m->name,backend->models[j].name))return 0;

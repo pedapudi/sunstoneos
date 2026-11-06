@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Check that tools/session.py builds a session that the image's own EL3 admission admits, and refuses what it cannot determine.
 
-The check uses two images that the gate builds from the tree under test (checks/gate-inputs.json): a CPU-return image without the NPU
-service and one with it. It reads no queue entry and no other worktree's build. For each image it requires:
+The check uses two images that the gate builds from the tree under test (checks/gate-inputs.json): a CPU-return image whose application
+declares no NPU and one whose application declares it (ss_application_npu). It reads no queue entry and no other worktree's build. For each image it requires:
   decode      tools/session.py check decodes the built session with apps/os/host.py and finds no disagreement with the image;
   admission   the image's own EL3 admission (tools/host_admission.py, compiled from the image's source tree) admits the session and its
               launch contract (admitted: true);
 and, across them:
   mutation    an NPU session with another catalogue digest than the image's is reported by `check --image` and refused by the EL3 admission
               (session_decode); a session with another manifest digest is refused by decode and by the EL3 admission;
-  refusals    a field that no source determines is an error that names it: a facts file without a thermal field, an NPU image without a
-              declaration, a device grant without pinned board facts, an input count that differs from the manifest;
+  refusals    a field that no source determines, or a source that contradicts the image, is an error that names it: a facts file
+              without a thermal field, an NPU declaration that differs from the image's or is given for an application that declares
+              no NPU, a device grant without pinned board facts, an input count that differs from the manifest;
   source      the host admission refuses a source tree other than the one the image's build directory was configured from, a tree that no
               longer exists, and an image that does not carry the build ID its build directory recorded.
 Usage: session-build.py --control-elf ELF --npu-elf ELF --output DIR
@@ -62,8 +63,8 @@ def refusal(function, *words):
 def main():
     global SESSION
     parser = argparse.ArgumentParser()
-    parser.add_argument('--control-elf', type=Path, required=True, help='a CPU-return OS image without the NPU service')
-    parser.add_argument('--npu-elf', type=Path, required=True, help='a CPU-return OS image with the NPU service')
+    parser.add_argument('--control-elf', type=Path, required=True, help='a CPU-return OS image whose application declares no NPU')
+    parser.add_argument('--npu-elf', type=Path, required=True, help='a CPU-return OS image whose application declares the NPU')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     out = args.output
@@ -76,14 +77,9 @@ def main():
     for name, image in (('control', args.control_elf), ('npu', args.npu_elf)):
         directory = out / name
         directory.mkdir(exist_ok=True)
-        declaration = None
-        if name == 'npu':
-            # The image links no graph: the application registers one at run time, within the declared bounds.
-            declaration = out / 'npu-declaration.json'
-            declaration.write_text(json.dumps({'slots': 1, 'in_flight': 1, 'graphs': 1, 'links': 0,
-                                               'graph_bytes': 1 << 20, 'tensor_bytes': 1 << 18}))
+        # The NPU declaration is the image's own (ss_application_npu); the builder takes it from there.
         inputs = placeholders(host, image, directory)
-        record = session.build(image, directory, npu_declaration=declaration, inputs=inputs, clock_grant=True)
+        record = session.build(image, directory, inputs=inputs, clock_grant=True)
         raw = (directory / 'template/session.bin').read_bytes()
         assert record['profile'] == name, record['profile']
         report = session.inspect(raw, image, host)
@@ -91,17 +87,17 @@ def main():
         assert session.find_session(directory) == directory / 'template/session.bin'
         verdict = session.admit(image, raw)
         assert verdict['admitted'] is True, (name, verdict)
-        built[name] = (image, raw, inputs, declaration)
+        built[name] = (image, raw, inputs)
         passed.append(f"{name} image: {len(raw)} bytes, services {', '.join(record['services'])}, decoded without disagreement, admitted: true")
     # mutation
-    image, raw, inputs, declaration = built['npu']
+    image, raw, inputs = built['npu']
     mutated = bytearray(raw)
     mutated[bytes(mutated).find(struct.pack('<Q', host.SERVICE_MAGIC[host.NPU])) + 52] ^= 1      # os_npu_session.client_model
     assert any('npu client_model' in p for p in session.inspect(bytes(mutated), image, host)['problems'])
     verdict = session.admit(image, bytes(mutated))
     assert verdict['admitted'] is False, verdict
     passed.append('a client model that is not the image\'s is reported by check --image and refused by the EL3 admission (%s)' % verdict['refusal'].split(': ')[-1])
-    image, raw, _, _ = built['control']
+    image, raw, _ = built['control']
     wrong = bytearray(raw)
     wrong[592 + 32 + 7] ^= 1                  # a byte of the session header's manifest digest
     refusal(lambda: session.inspect(bytes(wrong), image, host), 'manifest digest')
@@ -110,7 +106,7 @@ def main():
     passed.append('a wrong manifest digest is refused by decode and by the EL3 admission')
     # The CPU clock grant is written only on request. A session built without one carries no grant record, and the returning
     # image, which needs the grant for its return path, refuses it at EL3 admission.
-    image, raw, inputs, _ = built['control']
+    image, raw, inputs = built['control']
     bare = out / 'no-clock-declaration'
     session.build(image, bare, inputs=inputs)
     plain = (bare / 'template/session.bin').read_bytes()
@@ -133,13 +129,16 @@ def main():
     del variant['profiles']['control']['thermal']['apb1']
     (out / 'facts-no-apb1.json').write_text(json.dumps(variant))
     refusal(lambda: session.build(control[0], out / 'r1', inputs=control[2], fact_file=out / 'facts-no-apb1.json'), 'thermal', 'apb1')
-    refusal(lambda: session.build(npu[0], out / 'r2', inputs=npu[2]), 'npu declaration')
-    refusal(lambda: session.build(npu[0], out / 'r3', npu_declaration=npu[3], inputs=npu[2], devices=1), 'devices')
+    other = out / 'npu-declaration-other.json'
+    other.write_text(json.dumps({'slots': 2, 'in_flight': 1, 'graphs': 1, 'links': 0, 'graph_bytes': 1 << 20, 'tensor_bytes': 1 << 18}))
+    refusal(lambda: session.build(npu[0], out / 'r2', npu_declaration=other, inputs=npu[2]), 'npu declaration', 'declares')
+    refusal(lambda: session.build(control[0], out / 'r2c', npu_declaration=other, inputs=control[2]), 'npu declaration', 'declares no NPU')
+    refusal(lambda: session.build(npu[0], out / 'r3', inputs=npu[2], devices=1), 'devices')
     refusal(lambda: session.build(control[0], out / 'r4', inputs=control[2], devices=1), 'devices')
     (out / 'extra-input.bin').write_bytes(b'x')
     refusal(lambda: session.build(control[0], out / 'r5', inputs=control[2] + [out / 'extra-input.bin']), 'inputs')   # one more file than the manifest has regions
     refusal(lambda: session.pack('thermal', {'magic': 1}), 'thermal field')
-    passed.append('a field no source gives is an error naming it (thermal apb1, npu declaration, devices, inputs)')
+    passed.append('a field no source gives, or a declaration the image contradicts, is an error naming it (thermal apb1, npu declaration, devices, inputs)')
     # one source tree
     image = built['control'][0]
     build_dir = admission.find_build(image)[0]

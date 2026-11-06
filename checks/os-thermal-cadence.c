@@ -33,6 +33,8 @@ unsigned os_application_activity_generation(void){return 7;}
 static unsigned clock_busy;
 int os_cpu_clock_step(const struct a733_thermal_policy *p){(void)p;++clocks;return 1;}
 int os_cpu_clock_busy(void){return (int)clock_busy;}
+/* The NPU admission window that the step publishes; this model checks the CPU path only. */
+void os_npu_thermal(int allow,int stop,uint64_t until,uint64_t now){(void)allow;(void)stop;(void)until;(void)now;}
 void board_fail_at(uint32_t site,uint32_t value,const void *caller)
 {(void)site;(void)value;(void)caller;++failures;}
 int gicv3_spi_mask(const struct gicv3_spi *irq){(void)irq;return 1;}

@@ -53,8 +53,13 @@ def require(ok, message):
         raise ValueError(message)
 
 
+# Every OS image links the NPU service; a session grants it only to an application whose manifest declares the NPU, which
+# the image records in ss_application_npu (tools/sunstone-manifest.py).
+NPU_DECLARED = 'ss_application_npu'
+
+
 def npu_on_required(info):
-    return bool(info.get('finite_npu') or 'os_npu_client_model' in info.get('symbols', {}))
+    return bool(info.get('finite_npu') or NPU_DECLARED in info.get('symbols', {}))
 
 
 def validate_npu_on(words):
@@ -327,8 +332,8 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
             legacy = load('inspect_legacy', (host_tree or GPU_TREE)/'apps/os/cpu-return-host.py')
             geometry = legacy.geometry(Path(image))
         if kind=='npu':
-            require('os_npu_client_model' in names, 'NPU kind requires the linked OS NPU service.')
-        if generic and 'os_npu_client_model' in names:
+            require(NPU_DECLARED in names, 'NPU kind requires an application that declares the NPU.')
+        if generic and NPU_DECLARED in names:
             require('npu_stop' in geometry, 'NPU image requires its mandatory stop receipt.')
     else:
         require(descriptor.get('purpose')=='watchdog-reset-diagnostic','Raw probes admit only the intentional watchdog-reset diagnostic; use the native ELF contract.')
@@ -541,6 +546,13 @@ def prepare(args, info, live, out, *, dma_binding=None):
         require(len(raw) == 904, 'Supply a typed session bundle for NPU/audio images.')
         services = {records.THERMAL: raw[592:808], records.CPU_GRANT: raw[808:904]}
         devices, flags = 0, records.BIND_SID
+    # The session grants the NPU exactly when the application declares it; only then does the host read the NPU records.
+    npu_session = records.NPU in services
+    require(npu_session == (NPU_DECLARED in (info.get('symbols') or {})),
+            'The session carries an NPU record exactly when the application declares the NPU: the record is %s and the '
+            'application %s.' % ('present' if npu_session else 'absent',
+                                 'declares it' if NPU_DECLARED in (info.get('symbols') or {}) else 'does not'))
+    geometry = info['report_geometry']
     prefix = bytearray(raw[:592])
     epoch, generation, lease = [secrets.randbits(62) | 1 for _ in range(3)]
     struct.pack_into('<3Q', prefix, 24, epoch, generation, lease)
@@ -618,7 +630,7 @@ def prepare(args, info, live, out, *, dma_binding=None):
                 (0x52d00, write(out/'report-zero.bin', bytes(128))), (0x52000, out/'launch.bin')]
     returning = load('prepare_return_geometry', tree/'apps/os/cpu-return-host.py')
     plan = dict(meta, epoch=epoch, generation=generation, uploads=uploads, launch=['exe', '0x52000'],
-                host_admission=host_admission, watchdog=info['watchdog'], format='generic', geometry=info['report_geometry'],
+                host_admission=host_admission, watchdog=info['watchdog'], format='generic', geometry=geometry,
                 return_host=returning, input_regions=list(meta['uploads']) + radio_regions, image_ram=returning.IMAGE_RAM)
     if getattr(args, 'wifi', None):
         credential_session(session, host_admission, records.manifest_tool.DEVICES['radio'])

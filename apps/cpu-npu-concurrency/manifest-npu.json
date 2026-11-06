@@ -1,0 +1,9 @@
+{
+  "name": "cpu-npu-load",
+  "devices": {"required": [], "optional": []},
+  "cpu": {"clock_grants": true, "cluster": "a76", "workers": 7, "priority": 2, "stack_bytes": 16384},
+  "regions": [],
+  "deadlines": {"run_us": 8000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
+  "output_limit": 1728,
+  "npu": {"slots": 1, "in_flight": 1, "graphs": 1, "links": 0, "graph_bytes": 1048576, "tensor_bytes": 262144}
+}

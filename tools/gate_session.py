@@ -3,9 +3,10 @@
 
 Usage: gate_session.py IMAGE.elf OUTPUT.bin
 
-An NPU image takes its NPU extent from checks/data/npu-session-template (a queue entry's typed session), and the extent is made
-to describe this image: the client model is read from the image's own os_npu_client_model; the session names no pool, because the image takes it from the ledger when it admits the application. The declaration is the synchronous
-wrapper's: one slot, one job in flight, one graph registered at run time.
+An image whose application declares the NPU (ss_application_npu) takes its NPU extent from checks/data/npu-session-template (a
+queue entry's typed session), and the extent is made to describe this image: the client model is read from the image's own
+os_npu_client_model and the declaration from ss_application_npu; the session names no pool, because the image takes it from the
+ledger when it admits the application.
 
 The session is built by tools/board_images.py exactly as `board.py check` builds it: the same preparation, the same typed
 extents, one placeholder byte for each INPUT region. Two inputs stand in for a live read of the board, as in `submit`'s
@@ -28,7 +29,7 @@ import board_images as images
 
 
 NPU_MAGIC = 0x415337334f4e5031
-CLIENT_MODEL, DECLARATION = 52, 240          # offsets in struct os_npu_session (apps/os/npu-session.h)
+CLIENT_MODEL, GRAPH_REGION, DECLARATION = 52, 60, 240     # offsets in struct os_npu_session (apps/os/npu-session.h)
 
 
 def symbol_bytes(image, name):
@@ -52,9 +53,9 @@ def npu_template(image, scratch):
     if at < 0:
         raise SystemExit('the NPU session template has no NPU extent')
     raw[at + CLIENT_MODEL:at + CLIENT_MODEL + 4] = symbol_bytes(image, 'os_npu_client_model')[:4]
-    # The synchronous wrapper has one slot and one job in flight; the application registers one graph at run time, of at most
-    # 1 MiB with tensors of at most 256 KiB (the reviewed shufflenet-v2-published graph is 964,224 bytes with a 150,528-byte input).
-    struct.pack_into('<6I', raw, at + DECLARATION, 1, 1, 1, 0, 1 << 20, 1 << 18)
+    declared = struct.unpack('<7I', symbol_bytes(image, images.NPU_DECLARED))
+    struct.pack_into('<6I', raw, at + DECLARATION, *declared[:6])
+    struct.pack_into('<I', raw, at + GRAPH_REGION, declared[6])
     directory = Path(scratch) / 'template'
     directory.mkdir()
     (directory / 'session.bin').write_bytes(bytes(raw))
@@ -90,7 +91,7 @@ def session_for(image, scratch):
     host = images.load('gate_session_records', ROOT / 'apps/os/host.py')
     manifest = host.image_manifest(image)['manifest']
     values = [str(image), '--port', '3-1', '--evidence', str(Path(scratch) / 'run'), '--kind', 'cpu-return', '--preserve-dram']
-    if 'os_npu_client_model' in images.symbols(image):
+    if images.NPU_DECLARED in images.symbols(image):
         # The NPU extents come from a typed session template: a session of a queue entry for an NPU image, kept in the repository.
         values += ['--template', str(npu_template(image, scratch))]
     for number, _ in enumerate(host.regions(manifest, (1,))):

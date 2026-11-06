@@ -40,7 +40,7 @@ def device_rules():
     """The OS-owned fault and NPU requests use the public 16-byte layout."""
     text = (ROOT / 'apps/os/usb0.c').read_text()
     op, condition = re.search(r'if\(request.op==(5)\)\{if\(([^)]*)\)stop\(\);', text).groups()
-    assert re.search(r'if\(request.op==6\)\{if\(([^)]*)\)stop\(\);', text)[1] == condition
+    assert re.search(r'if\(request.op==6&&os_granted\(OS_GRANT_NPU\)\)\{if\(([^)]*)\)stop\(\);', text)[1] == condition
     header = (ROOT / 'include/sunstone_app.h').read_text()
     fields = re.search(r'struct ss_host_request \{([^}]+)\}', header)[1]
     assert re.sub(r'\s+', '', fields) == 'uint8_top,flags;uint16_tcount;uint32_toffset;uint64_targument;'

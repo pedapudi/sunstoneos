@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Decode and classify the OS NPU client's report.
 
-USB0 operation 6 of an integrated OS image built with SUNSTONE_A733_OS_NPU
+USB0 operation 6 of an integrated OS image whose session grants the NPU
 answers with the 104-byte report of apps/os/npu.h and no frame header. Other
-OS images stop USB0 on this operation. This module opens no device;
+sessions stop USB0 on this operation. This module opens no device;
 tools/check-a733-os-supervised.py requests the report once after its capture
 for an image whose link check records the NPU profile.
 

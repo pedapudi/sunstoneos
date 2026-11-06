@@ -196,9 +196,7 @@ static int authorize(void *v,const struct a733_thermal_config *c,const struct a7
 }
 static void cancel_from(uint32_t site,const void *here)
 {
-#ifdef SUNSTONE_A733_OS_NPU
  os_npu_thermal(0,1,0,a733_smp_counter()/24);
-#endif
  atomic_store_explicit(&load_state,A733_THERMAL_CRITICAL,memory_order_release);
  atomic_store_explicit(&thermal.failed,1,memory_order_release);
  board_fail_at(site,thermal.critical_word?thermal.critical_word:thermal.driver.fault_site,here);}
@@ -310,12 +308,10 @@ static int step(void)
         /* The final missing channel may arrive without changing policy level,
          * so the transition callback alone cannot release startup throttling. */
         publish_load(level);
-#ifdef SUNSTONE_A733_OS_NPU
         /* NPU admission uses an exclusive deadline; the policy's age==1 s
          * remains fresh, so its equivalent boundary is one microsecond later. */
         os_npu_thermal(level==A733_THERMAL_NORMAL&&a733_thermal_policy_seen(&thermal.policy)==31,
             level!=A733_THERMAL_NORMAL,fresh_until()+1,t);
-#endif
         /* Keep the 25 ms phase. Completion time skips slots crossed during
          * a read; an early IRQ read leaves the next periodic deadline intact. */
         if(t>=thermal.next_read)
@@ -329,9 +325,7 @@ static int step(void)
             record_reading(n,level);
             if(level==A733_THERMAL_CRITICAL){thermal.critical_word=critical_reading();return fault();}
             publish_load(level);
-#ifdef SUNSTONE_A733_OS_NPU
             os_npu_thermal(0,1,0,n);
-#endif
         }
     }
     if(!rearm())return fault();

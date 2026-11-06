@@ -83,11 +83,9 @@ static int services_state(uint64_t now,unsigned *first)
          * their stable service IDs without demanding reports from absent tasks. */
         if(!(required&(1u<<i)))continue;
         if(i==OS_SERVICE_APPLICATION&&(!ss_application.manifest||os_application_finished()))continue;
-#ifdef SUNSTONE_A733_OS_NPU
         /* The finite caller publishes only after actual local stop. Its
          * suspended terminal state needs no artificial heartbeat. */
         if(i==OS_SERVICE_NPU&&os_npu_complete())continue;
-#endif
         TaskHandle_t owner=atomic_load_explicit(&blocked_owner[i],memory_order_acquire);
         if(owner){
             struct sunstone_deadline_record r;

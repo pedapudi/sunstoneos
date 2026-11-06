@@ -10,8 +10,9 @@
  * after two steps once its session has stopped.
  *
  * checks/perf-mode.py copies apps/os/perf.c and these shims into its output
- * directory and builds this file there, with and without
- * SUNSTONE_A733_OS_NPU. Output: one JSON line, then PASS. */
+ * directory and builds this file there twice: with PERF_MODEL_NPU its session
+ * grants the NPU, without it the session grants only the CPU clock. Every OS
+ * image links the NPU hooks. Output: one JSON line, then PASS. */
 #define a733_cpu_clock_request fake_cpu_clock_request
 #define a733_cpu_clock_report fake_cpu_clock_report
 #define a733_rail_acquire fake_rail_acquire
@@ -28,7 +29,11 @@
 
 struct board_shim board={{UINT64_C(0x1122334455667788),7}};
 /* The session grants the CPU clock with the performance service at its high boot mode, and the NPU. */
+#ifdef PERF_MODEL_NPU
 struct os_session perf_model_session={.cpu_clock={.perf=1},.granted=OS_GRANT_CPU_CLOCK|OS_GRANT_NPU};
+#else
+struct os_session perf_model_session={.cpu_clock={.perf=1},.granted=OS_GRANT_CPU_CLOCK};
+#endif
 struct providers_shim providers;
 enum { L, B, D, G, N };
 static struct {
@@ -147,7 +152,6 @@ uint32_t a733_mmio_read32(uintptr_t a)
     default:assert(0);return 0;
     }
 }
-#ifdef SUNSTONE_A733_OS_NPU
 int os_npu_perf_ready(void){return (int)m.npu_ready;}
 int os_npu_perf_stopped(void){return m.npu_ready && m.npu_stopped;}
 int os_npu_perf_retune(unsigned mhz,unsigned sequence,uint64_t deadline)
@@ -161,7 +165,6 @@ unsigned os_npu_perf_answer(unsigned sequence)
     if(m.retune_steps){if(!--m.retune_steps)m.mhz[N]=m.retune_mhz;else return 0;}
     return 1;
 }
-#endif
 /* One owner step: the thermal task's burst, then the service. */
 static int tick(void)
 {
@@ -187,7 +190,7 @@ static struct os_perf_report wait(uint32_t number,unsigned limit)
     fprintf(stderr,"wait number=%u phase=%u engine=%u accepted=%u completed=%u busy=%u cancelled=%u failed=%u\n",number,perf.phase,perf.engine.phase,perf.accepted,perf.completed,perf.cpu_busy,perf.cancelled,perf.failed);
     assert(0);return usb(OS_PERF_REPORT,0,0);
 }
-#ifdef SUNSTONE_A733_OS_NPU
+#ifdef PERF_MODEL_NPU
 #define OWNED 0x13u
 #else
 #define OWNED 0x03u
@@ -224,7 +227,7 @@ int main(void)
     r=usb(OS_PERF_SWITCH,0x200|OWNED,board.session.epoch+1);
     assert(r.answer==OS_PERF_ANSWER_STALE && !r.number && !atomic_load(&mailbox));
     ++cases;
-#ifdef SUNSTONE_A733_OS_NPU
+#ifdef PERF_MODEL_NPU
     /* High to low while the NPU session runs: the switch holds until it
      * stops, then retunes the stopped NPU; a second command meanwhile is
      * answered busy. */
@@ -334,7 +337,7 @@ int main(void)
             (failure==1 || failure==4 ? !m.outstanding : m.outstanding) && r.reason==A733_PERF_STEP_FAILED);
         perf=saved_perf;m=saved_m;atomic_store(&mailbox,0);publish();++cases;
     }
-#ifdef SUNSTONE_A733_OS_NPU
+#ifdef PERF_MODEL_NPU
     /* An unanswered retune is unknown, even if the bootstrap did not
      * publish its own failure. The CPU owner must terminate the session. */
     r=usb(OS_PERF_READ,0,0);r=wait(r.number,100);assert(r.read_ok==0x1f);

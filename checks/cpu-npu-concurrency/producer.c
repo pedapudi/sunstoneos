@@ -124,7 +124,7 @@ int main(int argc,char **argv)
     if(argc!=3)return 4;scenario=argv[1];destination=argv[2];began=ns();
     grant.finish_by_us=ss_counter_ticks()/24+8000000;
     cpu_npu_load_init();
-#ifdef SUNSTONE_A733_OS_NPU
+#ifdef CPU_NPU_WITH_NPU
     runtime.service.ops.read=idle;runtime.service.worker=&service_task;
     if(!os_npu_diagnostic_bind(&runtime))abort();
     if(pthread_create(&service_task.thread,NULL,service,NULL))abort();

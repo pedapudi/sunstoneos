@@ -171,15 +171,18 @@ def geometry(image):
     if ranges:
         result['device_ranges_head'] = ranges
     # What a run publishes about where its device memory went and how long the terminal's walk of it took (apps/os/device-ranges.h).
+    # Every image links the NPU service, but only a session of an application that declares the NPU (ss_application_npu,
+    # tools/sunstone-manifest.py) grants it, so only such an image's NPU records are read.
+    npu = 'ss_application_npu' in symbols
     for symbol, key, bytes_ in (('os_cpu_return_walk', 'return_walk', 128), ('os_npu_guard_record', 'npu_guard', 64),
                               ('os_npu_register_record', 'npu_register', 64),
                               ('os_npu_prepare_record', 'npu_prepare', 128)):
-        if symbol in symbols:
+        if symbol in symbols and (npu or not key.startswith('npu_')):
             address, size = symbols[symbol]
             require(size == bytes_ and address % 8 == 0 and begin <= address < address + size <= end,
                     '%s outside preserved image RAM.' % symbol)
             result[key] = {'address': address, 'bytes': size}
-    if 'os_npu_published_report' in symbols:
+    if npu:
         address, size = symbols['os_npu_published_report']
         require(size == npu_capture.REPORT_BYTES and begin <= address < address + size <= end,
                 'NPU stop report outside preserved image RAM.')

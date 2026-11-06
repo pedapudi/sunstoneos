@@ -169,12 +169,10 @@ def build_harness(image, build=None, cache=None):
              (source / 'drivers/storage/storage_digest.c', defines), (build_id, defines),
              (ROOT / 'tools/host_admission.c', defines)]
     units.append((source / 'drivers/clock/a733_cpu_clock.c', [d for d in defines if d != '-DSUNSTONE_CRUMBS=1']))
-    npu = '-DSUNSTONE_A733_OS_NPU=1' in defines
-    if npu:
-        # The declaration check of the image (apps/os/npu-declaration.c) with the image's own NPU data, read from its ELF.
-        # Without the breadcrumb writes: they are aarch64 assembly, and the host keeps no failure record.
-        quiet = [d for d in defines if d != '-DSUNSTONE_CRUMBS=1']
-        units += [(source / 'apps/os/npu-declaration.c', quiet), (source / 'drivers/npu/npu_declaration.c', quiet)]
+    # The declaration check of the image (apps/os/npu-declaration.c), which every image links, with the image's own NPU data,
+    # read from its ELF. Without the breadcrumb writes: they are aarch64 assembly, and the host keeps no failure record.
+    quiet = [d for d in defines if d != '-DSUNSTONE_CRUMBS=1']
+    units += [(source / 'apps/os/npu-declaration.c', quiet), (source / 'drivers/npu/npu_declaration.c', quiet)]
     for path, _ in units:
         if not path.is_file():
             raise Unavailable('missing admission source %s' % path)
@@ -193,12 +191,11 @@ def build_harness(image, build=None, cache=None):
         if done.returncode:
             raise Unavailable('cannot compile %s with the image definitions: %s' % (path.name, done.stderr.strip()[:400]))
         objects.append(obj)
-    if npu:
-        (out / 'image-npu.c').write_text(npu_data_source(image))
-        done = run([*cc, *defines, *includes, '-I' + str(source / 'apps/os'), '-c', out / 'image-npu.c', '-o', out / 'image-npu.o'])
-        if done.returncode:
-            raise Unavailable('cannot compile the image NPU data: %s' % done.stderr.strip()[:400])
-        objects.append(out / 'image-npu.o')
+    (out / 'image-npu.c').write_text(npu_data_source(image))
+    done = run([*cc, *defines, *includes, '-I' + str(source / 'apps/os'), '-c', out / 'image-npu.c', '-o', out / 'image-npu.o'])
+    if done.returncode:
+        raise Unavailable('cannot compile the image NPU data: %s' % done.stderr.strip()[:400])
+    objects.append(out / 'image-npu.o')
     (out / 'manifest.bin').write_bytes(facts['manifest'])
     (out / 'manifest.c').write_text(
         '#include "application.h"\n__asm__(".section sunstone_manifest,\\"a\\"\\n.balign 8\\n.global __start_sunstone_manifest\\n'

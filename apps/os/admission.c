@@ -62,7 +62,6 @@ int os_session_valid(const struct os_session *s)
         if((s->granted&OS_GRANT_NPU)&&cpu.owner==s->npu.owner)return 0;
         if((s->granted&OS_GRANT_AUDIO)&&cpu.owner==s->audio.dma.owner)return 0;
     }
-#ifdef SUNSTONE_A733_OS_NPU
     if(s->granted&OS_GRANT_NPU){
         const struct os_npu_session *n=&s->npu;
         if(n->magic!=OS_NPU_SESSION_MAGIC||n->version!=OS_NPU_SESSION_VERSION||n->bytes!=sizeof(*n)||!n->owner||
@@ -77,7 +76,6 @@ int os_session_valid(const struct os_session *s)
         if(n->pck_client==OS_GPU_CLIENT||n->owner==OS_GPU_FIRMWARE_OWNER||n->owner==OS_GPU_SESSION_OWNER)return 0;
 #endif
     }
-#endif
 #ifdef SUNSTONE_A733_OS_DMA
     if(s->granted&OS_GRANT_DMA){
         const struct os_dma_session *dm=&s->dma;

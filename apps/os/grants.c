@@ -62,11 +62,16 @@ static const struct {unsigned services;const char *reason;} refused_compositions
     {OS_GRANT_RADIO,"the returning lifetime shuts down only the scanning radio station"},
 #endif
     {OS_GRANT_HEADSET,"the returning lifetime has no qualified shutdown of the Bluetooth module"},
+    {OS_GRANT_NPU|OS_GRANT_DMA,"the returning lifetime has no qualified retirement of the NPU beside the RAM-copy service"},
+#ifdef SUNSTONE_A733_OS_GPU
+    {OS_GRANT_NPU,"the returning lifetime has no qualified retirement of the NPU beside the GPU queue"},
+#endif
 #endif
 #ifdef SUNSTONE_A733_OS_USB_JPEG
     {OS_GRANT_AUDIO,"the USB camera decoder owns run-time non-cacheable allocation; the I2S stream needs allocator serialization"},
     {OS_GRANT_RADIO,"the USB camera decoder owns run-time non-cacheable allocation; the radio station needs allocator serialization"},
     {OS_GRANT_HEADSET,"the USB camera decoder owns run-time non-cacheable allocation; the headset needs allocator serialization"},
+    {OS_GRANT_NPU,"the USB camera decoder owns run-time non-cacheable allocation; the NPU service needs allocator serialization"},
 #endif
 #if defined(SUNSTONE_A733_OS_GPU) && !defined(SUNSTONE_BOARD_RESIDENT)
     {OS_GRANT_AUDIO,"the supervised GPU queue requires the recorded recognition composition, not live I2S capture"},

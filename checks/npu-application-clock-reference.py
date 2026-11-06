@@ -16,7 +16,7 @@ from pathlib import Path
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import *
 ROOT=Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--image', '{elf:npu}', '--output', '{output}']]
+GATE_RUNS = [['--image', '{elf:sup}', '--output', '{output}']]
 sys.path.insert(0,str(ROOT/'checks'))
 import harness
 LAYOUTS=('a733_npu_startup','a733_npu_startup_config','a733_npu_platform_config','a733_npu_startup_providers','a733_power_domain_row',

@@ -13,9 +13,7 @@
 #include "a733_perf_mode.h"
 #include <stdatomic.h>
 #include <string.h>
-#ifdef SUNSTONE_A733_OS_NPU
 #include "npu.h"
-#endif
 /* The session's grant decides: perf with both clusters, boot mode 1 (high) or 2 (low) (a733_cpu_clock_grant_load). */
 int os_perf_enabled(void)
 {
@@ -215,7 +213,6 @@ static enum a733_perf_status act(void *v,enum a733_perf_action a,enum a733_perf_
         }
         return perf.cpu_done ? map((int)perf.cpu_result) : A733_PERF_PENDING;
     }
-#ifdef SUNSTONE_A733_OS_NPU
     case A733_PERF_HOLD:
         /* The NPU changes only once its session has stopped. */
         if(b!=A733_PERF_NPU || !os_npu_perf_ready())return A733_PERF_REFUSED;
@@ -238,7 +235,6 @@ static enum a733_perf_status act(void *v,enum a733_perf_action a,enum a733_perf_
             if(now(&perf,&t) && t<deadline)return A733_PERF_PENDING;
             perf.failed=1;return A733_PERF_FAILED;
         }
-#endif
     case A733_PERF_RELEASE:return A733_PERF_DONE; /* The stopped NPU stays stopped. */
     default:return A733_PERF_REFUSED;
     }
@@ -250,11 +246,7 @@ static enum a733_perf_reason admit(void *v,unsigned blocks,unsigned cpu)
         return A733_PERF_THERMAL;
     /* Two changes stay for the driver's restores after a THROTTLE. */
     if(cpu && perf.cpu->changes<cpu+2u)return A733_PERF_BUDGET;
-#ifdef SUNSTONE_A733_OS_NPU
     if((blocks&A733_PERF_BIT(A733_PERF_NPU)) && !os_npu_perf_ready())return A733_PERF_NOT_READY;
-#else
-    (void)blocks;
-#endif
 #ifdef SUNSTONE_A733_OS_GPU
     if((blocks&A733_PERF_BIT(A733_PERF_GPU)) && !os_gpu_perf_ready())return A733_PERF_NOT_READY;
 #endif
@@ -297,9 +289,7 @@ int os_perf_step(struct a733_cpu_clock *cpu,const struct a733_thermal_policy *po
         perf.cpu=cpu;perf.policy=policy;perf.initialized=1;perf.boot_until=t+BOOT_WAIT_US;
         perf.thermal_level=a733_thermal_policy_level(policy);
         unsigned owned=cpu_owned();
-#ifdef SUNSTONE_A733_OS_NPU
         if(os_granted(OS_GRANT_NPU))owned|=A733_PERF_BIT(A733_PERF_NPU);
-#endif
 #ifdef SUNSTONE_A733_OS_GPU
         owned|=A733_PERF_BIT(A733_PERF_GPU);
 #endif

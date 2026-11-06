@@ -1,18 +1,21 @@
-# The same arithmetic runs as a CPU control when the NPU service is absent.
+# The same arithmetic runs as a CPU control when the application is built without its graph.
 if(NOT SUNSTONE_A733_OS_CPU_RETURN OR SUNSTONE_A733_OS_GPU OR
    SUNSTONE_A733_OS_DMA OR SUNSTONE_A733_OS_USB_CLASSES)
   message(FATAL_ERROR "CPU/NPU diagnostic requires its supervised CPU-return composition")
 endif()
 set(cpu_npu_sources "${CMAKE_CURRENT_LIST_DIR}/../main.c")
-if(SUNSTONE_A733_OS_NPU)
+# The diagnostic carries its graph: the OS image links none, and the application registers it at run time. With the artifacts
+# the application declares the NPU in its manifest, and its session grants the NPU service; without them it is the CPU control.
+set(SUNSTONE_CPU_NPU_ARTIFACTS "" CACHE FILEPATH "Artifacts map of the reviewed shufflenet-v2-published graph and vectors (empty: the CPU control)")
+set(cpu_npu_manifest "${CMAKE_CURRENT_LIST_DIR}/../manifest.json")
+if(NOT SUNSTONE_CPU_NPU_ARTIFACTS STREQUAL "")
   if(NOT SUNSTONE_A733_OS_NPU_OBSERVE)
     message(FATAL_ERROR "CPU/NPU overlap diagnostic requires opt-in NPU observation")
   endif()
-  # The diagnostic carries its graph: the OS image links none, and the application registers it at run time.
-  set(SUNSTONE_CPU_NPU_ARTIFACTS "" CACHE FILEPATH "Artifacts map of the reviewed shufflenet-v2-published graph and vectors")
   if(NOT EXISTS "${SUNSTONE_CPU_NPU_ARTIFACTS}")
-    message(FATAL_ERROR "CPU/NPU overlap diagnostic requires SUNSTONE_CPU_NPU_ARTIFACTS")
+    message(FATAL_ERROR "CPU/NPU overlap diagnostic: SUNSTONE_CPU_NPU_ARTIFACTS names no file")
   endif()
+  set(cpu_npu_manifest "${CMAKE_CURRENT_LIST_DIR}/../manifest-npu.json")
   set(cpu_npu_vectors "${CMAKE_CURRENT_BINARY_DIR}/cpu-npu-vectors.c")
   execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/../vectors.py"
     --artifacts "${SUNSTONE_CPU_NPU_ARTIFACTS}" --models "${SUNSTONE_SOURCE_ROOT}/checks/data/npu-test-model-list.json"
@@ -22,10 +25,13 @@ if(SUNSTONE_A733_OS_NPU)
 endif()
 add_sunstone_application(cpu-npu-load
   SOURCES ${cpu_npu_sources}
-  MANIFEST "${CMAKE_CURRENT_LIST_DIR}/../manifest.json"
+  MANIFEST "${cpu_npu_manifest}"
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/.."
   INPUTS "${CMAKE_CURRENT_LIST_DIR}/../vectors.py" "${CMAKE_CURRENT_LIST_DIR}/../vectors.h" "${CMAKE_CURRENT_LIST_DIR}/../receipt.h" "${CMAKE_CURRENT_LIST_DIR}/../gemm.h")
 target_compile_options(cpu-npu-load PRIVATE -ffp-contract=off)
+if(NOT SUNSTONE_CPU_NPU_ARTIFACTS STREQUAL "")
+  target_compile_definitions(cpu-npu-load PRIVATE CPU_NPU_WITH_NPU=1)
+endif()
 # OS/service code intentionally uses general registers. This FP application
 # uses the already-enabled/saved task FP context; override those two target
 # features for this source only, after inherited service options.

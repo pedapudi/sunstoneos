@@ -557,7 +557,8 @@ def c_tables(m):
              '#ifdef SUNSTONE_A733_OS_SD_WRITE', 'extern void os_sd_irq(void);', '#endif',
              'const struct a733_irq_route a733_irq_routes[] = {', '    {71,0,0xd8,os_thermal_irq},',
              '#ifdef SUNSTONE_BOARD_USB2_IRQ', '    {187,0,0xd8,board_host_irq},', '#endif',
-             '#ifdef SUNSTONE_A733_OS_NPU', '    {97,OS_NPU_CORE,0xd8,os_npu_irq},', '#endif',
+             # The NPU's line, in every image; the hardware-facts probe takes it itself.
+             '#ifndef SUNSTONE_A733_HW_FACTS', '    {97,OS_NPU_CORE,0xd8,os_npu_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_SD_WRITE', '    {193,0,0xd8,os_sd_irq},', '#endif',
              # DMA0's one line: the I2S stream's, or in an image with the RAM-copy service the handler of whichever
              # of the two the session granted. The hardware-facts probe takes the line itself.
@@ -571,6 +572,12 @@ def c_tables(m):
              '    1,OS_GPU_REPLY_US,OS_GPU_OPEN_US,OS_GPU_WAIT_TICKS,OS_GPU_PRIORITY,',
              ('    A733_SMP_APPLICATION_CORE,' if m.get('cluster', 0) else '    2,'),
              '    A733_GPU_CORE_HZ,A733_GPU_SUPPLY_UV};', '#endif', '']
+    if m.get('npu'):
+        # The application's NPU declaration, linked for the host tools that build its session: a session grants the NPU
+        # only to an application that declares it (tools/session.py, tools/board_images.py).
+        n = m['npu']
+        lines += ['__attribute__((used,retain)) const uint32_t ss_application_npu[7]={%du,%du,%du,%du,%du,%du,%du};' % tuple(
+            n[k] for k in ('slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes', 'graph_region')), '']
     # Placement is an OS setting; the GPU route uses the same admitted pair.
     if noapp:
         lines=[line for line in lines if not any(key in line for key in ('os_core-app.h','os_core_init','app_stack','app_task','{\"os-core\",os_application'))]

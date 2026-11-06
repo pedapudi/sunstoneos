@@ -57,10 +57,9 @@ static int os_request(void)
     if(request.op==5){if(request.flags||request.offset||request.count||request.argument)stop();
         memcpy(frame,&a733_fault_previous,sizeof(a733_fault_previous));queue(sizeof(a733_fault_previous));return 1;}
 #endif
-#ifdef SUNSTONE_A733_OS_NPU
-    if(request.op==6){if(request.flags||request.offset||request.count||request.argument)stop();
+    /* Operation 6 exists for a session that grants the NPU. */
+    if(request.op==6&&os_granted(OS_GRANT_NPU)){if(request.flags||request.offset||request.count||request.argument)stop();
         os_npu_report_copy(frame);queue(OS_NPU_REPORT_BYTES);return 1;}
-#endif
     /* Operations 7 and 8 exist for a session that grants the CPU clock, and the second for one that grants perf. */
     if(request.op==7&&os_granted(OS_GRANT_CPU_CLOCK)){if(request.flags||!request.count||request.count>1024)stop();
         memset(frame,0,sizeof(frame));size_t copied=0;uint32_t total=0;

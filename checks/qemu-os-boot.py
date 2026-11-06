@@ -84,7 +84,16 @@ OS_SOURCES = ['apps/os/application.c', 'apps/os/large.c', 'apps/os/large_load.c'
               'drivers/audio/a733_i2s_stream.c', 'drivers/audio/a733_i2s_platform.c', 'drivers/audio/a733_i2s_platform_native.c',
               'drivers/audio/a733_audio_leases.c', 'drivers/audio/dma_service_i2s_irq.c', 'runtime/device_memory_pool.c',
               # The radio station is in every image; an ungranted session reads neither its profile nor its credential.
-              'apps/os/radio.c', 'apps/os/wifi_credential.c']
+              'apps/os/radio.c', 'apps/os/wifi_credential.c',
+              # The NPU service is in every image; an ungranted session binds no task, interrupt or register.
+              'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-graph-index.c', 'apps/os/npu-client.c', 'apps/os/npu-irq.c',
+              'platform/a733/npu_native.c', 'runtime/counter_clock.c', 'drivers/npu/a733_npu_runtime.c',
+              'drivers/npu/a733_npu_runtime_interim.c', 'drivers/npu/npu_pool.c', 'drivers/npu/npu_declaration.c',
+              'drivers/npu/npu_service.c', 'drivers/npu/npu_queue.c', 'drivers/npu/npu_runtime_queue.c', 'drivers/npu/npu_idle.c',
+              'drivers/npu/a733_npu_sequence.c', 'drivers/npu/a733_npu_controller.c', 'drivers/npu/a733_npu_memory.c',
+              'drivers/npu/a733_npu_mmu.c', 'drivers/npu/nbg_model.c', 'drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_checksum.c',
+              'drivers/npu/nbg_relocation.c', 'drivers/npu/a733_npu_startup.c', 'drivers/npu/a733_npu_platform.c',
+              'drivers/npu/a733_npu_platform_native.c', 'runtime/npu_app.c']
 # Driver cores and their adapters, unmodified. The adapters reach registers
 # through a733_mmio.h, which the virtual board replaces (platform/qemu-os).
 DRIVER_SOURCES = ['drivers/thermal/a733_thermal.c', 'drivers/thermal/a733_thermal_native.c',

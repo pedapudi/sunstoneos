@@ -7,7 +7,7 @@
 #include "gemm.h"
 #include <stdatomic.h>
 #include <string.h>
-#ifdef SUNSTONE_A733_OS_NPU
+#ifdef CPU_NPU_WITH_NPU
 #include "vectors.h"
 #endif
 static struct cpu_npu_matrix matrix[8];
@@ -21,7 +21,7 @@ static atomic_uint throttle_armed;
 struct cpu_npu_counter { _Alignas(64) atomic_uint_fast64_t value; };
 static struct cpu_npu_counter chunks[8];
 static uint64_t work_cutoff;
-#ifdef SUNSTONE_A733_OS_NPU
+#ifdef CPU_NPU_WITH_NPU
 static atomic_uint pending_overlap;
 static void overlap_kick(void)
 {
@@ -41,7 +41,7 @@ struct { atomic_uint claimed;uint64_t stage,core,cell,job,observed_word,expected
  * fills it and then publishes failed; the main task alone finishes. */
 static struct cpu_npu_failure failure;
 static atomic_uint failed;
-#ifdef SUNSTONE_A733_OS_NPU
+#ifdef CPU_NPU_WITH_NPU
 static int npu_started;
 #endif
 
@@ -103,7 +103,7 @@ static void unit(unsigned core)
     if(!r->chunks)r->first=first;
     r->last=ss_counter_ticks();++r->chunks;
     atomic_store_explicit(&chunks[core].value,r->chunks,memory_order_release);
-#ifdef SUNSTONE_A733_OS_NPU
+#ifdef CPU_NPU_WITH_NPU
     overlap_kick();
 #endif
 }
@@ -138,7 +138,7 @@ static int at_top(void)
     return ss_clock_info(text,sizeof(text))>=(int)sizeof(prefix)-1&&
         !memcmp(text,prefix,sizeof(prefix)-1)&&strstr(text," dsu_mhz=1274 ")!=NULL;
 }
-#ifdef SUNSTONE_A733_OS_NPU
+#ifdef CPU_NPU_WITH_NPU
 static unsigned observation;
 static uint8_t output[8];
 static size_t input_bytes,output_bytes;
@@ -209,7 +209,7 @@ static _Noreturn void failure_finish(void)
             ss_progress();vTaskDelay(1);
         }
     failure.ack_mask=255;
-#ifdef SUNSTONE_A733_OS_NPU
+#ifdef CPU_NPU_WITH_NPU
     while(npu_started){
         if(ss_live()<0||ss_counter_ticks()/24>=limit)ss_fail_value(detail,value);
         int closed=ss_npu_close();if(closed<0)ss_fail_value(detail,value);
@@ -223,7 +223,7 @@ void cpu_npu_load_init(void)
 {
     const struct ss_grant *g=ss_grant();
     require(g&&g->main_core==6&&g->worker_cores==0xbf,0x86,6);
-#ifdef SUNSTONE_A733_OS_NPU
+#ifdef CPU_NPU_WITH_NPU
     require(ss_npu_observe(observe,NULL)==1,0x84,6);
 #endif
     for(unsigned c=0;c<8;++c){receipt.cpu[c].core=c;cpu_npu_matrix_init(&matrix[c],c);}
@@ -244,7 +244,7 @@ void cpu_npu_load_main(const struct ss_grant *grant)
     }
     require(at_top(),0x87,6);receipt.initial_top=1;
     atomic_store_explicit(&throttle_armed,1,memory_order_release);
-#ifdef SUNSTONE_A733_OS_NPU
+#ifdef CPU_NPU_WITH_NPU
     vectors();receipt.mode=1;receipt.target=CPU_NPU_JOBS;
 #endif
     uint64_t now=ss_counter_ticks();
@@ -253,7 +253,7 @@ void cpu_npu_load_main(const struct ss_grant *grant)
     if(work_cutoff-now>120000000)work_cutoff=now+120000000;
     receipt.start=now;ss_activity_begin();
     atomic_store_explicit(&start_epoch,1,memory_order_release);
-#ifdef SUNSTONE_A733_OS_NPU
+#ifdef CPU_NPU_WITH_NPU
     for(unsigned job=0;job<CPU_NPU_JOBS;++job){
         uint64_t admit=ss_counter_ticks();
         if(admit>=work_cutoff||work_cutoff-admit<52800000)fault(0x89,6,job,work_cutoff>admit?work_cutoff-admit:0,52800000);
@@ -289,7 +289,7 @@ void cpu_npu_load_main(const struct ss_grant *grant)
     }
     receipt.stop=ss_counter_ticks();receipt.stop_epoch=1;
     require(at_top(),0x87,6);receipt.final_top=1;ss_activity_end(1);
-#ifdef SUNSTONE_A733_OS_NPU
+#ifdef CPU_NPU_WITH_NPU
     for(;;){
         require(ss_counter_ticks()/24<grant->finish_by_us,0x8c,6);live(6);
         int closed=ss_npu_close();if(closed<0)fault(0x97,6,0,(uint32_t)closed,0);

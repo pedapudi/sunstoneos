@@ -18,11 +18,6 @@
 /* The build options that still select a service's code. OS_WITH_x(...) is its arguments when the option is on and
  * nothing when it is off; each goes when its option goes (docs/designs/one-os-image.md). */
 #define OS_ALWAYS(...) __VA_ARGS__
-#ifdef SUNSTONE_A733_OS_NPU
-#define OS_WITH_NPU(...) __VA_ARGS__
-#else
-#define OS_WITH_NPU(...)
-#endif
 #ifdef SUNSTONE_A733_OS_DMA
 #define OS_WITH_DMA(...) __VA_ARGS__
 #else
@@ -51,7 +46,7 @@
  * links its code (OS_LINKED_NAME is 1 when it is linked). A session cannot grant a service whose code the image lacks.
  * The headset's code is linked per image, so the session decode tests a weak reference instead. */
 #define OS_GRANT_ROWS(X) \
-    X(NPU, 0, OS_WITH_NPU) \
+    X(NPU, 0, OS_ALWAYS) \
     X(AUDIO, 1, OS_ALWAYS) \
     X(CPU_CLOCK, 2, OS_ALWAYS) \
     X(DMA, 3, OS_WITH_DMA) \
@@ -76,7 +71,7 @@
     X("thermal", os_thermal, os_thermal_start, OS_ALWAYS) \
     X("large", os_large, os_large_start, OS_ALWAYS) \
     X("tlbi", os_tlbi, os_tlbi_start, OS_WITH_TLBI) \
-    X("npu", os_npu, os_npu_start, OS_WITH_NPU) \
+    X("npu", os_npu, os_npu_start, OS_ALWAYS) \
     X("audio", os_audio, os_capture_start, OS_ALWAYS) \
     X("dma", os_dma, os_dma_start, OS_WITH_DMA) \
     X("radio", os_radio, os_radio_start, OS_ALWAYS) \

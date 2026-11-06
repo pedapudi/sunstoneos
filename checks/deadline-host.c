@@ -132,6 +132,8 @@ static const struct os_session *os_session_admitted(void){return &test_session;}
 static int a733_board_host_workload(unsigned workload){(void)workload;return 1;}
 static int os_application_finished(void){return 0;}
 static int os_watchdog_reload(void *owner){(void)owner;return 1;}
+/* The NPU service is in every image; this session does not grant it, so its finished state is never asked. */
+static int os_npu_complete(void){return 0;}
 static const struct { const void *manifest; } ss_application={(void *)1};
 #ifndef SERVICES_SOURCE
 #define SERVICES_SOURCE "../apps/os/services.c"

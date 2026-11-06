@@ -43,9 +43,7 @@ int os_application_gpu_share_bind(struct pvr_compute_queue *q){(void)q;return 1;
 #include <string.h>
 /* The headset library's capture length: absent (null) in an image that does not link it. */
 extern int os_headset_capture_frames(uint32_t *) __attribute__((weak));
-#ifdef SUNSTONE_A733_OS_NPU
 #include "npu.h"
-#endif
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
 #include "cpu-return.h"
 #endif
@@ -438,7 +436,7 @@ __attribute__((noinline)) _Noreturn void ss_fail(uint32_t detail)
         __builtin_return_address(0));
     for(;;)vTaskSuspend(NULL);
 }
-#if defined(SUNSTONE_A733_OS_CPU_RETURN) && defined(SUNSTONE_A733_OS_NPU)
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
 static int npu_retired(void){return os_npu_complete();}
 #endif
 _Noreturn void ss_finish(const void *data,size_t bytes)
@@ -464,7 +462,7 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
         ss_progress();vTaskDelay(1);
     }
 #endif
-#if defined(SUNSTONE_A733_OS_CPU_RETURN) && defined(SUNSTONE_A733_OS_NPU)
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
     /* SDK CLOSE transfers no bootstrap/local-stop authority. Wait for its
      * immutable client report and revalidate the live IRQ/runtime state. */
     while(!os_npu_retirement_check()){
