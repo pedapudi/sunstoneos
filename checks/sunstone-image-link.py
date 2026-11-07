@@ -201,7 +201,7 @@ def memory_routines(objects, nm, image):
         output = subprocess.run([nm, '--format=posix', '--extern-only', '--undefined-only', str(path)], check=True,
                                 capture_output=True, text=True).stdout
         undefined = {line.split()[0] for line in output.splitlines() if len(line.split()) >= 2 and not line.endswith(':')}
-        name = Path(path).name
+        name = str(path).split('.dir/', 1)[-1]
         if undefined & set(MEMORY_STRICT):
             strict.append(name)
         if undefined & set(MEMORY_UNALIGNED):
