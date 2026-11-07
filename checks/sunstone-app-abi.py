@@ -283,14 +283,14 @@ assert json.loads((a.build / 'radio' / 'manifest.json').read_text())[0]['devices
 refused(lambda v: v['cpu'].update(privilege='el1'), 'unknown cpu keys')
 refused(lambda v: v.update(output_limit=tool.OUTPUT_LIMIT + 1), 'output_limit')
 assert tool.OUTPUT_LIMIT + tool.RESULT_HEADER_BYTES == 0xf00000
-# A supervised session ends within 60 s; a resident image has no such bound.
-refused(lambda v: v['deadlines'].update(progress_window_us=tool.SUPERVISED_SESSION_US + 1), 'progress_window_us')
+# A supervised harness session ends within 60 s and the flag bounds the window there; without it
+# the window is bounded only by the 64-bit service table field.
 _long = json.loads(HELLO.read_text())
-_long['deadlines']['progress_window_us'] = 3600 * 10**6
-(a.build / 'resident-window.json').write_text(json.dumps(_long))
-assert tool.load(a.build / 'resident-window.json', resident=True)['progress_window_us'] == 3600 * 10**6
+_long['deadlines']['progress_window_us'] = tool.SUPERVISED_SESSION_US + 1
+(a.build / 'long-window.json').write_text(json.dumps(_long))
+assert tool.load(a.build / 'long-window.json')['progress_window_us'] == tool.SUPERVISED_SESSION_US + 1
 try:
-    tool.load(a.build / 'resident-window.json')
+    tool.load(a.build / 'long-window.json', supervised=True)
     raise AssertionError('a supervised window above 60 s was accepted')
 except SystemExit:
     pass

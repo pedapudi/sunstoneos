@@ -144,7 +144,7 @@ def integer(value, where, low=0, high=(1 << 64) - 1):
     return value
 
 
-def load(path, resident=False):
+def load(path, supervised=False):
     """manifest.json -> normalized dict with integer fields."""
     raw = json.loads(Path(path).read_text())
     known = {'name', 'devices', 'cpu', 'regions', 'large_regions', 'audio', 'deadlines', 'output_limit', 'host_ops', 'npu', 'gpu', 'abi'}
@@ -185,11 +185,13 @@ def load(path, resident=False):
     d = raw['deadlines']
     m['run_deadline_us'] = integer(d.get('run_us', 0), name + ' run_us')
     m['return_reserve_us'] = integer(d['return_reserve_us'], name + ' return_reserve_us')
-    # A supervised session ends before SUPERVISED_SESSION_US (the board admission refuses a
-    # session of 60 s or more), so a longer window supervises nothing. A resident image has no
-    # session deadline; its window is bounded only by the 64-bit service table field.
+    # A supervised harness session ends before SUPERVISED_SESSION_US (the board admission refuses a
+    # session of 60 s or more), so a longer window supervises nothing there; --supervised applies
+    # that bound. Every OS image links both lifetimes and the contract selects one at run time, so
+    # the build cannot know it: without the flag the window is bounded only by the 64-bit service
+    # table field, and admission refuses a window the session cannot use.
     m['progress_window_us'] = integer(d['progress_window_us'], name + ' progress_window_us', 1,
-                                      (1 << 64) - 1 if resident else SUPERVISED_SESSION_US)
+                                      SUPERVISED_SESSION_US if supervised else (1 << 64) - 1)
     m['output_limit'] = integer(raw.get('output_limit', 0), name + ' output_limit', 0, OUTPUT_LIMIT)
     require(m['output_limit'] >= FAILURE_RECORD_BYTES,
             '%s: output_limit %d is smaller than the %d-byte failure record (struct ss_failure in '
@@ -689,7 +691,7 @@ def main():
     e = sub.add_parser('emit')
     e.add_argument('--manifest', type=Path)
     e.add_argument('--no-application', action='store_true')
-    e.add_argument('--resident', action='store_true', help='resident image (SUNSTONE_BOARD_RESIDENT): no supervised-session bound on progress_window_us')
+    e.add_argument('--supervised', action='store_true', help='supervised harness session: bound progress_window_us by the 60 s session limit')
     e.add_argument('--output', type=Path, required=True)
     d = sub.add_parser('decode')
     d.add_argument('section', type=Path)
@@ -711,7 +713,7 @@ def main():
         (a.output/'manifest.bin').write_bytes(b'')
         (a.output/'manifest.json').write_text('[]\n')
         return
-    m = assign(load(a.manifest, a.resident))
+    m = assign(load(a.manifest, a.supervised))
     a.output.mkdir(parents=True, exist_ok=True)
     c = cname(m['name'])
     (a.output / (c + '-manifest.c')).write_text(c_source(m))
