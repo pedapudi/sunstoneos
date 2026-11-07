@@ -158,6 +158,10 @@ void a733_cpu_continue_boot(unsigned long core,uint64_t epoch,
 _Noreturn void a733_cached_el1(unsigned c,uint64_t epoch,uint64_t startup,uint64_t diagnostic,uint64_t rdist)
 {
     if(c>=8 || native_core()!=c || !epoch || a733_smp_counter()>=startup)a733_cached_smc(3,0x200);
+    /* Units built for relaxed alignment (cmake/codegen-align.cmake) and the unaligned memory routines make unaligned accesses to
+     * Normal memory. They are legal only with SCTLR_EL1.A clear on this core, which the entry code writes for every core
+     * (continue.S) and this read confirms before any task runs. */
+    {uint64_t sctlr;__asm__ volatile("mrs %0, sctlr_el1":"=r"(sctlr));if(sctlr&2u)a733_cached_smc(3,0x207);}
     a733_cached_runtime[c].epoch=epoch;a733_cached_runtime[c].startup_deadline=startup;
     a733_cached_runtime[c].diagnostic_deadline=diagnostic;a733_cached_runtime[c].redistributor=rdist;
     if(a733_smp_pre_scheduler(c,epoch,startup/24)!=1)a733_cached_smc(3,0x201);
