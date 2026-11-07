@@ -58,11 +58,19 @@ extern const void *volatile os_space_init_tag;
  * the kernel's table from its first instruction, whichever core takes it, with no window in which it holds the
  * application's. The tag is an aligned pointer to the space record, so bit 0 is free; the switch hook masks it. A
  * creator with no tag is an OS task already and is left alone. The mark is on the creating task only, so there is no
- * table and no limit on how many tasks create at once. expr is evaluated once; its value is the macro's. */
+ * table and no limit on how many tasks create at once. expr is evaluated once; its value is the macro's.
+ *
+ * Before the scheduler starts there is no creating task, so there is no mark to set; the application's init hook runs in
+ * that state, and there os_space_init_tag stands in for the creator's tag. The macro takes it away for the duration of
+ * the creation and puts it back, because a service task that the hook starts is a task of the OS and must not take the
+ * application's space. */
 #define OS_TASK_CREATE_IN_KERNEL_SPACE(expr) ({ \
-    TaskHookFunction_t os_tag_ = xTaskGetApplicationTaskTag(NULL); \
+    const void *os_init_tag_ = os_space_init_tag; \
+    os_space_init_tag = NULL; \
+    TaskHookFunction_t os_tag_ = xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED ? NULL : xTaskGetApplicationTaskTag(NULL); \
     if (os_tag_) vTaskSetApplicationTaskTag(NULL, (TaskHookFunction_t)((uintptr_t)os_tag_ | 1u)); \
     __typeof__(expr) os_created_ = (expr); \
     if (os_tag_) vTaskSetApplicationTaskTag(NULL, os_tag_); \
+    os_space_init_tag = os_init_tag_; \
     os_created_; })
 #endif

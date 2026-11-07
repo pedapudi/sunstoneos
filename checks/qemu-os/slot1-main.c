@@ -8,10 +8,12 @@
  *   mode 3: the init hook (which the OS calls before the scheduler, where no task creates anything) creates a task. The
  *           main task asks it to store to the main task's own stack, which only the application's space maps, and to the
  *           region; the child must run in the application's space, with no call. The result is {tag, stack word, region
- *           word, the child's task tag}. */
+ *           word, the child's task tag, the tag of an OS task that the same hook starts through
+ *           OS_TASK_CREATE_IN_KERNEL_SPACE, which must be none}. */
 #include "slot1_test-app.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "os_space.h"
 
 #define TAG UINT64_C(0x534c4f5431)        /* "SLOT1" */
 
@@ -27,6 +29,15 @@ static StaticTask_t child_state;
 static StackType_t child_stack[512];
 static volatile uint64_t *volatile stack_target, *volatile region_target;
 static volatile uint64_t child_done, child_tag;
+static StaticTask_t service_state;
+static StackType_t service_stack[512];
+static TaskHandle_t service_handle;
+
+static void service(void *unused)
+{
+    (void)unused;
+    for (;;) vTaskDelay(1000);
+}
 
 static void child(void *unused)
 {
@@ -43,6 +54,8 @@ static void child(void *unused)
 void slot1_test_init(void)
 {
     (void)xTaskCreateStaticAffinitySet(child, "init-child", 512, NULL, 3, child_stack, &child_state, 0xffu);
+    /* An SDK call that starts an OS service task creates it this way; it must stay in the kernel's table. */
+    service_handle = OS_TASK_CREATE_IN_KERNEL_SPACE(xTaskCreateStatic(service, "os-service", 512, NULL, 2, service_stack, &service_state));
 }
 
 void slot1_test_main(const struct ss_grant *grant)
@@ -63,7 +76,7 @@ void slot1_test_main(const struct ss_grant *grant)
         region_target = big;
         stack_target = &slot;
         while (!child_done) vTaskDelay(1);
-        const uint64_t result[4] = {TAG_INIT, slot, big[0], child_tag};
+        const uint64_t result[5] = {TAG_INIT, slot, big[0], child_tag, (uintptr_t)xTaskGetApplicationTaskTag(service_handle)};
         ss_finish(result, sizeof result);
     }
     uint64_t fold = 0;

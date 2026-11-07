@@ -1040,9 +1040,11 @@ def main():
     # task reads both. The child carries the main task's tag.
     c = run_case('init-hook-task-shares-space', slot1_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(3), '4G')
     c.clean()
-    tag, stack_word, region_word, child_tag = struct.unpack('<4Q', bytes.fromhex(c.finished['result']))
+    tag, stack_word, region_word, child_tag, service_tag = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
     c.require(tag == 0x534c4f5433 and stack_word == 0x1111222233334444 and region_word == 0x5555666677778888 and child_tag != 0,
               'init-hook task result %#x stack %#x region %#x tag %#x' % (tag, stack_word, region_word, child_tag))
+    # An OS task that the hook starts through OS_TASK_CREATE_IN_KERNEL_SPACE stays out of the space.
+    c.require(service_tag == 0, 'the OS service task started in the init hook took the application tag %#x' % service_tag)
 
     # The transport becomes ready between the main task's liveness test and its wait: the wake-up finds no waiter, and the
     # task must still start, not sleep to the session deadline.
