@@ -29,7 +29,6 @@ from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_SP, UC_ARM64_REG_L
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ('runtime/memory_unaligned.c', 'runtime/memory.c', 'runtime/memmove.c', 'checks/memory-unaligned.c',
                 'checks/memory-unaligned.py', 'include/sunstone_relaxed_memory.h')
-GATE_RUNS = [['--output', '{output}']]
 CODE, STACK, REQUEST, DATA = 0x100000, 0x300000, 0x200000, 0x1000000
 CANARY = 64
 DEAD = 0xdead0000
