@@ -93,7 +93,7 @@ def main():
     assert classes['tune'] == 'cortex-a55'
     found, count = problems(commands, classes)
     assert not found, '\n'.join(found[:30])
-    assert count['strict'] and count['relaxed'] and count['application'], count
+    assert count['strict'] and count['relaxed'] and (count['application'] or not classes['applications']), count
     # Mutation 1: a strict unit built without -mstrict-align. Mutation 2: a strict unit given -mno-strict-align after it.
     strict = [p for p in map(re.compile, classes['strict'])]
     victims = []

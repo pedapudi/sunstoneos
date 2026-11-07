@@ -19,6 +19,11 @@ elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/main.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest.json")
   add_sunstone_image(sunstone-a733-os-hello LIFETIME ${os_lifetime} APPLICATION hello-compute)
+elseif(SUNSTONE_APPLICATION STREQUAL "memcpy-bench")
+  add_sunstone_application(memcpy-bench
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/memcpy-bench/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/memcpy-bench/manifest.json")
+  add_sunstone_image(sunstone-a733-os-memcpy-bench LIFETIME ${os_lifetime} APPLICATION memcpy-bench)
 elseif(SUNSTONE_APPLICATION STREQUAL "headset-fixture")
   # Declares the headset device, so the image links the headset library with the Bluetooth stack and mSBC.
   add_sunstone_application(headset-fixture
