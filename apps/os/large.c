@@ -292,6 +292,7 @@ int os_device_range_publish(uint64_t base, uint64_t bytes)
 
 uint64_t os_space_kernel_ttbr;
 uint8_t os_space_active;
+const void *volatile os_space_init_tag;
 static uint64_t owner_ttbr;          /* the application's tag points here */
 
 /* Tasks of the application that wait for a region: a task waits on one region at a time, so the list holds

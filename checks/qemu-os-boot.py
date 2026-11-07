@@ -1035,6 +1035,15 @@ def main():
     guard = int(c.failure['value'], 16)
     c.require(0x50000000 <= guard < 0x50200000, 'the overflow faulted at %#x, not in the guard block 0x50000000..0x50200000' % guard)
 
+    # A task that the application creates in its init hook, which the OS calls before the scheduler where no task creates
+    # anything, runs in the application's space: it stores to the main task's ledger stack and to a region, and the main
+    # task reads both. The child carries the main task's tag.
+    c = run_case('init-hook-task-shares-space', slot1_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(3), '4G')
+    c.clean()
+    tag, stack_word, region_word, child_tag = struct.unpack('<4Q', bytes.fromhex(c.finished['result']))
+    c.require(tag == 0x534c4f5433 and stack_word == 0x1111222233334444 and region_word == 0x5555666677778888 and child_tag != 0,
+              'init-hook task result %#x stack %#x region %#x tag %#x' % (tag, stack_word, region_word, child_tag))
+
     # The transport becomes ready between the main task's liveness test and its wait: the wake-up finds no waiter, and the
     # task must still start, not sleep to the session deadline.
     c = run_case('usb-ready-between-test-and-wait', usb_race_elf, scenario(usb_ready_ms=60000, limit_ms=4000))

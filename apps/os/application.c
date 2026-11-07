@@ -418,7 +418,12 @@ int os_application_prepare(void)
      * region. */
     runtime_init();
 #endif
-    if(ss_application.init)ss_application.init();
+    if(ss_application.init){
+        /* No task creates the tasks of the init hook (the scheduler has not started), so they take the main task's space. */
+        os_space_init_tag=(const void *)xTaskGetApplicationTaskTag(main_task);
+        ss_application.init();
+        os_space_init_tag=NULL;
+    }
     return 1;
 }
 /* The first-failure record names the detail and the caller of ss_fail. */

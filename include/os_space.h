@@ -35,14 +35,23 @@ static inline void os_space_switch_in(const void *tag)
     if (have != want) __asm__ volatile("msr ttbr0_el1, %0" :: "r"(want) : "memory");
 }
 
+/* The application's tag while its init hook runs (apps/os/application.c), otherwise null. The hook runs before the scheduler,
+ * where no task creates anything, so a task created there takes this tag in place of a creator's. The OS sets it around
+ * the call only; an OS task created before the scheduler, outside the call, finds it null and stays in the kernel's table.
+ * The task-switch hook does not read it. */
+extern const void *volatile os_space_init_tag;
+
 /* traceTASK_CREATE: the new task takes the creator's tag, so a task that the application creates runs in the
  * application's space with no call of its own. The creator is the task running on the creating core, which is
  * absent (null) while boot code creates tasks before the scheduler starts. A macro, because the task control
  * block is private to the kernel files that expand it. A task of the OS is created from boot code or from an
  * OS task with no tag, and inherits none. */
 #define os_space_inherit(creator, created) \
-    do { if ((creator) && !(created)->pxTaskTag && !((uintptr_t)(creator)->pxTaskTag & 1u)) \
-             (created)->pxTaskTag = (creator)->pxTaskTag; } while (0)
+    do { if ((creator)) { \
+             if (!(created)->pxTaskTag && !((uintptr_t)(creator)->pxTaskTag & 1u)) \
+                 (created)->pxTaskTag = (creator)->pxTaskTag; \
+         } else if (os_space_init_tag && !(created)->pxTaskTag) \
+             (created)->pxTaskTag = (__typeof__((created)->pxTaskTag))os_space_init_tag; } while (0)
 
 /* Create a task of the OS from a task of an application (an SDK call that starts a service task). The creating task's
  * own tag carries bit 0 for the duration of the creation, so the hook above gives the new task no tag at all: it runs in
