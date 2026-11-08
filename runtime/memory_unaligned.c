@@ -45,6 +45,15 @@ RELAXED void *ss_memmove_unaligned(void *dest, const void *src, size_t count)
     unsigned char *d = dest;
     const unsigned char *s = src;
     if (count <= 32) { small(d, s, count); return dest; }
+    if (count <= 64) {
+        /* 33 to 64 bytes: the first and the last 32 bytes, all loaded before any is stored, overlap in the middle. */
+        uint64_t a0, a1, a2, a3, b0, b1, b2, b3;
+        LOAD64(s, a0); LOAD64(s + 8, a1); LOAD64(s + 16, a2); LOAD64(s + 24, a3);
+        LOAD64(s + count - 32, b0); LOAD64(s + count - 24, b1); LOAD64(s + count - 16, b2); LOAD64(s + count - 8, b3);
+        STORE64(d, a0); STORE64(d + 8, a1); STORE64(d + 16, a2); STORE64(d + 24, a3);
+        STORE64(d + count - 32, b0); STORE64(d + count - 24, b1); STORE64(d + count - 16, b2); STORE64(d + count - 8, b3);
+        return dest;
+    }
     if ((uintptr_t)d <= (uintptr_t)s || (uintptr_t)d >= (uintptr_t)s + count) {
         /* Forward. Both ends are read before anything is written and written last, so the loop need not start or end on a
          * block boundary and an overlapping source (a destination below it) is not overwritten before it is read. */
