@@ -55,22 +55,29 @@ RELAXED void *ss_memmove_unaligned(void *dest, const void *src, size_t count)
         return dest;
     }
     if ((uintptr_t)d <= (uintptr_t)s || (uintptr_t)d >= (uintptr_t)s + count) {
-        /* Forward. Both ends are read before anything is written and written last, so the loop need not start or end on a
-         * block boundary and an overlapping source (a destination below it) is not overwritten before it is read. */
-        uint64_t t0, t1, t2, t3, h0, h1;
-        LOAD64(s + count - 32, t0); LOAD64(s + count - 24, t1); LOAD64(s + count - 16, t2); LOAD64(s + count - 8, t3);
-        LOAD64(s, h0); LOAD64(s + 8, h1);
-        unsigned char *const begin = d, *const end = d + count;
-        /* The loop's stores are 16-byte aligned. */
-        const size_t skew = 16 - ((uintptr_t)d & 15);
-        d += skew; s += skew; count -= skew;
+        /* Forward, and every store at a higher address than the one before it, none twice: a Cortex-A55 recognizes a stream of
+         * stores that fill whole cache lines and then stops fetching the lines it is about to overwrite (write streaming). A
+         * copy that stored its head or tail again, out of order, lost that: the 176 rows of the encoder's position window, written
+         * into lines that the queue had just cleaned and invalidated, took 32.0 ms instead of 26.7 ms. Loads may be unaligned
+         * and are always read before the store that could overwrite them (the destination is not above the source). */
+        size_t skew = (size_t)(-(uintptr_t)d & 15);       /* bytes to the next 16-byte boundary of the destination */
+        count -= skew;
+        if (skew & 1) { *d++ = *s++; }
+        if (skew & 2) { uint16_t v; LOAD16(s, v); STORE16(d, v); d += 2; s += 2; }
+        if (skew & 4) { uint32_t v; LOAD32(s, v); STORE32(d, v); d += 4; s += 4; }
+        if (skew & 8) { uint64_t v; LOAD64(s, v); STORE64(d, v); d += 8; s += 8; }
+        /* One block a turn, in order: an unrolled loop would interleave the stores of two blocks. */
+        _Pragma("clang loop unroll(disable) interleave(disable)")
         for (; count >= 32; count -= 32, d += 32, s += 32) {
             uint64_t a, b, c, e;
             LOAD64(s, a); LOAD64(s + 8, b); LOAD64(s + 16, c); LOAD64(s + 24, e);
             STORE64(d, a); STORE64(d + 8, b); STORE64(d + 16, c); STORE64(d + 24, e);
         }
-        STORE64(begin, h0); STORE64(begin + 8, h1);
-        STORE64(end - 32, t0); STORE64(end - 24, t1); STORE64(end - 16, t2); STORE64(end - 8, t3);
+        if (count & 16) { uint64_t a, b; LOAD64(s, a); LOAD64(s + 8, b); STORE64(d, a); STORE64(d + 8, b); d += 16; s += 16; }
+        if (count & 8) { uint64_t v; LOAD64(s, v); STORE64(d, v); d += 8; s += 8; }
+        if (count & 4) { uint32_t v; LOAD32(s, v); STORE32(d, v); d += 4; s += 4; }
+        if (count & 2) { uint16_t v; LOAD16(s, v); STORE16(d, v); d += 2; s += 2; }
+        if (count & 1) { *d = *s; }
     } else {
         /* Backward, for a destination above an overlapping source. Both ends are read first and written last. */
         uint64_t t0, t1, t2, t3, h0, h1;
@@ -111,11 +118,19 @@ RELAXED void *ss_memset_unaligned(void *dest, int value, size_t count)
         else if (count) *d = (unsigned char)value;
         return dest;
     }
-    unsigned char *end = d + count;
-    STORE64(d, w); STORE64(d + 8, w);
-    size_t skew = 16 - ((uintptr_t)d & 15);
-    d += skew; count -= skew;
+    /* Stores in increasing order, none twice (see ss_memmove_unaligned). */
+    size_t skew = (size_t)(-(uintptr_t)d & 15);
+    count -= skew;
+    if (skew & 1) { *d++ = (unsigned char)value; }
+    if (skew & 2) { uint16_t v = (uint16_t)w; STORE16(d, v); d += 2; }
+    if (skew & 4) { uint32_t v = (uint32_t)w; STORE32(d, v); d += 4; }
+    if (skew & 8) { STORE64(d, w); d += 8; }
+    _Pragma("clang loop unroll(disable) interleave(disable)")
     for (; count >= 32; count -= 32, d += 32) { STORE64(d, w); STORE64(d + 8, w); STORE64(d + 16, w); STORE64(d + 24, w); }
-    STORE64(end - 32, w); STORE64(end - 24, w); STORE64(end - 16, w); STORE64(end - 8, w);
+    if (count & 16) { STORE64(d, w); STORE64(d + 8, w); d += 16; }
+    if (count & 8) { STORE64(d, w); d += 8; }
+    if (count & 4) { uint32_t v = (uint32_t)w; STORE32(d, v); d += 4; }
+    if (count & 2) { uint16_t v = (uint16_t)w; STORE16(d, v); d += 2; }
+    if (count & 1) { *d = (unsigned char)value; }
     return dest;
 }

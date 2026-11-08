@@ -23,7 +23,7 @@ import random
 import struct
 import subprocess
 
-from unicorn import UC_HOOK_BLOCK, Uc, UC_ARCH_ARM64, UC_MODE_ARM
+from unicorn import UC_HOOK_BLOCK, UC_HOOK_MEM_WRITE, Uc, UC_ARCH_ARM64, UC_MODE_ARM
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_PC
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,6 +131,42 @@ for n in list(range(0, 131)) + [255, 256, 257, 1023, 1024, 1025, 4095, 4096, 409
         got = bytes(uc.mem_read(DST + do - CANARY, n + 2 * CANARY))
         assert got == b'\xa5' * CANARY + bytes([value]) * n + b'\xa5' * CANARY, ('memset', n, do)
         cases += 1
+
+# The stores of a forward copy or a fill of more than 64 bytes (more than 32 for memset) are at increasing addresses, none twice,
+# and cover the destination exactly: a Cortex-A55 stops fetching the lines of a stream of such stores, and a head or tail that is
+# stored again out of order loses that (apps/memcpy-bench, rows into invalidated lines). The smaller copies overlap by design,
+# which shows that the hook sees the overlap.
+writes = []
+uc.hook_add(UC_HOOK_MEM_WRITE, lambda u, access, address, size, value, _: writes.append((address, size)))
+
+
+def stores(op, d, s, n):
+    del writes[:]
+    run(op, d, s, n)
+    return [w for w in writes if DST - 4096 <= w[0] < DST + 0x100000]
+
+
+def monotone(w, d, n):
+    end = d
+    for address, size in w:
+        if address != end:
+            return False
+        end += size
+    return end == d + n
+
+
+for n in list(range(65, 300)) + [1000, 4095, 4096, 4097, 65536]:
+    for so, do in ((0, 0), (3, 0), (5, 11), (1, 15)):
+        d = DST + 0x2000 + do
+        uc.mem_write(SRC + so, bytes(n))
+        assert monotone(stores(0, d, SRC + so, n), d, n), ('memcpy stores', n, so, do)
+        assert monotone(stores(1, d, SRC + so, n), d, n), ('memmove stores', n, so, do)
+for n in list(range(33, 300)) + [1000, 4097, 65536]:
+    for do in (0, 1, 3, 7, 9, 15):
+        d = DST + 0x2000 + do
+        assert monotone(stores(2, d, 0x5a, n), d, n), ('memset stores', n, do)
+overlap = stores(0, DST + 0x2000, SRC, 20)
+assert not monotone(overlap, DST + 0x2000, 20) and len(overlap) >= 4, 'the hook did not see the overlapping stores of a small copy'
 
 # Instructions for 4096 bytes: aligned, and with the source and destination at different alignments.
 cost = {}

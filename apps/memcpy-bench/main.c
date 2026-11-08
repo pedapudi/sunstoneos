@@ -12,7 +12,12 @@
  * Six further cases copy rows the way the encoder fills the position window of its attention step: 176 rows of 382 bytes, each
  * after a memset of 40 bytes, from a table whose rows are 2 bytes off an 8-byte boundary, into rows 382 bytes apart. The
  * table rows lie 17000 bytes apart and rotate through 8 MiB, so the source is not in the cache ("cold rows"), or 1000 bytes
- * apart in 176 KB ("warm rows"). Each is run with the strict memcpy, ss_memcpy_unaligned and ss_memmove_unaligned. */
+ * apart in 176 KB ("warm rows"). Each is run with the strict memcpy, ss_memcpy_unaligned and ss_memmove_unaligned.
+ *
+ * Three more cases write the rows into a destination that is not in the cache, as the encoder's position window is after the
+ * queue has cleaned and invalidated its input buffer: the destination moves by 67232 bytes a pass through 3 MiB. They run
+ * the strict routines, ss_memcpy_unaligned and ss_memset_unaligned, and the first unaligned routines (kept here for the
+ * comparison), which stored the head and the tail of a copy again out of order. */
 #include "memcpy_bench-app.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -30,7 +35,7 @@ _Static_assert(sizeof(struct bench_case) == 32, "record layout");
 struct bench_result { uint32_t cases, cluster_mhz_hint; uint64_t counter_hz; struct bench_case record[96]; };
 _Static_assert(sizeof(struct bench_result) <= 4096, "output_limit");
 
-enum { STRICT_COPY, UNALIGNED_COPY, STRICT_SET, UNALIGNED_SET, ROWS_STRICT, ROWS_COPY, ROWS_MOVE };
+enum { STRICT_COPY, UNALIGNED_COPY, STRICT_SET, UNALIGNED_SET, ROWS_STRICT, ROWS_COPY, ROWS_MOVE, COLD_STRICT, COLD_COPY, COLD_OVERLAP };
 #define TARGET_BYTES (32u << 20)
 
 static struct bench_result result;
@@ -60,6 +65,29 @@ static void measure(unsigned routine, uint8_t *work, uint32_t size, uint32_t src
     *c = (struct bench_case){routine, size, src_offset, dst_offset, iterations, end - begin};
 }
 
+/* The first unaligned routines: both ends are loaded first and stored last, so the stores are out of address order. */
+static void *overlapped_copy(void *dest, const void *src, size_t count)
+{
+    uint8_t *d = dest;
+    const uint8_t *s = src;
+    uint64_t t0, t1, t2, t3, h0, h1;
+    __builtin_memcpy(&t0, s + count - 32, 8); __builtin_memcpy(&t1, s + count - 24, 8);
+    __builtin_memcpy(&t2, s + count - 16, 8); __builtin_memcpy(&t3, s + count - 8, 8);
+    __builtin_memcpy(&h0, s, 8); __builtin_memcpy(&h1, s + 8, 8);
+    uint8_t *const begin = d, *const end = d + count;
+    const size_t skew = 16 - ((uintptr_t)d & 15);
+    d += skew; s += skew; count -= skew;
+    for (; count >= 32; count -= 32, d += 32, s += 32) {
+        uint64_t a, b, c, e;
+        __builtin_memcpy(&a, s, 8); __builtin_memcpy(&b, s + 8, 8); __builtin_memcpy(&c, s + 16, 8); __builtin_memcpy(&e, s + 24, 8);
+        __builtin_memcpy(d, &a, 8); __builtin_memcpy(d + 8, &b, 8); __builtin_memcpy(d + 16, &c, 8); __builtin_memcpy(d + 24, &e, 8);
+    }
+    __builtin_memcpy(begin, &h0, 8); __builtin_memcpy(begin + 8, &h1, 8);
+    __builtin_memcpy(end - 32, &t0, 8); __builtin_memcpy(end - 24, &t1, 8);
+    __builtin_memcpy(end - 16, &t2, 8); __builtin_memcpy(end - 8, &t3, 8);
+    return dest;
+}
+
 #define ROW_COUNT 176u
 #define ROW_BYTES 382u
 
@@ -75,6 +103,30 @@ static inline void rows_pass(unsigned routine, uint8_t *dst, const uint8_t *tabl
         else ss_memmove_unaligned(d + 40, s, ROW_BYTES - 40);
     }
     __asm__ volatile("" ::: "memory");
+}
+
+/* Rows into a destination that is not in the cache: the strict routine, the unaligned routine, the first unaligned routine. */
+static void measure_cold_destination(unsigned routine, uint8_t *work, uint64_t passes)
+{
+    const uint8_t *const table = work;
+    uint8_t *const dst = work + (12u << 20);
+    const uint32_t pass_bytes = ROW_COUNT * ROW_BYTES;
+    uint64_t begin = 0;
+    for (uint64_t pass = 0; pass < passes + 1; ++pass) {
+        if (pass == 1) { ss_progress(); begin = ss_counter_ticks(); }
+        uint8_t *const base = dst + (size_t)((pass * pass_bytes) % (3u << 20));
+        for (unsigned row = 0; row < ROW_COUNT; ++row) {
+            uint8_t *const d = base + (size_t)row * ROW_BYTES;
+            const uint8_t *const s = table + 34 + row * 1000u;
+            if (routine == COLD_STRICT) { memset(d, 0, 40); memcpy(d + 40, s, ROW_BYTES - 40); }
+            else if (routine == COLD_COPY) { ss_memset_unaligned(d, 0, 40); ss_memcpy_unaligned(d + 40, s, ROW_BYTES - 40); }
+            else { ss_memset_unaligned(d, 0, 40); overlapped_copy(d + 40, s, ROW_BYTES - 40); }
+        }
+        __asm__ volatile("" ::: "memory");
+    }
+    const uint64_t end = ss_counter_ticks();
+    struct bench_case *c = &result.record[result.cases++];
+    *c = (struct bench_case){routine, ROW_COUNT * ROW_BYTES, 1000, 0, passes, end - begin};
 }
 
 static void measure_rows(unsigned routine, uint8_t *work, uint32_t stride, uint32_t span, uint64_t passes)
@@ -108,5 +160,6 @@ void memcpy_bench_main(const struct ss_grant *grant)
                 measure(routine, work, set_sizes[s], 0, o ? 3 : 0);
     for (unsigned routine = ROWS_STRICT; routine <= ROWS_MOVE; ++routine) measure_rows(routine, work, 17000, 8u << 20, 400);
     for (unsigned routine = ROWS_STRICT; routine <= ROWS_MOVE; ++routine) measure_rows(routine, work, 1000, 176000, 400);
+    for (unsigned routine = COLD_STRICT; routine <= COLD_OVERLAP; ++routine) measure_cold_destination(routine, work, 400);
     ss_finish(&result, sizeof result);
 }

@@ -5,7 +5,8 @@ import struct
 HEADER = struct.Struct('<IIQ')
 RECORD = struct.Struct('<IIIIQQ')
 ROUTINES = ('strict memcpy', 'unaligned memcpy', 'strict memset', 'unaligned memset',
-            'rows, strict memcpy', 'rows, unaligned memcpy', 'rows, unaligned memmove')
+            'rows, strict memcpy', 'rows, unaligned memcpy', 'rows, unaligned memmove',
+            'rows into cold lines, strict', 'rows into cold lines, unaligned', 'rows into cold lines, first unaligned')
 
 
 def decode(payload):
