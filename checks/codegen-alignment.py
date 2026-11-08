@@ -5,8 +5,8 @@ cmake/codegen-align.cmake lists the units that must keep -mstrict-align (code th
 Device memory) and the units that run under Normal write-back memory and are built with -mno-strict-align; the build writes
 both lists to alignment-classes.json beside compile_commands.json. This check reads the two files of an OS build and requires:
 
-- every relaxed unit and every application unit has -mtune=cortex-a55, and no strict unit has it (the tuning unrolls
-  boot and device code by 9 percent and gains nothing there);
+- every relaxed unit and every application unit has -mtune=cortex-a55, and no strict unit has it except the memory routines of
+  the classes file's tuned_strict list (the tuning unrolls boot and device code by 9 percent and gains nothing there);
 - every unit on the strict list ends with -mstrict-align as the last of the two alignment flags (the last one wins);
 - every unit on the relaxed list ends with -mno-strict-align, and a C unit of it is compiled with the force-included
   include/sunstone_relaxed_memory.h, so that it links the unaligned memory routines;
@@ -74,8 +74,9 @@ def problems(commands, classes):
             count['strict'] += 1
             if effective(arguments) != 'strict':
                 found.append('%s: on the strict list but built without -mstrict-align' % name)
-            if '-mtune=cortex-a55' in arguments:
-                found.append('%s: a strict unit built with -mtune=cortex-a55' % name)
+            tuned = any(re.search(p, path) for p in classes.get('tuned_strict', ()))
+            if ('-mtune=cortex-a55' in arguments) != tuned:
+                found.append('%s: a strict unit %s -mtune=cortex-a55' % (name, 'without' if tuned else 'built with'))
         elif is_relaxed:
             count['application' if target in classes['applications'] else 'relaxed'] += 1
             if effective(arguments) != 'relaxed':

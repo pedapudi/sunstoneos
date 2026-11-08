@@ -1,6 +1,6 @@
 # Code generation flags of the OS image
 
-The relaxed units and the application objects are compiled for the Cortex-A55 (`-mtune=cortex-a55`; six of the eight cores are A55 cores, and the A76 cores run the same code out of order). The strict units, boot and device code, are not: the tuning unrolls their loops and adds 9 percent to their instructions (206,545 against 189,587 for the strict units of the encoder image) with no measured gain. Whether a unit is compiled for strict alignment (`-mstrict-align`) depends on where and when its code runs. `cmake/codegen-align.cmake` holds the two lists that decide it, and `checks/codegen-alignment.py` enforces them on the compile database of an OS build.
+The relaxed units and the application objects are compiled for the Cortex-A55 (`-mtune=cortex-a55`; six of the eight cores are A55 cores, and the A76 cores run the same code out of order). The strict units, boot and device code, are not: the tuning unrolls their loops and adds 9 percent to their instructions (206,545 against 189,587 for the strict units of the encoder image) with no measured gain. The strict memory routines `runtime/memory.c` and `memmove.c` are the exception: the tuned loops copy 1.7 times faster (8.0 against 4.7 GB/s aligned and 1.0 against 0.6 GB/s with differing alignments, in `apps/memcpy-bench`). Whether a unit is compiled for strict alignment (`-mstrict-align`) depends on where and when its code runs. `cmake/codegen-align.cmake` holds the two lists that decide it, and `checks/codegen-alignment.py` enforces them on the compile database of an OS build.
 
 ## Why alignment matters
 
@@ -23,7 +23,7 @@ The continuation code writes the whole register for every core, and the entry of
 
 ## What the check requires
 
-- Every relaxed and application unit has `-mtune=cortex-a55`, and no strict unit has it.
+- Every relaxed and application unit has `-mtune=cortex-a55`, and no strict unit has it except the strict memory routines.
 - Every unit on the strict list ends with `-mstrict-align`, and every unit on the relaxed list with `-mno-strict-align` and the force-included header.
 - No function of a relaxed unit is reachable, by direct calls, from the EL3 roots `a733_smp_boot` and the return terminal's restore. Calls through function pointers are not followed, so a unit that EL3 reaches only through a pointer must be placed on the strict list by hand.
 - Mutations (a strict unit built without `-mstrict-align`, a strict unit given `-mno-strict-align`, a relaxed unit built strict, and a relaxed unit that EL3 calls) are refused.
