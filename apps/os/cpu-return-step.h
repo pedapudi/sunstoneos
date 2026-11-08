@@ -34,6 +34,12 @@ static inline enum os_thermal_step os_cpu_return_thermal_step(int devices_ready,
     if(devices_ready)return OS_THERMAL_STEP_STOP;
     return failing?OS_THERMAL_STEP_WAIT:OS_THERMAL_STEP_EXIT;
 }
+/* The CPU clock owner's step (os_cpu_clock_step, called by the thermal owner on every pass) once the return has lowered CPU-B: the lowering is
+ * done and published, and a later pass must do nothing. A normal return never makes a later pass, because the thermal owner stops its converter
+ * at once; a failure return makes one every tick while the thermal owner waits for the NPU to retire (os_cpu_return_thermal_step), and a pass
+ * that ran the return branch again found the driver idle (READY, not COMPLETE) and refused (cpu.c line 235, found by the retained second
+ * record of the fifth NPU failure test). The thermal owner keeps reading the sensors while it waits: its protection does not lapse in the wait. */
+static inline int os_cpu_return_clock_pass(int lowering_done) { return !lowering_done; }
 /* bounded(): the supervisor's check that the board is live. board_live() is the three terms below (apps/board/main.c; live_until is the
  * session deadline in this lifetime). The EL3 stop detail says which one refused, so that a stop is told apart from the record's
  * first failure: 0x736 is kept for the session deadline, 0x744 for board.fatal without a device record, and 0x800 | the source line of

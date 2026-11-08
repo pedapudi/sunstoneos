@@ -12,6 +12,7 @@
 #include "os.h"
 #include "sunstone_crumb.h"
 #include "cpu-return.h"
+#include "cpu-return-step.h"
 #include "../board/application.h"
 #include "application.h"
 #include "a733_cpu_clock.h"
@@ -194,6 +195,7 @@ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
     struct a733_cpu_clock *c=&owner.driver;
     /* A session without the CPU clock record reaches no register here: no read of the clock tree, no rail, no PMIC. */
     if(!os_granted(OS_GRANT_CPU_CLOCK))return 0;
+    if(!os_cpu_return_clock_pass(atomic_load_explicit(&return_done,memory_order_acquire)))return 1;   /* the lowering is done (cpu-return-step.h) */
     if(owner.phase==START&&!os_cpu_return_requested()){
         /* The session is read once, here: later steps (1 kHz while the driver works) need nothing from it. */
         const struct os_session *s=os_session_admitted();

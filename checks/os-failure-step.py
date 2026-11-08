@@ -87,12 +87,18 @@ def main():
     exits = build(args.output, step.replace(thermal, 'return OS_THERMAL_STEP_EXIT;'), 'mutant-thermal-exits')
     assert exits.returncode != 0 and '0x744' in exits.stderr, 'the check did not reproduce the stop of the NPU failure test: ' + exits.stderr
     print('the thermal owner exiting at once reproduces the stop:', exits.stderr.strip().splitlines()[0])
+    # the clock owner re-running its return branch after the lowering: reproduces the stop 0xf8e5 / second record cpu.c:235 of the fifth test
+    clock = 'static inline int os_cpu_return_clock_pass(int lowering_done) { return !lowering_done; }'
+    assert step.count(clock) == 1
+    reruns = build(args.output, step.replace(clock, 'static inline int os_cpu_return_clock_pass(int lowering_done) { (void)lowering_done; return 1; }'), 'mutant-clock-reruns')
+    assert reruns.returncode != 0 and '0x744' in reruns.stderr, 'the check did not notice a clock owner that re-runs its return while the thermal owner waits'
+    print('the clock owner re-running its return while the thermal owner waits reproduces the stop:', reruns.stderr.strip().splitlines()[0])
     fatal = 'if(fatal)return npu_line?OS_BOUNDED_FATAL_NPU|(npu_line&0x3ffu):OS_BOUNDED_FATAL;'
     assert step.count(fatal) == 1
     blind = build(args.output, step.replace(fatal, ''), 'mutant-ignores-fatal')
     assert blind.returncode != 0, 'the check did not notice a bounded() that ignores board.fatal'
     print('PASS failure with the NPU open: an owner that closes returns cleanly at 40 instants, one that never closes ends at the 3 s limit, '
-          'a device failure stops with the NPU line, the thermal owner waits for the retirement, the supervisor does not stop the NPU from outside; 5 mutants fail')
+          'a device failure stops with the NPU line, the thermal owner waits for the retirement, the supervisor does not stop the NPU from outside; 6 mutants fail')
 
 
 if __name__ == '__main__':

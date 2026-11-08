@@ -31,6 +31,8 @@ static struct result run(int normal_return, unsigned npu_open, unsigned owner_po
         /* the thermal owner, once the return is requested and the clock is lowered (10 ms after the claim): exits at once when the devices are not
          * retired and no wait is allowed; the exit closes admission (board.fatal) */
         if (requested && now - since >= 10000 && !thermal_done) {
+            /* the thermal owner's pass calls the clock owner's step: a pass after the lowering is done must do nothing */
+            if (!retired && failing && os_cpu_return_clock_pass(1)) fatal = 1;     /* a pass while waiting */
             switch (os_cpu_return_thermal_step(retired, failing)) {
             case OS_THERMAL_STEP_EXIT: fatal = 1; break;
             case OS_THERMAL_STEP_WAIT: break;
