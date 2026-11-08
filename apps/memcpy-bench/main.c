@@ -7,7 +7,12 @@
  * Each case calls one routine on a source and a destination in the 16 MiB work region, for 32 MiB of copied bytes (so a case
  * with a small size makes many calls), and records the elapsed 24 MHz counter ticks. The sizes cover a block that stays in the
  * L1 data cache, one that stays in the L2 and one that comes from DRAM. The offsets give an aligned pair, a source that is
- * not aligned like the destination, and a pair that both lie off an 8-byte boundary. The result lists the cases in order. */
+ * not aligned like the destination, and a pair that both lie off an 8-byte boundary. The result lists the cases in order.
+ *
+ * Six further cases copy rows the way the encoder fills the position window of its attention step: 176 rows of 382 bytes, each
+ * after a memset of 40 bytes, from a table whose rows are 2 bytes off an 8-byte boundary, into rows 382 bytes apart. The
+ * table rows lie 17000 bytes apart and rotate through 8 MiB, so the source is not in the cache ("cold rows"), or 1000 bytes
+ * apart in 176 KB ("warm rows"). Each is run with the strict memcpy, ss_memcpy_unaligned and ss_memmove_unaligned. */
 #include "memcpy_bench-app.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -18,13 +23,14 @@ void *memcpy(void *restrict dest, const void *restrict src, size_t count);
 void *memset(void *dest, int value, size_t count);
 void *ss_memcpy_unaligned(void *restrict dest, const void *restrict src, size_t count);
 void *ss_memset_unaligned(void *dest, int value, size_t count);
+void *ss_memmove_unaligned(void *dest, const void *src, size_t count);
 
 struct bench_case { uint32_t routine, size, src_offset, dst_offset; uint64_t iterations, ticks; };
 _Static_assert(sizeof(struct bench_case) == 32, "record layout");
 struct bench_result { uint32_t cases, cluster_mhz_hint; uint64_t counter_hz; struct bench_case record[96]; };
 _Static_assert(sizeof(struct bench_result) <= 4096, "output_limit");
 
-enum { STRICT_COPY, UNALIGNED_COPY, STRICT_SET, UNALIGNED_SET };
+enum { STRICT_COPY, UNALIGNED_COPY, STRICT_SET, UNALIGNED_SET, ROWS_STRICT, ROWS_COPY, ROWS_MOVE };
 #define TARGET_BYTES (32u << 20)
 
 static struct bench_result result;
@@ -54,6 +60,35 @@ static void measure(unsigned routine, uint8_t *work, uint32_t size, uint32_t src
     *c = (struct bench_case){routine, size, src_offset, dst_offset, iterations, end - begin};
 }
 
+#define ROW_COUNT 176u
+#define ROW_BYTES 382u
+
+/* One pass of the position window: for each row a memset of 40 bytes, then the copy of the row. */
+static inline void rows_pass(unsigned routine, uint8_t *dst, const uint8_t *table, uint32_t stride, uint32_t span, uint64_t pass)
+{
+    for (unsigned row = 0; row < ROW_COUNT; ++row) {
+        uint8_t *const d = dst + (size_t)row * ROW_BYTES;
+        const uint8_t *const s = table + 34 + (((pass * ROW_COUNT + row) * (uint64_t)stride) % span);
+        ss_memset_unaligned(d, 0, 40);
+        if (routine == ROWS_STRICT) memcpy(d + 40, s, ROW_BYTES - 40);
+        else if (routine == ROWS_COPY) ss_memcpy_unaligned(d + 40, s, ROW_BYTES - 40);
+        else ss_memmove_unaligned(d + 40, s, ROW_BYTES - 40);
+    }
+    __asm__ volatile("" ::: "memory");
+}
+
+static void measure_rows(unsigned routine, uint8_t *work, uint32_t stride, uint32_t span, uint64_t passes)
+{
+    uint8_t *const table = work, *const dst = work + (12u << 20);
+    rows_pass(routine, dst, table, stride, span, 0);
+    ss_progress();
+    const uint64_t begin = ss_counter_ticks();
+    for (uint64_t pass = 0; pass < passes; ++pass) rows_pass(routine, dst, table, stride, span, pass);
+    const uint64_t end = ss_counter_ticks();
+    struct bench_case *c = &result.record[result.cases++];
+    *c = (struct bench_case){routine, ROW_COUNT * ROW_BYTES, stride, 0, passes, end - begin};
+}
+
 void memcpy_bench_main(const struct ss_grant *grant)
 {
     uint8_t *const work = grant->regions[MEMCPY_BENCH_REGION_WORK].base;
@@ -71,5 +106,7 @@ void memcpy_bench_main(const struct ss_grant *grant)
         for (unsigned o = 0; o < 2; ++o)
             for (unsigned routine = STRICT_SET; routine <= UNALIGNED_SET; ++routine)
                 measure(routine, work, set_sizes[s], 0, o ? 3 : 0);
+    for (unsigned routine = ROWS_STRICT; routine <= ROWS_MOVE; ++routine) measure_rows(routine, work, 17000, 8u << 20, 400);
+    for (unsigned routine = ROWS_STRICT; routine <= ROWS_MOVE; ++routine) measure_rows(routine, work, 1000, 176000, 400);
     ss_finish(&result, sizeof result);
 }

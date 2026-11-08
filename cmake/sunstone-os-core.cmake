@@ -563,9 +563,9 @@ endif()
 # hot loops to the other alignment and change their speed on the Cortex-A55. The NPU encoder's scalar conversion loops
 # ran 25% slower with its conversion function at 4 modulo 8 than at 0.
 target_compile_options(sunstone-a733-os-core PRIVATE -falign-functions=16)
-# Every OS unit, the applications' objects included, is scheduled for the in-order Cortex-A55 that six of the eight cores are
-# (the Cortex-A76 cores run the same code, out of order). The units that keep -mstrict-align are listed in codegen-align.cmake.
-target_compile_options(sunstone-a733-os-core PRIVATE -mtune=cortex-a55)
+# The relaxed units and the applications are scheduled for the in-order Cortex-A55 that six of the eight cores are (the
+# Cortex-A76 cores run the same code, out of order); see cmake/codegen-align.cmake. The strict units, which are boot and device
+# code, are not: the tuning unrolls their loops, which adds 9 percent to their instructions and gains nothing measurable.
 # Publish the exact OS compile configuration to application and device objects.
 foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_FEATURES)
   get_target_property(value sunstone-a733-os-core ${property})

@@ -5,7 +5,8 @@ cmake/codegen-align.cmake lists the units that must keep -mstrict-align (code th
 Device memory) and the units that run under Normal write-back memory and are built with -mno-strict-align; the build writes
 both lists to alignment-classes.json beside compile_commands.json. This check reads the two files of an OS build and requires:
 
-- every unit of the OS image's targets and of its applications has -mtune=cortex-a55;
+- every relaxed unit and every application unit has -mtune=cortex-a55, and no strict unit has it (the tuning unrolls
+  boot and device code by 9 percent and gains nothing there);
 - every unit on the strict list ends with -mstrict-align as the last of the two alignment flags (the last one wins);
 - every unit on the relaxed list ends with -mno-strict-align, and a C unit of it is compiled with the force-included
   include/sunstone_relaxed_memory.h, so that it links the unaligned memory routines;
@@ -65,8 +66,6 @@ def problems(commands, classes):
     found, count = [], {'strict': 0, 'relaxed': 0, 'default': 0, 'application': 0}
     for target, path, arguments in units(commands, classes):
         name = path
-        if '-mtune=cortex-a55' not in arguments:
-            found.append('%s: not built with -mtune=cortex-a55' % name)
         is_strict = any(p.search(path) for p in strict)
         is_relaxed = any(p.search(path) for p in relaxed) or target in classes['applications']
         if is_strict and is_relaxed:
@@ -75,10 +74,14 @@ def problems(commands, classes):
             count['strict'] += 1
             if effective(arguments) != 'strict':
                 found.append('%s: on the strict list but built without -mstrict-align' % name)
+            if '-mtune=cortex-a55' in arguments:
+                found.append('%s: a strict unit built with -mtune=cortex-a55' % name)
         elif is_relaxed:
             count['application' if target in classes['applications'] else 'relaxed'] += 1
             if effective(arguments) != 'relaxed':
                 found.append('%s: on the relaxed list but built with -mstrict-align' % name)
+            if '-mtune=cortex-a55' not in arguments:
+                found.append('%s: not built with -mtune=cortex-a55' % name)
             if re.search(r'\.c$', path) and not path.endswith('/runtime/memory_unaligned.c') \
                     and not any(HEADER in a for a in arguments):
                 found.append('%s: relaxed C unit without the force-included %s' % (name, HEADER))

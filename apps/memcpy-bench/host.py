@@ -4,7 +4,8 @@ import struct
 
 HEADER = struct.Struct('<IIQ')
 RECORD = struct.Struct('<IIIIQQ')
-ROUTINES = ('strict memcpy', 'unaligned memcpy', 'strict memset', 'unaligned memset')
+ROUTINES = ('strict memcpy', 'unaligned memcpy', 'strict memset', 'unaligned memset',
+            'rows, strict memcpy', 'rows, unaligned memcpy', 'rows, unaligned memmove')
 
 
 def decode(payload):
@@ -22,4 +23,6 @@ def decode(payload):
                      'iterations': iterations, 'ticks': ticks,
                      'mb_per_s': round(size * iterations / seconds / 1e6, 1),
                      'ns_per_call': round(seconds / iterations * 1e9, 1)})
+        if routine >= 4:
+            rows[-1]['ns_per_row'] = round(seconds / iterations / 176 * 1e9, 1)
     return {'cases': rows, 'counter_hz': hz}
