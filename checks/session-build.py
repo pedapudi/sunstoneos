@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Check that tools/session.py builds a session that the image's own EL3 admission admits, and refuses what it cannot determine.
 
-The check uses two images that the gate builds from the tree under test (checks/gate-inputs.json): a CPU-return image whose application
-declares no NPU and one whose application declares it (ss_application_npu). It reads no queue entry and no other worktree's build. For each image it requires:
+The check uses three images that the gate builds from the tree under test (checks/gate-inputs.json): a CPU-return image whose application
+declares no NPU and no device, one whose application declares the NPU (ss_application_npu), and the GPU image, whose manifest requires the GPU. It reads no queue entry and no other worktree's build. For each image it requires:
   decode      tools/session.py check decodes the built session with apps/os/host.py and finds no disagreement with the image;
+  devices     the session grants the device bits the manifest declares and the image can serve: the GPU session grants the GPU (0x10), the
+              NPU session grants no device (the NPU is a service), and a manifest that declares none grants none;
   admission   the image's own EL3 admission (tools/host_admission.py, compiled from the image's source tree) admits the session and its
               launch contract (admitted: true);
 and, across them:
@@ -11,10 +13,10 @@ and, across them:
               (session_decode); a session with another manifest digest is refused by decode and by the EL3 admission;
   refusals    a field that no source determines, or a source that contradicts the image, is an error that names it: a facts file
               without a thermal field, an NPU declaration that differs from the image's or is given for an application that declares
-              no NPU, a device grant without pinned board facts, an input count that differs from the manifest;
+              no NPU, a required device the facts do not pin, an input count that differs from the manifest;
   source      the host admission refuses a source tree other than the one the image's build directory was configured from, a tree that no
               longer exists, and an image that does not carry the build ID its build directory recorded.
-Usage: session-build.py --control-elf ELF --npu-elf ELF --output DIR
+Usage: session-build.py --control-elf ELF --npu-elf ELF --gpu-elf ELF --output DIR
 """
 import argparse
 import copy
@@ -23,7 +25,7 @@ import json
 from pathlib import Path
 import struct
 import sys
-GATE_RUNS = [['--control-elf', '{elf:ret-latency}', '--npu-elf', '{elf:ret-npu-load}', '--output', '{output}']]
+GATE_RUNS = [['--control-elf', '{elf:ret-latency}', '--npu-elf', '{elf:ret-npu-load}', '--gpu-elf', '{elf:ret-gpu}', '--output', '{output}']]
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -65,6 +67,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--control-elf', type=Path, required=True, help='a CPU-return OS image whose application declares no NPU')
     parser.add_argument('--npu-elf', type=Path, required=True, help='a CPU-return OS image whose application declares the NPU')
+    parser.add_argument('--gpu-elf', type=Path, required=True, help='a CPU-return OS image with the GPU service whose application requires the GPU')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     out = args.output
@@ -74,21 +77,25 @@ def main():
     host = session.records()
     passed = []
     built = {}
-    for name, image in (('control', args.control_elf), ('npu', args.npu_elf)):
+    expected_devices = {'control': 0, 'npu': 0, 'gpu': 0x10}
+    for name, image in (('control', args.control_elf), ('npu', args.npu_elf), ('gpu', args.gpu_elf)):
         directory = out / name
         directory.mkdir(exist_ok=True)
         # The NPU declaration is the image's own (ss_application_npu); the builder takes it from there.
         inputs = placeholders(host, image, directory)
-        record = session.build(image, directory, inputs=inputs, clock_grant=True)
+        declares_grant = bool(host.image_manifest(image)['manifest']['clock_use'] & 1)
+        record = session.build(image, directory, inputs=inputs, clock_grant=declares_grant)
         raw = (directory / 'template/session.bin').read_bytes()
-        assert record['profile'] == name, record['profile']
+        assert record['profile'] == ('control' if name == 'gpu' else name), record['profile']
+        assert record['devices'] == expected_devices[name], (name, record['devices'])
         report = session.inspect(raw, image, host)
         assert not report['problems'], (name, report['problems'])
+        assert report['devices'] == expected_devices[name], (name, report['devices'])
         assert session.find_session(directory) == directory / 'template/session.bin'
         verdict = session.admit(image, raw)
         assert verdict['admitted'] is True, (name, verdict)
         built[name] = (image, raw, inputs)
-        passed.append(f"{name} image: {len(raw)} bytes, services {', '.join(record['services'])}, decoded without disagreement, admitted: true")
+        passed.append(f"{name} image: devices {record['devices']:#x}, {len(raw)} bytes, services {', '.join(record['services'])}, decoded without disagreement, admitted: true")
     # mutation
     image, raw, inputs = built['npu']
     flags = bytes(raw).find(struct.pack('<Q', host.SERVICE_MAGIC[host.NPU])) + 52              # os_npu_session.flags
@@ -137,12 +144,35 @@ def main():
     other.write_text(json.dumps({'slots': 2, 'in_flight': 1, 'graphs': 1, 'links': 0, 'graph_bytes': 1 << 20, 'tensor_bytes': 1 << 18}))
     refusal(lambda: session.build(npu[0], out / 'r2', npu_declaration=other, inputs=npu[2]), 'npu declaration', 'declares')
     refusal(lambda: session.build(control[0], out / 'r2c', npu_declaration=other, inputs=control[2]), 'npu declaration', 'declares no NPU')
-    refusal(lambda: session.build(npu[0], out / 'r3', inputs=npu[2], devices=1), 'devices')
-    refusal(lambda: session.build(control[0], out / 'r4', inputs=control[2], devices=1), 'devices')
     (out / 'extra-input.bin').write_bytes(b'x')
     refusal(lambda: session.build(control[0], out / 'r5', inputs=control[2] + [out / 'extra-input.bin']), 'inputs')   # one more file than the manifest has regions
     refusal(lambda: session.pack('thermal', {'magic': 1}), 'thermal field')
-    passed.append('a field no source gives, or a declaration the image contradicts, is an error naming it (thermal apb1, npu declaration, devices, inputs)')
+    passed.append('a field no source gives, or a declaration the image contradicts, is an error naming it (thermal apb1, npu declaration, inputs)')
+    # Devices come from the manifest and the image, with no flag.
+    names = load('session_build_names', ROOT / 'tools/sunstone-manifest.py').DEVICES
+    declared = lambda required=0, optional=0: {'devices_required': required, 'devices_optional': optional}
+    linked = {session.GRANTABLE['gpu']: (0, 0)}
+    assert session.devices_for(declared(), linked, names) == (0, {})
+    assert session.devices_for(declared(names['gpu']), linked, names) == (names['gpu'], {})
+    assert session.devices_for(declared(0, names['gpu']), linked, names) == (names['gpu'], {})
+    granted, left_out = session.devices_for(declared(0, names['gpu'] | names['audio-i2s'] | names['usb-storage']), linked, names)
+    assert granted == names['gpu'] and set(left_out) == {'audio-i2s', 'usb-storage'}, (granted, left_out)
+    assert session.devices_for(declared(0, names['gpu']), {}, names)[0] == 0                      # no GPU service in the image
+    refusal(lambda: session.devices_for(declared(names['gpu']), {}, names), 'devices', 'gpu', 'service')
+    refusal(lambda: session.devices_for(declared(names['usb-storage']), linked, names), 'devices', 'usb-storage', 'pins no facts')
+    refusal(lambda: session.devices_for(declared(names['radio']), linked, names), 'devices', 'radio')
+    passed.append('devices: none declared grants none; the GPU is granted when declared and linked, optional or required; a required class without pinned facts is refused naming it, an optional one is left out')
+    # With the device bits forced to 0 the GPU session no longer matches the manifest that requires the GPU.
+    image, raw, _ = built['gpu']
+    bare = bytearray(raw)
+    fields = list(host.HEADER.unpack_from(bare, host.PREFIX_BYTES))
+    assert fields[4] == 0x10, fields
+    fields[4] = 0
+    host.HEADER.pack_into(bare, host.PREFIX_BYTES, *fields)
+    refusal(lambda: session.inspect(bytes(bare), image, host), 'device grant differs from manifest')
+    verdict = session.admit(image, bytes(bare))
+    assert verdict['admitted'] is False and verdict['term'] == 'session_decode', verdict
+    passed.append('the GPU session with its device bits forced to 0 is refused by decode and by the EL3 admission')
     # one source tree
     image = built['control'][0]
     build_dir = admission.find_build(image)[0]

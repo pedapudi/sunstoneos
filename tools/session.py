@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build and check the typed board session of a SunstoneOS image, with no device access and no old queue entry.
 
-    session.py build IMAGE --out DIR [--manifest M] [--npu-declaration D] [--input FILE ...] [--devices MASK]
+    session.py build IMAGE --out DIR [--manifest M] [--npu-declaration D] [--input FILE ...]
                              [--decoder FILE]
     session.py check DIR_OR_SESSION [--image IMAGE] [--admit] [--json]
 
@@ -11,10 +11,13 @@ generation and lease and re-derives the live thermal fields when it launches. --
 apps/npu-graphs/host.py writes) to DIR/decoder.py, the file that `board.py submit --decoder` takes. Every field is read from the image or from tools/session-facts.json:
 
   image identity, manifest digest   the image's build ID (tools/check-a733-smp.py) and its sunstone_manifest section
-  devices, flags, workload          the manifest's required devices; --devices adds optional ones (only 0 has pinned board facts)
+  devices, flags, workload          the device classes the manifest declares (required or optional) that the session can grant: the GPU, when the
+                                    image links the GPU service. It has no session record, so the bit and the image's service are the whole
+                                    grant. Every other class needs facts this file does not pin (see DEVICE_FACTS); an optional one is left out
+                                    and named in session.json, a required one is an error that names what is missing
   which service records             the thermal record always; the CPU clock grant only with --clock-grant (and --perf), for a manifest
                                     that declares cpu.clock_grants (cpu.perf); the NPU service when the application declares the NPU
-                                    (ss_application_npu); a DMA service or any device (the radio among them) is refused
+                                    (ss_application_npu; the NPU is a service, not a device bit); a DMA service is refused
   NPU flags                         the image's ss_application_npu (the manifest's npu.observe)
   NPU pool request                  --npu-pool BASE:BYTES (default 0:0: the allocator chooses)
   NPU declaration                   the image's ss_application_npu (the manifest's npu section); --npu-declaration D (a manifest with an
@@ -98,8 +101,45 @@ DERIVED = {'prefix': {'magic', 'version', 'bytes', 'epoch', 'generation', 'lease
 # the NPU in its manifest records the declaration (tools/sunstone-manifest.py).
 SYMBOLS = {'npu': 'ss_application_npu'}
 REVIEWED = ROOT / 'tools/cpu-reviewed-points.json'
+# Device classes a session can grant, and the symbol that shows the image links the service behind each. The GPU has no session
+# extent; the decoder (apps/os/host.py) and the EL3 admission (apps/os/session.c) check only the bit, the workload word of the board
+# prefix (2 for a session without USB storage, which the control profile carries) and, in the image, that the GPU service is linked.
+GRANTABLE = {'gpu': 'os_gpu_queue_start_entry'}
+# What the other classes need and the facts file does not pin: a grant of any of them is refused or left out.
+DEVICE_FACTS = {'usb-storage': 'the USB workload facts (workload 0, latch, Type-C and USB2 owners)',
+                'usb-keyboard': 'the USB workload facts (workload 0 or 4, latch, Type-C and USB2 owners)',
+                'audio-i2s': 'the audio extent and the DMA0 authority',
+                'audio-headset': 'the Bluetooth profile digest and the headset extent',
+                'usb-mouse': 'the USB class services, which the returning lifetime excludes',
+                'usb-serial': 'the USB class services, which the returning lifetime excludes',
+                'usb-camera': 'the USB class services, which the returning lifetime excludes',
+                'radio': 'the radio profile digest and the Wi-Fi credential'}
+
+
+def devices_for(manifest, symbols, names):
+    """(granted bits, {name: reason} of the optional classes left out) for a manifest and the symbols of its image.
+
+    names maps each class to its bit (tools/sunstone-manifest.py DEVICES). A class the manifest does not declare is not granted.
+    A declared class is granted when the facts allow it and the image links its service; a required class that cannot be granted
+    is an error, an optional one is reported."""
+    declared = manifest['devices_required'] | manifest['devices_optional']
+    granted, left_out = 0, {}
+    for name, bit in names.items():
+        if not declared & bit:
+            continue
+        if name in GRANTABLE and GRANTABLE[name] in symbols:
+            granted |= bit
+            continue
+        reason = ('the image links no %s service (symbol %s)' % (name, GRANTABLE[name]) if name in GRANTABLE
+                  else 'tools/session-facts.json pins no facts for %s' % DEVICE_FACTS.get(name, 'it'))
+        if manifest['devices_required'] & bit:
+            raise SessionError('devices: the manifest requires %s and %s' % (name, reason))
+        left_out[name] = reason
+    return granted, left_out
+
+
 # Services whose records the facts do not pin, refused when the image links them. Every image links the I2S service and
-# the radio station; a session grants them only with the audio-i2s or radio device, which the device rule below refuses.
+# the radio station; a session grants them only with the audio-i2s or radio device, which devices_for leaves out or refuses.
 UNSUPPORTED = {'os_dma_profile': 'DMA service record and its physical authority',
                'usb_memory_extent_valid': 'USB memory extent (USB class devices)'}
 
@@ -228,7 +268,7 @@ def declaration_of(path):
     return values
 
 
-def describe(image, manifest_path=None, npu_declaration=None, devices=None, host=None, clock_grant=False, perf=None):
+def describe(image, manifest_path=None, npu_declaration=None, host=None, clock_grant=False, perf=None):
     """Everything about IMAGE that the session depends on, or a SessionError naming the field that cannot be determined."""
     host = host or records()
     image = Path(image)
@@ -250,13 +290,9 @@ def describe(image, manifest_path=None, npu_declaration=None, devices=None, host
         if packed != info['section']:
             raise SessionError('manifest: %s does not pack to the manifest section of %s' % (manifest_path, image))
         declared = tool.load(manifest_path).get('npu')
-    granted = manifest['devices_required'] | (devices or 0)
-    if granted & ~(manifest['devices_required'] | manifest['devices_optional']):
-        raise SessionError('devices: %#x is not among the manifest\'s required %#x and optional %#x devices'
-                           % (devices, manifest['devices_required'], manifest['devices_optional']))
-    if granted:
-        raise SessionError('devices: the session grants %#x, and tools/session-facts.json pins board facts only for a session that grants none' % granted)
-    plan = {'image': str(image), 'manifest': manifest, 'manifest_sha256': info['sha256'], 'devices': granted,
+    names = load('session_tool_devices', ROOT / 'tools/sunstone-manifest.py').DEVICES
+    granted, left_out = devices_for(manifest, symbols, names)
+    plan = {'image': str(image), 'manifest': manifest, 'manifest_sha256': info['sha256'], 'devices': granted, 'devices_left_out': left_out,
             'flags': host.BIND_SID, 'services': ['thermal'], 'symbols': symbols, 'elf': elf}
     if clock_grant or perf:
         # A CPU clock grant is written only on request, and only for an application whose manifest declares that it may use
@@ -335,11 +371,11 @@ def build_session(plan, inputs, fact_file=FACTS, host=None, entropy=secrets.rand
     return raw, {'epoch': epoch, 'generation': generation, 'lease': lease, 'address': address, 'identity': identity.hex()}
 
 
-def build(image, out, manifest=None, npu_declaration=None, inputs=(), devices=None, decoder=None, fact_file=FACTS, npu_pool=(0, 0),
+def build(image, out, manifest=None, npu_declaration=None, inputs=(), decoder=None, fact_file=FACTS, npu_pool=(0, 0),
           clock_grant=False, perf=None):
     """Write OUT/template/session.bin, input files and session.json; returns the record."""
     host = records()
-    plan = describe(image, manifest, npu_declaration, devices, host, clock_grant, perf)
+    plan = describe(image, manifest, npu_declaration, host, clock_grant, perf)
     plan['npu_pool_request'] = tuple(npu_pool)
     values = input_values(plan, inputs, host)
     raw, ids = build_session(plan, values, fact_file, host)
@@ -353,7 +389,7 @@ def build(image, out, manifest=None, npu_declaration=None, inputs=(), devices=No
               'manifest_sha256': plan['manifest_sha256'], 'application': plan['manifest']['name'], 'profile': plan['profile'],
               'facts': str(Path(fact_file).resolve().relative_to(ROOT)) if Path(fact_file).resolve().is_relative_to(ROOT) else str(fact_file),
               'facts_sha256': hashlib.sha256(Path(fact_file).read_bytes()).hexdigest(),
-              'services': plan['services'], 'devices': plan['devices'], 'flags': plan['flags'], 'session_bytes': len(raw),
+              'services': plan['services'], 'devices': plan['devices'], 'devices_left_out': plan['devices_left_out'], 'flags': plan['flags'], 'session_bytes': len(raw),
               'session_sha256': hashlib.sha256(raw).hexdigest(), **ids,
               'inputs': [{'file': 'template/input-%d.bin' % i, 'bytes': len(v), 'sha256': hashlib.sha256(v).hexdigest()} for i, v in enumerate(values)]}
     if 'npu' in plan['services']:
@@ -485,7 +521,6 @@ def main(argv=None):
     b.add_argument('--manifest', type=Path, help='the application manifest JSON; it must pack to the image\'s manifest section')
     b.add_argument('--npu-declaration', type=Path, help='manifest with an npu section, or a JSON object of slots, in_flight, graphs, links')
     b.add_argument('--input', type=Path, action='append', default=[], help='a manifest input region\'s content, in region order (repeat)')
-    b.add_argument('--devices', type=lambda x: int(x, 0), help='optional manifest devices to grant besides the required ones')
     b.add_argument('--clock-grant', action='store_true', help='grant the CPU clock at the reviewed points (the manifest must declare cpu.clock_grants)')
     b.add_argument('--perf', choices=('high', 'low'), help='with --clock-grant: the performance-mode service and its boot mode (the manifest must declare cpu.perf)')
     b.add_argument('--decoder', type=Path, help='the application decoder, copied to OUT/decoder.py')
@@ -500,7 +535,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == 'build':
-            record = build(args.image, args.out, args.manifest, args.npu_declaration, args.input, args.devices, args.decoder,
+            record = build(args.image, args.out, args.manifest, args.npu_declaration, args.input, args.decoder,
                            npu_pool=args.npu_pool, clock_grant=args.clock_grant, perf=args.perf)
             print('wrote %s (%d bytes, profile %s, services %s)' % (args.out / 'template/session.bin', record['session_bytes'],
                                                                    record['profile'], ', '.join(record['services'])))

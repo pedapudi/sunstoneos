@@ -178,7 +178,7 @@ missing, and a `-D` option of yours replaces the pinned one.
 
 `session.py build IMAGE --out DIR` writes the typed board session of an image to
 `DIR/template/session.bin`, from the image's own symbols and manifest and the
-board facts in `session-facts.json`. `session.py check DIR [--admit]` decodes it
+board facts in `session-facts.json`. It grants the devices the manifest declares and the image can serve (the GPU), and takes no option for them. `session.py check DIR [--admit]` decodes it
 and runs the image's EL3 admission. `board.py submit IMAGE --template
 DIR/template ... --wait` queues the run, waits, and prints the outcome, stage,
 first failure and decoded summary. [The runner document](../docs/board-runner.md)

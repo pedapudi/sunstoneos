@@ -134,8 +134,12 @@ CPU clock grant, NPU), the NPU catalogue digest, client model and pool from the
 image's symbols, and the board and evidence facts of `tools/session-facts.json`.
 It uses the encoder of `apps/os/host.py`, which the runner and the host admission
 also use, and it reads no earlier queue entry. A field that no source determines
-is an error that names it; an image with an audio, DMA or radio service, and a
-grant of any device, are refused because the facts file pins nothing for them.
+is an error that names it; an image with a DMA service is refused because the facts file pins nothing for it.
+The session grants the device classes that the manifest declares and the image can serve, with no option to set bits: the GPU
+(required or optional) when the image links the GPU service, which has no session record and needs only the device bit and the
+control profile's workload 2. The NPU is a service, not a device bit; the manifest's `npu` section selects it. Every other class
+(USB storage and keyboard, I2S and headset capture, the USB class devices, the radio) needs facts the file does not pin: a required
+one is an error that names what is missing, an optional one is left out and listed as `devices_left_out` in `session.json`.
 `tools/session.py check DIR [--admit]` decodes the session, compares it with the
 image and, with `--admit`, runs the image's own EL3 admission on it. An NPU image
 needs `--npu-declaration` (a manifest with an `npu` section, or a JSON object of
