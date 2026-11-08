@@ -61,6 +61,7 @@ int board_radio_profile_runtime(struct board_radio_profile *o, const struct boar
 #include "../../apps/os/cpu-return.h"
 uint32_t os_cpu_return_entry_refusal;
 int os_cpu_return_requested(void) { return 0; }
+int os_cpu_return_failing(void) { return 0; }
 uint64_t os_cpu_return_cutoff(void) { return UINT64_MAX; }
 int os_cpu_return_start(void) { ABSENT("cpu return start"); }
 void os_cpu_return_begin(const uint8_t *data, size_t bytes) { (void)data; (void)bytes; ABSENT("cpu return begin"); }

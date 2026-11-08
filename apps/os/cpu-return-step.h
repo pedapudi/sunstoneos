@@ -23,6 +23,17 @@ static inline enum os_failure_step os_cpu_return_failure_step(int failing,int re
     if(!requested||devices_ready)return OS_FAILURE_STEP_NONE;
     return failing?OS_FAILURE_STEP_WAIT:OS_FAILURE_STEP_DEVICES;
 }
+/* The thermal owner's step once the return is requested and the CPU clock is lowered (os_thermal_task): it stops its converter only when the
+ * devices are retired. A normal return starts after the application retired its NPU, so not ready there is a defect (exit). A failure return
+ * starts at the failure: the application's NPU owner closes its queue only after it sees ss_live() == -1, so the owner waits for it; the supervisor
+ * ends a return that takes longer than OS_FAILURE_RETURN_US (0x742). Exiting at once was the setter of board.fatal in the NPU failure test
+ * (thermal.c line 381, found by the retained second record). */
+enum os_thermal_step { OS_THERMAL_STEP_STOP, OS_THERMAL_STEP_WAIT, OS_THERMAL_STEP_EXIT };
+static inline enum os_thermal_step os_cpu_return_thermal_step(int devices_ready,int failing)
+{
+    if(devices_ready)return OS_THERMAL_STEP_STOP;
+    return failing?OS_THERMAL_STEP_WAIT:OS_THERMAL_STEP_EXIT;
+}
 /* bounded(): the supervisor's check that the board is live. board_live() is the three terms below (apps/board/main.c; live_until is the
  * session deadline in this lifetime). The EL3 stop detail says which one refused, so that a stop is told apart from the record's
  * first failure: 0x736 is kept for the session deadline, 0x744 for board.fatal without a device record, and 0x800 | the source line of

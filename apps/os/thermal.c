@@ -8,6 +8,7 @@
 #include "os.h"
 #include "application.h"
 #include "cpu-return.h"
+#include "cpu-return-step.h"
 #include "platform.h"
 #include "../board/application.h"
 #include "../board/session.h"
@@ -378,7 +379,11 @@ void os_thermal_task(void *unused)
     for(;;){
         if(step()==1)BOARD_PROGRESS(OS_SERVICE_THERMAL);
         if(os_cpu_return_requested()&&os_cpu_return_clock_done()){
-            if(!os_cpu_return_devices_ready()){cancel();platform_exit(6);}
+            switch(os_cpu_return_thermal_step(os_cpu_return_devices_ready(),os_cpu_return_failing())){
+            case OS_THERMAL_STEP_EXIT:cancel();platform_exit(6);
+            case OS_THERMAL_STEP_WAIT:vTaskDelay(1);continue;     /* the application's NPU owner is closing its queue (cpu-return-step.h) */
+            case OS_THERMAL_STEP_STOP:break;
+            }
             if(!mask()){cancel();platform_exit(6);}
             while((*(volatile uint32_t *)(uintptr_t)thermal.irq.distributor&(UINT32_C(1)<<31))){
                 if(!live()){cancel();platform_exit(6);}vTaskDelay(1);

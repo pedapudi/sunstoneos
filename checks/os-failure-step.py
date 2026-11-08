@@ -81,12 +81,18 @@ def main():
     print('the supervisor stopping the NPU from outside reproduces the stop:', outside.stderr.strip().splitlines()[0])
     at_once = build(args.output, step.replace(wait, 'return OS_FAILURE_STEP_DEVICES;'), 'mutant-stops-at-el3')
     assert at_once.returncode != 0, 'the check did not notice a failure return that stops at EL3'
+    # the thermal owner exiting at once, as before: reproduces the stop 0x744 of the NPU failure test
+    thermal = 'return failing?OS_THERMAL_STEP_WAIT:OS_THERMAL_STEP_EXIT;'
+    assert step.count(thermal) == 1
+    exits = build(args.output, step.replace(thermal, 'return OS_THERMAL_STEP_EXIT;'), 'mutant-thermal-exits')
+    assert exits.returncode != 0 and '0x744' in exits.stderr, 'the check did not reproduce the stop of the NPU failure test: ' + exits.stderr
+    print('the thermal owner exiting at once reproduces the stop:', exits.stderr.strip().splitlines()[0])
     fatal = 'if(fatal)return npu_line?OS_BOUNDED_FATAL_NPU|(npu_line&0x3ffu):OS_BOUNDED_FATAL;'
     assert step.count(fatal) == 1
     blind = build(args.output, step.replace(fatal, ''), 'mutant-ignores-fatal')
     assert blind.returncode != 0, 'the check did not notice a bounded() that ignores board.fatal'
     print('PASS failure with the NPU open: an owner that closes returns cleanly at 40 instants, one that never closes ends at the 3 s limit, '
-          'a device failure stops with the NPU line, the supervisor does not stop the NPU from outside; 4 mutants fail')
+          'a device failure stops with the NPU line, the thermal owner waits for the retirement, the supervisor does not stop the NPU from outside; 5 mutants fail')
 
 
 if __name__ == '__main__':
