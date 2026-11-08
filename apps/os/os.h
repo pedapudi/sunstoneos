@@ -122,6 +122,7 @@ unsigned os_composition_refused(unsigned granted,unsigned lifetime);
 /* ORs the cores of this many workers of a main task on main_core into *mask; 0 when the manifest asks for more than its
  * cluster order holds (apps/os/grants.c). */
 int os_worker_cores(unsigned main_core,unsigned workers,uint32_t *mask);
+int os_npu_core_granted(unsigned main_core,uint32_t worker_cores,unsigned npu_core);
 const char *os_composition_reason(unsigned row);
 #define OS_SESSION_VERSION 1u
 int os_session_valid(const struct os_session *);

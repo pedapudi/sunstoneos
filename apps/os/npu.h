@@ -7,6 +7,9 @@
 #define OS_NPU_CORE 1u
 #endif
 #include "npu-session.h"
+/* The core that the NPU's interrupt is routed to and on which the EL0 queue accepts a submission. It is the one source of the
+ * grant's npu_core (apps/os/application.c) and of the queue's own test (apps/os/npu-queue.c). */
+static inline unsigned os_npu_queue_core(void){return OS_NPU_CORE;}
 /* The NPU's reservation is taken from the unified memory ledger when the application is admitted (os_npu_pool_prepare, called
  * by os_large_prepare): the largest extent the NPU can address inside one 4 GiB window is reserved, the runtime places its
  * tables and regions from the start of it, and the part beyond what it placed goes back to the ledger. The extent belongs to

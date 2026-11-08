@@ -87,6 +87,13 @@ size above. The region entries start at the same offset in both, so the same
 code reads them. `tools/sunstone-manifest.py` decodes both and records
 `"abi": 1` for a version 1 record.
 
+**The NPU core.** `struct ss_grant.npu_core` replaced a reserved word, so the grant keeps its 40 bytes and needs no new version. It
+names the core whose task may use the NPU queue (`SS_NPU_CORE_NONE`, `0xffffffff`, when the session grants none). The OS fills it
+from `os_npu_queue_core()` (`apps/os/npu.h`), the same function that the queue's own test calls (`apps/os/npu-queue.c`). An
+application on the A55 cluster is placed on that core and submits from its main task; one on the A76 cluster keeps its cores,
+must have that core among its workers (admission refuses it otherwise), and creates its producer task there in its init hook,
+where the task takes the application's address space (`os_space_init_tag`). The task that opens the queue is its producer.
+
 **Migration.** An application is compiled with the image against the SDK
 header, so the grant change needs a rebuild and no other source change for
 applications that index `grant->regions[i]` or read `regions` from a manifest.

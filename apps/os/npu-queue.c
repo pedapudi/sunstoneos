@@ -84,7 +84,7 @@ static int on_core(void *unused)
 {
     (void)unused;
     /* TPIDRRO is the port's EL0-safe task/core publication. */
-    return portGET_CORE_ID()==OS_NPU_CORE;
+    return portGET_CORE_ID()==os_npu_queue_core();
 }
 static void request(void *unused)
 {

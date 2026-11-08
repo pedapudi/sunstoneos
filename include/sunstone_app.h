@@ -168,6 +168,8 @@ struct ss_span {
     void *base;
     size_t bytes;   /* INPUT: content length; WORK, OUTPUT: capacity */
 };
+/* struct ss_grant.npu_core when the session grants no NPU queue. */
+#define SS_NPU_CORE_NONE 0xffffffffu
 struct ss_grant {
     uint32_t devices;               /* granted subset of required | optional */
     uint32_t main_core;
@@ -175,7 +177,8 @@ struct ss_grant {
     uint32_t region_count;
     const struct ss_span *regions;  /* region_count spans in manifest order; the image sizes the table from the manifest */
     uint32_t capture_frames;        /* I2S: exact frames; headset: profile-derived maximum; 0 without capture */
-    uint32_t reserved;
+    uint32_t npu_core;              /* the core whose task may use the NPU queue (SS_NPU_CORE_NONE without it): the main core on the
+                                     * A55 cluster, else a worker core, on which the application creates its producer task */
     uint64_t finish_by_us;          /* counter microseconds; 0 when resident */
 };
 

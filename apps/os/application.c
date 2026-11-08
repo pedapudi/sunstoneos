@@ -369,13 +369,17 @@ int os_application_prepare(void)
      * and before the scheduler, checks the boot point for it (os_cpu_boot_point_needed) and refuses the start when the
      * check fails. It is never placed on core 2. */
     grant.main_core=m->cluster==SS_CLUSTER_A76?6:2;
-    /* The EL0 ring's producer runs on the NPU interrupt's core, core 1, a Cortex-A55: an application that the declaration
-     * puts on the ring is placed there, and one that asks for the A76 cluster is refused. */
+    /* The EL0 ring's producer runs on the NPU interrupt's core, a Cortex-A55 (os_npu_queue_core), and the grant names that core.
+     * An application on the A55 cluster that the declaration puts on the ring is placed there and submits from its main task.
+     * One on the A76 cluster keeps its cores and is refused unless the queue's core is one of its worker cores: it creates its
+     * producer task there, in its init hook (the task takes the application's address space). */
+    grant.npu_core=SS_NPU_CORE_NONE;
     if(os_npu_queued()){
-        if(m->cluster==SS_CLUSTER_A76)return 0;
-        grant.main_core=OS_NPU_CORE;
+        if(m->cluster!=SS_CLUSTER_A76)grant.main_core=os_npu_queue_core();
+        grant.npu_core=os_npu_queue_core();
     }
     if(!os_worker_cores(grant.main_core,m->workers,&grant.worker_cores))return 0;
+    if(grant.npu_core!=SS_NPU_CORE_NONE&&!os_npu_core_granted(grant.main_core,grant.worker_cores,grant.npu_core))return 0;
     unsigned count=0,input=0;const struct ss_input_fact *facts=os_session_inputs(&count);
     grant.regions=ss_grant_spans;
     for(unsigned i=0;i<m->region_count;++i){ss_grant_spans[i].base=(void *)(uintptr_t)m->regions[i].address;

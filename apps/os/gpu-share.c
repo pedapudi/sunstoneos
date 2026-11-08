@@ -34,7 +34,7 @@ int os_gpu_share_admit(const struct ss_gpu_share *share,const struct ss_manifest
         if (m->regions[i].access&(SS_ACCESS_GPU_READ|SS_ACCESS_GPU_WRITE)) mapped|=1u<<i;
     }
     if (!mapped || share->shared_regions!=mapped) return 0;
-    *peer=*grant; peer->devices=SS_DEVICE_GPU; peer->worker_cores=0;
+    *peer=*grant; peer->devices=SS_DEVICE_GPU; peer->worker_cores=0; peer->npu_core=SS_NPU_CORE_NONE;
     peer->capture_frames=0;
     unsigned core=0;
     while (!(grant->worker_cores&(1u<<core))) ++core;

@@ -29,6 +29,9 @@ int main(void)
         for(unsigned w=0;w<=8;++w){uint32_t mask=0;int ok=os_worker_cores(m,w,&mask);printf("W %u %u %d %u\n",m,w,ok,mask);}
     }
 #define GRANT(NAME,bit,with) printf("G %s %u %d\n",#NAME,(unsigned)OS_GRANT_##NAME,(int)OS_LINKED_##NAME);all|=OS_GRANT_##NAME;
+    for(unsigned m=1;m<=6;++m)for(unsigned w=0;w<=8;++w){uint32_t mask=0;if(!os_worker_cores(m,w,&mask))continue;
+        printf("C %u %u %d\n",m,w,os_npu_core_granted(m,mask,os_npu_queue_core()));}
+    printf("Q %u\n",os_npu_queue_core());
     unsigned all=0;OS_GRANT_ROWS(GRANT)
 #define SERVICE(NAME,name,window,grant,with) with(printf("S %s %u %u %s\n",#NAME,(unsigned)OS_SERVICE_##NAME,(unsigned)(grant),name);)
     OS_SUPERVISED_ROWS(SERVICE)
@@ -82,11 +85,20 @@ def main():
     assert done.returncode == 0, done.stderr[-1500:]
     rows = {}
     placement = {}
+    npu_granted = {}
+    queue_core = None
     grants, supervised, count = {}, [], 0
     for line in subprocess.run([str(exe)], capture_output=True, text=True, check=True).stdout.splitlines():
         if line.startswith('W '):
             _, main, workers, ok, mask = line.split()
             placement[(int(main), int(workers))] = (int(ok), int(mask))
+            continue
+        if line.startswith('C '):
+            _, main, workers, granted = line.split()
+            npu_granted[(int(main), int(workers))] = int(granted)
+            continue
+        if line.startswith('Q '):
+            queue_core = int(line.split()[1])
             continue
         if line.startswith('G '):
             _, name, bit, linked = line.split()
@@ -124,6 +136,18 @@ def main():
               (1, 4): (1, bits(2, 3, 4, 5)), (1, 5): (1, bits(2, 3, 4, 5, 0)), (1, 6): (0, 0)}
     for key, (ok, mask) in expect.items():
         assert placement[key] == (ok, mask), (key, placement[key], (ok, mask))
+    # The NPU core of the grant (struct ss_grant.npu_core): the main task of an A55 application is placed on the queue's core
+    # (always granted); an A76 application is granted it as a worker core only from seven workers on; an A55 application on core
+    # 2 only from five. The grant and the queue's own test (apps/os/npu-queue.c on_core) use the one function.
+    assert queue_core == 1, queue_core
+    assert npu_granted[(1, 0)] == 1 and npu_granted[(6, 7)] == 1 and npu_granted[(6, 6)] == 0 and npu_granted[(6, 1)] == 0
+    assert npu_granted[(2, 5)] == 1 and npu_granted[(2, 4)] == 0, npu_granted
+    queue_source = (ROOT / 'apps/os/npu-queue.c').read_text()
+    assert 'portGET_CORE_ID()==os_npu_queue_core()' in queue_source and 'OS_NPU_CORE' not in queue_source, 'the queue tests another core'
+    application_source = (ROOT / 'apps/os/application.c').read_text()
+    assert application_source.count('os_npu_queue_core()') == 2 and 'OS_NPU_CORE' not in application_source, 'the grant names another core'
+    mutated = queue_source.replace('os_npu_queue_core()', '2u')
+    assert 'portGET_CORE_ID()==os_npu_queue_core()' not in mutated      # the mutation the two assertions above refuse
     for (main, workers), (ok, mask) in placement.items():
         if main != 6 and ok:
             assert not mask & bits(6, 7), (main, workers)

@@ -48,6 +48,10 @@ int os_worker_cores(unsigned main_core,unsigned workers,uint32_t *mask)
     for(unsigned i=0;i<workers;++i)*mask|=1u<<order[i];
     return 1;
 }
+/* Whether a task of the application can be the NPU queue's producer: the main task runs on the queue's core, or that core is
+ * one of the granted worker cores, where the application creates the task. */
+int os_npu_core_granted(unsigned main_core,uint32_t worker_cores,unsigned npu_core)
+{return npu_core<32&&(main_core==npu_core||(worker_cores>>npu_core&1u));}
 /* The compositions of services that admission refuses, with the reason of each. A row that is a convenience may be
  * removed once a measurement covers the combination; a row that names a shared hardware resource stays. The services
  * are the session's granted set, so the table is the only place that says which pairs are refused. A row applies in
