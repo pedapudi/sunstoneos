@@ -645,7 +645,8 @@ def c_tables(m):
              '/* The declared job bound; an image without GPU use replies within the open window. */',
              '__attribute__((used,retain)) const uint64_t os_gpu_job_us=UINT64_C(%d);' % gpu_us,
              '__attribute__((used,retain)) const uint32_t os_gpu_configuration[8]={',
-             '    1,(uint32_t)(2*(os_gpu_job_us?os_gpu_job_us:OS_GPU_OPEN_US)),OS_GPU_OPEN_US,OS_GPU_WAIT_TICKS,OS_GPU_PRIORITY,',
+             ('    1,(uint32_t)(2*UINT64_C(%d)),OS_GPU_OPEN_US,OS_GPU_WAIT_TICKS,OS_GPU_PRIORITY,' % gpu_us if gpu_us else
+              '    1,(uint32_t)(2*OS_GPU_OPEN_US),OS_GPU_OPEN_US,OS_GPU_WAIT_TICKS,OS_GPU_PRIORITY,'),
              ('    A733_SMP_APPLICATION_CORE,' if m.get('cluster', 0) else '    2,'),
              '    A733_GPU_CORE_HZ,A733_GPU_SUPPLY_UV};', '#endif', '']
     if m.get('npu'):
