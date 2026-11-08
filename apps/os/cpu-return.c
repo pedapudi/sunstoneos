@@ -1,6 +1,7 @@
 /* One finite staged CPU recognition. Service callbacks run on their existing
  * owners. Only the final per-core terminal stops the scheduler context. */
 #include "cpu-return.h"
+#include "cpu-return-step.h"
 #include "sunstone_wifi_credential.h"
 #include "cpu-return-el0.h"
 #include "application.h"
@@ -55,10 +56,13 @@ static uint64_t completion_cutoff(void)
 __attribute__((noinline)) static void bounded(void)
 {
     const int late=a733_smp_counter()/24>=board.session.deadline_us-10000;
-    if(board_live(NULL)&&!late)return;
+    const unsigned npu_line=atomic_load_explicit(&os_npu_first_failure.ready,memory_order_acquire)==2?os_npu_first_failure.site&0xfffu:0;
+    const unsigned detail=os_cpu_return_bounded_detail(atomic_load_explicit(&board.fatal,memory_order_acquire),a733_smp_counter()/24,
+        atomic_load_explicit(&board.live_until,memory_order_acquire),board.session.deadline_us,late,npu_line);
+    if(!detail)return;
     board_fail_at(SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_CPU_RETURN<<12|0x736|(uint32_t)((board.session.deadline_us/1000000)&0x7fff)<<16,
         board_live_refusal()|(late?1u<<31:0),__builtin_return_address(0));
-    platform_exit(0x736);
+    platform_exit(detail);
 }
 uint64_t os_cpu_return_cutoff(void)
 {return (board.session.deadline_us-OS_CPU_RETURN_RESERVE_US)*24;}
@@ -167,6 +171,8 @@ static int failure_claim(unsigned context,uint32_t site,uint32_t value,const voi
      * whatever it grants; the host reads it only for a session that grants the NPU. */
     if(before_scheduler)os_npu_report_unstarted(epoch,board.session.generation);
     atomic_store_explicit(&failing,1,memory_order_release);
+    /* The claim also runs where the task API is not legal (the unexpected-interrupt handler with interrupts masked, the SVC handler of
+     * ss_fail, the EL0 fault stub), so it only publishes `failing`; the supervisor, a task, stops the NPU (cpu-return-step.h). */
     if(!before_scheduler)return 1;
     atomic_store_explicit(&prefail,1,memory_order_release);
     atomic_store_explicit(&ready,1,memory_order_release);
@@ -246,10 +252,17 @@ void os_cpu_return_supervise(void)
     /* Live and before the deadline: restart WDT0. fail() never returns, and a
      * stalled supervisor stops the restarts, so WDT0 resets one interval later. */
     sunstone_watchdog_restart();
-    /* A failure return that the services cannot finish in time ends at the
-     * watchdog, as the failure did before this return existed. */
-    if(os_cpu_return_failing()&&a733_smp_counter()/24-atomic_load_explicit(&failing_since_us,memory_order_acquire)>=
-       OS_FAILURE_RETURN_US)fail(0x742);
+    /* A failure return that the services cannot finish in time ends at the watchdog, as the failure did before this return existed;
+     * until then it waits for the application's NPU owner to close its queue (cpu-return-step.h). */
+    const int requested=os_cpu_return_requested();
+    switch(os_cpu_return_failure_step(os_cpu_return_failing(),requested,requested?os_cpu_return_devices_ready():1,
+                                      a733_smp_counter()/24,atomic_load_explicit(&failing_since_us,memory_order_acquire),
+                                      OS_FAILURE_RETURN_US)){
+    case OS_FAILURE_STEP_TIMEOUT:fail(0x742);
+    case OS_FAILURE_STEP_DEVICES:fail(0x741);
+    case OS_FAILURE_STEP_WAIT:return;
+    case OS_FAILURE_STEP_NONE:break;
+    }
     if(!os_cpu_return_requested()){
         uint64_t cutoff=os_cpu_return_cutoff();
 #ifdef SUNSTONE_A733_OS_GPU_LINEAR
@@ -260,7 +273,6 @@ void os_cpu_return_supervise(void)
         if(a733_smp_counter()>=cutoff)fail_cutoff();
         return;
     }
-    if(!os_cpu_return_devices_ready())fail(0x741);
     if(!atomic_load_explicit(&thermal_done,memory_order_acquire))return;
 #ifdef SUNSTONE_A733_OS_DMA
     if(!os_dma_return_ready())return;
