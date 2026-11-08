@@ -14,7 +14,8 @@
 static _Thread_local unsigned core=6;
 static uint64_t began;
 static const char *scenario,*destination;
-static struct ss_grant grant={.main_core=6,.worker_cores=0xbf};
+static struct ss_span spans[2];
+static struct ss_grant grant={.main_core=6,.worker_cores=0xbf,.regions=spans};
 static uint64_t ns(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (uint64_t)t.tv_sec*1000000000+t.tv_nsec;}
 uint64_t ss_counter_ticks(void){return UINT64_C(24000000)+(ns()-began)*24/1000;}
 unsigned host_core(void){return !strcmp(scenario,"wrong-core")&&core==3?2:core;}
@@ -137,8 +138,8 @@ int main(int argc,char **argv)
     if(argc!=3)return 4;scenario=argv[1];destination=argv[2];began=ns();
     grant.finish_by_us=ss_counter_ticks()/24+8000000;
     grant.region_count=2;
-    grant.regions[0]=(struct ss_span){models_region,sizeof(models_region)};
-    grant.regions[1]=(struct ss_span){vectors_region,sizeof(vectors_region)};
+    spans[0]=(struct ss_span){models_region,sizeof(models_region)};
+    spans[1]=(struct ss_span){vectors_region,sizeof(vectors_region)};
     cpu_npu_load_init();
 #ifdef CPU_NPU_WITH_NPU
     runtime.service.ops.read=idle;runtime.service.worker=&service_task;

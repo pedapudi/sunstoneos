@@ -7,8 +7,8 @@
 #endif
 volatile unsigned audio_replay_result;
 static SS_MANIFEST_STORAGE(1) manifest_storage;
+const struct ss_application ss_application={.manifest=&manifest_storage.manifest};
 #define manifest (manifest_storage.manifest)
-const struct ss_application ss_application={.manifest=&manifest};
 static struct ss_span spans[1];
 static struct ss_grant grant;
 static uint64_t counter;
