@@ -21,6 +21,11 @@ set(SUNSTONE_STRICT_ALIGN
   "/os-image/(boot|continue|continue-sealed|platform|return-runtime|return-terminal)\\.[cS]$"
   "/freertos-a733-smp-cached/continue-core\\.c$"
   "/apps/os/(admission|lifetime|boot|cpu-return[^/]*|sealed|identity)\\.[cS]$"
+  # The session decoder and the digest of it run at EL3 from the boot (a733_smp_boot -> a733_smp_contract_valid and
+  # board_session_prepare), before the MMU is on; checks/codegen-alignment.py finds such units by the calls from the EL3 roots.
+  "/apps/os/(session|grants|capture|npu-declaration)\\.c$"
+  "/drivers/npu/npu_declaration\\.c$"
+  "/drivers/storage/storage_digest[a-z_]*\\.[cS]$"
   # Registers, and the controllers' FIFOs and descriptors in Device or non-cacheable memory.
   "/drivers/[^/]+/[^/]*_native[^/]*\\.[cS]$"
   "/drivers/(board|clock|crypto|dram|gpu|i2c|pinctrl|power|thermal|usb)/"
@@ -50,13 +55,13 @@ set(SUNSTONE_RELAXED_ALIGN
   "/runtime/(counter_clock|cpu_topology_app|cxx_terminate|deadline-a733|deadline|device_memory_pool|new_delete|newlib|newlib_smp|newlib_syscalls_smp|npu_app|npu_app_queue|memory_unaligned)\\.cc?$"
   "/network/allocator\\.c$"
   # The OS tasks and services.
-  "/apps/os/(application|capture|client|grants|irq|large|large_load|npu|npu-client|npu-declaration|npu-graph-index|npu-irq|npu-observe|npu-queue|services|session|start|usb-service|usb0)\\.c$"
+  "/apps/os/(application|client|irq|large|large_load|npu|npu-client|npu-graph-index|npu-irq|npu-observe|npu-queue|services|start|usb-service|usb0)\\.c$"
   "/apps/board/(audio|radio)\\.c$"
   # The NPU graph decoder and assembler, the runtime that places the graphs and the service ring.
-  "/drivers/npu/(nbg_assembly|nbg_checksum|nbg_model|nbg_relocation|a733_npu_runtime|a733_npu_runtime_interim|npu_declaration|npu_idle|npu_pool|npu_queue|npu_service)\\.c$"
+  "/drivers/npu/(nbg_assembly|nbg_checksum|nbg_model|nbg_relocation|a733_npu_runtime|a733_npu_runtime_interim|npu_idle|npu_pool|npu_queue|npu_service)\\.c$"
   # The radio protocol and the file system, which parse frames and directory entries from buffers.
   "/drivers/net/(aic8800_[a-z_]*|sunstone_net|a733_radio_result|a733_radio_session|a733_radio_platform|a733_radio_entropy)\\.c$"
-  "/drivers/storage/(fat32_ro|sdio_card|storage_digest|storage_digest_extensions)\\.c$"
+  "/drivers/storage/(fat32_ro|sdio_card)\\.c$"
   # The network stack and the supplicant.
   "/FreeRTOS-Plus-TCP-[^/]+/"
   "/FreeRTOS_TCP_Transmission_IPv4\\.c$"
