@@ -9,7 +9,7 @@ normally with seven secondary CPUs off and complete reference parity: 90 frames,
 transcript `There was silence.`, compute 135.673 ms against the 179.5 ms limit.
 A paced replay of the same input passes six fresh native sessions with full
 segmented parity, complete version 2 thermal reports and rail cleanup; median
-compute is 92.670 ms. These runs do not qualify corpus latency, retained-state
+compute is 92.670 ms. A 20.46 s recording (512 encoder frames) on the eight A76 cores returns normally with the host engine's transcript and checksums: compute 599.4 ms on the CPU engine, and 422.8 ms with the encoder's 16 layers on the NPU ([NPU status](npu.md)). These runs do not qualify corpus latency, retained-state
 replay, sustained multi-utterance capture or thermal and fault recovery.
 
 Mimus runs through the SunstoneOS application kit from its own repository ([apps/mimus/source.json](../../apps/mimus/source.json)).
@@ -18,15 +18,16 @@ Mimus runs through the SunstoneOS application kit from its own repository ([apps
 | --- | --- | --- | --- |
 | Recorded input through the application kit, CPU engine | qualified on the board | 135.673 ms compute against the 179.5 ms limit; 90 frames; exact transcript | `mimus-acceptance-summary` in [mimus.jsonl](../evidence/mimus.jsonl) |
 | Paced replay, six fresh native sessions | qualified on the board | Median compute 92.670 ms; full segmented parity | [mimus.jsonl](../evidence/mimus.jsonl) |
-| Eight CPU workers | host-tested | No hardware run | [mimus-eight-workers.md](../designs/mimus-eight-workers.md); [mimus-os-eight-workers.md](../designs/mimus-os-eight-workers.md) |
-| Accelerator-assisted recognition | host-tested | GPU: see [GPU status](gpu.md); NPU: see [NPU status](npu.md) | [gpu-recognition.md](../designs/gpu-recognition.md) |
+| Recorded 512-frame input, CPU engine on eight A76 workers | qualified on the board | 599.4 ms compute; text and checksums equal the host engine's | `1794107014170351336-e7854a09` |
+| Eight CPU workers | host-tested for the two-core SMP model and the OS build; run on the board only in the 512-frame record above | The record above | [mimus-eight-workers.md](../designs/mimus-eight-workers.md); [mimus-os-eight-workers.md](../designs/mimus-os-eight-workers.md) |
+| Accelerator-assisted recognition | NPU qualified on the board at 512 frames; GPU host-tested | NPU: compute 422.8 ms against 599.4 ms on the CPU; GPU: see [GPU status](gpu.md) | [gpu-recognition.md](../designs/gpu-recognition.md) |
 | Sustained replay, multi-utterance capture, live input, session expiry, retained-state replay, thermal and fault recovery | open | None | None |
 
 ## Open work
 
 1. Qualify sustained replay and multi-utterance capture on the board.
 2. Qualify live input and session expiry.
-3. Qualify accelerator-assisted execution; the qualified runs use the CPU engine only.
+3. Qualify GPU-assisted recognition on the board.
 4. Qualify retained-state replay and thermal and fault recovery.
 5. Fix the metadata watcher path issue so that the direct-result workaround in `cadence-1101/metadata-watch-note.md` is no longer needed.
 
@@ -35,7 +36,7 @@ Mimus runs through the SunstoneOS application kit from its own repository ([apps
 Board results with a queue entry are records in [mimus.jsonl](../evidence/mimus.jsonl), added with `tools/evidence.py add`; the revisions and queue entries of the acceptance runs are in the record `mimus-acceptance-summary`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-mimus-20261101.md).
 
 <!-- evidence-table:begin -->
-8 records in `docs/evidence/mimus.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+9 records in `docs/evidence/mimus.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -47,4 +48,5 @@ Board results with a queue entry are records in [mimus.jsonl](../evidence/mimus.
 | `1793560482537824782-7589f457` | 2026-11-01 | 3-1 | `d789333c6090` | returned | passed | run_total 71.887 s, compute 92607 µs, pacing_lateness_max 415 µs, thermal_slot_lateness_max 903 µs |
 | `1793560555177262469-0e251bd4` | 2026-11-01 | 3-1 | `d789333c6090` | returned | passed | run_total 71.501 s, compute 92719 µs, pacing_lateness_max 910 µs, thermal_slot_lateness_max 885 µs |
 | `1793560636888545789-06c0bafb` | 2026-11-01 | 3-1 | `d789333c6090` | returned | passed | run_total 71.773 s, compute 92610 µs, pacing_lateness_max 901 µs, thermal_slot_lateness_max 901 µs |
+| `1794107014170351336-e7854a09` | 2026-11-08 | 3-1 | `6d666ea47bfd` | returned | passed | run_total 78.613 s, frames 512 frames, compute_time 599368 µs, load_time 93800 µs, front_end_time 9257 µs, subsampling_time 161016 µs, attention_time 240826 µs, convolution_module_time 74647 µs, feed_forward_time 96971 µs, layer_norm_time 3205 µs, residual_time 13797 µs, head_time 9368 µs, punctuation_time 1476 µs, arena_peak 4.05778e+06 bytes |
 <!-- evidence-table:end -->
