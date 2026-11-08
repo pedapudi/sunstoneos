@@ -57,8 +57,8 @@ RELAXED void *ss_memmove_unaligned(void *dest, const void *src, size_t count)
     if ((uintptr_t)d <= (uintptr_t)s || (uintptr_t)d >= (uintptr_t)s + count) {
         /* Forward, and every store at a higher address than the one before it, none twice: a Cortex-A55 recognizes a stream of
          * stores that fill whole cache lines and then stops fetching the lines it is about to overwrite (write streaming). A
-         * copy that stored its head or tail again, out of order, lost that: the 176 rows of the encoder's position window, written
-         * into lines that the queue had just cleaned and invalidated, took 32.0 ms instead of 26.7 ms. Loads may be unaligned
+         * copy that stored its head and tail again, out of order, lost that: 176 rows of 382 bytes written into lines that were
+         * not in the cache took 216 ns a row that way and 132 ns in address order (apps/memcpy-bench). Loads may be unaligned
          * and are always read before the store that could overwrite them (the destination is not above the source). */
         size_t skew = (size_t)(-(uintptr_t)d & 15);       /* bytes to the next 16-byte boundary of the destination */
         count -= skew;
@@ -66,12 +66,21 @@ RELAXED void *ss_memmove_unaligned(void *dest, const void *src, size_t count)
         if (skew & 2) { uint16_t v; LOAD16(s, v); STORE16(d, v); d += 2; s += 2; }
         if (skew & 4) { uint32_t v; LOAD32(s, v); STORE32(d, v); d += 4; s += 4; }
         if (skew & 8) { uint64_t v; LOAD64(s, v); STORE64(d, v); d += 8; s += 8; }
-        /* One block a turn, in order: an unrolled loop would interleave the stores of two blocks. */
+        /* 64 bytes a turn, the loads before the stores and the stores in order (an unrolled loop would interleave the stores of
+         * two turns). */
         _Pragma("clang loop unroll(disable) interleave(disable)")
-        for (; count >= 32; count -= 32, d += 32, s += 32) {
+        for (; count >= 64; count -= 64, d += 64, s += 64) {
+            uint64_t a0, a1, a2, a3, a4, a5, a6, a7;
+            LOAD64(s, a0); LOAD64(s + 8, a1); LOAD64(s + 16, a2); LOAD64(s + 24, a3);
+            LOAD64(s + 32, a4); LOAD64(s + 40, a5); LOAD64(s + 48, a6); LOAD64(s + 56, a7);
+            STORE64(d, a0); STORE64(d + 8, a1); STORE64(d + 16, a2); STORE64(d + 24, a3);
+            STORE64(d + 32, a4); STORE64(d + 40, a5); STORE64(d + 48, a6); STORE64(d + 56, a7);
+        }
+        if (count & 32) {
             uint64_t a, b, c, e;
             LOAD64(s, a); LOAD64(s + 8, b); LOAD64(s + 16, c); LOAD64(s + 24, e);
             STORE64(d, a); STORE64(d + 8, b); STORE64(d + 16, c); STORE64(d + 24, e);
+            d += 32; s += 32;
         }
         if (count & 16) { uint64_t a, b; LOAD64(s, a); LOAD64(s + 8, b); STORE64(d, a); STORE64(d + 8, b); d += 16; s += 16; }
         if (count & 8) { uint64_t v; LOAD64(s, v); STORE64(d, v); d += 8; s += 8; }
@@ -126,7 +135,11 @@ RELAXED void *ss_memset_unaligned(void *dest, int value, size_t count)
     if (skew & 4) { uint32_t v = (uint32_t)w; STORE32(d, v); d += 4; }
     if (skew & 8) { STORE64(d, w); d += 8; }
     _Pragma("clang loop unroll(disable) interleave(disable)")
-    for (; count >= 32; count -= 32, d += 32) { STORE64(d, w); STORE64(d + 8, w); STORE64(d + 16, w); STORE64(d + 24, w); }
+    for (; count >= 64; count -= 64, d += 64) {
+        STORE64(d, w); STORE64(d + 8, w); STORE64(d + 16, w); STORE64(d + 24, w);
+        STORE64(d + 32, w); STORE64(d + 40, w); STORE64(d + 48, w); STORE64(d + 56, w);
+    }
+    if (count & 32) { STORE64(d, w); STORE64(d + 8, w); STORE64(d + 16, w); STORE64(d + 24, w); d += 32; }
     if (count & 16) { STORE64(d, w); STORE64(d + 8, w); d += 16; }
     if (count & 8) { STORE64(d, w); d += 8; }
     if (count & 4) { uint32_t v = (uint32_t)w; STORE32(d, v); d += 4; }
