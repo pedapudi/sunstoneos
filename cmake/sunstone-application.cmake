@@ -19,6 +19,8 @@ function(add_sunstone_application name)
   string(REPLACE "-" "_" cname "${name}")
   add_library(${name} OBJECT EXCLUDE_FROM_ALL ${APP_SOURCES})
   target_link_libraries(${name} PRIVATE sunstone-os-settings ${APP_LIBRARIES})
+  # The application runs at EL0 under Normal memory (cmake/codegen-align.cmake).
+  sunstone_relax_application(${name})
   target_include_directories(${name} PRIVATE "${output}" ${APP_INCLUDE_DIRECTORIES})
   set_target_properties(${name} PROPERTIES SUNSTONE_MANIFEST "${output}/manifest-input.json"
     SUNSTONE_MANIFEST_DIRECTORY "${output}" SUNSTONE_APPLICATION_NAME "${name}"

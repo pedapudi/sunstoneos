@@ -1,0 +1,10 @@
+{
+  "name": "memcpy-bench",
+  "devices": {"required": [], "optional": []},
+  "cpu": {"clock_grants": true, "cluster": "a55", "workers": 0, "priority": 2, "stack_bytes": 8192},
+  "regions": [
+    {"name": "work", "kind": "work", "access": ["read", "write"], "bytes": "0x1000000"}
+  ],
+  "deadlines": {"run_us": 20000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
+  "output_limit": 4096
+}

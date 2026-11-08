@@ -188,6 +188,32 @@ def check(image, manifest=None, application=None):
     return result
 
 
+MEMORY_STRICT = ('memcpy', 'memmove', 'memset')
+MEMORY_UNALIGNED = ('ss_memcpy_unaligned', 'ss_memmove_unaligned', 'ss_memset_unaligned')
+
+
+def memory_routines(objects, nm, image):
+    """Which objects call which version of the memory routines (cmake/codegen-align.cmake): the strict ones of runtime/memory.c
+    and memmove.c, safe with the MMU off and on Device memory, or the unaligned ones of runtime/memory_unaligned.c, for code that
+    runs under Normal write-back memory with SCTLR_EL1.A clear. An object that calls both is listed under both."""
+    strict, unaligned = [], []
+    for path in objects:
+        output = subprocess.run([nm, '--format=posix', '--extern-only', '--undefined-only', str(path)], check=True,
+                                capture_output=True, text=True).stdout
+        undefined = {line.split()[0] for line in output.splitlines() if len(line.split()) >= 2 and not line.endswith(':')}
+        name = str(path).split('.dir/', 1)[-1]
+        if undefined & set(MEMORY_STRICT):
+            strict.append(name)
+        if undefined & set(MEMORY_UNALIGNED):
+            unaligned.append(name)
+    linked = subprocess.run([nm, '--defined-only', str(image)], capture_output=True, text=True).stdout
+    for routine in MEMORY_STRICT + MEMORY_UNALIGNED:
+        assert (' T ' + routine) in linked or (' t ' + routine) in linked or routine in MEMORY_STRICT, \
+            'the image does not link ' + routine
+    return {'strict_callers': sorted(strict), 'unaligned_callers': sorted(unaligned),
+            'both': sorted(set(strict) & set(unaligned))}
+
+
 def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_expected=None):
     """Applications may use their closure, public calls, FreeRTOS and C/C++."""
     def symbols(paths, defined):
@@ -211,6 +237,9 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_ex
     # Object inventories include references in discarded sections. A public
     # call remains valid when no live caller keeps its implementation linked.
     allowed |= public_calls
+    # The unaligned memory routines are what an application's memcpy, memmove and memset call (runtime/memory_unaligned.c,
+    # include/sunstone_relaxed_memory.h): the same contract as the C library's routines, and stateless.
+    allowed |= {'ss_memcpy_unaligned', 'ss_memmove_unaligned', 'ss_memset_unaligned'}
     # An explicit shared-GPU descriptor names its own generated manifest.
     # Admit that immutable object only, using the selected image manifest's
     # exact bytes and section bounds rather than a symbol-name suffix.
@@ -296,6 +325,8 @@ def main():
     parser.add_argument('--application-library', type=Path, action='append', default=[])
     parser.add_argument('--runtime-library', type=Path, action='append', default=[])
     parser.add_argument('--nm', default='nm')
+    parser.add_argument('--memory-objects', type=Path, nargs='*', action='append', default=[],
+                        help='objects of the OS core, its device objects and the application, for the report of which memory routines each links')
     parser.add_argument('--session-seconds', type=int, help='the session lifetime the build compiled (A733_BOARD_SUPERVISED_SECONDS)')
     args = parser.parse_args()
     try:
@@ -331,6 +362,9 @@ def main():
             result['symbol_boundary'] = application_symbols(Elf(args.image.read_bytes()),
                 args.application_objects, args.application_library, args.runtime_library,
                 args.nm, (args.manifest.parent / 'large.bin').read_bytes())
+        objects = [path for group in args.memory_objects for path in group]
+        if objects:
+            result['memory_routines'] = memory_routines(objects, args.nm, args.image)
     except (AssertionError, ValueError) as error:
         print('FAIL OS image link:', error, file=sys.stderr)
         return 1

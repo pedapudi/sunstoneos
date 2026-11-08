@@ -1,5 +1,6 @@
 # OS implementation and device owners, independent of application sources.
 include("${CMAKE_CURRENT_LIST_DIR}/latency-instrumentation.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/codegen-align.cmake")
 option(SUNSTONE_A733_OS "Build the integrated OS image" OFF)
 option(SUNSTONE_A733_OS_SD_WRITE "OS image whose SD0 owner task writes the card under runner-admitted bounds (write-capable: the runner needs a coordinator approval record)" OFF)
 option(SUNSTONE_A733_OS_USB_CLASSES "OS input, serial and camera host services" OFF)
@@ -460,6 +461,8 @@ target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICAT
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_SCAN}>:SUNSTONE_A733_OS_RADIO_SCAN=1>")
 # The EL0 ring is linked too; the application's declaration selects it (apps/os/npu-session.h, os_npu_session_queued).
 target_sources(sunstone-a733-os-core PRIVATE "${os_root}/runtime/npu_app_queue.c" "${os_root}/apps/os/npu-queue.c")
+# The memory routines of the relaxed units (cmake/codegen-align.cmake); runtime/memory.c and memmove.c stay for the rest.
+target_sources(sunstone-a733-os-core PRIVATE "${os_root}/runtime/memory_unaligned.c")
 if(SUNSTONE_A733_OS_GPU)
   target_compile_definitions(sunstone-a733-os-core PRIVATE INCLUDE_eTaskGetState=1)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_GPU_LINEAR=1)
@@ -568,6 +571,9 @@ endif()
 # hot loops to the other alignment and change their speed on the Cortex-A55. The NPU encoder's scalar conversion loops
 # ran 25% slower with its conversion function at 4 modulo 8 than at 0.
 target_compile_options(sunstone-a733-os-core PRIVATE -falign-functions=16)
+# The relaxed units and the applications are scheduled for the in-order Cortex-A55 that six of the eight cores are (the
+# Cortex-A76 cores run the same code, out of order); see cmake/codegen-align.cmake. The strict units, which are boot and device
+# code, are not: the tuning unrolls their loops, which adds 9 percent to their instructions and gains nothing measurable.
 # Publish the exact OS compile configuration to application and device objects.
 foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_FEATURES)
   get_target_property(value sunstone-a733-os-core ${property})
@@ -608,3 +614,6 @@ if(SUNSTONE_GPU_TIMING)
     target_link_options(sunstone-a733-os-core INTERFACE "-Wl,--wrap=${symbol}")
   endforeach()
 endif()
+
+# Strict alignment only where the unit needs it (cmake/codegen-align.cmake), decided once every source is added.
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL sunstone_apply_alignment)
