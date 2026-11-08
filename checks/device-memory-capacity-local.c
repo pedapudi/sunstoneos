@@ -55,8 +55,9 @@ static int decode_passes(void){return fixture_mode==0;}
 #endif
 static struct a733_dram_range decode_seen[4];
 static unsigned decode_count,decode_calls;
-int a733_dram_decode_check(const struct a733_dram_range *r,unsigned n)
+int a733_dram_decode_check(const struct a733_dram_range *r,unsigned n,uint64_t *saved,unsigned saved_words)
 {
+    (void)saved;(void)saved_words;
     say("TRACE decode\n");
     ++decode_calls;decode_count=n;
     for(unsigned i=0;i<n && i<4;++i)decode_seen[i]=r[i];

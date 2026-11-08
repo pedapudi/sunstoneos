@@ -75,7 +75,17 @@ outside that tested map. On the core 0 EL3 path it then writes a distinct token
 to the first and last word of each range, to every 2 MiB step of the first
 gigabyte, to each power-of-two offset from 2 MiB to 8 GiB and to each gigabyte
 boundary, issues one `DSB SY`, and reads every token back. About 600 probes
-cover the 11 GiB range. An aliased, wrapped, stuck or absent address returns
+cover the 11 GiB range. Before each token the probe reads the word it is about to
+overwrite and keeps it in the caller's buffer (`A733_DRAM_PROBE_WORDS` of the range
+table: 947 words, 7,576 bytes of EL3 bss for the cached image's table; the probe
+counts the words first and refuses, touching nothing, when the buffer is smaller).
+After the compare it writes the kept words back in the reverse order, with the same
+uncached accesses as the tokens and one more `DSB SY`: the runner places INPUT regions
+in these ranges before the launch (a graph region at `0x4800_0000` was found with
+its first word replaced by a token), and the probe leaves them as it found them. The
+reverse order matters because the sweep visits some addresses twice (2 MiB is both a
+step and a power-of-two offset) and an aliasing decode maps two addresses to one cell:
+the later visit kept the earlier token. An aliased, wrapped, stuck or absent address returns
 another value and the check returns 0. The test runs with the MMU off, so it
 shows decode, not Non-secure firewall access; the qualification run showed
 that for the tested map. The host check `checks/dram-decode-probe.py` runs the

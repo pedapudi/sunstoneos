@@ -166,7 +166,15 @@ struct a733_dram_probe_io {
 };
 /* Returns 1 when every probe address of every range returns its own token.
  * Refuses (0) ranges outside the qualification image's tested map. */
-int a733_dram_decode_probe(const struct a733_dram_probe_io *, const struct a733_dram_range *, unsigned count);
+int a733_dram_decode_probe(const struct a733_dram_probe_io *, const struct a733_dram_range *, unsigned count,
+                           uint64_t *saved, uint64_t saved_words);
+/* The probe restores every word it writes (the runner's INPUT regions lie in the probed ranges), so it keeps each word it reads before
+ * writing its token in `saved`. A733_DRAM_PROBE_WORDS(size) is an upper bound of the words one range of `size` bytes needs, as a
+ * constant expression: the first and last word, one per 2 MiB step in the first GiB, one per address line from 2 MiB to 8 GiB (13) and
+ * one per GiB boundary (size / GiB, and one more for an unaligned start). The probe computes the exact count from the ranges first and
+ * refuses, touching nothing, when `saved_words` is smaller. */
+#define A733_DRAM_PROBE_WORDS(size) \
+    (2u + (unsigned)(((size) < (UINT64_C(1) << 30) ? (size) : (UINT64_C(1) << 30)) >> 21) + 13u + (unsigned)((size) >> 30) + 1u)
 /* The per-boot DRAM decode check. platform/a733-smp-cached/memory.c calls it
  * once on core 0 at EL3 with the MMU off, before it writes the EL1 entries
  * for `ranges`. The ranges lie in 0x4800_0000-0x7900_0000 and
@@ -179,6 +187,7 @@ int a733_dram_decode_probe(const struct a733_dram_probe_io *, const struct a733_
  * controller and firewall register reads only, no DRAM access, at most 64
  * register reads and 2,000 instructions. No pinned source documents the
  * DRAMC, SMC0 or SMC1 registers, so drivers/dram/a733_dram_decode.c makes no
- * access and returns 0 (docs/designs/dram-bus-priority.md). */
-int a733_dram_decode_check(const struct a733_dram_range *ranges, unsigned count);
+ * access and returns 0 (docs/designs/dram-bus-priority.md). The address test writes tokens into the ranges and puts every word back
+ * as it found it (a733_dram_decode_probe above); `saved` is the caller's static buffer of A733_DRAM_PROBE_WORDS for its range table. */
+int a733_dram_decode_check(const struct a733_dram_range *ranges, unsigned count, uint64_t *saved, unsigned saved_words);
 #endif

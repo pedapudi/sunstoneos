@@ -176,7 +176,7 @@ matches the trace. No image links this file; `memory.c` links a weak
 definition that returns 0, and the declaration in `include/a733_dram.h` is
 the one every definition uses. The address-test definition in
 `a733_dram_decode_probe.c` is the other option for an image that opts in. It
-does not read the controller registers, and it does not show that Non-secure
+puts back every word it overwrites (see the memory map design), does not read the controller registers, and does not show that Non-secure
 accesses pass the firewall or that no other master writes there.
 
 ## Host checks and measurements
