@@ -77,7 +77,7 @@ def header_cases():
     passed('decode-stage-fault-and-foreign-session')
     assert defines['FAIL_SVC'] == 0x5c0e and defines['FAIL_LEVEL'] == crumbs.FAIL_LEVEL
     assert defines['FAIL_RETURN'] == 1 << 31
-    groups = {k: v for k, v in defines.items() if k.startswith('FAIL_') and k not in ('FAIL_SVC', 'FAIL_LEVEL', 'FAIL_RETURN')}
+    groups = {k: v for k, v in defines.items() if k.startswith('FAIL_') and k not in ('FAIL_SVC', 'FAIL_LEVEL', 'FAIL_LEVEL_SECOND', 'FAIL_RETURN')}
     assert len(set(groups.values())) == len(groups) and all(0 < v < 16 for v in groups.values())
     words = dict.fromkeys(crumbs.WORDS, 0)
     words.update(tag=0x5c0d0000 | EPOCH & 0xffff, last=crumbs.EL3_STOP << 16 | 15 << 12 | 0x736,

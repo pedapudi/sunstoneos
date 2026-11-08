@@ -5,6 +5,7 @@
 #include "session.h"
 #include "sunstone_crumb.h"
 #include "stop_note.h"
+#include "fail_record.h"
 #include "sunstone_wifi_credential.h"
 #include "../os/cpu-return-el0.h"
 #include "cached.h"
@@ -40,7 +41,7 @@ static void fail_close(void)
 {atomic_fetch_or_explicit(&board.watchdog_state,4,memory_order_release);
  atomic_store_explicit(&board.fatal,1,memory_order_release);}
 #ifdef SUNSTONE_CRUMBS
-static atomic_uint fail_recorded;
+static atomic_uint fail_recorded,fail_first_site,fail_second_recorded;
 #endif
 uint32_t board_live_refusal(void)
 {
@@ -53,7 +54,7 @@ uint32_t board_live_refusal(void)
 __attribute__((noinline)) void board_fail_note(uint32_t site,uint32_t value,const void *caller)
 {
 #ifdef SUNSTONE_CRUMBS
-    if(!atomic_exchange_explicit(&fail_recorded,1,memory_order_acq_rel))sunstone_crumb_fail(site,value,caller);
+    if(board_fail_record_wanted(&fail_recorded,&fail_first_site,&fail_second_recorded,site))sunstone_crumb_fail(site,value,caller);
 #else
     (void)site;(void)value;(void)caller;
 #endif

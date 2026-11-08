@@ -21,6 +21,7 @@ KEY = 0x16aa0000
 RETURN_ROM = 0x0503  # SUNSTONE_CRUMB_RETURN_ROM: value is the WDT0 mode after the disarm
 EL3_STOP = 0x0111    # SUNSTONE_CRUMB_EL3_STOP: value is min(status, 15) << 12 | detail & 0xfff
 FAIL_LEVEL = 0xb     # SUNSTONE_CRUMB_FAIL_LEVEL: the first board failure, from EL0 or EL1
+FAIL_LEVEL_SECOND = 0xc  # SUNSTONE_CRUMB_FAIL_LEVEL_SECOND: a device failure that followed an application failure
 CUTOFF = 0x73c       # cpu-return fail_cutoff(): the session reached the supervisor's cutoff without a return request
 NPU_RETIREMENT_FAILED = 0x75f  # application ss_finish: the NPU retirement wait gave up before the cutoff
 # OS_NPU_STATE_* of apps/os/npu.h, bit by bit (os_npu_retirement_state).
@@ -179,7 +180,7 @@ def board_failure(words, defines, elf):
     """Decode a level 0xb record: the first board_fail and its site."""
     fault, site, caller, value = words['fault'], words['esr'], words['elr'], words['far']
     groups = {v: k[len('FAIL_'):].lower() for k, v in defines.items()
-              if k.startswith('FAIL_') and k not in ('FAIL_SVC', 'FAIL_LEVEL', 'FAIL_RETURN')}
+              if k.startswith('FAIL_') and k not in ('FAIL_SVC', 'FAIL_LEVEL', 'FAIL_LEVEL_SECOND', 'FAIL_RETURN')}
     group = (site >> 12) & 15
     legacy_npu = group == 8 and finite_npu_failure_image(elf)
     if legacy_npu:
@@ -325,6 +326,15 @@ def decode(words, epoch, elf=None):
             v = result['last']['value']
             result['last']['status'] = v >> 12 if v >> 12 < 15 else '15 or more'
             result['last']['detail'] = hex(v & 0xfff)
+            d = v & 0xfff
+            # the supervisor's stops of a return (apps/os/cpu-return.c, cpu-return-step.h)
+            named = {0x736: 'bounded(): the session deadline passed', 0x744: 'bounded(): board.fatal is set (no NPU record)',
+                     0x741: 'devices not ready in a normal return', 0x742: 'the failure return took longer than 3 s',
+                     0x73c: 'no return request before the cutoff'}.get(d)
+            if d & 0xc00 == 0x800:
+                named = 'bounded(): board.fatal is set; the NPU service\'s first failure is at source line %d of apps/os/npu.c' % (d & 0x3ff)
+            if named:
+                result['last']['return_stop'] = named
             if v >> 12 == 1:
                 legacy = {1: 'unnamed admission refusal (an image built before the refusal names)',
                           2: 'watchdog or reset-redirect state differs from the admitted profile'}
@@ -333,8 +343,10 @@ def decode(words, epoch, elf=None):
                     result['last']['admission_refusal'] = named
                 elif v & 0xfff in legacy:
                     result['last']['admission_refusal'] = {'detail': hex(v & 0xfff), 'meaning': legacy[v & 0xfff]}
-    if fault >> 24 == defines['FAULT_MAGIC'] and (fault >> 16) & 15 == FAIL_LEVEL:
+    if fault >> 24 == defines['FAULT_MAGIC'] and (fault >> 16) & 15 in (FAIL_LEVEL, FAIL_LEVEL_SECOND):
         result['board_failure'] = board_failure(words, defines, elf)
+        if (fault >> 16) & 15 == FAIL_LEVEL_SECOND:
+            result['board_failure']['after_application_failure'] = True
     elif fault >> 24 == defines['FAULT_MAGIC']:
         level = (fault >> 16) & 15
         result['fault'] = {'core': (fault >> 20) & 15, 'level': level, 'vector_slot': (fault >> 8) & 255,
@@ -361,7 +373,7 @@ def decode(words, epoch, elf=None):
                      (r['owner'], r['cluster'], r['driver_state']))
     if 'board_failure' in result:
         f = result['board_failure']
-        text = (f"first board failure on core {f['core']} at {f['exception_level']}: {f['group']} "
+        text = (f"{'device failure after an application failure' if f.get('after_application_failure') else 'first board failure'} on core {f['core']} at {f['exception_level']}: {f['group']} "
                 f"{f['site_kind']} {f['site']:#x}, value {f['value']}, caller {f['caller']}")
         if f.get('caller_source'):
             text += f" ({f['caller_source']})"

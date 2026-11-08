@@ -64,6 +64,9 @@
 #define SUNSTONE_CRUMB_SVC 0x5c0d
 #define SUNSTONE_CRUMB_FAIL_SVC 0x5c0e
 #define SUNSTONE_CRUMB_FAIL_LEVEL 0xbu
+/* FAULT's level after a device failure that follows an application failure (the failure return): the words then hold the device's site, value
+ * and caller, and the application's failure is the one the claim recorded in the result. Only that one replacement; every other later failure leaves the record. */
+#define SUNSTONE_CRUMB_FAIL_LEVEL_SECOND 0xcu
 /* Board failure site groups (ESR bits 15:12). */
 #define SUNSTONE_CRUMB_FAIL_BOARD 0x1u      /* board_fail(context) or a board site; value: context or site detail */
 #define SUNSTONE_CRUMB_FAIL_THERMAL 0x2u    /* thermal owner cancel/fault; value: driver fault_site (0 if none) */

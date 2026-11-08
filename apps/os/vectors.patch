@@ -70,7 +70,7 @@
      // Use this core's reserved Secure Device stack regardless of the fault's SP.
      adrp x3, a733_cpu_entry_stacks
      add x3, x3, :lo12:a733_cpu_entry_stacks
-@@ -514,14 +565,102 @@
+@@ -514,14 +565,125 @@
      stp x0, x1, [sp, #-16]!
      mrs x0, esr_el1
      and x0, x0, #0xffff
@@ -124,7 +124,7 @@
 +    ldp x0, x1, [sp, #32]
 +    mov x3, #0x07090000
 +    ldr w4, [x3, #0x110]
-+    cbnz w4, 1f
++    cbnz w4, .Lfail_second
 +    str w0, [x3, #0x114]
 +    str w2, [x3, #0x118]
 +    str w1, [x3, #0x11c]
@@ -142,6 +142,29 @@
 +    ldp x2, x3, [sp], #16
 +    ldp x0, x1, [sp], #16
 +    eret
++.Lfail_second:
++    // A device failure after an application failure (the failure return of an application whose NPU, GPU or other device then fails):
++    // the first record names the application, so this later one, the device's, replaces the words and FAULT's level becomes 0xc
++    // (SUNSTONE_CRUMB_FAIL_LEVEL_SECOND). Anything else keeps the first record. x3 = RTC base, w4 = FAULT, x0 = site, x1 = value, x2 = caller.
++    ubfx w5, w4, #16, #4
++    cmp w5, #0xb
++    b.ne 1b
++    ldr w5, [x3, #0x114]
++    ubfx w5, w5, #12, #4
++    cmp w5, #4                // the first record is an application failure (SUNSTONE_CRUMB_FAIL_APPLICATION)
++    b.ne 1b
++    ubfx w5, w0, #12, #4
++    cmp w5, #4
++    b.eq 1b                   // and this one is not
++    str w0, [x3, #0x114]
++    str w2, [x3, #0x118]
++    str w1, [x3, #0x11c]
++    bic w4, w4, #0xf0000
++    orr w4, w4, #0xc0000
++    dsb sy
++    str w4, [x3, #0x110]
++    dsb sy
++    b 1b
 +.Lqualification:
 +    // The returning lifetime's terminal. In any other lifetime the call is
 +    // not one of these and goes on to the kernel's handler.
