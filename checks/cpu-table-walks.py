@@ -269,7 +269,7 @@ def measure(image_path, baseline):
     assert result['enable_el1_ldp'] == 512 and result['enable_el1_dc_civac'] == 128, result
     # The eight-core entry keeps noncacheable walks until the core-6 walk run.
     assert result['tcr_el1'] == hex(TCR.for_image(image_path)), result
-    cases['eight-core-entry-installs-the-uncached-walk-value'] = True
+    cases['eight-core-entry-installs-the-image-selected-walk-value'] = True
     return result, cases
 
 

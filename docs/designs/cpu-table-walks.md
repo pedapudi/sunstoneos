@@ -191,9 +191,10 @@ Both core-6 images have 1,024 instruction-walk events per block, matching load
 digests, seven secondaries off and normal ROM return. The figures establish
 fixed-loop cost. A cost per hardware data walk is not inferred. The admission
 rule verifies equal work through matching load digests and instruction-side walk
-counts. The A76 data-side event also counts walks started by speculative loads
-and the data prefetcher. Cache hits allow more of those walks to complete within
-the measured block. A higher data count alongside fewer cycles is therefore
+counts. The coordinator's accepted interpretation attributes the higher A76
+data-side count to walks from speculative loads and the data prefetcher.
+Cache hits let more of those walks complete within the measured block.
+Under this interpretation, a higher data count alongside fewer cycles is
 expected and does not indicate a fault.
 
 The added boot work is about 1,000 maintenance operations, an estimated 0.15 ms
