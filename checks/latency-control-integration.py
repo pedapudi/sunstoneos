@@ -14,6 +14,11 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / '.cache/sunstoneos'
+GATE_RUNS = [
+    ['--build', '{build:latency-control-busy-model}', '--output', '{output}/busy', '--allow-runtime-error'],
+    ['--build', '{build:latency-control-busy-model}', '--output', '{output}/wrapper-order', '--negative-wrapper-order'],
+    ['--build', '{build:latency-control-idle-model}', '--output', '{output}/idle'],
+]
 
 
 def reverse_wrappers(build, output):
