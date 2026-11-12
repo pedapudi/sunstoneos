@@ -3,6 +3,8 @@
  * Copyright (c) 2017-2026, Arm Limited and Contributors. All rights reserved.
  */
 #include "a733_cpu_coherence.h"
+.global a733_cpu_coherence_tcr
+.set a733_cpu_coherence_tcr, A733_CPU_COHERENCE_TCR
 #if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
 #include "a733_usb_memory.h"
 #endif

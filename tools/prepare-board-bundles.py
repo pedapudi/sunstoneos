@@ -20,6 +20,8 @@ import stat
 import subprocess
 import tempfile
 import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+import a733_tcr
 
 ROOT = Path(__file__).resolve().parents[1]
 BWRAP = '/usr/bin/bwrap'
@@ -380,8 +382,8 @@ ROWS = [
                   'read of a cleaned 64 KiB buffer, PMCR_EL0 and PMCEID0/1_EL0, with IRQs masked around each region. '
                   'Walk A/B: refused when CCU +0x588 reads MBUS_DFS_EN set (bundle 3 read it clear on port 3-3 on '
                   '2026-10-24); otherwise a discarded warm-up block and twelve blocks in ABBA order of 1,024 '
-                  'TLBI-and-load iterations, iteration k loading line k of block k, A with TCR_EL1 0x200803019 '
-                  '(uncached walks) and B with 0x200803519; each block must count exactly 1,024 DTLB_WALK and 1,024 '
+                  f'TLBI-and-load iterations, iteration k loading line k of block k, A with TCR_EL1 {a733_tcr.UNCACHED_WALK:#x} '
+                  f'(uncached walks) and B with {a733_tcr.CACHED_WALK:#x}; each block must count exactly 1,024 DTLB_WALK and 1,024 '
                   'ITLB_WALK, and a calibration region before it records the walks after a lone TLBI. WFI: '
                   'started only before 0.9 s after '
                   'the monitor\'s entry, 1,000 ticks of a733_cpu_idle() with IRQs unmasked, reading the counters '
@@ -1494,7 +1496,7 @@ def snapshot(row, row_dir, artifacts_file, repository):
     command = [sys.executable, str(ROOT / 'tools/evidence-snapshot.py'), '--repository', str(repository),
                '--output', str(row_dir / 'snapshot'), '--artifact', str(artifacts_file),
                '--note', f'Sources of the {row["name"]} board-test bundle; the artifact lists the frozen bundle files.']
-    for source in row['sources']:
+    for source in dict.fromkeys([*row['sources'], 'tools/a733_tcr.py', 'include/a733_cpu_coherence.h']):
         command += ['--source', source]
     result = subprocess.run(command, capture_output=True, text=True)
     require(result.returncode == 0, 'Snapshot failed: ' + (result.stderr.strip() or result.stdout.strip()))

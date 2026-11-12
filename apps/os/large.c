@@ -15,6 +15,7 @@
 #include "capture.h"
 #include "sunstone_usb_service.h"
 #include "aarch64_device_memory.h"
+#include "a733_cpu_coherence.h"
 #include "device-ranges.h"
 #include "npu.h"
 #include "sunstone_notify.h"
@@ -157,15 +158,18 @@ static int export_regions(uint16_t owner)
 }
 
 static void install_space(uint64_t kernel_ttbr);
-/* The eight-core images walk their tables without the data caches (TCR_EL1 IRGN0 = ORGN0 = 0,
- * include/a733_cpu_coherence.h), so a descriptor the CPU wrote stays invisible to the walker until its line reaches
- * memory. Clean and invalidate every line of the built tables before any task uses the space; a space built long
- * before its first use would have been evicted by then, and one built just before it is not. */
-static void clean_tables(const void *base, size_t bytes)
+/* Tables use the cacheable arena mapping. Complete their stores before publishing
+ * the space to tasks. Noncacheable walks also need the lines written to memory. */
+static void publish_tables(const void *base, size_t bytes)
 {
+#if (A733_CPU_COHERENCE_TCR & 0xf00) != 0
+    (void)base; (void)bytes;
+    __asm__ volatile("dsb ish" ::: "memory");
+#else
     for (uintptr_t a = (uintptr_t)base & ~(uintptr_t)63; a < (uintptr_t)base + bytes; a += 64)
         __asm__ volatile("dc civac, %0" :: "r"(a) : "memory");
     __asm__ volatile("dsb sy" ::: "memory");
+#endif
 }
 unsigned os_large_count(void) { return slot_count; }
 const struct large_slot *os_large_slot(unsigned index) { return index < slot_count ? &slots[index] : 0; }
@@ -245,7 +249,7 @@ int os_large_prepare(void)
         memset(slots, 0, sizeof *slots * count);
         return large_failed(8);
     }
-    clean_tables(arena_pages, sizeof arena_pages);
+    publish_tables(arena_pages, sizeof arena_pages);
     slot_count = count;
     admitted = 1;
     install_space((uint64_t)ttbr);

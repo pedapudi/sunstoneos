@@ -14,6 +14,12 @@ FIXTURES = {
 }
 
 IMAGES = {
+    'ret-walks-uncached': {'configure': [
+        '-DSUNSTONE_APPLICATION=table-walks', '-DSUNSTONE_A733_TABLE_WALKS=uncached',
+    ], 'target': 'sunstone-a733-os-table-walks', 'elf': 'sunstone-a733-os-table-walks.elf'},
+    'ret-walks-cached': {'configure': [
+        '-DSUNSTONE_APPLICATION=table-walks', '-DSUNSTONE_A733_TABLE_WALKS=cached',
+    ], 'target': 'sunstone-a733-os-table-walks', 'elf': 'sunstone-a733-os-table-walks.elf'},
     'resident-stop': {'configure': [
         '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=hello-compute',
         '-DSUNSTONE_A733_OS_RESIDENT_STOP_ON_FINISH=ON',

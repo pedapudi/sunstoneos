@@ -16,6 +16,7 @@ p=argparse.ArgumentParser(description=__doc__)
 for name in ('build','bundle','output','objdump'):p.add_argument('--'+name,type=Path,required=True)
 p.add_argument('--case',help='Run only the named focused case; preserve other completed evidence separately.')
 a=p.parse_args();spec=importlib.util.spec_from_file_location('startup_host',ROOT/'tools/run-native-startup-probe.py');host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
+TCR_UNCACHED=host.TCR_UNCACHED
 m=json.loads((a.build/'manifest.json').read_bytes());bundle=json.loads((a.bundle/'prepared.json').read_bytes())
 assert bundle['image_sha256']==host.digest(a.bundle/'image.elf')
 before_power=m.get('stop_before_power',False)
@@ -86,7 +87,7 @@ def check(name,scenario='normal'):
             el1_memory['fetches' if fetch else 'reads']+=1
         if not regs[f'sctlr_el{level}']&1:return
         assert el3_cache and active[0]==1
-        assert regs[f'tcr_el{level}']==(0x200803019 if level==1 else 0x80823019) and regs[f'mair_el{level}']==0x44ff00
+        assert regs[f'tcr_el{level}']==(TCR_UNCACHED if level==1 else 0x80823019) and regs[f'mair_el{level}']==0x44ff00
         table=regs[f'ttbr0_el{level}'];temporary=level==3 and table==0x421f5000
         for shift in (30,21,12):
             slot=table+((address>>shift)&511)*8
@@ -473,8 +474,8 @@ def check(name,scenario='normal'):
     else:
         expected_controls=[['tcr_el1',0x800080],['sctlr_el1',0xc50839]]
         if el1_cache:expected_controls += [
-            ['sctlr_el1',0x30d00800],['tcr_el1',0x200803019],['tcr_el1',0x200803019],
-            ['sctlr_el1',0x30d01805],['tcr_el1',0x200803099],['sctlr_el1',0x30d01805],
+            ['sctlr_el1',0x30d00800],['tcr_el1',TCR_UNCACHED],['tcr_el1',TCR_UNCACHED],
+            ['sctlr_el1',0x30d01805],['tcr_el1',TCR_UNCACHED | (1 << 7)],['sctlr_el1',0x30d01805],
             ['sctlr_el1',0x30d00801],['sctlr_el1',0xc50839],['tcr_el1',0x800080]]
         expected_controls += [['sctlr_el1',0xc50838],['tcr_el1',0]]
         assert target_controls==expected_controls,target_controls

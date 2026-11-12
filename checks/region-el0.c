@@ -1,3 +1,4 @@
+#include "a733_cpu_coherence.h"
 /* QEMU fixture for the large application region: boots at EL1 with the MMU on, builds the kernel
  * tables of the probe platform, then runs the real ledger, space builder and EL0 routines
  * (apps/sd-read-probe/region.c, el0.S) and checks what each EL0 access did. */
@@ -222,7 +223,7 @@ void main(void)
         level2[i] = (0x40000000UL + i * 0x200000UL) | (1UL << 10) | (3UL << 8) | (1UL << 2) | 1;
     for (unsigned i = 64; i < 512; ++i) level2[i] = A733_EL1_DRAM_BLOCK(0x40000000UL + i * 0x200000UL);
     for (unsigned i = 2; i < 13; ++i) level1[i] = A733_EL1_DRAM_BLOCK((uint64_t)i << 30);
-    uint64_t mair = 0x44ff00, tcr = (2UL << 32) | (1UL << 23) | (3UL << 12) | (1UL << 10) | (1UL << 8) | 25;
+    uint64_t mair = 0x44ff00, tcr = A733_CPU_COHERENCE_TCR_CACHED_WALK;
     __asm__ volatile("msr mair_el1,%0\n msr tcr_el1,%1\n msr ttbr0_el1,%2\n isb\n tlbi vmalle1\n dsb sy\n isb"
                      :: "r"(mair), "r"(tcr), "r"((uintptr_t)level1) : "memory");
     uint64_t sctlr;

@@ -39,26 +39,9 @@ GPR = [UC_ARM64_REG_X0 + i for i in range(29)] + [UC_ARM64_REG_X29, UC_ARM64_REG
 SENTINEL = 0x47fff000
 STACK = 0x47f00000
 
-# Files that may spell an EL1 TCR value, by directory, and why. Every other
-# tracked source must name A733_CPU_COHERENCE_TCR or read the header values
-# with tools/a733_tcr.py. The check only reads these files as text.
-FROZEN = 'records from the digest-pinned production eight-core image'
-ALLOWED_BY_DIRECTORY = {
-    'include': {'a733_cpu_coherence.h': 'the definition'},
-    'platform/a733': {'cpu_continue.c': 'non-cacheable continuation profile (MAIR 0x4400)',
-                      'cpu_continue.S': 'non-cacheable continuation profile (MAIR 0x4400)'},
-    'checks': {'a733-cpu-continue.py': 'non-cacheable continuation profile (MAIR 0x4400)',
-               'native-startup-probe.py': FROZEN},
-    'apps/board-bundles-cpu': {'main.c': 'explicit cached versus uncached walk comparison'},
-    'apps/gpu-cache-permission': {'main.c': 'fixed cached GPU permission diagnostic',
-                                  'check.py': 'models that diagnostic control state'},
-    'apps/gpu-entry-checkpoint': {'check.py': 'frozen uncached GPU entry fixture'},
-    'apps/gpu-finite': {'host-check.py': 'frozen uncached returning image fixture'},
-    'boot/a733': {'native-el1-cache-probe.S': FROZEN},
-    'tools': {'run-native-startup-probe.py': FROZEN,
-              'prepare-board-bundles.py': 'cached versus uncached comparison description'},
-}
-ALLOWED = {f'{d}/{n}': why for d, names in ALLOWED_BY_DIRECTORY.items() for n, why in names.items()}
+# Both fixed profiles and digest-pinned fixtures read the header. A fixture of
+# an older image chooses UNCACHED_WALK explicitly rather than EIGHT_CORE.
+ALLOWED = {'include/a733_cpu_coherence.h': 'the definition'}
 # The previous and the current EL1 value, as a literal or as a mov/movk triple.
 LITERAL = re.compile(r'0x200803[05]19', re.I)
 TRIPLE = re.compile(r'mov\s+x\d+,\s*#0x3[05]19\s*\n[+ ]?\s*movk\s+x\d+,\s*#0x0*80,\s*lsl\s*#16', re.I)
@@ -285,8 +268,8 @@ def measure(image_path, baseline):
     assert result['enable_el1_instructions'] <= budgets['enable_el1_instructions'], result
     assert result['enable_el1_ldp'] == 512 and result['enable_el1_dc_civac'] == 128, result
     # The eight-core entry keeps noncacheable walks until the core-6 walk run.
-    assert result['tcr_el1'] == hex(TCR.EIGHT_CORE), result
-    cases['eight-core-entry-installs-the-uncached-walk-value'] = True
+    assert result['tcr_el1'] == hex(TCR.for_image(image_path)), result
+    cases['eight-core-entry-installs-the-image-selected-walk-value'] = True
     return result, cases
 
 
@@ -309,14 +292,15 @@ def main():
                   'SH0': ((cached >> 12) & 3, 3), 'TG0': ((cached >> 14) & 3, 0), 'EPD1': ((cached >> 23) & 1, 1),
                   'IPS': ((cached >> 32) & 7, 2)}
         assert all(v == want for v, want in fields.values()) and cached >> 35 == 0, fields
-        assert TCR.EIGHT_CORE == cached & ~(0xf << 8), hex(TCR.EIGHT_CORE)
-        cases['header-tcr-values-differ-only-in-walk-cacheability'] = True
+        assert TCR.UNCACHED_WALK == cached & ~(0xf << 8), hex(TCR.UNCACHED_WALK)
+        assert TCR.EIGHT_CORE == cached, hex(TCR.EIGHT_CORE)
+        cases['header-defaults-use-cached-walks'] = True
         sites = literal_sites()
         result['tcr_literal_files'] = sorted(sites)
         unexpected = sorted(set(sites) - set(ALLOWED))
         stale = sorted(set(ALLOWED) - set(sites))
         assert not unexpected and not stale, ('unexpected', unexpected, 'stale allowance', stale)
-        cases['tcr-literal-only-in-header-and-frozen-sites'] = True
+        cases['tcr-literals-only-in-header'] = True
         capacity = load('device_memory_capacity', ROOT / 'checks/device-memory-capacity.py')
         writers = capacity.later_table_writers()
         result['later_table_writers'] = writers

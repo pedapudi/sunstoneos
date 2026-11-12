@@ -1,0 +1,19 @@
+{
+  "component": "EL1 translation-table walks",
+  "sources": [
+    {
+      "name": "Cortex-A76 Core Technical Reference Manual",
+      "url": "https://documentation-service.arm.com/static/5f562083235b3560a01e03bc",
+      "revision": "100798_0401_00_en, r4p1, 31 July 2020",
+      "section": "A5.5.1, Configuring MMU accesses; C2.1, About the PMU; C2.3, PMU events 0x2d, 0x34 and 0x35; A5.1.1, translation-table prefetching; A6.5, data prefetching; B2.32, CPUECTLR_EL1.PFT_MM",
+      "sha256": "ea16a7af56045572125e0be1f6be8877eaef1e37d67133d8fb5dbcb96f7f9e57",
+      "local_path": "~/.cache/sunstoneos/sources/cpu-table-walks/cortex-a76.pdf",
+      "text_sha256": "2001f792283e6d0d0ecf1531fefca58ff817f26ebc072ab22bda14dbaa928c21",
+      "text_local_path": "~/.cache/sunstoneos/sources/cpu-table-walks/cortex-a76.txt",
+      "license": "Copyright Arm Limited; non-confidential documentation, retained outside tracked source",
+      "source_available": true,
+      "execution": "Host reference only; no vendor software is executed",
+      "use": "Both inner and outer write-back attributes permit descriptor reads through the data cache. Other combinations access external memory."
+    }
+  ]
+}

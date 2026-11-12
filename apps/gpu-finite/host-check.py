@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
+TCR_UNCACHED=module('gpu_finite_tcr',ROOT/'tools/a733_tcr.py').UNCACHED_WALK
 host=module('gpu_finite_host_check',ROOT/'apps/gpu-finite/host.py');report=host.report
 
 def reports(p):
@@ -37,7 +38,7 @@ def writer_check(image,manifest,geometry,evidence):
  assert hashlib.sha256(image.read_bytes()).hexdigest()=='2ab2cb1b3bac150d5eb695793ab0eb39bb453afc7fbd7ecb2f595ebfca3fd08d'
  # This pinned image predates cached table walks. Keep its actual TCR in the
  # existing translation model, as required by tools/a733_tcr.py.
- native.entry.shared.TCR=native.entry.shared.shared.TCR=0x200803019
+ native.entry.shared.TCR=native.entry.shared.shared.TCR=TCR_UNCACHED
  linked=native.layout.Image(image);linked.path=image;linked.ops={}
  for line in native.subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump','-d','--no-show-raw-insn',str(image)],text=True).splitlines():
   match=native.re.match(r'^\s*([0-9a-f]+):\s+(.+)$',line)

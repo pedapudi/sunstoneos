@@ -1,3 +1,4 @@
+#include "a733_cpu_coherence.h"
 #include "a733_cpu_continue.h"
 
 enum { DISTRIBUTOR, SCAN, CONTROL, MODE, WAKE_ENABLE, WAKE_CHECK,
@@ -300,7 +301,7 @@ void a733_cpu_continue_el1(unsigned long core,uint64_t epoch)
     __asm__ volatile("mrs %0, CurrentEL\n mrs %1, sctlr_el1\n mrs %2, mair_el1\n"
         "mrs %3, tcr_el1\n mrs %4, ttbr0_el1":"=r"(el),"=r"(sctlr),"=r"(mair),"=r"(tcr),"=r"(ttbr));
     if(core>=8 || native_core()!=core || el!=4 || (sctlr&0x1005)!=1 ||
-       mair!=0x4400 || tcr!=UINT64_C(0x200803019) || ttbr!=(uintptr_t)a733_cpu_continue_level1 ||
+       mair!=0x4400 || tcr!=A733_CPU_COHERENCE_TCR_UNCACHED_WALK || ttbr!=(uintptr_t)a733_cpu_continue_level1 ||
        a733_cpu_continue_plan.epoch!=epoch)park();
     uint64_t r=a733_cpu_continue_records[core].redistributor;
     if(!native_time(NULL,&now) || now>=a733_cpu_continue_plan.deadline_us ||
