@@ -1,0 +1,8 @@
+{
+  "name": "clock-api",
+  "devices": {"required": [], "optional": []},
+  "cpu": {"cluster": "a76", "workers": 0, "priority": 3, "stack_bytes": 8192},
+  "regions": [],
+  "deadlines": {"run_us": 2000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
+  "output_limit": 64
+}

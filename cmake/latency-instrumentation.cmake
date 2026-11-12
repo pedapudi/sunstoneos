@@ -1,7 +1,77 @@
 include_guard(GLOBAL)
+include("${CMAKE_CURRENT_LIST_DIR}/latency-restore-spans.cmake")
 option(SUNSTONE_LATENCY "Record maximum kernel and device response times" OFF)
 option(SUNSTONE_LATENCY_SWEEP "Keep every distinct masked-span pair with count, maximum and histogram (needs SUNSTONE_LATENCY)" OFF)
 option(SUNSTONE_LATENCY_PMU "Add per-span instruction and cache-refill counts to the latency report (read-only PMU use)" OFF)
+option(SUNSTONE_SCHED_LATENCY_TRACE "Record scheduler command, drain, exit and lock-wait timing in the latency diagnostic" OFF)
+option(SUNSTONE_SCHED_PMU "Count per-core PMU events in scheduler diagnostic windows" OFF)
+if(SUNSTONE_SCHED_PMU)
+  if(NOT SUNSTONE_LATENCY OR NOT SUNSTONE_SCHED_LATENCY_TRACE OR NOT SUNSTONE_PARTITIONED_SCHEDULER)
+    message(FATAL_ERROR "Scheduler PMU windows require latency recording, scheduler tracing and the partitioned scheduler")
+  endif()
+  if(SUNSTONE_LATENCY_PMU OR SUNSTONE_PMU_ACCOUNT OR SUNSTONE_PMU_RESULT OR SUNSTONE_LATENCY_CONTROL OR SUNSTONE_IRQ_COUNT)
+    message(FATAL_ERROR "Scheduler PMU windows require exclusive PMU ownership and the CPU-only latency wrapper")
+  endif()
+endif()
+option(SUNSTONE_LATENCY_CONTROL "Qualify robot control IRQ and task paths in the latency workload" OFF)
+set(SUNSTONE_LATENCY_CONTROL_MODE "busy" CACHE STRING "Control qualification phase: busy or idle")
+set_property(CACHE SUNSTONE_LATENCY_CONTROL_MODE PROPERTY STRINGS busy idle)
+if(SUNSTONE_LATENCY_CONTROL)
+  if(NOT SUNSTONE_LATENCY OR NOT SUNSTONE_PARTITIONED_SCHEDULER)
+    message(FATAL_ERROR "Control qualification requires latency recording and the partitioned scheduler")
+  endif()
+  if(SUNSTONE_LATENCY_PMU OR SUNSTONE_PMU_ACCOUNT OR SUNSTONE_CONTROL_IRQ OR SUNSTONE_CONTROL_TASK_EL1)
+    message(FATAL_ERROR "Control qualification requires SUNSTONE_LATENCY_PMU, SUNSTONE_PMU_ACCOUNT, SUNSTONE_CONTROL_IRQ and SUNSTONE_CONTROL_TASK_EL1 OFF")
+  endif()
+  if(SUNSTONE_LATENCY_CONTROL_MODE STREQUAL "busy")
+    set(SUNSTONE_LATENCY_CONTROL_MODE_ID 0)
+  elseif(SUNSTONE_LATENCY_CONTROL_MODE STREQUAL "idle")
+    set(SUNSTONE_LATENCY_CONTROL_MODE_ID 1)
+  else()
+    message(FATAL_ERROR "SUNSTONE_LATENCY_CONTROL_MODE must be busy or idle")
+  endif()
+endif()
+
+function(sunstone_enable_latency_control target)
+  target_sources(${target} PRIVATE "${SUNSTONE_SOURCE_ROOT}/runtime/control_irq.c")
+  target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_CONTROL=1
+    SUNSTONE_LATENCY_CONTROL_MODE=${SUNSTONE_LATENCY_CONTROL_MODE_ID}
+    SUNSTONE_LATENCY_RUN_US=15000000 INCLUDE_eTaskGetState=1)
+  set_property(TARGET ${target} PROPERTY SUNSTONE_LATENCY_CONTROL_BOUND ON)
+endfunction()
+
+# The control wrapper owns its PPIs before the latency recorder sees them.
+# Target properties keep the existing models' wrapper chain unchanged.
+set_property(SOURCE "${SUNSTONE_SOURCE_ROOT}/runtime/latency_irq.c" APPEND PROPERTY
+  COMPILE_DEFINITIONS "$<$<BOOL:$<TARGET_PROPERTY:SUNSTONE_LATENCY_CONTROL_BOUND>>:__wrap_vApplicationIRQHandler=ss_latency_inner_irq>")
+set_property(SOURCE "${SUNSTONE_SOURCE_ROOT}/runtime/control_irq.c" APPEND PROPERTY
+  COMPILE_DEFINITIONS "$<$<BOOL:$<TARGET_PROPERTY:SUNSTONE_LATENCY_CONTROL_BOUND>>:__real_vApplicationIRQHandler=ss_latency_inner_irq>")
+set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/runtime/control_irq.c"
+  PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
+
+function(sunstone_enable_scheduler_latency_trace target)
+  if(NOT SUNSTONE_SCHED_LATENCY_TRACE)
+    return()
+  endif()
+  if(NOT SUNSTONE_PARTITIONED_SCHEDULER)
+    message(FATAL_ERROR "Scheduler step timing requires the partitioned scheduler")
+  endif()
+  target_sources(${target} PRIVATE "${SUNSTONE_SOURCE_ROOT}/kernel/scheduler/latency_trace.c")
+  target_include_directories(${target} PRIVATE "${SUNSTONE_SOURCE_ROOT}/kernel/scheduler")
+  # Diagnostic storage declarations. Overflow is reported; maxima are retained
+  # separately, so a full log cannot silently discard its longest observation.
+  target_compile_definitions(${target} PRIVATE SUNSTONE_SCHED_LATENCY_TRACE=1
+    SS_SCHED_TRACE_WAITS=16 SS_SCHED_TRACE_TICKS=512 SS_SCHED_TRACE_HISTORY=16
+    INCLUDE_eTaskGetState=1)
+  set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/kernel/scheduler/latency_trace.c"
+    PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
+  if(SUNSTONE_SCHED_PMU)
+    target_sources(${target} PRIVATE "${SUNSTONE_SOURCE_ROOT}/kernel/scheduler/latency_pmu.c")
+    target_compile_definitions(${target} PRIVATE SUNSTONE_SCHED_PMU=1)
+    set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/kernel/scheduler/latency_pmu.c"
+      PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
+  endif()
+endfunction()
 set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/runtime/latency.c"
   "${SUNSTONE_SOURCE_ROOT}/runtime/latency_irq.c" PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
 
@@ -69,6 +139,10 @@ function(sunstone_enable_latency_port target)
   target_include_directories(${target} BEFORE PRIVATE "${output}")
   set_property(TARGET ${target} PROPERTY SUNSTONE_LATENCY_PORT_INPUTS "${inputs}")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${inputs})
+  sunstone_enable_latency_restore_spans(${target})
+  if(SUNSTONE_LATENCY_CONTROL AND target STREQUAL "sunstone-a733-os-core")
+    sunstone_enable_latency_control(${target})
+  endif()
 endfunction()
 
 function(sunstone_enable_latency target)

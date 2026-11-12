@@ -31,6 +31,26 @@
      {
          uxReturn = ( ( Queue_t * ) xQueue )->uxMessagesWaiting;
      }
+@@ -3156,6 +3162,9 @@
+          *  time a yield will be performed.  If an item is added to the queue while
+          *  the queue is locked, and the calling task blocks on the queue, then the
+          *  calling task will be immediately unblocked when the queue is unlocked. */
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++        ssKernelObjectSuspendOn( pxQueue );
++#endif
+         prvLockQueue( pxQueue );
+ 
+         if( pxQueue->uxMessagesWaiting == ( UBaseType_t ) 0U )
+@@ -3169,6 +3178,9 @@
+         }
+ 
+         prvUnlockQueue( pxQueue );
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++        ( void ) ssKernelObjectResumeOn();
++#endif
+ 
+         traceRETURN_vQueueWaitForMessageRestricted();
+     }
 --- event_groups.c
 +++ event_groups.c
 @@ -37,6 +37,12 @@

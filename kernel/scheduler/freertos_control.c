@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "freertos_control.h"
 #include <stddef.h>
+#include "latency_trace.h"
+#include "latency_pmu.h"
 
 #define ROUTE_CLOSED (UINT64_C(1) << 63)
 #define ROUTE_COUNT (ROUTE_CLOSED - 1)
@@ -16,6 +18,19 @@ static void unlock(struct ss_control *c, struct ss_control_slot *s)
 {
     atomic_fetch_add_explicit(&s->serving, 1, memory_order_release);
     ss_owner_event(c->backend);
+    uint64_t waiters = atomic_exchange_explicit(&s->waiters, 0, memory_order_acquire);
+    unsigned slot = (unsigned)(s - c->slot);
+    while (waiters) {
+        unsigned cpu = (unsigned)__builtin_ctzll(waiters);
+        waiters &= waiters - 1;
+        ss_control_wake(c, cpu, slot);
+    }
+}
+static bool try_lock(struct ss_control_slot *s)
+{
+    uint32_t serving = atomic_load_explicit(&s->serving, memory_order_acquire);
+    return atomic_compare_exchange_strong_explicit(&s->tickets, &serving,
+        serving + 1, memory_order_acq_rel, memory_order_acquire);
 }
 static void hint(struct ss_control *c, unsigned cpu, unsigned slot)
 {
@@ -27,6 +42,71 @@ static void all(struct ss_control *c, unsigned slot)
 {
     for (unsigned cpu = 0; cpu < SS_CONTROL_CPUS; ++cpu)
         if (c->active_mask & (UINT64_C(1) << cpu)) hint(c, cpu, slot);
+}
+void ss_control_park(struct ss_control *c, unsigned cpu, unsigned slot)
+{ ss_control_park_on(c, cpu, slot, &c->slot[slot].serving); }
+void ss_control_park_on(struct ss_control *c, unsigned cpu, unsigned slot, const void *resource)
+{
+    uint64_t bit = UINT64_C(1) << (slot % 64);
+    atomic_fetch_or_explicit(&c->pending[cpu].word[slot / 64], bit, memory_order_release);
+    atomic_fetch_or_explicit(&c->parked[cpu].word[slot / 64], bit, memory_order_release);
+#ifdef SS_CONTROL_PARK_TEST
+    extern void ss_control_test_park(struct ss_control *, unsigned, unsigned, unsigned);
+    ss_control_test_park(c, cpu, slot, 2);
+#endif
+    /* A release that acquires this cookie must not precede publication of
+     * the parked bit. Release before registration is covered by the caller's
+     * fresh resource-free check after publishing its waiter subscription. */
+    atomic_store_explicit(&c->parked_on[cpu][slot], (uintptr_t)resource, memory_order_release);
+}
+void ss_control_wake(struct ss_control *c, unsigned cpu, unsigned slot)
+{ ss_control_wake_on(c, cpu, slot, &c->slot[slot].serving); }
+void ss_control_wake_on(struct ss_control *c, unsigned cpu, unsigned slot, const void *resource)
+{
+    uintptr_t expected = (uintptr_t)resource;
+    if (!atomic_compare_exchange_strong_explicit(&c->parked_on[cpu][slot], &expected,
+        0, memory_order_acq_rel, memory_order_acquire)) return;
+    atomic_fetch_and_explicit(&c->parked[cpu].word[slot / 64],
+                              ~(UINT64_C(1) << (slot % 64)), memory_order_release);
+    hint(c, cpu, slot);
+}
+void ss_control_wake_mask(struct ss_control *c, unsigned cpu, const uint64_t slots[2], const void *resource)
+{
+    uint64_t admitted[2] = {0};
+    for (unsigned w = 0; w < 2; ++w) {
+        uint64_t bits = slots[w];
+        while (bits) {
+            unsigned b = (unsigned)__builtin_ctzll(bits), slot = w * 64 + b;
+            bits &= bits - 1;
+            uintptr_t expected = (uintptr_t)resource;
+            if (atomic_compare_exchange_strong_explicit(&c->parked_on[cpu][slot], &expected,
+                0, memory_order_acq_rel, memory_order_acquire)) admitted[w] |= UINT64_C(1) << b;
+        }
+        atomic_fetch_or_explicit(&c->pending[cpu].word[w], admitted[w], memory_order_release);
+        atomic_fetch_and_explicit(&c->parked[cpu].word[w], ~admitted[w], memory_order_release);
+    }
+    if (!(admitted[0] | admitted[1])) return;
+    ss_owner_barrier(c->backend);
+    if (c->backend && c->backend->sgi) c->backend->sgi(c->backend->context, cpu);
+}
+static void await_fifo_release(struct ss_control *c, unsigned cpu, unsigned slot)
+{
+    struct ss_control_slot *s = &c->slot[slot];
+    uint64_t bit = UINT64_C(1) << cpu;
+#ifdef SS_CONTROL_PARK_TEST
+    extern void ss_control_test_park(struct ss_control *, unsigned, unsigned, unsigned);
+    ss_control_test_park(c, cpu, slot, 0);
+#endif
+    ss_control_park(c, cpu, slot);
+    atomic_fetch_or_explicit(&s->waiters, bit, memory_order_release);
+#ifdef SS_CONTROL_PARK_TEST
+    ss_control_test_park(c, cpu, slot, 1);
+#endif
+    ss_owner_barrier(c->backend);
+    if (atomic_load_explicit(&s->tickets, memory_order_acquire) ==
+        atomic_load_explicit(&s->serving, memory_order_acquire) &&
+        (atomic_fetch_and_explicit(&s->waiters, ~bit, memory_order_acq_rel) & bit))
+        ss_control_wake(c, cpu, slot);
 }
 bool ss_control_route_pin(struct ss_control *c, unsigned slot,
                            struct ss_control_route *out)
@@ -101,6 +181,9 @@ void ss_control_register(struct ss_control *c, unsigned slot,
     s->descriptor = d;
     s->desired = (struct ss_control_state){ .incarnation = incarnation,
         .priority = priority, .effective_priority = priority, .affinity = affinity };
+    atomic_store_explicit(&s->suspension, 0, memory_order_relaxed);
+    atomic_store_explicit(&s->resume_pending, 0, memory_order_relaxed);
+    atomic_store_explicit(&s->affinity, affinity, memory_order_release);
     s->transfer = (struct ss_control_transfer){0};
     atomic_store_explicit(&s->owner, owner, memory_order_release);
     /* Registry registration requires lifetime references and all old owner
@@ -120,13 +203,24 @@ uint64_t ss_control_publish(struct ss_control *c, unsigned slot,
 {
     struct ss_control_slot *s = &c->slot[slot];
     lock(c, s);
+    s->desired.suspended = (atomic_load_explicit(&s->suspension, memory_order_acquire) &
+                            SS_CONTROL_SUSPENDED) != 0;
     bool was_suspended = s->desired.suspended;
     if (!s->desired.dead && mutate(context, &s->desired)) {
+        if (s->desired.suspended != was_suspended) {
+            if (s->desired.suspended)
+                atomic_fetch_or_explicit(&s->suspension,
+                    SS_CONTROL_SUSPENDED | SS_CONTROL_OFFCPU | SS_CONTROL_REMOTE_FRAME, memory_order_acq_rel);
+            else
+                atomic_fetch_and_explicit(&s->suspension, ~(SS_CONTROL_SUSPENDED | SS_CONTROL_SELF),
+                                           memory_order_acq_rel);
+        }
         if (!s->retained) {
             atomic_fetch_add_explicit(&s->descriptor->references, 1, memory_order_relaxed);
             s->retained = true;
         }
         ++s->desired.sequence;
+        atomic_store_explicit(&s->affinity, s->desired.affinity, memory_order_release);
         if (!was_suspended && s->desired.suspended)
             s->desired.offcpu_sequence = s->desired.sequence;
         /* A deletion's close and logical object detach are mutation duties. */
@@ -136,9 +230,52 @@ uint64_t ss_control_publish(struct ss_control *c, unsigned slot,
     unlock(c, s);
     return seq;
 }
+unsigned ss_control_suspension(const struct ss_control *c, unsigned slot)
+{ return atomic_load_explicit(&c->slot[slot].suspension, memory_order_acquire); }
+bool ss_control_suspend_current(struct ss_control *c, unsigned slot, unsigned cpu)
+{
+    struct ss_control_slot *s = &c->slot[slot];
+    unsigned old = atomic_fetch_or_explicit(&s->suspension,
+        SS_CONTROL_SUSPENDED | SS_CONTROL_OFFCPU | SS_CONTROL_SELF | SS_CONTROL_SELF_FRAME, memory_order_acq_rel);
+    unsigned owner = atomic_load_explicit(&s->owner, memory_order_acquire);
+    atomic_fetch_or_explicit(&c->pending[owner].word[slot / 64],
+                            UINT64_C(1) << (slot % 64), memory_order_release);
+    ss_owner_barrier(c->backend);
+    /* The current task immediately saves its frame. An interrupt that arrives
+     * before that transition already supplies the required owner entry. */
+    if (owner != cpu && c->backend && c->backend->sgi)
+        c->backend->sgi(c->backend->context, owner);
+    return !(old & SS_CONTROL_SUSPENDED);
+}
+bool ss_control_resume_isr(struct ss_control *c, unsigned slot)
+{
+    struct ss_control_slot *s = &c->slot[slot];
+    unsigned old = atomic_fetch_and_explicit(&s->suspension,
+        ~(SS_CONTROL_SUSPENDED | SS_CONTROL_SELF), memory_order_acq_rel);
+    if (!(old & SS_CONTROL_SUSPENDED)) return false;
+    atomic_fetch_add_explicit(&s->resume_pending, 1, memory_order_release);
+    hint(c, atomic_load_explicit(&s->owner, memory_order_acquire), slot);
+    return true;
+}
+void ss_control_refresh_suspension(struct ss_control *c, unsigned slot)
+{
+    struct ss_control_slot *s = &c->slot[slot];
+    unsigned flags = ss_control_suspension(c, slot);
+    uint64_t resumes = atomic_exchange_explicit(&s->resume_pending, 0, memory_order_acquire);
+    bool suspended = (flags & SS_CONTROL_SUSPENDED) != 0;
+    if (s->desired.suspended != suspended || resumes ||
+        ((flags & SS_CONTROL_OFFCPU) && !s->desired.offcpu_sequence)) {
+        ++s->desired.sequence;
+        s->desired.suspended = suspended;
+        s->desired.resume_generation += resumes;
+        if (flags & SS_CONTROL_OFFCPU) s->desired.offcpu_sequence = s->desired.sequence;
+    }
+}
 void ss_control_snapshot(struct ss_control *c, unsigned slot, struct ss_control_state *out)
 {
-    lock(c, &c->slot[slot]); *out = c->slot[slot].desired; unlock(c, &c->slot[slot]);
+    lock(c, &c->slot[slot]); *out = c->slot[slot].desired;
+    out->suspended = (ss_control_suspension(c, slot) & SS_CONTROL_SUSPENDED) != 0;
+    unlock(c, &c->slot[slot]);
 }
 bool ss_control_applied(const struct ss_control *c, unsigned slot, uint64_t seq)
 {
@@ -162,11 +299,57 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
     struct ss_control_slot *s = &c->slot[slot];
     bool put = false, retire = false;
     uint64_t incarnation;
-    lock(c, s);
+#ifdef SUNSTONE_SCHED_PMU
+    (void)ss_sched_pmu_prepare(cpu,SS_SCHED_PMU_CONTROL);
+#endif
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    struct ss_sched_trace_record trace_record = {.slot = slot, .stamp = {ss_sched_trace_now()}};
+#endif
+    if (!try_lock(s)) {
+        /* A record never waits behind a remote publisher. Its release wakes
+         * this parked request without a self-renewing interrupt retry. */
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+        trace_record.stamp[1] = ss_sched_trace_now();
+        trace_record.phase = SS_SCHED_RECORD_FIFO_BUSY;
+#endif
+        await_fifo_release(c, cpu, slot);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+        trace_record.stamp[2] = ss_sched_trace_now();
+        trace_record.stamp[3] = trace_record.stamp[4] = trace_record.stamp[2];
+        ss_sched_trace_record(cpu, &trace_record);
+#endif
+        return;
+    }
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    trace_record.stamp[1] = ss_sched_trace_now();
+#endif
+#ifdef SUNSTONE_SCHED_PMU
+    unsigned char pmu_scope;
+    (void)ss_sched_pmu_begin_scope(cpu,SS_SCHED_PMU_CONTROL,slot,0,&pmu_scope);
+#endif
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    trace_record.phase = s->phase;
+#endif
     incarnation = s->desired.incarnation;
+    if (cpu == s->owner) ss_control_refresh_suspension(c, slot);
     if (!s->desired.dead && !s->retained && cpu == s->owner &&
         ss_owner_pin(s->descriptor, s->desired.incarnation, c->backend)) {
         s->retained = true;
+    }
+    if (cpu == s->owner && s->retained && c->ops.prepare &&
+        !c->ops.prepare(c->ops.context, cpu, slot)) {
+#ifdef SUNSTONE_SCHED_PMU
+        (void)ss_sched_pmu_end_scope(cpu,&pmu_scope);
+#endif
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+        trace_record.stamp[2] = ss_sched_trace_now();
+#endif
+        unlock(c, s);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+        trace_record.stamp[3] = trace_record.stamp[4] = ss_sched_trace_now();
+        ss_sched_trace_record(cpu, &trace_record);
+#endif
+        return;
     }
     if (s->phase == 3 && cpu == s->transfer.old_owner &&
         route_drained(s, s->transfer.route_epoch)) {
@@ -203,7 +386,18 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
             (void)route_close(s);
             if (!c->ops.apply(c->ops.context, slot, task, &s->desired)) {
                 if (!c->ops.deferred || !c->ops.deferred(c->ops.context, slot)) hint(c, cpu, slot);
-                unlock(c, s); return;
+#ifdef SUNSTONE_SCHED_PMU
+                (void)ss_sched_pmu_end_scope(cpu,&pmu_scope);
+#endif
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+                trace_record.stamp[2] = ss_sched_trace_now();
+#endif
+                unlock(c, s);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+                trace_record.stamp[3] = trace_record.stamp[4] = ss_sched_trace_now();
+                ss_sched_trace_record(cpu, &trace_record);
+#endif
+                return;
             }
             atomic_store_explicit(&s->applied, s->desired.sequence, memory_order_release);
             s->phase = 0; s->retained = false; put = true;
@@ -230,6 +424,12 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
                 bool completed = c->ops.apply(c->ops.context, slot, task, &s->desired);
                 bool eligible = (s->desired.affinity & (UINT64_C(1) << cpu)) != 0;
                 if (completed && eligible) {
+                    /* Only the actual owner can finish a saved-frame fence.
+                     * A new self publication cannot execute on that CPU while
+                     * its owner commits; remote resume preserves this bit. */
+                    atomic_fetch_and_explicit(&s->suspension,
+                                               ~(SS_CONTROL_OFFCPU | SS_CONTROL_SELF_FRAME | SS_CONTROL_REMOTE_FRAME),
+                                               memory_order_release);
                     s->desired.offcpu_sequence = 0;
                     atomic_store_explicit(&s->applied, s->desired.sequence, memory_order_release);
                 }
@@ -245,38 +445,82 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
             }
         }
     } else hint(c, s->owner, slot);
+#ifdef SUNSTONE_SCHED_PMU
+    (void)ss_sched_pmu_end_scope(cpu,&pmu_scope);
+#endif
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    trace_record.stamp[2] = ss_sched_trace_now();
+#endif
     unlock(c, s);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    trace_record.stamp[3] = ss_sched_trace_now();
+#endif
     /* A last-put callback may publish retirement; never invoke under lock. */
     if (put) ss_owner_put(s->descriptor);
     if (retire && c->ops.retired) c->ops.retired(c->ops.context, slot, incarnation);
-    ss_owner_event(c->backend);
+    /* unlock already completes the serving/applied stores and wakes FIFO
+     * waiters. Only post-unlock lifetime work can require another event. */
+    if (put || retire) ss_owner_event(c->backend);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    trace_record.stamp[4] = ss_sched_trace_now();
+    ss_sched_trace_record(cpu, &trace_record);
+#endif
 }
 unsigned ss_control_drain(struct ss_control *c, unsigned cpu)
+{
+    uint64_t visited[2] = {0};
+    return ss_control_drain_excluding(c, cpu, visited);
+}
+unsigned ss_control_drain_excluding(struct ss_control *c, unsigned cpu, uint64_t visited[2])
 {
     /* Visit the pending hints in slot order from the cursor, once each. The
      * pending words are read once per word, not once per slot, so an empty
      * drain touches two words instead of every slot index. */
     _Static_assert(SS_OWNER_SLOTS == 128, "two pending words");
+    unsigned visited_count = (unsigned)__builtin_popcountll(visited[0]) +
+        (unsigned)__builtin_popcountll(visited[1]);
+    unsigned limit = visited_count >= SS_OWNER_BATCH ? 0 : SS_OWNER_BATCH - visited_count;
     unsigned count = 0, start = c->cursor[cpu].value;
-    for (unsigned pass = 0; pass < 2 && count < SS_OWNER_BATCH; ++pass) {
+    for (unsigned pass = 0; pass < 2 && count < limit; ++pass) {
         unsigned first = pass ? 0 : start, last = pass ? start : SS_OWNER_SLOTS;
-        for (unsigned w = first / 64; w <= (last ? (last - 1) / 64 : 0) && last > first && count < SS_OWNER_BATCH; ++w) {
+        for (unsigned w = first / 64; w <= (last ? (last - 1) / 64 : 0) && last > first && count < limit; ++w) {
             unsigned lo = w * 64 > first ? 0 : first - w * 64;
             unsigned hi = (w + 1) * 64 < last ? 64 : last - w * 64;
             uint64_t range = (hi == 64 ? ~UINT64_C(0) : (UINT64_C(1) << hi) - 1) & ~((UINT64_C(1) << lo) - 1);
-            uint64_t bits = atomic_load_explicit(&c->pending[cpu].word[w], memory_order_acquire) & range;
-            while (bits && count < SS_OWNER_BATCH) {
+            uint64_t pending = atomic_load_explicit(&c->pending[cpu].word[w], memory_order_acquire);
+            uint64_t parked = atomic_load_explicit(&c->parked[cpu].word[w], memory_order_acquire);
+            uint64_t bits = pending & ~parked & range & ~visited[w];
+            while (bits && count < limit) {
                 unsigned b = (unsigned)__builtin_ctzll(bits), slot = w * 64 + b;
                 uint64_t bit = UINT64_C(1) << b;
                 bits &= bits - 1;
                 if (atomic_fetch_and_explicit(&c->pending[cpu].word[w], ~bit, memory_order_acquire) & bit) {
+                    visited[w] |= bit;
                     consume(c, cpu, slot); ++count;
                     c->cursor[cpu].value = (slot + 1) % SS_OWNER_SLOTS;
+                    if (c->ops.pause && c->ops.pause(c->ops.context, cpu)) return count;
                 }
             }
         }
     }
     return count;
+}
+unsigned ss_control_drain_slot(struct ss_control *c, unsigned cpu, unsigned slot)
+{
+    uint64_t bit = UINT64_C(1) << (slot % 64);
+    if (!(atomic_fetch_and_explicit(&c->pending[cpu].word[slot / 64], ~bit,
+                                    memory_order_acquire) & bit)) return 0;
+    consume(c, cpu, slot);
+    return 1;
+}
+bool ss_control_has_pending(const struct ss_control *c, unsigned cpu)
+{
+    for (unsigned w = 0; w < 2; ++w) {
+        uint64_t pending = atomic_load_explicit(&c->pending[cpu].word[w], memory_order_acquire);
+        uint64_t parked = atomic_load_explicit(&c->parked[cpu].word[w], memory_order_acquire);
+        if (pending & ~parked) return true;
+    }
+    return false;
 }
 bool ss_control_checkpoint(struct ss_control *c, unsigned cpu)
 {
@@ -299,6 +543,10 @@ void ss_control_suspend_all(struct ss_control *c, unsigned cpu, uintptr_t holder
     atomic_store_explicit(&c->gate_ack, 0, memory_order_relaxed);
     atomic_fetch_add_explicit(&c->gate_epoch, 1, memory_order_relaxed);
     atomic_store_explicit(&c->gate_phase, SS_GATE_ACQUIRING, memory_order_release);
+#ifdef SS_KERNEL_TEST_ADMIN_ENTER
+    extern void ss_kernel_test_gate_acquiring(void) __attribute__((weak));
+    if (ss_kernel_test_gate_acquiring) ss_kernel_test_gate_acquiring();
+#endif
     for (unsigned target = 0; target < SS_CONTROL_CPUS; ++target)
         if ((c->active_mask & (UINT64_C(1) << target)) && c->backend && c->backend->sgi)
             c->backend->sgi(c->backend->context, target);

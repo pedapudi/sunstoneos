@@ -2,6 +2,8 @@
 #include "task.h"
 #include "queue.h"
 #include "platform.h"
+#include "freertos_control.h"
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef SS_QEMU_DYNAMIC_LIFECYCLE
@@ -103,6 +105,165 @@ static unsigned isolated_local, selected_idle[8];
 static unsigned withholding, blocker_release, withhold_cores, blocker_parked;
 static uint64_t withholding_completed, withholding_observations, withholding_ticks;
 static uint64_t local_phase_locks, local_wakes, local_completed, local_ticks, peer_idle_samples;
+static unsigned freeze_test, empty_sgis[8], abort_phase, abort_parked, abort_waits;
+static TaskHandle_t abort_target;
+static unsigned migration_phase, migration_started, migration_incoming, migration_adopted;
+static TaskHandle_t migration_target;
+static unsigned deferred_peer_started, deferred_peer_ran;
+static unsigned remote_suspend_returned;
+static unsigned admission_started, admission_go, admission_armed, admission_waiting, admission_completed;
+static unsigned admission_phase[9], admission_core[9], admission_migrate;
+static TaskHandle_t admission_target;
+static TaskHandle_t shield_self_target, held_self_target, delete_self_target, local_wake_target;
+static unsigned shield_self_phase, shield_premask, shield_fulfilled, shield_remote_frame;
+static unsigned held_self_started, held_self_release, held_self_returned, held_self_armed;
+static unsigned delete_self_mode, delete_self_go, delete_self_started, delete_self_waiting, delete_self_frozen;
+static unsigned local_wake_mode, local_wake_started, local_wake_ran;
+extern void ss_kernel_test_freeze_mark(unsigned);
+extern void ss_kernel_test_freeze_release(TaskHandle_t);
+extern void ss_kernel_test_request(TaskHandle_t, unsigned, unsigned);
+extern unsigned ss_kernel_test_task_state(TaskHandle_t);
+extern void ss_kernel_test_cleanup_shield(TaskHandle_t, bool);
+extern void ss_kernel_test_gate_hold(TaskHandle_t);
+extern bool ss_kernel_test_gate_complete(void);
+extern void ss_kernel_test_release_after_wait(unsigned);
+extern bool ss_kernel_test_redirect_saved(unsigned);
+extern bool ss_kernel_test_route_returned(TaskHandle_t);
+extern bool ss_latency_task_suspended(void *);
+extern void ss_kernel_test_yield_in_object(const void *);
+extern void ss_kernel_test_pending_slice(void);
+extern bool ss_kernel_test_current_running(void);
+extern bool ss_kernel_test_delay_aborted(void);
+extern unsigned ss_kernel_test_suspension(TaskHandle_t);
+extern bool ss_kernel_test_frame_pending(TaskHandle_t);
+extern unsigned ss_kernel_test_drain_held(TaskHandle_t);
+extern bool ss_kernel_test_freeze_unacked(unsigned);
+extern void ss_kernel_test_object_admission(const void *, unsigned);
+extern void ss_kernel_test_resume_then_suspend(TaskHandle_t, bool);
+extern void ssKernelObjectSuspendOn(const void *);
+extern BaseType_t ssKernelObjectResumeOn(void);
+void ss_kernel_test_gate_acquiring(void)
+{
+    if (__atomic_load_n(&held_self_armed, __ATOMIC_ACQUIRE))
+        __atomic_store_n(&held_self_release, 1, __ATOMIC_RELEASE);
+    unsigned kind = __atomic_load_n(&admission_armed, __ATOMIC_ACQUIRE);
+    if (!kind) return;
+    __atomic_store_n(&admission_go, kind, __ATOMIC_RELEASE);
+    for (unsigned wait = 0; wait < 1000000 && __atomic_load_n(&admission_waiting, __ATOMIC_ACQUIRE) != kind; ++wait)
+        __asm__ volatile("nop");
+    configASSERT(admission_waiting == kind);
+}
+void ss_kernel_test_admission_wait(unsigned cpu, unsigned phase)
+{
+    (void)cpu;
+    if (xTaskGetCurrentTaskHandle() == delete_self_target) {
+        __atomic_store_n(&delete_self_waiting, 1, __ATOMIC_RELEASE);
+        return;
+    }
+    if (xTaskGetCurrentTaskHandle() != admission_target) return;
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
+    configASSERT(irq > portMAX_API_PRIORITY_MASK);
+    portCLEAR_INTERRUPT_MASK(irq);
+    unsigned kind = __atomic_load_n(&admission_go, __ATOMIC_ACQUIRE);
+    if (__atomic_load_n(&admission_waiting, __ATOMIC_ACQUIRE) != kind) admission_phase[kind] = phase;
+    __atomic_store_n(&admission_waiting, kind, __ATOMIC_RELEASE);
+}
+void ss_kernel_test_admission_resume(void)
+{
+    if (xTaskGetCurrentTaskHandle() == admission_target && __atomic_load_n(&admission_migrate, __ATOMIC_ACQUIRE))
+        taskYIELD();
+}
+void ss_kernel_test_selecting(unsigned cpu, bool mandatory)
+{
+    unsigned freeze = __atomic_load_n(&freeze_test, __ATOMIC_ACQUIRE);
+    if ((cpu == 0 && (freeze == 2 || freeze == 5 || freeze == 8)) ||
+        (cpu == 1 && __atomic_load_n(&held_self_armed, __ATOMIC_ACQUIRE)))
+        configASSERT(mandatory && ss_kernel_test_freeze_unacked(cpu));
+}
+void ss_kernel_test_self_suspend_published(void)
+{
+    if (xTaskGetCurrentTaskHandle() == shield_self_target && shield_premask) {
+        shield_premask = 0;
+        portYIELD();
+        shield_fulfilled = 1;
+    }
+}
+void ss_kernel_test_self_delete_mark(unsigned cpu)
+{
+    if (xTaskGetCurrentTaskHandle() == delete_self_target && delete_self_mode == 2) {
+        ss_kernel_test_freeze_mark(cpu);
+        __atomic_store_n(&delete_self_frozen, 1, __ATOMIC_RELEASE);
+    }
+}
+void ss_kernel_test_remote_suspend_mark(unsigned cpu)
+{
+    if (xTaskGetCurrentTaskHandle() == shield_self_target && shield_self_phase == 13) {
+        configASSERT(ss_kernel_test_suspension(shield_self_target) & SS_CONTROL_OFFCPU);
+        configASSERT(!ss_latency_task_suspended(shield_self_target));
+        shield_remote_frame = 1;
+    }
+    if (cpu == 0 && __atomic_load_n(&freeze_test, __ATOMIC_ACQUIRE) == 4 &&
+        xTaskGetCurrentTaskHandle() == controller) {
+        ss_kernel_test_freeze_mark(cpu);
+        __atomic_store_n(&freeze_test, 5, __ATOMIC_RELEASE);
+    }
+}
+void ss_kernel_test_detach_incoming(unsigned slot, bool queued)
+{
+    (void)slot;
+    if (portGET_CORE_ID() == 2 && __atomic_load_n(&migration_phase, __ATOMIC_ACQUIRE) == 1) {
+        configASSERT(!queued);
+        ++migration_incoming;
+    }
+}
+void ss_kernel_test_ineligible_adopt(unsigned cpu, bool queued)
+{
+    if (__atomic_load_n(&migration_phase, __ATOMIC_ACQUIRE) < 3) {
+        configASSERT(!queued && cpu == 3);
+        ++migration_adopted;
+    }
+}
+void ss_kernel_test_saved_frame(unsigned cpu, unsigned slot)
+{
+    if (cpu == 0 && xTaskGetCurrentTaskHandle() == shield_self_target && shield_self_phase == 10) {
+        shield_self_phase = 11;
+        ss_kernel_test_resume_then_suspend(shield_self_target, true);
+    }
+    if (cpu == 2 && __atomic_load_n(&migration_phase, __ATOMIC_ACQUIRE) == 1 &&
+        xTaskGetCurrentTaskHandle() == migration_target && ss_kernel_test_redirect_saved(slot))
+        __atomic_store_n(&migration_phase, 2, __ATOMIC_RELEASE);
+}
+void ss_kernel_test_sgi(void)
+{ __atomic_fetch_add(&empty_sgis[portGET_CORE_ID()], 1, __ATOMIC_RELEASE); }
+void ss_kernel_test_direct_suspend_mark(unsigned cpu)
+{
+    if (xTaskGetCurrentTaskHandle() == shield_self_target && shield_fulfilled)
+        configASSERT(shield_self_phase != 6);
+    if (cpu == 0 && __atomic_load_n(&freeze_test, __ATOMIC_ACQUIRE) == 1 &&
+        xTaskGetCurrentTaskHandle() == controller) {
+        ss_kernel_test_freeze_mark(cpu);
+        __atomic_store_n(&freeze_test, 2, __ATOMIC_RELEASE);
+    }
+}
+void ss_kernel_test_after_control_batch(unsigned cpu)
+{
+    if (cpu == 0 && __atomic_load_n(&abort_phase, __ATOMIC_ACQUIRE) == 1 &&
+        ss_kernel_test_gate_complete()) {
+        __atomic_store_n(&abort_parked, 1, __ATOMIC_RELEASE);
+    }
+}
+void ss_kernel_test_wait_blocked(unsigned slot, uint64_t generation)
+{
+    (void)generation;
+    if (xTaskGetCurrentTaskHandle() == controller &&
+        __atomic_load_n(&freeze_test, __ATOMIC_ACQUIRE) == 7) {
+        ss_kernel_test_freeze_mark(0);
+        __atomic_store_n(&freeze_test, 8, __ATOMIC_RELEASE);
+    }
+    if (xTaskGetCurrentTaskHandle() == abort_target) {
+        if (++abort_waits == 2) ss_kernel_test_release_after_wait(slot);
+    }
+}
 void ss_kernel_test_admin_enter(unsigned cpu)
 {
     __atomic_fetch_add(&admin_locks[cpu], 1, __ATOMIC_RELAXED);
@@ -138,7 +299,8 @@ void __wrap_vTaskSwitchContext(BaseType_t cpu)
     __real_vTaskSwitchContext(cpu);
     in_switch[cpu] = 0;
     __atomic_fetch_add(&switches[cpu], 1, __ATOMIC_RELAXED);
-    unsigned idle = uxTaskPriorityGet(NULL) == 0;
+    /* TPIDRRO still identifies the saved outgoing frame until port restore. */
+    unsigned idle = uxTaskPriorityGet(pxCurrentTCBs[cpu]) == 0;
     __atomic_store_n(&selected_idle[cpu], idle, __ATOMIC_RELAXED);
     if (idle) __atomic_fetch_add(&idle_selected[cpu], 1, __ATOMIC_RELAXED);
 }
@@ -163,7 +325,19 @@ static void worker(void *argument)
 {
     unsigned id = (uintptr_t)argument;
     for (;;) {
-        configASSERT(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000)) == 1);
+        uint32_t notified = ulTaskNotifyTake(pdTRUE,
+            worker_round[id] == ROUNDS ? portMAX_DELAY : pdMS_TO_TICKS(2000));
+        if (notified != 1) {
+            platform_puts("worker wait cpu="); platform_hex(id);
+            platform_puts(" control-round="); platform_hex(control_round);
+            platform_puts(" control-phase="); platform_hex(control_phase); platform_puts("\n");
+            extern void ss_kernel_test_dump_control(TaskHandle_t);
+            ss_kernel_test_dump_control(controller);
+            ss_kernel_test_dump_control(movers[0]);
+            ss_kernel_test_dump_control(movers[1]);
+        }
+        configASSERT(notified == 1);
+        configASSERT(worker_round[id] < ROUNDS);
         configASSERT(portGET_CORE_ID() == id);
         uint32_t value;
         configASSERT(xQueueReceive(empty, &value, 1) == pdFAIL);
@@ -176,6 +350,13 @@ static void background(void *argument)
     unsigned id = (uintptr_t)argument;
     for (;;) {
         configASSERT(portGET_CORE_ID() == id);
+        unsigned freeze = __atomic_load_n(&freeze_test, __ATOMIC_ACQUIRE);
+        if (id == 0 && (freeze == 2 || freeze == 5 || freeze == 8)) {
+            ss_kernel_test_freeze_release(controller);
+            __atomic_store_n(&freeze_test, freeze == 2 ? 3 : freeze == 5 ? 6 : 9, __ATOMIC_RELEASE);
+            if (freeze == 8) configASSERT(xTaskAbortDelay(controller) == pdTRUE);
+            else vTaskResume(controller);
+        }
         __atomic_fetch_add(&busy[id], 1, __ATOMIC_RELAXED);
     }
 }
@@ -271,6 +452,32 @@ static StaticTask_t boot_state[BOOT_TASKS];
 static StackType_t boot_stack[BOOT_TASKS][1024];
 static TaskHandle_t boot_tasks[BOOT_TASKS];
 static unsigned boot_core[BOOT_TASKS] = {99, 99, 99, 99, 99}, boot_runs[BOOT_TASKS];
+static unsigned boot_suspend_checks[BOOT_TASKS];
+void ss_kernel_test_before_self_suspend(uint64_t *repair, uint64_t bit)
+{
+    TaskHandle_t current = xTaskGetCurrentTaskHandle();
+    for (unsigned id = 0; id < BOOT_TASKS; ++id)
+        if (boot_tasks[id] == current) {
+            /* Retain a prior repair indication across the new publication.
+             * Completing current-task metadata must retire this indication. */
+            *repair |= bit;
+            return;
+        }
+}
+void ss_kernel_test_self_suspend(unsigned consumed, bool repair, bool suspended,
+                                  bool off_cpu, bool acknowledged)
+{
+    TaskHandle_t current = xTaskGetCurrentTaskHandle();
+    for (unsigned id = 0; id < BOOT_TASKS; ++id) {
+        if (boot_tasks[id] != current) continue;
+        /* The direct transition consumes no metadata record. A prior repair
+         * stays pending, and only the saved frame can acknowledge suspension. */
+        configASSERT(consumed == 0 && repair && suspended && !off_cpu && !acknowledged);
+        configASSERT(!ss_latency_task_suspended(current));
+        __atomic_fetch_add(&boot_suspend_checks[id], 1, __ATOMIC_RELEASE);
+        return;
+    }
+}
 static void boot_task(void *argument)
 {
     unsigned id = (uintptr_t)argument;
@@ -299,11 +506,425 @@ static void boot_controls_verify(void)
     /* Task 3: deleted before the start; it never runs. */
     vTaskDelay(4);
     configASSERT(boot_runs[3] == 0);
+    for (unsigned id = 0; id < BOOT_TASKS; ++id) {
+        if (id == 3) continue;
+        for (unsigned wait = 0; wait < 200 && !__atomic_load_n(&boot_suspend_checks[id], __ATOMIC_ACQUIRE); ++wait)
+            vTaskDelay(1);
+        configASSERT(__atomic_load_n(&boot_suspend_checks[id], __ATOMIC_ACQUIRE) == 1);
+        for (unsigned wait = 0; wait < 200 && !ss_latency_task_suspended(boot_tasks[id]); ++wait) vTaskDelay(1);
+        configASSERT(ss_latency_task_suspended(boot_tasks[id]));
+    }
+}
+static StaticTask_t control_race_state[11];
+static StackType_t control_race_stack[11][2048];
+static StaticQueue_t shield_queue_state;
+static uint8_t shield_queue_storage[sizeof(uint32_t)];
+static QueueHandle_t shield_queue;
+static StaticQueue_t local_wake_queue_state;
+static uint8_t local_wake_queue_storage[sizeof(uint32_t)];
+static QueueHandle_t local_wake_queue;
+static void abort_actor(void *unused)
+{
+    (void)unused;
+    configASSERT(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
+    configASSERT(abort_parked && abort_phase == 1);
+    __atomic_store_n(&abort_phase, 2, __ATOMIC_RELEASE);
+    configASSERT(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
+    __atomic_store_n(&abort_phase, 3, __ATOMIC_RELEASE);
+    for (;;) vTaskSuspend(NULL);
+}
+static void shield_actor(void *unused)
+{
+    (void)unused;
+    uint32_t value;
+    (void)xQueueReceive(shield_queue, &value, portMAX_DELAY);
+    platform_panic("shielded event wait unexpectedly completed", 0);
+}
+static void migration_actor(void *unused)
+{
+    (void)unused;
+    __atomic_store_n(&migration_started, 1, __ATOMIC_RELEASE);
+    while (__atomic_load_n(&migration_phase, __ATOMIC_ACQUIRE) < 2) __asm__ volatile("nop");
+    configASSERT(portGET_CORE_ID() == 2 && ss_kernel_test_route_returned(xTaskGetCurrentTaskHandle()));
+    __atomic_store_n(&migration_phase, 3, __ATOMIC_RELEASE);
+    for (;;) vTaskSuspend(NULL);
+}
+static void deferred_peer(void *unused)
+{
+    (void)unused;
+    __atomic_store_n(&deferred_peer_started, 1, __ATOMIC_RELEASE);
+    configASSERT(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
+    __atomic_store_n(&deferred_peer_ran, 1, __ATOMIC_RELEASE);
+    for (;;) vTaskSuspend(NULL);
+}
+static void remote_suspend_actor(void *unused)
+{
+    (void)unused;
+    configASSERT(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
+    vTaskSuspend(controller);
+    __atomic_store_n(&remote_suspend_returned, 1, __ATOMIC_RELEASE);
+    for (;;) vTaskSuspend(NULL);
+}
+static void admission_actor(void *unused)
+{
+    (void)unused;
+    __atomic_store_n(&admission_started, 1, __ATOMIC_RELEASE);
+    for (unsigned kind = 1; kind <= 8; ++kind) {
+        while (__atomic_load_n(&admission_go, __ATOMIC_ACQUIRE) != kind) __asm__ volatile("nop");
+        if (kind == 1) vTaskDelay(1);
+        else if (kind == 2) configASSERT(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
+        else if (kind <= 6) ss_kernel_test_object_admission(empty, kind - 3);
+        else if (kind == 7) configASSERT(xTaskGetSchedulerState() == taskSCHEDULER_RUNNING);
+        else {
+            UBaseType_t irq = portSET_INTERRUPT_MASK();
+            ss_kernel_test_object_admission(empty, 0);
+            portCLEAR_INTERRUPT_MASK(irq);
+        }
+        admission_core[kind] = portGET_CORE_ID();
+        __atomic_store_n(&admission_completed, kind, __ATOMIC_RELEASE);
+    }
+    for (;;) vTaskSuspend(NULL);
+}
+static void admission_verify(void)
+{
+    admission_target = xTaskCreateStaticAffinitySet(admission_actor, "freeze-admission", 2048,
+        NULL, 6, control_race_stack[5], &control_race_state[5], 2);
+    configASSERT(admission_target);
+    for (unsigned wait = 0; wait < 200 && !__atomic_load_n(&admission_started, __ATOMIC_ACQUIRE); ++wait) vTaskDelay(1);
+    configASSERT(admission_started);
+    for (unsigned kind = 1; kind <= 8; ++kind) {
+        __atomic_store_n(&admission_armed, kind & 1u ? kind : 0, __ATOMIC_RELEASE);
+        vTaskSuspendAll();
+        /* The holder may consume an available notification with a nonzero
+         * timeout. Only an actual attempt to block is forbidden here. */
+        xTaskNotifyGive(controller);
+        configASSERT(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
+        __atomic_store_n(&admission_go, kind, __ATOMIC_RELEASE);
+        for (unsigned wait = 0; wait < 1000000 && (kind == 8 || __atomic_load_n(&admission_waiting, __ATOMIC_ACQUIRE) != kind) &&
+             __atomic_load_n(&admission_completed, __ATOMIC_ACQUIRE) < kind; ++wait) __asm__ volatile("nop");
+        if (kind == 8) configASSERT(admission_completed == 8 && admission_waiting != 8);
+        else {
+            configASSERT(admission_waiting == kind && admission_completed < kind);
+            configASSERT(admission_phase[kind] == (kind & 1u ? 1u : 2u));
+        }
+        if (kind == 2) {
+            __atomic_store_n(&admission_migrate, 1, __ATOMIC_RELEASE);
+            vTaskCoreAffinitySet(admission_target, 4);
+        }
+        (void)xTaskResumeAll();
+        __atomic_store_n(&admission_migrate, 0, __ATOMIC_RELEASE);
+        if (kind == 2) xTaskNotifyGive(admission_target);
+        for (unsigned wait = 0; wait < 200 && __atomic_load_n(&admission_completed, __ATOMIC_ACQUIRE) < kind; ++wait) vTaskDelay(1);
+        configASSERT(admission_completed == kind && admission_core[kind] == (kind == 1 ? 1u : 2u));
+        __atomic_store_n(&admission_armed, 0, __ATOMIC_RELEASE);
+    }
+    vTaskDelete(admission_target);
+    admission_target = NULL;
+}
+static void local_wake_actor(void *unused)
+{
+    (void)unused;
+    __atomic_store_n(&local_wake_started, 1, __ATOMIC_RELEASE);
+    if (!local_wake_mode) {
+        uint32_t value;
+        configASSERT(xQueueReceive(local_wake_queue, &value, portMAX_DELAY) == pdPASS && value == 0x42);
+    } else configASSERT(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
+    __atomic_store_n(&local_wake_ran, 1, __ATOMIC_RELEASE);
+    for (;;) vTaskSuspend(NULL);
+}
+static void local_wakes_verify(void)
+{
+    local_wake_queue = xQueueCreateStatic(1, sizeof(uint32_t), local_wake_queue_storage, &local_wake_queue_state);
+    configASSERT(local_wake_queue);
+    for (unsigned mode = 0; mode < 2; ++mode) {
+        local_wake_mode = mode;
+        local_wake_started = local_wake_ran = 0;
+        local_wake_target = xTaskCreateStaticAffinitySet(local_wake_actor, "local-control-wake", 2048,
+            NULL, 6, control_race_stack[6], &control_race_state[6], 1);
+        configASSERT(local_wake_target && local_wake_started && (ss_kernel_test_task_state(local_wake_target) & 1));
+        if (!mode) {
+            vTaskPreemptionDisable(NULL);
+            uint32_t value = 0x42;
+            configASSERT(xQueueSend(local_wake_queue, &value, 0) == pdPASS);
+            configASSERT(local_wake_ran == 0);
+            unsigned seen = __atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE);
+            uint64_t selections = __atomic_load_n(&switches[0], __ATOMIC_ACQUIRE);
+            portYIELD_CORE(0);
+            for (unsigned wait = 0; wait < 100000 && __atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE) == seen; ++wait)
+                __asm__ volatile("nop");
+            configASSERT(__atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE) > seen);
+            configASSERT(__atomic_load_n(&switches[0], __ATOMIC_ACQUIRE) > selections);
+            configASSERT(local_wake_ran == 0 && (ss_kernel_test_task_state(local_wake_target) & 256));
+            vTaskPreemptionEnable(NULL);
+            configASSERT(local_wake_ran == 1);
+        } else {
+            vTaskSuspendAll();
+            xTaskNotifyGive(local_wake_target);
+            configASSERT((ss_kernel_test_task_state(local_wake_target) & 257) == 1);
+            (void)xTaskResumeAll();
+            configASSERT(local_wake_ran == 1);
+        }
+        vTaskDelete(local_wake_target);
+    }
+}
+static void held_self_actor(void *unused)
+{
+    (void)unused;
+    vTaskPreemptionDisable(NULL);
+    ssKernelObjectSuspendOn(empty);
+    unsigned seen = __atomic_load_n(&empty_sgis[1], __ATOMIC_ACQUIRE);
+    vTaskSuspend(NULL);
+    for (unsigned wait = 0; wait < 100000 && __atomic_load_n(&empty_sgis[1], __ATOMIC_ACQUIRE) == seen; ++wait)
+        __asm__ volatile("nop");
+    configASSERT(__atomic_load_n(&empty_sgis[1], __ATOMIC_ACQUIRE) > seen);
+    __atomic_store_n(&held_self_started, 1, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&held_self_release, __ATOMIC_ACQUIRE)) __asm__ volatile("nop");
+    (void)ssKernelObjectResumeOn();
+    __atomic_store_n(&held_self_returned, 1, __ATOMIC_RELEASE);
+    vTaskPreemptionEnable(NULL);
+    for (;;) vTaskSuspend(NULL);
+}
+static void held_self_verify(void)
+{
+    held_self_target = xTaskCreateStaticAffinitySet(held_self_actor, "held-self", 2048,
+        NULL, 6, control_race_stack[7], &control_race_state[7], 2);
+    configASSERT(held_self_target);
+    for (unsigned wait = 0; wait < 200 && !__atomic_load_n(&held_self_started, __ATOMIC_ACQUIRE); ++wait) vTaskDelay(1);
+    configASSERT(held_self_started);
+    __atomic_store_n(&held_self_armed, 1, __ATOMIC_RELEASE);
+    vTaskSuspendAll();
+    configASSERT(!held_self_returned && xTaskGetCurrentTaskHandleForCore(1) != held_self_target);
+    __atomic_store_n(&held_self_armed, 0, __ATOMIC_RELEASE);
+    (void)xTaskResumeAll();
+    for (unsigned wait = 0; wait < 200 && !ss_latency_task_suspended(held_self_target); ++wait) vTaskDelay(1);
+    configASSERT(ss_latency_task_suspended(held_self_target));
+    vTaskResume(held_self_target);
+    for (unsigned wait = 0; wait < 200 && !__atomic_load_n(&held_self_returned, __ATOMIC_ACQUIRE); ++wait) vTaskDelay(1);
+    configASSERT(held_self_returned);
+    vTaskDelete(held_self_target);
+}
+static void shield_self_actor(void *unused)
+{
+    (void)unused;
+    TaskHandle_t self = xTaskGetCurrentTaskHandle();
+    shield_self_target = self;
+    ss_kernel_test_cleanup_shield(self, true);
+    shield_self_phase = 10;
+    vTaskSuspend(NULL);
+    configASSERT(shield_self_phase == 11);
+    configASSERT((ss_kernel_test_suspension(self) &
+        (SS_CONTROL_SUSPENDED | SS_CONTROL_OFFCPU | SS_CONTROL_SELF | SS_CONTROL_SELF_FRAME | SS_CONTROL_REMOTE_FRAME)) ==
+        (SS_CONTROL_OFFCPU | SS_CONTROL_REMOTE_FRAME));
+    configASSERT(ss_kernel_test_frame_pending(self));
+    shield_self_phase = 12;
+    configASSERT(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
+    configASSERT(shield_self_phase == 13);
+    ss_kernel_test_cleanup_shield(self, false);
+    while (ss_kernel_test_suspension(self) & SS_CONTROL_REMOTE_FRAME) taskYIELD();
+    configASSERT(shield_remote_frame && !ss_kernel_test_frame_pending(self));
+    shield_self_phase = 14;
+    ss_kernel_test_cleanup_shield(self, true);
+    shield_self_phase = 1;
+    vTaskSuspend(NULL);
+    configASSERT(shield_self_phase == 2);
+    shield_self_phase = 3;
+    vTaskSuspend(NULL);
+    configASSERT(shield_self_phase == 4);
+    shield_self_phase = 5;
+    shield_premask = 1;
+    vTaskSuspend(NULL);
+    configASSERT(shield_self_phase == 6);
+    shield_self_phase = 7;
+    vTaskSuspend(NULL);
+    configASSERT(shield_self_phase == 8);
+    shield_self_phase = 9;
+    ss_kernel_test_cleanup_shield(self, false);
+    for (;;) vTaskSuspend(NULL);
+}
+static void shield_self_wait(unsigned phase)
+{
+    for (unsigned wait = 0; wait < 200 &&
+         (shield_self_phase != phase || !ss_latency_task_suspended(shield_self_target)); ++wait) vTaskDelay(1);
+    configASSERT(shield_self_phase == phase && ss_latency_task_suspended(shield_self_target));
+}
+static void shield_self_verify(void)
+{
+    shield_self_target = xTaskCreateStaticAffinitySet(shield_self_actor, "shield-self", 2048,
+        NULL, 6, control_race_stack[8], &control_race_state[8], 1);
+    configASSERT(shield_self_target);
+    for (unsigned wait = 0; wait < 200 && shield_self_phase != 12; ++wait) vTaskDelay(1);
+    configASSERT(shield_self_phase == 12);
+    shield_self_phase = 13;
+    xTaskNotifyGive(shield_self_target);
+    for (unsigned wait = 0; wait < 200 && shield_self_phase != 1; ++wait) vTaskDelay(1);
+    shield_self_wait(1);
+    vTaskPrioritySet(shield_self_target, 7);
+    configASSERT(shield_self_phase == 1 && ss_latency_task_suspended(shield_self_target));
+    shield_self_phase = 2;
+    ss_kernel_test_resume_then_suspend(shield_self_target, false);
+    shield_self_wait(3);
+    shield_self_phase = 4;
+    vTaskResume(shield_self_target);
+    shield_self_wait(5);
+    shield_self_phase = 6;
+    ss_kernel_test_resume_then_suspend(shield_self_target, false);
+    shield_self_wait(7);
+    ss_kernel_test_request(shield_self_target, 4, 0);
+    for (unsigned wait = 0; wait < 200 && !(ss_kernel_test_task_state(shield_self_target) & 8); ++wait) vTaskDelay(1);
+    configASSERT((ss_kernel_test_task_state(shield_self_target) & 40) == 40);
+    shield_self_phase = 8;
+    vTaskResume(shield_self_target);
+    configASSERT(shield_self_phase == 9 || !(ss_kernel_test_suspension(shield_self_target) & SS_CONTROL_SELF));
+    for (unsigned wait = 0; wait < 200 && shield_self_phase != 9; ++wait) vTaskDelay(1);
+    configASSERT(shield_self_phase == 9);
+    for (unsigned wait = 0; wait < 200 && eTaskGetState(shield_self_target) != eDeleted; ++wait) vTaskDelay(1);
+    configASSERT(eTaskGetState(shield_self_target) == eDeleted);
+    shield_self_target = NULL;
+}
+static void delete_self_actor(void *unused)
+{
+    (void)unused;
+    __atomic_store_n(&delete_self_started, 1, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&delete_self_go, __ATOMIC_ACQUIRE)) __asm__ volatile("nop");
+    vTaskDelete(NULL);
+    platform_panic("self deletion returned", 0);
+}
+static void delete_self_verify(void)
+{
+    for (unsigned mode = 1; mode <= 2; ++mode) {
+        delete_self_mode = mode;
+        delete_self_started = delete_self_go = delete_self_waiting = delete_self_frozen = 0;
+        delete_self_target = xTaskCreateStaticAffinitySet(delete_self_actor, "delete-self-gate", 2048,
+            NULL, 6, control_race_stack[8 + mode], &control_race_state[8 + mode], 4);
+        configASSERT(delete_self_target);
+        for (unsigned wait = 0; wait < 200 && !__atomic_load_n(&delete_self_started, __ATOMIC_ACQUIRE); ++wait) vTaskDelay(1);
+        configASSERT(delete_self_started);
+        if (mode == 1) vTaskSuspendAll();
+        __atomic_store_n(&delete_self_go, 1, __ATOMIC_RELEASE);
+        if (mode == 1) {
+            for (unsigned wait = 0; wait < 1000000 && !__atomic_load_n(&delete_self_waiting, __ATOMIC_ACQUIRE); ++wait)
+                __asm__ volatile("nop");
+            configASSERT(delete_self_waiting && eTaskGetState(delete_self_target) == eRunning);
+            (void)xTaskResumeAll();
+        } else {
+            for (unsigned wait = 0; wait < 1000000 && (!__atomic_load_n(&delete_self_frozen, __ATOMIC_ACQUIRE) ||
+                 ss_kernel_test_freeze_unacked(2)); ++wait) __asm__ volatile("nop");
+            configASSERT(delete_self_frozen && xTaskGetCurrentTaskHandleForCore(2) != delete_self_target);
+            ss_kernel_test_freeze_release(delete_self_target);
+        }
+        for (unsigned wait = 0; wait < 200 && eTaskGetState(delete_self_target) != eDeleted; ++wait) vTaskDelay(1);
+        configASSERT(eTaskGetState(delete_self_target) == eDeleted);
+        delete_self_target = NULL;
+    }
+}
+static void control_races_verify(void)
+{
+    TaskHandle_t peer = xTaskCreateStaticAffinitySet(deferred_peer, "deferred-yield", 2048,
+        NULL, 5, control_race_stack[3], &control_race_state[3], 1);
+    configASSERT(peer);
+    for (unsigned wait = 0; wait < 200 && !__atomic_load_n(&deferred_peer_started, __ATOMIC_ACQUIRE); ++wait) vTaskDelay(1);
+    configASSERT(deferred_peer_started);
+    vTaskPreemptionDisable(NULL);
+    xTaskNotifyGive(peer);
+    configASSERT(!deferred_peer_ran);
+    unsigned slice_sgi = __atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE);
+    ss_kernel_test_pending_slice();
+    for (unsigned wait = 0; wait < 100000 && __atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE) == slice_sgi; ++wait)
+        __asm__ volatile("nop");
+    configASSERT(__atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE) > slice_sgi);
+    configASSERT(deferred_peer_ran == 0);
+    ss_kernel_test_yield_in_object(empty);
+    configASSERT(deferred_peer_ran == 1);
+    vTaskPreemptionEnable(NULL);
+    vTaskDelete(peer);
+    /* A maintenance SGI with no published work cannot force C selection. */
+    vTaskDelay(4);
+    uint64_t before = __atomic_load_n(&switches[0], __ATOMIC_ACQUIRE);
+    for (unsigned n = 0; n < 8; ++n) {
+        unsigned seen = __atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE);
+        portYIELD_CORE(0);
+        for (unsigned wait = 0; wait < 100000 && __atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE) == seen; ++wait)
+            __asm__ volatile("nop");
+        configASSERT(__atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE) > seen);
+        configASSERT(__atomic_load_n(&switches[0], __ATOMIC_ACQUIRE) == before);
+    }
+    __atomic_store_n(&freeze_test, 1, __ATOMIC_RELEASE);
+    vTaskSuspend(NULL);
+    configASSERT(__atomic_load_n(&freeze_test, __ATOMIC_ACQUIRE) == 3);
+    TaskHandle_t remote = xTaskCreateStaticAffinitySet(remote_suspend_actor, "freeze-remote", 2048,
+        NULL, 6, control_race_stack[4], &control_race_state[4], 2);
+    configASSERT(remote);
+    __atomic_store_n(&freeze_test, 4, __ATOMIC_RELEASE);
+    xTaskNotifyGive(remote);
+    for (unsigned wait = 0; wait < 10000000 && __atomic_load_n(&freeze_test, __ATOMIC_ACQUIRE) != 6; ++wait) {
+        configASSERT(ss_kernel_test_current_running());
+    }
+    configASSERT(freeze_test == 6);
+    for (unsigned wait = 0; wait < 200 && !__atomic_load_n(&remote_suspend_returned, __ATOMIC_ACQUIRE); ++wait) vTaskDelay(1);
+    configASSERT(remote_suspend_returned);
+    vTaskDelete(remote);
+    __atomic_store_n(&freeze_test, 7, __ATOMIC_RELEASE);
+    vTaskDelay(100);
+    configASSERT(freeze_test == 9);
+    configASSERT(!ss_kernel_test_delay_aborted());
+    vTaskPrioritySet(boot_tasks[4], ss_kernel_test_drain_held(boot_tasks[4]));
+    admission_verify();
+    local_wakes_verify();
+    held_self_verify();
+    shield_self_verify();
+    delete_self_verify();
+    abort_target = xTaskCreateStaticAffinitySet(abort_actor, "abort-generation", 2048,
+        NULL, 6, control_race_stack[0], &control_race_state[0], 1);
+    configASSERT(abort_target);
+    for (unsigned wait = 0; wait < 200 && !(ss_kernel_test_task_state(abort_target) & 1); ++wait) vTaskDelay(1);
+    configASSERT(ss_kernel_test_task_state(abort_target) & 1);
+    abort_waits = 1; /* The first admission can run before create returns. */
+    ss_kernel_test_gate_hold(abort_target);
+    __atomic_store_n(&abort_phase, 1, __ATOMIC_RELEASE);
+    ss_kernel_test_request(abort_target, 0, 0);
+    for (unsigned wait = 0; wait < 200 && abort_phase != 2; ++wait) vTaskDelay(1);
+    configASSERT(abort_parked && abort_phase == 2 && abort_waits == 2);
+    /* The accepted abort belongs to the first wait. Its delayed consumption
+     * advances the command counter while preserving this later blocked wait. */
+    for (unsigned wait = 0; wait < 200 && !(ss_kernel_test_task_state(abort_target) & 128); ++wait) vTaskDelay(1);
+    configASSERT((ss_kernel_test_task_state(abort_target) & 129) == 129);
+    xTaskNotifyGive(abort_target);
+    configASSERT(abort_phase == 3);
+    vTaskDelete(abort_target);
+    abort_target = NULL;
+    shield_queue = xQueueCreateStatic(1, sizeof(uint32_t), shield_queue_storage, &shield_queue_state);
+    configASSERT(shield_queue);
+    TaskHandle_t shield = xTaskCreateStaticAffinitySet(shield_actor, "shielded-event", 2048,
+        NULL, 2, control_race_stack[1], &control_race_state[1], 1);
+    configASSERT(shield);
+    for (unsigned wait = 0; wait < 200 && !(ss_kernel_test_task_state(shield) & 2); ++wait) vTaskDelay(1);
+    configASSERT((ss_kernel_test_task_state(shield) & 3) == 3);
+    ss_kernel_test_cleanup_shield(shield, true);
+    ss_kernel_test_request(shield, 2, 3);
+    ss_kernel_test_request(shield, 1, 0);
+    for (unsigned wait = 0; wait < 200 && (ss_kernel_test_task_state(shield) & 79) != 75; ++wait) vTaskDelay(1);
+    configASSERT((ss_kernel_test_task_state(shield) & 79) == 75);
+    ss_kernel_test_cleanup_shield(shield, false);
+    for (unsigned wait = 0; wait < 200 && !(ss_kernel_test_task_state(shield) & 32); ++wait) vTaskDelay(1);
+    configASSERT((ss_kernel_test_task_state(shield) & 38) == 32);
+    vTaskDelete(shield);
+    migration_target = xTaskCreateStaticAffinitySet(migration_actor, "redirect-handoff", 2048,
+        NULL, 6, control_race_stack[2], &control_race_state[2], 1u << 2);
+    configASSERT(migration_target);
+    for (unsigned wait = 0; wait < 200 && !__atomic_load_n(&migration_started, __ATOMIC_ACQUIRE); ++wait) vTaskDelay(1);
+    configASSERT(migration_started);
+    __atomic_store_n(&migration_phase, 1, __ATOMIC_RELEASE);
+    ss_kernel_test_request(migration_target, 3, 1u << 3);
+    for (unsigned wait = 0; wait < 200 && __atomic_load_n(&migration_phase, __ATOMIC_ACQUIRE) != 3; ++wait) vTaskDelay(1);
+    configASSERT(migration_phase == 3 && migration_incoming && migration_adopted);
+    vTaskDelete(migration_target);
+    platform_puts("control races: 8 empty SGIs, freeze after local suspension, parked abort preserves next wait, shielded linked-event repair, incoming hint during redirected handoff\n");
 }
 static void control(void *unused)
 {
     (void)unused;
     boot_controls_verify();
+    control_races_verify();
     for (unsigned round = 0; round < ROUNDS; ++round) {
         control_round = round;
         control_phase = 1;
@@ -337,18 +958,23 @@ static void control(void *unused)
     /* Give the primary idle task a cleanup window after the mixed workload.
      * CPU1 retains its continuously runnable home background task. */
     vTaskSuspend(backgrounds[0]);
-    for (unsigned id = 2; id < 8; ++id) vTaskSuspend(backgrounds[id]);
+    for (unsigned id = 2; id < 8; ++id) { control_phase = 0x500 + id; vTaskSuspend(backgrounds[id]); }
+    control_phase = 0x510;
     local_receiver = xTaskCreateStaticAffinitySet(local_receive, "local-receiver", 2048,
         NULL, 4, local_stack[0], &local_state[0], 2);
     local_sender = xTaskCreateStaticAffinitySet(local_send, "local-sender", 2048,
         NULL, 2, local_stack[1], &local_state[1], 2);
     configASSERT(local_receiver && local_sender);
+    control_phase = 0x511;
     vTaskCoreAffinitySet(local_receiver, 6);
+    control_phase = 0x512;
     /* The suspended background tasks leave their cores to the idle tasks asynchronously. */
     for (unsigned wait = 0; wait < 2000 && !__atomic_load_n(&selected_idle[2], __ATOMIC_RELAXED); ++wait) vTaskDelay(1);
     vTaskDelay(4);
+    control_phase = 0x513;
     uint64_t busy_start = __atomic_load_n(&busy[1], __ATOMIC_RELAXED);
     xTaskNotifyGive(local_sender);
+    control_phase = 0x514;
     configASSERT(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000)) == 1);
     uint64_t busy_delta = __atomic_load_n(&busy[1], __ATOMIC_RELAXED) - busy_start;
     platform_puts("local-wake attempts="); platform_hex(local_wakes);

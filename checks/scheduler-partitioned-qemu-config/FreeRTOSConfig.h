@@ -9,6 +9,9 @@
 #define INCLUDE_uxTaskPriorityGet 1
 #define INCLUDE_vTaskPrioritySet 1
 #define INCLUDE_eTaskGetState 1
+#define INCLUDE_xTaskGetSchedulerState 1
+#define INCLUDE_xTaskAbortDelay 1
+#define configUSE_TASK_PREEMPTION_DISABLE 1
 /* Measurement: list integrity values on every list operation (-DSUNSTONE_LIST_CHECK=1). */
 #ifdef SUNSTONE_LIST_CHECK
 #define configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES 1
