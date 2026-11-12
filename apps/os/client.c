@@ -1,12 +1,37 @@
 /* USB2 owner and the application's single-sector/read-keyboard mailboxes. */
 #include "os.h"
 #include "application.h"
+#include "cpu-return.h"
+#include "quiesce.h"
 #include "../board/application.h"
 #include "../board/session.h"
+#include "sunstone_crumb.h"
 #ifdef SUNSTONE_BOARD_USB2_IRQ
 #include "../board/host_irq.h"
 #endif
 #include <string.h>
+static enum os_quiesce_result usb_quiesce_step(struct os_quiesce *);
+static struct os_quiesce usb_quiesce={
+    .owner=OS_QUIESCE_USB,.order=OS_QUIESCE_DEVICES,.step=usb_quiesce_step
+};
+/* Called before the board creates its host, Type-C and power tasks. */
+int os_usb_quiesce_start(void)
+{return !os_returning()||os_quiesce_register(&usb_quiesce);}
+static enum os_quiesce_result usb_quiesce_step(struct os_quiesce *q)
+{
+    if(board.handles[4])xTaskNotifyGive(board.handles[4]);
+    return os_quiesce_result(q);
+}
+static void usb_fail_at(uint32_t site,uint32_t value,const void *caller)
+{
+    if(os_quiesce_fault(&usb_quiesce,site,value,caller))return;
+    board_fail_at(site,value,caller);
+}
+#define usb_fail() usb_fail_at(SUNSTONE_CRUMB_FAIL_SITE(BOARD),0,SUNSTONE_CRUMB_HERE())
+/* Used after the owner stopped accepting work. A lost controller remains
+ * retained; neither an empty port nor a masked IRQ certifies DMA completion. */
+static void usb_quiesce_unproven(unsigned core_started)
+{usb_fail_at(SUNSTONE_CRUMB_FAIL_BOARD<<12|0x801u,core_started?2u:1u,SUNSTONE_CRUMB_HERE());}
 void os_application_usb_changed(void);
 #ifdef SUNSTONE_A733_OS_USB_JPEG
 #include "sunstone_usb_service.h"
@@ -85,12 +110,12 @@ static void camera_poll(void)
 #if SUNSTONE_A733_OS_USB_JPEG
         if(!a733_usb2_camera_select_format(&board.host,SUNSTONE_UVC_MJPEG))return;
 #endif
-        int r=a733_usb2_camera_start(&board.host);if(r<0){board_fail(NULL);return;}camera_started=r;
+        int r=a733_usb2_camera_start(&board.host);if(r<0){usb_fail();return;}camera_started=r;
     }
     const struct sunstone_uvc_mode *mode=a733_usb2_camera_mode(&board.host);
     if(!mode){if(camera_connected)os_usb_service_disconnected(SS_DEVICE_USB_CAMERA);camera_connected=0;camera_started=0;return;}
     struct sunstone_camera_mode camera_mode;
-    if(sunstone_uvc_camera_mode(mode,&camera_mode)!=1){board_fail(NULL);return;}
+    if(sunstone_uvc_camera_mode(mode,&camera_mode)!=1){usb_fail();return;}
     if(!camera_connected){os_usb_service_connected(SS_DEVICE_USB_CAMERA);camera_connected=1;}
     for(unsigned slot=0;slot<SUNSTONE_UVC_FRAMES;++slot)if(!camera_lease[slot].frame){
         const struct sunstone_uvc_frame *frame=a733_usb2_camera_acquire(&board.host);if(!frame)return;
@@ -98,7 +123,7 @@ static void camera_poll(void)
         lease->frame=frame;lease->generation=frame->generation;lease->sequence=frame->sequence;lease->token=++camera_token;
         struct sunstone_camera_frame shared;
         if(sunstone_uvc_camera_view(frame,mode,lease->token,&shared)!=1){
-            os_usb_camera_native_release(lease->token);board_fail(NULL);return;
+            os_usb_camera_native_release(lease->token);usb_fail();return;
         }
         for(size_t i=0;i<shared.span_count;++i)lease->slice[i]=(struct ss_usb_frame_slice){shared.spans[i].data,shared.spans[i].bytes};
         struct ss_usb_camera_frame view={.token=lease->token,.sequence=shared.sequence,.slices=lease->slice,
@@ -111,11 +136,11 @@ static void os_usb_camera_native_release(uint64_t token)
 {
     for(unsigned i=0;i<SUNSTONE_UVC_FRAMES;++i){struct camera_lease *lease=&camera_lease[i];
         if(lease->frame&&lease->token==token){
-            if(a733_usb2_camera_release(&board.host,lease->frame,lease->generation,lease->sequence)!=1)board_fail(NULL);
+            if(a733_usb2_camera_release(&board.host,lease->frame,lease->generation,lease->sequence)!=1)usb_fail();
             else lease->frame=NULL;return;
         }
     }
-    board_fail(NULL);
+    usb_fail();
 }
 static void usb_changed(void *unused)
 {(void)unused;void os_application_usb_changed(void);os_application_usb_changed();}
@@ -190,7 +215,7 @@ static void usb_input(void *unused,const struct sunstone_hid_event *e)
     for(slot=0;slot<8;++slot)if(devices[slot].capabilities&&devices[slot].address==e->address&&devices[slot].instance==e->instance)break;
     if(e->type==SUNSTONE_HID_ATTACH){
         if(slot==8)for(slot=0;slot<8;++slot)if(!devices[slot].capabilities)break;
-        if(slot==8){board_fail(NULL);return;}
+        if(slot==8){usb_fail();return;}
         devices[slot].address=e->address;devices[slot].instance=e->instance;devices[slot].capabilities=e->usage;
         memset(devices[slot].keys,0,8);devices[slot].buttons=0;
         unsigned connected=0;for(unsigned i=0;i<8;++i)connected|=devices[i].capabilities;
@@ -229,7 +254,7 @@ static void usb_input(void *unused,const struct sunstone_hid_event *e)
         event.buttons=devices[slot].buttons;
     }
     unsigned device=event.kind==SS_INPUT_KEY?SS_DEVICE_USB_KEYBOARD:SS_DEVICE_USB_MOUSE;
-    if((os_session_devices()&device)&&os_usb_service_input(&event)!=1)board_fail(NULL);
+    if((os_session_devices()&device)&&os_usb_service_input(&event)!=1)usb_fail();
 }
 #endif
 static int serve(void)
@@ -269,7 +294,7 @@ static int serve(void)
     }
     return 1;
 }
-void os_storage_service(void){if(!serve())board_fail(NULL);}
+void os_storage_service(void){if(!serve())usb_fail();}
 #ifdef SUNSTONE_BOARD_USB2_IRQ
 static void host_wait(void)
 {
@@ -284,6 +309,7 @@ static void host_wait(void)
 #endif
 void board_host_task(void *unused)
 {
+    if(os_quiesce_requested(&usb_quiesce))goto stopped;
     (void)unused;board.host.dual_leaf=!!(os_session_devices()&SS_DEVICE_USB_KEYBOARD);
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
     const struct os_usb_service_ops service_ops={.wake=usb_request_wake,
@@ -293,12 +319,13 @@ void board_host_task(void *unused)
     a733_usb2_generic_enable(&board.host);
     a733_usb2_set_input(&board.host,usb_input,NULL);
     struct sunstone_usb_transport *transport=a733_usb2_transport(&board.host);
-    if(os_usb_serial_native_start(transport)!=1)board_fail(NULL);
+    if(os_usb_serial_native_start(transport)!=1)usb_fail();
 #endif
 #ifdef SUNSTONE_BOARD_HOST_DEADLINE
-    if(!board_host_irq_deadline_init())board_fail(NULL);
+    if(!board_host_irq_deadline_init())usb_fail();
 #endif
     for(;;){
+        if(os_quiesce_requested(&usb_quiesce))break;
         if(!board_live(NULL))break;
 #ifdef SUNSTONE_BOARD_USB2_IRQ
         int ready=board_host_irq_before();if(ready<0)break;
@@ -324,11 +351,21 @@ void board_host_task(void *unused)
         vTaskDelay(1);
 #endif
     }
+stopped:
 #ifdef SUNSTONE_BOARD_USB2_IRQ
     board_host_irq_stop();
 #endif
+    /* Closing admission and masking the interrupt do not prove xHCI DMA
+     * drained. The native host has no successful halt/release operation.
+     * Keep its memory and leases, report that gap, and let the supervisor
+     * collect the other owners' results before its bounded ending. */
+#ifdef SUNSTONE_A733_OS_USB_CLASSES
+    os_usb_service_retire();
+#endif
     atomic_store_explicit(&storage.state,4,memory_order_release);
+    if(os_quiesce_requested(&usb_quiesce))
+        usb_quiesce_unproven(board.host.core_started);
     a733_usb2_native_lost(&board.host);a733_typec_revoke(&board.typec.provider);
-    atomic_store_explicit(&board.result,2,memory_order_release);board_fail(NULL);
+    atomic_store_explicit(&board.result,2,memory_order_release);usb_fail();
     for(;;)vTaskSuspend(NULL);
 }
