@@ -335,7 +335,7 @@ def main():
         writers = capacity.later_table_writers()
         result['later_table_writers'] = writers
         assert not writers, writers
-        cases['no-table-writes-after-preparation'] = True
+        cases['no-additional-direct-boot-table-array-writers'] = True
         for path in a.single_core_image:
             body = disassemble(path.resolve())['platform_init']
             names = calls(body)

@@ -45,8 +45,8 @@ uint64_t a733_cached_usb_el1_l3[A733_USB_MEMORY_ALIAS_TABLES][512] TABLE;
 /* Word 0 holds the EL1 table sum; the rest keeps the line to itself. Code
  * names it last so that it follows the table pages (checks/cpu-table-walks.py). */
 uint64_t a733_cached_el1_table_sum[8] __attribute__((section(".bss.a733_cached_tables"),aligned(64)));
-/* EL1 cannot read the table pages (the block that holds them is unmapped there), so the entries of the first
- * 16 GiB are copied here, into ordinary memory, once the tables are complete (include/os_space.h). */
+/* Non-OS profiles keep snapshots because the monitor identity mapping is
+ * inaccessible at EL1. OS readers use the protected alias of the live tables. */
 static uint64_t el1_l1_head[16];
 void os_kernel_l1_head(uint64_t out[16])
 {
@@ -57,7 +57,7 @@ void os_kernel_l1_head(uint64_t out[16])
 #endif
     for (unsigned i = 0; i < 16; ++i) out[i] = source[i];
 }
-static uint64_t el1_l2_copy[512];          /* level-1 slot 1's level-2 table, for the same reason */
+static uint64_t el1_l2_copy[512];          /* Non-OS snapshot of level-1 slot 1's level-2 table. */
 void os_kernel_l2_slot1(uint64_t out[512])
 {
 #if defined(SUNSTONE_A733_OS)
