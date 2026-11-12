@@ -10,7 +10,6 @@ def module(name,path):
 service=module('sd_modes_service',ROOT/'checks/storage-read-service.py')
 class Machine(service.Machine):
  def __init__(self,image,session):
-  self.width=1;self.card_hs=0;self.mode_app=False;self.mode_data=bytes();self.module_changes=[]
   super().__init__(image,session);self.reject_mapping=False
   self.regs.update({0x020020a0:0xfe000000|(99<<8)|(1<<20),0x02003908:((1<<11)|(1<<2)|(1<<1))*0x10001,0x02003988:((1<<11)|(1<<2)|(1<<1))<<16})
   csd=(1<<126)|(9<<80)|((5|(1<<10))<<84)|(0x7fff<<48)|(0x32<<96)
@@ -28,34 +27,6 @@ class Machine(service.Machine):
   try:self.establish()
   except StopIteration:pass
   finally:self.owner=original
- def read_mmio(self,cpu,access,a,size,value,unused):
-  if a==0x04020200 and self.data_command in (6,51):
-   assert self.held and size==4 and self.fifo<self.total
-   word=int.from_bytes(self.mode_data[self.fifo:self.fifo+4],'little');self.fifo+=4
-   self.trace.append(['read',a,word]);self.write(a,word);return
-  super().read_mmio(cpu,access,a,size,value,unused)
- def write_mmio(self,cpu,access,a,size,v,unused):
-  if a==0x02002d00 and self.width==4:
-   assert self.held and self.regs.get(0x04020004)==0 and not self.regs.get(0x04020018,0)&(1<<31)
-   self.module_changes.append(v)
-  if a==0x04020018 and not v&(1<<21) and self.state==4 and v&63 in (55,51,6):
-   assert self.held and size==4 and not v&(1<<10)
-   n=v&63;arg=self.regs.get(0x0402001c,0);self.commands.append([n,arg]);self.trace.append(['write',a,v])
-   self.regs[a]=v&~(1<<31);self.regs[0x04020038]=4;self.regs[0x04020020]=0x900
-   self.data_command=self.total=self.fifo=0
-   if n==55:assert arg==0x12340000;self.mode_app=True;self.regs[0x04020020]|=1<<5
-   elif n==51:
-    assert self.mode_app and arg==0 and self.regs[0x04020010]==8
-    self.mode_app=False;self.data_command=51;self.total=8;self.mode_data=bytes([2,5])+bytes(6)
-   elif not v&(1<<9):assert self.mode_app and arg==2;self.mode_app=False;self.width=4
-   else:
-    assert self.width==4 and self.regs[0x0402000c]==1 and self.regs[0x04020010]==64
-    assert arg in (0x00fffff1,0x80fffff1);self.data_command=6;self.total=64
-    data=bytearray(64);data[13]=2
-    if arg>>31:self.card_hs=1;data[16]=1
-    self.mode_data=bytes(data)
-   return
-  super().write_mmio(cpu,access,a,size,v,unused)
 # SD physical layer 9.10 section 4.2.4.5: the four-bit CMD19 tuning block.
 TUNING=bytes.fromhex('ff0fff00ffccc3ccc33cccfffefffeefffdfffddfffbfffbbfff7fff77f7bdef'
                      'fff0fff00ffccc3ccc33cccfffefffeefffdfffddfffbfffbbfff7fff77f7bde')
