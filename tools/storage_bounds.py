@@ -334,8 +334,8 @@ def admit_boot_area(descriptor, args, image_sha256, approvals=None):
     start = mbr_partition_start(sectors)
     direction = record.get('direction')
     if direction in ('mbr', 'layout'):
-        entry = scratch_cards().get(b['card_cid']) or {}
-        require(entry.get('port') == args.port, 'An mbr or layout write needs the card listed as a scratch card on this port.')
+        scratch_entry = scratch_cards().get(b['card_cid']) or {}
+        require(scratch_entry.get('port') == args.port, 'An mbr or layout write needs the card listed as a scratch card on this port.')
     if direction == 'mbr':
         require((first, count) == (0, 1), 'An mbr write covers sector 0 alone.')
         new_start, new_end = mbr_move(sectors[0], candidate)
