@@ -1,6 +1,6 @@
 # Device owners block on notifications and absolute deadlines
 
-Status: implemented and host-tested for native DMA owner waits.
+Status: implemented and host-tested for native DMA and I2S owner waits.
 Physical interrupt and idle-core qualification remains open.
 
 ## DMA retirement observes distributor propagation at absolute times
@@ -93,3 +93,35 @@ descriptor/data, reset-lifetime and writer-exclusion authority. The
 I2S probe provisioning does not establish a later OS session's permissions.
 The typed session builder has no DMA record producer. Software wait evidence
 does not replace either requirement.
+
+## The I2S owner waits for requests, replies and completed periods
+
+The audio task batches local state transitions and blocks after it exhausts
+ready work. Client start and stop requests notify that task. The DMA service
+publishes separate reply hints and device-progress hints; phase changes,
+completed periods and pool readiness or retirement advance a progress sequence.
+A request snapshots that sequence before entering the service queue.
+An unchanged or busy reply cannot cause another request until the sequence
+advances. This preserves a device change that races the reply and prevents
+stale reply notifications from creating an empty-request loop.
+
+Idle audio waits until a request, a quiesce notification or the session deadline.
+Active work retains the declared one-second audio progress window as a precise
+deadline. Return work uses the supervisor's shared return deadline.
+PLL sampling observes the parent's required sample spacing; clock contention
+and register propagation retain precise 1 ms availability waits. The DMA worker
+still owns DMA and I2S hardware until its retirement publication, after which
+the audio task retires the pool and audio parent.
+
+The source-counted idle timer rate falls from 1,000 wakes per second to zero
+before session expiry. `os_audio_wake_record` has the same six-counter layout
+as the DMA record. Idle notifications count incoming requests; idle timeouts
+count expiry of the admitted session wait. Board wake rates remain unmeasured.
+
+The [native capture and return check](../../checks/os-quiesce-audio-headset.py)
+runs `os_audio_task` with modeled RTOS boundaries. Its event cases cover an
+idle request, a busy period reply with no new period, progress racing a reply,
+period publication and exact operation expiry. The same check retains PCM,
+stream reuse, drain and retained-fault cases. Mutations that restore a tick
+wait or treat reply hints as device progress fail. These owner checks execute
+no physical DMA, I2S or FreeRTOS context switch.

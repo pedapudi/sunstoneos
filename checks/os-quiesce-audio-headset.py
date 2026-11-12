@@ -111,7 +111,9 @@ def main():
                 'skip-parent-proof': ('audio->stage=RETURN_PARENT;return 0;',
                                       'audio->stage=RETURN_DONE;os_quiesce_complete(&audio_quiesce);return 0;', 13),
                 'slice-steady-stream': ('if(self!=audio->handle||slice>d)slice=d;', 'if(slice>d)slice=d;', 17),
-                'spin-mask-wait': ('vTaskDelay(1);', '(void)0;', 18),
+                'spin-mask-wait': ('sunstone_deadline_wait_until(end-time<1000?end:time+1000)', '0', 18),
+                'reply-is-device-progress': ('if(event&DMA_SERVICE_PROGRESS_EVENT)', 'if(event)', 19),
+                'tick-idle-wait': ('int result=sunstone_deadline_wait_until(until);', 'int result=(int)ulTaskNotifyTake(pdTRUE,1);', 19),
             }
             fixture = (ROOT / 'checks/os-image-audio.c').read_text()
             for name, (old, new, mode) in replacements.items():
