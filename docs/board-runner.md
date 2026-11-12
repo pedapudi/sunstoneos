@@ -110,8 +110,8 @@ stored with the entry and the result.
 `~/.cache/sunstoneos/board-queue/entries/`. It blocks until a result exists and
 prints its JSON path. `--no-wait` prints the future result path immediately.
 `--wait` also prints the outcome, the stage, the first failure and the decoded
-summary before the path, and exits 0 only for a returned image whose decoder
-reports no failure.
+summary before the path, and exits 0 for a returned image whose decoder reports
+no failure or the exact expected resident stop described below.
 
 ### Build, package, submit and wait
 
@@ -174,6 +174,32 @@ launch. Status includes running entries, eligible queued entries and the last
 20 completed entries per board. `ledger.jsonl` appends each queue submission,
 start, result, withdrawal, pause and resume. Entry files and earlier evidence are retained.
 `--queue DIR`, before the subcommand, selects an isolated queue.
+
+## Resident completion test
+
+`--lifetime resident` selects the linked resident contract and requires
+`--approved-by coordinator`, a typed session and the immutable diagnostic marker
+from `SUNSTONE_A733_OS_RESIDENT_STOP_ON_FINISH`. The default lifetime remains
+returning. A resident test uses development DRAM mode; `--preserve-dram` is
+refused because the expected reset destroys DRAM.
+
+The launcher publishes no diagnostic deadline, an initial expiry four seconds
+after its timestamp, WDT0 mode `0x41`, configuration 1 and output 2. It requires
+zero FEL and redirect fields, timestamps immediately before one WDT0 restart,
+and verifies the readbacks. The runner creates a fresh session identity and
+authenticates the complete typed session. Its observation bound remains the
+image's session duration, 60 seconds for the hello-compute diagnostic.
+
+The expected end retains outcome `watchdog-reset` and records
+`expected_reset: true`. Success requires the session's RTC tag, an EL3 stop on
+core 0 with stage `0x0111` and value `0x5000`, no fault or board-failure record,
+and no cleanup failure. Every other reset fails. The runner disarms WDT0 on the
+new FEL instance and reads no DRAM result or application output. The status and
+submit commands accept this exact expected end as successful.
+
+The [static-OFF procedure](designs/resident-fel.md) is unimplemented and needs
+coordinator approval and a cache predecessor proof. Native host admission does
+not establish those physical prerequisites. No resident submission is ready.
 
 ## Deliver a Wi-Fi credential
 
