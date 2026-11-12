@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ASSEMBLY = ['platform/a733/monitor.S', 'platform/a733/probe.S', 'checks/a733-aarch64.S',
             'boot/a733/native-startup-probe.S', 'boot/a733/a64-entry-probe.S',
             'boot/a733/primary-publication-probe.S', 'apps/cpu-runtime-qualification/terminal.S',
-            'apps/npu-finite/return.S', 'apps/gpu-finite/return.S', 'apps/card-fel-recovery/entry.S']
+            'apps/npu-finite/return.S', 'apps/gpu-finite/return.S']
 C_CALLER = 'boot/a733/stage2/loader.c'
 CHECK_INPUTS = ['include/a733_cpu_reset.h', *ASSEMBLY, C_CALLER]
 
@@ -53,18 +53,13 @@ def main():
         call='a733_cpu_reset_aarch32()' if name==C_CALLER else 'A733_CPU_RESET_WAIT(x0)'
         assert text.count(call)==1 and not re.search(r'msr\s+rmr_el3',text),name
         cases.append('shared-body-'+name)
-    # Only the generated gate offset and binary are needed to assemble the
-    # recovery caller. Its actual linked ELF is checked by card-fel-recovery.py.
-    (args.output/'gate.bin').write_bytes(bytes(4))
-    (args.output/'gate-info.h').write_text('#define CARD_FEL_TEST_OFFSET 0\n')
     c=args.output/'reset.c'
     c.write_text('#include "a733_cpu_reset.h"\n_Noreturn void reset(void){a733_cpu_reset_aarch32();}\n')
     for index,source in enumerate([*(ROOT/name for name in ASSEMBLY),c]):
         label=source.relative_to(ROOT).as_posix() if source.is_relative_to(ROOT) else 'stage2-C-reset'
         obj=args.output/('caller-%d.o'%index)
         command=[str(CLANG),'--target=aarch64-none-elf','-march=armv8-a','-O2','-ffreestanding',
-                 '-I',str(ROOT/'include'),'-I',str(args.output),
-                 '-DCARD_FEL_GATE_BINARY="'+str(args.output/'gate.bin')+'"','-c',str(source),'-o',str(obj)]
+                 '-I',str(ROOT/'include'),'-c',str(source),'-o',str(obj)]
         subprocess.run(command,check=True,capture_output=True,env=environment())
         with obj.open('rb')as stream:
             elf=ELFFile(stream)

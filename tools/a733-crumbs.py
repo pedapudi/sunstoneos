@@ -326,6 +326,16 @@ def decode(words, epoch, elf=None):
         result['last'] = stage(last)
         result['last']['core'] = time >> 29
         result['last']['seconds_since_power_on'] = round((time & 0x1fffffff) * 1024 / 24e6, 4)
+        if result['last']['stage'] == 0x0c02:
+            result['last']['name'] = 'CARD_FEL_GATE'
+            value = result['last']['value']
+            result['last']['gate_progress'] = {
+                1: 'entry', 2: 'mode checked', 3: 'watchdog disarmed',
+                4: 'request cleared', 5: 'before ROM branch',
+                0x81: 'refused local cache/MMU state', 0x82: 'refused ROM redirect',
+                0x83: 'refused watchdog mode/configuration/output',
+                0x84: 'request clear readback failed', 0x86: 'watchdog disarm readback failed',
+            }.get(value, 'unknown gate progress')
         if result['last']['stage'] == 0x0c01:
             result['last']['name'] = 'CARD_FEL_LAUNCH'
             if not fault and words['far'] & 0x80000000:
@@ -397,6 +407,8 @@ def decode(words, epoch, elf=None):
     if 'last' in result:
         r = result['last']
         parts.append(f"last stage {r['name']} ({r['stage']:#06x}) value {r['value']:#x} on core {r['core']}")
+        if 'gate_progress' in r:
+            parts.append('gate '+r['gate_progress'])
         if 'launcher_refusal' in r:
             f = r['launcher_refusal']
             target = f" core {f['core']}" if 'core' in f else ''
