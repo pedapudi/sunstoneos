@@ -131,6 +131,8 @@ for case in cases:
         elif name=='vTaskDelay':state['time']+=1000;ret()
         elif name=='vTaskSuspend':
             assert args[0]==0x4567 and state['requests'][-1]==enums['PVR_GPU_SERVICE_PARK']
+            for name,value in (('event_wakes',19),('deadline_wakes',7),('idle_wakes',3),('idle_wait_us',1000030)):
+                sf(service,'pvr_gpu_service',name,value,8)
             state['suspended']+=1;ret()
         else:raise AssertionError(name)
     u.hook_add(UC_HOOK_CODE,hook)
@@ -156,8 +158,9 @@ for case in cases:
     assert bool(result)==success and state['suspended']==int(success),(case,result,state)
     assert bool(invoke('os_gpu_return_ready'))==success
     if success:
-        raw=bytes(u.mem_read(image.address('os_gpu_return_report'),64))
-        assert struct.unpack('<8Q',raw)==(0x3152475033333741,report_version,64,epoch,generation,0 if zero_jobs else 7,63,report_value)
+        raw=bytes(u.mem_read(image.address('os_gpu_return_report'),96))
+        assert struct.unpack('<8Q',raw[:64])==(0x3152475033333741,report_version,64,epoch,generation,0 if zero_jobs else 7,63,report_value)
+        assert struct.unpack_from('<4Q',raw,64)==(19,7,3,1000030), 'Counters must be copied after suspension'
         (a.output/(case+'-gpu-report.bin')).write_bytes(raw)
         text=b'MODEL ONLY GPU application output\n';u.mem_write(0x80001000,text)
         state['time']=57000000 if case=='begin-expired' else 56000000

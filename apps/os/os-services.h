@@ -99,8 +99,8 @@ enum { OS_GRANT_ROWS(OS_GRANT_LINKED_) };
 #define OS_SERVICE_ID_(NAME, name, window_us, grant, with) with(OS_SERVICE_##NAME,)
 enum { OS_SERVICE_APPLICATION = 5, OS_SUPERVISED_ROWS(OS_SERVICE_ID_) OS_SERVICES };
 /* Deadline storage for supervised tasks, the SD owner, the NPU bootstrap,
- * service worker and optional queue power worker, and the GPU peer. */
-#define OS_DEADLINE_OWNERS (OS_SERVICES + 4u + OS_WITH_GPU(1u +) 0u)
+ * service worker and optional queue power worker, and the GPU service/peer. */
+#define OS_DEADLINE_OWNERS (OS_SERVICES + 4u + OS_WITH_GPU(2u +) 0u)
 /* The supervision table's rows after the application's, and the grant each one needs, indexed by service id. */
 #define OS_SERVICE_ENTRY_(NAME, name, window_us, grant, with) with({name, window_us},)
 #define OS_SERVICE_TABLE OS_SUPERVISED_ROWS(OS_SERVICE_ENTRY_)

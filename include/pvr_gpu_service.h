@@ -4,6 +4,9 @@
 #include "task.h"
 #include "queue.h"
 #include <stdatomic.h>
+#ifdef SUNSTONE_A733_OS
+#include "sunstone_deadline.h"
+#endif
 #include "pvr_fw_state.h"
 #include "pvr_gpu_stop.h"
 #include "pvr_gpu_flush.h"
@@ -156,6 +159,11 @@ struct pvr_gpu_service_config {
      * Same bounded completion and lifetime contract as job_irq_ack. */
     int (*job_kick)(void *);
     struct pvr_gpu_service_enable_ops power;
+#ifdef SUNSTONE_A733_OS
+    /* Owner-only persisted platform wait, queried after transport unlock.
+     * Zero leaves the existing provider retry policy in force. */
+    uint64_t (*next_wait)(void *,uint64_t now);
+#endif
     /* Optional bounded worker callback: acquire the firmware's executed
      * kernel-command count. When set, the health check is judged by that
      * count (pvr_gpu_control_count_executed), as upstream judges it; firmware
@@ -266,6 +274,9 @@ struct pvr_gpu_service_client {
     QueueHandle_t replies;
     StaticQueue_t reply_state;
     uint8_t reply_storage[sizeof(struct pvr_gpu_service_reply)];
+#ifdef SUNSTONE_A733_OS
+    unsigned event_waiting, event_index, event_gave, deadline_registered;
+#endif
 };
 /* Private static storage; visible for reservation without a heap. Only the
  * worker may access the controllers or backing after scheduler startup. */
@@ -298,6 +309,11 @@ struct pvr_gpu_service {
     unsigned owner, initialized, closed_owner;
     uint64_t closed_epoch;
     atomic_uint_fast64_t published_epoch;
+#ifdef SUNSTONE_A733_OS
+    atomic_uint_fast64_t event_sequence;
+    atomic_uint event_phase;
+    uint64_t event_wakes, deadline_wakes, idle_wakes, idle_wait_us;
+#endif
     /* A returning OS owns this one-way request. The service worker drains
      * accepted work and uses the ordinary CLOSE/PARK sequence. Uncollected
      * completed outputs may be abandoned only after admission closes. */
@@ -328,6 +344,16 @@ struct pvr_gpu_service {
     StaticTask_t worker_state;
     StackType_t worker_stack[PVR_GPU_SERVICE_STACK_WORDS];
 };
+#ifdef SUNSTONE_A733_OS
+/* Capture before testing a predicate. The wait arms the caller's notification
+ * index, rechecks this sequence, then blocks until publication or expiry. */
+uint64_t pvr_gpu_service_event_sequence(struct pvr_gpu_service *);
+int pvr_gpu_service_wait_event(struct pvr_gpu_service *,uint64_t sequence,uint64_t deadline);
+int pvr_gpu_service_deadline_register(struct pvr_gpu_service *);
+void pvr_gpu_service_notify_clients(struct pvr_gpu_service *);
+unsigned pvr_gpu_service_event_phase(struct pvr_gpu_service *);
+int pvr_gpu_service_close_ready(struct pvr_gpu_service *);
+#endif
 
 /* One instance. Zero storage once. Init/bind run at EL1 before the scheduler.
  * The SMP port must grant EL1t only through the internal worker hook below.

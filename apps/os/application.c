@@ -91,6 +91,11 @@ void os_application_failed(const struct ss_failure *failure,uint64_t epoch,uint6
  * application task. */
 unsigned sunstone_deadline_notify_index(void)
 {
+    /* The trusted GPU peer is created by the OS without an application
+     * address-space tag, but its fence and runtime waits still own index 2. */
+#ifdef SUNSTONE_A733_OS_GPU
+    if(peer_task && xTaskGetCurrentTaskHandle()==peer_task)return SS_NOTIFY_DEADLINE;
+#endif
     /* An application task, tagged when the application starts, waits on the runtime's index; an OS service task on its own. */
     return xTaskGetApplicationTaskTag(NULL)?SS_NOTIFY_DEADLINE:SS_NOTIFY_OWN;
 }
@@ -357,7 +362,7 @@ static void main_entry(void *unused)
     if (peer_task) {
         peer_grant.finish_by_us=grant.finish_by_us;
         atomic_store_explicit(&peer_ready,1,memory_order_release);
-        xTaskNotifyGive(peer_task);
+        xTaskNotifyGiveIndexed(peer_task,SS_NOTIFY_DEADLINE);
     }
 #endif
 #ifdef SUNSTONE_A733_USB_FAILURE_TEST
