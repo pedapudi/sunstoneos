@@ -178,7 +178,7 @@ start, result, withdrawal, pause and resume. Entry files and earlier evidence ar
 ## Resident completion test
 
 `--lifetime resident` selects the linked resident contract and requires
-`--approved-by coordinator`, a typed session and the immutable diagnostic marker
+a typed session and the immutable diagnostic marker
 from `SUNSTONE_A733_OS_RESIDENT_STOP_ON_FINISH`. The default lifetime remains
 returning. A resident test uses development DRAM mode; `--preserve-dram` is
 refused because the expected reset destroys DRAM.
@@ -197,9 +197,9 @@ and no cleanup failure. Every other reset fails. The runner disarms WDT0 on the
 new FEL instance and reads no DRAM result or application output. The status and
 submit commands accept this exact expected end as successful.
 
-The [static-OFF procedure](designs/resident-fel.md) is unimplemented and needs
-coordinator approval and a cache predecessor proof. Native host admission does
-not establish those physical prerequisites. No resident submission is ready.
+[Resident FEL entry](designs/resident-fel.md) accepts the same dynamic-OFF state
+as returning entry. Cold card boot retains stage 2's static-OFF contract. The
+coordinator lands the runner changes and restarts the daemon before submission.
 
 ## Deliver a Wi-Fi credential
 

@@ -1,101 +1,73 @@
 # Resident OS entry from the USB boot ROM
 
-Status: the bounded resident test and runner are host-tested. The static-OFF
-procedure is proposed and unimplemented. No resident board run is qualified.
-The [autonomous card design](autonomous-card-os.md) remains the card-boot contract.
-This procedure supplies its secondary CPU hold when the host loads a resident
-image through FEL, the boot ROM's USB loader.
+Status: the resident entry, bounded completion test and runner are host-tested.
+No resident board run is qualified. FEL is the boot ROM's USB loader; the
+[autonomous card design](autonomous-card-os.md) defines cold card boot.
 
-## Static OFF precedes native entry
+## Resident entry accepts the established FEL state
 
-The proposed SRAM launcher validates the request, session framing, image identity,
-host-armed WDT0, zero FEL flag and all three zero redirect fields before changing
-any CPU policy. It checks the CPU configuration
-bus gate, then preflights every secondary power page before its first write.
-Each page must identify PCK-600, PPU architecture 1.1, static and dynamic OFF/ON
-support, one operating mode, no emulation and no operating-mode policy or lock.
-Both hotplug requests must be clear. Policy and status must match at zero or
-`0x100`, with the core OFF.
+Under FEL, secondary cores are OFF, have never started and retain policy
+`0x100`. Returning board runs qualify startup from this state through the
+existing hotplug sequence. Resident FEL entry uses that same sequence. Its
+upload and cache-publication interval has the same predecessor conditions as
+returning entry and requires no additional static-OFF hold.
 
-The launcher writes static policy zero for cores 1 through 7. It requires policy
-readback zero, dynamic acknowledgment disabled and actual OFF before setting
-that core's GIC wake-disable bit. It preserves unrelated control bits and
-rechecks every held core before publishing the resident contract. A failure
-after the first write retains the hold and parks under WDT0. The procedure
-never restores dynamic policy on refusal.
+The resident startup checks each core before its first register write:
 
-The acknowledged hold remains until the existing mailbox owner publishes the
-target's entry and architecture. The resident startup then restores policy
-`0x100`, waits for dynamic acknowledgment and performs the existing hotplug
-request sequence (`platform/a733/cpu_start.c`). It releases one core at a time.
+| Entry | Policy/status | Additional requirement | Startup |
+| --- | --- | --- | --- |
+| FEL | `0x100/0x100` | Clear hotplug requests | Existing returning hotplug sequence; no policy write |
+| Cold card | `0/0` | Clear hotplug requests and GIC wake-disable | Publish entry, release static OFF, then hotplug |
 
-Implementation requires extraction of the policy sequence from
-`boot/a733/stage2/cpu.c`, with its two-sided MMIO barriers. The stage-2 cache
-cleanup remains specific to cold-card ownership. The AArch32 launcher requires
-stack-local state because its linker script forbids writable static sections.
+An ON core, unknown policy or mismatched acknowledgment refuses before startup
+writes. The explicit cold controller profile retains its strict static-OFF check.
+`platform/a733/cpu_start.c` selects the release sequence from the verified entry
+state. `apps/os/boot.patch` selects resident admission for the resident lifetime.
 
-The candidate hold occurs after image upload. A secondary wake can flush private
-cache lines into the shared cache before static OFF is acknowledged. The existing
-FEL publication evidence does not establish safety for that interval. Admission
-requires either exclusion before upload or an independent predecessor proof
-that excludes those writers. This evidence gap blocks power-state implementation
-and a resident submission; the policy helper alone cannot close it.
+Stage 2 establishes static OFF before card loading, as described in the
+[cold CPU contract](cold-cpu-static-off.md). Its policy-zero check and cache
+cleanup remain part of cold boot. Resident OS entry selects its startup branch
+from the observed policy; it does not infer whether the loader used FEL or the
+card. FEL uploads use the qualified returning
+entry assumptions and do not invoke the stage-2 ownership procedure.
 
 ## Reference sequence and implementation boundary
 
-The [cold CPU design](cold-cpu-static-off.md#source-contract) and
-[source manifest](../../boot/a733/stage2/cpu-sources.json) pin Arm DEN0051E
-sections 3.4.3 and 4.1.1, the PCK-600 identification register, and the A733
-vendor BL31 CPU power map and hotplug sequence. Disabling dynamic transitions
-takes effect after any in-flight transition; actual OFF and acknowledgment are
-therefore separate checks. Vendor CPU_ON publishes entry before requesting ON.
+The [CPU startup reference](../cpu-start.md) and
+[pinned sources](../../boot/a733/stage2/cpu-sources.json) identify the A733
+vendor BL31 power map and hotplug sequence. CPU_ON publishes the reset entry
+and architecture before requesting ON, then clears its software requests.
+SunstoneOS binds the mailbox before this sequence, bounds acknowledgment and
+retains resources on failure. Returning startup retains its register sequence.
 
-SunstoneOS adds identity and capability checks, a preflight of all seven cores,
-bounded acknowledgment, GIC wake exclusion and retained failure. The shared
-policy helper must preserve the stage-2 register sequence. The returning launcher
-does not call it. The resident launch requires coordinator approval and an
-immutable bounded-test marker in the ELF.
+Resident FEL admission adds exact policy/status checks for the inherited OFF
+state. Resident cold entry retains `HELD_POLICY`, acknowledged static OFF and
+GIC wake exclusion, then restores dynamic policy only after entry publication.
+`checks/a733-cpu-start.py` covers both resident entry states, ON refusal,
+retained failures and the returning writes against the pinned vendor helpers.
 
-## Time and size budgets
+## The diagnostic retains its completion through reset
 
-The hold has one 100 ms counter deadline and a 65,536-sample backstop for a
-stopped counter, matching stage 2. These are availability limits, not measured
-transition latency. WDT0 is already armed in mode `0x41`, configuration 1 and
-output 2. The implemented resident launcher timestamps immediately before one
-WDT0 CTRL restart, verifies mode, configuration and output, and bounds publication
-and handoff to one millisecond. The proposed hold precedes that restart.
-Native startup retains its one-second deadline and initial contract expiry four
-seconds after the restart timestamp. Physical expiry remains unqualified.
+WDT0 uses mode `0x41`, configuration 1 and output 2, with zero FEL and redirect
+fields. The launcher timestamps immediately before one CTRL restart and checks
+readbacks and the one-millisecond publication bound. Native startup has a
+one-second deadline; the initial contract expiry is four seconds after the
+restart timestamp. The resident contract has no diagnostic deadline.
 
-The implemented resident launcher occupies 2,500 bytes of its 3,072-byte
-reservation ([record](../evidence/resident-fel.jsonl),
-`resident-fel-host-contract`). The proposed hold has 572 bytes of remaining
-space. Host checks must measure that bound and the stage-2 32 KiB initialized-image boundary after
-the shared sequence is extracted. The bounded test uses the existing
-hello-compute application, whose manifest permits two seconds of work and a
-one-second progress window. A diagnostic build stops renewal after completion;
-ordinary resident builds continue supervising services after completion.
+The diagnostic build uses hello-compute, healthy selected services and a
+successful application result to stop renewal. Its supervisor runs on core 0
+and suppresses the synthetic maintenance failure note for that intentional
+exit. Real application, service and processor failures retain RTC records.
+Ordinary resident builds continue supervision after application completion.
+An immutable ELF marker identifies the completion diagnostic
+(`os_resident_test_profile`).
 
-The diagnostic supervisor runs on core 0. It requires healthy selected services
-and a successful application result before stopping renewal. Its intentional
-exit suppresses the synthetic maintenance failure note. Real application,
-service and processor failures retain RTC records and cannot qualify as the
-expected stop. The runner reads no DRAM after a reset.
+The runner accepts only the marked diagnostic's exact retained stop. It reads
+no DRAM after reset. The [prediction record](../evidence/resident-fel.jsonl),
+`resident-fel-completion-proposal`, contains the time budget and expected result.
+The frozen input manifest and exact host commands are in that record's evidence
+directory. Submission waits for the coordinator to land the runner changes,
+restart the daemon and instruct the worker to submit.
 
-The EL1 watchdog renewal check requires BOOT input low even though resident
-EL3 admission permits it high. The FEL proposal retains that live prerequisite;
-autonomous card boot needs a source-backed resolution of the discrepancy.
-
-The run prediction, worked 60-second session budget, reset observations and
-stop conditions belong in [the evidence record](../evidence/resident-fel.jsonl).
-The coordinator integrates the runner changes into the daemon's checkout before
-host admission and submission. No worker opens a USB device.
-
-## Approval and remaining work
-
-Three design reviewers assess simplicity, hardware performance and correctness
-before power-state implementation, then review the code. The coordinator must
-approve static OFF before a run and approve the exact frozen board proposal.
-The cache predecessor remains an unresolved correctness prerequisite.
-No card write is part of this procedure. Card installation requires a separate
-allocation, backup, exact write extent and storage-write approval.
+The current EL1 watchdog renewal check requires BOOT low. Its disagreement with
+cold resident admission remains in the card design's open work.
