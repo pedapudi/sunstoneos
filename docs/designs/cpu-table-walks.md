@@ -2,7 +2,10 @@
 
 Status: **implemented**; modeled counts are **host-tested**. **Qualified on the
 board** for the core-0 forced-walk loop on the cached single-core images
-(Cortex-A55). **Open:** the core-0 workload runs, the Cortex-A76 core-6 run
+(Cortex-A55). The OS core-6 comparison is **blocked on physical recovery of
+port 3-1**; its uncached control is refused before launch, recorded as
+`1794464995666959214-7c8fe3fb` in [the evidence](../evidence/cpu-table-walks.jsonl).
+**Open:** the core-0 workload runs, the Cortex-A76 core-6 run
 that admits the eight-core images, the Non-secure dirty-line experiment and the
 stage-2 block access. Readers are assumed to know AArch64 stage-1 translation,
 the Secure and Non-secure physical address spaces, and data-cache maintenance
@@ -272,7 +275,8 @@ board session.
    inference (record `cpu-table-walks-core0-workload-ab`). It also decides the
    contiguous hint.
 3. **Core-6 walk A/B on the Cortex-A76** through the OS diagnostic above
-   (record `cpu-table-walks-core6-walk-ab`). The eight-core default takes the
+   (record `cpu-table-walks-core6-walk-ab`), after port 3-1 recovery and a new
+   coordinator proposal. The eight-core default takes the
    cached value only after a measured gain, followed by returning controls on
    both CPU clusters and recognition against the 422.8 ms, 512-frame reference.
 4. **Stage-2 block access**: with the decode check passing, one read and one

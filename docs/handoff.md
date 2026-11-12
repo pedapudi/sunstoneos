@@ -1,5 +1,12 @@
 # SunstoneOS subsystem index
 
+**Physical recovery required on USB port `3-1`:** disconnect all power from
+that board, then reconnect its USB power/data cable to the same host port.
+Preserve the inserted microSD card. The runner refuses its failed USB instance;
+the core-6 walk control has no native result. The coordinator must establish
+fresh FEL identity and DDR readiness before another proposal. See queue entry
+`1794464995666959214-7c8fe3fb` in the [table-walk records](evidence/cpu-table-walks.jsonl).
+
 SunstoneOS runs FreeRTOS on the Orange Pi Zero 3W/A733. The
 [accepted objective](goal.md) requires complete usable hardware and native
 applications. No subsystem has complete physical qualification.
