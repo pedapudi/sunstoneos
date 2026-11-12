@@ -436,6 +436,10 @@ def run(decode):
     rejected('truncated version 3 record', pack(v3)[:-8])
     v4 = fixture(version=4)
     accepted('version 4 history preserves selecting exit', v4, classified('slow', tail=200))
+    prior_yield = copy.deepcopy(v4)
+    prior_yield['wake'][1][15] = prior_yield['history'][1][3] = 0
+    accepted('version 4 existing port yield links result zero to actual selection',
+             prior_yield, classified('slow', tail=200))
     future = copy.deepcopy(v4)
     future['history'][1][-1] = 3
     accepted('post-running IRQs do not replace selecting chain', future, classified('slow', tail=200))
@@ -444,6 +448,8 @@ def run(decode):
     trailing['wake'][1][2] = 27
     wake_summary(trailing['wake'][1], 2)
     accepted('post-switch pre-running IRQ remains visible', trailing, classified('unmatched'))
+    trailing['wake'][1][15] = 0
+    accepted('result zero with a later ordinary IRQ remains unmatched', trailing, classified('unmatched'))
     rotated = copy.deepcopy(v4)
     rotated['history'][1][7] = 99
     rotated['history'][1][4] = 115

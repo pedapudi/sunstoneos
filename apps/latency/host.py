@@ -282,7 +282,8 @@ def decode_scheduler_trace(payload, frequency):
             multiple = previous_irq_end > ready or previous_switch_end > ready or bool(trailing)
             linked = bool(irq_sequence and switch_sequence and not multiple and not lost and
                           ready <= stamps[4] <= begin <= end <= running and
-                          irq_sequence == switch_irq_sequence and selected_slot == running_slot and result in (1, 3))
+                          irq_sequence == switch_irq_sequence and selected_slot == running_slot and
+                          result in ((0, 1, 3) if version == 4 else (1, 3)))
             expected_flags = (1 if irq_sequence else 0) | (2 if switch_sequence else 0) | (8 if multiple else 0) | (32 if lost else 0)
             expected_flags |= 4 if linked else 16
             if ready and flags != expected_flags:

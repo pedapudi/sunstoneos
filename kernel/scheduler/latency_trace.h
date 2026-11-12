@@ -100,6 +100,8 @@ struct ss_sched_trace_summary {
 struct ss_sched_trace_wake_core {
     struct ss_sched_trace_wake maximum;
     /* Busy samples only. Classes: linked fast, linked slow, unmatched.
+     * Slow includes owner results 0 and 1 when an actual selection matches;
+     * the port may switch on a yield request that predates the C return.
      * Intervals: whole wake, owner-exit start to running. The latter includes
      * work before ready when readiness occurs during owner exit. Unmatched samples
      * contribute only whole-wake durations, never an attributed tail. */

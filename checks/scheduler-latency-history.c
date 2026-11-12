@@ -7,15 +7,16 @@
 static uint64_t clock_value;
 uint64_t ss_sched_trace_test_now(void) { return clock_value; }
 uint64_t ss_latency_counter_frequency(void) { return 24000000; }
-static void irq(unsigned core, uint64_t start)
+static void irq_result(unsigned core, uint64_t start, unsigned result)
 {
     ss_sched_trace_irq_begin(core, start);
     clock_value = start + 1; ss_sched_trace_irq_guard(core);
     clock_value = start + 2; ss_sched_trace_irq_stamp(core, 1);
     clock_value = start + 8; ss_sched_trace_irq_stamp(core, 2);
     clock_value = start + 10; ss_sched_trace_irq_stamp(core, 3);
-    ss_sched_trace_irq_end(core, 1);
+    ss_sched_trace_irq_end(core, result);
 }
+static void irq(unsigned core, uint64_t start) { irq_result(core, start, 1); }
 static void select_task(unsigned core, uint64_t begin, unsigned slot)
 {
     clock_value = begin; ss_sched_trace_switch_begin(core);
@@ -24,11 +25,12 @@ static void select_task(unsigned core, uint64_t begin, unsigned slot)
 int main(int argc, char **argv)
 {
     assert(argc == 2);
-    irq(0, 110); select_task(0, 130, 3);
+    /* A preexisting port yield request can select after owner result zero. */
+    irq_result(0, 110, 0); select_task(0, 130, 3);
     for (unsigned i = 0; i < 3; ++i) irq(0, 160 + i * 20);
     ss_sched_trace_wake_sample(0, 100, 150, 3);
 
-    irq(1, 1010); select_task(1, 1030, 3); irq(1, 1040);
+    irq_result(1, 1010, 0); select_task(1, 1030, 3); irq_result(1, 1040, 0);
     ss_sched_trace_wake_sample(1, 1000, 1060, 3);
 
     irq(2, 2010); select_task(2, 2030, 3);
@@ -63,8 +65,10 @@ int main(int argc, char **argv)
     ss_sched_trace_snapshot(&report);
     assert(report.version == 4 && report.history_capacity == SS_SCHED_TRACE_HISTORY);
     assert(report.wake[0].maximum.flags == 7 && report.wake[0].maximum.irq.sequence == 1);
+    assert(report.wake[0].maximum.irq.result == 0 && report.wake[0].summary[1][0].count == 1);
     assert(report.history[0].latest_sequence == 1 && report.history[0].future_irqs == 3);
     assert(report.wake[1].maximum.flags == 27 && report.wake[1].maximum.irq.sequence == 1);
+    assert(report.wake[1].maximum.irq.result == 0 && report.wake[1].summary[2][0].count == 1);
     assert(report.history[1].latest_sequence == 2 && report.history[1].trailing_count == 1 && report.history[1].trailing_work == 6);
     assert(report.wake[2].maximum.flags == 50 && report.wake[2].maximum.selection.irq_sequence == 1);
     assert(report.history[2].irq_overwritten == 1 && report.history[2].future_irqs == SS_SCHED_TRACE_HISTORY);

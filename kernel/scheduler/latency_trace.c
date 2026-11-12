@@ -231,7 +231,9 @@ void ss_sched_trace_wake_sample(unsigned core, uint64_t ready, uint64_t running,
         ready <= irq->stamp[4] && irq->stamp[4] <= s->begin &&
         s->begin <= s->end && s->end <= running &&
         s->irq_sequence == irq->sequence && s->selected_slot == slot &&
-        (irq->result == 1 || irq->result == 3);
+        /* Result zero leaves the port's existing yield request intact. The
+         * recorded selection establishes the switch independently of it. */
+        (irq->result == 0 || irq->result == 1 || irq->result == 3);
     flags |= linked ? SS_SCHED_WAKE_LINKED : SS_SCHED_WAKE_UNMATCHED;
     unsigned kind = linked ? (irq->result == 3 ? 0 : 1) : 2;
     struct ss_sched_trace_wake_core *row = &trace.wake[core];
