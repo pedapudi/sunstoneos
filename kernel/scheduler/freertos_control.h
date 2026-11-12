@@ -99,6 +99,10 @@ void ss_control_snapshot(struct ss_control *, unsigned, struct ss_control_state 
 bool ss_control_applied(const struct ss_control *, unsigned, uint64_t);
 void ss_control_wait(struct ss_control *, unsigned, uint64_t); /* task only, IRQs enabled */
 unsigned ss_control_drain(struct ss_control *, unsigned); /* max sixteen records */
+/* Consume only this owner's hint for one registered slot. A hint reissued by
+ * consume remains pending; the ordinary scan cursor and other slots are unchanged. */
+unsigned ss_control_drain_slot(struct ss_control *, unsigned cpu, unsigned slot);
+bool ss_control_has_pending(const struct ss_control *, unsigned cpu);
 void ss_control_forward(struct ss_control *, unsigned); /* stale old-owner hint */
 /* Caller already owns a lifetime pin and masks local API interrupts. One
  * registration/validation attempt; false requires an epoch-neutral bounded

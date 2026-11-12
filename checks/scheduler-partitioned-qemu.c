@@ -2,6 +2,7 @@
 #include "task.h"
 #include "queue.h"
 #include "platform.h"
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef SS_QEMU_DYNAMIC_LIFECYCLE
@@ -271,6 +272,32 @@ static StaticTask_t boot_state[BOOT_TASKS];
 static StackType_t boot_stack[BOOT_TASKS][1024];
 static TaskHandle_t boot_tasks[BOOT_TASKS];
 static unsigned boot_core[BOOT_TASKS] = {99, 99, 99, 99, 99}, boot_runs[BOOT_TASKS];
+static unsigned boot_suspend_checks[BOOT_TASKS];
+void ss_kernel_test_before_self_suspend(uint64_t *repair, uint64_t bit)
+{
+    TaskHandle_t current = xTaskGetCurrentTaskHandle();
+    for (unsigned id = 0; id < BOOT_TASKS; ++id)
+        if (boot_tasks[id] == current) {
+            /* Retain a prior repair indication across the new publication.
+             * Completing current-task metadata must retire this indication. */
+            *repair |= bit;
+            return;
+        }
+}
+void ss_kernel_test_self_suspend(unsigned consumed, bool repair, bool suspended,
+                                  bool off_cpu, bool acknowledged)
+{
+    TaskHandle_t current = xTaskGetCurrentTaskHandle();
+    for (unsigned id = 0; id < BOOT_TASKS; ++id) {
+        if (boot_tasks[id] != current) continue;
+        /* A running task owns its detached event item. Its command consumes
+         * one record without deferred object repair, but cannot acknowledge
+         * the suspend until the port saves and evicts its frame. */
+        configASSERT(consumed == 1 && !repair && suspended && !off_cpu && !acknowledged);
+        __atomic_fetch_add(&boot_suspend_checks[id], 1, __ATOMIC_RELEASE);
+        return;
+    }
+}
 static void boot_task(void *argument)
 {
     unsigned id = (uintptr_t)argument;
@@ -299,6 +326,12 @@ static void boot_controls_verify(void)
     /* Task 3: deleted before the start; it never runs. */
     vTaskDelay(4);
     configASSERT(boot_runs[3] == 0);
+    for (unsigned id = 0; id < BOOT_TASKS; ++id) {
+        if (id == 3) continue;
+        for (unsigned wait = 0; wait < 200 && !__atomic_load_n(&boot_suspend_checks[id], __ATOMIC_ACQUIRE); ++wait)
+            vTaskDelay(1);
+        configASSERT(__atomic_load_n(&boot_suspend_checks[id], __ATOMIC_ACQUIRE) == 1);
+    }
 }
 static void control(void *unused)
 {

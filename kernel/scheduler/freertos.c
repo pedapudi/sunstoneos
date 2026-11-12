@@ -486,6 +486,7 @@ static bool ssKernelAdmitTask(TCB_t *task)
     return false;
 }
 static void ssKernelControlDrain(void);
+static unsigned ssKernelControlDrainSlot(unsigned);
 static void ssKernelPullServe(unsigned);
 static uint64_t ssKernelPullTargets(struct ssKernelCPU *, unsigned);
 #ifndef SS_SERVICE_PASSES
@@ -1206,7 +1207,8 @@ static bool ssKernelServiceOnce(unsigned c, struct ssKernelCPU *cpu)
     }
     uint64_t next;
     return (ss_deadline_next(&cpu->deadlines, &next) && next <= ssKernelNow()) ||
-        ss_owner_has_pending(&cpu->run) || cpu->object_repair[0] || cpu->object_repair[1];
+        ss_owner_has_pending(&cpu->run) || ss_control_has_pending(&ssKernelControl, c) ||
+        cpu->object_repair[0] || cpu->object_repair[1];
 }
 #ifdef SS_KERNEL_TEST_ADMIN_ENTER
 static unsigned long ssKernelContinuations;
@@ -1610,9 +1612,49 @@ static bool ssKernelObjectPrepared(struct ssKernelTask *s,
     s->object_requested_priority = priority;
     s->object_detach = state->dead || state->suspended ||
         state->offcpu_sequence > s->offcpu_ack || state->abort_generation != s->abort_generation;
-    ssKernelCPUs[ssKernelCPUId()].object_repair[s->ready.slot / 64] |=
-        UINT64_C(1) << (s->ready.slot % 64);
+    struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
+    uint64_t bit = UINT64_C(1) << (s->ready.slot % 64);
+    TCB_t *t = s->ready.context;
+    /* Only this running task can insert its unlinked event item. A completed
+     * wake removes the item and drops its reference before publishing ready
+     * state. The owner mask and control FIFO therefore suffice for this case. */
+    if (cpu->run.current == &s->ready && !s->off_cpu &&
+        atomic_load_explicit(&s->execution, memory_order_acquire) == SS_K_RUNNING &&
+        !s->event_reference.descriptor && !listLIST_ITEM_CONTAINER(&t->xEventListItem)) {
+        if (!(s->object_detach && s->wait_kind == SS_K_EVENT) &&
+            !s->unordered && !(listGET_LIST_ITEM_VALUE(&t->xEventListItem) & taskEVENT_LIST_ITEM_VALUE_IN_USE))
+            listSET_LIST_ITEM_VALUE(&t->xEventListItem, configMAX_PRIORITIES - priority);
+        s->object_sequence = s->object_requested;
+        s->object_priority = s->object_requested_priority;
+        /* An older deferred request must not edit a later wait by this task. */
+        cpu->object_repair[s->ready.slot / 64] &= ~bit;
+        return true;
+    }
+    cpu->object_repair[s->ready.slot / 64] |= bit;
     return false;
+}
+/* A task suspending itself needs only its own control applied before yielding.
+ * The saved frame is still on CPU, so consume retains its acknowledgment hint;
+ * the mandatory yield performs owner maintenance after that frame is saved. */
+static unsigned ssKernelControlDrainSlot(unsigned slot)
+{
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
+    unsigned c = ssKernelCPUId();
+    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    configASSERT(!cpu->critical_depth && !cpu->o_critical);
+    configASSERT(!cpu->isr_depth && !cpu->o_isr);
+    configASSERT(!cpu->control_draining && !cpu->selecting);
+    cpu->control_draining = true;
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_drain_begin(c);
+#endif
+    unsigned consumed = ss_control_drain_slot(&ssKernelControl, c, slot);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_drain_end(c);
+#endif
+    cpu->control_draining = false;
+    portCLEAR_INTERRUPT_MASK(irq);
+    return consumed;
 }
 static void ssKernelControlDrain(void)
 {
@@ -2176,7 +2218,26 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
         trace_command.flags |= 16u;
 #endif
         SS_COMMAND_STAMP(3);
-        ssKernelControlDrain();
+        if (!from_isr && changed && self && command == SS_K_SUSPEND) {
+#ifdef SS_KERNEL_TEST_ADMIN_ENTER
+            extern void ss_kernel_test_before_self_suspend(uint64_t *, uint64_t) __attribute__((weak));
+            if (ss_kernel_test_before_self_suspend)
+                ss_kernel_test_before_self_suspend(&cpu->object_repair[slot / 64], UINT64_C(1) << (slot % 64));
+#endif
+            unsigned consumed = ssKernelControlDrainSlot(slot);
+#ifdef SS_KERNEL_TEST_ADMIN_ENTER
+            extern void ss_kernel_test_self_suspend(unsigned, bool, bool, bool, bool) __attribute__((weak));
+            if (ss_kernel_test_self_suspend) {
+                struct ssKernelTask *s = &ssKernelTasks[slot];
+                bool repair = (cpu->object_repair[slot / 64] & (UINT64_C(1) << (slot % 64))) != 0;
+                ss_kernel_test_self_suspend(consumed, repair,
+                    atomic_load_explicit(&s->execution, memory_order_acquire) == SS_K_SUSPENDED,
+                    s->off_cpu, ss_control_applied(&ssKernelControl, slot, sequence));
+            }
+#else
+            (void)consumed;
+#endif
+        } else ssKernelControlDrain();
         SS_COMMAND_STAMP(4);
         ssKernelSliceRefresh(ssKernelCPUId(), false);
         SS_COMMAND_STAMP(5);

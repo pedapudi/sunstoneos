@@ -304,6 +304,19 @@ unsigned ss_control_drain(struct ss_control *c, unsigned cpu)
     }
     return count;
 }
+unsigned ss_control_drain_slot(struct ss_control *c, unsigned cpu, unsigned slot)
+{
+    uint64_t bit = UINT64_C(1) << (slot % 64);
+    if (!(atomic_fetch_and_explicit(&c->pending[cpu].word[slot / 64], ~bit,
+                                    memory_order_acquire) & bit)) return 0;
+    consume(c, cpu, slot);
+    return 1;
+}
+bool ss_control_has_pending(const struct ss_control *c, unsigned cpu)
+{
+    return atomic_load_explicit(&c->pending[cpu].word[0], memory_order_acquire) ||
+        atomic_load_explicit(&c->pending[cpu].word[1], memory_order_acquire);
+}
 bool ss_control_checkpoint(struct ss_control *c, unsigned cpu)
 {
     unsigned phase = atomic_load_explicit(&c->gate_phase, memory_order_acquire);

@@ -75,6 +75,52 @@ static void drain(void)
     for (unsigned n = 0; n < 32; ++n)
         for (unsigned cpu = 0; cpu < 2; ++cpu) ss_control_drain(&control, cpu);
 }
+/* Negative control: reproduce the old command path's general drain while
+ * retaining the assertions about the one-request contract. */
+#ifdef SS_CONTROL_DRAIN_ALL_NEGATIVE
+#define ss_control_drain_slot(c, cpu, slot) ((void)(slot), ss_control_drain(c, cpu))
+#endif
+static void single_request_and_remaining_batch(void)
+{
+    const unsigned target = 2, other = 3;
+    const uint64_t target_bit = UINT64_C(1) << target, other_bit = UINT64_C(1) << other;
+    control.cursor[0].value = SS_OWNER_SLOTS - 1;
+    unsigned cursor = control.cursor[0].value;
+    uint64_t requested = ss_control_publish(&control, target, suspend_task, NULL);
+    uint64_t unrelated = ss_control_publish(&control, other, increment, NULL);
+    unsigned before = atomic_load(&applied);
+    assert(ss_control_drain_slot(&control, 0, target) == 1);
+    assert(atomic_load(&applied) == before + 1 && control.cursor[0].value == cursor);
+    assert(!ss_control_applied(&control, target, requested));
+    assert(!ss_control_applied(&control, other, unrelated));
+    /* The running target republishes its off-CPU fence; the unrelated hint
+     * remains available to the next maintenance point. */
+    assert((atomic_load(&control.pending[0].word[0]) & (target_bit | other_bit)) == (target_bit | other_bit));
+    assert(ss_control_has_pending(&control, 0));
+    atomic_store(&offcpu, true);
+    assert(ss_control_drain_slot(&control, 0, target) == 1);
+    assert(ss_control_applied(&control, target, requested));
+    assert(!ss_control_applied(&control, other, unrelated));
+    assert(control.cursor[0].value == cursor);
+    assert(ss_control_drain_slot(&control, 0, target) == 0);
+    assert(ss_control_drain(&control, 0) == 1);
+    assert(ss_control_applied(&control, other, unrelated));
+    assert(!ss_control_has_pending(&control, 0));
+    ss_control_publish(&control, target, resume_task, NULL);
+    drain();
+    atomic_store(&offcpu, false);
+
+    /* More than one batch spans both bitmap words and wraps the cursor. The
+     * owner must request another entry even when no wake or timeout remains. */
+    control.cursor[0].value = SS_OWNER_SLOTS - 1;
+    for (unsigned slot = 60; slot < 60 + SS_OWNER_BATCH + 1; ++slot)
+        ss_control_publish(&control, slot, increment, NULL);
+    assert(ss_control_drain(&control, 0) == SS_OWNER_BATCH);
+    assert(ss_control_has_pending(&control, 0));
+    assert(control.cursor[0].value == 60 + SS_OWNER_BATCH);
+    assert(ss_control_drain(&control, 0) == 1);
+    assert(!ss_control_has_pending(&control, 0));
+}
 int main(void)
 {
     struct ss_owner_backend backend = { .wait = wait_event };
@@ -85,6 +131,7 @@ int main(void)
         ss_owner_descriptor_init(&descriptor[slot], &descriptor[slot], 1);
         ss_control_register(&control, slot, &descriptor[slot], 1, 0, 1, 3);
     }
+    single_request_and_remaining_batch();
     pthread_t threads[2];
     for (unsigned n = 0; n < 2; ++n) assert(!pthread_create(&threads[n], NULL, publisher, (void *)(uintptr_t)n));
     while (atomic_load(&publications) < 2) drain();
@@ -129,6 +176,6 @@ int main(void)
     for (unsigned n = 0; n < 2; ++n) assert(!pthread_create(&threads[n], NULL, gate_caller, (void *)(uintptr_t)n));
     for (unsigned n = 0; n < 2; ++n) assert(!pthread_join(threads[n], NULL));
     assert(atomic_load(&control.gate_phase) == SS_GATE_OPEN);
-    puts("scheduler control: concurrent publication, off-CPU suspend/transfer, late publisher, retirement and FIFO nested gate passed");
+    puts("scheduler control: one-request drain, remaining-batch continuation, concurrent publication, off-CPU suspend/transfer, late publisher, retirement and FIFO nested gate passed");
     return 0;
 }
