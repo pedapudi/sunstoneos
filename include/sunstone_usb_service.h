@@ -21,6 +21,9 @@ void os_usb_service_dispatch(void);
 /* Application exit refuses new acquisitions and releases held leases after
  * pending transmit completion. The owner still owns controller drain. */
 void os_usb_service_retire(void);
+/* Owner only, after controller DMA has stopped; completes aborted metadata
+ * so dispatch can release receive leases borrowed by a pending transmit. */
+void os_usb_service_stopped(void);
 int os_usb_service_idle(void);
 int os_usb_service_input(const struct ss_input_event *event);
 int os_usb_service_serial(const struct ss_usb_serial_buffer *buffer);

@@ -202,6 +202,18 @@ void os_usb_service_write_complete(uint64_t sequence,int status,size_t actual)
 }
 void os_usb_service_retire(void)
 {atomic_store_explicit(&retiring,1,memory_order_release);wake();}
+/* The host calls this only after Disable Slot completions and HCHalted prove
+ * that an aborted transfer has no DMA writer. The following dispatch releases
+ * borrowed pages through the ordinary class callbacks. */
+void os_usb_service_stopped(void)
+{
+    if(!atomic_load_explicit(&retiring,memory_order_acquire))return;
+    unsigned state=atomic_load_explicit(&tx.state,memory_order_acquire),notify=0;
+    if(state==1||state==2){tx.status=-1;tx.actual=0;atomic_store_explicit(&tx.state,3,memory_order_release);notify=1;}
+    state=atomic_load_explicit(&config.state,memory_order_acquire);
+    if(state==1||state==2){config.result=-1;atomic_store_explicit(&config.state,3,memory_order_release);notify=1;}
+    if(notify)changed();
+}
 int os_usb_service_idle(void)
 {
     if(!atomic_load_explicit(&retiring,memory_order_acquire))return 0;
@@ -215,6 +227,8 @@ int os_usb_service_idle(void)
 void os_usb_service_dispatch(void)
 {
     if(atomic_load_explicit(&retiring,memory_order_acquire)){
+        unsigned cfg=atomic_load_explicit(&config.state,memory_order_acquire);
+        if(cfg==1){config.result=-1;atomic_store_explicit(&config.state,3,memory_order_release);changed();}
         unsigned state=atomic_load_explicit(&tx.state,memory_order_acquire);
         if(state==1){tx.status=-1;tx.actual=0;atomic_store_explicit(&tx.state,3,memory_order_release);state=3;}
         /* A borrowed receive buffer may also be the pending transmit buffer. */

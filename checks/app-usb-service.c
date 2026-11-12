@@ -1,7 +1,7 @@
 #include "sunstone_usb_service.h"
 #include <assert.h>
 static struct ss_grant grant;
-static int live=1,writes,wakes,configured;
+static int live=1,writes,wakes,configured,configurations;
 static unsigned serial_releases,camera_releases;
 const struct ss_grant *ss_grant(void){return &grant;}
 int ss_live(void){return live;}
@@ -15,7 +15,7 @@ static void release(void *c,unsigned d,uint64_t token)
 static int write(void *c,uint64_t sequence,const void *p,size_t bytes)
 {(void)c;assert(sequence>=9&&p&&bytes==3);++writes;return 1;}
 static int configure(void *c,const struct ss_usb_serial_line *line)
-{(void)c;assert(line->baud==1000000&&line->bits==8);return 1;}
+{(void)c;assert(line->baud==1000000&&line->bits==8);++configurations;return 1;}
 static int config_result(void *c){(void)c;return configured;}
 int main(void)
 {
@@ -74,7 +74,11 @@ int main(void)
     /* Application exit retains receive memory while zero-copy TX borrows it. */
     value.token=9;assert(os_usb_service_serial(&value)==1);assert(ss_usb_serial_acquire(&out)==1);
     assert(ss_usb_serial_write(10,out.data,out.bytes)==1);os_usb_service_dispatch();
+    assert(ss_usb_serial_configure(2,&line)==1);
     os_usb_service_retire();os_usb_service_dispatch();assert(!os_usb_service_idle()&&serial_releases==2);
-    os_usb_service_write_complete(10,1,3);os_usb_service_dispatch();
-    assert(os_usb_service_idle()&&serial_releases==3);return 0;
+    assert(configurations==1&&ss_usb_serial_config_result(2)==-1);
+    /* Controller stop proof lets the host retire an aborted transmit. */
+    os_usb_service_stopped();os_usb_service_dispatch();
+    assert(os_usb_service_idle()&&serial_releases==3);
+    assert(ss_usb_serial_write_result(10,&actual)==-1&&actual==0);return 0;
 }
