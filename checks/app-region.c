@@ -419,6 +419,54 @@ static void slot1_cases(void)
     arena.used = 0;
 }
 
+static void policy_table_cases(void)
+{
+    uint64_t root[512] = {0}, low[512], upper[512];
+    const uint64_t attrs = APP_PTE_VALID | APP_PTE_ATTR_WB | APP_PTE_SH_INNER | APP_PTE_AF |
+        APP_PTE_NG | APP_PTE_PXN | APP_PTE_UXN;
+    for (unsigned j = 0; j < 512; ++j) {
+        low[j] = (UINT64_C(0x40000000) + (uint64_t)j * APP_REGION_BLOCK) | attrs;
+        upper[j] = (UINT64_C(0x80000000) + (uint64_t)j * APP_REGION_BLOCK) | attrs;
+    }
+    root[1] = UINT64_C(0x41101003); root[2] = UINT64_C(0x41102003);
+    low[128] = (low[128] & ~(UINT64_C(7) << 2)) | (UINT64_C(2) << 2);
+    upper[3] = (upper[3] & ~(UINT64_C(7) << 2)) | (UINT64_C(2) << 2);
+    struct app_region_entry entries[] = {
+        {UINT64_C(0x50000000), APP_REGION_BLOCK, 7, APP_REGION_READ | APP_REGION_WRITE},
+        {UINT64_C(0x80600000), APP_REGION_BLOCK, 7, APP_REGION_READ}
+    };
+    struct app_region_ledger view = {.entry = entries, .capacity = 2};
+    const uint64_t *tables[APP_REGION_SLOTS] = {low, upper};
+    struct app_table_arena a = {arena_pages, arena_pa, 16, 0};
+    struct app_space s = {0};
+    assert(app_space_build_tables(&s, &a, root, tables, &view, 7, 8, APP_SPACE_NO_GIB_BLOCKS) == 0);
+    assert(a.used == 3 && s.asid == 8);
+    uint64_t *private_low = arena_pages[((s.root[1] & APP_PTE_ADDR_MASK) - arena_pa) / 4096];
+    uint64_t *private_upper = arena_pages[((s.root[2] & APP_PTE_ADDR_MASK) - arena_pa) / 4096];
+    assert(((private_low[128] >> 2) & 7) == 2 && (private_low[128] & APP_PTE_AP_EL0_RW));
+    assert(((private_upper[3] >> 2) & 7) == 2 && (private_upper[3] & APP_PTE_AP_RO) == APP_PTE_AP_RO);
+    assert(private_low[127] == low[127] && private_upper[4] == upper[4]);
+    assert(!(private_upper[4] & APP_PTE_AP_RO));
+    /* Explicit pages avoid dereferencing an unrecognized physical table. */
+    tables[1] = 0; a.used = 0;
+    assert(app_space_build_tables(&s, &a, root, tables, &view, 7, 8, 0) == APP_REGION_INVALID && a.used == 0);
+    tables[1] = upper;
+    upper[4] ^= APP_REGION_BLOCK;
+    assert(app_space_build_tables(&s, &a, root, tables, &view, 7, 8, 0) == APP_REGION_INVALID && a.used == 0);
+    upper[4] ^= APP_REGION_BLOCK;
+    upper[4] &= ~(UINT64_C(7) << 2);
+    assert(app_space_build_tables(&s, &a, root, tables, &view, 7, 8, 0) == APP_REGION_INVALID && a.used == 0);
+    /* A whole WB region keeps its 1 GiB leaf after the kernel splits the slot. */
+    for (unsigned j = 0; j < 512; ++j) upper[j] = (UINT64_C(0x80000000) + (uint64_t)j * APP_REGION_BLOCK) | attrs;
+    entries[1] = (struct app_region_entry){UINT64_C(0x80000000), APP_REGION_GIB, 7, APP_REGION_READ};
+    assert(app_space_build_tables(&s, &a, root, tables, &view, 7, 8, 0) == 0 && a.used == 2);
+    assert((s.root[2] & 3) == 1 && (s.root[2] & APP_PTE_AP_RO) == APP_PTE_AP_RO);
+    a.used = 0;
+    upper[4] = (upper[4] & ~(UINT64_C(7) << 2)) | (UINT64_C(2) << 2);
+    assert(app_space_build_tables(&s, &a, root, tables, &view, 7, 8, 0) == 0 && a.used == 3);
+    assert((s.root[2] & 3) == 3); /* Mixed policy cannot coalesce. */
+}
+
 int main(void)
 {
     build_kernel(0);
@@ -669,6 +717,7 @@ int main(void)
     large_cases();
     slot1_cases();
     pool_cases();
+    policy_table_cases();
     puts("app-region host check passed");
     return 0;
 }

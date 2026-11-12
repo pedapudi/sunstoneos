@@ -18,6 +18,7 @@ import subprocess
 import sys
 
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
+from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_WRITE, UC_HOOK_MEM_READ_UNMAPPED, UC_HOOK_MEM_WRITE_UNMAPPED
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X29, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_PC
 
@@ -209,6 +210,18 @@ def measure(image_path, baseline):
     start, end = image.address('__tables_start'), image.address('__tables_end')
     pages = {n: image.address(n) for n in ('a733_cached_el3_l1', 'a733_cached_el3_l2', 'a733_cached_el3_l3',
                                             'a733_cached_el1_l1', 'a733_cached_el1_l2')}
+    extra = []
+    if 'a733_cached_table_alias_l3' in image.symbols:
+        pages['a733_cached_table_alias_l3'] = image.address('a733_cached_table_alias_l3')
+        extra.append(pages['a733_cached_table_alias_l3'])
+    if 'a733_cached_usb_el1_l3' in image.symbols:
+        with image_path.open('rb') as stream:
+            symbol = ELFFile(stream).get_section_by_name('.symtab').get_symbol_by_name('a733_cached_usb_el1_l3')[0]
+            size = int(symbol['st_size'])
+        assert size and not size % 4096
+        for i in range(size // 4096):
+            pages[f'usb_alias_l3_{i}'] = image.address('a733_cached_usb_el1_l3') + i * 4096
+            extra.append(pages[f'usb_alias_l3_{i}'])
     result = {'image': str(image_path), 'table_bytes': end - start,
               'table_addresses': {n: hex(a) for n, a in pages.items()},
               'publication_lines': (end - start + 63) // 64}
@@ -240,11 +253,11 @@ def measure(image_path, baseline):
     assert names.index('a733_cpu_coherence_flush') < names.index('a733_cpu_coherence_tables'), names
     cases['prepare-calls-flush-before-builder'] = True
 
-    # Layout: five pages first, then the checksum line, all inside the section.
+    # Every profile's table pages precede its checksum line.
     total = image.address('a733_cached_el1_table_sum')
-    assert len({a >> 12 for a in pages.values()}) == 5 and all(start <= a and a + 4096 <= end for a in pages.values())
+    assert len({a >> 12 for a in pages.values()}) == 5 + len(extra) and all(start <= a and a + 4096 <= end for a in pages.values())
     assert total % 64 == 0 and total >= max(pages.values()) + 4096 and total + 64 <= end
-    cases['checksum-line-follows-the-five-pages'] = True
+    cases['checksum-line-follows-all-profile-pages'] = True
 
     # EL3: one DC CIVAC per section line, all before the first table write.
     m = prepared(image)
@@ -252,11 +265,29 @@ def measure(image_path, baseline):
     writes = [i for i, x in enumerate(m.trace) if x[0] == 'write']
     assert [m.trace[i][2] for i in flush] == list(range(start, end, 64))
     assert flush[-1] < writes[0] and ('dsb', 'sy', 0) in m.trace[flush[-1]:writes[0]]
-    words = [m.read(a) for p in (root, level2) for a in range(p, p + 4096, 8)]
+    words = [m.read(a) for p in (root, level2, *extra) for a in range(p, p + 4096, 8)]
     assert m.read(total) == sum(words) % (1 << 64)
     assert m.trace[writes[-1]][1] == total, 'the checksum is the last table-section write'
     assert m.read(root) & (3 << 8) == 2 << 8 and m.read(pages['a733_cached_el3_l1']) & (3 << 8) == 2 << 8
     cases['el3-flush-precedes-descriptors-and-checksum-is-last'] = True
+    if 'a733_cached_table_alias_l3' in pages:
+        alias = pages['a733_cached_table_alias_l3']
+        targets = [root, level2, *[p for n, p in pages.items() if n.startswith('usb_alias_l3_')]]
+        for i in range(512):
+            d = m.read(alias + i * 8)
+            if i >= len(targets):
+                assert d == 0, (i, hex(d))
+            else:
+                assert d & 0x0000fffffffff000 == targets[i]
+                assert d & 3 == 3 and (d >> 2) & 7 == 1 and (d >> 6) & 3 == 0
+                assert (d >> 8) & 3 == 3 and (d >> 53) & 3 == 3
+        assert m.read(level2 + 16 * 8) == 0, 'monitor identity view remains invalid'
+        cases['table-alias-exposes-only-EL1-pages-without-EL0-or-execute-access'] = True
+        m.write(alias + 511 * 8, 1)
+        m.el1()
+        assert m.call('a733_cpu_coherence_enable_el1', root, m.clock + 10**7) == 0xffffffff
+        assert not m.model['sctlr_el1'] & 1
+        cases['corrupt-table-alias-page-refuses-before-MMU-enable'] = True
 
     # Core 0 publishes code and initial RAM only; the flush above already
     # removed every table-section line, so the section is not published again.
@@ -264,10 +295,9 @@ def measure(image_path, baseline):
     assert [a for a, _ in published] == [0x41000000, 0x41200000], result
     cases['prepare-publishes-no-table-line'] = True
 
-    budgets = {'enable_el1_instructions': 2500}
+    budgets = {'enable_el1_instructions': 2500 + 1200 * len(extra)}
     assert result['enable_el1_instructions'] <= budgets['enable_el1_instructions'], result
-    assert result['enable_el1_ldp'] == 512 and result['enable_el1_dc_civac'] == 128, result
-    # The eight-core entry keeps noncacheable walks until the core-6 walk run.
+    assert result['enable_el1_ldp'] == 512 + 256 * len(extra) and result['enable_el1_dc_civac'] == 128 + 64 * len(extra), result
     assert result['tcr_el1'] == hex(TCR.for_image(image_path)), result
     cases['eight-core-entry-installs-the-image-selected-walk-value'] = True
     return result, cases

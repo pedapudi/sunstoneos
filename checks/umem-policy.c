@@ -4,8 +4,8 @@
  * roots with their own level-2 table for the first gigabyte above the boot image), a TLB that keeps every translation it
  * walked until a TLBI removes it, and cores that touch the chunk between every instruction, as speculation does. After
  * each primitive the model collects every cache attribute through which the chunk is reachable, in any table or any TLB
- * entry. The conversion passes only if that set never holds two attributes (no mismatched alias), if DC IVAC runs only
- * through a valid translation, and if the whole sequence has the break-before-make order. */
+ * entry. The conversion passes only if that set never holds two attributes (no mismatched alias), if DC CIVAC completes
+ * through the old valid translation before the break, and if the whole sequence has the break-before-make order. */
 #include "umem.h"
 #include "umem_policy.h"
 #include "a733_device_memory_layout.h"
@@ -22,7 +22,7 @@ static void fail(const char *what, uint64_t a, uint64_t b) { printf("FAIL: %s (%
 #define GIB UINT64_C(0x40000000)
 
 static uint64_t *l1[3], *kernel_l2, *private_l2[2];
-static struct tlb { int used; unsigned root; uint64_t va, desc; } tlb[4096];
+static struct tlb { int used; unsigned root; uint64_t va, desc, span; } tlb[4096];
 
 static uint64_t *page(void) { uint64_t *p = aligned_alloc(4096, 4096); memset(p, 0, 4096); return p; }
 
@@ -42,7 +42,10 @@ static uint64_t translate(unsigned root, uint64_t va)
     uint64_t d = walk(root, va);
     if (d)
         for (unsigned i = 0; i < 4096; ++i)
-            if (!tlb[i].used) { tlb[i] = (struct tlb){1, root, va & ~(BLOCK - 1), d}; break; }
+            if (!tlb[i].used) {
+                uint64_t span = (l1[root][va >> 30] & 3) == 1 ? GIB : BLOCK;
+                tlb[i] = (struct tlb){1, root, va & ~(BLOCK - 1), d, span}; break;
+            }
     return d;
 }
 
@@ -50,7 +53,7 @@ static uint64_t watched;                                  /* the chunk under con
 static unsigned mismatches, ops_seen;
 static char sequence[256];
 static unsigned sequence_length;
-static int ivac_fails, skip_tlbi;
+static int civac_fails, skip_tlbi;
 
 static void note(char c) { if (sequence_length < sizeof sequence - 1) sequence[sequence_length++] = c; }
 
@@ -86,20 +89,25 @@ static void op_tlbi(void *c, uint64_t va)
     (void)c;
     note('t');
     if (!skip_tlbi)
-        for (unsigned i = 0; i < 4096; ++i) if (tlb[i].used && tlb[i].va == (va & ~(BLOCK - 1))) tlb[i].used = 0;
+        /* Invalidation of a block covers all cached fragments derived from
+         * its descriptor (Linux arm64 fix ff4c5a0de1f2, tlbflush.h). */
+        for (unsigned i = 0; i < 4096; ++i)
+            if (tlb[i].used && va >= (tlb[i].va & ~(tlb[i].span - 1)) &&
+                va - (tlb[i].va & ~(tlb[i].span - 1)) < tlb[i].span) tlb[i].used = 0;
     speculate();
 }
-static int op_ivac(void *c, uint64_t va, uint64_t bytes)
+static int op_civac(void *c, uint64_t va, uint64_t bytes)
 {
     (void)c;
     note('v');
+    CHECK(sequence_length == 1, "cache maintenance precedes every table edit", sequence_length, 0);
     /* Cache maintenance by VA needs a valid translation in the executing core's root (the kernel's), page by page
      * through the 2 MiB block. */
-    for (uint64_t a = va; a < va + bytes; a += BLOCK) CHECK(translate(0, a) != 0, "DC IVAC through an unmapped address", a, 0);
+    for (uint64_t a = va; a < va + bytes; a += BLOCK) CHECK(translate(0, a) != 0, "DC CIVAC through an unmapped address", a, 0);
     speculate();
-    return ivac_fails ? -1 : 0;
+    return civac_fails ? -1 : 0;
 }
-static const struct umem_cpu_ops cpu = {0, op_store, op_dsb, op_isb, op_tlbi, op_ivac};
+static const struct umem_cpu_ops cpu = {0, op_store, op_dsb, op_isb, op_tlbi, op_civac};
 
 static uint64_t split_pages_storage[UMEM_POLICY_UPPER_SLOTS][512] __attribute__((aligned(4096)));
 static struct umem_el1_map map;
@@ -125,7 +133,7 @@ static void setup(void)
         memcpy(private_l2[a], kernel_l2, 4096);
         l1[1 + a][1] = (uint64_t)(uintptr_t)private_l2[a] | 3;
     }
-    watched = 0; mismatches = 0; ops_seen = 0; sequence_length = 0; ivac_fails = 0; skip_tlbi = 0;
+    watched = 0; mismatches = 0; ops_seen = 0; sequence_length = 0; civac_fails = 0; skip_tlbi = 0;
     kernel_table = (struct umem_policy_table){kernel_l2, 0, 0};
     CHECK(umem_policy_init(&map, &cpu, l1[0], &kernel_table, split_pages_storage) == 0, "init", 0, 0);
     private_tables[0] = (struct umem_policy_table){private_l2[0], UINT64_C(0x40000000), 0};
@@ -155,7 +163,7 @@ static void case_slot1(void)
     CHECK(convert(chunk, UMEM_NC) == 0, "convert to NC", 0, 0);
     CHECK(mismatches == 0, "no mismatched alias at any instruction", mismatches, 0);
     printf("  sequence %s\n", sequence);
-    CHECK(strcmp(sequence, "BBBdtdiMMMdiv") == 0, "break-before-make order", 0, 0);
+    CHECK(strcmp(sequence, "vBBBdtdiMMMdi") == 0, "clean-before-break and break-before-make order", 0, 0);
     for (unsigned r = 0; r < 3; ++r) CHECK(ATTR(walk(r, chunk)) == 2, "NC in every root", r, 0);
     for (unsigned r = 0; r < 3; ++r) CHECK(ATTR(translate(r, chunk)) == 2, "NC in every TLB", r, 0);
     CHECK((private_l2[0][128] & ~(UINT64_C(7) << 2)) == (before_a & ~(UINT64_C(7) << 2)), "only the attribute changes", private_l2[0][128], before_a);
@@ -178,7 +186,12 @@ static void case_split(void)
     map.spaces = 0;
     uint64_t chunk = UINT64_C(0x100000000) + 3 * BLOCK;
     CHECK(convert(chunk, UMEM_NC) == -1, "an unsplit slot refuses", 0, 0);
+    for (unsigned r = 0; r < 3; ++r) {
+        (void)translate(r, chunk);
+        (void)translate(r, UINT64_C(0x120000000));
+    }
     CHECK(umem_policy_split(&map, 4) == 0, "split slot 4", 0, 0);
+    for (unsigned i = 0; i < 4096; ++i) CHECK(!tlb[i].used, "split removes translations away from slot base", i, 0);
     for (unsigned j = 0; j < 512; ++j) {
         uint64_t d = split_pages_storage[2][j];
         CHECK((d & 3) == 1 && ATTR(d) == 1 && (d & UINT64_C(0x0000ffffffe00000)) == (UINT64_C(0x100000000) + j * BLOCK), "split entries", j, d);
@@ -205,12 +218,21 @@ static void case_refusals(void)
     uint64_t chunk = UINT64_C(0x50000000);
     CHECK(convert(chunk + 4096, UMEM_NC) == -1 && convert(UINT64_C(0x30000000), UMEM_NC) == -1, "unaligned or below DRAM", 0, 0);
     CHECK(convert(chunk, 5) == -1, "bad policy", 0, 0);
+    CHECK(convert(UINT64_C(0x340000000), UMEM_NC) == -1 &&
+          convert(UINT64_C(0x10000000000), UMEM_NC) == -1, "upper bounds precede split-mask shifts", 0, 0);
+    kernel_l2[128] ^= BLOCK;
+    CHECK(convert(chunk, UMEM_NC) == -1 && sequence_length == 0, "wrong physical output refuses without maintenance", 0, 0);
+    kernel_l2[128] = A733_EL1_DRAM_BLOCK(chunk) & ~(UINT64_C(7) << 2);
+    CHECK(convert(chunk, UMEM_NC) == -1 && sequence_length == 0, "device attribute refuses", 0, 0);
     kernel_l2[128] = 0;                                             /* an unmapped chunk */
     CHECK(convert(chunk, UMEM_NC) == -1, "a table without the block", 0, 0);
     kernel_l2[128] = A733_EL1_DRAM_BLOCK(chunk);
-    ivac_fails = 1;
+    civac_fails = 1;
+    uint64_t before = kernel_l2[129];
     CHECK(convert(UINT64_C(0x50200000), UMEM_NC) == -1, "a failed invalidate is reported", 0, 0);
-    ivac_fails = 0;
+    CHECK(kernel_l2[129] == before && private_l2[0][129] == before && private_l2[1][129] == before,
+          "cache refusal changes no mapping", 0, 0);
+    civac_fails = 0;
     /* The ledger's convert hook with the real conversion: an NC request converts and the model sees one sequence. */
     static uint8_t chunks[64];
     static struct umem u;
@@ -220,9 +242,26 @@ static void case_refusals(void)
     CHECK(umem_init(&u, &h, cells, 64, chunks, UINT64_C(0x50000000), 64, &range, 1) == 0, "ledger over the model", 0, 0);
     struct umem_buf b;
     struct umem_request r = {.bytes = 4096, .owner = 1, .policy = UMEM_NC};
+    civac_fails = 1;
+    sequence_length = 0;
+    CHECK(umem_alloc(&u, &r, &b) == UMEM_HW, "ledger reports cache refusal", 0, 0);
+    CHECK(chunks[0] == UMEM_WB && ATTR(kernel_l2[128]) == 1 && umem_check(&u) == 0,
+          "cache refusal keeps ledger and mappings WB", 0, 0);
+    civac_fails = 0;
+    sequence_length = 0;
     CHECK(umem_alloc(&u, &r, &b) == 0, "NC alloc", 0, 0);
     CHECK(ATTR(kernel_l2[(b.base - UINT64_C(0x40000000)) / BLOCK]) == 2, "the chunk of the buffer is NC", b.base, 0);
     CHECK(umem_check(&u) == 0, "ledger check", umem_check(&u), 0);
+    /* A free subextent of a chunk containing a live WB allocation cannot convert. */
+    struct umem_buf in_use;
+    struct umem_request occupied = {.bytes = 4096, .base = UINT64_C(0x50400000), .owner = 7,
+                                    .flags = UMEM_AT | UMEM_RAW};
+    CHECK(umem_alloc(&u, &occupied, &in_use) == 0, "WB allocation", 0, 0);
+    r.base = occupied.base + 4096; r.flags = UMEM_AT;
+    sequence_length = 0;
+    CHECK(umem_alloc(&u, &r, &b) == UMEM_NO_SPACE && sequence_length == 0,
+          "chunk in use refuses without cache or table operations", 0, 0);
+    CHECK(umem_owner_of(&u, occupied.base) == 7 && umem_check(&u) == 0, "live allocation is preserved", 0, 0);
 }
 
 /* Negative control: with the TLB invalidate removed, a stale write-back translation meets the new non-cacheable entries,

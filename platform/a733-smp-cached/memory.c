@@ -3,6 +3,15 @@
 #include "a733_cpu_coherence.h"
 #include "a733_cpu_start.h"
 #include "a733_device_memory_layout.h"
+#include "os_memory_tables.h"
+#if defined(SUNSTONE_A733_OS) && defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
+#include "umem.h"
+#include "umem_cpu.h"
+#include "app_region.h"
+#include "aarch64_device_memory.h"
+extern struct umem *os_large_umem(void);
+extern const struct app_space *os_large_space(void);
+#endif
 #if defined(SUNSTONE_A733_OS_GPU) || defined(SUNSTONE_A733_OS)
 #include "../../apps/os/application.h"
 #endif
@@ -25,6 +34,11 @@ const uintptr_t a733_local_pool_stride = (uintptr_t)2 << 20;
 uint64_t a733_cached_el3_l1[512] TABLE, a733_cached_el3_l2[512] TABLE;
 uint64_t a733_cached_el3_l3[512] TABLE;
 uint64_t a733_cached_el1_l1[512] TABLE, a733_cached_el1_l2[512] TABLE;
+#if defined(SUNSTONE_A733_OS)
+uint64_t a733_cached_table_alias_l3[512] TABLE;
+uint64_t *os_kernel_l1_mutable(void) { return (uint64_t *)(uintptr_t)OS_KERNEL_TABLE_ALIAS_BASE; }
+uint64_t *os_kernel_l2_mutable(void) { return (uint64_t *)(uintptr_t)(OS_KERNEL_TABLE_ALIAS_BASE + 4096); }
+#endif
 #if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
 uint64_t a733_cached_usb_el1_l3[A733_USB_MEMORY_ALIAS_TABLES][512] TABLE;
 #endif
@@ -34,9 +48,25 @@ uint64_t a733_cached_el1_table_sum[8] __attribute__((section(".bss.a733_cached_t
 /* EL1 cannot read the table pages (the block that holds them is unmapped there), so the entries of the first
  * 16 GiB are copied here, into ordinary memory, once the tables are complete (include/os_space.h). */
 static uint64_t el1_l1_head[16];
-void os_kernel_l1_head(uint64_t out[16]) { for (unsigned i = 0; i < 16; ++i) out[i] = el1_l1_head[i]; }
+void os_kernel_l1_head(uint64_t out[16])
+{
+#if defined(SUNSTONE_A733_OS)
+    const uint64_t *source = os_kernel_l1_mutable();
+#else
+    const uint64_t *source = el1_l1_head;
+#endif
+    for (unsigned i = 0; i < 16; ++i) out[i] = source[i];
+}
 static uint64_t el1_l2_copy[512];          /* level-1 slot 1's level-2 table, for the same reason */
-void os_kernel_l2_slot1(uint64_t out[512]) { for (unsigned i = 0; i < 512; ++i) out[i] = el1_l2_copy[i]; }
+void os_kernel_l2_slot1(uint64_t out[512])
+{
+#if defined(SUNSTONE_A733_OS)
+    const uint64_t *source = os_kernel_l2_mutable();
+#else
+    const uint64_t *source = el1_l2_copy;
+#endif
+    for (unsigned i = 0; i < 512; ++i) out[i] = source[i];
+}
 extern unsigned char __tables_start[], __tables_end[], __bss_end[], __heap_end[];
 extern unsigned char __device_pool_start[], __device_pool_end[];
 extern unsigned char __uncached_pool_start[], __uncached_pool_end[];
@@ -243,12 +273,29 @@ int a733_cached_memory_prepare(void)
         a733_cached_el3_l2[i]=0;
     }
 #endif
+    #if defined(SUNSTONE_A733_OS)
+    /* No EL0 or executable view of the monitor is introduced. The walker and
+     * this EL1 data alias use the same Inner Shareable write-back policy. */
+    for (unsigned i = 0; i < 512; ++i) a733_cached_table_alias_l3[i] = 0;
+    const uint64_t table_flags = BIT(54) | BIT(53) | BIT(10) | (UINT64_C(3) << 8) | 4 | 3;
+    a733_cached_table_alias_l3[0] = (uintptr_t)a733_cached_el1_l1 | table_flags;
+    a733_cached_table_alias_l3[1] = (uintptr_t)a733_cached_el1_l2 | table_flags;
+    #if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
+    for (unsigned i = 0; i < A733_USB_MEMORY_ALIAS_TABLES; ++i)
+        a733_cached_table_alias_l3[2 + i] = (uintptr_t)a733_cached_usb_el1_l3[i] | table_flags;
+    #endif
+    a733_cached_el1_l2[(OS_KERNEL_TABLE_ALIAS_BASE - 0x40000000) >> 21] =
+        (uintptr_t)a733_cached_table_alias_l3 | 3;
+    #endif
     /* Last table step: each core compares this with its own readback. */
     for (unsigned i = 16; i < 512; ++i) if (a733_cached_el1_l1[i]) return 0;
     for (unsigned i = 0; i < 16; ++i) el1_l1_head[i] = a733_cached_el1_l1[i];
     for (unsigned i = 0; i < 512; ++i) el1_l2_copy[i] = a733_cached_el1_l2[i];
     uint64_t sum = 0;
     for (unsigned i = 0; i < 512; ++i) sum += a733_cached_el1_l1[i] + a733_cached_el1_l2[i];
+    #if defined(SUNSTONE_A733_OS)
+    for (unsigned i = 0; i < 512; ++i) sum += a733_cached_table_alias_l3[i];
+    #endif
     #if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
     for(unsigned table=0;table<A733_USB_MEMORY_ALIAS_TABLES;++table)
         for(unsigned page=0;page<512;++page)sum+=a733_cached_usb_el1_l3[table][page];
@@ -260,3 +307,51 @@ int a733_cached_memory_prepare(void)
     return 1;
 #endif
 }
+
+#if defined(SUNSTONE_A733_OS) && defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
+/* Admission binds the payload view once, after the ledger owns the NC arena
+ * and before an application root copies the kernel's slot-1 table. */
+int os_usb_memory_alias(uint64_t parent_base, uint64_t parent_bytes)
+{
+    static uint64_t bound_base, bound_bytes;
+    if (bound_base) return parent_base == bound_base && parent_bytes == bound_bytes;
+    if (!parent_base || (parent_base & (UMEM_CHUNK - 1)) || parent_bytes != A733_USB_MEMORY_PARENT_BYTES ||
+        parent_base >= (UINT64_C(1) << 32) || parent_bytes > (UINT64_C(1) << 32) - parent_base || os_large_space()) return 0;
+    struct umem *u = os_large_umem();
+    struct umem_buf b;
+    struct umem_extent e;
+    if (!u || umem_lookup(u, parent_base, &b) || umem_describe(u, &b, &e, 0) ||
+        e.owner != UMEM_OWNER_KERNEL || e.policy != UMEM_NC || e.bytes < parent_bytes) return 0;
+    /* Refuse the complete mapping before writing any alias descriptor. */
+    for (uint64_t offset = A733_USB_MEMORY_DATA_OFFSET;
+         offset < A733_USB_MEMORY_DATA_OFFSET + A733_USB_MEMORY_DATA_BYTES; offset += UMEM_PAGE) {
+        struct aarch64_translation tr;
+        if (!aarch64_device_translate((uintptr_t)(parent_base + offset), 1, &tr) ||
+            tr.physical != parent_base + offset || tr.attributes != 0x44 ||
+            (tr.shareability != 2 && tr.shareability != 3)) return 0;
+    }
+    uint64_t (*tables)[512] = (uint64_t (*)[512])(uintptr_t)(OS_KERNEL_TABLE_ALIAS_BASE + 2 * 4096);
+    const struct umem_cpu_ops *cpu = &umem_cpu_el1;
+    for (unsigned t = 0; t < A733_USB_MEMORY_ALIAS_TABLES; ++t)
+        for (unsigned p = 0; p < 512; ++p) cpu->store(cpu->ctx, &tables[t][p], 0);
+    cpu->dsb_ish(cpu->ctx);
+    for (uint64_t offset = A733_USB_MEMORY_DATA_OFFSET;
+         offset < A733_USB_MEMORY_DATA_OFFSET + A733_USB_MEMORY_DATA_BYTES; offset += UMEM_PAGE)
+        cpu->tlbi_va_all_asids(cpu->ctx, A733_USB_MEMORY_ALIAS_BASE + offset);
+    cpu->dsb_ish(cpu->ctx);
+    cpu->isb(cpu->ctx);
+    for (unsigned t = 0; t < A733_USB_MEMORY_ALIAS_TABLES; ++t)
+        for (unsigned p = 0; p < 512; ++p) {
+            uint64_t offset = (uint64_t)t * UMEM_CHUNK + (uint64_t)p * UMEM_PAGE;
+            uint64_t d = 0;
+            if (offset >= A733_USB_MEMORY_DATA_OFFSET && offset < A733_USB_MEMORY_DATA_OFFSET + A733_USB_MEMORY_DATA_BYTES)
+                d = (parent_base + offset) | BIT(54) | BIT(53) | BIT(10) | (UINT64_C(3) << 8) |
+                    (UINT64_C(3) << 6) | 8 | 3;
+            cpu->store(cpu->ctx, &tables[t][p], d);
+        }
+    cpu->dsb_ish(cpu->ctx);
+    cpu->isb(cpu->ctx);
+    bound_base = parent_base; bound_bytes = parent_bytes;
+    return 1;
+}
+#endif

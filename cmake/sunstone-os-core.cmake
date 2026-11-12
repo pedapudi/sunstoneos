@@ -125,6 +125,7 @@ list(APPEND os_sources "${os_build}/continue.S")
 # Retained per-core fault records and their previous-boot report
 # (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
 set(os_added apps/os/admission.c apps/os/lifetime.c apps/os/sealed.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
+  kernel/umem/umem_policy.c arch/aarch64/umem_cpu.c
   runtime/cpu_topology_app.c
   apps/os/usb-service.c apps/os/large.c apps/os/large_load.c drivers/storage/sunxi_mmc.c drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c drivers/storage/fat32_ro.c drivers/storage/storage_digest.c drivers/storage/storage_digest_extensions.c drivers/storage/storage_digest_ce.S kernel/appmem/app_region.c kernel/appmem/large_admit.c kernel/umem/umem.c apps/os/application.c apps/os/session.c apps/os/grants.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
   runtime/deadline.c runtime/deadline-a733.c
@@ -617,6 +618,8 @@ if(SUNSTONE_A733_OS_USB_JPEG)
   list(APPEND os_headers "${os_root}/apps/jpeg/native-shared.h" "${os_root}/include/sunstone_usb_jpeg.h")
 endif()
 set(os_inputs ${board_inputs} ${os_sources} ${os_headers} ${os_generated} ${os_patches} ${os_external_inputs}
+  "${os_root}/include/os_memory_tables.h" "${os_root}/include/umem.h"
+  "${os_root}/include/umem_policy.h" "${os_root}/include/umem_cpu.h"
   "${os_root}/platform/a733-smp-cached/irq_table.h" "${os_root}/include/a733_fault.h"
   "${os_root}/include/a733_thermal.h" "${os_root}/include/a733_thermal_native.h"
   "${os_root}/include/gicv3_spi.h" "${os_root}/include/sunstone_deadline.h" "${CMAKE_CURRENT_LIST_FILE}")
