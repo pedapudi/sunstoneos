@@ -2,11 +2,12 @@
 
 Status: **implemented and host-tested**. Registered return steps cover every
 session grant; [the owner audit](failure-return-audit.md) distinguishes complete
-stop paths from retained faults. Physical qualification of the registry is
-pending port recovery, as recorded in [the return evidence](../evidence/failure-return.jsonl).
-Earlier forced application and EL0-abort returns are recorded as
-`1793579984604886693-7d81d397` and `1793582514152160909-ecc5988b` in
-[application.jsonl](../evidence/application.jsonl).
+stop paths from retained faults. Selected GPU, NPU and storage-read failures
+return to FEL without a watchdog reset; [the return evidence](../evidence/failure-return.jsonl) defines those
+inputs and retirement proofs. USB and radio failure-injection stages await
+reviewed USB launch admission facts.
+Forced application and EL0-abort returns also have
+[application evidence](../evidence/application.jsonl).
 
 A returning SunstoneOS image ends a failed run at the boot ROM, with its
 first-failure record and the DRAM that the host saved before launch, instead of
@@ -116,14 +117,25 @@ through each service's own stop path:
    core. Each runs at the highest priority, cleans caches, restores interrupt
    and power state, disarms the watchdog and returns to ROM.
 
-An application's NPU producer still closes its queue at a safe point after
+An application's NPU producer closes its queue at a safe point after
 `ss_live()` becomes negative. The GPU worker can finish accepted work after the
 application is suspended; its failure receipt identifies abandoned completed
-outputs. Storage closes only after transfer completion. An unclosed write-enabled
-volume cannot establish filesystem consistency and retains FAULT.
+outputs. Storage finishes the issued transfer and closes only when its owner-held
+record proves an untouched write session or a completed consistent transaction.
+An unsafe filesystem phase immediately records the session ID and phase as FAULT;
+return does not issue another metadata write, retry or recovery transaction.
 
-Later application failures preserve the first record. Registered device faults
-leave `board.fatal` clear while the supervisor collects remaining owner results.
+The supervisor publishes the absolute return deadline before requesting owners.
+The limit is three seconds from the return origin and ends before the session's
+final 10 ms guard. Shared lock waiters recheck it during existing tick waits and after
+acquisition. Shared pin reads and writes also check it before register access.
+An earlier transaction deadline still applies; observing closing before the
+shared deadline is published permits no new hardware work.
+
+Later application failures preserve the first record. `ss_fail` and
+`ss_fail_value` record their application detail once, including when a claim is
+refused; their fallback does not add a board note. Registered device faults leave
+`board.fatal` clear while the supervisor collects remaining owner results.
 
 **Before the scheduler started.** Core 0 claims the return in
 `ss_fail` or `platform_panic`, writes the record, marks the return ready and
@@ -146,9 +158,14 @@ closing refuses new registrations. The registry publishes all requests in an
 order class before releasing that class to its tasks. This preserves shared
 radio/headset ownership. A successful completion cannot overwrite FAULT.
 
-USB host, audio/headset, abandoned DMA work and unclosed filesystem writes have
-retained paths without a complete stop proof. Their callbacks report FAULT and
-preserve resources. They do not claim a successful ROM return.
+USB host, partial radio startup, scan-only radio, I2S audio and closed DMA services
+have native retirement proofs. Their callbacks report DONE only after those
+proofs complete. Active or abandoned DMA work, uncertain filesystem state and
+full-station CE ownership retain FAULT. Headset retirement requires protocol and
+UART closure plus explicit version 4 module-reset authority; legacy profiles
+retain FAULT ([Bluetooth return](bluetooth-return.md)).
+The audit distinguishes implemented stop paths from admitted and physically
+qualified compositions.
 
 ## NPU stop report when the service never ran
 

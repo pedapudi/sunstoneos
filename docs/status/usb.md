@@ -4,7 +4,12 @@
 
 Native USB0 device transport and bounded xHCI and TinyUSB host classes have host and instruction-model evidence. Device results do not qualify source power or host peripherals.
 
-**Software evidence:** emulator.
+The registered OS return path closes class admission, drains and halts xHCI,
+retires its interrupt and transport loans, restores the local host platform and
+waits for Type-C source stop. DONE requires all these proofs. Uncertain hardware
+or an active borrowed JPEG operation retains FAULT and prevents terminal release
+([owner audit](../designs/failure-return-audit.md)). This path is host-tested;
+physical failure-return qualification remains open.
 
 **Board-qualified scope:** High-speed inherited-clock USB0 PIO status, echo,
 logging and return pass: native takeover clears SoftConn, completes a 40-byte
@@ -22,11 +27,12 @@ peripherals remain unqualified.
 | USB0 takeover from the ROM device session (port 3-3) | qualified on the board | exchange of 40 bytes sent, 1 packet received | [design](../designs/usb-session-takeover.md), `usb-session-takeover-r9-v3` |
 | Type-C source-disabled control, one-second VBUS pulse, ten-second VBUS hold (port 3-1, TYPEC24 empty) | qualified on the board | VBUS rise at most 6.8 ms, fall at most 2.0 ms | [usb.jsonl](../evidence/usb.jsonl) |
 | Host classes: HID, BOT sector reads, serial bridges, UVC, UAC1 microphone | host-tested | 640 by 480 YUYV at 30 frames/s needs 18.432 MB/s | [design](../designs/usb-host-classes.md) |
+| Registered host and Type-C retirement | host-tested | one shared three-second return deadline | [owner audit](../designs/failure-return-audit.md) |
 | Loaded-port operation, attached peripherals, higher modes | open | none | open work 1 to 6 |
 
 ## Open work
 
-1. Rebuild the input, serial, camera and camera-JPEG images, attach the powered hub and devices, and run each class image on port 3-1. Gen1 needs at least 900 mA plus image-bound COMB0 and topology authority.
+1. Complete the reviewed USB launch admission facts, then qualify the registered return path. The empty-port diagnostic reaches ATTACH before xHCI starts; it tests partial startup and Type-C stop only. Started-controller retirement needs an admitted adapter or hub and an attached device. Gen1 needs at least 900 mA plus image-bound COMB0 and topology authority.
 2. Qualify physical devices, DMA visibility, interrupt delivery, source current and cutoff, sustained traffic, capture contents and continuity, serial flow control and overruns, repeated attachment and recovery. An overloaded output may stay above the controller threshold, so VBUS loss does not always reveal an overload.
 3. Qualify physical cold start, fabric and security ownership, and wider USB1, USB2 and DWC3 operation.
 4. Close the real-time gaps in the [real-time audit](driver-realtime-audit.md): a bounded privileged serial submission interface, more than one outstanding TX per endpoint, a connected IRQ wake path for the JPEG variant, and physical timing and idle current.
@@ -38,7 +44,7 @@ peripherals remain unqualified.
 
 **Board-qualified scope:** None.
 
-TYPEC24, the USB-C and DisplayPort connector, requires a USB-C adapter or hub. The native stack supplies Type-C ownership, USB2 and selected Gen1 profiles, bounded hubs, HID, BOT sector reads and recovery, serial bridges, UVC and UAC1 microphone capture. Hot-plug inside an admitted adapter or hub connection is implemented; removing TYPEC24 requires a new source session. The runner accepts finite `usb-class` probes through the watchdog marker, quiescence hook and normal-return receipt; the four OS images still lack real host drain and a returning lifetime. Image hashes and superseded queue entries are in [the image guide](../usb-host-images.md). See [host USB](../usb2-host.md) and [Type-C](../typec.md).
+TYPEC24, the USB-C and DisplayPort connector, requires a USB-C adapter or hub. The native stack supplies Type-C ownership, USB2 and selected Gen1 profiles, bounded hubs, HID, BOT sector reads and recovery, serial bridges, UVC and UAC1 microphone capture. Hot-plug inside an admitted adapter or hub connection is implemented; removing TYPEC24 requires a new source session. The runner accepts finite `usb-class` probes through the watchdog marker, quiescence hook and normal-return receipt. The OS has registered host drain and Type-C stop under the returning lifetime; their physical qualification still depends on the admitted topology and source-power facts. Image hashes and superseded queue entries are in [the image guide](../usb-host-images.md). See [host USB](../usb2-host.md) and [Type-C](../typec.md).
 
 ## Evidence
 

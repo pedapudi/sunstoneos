@@ -1,7 +1,10 @@
 # Radio power sequence and supply topology
 
-Status: **host-tested; the board has not run it.** The software follows the
-vendor sequence below. No rail has been enabled on a board by SunstoneOS.
+Status: **implemented, with finite power-on, scan and shutdown scope qualified on
+the board** ([radio status](../status/radio.md), [records](../evidence/radio.jsonl)).
+The registered return path also handles partial startup under the shared
+three-second deadline. Its failure-injection qualification awaits reviewed USB
+launch admission facts.
 
 This document is for driver developers and the board coordinator. It states
 which supplies power the AIC8800D80 module, the order in which the vendor
@@ -21,8 +24,8 @@ loads of DCDC1, whose selector the board reports as code 23, which is 3.3 V
 
 The board device tree (`sun60i-a733-orangepi-zero3w.dts`, `&rfkill`) gives the
 `wlan` node `wlan_power = "axp8191-bldo5", "axp8191-cldo1"` with
-`wlan_power_vol = <1800000>, <1800000>`, annotated as the supplies of the PG and
-PM pin banks, and `wlan_regon = PM1`. The `bt` node names the same two supplies.
+`wlan_power_vol = <1800000>, <1800000>` and `wlan_regon = PM1`. Its annotations
+identify the supplies with the PG and PM pin banks. The `bt` node names the same two supplies.
 Neither node names DCDC1, DCDC8 or any other output. The pinned
 `sunxi-wlan.c` and the AIC8800 board support code (`aicsdio.c`) give this order:
 
@@ -44,8 +47,7 @@ DCDC1 stays enabled throughout. The kernel never touches it for the radio.
 
 ## DCDC8 is not a radio supply
 
-The earlier documents named DCDC8 as the schematic's radio I/O supply. The
-schematic does not support that. Sheet 2 (power sequence) lists DCDC8 as
+Schematic sheet 2 (power sequence) lists DCDC8 as
 "VDD-DRAM (reserved)", 1.8 V. Sheet 6 gives the DCDC8 output a net named
 `DCDC8` that no other sheet uses. Sheet 2 lists CLDO1 as the supply of
 `VCC-PM`, `VCC33-18-USB` and `VDD18-LPDDR`. The vendor sequence above never
@@ -65,7 +67,7 @@ no supply for the `VCC-PG` net, while the device tree annotates BLDO5 as
 the choice does not change what the sequence does. The board read of the PG
 detect word, below, does not separate the readings.
 
-## What the board read for PG
+## PG voltage detection does not identify its supply
 
 `GPIO_POW_VAL` at `0x02000048` reports the voltage the SoC detects on each pin
 group. For PG, bits 13:12 are `10` for 3.3 V, `11` for 1.8 V, and `00` or `01`
@@ -77,24 +79,16 @@ withstand circuit follows "the detected GPIO voltage". `GPIO_POW_MOD_SEL` at
 `0x02000040` read `0x01155550`, its reset value, so PG was in adaptive mode.
 PM has its own pair of registers (`SGPIO_POW_VAL`, `SGPIO_POW_MOD_SEL`).
 
-The board read `GPIO_POW_VAL` as `0x020ff980` in two runs, so PG bits 13:12 are
-`11` (1.8 V) in both:
+The qualified observations report PG at 1.8 V with BLDO5 both enabled and
+disabled. They do not establish which supply feeds PG: another 1.8 V source may
+supply it, or the detector may not track the pin in this state. The device tree
+annotates BLDO5 as `vcc-pg`, while the schematic names no supply for that net.
+[The radio evidence](../evidence/radio.jsonl) records the measurements.
 
-| Run | BLDO5 (PMIC `0x21` bit 2, selector `0x2e`) | `GPIO_POW_VAL` | `SGPIO_POW_VAL` |
-| --- | --- | --- | --- |
-| `1793739986203659373-932efd85` | on, selector 13 (1.8 V) | `0x020ff980` | `0x0e` |
-| `1793742152141316018-59ac4fd1` | off, selector 13 | `0x020ff980` | `0x0e` |
-
-With BLDO5 off, the word is the same as with it on. The detected voltage does
-not follow BLDO5, so this word does not show what supplies PG. Either another
-1.8 V source supplies PG, or the detect does not track the pin in this state.
-The device tree still annotates BLDO5 as `vcc-pg` (`wlan_power`, line 2957 of
-the board device tree) and the schematic names no supply for the net. The
-first-run guard had treated `00` and `01` as "unsupplied" and required them; the
-manual supports no such reading, and the guard refused the run for that reason
-(code `0x431`). The guard now refuses only a 3.3 V reading (`10`), which would be
-a different supply that could fight BLDO5, and records the PG bits either way
-(`docs/designs/radio-service-stages.md`).
+The first-run guard therefore refuses a 3.3 V reading (`10`), which could imply a
+conflicting supply. It records the PG bits and accepts `11`, `00` or `01`; the
+manual supplies no basis for treating the invalid encodings as proof that the
+pins are unpowered ([service stages](radio-service-stages.md)).
 
 The finite observer `apps/power-supply-observe` already reads the PMIC bytes;
 the pin-block words come from the existing read-only bundle reader
@@ -122,9 +116,45 @@ intervals:
 Only BLDO5 can be powered on, only to 1.8 V, only under an exclusive lease.
 CLDO1 also feeds the LPDDR 1.8 V rail, so the provider never writes it.
 
+## Registered stop covers partial startup and completed scans
+
+The OS requests stop on the original module owner using the supervisor's absolute
+return deadline. The session closes SDIO admission and drains its accepted
+operation without extending that operation's bound. Partial startup completes
+only the work needed to prove the reached state. It starts no further firmware
+or protocol setup.
+
+The platform waits for any shared Bluetooth owner to release the module. A
+version 4 Bluetooth profile supplies authenticated PM2 reset authority, the
+expected GPIO configuration and inherited level, topology identity and wiring
+evidence. With that authority, the module owner asserts PM2 and verifies it
+before publishing Bluetooth peer stop. WLAN DOWN alone is insufficient. Legacy
+profiles supply no Bluetooth peer-stop proof
+([Bluetooth return](bluetooth-return.md)).
+
+After peer release, the platform drives PM1 low, quiesces a prepared SDC1
+controller, removes the module clock, gates and resets SDC1, and verifies those
+states. It powers BLDO5 off only when a completed observation proves it enabled,
+then verifies and reaps the PMIC request. A partially constructed controller
+uses its admitted state to determine which steps apply. The shared PERI0 parent,
+DCDC1 and CLDO1 are not changed. Clock, pin and rail reservations remain held
+through the return.
+
+A completed scan can report DONE only after DOWN readbacks, PMIC request
+retirement and credential cleanup. An uncertain transfer, write, ownership or readback retains
+FAULT. Full-station and association sessions also own the crypto engine (CE);
+radio shutdown supplies no CE drain proof, so their registered result retains
+FAULT value `0x905`.
+
+Shared lock waits and pin register accesses observe the return deadline. The
+stop path performs no later hardware access after expiry. Its native and host
+checks establish software sequencing; physical failure return and the version 4
+PM2 reset route remain unqualified.
+
 ## Differences that remain from the vendor sequence
 
-- PM2 is left as inherited. The vendor drives it low as an output at probe.
+- Without explicit Bluetooth stop authority, PM2 stays inherited. The vendor
+  drives it low as an output at probe.
 - The vendor clears the host's DDR50 capability. The native host has no UHS mode
   yet.
 - The vendor requests the PM0 interrupt as a wake source. The native platform

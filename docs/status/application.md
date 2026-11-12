@@ -10,12 +10,14 @@ lowering, thermal stop, PMIC stop and per-core terminals within three seconds.
 Device faults during the window retain their resources and record the owner and
 code while other cleanup continues. Terminals run only after every owner proves
 retirement. [The owner audit](../designs/failure-return-audit.md) lists the
-implemented paths and the USB, audio/headset, DMA and storage limitations.
+implemented stop proofs, admission limits and retained faults.
 
-The registry has host evidence; physical qualification needs port recovery
-([return evidence](../evidence/failure-return.jsonl)). Earlier
-application failures and EL0 exceptions returned without watchdog reset, as the
-evidence table records. An NPU failure before its service starts publishes a
+GPU compute, NPU recognition with an open queue, and failure after a verified
+512 MiB storage read return to FEL without watchdog reset on port 3-3
+([return evidence](../evidence/failure-return.jsonl)). Those cases qualify healthy
+device retirement after application failure. Earlier application failures and
+EL0 exceptions also returned without watchdog reset, as the evidence table
+records. An NPU failure before its service starts publishes a
 never-started report. EL1/EL3 exceptions, SError, unsafe ownership and unfinished
 returns retain their watchdog ending. The
 [return design](../designs/failure-return.md) defines these boundaries.
@@ -32,20 +34,21 @@ repeatability. [CPU status](cpu.md) identifies the result and failed controls.
 | --- | --- | --- | --- |
 | Application kit, manifest and session ([design](../designs/app-abi.md)) | implemented | 552-byte manifest, 4,096-byte session page | `app-abi-host-layout-checks` in [app-abi.jsonl](../evidence/app-abi.jsonl) |
 | OS-only, hello-compute and external-mimus builds | host-tested | 12 OS variants, 84 indexed checks passed | `application-host-gate-selection` in [application.jsonl](../evidence/application.jsonl) |
-| Failure return to the boot ROM ([design](../designs/failure-return.md)) | registered protocol host-tested; earlier application paths board-qualified | 12 registered owner identities; the two earlier forced failures returned without a watchdog reset | [owner audit](../designs/failure-return-audit.md) and the two entry records below |
+| Failure return to the boot ROM ([design](../designs/failure-return.md)) | host-tested; selected GPU, NPU and read-only storage failures board-qualified | 12 registered owner identities; three selected failures return without watchdog reset or secondary owner fault | [owner audit](../designs/failure-return-audit.md), [records](../evidence/failure-return.jsonl) |
 | Eight-worker CPU-only mimus recording | qualified on the board | 90-frame reference matched, seven secondaries off | [CPU status](cpu.md) |
-| GPU compute queue and trusted GPU peer | host-tested | none on the board | [GPU status](gpu.md) |
+| GPU compute queue and trusted GPU peer | selected compute failure board-qualified | two completed jobs, one abandoned output, firmware OFF and worker PARK at return | [return record](../evidence/failure-return.jsonl); broader GPU scope in [GPU status](gpu.md) |
 | Typed session for an image that grants a device (`tools/session.py`) | host-tested | the GPU mimus image and the GPU lifecycle image are admitted with device bit `0x10`; the NPU and control images grant no device | `checks/session-build.py`; [runner document](../board-runner.md) |
 | Concurrent CPU, GPU and NPU operation | host-tested | none on the board | [NPU status](npu.md) |
-| Lifetime from the contract magic in one OS image ([design](../designs/one-os-image.md#lifetime-word-and-sealed-session)) | returning: the lifetime of every image except the USB class images, qualified on the board; supervised: host-qualified on its EL3 stop paths, last run on the board before the returning lifetime got its own magic and lifetime word value; resident: host-tested at EL3 and EL1, unqualified on the board | four returning runs after that change (ret-npu-load, the NPU encoder, ret-latency, ret-radio-scan), each ending at RETURN_ROM value 0; two supervised runs before it (ret-npu-load: EL3 stage, total 32.04 s; EL1 stage, total 35.08 s); no resident board run | `1793948483319321125-4d7fb7af` below and the [NPU](npu.md), [latency](latency.md) and [radio](radio.md) records of 2026-11-06; `1793940886685882479-99c7d548` and `1793943016757588735-a94fc5b2` below; `checks/el3-stop-trace.py` shows that the supervised and resident stop paths execute the same instructions and accesses as before the change; `checks/os-lifetime-admission.py`, `checks/os-sealed-session.py`, `checks/board-lifetime-admission.py` |
+| Lifetime from the contract magic in one OS image ([design](../designs/one-os-image.md#lifetime-word-and-sealed-session)) | selected returning paths and supervised stops board-tested; resident host-tested | returning images retire all eight cores to ROM; supervised EL3 and EL1 stops have evidence; resident physical qualification is pending | [return records](../evidence/failure-return.jsonl), the supervised records below and [resident entry contract](../designs/resident-fel.md) |
 | Warm PCM-to-transcription time | open | target 0.05 times the audio duration | `application-recognition-time-target` (not run) |
 
 ## Open work
 
-The registered return protocol needs physical failure-injection runs. Clean USB
-host and audio/headset retirement also need complete native shutdown contracts.
-An application suspended during filesystem writes needs a consistency protocol
-before the storage owner can certify retirement.
+USB and radio failure-injection stages await reviewed USB launch admission
+facts. An empty USB port cannot qualify started-xHCI retirement. Audio and headset
+capture need physical accessories and return qualification. Storage has an
+owner-held consistency record, but failure during a filesystem write remains
+unqualified.
 
 1. Run an NPU image that fails before its NPU service starts, to confirm on the board that the never-started stop report keeps the port usable.
 2. Run the checks that need external inputs (H.264 capture, SAE); the full gate lists nine remaining checks.
@@ -55,8 +58,8 @@ before the storage owner can certify retirement.
 6. Add broader application inputs, native audio input, autonomous card boot, fault recovery and concurrent thermal qualification.
 7. Qualify the resident lifetime over FEL. The runner contract, completion diagnostic and retained reset outcome are host-tested; no resident board run exists. Resident startup admits the qualified FEL dynamic-OFF state and stage 2's cold static-OFF state ([entry contract](../designs/resident-fel.md)). Submission waits for the coordinator to land the runner changes and restart the daemon.
 8. Raise the USB host from 24 device records to the 127 that USB addresses allow. The records live in the USB parent lease, which `A733_USB_MEMORY_PARENT_FOR(devices)` in [include/a733_usb_memory.h](../../include/a733_usb_memory.h) computes from the device and endpoint counts. The linked arena ends at `A733_USB_MEMORY_END` (`0x42a00000`) and holds 24 records. 127 records need a lease of `0x904000` bytes and a 14 MiB arena, `0x42200000` to `0x43000000`. The arena is placed by the platform link scripts, `apps/os/usb-memory-link.patch` and `A733_USB_MEMORY_END`, which the memory-layout work owns. Until it reserves that range, a larger `SUNSTONE_USB_HOST_DEVICES` fails a static assertion that names `A733_USB_MEMORY_ARENA_FOR`.
-   Moving the records into the unified ledger, sized from the declaration, needs two pieces outside the device owners. The controller reads and writes the records, so they need non-cacheable memory, and the OS image's ledger has no `convert_chunk` hook (`umem_boot_hooks` in `apps/os/large.c` installs only the lock and unlock), so `os_owner_memory` refuses `OS_MEMORY_DEVICE`; adding the hook needs the table builders to remap a converted chunk. Applications also reach the arena through a fixed alias at `0x7a000000`, built by `a733_cached_usb_el1_l3` in `platform/a733/cpu_coherence.S`. Both belong to the table-walk work.
-9. Size the USB serial slots (4 per port, `SS_USB_SERIAL_SLOTS` in `drivers/usb/host/serial.c`) from the application's manifest. The slots hold loans of the USB transport's buffers (`acquire` in `drivers/usb/host/serial-native.c`), which are Normal non-cacheable controller buffers in the USB arena, so they move with the device records of item 8. The input event queue is done: its depth is the manifest's `usb.input_events` (a power of two; 1,024 when an application with a keyboard or mouse omits it) and admission takes its storage from the ledger (`os_usb_service_memory` in `apps/os/usb-service.c`).
+   Allocating the records from the unified ledger according to the declaration needs two changes outside the device owners. The controller reads and writes the records, so they need non-cacheable memory. The ledger has no `convert_chunk` hook: `umem_boot_hooks` in `apps/os/large.c` installs only the lock and unlock, so `os_owner_memory` refuses `OS_MEMORY_DEVICE`. Adding the hook needs the table builders to remap a converted chunk. Applications also reach the arena through a fixed alias at `0x7a000000`, built by `a733_cached_usb_el1_l3` in `platform/a733/cpu_coherence.S`. Both belong to the table-walk work.
+9. Size the USB serial slots (4 per port, `SS_USB_SERIAL_SLOTS` in `drivers/usb/host/serial.c`) from the application's manifest. The slots hold loans of the USB transport's buffers (`acquire` in `drivers/usb/host/serial-native.c`), which are Normal non-cacheable controller buffers in the USB arena, so they move with the device records of item 8. The input event queue uses the manifest's `usb.input_events`: a power of two, defaulting to 1,024 for keyboard or mouse applications. Admission takes its storage from the ledger through `os_usb_service_memory` in `apps/os/usb-service.c`.
 
 ## Evidence
 
