@@ -1,28 +1,11 @@
 #!/usr/bin/env python3
-"""Build and execute the cached eight-core image with modeled architectural I/O.
+"""The cached eight-core image machine: Unicorn with modeled architectural I/O, loaded by the checks that execute that image.
 
 The model has no A733 interconnect/cache implementation and proves no physical
 coherence, interrupt delivery timing, watchdog recovery or board admission.
-
-With --count, the scheduler run also counts, for each call of the kernel and
-port functions in COUNTED, the instructions, SVC, DSB, DMB and ISB that the
-calling core executes until the call returns, and the lock calls it makes.
-Instructions of other tasks and of interrupts taken during the call are not
-counted. The result gives the median of each count over all calls; sgi_sends
-counts the calls of vInterruptCore and woken the entries of prvYieldForTask
-(a task made ready that must run now) during the counted call. tick_by_wakes
-separates the tick handler's calls that woke nothing, those taken while the
-scheduler was suspended, which only pend the tick, and those that woke a
-task, whose SGIs are required preemptions. irq_round_trip counts each IRQ
-from its vector entry to its exception return on the taking core, grouped by
-interrupt ID and by whether the exit path called vTaskSwitchContext; the tick
-group also reports how many tick handler calls the IRQs made.
-
-With --late-ticks N, once the kernel tick count reaches 16 and core 0 has no
-IRQ in progress, the model counter jumps to N tick periods past the pending
-tick deadline, so N + 1 periods are due when the next tick IRQ arrives;
-late_catch_up then gives the tick IRQs, tick handler calls and instructions,
-counted from that IRQ, that the kernel needs to account for them.
+The module has no command line: its former standalone build and run used a copy of the
+sources whose patch set no longer applies, and the image is built by the checks
+that load the machine (checks/deadline.py).
 """
 import argparse
 import ctypes
@@ -40,7 +23,6 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_RE
 from unicorn.arm64_const import *
 ROOT=Path(__file__).resolve().parents[1]
 import importlib.util
-GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by deadline.py'
 spec=importlib.util.spec_from_file_location('hw_facts',ROOT/'tools/hw_facts.py')
 hw_facts=importlib.util.module_from_spec(spec);spec.loader.exec_module(hw_facts)
 # The Non-secure view of a Secure priority comes from docs/hardware/a733-facts.json.
@@ -74,73 +56,8 @@ EL3_MBUS_READS={0x02002588:0x81000000,0x02002594:0x00030001}
 
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 
-def build(e,freertos,perf_session=False):
-    e.mkdir(parents=True,exist_ok=False)
-    source=e/'source';source.mkdir()
-    paths=[*ROOT.glob('platform/a733-smp-cached/*'),*ROOT.glob('include/*.h'),
-        *ROOT.glob('runtime/include/*.h'),ROOT/'runtime/memory.c',ROOT/'runtime/memmove.c',
-        ROOT/'checks/fp-context.S',ROOT/'checks/a733-smp-cached.py',
-        ROOT/'cmake/a733-smp-cached.cmake',ROOT/'cmake/aarch64-clang.cmake',
-        *ROOT.glob('patches/freertos-smp-*.patch'),ROOT/'patches/freertos-a733-smp.patch']
-    paths += [ROOT/'platform/a733'/n for n in ['cpu_start.c','cpu_entry.c','cpu_entry.S','cpu_entry_native.c',
-        'cpu_continue.c','cpu_coherence.c','cpu_coherence.S']]
-    for p in paths:
-        d=source/p.relative_to(ROOT);d.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(p,d)
-    dep=e/'freertos';dep.mkdir()
-    for n in ['tasks.c','queue.c','list.c']:shutil.copy2(freertos/n,dep/n)
-    shutil.copytree(freertos/'include',dep/'include')
-    shutil.copytree(freertos/'portable/GCC/ARM_CR82',dep/'portable/GCC/ARM_CR82')
-    compiler=Path(shutil.which('clang-21')).resolve()
-    linker=Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld'
-    commands=[]
-    def run(cmd,name):
-        cmd=list(map(str,cmd));commands.append(cmd)
-        p=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
-        (e/(name+'.log')).write_text(p.stdout)
-        (e/'commands.json').write_text(json.dumps(commands,indent=2)+'\n');p.check_returncode()
-    toolchain=e/'toolchain.cmake'
-    toolchain.write_text(f'set(SUNSTONE_LLD "{linker}" CACHE FILEPATH "")\n'
-        f'include("{source}/cmake/aarch64-clang.cmake")\nset(CMAKE_C_COMPILER "{compiler}")\nset(CMAKE_ASM_COMPILER "{compiler}")\n')
-    b=e/'build'
-    run(['cmake','-G','Unix Makefiles','-S',source/'platform/a733-smp-cached','-B',b,
-        f'-DCMAKE_TOOLCHAIN_FILE={toolchain}',f'-DFREERTOS_DIR={dep}',f'-DSUNSTONE_LLD={linker}',
-        f'-DSUNSTONE_A733_PERF_SESSION={"ON" if perf_session else "OFF"}'],'configure')
-    run(['cmake','--build',b,'--target','a733-smp-cached-diagnostic'],'build')
-    (e/'build-inputs.json').write_text(json.dumps({str(p.relative_to(e)):sha(p)
-        for p in e.rglob('*') if p.is_file()},indent=2)+'\n')
-    return b/'a733-smp-cached-diagnostic.elf'
 
 
-def main():
-    p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--evidence',type=Path,required=True)
-    p.add_argument('--freertos',type=Path)
-    p.add_argument('--build-only',action='store_true')
-    p.add_argument('--stop-clock',type=int)
-    p.add_argument('--resume',type=Path)
-    p.add_argument('--transition-only',action='store_true')
-    p.add_argument('--cold-vectors-only',action='store_true')
-    p.add_argument('--image',type=Path,help='Reuse preserved ELF without rebuilding')
-    p.add_argument('--count',action='store_true',help='Count instructions per kernel and port call')
-    p.add_argument('--late-ticks',type=int,default=0,help='Make one tick IRQ this many tick periods late')
-    p.add_argument('--perf-session',action='store_true',help='Build with the multicore performance session measurements')
-    a=p.parse_args();e=a.evidence.resolve()
-    if a.image:
-        e.mkdir(parents=True,exist_ok=False);image=a.image.resolve()
-        shutil.copy2(__file__,e/'executed-check.py')
-    else:
-        assert a.freertos;image=build(e,a.freertos,a.perf_session)
-    if a.build_only:print(f'BUILT {image}');return
-    try:result=cold_vector_check(image) if a.cold_vectors_only else transition_check(image) if a.transition_only else execute(image,e,a.stop_clock,a.resume,a.count,a.late_ticks)
-    except Exception as error:
-        (e/'failure.txt').write_text(repr(error)+'\n');raise
-    (e/'result.json').write_text(json.dumps(result,indent=2)+'\n')
-    (e/'manifest.json').write_text(json.dumps({'image':str(image),'image_sha256':sha(image),
-        'check_sha256':sha(e/'executed-check.py' if a.image else e/'source/checks/a733-smp-cached.py'),
-        'resume':{'path':str(a.resume),'sha256':sha(a.resume)} if a.resume else None,'files':{str(f.relative_to(e)):sha(f)
-        for f in e.rglob('*') if f.is_file()}},indent=2)+'\n')
-    print('PASS '+('stackless cold/late-failure vectors' if a.cold_vectors_only else 'cached transition and retained vectors' if a.transition_only else
-        'saved diagnostic checkpoint' if a.stop_clock else 'eight-core scheduler and missing-secondary refusal'))
 
 # Execution model is defined below; build-only preserves the exact candidate
 # before any instruction run or subsequent source correction.
@@ -547,81 +464,3 @@ class Machine:
             if self.missing is not None and self.mmio[0x07052008+self.missing*0x1000]==8:
                 self.clock=max(self.clock,24000001)
         raise AssertionError(('instruction budget',self.steps,[hex(u.reg_read(UC_ARM64_REG_PC)) for u in self.cpus]))
-
-
-def execute(image,e,stop_clock=None,resume=None,count=False,late_ticks=0):
-    machine=Machine(image,count=count);machine.late_ticks=late_ticks
-    for r in machine.regs:r['tpidrro_el0']=TPIDRRO_RESET
-    if resume:machine.restore(resume)
-    success=machine.run(stop_clock);machine.save(e/'machine.pkl')
-    (e/'state.json').write_text(json.dumps(success,indent=2)+'\n')
-    if stop_clock:return {'diagnostic_checkpoint':True,'state':success}
-    assert success['report'][4]==0,success
-    assert success['EL3']==success['EL1']==success['task_cores']==list(range(8)),success
-    assert success['report'][7]==255
-    # Every core zeroed Group 0 and both Group 1 active-priority copies
-    # before it enabled Group 1 (Linux gic_cpu_sys_reg_init).
-    assert success['group1_active_priorities']=={c:['ap0r0','ap1r0_ns','ap1r0_s'] for c in range(8)},success['group1_active_priorities']
-    for c,r in enumerate(success['core_records']):
-        assert r[0]==32 and r[1]>0 and r[2]>0 and r[3]==0,(c,r)
-    failed=Machine(image,missing=7).run()
-    assert failed['report'][4]!=0 and failed['EL3']==failed['EL1']==[] and not failed['task_cores'],failed
-    return {'passed':True,'success':success,'missing_secondary':failed,
-        **({'counts':machine.counts()} if count else {}),
-        'limits':'Actual image instructions and FreeRTOS tasks; modeled registers, GIC, timer, exclusive monitors and shared RAM. No A733 cache/interconnect/physical timing model or board execution.'}
-
-
-def transition_check(image):
-    normal=Machine(image);good=normal.run(transition=True)
-    assert good['sif_cleared']==good['EL3']==good['EL1']==list(range(8)),good
-    sticky=Machine(image);sticky.sticky_sif=6;bad=sticky.run(transition=True)
-    assert 6 not in bad['EL3'] and not bad['EL1'],bad
-    assert sticky.q(sticky.symbols['a733_cached_records']+6*128+16)==6
-    assert sticky.q(sticky.symbols['a733_cached_records']+6*128+24)==8
-    vectors=[]
-    for state in (3,4,6):
-        m=Machine(image);c=6;u=m.cpus[c];r=m.regs[c]
-        address=m.symbols['a733_cached_records']+c*128
-        record=struct.pack('<16Q',5,c,state,*([0]*13))
-        u.mem_write(address,record)
-        r['sctlr_el1']=0x30d00800;r['tcr_el1']=0
-        r['esr_el3']=0x17<<26;r['far_el3']=0xabc;r['elr_el3']=0x41001234
-        u.reg_write(GPR[0],4);u.reg_write(GPR[1],0x123)
-        u.reg_write(UC_ARM64_REG_PC,m.symbols['a733_cached_el3_vectors']+8*128)
-        u.emu_start(u.reg_read(UC_ARM64_REG_PC),0x42200000,count=1000)
-        after=m.read(address,128)
-        assert r['sctlr_el1']&1 and r['tcr_el1']&0x800080==0x800080
-        if state==3:
-            assert m.q(address+16)==6 and m.q(address+24)==0x123 and m.q(address+40)==0x17<<26
-        else:assert after==record
-        assert all(m.read(m.symbols['a733_cached_records']+other*128,128)==bytes(128) for other in range(8) if other!=c)
-        vectors.append({'initial_state':state,'terminal_state':m.q(address+16)})
-    return {'passed':True,'normal_transition':good,'sticky_sif_refusal':bad,'terminal_vectors':vectors,
-        'limits':'New cache-adoption/SIF and retained-vector paths only; unchanged scheduler evidence is reused.'}
-
-
-def cold_vector_check(image):
-    cases=[]
-    for enabled in (False,True):
-        m=Machine(image);c=6;u=m.cpus[c];r=m.regs[c]
-        address=m.symbols['a733_cached_records']+c*128
-        u.mem_write(address,struct.pack('<16Q',5,c,3,*([0]*13)))
-        r['currentel']=4;r['spsel']=1;r['sctlr_el1']=0x30d00800|(0x1005 if enabled else 0)
-        r['vbar_el3']=m.symbols['a733_cached_el3_vectors']
-        r['sp_el3']=m.symbols['a733_cpu_entry_stacks']+(c+1)*4096
-        r['esr_el1']=0x96000011;u.reg_write(UC_ARM64_REG_SP,0)
-        if enabled:m.el3_enabled=set(range(8));m.el1_enabled.add(c)
-        branches=[]
-        def count(cpu,pc,size,unused):
-            ins=next(m.decoder.disasm(bytes(cpu.mem_read(pc,4)),pc))
-            if ins.mnemonic=='subs' and ins.op_str=='x16, x16, #1':branches.append(pc)
-        u.hook_add(UC_HOOK_CODE,count)
-        u.emu_start(m.symbols['a733_cached_cold_vectors']+0x400,0x42200000,count=1000)
-        assert m.q(address+16)==6 and m.q(address+24)==0x96000011
-        assert len(branches)==48 # Twenty-four iterations at EL1 and at EL3.
-        assert r['sctlr_el1']&1 and r['tcr_el1']&0x800080==0x800080
-        assert all(m.read(m.symbols['a733_cached_records']+other*128,128)==bytes(128) for other in range(8) if other!=c)
-        cases.append({'EL1_cache_active':enabled,'BHB_iterations':len(branches),'terminal_state':6})
-    return {'passed':True,'cases':cases,'limits':'Stackless exception paths with modeled system registers; no physical execution.'}
-
-if __name__=='__main__':main()

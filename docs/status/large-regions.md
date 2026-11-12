@@ -29,7 +29,7 @@ An application declares regions of upper memory, up to the 11 GiB the board maps
 
 1. Run the SD0 binding in an OS image through the failure scenarios on a board. `apps/os/large_sd.c` (`os_large_device`, `os_large_device_close`, `os_large_sd_pins`) uses the OS's shared providers and the read-only SD core; QEMU has no SD controller, so its RAM disk covers the loader and four scenarios cover a device that is present and fails (metadata, request start, mid-stream, absent).
 2. Count TLB refills in the OS image: EL0 cannot read the PMU, so the figure needs a counter grant or an EL1 sampler.
-3. Run the partitioned scheduler's `freertos.c` with the hook on a board.
+3. Run the partitioned scheduler's `kernel/scheduler/freertos.c` with the hook on a board.
 4. Regions requested at run time: a ledger whose storage grows while the system runs, an upper-memory allocator that serves the request, page-table pages taken at run time, and a break-before-make update of the application's root with `TLBI ASIDE1IS` on every core.
 5. Tearing down a space and reusing its ASID: the pool never takes an ASID back; reuse needs the table clear and the `TLBI ASIDE1IS` described in the design.
 6. Set `TCR_EL1.AS` (bit 36 of both `A733_CPU_COHERENCE_TCR_*` constants) together with the checks and `platform/a733/cpu_continue.c` that pin them, and run the CPU-return images on both clusters, when application teardown or more than 255 applications per session is needed. The pool already widens to 65535 when AS is set and the hardware reports 16 bits.

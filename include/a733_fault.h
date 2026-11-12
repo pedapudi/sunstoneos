@@ -83,7 +83,7 @@ void a733_fault_boot(void);
 #endif
 
 /* One log line of a record for the single-core images, at most
- * A733_FAULT_LINE_BYTES including the terminating NUL. checks/fault-decode.py
+ * A733_FAULT_LINE_BYTES including the terminating NUL. tools/fault-decode.py
  * formats the same line. Returns its length. */
 #define A733_FAULT_LINE_BYTES 160u
 static inline unsigned a733_fault_line_text(char *out, unsigned n, const char *text)

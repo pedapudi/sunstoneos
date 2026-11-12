@@ -3,7 +3,8 @@
 
 The host check links the actual invalidation, control, queue, startup, firmware
 and state sources. It writes the three generated commands to commands.bin; with
---sources, the pinned driver's complete function is compared against them.
+the pinned driver's complete function is compared against them. --sources names the driver
+directory and defaults to the pinned copy in the host cache; without it the comparison is skipped.
 """
 import argparse
 import hashlib
@@ -12,6 +13,7 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+PINNED = Path.home() / '.cache/sunstoneos/sources/gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination'
 SOURCES = ['checks/pvr-gpu-flush.c', 'drivers/gpu/pvr_gpu_flush.c', 'drivers/gpu/pvr_gpu_control.c',
            'drivers/gpu/pvr_gpu_start.c', 'drivers/gpu/pvr_firmware.c', 'drivers/gpu/pvr_ccb.c',
            'drivers/gpu/pvr_fw_state.c']
@@ -20,7 +22,8 @@ SOURCES = ['checks/pvr-gpu-flush.c', 'drivers/gpu/pvr_gpu_flush.c', 'drivers/gpu
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--sources', type=Path, help='Pinned board driver imagination directory')
+    parser.add_argument('--sources', type=Path, default=PINNED if PINNED.is_dir() else None,
+                        help='Pinned board driver imagination directory (default: the pinned copy in the host cache)')
     parser.add_argument('--clang', default='clang-21')
     args = parser.parse_args()
     out = args.output.resolve(); out.mkdir(parents=True, exist_ok=True)
@@ -34,7 +37,7 @@ def main():
          '-ffreestanding', '-fno-builtin', '-mgeneral-regs-only', '-mstrict-align', '-fstack-usage',
          '-Iinclude', '-Iruntime/include', '-c', 'drivers/gpu/pvr_gpu_flush.c', '-o', str(out / 'pvr_gpu_flush.o')]]
     if args.sources:
-        commands.append(['python3', '-I', str(ROOT / 'checks/pvr-gpu-flush-reference.py'),
+        commands.append(['python3', '-I', str(ROOT / 'tools/pvr-gpu-flush-reference.py'),
                          str(args.sources.resolve()), str(out)])
     records = []
     for index, command in enumerate(commands):

@@ -257,11 +257,24 @@ def board_failure_cases(image_path, prior, model, rtc):
     passed('board-fail-record-el1')
     # An application's ss_fail(detail): the decoder names the group, the
     # detail and the symbolized caller from the image.
-    m = model()
+    class Suspend(prior.Model):
+        # ss_fail ends in `for (;;) vTaskSuspend(NULL)`. The scheduler never resumes a suspended task, so the first
+        # vTaskSuspend call is where the failing task leaves the core; this model has no scheduler to switch away
+        # and would otherwise return from the kernel command into the loop for ever.
+        suspended = None
+        def code(self, uc, a, size, unused):
+            if a == self.s['vTaskSuspend']:
+                self.suspended = uc.reg_read(prior.fault.REGS[0])
+                self.stop = 'park'
+                uc.emu_stop()
+                return
+            super().code(uc, a, size, unused)
+    m = Suspend(prior.fault.Image(Path(image_path)))
     m.call(4, 'ss_fail', (0x123,))
     site = rtc(m, 0x114)
-    # ss_fail does not return: after the record, its task suspends and the core parks.
-    assert m.stop == 'park' and site == 1 << 31 | 4 << 12 | 0x123 and rtc(m, 0x118) == sentinel, (m.stop, hex(site))
+    # ss_fail does not return: after the record, its task suspends itself (vTaskSuspend(NULL)) and the core parks.
+    assert m.stop == 'park' and m.suspended == 0, (m.stop, m.suspended)
+    assert site == 1 << 31 | 4 << 12 | 0x123 and rtc(m, 0x118) == sentinel, (m.stop, hex(site))
     words = {name: rtc(m, offset) for name, offset in crumbs.WORDS.items()}
     words['tag'] = 0x5c0d0000 | EPOCH & 0xffff
     # The model's caller is a sentinel; a return address inside the image

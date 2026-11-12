@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Focused actual-image SD0 task/controller/native trace with modeled board services."""
+"""The SD0 task, controller and native-aperture machine: the actual linked image under Unicorn with modeled board services, used by the checks that load it."""
 import argparse,hashlib,importlib.util,json,struct,sys
 from pathlib import Path
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_READ,UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR,UC_ARM64_REG_PSTATE
 ROOT=Path(__file__).resolve().parents[1]
-GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by npu-stop-native.py'
 sys.path.insert(0,str(ROOT/'checks'))
 import harness
 # Many checks and builders load this module for its layout reader.
@@ -35,6 +34,7 @@ class Machine:
    self.cpu.mem_write(image.address('ullCriticalNesting'),bytes(8))
    self.cpu.mem_write(image.address('ullPortInterruptNesting'),bytes(8))
   self.base=image.address('storage_read');self.layout=image.layouts['storage_read_application'];self.platform=self.base+self.layout['platform'];self.p=image.layouts['a733_mmc_platform'];self.core=self.platform+self.p['core'];self.c=image.layouts['sunxi_mmc'];self.native=self.base+self.layout['native'];self.n=image.layouts['a733_mmc_platform_native'];self.board=image.address('board');self.shared=image.address('providers')+image.layouts['board_provider']['shared'];self.usb=image.layouts['a733_native_usb']
+  self.width=1;self.card_hs=0;self.mode_app=False;self.mode_data=bytes();self.module_changes=[]
   self.time=1000000;self.held=False;self.appheld=False;self.finished=False;self.retained=False;self.trace=[];self.commands=[];self.fifo=0;self.total=0;self.data_command=0;self.state=0;self.ocr=0;self.tx=[];self.request=None;self.max_tx=768;self.queued=0
   self.cpu.mem_write(self.base,session);self.cpu.mem_write(self.board,session[:592]);self.write(self.board+160,61000000,8);self.write(self.base+self.layout['handle'],1,8);self.write(self.base+self.layout['mutex'],1,8)
   self.cpu.mem_write(0x41f00000,session)
@@ -49,7 +49,7 @@ class Machine:
    0x04020300:0x03050530,0x0402005c:0x81710331,0x0402010c:0x80001234,0x04020054:0x12345676,0x04020058:0xffff,0x04020104:7,0x04020140:0xa5a40000}
   # The profile-2 read checks the PERI0 clock tree and the PF bank selector: PERI0 at 2.4 GHz (400 MHz branch), its auto gates and the selector at 3.3 V.
   self.regs.update({0x020020a0:0xfe000000|(99<<8)|(1<<20),0x02003908:((1<<11)|(1<<2)|(1<<1))*0x10001,0x02003988:((1<<11)|(1<<2)|(1<<1))<<16,0x02000070:1})
-  csd=(1<<126)|(9<<80)|(5<<84)|(0x7fff<<48);self.csd=[(csd>>(96-32*i))&0xffffffff for i in range(4)];self.cid=[0x12345678+i for i in range(4)]
+  csd=(1<<126)|(9<<80)|((5|(1<<10))<<84)|(0x7fff<<48)|(0x32<<96);self.csd=[(csd>>(96-32*i))&0xffffffff for i in range(4)];self.cid=[0x12345678+i for i in range(4)]
   names=['board_live','a733_smp_counter','a733_counter_clock_now','aarch64_device_translate','xTaskGetCurrentTaskHandle','xTaskGetSchedulerState','xQueueGetMutexHolder','xQueueSemaphoreTake','xQueueGenericSend','vTaskDelay','a733_platform_lock_enter','a733_platform_lock_leave','a733_platform_lock_retain','a733_rail_acquire','a733_rail_poll','a733_rail_status','a733_rail_retain','a733_pmic_identity','a733_pmic_live','a733_pmic_submit','a733_pmic_result','a733_pmic_reap','a733_pins_acquire_banked','a733_pins_held_banked','a733_pins_read_inputs_banked','a733_native_usb_step','a733_native_usb_health','tusb_rhport_init','tud_task_ext','tud_vendor_n_available','tud_vendor_n_read','tud_vendor_n_write','tud_vendor_n_write_flush','a733_cpu_coherence_publish']
   self.hooks={image.address(n):n for n in names}
   # The TX FIFO's free space, so that the shared USB0 service, which repeats
@@ -106,7 +106,37 @@ class Machine:
   elif name=='tud_vendor_n_write_available':self.ret(max(0,self.max_tx-self.queued))
   elif name=='tud_vendor_n_write_flush':self.ret(0)
   else:raise AssertionError(name)
+ # Bus-width and high-speed negotiation of the current image: ACMD51 (SCR), ACMD6 (width) and CMD6 (switch) once the card is selected.
+ def mode_read(self,a):
+  if a==0x04020200 and self.data_command in (6,51):
+   assert self.held and self.fifo<self.total
+   word=int.from_bytes(self.mode_data[self.fifo:self.fifo+4],'little');self.fifo+=4
+   self.trace.append(['read',a,word]);self.write(a,word);return True
+  return False
+ def mode_write(self,a,v):
+  if a==0x02002d00 and self.width==4:
+   assert self.held and self.regs.get(0x04020004)==0 and not self.regs.get(0x04020018,0)&(1<<31)
+   self.module_changes.append(v)
+  if a==0x04020018 and not v&(1<<21) and self.state==4 and v&63 in (55,51,6):
+   assert self.held and True and not v&(1<<10)
+   n=v&63;arg=self.regs.get(0x0402001c,0);self.commands.append([n,arg]);self.trace.append(['write',a,v])
+   self.regs[a]=v&~(1<<31);self.regs[0x04020038]=4;self.regs[0x04020020]=0x900
+   self.data_command=self.total=self.fifo=0
+   if n==55:assert arg==0x12340000;self.mode_app=True;self.regs[0x04020020]|=1<<5
+   elif n==51:
+    assert self.mode_app and arg==0 and self.regs[0x04020010]==8
+    self.mode_app=False;self.data_command=51;self.total=8;self.mode_data=bytes([2,5])+bytes(6)
+   elif not v&(1<<9):assert self.mode_app and arg==2;self.mode_app=False;self.width=4
+   else:
+    assert self.width==4 and self.regs[0x0402000c]==1 and self.regs[0x04020010]==64
+    assert arg in (0x00fffff1,0x80fffff1);self.data_command=6;self.total=64
+    data=bytearray(64);data[13]=2
+    if arg>>31:self.card_hs=1;data[16]=1
+    self.mode_data=bytes(data)
+   return True
+  return False
  def read_mmio(self,cpu,access,a,size,value,unused):
+  if self.mode_read(a):return
   assert self.held,(hex(a),'MMIO outside native common lock');assert size==4
   v=self.regs.get(a,0)
   if a==0x04020038:
@@ -117,6 +147,7 @@ class Machine:
    assert self.fifo<self.total;v=sum(((self.fifo+i)*37+11)%256<<(8*i) for i in range(4));self.fifo+=4
   self.trace.append(['read',a,v]);self.write(a,v)
  def write_mmio(self,cpu,access,a,size,v,unused):
+  if self.mode_write(a,v):return
   assert self.held and size==4,(hex(a),self.held);self.trace.append(['write',a,v]);assert a!=0x04020200
   self.regs[a]=v
   if a==0x04020038:self.regs[a]=self.read(a)&~v
@@ -152,43 +183,3 @@ class Machine:
  def frame(self):
   assert self.call('storage_read_copy',0x50010000,0x50011000)==1
   return bytes(self.cpu.mem_read(0x50010000,self.read(0x50011000)))
-def run(image,session,out,only=None):
- out.mkdir(parents=True,exist_ok=False);raw=session.read_bytes();prep=module('sd0_native_prep',ROOT/'apps/storage-read/prepare.py');prep.embedded_reference(image.read_bytes(),raw)
- e=sd0_image(image);required=['storage_read_task','storage_read_copy','storage_read_session_valid','storage_read_session_prepare','a733_mmc_platform_retain','a733_mmc_platform_init','sunxi_mmc_poll','board_usb0_task']
- for n in required:e.address(n)
- # Freeze every consumed field/hook mapping before behavioral execution.
- (out/'preflight.json').write_text(json.dumps(dict(image_sha256=hashlib.sha256(image.read_bytes()).hexdigest(),session_sha256=hashlib.sha256(raw).hexdigest(),symbols={n:e.address(n) for n in required},layouts=e.layouts,physical_access=False),indent=2)+'\n')
- decoder=module('sd0_native_decode',ROOT/'apps/storage-read/observe.py');results={}
- for variant in ((only,) if only else ('nominal','cancel-after-take','deadline-after-take','crc-fault')):
-  m=Machine(e,raw,variant);assert m.call('storage_read_session_valid',m.base)==1
-  for i in range(1200):
-   if m.field('stage')==5 and variant in ('cancel-after-take','deadline-after-take'):
-    if variant=='cancel-after-take':m.call('storage_read_revoke',1)
-    else:m.time=m.read(m.base+m.layout['deadline'],8);assert m.time<61000000
-   m.call('storage_read_task',0);m.time+=1000
-   if m.field('result'):break
-  assert m.field('result')==(1 if variant=='nominal' else 2),(variant,m.field('stage'),m.field('reason'),m.commands)
-  frame=m.frame();decoded=decoder.decode(frame,raw);assert decoded['status']==m.field('result')
-  if variant=='nominal':
-   assert frame[256:]==bytes((i*37+11)%256 for i in range(512))
-   assert [c[0] for c in m.commands]==[0,8,55,41,55,41,2,3,9,7,13,17,13],m.commands
-   assert decoded['cid']==m.cid and decoded['csd']==m.csd and decoded['sectors']==33554432 and decoded['ocr']==0xc0300000
-   (out/'native-frame.bin').write_bytes(frame)
-   # Real USB staging/cancel/TX callback: queue64, cancel, complete old64.
-   m.max_tx=64;m.request=0;m.call('board_usb0_task',0);assert len(m.tx)==1 and len(m.tx[0])==64
-   m.request=1;m.call('board_usb0_task',0);assert len(m.tx)==1
-   m.call('tud_vendor_tx_cb',0,64);assert m.field('cancel')==1
-   m.request=0;m.max_tx=768;m.call('board_usb0_task',0);assert len(m.tx)==2 and len(m.tx[-1])==256 and m.tx[-1][8]==2
-  else:
-   assert len(frame)==256 and not any(frame[32:64]);assert m.read(m.platform+m.p['fault'])==1
-   assert not any(m.cpu.mem_read(m.base+m.layout['copied'],512))
-   if variant=='crc-fault':assert m.read(m.core+m.c['borrowed'],8)==m.base+m.layout['borrowed'] and m.retained
-   else:assert m.read(m.core+m.c['borrowed'],8)==0
-  results[variant]=dict(passed=True,commands=m.commands,result=decoded,mmio_accesses=len(m.trace),retained_register_mutex=m.retained)
-  (out/(variant+'-trace.json')).write_text(json.dumps(m.trace,indent=2)+'\n')
-  (out/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,cases=results,scope='Actual linked task, controller/platform/native aperture and clock metadata; shared rail/pin/PMIC returns, scheduler/time, translations, MMIO/card and USB queue modeled. No physical qualification.'),indent=2)+'\n')
-if __name__=='__main__':
- p=argparse.ArgumentParser(description=__doc__)
- for n in ('image','session','output'):p.add_argument('--'+n,type=Path,required=True)
- p.add_argument('--case',choices=('deadline-after-take',))
- a=p.parse_args();run(a.image,a.session,a.output,a.case)

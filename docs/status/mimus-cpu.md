@@ -22,8 +22,8 @@ long-duration worker stress is pending.
 
 ## Open work
 
-1. Build a fresh native race image, run its short control, then the four predeclared 50-second sessions in `race-test-1101/sessions.json` through the queue on port 3-1. Stop at a failure or pause.
-2. Complete the application performance report from the final corpus, per-core timing and the stress receipts. The continuation record is mimus `docs/status/sunstoneos-cpu.md` in `/home/sunil/git/mimus-worktrees/cpu-perf-1031`.
+1. Build a fresh native race image, run its short control, then four predeclared 50-second sessions through the queue on port 3-1. The session list is part of the image build and is declared before the first run. Stop at a failure or pause.
+2. Complete the application performance report from the final corpus, per-core timing and the stress receipts. The continuation record is `docs/status/sunstoneos-cpu.md` of the mimus repository, which is not yet on its main branch.
 3. Coordinate the shared thermal files (`apps/os/thermal.c`, `checks/os-thermal-cadence.*`, `checks/os-cpu-return-thermal.py`) and `apps/mimus/source.json` with their owners.
 
 Writable constructor and GOT metadata stay in image RAM; the storage linker patch is reviewed against that layout. No approval is pending for the existing RAM-only queue plan; storage writes and new operating points need coordinator approval.

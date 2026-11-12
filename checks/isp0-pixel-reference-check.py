@@ -6,7 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 
-spec = importlib.util.spec_from_file_location('isp0_cpu_reference', Path(__file__).with_name('isp0-pixel-reference.py'))
+spec = importlib.util.spec_from_file_location('isp0_cpu_reference', Path(__file__).resolve().parents[1] / 'tools/isp0-pixel-reference.py')
 reference = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(reference)
 
