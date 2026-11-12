@@ -175,10 +175,11 @@ static int application_entry_ready(void)
 {
 #ifdef SUNSTONE_A733_USB_FAILURE_TEST
     /* The empty-port diagnostic waits for the two owner checkpoints before
-     * application entry. An attachment is neither expected nor synthesized. The grant
-     * and returning USB0 owner's readiness still precede application entry. */
+     * application entry. An attachment is neither expected nor synthesized. The
+     * USB0 readiness dependency applies only when that service is granted. */
     if(ss_live()<0)return -1;
-    return ss_grant()&&atomic_load_explicit(&usb_ready,memory_order_acquire);
+    return ss_grant()&&(!(grant.devices&SS_DEVICE_USB_DEVICE)||
+        atomic_load_explicit(&usb_ready,memory_order_acquire));
 #else
     return ss_live();
 #endif

@@ -24,7 +24,7 @@ args.output.mkdir(parents=True, exist_ok=False)
 image = Image(args.image, {'board_application', 'a733_board_session', 'ss_grant'})
 rows = []
 cases = ['ready', 'no-checkpoints', 'host-only', 'typec-only', 'extra-checkpoint',
-         'unprepared', 'usb-not-ready', 'ready-after-wake', 'expired-wait',
+         'unprepared', 'usb-device-not-ready', 'usb-device-ready', 'ready-after-wake', 'expired-wait',
          'board-dead', 'deadline-registration-failed', 'expired-checkpoint-pending',
          'expired-checkpoint-ready', 'board-lost-checkpoint-ready']
 for case in cases:
@@ -48,10 +48,13 @@ for case in cases:
     board = image.address('board')
     session = board + image.layouts['board_application']['session']
     put(session + image.layouts['a733_board_session']['deadline_us'], 60000000, 8)
-    put(grant + image.layouts['ss_grant']['devices'], 1 << 1)
+    usb_device = case in ('usb-device-not-ready', 'usb-device-ready', 'ready-after-wake', 'expired-wait')
+    put(grant + image.layouts['ss_grant']['devices'], (1 << 1) | ((1 << 9) if usb_device else 0))
     put(grant + image.layouts['ss_grant']['finish_by_us'], 55000000, 8)
     put(local('prepared'), case != 'unprepared')
-    put(local('usb_ready'), case not in ('usb-not-ready', 'ready-after-wake', 'expired-wait'))
+    # Keyboard-only sessions omit USB0, so readiness stays zero throughout.
+    # Synthetic USB-device grants test the helper, then fail the app's exact grant check.
+    put(local('usb_ready'), case == 'usb-device-ready')
     checkpoints = {'no-checkpoints': 0, 'host-only': 1, 'typec-only': 2, 'extra-checkpoint': 7,
                    'expired-checkpoint-pending': 0}.get(case, 3)
     put(image.address('usb_failure_checkpoints', '/apps/os/client.c'), checkpoints)
@@ -116,13 +119,14 @@ for case in cases:
     u.reg_write(UC_ARM64_REG_SP, 0x8001f000)
     u.reg_write(UC_ARM64_REG_LR, 0x80000000)
     u.emu_start(local('main_entry'), 0x80000000, count=100000)
-    expected = ('readiness-wait' if case in ('unprepared', 'usb-not-ready') else
+    expected = ('readiness-wait' if case in ('unprepared', 'usb-device-not-ready') else
                 'checkpoint-wait' if case in ('no-checkpoints', 'host-only', 'typec-only', 'extra-checkpoint') else
                 'failure-750' if case in ('board-dead', 'expired-wait', 'expired-checkpoint-pending',
                                         'expired-checkpoint-ready', 'board-lost-checkpoint-ready') else
-                'failure-756' if case == 'deadline-registration-failed' else 'injected')
+                'failure-756' if case == 'deadline-registration-failed' else
+                'failure-791' if case in ('usb-device-ready', 'ready-after-wake') else 'injected')
     assert state['registered'] == 1 and state['terminal'] == expected, (case, state)
-    if expected in ('injected', 'checkpoint-wait'):
+    if expected in ('injected', 'checkpoint-wait', 'failure-791'):
         assert get(local('finish_by'), 8) == 11000000, (case, 'run deadline missing')
         assert get(grant + image.layouts['ss_grant']['finish_by_us'], 8) == 11000000
     if expected == 'injected':
