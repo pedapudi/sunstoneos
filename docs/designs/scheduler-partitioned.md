@@ -255,6 +255,7 @@ system-register synchronization ([A733 SGI contract](../cpu-continue.md)).
 | Task wait state, generation, owner | Atomic packed state; owner commands arbitrate control changes | Waker claims a wait outcome; owner changes placement and lifetime |
 | Registry, creation and deletion, public global suspend gate | Separate administration lock (`ssKernelAdminNext`/`Serving`) and acknowledged owner commands | Task slow paths; never normal wake or switch |
 | Public `taskENTER_CRITICAL` | Recursive application lock plus local interrupt exclusion | Existing application and driver callers |
+| Global time and the tick's deadline sampling | CPU0 alone advances time with an atomic increment and reads each owner's published deadline and slice deadline; the port's tick handler takes no global lock (`ssKernelTickEnter`/`ssKernelTickExit` only defer preemption) | CPU0's timer interrupt |
 
 Object acquisition masks API-capable local interrupts before joining the FIFO, so
 an ISR never waits on a lock held by the task it interrupted. Waiting and

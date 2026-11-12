@@ -1911,6 +1911,26 @@ BaseType_t ssKernelOwnerIRQExit(void)
     return result;
 #endif
 }
+/* The port's tick handler brackets the tick with these instead of an ISR
+ * critical section. The tick reads published deadlines and slice deadlines,
+ * advances time and sends SGIs: none of that needs the global ISR lock, and it
+ * leaves no publication or command record to flush. IRQ entry has masked
+ * interrupts. The preemption count still holds the tick's reschedule request
+ * for the interrupt exit, as the critical section did. */
+UBaseType_t ssKernelTickEnter(void)
+{
+    if (!xSchedulerRunning) return 0;
+    configASSERT(ssKernelIrqsDisabled());
+    ++ssKernelCPUs[ssKernelCPUId()].preempt;
+    return 1;
+}
+void ssKernelTickExit(UBaseType_t entered)
+{
+    if (!entered) return;
+    struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
+    configASSERT(cpu->preempt);
+    --cpu->preempt;
+}
 static BaseType_t ssKernelTick(void)
 {
     /* CPU0 alone advances stage-B time. Remote CPUs receive only due-work or

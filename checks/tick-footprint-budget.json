@@ -21,15 +21,13 @@
   "code os": 56,
   "data fixture phase": 1,
   "data fixture wake": 24,
-  "data os ssKernelCPUs": 2,
+  "data os ssKernelCPUs": 1,
+  "data os ssKernelTime": 1,
   "data os tick_interval": 1,
-  "data os ullCriticalNestings": 1,
   "data os ullPortYieldRequired": 1,
-  "data os xPortCoreStates": 1,
-  "data os xPortLocks": 1,
   "data os xSchedulerRunning": 1,
-  "data stack exception stack": 7,
-  "data total": 40
+  "data stack exception stack": 3,
+  "data total": 33
  },
  "remote": {
   "code fixture": 6,

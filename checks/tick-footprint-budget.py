@@ -65,7 +65,9 @@ def main():
                         help='with --record, keep the larger of the recorded and measured counts')
     parser.add_argument('--lower', action='append', default=[], metavar='STRUCTURE',
                         help='with --record, lower only this structure (for example "data os ssKernelControl") '
-                             'to its measured count in every segment, and each data total by the same amount')
+                             'to its measured count in every segment, and each data total by the same amount; '
+                             'a structure with no budget in a segment is added at its measured count; '
+                             'SEGMENT:STRUCTURE limits it to one segment')
     args = parser.parse_args()
     out = args.output
     out.mkdir(parents=True, exist_ok=True)
@@ -117,12 +119,21 @@ def main():
         # recorded over earlier runs, which covers their path variation.
         budget = json.loads(BUDGET.read_text())
         for kind, rows in budget.items():
-            for key in args.lower:
-                if key in rows and measured.get(kind, {}).get(key, 0) < rows[key]:
-                    saved = rows[key] - measured.get(kind, {}).get(key, 0)
+            for named in args.lower:
+                segment, _, key = named.rpartition(':')
+                if segment and segment != kind:
+                    continue
+                value = measured.get(kind, {}).get(key, 0)
+                if key in rows and value < rows[key]:
+                    saved = rows[key] - value
                     rows[key] -= saved
                     if key.startswith('data '):
                         rows['data total'] -= saved
+                elif key not in rows and value:
+                    # A line the cut moved to a structure of its own.
+                    rows[key] = value
+                    if key.startswith('data '):
+                        rows['data total'] += value
             for key in [k for k, v in rows.items() if not v]:
                 del rows[key]
         BUDGET.write_text(json.dumps(budget, indent=1, sort_keys=True) + '\n')
