@@ -7,8 +7,9 @@ CPU and DSU points. Cached walks reduce fixed-loop cycles by 68.458% and are
 the default for eight-core images. Matching digests and instruction-side walk
 counts establish equal work; data-side walk counts are observations.
 The [evidence](../evidence/cpu-table-walks.jsonl) records both runs.
-**Open:** cached returning controls on both clusters, the 512-frame recognition
-comparison, the core-0 workload runs, the Non-secure dirty-line experiment and the
+Cached checksum controls return normally on both clusters. The 512-frame
+recognition matches its reference at 422.803 ms, within 0.005% of 422.783 ms.
+**Open:** the core-0 workload runs, the Non-secure dirty-line experiment and
 stage-2 block access. Readers are assumed to know AArch64 stage-1 translation,
 the Secure and Non-secure physical address spaces, and data-cache maintenance
 by virtual address.
@@ -186,6 +187,8 @@ record; the walk-loop figures are a board measurement.
 | OS forced-walk loop on core 6 at 2002 MHz, uncached cycles per iteration | control | 1206.625 median; 1.5605% spread across five blocks | `cpu-table-walks.jsonl`: `1794465341494995923-e29c2535` |
 | Same fixed loop on core 6, cached cycles per iteration | lower median beyond the larger spread | 380.5918 median; 0.1422% spread; 68.458% fewer cycles | `cpu-table-walks.jsonl`: `1794466032800309049-ed5f20e8` |
 | Core-6 measured data-walk count per 1,024-iteration block | observation | uncached 1,023–1,024; cached 1,816 | both core-6 records |
+| Cached checksum control, core 2 (A55); core 6 (A76) | matching checksum for 1 MiB; normal return | Adler-32 4092261806 and 3,966,372 retired instructions on each core | `cpu-table-walks.jsonl`: `1794468296830890805-eb36b7b1`, `1794468438892869334-94049e0b` |
+| Cached 512-frame recognition at the top points | reference parity; compute within 5% of 422.783 ms | 422.803 ms compute, 93.714 ms load; matching CRCs, text and formatting | `cpu-table-walks.jsonl`: `1794468700863089730-cc6e7da7` |
 
 Both core-6 images have 1,024 instruction-walk events per block, matching load
 digests, seven secondaries off and normal ROM return. The figures establish
@@ -196,6 +199,11 @@ data-side count to walks from speculative loads and the data prefetcher.
 Cache hits let more of those walks complete within the measured block.
 Under this interpretation, a higher data count alongside fewer cycles is
 expected and does not indicate a fault.
+
+The checksum controls and recognition return normally with seven secondaries
+off and rails restored. Recognition's main-core activity window records
+1,035,361,229 retired instructions. The single recognition comparison shows
+no measurable change in application compute time.
 
 The added boot work is about 1,000 maintenance operations, an estimated 0.15 ms
 at 494 MHz if each costs at most 70 cycles, plus 512 uncached loads per core, an
@@ -212,11 +220,11 @@ caches or walk latency.
   SHA-256 in `cmake/a733-smp-observe.cmake`, `cmake/a733-smp-supervised.cmake`
   and `cmake/a733-storage-maintenance.cmake`; their hooks read neither TCR nor
   the tables.
-- `checks/a733-cpu-coherence.py` is the only home of the primitive cases (a
-  corrupted checksum or a root entry 1 outside the monitor interval leaves
-  `SCTLR_EL1.M` clear and writes no system register; the flush refuses ranges
+- `checks/a733-cpu-coherence.py` holds the primitive cases. A corrupted
+  checksum or a root entry 1 outside the monitor interval leaves
+  `SCTLR_EL1.M` clear and writes no system register. The flush refuses ranges
   outside DRAM, an empty range, EL2, unmasked DAIF, `SCTLR.C` set and an
-  expired deadline). `checks/cpu-table-walks.py` holds the cases that need a
+  expired deadline. `checks/cpu-table-walks.py` holds the cases that need a
   linked image.
 
 ## Sources and unproven items
@@ -238,22 +246,25 @@ caches or walk latency.
   cacheability-dependent MMU prefetch targets (`CPUECTLR_EL1.PFT_MM`, B2.32).
   The fixed-work admission rule reports data-side events without treating them
   as a count of retired loads.
-- Unproven: the Arm Architecture Reference Manual
-  rules that EL3 with the MMU off addresses the Secure space, that EL1 with the
-  MMU off addresses the Non-secure space, and that maintenance issued with the
-  MMU off reaches every core; whether the A733 has a system cache beyond the DSU.
+- Unproven: the Arm Architecture Reference Manual rules for the Secure space
+  at EL3 with the MMU off, the Non-secure space at EL1 with the MMU off, and
+  maintenance reaching every core with the MMU off. The presence of an A733
+  system cache beyond the DSU is also unproven.
 
 ## Not built
 
-Cacheable EL3 walks (EL3 walks only at boot and on faults); one flush on core 0
-instead of one per core (saves 896 operations per boot but changes the EL1 entry
-order in `continue.c`); the contiguous hint on `dma32` blocks (it returns if a
-workload run shows `DTLB_WALK` costing more than 1% of `CPU_CYCLES`); moving the
-single-core `platform_init()` onto `enable_el1`; stage-3 entries 4 to 12, which
-need launch evidence for `0x1_0000_0000`–`0x3_4000_0000`.
+- Cacheable EL3 walks; EL3 walks only at boot and on faults.
+- One flush on core 0 instead of one per core; this saves 896 operations per
+  boot but changes the EL1 entry order in `continue.c`.
+- The contiguous hint on `dma32` blocks; reconsider it if a workload run shows
+  `DTLB_WALK` costing more than 1% of `CPU_CYCLES`.
+- Moving the single-core `platform_init()` onto `enable_el1`.
+- Stage-3 entries 4 to 12, which need launch evidence for
+  `0x1_0000_0000`–`0x3_4000_0000`.
+
 The accepted walk records do not capture `INST_RETIRED` or vary prefetch
-controls. The following returning controls and recognition record require
-retired-instruction counts within their application activity intervals.
+controls. The returning controls and recognition record retired instructions
+within their main-core application activity intervals.
 
 ## Core-6 measurement
 
@@ -288,6 +299,35 @@ The queue runs the uncached image first and the cached image only after a pass.
 Any first miss ends the batch. Predictions and timing budgets belong in the
 individual evidence records.
 
+## Retired instructions in returning application records
+
+The returning controls and recognition image enable `SUNSTONE_PMU_RESULT`,
+`SUNSTONE_IRQ_COUNT` and `SUNSTONE_PMU_ACCOUNT`. The existing first-IRQ PMU
+setup keeps counters 0–2 for cache refills and backend stalls. It assigns
+counter 3 to data walks, counter 4 to `INST_RETIRED` and counter 5 to `CHAIN`,
+which extends the instruction count to 64 bits. Event capability and register
+readback checks complete before publication of the per-core ready state.
+
+The main task waits for readiness before reading the counters at EL0. A bounded
+high/low/high sample handles a carry between the chained instruction counters.
+Activity begin and end must run in the same pinned main task. The captured
+window includes interruptions and other work on that core; it does not count
+all recognition workers. Recognition's window also includes weight packing and
+logging, while the application's `compute_us` timer remains unchanged.
+
+`runtime/pmu_result.c` prefixes the result with 48 bytes containing the core,
+cycles, retired instructions, a 32-bit modular data-walk delta and counter ticks.
+The end snapshot precedes allocation and packing. The exact allocation must fit
+the manifest's output capacity. `tools/pmu-result.py` freezes the original
+application decoder inside a standalone prefix decoder, preserving its binding
+and reference validation. `checks/pmu-result.py` exercises readiness, rollover,
+task ownership, bounds and delegation without claiming physical PMU behavior.
+
+The checksum controls select core 2 or core 6 through
+`SUNSTONE_HELLO_CLUSTER=a55|a76`. Both wait for the granted clocks and process
+the same 1 MiB input. The 48-byte prefix and 16-byte checksum result fit their
+64-byte declaration exactly.
+
 ## Open work
 
 Each run records the CPU-L, CPU-B and DSU clock rates and runs in a scheduled
@@ -300,12 +340,8 @@ board session.
 2. **Core-0 workload A/B** during a GPU frame, an NPU inference and a recognizer
    inference (record `cpu-table-walks-core0-workload-ab`). It also decides the
    contiguous hint.
-3. Run the cached returning controls on both clusters and recognition against
-   the 422.8 ms, 512-frame reference, each with retired-instruction counts.
-   The core-6 walk A/B admits the cached default
-   (record `cpu-table-walks-core6-walk-ab`).
-4. **Stage-2 block access**: with the decode check passing, one read and one
+3. **Stage-2 block access**: with the decode check passing, one read and one
    write per 1 GiB block (record `cpu-table-walks-stage2-block-access`).
-5. Decide whether the interleaved single-image form of the walk A/B run is
+4. Decide whether the interleaved single-image form of the walk A/B run is
    accepted in place of images built from two commits
    ([board-bundles-next.md](board-bundles-next.md)).
