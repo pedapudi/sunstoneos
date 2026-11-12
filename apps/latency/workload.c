@@ -280,10 +280,10 @@ void latency_workload_run(struct latency_result *out)
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
         while (!atomic_load_explicit(&load[c].stopped, memory_order_acquire)) wait_tick();
 #if defined(SUNSTONE_SCHED_LATENCY_TRACE) || defined(SUNSTONE_LATENCY_CONTROL)
-    /* stopped precedes self-suspension. Wait for the command to commit before
-     * the higher-priority wake task freezes this core's diagnostic records. */
+    /* stopped precedes suspension publication. Wait for the saved frame and
+     * owner acknowledgment before the wake task freezes this core's records. */
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
-        while (eTaskGetState(load_task[c]) != eSuspended) wait_tick();
+        while (!ss_latency_task_suspended(load_task[c])) wait_tick();
 #endif
     out->dma_jobs = latency_dma_model_stop();
 #ifdef SUNSTONE_LATENCY_TLBI

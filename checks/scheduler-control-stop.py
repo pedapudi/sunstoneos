@@ -78,9 +78,18 @@ def main():
         run(binary, case)
     disabled = build('no-task-state', ['-DINCLUDE_eTaskGetState=0'])
     run(disabled, 'suspended-query-disabled')
+    diagnostic = ['-DSUNSTONE_LATENCY=1', '-DconfigSS_PARTITIONED_SCHEDULER=1']
+    acknowledged = build('saved-frame-ack', diagnostic)
+    run(acknowledged, 'suspension-frame-ack')
 
     if not args.skip_negative:
         source = (ROOT / 'runtime/control_irq.c').read_text()
+        saved_frame = '    return ss_latency_task_suspended(task);'
+        assert source.count(saved_frame) == 1
+        old_state = output / 'logical-state-only.c'
+        old_state.write_text(source.replace(saved_frame, '    return eTaskGetState(task) == eSuspended;'))
+        bad = build('logical-state-only', [*diagnostic, '-DSS_CONTROL_SOURCE="' + str(old_state) + '"'])
+        run(bad, 'suspension-frame-ack', '!ulSunstoneControlTasksSuspended()')
         task_start = source.index('static void handle_task_path(')
         guard = '    if (__atomic_load_n(&s->stop, __ATOMIC_ACQUIRE)) { stop_local(s, 1); return; }\n'
         assert source[task_start:].count(guard) == 1
@@ -135,7 +144,7 @@ def main():
             run(bad, case, failure, timeout)
 
     files = [ROOT / 'runtime/control_irq.c', ROOT / 'runtime/control_ring.h',
-             ROOT / 'include/sunstone_control.h', ROOT / 'apps/latency/control.c',
+             ROOT / 'include/sunstone_control.h', ROOT / 'include/sunstone_latency.h', ROOT / 'apps/latency/control.c',
              ROOT / 'apps/latency/control.h', ROOT / 'checks/scheduler-control-stop.c',
              ROOT / 'checks/control-stop-config/FreeRTOS.h', ROOT / 'checks/control-stop-config/task.h']
     result = {'passed': True, 'physical_access': False, 'constructed_time': True,

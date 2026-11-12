@@ -21,7 +21,7 @@ struct control_test_task {
     void (*entry)(void *);
     void *argument;
     unsigned core;
-    _Atomic unsigned suspended;
+    _Atomic unsigned suspended, frame_ack;
     uint32_t pending;
 };
 static _Thread_local unsigned model_core, irq_masked;
@@ -147,6 +147,14 @@ void vTaskSuspend(TaskHandle_t task)
 { (void)task; atomic_store_explicit(&model_task->suspended, 1, memory_order_release); pthread_exit(NULL); }
 eTaskState eTaskGetState(TaskHandle_t task)
 { return atomic_load_explicit(&task->suspended, memory_order_acquire) ? eSuspended : eBlocked; }
+#ifdef SUNSTONE_LATENCY
+bool ss_latency_task_suspended(void *handle)
+{
+    TaskHandle_t task = handle;
+    return atomic_load_explicit(&task->suspended, memory_order_acquire) &&
+           atomic_load_explicit(&task->frame_ack, memory_order_acquire);
+}
+#endif
 
 static void deliver(unsigned core, unsigned interrupt)
 {
@@ -426,6 +434,26 @@ static void qualification(unsigned mode)
     }
     finish_tasks();
 }
+static void suspension_frame_ack(void)
+{
+    struct control_test_task consumer = {0}, path = {0};
+    atomic_store_explicit(&consumer.suspended, 1, memory_order_release);
+    atomic_store_explicit(&path.suspended, 1, memory_order_release);
+    consumer_handle = &consumer;
+    frequency_hz = 24000000;
+    stop_requested = consumer_parked = 1;
+    requested_mask = 1u << 1;
+    state[1].requested = state[1].isr_stopped = state[1].task_parked = 1;
+    state[1].paths = 3;
+    state[1].task_handle = &path;
+    assert(ulSunstoneControlQuiescent());
+    assert(eTaskGetState(&consumer) == eSuspended && eTaskGetState(&path) == eSuspended);
+    assert(!ulSunstoneControlTasksSuspended());
+    atomic_store_explicit(&consumer.frame_ack, 1, memory_order_release);
+    assert(!ulSunstoneControlTasksSuspended());
+    atomic_store_explicit(&path.frame_ack, 1, memory_order_release);
+    assert(ulSunstoneControlTasksSuspended());
+}
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -442,6 +470,7 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "unselected-stale")) unselected_stale();
     else if (!strcmp(argv[1], "empty-stop")) { vSunstoneControlStop(); assert(ulSunstoneControlQuiescent()); }
     else if (!strcmp(argv[1], "suspended-query-disabled")) assert(!ulSunstoneControlTasksSuspended());
+    else if (!strcmp(argv[1], "suspension-frame-ack")) suspension_frame_ack();
     else if (!strcmp(argv[1], "qualification-idle")) qualification(LATENCY_CONTROL_IDLE);
     else if (!strcmp(argv[1], "qualification-busy")) qualification(LATENCY_CONTROL_BUSY);
     else assert(0);

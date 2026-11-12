@@ -16,6 +16,9 @@
 #include "a733_gic_priority.h"
 #include "sunstone_control.h"
 #include "control_ring.h"
+#if defined(SUNSTONE_LATENCY) && ( configSS_PARTITIONED_SCHEDULER == 1 )
+#include "sunstone_latency.h"
+#endif
 
 extern void __real_vApplicationIRQHandler(uint64_t interrupt);
 extern struct { uint64_t epoch, startup_deadline, diagnostic_deadline, redistributor, reserved[12]; } a733_cached_runtime[8];
@@ -489,14 +492,24 @@ unsigned ulSunstoneControlQuiescent(void)
         return !__atomic_load_n(&requested_mask, __ATOMIC_ACQUIRE) && !consumer_handle;
     return progress.quiescent_mask == progress.requested_mask && progress.consumer_parked;
 }
+#if ( INCLUDE_eTaskGetState == 1 )
+static unsigned task_frame_suspended(TaskHandle_t task)
+{
+#if defined(SUNSTONE_LATENCY) && ( configSS_PARTITIONED_SCHEDULER == 1 )
+    return ss_latency_task_suspended(task);
+#else
+    return eTaskGetState(task) == eSuspended;
+#endif
+}
+#endif
 unsigned ulSunstoneControlTasksSuspended(void)
 {
 #if ( INCLUDE_eTaskGetState == 1 )
     if (!ulSunstoneControlQuiescent()) return 0;
-    if (consumer_handle && eTaskGetState(consumer_handle) != eSuspended) return 0;
+    if (consumer_handle && !task_frame_suspended(consumer_handle)) return 0;
     for (unsigned c = FIRST_CORE; c < CORES; ++c)
         if (__atomic_load_n(&state[c].requested, __ATOMIC_ACQUIRE) && state[c].task_handle &&
-            eTaskGetState(state[c].task_handle) != eSuspended) return 0;
+            !task_frame_suspended(state[c].task_handle)) return 0;
     return 1;
 #else
     return 0;
