@@ -24,9 +24,10 @@ static void controller(void *argument)
     latency_workload_run(&result);
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     configASSERT(result.scheduler.magic == SS_SCHED_TRACE_MAGIC);
-    configASSERT(result.scheduler.version == 1);
+    configASSERT(result.scheduler.version == SS_SCHED_TRACE_VERSION);
     configASSERT(result.scheduler.tick_count && result.scheduler.tick_count <= SS_SCHED_TRACE_TICKS);
     configASSERT(!result.scheduler.tick_dropped || result.scheduler.tick_count == SS_SCHED_TRACE_TICKS);
+    unsigned actual_fifo_cores = 0, linked_wakes = 0;
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
         const struct ss_sched_trace_core *trace = &result.scheduler.core[c];
         configASSERT(trace->command_count && trace->drain_count && trace->irq_count);
@@ -40,8 +41,39 @@ static void controller(void *argument)
             configASSERT(trace->drain.record[i].stamp[0] >= trace->drain.start);
             configASSERT(trace->drain.record[i].stamp[4] <= trace->drain.end);
         }
+        bool actual = false;
+        for (unsigned i = 0; i <= trace->wait_count; ++i) {
+            const struct ss_sched_trace_wait *wait = i ? &trace->wait[i - 1] : &trace->wait_max;
+            if (!(wait->flags & SS_SCHED_WAIT_ACTUAL_FIFO)) continue;
+            actual = true;
+            configASSERT(wait->lock == 0 && wait->fifo_start);
+            configASSERT(wait->start <= wait->fifo_start && wait->fifo_start <= wait->fifo_end && wait->fifo_end <= wait->end);
+            configASSERT(wait->fifo_serving <= 0xffff && wait->fifo_ticket <= 0xffff);
+        }
+        actual_fifo_cores += actual;
+        const struct ss_sched_trace_wake_core *row = &result.scheduler.wake[c];
+        const struct ss_sched_trace_wake *w = &row->maximum;
+        unsigned count = 0;
+        for (unsigned kind = 0; kind < 3; ++kind) {
+            count += row->summary[kind][0].count;
+            if (kind < 2) linked_wakes += row->summary[kind][0].count;
+            configASSERT(row->summary[kind][1].count == (kind == 2 ? 0 : row->summary[kind][0].count));
+        }
+        configASSERT(count == LATENCY_BUSY_SAMPLES);
+        configASSERT(w->running - w->ready == result.phases[SS_LAT_BUSY][c].metric[SS_LAT_SCHED_BUSY].maximum);
+        configASSERT(w->ready >= result.phase_bounds[SS_LAT_BUSY][0] && w->running <= result.phase_bounds[SS_LAT_BUSY][1]);
+        if (w->flags & SS_SCHED_WAKE_LINKED) {
+            configASSERT((w->flags & (SS_SCHED_WAKE_IRQ | SS_SCHED_WAKE_SWITCH)) == 3);
+            configASSERT(!(w->flags & (SS_SCHED_WAKE_MULTIPLE | SS_SCHED_WAKE_UNMATCHED)));
+            configASSERT(w->irq.previous_end <= w->ready && w->selection.previous_end <= w->ready);
+            for (unsigned i = 1; i < 5; ++i) configASSERT(w->irq.stamp[i - 1] <= w->irq.stamp[i]);
+            configASSERT(w->ready <= w->irq.stamp[4] && w->irq.stamp[4] <= w->selection.begin);
+            configASSERT(w->selection.begin <= w->selection.end && w->selection.end <= w->running);
+            configASSERT(w->selection.selected_slot == w->running_slot && w->selection.irq_sequence == w->irq.sequence);
+        }
     }
-    platform_puts("PASS scheduler trace: eight self-suspends, drain records, IRQ exits and timer intervals\n");
+    configASSERT(actual_fifo_cores && linked_wakes);
+    platform_puts("PASS scheduler trace: actual FIFO intervals, busy wake chains, self-suspends, drain records and timer intervals\n");
 #endif
     platform_puts("MODEL latency: host QEMU timing; CPU0 timer IRQ releases eight pinned tasks; DMA hardware modeled\n");
     platform_puts("DMA model stimulus: continuous 4096-byte jobs; client priority1 and service priority4 on CPU0\n");

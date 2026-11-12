@@ -141,6 +141,9 @@ static void wake_worker(void *argument)
         configASSERT(atomic_load_explicit(&wake[c].pending, memory_order_acquire));
         if (wake[c].metric < SS_LAT_METRICS) {
             const uint64_t running = ss_latency_now();
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+            ss_sched_trace_wake(c, wake[c].released, running, wake[c].metric == SS_LAT_SCHED_BUSY);
+#endif
             unsigned index = atomic_load_explicit(&wake[c].completed, memory_order_relaxed);
             configASSERT(index < LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES);
             report->wakes[c][index] = (struct latency_wake_sample){

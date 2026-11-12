@@ -47,16 +47,33 @@ def fixture(version=1):
         'records': [[3, 0, 1110, 1120, 1140, 1150, 1160]],
         'wait_max': wait(), 'waits': [wait()],
     })
-    if version == 2:
+    if version >= 2:
         for core in cores:
             core['wait_max'].extend([0] * 4)
             for record in core['waits']:
                 record.extend([0] * 4)
-    return {
+    report = {
         'header': [MAGIC, version, 2, 3], 'cores': cores,
         'startup': [[500 + 2 * c, 600 + 2 * c] for c in range(8)],
         'tick_count': 1, 'tick_dropped': 0, 'ticks': [[3050, 3100]],
     }
+    if version == 3:
+        report['wake'] = [[0] * 72 for _ in range(8)]
+        report['wake'][1] = [1900, 2200, 7, 3,
+            2000, 2010, 2020, 2100, 2120, 10, 10, 10, 10, 10,
+            1, 1, 5, 1800, 2130, 2170, 3, 7, 1800, 5] + [0] * 48
+        wake_summary(report['wake'][1], 1)
+    return report
+
+
+def wake_summary(words, kind):
+    words[24:] = [0] * 48
+    def summary(ticks):
+        return [1, ticks, ticks, *(int(ticks > FREQUENCY * limit // 1_000_000)
+                                  for limit in (10, 25, 50, 80, 100))]
+    words[24 + kind * 16:32 + kind * 16] = summary(words[1] - words[0])
+    if kind != 2:
+        words[32 + kind * 16:40 + kind * 16] = summary(words[1] - words[4])
 
 
 def pack(report):
@@ -79,6 +96,9 @@ def pack(report):
     for pair in report['ticks']:
         words.extend(pair)
     words.extend([0] * (2 * (ticks - len(report['ticks']))))
+    if report['header'][1] == 3:
+        for wake in report['wake']:
+            words.extend(wake)
     payload = struct.pack(f'<{len(words)}Q', *words)
     return payload + bytes((-len(payload)) % 64)
 
@@ -103,6 +123,7 @@ def check_symbols(source):
               for prefix in ('__start_', '__stop_')]
     cases = []
     for symbol, admitted in (('eTaskGetState', True), ('ss_sched_trace_snapshot', True),
+                             ('ss_sched_trace_wake', True),
                              ('os_cpu_clock_step', False), ('eTaskPrivateProbe', False),
                              ('ss_sched_trace_lock_release', False)):
         elf = SimpleNamespace(symbols=[*bounds, {'name': symbol, 'shndx': 1}],
@@ -339,6 +360,70 @@ def run(decode):
     bad['cores'][1]['wait_max'][6] |= 16
     rejected('version 1 cannot assert actual FIFO sampling', pack(bad))
     rejected('truncated version 2 record', pack(contended)[:-8])
+    v3 = fixture(version=3)
+
+    def classified(kind, *, tail=None):
+        def inspect(decoded):
+            row = decoded['wake_chains'][1]
+            assert row['scope'] == 'busy' and row['count'] == 1
+            assert row['maximum']['class'] == kind
+            assert row['classes'][kind]['whole_wake']['count'] == 1
+            if tail is not None:
+                assert row['maximum']['owner_exit_to_running_ticks'] == tail
+        return inspect
+    accepted('version 3 linked slow busy wake', v3, classified('slow', tail=200))
+    fast = copy.deepcopy(v3)
+    w = fast['wake'][1]
+    w[5:9] = [2010] * 4
+    w[9:14] = [0] * 5
+    w[14:16] = [0, 3]
+    wake_summary(w, 0)
+    accepted('version 3 fast wake has zero service', fast, classified('fast', tail=200))
+    inside = copy.deepcopy(v3)
+    inside['wake'][1][0] = 2050
+    wake_summary(inside['wake'][1], 1)
+    accepted('ready inside owner exit permits a longer exit-to-running interval', inside,
+             classified('slow', tail=200))
+    for name, field, value, flags in (
+            ('intervening ordinary IRQ', 17, 1950, 27),
+            ('intervening saved-frame switch', 22, 1950, 27),
+            ('switch belongs to another IRQ', 23, 4, 19),
+            ('switch selected another task', 20, 4, 19),
+            ('switch after running observation', 19, 2210, 19),
+            ('IRQ did not request switch', 15, 0, 19)):
+        data = copy.deepcopy(v3)
+        w = data['wake'][1]
+        w[field], w[2] = value, flags
+        wake_summary(w, 2)
+        accepted(name, data, classified('unmatched'))
+    missing = copy.deepcopy(v3)
+    w = missing['wake'][1]
+    w[4:18] = [0] * 14
+    w[2] = 18
+    wake_summary(w, 2)
+    accepted('missing owner exit remains unmatched', missing, classified('unmatched'))
+    for name, field, value in (
+            ('backward guard timestamp', 5, 1999),
+            ('backward switch timestamp', 19, 2129),
+            ('incorrect linked selected task', 20, 4),
+            ('incorrect linked IRQ sequence', 23, 4),
+            ('incorrect linked flag across intervening IRQ', 17, 1950),
+            ('IRQ service exceeds measured work', 9, 1000),
+            ('missing IRQ start with complete sequence', 4, 0),
+            ('unknown wake flags', 2, 39),
+            ('invalid probe slot', 3, 128),
+            ('summary threshold above sample count', 43, 2),
+            ('retained maximum below summary maximum', 42, 301)):
+        bad = copy.deepcopy(v3)
+        bad['wake'][1][field] = value
+        rejected(name, pack(bad))
+    bad = copy.deepcopy(fast)
+    bad['wake'][1][9] = 1
+    rejected('fast chain cannot contain service', pack(bad))
+    bad = copy.deepcopy(missing)
+    bad['wake'][1][64:72] = [1, 200, 200, 0, 0, 0, 0, 0]
+    rejected('unmatched samples cannot claim an IRQ tail', pack(bad))
+    rejected('truncated version 3 record', pack(v3)[:-8])
     return cases
 
 

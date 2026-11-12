@@ -88,6 +88,10 @@ void ss_latency_snapshot(struct ss_latency_core out[8]);
  * Its versioned layout is defined by kernel/scheduler/latency_trace.h. */
 struct ss_sched_trace_report;
 void ss_sched_trace_snapshot(struct ss_sched_trace_report *out);
+/* Record a busy wake after its running timestamp. This function masks the
+ * local API interrupts while copying completed IRQ/switch observations; its
+ * observer cost follows the measured timestamp and can affect later work. */
+void ss_sched_trace_wake(unsigned core, uint64_t ready, uint64_t running, unsigned busy);
 #endif
 /* Snapshot only after every writer has frozen; packed in descending duration. */
 void ss_latency_sites_snapshot(struct ss_latency_site out[SS_LAT_PHASES + 1][8][SS_LAT_SITE_KINDS][SS_LAT_SITE_SLOTS]);

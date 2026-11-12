@@ -1256,6 +1256,9 @@ static void ssKernelSwitch(unsigned c)
         cpu->reschedule = true;
         return;
     }
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_switch_begin(c);
+#endif
     struct ss_owner_task *previous = cpu->run.current;
 #if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
     struct ss_owner_descriptor *previous_reference = previous ?
@@ -1347,8 +1350,21 @@ static void ssKernelSwitch(unsigned c)
         cpu->reschedule = true;
         ssKernelForce(c);
     }
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_switch_end(c, selected->slot);
+#endif
     SS_PH_END(9);
 }
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+void ss_sched_trace_wake(unsigned core, uint64_t ready, uint64_t running, unsigned busy)
+{
+    if (!busy) return;
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
+    configASSERT(core == ssKernelCPUId());
+    ss_sched_trace_wake_sample(core, ready, running, ssKernelSelf()->uxOwnerSlot);
+    portCLEAR_INTERRUPT_MASK(irq);
+}
+#endif
 #ifdef SUNSTONE_OWNER_COUNTERS
 /* Owner-work drains by CPU (measurement): from the outermost interrupt exit, skipped by the mask guard there, and
  * from the tick. Each CPU writes its own line. */
@@ -1532,8 +1548,18 @@ BaseType_t ssKernelOwnerIRQExit(void)
     SS_OWNER_COUNT(exit_work);
     const uint64_t begin = ssOwnerClock();
     SS_PH_BEGIN;
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_irq_begin(ssKernelCPUId(), ss_sched_trace_now());
+#endif
 #if !defined(SS_KERNEL_TEST_IRQ_SLOW)
-    if (ssKernelIRQSwitchReady(ssKernelCPUId(), &ssKernelCPUs[ssKernelCPUId()])) {
+    bool ready = ssKernelIRQSwitchReady(ssKernelCPUId(), &ssKernelCPUs[ssKernelCPUId()]);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_irq_guard(ssKernelCPUId());
+#endif
+    if (ready) {
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+        ss_sched_trace_irq_fast(ssKernelCPUId());
+#endif
         SS_OWNER_COUNT(fast_switch);
         SS_OWNER_COUNT(exit_raised);
         ssKernelIRQTestComplete(true);
@@ -1541,14 +1567,13 @@ BaseType_t ssKernelOwnerIRQExit(void)
         SS_PH_END(1);
         return pdTRUE;
     }
+#elif defined(SUNSTONE_SCHED_LATENCY_TRACE)
+    ss_sched_trace_irq_guard(ssKernelCPUId());
 #endif
     /* The exit path calls this with PSTATE.I set, and the owner work takes several microseconds. Run it as an ISR
      * critical section does: raise ICC_PMR_EL1 to the API mask and clear PSTATE.I, so that only interrupts above the
      * API mask (the control class) can run in it. Their exit leaves the work alone (the PMR test above), and the
      * nesting count is zero here, as for any outermost exit. Set PSTATE.I again for the exit path that follows. */
-#ifdef SUNSTONE_SCHED_LATENCY_TRACE
-    ss_sched_trace_irq_begin(ssKernelCPUId(), ss_sched_trace_now());
-#endif
     const UBaseType_t previous = portSET_INTERRUPT_MASK_FROM_ISR();
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     ss_sched_trace_irq_stamp(ssKernelCPUId(), 1);

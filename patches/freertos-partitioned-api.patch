@@ -596,7 +596,7 @@
                  #if ( ( configIDLE_AFFINITY == 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
                  {
                      xIdleTaskHandles[ xCoreID ]->uxCoreAffinityMask = ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID );
-@@ -3767,6 +3999,32 @@
+@@ -3767,6 +3999,35 @@
  
  void vTaskStartScheduler( void )
  {
@@ -618,6 +618,9 @@
 +configSET_TLS_BLOCK(ssKernelSelf()->xTLSBlock);
 +#endif
 +atomic_store_explicit(&ssKernelTime, configINITIAL_TICK_COUNT, memory_order_release);
++#ifdef SUNSTONE_SCHED_LATENCY_TRACE
++ss_sched_trace_startup(ssKernelCPUId(), 0);
++#endif
 +xSchedulerRunning = pdTRUE;
 +portCONFIGURE_TIMER_FOR_RUN_TIME_STATS();
 +traceTASK_SWITCHED_IN();

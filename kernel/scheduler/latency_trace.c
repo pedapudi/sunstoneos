@@ -10,12 +10,18 @@ static struct {
      * mask would itself create a long span. Snapshot performs the copy. */
     struct ss_sched_trace_drain drain[2];
     struct ss_sched_trace_irq irq;
+    uint64_t guard_end;
+    struct ss_sched_trace_irq_chain last_irq;
+    struct ss_sched_trace_switch selection;
     struct {
         uint64_t start, end, serving, ticket;
         unsigned valid;
     } fifo;
 } state[SS_SCHED_TRACE_CORES];
 static uint64_t tick_start;
+/* Assembly writes the first restore marker with only X0/X1 still saved.
+ * Each CPU owns its row; snapshot reads after all diagnostic writers freeze. */
+uint64_t ss_sched_trace_startup_markers[SS_SCHED_TRACE_CORES][2];
 
 static int enabled(unsigned core)
 {
@@ -34,13 +40,16 @@ void ss_sched_trace_snapshot(struct ss_sched_trace_report *out)
     out->version = SS_SCHED_TRACE_VERSION;
     out->waits_capacity = SS_SCHED_TRACE_WAITS;
     out->ticks_capacity = SS_SCHED_TRACE_TICKS;
-    for (unsigned core = 0; core < SS_SCHED_TRACE_CORES; ++core)
+    for (unsigned core = 0; core < SS_SCHED_TRACE_CORES; ++core) {
         out->core[core].drain = state[core].drain[state[core].drain_best];
+        for (unsigned marker = 0; marker < 2; ++marker)
+            out->startup[core][marker] = ss_sched_trace_startup_markers[core][marker];
+    }
 }
 void ss_sched_trace_startup(unsigned core, unsigned marker)
 {
-    if (core < SS_SCHED_TRACE_CORES && marker < 2 && !trace.startup[core][marker])
-        trace.startup[core][marker] = ss_sched_trace_now();
+    if (core < SS_SCHED_TRACE_CORES && marker < 2 && !ss_sched_trace_startup_markers[core][marker])
+        ss_sched_trace_startup_markers[core][marker] = ss_sched_trace_now();
 }
 static uint64_t command_ticks(const struct ss_sched_trace_command *command)
 { return command->stamp[6] - command->stamp[0]; }
@@ -93,7 +102,19 @@ void ss_sched_trace_irq_begin(unsigned core, uint64_t start)
 {
     if (!enabled(core)) return;
     state[core].irq = (struct ss_sched_trace_irq){.stamp = {start}};
+    state[core].guard_end = 0;
     state[core].irq_active = 1;
+}
+void ss_sched_trace_irq_guard(unsigned core)
+{
+    const uint64_t now = ss_sched_trace_now();
+    if (enabled(core) && state[core].irq_active) state[core].guard_end = now;
+}
+void ss_sched_trace_irq_fast(unsigned core)
+{
+    if (!enabled(core) || !state[core].irq_active) return;
+    for (unsigned i = 1; i < 4; ++i) state[core].irq.stamp[i] = state[core].guard_end;
+    ss_sched_trace_irq_end(core, 3);
 }
 void ss_sched_trace_irq_stamp(unsigned core, unsigned stamp)
 {
@@ -108,7 +129,74 @@ void ss_sched_trace_irq_end(unsigned core, unsigned result)
     irq->result = result;
     ++row->irq_count;
     if (irq->stamp[3] - irq->stamp[0] > row->irq.stamp[3] - row->irq.stamp[0]) row->irq = *irq;
+    struct ss_sched_trace_irq_chain *last = &state[core].last_irq;
+    last->previous_end = last->stamp[4];
+    ++last->sequence;
+    last->stamp[0] = irq->stamp[0];
+    last->stamp[1] = state[core].guard_end;
+    for (unsigned i = 1; i < 4; ++i) last->stamp[i + 1] = irq->stamp[i];
+    for (unsigned i = 0; i < 5; ++i) last->service[i] = irq->service[i];
+    last->passes = irq->passes;
+    last->result = result;
     state[core].irq_active = 0;
+}
+void ss_sched_trace_switch_begin(unsigned core)
+{
+    const uint64_t now = ss_sched_trace_now();
+    if (!enabled(core)) return;
+    struct ss_sched_trace_switch *s = &state[core].selection;
+    s->previous_end = s->end;
+    s->begin = now;
+    s->end = 0;
+    s->irq_sequence = state[core].last_irq.sequence;
+    ++s->sequence;
+}
+void ss_sched_trace_switch_end(unsigned core, unsigned slot)
+{
+    const uint64_t now = ss_sched_trace_now();
+    if (!enabled(core)) return;
+    state[core].selection.end = now;
+    state[core].selection.selected_slot = slot;
+}
+static void summarize(struct ss_sched_trace_summary *summary, uint64_t ticks)
+{
+    static const unsigned limits[5] = {10, 25, 50, 80, 100};
+    uint64_t frequency = ss_latency_counter_frequency();
+    ++summary->count;
+    summary->sum += ticks;
+    if (ticks > summary->maximum) summary->maximum = ticks;
+    for (unsigned i = 0; i < 5; ++i)
+        if (ticks > frequency * limits[i] / 1000000) ++summary->over_us[i];
+}
+/* The adapter holds this owner's API mask. The running timestamp predates
+ * both masking and this observation; an intervening switch is unmatched. */
+void ss_sched_trace_wake_sample(unsigned core, uint64_t ready, uint64_t running, unsigned slot)
+{
+    if (!enabled(core) || !ready || running < ready) return;
+    const struct ss_sched_trace_irq_chain *irq = &state[core].last_irq;
+    const struct ss_sched_trace_switch *s = &state[core].selection;
+    uint64_t flags = 0;
+    if (irq->sequence) flags |= SS_SCHED_WAKE_IRQ;
+    if (s->sequence && s->end) flags |= SS_SCHED_WAKE_SWITCH;
+    bool multiple = irq->previous_end > ready || s->previous_end > ready;
+    if (multiple) flags |= SS_SCHED_WAKE_MULTIPLE;
+    bool linked = !multiple && (flags & 3) == 3 &&
+        irq->stamp[0] <= irq->stamp[1] && irq->stamp[1] <= irq->stamp[2] &&
+        irq->stamp[2] <= irq->stamp[3] && irq->stamp[3] <= irq->stamp[4] &&
+        ready <= irq->stamp[4] && irq->stamp[4] <= s->begin &&
+        s->begin <= s->end && s->end <= running &&
+        s->irq_sequence == irq->sequence && s->selected_slot == slot &&
+        (irq->result == 1 || irq->result == 3);
+    flags |= linked ? SS_SCHED_WAKE_LINKED : SS_SCHED_WAKE_UNMATCHED;
+    unsigned kind = linked ? (irq->result == 3 ? 0 : 1) : 2;
+    struct ss_sched_trace_wake_core *row = &trace.wake[core];
+    uint64_t elapsed = running - ready;
+    summarize(&row->summary[kind][0], elapsed);
+    if (linked) summarize(&row->summary[kind][1], running - irq->stamp[0]);
+    if (!row->maximum.ready || elapsed > row->maximum.running - row->maximum.ready) {
+        row->maximum = (struct ss_sched_trace_wake){ .ready = ready, .running = running,
+            .flags = flags, .running_slot = slot, .irq = *irq, .selection = *s };
+    }
 }
 void ss_sched_trace_service(unsigned core, unsigned part, uint64_t begin, uint64_t end)
 {

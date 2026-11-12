@@ -2,6 +2,7 @@
 #ifndef SS_SCHED_LATENCY_TRACE_H
 #define SS_SCHED_LATENCY_TRACE_H
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
 #ifndef SUNSTONE_LATENCY
@@ -18,7 +19,7 @@
 #define SS_SCHED_TRACE_CORES 8u
 #define SS_SCHED_TRACE_RECORDS (2u * SS_OWNER_BATCH)
 #define SS_SCHED_TRACE_MAGIC UINT64_C(0x5353534348545231)
-#define SS_SCHED_TRACE_VERSION 2u
+#define SS_SCHED_TRACE_VERSION 3u
 
 /* All timestamps use CNTVCT. A command retains the timestamps after masking,
  * reference, publish, before/after drain, after slice refresh and before unmask.
@@ -70,16 +71,52 @@ struct ss_sched_trace_core {
     struct ss_sched_trace_wait wait_max, wait[SS_SCHED_TRACE_WAITS];
 };
 struct ss_sched_trace_tick { uint64_t start, end; };
+enum ss_sched_trace_wake_flag {
+    SS_SCHED_WAKE_IRQ = 1u, SS_SCHED_WAKE_SWITCH = 2u,
+    SS_SCHED_WAKE_LINKED = 4u, SS_SCHED_WAKE_MULTIPLE = 8u,
+    SS_SCHED_WAKE_UNMATCHED = 16u
+};
+/* An IRQ here is an ordinary owner-exit call after the PMR reentry guard.
+ * Stamps: start, eligibility complete, API mask set, work done, mask restored.
+ * Fast result 3 has no service; its last four stamps equal guard completion. */
+struct ss_sched_trace_irq_chain {
+    uint64_t stamp[5], service[5], passes, result, sequence, previous_end;
+};
+struct ss_sched_trace_switch {
+    uint64_t begin, end, selected_slot, sequence, previous_end, irq_sequence;
+};
+struct ss_sched_trace_wake {
+    uint64_t ready, running, flags, running_slot;
+    struct ss_sched_trace_irq_chain irq;
+    struct ss_sched_trace_switch selection;
+};
+struct ss_sched_trace_summary {
+    uint64_t count, sum, maximum, over_us[5]; /* 10, 25, 50, 80, 100 us. */
+};
+struct ss_sched_trace_wake_core {
+    struct ss_sched_trace_wake maximum;
+    /* Busy samples only. Classes: linked fast, linked slow, unmatched.
+     * Intervals: whole wake, owner-exit start to running. The latter includes
+     * work before ready when readiness occurs during owner exit. Unmatched samples
+     * contribute only whole-wake durations, never an attributed tail. */
+    struct ss_sched_trace_summary summary[3][2];
+};
+_Static_assert(sizeof(struct ss_sched_trace_wake_core) == 72 * sizeof(uint64_t),
+               "version 3 wake record layout");
 struct ss_sched_trace_report {
     uint64_t magic, version, waits_capacity, ticks_capacity;
     struct ss_sched_trace_core core[SS_SCHED_TRACE_CORES];
-    /* Port scheduler-start entry and first context-restore entry. The second
-     * marker precedes vector setup and restoration; this interval is a lower
-     * bound on masking after scheduler start. Zero means unobserved. */
+    /* Version 3: core0 before xSchedulerRunning, other observed port starts;
+     * first task restore just before final X0/X1 load and ERET. These are
+     * boundary markers, not an upper bound on completed unmasking. */
     uint64_t startup[SS_SCHED_TRACE_CORES][2];
     uint64_t tick_count, tick_dropped;
     struct ss_sched_trace_tick tick[SS_SCHED_TRACE_TICKS];
+    struct ss_sched_trace_wake_core wake[SS_SCHED_TRACE_CORES];
 };
+_Static_assert(offsetof(struct ss_sched_trace_report, wake) ==
+    offsetof(struct ss_sched_trace_report, tick) + sizeof(((struct ss_sched_trace_report *)0)->tick),
+    "version 3 appends wake records after the version 2 fields");
 
 /* Private shadow metadata is atomic because arriving CPUs read it without the
  * lock. The real lock serializes writers. Readers make one generation check,
@@ -102,6 +139,8 @@ void ss_sched_trace_drain_begin(unsigned);
 void ss_sched_trace_drain_end(unsigned);
 void ss_sched_trace_record(unsigned, const struct ss_sched_trace_record *);
 void ss_sched_trace_irq_begin(unsigned, uint64_t);
+void ss_sched_trace_irq_guard(unsigned);
+void ss_sched_trace_irq_fast(unsigned);
 void ss_sched_trace_irq_stamp(unsigned, unsigned);
 void ss_sched_trace_irq_end(unsigned, unsigned);
 void ss_sched_trace_service(unsigned, unsigned, uint64_t, uint64_t);
@@ -109,6 +148,9 @@ void ss_sched_trace_service_pass(unsigned);
 void ss_sched_trace_tick_begin(void);
 void ss_sched_trace_tick_end(void);
 void ss_sched_trace_fifo_sample(unsigned, uint64_t, uint64_t, uint32_t);
+void ss_sched_trace_switch_begin(unsigned);
+void ss_sched_trace_switch_end(unsigned, unsigned);
+void ss_sched_trace_wake_sample(unsigned, uint64_t, uint64_t, unsigned);
 struct ss_sched_trace_wait ss_sched_trace_lock_begin(const struct ss_sched_trace_lock *, unsigned, uintptr_t,
                                                     uint64_t, uint64_t, unsigned);
 void ss_sched_trace_lock_acquired(struct ss_sched_trace_lock *, unsigned, struct ss_sched_trace_wait *);

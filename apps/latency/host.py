@@ -29,12 +29,14 @@ def decode_scheduler_trace(payload, frequency):
     if len(payload) < 32 or not frequency:
         raise ValueError('scheduler trace header or frequency is missing')
     magic, version, waits, tick_capacity = struct.unpack_from('<4Q', payload)
-    if magic != SCHED_MAGIC or version not in (1, 2) or not waits or not tick_capacity:
+    if magic != SCHED_MAGIC or version not in (1, 2, 3) or not waits or not tick_capacity:
         raise ValueError('scheduler trace schema or declared capacities differ')
     records = 32  # two drains, each bounded by SS_OWNER_BATCH = 16
     wait_words = 12 if version == 1 else 16
     core_words = 9 + 20 + 11 + 4 + records * 7 + (waits + 1) * wait_words
     expected = (4 + 8 * core_words + 16 + 2 + tick_capacity * 2) * 8
+    if version == 3:
+        expected += 8 * 72 * 8
     padded = (expected + 63) // 64 * 64
     if len(payload) != padded or any(payload[expected:]):
         raise ValueError('scheduler trace length or alignment padding differs')
@@ -64,7 +66,7 @@ def decode_scheduler_trace(payload, frequency):
     def wait_record():
         fields = ('start', 'end', 'site', 'lock', 'serving', 'next', 'flags',
                   'holder_core', 'holder_start', 'holder_end', 'holder_site', 'holder_generation')
-        if version == 2:
+        if version >= 2:
             fields += ('fifo_start', 'fifo_end', 'fifo_serving', 'fifo_ticket')
         value = dict(zip(fields, take(wait_words)))
         if value['flags'] & ~(15 if version == 1 else 31):
@@ -76,7 +78,7 @@ def decode_scheduler_trace(payload, frequency):
             raise ValueError('scheduler lock holder identity is invalid')
         if value['flags'] & 4 and not value['holder_start'] <= value['holder_end'] <= value['end']:
             raise ValueError('scheduler lock holder completion is invalid')
-        if version == 2:
+        if version >= 2:
             actual = value['flags'] & 16
             fifo_fields = tuple(value[name] for name in ('fifo_start', 'fifo_end', 'fifo_serving', 'fifo_ticket'))
             if actual:
@@ -106,6 +108,11 @@ def decode_scheduler_trace(payload, frequency):
         row['irq'] = {'stamp': list(values[:4]),
                       'service_ticks': dict(zip(('control', 'incoming', 'pull', 'expiry', 'slice'), values[4:9])),
                       'passes': values[9], 'result': values[10]}
+        if version == 3:
+            if values[10] not in (0, 1, 3):
+                raise ValueError('scheduler IRQ result is invalid')
+            if values[10] == 3 and (len(set(values[1:4])) != 1 or any(values[4:10])):
+                raise ValueError('scheduler fast IRQ contains mask or service work')
         start, end, count, dropped = take(4)
         if end < start or count > records or dropped:
             raise ValueError('scheduler drain is incomplete or invalid')
@@ -127,9 +134,11 @@ def decode_scheduler_trace(payload, frequency):
             raise ValueError('scheduler wait maximum omits a retained wait')
         cores.append(row)
     startup = [dict(zip(('scheduler_start', 'first_restore'), take(2))) for _ in range(8)]
-    for markers in startup:
+    for core, markers in enumerate(startup):
         if markers['scheduler_start'] and markers['first_restore'] and markers['first_restore'] < markers['scheduler_start']:
             raise ValueError('scheduler startup timestamps are out of order')
+        markers['start_kind'] = 'running_flag_boundary' if version == 3 and core == 0 else 'port_start_entry'
+        markers['restore_kind'] = 'pre_eret' if version == 3 else 'restore_entry'
     tick_count, tick_dropped = take(2)
     if tick_count > tick_capacity or tick_dropped and tick_count != tick_capacity:
         raise ValueError('scheduler tick log counters differ from capacity')
@@ -144,7 +153,7 @@ def decode_scheduler_trace(payload, frequency):
         for value in [row['wait_max'], *row['waits']]:
             value['cause'] = 'unclassified'
             value['holder_tick_overlap_ticks'] = 0
-            actual = version == 2 and value['flags'] & 16
+            actual = version >= 2 and value['flags'] & 16
             if actual and value['fifo_ticket'] == value['fifo_serving']:
                 # Reservation sees no predecessor. The remaining wrapper
                 # duration has no attribution to a particular mechanism.
@@ -178,9 +187,84 @@ def decode_scheduler_trace(payload, frequency):
                 if tick_dropped and (not ticks or end > ticks[-1]['end']):
                     continue
             value['cause'] = 'observed_holder_contention'
+    wake_cores = []
+    if version == 3:
+        names = ('fast', 'slow', 'unmatched')
+        limits = (10, 25, 50, 80, 100)
+
+        def summary():
+            count, total, maximum, *over = take(8)
+            if not count and (total or maximum or any(over)):
+                raise ValueError('scheduler empty wake summary contains measurements')
+            if total < maximum or total > count * maximum or any(v > count for v in over) or over != sorted(over, reverse=True):
+                raise ValueError('scheduler wake summary counts or durations are inconsistent')
+            for limit, number in zip(limits, over):
+                if bool(number) != (maximum > frequency * limit // 1_000_000):
+                    raise ValueError('scheduler wake summary threshold differs from maximum')
+            return {'count': count, 'sum_ticks': total, 'max_ticks': maximum,
+                    'over_us': dict(zip(map(str, limits), over))}
+
+        for core in range(8):
+            ready, running, flags, running_slot = take(4)
+            stamps = list(take(5))
+            service = list(take(5))
+            passes, result, irq_sequence, previous_irq_end = take(4)
+            begin, end, selected_slot, switch_sequence, previous_switch_end, switch_irq_sequence = take(6)
+            if running < ready or flags & ~31 or running_slot >= 128:
+                raise ValueError('scheduler wake endpoints, flags or probe slot are invalid')
+            if irq_sequence:
+                if not all(stamps) or stamps != sorted(stamps) or previous_irq_end > stamps[0] or result not in (0, 1, 3):
+                    raise ValueError('scheduler wake IRQ timing is invalid')
+                if sum(service) > stamps[3] - stamps[2]:
+                    raise ValueError('scheduler wake service exceeds owner work interval')
+                if result == 3 and (len(set(stamps[1:])) != 1 or passes or any(service)):
+                    raise ValueError('scheduler wake fast IRQ contains service work')
+            elif any(stamps + service + [passes, result, previous_irq_end]):
+                raise ValueError('scheduler wake IRQ fields lack a sequence')
+            if switch_sequence:
+                if not begin or end < begin or previous_switch_end > begin or selected_slot >= 128:
+                    raise ValueError('scheduler wake switch timing or identity is invalid')
+            elif any((begin, end, selected_slot, previous_switch_end, switch_irq_sequence)):
+                raise ValueError('scheduler wake switch fields lack a sequence')
+            multiple = previous_irq_end > ready or previous_switch_end > ready
+            linked = bool(irq_sequence and switch_sequence and not multiple and
+                          ready <= stamps[4] <= begin <= end <= running and
+                          irq_sequence == switch_irq_sequence and selected_slot == running_slot and result in (1, 3))
+            expected_flags = (1 if irq_sequence else 0) | (2 if switch_sequence else 0) | (8 if multiple else 0)
+            expected_flags |= 4 if linked else 16
+            if ready and flags != expected_flags:
+                raise ValueError('scheduler wake linkage flags differ from its observations')
+            if not ready and any([running, flags, running_slot, *stamps, *service, passes, result,
+                                  irq_sequence, previous_irq_end, begin, end, selected_slot,
+                                  switch_sequence, previous_switch_end, switch_irq_sequence]):
+                raise ValueError('scheduler empty wake chain contains observations')
+            kind = names[0 if result == 3 else 1] if linked else 'unmatched'
+            summaries = {}
+            for name in names:
+                whole, tail = summary(), summary()
+                if name == 'unmatched' and tail['count'] or name != 'unmatched' and tail['count'] != whole['count']:
+                    raise ValueError('scheduler wake tail summary lacks matching classified samples')
+                summaries[name] = {'whole_wake': whole, 'owner_exit_to_running': tail}
+            total = sum(v['whole_wake']['count'] for v in summaries.values())
+            maximum = max(v['whole_wake']['max_ticks'] for v in summaries.values())
+            if bool(total) != bool(ready) or maximum != running - ready or ready and summaries[kind]['whole_wake']['max_ticks'] != running - ready:
+                raise ValueError('scheduler retained wake maximum differs from its summaries')
+            wake_cores.append({'core': core, 'scope': 'busy', 'count': total,
+                'classes': summaries, 'maximum': {
+                    'ready': ready, 'running': running, 'flags': flags, 'running_slot': running_slot,
+                    'class': kind, 'linked': linked, 'multiple_entries': multiple,
+                    'whole_wake_ticks': running - ready,
+                    'owner_exit_to_running_ticks': running - stamps[0] if linked else None,
+                    'irq': {'stamp': stamps, 'service_ticks': dict(zip(('control', 'incoming', 'pull', 'expiry', 'slice'), service)),
+                            'passes': passes, 'result': result, 'sequence': irq_sequence, 'previous_end': previous_irq_end},
+                    'switch': {'begin': begin, 'end': end, 'selected_slot': selected_slot,
+                               'sequence': switch_sequence, 'previous_end': previous_switch_end,
+                               'irq_sequence': switch_irq_sequence}}})
     return {'version': version, 'waits_capacity': waits, 'ticks_capacity': tick_capacity,
             'cores': cores, 'startup': startup, 'tick_count': tick_count,
-            'tick_dropped': tick_dropped, 'ticks': ticks}
+            'primary_scheduler_start': startup[0]['scheduler_start'] if version == 3 else None,
+            'startup_scope': 'scheduler_start_to_pre_eret_markers' if version == 3 else 'port_start_to_restore_entry_lower_bound',
+            'tick_dropped': tick_dropped, 'ticks': ticks, 'wake_chains': wake_cores}
 
 
 def decode(payload, dma=False):
@@ -339,4 +423,11 @@ def decode(payload, dma=False):
             'phase_bounds': dict(zip(PHASES, bounds)), 'core_mask': mask, 'timer_irq_core_mask': irq_mask, 'dma_jobs': dma_jobs, 'cores': cores}
     if scheduler_tail:
         result['scheduler_trace'] = decode_scheduler_trace(scheduler_tail, frequency)
+        for row in result['scheduler_trace']['wake_chains']:
+            raw = [w for w in cores[row['core']]['raw_wakes'] if w['metric'] == 'wake_busy']
+            maximum = row['maximum']
+            if row['count'] != len(raw) or not any(w['ready'] == maximum['ready'] and w['running'] == maximum['running'] for w in raw):
+                raise ValueError('scheduler busy-wake chain differs from the named workload samples')
+            if maximum['whole_wake_ticks'] != max(w['running'] - w['ready'] for w in raw):
+                raise ValueError('scheduler busy-wake maximum differs from the named workload samples')
     return result
