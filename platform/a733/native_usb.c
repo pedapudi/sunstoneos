@@ -88,21 +88,23 @@ static int usb_write(void *p,uintptr_t a,uint32_t v)
     return a733_usb_platform_native_write(NULL,a,v)==1 ? 1 :
         usb_denied(n,A733_NATIVE_USB_DENIAL_ADAPTER,0);
 }
+static int usb_step_bad(struct a733_native_usb *n,int result)
+{n->usb_step_result=result;return -1;}
 int a733_native_usb_step(struct a733_native_usb *n)
 {
     static const enum a733_rail rail[4]={A733_RAIL_DCDC1,A733_RAIL_DC1SW2,A733_RAIL_DCDC9,A733_RAIL_ELDO6};
-    if(!n->live(n->context))return -1;
+    if(!n->live(n->context))return usb_step_bad(n,0);
     if(!atomic_load_explicit(&n->pmic_ready,memory_order_acquire))return 0;
     if(!n->usb_step) {
         a733_rail_mask_t mask=0;for(unsigned i=0;i<4;++i)mask|=A733_RAIL_BIT(rail[i]);
         enum a733_rail_result r=a733_rail_acquire(&n->rails,n->boot.usb.owner,mask,0,n->boot.usb.deadline_us,&n->usb_rail);
-        if(r==A733_RAIL_BUSY)return 0;if(r!=A733_RAIL_PENDING)return -1;n->usb_step=1;return 0;
+        if(r==A733_RAIL_BUSY)return 0;if(r!=A733_RAIL_PENDING)return usb_step_bad(n,r);n->usb_step=1;return 0;
     }
     if(n->usb_step==1) {
         enum a733_rail_result r=a733_rail_poll(&n->rails,&n->usb_rail);
-        if(r==A733_RAIL_BUSY||r==A733_RAIL_PENDING)return 0;if(r!=A733_RAIL_READY)return -1;
+        if(r==A733_RAIL_BUSY||r==A733_RAIL_PENDING)return 0;if(r!=A733_RAIL_READY)return usb_step_bad(n,r);
         enum a733_pmic_status q=a733_pmic_identity(&n->pmic,&n->usb_power);
-        if(q==A733_PMIC_BUSY)return 0;if(q!=A733_PMIC_READY)return -1;n->usb_step=2;return 0;
+        if(q==A733_PMIC_BUSY)return 0;if(q!=A733_PMIC_READY)return usb_step_bad(n,q);n->usb_step=2;return 0;
     }
     if(n->usb_step==2) {
         /* Queue all four snapshots so the provider reads them back to back.
@@ -113,7 +115,7 @@ int a733_native_usb_step(struct a733_native_usb *n)
             enum a733_pmic_status r=a733_pmic_submit(&n->pmic,n->boot.usb.owner,&n->usb_rail,
                 rail[i],n->boot.usb.deadline_us,&n->usb_request[i]);
             if(r==A733_PMIC_BUSY)return 0;
-            if(r!=A733_PMIC_PENDING)return -1;
+            if(r!=A733_PMIC_PENDING)return usb_step_bad(n,r);
             if(!n->usb_request[i].id)return 0;
         }
         n->usb_step=3;return 0;
@@ -124,18 +126,18 @@ int a733_native_usb_step(struct a733_native_usb *n)
         if(r==A733_PMIC_BUSY||r==A733_PMIC_PENDING)return 0;
         if(r!=A733_PMIC_COMPLETE||s->rail!=rail[n->usb_rail_index]||s->page_before||s->page_after||
            s->chip!=3||s->revision||s->decoded!=1||s->enabled!=1||
-           s->programmed_uv!=n->boot.usb_supply_uv[n->usb_rail_index])return -1;
+           s->programmed_uv!=n->boot.usb_supply_uv[n->usb_rail_index])return usb_step_bad(n,r);
         n->usb_step=4;return 0;
     }
     if(n->usb_step==4) {
         enum a733_pmic_status r=a733_pmic_reap(&n->pmic,&n->usb_request[n->usb_rail_index]);
-        if(r==A733_PMIC_BUSY)return 0;if(r!=A733_PMIC_COMPLETE)return -1;
+        if(r==A733_PMIC_BUSY)return 0;if(r!=A733_PMIC_COMPLETE)return usb_step_bad(n,r);
         n->usb_request[n->usb_rail_index]=(struct a733_pmic_request){0};
         n->usb_step=++n->usb_rail_index==4?5:3;return 0;
     }
     enum a733_usb_platform_result r=a733_usb_platform_poll(&n->usb);
     if(r==A733_USB_PLATFORM_PENDING||r==A733_USB_PLATFORM_BUSY)return 0;
-    if(r!=A733_USB_PLATFORM_PREPARED)return -1;
+    if(r!=A733_USB_PLATFORM_PREPARED)return usb_step_bad(n,r);
     atomic_store_explicit(&n->usb_prepared,1,memory_order_release);return 1;
 }
 int a733_native_usb_init(struct a733_native_usb *n,const struct a733_native_usb_config *b,
@@ -164,11 +166,14 @@ int a733_native_usb_init(struct a733_native_usb *n,const struct a733_native_usb_
 }
 int a733_native_usb_bind(struct a733_native_usb *n,TaskHandle_t pmic,TaskHandle_t usb)
 {
-    if(!n||!n->used||!pmic||!usb||pmic==usb||n->pmic_task||n->usb_task)return 0;
+    if(!n||!n->used||!pmic||(usb&&pmic==usb)||n->pmic_task||n->usb_task)return 0;
     n->pmic_task=pmic;n->usb_task=usb;
     if(!a733_pmic_native_init(&n->pmic_native,&n->locks,pmic)||
        !a733_pmic_native_bind(&n->pmic,&n->boot.pmic,&n->pmic_native,&n->clocks,&n->rails,&n->pins)||
        !a733_gpu_resources_native_use_pmic(&n->gpu_native,&n->gpu,&n->pmic))return 0;
+    /* A session without USB0 still needs the shared PMIC and rail providers.
+     * Leave the USB platform uninitialized and acquire no USB token. */
+    if(!usb)return 1;
     struct a733_usb_platform_ops ops={now,usb_authorize,enter,leave,retain,usb_read,usb_write};
     return a733_usb_platform_init(&n->usb,&n->boot.usb,&ops,n,&n->clocks);
 }

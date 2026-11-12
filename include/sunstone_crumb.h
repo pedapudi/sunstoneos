@@ -87,7 +87,7 @@
 /* Registered return faults retain the owner in bits 23:16, the original
  * group in bits 27:24 and its detail in bits 11:0. The value and caller keep
  * their original meanings; each descriptor also keeps the original site. */
-#define SUNSTONE_CRUMB_FAIL_QUIESCE 0xbu
+#define SUNSTONE_CRUMB_FAIL_QUIESCE 0xcu
 #define SUNSTONE_CRUMB_QUIESCE_NPU 0x0u
 #define SUNSTONE_CRUMB_QUIESCE_GPU 0x1u
 #define SUNSTONE_CRUMB_QUIESCE_USB 0x2u
@@ -100,6 +100,7 @@
 #define SUNSTONE_CRUMB_QUIESCE_THERMAL_OWNER 0x9u
 #define SUNSTONE_CRUMB_QUIESCE_PMIC_OWNER 0xau
 #define SUNSTONE_CRUMB_QUIESCE_TERMINAL_OWNER 0xbu
+#define SUNSTONE_CRUMB_FAIL_USB0 0xbu       /* USB0 guard; layout in sunstone_usb0_stop.h */
 /* Frozen finite NPU images use group 8. The host distinguishes their defined
  * finite return producers from CPU retention using the launched image ELF. */
 /* NPU first-failure layouts, independent of progress stages. Register offsets

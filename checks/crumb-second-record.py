@@ -60,7 +60,7 @@ def main():
     cases = [
         # (name, FAULT, ESR, new site, expected replaced)
         ('an application failure replaced by a device failure', 0xfa0b0000, 0x80004ff0, 0x80008e5a, True),
-        ('a registered storage fault names its owner', 0xfa0b0000, 0x80004ff0, 0x8106b901, True),
+        ('a registered storage fault names its owner', 0xfa0b0000, 0x80004ff0, 0x8106c901, True),
         ('an application failure kept against another application failure', 0xfa0b0000, 0x80004ff0, 0x80004100, False),
         ('a second record kept against a third failure', 0xfa0c0000, 0x80008e5a, 0x80009001, False),
         ('a device failure kept against another device', 0xfa0b0000, 0x80008e5a, 0x80009001, False),
@@ -109,14 +109,14 @@ def main():
               for k, v in defines.items() if k.startswith('QUIESCE_')}
     assert len(owners) == 12
     for owner, name in owners.items():
-        site = 0x8100b901 | owner << 16
+        site = 0x8100c901 | owner << 16
         record = crumbs.board_failure({'fault': 0xfa0c0000, 'esr': site,
                                        'elr': 0x41001234, 'far': 0x902}, defines, None)
         assert record['owner'] == name and record['code'] == 0x901
         assert record['source_group'] == 'board' and record['value'] == '0x902'
     for phase, name in enumerate(('unverified', 'fat1', 'fat2', 'directory', 'fsinfo',
                                   'dirty1', 'dirty2', 'clean1', 'clean2', 'raw', 'failed', 'protocol')):
-        site = 0x8100b921 | defines['QUIESCE_STORAGE'] << 16
+        site = 0x8100c921 | defines['QUIESCE_STORAGE'] << 16
         site += phase
         words = dict.fromkeys(crumbs.WORDS, 0)
         words.update(tag=0x5c0d0001, fault=0xfa0c0000, esr=site,

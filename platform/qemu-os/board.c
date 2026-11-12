@@ -162,6 +162,7 @@ int gicv3_spi_masked(const struct gicv3_spi *s)
 void board_usb0_task(void *unused)
 {
     (void)unused;
+    qemu_os_log("USB0-START\n");
     const uint64_t ready = now_us() + qemu_os_scenario()->usb_ready_us;
     while (now_us() < ready) vTaskDelay(1);
     /* A transport that hangs after it starts: it never tells the OS it is ready and never reports. */

@@ -38,6 +38,7 @@ struct a733_native_usb {
     void *context;
     atomic_uint pmic_ready,usb_prepared;
     unsigned used,usb_step,usb_rail_index;
+    int usb_step_result; /* Underlying provider result of a refused startup step. */
     /* First non-BUSY callback denial; no extra register reads. */
     unsigned usb_io_denial;
     int usb_io_provider_status;
@@ -56,6 +57,7 @@ enum a733_native_usb_denial { A733_NATIVE_USB_DENIAL_NONE,
     A733_NATIVE_USB_DENIAL_ADAPTER };
 int a733_native_usb_init(struct a733_native_usb *,const struct a733_native_usb_config *,
     int (*)(void *),void (*)(void *),void *);
+/* A null USB task binds only the PMIC/GPU providers; binding remains one-shot. */
 int a733_native_usb_bind(struct a733_native_usb *,TaskHandle_t,TaskHandle_t);
 int a733_native_usb_step(struct a733_native_usb *);
 int a733_native_usb_health(struct a733_native_usb *);

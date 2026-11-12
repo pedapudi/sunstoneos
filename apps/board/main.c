@@ -394,6 +394,7 @@ void a733_smp_diagnostic_start(void)
     TaskFunction_t functions[]={pmic,board_usb0_task,typec,power,board_host_task,radio_owner,radio_client,supervise};
     const char *names[]={"board-pmic","board-usb0","board-typec","board-power","board-usb2","board-radio","board-net","board-watchdog"};
     for(unsigned i=0;i<8;++i){
+        if(i==1&&!board_usb0_enabled())continue;
         if(i>=2&&i<=4&&!a733_board_host_workload(s->workload))continue;
         if(i>=5&&!a733_board_radio_workload(s->workload)
 #ifdef SUNSTONE_BOARD_SUPERVISED

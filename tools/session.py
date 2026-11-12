@@ -109,7 +109,7 @@ REVIEWED = ROOT / 'tools/cpu-reviewed-points.json'
 # Device classes a session can grant, and the symbol that shows the image links the service behind each. The GPU has no session
 # extent; the decoder (apps/os/host.py) and the EL3 admission (apps/os/session.c) check only the bit, the workload word of the board
 # prefix (2 for a session without USB storage, which the control profile carries) and, in the image, that the GPU service is linked.
-GRANTABLE = {'gpu': 'os_gpu_queue_start_entry'}
+GRANTABLE = {'gpu': 'os_gpu_queue_start_entry', 'usb-device': 'board_usb0_task'}
 DEVICE_PROFILES = {
     'usb-host': ('usb-keyboard', ('os_usb_service_init', 'os_usb_quiesce_start')),
     'radio-scan': ('radio', ('os_radio_start', 'os_radio_result_descriptor')),

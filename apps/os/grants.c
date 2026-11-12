@@ -58,6 +58,8 @@ int os_npu_core_granted(unsigned main_core,uint32_t worker_cores,unsigned npu_co
  * every lifetime unless it names the lifetimes (LIFETIME bits of enum a733_lifetime) it applies in. */
 #define LIFETIME(l) (1u<<(l))
 static const struct {unsigned services;const char *reason;unsigned lifetimes;} refused_compositions[]={
+    {OS_GRANT_USB0,"the returning lifetime has no qualified shutdown of the USB0 device owner",
+        LIFETIME(A733_LIFETIME_RETURN)},
     {OS_GRANT_NPU|OS_GRANT_AUDIO,"the NPU profile requires the recorded recognition composition, not live I2S capture"},
     {OS_GRANT_NPU|OS_GRANT_RADIO,"the NPU profile requires the recorded recognition composition, not the radio station"},
     {OS_GRANT_NPU|OS_GRANT_HEADSET,"the NPU profile requires the recorded recognition composition, not live headset capture"},

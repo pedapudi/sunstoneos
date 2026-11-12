@@ -191,16 +191,18 @@
                  if(a733_board_host_workload(board.session.workload))a733_typec_revoke(&board.typec.provider);
                  /* Status 5: renewal stopped. The reason reaches this core's
                   * retained slot, and on core 0 the resident result. */
-@@ -391,6 +461,8 @@
+@@ -390,7 +460,9 @@
+ #ifdef SUNSTONE_BOARD_APPLICATION
      if(board_application_pins(&b.pins)!=1)platform_panic("board application pins",10);
  #endif
-     if(!a733_native_usb_init(&providers.shared,&b,board_live,board_fail,NULL))platform_panic("board shared providers",4);
+-    if(!a733_native_usb_init(&providers.shared,&b,board_live,board_fail,NULL))platform_panic("board shared providers",4);
++    if(!a733_native_usb_init(&providers.shared,&b,board_live,board_usb0_provider_fail,NULL))platform_panic("board shared providers",4);
 +    if(a733_board_host_workload(s->workload)&&(!os_usb_quiesce_start||!os_usb_quiesce_start()))
 +        platform_panic("USB return registration",5);
      TaskFunction_t functions[]={pmic,board_usb0_task,typec,power,board_host_task,radio_owner,radio_client,supervise};
      const char *names[]={"board-pmic","board-usb0","board-typec","board-power","board-usb2","board-radio","board-net","board-watchdog"};
      for(unsigned i=0;i<8;++i){
-@@ -404,7 +476,8 @@
+@@ -405,7 +477,8 @@
          board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,!i?3:i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);
          if(!board.handles[i])platform_panic("board tasks",5);
  #if configNUMBER_OF_CORES > 1

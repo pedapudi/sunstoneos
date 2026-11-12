@@ -51,7 +51,8 @@
     X(CPU_CLOCK, 2, OS_ALWAYS) \
     X(DMA, 3, OS_WITH_DMA) \
     X(RADIO, 4, OS_ALWAYS) \
-    X(HEADSET, 5, OS_ALWAYS)
+    X(HEADSET, 5, OS_ALWAYS) \
+    X(USB0, 6, OS_ALWAYS)
 
 /* X(GRANT, extent, field, bytes, magic, version, need): the record a granted service carries, as the session extent of
  * that type, copied to the field of struct os_session. A record that is present grants its service. need says when the
@@ -103,7 +104,7 @@ enum { OS_SERVICE_APPLICATION = 5, OS_SUPERVISED_ROWS(OS_SERVICE_ID_) OS_SERVICE
 #define OS_SERVICE_ENTRY_(NAME, name, window_us, grant, with) with({name, window_us},)
 #define OS_SERVICE_TABLE OS_SUPERVISED_ROWS(OS_SERVICE_ENTRY_)
 #define OS_SERVICE_GRANT_(NAME, name, window_us, grant, with) with([OS_SERVICE_##NAME] = (grant),)
-#define OS_SERVICE_GRANTS {OS_SUPERVISED_ROWS(OS_SERVICE_GRANT_)}
+#define OS_SERVICE_GRANTS {[1] = OS_GRANT_USB0, OS_SUPERVISED_ROWS(OS_SERVICE_GRANT_)}
 /* The start list's entries and their prototypes (struct os_application, apps/os/application.h). */
 #define OS_START_PROTOTYPE_(name, prefix, start, with) \
     int prefix##_task_privileged(void (*)(void *), void *); int prefix##_pins(struct a733_pin_handoff *); int start(void);

@@ -29,6 +29,9 @@ NPU_RETIREMENT_STATE = ('report not published', 'report not stopped', 'report re
                         'SDK closed', 'local stop done', 'active', 'started', 'opened', 'failed', 'runtime failed',
                         'irq pending', 'irq stopped', 'worker parked', 'NPU service linked')
 BOUNDED = 0x736      # cpu-return bounded(): its value carries board_live_refusal() bits
+USB0_REASONS = {int(value): name.lower().replace('_', ' ') for name, value in re.findall(
+    r'^#define USB0_STOP_(\w+) (\d+)u$',
+    (ROOT / 'include/sunstone_usb0_stop.h').read_text(), re.M)}
 # The entry guard's rail refusal (apps/os/cpu-return-entry.c), whose detail is
 # DCDC5 << 10 | DCDC3, each in 10 mV units.
 GUARD_RAIL_LINE = next((i for i, line in enumerate(
@@ -204,7 +207,12 @@ def board_failure(words, defines, elf):
     if legacy_npu:
         record['group_source'] = 'finite NPU ELF (legacy group 8)'
     record['site_kind'] = ('code' if record['group'] == 'quiesce' else
-                           'detail' if record['group'] in ('cpu_return', 'application') else 'source line')
+                           'detail' if record['group'] in ('cpu_return', 'application', 'usb0') else 'source line')
+    if record['group'] == 'usb0':
+        record['usb0_guard'] = USB0_REASONS.get(record['site'], 'unknown guard')
+        record['provider_step'] = record['aux'] & 255
+        record['rail_index'] = record['aux'] >> 8
+        record['provider_result'] = value if value < 0x80000000 else value - (1 << 32)
     if record['group'] == 'npu' and site & defines['NPU_REGISTER']:
         record['register_offset'] = hex((record['aux'] & 0x3fff) << 2)
     elif record['group'] == 'npu' and site & defines['NPU_STARTUP']:
@@ -393,6 +401,9 @@ def decode(words, epoch, elf=None):
             text += f", owner {f['owner']}, source group {f['source_group']}"
         if 'session' in f:
             text += f", SESSION {f['session']:#x}, phase {f['storage_phase']}"
+        if 'usb0_guard' in f:
+            text += (f"; USB0 guard {f['usb0_guard']}, provider step {f['provider_step']}, "
+                     f"rail index {f['rail_index']}, result {f['provider_result']}")
         if 'register_offset' in f:
             text += f"; register offset {f['register_offset']}"
         if 'startup_stage' in f:
