@@ -2,11 +2,12 @@
 
 Status: **implemented**; modeled counts are **host-tested**. **Qualified on the
 board** for the core-0 forced-walk loop on the cached single-core images
-(Cortex-A55). The uncached OS control returns normally on Cortex-A76 core 6
-at the top CPU and DSU points. The cached comparison remains open; record
-`1794465341494995923-e29c2535` in [the evidence](../evidence/cpu-table-walks.jsonl).
-**Open:** the core-0 workload runs, the Cortex-A76 core-6 run
-that admits the eight-core images, the Non-secure dirty-line experiment and the
+(Cortex-A55). Both OS profiles return normally on Cortex-A76 core 6 at the top
+CPU and DSU points. Cached walks reduce fixed-loop cycles by 68.458%, but the
+data-walk counts differ and the comparison does not pass its admission rule.
+The [evidence](../evidence/cpu-table-walks.jsonl) records both runs.
+**Open:** the core-0 workload runs, the Cortex-A76 measurement interpretation
+that admits the eight-core default, the Non-secure dirty-line experiment and the
 stage-2 block access. Readers are assumed to know AArch64 stage-1 translation,
 the Secure and Non-secure physical address spaces, and data-cache maintenance
 by virtual address.
@@ -184,6 +185,14 @@ record; the walk-loop figures are a board measurement.
 | Table readback per core and boot | 512 `LDP` | 512 `LDP` | same |
 | Forced-walk loop on core 0, cycles per iteration, uncached; cached | cached no slower | 693.1; 436.1 (spread under 0.2%) | `cpu-table-walks.jsonl`: `cpu-table-walks-board-core0-loop` |
 | OS forced-walk loop on core 6 at 2002 MHz, uncached cycles per iteration | control | 1206.625 median; 1.5605% spread across five blocks | `cpu-table-walks.jsonl`: `1794465341494995923-e29c2535` |
+| Same fixed loop on core 6, cached cycles per iteration | lower median beyond the larger spread | 380.5918 median; 0.1422% spread; 68.458% fewer cycles | `cpu-table-walks.jsonl`: `1794466032800309049-ed5f20e8` |
+| Core-6 measured data-walk count per 1,024-iteration block | cached median inside uncached range | uncached 1,023–1,024; cached 1,816: admission inconclusive | both core-6 records |
+
+Both core-6 images have 1,024 instruction-walk events per block, matching load
+digests, seven secondaries off and normal ROM return. The figures establish
+fixed-loop cost, rather than a cost per hardware data walk. The cached default,
+cluster-return controls and recognition comparison remain gated on a coordinator
+decision about this scope or on a revised diagnostic.
 
 The added boot work is about 1,000 maintenance operations, an estimated 0.15 ms
 at 494 MHz if each costs at most 70 cycles, plus 512 uncached loads per core, an
@@ -221,6 +230,11 @@ caches or walk latency.
   access external memory. The [source record](../cpu-table-walks-sources.json)
   pins the PDF and extracted text. This establishes the supported configuration;
   walk cost remains a board measurement.
+- The same manual documents approximate absolute PMU counts (C2.1), translation
+  prefetching (A5.1.1), virtual-address load prefetching (A6.5) and
+  cacheability-dependent MMU prefetch targets (`CPUECTLR_EL1.PFT_MM`, B2.32).
+  These mechanisms suggest hypotheses for the differing data-walk counts; they
+  do not explain the observed value of 1,816 or establish equal data-walk work.
 - Unproven: the Arm Architecture Reference Manual
   rules that EL3 with the MMU off addresses the Secure space, that EL1 with the
   MMU off addresses the Non-secure space, and that maintenance issued with the
@@ -234,6 +248,9 @@ order in `continue.c`); the contiguous hint on `dma32` blocks (it returns if a
 workload run shows `DTLB_WALK` costing more than 1% of `CPU_CYCLES`); moving the
 single-core `platform_init()` onto `enable_el1`; stage-3 entries 4 to 12, which
 need launch evidence for `0x1_0000_0000`–`0x3_4000_0000`.
+The OS loop does not capture `INST_RETIRED` or vary prefetch controls. A revised
+diagnostic can use the already configured instruction counter if the coordinator
+requires stronger workload evidence.
 
 ## Core-6 measurement
 
@@ -281,9 +298,11 @@ board session.
    inference (record `cpu-table-walks-core0-workload-ab`). It also decides the
    contiguous hint.
 3. **Core-6 walk A/B on the Cortex-A76** through the OS diagnostic above
-   (record `cpu-table-walks-core6-walk-ab`) on port 3-3. The eight-core default takes the
-   cached value only after a measured gain, followed by returning controls on
-   both CPU clusters and recognition against the 422.8 ms, 512-frame reference.
+   (record `cpu-table-walks-core6-walk-ab`) needs a coordinator decision. Accept
+   the measured fixed-iteration gain with its counter limitation, or authorize
+   a revised diagnostic. The eight-core default stays uncached. Returning controls
+   on both clusters and recognition against the 422.8 ms, 512-frame reference
+   follow admission of the cached default.
 4. **Stage-2 block access**: with the decode check passing, one read and one
    write per 1 GiB block (record `cpu-table-walks-stage2-block-access`).
 5. Decide whether the interleaved single-image form of the walk A/B run is

@@ -199,7 +199,16 @@ def decoder_cases(tcr, out):
     harness.refused(lambda: host.compare(a, incompatible), 'count ranges do not overlap', ValueError)
     incompatible['samples'][-1]['dtlb_walk'] = 1024
     harness.refused(lambda: host.compare(a, incompatible), 'median is outside the control range', ValueError)
-    return 13
+    # Native cached record 1794466032800309049-ed5f20e8 returns successfully
+    # but reports 1816 measured data walks per block. Preserve the result and
+    # refuse a matched-walk gain rather than changing its acceptance threshold.
+    cached_data = bytearray(payload(a733_tcr.CACHED_WALK, 389726))
+    for i in range(host.SAMPLES):
+        struct.pack_into('<Q', cached_data, host.HEAD.size + 512 + i * host.SAMPLE.size + 16, 1818 if i == 0 else 1816)
+    captured_cached = host.decode(bytes(cached_data))
+    assert captured_cached['median_cycles_per_iteration'] == 380.591796875
+    harness.refused(lambda: host.compare(a, captured_cached), 'count ranges do not overlap', ValueError)
+    return 15
 
 
 def main():
