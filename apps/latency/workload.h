@@ -10,6 +10,9 @@
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
 #include "latency_trace.h"
 #endif
+#ifdef SUNSTONE_SCHED_PMU
+#include "latency_pmu.h"
+#endif
 
 #define LATENCY_CORES 8U
 #define LATENCY_IDLE_SAMPLES 64U
@@ -54,6 +57,9 @@ struct latency_result {
 #ifdef SUNSTONE_LATENCY_CONTROL
     struct latency_control_report control __attribute__((aligned(64)));
 #endif
+#ifdef SUNSTONE_SCHED_PMU
+    struct ss_sched_pmu_report pmu_windows __attribute__((aligned(64)));
+#endif
 };
 _Static_assert(offsetof(struct latency_result, core) == 320 &&
     offsetof(struct latency_result, phases) == 5440 &&
@@ -85,6 +91,12 @@ _Static_assert(offsetof(struct latency_result, control) ==
     ((offsetof(struct latency_result, scheduler) + sizeof(struct ss_sched_trace_report) + 63u) & ~(size_t)63u),
     "control tail follows the complete scheduler report");
 #endif
+#endif
+
+#ifdef SUNSTONE_SCHED_PMU
+_Static_assert(offsetof(struct latency_result, pmu_windows) % 64 == 0 &&
+    sizeof(struct latency_result) == offsetof(struct latency_result, pmu_windows) + 11712 &&
+    sizeof(struct latency_result) <= 131072, "scheduler PMU report tail layout");
 #endif
 
 /* Prepare before scheduling. Run from a controller allowed on one core; all

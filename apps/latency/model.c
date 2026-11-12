@@ -27,7 +27,24 @@ static void controller(void *argument)
     taskENTER_CRITICAL();
     taskEXIT_CRITICAL();
 #endif
+#ifdef SUNSTONE_SCHED_PMU
+    ss_sched_pmu_arm();
+#endif
     latency_workload_run(&result);
+#ifdef SUNSTONE_SCHED_PMU
+    configASSERT(result.pmu_windows.magic == SS_SCHED_PMU_MAGIC);
+    configASSERT(!(result.pmu_windows.flags & 8));
+    for (unsigned core = 0; core < LATENCY_CORES; ++core) {
+        const struct ss_sched_pmu_core *pmu = &result.pmu_windows.core[core];
+        configASSERT(pmu->status == SS_SCHED_PMU_OK && pmu->completed);
+        uint64_t total = 0;
+        for (unsigned kind = 0; kind < SS_SCHED_PMU_KINDS; ++kind)
+            for (unsigned bank = 0; bank < SS_SCHED_PMU_BANKS; ++bank)
+                total += pmu->row[kind][bank].count;
+        configASSERT(total == pmu->completed);
+    }
+    platform_puts("PASS scheduler PMU model: eight frozen writers and coherent sample totals; functional evidence only\n");
+#endif
 #ifdef SUNSTONE_LATENCY_CONTROL
     configASSERT(result.control.magic == LATENCY_CONTROL_MAGIC);
     configASSERT(result.control.mode == SUNSTONE_LATENCY_CONTROL_MODE);

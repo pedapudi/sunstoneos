@@ -97,6 +97,15 @@ void ss_sched_trace_snapshot(struct ss_sched_trace_report *out);
  * snapshots with the mask open. Observer cost can affect later work. */
 void ss_sched_trace_wake(unsigned core, uint64_t ready, uint64_t running, unsigned busy);
 #endif
+#ifdef SUNSTONE_SCHED_PMU
+/* The diagnostic arms after clock readiness. Each pinned worker acknowledges
+ * freeze before the controller copies the versioned report. PMU register
+ * access remains inside the kernel's EL1 measurement windows. */
+struct ss_sched_pmu_report;
+void ss_sched_pmu_arm(void);
+int ss_sched_pmu_freeze(unsigned core);
+void ss_sched_pmu_snapshot(struct ss_sched_pmu_report *out);
+#endif
 /* Snapshot only after every writer has frozen; packed in descending duration. */
 void ss_latency_sites_snapshot(struct ss_latency_site out[SS_LAT_PHASES + 1][8][SS_LAT_SITE_KINDS][SS_LAT_SITE_SLOTS]);
 #ifdef SUNSTONE_LATENCY_PMU

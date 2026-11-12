@@ -82,7 +82,7 @@ function(sunstone_latency_partitioned_model target metric)
     target_compile_definitions(${target} PRIVATE SS_LATENCY_OPS=${metric})
     target_compile_options(${target} PRIVATE
       "$<$<COMPILE_LANGUAGE:C>:SHELL:-include ${latency_root}/checks/latency-ops.h>")
-  elseif(NOT control)
+  elseif(NOT control AND NOT SUNSTONE_SCHED_PMU)
     # Real counter time with the PMU capture of the board image (QEMU counts instructions only).
     target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_PMU=1)
   endif()

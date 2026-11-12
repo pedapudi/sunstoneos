@@ -149,6 +149,62 @@ cost, and no constant overhead is subtracted. The existing workload takes 64
 idle and 128 busy wake samples per CPU. It supports exact observed maxima and
 phase percentiles, but cannot establish a 99.99th-percentile bound.
 
+## Per-core PMU windows retain separate event banks
+
+`SUNSTONE_SCHED_PMU` adds counters around saved-frame C selection, a control
+record body and CPU0's instrumented tick handler. It owns the PMU exclusively;
+legacy span counters, application PMU accounting and control qualification
+cannot share this profile. Arming follows the application's top-clock check.
+Only the measured EL1 CPU configures or reads its counters. Capability and
+configuration checks follow [the CPU PMU interface](../cpu-pmu.md).
+
+The six event counters require two banks. Both contain L1 data refill, L1
+instruction refill, L2 refill, data TLB walk and instruction TLB walk. The sixth
+counts attributable L3 refill (`0x2a`) in one bank and backend stalls (`0x24`)
+in the other. The cycle counter runs at full rate with 64-bit overflow. Core
+capability bits identify unsupported events. L3 refill is a core-attributable
+event, not a whole-cluster traffic counter.
+
+Each window uses a synchronous stack-object address as its scope. Admission
+masks local IRQ entry until the scope and internal sequence are published.
+Counter enable follows all capture-state stores. The end entry validates the
+core and scope, freezes counters and synchronizes before its first spill or
+result store. A nested rejected scope cannot end the outer window. Rejection
+updates no recorder state while the outer counters run, so its count remains
+explicitly unavailable.
+
+The report retains the maximum-cycle invocation per core, kind and bank, or an
+error sample. Its sample count includes every completed invocation. Banks are
+different invocations and are never joined into one sample. Tick windows
+alternate banks; other kinds select the bank from the core index. A missing
+bank is distinct from an unsupported counter. Raw empty-window references are
+retained without automatic subtraction. A blank may span less than one generic
+counter tick while still counting CPU cycles.
+
+Selection's trace helpers lie outside its PMU window. Control and tick windows
+include their existing latency observers; the new PMU result writes follow
+counter freeze. The tick window includes the fixture's notifications and the
+production handler. It differs from a wake's remaining handler time after task
+readiness. Port restoration and the final mask observer are outside C selection.
+Cycle-to-counter ratios have boundary skew and do not establish continuous
+frequency between the application's clock checks.
+
+Each pinned wake worker freezes its own PMU recorder before publishing its
+parked acknowledgment. The controller acquires all eight acknowledgments before
+copying the 11,712-byte report. A snapshot without all freezes or with an active
+scope is marked incomplete. The decoder exposes capabilities, overflow, missing
+banks, invalid samples and clock ratios without turning their zeros into
+measurements.
+
+The idle hook executes `DSB SY; WFI`. Suspend, selection and cross-core
+notification contain no cache maintenance or TLB invalidation. The application
+space hook may change TTBR0 with an ASID; it issues no TLBI. Boot, terminal
+retirement, optional invalidation diagnostics and device DMA maintenance have
+separate paths. Source inspection does not establish cache retention in WFI.
+CPU0's latency tick has eight possible direct notification targets, the pinned
+wake tasks. Other OS waits become ready through deadlines rather than these
+eight notification calls.
+
 ## The control phase retains enough samples for the requested percentile
 
 `SUNSTONE_LATENCY_CONTROL` adds a control phase to the latency application.

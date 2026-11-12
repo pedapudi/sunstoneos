@@ -12,6 +12,14 @@ MAGIC = 0x53534C4154454E31
 SCHED_MAGIC = 0x5353534348545231
 CONTROL_MAGIC = 0x53534354524C3031
 CONTROL_BYTES = 17536
+SCHED_PMU_MAGIC = 0x5353504D55303031
+SCHED_PMU_BYTES = 11712
+SCHED_PMU_KINDS = ('select_self', 'select_other', 'control', 'tick', 'blank')
+SCHED_PMU_EVENTS = ((0x03, 0x01, 0x17, 0x2a, 0x34, 0x35),
+                    (0x03, 0x01, 0x17, 0x24, 0x34, 0x35))
+SCHED_PMU_STATUS = ('ok', 'unarmed', 'not_el1', 'wrong_core', 'nested',
+                    'not_active', 'wrong_cookie', 'no_counters',
+                    'config_mismatch', 'not_prepared', 'frozen', 'overflow')
 CONTROL_BINS = 192
 CONTROL_BIN_TICKS = 4
 CONTROL_MINIMUM = 10000
@@ -607,10 +615,99 @@ def decode_control(payload, frequency):
         'cores': rows}
 
 
+def decode_scheduler_pmu(payload, frequency):
+    """Decode separate event banks without joining counts from different spans."""
+    if len(payload) != SCHED_PMU_BYTES or not frequency:
+        raise ValueError('scheduler PMU report length or frequency differs')
+    header = struct.unpack_from('<8Q', payload)
+    if header[:7] != (SCHED_PMU_MAGIC, 1, SCHED_PMU_BYTES, 8, 5, 2, 6) or header[7] not in (6, 14):
+        raise ValueError('scheduler PMU header or raw-count flags differ')
+    if header[7] & 8:
+        return {'version': 1, 'raw_counts': True, 'snapshot_complete': False, 'cores': [],
+                'nested_rejection_count_available': False, 'reason': 'captures_not_quiescent'}
+    cores = []
+    for core in range(8):
+        words = struct.unpack_from('<182Q', payload, 64 + core * 1456)
+        status, midr, counters, ceid0, ceid1, support0, support1, configured, attempts, completed, *reserved = words[:12]
+        if (status >= len(SCHED_PMU_STATUS) or midr > 0xffffffff or counters > 31 or
+                configured & ~3 or any(reserved) or
+                completed > attempts or (support0 | support1) & ~63):
+            raise ValueError('scheduler PMU core metadata differs')
+        supports = (support0, support1)
+        if status == 0:
+            if not midr or counters < 6:
+                raise ValueError('scheduler PMU configured core has no identity or counters')
+            for bank, events in enumerate(SCHED_PMU_EVENTS):
+                expected = sum(1 << index for index, event in enumerate(events)
+                    if index < counters and ((ceid0 >> event) & 1 if event < 32 else
+                                             (ceid1 >> (event - 32)) & 1))
+                if supports[bank] != expected:
+                    raise ValueError('scheduler PMU support mask differs from core capabilities')
+        rows, observed = [], 0
+        for kind, name in enumerate(SCHED_PMU_KINDS):
+            for bank in range(2):
+                data = words[12 + (kind * 2 + bank) * 17:12 + (kind * 2 + bank + 1) * 17]
+                count, nested, row_status, begin, end, cycles, *rest = data
+                events, supported, overflow, slot, flags, cookie = rest[:6], *rest[6:]
+                row = {'kind': name, 'bank': bank, 'count': count}
+                if not count:
+                    if any(data):
+                        raise ValueError('scheduler PMU empty bank contains a sample')
+                    row.update(observed=False, reason='no_sample_in_this_bank')
+                    rows.append(row)
+                    continue
+                if (nested or row_status >= len(SCHED_PMU_STATUS) or supported != supports[bank] or
+                        overflow & ~0x8000003f or flags != (7 if kind == 0 else 6) or
+                        not cookie or end < begin or any(value > 0xffffffff for value in events) or
+                        not configured & (1 << bank)):
+                    raise ValueError('scheduler PMU sample identity, flags or counters differ')
+                if kind < 3 and slot >= 128 or kind == 3 and core:
+                    raise ValueError('scheduler PMU sample has an invalid task slot or timer core')
+                if row_status == 0 and (not begin or (end == begin and kind != 4) or not cycles or overflow):
+                    raise ValueError('scheduler PMU successful sample has no interval or overflow')
+                if any(value for index, value in enumerate(events) if not supported & (1 << index)):
+                    raise ValueError('scheduler PMU unsupported event has a count')
+                names = ('l1d_refill', 'l1i_refill', 'l2_refill',
+                         'l3_refill' if bank == 0 else 'stall_backend', 'dtlb_walk', 'itlb_walk')
+                valid = row_status == 0 and not overflow
+                elapsed = end - begin
+                mhz = cycles * frequency / (elapsed * 1000000) if valid and elapsed else None
+                expected_mhz = 1794 if core < 6 else 2002
+                row.update(observed=True, status=SCHED_PMU_STATUS[row_status], supported_mask=supported,
+                    overflow_mask=overflow, slot=slot, flags=flags, cookie=cookie,
+                    begin_tick=begin, end_tick=end, elapsed_ticks=elapsed,
+                    time_us=elapsed * 1000000 / frequency, cycles=cycles,
+                    below_one_counter_tick=not elapsed,
+                    event_codes=list(SCHED_PMU_EVENTS[bank]), raw_events=list(events),
+                    events={event_name: value if valid and supported & (1 << index) else None
+                            for index, (event_name, value) in enumerate(zip(names, events))},
+                    effective_mhz=mhz, expected_mhz=expected_mhz,
+                    top_clock_consistent=abs(mhz - expected_mhz) <= expected_mhz * .1 if mhz is not None else None,
+                    nested_rejection_count=None,
+                    event_scope='one retained invocation, not totals over count')
+                rows.append(row)
+                observed += count
+        if observed != completed:
+            raise ValueError('scheduler PMU completed count differs from captured rows')
+        cores.append({'core': core, 'status': SCHED_PMU_STATUS[status], 'midr': midr,
+                      'counter_count': counters, 'pmceid0': ceid0, 'pmceid1': ceid1,
+                      'supported': list(supports), 'configured_banks': configured,
+                      'attempts': attempts, 'completed': completed, 'rows': rows})
+    return {'version': 1, 'raw_counts': True, 'snapshot_complete': not bool(header[7] & 8),
+            'nested_rejection_count_available': False, 'cores': cores,
+            'bank_scope': 'each bank is a separate invocation; event counts are not joined',
+            'retention': 'maximum-cycle invocation per core, kind and bank, or an error sample; count includes every completed invocation',
+            'clock_scope': 'cycle/counter ratio includes boundary skew; ten-percent top-clock comparison',
+            'recorder_scope': 'PMU publication follows counter freeze; existing latency diagnostics remain in the measured path'}
+
+
 def decode(payload, dma=False):
     if len(payload) < RESULT_BYTES:
         raise ValueError(f'latency result must contain {RESULT_BYTES} bytes')
     tail = payload[RESULT_BYTES:]
+    scheduler_pmu_tail = b''
+    if len(tail) >= SCHED_PMU_BYTES and struct.unpack_from('<Q', tail, len(tail) - SCHED_PMU_BYTES)[0] == SCHED_PMU_MAGIC:
+        tail, scheduler_pmu_tail = tail[:-SCHED_PMU_BYTES], tail[-SCHED_PMU_BYTES:]
     control_tail = b''
     if len(tail) >= CONTROL_BYTES and struct.unpack_from('<Q', tail, len(tail) - CONTROL_BYTES)[0] == CONTROL_MAGIC:
         tail, control_tail = tail[:-CONTROL_BYTES], tail[-CONTROL_BYTES:]
@@ -766,6 +863,10 @@ def decode(payload, dma=False):
                       'wake_site': site, 'raw_wakes': raw, 'sites': sites})
     result = {'quantile_method': QUANTILES, 'phase_attribution': 'named phases contain whole intervals; aggregate metrics and sites include gaps and crossings', 'model': False, 'frequency': frequency, 'elapsed_ticks': elapsed,
             'phase_bounds': dict(zip(PHASES, bounds)), 'core_mask': mask, 'timer_irq_core_mask': irq_mask, 'dma_jobs': dma_jobs, 'cores': cores}
+    if scheduler_pmu_tail:
+        if pmu_tail or control_tail or not scheduler_tail:
+            raise ValueError('scheduler PMU report requires its exclusive traced CPU profile')
+        result['scheduler_pmu'] = decode_scheduler_pmu(scheduler_pmu_tail, frequency)
     control = decode_control(control_tail, frequency) if control_tail else None
     if scheduler_tail:
         result['scheduler_trace'] = decode_scheduler_trace(scheduler_tail, frequency,

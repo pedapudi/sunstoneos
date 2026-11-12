@@ -17,6 +17,7 @@ ROOT=Path(__file__).resolve().parents[1]
 CHECK_INPUTS=['kernel/scheduler/latency_pmu.c','kernel/scheduler/latency_pmu.h',
               'kernel/scheduler/freertos.c','kernel/scheduler/freertos_control.c',
               'checks/scheduler-pmu-support.c','checks/scheduler-pmu-host']
+GATE_RUNS=[['--output','{output}']]
 RETURN,STACK,OUTPUT=0x47fff000,0x47f00000,0x43010000
 ENABLE=0x8000003f
 EVENTS=[[3,1,0x17,0x2a,0x34,0x35],[3,1,0x17,0x24,0x34,0x35]]

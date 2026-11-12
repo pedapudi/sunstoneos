@@ -150,6 +150,9 @@ static void wake_worker(void *argument)
         configASSERT(portGET_CORE_ID() == c);
         if (atomic_load_explicit(&phase, memory_order_acquire) == STOP) {
             ss_latency_freeze(c);
+#ifdef SUNSTONE_SCHED_PMU
+            configASSERT(ss_sched_pmu_freeze(c) == SS_SCHED_PMU_OK);
+#endif
             atomic_store_explicit(&wake[c].parked, 1, memory_order_release);
             vTaskSuspend(NULL);
             configASSERT(0);
@@ -306,6 +309,9 @@ void latency_workload_run(struct latency_result *out)
     ss_latency_sites_snapshot(out->sites);
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     ss_sched_trace_snapshot(&out->scheduler);
+#endif
+#ifdef SUNSTONE_SCHED_PMU
+    ss_sched_pmu_snapshot(&out->pmu_windows);
 #endif
 #ifdef SUNSTONE_LATENCY_PMU
     ss_latency_site_pmu_snapshot(out->site_pmu);
