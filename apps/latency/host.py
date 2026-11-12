@@ -837,8 +837,13 @@ def decode_latency_cause(payload, frequency):
     if tuple(types) != CAUSE_EVENT_TYPES:
         raise ValueError('cause event types differ from the declared counters')
     pmceid0 = grid(8)
+    # PMCEID0_EL0 bits [31:0] advertise common events 0x00-0x1f; events 0x20-0x3f
+    # (L3D refill 0x2a, backend stall 0x24) are in PMCEID1_EL0, which this report
+    # does not hold. The scheduler PMU record 1794497365941804086-44d410dc read
+    # both registers and found all six of its events, these two included, on every core.
     for core, value in enumerate(pmceid0):
-        missing = [name for name, event in zip(CAUSE_EVENTS, CAUSE_EVENT_TYPES) if not value >> event & 1]
+        missing = [name for name, event in zip(CAUSE_EVENTS, CAUSE_EVENT_TYPES)
+                   if event < 32 and not value >> event & 1]
         if missing:
             raise ValueError(f'cause core {core} does not implement {missing}')
     ev_tick, ev_release, ev_scan = grid(5), grid(8, 5), grid(8, 5)

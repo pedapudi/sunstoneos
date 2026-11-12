@@ -19,8 +19,8 @@ CHECK_INPUTS=['kernel/scheduler/latency_cause.c','kernel/scheduler/latency_cause
 RETURN,STACK,OUTPUT,SCRATCH=0x47fff000,0x47f00000,0x43010000,0x43000000
 CC=1<<31
 EVENTS=0x1f
-# PMCEID0 bits of the five counted events: 0x01, 0x03, 0x17, 0x24 and 0x2a (above bit 31 in PMCEID0's upper word).
-PMCEID0=(1<<0x01)|(1<<0x03)|(1<<0x17)|(1<<0x24)|(1<<0x2a)
+# PMCEID0 advertises the counted events below 0x20 (0x01, 0x03, 0x17); 0x24 and 0x2a are in PMCEID1.
+PMCEID0=(1<<0x01)|(1<<0x03)|(1<<0x17)
 class Model:
     def __init__(self,image,skip_mask=False,mismatch=False,skip_pair_mask=False):
         with image.open('rb') as f:

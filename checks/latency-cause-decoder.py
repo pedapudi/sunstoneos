@@ -47,7 +47,8 @@ def main():
         for case in range(15):
             w.extend(range(20 + case, 84 + case))
         w.extend(host.CAUSE_EVENT_TYPES)
-        w.extend([(1 << 0x01) | (1 << 0x03) | (1 << 0x17) | (1 << 0x24) | (1 << 0x2a)] * 8)
+        # PMCEID0 advertises events below 0x20 only, as the board reports it.
+        w.extend([(1 << 0x01) | (1 << 0x03) | (1 << 0x17)] * 8)
         w.extend([400, 300, 200, 100, 9000])
         w.extend([10, 8, 6, 4, 500] * 8)
         w.extend([1, 1, 1, 1, 50] * 8)
@@ -79,6 +80,7 @@ def main():
     assert busy['targets'][0]['mean_release_events']['l3d_refill'] == 8
     assert result['tick']['outside_events']['l1i_refill'] == 400 - 8 * 11
     cases.append('per-segment refill counts and complete-tick phase means')
+    cases.append('events above 0x1f are not expected in PMCEID0')
 
     def refused(name, word, value, reason):
         data = payload()
