@@ -1,0 +1,137 @@
+# Remaining device-owner waits
+
+Status: **source audit; implementation and physical validation remain open**.
+The scope is the PMIC, Type-C, GPIO power and supervisor tasks assembled from
+[`apps/board/main.c`](../../apps/board/main.c) and
+[`apps/os/main.patch`](../../apps/os/main.patch). Radio waits have a separate
+owner. The legacy USB diagnostic adapter remains in scope as a separate path.
+
+## Idle wake rates
+
+These nominal rates follow from the source and the configured 1,000 Hz tick in
+[`FreeRTOSConfig.h`](../../include/FreeRTOSConfig.h). They are not board
+measurements. Idle means no request, transition or shutdown is pending, before
+the session deadline. Type-C and GPIO power tasks exist only for host workloads.
+Active I2C yields can add runnable passes beyond the timeout wakes below.
+
+| Task and live function | Current wait | Nominal timeout wakes per second |
+| --- | --- | --- |
+| PMIC, `pmic()` | `ulTaskNotifyTake()` with the delay from `a733_power_service_step()` | Returning: 0 before the session deadline. Resident: 2 from the 500 ms idle cap. |
+| Type-C, `typec()` | One tick outside active I2C; `taskYIELD()` during a transfer | 1,000 when following the one-tick idle branch. |
+| GPIO power, `power()` | One tick, including while GPIO readiness is absent | 1,000. |
+| Supervisor, `supervise()` | 20 ms | 50. |
+
+The supervisor's 20 ms policy checks admission and return progress, and drives
+watchdog supervision. Converting that wait to absolute 20 ms deadlines preserves
+50 wakes/s. Reducing this rate requires a separate supervision-policy change.
+
+## PMIC and power-domain service
+
+[`a733_power_service_step()`](../../drivers/power/a733_power_domains.c) already
+blocks idle work through the task wrapper. PMIC submissions call the kick bound
+by `a733_pmic_bind_service()`. Power-domain row requests notify the same task;
+row completion and supply changes invoke registered consumer wake callbacks.
+The native notifier is `notify()` in
+[`a733_power_domains_native.c`](../../drivers/power/a733_power_domains_native.c).
+The OS patch also calls the SD readiness subscriber after publishing PMIC ready.
+
+Active waits still spin. `advance()` polls PCK status for up to the provisional
+`A733_POWER_PCK_SPIN_US` value of 50 µs after a command. Later service steps check
+once per tick, strictly before the 10 ms command deadline. The static `pmic()`
+helper repeatedly reads the clock between byte phases, for up to
+`A733_POWER_PMIC_SPIN_US`, 1,000 µs per service step.
+
+[`a733_pmic_work(now, &until)`](../../drivers/power/a733_pmic.c) already provides
+a phase hold: two bit times for START/repeated START/STOP, or nine for a byte,
+with a quarter-bit delay after an unfinished poll. The bounded loop in
+`transfer()` advances ready phases and exits on the first unfinished phase.
+The outer service helper supplies the clock spin. PMIC request completion
+publishes `DONE` without a client notification callback.
+
+The service exports rounded ticks, without an absolute next-wait API. An exact
+helper must cover the byte-phase hold, supply verification time, command
+deadline and session bound. Supply settling is 5,160 µs when required;
+verification has a 100 ms budget after readiness. Preserve those bounds and
+the existing ownership and retained-failure rules.
+
+## Type-C and independent GPIO shutdown
+
+[`a733_typec_poll()`](../../drivers/usb/a733_typec.c) rejects a prepared provider
+whose service gap exceeds 2 ms. Attached monitoring refreshes I2C status every
+5 ms and publishes observations with a 10 ms freshness limit. Other declared
+holds are 100 µs for comparator settling, 120 ms for debounce, 275 ms for VBUS
+rise and 650 ms for fall. A transaction has a 5 ms bound. Optional PD work also
+has deadlines in [`a733_typec_pd.c`](../../drivers/usb/a733_typec_pd.c).
+
+[`a733_typec_native_power_poll()`](../../platform/a733/typec_native.c) requires
+service at least every 1 ms. It checks PL9, revocation and the provider's
+`progress_until` and `power_until` values. Pending GPIO shutdown has a 5 ms
+bound. This task must operate independently when the I2C owner retains its
+mutex; combining the tasks would remove that failure protection.
+
+The native adapter publishes GPIO readiness, VBUS commands/results and stop
+handshake fields through atomics, without notification publishers. Revoke also
+only publishes an atomic flag. PMIC snapshot acquisition polls request results.
+The `irq()` callback reads PL9 as an input; it is not an interrupt handler.
+The TWI engine exposes polling and result collection, without an IRQ callback
+or exact phase-wait query. Longer sleeps require these publishers and an exact
+next-deadline helper, with corresponding review of the 1 ms and 2 ms contracts.
+
+## Interrupt routes and remaining provider gaps
+
+The pinned vendor device tree declares GPIOL SPI 198, S_TWI0 SPI 203 and S_TWI1
+SPI 204: GIC interrupt IDs **230, 235 and 236**, respectively. The OS route table
+generated by [`sunstone-manifest.py`](../../tools/sunstone-manifest.py) binds
+none of them. Both TWI adapters establish operation with controller interrupts
+disabled. These devices have interrupt sources whose native completion paths
+remain unbound.
+
+The pin manager already supports bank-qualified interrupt acquisition, masking,
+pending reads and acknowledgement. Type-C currently requests PL9 as GPIO input,
+not interrupt function 14. Its locked pin APIs do not supply an ISR-safe handler
+for the leased line. Binding PL9 also requires preserving the independent GPIO
+shutdown response to its latched low level.
+
+The vendor PCK node declares no interrupt property. PCK-600 has mask/status
+registers at offsets `0x030` and `0x038`; their A733 GIC wiring is unproven.
+The vendor driver polls with a 10 ms bound. Neither the node nor the current
+driver establishes that the hardware lacks interrupts. The provisional 50 µs
+spin does not establish a qualified deadline-based retry cadence.
+
+## Existing OS wait machinery
+
+[`sunstone_deadline_wait_until()`](../../include/sunstone_deadline.h) waits for
+an absolute microsecond deadline or notification. Each permanent owner registers
+once and rechecks its device predicate after every wake. The service certificate
+in [`services.c`](../../apps/os/services.c) authenticates the owner's actual
+wait sequence and retains a bounded observation window after wake.
+`board_service_blocked_until()` publishes the certificate. It does not prove
+device completion. PMIC, Type-C and GPIO power wrappers need deadline
+registration before using these certificates.
+
+The supervisor has no exported earliest-expiry helper. Its next check must cover
+service/certificate expiry, renewal, session cutoff and return deadlines.
+[`cpu-return.c`](../../apps/os/cpu-return.c) publishes return claims and drives
+[`quiesce.c`](../../apps/os/quiesce.c); those publications do not currently wake
+the supervisor. Fault claims also run in contexts where task APIs are illegal.
+A deferred wake path must respect those contexts. `sunstone_deadline_kick()`
+only requests timer rearming and does not notify the supervisor.
+
+The legacy [`a733_usb.c`](../../drivers/usb/a733_usb.c) diagnostic adapter uses
+[precise reset holds](legacy-usb-deadlines.md), with a retained virtual timer
+and an idle WFI hook. Its separate diagnostic protocol loop still uses tick
+delays. These paths are separate from the integrated native USB owner and
+remain physically unqualified.
+
+## Pinned references
+
+All archives below are cached under `~/.cache/sunstoneos/sources/`; their SHA-256
+values match [`sources.lock.json`](../../sources.lock.json).
+
+| Reference and location | Revision and SHA-256 |
+| --- | --- |
+| Vendor `sun60iw2p1.dtsi`, `gpu-power/arch/arm64/boot/dts/allwinner/`; PCK lines 745–756, GPIOL 1374–1385, S_TWI0/1 1956–1984 | Linux `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`; `1c7313f655bdc4d018201664adcb1fa1d100280388b8975e193ebbfc6ad4ddfa` |
+| Vendor `pck600_domains.c`, `gpu-power/drivers/pm_domain/`; command and acknowledgement bound, lines 112–121 | Same Linux revision; `2d9c2b60b3b264d1732538815d12570e45386d30b280a1d0b4f5b9780bdc49ee` |
+| Arm PCK-600 TRM, `gpu-isolation/pck600-trm.pdf`; section 4.2, pages 41–42 | `101150_0005_01_en-r0p5-issue01`; `32bd49afc93c0ecdb2b11663f73fbe90742203ac296a1d4aabb8172c3988e6ac` |
+| A733 user manual, `camera-research/A733_User_Manual_V1.00.pdf`; sections 18.11.6.1 and 18.11.7, TWI interrupt enable and control registers | `d0dc4d615be00b76e3a0818d0818eff8f69ffa15`; `cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d` |
+| Board schematic, `board-documents/schematic-v1.2.pdf`; sheet 11, FUSB302 PL9 interrupt and PL8 switch enable | V1.2; `4e0e92afbb1cca97a9c8593b8f2679178d9738f242ea431ed3650e893fe28ed0` |
