@@ -29,6 +29,8 @@ int os_cpu_return_failure(uint32_t site,uint32_t value,const void *caller);
 int os_cpu_return_unexpected_interrupt(unsigned interrupt,const void *caller);
 int os_cpu_return_panic(const char *file,unsigned line,const void *caller);
 int os_cpu_return_clock_done(void);
+int os_cpu_quiesce_register(void);
+int os_cpu_return_pmic_fault(uint32_t,uint32_t,const void *);
 int os_cpu_return_start(void);
 int os_cpu_return_task_privileged(void (*)(void *),void *);
 void os_cpu_return_begin(const uint8_t *,size_t);

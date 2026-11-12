@@ -8,6 +8,9 @@
 #include "fail_record.h"
 #include "sunstone_wifi_credential.h"
 #include "../os/cpu-return-el0.h"
+#ifdef SUNSTONE_A733_OS
+#include "../os/cpu-return.h"
+#endif
 #include "cached.h"
 #include "a733_memory_uncached.h"
 #include "platform.h"
@@ -110,8 +113,11 @@ static void pmic(void *unused)
         if(ready>0)atomic_store_explicit(&providers.shared.pmic_ready,1,memory_order_release);
         else if(ready<0){
             const struct a733_pmic *p=providers.domains.pmic;
-            board_fail_at(SUNSTONE_CRUMB_FAIL_SITE(PMIC),p&&p->rails?a733_power_authority_load(&p->rails->authority):~0u,
-                SUNSTONE_CRUMB_HERE());
+            const uint32_t site=SUNSTONE_CRUMB_FAIL_SITE(PMIC),value=p&&p->rails?a733_power_authority_load(&p->rails->authority):~0u;
+#ifdef SUNSTONE_A733_OS
+            if(!os_cpu_return_pmic_fault(site,value,SUNSTONE_CRUMB_HERE()))
+#endif
+                board_fail_at(site,value,SUNSTONE_CRUMB_HERE());
             park();
         }
         BOARD_PROGRESS(BOARD_SERVICE_PMIC);

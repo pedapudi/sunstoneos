@@ -314,7 +314,7 @@ foreach(pair "return-runtime.c|return-runtime|${os_qualification}/runtime.c"
   list(APPEND os_patches "${patch_file}")
   list(APPEND os_external_inputs "${original}")
 endforeach()
-list(APPEND os_added apps/os/cpu-return.c apps/os/cpu-return-el0.S apps/os/cpu-return-spi.c apps/os/cpu-return-entry.c)
+list(APPEND os_added apps/os/quiesce.c apps/os/cpu-return.c apps/os/cpu-return-el0.S apps/os/cpu-return-spi.c apps/os/cpu-return-entry.c)
 list(APPEND os_include_dirs "${os_build}")
 list(APPEND os_external_inputs "${os_qualification}/runtime.h" "${os_build}/cpu-return-runtime.h")
 if(SUNSTONE_A733_OS_USB_JPEG)

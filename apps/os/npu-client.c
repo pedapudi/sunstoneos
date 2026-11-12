@@ -119,7 +119,8 @@ int os_npu_sdk_bind(const struct npu_runtime *runtime)
 }
 /* Every path that retains the NPU resources names its reason: a record with only "retained" cannot be diagnosed. The site
  * carries the line and the detail a number that is unique to the statement. */
-#define RETAIN(detail) do{board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),(detail),SUNSTONE_CRUMB_HERE());goto retained;}while(0)
+#define RETAIN(detail) do{uint32_t site=SUNSTONE_CRUMB_FAIL_SITE(NPU);const void *here=SUNSTONE_CRUMB_HERE(); \
+    if(!os_npu_quiesce_fault(site,(detail),here))board_fail_note(site,(detail),here);goto retained;}while(0)
 void os_npu_client_task(void *unused)
 {
     (void)unused;struct os_npu_report report={0},*r=&report;
@@ -174,5 +175,6 @@ done:
 retained:
     /* Every NPU resource stays held; board_fail ends the lifetime. */
     if(queued)os_npu_queue_sdk_fail();
-    ss_npu_service_fail();r->retained=1;board_fail(NULL);goto done;
+    ss_npu_service_fail();r->retained=1;
+    if(!os_npu_quiesce_fault(SUNSTONE_CRUMB_FAIL_SITE(NPU),0x60d,SUNSTONE_CRUMB_HERE()))board_fail(NULL);goto done;
 }

@@ -2,6 +2,7 @@
  * owners. Only the final per-core terminal stops the scheduler context. */
 #include "cpu-return.h"
 #include "cpu-return-step.h"
+#include "quiesce.h"
 #include "sunstone_wifi_credential.h"
 #include "cpu-return-el0.h"
 #include "application.h"
@@ -20,7 +21,8 @@
 __attribute__((used,retain)) const uint64_t os_cpu_return_watchdog[5]={
     UINT64_C(0x31544457534f5243),2,SUNSTONE_CRUMB_WATCHDOG_MODE,SUNSTONE_CRUMB_RTC,A733_BOARD_SUPERVISED_SECONDS
 };
-static atomic_uint closing,thermal_done,pmic_stop,pmic_done,ready;
+static atomic_uint closing,thermal_done,pmic_done,ready;
+static uint64_t return_since_us;
 /* Failure return (docs/designs/failure-return.md). failing: a failure claimed
  * the return, so the same stop sequence runs as for success and the first
  * failure leaves with it. prefail: that failure came before the scheduler
@@ -89,6 +91,23 @@ static void terminal(void *argument)
 }
 int os_cpu_return_task_privileged(void (*entry)(void *),void *argument)
 {(void)argument;return entry==terminal;}
+static enum os_quiesce_result pmic_quiesce_step(struct os_quiesce *q)
+{
+    if(atomic_load_explicit(&pmic_done,memory_order_acquire))return OS_QUIESCE_DONE;
+    xTaskNotifyGive(board.handles[0]);return os_quiesce_result(q);
+}
+static struct os_quiesce pmic_quiesce={.owner=OS_QUIESCE_PMIC_OWNER,
+    .order=OS_QUIESCE_PMIC,.step=pmic_quiesce_step};
+int os_cpu_return_pmic_fault(uint32_t site,uint32_t value,const void *caller)
+{return os_quiesce_fault(&pmic_quiesce,site,value,caller);}
+static enum os_quiesce_result terminal_quiesce_step(struct os_quiesce *q)
+{
+    if(!os_quiesce_drained_before(OS_QUIESCE_TERMINALS))return OS_QUIESCE_FAULT;
+    (void)q;
+    return OS_QUIESCE_DONE;
+}
+static struct os_quiesce terminal_quiesce={.owner=OS_QUIESCE_TERMINAL_OWNER,
+    .order=OS_QUIESCE_TERMINALS,.step=terminal_quiesce_step};
 int os_cpu_return_start(void)
 {
 #ifdef SUNSTONE_A733_OS_RADIO_SCAN
@@ -96,6 +115,7 @@ int os_cpu_return_start(void)
 #else
     if(board.session.workload!=2||board.session.deadline_us<=OS_CPU_RETURN_RESERVE_US+10000)return 0;
 #endif
+    if(!os_quiesce_register(&pmic_quiesce)||!os_quiesce_register(&terminal_quiesce))return 0;
     for(unsigned c=0;c<8;++c){
         terminal_handle[c]=xTaskCreateStaticAffinitySet(terminal,"os-cpu-return",1024,(void *)(uintptr_t)c,
             configMAX_PRIORITIES-1,terminal_stack[c],&terminal_state[c],(UBaseType_t)1<<c);
@@ -172,7 +192,7 @@ static int failure_claim(unsigned context,uint32_t site,uint32_t value,const voi
     if(before_scheduler)os_npu_report_unstarted(epoch,board.session.generation);
     atomic_store_explicit(&failing,1,memory_order_release);
     /* The claim also runs where the task API is not legal (the unexpected-interrupt handler with interrupts masked, the SVC handler of
-     * ss_fail, the EL0 fault stub), so it only publishes `failing`; the supervisor, a task, stops the NPU (cpu-return-step.h). */
+     * ss_fail, the EL0 fault stub), so it only publishes `failing`; the supervisor, a task, drives registered owner steps. */
     if(!before_scheduler)return 1;
     atomic_store_explicit(&prefail,1,memory_order_release);
     atomic_store_explicit(&ready,1,memory_order_release);
@@ -233,17 +253,22 @@ void os_cpu_return_thermal_done(void)
 /* Called at the top of the sole PMIC owner loop, before another service step. */
 void os_cpu_return_pmic(void)
 {
-    if(!atomic_load_explicit(&pmic_stop,memory_order_acquire))return;
-    bounded();
-    if(!os_cpu_return_devices_ready())fail(0x741);
+    if(!os_quiesce_requested(&pmic_quiesce))return;
     struct a733_native_usb *p=&providers.shared;
+    unsigned fault=0;
     if(p->pmic.held||p->pmic.retained||p->pmic.failed||p->pmic.active!=A733_PMIC_REQUESTS||
-       atomic_load_explicit(&p->locks.retained,memory_order_acquire))fail(0x739);
-    for(unsigned i=0;i<A733_PMIC_REQUESTS;++i)
-        if(p->pmic.slots[i].state||p->pmic.slots[i].borrow.id)fail(0x73a);
-    if(xSemaphoreGetMutexHolder(p->locks.mutex[0])||xSemaphoreGetMutexHolder(p->locks.mutex[1]))fail(0x73b);
-    sunstone_crumb(SUNSTONE_CRUMB_PMIC_STOP,0);
-    atomic_store_explicit(&pmic_done,1,memory_order_release);
+       atomic_load_explicit(&p->locks.retained,memory_order_acquire))fault=0x739;
+    for(unsigned i=0;!fault&&i<A733_PMIC_REQUESTS;++i)
+        if(p->pmic.slots[i].state||p->pmic.slots[i].borrow.id)fault=0x73a;
+    if(!fault&&(xSemaphoreGetMutexHolder(p->locks.mutex[0])||xSemaphoreGetMutexHolder(p->locks.mutex[1])))fault=0x73b;
+    if(fault){
+        (void)os_cpu_return_pmic_fault(SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_PMIC<<12|fault,
+            fault,SUNSTONE_CRUMB_HERE());
+    }else{
+        sunstone_crumb(SUNSTONE_CRUMB_PMIC_STOP,0);
+        atomic_store_explicit(&pmic_done,1,memory_order_release);
+        os_quiesce_complete(&pmic_quiesce);
+    }
     for(;;)vTaskSuspend(NULL);
 }
 void os_cpu_return_supervise(void)
@@ -252,17 +277,6 @@ void os_cpu_return_supervise(void)
     /* Live and before the deadline: restart WDT0. fail() never returns, and a
      * stalled supervisor stops the restarts, so WDT0 resets one interval later. */
     sunstone_watchdog_restart();
-    /* A failure return that the services cannot finish in time ends at the watchdog, as the failure did before this return existed;
-     * until then it waits for the application's NPU owner to close its queue (cpu-return-step.h). */
-    const int requested=os_cpu_return_requested();
-    switch(os_cpu_return_failure_step(os_cpu_return_failing(),requested,requested?os_cpu_return_devices_ready():1,
-                                      a733_smp_counter()/24,atomic_load_explicit(&failing_since_us,memory_order_acquire),
-                                      OS_FAILURE_RETURN_US)){
-    case OS_FAILURE_STEP_TIMEOUT:fail(0x742);
-    case OS_FAILURE_STEP_DEVICES:fail(0x741);
-    case OS_FAILURE_STEP_WAIT:return;
-    case OS_FAILURE_STEP_NONE:break;
-    }
     if(!os_cpu_return_requested()){
         uint64_t cutoff=os_cpu_return_cutoff();
 #ifdef SUNSTONE_A733_OS_GPU_LINEAR
@@ -273,23 +287,11 @@ void os_cpu_return_supervise(void)
         if(a733_smp_counter()>=cutoff)fail_cutoff();
         return;
     }
-    if(!atomic_load_explicit(&thermal_done,memory_order_acquire))return;
-#ifdef SUNSTONE_A733_OS_DMA
-    if(!os_dma_return_ready())return;
-#endif
-    /* A session that grants the radio may hold the Wi-Fi credential: it leaves RAM, at EL1, before the return proceeds.
-     * The runner uploads a credential only for an application that declares the radio (tools/board.py). */
-    if(os_granted(OS_GRANT_RADIO)){
-        os_wifi_credential_poll();
-        if(!os_wifi_credential_wiped())return;
-    }
-#ifdef SUNSTONE_A733_OS_RADIO_SCAN
-    /* The module is shut down, with its readbacks, while the PMIC service can still turn BLDO5 off. */
-    os_radio_scan_return_request();
-    if(!os_radio_scan_return_ready())return;
-#endif
-    if(!atomic_exchange_explicit(&pmic_stop,1,memory_order_acq_rel))xTaskNotifyGive(board.handles[0]);
-    if(!atomic_load_explicit(&pmic_done,memory_order_acquire))return;
+    uint64_t now=a733_smp_counter()/24;
+    if(!return_since_us)return_since_us=os_cpu_return_failing()?
+        atomic_load_explicit(&failing_since_us,memory_order_acquire):now;
+    if(os_cpu_return_expired(now,return_since_us,OS_FAILURE_RETURN_US))fail(0x742);
+    if(os_quiesce_step(board_fail_note)!=OS_QUIESCE_DONE)return;
     /* This profile's readiness task never calls USB startup. Constructors
      * alone cannot acquire USB ownership or invoke controller callbacks. */
     const struct a733_native_usb *p=&providers.shared;

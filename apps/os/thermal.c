@@ -8,7 +8,7 @@
 #include "os.h"
 #include "application.h"
 #include "cpu-return.h"
-#include "cpu-return-step.h"
+#include "quiesce.h"
 #include "platform.h"
 #include "../board/application.h"
 #include "../board/session.h"
@@ -33,6 +33,19 @@ static struct os_thermal_service {
     uint32_t cpu_critical_millicelsius;
     uint32_t critical_word;               /* the reading behind a CRITICAL stop, for the failure record (critical_reading) */
 } thermal;
+static atomic_uint thermal_stop_authorized;
+static enum os_quiesce_result thermal_quiesce_step(struct os_quiesce *q)
+{
+    if(!os_quiesce_drained_before(OS_QUIESCE_THERMAL)){
+        (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_SITE(THERMAL),0x701,SUNSTONE_CRUMB_HERE());
+        return OS_QUIESCE_FAULT;
+    }
+    atomic_store_explicit(&thermal_stop_authorized,1,memory_order_release);
+    if(thermal.handle)xTaskNotifyGive(thermal.handle);
+    return os_quiesce_result(q);
+}
+static struct os_quiesce thermal_quiesce={.owner=OS_QUIESCE_THERMAL_OWNER,
+    .order=OS_QUIESCE_THERMAL,.step=thermal_quiesce_step};
 /* Recognition may run before the thermal task or the first complete sensor
  * set. Keep load reduced until all channels have valid, nonstale readings. */
 /* One publication binds level to the inclusive freshness deadline. The
@@ -219,7 +232,8 @@ static void cancel_from(uint32_t site,const void *here)
  os_npu_thermal(0,1,0,a733_smp_counter()/24);
  atomic_store_explicit(&load_state,A733_THERMAL_CRITICAL,memory_order_release);
  atomic_store_explicit(&thermal.failed,1,memory_order_release);
- board_fail_at(site,thermal.critical_word?thermal.critical_word:thermal.driver.fault_site,here);}
+ uint32_t value=thermal.critical_word?thermal.critical_word:thermal.driver.fault_site;
+ if(!os_quiesce_fault(&thermal_quiesce,site,value,here))board_fail_at(site,value,here);}
 /* Each cancel() and fault() call site records its own line and address. */
 #define cancel() cancel_from(SUNSTONE_CRUMB_FAIL_SITE(THERMAL),SUNSTONE_CRUMB_HERE())
 static void publish_load(enum a733_thermal_level level)
@@ -353,7 +367,7 @@ static int step(void)
      * no THS read. Quantizing this through 25 ms reads can exceed 125 ms. */
     record_reading(a733_smp_counter()/24,a733_thermal_policy_level(&thermal.policy));
     /* After the thermal step, so a CRITICAL reading ends the session first. */
-    if(os_cpu_clock_step(&thermal.policy)<0)return fault();
+    if(os_cpu_clock_step(&thermal.policy)<0&&!os_cpu_return_failing())return fault();
     return 1;
 }
 /* Ticks (1 ms) the owner may sleep after a step. It steps on the next tick while it has work that cannot wait: it is
@@ -373,28 +387,27 @@ static TickType_t idle_ticks(void)
     uint64_t ticks=(until-now)/(1000000u/configTICK_RATE_HZ);
     return ticks<1?1:ticks>20?20:(TickType_t)ticks;
 }
+/* The owner performs one stop operation per pass; it never waits inside a
+ * supervisor callback. Keep sampling until the earlier classes have drained. */
+static unsigned stop_masked;
+static void thermal_stop_step(void)
+{
+    if(!live()){cancel();return;}
+    if(!stop_masked){if(!mask()){cancel();return;}stop_masked=1;return;}
+    if(*(volatile uint32_t *)(uintptr_t)thermal.irq.distributor&(UINT32_C(1)<<31))return;
+    enum a733_thermal_result result=a733_thermal_stop(&thermal.driver,deadline());
+    if(result==A733_THERMAL_BUSY)return;
+    if(result!=A733_THERMAL_STOPPED||!live()){cancel();return;}
+    os_cpu_return_thermal_done();os_quiesce_complete(&thermal_quiesce);
+}
 void os_thermal_task(void *unused)
 {
     (void)unused;
     for(;;){
-        if(step()==1)BOARD_PROGRESS(OS_SERVICE_THERMAL);
-        if(os_cpu_return_requested()&&os_cpu_return_clock_done()){
-            switch(os_cpu_return_thermal_step(os_cpu_return_devices_ready(),os_cpu_return_failing())){
-            case OS_THERMAL_STEP_EXIT:cancel();platform_exit(6);
-            case OS_THERMAL_STEP_WAIT:vTaskDelay(1);continue;     /* the application's NPU owner is closing its queue (cpu-return-step.h) */
-            case OS_THERMAL_STEP_STOP:break;
-            }
-            if(!mask()){cancel();platform_exit(6);}
-            while((*(volatile uint32_t *)(uintptr_t)thermal.irq.distributor&(UINT32_C(1)<<31))){
-                if(!live()){cancel();platform_exit(6);}vTaskDelay(1);
-            }
-            enum a733_thermal_result result;
-            do{result=a733_thermal_stop(&thermal.driver,deadline());
-                if(result==A733_THERMAL_BUSY){if(!live()){cancel();platform_exit(6);}vTaskDelay(1);}
-            }while(result==A733_THERMAL_BUSY);
-            if(result!=A733_THERMAL_STOPPED||!live()){cancel();platform_exit(6);}
-            else{os_cpu_return_thermal_done();for(;;)vTaskSuspend(NULL);}
-        }
+        if(atomic_load_explicit(&thermal_stop_authorized,memory_order_acquire)&&os_quiesce_result(&thermal_quiesce)!=OS_QUIESCE_FAULT){
+            thermal_stop_step();
+            if(os_quiesce_result(&thermal_quiesce)==OS_QUIESCE_DONE)for(;;)vTaskSuspend(NULL);
+        }else if(step()==1)BOARD_PROGRESS(OS_SERVICE_THERMAL);
         TickType_t wait=idle_ticks();
         if(wait>1)(void)ulTaskNotifyTake(pdTRUE,wait);else vTaskDelay(1);
     }
@@ -425,6 +438,7 @@ int os_thermal_start(void)
     const struct os_session *s=os_session_admitted();
     if(!s)return 0;
     thermal.cpu_pages=os_cpu_boot_point_needed();
+    if(!os_cpu_quiesce_register()||!os_quiesce_register(&thermal_quiesce))return 0;
     if(!construct(s))return 0;
     /* A session that carries the CPU clock record, or an A76 application, starts from boot0's CPU-B point; the check is a
      * read of the CPU PLL words. Any other session reads nothing of the clock tree. */

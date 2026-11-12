@@ -72,7 +72,7 @@ CFLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mge
           '-ffunction-sections', '-fdata-sections', '-O2', '-g', '-Wall', '-Wextra', '-include', 'stdint.h']
 
 # OS and board sources that run unmodified.
-OS_SOURCES = ['apps/os/application.c', 'apps/os/large.c', 'apps/os/large_load.c', 'drivers/storage/fat32_ro.c', 'kernel/appmem/app_region.c', 'kernel/appmem/large_admit.c', 'kernel/umem/umem.c', 'apps/os/services.c', 'apps/os/capture.c', 'apps/os/session.c', 'apps/os/grants.c', 'apps/os/start.c',
+OS_SOURCES = ['apps/os/quiesce.c', 'apps/os/application.c', 'apps/os/large.c', 'apps/os/large_load.c', 'drivers/storage/fat32_ro.c', 'kernel/appmem/app_region.c', 'kernel/appmem/large_admit.c', 'kernel/umem/umem.c', 'apps/os/services.c', 'apps/os/capture.c', 'apps/os/session.c', 'apps/os/grants.c', 'apps/os/start.c',
               'apps/os/thermal.c', 'apps/os/cpu.c', 'apps/os/perf.c', 'drivers/clock/a733_cpu_clock.c', 'drivers/power/a733_perf_mode.c', 'apps/os/admission.c', 'apps/board/main.c', 'apps/os/sealed.c',
               'runtime/deadline.c', 'runtime/deadline-a733.c', 'platform/a733-smp-cached/irq_table.c',
               # The I2S capture service is in every image; an ungranted session never opens its stream.

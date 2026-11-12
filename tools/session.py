@@ -144,6 +144,49 @@ UNSUPPORTED = {'os_dma_profile': 'DMA service record and its physical authority'
                'usb_memory_extent_valid': 'USB memory extent (USB class devices)'}
 
 
+def quiesce_actors(plan, manifest=None):
+    """Owner names required by the session records, granted devices and card inputs.
+
+    This is an inventory, not launch admission. A synthetic plan can cover an
+    OS grant whose hardware facts the session builder cannot yet supply.
+    Optional manifest devices enter the inventory only when actually granted.
+    """
+    tool = load('session_quiesce_manifest', ROOT / 'tools/sunstone-manifest.py')
+    grants = {row[0] for row in tool.os_service_rows('OS_GRANT_ROWS')}
+    by_record = {extent.removeprefix('SS_EXTENT_').lower(): grant
+                 for grant, extent, *_ in tool.os_service_rows('OS_RECORD_ROWS')}
+    by_record.update({name.lower(): name for name in grants})
+    actors = {'THERMAL_OWNER', 'PMIC_OWNER', 'TERMINAL_OWNER'}
+    for record in plan.get('services', ()):
+        if record == 'thermal':
+            continue
+        if record not in by_record:
+            raise SessionError('quiesce: no service grant for record %s' % record)
+        actors.add(by_record[record])
+    device_owners = {'audio-i2s': 'AUDIO', 'audio-headset': 'HEADSET'}
+    devices = plan.get('devices', 0)
+    known_devices = 0
+    for bit in tool.DEVICES.values():
+        known_devices |= bit
+    if devices & ~known_devices:
+        raise SessionError('quiesce: unknown granted device bits %#x' % (devices & ~known_devices))
+    for name, bit in tool.DEVICES.items():
+        if not devices & bit:
+            continue
+        owner = 'USB' if name.startswith('usb-') else device_owners.get(name, name.upper().replace('-', '_'))
+        actors.add(owner)
+    workload = plan.get('workload', plan.get('prefix', {}).get('workload', 2))
+    if workload in (0, 1, 4):
+        actors.add('USB')
+    if workload in (1, 3):
+        actors.add('RADIO')
+    manifest = manifest if manifest is not None else plan.get('manifest', {})
+    if (plan.get('storage') or {'os_sd_owner_task', 'os_sd_quiesce_register'} & set(plan.get('symbols', {})) or
+            any(row.get('source_bytes', 0) for row in manifest.get('large_regions', ()))):
+        actors.add('STORAGE')
+    return sorted(actors)
+
+
 def width(fmt):
     return struct.calcsize('<' + fmt)
 
@@ -389,7 +432,7 @@ def build(image, out, manifest=None, npu_declaration=None, inputs=(), decoder=No
               'manifest_sha256': plan['manifest_sha256'], 'application': plan['manifest']['name'], 'profile': plan['profile'],
               'facts': str(Path(fact_file).resolve().relative_to(ROOT)) if Path(fact_file).resolve().is_relative_to(ROOT) else str(fact_file),
               'facts_sha256': hashlib.sha256(Path(fact_file).read_bytes()).hexdigest(),
-              'services': plan['services'], 'devices': plan['devices'], 'devices_left_out': plan['devices_left_out'], 'flags': plan['flags'], 'session_bytes': len(raw),
+              'services': plan['services'], 'quiesce_actors': quiesce_actors(plan), 'devices': plan['devices'], 'devices_left_out': plan['devices_left_out'], 'flags': plan['flags'], 'session_bytes': len(raw),
               'session_sha256': hashlib.sha256(raw).hexdigest(), **ids,
               'inputs': [{'file': 'template/input-%d.bin' % i, 'bytes': len(v), 'sha256': hashlib.sha256(v).hexdigest()} for i, v in enumerate(values)]}
     if 'npu' in plan['services']:

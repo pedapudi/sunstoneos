@@ -1,3 +1,4 @@
+#include "quiesce.h"
 /* Optional OS catalogue runtime. The board owns every power/clock provider;
  * this consumer owns one fixed RAM reservation, startup row and client slot. */
 #include "os.h"
@@ -86,6 +87,17 @@ static atomic_uint bootstrap_ran; /* The bootstrap task has run: the service may
 static unsigned creating; /* Only while os_npu_start creates its two tasks. */
 static int clock_now(uint64_t *now)
 {return a733_counter_clock_now(&providers.shared.counter,now);}
+static enum os_quiesce_result npu_quiesce_step(struct os_quiesce *q)
+{
+    /* Only the application closes its producer at a safe point. Forcing its
+     * queue closed here would turn an outstanding completion into retention. */
+    if(os_npu_retirement_check())return OS_QUIESCE_DONE;
+    return os_quiesce_result(q);
+}
+static struct os_quiesce npu_quiesce={.owner=OS_QUIESCE_NPU,
+    .order=OS_QUIESCE_QUEUES,.step=npu_quiesce_step};
+int os_npu_quiesce_fault(uint32_t site,uint32_t value,const void *caller)
+{return os_quiesce_fault(&npu_quiesce,site,value,caller);}
 struct os_npu_failure os_npu_first_failure;
 struct os_npu_fault_info os_npu_last_fault;
 #ifdef SUNSTONE_NPU_FAULT_HOOK
@@ -141,7 +153,8 @@ static int fail_at(uint32_t line,enum npu_service_operation op,unsigned model,ui
         ((uint32_t)op&7u)<<24|((uint32_t)ticket&255u)<<16;
     /* First-note ownership belongs to the existing board latch. In particular,
      * a native register or startup failure must survive this caller's refusal. */
-    board_fail_note(site,(uint32_t)observed,where);
+    const int returning_fault=os_npu_quiesce_fault(site,(uint32_t)observed,where);
+    if(!returning_fault)board_fail_note(site,(uint32_t)observed,where);
     atomic_store_explicit(&npu.failed,1,memory_order_release);
     unsigned empty=0;
     if(atomic_compare_exchange_strong_explicit(&os_npu_first_failure.ready,&empty,1,
@@ -166,7 +179,7 @@ static int fail_at(uint32_t line,enum npu_service_operation op,unsigned model,ui
         f->irq_stopped=atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire);
         atomic_store_explicit(&f->ready,2,memory_order_release);
     }
-    board_fail_at(site,(uint32_t)observed,where);return -1;
+    if(!returning_fault)board_fail_at(site,(uint32_t)observed,where);return -1;
 }
 #define FAIL_REQUEST(op,model,ticket,reply,expected,observed) \
     fail_at(__LINE__,(op),(model),(ticket),(reply),(uint64_t)(expected),(uint64_t)(observed),SUNSTONE_CRUMB_HERE(),NULL)
@@ -178,7 +191,13 @@ static void sdk_notify(void *unused)
 void os_npu_queue_notify(void){sdk_notify(NULL);}
 static int fail(void)
 {sdk_notify(NULL);return FAIL_REQUEST(NPU_SERVICE_STATUS,UINT32_MAX,0,NULL,0,npu.runtime.native.failed);}
-static void fatal(void *v){(void)v;(void)fail();}
+static void fatal(void *v)
+{
+    (void)v;(void)fail();
+    /* The native adapter traps if this callback returns. Its caller is the
+     * NPU owner task; keep that task parked with its resources retained. */
+    if(os_quiesce_result(&npu_quiesce)==OS_QUIESCE_FAULT)for(;;)vTaskSuspend(NULL);
+}
 static int live(void)
 {return npu.started&&board_live(NULL)&&!atomic_load_explicit(&npu.failed,memory_order_acquire);}
 static uint64_t capped(uint64_t now)
@@ -797,6 +816,7 @@ int os_npu_start(void)
     extern int os_npu_diagnostic_bind(struct npu_runtime *) __attribute__((weak));
     /* Not granted: no binding, task, interrupt or register access. */
     if(!os_granted(OS_GRANT_NPU))return 1;
+    if(!os_quiesce_register(&npu_quiesce))return REFUSE();
     if(!ss_npu_service_bind_event(sdk_notify,NULL))return REFUSE();
     const struct os_session *s=os_session_admitted();
     if(!s)return REFUSE();
