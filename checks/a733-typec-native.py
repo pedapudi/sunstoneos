@@ -155,7 +155,14 @@ def fusb_write(reg,value):
 def code(uc,a,n,context):
  word=get(a);masked=word&0xffffffe0;rt=word&31
  values={0xd5384240:4,0xd5381000:5,0xd53b0020:(4<<24)|(4<<16)}
- if masked==0xd53be020:values[masked]=test_time()*24
+ if masked==0xd53be020:
+  countdown=variable('typec_cross_clock')
+  if countdown:
+   put(symbols['typec_cross_clock'],countdown-1)
+   if countdown==1:
+    put(symbols['typec_test_time'],variable('typec_access_deadline',8),8)
+    put(symbols['typec_deadline_crossed'],1)
+  values[masked]=test_time()*24
  if masked in values:
   assert rt<29;uc.reg_write(UC_ARM64_REG_X0+rt,values[masked]);uc.reg_write(UC_ARM64_REG_PC,a+4)
  elif masked in (0xd5087800,0xd5087820):
@@ -337,7 +344,8 @@ stop_cases=[(1,9,'stop-constructor'),*((1,10+i,'stop-stage-'+str(i)) for i in ra
  (14,3,'stop-unknown-stage'),(15,3,'stop-revoked-inflight'),
  (16,18,'stop-lock-held-before-request'),(1,20,'stop-enable-pending'),(17,21,'stop-already-discharged'),
  (18,3,'stop-local-deadline-between-accesses'),(19,3,'stop-shared-deadline-between-accesses'),
- (20,3,'stop-pin-readback-after-one-tick'),(21,18,'stop-lock-contention-pending')]
+ (20,3,'stop-pin-readback-after-one-tick'),(21,18,'stop-lock-contention-pending'),
+ (22,3,'stop-shared-deadline-between-clock-samples')]
 if args.stop_cases:
  assert set(args.stop_cases)<=set(name for _,_,name in stop_cases)
  stop_cases=[case for case in stop_cases if case[2] in args.stop_cases]

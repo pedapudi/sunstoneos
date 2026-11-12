@@ -27,7 +27,8 @@ static int now(void *p,uint64_t *out)
     if(!intact(n)||!a733_platform_lock_live(n->config.locks)||
        n->config.locks->now(n->config.locks->context,out)!=1)return 0;
     uint64_t deadline=atomic_load_explicit(&n->stop_deadline,memory_order_acquire);
-    return !deadline||*out<deadline;
+    uint64_t shared=n->config.locks->deadline?n->config.locks->deadline(n->config.locks->context):0;
+    return (!deadline||*out<deadline)&&(!shared||*out<shared);
 }
 static int outside(void *p,const void *x,unsigned long bytes)
 {

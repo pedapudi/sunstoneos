@@ -33,6 +33,7 @@ volatile unsigned typec_steady_polls,typec_steady_reads,typec_steady_mmio,typec_
 volatile unsigned typec_stop_case,typec_low_fault,typec_restore_fault,typec_pin_restore_fault;
 volatile uint64_t typec_shared_deadline,typec_access_deadline;
 volatile unsigned typec_cross_deadline,typec_deadline_crossed,typec_late_mmio,typec_pin_delay;
+volatile unsigned typec_cross_clock;
 static unsigned stop_check(void);
 BaseType_t xTaskGetSchedulerState(void)
 {return scheduler?taskSCHEDULER_RUNNING:taskSCHEDULER_NOT_STARTED;}
@@ -269,6 +270,7 @@ static unsigned stop_check(void)
         if(which==18)deadline=typec_access_deadline;
         else typec_shared_deadline=typec_access_deadline;
     }
+    if(which==22)typec_shared_deadline=typec_access_deadline=typec_test_time+500;
     if(which==20)typec_pin_delay=1;
     current_task=4;
     assert(a733_typec_native_stop_request(&port,deadline)==1);
@@ -278,6 +280,14 @@ static unsigned stop_check(void)
     assert(a733_typec_native_provider_stop_poll(&port)==-1);
     assert(a733_typec_native_power_stop_poll(&port)==-1);
     assert(typec_mmio_count==accesses&&a733_typec_native_stop_result(&port)==0);
+    if(which==22){
+        uint64_t sample=0;current_task=1;typec_test_time=typec_shared_deadline-1;
+        /* The shared live check samples just before its deadline. The native
+         * time callback must also reject its own later sample at the limit. */
+        typec_cross_clock=2;
+        assert(port.bus_ops.now(&port,&sample)==0);
+        assert(typec_deadline_crossed==1&&sample==typec_shared_deadline);
+    }
     if(which==8||which==21)queue_owner[A733_PLATFORM_REGISTER_LOCK]=(void *)4;
     if(which==10){
         current_task=1;
@@ -333,6 +343,7 @@ static unsigned stop_check(void)
     }
     if(which==20)assert(!typec_pin_delay);
     if(which==21)assert(saw_contention);
+    if(which==22)assert(!typec_late_mmio);
     accesses=typec_mmio_count;
     for(unsigned i=0;i<3;i++){
         current_task=3;assert(a733_typec_native_power_stop_poll(&port)!=0);
