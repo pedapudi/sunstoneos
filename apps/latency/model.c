@@ -31,6 +31,7 @@ static void controller(void *argument)
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     configASSERT(result.scheduler.magic == SS_SCHED_TRACE_MAGIC);
     configASSERT(result.scheduler.version == SS_SCHED_TRACE_VERSION);
+    configASSERT(result.scheduler.history_capacity == SS_SCHED_TRACE_HISTORY);
     configASSERT(result.scheduler.tick_count && result.scheduler.tick_count <= SS_SCHED_TRACE_TICKS);
     configASSERT(!result.scheduler.tick_dropped || result.scheduler.tick_count == SS_SCHED_TRACE_TICKS);
     unsigned actual_fifo_cores = 0, linked_wakes = 0;
@@ -59,6 +60,7 @@ static void controller(void *argument)
         actual_fifo_cores += actual;
         const struct ss_sched_trace_wake_core *row = &result.scheduler.wake[c];
         const struct ss_sched_trace_wake *w = &row->maximum;
+        const struct ss_sched_trace_wake_history *history = &result.scheduler.history[c];
         unsigned count = 0;
         for (unsigned kind = 0; kind < 3; ++kind) {
             count += row->summary[kind][0].count;
@@ -76,6 +78,12 @@ static void controller(void *argument)
         number(" switch_irq_seq=", w->selection.irq_sequence);
         number(" irq_end=", w->irq.stamp[4]);
         number(" switch_begin=", w->selection.begin);
+        number(" latest_pre_running_irq=", history->latest_sequence);
+        number(" trailing_irqs=", history->trailing_count);
+        number(" trailing_work=", history->trailing_work);
+        number(" future_irqs=", history->future_irqs);
+        number(" irq_overwritten=", history->irq_overwritten);
+        number(" switch_overwritten=", history->switch_overwritten);
         platform_puts("\n");
         configASSERT(w->running - w->ready == result.phases[SS_LAT_BUSY][c].metric[SS_LAT_SCHED_BUSY].maximum);
         configASSERT(w->ready >= result.phase_bounds[SS_LAT_BUSY][0] && w->running <= result.phase_bounds[SS_LAT_BUSY][1]);
@@ -87,6 +95,15 @@ static void controller(void *argument)
             configASSERT(w->ready <= w->irq.stamp[4] && w->irq.stamp[4] <= w->selection.begin);
             configASSERT(w->selection.begin <= w->selection.end && w->selection.end <= w->running);
             configASSERT(w->selection.selected_slot == w->running_slot && w->selection.irq_sequence == w->irq.sequence);
+            configASSERT(!history->trailing_count && !(w->flags & SS_SCHED_WAKE_HISTORY_LOST));
+        }
+        if (c == 0 && !row->summary[0][0].count && !row->summary[1][0].count) {
+            /* An entirely unmatched primary must still expose real measured
+             * interference and its selecting exit, not observation-side loss. */
+            configASSERT((w->flags & SS_SCHED_WAKE_MULTIPLE) && !(w->flags & SS_SCHED_WAKE_HISTORY_LOST));
+            configASSERT(w->irq.sequence && w->irq.sequence == w->selection.irq_sequence);
+            configASSERT(history->latest_end <= w->running);
+            configASSERT(history->trailing_count || w->irq.previous_end > w->ready || w->selection.previous_end > w->ready);
         }
     }
     number("actual_fifo_cores=", actual_fifo_cores);

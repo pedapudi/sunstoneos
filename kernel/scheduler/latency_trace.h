@@ -16,10 +16,14 @@
 #ifndef SS_SCHED_TRACE_TICKS
 #error "The diagnostic must declare SS_SCHED_TRACE_TICKS"
 #endif
+#ifndef SS_SCHED_TRACE_HISTORY
+#error "The diagnostic must declare SS_SCHED_TRACE_HISTORY"
+#endif
+_Static_assert(SS_SCHED_TRACE_HISTORY > 0, "diagnostic event history must retain an entry");
 #define SS_SCHED_TRACE_CORES 8u
 #define SS_SCHED_TRACE_RECORDS (2u * SS_OWNER_BATCH)
 #define SS_SCHED_TRACE_MAGIC UINT64_C(0x5353534348545231)
-#define SS_SCHED_TRACE_VERSION 3u
+#define SS_SCHED_TRACE_VERSION 4u
 
 /* All timestamps use CNTVCT. A command retains the timestamps after masking,
  * reference, publish, before/after drain, after slice refresh and before unmask.
@@ -74,7 +78,7 @@ struct ss_sched_trace_tick { uint64_t start, end; };
 enum ss_sched_trace_wake_flag {
     SS_SCHED_WAKE_IRQ = 1u, SS_SCHED_WAKE_SWITCH = 2u,
     SS_SCHED_WAKE_LINKED = 4u, SS_SCHED_WAKE_MULTIPLE = 8u,
-    SS_SCHED_WAKE_UNMATCHED = 16u
+    SS_SCHED_WAKE_UNMATCHED = 16u, SS_SCHED_WAKE_HISTORY_LOST = 32u
 };
 /* An IRQ here is an ordinary owner-exit call after the PMR reentry guard.
  * Stamps: start, eligibility complete, API mask set, work done, mask restored.
@@ -101,6 +105,13 @@ struct ss_sched_trace_wake_core {
      * contribute only whole-wake durations, never an attributed tail. */
     struct ss_sched_trace_summary summary[3][2];
 };
+struct ss_sched_trace_wake_history {
+    /* Latest completed ordinary exit no later than running. Trailing exits
+     * follow the selecting IRQ through running. Overwritten counts are totals
+     * at observation; future_irqs counts retained exits excluded by running. */
+    uint64_t latest_start, latest_end, latest_work, latest_result, latest_sequence;
+    uint64_t trailing_count, trailing_work, irq_overwritten, switch_overwritten, future_irqs;
+};
 _Static_assert(sizeof(struct ss_sched_trace_wake_core) == 72 * sizeof(uint64_t),
                "version 3 wake record layout");
 struct ss_sched_trace_report {
@@ -113,6 +124,11 @@ struct ss_sched_trace_report {
     uint64_t tick_count, tick_dropped;
     struct ss_sched_trace_tick tick[SS_SCHED_TRACE_TICKS];
     struct ss_sched_trace_wake_core wake[SS_SCHED_TRACE_CORES];
+    /* Version 4 preserves the v3 prefix. Histories rotate within declared
+     * capacity; counters expose replacement, while a per-wake loss flag means
+     * a record needed to reconstruct that wake was no longer retained. */
+    uint64_t history_capacity;
+    struct ss_sched_trace_wake_history history[SS_SCHED_TRACE_CORES];
 };
 _Static_assert(offsetof(struct ss_sched_trace_report, wake) ==
     offsetof(struct ss_sched_trace_report, tick) + sizeof(((struct ss_sched_trace_report *)0)->tick),
@@ -127,9 +143,14 @@ struct ss_sched_trace_lock {
 };
 static inline uint64_t ss_sched_trace_now(void)
 {
+#ifdef SS_SCHED_TRACE_HOST_TEST
+    extern uint64_t ss_sched_trace_test_now(void);
+    return ss_sched_trace_test_now();
+#else
     uint64_t value;
     __asm__ volatile("isb\n mrs %0, cntvct_el0" : "=r"(value) :: "memory");
     return value;
+#endif
 }
 void ss_sched_trace_freeze(unsigned);
 void ss_sched_trace_snapshot(struct ss_sched_trace_report *);

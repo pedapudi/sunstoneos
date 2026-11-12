@@ -11,11 +11,13 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['apps/latency/host.py', 'kernel/scheduler/latency_trace.h',
+                'kernel/scheduler/latency_trace.c', 'checks/scheduler-latency-history.c',
                 'checks/sunstone-image-link.py', 'include/sunstone_latency.h']
 GATE_RUNS = [['--output', '{output}']]
 FREQUENCY = 24_000_000
@@ -57,12 +59,16 @@ def fixture(version=1):
         'startup': [[500 + 2 * c, 600 + 2 * c] for c in range(8)],
         'tick_count': 1, 'tick_dropped': 0, 'ticks': [[3050, 3100]],
     }
-    if version == 3:
+    if version >= 3:
         report['wake'] = [[0] * 72 for _ in range(8)]
         report['wake'][1] = [1900, 2200, 7, 3,
             2000, 2010, 2020, 2100, 2120, 10, 10, 10, 10, 10,
             1, 1, 5, 1800, 2130, 2170, 3, 7, 1800, 5] + [0] * 48
         wake_summary(report['wake'][1], 1)
+    if version == 4:
+        report['history_capacity'] = 16
+        report['history'] = [[0] * 10 for _ in range(8)]
+        report['history'][1] = [2000, 2120, 80, 1, 5, 0, 0, 0, 0, 0]
     return report
 
 
@@ -96,9 +102,13 @@ def pack(report):
     for pair in report['ticks']:
         words.extend(pair)
     words.extend([0] * (2 * (ticks - len(report['ticks']))))
-    if report['header'][1] == 3:
+    if report['header'][1] >= 3:
         for wake in report['wake']:
             words.extend(wake)
+    if report['header'][1] == 4:
+        words.append(report['history_capacity'])
+        for history in report['history']:
+            words.extend(history)
     payload = struct.pack(f'<{len(words)}Q', *words)
     return payload + bytes((-len(payload)) % 64)
 
@@ -424,18 +434,85 @@ def run(decode):
     bad['wake'][1][64:72] = [1, 200, 200, 0, 0, 0, 0, 0]
     rejected('unmatched samples cannot claim an IRQ tail', pack(bad))
     rejected('truncated version 3 record', pack(v3)[:-8])
+    v4 = fixture(version=4)
+    accepted('version 4 history preserves selecting exit', v4, classified('slow', tail=200))
+    future = copy.deepcopy(v4)
+    future['history'][1][-1] = 3
+    accepted('post-running IRQs do not replace selecting chain', future, classified('slow', tail=200))
+    trailing = copy.deepcopy(v4)
+    trailing['history'][1] = [2180, 2190, 6, 0, 6, 1, 6, 0, 0, 0]
+    trailing['wake'][1][2] = 27
+    wake_summary(trailing['wake'][1], 2)
+    accepted('post-switch pre-running IRQ remains visible', trailing, classified('unmatched'))
+    rotated = copy.deepcopy(v4)
+    rotated['history'][1][7] = 99
+    rotated['history'][1][4] = 115
+    rotated['wake'][1][16] = rotated['wake'][1][23] = 115
+    accepted('ordinary history rotation does not imply lost wake', rotated, classified('slow', tail=200))
+    for name, field, value in (('latest IRQ ends after captured running', 1, 2201),
+                                ('trailing count differs from sequence', 5, 2),
+                                ('trailing work exceeds interval', 6, 1000),
+                                ('future count exceeds retained history', 9, 17)):
+        bad = copy.deepcopy(trailing)
+        bad['history'][1][field] = value
+        rejected(name, pack(bad))
+    bad = copy.deepcopy(v4)
+    bad['wake'][1][2] = 51
+    wake_summary(bad['wake'][1], 2)
+    rejected('loss flag requires overwritten history', pack(bad))
+    for name, field, value in (('selecting IRQ was already overwritten', 7, 5),
+                                ('switch was already overwritten', 8, 7),
+                                ('overwrite count differs from latest IRQ', 7, 99)):
+        bad = copy.deepcopy(v4)
+        bad['history'][1][field] = value
+        rejected(name, pack(bad))
+    bad = copy.deepcopy(v4)
+    bad['wake'][1][16] = bad['wake'][1][23] = 17
+    bad['history'][1][4] = 17
+    rejected('retained IRQ exceeds history window', pack(bad))
+    bad = copy.deepcopy(v4)
+    bad['history'][0][9] = 1
+    rejected('empty wake cannot retain history observations', pack(bad))
+    rejected('truncated version 4 record', pack(v4)[:-8])
     return cases
+
+
+def check_history(source, output):
+    """Run the actual recorder with a controlled host counter, then decode it."""
+    fixture_source = source / 'checks/scheduler-latency-history.c'
+    recorder = source / 'kernel/scheduler/latency_trace.c'
+    binary, payload = output / 'history-check', output / 'history-report.bin'
+    command = ['/usr/bin/clang', '-std=c11', '-O1', '-g', '-fsanitize=address,undefined',
+               '-fno-omit-frame-pointer', '-DSUNSTONE_LATENCY=1', '-DSUNSTONE_SCHED_LATENCY_TRACE=1',
+               '-DSS_SCHED_TRACE_WAITS=2', '-DSS_SCHED_TRACE_TICKS=3', '-DSS_SCHED_TRACE_HISTORY=16',
+               '-DSS_SCHED_TRACE_HOST_TEST=1', '-I' + str(source / 'include'),
+               str(fixture_source), str(recorder), '-o', str(binary)]
+    compiled = subprocess.run(command, capture_output=True, text=True)
+    (output / 'history-compile.log').write_text(compiled.stdout + compiled.stderr)
+    compiled.check_returncode()
+    ran = subprocess.run([str(binary), str(payload)], capture_output=True, text=True)
+    (output / 'history-run.log').write_text(ran.stdout + ran.stderr)
+    ran.check_returncode()
+    decode, _ = load_decoder(source)
+    report = decode(payload.read_bytes(), FREQUENCY)
+    assert report['version'] == 4 and report['history_capacity'] == 16
+    expected = ('slow', 'unmatched', 'unmatched', 'unmatched', 'fast', 'slow', 'unmatched', 'unmatched')
+    assert tuple(row['maximum']['class'] for row in report['wake_chains']) == expected
+    return ['recorder history: future IRQ', 'recorder history: trailing IRQ',
+            'recorder history: selecting IRQ overwritten', 'recorder history: latest switch task differs',
+            'recorder history: old rotation retained', 'recorder history: future switches',
+            'recorder history: selection overwritten', 'recorder history: preceding IRQ ambiguity']
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, default=ROOT)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--case', choices=('decoder', 'symbols'), action='append')
+    parser.add_argument('--case', choices=('decoder', 'symbols', 'history'), action='append')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     source = args.source.resolve()
-    selected = args.case or ('decoder', 'symbols')
+    selected = args.case or ('decoder', 'symbols', 'history')
     cases, inputs = [], {}
     if 'decoder' in selected:
         decode, path = load_decoder(source)
@@ -445,6 +522,11 @@ def main():
         symbol_cases, path = check_symbols(source)
         cases.extend(symbol_cases)
         inputs['symbol_boundary'] = dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    if 'history' in selected:
+        cases.extend(check_history(source, args.output))
+        for name in ('kernel/scheduler/latency_trace.c', 'checks/scheduler-latency-history.c'):
+            path = source / name
+            inputs[name] = dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
     result = dict(passed=True, physical_access=False, constructed_report_records=True,
                   inputs=inputs, cases=cases)
     (args.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')

@@ -11,8 +11,9 @@ static struct {
     struct ss_sched_trace_drain drain[2];
     struct ss_sched_trace_irq irq;
     uint64_t guard_end;
-    struct ss_sched_trace_irq_chain last_irq;
-    struct ss_sched_trace_switch selection;
+    uint64_t irq_sequence, irq_end, switch_sequence, switch_end;
+    struct ss_sched_trace_irq_chain irq_history[SS_SCHED_TRACE_HISTORY];
+    struct ss_sched_trace_switch switch_history[SS_SCHED_TRACE_HISTORY];
     struct {
         uint64_t start, end, serving, ticket;
         unsigned valid;
@@ -40,6 +41,7 @@ void ss_sched_trace_snapshot(struct ss_sched_trace_report *out)
     out->version = SS_SCHED_TRACE_VERSION;
     out->waits_capacity = SS_SCHED_TRACE_WAITS;
     out->ticks_capacity = SS_SCHED_TRACE_TICKS;
+    out->history_capacity = SS_SCHED_TRACE_HISTORY;
     for (unsigned core = 0; core < SS_SCHED_TRACE_CORES; ++core) {
         out->core[core].drain = state[core].drain[state[core].drain_best];
         for (unsigned marker = 0; marker < 2; ++marker)
@@ -129,34 +131,39 @@ void ss_sched_trace_irq_end(unsigned core, unsigned result)
     irq->result = result;
     ++row->irq_count;
     if (irq->stamp[3] - irq->stamp[0] > row->irq.stamp[3] - row->irq.stamp[0]) row->irq = *irq;
-    struct ss_sched_trace_irq_chain *last = &state[core].last_irq;
-    last->previous_end = last->stamp[4];
-    ++last->sequence;
+    uint64_t sequence = ++state[core].irq_sequence;
+    struct ss_sched_trace_irq_chain *last = &state[core].irq_history[(sequence - 1) % SS_SCHED_TRACE_HISTORY];
+    last->previous_end = state[core].irq_end;
+    last->sequence = sequence;
     last->stamp[0] = irq->stamp[0];
     last->stamp[1] = state[core].guard_end;
     for (unsigned i = 1; i < 4; ++i) last->stamp[i + 1] = irq->stamp[i];
     for (unsigned i = 0; i < 5; ++i) last->service[i] = irq->service[i];
     last->passes = irq->passes;
     last->result = result;
+    state[core].irq_end = irq->stamp[3];
     state[core].irq_active = 0;
 }
 void ss_sched_trace_switch_begin(unsigned core)
 {
     const uint64_t now = ss_sched_trace_now();
     if (!enabled(core)) return;
-    struct ss_sched_trace_switch *s = &state[core].selection;
-    s->previous_end = s->end;
+    uint64_t sequence = ++state[core].switch_sequence;
+    struct ss_sched_trace_switch *s = &state[core].switch_history[(sequence - 1) % SS_SCHED_TRACE_HISTORY];
+    s->previous_end = state[core].switch_end;
     s->begin = now;
     s->end = 0;
-    s->irq_sequence = state[core].last_irq.sequence;
-    ++s->sequence;
+    s->irq_sequence = state[core].irq_sequence;
+    s->sequence = sequence;
 }
 void ss_sched_trace_switch_end(unsigned core, unsigned slot)
 {
     const uint64_t now = ss_sched_trace_now();
     if (!enabled(core)) return;
-    state[core].selection.end = now;
-    state[core].selection.selected_slot = slot;
+    struct ss_sched_trace_switch *s = &state[core].switch_history[(state[core].switch_sequence - 1) % SS_SCHED_TRACE_HISTORY];
+    s->end = now;
+    s->selected_slot = slot;
+    state[core].switch_end = now;
 }
 static void summarize(struct ss_sched_trace_summary *summary, uint64_t ticks)
 {
@@ -168,19 +175,57 @@ static void summarize(struct ss_sched_trace_summary *summary, uint64_t ticks)
     for (unsigned i = 0; i < 5; ++i)
         if (ticks > frequency * limits[i] / 1000000) ++summary->over_us[i];
 }
-/* The adapter holds this owner's API mask. The running timestamp predates
- * both masking and this observation; an intervening switch is unmatched. */
+/* The adapter holds this owner's API mask. Select completed events no later
+ * than the captured running timestamp; observation-side interrupts must not
+ * replace the exit and selection whose cost the timestamp measured. */
 void ss_sched_trace_wake_sample(unsigned core, uint64_t ready, uint64_t running, unsigned slot)
 {
     if (!enabled(core) || !ready || running < ready) return;
-    const struct ss_sched_trace_irq_chain *irq = &state[core].last_irq;
-    const struct ss_sched_trace_switch *s = &state[core].selection;
+    const struct ss_sched_trace_switch empty_switch = {0};
+    const struct ss_sched_trace_irq_chain empty_irq = {0};
+    const struct ss_sched_trace_switch *s = &empty_switch;
+    const struct ss_sched_trace_irq_chain *irq = &empty_irq, *latest = &empty_irq;
+    struct ss_sched_trace_wake_history history = {
+        .irq_overwritten = state[core].irq_sequence > SS_SCHED_TRACE_HISTORY ? state[core].irq_sequence - SS_SCHED_TRACE_HISTORY : 0,
+        .switch_overwritten = state[core].switch_sequence > SS_SCHED_TRACE_HISTORY ? state[core].switch_sequence - SS_SCHED_TRACE_HISTORY : 0
+    };
+    for (unsigned i = 0; i < SS_SCHED_TRACE_HISTORY; ++i) {
+        const struct ss_sched_trace_switch *candidate = &state[core].switch_history[i];
+        if (candidate->end && candidate->end <= running && candidate->sequence > s->sequence) s = candidate;
+        const struct ss_sched_trace_irq_chain *event = &state[core].irq_history[i];
+        if (!event->sequence) continue;
+        if (event->stamp[4] > running) ++history.future_irqs;
+        else if (event->sequence > latest->sequence) latest = event;
+    }
+    bool lost = !s->sequence && history.switch_overwritten;
+    if (s->irq_sequence) {
+        const struct ss_sched_trace_irq_chain *candidate = &state[core].irq_history[(s->irq_sequence - 1) % SS_SCHED_TRACE_HISTORY];
+        if (candidate->sequence == s->irq_sequence && candidate->stamp[4] <= running) irq = candidate;
+        else lost = true;
+    }
+    if (!latest->sequence && history.irq_overwritten) lost = true;
+    history.latest_start = latest->stamp[0];
+    history.latest_end = latest->stamp[4];
+    history.latest_work = latest->stamp[3] - latest->stamp[2];
+    history.latest_result = latest->result;
+    history.latest_sequence = latest->sequence;
+    if (irq->sequence && latest->sequence >= irq->sequence) {
+        history.trailing_count = latest->sequence - irq->sequence;
+        for (unsigned i = 0; i < SS_SCHED_TRACE_HISTORY; ++i) {
+            const struct ss_sched_trace_irq_chain *event = &state[core].irq_history[i];
+            if (event->sequence > irq->sequence && event->sequence <= latest->sequence)
+                history.trailing_work += event->stamp[3] - event->stamp[2];
+        }
+        /* Exact sequence tags and a retained first record prove every later
+         * record through latest is still in this circular history. */
+    }
     uint64_t flags = 0;
     if (irq->sequence) flags |= SS_SCHED_WAKE_IRQ;
     if (s->sequence && s->end) flags |= SS_SCHED_WAKE_SWITCH;
-    bool multiple = irq->previous_end > ready || s->previous_end > ready;
+    if (lost) flags |= SS_SCHED_WAKE_HISTORY_LOST;
+    bool multiple = irq->previous_end > ready || s->previous_end > ready || history.trailing_count;
     if (multiple) flags |= SS_SCHED_WAKE_MULTIPLE;
-    bool linked = !multiple && (flags & 3) == 3 &&
+    bool linked = !lost && !multiple && (flags & 3) == 3 &&
         irq->stamp[0] <= irq->stamp[1] && irq->stamp[1] <= irq->stamp[2] &&
         irq->stamp[2] <= irq->stamp[3] && irq->stamp[3] <= irq->stamp[4] &&
         ready <= irq->stamp[4] && irq->stamp[4] <= s->begin &&
@@ -196,6 +241,7 @@ void ss_sched_trace_wake_sample(unsigned core, uint64_t ready, uint64_t running,
     if (!row->maximum.ready || elapsed > row->maximum.running - row->maximum.ready) {
         row->maximum = (struct ss_sched_trace_wake){ .ready = ready, .running = running,
             .flags = flags, .running_slot = slot, .irq = *irq, .selection = *s };
+        trace.history[core] = history;
     }
 }
 void ss_sched_trace_service(unsigned core, unsigned part, uint64_t begin, uint64_t end)
