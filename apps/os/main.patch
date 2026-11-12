@@ -62,7 +62,32 @@
          if(!board_live(NULL))park();
          const uint32_t ticks=a733_power_service_step(&providers.domains);
          const int ready=a733_power_service_ready(&providers.domains);
-@@ -167,6 +191,8 @@
+@@ -134,6 +158,13 @@
+ {
+     (void)unused;int started=0;
+     for(;;){
++        if(a733_typec_native_stop_requested(&board.typec)){
++            if(a733_typec_native_provider_stop_poll(&board.typec))park();
++            BOARD_PROGRESS(BOARD_SERVICE_TYPEC);
++            if(board.typec.bus.state>=A733_TWI_BEGIN&&board.typec.bus.state<=A733_TWI_COMPLETE)taskYIELD();
++            else vTaskDelay(1);
++            continue;
++        }
+         if(!board_live(NULL)||a733_smp_counter()/24>=service_deadline())
+             a733_typec_revoke(&board.typec.provider);
+         if(!started&&board_live(NULL)&&atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)){
+@@ -153,6 +184,10 @@
+ static void power(void *unused)
+ {
+     (void)unused;for(;;){
++        if(a733_typec_native_stop_requested(&board.typec)){
++            if(a733_typec_native_power_stop_poll(&board.typec))park();
++            BOARD_PROGRESS(BOARD_SERVICE_POWER);vTaskDelay(1);continue;
++        }
+         if(!board_live(NULL)||a733_smp_counter()/24>=service_deadline())
+             a733_typec_revoke(&board.typec.provider);
+         (void)a733_typec_native_power_poll(&board.typec);
+@@ -167,6 +202,8 @@
  #ifdef SUNSTONE_A733_OS
          os_wifi_credential_poll(); /* EL1: the credential leaves RAM once the application has finished */
  #endif
@@ -71,7 +96,7 @@
          if(!board_live(NULL)){
              (void)board_radio_external_failure(&radio);
              atomic_store_explicit(&board.radio_result,3,memory_order_release);
-@@ -175,28 +201,39 @@
+@@ -175,28 +212,39 @@
  #ifdef SUNSTONE_A733_OS_RADIO_SCAN
              os_radio_scan_step(&radio,(int)r);
  #endif
@@ -115,7 +140,7 @@
              }else if(r==1){
                  unsigned verified=0;
                  if(board_radio_client_result(&radio,&verified)!=1){vTaskDelay(1);continue;}
-@@ -206,6 +243,8 @@
+@@ -206,6 +254,8 @@
                      memory_order_release,memory_order_relaxed);
              }
          }
@@ -124,7 +149,7 @@
          vTaskDelay(1);
      }
  }
-@@ -243,8 +282,11 @@
+@@ -243,8 +293,11 @@
  #elif defined(SUNSTONE_A733_OS)
  static void supervise(void *unused)
  {
@@ -137,7 +162,7 @@
          if(resident){
              /* The armed watchdog bounds every hang. A failure, an expired
               * service window, a service still silent at the loader's first
-@@ -391,6 +433,8 @@
+@@ -391,6 +444,8 @@
      if(board_application_pins(&b.pins)!=1)platform_panic("board application pins",10);
  #endif
      if(!a733_native_usb_init(&providers.shared,&b,board_live,board_fail,NULL))platform_panic("board shared providers",4);
@@ -146,7 +171,7 @@
      TaskFunction_t functions[]={pmic,board_usb0_task,typec,power,board_host_task,radio_owner,radio_client,supervise};
      const char *names[]={"board-pmic","board-usb0","board-typec","board-power","board-usb2","board-radio","board-net","board-watchdog"};
      for(unsigned i=0;i<8;++i){
-@@ -404,7 +448,8 @@
+@@ -404,7 +459,8 @@
          board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,!i?3:i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);
          if(!board.handles[i])platform_panic("board tasks",5);
  #if configNUMBER_OF_CORES > 1

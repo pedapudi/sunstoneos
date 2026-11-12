@@ -46,7 +46,7 @@ def main():
 
     binary = out/'ready-work'
     build(binary)
-    for case in ('normal', 'long-delay', 'stuck'):
+    for case in ('normal', 'long-delay', 'stuck', 'return-irq', 'return-no-irq'):
         run(case, [binary, case])
     # Compile the original wait condition into the same real-core fixture.
     source = (ROOT/'apps/board/host_irq.c').read_text()

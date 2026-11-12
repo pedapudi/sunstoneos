@@ -29,10 +29,8 @@ static void usb_fail_at(uint32_t site,uint32_t value,const void *caller)
     board_fail_at(site,value,caller);
 }
 #define usb_fail() usb_fail_at(SUNSTONE_CRUMB_FAIL_SITE(BOARD),0,SUNSTONE_CRUMB_HERE())
-/* Used after the owner stopped accepting work. A lost controller remains
- * retained; neither an empty port nor a masked IRQ certifies DMA completion. */
-static void usb_quiesce_unproven(unsigned core_started)
-{usb_fail_at(SUNSTONE_CRUMB_FAIL_BOARD<<12|0x801u,core_started?2u:1u,SUNSTONE_CRUMB_HERE());}
+static int usb_stop_fault(unsigned detail,unsigned value)
+{usb_fail_at(SUNSTONE_CRUMB_FAIL_BOARD<<12|detail,value,SUNSTONE_CRUMB_HERE());return -1;}
 void os_application_usb_changed(void);
 #ifdef SUNSTONE_A733_OS_USB_JPEG
 #include "sunstone_usb_service.h"
@@ -92,6 +90,7 @@ void os_usb_serial_native_release(uint64_t);
 int os_usb_serial_native_write(uint64_t,const void *,size_t);
 int os_usb_serial_native_configure(const struct ss_usb_serial_line *);
 int os_usb_serial_native_configured(void);
+void os_usb_serial_native_stopped(void);
 static int usb_configure(void *unused,const struct ss_usb_serial_line *line)
 {(void)unused;return os_usb_serial_native_configure(line);}
 static int usb_configured(void *unused)
@@ -308,6 +307,55 @@ static void host_wait(void)
     board_host_irq_wait();
 }
 #endif
+/* Only the original host task advances controller, broker and platform state.
+ * The Type-C tasks publish their own terminal results after local restoration. */
+static int usb_return_poll(uint64_t deadline)
+{
+    if(!deadline)return 0; /* Closing can precede supervisor publication. */
+    if(a733_smp_counter()/24>=deadline)return usb_stop_fault(0x805,board.host.stop_phase);
+#ifdef SUNSTONE_A733_OS_USB_CLASSES
+    os_usb_service_retire();
+#endif
+#ifdef SUNSTONE_BOARD_USB2_IRQ
+    if(board.host.core_started&&a733_xhci_stop_draining(&board.host.core)){
+        int irq=board_host_irq_before();
+        if(irq<0)return usb_stop_fault(0x802,1);
+        if(!irq)return 0;
+    }
+#endif
+    int result=a733_usb2_native_halt(&board.host,deadline);
+    if(result<0)return usb_stop_fault(0x801,board.host.core_started);
+#ifdef SUNSTONE_BOARD_USB2_IRQ
+    if(board.host.core_started&&a733_xhci_stop_draining(&board.host.core)&&board_host_irq_after()<0)
+        return usb_stop_fault(0x802,2);
+#endif
+    if(!result)return 0;
+#ifdef SUNSTONE_BOARD_USB2_IRQ
+    result=board_host_irq_retire(deadline);
+    if(result<0)return usb_stop_fault(0x802,3);
+    if(!result)return 0;
+#endif
+#ifdef SUNSTONE_A733_OS_USB_JPEG
+    if(atomic_load_explicit(&decode.state,memory_order_acquire)==2)
+        return usb_stop_fault(0x809,2);
+#endif
+#ifdef SUNSTONE_A733_OS_USB_CLASSES
+    /* All slots and the controller have stopped. Aborted broker operations
+     * can now release their borrowed pages without a device writer. */
+    os_usb_serial_native_stopped();os_usb_service_stopped();os_usb_service_dispatch();
+    if(!os_usb_service_idle())return 0;
+#endif
+    result=a733_usb2_native_stop(&board.host,deadline);
+    if(result<0)return usb_stop_fault(0x803,board.host.platform.stop_phase);
+    if(!result)return 0;
+    if(a733_typec_native_stop_request(&board.typec,deadline)!=1)return usb_stop_fault(0x804,1);
+    if(board.handles[2])xTaskNotifyGive(board.handles[2]);
+    if(board.handles[3])xTaskNotifyGive(board.handles[3]);
+    result=a733_typec_native_stop_result(&board.typec);
+    if(result<0)return usb_stop_fault(0x804,2);
+    if(!result)return 0;
+    os_quiesce_complete(&usb_quiesce);return 1;
+}
 void board_host_task(void *unused)
 {
     if(os_quiesce_requested(&usb_quiesce))goto stopped;
@@ -353,19 +401,22 @@ void board_host_task(void *unused)
 #endif
     }
 stopped:
+    if(os_quiesce_requested(&usb_quiesce)){
+        atomic_store_explicit(&storage.state,4,memory_order_release);
+        for(;;){
+            int result=usb_return_poll(os_cpu_return_deadline_us());
+            if(result)break;
+            (void)ulTaskNotifyTake(pdTRUE,1);
+        }
+        for(;;)vTaskSuspend(NULL);
+    }
 #ifdef SUNSTONE_BOARD_USB2_IRQ
     board_host_irq_stop();
 #endif
-    /* Closing admission and masking the interrupt do not prove xHCI DMA
-     * drained. The native host has no successful halt/release operation.
-     * Keep its memory and leases, report that gap, and let the supervisor
-     * collect the other owners' results before its bounded ending. */
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
     os_usb_service_retire();
 #endif
     atomic_store_explicit(&storage.state,4,memory_order_release);
-    if(os_quiesce_requested(&usb_quiesce))
-        usb_quiesce_unproven(board.host.core_started);
     a733_usb2_native_lost(&board.host);a733_typec_revoke(&board.typec.provider);
     atomic_store_explicit(&board.result,2,memory_order_release);usb_fail();
     for(;;)vTaskSuspend(NULL);

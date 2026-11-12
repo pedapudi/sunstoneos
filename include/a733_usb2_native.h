@@ -130,6 +130,8 @@ struct a733_usb2_native {
     unsigned dual_leaf,msc_seen,hid_seen,audio_seen,msc_mounted,hid_mounted,audio_mounted,hid_address,msc_in,msc_out;
     unsigned initialized,core_started,stack_started,failed,address,mounted,
         read_pending,read_complete,read_failed;
+    unsigned stop_phase;
+    uint64_t stop_deadline;
     uint32_t blocks,block_bytes,bot_tag,bot_total,bot_received;
     unsigned bot_phase,bot_opcode,bot_stage,bot_endpoint,bot_requested,bot_status;
     unsigned bot_recovery,bot_retried; /* One reset/retry per mounted READ10. */
@@ -202,6 +204,11 @@ void a733_usb2_set_input(struct a733_usb2_native *,a733_usb2_input_emit,void *);
 int a733_usb2_generic_enable(struct a733_usb2_native *);
 struct sunstone_usb_transport *a733_usb2_transport(struct a733_usb2_native *);
 void a733_usb2_native_lost(struct a733_usb2_native *);
+/* Original owner only. Halt closes native admission and proves controller DMA
+ * stopped. Borrowed pages remain valid. After GIC quiescence and broker lease
+ * retirement, stop restores local platform state. Both return 1/0/-1. */
+int a733_usb2_native_halt(struct a733_usb2_native *,uint64_t deadline);
+int a733_usb2_native_stop(struct a733_usb2_native *,uint64_t deadline);
 /* Internal TinyUSB composition; singleton static stack, one task and one host.
  * These entry points also permit the actual HCD/MSC stack in the host fixture. */
 int a733_usb2_host_bind(struct a733_usb2_native *);
