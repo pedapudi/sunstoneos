@@ -21,6 +21,9 @@ struct board_radio;
 void os_radio_scan_step(struct board_radio *,int result);
 #endif
 uint64_t os_cpu_return_cutoff(void);
+/* Published before owner requests. Zero until closing is supervised; otherwise
+ * the absolute shared return bound, clipped to the session's final guard. */
+uint64_t os_cpu_return_deadline_us(void);
 int os_cpu_return_requested(void);
 /* Failure return (docs/designs/failure-return.md). */
 int os_cpu_return_failing(void);

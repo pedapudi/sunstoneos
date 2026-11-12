@@ -22,7 +22,7 @@ __attribute__((used,retain)) const uint64_t os_cpu_return_watchdog[5]={
     UINT64_C(0x31544457534f5243),2,SUNSTONE_CRUMB_WATCHDOG_MODE,SUNSTONE_CRUMB_RTC,A733_BOARD_SUPERVISED_SECONDS
 };
 static atomic_uint closing,thermal_done,pmic_done,ready;
-static uint64_t return_since_us;
+static atomic_uint_fast64_t return_since_us;
 /* Failure return (docs/designs/failure-return.md). failing: a failure claimed
  * the return, so the same stop sequence runs as for success and the first
  * failure leaves with it. prefail: that failure came before the scheduler
@@ -68,6 +68,13 @@ __attribute__((noinline)) static void bounded(void)
 }
 uint64_t os_cpu_return_cutoff(void)
 {return (board.session.deadline_us-OS_CPU_RETURN_RESERVE_US)*24;}
+uint64_t os_cpu_return_deadline_us(void)
+{
+    uint64_t since=atomic_load_explicit(&return_since_us,memory_order_acquire);
+    if(!since||board.session.deadline_us<=10000)return 0;
+    uint64_t limit=since+OS_FAILURE_RETURN_US,session=board.session.deadline_us-10000;
+    return limit<session?limit:session;
+}
 int os_cpu_return_requested(void){return atomic_load_explicit(&closing,memory_order_acquire);}
 /* Task-context gates retain the original NPU fault. The EL3 terminal calls
  * ready() after selecting its Secure Device stack; its health read stays
@@ -285,9 +292,12 @@ void os_cpu_return_supervise(void)
         return;
     }
     uint64_t now=a733_smp_counter()/24;
-    if(!return_since_us)return_since_us=os_cpu_return_failing()?
-        atomic_load_explicit(&failing_since_us,memory_order_acquire):now;
-    if(os_cpu_return_expired(now,return_since_us,OS_FAILURE_RETURN_US)){os_quiesce_note_faults(board_fail_note);fail(0x742);}
+    uint64_t since=atomic_load_explicit(&return_since_us,memory_order_acquire);
+    if(!since){
+        since=os_cpu_return_failing()?atomic_load_explicit(&failing_since_us,memory_order_acquire):now;
+        atomic_store_explicit(&return_since_us,since,memory_order_release);
+    }
+    if(os_cpu_return_expired(now,since,OS_FAILURE_RETURN_US)){os_quiesce_note_faults(board_fail_note);fail(0x742);}
     if(os_quiesce_step(board_fail_note)!=OS_QUIESCE_DONE)return;
     /* This profile's readiness task never calls USB startup. Constructors
      * alone cannot acquire USB ownership or invoke controller callbacks. */
