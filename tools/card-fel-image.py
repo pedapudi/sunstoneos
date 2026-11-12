@@ -2,7 +2,7 @@
 """Build the early FEL gate's metadata and an unqualified ordinary boot0 file.
 
 No device is opened. The pinned image changes only its initial ARM branch,
-length/checksum and one appended sector. The stock storage loader is unchanged.
+length/checksum and the appended gate sectors. The stock storage loader is unchanged.
 """
 import argparse
 import hashlib
@@ -20,6 +20,10 @@ ROOT = Path(__file__).resolve().parents[1]
 PIN = '829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3'
 BASE, ORIGINAL_BYTES = 0x47000, 0x3c000
 PRODUCTION_WATCHDOG = 0  # A733_CARD_FEL_PRODUCTION_WATCHDOG in include/a733_card_fel_gate.h
+# The gate and its policy word fill at most two appended sectors; the ROM
+# admits boot0 lengths to 0xa7800 (docs/designs/card-fel-recovery.md).
+APPENDED_LIMIT = 1024
+GATE_LIMIT = APPENDED_LIMIT - 4
 
 
 def require(ok, message):
@@ -51,7 +55,7 @@ def gate_info(elf_raw, raw):
         require(set(symbols) == set(names), 'Gate symbols missing.')
         start, end = symbols[names[0]], symbols[names[1]]
         require(elf['e_entry'] == start == 0x52000 and end - start == len(raw) and
-                0 < len(raw) <= 508, 'Gate entry or appended-sector budget differs.')
+                0 < len(raw) <= GATE_LIMIT, 'Gate entry or appended-sector budget differs.')
         sections = [s for s in elf.iter_sections() if s['sh_flags'] & 2 and s['sh_size']]
         require(len(sections) == 1 and sections[0]['sh_type'] == 'SHT_PROGBITS' and
                 sections[0]['sh_addr'] == start and sections[0].data() == raw, 'Gate binary differs from ELF.')
@@ -64,9 +68,10 @@ def first_stage(original, gate):
             struct.unpack_from('<I', original, 12)[0] == checksum(original), 'Pinned boot0 identity/header differs.')
     entry, = struct.unpack_from('<I', original)
     require(entry == 0xea0002be, 'Pinned boot0 initial branch differs.')
-    require(0 < len(gate) <= 508 and len(gate) % 4 == 0, 'Gate and its policy word exceed the appended sector.')
+    require(0 < len(gate) <= GATE_LIMIT and len(gate) % 4 == 0, 'Gate and its policy word exceed the appended sectors.')
     # The word after the code is the gate's WDT0 policy; zero disarms WDT0.
-    result = bytearray(original + gate + struct.pack('<I', PRODUCTION_WATCHDOG) + bytes(508 - len(gate)))
+    appended = gate + struct.pack('<I', PRODUCTION_WATCHDOG)
+    result = bytearray(original + appended + bytes(-len(appended) % 512))
     struct.pack_into('<I', result, 0, 0xea000000 | ((len(original) - 8) // 4))
     struct.pack_into('<I', result, 16, len(result))
     struct.pack_into('<I', result, 12, checksum(result))
@@ -92,7 +97,7 @@ def main():
     args = parser.parse_args()
     spec = importlib.util.spec_from_file_location('fel_gate_package', ROOT/'tools/prepare-microsd-boot.py')
     package = importlib.util.module_from_spec(spec); spec.loader.exec_module(package)
-    gate = package.read_regular(args.gate_bin, 512)
+    gate = package.read_regular(args.gate_bin, APPENDED_LIMIT)
     info = gate_info(package.read_regular(args.gate_elf, 1 << 20), gate)
     original = package.read_regular(args.boot0, ORIGINAL_BYTES)
     image = first_stage(original, gate)

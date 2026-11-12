@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Execute the immutable ARM32 SRAM gate under both WDT0 policies; retain only RTC evidence.
+"""Execute the immutable ARM32 SRAM gate under both WDT0 policies and every entry state.
 
-No reset dispatch or DRAM receipt is modeled. Execution starts at the FEL exe
-address and stops at the ROM branch or the original cold boot0 reset stub.
+Entry states: the vendor FEL request, a watchdog return (cold-boot marker
+set) and a cold power-on (marker zero). No reset dispatch or DRAM receipt is
+modeled. Execution stops at the ROM branch, a park or boot0's reset stub.
 """
 import argparse
 import hashlib
@@ -37,18 +38,29 @@ FEL_SCTLR=0x00c51838
 WDT_RESTART=0x0205000c
 
 
+MARKER=card.RTC_MARKER
+KEYED=0x16aa16aa
+STAGE=card.RTC_STAGE<<16
+WARM,COLD,UNMARKED=0x4000,0x8000,0x2000
+IMAGE_CRUMB=0x01115000          # an image's own LAST breadcrumb, which a warm entry keeps
+WDT_MODE,WDT_CONFIG,WDT_OUTPUT=0x02050014,0x02050010,0x02050018
+
+
 class Machine:
-    def __init__(self,raw,base=card.GATE,variant='',sctlr=FEL_SCTLR & ~0x1000):
+    """Entry state: the request (default), or no request with the marker zero
+    (cold power-on) or set (watchdog return)."""
+    def __init__(self,raw,base=card.GATE,variant='',sctlr=FEL_SCTLR & ~0x1000,entry='request'):
         self.raw,self.base,self.variant,self.sctlr=raw,base,variant,sctlr
-        self.regs={card.RTC_TAG:0x5c0d0123,card.RTC_FLAG:card.FEL_FLAG,
-                   0x02050010:1,0x02050014:0x41,0x02050018:2}
+        self.regs={card.RTC_TAG:0x5c0d0123,card.RTC_FLAG:card.FEL_FLAG if entry=='request' else 0,
+                   card.RTC_LAST:IMAGE_CRUMB,MARKER:KEYED if entry=='warm' else 0,
+                   WDT_CONFIG:1,WDT_MODE:0x41,WDT_OUTPUT:2}
         self.regs.update({FAULT_WORDS[name]:value for name,value in SENTINELS.items()})
         self.events,self.terminal,self.restarts=[],None,0
         self.decoder=Cs(CS_ARCH_ARM,CS_MODE_ARM)
 
     def run(self,helper=False):
         cpu=Uc(UC_ARCH_ARM,UC_MODE_ARM)
-        for base in sorted({self.base & ~4095,0,0x47000,0x70000}):
+        for base in sorted({self.base & ~4095,(self.base+len(self.raw)-1)&~4095,0,0x47000,0x70000}):
             cpu.mem_map(base,4096)
         cpu.mem_write(self.base,self.raw)
         cpu.reg_write(arm.UC_ARM_REG_CPSR,0x60000153)
@@ -63,13 +75,18 @@ class Machine:
             assert size==4
             address=base+offset
             self.events.append(('write',address,value))
-            if address==0x02050014:
-                assert value>>16==0x16aa and value&0xffff in (0,card.GATE_WATCHDOG)
-                if self.variant=='stuck-mode':return
+            if address in (WDT_MODE,WDT_CONFIG,WDT_OUTPUT):
+                assert value>>16==0x16aa  # A733 manual 8.3.6.5-8.3.6.7
+                if address==WDT_MODE:
+                    assert value&0xffff in (0,card.GATE_WATCHDOG)
+                    if self.variant=='stuck-mode':return
                 value &= 0xffff
             if address==WDT_RESTART:
-                assert value==0x14af and self.regs[0x02050014]&1  # A733 manual 8.3.6.4
+                assert value==0x14af and self.regs[WDT_MODE]&1  # A733 manual 8.3.6.4
                 self.restarts+=1;return
+            if address==MARKER:
+                # A733 manual 9.1.7.20: only a keyed write takes effect.
+                if self.variant=='stuck-marker' or value>>16!=0x16aa:return
             if address==card.RTC_FLAG and self.variant=='stuck-clear':return
             self.regs[address]=value
         for base in (0x02050000,0x07050000,0x07090000):
@@ -103,6 +120,157 @@ class Machine:
         self.after=bytes(cpu.mem_read(self.base,len(self.raw)))
         return self.terminal
 
+    def writes(self):
+        return [e for e in self.events if e[0]=='write']
+
+    def untouched(self):
+        """The image's breadcrumb and fault words survive."""
+        return all(self.regs[address]==SENTINELS[key]for key,address in FAULT_WORDS.items())
+
+
+def store(code,text,before=None):
+    """The first instruction 'str <text>' in the gate (before the cold path when given)."""
+    found=[i for i in Cs(CS_ARCH_ARM,CS_MODE_ARM).disasm(code,card.GATE)
+           if i.mnemonic=='str' and i.op_str==text and (before is None or i.address<before)]
+    assert found
+    return found[0].address-card.GATE
+
+
+def without(raw,offset):
+    changed=bytearray(raw);struct.pack_into('<I',changed,offset,0xe320f000)  # NOP
+    return bytes(changed)
+
+
+def request_cases(name,raw,policy,code,cases):
+    for base in (card.GATE,0x83000):
+        for state in (0,FEL_SCTLR):
+            m=Machine(raw,base=base,sctlr=state)
+            assert m.run()=='rom' and m.after==raw
+            assert m.regs[card.RTC_FLAG]==0 and m.regs[WDT_MODE]==policy and m.regs[MARKER]==0
+            assert m.restarts==(policy!=0)
+            assert not m.sctlr & 0x1005 and m.untouched()
+            writes=m.writes()
+            progress=[value for kind,address,value in writes if address==card.RTC_LAST]
+            assert progress==[STAGE|n for n in range(1,6)]
+            assert all(e[1]in (card.RTC_LAST,card.RTC_FLAG,WDT_MODE,WDT_RESTART)for e in writes)
+            order=[e[1] for e in writes if e[1] in (WDT_MODE,WDT_RESTART,card.RTC_FLAG)]
+            assert order==[WDT_MODE,*([WDT_RESTART] if policy else []),card.RTC_FLAG]
+            mode=next(i for i,e in enumerate(m.events)if e[0]=='write'and e[1]==WDT_MODE)
+            assert any(e[0]=='cache'for e in m.events[:mode])
+            for i,e in enumerate(m.events):
+                if e[0]=='write'and e[1]==card.RTC_LAST:
+                    assert m.events[i+1][0]=='dsb'
+            words={key:m.regs.get(crumbs.RTC+offset,0)for key,offset in crumbs.WORDS.items()}
+            assert crumbs.decode(words,0x123)['last']['gate_progress']=='before ROM branch'
+            cases.append('%s-request-ARM32-%x-SCTLR-%x'%(name,base,state))
+    # Translation, caches or an armed ROM redirect make ROM 0x20 unsafe: park.
+    for case,address,value,expected in (
+            ('MMU',None,1,0x81),('D-cache',None,4,0x81),
+            ('redirect-C0',0x070501c0,1,0x82),('redirect-C4',0x070501c4,1,0x82),
+            ('redirect-D4',0x070501d4,1,0x82)):
+        m=Machine(raw)
+        if address is None:m.sctlr |= value
+        else:m.regs[address]=value
+        assert m.run()=='park' and m.regs[card.RTC_LAST]==STAGE|expected
+        assert m.regs[card.RTC_FLAG]==card.FEL_FLAG and m.restarts==0
+        assert not any(e[1]==WDT_MODE for e in m.writes())
+        cases.append(name+'-request-parks-on-'+case)
+    # Unmeasured WDT0 configuration or output: a disarm needs neither and
+    # proceeds; an arm is refused, recorded and the request still selects FEL.
+    for case,address,value in (('watchdog-mode',WDT_MODE,0x31),('watchdog-config',WDT_CONFIG,2),
+                               ('watchdog-output',WDT_OUTPUT,1)):
+        m=Machine(raw);m.regs[address]=value
+        assert m.run()=='rom' and m.regs[card.RTC_FLAG]==0
+        if policy==0:
+            assert m.regs[WDT_MODE]==0 and m.regs[card.RTC_LAST]==STAGE|5
+        else:
+            assert m.regs[card.RTC_LAST]==STAGE|0x83 and m.restarts==0
+            assert not any(e[1]==WDT_MODE for e in m.writes())
+        cases.append(name+'-request-'+case+'-enters-FEL')
+    # The previous gate refused and parked here: WDT0 reads 1 after a watchdog
+    # reset and its configuration and output after that reset are unmeasured.
+    m=Machine(raw);m.regs.update({WDT_MODE:1,WDT_CONFIG:0,WDT_OUTPUT:0x1f})
+    assert m.run()=='rom' and m.regs[card.RTC_FLAG]==0
+    assert m.regs[card.RTC_LAST]==(STAGE|5 if policy==0 else STAGE|0x83)
+    assert m.regs[WDT_MODE]==(0 if policy==0 else 1)
+    cases.append(name+'-request-after-watchdog-reset-unmeasured-registers-enters-FEL')
+    for mode in (0,1,0x41,0xb1):
+        m=Machine(raw);m.regs[WDT_MODE]=mode
+        assert m.run()=='rom' and m.regs[card.RTC_FLAG]==0 and m.regs[WDT_MODE]==policy
+        cases.append(name+'-request-recognized-watchdog-%x'%mode)
+    m=Machine(raw);m.regs[WDT_MODE]=0;m.regs[WDT_CONFIG]=2
+    assert m.run()=='rom' and m.regs[card.RTC_FLAG]==0
+    assert m.regs[card.RTC_LAST]==(STAGE|5 if policy==0 else STAGE|0x83)
+    cases.append(name+'-request-WDT0-off-configuration')
+    for variant,last,flag in (('stuck-mode',0x86,0),('stuck-clear',0x84,card.FEL_FLAG)):
+        m=Machine(raw,variant=variant)
+        assert m.run()=='rom' and m.regs[card.RTC_LAST]==STAGE|last and m.regs[card.RTC_FLAG]==flag
+        assert m.regs[WDT_MODE]==(policy if variant=='stuck-clear' else 0x41)
+        cases.append(name+'-request-'+variant)
+    cold=next(i.address for i in Cs(CS_ARCH_ARM,CS_MODE_ARM).disasm(code,card.GATE)
+              if i.mnemonic=='ldr' and i.op_str.startswith('r2, [pc') and
+              struct.unpack_from('<I',code,((i.address+8)-card.GATE)+int(i.op_str.split('#')[1].rstrip(']'),0))[0]==KEYED)
+    for text,last,flag in (('r2, [r5]',0x86,0),('r8, [r0]',0x84,card.FEL_FLAG)):
+        m=Machine(without(raw,store(code,text,cold)));assert m.run()=='rom'
+        assert m.regs[card.RTC_LAST]==STAGE|last and m.regs[card.RTC_FLAG]==flag
+        cases.append(name+'-mutation-omitted-'+text)
+    return cold
+
+
+def warm_cases(name,raw,policy,code,cold,cases):
+    # A watchdog return through the card: marker set, no request, WDT0 mode 1,
+    # configuration and output unmeasured.
+    for config,output in ((1,2),(0,0x1f),(1,0x1f)):
+        m=Machine(raw,entry='warm');m.regs.update({WDT_MODE:1,WDT_CONFIG:config,WDT_OUTPUT:output})
+        assert m.run()=='rom' and m.regs[card.RTC_LAST]==IMAGE_CRUMB and m.untouched()
+        assert m.regs[MARKER]==KEYED and not any(e[1]==MARKER for e in m.writes())
+        refused=policy!=0 and (config,output)!=(1,2)
+        assert m.regs[card.RTC_FLAG]==STAGE|WARM|(0x300 if refused else 0)|1
+        assert m.regs[WDT_MODE]==(1 if refused else policy) and m.restarts==(policy!=0 and not refused)
+        assert all(e[1] in (card.RTC_FLAG,WDT_MODE,WDT_RESTART) for e in m.writes())
+        cases.append('%s-watchdog-return-config-%x-output-%x-enters-FEL'%(name,config,output))
+    # The earlier cold record's flag survives; an unrelated GP2 value does not.
+    for before,kept in ((STAGE|COLD|0x41,COLD),(0x12348000,0),(STAGE|WARM|COLD|1,COLD)):
+        m=Machine(raw,entry='warm');m.regs[card.RTC_FLAG]=before;m.regs[WDT_MODE]=1
+        assert m.run()=='rom' and m.regs[card.RTC_FLAG]==STAGE|WARM|kept|1
+        cases.append('%s-warm-keeps-cold-flag-from-%x'%(name,before))
+    # Any nonzero marker other than the keyed value also selects FEL.
+    m=Machine(raw,entry='warm');m.regs[MARKER]=0x00001234
+    assert m.run()=='rom' and m.regs[card.RTC_FLAG]>>16==card.RTC_STAGE and m.regs[card.RTC_FLAG]&WARM
+    cases.append(name+'-unknown-marker-enters-FEL')
+    for case,address,value,expected in (('MMU',None,1,0x81),('redirect-D4',0x070501d4,1,0x82)):
+        m=Machine(raw,entry='warm')
+        if address is None:m.sctlr |= value
+        else:m.regs[address]=value
+        assert m.run()=='park' and m.regs[card.RTC_FLAG]==STAGE|expected and m.regs[card.RTC_LAST]==IMAGE_CRUMB
+        cases.append(name+'-warm-parks-on-'+case)
+    m=Machine(raw,entry='warm',variant='stuck-clear')
+    assert m.run()=='rom' and m.regs[card.RTC_LAST]==IMAGE_CRUMB
+    cases.append(name+'-warm-record-unconfirmed-enters-FEL')
+
+
+def cold_cases(name,raw,cases):
+    # Cold power-on: the marker reads zero.
+    for mode in (0,1):
+        m=Machine(raw,entry='cold');m.regs[WDT_MODE]=mode
+        assert m.run()=='cold' and m.regs[MARKER]==KEYED
+        assert m.regs[card.RTC_FLAG]==STAGE|COLD|mode and m.regs[card.RTC_LAST]==IMAGE_CRUMB and m.untouched()
+        assert (m.regs[WDT_OUTPUT],m.regs[WDT_CONFIG],m.regs[WDT_MODE],m.restarts)==(2,1,0xb1,1)
+        order=[e[1] for e in m.writes()]
+        assert order==[MARKER,card.RTC_FLAG,WDT_OUTPUT,WDT_CONFIG,WDT_MODE,WDT_RESTART]
+        assert m.sctlr==FEL_SCTLR & ~0x1000  # boot0's reset stub sets its own SCTLR
+        cases.append('%s-cold-marks-arms-16s-and-enters-boot0-from-mode-%x'%(name,mode))
+    # A marker that does not read back cannot record the epoch: FEL.
+    m=Machine(raw,entry='cold',variant='stuck-marker')
+    assert m.run()=='rom' and m.regs[MARKER]==0
+    assert m.regs[card.RTC_FLAG]>>8&0xff==(COLD|WARM|UNMARKED)>>8
+    cases.append(name+'-cold-unconfirmed-marker-enters-FEL')
+    # The next watchdog reset after a cold boot reaches the warm path.
+    m=Machine(raw,entry='cold');m.run()
+    n=Machine(raw,entry='warm');n.regs.update({card.RTC_FLAG:m.regs[card.RTC_FLAG],MARKER:m.regs[MARKER],WDT_MODE:1})
+    assert n.run()=='rom' and n.regs[card.RTC_FLAG]&(COLD|WARM)==COLD|WARM
+    cases.append(name+'-cold-then-watchdog-reset-enters-FEL')
+
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
@@ -110,77 +278,31 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=False)
     info=card.inspect(args.image)
+    assert info['profile']['entry']==card.ENTRY_REQUEST
     upload=next(data for address,data in info['uploads']if address==card.GATE)
     length=info['profile']['gate_bytes']
     code=upload[:length]
-    assert len(upload)==length+4<=512 and struct.unpack_from('<I',upload,length)[0]==info['profile']['gate_watchdog']==card.GATE_WATCHDOG
+    assert len(upload)==length+4<=1024 and struct.unpack_from('<I',upload,length)[0]==info['profile']['gate_watchdog']==card.GATE_WATCHDOG
     assert not any(address>=0x40000000 for address,data in info['uploads'])
+    # The warm-entry proof image carries the same gate bytes and policy word.
+    warm_image=args.image.with_name('a733-card-fel-warm.elf')
+    warm=card.inspect(warm_image)
+    assert warm['profile']['entry']==card.ENTRY_WARM and warm['profile']['gate_sha256']==info['profile']['gate_sha256']
+    assert next(data for address,data in warm['uploads'] if address==card.GATE)==upload
     # Identical code; only the appended WDT0 policy word differs.
     images={0:code+struct.pack('<I',0),card.GATE_WATCHDOG:upload}
     cases=[]
     for policy,raw in images.items():
         name='disarm' if policy==0 else 'rearm-%x'%policy
-        for base in (card.GATE,0x83000):
-            for state in (0,FEL_SCTLR):
-                m=Machine(raw,base=base,sctlr=state)
-                assert m.run()=='rom' and m.after==raw
-                assert m.regs[card.RTC_FLAG]==0 and m.regs[0x02050014]==policy
-                assert m.restarts==(policy!=0)
-                assert not m.sctlr & 0x1005
-                assert all(m.regs[address]==SENTINELS[key]for key,address in FAULT_WORDS.items())
-                writes=[e for e in m.events if e[0]=='write']
-                progress=[value for kind,address,value in writes if address==card.RTC_LAST]
-                assert progress==[card.RTC_STAGE<<16|n for n in range(1,6)]
-                assert all(e[1]in (card.RTC_LAST,card.RTC_FLAG,0x02050014,WDT_RESTART)for e in writes)
-                order=[e[1] for e in writes if e[1] in (0x02050014,WDT_RESTART,card.RTC_FLAG)]
-                assert order==[0x02050014,*([WDT_RESTART] if policy else []),card.RTC_FLAG]
-                mode=next(i for i,e in enumerate(m.events)if e[0]=='write'and e[1]==0x02050014)
-                assert any(e[0]=='cache'for e in m.events[:mode])
-                for i,e in enumerate(m.events):
-                    if e[0]=='write'and e[1]==card.RTC_LAST:
-                        assert m.events[i+1][0]=='dsb'
-                words={key:m.regs.get(crumbs.RTC+offset,0)for key,offset in crumbs.WORDS.items()}
-                assert crumbs.decode(words,0x123)['last']['gate_progress']=='before ROM branch'
-                cases.append('%s-ARM32-%x-SCTLR-%x'%(name,base,state))
-        for case,address,value,expected in (
-                ('MMU',None,1,0x81),('D-cache',None,4,0x81),
-                ('redirect-C0',0x070501c0,1,0x82),('redirect-C4',0x070501c4,1,0x82),
-                ('redirect-D4',0x070501d4,1,0x82),('watchdog-mode',0x02050014,0x31,0x83),
-                ('watchdog-config',0x02050010,2,0x83),('watchdog-output',0x02050018,1,0x83)):
-            m=Machine(raw)
-            if address is None:m.sctlr |= value
-            else:m.regs[address]=value
-            assert m.run()=='park' and m.regs[card.RTC_LAST]==card.RTC_STAGE<<16|expected
-            assert m.regs[card.RTC_FLAG]==card.FEL_FLAG and m.restarts==0
-            assert not any(e[0]=='write'and e[1]==0x02050014 for e in m.events)
-            cases.append(name+'-refuses-'+case)
-        for mode in (0,1,0x41,0xb1):
-            m=Machine(raw);m.regs[0x02050014]=mode
-            assert m.run()=='rom' and m.regs[card.RTC_FLAG]==0 and m.regs[0x02050014]==policy
-            cases.append(name+'-recognized-watchdog-%x'%mode)
-        # With WDT0 off, re-arming still requires system reset and its output.
-        m=Machine(raw);m.regs[0x02050014]=0;m.regs[0x02050010]=2
-        assert m.run()==('rom' if policy==0 else 'park')
-        assert policy==0 or m.regs[card.RTC_LAST]==card.RTC_STAGE<<16|0x83
-        cases.append(name+'-WDT0-off-configuration')
-        for variant,last,terminal in (('stuck-mode',0x86,'park'),('stuck-clear',0x84,'rom')):
-            m=Machine(raw,variant=variant)
-            assert m.run()==terminal and m.regs[card.RTC_LAST]==card.RTC_STAGE<<16|last
-            assert m.regs[card.RTC_FLAG]==card.FEL_FLAG
-            assert m.regs[0x02050014]==(policy if variant=='stuck-clear' else 0x41)
-            cases.append(name+'-'+variant)
-        for text,last,terminal in (('r2, [r5]',0x86,'park'),('r1, [r0]',0x84,'rom')):
-            instructions=list(Cs(CS_ARCH_ARM,CS_MODE_ARM).disasm(code,card.GATE))
-            stores=[i for i in instructions if i.mnemonic=='str'and i.op_str==text]
-            assert len(stores)==1
-            changed=bytearray(raw);struct.pack_into('<I',changed,stores[0].address-card.GATE,0xe320f000)
-            m=Machine(bytes(changed));assert m.run()==terminal
-            assert m.regs[card.RTC_LAST]==card.RTC_STAGE<<16|last and m.regs[card.RTC_FLAG]==card.FEL_FLAG
-            cases.append(name+'-mutation-omitted-'+text)
-        m=Machine(raw);m.regs[card.RTC_FLAG]=0;m.regs[0x02050014]=0;m.regs[card.RTC_LAST]=0x01115000
-        assert m.run()=='cold' and not any(e[0]=='write' for e in m.events)
-        assert m.regs[card.RTC_LAST]==0x01115000
-        cases.append(name+'-cold-card-path-writes-nothing-and-enters-original-boot0')
+        cold=request_cases(name,raw,policy,code,cases)
+        warm_cases(name,raw,policy,code,cold,cases)
+        cold_cases(name,raw,cases)
+    # The warm proof as the runner sets it: WDT0 armed at 0x41, marker set.
+    m=Machine(upload,entry='warm');m.regs[WDT_MODE]=0x41
+    assert m.run()=='rom' and m.regs[WDT_MODE]==0xb1 and m.restarts==1
+    assert m.regs[card.RTC_FLAG]==card.expected_flag({'profile':warm['profile'],'watchdog':{'mode':0x41}})
+    assert m.regs[card.RTC_LAST]==IMAGE_CRUMB
+    cases.append('warm-proof-records-entry-mode-and-rearms')
     # The runner's last transaction before exe is an RTC MMIO command. In the
     # reviewed tool every MMIO command first runs aw_disable_icache, so execute
     # that helper's instructions from its pinned source and then the gate.
@@ -201,16 +323,20 @@ def main():
     package=module('direct_gate_package','tools/card-fel-image.py')
     original=(Path.home()/'.cache/sunstoneos/sources/board-boot/boot0_sdcard_orangepizero3w.fex').read_bytes()
     patched=package.first_stage(original,code)
-    assert len(patched)==246272 and struct.unpack_from('<I',patched,12)[0]==package.checksum(patched)
+    assert len(patched)==len(original)+1024 and struct.unpack_from('<I',patched,12)[0]==package.checksum(patched)
     restored=bytearray(patched[:len(original)]);restored[:4]=original[:4];restored[12:20]=original[12:20]
     assert restored==original
     sector=patched[len(original):]
-    assert len(sector)==512 and sector[:length]==code and struct.unpack_from('<I',sector,length)[0]==0
-    m=Machine(sector,base=0x83000);assert m.run()=='rom' and m.regs[0x02050014]==0 and m.restarts==0
-    cases.append('card-package-uses-proof-gate-code-with-disarm-policy')
+    assert len(sector)==1024 and sector[:length]==code and struct.unpack_from('<I',sector,length)[0]==0
+    assert not any(sector[length+4:])
+    m=Machine(sector,base=0x83000);assert m.run()=='rom' and m.regs[WDT_MODE]==0 and m.restarts==0
+    m=Machine(sector,base=0x83000,entry='warm');m.regs[WDT_MODE]=1
+    assert m.run()=='rom' and m.regs[WDT_MODE]==0 and m.regs[card.RTC_FLAG]==STAGE|WARM|1
+    m=Machine(sector,base=0x83000,entry='cold');assert m.run()=='cold' and m.regs[MARKER]==KEYED
+    cases.append('card-package-sectors-at-0x83000-request-warm-and-cold')
     rom=(Path.home()/'.cache/sunstoneos/evidence/rom-copy-20261016-084055/physical-rom.bin').read_bytes()
     assert hashlib.sha256(rom).hexdigest()=='a8e31821e8a1611d75867825914c58373c732742cb8f2235e8168c1d7e93b5aa'
-    for length,expected in ((0x3c200,True),(0xa7800,True),(0x3c201,False),(0xa7a00,False)):
+    for length,expected in ((0x3c200,True),(0x3c400,True),(0xa7800,True),(0x3c201,False),(0xa7a00,False)):
         cpu=Uc(UC_ARCH_ARM,UC_MODE_ARM);cpu.mem_map(0,0x20000);cpu.mem_write(0,rom)
         result=[]
         def stop(cpu,address,size,unused):

@@ -97,19 +97,55 @@ def arm_arguments(mode):
     return args
 
 
+# Words that tell a cold power-on from a warm reset (docs/designs/card-fel-recovery.md):
+# the first-stage gate's record in RTC GP2, the cold-boot marker (RTC IC_CHARA_REG,
+# A733 manual 9.1.7.20), the DCXO control word with the reset level in bit 13
+# (9.1.7.16) and WDT0's configuration and output. Never cleared with WORDS.
+RESET_WORDS = {'flag': RTC + 0x108, 'marker': RTC + 0x1f0, 'xo_ctrl0': RTC + 0x160,
+               'wdt_config': WDT_CONFIG, 'wdt_output': WDT_OUTPUT}
+MARKER, MARKER_KEYED, MARKER_SET = RTC + 0x1f0, 0x16aa16aa, 0x16aa
+FEL_REQUEST, GATE_STAGE = 0x5aa5a55a, 0x0c02
+GATE_FLAGS = {'cold': 0x8000, 'warm': 0x4000, 'unmarked': 0x2000}  # include/a733_card_fel_gate.h
+
+
+def reset_arguments():
+    args = []
+    for address in RESET_WORDS.values():
+        args += ['readl', hex(address)]
+    return args
+
+
+def gate_record(flag):
+    """Decode the first-stage gate's record in GP2, or None for another value."""
+    if flag >> 16 != GATE_STAGE:
+        return None
+    record = {name: bool(flag & bit) for name, bit in GATE_FLAGS.items()}
+    record.update(refused_step=flag >> 8 & 0xf, mode=flag & 0xff)
+    return record
+
+
+def effective_mode(before, record):
+    """WDT0's mode at the reset: the production gate disarms WDT0 on a warm
+    entry and records the mode it read, so a zero readback defers to it."""
+    if record and record['warm'] and before == 0:
+        return record['mode']
+    return before
+
+
 def return_arguments():
-    """One FEL invocation on the returned instance: mode, disarm, mode again, crumbs."""
+    """One FEL invocation on the returned instance: mode, disarm, mode again, crumbs, reset words."""
     args = ['readl', hex(WDT_MODE), 'writel', hex(WDT_MODE), hex(KEY), 'readl', hex(WDT_MODE)]
     for offset in WORDS.values():
         args += ['readl', hex(RTC + offset)]
-    return args
+    return args + reset_arguments()
 
 
 def parse_return(stdout):
     values = [int(x, 16) for x in stdout.split()]
-    if len(values) != 2 + len(WORDS):
+    if len(values) != 2 + len(WORDS) + len(RESET_WORDS):
         raise ValueError('Unexpected watchdog return readback.')
-    return values[0], values[1], dict(zip(WORDS, values[2:]))
+    crumbs = values[2:2 + len(WORDS)]
+    return values[0], values[1], dict(zip(WORDS, crumbs)), dict(zip(RESET_WORDS, values[2 + len(WORDS):]))
 
 
 def bundle_image(bundle, image_sha256):

@@ -27,16 +27,17 @@ eight RTC words; it does not clear them.
 The early SunstoneOS gate applies the same request before boot0's board setup,
 DRAM initialization or storage access. The gate is stackless and
 position-independent AArch32 code
-([source](../../boot/a733/card-fel-gate.S)). A clear request continues at
-boot0's original reset stub, `0x47b00`, and writes no RTC word. The matching
-request requires translation and data caches off and the known clear ROM
-redirect words. The gate then disables and invalidates the instruction cache,
-checks a recognized watchdog state and applies its WDT0 policy (below) with
-readback. It then clears the request with barriers and readback, invalidates
-the branch predictor and branches to ARM ROM `0x20`. A policy readback refusal
-keeps the request pending and parks with WDT0 still armed. An unconfirmed
-clear enters FEL with a failure code. The gate changes no voltage, clock or
-secondary power policy.
+([source](../../boot/a733/card-fel-gate.S)). Without the request, the
+cold-boot predicate below selects between boot0 and FEL. The request path,
+and the warm path without it, require translation and data caches off and the
+known clear ROM redirect words; otherwise the gate records a refusal and
+parks, because ROM `0x20` is then unsafe. The gate then disables and
+invalidates the instruction cache and applies its WDT0 policy (below) with
+readback. It then clears the request, or stores its warm record, with
+barriers and readback, invalidates the branch predictor and branches to ARM
+ROM `0x20`. A watchdog refusal records its code, leaves WDT0 as found and
+still enters FEL. An unconfirmed clear enters FEL with a failure code. The
+gate changes no voltage, clock or secondary power policy.
 
 The WDT0 policy is the 32-bit word that immediately follows the gate code; the
 code loads it PC-relative, so every profile runs identical code bytes. Zero
@@ -44,13 +45,18 @@ disarms WDT0: the card first stage appends zero, because FEL must not reset
 under a watchdog. A nonzero value is a WDT0 mode that the gate writes with the
 key and then restarts through the control register (A733 manual §8.3.6.4,
 key `0xa57`). The FEL proof uses `0xb1`: enabled, 16 seconds, the largest
-interval (§8.3.6.6). Before a nonzero policy, or with WDT0 already enabled,
-the gate requires system-reset configuration and reset output.
+interval (§8.3.6.6). Before a nonzero policy the gate requires a recognized
+mode, system-reset configuration and reset output. A disarm needs none of
+them: WDT0 reads mode `1` after a watchdog reset, and its configuration and
+output words after that reset are unmeasured.
 
 On the requested path the gate records its progress in the RTC LAST word,
 `0x07090104`, as stage `0x0c02` in the high half and a value in the low half
 ([codes](../../include/a733_card_fel_gate.h)). Each store is followed by a DSB.
-The gate leaves the fault, ESR, ELR and FAR words unchanged.
+On the warm path the same values go to RTC general-purpose register 2
+(`0x07090108`) and end in the gate record described below, so LAST keeps the
+breadcrumb of the image that was running. The gate leaves the fault, ESR,
+ELR and FAR words unchanged.
 
 | Value | Meaning |
 | --- | --- |
@@ -61,9 +67,9 @@ The gate leaves the fault, ESR, ELR and FAR words unchanged.
 | `5` | Before the branch to ROM `0x20` |
 | `0x81` | Refused: MMU or data cache enabled |
 | `0x82` | Refused: a ROM redirect word is nonzero |
-| `0x83` | Refused: unrecognized watchdog mode, configuration or output |
-| `0x84` | Request readback nonzero after the clear; FEL entered anyway |
-| `0x86` | Refused: WDT0 mode readback differs from the policy |
+| `0x83` | Re-arm refused: unrecognized watchdog mode, configuration or output; FEL entered |
+| `0x84` | Request or record readback differs after the store; FEL entered anyway |
+| `0x86` | WDT0 mode readback differs from the policy; FEL entered |
 
 The captured ROM's entry at `0x20` bypasses BOOT sampling but still checks the
 second software redirect at `0x070501d4`. All redirect words therefore remain
@@ -204,41 +210,80 @@ before the OS starts. An absent FEL request does not authorize card boot.
 Without an explicit reboot request, an unknown reset cause must select FEL,
 so a hung OS cannot create a card-boot loop.
 
-The reset-cause predicate remains unresolved. The pinned A733 manual's PRCM
-register inventory (§4.2.4) and RTC register inventory (§9.1.6) identify no
-retained power-on-versus-warm reset cause. RTC `0x07090160[13]` reports the
-current reset level (§9.1.7.16); `0x070901f4[3]` enables the POR reset output
-(§9.1.7.21). Neither records the preceding reset. WDT `0x02050004[0]` is an
-interval-interrupt pending bit, and RTC `0x07090304` is ROM software progress;
+The A733 has no retained hardware reset cause. The manual's PRCM register
+inventory (§4.2.4) and RTC register inventory (§9.1.6) list none.
+RTC `0x07090160[13]` reports the current reset level (§9.1.7.16), and
+`0x070901f4[3]` enables the POR reset output (§9.1.7.21); neither records the
+preceding reset. WDT `0x02050004[0]` is an interval-interrupt pending bit, and
+RTC `0x07090304` is ROM software progress;
 [the reset audit](../watchdog-reset-evidence.md) explains those exclusions.
+The pinned U-Boot's `board_sun60iw2.c` issues the watchdog software-reset
+command without reading a cause latch. Its AXP8191 driver decodes PMIC register
+`0x50[2:0]` as supply-rise, button and IRQ power sources, but the inspected
+code does not establish that field's retention or clearing, and the gate
+cannot reach the PMIC before boot0 initializes the TWI bus.
 
-The pinned U-Boot's `arch/arm/mach-sunxi/rtc.c` implements software boot requests,
-and `board_sun60iw2.c` issues the watchdog software-reset command without
-reading a cause latch.
-Its AXP8191 driver decodes PMIC register `0x50[2:0]` as supply-rise, button and
-IRQ power sources. The inspected code does not establish that field's retention
-or clearing semantics, or that it distinguishes an SoC warm reset from power-on.
-The source identities are in [the recovery inventory](../vendor-firmware/data/card-fel-recovery.json).
-Installation requires an A733-specific reset indication, its retention and
-clearing rules, and an audit of ROM consumption before the gate reads it.
-The current request-only RAM proof does not implement this cold-only policy.
+The vendor kernel detects a cold boot with a software marker instead. Its RTC
+driver (`bsp/drivers/rtc/rtc-sunxi.c` at board-kernel revision
+`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`, lines 1018..1041) reads an RTC
+general-purpose word: the reset value zero means the RTC domain lost power,
+and the driver then stores a nonzero boot reason. The manual states the basis:
+RTC registers below offset `0x300` lie in the VDD_RTC power domain
+(§9.1.6 note), and their contents persist while VDD_RTC stays above 0.7 V
+(§9.1.4.4). A system reset, including a WDT0 reset, does not reset them; the
+breadcrumb words at `0x07090100..0x0709011c` survive every recorded watchdog
+return.
 
-The card runner must set the request before execution that could reset through
-a bootable card. A card-aware OS must set it before an expected watchdog stop
+SunstoneOS uses the same principle with a register that no other code touches.
+IC_CHARA_REG at `0x070901f0` (§9.1.7.20) is in the VDD_RTC domain and resets
+to `0x00000000`. A write takes effect only when bits 31:16 hold the key
+`0x16aa`; bits 15:0 then read `0x16aa`, and otherwise read zero. The
+predicted full readback after a keyed write is `0x16aa16aa`; the predicate
+tests bits 15:0 only. The captured
+ROM accesses only RTC offsets `0x120`, `0x15c`, `0x160`, `0x16c`, `0x304`,
+`0x310` and `0x328`, and the pinned boot0 holds no literal for `0x070901f0`,
+so neither changes the marker.
+
+The cold-boot predicate is therefore `0x070901f0[15:0] == 0`:
+
+| Reset kind | Predicted `0x070901f0` at gate entry | Gate decision |
+| --- | --- | --- |
+| Power-on after VDD_RTC fell below 0.7 V | `0x00000000` | Cold: set the marker, continue to boot0 |
+| WDT0 reset after the marker was set | `0x16aa16aa` | Warm: FEL |
+| ROM `0x20` re-entry or FEL launch | Unchanged; the gate does not run | None |
+| Power interruption too short to discharge VDD_RTC | `0x16aa16aa` | Warm: FEL |
+| Any other value | Unknown | FEL |
+
+The marker must be set in every power epoch before the first reset that can
+reach the card. The cold-path gate sets it. The runner must also set it at its
+first FEL contact, because a board that powers up in FEL never runs the gate;
+without that write the first watchdog return would read zero and boot the card.
+A misclassification in the safe direction, a cold power-on read as warm, enters
+FEL. A warm reset read as cold requires the marker to be cleared without a
+VDD_RTC power loss.
+
+Two parts of the predicate remain unconfirmed on the board: the keyed readback
+value and its retention across a WDT0 reset. The board also has no measurement
+of whether removing USB power discharges VDD_RTC; the 2026-10-31 replug left
+the PMIC rail selectors unchanged ([watchdog.md](../watchdog.md)).
+
+With the cold-boot predicate, a warm reset enters FEL without a request. The
+vendor request remains the path for software that runs after a cold decision.
+A card-aware OS must set it before an expected watchdog stop
 and verify the write before parking. Its admission and renewal predicates must
 name that recovery policy and the exact request value. Existing zero-request
 contracts remain distinct. The RAM proof does not implement or qualify those
 OS contract changes.
 
 The early gate is packaged with the pinned boot0 by changing only its initial
-branch, header length/checksum and appended gate sector. The normal path keeps
+branch, header length/checksum and appended gate sectors. The normal path keeps
 the vendor setup and loader. Its stock package location remains unchanged;
-the FAT32 loader and below-sector-2048 installation are subsequent work.
-The gate occupies 472 bytes of code and a 4-byte policy word; the packaged first stage is 246,272 bytes
-(sectors 16..496). The current installer's 480-sector boot0 range ends at
-495 and does not authorize that extra sector. No installation plan is emitted.
+the FAT32 loader is subsequent work. The gate occupies 688 bytes of code and a
+4-byte policy word, padded to two sectors; the packaged first stage is
+246,784 bytes (sectors 16..497). The storage updater's 480-sector boot0 range
+ends at 495; the boot-area write class below admits the longer extent.
 
-The captured ROM admits the new aligned length `0x3c200` under its
+The captured ROM admits the new aligned length `0x3c400` under its
 `0xa7800` limit. Its conditional checksum path does not establish universal
 authentication of appended bytes; the host producer independently checks the
 pinned original and the complete derived checksum. The source identities and
@@ -249,3 +294,164 @@ The RAM proof establishes request consumption and direct FEL entry. It does
 not establish watchdog-reset-to-card execution, power-loss retention, recovery
 from an inaccessible fabric, or autonomous cold boot. Each remains a separate
 physical qualification requirement.
+
+## Installing the first stage on the port 3-3 card
+
+**Status: steps A to C passed on 2026-11-12; the write, step D, is not
+approved.** The coordinator approved the code, the runner's marker write and
+board steps A to C below. Their records are in
+[the evidence file](../evidence/card-fel-recovery.jsonl). The card on port 3-3 is the
+scratch card with CID `2750485344333247120000029d014c47`. Its MBR holds one
+FAT32 partition from sector 2048 for 61,065,216 sectors, so sectors 1..2047
+lie outside every partition.
+
+### Code for the install
+
+- **Gate revision with the cold-boot predicate.** A request still selects FEL.
+  Without a request, `0x070901f0[15:0] == 0` selects the cold path, and any
+  other value selects FEL. The warm path disarms WDT0 and branches to ROM
+  `0x20`. The previous gate refused and parked when WDT0 mode was nonzero and
+  the configuration or output words differed from `1` and `2`. WDT0 mode
+  reads `1` after a watchdog reset and those two words after a reset are
+  unmeasured, so that gate could have parked a board after a watchdog reset
+  with no USB device. The revision checks them only before arming WDT0, and a
+  watchdog refusal enters FEL. The cold path writes `0x16aa16aa` to
+  `0x070901f0` and reads it back, arms WDT0 at 16 seconds, and continues at
+  boot0's reset stub `0x47b00`; if boot0 then hangs, the watchdog reset reaches
+  the warm path and FEL. A marker that does not read back selects FEL.
+- **Gate record.** The warm and cold paths leave the LAST and fault words
+  unchanged, so a hung image's breadcrumbs survive the reset. The gate keeps
+  its record in RTC general-purpose register 2 (`0x07090108`)
+  ([constants](../../include/a733_card_fel_gate.h)). The record never equals
+  the request value `0x5aa5a55a`. Its fields are:
+  - bits 31:16: `0x0c02`;
+  - bit 15: a cold path has run in this power epoch;
+  - bit 14: the latest entry selected FEL;
+  - bit 13: the cold path's marker did not read back;
+  - bits 11:8: the refused watchdog step;
+  - bits 7:0: the WDT0 mode read at entry.
+- **Runner marker and reads.** At every new FEL instance, before the
+  session's first watchdog reset, `tools/board.py` reads `0x07090108`,
+  `0x070901f0`, `0x07090160` and the WDT0 configuration and output words, and
+  records them under `power_epoch`. It then clears a gate record and writes
+  `0x16aa16aa` to the marker when its low half is not `0x16aa`. A marker that
+  does not read back refuses the run before any reset. Every return reads the
+  same words. When WDT0 reads zero and a warm gate record is present, the
+  record's mode classifies the return, because the gate disarmed WDT0.
+- **Warm-entry SRAM proof.** The build makes a second proof image,
+  `a733-card-fel-warm.elf`, with the same gate bytes and profile entry `2`.
+  The runner then sets no request and requires the marker before the execute
+  request. The proof passes when WDT0 holds the re-armed `0xb1`, LAST is
+  unchanged and GP2 holds `0x0c024041`, the warm record with the mode `0x41`
+  that the runner armed.
+- **Boot-area storage admission.** Descriptor key `storage_boot_area`
+  (`tools/storage_bounds.py:admit_boot_area`) admits one write range equal to
+  the extent in the first-stage manifest, ending below sector 2048 and below
+  the partition start, with backup ranges `[0,1]` and `[16,496]`. The
+  approval record names the backup, the candidate's SHA-256, the manifest and
+  its hash, and the direction: `install` requires the manifest's first stage,
+  and `restore` requires the extent's bytes from a named earlier backup.
+- **Raw-extent write.** Mode 10 of `apps/storage-write-test` takes the bounds
+  blob and a mode input that holds a 512-byte header and the candidate
+  sectors. `ss_storage_enable` re-reads the backup ranges and refuses unless
+  their SHA-256 equals the blob's. The application writes the extent in
+  ascending pieces of at most 256 sectors, reads it back, compares SHA-256
+  with the candidate, re-reads sector 0, and mounts and unmounts the FAT32
+  partition without writing, as `include/sunstone_storage.h` requires after
+  raw device writes.
+- **Writer audit.** `checks/rtc-marker-writers.py` fails when a tracked
+  source outside the gate and the runner names the marker register.
+
+The revised gate is 688 bytes, so the gate and its policy word fill two
+appended sectors. The first stage is 246,784 bytes, sectors 16..497 (482
+sectors), with SHA-256
+`f704f71f00748d58c631e78ca513d9c4fb8750d1e9f565dadeb14253518f3f98`. The
+captured ROM admits the length `0x3c400`.
+
+### Board steps
+
+| Step | Kind | Card access | Prediction |
+| --- | --- | --- | --- |
+| A | Predicate reads on one returning image that ends in a WDT0 reset | None | `0x070901f0` reads `0` at first contact (no writer exists), `0x16aa16aa` after the runner's write and after the watchdog return; `0x07090160[13]` reads `1` each time |
+| B | SRAM proof of the revised gate's warm path through FEL `exe` (`a733-card-fel-warm.elf`) | None | New FEL instance within 1 s of the request; GP2 `0x0c024041`; WDT0 re-armed to `0xb1` under the proof policy; LAST unchanged |
+| C | Read-only capture with `apps/sd-backup-probe`, ranges `0:1 16:496 2048:1 24576:1 32800:1` (500 sectors) | Read | Sector 0 equals the registered restore point; sector 2048 is the partition's FAT32 boot sector; sectors 24576 and 32800 lack the TOC1 magic `0x89119800` at byte 16 |
+| D | Raw-extent write with `--storage-write` (not approved) | Write 16..497 | Readback SHA-256 equals the candidate's; sector 0 unchanged |
+| E | One returning image that ends in a WDT0 reset | None | The cold-predicate gate's warm-path record below |
+
+### Results of steps A to C
+
+- **Step A** ran on the request-path SRAM proof of the revised gate, because
+  every session already includes a WDT0 reset before launch. IC_CHARA read
+  `0` at first contact, `0x16aa16aa` after the runner's keyed write, after the
+  session's WDT0 reset and after the gate's ROM re-entry. WDT0 configuration
+  and output read `1` and `2` after a WDT0 reset, the first measurement of
+  those two words.
+- **Step B** matched its prediction: GP2 `0x0c024041`, WDT0 `0xb1` when first
+  read, LAST `0`, and a new FEL instance 0.518 seconds after the execute
+  request.
+- **Host emulation** of the exact first-stage file, executed whole from
+  `0x47000`, reached the gate and gave the request, watchdog-return and cold
+  records predicted below.
+- **Step C** captured 500 sectors. Sector 0 equals the restore point. Sector
+  2048 differs from the restore point only in the volume label, which the
+  reformats of 2026-11-03 rewrote. Sectors 16..511 are all zero, and neither
+  sector 24576 nor sector 32800 holds a TOC1 header.
+
+Step C writes the capture to
+`~/.cache/sunstoneos/build/card-boot-1111/card-backup/3-3-boot-area.bin`
+(500 records of a little-endian 64-bit sector and its 512 bytes), with a
+manifest listing the SHA-256 of the file, of the 16..511 records and of each
+single-sector record. The approval record's backup file holds the 497 records
+of sectors 0 and 16..511, the backup ranges that the OS re-reads. Sector 0 must match the restore point before the
+approval record is written. If sector 24576 or 32800 holds a valid TOC1 header,
+installation stops, because the cold path would hand off to that package.
+
+Step D writes exactly one extent:
+
+| First sector | Sectors | Bytes | Contents | Restored from |
+| --- | --- | --- | --- | --- |
+| 16 | 482 | 246,784 | Pinned boot0 with the patched branch, length and checksum, then the two gate sectors | Step C records 16..497 |
+
+The OS verifies the backup digest before its first write, so a card that
+changed after step C is refused. The session needs about 1 s for the card
+opening, under 50 ms for the two CMD25 pieces and under 10 ms for the
+readback, within the 60-second session and its 55-second finish.
+
+### Predicted boot records
+
+The ROM's card loader finds a valid boot0 header at sector 16 and copies
+`0x3c400` bytes to `0x47000`. The patched branch enters the gate at
+`0x83000`.
+
+- **Watchdog return** (marker set by the runner): the gate takes the warm
+  path in microseconds and enters FEL. The runner then reads gate record
+  `0x0c024001` (bit 14, WDT0 mode `1`), WDT0 mode `0`, `0x070901f0` =
+  `0x16aa16aa`, and the image's own LAST and fault words. The ROM's card read
+  of 246 KB adds an unmeasured delay to the 1.79-second reset-to-instance time
+  recorded for a ROM re-entry; at 4-bit 25 MHz it is about 20 ms, and step E
+  budgets 6 s.
+- **Cold power-on** (VDD_RTC discharged): the gate reads zero, sets the
+  marker, arms WDT0 for 16 s and continues into boot0. boot0 initializes
+  DRAM and looks for a TOC1 package at sector 32800 and then 24576. Neither
+  holds one, so boot0 prints `Loading boot-pkg fail`, waits 10 ms and branches
+  to ROM `0x20` (`829ea8e3@0x5e1b8..0x5e1d2`), which enters FEL. If the runner
+  does not disarm WDT0 within 16 s, the reset reaches the warm path and FEL.
+  The record then holds bit 15, and bit 14 if that reset occurred.
+- **Power-on with VDD_RTC still above 0.7 V**: the warm path, as for a
+  watchdog return.
+
+### Restoring the card over FEL
+
+Every predicted path ends in FEL, so restoration needs no card removal. From
+any FEL instance, a read-only capture of `0:1 16:496` confirms the installed
+bytes, and a raw-extent write in the `restore` direction with the step C
+records 16..497 as the candidate
+returns the extent to its original bytes; its readback must equal the hash of
+those records. If sector 16 held no boot0 header before the install, the ROM
+then finds no boot0 and enters FEL, as it does today.
+
+One failure remains outside this procedure: a defect that stops both the
+warm path and the cold path before FEL. The board then presents no USB device
+until the card is removed. Step B executes the revised gate's code bytes on
+the board from SRAM, and the host checks execute the packaged sector at
+`0x83000`, before step D runs.

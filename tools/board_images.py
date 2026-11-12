@@ -443,7 +443,7 @@ def policy(info, args, session=None):
         require(approved and args.kind == 'probe', 'Card FEL recovery requires --approved-by coordinator.')
         require(not args.input and not getattr(args, 'decoder', None),
                 'Card FEL recovery takes no inputs and uses its fixed retained result decoder.')
-        require(not storage and not d.get('storage_bounds') and not d.get('storage_scratch') and
+        require(not storage and not d.get('storage_bounds') and not d.get('storage_scratch') and not d.get('storage_boot_area') and
                 bounds.classify(args.image) == 'no-core', 'Card FEL recovery must have no SD core or storage-write authority.')
         require(not d.get('operating_points') and getattr(args, 'restore_rails', None) is not True,
                 'Card FEL recovery carries no clock, rail or power transition authority.')
