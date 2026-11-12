@@ -625,6 +625,7 @@ def c_tables(m):
     c = cname(m['name'])
     gpu = m.get('gpu')
     gpu_us = gpu['job_us'] if gpu else 0
+    sd_guard = '#if 1' if any(not (r['flags'] & 8) for r in m.get('large_regions', [])) else '#ifdef SUNSTONE_A733_OS_SD_WRITE'
     lines = ['/* Fixed image composition from the application manifest. */',
              '#include "os.h"', '#include "application.h"', '#include "irq_table.h"',
              '#include "%s-app.h"' % c,
@@ -667,12 +668,12 @@ def c_tables(m):
              '    OS_SERVICE_TABLE', '};',
              '#ifdef SUNSTONE_BOARD_USB2_IRQ', 'extern void board_host_irq(void);', '#endif',
              '#ifdef SUNSTONE_A733_HW_FACTS', 'extern void os_hw_facts_irq(void);', '#endif',
-             '#ifdef SUNSTONE_A733_OS_SD_WRITE', 'extern void os_sd_irq(void);', '#endif',
+             sd_guard, 'extern void os_sd_irq(void);', '#endif',
              'const struct a733_irq_route a733_irq_routes[] = {', '    {71,0,0xd8,os_thermal_irq},',
              '#ifdef SUNSTONE_BOARD_USB2_IRQ', '    {187,0,0xd8,board_host_irq},', '#endif',
              # The NPU's line, in every image; the hardware-facts probe takes it itself.
              '#ifndef SUNSTONE_A733_HW_FACTS', '    {97,OS_NPU_CORE,0xd8,os_npu_irq},', '#endif',
-             '#ifdef SUNSTONE_A733_OS_SD_WRITE', '    {193,0,0xd8,os_sd_irq},', '#endif',
+             sd_guard, '    {193,0,0xd8,os_sd_irq},', '#endif',
              # DMA0's one line: the I2S stream's, or in an image with the RAM-copy service the handler of whichever
              # of the two the session granted. The hardware-facts probe takes the line itself.
              '#ifndef SUNSTONE_A733_HW_FACTS', '#ifdef SUNSTONE_A733_OS_DMA', '    {143,0,0xd8,os_dma0_irq},', '#else',

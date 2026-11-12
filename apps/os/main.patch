@@ -60,7 +60,7 @@
      fail_close();a733_typec_revoke(&board.typec.provider);
  }
  static _Noreturn void park(void){for(;;)vTaskSuspend(NULL);}
-@@ -115,6 +144,8 @@
+@@ -115,10 +144,16 @@
  static void pmic(void *unused)
  {
      (void)unused;for(;;){
@@ -69,6 +69,15 @@
          if(!board_live(NULL))park();
          const uint32_t ticks=a733_power_service_step(&providers.domains);
          const int ready=a733_power_service_ready(&providers.domains);
+-        if(ready>0)atomic_store_explicit(&providers.shared.pmic_ready,1,memory_order_release);
++        if(ready>0){
++            atomic_store_explicit(&providers.shared.pmic_ready,1,memory_order_release);
++            extern void os_sd_pmic_ready(void) __attribute__((weak));
++            if(os_sd_pmic_ready)os_sd_pmic_ready();
++        }
+         else if(ready<0){
+             const struct a733_pmic *p=providers.domains.pmic;
+             const uint32_t site=SUNSTONE_CRUMB_FAIL_SITE(PMIC),value=p&&p->rails?a733_power_authority_load(&p->rails->authority):~0u;
 @@ -136,6 +167,14 @@
  {
      (void)unused;int started=0;

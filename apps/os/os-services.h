@@ -101,7 +101,12 @@ enum { OS_SERVICE_APPLICATION = 5, OS_SUPERVISED_ROWS(OS_SERVICE_ID_) OS_SERVICE
 /* Deadline storage for supervised tasks, the SD owner, the NPU bootstrap,
  * service worker and optional queue power worker, GPU service/peer, and DMA
  * service/bootstrap workers. */
-#define OS_DEADLINE_OWNERS (OS_SERVICES + 4u + OS_WITH_GPU(2u +) OS_WITH_DMA(2u +) 0u)
+#ifdef SUNSTONE_A733_OS_SD_WRITE
+#define OS_SD_LOADER_DEADLINES 1u
+#else
+#define OS_SD_LOADER_DEADLINES 0u
+#endif
+#define OS_DEADLINE_OWNERS (OS_SERVICES + 4u + OS_WITH_GPU(2u +) OS_WITH_DMA(2u +) OS_SD_LOADER_DEADLINES)
 /* The supervision table's rows after the application's, and the grant each one needs, indexed by service id. */
 #define OS_SERVICE_ENTRY_(NAME, name, window_us, grant, with) with({name, window_us},)
 #define OS_SERVICE_TABLE OS_SUPERVISED_ROWS(OS_SERVICE_ENTRY_)

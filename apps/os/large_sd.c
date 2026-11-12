@@ -1,16 +1,10 @@
-/* The read-only SD0 binding of the OS image for the large-region loader (docs/designs/large-app-regions.md).
- *
- * It uses the OS's own shared providers (providers.shared: counter, locks, clock leases, pins, rails, the PMIC that
- * the board-pmic task serves) and the read-only build of the SD core (SUNXI_MMC_READ_ONLY: no write or erase command
- * is reachable, checks/sd-read-only.py). The loader task owns the platform: os_large_device() runs in it, identifies
- * the card in profile 2 (four-bit high speed, 3.3 V) and returns the device; os_large_device_close() restores the
- * clock, pins and rail leases when the last region has loaded. A failure of any step retains the platform (the
- * provider keeps ownership of what it touched) and returns no device, so every region fails as unloadable and the
- * application is told.
- *
- * The same sequence runs as apps/sd-read-probe on a board, where it identified the card, read it at 21.9 MB/s per
- * request and restored every register; this file differs in using the OS's providers and in running as the
- * loader task. Not yet run in an OS image on a board. */
+/* The read-only SD0 binding for the OS large-region loader.
+ * The loader owns the platform and its providers, identifies the card, enables
+ * INTID 193 for DMA reads, then masks it and restores resources after its last
+ * read. Controller completion wakes its task notification; register and card
+ * holds use precise deadlines. SUNXI_MMC_READ_ONLY excludes write and erase
+ * commands (checks/sd-read-only.py). A failure retains every uncertain resource.
+ * The read-only interrupt composition awaits physical qualification. */
 #include "FreeRTOS.h"
 #include "task.h"
 #include "app_large.h"
@@ -26,22 +20,27 @@
 #include "quiesce.h"
 #include "cpu-return.h"
 #include "sunstone_crumb.h"
+#include "sunstone_storage.h"
+#include "sunstone_deadline.h"
+#include "gicv3_spi.h"
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #ifdef OS_SD_WRITE
 #include "sd_hw.h"
-#include "gicv3_spi.h"
 #include "a733_storage_bounds.h"
 #include "storage_wait.h"
-#include "sunstone_deadline.h"
 /* A write-capable image: the read binding below is the shared setup of both images. sd_owner.c runs the one owner task,
  * so the two entry points get other names here and sd_owner.c supplies os_large_device() as a proxy for the loader. */
 #endif
 
 #define IDENTIFY_US 5000000u
+#define SMHC0 UINT32_C(0x04020000)
 #define LIFETIME_US 180000000u
 #define READ_US 500000u
+/* The initial busy retry cadence of sunxi_mmc.c:busy_wait, also used for
+ * register conditions whose admitted interface supplies no notification. */
+#define REGISTER_RECHECK_US 100u
 #define DMA_BUFFER (SUNXI_MMC_MAX_DMA_BLOCKS * 512u)
 
 /* True when the image declares a large region that the card loads: the PF bank must then be authorized at boot. */
@@ -77,6 +76,21 @@ static struct os_large_device device;
 static unsigned blocks_in_flight;
 static int opened;
 static atomic_uint close_proven;
+#ifndef OS_SD_WRITE
+/* A read-only image publishes the existing storage statistics after close. */
+static _Atomic uint64_t read_started_us,read_closed_us,read_sleep_us,read_wakes,read_irq_recheck;
+static _Atomic uint32_t read_owner_cores;
+static int read_sleep_until(uint64_t until,enum sunxi_mmc_wait hint)
+{
+    const uint64_t from=sunstone_deadline_now_us();
+    const int result=sunstone_deadline_wait_until(until);
+    atomic_fetch_add_explicit(&read_sleep_us,sunstone_deadline_now_us()-from,memory_order_relaxed);
+    atomic_fetch_add_explicit(&read_wakes,1,memory_order_relaxed);
+    if(hint==SUNXI_MMC_WAIT_IRQ&&result!=SUNSTONE_DEADLINE_NOTIFIED)
+        atomic_fetch_add_explicit(&read_irq_recheck,1,memory_order_relaxed);
+    return result;
+}
+#endif
 #ifndef OS_SD_WRITE
 enum { SD_UNOPENED, SD_OPENING, SD_OPEN, SD_CLOSED, SD_FAILED };
 static atomic_uint storage_state;
@@ -138,7 +152,8 @@ static void sd_pause(void)
     uint64_t until=sd_deadline(now_us()+1000u);
     if(now_us()<until)(void)sunstone_deadline_wait_until(until);
 #else
-    vTaskDelay(1);
+    uint64_t until=now_us()+REGISTER_RECHECK_US;
+    if(until&&until!=UINT64_MAX)(void)read_sleep_until(until,SUNXI_MMC_WAIT_NONE);
 #endif
 }
 static int memory_ok(uintptr_t a, size_t bytes, uint8_t attributes, uint8_t shareability)
@@ -285,282 +300,6 @@ static int found_at_1v8(void)
 static unsigned saved_aux; static uint64_t saved_where;   /* where the last write fault stopped, kept across the restart that discards the core's result */
 static uint64_t first_fault_detail; static unsigned first_fault_piece, first_fault_idst;       /* the core's error, protocol step and interrupt status at the first failed request (apps/os/sd_note.h), kept for the failure record */
 static uint64_t last_sector; static uint32_t last_count; static uint8_t *last_dma;
-#ifdef OS_SD_WRITE
-static void irq_suspend(void);
-static int irq_resume(void);
-#endif
-/* A recovery that did not complete (stages 37 to 40) leaves the fault that began it: os_sd_diag[1] is the core's error, protocol step and interrupt status at the first failed
- * request, and os_sd_diag[2] the platform's result in 2:0, its fault flag and the rest as sd_note.h os_sd_recover_aux lays them out, for the record's aux field. */
-static int recover_fail(unsigned stage, enum a733_mmc_platform_result r)
-{
-    int rc = DIAG(stage, first_fault_detail);
-    os_sd_diag[2] = os_sd_recover_aux((unsigned)r, platform.fault ? 1u : 0u, (board_live_refusal() >> 28) & 7u, now_us() >= config.lifetime_deadline_us ? 1u : 0u,
-                                      first_fault_piece, first_fault_idst, r != A733_MMC_PENDING && r != A733_MMC_BUSY);
-    return rc;
-}
-/* A failed read the platform can recover (A733_MMC_ERROR): identify again, which tunes again, or step the mode down (a733_mmc_platform_recover). Blocking, in the owner. */
-static int recover_blocking(void)
-{
-    if(!sd_admission())return 0;
-    enum a733_mmc_platform_result r;
-    if (!first_fault_detail) { first_fault_detail = os_sd_first_fault(&platform.core); first_fault_piece = sunxi_mmc_piece_class(platform.core.write_request.blocks); first_fault_idst = sunxi_mmc_idst4(platform.core.result.dma_status); }
-    saved_where = os_sd_where_detail(&platform.core, platform.core.card.timing); saved_aux = (unsigned)os_sd_where_aux(&platform.core);
-#ifdef OS_SD_WRITE
-    irq_suspend();
-#endif
-    uint64_t deadline=sd_deadline(now_us()+RECOVER_US);
-    do {
-        if(!sd_admission()||!sd_time_left(deadline))return recover_fail(37,A733_MMC_ERROR);
-        r=a733_mmc_platform_recover(&platform,deadline);
-        if(r==A733_MMC_BUSY)sd_pause();
-    } while(r==A733_MMC_BUSY&&board_live(NULL));
-    if (r != A733_MMC_PENDING) return recover_fail(37, r);
-    ++restarts;
-    for (;;) {
-        uint64_t wake = now_us();
-        for (;;) {
-            if(!sd_admission()||!sd_time_left(deadline))return recover_fail(38,A733_MMC_ERROR);
-            r = a733_mmc_platform_poll(&platform);
-            if (r != A733_MMC_PENDING && r != A733_MMC_BUSY) break;
-            if (now_us() - wake >= 1000 || !board_live(NULL)) break;
-        }
-        if (r == A733_MMC_READY) break;
-        if ((r != A733_MMC_PENDING && r != A733_MMC_BUSY) || !board_live(NULL) || now_us() >= config.lifetime_deadline_us) return recover_fail(38, r);
-        sd_pause();
-    }
-    do {
-        if(!sd_admission()||!sd_time_left(deadline))return recover_fail(39,A733_MMC_ERROR);
-        r=a733_mmc_platform_card(&platform,&card,sd_deadline(deadline));
-        if(r==A733_MMC_BUSY)sd_pause();
-    } while(r==A733_MMC_BUSY&&board_live(NULL));
-    if (r != A733_MMC_READY) return recover_fail(39, r);
-    record_mode();
-#ifdef OS_SD_WRITE
-    if (!irq_resume()) return recover_fail(40, r);
-#endif
-    return 1;
-}
-/* One request at a time into dma, to completion or failure; the loader's metadata reads. */
-#ifdef OS_SD_WRITE
-static enum a733_mmc_platform_result drive_platform(uint64_t deadline, uint32_t recheck_us);
-static int sd_irq_mask_settled(void);
-static uint32_t recheck_for(uint32_t blocks, int write);
-#endif
-static int read_blocking(uint64_t sector, uint32_t count, uint8_t *dma)
-{
-    enum a733_mmc_platform_result r;
-    for (unsigned attempt = 0;; ++attempt) {
-        uint64_t deadline=sd_deadline(now_us()+READ_US);
-        do {
-            if(!sd_admission()||!sd_time_left(deadline))return DIAG(30,PLATX(A733_MMC_ERROR));
-            r=a733_mmc_platform_read(&platform,sector,count,dma,count*512u,sd_deadline(deadline));
-        } while(r==A733_MMC_BUSY&&board_live(NULL));
-        if (r != A733_MMC_PENDING) return DIAG(30, PLATX(r));
-#ifdef OS_SD_WRITE
-        r = drive_platform(deadline, recheck_for(count, 0));
-#else
-        do { r = a733_mmc_platform_poll(&platform); } while ((r == A733_MMC_PENDING || r == A733_MMC_BUSY) && board_live(NULL));
-#endif
-        if (r == A733_MMC_ERROR && attempt < A733_MMC_RECOVERIES && recover_blocking()) continue;      /* identify again or step down, then the same request again */
-        break;
-    }
-    if (r != A733_MMC_COMPLETE) return DIAG(31, PLATX(r));
-    do {
-        if(!sd_time_left(config.lifetime_deadline_us))return DIAG(32,PLATX(A733_MMC_ERROR));
-        r=a733_mmc_platform_take(&platform,&result,sd_deadline(config.lifetime_deadline_us));
-    } while(r==A733_MMC_BUSY);
-    if (r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.received == count * 512u) return 1;
-    return DIAG(32, PLATX(r));
-}
-static int sd_read(void *unused, uint64_t sector, uint32_t count, uint8_t *out)
-{
-    (void)unused;
-#ifndef OS_SD_WRITE
-    if(os_cpu_return_requested())return 0;
-#endif
-    if (!count || count > SUNXI_MMC_MAX_DMA_BLOCKS || sector + count > card.sectors) return 0;
-    uint8_t *dma = buffers + 2 * DMA_BUFFER;
-    if (!read_blocking(sector, count, dma)) return 0;
-    memcpy(out, dma, (size_t)count * 512u);
-    return 1;
-}
-static int sd_submit(void *unused, uint64_t sector, uint32_t count, uint8_t *dma)
-{
-    (void)unused;
-#ifndef OS_SD_WRITE
-    if(os_cpu_return_requested())return 0;
-#endif
-    if (!count || count > SUNXI_MMC_MAX_DMA_BLOCKS || sector + count > card.sectors) return 0;
-    enum a733_mmc_platform_result r;
-    uint64_t deadline=sd_deadline(now_us()+READ_US);
-    do {
-        if(!sd_admission()||!sd_time_left(deadline))return 0;
-        r=a733_mmc_platform_read(&platform,sector,count,dma,count*512u,sd_deadline(deadline));
-    } while(r==A733_MMC_BUSY&&board_live(NULL));
-    blocks_in_flight = count; last_sector = sector; last_count = count; last_dma = dma;
-    if (r != A733_MMC_PENDING) return 0;
-#ifndef OS_SD_WRITE
-    /* The request is accepted but the command is issued by the polls that follow, and the loader hashes the previous piece
-     * before it polls: without these steps the card would sit idle for that whole time. Step the controller until the
-     * command is issued (command_step 2 is the wait for it to finish), so that the data moves while the caller works. A
-     * step that fails or completes is seen again by sd_poll. */
-    for (unsigned steps = 0; steps < 64 && platform.core.command_step < 2; ++steps) {
-        r = a733_mmc_platform_poll(&platform);
-        if (r != A733_MMC_PENDING && r != A733_MMC_BUSY) break;
-    }
-#endif
-    return 1;
-}
-static int sd_poll(void *unused)
-{
-    (void)unused;
-    if(!sd_time_left(config.lifetime_deadline_us))return -1;
-    enum a733_mmc_platform_result r = a733_mmc_platform_poll(&platform);
-    if (r == A733_MMC_PENDING || r == A733_MMC_BUSY) return board_live(NULL) ? 0 : -1;
-    if (r == A733_MMC_ERROR) {
-        /* A failed read: identify again (or step down) and submit the same request again; the caller keeps waiting. */
-        if (!recover_blocking()) return -1;
-        uint64_t deadline=sd_deadline(now_us()+READ_US);
-        do {
-            if(!sd_admission()||!sd_time_left(deadline))return -1;
-            r=a733_mmc_platform_read(&platform,last_sector,last_count,last_dma,last_count*512u,sd_deadline(deadline));
-        } while(r==A733_MMC_BUSY&&board_live(NULL));
-        return r == A733_MMC_PENDING ? 0 : -1;
-    }
-    if (r != A733_MMC_COMPLETE) return -1;
-    do {
-        if(!sd_time_left(config.lifetime_deadline_us))return -1;
-        r=a733_mmc_platform_take(&platform,&result,sd_deadline(config.lifetime_deadline_us));
-    } while(r==A733_MMC_BUSY);
-    return r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.received == blocks_in_flight * 512u ? 1 : -1;
-}
-
-/* Runs in the loader task, which becomes the platform's owner task. */
-#ifdef OS_SD_WRITE
-const struct os_large_device *os_sd_open_owner_device(void)
-#else
-const struct os_large_device *os_large_device(void)
-#endif
-{
-#ifndef OS_SD_WRITE
-    unsigned state=SD_UNOPENED;
-    if(os_cpu_return_requested()||!atomic_compare_exchange_strong_explicit(&storage_state,&state,SD_OPENING,memory_order_acq_rel,memory_order_acquire))return NULL;
-#endif
-    if (!os_large_sd_declared() || opened) return DIAGP(1, opened);
-    /* The PMIC service must be up before the SD rail can be leased. */
-    for (unsigned waited = 0; !atomic_load_explicit(&providers.shared.pmic_ready, memory_order_acquire); ++waited) {
-        if (!sd_admission() || waited > 10000 || !board_live(NULL)) return DIAGP(2, waited);
-        sd_pause();
-    }
-    struct device_memory_pool *pool = a733_memory_uncached_init();
-    struct device_memory_extent extent;
-    if (!pool || device_memory_acquire(pool, UINT64_C(0x53443044), 4096, &descriptor_lease, &extent) != 1) return DIAGP(3, 0);
-    descriptors = (volatile struct sunxi_mmc_dma_descriptor *)extent.cpu;
-#ifdef OS_SD_WRITE
-    if (!sd_irq_mask_settled()) return DIAGP(12, 0);        /* the route table enabled INTID 193 at boot; the platform's baseline wants it masked */
-#endif
-    for (unsigned start18 = 0;; start18 = 1) {
-        if(!sd_admission())return DIAGP(4,0);
-        if (!configure(start18)) return DIAGP(4, 0);
-        if (!a733_mmc_platform_native_init_selected(&native, &providers.shared.locks, xTaskGetCurrentTaskHandle(), SUNXI_MMC_SD,
-                A733_MMC_EMMC_SDC2, admit, &platform)) return DIAGP(5, 0);
-        native.operations.dma_sync = dma_sync;
-        if (!a733_mmc_platform_init(&platform, &config, &native.operations, &native, &providers.shared.clocks,
-                &providers.shared.pins, &providers.shared.rails, &providers.shared.pmic)) return DIAGP(6, 0);
-        opened = 1;
-        /* Identification polls for up to a millisecond per wake and yields so that the PMIC task can answer. */
-        for (;;) {
-            uint64_t wake = now_us();
-            enum a733_mmc_platform_result r;
-            for (;;) {
-                if(!sd_admission()||!sd_time_left(config.deadline_us)){r=A733_MMC_ERROR;break;}
-                r = a733_mmc_platform_poll(&platform);
-                if (r != A733_MMC_PENDING && r != A733_MMC_BUSY) break;
-                if (now_us() - wake >= 1000 || !board_live(NULL)) break;
-            }
-            if (r == A733_MMC_READY) break;
-            if ((r != A733_MMC_PENDING && r != A733_MMC_BUSY) || !board_live(NULL) || now_us() >= config.deadline_us) {
-                (void)a733_mmc_platform_retain(&platform);
-                return DIAGP(7, PLAT(r));
-            }
-            sd_pause();
-        }
-        enum a733_mmc_platform_result r;
-        do {
-            if(!sd_admission()||!sd_time_left(config.deadline_us)){r=A733_MMC_ERROR;break;}
-            r=a733_mmc_platform_card(&platform,&card,sd_deadline(config.deadline_us));
-            if(r==A733_MMC_BUSY)sd_pause();
-        } while(r==A733_MMC_BUSY&&board_live(NULL));
-        if (r != A733_MMC_READY || !card.sectors) { (void)a733_mmc_platform_retain(&platform); return DIAGP(8, PLAT(r)); }
-        if (start18 || !found_at_1v8()) break;
-        /* The card was identified at 3.3 V but already signals 1.8 V (the rule above): one read so that the platform may close, close it with the bank at 3.3 V,
-         * and open it again with the bank moved to 1.8 V first and the card re-entered with no CMD11, the lifetime proven on 3-3. */
-        static uint8_t scratch[512];
-        if (!sd_read(NULL, 0, 1, scratch)) { (void)a733_mmc_platform_retain(&platform); return DIAGP(41, 0); }
-        enum a733_mmc_platform_result c;
-        uint64_t close_deadline=sd_deadline(config.lifetime_deadline_us);
-        do {
-            if(!sd_time_left(close_deadline)){c=A733_MMC_ERROR;break;}
-            c=a733_mmc_platform_close(&platform,close_deadline);
-            if(c==A733_MMC_BUSY||c==A733_MMC_PENDING)sd_pause();
-        } while(c==A733_MMC_BUSY||c==A733_MMC_PENDING);
-        if (c != A733_MMC_CLOSED) { (void)a733_mmc_platform_retain(&platform); return DIAGP(42, PLAT(c)); }
-        memset(&platform, 0, sizeof platform); memset(&native, 0, sizeof native); memset(&card, 0, sizeof card);
-        opened = 0; blocks_in_flight = 0; reopened = 1;
-    }
-    record_mode();
-#ifndef OS_SD_WRITE
-    atomic_store_explicit(&storage_state,SD_OPEN,memory_order_release);
-#endif
-    device = (struct os_large_device){{NULL, sd_read, card.sectors}, {NULL, sd_submit, sd_poll}, 0, 0, buffers};
-    return &device;
-}
-
-/* Restore the clock, the pins and the rail when the last region has loaded. */
-#ifdef OS_SD_WRITE
-void os_sd_close_owner_device(void)
-#else
-void os_large_device_close(void)
-#endif
-{
-    if (!opened) return;
-    enum a733_mmc_platform_result r=A733_MMC_ERROR;
-    uint64_t deadline=sd_deadline(config.lifetime_deadline_us);
-    do {
-        if(!sd_time_left(deadline)){r=A733_MMC_ERROR;break;}
-        r=a733_mmc_platform_close(&platform,deadline);
-        if(r==A733_MMC_BUSY||r==A733_MMC_PENDING)sd_pause();
-    } while(r==A733_MMC_BUSY||r==A733_MMC_PENDING);
-    if (r != A733_MMC_CLOSED) {
-        (void)a733_mmc_platform_retain(&platform);
-#ifndef OS_SD_WRITE
-        atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);
-        (void)os_quiesce_fault(&storage_quiesce,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x913,
-            (uint32_t)PLATX(r),SUNSTONE_CRUMB_HERE());
-#endif
-        return;                             /* uncertain DMA retains its descriptors */
-    }
-    if (descriptor_lease.pool && device_memory_release(a733_memory_uncached_init(), descriptor_lease)!=1) {
-#ifndef OS_SD_WRITE
-        atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);
-        (void)os_quiesce_fault(&storage_quiesce,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x914,
-            0,SUNSTONE_CRUMB_HERE());
-#endif
-        return;
-    }
-    descriptor_lease=(struct device_memory_lease){0};opened=0;
-    atomic_store_explicit(&close_proven,1,memory_order_release);
-#ifndef OS_SD_WRITE
-    atomic_store_explicit(&storage_state,SD_CLOSED,memory_order_release);
-    os_quiesce_complete(&storage_quiesce);
-#endif
-}
-
-#ifdef OS_SD_WRITE
-#define WRITE_US 2000000u
-#define SMHC0 UINT32_C(0x04020000)
-static uint8_t *blob_copy;                       /* sized from the input at enable time, kept for the image's lifetime */
-
 /* --- completion by interrupt ------------------------------------------------------------------------------------------ */
 /* SMHC0 is GIC SPI 161, INTID 193, level high (board kernel sun60iw2p1.dtsi, sdc0). The route is emitted with the image's
  * routes (tools/sunstone-manifest.py). The handler follows the board kernel's sunxi_mmc_irq (sunxi-mmc.c:1271): read the
@@ -602,7 +341,13 @@ static int sd_irq_mask_settled(void)
     if(!sd_time_left(UINT64_MAX))return 0;
     if (!os_sd_diag[0]) os_sd_diag[2] = sd_irq_state() | (uint64_t)atomic_load_explicit(&irq_stray_count, memory_order_relaxed) << 8;     /* before the mask */
     if (!gicv3_spi_mask(&sd_gic)) return 0;
+#ifdef OS_SD_WRITE
     for (unsigned tries = 0; tries < 100; ++tries) {
+#else
+    const uint64_t until=now_us()+100000u;
+    for (;;) {
+        if(now_us()>=until)return 0;
+#endif
         if(!sd_time_left(UINT64_MAX))return 0;
         int r = gicv3_spi_masked(&sd_gic);
         if (r) {
@@ -630,7 +375,13 @@ static int irq_resume(void)
     if (!irq_owner_on) return 1;
     if (!a733_mmc_platform_irq(&platform, 1)) return 0;
     irq_live = 1;
+#ifdef OS_SD_WRITE
     for (unsigned tries = 0; tries < 100; ++tries) {
+#else
+    const uint64_t until=now_us()+100000u;
+    for (;;) {
+        if(now_us()>=until){irq_live=0;return 0;}
+#endif
         if(!sd_admission()||!sd_time_left(config.lifetime_deadline_us)){irq_live=0;return 0;}
         int r = gicv3_spi_rearm(&sd_gic);
         if (r < 0) { irq_live = 0; return 0; }
@@ -639,6 +390,420 @@ static int irq_resume(void)
     }
     irq_live = 0; return 0;
 }
+
+
+#ifndef OS_SD_WRITE
+static int read_wait_until(uint64_t deadline);
+#endif
+#ifndef OS_SD_WRITE
+static _Atomic(TaskHandle_t) pmic_waiter;
+void os_sd_pmic_ready(void)
+{
+    TaskHandle_t waiter=atomic_load_explicit(&pmic_waiter,memory_order_acquire);
+    if(waiter)xTaskNotifyGive(waiter);
+}
+static int read_pmic_ready(void)
+{
+    const uint64_t until=now_us()+10000000u;
+    atomic_store_explicit(&pmic_waiter,owner_task,memory_order_release);
+    while(!atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)){
+        if(!board_live(NULL)||now_us()>=until||
+           read_sleep_until(until,SUNXI_MMC_WAIT_NONE)==SUNSTONE_DEADLINE_ERROR){
+            atomic_store_explicit(&pmic_waiter,NULL,memory_order_release);return 0;
+        }
+    }
+    atomic_store_explicit(&pmic_waiter,NULL,memory_order_release);return 1;
+}
+#endif
+/* A recovery that did not complete (stages 37 to 40) leaves the fault that began it: os_sd_diag[1] is the core's error, protocol step and interrupt status at the first failed
+ * request, and os_sd_diag[2] the platform's result in 2:0, its fault flag and the rest as sd_note.h os_sd_recover_aux lays them out, for the record's aux field. */
+static int recover_fail(unsigned stage, enum a733_mmc_platform_result r)
+{
+    int rc = DIAG(stage, first_fault_detail);
+    os_sd_diag[2] = os_sd_recover_aux((unsigned)r, platform.fault ? 1u : 0u, (board_live_refusal() >> 28) & 7u, now_us() >= config.lifetime_deadline_us ? 1u : 0u,
+                                      first_fault_piece, first_fault_idst, r != A733_MMC_PENDING && r != A733_MMC_BUSY);
+    return rc;
+}
+/* A failed read the platform can recover (A733_MMC_ERROR): identify again, which tunes again, or step the mode down (a733_mmc_platform_recover). Blocking, in the owner. */
+static int recover_blocking(void)
+{
+    if(!sd_admission())return 0;
+    enum a733_mmc_platform_result r;
+    if (!first_fault_detail) { first_fault_detail = os_sd_first_fault(&platform.core); first_fault_piece = sunxi_mmc_piece_class(platform.core.write_request.blocks); first_fault_idst = sunxi_mmc_idst4(platform.core.result.dma_status); }
+    saved_where = os_sd_where_detail(&platform.core, platform.core.card.timing); saved_aux = (unsigned)os_sd_where_aux(&platform.core);
+    irq_suspend();
+    uint64_t deadline=sd_deadline(now_us()+RECOVER_US);
+    do {
+        if(!sd_admission()||!sd_time_left(deadline))return recover_fail(37,A733_MMC_ERROR);
+        r=a733_mmc_platform_recover(&platform,deadline);
+        if(r==A733_MMC_BUSY)sd_pause();
+    } while(r==A733_MMC_BUSY&&board_live(NULL));
+    if (r != A733_MMC_PENDING) return recover_fail(37, r);
+    ++restarts;
+    for (;;) {
+        uint64_t wake = now_us();
+#ifndef OS_SD_WRITE
+        (void)wake;
+#endif
+        for (;;) {
+            if(!sd_admission()||!sd_time_left(deadline))return recover_fail(38,A733_MMC_ERROR);
+            r = a733_mmc_platform_poll(&platform);
+            if (r != A733_MMC_PENDING && r != A733_MMC_BUSY) break;
+#ifndef OS_SD_WRITE
+            if(!read_wait_until(deadline))return recover_fail(38,A733_MMC_ERROR);
+            break;
+#else
+            if (now_us() - wake >= 1000 || !board_live(NULL)) break;
+#endif
+        }
+        if (r == A733_MMC_READY) break;
+        if ((r != A733_MMC_PENDING && r != A733_MMC_BUSY) || !board_live(NULL) || now_us() >= config.lifetime_deadline_us) return recover_fail(38, r);
+#ifdef OS_SD_WRITE
+        sd_pause();
+#endif
+    }
+    do {
+        if(!sd_admission()||!sd_time_left(deadline))return recover_fail(39,A733_MMC_ERROR);
+        r=a733_mmc_platform_card(&platform,&card,sd_deadline(deadline));
+        if(r==A733_MMC_BUSY)sd_pause();
+    } while(r==A733_MMC_BUSY&&board_live(NULL));
+    if (r != A733_MMC_READY) return recover_fail(39, r);
+    record_mode();
+    if (!irq_resume()) return recover_fail(40, r);
+    return 1;
+}
+#ifndef OS_SD_WRITE
+/* The core supplies timer holds for busy/retry states. Reset, FIFO and
+ * identification status have no notification in its admitted interface. */
+static int read_wait_until(uint64_t deadline)
+{
+    uint64_t now=now_us(),until=deadline;
+    if(now>=deadline)return 0;
+    uint32_t delay=0;
+    enum sunxi_mmc_wait hint=sunxi_mmc_wait_hint(&platform.core,&delay);
+    if(hint!=SUNXI_MMC_WAIT_IRQ){
+        uint64_t pause=hint==SUNXI_MMC_WAIT_TIMER&&delay?delay:REGISTER_RECHECK_US;
+        if(pause<deadline-now)until=now+pause;
+    }
+    return read_sleep_until(until,hint)!=SUNSTONE_DEADLINE_ERROR;
+}
+static enum a733_mmc_platform_result read_drive(uint64_t deadline)
+{
+    for(;;){
+        if(!board_live(NULL))return a733_mmc_platform_retain(&platform);
+        enum a733_mmc_platform_result r=a733_mmc_platform_poll(&platform);
+        if(r!=A733_MMC_PENDING&&r!=A733_MMC_BUSY)return r;
+        if(!read_wait_until(deadline))return a733_mmc_platform_retain(&platform);
+    }
+}
+static uint64_t read_deadline;
+#endif
+/* One request at a time into dma, to completion or failure; the loader's metadata reads. */
+#ifdef OS_SD_WRITE
+static enum a733_mmc_platform_result drive_platform(uint64_t deadline, uint32_t recheck_us);
+static int sd_irq_mask_settled(void);
+static uint32_t recheck_for(uint32_t blocks, int write);
+#endif
+static int read_blocking(uint64_t sector, uint32_t count, uint8_t *dma)
+{
+    enum a733_mmc_platform_result r;
+    for (unsigned attempt = 0;; ++attempt) {
+        uint64_t deadline=sd_deadline(now_us()+READ_US);
+        do {
+            if(!sd_admission()||!sd_time_left(deadline))return DIAG(30,PLATX(A733_MMC_ERROR));
+            r=a733_mmc_platform_read(&platform,sector,count,dma,count*512u,sd_deadline(deadline));
+#ifndef OS_SD_WRITE
+        if(r==A733_MMC_BUSY)sd_pause();
+#endif
+        } while(r==A733_MMC_BUSY&&board_live(NULL));
+        if (r != A733_MMC_PENDING) return DIAG(30, PLATX(r));
+#ifdef OS_SD_WRITE
+        r = drive_platform(deadline, recheck_for(count, 0));
+#else
+        r=read_drive(deadline);
+#endif
+        if (r == A733_MMC_ERROR && attempt < A733_MMC_RECOVERIES && recover_blocking()) continue;      /* identify again or step down, then the same request again */
+        break;
+    }
+    if (r != A733_MMC_COMPLETE) return DIAG(31, PLATX(r));
+    do {
+        if(!sd_time_left(config.lifetime_deadline_us))return DIAG(32,PLATX(A733_MMC_ERROR));
+        r=a733_mmc_platform_take(&platform,&result,sd_deadline(config.lifetime_deadline_us));
+#ifndef OS_SD_WRITE
+        if(r==A733_MMC_BUSY)sd_pause();
+#endif
+    } while(r==A733_MMC_BUSY);
+    if (r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.received == count * 512u) return 1;
+    return DIAG(32, PLATX(r));
+}
+static int sd_read(void *unused, uint64_t sector, uint32_t count, uint8_t *out)
+{
+    (void)unused;
+#ifndef OS_SD_WRITE
+    if(os_cpu_return_requested())return 0;
+#endif
+    if (!count || count > SUNXI_MMC_MAX_DMA_BLOCKS || sector + count > card.sectors) return 0;
+    uint8_t *dma = buffers + 2 * DMA_BUFFER;
+    if (!read_blocking(sector, count, dma)) return 0;
+    memcpy(out, dma, (size_t)count * 512u);
+    return 1;
+}
+static int sd_submit(void *unused, uint64_t sector, uint32_t count, uint8_t *dma)
+{
+    (void)unused;
+#ifndef OS_SD_WRITE
+    if(os_cpu_return_requested())return 0;
+#endif
+    if (!count || count > SUNXI_MMC_MAX_DMA_BLOCKS || sector + count > card.sectors) return 0;
+    enum a733_mmc_platform_result r;
+    uint64_t deadline=sd_deadline(now_us()+READ_US);
+    do {
+        if(!sd_admission()||!sd_time_left(deadline))return 0;
+        r=a733_mmc_platform_read(&platform,sector,count,dma,count*512u,sd_deadline(deadline));
+#ifndef OS_SD_WRITE
+        if(r==A733_MMC_BUSY)sd_pause();
+#endif
+    } while(r==A733_MMC_BUSY&&board_live(NULL));
+    blocks_in_flight = count; last_sector = sector; last_count = count; last_dma = dma;
+#ifndef OS_SD_WRITE
+    read_deadline=deadline;
+#endif
+    if (r != A733_MMC_PENDING) return 0;
+#ifndef OS_SD_WRITE
+    /* The request is accepted but the command is issued by the polls that follow, and the loader hashes the previous piece
+     * before it polls: without these steps the card would sit idle for that whole time. Step the controller until the
+     * command is issued (command_step 2 is the wait for it to finish), so that the data moves while the caller works. A
+     * step that fails or completes is seen again by sd_poll. */
+    for (unsigned steps = 0; steps < 64 && platform.core.command_step < 2; ++steps) {
+        r = a733_mmc_platform_poll(&platform);
+        if (r != A733_MMC_PENDING && r != A733_MMC_BUSY) break;
+        if(platform.core.command_step<2&&!read_wait_until(deadline))break;
+    }
+#endif
+    return 1;
+}
+static int sd_poll(void *unused)
+{
+    (void)unused;
+    if(!sd_time_left(config.lifetime_deadline_us))return -1;
+    enum a733_mmc_platform_result r;
+#ifdef OS_SD_WRITE
+    r=a733_mmc_platform_poll(&platform);
+#else
+    r=read_drive(read_deadline);
+#endif
+    if (r == A733_MMC_PENDING || r == A733_MMC_BUSY) return board_live(NULL) ? 0 : -1;
+    if (r == A733_MMC_ERROR) {
+        /* A failed read: identify again (or step down) and submit the same request again; the caller keeps waiting. */
+        if (!recover_blocking()) return -1;
+        uint64_t deadline=sd_deadline(now_us()+READ_US);
+        do {
+            if(!sd_admission()||!sd_time_left(deadline))return -1;
+            r=a733_mmc_platform_read(&platform,last_sector,last_count,last_dma,last_count*512u,sd_deadline(deadline));
+#ifndef OS_SD_WRITE
+        if(r==A733_MMC_BUSY)sd_pause();
+#endif
+        } while(r==A733_MMC_BUSY&&board_live(NULL));
+#ifndef OS_SD_WRITE
+        read_deadline=deadline;
+#endif
+        return r == A733_MMC_PENDING ? 0 : -1;
+    }
+    if (r != A733_MMC_COMPLETE) return -1;
+    do {
+        if(!sd_time_left(config.lifetime_deadline_us))return -1;
+        r=a733_mmc_platform_take(&platform,&result,sd_deadline(config.lifetime_deadline_us));
+#ifndef OS_SD_WRITE
+        if(r==A733_MMC_BUSY)sd_pause();
+#endif
+    } while(r==A733_MMC_BUSY);
+    return r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.received == blocks_in_flight * 512u ? 1 : -1;
+}
+
+/* Runs in the loader task, which becomes the platform's owner task. */
+#ifdef OS_SD_WRITE
+const struct os_large_device *os_sd_open_owner_device(void)
+#else
+const struct os_large_device *os_large_device(void)
+#endif
+{
+#ifndef OS_SD_WRITE
+    unsigned state=SD_UNOPENED;
+    if(os_cpu_return_requested()||!atomic_compare_exchange_strong_explicit(&storage_state,&state,SD_OPENING,memory_order_acq_rel,memory_order_acquire))return NULL;
+#endif
+    if (!os_large_sd_declared() || opened) return DIAGP(1, opened);
+#ifndef OS_SD_WRITE
+    owner_task=xTaskGetCurrentTaskHandle();
+    if(!sunstone_deadline_register())return DIAGP(9,0);
+    atomic_store_explicit(&read_started_us,sunstone_deadline_now_us(),memory_order_relaxed);
+    atomic_fetch_or_explicit(&read_owner_cores,1u<<portGET_CORE_ID(),memory_order_relaxed);
+#endif
+    /* The PMIC service must be up before the SD rail can be leased. */
+#ifndef OS_SD_WRITE
+    if(!read_pmic_ready())return DIAGP(2,0);
+#else
+    for (unsigned waited = 0; !atomic_load_explicit(&providers.shared.pmic_ready, memory_order_acquire); ++waited) {
+        if (!sd_admission() || waited > 10000 || !board_live(NULL)) return DIAGP(2, waited);
+        sd_pause();
+    }
+#endif
+    struct device_memory_pool *pool = a733_memory_uncached_init();
+    struct device_memory_extent extent;
+    if (!pool || device_memory_acquire(pool, UINT64_C(0x53443044), 4096, &descriptor_lease, &extent) != 1) return DIAGP(3, 0);
+    descriptors = (volatile struct sunxi_mmc_dma_descriptor *)extent.cpu;
+    if (!sd_irq_mask_settled()) return DIAGP(12, 0);        /* the platform baseline requires INTID 193 masked */
+    for (unsigned start18 = 0;; start18 = 1) {
+        if(!sd_admission())return DIAGP(4,0);
+        if (!configure(start18)) return DIAGP(4, 0);
+        if (!a733_mmc_platform_native_init_selected(&native, &providers.shared.locks, xTaskGetCurrentTaskHandle(), SUNXI_MMC_SD,
+                A733_MMC_EMMC_SDC2, admit, &platform)) return DIAGP(5, 0);
+        native.operations.dma_sync = dma_sync;
+        if (!a733_mmc_platform_init(&platform, &config, &native.operations, &native, &providers.shared.clocks,
+                &providers.shared.pins, &providers.shared.rails, &providers.shared.pmic)) return DIAGP(6, 0);
+        opened = 1;
+        /* Identification polls for up to a millisecond per wake and yields so that the PMIC task can answer. */
+        for (;;) {
+            uint64_t wake = now_us();
+#ifndef OS_SD_WRITE
+            (void)wake;
+#endif
+            enum a733_mmc_platform_result r;
+            for (;;) {
+                if(!sd_admission()||!sd_time_left(config.deadline_us)){r=A733_MMC_ERROR;break;}
+                r = a733_mmc_platform_poll(&platform);
+                if (r != A733_MMC_PENDING && r != A733_MMC_BUSY) break;
+#ifndef OS_SD_WRITE
+                if(!read_wait_until(config.deadline_us)){r=A733_MMC_ERROR;break;}
+                break;
+#else
+                if (now_us() - wake >= 1000 || !board_live(NULL)) break;
+#endif
+            }
+            if (r == A733_MMC_READY) break;
+            if ((r != A733_MMC_PENDING && r != A733_MMC_BUSY) || !board_live(NULL) || now_us() >= config.deadline_us) {
+                (void)a733_mmc_platform_retain(&platform);
+                return DIAGP(7, PLAT(r));
+            }
+#ifdef OS_SD_WRITE
+            sd_pause();
+#endif
+        }
+        enum a733_mmc_platform_result r;
+        do {
+            if(!sd_admission()||!sd_time_left(config.deadline_us)){r=A733_MMC_ERROR;break;}
+            r=a733_mmc_platform_card(&platform,&card,sd_deadline(config.deadline_us));
+            if(r==A733_MMC_BUSY)sd_pause();
+        } while(r==A733_MMC_BUSY&&board_live(NULL));
+        if (r != A733_MMC_READY || !card.sectors) { (void)a733_mmc_platform_retain(&platform); return DIAGP(8, PLAT(r)); }
+        if (start18 || !found_at_1v8()) break;
+        /* The card was identified at 3.3 V but already signals 1.8 V (the rule above): one read so that the platform may close, close it with the bank at 3.3 V,
+         * and open it again with the bank moved to 1.8 V first and the card re-entered with no CMD11, the lifetime proven on 3-3. */
+        static uint8_t scratch[512];
+        if (!sd_read(NULL, 0, 1, scratch)) { (void)a733_mmc_platform_retain(&platform); return DIAGP(41, 0); }
+        enum a733_mmc_platform_result c;
+        uint64_t close_deadline=sd_deadline(config.lifetime_deadline_us);
+        do {
+            if(!sd_time_left(close_deadline)){c=A733_MMC_ERROR;break;}
+            c=a733_mmc_platform_close(&platform,close_deadline);
+            if(c==A733_MMC_BUSY||c==A733_MMC_PENDING)sd_pause();
+        } while(c==A733_MMC_BUSY||c==A733_MMC_PENDING);
+        if (c != A733_MMC_CLOSED) { (void)a733_mmc_platform_retain(&platform); return DIAGP(42, PLAT(c)); }
+        memset(&platform, 0, sizeof platform); memset(&native, 0, sizeof native); memset(&card, 0, sizeof card);
+        opened = 0; blocks_in_flight = 0; reopened = 1;
+    }
+    record_mode();
+#ifndef OS_SD_WRITE
+    if(!sunxi_mmc_set_irq(&platform.core,irq_taken,NULL)||!a733_mmc_platform_irq(&platform,1))return DIAGP(9,1);
+    irq_owner_on=1;
+    if(!irq_resume())return DIAGP(9,2);
+    atomic_store_explicit(&storage_state,SD_OPEN,memory_order_release);
+#endif
+    device = (struct os_large_device){{NULL, sd_read, card.sectors}, {NULL, sd_submit, sd_poll}, 0, 0, buffers};
+    return &device;
+}
+
+/* Restore the clock, the pins and the rail when the last region has loaded. */
+#ifdef OS_SD_WRITE
+void os_sd_close_owner_device(void)
+#else
+void os_large_device_close(void)
+#endif
+{
+    if (!opened) return;
+#ifndef OS_SD_WRITE
+    if(platform.irq_mode){
+        irq_live=0;
+        if(!sd_irq_mask_settled()||!a733_mmc_platform_irq(&platform,0)){
+            (void)a733_mmc_platform_retain(&platform);
+            atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);
+            (void)os_quiesce_fault(&storage_quiesce,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x915,0,SUNSTONE_CRUMB_HERE());
+            return;
+        }
+        irq_owner_on=0;
+    }
+#endif
+    enum a733_mmc_platform_result r=A733_MMC_ERROR;
+    uint64_t deadline=sd_deadline(config.lifetime_deadline_us);
+    do {
+        if(!sd_time_left(deadline)){r=A733_MMC_ERROR;break;}
+        r=a733_mmc_platform_close(&platform,deadline);
+        if(r==A733_MMC_BUSY||r==A733_MMC_PENDING)sd_pause();
+    } while(r==A733_MMC_BUSY||r==A733_MMC_PENDING);
+    if (r != A733_MMC_CLOSED) {
+        (void)a733_mmc_platform_retain(&platform);
+#ifndef OS_SD_WRITE
+        atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);
+        (void)os_quiesce_fault(&storage_quiesce,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x913,
+            (uint32_t)PLATX(r),SUNSTONE_CRUMB_HERE());
+#endif
+        return;                             /* uncertain DMA retains its descriptors */
+    }
+    if (descriptor_lease.pool && device_memory_release(a733_memory_uncached_init(), descriptor_lease)!=1) {
+#ifndef OS_SD_WRITE
+        atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);
+        (void)os_quiesce_fault(&storage_quiesce,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x914,
+            0,SUNSTONE_CRUMB_HERE());
+#endif
+        return;
+    }
+    descriptor_lease=(struct device_memory_lease){0};opened=0;
+#ifndef OS_SD_WRITE
+    atomic_store_explicit(&read_closed_us,sunstone_deadline_now_us(),memory_order_relaxed);
+#endif
+    atomic_store_explicit(&close_proven,1,memory_order_release);
+#ifndef OS_SD_WRITE
+    atomic_store_explicit(&storage_state,SD_CLOSED,memory_order_release);
+    os_quiesce_complete(&storage_quiesce);
+    extern void os_application_wake_main(void);
+    os_application_wake_main();
+#endif
+}
+
+#ifndef OS_SD_WRITE
+int ss_storage_owner_stats(struct ss_storage_owner_stats *out)
+{
+    if(!out||!atomic_load_explicit(&close_proven,memory_order_acquire))return 0;
+    const uint64_t now=sunstone_deadline_now_us();
+    const uint64_t closed=atomic_load_explicit(&read_closed_us,memory_order_relaxed);
+    *out=(struct ss_storage_owner_stats){
+        .elapsed_us=now-atomic_load_explicit(&read_started_us,memory_order_relaxed),
+        .asleep_us=atomic_load_explicit(&read_sleep_us,memory_order_relaxed)+(now-closed),
+        .wakes=atomic_load_explicit(&read_wakes,memory_order_relaxed),
+        .owner_cores=atomic_load_explicit(&read_owner_cores,memory_order_relaxed),
+        .caller_cores=atomic_load_explicit(&read_owner_cores,memory_order_relaxed),
+        .irq_stray=atomic_load_explicit(&irq_stray_count,memory_order_relaxed),
+        .irq_recheck=(uint32_t)atomic_load_explicit(&read_irq_recheck,memory_order_relaxed)};
+    for(unsigned c=0;c<8;++c){
+        out->irq_entries[c]=atomic_load_explicit(&irq_entry_count[c],memory_order_relaxed);
+        if(out->irq_entries[c])out->irq_cores|=1u<<c;
+    }
+    return 1;
+}
+#endif
+
+#ifdef OS_SD_WRITE
+#define WRITE_US 2000000u
+static uint8_t *blob_copy;                       /* sized from the input at enable time, kept for the image's lifetime */
 
 /* The wait loop: poll, then sleep on the interrupt or a one-shot timer, as the core's hint says. */
 struct drive { enum a733_mmc_platform_result r; int (*poll)(void); };
@@ -810,6 +975,9 @@ static int hw_write_piece(uint64_t sector, uint32_t count, const uint8_t *src)
     do {
         if(!sd_time_left(config.lifetime_deadline_us))return write_fail(34,A733_MMC_ERROR,sector,count);
         r=a733_mmc_platform_take(&platform,&result,sd_deadline(config.lifetime_deadline_us));
+#ifndef OS_SD_WRITE
+        if(r==A733_MMC_BUSY)sd_pause();
+#endif
     } while(r==A733_MMC_BUSY);
     int ok = r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.confirmed_blocks == count;
     if (ok) { ++os_sd_write_pieces; os_sd_write_sectors += count; }

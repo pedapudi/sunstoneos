@@ -4,8 +4,10 @@ The device-owner notification work is not ready to land. NPU recognition and
 thermal capture have passing records in [NPU owner evidence](evidence/npu-owner-events.jsonl)
 and [thermal owner evidence](evidence/thermal-owner-events.jsonl).
 [GPU owner evidence](evidence/gpu-owner-events.jsonl) covers ten lifecycle
-cycles, one peer job and native retirement. Later owner groups have no physical
-evidence for their notification changes. The coordinator's worker handoff is
+cycles, one peer job and native retirement. The
+[SD owner evidence](evidence/sd-owner-events.jsonl) covers the verified read-only
+load and a retired-loader idle observation. DMA and I2S need current nonsecure
+DMA access authority before launch. The coordinator's worker handoff is
 `~/.cache/sunstoneos/build/event-owners-1112/handoff.md`.
 
 SunstoneOS runs FreeRTOS on the Orange Pi Zero 3W/A733. The
