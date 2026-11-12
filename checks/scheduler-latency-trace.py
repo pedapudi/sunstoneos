@@ -11,9 +11,12 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECK_INPUTS = ['apps/latency/host.py', 'kernel/scheduler/latency_trace.h']
+CHECK_INPUTS = ['apps/latency/host.py', 'kernel/scheduler/latency_trace.h',
+                'checks/sunstone-image-link.py', 'include/sunstone_latency.h']
 GATE_RUNS = [['--output', '{output}']]
 FREQUENCY = 24_000_000
 MAGIC = 0x5353534348545231
@@ -80,6 +83,43 @@ def load_decoder(source):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.decode_scheduler_trace, path
+
+
+def check_symbols(source):
+    """Execute the boundary checker with constructed nm and ELF inventories."""
+    path = source / 'checks/sunstone-image-link.py'
+    spec = importlib.util.spec_from_file_location('scheduler_symbol_boundary', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    bounds = [{'name': prefix + name, 'shndx': 1, 'value': 0}
+              for name in ('sunstone_gpu_program', 'sunstone_region_initializers',
+                           'sunstone_large_regions')
+              for prefix in ('__start_', '__stop_')]
+    cases = []
+    for symbol, admitted in (('eTaskGetState', True), ('ss_sched_trace_snapshot', True),
+                             ('os_cpu_clock_step', False), ('eTaskPrivateProbe', False),
+                             ('ss_sched_trace_lock_release', False)):
+        elf = SimpleNamespace(symbols=[*bounds, {'name': symbol, 'shndx': 1}],
+                              names=[], sections=[], data=b'')
+        empty = SimpleNamespace(names=[], sections=[], data=b'')
+
+        def nm(command, **unused):
+            return SimpleNamespace(stdout=(symbol + ' U\n')
+                                   if '--undefined-only' in command else 'fixture_app T 0 4\n')
+
+        with patch.object(module.subprocess, 'run', side_effect=nm), \
+                patch.object(module, 'Elf', return_value=empty), \
+                patch.object(module, 'application_manifest', return_value={'regions': []}):
+            try:
+                result = module.application_symbols(elf, [Path(__file__)], [], [], 'fixture-nm')
+            except AssertionError as error:
+                assert not admitted, (symbol, str(error))
+                assert str(error) == 'application references private OS symbols: ' + symbol
+            else:
+                assert admitted, f'private symbol admitted: {symbol}'
+                assert result['external_symbols'] == 1
+        cases.append(('admit ' if admitted else 'refuse ') + symbol)
+    return cases, path
 
 
 def run(decode):
@@ -227,13 +267,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, default=ROOT)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--case', choices=('decoder', 'symbols'), action='append')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
-    decode, path = load_decoder(args.source.resolve())
-    cases = run(decode)
+    source = args.source.resolve()
+    selected = args.case or ('decoder', 'symbols')
+    cases, inputs = [], {}
+    if 'decoder' in selected:
+        decode, path = load_decoder(source)
+        cases.extend(run(decode))
+        inputs['decoder'] = dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    if 'symbols' in selected:
+        symbol_cases, path = check_symbols(source)
+        cases.extend(symbol_cases)
+        inputs['symbol_boundary'] = dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
     result = dict(passed=True, physical_access=False, constructed_report_records=True,
-                  decoder=str(path), decoder_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
-                  cases=cases)
+                  inputs=inputs, cases=cases)
     (args.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(dict(passed=True, cases=len(cases), physical_access=False)))
 
