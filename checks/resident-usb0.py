@@ -21,7 +21,8 @@ GATE_RUNS = [['{elf:resident-stop}', '--out', '{output}']]
 CHECK_INPUTS = ['apps/os/main.patch', 'apps/os/application.c', 'apps/os/session.c',
                 'apps/os/services.c', 'apps/os/os-services.h', 'platform/a733/native_usb.c',
                 'include/sunstone_app.h', 'include/a733_native_usb.h', 'apps/os/grants.c',
-                'tools/session.py', 'checks/resident-linked.py']
+                'tools/session.py', 'checks/resident-linked.py', 'apps/board/main.c',
+                'apps/board/application.h', 'apps/os/start.c']
 spec = importlib.util.spec_from_file_location('resident_linked', ROOT / 'checks/resident-linked.py')
 linked = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(linked)

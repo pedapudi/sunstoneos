@@ -108,7 +108,7 @@
                  if(a733_board_host_workload(board.session.workload))a733_typec_revoke(&board.typec.provider);
                  /* Status 5: renewal stopped. The reason reaches this core's
                   * retained slot, and on core 0 the resident result. */
-@@ -378,10 +415,11 @@
+@@ -378,7 +415,7 @@
  #ifdef SUNSTONE_BOARD_APPLICATION
      if(board_application_pins(&b.pins)!=1)platform_panic("board application pins",10);
  #endif
@@ -117,11 +117,7 @@
      TaskFunction_t functions[]={pmic,board_usb0_task,typec,power,board_host_task,radio_owner,radio_client,supervise};
      const char *names[]={"board-pmic","board-usb0","board-typec","board-power","board-usb2","board-radio","board-net","board-watchdog"};
      for(unsigned i=0;i<8;++i){
-+        if(i==1&&!os_granted(OS_GRANT_USB0))continue;
-         if(i>=2&&i<=4&&!a733_board_host_workload(s->workload))continue;
-         if(i>=5&&!a733_board_radio_workload(s->workload)
- #ifdef SUNSTONE_BOARD_SUPERVISED
-@@ -392,7 +430,8 @@
+@@ -393,7 +430,8 @@
          board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,!i?3:i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);
          if(!board.handles[i])platform_panic("board tasks",5);
  #if configNUMBER_OF_CORES > 1

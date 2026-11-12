@@ -18,6 +18,7 @@ _Static_assert(OS_RECOGNITION_CORE==A733_SMP_APPLICATION_CORE,"recognition core 
 #endif
 _Static_assert(BOARD_SERVICE_USB0==1&&BOARD_SERVICE_TYPEC==2&&BOARD_SERVICE_POWER==3&&BOARD_SERVICE_USB2==4,
     "USB service selection IDs");
+int board_usb0_enabled(void){return os_granted(OS_GRANT_USB0);}
 int board_application_task_privileged(void (*entry)(void *),void *context)
 {
     for(unsigned i=0;i<os_application_count;++i)
