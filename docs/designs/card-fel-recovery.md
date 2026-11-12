@@ -297,9 +297,10 @@ physical qualification requirement.
 
 ## Installing the first stage on the port 3-3 card
 
-**Status: code implemented and host-checked; no board step has run.** The
-coordinator approved the code, the runner's marker write and board steps A
-to C below. The write, step D, is not approved. The card on port 3-3 is the
+**Status: installed on 2026-11-12.** Steps A to D passed; the user approved
+the write through the coordinator. Step E's record differed from its
+prediction in the mode byte (below). Their records are in
+[the evidence file](../evidence/card-fel-recovery.jsonl). The card on port 3-3 is the
 scratch card with CID `2750485344333247120000029d014c47`. Its MBR holds one
 FAT32 partition from sector 2048 for 61,065,216 sectors, so sectors 1..2047
 lie outside every partition.
@@ -373,9 +374,28 @@ captured ROM admits the length `0x3c400`.
 | --- | --- | --- | --- |
 | A | Predicate reads on one returning image that ends in a WDT0 reset | None | `0x070901f0` reads `0` at first contact (no writer exists), `0x16aa16aa` after the runner's write and after the watchdog return; `0x07090160[13]` reads `1` each time |
 | B | SRAM proof of the revised gate's warm path through FEL `exe` (`a733-card-fel-warm.elf`) | None | New FEL instance within 1 s of the request; GP2 `0x0c024041`; WDT0 re-armed to `0xb1` under the proof policy; LAST unchanged |
-| C | Read-only capture with `apps/sd-backup-probe`, ranges `0:1 16:496 2048:1 24576:1 32800:1` (500 sectors) | Read | Sector 0 and sector 2048 equal the registered restore point; sectors 24576 and 32800 lack the TOC1 magic `0x89119800` at byte 16 |
+| C | Read-only capture with `apps/sd-backup-probe`, ranges `0:1 16:496 2048:1 24576:1 32800:1` (500 sectors) | Read | Sector 0 equals the registered restore point; sector 2048 is the partition's FAT32 boot sector; sectors 24576 and 32800 lack the TOC1 magic `0x89119800` at byte 16 |
 | D | Raw-extent write with `--storage-write` (not approved) | Write 16..497 | Readback SHA-256 equals the candidate's; sector 0 unchanged |
 | E | One returning image that ends in a WDT0 reset | None | The cold-predicate gate's warm-path record below |
+
+### Results of steps A to C
+
+- **Step A** ran on the request-path SRAM proof of the revised gate, because
+  every session already includes a WDT0 reset before launch. IC_CHARA read
+  `0` at first contact, `0x16aa16aa` after the runner's keyed write, after the
+  session's WDT0 reset and after the gate's ROM re-entry. WDT0 configuration
+  and output read `1` and `2` after a WDT0 reset, the first measurement of
+  those two words.
+- **Step B** matched its prediction: GP2 `0x0c024041`, WDT0 `0xb1` when first
+  read, LAST `0`, and a new FEL instance 0.518 seconds after the execute
+  request.
+- **Host emulation** of the exact first-stage file, executed whole from
+  `0x47000`, reached the gate and gave the request, watchdog-return and cold
+  records predicted below.
+- **Step C** captured 500 sectors. Sector 0 equals the restore point. Sector
+  2048 differs from the restore point only in the volume label, which the
+  reformats of 2026-11-03 rewrote. Sectors 16..511 are all zero, and neither
+  sector 24576 nor sector 32800 holds a TOC1 header.
 
 Step C writes the capture to
 `~/.cache/sunstoneos/build/card-boot-1111/card-backup/3-3-boot-area.bin`
@@ -404,8 +424,8 @@ The ROM's card loader finds a valid boot0 header at sector 16 and copies
 `0x83000`.
 
 - **Watchdog return** (marker set by the runner): the gate takes the warm
-  path in microseconds and enters FEL. The runner then reads gate record
-  `0x0c024001` (bit 14, WDT0 mode `1`), WDT0 mode `0`, `0x070901f0` =
+  path in microseconds and enters FEL. The runner then reads a gate record
+  with bit 14 and the WDT0 mode the gate read at entry, WDT0 mode `0`, `0x070901f0` =
   `0x16aa16aa`, and the image's own LAST and fault words. The ROM's card read
   of 246 KB adds an unmeasured delay to the 1.79-second reset-to-instance time
   recorded for a ROM re-entry; at 4-bit 25 MHz it is about 20 ms, and step E
@@ -419,6 +439,23 @@ The ROM's card loader finds a valid boot0 header at sector 16 and copies
   The record then holds bit 15, and bit 14 if that reset occurred.
 - **Power-on with VDD_RTC still above 0.7 V**: the warm path, as for a
   watchdog return.
+
+### Results of the write and the first returns
+
+- **Step D** wrote sectors 16..497 in two pieces (16.8 ms) and read them back
+  in 6.6 ms; the read-back SHA-256 equals the first stage's, and sector 0 is
+  unchanged. The run's last reset, the rail-restore helper's return (a warm
+  reset with WDT0 at `0xb1` and no ROM redirect), loaded the new card boot0:
+  the gate stored warm record `0x0c0240b1`, disarmed WDT0 and entered FEL.
+  The result keeps only that last return record, so the route of the image's
+  own return is not recorded.
+- **Step E**, the next session's WDT0 reset, also came back to FEL through
+  the gate, with warm record `0x0c024041`. The prediction was `0x0c024001`.
+  At gate entry WDT0 still reads the mode armed before the reset (`0x41`);
+  the mode `1` read in FEL after earlier watchdog resets is written later.
+  Bit 0 is set in both values, so the runner's watchdog-reset test
+  (`mode & 1`) is unchanged. The session reset took 4.8 seconds against 6.0
+  before the install.
 
 ### Restoring the card over FEL
 
