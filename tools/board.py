@@ -297,11 +297,14 @@ class Live:
             self.record['quarantined'] = True
             self.journal()
 
-    def tx(self, *arguments, timeout=30, pass_fds=()):
+    def tx(self, *arguments, timeout=30, pass_fds=(), recovery_launch=False):
         require(not self.failed, 'A failed FEL transaction forbids further requests.')
         if self.journal_error and not self.recovering:
             raise self.journal_error
         arguments = list(map(str, arguments))
+        require(not recovery_launch or (self.armed and arguments == ['exe', '0x52000'] and
+                self.record.get('card_recovery_flag', {}).get('armed')),
+                'Only the armed SRAM recovery gate permits a launch disconnect.')
         entry = {'arguments': arguments, 'start': self.now()}
         self.record.setdefault('transactions', []).append(entry)
         self.journal()  # A file failure here precedes device communication.
@@ -309,15 +312,27 @@ class Live:
             if self.access.identity(self.node) != self.identity or self.access.target(self.node).name != self.args.port:
                 raise TransportFailure('USB identity changed before FEL request.')
             self.access.require_rom(self.node)
+            entry['command_started'] = True
             result = self.process([str(self.args.fel), '-d', f'{int(self.node.parent.name)}:{int(self.node.name)}',
                                    *arguments], capture_output=True, text=True, timeout=timeout, pass_fds=pass_fds)
-        except (OSError, subprocess.TimeoutExpired, TransportFailure) as error:
+        except subprocess.TimeoutExpired as error:
+            self.failed = True
+            if recovery_launch and entry.get('command_started'):
+                entry.update(provisional_disconnect=True, timeout=True, seconds=self.now()-entry['start'])
+                self.journal()
+                return ''
+            raise TransportFailure(str(error)) from error
+        except (OSError, TransportFailure) as error:
             self.failed = True
             raise TransportFailure(str(error)) from error
         # Record a failed transfer before any parsing or filesystem operation.
         if result.returncode:
             self.failed = True
             entry.update(exit_code=result.returncode, stderr=result.stderr, stdout=result.stdout)
+            if recovery_launch:
+                entry.update(provisional_disconnect=True, seconds=self.now()-entry['start'])
+                self.journal()
+                return ''
             raise TransportFailure('FEL transaction failed: ' + result.stderr.strip())
         entry.update(exit_code=0, stdout=result.stdout, stderr=result.stderr, seconds=self.now()-entry['start'])
         try:
@@ -877,10 +892,16 @@ class Live:
         self.journal()
         self.arm(plan['watchdog']['mode'])
         if plan.get('format') == 'card-fel-recovery':
-            images.load('arm_card_fel_recovery', ROOT/'tools/card_recovery.py').arm(self)
+            images.load('arm_card_fel_recovery', ROOT/'tools/card_recovery.py').arm(self, plan)
         self.recovery_deadline = self.now()+plan['watchdog']['session_seconds']+crumbs.interval(plan['watchdog']['mode'])+10
-        self.tx(*plan['launch'])
+        if plan.get('format') == 'card-fel-recovery':
+            require(plan['launch'] == ['exe', '0x52000'], 'Card recovery requires its direct SRAM entry.')
+            self.tx(*plan['launch'], recovery_launch=True)
+        else:
+            self.tx(*plan['launch'])
         self.wait(plan['watchdog']['session_seconds'] + crumbs.interval(plan['watchdog']['mode']) + 10)
+        if plan.get('format') == 'card-fel-recovery':
+            images.load('receipt_card_fel_recovery', ROOT/'tools/card_recovery.py').receipt(self)
         before, after, words = self.returned()
         elf = self.args.image if plan.get('format') == 'npu' or self.args.image.suffix == '.elf' else None
         decoded = crumbs.decode(words, plan['epoch'], elf)
@@ -900,8 +921,13 @@ class Live:
             return 'watchdog-reset'
         if plan.get('lifetime') == 'resident':
             raise UnresolvedReturn('Resident qualification returned without its expected watchdog reset.')
-        if plan.get('format') == 'card-fel-recovery' and words['fault']:
-            raise UnresolvedReturn('Card first-stage recovery retained a fault word.')
+        if plan.get('format') == 'card-fel-recovery':
+            if not (before == 0 and after == 0 and decoded['session'] and words['last'] == 0x0c020005 and not words['fault'] and
+                    self.record['card_recovery_return']['rtc_flag'] == 0):
+                raise UnresolvedReturn('Card recovery lacks the matching retained SRAM gate receipt.')
+            self.record['normal_return'] = True
+            usb_power.enforce(self)
+            return 'returned'
         # An image that links the failure return may return after its first
         # failure; the record is then in the breadcrumbs and in its result.
         # Any other return that carries a failure record stays unresolved.
@@ -1045,6 +1071,10 @@ def run_image(args, backend=Live):
             dma_binding = images.dma_admission(args, info)
             application_inputs(args, info, evidence)
             images.load('storage_bounds', ROOT/'tools/storage_bounds.py').verify_delivered(args)
+            if info.get('card_fel_recovery'):
+                fel = evidence/'sunxi-fel'
+                result['recovery_fel'] = images.load('freeze_card_fel_tool', ROOT/'tools/card_recovery.py').freeze_fel(args.fel, fel)
+                args.fel = fel
         owner = backend(args, evidence, result)
         owner.credential = credential
         with owner.locked():
@@ -1054,8 +1084,11 @@ def run_image(args, backend=Live):
                 if dma_binding is not None:
                     owner.dma_binding = timed('dma-identity', lambda: images.bind_dma_identity(dma_binding, args, owner.identity))
                 timed('reset', owner.reset)
-                timed('dram', owner.dram)
-                timed('credential-residue', lambda: owner.clear_stale_residue(credential is not None))
+                if info.get('card_fel_recovery'):
+                    result['dram_mode'] = 'sram-only'
+                else:
+                    timed('dram', owner.dram)
+                    timed('credential-residue', lambda: owner.clear_stale_residue(credential is not None))
                 if helper_only or info['entry_guard'] or args.kind == 'npu':
                     timed('rails', owner.rails)
                 if helper_only:
@@ -1212,7 +1245,7 @@ def result_summary(result, limit=1500):
     return lines
 
 
-SESSION_LITERAL = re.compile(r"""['"]([A-Za-z0-9_./-]+\.(?:py|c|h|S|inc|json))['"]""")
+SESSION_LITERAL = re.compile(r"""['"]([A-Za-z0-9_./-]+\.(?:py|c|h|S|inc|json|patch))['"]""")
 SESSION_IMPORT = re.compile(r'^\s*(?:import|from)\s+([A-Za-z_]\w*)', re.M)
 SESSION_INCLUDE = re.compile(r'^\s*#\s*include\s+"([^"]+)"', re.M)
 
