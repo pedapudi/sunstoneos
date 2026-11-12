@@ -138,10 +138,12 @@ void ss_latency_cause_irq_begin(unsigned core,unsigned interrupt)
 void ss_latency_cause_irq_end(unsigned core)
 {
     if (!active(core) || !own_el1(core) || !state[core].depth) return;
+    uint64_t saved=READ(daif);__asm__ volatile("msr daifset, #2" ::: "memory");
     report.core[core].cycle_end=cycles();report.core[core].tick_end=READ(cntpct_el0);
     report.core[core].overflow=READ(pmovsclr_el0);
     if (report.core[core].overflow&CC_ENABLE) report.core[core].status=SS_CAUSE_CONFIG;
     --state[core].depth;
+    WRITE(daif,saved);
 }
 void ss_latency_cause_tick_begin(void)
 {
@@ -149,8 +151,10 @@ void ss_latency_cause_tick_begin(void)
     struct cause_state *s=&state[0];
     s->tick=(struct ss_latency_cause_tick){0};s->phase=SS_LATENCY_CAUSE_PHASES;
     s->tick_depth=s->depth;
+    uint64_t saved=READ(daif);__asm__ volatile("msr daifset, #2" ::: "memory");
     s->tick.interrupted=ss_latency_cause_irq_count(0);
     s->tick.begin_tick=READ(cntpct_el0);s->tick.begin_cycles=cycles();
+    WRITE(daif,saved);
 }
 void ss_latency_cause_release_begin(unsigned target,unsigned phase)
 {
@@ -332,9 +336,11 @@ void ss_latency_cause_tick_end(void)
 {
     struct cause_state *s=&state[0];
     if (!active(0) || !own_el1(0) || !s->tick_depth || s->depth!=s->tick_depth) return;
+    uint64_t saved=READ(daif);__asm__ volatile("msr daifset, #2" ::: "memory");
     uint64_t end=cycles(),tick=READ(cntpct_el0);
     s->tick.end_cycles=end;s->tick.end_tick=tick;
     s->tick.interrupted=ss_latency_cause_irq_count(0)-s->tick.interrupted;
+    WRITE(daif,saved);
     uint64_t count=report.tick.count+1;
     if (s->tick.release_mask==255 && s->tick.state_mask==255) {
         if (end-s->tick.begin_cycles>report.tick.end_cycles-report.tick.begin_cycles) report.tick=s->tick;

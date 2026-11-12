@@ -19,7 +19,7 @@ CHECK_INPUTS=['kernel/scheduler/latency_cause.c','kernel/scheduler/latency_cause
 RETURN,STACK,OUTPUT,SCRATCH=0x47fff000,0x47f00000,0x43010000,0x43000000
 CC=1<<31
 class Model:
-    def __init__(self,image,skip_mask=False,mismatch=False):
+    def __init__(self,image,skip_mask=False,mismatch=False,skip_pair_mask=False):
         with image.open('rb') as f:
             e=ELFFile(f);self.parts=[(p['p_vaddr'],p.data()) for p in e.iter_segments() if p['p_type']=='PT_LOAD']
             self.sym={s.name:s['st_value'] for s in e.get_section_by_name('.symtab').iter_symbols() if s['st_shndx']!='SHN_UNDEF'}
@@ -30,6 +30,7 @@ class Model:
                 low=p&~4095;high=(p+len(data)+4095)&~4095;self.uc.mem_map(low,high-low)
             if data:self.uc.mem_write(p,data)
         self.uc.reg_write(R.UC_ARM64_REG_SP,STACK)
+        self.pair_pending=False;self.pair_attempts=0;self.skip_pair_mask=skip_pair_mask
         self.core=0;self.el1=True;self.clock=1000;self.skip_mask=skip_mask;self.mismatch=mismatch
         self.regs={'pmcr_el0':6<<11,'pmccntr_el0':0,'pmcntenset_el0':0,'pmintenset_el1':0,
                    'pmuserenr_el0':0,'pmccfiltr_el0':0,'pmovsclr_el0':0,'daif':0,
@@ -53,10 +54,16 @@ class Model:
             dst,key=i.op_str.split(', ')
             if key=='tpidrro_el0':value=0x43000000|(self.core<<48)|((1<<56) if self.el1 else 0)
             elif key=='tpidr_el1':assert self.el1;value=self.core
-            elif key=='cntpct_el0':value=self.clock
+            elif key=='cntpct_el0':
+                if self.pair_pending:
+                    self.pair_attempts+=1
+                    if not self.regs['daif']&0x80:self.violation=('IRQ skews paired clock endpoint',hex(pc))
+                    self.pair_pending=False
+                value=self.clock
             elif key=='pmccntr_el0':
                 assert self.el1 or self.regs['pmuserenr_el0']&4
                 value=self.regs[key]
+                if any(self.sym[n]<=pc<self.sym[n]+self.size[n] for n in ['ss_latency_cause_irq_end','ss_latency_cause_tick_end']):self.pair_pending=True
                 if leaf:
                     if not self.regs['daif']&0x80:self.violation=('benchmark admits IRQ',hex(pc))
                     self.measuring=not self.measuring;self.samples.append((pc,self.measuring))
@@ -75,7 +82,8 @@ class Model:
             elif key=='pmintenclr_el1':self.regs['pmintenset_el1']&=~value
             elif key=='pmovsclr_el0':self.regs[key]&=~value
             elif key.lower()=='daifset':
-                if not(self.skip_mask and leaf):self.regs['daif']|=value<<6
+                pair=any(self.sym[n]<=pc<self.sym[n]+self.size[n] for n in ['ss_latency_cause_irq_end','ss_latency_cause_tick_begin','ss_latency_cause_tick_end'])
+                if not((self.skip_mask and leaf) or (self.skip_pair_mask and pair)):self.regs['daif']|=value<<6
             elif key=='icc_sgi1r_el1':pass
             else:self.regs[key]=value
             uc.reg_write(R.UC_ARM64_REG_PC,pc+4)
@@ -157,6 +165,13 @@ def main():
     bad=Model(image,skip_mask=True);bad.setup();bad.call('ss_latency_cause_bench_leaf',8,SCRATCH,0x10001,0xf0,allow_violation=True)
     assert bad.violation and bad.violation[0]=='benchmark admits IRQ'
     results.append('omitting benchmark DAIF mask fails forced IRQ negative')
+    m=Model(image);m.setup();m.call('ss_latency_cause_irq_end',0);assert m.pair_attempts and not m.regs['daif']&0x80
+    bad=Model(image,skip_pair_mask=True);bad.setup();bad.call('ss_latency_cause_irq_end',0,allow_violation=True)
+    assert bad.violation and bad.violation[0]=='IRQ skews paired clock endpoint'
+    control=(ROOT/'kernel/scheduler/freertos_control.c').read_text()
+    selfbody=control.split('bool ss_control_suspend_current(',1)[1].split('bool ss_control_resume_isr',1)[0]
+    assert 'ss_latency_cause_sgi_' not in selfbody
+    results.append('paired CC/time endpoints exclude IRQ skew; unmasked self publication has no per-core scope')
     m=Model(image);m.setup();m.call('ss_latency_cause_bench_request');wait_tested=False
     bench=m.sym['report']+6016
     for iteration in range(970):
