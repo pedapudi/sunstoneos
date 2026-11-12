@@ -62,7 +62,12 @@ static _Atomic uint64_t load_state=A733_THERMAL_THROTTLE;
 int os_thermal_throttled(void)
 {
     uint64_t state=atomic_load_explicit(&load_state,memory_order_acquire);
-    return (state&3)!=A733_THERMAL_NORMAL||a733_smp_counter()/24>(state>>2);
+    uint64_t now=a733_smp_counter()/24;
+    /* A refresh can race the counter read. A reader that would report stale
+     * rechecks the publication once before deciding to sleep for recovery. */
+    if((state&3)==A733_THERMAL_NORMAL&&now>(state>>2))
+        state=atomic_load_explicit(&load_state,memory_order_acquire);
+    return (state&3)!=A733_THERMAL_NORMAL||now>(state>>2);
 }
 void ss_thermal_status(struct ss_thermal_status *out)
 {
@@ -248,7 +253,11 @@ static void publish_load(enum a733_thermal_level level)
 {
     if(level==A733_THERMAL_NORMAL&&a733_thermal_policy_seen(&thermal.policy)!=31)
         level=A733_THERMAL_THROTTLE;
-    atomic_store_explicit(&load_state,(fresh_until()<<2)|level,memory_order_release);
+    uint64_t next=(fresh_until()<<2)|level;
+    uint64_t previous=atomic_exchange_explicit(&load_state,next,memory_order_release);
+    uint64_t now=a733_smp_counter()/24;
+    if((previous&3)!=(next&3)||((now>(previous>>2))!=(now>(next>>2))))
+        os_application_wake_main();
 }
 /* The recognizer backs off at its checkpoints during THROTTLE, and new GPU
  * placements use the CPU. CRITICAL closes admission through board_fail.

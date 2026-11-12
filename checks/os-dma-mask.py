@@ -51,12 +51,14 @@ static int gicv3_spi_mask(void *s)
 {assert(s==&dma.irq.spi&&now<dma.mask_deadline);++masks;if(late_mask)now=deadline;return mask_result;}
 static int gicv3_spi_masked(void *s)
 {assert(s==&dma.irq.spi&&now<dma.mask_deadline);++reads;if(late_read)now=deadline;return read_fault?-1:reads>ready_after;}
-static void vTaskDelay(unsigned ticks)
+static int sunstone_deadline_register(void){return 1;}
+static int sunstone_deadline_wait_until(uint64_t until)
 {
-    assert(ticks==1&&!invalid_context&&!held&&!dma.irq.masked&&!critical);
+    assert(until>now&&until<=dma.mask_deadline&&!invalid_context&&!held&&!dma.irq.masked&&!critical);
     assert(reads&&reads<=ready_after&&now<dma.mask_deadline);
-    ++delays;now+=1000;if(extend)deadline+=1000000;
+    ++delays;now=until;if(extend)deadline+=1000000;
     if(begin_return)deadline=2500;
+    return 1;
 }
 static void taskENTER_CRITICAL(void)
 {assert(!critical);if(late_handler){++handler_calls;dma.irq.masked=1;}critical=1;++critical_entries;}
@@ -107,7 +109,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     text = (ROOT / 'apps/os/dma.c').read_text()
     callback = function(text, 'mask_timely') + '\n' + function(text, 'mask')
-    variants = {'normal': callback, 'no-yield': callback.replace('vTaskDelay(1);', ';'),
+    variants = {'normal': callback, 'no-yield': callback.replace('if(sunstone_deadline_wait_until(retry)<0)', '(void)retry; if(0)'),
                 'missing-deadline-admitted': callback.replace('if(!dma.mask_deadline)', 'if(0)'),
                 'unsynchronized-publication': callback.replace('taskENTER_CRITICAL();', '').replace('taskEXIT_CRITICAL();', '')}
     results = {}

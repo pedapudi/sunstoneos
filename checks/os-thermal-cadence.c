@@ -34,6 +34,7 @@ int os_cpu_return_requested(void){return 0;}
 int os_cpu_return_failing(void){return 0;}
 int os_application_deadline(void){return 1;}
 unsigned os_application_activity_generation(void){return 7;}
+void os_application_wake_main(void){}
 static unsigned clock_busy;
 int os_cpu_clock_step(const struct a733_thermal_policy *p){(void)p;++clocks;return 1;}
 int os_cpu_clock_busy(void){return (int)clock_busy;}

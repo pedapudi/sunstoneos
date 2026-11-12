@@ -40,6 +40,8 @@ elseif(SUNSTONE_APPLICATION STREQUAL "memcpy-bench")
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/memcpy-bench/main.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/memcpy-bench/manifest.json")
   add_sunstone_image(sunstone-a733-os-memcpy-bench LIFETIME ${os_lifetime} APPLICATION memcpy-bench)
+elseif(SUNSTONE_APPLICATION STREQUAL "dma-events")
+  include("${SUNSTONE_SOURCE_ROOT}/apps/dma-events/cmake/application.cmake")
 elseif(SUNSTONE_APPLICATION STREQUAL "usb-empty-fail")
   add_sunstone_application(usb-empty-fail
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/usb-empty-fail/main.c"

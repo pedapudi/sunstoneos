@@ -190,6 +190,14 @@ static int application_entry_ready(void)
 #endif
 }
 static int live_changed(void){return application_entry_ready()!=0;}
+void ss_wait_until(uint64_t until)
+{
+    const uint64_t limit=atomic_load_explicit(&finish_by,memory_order_acquire);
+    if(limit&&a733_smp_counter()/24>=limit)ss_fail(0x757);
+    if(limit&&until>limit)until=limit;
+    if(application_wait_until(until)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
+    if(limit&&a733_smp_counter()/24>=limit)ss_fail(0x757);
+}
 void ss_usb_wait(uint32_t wait_us)
 {
     uint64_t now=a733_smp_counter()/24;
