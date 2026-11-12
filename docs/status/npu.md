@@ -60,7 +60,7 @@ Designs: [platform](../designs/npu-platform.md), [fast path](../designs/npu-fast
 Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` records hold the results that earlier status prose described. Earlier prose evidence is in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-94 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+95 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -158,4 +158,5 @@ Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` recor
 | `1794491788400711310-b14ea0fe` | 2026-11-12 | 3-3 | `747ac099601b` | returned | failed | run_total 134.593 s, frames 512 frames, compute_time 352522 µs, load_time 93686 µs, front_end_time 9250 µs, subsampling_hook_time 79 µs, subsampling_tiles_time 61986 µs, subsampling_jobs_time 58647 µs, subsampling_entry_jobs_time 3039 µs, layers_time 331211 µs, head_time 9396 µs, punctuation_time 1484 µs, npu_job_wait 243046 µs, cpu_copy_and_convert 71144 µs, copy_entry_outputs 4546 µs, copy_steps 56983 µs, position_tables_time 34733 µs, position_wait 49 µs, jobs 772 jobs, saturated_codes 0 codes, counted_codes 1.76864e+07 codes, arena_peak 4.67709e+06 bytes |
 | `1794501877221324055-64875288` | 2026-11-12 | 3-3 | `f12d44d332ab` | returned | passed | run_total 135.141 s, frames 512 frames, compute_time 317667 µs, load_time 93691 µs, front_end_time 9242 µs, subsampling_hook_time 81 µs, subsampling_tiles_time 62026 µs, subsampling_jobs_time 58653 µs, subsampling_entry_jobs_time 3047 µs, layers_time 296391 µs, head_time 9372 µs, punctuation_time 1479 µs, npu_job_wait 206186 µs, cpu_copy_and_convert 72727 µs, copy_entry_outputs 4498 µs, copy_steps 58579 µs, position_tables_time 48807 µs, position_wait 47 µs, jobs 772 jobs, saturated_codes 0 codes, counted_codes 1.76864e+07 codes, arena_peak 4.67709e+06 bytes |
 | `1794503978134939430-c6c37888` | 2026-11-12 | 3-3 | `45f12b20e357` | returned | passed | run_total 170.128 s, frames 512 frames, compute_time 308625 µs, load_time 93783 µs, front_end_time 9247 µs, subsampling_hook_time 80 µs, subsampling_tiles_time 62027 µs, subsampling_jobs_time 58688 µs, subsampling_entry_jobs_time 3039 µs, layers_time 287341 µs, head_time 9378 µs, punctuation_time 1481 µs, npu_job_wait 196245 µs, cpu_copy_and_convert 73020 µs, copy_entry_outputs 5069 µs, copy_steps 58820 µs, position_tables_time 48700 µs, position_wait 53 µs, jobs 772 jobs, saturated_codes 0 codes, counted_codes 1.76864e+07 codes, npu_prepare_time 116379 µs, npu_graph_bytes 2.71164e+07 bytes, npu_graphs 145 graphs |
+| `1794506252076994875-247497f5` | 2026-11-12 | 3-3 | `a9e1c5345580` | watchdog-reset | failed | run_total 33.179 s |
 <!-- evidence-table:end -->
