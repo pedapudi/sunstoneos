@@ -200,9 +200,11 @@ def library(tree, text):
     plain = (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.ClassDef, ast.Assign, ast.AnnAssign, ast.Expr)
 
     def path_setup(node):
-        """sys.path.insert(...) or sys.path.append(...), the only call a module may make at import to find its siblings."""
+        """The calls a module may make at import to find its siblings: sys.path.insert(...), sys.path.append(...) and
+        spec.loader.exec_module(module), which loads a sibling by path."""
         call = node.value
-        return (isinstance(call, ast.Call) and ast.unparse(call.func) in ('sys.path.insert', 'sys.path.append'))
+        name = ast.unparse(call.func) if isinstance(call, ast.Call) else ''
+        return name in ('sys.path.insert', 'sys.path.append') or name.endswith('.loader.exec_module')
 
     return all(isinstance(node, plain) and not (isinstance(node, ast.Expr) and not isinstance(node.value, ast.Constant)
                                                 and not path_setup(node)) for node in tree.body)
