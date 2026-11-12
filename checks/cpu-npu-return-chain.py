@@ -104,11 +104,14 @@ class Native(terminal.KernelPages, owners.Model):
         self.report = layout.address('os_npu_published_report')
         self.ops, self.ticket, self.operation, self.submits = [], 0, 0, 0
         self.stop_calls, self.failures = 0, []
-        self.contexts, self.notifications = {}, {}
+        self.contexts, self.notifications, self.blocked, self.blocked_until = {}, {}, {}, None
+        self.expire_short = False
         self.pending_completion, self.delivered = 0, False
         self.put64(self.thermal+layout.layouts['os_thermal_service']['next_read'],self.time//24)
         self.put64(self.thermal+layout.layouts['os_thermal_service']['handle'], 0x6000)
         self.notify_wait = layout.address('ulTaskGenericNotifyTake')
+        # The client's service health window is the board's, not under test (as in checks/cpu-npu-integration.py).
+        self.hooks[layout.address('board_service_blocked_until')] = lambda: 1
         self.uc.mem_map(POOL, POOL_BYTES)
         # The application links no input: it reads the vectors region the runner uploads. The model sees a region of the
         # size of shufflenet-v2-published's input (150,528 bytes) with a fixed pattern, which the run must copy exactly.
@@ -205,6 +208,8 @@ class Native(terminal.KernelPages, owners.Model):
         hooks = layout.address('hooks', 'drivers/npu/a733_npu_runtime.c')
         # Admission and the NPU start bind the runtime at EL1, before any task of the application runs.
         assert self.api('npu_service_runtime', self.service, hooks, self.rt, task=CLIENT) == 1
+        # os_npu_start binds the SDK's event callback before the runtime: a submission notifies the client owner.
+        assert self.api('ss_npu_service_bind_event', layout.address('sdk_notify', 'apps/os/npu.c'), 0, task=CLIENT) == 1
         assert self.api('os_npu_sdk_bind', self.rt, task=CLIENT) == 1
         self.scheduler = 2
         for name, unit in [('bootstrap', 'apps/os/npu.c'), ('runtime_worker', 'drivers/npu/npu_service.c')]:
@@ -310,7 +315,16 @@ class Native(terminal.KernelPages, owners.Model):
         if address==self.layout.address('npu_runtime_collect') and self.operation==2 and self.time<self.pending_completion:
             self.stop='device-wait';uc.emu_stop();return
         if address == self.notify_wait:
-            self.stop = 'blocked';uc.emu_stop();return
+            self.stop = 'blocked';self.blocked_until = None;uc.emu_stop();return
+        if address == self.layout.address('sunstone_deadline_wait_until') and not self.thermal_running:
+            # The owners block on a precise deadline (apps/os/npu.c wait_until).
+            until = uc.reg_read(prior.fault.REGS[0])
+            if self.expire_short and until < self.u64(self.n+self.nf['end']):
+                # The local-stop settle deadline expires: time advances to it
+                # and the wait returns SUNSTONE_DEADLINE_EXPIRED (1).
+                self.time = max(self.time, until*24);uc.reg_write(prior.fault.REGS[0], 1)
+                uc.reg_write(UC_ARM64_REG_PC, uc.reg_read(UC_ARM64_REG_LR));return
+            self.stop = 'blocked';self.blocked_until = until;uc.emu_stop();return
         super().code(uc, address, size, unused)
 
     def task(self, name, *, resume=False, device=False):
@@ -320,8 +334,14 @@ class Native(terminal.KernelPages, owners.Model):
             self.uc.context_restore(self.contexts[name])
             if not device:
                 notified=self.notifications.pop(self.current_task,0)
-                if not notified:self.time+=24000 # expiry of the existing 1 ms client wait
-                self.uc.reg_write(prior.fault.REGS[0], notified)
+                until=self.blocked[name]
+                if until is None:
+                    if not notified:self.time+=24000 # expiry of the existing 1 ms client wait
+                    self.uc.reg_write(prior.fault.REGS[0], notified)
+                else:
+                    # SUNSTONE_DEADLINE_NOTIFIED (0), or EXPIRED (1) at the exact deadline.
+                    if not notified:self.time=max(self.time,until*24)
+                    self.uc.reg_write(prior.fault.REGS[0], 0 if notified else 1)
                 self.uc.reg_write(UC_ARM64_REG_PC, self.uc.reg_read(UC_ARM64_REG_LR))
         else:
             index = 0 if name == 'bootstrap' else 1
@@ -332,6 +352,7 @@ class Native(terminal.KernelPages, owners.Model):
                 'apps/os/npu.c' if name == 'bootstrap' else 'apps/os/npu-client.c'))
         self.uc.emu_start(self.uc.reg_read(UC_ARM64_REG_PC), 0, count=2000000)
         assert self.stop in ('blocked', 'device-wait', 'suspended', 'failure'), (name, self.stop)
+        self.blocked[name] = self.blocked_until if self.stop == 'blocked' else None
         self.contexts[name] = self.uc.context_save()
 
 
@@ -411,7 +432,7 @@ def ownership(image, layout, payload, *, fault=False, fault_task=MAIN):
     native.task('bootstrap');assert native.stop == 'blocked'
     assert native.u32(native.n+native.nf['active']) == 1
     assert not native.u32(native.n+native.nf['stopped'])
-    native.task('client');assert native.stop == 'blocked'
+    native.task('client');assert native.stop == 'blocked', (native.stop, native.failures)
     native.sample_thermal()
     native.api('ss_activity_begin')
     for job in range(4):
@@ -421,7 +442,7 @@ def ownership(image, layout, payload, *, fault=False, fault_task=MAIN):
         if native.stop=='device-wait':
             native.advance_thermal(native.pending_completion)
             native.task('client',resume=True,device=True)
-        assert native.stop=='blocked'
+        assert native.stop=='blocked', (job, native.stop, native.failures, native.ops[-3:])
         assert native.api('ss_npu_run', *arguments) == 1
         native.sample_thermal()
         assert bytes(native.uc.mem_read(native.output, len(native.reference))) == native.reference
@@ -456,8 +477,10 @@ def ownership(image, layout, payload, *, fault=False, fault_task=MAIN):
         return native
     native.api('chain_runtime_worker', native.service, task=WORKER, core=1)
     assert native.stop == 'blocked' and native.u32(native.sig+native.gf['runtime_parked']) == 1
+    native.expire_short = True
     native.task('bootstrap', resume=True)
-    assert native.stop == 'suspended' and native.stop_calls == 3
+    native.expire_short = False
+    assert native.stop == 'suspended' and native.stop_calls == 3, (native.stop, native.stop_calls, native.failures)
     assert native.u32(native.n+native.nf['stopped']) == 1
     assert not native.u32(native.report+12), 'Bootstrap cannot publish the client result.'
     native.task('client', resume=True);assert native.stop == 'suspended'

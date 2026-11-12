@@ -36,7 +36,7 @@ class Model(terminal.KernelPages,owner.Model):
   self.sf=layout.layouts['npu_service'];self.report=layout.address('os_npu_published_report')
   self.binding=layout.address('binding','apps/os/npu-irq.c')
   self.closed_operation=None;self.stop_calls=0;self.stop_pending=0;self.publish_stop=False
-  self.failures=[];self.callback_after_park=0;self.wakes=0;self.waits=[];self.delays=0
+  self.failures=[];self.callback_after_park=0;self.wakes=0;self.waits=[];self.delays=0;self.expire_short=False
   self.hooks[layout.address('os_application_wake_main')]=self.wake_main
   assert self.grants & terminal.GRANTS['NPU'], 'the application must declare the NPU service'
   self.deadline_wait=layout.address('sunstone_deadline_wait_until')
@@ -96,8 +96,14 @@ class Model(terminal.KernelPages,owner.Model):
   if address==self.layout.address('board_fail_at'):
    self.failures.append((uc.reg_read(prior.fault.REGS[0]),uc.reg_read(prior.fault.REGS[1])))
    self.stop='failure';uc.emu_stop();return
-  if address==self.deadline_wait:
-   self.waits.append(uc.reg_read(prior.fault.REGS[0]));self.stop='waiting';uc.emu_stop();return
+  if address==self.deadline_wait and not self.thermal_running:
+   until=uc.reg_read(prior.fault.REGS[0]);self.waits.append(until)
+   if self.expire_short and until<self.u64(self.n+self.nf['end']):
+    # A short exact deadline (the local-stop settle) expires: time advances
+    # to it and the wait returns SUNSTONE_DEADLINE_EXPIRED (1).
+    self.time=max(self.time,until*24);uc.reg_write(prior.fault.REGS[0],1)
+    uc.reg_write(UC_ARM64_REG_PC,uc.reg_read(UC_ARM64_REG_LR));return
+   self.stop='waiting';uc.emu_stop();return
   if address==self.notify_wait:
    self.stop='blocked';uc.emu_stop();return
   super().code(uc,address,size,unused)
@@ -141,22 +147,23 @@ if not a.late_isr_only:
   assert len(stop_calls)==calls
   results.append(dict(case=f'actual-stop-entry-park{parked}-fault{failed}-pending{pending}',passed=True,startup_stop_calls=len(stop_calls)))
  # Preserve/resume the real bootstrap frame across a separate actual CLOSE.
- # Its notification wait is an RTOS effect; the local C loop and all stop
- # ordering execute without replacing the bootstrap function.
- m=Model(image,layout);m.call(1,'host_bootstrap');assert m.stop=='blocked'
+ # Its precise-deadline wait (sunstone_deadline_wait_until) is an RTOS
+ # effect; the local C loop and all stop ordering execute without replacing
+ # the bootstrap function. Each resume returns SUNSTONE_DEADLINE_NOTIFIED (0).
+ m=Model(image,layout);m.call(1,'host_bootstrap');assert m.stop=='waiting' and m.waits==[55000000]
  context=m.uc.context_save();sp=m.uc.reg_read(UC_ARM64_REG_SP)
  stack=bytes(m.uc.mem_read(sp,m.s['__a733_smp_boot_stack_top']-sp))
  assert m.call(1,'os_npu_close')==1
  m.uc.mem_write(sp,stack);m.uc.context_restore(context)
- m.uc.reg_write(prior.fault.REGS[0],1);m.uc.reg_write(UC_ARM64_REG_PC,m.uc.reg_read(UC_ARM64_REG_LR));m.stop=None
+ m.uc.reg_write(prior.fault.REGS[0],0);m.uc.reg_write(UC_ARM64_REG_PC,m.uc.reg_read(UC_ARM64_REG_LR));m.stop=None
  m.uc.emu_start(m.uc.reg_read(UC_ARM64_REG_PC),0,count=50000)
- assert m.stop=='blocked' and not m.stop_calls and not m.u32(m.n+m.nf['stopped'])
+ assert m.stop=='waiting' and not m.stop_calls and not m.u32(m.n+m.nf['stopped'])
  # Worker park notification then allows local stop to remain pending twice and
  # publish its completion only after the third platform reply.
  context=m.uc.context_save();sp=m.uc.reg_read(UC_ARM64_REG_SP);stack=bytes(m.uc.mem_read(sp,m.s['__a733_smp_boot_stack_top']-sp))
  m.call(1,'host_runtime_worker',(m.service,));assert m.stop=='blocked'
- m.uc.mem_write(sp,stack);m.uc.context_restore(context);m.stop_pending=2
- m.uc.reg_write(prior.fault.REGS[0],1);m.uc.reg_write(UC_ARM64_REG_PC,m.uc.reg_read(UC_ARM64_REG_LR));m.stop=None
+ m.uc.mem_write(sp,stack);m.uc.context_restore(context);m.stop_pending=2;m.expire_short=True
+ m.uc.reg_write(prior.fault.REGS[0],0);m.uc.reg_write(UC_ARM64_REG_PC,m.uc.reg_read(UC_ARM64_REG_LR));m.stop=None
  m.uc.emu_start(m.uc.reg_read(UC_ARM64_REG_PC),0,count=100000)
  assert m.stop=='suspended' and m.stop_calls==3 and m.u32(m.n+m.nf['stopped'])==1
  assert m.wakes>=1 # the local stop wakes the application's end wait
