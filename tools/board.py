@@ -894,7 +894,7 @@ class Live:
                 plan.get('lifetime') == 'resident' and decoded.get('session') and
                 decoded.get('last', {}).get('stage') == crumbs.EL3_STOP and
                 decoded['last']['value'] == 0x5000 and decoded['last'].get('core') == 0 and not decoded.get('fault') and
-                not decoded.get('board_failure') and not self.record.get('cleanup_failure'))
+                not words['fault'] and not decoded.get('board_failure') and not self.record.get('cleanup_failure'))
             return 'watchdog-reset'
         if plan.get('lifetime') == 'resident':
             raise UnresolvedReturn('Resident qualification returned without its expected watchdog reset.')

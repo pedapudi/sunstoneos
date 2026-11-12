@@ -175,6 +175,7 @@ class Model:
                         defines, _ = board.crumbs.header()
                         level = 3 if self.variant == 'resident-fault' else board.crumbs.FAIL_LEVEL
                         self.registers[board.crumbs.RTC+0x110] = defines['FAULT_MAGIC'] << 24 | level << 16
+                    if self.variant == 'resident-malformed-fault':self.registers[board.crumbs.RTC+0x110] = 1
                     if self.variant == 'resident-normal':
                         self.registers[board.crumbs.WDT_MODE] = 0
                         self.registers[board.crumbs.RTC+0x104] = board.crumbs.RETURN_ROM << 16
@@ -244,7 +245,7 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
 def resident_cases(out):
     """A resident test succeeds only at its declared retained stop, never by reading DRAM."""
     for variant in ('resident-stop', 'resident-stale', 'resident-wrong-status', 'resident-wrong-stage',
-                    'resident-secondary', 'resident-fault', 'resident-failure', 'resident-normal'):
+                    'resident-secondary', 'resident-fault', 'resident-failure', 'resident-malformed-fault', 'resident-normal'):
         result, model, owner = lifecycle(out/variant, variant, resident=True)
         expected = variant == 'resident-stop'
         assert board.result_passed(result) == expected, (variant, result)
