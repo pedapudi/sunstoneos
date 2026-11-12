@@ -157,6 +157,10 @@ class Model:
                     # A733 manual 9.1.7.20: only a keyed write takes effect.
                     if value>>16!=0x16aa or self.variant=='marker-stuck':i+=3;continue
                     if self.variant=='recovery-warm-unmarked':i+=3;continue
+                    # Two outcomes the marker clear test separates: a keyed write of zero is ignored, or it clears
+                    # the marker and (marker-clear-sticks) the restore then fails.
+                    if self.variant=='marker-unclearable' and value&0xffff!=board.crumbs.MARKER_SET:i+=3;continue
+                    if self.variant=='marker-clear-sticks' and self.registers.get(address,0)==board.crumbs.MARKER_CLEAR:i+=3;continue
                 self.registers[address] = value&0xffff if address in (board.crumbs.WDT_MODE,board.crumbs.WDT_CONFIG,board.crumbs.WDT_OUTPUT) else value
                 if address==board.crumbs.WDT_RESTART and self.registers[board.crumbs.WDT_MODE]==0x41:
                     self.pending=True
@@ -254,9 +258,10 @@ class Model:
         return types.SimpleNamespace(returncode=0,stdout='\n'.join(out),stderr='')
 
 
-def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=False,recovery=False,entry=1):
+def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=False,recovery=False,entry=1,configure=None):
     root.mkdir()
     args=arguments(root, development=resident or recovery)
+    if configure:configure(args)
     if resident:args.lifetime='resident'
     if recovery:args.kind='probe';args.approved_by='coordinator'
     args.restore_rails=restore
@@ -376,6 +381,14 @@ def card_recovery_cases(out,image=None):
         except ValueError:pass
         else:raise AssertionError(('card recovery policy accepted',name))
         setattr(args,name,saved)
+    args.marker_clear_test=True
+    images.policy(info,args)
+    args.approved_by=None
+    try:images.policy(info,args)
+    except ValueError as error:assert '--marker-clear-test' in str(error),error
+    else:raise AssertionError('--marker-clear-test admitted without approval')
+    args.marker_clear_test=False;args.approved_by='coordinator'
+    passed('marker-clear-test-requires-coordinator-approval')
     with patch.object(images,'load',return_value=types.SimpleNamespace(classify=lambda _: 'write-capable')):
         try:images.policy(info,args)
         except ValueError:pass
@@ -690,6 +703,39 @@ def automatic_restore_cases(out):
     passed('rails-restored-after-a-grant-that-admits-a-transition-unless-opted-out')
 
 
+def marker_clear_cases(out):
+    """--marker-clear-test: at first contact, with WDT0 read disarmed, one keyed write of zero, a read, the keyed set and a
+    read. Both outcomes are recorded; a marker that does not read set again stops the run before launch."""
+    marker=board.crumbs.MARKER
+    for variant,expected,cleared in (('marker-clearable','returned',True),('marker-unclearable','returned',False),
+                                     ('marker-clear-sticks','refused-before-launch',True)):
+        root=out/variant
+        def run(args):
+            args.marker_clear_test=True;args.approved_by='coordinator'
+        result,model,owner=lifecycle(root,variant,configure=run)
+        assert result['outcome']==expected,(variant,result)
+        test=owner.record['marker_clear_test']
+        assert test['wdt_mode']==0 and test['clearable']==cleared,(variant,test)
+        # 0x16aa0000 is also WDT0's disarm word (the same key), so the clear is found by its marker address.
+        clears=[i for i,c in enumerate(model.calls) if any(c[j:j+3]==['writel',hex(marker),hex(board.crumbs.MARKER_CLEAR)]
+                                                          for j in range(len(c)))]
+        assert len(clears)==1,'The clear is tried once, at first contact.'
+        clear=clears[0]
+        assert model.calls[clear]==['writel',hex(marker),hex(board.crumbs.MARKER_CLEAR),'readl',hex(marker),
+                                    'writel',hex(marker),hex(board.crumbs.MARKER_KEYED),'readl',hex(marker)]
+        reset=[i for i,c in enumerate(model.calls) if '0x16aa0041' in c or c[0]=='exe']
+        assert all(clear<i for i in reset),'The clear precedes every arm and launch.'
+        if variant=='marker-clear-sticks':
+            assert 'clear test restored' in result['first_failure']['detail'] and not reset
+        else:
+            assert test['after_restore']&0xffff==board.crumbs.MARKER_SET
+        passed(variant)
+    job={'image':'/image.elf','directory':str(out),'options':{'marker_clear_test':True,'approved_by':'coordinator'}}
+    command=board.Queue.runner_command(job,'3-1')
+    assert 'marker_clear_test' in board.FROZEN_OPTIONS and '--marker-clear-test' in command
+    passed('marker-clear-test-is-frozen-into-the-runner-command')
+
+
 def transport_cases(out):
     for variant in ('normal','watchdog','no-return','host-error','dram-failure','rail-refusal','readback','partial-arm','journal-error','invalid-report','stuck-disarm','return-decoder',
                     'card-watchdog-41','card-watchdog-b1','card-cold-record','marker-stuck'):
@@ -741,6 +787,7 @@ def transport_cases(out):
             # One fresh-instance wait, never an automatic second reset.
             assert sum('0x16aa0041' in c for c in model.calls)==1
         passed(variant)
+    marker_clear_cases(out)
     for variant,expected in (
             ('watchdog-before-entry','watchdog-reset'),('missing-return','host-error'),
             ('wrong-return-session','host-error'),('fel-after-return','host-error'),
