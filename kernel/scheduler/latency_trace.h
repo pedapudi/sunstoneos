@@ -24,6 +24,7 @@ _Static_assert(SS_SCHED_TRACE_HISTORY > 0, "diagnostic event history must retain
 #define SS_SCHED_TRACE_RECORDS (2u * SS_OWNER_BATCH)
 #define SS_SCHED_TRACE_MAGIC UINT64_C(0x5353534348545231)
 #define SS_SCHED_TRACE_VERSION 5u
+#define SS_SCHED_RECORD_FIFO_BUSY (UINT64_C(1) << 63)
 
 /* All timestamps use CNTVCT. A command retains the timestamps after masking,
  * reference, publish, before/after drain, after slice refresh and before unmask.
@@ -36,7 +37,9 @@ struct ss_sched_trace_command {
 };
 /* Record timestamps: before FIFO acquisition, acquired, before unlock, after
  * unlock/event, after reference release/final event. Phase is the control
- * transfer phase observed under the FIFO. */
+ * transfer phase observed under the FIFO. Version 5 busy attempts use only
+ * SS_SCHED_RECORD_FIFO_BUSY, with try and park endpoints in stamps 1 and 2;
+ * stamps 3 and 4 then repeat stamp 2. */
 struct ss_sched_trace_record {
     uint64_t slot, phase, stamp[5];
 };

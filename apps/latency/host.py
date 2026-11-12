@@ -148,7 +148,15 @@ def decode_scheduler_trace(payload, frequency):
                 ordered(stamp)
                 if not start <= stamp[0] <= stamp[-1] <= end:
                     raise ValueError('scheduler control record lies outside its drain')
-                entries.append({'slot': slot, 'phase': phase, 'stamp': stamp})
+                record = {'slot': slot, 'phase': phase, 'stamp': stamp, 'record_type': 'locked'}
+                if phase == 1 << 63:
+                    if version != 5 or stamp[2] != stamp[3] or stamp[3] != stamp[4]:
+                        raise ValueError('scheduler busy FIFO record differs from its version or shape')
+                    record.update(record_type='fifo_busy', fifo_try_ticks=stamp[1] - stamp[0],
+                                  park_ticks=stamp[2] - stamp[1])
+                elif phase > 3:
+                    raise ValueError('scheduler control transfer phase is invalid')
+                entries.append(record)
         row['drain'] = {'start': start, 'end': end, 'count': count, 'dropped': dropped, 'records': entries}
         row['wait_max'] = wait_record()
         entries = [wait_record() for _ in range(waits)]

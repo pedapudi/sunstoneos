@@ -560,6 +560,18 @@ def run(decode):
     hole['window']['header'][2] |= 4
     accepted('an explicitly incomplete snapshot remains unattributed', hole,
              lambda value: value['wake_chains'][0]['maximum']['snapshot_incomplete'])
+    busy_record = copy.deepcopy(v5)
+    busy_record['cores'][1]['records'][0] = [3, 1 << 63, 1110, 1120, 1140, 1140, 1140]
+    def busy_steps(value):
+        row = value['cores'][1]['drain']['records'][0]
+        assert row['record_type'] == 'fifo_busy' and row['fifo_try_ticks'] == 10 and row['park_ticks'] == 20
+    accepted('busy FIFO attempt retains try and park cost', busy_record, busy_steps)
+    bad = copy.deepcopy(busy_record); bad['header'][1] = 4
+    rejected('older format rejects a busy FIFO record', pack(bad))
+    bad = copy.deepcopy(busy_record); bad['cores'][1]['records'][0][1] |= 1
+    rejected('busy attempt cannot claim an unread transfer phase', pack(bad))
+    bad = copy.deepcopy(busy_record); bad['cores'][1]['records'][0][-1] += 1
+    rejected('busy attempt cannot claim unlock or reference-release work', pack(bad))
     return cases
 
 
