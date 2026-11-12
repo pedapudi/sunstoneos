@@ -24,10 +24,10 @@ struct a733_radio_session_config {
 };
 enum a733_radio_session_result { A733_SESSION_PENDING,A733_SESSION_BUSY,
     A733_SESSION_MANAGEMENT,A733_SESSION_NETWORK,A733_SESSION_RETAINED,A733_SESSION_INVALID,
-    A733_SESSION_LOST,A733_SESSION_ENUMERATED };
+    A733_SESSION_LOST,A733_SESSION_ENUMERATED,A733_SESSION_DOWN };
 /* Private, zero storage. One immutable task owns every platform/protocol/socket
  * polling call. Application tasks use the existing copied socket queues. All
- * object and blob lifetimes survive fault; no shutdown, reset or reinit exists. */
+ * object and blob lifetimes survive fault and stop; no reinit exists. */
 struct a733_radio_session {
     struct a733_radio_session *self;
     struct a733_radio_session_config config;
@@ -45,6 +45,7 @@ struct a733_radio_session {
     atomic_uint busy;
     uint64_t deadline,last_now;
     unsigned stage,fault,renew_pending;
+    unsigned stop_requested;
     /* Where the first failure was decided: the source line of the fail call and the stage then. Zero while healthy;
      * an external retain records no line. */
     unsigned fail_line,fail_stage,fail_detail; /* fail_stage: the stage | detail << 9, the detail a refusal group mask */
@@ -55,6 +56,19 @@ struct a733_radio_session {
     struct aic8800_wifi_target reconnect_target;
     struct aic8800_supplicant_config reconnect_security;
 };
+/* Serialized owner request. Poll returns DOWN only after hardware shutdown.
+ * The absolute deadline is never renewed. Held protocol records remain pinned;
+ * all session admissions refuse after stop. WLAN DOWN alone does not prove the
+ * Bluetooth peer stopped: that requires the separately authenticated PM2 reset. */
+int a733_radio_session_stop(struct a733_radio_session *,uint64_t absolute_deadline_us);
+int a733_radio_session_peer_stopped(struct a733_radio_session *);
+/* An attached Bluetooth owner releases only after its protocol traffic ends.
+ * Before release, held checks the existing firmware generation and resource
+ * ownership without opening admission: 1 live, 0 contention, -1 fault/refusal.
+ * Release is permanent and invalidates held. No-Bluetooth sessions need no
+ * release call. Every operation is serialized on the session owner task. */
+int a733_radio_session_stop_release(struct a733_radio_session *);
+int a733_radio_session_stop_held(struct a733_radio_session *);
 /* Pure init, before first platform poll. Requires the actual initialized
  * platform and immutable firmware blobs. Firmware identity is an expectation;
  * the actual transport reads it again before the engine can claim ownership.

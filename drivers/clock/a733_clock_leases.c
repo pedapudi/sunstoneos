@@ -27,10 +27,10 @@ static a733_clock_mask_t parents(a733_clock_mask_t mask)
     if(mask&A733_CLOCK_LRADC)p|=A733_CLOCK_FABRIC|A733_CLOCK_RTC32K;
     if(mask&A733_CLOCK_GPADC)p|=A733_CLOCK_GPADC24M|A733_CLOCK_FABRIC;
     if(mask&A733_CLOCK_PWM0)p|=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC;
-    if(mask&(A733_CLOCK_TWI11|A733_CLOCK_TWI9))p|=A733_CLOCK_FABRIC;
+    if(mask&(A733_CLOCK_TWI11|A733_CLOCK_TWI9|A733_CLOCK_HEADER_TWIS))p|=A733_CLOCK_FABRIC;
     if(mask&(A733_CLOCK_USB0|A733_CLOCK_USB1))p|=A733_CLOCK_USB01_REF;
     if(mask&A733_CLOCK_MAIN_UARTS)p|=A733_CLOCK_APB_UART;
-    if(mask&(A733_CLOCK_S_UARTS|A733_CLOCK_S_TWI0|A733_CLOCK_S_TWI1))p|=A733_CLOCK_APBS1;
+    if(mask&(A733_CLOCK_S_UARTS|A733_CLOCK_S_TWI0|A733_CLOCK_S_TWI1|A733_CLOCK_S_TWI2))p|=A733_CLOCK_APBS1;
     if(mask&A733_CLOCK_THS)p|=A733_CLOCK_GPADC24M;
     if(mask&A733_CLOCK_VO0)p|=A733_CLOCK_DISPLL1;
     if((mask|p)&(A733_CLOCK_DISPLL1|A733_CLOCK_CPU_L|A733_CLOCK_CPU_B|A733_CLOCK_CPU_DSU))p|=A733_CLOCK_OSC;
@@ -103,7 +103,7 @@ enum a733_clock_result a733_clock_acquire(struct a733_clock_leases *m,uint64_t o
         A733_CLOCK_S_UARTS|A733_CLOCK_SPIS|A733_CLOCK_CE|A733_CLOCK_USB0|A733_CLOCK_USB1|
         A733_CLOCK_SDC1|A733_CLOCK_RADIO_MODULE|A733_CLOCK_S_TWI0|
         A733_CLOCK_SDC0|A733_CLOCK_SDC2|A733_CLOCK_SDC3|A733_CLOCK_PCIE0|A733_CLOCK_COMB1|A733_CLOCK_COMB0|
-        A733_CLOCK_TWI11|A733_CLOCK_TWI9|A733_CLOCK_S_TWI1|A733_CLOCK_USB2|A733_CLOCK_PWM0|A733_CLOCK_GPADC|A733_CLOCK_LRADC;
+        A733_CLOCK_TWI11|A733_CLOCK_TWI9|A733_CLOCK_S_TWI1|A733_CLOCK_HEADER_TWIS|A733_CLOCK_S_TWI2|A733_CLOCK_USB2|A733_CLOCK_PWM0|A733_CLOCK_GPADC|A733_CLOCK_LRADC;
     if(!owner || !(shared|exclusive) || ((shared|exclusive)&~A733_CLOCK_ALL) ||
         (shared&exclusive) || (shared&local) ||
         !a733_ranges_disjoint(m,sizeof(*m),out,sizeof(*out)))return A733_CLOCK_INVALID;
@@ -151,6 +151,32 @@ enum a733_clock_result a733_clock_publish_audio(struct a733_clock_leases *m,
     struct a733_clock_token t={id,token->owner,parents(A733_CLOCK_AUDIO5)|A733_CLOCK_AUDIO5,0};
     m->next_id=id+1;m->slots[slot]=(struct a733_clock_token){0};m->slots[home(id)]=t;
     *out=t;return leave(m,A733_CLOCK_OK);
+}
+enum a733_clock_result a733_clock_reclaim_audio(struct a733_clock_leases *m,
+    const struct a733_clock_token *token,uint64_t deadline,struct a733_clock_token *out)
+{
+    if(!a733_ranges_disjoint(m,sizeof(*m),token,sizeof(*token)) ||
+       !a733_ranges_disjoint(m,sizeof(*m),out,sizeof(*out)) ||
+       !a733_ranges_disjoint(token,sizeof(*token),out,sizeof(*out)))return A733_CLOCK_INVALID;
+    const struct a733_clock_token old=*token;
+    enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
+    unsigned slot=find(m,&old);
+    if(slot==A733_CLOCK_CLIENTS || old.exclusive ||
+       old.shared!=(parents(A733_CLOCK_AUDIO5)|A733_CLOCK_AUDIO5))return leave(m,A733_CLOCK_INVALID);
+    if(is_retained(m,slot))return leave(m,A733_CLOCK_FAULT);
+    const a733_clock_mask_t shared=A733_CLOCK_REF|A733_CLOCK_OSC;
+    for(unsigned i=0;i<A733_CLOCK_CLIENTS;++i){
+        const struct a733_clock_token *t=&m->slots[i];
+        if(i==slot || !t->id)continue;
+        if((A733_CLOCK_AUDIO_CHANGE&(t->shared|t->exclusive)) ||
+           (shared&t->exclusive))return leave(m,A733_CLOCK_BUSY);
+    }
+    const uint64_t id=next_identifier(m,slot);
+    if(!id)return leave(m,A733_CLOCK_EXHAUSTED);
+    r=clock_check(m,deadline);if(r!=A733_CLOCK_OK)return leave(m,r);
+    struct a733_clock_token next={id,old.owner,shared,A733_CLOCK_AUDIO_CHANGE};
+    m->next_id=id+1;m->slots[slot]=(struct a733_clock_token){0};m->slots[home(id)]=next;
+    *out=next;return leave(m,A733_CLOCK_OK);
 }
 enum a733_clock_result a733_clock_publish_stable(struct a733_clock_leases *m,
     const struct a733_clock_token *token,a733_clock_mask_t stable,uint64_t deadline,struct a733_clock_token *out)

@@ -1,11 +1,10 @@
 # Cold SD boot supplies the resident OS and recorded recognition inputs
 
-**Status: host-tested** for the session framing, the flat-runtime check and the
-canonical session hash (`apps/os/card.py`, `boot/a733/stage2/`,
-`checks/stage2-session.py`). **Open** for the card producer that binds the cold
-policy and evidence to a bundle (`apps/os/card.py` holds only the offline
-checks; the policy schema, evidence classes and bundle emission below are the
-design), and for physical boot from an allocated card.
+**Status: host-tested** for typed-session framing, runtime flattening, policy
+validation and ordinary-file bundle planning (`apps/os/card.py`,
+`tools/card-boot.py`, `checks/card-boot.py`, `checks/stage2-session.py`). Physical
+installation and autonomous boot remain open. The producer emits plans; the
+storage maintenance tool has no connected physical writer in its CLI.
 
 The path is ROM, pinned boot0, the stage-2 monitor, a verified resident
 FreeRTOS OS slot, then recorded mimus recognition. The card supplies the runtime
@@ -27,7 +26,7 @@ The slot is version 1 with four extents ([boot-slots.md](../boot-slots.md)):
 | Extent | Load address | Contents |
 | --- | --- | --- |
 | Runtime | `0x41000000` | Initialized ELF load segments, with bounded zero gaps; native startup owns its BSS |
-| Session | `0x41f00000` | 808-byte recorded OS session, or 904 bytes with the CPU grant |
+| Session | `0x41f00000` | Typed session, including its authenticated input facts, bounded by the 4 KiB reservation |
 | Models | `0x44000000` | Base model, zero padding to `0x44800000`, then overlay model |
 | Recorded input | `0x45000000` | Authenticated WAV |
 
@@ -66,10 +65,9 @@ admission requires matching generation, image identity, owners, grant bounds and
 the complete session digest.
 
 Canonical template hashing (`canonical_session`) zeroes board epoch and
-generation at bytes 24..39. For the 904-byte form it also zeroes grant epoch and
-generation at bytes 840..855 and the approval digest at bytes 872..903. No owner,
-image, SID, temperature trip or operating-point bound is excluded, which avoids
-circular identities.
+generation at bytes 24..39 and CPU-grant epoch and generation at grant offsets
+32..47. Every other byte remains authenticated, including the performance word
+and the reserved CPU bytes. The native grant contains no approval digest.
 
 The cold CPU policy is an immutable reviewed record for the board, resident
 image, canonical template, operating-point maxima and a transition budget per
@@ -84,23 +82,29 @@ permitted transitions; runtime refusal or a thermal ceiling does not establish
 the requested frequency. Eight-worker placement and priorities are those of the
 linked, inspected adapter.
 
-The policy schema is `a733-os-card-policy-v1` with scope
-`resident-recorded-cold-boot`. It records the runtime and monitor hashes,
-canonical session hash, linked inference configuration, board identity, four SID
-words and SID authority. Its fixed evidence references identify the session's
+The policy schema is `sunstone-card-boot-policy-v1` with scope
+`resident-cold-boot`. It records the image, monitor, linked manifest and canonical
+session hashes, manifest worker count, board identity and target, four SID words
+and SID authority. Its fixed evidence references identify the session's
 qualification and recovery, wiring, memory and four thermal records; the
 qualification and recovery hashes must agree, as native board admission requires.
-A CPU grant also requires matching read-only B1 evidence, the SID bin's two vendor
-maxima and a transition budget of 1 to 64 per boot. The policy's SHA-256 is the
-grant's approval identity. These identities do not establish physical facts or
-authorize a card write. The evidence class is `board-records` or
+The manifest worker count excludes the application's owner task; seven workers
+and the owner form the eight-task recorded configuration.
+A CPU grant also requires the matching read-only CPU clock and supply record
+([B1](cpu-a76-dvfs.md)), the SID bin's two vendor
+maxima and voltages, and a transition budget of 1 to 64 per boot. The manifest
+must declare clock grants. This profile requires both clusters, performance
+mode zero and all 28 reserved CPU bytes zero. The policy's SHA-256 stays in the
+host bundle. These identities do not establish physical facts or authorize a
+card write. The evidence class is `board-records` or
 `model-fixture`; model evidence requires `--model-fixture` and stays labeled in
 the output. The producer emits `physical_qualified: false` for either class.
 
 ## Resident supervision follows the admitted task selection
 
-Workload 2 is valid for resident recorded builds. The image creates PMIC, USB0,
-recognition, thermal and supervision tasks and no USB-host, Type-C or
+Workload 2 is valid for resident recorded builds. The image creates PMIC,
+recognition, thermal and supervision tasks, and USB0 only when the session
+grants `usb-device`. It creates no USB-host, Type-C or
 USB-host-power tasks, so the resident health check requires reports only from
 those selected tasks; service identifiers and windows are unchanged. Modes 0 and
 4 keep their USB-host requirements. A successful recorded inference retains its
@@ -120,17 +124,26 @@ requests the vendor points, so no host performance command is needed. The therma
 its first-recognition window in the 602-row, 60-second buffer; it is bounded
 diagnostic evidence rather than lifetime telemetry.
 
-The producer takes the resident ELF and link record, stage-2 ELF and binary, the
-fixed models and WAV, pinned boot0 and packer, cold template and policy,
+The producer takes an OS ELF that admits the resident lifetime and its passing
+link record, stage-2 ELF and binary, at most two packed input assets, pinned boot0
+and an optional packer cross-check. It also requires the cold template, policy,
 allocation, original full backup, current ordinary card image and identified-card
-record. It checks the full original backup against the allocation, creates a new
-output directory and never applies its plans. Each storage session still requires
+record. It rejects the stop-on-finish diagnostic marker. Each manifest input
+must match its session fact and one asset slice; padding outside those slices
+must be zero. The caller combines the two model inputs into one asset.
+
+The producer checks the full original backup against the allocation, binds the
+backup and current image hashes to the supplied CID and target, and detects
+source changes across planning. Capture provenance remains a physical
+prerequisite: a supplied CID does not prove where a file came from. The producer
+creates a new output directory and never applies its plans. Each storage session requires
 its own verified range backup and the storage admission before any physical
 write. The monitor package and boot0 are separately protected storage ranges, and
 the bundle does not make their installation atomic with a slot header. A physical
 installation retains recovery for interruption of those writes and establishes
 monitor and session compatibility before treating the new slot as a fallback.
-Optional DRAM restore keeps its own temperature and memory qualification
+The initial producer profile grants no devices and accepts only thermal, input
+and optional CPU-grant extents. Optional DRAM restore keeps its own temperature and memory qualification
 requirements; the default bundle uses the pinned full-training boot0.
 
 ## Validation
@@ -149,9 +162,9 @@ refuse before publication.
 
 | Item | Figure | Record |
 | --- | --- | --- |
-| Initialized runtime span of the checked eight-worker image | 2,100,336 bytes | [autonomous-card-os.jsonl](../evidence/autonomous-card-os.jsonl), `autonomous-card-os-static-budgets` |
-| Stage-2 monitor initialized bytes | 32,560, with 208 bytes before the fixed report at `0x47008000` | same |
-| Modeled instructions before OS entry (904-byte form) | 37,561 | same |
+| Initialized runtime span of the checked eight-task image | 2,100,600 bytes | [autonomous-card-os.jsonl](../evidence/autonomous-card-os.jsonl), `card-boot-typed-bundle-host` |
+| Stage-2 monitor initialized bytes | 31,896, with 872 bytes before the fixed report at `0x47008000` | same |
+| Typed recorded session without CPU authority | 1,008 bytes | same |
 | Cold boot latency | not measured | `autonomous-card-os-physical-boot` (not run) |
 
 Static budgets are four slot extents, one flat-runtime pass, one bounded
@@ -163,17 +176,33 @@ constant-size session stamping.
 
 ## Open work
 
-1. Implement the card producer: policy and evidence validation, frozen flat
-   inputs, monitor package, generation-bound slot plan and backup-first storage
-   sessions, emitting `physical_qualified: false`.
-2. Reserve a card allocation and run backup-first installation, autonomous
+1. Provide a reviewed physical writer through the queue, with independent
+   recovery, fresh range backups and coordinator-approved storage grants.
+2. Designate a card with a compatible layout, reserve its allocation and
+   preserve its complete, identified host backup before installation, autonomous
    recognition, service timing and a normal watchdog reboot. The native loader
    still refuses unproven remote writers and CPU and cache ownership before SD
-   access; no production card reservation or backup exists.
-   The [resident FEL test](resident-fel.md) has host evidence only. FEL entry
+   access; no production card reservation or full backup is recorded.
+   The bounded [resident FEL completion test](resident-fel.md) is qualified
+   on port 3-3; cold card boot remains unqualified. FEL entry
    admits dynamic OFF; cold card entry retains stage 2's static OFF.
-3. Replace identification-speed loading through the SD owner's post-DRAM SD core
-   and measure cold boot latency.
+   The authenticated restore points record FAT32 starts at sectors 32,768 and
+   2,048; both conflict with the required sectors 0..40,959. The existing
+   backups cover only 395 and 589 sectors. These cached records establish no
+   current card state or authority to repartition ([allocation audit](../evidence/autonomous-card-os.jsonl),
+   `card-boot-recorded-layout-refusal`).
+3. Measure cold boot latency. Stage 2 selects four-bit, 50 MHz descriptor-DMA
+   reads after identification. Its global 30-second software deadline includes
+   both candidate loads during fallback. WDT0 arms after loading, so a
+   pre-entry hardware stall has no established watchdog recovery.
 4. Provide recovery for interruption of the monitor and boot0 writes.
 5. Resolve EL1 watchdog renewal requiring BOOT input low while cold resident
    admission permits it high. This discrepancy remains open for card boot.
+6. Update the external application's manifest to declare CPU clock grants for
+   the vendor-point cold profile. The pinned recorded manifest declares eight
+   execution tasks but no clock grant; its host bundle cannot qualify that
+   profile. The ordinary-file fixture explicitly records `cpu_authority: false`.
+7. Define the cold-boot capture path. A session without USB0 has no live export.
+   Loader reports reside in DRAM, and the next OS entry clears the RTC session
+   record. A rebooting card image therefore needs a capture mechanism before
+   its next entry erases the evidence.

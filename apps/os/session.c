@@ -120,6 +120,7 @@ int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,un
      * the image has it, and the I2S receive record only with the I2S device. An absent record grants nothing. */
     if(radio)out->granted|=OS_GRANT_RADIO;
     if(h->devices&SS_DEVICE_AUDIO_HEADSET)out->granted|=OS_GRANT_HEADSET;
+    if(h->devices&SS_DEVICE_USB_DEVICE)out->granted|=OS_GRANT_USB0;
     {
         /* The declared records (apps/os/os-services.h). need is 0 for an optional record, OS_RECORD_LINKED for one the
          * image requires whenever it links the service, or the device bit that the session holds exactly when the record

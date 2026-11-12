@@ -87,8 +87,14 @@ int a733_dma_pool_session_stream_supervised_init(struct a733_dma_pool_session *,
 /* Use with the private FreeRTOS port's task-privilege hook. Only the exact
  * bootstrap creation and existing service worker creation receive EL1t. */
 BaseType_t a733_dma_pool_task_privileged(TaskFunction_t, void *);
+/* The bound client 0 calls from EL1 task context to publish the supervisor's
+ * absolute return deadline once. Repeating that deadline succeeds; changing
+ * it, an expired deadline or another task is refused. Returns 1 or -1.
+ * The limit covers pending startup and final verification, without changing
+ * the admitted startup configuration or opening a service channel. */
+int a733_dma_pool_session_return_limit(struct a733_dma_pool_session *,uint64_t);
 /* After normal CLOSE and dma_service_retired: wake the original bootstrap
- * to verify the adopted platform, then wait for its last-access acknowledgment.
+ * to verify the final platform, then wait for its last-access acknowledgment.
  * No pool, clock token or descriptor allocation is released. */
 int a733_dma_pool_session_retire(struct a733_dma_pool_session *);
 #endif

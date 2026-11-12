@@ -55,17 +55,20 @@ void a733_usb2_native_leave(struct a733_usb2_native *n)
     if(client)xTaskNotifyGive((TaskHandle_t)n->owner_task);
 }
 static int now(void *cookie,uint64_t *value)
-{struct a733_usb2_native *n=cookie;return n->locks->now(n->locks->context,value);}
+{struct a733_usb2_native *n=cookie;return a733_platform_lock_live(n->locks)&&n->locks->now(n->locks->context,value);}
 static int admit(void *cookie,const struct a733_usb2_platform_config *c)
 {struct a733_usb2_native *n=cookie;return current(n)&&c==&n->platform.config?n->admit(n->admission_context,c):-1;}
 static int enter(void *cookie,uint64_t d)
-{struct a733_usb2_native *n=cookie;return current(n)?a733_platform_lock_enter(n->locks,A733_PLATFORM_REGISTER_LOCK,d):-1;}
+{
+    struct a733_usb2_native *n=cookie;if(!current(n))return -1;
+    return a733_platform_lock_step(n->locks,A733_PLATFORM_REGISTER_LOCK,d);
+}
 static void leave(void *cookie)
 {struct a733_usb2_native *n=cookie;a733_platform_lock_leave(n->locks,A733_PLATFORM_REGISTER_LOCK);}
 static void retain(void *cookie)
 {struct a733_usb2_native *n=cookie;configASSERT(a733_platform_lock_retain(n->locks,A733_PLATFORM_REGISTER_LOCK)==1);}
 static int held(struct a733_usb2_native *n)
-{return current(n)&&!(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1)&&
+{return current(n)&&a733_platform_lock_live(n->locks)&&!(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1)&&
     xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_REGISTER_LOCK])==xTaskGetCurrentTaskHandle();}
 static int read(void *cookie,uintptr_t a,uint32_t *v)
 {
@@ -126,7 +129,7 @@ static int core_outside(void *cookie,const void *p,size_t z)
 static int live(void *cookie,uint64_t generation,uint64_t d)
 {struct a733_usb2_native *n=cookie;return current(n)&&!n->failed?a733_usb2_platform_live(&n->platform,generation,d):-1;}
 static int core_allowed(struct a733_usb2_native *n,uint32_t off,unsigned w)
-{return current(n)&&n->core_started&&!n->failed&&!n->platform.failed&&off<=0x8000-w&&!(off&(w-1));}
+{return current(n)&&a733_platform_lock_live(n->locks)&&n->core_started&&!n->failed&&!n->platform.failed&&off<=0x8000-w&&!(off&(w-1));}
 static int read32(void *cookie,uint32_t off,uint32_t *v)
 {
     struct a733_usb2_native *n=cookie;if(!v||!core_allowed(n,off,4))return 0;
@@ -225,9 +228,36 @@ void a733_usb2_native_lost(struct a733_usb2_native *n)
     if(n->core_started)a733_xhci_lost(&n->core);
     a733_usb2_platform_lost(&n->platform);n->read_failed=1;
 }
+int a733_usb2_native_halt(struct a733_usb2_native *n,uint64_t deadline)
+{
+    if(!current(n)||n->failed||!deadline)return -1;
+    if(n->stop_phase>=2)return 1;
+    if(!n->stop_phase){
+        n->stop_phase=1;n->stop_deadline=deadline;
+        n->read_failed=1;n->mounted=0;
+    }
+    if(deadline<n->stop_deadline)n->stop_deadline=deadline;
+    if(n->stop_deadline>n->platform.config.lifetime_deadline)
+        n->stop_deadline=n->platform.config.lifetime_deadline;
+    int r=n->core_started?a733_xhci_stop(&n->core,n->stop_deadline):1;
+    if(r<0){a733_usb2_native_lost(n);return -1;}
+    if(r==1)n->stop_phase=2;
+    return r;
+}
+int a733_usb2_native_stop(struct a733_usb2_native *n,uint64_t deadline)
+{
+    if(!current(n)||n->failed||!deadline||n->stop_phase<2)return -1;
+    if(n->stop_phase==3)return 1;
+    if(deadline<n->stop_deadline)n->stop_deadline=deadline;
+    int r=a733_usb2_platform_stop(&n->platform,n->stop_deadline);
+    if(r<0){a733_usb2_native_lost(n);return -1;}
+    if(r==1)n->stop_phase=3;
+    return r;
+}
 enum a733_usb2_result a733_usb2_native_poll(struct a733_usb2_native *n)
 {
     if(!current(n))return A733_USB2_INVALID;if(n->failed)return A733_USB2_RETAINED;
+    if(n->stop_phase)return A733_USB2_INVALID;
     if(!n->core_started){enum a733_usb2_result r=a733_usb2_platform_poll(&n->platform);
         if(r!=A733_USB2_READY)return r;
         n->core_started=1;

@@ -20,6 +20,11 @@ void radio_scan_main(const struct ss_grant *grant)
         if (status.done) break;
         ss_usb_wait(1000);
     }
+#ifdef SUNSTONE_RADIO_SCAN_FAILURE_TEST
+    /* The public radio-status ABI stores the completed scan as stage 7.
+     * Inject only after that successful observation, before exporting output. */
+    if(!status.failed&&status.stage==7u)ss_fail(UINT32_C(0x524107));
+#endif
     const struct radio_scan_result result = {status.stage, status.failed, status.done, 0};
     ss_finish(&result, sizeof(result));
 }

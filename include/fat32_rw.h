@@ -34,6 +34,16 @@ enum fwr_status {
 #define FWR_FAT_WINDOW_SECTORS 128u
 #define FWR_HIST 16u
 
+/* Optional owner certification. Events and classified writes use the same
+ * synchronous device queue. A token identifies one outer metadata operation. */
+enum fwr_operation { FWR_OP_MOUNT=1, FWR_OP_CHECKPOINT, FWR_OP_SYNC,
+    FWR_OP_TRUNCATE, FWR_OP_MKDIR, FWR_OP_UNLINK, FWR_OP_RENAME };
+enum fwr_transaction_event { FWR_TX_BEGIN=1, FWR_TX_COMMIT, FWR_TX_ABORT };
+enum fwr_write_phase { FWR_PHASE_DATA=0, FWR_PHASE_UNVERIFIED,
+    FWR_PHASE_FAT1, FWR_PHASE_FAT2, FWR_PHASE_DIRECTORY, FWR_PHASE_FSINFO,
+    FWR_PHASE_DIRTY1, FWR_PHASE_DIRTY2, FWR_PHASE_CLEAN1, FWR_PHASE_CLEAN2,
+    FWR_PHASE_RAW, FWR_PHASE_FAILED, FWR_PHASE_PROTOCOL };
+
 struct fwr_device {
     void *context;
     /* Both return 1 on success. A write of count sectors persists in ascending sector order. */
@@ -47,6 +57,11 @@ struct fwr_device {
     uint32_t au_sectors;
     /* Largest single write (one CMD25 with descriptor DMA). 0 selects 256 sectors. */
     uint32_t max_write_sectors;
+    /* Supply both hooks or neither. BEGIN returns a nonzero token; COMMIT and
+     * ABORT echo it. A failed event refuses the filesystem operation. */
+    int (*transaction)(void *, unsigned event, unsigned operation, uint32_t *token);
+    int (*write_classified)(void *, uint64_t sector, uint32_t count,
+                            const uint8_t *buffer, unsigned phase, uint32_t token);
 };
 #define FWR_DEFAULT_AU_SECTORS 128u
 
@@ -87,6 +102,9 @@ struct fwr_volume {
     uint32_t window_first;                 /* FAT sector index of the window start; ~0u: none */
     uint32_t window_valid_sectors;
     uint8_t in_recovery;
+    unsigned transaction_depth, transaction_operation, transaction_failed;
+    uint32_t transaction_token;
+    unsigned flag_write;            /* 0 ordinary FAT, 1 dirty flag, 2 clean flag */
     uint8_t window_dirty[FWR_FAT_WINDOW_SECTORS / 8];
     uint64_t dir_cached;
     uint8_t dir_sector[FWR_SECTOR];

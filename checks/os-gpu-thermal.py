@@ -21,6 +21,7 @@ DEFINES = ['SUNSTONE_A733_FAULT_PAGE=1', 'SUNSTONE_A733_OS=1', 'SUNSTONE_A733_OS
            'SUNSTONE_BOARD_APPLICATION=1', 'SUNSTONE_BOARD_SUPERVISED=1', 'SUNSTONE_BOARD_USB2_DUAL=1', 'PVR_GPU_PERFORMANCE=1']
 INCLUDES = [ROOT / 'apps/os', ROOT / 'apps/board', ROOT / 'platform/a733-smp-cached', ROOT / 'drivers/usb',
             ROOT / 'network/include', NETWORK / 'include', NETWORK / 'portable/Compiler/GCC']
+SOURCES = ['checks/os-gpu-thermal.c', 'apps/os/quiesce.c']
 CASES = ['repeated-park-reopen', 'throttle-during-reopen', 'critical-during-reopen',
          'close-observation-deadline', 'wrong-client', 'expired-lifetime', 'stale-open-epoch',
          'terminal-retire', 'retire-close-busy', 'retire-deadline', 'retire-critical',
@@ -36,7 +37,7 @@ out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
 
 
 def build(name, source):
-    return host_rtos.build(out / name, ['checks/os-gpu-thermal.c'], 'os-gpu-thermal', defines=DEFINES,
+    return host_rtos.build(out / name, SOURCES, 'os-gpu-thermal', defines=DEFINES,
                            includes=INCLUDES, flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'],
                            link=['-Wl,--gc-sections', '-Wl,--wrap=vTaskDelay'])
 
@@ -61,7 +62,7 @@ controls = {}
 if 15 in args.cases:
     mutant = host_rtos.mutated(out, 'apps/os/gpu.c', 'while (!pvr_compute_queue_clients_idle(gpu.component)) {',
                                'while (0) {', 'gpu-close-ignores-clients.c')
-    exe_mutant = host_rtos.build(out / 'control', ['checks/os-gpu-thermal.c'], 'os-gpu-thermal',
+    exe_mutant = host_rtos.build(out / 'control', SOURCES, 'os-gpu-thermal',
         defines=DEFINES + ['GPU_SOURCE="%s"' % mutant], includes=INCLUDES,
         flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'],
         link=['-Wl,--gc-sections', '-Wl,--wrap=vTaskDelay'])

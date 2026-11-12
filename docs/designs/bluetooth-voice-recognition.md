@@ -127,7 +127,9 @@ test `loss_packets`.
   between activations silence packets get now plus the response timeout,
   capped by the window. With the link open, a stop or the window closes it
   and discards a partial segment.
-- The owner never closes the AG. From the first entry into idle through
+- During capture the owner keeps the AG open. The OS
+  [return protocol](bluetooth-return.md) closes it after stopping synchronous
+  audio. From the first entry into idle through
   CAPTURE, an AG that leaves the ready state, as when the headset closes the
   service-level connection, is a release the owner did not request. It calls
   `fail()` in the same poll, in either lifetime, unless a stop or the window

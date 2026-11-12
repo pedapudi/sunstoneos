@@ -147,6 +147,8 @@ for target, compiler, flags in [('host', a.cc, []),
             entry.pop('gpu')                # the gpu declaration goes to the image tables, not the packed manifest
             entry.pop('usb_input_events')   # the USB input depth goes to the image tables, not the packed manifest
             entry.pop('usb_devices')        # the USB controller count goes to the image tables
+            entry.pop('i2c')                # the header I2C declarations go to the image tables
+            entry.pop('rtc')                # the RTC declaration goes to the image tables
         assert decoded == described, name + ' decoder differs'
     include = ['-I', ROOT / 'include', '-I', generated['hello_compute']]
     main = out / 'main.o'

@@ -12,12 +12,16 @@ parser.add_argument('--repository',type=Path,default=Path(__file__).resolve().pa
 parser.add_argument('--output',type=Path,required=True)
 parser.add_argument('--dcxo26',action='store_true')
 parser.add_argument('--block-only',action='store_true')
+parser.add_argument('--stop-only',action='store_true',help='Run shutdown continuations after the nominal attachment checkpoint')
+parser.add_argument('--stop-cases',nargs='+',help='Selected shutdown continuation names; omitted means all')
+parser.add_argument('--resume',action='store_true',help='Reuse the frozen ELF and archived checkpoints; execute only unfinished cases')
 parser.add_argument('--mode',choices=['all','build','execute'],default='all')
 parser.add_argument('--steady-max-reads',type=int,default=21,help='STATUS0 reads allowed in 100 ms of attached monitoring')
 parser.add_argument('--steady-old-loop',action='store_true',help='Model the earlier board loop that yielded after each monitoring step')
 parser.add_argument('--fault-cases',type=int,nargs='+',choices=range(1,9),default=list(range(1,9)),
                     help='Fault continuations after nominal checkpoint setup; select failed or unexecuted cases')
 args=parser.parse_args();repo=args.repository.resolve();out=args.output.resolve()
+if args.resume:args.mode='execute'
 cache=Path.home()/'.cache/sunstoneos';source=cache/'sources'
 compiler=Path('/usr/lib/llvm-21/bin/clang').resolve()
 linker=cache/'host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/bin/aarch64-none-elf-ld'
@@ -76,9 +80,15 @@ if args.mode!='execute':
  if args.mode=='build':raise SystemExit(0)
 else:
  inputs=json.loads((out/'inputs.json').read_text())
- assert all(hashlib.sha256(Path(p).read_bytes()).hexdigest()==v['sha256'] for p,v in inputs.items())
+ assert all(hashlib.sha256(Path(p).read_bytes()).hexdigest()==v['sha256'] for p,v in inputs.items() if not(args.resume and Path(p)==Path(__file__).resolve()))
  assert hashlib.sha256(elfpath.read_bytes()).hexdigest()==json.loads((out/'artifacts.json').read_text())[str(elfpath)]
-assert not (out/'results.json').exists(),'Preserve previous execution; do not replay it implicitly.'
+if args.resume:
+ stamp=str(time.time_ns());runner=out/('resume-runner-'+stamp+'.py');runner.write_bytes(Path(__file__).read_bytes())
+ previous=json.loads((out/'results.json').read_text());(out/('results-before-resume-'+stamp+'.json')).write_text(json.dumps(previous,indent=2)+'\n')
+ completed_cases={c['name'] for c in previous['cases'] if c['passed']}
+else:
+ assert not (out/'results.json').exists(),'Preserve previous execution; do not replay it implicitly.'
+ completed_cases=set()
 with elfpath.open('rb') as f:
  elf=ELFFile(f);segments=[(s['p_vaddr'],s.data()) for s in elf.iter_segments() if s['p_type']=='PT_LOAD']
  symbols={s.name:s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
@@ -101,6 +111,17 @@ state={'bus':{0x07083000:{'wire':0},0x07084000:{'wire':0}},'fusb':{1:0x80,0xa:25
  'pmic':{0xe:3,0x10:1,0x11:16,0x12:23},'interrupt':0,'status':0,'gpio':0,'events':[],
  'translations':0,'mmio':0,'delayed_stop':False,'vbus_low_samples':[],'debounce_reads':[]}
 checkpoints={};mode='nominal';panic=[];results=[];start_wall=time.monotonic();instruction_allowance=0
+if args.resume:
+ results=[c for c in previous['cases'] if c['passed']]
+ for checkpoint_dir in sorted(out.glob('checkpoint-*')):
+  cpu=json.loads((checkpoint_dir/'cpu.json').read_text())
+  for i,v in enumerate(cpu['x']):u.reg_write(UC_ARM64_REG_X0+i,v)
+  for reg,key in [(UC_ARM64_REG_PC,'pc'),(UC_ARM64_REG_SP,'sp'),(UC_ARM64_REG_PSTATE,'pstate'),(UC_ARM64_REG_LR,'lr'),(UC_ARM64_REG_FP,'fp')]:u.reg_write(reg,cpu[key])
+  for fields,key in [((3,3,14,0,0),'cntfrq'),((3,0,7,4,0),'par_el1'),((3,0,13,0,4),'tpidr_el1'),((3,0,1,0,0),'sctlr_el1')]:u.cpr_write(*fields,cpu['system'][key])
+  hardware=json.loads((checkpoint_dir/'hardware.json').read_text())
+  for field in ('bus','fusb','pmic'):hardware[field]={int(k):v for k,v in hardware[field].items()}
+  memory=[(b,gzip.decompress((checkpoint_dir/(hex(b)+'.bin.gz')).read_bytes())) for b,_ in regions]
+  checkpoints[int(checkpoint_dir.name.split('-')[1])]=(u.context_save(),memory,hardware)
 
 def status():
  f=state['fusb'];sw=f.get(2,0);mdac=f.get(4,0);partner=variable('typec_partner_cc')
@@ -134,7 +155,14 @@ def fusb_write(reg,value):
 def code(uc,a,n,context):
  word=get(a);masked=word&0xffffffe0;rt=word&31
  values={0xd5384240:4,0xd5381000:5,0xd53b0020:(4<<24)|(4<<16)}
- if masked==0xd53be020:values[masked]=test_time()*24
+ if masked==0xd53be020:
+  countdown=variable('typec_cross_clock')
+  if countdown:
+   put(symbols['typec_cross_clock'],countdown-1)
+   if countdown==1:
+    put(symbols['typec_test_time'],variable('typec_access_deadline',8),8)
+    put(symbols['typec_deadline_crossed'],1)
+  values[masked]=test_time()*24
  if masked in values:
   assert rt<29;uc.reg_write(UC_ARM64_REG_X0+rt,values[masked]);uc.reg_write(UC_ARM64_REG_PC,a+4)
  elif masked in (0xd5087800,0xd5087820):
@@ -154,7 +182,7 @@ def archive_state(name,memory,hardware):
 def checkpoint(uc,a,n,context):
  which=uc.reg_read(UC_ARM64_REG_X0)
  if mode=='nominal' and which not in checkpoints:
-  assert which in (1,2,3,4)
+  assert which in (1,2,3,4,9,*range(10,22))
   memory=[(b,bytes(uc.mem_read(b,size))) for b,size in regions]
   checkpoints[which]=(uc.context_save(),memory,copy.deepcopy(state))
   archive_state('checkpoint-'+str(which),memory,state)
@@ -163,10 +191,17 @@ def failure(uc,a,n,context):
  panic.append({'file':text,'line':uc.reg_read(UC_ARM64_REG_X1)});uc.emu_stop()
 def read(uc,access,a,n,value,context):
  if a>=0x40000000:return
+ if variable('typec_deadline_crossed'):
+  put(symbols['typec_late_mmio'],variable('typec_late_mmio')+1)
+  raise AssertionError(('MMIO after return deadline',hex(a),test_time()))
  state['mmio']+=1;put(symbols['typec_mmio_count'],state['mmio'])
  if a==0x07025010:
   status();active=not(state['fusb'].get(6,0)&0x20) and bool(state['interrupt']&~state['fusb'].get(0xa,255))
-  put(a,state['gpio']|(0 if active else 512));return
+  # Fault injection: the SY6280 enable remains high after the requested low.
+  # Native pin-manager output verification must refuse the resulting readback.
+  put(a,state['gpio']|(256 if variable('typec_low_fault') else 0)|(0 if active else 512));return
+ if a==0x07025004 and variable('typec_pin_restore_fault') and state.get('pin_restore_written'):
+  put(a,get(a)|1);return
  base=a&~4095
  if base not in state['bus']:return
  if base==0x07084000:assert state['translations']>=8
@@ -179,21 +214,41 @@ def read(uc,access,a,n,value,context):
   if off==8 and 'data' in b:put(a,b['data'])
   elif off==0xc and 'control' in b:put(a,b['control'])
   elif off==0x10 and 'status' in b:put(a,b['status'])
+  # Advance the modeled counter after an admitted control read. The next
+  # native access within this same TWI poll must observe the deadline.
+  if base==0x07084000 and off==0xc and variable('typec_cross_deadline'):
+   put(symbols['typec_test_time'],variable('typec_access_deadline',8),8)
+   put(symbols['typec_deadline_crossed'],1);put(symbols['typec_cross_deadline'],0)
 def write(uc,access,a,n,value,context):
  if a>=0x40000000:return
+ if variable('typec_deadline_crossed'):
+  put(symbols['typec_late_mmio'],variable('typec_late_mmio')+1)
+  raise AssertionError(('MMIO after return deadline',hex(a),test_time()))
  state['mmio']+=1;put(symbols['typec_mmio_count'],state['mmio'])
  state['events'].append(['mmio',a,value,test_time()])
+ if a==0x07025004 and variable('typec_pin_restore_fault') and not value&15:
+  state['pin_restore_written']=True
  if a==0x07025010:
   old=state['gpio'];state['gpio']=value
   if value&256 and not old&256:
    assert not variable('typec_external_vbus')
    assert state['vbus_low_samples'] and state['vbus_low_samples'][-1][1]&0xa0==0
    assert state['vbus_low_samples'][-1][2]&12==0
-  status();return
+  status()
+  # Scheduler preemption between a write and its readback exceeds one tick
+  # but remains within the accepted five-millisecond GPIO operation budget.
+  if not value&256 and variable('typec_pin_delay'):
+   put(symbols['typec_test_time'],test_time()+1500,8);put(symbols['typec_pin_delay'],0)
+  return
  base=a&~4095
  if base not in state['bus']:return
  b=state['bus'][base];off=a-base
  if off==8:b['data']=value;return
+ # A733 manual 18.11.7 legacy control: clearing BUS_EN on an idle
+ # controller disables it. The injected stale readback retains BUS_EN.
+ if off==0xc and not value&0x48:
+  if not variable('typec_restore_fault'):b['control']=value
+  return
  if off!=0xc or not value&8:return
  wire=b['wire'];data=b.get('data',0)
  if value==0x68:
@@ -229,9 +284,8 @@ def execute(name,start):
  global panic,instruction_allowance
  panic=[];error=None;u.reg_write(UC_ARM64_REG_PC,start)
  for chunk in range(35):
-  # Nine cases share one budget; together they use about 660 million
-  # instructions.
-  if instruction_allowance>=900000000 or time.monotonic()-start_wall>=600:break
+  # Legacy attachment and shutdown continuations share one finite budget.
+  if instruction_allowance>=1200000000 or time.monotonic()-start_wall>=600:break
   try:u.emu_start(u.reg_read(UC_ARM64_REG_PC),0x407fe000,timeout=max(1,int(min(10,600-(time.monotonic()-start_wall))*1000000)),count=10000000)
   except Exception as exc:error=str(exc)
   instruction_allowance+=10000000
@@ -241,12 +295,14 @@ def execute(name,start):
  result={'name':name,'passed':passed,'panic':panic,'error':error,'cpu':cpu_record(),'modeled_us':test_time(),'mmio':state['mmio']}
  results.append(result);(out/'results.json').write_text(json.dumps({'elf_sha256':hashlib.sha256(elfpath.read_bytes()).hexdigest(),'cases':results},indent=2)+'\n')
  if not passed:
-  archive_state('stopped-'+name,[(b,bytes(u.mem_read(b,size))) for b,size in regions],state)
+  archive_state('stopped-'+name+('-'+str(time.time_ns()) if args.resume else ''),[(b,bytes(u.mem_read(b,size))) for b,size in regions],state)
   raise SystemExit('Stopped without retry: inspect preserved CPU, hardware and memory state.')
-if args.block_only:put(symbols['typec_block_only'],1)
-execute('attach-cc1-block-read' if args.block_only else 'attach-cc1-delayed-stop-detach',symbols['typec_native_check'])
+if args.resume:state=json.loads((out/'nominal-trace.json').read_text())
+else:
+ if args.block_only:put(symbols['typec_block_only'],1)
+ execute('attach-cc1-block-read' if args.block_only else 'attach-cc1-delayed-stop-detach',symbols['typec_native_check'])
 assert state['delayed_stop']
-(out/'nominal-trace.json').write_text(json.dumps(state,indent=2)+'\n')
+if not args.resume:(out/'nominal-trace.json').write_text(json.dumps(state,indent=2)+'\n')
 # Source-derived expectations applied to the actual native trace, independently
 # of controller state fields. No additional device execution is required.
 events=state['events']
@@ -264,9 +320,11 @@ if args.block_only:
  (out/'completed.json').write_text(json.dumps({'result':'pass','physical':False,'scope':'actual native adapter: byte default-host regression, three-byte repeated-START block read, two ACKs, last NACK and completed STOP'},indent=2)+'\n')
  raise SystemExit(0)
 assert all(which in checkpoints for which in (1,2,3,4))
-for fault,point,name in [(1,1,'attach-cc2-detach'),(2,2,'external-vbus-refusal'),(3,3,'retained-i2c-independent-power-off'),
+legacy_cases=[] if args.stop_only else [(1,1,'attach-cc2-detach'),(2,2,'external-vbus-refusal'),(3,3,'retained-i2c-independent-power-off'),
  (4,3,'provider-stall-power-off'),(5,3,'invalid-host-token'),(6,3,'registry-busy-pending-shutdown'),(7,4,'pre-pin-authority-loss'),
- (8,3,'steady-monitor-100ms')]:
+ (8,3,'steady-monitor-100ms')]
+for fault,point,name in legacy_cases:
+ if name in completed_cases:continue
  if fault not in args.fault_cases:continue
  mode=name;context,memory,hardware=checkpoints[point]
  for a,data in memory:u.mem_write(a,data)
@@ -278,6 +336,39 @@ for fault,point,name in [(1,1,'attach-cc2-detach'),(2,2,'external-vbus-refusal')
   print(json.dumps({'steady_monitor_100ms':steady}),flush=True)
   (out/'steady-monitor.json').write_text(json.dumps(steady,indent=2)+'\n')
   assert 0<steady['status_reads']<=args.steady_max_reads
-assert all(hashlib.sha256(Path(p).read_bytes()).hexdigest()==v['sha256'] for p,v in inputs.items())
-(out/'completed.json').write_text(json.dumps({'result':'pass','nominal_runs':1,'checkpoint_continuations':len(set(args.fault_cases)),'fault_cases':args.fault_cases,'physical':False,
+stop_cases=[(1,9,'stop-constructor'),*((1,10+i,'stop-stage-'+str(i)) for i in range(10)),
+ (1,3,'stop-attached'),(2,3,'stop-inflight'),(3,3,'stop-i2c-fault'),(4,3,'stop-vbus-high'),
+ (5,3,'stop-gpio-fault'),(6,3,'stop-deadline'),(7,3,'stop-transaction-deadline'),
+ (8,3,'stop-gpio-busy'),(9,14,'stop-pmic-first-pending'),(9,15,'stop-pmic-second-pending'),
+ (10,3,'stop-power-ack'),(12,3,'stop-control-readback'),(13,3,'stop-pin-readback'),
+ (14,3,'stop-unknown-stage'),(15,3,'stop-revoked-inflight'),
+ (16,18,'stop-lock-held-before-request'),(1,20,'stop-enable-pending'),(17,21,'stop-already-discharged'),
+ (18,3,'stop-local-deadline-between-accesses'),(19,3,'stop-shared-deadline-between-accesses'),
+ (20,3,'stop-pin-readback-after-one-tick'),(21,18,'stop-lock-contention-pending'),
+ (22,3,'stop-shared-deadline-between-clock-samples')]
+if args.stop_cases:
+ assert set(args.stop_cases)<=set(name for _,_,name in stop_cases)
+ stop_cases=[case for case in stop_cases if case[2] in args.stop_cases]
+for fault,point,name in stop_cases:
+ if name in completed_cases:continue
+ mode=name;context,memory,hardware=checkpoints[point]
+ for a,data in memory:u.mem_write(a,data)
+ u.context_restore(context);state=copy.deepcopy(hardware);put(symbols['typec_stop_case'],fault)
+ event_start=len(state['events'])
+ execute(name,u.reg_read(UC_ARM64_REG_PC))
+ if fault in (1,2,9,10,17,20,21):
+  assert get(0x0701019c)&0x20002==0
+  assert get(0x07025004)==0
+  # Register restoration follows GPIO-low readback, discharge and the power
+  # task's publication. The C fixture checks the atomic publication boundary.
+  after=state['events'][event_start:]
+  gates=[v for kind,a,v,t in after if kind=='mmio' and a==0x0701019c]
+  if point in (3,19,20,21):
+   assert gates==[0x30001,0x10001]
+   assert state['bus'][0x07084000]['control']&0xfc==0
+  else:assert not gates
+  if point==20:assert not any(kind=='mmio' and a==0x07025010 and v&256 for kind,a,v,t in after)
+ (out/(name+'-trace.json')).write_text(json.dumps(state,indent=2)+'\n')
+assert all(hashlib.sha256(Path(p).read_bytes()).hexdigest()==v['sha256'] for p,v in inputs.items() if not(args.resume and Path(p)==Path(__file__).resolve()))
+(out/'completed.json').write_text(json.dumps({'result':'pass','nominal_runs':1,'checkpoint_continuations':len(results)-1,'fault_cases':args.fault_cases,'stop_cases':[c[2] for c in stop_cases],'physical':False,
  'inputs':len(inputs),'instruction_allowance_upper_bound':instruction_allowance,'scope':'actual native providers; modeled MMIO, scheduler and electrical qualification'},indent=2)+'\n')

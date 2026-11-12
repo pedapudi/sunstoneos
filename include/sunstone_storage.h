@@ -17,7 +17,11 @@ int ss_storage_open_read(void);
 /* Register the flush buffer (64-byte aligned, in a WORK region, a multiple of 512 bytes); the FAT32 service then writes from
  * it with no copy. Once, before ss_storage_device. */
 int ss_storage_region(void *base, size_t bytes);
-/* Fill the block device (read, write, sector count, allocation unit, largest single write) for fwr_mount. */
+/* Fill the block device for fwr_mount, including the owner transaction hooks.
+ * Keep these hooks when copying the device. They certify FAT and directory
+ * consistency independently of application RAM during failure return. Raw
+ * device writes invalidate that certificate; a successful filesystem mount
+ * must validate a consistent point before closing a raw-write session. */
 int ss_storage_device(struct fwr_device *);
 /* Restore the card's clock, pins and rail leases, as a returning image must before it finishes. Call after the volume is
  * unmounted; every later request fails. */

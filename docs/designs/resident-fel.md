@@ -1,7 +1,8 @@
 # Resident OS entry from the USB boot ROM
 
-Status: the resident entry, bounded completion test and runner are host-tested.
-No resident board run is qualified. FEL is the boot ROM's USB loader; the
+Status: the bounded resident completion diagnostic is qualified on port 3-3.
+Continuous resident supervision and cold card boot remain unqualified.
+FEL is the boot ROM's USB loader; the
 [autonomous card design](autonomous-card-os.md) defines cold card boot.
 
 ## Resident entry accepts the established FEL state
@@ -62,12 +63,47 @@ Ordinary resident builds continue supervision after application completion.
 An immutable ELF marker identifies the completion diagnostic
 (`os_resident_test_profile`).
 
+## USB0 ownership requires its device grant
+
+The manifest names the USB0 vendor device service as `usb-device`
+(`SS_DEVICE_USB_DEVICE`). Session decoding derives `OS_GRANT_USB0` from that
+device bit. It adds no service extent. The board creates the USB0 task only
+when the session grants it, independently of the lifetime. The application
+waits for USB0 readiness only when that device is granted. Resident supervision
+requires USB0 progress only when its task exists.
+
+Hello-compute declares no USB device. Its session creates no USB0 task and
+initializes no USB0 platform. Shared PMIC, rail and GPU provider binding remains
+available; binding without a USB task is still one-shot. The application runs
+and completes without USB enumeration or a USB-ready publication.
+
+USB0 failures use the retained failure group `0xb`. Each guard has a stable
+reason in `include/sunstone_usb0_stop.h`. The site's auxiliary field carries
+the provider step in bits 7:0 and rail index above it; the value carries the
+signed provider result. Provider retention records its own reason before the
+generic failure path can obscure it. `tools/a733-crumbs.py` decodes these fields.
+
 The runner accepts only the marked diagnostic's exact retained stop. It reads
 no DRAM after reset. The [prediction record](../evidence/resident-fel.jsonl),
-`resident-fel-completion-proposal`, contains the time budget and expected result.
+`resident-fel-no-usb0-proposal`, contains the time budget and expected result.
 The frozen input manifest and exact host commands are in that record's evidence
-directory. Submission waits for the coordinator to land the runner changes,
-restart the daemon and instruct the worker to submit.
+directory. The [application evidence](../evidence/application.jsonl), entry
+`1794474070488494360-23d98e20`, records the matching session and core-0
+EL3 stop `0x0111/0x5000`, with no retained fault or board failure. The watchdog
+resets to FEL and DRAM is lost. The diagnostic excludes USB0 through its
+manifest and session grant. This result qualifies the marked completion test;
+it does not measure indefinite resident supervision.
 
-The current EL1 watchdog renewal check requires BOOT low. Its disagreement with
-cold resident admission remains in the card design's open work.
+## Open work
+
+- A resident session that grants USB0 over FEL requires the
+  [ROM takeover mode](usb-session-takeover.md). Cached-SMP session admission
+  refuses that mode today. Its controller, interrupt and DMA exclusion must be
+  bound before a USB0-granted FEL run; a device grant supplies none of that authority.
+- USB0 requires current rail readbacks. The failed run captures neither DCDC9
+  nor ELDO6; its programmed-voltage expectations differ from an older port-3-3
+  observation. Keep the exact rail guards until current inputs are established.
+- The returning lifetime has no qualified USB0 shutdown. Its composition
+  admission refuses `OS_GRANT_USB0` until that path exists.
+- The current EL1 watchdog renewal check requires BOOT low. Its disagreement
+  with cold resident admission remains in the card design's open work.

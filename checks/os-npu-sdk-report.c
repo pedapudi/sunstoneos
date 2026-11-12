@@ -1,11 +1,19 @@
 /* Run the actual OS SDK owner through refusal, successful copies and CLOSE;
  * the final immutable report must count only copied successful results. */
 #include "../apps/os/npu-client.c"
+#include "../apps/os/quiesce.c"
 #include "npu-queue-unlinked.c"
 #include <assert.h>
 #include <setjmp.h>
 #include <stdlib.h>
 #include <stdio.h>
+/* The client runs outside supervisor return. Route its fault callback through
+ * the real registry with an unrequested owner descriptor. */
+static struct os_quiesce report_quiesce={.owner=OS_QUIESCE_NPU,.order=OS_QUIESCE_QUEUES};
+int os_cpu_return_requested(void){return 0;}
+int os_cpu_return_failing(void){return 0;}
+int os_npu_quiesce_fault(uint32_t site,uint32_t value,const void *caller)
+{return os_quiesce_fault(&report_quiesce,site,value,caller);}
 struct board_application board;
 struct board_provider providers;
 static struct ss_manifest manifest;

@@ -26,6 +26,7 @@ import board
 import board_images as images
 
 rows = []
+CARD_GATE = bytes.fromhex('00f020e3') * 6 + bytes(8)
 
 
 def passed(name):
@@ -73,7 +74,7 @@ class Model:
 
     def discover(self, port):
         assert port=='3-1'
-        if self.pending and self.variant!='no-return':
+        if self.pending and self.variant!='no-return' and not (self.variant=='recovery-no-return' and self.launched):
             self.number += 1
             self.pending = False
         return self.node
@@ -151,7 +152,7 @@ class Model:
                     data=bytes([data[0]^1])+data[1:]
                 Path(args[i+3]).write_bytes(data)
                 i+=4
-            elif op=='exe':
+            elif op in ('exe','reset64'):
                 self.launched=True
                 self.pending=True
                 self.registers[board.crumbs.RTC+0x100]=0x5c0d0001
@@ -179,16 +180,34 @@ class Model:
                     if self.variant == 'resident-normal':
                         self.registers[board.crumbs.WDT_MODE] = 0
                         self.registers[board.crumbs.RTC+0x104] = board.crumbs.RETURN_ROM << 16
+                if self.variant.startswith('recovery-'):
+                    recovery=images.load('model_card_recovery',ROOT/'tools/card_recovery.py')
+                    self.registers[recovery.RTC_FLAG]=0
+                    gate=bytearray(CARD_GATE);struct.pack_into('<2I',gate,24,recovery.GATE_COMPLETE,1)
+                    report=recovery.REPORT_RECORD.pack(recovery.REPORT_MAGIC,1,64,1,1,recovery.FEL_FLAG,0x41,12)
+                    if self.variant=='recovery-report':report=report[:24]+struct.pack('<Q',2)+report[32:]
+                    if self.variant=='recovery-gate':gate[0]^=1
+                    if self.variant=='recovery-flag':self.registers[recovery.RTC_FLAG]=recovery.FEL_FLAG
+                    for address,data in ((recovery.GATE,gate),(recovery.REPORT,report)):
+                        for n,byte in enumerate(data):self.memory[address+n]=byte
+                    if self.variant=='recovery-watchdog':
+                        self.registers[board.crumbs.WDT_MODE]=1
+                        self.registers[board.crumbs.RTC+0x104]=0x0c010000
+                    if self.variant=='recovery-fault':
+                        defines,_=board.crumbs.header()
+                        self.registers[board.crumbs.RTC+0x110]=defines['FAULT_MAGIC']<<24|3<<16
+                    if self.variant=='recovery-malformed-fault':self.registers[board.crumbs.RTC+0x110]=1
                 i+=2
             else:
                 raise AssertionError(op)
         return types.SimpleNamespace(returncode=0,stdout='\n'.join(out),stderr='')
 
 
-def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=False):
+def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=False,recovery=False):
     root.mkdir()
-    args=arguments(root, development=resident)
+    args=arguments(root, development=resident or recovery)
     if resident:args.lifetime='resident'
+    if recovery:args.kind='probe';args.approved_by='coordinator'
     args.restore_rails=restore
     model=Model(variant)
     owners=[]
@@ -221,9 +240,15 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
             if resident:
                 plan['lifetime']='resident'
                 plan['watchdog']['mode']=0x41
+            if recovery:
+                plan.update(format='card-fel-recovery',nonce=1,launch=['reset64','0x41000000'],
+                    profile={'gate_address':0x41001000,'gate_bytes':len(CARD_GATE),'state_offset':24,'test_offset':28,
+                             'gate_sha256':images.hashlib.sha256(CARD_GATE).hexdigest()},
+                    watchdog={'mode':0x41,'session_seconds':60})
             if grant!='absent':plan['cpu_grant_raises']=grant
             return plan
         def capture(self,plan):
+            if recovery:return super().capture(plan)
             if variant=='fel-after-return':self.tx('readl','0x20')
             if variant=='host-error':raise TypeError('injected decoder bug after normal return')
             if variant=='invalid-report':
@@ -236,7 +261,7 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
         args.decoder=root/'application-decoder.py'
         args.decoder.write_text('def decode(payload):\n    return {"failed": True}\ndef failures(decoded):\n    return ["native job failed"]\n' if variant=='decoder-failure' else
                                 'def decode(payload):\n    raise ValueError("malformed payload")\n')
-    info={'entry_guard':True,'descriptor':{},'watchdog':{'mode':0xb1,'session_seconds':1}}
+    info={'entry_guard':not recovery,'descriptor':{},'watchdog':{'mode':0xb1,'session_seconds':1}}
     with patch.object(images,'inspect',return_value=info),patch.object(images,'policy'), \
          patch.object(board.os,'access',return_value=True),contextlib.redirect_stdout(io.StringIO()), \
          (patch.object(board.crumbs,'parse_return',side_effect=ValueError('injected return decoder bug')) if variant=='return-decoder' else contextlib.nullcontext()):
@@ -244,6 +269,115 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
     assert not model.lock
     assert json.loads(Path(result['result_path']).read_text())['outcome']==result['outcome']
     return result,model,owners[0]
+
+
+def card_recovery_fixture(root):
+    """A structural ELF fixture; the gate's executing instruction check lives separately."""
+    root.mkdir()
+    recovery=images.load('fixture_card_recovery',ROOT/'tools/card_recovery.py')
+    digest=images.hashlib.sha256(CARD_GATE).digest()
+    source=root/'fixture.S'
+    source.write_text('.section .text,"ax"\n.global _start\n.type _start,%function\n_start: ret\n.size _start,.-_start\n'
+        '.section .rodata,"a"\n.balign 8\n.global a733_card_fel_profile\n.type a733_card_fel_profile,%object\n'
+        'a733_card_fel_profile:\n.quad '+','.join(map(str,(recovery.PROFILE_MAGIC,1,88,recovery.GATE,len(CARD_GATE),24,28)))+
+        '\n.byte '+','.join(map(str,digest))+'\n.size a733_card_fel_profile,88\n'
+        '.section .card_gate,"ax"\n.byte '+','.join(map(str,CARD_GATE))+'\n'
+        '.section .request,"aw",%nobits\n.global a733_card_fel_request\n.type a733_card_fel_request,%object\n'
+        'a733_card_fel_request: .skip 32\n.size a733_card_fel_request,32\n'
+        '.section .report,"aw",%nobits\n.global a733_card_fel_report\n.type a733_card_fel_report,%object\n'
+        'a733_card_fel_report: .skip 64\n.size a733_card_fel_report,64\n')
+    script=root/'fixture.ld'
+    script.write_text('ENTRY(_start)\nPHDRS { code PT_LOAD FLAGS(5); gate PT_LOAD FLAGS(5); request PT_LOAD FLAGS(6); report PT_LOAD FLAGS(6); }\n'
+        'SECTIONS { . = 0x41000000; .text : { *(.text) } :code .rodata : { *(.rodata) } :code '
+        '.card_gate 0x41001000 : { *(.card_gate) } :gate '
+        '.request 0x41002000 (NOLOAD) : { *(.request) } :request '
+        '.report 0x42000000 (NOLOAD) : { *(.report) } :report /DISCARD/ : { *(.comment) *(.note*) } }\n')
+    subprocess.run([str(images.CLANG),'--target=aarch64-none-elf','-c',str(source),'-o',str(root/'fixture.o')],check=True)
+    subprocess.run([str(images.LLD),'-T',str(script),str(root/'fixture.o'),'-o',str(root/'fixture.elf')],check=True)
+    return root/'fixture.elf'
+
+
+def card_recovery_cases(out,image=None):
+    recovery=images.load('check_card_recovery',ROOT/'tools/card_recovery.py')
+    fixture=card_recovery_fixture(out/'card-recovery-fixture')
+    info=images.inspect(fixture,'probe')
+    assert info.get('card_fel_recovery') and not info.get('native_probe') and not info['entry_guard']
+    args=arguments(fixture.parent,'--kind','probe','--approved-by','coordinator',development=True);args.image=fixture
+    images.policy(info,args)
+    for name,value in (('approved_by',None),('storage_write',True),('preserve_dram',True),('restore_rails',True),
+                       ('input',[fixture]),('decoder',fixture)):
+        saved=getattr(args,name);setattr(args,name,value)
+        try:images.policy(info,args)
+        except ValueError:pass
+        else:raise AssertionError(('card recovery policy accepted',name))
+        setattr(args,name,saved)
+    with patch.object(images,'load',return_value=types.SimpleNamespace(classify=lambda _: 'write-capable')):
+        try:images.policy(info,args)
+        except ValueError:pass
+        else:raise AssertionError('Card recovery SD core accepted')
+    try:images.inspect(fixture,'cpu-return')
+    except ValueError:pass
+    else:raise AssertionError('Recovery profile accepted under another kind')
+    plan=images.prepare(args,info,{},fixture.parent/'prepared')
+    request=recovery.REQUEST_RECORD.unpack((fixture.parent/'prepared/request.bin').read_bytes())
+    assert request==(recovery.REQUEST_MAGIC,1,plan['epoch'],0x41) and plan['epoch']
+    assert plan['format']=='card-fel-recovery' and plan['launch']==['reset64','0x41000000']
+    assert 'tools/card_recovery.py' in board.session_files()
+    args.evidence=fixture.parent/'check';args.queue=fixture.parent/'offline-queue';args.state=None
+    with contextlib.redirect_stdout(io.StringIO()):assert board.check_image(args)==0
+    passed('card-recovery-ELF-policy-nonce-offline-check-and-daemon-closure')
+    # Mutate the actual marker and allocation records, never a mocked inspect result.
+    import io as binary_io
+    from elftools.elf.elffile import ELFFile
+    original=fixture.read_bytes();elf=ELFFile(binary_io.BytesIO(original));table=elf.get_section_by_name('.symtab')
+    symbol=next(s for s in table.iter_symbols() if s.name=='a733_card_fel_profile')
+    section=elf.get_section(symbol['st_shndx']);offset=section['sh_offset']+symbol['st_value']-section['sh_addr']
+    mutations=[('version',offset+8,'Q',2),('marker-size',offset+16,'Q',96),('gate-address',offset+24,'Q',recovery.GATE+4),
+               ('gate-size',offset+32,'Q',513),('state-alignment',offset+40,'Q',25),('state-bounds',offset+40,'Q',32),
+               ('duplicate-state-test',offset+48,'Q',24),('gate-hash',offset+56,'B',original[offset+56]^1),
+               ('wrong-ELF-entry',24,'Q',recovery.ENTRY+4),('wrong-ELF-machine',18,'H',0)]
+    gate=elf.get_section_by_name('.card_gate')
+    mutations.append(('gate-bytes',gate['sh_offset'],'B',original[gate['sh_offset']]^1))
+    for index,s in enumerate(table.iter_symbols()):
+        if s.name=='a733_card_fel_request':mutations.append(('request-address',table['sh_offset']+index*table['sh_entsize']+8,'Q',recovery.REQUEST+8))
+        if s.name=='a733_card_fel_report':mutations.append(('report-size',table['sh_offset']+index*table['sh_entsize']+16,'Q',65))
+    for index,section in enumerate(elf.iter_sections()):
+        if section.name=='.card_gate':mutations.append(('writable-gate',elf['e_shoff']+index*elf['e_shentsize']+8,'Q',7))
+        if section.name=='.report':mutations.append(('initialized-report',elf['e_shoff']+index*elf['e_shentsize']+4,'I',1))
+    for name,position,fmt,value in mutations:
+        bad=bytearray(original);struct.pack_into('<'+fmt,bad,position,value)
+        target=fixture.parent/(name+'.elf');target.write_bytes(bad)
+        try:images.inspect(target,'probe')
+        except ValueError:pass
+        else:raise AssertionError('Recovery ELF mutation admitted: '+name)
+        passed('card-recovery-refuses-'+name)
+    for variant in ('recovery-success','recovery-watchdog','recovery-report','recovery-gate','recovery-flag','recovery-fault',
+                    'recovery-malformed-fault','recovery-no-return'):
+        result,model,owner=lifecycle(out/variant,variant,recovery=True)
+        assert bool(result.get('card_recovery_validated'))==(variant=='recovery-success'),(variant,result)
+        assert board.result_passed(result)==(variant=='recovery-success'),(variant,result)
+        assert owner.rail_phases is None,'The recovery proof changes no PMIC rail.'
+        assert not result.get('expected_reset'),'A recovery proof cannot relabel watchdog failure.'
+        if variant=='recovery-success':
+            assert result['outcome']=='returned' and not result.get('dram_lost') and result['return_report']['rtc_flag']==0
+            launch=model.calls.index(['reset64','0x41000000'])
+            flag_write=['writel',hex(recovery.RTC_FLAG),hex(recovery.FEL_FLAG),'readl',hex(recovery.RTC_FLAG)]
+            armed=[i for i,c in enumerate(model.calls[:launch]) if hex(board.crumbs.KEY|0x41) in c][-1]
+            assert armed<model.calls.index(flag_write)<launch
+        if variant in ('recovery-watchdog','recovery-fault','recovery-malformed-fault'):
+            assert not any(c[0]=='read' and int(c[1],0)>=0x41000000 for c in model.calls[model.calls.index(['reset64','0x41000000'])+1:])
+        if variant in ('recovery-report','recovery-gate','recovery-flag','recovery-fault','recovery-malformed-fault','recovery-no-return'):
+            assert result['quarantined'],(variant,result)
+        passed('card-'+variant)
+    if image is not None:
+        actual=images.inspect(image,'probe')
+        args.image=image
+        images.policy(actual,args)
+        prepared=images.prepare(args,actual,{},fixture.parent/'actual-image')
+        assert prepared['format']=='card-fel-recovery'
+        board.save(fixture.parent/'actual-admission.json',{'physical_access':False,'image_sha256':images.sha(image),
+            'profile':prepared['profile'],'nonce':prepared['nonce'],'watchdog':prepared['watchdog']})
+        passed('card-recovery-actual-frozen-image-admission')
 
 
 def resident_cases(out):
@@ -1521,6 +1655,7 @@ def main():
     parser.add_argument('--hello',type=Path)
     parser.add_argument('--resident-image',type=Path,help='Bounded stop-on-finish OS ELF for resident native admission.')
     parser.add_argument('--resident-template',type=Path,help='Typed session template directory for --resident-image.')
+    parser.add_argument('--card-recovery-image',type=Path,help='Actual RAM-only first-stage RTC recovery ELF.')
     parser.add_argument('--gpu-image',type=Path,action='append',help='Real generic GPU ELF for gpu-capture group; repeat for diagnostic and ordinary images.')
     parser.add_argument('--npu-image',type=Path,help='Generic ELF whose application declares the NPU, for the generic-npu group (gate image ret-npu-load)')
     parser.add_argument('--npu-images',type=Path)
@@ -1530,12 +1665,13 @@ def main():
     parser.add_argument('--npu-case',action='append',default=[],
                         choices=('local-restart','model-switch','sdk-access','power-cycle'),
                         help='Run only selected finite NPU cases; repeat to resume unfinished cases.')
-    parser.add_argument('--only',default='transport,resident,queue,queue-integrity,policy,preflight,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
+    parser.add_argument('--only',default='transport,resident,card-recovery,queue,queue-integrity,policy,preflight,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
     args=parser.parse_args()
     args.out.mkdir(parents=True,exist_ok=False)
     groups=args.only.split(',')
     if 'transport' in groups:transport_cases(args.out);removed_cases(args.out);automatic_restore_cases(args.out)
     if 'resident' in groups:resident_cases(args.out);resident_launcher_cases(args.out)
+    if 'card-recovery' in groups:card_recovery_cases(args.out,args.card_recovery_image)
     if 'resident' in groups and args.resident_image:
         assert args.resident_template,'--resident-image needs --resident-template'
         resident_image_case(args.out,args.resident_image,args.resident_template)

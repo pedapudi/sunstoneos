@@ -508,6 +508,22 @@ It restores those bytes after its validated normal return. Finite native NPU dia
 retirement rules described below. Neither format's serialization establishes
 physical qualification.
 
+## First-stage FEL recovery uses its own RAM proof
+
+`--kind probe --approved-by coordinator` admits the
+[first-stage recovery image](designs/card-fel-recovery.md) through its immutable
+`a733_card_fel_profile`. This profile has a fresh nonce request, an exact
+AArch32 gate hash and a fixed report. It carries no storage or power-transition
+authority and uses no secondary policy writes or generic probe return epilogue.
+
+The runner sets and verifies the vendor RTC request after arming WDT0 and
+before launching the image. Acceptance requires normal FEL return, mode zero,
+the matching nonce/report, consumed gate state, unchanged gate code and cleared
+RTC request. A watchdog reset is a failed proof; the runner captures no DRAM
+after it. A normal return with an invalid receipt quarantines the instance.
+The resulting evidence qualifies only this RAM path. Card loading and recovery
+after a system watchdog reset remain separate tests.
+
 ## USB class probes require finite device cleanup
 
 `--kind usb-class` uses the existing [native probe contract](board-probe-contract.md).

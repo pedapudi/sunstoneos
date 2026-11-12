@@ -876,6 +876,8 @@ class Live:
         self.record['launch_attempted'] = True
         self.journal()
         self.arm(plan['watchdog']['mode'])
+        if plan.get('format') == 'card-fel-recovery':
+            images.load('arm_card_fel_recovery', ROOT/'tools/card_recovery.py').arm(self)
         self.recovery_deadline = self.now()+plan['watchdog']['session_seconds']+crumbs.interval(plan['watchdog']['mode'])+10
         self.tx(*plan['launch'])
         self.wait(plan['watchdog']['session_seconds'] + crumbs.interval(plan['watchdog']['mode']) + 10)
@@ -898,6 +900,8 @@ class Live:
             return 'watchdog-reset'
         if plan.get('lifetime') == 'resident':
             raise UnresolvedReturn('Resident qualification returned without its expected watchdog reset.')
+        if plan.get('format') == 'card-fel-recovery' and words['fault']:
+            raise UnresolvedReturn('Card first-stage recovery retained a fault word.')
         # An image that links the failure return may return after its first
         # failure; the record is then in the breadcrumbs and in its result.
         # Any other return that carries a failure record stays unresolved.
@@ -914,6 +918,8 @@ class Live:
         try:
             return images.capture(self, plan, self.args)
         except BaseException as error:
+            if plan.get('format') == 'card-fel-recovery':
+                self.quarantine('Card first-stage recovery proof unverified: '+str(error))
             if plan.get('format') in ('npu', 'generic'):
                 if images.preserving(self.args):
                     if not self.record.get('dram_restored'):
@@ -1276,13 +1282,13 @@ def check_image(args):
     images.load('storage_bounds', ROOT/'tools/storage_bounds.py').verify_delivered(args)
     live = json.loads(args.state.read_text()) if args.state else {}
     dma_binding = images.dma_admission(args, info, live if live.get('identity') is not None else None)
-    require(info.get('native_probe') or live.get('words'),
+    require(info.get('native_probe') or info.get('card_fel_recovery') or live.get('words'),
             'Offline application preparation requires --state with captured words.')
     plan = images.prepare(args, info, live, evidence/'bundle', dma_binding=dma_binding)
     report = {'admitted': True, 'physical_access': False, 'image_sha256': images.sha(args.image),
               'watchdog': plan['watchdog'],
               'uploads': [{'address': a, 'file': str(p), 'sha256': images.sha(p)} for a, p in plan['uploads']]}
-    report.update({k: plan[k] for k in ('epoch', 'generation', 'lease', 'lifetime', 'marker', 'host_admission') if k in plan})
+    report.update({k: plan[k] for k in ('epoch', 'generation', 'lease', 'lifetime', 'marker', 'profile', 'host_admission') if k in plan})
     report['preflight'] = check_preflight(args, info, plan)
     save(evidence/'admission.json', report)
     print(json.dumps(report, indent=2))

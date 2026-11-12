@@ -4,6 +4,7 @@
 The cases cover selection, failure handling, evidence preservation,
 per-checkout build directories and the dirty-tree identity."""
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -80,7 +81,8 @@ indexer = SimpleNamespace(PROSE_CHECKS=json.loads(os.environ.get('GATE_TEST_PROS
     'focused.py': {'pure_host': True, 'required_arguments': ['--output']},
     'progress.py': {'pure_host': True, 'required_arguments': []},
     'pre-push-hook.py': {'pure_host': True, 'required_arguments': ['--output']},
-    'image.py': {'pure_host': False, 'library': False, 'required_arguments': ['--image']}})
+    'image.py': {'pure_host': False, 'library': False, 'required_arguments': ['--image']},
+    **json.loads(os.environ.get('GATE_TEST_DECLARED', '{}'))})
 def needs(entry):
     return ['--image']
 def plan(value=None, changed=None, index=None):
@@ -91,6 +93,13 @@ def plan(value=None, changed=None, index=None):
               {'check': 'progress.py', 'status': 'runnable', 'needs': [], 'output': False}]
     if changed == ['pending']:
         checks.append({'check': 'image.py', 'status': 'pending', 'needs': ['--image'], 'output': False})
+    if changed == ['declared']:
+        declared = json.loads(os.environ.get('GATE_TEST_DECLARED', '{}'))
+        for name in json.loads(os.environ.get('GATE_TEST_SELECTED', 'null')) or declared:
+            entry = declared[name]
+            checks.append({'check': name, 'status': 'runnable' if entry['pure_host'] else 'pending',
+                           'needs': [] if entry['pure_host'] else ['USB access'], 'output': True,
+                           'output_option': entry.get('output_option', '--output')})
     if set(changed or []) & {'tools/git-hooks/pre-push', 'checks/harness.py', 'checks/pre-push-hook.py', 'untracked-hook-input.txt'}:
         checks.append({'check': 'pre-push-hook.py', 'status': 'runnable', 'needs': [], 'output': True})
     return {'baseline': 'sup', 'revisions': ['base', 'head'], 'range': value, 'changed': changed, 'checks': checks}
@@ -153,6 +162,7 @@ def plan(value=None, changed=None, index=None):
         self.assertEqual([c[0] for c in calls], ['cfg.sh', 'cmake', 'python'])
         # The OS-core build overrides the EXAMPLE_DIR that cfg.sh passes.
         self.assertEqual(calls[0][-1], '-DEXAMPLE_DIR=')
+        self.assertIn('-DPython3_EXECUTABLE=' + str(self.sandbox / 'venv/bin/python'), calls[0])
         self.assertEqual(calls[1][calls[1].index('--target') + 1:], ['kernel-check', '-j', '12'])
         self.assertEqual(calls[2][1], 'tools/check-kernel.py')
 
@@ -164,9 +174,11 @@ def plan(value=None, changed=None, index=None):
         self.assertEqual([c[0] for c in calls], ['cfg.sh', 'cmake', 'cfg.sh', 'cmake', 'python', 'python'])
         core = self.sandbox / 'build' / ('gate-central-' + self.tree(self.source))
         example = self.sandbox / 'build' / ('gate-example-' + self.tree(self.source))
-        self.assertEqual(calls[0][1:], [str(self.source), str(core), '-DSUNSTONE_APPLICATION=', '-DSUNSTONE_EXTERNAL_APPLICATIONS=', '-DEXAMPLE_DIR='])
+        python_option = '-DPython3_EXECUTABLE=' + str(self.sandbox / 'venv/bin/python')
+        self.assertEqual(calls[0][1:], [str(self.source), str(core), '-DSUNSTONE_APPLICATION=', python_option,
+                                      '-DSUNSTONE_EXTERNAL_APPLICATIONS=', '-DEXAMPLE_DIR='])
         self.assertEqual(calls[1][calls[1].index('--target') + 1:], ['kernel-check', '-j', '12'])
-        self.assertEqual(calls[2][1:], [str(self.source), str(example), '-DSUNSTONE_EXTERNAL_APPLICATIONS=', '-DEXAMPLE_DIR=',
+        self.assertEqual(calls[2][1:], [str(self.source), str(example), python_option, '-DSUNSTONE_EXTERNAL_APPLICATIONS=', '-DEXAMPLE_DIR=',
                                       '-DSUNSTONE_EXTERNAL_APPLICATIONS=' + str(self.example),
                                       '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=example'])
         self.assertEqual(calls[3][calls[3].index('--target') + 1:],
@@ -271,6 +283,73 @@ def plan(value=None, changed=None, index=None):
         self.assertIn('PENDING checks/image.py: --image', result.stdout)
         self.assertIn('INCOMPLETE affected coverage', result.stdout)
         self.assertFalse(any('checks/image.py' in call for call in self.records()))
+
+    def declared_modes(self):
+        # Use the actual declaration that exposed the missing image mode.
+        tree = ast.parse((ROOT / 'checks/returning-watchdog.py').read_text())
+        runs = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign) and
+                    any(isinstance(t, ast.Name) and t.id == 'GATE_RUNS' for t in node.targets))
+        self.assertEqual(runs, [['--out', '{output}', '--image', '{elf:ret-gpu}']])
+        declared = {
+            'returning-watchdog.py': {'pure_host': True, 'output_option': '--out', 'required_arguments': ['--out'],
+                                      'gate': {'runs': runs}},
+            'host-mode.py': {'pure_host': True, 'required_arguments': ['--output'],
+                             'gate': {'runs': [['--output', '{output}', '--mode', 'extended']]}},
+            'board-mode.py': {'pure_host': False, 'library': False, 'usb': True, 'required_arguments': [],
+                              'gate': {'board': 'requires a connected board'}},
+        }
+        self.env['GATE_TEST_DECLARED'] = json.dumps(declared)
+        return declared
+
+    def test_pure_host_declaration_selects_image_build_and_nonimage_arguments(self):
+        self.declared_modes()
+        result = self.run_gate('--changed', 'declared')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.records()
+        run = next(call for call in calls if 'checks/returning-watchdog.py' in call)
+        self.assertIn('--image', run)
+        self.assertTrue(run[run.index('--image') + 1].endswith('sunstone-a733-os-gpu-lifecycle.elf'))
+        build = next(call for call in calls if '--target' in call and 'sunstone-a733-os-gpu-lifecycle' in call)
+        self.assertLess(calls.index(build), calls.index(run))
+        self.assertEqual(sum('checks/returning-watchdog.py' in call for call in calls), 1)
+        host = next(call for call in calls if 'checks/host-mode.py' in call)
+        self.assertEqual(host[-2:], ['--mode', 'extended'])
+        self.assertEqual(sum('checks/focused.py' in call for call in calls), 1)
+        self.assertEqual(sum('checks/progress.py' in call for call in calls), 1)
+        self.assertFalse(any('checks/board-mode.py' in call for call in calls))
+        self.assertIn('BOARD checks/board-mode.py', result.stdout)
+
+    def test_declared_image_failure_blocks_its_pure_host_check(self):
+        self.declared_modes()
+        self.env['GATE_TEST_FAIL'] = 'sunstone-a733-os-gpu-lifecycle'
+        result = self.run_gate('--changed', 'declared', '--keep-going')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertFalse(any('checks/returning-watchdog.py' in call for call in self.records()))
+        self.assertIn('SKIP image-returning-watchdog', result.stdout)
+        self.assertTrue(any('checks/host-mode.py' in call for call in self.records()))
+
+    def test_full_gate_only_selects_declared_images_for_affected_checks(self):
+        declared = self.declared_modes()
+        declared['unrelated-native.py'] = {'pure_host': True, 'required_arguments': ['--output'],
+                                           'gate': {'runs': [['--output', '{output}', '--image', '{elf:ret-npu-load}']]}}
+        self.env['GATE_TEST_DECLARED'] = json.dumps(declared)
+        self.env['GATE_TEST_SELECTED'] = json.dumps(['returning-watchdog.py'])
+        result = self.run_gate('--full', '--changed', 'declared')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.records()
+        watchdog = next(call for call in calls if 'checks/returning-watchdog.py' in call)
+        self.assertIn('--image', watchdog)
+        other = next(call for call in calls if 'checks/unrelated-native.py' in call)
+        self.assertNotIn('--image', other)
+        self.assertFalse(any('-DSUNSTONE_APPLICATION=npu-load' in call for call in calls))
+        self.assertEqual(sum('checks/returning-watchdog.py' in call for call in calls), 1)
+
+    def test_empty_declaration_is_refused_before_default_is_removed(self):
+        self.env['GATE_TEST_DECLARED'] = json.dumps({'empty.py': {'pure_host': True, 'gate': {'runs': []}}})
+        result = self.run_gate('--changed', 'declared')
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('empty.py declares no gate runs', result.stderr)
+        self.assertEqual(self.records(), [])
 
     def commit_source(self, name):
         path = self.source / name

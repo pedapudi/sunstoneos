@@ -10,6 +10,20 @@
 /* The admitted lifetime of the modeled session (enum a733_lifetime). */
 static unsigned model_lifetime=A733_LIFETIME_RESIDENT;
 unsigned board_session_lifetime(void){return model_lifetime;}
+/* This fixture covers admission and startup, without running a return. */
+int os_quiesce_register(struct os_quiesce *q){(void)q;return 1;}
+int os_quiesce_requested(const struct os_quiesce *q){(void)q;return 0;}
+enum os_quiesce_result os_quiesce_result(const struct os_quiesce *q){(void)q;return OS_QUIESCE_PENDING;}
+void os_quiesce_complete(struct os_quiesce *q){(void)q;}
+int os_quiesce_fault(struct os_quiesce *q,uint32_t site,uint32_t value,const void *caller)
+{(void)q;(void)site;(void)value;(void)caller;return 0;}
+void board_fail_at(uint32_t site,uint32_t value,const void *caller){(void)site;(void)value;(void)caller;}
+BaseType_t xTaskGenericNotify(TaskHandle_t task,UBaseType_t index,uint32_t value,eNotifyAction action,uint32_t *previous)
+{(void)task;(void)index;(void)value;(void)action;(void)previous;return pdPASS;}
+int board_radio_shutdown(struct board_radio *r,uint64_t deadline){(void)r;(void)deadline;return 0;}
+uint64_t a733_smp_counter(void){return 0;}
+void os_wifi_credential_poll(void){}
+int os_wifi_credential_wiped(void){return 1;}
 struct board_application board;
 volatile unsigned os_check_result;
 static struct os_session session;

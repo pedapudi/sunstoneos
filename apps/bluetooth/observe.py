@@ -36,7 +36,7 @@ def decode(frame, session, profile):
 
 def decode_pcm(frame,session,profile,kind,offset,count):
     """Decode one immutable post-disconnect copy; caller verifies the full hash."""
-    if len(profile) not in (752,832) or struct.unpack_from('<II',profile,8)!=({752:2,832:3}.get(len(profile),0),len(profile)):
+    if len(profile) not in (752,832,888) or struct.unpack_from('<II',profile,8)!=({752:2,832:3,888:4}.get(len(profile),0),len(profile)):
         raise ValueError('Headset capture profile required.')
     if len(session)!=592 or struct.unpack_from('<3Q',session)!=(0x4153373342535332,2,592):
         raise ValueError('Supervised board session required.')
@@ -72,7 +72,7 @@ def decode_pcm(frame,session,profile,kind,offset,count):
 
 
 def decode_recognition(frame,session,profile,offset,count):
-    if len(profile)!=832 or struct.unpack_from('<II',profile,8)!=(3,832) or len(frame)<208:
+    if len(profile) not in (832,888) or struct.unpack_from('<II',profile,8)!=({832:3,888:4}.get(len(profile),0),len(profile)) or len(frame)<208:
         raise ValueError('Finite headset recognition profile/frame required.')
     if len(session)!=592 or struct.unpack_from('<3Q',session)!=(0x4153373342535332,2,592) or struct.unpack_from('<I',session,400)[0]!=2:
         raise ValueError('Supervised Bluetooth session required.')
@@ -103,7 +103,7 @@ def decode_repeated(frame,session,profile,offset=0):
     the caller, which sees every ticket, checks that it is contiguous."""
     def require(ok,message):
         if not ok:raise ValueError(message)
-    mode=struct.unpack_from('<I',profile,624)[0] if len(profile)==832 else 0
+    mode=struct.unpack_from('<I',profile,624)[0] if len(profile) in (832,888) and struct.unpack_from('<II',profile,8)==({832:3,888:4}[len(profile)],len(profile)) else 0
     require(mode in (2,3,5),'Repeated headset profile required.')
     require(272<=len(frame)<=1296 and struct.unpack_from('<II',frame)==(0x53525442,2 if mode in (3,5) else 1),'Repeated Bluetooth frame/version differs.')
     state,count=struct.unpack_from('<2I',frame,8)

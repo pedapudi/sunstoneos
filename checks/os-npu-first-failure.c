@@ -2,12 +2,19 @@
  * are modeled; no MMIO or accelerator work occurs. */
 #include "../apps/os/npu.c"
 #include "../apps/os/npu-declaration.c"
+#include "../apps/os/quiesce.c"
 #include "npu-queue-unlinked.c"
 #include <assert.h>
 #include <setjmp.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+/* Request failures precede supervisor return. The real registry must leave
+ * these failures with the existing board failure path. */
+int os_cpu_return_requested(void){return 0;}
+int os_cpu_return_failing(void){return 0;}
+int os_npu_complete(void){abort();}
+int os_granted(unsigned mask){(void)mask;abort();}
 struct board_application board;
 /* The guard check of the stop step reads memory that the model keeps coherent; this run reserves no guard. */
 int aarch64_device_cache(enum aarch64_cache_op op,uintptr_t cpu,size_t bytes){(void)op;return cpu&&bytes;}

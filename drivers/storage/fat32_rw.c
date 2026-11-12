@@ -65,7 +65,17 @@ static int dev_write(struct fwr_volume *v, uint64_t sector, uint32_t count, cons
             if (cut > sector) n = (uint32_t)(cut - sector);
         }
         if (d->yield) d->yield(d->context);
-        if (d->write(d->context, sector, n, data) != 1) return FWR_IO;
+        unsigned phase = FWR_PHASE_DATA;
+        if (!is_data) {
+            if (sector >= v->fat1 && sector < v->fat1 + v->fat_sectors)
+                phase = v->flag_write == 1 ? FWR_PHASE_DIRTY1 : v->flag_write == 2 ? FWR_PHASE_CLEAN1 : FWR_PHASE_FAT1;
+            else if (v->fats == 2 && sector >= v->fat2 && sector < v->fat2 + v->fat_sectors)
+                phase = v->flag_write == 1 ? FWR_PHASE_DIRTY2 : v->flag_write == 2 ? FWR_PHASE_CLEAN2 : FWR_PHASE_FAT2;
+            else phase = sector == v->fsinfo ? FWR_PHASE_FSINFO : FWR_PHASE_DIRECTORY;
+        }
+        int ok = d->write_classified ? d->write_classified(d->context, sector, n, data, phase, v->transaction_token)
+                                    : d->write(d->context, sector, n, data);
+        if (ok != 1) return FWR_IO;
         struct fwr_wear *w = &v->wear;
         w->writes++; w->bytes_written += (uint64_t)n * S;
         if (is_data) w->data_bytes += (uint64_t)n * S; else w->metadata_bytes += (uint64_t)n * S;
@@ -163,7 +173,9 @@ static int set_flag(struct fwr_volume *v, int clean)
     r = fat_set_raw(v, 1, raw);
     if (r) return r;
     /* Mount reads the flag from FAT 1: set it there first, clear it there last. */
+    v->flag_write = clean ? 2u : 1u;
     r = fat_flush_order(v, clean);
+    v->flag_write = 0;
     if (r) return r;
     v->dirty_set = !clean;
     return FWR_OK;
@@ -192,11 +204,9 @@ static int fsinfo_write(struct fwr_volume *v)
 
 static int recover(struct fwr_volume *v);
 
-int fwr_mount(struct fwr_volume *v, const struct fwr_config *cfg)
+static int mount_transaction(struct fwr_volume *v, const struct fwr_config *cfg)
 {
     if (!v || !cfg || !cfg->device.read || !cfg->device.write || !cfg->cluster_buffer || !cfg->fat_window) return FWR_INVALID;
-    memset(v, 0, sizeof *v);
-    v->cfg = *cfg;
     v->window_first = UINT32_MAX; v->dir_cached = UINT64_MAX;
     v->free_clusters = v->next_hint = UINT32_MAX;
     v->au = cfg->device.au_sectors ? cfg->device.au_sectors : FWR_DEFAULT_AU_SECTORS;
@@ -256,7 +266,7 @@ static int file_quiescent(const struct fwr_file *f)
     return 1;
 }
 
-int fwr_checkpoint(struct fwr_volume *v)
+static int checkpoint_transaction(struct fwr_volume *v)
 {
     int r = fat_flush(v);
     if (r) return r;
@@ -833,7 +843,7 @@ static struct fwr_file *open_file_at(struct fwr_volume *v, const struct fwr_slot
     return NULL;
 }
 
-int fwr_mkdir(struct fwr_volume *v, const char *path)
+static int mkdir_transaction(struct fwr_volume *v, const char *path)
 {
     uint32_t dir; char leaf[FWR_NAME_MAX + 1];
     int r = resolve(v, path, &dir, leaf);
@@ -863,7 +873,7 @@ int fwr_mkdir(struct fwr_volume *v, const char *path)
     return entry_create(v, dir, leaf, 0x10, c, 0, &slot);
 }
 
-int fwr_unlink(struct fwr_volume *v, const char *path)
+static int unlink_transaction(struct fwr_volume *v, const char *path)
 {
     uint32_t dir; char leaf[FWR_NAME_MAX + 1];
     int r = resolve(v, path, &dir, leaf);
@@ -1096,7 +1106,7 @@ static int publish_replace(struct fwr_file *f)
     return FWR_OK;
 }
 
-int fwr_sync(struct fwr_file *f)
+static int sync_transaction(struct fwr_file *f)
 {
     if (!f || f->closed) return FWR_INVALID;
     if (f->failed) return FWR_FAILED;
@@ -1125,7 +1135,7 @@ int fwr_close(struct fwr_file *f)
     return r;
 }
 
-int fwr_truncate(struct fwr_file *f, uint64_t size)
+static int truncate_transaction(struct fwr_file *f, uint64_t size)
 {
     if (!f || f->closed) return FWR_INVALID;
     if (f->failed) return FWR_FAILED;
@@ -1248,7 +1258,7 @@ int fwr_read_cursor(struct fwr_volume *v, struct fwr_cursor *cur, const char *pa
 
 /* ---------------------------------------------------------------- rename */
 
-int fwr_rename(struct fwr_volume *v, const char *from, const char *to)
+static int rename_transaction(struct fwr_volume *v, const char *from, const char *to)
 {
     uint32_t d1, d2; char l1[FWR_NAME_MAX + 1], l2[FWR_NAME_MAX + 1];
     int r = resolve(v, from, &d1, l1);
@@ -1473,4 +1483,74 @@ static int recover(struct fwr_volume *v)
     r = set_flag(v, 1);
     v->in_recovery = 0;
     return r;
+}
+
+/* The caller owns these objects and may be suspended at any instruction.
+ * Only completed owner events change the independent retirement proof. */
+static int transaction_enter(struct fwr_volume *v, unsigned operation)
+{
+    if (v->transaction_depth) { ++v->transaction_depth; return FWR_OK; }
+    v->transaction_operation = operation; v->transaction_failed = 0;
+    v->transaction_token = 0;
+    if (v->cfg.device.transaction &&
+        v->cfg.device.transaction(v->cfg.device.context, FWR_TX_BEGIN, operation, &v->transaction_token) != 1)
+        return FWR_REFUSED;
+    v->transaction_depth = 1;
+    return FWR_OK;
+}
+static int transaction_leave(struct fwr_volume *v, int result)
+{
+    if (result) v->transaction_failed = 1;
+    if (--v->transaction_depth) return result;
+    unsigned event = v->transaction_failed ? FWR_TX_ABORT : FWR_TX_COMMIT;
+    if (v->cfg.device.transaction &&
+        v->cfg.device.transaction(v->cfg.device.context, event, v->transaction_operation, &v->transaction_token) != 1 && !result)
+        result = FWR_IO;
+    v->transaction_token = 0;
+    return result;
+}
+int fwr_mount(struct fwr_volume *v, const struct fwr_config *cfg)
+{
+    if (!v || !cfg || !cfg->device.read || !cfg->device.write || !cfg->cluster_buffer || !cfg->fat_window ||
+        (!!cfg->device.transaction != !!cfg->device.write_classified)) return FWR_INVALID;
+    struct fwr_config copy = *cfg;
+    memset(v, 0, sizeof *v); v->cfg = copy;
+    int r = transaction_enter(v, FWR_OP_MOUNT);
+    return r ? r : transaction_leave(v, mount_transaction(v, &v->cfg));
+}
+int fwr_checkpoint(struct fwr_volume *v)
+{
+    if (!v) return FWR_INVALID;
+    int r = transaction_enter(v, FWR_OP_CHECKPOINT);
+    return r ? r : transaction_leave(v, checkpoint_transaction(v));
+}
+int fwr_sync(struct fwr_file *f)
+{
+    if (!f || !f->volume) return FWR_INVALID;
+    int r = transaction_enter(f->volume, FWR_OP_SYNC);
+    return r ? r : transaction_leave(f->volume, sync_transaction(f));
+}
+int fwr_truncate(struct fwr_file *f, uint64_t size)
+{
+    if (!f || !f->volume) return FWR_INVALID;
+    int r = transaction_enter(f->volume, FWR_OP_TRUNCATE);
+    return r ? r : transaction_leave(f->volume, truncate_transaction(f, size));
+}
+int fwr_mkdir(struct fwr_volume *v, const char *path)
+{
+    if (!v) return FWR_INVALID;
+    int r = transaction_enter(v, FWR_OP_MKDIR);
+    return r ? r : transaction_leave(v, mkdir_transaction(v, path));
+}
+int fwr_unlink(struct fwr_volume *v, const char *path)
+{
+    if (!v) return FWR_INVALID;
+    int r = transaction_enter(v, FWR_OP_UNLINK);
+    return r ? r : transaction_leave(v, unlink_transaction(v, path));
+}
+int fwr_rename(struct fwr_volume *v, const char *from, const char *to)
+{
+    if (!v) return FWR_INVALID;
+    int r = transaction_enter(v, FWR_OP_RENAME);
+    return r ? r : transaction_leave(v, rename_transaction(v, from, to));
 }

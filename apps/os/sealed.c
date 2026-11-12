@@ -33,7 +33,7 @@ _Static_assert(__builtin_offsetof(struct os_sealed,lifetime)==OS_SEALED_LIFETIME
 _Static_assert(A733_LIFETIME_RETURN==OS_LIFETIME_RETURN_WORD,"the vectors' returning lifetime value");
 /* The lifetime copy under its own name, which sunstone_crumb (include/sunstone_crumb.h) reads before it takes the
  * breadcrumb SVC: a supervised or resident session makes no trap for a progress breadcrumb. */
-__asm__(".globl os_crumb_lifetime\n.set os_crumb_lifetime, os_sealed+4100");
+__asm__(".globl os_crumb_lifetime\n.set os_crumb_lifetime, os_sealed+4100\n.size os_crumb_lifetime,4");
 _Static_assert(OS_SEALED_LIFETIME_OFFSET==4100,"os_crumb_lifetime names the lifetime copy");
 /* EL3 state: a second session in the same boot is refused. In monitor memory, which EL1 does not map, and zeroed with
  * the image's other monitor state. */

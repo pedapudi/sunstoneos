@@ -27,29 +27,37 @@ static enum a733_i2s_resource_result publish(void *ctx,const struct a733_audio_t
 {
     struct a733_audio_leases *b=ctx;
     if(!b || !b->initialized || b->failed)return A733_I2S_RESOURCE_RETAINED;
+    unsigned from=old?old->scope:0,to=from==A733_AUDIO_CHANGE?A733_AUDIO_STABLE:A733_AUDIO_CHANGE;
     if(!a733_ranges_disjoint(b,sizeof(*b),old,sizeof(*old)) || !a733_ranges_disjoint(b,sizeof(*b),out,sizeof(*out)) ||
         !a733_ranges_disjoint(old,sizeof(*old),out,sizeof(*out)) ||
         !a733_ranges_disjoint(b->registry,sizeof(*b->registry),out,sizeof(*out)) ||
-        old->scope!=A733_AUDIO_CHANGE || old->id!=b->tokens[A733_AUDIO_CHANGE-1].id ||
-        out->id || b->tokens[A733_AUDIO_STABLE-1].id)return fault(b);
-    enum a733_clock_result r=a733_clock_publish_audio(b->registry,&b->tokens[A733_AUDIO_CHANGE-1],
-        deadline,&b->tokens[A733_AUDIO_STABLE-1]);
+        (from!=A733_AUDIO_CHANGE && from!=A733_AUDIO_STABLE) ||
+        !old->id || old->id!=b->tokens[from-1].id ||
+        out->id || b->tokens[to-1].id ||
+        (from==A733_AUDIO_STABLE && b->tokens[A733_AUDIO_LOCAL-1].id))return fault(b);
+    enum a733_clock_result r=from==A733_AUDIO_CHANGE?
+        a733_clock_publish_audio(b->registry,&b->tokens[from-1],deadline,&b->tokens[to-1]):
+        a733_clock_reclaim_audio(b->registry,&b->tokens[from-1],deadline,&b->tokens[to-1]);
     if(r==A733_CLOCK_BUSY)return A733_I2S_RESOURCE_BUSY;
     if(r!=A733_CLOCK_OK)return fault(b);
-    b->tokens[A733_AUDIO_CHANGE-1]=(struct a733_clock_token){0};
-    *out=(struct a733_audio_token){b->tokens[A733_AUDIO_STABLE-1].id,A733_AUDIO_STABLE};
+    b->tokens[from-1]=(struct a733_clock_token){0};
+    *out=(struct a733_audio_token){b->tokens[to-1].id,(enum a733_audio_scope)to};
     return A733_I2S_RESOURCE_READY;
 }
 static enum a733_i2s_resource_result release(void *ctx,const struct a733_audio_token *old,uint64_t deadline)
 {
     struct a733_audio_leases *b=ctx;
     if(!b || !b->initialized || b->failed)return A733_I2S_RESOURCE_RETAINED;
-    if(!a733_ranges_disjoint(b,sizeof(*b),old,sizeof(*old)) || old->scope!=A733_AUDIO_LOCAL ||
-        old->id!=b->tokens[A733_AUDIO_LOCAL-1].id)return fault(b);
-    enum a733_clock_result r=a733_clock_release(b->registry,&b->tokens[A733_AUDIO_LOCAL-1],deadline);
+    if(!a733_ranges_disjoint(b,sizeof(*b),old,sizeof(*old)) ||
+        old->scope<A733_AUDIO_REFERENCE || old->scope>A733_AUDIO_LOCAL ||
+        !old->id || old->id!=b->tokens[old->scope-1].id ||
+        (old->scope!=A733_AUDIO_LOCAL && b->tokens[A733_AUDIO_LOCAL-1].id) ||
+        (old->scope==A733_AUDIO_REFERENCE &&
+         (b->tokens[A733_AUDIO_CHANGE-1].id || b->tokens[A733_AUDIO_STABLE-1].id)))return fault(b);
+    enum a733_clock_result r=a733_clock_release(b->registry,&b->tokens[old->scope-1],deadline);
     if(r==A733_CLOCK_BUSY)return A733_I2S_RESOURCE_BUSY;
     if(r!=A733_CLOCK_OK)return fault(b);
-    b->tokens[A733_AUDIO_LOCAL-1]=(struct a733_clock_token){0};return A733_I2S_RESOURCE_READY;
+    b->tokens[old->scope-1]=(struct a733_clock_token){0};return A733_I2S_RESOURCE_READY;
 }
 static int enter(void *ctx,uint64_t deadline)
 {struct a733_audio_leases *b=ctx;return !b->failed && b->backend.enter(b->context,deadline);}

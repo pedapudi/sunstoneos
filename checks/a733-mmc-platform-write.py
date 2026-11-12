@@ -60,6 +60,8 @@ uint32_t a733_native_host_load(uintptr_t a)
 void a733_native_host_store(uintptr_t a, uint32_t v)
 { if (a >= platform.base && a < platform.base + 0x304) assert(write32(NULL, (uint32_t)(a - platform.base), v) == 1); }
 int a733_native_host_current(void *n) { (void)n; return 1; }
+/* This fixture models a normal transaction with no return deadline. */
+int a733_platform_lock_live(struct a733_platform_locks *l) { (void)l; return 1; }
 int a733_platform_lock_enter(struct a733_platform_locks *l, enum a733_platform_lock k, uint64_t d) { (void)l; (void)k; (void)d; return 1; }
 void a733_platform_lock_leave(struct a733_platform_locks *l, enum a733_platform_lock k) { (void)l; (void)k; }
 int a733_platform_lock_retain(struct a733_platform_locks *l, enum a733_platform_lock k) { (void)l; (void)k; return 1; }

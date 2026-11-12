@@ -12,7 +12,7 @@
 #include "os.h"
 #include "sunstone_crumb.h"
 #include "cpu-return.h"
-#include "cpu-return-step.h"
+#include "quiesce.h"
 #include "../board/application.h"
 #include "application.h"
 #include "a733_cpu_clock.h"
@@ -100,6 +100,15 @@ enum { START, INSPECT, REQUEST, FOLLOW };
 static unsigned entry_checked;
 static unsigned return_request;
 static unsigned return_clock_last;
+static enum os_quiesce_result clock_quiesce_step(struct os_quiesce *q)
+{
+    if(os_cpu_return_clock_done())return OS_QUIESCE_DONE;
+    return os_quiesce_result(q);
+}
+static struct os_quiesce clock_quiesce={.owner=OS_QUIESCE_CPU_CLOCK,
+    .order=OS_QUIESCE_CLOCK,.step=clock_quiesce_step};
+int os_cpu_quiesce_register(void)
+{return !os_granted(OS_GRANT_CPU_CLOCK)||os_quiesce_register(&clock_quiesce);}
 /* Emit once per change of return step, owner phase or driver state. The
  * thermal owner is the sole writer; repeated pending polls add no marker. */
 static void return_clock_progress(unsigned step)
@@ -188,14 +197,19 @@ static uint64_t later(uint64_t us)
 /* Each refusal records its line, phase, cluster and full status word before
  * the thermal owner's fault() ends the session (include/sunstone_crumb.h). */
 static int refused(uint32_t site,const void *here,uint32_t status)
-{board_fail_note(site|SUNSTONE_CRUMB_CPU_AUX|((uint32_t)owner.phase<<8|(owner.cluster&0xffu))<<16,status,here);return -1;}
+{
+    site|=SUNSTONE_CRUMB_CPU_AUX|((uint32_t)owner.phase<<8|(owner.cluster&0xffu))<<16;
+    if(!os_quiesce_fault(&clock_quiesce,site,status,here))board_fail_note(site,status,here);
+    return -1;
+}
 #define REFUSED(status) refused(SUNSTONE_CRUMB_FAIL_SITE(CPU_CLOCK),SUNSTONE_CRUMB_HERE(),(uint32_t)(status))
 int os_cpu_clock_step(const struct a733_thermal_policy *policy)
 {
     struct a733_cpu_clock *c=&owner.driver;
     /* A session without the CPU clock record reaches no register here: no read of the clock tree, no rail, no PMIC. */
     if(!os_granted(OS_GRANT_CPU_CLOCK))return 0;
-    if(!os_cpu_return_clock_pass(atomic_load_explicit(&return_done,memory_order_acquire)))return 1;   /* the lowering is done (cpu-return-step.h) */
+    if(atomic_load_explicit(&return_done,memory_order_acquire))return 1;
+    if(os_quiesce_result(&clock_quiesce)==OS_QUIESCE_FAULT)return -1;
     if(owner.phase==START&&!os_cpu_return_requested()){
         /* The session is read once, here: later steps (1 kHz while the driver works) need nothing from it. */
         const struct os_session *s=os_session_admitted();
@@ -229,6 +243,7 @@ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
         return_clock_progress(return_request?3u:1u);
         if(r==A733_CPU_CLOCK_RETAINED||r==A733_CPU_CLOCK_INVALID)return REFUSED(r);
         if(r==A733_CPU_CLOCK_PENDING)return 1;
+        if(!os_quiesce_requested(&clock_quiesce))return 1;
         if(!return_request&&c->applied_mhz[A733_CPU_BIG]>1014){
             return_clock_progress(2);
             if(a733_cpu_clock_request(c,A733_CPU_BIG,1014,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return REFUSED(0);

@@ -78,6 +78,7 @@ static int observe(struct a733_usb2_platform *p)
         int r=health(p);if(r==1)r=attachment(p);
         if(r==1)return timely(p)?1:-1;
         if(r<0||!timely(p))return -1;
+        if(p->stop_phase)return 0; /* Return work never spins on a provider. */
         if(p->last_now-start>=BUSY_US)return 0;
     }
 }
@@ -176,6 +177,7 @@ static int globals(struct a733_usb2_platform *p)
 enum a733_usb2_result a733_usb2_platform_poll(struct a733_usb2_platform *p)
 {
     if(!enter(p))return A733_USB2_BUSY;
+    if(p->stop_phase)return finish(p,A733_USB2_INVALID);
     if(p->failed)return finish(p,fault(p));
     p->deadline=p->phase==READY?p->config.lifetime_deadline:p->config.deadline;
     if(!timely(p))return finish(p,fault(p));int h=health(p);
@@ -231,7 +233,9 @@ enum a733_usb2_result a733_usb2_platform_poll(struct a733_usb2_platform *p)
         case SS_SETUP:
             if(p->config.superspeed){int r=a733_usb3_phy_poll(p);if(r<0)ok=0;else if(!r)return finish(p,A733_USB2_PENDING);}
             break;
-        case GLOBAL:ok=globals(p);if(ok&&p->config.superspeed)ok=update(p,DWC+0xd024,B(30),B(30));break;
+        case GLOBAL:ok=globals(p);if(ok&&p->config.superspeed){
+            ok=rd(p,DWC+0xd024,&p->ss_dwc_before);
+            if(ok){p->ss_published|=2;ok=update(p,DWC+0xd024,B(30),B(30));}}break;
         default:ok=0;break;}
         if(!ok)return finish(p,fault(p));++p->phase;break;}}
     return finish(p,p->phase==READY?A733_USB2_READY:A733_USB2_PENDING);
@@ -246,6 +250,64 @@ int a733_usb2_platform_live(struct a733_usb2_platform *p,uint64_t generation,uin
 }
 void a733_usb2_platform_lost(struct a733_usb2_platform *p)
 {if(enter(p))finish(p,fault(p));}
+int a733_usb2_platform_stop(struct a733_usb2_platform *p,uint64_t deadline)
+{
+    enum { REAP=1,PHY3,RESTORE_DWC,PHY2,ROUTE,CLOCK_OFF,RESET_OFF,VERIFY,STOPPED };
+    if(!enter(p))return 0;
+    if(p->stop_phase==STOPPED){finish(p,A733_USB2_READY);return 1;}
+    if(p->failed||!deadline||deadline>p->config.lifetime_deadline)goto failed;
+    if(!p->stop_phase){p->stop_phase=REAP;p->stop_deadline=deadline;}
+    if(deadline<p->stop_deadline)p->stop_deadline=deadline;
+    p->deadline=p->stop_deadline;
+    if(!timely(p)||p->phase>READY)goto failed;
+    int h=health(p);if(h<0)goto failed;if(!h)goto pending;
+    if(p->stop_phase==REAP){
+        if(p->request.id){
+            enum a733_pmic_status r=a733_pmic_reap(p->pmic,&p->request);
+            if(r==A733_PMIC_BUSY||r==A733_PMIC_PENDING)goto pending;
+            if(r!=A733_PMIC_COMPLETE)goto failed;
+            p->request=(struct a733_pmic_request){0};
+        }
+        /* CLOCKS has not executed until phase advances past it. No native
+         * controller access or DMA publication is possible before that. */
+        p->stop_phase=p->phase<=CLOCKS?STOPPED:PHY3;
+        goto pending;
+    }
+    if(p->stop_phase==STOPPED){finish(p,A733_USB2_READY);return 1;}
+    /* The native stop adapter makes a nonblocking mutex attempt. */
+    int lock=p->ops.enter(p->cookie,p->deadline);
+    if(!lock)goto pending;if(lock!=1)goto failed;p->held=1;
+    h=observe(p);if(h<0)goto failed;if(!h)goto pending;
+    int ok=1;
+    switch(p->stop_phase){
+    case PHY3:
+        if(p->config.superspeed){int r=a733_usb3_phy_stop(p);if(r<0)goto failed;if(!r)goto pending;}
+        break;
+    case RESTORE_DWC:
+        if(p->ss_published&2)ok=update(p,DWC+0xd024,B(30),p->ss_dwc_before&B(30));
+        break;
+    case PHY2:
+        if(p->phase>PHY_SETUP)ok=update(p,PHY+0x10,0x428,8);
+        break;
+    case ROUTE:ok=update(p,0x06c00008,0x330010,0);break;
+    case CLOCK_OFF:
+        ok=update(p,CCU+0x1348,B(31),0)&&update(p,CCU+0x1350,B(31),0)&&
+           update(p,CCU+0x1354,B(31),0)&&update(p,CCU+0x1364,B(31),0);
+        break;
+    case RESET_OFF:ok=update(p,CCU+0x135c,B(16),0);break;
+    case VERIFY:
+        ok=ck(p,CCU+0x1348,B(31),0)&&ck(p,CCU+0x1350,B(31),0)&&
+           ck(p,CCU+0x1354,B(31),0)&&ck(p,CCU+0x1364,B(31),0)&&
+           ck(p,CCU+0x135c,B(16),0)&&ck(p,0x06c00008,0x330010,0);
+        break;
+    default:goto failed;
+    }
+    if(!ok)goto failed;++p->stop_phase;
+pending:
+    finish(p,A733_USB2_PENDING);return p->stop_phase==STOPPED?1:0;
+failed:
+    finish(p,fault(p));return -1;
+}
 uint32_t a733_usb2_platform_mask(uintptr_t a)
 {
     switch(a){case CCU+0x1348:return 0x87000000;case CCU+0x1350:return 0x8100001f;

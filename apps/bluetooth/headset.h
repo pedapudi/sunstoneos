@@ -19,6 +19,13 @@ extern const size_t bluetooth_headset_state_bytes;
 int bluetooth_headset_memory(void *memory);
 int bluetooth_headset_poll(struct bluetooth_application *,uint64_t now);
 int bluetooth_headset_retain(struct bluetooth_application *);
+/* Owner-task return protocol for OS capture modes 2 and 3. Begin closes capture and connection admission;
+ * stop runs one bounded round of existing consumers and returns 0 pending, 1 after all upper
+ * connections and packet ownership retire, or -1 retained fault. The caller
+ * requests HCI scan-disable before stop and sends final HCI Reset afterward.
+ * Every call uses the same absolute deadline. Earlier bounds still apply. */
+int bluetooth_headset_stop_begin(struct bluetooth_application *,uint64_t now,uint64_t deadline);
+int bluetooth_headset_stop(struct bluetooth_application *,uint64_t now,uint64_t deadline);
 /* Cross-task copied results only. Pending has no mutable producer fields.
  * kind0=PCM byte offset,kind1=raw record byte offset; bytes<=1024.
  * Complete follows full capture and actual synchronous disconnect. */

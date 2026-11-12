@@ -106,6 +106,12 @@ unsigned board_session_lifetime(void);
 #endif
 void board_usb0_task(void *);
 void board_host_task(void *);
+#ifdef SUNSTONE_A733_OS
+/* The OS session selects USB0. Shared startup uses this on A733 and QEMU. */
+int board_usb0_enabled(void);
+#else
+static inline int board_usb0_enabled(void){return 1;}
+#endif
 #ifdef SUNSTONE_BOARD_APPLICATION
 #ifndef SUNSTONE_BOARD_SUPERVISED
 #error Board application hooks require supervised startup

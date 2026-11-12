@@ -159,6 +159,9 @@ void usb2_source_reference(u32 *out){out[0]=out[1]=0;struct dwc3 d={.ref_clk=out
     cases=['admission','read','busy-read','busy-stuck','busy-stuck-platform','busy-stuck-lock','mutex-loss','bad-config','short-descriptor','bad-status','short-data','cancel','detach','unplug','hid-hs-unplug','hub-unplug','unplug-stuck','hub-detach','hub-detach-enabled','ss-hub-detach']
     cases+=['latency-reset','latency-cnr','latency-run','latency-port']
     cases+=['hub-hold','hub-hold-zero','hub-hold-expiry']
+    cases += [f'return-phase-{phase}' for phase in range(13)]
+    cases += [f'return-ss-{phase}' for phase in range(8)]
+    cases += ['return-ss-ready', 'return-pmic', 'return-lock', 'return-readback']
     cases=[] if a.compile_only else a.cases or cases
     for case in cases:
         run(case,[out/'composed',case,*([out/(case+'-reports.bin')] if case.startswith('companion-') or case.startswith('ss-') or case.startswith('irq-ss-') or case.startswith('msc-stall') or case.startswith('irq-msc-stall') or case.startswith('dual-') or case.startswith('irq-dual-') or case in ('hid-fs','hid-ls','hid-hs','hub-hid-fs','hub-hid-ls','hub-hid-hs','hub-mtt-ls','hub-port7','irq-hub-hid-fs') else [])])

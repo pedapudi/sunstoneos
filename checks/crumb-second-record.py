@@ -60,6 +60,7 @@ def main():
     cases = [
         # (name, FAULT, ESR, new site, expected replaced)
         ('an application failure replaced by a device failure', 0xfa0b0000, 0x80004ff0, 0x80008e5a, True),
+        ('a registered storage fault names its owner', 0xfa0b0000, 0x80004ff0, 0x8106c901, True),
         ('an application failure kept against another application failure', 0xfa0b0000, 0x80004ff0, 0x80004100, False),
         ('a second record kept against a third failure', 0xfa0c0000, 0x80008e5a, 0x80009001, False),
         ('a device failure kept against another device', 0xfa0b0000, 0x80008e5a, 0x80009001, False),
@@ -103,8 +104,35 @@ def main():
     crumbs = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(crumbs)
     assert crumbs.FAIL_LEVEL_SECOND == 0xc
+    defines, _ = crumbs.header()
+    owners = {v: k[len('QUIESCE_'):].lower().removesuffix('_owner')
+              for k, v in defines.items() if k.startswith('QUIESCE_')}
+    assert len(owners) == 15 and defines['QUIESCE_I2C'] == 13
+    assert defines['QUIESCE_USB0'] == 12 and defines['FAIL_USB0'] != defines['FAIL_QUIESCE']
+    usb0_site = (0x80000000 | defines['FAIL_USB0'] << 24 | defines['QUIESCE_USB0'] << 16 |
+                 defines['FAIL_QUIESCE'] << 12 | 24)
+    usb0 = crumbs.board_failure({'fault': 0xfa0c0000, 'esr': usb0_site,
+                                 'elr': 0x41001234, 'far': 1}, defines, None)
+    assert usb0['owner'] == 'usb0' and usb0['source_group'] == 'usb0' and usb0['code'] == 24
+    for owner, name in owners.items():
+        site = 0x8100c901 | owner << 16
+        record = crumbs.board_failure({'fault': 0xfa0c0000, 'esr': site,
+                                       'elr': 0x41001234, 'far': 0x902}, defines, None)
+        assert record['owner'] == name and record['code'] == 0x901
+        assert record['source_group'] == 'board' and record['value'] == '0x902'
+    for phase, name in enumerate(('unverified', 'fat1', 'fat2', 'directory', 'fsinfo',
+                                  'dirty1', 'dirty2', 'clean1', 'clean2', 'raw', 'failed', 'protocol')):
+        site = 0x8100c921 | defines['QUIESCE_STORAGE'] << 16
+        site += phase
+        words = dict.fromkeys(crumbs.WORDS, 0)
+        words.update(tag=0x5c0d0001, fault=0xfa0c0000, esr=site,
+                     elr=0x41001234, far=0xfedcba98)
+        decoded = crumbs.decode(words, 1)
+        record = decoded['board_failure']
+        assert record['session'] == 0xfedcba98 and record['storage_phase'] == name, record
+        assert 'SESSION 0xfedcba98, phase ' + name in decoded['summary'], decoded['summary']
     print('PASS second record: a device failure replaces an application failure in the retained words (level 0xc) and nothing else replaces a record; '
-          '5 seeded records, 2 mutants fail')
+          '6 seeded records, 15 owner decodes, 2 mutants fail')
 
 
 if __name__ == '__main__':
