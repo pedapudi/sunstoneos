@@ -251,7 +251,7 @@ void cpu_npu_load_init(void)
 #endif
     for(unsigned c=0;c<8;++c){receipt.cpu[c].core=c;cpu_npu_matrix_init(&matrix[c],c);}
     for(unsigned c=0;c<8;++c)if(c!=6)
-        require(xTaskCreateStaticAffinitySet(worker,"cpu-gemm",2048,(void *)(uintptr_t)c,
+        require(ss_task_create_static_affinity_set(worker,"cpu-gemm",2048,(void *)(uintptr_t)c,
             2,stacks[c],&tasks[c],(UBaseType_t)1<<c)!=NULL,0x86,c);
 }
 void cpu_npu_load_main(const struct ss_grant *grant)

@@ -9,11 +9,14 @@
  *           main task asks it to store to the main task's own stack, which only the application's space maps, and to the
  *           region; the child must run in the application's space, with no call. The result is {tag, stack word, region
  *           word, the child's task tag, the tag of an OS task that the same hook starts through
- *           OS_TASK_CREATE_IN_KERNEL_SPACE, which must be none}. */
+ *           os_task_create_static(NULL, ...), which must be none}. The child is made by the kit's
+ *           ss_task_create_static_affinity_set. Built with SLOT1_DIRECT_CREATE the hook calls xTaskCreateStaticAffinitySet
+ *           directly and the OS must fail the session with detail 0x7a1 at the creation. */
 #include "slot1_test-app.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "os_space.h"
+#include "os-task.h"
 
 #define TAG UINT64_C(0x534c4f5431)        /* "SLOT1" */
 
@@ -53,9 +56,14 @@ static void child(void *unused)
 /* Runs once before the scheduler, from os_application_prepare. */
 void slot1_test_init(void)
 {
+    #ifdef SLOT1_DIRECT_CREATE
+    /* A direct FreeRTOS creation in the init hook has no space to take: the OS refuses it with detail 0x7a1. */
     (void)xTaskCreateStaticAffinitySet(child, "init-child", 512, NULL, 3, child_stack, &child_state, 0xffu);
+#else
+    (void)ss_task_create_static_affinity_set(child, "init-child", 512, NULL, 3, child_stack, &child_state, 0xffu);
+#endif
     /* An SDK call that starts an OS service task creates it this way; it must stay in the kernel's table. */
-    service_handle = OS_TASK_CREATE_IN_KERNEL_SPACE(xTaskCreateStatic(service, "os-service", 512, NULL, 2, service_stack, &service_state));
+    service_handle = os_task_create_static(NULL, service, "os-service", 512, NULL, 2, service_stack, &service_state);
 }
 
 void slot1_test_main(const struct ss_grant *grant)

@@ -8,9 +8,11 @@
 #include "application.h"
 #include "sunstone_app.h"
 #include "os_space.h"
+#include "os-task.h"
 #include "app_region.h"
 #include "app_large.h"
 #include "umem.h"
+#include "a733_device_memory_layout.h"
 #include "umem_cpu.h"
 #include "os_memory_tables.h"
 #include "owner-memory.h"
@@ -49,6 +51,11 @@ static unsigned usable_ranges(const uint64_t *base_l1, const uint64_t *base_l2, 
     for (unsigned slot = 2; slot < 13; ++slot) {
         uint64_t block = (UINT64_C(1) << 30) * slot;
         if (base_l1[slot] == KERNEL_BLOCK(block) && !add_range(out, &count, capacity, block, UINT64_C(1) << 30)) return 0;
+    }
+    /* The last 2 MiB block of the map is the DRAM decode probe's: the ledger never hands it out. */
+    if (count && out[count - 1].base + out[count - 1].bytes == A733_DRAM_MAP_END) {
+        if (out[count - 1].bytes == A733_DRAM_TOP_BLOCK) --count;
+        else out[count - 1].bytes -= A733_DRAM_TOP_BLOCK;
     }
     return count;
 }
@@ -385,7 +392,38 @@ int os_device_range_publish(uint64_t base, uint64_t bytes)
 
 uint64_t os_space_kernel_ttbr;
 uint8_t os_space_active;
-const void *volatile os_space_init_tag;
+volatile uint8_t os_space_app_init_active;
+volatile uint8_t os_space_explicit[configNUMBER_OF_CORES];
+__attribute__((noinline)) void os_space_refuse_create(void)
+{
+    /* A task created by a direct FreeRTOS call inside the application's init hook has no space to take. The failure ends the
+     * session; the task is never served (the failure return stops every task). */
+    board_fail_at(SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_APPLICATION<<12|OS_SPACE_REFUSED,OS_SPACE_REFUSED,__builtin_return_address(0));
+}
+TaskHandle_t os_task_create_static_affinity_set(const void *space,TaskFunction_t entry,const char *name,uint32_t stack_words,
+    void *arg,UBaseType_t priority,StackType_t *stack,StaticTask_t *tcb,UBaseType_t affinity)
+{
+    const unsigned core=portGET_CORE_ID();
+    taskENTER_CRITICAL();
+    os_space_explicit[core]=1;
+    TaskHandle_t h=xTaskCreateStaticAffinitySet(entry,name,stack_words,arg,priority,stack,tcb,affinity);
+    if(h)vTaskSetApplicationTaskTag(h,(TaskHookFunction_t)space);
+    os_space_explicit[core]=0;
+    taskEXIT_CRITICAL();
+    return h;
+}
+TaskHandle_t os_task_create_static(const void *space,TaskFunction_t entry,const char *name,uint32_t stack_words,
+    void *arg,UBaseType_t priority,StackType_t *stack,StaticTask_t *tcb)
+{
+    const unsigned core=portGET_CORE_ID();
+    taskENTER_CRITICAL();
+    os_space_explicit[core]=1;
+    TaskHandle_t h=xTaskCreateStatic(entry,name,stack_words,arg,priority,stack,tcb);
+    if(h)vTaskSetApplicationTaskTag(h,(TaskHookFunction_t)space);
+    os_space_explicit[core]=0;
+    taskEXIT_CRITICAL();
+    return h;
+}
 static uint64_t owner_ttbr;          /* the application's tag points here */
 
 /* Tasks of the application that wait for a region: a task waits on one region at a time, so the list holds

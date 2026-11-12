@@ -34,6 +34,10 @@ TaskHandle_t xTaskCreateStaticAffinitySet(void (*function)(void *), const char *
     pthread_create(&state->thread, 0, entry, state);
     return state;
 }
+/* The kit's task creation on the host: the same thread, no address space. */
+void *ss_task_create_static_affinity_set(void (*function)(void *), const char *name, uint32_t depth, void *argument,
+    unsigned long priority, void *stack, void *state, unsigned long affinity)
+{ return xTaskCreateStaticAffinitySet(function, name, depth, argument, (unsigned)priority, stack, state, (uint32_t)affinity); }
 TaskHandle_t xTaskGetCurrentTaskHandle(void) { return self ? self : &main_task; }
 uint32_t ulTaskNotifyTake(int clear, TickType_t ticks)
 {

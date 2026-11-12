@@ -63,7 +63,8 @@ class Model:
                           **dict(zip((0x20,0x24,0x28,0x3c,0x40),(0xeb00008f,0xe3a00911,0xe3a0193d,0xe3a0605c,0xea00004d)))}
         if variant=='card-cold-record':
             # A cold power-on ran the card gate and boot0, which found no package and entered FEL.
-            self.registers.update({board.crumbs.RESET_WORDS['flag']:0x0c028001,board.crumbs.MARKER:board.crumbs.MARKER_KEYED})
+            # WDT0 mode reads its reset value 0 at a power-on gate entry.
+            self.registers.update({board.crumbs.RESET_WORDS['flag']:0x0c028000,board.crumbs.MARKER:board.crumbs.MARKER_KEYED})
         self.calls = []
         self.programs = []
         self.quarantined = []
@@ -71,6 +72,16 @@ class Model:
         self.clock = 0
         self.arm_failed = False
         self.permissions_waited = False
+
+    def card_reset(self):
+        """A reset of a board whose card holds the first stage, with the marker set: the gate takes its warm path,
+        records the WDT0 mode it reads at entry (the mode armed before the reset; the board sets mode 1 only
+        later, measured 2026-11-12), disarms WDT0 and enters FEL."""
+        if not self.variant.startswith('card-') or self.registers.get(board.crumbs.MARKER,0)&0xffff!=board.crumbs.MARKER_SET:
+            return
+        flag=board.crumbs.RESET_WORDS['flag']
+        self.registers[flag]=0x0c024000|self.registers[board.crumbs.WDT_MODE]&0xff
+        self.registers[board.crumbs.WDT_MODE]=0
 
     @property
     def node(self):
@@ -82,6 +93,7 @@ class Model:
                 and self.clock>=getattr(self,'reset_at',0):
             self.number += 1
             self.pending = False
+            if not self.launched:self.card_reset()  # the session's WDT0 reset reaches the new instance
         return self.node
 
     @contextlib.contextmanager
@@ -145,6 +157,10 @@ class Model:
                     # A733 manual 9.1.7.20: only a keyed write takes effect.
                     if value>>16!=0x16aa or self.variant=='marker-stuck':i+=3;continue
                     if self.variant=='recovery-warm-unmarked':i+=3;continue
+                    # Two outcomes the marker clear test separates: a keyed write of zero is ignored, or it clears
+                    # the marker and (marker-clear-sticks) the restore then fails.
+                    if self.variant=='marker-unclearable' and value&0xffff!=board.crumbs.MARKER_SET:i+=3;continue
+                    if self.variant=='marker-clear-sticks' and self.registers.get(address,0)==board.crumbs.MARKER_CLEAR:i+=3;continue
                 self.registers[address] = value&0xffff if address in (board.crumbs.WDT_MODE,board.crumbs.WDT_CONFIG,board.crumbs.WDT_OUTPUT) else value
                 if address==board.crumbs.WDT_RESTART and self.registers[board.crumbs.WDT_MODE]==0x41:
                     self.pending=True
@@ -172,10 +188,11 @@ class Model:
                 self.registers[board.crumbs.RTC+0x100]=0x5c0d0001
                 self.registers[board.crumbs.RTC+0x104]=(0x0410 if self.variant=='watchdog' else board.crumbs.RETURN_ROM)<<16
                 if self.variant not in ('watchdog','stuck-disarm'):self.registers[board.crumbs.WDT_MODE]=0
-                if self.variant == 'card-watchdog':
-                    # WDT0 reset through a card first stage: the gate read mode 1, disarmed WDT0 and recorded it.
+                if self.variant.startswith('card-watchdog-'):
+                    # The image armed WDT0 in this mode and stopped renewing it; the reset passes through the card gate.
+                    self.registers[board.crumbs.WDT_MODE] = int(self.variant.rsplit('-',1)[1],16)
                     self.registers[board.crumbs.RTC+0x104] = 0x0410 << 16
-                    self.registers[board.crumbs.RESET_WORDS['flag']] = 0x0c024001
+                    self.card_reset()
                 if self.variant == 'watchdog-before-entry':
                     self.registers[board.crumbs.RTC+0x100] = 0
                     self.registers[board.crumbs.WDT_MODE] = 0xb1
@@ -241,9 +258,10 @@ class Model:
         return types.SimpleNamespace(returncode=0,stdout='\n'.join(out),stderr='')
 
 
-def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=False,recovery=False,entry=1):
+def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=False,recovery=False,entry=1,configure=None):
     root.mkdir()
     args=arguments(root, development=resident or recovery)
+    if configure:configure(args)
     if resident:args.lifetime='resident'
     if recovery:args.kind='probe';args.approved_by='coordinator'
     args.restore_rails=restore
@@ -363,6 +381,14 @@ def card_recovery_cases(out,image=None):
         except ValueError:pass
         else:raise AssertionError(('card recovery policy accepted',name))
         setattr(args,name,saved)
+    args.marker_clear_test=True
+    images.policy(info,args)
+    args.approved_by=None
+    try:images.policy(info,args)
+    except ValueError as error:assert '--marker-clear-test' in str(error),error
+    else:raise AssertionError('--marker-clear-test admitted without approval')
+    args.marker_clear_test=False;args.approved_by='coordinator'
+    passed('marker-clear-test-requires-coordinator-approval')
     with patch.object(images,'load',return_value=types.SimpleNamespace(classify=lambda _: 'write-capable')):
         try:images.policy(info,args)
         except ValueError:pass
@@ -677,11 +703,44 @@ def automatic_restore_cases(out):
     passed('rails-restored-after-a-grant-that-admits-a-transition-unless-opted-out')
 
 
+def marker_clear_cases(out):
+    """--marker-clear-test: at first contact, with WDT0 read disarmed, one keyed write of zero, a read, the keyed set and a
+    read. Both outcomes are recorded; a marker that does not read set again stops the run before launch."""
+    marker=board.crumbs.MARKER
+    for variant,expected,cleared in (('marker-clearable','returned',True),('marker-unclearable','returned',False),
+                                     ('marker-clear-sticks','refused-before-launch',True)):
+        root=out/variant
+        def run(args):
+            args.marker_clear_test=True;args.approved_by='coordinator'
+        result,model,owner=lifecycle(root,variant,configure=run)
+        assert result['outcome']==expected,(variant,result)
+        test=owner.record['marker_clear_test']
+        assert test['wdt_mode']==0 and test['clearable']==cleared,(variant,test)
+        # 0x16aa0000 is also WDT0's disarm word (the same key), so the clear is found by its marker address.
+        clears=[i for i,c in enumerate(model.calls) if any(c[j:j+3]==['writel',hex(marker),hex(board.crumbs.MARKER_CLEAR)]
+                                                          for j in range(len(c)))]
+        assert len(clears)==1,'The clear is tried once, at first contact.'
+        clear=clears[0]
+        assert model.calls[clear]==['writel',hex(marker),hex(board.crumbs.MARKER_CLEAR),'readl',hex(marker),
+                                    'writel',hex(marker),hex(board.crumbs.MARKER_KEYED),'readl',hex(marker)]
+        reset=[i for i,c in enumerate(model.calls) if '0x16aa0041' in c or c[0]=='exe']
+        assert all(clear<i for i in reset),'The clear precedes every arm and launch.'
+        if variant=='marker-clear-sticks':
+            assert 'clear test restored' in result['first_failure']['detail'] and not reset
+        else:
+            assert test['after_restore']&0xffff==board.crumbs.MARKER_SET
+        passed(variant)
+    job={'image':'/image.elf','directory':str(out),'options':{'marker_clear_test':True,'approved_by':'coordinator'}}
+    command=board.Queue.runner_command(job,'3-1')
+    assert 'marker_clear_test' in board.FROZEN_OPTIONS and '--marker-clear-test' in command
+    passed('marker-clear-test-is-frozen-into-the-runner-command')
+
+
 def transport_cases(out):
     for variant in ('normal','watchdog','no-return','host-error','dram-failure','rail-refusal','readback','partial-arm','journal-error','invalid-report','stuck-disarm','return-decoder',
-                    'card-watchdog','card-cold-record','marker-stuck'):
+                    'card-watchdog-41','card-watchdog-b1','card-cold-record','marker-stuck'):
         result,model,owner=lifecycle(out/variant,variant)
-        expected={'normal':'returned','watchdog':'watchdog-reset','no-return':'no-return','card-watchdog':'watchdog-reset',
+        expected={'normal':'returned','watchdog':'watchdog-reset','no-return':'no-return','card-watchdog-41':'watchdog-reset','card-watchdog-b1':'watchdog-reset',
                   'card-cold-record':'returned','marker-stuck':'refused-before-launch',
                   'host-error':'host-error','dram-failure':'refused-before-launch','rail-refusal':'refused-before-launch',
                   'readback':'refused-before-launch','partial-arm':'host-error','journal-error':'host-error','invalid-report':'host-error','stuck-disarm':'host-error','return-decoder':'host-error'}[variant]
@@ -706,13 +765,20 @@ def transport_cases(out):
             first=next(i for i,c in enumerate(model.calls) if hex(marker) in c and 'writel' in c)
             reset=next(i for i,c in enumerate(model.calls) if '0x16aa0041' in c)
             assert first<reset,'The marker is set before the session reset can reach a card.'
-        if variant=='card-watchdog':
-            # The gate disarmed WDT0; its record carries mode 1, so the return is a watchdog reset.
+        if variant.startswith('card-'):
+            # The session's own WDT0 reset (mode 0x41) passed through the card gate; the runner cleared its record.
+            session=result['power_epoch'][1]
+            assert session['words']['flag']==0x0c024041 and session['flag_after']==0,(variant,session)
+            assert session['gate']=={'cold':False,'warm':True,'unmarked':False,'refused_step':0,'mode':0x41}
+        if variant.startswith('card-watchdog-'):
+            # The gate disarmed WDT0; the record's low byte is the mode the image armed, so the return is a watchdog reset.
+            armed=int(variant.rsplit('-',1)[1],16)
             back=owner.record['watchdog_return']
-            assert back['before']==0 and back['mode_at_reset']==1 and back['gate']['warm'] and result['dram_lost']
-            assert model.registers[flag]==0
+            assert back['reset_words']['flag']==0x0c024000|armed,(variant,back)
+            assert back['before']==0 and back['mode_at_reset']==armed and back['gate']['mode']==armed and back['gate']['warm']
+            assert result['dram_lost'] and model.registers[flag]==0
         if variant=='card-cold-record':
-            assert result['power_epoch'][0]['gate']=={'cold':True,'warm':False,'unmarked':False,'refused_step':0,'mode':1}
+            assert result['power_epoch'][0]['gate']=={'cold':True,'warm':False,'unmarked':False,'refused_step':0,'mode':0}
             assert result['power_epoch'][0]['flag_after']==0 and 'marker_after' in result['power_epoch'][0]
         if variant=='marker-stuck':
             assert 'cold-boot marker' in result['first_failure']['detail']
@@ -721,6 +787,7 @@ def transport_cases(out):
             # One fresh-instance wait, never an automatic second reset.
             assert sum('0x16aa0041' in c for c in model.calls)==1
         passed(variant)
+    marker_clear_cases(out)
     for variant,expected in (
             ('watchdog-before-entry','watchdog-reset'),('missing-return','host-error'),
             ('wrong-return-session','host-error'),('fel-after-return','host-error'),

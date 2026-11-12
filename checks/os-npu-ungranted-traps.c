@@ -10,6 +10,7 @@
 const struct ss_application ss_application;
 TRAP(os_npu_index_check)
 TRAP(os_npu_index_entry)
+TRAP(os_npu_index_copy)
 TRAP(a733_npu_startup_init)
 TRAP(os_npu_client_task)
 TRAP(os_npu_complete)
