@@ -17,7 +17,7 @@ from harness import environment
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--output', '{output}', '--graphs', '{fixture:npu-graphs}']]
 CACHE = Path.home() / '.cache/sunstoneos'
-CHECK_INPUTS = ('tools/npu-fixtures.json', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'tools/npu-test-models.py', 'apps/npu-graphs/models-a1.json', 'apps/npu-graphs/models-a2.json', 'apps/npu-graphs/models-b.json', 'apps/npu-graphs/models-sh.json',
+CHECK_INPUTS = ('tools/npu-fixtures.json', 'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/quiesce.c', 'apps/os/quiesce.h', 'tools/npu-test-models.py', 'apps/npu-graphs/models-a1.json', 'apps/npu-graphs/models-a2.json', 'apps/npu-graphs/models-b.json', 'apps/npu-graphs/models-sh.json',
                 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/nbg_assembly.c',
                 'checks/os-npu-service.c', 'checks/os-npu-graphs.py', 'tools/npu-fixtures.json')
 sys.path.insert(0, str(ROOT / 'checks'))

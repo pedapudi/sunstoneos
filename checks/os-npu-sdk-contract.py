@@ -16,7 +16,7 @@ import subprocess
 import sys
 from harness import SANITIZE, environment
 
-CHECK_INPUTS = ('apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu.h', 'apps/os/npu-client.c',
+CHECK_INPUTS = ('apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/quiesce.c', 'apps/os/quiesce.h', 'apps/os/npu.h', 'apps/os/npu-client.c',
                 'apps/os/npu-report.py', 'include/sunstone_crumb.h',
                 'tools/a733-crumbs.py', 'checks/os-npu-first-failure.c', 'checks/npu-queue-unlinked.c',
                 'checks/os-npu-sdk-report.c', 'drivers/storage/storage_digest.c')
@@ -26,12 +26,19 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--native-flags', type=Path, required=True)
 p.add_argument('--output', type=Path, required=True)
 p.add_argument('--cc', default='/usr/bin/clang-21')
+p.add_argument('--section', choices=('all', 'first-failure', 'reports'), default='all')
 a = p.parse_args()
 a.output.mkdir(parents=True, exist_ok=False)
 flags = a.native_flags.read_text()
 def value(name):
     return shlex.split(next(line.split('=', 1)[1] for line in flags.splitlines() if line.startswith(name + ' =')))
 args = value('C_DEFINES') + value('C_INCLUDES')
+# Native headers require the image's forced preincludes before stdatomic.h.
+# Keep those declarations while omitting target-only machine options.
+native_options = value('C_FLAGS')
+for index, option in enumerate(native_options):
+    if option == '-include':
+        args += [option, native_options[index + 1]]
 old_root = next(arg[2:-len('/apps/os')] for arg in args if arg.startswith('-I') and arg.endswith('/apps/os'))
 args = [arg.replace(old_root, str(ROOT)) for arg in args]
 # Host mocks retain note packing; ARM SVC assembly is checked by the native ELF.
@@ -43,6 +50,7 @@ def run(command, red=False):
                             env={**environment(), 'TMPDIR': str(a.output.resolve())})
     row = dict(command=command, returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
     commands.append(row)
+    (a.output / 'commands.json').write_text(json.dumps(commands, indent=2) + '\n')
     if (result.returncode == 0) == red:
         raise AssertionError(row)
     return result
@@ -63,20 +71,25 @@ def module(name, relative):
 report = module('npu_report', 'apps/os/npu-report.py')
 crumbs = module('npu_crumbs', 'tools/a733-crumbs.py')
 defines, _ = crumbs.header()
-exe = a.output / 'first-failure'
-build(ROOT / 'checks/os-npu-first-failure.c', exe)
 operations = ('STATUS', 'OPEN', 'SUBMIT', 'CANCEL', 'REAP', 'CLOSE', 'WAIT', 'LOAD')
-for case in range(20):
-    result = run([str(exe), str(case)])
-    site, observed, ticket, operation = map(int, result.stdout.split())
-    decoded = None
-    if site:
-        decoded = crumbs.board_failure(dict(fault=0xb00, esr=site, elr=0, far=observed), defines, None)
-        if site & defines['NPU_REQUEST']:
-            assert decoded['request_operation'] == operations[operation]
-            assert decoded['expected_ticket_low8'] == ticket & 255
-            assert decoded['observed_word'] == hex(observed)
-    results.append(dict(case='first-failure-' + str(case), decoded=decoded))
+if a.section != 'reports':
+    exe = a.output / 'first-failure'
+    build(ROOT / 'checks/os-npu-first-failure.c', exe)
+    for case in range(20):
+        result = run([str(exe), str(case)])
+        site, observed, ticket, operation = map(int, result.stdout.split())
+        decoded = None
+        if site:
+            decoded = crumbs.board_failure(dict(fault=0xb00, esr=site, elr=0, far=observed), defines, None)
+            if site & defines['NPU_REQUEST']:
+                assert decoded['request_operation'] == operations[operation]
+                assert decoded['expected_ticket_low8'] == ticket & 255
+                assert decoded['observed_word'] == hex(observed)
+        results.append(dict(case='first-failure-' + str(case), decoded=decoded))
+    if a.section == 'first-failure':
+        (a.output / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
+        print('PASS 20 OS NPU first-failure cases')
+        sys.exit(0)
 
 for builtin in (False, True):
     exe = a.output / ('builtin-report' if builtin else 'sdk-report')
@@ -149,6 +162,7 @@ for case in (4, 5):
 inputs = {str(ROOT / path): hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
           for path in (*CHECK_INPUTS, 'checks/os-npu-sdk-contract.py')}
 inputs[str(a.native_flags)] = hashlib.sha256(a.native_flags.read_bytes()).hexdigest()
-(a.output / 'result.json').write_text(json.dumps(dict(result='pass', source_inputs=inputs,
+(a.output / 'result.json').write_text(json.dumps(dict(result='pass', section=a.section, source_inputs=inputs,
     cases=results, commands=commands, physical_access=False), indent=1) + '\n')
-print('PASS OS NPU contract: 20 failure predicates, seven actual producer/parser reports, four malformed reports, four missing-copy red cases, two missing-note red cases')
+print('PASS OS NPU contract: ' + ('20 failure predicates, ' if a.section != 'reports' else '') +
+      'seven actual producer/parser reports, four malformed reports, four missing-copy red cases, two missing-note red cases')
