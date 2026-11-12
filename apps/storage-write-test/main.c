@@ -19,6 +19,13 @@
  *   2  read back the file at PATH against the stream and report (read-only open);
  *   9  format the card's FAT32 partition in place (scratch cards only; the bounds admit writes inside the partition and nothing else): zero both FATs and the root
  *      cluster, set FAT entries 0 to 2, rewrite the FSInfo sector. The boot sector and the geometry are kept. written_bytes is the bytes zeroed; no file is created.
+ *  10  write one raw extent below the partition (the boot-area class of tools/storage_bounds.py): the mode input is a 512-byte header (u32 10, u32 0,
+ *      u64 first sector) followed by the candidate sectors. The extent must equal the blob's single write range, or nothing is written (status 14).
+ *      The OS re-reads the blob's backup ranges before the first write. The application writes the extent in ascending pieces from the flush region,
+ *      reads it back, compares it with the candidate, re-reads sector 0, then mounts and unmounts the FAT32 partition without writing so a raw write
+ *      ends at a validated filesystem point. Result: written_bytes the bytes written, flushes the pieces, flush_ticks and read_ticks the write and
+ *      read-back times, mismatches and first_mismatch the read-back comparison, volume_size 1 when sector 0 read the same before and after, and the
+ *      histogram words 0..7 the read-back SHA-256 and 8..15 the candidate's SHA-256, both computed on the board.
  * The result (512 bytes) carries the write rate, the flush latency percentiles, the wear counters, the owner task's busy
  * time, and the measured CPU clock. Rates are figures only for an image at the approved top operating points. */
 #include "storage_write-app.h"
@@ -117,6 +124,48 @@ static void stream_fill(uint8_t *dst, uint64_t offset, size_t n)
     }
 }
 
+/* --- SHA-256 of a byte stream (FIPS 180-4), for the raw-extent mode's read-back and candidate ------------------------- */
+struct sha256 { uint32_t h[8]; uint8_t block[64]; uint64_t bytes; };
+static void sha256_compress(uint32_t h[8], const uint8_t m[64])
+{
+    uint32_t w[64], v[8];
+    for (unsigned i = 0; i < 16; ++i) w[i] = (uint32_t)m[4 * i] << 24 | (uint32_t)m[4 * i + 1] << 16 | (uint32_t)m[4 * i + 2] << 8 | m[4 * i + 3];
+    for (unsigned i = 16; i < 64; ++i) {
+        uint32_t s0 = ROR(w[i - 15], 7) ^ ROR(w[i - 15], 18) ^ (w[i - 15] >> 3), s1 = ROR(w[i - 2], 17) ^ ROR(w[i - 2], 19) ^ (w[i - 2] >> 10);
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+    memcpy(v, h, sizeof v);
+    for (unsigned i = 0; i < 64; ++i) {
+        uint32_t t1 = v[7] + (ROR(v[4], 6) ^ ROR(v[4], 11) ^ ROR(v[4], 25)) + ((v[4] & v[5]) ^ (~v[4] & v[6])) + K[i] + w[i];
+        uint32_t t2 = (ROR(v[0], 2) ^ ROR(v[0], 13) ^ ROR(v[0], 22)) + ((v[0] & v[1]) ^ (v[0] & v[2]) ^ (v[1] & v[2]));
+        v[7] = v[6]; v[6] = v[5]; v[5] = v[4]; v[4] = v[3] + t1; v[3] = v[2]; v[2] = v[1]; v[1] = v[0]; v[0] = t1 + t2;
+    }
+    for (unsigned i = 0; i < 8; ++i) h[i] += v[i];
+}
+static void sha256_init(struct sha256 *s)
+{
+    static const uint32_t iv[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+    memcpy(s->h, iv, sizeof iv); s->bytes = 0;
+}
+static void sha256_add(struct sha256 *s, const uint8_t *p, size_t n)
+{
+    while (n) {
+        size_t at = (size_t)(s->bytes % 64), take = 64 - at < n ? 64 - at : n;
+        memcpy(s->block + at, p, take);
+        s->bytes += take; p += take; n -= take;
+        if (at + take == 64) sha256_compress(s->h, s->block);
+    }
+}
+static void sha256_end(struct sha256 *s, uint8_t out[32])
+{
+    uint64_t bits = s->bytes * 8;
+    uint8_t pad[72] = {0x80};
+    size_t at = (size_t)(s->bytes % 64), n = (at < 56 ? 56 : 120) - at;
+    for (unsigned i = 0; i < 8; ++i) pad[n + i] = (uint8_t)(bits >> (56 - 8 * i));
+    sha256_add(s, pad, n + 8);
+    for (unsigned i = 0; i < 8; ++i) { out[4 * i] = (uint8_t)(s->h[i] >> 24); out[4 * i + 1] = (uint8_t)(s->h[i] >> 16); out[4 * i + 2] = (uint8_t)(s->h[i] >> 8); out[4 * i + 3] = (uint8_t)s->h[i]; }
+}
+
 /* --- the CPU clock: a chain of dependent adds timed against the 24 MHz counter ------------------------------------- */
 static uint64_t cpu_cycles_per_second(uint64_t *ticks_out)
 {
@@ -161,6 +210,8 @@ static void finish_report(void)
     ss_finish(&r, sizeof r);
 }
 #define E_MISMATCH 13
+#define E_EXTENT 14        /* mode 10: the extent is not the blob's single write range, or the candidate is not whole sectors; nothing written */
+#define E_SECTOR0 15       /* mode 10: sector 0 read differently after the write */
 enum { OK = 0, E_BOUNDS = 1, E_REGION = 2, E_DEVICE = 3, E_MBR = 4, E_MOUNT = 5, E_DIR = 6, E_OPEN = 7, E_WRITE = 8, E_CLOSE = 9, E_READ = 10, E_TIMEOUT = 11, E_SIZE = 12 };
 
 static uint32_t flush_ticks[MAX_FLUSHES];
@@ -309,6 +360,55 @@ static int format_partition(uint64_t base, uint64_t sectors)
     return OK;
 }
 
+/* Mode 10: the header's extent, checked against the blob's single write range (SSBW0003: magic, write count, backup count, digest, ranges, CID). */
+#define EXTENT_HEADER 512u
+static uint64_t le64(const uint8_t *p) { uint64_t v = 0; for (unsigned i = 0; i < 8; ++i) v |= (uint64_t)p[i] << (8 * i); return v; }
+static int extent_of(const struct ss_span *bounds, const struct ss_span *mode, uint64_t *first, uint64_t *count)
+{
+    const uint8_t *b = bounds->base, *m = mode->base;
+    if (mode->bytes <= EXTENT_HEADER || (mode->bytes - EXTENT_HEADER) % 512u || bounds->bytes < 48u + 16u + 16u || memcmp(b, "SSBW0003", 8) ||
+        le32(b + 8) != 1) return 0;
+    *first = le64(m + 8); *count = (mode->bytes - EXTENT_HEADER) / 512u;
+    return le64(b + 48) == *first && le64(b + 56) == *count;
+}
+
+/* Write the candidate over [first, first + count), read it back and compare. Returns 0, or an error status with r.detail the failing sector. */
+static int write_extent(const uint8_t *candidate, uint64_t first, uint64_t count)
+{
+    static uint8_t sector0[2][512] __attribute__((aligned(64)));
+    uint32_t piece = device.max_write_sectors ? device.max_write_sectors : 256u;
+    if (piece > scratch_bytes / 512u) piece = (uint32_t)(scratch_bytes / 512u);
+    if (piece > 256u) piece = 256u;                                    /* one read request carries at most 256 blocks (docs/sd-card.md section 5) */
+    if (!piece || device.read(device.context, 0, 1, sector0[0]) != 1) { r.detail = 0; return E_READ; }
+    struct sha256 want, got;
+    sha256_init(&want); sha256_add(&want, candidate, (size_t)count * 512u); sha256_end(&want, (uint8_t *)r.histogram + 32);
+    uint64_t w0 = ss_counter_ticks();
+    for (uint64_t done = 0; done < count; ) {
+        uint32_t n = count - done < piece ? (uint32_t)(count - done) : piece;
+        memcpy(scratch, candidate + done * 512u, (size_t)n * 512u);     /* the owner writes from the registered flush region */
+        if (device.write(device.context, first + done, n, scratch) != 1) { r.detail = first + done; return E_WRITE; }
+        done += n; r.written_bytes = done * 512u; ++r.flushes; ss_progress();
+    }
+    uint64_t w1 = ss_counter_ticks();
+    r.flush_ticks = w1 - w0;
+    sha256_init(&got);
+    for (uint64_t done = 0; done < count; ) {
+        uint32_t n = count - done < piece ? (uint32_t)(count - done) : piece;
+        if (device.read(device.context, first + done, n, scratch) != 1) { r.detail = first + done; return E_READ; }
+        sha256_add(&got, scratch, (size_t)n * 512u);
+        const uint8_t *c = candidate + done * 512u;
+        if (memcmp(scratch, c, (size_t)n * 512u))
+            for (size_t i = 0; i < (size_t)n * 512u; ++i) if (scratch[i] != c[i]) { if (!r.mismatches++) r.first_mismatch = done * 512u + i; }
+        done += n; ss_progress();
+    }
+    sha256_end(&got, (uint8_t *)r.histogram);
+    r.read_ticks = ss_counter_ticks() - w1;
+    if (device.read(device.context, 0, 1, sector0[1]) != 1) { r.detail = 0; return E_READ; }
+    r.volume_size = !memcmp(sector0[0], sector0[1], 512);
+    if (r.mismatches) return E_MISMATCH;
+    return r.volume_size ? OK : E_SECTOR0;
+}
+
 void storage_write_main(const struct ss_grant *grant)
 {
     const struct ss_span *bounds = &grant->regions[STORAGE_WRITE_REGION_BOUNDS], *mode = &grant->regions[STORAGE_WRITE_REGION_MODE],
@@ -343,6 +443,8 @@ void storage_write_main(const struct ss_grant *grant)
     r.cpu_hz = cpu_cycles_per_second(&r.cpu_calibration_ticks);
     ss_progress();
     ss_activity_begin(); activity = 1;                          /* the thermal report covers the card work */
+    uint64_t extent_first = 0, extent_count = 0;
+    if (mode_id == 10 && !extent_of(bounds, mode, &extent_first, &extent_count)) { r.status = E_EXTENT; finish_report(); }
     card_open = 1;                                             /* enabling opens the card in the owner task, even if it then refuses */
     /* The read-back modes (2, 3, 6) open the card for reading and verify no bounds: the backup sectors the blob hashes change with every session. */
     const int read_only = mode_id == 2 || mode_id == 3 || mode_id == 6;                 /* 1 and 8 write: the writer is enabled */
@@ -365,6 +467,18 @@ void storage_write_main(const struct ss_grant *grant)
             else if ((verified = fwr_unmount(&volume))) { r.status = E_CLOSE; r.detail = (uint64_t)-verified; }
         }
         collect(); r.total_ticks = ss_counter_ticks() - t_start; finish_report();
+    }
+    if (mode_id == 10) {
+        uint8_t hashes[64];
+        if (extent_first + extent_count > base) r.status = E_EXTENT;               /* below the partition only */
+        else r.status = (uint64_t)write_extent((const uint8_t *)mode->base + EXTENT_HEADER, extent_first, extent_count);
+        memcpy(hashes, r.histogram, sizeof hashes);
+        /* Raw writes have no filesystem proof until mount and clean unmount validate them. */
+        int verified = mount(base, sectors);
+        if (verified) { if (!r.status) { r.status = E_MOUNT; r.detail = (uint64_t)-verified; } }
+        else if ((verified = fwr_unmount(&volume)) && !r.status) { r.status = E_CLOSE; r.detail = (uint64_t)-verified; }
+        collect(); memcpy(r.histogram, hashes, sizeof hashes);                    /* the hashes replace the wear histogram, which raw writes do not fill */
+        r.total_ticks = ss_counter_ticks() - t_start; finish_report();
     }
     int rc = mount(base, sectors);
     if (rc) { r.status = E_MOUNT; r.detail = (uint64_t)-rc; finish_report(); }

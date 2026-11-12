@@ -12,4 +12,21 @@
  * to FEL; docs/designs/card-fel-recovery.md has the time budget. */
 #define A733_CARD_FEL_PRODUCTION_WATCHDOG 0
 #define A733_CARD_FEL_PROOF_WATCHDOG 0xb1
+/* Cold-boot marker: RTC IC_CHARA_REG (A733 manual 9.1.7.20), in the VDD_RTC
+ * domain and zero after the RTC supply was lost. A write takes effect only
+ * with key 0x16aa in bits 31:16; bits 15:0 then read 0x16aa. Only the gate's
+ * cold path and the runner's first FEL contact write it. */
+#define A733_CARD_FEL_RTC_MARKER 0x070901f0
+#define A733_CARD_FEL_MARKER_KEYED 0x16aa16aa
+#define A733_CARD_FEL_MARKER_SET 0x16aa
+/* Gate record in RTC general-purpose register 2 (0x07090108) after an entry
+ * without the FEL request: A733_CARD_FEL_STAGE in bits 31:16, the flags
+ * below, the refused watchdog step in bits 11:8 and the WDT0 mode read at
+ * entry in bits 7:0. It never equals the vendor request 0x5aa5a55a. */
+#define A733_CARD_FEL_RECORD_COLD 0x8000        /* A cold path ran in this power epoch. */
+#define A733_CARD_FEL_RECORD_WARM 0x4000        /* The latest entry selected FEL. */
+#define A733_CARD_FEL_RECORD_UNMARKED 0x2000    /* The cold path's marker did not read back. */
+/* The cold path arms WDT0 for 16 s before boot0, so a hang in boot0 resets
+ * into the warm path and FEL. */
+#define A733_CARD_FEL_COLD_WATCHDOG 0xb1
 #endif

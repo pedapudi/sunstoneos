@@ -482,6 +482,30 @@ class Live:
                                              for x in ('readl', hex(a))]).split()]
         require(words == [0xeb00008f, 0xe3a00911, 0xe3a0193d, 0xe3a0605c, 0xea00004d], 'Forced-FEL ROM entry differs.')
         self.upload(0x71000, images.write(self.evidence/f'rom-scratch-restore-{self.sequence}.bin', before))
+        self.mark_power_epoch()
+
+    def mark_power_epoch(self):
+        """Record the reset words of this instance, clear a first-stage gate record and set the cold-boot marker.
+
+        A card first stage boots the card only while the marker reads zero, which means the RTC supply was lost
+        (docs/designs/card-fel-recovery.md). A board that powers up in FEL never runs the gate, so the runner sets
+        the marker at every contact; without it the first watchdog return would boot the card."""
+        values = dict(zip(crumbs.RESET_WORDS, (int(x, 16) for x in self.tx(*crumbs.reset_arguments()).split())))
+        require(len(values) == len(crumbs.RESET_WORDS), 'Reset word readback differs.')
+        entry = {'sequence': self.sequence, 'words': values, 'gate': crumbs.gate_record(values['flag'])}
+        commands = []
+        if entry['gate']:
+            commands += ['writel', hex(crumbs.RESET_WORDS['flag']), '0x0']
+        if values['marker'] & 0xffff != crumbs.MARKER_SET:
+            commands += ['writel', hex(crumbs.MARKER), hex(crumbs.MARKER_KEYED)]
+        if commands:
+            after = [int(x, 16) for x in self.tx(*commands, 'readl', hex(crumbs.RESET_WORDS['flag']),
+                                                 'readl', hex(crumbs.MARKER)).split()]
+            entry.update(flag_after=after[0], marker_after=after[1])
+            require(not entry['gate'] or after[0] == 0, 'The first-stage gate record did not clear.')
+            require(after[1] & 0xffff == crumbs.MARKER_SET, 'The cold-boot marker did not read back after its keyed write.')
+        self.record.setdefault('power_epoch', []).append(entry)
+        self.journal()
 
     def usb_source_off(self, phase, enforce=True):
         usb_power.observe(self, phase)
@@ -521,7 +545,7 @@ class Live:
     def returned(self):
         raw = self.tx(*crumbs.return_arguments())
         try:
-            before,after,words = crumbs.parse_return(raw)
+            before,after,words,reset_words = crumbs.parse_return(raw)
         except ValueError as error:
             # A host decoder failure must not leave a possibly armed image or
             # quarantine a healthy returned instance. Verify disarm separately.
@@ -529,10 +553,16 @@ class Live:
             self.observe_return_power('invalid-return-report')
             raise RuntimeError('Invalid watchdog return report: '+str(error)) from error
         self.confirm_disarmed(after)
-        self.record['watchdog_return'] = {'before': before, 'after': after, 'words': words}
+        gate = crumbs.gate_record(reset_words['flag'])
+        self.record['watchdog_return'] = {'before': before, 'after': after, 'words': words, 'reset_words': reset_words,
+                                          'gate': gate, 'mode_at_reset': crumbs.effective_mode(before, gate)}
         self.journal()
+        if gate:
+            # The first-stage gate disarmed WDT0 on its warm path; its record carries the mode it read.
+            cleared = self.tx('writel', hex(crumbs.RESET_WORDS['flag']), '0x0', 'readl', hex(crumbs.RESET_WORDS['flag']))
+            require(int(cleared, 16) == 0, 'The first-stage gate record did not clear.')
         self.observe_return_power('native-return')
-        return before,after,words
+        return crumbs.effective_mode(before, gate),after,words
 
     def observe_return_power(self, phase):
         # Preserve the copied WDT/breadcrumb origin before a cleanup failure.
@@ -930,8 +960,7 @@ class Live:
         if plan.get('lifetime') == 'resident':
             raise UnresolvedReturn('Resident qualification returned without its expected watchdog reset.')
         if plan.get('format') == 'card-fel-recovery':
-            if not (gate_armed and after == 0 and decoded['session'] and words['last'] == 0x0c020005 and not words['fault'] and
-                    self.record['card_recovery_return']['rtc_flag'] == 0):
+            if not (gate_armed and decoded['session'] and recovery.accepted(plan, self.record)):
                 raise UnresolvedReturn('Card recovery lacks the matching retained SRAM gate receipt.')
             self.record['normal_return'] = True
             usb_power.enforce(self)

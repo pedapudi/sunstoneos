@@ -61,6 +61,9 @@ class Model:
         self.memory = {}
         self.registers = {board.crumbs.WDT_MODE:0,board.crumbs.WDT_CONFIG:1,board.crumbs.WDT_OUTPUT:2,
                           **dict(zip((0x20,0x24,0x28,0x3c,0x40),(0xeb00008f,0xe3a00911,0xe3a0193d,0xe3a0605c,0xea00004d)))}
+        if variant=='card-cold-record':
+            # A cold power-on ran the card gate and boot0, which found no package and entered FEL.
+            self.registers.update({board.crumbs.RESET_WORDS['flag']:0x0c028001,board.crumbs.MARKER:board.crumbs.MARKER_KEYED})
         self.calls = []
         self.programs = []
         self.quarantined = []
@@ -138,6 +141,10 @@ class Model:
                 address,value=int(args[i+1],0),int(args[i+2],0)
                 if self.variant=='stuck-disarm' and self.launched and address==board.crumbs.WDT_MODE and value==board.crumbs.KEY:
                     self.pending=True;i+=3;continue
+                if address==board.crumbs.MARKER:
+                    # A733 manual 9.1.7.20: only a keyed write takes effect.
+                    if value>>16!=0x16aa or self.variant=='marker-stuck':i+=3;continue
+                    if self.variant=='recovery-warm-unmarked':i+=3;continue
                 self.registers[address] = value&0xffff if address in (board.crumbs.WDT_MODE,board.crumbs.WDT_CONFIG,board.crumbs.WDT_OUTPUT) else value
                 if address==board.crumbs.WDT_RESTART and self.registers[board.crumbs.WDT_MODE]==0x41:
                     self.pending=True
@@ -159,11 +166,16 @@ class Model:
                 Path(args[i+3]).write_bytes(data)
                 i+=4
             elif op in ('exe','reset64'):
+                entry_mode=self.registers.get(board.crumbs.WDT_MODE,0)
                 self.launched=True
                 self.pending=True
                 self.registers[board.crumbs.RTC+0x100]=0x5c0d0001
                 self.registers[board.crumbs.RTC+0x104]=(0x0410 if self.variant=='watchdog' else board.crumbs.RETURN_ROM)<<16
                 if self.variant not in ('watchdog','stuck-disarm'):self.registers[board.crumbs.WDT_MODE]=0
+                if self.variant == 'card-watchdog':
+                    # WDT0 reset through a card first stage: the gate read mode 1, disarmed WDT0 and recorded it.
+                    self.registers[board.crumbs.RTC+0x104] = 0x0410 << 16
+                    self.registers[board.crumbs.RESET_WORDS['flag']] = 0x0c024001
                 if self.variant == 'watchdog-before-entry':
                     self.registers[board.crumbs.RTC+0x100] = 0
                     self.registers[board.crumbs.WDT_MODE] = 0xb1
@@ -189,8 +201,15 @@ class Model:
                 if self.variant.startswith('recovery-'):
                     recovery=images.load('model_card_recovery',ROOT/'tools/card_recovery.py')
                     assert args[i]=='exe' and kw['timeout']==recovery.EXE_SECONDS
-                    self.registers[recovery.RTC_FLAG]=0
-                    self.registers[board.crumbs.RTC+0x104]=0x0c020005
+                    if self.variant.startswith('recovery-warm'):
+                        # No request: the gate reads the marker and stores its warm record with the mode it read.
+                        requested=self.registers.get(recovery.RTC_FLAG)==recovery.FEL_FLAG or self.variant=='recovery-warm-as-request'
+                        self.registers[board.crumbs.RTC+0x104]=0x0c020005 if requested else 0
+                        self.registers[recovery.RTC_FLAG]=0 if requested else 0x0c024000|entry_mode
+                        if self.variant=='recovery-warm-record':self.registers[recovery.RTC_FLAG]^=0x8000
+                    else:
+                        self.registers[recovery.RTC_FLAG]=0
+                        self.registers[board.crumbs.RTC+0x104]=0x0c020005
                     # The gate re-arms WDT0 at 16 s instead of disarming it.
                     self.registers[board.crumbs.WDT_MODE]=recovery.GATE_WATCHDOG
                     if self.variant=='recovery-no-reenumerate':
@@ -222,7 +241,7 @@ class Model:
         return types.SimpleNamespace(returncode=0,stdout='\n'.join(out),stderr='')
 
 
-def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=False,recovery=False):
+def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=False,recovery=False,entry=1):
     root.mkdir()
     args=arguments(root, development=resident or recovery)
     if resident:args.lifetime='resident'
@@ -265,8 +284,8 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
                 plan['watchdog']['mode']=0x41
             if recovery:
                 plan.update(format='card-fel-recovery',nonce=1,launch=['exe','0x52000'],launch_seconds=2,uploads=[(0x52000,args.image)],
-                    profile={'version':3,'gate_address':0x52000,'gate_bytes':len(CARD_GATE),'gate_watchdog':0xb1,'rtc_stage':0x0c02,
-                             'final_value':5,'gate_sha256':images.hashlib.sha256(CARD_GATE).hexdigest()},
+                    profile={'version':4,'gate_address':0x52000,'gate_bytes':len(CARD_GATE),'gate_watchdog':0xb1,'rtc_stage':0x0c02,
+                             'final_value':5,'entry':entry,'gate_sha256':images.hashlib.sha256(CARD_GATE).hexdigest()},
                     watchdog={'mode':0x41,'gate_mode':0xb1,'session_seconds':60})
             if grant!='absent':plan['cpu_grant_raises']=grant
             return plan
@@ -295,7 +314,7 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
     return result,model,owners[0]
 
 
-def card_recovery_fixture(root, legacy=False):
+def card_recovery_fixture(root, legacy=False, entry=1):
     """A structural ELF fixture; executing gate checks live separately."""
     root.mkdir()
     recovery=images.load('fixture_card_recovery',ROOT/'tools/card_recovery.py')
@@ -307,9 +326,9 @@ def card_recovery_fixture(root, legacy=False):
         '.global a733_card_fel_gate_watchdog\n.type a733_card_fel_gate_watchdog,%object\n'
         'a733_card_fel_gate_watchdog: .word '+str(recovery.GATE_WATCHDOG)+'\n.size a733_card_fel_gate_watchdog,4\n'
         '.section .profile,"a"\n.balign 8\n.global a733_card_fel_profile\n.type a733_card_fel_profile,%object\n'
-        'a733_card_fel_profile:\n.quad '+','.join(map(str,(recovery.PROFILE_MAGIC,3,96,recovery.GATE,len(CARD_GATE),0x0c02,5,
-                                                         recovery.GATE_WATCHDOG)))+
-        '\n.byte '+','.join(map(str,digest))+'\n.size a733_card_fel_profile,96\n')
+        'a733_card_fel_profile:\n.quad '+','.join(map(str,(recovery.PROFILE_MAGIC,4,104,recovery.GATE,len(CARD_GATE),0x0c02,5,
+                                                         recovery.GATE_WATCHDOG,entry)))+
+        '\n.byte '+','.join(map(str,digest))+'\n.size a733_card_fel_profile,104\n')
     script=root/'fixture.ld'
     script.write_text('ENTRY(a733_card_fel_gate_image)\nPHDRS { gate PT_LOAD FLAGS(5); profile PT_LOAD FLAGS(4); }\n'
         'SECTIONS { .card_gate 0x52000 : { *(.card_gate) } :gate '
@@ -371,11 +390,12 @@ def card_recovery_cases(out,image=None):
     original=fixture.read_bytes();elf=ELFFile(io.BytesIO(original));table=elf.get_section_by_name('.symtab')
     symbol=next(s for s in table.iter_symbols() if s.name=='a733_card_fel_profile')
     section=elf.get_section(symbol['st_shndx']);offset=section['sh_offset']+symbol['st_value']-section['sh_addr']
-    mutations=[('old-profile-version',offset+8,'Q',2),('marker-size',offset+16,'Q',88),
-               ('gate-address',offset+24,'Q',recovery.GATE+4),('gate-size',offset+32,'Q',513),
+    mutations=[('old-profile-version',offset+8,'Q',3),('marker-size',offset+16,'Q',96),
+               ('gate-address',offset+24,'Q',recovery.GATE+4),('gate-size',offset+32,'Q',1024),
                ('rtc-stage',offset+40,'Q',0x0c01),('final-value',offset+48,'Q',4),
                ('profile-disarm-policy',offset+56,'Q',0),('profile-4s-policy',offset+56,'Q',0x41),
-               ('gate-hash',offset+64,'B',original[offset+64]^1),('wrong-ELF-entry',24,'I',recovery.ENTRY+4),
+               ('unknown-entry',offset+64,'Q',3),('no-entry',offset+64,'Q',0),
+               ('gate-hash',offset+72,'B',original[offset+72]^1),('wrong-ELF-entry',24,'I',recovery.ENTRY+4),
                ('A64-machine',18,'H',183)]
     gate=elf.get_section_by_name('.card_gate')
     mutations.append(('gate-bytes',gate['sh_offset'],'B',original[gate['sh_offset']]^1))
@@ -418,12 +438,20 @@ def card_recovery_cases(out,image=None):
             assert bool(called)==(failure not in ('recovery-unrelated-command','recovery-precommand-timeout'))
             owner.armed=False
         passed('card-recovery-transport-scope-'+failure)
-    successful=('recovery-success','recovery-disconnect','recovery-timeout')
+    successful=('recovery-success','recovery-disconnect','recovery-timeout','recovery-warm')
     for variant in (*successful,'recovery-watchdog','recovery-progress','recovery-tag','recovery-flag','recovery-fault',
                     'recovery-malformed-fault','recovery-no-return','recovery-stale','recovery-precommand',
-                    'recovery-no-reenumerate','recovery-late'):
-        result,model,owner=lifecycle(out/variant,variant,recovery=True)
+                    'recovery-no-reenumerate','recovery-late','recovery-warm-record','recovery-warm-unmarked',
+                    'recovery-warm-as-request'):
+        # A warm-entry proof sets no request; the gate stores its record instead.
+        entry=2 if variant.startswith('recovery-warm') else 1
+        result,model,owner=lifecycle(out/variant,variant,recovery=True,entry=entry)
         expected=variant in successful
+        if variant=='recovery-warm-unmarked':
+            # A marker that does not read back refuses at first contact, before any reset or upload.
+            assert not board.result_passed(result) and 'cold-boot marker' in result['first_failure']['detail']
+            assert not any(c[0] in ('exe','reset64') or hex(board.crumbs.WDT_MODE) in c for c in model.calls)
+            passed('card-'+variant);continue
         assert bool(result.get('card_recovery_validated'))==expected,(variant,result)
         assert board.result_passed(result)==expected,(variant,result)
         assert owner.rail_phases is None,'The recovery proof changes no PMIC rail.'
@@ -439,8 +467,9 @@ def card_recovery_cases(out,image=None):
         else:
             launch=model.calls.index(['exe','0x52000'])
             assert not any(c[0] in ('read','write') for c in model.calls[launch+1:]),'Returned ROM owns all SRAM; no RAM reads/restores'
-            flag_write=['writel',hex(recovery.RTC_TAG),'0x5c0d0001','writel',hex(recovery.RTC_FLAG),hex(recovery.FEL_FLAG),
-                        'readl',hex(recovery.RTC_TAG),'readl',hex(recovery.RTC_FLAG)]
+            flag_write=['writel',hex(recovery.RTC_TAG),'0x5c0d0001','writel',hex(recovery.RTC_FLAG),
+                        hex(recovery.FEL_FLAG if entry==1 else 0),'readl',hex(recovery.RTC_TAG),'readl',hex(recovery.RTC_FLAG),
+                        'readl',hex(recovery.RTC_MARKER)]
             armed=[i for i,c in enumerate(model.calls[:launch]) if hex(board.crumbs.KEY|0x41) in c][-1]
             assert armed<model.calls.index(flag_write)<launch
             # The reviewed tool runs its I-cache disable helper before each MMIO
@@ -449,7 +478,9 @@ def card_recovery_cases(out,image=None):
             uploads=[i for i,c in enumerate(model.calls[:launch]) if c[0]=='write']
             assert uploads and model.calls[launch-1]==flag_write and uploads[-1]<launch-1
         if expected:
-            assert result['outcome']=='returned' and result['return_report']['rtc_flag']==0
+            assert result['outcome']=='returned'
+            assert result['return_report']['rtc_flag']==(0 if entry==1 else 0x0c024041)
+            assert model.registers[recovery.RTC_FLAG]==0  # the runner cleared the gate record after reading it
             assert len(result['instances'])>=3 and not owner.failed
             # The gate left WDT0 re-armed; the runner read it, then disarmed it over FEL.
             returned=owner.record['watchdog_return']
@@ -468,7 +499,8 @@ def card_recovery_cases(out,image=None):
             assert any(t.get('provisional_disconnect') and t.get('command_started') for t in owner.record['transactions'])
         if variant=='recovery-watchdog':
             assert result['outcome']=='watchdog-reset' and result['card_recovery_return']['rtc_flag']==recovery.FEL_FLAG
-        if variant in ('recovery-progress','recovery-tag','recovery-flag','recovery-fault','recovery-malformed-fault','recovery-no-return','recovery-stale'):
+        if variant in ('recovery-progress','recovery-tag','recovery-flag','recovery-fault','recovery-malformed-fault','recovery-no-return','recovery-stale',
+                       'recovery-warm-record','recovery-warm-as-request'):
             assert result['quarantined'],(variant,result)
         passed('card-'+variant)
     if image is not None:
@@ -646,9 +678,11 @@ def automatic_restore_cases(out):
 
 
 def transport_cases(out):
-    for variant in ('normal','watchdog','no-return','host-error','dram-failure','rail-refusal','readback','partial-arm','journal-error','invalid-report','stuck-disarm','return-decoder'):
+    for variant in ('normal','watchdog','no-return','host-error','dram-failure','rail-refusal','readback','partial-arm','journal-error','invalid-report','stuck-disarm','return-decoder',
+                    'card-watchdog','card-cold-record','marker-stuck'):
         result,model,owner=lifecycle(out/variant,variant)
-        expected={'normal':'returned','watchdog':'watchdog-reset','no-return':'no-return',
+        expected={'normal':'returned','watchdog':'watchdog-reset','no-return':'no-return','card-watchdog':'watchdog-reset',
+                  'card-cold-record':'returned','marker-stuck':'refused-before-launch',
                   'host-error':'host-error','dram-failure':'refused-before-launch','rail-refusal':'refused-before-launch',
                   'readback':'refused-before-launch','partial-arm':'host-error','journal-error':'host-error','invalid-report':'host-error','stuck-disarm':'host-error','return-decoder':'host-error'}[variant]
         assert result['outcome']==expected,(variant,result)
@@ -663,6 +697,26 @@ def transport_cases(out):
             assert not any(c[0]=='read' and int(c[1],0)>=0x41000000 for c in model.calls[model.calls.index(['exe','0x52000'])+1:])
         if variant=='partial-arm':
             assert result['transport_recovered'] and not owner.armed
+        flag,marker=board.crumbs.RESET_WORDS['flag'],board.crumbs.MARKER
+        if variant=='normal':
+            # The first contact sets the cold-boot marker; the instance after the session's reset finds it retained.
+            epochs=result['power_epoch']
+            assert epochs[0]['words']['marker']==0 and epochs[0]['marker_after']==board.crumbs.MARKER_KEYED
+            assert all(e['words']['marker']==board.crumbs.MARKER_KEYED and 'marker_after' not in e for e in epochs[1:])
+            first=next(i for i,c in enumerate(model.calls) if hex(marker) in c and 'writel' in c)
+            reset=next(i for i,c in enumerate(model.calls) if '0x16aa0041' in c)
+            assert first<reset,'The marker is set before the session reset can reach a card.'
+        if variant=='card-watchdog':
+            # The gate disarmed WDT0; its record carries mode 1, so the return is a watchdog reset.
+            back=owner.record['watchdog_return']
+            assert back['before']==0 and back['mode_at_reset']==1 and back['gate']['warm'] and result['dram_lost']
+            assert model.registers[flag]==0
+        if variant=='card-cold-record':
+            assert result['power_epoch'][0]['gate']=={'cold':True,'warm':False,'unmarked':False,'refused_step':0,'mode':1}
+            assert result['power_epoch'][0]['flag_after']==0 and 'marker_after' in result['power_epoch'][0]
+        if variant=='marker-stuck':
+            assert 'cold-boot marker' in result['first_failure']['detail']
+            assert not any('0x16aa0041' in c or c[0]=='exe' for c in model.calls)
         if variant=='no-return':
             # One fresh-instance wait, never an automatic second reset.
             assert sum('0x16aa0041' in c for c in model.calls)==1
