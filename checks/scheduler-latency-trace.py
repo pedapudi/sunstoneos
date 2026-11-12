@@ -143,7 +143,8 @@ def check_symbols(source):
                            'sunstone_large_regions')
               for prefix in ('__start_', '__stop_')]
     cases = []
-    for symbol, admitted in (('eTaskGetState', True), ('ss_sched_trace_snapshot', True),
+    for symbol, admitted in (('eTaskGetState', True), ('ss_latency_task_suspended', True),
+                             ('ss_sched_trace_snapshot', True),
                              ('ss_sched_trace_wake', True),
                              ('os_cpu_clock_step', False), ('eTaskPrivateProbe', False),
                              ('ss_sched_trace_lock_release', False)):

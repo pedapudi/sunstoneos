@@ -177,6 +177,7 @@ int main(int argc, char **argv)
     ss_sched_trace_snapshot(&interrupted);
     assert(interrupted.wake[0].maximum.flags == (SS_SCHED_WAKE_UNMATCHED | SS_SCHED_WAKE_SNAPSHOT_INCOMPLETE));
     assert(interrupted.cpu0_window.flags & SS_SCHED_WINDOW_INCOMPLETE);
+    assert(!interrupted.history[0].latest_sequence && "replaced rows must not retain mixed observations");
     assert(history_reads <= 2 * SS_SCHED_TRACE_HISTORY);
     file = fopen(argv[2], "wb"); assert(file);
     assert(fwrite(&interrupted, sizeof(interrupted), 1, file) == 1);

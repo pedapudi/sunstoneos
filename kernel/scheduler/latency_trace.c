@@ -147,6 +147,8 @@ uint64_t ss_sched_trace_dispatch_begin(unsigned core, unsigned interrupt, uint64
     uint64_t sequence = atomic_fetch_add_explicit(&cpu0_dispatch.next, 1, memory_order_relaxed) + 1;
     struct ss_sched_dispatch_entry *event = &cpu0_dispatch.irq[(sequence - 1) % SS_SCHED_TRACE_HISTORY];
     atomic_fetch_add_explicit(&event->generation, 1, memory_order_acq_rel);
+    /* Pair payload observations with the reader fence after publishing odd. */
+    atomic_thread_fence(memory_order_release);
     atomic_store_explicit(&event->dispatch, sequence, memory_order_relaxed);
     const uint64_t words[7] = {0, (interrupt & UINT64_C(0xffff)) |
         ((spsr & UINT64_C(0xffffffff)) << 16), ss_sched_trace_now(), 0, pc, 0, 0};
@@ -160,17 +162,22 @@ void ss_sched_trace_dispatch_end(unsigned core, uint64_t sequence)
     struct ss_sched_dispatch_entry *event = &cpu0_dispatch.irq[(sequence - 1) % SS_SCHED_TRACE_HISTORY];
     if (atomic_load_explicit(&event->dispatch, memory_order_relaxed) != sequence) return;
     atomic_fetch_add_explicit(&event->generation, 1, memory_order_acq_rel);
+    /* Pair payload observations with the reader fence after publishing odd. */
+    atomic_thread_fence(memory_order_release);
     atomic_store_explicit(&event->word[3], ss_sched_trace_now(), memory_order_relaxed);
     atomic_fetch_add_explicit(&event->generation, 1, memory_order_release);
     atomic_store_explicit(&cpu0_dispatch.completed, sequence, memory_order_release);
 }
-static void dispatch_owner(unsigned field, uint64_t value)
+static void dispatch_owner(unsigned field, uint64_t value, uint64_t irq_sequence)
 {
     const uint64_t sequence = atomic_load_explicit(&cpu0_dispatch.owner, memory_order_relaxed);
     if (!sequence) return;
     struct ss_sched_dispatch_entry *event = &cpu0_dispatch.irq[(sequence - 1) % SS_SCHED_TRACE_HISTORY];
     if (atomic_load_explicit(&event->dispatch, memory_order_relaxed) != sequence) return;
     atomic_fetch_add_explicit(&event->generation, 1, memory_order_acq_rel);
+    /* Pair payload observations with the reader fence after publishing odd. */
+    atomic_thread_fence(memory_order_release);
+    if (field == 6) atomic_store_explicit(&event->word[0], irq_sequence, memory_order_relaxed);
     atomic_store_explicit(&event->word[field], value, memory_order_relaxed);
     atomic_fetch_add_explicit(&event->generation, 1, memory_order_release);
 }
@@ -183,7 +190,7 @@ void ss_sched_trace_irq_begin(unsigned core, uint64_t start)
     if (!core) {
         atomic_store_explicit(&cpu0_dispatch.owner,
             atomic_load_explicit(&cpu0_dispatch.completed, memory_order_acquire), memory_order_relaxed);
-        dispatch_owner(5, start);
+        dispatch_owner(5, start, 0);
     }
 }
 void ss_sched_trace_irq_guard(unsigned core)
@@ -205,6 +212,8 @@ void ss_sched_trace_irq_stamp(unsigned core, unsigned stamp)
 static void irq_history_store(struct ss_sched_irq_history *out, const struct ss_sched_trace_irq_chain *in)
 {
     atomic_fetch_add_explicit(&out->generation, 1, memory_order_acq_rel);
+    /* Pair payload observations with the reader fence after publishing odd. */
+    atomic_thread_fence(memory_order_release);
     for (unsigned i = 0; i < 5; ++i) {
         atomic_store_explicit(&out->stamp[i], in->stamp[i], memory_order_relaxed);
         atomic_store_explicit(&out->service[i], in->service[i], memory_order_relaxed);
@@ -218,6 +227,8 @@ static void irq_history_store(struct ss_sched_irq_history *out, const struct ss_
 static void switch_history_store(struct ss_sched_switch_history *out, const struct ss_sched_trace_switch *in)
 {
     atomic_fetch_add_explicit(&out->generation, 1, memory_order_acq_rel);
+    /* Pair payload observations with the reader fence after publishing odd. */
+    atomic_thread_fence(memory_order_release);
     atomic_store_explicit(&out->begin, in->begin, memory_order_relaxed);
     atomic_store_explicit(&out->end, in->end, memory_order_relaxed);
     atomic_store_explicit(&out->selected_slot, in->selected_slot, memory_order_relaxed);
@@ -238,7 +249,6 @@ static bool irq_history_read(unsigned core, uint64_t sequence, struct ss_sched_t
     const struct ss_sched_irq_history *in = &state[core].irq_history[(sequence - 1) % SS_SCHED_TRACE_HISTORY];
     uint64_t generation = atomic_load_explicit(&in->generation, memory_order_acquire);
     if (generation & 1) return false;
-    SS_HISTORY_READ(core, 0, sequence);
     for (unsigned i = 0; i < 5; ++i) {
         out->stamp[i] = atomic_load_explicit(&in->stamp[i], memory_order_relaxed);
         out->service[i] = atomic_load_explicit(&in->service[i], memory_order_relaxed);
@@ -246,6 +256,7 @@ static bool irq_history_read(unsigned core, uint64_t sequence, struct ss_sched_t
     out->passes = atomic_load_explicit(&in->passes, memory_order_relaxed);
     out->result = atomic_load_explicit(&in->result, memory_order_relaxed);
     out->sequence = atomic_load_explicit(&in->sequence, memory_order_relaxed);
+    SS_HISTORY_READ(core, 0, sequence);
     out->previous_end = atomic_load_explicit(&in->previous_end, memory_order_relaxed);
     atomic_thread_fence(memory_order_acquire);
     return generation == atomic_load_explicit(&in->generation, memory_order_relaxed) && out->sequence == sequence;
@@ -255,11 +266,11 @@ static bool switch_history_read(unsigned core, uint64_t sequence, struct ss_sche
     const struct ss_sched_switch_history *in = &state[core].switch_history[(sequence - 1) % SS_SCHED_TRACE_HISTORY];
     uint64_t generation = atomic_load_explicit(&in->generation, memory_order_acquire);
     if (generation & 1) return false;
-    SS_HISTORY_READ(core, 1, sequence);
     out->begin = atomic_load_explicit(&in->begin, memory_order_relaxed);
     out->end = atomic_load_explicit(&in->end, memory_order_relaxed);
     out->selected_slot = atomic_load_explicit(&in->selected_slot, memory_order_relaxed);
     out->sequence = atomic_load_explicit(&in->sequence, memory_order_relaxed);
+    SS_HISTORY_READ(core, 1, sequence);
     out->previous_end = atomic_load_explicit(&in->previous_end, memory_order_relaxed);
     out->irq_sequence = atomic_load_explicit(&in->irq_sequence, memory_order_relaxed);
     atomic_thread_fence(memory_order_acquire);
@@ -276,8 +287,7 @@ void ss_sched_trace_irq_end(unsigned core, unsigned result)
     uint64_t sequence = atomic_load_explicit(&state[core].irq_sequence, memory_order_relaxed) + 1;
     atomic_store_explicit(&ss_sched_trace_switch_irq[core], sequence, memory_order_relaxed);
     if (!core) {
-        dispatch_owner(0, sequence);
-        dispatch_owner(6, irq->stamp[3]);
+        dispatch_owner(6, irq->stamp[3], sequence);
         atomic_store_explicit(&cpu0_dispatch.owner, 0, memory_order_relaxed);
     }
     struct ss_sched_trace_irq_chain last = {.sequence = sequence,

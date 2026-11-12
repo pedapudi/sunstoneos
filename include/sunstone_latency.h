@@ -1,6 +1,7 @@
 #ifndef SUNSTONE_LATENCY_H
 #define SUNSTONE_LATENCY_H
 #include <stdint.h>
+#include <stdbool.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -82,6 +83,9 @@ extern const uint64_t ss_latency_budget_us[SS_LAT_METRICS];
 void ss_latency_init(uint64_t frequency);
 uint64_t ss_latency_counter_frequency(void);
 void ss_latency_freeze(unsigned core);
+/* Diagnostic query for a suspended target's saved-frame acknowledgment.
+ * The caller keeps the target suspended and alive through its snapshot. */
+bool ss_latency_task_suspended(void *task);
 void ss_latency_snapshot(struct ss_latency_core out[8]);
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
 /* Optional scheduler diagnostic, read after all eight recorders are frozen.
