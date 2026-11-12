@@ -443,6 +443,8 @@ int bluetooth_application_poll(struct bluetooth_application *a)
             a->profile->frame_timeout_us,1500000,binding_current,a};
         if(bt_hci_init(&a->hci,&a->binding,a->slots,4,a->hci_deadline,a->profile->command_timeout_us)!=1)
             return bluetooth_application_retain(a);
+        if(a->uart.config.deferred_irq&&bt_h4_irq_enable(&a->hci.transport,a->deadline)!=1)
+            return bluetooth_application_retain(a);
         a->stage=2;
     }
     if(generation!=a->firmware_generation||bt_hci_step(&a->hci,64,a->deadline)<0)return bluetooth_application_retain(a);
@@ -458,6 +460,33 @@ int bluetooth_application_poll(struct bluetooth_application *a)
     }
     return atomic_load_explicit(&a->result,memory_order_acquire)?1:0;
 }
+uint64_t bluetooth_application_next_deadline(const struct bluetooth_application *a,uint64_t until)
+{
+    if(!a||a->self!=a||!until||!a->profile||xTaskGetCurrentTaskHandle()!=a->owner||
+       atomic_load_explicit(&a->failed,memory_order_acquire))return 0;
+#define EARLIER(value) do{uint64_t at=(value);if(at&&at<until)until=at;}while(0)
+    EARLIER(a->deadline);
+    if(a->stop_phase)EARLIER(a->stop_deadline);
+    if(!a->firmware_generation)EARLIER(a->bootstrap_deadline);
+    else if(!atomic_load_explicit(&a->result,memory_order_acquire))EARLIER(a->hci_deadline);
+    const struct bt_hci *h=&a->hci;
+    if(h->self==h){
+        if(h->state==BT_HCI_FAULT)return 0;
+        if(h->state!=BT_HCI_STOPPED){
+            until=bt_h4_deadline(&h->transport,until);if(!until)return 0;
+            if(h->command!=BT_HCI_IDLE)EARLIER(h->command_deadline);
+            if(!h->scan_requested&&h->state==BT_HCI_INITIALIZING)EARLIER(h->initialization_deadline);
+            if(!h->scan_requested&&h->state==BT_HCI_CONFIGURING)EARLIER(h->configuration_deadline);
+            EARLIER(h->return_deadline);
+        }
+    }
+#undef EARLIER
+#ifdef SUNSTONE_BLUETOOTH_HEADSET
+    if(a->profile->version>=2&&atomic_load_explicit(&a->result,memory_order_acquire))
+        until=bluetooth_headset_next_deadline(a,until);
+#endif
+    return until;
+}
 int bluetooth_application_result(struct bluetooth_application *a,struct bt_hci_identity *out)
 {
     if(!a||a->self!=a||!out||!bt_range_disjoint(a,sizeof(*a),out,sizeof(*out))||
@@ -469,6 +498,56 @@ int bluetooth_application_result(struct bluetooth_application *a,struct bt_hci_i
     *out=a->identity;atomic_store_explicit(&a->result_lock,0,memory_order_release);
     return atomic_load_explicit(&a->failed,memory_order_acquire)||
         (atomic_load_explicit(a->recovery_state,memory_order_acquire)&4)?-1:1;
+}
+
+int bluetooth_application_work_state(const struct bluetooth_application *a,struct bluetooth_work_state *out)
+{
+    if(!a||a->self!=a||!a->profile||!out||xTaskGetCurrentTaskHandle()!=a->owner||
+       atomic_load_explicit(&a->failed,memory_order_acquire)||
+       (a->recovery_state&&(atomic_load_explicit(a->recovery_state,memory_order_acquire)&4))||
+       !bt_range_disjoint(a,sizeof(*a),out,sizeof(*out))||
+       !bt_range_disjoint(a->profile,sizeof(*a->profile),out,sizeof(*out))||
+       (a->recovery_state&&!bt_range_disjoint(a->recovery_state,sizeof(*a->recovery_state),out,sizeof(*out)))||
+       (a->shared&&!bt_range_disjoint(a->shared,sizeof(*a->shared),out,sizeof(*out))))return 0;
+#ifdef SUNSTONE_BLUETOOTH_HEADSET
+    if(!bluetooth_headset_work_state(a,out))return 0;
+#else
+    memset(out,0,sizeof(*out));
+#endif
+    out->application.stage=a->stage;out->application.stop_phase=a->stop_phase;
+    out->application.stop_fault=a->stop_fault;
+    out->application.result=atomic_load_explicit(&a->result,memory_order_acquire);
+    out->application.stop_release=atomic_load_explicit(&a->stop_release,memory_order_acquire);
+    out->application.stop_peer=atomic_load_explicit(&a->stop_peer,memory_order_acquire);
+#define TAKE(name) target->name=source->name;
+    {struct bluetooth_work_hci *target=&out->hci;const struct bt_hci *source=&a->hci;BT_WORK_HCI(TAKE)}
+    {struct bluetooth_work_h4 *target=&out->h4;const struct bt_h4 *source=&a->hci.transport;BT_WORK_H4(TAKE)}
+    for(unsigned i=0;i<BT_H4_SLOTS;++i){
+        struct bluetooth_work_record *target=&out->records[i];
+        const struct bt_h4_record *source=&a->hci.transport.records[i];BT_WORK_RECORD(TAKE)
+    }
+#undef TAKE
+    return 1;
+}
+int bluetooth_application_rx_unclassified(const struct bluetooth_application *a)
+{
+    if(!a||a->self!=a||!a->profile||xTaskGetCurrentTaskHandle()!=a->owner||
+       atomic_load_explicit(&a->failed,memory_order_acquire)||
+       (a->recovery_state&&(atomic_load_explicit(a->recovery_state,memory_order_acquire)&4))||
+       a->hci.transport.state!=BT_H4_ACTIVE||!a->hci.transport.count||
+       a->hci.transport.count>BT_H4_SLOTS||a->hci.transport.assembling>a->hci.transport.count)return -1;
+    const struct bt_h4 *h=&a->hci.transport;
+    if(h->staged||h->assembling<h->count)return 1;
+    for(unsigned i=0;i<h->count;++i){
+        if(h->records[i].owner>BT_H4_OWNED||
+           (h->records[i].owner==BT_H4_OWNED&&!h->records[i].serial))return -1;
+        if(h->records[i].owner==BT_H4_PARTIAL||h->records[i].owner==BT_H4_COMPLETE)return 1;
+    }
+#ifdef SUNSTONE_BLUETOOTH_HEADSET
+    if(a->profile->version>=2)return bluetooth_headset_rx_unclassified(a);
+#endif
+    for(unsigned i=0;i<h->count;++i)if(h->records[i].owner==BT_H4_OWNED)return 1;
+    return 0;
 }
 
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION

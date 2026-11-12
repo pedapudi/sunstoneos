@@ -1,6 +1,7 @@
 # Device owners block on notifications and absolute deadlines
 
-Status: implemented and host-tested for native DMA and I2S owner waits.
+Status: implemented and host-tested for native DMA, I2S and headset-segment
+owner waits. The Bluetooth transport still polls at a precise cadence.
 Physical interrupt and idle-core qualification remains open.
 
 ## DMA retirement observes distributor propagation at absolute times
@@ -51,7 +52,8 @@ outside the integrated OS retain their existing scheduler-tick waits.
 The native worker's source-counted idle timer rate is zero before and after
 this change. Its active fallback wakes at 1,000 times per second with the
 single-tick I2S binding; an armed native transfer now has only interrupt and
-deadline wakes. These counts describe wait arguments, not physical wake counts.
+deadline wakes. These source counts describe wait arguments. Physical wake
+rates remain unmeasured.
 
 [The worker check](../../checks/event-dma-worker.py) executes the production
 worker body with modeled queue and timer boundaries. It covers idle waits,
@@ -125,3 +127,37 @@ period publication and exact operation expiry. The same check retains PCM,
 stream reuse, drain and retained-fault cases. Mutations that restore a tick
 wait or treat reply hints as device progress fail. These owner checks execute
 no physical DMA, I2S or FreeRTOS context switch.
+
+## The headset segment client blocks on publication
+
+The headset segment client waits on its notification until the admitted session
+deadline. A new recognition generation, segment publication and quiesce request
+wake it. Its registered deadline certificate covers the idle service window.
+The source-counted idle timer rate falls from four wakes per second to zero
+before session expiry.
+
+The standalone Bluetooth owner retains its 1 ms H4 service cadence through
+absolute compares. An early notification ends the wait without moving the
+next cadence boundary. That owner still has 1,000 timer observations per second.
+The shared-radio composition retains the radio owner's scheduling policy.
+
+UART hardware provides interrupts. The current Bluetooth composition uses the
+UART platform's polling profile, whose GIC source remains masked; see
+[UART platform ownership](../uart-platform.md) and [the H4 service
+budget](../uart.md). Deferred delivery requires an admitted root-owned interrupt
+route, a mask-only ISR, synchronization and transport rearm. Those integrations
+are absent. Precise transport polling is an intermediate state and does not
+satisfy interrupt-driven Bluetooth ownership.
+
+`os_headset_wake_record` contains two consecutive six-counter records in the
+DMA format: the segment client, then the standalone Bluetooth owner. The client
+counts blocked microseconds and incoming notifications. The transport owner
+counts its total waits, wakes and timer expiries. Physical wake rates remain
+unmeasured. Physical headset qualification remains open.
+
+The [headset check](../../checks/os-quiesce-audio-headset.py) retains startup,
+segment, shared-module and failure-return cases. It also runs the client and
+standalone owner loops with modeled RTOS boundaries. The event cases cover
+idle publication, the cadence boundary after an early notification and session
+expiry. Scheduler-tick mutations fail. This model supplies Bluetooth segments
+and protocol outcomes; it establishes no UART interrupt or radio behavior.

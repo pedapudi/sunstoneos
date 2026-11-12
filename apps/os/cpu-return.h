@@ -44,6 +44,14 @@ int os_cpu_return_ready(void);
 int os_cpu_return_devices_ready(void);
 void os_cpu_return_spi_save(void);
 int os_cpu_return_spi_restore(void);
+/* One Secure Device snapshot per selected image route. The generated table
+ * defines both storage and capacity from its own array declaration. */
+struct os_cpu_return_spi_snapshot {
+    uint64_t route;
+    uint32_t group,modifier,config,priority,valid,intid;
+};
+extern struct os_cpu_return_spi_snapshot os_cpu_return_spi_saved[];
+extern const unsigned os_cpu_return_spi_capacity;
 struct a733_cpu_clock;
 struct a733_thermal_policy;
 int os_cpu_return_thermal_ready(void);

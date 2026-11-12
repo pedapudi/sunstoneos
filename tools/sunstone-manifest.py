@@ -668,12 +668,16 @@ def c_tables(m):
              '    OS_SERVICE_TABLE', '};',
              '#ifdef SUNSTONE_BOARD_USB2_IRQ', 'extern void board_host_irq(void);', '#endif',
              '#ifdef SUNSTONE_A733_HW_FACTS', 'extern void os_hw_facts_irq(void);', '#endif',
+             '#if defined(SUNSTONE_A733_OS_HEADSET) && defined(SUNSTONE_A733_OS_HEADSET_IRQ)',
+             'extern void os_headset_uart_irq(void);', '#endif',
              sd_guard, 'extern void os_sd_irq(void);', '#endif',
              'const struct a733_irq_route a733_irq_routes[] = {', '    {71,0,0xd8,os_thermal_irq},',
              '#ifdef SUNSTONE_BOARD_USB2_IRQ', '    {187,0,0xd8,board_host_irq},', '#endif',
              # The NPU's line, in every image; the hardware-facts probe takes it itself.
              '#ifndef SUNSTONE_A733_HW_FACTS', '    {97,OS_NPU_CORE,0xd8,os_npu_irq},', '#endif',
              sd_guard, '    {193,0,0xd8,os_sd_irq},', '#endif',
+             '#if defined(SUNSTONE_A733_OS_HEADSET) && defined(SUNSTONE_A733_OS_HEADSET_IRQ)',
+             '    {35,0,0xd8,os_headset_uart_irq},', '#endif',
              # DMA0's one line: the I2S stream's, or in an image with the RAM-copy service the handler of whichever
              # of the two the session granted. The hardware-facts probe takes the line itself.
              '#ifndef SUNSTONE_A733_HW_FACTS', '#ifdef SUNSTONE_A733_OS_DMA', '    {143,0,0xd8,os_dma0_irq},', '#else',
@@ -681,6 +685,10 @@ def c_tables(m):
              '#ifdef SUNSTONE_A733_OS_GPU', ('    {95,A733_SMP_APPLICATION_CORE,0xd8,os_gpu_queue_irq},' if m.get('cluster', 0) else '    {95,2,0xd8,os_gpu_queue_irq},'), '#endif',
              '#ifdef SUNSTONE_A733_HW_FACTS', '    {97,0,0xd8,os_hw_facts_irq},{143,0,0xd8,os_hw_facts_irq},{95,0,0xd8,os_hw_facts_irq},', '#endif', '};',
              'const unsigned a733_irq_route_count=sizeof(a733_irq_routes)/sizeof(a733_irq_routes[0]);',
+             '#include "cpu-return.h"',
+             'struct os_cpu_return_spi_snapshot os_cpu_return_spi_saved[sizeof(a733_irq_routes)/sizeof(a733_irq_routes[0])]',
+             '    __attribute__((section(".bss.a733_smp_monitor"),aligned(128)));',
+             'const unsigned os_cpu_return_spi_capacity=sizeof(os_cpu_return_spi_saved)/sizeof(os_cpu_return_spi_saved[0]);',
              '#ifdef SUNSTONE_A733_OS_GPU', '#include "gpu-runtime.h"',
              '/* The declared job bound; an image without GPU use replies within the open window. */',
              '__attribute__((used,retain)) const uint64_t os_gpu_job_us=UINT64_C(%d);' % gpu_us,

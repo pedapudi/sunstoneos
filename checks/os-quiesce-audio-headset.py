@@ -73,6 +73,10 @@ def main():
         compiled_root = str(Path(unit['file']).resolve().parents[2])
         flags = [flag.replace(compiled_root, str(ROOT)) for flag in shlex.split(unit['command'])]
         flags = flags[:flags.index('-o')]
+        if owner == 'headset':
+            # Legacy PCM/segment models have no UART/GIC provider. The native
+            # event composition is exercised by os-headset-uart-events.py.
+            flags.append('-USUNSTONE_A733_OS_HEADSET_IRQ')
         sources = (('checks/os-image-audio.c', 'apps/os/capture.c', 'drivers/audio/a733_i2s.c') if owner == 'audio' else
                    ('checks/os-image-headset.c', 'apps/bluetooth/pcm.c', 'drivers/storage/storage_digest.c'))
         command = flags + [str(ROOT / p) for p in (*sources, 'runtime/memory.c', 'runtime/memmove.c')] + [
@@ -127,6 +131,26 @@ def main():
                 parts, names = model.image(changed, args.output, name)
                 result, _ = model.run(parts, names, mode, 16000)
                 assert result != 1, (name, 'accepted unsafe retirement')
+                rejected += 1
+        else:
+            fixture = (ROOT / 'checks/os-image-headset.c').read_text()
+            replacements = {
+                'tick-segment-client': ('wait_until(OS_SERVICE_HEADSET,0,limit,limit)',
+                                        '(int)ulTaskNotifyTake(pdTRUE,1)', 18),
+                'tick-bluetooth-cadence': ('wait_until(OS_SERVICE_BLUETOOTH,1,until,limit)',
+                                          '(int)ulTaskNotifyTake(pdTRUE,1)', 19),
+            }
+            for name, (old, new, mode) in replacements.items():
+                assert old in text
+                mutant = args.output / (name + '.c')
+                mutant.write_text(text.replace(old, new, 1))
+                replay = args.output / (name + '-fixture.c')
+                replay.write_text(fixture.replace('"../apps/os/headset.c"', '"' + str(mutant.resolve()) + '"'))
+                changed = [str(replay.resolve()) if arg == str(ROOT / 'checks/os-image-headset.c') else arg for arg in command]
+                changed += ['-I' + str(ROOT / 'checks'), '-I' + str(ROOT / 'apps/os')]
+                parts, names = model.image(changed, args.output, name)
+                result, _ = model.run(parts, names, mode, 16000)
+                assert result != 1, (name, 'accepted a scheduler tick wake')
                 rejected += 1
         records[owner] = {'cases': cases, 'mutants_rejected': rejected,
                           'source_sha256': hashlib.sha256(text.encode()).hexdigest(), 'command': command}
