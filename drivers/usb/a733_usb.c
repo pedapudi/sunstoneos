@@ -5,7 +5,6 @@
 #include "a733_usb.h"
 #include "a733_mmio.h"
 #include "device/dcd.h"
-#include "sunstone_deadline.h"
 
 #define USB 0x04100000UL
 #define CCU 0x02002000UL
@@ -16,29 +15,29 @@ uint32_t tusb_time_millis_api(void)
     return (uint32_t)(counter() / (COUNTER_HZ / 1000));
 }
 
-static void hold_us(uint64_t microseconds)
+void tusb_time_delay_ms_api(uint32_t milliseconds)
+{
+    vTaskDelay(pdMS_TO_TICKS(milliseconds));
+}
+
+static void hold_us(uint32_t microseconds)
 {
     /* This legacy target's monitor establishes the 24 MHz counter contract.
      * One extra raw tick covers the fraction before the first sample. */
-    const uint64_t scale=COUNTER_HZ/1000000u;
-    if(microseconds>(UINT64_MAX-1)/scale)platform_panic("USB hold overflow",__LINE__);
-    const uint64_t ticks=scale*microseconds+1;
+    const uint64_t ticks=(COUNTER_HZ/1000000u)*(uint64_t)microseconds+1;
     const uint64_t start=counter();
     if(start>UINT64_MAX-ticks)platform_panic("USB hold overflow",__LINE__);
     const uint64_t target=start+ticks;
-    const uint64_t until=target/scale+(target%scale!=0);
+    if(microseconds>=1000)vTaskDelay(pdMS_TO_TICKS(microseconds/1000));
     uint64_t previous=start;
-    for(;;){
-        const uint64_t now=counter();
+    for(unsigned reads=0;reads<1000000;++reads){
+        uint64_t now=counter();
         if(now<previous)platform_panic("USB counter reversed",__LINE__);
         if(now>=target)return;
         previous=now;
-        if(sunstone_deadline_wait_until(until)==SUNSTONE_DEADLINE_ERROR)
-            platform_panic("USB precise hold",__LINE__);
     }
+    platform_panic("USB counter stopped",__LINE__);
 }
-void tusb_time_delay_ms_api(uint32_t milliseconds)
-{if(milliseconds)hold_us((uint64_t)milliseconds*1000u);}
 
 void a733_usb_prepare(void)
 {

@@ -117,11 +117,10 @@ the supervisor. Fault claims also run in contexts where task APIs are illegal.
 A deferred wake path must respect those contexts. `sunstone_deadline_kick()`
 only requests timer rearming and does not notify the supervisor.
 
-The legacy [`a733_usb.c`](../../drivers/usb/a733_usb.c) diagnostic adapter uses
-[precise reset holds](legacy-usb-deadlines.md), with a retained virtual timer
-and an idle WFI hook. Its separate diagnostic protocol loop still uses tick
-delays. These paths are separate from the integrated native USB owner and
-remain physically unqualified.
+The legacy [`a733_usb.c`](../../drivers/usb/a733_usb.c) diagnostic adapter
+paces its reset holds and its diagnostic protocol loop with tick delays; its
+image links no precise-deadline backend. These paths are separate from the
+integrated native USB owner and remain physically unqualified.
 
 ## Pinned references
 

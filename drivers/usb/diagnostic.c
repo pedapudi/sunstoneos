@@ -5,9 +5,6 @@
 #include "a733_usb.h"
 #include "usb_service.h"
 #include "tusb.h"
-#ifdef SUNSTONE_USB_PRECISE_DELAY
-#include "sunstone_deadline.h"
-#endif
 #include <string.h>
 
 #define MESSAGE_MAGIC 0x53534f53U
@@ -258,9 +255,6 @@ static bool service_pass(void)
 static void usb_task(void *argument)
 {
     (void)argument;
-#ifdef SUNSTONE_USB_PRECISE_DELAY
-    configASSERT(sunstone_deadline_register());
-#endif
     renew_recovery_timer();
     tusb_rhport_init_t init = {.role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_HIGH};
     configASSERT(tusb_init(0, &init));

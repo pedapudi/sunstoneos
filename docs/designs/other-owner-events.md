@@ -101,10 +101,10 @@ and retained faults. Physical return qualification remains open.
 
 The USB host configuration without interrupt binding retains a normal-operation
 polling reference at a precise 1 ms cadence in `apps/os/client.c`. It has no
-idle-wake reduction and remains unqualified. The legacy USB0 runtime uses
-[precise reset holds](legacy-usb-deadlines.md) and an idle WFI hook. Its separate
-diagnostic protocol loop remains tick-paced. The host return checks do not
-qualify either polling reference.
+idle-wake reduction and remains unqualified. The legacy USB0
+runtime in `drivers/usb/a733_usb.c` has no linked precise-deadline backend.
+Replacing either path requires its selected interrupt and timer composition;
+the host return checks do not qualify those paths.
 
 ## Network and SDIO completion use a retained event binding
 
