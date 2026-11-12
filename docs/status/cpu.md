@@ -29,7 +29,7 @@ normally without a replug. The records list the queue entries.
 | Integrated OS image at the top points (B1, TOP) | open | Predicted 2.10 s at boot rates, 1.20 s at the top points | [top points](../designs/cpu-top-opp.md) |
 | Cold secondary ownership through static OFF | host-tested | 23 owner cases, stage2 80 bytes below 32 KiB | [design](../designs/cold-cpu-static-off.md); [records](../evidence/cold-cpu-static-off.jsonl) |
 | Thermal capture after returning recognition | host-tested | 33,816 bytes in two ROM reads; longer-input run did not return | [design](../designs/cpu-return-thermal.md); [records](../evidence/cpu-return-thermal.jsonl) |
-| Cacheable EL1 table walks | host-tested; core-6 comparison blocked | Application-table maintenance: 832 operations uncached, 0 cached; cached stores complete with `DSB ISH` | [design](../designs/cpu-table-walks.md); [records](../evidence/cpu-table-walks.jsonl) |
+| Cacheable EL1 table walks | host-tested; core-6 comparison prepared | Application-table maintenance: 832 operations uncached, 0 cached; cached stores complete with `DSB ISH` | [design](../designs/cpu-table-walks.md); [records](../evidence/cpu-table-walks.jsonl) |
 | Performance modes (high and low) | host-tested | 3 CPU requests and 2 PMIC writes per full switch | [design](../designs/performance-modes.md); [resident](../designs/resident-performance.md); [records](../evidence/performance-modes.jsonl) |
 | Sustained scheduling, WFI idle, retention, cluster power-down, PMU events | open | Instruction-model evidence only | Open work below |
 
@@ -38,7 +38,7 @@ normally without a replug. The records list the queue entries.
 1. Repeat the corrected reliability workload from three cold starts; one run passes, so repeatability and full restoration are unqualified.
 2. Qualify sustained scheduling, broader coherence and per-core IRQ workloads, induced-fault recovery, and idle, wake and thermal transitions.
 3. Locate the fault of the longer-recognition nonreturn. Repeat it only with a concrete correction or a narrower hypothesis.
-4. Recover port `3-1` through the [handoff](../handoff.md), then qualify the prepared core-6 OS walk comparison. The uncached control is refused before launch. Eight-core defaults keep uncached walks; the cached return and recognition checks require a measured gain ([design](../designs/cpu-table-walks.md)).
+4. Qualify the prepared core-6 OS walk comparison on port `3-3`. Eight-core defaults keep uncached walks; the cached return and recognition checks require a measured gain ([design](../designs/cpu-table-walks.md)).
 5. Qualify WFI idle behavior (instruction-model evidence only), retention and cluster power-down.
 6. Broaden PMU event qualification beyond the single-core result in `board-session-20261023/port-3-3/set5-bb4-run/`.
 7. Release the held static-OFF policy through the reviewed path before later multicore consumers use it.
