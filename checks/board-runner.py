@@ -425,6 +425,11 @@ def card_recovery_cases(out,image=None):
                         'readl',hex(recovery.RTC_TAG),'readl',hex(recovery.RTC_FLAG)]
             armed=[i for i,c in enumerate(model.calls[:launch]) if hex(board.crumbs.KEY|0x41) in c][-1]
             assert armed<model.calls.index(flag_write)<launch
+            # The reviewed tool runs its I-cache disable helper before each MMIO
+            # command, so the RTC arm command after the last upload is the
+            # instruction-fetch predecessor of exe (checks/card-fel-recovery.py).
+            uploads=[i for i,c in enumerate(model.calls[:launch]) if c[0]=='write']
+            assert uploads and model.calls[launch-1]==flag_write and uploads[-1]<launch-1
         if expected:
             assert result['outcome']=='returned' and result['return_report']['rtc_flag']==0
             assert len(result['instances'])>=3 and not owner.failed

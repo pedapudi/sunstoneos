@@ -1,4 +1,5 @@
-/* Stackless, position-independent first-stage gate, also entered by FEL exe. */
+/* Stackless, position-independent first-stage gate, also entered by FEL exe.
+ * Vendor sequence and limits: docs/designs/card-fel-recovery.md. */
 #include "a733_card_fel_gate.h"
 .syntax unified
 .arch armv8-a
@@ -15,17 +16,17 @@
 .endm
 a733_card_fel_gate:
     cpsid ifa
-    ldr r6,=0x07090104
-    progress A733_CARD_FEL_ENTRY
     ldr r0,=0x07090108
     ldr r1,[r0]
     ldr r2,=0x5aa5a55a
     cmp r1,r2
     beq requested
-    /* Cold media entry: boot0 supplies its own stack and initialization. */
+    /* Cold media entry keeps every RTC record; boot0 supplies its own stack. */
     ldr r0,=0x47b00
     bx r0
 requested:
+    ldr r6,=0x07090104
+    progress A733_CARD_FEL_ENTRY
     mov r7,#1                 /* Local translation/cache entry. */
     mrc p15,0,r1,c1,c0,0
     tst r1,#5

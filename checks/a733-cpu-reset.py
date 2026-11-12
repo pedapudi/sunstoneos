@@ -16,7 +16,11 @@ ASSEMBLY = ['platform/a733/monitor.S', 'platform/a733/probe.S', 'checks/a733-aar
             'boot/a733/primary-publication-probe.S', 'apps/cpu-runtime-qualification/terminal.S',
             'apps/npu-finite/return.S', 'apps/gpu-finite/return.S']
 C_CALLER = 'boot/a733/stage2/loader.c'
-CHECK_INPUTS = ['include/a733_cpu_reset.h', *ASSEMBLY, C_CALLER]
+# A literal list, so checks/check-index.py can read it; main() requires it to match.
+CHECK_INPUTS = ['include/a733_cpu_reset.h', 'platform/a733/monitor.S', 'platform/a733/probe.S',
+                'checks/a733-aarch64.S', 'boot/a733/native-startup-probe.S', 'boot/a733/a64-entry-probe.S',
+                'boot/a733/primary-publication-probe.S', 'apps/cpu-runtime-qualification/terminal.S',
+                'apps/npu-finite/return.S', 'apps/gpu-finite/return.S', 'boot/a733/stage2/loader.c']
 
 
 def reset_wait(parts):
@@ -47,6 +51,7 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=False)
     cases=[]
+    assert CHECK_INPUTS==['include/a733_cpu_reset.h',*ASSEMBLY,C_CALLER],'CHECK_INPUTS differs from the checked callers'
     # These sources must invoke the one body; an inline copy defeats this check.
     for name in (*ASSEMBLY,C_CALLER):
         text=(ROOT/name).read_text()

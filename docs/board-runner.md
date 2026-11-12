@@ -508,21 +508,27 @@ It restores those bytes after its validated normal return. Finite native NPU dia
 retirement rules described below. Neither format's serialization establishes
 physical qualification.
 
-## First-stage FEL recovery uses its own RAM proof
+## First-stage FEL recovery uses its own SRAM proof
 
 `--kind probe --approved-by coordinator` admits the
 [first-stage recovery image](designs/card-fel-recovery.md) through its immutable
-`a733_card_fel_profile`. This profile has a fresh nonce request, an exact
-AArch32 gate hash and a fixed report. It carries no storage or power-transition
-authority and uses no secondary policy writes or generic probe return epilogue.
+`a733_card_fel_profile`. The image holds only the exact AArch32 gate at
+`0x52000` and the read-only profile at `0x52400`. It carries no input, storage,
+DRAM, clock or power-transition authority, and the runner initializes no DRAM.
+The runner refuses any FEL binary other than the reviewed one, which disables
+the instruction cache before each register command, and runs a frozen copy.
 
-The runner sets and verifies the vendor RTC request after arming WDT0 and
-before launching the image. Acceptance requires normal FEL return, mode zero,
-the matching nonce/report, consumed gate state, unchanged gate code and cleared
-RTC request. A watchdog reset is a failed proof; the runner captures no DRAM
-after it. A normal return with an invalid receipt quarantines the instance.
-The resulting evidence qualifies only this RAM path. Card loading and recovery
-after a system watchdog reset remain separate tests.
+The runner uploads both loads, arms WDT0 in mode `0x41`, then sets and reads
+back the session tag and the vendor RTC request, and executes `0x52000`. The
+gate branches to the ROM's FEL entry from inside that execute command. A failed
+or timed-out execute transaction is therefore the expected USB disconnect, but
+only for this command after it has started with the watchdog and request
+armed. The runner then sends nothing to the old instance and waits for a new
+one. Acceptance requires the cleared RTC request, LAST `0x0c020005`, the
+matching tag, no fault word, WDT0 mode zero and no watchdog reset. A watchdog
+reset fails the proof; any other invalid receipt quarantines the instance.
+The evidence qualifies only this SRAM path. Card loading and recovery after a
+system watchdog reset remain separate tests.
 
 ## USB class probes require finite device cleanup
 

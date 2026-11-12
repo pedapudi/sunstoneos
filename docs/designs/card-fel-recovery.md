@@ -1,9 +1,9 @@
 # A retained first-stage request selects FEL before card loading
 
-**Status: blocked.** The gate and launcher have software checks; no card is
-written. The RAM proof lacks a documented AArch32 reset path to its DRAM gate.
-The shared read-only secondary-OFF admission passes on port 3-3. Physical gate
-entry and cold-card recovery remain unqualified
+**Status: host-checked; one physical RAM proof pending.** The gate has
+executing host checks, and no card is written. The RAM proof runs the gate in
+SRAM through the ROM's FEL execute command. Physical gate execution and
+cold-card recovery remain unqualified
 ([evidence](../evidence/card-fel-recovery.jsonl)).
 
 ## The first stage consumes the vendor request
@@ -23,27 +23,41 @@ to ARM ROM `0x20` through `0x48ec6`. The helper's initial loop reads and prints
 eight RTC words; it does not clear them.
 
 The early SunstoneOS gate applies the same request before boot0's board setup,
-DRAM initialization or storage access. A clear request continues at boot0's
-original reset stub, `0x47b00`. The matching request requires translation and
-data caches off and the known clear ROM redirect words. It clears the request
-with barriers and readback after disarming a recognized watchdog and checking
-mode zero. Cold ROM enables the instruction cache; the requested path disables
-and invalidates it before the final branch-predictor cleanup and ARM ROM entry.
-A disarm refusal keeps the request pending and parks. An unconfirmed clear
-after disarm enters FEL without a success state. The gate changes no voltage,
-clock or secondary power policy.
+DRAM initialization or storage access. The gate is stackless and
+position-independent AArch32 code
+([source](../../boot/a733/card-fel-gate.S)). A clear request continues at
+boot0's original reset stub, `0x47b00`, and writes no RTC word. The matching
+request requires translation and data caches off and the known clear ROM
+redirect words. The gate then disables and invalidates the instruction cache,
+disarms a recognized watchdog, checks mode zero, and clears the request with
+barriers and readback. It invalidates the branch predictor and branches to ARM
+ROM `0x20`. A disarm refusal keeps the request pending and parks with WDT0
+still armed. An unconfirmed clear after disarm enters FEL with a failure code.
+The gate changes no voltage, clock or secondary power policy.
+
+On the requested path the gate records its progress in the RTC LAST word,
+`0x07090104`, as stage `0x0c02` in the high half and a value in the low half
+([codes](../../include/a733_card_fel_gate.h)). Each store is followed by a DSB.
+The gate leaves the fault, ESR, ELR and FAR words unchanged.
+
+| Value | Meaning |
+| --- | --- |
+| `1` | Request matched; gate entered |
+| `2` | Watchdog mode, configuration and output checked |
+| `3` | WDT0 disarmed and read back as mode zero |
+| `4` | Request cleared and read back as zero |
+| `5` | Before the branch to ROM `0x20` |
+| `0x81` | Refused: MMU or data cache enabled |
+| `0x82` | Refused: a ROM redirect word is nonzero |
+| `0x83` | Refused: unrecognized watchdog mode, configuration or output |
+| `0x84` | Request readback nonzero after the clear; FEL entered anyway |
+| `0x86` | Refused: WDT0 mode nonzero after the disarm write |
 
 The captured ROM's entry at `0x20` bypasses BOOT sampling but still checks the
 second software redirect at `0x070501d4`. All redirect words therefore remain
 zero. The ROM consumes no RTC request itself; the gate makes the selection.
-The launcher publishes CPU0 RVBAR and uses the
-[shared reset body](../../include/a733_cpu_reset.h): DSB, `RMR_EL3 = 2`, ISB,
-then a terminal WFI/back-branch loop. The request takes effect when the core
-enters WFI. The monitor, probes, finite-device returns and stage-2 loader use
-this same body. This sequence does not establish the AArch32 reset destination.
-If entered in AArch32, the gate branches to `0x20` itself.
 
-## Reset-address authority blocks the RAM proof
+## A warm reset cannot enter the gate
 
 The A733 manual places CPU_SUBSYS_CTRL at `0x08000000` (§5.1.5).
 Its CPU0 registers have separate execution-state and reset-address roles:
@@ -54,84 +68,88 @@ Its CPU0 registers have separate execution-state and reset-address roles:
 | CLU0_RVBARADDR0_L | `0x08001004` | Low reset-address bits for AArch64 execution (§5.1.6.7) |
 | CLU0_RVBARADDR0_H | `0x08001008` | High reset-address bits for AArch64 execution (§5.1.6.8) |
 
-The pinned vendor BL31 selects AArch64 at helper `0xc298` and programs its
-warm-entry address through `0xc4a0`. The readable TF-A A733 port uses the same
-addresses, including core 0. SunstoneOS's `cpu_start.c` also selects AArch64
-before starting a core. These sequences corroborate the register map for
-AArch64; they do not extend it to AArch32.
+The Cortex-A55 TRM §B2.93 defines `RVBAR_EL3` as read-only, derived from the
+RVBARADDR inputs and describing AArch64 reset entry. The AArch32 reset vector
+instead depends on `SCTLR.V` and VINITHI (§B1.81). The pinned vendor BL31, the
+TF-A A733 port and SunstoneOS's `cpu_start.c` all select AArch64 before using
+these registers. An AArch32 warm reset therefore cannot be directed to a gate
+in DRAM, and the RAM proof uses no reset.
 
-The Cortex-A55 TRM §B2.93 defines architectural `RVBAR_EL3` as read-only,
-derived from RVBARADDR inputs and describing AArch64 reset entry. Its AArch32
-`SCTLR.V` reset value instead depends on VINITHI (§B1.81). The inspected sources
-do not establish a path from `RMR_EL3 = 2` to the gate at `0x41001000`.
-The launcher must not repeat this RAM proof on the strength of its RVBAR writes.
+## The RAM proof executes the gate from SRAM
 
-Existing returning images write RVBAR `0x20` and request AArch32 reset, but
-their FEL return does not prove that execution began at `0x20`. In the captured
-ROM, the instruction at offset zero branches to `0x44`, distinct from the
-forced-FEL entry at `0x20`. The inspected references do not establish the full
-AArch32 reset-vector selection or the board's VINITHI value. Source identities
-and these limits are in [the recovery inventory](../vendor-firmware/data/card-fel-recovery.json).
+On a card, the ROM loads the first stage into SRAM and runs it in AArch32 with
+the MMU off. The ROM's FEL execute command does the same for an uploaded image.
+A measured SRAM probe executed through that command at `0x52000` ran in
+AArch32 supervisor mode with SCTLR `0x00c51838`: MMU and data cache off,
+instruction cache on ([SRAM probe result](../boot.md#sram-probe-result)).
+The proof therefore uploads the gate to `0x52000` and executes it there.
 
-## The RAM-proof profile
+The proof ELF ([sources](../../apps/card-fel-recovery/)) contains two read-only
+loads: the exact gate bytes at `0x52000` and a 88-byte profile at `0x52400`.
+The profile names its version, the gate address and length, the RTC stage
+`0x0c02`, the final progress value 5 and the gate's SHA-256. The runner's
+admission ([tools/card_recovery.py](../../tools/card_recovery.py)) requires an
+AArch32 executable entered at `0x52000`, loads only inside
+`0x52000..0x52d80`, and gate bytes matching the profile hash. The packaged card
+first stage contains the same gate bytes. The profile has no storage, DRAM,
+clock or rail authority, and the runner initializes no DRAM.
 
-The queue profile admits one immutable ELF containing an AArch64 launcher,
-the exact position-independent AArch32 gate and a fresh nonce request. It
-checks ELF permissions and fixed reservations, the gate hash and its two
-mutable observation words. It grants no storage access.
+The runner sequence is as follows:
 
-After arming WDT0 in mode `0x41`, the runner sets and reads back the RTC request
-before launch. The launcher checks EL3, cache-off entry, the nonce, watchdog,
-request and acknowledged OFF secondaries with clear start requests. It changes
-no secondary policy. It publishes its report, enables the gate's RAM-only
-observation word, writes `0x41001000` to CPU0's AArch64-only RVBAR inputs and
-requests an AArch32 reset. That request does not establish entry into the gate.
+1. Reset the board to a fresh FEL instance and upload both loads with the
+   tool's `write` command.
+2. Clear the crumb words and arm WDT0 in mode `0x41` (a four-second interval).
+3. Write the session tag to `0x07090100` and the request to `0x07090108`, and
+   read both back.
+4. Execute `0x52000`.
 
-[The CPU OFF helpers](../../include/a733_cpu_off.h) define both register addresses
-and predicates for the launcher and resident start. PPU status has low bits zero;
-hotplug control and mode have bit 0 clear. Dynamic OFF requires policy and status
-`0x100`. Static OFF requires policy and status zero and control bit 1 set.
-The launcher's C admission uses one measured 16-byte frame in its owned stack
-at `0x41002020..0x41002030`; interrupts remain masked. Linked checks enforce
-the stack bounds on successful and refusing paths.
+The `write` command leaves the instruction cache enabled. The reviewed FEL
+tool, built with the A733 `icache_fix` patch, runs a helper before every
+register read or write command: it clears `SCTLR.I`, invalidates the
+instruction cache and returns. The request-arming command in step 3 is the
+last command before the execute command, so instruction fetch from the
+uploaded gate starts with the cache off. The gate also clears `SCTLR.I` and
+invalidates the instruction cache itself. The runner refuses any FEL binary
+other than the reviewed one and runs a frozen copy.
 
-Only the matching gate path disarms WDT0, clears the request, records completion
-and branches to ROM. In observation mode it also records `RETURN_ROM` with mode
-zero; the production gate preserves the preceding RTC stop/failure record.
-The runner requires a distinct usable FEL instance, no retained fault, matching
-nonce/report, consumed gate state, unchanged gate code, request zero and mode
-zero. A watchdog reset or any mismatch fails the proof and ends board access.
-There is no generic probe return epilogue after the gate.
-The host model keeps the request pending through the ISB and completes it at
-WFI, but then assumes that AArch32 execution starts at the programmed RVBAR.
-The register definitions do not support that assumption. Its linked checks
-therefore establish software behavior under a synthetic dispatch, not physical
-gate reachability. The compiled terminal-sequence checks and pending-reset
-case still establish the WFI loop and absence of later RTC writes.
+The gate's branch to `0x20` re-enters the ROM while the host's execute
+transaction is still open. In the captured ROM, the paths from `0x20` and from
+the reset vector at `0x44` meet at the same FEL routine (`0x2514`, called with
+`r0 = 0x7f`). Both then run the same clock and USB initialization and the FEL
+loop at `0x1061c`. Returning images reach FEL through the reset vector with the
+USB controller still configured, and each produces a new USB instance. The
+runner therefore treats a failed or timed-out execute transaction as the
+expected disconnect. It accepts that only for this execute command, after the
+command has started, with the watchdog and request armed. It sends no further
+request to the old instance and waits for a new one. If no new instance
+appears, the board remains in the ROM with WDT0 disarmed and needs a power
+cycle.
 
-Each launcher refusal records stage `0x0c01` and a distinct guard code from
-[the refusal definitions](../../apps/card-fel-recovery/refusal.h). Values
-`0x100+c` through `0x600+c` identify core `c` OFF status, control request,
-mode request, policy, policy acknowledgment and static wake hold.
-The raw sampled value occupies ESR/ELR as low/high words. FAR contains the source
-address with bit 31 marking this format; source zero denotes a system register.
-Payload stores and a DSB precede publication of LAST. The launcher preserves an
-existing fault and its payload. The decoder names the guard, core, source and
-sample only when the format marker is present and no fault owns those words.
+After the new instance appears, the runner reads `0x07090108` and the retained
+crumb words. Acceptance requires the request zero, LAST `0x0c020005`, the
+matching session tag, no fault word, WDT0 mode zero before and after capture,
+and no watchdog reset. A watchdog reset or any other receipt fails the proof
+and quarantines the board. The ROM's FEL entry clears SRAM `0x44000..0xf4000`,
+so the runner reads no SRAM after the return.
 
-Gate refusal values are `0x80+r`, where
-`r=0,1,2,3,6` identifies a missing request, local entry, redirects, watchdog
-contract or disarm readback. Those gate crumbs exist only in observation mode.
-The ordinary gate preserves earlier fault and stop records.
+The host checks execute the actual gate bytes at `0x52000` and at the card
+location `0x83000`, with the instruction cache on and off
+(`checks/card-fel-recovery.py`). They cover each refusal, both readback
+failures, omitted stores, the cold path and the tool's cache helper.
+`checks/board-runner.py` models the execute disconnect, the timeout, the
+ordering of uploads, arming and execution, and each invalid receipt.
 
 The session budget is 60 seconds, with `finish_by` 55 seconds and a 3-second
-native progress window. The worked allocation is preparation 25 seconds,
-upload 5 seconds, request arming 0.25 seconds, native execution 0.05 seconds,
-ROM enumeration 10 seconds and capture 2 seconds: 42.30 seconds total.
-That leaves 12.70 seconds before `finish_by` and 17.70 seconds in the session.
-Arming plus native execution consumes 0.30 seconds of the 4-second watchdog
-interval; native progress consumes at most 0.05 seconds of its 3-second window.
-These are test budgets, not measured cold-boot latency.
+native progress window. The worst-case allocation is preparation and reset
+25 seconds, upload 5 seconds, watchdog and request arming 0.5 seconds, gate
+execution under 0.001 seconds, the end of the execute transaction 10 seconds
+(the FEL tool's USB timeout when no disconnect error arrives first), ROM
+enumeration 10 seconds and capture 2 seconds: 52.5 seconds. That leaves
+2.5 seconds before `finish_by` and 7.5 seconds in the session. The last physical
+run of the earlier DRAM-based recovery image, which also trained DRAM, took
+10.3 seconds in total. The gate disarms WDT0 within microseconds of entry, inside the 4-second
+watchdog interval, and records its last progress well inside the 3-second
+window. These are test budgets, not measured cold-boot latency.
 
 ## Integration after the proof
 
@@ -172,7 +190,7 @@ The early gate is packaged with the pinned boot0 by changing only its initial
 branch, header length/checksum and appended gate sector. The normal path keeps
 the vendor setup and loader. Its stock package location remains unchanged;
 the FAT32 loader and below-sector-2048 installation are subsequent work.
-The gate occupies 424 bytes; the packaged first stage is 246,272 bytes
+The gate occupies 444 bytes; the packaged first stage is 246,272 bytes
 (sectors 16..496). The current installer's 480-sector boot0 range ends at
 495 and does not authorize that extra sector. No installation plan is emitted.
 

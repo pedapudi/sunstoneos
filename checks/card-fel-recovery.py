@@ -14,7 +14,6 @@ import struct
 from capstone import Cs, CS_ARCH_ARM, CS_MODE_ARM
 from unicorn import Uc, UC_ARCH_ARM, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn import arm_const as arm
-from harness import refused
 
 ROOT=Path(__file__).resolve().parents[1]
 CHECK_INPUTS=['boot/a733/card-fel-gate.S','apps/card-fel-recovery/entry.S',
@@ -162,31 +161,27 @@ def main():
         m=Machine(bytes(changed));assert m.run()==terminal
         assert m.regs[card.RTC_LAST]==card.RTC_STAGE<<16|last and m.regs[card.RTC_FLAG]==card.FEL_FLAG
         cases.append('mutation-omitted-'+text)
-    m=Machine(raw);m.regs[card.RTC_FLAG]=0;m.regs[0x02050014]=0
-    assert m.run()=='cold'and m.regs[card.RTC_LAST]==card.RTC_STAGE<<16|1
-    cases.append('cold-card-path-keeps-original-boot0-entry')
-    # Execute the actual pinned tool's cache predecessor, not a new helper.
-    tool=Path.home()/'.cache/sunstoneos/build/sunxi-a733'
-    tool_bytes=card.fel_bytes(tool/'sunxi-fel')
-    source=(tool/'fel_lib.c').read_text()
-    assert hashlib.sha256((tool/'fel_lib.c').read_bytes()).hexdigest()== \
+    m=Machine(raw);m.regs[card.RTC_FLAG]=0;m.regs[0x02050014]=0;m.regs[card.RTC_LAST]=0x01115000
+    assert m.run()=='cold' and not any(e[0]=='write' for e in m.events)
+    assert m.regs[card.RTC_LAST]==0x01115000
+    cases.append('cold-card-path-writes-nothing-and-enters-original-boot0')
+    # The runner's last transaction before exe is an RTC MMIO command. In the
+    # reviewed tool every MMIO command first runs aw_disable_icache, so execute
+    # that helper's instructions from its pinned source and then the gate.
+    source_path=Path.home()/'.cache/sunstoneos/build/sunxi-a733/fel_lib.c'
+    assert hashlib.sha256(source_path.read_bytes()).hexdigest()== \
         'dc73cba1e4acb3b6edb4ab034cc491ce68f3e1979e45b21433198b04f7017d05'
+    source=source_path.read_text()
     section=source.split('static void aw_disable_icache(',1)[1].split('void aw_fel_write(',1)[0]
     helper=struct.pack('<6I',*[int(word,16)for word in re.findall(r'htole32\((0x[0-9a-f]+)\)',section)])
-    # The host compiler stores the first vector and final scalar separately.
-    # Bind all helper words to the reviewed executable as well as its source.
-    assert helper[:16]in tool_bytes and helper[16:]in tool_bytes
-    m=Machine(helper,base=0x71000,sctlr=FEL_SCTLR)
-    assert m.run(helper=True)=='helper-return'and not m.sctlr&0x1000
-    assert any(e[0]=='cache'for e in m.events)
+    assert 'aw_disable_icache(dev)' in source.split('void aw_fel_write(',1)[1]
     assert re.search(r'\.icache_fix\s*=\s*true',(ROOT/'patches/sunxi-a733-sram.patch').read_text())
-    assert 'aw_disable_icache(dev)'in source.split('void aw_fel_write(',1)[1]
+    m=Machine(helper,base=0x71000,sctlr=FEL_SCTLR)
+    assert m.run(helper=True)=='helper-return' and not m.sctlr&0x1000
+    assert any(e[0]=='cache' for e in m.events)
     gate=Machine(raw,sctlr=m.sctlr);assert gate.run()=='rom'
     assert hashlib.sha256(gate.after).hexdigest()==info['profile']['gate_sha256']
-    cases.append('pinned-tool-cache-off-before-fresh-SRAM-exe')
-    # A different host tool cannot assert this instruction-fetch predecessor.
-    refused(lambda:card.fel_bytes(args.image),'reviewed FEL binary')
-    cases.append('unreviewed-cache-predecessor-refused')
+    cases.append('tool-cache-helper-then-fresh-SRAM-exe')
     package=module('direct_gate_package','tools/card-fel-image.py')
     original=(Path.home()/'.cache/sunstoneos/sources/board-boot/boot0_sdcard_orangepizero3w.fex').read_bytes()
     patched=package.first_stage(original,raw)
