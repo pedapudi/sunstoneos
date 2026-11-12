@@ -5,6 +5,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import struct
 import subprocess
 from harness import CLANG, environment, refused
 
@@ -32,8 +33,29 @@ def main():
     elf = link.Elf(args.image.read_bytes())
     def check(image, object_path=obj):
         return link.application_symbols(image, [object_path], [], [], '/usr/bin/llvm-nm-21')
-    check(elf)
-    cases = ['public-header-lifetime-reference']
+    assert not any(section[5] for name, section in zip(elf.names, elf.sections)
+                   if name == 'sunstone_manifest'), 'fixture must be an OS image without an application'
+    result = check(elf)
+    assert result['region_initializers'] == 0
+    cases = ['empty-os-without-application-manifest', 'public-header-lifetime-reference']
+    # With no application, an initializer has no valid region index even when
+    # the object inventory and immutable section bounds agree with its bytes.
+    initializer = args.output / 'initializer.c'
+    initializer.write_text('__attribute__((used,section("sunstone_region_initializers"),aligned(8)))\n'
+                           'const struct {unsigned index,reserved;unsigned long size;} init={0,0,8};\n')
+    initializer_obj = args.output / 'initializer.o'
+    subprocess.run([str(CLANG), '--target=aarch64-none-elf', '-O2', '-ffreestanding',
+                    '-c', str(initializer), '-o', str(initializer_obj)], check=True, capture_output=True)
+    changed = copy.deepcopy(elf)
+    section_index = changed.names.index('sunstone_region_initializers')
+    section = list(changed.sections[section_index])
+    section[4], section[5] = len(changed.data), 16
+    changed.sections[section_index] = tuple(section)
+    changed.data += struct.pack('<IIQ', 0, 0, 8)
+    stop = next(s for s in changed.symbols if s['name'] == '__stop_sunstone_region_initializers')
+    stop['value'] = section[3] + 16
+    refused(lambda: check(changed, initializer_obj), 'region initializer index', kind=AssertionError)
+    cases.append('initializer-without-manifest-refused')
     sealed = next(s['value'] for s in elf.symbols if s['name'] == 'os_sealed')
     for name, field, value in (
             ('session-word', 'value', sealed),

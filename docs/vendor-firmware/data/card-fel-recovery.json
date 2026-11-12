@@ -12,6 +12,16 @@
         "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/arch/arm/mach-sunxi/rtc.c"
       },
       {
+        "path": "arch/arm/mach-sunxi/board_sun60iw2.c",
+        "sha256": "86494718af3609e2d11b53fc9ed7f8560398a0b5db3199e7d1128fe042b36e9b",
+        "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/arch/arm/mach-sunxi/board_sun60iw2.c"
+      },
+      {
+        "path": "drivers/sunxi_power/pmu_axp8191.c",
+        "sha256": "e6faa518a123c374b8f9148327f5e4aeeb2d89eb2bc3e91dae9a35e06d964c59",
+        "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/drivers/sunxi_power/pmu_axp8191.c"
+      },
+      {
         "path": "board/sunxi/board_common.c",
         "sha256": "d6112215cca4d8e365261bdb9e8130d9e656cc502039f276a684265b6d5881cf",
         "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/board/sunxi/board_common.c"
@@ -62,13 +72,25 @@
     "url": "https://gitlab.com/api/v4/projects/71118510/repository/files/A733%2FHardware%E7%A1%AC%E4%BB%B6%E7%B1%BB%E6%96%87%E6%A1%A3%2F%E8%8A%AF%E7%89%87%E6%89%8B%E5%86%8C%2FA733_User%20Manual_V1.00.pdf/raw?ref=d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
     "revision": "d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
     "sha256": "cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d",
-    "section": "9.1.7.14, general-purpose registers",
+    "section": "4.2.4 PRCM inventory; 8.3.6.2 watchdog IRQ; 9.1.6 RTC inventory; 9.1.7.14 general-purpose registers; 9.1.7.16 reset status; 9.1.7.21 POR control",
     "condition": "Retained while VDD_RTC > 0.7 V; power-removal retention is not established."
   },
   "request": {
     "address": "0x07090108",
     "value": "0x5aa5a55a",
     "normal_boot_value": 0
+  },
+  "reset_cause": {
+    "status": "No retained A733 power-on-versus-warm reset cause is established by the inspected sources.",
+    "policy": "Only confirmed cold power-on or an explicit one-use OS card-reboot request may permit card boot; without that request, warm, watchdog and unknown resets must select FEL.",
+    "implementation": "Installation work remains blocked on the reset-cause predicate; the request-only RAM proof does not implement it.",
+    "excluded_indications": {
+      "0x07090160 bit 13": "Current reset assertion level, not preceding cause; manual 9.1.7.16.",
+      "0x070901f4 bit 3": "POR reset output enable, not cause; manual 9.1.7.21.",
+      "0x02050004 bit 0": "Interval interrupt pending, write-one-to-clear; retention across reset is unspecified; manual 8.3.6.2.",
+      "0x07090304": "ROM software progress; captured-ROM offsets 0x7c..0xc4 and helper 0xd14.",
+      "AXP8191 0x50 bits 0..2": "U-Boot pmu_axp8191.c:544..570 decodes supply-rise, button and IRQ power sources; no established SoC warm/watchdog distinction or reset/clear semantics."
+    }
   },
   "limits": [
     "The ROM does not consume the RTC request; boot0 or the early gate does.",

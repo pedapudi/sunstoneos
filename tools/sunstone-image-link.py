@@ -326,7 +326,9 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_ex
             assert flags == 13 and i == len(large_records) - 1, 'large region heap record %d' % i
     initializers = admitted['sunstone_region_initializers']
     assert len(initializers) % 16 == 0 and len(initializers) <= 8 * 16, 'region initializer extent'
-    regions = application_manifest(elf)['regions']
+    # An empty OS image has no application manifest or initializer indices.
+    # Nonempty manifest sections still go through the complete decoder above.
+    regions = application_manifest(elf)['regions'] if manifests else []
     seen = set()
     for index, reserved, size in struct.iter_unpack('<IIQ', initializers):
         assert not reserved and index < len(regions) and index not in seen, 'region initializer index'

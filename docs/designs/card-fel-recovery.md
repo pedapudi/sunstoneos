@@ -79,6 +79,32 @@ These are test budgets, not measured cold-boot latency.
 
 ## Integration after the proof
 
+Autonomous card boot is permitted only after a confirmed cold power-on. Every
+warm reset, including watchdog expiry, must enter FEL unless the OS explicitly
+requests a card reboot. That request must authorize one boot and be consumed
+before the OS starts. An absent FEL request does not authorize card boot.
+Without an explicit reboot request, an unknown reset cause must select FEL,
+so a hung OS cannot create a card-boot loop.
+
+The reset-cause predicate remains unresolved. The pinned A733 manual's PRCM
+register inventory (§4.2.4) and RTC register inventory (§9.1.6) identify no
+retained power-on-versus-warm reset cause. RTC `0x07090160[13]` reports the
+current reset level (§9.1.7.16); `0x070901f4[3]` enables the POR reset output
+(§9.1.7.21). Neither records the preceding reset. WDT `0x02050004[0]` is an
+interval-interrupt pending bit, and RTC `0x07090304` is ROM software progress;
+[the reset audit](../watchdog-reset-evidence.md) explains those exclusions.
+
+The pinned U-Boot's `arch/arm/mach-sunxi/rtc.c` implements software boot requests,
+and `board_sun60iw2.c` issues the watchdog software-reset command without
+reading a cause latch.
+Its AXP8191 driver decodes PMIC register `0x50[2:0]` as supply-rise, button and
+IRQ power sources. The inspected code does not establish that field's retention
+or clearing semantics, or that it distinguishes an SoC warm reset from power-on.
+The source identities are in [the recovery inventory](../vendor-firmware/data/card-fel-recovery.json).
+Installation requires an A733-specific reset indication, its retention and
+clearing rules, and an audit of ROM consumption before the gate reads it.
+The current request-only RAM proof does not implement this cold-only policy.
+
 The card runner must set the request before execution that could reset through
 a bootable card. A card-aware OS must set it before an expected watchdog stop
 and verify the write before parking. Its admission and renewal predicates must
