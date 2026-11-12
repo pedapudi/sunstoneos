@@ -61,7 +61,7 @@ Designs: [platform](../designs/npu-platform.md), [fast path](../designs/npu-fast
 Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` records hold the results that earlier status prose described. Earlier prose evidence is in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-97 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+98 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -162,4 +162,5 @@ Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` recor
 | `1794505489803680032-17215a28` | 2026-11-12 | 3-3 | `a679a23affb9` | returned | passed | run_total 130.625 s, frames 512 frames, compute_time 308357 µs, load_time 93824 µs, layers_time 287097 µs, subsampling_tiles_time 61999 µs, npu_job_wait 195677 µs, cpu_copy_and_convert 73332 µs, copy_entry_outputs 5047 µs, copy_steps 59162 µs, jobs 772 jobs, saturated_codes 0 codes, counted_codes 1.76864e+07 codes, npu_prepare_time 83555 µs, npu_prepare_layout 39552 µs, npu_prepare_native 24423 µs, npu_graph_bytes 1.58775e+07 bytes, npu_graphs 145 graphs, npu_range 5.66231e+07 bytes, launch_stage 115.39 s |
 | `1794506252076994875-247497f5` | 2026-11-12 | 3-3 | `a9e1c5345580` | watchdog-reset | failed | run_total 33.179 s |
 | `1794506933827430720-5ffeeae8` | 2026-11-12 | 3-3 | `a735d49c4236` | returned | failed | run_total 32.181 s, entry_p50 768.5 us, step_p50 229.7 us, output_p50 219.8 us, convolution_p50 173.5 us, final_p50 320.4 us, subsampling_p50 14622.9 us, graph_mul_p50 10.8 us, graph_mul_pipelined 9.7 us, graph_sh_pad_p50 4.3 us, idle_wait_max 0.25 us |
+| `1794507437019165469-02ac874c` | 2026-11-12 | 3-3 | `beee74a6d316` | returned | passed | run_total 22.442 s, step_q64_p50 229.9 us, step_q64_pipelined 228 us, step_q128_p50 581.7 us, step_q128_pipelined 580.1 us, step_total_q64_512 117.7 ms, step_total_q128_512 148.9 ms |
 <!-- evidence-table:end -->
