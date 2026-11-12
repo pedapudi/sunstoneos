@@ -9,7 +9,7 @@ from pathlib import Path
 import struct
 import subprocess
 import sys
-from harness import CLANG, environment, refused
+from harness import CLANG, LLD, environment, refused
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('session_host', ROOT / 'apps/os/host.py')
@@ -149,11 +149,27 @@ def main():
         struct.pack_into(form, altered, result_offset + offset, value)
         refused(lambda: host.result_geometry(altered), reason)
         cases.append(name)
-    card.flat_runtime(image_raw)
+    refused(lambda: card.flat_runtime(image_raw), 'AArch64 executable at the slot entry')
+    cases.append('host-executable-is-not-a-card-runtime')
+    # A real AArch64 executable supplies the runtime geometry fixture; the
+    # host executable above exists only to run the application's C producer.
+    runtime_source = out / 'runtime.S'
+    runtime_source.write_text('.global _start\n.text\n_start: b .\n.bss\n.space 64\n')
+    runtime_object, runtime_image = out / 'runtime.o', out / 'runtime.elf'
+    runtime_link = out / 'runtime.ld'
+    runtime_link.write_text('ENTRY(_start)\nPHDRS {code PT_LOAD FLAGS(5); data PT_LOAD FLAGS(6);}\n'
+                            'SECTIONS {. = 0x41000000; .text : {*(.text*)} :code '
+                            '. = 0x41001000; .bss (NOLOAD) : {*(.bss*)} :data}\n')
+    run(CLANG, '--target=aarch64-none-elf', '-c', runtime_source, '-o', runtime_object)
+    run(LLD, '-T', runtime_link, runtime_object, '-o', runtime_image)
+    runtime_raw = runtime_image.read_bytes()
+    runtime_elf = host.image_manifest(runtime_raw)['elf']
+    card.flat_runtime(runtime_raw)
     # Mutate an actual load segment into a BSS-only reserved-memory collision.
-    load_index = next(index for index, segment in enumerate(elf.iter_segments()) if segment['p_type'] == 'PT_LOAD')
-    altered = bytearray(image_raw)
-    offset = elf['e_phoff'] + load_index * elf['e_phentsize']
+    load_index = next(index for index, segment in enumerate(runtime_elf.iter_segments())
+                      if segment['p_type'] == 'PT_LOAD' and not segment['p_filesz'])
+    altered = bytearray(runtime_raw)
+    offset = runtime_elf['e_phoff'] + load_index * runtime_elf['e_phentsize']
     struct.pack_into('<Q', altered, offset + 16, 0x41eff000)
     struct.pack_into('<2Q', altered, offset + 32, 0, 0x2000)
     refused(lambda: card.flat_runtime(altered), 'no load segment')

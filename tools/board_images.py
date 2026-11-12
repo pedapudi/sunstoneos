@@ -278,6 +278,11 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
     descriptor = descriptor or {}
     if descriptor:
         require(descriptor.get('image_sha256') == sha(image), 'Image descriptor hash differs.')
+    if 'a733_card_fel_profile' in names:
+        require(kind == 'probe', 'Card FEL recovery uses --kind probe.')
+        recovery = load('card_fel_recovery_contract', ROOT/'tools/card_recovery.py').inspect(image)
+        return {'symbols': names, 'watchdog': recovery['watchdog'], 'generic': False, 'entry_guard': False,
+                'descriptor': descriptor, 'card_fel_recovery': recovery, 'usb_class': False}
     if 'usb_vbus_probe_profile' in names:
         profile = symbol_bytes(image, 'usb_vbus_probe_profile')
         require(profile in [struct.pack('<3Q', 0x3153554256535355, 1, mode) for mode in (0, 1, 10)],
@@ -434,6 +439,15 @@ def policy(info, args, session=None):
     # and an image without an SD core pass unchanged; any other image, and any write request, needs
     # the coordinator's approval record for the exact bounds.
     bounds = load('storage_bounds', ROOT/'tools/storage_bounds.py')
+    if info.get('card_fel_recovery'):
+        require(approved and args.kind == 'probe', 'Card FEL recovery requires --approved-by coordinator.')
+        require(not args.input and not getattr(args, 'decoder', None),
+                'Card FEL recovery takes only its generated request and fixed result decoder.')
+        require(not storage and not d.get('storage_bounds') and not d.get('storage_scratch') and
+                bounds.classify(args.image) == 'no-core', 'Card FEL recovery must have no SD core or storage-write authority.')
+        require(not d.get('operating_points') and getattr(args, 'restore_rails', None) is not True,
+                'Card FEL recovery carries no clock, rail or power transition authority.')
+        require(not preserving(args), 'Card FEL recovery is a RAM-only development proof without DRAM preservation.')
     if storage or bounds.classify(args.image) == 'write-capable':
         bounds.admit(d, args, sha(args.image))
     # The reviewed operating points are data (tools/cpu-reviewed-points.json, protected), shared with tools/session.py.
@@ -527,6 +541,8 @@ def prepare(args, info, live, out, *, dma_binding=None):
         return dict(meta, uploads=uploads, launch=['exe','0x52000'], format='npu', finite=finite)
     if info.get('native_probe'):
         return load('prepare_native_probe', ROOT/'tools/board_probe.py').prepare(args.image,info['native_probe'],args.input,out)
+    if info.get('card_fel_recovery'):
+        return load('prepare_card_fel_recovery', ROOT/'tools/card_recovery.py').prepare(info['card_fel_recovery'],args.input,out)
     dev = load('runner_dev', ROOT / 'tools/board_state.py')
     base = load('runner_base', ROOT / 'tools/check-a733-smp.py')
     tree = args.host_tree or ROOT
@@ -774,6 +790,8 @@ def write(path, data):
 
 
 def capture(owner, plan, args):
+    if plan.get('format') == 'card-fel-recovery':
+        return load('capture_card_fel_recovery', ROOT/'tools/card_recovery.py').capture(owner, plan)
     out = owner.evidence
     if plan['format'] == 'npu':
         finite = plan['finite']

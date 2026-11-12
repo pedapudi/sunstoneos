@@ -162,6 +162,7 @@ def plan(value=None, changed=None, index=None):
         self.assertEqual([c[0] for c in calls], ['cfg.sh', 'cmake', 'python'])
         # The OS-core build overrides the EXAMPLE_DIR that cfg.sh passes.
         self.assertEqual(calls[0][-1], '-DEXAMPLE_DIR=')
+        self.assertIn('-DPython3_EXECUTABLE=' + str(self.sandbox / 'venv/bin/python'), calls[0])
         self.assertEqual(calls[1][calls[1].index('--target') + 1:], ['kernel-check', '-j', '12'])
         self.assertEqual(calls[2][1], 'tools/check-kernel.py')
 
@@ -173,9 +174,11 @@ def plan(value=None, changed=None, index=None):
         self.assertEqual([c[0] for c in calls], ['cfg.sh', 'cmake', 'cfg.sh', 'cmake', 'python', 'python'])
         core = self.sandbox / 'build' / ('gate-central-' + self.tree(self.source))
         example = self.sandbox / 'build' / ('gate-example-' + self.tree(self.source))
-        self.assertEqual(calls[0][1:], [str(self.source), str(core), '-DSUNSTONE_APPLICATION=', '-DSUNSTONE_EXTERNAL_APPLICATIONS=', '-DEXAMPLE_DIR='])
+        python_option = '-DPython3_EXECUTABLE=' + str(self.sandbox / 'venv/bin/python')
+        self.assertEqual(calls[0][1:], [str(self.source), str(core), '-DSUNSTONE_APPLICATION=', python_option,
+                                      '-DSUNSTONE_EXTERNAL_APPLICATIONS=', '-DEXAMPLE_DIR='])
         self.assertEqual(calls[1][calls[1].index('--target') + 1:], ['kernel-check', '-j', '12'])
-        self.assertEqual(calls[2][1:], [str(self.source), str(example), '-DSUNSTONE_EXTERNAL_APPLICATIONS=', '-DEXAMPLE_DIR=',
+        self.assertEqual(calls[2][1:], [str(self.source), str(example), python_option, '-DSUNSTONE_EXTERNAL_APPLICATIONS=', '-DEXAMPLE_DIR=',
                                       '-DSUNSTONE_EXTERNAL_APPLICATIONS=' + str(self.example),
                                       '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=example'])
         self.assertEqual(calls[3][calls[3].index('--target') + 1:],

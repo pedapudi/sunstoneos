@@ -14,6 +14,9 @@ FIXTURES = {
 }
 
 IMAGES = {
+    'card-fel-recovery': {'configure': [
+        '-DSUNSTONE_A733_CARD_FEL_RECOVERY=ON',
+    ], 'target': 'a733-card-fel-recovery', 'elf': 'a733-card-fel-recovery.elf'},
     'ret-walks-uncached': {'configure': [
         '-DSUNSTONE_APPLICATION=table-walks', '-DSUNSTONE_A733_TABLE_WALKS=uncached',
     ], 'target': 'sunstone-a733-os-table-walks', 'elf': 'sunstone-a733-os-table-walks.elf'},
@@ -23,6 +26,10 @@ IMAGES = {
     'resident-stop': {'configure': [
         '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=hello-compute',
         '-DSUNSTONE_A733_OS_RESIDENT_STOP_ON_FINISH=ON',
+    ], 'target': 'sunstone-a733-os-hello', 'elf': 'sunstone-a733-os-hello.elf'},
+    'card-profile': {'configure': [
+        '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=hello-compute',
+        '-DSUNSTONE_A733_OS_RESIDENT_STOP_ON_FINISH=OFF',
     ], 'target': 'sunstone-a733-os-hello', 'elf': 'sunstone-a733-os-hello.elf'},
     # the returning NPU image of apps/cpu-npu-concurrency (apps/cpu-npu-concurrency/README.md)
     'ret-npu-load': {'configure': [
