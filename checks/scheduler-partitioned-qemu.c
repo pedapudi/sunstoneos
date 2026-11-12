@@ -245,10 +245,6 @@ void ss_kernel_test_direct_suspend_mark(unsigned cpu)
         __atomic_store_n(&freeze_test, 2, __ATOMIC_RELEASE);
     }
 }
-void ss_kernel_test_control_wait(TaskHandle_t target)
-{
-    configASSERT(target != shield_self_target || shield_self_phase != 8);
-}
 void ss_kernel_test_after_control_batch(unsigned cpu)
 {
     if (cpu == 0 && __atomic_load_n(&abort_phase, __ATOMIC_ACQUIRE) == 1 &&
@@ -778,6 +774,7 @@ static void shield_self_verify(void)
     configASSERT((ss_kernel_test_task_state(shield_self_target) & 40) == 40);
     shield_self_phase = 8;
     vTaskResume(shield_self_target);
+    configASSERT(shield_self_phase == 9 || !(ss_kernel_test_suspension(shield_self_target) & SS_CONTROL_SELF));
     for (unsigned wait = 0; wait < 200 && shield_self_phase != 9; ++wait) vTaskDelay(1);
     configASSERT(shield_self_phase == 9);
     for (unsigned wait = 0; wait < 200 && eTaskGetState(shield_self_target) != eDeleted; ++wait) vTaskDelay(1);

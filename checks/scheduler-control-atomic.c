@@ -144,11 +144,14 @@ static void suspension_sources(void)
     assert(ss_control_resume_isr(&control, 0));
     ss_control_publish(&control, 0, suspend, NULL);
     unsigned flags = ss_control_suspension(&control, 0);
-    assert((flags & (SS_CONTROL_SUSPENDED | SS_CONTROL_SELF | SS_CONTROL_SELF_FRAME)) ==
-           (SS_CONTROL_SUSPENDED | SS_CONTROL_SELF_FRAME));
+    assert(flags == (SS_CONTROL_SUSPENDED | SS_CONTROL_OFFCPU | SS_CONTROL_SELF_FRAME | SS_CONTROL_REMOTE_FRAME));
+    assert(ss_control_resume_isr(&control, 0));
+    assert(ss_control_suspension(&control, 0) ==
+           (SS_CONTROL_OFFCPU | SS_CONTROL_SELF_FRAME | SS_CONTROL_REMOTE_FRAME));
     offcpu = true;
     uint64_t first[2] = {0};
     assert(drain(first) == 1 && !atomic_load(&descriptor[0].references));
+    assert(!ss_control_suspension(&control, 0));
     initialize();
     ss_control_publish(&control, 0, suspend, NULL);
     assert(ss_control_resume_isr(&control, 0));

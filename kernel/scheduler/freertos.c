@@ -2157,10 +2157,6 @@ static void ssKernelControlDrain(void)
 }
 static void ssKernelWait(unsigned slot, uint64_t sequence, uint64_t incarnation)
 {
-#ifdef SS_KERNEL_TEST_ADMIN_ENTER
-    extern void ss_kernel_test_control_wait(TaskHandle_t) __attribute__((weak));
-    if (ss_kernel_test_control_wait) ss_kernel_test_control_wait(ssKernelTasks[slot].ready.context);
-#endif
     while (!ss_control_applied(&ssKernelControl, slot, sequence) &&
            atomic_load_explicit(&ssKernelCleanupCompleted[slot], memory_order_acquire) < incarnation) {
         /* Re-enter this CPU's owner with API IRQs excluded, including after a
