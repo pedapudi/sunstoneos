@@ -45,6 +45,11 @@ elseif(SUNSTONE_APPLICATION STREQUAL "rtc-alarm")
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/rtc-alarm/main.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/rtc-alarm/manifest.json")
   add_sunstone_image(sunstone-a733-os-rtc-alarm LIFETIME ${os_lifetime} APPLICATION rtc-alarm)
+elseif(SUNSTONE_APPLICATION STREQUAL "rtc-crystal")
+  add_sunstone_application(rtc-crystal
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/rtc-crystal/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/rtc-crystal/manifest.json")
+  add_sunstone_image(sunstone-a733-os-rtc-crystal LIFETIME ${os_lifetime} APPLICATION rtc-crystal)
 elseif(SUNSTONE_APPLICATION STREQUAL "memcpy-bench")
   add_sunstone_application(memcpy-bench
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/memcpy-bench/main.c"
