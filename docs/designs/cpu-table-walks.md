@@ -160,9 +160,10 @@ check; the dirty-line experiment bounds later ones.
 
 When `a733_dram_decode_check()` returns 1 in `memory.c`, the builder maps DRAM
 above the boot image at EL1 as write-back memory with `A733_EL1_DRAM_BLOCK`. It uses 2 MiB level-2 blocks for `0x48000000`–`0x79000000` (unless the extended device-memory layout already maps it) and 1 GiB level-1 blocks for
-`0x80000000` up to `A733_DRAM_MAP_END` (`0x3_4000_0000`). EL3 entries stay
-invalid, except the blocks that an OS image's work and output regions need for
-the return path. A mapped write-back block receives speculative reads, so the
+`0x80000000` up to `A733_DRAM_MAP_END` (`0x3_4000_0000`). OS images also map
+the decoded DRAM at EL3 as Normal non-cacheable memory, so return cleanup can
+reach device-visible regions chosen at runtime. Other images leave those
+EL3 entries invalid. A mapped write-back block receives speculative reads, so the
 check runs at EL3 on every boot, rather than reading a retained word that an
 earlier boot could have left. The default definition in `memory.c` is weak and
 returns 0, so no entry above the boot image is written. An image that sets
