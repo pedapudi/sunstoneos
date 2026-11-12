@@ -12,6 +12,13 @@ extern void *memcpy(void *,const void *,size_t);
 #define ISB() __asm__ volatile("isb" ::: "memory")
 #define CC_ENABLE (UINT64_C(1) << 31)
 #define DEPTHS (configUNIQUE_INTERRUPT_PRIORITIES + 1u)
+/* The A733 configuration defines the SGI value in FreeRTOSConfig.h. The QEMU
+ * model relies on the port's default in port.c, which this file cannot see, so
+ * the same default (target-list bit, Aff1 zero) is repeated here. */
+#ifndef portSGI1R_VALUE
+#define portSGI1R_VALUE(interrupt, core) \
+    ((uint64_t)(((1UL << (core)) & 0xFFFFu) | (((uint64_t)(interrupt) & 0xFu) << 24u)))
+#endif
 _Static_assert(configNUMBER_OF_CORES == SS_LATENCY_CAUSE_CORES, "cause topology");
 _Static_assert(portTASK_REGISTER_EL1_BIT == 56, "cause task tag");
 struct sgi_scope {
