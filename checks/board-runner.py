@@ -210,6 +210,10 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
                    for o,v in ((0,board.state.BOOT_PLL[d]),(0x1c,board.state.BOOT_MUX[d]))}
             if variant=='restore-clock':words['0x8871000']=0
             return {'words':words}
+        def observe_return_power(self,phase):
+            super().observe_return_power(phase)
+            if variant=='resident-cleanup':
+                self.record['cleanup_failure']='injected returned USB source cleanup failure'
         def prepare(self,info):
             if dirty:self.record[dirty]=True
             plan={'epoch':1,'generation':2,'watchdog':{'mode':0xb1,'session_seconds':1},
@@ -245,7 +249,8 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
 def resident_cases(out):
     """A resident test succeeds only at its declared retained stop, never by reading DRAM."""
     for variant in ('resident-stop', 'resident-stale', 'resident-wrong-status', 'resident-wrong-stage',
-                    'resident-secondary', 'resident-fault', 'resident-failure', 'resident-malformed-fault', 'resident-normal'):
+                    'resident-secondary', 'resident-fault', 'resident-failure', 'resident-malformed-fault',
+                    'resident-cleanup', 'resident-normal'):
         result, model, owner = lifecycle(out/variant, variant, resident=True)
         expected = variant == 'resident-stop'
         assert board.result_passed(result) == expected, (variant, result)
@@ -256,6 +261,9 @@ def resident_cases(out):
                        for c in model.calls[model.calls.index(['exe', '0x52000'])+1:])
         if expected:
             assert result['first_failure'] is None and not owner.armed and not model.quarantined
+        if variant=='resident-cleanup':
+            assert result['breadcrumbs']['last']['stage']==board.crumbs.EL3_STOP
+            assert result['breadcrumbs']['last']['value']==0x5000 and result['cleanup_failure']
         passed(variant)
     # The same retained stop under another lifetime remains a failed watchdog run.
     result, _, _ = lifecycle(out/'returning-resident-stop', 'resident-stop')
