@@ -464,6 +464,14 @@ struct ss_usb_decoded_frame {
  * Retain token until this call returns 1 or -1. Output stays read-only and
  * retained for the image lifetime. 0 pending; -1 refused or failed. */
 int ss_usb_camera_decode(uint64_t token, struct ss_usb_decoded_frame *frame);
+/* Create a task of the application: it runs in the application's address space, from its first instruction, whichever
+ * task or hook creates it. Same arguments as FreeRTOS xTaskCreateStaticAffinitySet (the stack is a StackType_t array, the
+ * control block a StaticTask_t, the priority and affinity UBaseType_t); returns the TaskHandle_t, or null when the creation
+ * is refused. The init hook of the application, which runs before the scheduler, must use this call: a task made there by a
+ * direct FreeRTOS call has no space to take, and the OS fails the session with detail 0x7a1 at the creation. A task that a
+ * running application task creates with a direct FreeRTOS call still takes its creator's space. */
+void *ss_task_create_static_affinity_set(void (*entry)(void *), const char *name, uint32_t stack_words, void *arg,
+                                         unsigned long priority, void *stack, void *tcb, unsigned long affinity);
 /* Copy the result into the OS result record and end this application. In a
  * returning lifetime the OS then returns to the host; in the resident
  * lifetime the record stays readable over the host channel. Refused

@@ -254,3 +254,9 @@ QEMU execution traces and the golden comparison (record `memory-map-12g-qemu` in
 3. **Other designs.** [cpu-table-walks.md](cpu-table-walks.md) and [cpu-coherence.md](../cpu-coherence.md) should replace their `0x8000_0000`–`0xFFFF_FFFF` requirement with this contract.
 
 The OS image maps every gigabyte and every 2 MiB block of DRAM that the decode check passed at EL3 too, as normal write-back memory with the attributes of a level-2 block, because the return cleans at EL3 the device-visible ranges that the OS publishes (`apps/os/device-ranges.h`), and the OS chooses them at run time. The fixtures that build the extended layout map nothing there.
+
+## The last 2 MiB block belongs to the decode probe
+
+The DRAM decode probe (`drivers/dram/a733_dram_decode_probe.c`) runs at EL3 in every cached image's boot, after the runner has placed INPUT regions in DRAM and before any loader. It writes two words and reads the rest. One is a token in a word of the caller's own kernel memory. The other is a second token in the last word of the map, `0x33ffffff8`, which lies in the last 2 MiB block (`A733_DRAM_TOP_BLOCK`, `0x33fe00000` to `0x340000000`). The probe requires the second token to read back, which an absent or truncated top of memory does not do, and the first token to be undisturbed.
+
+The block is the probe's: application ranges end at `A733_DRAM_APP_END` (`0x33fe00000`). The ledger removes the block from the usable ranges (`apps/os/large.c`), and the manifest tool refuses any region that includes it, so neither a loaded region nor an uploaded INPUT region can overlap a word the probe writes.

@@ -37,7 +37,7 @@ void cpu_capacity_init(void)
     const struct ss_grant *g=ss_grant();
     if(!g||g->main_core!=6||g->worker_cores!=0xbf)ss_fail(0xca01);
     for(unsigned core=0;core<CAPACITY_CORES;++core){
-        workers[core]=xTaskCreateStaticAffinitySet(worker,"capacity",1024,
+        workers[core]=ss_task_create_static_affinity_set(worker,"capacity",1024,
             (void *)(uintptr_t)core,2,stack[core],&state[core],1u<<core);
         if(!workers[core])ss_fail(0xca02);
     }

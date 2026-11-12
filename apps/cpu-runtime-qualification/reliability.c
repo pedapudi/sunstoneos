@@ -85,7 +85,7 @@ void cpu_reliability_init(void)
     admitted_tick=xTaskGetTickCount();
     require(grant && grant->main_core==6 && grant->worker_cores==0xbf,6,0);
     for(unsigned c=0;c<REL_CORES;++c)if(c!=grant->main_core){
-        handles[c]=xTaskCreateStaticAffinitySet(worker,"cpu-rel",1024,(void *)(uintptr_t)c,
+        handles[c]=ss_task_create_static_affinity_set(worker,"cpu-rel",1024,(void *)(uintptr_t)c,
             2,stacks[c],&tasks[c],(UBaseType_t)1<<c);
         require(handles[c]!=NULL,6,c);
     }

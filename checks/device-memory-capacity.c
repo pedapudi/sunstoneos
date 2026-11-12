@@ -316,7 +316,7 @@ static void golden_tables(void)
     /* The builder passed one range, 0x80000000-0x340000000, and wrote level-1
      * entries 2-12 for it only when the check passed. */
     CHECK(decode_calls==1 && decode_count==1 && decode_seen[0].base==UINT64_C(0x80000000) &&
-          decode_seen[0].size==A733_DRAM_MAP_END-UINT64_C(0x80000000));
+          decode_seen[0].size==A733_DRAM_APP_END-UINT64_C(0x80000000));
     uint64_t mapped=0,valid=0;
     for(unsigned i=2;i<512;++i) {
         uint64_t pa=(uint64_t)i<<30;

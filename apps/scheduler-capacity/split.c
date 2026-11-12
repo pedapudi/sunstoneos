@@ -82,7 +82,7 @@ void cpu_split_init(void)
     const struct ss_grant *g=ss_grant();
     if(!g||g->main_core!=6||g->worker_cores!=0xbf)ss_fail(0xcb01);
     for(unsigned c=0;c<CAPACITY_CORES;++c){
-        workers[c]=xTaskCreateStaticAffinitySet(worker,"capacity-split",1024,
+        workers[c]=ss_task_create_static_affinity_set(worker,"capacity-split",1024,
             (void *)(uintptr_t)c,2,stacks[c],&states[c],1u<<c);
         if(!workers[c])ss_fail(0xcb02);
     }

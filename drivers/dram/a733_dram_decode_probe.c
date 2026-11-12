@@ -14,110 +14,68 @@
  * controller configuration (its size and address mapping) comes from the
  * training or restore record that the boot applied, and a different record or
  * a different DRAM population would break linear decode without changing the
- * image. The test writes a distinct token to each probe address and reads
- * every token back; two addresses that decode to the same cells, a wrapped
- * address and an absent cell all return another token.
+ * image. The test writes one token word (and a second in the reserved top block of the map), in the caller's own kernel memory, and
+ * only reads everywhere else: for each address bit of the DRAM offset and each
+ * gigabyte multiple it reads the word at the offset with that bit flipped (or
+ * that many gigabytes added) and requires that it is not the token. A decode that
+ * ignores an address bit, or wraps at a size, maps that word onto the token's cell.
+ * No application memory is written, so nothing the runner or the loader placed in
+ * the probed ranges can change.
  *
  * The test runs at EL3 with the MMU off (Device-nGnRnE accesses, so no cache
- * holds the tokens, and the restored words reach DRAM the same way, behind the
- * same kind of barrier). It does not prove that Non-secure accesses pass the
+ * holds the token and every read reaches the DRAM). It does not prove that Non-secure accesses pass the
  * memory firewall, which the qualification image's Non-secure run showed for
  * its tested map, and it does not prove that no other master writes there. */
 #include "a733_dram.h"
 #include "a733_device_memory_layout.h"
 
 #define TESTED_FIRST UINT64_C(0x44000000)   /* first byte of the qualification image's tested map */
+#define DRAM_BASE UINT64_C(0x40000000)
 #define TOKEN_KEY UINT64_C(0x5ad3a5c3c5a35ac3)
 #define GIB (UINT64_C(1) << 30)
 #define BLOCK (UINT64_C(1) << 21)
 
-/* The probe leaves every word it touches as it found it: the runner places INPUT regions in DRAM before the launch, in the very
- * ranges this test covers, and the application's admission reads them afterwards. For each probe address the write pass reads
- * the word, saves it and writes the token; after the last compare the restore pass writes the saved words back in the reverse of
- * the order in which they were taken. The order matters when the decode aliases two addresses: the later address saved the earlier
- * one's token, so restoring it first and the earlier one last leaves the true word in the cell.
- *
- * The saved words are the caller's buffer, sized at build time from the same range table (A733_DRAM_PROBE_WORDS in a733_dram.h).
- * The count is computed first and a buffer that is too small refuses before any access. */
 static uint64_t token(uint64_t pa) { return (pa * UINT64_C(0x9e3779b97f4a7c15)) ^ TOKEN_KEY ^ (pa >> 17); }
 
-enum pass { WRITE, VERIFY, COUNT, RESTORE };
-struct probe_walk { const struct a733_dram_probe_io *io; uint64_t *saved; unsigned failed; uint64_t count, index; };
-
-/* Visit one probe address of a range. */
-static void visit(struct probe_walk *w, enum pass pass, uint64_t pa)
-{
-    switch (pass) {
-    case WRITE:
-        w->saved[w->index++] = w->io->read(w->io->context, pa);
-        w->io->write(w->io->context, pa, token(pa));
-        break;
-    case VERIFY:
-        if (w->io->read(w->io->context, pa) != token(pa)) w->failed = 1;
-        break;
-    case RESTORE:
-        w->io->write(w->io->context, pa, w->saved[--w->index]);
-        break;
-    case COUNT:
-        break;
-    }
-    ++w->count;
-}
-
-/* Probe addresses of one range: its first and last word, each 2 MiB step inside its first gigabyte, each power-of-two offset
- * from 2 MiB to 8 GiB (each address line the 12 GiB map decodes), and each gigabyte boundary. */
-static void sweep(struct probe_walk *w, enum pass pass, uint64_t base, uint64_t end)
-{
-    visit(w, pass, base);
-    visit(w, pass, end - 8);
-    for (uint64_t pa = (base + BLOCK) & ~(BLOCK - 1); pa < end && pa - base < GIB; pa += BLOCK) visit(w, pass, pa);
-    for (uint64_t bit = BLOCK; bit <= UINT64_C(1) << 33; bit <<= 1) {
-        uint64_t pa = base + bit;
-        if (pa < end) visit(w, pass, pa);
-    }
-    for (uint64_t pa = (base + GIB) & ~(GIB - 1); pa < end; pa += GIB) visit(w, pass, pa);
-}
-
-/* The same addresses in the opposite order. */
-static void sweep_reverse(struct probe_walk *w, uint64_t base, uint64_t end)
-{
-    uint64_t gibs = 0, steps = 0;
-    for (uint64_t pa = (base + GIB) & ~(GIB - 1); pa < end; pa += GIB) ++gibs;
-    for (uint64_t pa = (base + BLOCK) & ~(BLOCK - 1); pa < end && pa - base < GIB; pa += BLOCK) ++steps;
-    const uint64_t first_gib = (base + GIB) & ~(GIB - 1), first_step = (base + BLOCK) & ~(BLOCK - 1);
-    while (gibs) visit(w, RESTORE, first_gib + --gibs * GIB);
-    for (uint64_t bit = UINT64_C(1) << 33; bit >= BLOCK; bit >>= 1) {
-        uint64_t pa = base + bit;
-        if (pa < end) visit(w, RESTORE, pa);
-    }
-    while (steps) visit(w, RESTORE, first_step + --steps * BLOCK);
-    visit(w, RESTORE, end - 8);
-    visit(w, RESTORE, base);
-}
-
+/* `scratch` is a word of the caller's kernel memory (EL3 bss): the only word this test writes. Its physical address equals its
+ * pointer value at EL3 with the MMU off. It must lie in DRAM and outside every range given, so that the write set and the
+ * application ranges are disjoint by construction; the ranges are the memory that the caller is about to map for applications. */
 int a733_dram_decode_probe(const struct a733_dram_probe_io *io, const struct a733_dram_range *ranges, unsigned count,
-                           uint64_t *saved, uint64_t saved_words)
+                           uint64_t scratch_pa, uint64_t scratch_words)
 {
-    if (!io || !io->read || !io->write || !io->barrier || !ranges || !count) return 0;
+    if (!io || !io->read || !io->write || !io->barrier || !ranges || !count || !scratch_words ||
+        (scratch_pa & 7) || scratch_pa < DRAM_BASE || scratch_pa + 8 > A733_DRAM_MAP_END) return 0;
     uint64_t previous_end = TESTED_FIRST;
     for (unsigned i = 0; i < count; ++i) {
         uint64_t b = ranges[i].base, n = ranges[i].size;
-        if (!n || (b | n) & (BLOCK - 1) || b < previous_end || b > A733_DRAM_MAP_END ||
-            n > A733_DRAM_MAP_END - b) return 0;
+        if (!n || (b | n) & (BLOCK - 1) || b < previous_end || b > A733_DRAM_APP_END ||
+            n > A733_DRAM_APP_END - b) return 0;
         previous_end = b + n;
+        if (scratch_pa < b + n && scratch_pa + 8 > b) return 0;     /* the scratch word is not application memory */
     }
-    struct probe_walk w = {io, saved, 0, 0, 0};
-    for (unsigned i = 0; i < count; ++i) sweep(&w, COUNT, ranges[i].base, ranges[i].base + ranges[i].size);
-    if (!saved || w.count > saved_words) return 0;      /* before any access */
-    const uint64_t total = w.count;
-    w.count = 0;
-    for (unsigned i = 0; i < count; ++i) sweep(&w, WRITE, ranges[i].base, ranges[i].base + ranges[i].size);
+    const uint64_t offset = scratch_pa - DRAM_BASE, span = A733_DRAM_MAP_END - DRAM_BASE;
+    io->write(io->context, scratch_pa, token(scratch_pa));
     io->barrier(io->context);
-    for (unsigned i = 0; i < count; ++i) sweep(&w, VERIFY, ranges[i].base, ranges[i].base + ranges[i].size);
-    w.index = total;
-    for (unsigned i = count; i-- > 0;) sweep_reverse(&w, ranges[i].base, ranges[i].base + ranges[i].size);
-    io->barrier(io->context);   /* the restores complete before the table builder maps the memory */
-    return !w.failed;
+    unsigned failed = io->read(io->context, scratch_pa) != token(scratch_pa);
+    /* The top word, in the block that no range includes and the ledger never hands out: a second token must read back, which an
+     * absent or truncated top does not do, and the first token must be undisturbed, which an alias of the two does not allow. */
+    const uint64_t top = A733_DRAM_MAP_END - 8, second = ~token(top);
+    io->write(io->context, top, second);
+    io->barrier(io->context);
+    if (io->read(io->context, top) != second || io->read(io->context, scratch_pa) != token(scratch_pa)) failed = 1;
+    /* Partners: the offset with each address bit from 2 MiB to 8 GiB flipped, and the offset plus each whole gigabyte. */
+    for (uint64_t bit = BLOCK; bit <= UINT64_C(1) << 33; bit <<= 1) {
+        uint64_t partner = offset ^ bit;
+        if (partner < span && partner != offset && io->read(io->context, DRAM_BASE + partner) == token(scratch_pa)) failed = 1;
+    }
+    for (uint64_t add = GIB; offset + add < span; add += GIB)
+        if (io->read(io->context, DRAM_BASE + offset + add) == token(scratch_pa)) failed = 1;
+    /* The first and last word of each range must not alias the scratch word either. */
+    for (unsigned i = 0; i < count; ++i) {
+        if (io->read(io->context, ranges[i].base) == token(scratch_pa)) failed = 1;
+        if (io->read(io->context, ranges[i].base + ranges[i].size - 8) == token(scratch_pa)) failed = 1;
+    }
+    return !failed;
 }
 
 #ifndef A733_DRAM_DECODE_PROBE_HOST
@@ -125,9 +83,9 @@ static uint64_t hw_read(void *c, uint64_t pa) { (void)c; return *(volatile uint6
 static void hw_write(void *c, uint64_t pa, uint64_t v) { (void)c; *(volatile uint64_t *)(uintptr_t)pa = v; }
 static void hw_barrier(void *c) { (void)c; __asm__ volatile("dsb sy" ::: "memory"); }
 
-int a733_dram_decode_check(const struct a733_dram_range *ranges, unsigned count, uint64_t *saved, unsigned saved_words)
+int a733_dram_decode_check(const struct a733_dram_range *ranges, unsigned count, uint64_t *scratch, unsigned scratch_words)
 {
     static const struct a733_dram_probe_io io = {0, hw_read, hw_write, hw_barrier};
-    return a733_dram_decode_probe(&io, ranges, count, saved, saved_words);
+    return a733_dram_decode_probe(&io, ranges, count, (uint64_t)(uintptr_t)scratch, scratch_words);
 }
 #endif

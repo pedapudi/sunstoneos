@@ -2,6 +2,7 @@
  * USB, capture, thermal and clock service tasks. */
 #include "os.h"
 #include "application.h"
+#include "os-task.h"
 #include "os_space.h"
 #include "sunstone_notify.h"
 #include "../board/application.h"
@@ -499,12 +500,26 @@ int os_application_prepare(void)
     runtime_init();
 #endif
     if(ss_application.init){
-        /* No task creates the tasks of the init hook (the scheduler has not started), so they take the main task's space. */
-        os_space_init_tag=(const void *)xTaskGetApplicationTaskTag(main_task);
+        /* No task creates anything while the hook runs (the scheduler has not started). The hook creates tasks through the
+         * kit's ss_task_create_static_affinity_set, which names the application's space; a direct FreeRTOS creation there is
+         * refused (include/os_space.h). */
+        os_space_app_init_active=1;
         ss_application.init();
-        os_space_init_tag=NULL;
+        os_space_app_init_active=0;
     }
     return 1;
+}
+/* The kit's task creation (include/sunstone_app.h): the new task runs in the application's space, whichever task or hook calls.
+ * The space is the tag of the caller when a task calls, and of the main task in the init hook, where nothing runs yet. A caller
+ * that carries no tag is not an application's task, and the creation is refused (null). */
+void *ss_task_create_static_affinity_set(void (*entry)(void *),const char *name,uint32_t stack_words,void *arg,
+    unsigned long priority,void *stack,void *tcb,unsigned long affinity)
+{
+    const void *space=(const void *)(xTaskGetSchedulerState()==taskSCHEDULER_NOT_STARTED?
+        xTaskGetApplicationTaskTag(main_task):xTaskGetApplicationTaskTag(NULL));
+    if(!space)return NULL;
+    return os_task_create_static_affinity_set(space,entry,name,stack_words,arg,(UBaseType_t)priority,
+        (StackType_t *)stack,(StaticTask_t *)tcb,(UBaseType_t)affinity);
 }
 /* The first-failure record names the detail and the caller of ss_fail. */
 /* The application fails at EL0: board_fail must not run the credential wipe (dc civac traps at EL0). The radio owner
