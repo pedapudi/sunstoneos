@@ -181,7 +181,12 @@ static void route_adopt(struct ss_control_slot *s)
 void ss_control_init(struct ss_control *c, uint64_t active,
                      const struct ss_owner_backend *b, const struct ss_control_ops *ops)
 {
-    *c = (struct ss_control){ .backend = b, .ops = *ops, .active_mask = active };
+    /* Initialize in place. A compound literal of the whole control (over
+     * 40 KiB) is built on the caller's stack, and each core's stack is 32 KiB. */
+    __builtin_memset(c, 0, sizeof *c);
+    c->backend = b;
+    c->ops = *ops;
+    c->active_mask = active;
 }
 void ss_control_register(struct ss_control *c, unsigned slot,
                          struct ss_owner_descriptor *d, uint64_t incarnation,
