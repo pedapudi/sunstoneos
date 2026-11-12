@@ -11,6 +11,9 @@
 #include "app_region.h"
 #include "app_large.h"
 #include "umem.h"
+#include "owner-memory.h"
+#include "capture.h"
+#include "sunstone_usb_service.h"
 #include "aarch64_device_memory.h"
 #include "device-ranges.h"
 #include "npu.h"
@@ -130,20 +133,27 @@ static int region_give(void *ctx, uint16_t owner, uint64_t base)
 }
 static const struct large_allocator region_allocator = {0, region_take, region_give};
 /* The owner's extents, in the form the space builder reads. The ledger's own storage is not a table of regions. */
-struct export_state { unsigned count; };
+/* The space also maps the kernel's extents that a device owner took with EL0 access (os_owner_memory): they are listed
+ * under the application's ASID with their access. Every other kernel extent (metadata, device state, the guard blocks)
+ * has no access and stays unmapped. */
+struct export_state { unsigned count, refused; uint16_t owner; };
+int os_headset_memory(void) __attribute__((weak));   /* in the headset library, which an image links only for the headset */
 static int export_one(void *ctx, const struct umem_extent *e)
 {
     struct export_state *x = ctx;
-    if (x->count >= os_ledger_capacity) return 1;
-    os_large_entry_storage[x->count++] = (struct app_region_entry){e->base, e->bytes, e->owner, e->access};
+    if (e->owner == UMEM_OWNER_KERNEL && !e->access) return 0;
+    if (x->count >= os_ledger_capacity) { x->refused = 1; return 1; }
+    os_large_entry_storage[x->count++] = (struct app_region_entry){e->base, e->bytes, x->owner, e->access};
     return 0;
 }
 static int export_regions(uint16_t owner)
 {
-    struct export_state x = {0};
+    struct export_state x = {0, 0, owner};
     view = (struct app_region_ledger){.entry = os_large_entry_storage, .capacity = os_ledger_capacity};
     memset(os_large_entry_storage, 0, sizeof *os_large_entry_storage * os_ledger_capacity);
-    return umem_for_each(&ledger, owner, export_one, &x) == x.count;
+    (void)umem_for_each(&ledger, owner, export_one, &x);
+    if (!x.refused) (void)umem_for_each(&ledger, UMEM_OWNER_KERNEL, export_one, &x);
+    return !x.refused;
 }
 
 static void install_space(uint64_t kernel_ttbr);
@@ -207,13 +217,16 @@ int os_large_prepare(void)
      * places. It belongs to the application and is mapped in its space. A refusal is recorded and leaves the NPU unprepared
      * (os_npu_start refuses); it does not stop the application. */
     if (!os_npu_pool_prepare(&ledger, owner_asid)) return large_failed(9);
+    /* The device owners whose memory the application's tasks reach take it now, before the tables are built
+     * (owner-memory.h): the capture buffer, the USB input queue, and the headset's state in a session that grants the headset. */
+    if (!os_capture_memory() || !os_usb_service_memory() || (os_headset_memory && !os_headset_memory())) return large_failed(10);
     /* The main stack: a 2 MiB block that the guard owner holds below it, so that an overflow is an EL0 fault in memory
      * no space maps. The stack is at the bottom of its own block. Where no extent is free the static stack stays. */
     if (manifest) {
         uint64_t base, bytes;
-        if (region_take(0, APP_REGION_GUARD_OWNER, 2 * APP_REGION_BLOCK, APP_REGION_READ, &base, &bytes) == 0) {
+        if (region_take(0, APP_REGION_GUARD_OWNER, 2 * APP_REGION_BLOCK, 0, &base, &bytes) == 0) {
             (void)region_give(0, APP_REGION_GUARD_OWNER, base);
-            if (region_take_at(APP_REGION_GUARD_OWNER, base, APP_REGION_BLOCK, APP_REGION_READ) == 0 &&
+            if (region_take_at(APP_REGION_GUARD_OWNER, base, APP_REGION_BLOCK, 0) == 0 &&
                 region_take_at(owner_asid, base + APP_REGION_BLOCK, manifest->stack_bytes, APP_REGION_READ | APP_REGION_WRITE) == 0)
                 main_stack = (void *)(uintptr_t)(base + APP_REGION_BLOCK);
             else
@@ -252,6 +265,13 @@ int os_large_prepare(void)
 static void ledger_lock(void *ctx) { (void)ctx; taskENTER_CRITICAL(); }
 static void ledger_unlock(void *ctx) { (void)ctx; taskEXIT_CRITICAL(); }
 struct umem *os_large_umem(void) { return admitted || ledger_ready ? &ledger : 0; }
+/* A device owner's memory (apps/os/owner-memory.h). EL0-visible memory is mapped by the application's tables, which admission
+ * builds once at its end: a request for it after that is refused. */
+void *os_owner_memory(uint64_t bytes, uint64_t align, unsigned attributes)
+{
+    if (!ledger_ready || (admitted && (attributes & (OS_MEMORY_EL0_READ | OS_MEMORY_EL0_WRITE)))) return 0;
+    return os_owner_memory_from(&ledger, bytes, align, attributes);
+}
 
 /* ---- The device ranges the EL3 terminal cleans (apps/os/device-ranges.h) ---- */
 uint64_t os_device_ranges_head;

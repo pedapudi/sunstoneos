@@ -34,7 +34,7 @@ static struct npu_runtime_slot slot_zero; /* the runtime's slot table is carved 
 static struct os_npu_device device; /* what a granted admission takes from the ledger */
 int main(void)
 {
-    npu.device=&device;npu.runtime.slot=&slot_zero;
+    npu.device=&device;device.runtime.service.signals=&npu.signals;npu.device->runtime.slot=&slot_zero;
     npu.started=1;npu.end=10000000;
     npu.client=(TaskHandle_t)&npu.client;npu.bootstrap=(TaskHandle_t)&npu.bootstrap;
     atomic_store(&npu.gate,(UINT64_C(1000000)<<3)|ALLOW);

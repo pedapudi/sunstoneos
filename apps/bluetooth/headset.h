@@ -12,6 +12,11 @@ struct bluetooth_pcm_snapshot {
     uint32_t state,bytes,records,loss_packets;
     uint8_t sha256[32];
 };
+/* In the OS, the library's state lives in memory its owner takes at the grant: bluetooth_headset_state_bytes bytes, zeroed
+ * and aligned to 64, given once with bluetooth_headset_memory before the application's init or attach and before any other
+ * entry of this file is called. */
+extern const size_t bluetooth_headset_state_bytes;
+int bluetooth_headset_memory(void *memory);
 int bluetooth_headset_poll(struct bluetooth_application *,uint64_t now);
 int bluetooth_headset_retain(struct bluetooth_application *);
 /* Cross-task copied results only. Pending has no mutable producer fields.

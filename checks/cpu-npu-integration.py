@@ -27,10 +27,12 @@ class Model(terminal.KernelPages,owner.Model):
   super().__init__(image,layout)
   self.n=layout.address('npu','apps/os/npu.c');self.nf=layout.layouts['os_npu_application']
   self.device=terminal.npu_device(self,self.s,layout,self.n);self.df=layout.layouts['os_npu_device']
-  # Kernel-only on the board (checks/os-cpu-return.py KernelPages): the device state and the runtime's slot table, which is EL1
-  # metadata there and is at 0x41f01000 here.
+  # Kernel-only on the board (checks/os-cpu-return.py KernelPages): the device state, which holds the runtime and its service,
+  # and the runtime's slot table, which is EL1 metadata there and is at 0x41f01000 here. The runtime's signal words are in the
+  # npu static, which the application's tables map.
   self.kernel_only(self.device,self.device+layout.layouts['os_npu_device']['stacks']+2*4096*8);self.kernel_only(0x41f01000,0x41f02000)
-  self.rt=self.n+self.nf['runtime'];self.service=self.rt+layout.layouts['npu_runtime']['service']
+  self.rt=self.device+self.df['runtime'];self.service=self.rt+layout.layouts['npu_runtime']['service']
+  self.sig=self.n+self.nf['signals'];self.gf=layout.layouts['npu_service_signals']
   self.sf=layout.layouts['npu_service'];self.report=layout.address('os_npu_published_report')
   self.closed_operation=None;self.stop_calls=0;self.stop_pending=0;self.publish_stop=False
   self.failures=[];self.callback_after_park=0;self.wakes=0;self.waits=[];self.delays=0
@@ -50,7 +52,8 @@ class Model(terminal.KernelPages,owner.Model):
   grant=layout.address('grant','apps/os/application.c');self.put64(grant+layout.layouts['ss_grant']['finish_by_us'],55000000)
   # The slot table is carved from the runtime's reservation and the runtime points to it (fail_at reads slot 0).
   self.put64(self.rt+layout.layouts['npu_runtime']['slot'],0x41f01000)
-  for k in ('initialized','irq_bound','irq_stopped'):self.put32(self.service+self.sf[k],1)
+  for k in ('initialized','irq_bound'):self.put32(self.service+self.sf[k],1)
+  self.put64(self.service+self.sf['signals'],self.sig);self.put32(self.sig+self.gf['irq_stopped'],1) # device_take points the service at them
   self.put64(layout.address('instance','drivers/npu/npu_service.c'),self.service)
   self.put64(self.service+self.sf['runtime'],self.rt) # nonnull authority; parked loop uses no hooks
   self.put32(self.service+self.sf['activation_state'],2)
@@ -96,12 +99,12 @@ class Model(terminal.KernelPages,owner.Model):
    self.stop='blocked';uc.emu_stop();return
   super().code(uc,address,size,unused)
  def stopped(self):
-  self.put32(self.n+self.nf['stopped'],1);self.put32(self.service+self.sf['runtime_parked'],1)
+  self.put32(self.n+self.nf['stopped'],1);self.put32(self.sig+self.gf['runtime_parked'],1)
   self.put32(self.report+12,1);self.put32(self.report+56,1)
 
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('elf',type=Path);p.add_argument('--out',type=Path,required=True);p.add_argument('--payload',type=Path);p.add_argument('--late-isr-only',action='store_true');a=p.parse_args();a.out.mkdir(parents=True,exist_ok=False)
 names={'board_application','a733_board_session','board_provider','a733_native_usb','a733_pmic','a733_pmic_slot',
-'a733_platform_locks','os_thermal_service','os_npu_application','os_npu_device','npu_runtime','npu_runtime_slot','npu_service','a733_npu_controller','a733_npu_startup','ss_grant','npu_service_reply'}
+'a733_platform_locks','os_thermal_service','os_npu_application','os_npu_device','npu_runtime','npu_runtime_slot','npu_service','npu_service_signals','a733_npu_controller','a733_npu_startup','ss_grant','npu_service_reply'}
 layout=Image(a.elf,names);image=prior.fault.Image(a.elf);results=[]
 if not a.late_isr_only:
  m=Model(image,layout)
@@ -112,7 +115,7 @@ if not a.late_isr_only:
  # Execute the actual final runtime loop: it must publish parked, then block
  # before any backend/runtime callback can execute, including on another wake.
  m.call(1,'host_runtime_worker',(m.service,));assert m.stop=='blocked'
- assert m.u32(m.service+m.sf['runtime_parked'])==1
+ assert m.u32(m.sig+m.gf['runtime_parked'])==1
  results.append(dict(case='final-close-worker-parks-before-backend',passed=True))
  # The real generic stop entry refuses provider access until worker park and
  # retains a late runtime fault before testing that acknowledgment.
@@ -123,9 +126,9 @@ if not a.late_isr_only:
   slots=0x41f01000 # the slot table is carved from the reservation: the runtime points to it
   m.put64(m.rt+rf['slot'],slots);m.put32(m.rt+rf['slots'],1);m.put32(slots+layout.layouts['npu_runtime_slot']['state'],8)
   m.put64(startup+layout.layouts['a733_npu_startup']['task'],0x3000)
-  m.put32(m.service+m.sf['runtime_parked'],parked);m.put32(m.rt+rf['failed'],failed)
+  m.put32(m.sig+m.gf['runtime_parked'],parked);m.put32(m.sig+m.gf['runtime_failed'],failed)
   if pending:
-   m.put32(m.service+m.sf['irq_pending'],pending);m.put32(m.service+m.sf['irq_stopped'],0)
+   m.put32(m.sig+m.gf['irq_pending'],pending);m.put32(m.sig+m.gf['irq_stopped'],0)
   stop_calls=[];m.hooks[layout.address('a733_npu_startup_stop')]=lambda:stop_calls.append(1) or 0
   assert m.call(1,'npu_runtime_stop_poll',(m.rt,))==expected
   assert len(stop_calls)==calls
@@ -162,7 +165,7 @@ m=Model(image,layout);m.stopped()
 notify=next(name for name in ('vTaskGenericNotifyGiveFromISR','vTaskNotifyGiveFromISR') if name in layout.symbols)
 m.hooks[layout.address(notify)]=lambda:0
 m.call(1,'npu_service_irq_notify_from_isr',(m.service,1,0x41f00000))
-assert m.u32(m.service+m.sf['irq_pending'])==3 and not m.u32(m.service+m.sf['irq_stopped'])
+assert m.u32(m.sig+m.gf['irq_pending'])==3 and not m.u32(m.sig+m.gf['irq_stopped'])
 assert m.call(6,'os_npu_complete')==0
 m.call(6,'ss_finish',(0x41f00000,16))
 assert m.stop=='failure' and m.failures and m.failures[0][0]&0xf000==0xa000
@@ -173,7 +176,7 @@ if not a.late_isr_only:
   m=Model(image,layout);m.stopped();assert m.call(0,'os_cpu_return_start')==1
   m.call(6,'ss_finish',(0x41f00000,16));assert m.stop=='suspended'
   def inject():
-   m.put32(m.service+m.sf['irq_pending'],3);m.put32(m.service+m.sf['irq_stopped'],0)
+   m.put32(m.sig+m.gf['irq_pending'],3);m.put32(m.sig+m.gf['irq_stopped'],0)
   if failure=='before-thermal':inject()
   m.call(0,'os_thermal_task')
   if failure=='before-thermal':
@@ -198,9 +201,9 @@ if not a.late_isr_only:
   m=Model(image,layout);m.stopped()
   if variant=='unpublished':m.put32(m.report+12,0)
   if variant=='pending-local-stop':m.put32(m.n+m.nf['stopped'],0)
-  if variant=='worker-not-parked':m.put32(m.service+m.sf['runtime_parked'],0)
-  if variant=='late-irq':m.put32(m.service+m.sf['irq_pending'],1)
-  if variant=='late-runtime-fault':m.put32(m.rt+layout.layouts['npu_runtime']['failed'],1)
+  if variant=='worker-not-parked':m.put32(m.sig+m.gf['runtime_parked'],0)
+  if variant=='late-irq':m.put32(m.sig+m.gf['irq_pending'],1)
+  if variant=='late-runtime-fault':m.put32(m.sig+m.gf['runtime_failed'],1)
   if variant=='reserve-exhausted':m.time=55000000*24
   elif variant!='complete':m.time=(55000000-50)*24
   payload=a.payload.read_bytes() if a.payload else b'producer-receipt'

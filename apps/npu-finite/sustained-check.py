@@ -57,7 +57,7 @@ image=a.out/'client-host-only.elf'
 link=[str(LLD),'--image-base=0x41100000','-Ttext=0x41200000','-e','a733_smp_diagnostic_start','--defsym=__npu_clean_start=0x41200000','--defsym=__device_pool_end=0x41f00000','--defsym=__npu_platform_log=0x42000000',str(client),str(digest),str(networks),str(stubs),str(layout),str(receipt_writer),'-o',str(image)]
 subprocess.run(link,check=True,env=environment());compiled.append(link)
 (a.out/'commands.json').write_text(json.dumps(compiled,indent=2)+'\n')
-im=Image(image,layout_names=('npu_runtime','npu_runtime_slot','npu_runtime_counters','npu_service','a733_npu_controller','a733_observe_identity','npu_finite_network','storage_digest'))
+im=Image(image,layout_names=('npu_runtime','npu_runtime_slot','npu_runtime_counters','npu_service','npu_service_signals','a733_npu_controller','a733_observe_identity','npu_finite_network','storage_digest'))
 L=im.layouts;enums={}
 with image.open('rb') as f:
  elf=ELFFile(f);sizes={s.name:int(s['st_size']) for s in elf.get_section_by_name('.symtab').iter_symbols()}
@@ -95,6 +95,7 @@ for variant in (a.case if a.case else variants):
  def get(at,n=8):return int.from_bytes(u.mem_read(at,n),'little')
  def ret(v=0):u.reg_write(UC_ARM64_REG_X0,v);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
  rt=0x43000000;service=rt+L['npu_runtime']['service'];slot=rt+L['npu_runtime']['slot'];controller=service+L['npu_service']['controller']
+ put(service+L['npu_service']['signals'],service+L['npu_service']['own_signals'])
  for field,value in [('epoch',7),('generation',8),('lease',9),('deadline',480000000)]:put(im.address('a733_observe_identity')+L['a733_observe_identity'][field],value)
  refs=[bytes(u.mem_read(im.address(f'npu_finite_reference_{n}'),sizes[f'npu_finite_reference_{n}'])) for n in range(2)]
  references=[r.hex() for r in refs]
@@ -161,7 +162,7 @@ for variant in (a.case if a.case else variants):
    state['closed']=True
    for field,value in [('opened',1),('closed',1),('state',enums['NPU_RUNTIME_CLOSED'])]:put(slot+L['npu_runtime_slot'][field],value,4)
    put(controller+L['a733_npu_controller']['state'],enums['A733_NPU_CLOSED'],4)
-   put(service+L['npu_service']['irq_stopped'],1,4);ret(1)
+   put(service+L['npu_service']['own_signals']+L['npu_service_signals']['irq_stopped'],1,4);ret(1)
   elif name=='npu_service_irq_completions':ret(get(service+L['npu_service']['irq_completions'],4))
   elif name=='npu_service_irq_stopped':ret(int(state['closed']))
   elif name in ('a733_npu_application_stopped','a733_npu_application_quiesce','a733_npu_application_quiescent'):ret(int(state['closed']))
