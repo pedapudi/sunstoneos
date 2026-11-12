@@ -22,18 +22,13 @@ static int intact(struct a733_typec_native *n)
 static int current(void *p)
 {struct a733_typec_native *n=p;return intact(n)&&a733_task_context_owner_el1(n->config.provider_task);}
 static int now(void *p,uint64_t *out)
-{struct a733_typec_native *n=p;return intact(n)&&n->config.locks->now(n->config.locks->context,out)==1;}
-/* Shared lock entry waits only for whole ticks. A sub-tick deadline makes
- * every shutdown admission a single nonblocking attempt. */
-static uint64_t operation_deadline(struct a733_typec_native *n,uint64_t d,unsigned stopping)
 {
-    uint64_t t,short_deadline;
-    const uint64_t tick_us=(1000000u+configTICK_RATE_HZ-1u)/configTICK_RATE_HZ;
-    if(!now(n,&t)||tick_us<=1||!a733_deadline_after(t,tick_us-stopping,&short_deadline))return 0;
-    return short_deadline<d?short_deadline:d;
+    struct a733_typec_native *n=p;
+    if(!intact(n)||!a733_platform_lock_live(n->config.locks)||
+       n->config.locks->now(n->config.locks->context,out)!=1)return 0;
+    uint64_t deadline=atomic_load_explicit(&n->stop_deadline,memory_order_acquire);
+    return !deadline||*out<deadline;
 }
-static uint64_t stop_operation_deadline(struct a733_typec_native *n,uint64_t d)
-{return operation_deadline(n,d,1);}
 static int outside(void *p,const void *x,unsigned long bytes)
 {
     struct a733_typec_native *n=p;
@@ -72,12 +67,14 @@ static int bus_enter(void *p,uint64_t d)
 {
     struct a733_typec_native *n=p;int held=0,r=live(n);
     if(r!=1)return r;
-    d=operation_deadline(n,d,atomic_load_explicit(&n->stop_deadline,memory_order_acquire)!=0);
+    uint64_t stop=atomic_load_explicit(&n->stop_deadline,memory_order_acquire);
+    if(stop&&d>stop)d=stop;
     if(n->held)return -1;
     enum a733_pins_result pins=a733_pins_held_banked(n->config.pins,&n->pin,&held,d);
     if(pins==A733_PINS_BUSY)return 0;
     if(pins!=A733_PINS_OK||!held)return -1;
-    if(!a733_platform_lock_enter(n->config.locks,A733_PLATFORM_I2C1_LOCK,d))return 0;
+    r=a733_platform_lock_step(n->config.locks,A733_PLATFORM_I2C1_LOCK,d);
+    if(r!=1)return r;
     n->held=(unsigned)A733_PLATFORM_I2C1_LOCK+1;return 1;
 }
 static int bus_owned(struct a733_typec_native *n)
@@ -94,14 +91,16 @@ static void bus_retain(void *p)
  n->bus_fault=1;a733_typec_revoke(&n->provider);}
 static int bus_read(void *p,uintptr_t a,uint32_t *out)
 {
-    if(!out||!bus_owned(p)||a<BASE)return 0;
+    uint64_t t;
+    if(!out||a<BASE||!bus_owned(p)||!now(p,&t))return 0;
     switch(a-BASE){case 8:case 0xc:case 0x10:case 0x14:case 0x18:case 0x1c:case 0x20:
     case 0x200:case 0x210:case 0x214:case 0x218:case 0x21c:*out=a733_mmio_read32_dsb_sy_both(a);return 1;default:return 0;}
 }
 static int bus_write(void *p,uintptr_t a,uint32_t v)
 {
-    if(!bus_owned(p)||v>255||(a!=BASE+8&&a!=BASE+0xc)||
-       (a==BASE+0xc&&v!=0x48&&v!=0x4c&&v!=0x58&&v!=0x68))return 0;
+    uint64_t t;
+    if(v>255||(a!=BASE+8&&a!=BASE+0xc)||
+       (a==BASE+0xc&&v!=0x48&&v!=0x4c&&v!=0x58&&v!=0x68)||!bus_owned(p)||!now(p,&t))return 0;
     a733_mmio_write32_dsb_sy_both(a,v);return 1;
 }
 static int at(uintptr_t a)
@@ -153,14 +152,15 @@ static int prepare(void *p,uint64_t d)
         if(!at(pages[n->index]))goto fault;if(++n->index==4){n->index=0;++n->stage;}break;}
     case 7:{
         r=authority(n,0);if(r<0)goto fault;if(!r)return 0;
-        enum a733_pins_result x=a733_pins_acquire_banked(n->config.pins,n->clock.owner,n->pin_requests,4,&n->pin,operation_deadline(n,d,0));
+        enum a733_pins_result x=a733_pins_acquire_banked(n->config.pins,n->clock.owner,n->pin_requests,4,&n->pin,d);
         if(x==A733_PINS_BUSY)return 0;if(x!=A733_PINS_OK)goto fault;
         atomic_store_explicit(&n->gpio_ready,1,memory_order_release);++n->stage;break;}
     case 8:
         r=authority(n,1);if(r<0)goto fault;if(!r)return 0;
-        {enum a733_pins_result x=a733_pins_held_banked(n->config.pins,&n->pin,&owned,operation_deadline(n,d,0));
+        {enum a733_pins_result x=a733_pins_held_banked(n->config.pins,&n->pin,&owned,d);
          if(x==A733_PINS_BUSY)return 0;if(x!=A733_PINS_OK||!owned)goto fault;}
-        if(!a733_platform_lock_enter(n->config.locks,A733_PLATFORM_REGISTER_LOCK,operation_deadline(n,d,0)))return 0;
+        r=a733_platform_lock_step(n->config.locks,A733_PLATFORM_REGISTER_LOCK,d);
+        if(r<0)goto fault;if(!r)return 0;
         n->held=1;
         /* S_TWI1 shares TWI0's register set. The PMU registers of S_TWI0 are
          * absent from its manual register map and are never probed here. */
@@ -280,7 +280,7 @@ int a733_typec_native_power_poll(struct a733_typec_native *n)
     if(!now(n,&t)||!a733_deadline_after(t,1000,&d)||!a733_monotonic_advance(t,&n->power_now)){
         a733_typec_revoke(&n->provider);n->power_fault=1;return -1;}
     uint64_t stop_deadline=atomic_load_explicit(&n->stop_deadline,memory_order_acquire);
-    if(stop_deadline){if(d>stop_deadline)d=stop_deadline;d=stop_operation_deadline(n,d);}
+    if(stop_deadline)d=stop_deadline;
     unsigned command=atomic_load_explicit(&n->command,memory_order_acquire);
     unsigned output=atomic_load_explicit(&n->output_state,memory_order_acquire);
     if(stop_deadline&&command==2&&output!=2)return 0;
@@ -409,12 +409,13 @@ int a733_typec_native_provider_stop_poll(struct a733_typec_native *n)
         if(n->held||n->bus.held||n->bus.state!=A733_TWI_READY||
            n->provider.state!=A733_TYPEC_OFF_RETAINED)return provider_stop_fault(n);
         r=ownership(n,1);if(r<0)return provider_stop_fault(n);if(!r)return 0;
-        n->deadline=stop_operation_deadline(n,deadline);
+        n->deadline=deadline;
         int owned=0;
         enum a733_pins_result p=a733_pins_held_banked(n->config.pins,&n->pin,&owned,n->deadline);
         if(p==A733_PINS_BUSY)return 0;
         if(p!=A733_PINS_OK||!owned)return provider_stop_fault(n);
-        if(!a733_platform_lock_enter(n->config.locks,A733_PLATFORM_REGISTER_LOCK,n->deadline))return 0;
+        r=a733_platform_lock_step(n->config.locks,A733_PLATFORM_REGISTER_LOCK,n->deadline);
+        if(r<0)return provider_stop_fault(n);if(!r)return 0;
         n->held=1;
         /* A733 manual 18.11.7: idle legacy controller, gate bit1 and reset
          * bit17. Preserve the PMIC controller's neighboring fields. */
@@ -431,8 +432,7 @@ int a733_typec_native_provider_stop_poll(struct a733_typec_native *n)
         ++n->stop_phase;return 0;}
     case 8:
         if(n->pin.id){
-            enum a733_pins_result p=a733_pins_release_banked(n->config.pins,&n->pin,1,
-                stop_operation_deadline(n,deadline));
+            enum a733_pins_result p=a733_pins_release_banked(n->config.pins,&n->pin,1,deadline);
             if(p==A733_PINS_BUSY)return 0;
             if(p!=A733_PINS_OK)return provider_stop_fault(n);
             atomic_store_explicit(&n->gpio_ready,0,memory_order_release);
@@ -466,7 +466,7 @@ int a733_typec_native_power_stop_poll(struct a733_typec_native *n)
         if(t>=deadline)goto fault;
         int owned=ownership(n,1);if(owned<0)goto fault;if(!owned)return 0;
         enum a733_pins_result p=a733_pins_write_outputs(n->config.pins,&n->pin,n->wiring->vbus_bank,
-            1u<<n->wiring->vbus_pin,0,stop_operation_deadline(n,deadline));
+            1u<<n->wiring->vbus_pin,0,deadline);
         if(p==A733_PINS_BUSY)return 0;
         if(p!=A733_PINS_OK)goto fault;
         atomic_store_explicit(&n->output_state,1,memory_order_release);

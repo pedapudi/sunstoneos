@@ -184,6 +184,9 @@ def failure(uc,a,n,context):
  panic.append({'file':text,'line':uc.reg_read(UC_ARM64_REG_X1)});uc.emu_stop()
 def read(uc,access,a,n,value,context):
  if a>=0x40000000:return
+ if variable('typec_deadline_crossed'):
+  put(symbols['typec_late_mmio'],variable('typec_late_mmio')+1)
+  raise AssertionError(('MMIO after return deadline',hex(a),test_time()))
  state['mmio']+=1;put(symbols['typec_mmio_count'],state['mmio'])
  if a==0x07025010:
   status();active=not(state['fusb'].get(6,0)&0x20) and bool(state['interrupt']&~state['fusb'].get(0xa,255))
@@ -204,8 +207,16 @@ def read(uc,access,a,n,value,context):
   if off==8 and 'data' in b:put(a,b['data'])
   elif off==0xc and 'control' in b:put(a,b['control'])
   elif off==0x10 and 'status' in b:put(a,b['status'])
+  # Advance the modeled counter after an admitted control read. The next
+  # native access within this same TWI poll must observe the deadline.
+  if base==0x07084000 and off==0xc and variable('typec_cross_deadline'):
+   put(symbols['typec_test_time'],variable('typec_access_deadline',8),8)
+   put(symbols['typec_deadline_crossed'],1);put(symbols['typec_cross_deadline'],0)
 def write(uc,access,a,n,value,context):
  if a>=0x40000000:return
+ if variable('typec_deadline_crossed'):
+  put(symbols['typec_late_mmio'],variable('typec_late_mmio')+1)
+  raise AssertionError(('MMIO after return deadline',hex(a),test_time()))
  state['mmio']+=1;put(symbols['typec_mmio_count'],state['mmio'])
  state['events'].append(['mmio',a,value,test_time()])
  if a==0x07025004 and variable('typec_pin_restore_fault') and not value&15:
@@ -216,7 +227,12 @@ def write(uc,access,a,n,value,context):
    assert not variable('typec_external_vbus')
    assert state['vbus_low_samples'] and state['vbus_low_samples'][-1][1]&0xa0==0
    assert state['vbus_low_samples'][-1][2]&12==0
-  status();return
+  status()
+  # Scheduler preemption between a write and its readback exceeds one tick
+  # but remains within the accepted five-millisecond GPIO operation budget.
+  if not value&256 and variable('typec_pin_delay'):
+   put(symbols['typec_test_time'],test_time()+1500,8);put(symbols['typec_pin_delay'],0)
+  return
  base=a&~4095
  if base not in state['bus']:return
  b=state['bus'][base];off=a-base
@@ -319,7 +335,9 @@ stop_cases=[(1,9,'stop-constructor'),*((1,10+i,'stop-stage-'+str(i)) for i in ra
  (8,3,'stop-gpio-busy'),(9,14,'stop-pmic-first-pending'),(9,15,'stop-pmic-second-pending'),
  (10,3,'stop-power-ack'),(12,3,'stop-control-readback'),(13,3,'stop-pin-readback'),
  (14,3,'stop-unknown-stage'),(15,3,'stop-revoked-inflight'),
- (16,18,'stop-lock-held-before-request'),(1,20,'stop-enable-pending'),(17,21,'stop-already-discharged')]
+ (16,18,'stop-lock-held-before-request'),(1,20,'stop-enable-pending'),(17,21,'stop-already-discharged'),
+ (18,3,'stop-local-deadline-between-accesses'),(19,3,'stop-shared-deadline-between-accesses'),
+ (20,3,'stop-pin-readback-after-one-tick'),(21,18,'stop-lock-contention-pending')]
 if args.stop_cases:
  assert set(args.stop_cases)<=set(name for _,_,name in stop_cases)
  stop_cases=[case for case in stop_cases if case[2] in args.stop_cases]
@@ -330,7 +348,7 @@ for fault,point,name in stop_cases:
  u.context_restore(context);state=copy.deepcopy(hardware);put(symbols['typec_stop_case'],fault)
  event_start=len(state['events'])
  execute(name,u.reg_read(UC_ARM64_REG_PC))
- if fault in (1,2,9,10,17):
+ if fault in (1,2,9,10,17,20,21):
   assert get(0x0701019c)&0x20002==0
   assert get(0x07025004)==0
   # Register restoration follows GPIO-low readback, discharge and the power

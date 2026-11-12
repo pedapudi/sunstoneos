@@ -31,6 +31,8 @@ volatile unsigned typec_wire_fault,typec_partner_cc=1,typec_external_vbus,typec_
 volatile uint64_t typec_monitor_request;
 volatile unsigned typec_steady_polls,typec_steady_reads,typec_steady_mmio,typec_steady_old_loop;
 volatile unsigned typec_stop_case,typec_low_fault,typec_restore_fault,typec_pin_restore_fault;
+volatile uint64_t typec_shared_deadline,typec_access_deadline;
+volatile unsigned typec_cross_deadline,typec_deadline_crossed,typec_late_mmio,typec_pin_delay;
 static unsigned stop_check(void);
 BaseType_t xTaskGetSchedulerState(void)
 {return scheduler?taskSCHEDULER_RUNNING:taskSCHEDULER_NOT_STARTED;}
@@ -42,7 +44,7 @@ static unsigned queue_index(QueueHandle_t q)
 TaskHandle_t xQueueGetMutexHolder(QueueHandle_t q){return queue_owner[queue_index(q)];}
 BaseType_t xQueueSemaphoreTake(QueueHandle_t q,TickType_t wait)
 {
-    if((current_task==1||current_task==3)&&atomic_load(&port.stop_deadline))assert(!wait);
+    assert(wait<=1);
     unsigned i=queue_index(q);
     if(queue_owner[i]){typec_test_time+=wait?1000:0;return pdFALSE;}
     queue_owner[i]=xTaskGetCurrentTaskHandle();return pdTRUE;
@@ -60,10 +62,13 @@ static int forbidden_rail(void *p,struct a733_gpu_resource_rail *out,uint64_t d)
 {(void)p;(void)out;(void)d;assert(0);return 0;}
 __attribute__((noinline)) void typec_checkpoint(unsigned id)
 {typec_checkpoint_id=id;}
+static uint64_t shared_deadline(void *unused)
+{(void)unused;return typec_shared_deadline;}
 static void setup(void)
 {
     assert(a733_counter_clock_init(&counter,24000000));
     assert(a733_platform_locks_init(&locks,a733_counter_clock_now,&counter));
+    locks.deadline=shared_deadline;
     assert(a733_clock_leases_init(&clocks,a733_counter_clock_now,&counter));
     const struct a733_gpu_resource_ops gpu_ops={a733_counter_clock_now,forbidden_read,forbidden_update,forbidden_rail};
     assert(a733_gpu_resources_init(&gpu,&gpu_ops,&counter));
@@ -71,10 +76,12 @@ static void setup(void)
     assert(a733_rail_leases_init(&rails,&rail_binding));
 }
 static int pin_now(void *p,uint64_t *out)
-{struct a733_platform_locks *l=p;return l->now(l->context,out);}
+{struct a733_platform_locks *l=p;return a733_platform_lock_live(l)&&l->now(l->context,out);}
+static int pin_enter(void *p,uint64_t deadline)
+{return a733_platform_lock_step(p,A733_PLATFORM_REGISTER_LOCK,deadline)==1;}
 static void finish_setup(void)
 {
-    const struct a733_pins_locks pin_locks={locks.callbacks.register_enter,locks.callbacks.register_leave,pin_now,&locks};
+    const struct a733_pins_locks pin_locks={pin_enter,locks.callbacks.register_leave,pin_now,&locks};
     assert(a733_pins_native_init(&pin_native,&pin_locks));
     struct a733_pin_handoff handoff={0};
     for(unsigned b=1;b<A733_PIN_BANKS;b++)handoff.authorized[b]=a733_pin_bank_mask(b);
@@ -228,7 +235,7 @@ unsigned typec_native_check(void)
 static unsigned stop_check(void)
 {
     const unsigned which=typec_stop_case,stage=port.stage;
-    if(which==2||which==3||which==7||which==15){
+    if(which==2||which==3||which==7||which==15||which==18||which==19){
         for(unsigned i=0;i<1000&&port.bus.state!=A733_TWI_WAIT;i++)assert(service(1)>=0);
         assert(port.bus.held&&port.provider.transaction);
         if(which==3)typec_wire_fault=1;
@@ -257,6 +264,12 @@ static unsigned stop_check(void)
         typec_test_time+=10000;
     }
     uint64_t deadline=typec_test_time+(which==6?1:3000000);
+    if(which==18||which==19){
+        typec_cross_deadline=1;typec_access_deadline=typec_test_time+500;
+        if(which==18)deadline=typec_access_deadline;
+        else typec_shared_deadline=typec_access_deadline;
+    }
+    if(which==20)typec_pin_delay=1;
     current_task=4;
     assert(a733_typec_native_stop_request(&port,deadline)==1);
     assert(a733_typec_native_stop_request(&port,deadline)==1);
@@ -265,7 +278,7 @@ static unsigned stop_check(void)
     assert(a733_typec_native_provider_stop_poll(&port)==-1);
     assert(a733_typec_native_power_stop_poll(&port)==-1);
     assert(typec_mmio_count==accesses&&a733_typec_native_stop_result(&port)==0);
-    if(which==8)queue_owner[A733_PLATFORM_REGISTER_LOCK]=(void *)4;
+    if(which==8||which==21)queue_owner[A733_PLATFORM_REGISTER_LOCK]=(void *)4;
     if(which==10){
         current_task=1;
         for(unsigned i=0;i<20;i++){
@@ -274,7 +287,7 @@ static unsigned stop_check(void)
             assert(port.pin.id&&a733_typec_native_stop_result(&port)==0);
         }
     }
-    unsigned power_terminal=0,provider_terminal=0,saw_drain=0;
+    unsigned power_terminal=0,provider_terminal=0,saw_drain=0,saw_contention=0;
     uint64_t transaction_deadline=port.bus.deadline;
     for(unsigned i=0;i<120000&&(!power_terminal||!provider_terminal);i++){
         /* A persistent high comparator has already completed a measurement.
@@ -285,6 +298,11 @@ static unsigned stop_check(void)
         if(!pmic.failed)(void)a733_pmic_poll(&pmic);
         current_task=3;
         int power=a733_typec_native_power_stop_poll(&port);
+        if(which==21&&port.power_stop_deadline&&!saw_contention){
+            assert(!power&&!port.power_fault&&!pins.failed&&typec_test_time<port.power_stop_deadline);
+            assert(!atomic_load(&locks.retained));saw_contention=1;
+            queue_owner[A733_PLATFORM_REGISTER_LOCK]=0;
+        }
         if(power)power_terminal=1;
         current_task=1;
         int provider=a733_typec_native_provider_stop_poll(&port);
@@ -296,7 +314,7 @@ static unsigned stop_check(void)
         if(a733_typec_native_stop_result(&port)==1)assert(provider_terminal&&power_terminal);
     }
     assert(provider_terminal&&power_terminal);
-    int expected=(which==1||which==2||which==9||which==10||which==17)?1:-1;
+    int expected=(which==1||which==2||which==9||which==10||which==17||which==20||which==21)?1:-1;
     assert(a733_typec_native_stop_result(&port)==expected);
     if(expected==1){
         assert(!port.pin.id&&!port.requests[0].id&&!port.requests[1].id);
@@ -309,6 +327,12 @@ static unsigned stop_check(void)
     }else if(stage>=8)assert(port.pin.id);
     if(which==3||which==7||which==15)assert(port.bus_fault&&port.bus.state==A733_TWI_FAULT);
     if(which==4)assert(atomic_load(&port.output_state)==1&&typec_test_time<deadline);
+    if(which==18||which==19){
+        assert(typec_deadline_crossed==1&&!typec_late_mmio&&port.bus_fault);
+        assert(port.bus.deadline==transaction_deadline);
+    }
+    if(which==20)assert(!typec_pin_delay);
+    if(which==21)assert(saw_contention);
     accesses=typec_mmio_count;
     for(unsigned i=0;i<3;i++){
         current_task=3;assert(a733_typec_native_power_stop_poll(&port)!=0);
