@@ -156,7 +156,7 @@ def scratch_cases(module, out, approvals, made):
     module.card_approval_path(CID33, approvals).write_text(json.dumps({'card_cid': CID33, 'port': '3-1'}))
     refused(go, 'another card or port')
     module.card_approval_path(CID33, approvals).write_text(json.dumps({'card_cid': CID33, 'port': '3-3'}))
-    refused(lambda: go(desc=dict(descriptor, storage_bounds=made['3-3']['descriptor']['storage_bounds'])), 'not both')
+    refused(lambda: go(desc=dict(descriptor, storage_bounds=made['3-3']['descriptor']['storage_bounds'])), 'one of storage_bounds, storage_scratch and storage_boot_area')
 
 
 def _write(path, data):

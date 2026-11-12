@@ -8,6 +8,8 @@ runs 512 MiB and derives its guard from the session deadline), over a file-backe
   fast       no delay and no guard: status 0, the whole file, fsck clean, the whole stream;
   append     mode 5 on the slow image: the file reaches the full length, equals the stream, the volume is clean; on a whole file or an absent file nothing is written;
   read-back  mode 3 on the fast image: status 0 and no mismatches; on the slow image: status 12 (the file is short);
+  extent     mode 10 on a fresh image: the candidate lands on its extent below the partition and reads back equal, nothing else changes, and an extent
+             that differs from the blob's single write range, a partial sector, two write ranges or an extent reaching the partition write nothing;
   format     mode 9 on the whole-file image (a scratch card's restore): status 0, `fsck.fat -n` clean, the file and its directory gone, the whole partition outside the
              FATs, the boot sector's label and the FSInfo counts the only other writes, the geometry kept; the region file then created again by mode 0, whole and equal to the stream.
 """
@@ -193,8 +195,54 @@ def main():
     odd_img = out / 'odd.img'; make_image(odd_img)
     d7 = run(fast, odd_img, 5, out / 'append-absent.result', 0)
     assert d7['status'] == 7, d7                                  # no file: E_OPEN, nothing written
+    extent_cases(fast, out)
     print(f"PASS storage-write guard: stopped at {d['written_bytes']} of {FILE} bytes, file closed at {synced} bytes, fsck clean, "
           f"stream prefix intact; fast run whole and clean; read-back status {d3['status']} and {d4['status']}")
+
+
+def extent_cases(binary, out):
+    """Mode 10 on a fresh image: the candidate lands on exactly its extent below the partition and reads back equal; sector 0 and the
+    partition stay as they were and fsck stays clean; an extent that is not the blob's single write range, a partial candidate sector, a
+    blob with two write ranges and an extent that reaches the partition each write nothing and report status 14."""
+    spec = importlib.util.spec_from_file_location('storage_bounds_extent', ROOT / 'tools/storage_bounds.py')
+    sb = importlib.util.module_from_spec(spec); spec.loader.exec_module(sb)
+    cid = '2750485344333247120000029d014c47'
+    candidate = bytes((i * 131 + (i >> 9)) & 0xff for i in range(481 * 512))
+    assert host.extent_input(16, candidate) == sb.write_extent_input(16, candidate), 'host and runner encode the raw-extent input differently'
+
+    def blob(ranges):
+        return sb.encode_input(ranges, [(0, 1), (16, 496)], '00' * 32, cid)
+
+    def run10(image, name, bounds_blob, mode_input):
+        (out / f'{name}.bounds').write_bytes(bounds_blob)
+        (out / f'{name}.mode').write_bytes(mode_input)
+        env = {**harness.environment(), 'BOUNDS': str(out / f'{name}.bounds'), 'MODE_INPUT': str(out / f'{name}.mode')}
+        r = subprocess.run([str(binary), str(image), str(BASE), str(PART), '10', str(out / f'{name}.result'), '0'],
+                           capture_output=True, text=True, env=env)
+        assert r.returncode == 0, f'model exited {r.returncode}: {r.stdout}{r.stderr}'
+        return host.decode((out / f'{name}.result').read_bytes())
+
+    image = out / 'extent.img'; make_image(image)
+    before = image.read_bytes()
+    d = run10(image, 'extent', blob([(16, 481)]), host.extent_input(16, candidate))
+    after = image.read_bytes()
+    want = hashlib.sha256(candidate).hexdigest()
+    assert d['status'] == 0 and not host.failures(d, want), d
+    assert d['written_bytes'] == len(candidate) and d['flushes'] == 2 and d['extent']['readback_sha256'] == want, d['extent']
+    assert after[16 * 512:497 * 512] == candidate, 'the extent does not hold the candidate'
+    assert after[:16 * 512] == before[:16 * 512] and after[497 * 512:] == before[497 * 512:], 'a sector outside the extent changed'
+    fsck_clean(image)
+    assert host.failures(dict(d, extent=dict(d['extent'], sector0_unchanged=False)), want)
+    assert host.failures(d, '0' * 64) and host.failures(dict(d, mismatches=1), want)
+    for name, bounds_blob, mode_input in (
+            ('extent-shifted', blob([(16, 481)]), host.extent_input(17, candidate)),
+            ('extent-short', blob([(16, 481)]), host.extent_input(16, candidate)[:-100]),
+            ('extent-two-ranges', blob([(16, 481), (600, 1)]), host.extent_input(16, candidate)),
+            ('extent-into-partition', blob([(BASE - 8, 16)]), host.extent_input(BASE - 8, bytes(16 * 512)))):
+        clean = out / f'{name}.img'; clean.write_bytes(after)
+        d = run10(clean, name, bounds_blob, mode_input)
+        assert d['status'] == 14 and d['written_bytes'] == 0, (name, d['status'], d['written_bytes'])
+        assert clean.read_bytes() == after, name + ' changed the card'
 
 
 if __name__ == '__main__':

@@ -15,13 +15,52 @@ struct ss_control_stats {
 };
 #define SS_CONTROL_BINS 192u /* four counter ticks (167 ns) per bin, 32 us; the last bin takes the rest */
 #define SS_CONTROL_BIN_TICKS 4u
+enum ss_control_mode {
+    /* Keep histograms without allocating a ring consumer or publishing ring samples. */
+    SS_CONTROL_HISTOGRAM_ONLY = 1u
+};
+enum ss_control_error {
+    SS_CONTROL_ERROR_DEADLINE = 1u,
+    SS_CONTROL_ERROR_NOTIFICATION = 2u,
+    SS_CONTROL_ERROR_NS_RANGE = 4u,
+    SS_CONTROL_ERROR_TASK_CREATE = 8u
+};
+/* Counts and acknowledgments are release-published by their respective writers.
+ * Quiescent bits require both the local timer-ISR and requested task-path writer
+ * to acknowledge stop. consumer_parked follows the final ring drain. */
+struct ss_control_progress {
+    uint64_t frequency_hz, count[SS_CONTROL_CORES][2];
+    uint32_t requested_mask, armed_mask, quiescent_mask, consumer_parked;
+    uint32_t errors[SS_CONTROL_CORES];
+};
+struct ss_control_metric {
+    uint64_t count;
+    uint32_t maximum_ticks, p9999_upper_ticks;
+};
 /* Paths to run per core: bit 0 the control interrupt handler, bit 1 the woken task. */
 unsigned ulSunstoneControlStartPaths(const unsigned *cores, const unsigned *rate_hz, const unsigned *paths, unsigned n);
-/* The latency (kind 0) or jitter (kind 1) histogram of a path, SS_CONTROL_BINS counts of one tick each. The task
- * path also has kind 2, the handler's entry delay after the deadline, and kind 3, the task start after the handler. */
+/* The measurement mode is selected on the first start and cannot change.
+ * A stopped instance cannot restart. A rate must produce a nonzero period. */
+unsigned ulSunstoneControlStartPathsMode(const unsigned *cores, const unsigned *rate_hz,
+                                       const unsigned *paths, unsigned n, unsigned mode);
+unsigned ulSunstoneControlProgressRead(struct ss_control_progress *out);
+unsigned ulSunstoneControlQuiescent(void);
+/* Qualification-only completion check using the public FreeRTOS task-state
+ * query. Returns zero when INCLUDE_eTaskGetState is disabled. Its queries can
+ * add diagnostic contention; data quiescence is the separate promise above. */
+unsigned ulSunstoneControlTasksSuspended(void);
+/* Read after Quiescent returns true. Kinds match Histogram below. */
+unsigned ulSunstoneControlMetricRead(unsigned core, unsigned path, unsigned kind,
+                                    struct ss_control_metric *out);
+/* The latency (kind 0) or jitter (kind 1) histogram of a path, SS_CONTROL_BINS counts with width SS_CONTROL_BIN_TICKS. The task
+ * path also has kind 2, the handler's entry delay after the deadline, and kind 3, the task start after the handler.
+ * Histogram and the legacy statistics/context getters require caller synchronization
+ * with their writers; stop plus Quiescent provides that synchronization. */
 const uint32_t *ulSunstoneControlHistogram(unsigned core, unsigned path, unsigned kind);
 /* Start `rate_hz[i]` on `cores[i]` (not core 0). Returns the number started. Call once, from a task. */
 unsigned ulSunstoneControlStart(const unsigned *cores, const unsigned *rate_hz, unsigned n);
+/* Request stop and wake each owner/task. The caller polls Quiescent; this
+ * function does not wait. Owned stale timer interrupts remain handled. */
 void vSunstoneControlStop(void);
 struct ss_control_worst { uint32_t latency_ns, pmr; uint64_t elr, spsr, rpr, task, nesting, when_us; };
 /* The rank-th largest control-path latency of a core with the interrupted context (see runtime/control_irq.c). */

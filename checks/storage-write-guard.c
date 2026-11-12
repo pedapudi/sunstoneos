@@ -1,7 +1,8 @@
 /* Host model for the storage-write test's time guard: apps/storage-write-test/main.c is compiled unchanged except for a
  * scaled-down file and guard (FILE_BYTES, GUARD_US), against a file-backed card image whose writes are slow (a fixed
  * sleep per write call) and a stub of the OS kit. The model refuses writes outside the FAT copies and data area, and
- * ss_finish stores the 512-byte result in the file named by RESULT and exits. Usage:
+ * ss_finish stores the 512-byte result in the file named by RESULT and exits. In mode 10 the model admits writes only inside the header's
+ * extent. Usage:
  *   storage-write-guard IMAGE BASE SECTORS MODE RESULT DELAY_US */
 #define _GNU_SOURCE
 #define _FILE_OFFSET_BITS 64
@@ -18,6 +19,7 @@ static uint64_t dev_sectors, part_base, part_sectors, delay_us;
 static const char *result_path;
 static unsigned format_certified, format_serial;
 static uint64_t region_fat1, region_fat2, region_data, region_end, region_fsinfo, region_boot = UINT64_MAX;   /* the boot sector is writable only in the format mode */
+static uint64_t extent_first, extent_end;     /* mode 10: the header's extent, the only sectors it may write */
 
 /* The model's clock is virtual: it advances only by the waits the application asks for (ss_usb_wait) and by the modeled card's
  * time per write call. Host load therefore never moves a deadline relative to the writes: a session that must be cut after N
@@ -41,7 +43,7 @@ void sha256_block_ce(const uint8_t b[64], uint8_t d[32]) { (void)b; (void)d; abo
 int ss_cpu_observations(unsigned core, struct ss_cpu_observation *o) { (void)core; memset(o, 0, sizeof *o); return 1; }
 int ss_storage_enable(const void *b, size_t n) { (void)b; (void)n; return 1; }
 int ss_storage_region(void *b, size_t n) { (void)b; (void)n; return 1; }
-int ss_storage_close(void) { if (r.mode == 9 && !r.status) assert(format_certified); return 1; }
+int ss_storage_close(void) { if ((r.mode == 9 || r.mode == 10) && !r.status) assert(format_certified); return 1; }
 int ss_storage_open_read(void) { return 1; }
 int ss_storage_diagnostic(uint64_t out[4]) { memset(out, 0, 32); return 1; }
 int ss_storage_mode(uint64_t out[5]) { memset(out, 0, 40); return 1; }
@@ -75,6 +77,7 @@ static int dev_read(void *c, uint64_t s, uint32_t n, uint8_t *buf)
 static int allowed(uint64_t s)
 {
     uint64_t fsz = region_fat2 - region_fat1;
+    if (r.mode == 10) return s >= extent_first && s < extent_end;
     return (s >= region_fat1 && s < region_fat2 + fsz) || s == region_fsinfo || s == region_boot || (s >= region_data && s < region_end);
 }
 static int dev_write(void *c, uint64_t s, uint32_t n, const uint8_t *buf)
@@ -109,11 +112,24 @@ int ss_storage_device(struct fwr_device *d)
 {
     *d = (struct fwr_device){.context = NULL, .read = dev_read, .write = dev_write, .yield = NULL, .sectors = dev_sectors,
                              .au_sectors = getenv("AU_SECTORS") ? (uint32_t)strtoul(getenv("AU_SECTORS"), 0, 0) : 256, .max_write_sectors = 256};
-    if (r.mode == 9) { d->transaction = format_transaction; d->write_classified = format_write; }
+    if (r.mode == 9 || r.mode == 10) { d->transaction = format_transaction; d->write_classified = format_write; }
     return 1;
 }
 
-static uint8_t bounds_blob[64], mode_blob[4096] __attribute__((aligned(64)));
+static uint8_t bounds_blob[65536], mode_blob[254464] __attribute__((aligned(64)));
+static size_t bounds_bytes = 64, mode_bytes = 4096;
+/* BOUNDS and MODE_INPUT name files that replace the inputs (mode 10 reads its extent and candidate from them). */
+static size_t load(const char *name, uint8_t *to, size_t limit, size_t otherwise)
+{
+    const char *path = getenv(name);
+    if (!path) return otherwise;
+    FILE *f = fopen(path, "rb");
+    if (!f) exit(2);
+    size_t n = fread(to, 1, limit, f);
+    if (!feof(f) && fgetc(f) != EOF) exit(2);
+    fclose(f);
+    return n;
+}
 static uint8_t flush_buffer[16 << 20] __attribute__((aligned(64)));
 
 int main(int argc, char **argv)
@@ -124,6 +140,12 @@ int main(int argc, char **argv)
     part_base = strtoull(argv[2], 0, 0); part_sectors = strtoull(argv[3], 0, 0);
     dev_sectors = (uint64_t)lseek(image_fd, 0, SEEK_END) / 512;
     mode_blob[0] = (uint8_t)atoi(argv[4]);
+    bounds_bytes = load("BOUNDS", bounds_blob, sizeof bounds_blob, bounds_bytes);
+    mode_bytes = load("MODE_INPUT", mode_blob, sizeof mode_blob, mode_bytes);
+    if (mode_blob[0] == 10) {
+        for (unsigned i = 0; i < 8; ++i) extent_first |= (uint64_t)mode_blob[8 + i] << (8 * i);
+        extent_end = extent_first + (mode_bytes > 512 ? (mode_bytes - 512) / 512 : 0);
+    }
     result_path = argv[5]; delay_us = strtoull(argv[6], 0, 0);
     uint8_t b[512];
     if (pread(image_fd, b, 512, (off_t)part_base * 512) != 512) return 2;
@@ -137,10 +159,11 @@ int main(int argc, char **argv)
     if (getenv("FINISH_AFTER_US")) { finish_by_us = now_us() + strtoull(getenv("FINISH_AFTER_US"), 0, 0); cut_enabled = getenv("CUT") != NULL; g.finish_by_us = finish_by_us; }
     /* The grant points at a span table in manifest order (ABI version 2). */
     static struct ss_span spans[] = {
-        [STORAGE_WRITE_REGION_BOUNDS] = {bounds_blob, sizeof bounds_blob},
-        [STORAGE_WRITE_REGION_MODE] = {mode_blob, sizeof mode_blob},
+        [STORAGE_WRITE_REGION_BOUNDS] = {bounds_blob, 0},
+        [STORAGE_WRITE_REGION_MODE] = {mode_blob, 0},
         [STORAGE_WRITE_REGION_FLUSH] = {flush_buffer, sizeof flush_buffer},
     };
+    spans[STORAGE_WRITE_REGION_BOUNDS].bytes = bounds_bytes; spans[STORAGE_WRITE_REGION_MODE].bytes = mode_bytes;
     g.regions = spans;
     g.region_count = sizeof spans / sizeof spans[0];
     storage_write_main(&g);

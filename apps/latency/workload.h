@@ -4,12 +4,24 @@
 #include "sunstone_latency.h"
 #include <stddef.h>
 #include <stdint.h>
+#ifdef SUNSTONE_LATENCY_CONTROL
+#include "control.h"
+#endif
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+#include "latency_trace.h"
+#endif
+#ifdef SUNSTONE_SCHED_PMU
+#include "latency_pmu.h"
+#endif
 
 #define LATENCY_CORES 8U
 #define LATENCY_IDLE_SAMPLES 64U
 #define LATENCY_BUSY_SAMPLES 128U
 #define LATENCY_BYTES_PER_CORE (1024U * 1024U)
 #define LATENCY_RESULT_MAGIC UINT64_C(0x53534c4154454e31)
+#ifndef SUNSTONE_LATENCY_RUN_US
+#define SUNSTONE_LATENCY_RUN_US 12000000u
+#endif
 
 struct latency_traffic {
     uint64_t sweeps, bytes_read, bytes_written, digest;
@@ -39,18 +51,53 @@ struct latency_result {
     uint32_t pmu_supported[LATENCY_CORES];
     struct ss_latency_site_pmu site_pmu[SS_LAT_PMU_ROWS][LATENCY_CORES][SS_LAT_SITE_SLOTS];
 #endif
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    struct ss_sched_trace_report scheduler __attribute__((aligned(64)));
+#endif
+#ifdef SUNSTONE_LATENCY_CONTROL
+    struct latency_control_report control __attribute__((aligned(64)));
+#endif
+#ifdef SUNSTONE_SCHED_PMU
+    struct ss_sched_pmu_report pmu_windows __attribute__((aligned(64)));
+#endif
 };
 _Static_assert(offsetof(struct latency_result, core) == 320 &&
     offsetof(struct latency_result, phases) == 5440 &&
     offsetof(struct latency_result, acquisitions) == 20224 &&
     offsetof(struct latency_result, wakes) == 20848 &&
     offsetof(struct latency_result, sites) == 57728 &&
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
 #ifdef SUNSTONE_LATENCY_PMU
+    offsetof(struct latency_result, scheduler) == 65088 &&
+#else
+    offsetof(struct latency_result, scheduler) == 63872 &&
+#endif
+    sizeof(struct latency_result) <= 131072,
+#elif defined(SUNSTONE_LATENCY_CONTROL)
+    offsetof(struct latency_result, control) == 63872 &&
+    sizeof(struct latency_result) == 63872 + 17536,
+#elif defined(SUNSTONE_LATENCY_PMU)
     sizeof(struct latency_result) == 63872 + 1216,
 #else
     sizeof(struct latency_result) == 63872,
 #endif
     "latency binary report layout");
+#ifdef SUNSTONE_LATENCY_CONTROL
+_Static_assert(offsetof(struct latency_result, control) % 64 == 0 &&
+    sizeof(struct latency_result) == offsetof(struct latency_result, control) + 17536 &&
+    sizeof(struct latency_result) <= 131072, "control report tail layout");
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+_Static_assert(offsetof(struct latency_result, control) ==
+    ((offsetof(struct latency_result, scheduler) + sizeof(struct ss_sched_trace_report) + 63u) & ~(size_t)63u),
+    "control tail follows the complete scheduler report");
+#endif
+#endif
+
+#ifdef SUNSTONE_SCHED_PMU
+_Static_assert(offsetof(struct latency_result, pmu_windows) % 64 == 0 &&
+    sizeof(struct latency_result) == offsetof(struct latency_result, pmu_windows) + 11712 &&
+    sizeof(struct latency_result) <= 131072, "scheduler PMU report tail layout");
+#endif
 
 /* Prepare before scheduling. Run from a controller allowed on one core; all
  * workload tasks use fixed affinity and independently allocated static stacks. */

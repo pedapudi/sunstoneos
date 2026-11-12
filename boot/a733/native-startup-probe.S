@@ -1,4 +1,5 @@
 // Fixed native-image checkpoints. The original startup owns stack and BSS.
+#include "a733_cpu_reset.h"
 .arch armv8-a
 .section .text,"ax"
 .global boot_checkpoint, cached_checkpoint, stop_checkpoint, park_checkpoint, fault_checkpoint
@@ -1118,11 +1119,8 @@ snapshot_final:
     mov w1, #0x20
     str w1, [x0]
     str wzr, [x0, #4]
-    dsb sy
     mov x0, #2
-    msr rmr_el3, x0
-    isb
-    b park
+    A733_CPU_RESET_WAIT(x0)
 configuration_require_off:
     dsb sy
     ldr w17, [x14]

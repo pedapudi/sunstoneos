@@ -1,3 +1,4 @@
+#include "a733_cpu_reset.h"
 .section .text.probe_smc,"ax"
 .global sunstone_probe_smc
 .type sunstone_probe_smc,%function
@@ -23,12 +24,8 @@ sunstone_probe_rom:
     mov w1,#0x20
     str w1,[x0]
     str wzr,[x0,#4]
-    dsb sy
     mov x0,#2
-    msr rmr_el3,x0
-    isb
-1:  wfi
-    b 1b
+    A733_CPU_RESET_WAIT(x0)
 .size sunstone_probe_rom,.-sunstone_probe_rom
 
 .section .text.probe_smc,"ax"

@@ -442,12 +442,13 @@ def policy(info, args, session=None):
     if info.get('card_fel_recovery'):
         require(approved and args.kind == 'probe', 'Card FEL recovery requires --approved-by coordinator.')
         require(not args.input and not getattr(args, 'decoder', None),
-                'Card FEL recovery takes only its generated request and fixed result decoder.')
-        require(not storage and not d.get('storage_bounds') and not d.get('storage_scratch') and
+                'Card FEL recovery takes no inputs and uses its fixed retained result decoder.')
+        require(not storage and not d.get('storage_bounds') and not d.get('storage_scratch') and not d.get('storage_boot_area') and
                 bounds.classify(args.image) == 'no-core', 'Card FEL recovery must have no SD core or storage-write authority.')
         require(not d.get('operating_points') and getattr(args, 'restore_rails', None) is not True,
                 'Card FEL recovery carries no clock, rail or power transition authority.')
-        require(not preserving(args), 'Card FEL recovery is a RAM-only development proof without DRAM preservation.')
+        require(not preserving(args), 'Card FEL recovery uses only SRAM and has no DRAM preservation.')
+        load('card_fel_recovery_tool', ROOT/'tools/card_recovery.py').fel_bytes(args.fel)
     if storage or bounds.classify(args.image) == 'write-capable':
         bounds.admit(d, args, sha(args.image))
     # The reviewed operating points are data (tools/cpu-reviewed-points.json, protected), shared with tools/session.py.

@@ -1,5 +1,6 @@
 /* The EL1 tail never accesses a stack after clearing M/C/I. Final set/way
  * cleanup at EL3 retires late EL1 stack stores in both PA security spaces. */
+#include "a733_cpu_reset.h"
 .section .text.gpu_finite_smc,"ax"
 .global gpu_finite_smc
 .type gpu_finite_smc,%function
@@ -30,11 +31,7 @@ gpu_return_reset:
     mov w1,#0x20
     str w1,[x0]
     str wzr,[x0,#4]
-    dsb sy
     mov x0,#2
-    msr rmr_el3,x0
-    isb
-1:  wfi
-    b 1b
+    A733_CPU_RESET_WAIT(x0)
 .size gpu_return_reset,.-gpu_return_reset
 .section .note.GNU-stack,"",%progbits

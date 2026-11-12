@@ -4,7 +4,8 @@
 Modes: 0 creates the 512 MiB region test file (no read-back; a guard six seconds before the session deadline stops the write, closes cleanly and reports status 11);
 3 reads the whole file back against the stream; 1 is the interruption test, first lifetime (the application
 stops reporting progress after `cut_bytes` so the watchdog resets the board mid-flush); 2 is its second lifetime (mount,
-recover, read back what the volume holds)."""
+recover, read back what the volume holds); 10 writes one raw extent below the partition from the candidate sectors that
+follow its 512-byte header (extent_input), reads it back and reports both SHA-256 values."""
 import struct
 
 FIELDS = ('tag mode status detail file_bytes written_bytes au_sectors cpu_hz cpu_calibration_ticks counter_hz '
@@ -40,6 +41,18 @@ def mode_input(mode=0, cut_bytes=0):
     return struct.pack('<IIQ', mode, 0, cut_bytes).ljust(4096, b'\0')
 
 
+EXTENT_MODE, EXTENT_HEADER = 10, 512
+# The mode region holds the header and at most the 496 sectors 16..511 that the boot-area class backs up (tools/storage_bounds.py).
+EXTENT_MAX_SECTORS = 496
+
+
+def extent_input(first, candidate):
+    """The mode input of a raw-extent write: u32 10, u32 0, u64 first sector, zero to 512 bytes, then the candidate sectors."""
+    if not candidate or len(candidate) % 512 or len(candidate) // 512 > EXTENT_MAX_SECTORS:
+        raise ValueError('The candidate must be 1 to %d whole sectors.' % EXTENT_MAX_SECTORS)
+    return struct.pack('<IIQ', EXTENT_MODE, 0, first).ljust(EXTENT_HEADER, b'\0') + bytes(candidate)
+
+
 def decode(payload):
     if len(payload) != 512:
         raise ValueError(f'storage-write result is {len(payload)} bytes, not 512.')
@@ -73,6 +86,11 @@ def decode(payload):
                                      'total': sec(out['read_ticks'])}
         if out['flush_ticks']:
             out['read_rate_mb_s'] = out['written_bytes'] / sec(out['flush_ticks']) / 1e6
+    if out['mode'] == EXTENT_MODE:                 # the histogram words carry the read-back and candidate SHA-256, computed on the board
+        digests = payload[8 * len(FIELDS):8 * len(FIELDS) + 64]
+        out['extent'] = {'written_bytes': out['written_bytes'], 'pieces': out['flushes'], 'readback_sha256': digests[:32].hex(),
+                         'candidate_sha256': digests[32:].hex(), 'sector0_unchanged': out['volume_size'] == 1,
+                         'write_seconds': sec(out['flush_ticks']), 'readback_seconds': sec(out['read_ticks'])}
     out['phase_seconds'] = {k: sec(out[k + '_ticks']) for k in ('create', 'generate', 'flush', 'close', 'total')}
     out['flush_latency_ms'] = {k: sec(out['flush_' + k]) * 1e3 for k in ('p50', 'p99', 'max')}
     if out['owner_elapsed_us']:
@@ -90,7 +108,15 @@ def guard_stop(decoded):
             0 < decoded['written_bytes'] < decoded['file_bytes'])
 
 
-def failures(decoded):
+def failures(decoded, candidate_sha256=None):
+    """The failures of a run; a raw-extent run also needs sector 0 unchanged and, when given, the read-back equal to the expected candidate."""
+    if decoded['mode'] == EXTENT_MODE:
+        e = decoded['extent']
+        wanted = candidate_sha256 or e['candidate_sha256']
+        if decoded['status'] == 0 and decoded['mismatches'] == 0 and e['sector0_unchanged'] and e['readback_sha256'] == e['candidate_sha256'] == wanted:
+            return []
+        return [f"status {decoded['status']} detail {decoded['detail']} mismatches {decoded['mismatches']} sector0 unchanged {e['sector0_unchanged']} "
+                f"read-back {e['readback_sha256']} candidate {e['candidate_sha256']}"]
     if decoded['mismatches'] == 0 and (decoded['status'] == 0 or guard_stop(decoded)):
         return []
     return [f"status {decoded['status']} detail {decoded['detail']} mismatches {decoded['mismatches']}"]

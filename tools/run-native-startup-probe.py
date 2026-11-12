@@ -52,7 +52,8 @@ SOURCES=('boot/a733/native-startup-probe.S','boot/a733/native-startup-probe.ld',
     'boot/a733/native-local-interrupt-probe.c','boot/a733/native-el3-cache-probe.S','boot/a733/native-el1-cache-probe.S','boot/a733/native-ns-publication.S','platform/a733/cpu_continue.c',
     'platform/a733-smp-cached/continuation-core.patch','platform/a733/cpu_start.c',
     'runtime/memory.c','runtime/include/string.h','include/a733_cpu_continue.h',
-    'include/a733_cpu_entry.h','include/a733_cpu_start.h','include/a733_cpu_coherence.h','tools/a733_tcr.py')
+    'include/a733_cpu_entry.h','include/a733_cpu_start.h','include/a733_cpu_off.h',
+    'include/a733_cpu_reset.h','include/a733_cpu_coherence.h','tools/a733_tcr.py')
 REPORT=0x42002000
 # Includes every byte written by actual stack/BSS initialization and admission.
 DRAM=(('native-code',0x41000000,0x12078),('native-data',0x41200000,0x21),
@@ -82,7 +83,7 @@ def prepare(a):
     profile=execution_profile(a.stop_before_power,a.stop_after_cpu_interface,a.stop_before_wake,a.stop_after_wake,a.el3_cache,a.el1_cache)
     commands=[['patch','--silent','--output',a.build/'continue-core.c',ROOT/'platform/a733/cpu_continue.c',
         ROOT/'platform/a733-smp-cached/continuation-core.patch'],
-        [a.clang,'--target=aarch64-none-elf','-march=armv8-a','-c',ROOT/'boot/a733/native-startup-probe.S','-o',a.build/'overlay.o']]
+        [a.clang,'--target=aarch64-none-elf','-march=armv8-a','-I',ROOT/'include','-c',ROOT/'boot/a733/native-startup-probe.S','-o',a.build/'overlay.o']]
     objects=[a.build/'overlay.o']
     for name,source in [('local',ROOT/'boot/a733/native-local-interrupt-probe.c'),
                         ('controller',a.build/'continue-core.c'),('topology',ROOT/'platform/a733/cpu_start.c'),

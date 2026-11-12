@@ -297,11 +297,14 @@ class Live:
             self.record['quarantined'] = True
             self.journal()
 
-    def tx(self, *arguments, timeout=30, pass_fds=()):
+    def tx(self, *arguments, timeout=30, pass_fds=(), recovery_launch=False):
         require(not self.failed, 'A failed FEL transaction forbids further requests.')
         if self.journal_error and not self.recovering:
             raise self.journal_error
         arguments = list(map(str, arguments))
+        require(not recovery_launch or (self.armed and arguments == ['exe', '0x52000'] and
+                self.record.get('card_recovery_flag', {}).get('armed')),
+                'Only the armed SRAM recovery gate permits a launch disconnect.')
         entry = {'arguments': arguments, 'start': self.now()}
         self.record.setdefault('transactions', []).append(entry)
         self.journal()  # A file failure here precedes device communication.
@@ -309,15 +312,27 @@ class Live:
             if self.access.identity(self.node) != self.identity or self.access.target(self.node).name != self.args.port:
                 raise TransportFailure('USB identity changed before FEL request.')
             self.access.require_rom(self.node)
+            entry['command_started'] = True
             result = self.process([str(self.args.fel), '-d', f'{int(self.node.parent.name)}:{int(self.node.name)}',
                                    *arguments], capture_output=True, text=True, timeout=timeout, pass_fds=pass_fds)
-        except (OSError, subprocess.TimeoutExpired, TransportFailure) as error:
+        except subprocess.TimeoutExpired as error:
+            self.failed = True
+            if recovery_launch and entry.get('command_started'):
+                entry.update(provisional_disconnect=True, timeout=True, seconds=self.now()-entry['start'])
+                self.journal()
+                return ''
+            raise TransportFailure(str(error)) from error
+        except (OSError, TransportFailure) as error:
             self.failed = True
             raise TransportFailure(str(error)) from error
         # Record a failed transfer before any parsing or filesystem operation.
         if result.returncode:
             self.failed = True
             entry.update(exit_code=result.returncode, stderr=result.stderr, stdout=result.stdout)
+            if recovery_launch:
+                entry.update(provisional_disconnect=True, seconds=self.now()-entry['start'])
+                self.journal()
+                return ''
             raise TransportFailure('FEL transaction failed: ' + result.stderr.strip())
         entry.update(exit_code=0, stdout=result.stdout, stderr=result.stderr, seconds=self.now()-entry['start'])
         try:
@@ -467,6 +482,30 @@ class Live:
                                              for x in ('readl', hex(a))]).split()]
         require(words == [0xeb00008f, 0xe3a00911, 0xe3a0193d, 0xe3a0605c, 0xea00004d], 'Forced-FEL ROM entry differs.')
         self.upload(0x71000, images.write(self.evidence/f'rom-scratch-restore-{self.sequence}.bin', before))
+        self.mark_power_epoch()
+
+    def mark_power_epoch(self):
+        """Record the reset words of this instance, clear a first-stage gate record and set the cold-boot marker.
+
+        A card first stage boots the card only while the marker reads zero, which means the RTC supply was lost
+        (docs/designs/card-fel-recovery.md). A board that powers up in FEL never runs the gate, so the runner sets
+        the marker at every contact; without it the first watchdog return would boot the card."""
+        values = dict(zip(crumbs.RESET_WORDS, (int(x, 16) for x in self.tx(*crumbs.reset_arguments()).split())))
+        require(len(values) == len(crumbs.RESET_WORDS), 'Reset word readback differs.')
+        entry = {'sequence': self.sequence, 'words': values, 'gate': crumbs.gate_record(values['flag'])}
+        commands = []
+        if entry['gate']:
+            commands += ['writel', hex(crumbs.RESET_WORDS['flag']), '0x0']
+        if values['marker'] & 0xffff != crumbs.MARKER_SET:
+            commands += ['writel', hex(crumbs.MARKER), hex(crumbs.MARKER_KEYED)]
+        if commands:
+            after = [int(x, 16) for x in self.tx(*commands, 'readl', hex(crumbs.RESET_WORDS['flag']),
+                                                 'readl', hex(crumbs.MARKER)).split()]
+            entry.update(flag_after=after[0], marker_after=after[1])
+            require(not entry['gate'] or after[0] == 0, 'The first-stage gate record did not clear.')
+            require(after[1] & 0xffff == crumbs.MARKER_SET, 'The cold-boot marker did not read back after its keyed write.')
+        self.record.setdefault('power_epoch', []).append(entry)
+        self.journal()
 
     def usb_source_off(self, phase, enforce=True):
         usb_power.observe(self, phase)
@@ -506,7 +545,7 @@ class Live:
     def returned(self):
         raw = self.tx(*crumbs.return_arguments())
         try:
-            before,after,words = crumbs.parse_return(raw)
+            before,after,words,reset_words = crumbs.parse_return(raw)
         except ValueError as error:
             # A host decoder failure must not leave a possibly armed image or
             # quarantine a healthy returned instance. Verify disarm separately.
@@ -514,10 +553,16 @@ class Live:
             self.observe_return_power('invalid-return-report')
             raise RuntimeError('Invalid watchdog return report: '+str(error)) from error
         self.confirm_disarmed(after)
-        self.record['watchdog_return'] = {'before': before, 'after': after, 'words': words}
+        gate = crumbs.gate_record(reset_words['flag'])
+        self.record['watchdog_return'] = {'before': before, 'after': after, 'words': words, 'reset_words': reset_words,
+                                          'gate': gate, 'mode_at_reset': crumbs.effective_mode(before, gate)}
         self.journal()
+        if gate:
+            # The first-stage gate disarmed WDT0 on its warm path; its record carries the mode it read.
+            cleared = self.tx('writel', hex(crumbs.RESET_WORDS['flag']), '0x0', 'readl', hex(crumbs.RESET_WORDS['flag']))
+            require(int(cleared, 16) == 0, 'The first-stage gate record did not clear.')
         self.observe_return_power('native-return')
-        return before,after,words
+        return crumbs.effective_mode(before, gate),after,words
 
     def observe_return_power(self, phase):
         # Preserve the copied WDT/breadcrumb origin before a cleanup failure.
@@ -877,10 +922,21 @@ class Live:
         self.journal()
         self.arm(plan['watchdog']['mode'])
         if plan.get('format') == 'card-fel-recovery':
-            images.load('arm_card_fel_recovery', ROOT/'tools/card_recovery.py').arm(self)
+            images.load('arm_card_fel_recovery', ROOT/'tools/card_recovery.py').arm(self, plan)
         self.recovery_deadline = self.now()+plan['watchdog']['session_seconds']+crumbs.interval(plan['watchdog']['mode'])+10
-        self.tx(*plan['launch'])
+        recovery = images.load('card_fel_recovery_launch', ROOT/'tools/card_recovery.py') \
+            if plan.get('format') == 'card-fel-recovery' else None
+        launched = self.now()
+        if recovery:
+            require(plan['launch'] == ['exe', '0x52000'] and plan['launch_seconds'] == recovery.EXE_SECONDS,
+                    'Card recovery requires its direct SRAM entry and bounded execute transaction.')
+            # The gate re-enters the ROM; the disconnect can lose this request's status.
+            self.tx(*plan['launch'], recovery_launch=True, timeout=plan['launch_seconds'])
+        else:
+            self.tx(*plan['launch'])
         self.wait(plan['watchdog']['session_seconds'] + crumbs.interval(plan['watchdog']['mode']) + 10)
+        if recovery:
+            recovery.receipt(self, launched)
         before, after, words = self.returned()
         elf = self.args.image if plan.get('format') == 'npu' or self.args.image.suffix == '.elf' else None
         decoded = crumbs.decode(words, plan['epoch'], elf)
@@ -888,7 +944,10 @@ class Live:
         save(self.evidence/'breadcrumbs.json', decoded)
         require(not after & 1, 'WDT0 did not disarm after return.')
         self.record['rom_returned'] = True
-        if self.watchdog_reset_seen(before):
+        # The recovery gate leaves WDT0 re-armed; the runner disarmed it in returned().
+        gate_armed = bool(recovery) and recovery.gate_return(
+            plan, before, self.record['card_recovery_return']['seconds_after_exe'])
+        if self.watchdog_reset_seen(before) and not gate_armed:
             self.record['dram_lost'] = True
             # The bounded resident test deliberately stops renewal after its application.
             # RTC SRAM is authoritative after reset; no DRAM result survives.
@@ -900,8 +959,12 @@ class Live:
             return 'watchdog-reset'
         if plan.get('lifetime') == 'resident':
             raise UnresolvedReturn('Resident qualification returned without its expected watchdog reset.')
-        if plan.get('format') == 'card-fel-recovery' and words['fault']:
-            raise UnresolvedReturn('Card first-stage recovery retained a fault word.')
+        if plan.get('format') == 'card-fel-recovery':
+            if not (gate_armed and decoded['session'] and recovery.accepted(plan, self.record)):
+                raise UnresolvedReturn('Card recovery lacks the matching retained SRAM gate receipt.')
+            self.record['normal_return'] = True
+            usb_power.enforce(self)
+            return 'returned'
         # An image that links the failure return may return after its first
         # failure; the record is then in the breadcrumbs and in its result.
         # Any other return that carries a failure record stays unresolved.
@@ -1045,6 +1108,10 @@ def run_image(args, backend=Live):
             dma_binding = images.dma_admission(args, info)
             application_inputs(args, info, evidence)
             images.load('storage_bounds', ROOT/'tools/storage_bounds.py').verify_delivered(args)
+            if info.get('card_fel_recovery'):
+                fel = evidence/'sunxi-fel'
+                result['recovery_fel'] = images.load('freeze_card_fel_tool', ROOT/'tools/card_recovery.py').freeze_fel(args.fel, fel)
+                args.fel = fel
         owner = backend(args, evidence, result)
         owner.credential = credential
         with owner.locked():
@@ -1054,8 +1121,11 @@ def run_image(args, backend=Live):
                 if dma_binding is not None:
                     owner.dma_binding = timed('dma-identity', lambda: images.bind_dma_identity(dma_binding, args, owner.identity))
                 timed('reset', owner.reset)
-                timed('dram', owner.dram)
-                timed('credential-residue', lambda: owner.clear_stale_residue(credential is not None))
+                if info.get('card_fel_recovery'):
+                    result['dram_mode'] = 'sram-only'
+                else:
+                    timed('dram', owner.dram)
+                    timed('credential-residue', lambda: owner.clear_stale_residue(credential is not None))
                 if helper_only or info['entry_guard'] or args.kind == 'npu':
                     timed('rails', owner.rails)
                 if helper_only:
@@ -1212,7 +1282,7 @@ def result_summary(result, limit=1500):
     return lines
 
 
-SESSION_LITERAL = re.compile(r"""['"]([A-Za-z0-9_./-]+\.(?:py|c|h|S|inc|json))['"]""")
+SESSION_LITERAL = re.compile(r"""['"]([A-Za-z0-9_./-]+\.(?:py|c|h|S|inc|json|patch))['"]""")
 SESSION_IMPORT = re.compile(r'^\s*(?:import|from)\s+([A-Za-z_]\w*)', re.M)
 SESSION_INCLUDE = re.compile(r'^\s*#\s*include\s+"([^"]+)"', re.M)
 
