@@ -350,7 +350,11 @@ struct pvr_gpu_service {
 uint64_t pvr_gpu_service_event_sequence(struct pvr_gpu_service *);
 int pvr_gpu_service_wait_event(struct pvr_gpu_service *,uint64_t sequence,uint64_t deadline);
 int pvr_gpu_service_deadline_register(struct pvr_gpu_service *);
+/* Any task: advance the event sequence and wake waiting clients. Only the
+ * worker writes the service phase, so this call never reads it. */
 void pvr_gpu_service_notify_clients(struct pvr_gpu_service *);
+/* The phase the worker last published with an event, never a phase newer
+ * than that publication's sequence. */
 unsigned pvr_gpu_service_event_phase(struct pvr_gpu_service *);
 int pvr_gpu_service_close_ready(struct pvr_gpu_service *);
 #endif

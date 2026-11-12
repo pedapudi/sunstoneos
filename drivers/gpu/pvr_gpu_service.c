@@ -46,15 +46,29 @@ static BaseType_t request_send(struct pvr_gpu_service *s,const struct pvr_gpu_se
     return result;
 }
 #ifdef SUNSTONE_A733_OS
-void pvr_gpu_service_notify_clients(struct pvr_gpu_service *s)
+/* The caller holds the critical section. */
+static void notify_waiting_clients(struct pvr_gpu_service *s)
 {
-    taskENTER_CRITICAL();
-    atomic_store_explicit(&s->event_phase,s->phase,memory_order_release);
     atomic_fetch_add_explicit(&s->event_sequence,1,memory_order_release);
     for(unsigned i=0;i<PVR_GPU_SERVICE_CLIENTS;++i){
         struct pvr_gpu_service_client *c=&s->clients[i];
         if(c->event_waiting){c->event_gave=1;xTaskNotifyGiveIndexed(c->task,c->event_index);}
     }
+}
+void pvr_gpu_service_notify_clients(struct pvr_gpu_service *s)
+{
+    taskENTER_CRITICAL();
+    notify_waiting_clients(s);
+    taskEXIT_CRITICAL();
+}
+/* Worker only: s->phase is the worker's own field. The release store of the
+ * phase precedes the sequence increment, so a client that observes the new
+ * sequence with an acquire load also observes this phase or a later one. */
+static void publish_phase(struct pvr_gpu_service *s)
+{
+    taskENTER_CRITICAL();
+    atomic_store_explicit(&s->event_phase,s->phase,memory_order_release);
+    notify_waiting_clients(s);
     taskEXIT_CRITICAL();
 }
 unsigned pvr_gpu_service_event_phase(struct pvr_gpu_service *s)
@@ -1497,7 +1511,7 @@ static void worker(void *argument)
         int more=burst(s, &started);
         quiesce_step(s);
 #ifdef SUNSTONE_A733_OS
-        if(progress(s)!=before)pvr_gpu_service_notify_clients(s);
+        if(progress(s)!=before)publish_phase(s);
         if(more){
             /* A bounded CPU preparation burst yields through the precise
              * timer only at its declared fairness budget. */
@@ -1617,7 +1631,7 @@ message_ready:
         }
         configASSERT(xQueueSend(s->clients[message.client].replies, &reply, 0) == pdTRUE);
 #ifdef SUNSTONE_A733_OS
-        pvr_gpu_service_notify_clients(s);
+        publish_phase(s);
 #endif
     }
 }

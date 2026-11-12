@@ -94,7 +94,7 @@ def run(image_path, case):
         put(field(service, 'pvr_gpu_service', 'performance') + performance['ticket'], 1)
     if case == 'owner-lock':
         set_field(fast, 'pvr_compute_fast', 'locked', 1, 4)
-    direct_case = case in ('direct-during-arm', 'direct-expiry', 'subtick-close')
+    direct_case = case in ('direct-during-arm', 'direct-expiry', 'subtick-close', 'direct-wait-refused', 'close-wait-refused')
     if direct_case:
         state['now'] = 12000
         put(image.address('instance', '/drivers/gpu/gpu_queue.c'), queue)
@@ -133,6 +133,15 @@ def run(image_path, case):
             wait = field(power, 'a733_gpu_power', 'wait')
             set_field(wait, 'a733_gpu_wait', 'next_wait_us', 90)
             set_field(wait, 'a733_gpu_wait', 'kind', 1, 4)
+    if case == 'client-notify-phase':
+        # A client publishes while the worker is between phases: the published
+        # phase stays the worker's last publication; the sequence advances.
+        set_field(service, 'pvr_gpu_service', 'phase', enums['PVR_GPU_SERVICE_STOPPING'], 4)
+        set_field(service, 'pvr_gpu_service', 'event_phase', enums['PVR_GPU_SERVICE_READY'], 4)
+        set_field(service, 'pvr_gpu_service', 'event_sequence', 5)
+        set_field(client, 'pvr_gpu_service_client', 'event_waiting', 1, 4)
+        set_field(client, 'pvr_gpu_service_client', 'event_index', 2, 4)
+    state['notified'] = 0
     client_case = case in ('before-arm', 'during-arm', 'expiry')
     if client_case:
         assert 'event_sequence' in image.layouts['pvr_gpu_service'], 'native event waits absent'
@@ -176,7 +185,7 @@ def run(image_path, case):
         elif name == 'sunstone_deadline_now_us':
             ret(state['now'])
         elif name == 'sunstone_deadline_register':
-            ret(1)
+            ret(0 if case == 'close-wait-refused' else 1)
         elif name == 'sunstone_deadline_notify_index':
             ret(2)
         elif name == 'xTaskGetCurrentTaskHandle':
@@ -186,6 +195,7 @@ def run(image_path, case):
         elif name == 'uxQueueMessagesWaiting':
             ret()
         elif name == 'xTaskGenericNotify':
+            state['notified'] += 1
             ret(1)
         elif name == 'xQueueReceive':
             wait = args[2]
@@ -218,6 +228,8 @@ def run(image_path, case):
             state['operation'] = get(field(args[2], 'pvr_gpu_service_request', 'operation'), 4)
             put(args[4], 1)
             ret(1)
+        elif name == 'pvr_gpu_service_collect' and case == 'close-wait-refused':
+            ret(0)
         elif name == 'pvr_gpu_service_collect':
             phase = 'PVR_GPU_SERVICE_STOPPED' if state['operation'] == enums['PVR_GPU_SERVICE_CLOSE'] else 'PVR_GPU_SERVICE_READY'
             set_field(args[2], 'pvr_gpu_service_reply', 'result', enums['PVR_GPU_SERVICE_OK'], 4)
@@ -239,6 +251,9 @@ def run(image_path, case):
                 uc.emu_stop()
             elif direct_case:
                 assert args[0] == 12345, ('absolute deadline rounded to a tick', args)
+                if case == 'direct-wait-refused':
+                    ret(0xffffffffffffffff)
+                    return
                 state['now'] = args[0] if case == 'direct-expiry' else args[0] - 1
                 if case != 'direct-expiry':
                     set_field(fast, 'pvr_compute_fast', 'completed', 1, 4)
@@ -270,7 +285,7 @@ def run(image_path, case):
     elif case == 'close-performance-busy':
         function = image.address('pvr_gpu_service_close_ready')
     elif direct_case:
-        if case == 'subtick-close':
+        if case in ('subtick-close', 'close-wait-refused'):
             u.reg_write(UC_ARM64_REG_X0, 1)
             u.reg_write(UC_ARM64_REG_X0 + 1, 12345)
             u.reg_write(UC_ARM64_REG_X0 + 2, enums['PVR_GPU_SERVICE_CLOSE'])
@@ -282,6 +297,8 @@ def run(image_path, case):
             u.reg_write(UC_ARM64_REG_X0 + 3, 12345)
             u.reg_write(UC_ARM64_REG_X0 + 4, 0)
             function = image.address('direct_wait_until', '/drivers/gpu/gpu_queue.c')
+    elif case == 'client-notify-phase':
+        function = image.address('pvr_gpu_service_notify_clients')
     elif client_case:
         u.reg_write(UC_ARM64_REG_X0 + 1, 1)
         u.reg_write(UC_ARM64_REG_X0 + 2, 12345)
@@ -303,11 +320,19 @@ def run(image_path, case):
         assert u.reg_read(UC_ARM64_REG_PC) == 0x80000000, (case, 'execution budget')
         assert state['waits'] == [12345], state
         assert state['index'] == 2, 'direct waiter cleanup used an application-owned index'
-        expected = 'GPU_QUEUE_TIMEOUT' if case == 'direct-expiry' else 'GPU_QUEUE_OK'
-        assert u.reg_read(UC_ARM64_REG_X0) == enums[expected], (case, state)
-        if case == 'direct-expiry':
+        # A refused deadline wait is a fault: no retry can succeed.
+        expected = {'direct-expiry': 'GPU_QUEUE_TIMEOUT', 'direct-wait-refused': 'GPU_QUEUE_FAULT',
+                    'close-wait-refused': 'GPU_QUEUE_FAULT'}.get(case, 'GPU_QUEUE_OK')
+        assert u.reg_read(UC_ARM64_REG_X0) == enums[expected], (case, 'result', u.reg_read(UC_ARM64_REG_X0), enums[expected])
+        if case in ('direct-expiry', 'direct-wait-refused'):
             assert get(field(fast, 'pvr_compute_fast', 'pending'), 4) == 1
             assert get(field(queue, 'pvr_compute_queue', 'client_owed'), 4) == 1
+    elif case == 'client-notify-phase':
+        assert u.reg_read(UC_ARM64_REG_PC) == 0x80000000, (case, 'execution budget')
+        published = get(field(service, 'pvr_gpu_service', 'event_phase'), 4)
+        assert published == enums['PVR_GPU_SERVICE_READY'], ('client published the worker phase', published)
+        assert get(field(service, 'pvr_gpu_service', 'event_sequence')) == 6
+        assert get(field(client, 'pvr_gpu_service_client', 'event_gave'), 4) == 1 and state['notified'] == 1, state
     elif client_case:
         assert u.reg_read(UC_ARM64_REG_PC) == 0x80000000, (case, 'execution budget')
         assert u.reg_read(UC_ARM64_REG_X0) == (1 if case == 'expiry' else 0)
@@ -333,6 +358,7 @@ def main():
     args = parser.parse_args()
     rows = [run(args.image, case) for case in ('idle', 'idle-measured', 'idle-immediate', 'idle-clock-reversal', 'idle-duration-overflow', 'completed-job', 'job-deadline', 'owner-lock',
                                               'before-arm', 'during-arm', 'expiry', 'direct-during-arm', 'direct-expiry', 'subtick-close', 'close-performance-busy',
+                                              'client-notify-phase', 'direct-wait-refused', 'close-wait-refused',
                                               'worker-start-wait', 'lifecycle-retry-overhead', 'platform-retry-overhead')]
     baseline = None
     if args.baseline_image:
