@@ -69,6 +69,10 @@ The frozen input manifest and exact host commands are in that record's evidence
 directory. The [application evidence](../evidence/application.jsonl), entry
 `1794468954726206112-8d88da24`, records the physical run. It reaches supervision
 but retains a USB0 stop failure; successful resident completion remains open.
+The [USB0 failure audit](../evidence/resident-usb0-stop-audit.md) identifies
+missing provider observations and the separate cold-controller/FEL handoff
+mismatch. Native USB ownership requires an admitted handoff and current rail
+expectations before a successful completion run can be proposed.
 
 The current EL1 watchdog renewal check requires BOOT low. Its disagreement with
 cold resident admission remains in the card design's open work.
