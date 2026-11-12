@@ -818,6 +818,11 @@ static struct {
     _Alignas(SS_CACHE_LINE) struct ssObjectTicket task;
     _Alignas(SS_CACHE_LINE) struct ssObjectTicket isr;
 } ssObjectLocks[SS_OBJECT_SLOTS];
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+_Static_assert(sizeof(ssSchedTraceLocks) / sizeof(ssSchedTraceLocks[0]) ==
+    1 + sizeof(ssObjectLocks) / sizeof(ssObjectLocks[0]),
+    "scheduler tracing covers the global task lock and every object task lock");
+#endif
 /* The leaf lock of priority donation: one writer at a time to a holder's donated priority and mutex count. */
 static struct { _Alignas(SS_CACHE_LINE) struct ssObjectTicket lock; } ssDonation;
 static inline unsigned ssObjectSlot(const void *object)
