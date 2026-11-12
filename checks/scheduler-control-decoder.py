@@ -99,8 +99,12 @@ def scheduler_payload(source, version):
                 1201, 1202, 1202, 1203, 1204, 0, 0, 0, 0, 0,
                 1, 1, 1, 0, 1205, 1206, core + 1, 1, 0, 1] + [0] * 48
             report['wake'][core][40:56] = [128, 1024, 8, 0, 0, 0, 0, 0, 128, 896, 7, 0, 0, 0, 0, 0]
-            if version == 4:
+            if version >= 4:
                 report['history'][core] = [1201, 1204, 1, 1, 1, 0, 0, 0, 0, 0]
+    if version == 5:
+        report['window'] = {'header': [1, 1, 0, 16],
+            'irqs': [[1, 30 | (0x3c0 << 16), 1200, 1201, 0x41001000, 1201, 1204]],
+            'selections': [[1205, 1206, 1, 1]]}
     return module.pack(report)
 
 
@@ -230,7 +234,7 @@ def run(decoder, source):
         reject(name, data)
 
     base = base_payload()
-    for version in (None, 1, 2, 3, 4):
+    for version in (None, 1, 2, 3, 4, 5):
         scheduler = scheduler_payload(source, version) if version else b''
         for pmu in (b'', bytes(1216)):
             for control in (b'', pack(busy)):
@@ -239,9 +243,12 @@ def run(decoder, source):
                 assert bool(result.get('scheduler_trace')) == bool(scheduler)
                 if control:
                     assert result['qualification']['recorded_targets_met']
-                    assert len(base + pmu + scheduler + control) <= 131072
+                    if version != 5 or not pmu:
+                        assert len(base + pmu + scheduler + control) <= 131072
                     if version == 4:
                         assert len(base + pmu + scheduler + control) == (130816 if pmu else 129600)
+                    if version == 5 and not pmu:
+                        assert len(base + scheduler + control) == 131072
                 cases.append(f'layout scheduler={version}, PMU={bool(pmu)}, control={bool(control)}')
     for elapsed, combined, valid in ((10000, False, True), (10001, False, False),
                                      (15000, True, True), (15001, True, False)):

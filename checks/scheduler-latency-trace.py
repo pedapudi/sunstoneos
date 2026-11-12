@@ -65,10 +65,12 @@ def fixture(version=1):
             2000, 2010, 2020, 2100, 2120, 10, 10, 10, 10, 10,
             1, 1, 5, 1800, 2130, 2170, 3, 7, 1800, 5] + [0] * 48
         wake_summary(report['wake'][1], 1)
-    if version == 4:
+    if version >= 4:
         report['history_capacity'] = 16
         report['history'] = [[0] * 10 for _ in range(8)]
         report['history'][1] = [2000, 2120, 80, 1, 5, 0, 0, 0, 0, 0]
+    if version == 5:
+        report['window'] = {'header': [0, 0, 0, 16], 'irqs': [], 'selections': []}
     return report
 
 
@@ -105,10 +107,19 @@ def pack(report):
     if report['header'][1] >= 3:
         for wake in report['wake']:
             words.extend(wake)
-    if report['header'][1] == 4:
+    if report['header'][1] >= 4:
         words.append(report['history_capacity'])
         for history in report['history']:
             words.extend(history)
+    if report['header'][1] == 5:
+        window = report['window']
+        words.extend(window['header'])
+        for row in window['irqs']:
+            words.extend(row)
+        words.extend([0] * (7 * (window['header'][3] - len(window['irqs']))))
+        for row in window['selections']:
+            words.extend(row)
+        words.extend([0] * (4 * (window['header'][3] - len(window['selections']))))
     payload = struct.pack(f'<{len(words)}Q', *words)
     return payload + bytes((-len(payload)) % 64)
 
@@ -480,6 +491,69 @@ def run(decode):
     bad['history'][0][9] = 1
     rejected('empty wake cannot retain history observations', pack(bad))
     rejected('truncated version 4 record', pack(v4)[:-8])
+    v5 = fixture(version=5)
+    v5['wake'][0] = copy.deepcopy(v5['wake'][1])
+    v5['wake'][0][2] = 27
+    v5['wake'][0][17] = 1980
+    v5['wake'][0][22] = 1989
+    wake_summary(v5['wake'][0], 2)
+    v5['history'][0] = copy.deepcopy(v5['history'][1])
+    v5['window'] = {'header': [3, 2, 0, 16], 'irqs': [
+        [4, 30 | (0x3c0 << 16), 1901, 1950, 0x41000100, 1951, 1980],
+        [5, 0x3c0 << 16, 1990, 1999, 0x41000200, 2000, 2120],
+        [0, 27 | (0x3c5 << 16), 2180, 2190, 0x41000300, 0, 0]],
+        'selections': [[1985, 1989, 4, 1], [2130, 2170, 5, 3]]}
+    def window_ids(value):
+        window = value['cpu0_wake_window']
+        assert [row['interrupt'] for row in window['irqs']] == [30, 0, 27]
+        assert window['irqs'][-1]['spsr'] == 0x3c5 and not window['flags']
+    accepted('version 5 retains earlier timer, SGI and guarded IRQ dispatches', v5, window_ids)
+    svc = copy.deepcopy(v5)
+    svc['wake'][0][2] = 26
+    svc['wake'][0][4:18] = [0] * 14
+    svc['wake'][0][18:24] = [2191, 2199, 3, 8, 2170, 0]
+    wake_summary(svc['wake'][0], 2)
+    svc['window']['header'][1] = 3
+    svc['window']['selections'].append([2191, 2199, 0, 3])
+    accepted('version 5 distinguishes a later voluntary SVC selection', svc,
+             lambda value: value['cpu0_wake_window']['selections'][-1]['origin'] == 'svc')
+    lost = copy.deepcopy(v5)
+    lost['window']['header'][:3] = [0, 2, 5]
+    lost['window']['irqs'] = []
+    accepted('version 5 exposes unavailable IRQ history', lost,
+             lambda value: value['cpu0_wake_window']['incomplete'])
+    for name, field, value in (('IRQ count exceeds capacity', 0, 17),
+                               ('selection count exceeds capacity', 1, 17),
+                               ('unknown window flags', 2, 8), ('window capacity differs', 3, 15)):
+        bad = copy.deepcopy(v5); bad['window']['header'][field] = value
+        rejected(name, pack(bad))
+    for name, field, value in (('invalid interrupt ID', 1, 1023),
+                               ('invalid saved mode', 1, 30 | (2 << 16)),
+                               ('saved status exceeds 32 bits', 1, 1 << 48),
+                               ('future C dispatch', 3, 2201), ('owner before C dispatch end', 5, 1902),
+                               ('duplicate ordinary owner sequence', 0, 5), ('missing interrupted PC', 4, 0)):
+        bad = copy.deepcopy(v5); bad['window']['irqs'][0][field] = value
+        rejected(name, pack(bad))
+    bad = copy.deepcopy(v5); bad['window']['irqs'][-1][5:] = [2190, 2191]
+    rejected('guarded IRQ must not claim owner work', pack(bad))
+    bad = copy.deepcopy(v5); bad['window']['selections'][0][2] = 3
+    rejected('selection origin missing without coverage flag', pack(bad))
+    bad = copy.deepcopy(v5); bad['window']['selections'][-1][1] = 2169
+    rejected('window must retain the latest selecting event', pack(bad))
+    bad = copy.deepcopy(v5); bad['window']['selections'].append([2191, 2192, 0, 3])
+    rejected('unused selection row contains data', pack(bad))
+    rejected('truncated version 5 record', pack(v5)[:-8])
+    direct = copy.deepcopy(v5)
+    direct['cores'][1]['self_suspend'] = [2, 3, 69, 1000, 1010, 1040, 1050, 1060, 1080, 1110]
+    def direct_scope(value):
+        record = value['cores'][1]['self_suspend']
+        assert record['masked_c_ticks'] == 60 and record['ticks'] == 110
+        assert record['steps_ticks'] == dict(reference=10, publish=30, local_commit=10, save_frame=20, select=30)
+    accepted('direct suspension separates unmasked admission from masked selection', direct, direct_scope)
+    bad = copy.deepcopy(direct); bad['cores'][1]['self_suspend'][2] |= 16
+    rejected('direct suspension cannot claim a control drain', pack(bad))
+    bad = fixture(version=4); bad['cores'][1]['self_suspend'][2] = 69
+    rejected('older trace cannot reinterpret direct suspension stamps', pack(bad))
     return cases
 
 
@@ -501,10 +575,16 @@ def check_history(source, output):
     ran.check_returncode()
     decode, _ = load_decoder(source)
     report = decode(payload.read_bytes(), FREQUENCY)
-    assert report['version'] == 4 and report['history_capacity'] == 16
-    expected = ('slow', 'unmatched', 'unmatched', 'unmatched', 'fast', 'slow', 'unmatched', 'unmatched')
+    assert report['version'] == 5 and report['history_capacity'] == 16
+    expected = ('unmatched', 'unmatched', 'unmatched', 'unmatched', 'fast', 'slow', 'unmatched', 'unmatched')
     assert tuple(row['maximum']['class'] for row in report['wake_chains']) == expected
-    return ['recorder history: future IRQ', 'recorder history: trailing IRQ',
+    window = report['cpu0_wake_window']
+    assert len(window['irqs']) == 7 and len(window['selections']) == 4 and not window['flags']
+    assert window['irqs'][-2]['interrupt'] == 27 and window['irqs'][-1]['interrupt'] == 0
+    assert window['selections'][-1]['origin'] == 'svc'
+    assert report['cores'][7]['self_suspend']['masked_c_ticks'] == 50
+    assert report['cores'][7]['self_suspend']['steps_ticks']['select'] == 20
+    return ['recorder CPU0 dispatch IDs and voluntary selection origin', 'recorder history: future IRQ', 'recorder history: trailing IRQ',
             'recorder history: selecting IRQ overwritten', 'recorder history: latest switch task differs',
             'recorder history: old rotation retained', 'recorder history: future switches',
             'recorder history: selection overwritten', 'recorder history: preceding IRQ ambiguity']

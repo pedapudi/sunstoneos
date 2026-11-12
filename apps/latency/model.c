@@ -146,10 +146,26 @@ static void controller(void *argument)
             /* An entirely unmatched primary must still expose real measured
              * interference and its selecting exit, not observation-side loss. */
             configASSERT((w->flags & SS_SCHED_WAKE_MULTIPLE) && !(w->flags & SS_SCHED_WAKE_HISTORY_LOST));
-            configASSERT(w->irq.sequence && w->irq.sequence == w->selection.irq_sequence);
+            if (w->irq.sequence) configASSERT(w->irq.sequence == w->selection.irq_sequence);
+            else configASSERT(!w->selection.irq_sequence && w->selection.previous_end > w->ready);
             configASSERT(history->latest_end <= w->running);
             configASSERT(history->trailing_count || w->irq.previous_end > w->ready || w->selection.previous_end > w->ready);
         }
+    }
+    const struct ss_sched_trace_cpu0_window *window = &result.scheduler.cpu0_window;
+    configASSERT(window->capacity == SS_SCHED_TRACE_HISTORY);
+    configASSERT(window->irq_count && window->irq_count <= window->capacity && window->switch_count <= window->capacity);
+    configASSERT(!(window->flags & SS_SCHED_WINDOW_INCOMPLETE));
+    number("cpu0_window_irqs=", window->irq_count);
+    number(" selections=", window->switch_count);
+    number(" flags=", window->flags);
+    platform_puts("\n");
+    for (unsigned i = 0; i < window->irq_count; ++i) {
+        const struct ss_sched_trace_window_irq *event = &window->irq[i];
+        configASSERT(event->begin && event->begin <= event->end && event->end <= result.scheduler.wake[0].maximum.running);
+        configASSERT((event->descriptor & 0xffff) < 1020 && event->pc);
+        if (event->sequence) configASSERT(event->end <= event->owner_begin && event->owner_begin <= event->owner_end);
+        else configASSERT(!event->owner_begin && !event->owner_end);
     }
     number("actual_fifo_cores=", actual_fifo_cores);
     number(" linked_wakes=", linked_wakes);

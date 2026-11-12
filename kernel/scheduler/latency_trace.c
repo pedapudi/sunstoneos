@@ -14,12 +14,25 @@ static struct {
     uint64_t irq_sequence, irq_end, switch_sequence, switch_end;
     struct ss_sched_trace_irq_chain irq_history[SS_SCHED_TRACE_HISTORY];
     struct ss_sched_trace_switch switch_history[SS_SCHED_TRACE_HISTORY];
+    unsigned direct_suspend_active;
+    struct ss_sched_trace_command direct_suspend;
     struct {
         uint64_t start, end, serving, ticket;
         unsigned valid;
     } fifo;
 } state[SS_SCHED_TRACE_CORES];
 static uint64_t tick_start;
+struct ss_sched_dispatch_entry {
+    _Atomic uint64_t generation, dispatch;
+    _Atomic uint64_t word[7];
+};
+static struct {
+    uint64_t next, completed, owner;
+    struct ss_sched_dispatch_entry irq[SS_SCHED_TRACE_HISTORY];
+} cpu0_dispatch;
+/* SVC entry clears this tag using X0/X1 before either register is restored.
+ * A voluntary selection cannot inherit the preceding IRQ's origin. */
+uint64_t ss_sched_trace_switch_irq[SS_SCHED_TRACE_CORES];
 /* Assembly writes the first restore marker with only X0/X1 still saved.
  * Each CPU owns its row; snapshot reads after all diagnostic writers freeze. */
 uint64_t ss_sched_trace_startup_markers[SS_SCHED_TRACE_CORES][2];
@@ -42,6 +55,7 @@ void ss_sched_trace_snapshot(struct ss_sched_trace_report *out)
     out->waits_capacity = SS_SCHED_TRACE_WAITS;
     out->ticks_capacity = SS_SCHED_TRACE_TICKS;
     out->history_capacity = SS_SCHED_TRACE_HISTORY;
+    out->cpu0_window.capacity = SS_SCHED_TRACE_HISTORY;
     for (unsigned core = 0; core < SS_SCHED_TRACE_CORES; ++core) {
         out->core[core].drain = state[core].drain[state[core].drain_best];
         for (unsigned marker = 0; marker < 2; ++marker)
@@ -68,8 +82,23 @@ void ss_sched_trace_command(unsigned core, const struct ss_sched_trace_command *
     const uint64_t stage[4] = { command->stamp[1] - command->stamp[0],
         command->stamp[2] - command->stamp[1], command->stamp[4] - command->stamp[3],
         command->stamp[5] - command->stamp[4] };
-    for (unsigned i = 0; i < 4; ++i)
+    /* The final two legacy maxima describe drain and slice work. A direct
+     * suspension has different stages, retained in its complete record. */
+    for (unsigned i = 0; i < ((command->flags & 64) ? 2u : 4u); ++i)
         if (stage[i] > row->command_stage_max[i]) row->command_stage_max[i] = stage[i];
+}
+void ss_sched_trace_direct_suspend_begin(unsigned core, const struct ss_sched_trace_command *command)
+{
+    if (!enabled(core)) return;
+    state[core].direct_suspend = *command;
+    state[core].direct_suspend.command = 2;
+    state[core].direct_suspend.flags = (command->flags | UINT64_C(65)) & ~UINT64_C(58);
+    state[core].direct_suspend_active = 1;
+}
+void ss_sched_trace_direct_suspend_mark(unsigned core)
+{
+    if (enabled(core) && state[core].direct_suspend_active)
+        state[core].direct_suspend.stamp[4] = ss_sched_trace_now();
 }
 void ss_sched_trace_drain_begin(unsigned core)
 {
@@ -100,12 +129,49 @@ void ss_sched_trace_record(unsigned core, const struct ss_sched_trace_record *re
     if (d->count < SS_SCHED_TRACE_RECORDS) d->record[d->count++] = *record;
     else ++d->dropped;
 }
+uint64_t ss_sched_trace_dispatch_begin(unsigned core, unsigned interrupt, uint64_t pc, uint64_t spsr)
+{
+    if (core || !enabled(core)) return 0;
+    uint64_t sequence = ++cpu0_dispatch.next;
+    struct ss_sched_dispatch_entry *event = &cpu0_dispatch.irq[(sequence - 1) % SS_SCHED_TRACE_HISTORY];
+    atomic_fetch_add_explicit(&event->generation, 1, memory_order_relaxed);
+    atomic_store_explicit(&event->dispatch, sequence, memory_order_relaxed);
+    const uint64_t words[7] = {0, (interrupt & UINT64_C(0xffff)) |
+        ((spsr & UINT64_C(0xffffffff)) << 16), ss_sched_trace_now(), 0, pc, 0, 0};
+    for (unsigned i = 0; i < 7; ++i) atomic_store_explicit(&event->word[i], words[i], memory_order_relaxed);
+    atomic_fetch_add_explicit(&event->generation, 1, memory_order_release);
+    return sequence;
+}
+void ss_sched_trace_dispatch_end(unsigned core, uint64_t sequence)
+{
+    if (core || !sequence || !enabled(core)) return;
+    struct ss_sched_dispatch_entry *event = &cpu0_dispatch.irq[(sequence - 1) % SS_SCHED_TRACE_HISTORY];
+    if (atomic_load_explicit(&event->dispatch, memory_order_relaxed) != sequence) return;
+    atomic_fetch_add_explicit(&event->generation, 1, memory_order_relaxed);
+    atomic_store_explicit(&event->word[3], ss_sched_trace_now(), memory_order_relaxed);
+    atomic_fetch_add_explicit(&event->generation, 1, memory_order_release);
+    cpu0_dispatch.completed = sequence;
+}
+static void dispatch_owner(unsigned field, uint64_t value)
+{
+    const uint64_t sequence = cpu0_dispatch.owner;
+    if (!sequence) return;
+    struct ss_sched_dispatch_entry *event = &cpu0_dispatch.irq[(sequence - 1) % SS_SCHED_TRACE_HISTORY];
+    if (atomic_load_explicit(&event->dispatch, memory_order_relaxed) != sequence) return;
+    atomic_fetch_add_explicit(&event->generation, 1, memory_order_relaxed);
+    atomic_store_explicit(&event->word[field], value, memory_order_relaxed);
+    atomic_fetch_add_explicit(&event->generation, 1, memory_order_release);
+}
 void ss_sched_trace_irq_begin(unsigned core, uint64_t start)
 {
     if (!enabled(core)) return;
     state[core].irq = (struct ss_sched_trace_irq){.stamp = {start}};
     state[core].guard_end = 0;
     state[core].irq_active = 1;
+    if (!core) {
+        cpu0_dispatch.owner = cpu0_dispatch.completed;
+        dispatch_owner(5, start);
+    }
 }
 void ss_sched_trace_irq_guard(unsigned core)
 {
@@ -132,6 +198,12 @@ void ss_sched_trace_irq_end(unsigned core, unsigned result)
     ++row->irq_count;
     if (irq->stamp[3] - irq->stamp[0] > row->irq.stamp[3] - row->irq.stamp[0]) row->irq = *irq;
     uint64_t sequence = ++state[core].irq_sequence;
+    ss_sched_trace_switch_irq[core] = sequence;
+    if (!core) {
+        dispatch_owner(0, sequence);
+        dispatch_owner(6, irq->stamp[3]);
+        cpu0_dispatch.owner = 0;
+    }
     struct ss_sched_trace_irq_chain *last = &state[core].irq_history[(sequence - 1) % SS_SCHED_TRACE_HISTORY];
     last->previous_end = state[core].irq_end;
     last->sequence = sequence;
@@ -153,8 +225,9 @@ void ss_sched_trace_switch_begin(unsigned core)
     s->previous_end = state[core].switch_end;
     s->begin = now;
     s->end = 0;
-    s->irq_sequence = state[core].irq_sequence;
+    s->irq_sequence = ss_sched_trace_switch_irq[core];
     s->sequence = sequence;
+    if (state[core].direct_suspend_active) state[core].direct_suspend.stamp[5] = now;
 }
 void ss_sched_trace_switch_end(unsigned core, unsigned slot)
 {
@@ -164,6 +237,11 @@ void ss_sched_trace_switch_end(unsigned core, unsigned slot)
     s->end = now;
     s->selected_slot = slot;
     state[core].switch_end = now;
+    if (state[core].direct_suspend_active) {
+        state[core].direct_suspend.stamp[6] = now;
+        ss_sched_trace_command(core, &state[core].direct_suspend);
+        state[core].direct_suspend_active = 0;
+    }
 }
 static void summarize(struct ss_sched_trace_summary *summary, uint64_t ticks)
 {
@@ -174,6 +252,49 @@ static void summarize(struct ss_sched_trace_summary *summary, uint64_t ticks)
     if (ticks > summary->maximum) summary->maximum = ticks;
     for (unsigned i = 0; i < 5; ++i)
         if (ticks > frequency * limits[i] / 1000000) ++summary->over_us[i];
+}
+static void cpu0_window(uint64_t ready, uint64_t running)
+{
+    struct ss_sched_trace_cpu0_window *out = &trace.cpu0_window;
+    *out = (struct ss_sched_trace_cpu0_window){.capacity = SS_SCHED_TRACE_HISTORY};
+    const uint64_t last_irq = cpu0_dispatch.next, last_switch = state[0].switch_sequence;
+    uint64_t first = last_irq > SS_SCHED_TRACE_HISTORY ? last_irq - SS_SCHED_TRACE_HISTORY + 1 : 1;
+    for (uint64_t sequence = first; sequence <= last_irq; ++sequence) {
+        const struct ss_sched_dispatch_entry *event = &cpu0_dispatch.irq[(sequence - 1) % SS_SCHED_TRACE_HISTORY];
+        uint64_t generation = atomic_load_explicit(&event->generation, memory_order_acquire);
+        uint64_t tag = atomic_load_explicit(&event->dispatch, memory_order_relaxed), words[7];
+        for (unsigned i = 0; i < 7; ++i) words[i] = atomic_load_explicit(&event->word[i], memory_order_relaxed);
+        atomic_thread_fence(memory_order_acquire);
+        if ((generation & 1) || tag != sequence ||
+            generation != atomic_load_explicit(&event->generation, memory_order_relaxed)) {
+            out->flags |= SS_SCHED_WINDOW_INCOMPLETE;
+            continue;
+        }
+        if (words[2] > running) continue;
+        if (words[3] > running || words[5] > running || words[6] > running) continue;
+        if (!words[3] || (words[5] && !words[6])) {
+            out->flags |= SS_SCHED_WINDOW_INCOMPLETE;
+            continue;
+        }
+        struct ss_sched_trace_window_irq *row = &out->irq[out->irq_count++];
+        row->sequence = words[0]; row->descriptor = words[1]; row->begin = words[2];
+        row->end = words[3]; row->pc = words[4]; row->owner_begin = words[5]; row->owner_end = words[6];
+    }
+    if (last_irq > SS_SCHED_TRACE_HISTORY &&
+        (!out->irq_count || out->irq[0].begin > ready)) out->flags |= SS_SCHED_WINDOW_IRQ_PREFIX_LOST;
+    first = last_switch > SS_SCHED_TRACE_HISTORY ? last_switch - SS_SCHED_TRACE_HISTORY + 1 : 1;
+    for (uint64_t sequence = first; sequence <= last_switch; ++sequence) {
+        const struct ss_sched_trace_switch *s = &state[0].switch_history[(sequence - 1) % SS_SCHED_TRACE_HISTORY];
+        if (!s->end || s->end > running) continue;
+        out->selection[out->switch_count++] = (struct ss_sched_trace_window_switch){
+            s->begin, s->end, s->irq_sequence, s->selected_slot};
+    }
+    if (last_switch > SS_SCHED_TRACE_HISTORY &&
+        (!out->switch_count || out->selection[0].begin > ready)) out->flags |= SS_SCHED_WINDOW_SWITCH_PREFIX_LOST;
+    const uint64_t latest = trace.history[0].latest_sequence;
+    bool found = !latest;
+    for (unsigned i = 0; i < out->irq_count; ++i) if (out->irq[i].sequence == latest) found = true;
+    if (!found) out->flags |= SS_SCHED_WINDOW_INCOMPLETE;
 }
 /* The adapter holds this owner's API mask. Select completed events no later
  * than the captured running timestamp; observation-side interrupts must not
@@ -244,6 +365,7 @@ void ss_sched_trace_wake_sample(unsigned core, uint64_t ready, uint64_t running,
         row->maximum = (struct ss_sched_trace_wake){ .ready = ready, .running = running,
             .flags = flags, .running_slot = slot, .irq = *irq, .selection = *s };
         trace.history[core] = history;
+        if (!core) cpu0_window(ready, running);
     }
 }
 void ss_sched_trace_service(unsigned core, unsigned part, uint64_t begin, uint64_t end)

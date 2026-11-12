@@ -9,6 +9,12 @@ uint64_t ss_sched_trace_test_now(void) { return clock_value; }
 uint64_t ss_latency_counter_frequency(void) { return 24000000; }
 static void irq_result(unsigned core, uint64_t start, unsigned result)
 {
+    uint64_t dispatch = 0;
+    if (!core) {
+        clock_value = start - 10;
+        dispatch = ss_sched_trace_dispatch_begin(0, 30, 0x41001000, 0x3c0);
+        clock_value = start - 1; ss_sched_trace_dispatch_end(0, dispatch);
+    }
     ss_sched_trace_irq_begin(core, start);
     clock_value = start + 1; ss_sched_trace_irq_guard(core);
     clock_value = start + 2; ss_sched_trace_irq_stamp(core, 1);
@@ -29,6 +35,31 @@ int main(int argc, char **argv)
     irq_result(0, 110, 0); select_task(0, 130, 3);
     for (unsigned i = 0; i < 3; ++i) irq(0, 160 + i * 20);
     ss_sched_trace_wake_sample(0, 100, 150, 3);
+    static struct ss_sched_trace_report first;
+    ss_sched_trace_snapshot(&first);
+    assert(first.cpu0_window.irq_count == 1 && first.cpu0_window.switch_count == 1);
+    assert(first.cpu0_window.irq[0].sequence == 1 && first.cpu0_window.irq[0].descriptor == (30 | (UINT64_C(0x3c0) << 16)));
+    assert(first.cpu0_window.irq[0].begin == 100 && first.cpu0_window.irq[0].end == 109);
+    assert(first.cpu0_window.selection[0].irq_sequence == 1 && !first.cpu0_window.flags);
+
+    irq(0, 260); select_task(0, 280, 3);
+    clock_value = 300;
+    uint64_t guarded = ss_sched_trace_dispatch_begin(0, 27, 0x41002000, 0x3c5);
+    clock_value = 305; ss_sched_trace_dispatch_end(0, guarded);
+    clock_value = 310;
+    uint64_t sgi = ss_sched_trace_dispatch_begin(0, 0, 0x41003000, 0x3c0);
+    clock_value = 319; ss_sched_trace_dispatch_end(0, sgi);
+    ss_sched_trace_irq_begin(0, 320);
+    clock_value = 321; ss_sched_trace_irq_guard(0);
+    clock_value = 322; ss_sched_trace_irq_stamp(0, 1);
+    clock_value = 328; ss_sched_trace_irq_stamp(0, 2);
+    clock_value = 330; ss_sched_trace_irq_stamp(0, 3); ss_sched_trace_irq_end(0, 0);
+    select_task(0, 350, 3);
+    extern uint64_t ss_sched_trace_switch_irq[SS_SCHED_TRACE_CORES];
+    ss_sched_trace_switch_irq[0] = 0; /* SVC entry's assembly store. */
+    select_task(0, 370, 3);
+    for (unsigned i = 0; i < 3; ++i) irq(0, 410 + i * 20);
+    ss_sched_trace_wake_sample(0, 250, 400, 3);
 
     irq_result(1, 1010, 0); select_task(1, 1030, 3); irq_result(1, 1040, 0);
     ss_sched_trace_wake_sample(1, 1000, 1060, 3);
@@ -60,13 +91,26 @@ int main(int argc, char **argv)
 
     irq(7, 7010); irq(7, 7030); select_task(7, 7050, 3);
     ss_sched_trace_wake_sample(7, 7000, 7070, 3);
+    struct ss_sched_trace_command direct = {.command = 2, .slot = 3, .flags = 5,
+        .stamp = {8000, 8010, 8020, 8100}};
+    ss_sched_trace_direct_suspend_begin(7, &direct);
+    clock_value = 8110; ss_sched_trace_direct_suspend_mark(7);
+    clock_value = 8130; ss_sched_trace_switch_begin(7);
+    clock_value = 8150; ss_sched_trace_switch_end(7, 4);
     for (unsigned core = 0; core < SS_SCHED_TRACE_CORES; ++core) ss_sched_trace_freeze(core);
     static struct ss_sched_trace_report report;
     ss_sched_trace_snapshot(&report);
-    assert(report.version == 4 && report.history_capacity == SS_SCHED_TRACE_HISTORY);
-    assert(report.wake[0].maximum.flags == 7 && report.wake[0].maximum.irq.sequence == 1);
-    assert(report.wake[0].maximum.irq.result == 0 && report.wake[0].summary[1][0].count == 1);
-    assert(report.history[0].latest_sequence == 1 && report.history[0].future_irqs == 3);
+    assert(report.version == 5 && report.history_capacity == SS_SCHED_TRACE_HISTORY);
+    assert(first.wake[0].maximum.flags == 7 && first.wake[0].maximum.irq.sequence == 1);
+    assert(first.wake[0].maximum.irq.result == 0 && first.wake[0].summary[1][0].count == 1);
+    assert(first.history[0].latest_sequence == 1 && first.history[0].future_irqs == 3);
+    assert(report.wake[0].maximum.flags == 26 && !report.wake[0].maximum.selection.irq_sequence);
+    assert(report.cpu0_window.irq_count == 7 && report.cpu0_window.switch_count == 4 && !report.cpu0_window.flags);
+    assert(report.cpu0_window.irq[5].descriptor == (27 | (UINT64_C(0x3c5) << 16)));
+    assert(!report.cpu0_window.irq[5].sequence && !report.cpu0_window.irq[5].owner_begin);
+    assert(report.cpu0_window.irq[6].descriptor == (UINT64_C(0x3c0) << 16));
+    assert(report.cpu0_window.irq[6].sequence == 6 && report.cpu0_window.irq[6].owner_begin == 320);
+    assert(report.cpu0_window.selection[3].begin == 370 && !report.cpu0_window.selection[3].irq_sequence);
     assert(report.wake[1].maximum.flags == 27 && report.wake[1].maximum.irq.sequence == 1);
     assert(report.wake[1].maximum.irq.result == 0 && report.wake[1].summary[2][0].count == 1);
     assert(report.history[1].latest_sequence == 2 && report.history[1].trailing_count == 1 && report.history[1].trailing_work == 6);
@@ -77,6 +121,10 @@ int main(int argc, char **argv)
     assert(report.wake[5].maximum.flags == 7 && report.wake[5].maximum.selection.sequence == 1);
     assert(report.wake[6].maximum.flags == 48 && report.history[6].switch_overwritten == 1);
     assert(report.wake[7].maximum.flags == 27 && !report.history[7].trailing_count);
+    assert(report.core[7].self_suspend.flags == 69 && report.core[7].self_suspend.stamp[6] == 8150);
+    assert(report.core[7].self_suspend.stamp[4] == 8110 && report.core[7].self_suspend.stamp[5] == 8130);
+    assert(report.core[7].command_stage_max[0] == 10 && report.core[7].command_stage_max[1] == 10);
+    assert(!report.core[7].command_stage_max[2] && !report.core[7].command_stage_max[3]);
     FILE *file = fopen(argv[1], "wb"); assert(file);
     assert(fwrite(&report, sizeof(report), 1, file) == 1);
     static const unsigned char padding[64];

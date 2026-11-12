@@ -34,7 +34,7 @@ def decode_scheduler_trace(payload, frequency):
     if len(payload) < 32 or not frequency:
         raise ValueError('scheduler trace header or frequency is missing')
     magic, version, waits, tick_capacity = struct.unpack_from('<4Q', payload)
-    if magic != SCHED_MAGIC or version not in (1, 2, 3, 4) or not waits or not tick_capacity:
+    if magic != SCHED_MAGIC or version not in (1, 2, 3, 4, 5) or not waits or not tick_capacity:
         raise ValueError('scheduler trace schema or declared capacities differ')
     records = 32  # two drains, each bounded by SS_OWNER_BATCH = 16
     wait_words = 12 if version == 1 else 16
@@ -42,8 +42,14 @@ def decode_scheduler_trace(payload, frequency):
     expected = (4 + 8 * core_words + 16 + 2 + tick_capacity * 2) * 8
     if version >= 3:
         expected += 8 * 72 * 8
-    if version == 4:
+    if version >= 4:
+        history_offset = expected
         expected += (1 + 8 * 10) * 8
+        if version == 5:
+            if len(payload) < expected:
+                raise ValueError('scheduler history header is missing')
+            capacity, = struct.unpack_from('<Q', payload, history_offset)
+            expected += (4 + 11 * capacity) * 8
     padded = (expected + 63) // 64 * 64
     if len(payload) != padded or any(payload[expected:]):
         raise ValueError('scheduler trace length or alignment padding differs')
@@ -65,10 +71,19 @@ def decode_scheduler_trace(payload, frequency):
         ordered(stamp)
         def duration(first, last):
             return stamp[last] - stamp[first] if stamp[first] and stamp[last] else 0
-        return {'command': kind, 'slot': slot, 'flags': flags, 'stamp': stamp,
-                'ticks': duration(0, 6),
-                'steps_ticks': dict(zip(('reference', 'publish', 'drain', 'slice'),
-                    (duration(0, 1), duration(1, 2), duration(3, 4), duration(4, 5))))}
+        direct = bool(flags & 64)
+        if direct and (version != 5 or kind != 2 or flags & 63 != 5 or not all(stamp)):
+            raise ValueError('scheduler direct suspension flags or timestamps differ')
+        result = {'command': kind, 'slot': slot, 'flags': flags, 'stamp': stamp,
+                  'ticks': duration(0, 6), 'direct_self_suspend': direct,
+                  'steps_ticks': dict(zip(('reference', 'publish', 'drain', 'slice'),
+                      (duration(0, 1), duration(1, 2), duration(3, 4), duration(4, 5))))}
+        if direct:
+            result['steps_ticks'] = dict(zip(('reference', 'publish', 'local_commit', 'save_frame', 'select'),
+                (duration(0, 1), duration(1, 2), duration(3, 4), duration(4, 5), duration(5, 6))))
+            result['masked_c_ticks'] = duration(3, 6)
+            result['reference_publication_scope'] = 'before_the_API_mask'
+        return result
 
     def wait_record():
         fields = ('start', 'end', 'site', 'lock', 'serving', 'next', 'flags',
@@ -107,6 +122,7 @@ def decode_scheduler_trace(payload, frequency):
         count, *scalars = take(9)
         row = {'core': core, 'command_count': count,
                'command_stage_max_ticks': dict(zip(('reference', 'publish', 'drain', 'slice'), scalars[:4])),
+               'command_stage_max_legacy_only': ['drain', 'slice'] if version == 5 else [],
                'irq_count': scalars[4], 'drain_count': scalars[5],
                'wait_count': scalars[6], 'wait_dropped': scalars[7],
                'command': command(), 'self_suspend': command()}
@@ -146,7 +162,8 @@ def decode_scheduler_trace(payload, frequency):
             raise ValueError('scheduler startup timestamps are out of order')
         markers['start_kind'] = (None if not markers['scheduler_start'] else
             'primary_running_flag_boundary' if version >= 3 and core == 0 else 'port_start_entry')
-        markers['restore_kind'] = 'pre_eret' if version >= 3 else 'restore_entry'
+        markers['restore_kind'] = ('pre_eret_before_optional_return_observer' if version == 5 else
+                                   'pre_eret' if version >= 3 else 'restore_entry')
     tick_count, tick_dropped = take(2)
     if tick_count > tick_capacity or tick_dropped and tick_count != tick_capacity:
         raise ValueError('scheduler tick log counters differ from capacity')
@@ -198,7 +215,7 @@ def decode_scheduler_trace(payload, frequency):
     wake_cores = []
     history_capacity = None
     histories = []
-    if version == 4:
+    if version >= 4:
         history_offset = offset + 8 * 72 * 8
         history_capacity, = struct.unpack_from('<Q', payload, history_offset)
         if not history_capacity:
@@ -229,7 +246,7 @@ def decode_scheduler_trace(payload, frequency):
             service = list(take(5))
             passes, result, irq_sequence, previous_irq_end = take(4)
             begin, end, selected_slot, switch_sequence, previous_switch_end, switch_irq_sequence = take(6)
-            if running < ready or flags & ~(63 if version == 4 else 31) or running_slot >= 128:
+            if running < ready or flags & ~(63 if version >= 4 else 31) or running_slot >= 128:
                 raise ValueError('scheduler wake endpoints, flags or probe slot are invalid')
             if irq_sequence:
                 if not all(stamps) or stamps != sorted(stamps) or previous_irq_end > stamps[0] or result not in (0, 1, 3):
@@ -289,7 +306,7 @@ def decode_scheduler_trace(payload, frequency):
             linked = bool(irq_sequence and switch_sequence and not multiple and not lost and
                           ready <= stamps[4] <= begin <= end <= running and
                           irq_sequence == switch_irq_sequence and selected_slot == running_slot and
-                          result in ((0, 1, 3) if version == 4 else (1, 3)))
+                          result in ((0, 1, 3) if version >= 4 else (1, 3)))
             expected_flags = (1 if irq_sequence else 0) | (2 if switch_sequence else 0) | (8 if multiple else 0) | (32 if lost else 0)
             expected_flags |= 4 if linked else 16
             if ready and flags != expected_flags:
@@ -321,11 +338,78 @@ def decode_scheduler_trace(payload, frequency):
                     'switch': {'begin': begin, 'end': end, 'selected_slot': selected_slot,
                                'sequence': switch_sequence, 'previous_end': previous_switch_end,
                                'irq_sequence': switch_irq_sequence}}})
+    cpu0_window = None
+    if version == 5:
+        window_offset = offset + (1 + 8 * 10) * 8
+        irq_count, switch_count, window_flags, capacity = struct.unpack_from('<4Q', payload, window_offset)
+        window_offset += 32
+        if capacity != history_capacity or max(irq_count, switch_count) > capacity or window_flags & ~7:
+            raise ValueError('scheduler CPU0 history window header differs')
+        maximum = wake_cores[0]['maximum']
+        ready, running = maximum['ready'], maximum['running']
+        irq_rows, switch_rows, owner_sequences = [], [], set()
+        for index in range(capacity):
+            sequence, descriptor, begin, end, pc, owner_begin, owner_end = \
+                struct.unpack_from('<7Q', payload, window_offset)
+            window_offset += 56
+            if index >= irq_count:
+                if any((sequence, descriptor, begin, end, pc, owner_begin, owner_end)):
+                    raise ValueError('scheduler unused CPU0 IRQ row contains data')
+                continue
+            interrupt, spsr = descriptor & 0xffff, descriptor >> 16
+            if (not 0 < begin <= end <= running or not pc or interrupt >= 1020 or spsr > 0xffffffff or
+                    spsr & 31 not in (0, 4, 5) or irq_rows and begin < irq_rows[-1]['dispatch_begin']):
+                raise ValueError('scheduler CPU0 IRQ identity or dispatch timing is invalid')
+            if sequence:
+                if sequence in owner_sequences or not end <= owner_begin <= owner_end <= running:
+                    raise ValueError('scheduler CPU0 owner interval or sequence is invalid')
+                owner_sequences.add(sequence)
+            elif owner_begin or owner_end:
+                raise ValueError('scheduler guarded CPU0 IRQ contains owner work')
+            irq_rows.append({'sequence': sequence, 'interrupt': interrupt, 'spsr': spsr,
+                'pc': pc, 'dispatch_begin': begin, 'dispatch_end': end,
+                'dispatch_ticks': end - begin, 'owner_begin': owner_begin, 'owner_end': owner_end,
+                'owner_ticks': owner_end - owner_begin,
+                'overlaps_wake': end > ready or owner_end > ready})
+        for index in range(capacity):
+            begin, end, irq_sequence, slot = struct.unpack_from('<4Q', payload, window_offset)
+            window_offset += 32
+            if index >= switch_count:
+                if any((begin, end, irq_sequence, slot)):
+                    raise ValueError('scheduler unused CPU0 selection row contains data')
+                continue
+            if (not 0 < begin <= end <= running or slot >= 128 or
+                    switch_rows and begin < switch_rows[-1]['end']):
+                raise ValueError('scheduler CPU0 selection timing or task is invalid')
+            if irq_sequence:
+                origin = next((row for row in irq_rows if row['sequence'] == irq_sequence), None)
+                if origin:
+                    if origin['owner_end'] > begin:
+                        raise ValueError('scheduler CPU0 selection precedes its owner exit')
+                elif not window_flags & 5:
+                    raise ValueError('scheduler CPU0 selection origin is missing without history loss')
+            switch_rows.append({'begin': begin, 'end': end, 'irq_sequence': irq_sequence,
+                'selected_slot': slot, 'origin': 'irq' if irq_sequence else 'svc',
+                'ticks': end - begin, 'overlaps_wake': end > ready})
+        if not ready and (irq_count or switch_count or window_flags):
+            raise ValueError('scheduler empty CPU0 wake contains an event window')
+        selected = maximum['switch']
+        if switch_rows and selected['sequence'] and (switch_rows[-1]['begin'], switch_rows[-1]['end'],
+                switch_rows[-1]['irq_sequence'], switch_rows[-1]['selected_slot']) != (
+                selected['begin'], selected['end'], selected['irq_sequence'], selected['selected_slot']):
+            raise ValueError('scheduler CPU0 window omits the latest selecting event')
+        latest = histories[0]['latest_sequence']
+        if latest and latest not in owner_sequences and not window_flags & 5:
+            raise ValueError('scheduler CPU0 window omits the latest owner exit')
+        cpu0_window = {'capacity': capacity, 'flags': window_flags,
+            'irq_prefix_lost': bool(window_flags & 1), 'switch_prefix_lost': bool(window_flags & 2),
+            'incomplete': bool(window_flags & 4), 'ready': ready, 'running': running,
+            'irqs': irq_rows, 'selections': switch_rows}
     return {'version': version, 'waits_capacity': waits, 'ticks_capacity': tick_capacity,
             'cores': cores, 'startup': startup, 'tick_count': tick_count,
             'primary_scheduler_start': startup[0]['scheduler_start'] if version >= 3 else None,
             'startup_scope': 'scheduler_start_to_pre_eret_markers' if version >= 3 else 'port_start_to_restore_entry_lower_bound',
-            'tick_dropped': tick_dropped, 'ticks': ticks, 'wake_chains': wake_cores, 'history_capacity': history_capacity}
+            'tick_dropped': tick_dropped, 'ticks': ticks, 'wake_chains': wake_cores, 'history_capacity': history_capacity, 'cpu0_wake_window': cpu0_window}
 
 
 def decode_control(payload, frequency):

@@ -23,12 +23,14 @@ _Static_assert(SS_SCHED_TRACE_HISTORY > 0, "diagnostic event history must retain
 #define SS_SCHED_TRACE_CORES 8u
 #define SS_SCHED_TRACE_RECORDS (2u * SS_OWNER_BATCH)
 #define SS_SCHED_TRACE_MAGIC UINT64_C(0x5353534348545231)
-#define SS_SCHED_TRACE_VERSION 4u
+#define SS_SCHED_TRACE_VERSION 5u
 
 /* All timestamps use CNTVCT. A command retains the timestamps after masking,
  * reference, publish, before/after drain, after slice refresh and before unmask.
  * Flags: bit 0 self, bit 1 ISR, bit 2 running scheduler, bit 3 deferred,
- * bit 4 local drain, bit 5 handle admission failed. */
+ * bit 4 local drain, bit 5 handle admission failed. Version 5 bit 6 marks a
+ * direct self-suspend: stamps 0..2 cover unmasked reference/publication;
+ * stamps 3..6 cover masked local mark, saved-frame entry and selection. */
 struct ss_sched_trace_command {
     uint64_t command, slot, flags, stamp[7];
 };
@@ -114,6 +116,27 @@ struct ss_sched_trace_wake_history {
     uint64_t latest_start, latest_end, latest_work, latest_result, latest_sequence;
     uint64_t trailing_count, trailing_work, irq_overwritten, switch_overwritten, future_irqs;
 };
+enum ss_sched_trace_window_flag {
+    SS_SCHED_WINDOW_IRQ_PREFIX_LOST = 1u,
+    SS_SCHED_WINDOW_SWITCH_PREFIX_LOST = 2u,
+    SS_SCHED_WINDOW_INCOMPLETE = 4u
+};
+/* CPU0 retains complete C dispatches, including exits skipped by the PMR
+ * guard. descriptor packs INTID in bits 0..15 and saved SPSR in bits 16..47.
+ * sequence is the ordinary owner-exit sequence, or zero for a guarded exit. */
+struct ss_sched_trace_window_irq {
+    uint64_t sequence, descriptor, begin, end, pc, owner_begin, owner_end;
+};
+struct ss_sched_trace_window_switch {
+    uint64_t begin, end, irq_sequence, selected_slot;
+};
+struct ss_sched_trace_cpu0_window {
+    uint64_t irq_count, switch_count, flags, capacity;
+    struct ss_sched_trace_window_irq irq[SS_SCHED_TRACE_HISTORY];
+    struct ss_sched_trace_window_switch selection[SS_SCHED_TRACE_HISTORY];
+};
+_Static_assert(sizeof(struct ss_sched_trace_cpu0_window) ==
+    (4u + 11u * SS_SCHED_TRACE_HISTORY) * sizeof(uint64_t), "version 5 window layout");
 _Static_assert(sizeof(struct ss_sched_trace_wake_core) == 72 * sizeof(uint64_t),
                "version 3 wake record layout");
 struct ss_sched_trace_report {
@@ -131,6 +154,8 @@ struct ss_sched_trace_report {
      * a record needed to reconstruct that wake was no longer retained. */
     uint64_t history_capacity;
     struct ss_sched_trace_wake_history history[SS_SCHED_TRACE_CORES];
+    /* Version 5 appends the CPU0 histories at its longest busy wake. */
+    struct ss_sched_trace_cpu0_window cpu0_window;
 };
 _Static_assert(offsetof(struct ss_sched_trace_report, wake) ==
     offsetof(struct ss_sched_trace_report, tick) + sizeof(((struct ss_sched_trace_report *)0)->tick),
@@ -158,6 +183,8 @@ void ss_sched_trace_freeze(unsigned);
 void ss_sched_trace_snapshot(struct ss_sched_trace_report *);
 void ss_sched_trace_startup(unsigned, unsigned);
 void ss_sched_trace_command(unsigned, const struct ss_sched_trace_command *);
+void ss_sched_trace_direct_suspend_begin(unsigned, const struct ss_sched_trace_command *);
+void ss_sched_trace_direct_suspend_mark(unsigned);
 void ss_sched_trace_drain_begin(unsigned);
 void ss_sched_trace_drain_end(unsigned);
 void ss_sched_trace_record(unsigned, const struct ss_sched_trace_record *);
@@ -166,6 +193,8 @@ void ss_sched_trace_irq_guard(unsigned);
 void ss_sched_trace_irq_fast(unsigned);
 void ss_sched_trace_irq_stamp(unsigned, unsigned);
 void ss_sched_trace_irq_end(unsigned, unsigned);
+uint64_t ss_sched_trace_dispatch_begin(unsigned, unsigned, uint64_t, uint64_t);
+void ss_sched_trace_dispatch_end(unsigned, uint64_t);
 void ss_sched_trace_service(unsigned, unsigned, uint64_t, uint64_t);
 void ss_sched_trace_service_pass(unsigned);
 void ss_sched_trace_tick_begin(void);

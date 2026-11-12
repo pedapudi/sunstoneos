@@ -63,3 +63,19 @@
  
  #if ( configENABLE_MPU == 1 )
     /* Save pxTopOfStack ( ullContext ) on the task's TCB and set SP_EL0 to ullTaskUnprivilegedSP. */
+@@ -600,6 +648,15 @@
+ STP X0, X1, [SP, #-0x10]!
+ STP X2, X3, [SP, #-0x10]!
+ STP X4, X5, [SP, #-0x10]!
++#ifdef SUNSTONE_SCHED_LATENCY_TRACE
++/* This selection originates in SVC, regardless of the last completed IRQ.
++ * X0/X1 are saved above and DAIF.I excludes an interrupt-side tag update. */
++ADRP X0, ss_sched_trace_switch_irq
++ADD X0, X0, :lo12:ss_sched_trace_switch_irq
++MRS X1, TPIDR_EL1
++AND X1, X1, #0xff
++STR XZR, [X0, X1, LSL #3]
++#endif
+ 
+ MRS X4, ELR_EL1  /* Save exception return address. */
+ MRS X5, SPSR_EL1 /* Save program status register address. */
