@@ -389,7 +389,9 @@ def large_manifest_path(path, digest, file, with_digest=True):
 def ramdisk(work, tag, tree):
     """A 40 MiB FAT32 volume with the tree, written by the independent writer of checks/fat32-ro.py."""
     part = Path(work) / (tag + '.disk')
-    run(['truncate', '-s', str(81920 * 512), part])
+    with part.open('xb') as stream:
+        stream.seek(81920 * 512 - 1)
+        stream.write(b'\0')
     done = run(['/usr/sbin/mkfs.fat', '-F', '32', '-s', '1', '-n', 'SUNSTONE', '-i', '5a733004', part])
     assert done.returncode == 0, done.stderr
     image = bytearray(part.read_bytes())
@@ -931,7 +933,9 @@ def main():
     c = run_case('large-region-other-space-faults', large_elf, scenario(usb_ready_ms=usb_delay_ms), mode1, '4G', [(RAMDISK_ADDRESS, good)])
     c.failed_with('APPLICATION', 0xe24)
     c.require(int(c.failure['value'], 16) == 0x80000000, 'the fault address is %s' % c.failure['value'])
-    c.require(int(c.failure['site'], 16) == 0x800d4e24, 'the record holds the site %s: not a level 1 permission fault on a read' % c.failure['site'])
+    # The kernel's upper slots are split for free-chunk policy conversion;
+    # an untagged task therefore fails the EL0 permission check at level 2.
+    c.require(int(c.failure['site'], 16) == 0x800e4e24, 'the record holds the site %s: not a level 2 permission fault on a read' % c.failure['site'])
     # The provider is present but the device fails: at the metadata, at the start of a request, in the middle of the
     # stream, or there is no device. The loader fails the region with its status; the application is told and returns.
     # The file is larger than five requests (4 MiB = 32 requests of 128 KiB), so the mid-stream failure falls inside it.

@@ -14,6 +14,10 @@ FIXTURES = {
 }
 
 IMAGES = {
+    'os-usb-ledger': {'configure': [
+        '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=hello-compute',
+        '-DSUNSTONE_A733_OS_USB_CLASSES=ON', '-DSUNSTONE_BOARD_USB2_IRQ=ON',
+    ], 'target': 'sunstone-a733-os-hello', 'elf': 'sunstone-a733-os-hello.elf'},
     'ret-walks-uncached': {'configure': [
         '-DSUNSTONE_APPLICATION=table-walks', '-DSUNSTONE_A733_TABLE_WALKS=uncached',
     ], 'target': 'sunstone-a733-os-table-walks', 'elf': 'sunstone-a733-os-table-walks.elf'},

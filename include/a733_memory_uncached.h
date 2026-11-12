@@ -5,10 +5,9 @@
 /* The Normal non-cacheable boot pool. The local layout uses one optional
  * 2 MiB block, 0x41c00000..0x41e00000, with the caller's alignment; the
  * extended layout reserves class `uncached`, 0x78000000..0x79000000.
- * The OS USB-class layout instead reserves 8 MiB at
- * 0x42200000..0x42a00000. This same allocator owns that complete linker
- * reservation: USB takes the first 5 MiB lease, and JPEG retains separate
- * leases in the remainder. The NPU pool and application regions are outside it.
+ * OS USB-class images obtain their backing from the unified ledger at boot,
+ * sized by usb.devices: 8 MiB for 24 devices, 14 MiB for 127. USB and retained
+ * JPEG buffers keep separate child leases in that kernel-owned NC extent.
  *
  * Preparation and the getter behave as for the write-back pool. In the
  * extended layout a733_device_memory_prepare() runs preparation once, and in
@@ -19,9 +18,10 @@
  * non-cacheable, so acquire runs no clean. Preparation returns 1 when the
  * image links no local uncached pool.
  *
- * Both EL1 and EL3 tables map the pool non-cacheable from their first
+ * In the legacy layouts both EL1 and EL3 tables map the pool non-cacheable from their first
  * installation, so no cacheable alias exists. No attribute change,
- * remote-user exclusion or RAM-capacity discovery is supplied. */
+ * remote-user exclusion or RAM-capacity discovery is supplied there. The OS
+ * ledger instead converts wholly free chunks before granting its backing. */
 int a733_memory_uncached_prepare(void);
 struct device_memory_pool *a733_memory_uncached_init(void);
 #endif

@@ -124,7 +124,12 @@ int a733_cached_memory_prepare(void)
 #elif defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
     /* These are immutable linker allocations, not physical RAM discovery.
      * The runner establishes launch authority before this image executes. */
-    if(nc!=A733_USB_MEMORY_BASE || ne!=A733_USB_MEMORY_END ||
+    if(
+#if defined(SUNSTONE_USB_LEDGER_MEMORY) && SUNSTONE_USB_LEDGER_MEMORY
+       nc!=ne ||
+#else
+       nc!=A733_USB_MEMORY_BASE || ne!=A733_USB_MEMORY_END ||
+#endif
        (uintptr_t)__bss_end>(uintptr_t)__heap_end || (uintptr_t)__heap_end>wb ||
        we<wb || (we!=wb && ((wb|we)&4095 || we-wb>A733_LOCAL_DEVICE_POOL_BYTES || we>0x41f00000)))return 0;
 #else
@@ -211,7 +216,7 @@ int a733_cached_memory_prepare(void)
         a733_cached_el3_l3[i] = v;
     }
     a733_cached_el3_l2[16] = (uintptr_t)a733_cached_el3_l3 | 3;
-    a733_cached_el1_l2[16] = 0; /* Secure monitor and tables remain inaccessible at EL1. */
+    a733_cached_el1_l2[16] = 0; /* Monitor identity view stays invalid; the OS has a limited table alias. */
     /* DRAM above the boot image, EL1 read/write, no EL0 access, never
      * executable. A mapped block receives speculative reads, so it is written
      * only when this boot's decode is linear there with no protected region.
@@ -248,6 +253,7 @@ int a733_cached_memory_prepare(void)
     }
 #endif
 #if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
+#if !defined(SUNSTONE_USB_LEDGER_MEMORY) || !SUNSTONE_USB_LEDGER_MEMORY
     /* One immutable NC physical view in both regimes. Controller metadata,
      * scratch and the remaining pool are inaccessible at EL0. */
     for(uintptr_t a=A733_USB_MEMORY_BASE;a<A733_USB_MEMORY_END;a+=0x200000){
@@ -256,6 +262,7 @@ int a733_cached_memory_prepare(void)
         a733_cached_el3_l2[i]=common|BIT(5)|BIT(6);
         a733_cached_el1_l2[i]=common|BIT(53);
     }
+#endif
     /* The application alias contains payload pages only. AP=11 is read-only
      * at EL0 and EL1; drivers write through the private identity view. */
     for(unsigned table=0;table<A733_USB_MEMORY_ALIAS_TABLES;++table){
@@ -263,9 +270,13 @@ int a733_cached_memory_prepare(void)
         for(unsigned page=0;page<512;++page){
             uintptr_t address=va+(uintptr_t)page*4096;
             uint64_t v=0;
+#if !defined(SUNSTONE_USB_LEDGER_MEMORY) || !SUNSTONE_USB_LEDGER_MEMORY
             if(address>=A733_USB_MEMORY_APP_START&&address<A733_USB_MEMORY_APP_END)
                 v=(address-A733_USB_MEMORY_ALIAS_BASE+A733_USB_MEMORY_BASE)|BIT(54)|BIT(53)|
                     BIT(10)|(UINT64_C(3)<<8)|(UINT64_C(3)<<6)|8|3;
+#else
+            (void)address; /* Admission binds the payload after its NC allocation. */
+#endif
             a733_cached_usb_el1_l3[table][page]=v;
         }
         unsigned i=(unsigned)((va-0x40000000)>>21);

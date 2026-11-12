@@ -3,11 +3,13 @@
 /* The OS takes the NC backing from its unified ledger. Legacy diagnostic
  * images keep a linked reservation. Child leases separate controller memory
  * from retained JPEG buffers. */
+#if !defined(SUNSTONE_USB_LEDGER_MEMORY) || !SUNSTONE_USB_LEDGER_MEMORY
 #define A733_USB_MEMORY_BASE 0x42200000
 #ifndef A733_USB_MEMORY_END /* Host checks of a larger device count define it. */
 #define A733_USB_MEMORY_END 0x42a00000
 #endif
 #define A733_USB_MEMORY_BYTES (A733_USB_MEMORY_END-A733_USB_MEMORY_BASE)
+#endif
 #define A733_USB_MEMORY_ALIAS_BASE 0x7a000000
 #define A733_USB_MEMORY_DATA_OFFSET 0x40000
 #define A733_USB_MEMORY_DATA_BYTES 0x400000
@@ -30,8 +32,10 @@
 #define A733_USB_HEAD_RECORDS ((A733_USB_MEMORY_DATA_OFFSET-A733_USB_RECORD_BASE)/A733_USB_RECORD_BYTES)
 #define A733_USB_TAIL_BASE (A733_USB_MEMORY_DATA_OFFSET+A733_USB_MEMORY_DATA_BYTES)
 /* Records the arena as linked holds beside the retained leases. */
+#if !defined(SUNSTONE_USB_LEDGER_MEMORY) || !SUNSTONE_USB_LEDGER_MEMORY
 #define A733_USB_RECORDS_FIT (A733_USB_HEAD_RECORDS+ \
     (A733_USB_MEMORY_BYTES-A733_USB_MEMORY_RETAINED_BYTES-A733_USB_TAIL_BASE)/A733_USB_RECORD_BYTES)
+#endif
 #ifndef SUNSTONE_USB_HOST_DEVICES
 #if defined(SUNSTONE_USB_LEDGER_MEMORY) && SUNSTONE_USB_LEDGER_MEMORY
 #define SUNSTONE_USB_HOST_DEVICES 24u
