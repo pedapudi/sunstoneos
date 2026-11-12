@@ -1,0 +1,293 @@
+--- portASM.S
++++ portASM.S
+@@ -617,21 +617,42 @@
+  * FreeRTOS_SWI_Handler handler is used to perform a context switch.
+  *****************************************************************************/
+    .align 8
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++/* Preserve restored volatile state around the last C timestamp. The final
++ * temporary GP restore and ERET remain an unmeasured instrumentation tail. */
++.macro ss_latency_return_point
++savefuncontextgpregs
++MRS X0, TPIDR_EL1
++AND X0, X0, #0xff
++MRS X1, SPSR_EL1
++MRS X2, ICC_PMR_EL1
++BL ss_latency_exception_return
++restorefuncontextgpregs
++.endm
++#endif
++
+    .type FreeRTOS_SWI_Handler, % function
+ FreeRTOS_SWI_Handler:
+ /* Save X0-X5 temporarily as they are used in the handler. */
+ STP X0, X1, [SP, #-0x10]!
+ STP X2, X3, [SP, #-0x10]!
+ STP X4, X5, [SP, #-0x10]!
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++savefuncontextgpregs
++MRS X0, TPIDR_EL1
++AND X0, X0, #0xff
++BL ss_latency_exception_enter
++restorefuncontextgpregs
++#endif
+ #ifdef SUNSTONE_SCHED_LATENCY_TRACE
+ /* This selection originates in SVC, regardless of the last completed IRQ.
+  * X0/X1 are saved above and DAIF.I excludes an interrupt-side tag update. */
+ ADRP X0, ss_sched_trace_switch_irq
+ ADD X0, X0, :lo12:ss_sched_trace_switch_irq
+ MRS X1, TPIDR_EL1
+ AND X1, X1, #0xff
+ STR XZR, [X0, X1, LSL #3]
+ #endif
+ 
+ MRS X4, ELR_EL1  /* Save exception return address. */
+ MRS X5, SPSR_EL1 /* Save program status register address. */
+@@ -661,6 +682,9 @@
+ LDP X0, X1, [SP], #0x10
+ DSB SY
+ ISB SY
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 
+ 2:
+@@ -676,6 +700,9 @@
+ LDP X4, X5, [SP], #0x10
+ LDP X2, X3, [SP], #0x10
+ LDP X0, X1, [SP], #0x10
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 
+ 3:
+@@ -690,6 +717,9 @@
+ LDP X4, X5, [SP], #0x10
+ LDP X2, X3, [ SP ], # 0x10
+ LDP XZR, X1, [ SP ], # 0x10
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 
+ 4:
+@@ -718,6 +748,9 @@
+ LDP X4, X5, [ SP ], # 0x10
+ LDP X2, X3, [ SP ], # 0x10
+ LDP XZR, X1, [ SP ], # 0x10
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 
+ 5:
+@@ -738,6 +771,9 @@
+ LDP X4, X5, [SP], #0x10
+ LDP X2, X3, [SP], #0x10
+ LDP X0, X1, [SP], #0x10
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 
+ 6:
+@@ -758,6 +794,9 @@
+ LDP X4, X5, [SP], #0x10
+ LDP X2, X3, [SP], #0x10
+ LDP X0, X1, [SP], #0x10
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 
+ 7:
+@@ -774,6 +813,9 @@
+    LDP X4, X5, [ SP ], # 0x10
+    LDP X2, X3, [ SP ], # 0x10
+    LDP XZR, X1, [ SP ], # 0x10
++   #ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++   ss_latency_return_point
++   #endif
+    ERET
+ #endif /* #if ( configENABLE_MPU == 1 ) */
+ 
+@@ -788,6 +830,9 @@
+ LDP X2, X3, [ SP ], # 0x10
+ LDP X0, X1, [ SP ], # 0x10
+ portSAVE_CONTEXT
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 
+ 9:
+@@ -801,6 +846,9 @@
+ LDP X2, X3, [ SP ], # 0x10
+ LDP X0, X1, [ SP ], # 0x10
+ portRESTORE_CONTEXT
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 
+ 10:
+@@ -839,6 +887,9 @@
+ LDP X4, X5, [SP], #0x10
+ LDP X2, X3, [ SP ], # 0x10
+ LDP X0, X1, [ SP ], # 0x10
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 
+ 12:
+@@ -855,6 +906,9 @@
+ LDP X4, X5, [SP], #0x10
+ LDP X2, X3, [SP], #0x10
+ LDP XZR, X1, [SP], #0x10
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 13:
+ #endif
+@@ -871,6 +925,9 @@
+ LDP X4, X5, [SP], #0x10
+ LDP X2, X3, [SP], #0x10
+ LDP XZR, X1, [SP], #0x10
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 14:
+ #endif
+@@ -921,6 +978,9 @@
+ LDP X4, X5, [SP], #0x10
+ LDP X2, X3, [SP], #0x10
+ LDP X0, X1, [SP], #0x10
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ .Lgpu_call_refuse:
+ /* Restore the original caller PC even when a missing target was detected. */
+@@ -994,6 +1054,9 @@
+    adrp    X30, vRequestSystemCallExit
+    add     X30, X30, :lo12:vRequestSystemCallExit
+    restoresyscallcontextgpregs
++   #ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++   ss_latency_return_point
++   #endif
+    ERET
+ 
+ priv_path:
+@@ -1010,6 +1073,9 @@
+    LDP     X4, X5, [ SP ], #0x10
+    LDP     X2, X3, [ SP ], #0x10
+    LDP     X0, X1, [ SP ], #0x10
++   #ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++   ss_latency_return_point
++   #endif
+    ERET
+ 
+    /* ---------- SystemCallExit -----------------------------------*/
+@@ -1022,6 +1088,9 @@
+    LDP     X4, X5, [ SP ], #0x10
+    LDP     X2, X3, [ SP ], #0x10
+    LDP     XZR, X1, [ SP ], #0x10
++   #ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++   ss_latency_return_point
++   #endif
+    ERET
+ #endif /* #if ( configENABLE_MPU == 1 ) */
+ 
+@@ -1066,6 +1135,9 @@
+ BL vTaskSwitchContext
+ restorefuncontextgpregs
+ portRESTORE_CONTEXT
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 
+ Skip_Context_Switch:
+@@ -1073,6 +1145,9 @@
+ LDP X4, X5, [SP], #0x10
+ LDP X2, X3, [SP], #0x10
+ LDP X0, X1, [SP], #0x10
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 
+ Start_First_Task:
+@@ -1081,6 +1156,9 @@
+    LDP X2, X3, [SP], #0x10
+    LDP X0, X1, [SP], #0x10
+    portRESTORE_CONTEXT
++   #ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++   ss_latency_return_point
++   #endif
+    ERET
+ 
+ /******************************************************************************
+@@ -1111,6 +1189,9 @@
+ ISB SY
+ /* Start the first task. */
+ portRESTORE_CONTEXT
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 
+ /******************************************************************************
+@@ -1130,6 +1211,13 @@
+ /* Save volatile registers. */
+ saveallgpregisters
+ savefloatregisters
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++savefuncontextgpregs
++MRS X0, TPIDR_EL1
++AND X0, X0, #0xff
++BL ss_latency_exception_enter
++restorefuncontextgpregs
++#endif
+ 
+ /* Save the SPSR and ELR. */
+ MRS X3, SPSR_EL1
+@@ -1184,6 +1272,13 @@
+  * interrupt, before the EOI. */
+ MSR DAIFSET, # 2
+ DSB SY
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++savefuncontextgpregs
++MRS X0, TPIDR_EL1
++AND X0, X0, #0xff
++BL ss_latency_exception_enter
++restorefuncontextgpregs
++#endif
+ 
+ /* Restore the interrupt ID value. */
+ LDP X0, X1, [ SP ], # 0x10
+@@ -1274,6 +1369,9 @@
+ BL vTaskSwitchContext
+ restorefuncontextgpregs
+ portRESTORE_CONTEXT
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 
+ Exit_IRQ_No_Context_Switch:
+@@ -1297,6 +1395,9 @@
+ restorefloatregisters
+ restoreallgpregisters
+ 
++#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
++ss_latency_return_point
++#endif
+ ERET
+ 
+ /******************************************************************************
