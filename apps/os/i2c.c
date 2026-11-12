@@ -376,8 +376,11 @@ static void owner_task_body(void)
             if(!(declared_mask&(1u<<n)))continue;
             unsigned phase=atomic_load_explicit(&b->phase,memory_order_acquire);
             unsigned command=atomic_exchange_explicit(&b->command,NO_COMMAND,memory_order_acq_rel);
-            if(phase==CLOSED&&command==OPEN_COMMAND&&!quit){open_bus(b,n);phase=atomic_load_explicit(&b->phase,memory_order_acquire);}
-            else if(phase==OPEN&&(command==CLOSE_COMMAND||quit)){close_bus(b);phase=atomic_load_explicit(&b->phase,memory_order_acquire);}
+            if(phase==CLOSED&&command==OPEN_COMMAND&&!quit){
+                open_bus(b,n);phase=atomic_load_explicit(&b->phase,memory_order_acquire);os_application_wake_task(b->waiter);
+            }else if(phase==OPEN&&(command==CLOSE_COMMAND||quit)){
+                close_bus(b);phase=atomic_load_explicit(&b->phase,memory_order_acquire);os_application_wake_task(b->waiter);
+            }
             if(phase==OPEN){
                 if(atomic_load_explicit(&b->transfer,memory_order_acquire)==SUBMITTED)start_transfer(b);
                 if(atomic_load_explicit(&b->transfer,memory_order_acquire)==ACTIVE){
@@ -448,7 +451,7 @@ int ss_i2c_open(unsigned n,uint32_t rate_hz)
     default:break;
     }
     unsigned none=NO_COMMAND;
-    b->want_rate=rate_hz;
+    b->want_rate=rate_hz;b->waiter=xTaskGetCurrentTaskHandle();
     if(atomic_compare_exchange_strong_explicit(&b->command,&none,OPEN_COMMAND,memory_order_acq_rel,memory_order_acquire))kick();
     return 0;
 }
@@ -509,6 +512,7 @@ int ss_i2c_close(unsigned n)
     default:break;
     }
     unsigned none=NO_COMMAND;
+    b->waiter=xTaskGetCurrentTaskHandle();
     if(atomic_compare_exchange_strong_explicit(&b->command,&none,CLOSE_COMMAND,memory_order_acq_rel,memory_order_acquire))kick();
     return 0;
 }
