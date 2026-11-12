@@ -18,7 +18,18 @@ struct board_provider providers;
 volatile unsigned os_check_result;
 static void check(int ok,unsigned code){if(!ok){os_check_result=code;__asm__ volatile("brk #0");for(;;){}}}
 static unsigned board_up=1,board_failed,stopped,bound,initialized,created,attributes=0xff,mode,polled,retained;
-static uint32_t segment_flags;
+static uint32_t segment_flags,segment_disconnected;
+static unsigned model_failing,quiesce_notes,quiesce_registered;
+int os_quiesce_register(struct os_quiesce *q)
+{check(!created,130);q->registered=1;++quiesce_registered;return 1;}
+int os_quiesce_requested(const struct os_quiesce *q){return atomic_load(&q->requested)!=0;}
+enum os_quiesce_result os_quiesce_result(const struct os_quiesce *q){return atomic_load(&q->result);}
+int os_quiesce_fault(struct os_quiesce *q,uint32_t site,uint32_t value,const void *caller)
+{
+    if(!model_failing&&!os_quiesce_requested(q))return 0;
+    if(!atomic_exchange(&q->fault_state,2)){q->site=site;q->value=value;q->caller=caller;++quiesce_notes;}
+    atomic_store(&q->result,OS_QUIESCE_FAULT);return 1;
+}
 static struct os_session session;
 static unsigned radio_granted; /* the session grants the radio: the headset shares the radio's module owner */
 static uint64_t start_us,end_us;
@@ -109,7 +120,7 @@ static void activation(unsigned segment)
 int bluetooth_headset_segment_status(struct bluetooth_application *a,struct bluetooth_segment_status *out)
 {
     if(a!=&app||failed_app)return -1;
-    *out=(struct bluetooth_segment_status){head,tail,segment_flags,0};return 1;
+    *out=(struct bluetooth_segment_status){head,tail,segment_flags,segment_disconnected};return 1;
 }
 int bluetooth_headset_segment_request(struct bluetooth_application *a,unsigned request,uint64_t observed)
 {
@@ -248,6 +259,7 @@ static void start_case(void)
     }
     check(start_us==7000000&&end_us==board.session.deadline_us,41);
     check(codec_ready==1,44);
+    check(quiesce_registered==1,131);
     check(!os_headset_start()&&initialized==1,42);
 }
 /* One owner iteration polls a live application, retains it once the board
@@ -280,6 +292,35 @@ void os_check_run(unsigned selected)
     /* The started client's handle; os_headset_start runs in mode 0. */
     headset.client=(TaskHandle_t)&headset.client_task;
     board.session.workload=mode==10?0:4;
+    if(mode==11||mode==14){
+        /* The request stops capture. A delayed disconnect stays pending;
+         * after it, UART and the independently owned module remain held. */
+        session.granted=OS_GRANT_HEADSET|(radio_granted?OS_GRANT_RADIO:0);
+        model_failing=mode==11;atomic_store(&headset_quiesce.requested,1);
+        check(os_headset_quiesce_pending(),132);
+        atomic_store(&headset.requested,1);
+        for(unsigned i=0;i<10;++i){
+            check(headset_quiesce_step(&headset_quiesce)==OS_QUIESCE_PENDING,133);
+            check(step()==0&&!word&&!board_failed,134);
+        }
+        check(quiesce_notes==0&&os_headset_capture(1,&wav,&bytes)==-1,135);
+        segment_disconnected=1;
+        check(headset_quiesce_step(&headset_quiesce)==OS_QUIESCE_FAULT&&!os_headset_quiesce_pending(),136);
+        check(headset_quiesce.value==(HEADSET_RETURN_UART|(radio_granted?0u:HEADSET_RETURN_MODULE))&&quiesce_notes==1&&!board_failed,137);
+        unsigned previous=polled;serve();check(polled==previous,138);
+        os_check_result=1;return;
+    }
+    if(mode==12){
+        /* A failure before the ordered callback still preserves admission. */
+        model_failing=1;fail();
+        check(os_quiesce_result(&headset_quiesce)==OS_QUIESCE_FAULT&&quiesce_notes==1&&!board_failed,139);
+        os_check_result=1;return;
+    }
+    if(mode==13){
+        model_failing=1;atomic_store(&headset_quiesce.requested,1);failed_app=1;
+        check(headset_quiesce_step(&headset_quiesce)==OS_QUIESCE_FAULT&&headset_quiesce.value==0x100u&&!board_failed,140);
+        os_check_result=1;return;
+    }
     if(mode==8){
         /* The supervised capture window ends capture without a fault; any other
          * stop reason leaves later generations without a capture. */

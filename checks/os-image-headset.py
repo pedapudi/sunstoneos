@@ -67,7 +67,9 @@ ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--build', '{build:headset}', '--output', '{output}']]
 CASES = ['pins-and-startup', 'keyboard-generations', 'request-after-publication', 'refused-borrow',
          'request-rules', 'refused-request', 'failed-application', 'owner-iteration',
-         'stopped-capture', 'wideband-segment', 'button-only-workload']
+         'stopped-capture', 'wideband-segment', 'button-only-workload',
+         'return-waits-for-disconnect-and-retains-transports', 'failure-before-ordered-step',
+         'return-stop-refusal', 'normal-return-retains-transports']
 # Bit 8 of the mode: the session grants the radio, so the headset shares the radio's module owner.
 RADIO = 0x100
 # Bit 9: the session's admitted lifetime is resident; without it, supervised. The two cases that depend on the lifetime run
@@ -75,6 +77,7 @@ RADIO = 0x100
 RESIDENT = 0x200
 RUNS = [(mode, case) for mode, case in enumerate(CASES)] + \
     [(RADIO | CASES.index(case), case + '-with-radio') for case in ('pins-and-startup', 'owner-iteration')] + \
+    [(RADIO | mode, CASES[mode] + '-with-radio') for mode in (11, 14)] + \
     [(RESIDENT | radio | CASES.index(case), case + ('-with-radio' if radio else '') + '-resident')
      for case in ('pins-and-startup', 'owner-iteration') for radio in (0, RADIO)]
 
