@@ -3,6 +3,7 @@
 import argparse
 import importlib.util
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -21,6 +22,24 @@ def function(source, name):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.function(source, name)
+
+
+def short_readiness_context(patch):
+    """Drop two trailing context lines from the hunk that publishes PMIC readiness.
+
+    The mutant is derived from the current hunk, so later edits to the patch
+    cannot turn it into a copy of the production patch."""
+    lines = patch.split('\n')
+    anchor = lines.index('         else if(ready<0){')
+    header = max(i for i in range(anchor) if lines[i].startswith('@@ '))
+    end = next((i for i in range(anchor + 1, len(lines)) if not lines[i].startswith(' ')), len(lines))
+    assert end - anchor - 1 >= 2, 'readiness hunk lacks two trailing context lines'
+    match = re.fullmatch(r'@@ -(\d+),(\d+) \+(\d+),(\d+) @@(.*)', lines[header])
+    lines[header] = '@@ -%s,%d +%s,%d @@%s' % (match[1], int(match[2]) - 2, match[3], int(match[4]) - 2, match[5])
+    del lines[end - 2:end]
+    mutant = '\n'.join(lines)
+    assert mutant != patch
+    return mutant
 
 
 def main():
@@ -89,8 +108,7 @@ def main():
         run=subprocess.run(command,capture_output=True,text=True)
         (args.output/'patch.log').write_text(run.stdout+run.stderr)
         assert not run.returncode,run.stdout+run.stderr
-        text=(ROOT/'apps/os/main.patch').read_text().replace('@@ -115,10 +144,16 @@','@@ -115,8 +144,14 @@')
-        text=text.replace('         else if(ready<0){\n             const struct a733_pmic *p=providers.domains.pmic;\n             const uint32_t site=SUNSTONE_CRUMB_FAIL_SITE(PMIC),value=p&&p->rails?a733_power_authority_load(&p->rails->authority):~0u;\n@@ -136,6 +167,14 @@','         else if(ready<0){\n@@ -136,6 +167,14 @@',1)
+        text=short_readiness_context((ROOT/'apps/os/main.patch').read_text())
         mutant=args.output/'short-context.patch';mutant.write_text(text)
         command[-1]=str(mutant)
         run=subprocess.run(command,capture_output=True,text=True)
