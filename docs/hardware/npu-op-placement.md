@@ -45,6 +45,7 @@ against 269 for the shader's full-width `Sub` and `Exp`.
 | Slice-based alignment of the same scores (two slices) | transpose unit | 81 |
 | `Sub` with a broadcast operand | stream processor | 77 |
 | `Tile` of a `[4, 128, 1]` tensor to `[4, 128, 128]` | shader | not measured alone; a probe graph whose only shader operation is the `Tile` took 495.8 in all |
+| Three `Tile` operations in the 64-row step: `[4, 64, 1]` to `[4, 64, 128]` and twice to `[4, 64, 44]` | shader | about 170 together, 57 each: the step took about 304 against 229.4 without them while the estimates of its other operations fell by 95 (record `1794491788400711310-b14ea0fe`) |
 | Native `Softmax` | stream processor | 82 |
 | `ReduceMax` over the last axis | stream processor | 5 |
 | `Elu` of the same tensor (the compiler estimates 113 microseconds) | activation unit | not measured alone; it replaced the shader `Exp` in a 64-row job and saved 88 of that job's 391 microseconds |
