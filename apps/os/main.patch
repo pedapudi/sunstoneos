@@ -1,17 +1,18 @@
 --- main.c
 +++ main-os.c
-@@ -1,4 +1,9 @@
+@@ -1,4 +1,10 @@
 -#include "application.h"
 +/* Generated in the build directory, where "application.h" would name the
 + * generated application header. */
 +#include "../board/application.h"
 +#include "os.h"
 +#include "cpu-return.h"
++#include "radio-quiesce.h"
 +extern int os_usb_quiesce_start(void) __attribute__((weak));
  #ifdef SUNSTONE_BOARD_USB2_IRQ
  #include "host_irq.h"
  #endif
-@@ -22,6 +27,10 @@
+@@ -22,6 +28,11 @@
  struct board_application board;
  struct board_provider providers;
  static struct board_radio radio;
@@ -19,10 +20,11 @@
 + * not link the headset library. */
 +struct board_radio *os_board_radio(void){return &radio;}
 +extern void os_module_poll(void) __attribute__((weak));
++extern int os_headset_quiesce_pending(void) __attribute__((weak));
  static struct board_radio_profile admitted_profile;
  #ifdef SUNSTONE_BOARD_SUPERVISED
  static struct board_radio_profile runtime_profile;
-@@ -76,7 +85,14 @@
+@@ -76,7 +87,14 @@
      __builtin_return_address(0));fail_close();}
  /* Every failure still passes through board_fail, after its own record. */
  __attribute__((noinline)) void board_fail_at(uint32_t site,uint32_t value,const void *caller)
@@ -38,7 +40,7 @@
  /* This hook is used by the existing cached EL1/EL3 fatal paths. It only closes
   * atomic admission; those paths record their own fault, and EL3 cannot use
   * the breadcrumb SVC. The independent watchdog owns recovery from stopped CPUs. */
-@@ -88,7 +104,11 @@
+@@ -88,7 +106,11 @@
  {
      uint64_t el;
      __asm__ volatile("mrs %0, CurrentEL":"=r"(el));
@@ -51,7 +53,7 @@
      fail_close();a733_typec_revoke(&board.typec.provider);
  }
  static _Noreturn void park(void){for(;;)vTaskSuspend(NULL);}
-@@ -104,6 +124,8 @@
+@@ -104,6 +126,8 @@
  static void pmic(void *unused)
  {
      (void)unused;for(;;){
@@ -60,18 +62,60 @@
          if(!board_live(NULL))park();
          const uint32_t ticks=a733_power_service_step(&providers.domains);
          const int ready=a733_power_service_ready(&providers.domains);
-@@ -173,6 +195,10 @@
+@@ -155,6 +179,8 @@
+ #ifdef SUNSTONE_A733_OS
+         os_wifi_credential_poll(); /* EL1: the credential leaves RAM once the application has finished */
+ #endif
++        int parked=os_radio_quiesce_parked();
++        if(parked)goto radio_return_wait;
+         if(!board_live(NULL)){
+             (void)board_radio_external_failure(&radio);
+             atomic_store_explicit(&board.radio_result,3,memory_order_release);
+@@ -163,28 +189,39 @@
+ #ifdef SUNSTONE_A733_OS_RADIO_SCAN
+             os_radio_scan_step(&radio,(int)r);
+ #endif
++            int returning=os_radio_quiesce_poll(&radio,(int)r);
++            if(returning==2){parked=1;goto radio_return_wait;}
+             if(r==BOARD_RADIO_RETAINED||r==BOARD_RADIO_INVALID){
+                 atomic_store_explicit(&board.radio_result,3,memory_order_release);
+                 /* A failure that left nothing powered (a guard refusal, or a completed failure shutdown) is not a
+                  * board failure: the session ends normally with the record. */
+-                if(!a733_radio_platform_clean(&radio.platform)){
++                if(!a733_radio_platform_clean(&radio.platform)&&
++                   !os_radio_quiesce_fault((uint32_t)r,SUNSTONE_CRUMB_HERE())){
+                     atomic_fetch_or_explicit(&board.watchdog_state,4,memory_order_release);
+                     a733_typec_revoke(&board.typec.provider);
                  }
              }
          }
++radio_return_wait:
 +        /* The same owner task serves the module's Bluetooth client when the session grants the headset. */
 +        if(os_module_poll&&os_granted(OS_GRANT_HEADSET))os_module_poll();
++        if(parked&&(!os_headset_quiesce_pending||!os_headset_quiesce_pending()))park();
 +        /* A failed radio stops reporting, so the resident watchdog resets the board; a guard refusal changed nothing and keeps reporting. */
 +        if(atomic_load_explicit(&board.radio_result,memory_order_acquire)!=3||a733_radio_platform_clean(&radio.platform))BOARD_PROGRESS(OS_SERVICE_RADIO);
          vTaskDelay(1);
      }
  }
-@@ -194,6 +220,8 @@
+ static void radio_client(void *unused)
+ {
+     (void)unused;for(;;){
+-        if(board_live(NULL)){
++        if(board_live(NULL)&&!os_radio_quiesce_requested()){
+             int r=board_radio_client_poll(&radio);
+             if(r<0){
+                 atomic_store_explicit(&board.radio_result,3,memory_order_release);
+-                atomic_fetch_or_explicit(&board.watchdog_state,4,memory_order_release);
+-                a733_typec_revoke(&board.typec.provider);
++                if(!os_radio_quiesce_fault((uint32_t)r,SUNSTONE_CRUMB_HERE())){
++                    atomic_fetch_or_explicit(&board.watchdog_state,4,memory_order_release);
++                    a733_typec_revoke(&board.typec.provider);
++                }
+             }else if(r==1){
+                 unsigned verified=0;
+                 if(board_radio_client_result(&radio,&verified)!=1){vTaskDelay(1);continue;}
+@@ -194,6 +231,8 @@
                      memory_order_release,memory_order_relaxed);
              }
          }
@@ -80,7 +124,7 @@
          vTaskDelay(1);
      }
  }
-@@ -231,8 +259,11 @@
+@@ -231,8 +270,11 @@
  #elif defined(SUNSTONE_A733_OS)
  static void supervise(void *unused)
  {
@@ -93,7 +137,7 @@
          if(resident){
              /* The armed watchdog bounds every hang. A failure, an expired
               * service window, a service still silent at the loader's first
-@@ -379,6 +410,8 @@
+@@ -379,6 +421,8 @@
      if(board_application_pins(&b.pins)!=1)platform_panic("board application pins",10);
  #endif
      if(!a733_native_usb_init(&providers.shared,&b,board_live,board_fail,NULL))platform_panic("board shared providers",4);
@@ -102,7 +146,7 @@
      TaskFunction_t functions[]={pmic,board_usb0_task,typec,power,board_host_task,radio_owner,radio_client,supervise};
      const char *names[]={"board-pmic","board-usb0","board-typec","board-power","board-usb2","board-radio","board-net","board-watchdog"};
      for(unsigned i=0;i<8;++i){
-@@ -392,7 +425,8 @@
+@@ -392,7 +436,8 @@
          board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,!i?3:i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);
          if(!board.handles[i])platform_panic("board tasks",5);
  #if configNUMBER_OF_CORES > 1

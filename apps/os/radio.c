@@ -6,10 +6,68 @@
  * the OS session adds. This entry refuses those collisions before any
  * provider is constructed. */
 #include "os.h"
+#include "cpu-return.h"
+#include "quiesce.h"
+#include "radio-quiesce.h"
 #include "../board/application.h"
 #include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
+#include "sunstone_crumb.h"
+#include "sunstone_wifi_credential.h"
 #include <string.h>
+static enum os_quiesce_result radio_quiesce_step(struct os_quiesce *);
+static struct os_quiesce radio_quiesce={
+    .owner=OS_QUIESCE_RADIO,.order=OS_QUIESCE_DEVICES,.step=radio_quiesce_step
+};
+static unsigned shutdown_started;
+static enum os_quiesce_result radio_quiesce_step(struct os_quiesce *q)
+{
+    if(board.handles[5])xTaskNotifyGive(board.handles[5]);
+    if(board.handles[6])xTaskNotifyGive(board.handles[6]);
+    return os_quiesce_result(q);
+}
+int os_radio_quiesce_requested(void)
+{return os_quiesce_requested(&radio_quiesce);}
+int os_radio_quiesce_parked(void)
+{return os_radio_quiesce_requested()&&os_quiesce_result(&radio_quiesce)!=OS_QUIESCE_PENDING;}
+int os_radio_quiesce_fault(uint32_t value,const void *caller)
+{return os_quiesce_fault(&radio_quiesce,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x901u,value,caller);}
+static void radio_quiesce_refuse(uint32_t value)
+{
+    if(!os_radio_quiesce_fault(value,SUNSTONE_CRUMB_HERE()))
+        board_fail_at(SUNSTONE_CRUMB_FAIL_BOARD<<12|0x901u,value,SUNSTONE_CRUMB_HERE());
+}
+/* One owner pass. The existing board driver admits shutdown only after a
+ * completed scan with an idle transport. A retained or unimplemented stop
+ * never becomes a successful retirement merely because the scan has ended. */
+int os_radio_quiesce_poll(struct board_radio *r,int result)
+{
+    if(!os_radio_quiesce_requested())return 0;
+    if(os_quiesce_result(&radio_quiesce)!=OS_QUIESCE_PENDING)return 2;
+    if(!r->config.scan_only||r->config.entropy_only){radio_quiesce_refuse(0x902u);return 2;}
+    if(result==BOARD_RADIO_RETAINED||result==BOARD_RADIO_INVALID){
+        radio_quiesce_refuse(r->platform.fail_line?r->platform.fail_line<<16|(r->platform.fail_stage&0xffffu):
+            r->session.fail_line<<16|0x100u|(r->session.fail_stage&0xfeffu));
+        return 2;
+    }
+    if(result==BOARD_RADIO_DOWN){
+        /* DOWN is the normal driver's completed readback sequence. The
+         * platform_clean predicate describes its separate failure cleanup. */
+        if(r->platform.fault||r->platform.held||r->platform.retained||r->platform.pmic_request.id||
+           r->session.transport.pending||r->session.transport.held){radio_quiesce_refuse(0x903u);return 2;}
+        os_wifi_credential_poll();
+        if(os_wifi_credential_wiped()){os_quiesce_complete(&radio_quiesce);return 2;}
+        return 1;
+    }
+    if(!shutdown_started&&result!=BOARD_RADIO_SCANNED){radio_quiesce_refuse(0x904u);return 2;}
+    if(result==BOARD_RADIO_SCANNED&&!shutdown_started){
+        uint64_t now=a733_smp_counter()/24;
+        uint64_t deadline=now+OS_FAILURE_RETURN_US;
+        if(deadline>board.session.deadline_us-10000)deadline=board.session.deadline_us-10000;
+        shutdown_started=board_radio_shutdown(r,deadline);
+    }
+    return 1;
+}
 static struct board_radio_profile profile;
 static unsigned admitted;
 /* The board's own radio tasks are privileged by main.c. */
@@ -39,5 +97,6 @@ int os_radio_start(void)
 {
     const struct os_session *s=os_session_admitted();
     if(s&&!(s->granted&OS_GRANT_RADIO))return 1;
-    return s&&s->board.workload==OS_RADIO_WORKLOAD&&board.handles[5]&&board.handles[6];
+    if(!s||s->board.workload!=OS_RADIO_WORKLOAD||!board.handles[5]||!board.handles[6])return 0;
+    return !os_returning()||os_quiesce_register(&radio_quiesce);
 }

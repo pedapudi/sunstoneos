@@ -4,6 +4,7 @@
 #include "os.h"
 #include "../board/application.h"
 #include "cpu-return.h"
+#include "radio-quiesce.h"
 #include "a733_radio_result.h"
 #include "os_radio_result.h"
 #include "sunstone_crumb.h"
@@ -70,19 +71,21 @@ void os_radio_scan_step(struct board_radio *r, int result)
     } else if ((result == BOARD_RADIO_RETAINED || result == BOARD_RADIO_INVALID) && current != FAILED) {
         /* The first failure record names where the platform failed (source line and stage), so a run that
          * cannot return still says it; the descriptor's record carries the same site. */
-        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD) | SUNSTONE_CRUMB_FAIL_RETURN,
-            r->platform.fail_line ? r->platform.fail_line << 16 | (r->platform.fail_stage & 0xffffu) :
-            r->session.fail_line << 16 | 0x100u | (r->session.fail_stage & 0xfeffu), __builtin_return_address(0));
+        uint32_t value = r->platform.fail_line ? r->platform.fail_line << 16 | (r->platform.fail_stage & 0xffffu) :
+            r->session.fail_line << 16 | 0x100u | (r->session.fail_stage & 0xfeffu);
+        if(!os_radio_quiesce_fault(value,__builtin_return_address(0)))
+            board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD) | SUNSTONE_CRUMB_FAIL_RETURN,
+                value,__builtin_return_address(0));
         publish(r);
         atomic_store_explicit(&state, FAILED, memory_order_release);
     }
 }
 void os_radio_scan_return_request(void){atomic_store_explicit(&returning, 1, memory_order_release);}
-/* Down with every readback matched, or failed and published: nothing more can be shut down. */
+/* A published failure does not establish that the module stopped. */
 int os_radio_scan_return_ready(void)
 {
     unsigned s = atomic_load_explicit(&state, memory_order_acquire);
-    return s == DOWN || s == FAILED;
+    return s == DOWN;
 }
 void ss_radio_status(struct ss_radio_status *status)
 {

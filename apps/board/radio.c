@@ -11,6 +11,7 @@ extern int os_ce_entropy_ready(void) __attribute__((weak));
 extern int os_ce_entropy_failed(void) __attribute__((weak));
 extern int os_ce_entropy_bytes(void *,uint8_t *,size_t) __attribute__((weak));
 extern void os_ce_entropy_wipe(void) __attribute__((weak));
+extern int os_radio_quiesce_fault(uint32_t,const void *) __attribute__((weak));
 extern int ss_wifi_credential(const uint8_t **,size_t *,const uint8_t **,const uint8_t **,size_t *) __attribute__((weak));
 enum { STARTING,CONNECTING,SECURING,ONLINE,SCANNING,SCANNED,SHUTTING_DOWN,DOWN };
 /* Elapsed time before an owner stops repeating advancing session steps. At
@@ -100,7 +101,9 @@ static enum board_radio_result retain(struct board_radio *r)
     /* The board's failure bit waits for the failure shutdown. A failure that left nothing powered (a
      * refusal before any write, or a failure shutdown that finished with every readback matched) leaves it alone, so
      * the session ends normally and the record can be read; a watchdog reset would lose DRAM. */
-    if(!waiting&&!a733_radio_platform_clean(&r->platform))atomic_fetch_or_explicit(r->config.recovery_state,4,memory_order_acq_rel);
+    if(!waiting&&!a733_radio_platform_clean(&r->platform)&&
+       (!os_radio_quiesce_fault||!os_radio_quiesce_fault(r->platform.fail_line<<16|(r->platform.fail_stage&0xffffu),
+           __builtin_return_address(0))))atomic_fetch_or_explicit(r->config.recovery_state,4,memory_order_acq_rel);
     if(!r->config.scan_only)(void)a733_radio_entropy_retain(&r->entropy);
     if(waiting)return BOARD_RADIO_PENDING;
     if(r->config.report_memory.allocate){
