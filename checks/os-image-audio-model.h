@@ -19,7 +19,9 @@ static uint8_t memory[PERIODS][4096];
 static uint8_t staging[4096];
 static char log[512];static unsigned logged;
 int board_live(void *v){(void)v;return board_up;}
-uint64_t a733_smp_counter(void){return 0;} /* Replay is not selected in this model. */
+static uint64_t model_ticks;
+static unsigned model_critical,model_delays;
+uint64_t a733_smp_counter(void){return model_ticks;} /* Replay is not selected in this model. */
 void board_fail(void *v){(void)v;board_failed=1;}
 static void check(int ok,unsigned code){if(!ok){os_check_result=code;__asm__ volatile("brk #0");for(;;){}}}
 /* The admitted lifetime of the modeled session (enum a733_lifetime), at EL1 and in admission alike. */
@@ -31,7 +33,8 @@ void board_service_progress(unsigned service){check(service==OS_SERVICE_AUDIO,80
 #define REPORTS(n) (model_lifetime==A733_LIFETIME_RESIDENT?(n):0u)
 _Noreturn void platform_panic(const char *file,unsigned line)
 {(void)file;os_check_result=200+line;__asm__ volatile("brk #0");for(;;){}}
-void vTaskDelay(TickType_t ticks){(void)ticks;}
+void vTaskDelay(TickType_t ticks)
+{check(!model_critical,207);++model_delays;model_ticks+=(uint64_t)ticks*24000000/configTICK_RATE_HZ;}
 enum a733_i2s_resource_result a733_audio_parent_poll(struct a733_audio_parent *p)
 {(void)p;return ++parent_polls<3?A733_I2S_RESOURCE_PENDING:A733_I2S_RESOURCE_READY;}
 int a733_audio_parent_ready(const struct a733_audio_parent *p){(void)p;return parent_polls>=3;}

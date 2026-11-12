@@ -23,7 +23,69 @@ int os_granted(unsigned mask){return mask&&(session.granted&mask)==mask;}
 static unsigned stream_opens;
 int __wrap_os_audio_stream_open(const struct os_audio_stream_config *c){++stream_opens;return configure(c);}
 static unsigned model_failing,quiesce_notes;
+static unsigned service_retired,pool_retired,parent_retired,retire_block;
+static unsigned lock_attempts,lock_late,lock_counter_fail,return_deadline_pending,lock_delay_ticks;
+static uint64_t lock_deadline;
+static TaskHandle_t mutex_owner,current_task;
+static unsigned mask_mode,mask_attempts,mask_reads,mask_publications,late_irqs;
+void vTaskEnterCritical(void){check(!model_critical,208);model_critical=1;}
+void vTaskExitCritical(void){check(model_critical&&audio->irq.masked,209);model_critical=0;++mask_publications;}
+int gicv3_spi_mask(const struct gicv3_spi *spi)
+{check(spi==&audio->irq.spi,201);++mask_attempts;return mask_mode==1?0:1;}
+int gicv3_spi_masked(const struct gicv3_spi *spi)
+{
+    check(spi==&audio->irq.spi&&!model_critical,202);++mask_reads;
+    if(mask_mode==3&&mask_reads==1)return 0;
+    if(mask_mode==4)return 0;
+    /* A late notifier still owns the plain masked field under the scheduler
+     * critical section, even after SERVICE_RETIRING closes its service call. */
+    if(mask_mode==5){check(!model_critical,210);model_critical=1;audio->irq.masked=1;model_critical=0;++late_irqs;}
+    return mask_mode==2?-1:1;
+}
+volatile uint64_t ullPortInterruptNestings[8],ullCriticalNestings[8];
+TaskHandle_t xTaskGetCurrentTaskHandle(void){return current_task?current_task:audio->handle;}
+BaseType_t xTaskGetSchedulerState(void){return taskSCHEDULER_RUNNING;}
+TaskHandle_t xQueueGetMutexHolder(QueueHandle_t q){(void)q;return mutex_owner;}
+int a733_counter_clock_now(void *cookie,uint64_t *out)
+{check(cookie==&providers.shared.counter,192);if(atomic_load(&providers.shared.counter.failed))return 0;*out=model_ticks/24;return 1;}
+int a733_platform_lock_enter(struct a733_platform_locks *locks,enum a733_platform_lock which,uint64_t d)
+{
+    check(locks==&providers.shared.locks&&which==A733_PLATFORM_REGISTER_LOCK,193);
+    ++lock_attempts;lock_deadline=d;
+    if(lock_counter_fail)atomic_store(&providers.shared.counter.failed,1);
+    if(lock_late)model_ticks=(d+1)*24;
+    if(lock_delay_ticks){model_ticks+=(uint64_t)lock_delay_ticks*24000000/configTICK_RATE_HZ;return model_ticks/24<d;}
+    return 0; /* Ordinary contention or an already released late acquisition. */
+}
+int os_cpu_return_requested(void){return model_failing!=0;}
 int os_cpu_return_failing(void){return model_failing!=0;}
+uint64_t os_cpu_return_deadline_us(void){return return_deadline_pending?0:3000000;}
+void os_quiesce_complete(struct os_quiesce *q)
+{check(service_retired&&pool_retired&&parent_retired&&!audio->pending&&!held_ticket&&phase==DMA_SERVICE_CLOSED,182);atomic_store(&q->result,OS_QUIESCE_DONE);}
+int a733_dma_pool_session_return_limit(struct a733_dma_pool_session *s,uint64_t d)
+{check(s==&audio->pool&&d==3000000,183);return 1;}
+int dma_service_retired(const struct dma_service *s)
+{check(s==&audio->pool.service,184);return service_retired;}
+int dma_service_quiesce(struct dma_service *s)
+{
+    check(s==&audio->pool.service&&!audio->pending&&!held_ticket&&phase==DMA_SERVICE_CLOSED,185);
+    if(retire_block==1)return -1;
+    service_retired=1;return 1;
+}
+int a733_dma_pool_session_retire(struct a733_dma_pool_session *s)
+{
+    check(s==&audio->pool&&service_retired,186);
+    if(retire_block==2)return 0;
+    if(retire_block==3)return -1;
+    pool_retired=1;return 1;
+}
+enum a733_i2s_resource_result a733_audio_parent_retire(struct a733_audio_parent *p,uint64_t d)
+{
+    check(p==&audio->parent&&service_retired&&pool_retired&&d==3000000,187);
+    if(retire_block==4)return A733_I2S_RESOURCE_PENDING;
+    if(retire_block==5)return A733_I2S_RESOURCE_RETAINED;
+    parent_retired=1;return A733_I2S_RESOURCE_READY;
+}
 int os_quiesce_register(struct os_quiesce *q){q->registered=1;return 1;}
 int os_quiesce_requested(const struct os_quiesce *q){return atomic_load(&q->requested)!=0;}
 enum os_quiesce_result os_quiesce_result(const struct os_quiesce *q){return atomic_load(&q->result);}
@@ -50,6 +112,10 @@ static void reset(void)
     audio=&state;memset(audio,0,sizeof(*audio));
     atomic_store(&audio_quiesce.requested,0);atomic_store(&audio_quiesce.result,OS_QUIESCE_PENDING);
     atomic_store(&audio_quiesce.fault_state,0);model_failing=quiesce_notes=0;
+    model_ticks=0;service_retired=pool_retired=parent_retired=retire_block=0;
+    lock_attempts=lock_late=lock_counter_fail=return_deadline_pending=lock_delay_ticks=0;lock_deadline=0;mutex_owner=current_task=NULL;
+    mask_mode=mask_attempts=mask_reads=mask_publications=late_irqs=model_critical=model_delays=0;
+    memset(&providers,0,sizeof(providers));audio->handle=(TaskHandle_t)(uintptr_t)1;
     phase=DMA_SERVICE_CLOSED;produced=puts_done=reaps=closes=opens=silent=logged=0;
     sent=held_ticket=0;board_up=1;board_failed=0;parent_polls=0;
     for(unsigned i=0;i<PERIODS;++i)audio->pool.stream_mappings[i].cpu=memory[i];
@@ -113,16 +179,17 @@ void os_check_run(unsigned selected,unsigned samples)
     if(mode==13){
         /* Request return at each client boundary, including a held period.
          * Every opened stream drains and closes, with no replacement open.
-         * The unretired DMA pool and audio parent remain an explicit fault. */
-        for(unsigned before=0;before<40;++before){
+         * Parent shutdown follows the final worker and pool publications. */
+        for(unsigned cyclic=0;cyclic<2;++cyclic)for(unsigned before=0;before<40;++before){
             reset();struct os_audio_stream_config c=config(16000,1,16,4096,4);
+            c.cyclic=cyclic;
             check(configure(&c)&&os_audio_stream_start()==1,160);
             for(unsigned i=0;i<before;++i)check(step()==0,161);
             unsigned opened=opens;
             model_failing=1;atomic_store(&audio_quiesce.requested,1);
             for(unsigned i=0;i<40&&os_quiesce_result(&audio_quiesce)==OS_QUIESCE_PENDING;++i)pass();
-            check(os_quiesce_result(&audio_quiesce)==OS_QUIESCE_FAULT&&quiesce_notes==1&&!board_failed,162);
-            check(audio_quiesce.value==(AUDIO_RETURN_POOL|AUDIO_RETURN_PARENT),163);
+            check(os_quiesce_result(&audio_quiesce)==OS_QUIESCE_DONE&&!quiesce_notes&&!board_failed,162);
+            check(service_retired&&pool_retired&&parent_retired,163);
             check(opens==opened&&(!opened||phase==DMA_SERVICE_CLOSED)&&!held_ticket,164);
             check(os_audio_stream_start()==-1,165);
         }
@@ -140,13 +207,68 @@ void os_check_run(unsigned selected,unsigned samples)
         check(os_quiesce_result(&audio_quiesce)==OS_QUIESCE_PENDING&&!board_failed&&audio->pending,174);
         silent=0;
         for(unsigned i=0;i<40&&os_quiesce_result(&audio_quiesce)==OS_QUIESCE_PENDING;++i)pass();
-        check(os_quiesce_result(&audio_quiesce)==OS_QUIESCE_FAULT&&phase==DMA_SERVICE_CLOSED&&!held_ticket&&!board_failed,175);
+        check(os_quiesce_result(&audio_quiesce)==OS_QUIESCE_DONE&&phase==DMA_SERVICE_CLOSED&&!held_ticket&&!board_failed,175);
         os_check_result=1;return;
     }
     if(mode==15){
         /* A device failure can precede this owner's ordered step. */
         model_failing=1;fail();
         check(atomic_load(&audio->failed)&&os_quiesce_result(&audio_quiesce)==OS_QUIESCE_FAULT&&!board_failed,180);
+        os_check_result=1;return;
+    }
+    if(mode==16){
+        for(unsigned blocked=1;blocked<=5;++blocked){
+            reset();retire_block=blocked;model_failing=1;atomic_store(&audio_quiesce.requested,1);
+            for(unsigned i=0;i<20;++i)pass();
+            check(!parent_retired&&!board_failed,188);
+            if(blocked==2||blocked==4){
+                check(os_quiesce_result(&audio_quiesce)==OS_QUIESCE_PENDING,189);
+                model_ticks=3000000u*24u;pass();
+            }
+            check(os_quiesce_result(&audio_quiesce)==OS_QUIESCE_FAULT&&quiesce_notes==1,190);
+            unsigned before=logged;for(unsigned i=0;i<4;++i)pass();check(logged==before,191);
+        }
+        os_check_result=1;return;
+    }
+    if(mode==17){
+        __asm__ volatile("msr daifclr, #2");
+        providers.shared.locks.initialized=1;
+        const uint64_t tick=(1000000u+configTICK_RATE_HZ-1u)/configTICK_RATE_HZ;
+        check(!enter(audio,60000000)&&lock_attempts==1&&lock_deadline==tick&&!atomic_load(&audio->failed),194);
+        model_failing=1;return_deadline_pending=1;
+        check(!enter(audio,60000000)&&lock_attempts==1&&!atomic_load(&audio->failed),195);
+        return_deadline_pending=0;model_ticks=(3000000-10)*24;lock_late=1;
+        check(!enter(audio,60000000)&&lock_attempts==2&&lock_deadline==3000000&&!mutex_owner,196);
+        model_ticks=1;lock_late=0;atomic_store(&providers.shared.locks.retained,1u<<A733_PLATFORM_REGISTER_LOCK);
+        check(!enter(audio,60000000)&&lock_attempts==2&&os_quiesce_result(&audio_quiesce)==OS_QUIESCE_FAULT,197);
+        reset();providers.shared.locks.initialized=1;model_failing=1;mutex_owner=audio->handle;
+        check(!enter(audio,60000000)&&!lock_attempts&&os_quiesce_result(&audio_quiesce)==OS_QUIESCE_FAULT,198);
+        reset();providers.shared.locks.initialized=1;model_failing=1;lock_counter_fail=1;
+        uint64_t t;
+        check(!enter(audio,60000000)&&lock_attempts==1&&!now(audio,&t),199);
+        reset();providers.shared.locks.initialized=1;atomic_store(&audio->ready,1);
+        audio->pool.service.worker=current_task=(TaskHandle_t)(uintptr_t)2;lock_delay_ticks=2;
+        check(enter(audio,10000)==1&&lock_deadline==10000&&model_ticks/24==2*tick&&
+              !atomic_load(&audio->failed),211);
+        os_check_result=1;return;
+    }
+    if(mode==18){
+        __asm__ volatile("msr daifclr, #2");
+        for(unsigned m=0;m<4;++m){
+            reset();mask_mode=m;audio->pool.service.worker=audio->handle;
+            int r=mask(&audio->irq);
+            unsigned success=m==0||m==3;
+            check(r==(success?1:-1)&&mask_attempts==1&&audio->irq.masked==success&&mask_publications==success,203);
+            check(mask_reads==(m==1?0u:m==3?2u:1u)&&model_delays==(m==3),204);
+        }
+        reset();audio->pool.service.worker=audio->handle;model_ticks=3000000u*24u;
+        check(mask(&audio->irq)==-1&&!mask_attempts&&!mask_reads,205);
+        reset();audio->pool.service.worker=audio->handle;model_ticks=(3000000u-10u)*24u;mask_mode=4;
+        check(mask(&audio->irq)==-1&&mask_attempts==1&&mask_reads==1&&!audio->irq.masked,206);
+        reset();audio->pool.service.worker=audio->handle;return_deadline_pending=1;
+        check(mask(&audio->irq)==-1&&!mask_attempts,212);
+        reset();audio->pool.service.worker=audio->handle;mask_mode=5;
+        check(mask(&audio->irq)==1&&late_irqs==1&&mask_publications==1,213);
         os_check_result=1;return;
     }
     if(mode==11){

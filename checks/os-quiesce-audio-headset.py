@@ -90,12 +90,48 @@ def main():
             result, _ = model.run(segments, symbols, mode, frames)
             cases[case + '-' + str(frames)] = result
             assert result == 1, (owner, mode, frames, result)
-        records[owner] = {'cases': cases, 'mutants_rejected': 2,
+        rejected = 2
+        if owner == 'audio':
+            register_sources = ['checks/os-audio-register.c', 'drivers/audio/a733_i2s_platform.c',
+                'drivers/audio/a733_i2s.c', 'drivers/audio/a733_i2s_stream.c',
+                'drivers/audio/a733_audio_leases.c', 'drivers/clock/a733_clock_leases.c',
+                'drivers/pinctrl/a733_pins.c', 'drivers/pinctrl/a733_pin_tables.c',
+                'drivers/dma/a733_dma.c', 'drivers/dma/a733_dma_controller.c',
+                'runtime/memory.c', 'runtime/memmove.c']
+            register_command = flags + [str(ROOT / p) for p in register_sources] + [
+                '-nostdlib', '--ld-path=' + str(lld), '-Wl,-Ttext=0x41000000',
+                '-Wl,-e,os_check_run', '-Wl,--gc-sections']
+            parts, names = model.image(register_command, args.output, 'audio-register')
+            for mode in (0, 1):
+                result, _ = model.run(parts, names, mode, 0)
+                assert result == 1, ('actual stream register contention', mode, result)
+                cases['actual-stream-register-' + ('global-expiry' if mode else 'two-tick-contention')] = result
+            replacements = {
+                'skip-stream-drain': ('audio->stage=CANCEL;return 0;', 'audio->stage=RETURN_POOL;return 0;', 13),
+                'skip-parent-proof': ('audio->stage=RETURN_PARENT;return 0;',
+                                      'audio->stage=RETURN_DONE;os_quiesce_complete(&audio_quiesce);return 0;', 13),
+                'slice-steady-stream': ('if(self!=audio->handle||slice>d)slice=d;', 'if(slice>d)slice=d;', 17),
+                'spin-mask-wait': ('vTaskDelay(1);', '(void)0;', 18),
+            }
+            fixture = (ROOT / 'checks/os-image-audio.c').read_text()
+            for name, (old, new, mode) in replacements.items():
+                assert old in text
+                mutant = args.output / (name + '.c')
+                mutant.write_text(text.replace(old, new, 1))
+                replay = args.output / (name + '-fixture.c')
+                replay.write_text(fixture.replace('"../apps/os/audio.c"', '"' + str(mutant.resolve()) + '"'))
+                changed = [str(replay.resolve()) if arg == str(ROOT / 'checks/os-image-audio.c') else arg for arg in command]
+                changed += ['-I' + str(ROOT / 'checks'), '-I' + str(ROOT / 'apps/os')]
+                parts, names = model.image(changed, args.output, name)
+                result, _ = model.run(parts, names, mode, 16000)
+                assert result != 1, (name, 'accepted unsafe retirement')
+                rejected += 1
+        records[owner] = {'cases': cases, 'mutants_rejected': rejected,
                           'source_sha256': hashlib.sha256(text.encode()).hexdigest(), 'command': command}
     record = {'passed': True, 'physical_access': False, 'owners': records}
     (args.output / 'result.json').write_text(json.dumps(record, indent=2) + '\n')
     print('PASS return owners: ' + ', '.join(owners) + '; delayed completion, retained faults, capture regressions; '
-          + str(2 * len(owners)) + ' mutants rejected')
+          + str(sum(r['mutants_rejected'] for r in records.values())) + ' mutants rejected')
 
 
 if __name__ == '__main__':
