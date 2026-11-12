@@ -277,6 +277,19 @@ system, exception stack, latency fixture or diagnostic. When the busy traffic
 evicts the working set between ticks, the first-touch count of a segment
 estimates its refills, which the board's event counts then test.
 
+A prediction weights each line by who writes it. A line that another core writes
+between ticks refills on every busy tick. A line that only CPU0 touches, such
+as its exception stack or its diagnostic state, mostly stays in its caches and
+seldom refills. Entry `1794508626388886966-ae6d2457` shows the difference: the
+footprint cuts removed mostly lines that other cores write. Scaling each
+segment's earlier refills by its ratio of first-touch lines predicted remote
+releases of 105,000 to 132,000 summed cycles and an outside segment of 50,000
+to 75,000 cycles. The board measured 96,603 and 46,703. Each removed refill
+saved about 1,274 cycles, as the 1,268 cycles per refill of entry
+`1794504237145636168-9aa4ebd9` predicts. A prediction therefore counts the
+lines that other cores write separately and charges one refill to each of them
+per tick.
+
 `checks/tick-footprint-budget.py` holds these counts to
 `checks/tick-footprint-budget.json`. For CPU0's own release, the largest remote
 release, the largest deadline scan and the work outside them, it takes the
