@@ -2,6 +2,7 @@
 #include "sunstone_deadline.h"
 #include "sunxi_smhc.h"
 #include "a733_range.h"
+#include "a733_gic_priority.h"
 #ifndef A733_RADIO_EVENTS_MMIO_DEFINED
 #include "a733_mmio.h"
 static uint32_t event_read(uintptr_t address){return a733_mmio_read32_dsb_sy_both(address);}
@@ -12,8 +13,10 @@ static uint64_t event_route(uintptr_t address)
 #define GIC UINT32_C(0x03400000)
 #define BIT194 4u
 #define SDC UINT32_C(0x04021000)
+/* The EL3 image table installs the SDIO route at this stored priority. */
+#define SDIO_IRQ_STORED_PRIORITY 0xd8u
 #if defined(portPRIORITY_SHIFT)
-_Static_assert(((((configMAX_API_CALL_INTERRUPT_PRIORITY<<portPRIORITY_SHIFT)>>1)|0x80u))<=0xd8u,
+_Static_assert(SDIO_IRQ_STORED_PRIORITY>=A733_GIC_STORED_API_FLOOR(configMAX_API_CALL_INTERRUPT_PRIORITY<<portPRIORITY_SHIFT),
     "SDIO route priority must permit FreeRTOS FromISR calls");
 #endif
 
@@ -32,12 +35,12 @@ int a733_radio_events_begin(struct a733_radio_events *e)
     if(!e||!e->initialized||e->owner!=xTaskGetCurrentTaskHandle()||portGET_CORE_ID()!=0||
        e->platform->ops.current(e->platform->cookie)!=1||atomic_load(&e->failed))return 0;
     if(e->started)return 1;
-    /* The EL3 image table installs secure priority d8. With the distributor's
-     * security extension enabled its Nonsecure view reads b0. */
+    /* With the distributor's security extension enabled, the stored
+     * priority reads as its Nonsecure view. */
     /* IGROUPR/IGRPMODR are RAZ from Nonsecure EL1 with DS=0. The EL3
      * route installer proves those fields; the owner checks readable state. */
     if((event_read(GIC+0xc30)&(3u<<4))||
-       ((event_read(GIC+0x4c0)>>16)&255u)!=0xb0u||event_route(GIC+0x6610)!=0||
+       ((event_read(GIC+0x4c0)>>16)&255u)!=A733_GIC_NS_VIEW(SDIO_IRQ_STORED_PRIORITY)||event_route(GIC+0x6610)!=0||
        ((event_read(GIC+0x118)|event_read(GIC+0x218)|event_read(GIC+0x318))&BIT194)){
         atomic_store(&e->failed,1);return 0;
     }
