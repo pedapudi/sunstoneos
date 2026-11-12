@@ -82,6 +82,11 @@ static void controller(void *argument)
     unsigned actual_fifo_cores = 0, linked_wakes = 0;
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
         const struct ss_sched_trace_core *trace = &result.scheduler.core[c];
+#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
+        extern uint64_t ss_latency_first_return_seen[8];
+        configASSERT(ss_latency_first_return_seen[c] == 1);
+        configASSERT(result.scheduler.startup[c][1] >= result.scheduler.startup[c][0]);
+#endif
         configASSERT(trace->command_count && trace->drain_count && trace->irq_count);
         configASSERT(trace->self_suspend.command == 2);
         configASSERT((trace->self_suspend.flags & 5) == 5);

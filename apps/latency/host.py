@@ -174,8 +174,11 @@ def decode_scheduler_trace(payload, frequency):
             raise ValueError('scheduler startup timestamps are out of order')
         markers['start_kind'] = (None if not markers['scheduler_start'] else
             'primary_running_flag_boundary' if version >= 3 and core == 0 else 'port_start_entry')
-        markers['restore_kind'] = ('pre_eret_before_optional_return_observer' if version == 5 else
+        markers['restore_kind'] = ('final_software_return_point' if version == 5 else
                                    'pre_eret' if version >= 3 else 'restore_entry')
+        if version == 5:
+            markers['restore_scope'] = ('excludes the remaining assembly restore and ERET; '
+                'restore-spans runs include return-observer bookkeeping')
     tick_count, tick_dropped = take(2)
     if tick_count > tick_capacity or tick_dropped and tick_count != tick_capacity:
         raise ValueError('scheduler tick log counters differ from capacity')

@@ -493,6 +493,10 @@ def run(decode):
     rejected('empty wake cannot retain history observations', pack(bad))
     rejected('truncated version 4 record', pack(v4)[:-8])
     v5 = fixture(version=5)
+    def startup_scope(value):
+        assert value['startup'][0]['restore_kind'] == 'final_software_return_point'
+        assert 'remaining assembly restore and ERET' in value['startup'][0]['restore_scope']
+    accepted('version 5 states the startup software boundary and remaining return tail', v5, startup_scope)
     v5['wake'][0] = copy.deepcopy(v5['wake'][1])
     v5['wake'][0][2] = 27
     v5['wake'][0][17] = 1980

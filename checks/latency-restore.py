@@ -46,25 +46,40 @@ def linked_audit(image, port_object, output, objdump):
                     pending.append(callee)
     port = subprocess.check_output([objdump, '-dr', '--no-show-raw-insn', port_object], text=True)
     (output / 'port-disassembly.txt').write_text(port)
+    symbols = subprocess.check_output([objdump, '-t', image], text=True)
+    startup = 'ss_sched_trace_startup_markers' in symbols
+    if startup:
+        guard = next((line.split() for line in symbols.splitlines()
+                      if line.endswith(' ss_latency_first_return_seen')), None)
+        assert guard and int(guard[-2], 16) == 8 * 8, 'startup return guards must occupy eight words'
     instructions = []
     for line in port.splitlines():
         instruction = re.match(r'^\s*[0-9a-f]+:\s+([a-z0-9.]+)\s*(.*)$', line)
         if instruction:
             instructions.append([*instruction.groups(), ''])
-        elif instructions and 'R_AARCH64_CALL26' in line:
+        elif instructions and 'R_AARCH64_' in line:
             instructions[-1][2] = line.split()[-1]
     returns = 0
     for index, (opcode, operands, relocation) in enumerate(instructions):
         if opcode == 'eret':
             returns += 1
-            recent = instructions[max(0, index - 16):index]
-            assert any(row[0] == 'bl' and row[2] == 'ss_latency_exception_return' for row in recent), \
+            recent = list(reversed(instructions[:index]))
+            call = next((row for row in recent if row[0] in ('bl', 'eret')), None)
+            assert call and call[0] == 'bl' and call[2] == 'ss_latency_exception_return', \
                 ('return lacks the final recorder hook', index)
+            if startup:
+                tail = recent[:recent.index(call)]
+                assert all(not re.search(r'\b(?:[vqdsbh][0-9]+|fpcr|fpsr)\b', row[1], re.I)
+                           for row in tail), ('SIMD after the return observer', index)
+                assert any(row[2] == 'ss_latency_first_return_seen' for row in tail) and \
+                       any(row[2] == 'ss_sched_trace_startup_markers' for row in tail), \
+                    ('startup marker must follow the return observer', index)
     assert returns, 'selected port has no exception return'
     report = {'passed': True, 'image_sha256': hashlib.sha256(image.read_bytes()).hexdigest(),
               'port_object_sha256': hashlib.sha256(port_object.read_bytes()).hexdigest(),
               'reachable_functions': sorted(seen), 'selected_return_hooks': returns,
-              'scope': 'no SIMD or indirect callees after task FPU restore; software timestamps exclude entry saves and post-timestamp observer/temporary restore/ERET work'}
+              'scope': 'no SIMD or indirect callees after task FPU restore; mask timestamps exclude entry saves and post-timestamp observer/temporary restore/ERET work',
+              'startup_scope': 'with scheduler trace, the first return marker includes observer bookkeeping and excludes its timestamp store, final temporary GP restore and ERET'}
     (output / 'linked-result.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report))
 

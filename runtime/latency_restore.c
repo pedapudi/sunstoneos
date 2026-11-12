@@ -4,6 +4,12 @@
 #include "sunstone_latency.h"
 #include <stdbool.h>
 
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+/* Each CPU advances its existing startup marker once, at the assembly return
+ * point after this observer. Bootstrap returns with no marker leave it clear. */
+uint64_t ss_latency_first_return_seen[8];
+#endif
+
 void __real_ss_latency_mask_close(unsigned core, uintptr_t site);
 void __wrap_ss_latency_mask_close(unsigned core, uintptr_t site)
 {
