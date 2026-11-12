@@ -1494,8 +1494,11 @@ failed:fault(x);return -1;
 int a733_xhci_interrupt_start(struct a733_xhci *x)
 {
     uint32_t command,iman;
-    if(!owner(x)||x->failed||x->stop_phase)return -1;
-    if(x->irq_mode)return 1;
+    if(!owner(x)||x->failed)return -1;
+    /* The board wrapper rechecks its existing binding on every drain pass.
+     * Shutdown may use that binding until source disable, but never creates one. */
+    if(x->irq_mode)return !x->stop_phase||x->stop_phase==S_DRAIN?1:-1;
+    if(x->stop_phase)return -1;
     if(x->phase!=P_ACTIVE)return 0;
     if(!rd(x,x->operational,&command)||command!=1||
        !rd(x,x->runtime+0x20,&iman)||(iman&2)||
