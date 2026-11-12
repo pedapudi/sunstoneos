@@ -38,6 +38,7 @@ struct cause_state {
 };
 static struct cause_state state[SS_LATENCY_CAUSE_CORES];
 static struct ss_latency_cause_report report;
+struct ss_latency_cause_dsu ss_latency_cause_dsu_boot[SS_LATENCY_CAUSE_CORES];
 static _Atomic unsigned armed, initialized, bench_requested, bench_completed;
 static _Alignas(64) uint64_t bench_store;
 static uint64_t bench_irq_before;
@@ -120,6 +121,7 @@ bool ss_latency_cause_snapshot(void *out,size_t bytes)
         }
     }
     atomic_store_explicit(&armed,0,memory_order_release);
+    memcpy(report.dsu,ss_latency_cause_dsu_boot,sizeof(report.dsu));
     memcpy(out,&report,sizeof(report));
     return true;
 }

@@ -23,7 +23,7 @@ def main():
     cases = []
 
     def payload():
-        w = [host.CAUSE_MAGIC, 2, host.CAUSE_BYTES, 8, 2, 15, 64, 13]
+        w = [host.CAUSE_MAGIC, 3, host.CAUSE_BYTES, 8, 2, 15, 64, 13]
         for core in range(8):
             mhz = 1794 if core < 6 else 2002
             w.extend([0, 0x414fd050 if core < 6 else 0x414fd0b0, core << 8,
@@ -59,6 +59,8 @@ def main():
         w.extend([64 * 100] * 8 + [128 * 1000] * 8)
         w.extend([64 * 3, 64 * 2, 64 * 1, 64 * 1, 64 * 400] * 8 + [128 * 30, 128 * 20, 128 * 10, 128 * 8, 128 * 15000] * 8)
         w.extend([64, 64, 64, 64, 64] * 8 + [128, 128, 128, 128, 128] * 8)
+        for core in range(8):
+            w.extend([1, 0x41, 0x200a, 0, core, 0x73])
         assert len(w) * 8 == host.CAUSE_BYTES
         return bytearray(struct.pack('<' + 'Q' * len(w), *w))
 
@@ -81,6 +83,17 @@ def main():
     assert result['tick']['outside_events']['l1i_refill'] == 400 - 8 * 11
     cases.append('per-segment refill counts and complete-tick phase means')
     cases.append('events above 0x1f are not expected in PMCEID0')
+    dsu = result['dsu']
+    assert dsu['complete'] and dsu['cluster_registers_agree']
+    assert dsu['cores'][5]['clusterthreadsid'] == '0x5' and dsu['cores'][0]['actlr_el3'] == '0x73'
+    dsu_words = len(original) // 8 - 48
+    partial = payload()
+    put(partial, dsu_words + 6 * 3, 0)
+    put(partial, dsu_words + 6 * 4 + 3, 1)
+    partial_dsu = decode(partial)['dsu']
+    assert not partial_dsu['complete'] and not partial_dsu['cores'][3]['captured']
+    assert not partial_dsu['cluster_registers_agree']
+    cases.append('DSU registers per core; a missing capture or a disagreeing partition register is reported')
 
     def refused(name, word, value, reason):
         data = payload()

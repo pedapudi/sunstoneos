@@ -251,7 +251,15 @@ difference is taken modulo 2^32. The report keeps these differences for the
 retained tick and, per phase, sums over complete ticks (all eight releases and
 scans): whole tick, each release, each scan, and the remainder outside them.
 
-The report occupies 16,432 bytes and the exchange report 3,392 bytes; a
+The report also records, for each core, five registers that the core reads at
+EL3 during boot, after it enables EL3 translation: `CLUSTERIDR_EL1` (the DSU
+revision), `CLUSTERCFR_EL1`, `CLUSTERPARTCR_EL1` (the L3 partition control),
+`CLUSTERTHREADSID_EL1` (the core's scheme ID) and `ACTLR_EL3`, which controls
+EL1 access to the cluster registers. The capture writes no register. The
+decoder reports a missing capture or cluster registers that differ between
+cores; neither refuses the measurement.
+
+The report occupies 16,816 bytes and the exchange report 3,392 bytes; a
 64-byte footer gives both offsets. The profile declares a 147,456-byte output
 limit to hold them. All recorded intervals are raw: hook
 bookkeeping stays inside them, and the benchmark's empty body and an empty

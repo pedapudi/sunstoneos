@@ -204,12 +204,15 @@ def main():
     assert m.readq(bench+88,15)==(64,)*15
     results.append('960 quiet samples, 384 SGI acknowledgments, no sample while pending, and real empty C-hook calibration')
     m=Model(image);m.setup();m.el1=False
-    assert not m.call('ss_latency_cause_snapshot',OUTPUT,16432)
+    assert not m.call('ss_latency_cause_snapshot',OUTPUT,16816)
     assert m.readq(OUTPUT,8)[7]==2
     m.call('ss_latency_cause_freeze',1);assert m.call('ss_latency_cause_core_ready',0)
     for c in range(8):m.core=c;m.call('ss_latency_cause_freeze',c)
-    assert m.call('ss_latency_cause_snapshot',OUTPUT,16432)==1
-    assert m.readq(OUTPUT,8)[:7]==(0x5353434155534531,2,16432,8,2,15,64)
+    dsu=[v for c in range(8) for v in (1,0x41,0x200a,0,c,0x73)]
+    m.uc.mem_write(m.sym['ss_latency_cause_dsu_boot'],struct.pack('<48Q',*dsu))
+    assert m.call('ss_latency_cause_snapshot',OUTPUT,16816)==1
+    assert m.readq(OUTPUT,8)[:7]==(0x5353434155534531,3,16816,8,2,15,64)
+    assert m.readq(OUTPUT+16816-48*8,48)==tuple(dsu)
     results.append('EL0-safe own-core freeze, wrong-core rejection and all-core snapshot acknowledgments')
     r={'passed':True,'cases':results,'leaf_boundaries':boundaries,'image':str(image),'image_sha256':hashlib.sha256(image.read_bytes()).hexdigest(),'physical_access':False}
     (out/'report.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r,indent=2))

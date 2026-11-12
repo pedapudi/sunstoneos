@@ -21,7 +21,7 @@ SCHED_PMU_STATUS = ('ok', 'unarmed', 'not_el1', 'wrong_core', 'nested',
                     'not_active', 'wrong_cookie', 'no_counters',
                     'config_mismatch', 'not_prepared', 'frozen', 'overflow')
 CAUSE_MAGIC = 0x5353434155534531
-CAUSE_BYTES = 16432
+CAUSE_BYTES = 16816
 CAUSE_EVENTS = ('l1i_refill', 'l1d_refill', 'l2d_refill', 'l3d_refill', 'stall_backend')
 CAUSE_EVENT_TYPES = (0x01, 0x03, 0x17, 0x2a, 0x24)
 CAUSE_FOOTER_MAGIC = 0x5353434155534631
@@ -735,7 +735,7 @@ def decode_latency_cause(payload, frequency):
         return result
 
     header = take('magic version bytes cores phases cases samples flags')
-    if tuple(header.values())[:7] != (CAUSE_MAGIC, 2, CAUSE_BYTES, 8, 2, 15, 64) or header['flags'] != 13:
+    if tuple(header.values())[:7] != (CAUSE_MAGIC, 3, CAUSE_BYTES, 8, 2, 15, 64) or header['flags'] != 13:
         raise ValueError('latency cause header is invalid or its snapshot is incomplete')
     cores = []
     for core in range(8):
@@ -851,6 +851,8 @@ def decode_latency_cause(payload, frequency):
     phase_events, phase_outside = grid(2, 5), grid(2, 5)
     phase_release_cycles, phase_scan_cycles = grid(2, 8), grid(2, 8)
     phase_release, phase_scan = grid(2, 8, 5), grid(2, 8, 5)
+    dsu_fields = ('captured', 'clusteridr', 'clustercfr', 'clusterpartcr', 'clusterthreadsid', 'actlr_el3')
+    dsu_rows = [dict(zip(dsu_fields, row)) for row in grid(8, len(dsu_fields))]
     if offset != len(words):
         raise ValueError('cause decoder and wire report disagree')
 
@@ -883,8 +885,17 @@ def decode_latency_cause(payload, frequency):
               'scope': 'raw counts with hook bookkeeping included; L3D refill is core-attributable; '
                        'phase means cover ticks with all eight releases and scans'}
     bench['extra_sgi_observations'] = bench['sgi_observed'] - bench['sgi_sends']
+    # A missing capture is reported, not refused: the register values are a
+    # record beside the measurement and never gate it.
+    dsu = {'cores': [dict({k: hex(v) for k, v in row.items() if k != 'captured'},
+                          core=core, captured=row['captured'] == 1)
+                     for core, row in enumerate(dsu_rows)],
+           'complete': all(row['captured'] == 1 for row in dsu_rows),
+           'cluster_registers_agree': len({(row['clusteridr'], row['clustercfr'], row['clusterpartcr'])
+                                           for row in dsu_rows if row['captured'] == 1}) <= 1,
+           'scope': 'read once per core at EL3 during boot; no DSU register is written'}
     return {'header': header, 'cores': cores, 'sgi': sends, 'phases': phases,
-            'tick': tick, 'benchmark': bench, 'events': events,
+            'tick': tick, 'benchmark': bench, 'events': events, 'dsu': dsu,
             'component_scope': 'raw instrumented cycles; hook bookkeeping and its interaction with DSB remain included',
             'benchmark_scope': 'one IRQ-masked leaf sample per tick; matching blank and common endpoint ISB included; stores follow endpoint',
             'sgi_scope': 'raw and context-synchronized arms differ; SGI-only does not establish target delivery',

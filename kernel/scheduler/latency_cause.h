@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #define SS_LATENCY_CAUSE_MAGIC UINT64_C(0x5353434155534531)
-#define SS_LATENCY_CAUSE_VERSION 2u
+#define SS_LATENCY_CAUSE_VERSION 3u
 #define SS_LATENCY_CAUSE_CORES 8u
 #define SS_LATENCY_CAUSE_PHASES 2u
 #define SS_LATENCY_CAUSE_SAMPLES 64u
@@ -85,6 +85,13 @@ struct ss_latency_cause_events {
     uint64_t phase_release[SS_LATENCY_CAUSE_PHASES][SS_LATENCY_CAUSE_CORES][SS_LATENCY_CAUSE_EVENTS];
     uint64_t phase_scan[SS_LATENCY_CAUSE_PHASES][SS_LATENCY_CAUSE_CORES][SS_LATENCY_CAUSE_EVENTS];
 };
+/* DynamIQ Shared Unit state that each core reads at EL3 during boot, read
+ * only: CLUSTERIDR_EL1 (DSU revision), CLUSTERCFR_EL1, CLUSTERPARTCR_EL1 (L3
+ * partition control), CLUSTERTHREADSID_EL1 (this core's scheme ID) and
+ * ACTLR_EL3. captured is 1 once the core has stored the five values. */
+struct ss_latency_cause_dsu {
+    uint64_t captured, clusteridr, clustercfr, clusterpartcr, clusterthreadsid, actlr_el3;
+};
 struct ss_latency_cause_report {
     uint64_t magic, version, bytes, cores, phases, cases, samples, flags;
     struct ss_latency_cause_core core[SS_LATENCY_CAUSE_CORES];
@@ -93,9 +100,10 @@ struct ss_latency_cause_report {
     struct ss_latency_cause_tick tick;
     struct ss_latency_cause_bench bench;
     struct ss_latency_cause_events events;
+    struct ss_latency_cause_dsu dsu[SS_LATENCY_CAUSE_CORES];
 };
 _Static_assert(sizeof(struct ss_latency_cause_events) == 2528u, "cause event section layout");
-_Static_assert(sizeof(struct ss_latency_cause_report) == 16432u, "cause report wire layout");
+_Static_assert(sizeof(struct ss_latency_cause_report) == 16816u, "cause report wire layout");
 
 #ifdef SUNSTONE_LATENCY_CAUSE
 #if !defined(SUNSTONE_LATENCY) || !defined(SUNSTONE_SCHED_LATENCY_TRACE)
@@ -108,6 +116,10 @@ _Static_assert(sizeof(struct ss_latency_cause_report) == 16432u, "cause report w
  * its named core is ready. Each pinned task freezes its own core before the
  * final snapshot, which refuses any missing acknowledgment. */
 void ss_latency_cause_arm(void);
+/* Each core writes its own entry at EL3 after it enables EL3 translation, so
+ * the store goes through the write-back Nonsecure view that EL1 reads. The
+ * snapshot copies the entries into the report. */
+extern struct ss_latency_cause_dsu ss_latency_cause_dsu_boot[SS_LATENCY_CAUSE_CORES];
 bool ss_latency_cause_core_ready(unsigned core);
 uint64_t ss_latency_cause_irq_count(unsigned core);
 void ss_latency_cause_bench_request(void);
