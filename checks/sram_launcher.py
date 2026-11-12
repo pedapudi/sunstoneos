@@ -51,7 +51,7 @@ class Launch:
         self.stop = []
 
 
-def execute(segments, code, request, contract, session, contract_magic, contract_size, name):
+def execute(segments, code, request, contract, session, contract_magic, contract_size, name, *, watchdog=None, resident=False):
     """Run the launcher once and return its Launch.
 
     The memory hooks refuse any access outside the report, stack, contract
@@ -76,6 +76,8 @@ def execute(segments, code, request, contract, session, contract_magic, contract
     for register, value in saved.items():
         cpu.reg_write(register, value)
     mmio = {MODE: 0, CONFIG: 0, FLAG: 0, ALT: 0, RVBAR: 0, RVBAR + 4: 0}
+    if watchdog is not None:
+        mmio.update({MODE: watchdog[0], CONFIG: watchdog[1], 0x02050018: watchdog[2]})
 
     def read(uc, access, address, size, value, unused):
         if address < 0x02000000 or address >= 0x41000000:
@@ -88,7 +90,8 @@ def execute(segments, code, request, contract, session, contract_magic, contract
         if address < 0x02000000:
             assert REPORT <= address < REPORT + 128 or 0x53000 <= address < 0x54000 or 0x70000 - 60 <= address < 0x70000
         elif address >= 0x41000000:
-            assert CONTRACT <= address < CONTRACT + 8 or CONTRACT + 80 <= address < CONTRACT + 112
+            assert (CONTRACT <= address < CONTRACT + 8 or CONTRACT + 80 <= address < CONTRACT + 112 or
+                    (resident and CONTRACT + 120 <= address < CONTRACT + 144))
         else:
             assert address in (RVBAR, RVBAR + 4) and size == 4
             assert struct.unpack('<Q', uc.mem_read(CONTRACT, 8))[0] == contract_magic

@@ -164,15 +164,30 @@ class Model:
                     self.registers[board.crumbs.RTC+0x104] = 0
                 elif self.variant == 'wrong-return-session':
                     self.registers[board.crumbs.RTC+0x100] ^= 1
+                if self.variant.startswith('resident-'):
+                    self.registers[board.crumbs.WDT_MODE] = 1
+                    self.registers[board.crumbs.RTC+0x104] = board.crumbs.EL3_STOP << 16 | 0x5000
+                    if self.variant == 'resident-stale':self.registers[board.crumbs.RTC+0x100] ^= 1
+                    if self.variant == 'resident-wrong-status':self.registers[board.crumbs.RTC+0x104] ^= 0x1000
+                    if self.variant == 'resident-wrong-stage':self.registers[board.crumbs.RTC+0x104] ^= 1 << 16
+                    if self.variant == 'resident-secondary':self.registers[board.crumbs.RTC+0x10c] = 1 << 29
+                    if self.variant in ('resident-fault', 'resident-failure'):
+                        defines, _ = board.crumbs.header()
+                        level = 3 if self.variant == 'resident-fault' else board.crumbs.FAIL_LEVEL
+                        self.registers[board.crumbs.RTC+0x110] = defines['FAULT_MAGIC'] << 24 | level << 16
+                    if self.variant == 'resident-normal':
+                        self.registers[board.crumbs.WDT_MODE] = 0
+                        self.registers[board.crumbs.RTC+0x104] = board.crumbs.RETURN_ROM << 16
                 i+=2
             else:
                 raise AssertionError(op)
         return types.SimpleNamespace(returncode=0,stdout='\n'.join(out),stderr='')
 
 
-def lifecycle(root,variant,restore=False,dirty=None,grant='absent'):
+def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=False):
     root.mkdir()
-    args=arguments(root)
+    args=arguments(root, development=resident)
+    if resident:args.lifetime='resident';args.approved_by='coordinator'
     args.restore_rails=restore
     model=Model(variant)
     owners=[]
@@ -198,6 +213,9 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent'):
             if dirty:self.record[dirty]=True
             plan={'epoch':1,'generation':2,'watchdog':{'mode':0xb1,'session_seconds':1},
                   'uploads':[(0x41000000,args.image)],'launch':['exe','0x52000']}
+            if resident:
+                plan['lifetime']='resident'
+                plan['watchdog']['mode']=0x41
             if grant!='absent':plan['cpu_grant_raises']=grant
             return plan
         def capture(self,plan):
@@ -221,6 +239,92 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent'):
     assert not model.lock
     assert json.loads(Path(result['result_path']).read_text())['outcome']==result['outcome']
     return result,model,owners[0]
+
+
+def resident_cases(out):
+    """A resident test succeeds only at its declared retained stop, never by reading DRAM."""
+    for variant in ('resident-stop', 'resident-stale', 'resident-wrong-status', 'resident-wrong-stage',
+                    'resident-secondary', 'resident-fault', 'resident-failure', 'resident-normal'):
+        result, model, owner = lifecycle(out/variant, variant, resident=True)
+        expected = variant == 'resident-stop'
+        assert board.result_passed(result) == expected, (variant, result)
+        if variant != 'resident-normal':
+            assert result['outcome'] == 'watchdog-reset' and result['dram_lost'] and result['rom_returned']
+        assert bool(result.get('expected_reset')) == expected, (variant, result)
+        assert not any(c[0] == 'read' and int(c[1], 0) >= 0x41000000
+                       for c in model.calls[model.calls.index(['exe', '0x52000'])+1:])
+        if expected:
+            assert result['first_failure'] is None and not owner.armed and not model.quarantined
+        passed(variant)
+    # The same retained stop under another lifetime remains a failed watchdog run.
+    result, _, _ = lifecycle(out/'returning-resident-stop', 'resident-stop')
+    assert not result.get('expected_reset') and not board.result_passed(result)
+    passed('returning-stop-is-not-a-resident-success')
+    root=out/'resident-policy';root.mkdir()
+    args=arguments(root, '--lifetime', 'resident', '--approved-by', 'coordinator', development=True)
+    info={'generic':True,'symbols':{'os_resident_test_profile':(0,24)},'descriptor':{}}
+    args.kind='cpu-return'
+    marker=struct.pack('<3Q',0x3154534554525353,1,0x5000)
+    bounds=types.SimpleNamespace(classify=lambda _: 'read-only')
+    with patch.object(images, 'symbol_bytes', return_value=marker), patch.object(images, 'load', return_value=bounds):
+        images.policy(info,args)
+        for name, value in (('approved_by',None),('preserve_dram',True),('kind','probe')):
+            saved=getattr(args,name);setattr(args,name,value)
+            try:images.policy(info,args)
+            except ValueError:pass
+            else:raise AssertionError(('resident policy accepted',name))
+            setattr(args,name,saved)
+        with patch.object(images, 'symbol_bytes', return_value=marker[:-1]+b'\x01'):
+            try:images.policy(info,args)
+            except ValueError:pass
+            else:raise AssertionError('resident marker mismatch accepted')
+    assert 'lifetime' in board.FROZEN_OPTIONS
+    job={'image':str(args.image),'directory':str(root),'options':{'lifetime':'resident'}}
+    command=board.Queue.runner_command(job,'3-1')
+    assert command[command.index('--lifetime')+1]=='resident'
+    passed('resident-policy-approval-marker-development-and-frozen-selection')
+
+
+def resident_launcher_cases(out):
+    """Run the real SRAM launcher instructions against the native resident contract."""
+    import sram_launcher
+    admission=images.load('runner_test_admission',ROOT/'tools/host_admission.py')
+    producer=images.load('runner_test_request',ROOT/'apps/board/prepare.py')
+    session=bytearray(904)
+    struct.pack_into('<6Q',session,0,0x4153373342535332,2,592,1,2,3)
+    identity=bytes(range(32));address=0x41001000
+    request, contract=producer.request_bytes(address,identity,1,2,3,session)
+    request=struct.pack('<Q',0x415337334f534c31)+request[8:]
+    contract=bytearray(contract);struct.pack_into('<Q',contract,184,len(session))
+    for lifetime, magic, mode in (('returning',0x415337334f544331,0xb1),('resident',0x415337334f524331,0x41)):
+        root=out/('launcher-'+lifetime);root.mkdir()
+        images.launcher(root,len(session),mode,60,magic=magic)
+        launch=sram_launcher.execute([(address,identity)],(root/'launch.bin').read_bytes(),request,contract,session,
+                                     magic,224,lifetime,watchdog=(mode,1,2),resident=lifetime=='resident')
+        assert launch.stop==['handoff'] and launch.report[0]==12 and launch.session_intact and launch.canary_intact
+        expected,_=admission.completed_contract(contract,60,magic,launch.ticks[0])
+        assert launch.published==expected[:224],(lifetime,launch.published.hex(),expected[:224].hex())
+        assert launch.writes==[(sram_launcher.RVBAR,0x41000000),(sram_launcher.RVBAR+4,0)]
+        if lifetime=='resident':
+            assert struct.unpack_from('<2Q',launch.published,96)==((1<<64)-1,launch.ticks[0]+4*24000000)
+            assert struct.unpack_from('<3Q',launch.published,120)==(0x41,1,2)
+            assert not any(launch.published[144:176])
+            for bad in ((0xb1,1,2),(0x41,0x101,2),(0x41,1,0)):
+                try:sram_launcher.execute([(address,identity)],(root/'launch.bin').read_bytes(),request,contract,session,
+                                          magic,224,str(bad),watchdog=bad,resident=True)
+                except AssertionError as error:assert 'unexpectedly parked' in str(error),str(error)
+                else:raise AssertionError(('resident launcher admitted incorrect WDT',bad))
+        passed('real-'+lifetime+'-launcher-contract-and-watchdog')
+    for profile in (struct.pack('<3Q',1,0,3),struct.pack('<Q',1)):
+        try:admission.contract_magic(profile,'resident')
+        except ValueError:pass
+        else:raise AssertionError('a linked profile without resident authority was admitted')
+    passed('resident-contract-selection-refuses-unlinked-lifetime')
+    nonzero=bytearray(contract);struct.pack_into('<Q',nonzero,120,0x41)
+    try:admission.completed_contract(nonzero,60,0x415337334f524331)
+    except ValueError:pass
+    else:raise AssertionError('host completion concealed a nonzero initial watchdog field')
+    passed('resident-preflight-refuses-prepopulated-watchdog-fields')
 
 
 def automatic_restore_cases(out):
@@ -1382,11 +1486,12 @@ def main():
     parser.add_argument('--npu-case',action='append',default=[],
                         choices=('local-restart','model-switch','sdk-access','power-cycle'),
                         help='Run only selected finite NPU cases; repeat to resume unfinished cases.')
-    parser.add_argument('--only',default='transport,queue,queue-integrity,policy,preflight,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
+    parser.add_argument('--only',default='transport,resident,queue,queue-integrity,policy,preflight,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
     args=parser.parse_args()
     args.out.mkdir(parents=True,exist_ok=False)
     groups=args.only.split(',')
     if 'transport' in groups:transport_cases(args.out);removed_cases(args.out);automatic_restore_cases(args.out)
+    if 'resident' in groups:resident_cases(args.out);resident_launcher_cases(args.out)
     if 'queue' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):withdraw_cases(args.out)
