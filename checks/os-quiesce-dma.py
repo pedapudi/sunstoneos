@@ -6,13 +6,14 @@ establishes adapter control flow, not hardware drain. dma-retirement.py runs the
 worker's idle retirement and abandonment cases with the real controller.
 """
 import argparse
+import json
 import re
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['apps/os/dma.c', 'apps/os/quiesce.h', 'apps/os/quiesce.c',
-                'include/dma_service.h', 'drivers/dma/dma_service.c']
+                'include/dma_service.h', 'drivers/dma/dma_service.c', 'include/sunstone_crumb.h']
 
 
 def function(text, name):
@@ -40,8 +41,7 @@ PRELUDE = r'''
 #include <stdlib.h>
 #include <stdio.h>
 #include "quiesce.h"
-#define SUNSTONE_CRUMB_FAIL_RETURN 0x80000000u
-#define SUNSTONE_CRUMB_FAIL_BOARD 1u
+#undef SUNSTONE_CRUMB_HERE
 #define SUNSTONE_CRUMB_HERE() ((const void *)(uintptr_t)0x1234)
 enum { A733_DMA_POOL_EMPTY, A733_DMA_POOL_WAITING, A733_DMA_POOL_READY, A733_DMA_POOL_FAILED };
 struct service { atomic_uint quiesce_fault; };
@@ -107,9 +107,15 @@ def build(text, out, name):
     source.write_text(PRELUDE + function(text, 'dma_quiesce_step') + '\n' + descriptor + '\n' +
                       function(text, 'fatal') + '\n' + TEST)
     binary = directory / 'check'
-    subprocess.run(['clang-21', '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Wno-unused-function',
-                    '-fsanitize=address,undefined', '-I' + str(ROOT / 'apps/os'), str(source),
-                    str(ROOT / 'apps/os/quiesce.c'), '-o', str(binary)], check=True, capture_output=True)
+    command = ['clang-21', '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Wno-unused-function',
+               '-fsanitize=address,undefined', '-I' + str(ROOT / 'apps/os'), '-I' + str(ROOT / 'include'),
+               str(source), str(ROOT / 'apps/os/quiesce.c'), '-o', str(binary)]
+    compile_result = subprocess.run(command, capture_output=True, text=True)
+    (directory / 'compile.json').write_text(json.dumps({'command': command, 'returncode': compile_result.returncode,
+        'stdout': compile_result.stdout, 'stderr': compile_result.stderr}, indent=2) + '\n')
+    if compile_result.returncode:
+        raise RuntimeError('DMA fixture compilation failed: ' + str(source) + '\n' +
+                           compile_result.stdout + compile_result.stderr)
     return subprocess.run([str(binary)], capture_output=True, text=True)
 
 
