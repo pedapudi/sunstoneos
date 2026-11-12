@@ -14,9 +14,10 @@ stage-2 block access. Readers are assumed to know AArch64 stage-1 translation,
 the Secure and Non-secure physical address spaces, and data-cache maintenance
 by virtual address.
 
-The cached images build five 4 KiB translation-table pages in the monitor
+The non-USB cached images build five 4 KiB translation-table pages in the monitor
 interval at `0x421f0000`: level 1, level 2 and level 3 for EL3, and level 1 and
-level 2 for EL1. The EL1 walker reads descriptors as write-back cacheable
+level 2 for EL1. USB host profiles add three EL1 level-3 pages.
+The EL1 walker reads descriptors as write-back cacheable
 memory in both the cached single-core and eight-core images. The header
 [a733_cpu_coherence.h](../../include/a733_cpu_coherence.h) holds both values,
 `A733_CPU_COHERENCE_TCR_CACHED_WALK` (`0x200803519`, IRGN0 = ORGN0 = 0b01,
@@ -259,8 +260,6 @@ caches or walk latency.
 - The contiguous hint on `dma32` blocks; reconsider it if a workload run shows
   `DTLB_WALK` costing more than 1% of `CPU_CYCLES`.
 - Moving the single-core `platform_init()` onto `enable_el1`.
-- Stage-3 entries 4 to 12, which need launch evidence for
-  `0x1_0000_0000`–`0x3_4000_0000`.
 
 The accepted walk records do not capture `INST_RETIRED` or vary prefetch
 controls. The returning controls and recognition record retired instructions
@@ -280,8 +279,9 @@ loads one line from the next mapped 2 MiB DRAM block. The loop skips the monitor
 hole and visits 63 blocks. Its measured interval uses registers only, apart from
 the target loads. It records cycles, counter ticks, data and instruction walks,
 bus accesses and a load digest. Interrupts are masked only around each block.
-The decoder checks core identity, implemented events, the cycle/counter ratio,
-advancing walk counters and unchanged top clock settings. Absolute event counts
+The native diagnostic checks implemented PMU events. The decoder checks core
+identity, the cycle/counter ratio, advancing walk counters and unchanged top
+clock settings. Absolute event counts
 can be approximate because of pipeline effects (Cortex-A76 TRM C2.1), so the
 decoder reports them without requiring one event per retired load. A comparison
 requires matching measured load digests and instruction-side walk counts.
