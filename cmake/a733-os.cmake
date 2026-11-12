@@ -47,8 +47,14 @@ elseif(SUNSTONE_APPLICATION STREQUAL "large-region-test")
   # The test runs on the A76 cluster with CPU clock grants. The session lifetime follows the manifest's run deadline
   # (tools/session_lifetime.py).
   set(large_region_manifest "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest-return.json")
+  set(large_region_source "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/main.c")
+  option(SUNSTONE_LARGE_REGION_FAIL_AFTER_READ "Fail the application after the declared card file passes its digest check" OFF)
+  if(SUNSTONE_LARGE_REGION_FAIL_AFTER_READ)
+    set(large_region_manifest "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest-failure-read.json")
+    set(large_region_source "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/failure.c")
+  endif()
   add_sunstone_application(large-region
-    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/main.c"
+    SOURCES "${large_region_source}"
     MANIFEST "${large_region_manifest}")
   add_sunstone_image(sunstone-a733-os-large-region-test LIFETIME ${os_lifetime} APPLICATION large-region)
 elseif(SUNSTONE_APPLICATION STREQUAL "heap-test")
