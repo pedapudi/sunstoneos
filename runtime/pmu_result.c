@@ -9,11 +9,18 @@
 #include <string.h>
 
 extern long ulSunstonePmuReady(unsigned core);
+extern TaskHandle_t os_application_main_task(void);
 extern void __real_ss_activity_begin(void);
 extern void __real_ss_activity_end(int);
 extern _Noreturn void __real_ss_finish(const void *, size_t);
 static struct sunstone_pmu_result first, captured;
 static unsigned active, complete;
+
+static void require_main(void)
+{
+    TaskHandle_t main = os_application_main_task();
+    if (!main || xTaskGetCurrentTaskHandle() != main) ss_fail(0x7b08);
+}
 
 static int snapshot(struct sunstone_pmu_result *out)
 {
@@ -50,6 +57,7 @@ static void ready(void)
 
 void __wrap_ss_activity_begin(void)
 {
+    require_main();
     if (active) ss_fail(0x7b03);
     ready();
     __real_ss_activity_begin();
@@ -60,6 +68,7 @@ void __wrap_ss_activity_begin(void)
 
 void __wrap_ss_activity_end(int success)
 {
+    require_main();
     if (!active || portGET_CORE_ID() != first.core || !snapshot(&captured)) ss_fail(0x7b05);
     captured.cycles -= first.cycles;
     captured.inst_retired -= first.inst_retired;
@@ -72,6 +81,7 @@ void __wrap_ss_activity_end(int success)
 
 _Noreturn void __wrap_ss_finish(const void *data, size_t bytes)
 {
+    require_main();
     if (active) __wrap_ss_activity_end(1);
     if (!complete || !ss_application.manifest || (!data && bytes) ||
         ss_result_capacity < sizeof captured || bytes > ss_result_capacity - sizeof captured) ss_fail(0x7b06);

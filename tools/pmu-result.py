@@ -47,7 +47,8 @@ def decode(payload):
 
 def failures(result):
     app = application()
-    errors = list(app.failures(result)) if hasattr(app, 'failures') else []
+    app_result = {key: value for key, value in result.items() if key != 'pmu'}
+    errors = list(app.failures(app_result)) if hasattr(app, 'failures') else []
     if 'matches_reference' in result and not result['matches_reference']:
         errors.append('application result differs from its reference')
     if hasattr(app, 'expected'):
@@ -64,6 +65,10 @@ def freeze(decoder, output):
     source = source.replace('APPLICATION_SOURCE = None', 'APPLICATION_SOURCE = ' + repr(Path(decoder).read_text()), 1)
     source = source.replace('APPLICATION_ORIGIN = None', 'APPLICATION_ORIGIN = ' + repr(str(Path(decoder).resolve())), 1)
     Path(output).write_text(source)
+
+
+if APPLICATION_SOURCE is not None and hasattr(application(), 'BINDING'):
+    BINDING = application().BINDING
 
 
 if __name__ == '__main__':

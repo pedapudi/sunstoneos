@@ -30,18 +30,22 @@ def build(out):
 #include <stddef.h>
 #include <stdint.h>
 typedef uint64_t StackType_t;
+typedef void *TaskHandle_t;
 typedef struct { uint64_t word; } StaticTask_t;
 void *pvPortMalloc(size_t);
 unsigned test_core(void);
 #define portGET_CORE_ID() test_core()
 #endif
 ''')
-    (out / 'task.h').write_text('void vTaskDelay(unsigned);\n')
+    (out / 'task.h').write_text('void vTaskDelay(unsigned);\nTaskHandle_t xTaskGetCurrentTaskHandle(void);\n')
     (out / 'stubs.c').write_text('''#include "FreeRTOS.h"
 #include "sunstone_app.h"
 #include "application.h"
 unsigned mock_core = 2;
+uintptr_t mock_task = 0x1234;
 unsigned test_core(void) { return mock_core; }
+TaskHandle_t xTaskGetCurrentTaskHandle(void) { return (void *)mock_task; }
+TaskHandle_t os_application_main_task(void) { return (void *)0x1234; }
 static struct ss_grant grant = {.main_core = 2};
 const struct ss_grant *ss_grant(void) { return &grant; }
 static struct ss_manifest manifest = {.output_limit = 64};
@@ -214,15 +218,29 @@ def native_cases(image):
         if variant in ('capacity', 'null-data'):
             assert not m.allocations
         cases.append(variant + '-refused')
+    for boundary in ('begin', 'end', 'finish'):
+        m = Machine(image)
+        m.call('__wrap_vApplicationIRQHandler', 30)
+        if boundary != 'begin':
+            m.call('__wrap_ss_activity_begin')
+        if boundary == 'finish':
+            m.call('__wrap_ss_activity_end', 1)
+        m.u.mem_write(image.address('mock_task'), struct.pack('<Q', 0x5678))
+        m.call('__wrap_ss_activity_' + boundary if boundary != 'finish' else '__wrap_ss_finish', 0x41510000, 16)
+        assert m.failed == 0x7b08 and not m.allocations
+        cases.append('same-core-wrong-task-' + boundary + '-refused')
     return cases
 
 
 def decoder_cases(out):
     tool = load('pmu_result_tool', ROOT / 'tools/pmu-result.py')
     decoder = out / 'delegate.py'
-    decoder.write_text('''def decode(payload):
+    decoder.write_text('''BINDING = {'image_sha256': 'test-image-digest'}
+def decode(payload):
     return {'bytes': len(payload), 'matches_reference': payload == b'correct'}
 def failures(result):
+    if set(result) != {'bytes', 'matches_reference'}:
+        return ['unexpected delegate fields']
     return []
 ''')
     frozen = out / 'frozen.py'
@@ -230,6 +248,7 @@ def failures(result):
     module = load('frozen_pmu_result', frozen)
     raw = struct.pack('<6Q', tool.MAGIC, 6, 1000, (1 << 32) + 15, 9, 24) + b'correct'
     result = module.decode(raw)
+    assert module.BINDING == {'image_sha256': 'test-image-digest'}
     assert result['pmu']['inst_retired'] == (1 << 32) + 15 and result['pmu']['dtlb_walk_mod32'] == 9
     assert result['bytes'] == 7 and not module.failures(result)
     assert module.failures(module.decode(raw[:-7] + b'wrong'))
@@ -238,7 +257,7 @@ def failures(result):
         struct.pack_into('<Q', bad, offset, 0 if offset != 8 else 7)
         harness.refused(lambda: module.decode(bytes(bad)), 'PMU result', ValueError)
     harness.refused(lambda: module.decode(raw[:47]), 'prefix', ValueError)
-    return 8
+    return 10
 
 
 def main():
