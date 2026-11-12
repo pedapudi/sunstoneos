@@ -102,22 +102,20 @@
          if(!board_live(NULL)||a733_smp_counter()/24>=service_deadline())
              a733_typec_revoke(&board.typec.provider);
          (void)a733_typec_native_power_poll(&board.typec);
-@@ -167,6 +210,8 @@
+@@ -167,6 +210,12 @@
  #ifdef SUNSTONE_A733_OS
          os_wifi_credential_poll(); /* EL1: the credential leaves RAM once the application has finished */
  #endif
 +        int parked=os_radio_quiesce_parked();
 +        if(parked)goto radio_return_wait;
++        if(os_radio_quiesce_requested()){
++            parked=os_radio_quiesce_poll(&radio,0)==2;
++            goto radio_return_wait;
++        }
          if(!board_live(NULL)){
              (void)board_radio_external_failure(&radio);
              atomic_store_explicit(&board.radio_result,3,memory_order_release);
-@@ -175,28 +220,39 @@
- #ifdef SUNSTONE_A733_OS_RADIO_SCAN
-             os_radio_scan_step(&radio,(int)r);
- #endif
-+            int returning=os_radio_quiesce_poll(&radio,(int)r);
-+            if(returning==2){parked=1;goto radio_return_wait;}
-             if(r==BOARD_RADIO_RETAINED||r==BOARD_RADIO_INVALID){
+@@ -179,24 +228,33 @@
                  atomic_store_explicit(&board.radio_result,3,memory_order_release);
                  /* A failure that left nothing powered (a guard refusal, or a completed failure shutdown) is not a
                   * board failure: the session ends normally with the record. */
@@ -155,7 +153,7 @@
              }else if(r==1){
                  unsigned verified=0;
                  if(board_radio_client_result(&radio,&verified)!=1){vTaskDelay(1);continue;}
-@@ -206,6 +262,8 @@
+@@ -206,6 +264,8 @@
                      memory_order_release,memory_order_relaxed);
              }
          }
@@ -164,7 +162,7 @@
          vTaskDelay(1);
      }
  }
-@@ -243,8 +301,11 @@
+@@ -243,8 +303,11 @@
  #elif defined(SUNSTONE_A733_OS)
  static void supervise(void *unused)
  {
@@ -177,7 +175,7 @@
          if(resident){
              /* The armed watchdog bounds every hang. A failure, an expired
               * service window, a service still silent at the loader's first
-@@ -391,6 +452,8 @@
+@@ -391,6 +454,8 @@
      if(board_application_pins(&b.pins)!=1)platform_panic("board application pins",10);
  #endif
      if(!a733_native_usb_init(&providers.shared,&b,board_live,board_fail,NULL))platform_panic("board shared providers",4);
@@ -186,7 +184,7 @@
      TaskFunction_t functions[]={pmic,board_usb0_task,typec,power,board_host_task,radio_owner,radio_client,supervise};
      const char *names[]={"board-pmic","board-usb0","board-typec","board-power","board-usb2","board-radio","board-net","board-watchdog"};
      for(unsigned i=0;i<8;++i){
-@@ -404,7 +467,8 @@
+@@ -404,7 +469,8 @@
          board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,!i?3:i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);
          if(!board.handles[i])platform_panic("board tasks",5);
  #if configNUMBER_OF_CORES > 1
