@@ -1,3 +1,4 @@
+#include "a733_cpu_coherence.h"
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Bundle 4 of docs/designs/board-bundles-next.md: event counters, the core-0
  * walk A/B and idle WFI, in that order, on the returning single-core platform
@@ -17,8 +18,8 @@
  *    PMCEID1_EL0.
  * 2. Walk A/B, refused when CCU +0x588 reads MBUS_DFS_EN set: one discarded
  *    warm-up block, then twelve blocks in ABBA order. A is the uncached walk
- *    (TCR_EL1 0x200803019), B the cached walk that platform_init() installs
- *    (0x200803519). A block is 1,024 iterations of TLBI VMALLE1, DSB ISH, ISB
+ *    (A733_CPU_COHERENCE_TCR_UNCACHED_WALK), B the cached walk that
+ *    platform_init() installs (A733_CPU_COHERENCE_TCR_CACHED_WALK). A block is 1,024 iterations of TLBI VMALLE1, DSB ISH, ISB
  *    and one load from a different 2 MiB block of the 128 MiB map, at line k
  *    of block k, so that the loaded lines fall in different cache sets and
  *    stay in L1 and none evicts a table line; no load targets the result
@@ -55,8 +56,8 @@
 #define WALK_ITERATIONS 1024u
 #define WALK_BLOCKS 13u /* one warm-up block, then twelve in ABBA order */
 #define WFI_TICKS 1000u
-#define TCR_CACHED UINT64_C(0x200803519)   /* platform_init(): IRGN0 = ORGN0 = 1 */
-#define TCR_UNCACHED UINT64_C(0x200803019) /* IRGN0 = ORGN0 = 0 */
+#define TCR_CACHED A733_CPU_COHERENCE_TCR_CACHED_WALK   /* platform_init(): IRGN0 = ORGN0 = 1 */
+#define TCR_UNCACHED A733_CPU_COHERENCE_TCR_UNCACHED_WALK /* IRGN0 = ORGN0 = 0 */
 #define MBUS_CLK UINT32_C(0x02002588)
 #define MBUS_DFS_EN (UINT32_C(1) << 28)
 #define IMAGE_BASE UINT64_C(0x41000000)

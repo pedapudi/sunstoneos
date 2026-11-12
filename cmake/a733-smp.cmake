@@ -23,6 +23,7 @@ set(a733_sources
 list(TRANSFORM a733_sources PREPEND "${a733_root}/")
 # This is a build-input identity, not the final ELF digest. The host records both.
 set(a733_identity_inputs ${a733_sources}
+  "${a733_root}/include/a733_cpu_coherence.h"
   "${a733_root}/include/a733_cpu_start.h" "${a733_root}/include/a733_cpu_entry.h"
   "${a733_root}/include/a733_cpu_continue.h" "${a733_root}/include/FreeRTOSConfig.h"
   "${a733_root}/platform/a733-smp/FreeRTOSConfig.h" "${a733_root}/platform/a733-smp/boot.h"

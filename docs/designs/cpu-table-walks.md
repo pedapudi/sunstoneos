@@ -31,6 +31,27 @@ A cacheable walker can hit a stale cache line over a table page, so the images
 add two cache-maintenance steps and a per-boot check of the EL1 tables, and
 finish every EL1 descriptor inside one builder.
 
+## Translation-control consumers
+
+The header is the sole definition of the cached and uncached EL1 values.
+`checks/cpu-table-walks.py` scans tracked source for full literals and assembly
+instruction triples and permits them only in that header. The sixteen other
+consumers use named values, including patch context and computed-value fixtures:
+
+| Consumers | Selection |
+| --- | --- |
+| `platform/a733/platform.c`, `apps/storage-read-single-core/platform.patch` | Cached walks for the single-core platform |
+| `platform/a733/cpu_continue.c`, `platform/a733/cpu_continue.S`, `checks/a733-cpu-continue.py` | Explicit uncached value for the Normal-NC continuation profile |
+| `boot/a733/native-el1-cache-probe.S`, `checks/native-startup-probe.py`, `tools/run-native-startup-probe.py` | Explicit uncached value of the digest-pinned native image |
+| `apps/gpu-entry-checkpoint/check.py`, `apps/gpu-finite/host-check.py` | Explicit uncached value of their frozen images |
+| `apps/gpu-cache-permission/main.c`, `apps/gpu-cache-permission/check.py` | Explicit cached value of the permission diagnostic |
+| `apps/board-bundles-cpu/main.c`, `tools/prepare-board-bundles.py` | Both values for the forced-walk comparison |
+| `checks/memtest-map-admission.py`, `checks/region-el0.c` | Explicit cached value for the mapping fixtures |
+
+The Python reader exports `CACHED_WALK` and `UNCACHED_WALK` for fixed profiles,
+and `SINGLE_CORE` and `EIGHT_CORE` for the corresponding current image defaults.
+Frozen fixtures select a fixed profile independently of those defaults.
+
 ## Ownership and data flow
 
 1. **Cold entry, core 0, EL3, MMU and caches off.** At the start of
@@ -129,10 +150,9 @@ caches or walk latency.
 ## Constraints
 
 - The non-cacheable continuation profile (`platform/a733/cpu_continue.{S,c}`,
-  `MAIR = 0x4400`), every `TCR_EL3` literal, the frozen
-  `apps/gpu-finite/return-check.py` and the native startup and cache probes
-  keep their own value; the probes enter EL1 through a production eight-core
-  image pinned by SHA-256.
+  `MAIR = 0x4400`) and the frozen native and GPU fixtures select the shared
+  uncached constant. Every `TCR_EL3` literal retains its separate profile.
+  The probes enter EL1 through a production eight-core image pinned by SHA-256.
 - Three private builds patch `platform/a733-smp-cached/continue.S` and pin its
   SHA-256 in `cmake/a733-smp-observe.cmake`, `cmake/a733-smp-supervised.cmake`
   and `cmake/a733-storage-maintenance.cmake`; their hooks read neither TCR nor

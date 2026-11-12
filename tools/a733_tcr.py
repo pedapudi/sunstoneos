@@ -33,4 +33,5 @@ def read(header=HEADER):
     return tuple(values)
 
 
-SINGLE_CORE, EIGHT_CORE = read()
+CACHED_WALK, UNCACHED_WALK = read()
+SINGLE_CORE, EIGHT_CORE = CACHED_WALK, UNCACHED_WALK
