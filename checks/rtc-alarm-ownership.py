@@ -37,6 +37,7 @@ def main():
               '-Iinclude']
     for name, sources in (
         ('ownership', ['checks/rtc-alarm-ownership.c', 'drivers/rtc/a733_rtc.c']),
+        ('rc', ['checks/a733-rtc-rc.c', 'drivers/rtc/a733_rtc.c']),
         ('alarm', ['checks/a733-rtc.c', 'drivers/rtc/a733_rtc.c', 'drivers/rtc/a733_rtc_boot.c']),
         ('calendar', ['checks/a733-rtc-calendar.c', 'drivers/rtc/a733_rtc.c',
                       'drivers/rtc/a733_rtc_initialize.c']),
@@ -51,7 +52,7 @@ def main():
     # Each compilation has several sources; record their headers explicitly
     # as well as every translation unit, the runner and the shared policy.
     inputs = ['checks/rtc-alarm-ownership.py', 'checks/rtc-alarm-ownership.c',
-              'checks/a733-rtc.c', 'checks/a733-rtc-calendar.c', 'checks/harness.py',
+              'checks/a733-rtc.c', 'checks/a733-rtc-rc.c', 'checks/a733-rtc-calendar.c', 'checks/harness.py',
               'drivers/rtc/a733_rtc.c', 'drivers/rtc/a733_rtc_boot.c',
               'drivers/rtc/a733_rtc_initialize.c', 'include/a733_rtc.h',
               'include/a733_rtc_boot.h', 'include/a733_rtc_initialize.h', 'include/a733_range.h']

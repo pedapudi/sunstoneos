@@ -175,6 +175,24 @@ void os_dma_irq(void);
 void os_dma0_irq(void);
 int os_dma_return_ready(void);
 #endif
+/* The header I2C class (include/sunstone_i2c.h, apps/os/i2c.c). The generated tables declare the controllers the
+ * application's manifest names; with none, the service touches nothing. */
+struct os_i2c_declaration {uint32_t bus,max_rate_hz;};
+void os_i2c_task(void *);
+int os_i2c_task_privileged(void (*)(void *),void *);
+int os_i2c_pins(struct a733_pin_handoff *);
+int os_i2c_start(void);
+void os_i2c_irq_twi0(void);
+void os_i2c_irq_twi1(void);
+void os_i2c_irq_twi2(void);
+void os_i2c_irq_twi3(void);
+void os_i2c_irq_s_twi2(void);
+/* The RTC class (include/sunstone_rtc.h, apps/os/rtc.c). */
+void os_rtc_task(void *);
+int os_rtc_task_privileged(void (*)(void *),void *);
+int os_rtc_pins(struct a733_pin_handoff *);
+int os_rtc_start(void);
+void os_rtc_irq(void);
 /* The capture stream (audio-stream.h); its start entry is
  * os_audio_stream_open, which the composition calls with the client's
  * configuration. */

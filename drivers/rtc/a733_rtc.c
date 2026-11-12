@@ -16,6 +16,8 @@
 #define HMS_MASK UINT32_C(0x001f3f3f)
 static int timely(struct a733_rtc *r)
 {uint64_t n;return r->ops.now_us(r->context,&n)==1&&a733_deadline_admit(n,&r->last,r->deadline);}
+static int timely_now(struct a733_rtc *r,uint64_t *n)
+{return r->ops.now_us(r->context,n)==1&&a733_deadline_admit(*n,&r->last,r->deadline);}
 static int read_reg(struct a733_rtc *r,uint32_t o,uint32_t *v)
 {return timely(r)&&r->ops.read(r->context,o,v)==1&&timely(r);}
 static int write_reg(struct a733_rtc *r,uint32_t o,uint32_t v)
@@ -33,14 +35,15 @@ static int clock_ok(struct a733_rtc *r)
          * divides by32 and (PRESCAL[4:0]+1); do not assert a 32768Hz rate.
          * +0x160 bit0 is RC enable. These registers share the admitted RTC
          * aperture; the caller must establish bus accessibility first. */
-        if(!r->read_only||(control&0x183)||(status&7)||
+        if(!(r->read_only||r->rc_mode)||(control&0x183)||(status&7)||
            !read_reg(r,0x0c,&calibration)||(calibration&1)||
            !read_reg(r,0x08,&prescaler)||!read_reg(r,0x160,&oscillator)||!(oscillator&1))return 0;
         source=A733_RTC_READ_RC_NORMAL;
     }
-    if((r->state!=A733_RTC_EMPTY||(r->read_only&&r->read_source))&&
+    const unsigned adopted=r->read_only||r->rc_mode;
+    if((r->state!=A733_RTC_EMPTY||(adopted&&r->read_source))&&
        (((control^r->snapshot.clock_control)&0xc01f)||
-        (r->read_only&&(source!=r->read_source||
+        (adopted&&(source!=r->read_source||
          ((prescaler^r->prescaler)&31)||((calibration^r->calibration)&1)||
          ((oscillator^r->oscillator)&1)))))return 0;
     r->snapshot.clock_control=control;r->snapshot.clock_status=status;
@@ -71,10 +74,10 @@ static int coherent(struct a733_rtc *r,struct a733_rtc_time *out)
     }
     return 0;
 }
-static int open_rtc(struct a733_rtc *r,const struct a733_rtc_ops *ops,void *context,uint64_t deadline,unsigned read_only)
+static int open_rtc(struct a733_rtc *r,const struct a733_rtc_ops *ops,void *context,uint64_t deadline,unsigned read_only,unsigned rc)
 {
     if(!r||r->state!=A733_RTC_EMPTY||!ops||!ops->now_us||!ops->read||(!read_only&&!ops->write)||!deadline)return 0;
-    r->ops=*ops;r->read_only=read_only;if(read_only)r->ops.write=NULL;
+    r->ops=*ops;r->read_only=read_only;r->rc_mode=rc;if(read_only)r->ops.write=NULL;
     r->read_source=0;r->prescaler=0;r->calibration=0;r->oscillator=0;
     r->context=context;r->deadline=deadline;
     atomic_init(&r->owned,0);atomic_init(&r->irq_seen,0);atomic_init(&r->irq_fault,0);
@@ -87,12 +90,48 @@ static int open_rtc(struct a733_rtc *r,const struct a733_rtc_ops *ops,void *cont
     r->state=A733_RTC_READY;return 1;
 }
 int a733_rtc_open(struct a733_rtc *r,const struct a733_rtc_ops *ops,void *context,uint64_t deadline)
-{return open_rtc(r,ops,context,deadline,0);}
+{return open_rtc(r,ops,context,deadline,0,0);}
+int a733_rtc_open_rc(struct a733_rtc *r,const struct a733_rtc_ops *ops,void *context,uint64_t deadline)
+{return open_rtc(r,ops,context,deadline,0,1);}
 int a733_rtc_open_readonly(struct a733_rtc *r,const struct a733_rtc_ops *ops,void *context,uint64_t deadline)
-{return open_rtc(r,ops,context,deadline,1);}
+{return open_rtc(r,ops,context,deadline,1,0);}
+static int waiting_clear(struct a733_rtc *r,uint32_t mask,int (*pause)(void *,uint64_t))
+{
+    uint64_t n;
+    if(!timely_now(r,&n))return 0;
+    const uint64_t end=n+1000000;
+    for(;;){
+        uint32_t v;
+        if(!read_reg(r,0,&v))return 0;
+        if(!(v&mask)){
+            if(!timely_now(r,&n)||!pause(r->context,n+2001))return 0;
+            return 1;
+        }
+        if(!timely_now(r,&n)||n>=end||!pause(r->context,n+1000))return 0;
+    }
+}
+int a733_rtc_set_time(struct a733_rtc *r,uint32_t day,uint32_t hms,int (*pause)(void *,uint64_t))
+{
+    if(!r||!pause||!r->rc_mode||r->state!=A733_RTC_READY||!day||day>65535||(hms&~UINT32_C(0x1f3f3f))||
+       ((hms>>16)&31)>23||((hms>>8)&63)>59||(hms&63)>59)return 0;
+    uint32_t v;uint64_t written,done;
+    if(!waiting_clear(r,256,pause)||!read_reg(r,HMS,&v)||!timely_now(r,&written)||
+       !write_reg(r,HMS,(v&~UINT32_C(0x1f3f3f))|hms)||!waiting_clear(r,256,pause)||
+       !waiting_clear(r,128,pause)||!read_reg(r,DAY,&v)||
+       !write_reg(r,DAY,(v&~UINT32_C(65535))|day)||!waiting_clear(r,128,pause))return fail(r);
+    struct a733_rtc_time t;
+    if(!coherent(r,&t)||!timely_now(r,&done))return fail(r);
+    const uint64_t requested=(uint64_t)day*86400+((hms>>16)&31)*3600+((hms>>8)&63)*60+(hms&63);
+    const uint64_t actual=seconds(&t);
+    /* The RC runs slower than real time (about 1.1 s per RTC second), so the new calendar can be no
+     * later than the request plus the elapsed time, and a lost carry would leave it before the request. */
+    if(actual<requested||actual-requested>(done-written+999999)/1000000)return fail(r);
+    r->snapshot.initial=t;
+    return 1;
+}
 int a733_rtc_read(struct a733_rtc *r,struct a733_rtc_time *out)
 {
-    if(!r||!out||(r->state!=A733_RTC_READY&&r->state!=A733_RTC_ARMED))return 0;
+    if(!r||!out||(r->state!=A733_RTC_READY&&r->state!=A733_RTC_ARMED&&r->state!=A733_RTC_FIRED&&r->state!=A733_RTC_CANCELLED))return 0;
     return coherent(r,out)?1:fail(r);
 }
 int a733_rtc_arm(struct a733_rtc *r,unsigned delay)

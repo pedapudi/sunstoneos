@@ -26,12 +26,27 @@ struct a733_rtc {
     enum a733_rtc_state state;
     /* Read-only capability and source observations are outside snapshot ABI. */
     uint32_t read_only,read_source,prescaler,calibration,oscillator;
+    uint32_t rc_mode;
 };
 /* Own RTC registers/IRQ exclusively, with stable source and existing calendar.
  * Caller masks the SPI and confirms it inactive before every operation.
  * A single owner task performs all RTC operations, including irq().
  * Failed operations retain every reservation and never attempt rollback. */
 int a733_rtc_open(struct a733_rtc *,const struct a733_rtc_ops *,void *,uint64_t);
+/* Writable open while the RTC runs from the inherited internal RC oscillator
+ * (normal RC, uncalibrated), the state the board is in. Same checks and ownership
+ * as a733_rtc_open, with the RC source accepted and its control, prescaler,
+ * calibration and oscillator words required stable. No clock-source write is
+ * ever made. The RC rate is not asserted: the caller measures it against its
+ * own time base (the board's RTC second took about 1.1 s). */
+int a733_rtc_open_rc(struct a733_rtc *,const struct a733_rtc_ops *,void *,uint64_t);
+/* Set the calendar of an RC-mode instance (READY state): HMS then DAY, each
+ * followed by the busy-bit wait and the 2 ms settle of the pinned rtc-sunxi.c
+ * settime. pause(context, until_us) must return 1 after waiting without
+ * holding any lock. The new value is verified by a coherent read: not before
+ * the request and not later than it plus the elapsed time (rounded up);
+ * the saved initial reading is replaced. Failure retains the instance. */
+int a733_rtc_set_time(struct a733_rtc *,uint32_t day,uint32_t hms,int (*pause)(void *,uint64_t));
 /* Explicit read-only adoption: external or normal (uncalibrated) RC only.
  * RC selection additionally reads +0x08/+0x0c/+0x160 through the supplied
  * callback. Caller establishes bus accessibility and exclusive source/calendar
@@ -40,7 +55,8 @@ int a733_rtc_open(struct a733_rtc *,const struct a733_rtc_ops *,void *,uint64_t)
  * initialize/set_calendar reject these instance ops before any MMIO. Caller
  * raw ops, if retained independently, remain separate privileged authority. */
 int a733_rtc_open_readonly(struct a733_rtc *,const struct a733_rtc_ops *,void *,uint64_t);
-/* Coherent read by the same owner; permitted during its own active alarm. */
+/* Coherent read by the same owner; permitted during its own active alarm and after it has finished
+ * (fired or cancelled), when the saved alarm registers are restored. A retained instance refuses. */
 int a733_rtc_read(struct a733_rtc *,struct a733_rtc_time *);
 int a733_rtc_arm(struct a733_rtc *,unsigned seconds);
 int a733_rtc_irq(struct a733_rtc *);

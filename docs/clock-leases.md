@@ -85,7 +85,7 @@ change. The [CPU clock driver](cpu-clock.md) holds its cluster exclusively and,
 for CPU-L, the DSU shared. Rail voltage remains a separate ledger lease.
 TWI9 uses bit 77 for the CAM2 sensor bus controller at `0x02519000` and its
 CCU+0xea4 gate0/reset16. Like TWI11, it is exclusive-only and holds FABRIC
-shared to prevent APB1 retuning. Bits 78–127 remain invalid.
+shared to prevent APB1 retuning. Bits 78 to 82 are TWI0 to TWI3 and S_TWI2, each a controller scope with its gate and reset word (exclusive only, under FABRIC for the main controllers and APBS1 for S_TWI2). Bits 83–127 remain invalid.
 Encoder/decoder coexistence, parent conflicts and IOMMU exclusion in both
 directions are refused before register access; no host check covers this. The
 two affected clock units compile for freestanding AArch64 with their existing
