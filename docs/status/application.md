@@ -70,7 +70,7 @@ unqualified.
 Board results are records in `docs/evidence/application.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-application-20261101.md).
 
 <!-- evidence-table:begin -->
-13 records in `docs/evidence/application.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+14 records in `docs/evidence/application.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -87,4 +87,5 @@ Board results are records in `docs/evidence/application.jsonl`; add one with `to
 | `1794491155007317124-af2f5180` | 2026-11-12 | 3-3 | `65b3cb6fdde2` | failure-return | failed | run_total 134.437 s |
 | `1794491353241460574-0a73bdb5` | 2026-11-12 | 3-3 | `00e11fb42d05` | returned | passed | run_total 135.03 s, compute 317.733 ms, compute_previous 317.766 ms, frames 512 frames |
 | `1794494318186325693-458570f3` | 2026-11-12 | 3-3 | `f547b9c3fa72` | returned | passed | run_total 135.769 s, compute 318.174 ms, frames 512 frames |
+| `1794502187341105927-1317448c` | 2026-11-12 | 3-3 | `19644ac31930` | returned | passed | run_total 137.225 s, compute 317.786 ms, frames 512 frames |
 <!-- evidence-table:end -->
