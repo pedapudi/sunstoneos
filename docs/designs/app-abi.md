@@ -73,6 +73,13 @@ The OS image derives its session lifetime from `run_deadline_us` and
 `return_reserve_us` ([os-image.md](../os-image.md#the-session-lifetime-follows-the-manifest)).
 No manifest can exceed it.
 
+One field of `manifest.json` is not packed: `usb.input_events`, the depth of
+the USB input event queue, a power of two of at most 2^31. Only an
+application that lists the USB keyboard or mouse may declare it; one that
+omits it gets 1,024 events, the depth the USB input image was built with. The
+generated tables carry the depth (`ss_usb_input_events`), and admission takes
+the queue from the unified ledger.
+
 **Version.** `SS_MANIFEST_VERSION` is 2. Version 1 held a fixed table of eight
 regions in a 552-byte record. Version 2 keeps the 104-byte head
 (`SS_MANIFEST_HEAD_BYTES`) and follows it with `region_count` 56-byte region

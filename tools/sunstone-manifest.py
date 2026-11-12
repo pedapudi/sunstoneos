@@ -147,7 +147,8 @@ def integer(value, where, low=0, high=(1 << 64) - 1):
 def load(path, supervised=False):
     """manifest.json -> normalized dict with integer fields."""
     raw = json.loads(Path(path).read_text())
-    known = {'name', 'devices', 'cpu', 'regions', 'large_regions', 'audio', 'deadlines', 'output_limit', 'host_ops', 'npu', 'gpu', 'abi'}
+    known = {'name', 'devices', 'cpu', 'regions', 'large_regions', 'audio', 'usb', 'deadlines', 'output_limit', 'host_ops', 'npu', 'gpu',
+             'abi'}
     require(set(raw) <= known, '%s: unknown keys %s' % (path, sorted(set(raw) - known)))
     name = raw['name']
     require(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9-]{0,14}', name) is not None,
@@ -237,6 +238,19 @@ def load(path, supervised=False):
         require(m['audio']['min_frames'] <= m['audio']['max_frames'], name + ': min_frames exceeds max_frames')
     else:
         m['audio'] = {'rate_hz': 0, 'channels': 0, 'bits': 0, 'min_frames': 0, 'max_frames': 0}
+    # The depth of the USB input queue (apps/os/usb-service.c). It is not part of the packed binary: the generated tables carry
+    # it, and admission takes the queue from the ledger. The ring indexes it with free-running 32-bit counters, so the depth is
+    # a power of two of at most 2^31. The default, 1,024 events, is the depth the USB input image was built with; no
+    # application has measured its report rate.
+    usb = raw.get('usb', {})
+    require(isinstance(usb, dict) and set(usb) <= {'input_events'}, name + ': unknown usb keys')
+    if (required | optional) & (DEVICES['usb-keyboard'] | DEVICES['usb-mouse']):
+        events = integer(usb.get('input_events', 1024), name + ' usb input_events', 1, 1 << 31)
+        require(events & (events - 1) == 0, name + ': usb input_events is a power of two')
+    else:
+        require('input_events' not in usb, name + ': usb input_events needs the usb-keyboard or usb-mouse device')
+        events = 0
+    m['usb_input_events'] = events
     regions, names = [], []
     # region_count is one byte of the manifest head, so a manifest declares at most 255 regions.
     require(len(raw.get('regions', [])) <= 255, name + ': at most 255 regions (the one-byte region_count)')
@@ -591,9 +605,10 @@ def capture_bytes(m):
 
 
 def owner_extents(m):
-    """The device owners' extents that the application's tables map (apps/os/owner-memory.h): the capture buffer, and the
-    headset's state when the manifest lists the headset."""
-    return (1 if capture_bytes(m) else 0) + (1 if (m['devices_required'] | m['devices_optional']) & DEVICES['audio-headset'] else 0)
+    """The device owners' extents that the application's tables map (apps/os/owner-memory.h): the capture buffer, the USB
+    input queue, and the headset's state when the manifest lists the headset."""
+    return ((1 if capture_bytes(m) else 0) + (1 if m.get('usb_input_events', 0) else 0) +
+            (1 if (m['devices_required'] | m['devices_optional']) & DEVICES['audio-headset'] else 0))
 
 
 def ledger_entries(m):
@@ -640,6 +655,8 @@ def c_tables(m):
              '/* The capture buffer: the 64-byte headroom and the declared frames. Admission takes it from the ledger (apps/os/capture.c). */',
              'const size_t ss_capture_bytes = %du;' % capture_bytes(m),
              'const size_t ss_capture_capacity = %du;' % (capture_bytes(m) - 64 if capture_bytes(m) else 0),
+             '/* The USB input queue\'s depth; admission takes the queue from the ledger (apps/os/usb-service.c). */',
+             'const unsigned ss_usb_input_events = %du;' % m.get('usb_input_events', 0),
              '__attribute__((used,retain)) const struct os_application os_applications[] = {',
              '    OS_START_TABLE',
              '    {"%s",os_application_task_privileged,os_application_pins,os_application_start},' % m['name'],

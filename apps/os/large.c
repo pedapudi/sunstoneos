@@ -13,6 +13,7 @@
 #include "umem.h"
 #include "owner-memory.h"
 #include "capture.h"
+#include "sunstone_usb_service.h"
 #include "aarch64_device_memory.h"
 #include "device-ranges.h"
 #include "npu.h"
@@ -217,8 +218,8 @@ int os_large_prepare(void)
      * (os_npu_start refuses); it does not stop the application. */
     if (!os_npu_pool_prepare(&ledger, owner_asid)) return large_failed(9);
     /* The device owners whose memory the application's tasks reach take it now, before the tables are built
-     * (owner-memory.h): the capture buffer, and the headset's state in a session that grants the headset. */
-    if (!os_capture_memory() || (os_headset_memory && !os_headset_memory())) return large_failed(10);
+     * (owner-memory.h): the capture buffer, the USB input queue, and the headset's state in a session that grants the headset. */
+    if (!os_capture_memory() || !os_usb_service_memory() || (os_headset_memory && !os_headset_memory())) return large_failed(10);
     /* The main stack: a 2 MiB block that the guard owner holds below it, so that an overflow is an EL0 fault in memory
      * no space maps. The stack is at the bottom of its own block. Where no extent is free the static stack stays. */
     if (manifest) {
