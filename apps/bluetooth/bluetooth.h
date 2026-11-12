@@ -11,8 +11,8 @@
 #define BLUETOOTH_PROFILE_MAGIC UINT64_C(0x3150465442535353)
 #define BLUETOOTH_PROFILE_ADDRESS UINT64_C(0x43000000)
 /* Immutable external authority; evidence identifies the actual installed
- * topology, fresh module/UART ownership and secure SID access. PM2 is never
- * driven here: stable reset/LPO behavior must already be established. */
+ * topology, fresh module/UART ownership and secure SID access. Only version 4
+ * grants the separately authenticated PM2 reset-stop contract. */
 struct bluetooth_headset_profile {
     uint32_t mode,incoming;
     uint8_t peer[6],pin[17],allow_just_works;
@@ -44,8 +44,9 @@ struct bluetooth_profile {
     uint64_t command_timeout_us,frame_timeout_us,binding_timeout_us;
     struct bluetooth_headset_profile headset;
     struct bluetooth_recognition_profile recognition;
+    struct a733_radio_bluetooth_stop bluetooth_stop;
 };
-_Static_assert(sizeof(struct bluetooth_profile)==832&&offsetof(struct bluetooth_profile,recognition)==752&&offsetof(struct bluetooth_profile,headset)==624&&offsetof(struct bluetooth_profile,firmware_address)==512,
+_Static_assert(sizeof(struct bluetooth_profile)==888&&offsetof(struct bluetooth_profile,bluetooth_stop)==832&&offsetof(struct bluetooth_profile,recognition)==752&&offsetof(struct bluetooth_profile,headset)==624&&offsetof(struct bluetooth_profile,firmware_address)==512,
     "Bluetooth offline profile geometry");
 /* Session lifetimes: supervised, exactly 60 s after the session start, or
  * resident, ending at UINT64_MAX/24 us like the board's resident session. */
@@ -95,6 +96,11 @@ struct bluetooth_application {
     unsigned stage,iteration_live,host_wake,attached,resident;
     uint64_t started;
     atomic_uint failed,result_lock,result;
+    /* Stop runs on the original owner. release/peer publish the shared-module
+     * handshake; phase and deadline never restart after a terminal result. */
+    atomic_uint stop_release,stop_peer;
+    uint64_t stop_deadline;
+    unsigned stop_phase,stop_fault;
     struct bt_hci_identity identity;
     uint64_t discarded_records;
 };
@@ -137,6 +143,15 @@ int bluetooth_application_attach(struct bluetooth_application *,const struct blu
     const uint8_t profile_digest[32],struct a733_radio_platform_native *,struct a733_radio_session *);
 /* 0 pending,1 actual six-command identity captured,-1 retained failure. */
 int bluetooth_application_poll(struct bluetooth_application *);
+/* Owner-only return work: 0 pending, 1 UART and owned module stopped,
+ * -1 retained fault. The absolute deadline only shortens. Each call performs
+ * one bounded protocol/platform step; it does not renew any accepted command. */
+int bluetooth_application_stop(struct bluetooth_application *,uint64_t deadline);
+/* Shared-module handshake. Release is -1 fault, 0 pending, 1 no more HCI work.
+ * Peer completion is exactly 1 only for the authenticated Bluetooth reset
+ * proof, never for WLAN DOWN. All callbacks run on the shared owner task. */
+int bluetooth_application_module_release(struct bluetooth_application *);
+void bluetooth_application_module_down(struct bluetooth_application *,int proved);
 int bluetooth_application_retain(struct bluetooth_application *);
 int bluetooth_application_result(struct bluetooth_application *,struct bt_hci_identity *);
 #endif

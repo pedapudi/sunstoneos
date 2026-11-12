@@ -50,6 +50,7 @@ def validate(record, raw, flags, cache, board, bluetooth, require, *, frozen=Fal
         require(isinstance(ref, dict) and set(ref) == {'path', 'sha256'} and
                 isinstance(ref['path'], str) and Path(ref['path']).is_absolute(), 'Invalid radio evidence reference.')
         path = ref['path']
+        require(not frozen or path in cache, 'Frozen radio evidence or asset missing.')
         if path not in cache:
             cache[path] = Path(path).read_bytes()
         data = cache[path]
@@ -92,7 +93,7 @@ def validate(record, raw, flags, cache, board, bluetooth, require, *, frozen=Fal
                 doc.get('sid_authority') == u64(raw, 312), 'Radio secure chip identity differs from session.')
         digest_ref(doc.get('radio_sid'), headset[88:120] if headset is not None else raw[320:352])
     if headset is not None:
-        require(len(headset) == 832, 'OS headset requires the repeated-capture profile.')
+        require(len(headset) in (832, 888), 'OS headset requires the repeated-capture profile.')
         bt_spans = bluetooth.profile_check(headset, raw, workloads=(0, 1, 4), model_pin=model_pin)
         mode = struct.unpack_from('<I', headset, 624)[0]
         require(mode in ((2, 3) if flags['msbc'] else (2,)), 'Headset mode exceeds linked codec capability.')
@@ -112,6 +113,8 @@ def validate(record, raw, flags, cache, board, bluetooth, require, *, frozen=Fal
         for key, offset in [('bluetooth_wiring', 56), ('bluetooth_sid', 88),
                             ('bluetooth_transport', 120), ('bluetooth_scheduling', 672)]:
             digest_ref(doc.get(key), headset[offset:offset + 32])
+        if len(headset) == 888:
+            digest_ref(doc.get('bluetooth_stop'), headset[848:880])
         if radio is not None:
             require(bt_platform == platform and headset[152:176] == pm and
                     u64(headset, 576) == u64(radio, 1224) and headset[496:508] == radio[496:508] and

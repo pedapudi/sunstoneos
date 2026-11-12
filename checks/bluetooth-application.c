@@ -15,6 +15,8 @@ static TaskHandle_t owner=(TaskHandle_t)(uintptr_t)1,current_task;
 static BaseType_t scheduler=taskSCHEDULER_NOT_STARTED;
 static unsigned radio_polls,radio_retains,uart_retains,bootstrap_ready,uart_busy,constructor_calls;
 static unsigned fast_requests,fast_refused,radio_progress,radio_tick,ready_on_poll,clock_fail;
+static unsigned return_release,return_peer=1,return_held=1,uart_closing,uart_closes;
+static unsigned return_residual,return_injected;
 static enum a733_radio_session_result radio_status=A733_SESSION_PENDING;
 TaskHandle_t xTaskGetCurrentTaskHandle(void){return current_task;}
 BaseType_t xTaskGetSchedulerState(void){return scheduler;}
@@ -36,9 +38,14 @@ int a733_uart_platform_init(struct a733_uart_platform *u,const struct a733_uart_
     ++constructor_calls;return 1;
 }
 enum a733_uart_platform_result a733_uart_platform_poll(struct a733_uart_platform *u)
-{assert(u==&app.uart);return a733_uart_poll(&u->uart)==A733_UART_READY?A733_UART_PLATFORM_READY:A733_UART_PLATFORM_RETAINED;}
+{assert(u==&app.uart);int r=a733_uart_poll(&u->uart);
+ if(uart_closing)return r==A733_UART_DRAINED?A733_UART_PLATFORM_CLOSED:r==A733_UART_DRAINING?A733_UART_PLATFORM_PENDING:A733_UART_PLATFORM_RETAINED;
+ return r==A733_UART_READY?A733_UART_PLATFORM_READY:A733_UART_PLATFORM_RETAINED;}
 enum a733_uart_platform_result a733_uart_platform_live(struct a733_uart_platform *u,uint64_t d)
-{assert(u==&app.uart&&d==app.deadline);u->uart.deadline=d;return uart_busy?A733_UART_PLATFORM_BUSY:A733_UART_PLATFORM_READY;}
+{assert(u==&app.uart&&d==(app.stop_phase?app.stop_deadline:app.deadline));u->uart.deadline=d;return uart_busy?A733_UART_PLATFORM_BUSY:A733_UART_PLATFORM_READY;}
+enum a733_uart_platform_result a733_uart_platform_close(struct a733_uart_platform *u,unsigned quiet,uint64_t d)
+{assert(u==&app.uart&&quiet==1&&d==app.stop_deadline&&atomic_load(&app.stop_peer)==1&&atomic_load(&app.stop_release));
+ ++uart_closes;uart_closing=1;return a733_uart_drain(&u->uart,d)==A733_UART_DRAINING?A733_UART_PLATFORM_PENDING:A733_UART_PLATFORM_RETAINED;}
 struct a733_uart *a733_uart_platform_controller(struct a733_uart_platform *u){assert(u==&app.uart);return &u->uart;}
 enum a733_uart_platform_result a733_uart_platform_retain(struct a733_uart_platform *u)
 {assert(u==&app.uart&&(atomic_load(&recovery)&4));++uart_retains;return A733_UART_PLATFORM_RETAINED;}
@@ -51,6 +58,8 @@ int a733_radio_platform_four_bit(struct a733_radio_platform *p)
 {assert(p==&app.radio&&!p->four_bit);++fast_requests;if(fast_refused)return 0;p->four_bit=1;return 1;}
 int a733_radio_platform_bluetooth(struct a733_radio_platform *p,const struct a733_radio_bluetooth_pins *b)
 {assert(p==&app.radio&&b==&profile.wake);p->bluetooth=*b;return 1;}
+int a733_radio_platform_bluetooth_stop(struct a733_radio_platform *p,const struct a733_radio_bluetooth_stop *b)
+{assert(p==&app.radio&&b==&profile.bluetooth_stop);p->bluetooth_stop=*b;return 1;}
 enum a733_radio_platform_result a733_radio_platform_bluetooth_wake(struct a733_radio_platform *p,
     const struct a733_radio_borrow *b,uint64_t d,unsigned *v)
 {assert(p==&app.radio&&b==&app.session.borrow&&d==app.session.deadline);*v=0;return A733_RADIO_READY;}
@@ -61,19 +70,28 @@ int a733_radio_session_init_bootstrap(struct a733_radio_session *s,struct a733_r
 }
 enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session *s)
 {assert(s==&app.session&&app.uart.uart.state==A733_UART_READY);++radio_polls;wire.now+=radio_tick;
+ if(s->stop_requested){
+   if(return_release&&!return_injected){return_injected=1;
+     for(unsigned i=0;i<return_residual;++i){uint8_t value=(uint8_t)i;bytes(&wire,&value,1);}}
+   return return_release?A733_SESSION_DOWN:A733_SESSION_PENDING;}
  if(radio_progress&1)++app.radio.host.progress;if(radio_progress&2)++s->transport.progress;
  if(radio_progress&4)++app.radio.stage;if(radio_progress&8)++s->stage;
  if(ready_on_poll==radio_polls)s->dispatcher.initialized=1;return radio_status;}
 int a733_radio_session_bootstrap(struct a733_radio_session *s,uint64_t *generation)
 {assert(s==&app.session);if(!bootstrap_ready)return 0;s->borrow.generation=4;*generation=4;return 1;}
+int a733_radio_session_stop(struct a733_radio_session *s,uint64_t deadline)
+{assert(s==&app.session&&deadline==app.stop_deadline);s->stop_requested=1;return 1;}
+int a733_radio_session_stop_release(struct a733_radio_session *s)
+{assert(s==&app.session&&atomic_load(&app.stop_release));return_release=1;return 1;}
+int a733_radio_session_stop_held(struct a733_radio_session *s)
+{assert(s==app.module_session&&s->stop_requested&&!return_release);return return_held;}
+int a733_radio_session_peer_stopped(struct a733_radio_session *s)
+{assert(s==&app.session&&return_release);return return_peer;}
 enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_session *s)
 {assert(s==&app.session&&(atomic_load(&recovery)&4));++radio_retains;return A733_SESSION_RETAINED;}
 int a733_radio_session_take_event(struct a733_radio_session *s,struct aic8800_dispatch_event *e){(void)s;(void)e;return 0;}
 int a733_radio_session_take_record(struct a733_radio_session *s,struct aic8800_dispatch_record *r){(void)s;(void)r;return 0;}
-#ifndef BLUETOOTH_APPLICATION_FIXTURE_ENTRY
-#define BLUETOOTH_APPLICATION_FIXTURE_ENTRY main
-#endif
-int BLUETOOTH_APPLICATION_FIXTURE_ENTRY(int argc,char **argv)
+static void application_fixture_init(void)
 {
     wire.now=1;wire.room=1024;providers.used=1;providers.boot.identity=99;atomic_init(&recovery,1);
     profile=(struct bluetooth_profile){.magic=BLUETOOTH_PROFILE_MAGIC,.version=1,.bytes=624,
@@ -88,6 +106,14 @@ int BLUETOOTH_APPLICATION_FIXTURE_ENTRY(int argc,char **argv)
     digest[0]^=1;assert(!bluetooth_profile_valid(&profile,digest));digest[0]^=1;
     assert(bluetooth_application_init(&app,&profile,&providers,&chip,owner,&recovery,0,60000000,digest)&&constructor_calls==1);
     scheduler=taskSCHEDULER_RUNNING;current_task=owner;
+}
+#ifndef BLUETOOTH_APPLICATION_FIXTURE_ENTRY
+#define BLUETOOTH_APPLICATION_FIXTURE_ENTRY main
+#endif
+int BLUETOOTH_APPLICATION_FIXTURE_ENTRY(int argc,char **argv)
+{
+    application_fixture_init();
+    uint8_t digest[32];storage_digest_bytes(&profile,profile.bytes,digest);
     assert(bluetooth_application_poll(&app)==0&&!radio_polls);
     unsigned accesses=wire.accesses;assert(bluetooth_application_poll(&app)==0&&wire.accesses==accesses&&!wire.tn);
     bootstrap_ready=1;uart_busy=1;

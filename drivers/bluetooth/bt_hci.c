@@ -54,6 +54,7 @@ int bt_hci_init(struct bt_hci *h, const struct bt_h4_binding *b,
     h->identity=(struct bt_hci_identity){0};h->initialization_deadline=deadline;
     h->command_timeout_us=timeout;h->command_deadline=0;h->command_tag=0;
     h->stage=0;h->external_command=0;h->credits=1;h->opcode=0;h->last_status=0;h->command_accepted=0;
+    h->return_deadline=0;h->scan_requested=0;h->scan_complete=0;h->stop_requested=0;h->return_command=0;
     h->command=BT_HCI_IDLE;h->state=BT_HCI_INITIALIZING;return 1;
 }
 int bt_hci_synchronous_supported(const struct bt_hci *h)
@@ -78,7 +79,7 @@ int bt_hci_configure_incoming(struct bt_hci *h,const struct bt_hci_incoming_conf
 {
     if(!h || h->self!=h || !c || !c->current || !c->service_generation || !c->receive_latency_us || c->synchronous_audio>1 ||
        (c->synchronous_audio && !bt_hci_synchronous_supported(h)) ||
-       h->state!=BT_HCI_IDENTIFIED || h->identity.valid!=63 || h->command_tag!=6 ||
+       h->state!=BT_HCI_IDENTIFIED || h->scan_requested || h->identity.valid!=63 || h->command_tag!=6 ||
        h->acl_owner || h->configured || h->configuration_stage || h->configuration_deadline ||
        h->command!=BT_HCI_IDLE || h->external_command || deadline<=h->transport.now ||
        c->accept_timeout_slots<0x00a0 || c->accept_timeout_slots>0xb540 ||
@@ -114,7 +115,8 @@ int bt_hci_incoming_bound(struct bt_hci *h,uint64_t response)
 static int request(struct bt_hci *h,uint16_t opcode,const uint8_t *p,size_t n,uint64_t deadline)
 {
     if(!h || h->self!=h || !deadline || !p || !bt_range_disjoint_empty(h,sizeof(*h),p,n))return -1;
-    if(h->state!=BT_HCI_IDENTIFIED) return -1;
+    if(h->state!=BT_HCI_IDENTIFIED || h->stop_requested) return -1;
+    if(h->return_deadline && deadline>h->return_deadline)deadline=h->return_deadline;
     if(h->command!=BT_HCI_IDLE || !h->credits ||
        h->transport.tx_offset<h->transport.tx_length) return 0;
     if(h->command_tag==UINT64_MAX) return fail(h);
@@ -127,9 +129,41 @@ static int request(struct bt_hci *h,uint16_t opcode,const uint8_t *p,size_t n,ui
 int bt_hci_request(struct bt_hci *h,uint16_t op,const uint8_t *p,size_t n,uint64_t deadline)
 {
     if(h&&h->security_ack_pending)return 0;
-    if((op!=0x0405 || n!=13) && (op!=0x0406 || n!=3) && (op!=0x0409 || n!=7) &&
+    if((op!=0x0405 || n!=13) && (op!=0x0406 || n!=3) && (op!=0x0408 || n!=6) && (op!=0x0409 || n!=7) &&
        (op!=0x040a || n!=7))return -1;
-    return request(h,op,p,n,deadline);
+    int result=request(h,op,p,n,deadline);
+    if(result==1 && op==0x0408)h->external_command=2;
+    return result;
+}
+int bt_hci_scan_disable(struct bt_hci *h,uint64_t deadline)
+{
+    if(!h || h->self!=h || !deadline || h->state==BT_HCI_CLOSED || h->state==BT_HCI_FAULT)return -1;
+    if(h->state==BT_HCI_STOPPED)return 1;
+    if(!h->return_deadline || deadline<h->return_deadline)h->return_deadline=deadline;
+    h->scan_requested=1;
+    return deadline>h->transport.now ? 1 : fail(h);
+}
+int bt_hci_scan_disabled(const struct bt_hci *h)
+{
+    if(!h || h->self!=h || h->state==BT_HCI_FAULT || h->state==BT_HCI_CLOSED)return -1;
+    return h->scan_complete ? 1 : 0;
+}
+int bt_hci_stop(struct bt_hci *h,uint64_t deadline)
+{
+    if(bt_hci_scan_disable(h,deadline)!=1)return -1;
+    h->stop_requested=1;return 1;
+}
+int bt_hci_stopped(const struct bt_hci *h)
+{
+    if(!h || h->self!=h || h->state==BT_HCI_FAULT || h->state==BT_HCI_CLOSED)return -1;
+    return h->state==BT_HCI_STOPPED;
+}
+static int transport_empty(const struct bt_hci *h)
+{
+    const struct bt_h4 *t=&h->transport;
+    if(t->state!=BT_H4_ACTIVE || t->staged || t->assembling!=t->count || t->tx_offset!=t->tx_length)return 0;
+    for(unsigned i=0;i<t->count;++i)if(t->records[i].owner!=BT_H4_FREE)return 0;
+    return 1;
 }
 int bt_hci_synchronous_request(struct bt_hci *h,const void *owner,uint16_t op,const uint8_t *p,size_t n,uint64_t deadline)
 {
@@ -194,6 +228,14 @@ static int dispatch(struct bt_hci *h, const struct bt_h4_record *r)
     if(h->command!=BT_HCI_WAITING || opcode!=h->opcode || r->tag!=h->command_tag)
         return retain(h,r);
     h->credits=credits;
+    if(h->return_command) {
+        if(h->return_command>2 || cs || n!=4 || p[5])return bad_record(h,r);
+        if(bt_h4_release(&h->transport,r->serial)!=1)return fail(h);
+        h->command=BT_HCI_IDLE;
+        if(h->return_command==1){h->scan_complete=1;h->return_command=0;}
+        else h->return_command=3;
+        return 1;
+    }
     if(h->state==BT_HCI_CONFIGURING) {
         unsigned stage=h->configuration_stage;
         if(stage>=config_count(h) || cs || n!=3+config_return(h,stage)) return bad_record(h,r);
@@ -246,19 +288,21 @@ int bt_hci_step(struct bt_hci *h, unsigned budget, uint64_t deadline)
 {
     if(!h || h->self!=h || !deadline || !budget || budget>BT_H4_BUDGET || h->state==BT_HCI_CLOSED) return -1;
     if(h->state==BT_HCI_FAULT) return -1;
+    if(h->state==BT_HCI_STOPPED)return 1;
     if((h->state==BT_HCI_CONFIGURING || h->configured) && config_authority(h)!=1) return -1;
-    if(h->state==BT_HCI_CONFIGURING && deadline>h->configuration_deadline)
+    if(!h->scan_requested && h->state==BT_HCI_CONFIGURING && deadline>h->configuration_deadline)
         deadline=h->configuration_deadline;
-    if(h->state==BT_HCI_INITIALIZING && deadline>h->initialization_deadline)
+    if(!h->scan_requested && h->state==BT_HCI_INITIALIZING && deadline>h->initialization_deadline)
         deadline=h->initialization_deadline;
     if(h->command!=BT_HCI_IDLE && deadline>h->command_deadline) deadline=h->command_deadline;
+    if(h->return_deadline && deadline>h->return_deadline)deadline=h->return_deadline;
     uint64_t tag=h->command==BT_HCI_WAITING ? h->command_tag : 0;
     if(bt_h4_step(&h->transport,budget,tag,deadline)!=1) return fail(h);
     if(h->command==BT_HCI_SENDING && h->transport.tx_offset==h->transport.tx_length)
         h->command=BT_HCI_WAITING;
     const struct bt_h4_record *r=bt_h4_next(&h->transport,BT_H4_COMPLETE);
     if(r && dispatch(h,r)!=1) return -1;
-    if(h->state==BT_HCI_INITIALIZING && h->command==BT_HCI_IDLE && h->credits &&
+    if(!h->scan_requested && h->state==BT_HCI_INITIALIZING && h->command==BT_HCI_IDLE && h->credits &&
        !h->transport.staged && h->transport.assembling==h->transport.count &&
        !bt_h4_next(&h->transport,BT_H4_COMPLETE)) {
         uint64_t now=h->transport.now;
@@ -268,7 +312,7 @@ int bt_hci_step(struct bt_hci *h, unsigned budget, uint64_t deadline)
         if(bt_h4_command(&h->transport,h->opcode,0,0,h->command_deadline)!=1) return fail(h);
         --h->credits;h->command=BT_HCI_SENDING;
     }
-    if(h->state==BT_HCI_CONFIGURING && h->command==BT_HCI_IDLE && h->credits &&
+    if(!h->scan_requested && h->state==BT_HCI_CONFIGURING && h->command==BT_HCI_IDLE && h->credits &&
        !h->transport.staged && h->transport.assembling==h->transport.count &&
        !bt_h4_next(&h->transport,BT_H4_COMPLETE)) {
         const struct bt_hci_incoming_config *c=&h->incoming_config;
@@ -287,6 +331,20 @@ int bt_hci_step(struct bt_hci *h, unsigned budget, uint64_t deadline)
         if(h->command_deadline>h->configuration_deadline) h->command_deadline=h->configuration_deadline;
         h->opcode=(uint16_t)op;++h->command_tag;h->command_accepted=0;
         if(bt_h4_command(&h->transport,h->opcode,params,n,h->command_deadline)!=1) return fail(h);
+        --h->credits;h->command=BT_HCI_SENDING;
+    }
+    if(h->return_command==3 && transport_empty(h)) {h->state=BT_HCI_STOPPED;return 1;}
+    if(h->scan_requested && !h->return_command && h->command==BT_HCI_IDLE && h->credits &&
+       !h->security_ack_pending && !h->transport.staged && h->transport.assembling==h->transport.count &&
+       h->transport.tx_offset==h->transport.tx_length && !bt_h4_next(&h->transport,BT_H4_COMPLETE) &&
+       !bt_h4_next(&h->transport,BT_H4_OWNED) &&
+       (!h->scan_complete || (h->stop_requested && transport_empty(h)))) {
+        unsigned reset=h->scan_complete;uint8_t scan=0;
+        if(h->command_tag==UINT64_MAX || !a733_deadline_after(h->transport.now,h->command_timeout_us,&h->command_deadline))return fail(h);
+        if(h->command_deadline>h->return_deadline)h->command_deadline=h->return_deadline;
+        h->opcode=reset ? HCI_OP_RESET : 0x0c1a;
+        if(bt_h4_command(&h->transport,h->opcode,&scan,reset ? 0 : 1,h->command_deadline)!=1)return fail(h);
+        ++h->command_tag;h->command_accepted=0;h->return_command=reset ? 2 : 1;
         --h->credits;h->command=BT_HCI_SENDING;
     }
     return 1;

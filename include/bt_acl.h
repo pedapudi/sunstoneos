@@ -14,7 +14,8 @@ enum bt_acl_link_state { BT_ACL_UNUSED, BT_ACL_CONNECT_QUEUED,
     BT_ACL_DISCONNECT_QUEUED, BT_ACL_DISCONNECT_STATUS, BT_ACL_DISCONNECTING,
     BT_ACL_CLOSED, BT_ACL_WAIT_REQUEST, BT_ACL_ACCEPT_QUEUED,
     BT_ACL_ACCEPT_STATUS, BT_ACL_ACCEPTING, BT_ACL_REJECT_QUEUED,
-    BT_ACL_REJECT_STATUS, BT_ACL_REJECTING };
+    BT_ACL_REJECT_STATUS, BT_ACL_REJECTING, BT_ACL_CANCEL_QUEUED,
+    BT_ACL_CANCEL_STATUS, BT_ACL_CANCELLING };
 enum bt_acl_tx_state { BT_ACL_TX_FREE, BT_ACL_QUEUED, BT_ACL_PARTIAL,
     BT_ACL_SENT, BT_ACL_CREDIT_RETIRED, BT_ACL_FLUSHED, BT_ACL_NOT_SENT };
 struct bt_acl_peer { uint8_t address[6], page_scan_mode, role_switch; uint16_t clock_offset; };
@@ -24,6 +25,7 @@ struct bt_acl_link {
     uint16_t handle;
     uint8_t status, reason, encryption, class_of_device[3];
     unsigned flush_seen, incoming, handle_valid;
+    unsigned cancel_event;
     enum bt_acl_link_state state;
 };
 struct bt_acl_packet {
@@ -72,6 +74,8 @@ struct bt_acl {
     struct bt_acl_packet packets[BT_ACL_TX_SLOTS];
     uint64_t next_link, next_packet, seen_record, incoming_timeout_us;
     unsigned capacity, credits, mtu, active_tx, command_link;
+    uint64_t return_deadline;
+    unsigned admission_closed, stopping;
     enum bt_acl_state state;
 };
 /* One serialized task exclusively owns this object and the IDENTIFIED HCI
@@ -115,6 +119,17 @@ int bt_acl_listen(struct bt_acl *, const uint8_t address[6], uint64_t deadline,
                   uint64_t *link_generation);
 /* Only reason0x13 (local user termination) is currently emitted. */
 int bt_acl_disconnect(struct bt_acl *, uint64_t link_generation, uint64_t deadline);
+/* Close connection/listen admission while permitting upper-layer close data.
+ * Unsent attempts close locally; received requests are rejected. Stop follows
+ * upper-layer closure and also closes data admission, cancels accepted outgoing
+ * attempts and disconnects every established link. No I/O in either request;
+ * existing step owns progress. Deadlines only shorten. Exact1 accepted,-1 fault.
+ * Quiescent returns1 only after every link and packet is terminal and no command
+ * or frame is borrowed; terminal packet results still require caller release.
+ * It returns0 pending,-1 fault, and does not certify SCO/security retirement. */
+int bt_acl_close_admission(struct bt_acl *,uint64_t deadline);
+int bt_acl_stop(struct bt_acl *,uint64_t deadline);
+int bt_acl_quiescent(const struct bt_acl *);
 /* One already-fragmented unicast ACL payload, PB1 continuation or PB2 start.
  * No L2CAP framing/security is supplied. Caller must retain immutable bytes
  * until an explicit terminal-result release, even after UART acceptance. */

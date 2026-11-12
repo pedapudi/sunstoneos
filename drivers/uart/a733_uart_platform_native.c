@@ -16,7 +16,7 @@ static int current(void *cookie)
 static int now(void *cookie,uint64_t *v)
 {
     struct a733_uart_platform_native *n=cookie;
-    return n->locks->now(n->locks->context,v);
+    return a733_platform_lock_live(n->locks)&&n->locks->now(n->locks->context,v);
 }
 static int authorize(void *cookie,const struct a733_uart_platform_config *c,
     const struct a733_clock_token *t,enum a733_uart_admission phase)
@@ -28,7 +28,8 @@ static int authorize(void *cookie,const struct a733_uart_platform_config *c,
 static int enter(void *cookie,uint64_t deadline)
 {
     struct a733_uart_platform_native *n=cookie;
-    return current(n) && a733_platform_lock_enter(n->locks,A733_PLATFORM_REGISTER_LOCK,deadline);
+    if(!current(n))return -1;
+    return a733_platform_lock_step(n->locks,A733_PLATFORM_REGISTER_LOCK,deadline);
 }
 static void leave(void *cookie)
 {
@@ -42,7 +43,8 @@ static void retain(void *cookie)
 }
 static int access_allowed(struct a733_uart_platform_native *n,uintptr_t a,unsigned writing)
 {
-    if (!current(n) || !a733_uart_platform_native_address(n->port,a,writing)) return 0;
+    if (!current(n) || !a733_platform_lock_live(n->locks) ||
+        !a733_uart_platform_native_address(n->port,a,writing)) return 0;
     uintptr_t base=n->port<7 ? UINT32_C(0x02500000)+n->port*0x1000u : UINT32_C(0x07080000)+(n->port-7)*0x1000u;
     if (a>=base && a<=base+0xc0) return 1; /* Exclusive controller, owner task. */
     return !(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1u) &&

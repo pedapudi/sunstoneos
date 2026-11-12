@@ -29,11 +29,11 @@
  * acknowledged. A lost packet stops capture, and its stop flag, like any
  * stop but the supervised capture window, ends the session through
  * board_fail, as do a refused take, a failed Bluetooth owner and a failed
- * board. The Bluetooth owner then retains
- * its transports and the client keeps its buffers. The supervised image waits
- * for manual power removal; in the resident image both tasks stop reporting
- * progress and the watchdog resets the board. */
+ * board. During a return the original owner stops the protocol, waits for
+ * authenticated module reset, and drains UART. Uncertain resources stay
+ * retained and the supervisor records the owner's fault. */
 #include "os.h"
+#include "cpu-return.h"
 #include "quiesce.h"
 #include "../board/application.h"
 #include "../bluetooth/bluetooth.h"
@@ -74,9 +74,6 @@ static struct {
 static enum os_quiesce_result headset_quiesce_step(struct os_quiesce *);
 static struct os_quiesce headset_quiesce={.owner=OS_QUIESCE_HEADSET,
     .order=OS_QUIESCE_DEVICES,.step=headset_quiesce_step};
-/* A synchronous disconnect closes capture. UART/HCI retirement, and module
- * shutdown when Bluetooth owns it, have no supported return contract. */
-enum { HEADSET_RETURN_UART=1u, HEADSET_RETURN_MODULE=2u };
 static int live(void){return board_live(NULL)&&!atomic_load_explicit(&headset.failed,memory_order_acquire);}
 /* The session grants the radio: the board's radio owner owns the module and the headset attaches to it. */
 static int shared(void){return os_granted(OS_GRANT_RADIO);}
@@ -86,12 +83,9 @@ int os_headset_quiesce_pending(void)
 static enum os_quiesce_result headset_quiesce_step(struct os_quiesce *q)
 {
     if(os_quiesce_result(q)!=OS_QUIESCE_PENDING)return os_quiesce_result(q);
-    struct bluetooth_segment_status status;
-    uint32_t code=0;
-    if(bluetooth_headset_segment_stop(&app)!=1)code=0x100u;
-    else if(bluetooth_headset_segment_status(&app,&status)!=1)code=0x101u;
-    else if(status.disconnected)code=HEADSET_RETURN_UART|(shared()?0u:HEADSET_RETURN_MODULE);
-    if(code)(void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_SITE(BOARD),code,SUNSTONE_CRUMB_HERE());
+    /* The supervisor never runs protocol or device work on the wrong task. */
+    if(!headset.owner)(void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_SITE(BOARD),0x100u,SUNSTONE_CRUMB_HERE());
+    else xTaskNotifyGive(headset.owner);
     if(headset.client)xTaskNotifyGive(headset.client);
     return os_quiesce_result(q);
 }
@@ -110,7 +104,7 @@ static int headset_workload_valid(unsigned workload)
 int os_headset_profile_valid(const struct a733_board_session *s,const struct bluetooth_profile *p)
 {
     if(!s||!p||!headset_workload_valid(s->workload)||!s->sid_authority||s->sid_authority!=p->sid_authority||
-       p->version!=3||!os_headset_mode_valid(p->headset.mode)||!bluetooth_profile_valid(p,s->sid_evidence)||p->topology!=s->topology||
+       (p->version!=3&&p->version!=4)||!os_headset_mode_valid(p->headset.mode)||!bluetooth_profile_valid(p,s->sid_evidence)||p->topology!=s->topology||
        memcmp(p->radio.fabric,s->fabric,sizeof(s->fabric))||memcmp(p->radio.fabric_hz,s->fabric_hz,sizeof(s->fabric_hz)))
         return 0;
     uint64_t owners[]={s->pmic_owner,s->usb0_owner,s->typec_owner,s->usb2_owner,p->radio.owner,p->uart.owner};
@@ -122,7 +116,7 @@ int os_headset_identity(const struct a733_board_session *s,uint64_t deadline)
 {
     const volatile struct bluetooth_profile *source=(const void *)OS_HEADSET_PROFILE_ADDRESS;
     uint32_t bytes=source->bytes;
-    if(bytes!=sizeof(profile))return 0;
+    if(bytes!=832&&bytes!=sizeof(profile))return 0;
     for(uint32_t i=0;i<bytes;++i)((uint8_t *)&profile)[i]=((const volatile uint8_t *)source)[i];
     if(profile.bytes!=bytes||!os_headset_profile_valid(s,&profile)||
        a733_cpu_coherence_publish((uintptr_t)&profile,sizeof(profile),deadline)!=1||
@@ -142,7 +136,15 @@ void bluetooth_recognition_abort(void){fail();}
 /* One Bluetooth owner iteration, on the module owner's task. */
 static void serve(void)
 {
-    if(os_quiesce_result(&headset_quiesce)==OS_QUIESCE_FAULT)return;
+    if(os_quiesce_result(&headset_quiesce)!=OS_QUIESCE_PENDING)return;
+    if(os_quiesce_requested(&headset_quiesce)){
+        int stopped=bluetooth_application_stop(&app,os_cpu_return_deadline_us());
+        if(stopped<0)(void)os_quiesce_fault(&headset_quiesce,SUNSTONE_CRUMB_FAIL_SITE(BOARD),
+            0x110u|(app.stop_fault<<12),SUNSTONE_CRUMB_HERE());
+        else if(stopped)os_quiesce_complete(&headset_quiesce);
+        if(stopped>=0)BOARD_PROGRESS(OS_SERVICE_BLUETOOTH);
+        return;
+    }
     if(!board_live(NULL))(void)bluetooth_application_retain(&app);
     else if(atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire))
         (void)bluetooth_application_poll(&app);
@@ -150,6 +152,14 @@ static void serve(void)
     if(!atomic_load_explicit(&app.failed,memory_order_acquire))BOARD_PROGRESS(OS_SERVICE_BLUETOOTH);
 }
 void os_module_poll(void){serve();}
+int os_headset_module_release_ready(void)
+{
+    if(!granted())return 1;
+    if(os_quiesce_result(&headset_quiesce)==OS_QUIESCE_FAULT)return -1;
+    return bluetooth_application_module_release(&app);
+}
+void os_headset_module_down(int proved)
+{if(granted())bluetooth_application_module_down(&app,proved);}
 static void owner(void *unused){(void)unused;for(;;){serve();vTaskDelay(1);}}
 /* Client task only: one bounded step. 0 continue, -1 failed. */
 static int step(void)
@@ -245,7 +255,7 @@ int os_headset_pins(struct a733_pin_handoff *pins)
     static const struct a733_mapping_rule wb={A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
     if(!a733_mapping_check_pages(aarch64_device_translate,BLUETOOTH_PROFILE_ADDRESS,BLUETOOTH_PROFILE_ADDRESS,
            UINT64_C(0x43100000)-BLUETOOTH_PROFILE_ADDRESS,&wb))return 0;
-    pins->authorized[A733_PIN_G]=0x3ff;pins->authorized[A733_PIN_M]=0x1b;pins->latch[1]=p->pm_latch;
+    pins->authorized[A733_PIN_G]=0x3ff;pins->authorized[A733_PIN_M]=p->version==4?0x1f:0x1b;pins->latch[1]=p->pm_latch;
     return 1;
 }
 int os_headset_memory(void)

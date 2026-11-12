@@ -82,7 +82,8 @@ int bluetooth_headset_memory(void *memory)
 static struct bluetooth_headset_state voice_storage,*const voice_state=&voice_storage;
 #endif
 #define voice (*voice_state)
-static struct {struct bluetooth_application *app;} context;
+enum stop_phase {STOP_OFF,STOP_SCAN,STOP_VOICE,STOP_AUDIO,STOP_CONTROL,STOP_SDP,STOP_SERVER,STOP_CHANNELS,STOP_ACL,STOP_DONE,STOP_FAULT};
+static struct {struct bluetooth_application *app;uint64_t stop_deadline,close_deadline;unsigned stop_phase;} context;
 static int live(struct bluetooth_application *a)
 {return a&&a==voice.app&&a->iteration_live&&xTaskGetCurrentTaskHandle()==a->owner&&
     !atomic_load_explicit(&a->failed,memory_order_acquire)&&!(atomic_load_explicit(a->recovery_state,memory_order_acquire)&4);}
@@ -108,7 +109,8 @@ static int policy(void *ctx,uint64_t link,uint16_t psm,unsigned incoming)
 #endif
 }
 static int psm(void *ctx,uint64_t link,uint16_t value,unsigned incoming)
-{if(value==1&&incoming)return bt_sdp_server_admit(&voice.server,link,value,incoming);
+{if(context.stop_phase&&incoming)return 0;
+ if(value==1&&incoming)return bt_sdp_server_admit(&voice.server,link,value,incoming);
 #ifdef SUNSTONE_BLUETOOTH_A2DP
  return bt_avdtp_admit(&voice.sink,link,value,incoming);
 #else
@@ -154,9 +156,9 @@ static uint64_t stage_deadline(const struct bluetooth_application *a,uint64_t du
 {
     /* Recognition reserves the final20s of the existing60s supervised session.
      * This allocation is not a physical inference-time qualification. */
-    if((a->profile->version==3||a->profile->headset.mode==4)&&duration>40000000)duration=40000000;
+    if((a->profile->version>=3||a->profile->headset.mode==4)&&duration>40000000)duration=40000000;
     if(a->resident){
-        uint64_t firmware=(a->profile->version==3||a->profile->headset.mode==4)?30000000:40000000;
+        uint64_t firmware=(a->profile->version>=3||a->profile->headset.mode==4)?30000000:40000000;
         return cap(a->started,duration-firmware,a->deadline);
     }
     return a->started+duration;
@@ -247,6 +249,7 @@ static int a2dp_poll(struct bluetooth_application *a,uint64_t now)
 int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
 {
     if(!a||a->profile->version<2||!a->iteration_live||xTaskGetCurrentTaskHandle()!=a->owner)return -1;
+    if(context.stop_phase)return bluetooth_headset_stop(a,now,context.stop_deadline);
     if(!voice.app){voice.app=a;context.app=a;voice.last_owner=now;}
 #ifdef SUNSTONE_BLUETOOTH_A2DP
     if(atomic_load_explicit(&voice.terminal,memory_order_acquire))return live(a)?1:-1;
@@ -477,9 +480,9 @@ int bluetooth_headset_copy(struct bluetooth_application *a,unsigned kind,uint32_
  * recognizer consumer. A slot is written only while head-tail<2, and tail
  * advances only at the acknowledgement, so a borrowed slot never changes. */
 int bluetooth_headset_repeated(const struct bluetooth_application *a)
-{return a&&a->self==a&&a->profile&&a->profile->version==3&&(a->profile->headset.mode==2||a->profile->headset.mode==3||a->profile->headset.mode==5); }
+{return a&&a->self==a&&a->profile&&a->profile->version>=3&&(a->profile->headset.mode==2||a->profile->headset.mode==3||a->profile->headset.mode==5); }
 int bluetooth_headset_wideband(const struct bluetooth_application *a)
-{return a&&a->self==a&&a->profile&&((a->profile->version==2&&a->profile->headset.mode==4)||(a->profile->version==3&&(a->profile->headset.mode==3||a->profile->headset.mode==5)));}
+{return a&&a->self==a&&a->profile&&((a->profile->version==2&&a->profile->headset.mode==4)||(a->profile->version>=3&&(a->profile->headset.mode==3||a->profile->headset.mode==5)));}
 static int segment_live(struct bluetooth_application *a)
 {return bluetooth_headset_repeated(a)&&voice.segment_app==a&&
     !atomic_load_explicit(&a->failed,memory_order_acquire)&&
@@ -518,7 +521,8 @@ int bluetooth_headset_segment_status(struct bluetooth_application *a,struct blue
  * of ACCEPT, so a failed exchange means an activation started or ended. */
 int bluetooth_headset_segment_request(struct bluetooth_application *a,unsigned request,uint64_t published)
 {
-    if(!consumer(a)||(request!=BLUETOOTH_SEGMENT_ACCEPT&&request!=BLUETOOTH_SEGMENT_START))return -1;
+    if(!consumer(a)||atomic_load_explicit(&voice.segment_stop,memory_order_acquire)||
+       (request!=BLUETOOTH_SEGMENT_ACCEPT&&request!=BLUETOOTH_SEGMENT_START))return -1;
     unsigned word=atomic_load_explicit(&voice.segment_request,memory_order_acquire);
     if(word==request)return 1;
     if(word>request||atomic_load_explicit(&voice.segment_head,memory_order_acquire)!=published)return 0;
@@ -855,4 +859,189 @@ static int repeated_audio(struct bluetooth_application *a,struct bt_sco_link *l,
     /* DONE still reaches control_step, bt_sco_step and security_service in the
      * owner poll. Revocation remains observable through the output lifetime. */
     return voice.stage==DONE?1:0;
+}
+
+static int stop_fault(void)
+{context.stop_phase=STOP_FAULT;return fail();}
+int bluetooth_headset_stop_begin(struct bluetooth_application *a,uint64_t now,uint64_t deadline)
+{
+    if(!a||a->self!=a||!a->profile||a->profile->version<2||
+       (a->profile->headset.mode!=2&&a->profile->headset.mode!=3)||xTaskGetCurrentTaskHandle()!=a->owner)return -1;
+    if(context.stop_phase==STOP_FAULT)return -1;
+    if(context.app&&context.app!=a)return -1;
+    if(atomic_load_explicit(&a->failed,memory_order_acquire)||
+       (atomic_load_explicit(a->recovery_state,memory_order_acquire)&4)){
+        context.stop_phase=STOP_FAULT;return -1;}
+    if(context.stop_phase==STOP_DONE)return context.app==a?1:-1;
+    if(!voice.app){voice.app=a;context.app=a;voice.last_owner=now;}
+    if(context.app!=a||atomic_load_explicit(&a->failed,memory_order_acquire)||
+       (atomic_load_explicit(a->recovery_state,memory_order_acquire)&4)||now<voice.last_owner||deadline<=now)return stop_fault();
+    if(deadline>a->deadline)deadline=a->deadline;
+    if(!context.stop_deadline||deadline<context.stop_deadline)context.stop_deadline=deadline;
+    if(context.close_deadline>context.stop_deadline)context.close_deadline=context.stop_deadline;
+    if(!context.stop_phase)context.stop_phase=STOP_SCAN;
+    voice.stop=1;voice.ag.voice_admit=0;
+    atomic_store_explicit(&voice.segment_stop,1,memory_order_release);
+    if(voice.acl.state==BT_ACL_ACTIVE){
+        if(bt_acl_close_admission(&voice.acl,context.stop_deadline)!=1)return stop_fault();
+        if(voice.security.self&&bt_security_stop(&voice.security,context.stop_deadline)!=1)return stop_fault();
+        if(voice.audio.initialized&&bt_sco_close_admission(&voice.audio,context.stop_deadline)!=1)return stop_fault();
+    }else if(voice.acl.state!=BT_ACL_OFF)return stop_fault();
+    return 1;
+}
+/* Retire only terminal copied records. A held H4 packet or accepted transmit
+ * remains with its worker until the matched completion makes it releasable. */
+static int stop_audio_records(void)
+{
+    const struct bt_sco_packet *p=bt_sco_result(&voice.audio);
+    if(p&&bt_sco_release_result(&voice.audio,p->serial)!=1)return -1;
+    p=bt_sco_receive(&voice.audio);
+    if(p){if(bt_sco_release_receive(&voice.audio,p->serial)!=1)return -1;
+        if(voice.partial_serial==p->serial){voice.partial_serial=0;voice.partial_offset=0;}}
+    return 1;
+}
+static int stop_security(void)
+{return !voice.security.self||bt_security_service(&voice.security,context.close_deadline?context.close_deadline:context.stop_deadline)==1;}
+static int stop_control_step(uint64_t deadline)
+{
+    if(voice.ag.rfcomm&&voice.ag.phase!=BT_HFP_AG_CLOSED)return bt_hfp_ag_step(&voice.ag,64,128,deadline);
+    if(voice.rfcomm.l2cap&&voice.rfcomm.phase!=BT_RFCOMM_CLOSED)return bt_rfcomm_step(&voice.rfcomm,64,deadline);
+    return bt_l2cap_step(&voice.l2cap,64,deadline);
+}
+static int stop_audio_service(void)
+{
+    return !voice.audio.initialized||
+        (bt_sco_service(&voice.audio)==1&&stop_audio_records()==1);
+}
+/* Visit each existing consumer once in its normal order. SCO metadata service
+ * between consumers lets a classified request transmit during this owner pass,
+ * leaving the next pass for its response within the original command bound. */
+static int stop_consumers_step(uint64_t bound)
+{
+    if(voice.l2cap.state!=BT_L2CAP_ACTIVE)return bt_acl_step(&voice.acl,64,bound);
+    if(voice.discovery.l2cap&&voice.discovery.phase!=BT_SDP_CLOSED){
+        if(voice.discovery.phase!=BT_SDP_CLOSING&&bt_sdp_close(&voice.discovery,bound)!=1)return -1;
+        if(bt_sdp_step(&voice.discovery,64,bound)<0||!stop_audio_service())return -1;
+    }
+    if(bt_sdp_server_step(&voice.server,64,bound)<0||!stop_audio_service())return -1;
+    if(!voice.ag.rfcomm&&voice.rfcomm.l2cap&&voice.rfcomm.phase!=BT_RFCOMM_CLOSED&&
+       voice.rfcomm.phase!=BT_RFCOMM_CLOSING&&bt_rfcomm_close(&voice.rfcomm,bound)!=1)return -1;
+    if(stop_control_step(bound)<0||!stop_audio_service())return -1;
+    if(voice.audio.initialized&&
+       (bt_sco_step(&voice.audio,64,bound)!=1||stop_audio_records()!=1))return -1;
+    return 1;
+}
+static int stop_acl_step(uint64_t bound)
+{
+    /* L2CAP validates final data for a known disconnecting handle. The audio
+     * worker then transmits any late refusal queued by its metadata service. */
+    if(bt_l2cap_step(&voice.l2cap,64,bound)!=1||!stop_audio_service())return -1;
+    if(voice.audio.initialized&&
+       (bt_sco_step(&voice.audio,64,bound)!=1||stop_audio_records()!=1))return -1;
+    return 1;
+}
+static int stop_complete(void)
+{
+    context.stop_phase=STOP_DONE;voice.stage=DONE;voice.active=0;voice.operation_deadline=0;
+    atomic_store_explicit(&voice.segment_request,0,memory_order_release);
+    atomic_store_explicit(&voice.segment_disconnected,1,memory_order_release);wake();return 1;
+}
+int bluetooth_headset_stop(struct bluetooth_application *a,uint64_t now,uint64_t deadline)
+{
+    if(bluetooth_headset_stop_begin(a,now,deadline)!=1)return -1;
+    if(context.stop_phase==STOP_DONE)return 1;
+    if(!live(a))return stop_fault();
+    if(now>=context.stop_deadline||(context.close_deadline&&now>=context.close_deadline))return stop_fault();
+    voice.last_owner=now;
+    if(context.stop_phase==STOP_SCAN){
+        int r=voice.acl.state==BT_ACL_ACTIVE?stop_consumers_step(context.stop_deadline):bt_hci_step(&a->hci,64,context.stop_deadline);
+        if(r<0||!stop_security())return stop_fault();
+        r=bt_hci_scan_disabled(&a->hci);if(r<0)return stop_fault();if(!r)return 0;
+        if(voice.acl.state==BT_ACL_OFF)return stop_complete();
+        context.close_deadline=cap(now,2000000,context.stop_deadline);
+        if(voice.operation_deadline&&context.close_deadline>voice.operation_deadline)context.close_deadline=voice.operation_deadline;
+        if(bt_acl_close_admission(&voice.acl,context.close_deadline)!=1||
+           (voice.security.self&&bt_security_stop(&voice.security,context.close_deadline)!=1)||
+           (voice.audio.initialized&&bt_sco_close_admission(&voice.audio,context.close_deadline)!=1))return stop_fault();
+        context.stop_phase=STOP_VOICE;return 0;
+    }
+    uint64_t bound=context.close_deadline;
+    /* Every accepted channel keeps its consumer until upper closure. One
+     * channel's response can arrive behind another channel's owned input. */
+    if(context.stop_phase<STOP_ACL&&
+       (stop_consumers_step(bound)<0||!stop_security()))return stop_fault();
+    if(context.stop_phase==STOP_VOICE){
+        if(voice.ag.rfcomm&&voice.ag.phase==BT_HFP_AG_READY){
+            if(voice.ag.recognition){if(bt_hfp_ag_voice(&voice.ag,0)<0)return stop_fault();return 0;}
+            if(voice.ag.response_length||voice.ag.transmit)return 0;
+        }
+        if(voice.audio.initialized&&bt_sco_stop(&voice.audio,bound)!=1)return stop_fault();
+        context.stop_phase=STOP_AUDIO;return 0;
+    }
+    if(context.stop_phase==STOP_AUDIO){
+        if(voice.audio.initialized){
+            int r=bt_sco_quiescent(&voice.audio);if(r<0)return stop_fault();if(!r)return 0;
+        }
+        context.stop_phase=STOP_CONTROL;return 0;
+    }
+    if(context.stop_phase==STOP_CONTROL){
+        if(voice.rfcomm.error||voice.ag.error)return stop_fault();
+        if(voice.ag.rfcomm&&voice.ag.phase!=BT_HFP_AG_CLOSED&&voice.ag.phase!=BT_HFP_AG_CLOSING){
+            if(voice.ag.phase==BT_HFP_AG_FAULT||bt_hfp_ag_close(&voice.ag,bound)!=1)return stop_fault();return 0;}
+        if(!voice.ag.rfcomm&&voice.rfcomm.l2cap&&voice.rfcomm.phase!=BT_RFCOMM_CLOSED&&voice.rfcomm.phase!=BT_RFCOMM_CLOSING){
+            if(voice.rfcomm.phase==BT_RFCOMM_FAULT||bt_rfcomm_close(&voice.rfcomm,bound)!=1)return stop_fault();return 0;}
+        if(voice.rfcomm.l2cap){
+            if(voice.rfcomm.phase!=BT_RFCOMM_CLOSED||(voice.ag.rfcomm&&voice.ag.phase!=BT_HFP_AG_CLOSED))return 0;
+            const struct bt_rfcomm_buffer *p=bt_rfcomm_result(&voice.rfcomm);
+            if(p){if(bt_rfcomm_release_result(&voice.rfcomm,p->serial)!=1)return stop_fault();return 0;}
+            p=bt_rfcomm_receive(&voice.rfcomm);
+            if(p){if(bt_rfcomm_release_receive(&voice.rfcomm,p->serial)!=1)return stop_fault();return 0;}
+            if(voice.ag.transmit||voice.ag.receive)return stop_fault();
+        }
+        context.stop_phase=STOP_SDP;return 0;
+    }
+    if(context.stop_phase==STOP_SDP){
+        if(voice.discovery.l2cap&&voice.discovery.phase!=BT_SDP_CLOSED){
+            if(voice.discovery.phase!=BT_SDP_CLOSING){if(bt_sdp_close(&voice.discovery,bound)!=1)return stop_fault();return 0;}
+            return 0;
+        }
+        context.stop_phase=STOP_SERVER;return 0;
+    }
+    if(context.stop_phase==STOP_SERVER){
+        for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i){struct bt_sdp_server_session *s=&voice.server.sessions[i];
+            if(!s->channel)continue;if(s->error)return stop_fault();
+            const struct bt_l2cap_channel *c=NULL;
+            for(unsigned j=0;j<BT_L2CAP_CHANNELS;++j)if(voice.l2cap.channels[j].generation==s->channel)c=&voice.l2cap.channels[j];
+            if(!c||c->state==BT_L2CAP_QUARANTINED)return stop_fault();
+            if(c->state==BT_L2CAP_CLOSED){int r=bt_sdp_server_release_channel(&voice.server,s->channel);if(r<0)return stop_fault();return 0;}
+            if(!s->closing&&c->state==BT_L2CAP_OPEN&&bt_sdp_server_close(&voice.server,s->channel,bound)!=1)return stop_fault();
+            return 0;
+        }
+        context.stop_phase=STOP_CHANNELS;return 0;
+    }
+    if(context.stop_phase==STOP_CHANNELS){
+        for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i){const struct bt_l2cap_channel *c=&voice.l2cap.channels[i];
+            if(c->state==BT_L2CAP_UNUSED)continue;
+            if(c->state==BT_L2CAP_QUARANTINED||(c->state==BT_L2CAP_CLOSED&&c->completion!=BT_L2CAP_CONFIRMED))return stop_fault();
+            if(c->state==BT_L2CAP_OPEN){if(bt_l2cap_close(&voice.l2cap,c->generation,bound)<0)return stop_fault();return 0;}
+            if(c->state!=BT_L2CAP_CLOSED)return 0;
+        }
+        for(unsigned i=0;i<BT_L2CAP_PDUS;++i){
+            if(voice.l2cap.tx[i].state!=BT_L2CAP_FREE||voice.l2cap.rx[i].state!=BT_L2CAP_FREE)return 0;}
+        for(unsigned i=0;i<BT_ACL_TX_SLOTS;++i)if(voice.l2cap.fragments[i].acl_serial)return 0;
+        if(bt_acl_receive(&voice.acl))return 0;
+        if(voice.audio.initialized){int r=bt_sco_quiescent(&voice.audio);if(r<0)return stop_fault();if(!r)return 0;}
+        if(bt_acl_stop(&voice.acl,bound)!=1)return stop_fault();context.stop_phase=STOP_ACL;return 0;
+    }
+    if(context.stop_phase==STOP_ACL){
+        if(stop_acl_step(bound)!=1)return stop_fault();
+        int audio=1;
+        if(voice.audio.initialized){
+            audio=bt_sco_quiescent(&voice.audio);if(audio<0)return stop_fault();}
+        if(!stop_security())return stop_fault();if(!audio)return 0;
+        int r=bt_acl_quiescent(&voice.acl);if(r<0)return stop_fault();if(!r)return 0;
+        if(voice.security.self){r=bt_security_quiescent(&voice.security);if(r<0)return stop_fault();if(!r)return 0;}
+        return stop_complete();
+    }
+    return stop_fault();
 }
