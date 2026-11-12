@@ -636,7 +636,27 @@ def check_history(source, output):
     assert interrupted['wake_chains'][0]['maximum']['snapshot_incomplete']
     assert interrupted['wake_chains'][0]['maximum']['class'] == 'unmatched'
     assert interrupted['cpu0_wake_window']['incomplete']
+    # Preserve the old unconditional-reset behavior behind the new Boolean
+    # signature: this must fail when an IRQ arrives inside open owner work.
+    text = recorder.read_text()
+    guarded = 'if (!enabled(core) || state[core].irq_active) return false;'
+    assert text.count(guarded) == 1
+    unsafe = output / 'history-reentrant-reset.c'
+    unsafe.write_text(text.replace(guarded, 'if (!enabled(core)) return false;'))
+    negative = output / 'history-reentrant-reset'
+    negative_command = [str(unsafe) if item == str(recorder) else str(negative) if item == str(binary) else item
+                        for item in command]
+    negative_command.append('-I' + str(source / 'kernel/scheduler'))
+    compiled = subprocess.run(negative_command, capture_output=True, text=True)
+    (output / 'history-reentrant-reset-compile.log').write_text(compiled.stdout + compiled.stderr)
+    compiled.check_returncode()
+    ran = subprocess.run([str(negative), str(output / 'unsafe-report.bin'), str(output / 'unsafe-interrupted.bin')],
+                         capture_output=True, text=True)
+    (output / 'history-reentrant-reset.log').write_text(ran.stdout + ran.stderr)
+    assert ran.returncode != 0 and 'nested owner trace must preserve its active parent' in ran.stderr
     return ['recorder retains a parked FIFO visit without locked work',
+            'recorder rejects nested owner tracing and preserves its parent with guarded dispatch history',
+            'recorder rejects the old unconditional nested reset',
             'recorder unmasked snapshot excludes an injected future event',
             'recorder unmasked snapshot exposes an injected overwrite without retry',
             'recorder CPU0 dispatch IDs and voluntary selection origin', 'recorder history: future IRQ', 'recorder history: trailing IRQ',

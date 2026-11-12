@@ -184,9 +184,9 @@ static void dispatch_owner(unsigned field, uint64_t value, uint64_t irq_sequence
     atomic_store_explicit(&event->word[field], value, memory_order_relaxed);
     atomic_fetch_add_explicit(&event->generation, 1, memory_order_release);
 }
-void ss_sched_trace_irq_begin(unsigned core, uint64_t start)
+bool ss_sched_trace_irq_begin(unsigned core, uint64_t start)
 {
-    if (!enabled(core)) return;
+    if (!enabled(core) || state[core].irq_active) return false;
     state[core].irq = (struct ss_sched_trace_irq){.stamp = {start}};
     state[core].guard_end = 0;
     state[core].irq_active = 1;
@@ -195,6 +195,7 @@ void ss_sched_trace_irq_begin(unsigned core, uint64_t start)
             atomic_load_explicit(&cpu0_dispatch.completed, memory_order_acquire), memory_order_relaxed);
         dispatch_owner(5, start, 0);
     }
+    return true;
 }
 void ss_sched_trace_irq_guard(unsigned core)
 {

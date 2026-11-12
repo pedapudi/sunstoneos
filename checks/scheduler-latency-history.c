@@ -16,7 +16,7 @@ static void irq_result(unsigned core, uint64_t start, unsigned result)
         dispatch = ss_sched_trace_dispatch_begin(0, 30, 0x41001000, 0x3c0);
         clock_value = start - 1; ss_sched_trace_dispatch_end(0, dispatch);
     }
-    ss_sched_trace_irq_begin(core, start);
+    assert(ss_sched_trace_irq_begin(core, start));
     clock_value = start + 1; ss_sched_trace_irq_guard(core);
     clock_value = start + 2; ss_sched_trace_irq_stamp(core, 1);
     if (!core && start == 110) {
@@ -25,6 +25,18 @@ static void irq_result(unsigned core, uint64_t start, unsigned result)
         clock_value = start + 3;
         uint64_t inner = ss_sched_trace_dispatch_begin(0, 27, 0x41004000, 0x3c5);
         clock_value = start + 4; ss_sched_trace_dispatch_end(0, inner);
+        clock_value = start + 5;
+        bool nested_trace = ss_sched_trace_irq_begin(0, clock_value);
+        assert(!nested_trace && "nested owner trace must preserve its active parent");
+        if (nested_trace) {
+            ss_sched_trace_irq_guard(0);
+            ss_sched_trace_irq_stamp(0, 1);
+            ss_sched_trace_irq_stamp(0, 2);
+            ss_sched_trace_irq_stamp(0, 3);
+            ss_sched_trace_irq_end(0, 0);
+        }
+        ss_sched_trace_service(0, 0, start + 2, start + 8);
+        ss_sched_trace_service_pass(0);
     }
     clock_value = start + 8; ss_sched_trace_irq_stamp(core, 2);
     clock_value = start + 10; ss_sched_trace_irq_stamp(core, 3);
@@ -71,7 +83,7 @@ int main(int argc, char **argv)
     clock_value = 310;
     uint64_t sgi = ss_sched_trace_dispatch_begin(0, 0, 0x41003000, 0x3c0);
     clock_value = 319; ss_sched_trace_dispatch_end(0, sgi);
-    ss_sched_trace_irq_begin(0, 320);
+    assert(ss_sched_trace_irq_begin(0, 320));
     clock_value = 321; ss_sched_trace_irq_guard(0);
     clock_value = 322; ss_sched_trace_irq_stamp(0, 1);
     clock_value = 328; ss_sched_trace_irq_stamp(0, 2);
@@ -95,7 +107,7 @@ int main(int argc, char **argv)
     ss_sched_trace_wake_sample(3, 3000, 3080, 3);
 
     for (unsigned i = 0; i <= SS_SCHED_TRACE_HISTORY; ++i) irq(4, 4000 + i * 20);
-    ss_sched_trace_irq_begin(4, 4410);
+    assert(ss_sched_trace_irq_begin(4, 4410));
     clock_value = 4411; ss_sched_trace_irq_guard(4); ss_sched_trace_irq_fast(4);
     select_task(4, 4430, 3);
     ss_sched_trace_wake_sample(4, 4400, 4450, 3);
@@ -142,6 +154,11 @@ int main(int argc, char **argv)
     assert(report.version == 5 && report.history_capacity == SS_SCHED_TRACE_HISTORY);
     assert(first.wake[0].maximum.flags == 7 && first.wake[0].maximum.irq.sequence == 1);
     assert(first.wake[0].maximum.irq.result == 0 && first.wake[0].summary[1][0].count == 1);
+    assert(first.core[0].irq_count == 4);
+    assert(first.wake[0].maximum.irq.stamp[0] == 110 && first.wake[0].maximum.irq.stamp[1] == 111);
+    assert(first.wake[0].maximum.irq.stamp[2] == 112 && first.wake[0].maximum.irq.stamp[3] == 118);
+    assert(first.wake[0].maximum.irq.stamp[4] == 120 && first.wake[0].maximum.irq.passes == 1);
+    assert(first.wake[0].maximum.irq.service[0] == 6);
     assert(first.history[0].latest_sequence == 1 && first.history[0].future_irqs == 3);
     assert(report.wake[0].maximum.flags == 26 && !report.wake[0].maximum.selection.irq_sequence);
     assert(report.cpu0_window.irq_count == 8 && report.cpu0_window.switch_count == 4 && !report.cpu0_window.flags);
@@ -192,6 +209,9 @@ int main(int argc, char **argv)
     assert(fwrite(padding, 1, bytes, file) == bytes);
     assert(fclose(file) == 0);
     for (unsigned core = 0; core < SS_SCHED_TRACE_CORES; ++core) ss_sched_trace_freeze(core);
+    for (unsigned core = 0; core < SS_SCHED_TRACE_CORES; ++core)
+        assert(!ss_sched_trace_irq_begin(core, 30000));
+    assert(!ss_sched_trace_irq_begin(SS_SCHED_TRACE_CORES, 30000));
     puts("scheduler wake history: future events, trailing IRQs, exact sequence loss, slot identity and rotation passed");
     return 0;
 }

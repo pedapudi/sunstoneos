@@ -3,6 +3,7 @@
 #define SS_SCHED_LATENCY_TRACE_H
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
 #ifndef SUNSTONE_LATENCY
@@ -200,7 +201,9 @@ void ss_sched_trace_direct_suspend_mark(unsigned);
 void ss_sched_trace_drain_begin(unsigned);
 void ss_sched_trace_drain_end(unsigned);
 void ss_sched_trace_record(unsigned, const struct ss_sched_trace_record *);
-void ss_sched_trace_irq_begin(unsigned, uint64_t);
+/* Only an accepted entry may emit guard, stage, fast or end markers. Nested
+ * owner entries leave the active parent intact; dispatch history is separate. */
+bool ss_sched_trace_irq_begin(unsigned, uint64_t);
 void ss_sched_trace_irq_guard(unsigned);
 void ss_sched_trace_irq_fast(unsigned);
 void ss_sched_trace_irq_stamp(unsigned, unsigned);
