@@ -18,7 +18,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['apps/latency/host.py', 'kernel/scheduler/latency_trace.h',
                 'kernel/scheduler/latency_trace.c', 'checks/scheduler-latency-history.c',
-                'checks/sunstone-image-link.py', 'include/sunstone_latency.h']
+                'tools/sunstone-image-link.py', 'include/sunstone_latency.h']
 GATE_RUNS = [['--output', '{output}']]
 FREQUENCY = 24_000_000
 MAGIC = 0x5353534348545231
@@ -134,7 +134,7 @@ def load_decoder(source):
 
 def check_symbols(source):
     """Execute the boundary checker with constructed nm and ELF inventories."""
-    path = source / 'checks/sunstone-image-link.py'
+    path = source / 'tools/sunstone-image-link.py'
     spec = importlib.util.spec_from_file_location('scheduler_symbol_boundary', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
