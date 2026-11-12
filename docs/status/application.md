@@ -71,7 +71,7 @@ unqualified.
 Board results are records in `docs/evidence/application.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-application-20261101.md).
 
 <!-- evidence-table:begin -->
-8 records in `docs/evidence/application.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+9 records in `docs/evidence/application.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -83,4 +83,5 @@ Board results are records in `docs/evidence/application.jsonl`; add one with `to
 | `1793943016757588735-a94fc5b2` | 2026-11-06 | 3-1 | `6d710e0fbc62` | returned | passed | run_total 35.077 s, launch 17.33 s, npu_trigger_to_irq_p50 2906.6 us, npu_trigger_to_irq_max 2915.5 us, jobs 4, mismatches 0 |
 | `1793944293922210812-d6f96434` | 2026-11-06 | 3-1 | `d71fd555fb48` | host-error | passed | run_total 32.203 s, run_total 32.202 s, launch 14.694 s, npu_trigger_to_irq_p50 2906.3 us, npu_trigger_to_irq_max 2914.2 us, jobs 4, mismatches 0 |
 | `1793948483319321125-4d7fb7af` | 2026-11-06 | 3-1 | `e44044de5574` | returned | passed | run_total 32.4 s, run_total 32.4 s, launch 14.78 s, npu_trigger_to_irq_p50 2906.5 us, npu_trigger_to_irq_max 2913.5 us, jobs 4, mismatches 0 |
+| `1794468954726206112-8d88da24` | 2026-11-12 | 3-3 | `28155e9b4b9d` | watchdog-reset | failed | run_total 24.846 s, launch_stage 9.62776 s, rtc_stage 273, rtc_stop_value 24575, rtc_core 0, board_failure_core 1, wdt_mode_before 65, wdt_mode_after 0 |
 <!-- evidence-table:end -->
