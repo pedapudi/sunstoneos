@@ -166,6 +166,7 @@ A device owner is the OS code that drives a device for a session: the NPU runtim
 
 Memory without an EL0 attribute is reachable at EL1 only: the kernel's tables map the ledger's DRAM at EL1, and an application's tables map no kernel extent that carries no access. An application's tables map whole 2 MiB blocks and are built once at admission (`os_large_prepare`), so an EL0-visible request is rounded to 2 MiB on a 2 MiB boundary and must be made before the tables are built; the helper refuses it afterwards. The OS image installs no policy conversion (`convert_chunk`), so the ledger has no non-cacheable chunk and refuses `OS_MEMORY_DEVICE`.
 
+The application's own task runs some OS code at EL0 (an SDK call that waits, for example). A word that such code reads must stay where EL0 can read it. The NPU owner keeps its four such words in the image and the rest in an EL1-only extent ([one OS image](one-os-image.md), NPU memory).
 
 ## Mappings
 

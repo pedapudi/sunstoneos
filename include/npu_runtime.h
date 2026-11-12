@@ -187,7 +187,7 @@ struct npu_runtime {
     uint64_t doorbell_ticks;
 #endif
     struct npu_runtime_counters counters;
-    atomic_uint failed;
+    /* The runtime's failure is service.signals->runtime_failed (struct npu_service_signals in npu_service.h). */
     unsigned prepared, bound, resident, tensor_links;
     enum npu_declaration_result refusal; /* why prepare refused: the resource that did not fit */
 };

@@ -13,7 +13,7 @@ r=Path(__file__).resolve().parents[2]
 def module(n,path):
  s=importlib.util.spec_from_file_location(n,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 layout=module('startup_layout',r/'checks/storage-read-native.py');host=module('startup_host',r/'apps/npu-interrupt/host.py');h=host.finite
-im=layout.Image(a.native/'image.elf',layout_names=('npu_convolution','npu_service','npu_service_reply','a733_observe_identity','a733_smp_contract','a733_npu_application_result','a733_npu_controller'))
+im=layout.Image(a.native/'image.elf',layout_names=('npu_convolution','npu_service','npu_service_signals','npu_service_reply','a733_observe_identity','a733_smp_contract','a733_npu_application_result','a733_npu_controller'))
 _,_,_,_,g=h.image_profile((a.native/'image.elf').read_bytes(),json.loads((a.native/'manifest.json').read_text()))
 assert g['startup_only'];infer=bool(g.get('single_inference'));cl=im.layouts['npu_convolution'];sl=im.layouts['npu_service'];reply=im.layouts['npu_service_reply'];ar=im.layouts['a733_npu_application_result']
 irq_offset=None
@@ -86,7 +86,7 @@ for variant in selected:
     if variant=='output-before-close':put(c+cl['output_ready'],1,4)
    if op==5 and not failed:
     state['closed']=True;put(c+cl['ready'],0,4);put(c+cl['closed'],int(variant!='unclosed'),4)
-    put(service+sl['controller']+im.layouts['a733_npu_controller']['state'],9,4);put(service+sl['irq_masked'],1,4);put(service+sl['irq_stopped'],int(variant!='missing-IRQ-stop'),4)
+    put(service+sl['controller']+im.layouts['a733_npu_controller']['state'],9,4);put(service+sl['irq_masked'],1,4);put(service+sl['signals'],service+sl['own_signals']);put(service+sl['own_signals']+im.layouts['npu_service_signals']['irq_stopped'],int(variant!='missing-IRQ-stop'),4)
    ret(1);return
   if name=='npu_convolution_output':
    assert infer and args[0]==c and args[2]==len(reference) and get(c+cl['output_ready'],4),args

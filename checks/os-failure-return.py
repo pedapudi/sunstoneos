@@ -258,11 +258,11 @@ def never_ran_npu(s):
     """An NPU image whose service never ran: undo the terminal fixture's finished, active and stopped service state."""
     m = s.model
     npu = s.local('npu')
-    layout = Layouts(s.elf, {'os_npu_application', 'npu_runtime', 'npu_service'})
+    layout = Layouts(s.elf, {'os_npu_application', 'npu_service_signals'})
     nf = layout.layouts['os_npu_application']
-    service = npu + nf['runtime'] + layout.layouts['npu_runtime']['service']
-    for address in (npu + nf['stopped'], npu + nf['active'], service + layout.layouts['npu_service']['irq_stopped'],
-                    service + layout.layouts['npu_service']['runtime_parked']):
+    signals = npu + nf['signals']
+    for address in (npu + nf['stopped'], npu + nf['active'], signals + layout.layouts['npu_service_signals']['irq_stopped'],
+                    signals + layout.layouts['npu_service_signals']['runtime_parked']):
         m.put32(address, 0)
     report = s.local('os_npu_published_report')
     m.uc.mem_write(report, bytes(104))
