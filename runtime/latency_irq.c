@@ -1,10 +1,18 @@
 #include "sunstone_latency.h"
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+#include "latency_trace.h"
+#endif
 
 extern void __real_vApplicationIRQHandler(uint64_t interrupt);
 void __wrap_vApplicationIRQHandler(uint64_t interrupt)
 {
 #ifdef SUNSTONE_LATENCY_PMU
     ss_latency_pmu_enable(); /* once per core, at EL1, before the span it first measures */
+#endif
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    uint64_t trace_core;
+    __asm__ volatile("mrs %0, tpidr_el1" : "=r"(trace_core));
+    if (interrupt == 30 && !trace_core) ss_sched_trace_tick_begin();
 #endif
     if (interrupt == 30) {
         uint64_t core, due;
@@ -20,4 +28,7 @@ void __wrap_vApplicationIRQHandler(uint64_t interrupt)
         }
     }
     __real_vApplicationIRQHandler(interrupt);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    if (interrupt == 30 && !trace_core) ss_sched_trace_tick_end();
+#endif
 }

@@ -11,6 +11,7 @@
 #include "freertos_control.h"
 #include "notification.h"
 #include "deadline.h"
+#include "latency_trace.h"
 
 /* The private fork rejects optional configurations whose API branches have
  * not been converted. No enabled public API may fall through to legacy lists.
@@ -32,6 +33,34 @@ _Static_assert(configMAX_PRIORITIES == SS_OWNER_PRIORITIES,
 
 #ifndef SS_PULL_MOVES_PER_PASS
 #define SS_PULL_MOVES_PER_PASS 0u /* transfers one idle-pull pass may start; 0 is unlimited */
+#endif
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+static struct { _Alignas(SS_CACHE_LINE) struct ss_sched_trace_lock value; } ssSchedTraceLocks[SS_OBJECT_SLOTS + 1];
+#ifndef SUNSTONE_LOCK_TAS_CONTROL
+#define SUNSTONE_LOCK_TAS_CONTROL 0
+#endif
+extern uint32_t ulSunstoneTraceTaskTickets(void);
+#define SS_LTRACE_BEGIN(id, site, serving, next, tickets) \
+    const uint64_t ss_trace_generation = atomic_load_explicit(&ssSchedTraceLocks[id].value.generation, memory_order_acquire); \
+    struct ss_sched_trace_wait ss_trace_wait = ss_sched_trace_lock_begin(&ssSchedTraceLocks[id].value, id, site, serving, next, tickets); \
+    if (ss_trace_wait.holder_generation != ss_trace_generation) ss_trace_wait.flags &= ~SS_SCHED_WAIT_TICKETS
+#define SS_LTRACE_GLOBAL_BEGIN(site) \
+    const uint64_t ss_trace_generation = atomic_load_explicit(&ssSchedTraceLocks[0].value.generation, memory_order_acquire); \
+    const uint32_t ss_trace_word = ulSunstoneTraceTaskTickets(); \
+    struct ss_sched_trace_wait ss_trace_wait = ss_sched_trace_lock_begin(&ssSchedTraceLocks[0].value, 0, site, \
+        ss_trace_word & UINT32_C(0xffff), ss_trace_word >> 16, !SUNSTONE_LOCK_TAS_CONTROL); \
+    if (ss_trace_wait.holder_generation != ss_trace_generation) ss_trace_wait.flags &= ~SS_SCHED_WAIT_TICKETS
+#define SS_LTRACE_ACQUIRED(core, id) ss_sched_trace_lock_acquired(&ssSchedTraceLocks[id].value, core, &ss_trace_wait)
+#define SS_LTRACE_RELEASE(id) ss_sched_trace_lock_release(&ssSchedTraceLocks[id].value)
+#define SS_SERVICE_TRACE_BEGIN const uint64_t ss_service_begin = ss_sched_trace_now()
+#define SS_SERVICE_TRACE_END(core, part) ss_sched_trace_service(core, part, ss_service_begin, ss_sched_trace_now())
+#else
+#define SS_LTRACE_BEGIN(id, site, serving, next, tickets) ((void)0)
+#define SS_LTRACE_GLOBAL_BEGIN(site) ((void)0)
+#define SS_LTRACE_ACQUIRED(core, id) ((void)0)
+#define SS_LTRACE_RELEASE(id) ((void)0)
+#define SS_SERVICE_TRACE_BEGIN ((void)0)
+#define SS_SERVICE_TRACE_END(core, part) ((void)0)
 #endif
 enum ssKernelExecution { SS_K_READY, SS_K_RUNNING, SS_K_BLOCKED, SS_K_SUSPENDED, SS_K_DEAD, SS_K_TRANSFERRING };
 enum ssKernelWait { SS_K_NONE, SS_K_DELAY, SS_K_EVENT, SS_K_NOTIFICATION };
@@ -665,7 +694,9 @@ static __attribute__((noinline)) void ssKernelObjectEnterAt(uintptr_t object, ui
     if (!cpu->object_depth) {
         ++cpu->preempt;
         SS_TR_START(c, 0, 0);
+        SS_LTRACE_GLOBAL_BEGIN(site);
         portGET_TASK_LOCK((BaseType_t)c);
+        SS_LTRACE_ACQUIRED(c, 0);
         SS_TR_LOCKED(c, 0, 0, object, site);
     }
     if (!cpu->critical_depth) {
@@ -689,6 +720,7 @@ void ssKernelObjectExit(void)
     portRELEASE_ISR_LOCK((BaseType_t)c);
     if (!cpu->object_depth) {
         SS_TR_RELEASED(c, 0);
+        SS_LTRACE_RELEASE(0);
         portRELEASE_TASK_LOCK((BaseType_t)c);
         ssKernelFlush();
         --cpu->preempt;
@@ -737,7 +769,9 @@ static __attribute__((noinline)) void ssKernelObjectSuspendAt(uintptr_t object, 
     if (!cpu->object_depth) {
         ++cpu->preempt;
         SS_TR_START(c, 0, 0);
+        SS_LTRACE_GLOBAL_BEGIN(site);
         portGET_TASK_LOCK((BaseType_t)c);
+        SS_LTRACE_ACQUIRED(c, 0);
         SS_TR_LOCKED(c, 0, 0, object, site);
     }
     ++cpu->object_depth;
@@ -754,6 +788,7 @@ BaseType_t ssKernelObjectResume(void)
     --cpu->suspend_depth;
     if (!--cpu->object_depth) {
         SS_TR_RELEASED(c, 0);
+        SS_LTRACE_RELEASE(0);
         portRELEASE_TASK_LOCK((BaseType_t)c);
         ssKernelFlush();
         configASSERT(cpu->preempt);
@@ -838,7 +873,11 @@ static __attribute__((noinline)) void ssKernelObjectEnterOnAt(const void *object
         cpu->t_slot = slot;
         SS_TR_START(c, 0, 2 + 2 * slot);
         SS_LAT_START(1);
+        SS_LTRACE_BEGIN(slot + 1, site,
+            atomic_load_explicit(&ssObjectLocks[slot].task.serving, memory_order_relaxed),
+            atomic_load_explicit(&ssObjectLocks[slot].task.next, memory_order_relaxed), 1);
         ssTicketAcquire(&ssObjectLocks[slot].task);
+        SS_LTRACE_ACQUIRED(c, slot + 1);
         SS_TR_LOCKED(c, 0, 2 + 2 * slot, (uintptr_t)object, site);
         SS_LAT_ACQUIRED(c, 1, site);
     } else configASSERT(cpu->t_slot == slot);
@@ -859,6 +898,7 @@ void ssKernelObjectLeave(void)
     if (!cpu->o_depth) {
         SS_TR_RELEASED(c, 0);
         SS_LAT_RELEASING(c, 1, 0);
+        SS_LTRACE_RELEASE(cpu->t_slot + 1);
         ssTicketRelease(&ssObjectLocks[cpu->t_slot].task);
         ssKernelFlush();
         --cpu->preempt;
@@ -913,7 +953,11 @@ static __attribute__((noinline)) void ssKernelObjectSuspendOnAt(const void *obje
         cpu->t_slot = slot;
         SS_TR_START(c, 0, 2 + 2 * slot);
         SS_LAT_START(1);
+        SS_LTRACE_BEGIN(slot + 1, site,
+            atomic_load_explicit(&ssObjectLocks[slot].task.serving, memory_order_relaxed),
+            atomic_load_explicit(&ssObjectLocks[slot].task.next, memory_order_relaxed), 1);
         ssTicketAcquire(&ssObjectLocks[slot].task);
+        SS_LTRACE_ACQUIRED(c, slot + 1);
         SS_TR_LOCKED(c, 0, 2 + 2 * slot, (uintptr_t)object, site);
         SS_LAT_ACQUIRED(c, 1, site);
     } else configASSERT(cpu->t_slot == slot);
@@ -932,6 +976,7 @@ BaseType_t ssKernelObjectResumeOn(void)
     if (!--cpu->o_depth) {
         SS_TR_RELEASED(c, 0);
         SS_LAT_RELEASING(c, 1, 0);
+        SS_LTRACE_RELEASE(cpu->t_slot + 1);
         ssTicketRelease(&ssObjectLocks[cpu->t_slot].task);
         ssKernelFlush();
         configASSERT(cpu->preempt);
@@ -1108,32 +1153,45 @@ static void ssKernelExpired(void *context, const struct ss_deadline_result *resu
  * batch or one that arrived after the drain, or object repair. */
 static bool ssKernelServiceOnce(unsigned c, struct ssKernelCPU *cpu)
 {
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_service_pass(c);
+#endif
     {
         SS_PH_BEGIN;
+        SS_SERVICE_TRACE_BEGIN;
         ssKernelControlDrain();
+        SS_SERVICE_TRACE_END(c, 0);
         SS_PH_END(3);
     }
     {
         SS_PH_BEGIN;
+        SS_SERVICE_TRACE_BEGIN;
         ss_owner_drain(&cpu->run, ssKernelInspect, NULL);
+        SS_SERVICE_TRACE_END(c, 1);
         SS_PH_END(4);
     }
     if (!cpu->selecting) {
         SS_PH_BEGIN;
+        SS_SERVICE_TRACE_BEGIN;
         ssKernelPullServe(c);
+        SS_SERVICE_TRACE_END(c, 2);
         SS_PH_END(5);
     }
     /* Event timeout completion edits object metadata. Exception entry does
      * that maintenance before selection; newly due work gets another entry. */
     if (!cpu->selecting) {
         SS_PH_BEGIN;
+        SS_SERVICE_TRACE_BEGIN;
         ss_deadline_expire(&cpu->deadlines, ssKernelNow(), SS_DEADLINE_BATCH,
                            ssKernelExpired, NULL);
+        SS_SERVICE_TRACE_END(c, 3);
         SS_PH_END(6);
     }
     {
         SS_PH_BEGIN;
+        SS_SERVICE_TRACE_BEGIN;
         ssKernelSliceRefresh(c, false);
+        SS_SERVICE_TRACE_END(c, 4);
         SS_PH_END(7);
     }
     if (atomic_load_explicit(&cpu->slice_deadline, memory_order_relaxed) <= ssKernelNow()) {
@@ -1372,8 +1430,17 @@ BaseType_t ssKernelOwnerIRQExit(void)
      * critical section does: raise ICC_PMR_EL1 to the API mask and clear PSTATE.I, so that only interrupts above the
      * API mask (the control class) can run in it. Their exit leaves the work alone (the PMR test above), and the
      * nesting count is zero here, as for any outermost exit. Set PSTATE.I again for the exit path that follows. */
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_irq_begin(ssKernelCPUId(), ss_sched_trace_now());
+#endif
     const UBaseType_t previous = portSET_INTERRUPT_MASK_FROM_ISR();
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_irq_stamp(ssKernelCPUId(), 1);
+#endif
     const BaseType_t result = ssKernelOwnerIRQExitWork();
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_irq_stamp(ssKernelCPUId(), 2);
+#endif
     /* Set PSTATE.I before restoring the mask: portCLEAR_INTERRUPT_MASK_FROM_ISR clears it after the write, and an
      * ordinary interrupt taken then would be a second outermost exit inside this one. */
     __asm__ volatile("msr daifset, #2\n dsb sy\n isb\n msr icc_pmr_el1, %0\n dsb sy\n isb" :: "r"((uint64_t)previous) : "memory");
@@ -1382,6 +1449,10 @@ BaseType_t ssKernelOwnerIRQExit(void)
      * restore bypasses portCLEAR_INTERRUPT_MASK_FROM_ISR, so close the span here, as that macro would. Otherwise it
      * stays open until the next instrumented clear on this core, up to a tick later on an idle core. */
     if (previous > portMAX_API_PRIORITY_MASK) ss_latency_mask_close(portGET_CORE_ID(), (uintptr_t)__builtin_return_address(0));
+#endif
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_irq_stamp(ssKernelCPUId(), 3);
+    ss_sched_trace_irq_end(ssKernelCPUId(), (unsigned)result);
 #endif
     ssOwnerSpan(begin, false);
     SS_PH_END(1);
@@ -1550,10 +1621,16 @@ static void ssKernelControlDrain(void)
      * outside this whole maintenance interval so its final ack cannot retire
      * a descriptor still referenced by the unlocked repair batch. */
     cpu->control_draining = true;
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_drain_begin(c);
+#endif
     ss_control_drain(&ssKernelControl, c);
     /* Controls can arrive after exception-entry preparation. Leave their
      * object repair pending until the next entry, outside task selection. */
     if (cpu->selecting) {
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+        ss_sched_trace_drain_end(c);
+#endif
         cpu->control_draining = false;
         portCLEAR_INTERRUPT_MASK(irq);
         return;
@@ -1589,6 +1666,9 @@ static void ssKernelControlDrain(void)
     }
     /* Repair completion can now be acknowledged without acquiring I in FIFO. */
     ss_control_drain(&ssKernelControl, c);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_drain_end(c);
+#endif
     cpu->control_draining = false;
     portCLEAR_INTERRUPT_MASK(irq);
 }
@@ -2010,13 +2090,38 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
     TCB_t *current = ssKernelSelf();
     if (!handle) handle = current;
     UBaseType_t irq = from_isr ? portSET_INTERRUPT_MASK_FROM_ISR() : portSET_INTERRUPT_MASK();
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    struct ss_sched_trace_command trace_command = { .command = command, .slot = UINT64_MAX,
+        .flags = (handle == current ? 1u : 0u) | (from_isr ? 2u : 0u) | (xSchedulerRunning ? 4u : 0u),
+        .stamp = {ss_sched_trace_now()} };
+#define SS_COMMAND_STAMP(n) (trace_command.stamp[n] = ss_sched_trace_now())
+#define SS_COMMAND_FINISH() do { \
+    for (unsigned ss_i = 1; ss_i < 6; ++ss_i) \
+        if (!trace_command.stamp[ss_i]) trace_command.stamp[ss_i] = trace_command.stamp[ss_i - 1]; \
+    trace_command.stamp[6] = ss_sched_trace_now(); \
+    ss_sched_trace_command(ssKernelCPUId(), &trace_command); \
+} while (0)
+#else
+#define SS_COMMAND_STAMP(n) ((void)0)
+#define SS_COMMAND_FINISH() ((void)0)
+#endif
     struct ss_kernel_pin pin;
     if (!ss_kernel_handle_pin(&ssKernelRegistry, handle, &pin)) {
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+        trace_command.flags |= 32u;
+#endif
+        SS_COMMAND_STAMP(1);
+        SS_COMMAND_FINISH();
         if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
         return false;
     }
+    SS_COMMAND_STAMP(1);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    trace_command.slot = pin.slot;
+#endif
     struct ssKernelMutation mutation = { .command = command, .argument = argument, .slot = pin.slot };
     uint64_t sequence = ss_control_publish(&ssKernelControl, pin.slot, ssKernelMutate, &mutation);
+    SS_COMMAND_STAMP(2);
     bool changed = mutation.changed;
     if (!xSchedulerRunning) {
         /* Boot has no running owner on another CPU and no task stack to save.
@@ -2029,6 +2134,7 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
         if (changed && task->ready.queued)
             configASSERT(ss_owner_remove(&ssKernelCPUs[owner].run, &task->ready));
         ss_kernel_handle_put(&pin);
+        SS_COMMAND_FINISH();
         if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
         return changed;
     }
@@ -2036,6 +2142,9 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
     unsigned slot = pin.slot;
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
     if (ssKernelHolds(cpu)) {
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+        trace_command.flags |= 8u;
+#endif
         /* Logical desired state is committed now. Owner consumption and task
          * acknowledgments wait until the caller releases compatibility I. */
         if (cpu->command_reference[slot].descriptor) ss_kernel_handle_put(&pin);
@@ -2045,24 +2154,33 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
         cpu->command_no_wait[slot] = from_isr || self;
         cpu->command_delete[slot] |= command == SS_K_DELETE;
         if (self && changed) cpu->reschedule = true;
+        SS_COMMAND_FINISH();
         if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
         return changed;
     }
     if (command == SS_K_DELETE && self) {
         ss_kernel_handle_put(&pin);
+        SS_COMMAND_FINISH();
         if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
         portYIELD();
         configASSERT(false); /* Deleted tasks cannot regain execution. */
         return changed;
     }
     if (atomic_load_explicit(&ssKernelTasks[slot].owner, memory_order_acquire) == ssKernelCPUId()) {
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+        trace_command.flags |= 16u;
+#endif
+        SS_COMMAND_STAMP(3);
         ssKernelControlDrain();
+        SS_COMMAND_STAMP(4);
         ssKernelSliceRefresh(ssKernelCPUId(), false);
+        SS_COMMAND_STAMP(5);
     }
     if (!from_isr && changed && self && command == SS_K_SUSPEND) {
         /* No reference is kept on a stack that can remain suspended forever.
          * Returning here requires that this same task was resumed alive. */
         ss_kernel_handle_put(&pin);
+        SS_COMMAND_FINISH();
         if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
         portYIELD();
         return changed;
@@ -2072,6 +2190,7 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
      * permanent slot/incarnation cookie across acknowledgment waits; cleanup
      * completion also satisfies a command whose target has since retired. */
     ss_kernel_handle_put(&pin);
+    SS_COMMAND_FINISH();
     if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
     if (!from_isr && changed) {
         if (self && command == SS_K_AFFINITY) portYIELD();
@@ -2084,6 +2203,8 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
     if (!from_isr && ssKernelCPUs[ssKernelCPUId()].reschedule && ssKernelCanPreempt()) portYIELD();
     return changed;
 }
+#undef SS_COMMAND_STAMP
+#undef SS_COMMAND_FINISH
 static void ssKernelCommandsDetach(void)
 {
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];

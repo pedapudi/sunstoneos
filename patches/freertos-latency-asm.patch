@@ -21,3 +21,15 @@
     MSR ICC_PMR_EL1, X1      /* Set interrupt mask */
     DSB SY
     ISB SY
+@@ -1084,6 +1098,11 @@
+    .align 8
+    .type vPortRestoreTaskContext, % function
+ vPortRestoreTaskContext:
++#ifdef SUNSTONE_SCHED_LATENCY_TRACE
++   MRS X0, TPIDR_EL1
++   MOV X1, #1
++   BL ss_sched_trace_startup
++#endif
+ .set freertos_vector_base, _freertos_vector_table
+ /* Install the FreeRTOS interrupt handlers. */
+ LDR X1, = freertos_vector_base

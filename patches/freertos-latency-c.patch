@@ -1,16 +1,29 @@
 --- port.c
 +++ port.c
-@@ -40,6 +40,9 @@
+@@ -40,6 +40,12 @@
  /* Scheduler includes. */
  #include "FreeRTOS.h"
  #include "task.h"
 +#ifdef SUNSTONE_LATENCY
 +#include "sunstone_latency.h"
++#ifdef SUNSTONE_SCHED_LATENCY_TRACE
++extern void ss_sched_trace_startup(unsigned, unsigned);
++#endif
 +#endif
  
  /* MPU includes. */
  #include "mpu_wrappers.h"
-@@ -1417,6 +1420,9 @@
+@@ -1176,6 +1182,9 @@
+ 
+ BaseType_t xPortStartScheduler( void )
+ {
++#ifdef SUNSTONE_SCHED_LATENCY_TRACE
++    ss_sched_trace_startup(portGET_CORE_ID_FROM_ISR(), 0);
++#endif
+     uint64_t ullAPSR;
+ 
+     #if ( configASSERT_DEFINED == 1 )
+@@ -1417,6 +1426,9 @@
  
  void vPortClearInterruptMask( UBaseType_t uxNewMaskValue )
  {
@@ -20,7 +33,7 @@
      #if ( configNUMBER_OF_CORES > 1 )
          /* An EL1 task writes the mask in line; DAIF keeps the caller's value,
           * as the supervisor call returns the caller's SPSR. */
-@@ -1448,6 +1454,9 @@
+@@ -1448,6 +1460,9 @@
  
  void vPortClearInterruptMaskFromISR( UBaseType_t uxNewMaskValue )
  {
@@ -30,7 +43,7 @@
      __asm volatile (
          "MSR DAIFSET, #2        \n"
          "DSB SY                 \n"
-@@ -1467,6 +1476,9 @@
+@@ -1467,6 +1482,9 @@
  UBaseType_t uxPortSetInterruptMask( void )
  {
      UBaseType_t ullPMRValue;
@@ -40,7 +53,7 @@
  
      #if ( configNUMBER_OF_CORES > 1 )
          if( ( ullPortGetTaskRegister() >> portTASK_REGISTER_EL1_BIT ) & 1U )
-@@ -1484,6 +1496,11 @@
+@@ -1484,6 +1502,11 @@
                                   ::"r" ( ( uint64_t ) portMAX_API_PRIORITY_MASK ) : "memory" );
              }
  
@@ -52,7 +65,7 @@
              return ullPMRValue;
          }
      #endif
-@@ -1497,6 +1514,11 @@
+@@ -1497,6 +1520,11 @@
          : "x0", "memory"
      );
  
@@ -64,7 +77,7 @@
      return ullPMRValue;
  }
  
-@@ -1504,6 +1526,9 @@
+@@ -1504,6 +1532,9 @@
  UBaseType_t uxPortSetInterruptMaskFromISR( void )
  {
      UBaseType_t ullPMRValue;
@@ -74,7 +87,7 @@
  
      __asm volatile ( "MRS %0, ICC_PMR_EL1" : "=r" ( ullPMRValue ) );
  
-@@ -1521,6 +1546,11 @@
+@@ -1521,6 +1552,11 @@
                           ::"r" ( ( uint64_t ) configMAX_API_CALL_INTERRUPT_PRIORITY << portPRIORITY_SHIFT ) : "memory" );
      }
  
@@ -86,7 +99,20 @@
      return ullPMRValue;
  }
  
-@@ -1811,6 +1841,9 @@
+@@ -1591,6 +1627,12 @@
+         volatile uint64_t ullRecursionCount;
+     } __attribute__( ( aligned( 64 ) ) ) PortLock_t;
+     PRIVILEGED_DATA PortLock_t xPortLocks[ eLockCount ];
++#ifdef SUNSTONE_SCHED_LATENCY_TRACE
++    uint32_t ulSunstoneTraceTaskTickets( void )
++    {
++        return __atomic_load_n( &xPortLocks[ eTaskLock ].ulGateWord, __ATOMIC_RELAXED );
++    }
++#endif
+     _Static_assert( sizeof( PortLock_t ) == 64, "locks occupy separate cache lines" );
+     _Static_assert( configNUMBER_OF_CORES < 65536, "outstanding tickets cannot wrap" );
+     #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+@@ -1775,6 +1817,9 @@
          configASSERT( eLockNum < eLockCount );
  
          uint32_t ulLockBit = 1u << eLockNum;
@@ -96,7 +122,7 @@
  
          /* Lock acquire */
          if( uxAcquire )
-@@ -1828,6 +1861,9 @@
+@@ -1792,6 +1837,9 @@
                  {
                      configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) != 255u );
                      prvSet64( &( xPortLocks[ eLockNum ].ullRecursionCount ), ( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) + 1 ) );
@@ -106,7 +132,7 @@
                      return;
                  }
  
-@@ -1860,6 +1896,9 @@
+@@ -1824,6 +1872,9 @@
                  {
                      configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) != 255u );
                      prvSet64( &( xPortLocks[ eLockNum ].ullRecursionCount ), ( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) + 1 ) );
@@ -116,7 +142,7 @@
                      return;
                  }
  
-@@ -1869,6 +1908,9 @@
+@@ -1833,6 +1884,9 @@
              /* Assert the lock count is 0 when the spinlock is free and is acquired. */
              configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) == 0 );
  
@@ -126,7 +152,7 @@
              /* Set lock count as 1. */
              prvSet64( &( xPortLocks[ eLockNum ].ullRecursionCount ), 1 );
              /* Record that this core owns the lock. */
-@@ -1881,6 +1923,9 @@
+@@ -1845,6 +1899,9 @@
              configASSERT( ( prvGet64( &( xPortCoreStates[ ucCoreID ].ullOwnedLocks ) ) & ulLockBit ) != 0 );
              configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) != 0 );
  

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "freertos_control.h"
 #include <stddef.h>
+#include "latency_trace.h"
 
 #define ROUTE_CLOSED (UINT64_C(1) << 63)
 #define ROUTE_COUNT (ROUTE_CLOSED - 1)
@@ -162,7 +163,14 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
     struct ss_control_slot *s = &c->slot[slot];
     bool put = false, retire = false;
     uint64_t incarnation;
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    struct ss_sched_trace_record trace_record = {.slot = slot, .stamp = {ss_sched_trace_now()}};
+#endif
     lock(c, s);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    trace_record.stamp[1] = ss_sched_trace_now();
+    trace_record.phase = s->phase;
+#endif
     incarnation = s->desired.incarnation;
     if (!s->desired.dead && !s->retained && cpu == s->owner &&
         ss_owner_pin(s->descriptor, s->desired.incarnation, c->backend)) {
@@ -203,7 +211,15 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
             (void)route_close(s);
             if (!c->ops.apply(c->ops.context, slot, task, &s->desired)) {
                 if (!c->ops.deferred || !c->ops.deferred(c->ops.context, slot)) hint(c, cpu, slot);
-                unlock(c, s); return;
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+                trace_record.stamp[2] = ss_sched_trace_now();
+#endif
+                unlock(c, s);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+                trace_record.stamp[3] = trace_record.stamp[4] = ss_sched_trace_now();
+                ss_sched_trace_record(cpu, &trace_record);
+#endif
+                return;
             }
             atomic_store_explicit(&s->applied, s->desired.sequence, memory_order_release);
             s->phase = 0; s->retained = false; put = true;
@@ -245,11 +261,21 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
             }
         }
     } else hint(c, s->owner, slot);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    trace_record.stamp[2] = ss_sched_trace_now();
+#endif
     unlock(c, s);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    trace_record.stamp[3] = ss_sched_trace_now();
+#endif
     /* A last-put callback may publish retirement; never invoke under lock. */
     if (put) ss_owner_put(s->descriptor);
     if (retire && c->ops.retired) c->ops.retired(c->ops.context, slot, incarnation);
     ss_owner_event(c->backend);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    trace_record.stamp[4] = ss_sched_trace_now();
+    ss_sched_trace_record(cpu, &trace_record);
+#endif
 }
 unsigned ss_control_drain(struct ss_control *c, unsigned cpu)
 {
