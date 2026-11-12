@@ -1,5 +1,6 @@
 #include "gate-info.h"
 #include "refusal.h"
+#include "a733_cpu_reset.h"
 .section .text.entry,"ax"
 .global _start
 .type _start,%function
@@ -116,13 +117,8 @@ _start:
     ldr x0,=0x41001000
     str w0,[x5]
     str wzr,[x5,#4]
-    dsb sy
     mov x0,#2
-    msr rmr_el3,x0
-    isb
-    mov w11,#CARD_FEL_REFUSE_RESET_REQUEST
-    mov x5,#0
-    mrs x0,rmr_el3
+    A733_CPU_RESET_WAIT(x0)
 refuse:
     mov x2,x0                /* One retained raw sample; no diagnostic reread. */
     mov w0,w11

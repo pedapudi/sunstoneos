@@ -17,6 +17,7 @@
 #define CARD_FEL_REFUSE_REDIRECT_C4 15
 #define CARD_FEL_REFUSE_REDIRECT_D4 16
 #define CARD_FEL_REFUSE_GATE_PUBLICATION 17
+/* Legacy fallthrough code; the shared reset path waits without recording it. */
 #define CARD_FEL_REFUSE_RESET_REQUEST 18
 #define CARD_FEL_REFUSE_OFF_STATUS 0x100
 #define CARD_FEL_REFUSE_CONTROL 0x200

@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['boot/a733/card-fel-gate.S', 'apps/card-fel-recovery/entry.S',
                 'apps/card-fel-recovery/profile.c', 'apps/card-fel-recovery/admission.c',
                 'apps/card-fel-recovery/refusal.h', 'include/a733_cpu_off.h',
+                'include/a733_cpu_reset.h', 'checks/a733-cpu-reset.py',
                 'platform/a733/cpu_start.c', 'tools/card_recovery.py', 'tools/card-fel-image.py']
 GATE_RUNS = [['--image', '{elf:card-fel-recovery}', '--output', '{output}']]
 
@@ -31,6 +32,7 @@ def module(name, path):
 
 
 card = module('linked_card_recovery', 'tools/card_recovery.py')
+reset_check = module('card_recovery_reset_wait', 'checks/a733-cpu-reset.py')
 crumbs = module('card_recovery_crumb_layout', 'tools/a733-crumbs.py')
 FAULT_WORDS = {name: crumbs.RTC+crumbs.WORDS[name] for name in ('esr','elr','far')}
 FAULT_SENTINELS = dict(zip(FAULT_WORDS, (0x11111111,0x22222222,0x33333333)))
@@ -41,6 +43,7 @@ class Machine:
         self.image, self.profile, self.nonce = image, info['profile'], nonce
         self.variant, self.events, self.terminal = variant, [], None
         self.stack_used = 0
+        self.reset_pending,self.reset_wfi_count,self.reset_events_index = False,0,None
         self.regs = {card.RTC_FLAG: card.FEL_FLAG, 0x02050010: 1, 0x02050014: 0x41, 0x02050018: 2}
         self.regs.update({FAULT_WORDS[name]:value for name,value in FAULT_SENTINELS.items()})
         for core in range(1,8):
@@ -99,16 +102,26 @@ class Machine:
                 if ins.op_str.startswith('rmr_el3'):
                     assert cpu.reg_read(a64.UC_ARM64_REG_X0) == 2
                     assert self.regs[0x08001004] == card.GATE and self.regs[0x08001008] == 0
-                    if self.variant == 'no-reset':
-                        self.system['rmr_el3'] = 2
-                        cpu.reg_write(a64.UC_ARM64_REG_PC,address+4)
-                    else:
-                        self.terminal = 'reset-to-gate';cpu.emu_stop()
+                    self.system['rmr_el3'] = 2
+                    self.reset_pending = True
+                    self.reset_wfi_address = address+8
+                    self.reset_events_index = len(self.events)
+                    cpu.reg_write(a64.UC_ARM64_REG_PC,address+4)
                 else:
                     assert ins.op_str.startswith('daifset')
                     cpu.reg_write(a64.UC_ARM64_REG_PC,address+4)
             elif ins.mnemonic == 'wfi':
-                self.terminal = 'park';cpu.emu_stop()
+                if self.reset_pending:
+                    assert address==self.reset_wfi_address, 'reset must reach immediate WFI'
+                    self.reset_wfi_count += 1
+                    if self.variant != 'no-reset':
+                        self.terminal='reset-to-gate';cpu.emu_stop()
+                    elif self.reset_wfi_count==2:
+                        self.terminal='reset-pending';cpu.emu_stop()
+                    else:
+                        cpu.reg_write(a64.UC_ARM64_REG_PC,address+4)
+                else:
+                    self.terminal = 'park';cpu.emu_stop()
             elif ins.mnemonic == 'dsb':
                 self.events.append(('barrier',))
         cpu.hook_add(UC_HOOK_CODE,code)
@@ -161,6 +174,7 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     args = parser.parse_args();args.output.mkdir(parents=True,exist_ok=False)
     image, info = Image(args.image), card.inspect(args.image)
+    reset_check.reset_wait(image.parts)
     cases,stack_used = [],0
     for policy in (0,0x100):
         m = Machine(image,info,0x123456789abc,policy=policy)
@@ -200,8 +214,7 @@ def main():
             ('redirect-C0',14,0x070501c0,0x10),('redirect-C4',15,0x070501c4,0x20),
             ('redirect-D4',16,0x070501d4,0xefe8)):
         failures.append((name,code,address,sample,lambda c,m,a=address,v=sample:m.regs.update({a:v}),''))
-    failures += [('publication',17,card.GATE+info['profile']['test_offset'],0,None,'stuck-publication'),
-                 ('reset-request',18,0,2,None,'no-reset')]
+    failures += [('publication',17,card.GATE+info['profile']['test_offset'],0,None,'stuck-publication')]
     for core in range(1,8):
         for name,base,address,sample in (
                 ('ON',0x100,0x07052008+core*0x1000,0x108),
@@ -222,7 +235,6 @@ def main():
         stack_used=max(stack_used,m.stack_used)
         writes=[e for e in m.events if e[0]=='write']
         allowed=(0x07090100,0x07090104,0x0709010c,0x07090114,0x07090118,0x0709011c)
-        if variant=='no-reset':allowed += (0x08001004,0x08001008)
         assert all(e[1] in allowed for e in writes),name
         assert m.regs[0x07090104]==0x0c010000|code,name
         assert m.regs[0x07090114]==sample&0xffffffff,name
@@ -250,6 +262,13 @@ def main():
     words['fault']=0;words['far']=0;words['elr']=0;words['esr']=0
     assert 'launcher_refusal' not in crumbs.decode(words,m.nonce)['last']
     cases.append('legacy-refusal-has-no-invented-sample')
+    m=Machine(image,info,1,variant='no-reset')
+    assert m.launcher()=='reset-pending' and m.reset_wfi_count==2
+    assert not any(e[0]=='write'for e in m.events[m.reset_events_index:])
+    assert m.regs[0x07090104]==0x0c010000
+    assert all(m.regs[address]==FAULT_SENTINELS[name]for name,address in FAULT_WORDS.items())
+    assert m.regs[card.RTC_FLAG]==card.FEL_FLAG and m.regs[0x02050014]==0x41
+    cases.append('pending-reset-WFI-loop-writes-no-RTC-refusal')
     for variant in ('stuck-disarm','stuck-clear','lost-request','late-redirect','unknown-watchdog'):
         m = Machine(image,info,2,variant=variant)
         assert m.launcher()=='reset-to-gate'

@@ -36,9 +36,11 @@ clock or secondary power policy.
 The captured ROM's entry at `0x20` bypasses BOOT sampling but still checks the
 second software redirect at `0x070501d4`. All redirect words therefore remain
 zero. The ROM consumes no RTC request itself; the gate makes the selection.
-The existing CPU-local transition supplies AArch32 entry from an AArch64
-caller: CPU0 RVBAR, DSB, `RMR_EL3 = 2`, ISB. The AArch32 gate then branches
-to `0x20` itself.
+The CPU-local transition publishes CPU0 RVBAR and uses the
+[shared reset body](../../include/a733_cpu_reset.h): DSB, `RMR_EL3 = 2`, ISB,
+then a terminal WFI/back-branch loop. The request takes effect when the core
+enters WFI. The monitor, probes, finite-device returns and stage-2 loader use
+this same body. The AArch32 gate then branches to `0x20` itself.
 
 ## The RAM proof executes the actual gate
 
@@ -68,9 +70,11 @@ The runner requires a distinct usable FEL instance, no retained fault, matching
 nonce/report, consumed gate state, unchanged gate code, request zero and mode
 zero. A watchdog reset or any mismatch fails the proof and ends board access.
 There is no generic probe return epilogue after the gate.
-The host model's successful path stops at the reset-request instruction.
-Physical execution reaches its readback, so completion of that request and
-the ordering required for AArch32 gate entry remain qualification blockers.
+The host model keeps the request pending through the ISB and completes it at
+WFI. A pending-reset case executes the idle loop without further RTC writes.
+Compiled checks require the exact terminal sequence in every caller and refuse
+mutations that remove WFI or its back-branch. Physical reset completion and
+AArch32 gate entry remain qualification requirements.
 
 Each launcher refusal records stage `0x0c01` and a distinct guard code from
 [the refusal definitions](../../apps/card-fel-recovery/refusal.h). Values
