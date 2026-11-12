@@ -8,8 +8,6 @@ static int gpu_now(void *p,uint64_t *v)
 {return a733_counter_clock_now(&((struct a733_native_usb *)((char *)p - offsetof(struct a733_native_usb,gpu_native)))->counter,v);}
 static int enter(void *p,uint64_t deadline)
 {return ((struct a733_native_usb *)p)->live(((struct a733_native_usb *)p)->context)&&a733_platform_lock_enter(&((struct a733_native_usb *)p)->locks,A733_PLATFORM_REGISTER_LOCK,deadline);}
-static int pin_enter(void *p,uint64_t deadline)
-{return ((struct a733_native_usb *)p)->live(((struct a733_native_usb *)p)->context)&&a733_platform_lock_step(&((struct a733_native_usb *)p)->locks,A733_PLATFORM_REGISTER_LOCK,deadline)==1;}
 static void leave(void *p)
 {a733_platform_lock_leave(&((struct a733_native_usb *)p)->locks,A733_PLATFORM_REGISTER_LOCK);}
 static void retain(void *p)
@@ -154,7 +152,7 @@ int a733_native_usb_init(struct a733_native_usb *n,const struct a733_native_usb_
     if(!a733_counter_clock_init(&n->counter,24000000)||
        !a733_platform_locks_init(&n->locks,a733_counter_clock_now,&n->counter)||
        !a733_clock_leases_init(&n->clocks,a733_counter_clock_now,&n->counter))return 0;
-    struct a733_pins_locks pl={pin_enter,leave,now,n};
+    struct a733_pins_locks pl={enter,leave,now,n};
     if(!a733_pins_native_init(&n->pin_native,&pl)||
        !a733_pins_init_banks(&n->pins,&n->pin_native.operations,&n->pin_native,&n->boot.pins)||
        !a733_gpu_resources_native_init(&n->gpu_native,&n->locks.callbacks))return 0;

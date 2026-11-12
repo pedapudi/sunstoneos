@@ -101,9 +101,7 @@ int main(void)
  clock_us=limit_us;
  assert(!native_read(&pins,0x300b000,&value) && !native_write(&pins,0x300b000,7) && io_accesses==2);
  reset(); shared=(struct a733_native_usb){.locks=locks,.live=always_live}; failures=2;
- assert(pin_enter(&shared,60000000)==0 && takes==1);
- assert(pin_enter(&shared,60000000)==0 && takes==2);
- assert(pin_enter(&shared,60000000)==1 && takes==3 && holder[0]==1);
+ assert(enter(&shared,60000000)==1 && takes==3 && holder[0]==1);
  puts("PASS 21 shared-lock and native pin deadline cases");
 }
 '''
@@ -121,7 +119,7 @@ def main():
     pins = (ROOT / 'drivers/pinctrl/a733_pins_native.c').read_text()
     source += pins[pins.index('static int native_read('):pins.index('int a733_pins_native_init(')]
     native = (ROOT / 'platform/a733/native_usb.c').read_text()
-    source += native[native.index('static int pin_enter('):native.index('static void leave(')]
+    source += native[native.index('static int enter('):native.index('static void leave(')]
 
     def run(text, name):
         unit, exe = args.output / (name + '.c'), args.output / name
@@ -135,12 +133,14 @@ def main():
     mutants = [source.replace('lock_enter(p,lock,deadline,1)', 'lock_enter(p,lock,deadline,0)'),
                source.replace('deadline=lock_deadline(p,deadline);', ''),
                source.replace('configASSERT(xSemaphoreGive(p->mutex[lock]) == pdTRUE);', ''),
-               source.replace('!n->locks.now(n->locks.cookie,&now) || ', '')]
+               source.replace('!n->locks.now(n->locks.cookie,&now) || ', ''),
+               source.replace('&&a733_platform_lock_enter(&((struct a733_native_usb *)p)->locks,A733_PLATFORM_REGISTER_LOCK,deadline);',
+                              '&&a733_platform_lock_step(&((struct a733_native_usb *)p)->locks,A733_PLATFORM_REGISTER_LOCK,deadline)==1;')]
     for i, mutant in enumerate(mutants):
         assert mutant != source and run(mutant, 'mutant-' + str(i)).returncode != 0
     (args.output / 'result.json').write_text(json.dumps({'passed': True, 'physical_access': False,
                                                        'cases': 21, 'mutants_rejected': len(mutants)}, indent=2) + '\n')
-    print(real.stdout.strip() + '; four mutants rejected')
+    print(real.stdout.strip() + '; five mutants rejected')
 
 
 if __name__ == '__main__':
