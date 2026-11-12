@@ -40,6 +40,22 @@ int a733_rtc_open(struct a733_rtc *,const struct a733_rtc_ops *,void *,uint64_t)
  * ever made. The RC rate is not asserted: the caller measures it against its
  * own time base (the board's RTC second took about 1.1 s). */
 int a733_rtc_open_rc(struct a733_rtc *,const struct a733_rtc_ops *,void *,uint64_t);
+/* Select the external 32.768 kHz crystal for an RC-mode instance in READY state, with the sequence of
+ * a733_rtc_initialize's source step (manual 9.1.7): keep the crystal gate and the auto-switch field, require four
+ * consecutive healthy samples (source status bit 2 clear, 3 us apart, within 1 s), select the external source (control
+ * bits 1:0 = 01), clear the switch-pending bit, and wait for control & 0x193 == 0x11 with status & 7 == 1. Only the
+ * control word (+0x00, with the key) and the status word (+0x04, bit 1) are written. If the crystal is not healthy or the
+ * source does not settle, the control word is restored to its value on entry and the instance stays on the RC
+ * (result A733_RTC_SWITCH_FALLBACK, the health observations in the record). The calendar is read coherently before
+ * and after; the caller judges continuity. Returns 1 when the instance is usable (switched or fell back), 0 after a
+ * failure that retains it. */
+enum {A733_RTC_SWITCH_DONE=1,A733_RTC_SWITCH_FALLBACK=2};
+struct a733_rtc_switch {
+    uint32_t result,control_before,status_before,control_after,status_after,samples,healthy_run,writes;
+    struct a733_rtc_time before,after;
+    uint64_t before_us,after_us;
+};
+int a733_rtc_select_crystal(struct a733_rtc *,int (*pause)(void *,uint64_t),struct a733_rtc_switch *);
 /* Set the calendar of an RC-mode instance (READY state): HMS then DAY, each
  * followed by the busy-bit wait and the 2 ms settle of the pinned rtc-sunxi.c
  * settime. pause(context, until_us) must return 1 after waiting without

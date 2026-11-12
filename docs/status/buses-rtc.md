@@ -6,7 +6,7 @@ Native internal buses, GPIO, UART, SPI, PWM, ADC and RTC paths have software evi
 
 **Software evidence:** host (engine and clock words); linked OS image and host admission for the scan image.
 
-**Board-qualified scope:** An empty-bus scan of TWI0-3 and S_TWI2 at 96 to 100 kHz and 385 to 400 kHz (open, 128 address probes, close, lines high). Inherited PMIC reads, RTC RC-mode progression,
+**Board-qualified scope:** An empty-bus scan of TWI0-3 and S_TWI2 at 96 to 100 kHz and 385 to 400 kHz (open, 128 address probes, close, lines high). Inherited PMIC reads, RTC RC-mode progression, crystal selection, calendar set, alarm and retention,
 watchdog reset, retained breadcrumbs and returning FEL execution have physical
 records. These results do not qualify every exposed bus or reset scenario.
 
@@ -20,14 +20,14 @@ records. These results do not qualify every exposed bus or reset scenario.
 | PWM (fan, LED) and GPADC0-3 | host-tested | LRADC electrically blocked | [PWM](../pwm.md), [ADC](../adc-application.md) |
 | RTC RC-mode progression | qualified on the board | 1 s in about 1.1 s | `buses-rtc-rtc-rc-progression` |
 | RTC calendar, crystal initialization, non-waking alarms | host-tested | | [RTC](../rtc-application.md) |
-| RTC calendar set, one alarm and retention from the internal RC | qualified on the board (read after the alarm unrun) | alarm at target + 1 RTC s, 0.22 ms to finish; RTC second about 1.19 s | [design](../designs/rtc-rc-alarm.md) |
+| RTC crystal selection at open, calendar set, alarm and retention | qualified on the board (read after the alarm unrun) | the OS selects the 32.768 kHz crystal when healthy; RTC second 0.99993 s of counter time (-72 ppm; RC was 1.19 s); alarm at target + 1 RTC s | [design](../designs/rtc-rc-alarm.md) |
 | Watchdog expiry, retained breadcrumbs, FEL recovery | qualified on the board | | `buses-rtc-watchdog-fel-return`; [watchdog](../watchdog.md) |
 | LEDs, buttons, infrared, Ethernet, debug | open | | [board wiring](../board-wiring.md) |
 
 ## Open work
 
 1. Qualify the exposed I2C controllers electrically with an attached peripheral: rise time, bank voltage, clock stretching and the 400 kHz margin. The empty-bus scan (see the evidence table) establishes the binding only.
-2. Run the corrected `rtc-alarm` image once to qualify the calendar read after the alarm, then qualify crystal selection, calibration, wake and calendar retention across power removal. The RTC runs from the uncalibrated internal RC (about 1.19 s per RTC second); no 32.768 kHz accuracy is established.
+2. Attribute the 72 ppm error of the RTC second on the crystal (crystal, load capacitors or the counter reference) with an independent timebase, and qualify calibration, wake and calendar retention across power removal. The OS selects the crystal at open when it is healthy and stays on the RC otherwise.
 3. Qualify UART, SPI and PWM electrically: wiring, timing, IRQs, DMA visibility and waveform.
 4. Qualify ADC values, accuracy, IRQs and recovery; resolve the LRADC electrical block.
 5. Audit the remaining board functions (LEDs, buttons, infrared, Ethernet and debug) against the wiring record.
@@ -93,7 +93,7 @@ Audit fitted LEDs, buttons, infrared, Ethernet, debug and other blocks against [
 Board results are records in [`docs/evidence/buses-rtc.jsonl`](../evidence/buses-rtc.jsonl); add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-buses-rtc-20261101.md).
 
 <!-- evidence-table:begin -->
-10 records in `docs/evidence/buses-rtc.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+11 records in `docs/evidence/buses-rtc.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -107,4 +107,5 @@ Board results are records in [`docs/evidence/buses-rtc.jsonl`](../evidence/buses
 | `1794482702632861790-8e32fccf` | 2026-11-12 | 3-3 | `e9110e0c556f` | returned | failed | run_total 27.101 s, alarm_wait 4 s, alarm_latency 0.22 ms |
 | `1794482776569788451-05dabdc7` | 2026-11-12 | 3-3 | `427f6502a73c` | returned | failed | run_total 27.822 s, alarm_wait 4.68 s, calendar_advance 59 s, rtc_second_estimate 1.19 s, alarm_latency 0.22 ms |
 | `1794482905793724594-35d381b3` | 2026-11-12 | 3-3 | `f5a808858a42` | returned | passed | run_total 26.909 s, alarm_wait 3.67 s, alarm_latency 0.226 ms |
+| `1794487178456460888-f92f1914` | 2026-11-12 | 3-3 | `9dff890459aa` | returned | failed | run_total 44.792 s, rc_second 1.1875 s, crystal_second 0.999928 s, crystal_error -72.4 ppm, switch_calendar_jump 0 s |
 <!-- evidence-table:end -->

@@ -18,11 +18,12 @@
 #include <string.h>
 
 extern const unsigned ss_rtc_declared;
+_Static_assert(sizeof(struct ss_rtc_switch)==sizeof(struct a733_rtc_switch),"switch record layouts");
 _Static_assert(sizeof(struct ss_rtc_time)==sizeof(struct a733_rtc_time),"time layouts");
 #define RTC UINT32_C(0x07090000)
 #define GICD UINT32_C(0x03400000)
 enum phase {CLOSED,OPENING,OPEN,CLOSING,FAULT};
-enum op {NONE,OPEN_OP,SET_OP,READ_OP,ARM_OP,CLOSE_OP};
+enum op {NONE,OPEN_OP,SET_OP,READ_OP,ARM_OP,CLOSE_OP,SELECT_OP,MEASURE_OP};
 enum {POSTED=1,DONE=2};
 static struct {
     struct a733_rtc rtc;
@@ -33,6 +34,7 @@ static struct {
     uint32_t a,b;
     struct ss_rtc_info info;struct ss_rtc_time time;uint64_t time_ticks;
     struct ss_rtc_alarm alarm;
+    struct ss_rtc_switch sw;struct ss_rtc_rate rate;atomic_uint switching;
     uint64_t irq_ticks,alarm_deadline_us;
     uint32_t fault;
     TaskHandle_t waiter;
@@ -55,7 +57,9 @@ static int ops_read(void *c,uint32_t o,uint32_t *v)
 static int ops_write(void *c,uint32_t o,uint32_t v)
 {
     (void)c;
-    if((o!=0x10&&o!=0x14&&(o<0x20||o>0x30||(o&3)))||a733_platform_lock_enter(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK,lease_now()+20000)!=1)return 0;
+    /* The control and status words are writable only while the owner runs the crystal selection. */
+    const int source_word=(o==0||o==4)&&atomic_load_explicit(&rtc.switching,memory_order_acquire);
+    if((!source_word&&o!=0x10&&o!=0x14&&(o<0x20||o>0x30||(o&3)))||a733_platform_lock_enter(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK,lease_now()+20000)!=1)return 0;
     a733_mmio_write32_dsb_sy_both(RTC+o,v);
     a733_platform_lock_leave(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK);return 1;
 }
@@ -112,6 +116,54 @@ static void end_alarm(int timed_out)
 }
 
 /* --- requests ------------------------------------------------------------------------------------------------------- */
+static int do_select(void)
+{
+    struct a733_rtc_switch s;
+    atomic_store(&rtc.switching,1);
+    const int ok=a733_rtc_select_crystal(&rtc.rtc,pause,&s);
+    atomic_store(&rtc.switching,0);
+    if(!ok){fail(10);return -1;}
+    memcpy(&rtc.sw,&s,sizeof(s));
+    rtc.info.source=rtc.rtc.read_source;
+    rtc.info.clock_control=rtc.rtc.snapshot.clock_control;rtc.info.clock_status=rtc.rtc.snapshot.clock_status;
+    return 1;
+}
+static int read_seconds(uint32_t *s)
+{uint32_t v;if(!ops_read(NULL,0x14,&v))return 0;*s=v&63;return 1;}
+/* Sleep in 20 us steps until the seconds field changes; the counter is read right after the read that saw it. */
+static int next_edge(uint32_t *seconds,uint64_t *ticks,unsigned *polls,uint64_t limit_us)
+{
+    uint32_t s;
+    for(;;){
+        (void)sunstone_deadline_wait_until(now_us()+20);
+        if(!read_seconds(&s))return 0;
+        ++*polls;
+        if(s!=*seconds){*ticks=ss_counter_ticks();*seconds=s;return 1;}
+        if(now_us()>limit_us)return 0;
+    }
+}
+static int measure(unsigned n)
+{
+    memset(&rtc.rate,0,sizeof(rtc.rate));
+    rtc.rate.seconds=n;rtc.rate.source=rtc.rtc.read_source;
+    uint32_t s;uint64_t a,b;
+    if(!read_seconds(&s)||!next_edge(&s,&a,&rtc.rate.polls,now_us()+3000000))return -1;
+    /* An RTC second lasts at least 0.9 s on either source, so sleeping 0.85 s for each of the first n - 1 seconds
+     * cannot pass the n-th edge. The seconds field then says how many edges have gone by. */
+    const uint64_t guard=now_us()+(uint64_t)(n-1)*850000;
+    while(now_us()<guard)(void)sunstone_deadline_wait_until(guard);
+    uint32_t last;
+    if(!read_seconds(&last))return -1;
+    unsigned edges=(last+60-s)%60;
+    if(edges>=n)return -1;
+    while(edges<n){
+        if(!next_edge(&last,&b,&rtc.rate.polls,now_us()+4000000))return -1;
+        ++edges;
+    }
+    if(edges!=n)return -1;
+    rtc.rate.edge_a_ticks=a;rtc.rate.edge_b_ticks=b;rtc.rate.status=1;
+    return 1;
+}
 static int do_open(void)
 {
     atomic_store(&rtc.phase,OPENING);
@@ -130,7 +182,11 @@ static int do_open(void)
     rtc.info.clock_control=rtc.rtc.snapshot.clock_control;rtc.info.clock_status=rtc.rtc.snapshot.clock_status;
     rtc.info.prescaler=rtc.rtc.prescaler;rtc.info.calibration=rtc.rtc.calibration;rtc.info.oscillator=rtc.rtc.oscillator;
     rtc.info.source=rtc.rtc.read_source;rtc.info.opened_ticks=ss_counter_ticks();
-    atomic_store(&rtc.phase,OPEN);return 1;
+    memset(&rtc.sw,0,sizeof(rtc.sw));
+    atomic_store(&rtc.phase,OPEN);
+    if(!(rtc.a&SS_RTC_KEEP_RC)&&rtc.rtc.read_source==A733_RTC_READ_RC_NORMAL&&do_select()<0)return -1;
+    memcpy(&rtc.info.crystal,&rtc.sw,sizeof(rtc.sw));
+    return 1;
 }
 static void serve(void)
 {
@@ -139,6 +195,12 @@ static void serve(void)
     int r=-1;
     switch(rtc.op){
     case OPEN_OP:if(phase==CLOSED)r=do_open();else if(phase==OPEN)r=1;break;
+    case SELECT_OP:
+        if(phase==OPEN&&rtc.rtc.state==A733_RTC_READY&&rtc.rtc.read_source==A733_RTC_READ_RC_NORMAL)r=do_select();
+        break;
+    case MEASURE_OP:
+        if(phase==OPEN&&rtc.rtc.state==A733_RTC_READY&&rtc.a>=1&&rtc.a<=20)r=measure(rtc.a);
+        break;
     case SET_OP:
         if(phase==OPEN&&rtc.rtc.state==A733_RTC_READY)r=a733_rtc_set_time(&rtc.rtc,rtc.a,rtc.b,pause)?1:(fail(3),-1);
         break;
@@ -248,7 +310,13 @@ static int call(unsigned op,uint32_t a,uint32_t b)
     return 0;
 }
 int ss_rtc_open(struct ss_rtc_info *info)
-{int r=call(OPEN_OP,0,0);if(r==1&&info)*info=rtc.info;return r;}
+{return ss_rtc_open_with(info,0);}
+int ss_rtc_open_with(struct ss_rtc_info *info,uint32_t flags)
+{int r=call(OPEN_OP,flags,0);if(r==1&&info)*info=rtc.info;return r;}
+int ss_rtc_select_crystal(struct ss_rtc_switch *record)
+{int r=call(SELECT_OP,0,0);if(r==1&&record)*record=*(struct ss_rtc_switch *)&rtc.sw;return r;}
+int ss_rtc_measure(unsigned seconds,struct ss_rtc_rate *rate)
+{int r=call(MEASURE_OP,seconds,0);if(r==1&&rate)*rate=rtc.rate;return r;}
 int ss_rtc_set(uint32_t day,uint32_t hms){return call(SET_OP,day,hms);}
 int ss_rtc_read(struct ss_rtc_time *t,uint64_t *ticks)
 {int r=call(READ_OP,0,0);if(r==1&&t){*t=rtc.time;if(ticks)*ticks=rtc.time_ticks;}return r;}

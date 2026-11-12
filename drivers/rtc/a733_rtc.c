@@ -205,3 +205,67 @@ int a733_rtc_finish(struct a733_rtc *r,int cancel)
     atomic_store_explicit(&r->owned,0,memory_order_release);
     r->state=seen?A733_RTC_FIRED:A733_RTC_CANCELLED;return 1;
 }
+
+/* --- external crystal selection for an RC-mode instance ------------------------------------------------------------ */
+static int control_word(struct a733_rtc *r,uint32_t mask,uint32_t value,struct a733_rtc_switch *o)
+{
+    uint32_t v,check;
+    if(!read_reg(r,0,&v))return 0;
+    const uint32_t low=((v&65535)&~mask)|value;
+    ++o->writes;
+    if(!write_reg(r,0,UINT32_C(0x16aa0000)|low)||!read_reg(r,0,&check))return 0;
+    return (check&UINT32_C(0xc01f))==(low&UINT32_C(0xc01f));
+}
+static int restore_control(struct a733_rtc *r,struct a733_rtc_switch *o)
+{
+    uint32_t v;
+    return control_word(r,UINT32_C(0xffff),o->control_before&65535,o)&&read_reg(r,0,&v);
+}
+int a733_rtc_select_crystal(struct a733_rtc *r,int (*pause)(void *,uint64_t),struct a733_rtc_switch *o)
+{
+    if(!r||!pause||!o||!r->rc_mode||r->state!=A733_RTC_READY||r->read_source!=A733_RTC_READ_RC_NORMAL)return 0;
+    *o=(struct a733_rtc_switch){0};
+    uint64_t n;uint32_t c,s;
+    if(!timely_now(r,&o->before_us)||!coherent(r,&o->before)||!read_reg(r,0,&o->control_before)||
+       !read_reg(r,4,&o->status_before))return fail(r);
+    /* The gate and the stable auto-switch field, as the manual's source sequence orders them. */
+    if(!control_word(r,UINT32_C(0xc000),UINT32_C(0x4000),o)||!control_word(r,16,16,o))return fail(r);
+    if(!timely_now(r,&n))return fail(r);
+    const uint64_t end=n+1000000;
+    unsigned run=0;
+    do{
+        if(!read_reg(r,4,&s))return fail(r);
+        ++o->samples;
+        run=(s&4)?0:run+1;
+        if(run==4)break;
+        if(!timely_now(r,&n)||!pause(r->context,n+3)||!timely_now(r,&n))return fail(r);
+    }while(n<end);
+    o->healthy_run=run;
+    int switched=0;
+    if(run==4&&control_word(r,3,1,o)){
+        if(!read_reg(r,4,&s))return fail(r);
+        if((s&2)&&(++o->writes,!write_reg(r,4,2)))return fail(r);
+        if(!timely_now(r,&n))return fail(r);
+        const uint64_t settle_end=n+1000000;
+        do{
+            if(!read_reg(r,0,&c)||!read_reg(r,4,&s))return fail(r);
+            if((c&0x193)==0x11&&(s&7)==1){switched=1;break;}
+            if(!timely_now(r,&n)||!pause(r->context,n+1000)||!timely_now(r,&n))return fail(r);
+        }while(n<settle_end);
+    }
+    if(!switched){
+        /* Fall back: the control word returns to its entry value, so the RC stays selected. */
+        if(!restore_control(r,o)||!read_reg(r,0,&o->control_after)||!read_reg(r,4,&o->status_after)||
+           ((o->control_after^o->control_before)&0xc01f))return fail(r);
+        o->result=A733_RTC_SWITCH_FALLBACK;
+        return 1;
+    }
+    if(!read_reg(r,0,&o->control_after)||!read_reg(r,4,&o->status_after))return fail(r);
+    /* Adopt the external source as this instance's stable state. */
+    r->snapshot.clock_control=o->control_after;r->snapshot.clock_status=o->status_after;
+    r->read_source=A733_RTC_READ_EXTERNAL;r->prescaler=r->calibration=r->oscillator=0;
+    if(!coherent(r,&o->after)||!timely_now(r,&o->after_us))return fail(r);
+    r->snapshot.initial=o->after;
+    o->result=A733_RTC_SWITCH_DONE;
+    return 1;
+}

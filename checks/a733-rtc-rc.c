@@ -6,7 +6,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-struct model {uint32_t regs[0x180/4];uint64_t now;unsigned writes[0x180/4],order[16],norder,busy;};
+struct model {uint32_t regs[0x180/4];uint64_t now;unsigned writes[0x180/4],order[16],norder,busy,dyn,crystal,sick;};
 static void reset(struct model *m)
 {
  memset(m,0,sizeof(*m));
@@ -17,6 +17,11 @@ static int rd(void *p,uint32_t o,uint32_t *v)
 {
  struct model *m=p;assert(o<0x180&&!(o&3));
  *v=m->regs[o/4];
+ if(m->dyn&&o==4){
+  /* Health: bit 2 set while the crystal is not oscillating; the source reads external once selected. */
+  *v=(m->crystal?0:4)|((m->regs[0]&1)&&m->crystal?1:0);
+  if(m->sick&&m->writes[0]>=2&&m->sick--)*v|=4;
+ }
  if(o==0&&m->busy){*v|=256|128;--m->busy;}
  return 1;
 }
@@ -24,7 +29,7 @@ static int wr(void *p,uint32_t o,uint32_t v)
 {
  struct model *m=p;assert(o<0x180&&!(o&3));++m->writes[o/4];
  if(m->norder<16)m->order[m->norder++]=o;
- if(o==0x30)m->regs[o/4]&=~v;else m->regs[o/4]=v;
+ if(o==0x30)m->regs[o/4]&=~v;else if(o==0)m->regs[0]=v&0xffff;else m->regs[o/4]=v;
  if(o==0x14||o==0x10)m->busy=3;
  return 1;
 }
@@ -84,6 +89,26 @@ int main(void)
  m.regs[0]=0x4011;m.regs[1]=1;
  struct a733_rtc_time t;
  assert(!a733_rtc_read(&r,&t)&&r.state==A733_RTC_RETAINED);
+ /* Crystal selection: continuity, the control word as the only source write, and adoption of the external state. */
+ memset(&r,0,sizeof(r));reset(&m);m.dyn=1;m.crystal=1;
+ assert(a733_rtc_open_rc(&r,&ops,&m,1000000000));
+ struct a733_rtc_switch sw;
+ assert(a733_rtc_select_crystal(&r,pause,&sw)&&sw.result==A733_RTC_SWITCH_DONE&&sw.healthy_run==4);
+ assert((m.regs[0]&0x193)==0x11&&sw.control_before==0x401c&&sw.after.day==sw.before.day);
+ assert(m.writes[0]&&!m.writes[2]&&!m.writes[3]&&!m.writes[0x160/4]&&!m.writes[0x10/4]&&!m.writes[0x14/4]);
+ assert(r.read_source==A733_RTC_READ_EXTERNAL&&a733_rtc_read(&r,&t));   /* the instance accepts the new source */
+ assert(a733_rtc_arm(&r,2)&&r.state==A733_RTC_ARMED);
+ assert(!a733_rtc_select_crystal(&r,pause,&sw));                         /* not in the READY state */
+ /* A sick crystal: the control word returns to its entry value and the RC stays selected. */
+ memset(&r,0,sizeof(r));reset(&m);m.dyn=1;m.crystal=1;
+ assert(a733_rtc_open_rc(&r,&ops,&m,1000000000));
+ m.sick=1000000;   /* the crystal stays unhealthy once the sequence starts */
+ assert(a733_rtc_select_crystal(&r,pause,&sw)&&sw.result==A733_RTC_SWITCH_FALLBACK&&sw.healthy_run<4&&sw.samples>100);
+m.sick=0;   /* the entry control word is back, so the status reads as on entry */
+ assert(m.regs[0]==0x401c&&r.read_source==A733_RTC_READ_RC_NORMAL&&a733_rtc_read(&r,&t));
+ /* After the switch the board stays on the crystal: the next open sees the external state and adopts it. */
+ memset(&r,0,sizeof(r));reset(&m);m.regs[0]=0x4011;m.regs[1]=1;
+ assert(a733_rtc_open_rc(&r,&ops,&m,1000000000)&&r.read_source==A733_RTC_READ_EXTERNAL&&!m.norder);
  /* An instance not opened in RC mode cannot set the calendar. */
  memset(&r,0,sizeof(r));reset(&m);m.regs[0]=0x4011;m.regs[1]=1;
  assert(a733_rtc_open(&r,&ops,&m,1000000000)&&!a733_rtc_set_time(&r,day,hms,pause)&&!m.norder);
