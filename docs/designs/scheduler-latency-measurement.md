@@ -32,14 +32,20 @@ The [partitioned adapter](../../kernel/scheduler/freertos.c) retains the task
 handle and serializes the desired change through a per-task FIFO lock. It
 publishes a pending bit, orders publication before observation, and requests a
 software interrupt when required. The owner consumes the change under the
-kernel API interrupt mask, repairs event-list metadata outside the control
-lock, and drains again. It then refreshes the time slice, releases the handle,
-restores the mask and yields. Additional checks bind the handle to its lifetime,
+kernel API interrupt mask and repairs linked event-list metadata outside the
+control lock. A running current task with an unlinked event item and no event
+reference completes its metadata repair directly. A task suspending itself
+consumes only its own request before refreshing the slice, releasing the handle,
+restoring the mask and yielding. The saved-frame maintenance acknowledges its
+off-CPU fence. Other commands retain the general drain and repair path.
+Additional checks bind the handle to its lifetime,
 restrict list writes to the owner, and require saved-context acknowledgments
 before migration or deletion completes.
 
 Each low-level control drain consumes at most `SS_OWNER_BATCH` records.
-`ssKernelControlDrain` calls that drain twice, around event-list repair. Control
+`ssKernelControlDrain` calls that drain twice, around event-list repair.
+Pending control bits participate in the maintenance continuation check, so
+requests beyond a batch retain a later owner entry. Control
 lock release and completion publication execute store-completion barriers and
 event signals. The diagnostic timestamps each record without changing those
 operations or their ordering.
