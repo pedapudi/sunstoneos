@@ -35,6 +35,11 @@ elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
     target_sources(sunstone-a733-os-hello PRIVATE ${hello_pmu_inputs})
     target_link_options(sunstone-a733-os-hello PRIVATE -Wl,--wrap=hello_compute_main)
   endif()
+elseif(SUNSTONE_APPLICATION STREQUAL "i2c-scan")
+  add_sunstone_application(i2c-scan
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/i2c-scan/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/i2c-scan/manifest.json")
+  add_sunstone_image(sunstone-a733-os-i2c-scan LIFETIME ${os_lifetime} APPLICATION i2c-scan)
 elseif(SUNSTONE_APPLICATION STREQUAL "memcpy-bench")
   add_sunstone_application(memcpy-bench
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/memcpy-bench/main.c"

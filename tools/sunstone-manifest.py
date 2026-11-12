@@ -148,7 +148,7 @@ def load(path, supervised=False):
     """manifest.json -> normalized dict with integer fields."""
     raw = json.loads(Path(path).read_text())
     known = {'name', 'devices', 'cpu', 'regions', 'large_regions', 'audio', 'usb', 'deadlines', 'output_limit', 'host_ops', 'npu', 'gpu',
-             'abi'}
+             'i2c', 'abi'}
     require(set(raw) <= known, '%s: unknown keys %s' % (path, sorted(set(raw) - known)))
     name = raw['name']
     require(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9-]{0,14}', name) is not None,
@@ -226,6 +226,7 @@ def load(path, supervised=False):
             require(isinstance(n['graph_region'], str), name + ': npu graph_region is the name of an input region')
             m['npu_graph_region_name'] = n['graph_region']
     m['gpu'] = load_gpu(name, raw.get('gpu'), required)
+    m['i2c'] = load_i2c(name, raw.get('i2c', []))
     audio = raw.get('audio')
     if audio is not None or (required | optional) & CAPTURE:
         require(audio is not None, name + ': a capture device needs an audio format')
@@ -303,6 +304,29 @@ def load(path, supervised=False):
     m['large_regions'], m['large_names'] = load_large(name, raw.get('large_regions', []))
     add_heap_region(name, m)
     return m
+
+
+# The header I2C controllers (include/sunstone_i2c.h): bus names in the order of enum a733_i2c_bus_id and the interrupt that
+# each owns (SPI number plus 32). The section is not part of the packed binary: the generated tables carry it, and the OS
+# grants a declared controller when the board description routes it to the header.
+I2C_BUSES = {'twi0': (0, 43, 'twi0'), 'twi1': (1, 44, 'twi1'), 'twi2': (2, 45, 'twi2'), 'twi3': (3, 46, 'twi3'),
+             's_twi2': (4, 237, 's_twi2')}
+
+
+def load_i2c(name, items):
+    """The i2c section of manifest.json: a list of {bus, max_rate_hz}."""
+    require(isinstance(items, list), name + ': i2c is a list of {bus, max_rate_hz}')
+    result, seen = [], set()
+    for i, item in enumerate(items):
+        where = '%s i2c %d' % (name, i)
+        require(isinstance(item, dict) and set(item) == {'bus', 'max_rate_hz'}, where + ': keys are bus and max_rate_hz')
+        require(item['bus'] in I2C_BUSES, where + ': bus is one of %s' % ', '.join(sorted(I2C_BUSES)))
+        require(item['bus'] not in seen, where + ': bus declared twice')
+        seen.add(item['bus'])
+        rate = integer(item['max_rate_hz'], where + ' max_rate_hz', 1000, 400000)
+        index, intid, symbol = I2C_BUSES[item['bus']]
+        result.append({'bus': index, 'max_rate_hz': rate, 'intid': intid, 'symbol': symbol})
+    return result
 
 
 GPU_KEYS = ('job_us', 'clients', 'depth', 'leases', 'bindings', 'argument_bytes', 'program_bytes')
@@ -657,6 +681,10 @@ def c_tables(m):
              'const size_t ss_capture_capacity = %du;' % (capture_bytes(m) - 64 if capture_bytes(m) else 0),
              '/* The USB input queue\'s depth; admission takes the queue from the ledger (apps/os/usb-service.c). */',
              'const unsigned ss_usb_input_events = %du;' % m.get('usb_input_events', 0),
+             '/* The header I2C controllers the manifest declares (apps/os/i2c.c). */',
+             'const struct os_i2c_declaration ss_i2c_declarations[%d] = {%s};' % (
+                 max(1, len(m.get('i2c', []))), ','.join('{%du,%du}' % (d['bus'], d['max_rate_hz']) for d in m.get('i2c', [])) or '{0,0}'),
+             'const unsigned ss_i2c_declaration_count = %du;' % len(m.get('i2c', [])),
              '__attribute__((used,retain)) const struct os_application os_applications[] = {',
              '    OS_START_TABLE',
              '    {"%s",os_application_task_privileged,os_application_pins,os_application_start},' % m['name'],
@@ -678,6 +706,7 @@ def c_tables(m):
              '#ifndef SUNSTONE_A733_HW_FACTS', '#ifdef SUNSTONE_A733_OS_DMA', '    {143,0,0xd8,os_dma0_irq},', '#else',
              '    {143,0,0xd8,os_audio_irq},', '#endif', '#endif',
              '#ifdef SUNSTONE_A733_OS_GPU', ('    {95,A733_SMP_APPLICATION_CORE,0xd8,os_gpu_queue_irq},' if m.get('cluster', 0) else '    {95,2,0xd8,os_gpu_queue_irq},'), '#endif',
+             ] + ['    {%d,0,0xd8,os_i2c_irq_%s},' % (d['intid'], d['symbol']) for d in m.get('i2c', [])] + [
              '#ifdef SUNSTONE_A733_HW_FACTS', '    {97,0,0xd8,os_hw_facts_irq},{143,0,0xd8,os_hw_facts_irq},{95,0,0xd8,os_hw_facts_irq},', '#endif', '};',
              'const unsigned a733_irq_route_count=sizeof(a733_irq_routes)/sizeof(a733_irq_routes[0]);',
              '#ifdef SUNSTONE_A733_OS_GPU', '#include "gpu-runtime.h"',

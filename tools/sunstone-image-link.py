@@ -229,7 +229,7 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_ex
     kit = Path(__file__).resolve().parents[1] / 'include'
     header = ''.join((kit / name).read_text() for name in
                      ('sunstone_app.h', 'gpu_queue.h', 'sunstone_latency.h', 'sunstone_dma.h', 'sunstone_storage.h',
-                      'sunstone_npu_queue.h'))
+                      'sunstone_npu_queue.h', 'sunstone_i2c.h'))
     public_calls = set(re.findall(r'\b((?:ss_|gpu_queue_)[a-z0-9_]+)\s*\([^;{}]*\)\s*;', header))
     # Object inventories include references in discarded sections. A public
     # call remains valid when no live caller keeps its implementation linked.

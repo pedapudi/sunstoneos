@@ -1,0 +1,14 @@
+{
+  "name": "i2c-scan",
+  "devices": {"required": [], "optional": []},
+  "cpu": {"cluster": "a55", "workers": 0, "priority": 2, "stack_bytes": 8192},
+  "i2c": [
+    {"bus": "twi0", "max_rate_hz": 400000},
+    {"bus": "twi1", "max_rate_hz": 400000},
+    {"bus": "twi2", "max_rate_hz": 400000},
+    {"bus": "twi3", "max_rate_hz": 400000},
+    {"bus": "s_twi2", "max_rate_hz": 400000}
+  ],
+  "deadlines": {"run_us": 10000000, "return_reserve_us": 5000000, "progress_window_us": 2000000},
+  "output_limit": 2048
+}

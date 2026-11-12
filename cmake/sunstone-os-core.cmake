@@ -138,7 +138,7 @@ set(os_added apps/os/admission.c apps/os/lifetime.c apps/os/sealed.c apps/os/ide
   apps/os/usb-service.c apps/os/large.c apps/os/large_load.c drivers/storage/sunxi_mmc.c drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c drivers/storage/fat32_ro.c drivers/storage/storage_digest.c drivers/storage/storage_digest_extensions.c drivers/storage/storage_digest_ce.S kernel/appmem/app_region.c kernel/appmem/large_admit.c kernel/umem/umem.c apps/os/application.c apps/os/session.c apps/os/grants.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
   runtime/deadline.c runtime/deadline-a733.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
-  apps/os/thermal.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
+  apps/os/thermal.c apps/os/i2c.c drivers/i2c/a733_i2c_bus.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
   drivers/thermal/a733_thermal_native.c drivers/gpu/gicv3_spi.c platform/a733/fault.S platform/a733/fault.c)
 if(SUNSTONE_A733_OS_SD_WRITE)
   # One SD0 owner task serves the loader's reads and the FAT32 write service (apps/os/sd_owner.c); the SD core is built with its write path.
