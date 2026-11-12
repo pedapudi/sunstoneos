@@ -29,11 +29,23 @@ def inputs():
     return []
 
 
-def decode_scheduler_trace(payload, frequency):
-    """Decode the diagnostic-only tail; all durations retain raw counter ticks."""
+def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
+    """Decode the tail, with optional build metadata for its startup endpoint."""
+    if restore_spans is not None and not isinstance(restore_spans, bool):
+        raise ValueError('scheduler restore-span metadata must be Boolean or absent')
     if len(payload) < 32 or not frequency:
         raise ValueError('scheduler trace header or frequency is missing')
     magic, version, waits, tick_capacity = struct.unpack_from('<4Q', payload)
+    if version == 5:
+        configuration = tick_capacity & ~0xffffffff
+        tick_capacity &= 0xffffffff
+        if configuration & ~(3 << 62) or configuration == 1 << 62:
+            raise ValueError('scheduler build metadata has reserved bits or no validity flag')
+        if configuration & (1 << 63):
+            embedded_restore = bool(configuration & (1 << 62))
+            if restore_spans is not None and restore_spans != embedded_restore:
+                raise ValueError('scheduler and control restore-span metadata disagree')
+            restore_spans = embedded_restore
     if magic != SCHED_MAGIC or version not in (1, 2, 3, 4, 5) or not waits or not tick_capacity:
         raise ValueError('scheduler trace schema or declared capacities differ')
     records = 32  # two drains, each bounded by SS_OWNER_BATCH = 16
@@ -174,11 +186,18 @@ def decode_scheduler_trace(payload, frequency):
             raise ValueError('scheduler startup timestamps are out of order')
         markers['start_kind'] = (None if not markers['scheduler_start'] else
             'primary_running_flag_boundary' if version >= 3 and core == 0 else 'port_start_entry')
-        markers['restore_kind'] = ('final_software_return_point' if version == 5 else
-                                   'pre_eret' if version >= 3 else 'restore_entry')
+        markers['restore_kind'] = 'pre_eret' if version >= 3 else 'restore_entry'
         if version == 5:
-            markers['restore_scope'] = ('excludes the remaining assembly restore and ERET; '
-                'restore-spans runs include return-observer bookkeeping')
+            if restore_spans is True:
+                markers['restore_kind'] = 'final_software_return_point'
+                markers['restore_scope'] = ('includes return-observer bookkeeping; excludes its '
+                    'timestamp store, final temporary GP restore and ERET')
+            elif restore_spans is False:
+                markers['restore_scope'] = 'port restore marker; excludes the remaining assembly restore and ERET'
+            else:
+                markers['restore_kind'] = 'build_dependent_pre_eret'
+                markers['restore_scope'] = ('restore-span build metadata unavailable: ON includes return-observer '
+                    'bookkeeping, OFF records the port restore marker; both exclude the remaining assembly restore and ERET')
     tick_count, tick_dropped = take(2)
     if tick_count > tick_capacity or tick_dropped and tick_count != tick_capacity:
         raise ValueError('scheduler tick log counters differ from capacity')
@@ -425,9 +444,12 @@ def decode_scheduler_trace(payload, frequency):
             'scope': 'outer C dispatch and ordinary owner exits',
             'irqs': irq_rows, 'selections': switch_rows}
     return {'version': version, 'waits_capacity': waits, 'ticks_capacity': tick_capacity,
+            **({'restore_spans': restore_spans} if version == 5 else {}),
             'cores': cores, 'startup': startup, 'tick_count': tick_count,
             'primary_scheduler_start': startup[0]['scheduler_start'] if version >= 3 else None,
-            'startup_scope': 'scheduler_start_to_pre_eret_markers' if version >= 3 else 'port_start_to_restore_entry_lower_bound',
+            'startup_scope': ('scheduler_start_to_final_software_return_point' if version == 5 and restore_spans is True else
+                'scheduler_start_to_build_dependent_pre_eret_marker' if version == 5 and restore_spans is None else
+                'scheduler_start_to_pre_eret_markers' if version >= 3 else 'port_start_to_restore_entry_lower_bound'),
             'tick_dropped': tick_dropped, 'ticks': ticks, 'wake_chains': wake_cores, 'history_capacity': history_capacity, 'cpu0_wake_window': cpu0_window}
 
 
@@ -736,8 +758,10 @@ def decode(payload, dma=False):
                       'wake_site': site, 'raw_wakes': raw, 'sites': sites})
     result = {'quantile_method': QUANTILES, 'phase_attribution': 'named phases contain whole intervals; aggregate metrics and sites include gaps and crossings', 'model': False, 'frequency': frequency, 'elapsed_ticks': elapsed,
             'phase_bounds': dict(zip(PHASES, bounds)), 'core_mask': mask, 'timer_irq_core_mask': irq_mask, 'dma_jobs': dma_jobs, 'cores': cores}
+    control = decode_control(control_tail, frequency) if control_tail else None
     if scheduler_tail:
-        result['scheduler_trace'] = decode_scheduler_trace(scheduler_tail, frequency)
+        result['scheduler_trace'] = decode_scheduler_trace(scheduler_tail, frequency,
+            restore_spans=control['restore_spans'] if control is not None else None)
         for row in result['scheduler_trace']['wake_chains']:
             raw = [w for w in cores[row['core']]['raw_wakes'] if w['metric'] == 'wake_busy']
             maximum = row['maximum']
@@ -746,7 +770,7 @@ def decode(payload, dma=False):
             if maximum['whole_wake_ticks'] != max(w['running'] - w['ready'] for w in raw):
                 raise ValueError('scheduler busy-wake maximum differs from the named workload samples')
     if control_tail:
-        result['control'] = decode_control(control_tail, frequency)
+        result['control'] = control
         targets = {}
         for label, metric_name in (('task_lock_wait', 'lock1_wait'), ('interrupts_masked', 'irq_masked')):
             count = sum(row['metrics'][metric_name]['count'] for row in cores)

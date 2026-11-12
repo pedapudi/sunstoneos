@@ -86,6 +86,8 @@ def wake_summary(words, kind):
 def pack(report):
     words = list(report['header'])
     waits, ticks = words[2:4]
+    if words[1] == 5:
+        ticks &= 0xffffffff
     wait_words = 12 if words[1] == 1 else 16
     for core in report['cores']:
         for key in ('counts', 'command', 'self_suspend', 'irq', 'drain'):
@@ -493,9 +495,30 @@ def run(decode):
     rejected('truncated version 4 record', pack(v4)[:-8])
     v5 = fixture(version=5)
     def startup_scope(value):
-        assert value['startup'][0]['restore_kind'] == 'final_software_return_point'
+        assert value['startup'][0]['restore_kind'] == 'build_dependent_pre_eret'
         assert 'remaining assembly restore and ERET' in value['startup'][0]['restore_scope']
-    accepted('version 5 states the startup software boundary and remaining return tail', v5, startup_scope)
+        assert value['startup_scope'] == 'scheduler_start_to_build_dependent_pre_eret_marker'
+    accepted('version 5 without build metadata keeps the startup endpoint conditional', v5, startup_scope)
+    for enabled, kind in ((False, 'pre_eret'), (True, 'final_software_return_point')):
+        value = decode(pack(v5), FREQUENCY, restore_spans=enabled)
+        assert value['startup'][0]['restore_kind'] == kind
+        assert ('includes return-observer bookkeeping' in value['startup'][0]['restore_scope']) == enabled
+        cases.append(f'version 5 startup endpoint uses restore-span metadata {enabled}')
+        embedded = copy.deepcopy(v5)
+        embedded['header'][3] |= (1 << 63) | (int(enabled) << 62)
+        value = decode(pack(embedded), FREQUENCY)
+        assert value['restore_spans'] == enabled and value['ticks_capacity'] == 3
+        assert value['startup'][0]['restore_kind'] == kind
+        cases.append(f'version 5 standalone startup endpoint uses in-band metadata {enabled}')
+    for flags, name in ((1 << 62, 'restore flag without known configuration'),
+                        (1 << 32, 'reserved configuration bit'),
+                        ((1 << 63) | (1 << 61), 'reserved bit with known configuration')):
+        bad = copy.deepcopy(v5)
+        bad['header'][3] |= flags
+        rejected(name, pack(bad))
+    legacy = decode(pack(v4), FREQUENCY, restore_spans=True)
+    assert legacy['startup'][0]['restore_kind'] == 'pre_eret' and 'restore_scope' not in legacy['startup'][0]
+    cases.append('legacy startup endpoint remains unchanged with new metadata')
     v5['wake'][0] = copy.deepcopy(v5['wake'][1])
     v5['wake'][0][2] = 27
     v5['wake'][0][17] = 1980
@@ -598,6 +621,7 @@ def check_history(source, output):
     decode, _ = load_decoder(source)
     report = decode(payload.read_bytes(), FREQUENCY)
     assert report['version'] == 5 and report['history_capacity'] == 16
+    assert report['restore_spans'] is False and report['startup'][0]['restore_kind'] == 'pre_eret'
     expected = ('unmatched', 'unmatched', 'unmatched', 'unmatched', 'fast', 'slow', 'unmatched', 'unmatched')
     assert tuple(row['maximum']['class'] for row in report['wake_chains']) == expected
     window = report['cpu0_wake_window']

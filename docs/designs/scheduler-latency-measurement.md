@@ -156,6 +156,16 @@ without tickless idle remain unqualified.
 
 ## Startup and workload use distinct timing boundaries
 
+Version five carries restore-span build metadata in the upper two bits of its
+tick-capacity header word; the lower 32 bits retain the capacity and the middle
+bits are reserved. The validity bit distinguishes an explicit OFF value from
+an older header with unknown metadata. With restore spans enabled, the startup
+endpoint follows the return observer's bookkeeping and excludes the timestamp
+store, final temporary register restoration and exception return. With restore
+spans disabled, it remains the port restore marker. The decoder checks this
+metadata against a control tail when present and keeps an older version-five
+endpoint conditional when no build metadata is available.
+
 Version four marks the primary CPU immediately before it sets the
 scheduler-running flag. Assembly records each core's first context restoration
 immediately before restoring the final register pair, changing stack selection

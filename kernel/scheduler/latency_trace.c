@@ -60,7 +60,10 @@ void ss_sched_trace_snapshot(struct ss_sched_trace_report *out)
     out->magic = SS_SCHED_TRACE_MAGIC;
     out->version = SS_SCHED_TRACE_VERSION;
     out->waits_capacity = SS_SCHED_TRACE_WAITS;
-    out->ticks_capacity = SS_SCHED_TRACE_TICKS;
+    out->ticks_capacity = SS_SCHED_TRACE_TICKS | SS_SCHED_TRACE_CONFIG_KNOWN;
+#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
+    out->ticks_capacity |= SS_SCHED_TRACE_RESTORE_SPANS;
+#endif
     out->history_capacity = SS_SCHED_TRACE_HISTORY;
     out->cpu0_window.capacity = SS_SCHED_TRACE_HISTORY;
     for (unsigned core = 0; core < SS_SCHED_TRACE_CORES; ++core) {

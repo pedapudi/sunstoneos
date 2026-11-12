@@ -249,6 +249,24 @@ def run(decoder, source):
                     if version == 5 and not pmu:
                         assert len(base + scheduler + control) == 131072
                 cases.append(f'layout scheduler={version}, PMU={bool(pmu)}, control={bool(control)}')
+    for enabled in (False, True):
+        # Keep the complete workload's valid wake-chain fields and change only
+        # the already constructed report's header configuration word.
+        scheduler = bytearray(scheduler_payload(source, 5))
+        struct.pack_into('<Q', scheduler, 24, 512 | (1 << 63) | (int(enabled) << 62))
+        control = copy.deepcopy(busy)
+        control['header'][-1] |= int(enabled) << 2
+        decoded = decoder.decode(base + scheduler + pack(control))
+        assert decoded['scheduler_trace']['restore_spans'] == enabled
+        assert decoded['scheduler_trace']['startup'][0]['restore_kind'] == (
+            'final_software_return_point' if enabled else 'pre_eret')
+        cases.append(f'combined startup metadata agrees with control flag {enabled}')
+        control['header'][-1] ^= 4
+        reject(f'combined startup metadata disagrees with control flag {enabled}',
+               base + scheduler + pack(control), decoder.decode)
+        standalone = decoder.decode(base + scheduler)
+        assert standalone['scheduler_trace']['restore_spans'] == enabled
+        cases.append(f'standalone result retains startup build metadata {enabled}')
     for elapsed, combined, valid in ((10000, False, True), (10001, False, False),
                                      (15000, True, True), (15001, True, False)):
         data = base_payload(elapsed) + (pack(busy) if combined else b'')

@@ -25,6 +25,13 @@ _Static_assert(SS_SCHED_TRACE_HISTORY > 0, "diagnostic event history must retain
 #define SS_SCHED_TRACE_MAGIC UINT64_C(0x5353534348545231)
 #define SS_SCHED_TRACE_VERSION 5u
 #define SS_SCHED_RECORD_FIFO_BUSY (UINT64_C(1) << 63)
+/* Version 5 ticks_capacity: low 32 bits are the declared capacity, bit 63
+ * confirms build metadata, and bit 62 identifies restore-span instrumentation.
+ * Bits 32..61 are reserved. Older version-5 headers have unknown metadata.
+ * See docs/designs/scheduler-latency-measurement.md, startup boundaries. */
+#define SS_SCHED_TRACE_CONFIG_KNOWN (UINT64_C(1) << 63)
+#define SS_SCHED_TRACE_RESTORE_SPANS (UINT64_C(1) << 62)
+_Static_assert(SS_SCHED_TRACE_TICKS <= UINT32_MAX, "tick capacity must not overlap build metadata");
 
 /* All timestamps use CNTVCT. A command retains the timestamps after masking,
  * reference, publish, before/after drain, after slice refresh and before unmask.
@@ -145,7 +152,7 @@ _Static_assert(sizeof(struct ss_sched_trace_cpu0_window) ==
 _Static_assert(sizeof(struct ss_sched_trace_wake_core) == 72 * sizeof(uint64_t),
                "version 3 wake record layout");
 struct ss_sched_trace_report {
-    uint64_t magic, version, waits_capacity, ticks_capacity;
+    uint64_t magic, version, waits_capacity, ticks_capacity; /* V5 capacity includes the metadata above. */
     struct ss_sched_trace_core core[SS_SCHED_TRACE_CORES];
     /* Version 3: core0 before xSchedulerRunning, other observed port starts;
      * first task restore just before final X0/X1 load and ERET. These are
