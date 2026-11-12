@@ -4,7 +4,7 @@
   "code os": 71,
   "data fixture load_task": 1,
   "data fixture task control block": 1,
-  "data fixture wake": 2,
+  "data fixture wake": 1,
   "data fixture wake_task": 1,
   "data os actions": 1,
   "data os pxCurrentTCBs": 1,
@@ -14,27 +14,27 @@
   "data os ssKernelRegistry": 1,
   "data os ssKernelTasks": 4,
   "data stack exception stack": 7,
-  "data total": 25
+  "data total": 24
  },
  "outside": {
   "code fixture": 4,
   "code os": 56,
   "data fixture phase": 1,
-  "data fixture wake": 24,
+  "data fixture wake": 8,
   "data os ssKernelCPUs": 1,
   "data os ssKernelTime": 1,
   "data os tick_interval": 1,
   "data os ullPortYieldRequired": 1,
   "data os xSchedulerRunning": 1,
   "data stack exception stack": 3,
-  "data total": 33
+  "data total": 17
  },
  "remote": {
   "code fixture": 6,
   "code os": 56,
   "data fixture load_task": 1,
   "data fixture phase": 1,
-  "data fixture wake": 2,
+  "data fixture wake": 1,
   "data fixture wake_task": 1,
   "data os actions": 1,
   "data os pxCurrentTCBs": 1,
@@ -45,7 +45,7 @@
   "data os ssKernelTasks": 1,
   "data os xSchedulerRunning": 1,
   "data stack exception stack": 7,
-  "data total": 25
+  "data total": 24
  },
  "scan": {
   "code os": 5,

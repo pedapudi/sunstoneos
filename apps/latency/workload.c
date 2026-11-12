@@ -8,16 +8,23 @@
 
 _Static_assert(configNUMBER_OF_CORES == LATENCY_CORES, "requires eight cores");
 enum phase { QUIET, IDLE, BUSY, STOP };
+/* One line per core: only that core's wake task and CPU0's tick share it.
+ * The alignment applies to the first member alone; on a declarator list it
+ * would align every member and spread a slot over three lines. */
 struct wake_slot {
-    _Alignas(64) atomic_uint pending, completed, parked;
+    _Alignas(64) atomic_uint pending;
+    atomic_uint completed, parked;
     uint64_t released;
     unsigned metric;
 };
+_Static_assert(sizeof(struct wake_slot) == 64, "one line per wake slot");
 struct load_slot {
-    _Alignas(64) atomic_uint ready, stopped;
+    _Alignas(64) atomic_uint ready;
+    atomic_uint stopped;
     atomic_uint_fast64_t sweeps;
     uint64_t digest;
 };
+_Static_assert(sizeof(struct load_slot) == 64, "one line per load slot");
 static struct wake_slot wake[LATENCY_CORES];
 static struct load_slot load[LATENCY_CORES];
 #ifdef SUNSTONE_LATENCY_MODEL
