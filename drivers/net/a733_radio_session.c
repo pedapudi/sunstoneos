@@ -34,14 +34,16 @@ static enum a733_radio_session_result fail_at(struct a733_radio_session *s,unsig
     if(line&&!s->fail_line){s->fail_line=line;s->fail_stage=s->stage|(s->fail_detail<<9);}
     s->fault=1;
     sunxi_sdio_stop(&s->platform->host,SUNXI_SDIO_CARD_ERROR);
-    if(s->dispatcher.initialized)aic8800_transport_fault_receive(&s->transport,&s->dispatcher);
-    else if(s->transport.initialized)aic8800_transport_poll(&s->transport);
+    if(!s->stop_requested){
+        if(s->dispatcher.initialized)aic8800_transport_fault_receive(&s->transport,&s->dispatcher);
+        else if(s->transport.initialized)aic8800_transport_poll(&s->transport);
+    }
     (void)a733_radio_platform_retain(s->platform);
     if(s->sockets.initialized){
         atomic_store(&s->sockets.failed,1);aic8800_network_fault(&s->sockets.network);
         /* Failed network polling emits link-down and services copied replies;
          * it cannot advance the retained transport or discard packet storage. */
-        (void)sunstone_net_poll_owned(&s->sockets);
+        if(!s->stop_requested)(void)sunstone_net_poll_owned(&s->sockets);
     }
     return A733_SESSION_RETAINED;
 }
@@ -115,6 +117,46 @@ int a733_radio_session_init(struct a733_radio_session *s,struct a733_radio_platf
 {return initialize(s,p,c,0);}
 int a733_radio_session_init_bootstrap(struct a733_radio_session *s,struct a733_radio_platform *p,const struct a733_radio_session_config *c)
 {return initialize(s,p,c,1);}
+int a733_radio_session_stop(struct a733_radio_session *s,uint64_t deadline)
+{
+    if(!enter(s))return 0;
+    if(!deadline||deadline>s->platform->config.lifetime_deadline_us){(void)leave(s,A733_SESSION_PENDING);return 0;}
+    s->stop_requested=1;
+    if(s->sockets.initialized){
+        atomic_store_explicit(&s->sockets.failed,1,memory_order_release);
+        aic8800_network_fault(&s->sockets.network);
+    }
+    int ok=a733_radio_platform_stop(s->platform,&s->borrow,deadline);
+    if(!ok)(void)fail(s);
+    (void)leave(s,A733_SESSION_PENDING);return ok;
+}
+int a733_radio_session_peer_stopped(struct a733_radio_session *s)
+{
+    return owner(s)&&s->stop_requested&&s->platform->peer_stopped&&
+        s->platform->bluetooth_stop_lease.id&&!s->platform->pins->failed;
+}
+int a733_radio_session_stop_release(struct a733_radio_session *s)
+{
+    if(!enter(s))return 0;
+    int ok=s->stop_requested&&!s->fault&&a733_radio_platform_stop_release(s->platform,&s->borrow);
+    (void)leave(s,A733_SESSION_PENDING);return ok;
+}
+int a733_radio_session_stop_held(struct a733_radio_session *s)
+{
+    if(!enter(s))return -1;
+    if(!s->stop_requested||s->fault||s->platform->stop_released||
+       s->firmware.state!=AIC8800_FW_START_CONFIRMED||!s->firmware.bt_patch_applied||
+       s->runtime.state!=AIC8800_RUNTIME_RECEIVING||s->transport.state!=AIC8800_TRANSPORT_RUNTIME||
+       s->transport.card!=&s->platform->card||s->transport.firmware!=&s->firmware||
+       s->firmware.owner!=&s->transport||s->transport.runtime!=&s->runtime||s->runtime.owner!=&s->transport||
+       s->transport.receive_owner!=&s->dispatcher||!s->dispatcher.initialized||s->dispatcher.faulted||
+       s->dispatcher.transport!=&s->transport||(s->firmware.binding_required&&!s->runtime.binding_confirmed)){
+        (void)leave(s,A733_SESSION_PENDING);return -1;
+    }
+    enum a733_radio_platform_result r=a733_radio_platform_stop_held(s->platform,&s->borrow);
+    if(r==A733_RADIO_RETAINED)(void)fail(s);
+    (void)leave(s,A733_SESSION_PENDING);return r==A733_RADIO_READY?1:r==A733_RADIO_BUSY?0:-1;
+}
 /* Ordinary frames admitted while no network consumer is attached are counted
  * and discarded. A held frame would stop the receive parser and attachment. */
 static int discard_data(struct a733_radio_session *s)
@@ -195,6 +237,12 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
 {
     if(!enter(s))return A733_SESSION_INVALID;
     if(s->fault)return leave(s,fail(s));
+    if(s->stop_requested){
+        enum a733_radio_platform_result r=a733_radio_platform_poll(s->platform);
+        if(r==A733_RADIO_RETAINED||r==A733_RADIO_INVALID)return leave(s,fail(s));
+        return leave(s,r==A733_RADIO_DOWN?A733_SESSION_DOWN:
+            r==A733_RADIO_BUSY?A733_SESSION_BUSY:A733_SESSION_PENDING);
+    }
     if(s->stage==PLATFORM){
         enum a733_radio_platform_result r=a733_radio_platform_poll(s->platform);
         if(r==A733_RADIO_RETAINED||r==A733_RADIO_INVALID)return leave(s,fail(s));
@@ -283,13 +331,13 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
 }
 static int admission(struct a733_radio_session *s,uint64_t deadline)
 {
-    return !s->bootstrap_only&&!s->fault&&!s->renew_pending&&(s->stage==MANAGEMENT||s->stage==NETWORK)&&deadline&&deadline<=s->deadline&&
+    return !s->stop_requested&&!s->bootstrap_only&&!s->fault&&!s->renew_pending&&(s->stage==MANAGEMENT||s->stage==NETWORK)&&deadline&&deadline<=s->deadline&&
         live(s)==A733_SESSION_PENDING;
 }
 int a733_radio_session_bootstrap(struct a733_radio_session *s,uint64_t *generation)
 {
     if(!enter(s))return -1;
-    if(!outside(s,generation,sizeof(*generation))||s->fault){(void)leave(s,A733_SESSION_PENDING);return -1;}
+    if(!outside(s,generation,sizeof(*generation))||s->fault||s->stop_requested){(void)leave(s,A733_SESSION_PENDING);return -1;}
     if(s->transport.state==AIC8800_TRANSPORT_FAULT||s->dispatcher.faulted||s->runtime.state==AIC8800_RUNTIME_FAULT){
         (void)leave(s,fail(s));return -1;
     }
@@ -348,9 +396,9 @@ int a733_radio_session_start_network(struct a733_radio_session *s,const struct s
     return done(s,ok);
 }
 int a733_radio_session_take_event(struct a733_radio_session *s,struct aic8800_dispatch_event *out)
-{if(!enter(s))return 0;int ok=outside(s,out,sizeof(*out))&&aic8800_dispatch_take_event(&s->dispatcher,out);(void)leave(s,A733_SESSION_PENDING);return ok;}
+{if(!enter(s))return 0;int ok=!s->stop_requested&&outside(s,out,sizeof(*out))&&aic8800_dispatch_take_event(&s->dispatcher,out);(void)leave(s,A733_SESSION_PENDING);return ok;}
 int a733_radio_session_take_record(struct a733_radio_session *s,struct aic8800_dispatch_record *out)
-{if(!enter(s))return 0;int ok=outside(s,out,sizeof(*out))&&aic8800_dispatch_take_record(&s->dispatcher,out);(void)leave(s,A733_SESSION_PENDING);return ok;}
+{if(!enter(s))return 0;int ok=!s->stop_requested&&outside(s,out,sizeof(*out))&&aic8800_dispatch_take_record(&s->dispatcher,out);(void)leave(s,A733_SESSION_PENDING);return ok;}
 int a733_radio_session_take_scan(struct a733_radio_session *s,struct aic8800_wifi_scan_summary *out)
 {if(!enter(s))return 0;return done(s,outside(s,out,sizeof(*out))&&admission(s,s->deadline)&&aic8800_transport_take_scan(&s->transport,out));}
 

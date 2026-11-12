@@ -22,7 +22,7 @@ def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def main():
  p=argparse.ArgumentParser(description=__doc__)
  for name in ["tcp","rsn","kernel","tinyusb","headers","linker","qemu","reference-dir","evidence"]:p.add_argument("--"+name,type=Path,required=True)
- p.add_argument("--cases",nargs="+",choices=["session"],default=["session"])
+ p.add_argument("--cases",nargs="+",choices=["session","stop-start","stop-setup","stop-upload","stop-runtime","stop-held","stop-deadline"],default=["session","stop-start","stop-setup","stop-upload","stop-runtime","stop-held","stop-deadline"])
  p.add_argument("--build-only",action="store_true");p.add_argument("--firmware",type=Path,required=True);a=p.parse_args()
  out=a.evidence.resolve();out.mkdir(parents=True,exist_ok=True);source=out/"project";source.mkdir(exist_ok=True)
  for name,h in REFERENCES.items():assert sha(a.reference_dir/name)==h,name
@@ -40,7 +40,7 @@ def main():
  toolchain=out/"toolchain.cmake";toolchain.write_text(f'set(CMAKE_SYSTEM_NAME Generic)\nset(CMAKE_SYSTEM_PROCESSOR aarch64)\nset(CMAKE_C_COMPILER clang)\nset(CMAKE_ASM_COMPILER clang)\nset(CMAKE_C_COMPILER_TARGET aarch64-none-elf)\nset(CMAKE_ASM_COMPILER_TARGET aarch64-none-elf)\nset(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)\nset(CMAKE_EXE_LINKER_FLAGS_INIT "--ld-path={a.linker}")\nset(SUNSTONE_LLD "{a.linker}")\n# The repository toolchain also defines the path-map helpers its CMakeLists uses.\ninclude("{ROOT}/cmake/aarch64-clang.cmake")\n')
  result={"references":REFERENCES,"firmware":dict(blobs),"commands":[],"runs":[]}
  commands=[["cmake","-S",str(source),"-B",str(out/"build"),f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",f"-DFREERTOS_DIR={a.kernel}",f"-DTINYUSB_DIR={a.tinyusb}",f"-DSUNSTONE_TCP_DIR={a.tcp}",f"-DSUNSTONE_RSN_DIR={a.rsn}",f"-DSUNSTONE_NETWORK_C_HEADERS={a.headers}",f"-DSUNSTONE_LLD={a.linker}",f"-DSUNSTONE_SESSION_BLOBS={assembly}"],
- ["cmake","--build",str(out/"build"),"--target","radio-session-model","-j4"]]
+ ["cmake","--build",str(out/"build"),"--target","radio-session-model","-j3"]]
  for cmd in commands:
   run=subprocess.run(cmd,capture_output=True,text=True);result["commands"].append({"command":cmd,"returncode":run.returncode,"stdout":run.stdout,"stderr":run.stderr})
   if run.returncode:break

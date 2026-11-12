@@ -52,7 +52,7 @@ int a733_radio_platform_scopes(const struct a733_radio_platform_config *c,a733_c
 static int supply_live(struct a733_radio_platform *p);
 static int abort_possible(struct a733_radio_platform *p)
 {
-    if(p->fault||p->aborting||p->abort_done||!(p->power_on||p->already_on)||
+    if(p->fault||p->stop_requested||p->aborting||p->abort_done||!(p->power_on||p->already_on)||
        p->stage<RSTAGE_SUPPLY_WAIT||p->stage>RSTAGE_READY||!p->pin_lease.id||
        p->last_now+ABORT_US>p->config.lifetime_deadline_us||p->ops.current(p->cookie)!=1||
        a733_rail_status(p->rails,&p->rail)!=A733_RAIL_READY||
@@ -63,7 +63,7 @@ static enum a733_radio_platform_result fail_at(struct a733_radio_platform *p,uns
 {
     if(line&&!p->fail_line){p->fail_line=line;p->fail_stage=p->stage;}
     /* An abort is never cut short: while it runs inside its deadline the failure waits for it. */
-    if(p->aborting&&p->last_now<p->deadline)return A733_RADIO_PENDING;
+    if(p->aborting&&!p->stop_requested&&p->last_now<p->deadline)return A733_RADIO_PENDING;
     if(a733_radio_platform_clean(p)){
         /* Nothing is powered: leave the register lock and keep every lease as it is. */
         p->fault=1;
@@ -250,7 +250,7 @@ static int host_access(struct a733_radio_platform *p,uint32_t off,uint32_t *v,un
     unsigned entered=0;
     if(!p->core_call) {
         unsigned expected=0;
-        if(p->stage!=RSTAGE_READY||!p->borrower.generation||
+        if(p->stop_requested||p->stage!=RSTAGE_READY||!p->borrower.generation||
             !atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return 0;
         entered=1;
     }
@@ -318,12 +318,12 @@ int a733_radio_platform_init(struct a733_radio_platform *p,const struct a733_rad
 }
 int a733_radio_platform_four_bit(struct a733_radio_platform *p)
 {
-    if(!p||!p->initialized||p->stage!=RSTAGE_ACQUIRE||p->clock.id||p->fault||p->four_bit)return 0;
+    if(!p||!p->initialized||p->stage!=RSTAGE_ACQUIRE||p->clock.id||p->fault||p->stop_requested||p->four_bit)return 0;
     p->four_bit=1;p->shared|=A733_CLOCK_PERI0;return 1;
 }
 int a733_radio_platform_first_run_guard(struct a733_radio_platform *p)
 {
-    if(!p||!p->initialized||p->stage!=RSTAGE_ACQUIRE||p->clock.id||p->fault||p->first_run_guard||p->rail_count>=4)return 0;
+    if(!p||!p->initialized||p->stage!=RSTAGE_ACQUIRE||p->clock.id||p->fault||p->stop_requested||p->first_run_guard||p->rail_count>=4)return 0;
     /* DCDC8 joins the shared lease as an observation only; rebuild the sequence. */
     p->first_run_guard=1;p->rail_scopes|=rail_scope(A733_RADIO_DCDC8);p->rail_count=0;
     for(unsigned rail=0;rail<A733_RAIL_COUNT;++rail)
@@ -332,7 +332,7 @@ int a733_radio_platform_first_run_guard(struct a733_radio_platform *p)
 }
 int a733_radio_platform_bluetooth(struct a733_radio_platform *p,const struct a733_radio_bluetooth_pins *b)
 {
-    if(!p||!p->initialized||p->stage!=RSTAGE_ACQUIRE||p->clock.id||p->fault||p->bluetooth.authority||
+    if(!p||!p->initialized||p->stage!=RSTAGE_ACQUIRE||p->clock.id||p->fault||p->stop_requested||p->bluetooth.authority||
         !b||!b->authority||!a733_ranges_disjoint(p,sizeof(*p),b,sizeof(*b)))return 0;
     for(unsigned i=0;i<2;++i)
         if((b->expected[i].function!=0&&b->expected[i].function!=15)||
@@ -340,6 +340,19 @@ int a733_radio_platform_bluetooth(struct a733_radio_platform *p,const struct a73
             !a733_pin_config_valid_banked(A733_PIN_M,3+i,b->expected[i])||
             !a733_pin_config_valid_banked(A733_PIN_M,3+i,b->desired[i]))return 0;
     p->bluetooth=*b;return 1;
+}
+int a733_radio_platform_bluetooth_stop(struct a733_radio_platform *p,const struct a733_radio_bluetooth_stop *b)
+{
+    if(!p||!p->initialized||p->stage!=RSTAGE_ACQUIRE||p->clock.id||p->fault||p->stop_requested||
+       !p->bluetooth.authority||p->bluetooth_stop.authority||!b||!output_disjoint(p,b,sizeof(*b))||
+       !b->authority||b->topology!=p->config.topology.identity||b->expected.function!=1||
+       !a733_pin_config_valid_banked(A733_PIN_M,2,b->expected)||b->inherited_level>1||b->reserved)return 0;
+    unsigned evidence=0;
+    for(unsigned i=0;i<sizeof(b->wiring_evidence);++i)evidence|=b->wiring_evidence[i];
+    if(!evidence||!(p->pins->handoff.authorized[A733_PIN_M]&4)||
+       !(p->pins->handoff.latch[1].known_mask&4)||
+       !!(p->pins->handoff.latch[1].value&4)!=b->inherited_level)return 0;
+    p->bluetooth_stop=*b;return 1;
 }
 static enum a733_radio_platform_result metadata(struct a733_radio_platform *p)
 {
@@ -557,12 +570,103 @@ int a733_radio_platform_shutdown(struct a733_radio_platform *p,const struct a733
     if(!p||!p->initialized||!token||!a733_ranges_disjoint(p,sizeof(*p),token,sizeof(*token)))return 0;
     unsigned expected=0;
     if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return 0;
-    int ok=!p->fault&&p->ops.current(p->cookie)==1&&p->stage==RSTAGE_READY&&token->generation&&
+    int ok=!p->fault&&!p->stop_requested&&p->ops.current(p->cookie)==1&&p->stage==RSTAGE_READY&&token->generation&&
         token->generation==p->borrower.generation&&token->owner==p->borrower.owner&&
         p->host.state==SUNXI_SDIO_READY&&p->card.state==SDIO_CARD_READY&&observe(p)&&
         deadline>p->last_now&&deadline<=p->config.lifetime_deadline_us;
     if(ok){p->deadline=deadline;p->stage=RSTAGE_SHUTDOWN_PM1;}
     (void)finish(p,A733_RADIO_PENDING);return ok;
+}
+int a733_radio_platform_stop(struct a733_radio_platform *p,const struct a733_radio_borrow *token,uint64_t deadline)
+{
+    if(!p||!p->initialized||!token||!output_disjoint(p,token,sizeof(*token)))return 0;
+    unsigned expected=0;
+    if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return 0;
+    int ok=p->ops.current(p->cookie)==1&&token->generation==p->borrower.generation&&
+        token->owner==p->borrower.owner&&deadline&&deadline<=p->config.lifetime_deadline_us;
+    if(ok){
+        /* Admission closes even if the clock or existing lifetime has failed.
+         * That failure must not obtain the legacy fresh abort allowance. */
+        if(!p->stop_requested){p->stop_deadline=deadline;p->stop_released=!p->bluetooth.authority;}
+        else if(deadline<p->stop_deadline)p->stop_deadline=deadline;
+        p->stop_requested=1;
+        if(p->stage>RSTAGE_READY&&p->stage<=RSTAGE_DOWN){
+            p->stop_phase=3;p->stop_bus=0x10001;
+            for(unsigned i=0;i<p->rail_count;++i)if(p->snapshots[i].rail==A733_RAIL_BLDO5)
+                p->stop_powered=p->snapshots[i].enabled;
+        }
+        if(!observe(p)||p->last_now>=p->stop_deadline||p->fault||p->aborting||p->abort_done)
+            (void)fail(p);
+        else if(p->stage<=RSTAGE_READY)p->deadline=p->stop_deadline;
+        else if(p->deadline>p->stop_deadline)p->deadline=p->stop_deadline;
+    }
+    (void)finish(p,A733_RADIO_PENDING);return ok;
+}
+int a733_radio_platform_stop_release(struct a733_radio_platform *p,const struct a733_radio_borrow *token)
+{
+    if(!p||!p->initialized||!token||!output_disjoint(p,token,sizeof(*token)))return 0;
+    unsigned expected=0;
+    if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return 0;
+    int ok=p->ops.current(p->cookie)==1&&p->stop_requested&&!p->fault&&
+        token->generation==p->borrower.generation&&token->owner==p->borrower.owner&&
+        observe(p)&&p->last_now<p->stop_deadline;
+    if(ok)p->stop_released=1;
+    (void)finish(p,A733_RADIO_PENDING);return ok;
+}
+/* Finish only the accepted host operation. The original stage stays intact:
+ * widening's module callback authenticates that stage and the register lock.
+ * Higher protocol state and all buffers remain pinned and cannot resume. */
+static enum a733_radio_platform_result stop_poll(struct a733_radio_platform *p)
+{
+    if(!p->stop_phase){
+        if(p->host.state==SUNXI_SDIO_FAULT)return fail(p);
+        if(p->host.state!=SUNXI_SDIO_READY&&p->host.state!=SUNXI_SDIO_UNPREPARED){
+            int live=clock_live(p);if(live<0)return fail(p);if(!live)return A733_RADIO_BUSY;
+            int locked=lock(p);if(locked<0)return fail(p);if(!locked)return A733_RADIO_BUSY;
+            if(p->pins->failed)return fail(p);
+            if(p->host.state!=SUNXI_SDIO_WIDENING){p->ops.leave(p->cookie);p->held=0;}
+            p->core_call=1;sunxi_sdio_poll(&p->host);p->core_call=0;
+            if(p->host.state==SUNXI_SDIO_FAULT||!timely(p))return fail(p);
+            if(p->host.state==SUNXI_SDIO_DONE){
+                if(!sunxi_sdio_take_result(&p->host,&p->stop_result)||p->stop_result.error)return fail(p);
+                p->stop_completed=1;
+            }
+            return A733_RADIO_PENDING;
+        }
+        if(!p->pin_lease.id||p->pmic_request.id||
+           (p->host.state==SUNXI_SDIO_UNPREPARED&&p->stage>RSTAGE_PREPARE))return fail(p);
+        p->stop_unprepared=p->host.state==SUNXI_SDIO_UNPREPARED;
+        p->stop_bus=p->stage<=RSTAGE_BUS_GATE?0:p->stage<=RSTAGE_RESET_RELEASE?1:0x10001;
+        /* The latest completed supply observation proves whether an off
+         * request is legal. Before POWER_ON, an observed off rail stays off. */
+        unsigned observed=0;
+        for(unsigned i=0;i<p->rail_count;++i)if(p->snapshots[i].rail==A733_RAIL_BLDO5){
+            observed=1;p->stop_powered=p->snapshots[i].enabled;
+        }
+        if(!observed)return fail(p);
+        p->stop_phase=1;return A733_RADIO_PENDING;
+    }
+    if(!p->stop_released)return A733_RADIO_PENDING;
+    if(p->stop_phase==1&&p->bluetooth_stop.authority){
+        const struct a733_radio_bluetooth_stop *b=&p->bluetooth_stop;
+        struct a733_pin_request_banked request={A733_PIN_M,2,b->expected,b->expected,b->inherited_level,0,0};
+        struct a733_pin_output_condition condition={0};
+        condition.masks[A733_PIN_M]=4;condition.levels[A733_PIN_M]=(uint32_t)b->inherited_level<<2;
+        enum a733_pins_result r=a733_pins_acquire_banked_checked(p->pins,p->config.owner,&request,1,
+            &condition,&p->bluetooth_stop_lease,p->deadline);
+        if(!timely(p))return fail(p);
+        if(r==A733_PINS_BUSY)return A733_RADIO_BUSY;
+        if(r!=A733_PINS_OK)return fail(p);
+        p->stop_phase=2;return A733_RADIO_PENDING;
+    }
+    if(p->stop_phase==2){
+        enum a733_pins_result r=a733_pins_write_outputs(p->pins,&p->bluetooth_stop_lease,A733_PIN_M,4,0,p->deadline);
+        if(!timely(p))return fail(p);
+        if(r==A733_PINS_BUSY)return A733_RADIO_BUSY;
+        if(r!=A733_PINS_OK)return fail(p);
+        p->peer_stopped=1;
+    }
+    p->stop_phase=3;p->stage=RSTAGE_SHUTDOWN_PM1;return A733_RADIO_PENDING;
 }
 /* The failure shutdown. Every step is best effort and read back where the hardware answers; a step that
  * cannot be done sets no success bit and the next still runs: PM1 low first (the module off), then the
@@ -632,7 +736,7 @@ static enum a733_radio_platform_result shutdown_poll(struct a733_radio_platform 
         p->stage=RSTAGE_SHUTDOWN_CONTROLLER;return A733_RADIO_PENDING;
     }
     if(p->stage==RSTAGE_SHUTDOWN_POWER) {
-        if(!(p->power_on||p->already_on)){p->stage=RSTAGE_DOWN;return A733_RADIO_DOWN;}
+        if(p->stop_requested?!p->stop_powered:!(p->power_on||p->already_on)){p->stage=RSTAGE_DOWN;return A733_RADIO_DOWN;}
         enum a733_pmic_status r=a733_pmic_submit_power_off(p->pmic,p->config.owner,&p->rail,A733_RAIL_BLDO5,
             RADIO_IO_CODE,p->deadline,&p->pmic_request);
         if(!timely(p))return fail(p);
@@ -664,6 +768,7 @@ static enum a733_radio_platform_result shutdown_poll(struct a733_radio_platform 
     /* Only the clock step writes shared CCU state under the register lock. */
     if(p->stage!=RSTAGE_SHUTDOWN_CLOCKS){p->ops.leave(p->cookie);p->held=0;}
     if(p->stage==RSTAGE_SHUTDOWN_CONTROLLER) {
+        if(p->stop_requested&&p->stop_unprepared){p->stage=RSTAGE_SHUTDOWN_CLOCKS;return A733_RADIO_PENDING;}
         if(!sunxi_sdio_quiesce(&p->host,p->deadline))return fail(p);
         p->stage=RSTAGE_SHUTDOWN_CONTROLLER_WAIT;
     } else if(p->stage==RSTAGE_SHUTDOWN_CONTROLLER_WAIT) {
@@ -673,9 +778,9 @@ static enum a733_radio_platform_result shutdown_poll(struct a733_radio_platform 
     } else if(p->stage==RSTAGE_SHUTDOWN_CLOCKS) {
         /* Module gate off, then the bus gate and reset asserted, each read back; the
          * interrupt stays masked and inactive. */
-        uint32_t old=p->running_module;
+        uint32_t old=p->stop_requested&&!p->stop_bus?p->initial_module&0x87001f1f:p->running_module;
         int ok=update(p,CCU+0xd10,0x87001f1f,old,old&~BIT(31))&&
-            update(p,CCU+0xd1c,0x10001,0x10001,0)&&masked(p)==1;
+            update(p,CCU+0xd1c,0x10001,p->stop_requested?p->stop_bus:0x10001,0)&&masked(p)==1;
         if(!ok)return fail(p);
         p->running_module=old&~BIT(31);p->stage=RSTAGE_SHUTDOWN_POWER;
     } else return fail(p);
@@ -689,9 +794,16 @@ enum a733_radio_platform_result a733_radio_platform_poll(struct a733_radio_platf
     if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return A733_RADIO_BUSY;
     if(p->fault)return finish(p,fail(p));
     if(p->ops.current(p->cookie)!=1)return finish(p,A733_RADIO_INVALID);
-    if(p->stage==RSTAGE_READY)return finish(p,p->host.state==SUNXI_SDIO_FAULT?fail(p):A733_RADIO_READY);
+    if(p->stage==RSTAGE_READY&&!p->stop_requested)return finish(p,p->host.state==SUNXI_SDIO_FAULT?fail(p):A733_RADIO_READY);
     if(p->stage==RSTAGE_DOWN)return finish(p,A733_RADIO_DOWN);
     if(!timely(p))return finish(p,fail(p));
+    if(p->stop_requested&&p->stage<=RSTAGE_READY&&p->stage>RSTAGE_PINS&&
+       p->stage!=RSTAGE_POWER_WAIT&&p->stage!=RSTAGE_VERIFY_RAILS){
+        int health=supply_live(p);
+        if(health<0)return finish(p,fail(p));
+        if(!health)return finish(p,A733_RADIO_BUSY);
+        return finish(p,stop_poll(p));
+    }
     if(p->stage>RSTAGE_READY){
         int health=supply_live(p);
         if(health<0)return finish(p,fail(p));
@@ -719,26 +831,28 @@ int a733_radio_platform_borrow(struct a733_radio_platform *p,uint64_t owner,
         !output_disjoint(p,card,sizeof(*card))||!a733_ranges_disjoint(out,sizeof(*out),card,sizeof(*card)))return 0;
     unsigned expected=0;
     if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return 0;
-    int ok=!p->fault&&p->ops.current(p->cookie)==1&&p->stage==RSTAGE_READY&&!p->borrower.generation&&
+    int ok=!p->fault&&!p->stop_requested&&p->ops.current(p->cookie)==1&&p->stage==RSTAGE_READY&&!p->borrower.generation&&
         p->host.state==SUNXI_SDIO_READY&&p->card.state==SDIO_CARD_READY;
     if(ok&&!observe(p)){fail(p);ok=0;}
     if(ok){p->borrower=(struct a733_radio_borrow){p->clock.id,owner};*out=p->borrower;*card=&p->card;}
     (void)finish(p,A733_RADIO_PENDING);return ok;
 }
-enum a733_radio_platform_result a733_radio_platform_live(struct a733_radio_platform *p,
-    const struct a733_radio_borrow *token,uint64_t deadline)
+static enum a733_radio_platform_result live_proof(struct a733_radio_platform *p,
+    const struct a733_radio_borrow *token,uint64_t deadline,unsigned stopping)
 {
     if(!p||!p->initialized||!deadline||!a733_ranges_disjoint(p,sizeof(*p),token,sizeof(*token)))return A733_RADIO_INVALID;
     unsigned expected=0;
     if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return A733_RADIO_BUSY;
     if(p->fault)return finish(p,fail(p));
-    if(p->ops.current(p->cookie)!=1||p->stage!=RSTAGE_READY||!token->generation||
+    if(p->stop_requested!=stopping||(stopping&&(p->stop_released||p->stop_phase>=3||deadline!=p->stop_deadline))||
+        p->ops.current(p->cookie)!=1||p->stage!=RSTAGE_READY||!token->generation||
         token->generation!=p->borrower.generation||token->owner!=p->borrower.owner)return finish(p,A733_RADIO_INVALID);
     /* Fixed authority outlives individual completed-and-consumed requests.
      * Active or unconsumed work keeps its existing operation deadline. */
     if(!observe(p)||p->host.state==SUNXI_SDIO_FAULT||p->card.state!=SDIO_CARD_READY)return finish(p,fail(p));
     if(p->host.state!=SUNXI_SDIO_READY) {
         if(p->last_now>=p->deadline)return finish(p,fail(p));
+        if(stopping&&p->host.deadline&&p->last_now>=p->host.deadline)return finish(p,fail(p));
         if(deadline!=p->deadline)return finish(p,A733_RADIO_INVALID);
     }
     if(deadline<=p->last_now||deadline>p->config.lifetime_deadline_us)return finish(p,A733_RADIO_INVALID);
@@ -754,6 +868,12 @@ enum a733_radio_platform_result a733_radio_platform_live(struct a733_radio_platf
     if(p->pins->failed||!timely(p))return finish(p,fail(p));
     return finish(p,A733_RADIO_READY);
 }
+enum a733_radio_platform_result a733_radio_platform_live(struct a733_radio_platform *p,
+    const struct a733_radio_borrow *token,uint64_t deadline)
+{return live_proof(p,token,deadline,0);}
+enum a733_radio_platform_result a733_radio_platform_stop_held(struct a733_radio_platform *p,
+    const struct a733_radio_borrow *token)
+{return p?live_proof(p,token,p->stop_deadline,1):A733_RADIO_INVALID;}
 enum a733_radio_platform_result a733_radio_platform_wake(struct a733_radio_platform *p,
     const struct a733_radio_borrow *token,uint64_t deadline,unsigned *level)
 {
