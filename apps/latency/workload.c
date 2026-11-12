@@ -128,7 +128,13 @@ void ss_latency_tick_hook(void)
             atomic_load_explicit(&wake[c].pending, memory_order_acquire)) continue;
         wake[c].metric = SS_LAT_METRICS;
         atomic_store_explicit(&wake[c].pending, 1, memory_order_release);
+#ifdef SUNSTONE_LATENCY_CAUSE
+        ss_latency_cause_release_begin(c, p == IDLE ? 0u : 1u);
+#endif
         vTaskNotifyGiveFromISR(wake_task[c], &woken);
+#ifdef SUNSTONE_LATENCY_CAUSE
+        ss_latency_cause_release_end(c);
+#endif
     }
     portYIELD_FROM_ISR(woken);
     /* FromISR mask restoration can clear PSTATE.I. The following production
@@ -152,6 +158,9 @@ static void wake_worker(void *argument)
             ss_latency_freeze(c);
 #ifdef SUNSTONE_SCHED_PMU
             configASSERT(ss_sched_pmu_freeze(c) == SS_SCHED_PMU_OK);
+#endif
+#ifdef SUNSTONE_LATENCY_CAUSE
+            ss_latency_cause_freeze(c);
 #endif
             atomic_store_explicit(&wake[c].parked, 1, memory_order_release);
             vTaskSuspend(NULL);
@@ -251,6 +260,9 @@ void latency_workload_init(void)
             (void *)(uintptr_t)c, 1, load_stack[c], &load_state[c], 1U << c);
         configASSERT(wake_task[c] && load_task[c]);
     }
+#ifdef SUNSTONE_LATENCY_CAUSE
+    latency_cause_ping_init();
+#endif
 }
 void latency_workload_run(struct latency_result *out)
 {
@@ -294,6 +306,16 @@ void latency_workload_run(struct latency_result *out)
     out->dma_jobs = (uint32_t)atomic_load_explicit(&tlbi_issue_max, memory_order_relaxed);
 #endif
     atomic_store_explicit(&phase, QUIET, memory_order_release);
+#ifdef SUNSTONE_LATENCY_CAUSE
+    /* The load workers are suspended and every measured wake has completed.
+     * One barrier sample per tick lets CPU1 consume its reschedule SGI before
+     * the next sample. Progress and the manifest run budget bound this wait. */
+    ss_latency_cause_bench_request();
+    while (!ss_latency_cause_bench_done()) wait_tick();
+    configASSERT(latency_cause_ping_start(ss_latency_counter_frequency()));
+    while (!latency_cause_ping_done()) wait_tick();
+    configASSERT(latency_cause_ping_snapshot(&out->ping));
+#endif
 #ifdef SUNSTONE_LATENCY_CONTROL
     if (SUNSTONE_LATENCY_CONTROL_MODE == LATENCY_CONTROL_IDLE) qualify_control();
     configASSERT(latency_control_snapshot(&out->control));
@@ -312,6 +334,13 @@ void latency_workload_run(struct latency_result *out)
 #endif
 #ifdef SUNSTONE_SCHED_PMU
     ss_sched_pmu_snapshot(&out->pmu_windows);
+#endif
+#ifdef SUNSTONE_LATENCY_CAUSE
+    configASSERT(ss_latency_cause_snapshot(&out->cause, sizeof(out->cause)));
+    const uint64_t footer[8] = {LATENCY_CAUSE_FOOTER_MAGIC, 1, sizeof(*out),
+        offsetof(struct latency_result, cause), sizeof(out->cause),
+        offsetof(struct latency_result, ping), sizeof(out->ping), 0};
+    for (unsigned word = 0; word < 8; ++word) out->cause_footer[word] = footer[word];
 #endif
 #ifdef SUNSTONE_LATENCY_PMU
     ss_latency_site_pmu_snapshot(out->site_pmu);

@@ -13,6 +13,11 @@
 #ifdef SUNSTONE_SCHED_PMU
 #include "latency_pmu.h"
 #endif
+#ifdef SUNSTONE_LATENCY_CAUSE
+#include "latency_cause.h"
+#include "cause-ping.h"
+#define LATENCY_CAUSE_FOOTER_MAGIC UINT64_C(0x5353434155534631)
+#endif
 
 #define LATENCY_CORES 8U
 #define LATENCY_IDLE_SAMPLES 64U
@@ -60,6 +65,11 @@ struct latency_result {
 #ifdef SUNSTONE_SCHED_PMU
     struct ss_sched_pmu_report pmu_windows __attribute__((aligned(64)));
 #endif
+#ifdef SUNSTONE_LATENCY_CAUSE
+    struct ss_latency_cause_report cause __attribute__((aligned(64)));
+    struct latency_cause_ping_report ping;
+    uint64_t cause_footer[8] __attribute__((aligned(64)));
+#endif
 };
 _Static_assert(offsetof(struct latency_result, core) == 320 &&
     offsetof(struct latency_result, phases) == 5440 &&
@@ -97,6 +107,12 @@ _Static_assert(offsetof(struct latency_result, control) ==
 _Static_assert(offsetof(struct latency_result, pmu_windows) % 64 == 0 &&
     sizeof(struct latency_result) == offsetof(struct latency_result, pmu_windows) + 11712 &&
     sizeof(struct latency_result) <= 131072, "scheduler PMU report tail layout");
+#endif
+
+#ifdef SUNSTONE_LATENCY_CAUSE
+_Static_assert(sizeof(struct latency_result) <= 131072 &&
+    offsetof(struct latency_result, cause_footer) + 64 == sizeof(struct latency_result),
+    "cause diagnostic and footer fit the declared result region");
 #endif
 
 /* Prepare before scheduling. Run from a controller allowed on one core; all
