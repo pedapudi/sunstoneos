@@ -111,9 +111,19 @@ void ss_latency_tick_hook(void)
 #ifdef SUNSTONE_LATENCY_TLBI
     tlbi_broadcast();
 #endif
+#ifndef SS_LATENCY_TEST_TICK_MASK_HELD
+    /* Each notification takes its own API guard. Admit interrupts between
+     * releases rather than masking this diagnostic's whole eight-task loop. */
+    __asm__ volatile("msr daifclr, #2" ::: "memory");
+#endif
     unsigned limit = p == IDLE ? LATENCY_IDLE_SAMPLES : LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES;
     BaseType_t woken = pdFALSE;
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
+#ifdef SUNSTONE_LATENCY_MODEL
+        uint64_t admission;
+        __asm__ volatile("mrs %0, daif" : "=r"(admission));
+        configASSERT(!(admission & UINT64_C(0x80)));
+#endif
         if (atomic_load_explicit(&wake[c].completed, memory_order_acquire) >= limit ||
             atomic_load_explicit(&wake[c].pending, memory_order_acquire)) continue;
         wake[c].metric = SS_LAT_METRICS;
@@ -123,7 +133,13 @@ void ss_latency_tick_hook(void)
     portYIELD_FROM_ISR(woken);
     /* FromISR mask restoration can clear PSTATE.I. The following production
      * tick handler requires the masked state supplied by IRQ entry. */
+#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
+    const uint64_t restore_start = ss_latency_now();
+#endif
     __asm__ volatile("msr daifset, #2" ::: "memory");
+#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
+    ss_latency_mask_open(portGET_CORE_ID(), restore_start, (uintptr_t)ss_latency_tick_hook);
+#endif
 }
 static void wake_worker(void *argument)
 {
