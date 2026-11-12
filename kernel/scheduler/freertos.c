@@ -67,23 +67,26 @@ extern uint32_t ulSunstoneTraceTaskTickets(void);
 enum ssKernelExecution { SS_K_READY, SS_K_RUNNING, SS_K_BLOCKED, SS_K_SUSPENDED, SS_K_DEAD, SS_K_TRANSFERRING };
 enum ssKernelWait { SS_K_NONE, SS_K_DELAY, SS_K_EVENT, SS_K_NOTIFICATION };
 enum ssKernelOutcome { SS_K_WAITING, SS_K_EVENT_READY, SS_K_TIMED_OUT, SS_K_ABORTED };
+/* Fields are grouped by the wake path that reads them, so that a wake touches
+ * as few lines as possible:
+ * - first line: what any wake reads or writes (owner, execution, outcome,
+ *   effective priority and notification index zero);
+ * - the ready link's line: the owner's queue link, the notification wait
+ *   record and the wait generation, read when a wake makes the task ready;
+ * - the next line: the wait kind and state flags, then the deadline entry
+ *   whose owner field a ready transition reads.
+ * Cold fields fill the space between. */
 struct ssKernelTask {
-    _Alignas(SS_CACHE_LINE) struct ss_owner_task ready;
-    struct ss_deadline_entry deadline;
+    _Alignas(SS_CACHE_LINE) _Atomic unsigned owner;
+    _Atomic unsigned execution, outcome, effective;
     struct ss_notification notification[configTASK_NOTIFICATION_ARRAY_ENTRIES];
-    struct ss_notification_wait notify_wait;
-    struct ss_kernel_pin event_reference;
-    _Atomic unsigned owner, execution, outcome, effective, base;
+    _Atomic unsigned base;
     _Atomic unsigned transfer_execution;
     /* Compatibility object exclusion serializes donation writers. Owners read
      * committed donation without acquiring an object lock before their FIFO. */
     _Atomic unsigned donation, mutexes;
-    uint64_t generation;
     _Atomic uint64_t published_wait_generation;
-    unsigned wait_kind, notify_index;
-    bool indefinite, unordered, off_cpu;
-    bool suspended, dead, cleanup_queued, resources_destroyed, cleanup_control_deferred;
-    bool offcpu_wait, detach_pending;
+    struct ss_kernel_pin event_reference;
     _Atomic unsigned cleanup_shield;
     uint64_t resume_generation, abort_generation, offcpu_ack;
     uint64_t object_sequence, object_requested;
@@ -92,7 +95,21 @@ struct ssKernelTask {
     /* The lock slot of the object whose event list this task waits on; set when it blocks, under that object's lock. */
     unsigned event_slot;
     bool object_detach;
+    _Alignas(SS_CACHE_LINE) struct ss_owner_task ready;
+    struct ss_notification_wait notify_wait;
+    uint64_t generation;
+    unsigned wait_kind, notify_index;
+    bool indefinite, unordered, off_cpu;
+    bool suspended, dead, cleanup_queued, resources_destroyed, cleanup_control_deferred;
+    bool offcpu_wait, detach_pending;
+    struct ss_deadline_entry deadline;
 };
+#define SS_K_SAME_LINE(a, b) (offsetof(struct ssKernelTask, a) / SS_CACHE_LINE == \
+                              (offsetof(struct ssKernelTask, b) + sizeof(((struct ssKernelTask *)0)->b) - 1) / SS_CACHE_LINE)
+_Static_assert(SS_K_SAME_LINE(owner, notification[0]), "a wake's first line holds owner state and notification zero");
+_Static_assert(SS_K_SAME_LINE(ready, generation), "the ready link shares its line with the wait record");
+_Static_assert(SS_K_SAME_LINE(wait_kind, deadline.owner), "the wait flags share a line with the deadline owner");
+#undef SS_K_SAME_LINE
 struct ssKernelCPU {
     struct ss_owner run;
     struct ss_deadline_heap deadlines;
