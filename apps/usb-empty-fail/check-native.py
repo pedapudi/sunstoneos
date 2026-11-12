@@ -25,7 +25,8 @@ image = Image(args.image, {'board_application', 'a733_board_session', 'ss_grant'
 rows = []
 cases = ['ready', 'no-checkpoints', 'host-only', 'typec-only', 'extra-checkpoint',
          'unprepared', 'usb-not-ready', 'ready-after-wake', 'expired-wait',
-         'board-dead', 'deadline-registration-failed']
+         'board-dead', 'deadline-registration-failed', 'expired-checkpoint-pending',
+         'expired-checkpoint-ready', 'board-lost-checkpoint-ready']
 for case in cases:
     u = machine()
     u.mem_map(0x41000000, 0x1200000)
@@ -51,9 +52,11 @@ for case in cases:
     put(grant + image.layouts['ss_grant']['finish_by_us'], 55000000, 8)
     put(local('prepared'), case != 'unprepared')
     put(local('usb_ready'), case not in ('usb-not-ready', 'ready-after-wake', 'expired-wait'))
-    checkpoints = {'no-checkpoints': 0, 'host-only': 1, 'typec-only': 2, 'extra-checkpoint': 7}.get(case, 3)
+    checkpoints = {'no-checkpoints': 0, 'host-only': 1, 'typec-only': 2, 'extra-checkpoint': 7,
+                   'expired-checkpoint-pending': 0}.get(case, 3)
     put(image.address('usb_failure_checkpoints', '/apps/os/client.c'), checkpoints)
-    state = {'clock_us': 1000000, 'registered': 0, 'waits': 0, 'delays': 0, 'terminal': None}
+    state = {'clock_us': 1000000, 'registered': 0, 'waits': 0, 'delays': 0,
+             'board_checks': 0, 'counter_reads': 0, 'terminal': None}
     names = ['board_service_deadline_register', 'board_live', 'ss_progress', 'a733_smp_counter',
              'os_session_inputs', 'application_wait_until_unless', 'vTaskDelay', 'ss_fail', 'ss_fail_value']
     hooks = {image.address(name): name for name in names}
@@ -73,10 +76,14 @@ for case in cases:
             state['registered'] += 1
             ret(case != 'deadline-registration-failed')
         elif name == 'board_live':
-            ret(case != 'board-dead')
+            state['board_checks'] += 1
+            ret(case != 'board-dead' and not (case == 'board-lost-checkpoint-ready' and state['board_checks'] >= 2))
         elif name == 'ss_progress':
             ret()
         elif name == 'a733_smp_counter':
+            state['counter_reads'] += 1
+            if (case == 'expired-checkpoint-ready' and state['counter_reads'] >= 2) or (case == 'expired-checkpoint-pending' and state['delays']):
+                state['clock_us'] = 11000000
             ret(state['clock_us'] * 24)
         elif name == 'os_session_inputs':
             put(arg, 0)
@@ -94,7 +101,10 @@ for case in cases:
         elif name == 'vTaskDelay':
             assert arg == 1
             state['delays'] += 1
-            stop('checkpoint-wait')
+            if case == 'expired-checkpoint-pending':
+                ret()
+            else:
+                stop('checkpoint-wait')
         elif name == 'ss_fail':
             stop(f'failure-{arg:x}')
         elif name == 'ss_fail_value':
@@ -108,7 +118,8 @@ for case in cases:
     u.emu_start(local('main_entry'), 0x80000000, count=100000)
     expected = ('readiness-wait' if case in ('unprepared', 'usb-not-ready') else
                 'checkpoint-wait' if case in ('no-checkpoints', 'host-only', 'typec-only', 'extra-checkpoint') else
-                'failure-750' if case in ('board-dead', 'expired-wait') else
+                'failure-750' if case in ('board-dead', 'expired-wait', 'expired-checkpoint-pending',
+                                        'expired-checkpoint-ready', 'board-lost-checkpoint-ready') else
                 'failure-756' if case == 'deadline-registration-failed' else 'injected')
     assert state['registered'] == 1 and state['terminal'] == expected, (case, state)
     if expected in ('injected', 'checkpoint-wait'):

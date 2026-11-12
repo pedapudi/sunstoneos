@@ -355,8 +355,9 @@ static void main_entry(void *unused)
     /* Only this diagnostic waits for empty-port service startup. Keep the
      * private owner predicate out of the application's public ABI. */
     extern int os_usb_failure_ready(void);
-    while(!os_usb_failure_ready()){
+    for(;;){
         if(ss_live()<0||!os_application_deadline())ss_fail(0x750);
+        if(os_usb_failure_ready())break;
         ss_progress();vTaskDelay(1);
     }
 #endif
