@@ -1352,11 +1352,11 @@ static void ssKernelSwitch(unsigned c)
 #ifdef SUNSTONE_OWNER_COUNTERS
 /* Owner-work drains by CPU (measurement): from the outermost interrupt exit, skipped by the mask guard there, and
  * from the tick. Each CPU writes its own line. */
-static struct { uint64_t exit_work, exit_skipped, tick_work, service_run, exit_max, yield_max, exit_over5, yield_over5, exit_raised, skip_pending, pad[6]; } ssOwnerCounters[8] __attribute__((aligned(64)));
+static struct { uint64_t exit_work, exit_skipped, tick_work, service_run, exit_max, yield_max, exit_over5, yield_over5, exit_raised, skip_pending, fast_switch, pad[5]; } ssOwnerCounters[8] __attribute__((aligned(64)));
 extern uint64_t ullPortYieldRequired[];
 uint64_t ulSunstoneOwnerCounters(unsigned cpu, unsigned which)
 {
-    if (cpu >= 8 || which > 9) return 0;
+    if (cpu >= 8 || which > 10) return 0;
     const uint64_t *row = &ssOwnerCounters[cpu].exit_work;
     return row[which];
 }
@@ -1416,6 +1416,105 @@ static BaseType_t ssKernelOwnerIRQExitWork(void)
     }
     return cpu->reschedule && !cpu->preempt ? pdTRUE : pdFALSE;
 }
+#if defined(__aarch64__)
+/* A local wake has already inserted its ready task. With PSTATE.I set, a
+ * required switch can proceed directly to saving the outgoing frame when no
+ * object, control or timer maintenance must precede selection. The selecting
+ * service pass still drains incoming work and closes the dispatch handshake. */
+static bool ssKernelIRQSwitchReady(unsigned c, struct ssKernelCPU *cpu)
+{
+    struct ss_owner_task *current = cpu->run.current;
+    if (cpu->preempt || !cpu->reschedule || !current) return false;
+    unsigned state = atomic_load_explicit(&ssKernelTasks[current->slot].execution,
+                                          memory_order_acquire);
+    if (state == SS_K_RUNNING || state == SS_K_READY) {
+#if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
+        if (((TCB_t *)current->context)->xPreemptionDisable) return false;
+#endif
+        if (!cpu->run.ready_bitmap) return false;
+        unsigned priority = 31U - (unsigned)__builtin_clz(cpu->run.ready_bitmap);
+        configASSERT(cpu->run.ready[priority].head);
+        if (priority <= current->priority) return false;
+    }
+    if (ss_control_has_pending(&ssKernelControl, c) ||
+        cpu->object_repair[0] || cpu->object_repair[1]) return false;
+    uint64_t now = ssKernelNow(), deadline;
+    if ((ss_deadline_next(&cpu->deadlines, &deadline) && deadline <= now) ||
+        atomic_load_explicit(&cpu->slice_deadline, memory_order_relaxed) <= now)
+        return false;
+    /* A global suspension still acknowledges this owner's checkpoint. Do it
+     * last so the ordinary fallback retains its existing checkpoint order. */
+    return !ss_control_checkpoint(&ssKernelControl, c);
+}
+#ifdef SS_KERNEL_TEST_IRQ_EXIT
+#ifndef SUNSTONE_OWNER_COUNTERS
+#error "IRQ-exit regression requires owner service counters"
+#endif
+/* The linked IRQ fixture supplies real local wakes and injects one pending
+ * maintenance condition after MakeReady. Each static node outlives its heap
+ * membership; a stale generation expires without changing a task's wait. */
+static struct {
+    struct ss_deadline_entry stale;
+    uint64_t services;
+    unsigned active, slot;
+} ssKernelIRQTests[configNUMBER_OF_CORES];
+extern void ss_kernel_test_irq_result(unsigned kind, bool fast, uint64_t services);
+bool ss_kernel_test_irq_prepare(unsigned kind)
+{
+    configASSERT(kind < 5);
+    UBaseType_t irq = portSET_INTERRUPT_MASK_FROM_ISR();
+    unsigned c = ssKernelCPUId();
+    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    typeof(ssKernelIRQTests[0]) *test = &ssKernelIRQTests[c];
+    configASSERT(!test->active);
+    if (!ssKernelIRQSwitchReady(c, cpu)) {
+        portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
+        return false;
+    }
+    struct ssKernelTask *s = &ssKernelTasks[cpu->run.current->slot];
+    if (atomic_load_explicit(&s->execution, memory_order_acquire) != SS_K_RUNNING ||
+        s->wait_kind != SS_K_NONE) {
+        portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
+        return false;
+    }
+    test->slot = s->ready.slot;
+    if (kind == 1) ss_control_repair(&ssKernelControl, test->slot);
+    else if (kind == 2) {
+        configASSERT(!test->stale.owner && cpu->deadlines.count < SS_DEADLINE_CAPACITY);
+        configASSERT(s->generation != UINT64_MAX);
+        ss_deadline_entry_init(&test->stale);
+        configASSERT(ss_deadline_insert(&cpu->deadlines, &test->stale, s,
+                                       UINT64_MAX, ssKernelNow()));
+    } else if (kind == 3) {
+        atomic_store_explicit(&cpu->slice_deadline, ssKernelNow(), memory_order_release);
+    } else if (kind == 4) {
+        TCB_t *t = s->ready.context;
+        configASSERT(!s->event_reference.descriptor && !listLIST_ITEM_CONTAINER(&t->xEventListItem));
+        s->object_requested = s->object_sequence;
+        s->object_requested_priority = s->object_priority;
+        cpu->object_repair[test->slot / 64] |= UINT64_C(1) << (test->slot % 64);
+    }
+    test->active = kind + 1;
+    test->services = ssOwnerCounters[c].service_run;
+    portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
+    return true;
+}
+static void ssKernelIRQTestComplete(bool fast)
+{
+    unsigned c = ssKernelCPUId();
+    typeof(ssKernelIRQTests[0]) *test = &ssKernelIRQTests[c];
+    if (!test->active) return;
+    unsigned kind = test->active - 1;
+    configASSERT(!test->stale.owner);
+    configASSERT(!(ssKernelCPUs[c].object_repair[test->slot / 64] &
+                   (UINT64_C(1) << (test->slot % 64))));
+    test->active = 0;
+    ss_kernel_test_irq_result(kind, fast, ssOwnerCounters[c].service_run - test->services);
+}
+#else
+#define ssKernelIRQTestComplete(fast) ((void)0)
+#endif
+#endif
 /* The outermost interrupt exit (portASM.S) drains owner work. An interrupt taken while the interrupted code had the
  * API mask raised can only be one above that mask: the kernel's maintenance, object and control sections are all
  * masked at the API priority, so the exit work would re-enter them (the control drain asserts on this). Such an
@@ -1433,6 +1532,16 @@ BaseType_t ssKernelOwnerIRQExit(void)
     SS_OWNER_COUNT(exit_work);
     const uint64_t begin = ssOwnerClock();
     SS_PH_BEGIN;
+#if !defined(SS_KERNEL_TEST_IRQ_SLOW)
+    if (ssKernelIRQSwitchReady(ssKernelCPUId(), &ssKernelCPUs[ssKernelCPUId()])) {
+        SS_OWNER_COUNT(fast_switch);
+        SS_OWNER_COUNT(exit_raised);
+        ssKernelIRQTestComplete(true);
+        ssOwnerSpan(begin, false);
+        SS_PH_END(1);
+        return pdTRUE;
+    }
+#endif
     /* The exit path calls this with PSTATE.I set, and the owner work takes several microseconds. Run it as an ISR
      * critical section does: raise ICC_PMR_EL1 to the API mask and clear PSTATE.I, so that only interrupts above the
      * API mask (the control class) can run in it. Their exit leaves the work alone (the PMR test above), and the
@@ -1445,6 +1554,7 @@ BaseType_t ssKernelOwnerIRQExit(void)
     ss_sched_trace_irq_stamp(ssKernelCPUId(), 1);
 #endif
     const BaseType_t result = ssKernelOwnerIRQExitWork();
+    ssKernelIRQTestComplete(false);
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     ss_sched_trace_irq_stamp(ssKernelCPUId(), 2);
 #endif

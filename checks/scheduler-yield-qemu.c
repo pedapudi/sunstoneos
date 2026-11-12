@@ -1,6 +1,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "platform.h"
+#include <stdbool.h>
 
 /* No switch request may be lost. On cores 1 to 7 an API-level timer interrupt wakes a priority 6 task from the
  * interrupt (xTaskNotifyGiveFromISR and portYIELD_FROM_ISR) over a busy priority 1 task, while, in the storm build,
@@ -20,13 +21,31 @@ static StaticTask_t high_tasks[CORES], busy_tasks[CORES], control_task;
 static StackType_t high_stacks[CORES][1024], busy_stacks[CORES][1024], control_stack[2048];
 static TaskHandle_t high[CORES];
 static struct { uint64_t raised, served, late, max, started, sum; } stat[CORES] __attribute__((aligned(64)));
+#ifdef SS_KERNEL_TEST_IRQ_EXIT
+extern bool ss_kernel_test_irq_prepare(unsigned kind);
+static unsigned irq_cases[CORES];
+void ss_kernel_test_irq_result(unsigned kind, bool fast, uint64_t services) {
+    unsigned core = (unsigned)portGET_CORE_ID();
+    configASSERT(kind == irq_cases[core]);
+    configASSERT(kind ? !fast && services > 0 : fast && services == 0);
+    ++irq_cases[core];
+}
+#endif
 static uint64_t counter(void) { uint64_t v; __asm__ volatile("isb\n mrs %0, cntvct_el0" : "=r"(v) :: "memory"); return v; }
 
 void ss_wake_isr(unsigned core) {
     BaseType_t woken = pdFALSE;
     stat[core].started = counter();
     if (high[core]) vTaskNotifyGiveFromISR(high[core], &woken);
-    if (woken) ++stat[core].raised;
+    if (woken) {
+        ++stat[core].raised;
+#ifdef SS_KERNEL_TEST_IRQ_EXIT
+        /* Complete startup before exercising clean, control, deadline, slice
+         * and object-repair exits. Inject after the notification's MakeReady. */
+        if (stat[core].raised > 5 && irq_cases[core] < 5)
+            (void)ss_kernel_test_irq_prepare(irq_cases[core]);
+#endif
+    }
     portYIELD_FROM_ISR(woken);
 }
 static void high_task(void *argument) {
@@ -63,16 +82,22 @@ static void control(void *argument) {
         platform_puts(" pending="); platform_hex(ullPortYieldRequired[c]); platform_puts("\n");
         configASSERT(stat[c].raised == stat[c].served);
         configASSERT(ullPortYieldRequired[c] == 0);
+#ifdef SS_KERNEL_TEST_IRQ_EXIT
+        configASSERT(irq_cases[c] == 5);
+#endif
     }
     platform_puts("wake-period-ticks="); platform_hex(ss_wake_period); platform_puts(" worst-ticks="); platform_hex(worst); platform_puts("\n");
 #ifdef SUNSTONE_OWNER_COUNTERS
     {
         extern uint64_t ulSunstoneOwnerCounters(unsigned cpu, unsigned which);
-        uint64_t skipped = 0, pending = 0;
+        uint64_t skipped = 0, pending = 0, fast = 0;
         for (unsigned c = 0; c < CORES; ++c) {
             skipped += ulSunstoneOwnerCounters(c, 1); pending += ulSunstoneOwnerCounters(c, 9);
+            fast += ulSunstoneOwnerCounters(c, 10);
         }
         platform_puts("exit-skipped="); platform_hex(skipped); platform_puts(" skipped-with-request-pending="); platform_hex(pending); platform_puts("\n");
+        platform_puts("direct-switch-exits="); platform_hex(fast); platform_puts("\n");
+        configASSERT(fast > WAKE_PERIODS);
     }
 #endif
     configASSERT(raised > WAKE_PERIODS && raised == served);
