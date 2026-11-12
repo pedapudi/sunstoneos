@@ -153,6 +153,20 @@ Every allocation of a `WB` extent returns memory that holds no dirty line, and e
 
 Acquire, release and the policy conversion take one ledger lock, the kernel critical section of [memory-architecture.md](memory-architecture.md). Table edits take a per-space lock and run outside the ledger lock. No interrupt handler calls the ledger. The ledger's metadata lives in kernel-owned memory that no application table maps, so EL0 code cannot corrupt ownership; the lock words in the image's `.bss` stay EL0-writable, as the memory architecture records.
 
+### Device owners
+
+A device owner is the OS code that drives a device for a session: the NPU runtime, the audio capture buffer, the headset, the USB host service. An owner takes its memory from the ledger when the session's grant is made, through one helper, `os_owner_memory` (`apps/os/owner-memory.h`), and keeps no static pool. The helper takes a size, an alignment and attributes, and returns zeroed memory owned by the kernel for the rest of the session. No owner gives the memory back: the session's end (the ROM return or the reset) ends it.
+
+| Attribute | Meaning |
+| --- | --- |
+| `OS_MEMORY_CACHED` | Normal write-back (the default) |
+| `OS_MEMORY_DEVICE` | Normal non-cacheable, for memory a device writes while the CPU polls |
+| `OS_MEMORY_EL0_READ` | The application's tasks may read it |
+| `OS_MEMORY_EL0_WRITE` | The application's tasks may read and write it |
+
+Memory without an EL0 attribute is reachable at EL1 only: the kernel's tables map the ledger's DRAM at EL1, and an application's tables map no kernel extent that carries no access. An application's tables map whole 2 MiB blocks and are built once at admission (`os_large_prepare`), so an EL0-visible request is rounded to 2 MiB on a 2 MiB boundary and must be made before the tables are built; the helper refuses it afterwards. The OS image installs no policy conversion (`convert_chunk`), so the ledger has no non-cacheable chunk and refuses `OS_MEMORY_DEVICE`.
+
+
 ## Mappings
 
 Each address-space kind implements one interface: `map`, `unmap`, `flush` and `quiesced`. `map` takes a buffer extent, a protection and an optional address and returns the address in that space. `flush` invalidates the space's translations for a range. `unmap` is legal only after `quiesced` returns true for the space.
