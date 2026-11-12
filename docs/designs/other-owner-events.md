@@ -24,3 +24,19 @@ single retirement publication after the final lease release.
 
 These checks model event producers and the session clock. They do not qualify
 physical USB interrupts, GPU completion timing or idle power.
+
+## Periodic invalidations use absolute deadlines
+
+The optional translation lookaside buffer measurement task derives its period
+in microseconds from the configured period and waits on the precise deadline
+facility. A notification before the deadline cannot issue an invalidation early.
+The control form executes the same cadence with no invalidation instruction.
+The public measurement snapshot in `include/sunstone_tlbi.h` reports its form,
+declared period, wake count and instruction costs without exposing OS storage.
+
+`checks/event-misc-tlbi.py` runs that control form with a 10 ms period. It checks
+that the owner remains blocked at 5 ms, executes two periods by 21 ms and stops
+at the next deadline after application completion. A delayed first alarm keeps
+the second period at 20 ms. A tick-paced retry mutation
+fails the check. This periodic measurement task has a declared timer event for
+every wake; it has no device interrupt source.
