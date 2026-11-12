@@ -5,11 +5,23 @@ else()
   set(latency_name latency)
   set(latency_manifest "${CMAKE_CURRENT_LIST_DIR}/../manifest.json")
 endif()
+if(SUNSTONE_SCHED_LATENCY_TRACE)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${latency_manifest}")
+  file(READ "${latency_manifest}" latency_manifest_json)
+  string(JSON latency_manifest_json SET "${latency_manifest_json}" output_limit 131072)
+  set(latency_manifest "${CMAKE_CURRENT_BINARY_DIR}/${latency_name}-trace-manifest.json")
+  file(WRITE "${latency_manifest}" "${latency_manifest_json}\n")
+endif()
 add_sunstone_application(${latency_name}
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../native.c" "${CMAKE_CURRENT_LIST_DIR}/../workload.c"
   MANIFEST "${latency_manifest}"
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/..")
 target_compile_definitions(${latency_name} PRIVATE SUNSTONE_LATENCY=1)
+if(SUNSTONE_SCHED_LATENCY_TRACE)
+  target_compile_definitions(${latency_name} PRIVATE SUNSTONE_SCHED_LATENCY_TRACE=1
+    SS_SCHED_TRACE_WAITS=16 SS_SCHED_TRACE_TICKS=512 INCLUDE_eTaskGetState=1)
+  target_include_directories(${latency_name} PRIVATE "${SUNSTONE_SOURCE_ROOT}/kernel/scheduler")
+endif()
 if(SUNSTONE_LATENCY_PMU)
   target_compile_definitions(${latency_name} PRIVATE SUNSTONE_LATENCY_PMU=1)
 endif()

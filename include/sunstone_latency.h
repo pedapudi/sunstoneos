@@ -83,6 +83,12 @@ void ss_latency_init(uint64_t frequency);
 uint64_t ss_latency_counter_frequency(void);
 void ss_latency_freeze(unsigned core);
 void ss_latency_snapshot(struct ss_latency_core out[8]);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+/* Optional scheduler diagnostic, read after all eight recorders are frozen.
+ * Its versioned layout is defined by kernel/scheduler/latency_trace.h. */
+struct ss_sched_trace_report;
+void ss_sched_trace_snapshot(struct ss_sched_trace_report *out);
+#endif
 /* Snapshot only after every writer has frozen; packed in descending duration. */
 void ss_latency_sites_snapshot(struct ss_latency_site out[SS_LAT_PHASES + 1][8][SS_LAT_SITE_KINDS][SS_LAT_SITE_SLOTS]);
 #ifdef SUNSTONE_LATENCY_PMU

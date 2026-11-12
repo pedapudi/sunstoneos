@@ -2,6 +2,24 @@ include_guard(GLOBAL)
 option(SUNSTONE_LATENCY "Record maximum kernel and device response times" OFF)
 option(SUNSTONE_LATENCY_SWEEP "Keep every distinct masked-span pair with count, maximum and histogram (needs SUNSTONE_LATENCY)" OFF)
 option(SUNSTONE_LATENCY_PMU "Add per-span instruction and cache-refill counts to the latency report (read-only PMU use)" OFF)
+option(SUNSTONE_SCHED_LATENCY_TRACE "Record scheduler command, drain, exit and lock-wait timing in the latency diagnostic" OFF)
+
+function(sunstone_enable_scheduler_latency_trace target)
+  if(NOT SUNSTONE_SCHED_LATENCY_TRACE)
+    return()
+  endif()
+  if(NOT SUNSTONE_PARTITIONED_SCHEDULER)
+    message(FATAL_ERROR "Scheduler step timing requires the partitioned scheduler")
+  endif()
+  target_sources(${target} PRIVATE "${SUNSTONE_SOURCE_ROOT}/kernel/scheduler/latency_trace.c")
+  target_include_directories(${target} PRIVATE "${SUNSTONE_SOURCE_ROOT}/kernel/scheduler")
+  # Diagnostic storage declarations. Overflow is reported; maxima are retained
+  # separately, so a full log cannot silently discard its longest observation.
+  target_compile_definitions(${target} PRIVATE SUNSTONE_SCHED_LATENCY_TRACE=1
+    SS_SCHED_TRACE_WAITS=16 SS_SCHED_TRACE_TICKS=512 INCLUDE_eTaskGetState=1)
+  set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/kernel/scheduler/latency_trace.c"
+    PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
+endfunction()
 set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/runtime/latency.c"
   "${SUNSTONE_SOURCE_ROOT}/runtime/latency_irq.c" PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
 

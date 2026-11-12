@@ -241,6 +241,12 @@ void latency_workload_run(struct latency_result *out)
     atomic_store_explicit(&stop_load, 1, memory_order_release);
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
         while (!atomic_load_explicit(&load[c].stopped, memory_order_acquire)) wait_tick();
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    /* stopped precedes self-suspension. Wait for the command to commit before
+     * the higher-priority wake task freezes this core's diagnostic records. */
+    for (unsigned c = 0; c < LATENCY_CORES; ++c)
+        while (eTaskGetState(load_task[c]) != eSuspended) wait_tick();
+#endif
     out->dma_jobs = latency_dma_model_stop();
 #ifdef SUNSTONE_LATENCY_TLBI
     configASSERT(atomic_load_explicit(&tlbi_issued, memory_order_relaxed) >= LATENCY_IDLE_SAMPLES);
@@ -256,6 +262,9 @@ void latency_workload_run(struct latency_result *out)
     ss_latency_snapshot(out->core);
     ss_latency_phase_snapshot(out->phases);
     ss_latency_sites_snapshot(out->sites);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_snapshot(&out->scheduler);
+#endif
 #ifdef SUNSTONE_LATENCY_PMU
     ss_latency_site_pmu_snapshot(out->site_pmu);
     for (unsigned c = 0; c < LATENCY_CORES; ++c) out->pmu_supported[c] = ss_latency_pmu_supported(c);

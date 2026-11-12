@@ -22,6 +22,27 @@ static void controller(void *argument)
 {
     (void)argument;
     latency_workload_run(&result);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    configASSERT(result.scheduler.magic == SS_SCHED_TRACE_MAGIC);
+    configASSERT(result.scheduler.version == 1);
+    configASSERT(result.scheduler.tick_count && result.scheduler.tick_count <= SS_SCHED_TRACE_TICKS);
+    configASSERT(!result.scheduler.tick_dropped || result.scheduler.tick_count == SS_SCHED_TRACE_TICKS);
+    for (unsigned c = 0; c < LATENCY_CORES; ++c) {
+        const struct ss_sched_trace_core *trace = &result.scheduler.core[c];
+        configASSERT(trace->command_count && trace->drain_count && trace->irq_count);
+        configASSERT(trace->self_suspend.command == 2);
+        configASSERT((trace->self_suspend.flags & 5) == 5);
+        configASSERT(trace->self_suspend.stamp[0] && trace->self_suspend.stamp[6]);
+        for (unsigned i = 1; i < 7; ++i)
+            configASSERT(trace->self_suspend.stamp[i] >= trace->self_suspend.stamp[i - 1]);
+        configASSERT(!trace->drain.dropped);
+        for (unsigned i = 0; i < trace->drain.count; ++i) {
+            configASSERT(trace->drain.record[i].stamp[0] >= trace->drain.start);
+            configASSERT(trace->drain.record[i].stamp[4] <= trace->drain.end);
+        }
+    }
+    platform_puts("PASS scheduler trace: eight self-suspends, drain records, IRQ exits and timer intervals\n");
+#endif
     platform_puts("MODEL latency: host QEMU timing; CPU0 timer IRQ releases eight pinned tasks; DMA hardware modeled\n");
     platform_puts("DMA model stimulus: continuous 4096-byte jobs; client priority1 and service priority4 on CPU0\n");
     number("frequency=", result.frequency);

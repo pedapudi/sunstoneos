@@ -4,6 +4,9 @@
 #include "sunstone_latency.h"
 #include <stddef.h>
 #include <stdint.h>
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+#include "latency_trace.h"
+#endif
 
 #define LATENCY_CORES 8U
 #define LATENCY_IDLE_SAMPLES 64U
@@ -39,13 +42,23 @@ struct latency_result {
     uint32_t pmu_supported[LATENCY_CORES];
     struct ss_latency_site_pmu site_pmu[SS_LAT_PMU_ROWS][LATENCY_CORES][SS_LAT_SITE_SLOTS];
 #endif
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    struct ss_sched_trace_report scheduler __attribute__((aligned(64)));
+#endif
 };
 _Static_assert(offsetof(struct latency_result, core) == 320 &&
     offsetof(struct latency_result, phases) == 5440 &&
     offsetof(struct latency_result, acquisitions) == 20224 &&
     offsetof(struct latency_result, wakes) == 20848 &&
     offsetof(struct latency_result, sites) == 57728 &&
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
 #ifdef SUNSTONE_LATENCY_PMU
+    offsetof(struct latency_result, scheduler) == 65088 &&
+#else
+    offsetof(struct latency_result, scheduler) == 63872 &&
+#endif
+    sizeof(struct latency_result) <= 131072,
+#elif defined(SUNSTONE_LATENCY_PMU)
     sizeof(struct latency_result) == 63872 + 1216,
 #else
     sizeof(struct latency_result) == 63872,

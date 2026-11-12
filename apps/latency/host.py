@@ -9,6 +9,7 @@ SITE_METRICS = ('irq_masked', 'lock1_hold')
 SITE_SLOTS = 3
 QUANTILES = 'nearest-rank logarithmic histogram upper endpoints; sixteen bins per power of two; exact maximum'
 MAGIC = 0x53534C4154454E31
+SCHED_MAGIC = 0x5353534348545231
 METRICS = ('timer_irq', 'irq_masked', 'lock0_wait', 'lock0_hold', 'lock1_wait',
            'lock1_hold', 'wake_idle', 'wake_busy', 'dma', 'gpu', 'npu')
 
@@ -23,9 +24,140 @@ def inputs():
     return []
 
 
+def decode_scheduler_trace(payload, frequency):
+    """Decode the diagnostic-only tail; all durations retain raw counter ticks."""
+    if len(payload) < 32 or not frequency:
+        raise ValueError('scheduler trace header or frequency is missing')
+    magic, version, waits, tick_capacity = struct.unpack_from('<4Q', payload)
+    if magic != SCHED_MAGIC or version != 1 or not waits or not tick_capacity:
+        raise ValueError('scheduler trace schema or declared capacities differ')
+    records = 32  # two drains, each bounded by SS_OWNER_BATCH = 16
+    core_words = 9 + 20 + 11 + 4 + records * 7 + (waits + 1) * 12
+    expected = (4 + 8 * core_words + 16 + 2 + tick_capacity * 2) * 8
+    padded = (expected + 63) // 64 * 64
+    if len(payload) != padded or any(payload[expected:]):
+        raise ValueError('scheduler trace length or alignment padding differs')
+    offset = 32
+
+    def take(count):
+        nonlocal offset
+        values = struct.unpack_from(f'<{count}Q', payload, offset)
+        offset += count * 8
+        return values
+
+    def ordered(stamps):
+        observed = [v for v in stamps if v]
+        if observed != sorted(observed):
+            raise ValueError('scheduler trace timestamps are out of order')
+
+    def command():
+        kind, slot, flags, *stamp = take(10)
+        ordered(stamp)
+        def duration(first, last):
+            return stamp[last] - stamp[first] if stamp[first] and stamp[last] else 0
+        return {'command': kind, 'slot': slot, 'flags': flags, 'stamp': stamp,
+                'ticks': duration(0, 6),
+                'steps_ticks': dict(zip(('reference', 'publish', 'drain', 'slice'),
+                    (duration(0, 1), duration(1, 2), duration(3, 4), duration(4, 5))))}
+
+    def wait_record():
+        fields = ('start', 'end', 'site', 'lock', 'serving', 'next', 'flags',
+                  'holder_core', 'holder_start', 'holder_end', 'holder_site', 'holder_generation')
+        value = dict(zip(fields, take(12)))
+        if value['end'] < value['start']:
+            raise ValueError('scheduler lock wait has negative duration')
+        value['ticks'] = value['end'] - value['start']
+        if value['flags'] & 3 == 3 and (value['holder_core'] >= 8 or not value['holder_start']):
+            raise ValueError('scheduler lock holder identity is invalid')
+        if value['flags'] & 4 and not value['holder_start'] <= value['holder_end'] <= value['end']:
+            raise ValueError('scheduler lock holder completion is invalid')
+        return value
+
+    cores = []
+    for core in range(8):
+        count, *scalars = take(9)
+        row = {'core': core, 'command_count': count,
+               'command_stage_max_ticks': dict(zip(('reference', 'publish', 'drain', 'slice'), scalars[:4])),
+               'irq_count': scalars[4], 'drain_count': scalars[5],
+               'wait_count': scalars[6], 'wait_dropped': scalars[7],
+               'command': command(), 'self_suspend': command()}
+        values = take(11)
+        ordered(values[:4])
+        row['irq'] = {'stamp': list(values[:4]),
+                      'service_ticks': dict(zip(('control', 'incoming', 'pull', 'expiry', 'slice'), values[4:9])),
+                      'passes': values[9], 'result': values[10]}
+        start, end, count, dropped = take(4)
+        if end < start or count > records or dropped:
+            raise ValueError('scheduler drain is incomplete or invalid')
+        entries = []
+        for index in range(records):
+            slot, phase, *stamp = take(7)
+            if index < count:
+                ordered(stamp)
+                if not start <= stamp[0] <= stamp[-1] <= end:
+                    raise ValueError('scheduler control record lies outside its drain')
+                entries.append({'slot': slot, 'phase': phase, 'stamp': stamp})
+        row['drain'] = {'start': start, 'end': end, 'count': count, 'dropped': dropped, 'records': entries}
+        row['wait_max'] = wait_record()
+        entries = [wait_record() for _ in range(waits)]
+        if row['wait_count'] > waits or row['wait_dropped'] and row['wait_count'] != waits:
+            raise ValueError('scheduler wait log counters differ from capacity')
+        row['waits'] = entries[:row['wait_count']]
+        if any(value['ticks'] > row['wait_max']['ticks'] for value in row['waits']):
+            raise ValueError('scheduler wait maximum omits a retained wait')
+        cores.append(row)
+    startup = [dict(zip(('scheduler_start', 'first_restore'), take(2))) for _ in range(8)]
+    for markers in startup:
+        if markers['scheduler_start'] and markers['first_restore'] and markers['first_restore'] < markers['scheduler_start']:
+            raise ValueError('scheduler startup timestamps are out of order')
+    tick_count, tick_dropped = take(2)
+    if tick_count > tick_capacity or tick_dropped and tick_count != tick_capacity:
+        raise ValueError('scheduler tick log counters differ from capacity')
+    ticks = []
+    for index in range(tick_capacity):
+        start, end = take(2)
+        if index < tick_count:
+            if not start or end < start or ticks and start < ticks[-1]['end']:
+                raise ValueError('scheduler timer intervals overlap or are invalid')
+            ticks.append({'start': start, 'end': end})
+    for row in cores:
+        for value in [row['wait_max'], *row['waits']]:
+            value['cause'] = 'unclassified'
+            value['holder_tick_overlap_ticks'] = 0
+            if not value['ticks'] or value['flags'] & 15 != 15:
+                continue
+            begin, end = max(value['start'], value['holder_start']), value['holder_end']
+            if end <= begin:
+                continue
+            # More than the observed holder can precede this waiter. Preserve
+            # the overlap without attributing the complete wait to one holder.
+            ticket_mask = 0xffff if value['lock'] == 0 else 0xffffffff
+            if (value['next'] - value['serving']) & ticket_mask != 1:
+                continue
+            if value['holder_core'] == 0:
+                overlap = sum(max(0, min(end, tick['end']) - max(begin, tick['start'])) for tick in ticks)
+                value['holder_tick_overlap_ticks'] = overlap
+                if overlap:
+                    value['cause'] = 'holder_tick_overlap'
+                    continue
+                if tick_dropped and (not ticks or end > ticks[-1]['end']):
+                    continue
+            value['cause'] = 'observed_holder_contention'
+    return {'version': version, 'waits_capacity': waits, 'ticks_capacity': tick_capacity,
+            'cores': cores, 'startup': startup, 'tick_count': tick_count,
+            'tick_dropped': tick_dropped, 'ticks': ticks}
+
+
 def decode(payload, dma=False):
-    pmu_tail = payload[RESULT_BYTES:] if len(payload) == RESULT_BYTES + PMU_BYTES else b''
-    if len(payload) not in (RESULT_BYTES, RESULT_BYTES + PMU_BYTES):
+    tail = payload[RESULT_BYTES:]
+    pmu_tail, scheduler_tail = b'', b''
+    if len(tail) >= 8 and struct.unpack_from('<Q', tail)[0] == SCHED_MAGIC:
+        scheduler_tail = tail
+    elif len(tail) >= PMU_BYTES + 8 and struct.unpack_from('<Q', tail, PMU_BYTES)[0] == SCHED_MAGIC:
+        pmu_tail, scheduler_tail = tail[:PMU_BYTES], tail[PMU_BYTES:]
+    elif len(tail) == PMU_BYTES:
+        pmu_tail = tail
+    elif tail or len(payload) != RESULT_BYTES:
         raise ValueError(f'latency result must contain {RESULT_BYTES} bytes')
     payload = payload[:RESULT_BYTES]
     magic, frequency, elapsed, mask, model, dma_jobs, irq_mask = struct.unpack_from('<3Q4I', payload)
@@ -168,5 +300,8 @@ def decode(payload, dma=False):
                       'lock_acquisitions_including_recursive': dict(zip(('isr', 'task'), acquisitions)),
                       'phase_lock_acquisitions': dict(zip(PHASES, phase_acquisitions)),
                       'wake_site': site, 'raw_wakes': raw, 'sites': sites})
-    return {'quantile_method': QUANTILES, 'phase_attribution': 'named phases contain whole intervals; aggregate metrics and sites include gaps and crossings', 'model': False, 'frequency': frequency, 'elapsed_ticks': elapsed,
+    result = {'quantile_method': QUANTILES, 'phase_attribution': 'named phases contain whole intervals; aggregate metrics and sites include gaps and crossings', 'model': False, 'frequency': frequency, 'elapsed_ticks': elapsed,
             'phase_bounds': dict(zip(PHASES, bounds)), 'core_mask': mask, 'timer_irq_core_mask': irq_mask, 'dma_jobs': dma_jobs, 'cores': cores}
+    if scheduler_tail:
+        result['scheduler_trace'] = decode_scheduler_trace(scheduler_tail, frequency)
+    return result

@@ -94,6 +94,9 @@ function(sunstone_latency_partitioned_model target metric)
   set_target_properties(${target} PROPERTIES SUFFIX ".elf"
     LINK_DEPENDS "${latency_root}/platform/qemu-smp/link.ld")
   sunstone_scheduler_partitioned_bind(${target} "${smp_build}")
+  if(NOT metric)
+    sunstone_enable_scheduler_latency_trace(${target})
+  endif()
   sunstone_enable_latency_port(${target})
 endfunction()
 # Masked spans reported as scheduler atomic stores and read-modify-writes, and as loads.
