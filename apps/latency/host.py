@@ -10,6 +10,11 @@ SITE_SLOTS = 3
 QUANTILES = 'nearest-rank logarithmic histogram upper endpoints; sixteen bins per power of two; exact maximum'
 MAGIC = 0x53534C4154454E31
 SCHED_MAGIC = 0x5353534348545231
+CONTROL_MAGIC = 0x53534354524C3031
+CONTROL_BYTES = 17536
+CONTROL_BINS = 192
+CONTROL_BIN_TICKS = 4
+CONTROL_MINIMUM = 10000
 METRICS = ('timer_irq', 'irq_masked', 'lock0_wait', 'lock0_hold', 'lock1_wait',
            'lock1_hold', 'wake_idle', 'wake_busy', 'dma', 'gpu', 'npu')
 
@@ -139,7 +144,8 @@ def decode_scheduler_trace(payload, frequency):
     for core, markers in enumerate(startup):
         if markers['scheduler_start'] and markers['first_restore'] and markers['first_restore'] < markers['scheduler_start']:
             raise ValueError('scheduler startup timestamps are out of order')
-        markers['start_kind'] = 'running_flag_boundary' if version >= 3 and core == 0 else 'port_start_entry'
+        markers['start_kind'] = (None if not markers['scheduler_start'] else
+            'primary_running_flag_boundary' if version >= 3 and core == 0 else 'port_start_entry')
         markers['restore_kind'] = 'pre_eret' if version >= 3 else 'restore_entry'
     tick_count, tick_dropped = take(2)
     if tick_count > tick_capacity or tick_dropped and tick_count != tick_capacity:
@@ -322,8 +328,159 @@ def decode_scheduler_trace(payload, frequency):
             'tick_dropped': tick_dropped, 'ticks': ticks, 'wake_chains': wake_cores, 'history_capacity': history_capacity}
 
 
+def decode_control(payload, frequency):
+    """Validate the stopped control recorder and report measurement qualification.
+
+    Counts, errors and missed deadlines remain visible even when they prevent
+    qualification. Inconsistent fields or an unknown binary layout are rejected.
+    """
+    if len(payload) != CONTROL_BYTES:
+        raise ValueError('control qualification report length differs')
+    magic, version, hz, minimum, requested, mode, ready, quiescent, parked, errors, complete, flags = \
+        struct.unpack_from('<4Q8I', payload)
+    if (magic != CONTROL_MAGIC or version != 1 or not 0 < hz <= 0xffffffff or hz != frequency or
+            minimum != CONTROL_MINIMUM or requested != 0xfe or mode not in (0, 1) or
+            flags not in (1, 3, 5, 7) or errors & ~15 or parked not in (0, 1) or
+            any(mask & ~requested for mask in (ready, quiescent, complete))):
+        raise ValueError('control qualification header differs')
+    reasons = []
+    if ready != requested:
+        reasons.append('not_all_cores_armed')
+    if quiescent != requested or not parked:
+        reasons.append('writers_not_quiescent')
+    rows, actual_complete, actual_errors = [], 0, 0
+    stats_fields = ('path', 'core', 'rate_hz', 'count', 'consumed', 'gaps', 'dropped', 'missed',
+                    'latency_max_ns', 'latency_p9999_ns', 'jitter_max_ns', 'jitter_p9999_ns')
+    rates = (1000, 2000, 4000, 8000, 10000, 4000, 4000) if mode == 0 else (10000,) * 7
+
+    def tick_range(ns, error_flags):
+        if ns == 0xffffffff and error_flags & 4:
+            return ((ns * hz + 999999999) // 1000000000, 0xffffffff)
+        low = (ns * hz + 999999999) // 1000000000
+        high = ((ns + 1) * hz + 999999999) // 1000000000 - 1
+        if low > high or high < 0 or low > 0xffffffff:
+            raise ValueError('control metric cannot represent counter ticks')
+        return low, min(high, 0xffffffff)
+
+    def ns(ticks):
+        return min(0xffffffff, ticks * 1000000000 // hz)
+
+    def metric(bins, count, maximum, percentile, error_flags, *, raw_ticks=False):
+        if sum(bins) != count:
+            raise ValueError('control histogram count differs from its path')
+        if not count:
+            if maximum or percentile:
+                raise ValueError('empty control histogram has timing data')
+            return {'count': 0, 'max_ns': 0, 'p9999_upper_ns': 0,
+                    'p9999_upper_ticks': 0, 'saturated_count': 0}
+        last = max(b for b, value in enumerate(bins) if value)
+        low, high = (maximum, maximum) if raw_ticks else tick_range(maximum, error_flags)
+        low, high = max(low, last * CONTROL_BIN_TICKS), min(high,
+            (last + 1) * CONTROL_BIN_TICKS - 1 if last < CONTROL_BINS - 1 else 0xffffffff)
+        if low > high:
+            raise ValueError('control histogram maximum differs from its highest bin')
+        rank, cumulative, selected = count - count // 10000, 0, 0
+        for selected, value in enumerate(bins):
+            cumulative += value
+            if cumulative >= rank:
+                break
+        # The recorder returns the exact maximum below its declared minimum.
+        use_maximum = count < CONTROL_MINIMUM or selected == CONTROL_BINS - 1
+        upper_ticks = high if use_maximum else (selected + 1) * CONTROL_BIN_TICKS
+        expected = maximum if use_maximum else (upper_ticks if raw_ticks else ns(upper_ticks))
+        if percentile != expected:
+            raise ValueError('control percentile differs from nearest-rank histogram endpoint')
+        return {'count': count, 'max_ns': ns(maximum) if raw_ticks else maximum,
+                'max_ticks_interval': [low, high], 'p9999_upper_ticks': upper_ticks,
+                'p9999_upper_ns': ns(percentile) if raw_ticks else percentile,
+                'saturated_count': bins[-1]}
+
+    for index, rate in enumerate(rates):
+        offset = 64 + index * 2496
+        core, rate_hz, paths, error_flags = struct.unpack_from('<4I', payload, offset)
+        if (core != index + 1 or rate_hz != rate or paths != (3 if mode == 0 else 1) or
+                error_flags & ~15 or hz < rate):
+            raise ValueError('control core, rate, paths or error flags differ')
+        stats = [dict(zip(stats_fields, struct.unpack_from('<3I4x5Q4I', payload, offset + 16 + path * 72)))
+                 for path in range(2)]
+        entry_max, gap_max, entry_p9999, gap_p9999, published_control, published_task = \
+            struct.unpack_from('<4I2Q', payload, offset + 160)
+        histograms = [struct.unpack_from(f'<{CONTROL_BINS}I', payload,
+                      offset + 192 + h * CONTROL_BINS * 4) for h in range(3)]
+        for path, row in enumerate(stats):
+            if not paths & (1 << path):
+                if any(row.values()):
+                    raise ValueError('unselected control path contains statistics')
+                continue
+            if (row['path'], row['core'], row['rate_hz']) != (path, core, rate):
+                raise ValueError('control statistics identity differs')
+            if row['count'] != (published_task if path else published_control):
+                raise ValueError('control published count differs from final statistics')
+            if row['consumed'] != (row['count'] if path else 0):
+                raise ValueError('control histogram-only consumption count differs')
+            for name in ('latency', 'jitter'):
+                count = row['count'] if name == 'latency' else max(0, row['count'] - 1)
+                maximum, percentile = row[name + '_max_ns'], row[name + '_p9999_ns']
+                if not count and (maximum or percentile):
+                    raise ValueError('empty control metric has statistics')
+                if count:
+                    low, high = tick_range(maximum, error_flags)
+                    endpoints = {ns((b + 1) * CONTROL_BIN_TICKS)
+                                 for b in range(min(high // CONTROL_BIN_TICKS + 1, CONTROL_BINS - 1))}
+                    if high >= (CONTROL_BINS - 1) * CONTROL_BIN_TICKS:
+                        endpoints.add(maximum)
+                    if (count < CONTROL_MINIMUM and percentile != maximum or
+                            count >= CONTROL_MINIMUM and percentile not in endpoints):
+                        raise ValueError('control statistics percentile exceeds its maximum bin')
+            for name in ('gaps', 'dropped', 'missed'):
+                if row[name]:
+                    reasons.append(f'core{core}_{"task" if path else "control"}_{name}')
+        if error_flags:
+            reasons.append(f'core{core}_runtime_errors')
+        actual_errors |= error_flags
+        if published_control > minimum and (mode == 1 or published_task >= minimum):
+            actual_complete |= 1 << core
+        else:
+            reasons.append(f'core{core}_insufficient_samples')
+        task_latency = metric(histograms[0], stats[1]['count'], stats[1]['latency_max_ns'],
+                              stats[1]['latency_p9999_ns'], error_flags)
+        task_gap = metric(histograms[1], stats[1]['count'], gap_max, gap_p9999, error_flags, raw_ticks=True)
+        control_jitter = metric(histograms[2], max(0, stats[0]['count'] - 1),
+                                stats[0]['jitter_max_ns'], stats[0]['jitter_p9999_ns'], error_flags)
+        if mode == 1 and (published_task or entry_max or entry_p9999 or gap_max or gap_p9999):
+            raise ValueError('idle control-only measurement contains task data')
+        entry_upper = ((entry_max // CONTROL_BIN_TICKS + 1) * CONTROL_BIN_TICKS
+                       if entry_max < (CONTROL_BINS - 1) * CONTROL_BIN_TICKS else entry_max)
+        if entry_p9999 > entry_upper:
+            raise ValueError('task interrupt-entry percentile exceeds its maximum bin')
+        rows.append({'core': core, 'rate_hz': rate, 'period_ticks': hz // rate,
+            'paths': paths, 'error_flags': error_flags,
+            'stats': stats, 'published_control': published_control, 'published_task': published_task,
+            'task_latency': task_latency, 'task_gap': task_gap, 'control_jitter': control_jitter,
+            'task_entry': {'max_ticks': entry_max, 'p9999_upper_ticks': entry_p9999},
+            'histograms': dict(zip(('task_latency', 'task_gap', 'control_jitter'), histograms))})
+    if actual_errors != errors or actual_complete != complete:
+        raise ValueError('control error or completion summary differs from its cores')
+    task_target = all(row['task_latency']['p9999_upper_ticks'] * 1000000 <= 10 * hz for row in rows) if mode == 0 else None
+    return {'version': version, 'frequency_hz': hz, 'minimum_samples': minimum,
+        'mode': 'busy' if mode == 0 else 'idle', 'tickless': bool(flags & 2),
+        'restore_spans': bool(flags & 4), 'flags': flags,
+        'requested_mask': requested, 'ready_mask': ready, 'quiescent_mask': quiescent,
+        'consumer_parked': parked, 'complete_mask': complete, 'errors': errors,
+        'quantile_method': 'nearest-rank 99.99th percentile; four-tick bin upper endpoints; exact maximum in saturated bin or below 10000 samples',
+        'measurement_qualified': not reasons, 'unqualified_reasons': reasons,
+        'task_wake_target': {'interval': 'deadline_to_task_running', 'target_us': 10,
+                             'met': task_target, 'qualified': not reasons and task_target is True},
+        'cores': rows}
+
+
 def decode(payload, dma=False):
+    if len(payload) < RESULT_BYTES:
+        raise ValueError(f'latency result must contain {RESULT_BYTES} bytes')
     tail = payload[RESULT_BYTES:]
+    control_tail = b''
+    if len(tail) >= CONTROL_BYTES and struct.unpack_from('<Q', tail, len(tail) - CONTROL_BYTES)[0] == CONTROL_MAGIC:
+        tail, control_tail = tail[:-CONTROL_BYTES], tail[-CONTROL_BYTES:]
     pmu_tail, scheduler_tail = b'', b''
     if len(tail) >= 8 and struct.unpack_from('<Q', tail)[0] == SCHED_MAGIC:
         scheduler_tail = tail
@@ -331,14 +488,14 @@ def decode(payload, dma=False):
         pmu_tail, scheduler_tail = tail[:PMU_BYTES], tail[PMU_BYTES:]
     elif len(tail) == PMU_BYTES:
         pmu_tail = tail
-    elif tail or len(payload) != RESULT_BYTES:
+    elif tail:
         raise ValueError(f'latency result must contain {RESULT_BYTES} bytes')
     payload = payload[:RESULT_BYTES]
     magic, frequency, elapsed, mask, model, dma_jobs, irq_mask = struct.unpack_from('<3Q4I', payload)
     if magic != MAGIC or mask != 0xff or model or irq_mask != 1 or \
             (dma_jobs < 2 if dma else dma_jobs != 0):
         raise ValueError('native CPU latency header differs')
-    if not frequency or not 0 < elapsed <= 10000:
+    if not frequency or not 0 < elapsed <= (15000 if control_tail else 10000):
         raise ValueError('latency counter frequency or run interval is invalid')
     cores = []
     fields = ('count', 'max_ticks', 'max_start', 'max_site', 'first_over_start',
@@ -485,4 +642,23 @@ def decode(payload, dma=False):
                 raise ValueError('scheduler busy-wake chain differs from the named workload samples')
             if maximum['whole_wake_ticks'] != max(w['running'] - w['ready'] for w in raw):
                 raise ValueError('scheduler busy-wake maximum differs from the named workload samples')
+    if control_tail:
+        result['control'] = decode_control(control_tail, frequency)
+        targets = {}
+        for label, metric_name in (('task_lock_wait', 'lock1_wait'), ('interrupts_masked', 'irq_masked')):
+            count = sum(row['metrics'][metric_name]['count'] for row in cores)
+            maximum = max(row['metrics'][metric_name]['max_ticks'] for row in cores)
+            targets[label] = {'target_us': 25, 'max_ticks': maximum,
+                'max_us': maximum * 1000000 / frequency,
+                'met': maximum * 1000000 <= 25 * frequency if count else None}
+        targets['task_wake'] = result['control']['task_wake_target']
+        result['qualification'] = {'targets': targets,
+            'scope': 'deadline-to-task p9999, task-lock wait maximum and recorded mask maximum',
+            'recorded_targets_met': result['control']['measurement_qualified'] and
+                                    all(value['met'] is True for value in targets.values()),
+            'mask_coverage': ('contiguous exception spans through the recorded restore point'
+                if result['control']['restore_spans'] else 'fast and switch mask-span coverage unqualified'),
+            'limitations': ['startup masking requires separate qualification',
+                            'three final-image runs are required for repeatability',
+                            'mask timing excludes the fixed final restore and ERET instructions']}
     return result
