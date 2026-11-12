@@ -1,14 +1,18 @@
-# Header I2C bindings remain unimplemented
+# Header I2C controllers
 
-SunstoneOS has a bounded TWI transaction engine and native bindings for the
-camera controllers TWI9 and TWI11. The separate Type-C adapter binds S_TWI1;
-the PMIC uses S_TWI0. These paths do not establish native access to the four
-main I2C controllers exposed at the 40-pin header.
+SunstoneOS has a bounded polled TWI transaction engine and native bindings for the
+camera controllers TWI9 and TWI11. The separate Type-C adapter binds S_TWI1; the
+PMIC uses S_TWI0. The four main controllers TWI0 to TWI3 and S_TWI2, which the
+40-pin header exposes, have a separate interrupt-driven engine
+(`a733_i2c_bus.c`) and an OS class service (`apps/os/i2c.c`); the
+[design](../../docs/designs/header-i2c.md) describes them, and the application
+interface is `include/sunstone_i2c.h`. The wiring evidence below remains the
+source of the routes in the board description.
 
 The board manual V1.0, section 3.16.4, gives these header routes. The pinned
 board device tree gives their SoC pins and a 400 kHz requested bus rate:
 
-| Controller | Header SDA | Header SCL | SoC pin pair |
+| Controller | Header SDA | Header SCL | SoC pin pair (SCL, SDA) |
 | --- | --- | --- | --- |
 | TWI0 | 3 | 5 | PB2/PB3 |
 | TWI1 | 38 | 40 | PB7/PB8 |
@@ -16,27 +20,16 @@ board device tree gives their SoC pins and a 400 kHz requested bus rate:
 | TWI3 | 26 | 21 | PE3/PE4 |
 
 The device tree selects S_TWI2 on PL10/PL11 and declares a HYM8563 RTC child.
-That declaration does not establish a fitted external RTC. The pin manager
-also describes an S_TWI2 alternate function on PL4/PL5. A supported pin-table
-alternative does not establish the fitted board route.
-
-`a733_twi_init_controller` selects only TWI9, TWI11 or S_TWI1. Its native
-camera adapter admits only TWI9 or TWI11 and reserves one camera-bus mutex.
-The clock registry has no dedicated scope for TWI0–3 or S_TWI2. Completing
-header I2C therefore needs shared clock scopes and serialized bus ownership,
-followed by controller selection, native pin/clock bindings and a real caller.
-A pin-table entry alone supplies none of those operations.
-
-The camera adapter currently plans at most 100 kHz on both routes. The board
-device tree requests 100 kHz for TWI9 and 400 kHz for TWI11. Higher-rate
-qualification must resolve that difference and use an admitted peer. Neither
-that device-tree setting nor the header table measures electrical timing.
-New rate profiles require the coordinator's clock-point review before a run.
+That declaration does not establish a fitted external RTC. The V1.2 schematic
+routes PL10/PL11 to the Type-C sideband pins and routes S_TWI2 to header pins
+27 (SDA) and 28 (SCL) on PL5/PL4 with function 3, which is the route the board
+description uses.
 
 TWI1 shares PB7/PB8 with I2S0. TWI2 and TWI3 share PE1–4 with SPI3; PE1 also
-belongs to the UART6 route. Native admission must preserve these pin conflicts,
-exclude autonomous/DMA writers, establish pull-ups and bank voltage, and retain
-ownership after an uncertain transaction. Electrical recovery cannot be
+belongs to the UART6 route. The pin manager preserves these conflicts. The service refuses a controller whose
+gate or reset is already open, requires the engine registers idle, enables the SoC
+pull-up, and retains the controller after an uncertain close. Bank voltage and
+the pull-up value remain unestablished, and electrical recovery cannot be
 inferred from a software timeout.
 
 The source records are `board-manual`, `board-schematic`, and
