@@ -8,6 +8,8 @@
 #define LATENCY_CAUSE_PING_SAMPLES 256u
 #define LATENCY_CAUSE_PING_PAIRS 2u
 #define LATENCY_CAUSE_PING_BYTES 3392u
+/* One quarter of the latency manifest's one-second progress window. */
+#define LATENCY_CAUSE_PING_TIMEOUT_US 250000u
 
 enum latency_cause_ping_status {
     LATENCY_CAUSE_PING_PENDING,
@@ -41,8 +43,10 @@ _Static_assert(sizeof(struct latency_cause_ping_report) == LATENCY_CAUSE_PING_BY
 
 /* Initialize before scheduling. Start once, after memory workers stop and before
  * recorder freeze. The controller polls done with its ordinary one-tick delay.
- * One overall one-second raw-counter deadline bounds all readiness and exchange
- * work. Stop requests cancellation; workers park within that same deadline.
+ * One overall 250ms raw-counter deadline bounds readiness and exchanges. A
+ * one-tick (1ms) parking allowance leaves 749ms of the one-second progress
+ * window for the controller. Stop requests cancellation; IRQ and scheduler
+ * delays remain observable rather than being subtracted from the budget.
  * Done also requires all three saved task frames to be suspended. Snapshot then
  * copies immutable results. Normal interrupts remain enabled throughout.
  *

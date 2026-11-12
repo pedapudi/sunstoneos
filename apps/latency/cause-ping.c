@@ -39,7 +39,7 @@ extern uint64_t ss_latency_cause_ping_test_cycles(void);
 static uint64_t now(void) { return ss_latency_cause_ping_test_now(); }
 static uint64_t cycles(void) { return ss_latency_cause_ping_test_cycles(); }
 #else
-/* A relaxed counter read is sufficient for the coarse one-second timeout. It
+/* A relaxed counter read is sufficient for the coarse 250ms timeout. It
  * adds no ISB inside the polling loop; each measured sample has exactly the two
  * ISB/PMCCNTR reads below. Timeout polling occurs every 64 failed turn loads. */
 static uint64_t now(void)
@@ -236,13 +236,17 @@ void latency_cause_ping_init(void)
 bool latency_cause_ping_start(uint64_t frequency)
 {
     uint64_t begin = now();
-    if (!tasks[0] || !frequency || begin > UINT64_MAX - frequency) return false;
+    /* Round the declared experiment interval up without multiplying the whole
+     * 64-bit frequency. The A733's 24MHz counter gives exactly 6,000,000 ticks. */
+    uint64_t timeout = frequency / 1000000u * LATENCY_CAUSE_PING_TIMEOUT_US +
+        (frequency % 1000000u * LATENCY_CAUSE_PING_TIMEOUT_US + 999999u) / 1000000u;
+    if (!tasks[0] || !timeout || begin > UINT64_MAX - timeout) return false;
     unsigned expected = 0;
     if (!atomic_compare_exchange_strong_explicit(&control.started, &expected, 1,
                                                  memory_order_acq_rel, memory_order_acquire)) return false;
     result.frequency = frequency;
     result.begin_tick = begin;
-    control.deadline = begin + frequency;
+    control.deadline = begin + timeout;
     xTaskNotifyGive(tasks[0]);
     return true;
 }
