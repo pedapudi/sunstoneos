@@ -82,6 +82,13 @@ void i2c_scan_main(const struct ss_grant *grant)
 {
     (void)grant;
     static const uint32_t rates[RATES]={100000,400000};
+    /* The CPU clock owner raises both clusters while the application starts. Like the other CPU-return applications,
+     * scan only once it has finished and the thermal policy is not throttling, so the scan sees a settled system. */
+    while(!ss_clock_ready()||ss_throttled()){
+        if(ss_live()<0)ss_fail(0x1c20);
+        ss_progress();
+        ss_usb_wait(1000);
+    }
     report.magic=MAGIC;report.version=1;report.records_expected=BUSES*RATES;
     for(unsigned bus=0;bus<BUSES;++bus)
         for(unsigned i=0;i<RATES;++i){
