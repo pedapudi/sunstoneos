@@ -967,7 +967,8 @@ def run_image(args, backend=Live):
     evidence = args.evidence or CACHE/'board-queue/runs'/f'{time.time_ns()}-{args.port}-{uuid.uuid4().hex[:8]}'
     evidence = evidence_directory(evidence)
     result = {'schema': 'sunstone-board-result-v1', 'port': args.port, 'image': str(args.image),
-              'kind': args.kind, 'outcome': 'host-error', 'first_failure': None, 'durations': {},
+              'kind': args.kind, 'lifetime': getattr(args, 'lifetime', 'returning'),
+              'outcome': 'host-error', 'first_failure': None, 'durations': {},
               'evidence_path': str(evidence.resolve()), 'result_path': str((evidence/'result.json').resolve()),
               'quarantined': False, 'launch_attempted': False, 'time': time.time(), 'host_pressure': {'start': pressure_start},
               'git_revision': subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'], capture_output=True,text=True).stdout.strip()}
@@ -1281,7 +1282,7 @@ def check_image(args):
     report = {'admitted': True, 'physical_access': False, 'image_sha256': images.sha(args.image),
               'watchdog': plan['watchdog'],
               'uploads': [{'address': a, 'file': str(p), 'sha256': images.sha(p)} for a, p in plan['uploads']]}
-    report.update({k: plan[k] for k in ('epoch', 'generation', 'lease', 'marker', 'host_admission') if k in plan})
+    report.update({k: plan[k] for k in ('epoch', 'generation', 'lease', 'lifetime', 'marker', 'host_admission') if k in plan})
     report['preflight'] = check_preflight(args, info, plan)
     save(evidence/'admission.json', report)
     print(json.dumps(report, indent=2))

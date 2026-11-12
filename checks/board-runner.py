@@ -338,6 +338,28 @@ def resident_launcher_cases(out):
     passed('resident-preflight-refuses-prepopulated-watchdog-fields')
 
 
+def resident_image_case(out, image, template):
+    """Prepare the real bounded resident ELF and execute its own native admission."""
+    root=out/'resident-image';root.mkdir()
+    args=arguments(root,'--lifetime','resident','--approved-by','coordinator','--template',str(template),development=True)
+    args.image=image
+    info=images.inspect(image,'cpu-return')
+    words=images.offline_words()
+    assert words,'The native admission needs captured board words.'
+    results={}
+    for lifetime in ('resident','returning'):
+        args.lifetime=lifetime
+        plan=images.prepare(args,info,{'words':words},root/lifetime)
+        assert plan['host_admission'].get('admitted') is True,plan['host_admission']
+        assert plan['lifetime']==lifetime and plan['watchdog']['mode']==(0x41 if lifetime=='resident' else 0xb1)
+        results[lifetime]={'admission':plan['host_admission'],'watchdog':plan['watchdog'],
+                           'launcher_sha256':images.sha(root/lifetime/'launch.bin')}
+    board.save(root/'admission.json',{'physical_access':False,'coordinator_approval':False,
+        'scope':'Host fixture of approved arguments; no launch authorization.',
+        'image_sha256':images.sha(image),'lifetimes':results})
+    passed('real-resident-image-and-returning-native-admission')
+
+
 def automatic_restore_cases(out):
     """The runner restores the CPU rails after a session whose CPU clock grant admits a transition, unless the run opts
     out with --no-restore-rails; the option, frozen in a queue entry, reaches the runner as given."""
@@ -1488,6 +1510,8 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--hello',type=Path)
+    parser.add_argument('--resident-image',type=Path,help='Bounded stop-on-finish OS ELF for resident native admission.')
+    parser.add_argument('--resident-template',type=Path,help='Typed session template directory for --resident-image.')
     parser.add_argument('--gpu-image',type=Path,action='append',help='Real generic GPU ELF for gpu-capture group; repeat for diagnostic and ordinary images.')
     parser.add_argument('--npu-image',type=Path,help='Generic ELF whose application declares the NPU, for the generic-npu group (gate image ret-npu-load)')
     parser.add_argument('--npu-images',type=Path)
@@ -1503,6 +1527,9 @@ def main():
     groups=args.only.split(',')
     if 'transport' in groups:transport_cases(args.out);removed_cases(args.out);automatic_restore_cases(args.out)
     if 'resident' in groups:resident_cases(args.out);resident_launcher_cases(args.out)
+    if 'resident' in groups and args.resident_image:
+        assert args.resident_template,'--resident-image needs --resident-template'
+        resident_image_case(args.out,args.resident_image,args.resident_template)
     if 'queue' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):withdraw_cases(args.out)
