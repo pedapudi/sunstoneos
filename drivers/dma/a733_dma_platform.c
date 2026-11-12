@@ -198,12 +198,29 @@ enum a733_dma_platform_result a733_dma_platform_poll(struct a733_dma_platform *p
 int a733_dma_platform_ready(const struct a733_dma_platform *p)
 {return p && p->initialized && !p->failed && p->stage==COMPLETE;}
 
-enum a733_dma_platform_result a733_dma_platform_verify_adopted(
+/* The final enabled state is the same for cold startup and adoption. This
+ * verifier never enters baseline/controller: those startup helpers can write. */
+static int retired_baseline(struct a733_dma_platform *p)
+{
+    uint32_t v;
+    for(unsigned i=0;i<3;++i)
+        if(!rd(p,CCU+fabric_offsets[i],&v)||(v&fabric_masks[i])!=p->config.fabric[i])return 0;
+    return parents_stable(p)&&rd(p,BUS,&v)&&(v&UINT32_C(0x10001))==UINT32_C(0x10001)&&
+        rd(p,MBUS_GATE,&v)&&(v&CRITICAL)==CRITICAL&&(v&1);
+}
+static int retired_controller(struct a733_dma_platform *p)
+{
+    uint32_t cpu,mcu,automatic;
+    return quiet(p)&&rd(p,DMA+A733_DMA_REG_CPU_ROUTE,&cpu)&&(cpu&0xffff)==p->config.desired_cpu&&
+        rd(p,DMA+A733_DMA_REG_MCU_ROUTE,&mcu)&&(mcu&0xffff)==p->config.desired_mcu&&
+        rd(p,DMA+A733_DMA_REG_AUTO_GATE,&automatic)&&automatic==4;
+}
+enum a733_dma_platform_result a733_dma_platform_verify_retired(
     struct a733_dma_platform *p,uint64_t deadline)
 {
-    if(!a733_dma_platform_ready(p)||p->config.cold||!deadline)return RETAINED;
-    /* Verification uses a fresh finite deadline without changing the copied
-     * startup contract. cold=0 makes baseline/controller strictly read-only. */
+    if(!a733_dma_platform_ready(p)||!deadline)return RETAINED;
+    /* The copied startup contract keeps its cold policy and initial routes.
+     * Only this private verifier copy uses the return deadline. */
     struct a733_dma_platform check=*p;
     check.config.deadline_us=deadline;
     check.retire_checking=1;
@@ -216,11 +233,17 @@ enum a733_dma_platform_result a733_dma_platform_verify_adopted(
         p->retire_fault=A733_DMA_RETIRE_ENTER;p->retire_now=check.retire_now;return fault(p);
     }
     unsigned failed=0;
-    if(!baseline(&check))failed=A733_DMA_RETIRE_BASELINE;
-    else if(!controller(&check))failed=A733_DMA_RETIRE_CONTROLLER;
+    if(!retired_baseline(&check))failed=A733_DMA_RETIRE_BASELINE;
+    else if(!retired_controller(&check))failed=A733_DMA_RETIRE_CONTROLLER;
     else if(!timely(&check))failed=A733_DMA_RETIRE_BEFORE_LEAVE;
     check.ops.leave(check.cookie);
     if(!failed&&!timely(&check))failed=A733_DMA_RETIRE_AFTER_LEAVE;
     if(failed){p->retire_fault=failed;p->retire_now=check.retire_now;return fault(p);}
     return READY;
+}
+enum a733_dma_platform_result a733_dma_platform_verify_adopted(
+    struct a733_dma_platform *p,uint64_t deadline)
+{
+    if(!p||p->config.cold)return RETAINED;
+    return a733_dma_platform_verify_retired(p,deadline);
 }

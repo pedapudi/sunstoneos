@@ -35,6 +35,9 @@ struct a733_dma_startup {
     struct a733_platform_locks *locks;
     TaskHandle_t task;
     unsigned initialized, failed, register_held, supervised, retired;
+    /* Published once by the bound return client; the bootstrap observes it
+     * before every platform access and while retrying register-lock entry. */
+    atomic_uint_fast64_t return_deadline;
     uint64_t retire_deadline,retire_now;
     unsigned retire_fault; /* 1 counter, 2 deadline, 3 token, 4 platform. */
     uintptr_t retire_read_address;
@@ -65,6 +68,9 @@ int a733_dma_startup_ready(const struct a733_dma_startup *);
 /* Original bootstrap task only, after service retirement; adopt-only and
  * read-only. deadline_us is fixed on the first call and never extended. */
 enum a733_dma_platform_result a733_dma_startup_retire_adopted(
+    struct a733_dma_startup *,uint64_t deadline_us);
+/* The same original-task verification after cold startup or adoption. */
+enum a733_dma_platform_result a733_dma_startup_retire(
     struct a733_dma_startup *,uint64_t deadline_us);
 /* dma_service_activation.prepared callback. Exact controller/channel match,
  * designated bootstrap task, copied handoff, live token and healthy common
