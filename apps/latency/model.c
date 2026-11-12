@@ -2,6 +2,14 @@
 #include "task.h"
 #include "platform.h"
 #include "workload.h"
+/* The kit's task creation (include/sunstone_app.h) on the model images, which have no application address space and do not
+ * link apps/os/application.c: the same FreeRTOS creation, so the workload shared with the OS image builds unchanged. */
+void *ss_task_create_static_affinity_set(void (*entry)(void *), const char *name, uint32_t stack_words, void *arg,
+                                         unsigned long priority, void *stack, void *tcb, unsigned long affinity)
+{
+    return xTaskCreateStaticAffinitySet(entry, name, stack_words, arg, (UBaseType_t)priority, (StackType_t *)stack,
+                                        (StaticTask_t *)tcb, (UBaseType_t)affinity);
+}
 
 #ifdef SUNSTONE_LATENCY_CPU_ONLY
 /* The CPU control has no DMA client; these hooks stand for the board image's absence of one. */
