@@ -1,23 +1,22 @@
-/* Host check of the address-test DRAM decode check. The memory model decodes
- * addresses with a selectable fault and aborts on an access outside the
- * ranges the check was given, as a bus error would. */
+/* Host check of the address-test DRAM decode check. The memory model decodes addresses with a selectable fault. The probe
+ * may write only its scratch word, a word of kernel memory outside every range it is given; every other access must be a read.
+ * The check records every write and proves the write set is disjoint from the ranges and from each application region. */
 #include "a733_dram.h"
 #include "a733_device_memory_layout.h"
+#include "app_region.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #define GIB (UINT64_C(1) << 30)
-enum fault { LINEAR, WRAP_8GIB, IGNORE_BIT33, IGNORE_BIT30, STUCK_BIT21, TRUNCATED_10GIB, ABSENT_TOP, DROP_WRITES };
+#define BASE UINT64_C(0x40000000)
+enum fault { LINEAR, WRAP_8GIB, IGNORE_BIT33, IGNORE_BIT30, STUCK_BIT21, WRAP_10GIB, DROP_WRITES, IGNORE_BIT24 };
 struct cell { uint64_t address, value; };
-static struct cell cells[4096];   /* only the probe addresses are cells; everything else holds initial() */
-static unsigned used;
+static struct cell cells[64];
+static unsigned used, reads, writes, barriers;
+static uint64_t written[16];
 static enum fault fault;
-static const struct a733_dram_range *allowed;
-static unsigned allowed_count;
-static unsigned reads, writes;
 
-/* What the runner left in a cell before the probe: a known, address-dependent pattern (an INPUT region's bytes). */
 static uint64_t initial(uint64_t cell)
 {
     uint64_t z = cell * UINT64_C(0x9e3779b97f4a7c15) + UINT64_C(0x1234567);
@@ -25,121 +24,81 @@ static uint64_t initial(uint64_t cell)
     z = (z ^ (z >> 27)) * UINT64_C(0x94d049bb133111eb);
     return z ^ (z >> 31);
 }
+/* The cell an address reaches: the DRAM offset passes through the fault. */
 static uint64_t decode(uint64_t pa)
 {
+    uint64_t off = pa - BASE;
     switch (fault) {
-    case WRAP_8GIB: return (pa - UINT64_C(0x40000000)) % (8 * GIB);
-    case IGNORE_BIT33: return pa & ~(UINT64_C(1) << 33);
-    case IGNORE_BIT30: return pa & ~(UINT64_C(1) << 30);
-    case STUCK_BIT21: return pa & ~(UINT64_C(1) << 21);
-    default: return pa;
+    case WRAP_8GIB: off %= 8 * GIB; break;
+    case WRAP_10GIB: off %= 10 * GIB; break;
+    case IGNORE_BIT33: off &= ~(UINT64_C(1) << 33); break;
+    case IGNORE_BIT30: off &= ~(UINT64_C(1) << 30); break;
+    case STUCK_BIT21: off &= ~(UINT64_C(1) << 21); break;
+    case IGNORE_BIT24: off &= ~(UINT64_C(1) << 24); break;
+    default: break;
     }
-}
-static void check_allowed(uint64_t pa)
-{
-    for (unsigned i = 0; i < allowed_count; ++i)
-        if (pa >= allowed[i].base && pa + 8 <= allowed[i].base + allowed[i].size) return;
-    fprintf(stderr, "access outside the given ranges: %#llx\n", (unsigned long long)pa);
-    abort();
+    return BASE + off;
 }
 static uint64_t rd(void *c, uint64_t pa)
 {
-    (void)c; check_allowed(pa); ++reads;
-    assert(!(pa & 7));
-    if ((fault == TRUNCATED_10GIB && pa >= UINT64_C(0x40000000) + 10 * GIB) ||
-        (fault == ABSENT_TOP && pa >= UINT64_C(0x340000000) - GIB)) return 0;
+    (void)c; ++reads; assert(!(pa & 7));
     uint64_t d = decode(pa);
     for (unsigned i = 0; i < used; ++i) if (cells[i].address == d) return cells[i].value;
     return initial(d);
 }
 static void wr(void *c, uint64_t pa, uint64_t v)
 {
-    (void)c; check_allowed(pa); ++writes;
-    assert(!(pa & 7));
+    (void)c; assert(!(pa & 7) && writes < 16);
+    written[writes++] = pa;
     if (fault == DROP_WRITES) return;
-    if ((fault == TRUNCATED_10GIB && pa >= UINT64_C(0x40000000) + 10 * GIB) ||
-        (fault == ABSENT_TOP && pa >= UINT64_C(0x340000000) - GIB)) return;
     uint64_t d = decode(pa);
     for (unsigned i = 0; i < used; ++i) if (cells[i].address == d) { cells[i].value = v; return; }
-    assert(used < 4096);
+    assert(used < 64);
     cells[used++] = (struct cell){d, v};
 }
-static unsigned barriers;
 static void bar(void *c) { (void)c; ++barriers; }
 
-static uint64_t saved[A733_DRAM_PROBE_WORDS(UINT64_C(0x31000000)) + A733_DRAM_PROBE_WORDS(A733_DRAM_MAP_END - UINT64_C(0x80000000))];
-static uint64_t capacity = sizeof saved / sizeof saved[0];
-
-/* Runs the probe over the model. Whatever it returns, every cell it touched must hold what it held before: the probe puts back the
- * words it overwrote, in the reverse order so that an aliasing decode (two addresses, one cell) ends with the first word saved. */
+#define SCRATCH UINT64_C(0x41234560)   /* EL3 bss: kernel memory, below the application ranges */
 static int run(enum fault f, const struct a733_dram_range *r, unsigned n)
 {
-    used = reads = writes = barriers = 0; fault = f; allowed = r; allowed_count = n;
+    used = reads = writes = barriers = 0; fault = f;
     static const struct a733_dram_probe_io io = {0, rd, wr, bar};
-    const int result = a733_dram_decode_probe(&io, r, n, saved, capacity);
-    for (unsigned i = 0; i < used; ++i)
-        if (cells[i].value != initial(cells[i].address)) {
-            fprintf(stderr, "FAIL: cell %#llx holds %#llx after the probe, not its own %#llx (fault %d)\n", (unsigned long long)cells[i].address,
-                    (unsigned long long)cells[i].value, (unsigned long long)initial(cells[i].address), (int)f);
-            exit(4);
-        }
-    return result;
+    return a733_dram_decode_probe(&io, r, n, SCRATCH, 1);
 }
-
-/* The words of [first, first + bytes) as the model holds them now (a cell the probe never touched holds its initial pattern). */
-static void dump(const char *path, uint64_t first, uint64_t bytes, int before)
+/* Every application region of the image: the window the loader fills, the slot 1 area and all of upper memory, as the ledger knows them. */
+static void disjoint(const struct a733_dram_range *r, unsigned n)
 {
-    FILE *f = fopen(path, "wb");
-    assert(f);
-    for (uint64_t pa = first; pa < first + bytes; pa += 8) {
-        uint64_t v = initial(pa);
-        if (!before)
-            for (unsigned i = 0; i < used; ++i) if (cells[i].address == pa) { v = cells[i].value; break; }
-        fwrite(&v, 8, 1, f);
+    for (unsigned w = 0; w < writes; ++w) {
+        assert(written[w] == SCRATCH);
+        for (unsigned i = 0; i < n; ++i) assert(written[w] + 8 <= r[i].base || r[i].base + r[i].size <= written[w]);
+        /* Below the window the loader fills (0x44000000) and so below every application region. */
+        assert(written[w] >= BASE && written[w] < UINT64_C(0x44000000) && written[w] < APP_REGION_FLOOR);
     }
-    fclose(f);
 }
 
-int main(int argc, char **argv)
+int main(void)
 {
     static const struct a733_dram_range high[] = {{UINT64_C(0x80000000), A733_DRAM_MAP_END - UINT64_C(0x80000000)}};
     static const struct a733_dram_range both[] = {{UINT64_C(0x48000000), UINT64_C(0x31000000)},
                                                   {UINT64_C(0x80000000), A733_DRAM_MAP_END - UINT64_C(0x80000000)}};
-    /* The linear decode passes, in both range sets, with one barrier between the passes and
-     * the same number of reads and writes within a bounded probe count. */
-    /* One barrier after the writes and one after the restores; the write pass reads each word before it writes, the compare pass reads
-     * it again, and the restore writes it back: reads = 2 words, writes = 2 words. */
-    assert(run(LINEAR, high, 1) && barriers == 2 && reads == writes && writes > 1000 && writes < 1400);
-    unsigned high_probes = writes;
-    assert(run(LINEAR, both, 2) && barriers == 2 && reads == writes && writes > high_probes);
-    const unsigned both_words = writes / 2;
-    assert(both_words <= sizeof saved / sizeof saved[0]);      /* the build-time bound covers the exact count */
-    printf("probe words for the cached image's table: %u exact, %zu bound (%zu bytes)\n", both_words, sizeof saved / sizeof saved[0], sizeof saved);
-    /* An INPUT region at 0x48000000 (the graph region of the recognition application, 14,680,064 bytes, and the 16 KiB region behind it)
-     * keeps its bytes through the probe: the checker (dram-decode-probe.py) compares the SHA-256 of the region before and after. */
-    if (argc == 3) {
-        assert(run(LINEAR, both, 2));
-        dump(argv[1], UINT64_C(0x48000000), 14680064 + 16384, 1);
-        dump(argv[2], UINT64_C(0x48000000), 14680064 + 16384, 0);
-    }
+    /* The linear decode passes. Exactly one write, to the scratch word, and it lies in no range; the rest are reads. */
+    assert(run(LINEAR, high, 1) && writes == 1 && barriers == 1 && reads > 20);
+    disjoint(high, 1);
+    assert(run(LINEAR, both, 2) && writes == 1);
+    disjoint(both, 2);
+    printf("probe: 1 write (scratch word %#llx), %u reads for the cached image's table\n", (unsigned long long)SCRATCH, reads);
+    /* An INPUT region at 0x48000000 (the graph region of the recognition application) keeps its bytes: no write reaches it. */
+    for (unsigned i = 0; i < used; ++i) assert(cells[i].address < UINT64_C(0x44000000));
     /* Each decode fault fails the check. */
-    const char *names[] = {"linear", "wrap at 8 GiB", "bit 33 ignored", "bit 30 ignored", "bit 21 stuck",
-                           "truncated at 10 GiB", "top gigabyte absent", "writes dropped"};
-    for (enum fault f = WRAP_8GIB; f <= DROP_WRITES; ++f)
-        if (run(f, high, 1)) { fprintf(stderr, "FAIL: %s passed\n", names[f]); return 1; }
-    assert(!run(WRAP_8GIB, both, 2));
-    /* Refusals touch nothing. */
+    const char *names[] = {"linear", "wrap at 8 GiB", "bit 33 ignored", "bit 30 ignored", "bit 21 stuck", "wrap at 10 GiB", "writes dropped", "bit 24 ignored"};
+    for (enum fault f = WRAP_8GIB; f <= IGNORE_BIT24; ++f)
+        if (run(f, both, 2)) { fprintf(stderr, "FAIL: %s passed\n", names[f]); return 1; }
+    /* Refusals write and read nothing. */
     static const struct a733_dram_range below[] = {{UINT64_C(0x40000000), 0x4000000}};
     static const struct a733_dram_range unaligned[] = {{UINT64_C(0x80001000), 0x200000}};
     static const struct a733_dram_range past[] = {{UINT64_C(0x80000000), A733_DRAM_MAP_END}};
     static const struct a733_dram_range unsorted[] = {{UINT64_C(0x90000000), 0x200000}, {UINT64_C(0x80000000), 0x200000}};
     static const struct a733_dram_range empty[] = {{UINT64_C(0x80000000), 0}};
-    /* A buffer one word too small refuses before any access. */
-    capacity = both_words - 1;
-    assert(!run(LINEAR, both, 2) && !writes && !reads);
-    capacity = both_words;
-    assert(run(LINEAR, both, 2));
-    capacity = sizeof saved / sizeof saved[0];
     assert(!run(LINEAR, below, 1) && !writes && !reads);
     assert(!run(LINEAR, unaligned, 1) && !writes);
     assert(!run(LINEAR, past, 1) && !writes);
@@ -147,10 +106,13 @@ int main(int argc, char **argv)
     assert(!run(LINEAR, empty, 1) && !writes);
     assert(!run(LINEAR, high, 0) && !writes);
     static const struct a733_dram_probe_io none = {0, 0, 0, 0};
-    assert(!a733_dram_decode_probe(&none, high, 1, saved, capacity));
-    /* A small range is probed inside itself only (the model aborts otherwise). */
-    static const struct a733_dram_range tiny[] = {{UINT64_C(0x80000000), 0x400000}};
-    assert(run(LINEAR, tiny, 1));
+    assert(!a733_dram_decode_probe(&none, high, 1, SCRATCH, 1));
+    /* A scratch word inside an application range, outside DRAM, or misaligned is refused before any access. */
+    static const struct a733_dram_probe_io io = {0, rd, wr, bar};
+    used = reads = writes = 0; fault = LINEAR;
+    assert(!a733_dram_decode_probe(&io, both, 2, UINT64_C(0x48000008), 1) && !a733_dram_decode_probe(&io, both, 2, UINT64_C(0x90000000), 1) &&
+           !a733_dram_decode_probe(&io, both, 2, SCRATCH + 4, 1) && !a733_dram_decode_probe(&io, both, 2, UINT64_C(0x1000), 1) &&
+           !a733_dram_decode_probe(&io, both, 2, SCRATCH, 0) && !writes && !reads);
     puts("dram-decode-probe host check passed");
     return 0;
 }
