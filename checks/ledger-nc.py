@@ -35,7 +35,7 @@ CHECK_INPUTS = ['apps/os/large.c', 'apps/os/owner-memory.h', 'kernel/umem/umem.c
 
 CASES = ('owner-nc-allocation', 'private-l2-policy', 'chunk-in-use', 'maintenance-refusal',
          'nc-to-wb', 'omit-cache', 'omit-tlbi', 'out-of-map', 'pinned-reservations',
-         'coalesced-root-refusal')
+         'coalesced-root-refusal', 'omit-table-clean')
 
 BLOCK = 0x200000
 GIB = 0x40000000
@@ -69,7 +69,9 @@ class Model:
         self.active = None
         self.conversions = []
         self.lock_depth = 0
-        self.operations = dict(civac=0, tlbi=0, descriptor_stores=0)
+        self.operations = dict(civac=0, table_cleans=0, tlbi=0, descriptor_stores=0)
+        self.uncached_walk = not image.tcr & 0xf00
+        self.table_dirty, self.table_clean_pending = set(), set()
         self.table_regions = [(ALIAS, ALIAS + 8192)]
         self.split_bytes = ((self.field('umem_el1_map', 'split_mask') - self.field('umem_el1_map', 'split')) //
                             image.sizes['umem_policy_table']) * 4096
@@ -153,6 +155,10 @@ class Model:
         split = self.read(self.policy + self.field('umem_el1_map', 'split_pages'))
         if any(lo <= address < hi for lo, hi in self.table_regions) or split and split <= address < split + self.split_bytes:
             self.operations['descriptor_stores'] += 1
+            if self.uncached_walk:
+                line = address & ~63
+                self.table_dirty.add(line)
+                self.table_clean_pending.discard(line)
         if ALIAS <= address < ALIAS + 8192:
             physical = (self.root if address < ALIAS + 4096 else self.slot1) + (address & 4095)
             u.mem_write(physical, value.to_bytes(size, 'little'))
@@ -200,6 +206,7 @@ class Model:
 
     def code(self, u, address, size, unused):
         if self.active is not None and address == self.active['return']:
+            assert not self.table_dirty, 'conversion returns before descriptor cache cleaning completes'
             self.active['status'] = signed(u.reg_read(UC_ARM64_REG_X0))
             self.active['after'] = self.entries(self.active['chunk'])
             self.conversions.append(self.active)
@@ -223,7 +230,7 @@ class Model:
             chunk = u.reg_read(UC_ARM64_REG_X0 + 1)
             self.active = dict(chunk=chunk, policy=u.reg_read(UC_ARM64_REG_X0 + 2),
                                before=self.entries(chunk), cleaned=set(), cache_complete=False,
-                               events=[], return_address=u.reg_read(UC_ARM64_REG_LR))
+                               events=[], table_cleans=[], return_address=u.reg_read(UC_ARM64_REG_LR))
             self.active['return'] = self.active.pop('return_address')
             if FLOOR <= chunk < 0x340000000:
                 for root in self.roots:
@@ -244,11 +251,24 @@ class Model:
             u.reg_write(reg(args[0]), values[args[1]])
             self.skip(address)
         elif op.mnemonic == 'dc':
+            va = u.reg_read(reg(args[1]))
+            if args[0] == 'cvac':
+                assert self.uncached_walk, 'cached table walks unexpectedly clean a descriptor line'
+                line = va & ~63
+                assert line in self.table_dirty, 'descriptor clean does not follow a table store'
+                self.operations['table_cleans'] += 1
+                if self.active is not None:
+                    assert line in {entry & ~63 for entry, old in self.active['before']}, \
+                        'conversion cleans a line outside its descriptors'
+                    self.active['table_cleans'].append(va)
+                if self.variant != 'omit-table-clean' or self.active is None:
+                    self.table_clean_pending.add(line)
+                self.skip(address)
+                return
             if args[0] == 'civac':
                 self.operations['civac'] += 1
             if self.active is not None:
                 assert args[0] == 'civac', 'conversion must clean and invalidate, not discard dirty lines'
-                va = u.reg_read(reg(args[1]))
                 state = self.active
                 assert not state['events'], 'cache maintenance follows a descriptor edit or TLB operation'
                 assert state['chunk'] <= va < state['chunk'] + BLOCK and not va & 63, 'cache operation misses its chunk'
@@ -257,6 +277,7 @@ class Model:
                     state['cleaned'].add(va)
             self.skip(address)
         elif op.mnemonic == 'tlbi':
+            assert not self.table_dirty, 'TLBI precedes completed descriptor cache cleaning'
             self.operations['tlbi'] += 1
             if self.active is not None:
                 state = self.active
@@ -268,6 +289,10 @@ class Model:
                 self.speculative_read()
             self.skip(address)
         elif op.mnemonic in ('dsb', 'isb', 'dmb'):
+            if op.mnemonic == 'dsb' and self.uncached_walk:
+                assert self.table_dirty <= self.table_clean_pending, 'descriptor stores reach a barrier without cache cleaning'
+                self.table_dirty.clear()
+                self.table_clean_pending.clear()
             if self.active is not None:
                 state = self.active
                 if op.mnemonic == 'dsb' and args[0] == 'sy' and not state['events']:
@@ -306,6 +331,8 @@ class Model:
         return signed(self.call('umem_alloc', self.ledger, request, result)), result
 
     def add_private(self):
+        # This fixture starts with an already-published application root and
+        # L2 copy; the application-builder publication has its own cases.
         root, l2, table = 0x47000000, 0x47001000, 0x47002000
         self.u.mem_write(root, bytes(self.u.mem_read(self.root, 4096)))
         self.u.mem_write(l2, bytes(self.u.mem_read(self.slot1, 4096)))
@@ -363,6 +390,8 @@ def check_conversion(model, expected_policy, count=1):
     entries = len(state['before'])
     expected = ['break'] * entries + ['dsb:ish', 'tlbi', 'dsb:ish', 'isb'] + ['make'] * entries + ['dsb:ish', 'isb']
     assert state['events'] == expected, (state['events'], expected)
+    expected_cleans = 2 * entries if model.uncached_walk else 0
+    assert len(state['table_cleans']) == expected_cleans and not model.table_dirty
     want = (2 if expected_policy else 1) << 2
     for (address, old), (after_address, new) in zip(state['before'], state['after']):
         assert address == after_address and new & ATTR == want
@@ -374,7 +403,8 @@ def check_conversion(model, expected_policy, count=1):
         'split tables are not backed by one kernel-owned WB ledger extent'
     return dict(chunk=hex(state['chunk']), table_entries=entries, civac_lines=len(state['cleaned']),
                 order=state['events'], split_storage=hex(tables), split_bytes=model.split_bytes,
-                sparse_metadata_pages=len(model.sparse_pages))
+                sparse_metadata_pages=len(model.sparse_pages), descriptor_cleans=len(state['table_cleans']),
+                cached_table_walks=not model.uncached_walk)
 
 
 def run_case(name, image):
@@ -424,9 +454,13 @@ def run_case(name, image):
         status, _ = model.request(pointer, 0)
         assert status == 0
         return check_conversion(model, 0, 2)
-    if name in ('omit-cache', 'omit-tlbi'):
+    if name in ('omit-cache', 'omit-tlbi', 'omit-table-clean'):
+        if name == 'omit-table-clean':
+            assert model.uncached_walk, 'table-clean omission requires an uncached-walk image'
         model.bootstrap()
-        reason = 'cache maintenance incomplete before break' if name == 'omit-cache' else 'cached translation survives make'
+        reason = {'omit-cache': 'cache maintenance incomplete before break',
+                  'omit-tlbi': 'cached translation survives make',
+                  'omit-table-clean': 'descriptor stores reach a barrier without cache cleaning'}[name]
         return harness.refused(lambda: model.call('os_owner_memory_below', 4096, BLOCK, 1, 1 << 32), reason, AssertionError)
     if name == 'out-of-map':
         model.bootstrap()
@@ -538,7 +572,8 @@ def main():
     image.tcr = a733_tcr.for_image(args.image)
     image.sizes = structure_sizes(args.image, ('ss_manifest', 'ss_region', 'umem_policy_table'))
     image.admitted_storage = variable_storage(args.image, 'apps/os/large.c', 'admitted')
-    cases = {name: run_case(name, image) for name in (args.case or CASES)}
+    selected = args.case or tuple(name for name in CASES if name != 'omit-table-clean' or not image.tcr & 0xf00)
+    cases = {name: run_case(name, image) for name in selected}
     assert hashlib.sha256(args.image.read_bytes()).hexdigest() == image_sha256, 'image changed during the check'
     harness.save(args.output / 'result.json', dict(passed=True, physical_access=False, image=str(args.image),
         image_sha256=image_sha256, cases=cases,
