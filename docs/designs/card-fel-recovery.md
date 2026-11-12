@@ -356,9 +356,12 @@ lie outside every partition.
   sectors. `ss_storage_enable` re-reads the backup ranges and refuses unless
   their SHA-256 equals the blob's. The application writes the extent in
   ascending pieces of at most 256 sectors, reads it back, compares SHA-256
-  with the candidate, re-reads sector 0, and mounts and unmounts the FAT32
-  partition without writing, as `include/sunstone_storage.h` requires after
-  raw device writes.
+  with the candidate and re-reads sector 0, which must be unchanged, or equal
+  to the candidate's first sector when the extent starts at sector 0 (an MBR
+  write). It then re-reads the MBR and mounts and unmounts the FAT32
+  partition that the MBR names, without writing, as
+  `include/sunstone_storage.h` requires after raw device writes. The mode
+  region holds the header and at most one boot slot of 40,960 sectors.
 - **Writer audit.** `checks/rtc-marker-writers.py` fails when a tracked
   source outside the gate and the runner names the marker register.
 

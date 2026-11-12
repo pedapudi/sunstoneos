@@ -2,7 +2,8 @@
  * scaled-down file and guard (FILE_BYTES, GUARD_US), against a file-backed card image whose writes are slow (a fixed
  * sleep per write call) and a stub of the OS kit. The model refuses writes outside the FAT copies and data area, and
  * ss_finish stores the 512-byte result in the file named by RESULT and exits. In mode 10 the model admits writes only inside the header's
- * extent. Usage:
+ * extent. In mode 9 with a new volume in the input, it admits only that volume's boot, FSInfo, backup boot and backup FSInfo sectors, both FATs and the root
+ * cluster. Sector 0 reads as the image holds it when that is an MBR, else as a synthesized MBR of the arguments' partition. Usage:
  *   storage-write-guard IMAGE BASE SECTORS MODE RESULT DELAY_US */
 #define _GNU_SOURCE
 #define _FILE_OFFSET_BITS 64
@@ -20,6 +21,7 @@ static const char *result_path;
 static unsigned format_certified, format_serial;
 static uint64_t region_fat1, region_fat2, region_data, region_end, region_fsinfo, region_boot = UINT64_MAX;   /* the boot sector is writable only in the format mode */
 static uint64_t extent_first, extent_end;     /* mode 10: the header's extent, the only sectors it may write */
+static uint64_t new_first, new_count, new_fatsz;   /* mode 9 with a new volume: its range and FAT size (the Microsoft formula, 32 sectors per cluster, 32 reserved) */
 
 /* The model's clock is virtual: it advances only by the waits the application asks for (ss_usb_wait) and by the modeled card's
  * time per write call. Host load therefore never moves a deadline relative to the writes: a session that must be cut after N
@@ -59,7 +61,8 @@ void ss_finish(const void *res, size_t bytes)
 static int dev_read(void *c, uint64_t s, uint32_t n, uint8_t *buf)
 {
     (void)c;
-    if (s == 0 && n == 1) {                                  /* a synthesized MBR: one FAT32 LBA partition */
+    if (s == 0 && n == 1) {                                  /* the image's MBR if it holds one, else a synthesized MBR: one FAT32 LBA partition */
+        if (pread(image_fd, buf, 512, 0) == 512 && buf[510] == 0x55 && buf[511] == 0xaa) return 1;
         memset(buf, 0, 512);
         uint8_t *e = buf + 446;
         e[4] = 0x0c;
@@ -78,6 +81,10 @@ static int allowed(uint64_t s)
 {
     uint64_t fsz = region_fat2 - region_fat1;
     if (r.mode == 10) return s >= extent_first && s < extent_end;
+    if (r.mode == 9 && new_count) {
+        uint64_t o = s - new_first;
+        return s >= new_first && (o <= 1 || o == 6 || o == 7 || (o >= 32 && o < 32 + 2 * new_fatsz + 32));
+    }
     return (s >= region_fat1 && s < region_fat2 + fsz) || s == region_fsinfo || s == region_boot || (s >= region_data && s < region_end);
 }
 static int dev_write(void *c, uint64_t s, uint32_t n, const uint8_t *buf)
@@ -97,6 +104,11 @@ static int dev_write(void *c, uint64_t s, uint32_t n, const uint8_t *buf)
         _exit(77);
     }
     virtual_us += delay_us;                                  /* the slow card */
+    if (s == 0 && getenv("DROP_SECTOR0")) return 1;          /* a card that acknowledges a write of sector 0 and keeps the old contents */
+    if (s != 0 && getenv("CLOBBER_SECTOR0")) {               /* a write that also changes sector 0: another MBR */
+        uint8_t other[512]; memset(other, 0x11, sizeof other); other[510] = 0x55; other[511] = 0xaa;
+        if (pwrite(image_fd, other, 512, 0) != 512) return 0;
+    }
     return pwrite(image_fd, buf, (size_t)n * 512, (off_t)s * 512) == (ssize_t)n * 512;
 }
 static int format_transaction(void *c, unsigned event, unsigned operation, uint32_t *token)
@@ -116,7 +128,7 @@ int ss_storage_device(struct fwr_device *d)
     return 1;
 }
 
-static uint8_t bounds_blob[65536], mode_blob[254464] __attribute__((aligned(64)));
+static uint8_t bounds_blob[65536], mode_blob[512 + 40960 * 512] __attribute__((aligned(64)));
 static size_t bounds_bytes = 64, mode_bytes = 4096;
 /* BOUNDS and MODE_INPUT name files that replace the inputs (mode 10 reads its extent and candidate from them). */
 static size_t load(const char *name, uint8_t *to, size_t limit, size_t otherwise)
@@ -142,6 +154,10 @@ int main(int argc, char **argv)
     mode_blob[0] = (uint8_t)atoi(argv[4]);
     bounds_bytes = load("BOUNDS", bounds_blob, sizeof bounds_blob, bounds_bytes);
     mode_bytes = load("MODE_INPUT", mode_blob, sizeof mode_blob, mode_bytes);
+    if (mode_blob[0] == 9 && mode_bytes >= 32) {
+        for (unsigned i = 0; i < 8; ++i) { new_first |= (uint64_t)mode_blob[16 + i] << (8 * i); new_count |= (uint64_t)mode_blob[24 + i] << (8 * i); }
+        if (new_count > 32) new_fatsz = (new_count - 32 + 4096) / 4097;
+    }
     if (mode_blob[0] == 10) {
         for (unsigned i = 0; i < 8; ++i) extent_first |= (uint64_t)mode_blob[8 + i] << (8 * i);
         extent_end = extent_first + (mode_bytes > 512 ? (mode_bytes - 512) / 512 : 0);
