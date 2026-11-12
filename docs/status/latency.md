@@ -14,6 +14,7 @@ The cached-walk CPU latency diagnostic returns normally on port 3-3 and complete
 | A55 C self-selection | measured; full dispatch remains open | 3 to 15.792 µs in retained PMU windows | same record |
 | One control-record body | measured; full batch remains open | 3.125 to 20.375 µs | same record |
 | Instrumented CPU0 whole tick | open | 165.917 µs; a separate sample has 74.88 percent backend stalls | same record |
+| Cause of CPU0 tick stalls | measured | Busy-phase releases cost 11,441 to 74,021 cycles on average against about 2,600 when idle; SGI segments take 2.2 percent of a 192.42 µs tick; one line transfer costs 142.5 to 153.5 cycles | `1794502169612799798-8aea3851`; [cause capture](../designs/scheduler-latency-measurement.md#cause-capture-separates-release-barrier-and-line-transfer-costs) |
 | Retained mask interval after scheduler start | open | 86.250 µs on core 4 against 25 µs | same record |
 | Kernel task-lock wait | measured below budget; worst case unqualified | 9.792 µs against 25 µs | same record |
 | CPU0 busy task wake | open | Maximum 210.417 µs; 10 µs 99.99th-percentile target unqualified | same record |
@@ -25,7 +26,7 @@ The figures come from one instrumented run at CPU-L 1794 MHz and 1000 mV, CPU-B 
 
 1. Shorten CPU0's instrumented tick while preserving its eight periodic latency-fixture notifications, deadline handling and equal-priority slicing.
 2. Bound masking after scheduler start, including initialization, frame restoration and the final recorder boundary.
-3. Determine the cause of backend stalls and reduce remote scheduler-state writes while preserving task lifetime, affinity and priority order.
+3. Reduce the cache lines CPU0 touches per tick. The stalls follow refills of lines that the busy memory traffic evicts, not barriers after SGI writes or line migration between cores: CPU0's own release, which touches no remote lines, is the costliest, and release cost falls with release order. Preserve task lifetime, affinity and priority order.
 4. Qualify lock-wait bounds under contention independently of diagnostic wrapper overhead.
 5. Run the combined CPU and DMA image after the thermal-readiness fix and independently established DMA authority.
 6. Measure DMA, GPU and NPU completion timing; physical DMA cleanup is unqualified.
