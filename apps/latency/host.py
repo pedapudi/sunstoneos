@@ -29,10 +29,11 @@ def decode_scheduler_trace(payload, frequency):
     if len(payload) < 32 or not frequency:
         raise ValueError('scheduler trace header or frequency is missing')
     magic, version, waits, tick_capacity = struct.unpack_from('<4Q', payload)
-    if magic != SCHED_MAGIC or version != 1 or not waits or not tick_capacity:
+    if magic != SCHED_MAGIC or version not in (1, 2) or not waits or not tick_capacity:
         raise ValueError('scheduler trace schema or declared capacities differ')
     records = 32  # two drains, each bounded by SS_OWNER_BATCH = 16
-    core_words = 9 + 20 + 11 + 4 + records * 7 + (waits + 1) * 12
+    wait_words = 12 if version == 1 else 16
+    core_words = 9 + 20 + 11 + 4 + records * 7 + (waits + 1) * wait_words
     expected = (4 + 8 * core_words + 16 + 2 + tick_capacity * 2) * 8
     padded = (expected + 63) // 64 * 64
     if len(payload) != padded or any(payload[expected:]):
@@ -63,7 +64,11 @@ def decode_scheduler_trace(payload, frequency):
     def wait_record():
         fields = ('start', 'end', 'site', 'lock', 'serving', 'next', 'flags',
                   'holder_core', 'holder_start', 'holder_end', 'holder_site', 'holder_generation')
-        value = dict(zip(fields, take(12)))
+        if version == 2:
+            fields += ('fifo_start', 'fifo_end', 'fifo_serving', 'fifo_ticket')
+        value = dict(zip(fields, take(wait_words)))
+        if value['flags'] & ~(15 if version == 1 else 31):
+            raise ValueError('scheduler lock wait flags differ from its version')
         if value['end'] < value['start']:
             raise ValueError('scheduler lock wait has negative duration')
         value['ticks'] = value['end'] - value['start']
@@ -71,6 +76,21 @@ def decode_scheduler_trace(payload, frequency):
             raise ValueError('scheduler lock holder identity is invalid')
         if value['flags'] & 4 and not value['holder_start'] <= value['holder_end'] <= value['end']:
             raise ValueError('scheduler lock holder completion is invalid')
+        if version == 2:
+            actual = value['flags'] & 16
+            fifo_fields = tuple(value[name] for name in ('fifo_start', 'fifo_end', 'fifo_serving', 'fifo_ticket'))
+            if actual:
+                if value['lock'] != 0 or not value['fifo_start'] or not (
+                        value['start'] <= value['fifo_start'] <= value['fifo_end'] <= value['end']):
+                    raise ValueError('scheduler actual FIFO sample lies outside its global lock wait')
+                if value['fifo_serving'] > 0xffff or value['fifo_ticket'] > 0xffff:
+                    raise ValueError('scheduler actual FIFO ticket exceeds its 16-bit field')
+                value['fifo_ticks'] = value['fifo_end'] - value['fifo_start']
+                value['wrapper_residual_ticks'] = value['ticks'] - value['fifo_ticks']
+            else:
+                if any(fifo_fields):
+                    raise ValueError('scheduler FIFO fields lack an actual-sample flag')
+                value['fifo_ticks'] = value['wrapper_residual_ticks'] = None
         return value
 
     cores = []
@@ -124,9 +144,24 @@ def decode_scheduler_trace(payload, frequency):
         for value in [row['wait_max'], *row['waits']]:
             value['cause'] = 'unclassified'
             value['holder_tick_overlap_ticks'] = 0
+            actual = version == 2 and value['flags'] & 16
+            if actual and value['fifo_ticket'] == value['fifo_serving']:
+                # Reservation sees no predecessor. The remaining wrapper
+                # duration has no attribution to a particular mechanism.
+                value['cause'] = 'uncontended_FIFO'
+                continue
             if not value['ticks'] or value['flags'] & 15 != 15:
                 continue
             begin, end = max(value['start'], value['holder_start']), value['holder_end']
+            if actual:
+                # Keep the early holder snapshot separate from the actual
+                # reservation. A changed predecessor or intervening waiter
+                # prevents a claim about the complete wait's cause.
+                if ((value['fifo_ticket'] - value['fifo_serving']) & 0xffff) != 1 or \
+                        value['fifo_serving'] != value['serving'] or value['fifo_ticket'] != value['next']:
+                    continue
+                begin = max(value['fifo_start'], value['holder_start'])
+                end = min(value['fifo_end'], value['holder_end'])
             if end <= begin:
                 continue
             # More than the observed holder can precede this waiter. Preserve

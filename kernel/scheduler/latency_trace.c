@@ -10,6 +10,10 @@ static struct {
      * mask would itself create a long span. Snapshot performs the copy. */
     struct ss_sched_trace_drain drain[2];
     struct ss_sched_trace_irq irq;
+    struct {
+        uint64_t start, end, serving, ticket;
+        unsigned valid;
+    } fifo;
 } state[SS_SCHED_TRACE_CORES];
 static uint64_t tick_start;
 
@@ -27,7 +31,7 @@ void ss_sched_trace_snapshot(struct ss_sched_trace_report *out)
 {
     *out = trace;
     out->magic = SS_SCHED_TRACE_MAGIC;
-    out->version = 1;
+    out->version = SS_SCHED_TRACE_VERSION;
     out->waits_capacity = SS_SCHED_TRACE_WAITS;
     out->ticks_capacity = SS_SCHED_TRACE_TICKS;
     for (unsigned core = 0; core < SS_SCHED_TRACE_CORES; ++core)
@@ -126,6 +130,19 @@ void ss_sched_trace_tick_end(void)
     else ++trace.tick_dropped;
     tick_start = 0;
 }
+/* The port calls this after its FIFO end timestamp. The sample belongs to
+ * this CPU's next enclosing lock trace; its storage cost is not FIFO time. */
+void ss_sched_trace_fifo_sample(unsigned core, uint64_t start, uint64_t end, uint32_t word)
+{
+    if (core >= SS_SCHED_TRACE_CORES) return;
+    state[core].fifo.valid = 0;
+    if (!enabled(core)) return;
+    state[core].fifo.start = start;
+    state[core].fifo.end = end;
+    state[core].fifo.serving = word & UINT32_C(0xffff);
+    state[core].fifo.ticket = word >> 16;
+    state[core].fifo.valid = 1;
+}
 struct ss_sched_trace_wait ss_sched_trace_lock_begin(const struct ss_sched_trace_lock *lock,
     unsigned id, uintptr_t site, uint64_t serving, uint64_t next, unsigned tickets)
 {
@@ -151,6 +168,22 @@ void ss_sched_trace_lock_acquired(struct ss_sched_trace_lock *lock, unsigned cor
                                   struct ss_sched_trace_wait *wait)
 {
     wait->end = ss_sched_trace_now();
+    if (core < SS_SCHED_TRACE_CORES) {
+        /* Consume even a stale sample or one followed by a different lock.
+         * Recursion and TAS paths never produce a fresh FIFO sample. */
+        const unsigned valid = state[core].fifo.valid;
+        state[core].fifo.valid = 0;
+        if (valid && wait->lock == 0 &&
+            wait->start <= state[core].fifo.start &&
+            state[core].fifo.start <= state[core].fifo.end &&
+            state[core].fifo.end <= wait->end) {
+            wait->fifo_start = state[core].fifo.start;
+            wait->fifo_end = state[core].fifo.end;
+            wait->fifo_serving = state[core].fifo.serving;
+            wait->fifo_ticket = state[core].fifo.ticket;
+            wait->flags |= SS_SCHED_WAIT_ACTUAL_FIFO;
+        }
+    }
     /* The real lock excludes shadow writers here. A matched completion is
      * exact even if the holder's tick ended after the waiter arrived. */
     if ((wait->flags & SS_SCHED_WAIT_HOLDER) &&

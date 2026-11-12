@@ -18,6 +18,7 @@
 #define SS_SCHED_TRACE_CORES 8u
 #define SS_SCHED_TRACE_RECORDS (2u * SS_OWNER_BATCH)
 #define SS_SCHED_TRACE_MAGIC UINT64_C(0x5353534348545231)
+#define SS_SCHED_TRACE_VERSION 2u
 
 /* All timestamps use CNTVCT. A command retains the timestamps after masking,
  * reference, publish, before/after drain, after slice refresh and before unmask.
@@ -45,7 +46,8 @@ enum ss_sched_trace_wait_flag {
     SS_SCHED_WAIT_HOLDER = 1u,
     SS_SCHED_WAIT_SNAPSHOT = 2u,
     SS_SCHED_WAIT_COMPLETED = 4u,
-    SS_SCHED_WAIT_TICKETS = 8u
+    SS_SCHED_WAIT_TICKETS = 8u,
+    SS_SCHED_WAIT_ACTUAL_FIFO = 16u
 };
 /* lock 0 is the global task lock; 1 + slot is an object task lock. A coherent
  * arrival holder is authoritative only when SNAPSHOT and HOLDER are set.
@@ -54,6 +56,10 @@ enum ss_sched_trace_wait_flag {
 struct ss_sched_trace_wait {
     uint64_t start, end, site, lock, serving, next, flags;
     uint64_t holder_core, holder_start, holder_end, holder_site, holder_generation;
+    /* Version 2: actual global task FIFO execution and LDADDA reservation.
+     * The early serving/next snapshot above remains independent. Zero fields
+     * without ACTUAL_FIFO mean that this acquisition was not sampled. */
+    uint64_t fifo_start, fifo_end, fifo_serving, fifo_ticket;
 };
 struct ss_sched_trace_core {
     uint64_t command_count, command_stage_max[4], irq_count, drain_count;
@@ -102,6 +108,7 @@ void ss_sched_trace_service(unsigned, unsigned, uint64_t, uint64_t);
 void ss_sched_trace_service_pass(unsigned);
 void ss_sched_trace_tick_begin(void);
 void ss_sched_trace_tick_end(void);
+void ss_sched_trace_fifo_sample(unsigned, uint64_t, uint64_t, uint32_t);
 struct ss_sched_trace_wait ss_sched_trace_lock_begin(const struct ss_sched_trace_lock *, unsigned, uintptr_t,
                                                     uint64_t, uint64_t, unsigned);
 void ss_sched_trace_lock_acquired(struct ss_sched_trace_lock *, unsigned, struct ss_sched_trace_wait *);

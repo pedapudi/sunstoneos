@@ -32,7 +32,7 @@ def wait(*, start=3000, end=3240, holder=2, flags=15):
             holder, start - 100, end - 40, 0x2000, 2]
 
 
-def fixture():
+def fixture(version=1):
     empty = {
         'counts': [0] * 9, 'command': [0] * 10, 'self_suspend': [0] * 10,
         'irq': [0] * 11, 'drain': [0] * 4, 'records': [],
@@ -47,8 +47,13 @@ def fixture():
         'records': [[3, 0, 1110, 1120, 1140, 1150, 1160]],
         'wait_max': wait(), 'waits': [wait()],
     })
+    if version == 2:
+        for core in cores:
+            core['wait_max'].extend([0] * 4)
+            for record in core['waits']:
+                record.extend([0] * 4)
     return {
-        'header': [MAGIC, 1, 2, 3], 'cores': cores,
+        'header': [MAGIC, version, 2, 3], 'cores': cores,
         'startup': [[500 + 2 * c, 600 + 2 * c] for c in range(8)],
         'tick_count': 1, 'tick_dropped': 0, 'ticks': [[3050, 3100]],
     }
@@ -57,6 +62,7 @@ def fixture():
 def pack(report):
     words = list(report['header'])
     waits, ticks = words[2:4]
+    wait_words = 12 if words[1] == 1 else 16
     for core in report['cores']:
         for key in ('counts', 'command', 'self_suspend', 'irq', 'drain'):
             words.extend(core[key])
@@ -66,7 +72,7 @@ def pack(report):
         words.extend(core['wait_max'])
         for record in core['waits']:
             words.extend(record)
-        words.extend([0] * (12 * (waits - len(core['waits']))))
+        words.extend([0] * (wait_words * (waits - len(core['waits']))))
     for pair in report['startup']:
         words.extend(pair)
     words.extend([report['tick_count'], report['tick_dropped']])
@@ -260,6 +266,79 @@ def run(decode):
     raw = bytearray(pack(base))
     raw[-1] = 1
     rejected('nonzero alignment padding', raw)
+
+    v2 = fixture(version=2)
+    accepted('version 2 without an actual sample', v2,
+             cause('observed_holder_contention'))
+
+    def actual(data, start=3030, end=3210, serving=7, ticket=8):
+        for record in (data['cores'][1]['wait_max'], data['cores'][1]['waits'][0]):
+            record[6] |= 16
+            record[12:] = [start, end, serving, ticket]
+        return data
+
+    contended = actual(copy.deepcopy(v2))
+    accepted('actual single FIFO predecessor', contended,
+             cause('observed_holder_contention'))
+    empty = actual(copy.deepcopy(v2), serving=8, ticket=8)
+
+    def no_predecessor(decoded):
+        cause('uncontended_FIFO')(decoded)
+        row = decoded['cores'][1]['wait_max']
+        assert row['fifo_ticks'] == 180
+        assert row['wrapper_residual_ticks'] == 60
+    accepted('actual empty FIFO separates wrapper residual', empty, no_predecessor)
+    unknown = copy.deepcopy(empty)
+    for record in (unknown['cores'][1]['wait_max'], unknown['cores'][1]['waits'][0]):
+        record[6] = 16
+        record[7:12] = [0] * 5
+    accepted('actual empty FIFO needs no holder snapshot', unknown, no_predecessor)
+
+    tick = copy.deepcopy(contended)
+    for record in (tick['cores'][1]['wait_max'], tick['cores'][1]['waits'][0]):
+        record[7] = 0
+    accepted('actual single predecessor overlaps CPU0 tick', tick,
+             cause('holder_tick_overlap'))
+    before = copy.deepcopy(tick)
+    before['ticks'] = [[3000, 3020]]
+    accepted('tick before actual FIFO is unrelated', before,
+             cause('observed_holder_contention'))
+
+    for name, serving, ticket in (('multiple actual predecessors', 7, 9),
+                                   ('actual holder differs from early snapshot', 8, 9),
+                                   ('actual ticket differs from early next', 7, 10)):
+        data = actual(copy.deepcopy(v2), serving=serving, ticket=ticket)
+        accepted(name, data, cause('unclassified'))
+    unmatched = copy.deepcopy(contended)
+    for record in (unmatched['cores'][1]['wait_max'], unmatched['cores'][1]['waits'][0]):
+        record[6] &= ~4
+        record[9] = 0
+    accepted('actual predecessor without matched release is unknown', unmatched,
+             cause('unclassified'))
+
+    wrap = actual(copy.deepcopy(v2), serving=0xffff, ticket=0)
+    for record in (wrap['cores'][1]['wait_max'], wrap['cores'][1]['waits'][0]):
+        record[4:6] = [0xffff, 0]
+    accepted('actual reservation wraps at 16 bits', wrap,
+             cause('observed_holder_contention'))
+
+    for name, field, value in (('FIFO starts before wrapper', 12, 2999),
+                                ('FIFO ends after wrapper', 13, 3241),
+                                ('FIFO timestamps go backward', 13, 3029),
+                                ('FIFO sample has zero start', 12, 0),
+                                ('FIFO serving exceeds 16 bits', 14, 0x10000),
+                                ('FIFO ticket exceeds 16 bits', 15, 0x10000),
+                                ('actual FIFO belongs to another lock', 3, 1)):
+        bad = copy.deepcopy(contended)
+        bad['cores'][1]['wait_max'][field] = value
+        rejected(name, pack(bad))
+    bad = copy.deepcopy(contended)
+    bad['cores'][1]['wait_max'][6] &= ~16
+    rejected('FIFO fields without actual flag', pack(bad))
+    bad = copy.deepcopy(base)
+    bad['cores'][1]['wait_max'][6] |= 16
+    rejected('version 1 cannot assert actual FIFO sampling', pack(bad))
+    rejected('truncated version 2 record', pack(contended)[:-8])
     return cases
 
 
