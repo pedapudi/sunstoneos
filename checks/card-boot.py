@@ -20,6 +20,13 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['apps/os/card.py', 'tools/card-boot.py', 'tools/boot-slots.py', 'tools/storage-update.py',
                 'tools/prepare-microsd-boot.py', 'tools/sunstone-image-link.py', 'drivers/clock/a733_cpu_clock.c']
+GATE_RUNS = [[
+    '--image', '{elf:card-profile}',
+    '--link-check', '{build:card-profile}/os-image/sunstone-a733-os-hello/link-check.json',
+    '--cpu-image', '{elf:card-profile}', '--diagnostic-image', '{elf:resident-stop}',
+    '--stage2', '{build:stage2}/a733-stage2.bin', '--stage2-elf', '{elf:stage2}',
+    '--boot0', '{cache}/sources/board-boot/boot0_sdcard_orangepizero3w.fex', '--output', '{output}',
+]]
 
 
 def module(name, path):
