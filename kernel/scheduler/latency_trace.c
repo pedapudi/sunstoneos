@@ -160,6 +160,10 @@ void ss_sched_trace_lock_acquired(struct ss_sched_trace_lock *lock, unsigned cor
     }
     uint64_t generation = atomic_load_explicit(&lock->generation, memory_order_relaxed);
     atomic_fetch_add_explicit(&lock->generation, 1, memory_order_acq_rel);
+    /* If an arriving reader observes any new relaxed payload value, its
+     * acquire fence also observes the odd generation before accepting the
+     * final generation sample. The real lock excludes writers, not readers. */
+    atomic_thread_fence(memory_order_release);
     atomic_store_explicit(&lock->core_plus_one, core + 1, memory_order_relaxed);
     atomic_store_explicit(&lock->acquired, wait->end, memory_order_relaxed);
     atomic_store_explicit(&lock->site, wait->site, memory_order_relaxed);
@@ -178,6 +182,7 @@ void ss_sched_trace_lock_release(struct ss_sched_trace_lock *lock)
     const uint64_t now = ss_sched_trace_now();
     uint64_t generation = atomic_load_explicit(&lock->generation, memory_order_relaxed);
     atomic_fetch_add_explicit(&lock->generation, 1, memory_order_acq_rel);
+    atomic_thread_fence(memory_order_release);
     atomic_store_explicit(&lock->completed_generation, generation, memory_order_relaxed);
     atomic_store_explicit(&lock->completed_end, now, memory_order_relaxed);
     atomic_store_explicit(&lock->core_plus_one, 0, memory_order_relaxed);
