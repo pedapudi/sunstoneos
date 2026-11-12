@@ -126,7 +126,7 @@ struct a733_radio_platform {
     uint32_t pad_power[4];
     uint64_t stop_deadline;
     struct sunxi_sdio_result stop_result;
-    unsigned stop_requested,stop_phase,stop_completed,stop_unprepared,stop_bus,stop_powered,peer_stopped;
+    unsigned stop_requested,stop_phase,stop_completed,stop_unprepared,stop_bus,stop_powered,peer_stopped,stop_released;
 };
 /* The failure left nothing powered, so no reset is needed to release anything: the first-run guard refused before
  * any write, or the failure shutdown finished with every readback matched (PM1 low, clocks off, BLDO5 off). Such a
@@ -148,6 +148,8 @@ int a733_radio_platform_bluetooth_stop(struct a733_radio_platform *,const struct
  * the one accepted host operation, then performs checked shutdown. All borrowed
  * storage remains pinned. Repeated admission cannot extend the first deadline. */
 int a733_radio_platform_stop(struct a733_radio_platform *,const struct a733_radio_borrow *,uint64_t deadline);
+int a733_radio_platform_stop_release(struct a733_radio_platform *,const struct a733_radio_borrow *);
+enum a733_radio_platform_result a733_radio_platform_stop_held(struct a733_radio_platform *,const struct a733_radio_borrow *);
 /* Request four-bit default speed before the first poll. Adds the shared PERI0
  * lease scope and its 400 MHz branch to every clock observation. After
  * enumeration of a full-speed card, the platform sets CCCR bus width to four
