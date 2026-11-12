@@ -176,6 +176,21 @@ static int application_wait_until_unless(uint64_t until,int (*unless)(void))
     return result;
 }
 static int application_wait_until(uint64_t until){return application_wait_until_unless(until,NULL);}
+/* The producer publishes its predicate before os_wake. Registration and the
+ * second predicate check in application_wait_until_unless close the race. */
+#if defined(SUNSTONE_A733_OS_GPU) || defined(SUNSTONE_A733_OS_USB_CLASSES) || defined(SUNSTONE_A733_USB_FAILURE_TEST)
+static void application_wait_for(int (*done)(void),uint32_t failure)
+{
+    uint64_t until=board.session.deadline_us-10000;
+    const uint64_t finish=atomic_load_explicit(&finish_by,memory_order_acquire);
+    if(finish&&finish<until)until=finish;
+    while(!done()){
+        if(ss_live()<0||a733_smp_counter()/24>=until)ss_fail(failure);
+        ss_progress();
+        if(application_wait_until_unless(until,done)==SUNSTONE_DEADLINE_ERROR)ss_fail(failure);
+    }
+}
+#endif
 static int application_entry_ready(void)
 {
 #ifdef SUNSTONE_A733_USB_FAILURE_TEST
@@ -330,8 +345,11 @@ static void peer_entry(void *unused)
         ss_progress();
     }
     atomic_store_explicit(&peer_done,1,memory_order_release);
+    os_wake(main_task);
     for (;;) vTaskSuspend(NULL);
 }
+static int peer_finished(void)
+{return !peer_task||atomic_load_explicit(&peer_done,memory_order_acquire);}
 #endif
 static void main_entry(void *unused)
 {
@@ -377,11 +395,7 @@ static void main_entry(void *unused)
     /* Only this diagnostic waits for empty-port service startup. Keep the
      * private owner predicate out of the application's public ABI. */
     extern int os_usb_failure_ready(void);
-    for(;;){
-        if(ss_live()<0||!os_application_deadline())ss_fail(0x750);
-        if(os_usb_failure_ready())break;
-        ss_progress();vTaskDelay(1);
-    }
+    application_wait_for(os_usb_failure_ready,0x750);
 #endif
     ss_application.main(&grant);ss_fail(0x755);
 }
@@ -500,10 +514,7 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
     if(xTaskGetCurrentTaskHandle()!=main_task || (!data&&bytes)||bytes>ss_result_capacity||os_application_finished()||
        (grant.finish_by_us&&a733_smp_counter()/24>=grant.finish_by_us))ss_fail(0x756);
 #ifdef SUNSTONE_A733_OS_GPU
-    while(peer_task&&!atomic_load_explicit(&peer_done,memory_order_acquire)){
-        if(!peer_within_session())ss_fail(0x75d);
-        ss_progress();vTaskDelay(1);
-    }
+    application_wait_for(peer_finished,0x75d);
     if(!os_gpu_queue_quiesce())ss_fail(0x75e);
 #endif
     /* The returning lifetime retires its devices before the ROM return. */
@@ -513,10 +524,7 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
 #endif
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
     os_usb_service_retire();
-    while(!os_usb_service_idle()){
-        if(ss_live()<0)ss_fail(0x758);
-        ss_progress();vTaskDelay(1);
-    }
+    application_wait_for(os_usb_service_idle,0x758);
 #endif
     /* SDK CLOSE transfers no bootstrap/local-stop authority. Wait for its
      * immutable client report and revalidate the live IRQ/runtime state. */

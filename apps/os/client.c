@@ -35,7 +35,10 @@ static int usb_return_unpublished(void)
 #ifdef SUNSTONE_A733_USB_FAILURE_TEST
 static atomic_uint usb_failure_checkpoints;
 void os_usb_failure_checkpoint(unsigned bits)
-{atomic_fetch_or_explicit(&usb_failure_checkpoints,bits,memory_order_release);}
+{
+    const unsigned previous=atomic_fetch_or_explicit(&usb_failure_checkpoints,bits,memory_order_release);
+    if((previous|bits)!=previous)os_application_wake_main();
+}
 int os_usb_failure_ready(void)
 {return atomic_load_explicit(&usb_failure_checkpoints,memory_order_acquire)==3u;}
 #endif
