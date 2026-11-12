@@ -785,6 +785,91 @@ def restore_dram(owner, backups, regions):
         owner.upload(item['address'], Path(item['file']), expected_sha256=item['sha256'])
 
 
+# Upload verification by an on-board digest (docs/board-runner.md, "Verify uploads by digest"). The helper
+# boot/a733/upload-digest.S runs in the launcher's SRAM reservation, which every plan that executes 0x52000 owns, before
+# the launcher, request and report are uploaded there. Its request block starts DIGEST_PARAMS bytes after the helper and
+# ends at the end of the reservation; the range count it accepts follows from that size.
+LAUNCHER_SRAM = (0x52000, 0x52d80)
+DIGEST_SOURCE = 'boot/a733/upload-digest.S'
+DIGEST_PARAMS = 0x800
+DIGEST_MAGIC, DIGEST_DONE = 0x31474455, 0x454e4f44
+DIGEST_MAX_RANGES = (LAUNCHER_SRAM[1] - LAUNCHER_SRAM[0] - DIGEST_PARAMS - 16) // 40
+DIGEST_STATUS = {0xe0000001: 'request magic differs', 0xe0000002: 'no SHA-256 instructions (ID_ISAR5.SHA2 is 0)',
+                 0xe0000003: 'too many ranges', 0xe0000004: 'range address is not a multiple of 4'}
+VERIFY_MODES = ('readback', 'digest')
+
+
+class UploadFault(ValueError):
+    """An upload whose on-board bytes differ from the host's: a transport fault, not an image result."""
+    def __init__(self, message, detail):
+        super().__init__(message)
+        self.detail = detail
+
+
+def build_upload_digest(out):
+    """Assemble the digest helper at the launcher's address; return its flat binary."""
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    flags = ['--target=arm-none-eabi', '-march=armv8-a', '-marm']
+    commands = [[str(CLANG), *flags, '-c', str(ROOT/DIGEST_SOURCE), '-o', str(out/'upload-digest.o')],
+                [str(LLD), f'-Ttext={LAUNCHER_SRAM[0]:#x}', '-e', '_start', str(out/'upload-digest.o'),
+                 '-o', str(out/'upload-digest.elf')],
+                ['/usr/lib/llvm-21/bin/llvm-objcopy', '-O', 'binary', str(out/'upload-digest.elf'), str(out/'upload-digest.bin')]]
+    with (out/'upload-digest.log').open('w') as log:
+        for command in commands:
+            subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT)
+    binary = out/'upload-digest.bin'
+    require(0 < binary.stat().st_size <= DIGEST_PARAMS, 'The digest helper overlaps its request block.')
+    return binary
+
+
+def upload_verification(plan, mode):
+    """Which uploads the digest helper verifies and which are read back, in plan order.
+
+    The helper needs the launcher's SRAM reservation, so the digest path applies to a plan that executes 0x52000 and
+    uploads into that reservation; it verifies the DRAM uploads whose address is a multiple of 4 and that no later upload
+    overlaps. The uploads into the reservation are written after the helper has run and are read back, as are all uploads
+    of any other plan or in readback mode."""
+    require(mode in VERIFY_MODES, f'Unknown upload verification {mode!r}.')
+    uploads = list(plan.get('uploads', []))
+    inside = lambda address: LAUNCHER_SRAM[0] <= address < LAUNCHER_SRAM[1]
+    result = {'mode': 'readback', 'digest': [], 'readback': uploads, 'reason': 'readback requested'}
+    if mode == 'readback':
+        return result
+    if plan.get('launch') != ['exe', hex(LAUNCHER_SRAM[0])] or not any(inside(a) for a, _ in uploads):
+        return dict(result, reason='the plan does not own the launcher SRAM')
+    sizes = [Path(source).stat().st_size for _, source in uploads]
+    digest = []
+    for index, ((address, source), size) in enumerate(zip(uploads, sizes)):
+        later = [(a, n) for (a, _), n in zip(uploads[index+1:], sizes[index+1:])]
+        if (not inside(address) and address % 4 == 0 and size > 0 and
+                not any(a < address + size and address < a + n for a, n in later)):
+            digest.append((address, source))
+    if not digest:
+        return dict(result, reason='no upload qualifies for the digest')
+    return {'mode': 'digest', 'digest': digest, 'readback': [u for u in uploads if u not in digest], 'reason': None}
+
+
+def digest_request(ranges):
+    """The request block for [(address, bytes), ...]: magic, count, status 0, ID_ISAR5 0, the ranges, zeroed digests."""
+    require(0 < len(ranges) <= DIGEST_MAX_RANGES, 'Digest request range count is outside the request block.')
+    return (struct.pack('<4I', DIGEST_MAGIC, len(ranges), 0, 0) + b''.join(struct.pack('<2I', a, n) for a, n in ranges) +
+            bytes(32 * len(ranges)))
+
+
+def digest_reply(request, reply):
+    """(status, ID_ISAR5, [digest, ...]) from the block read back after the helper ran. Every byte the host wrote, other
+    than the status, ID_ISAR5 and digest fields the helper fills, must read back unchanged."""
+    count = struct.unpack_from('<I', request, 4)[0]
+    require(len(reply) == len(request), 'Digest reply is the wrong size.')
+    ranges = 16 + 8 * count
+    if reply[:8] != request[:8] or reply[16:ranges] != request[16:ranges]:
+        raise UploadFault('The digest request block read back differently; the helper result is not trusted.',
+                          {'site': 'upload-digest-request', 'expected': request[:ranges].hex(), 'observed': reply[:ranges].hex()})
+    status, isar5 = struct.unpack_from('<2I', reply, 8)
+    return status, isar5, [reply[ranges + 32 * i:ranges + 32 * i + 32] for i in range(count)]
+
+
 def write(path, data):
     Path(path).write_bytes(data)
     return Path(path)
