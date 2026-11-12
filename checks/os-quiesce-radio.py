@@ -8,7 +8,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['apps/os/radio.c', 'apps/os/quiesce.c', 'apps/os/quiesce.h',
-                'apps/radio-scan/main.c', 'cmake/a733-os.cmake']
+                'apps/os/radio_scan.c', 'apps/radio-scan/main.c', 'cmake/a733-os.cmake']
 PRELUDE = r'''
 #include "quiesce.h"
 #include <assert.h>
@@ -158,6 +158,50 @@ int main(int argc,char **argv)
             subprocess.run([str(binary), str(stage), str(failed), str(int(forced and stage == 7 and not failed))], check=True)
 
 
+def observer(out, compiler):
+    source = (ROOT / 'apps/os/radio_scan.c').read_text()
+    body = source[source.index('void os_radio_scan_step('):source.index('void ss_radio_status(')]
+    fixture = out / 'scan-observer.c'
+    fixture.write_text(r'''
+#include <assert.h>
+#include <stdatomic.h>
+#include <stdint.h>
+enum {RUNNING,SCANNED,DOWN,FAILED};
+enum {BOARD_RADIO_SCANNED,BOARD_RADIO_DOWN,BOARD_RADIO_RETAINED,BOARD_RADIO_INVALID};
+static _Atomic unsigned state,stage_seen;
+static unsigned requested,starts,steps,published,noted;
+struct board_radio {struct {unsigned entropy_only;} config;struct {unsigned fail_line,fail_stage;} platform,session;};
+struct a733_radio_report {struct {unsigned stage;} head;};
+static struct a733_radio_report report={.head.stage=7};
+static int os_radio_quiesce_requested(void){return requested;}
+static void os_ce_probe_start(void){++starts;}
+static void os_ce_probe_step(void){++steps;}
+static int os_ce_probe_done(void){return 0;}
+static int os_ce_probe_failed(void){return 0;}
+static const struct a733_radio_report *board_radio_report(struct board_radio *r){(void)r;return &report;}
+static void publish(struct board_radio *r){(void)r;++published;}
+static int os_radio_quiesce_fault(uint32_t value,const void *caller){(void)value;(void)caller;return requested;}
+#define SUNSTONE_CRUMB_FAIL_SITE(x) 0
+#define SUNSTONE_CRUMB_FAIL_RETURN 0
+static void board_fail_note(uint32_t site,uint32_t value,const void *caller){(void)site;(void)value;(void)caller;++noted;}
+''' + body + r'''
+int main(void)
+{
+    struct board_radio r={.config.entropy_only=1};
+    os_radio_scan_step(&r,BOARD_RADIO_SCANNED);assert(starts==1&&steps==1);
+    requested=1;os_radio_scan_step(&r,BOARD_RADIO_RETAINED);
+    assert(starts==1&&steps==1&&atomic_load(&state)==FAILED&&!noted&&!published);
+    r.config.entropy_only=0;atomic_store(&state,RUNNING);
+    os_radio_scan_step(&r,BOARD_RADIO_SCANNED);assert(atomic_load(&state)==SCANNED&&atomic_load(&stage_seen)==7);
+    os_radio_scan_step(&r,BOARD_RADIO_DOWN);assert(atomic_load(&state)==DOWN&&published==1);
+    return 0;
+}
+''')
+    binary = out / 'scan-observer'
+    subprocess.run([compiler, '-std=c11', '-Wall', '-Wextra', '-Werror', str(fixture), '-o', str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--output', type=Path, required=True)
@@ -186,6 +230,7 @@ def main():
         assert (run.returncode == 0) == (name == 'radio'), results[-1]
     (out / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
     application(out, compiler)
+    observer(out, compiler)
     print('PASS radio bounded return, Bluetooth release/peer proof, CE fault, two caught mutations and scan failure injection')
 
 

@@ -43,6 +43,11 @@ void os_radio_scan_step(struct board_radio *r, int result)
 {
     unsigned current = atomic_load_explicit(&state, memory_order_acquire);
     if (r->config.entropy_only) {
+        if(os_radio_quiesce_requested()){
+            if(result==BOARD_RADIO_RETAINED||result==BOARD_RADIO_INVALID)
+                atomic_store_explicit(&state,FAILED,memory_order_release);
+            return;
+        }
         /* The CE entropy stage replaces the radio's own work: no platform poll, no shutdown to do. */
         if (current == RUNNING) {
             os_ce_probe_start();
