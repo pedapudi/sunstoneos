@@ -206,6 +206,49 @@ CPU0's latency tick has eight possible direct notification targets, the pinned
 wake tasks. Other OS waits become ready through deadlines rather than these
 eight notification calls.
 
+## Cause capture separates release, barrier and line-transfer costs
+
+`SUNSTONE_LATENCY_CAUSE` tests two explanations for the backend stalls in
+CPU0's tick. Under the first, cache lines that other cores own migrate to
+CPU0 on each remote release, so cost follows the lines touched and the
+line-transfer time. Under the second, a DSB that follows a GIC write waits for
+that device write to complete, so cost follows the count of such barriers. The
+profile owns the cycle counter exclusively and refuses the scheduler PMU
+windows, span PMU recording, PMU accounting, control qualification and
+interrupt counting. Each CPU enables its own cycle counter, with EL0 reads
+permitted, in its first interrupt after arming.
+
+The capture has three parts.
+
+1. **Tick segments.** Around each of the fixture's eight notifications the
+   tick records the release interval, the SGI sub-interval (from the owner
+   barrier before the SGI to the end of the SGI write sequence) and the
+   interrupt-mask restoration at the end of the notification. Around each
+   core's step in the scheduler tick's deadline scan it records the scan
+   interval and any SGI that the scan forces. The report retains the
+   longest tick in which all eight targets were released, with absolute
+   cycle stamps, and keeps per-target counts, totals and maxima for the idle
+   and busy phases.
+2. **Barrier benchmark.** After the workload stops, CPU0 runs one sample per
+   tick of fifteen instruction sequences with IRQs masked: an empty body,
+   ISB, DSB ISH, DSB SY, a store alone and followed by each DSB, an
+   `ICC_SGI1R_EL1` write alone, followed by each DSB, and followed by ISB and
+   each DSB, and an unchanged `ICC_PMR_EL1` write alone and followed by DSB
+   SY. Each case has 64 raw samples between ISB-synchronized counter reads.
+   SGI cases send the production reschedule SGI to CPU1, and the next sample
+   waits until CPU1 has taken it.
+3. **Line exchange.** CPU0 passes one write-back cache line back and forth
+   256 times with CPU1 (same core type) and with CPU6 (Cortex-A76), after 256
+   local store-and-load references. CPU0 times each round trip on its own
+   counter; half a round trip estimates one transfer and includes the peer's
+   polling. One 250 ms deadline bounds the exchange.
+
+The report occupies 13,904 bytes and the exchange report 3,392 bytes; a
+64-byte footer gives both offsets. All recorded intervals are raw: hook
+bookkeeping stays inside them, and the benchmark's empty body and an empty
+release-hook pair give the overhead references. Every hook is compiled only
+when the option is set, so production images carry none of this code.
+
 ## The control phase retains enough samples for the requested percentile
 
 `SUNSTONE_LATENCY_CONTROL` adds a control phase to the latency application.
