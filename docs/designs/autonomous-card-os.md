@@ -99,8 +99,9 @@ the output. The producer emits `physical_qualified: false` for either class.
 
 ## Resident supervision follows the admitted task selection
 
-Workload 2 is valid for resident recorded builds. The image creates PMIC, USB0,
-recognition, thermal and supervision tasks and no USB-host, Type-C or
+Workload 2 is valid for resident recorded builds. The image creates PMIC,
+recognition, thermal and supervision tasks, and USB0 only when the session
+grants `usb-device`. It creates no USB-host, Type-C or
 USB-host-power tasks, so the resident health check requires reports only from
 those selected tasks; service identifiers and windows are unchanged. Modes 0 and
 4 keep their USB-host requirements. A successful recorded inference retains its
@@ -170,7 +171,8 @@ constant-size session stamping.
    recognition, service timing and a normal watchdog reboot. The native loader
    still refuses unproven remote writers and CPU and cache ownership before SD
    access; no production card reservation or backup exists.
-   The [resident FEL test](resident-fel.md) has host evidence only. FEL entry
+   The bounded [resident FEL completion test](resident-fel.md) is qualified
+   on port 3-3; cold card boot remains unqualified. FEL entry
    admits dynamic OFF; cold card entry retains stage 2's static OFF.
 3. Replace identification-speed loading through the SD owner's post-DRAM SD core
    and measure cold boot latency.
