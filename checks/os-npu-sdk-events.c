@@ -39,6 +39,8 @@ unsigned os_lifetime(void){return A733_LIFETIME_SUPERVISED;}
 void board_service_progress(unsigned service){(void)service;}
 void os_application_wake_main(void){}   /* the application's end wait (apps/os/application.c); no application runs here */
 int os_task_at_el1(void){return 1;}   /* the failure records are made as the NPU's own (EL1) tasks here */
+int os_npu_quiesce_fault(uint32_t site,uint32_t value,const void *caller)
+{(void)site;(void)value;(void)caller;assert(0);return 0;}
 void board_fail_note(uint32_t s,uint32_t v,const void *p){(void)s;(void)v;(void)p;assert(0);}
 void board_fail(void *v){(void)v;assert(0);}
 void vTaskSuspend(TaskHandle_t task){assert(!task);longjmp(ended,1);}
