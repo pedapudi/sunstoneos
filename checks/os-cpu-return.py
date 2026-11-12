@@ -36,6 +36,14 @@ from harness import Image, save
 # (device_take in apps/os/npu.c), and `npu` holds its address. The models place it in mapped image RAM above the image's device
 # pool and below the fixtures at 0x41f00000.
 NPU_DEVICE = 0x41e00000
+GRANTS = {name: 1 << int(bit, 0) for name, bit, _ in records.manifest_tool.os_service_rows('OS_GRANT_ROWS')}
+
+
+def service_grants(image):
+    """Declared service records used by the linked CPU/NPU return fixtures."""
+    manifest = records.image_manifest(image.path)['manifest'] or {}
+    return ((GRANTS['NPU'] if 'ss_application_npu' in image.symbols else 0) |
+            (GRANTS['CPU_CLOCK'] if manifest.get('clock_use', 0) & 1 else 0))
 
 
 def npu_device(model, symbols, layout, npu):
@@ -210,7 +218,10 @@ class Model(prior.Model):
         self.put64(second + 8, 1)
         self.put64(second + 16, self.published[2][0]); self.put64(second + 24, self.published[2][1])
         self.put64(self.s['os_device_ranges_head'], first)
-        if 'os_npu_published_report' in self.s:
+        grants = service_grants(self.image)
+        layout = Image(self.image.path, set())
+        self.put32(layout.address('granted_word', '/apps/os/grants.c'), 0x80000000 | grants)
+        if grants & GRANTS['NPU']:
             # Terminal-only fixture: preceding service close/local stop and
             # worker park are supplied inputs; their real functions have a
             # separate linked integration check.
@@ -291,7 +302,7 @@ def main():
               'published-range-wraps', 'published-deadline')
     if '__os_npu_pool_start' in image.symbols:
         raise SystemExit('the image still links a fixed NPU pool')
-    if 'os_npu_published_report' in image.symbols:
+    if service_grants(image) & GRANTS['NPU']:
         cases += ('npu-late-irq',)
     if 'os_gpu_return_report' in image.symbols:
         cases += ('gpu-active','gpu-spi-restore-readback','wrong-pool-alias')

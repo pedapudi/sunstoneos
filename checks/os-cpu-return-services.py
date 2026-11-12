@@ -20,6 +20,9 @@ GATE_RUNS = [['{elf:ret-gpu}', '--out', '{output}']]
 spec = importlib.util.spec_from_file_location('return_services_prior', ROOT / 'checks/cpu-runtime-qualification.py')
 prior = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(prior)
+spec = importlib.util.spec_from_file_location('return_services_terminal', ROOT / 'checks/os-cpu-return.py')
+terminal = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(terminal)
 
 
 class Model(prior.Model):
@@ -35,6 +38,7 @@ class Model(prior.Model):
         self.handles = []
         self.stop_result = 7
         self.thermal_context = None
+        self.thermal_running = False
         self.mutex_held = False
         self.hooks = {}
         for name in ('vTaskEnterCritical', 'vTaskExitCritical', 'os_cpu_clock_step'):
@@ -52,6 +56,10 @@ class Model(prior.Model):
         self.flags = {name: layout.address(name, 'cpu-return.c')
                       for name in ('closing', 'ready')}
         self.quiesce = {name: layout.address(name + '_quiesce') for name in ('clock', 'thermal', 'pmic', 'terminal')}
+        self.grants = terminal.service_grants(image)
+        if self.grants & terminal.GRANTS['NPU']:
+            self.quiesce['npu'] = layout.address('npu_quiesce')
+        self.put32(layout.address('granted_word', 'apps/os/grants.c'), 0x80000000 | self.grants)
         self.put32(layout.address('return_done', 'apps/os/cpu.c'), 1)
         board_fields = layout.layouts['board_application']
         session_fields = layout.layouts['a733_board_session']
@@ -95,7 +103,12 @@ class Model(prior.Model):
         # completed clock and constructed thermal owner register their actual
         # descriptors before any return request.
         assert self.call(0, 'os_cpu_return_start') == 1
-        for name in ('clock', 'thermal'):
+        names = ['thermal']
+        if self.grants & terminal.GRANTS['CPU_CLOCK']:
+            names.append('clock')
+        if self.grants & terminal.GRANTS['NPU']:
+            names.append('npu')
+        for name in names:
             assert self.call(0, 'os_quiesce_register', (self.quiesce[name],)) == 1
 
     def thermal_pass(self):
@@ -111,7 +124,9 @@ class Model(prior.Model):
         else:
             self.uc.context_restore(self.thermal_context)
         for _ in range(200000 // 64):
+            self.thermal_running = True
             self.uc.emu_start(self.uc.reg_read(UC_ARM64_REG_PC), 0, count=64)
+            self.thermal_running = False
             self.apply_side_effects()
             if self.stop:
                 self.thermal_context = self.uc.context_save()
