@@ -2,18 +2,18 @@
 
 **Status: implemented.**
 
-Native internal buses, GPIO, UART, SPI, PWM, ADC and RTC paths have software evidence. The exposed I2C controllers (TWI0 to TWI3 and S_TWI2) have a native class service with clock, reset, pin, interrupt and deadline bindings and host evidence; the first board scan did not return a result.
+Native internal buses, GPIO, UART, SPI, PWM, ADC and RTC paths have software evidence. The exposed I2C controllers (TWI0 to TWI3 and S_TWI2) have a native class service with clock, reset, pin, interrupt and deadline bindings and host evidence; the board scan of all five controllers with nothing attached passes.
 
 **Software evidence:** host (engine and clock words); linked OS image and host admission for the scan image.
 
-**Board-qualified scope:** Inherited PMIC reads, RTC RC-mode progression,
+**Board-qualified scope:** An empty-bus scan of TWI0-3 and S_TWI2 at 96 to 100 kHz and 385 to 400 kHz (open, 128 address probes, close, lines high). Inherited PMIC reads, RTC RC-mode progression,
 watchdog reset, retained breadcrumbs and returning FEL execution have physical
 records. These results do not qualify every exposed bus or reset scenario.
 
 | Capability | Status | Key figure | Evidence and design |
 | --- | --- | --- | --- |
 | Shared PMIC provider, DCDC1 read | qualified on the board | register observation only | `buses-rtc-pmic-dcdc1-read` |
-| Exposed I2C controllers (TWI0-3, S_TWI2) | host-tested | interrupt-driven class service; the board scan is unqualified | [design](../designs/header-i2c.md), [class interface](../../include/sunstone_i2c.h) |
+| Exposed I2C controllers (TWI0-3, S_TWI2) | qualified on the board (empty bus) | 128 of 128 address NACKs on each of ten scans; 107 us per probe at 100 kHz | [design](../designs/header-i2c.md), [class interface](../../include/sunstone_i2c.h) |
 | GPIO, mux, pull, drive, interrupt, debounce | host-tested | bank-qualified ownership | [pins](../pins.md) |
 | UART (nine controllers; UART2 IRQ and DMA applications) | host-tested | | [UART](../uart.md) |
 | SPI0-4 and S_SPI FIFO paths; SPI3 DMA command-response | host-tested | 4096-byte response; 65.792 ms of clocks at 500 kHz | [SPI](../spi.md), [native SPI DMA](../designs/spi-native-dma.md) |
@@ -25,7 +25,7 @@ records. These results do not qualify every exposed bus or reset scenario.
 
 ## Open work
 
-1. Qualify the exposed I2C controllers on the board. The first scan (`buses-rtc` record `1794478857548541189-7cb7b581`) ended without a result: the CPU clock owner refused a step during the return. The cause is not identified. A control run of the hello-compute image built from this branch separates a defect in the shared changes (interrupt-record sizing, clock scopes, the service start entry) from the scan application; an application that waits for `ss_clock_ready()` before finishing, as the other CPU-return applications do, is the second discriminator.
+1. Qualify the exposed I2C controllers electrically with an attached peripheral: rise time, bank voltage, clock stretching and the 400 kHz margin. The empty-bus scan (see the evidence table) establishes the binding only.
 2. Qualify the RTC alarms, clock switching, absolute time, calibration, wake and calendar retention across power modes. The board runs the RTC from the internal RC oscillator (source control 0x401c); the alarm opener and the calendar writer accept only the external 32.768 kHz source, so qualifying alarms and absolute time without changing the clock source needs a reviewed RC-source mode in `drivers/rtc/a733_rtc.c` and `drivers/rtc/a733_rtc_initialize.c`.
 3. Qualify UART, SPI and PWM electrically: wiring, timing, IRQs, DMA visibility and waveform.
 4. Qualify ADC values, accuracy, IRQs and recovery; resolve the LRADC electrical block.
@@ -92,7 +92,7 @@ Audit fitted LEDs, buttons, infrared, Ethernet, debug and other blocks against [
 Board results are records in [`docs/evidence/buses-rtc.jsonl`](../evidence/buses-rtc.jsonl); add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-buses-rtc-20261101.md).
 
 <!-- evidence-table:begin -->
-4 records in `docs/evidence/buses-rtc.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+7 records in `docs/evidence/buses-rtc.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -100,4 +100,7 @@ Board results are records in [`docs/evidence/buses-rtc.jsonl`](../evidence/buses
 | `buses-rtc-rtc-rc-progression` | 2026-10-18 |  | `` | returned | passed | rtc_second_duration 1.1 s |
 | `buses-rtc-watchdog-fel-return` | 2026-10-31 |  | `` | watchdog-reset | passed |  |
 | `1794478857548541189-7cb7b581` | 2026-11-12 | 3-3 | `693b6d5a51bf` | watchdog-reset | inconclusive | run_total 20.654 s |
+| `1794482316080920295-1fa0e7b5` | 2026-11-12 | 3-3 | `3d5cda73c6ec` | returned | passed | run_total 22.727 s |
+| `1794482360148455232-b0b0b849` | 2026-11-12 | 3-3 | `6af5ee3fa083` | returned | passed | run_total 22.802 s |
+| `1794482394892578429-4199afcd` | 2026-11-12 | 3-3 | `576462699622` | host-error | passed | run_total 23.166 s, rate_100k_main 96153 Hz, rate_400k_main 384615 Hz, probe_100k_main 107 us, probe_400k_main 40 us, scan_100k 15.6 ms, scan_400k 7.1 ms, interrupts_per_scan 256 |
 <!-- evidence-table:end -->

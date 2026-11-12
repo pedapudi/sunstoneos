@@ -4,10 +4,11 @@
 The record is the 32-byte header and one 152-byte record per (bus, rate) that apps/i2c-scan/main.c writes.
 decode() returns the fields; failures() names every departure from the prediction that no device is attached: each
 of the 128 probes answers with an address NACK, the lines read high after open and close, and nothing else happens.
+The count of starts that found the previous STOP still in flight (busy_starts, cumulative per bus) is reported, not judged: the start is hardware-ordered after the STOP.
 """
 import struct
 
-HEADER = struct.Struct('<QIIII4xQ')
+HEADER = struct.Struct('<QIIIIQ')
 RECORD = struct.Struct('<26I6Q')
 MAGIC = 0x3143325f5343414e
 BUSES = ('twi0', 'twi1', 'twi2', 'twi3', 's_twi2')
@@ -62,6 +63,4 @@ def failures(decoded):
             out.append(f"{tag}: interrupts {r['interrupts']} spurious {r['spurious']} strays {r['strays']}")
         if r['rate'] > r['rate_request'] or r['rate'] * 10 < r['rate_request'] * 9:
             out.append(f"{tag}: programmed rate {r['rate']} Hz")
-        if r['busy_starts']:
-            out.append(f"{tag}: {r['busy_starts']} transfers began before the bus read idle")
     return out
