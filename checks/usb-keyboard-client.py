@@ -17,8 +17,8 @@ def main():
     includes = [ROOT / 'apps/os', ROOT / 'apps/board']
     def build(name, client=None, quiet=False):
         defs = defines + (['KEYBOARD_CLIENT_SOURCE="%s"' % client] if client else [])
-        return host_rtos.build(out, ['checks/usb-keyboard-client.c'], name, defines=defs, includes=includes,
-                               flags=['-pthread'] + (['-w'] if quiet else []))
+        return host_rtos.build(out, ['checks/usb-keyboard-client.c', 'apps/os/quiesce.c'], name, defines=defs, includes=includes,
+                               flags=['-pthread', '-ffunction-sections', '-fdata-sections'] + (['-w'] if quiet else []), link=['-Wl,--gc-sections'])
     exe = build('keyboard')
     result = host_rtos.run(exe)
     (out / 'run.log').write_text(result.stdout + result.stderr)

@@ -56,7 +56,14 @@ const struct ss_grant *ss_grant(void){return &grant;}
 int ss_live(void){return 1;}
 unsigned os_session_devices(void){return grant.devices;}
 void board_fail(void *p){(void)p;assert(0);}
-/* The owner task body (board_host_task) is linked but not run here. */
+void board_fail_at(uint32_t site,uint32_t value,const void *caller)
+{(void)site;(void)value;(void)caller;assert(0);}
+/* This mailbox check runs while the session is live, before return. */
+unsigned board_session_lifetime(void){return A733_LIFETIME_SUPERVISED;}
+int os_cpu_return_requested(void){return 0;}
+int os_cpu_return_failing(void){return 0;}
+uint64_t os_cpu_return_deadline_us(void){return 0;}
+/* The owner task body (board_host_task) is compiled but not run here. */
 void os_usb_service_init(const struct os_usb_service_ops *o,void *c){(void)o;(void)c;assert(0);}
 int a733_usb2_generic_enable(struct a733_usb2_native *n){(void)n;assert(0);return 0;}
 void a733_usb2_set_input(struct a733_usb2_native *n,a733_usb2_input_emit f,void *c){(void)n;(void)f;(void)c;assert(0);}
