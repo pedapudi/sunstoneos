@@ -148,7 +148,9 @@ def decode_scheduler_trace(payload, frequency):
                 ordered(stamp)
                 if not start <= stamp[0] <= stamp[-1] <= end:
                     raise ValueError('scheduler control record lies outside its drain')
-                record = {'slot': slot, 'phase': phase, 'stamp': stamp, 'record_type': 'locked'}
+                record = {'slot': slot, 'phase': phase, 'stamp': stamp}
+                if version == 5:
+                    record['record_type'] = 'locked'
                 if phase == 1 << 63:
                     if version != 5 or stamp[2] != stamp[3] or stamp[3] != stamp[4]:
                         raise ValueError('scheduler busy FIFO record differs from its version or shape')

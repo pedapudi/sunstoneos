@@ -131,6 +131,12 @@ int main(int argc, char **argv)
     clock_value = 10010; ss_sched_trace_direct_suspend_mark(7);
     clock_value = 10020; ss_sched_trace_switch_begin(7);
     clock_value = 10040; ss_sched_trace_switch_end(7, 4);
+    clock_value = 11000; ss_sched_trace_drain_begin(6);
+    const struct ss_sched_trace_record busy = {.slot = 3,
+        .phase = SS_SCHED_RECORD_FIFO_BUSY,
+        .stamp = {11010, 11020, 11040, 11040, 11040}};
+    ss_sched_trace_record(6, &busy);
+    clock_value = 11050; ss_sched_trace_drain_end(6);
     static struct ss_sched_trace_report report;
     ss_sched_trace_snapshot(&report);
     assert(report.version == 5 && report.history_capacity == SS_SCHED_TRACE_HISTORY);
@@ -160,6 +166,8 @@ int main(int argc, char **argv)
     assert(report.core[7].command.stamp[6] == 10040);
     assert(report.core[7].command_stage_max[0] == 10 && report.core[7].command_stage_max[1] == 10);
     assert(!report.core[7].command_stage_max[2] && !report.core[7].command_stage_max[3]);
+    assert(report.core[6].drain.count == 1 && report.core[6].drain.record[0].phase == SS_SCHED_RECORD_FIFO_BUSY);
+    assert(report.core[6].drain.record[0].stamp[4] == 11040);
     FILE *file = fopen(argv[1], "wb"); assert(file);
     assert(fwrite(&report, sizeof(report), 1, file) == 1);
     static const unsigned char padding[64];

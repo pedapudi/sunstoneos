@@ -603,11 +603,14 @@ def check_history(source, output):
     assert window['selections'][-1]['origin'] == 'svc'
     assert report['cores'][7]['self_suspend']['masked_c_ticks'] == 60
     assert report['cores'][7]['self_suspend']['steps_ticks']['select'] == 30
+    busy = report['cores'][6]['drain']['records'][0]
+    assert busy['record_type'] == 'fifo_busy' and busy['fifo_try_ticks'] == 10 and busy['park_ticks'] == 20
     interrupted = decode(interrupted_payload.read_bytes(), FREQUENCY)
     assert interrupted['wake_chains'][0]['maximum']['snapshot_incomplete']
     assert interrupted['wake_chains'][0]['maximum']['class'] == 'unmatched'
     assert interrupted['cpu0_wake_window']['incomplete']
-    return ['recorder unmasked snapshot excludes an injected future event',
+    return ['recorder retains a parked FIFO visit without locked work',
+            'recorder unmasked snapshot excludes an injected future event',
             'recorder unmasked snapshot exposes an injected overwrite without retry',
             'recorder CPU0 dispatch IDs and voluntary selection origin', 'recorder history: future IRQ', 'recorder history: trailing IRQ',
             'recorder history: selecting IRQ overwritten', 'recorder history: latest switch task differs',
