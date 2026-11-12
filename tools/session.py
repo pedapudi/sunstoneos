@@ -179,7 +179,7 @@ def quiesce_actors(plan, manifest=None):
         if record not in by_record:
             raise SessionError('quiesce: no service grant for record %s' % record)
         actors.add(by_record[record])
-    device_owners = {'audio-i2s': 'AUDIO', 'audio-headset': 'HEADSET'}
+    device_owners = {'audio-i2s': 'AUDIO', 'audio-headset': 'HEADSET', 'usb-device': 'USB0'}
     devices = plan.get('devices', 0)
     known_devices = 0
     for bit in tool.DEVICES.values():
@@ -189,7 +189,7 @@ def quiesce_actors(plan, manifest=None):
     for name, bit in tool.DEVICES.items():
         if not devices & bit:
             continue
-        owner = 'USB' if name.startswith('usb-') else device_owners.get(name, name.upper().replace('-', '_'))
+        owner = device_owners.get(name, 'USB' if name.startswith('usb-') else name.upper().replace('-', '_'))
         actors.add(owner)
     workload = plan.get('workload', plan.get('prefix', {}).get('workload', 2))
     if workload in (0, 1, 4):

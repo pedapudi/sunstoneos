@@ -22,6 +22,7 @@ enum os_quiesce_owner {
     OS_QUIESCE_THERMAL_OWNER=SUNSTONE_CRUMB_QUIESCE_THERMAL_OWNER,
     OS_QUIESCE_PMIC_OWNER=SUNSTONE_CRUMB_QUIESCE_PMIC_OWNER,
     OS_QUIESCE_TERMINAL_OWNER=SUNSTONE_CRUMB_QUIESCE_TERMINAL_OWNER,
+    OS_QUIESCE_USB0=SUNSTONE_CRUMB_QUIESCE_USB0,
 };
 /* Each service owns one descriptor for the session. Registration precedes
  * task creation or device access. The supervisor alone invokes step, which
