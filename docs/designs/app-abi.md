@@ -99,7 +99,7 @@ names the core whose task may use the NPU queue (`SS_NPU_CORE_NONE`, `0xffffffff
 from `os_npu_queue_core()` (`apps/os/npu.h`), the same function that the queue's own test calls (`apps/os/npu-queue.c`). An
 application on the A55 cluster is placed on that core and submits from its main task; one on the A76 cluster keeps its cores,
 must have that core among its workers (admission refuses it otherwise), and creates its producer task there in its init hook,
-where the task takes the application's address space (`os_space_init_tag`). The task that opens the queue is its producer.
+with `ss_task_create_static_affinity_set` (include/sunstone_app.h), which creates the task in the application's address space; a direct FreeRTOS creation in the hook is refused with detail 0x7a1. The task that opens the queue is its producer.
 
 **Migration.** An application is compiled with the image against the SDK
 header, so the grant change needs a rebuild and no other source change for

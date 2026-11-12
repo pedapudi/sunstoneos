@@ -47,7 +47,7 @@ DMA0 needs physical channel, controller and data-access authority and transfer t
 Board results are records in [memory-dma.jsonl](../evidence/memory-dma.jsonl); add one with `tools/evidence.py add`. Related records: [dram-bandwidth.jsonl](../evidence/dram-bandwidth.jsonl), [dram-training-restore.jsonl](../evidence/dram-training-restore.jsonl), [mbus-restore.jsonl](../evidence/mbus-restore.jsonl), [dram-fast-boot.jsonl](../evidence/dram-fast-boot.jsonl), [dram-controller.jsonl](../evidence/dram-controller.jsonl) and [dram-bus-priority.jsonl](../evidence/dram-bus-priority.jsonl). Earlier prose evidence is in [the historical log](../history/status-memory-dma-20261101.md).
 
 <!-- evidence-table:begin -->
-27 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+28 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -78,4 +78,5 @@ Board results are records in [memory-dma.jsonl](../evidence/memory-dma.jsonl); a
 | `1793638861895715015-a7176fec` | 2026-11-02 | 3-1 | `1e45c08facb9` | result-mismatch | passed | run_total 63.521 s, fault_status 0 x06, fault_address 0 x7fffffff |
 | `1793638933466934204-4dc4152d` | 2026-11-02 | 3-1 | `5f7f9f84fd74` | result-mismatch | passed | run_total 50.985 s, fault_status 0 x0d, fault_address 0 x200000000 |
 | `1793638990638144080-9a9aad2d` | 2026-11-02 | 3-1 | `42a609c0698d` | result-mismatch | passed | run_total 18.73 s, fault_status 0 x0d, fault_address 0 x80000000 |
+| `1794491111774670751-4e0e6e46` | 2026-11-12 | 3-3 | `a8e2fce081bd` | returned | passed | run_total 22.835 s |
 <!-- evidence-table:end -->

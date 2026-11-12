@@ -90,6 +90,8 @@ ACCESS = {'read': 1, 'write': 2, 'gpu-read': 4, 'gpu-write': 8, 'scratch': 16}
 WINDOW = tuple(memory_layout.record()['window'])
 SLOT1 = tuple(memory_layout.record()['slot1_area'])
 UPPER = tuple(memory_layout.record()['upper_area'])
+# The last 2 MiB block of the map is the DRAM decode probe's (include/a733_device_memory_layout.h): no region may include it.
+UPPER = (UPPER[0], UPPER[1] - 0x200000)
 AREAS = (WINDOW, SLOT1, UPPER)
 PAGE = 0x1000
 BLOCK = 0x200000

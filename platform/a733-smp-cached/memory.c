@@ -79,25 +79,19 @@ static const struct a733_dram_range dram_map[] = {
 #if !defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
     {UINT64_C(0x48000000), UINT64_C(0x79000000) - UINT64_C(0x48000000)},
 #endif
-    {UINT64_C(0x80000000), A733_DRAM_MAP_END - UINT64_C(0x80000000)},
+    {UINT64_C(0x80000000), A733_DRAM_APP_END - UINT64_C(0x80000000)},
 };
 #define DRAM_MAP_RANGES (unsigned)(sizeof dram_map / sizeof dram_map[0])
-/* The words the decode check keeps while it tests (it puts every word back as it found it): an upper bound from the same table, in
- * EL3 bss. 408 + 539 words, 7,576 bytes, for the table above. */
-#if !defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
-#define DRAM_PROBE_WORDS (A733_DRAM_PROBE_WORDS(UINT64_C(0x79000000) - UINT64_C(0x48000000)) + A733_DRAM_PROBE_WORDS(A733_DRAM_MAP_END - UINT64_C(0x80000000)))
-#else
-#define DRAM_PROBE_WORDS A733_DRAM_PROBE_WORDS(A733_DRAM_MAP_END - UINT64_C(0x80000000))
-#endif
-static uint64_t dram_probe_saved[DRAM_PROBE_WORDS];
+/* The one word the decode check writes: kernel memory (EL3 bss), outside every range above. */
+static uint64_t dram_probe_scratch[1];
 #endif
 /* No image links drivers/dram/a733_dram_decode.c yet, so this default is the
  * one definition in every image: no decode evidence, so no entry above the
  * current map. The driver's definition, which has the same declaration in
  * a733_dram.h, replaces it in an image that links the driver. */
-__attribute__((weak)) int a733_dram_decode_check(const struct a733_dram_range *ranges, unsigned count, uint64_t *saved, unsigned saved_words)
+__attribute__((weak)) int a733_dram_decode_check(const struct a733_dram_range *ranges, unsigned count, uint64_t *scratch, unsigned scratch_words)
 {
-    (void)ranges; (void)count; (void)saved; (void)saved_words;
+    (void)ranges; (void)count; (void)scratch; (void)scratch_words;
     return 0;
 }
 
@@ -222,7 +216,7 @@ int a733_cached_memory_prepare(void)
      * only when this boot's decode is linear there with no protected region.
      * EL3 entries stay invalid: EL3 does not access that range. */
 #if !defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
-    if (a733_dram_decode_check(dram_map, DRAM_MAP_RANGES, dram_probe_saved, DRAM_PROBE_WORDS) == 1) {
+    if (a733_dram_decode_check(dram_map, DRAM_MAP_RANGES, dram_probe_scratch, 1) == 1) {
         for (unsigned r = 0; r < DRAM_MAP_RANGES; ++r) {
             uint64_t base = dram_map[r].base, level1 = base >= UINT64_C(0x80000000);
             uint64_t step = level1 ? UINT64_C(1) << 30 : UINT64_C(1) << 21;

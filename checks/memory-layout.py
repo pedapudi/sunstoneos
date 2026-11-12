@@ -285,13 +285,15 @@ def check_placement(record):
     require(placed([work('a', area_mib - 8), work('b', 100), work('c', 100)]) == [area[0], upper[0], upper[0] + (100 << 20)],
             'the second region of the upper memory does not follow the first')
     require(placed([work('a', 64, address=upper[0] + (8 << 30))]) == [upper[0] + (8 << 30)], 'a pinned upper region moved')
-    require(placed([work('a', 64, address=upper[1] - (64 << 20))]) == [upper[1] - (64 << 20)],
-            'a pinned region at the end of the installed memory was refused')
+    # The last 2 MiB block of the map is the DRAM decode probe's: a region ends at the block, and one that includes it is refused.
+    top = 2 << 20
+    require(placed([work('a', 64, address=upper[1] - top - (64 << 20))]) == [upper[1] - top - (64 << 20)],
+            'a pinned region that ends at the probe block was refused')
     require(placed([work('a', 64, address=upper[0] + (8 << 20)), work('b', 8)]) == [upper[0] + (8 << 20), window[0]],
             'an unpinned region does not take the window beside a pinned upper region')
     require(upper[0] == 0x80000000 and upper[1] == record['dram'][1], 'the upper memory is not from 0x80000000 to the installed memory')
     for bad in (dict(address=window[1] - (2 << 20)), dict(address=area[0] + 4096), dict(address=area[1] - (2 << 20)),
-                dict(address=upper[0] - (32 << 20)), dict(address=upper[1] - (32 << 20)), dict(address=upper[0] + 4096)):
+                dict(address=upper[0] - (32 << 20)), dict(address=upper[1] - (32 << 20)), dict(address=upper[1] - top - (62 << 20)), dict(address=upper[0] + 4096)):
         try:
             placed([work('a', 64, **bad)])
         except SystemExit:

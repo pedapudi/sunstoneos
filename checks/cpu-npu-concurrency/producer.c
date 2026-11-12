@@ -52,6 +52,9 @@ static void *entry(void *argument){StaticTask_t *task=argument;core=task->core;/
     if(!strcmp(scenario,"frozen-cpu1")&&core==1){struct timespec pause={0,1000000};while(!atomic_load(&thaw))nanosleep(&pause,NULL);}task->entry(task->argument);return NULL;}
 TaskHandle_t xTaskCreateStaticAffinitySet(void (*fn)(void *),const char *name,unsigned words,void *arg,unsigned priority,StackType_t *stack,StaticTask_t *task,unsigned mask)
 {(void)name;(void)words;(void)priority;(void)stack;task->core=__builtin_ctz(mask);task->entry=fn;task->argument=arg;if(pthread_create(&task->thread,NULL,entry,task))return NULL;return task;}
+/* The kit's task creation on the host: the same thread, no address space. */
+void *ss_task_create_static_affinity_set(void (*fn)(void *),const char *name,uint32_t words,void *arg,unsigned long priority,void *stack,void *task,unsigned long mask)
+{return xTaskCreateStaticAffinitySet(fn,name,words,arg,(unsigned)priority,stack,task,(unsigned)mask);}
 TaskHandle_t xTaskGetCurrentTaskHandle(void){return NULL;}
 int xTaskGetSchedulerState(void){return 0;}
 void vTaskDelay(unsigned ticks){struct timespec t={0,(long)(ticks?ticks:1)*10000};nanosleep(&t,NULL);}

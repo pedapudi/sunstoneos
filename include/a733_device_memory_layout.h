@@ -58,6 +58,11 @@ static inline int a733_device_memory_local_pool_valid(uintptr_t start, uintptr_t
  * cached builder maps DRAM above the boot image only when
  * a733_dram_decode_check() of a733_dram.h passes for those ranges. */
 #define A733_DRAM_MAP_END UINT64_C(0x340000000)
+/* The last 2 MiB block of the map belongs to the DRAM decode probe (drivers/dram/a733_dram_decode_probe.c): the probe writes
+ * a token in its last word at boot and the ledger never hands the block out, so the probe tests that the top of memory exists
+ * without touching anything an application can hold. Application ranges end at A733_DRAM_APP_END. */
+#define A733_DRAM_TOP_BLOCK UINT64_C(0x200000)
+#define A733_DRAM_APP_END (A733_DRAM_MAP_END - A733_DRAM_TOP_BLOCK)
 /* The address step of the local pool check, a733_memory_local_check() in
  * a733_memory_critical.h. An image whose tables map every local pool byte
  * with 2 MiB level-2 block descriptors defines it as 2 MiB:

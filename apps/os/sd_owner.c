@@ -15,6 +15,7 @@
 #include "quiesce.h"
 #include "cpu-return.h"
 #include "os_space.h"
+#include "os-task.h"
 #include "../board/application.h"
 #include "sunstone_crumb.h"
 #include "fat32_rw.h"
@@ -327,7 +328,7 @@ static int start(void)
     ready_waiter = xTaskGetCurrentTaskHandle();
     /* The caller is the application's task, which would pass its address space on to the task it creates; the owner is
      * an OS service task and runs in the kernel's table from its first instruction (include/os_space.h). */
-    owner = OS_TASK_CREATE_IN_KERNEL_SPACE(xTaskCreateStatic(owner_main, "sd-owner", OWNER_STACK_WORDS, NULL, OWNER_PRIORITY, owner_stack, &owner_tcb));
+    owner = os_task_create_static(NULL, owner_main, "sd-owner", OWNER_STACK_WORDS, NULL, OWNER_PRIORITY, owner_stack, &owner_tcb);
     if (!owner) { os_sd_diag[0] = 10; atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release); return 0; }
     /* The owner gives the notification once the card is open or has failed. A wake is only a hint (any other notification would end a
      * single wait early), so wait on the state, on the caller's own index, until a time bound measured in microseconds. */
