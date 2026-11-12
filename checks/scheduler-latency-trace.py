@@ -123,6 +123,16 @@ def run(decode):
             change(record)
         accepted(name, data, cause('unclassified'))
 
+    for name, lock, maximum in (('global ticket wrap', 0, 0xffff),
+                                ('object ticket wrap', 1, 0xffffffff)):
+        wrapped = copy.deepcopy(base)
+        for record in (wrapped['cores'][1]['wait_max'], wrapped['cores'][1]['waits'][0]):
+            record[3:6] = [lock, maximum, 0]
+        accepted(name, wrapped, cause('observed_holder_contention'))
+        for record in (wrapped['cores'][1]['wait_max'], wrapped['cores'][1]['waits'][0]):
+            record[4] = maximum - 1
+        accepted(name + ' with multiple predecessors', wrapped, cause('unclassified'))
+
     unrelated_tick = copy.deepcopy(overlap)
     unrelated_tick['ticks'] = [[3210, 3230]]
     accepted('tick after holder release is unrelated', unrelated_tick,
