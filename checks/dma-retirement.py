@@ -15,7 +15,9 @@ GATE_RUNS = [
     ['--output', '{output}', '--freertos', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64', '--lld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld'],
 ]
 LABELS = {0: 'normal-and-delayed-drain', 1: 'failed-mask-retained',
-          2: 'uncollected-peer-reply', 3: 'queued-peer-request', 4: 'stuck-busy-retained'}
+          2: 'uncollected-peer-reply', 3: 'queued-peer-request', 4: 'stuck-busy-retained',
+          5: 'idle-owner-retirement', 6: 'abandoned-channel-retained',
+          7: 'abandoned-reply-retained', 8: 'owner-mask-failure-retained', 9: 'reserved-sender-retained'}
 
 if not __debug__:
     raise SystemExit('checks require assertions')
@@ -24,7 +26,7 @@ if not __debug__:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--cases', default='0,1,2,3,4')
+    parser.add_argument('--cases', default='0,1,2,3,4,5,6,7,8,9')
     for name in ('freertos', 'tinyusb', 'qemu', 'lld'):
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
@@ -51,6 +53,7 @@ foreach(property INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_OPTIONS LINK_OP
   set_property(TARGET dma-retirement-model PROPERTY ${{property}} "${{value}}")
 endforeach()
 target_compile_definitions(dma-retirement-model PRIVATE npu_service_task_privileged=dma_service_task_privileged)
+target_link_options(dma-retirement-model PRIVATE -Wl,--wrap=dma_service_task_privileged -Wl,--wrap=xQueueGenericSend)
 set_target_properties(dma-retirement-model PROPERTIES SUFFIX ".elf"
   LINK_DEPENDS "{ROOT}/platform/qemu-smp/link.ld")
 ''')

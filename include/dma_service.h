@@ -26,6 +26,8 @@ enum dma_service_result { DMA_SERVICE_OK, DMA_SERVICE_INVALID, DMA_SERVICE_DENIE
 enum dma_service_phase { DMA_SERVICE_CLOSED, DMA_SERVICE_OPENING, DMA_SERVICE_READY,
     DMA_SERVICE_RUNNING, DMA_SERVICE_DRAINING, DMA_SERVICE_RESULT, DMA_SERVICE_CLOSING,
     DMA_SERVICE_RECOVERY };
+enum dma_service_quiesce_fault { DMA_QUIESCE_NO_FAULT, DMA_QUIESCE_CHANNEL_HELD,
+    DMA_QUIESCE_REQUEST_HELD, DMA_QUIESCE_REPLY_HELD, DMA_QUIESCE_MASK_FAILED };
 enum dma_service_outcome { DMA_SERVICE_NO_RESULT, DMA_SERVICE_COMPLETE,
     DMA_SERVICE_CANCELED, DMA_SERVICE_FAILED };
 struct dma_service_request {
@@ -136,6 +138,7 @@ struct dma_service {
     unsigned retirement_senders,retirement_client;
     uint64_t retirement_ticket;
     atomic_uint retirement_collected;
+    atomic_uint quiesce_requested, quiesce_fault;
     TaskHandle_t worker;
     StaticTask_t worker_state;
     StackType_t worker_stack[DMA_SERVICE_STACK_WORDS];
@@ -194,6 +197,12 @@ int dma_service_bind_irq(struct dma_service *, const struct dma_service_irq *);
  * before restoring platform state. Allocations and clock leases stay owned. */
 int dma_service_bind_retirement(struct dma_service *,int (*mask)(void *),void *);
 int dma_service_retired(const struct dma_service *);
+/* Trusted EL1 return owner: close admission and ask the worker to retire an
+ * idle service. No caller may own a channel, result, queued request or reply.
+ * The worker uses the existing IRQ mask and final-access acknowledgment.
+ * Returns 1 retired, 0 pending, -1 retained or invalid. An abandoned client
+ * keeps its buffers; this entry never cancels or reaps its work. */
+int dma_service_quiesce(struct dma_service *);
 /* ISR only, after the platform has masked the SPI; mask_ok is its result. */
 void dma_service_irq_notify_from_isr(struct dma_service *, int mask_ok, BaseType_t *woken);
 /* Task-only. Identity comes from FreeRTOS. send copies the request, never

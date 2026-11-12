@@ -6,6 +6,8 @@
 #include "dma_service_i2s_irq.h"
 #include "sunstone_dma.h"
 #include "boot.h"
+#include "quiesce.h"
+#include "sunstone_crumb.h"
 
 __attribute__((used,retain)) const uint64_t os_dma_profile[3]={
     UINT64_C(0x41533733444d4131),1,4096
@@ -21,8 +23,35 @@ static struct {
     uint64_t mask_deadline,mask_now;
     atomic_uint ready;
 } dma;
+static enum os_quiesce_result dma_quiesce_step(struct os_quiesce *q)
+{
+    if(atomic_load_explicit(&dma.ready,memory_order_acquire))return OS_QUIESCE_DONE;
+    unsigned state=atomic_load_explicit(&dma.pool.state,memory_order_acquire);
+    if(state==A733_DMA_POOL_WAITING)return OS_QUIESCE_PENDING;
+    if(state==A733_DMA_POOL_READY){
+        int stopped=dma_service_quiesce(&dma.pool.service);
+        if(!stopped)return OS_QUIESCE_PENDING;
+        if(stopped>0){
+            int retired=a733_dma_pool_session_retire(&dma.pool);
+            if(!retired)return OS_QUIESCE_PENDING;
+            if(retired>0){atomic_store_explicit(&dma.ready,1,memory_order_release);return OS_QUIESCE_DONE;}
+        }
+    }
+    (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|0x811,
+        state|(atomic_load_explicit(&dma.pool.service.quiesce_fault,memory_order_acquire)<<8)|
+        (dma.mask_fault<<24),SUNSTONE_CRUMB_HERE());
+    return OS_QUIESCE_FAULT;
+}
+static struct os_quiesce dma_quiesce={.owner=OS_QUIESCE_DMA,
+    .order=OS_QUIESCE_DEVICES,.step=dma_quiesce_step};
 static _Noreturn void fatal(void *unused)
-{(void)unused;platform_panic("DMA retained state",1);}
+{
+    (void)unused;
+    if(os_quiesce_fault(&dma_quiesce,SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|0x812,
+        atomic_load_explicit(&dma.pool.state,memory_order_acquire),SUNSTONE_CRUMB_HERE()))
+        for(;;)vTaskSuspend(NULL);
+    platform_panic("DMA retained state",1);
+}
 int os_dma_task_privileged(void (*entry)(void *),void *arg)
 {return a733_dma_pool_task_privileged(entry,arg)==pdTRUE;}
 int os_dma_pins(struct a733_pin_handoff *unused)
@@ -49,6 +78,7 @@ int os_dma_start(void)
     uint64_t now;
     if(!s||!ss_application.task||!a733_counter_clock_now(&providers.shared.counter,&now)||
        now>UINT64_MAX-100000)return 0;
+    if(!os_quiesce_register(&dma_quiesce))return 0;
     dma.handoff=s->dma.handoff;
     dma.handoff.allowed.deadline_us=now+100000;
     dma.config=(struct a733_dma_pool_config){
@@ -71,7 +101,7 @@ int os_dma_return_ready(void)
 static int caller(void)
 {
     return xTaskGetCurrentTaskHandle()==(TaskHandle_t)ss_application.task&&
-        !os_dma_return_ready();
+        !os_dma_return_ready()&&!os_quiesce_requested(&dma_quiesce);
 }
 static int request(enum dma_service_operation op,struct dma_service_reply *reply)
 {
