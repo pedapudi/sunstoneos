@@ -246,7 +246,11 @@ def load(path, supervised=False):
     # a power of two of at most 2^31. The default, 1,024 events, is the depth the USB input image was built with; no
     # application has measured its report rate.
     usb = raw.get('usb', {})
-    require(isinstance(usb, dict) and set(usb) <= {'input_events'}, name + ': unknown usb keys')
+    require(isinstance(usb, dict) and set(usb) <= {'input_events', 'devices'}, name + ': unknown usb keys')
+    host = sum(DEVICES[n] for n in ('usb-storage', 'usb-keyboard', 'usb-mouse', 'usb-serial', 'usb-camera'))
+    require('devices' not in usb or (required | optional) & host, name + ': usb devices needs a USB host device')
+    # USB 2.0 section 4.1.1 assigns addresses 1 to 127. Existing images use 24 records.
+    m['usb_devices'] = integer(usb.get('devices', 24), name + ' usb devices', 1, 127) if (required | optional) & host else 0
     if (required | optional) & (DEVICES['usb-keyboard'] | DEVICES['usb-mouse']):
         events = integer(usb.get('input_events', 1024), name + ' usb input_events', 1, 1 << 31)
         require(events & (events - 1) == 0, name + ': usb input_events is a power of two')
@@ -683,6 +687,8 @@ def c_tables(m):
              'const size_t ss_capture_capacity = %du;' % (capture_bytes(m) - 64 if capture_bytes(m) else 0),
              '/* The USB input queue\'s depth; admission takes the queue from the ledger (apps/os/usb-service.c). */',
              'const unsigned ss_usb_input_events = %du;' % m.get('usb_input_events', 0),
+             '/* Controller records; their NC backing is taken from the ledger at boot. */',
+             'const unsigned ss_usb_devices = %du;' % m.get('usb_devices', 0),
              '/* The header I2C controllers the manifest declares (apps/os/i2c.c). */',
              'const struct os_i2c_declaration ss_i2c_declarations[%d] = {%s};' % (
                  max(1, len(m.get('i2c', []))), ','.join('{%du,%du}' % (d['bus'], d['max_rate_hz']) for d in m.get('i2c', [])) or '{0,0}'),

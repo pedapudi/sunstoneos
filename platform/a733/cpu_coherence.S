@@ -306,6 +306,11 @@ a733_cpu_coherence_flush:
     add x3, x3, #4096
     .endr
 #endif
+ #if defined(SUNSTONE_A733_OS)
+    adrp x3, a733_cached_table_alias_l3
+    add x3, x3, :lo12:a733_cached_table_alias_l3
+    flush_page x3
+ #endif
     dsb sy
     deadline_check .Lrefuse_el1
     mov x5, xzr
@@ -319,6 +324,11 @@ a733_cpu_coherence_flush:
     add x8, x8, #4096
     .endr
 #endif
+ #if defined(SUNSTONE_A733_OS)
+    adrp x8, a733_cached_table_alias_l3
+    add x8, x8, :lo12:a733_cached_table_alias_l3
+    sum_page x8
+ #endif
     adrp x6, a733_cached_el1_table_sum
     ldr x6, [x6, :lo12:a733_cached_el1_table_sum]
     cmp x5, x6

@@ -31,7 +31,7 @@ Each row gives the value, where the code sets it, the reason the code or its doc
 | C13 | EL0 reach through the shared table | `0x4000_0000`..`0x4800_0000`, 128 MiB | `platform/a733/platform.c` (64 blocks); `el0` in `tools/memory_layout.py`; `APP_REGION_FLOOR` in `include/app_region.h` | "DRAM above `0x48000000` is closed to EL0" in the cached profile; one boot table serves every EL0 task | Software |
 | C14 | Application window | `0x4400_0000`..`0x4700_0000`, 48 MiB | `window` in `tools/memory_layout.py` | Placement window for manifest regions, GPU buffers and the NPU pool | Software |
 | C15 | Slot 1 area and upper area | `0x4800_0000`..`0x7900_0000`; `0x8000_0000`..`0x3_4000_0000` | `slot1_area`, `upper_area` in `tools/memory_layout.py` | Manifest tool placement order | Software |
-| C16 | Boot assets and USB arena | `0x4220_0000`..`0x4800_0000`; USB arena `0x4220_0000`..`0x42a0_0000`, 8 MiB | `include/a733_usb_memory.h` (`A733_USB_MEMORY_BASE/END`), existing manifests | Pinned addresses for runner uploads and the USB host's pool | Software |
+| C16 | Boot assets and legacy USB arena | `0x4220_0000`..`0x4800_0000`; legacy USB arena `0x4220_0000`..`0x42a0_0000`, 8 MiB | `include/a733_usb_memory.h` (`A733_USB_MEMORY_BASE/END` in non-ledger profiles), existing manifests | Pinned runner uploads and legacy diagnostics; OS USB backing comes from the ledger | Software |
 | C17 | Region ledger granule and floor | 2 MiB extents, 12 level-1 slots, floor `0x4800_0000` | `APP_REGION_BLOCK`, `APP_REGION_SLOTS`, `APP_REGION_FLOOR` in `include/app_region.h` | Smallest extent that a block descriptor maps; the floor is the end of the shared EL0 window | Granule: software (4 KiB pages exist). Slots: hardware (level-1 entries over 12 GiB) |
 | C18 | Application spaces per image | one space, 13 table pages | `arena_pages[APP_SPACE_PAGES][512]` and one `space` in `apps/os/large.c` | Admission builds the one application's space | Software |
 | C19 | ASID count | 255, or 65,535 with `TCR_EL1.AS` | `app_asid_pool` in `include/app_region.h` | `ID_AA64MMFR0_EL1.ASIDBits` and `TCR_EL1.AS` | Hardware (Arm ARM D8) |
@@ -129,15 +129,29 @@ A buffer has one policy, and every CPU mapping of it, kernel and EL0, uses that 
 
 The kernel's identity map of DRAM is write-back. An `NC` buffer needs the entry for its 2 MiB chunk to be non-cacheable in every table that maps the chunk, and that includes the EL1-only entries that each application root carries for memory the application does not own: kernel code that runs in an application's task uses that root. The ledger keeps one policy byte per 2 MiB chunk (6,144 bytes for 12 GiB) and allocates `NC` buffers only from `NC` chunks. A free chunk converts when a request needs the other policy (`umem_policy_convert`):
 
-1. The ledger takes the chunk out of the free lists under its lock; no allocation uses it.
-2. The conversion clears the valid bit of the chunk's entry in every table that maps it: the kernel's level-2 table, each application's private level-2 table and each split gigabyte's table. It executes `DSB ISH`, `TLBI VAAE1IS` (all ASIDs) and `DSB ISH`, and `ISB`. No entry maps the chunk now, in a table or in a TLB.
-3. It writes the same descriptors with the new attribute index, executes `DSB ISH` and `ISB`.
-4. It runs `DC IVAC` over the chunk through the new mapping. The chunk is free, so its contents are dead and the invalidate discards nothing of value, and it removes any line that an access before step 2 allocated under the old attribute.
+1. The ledger takes the wholly free chunk out of the free lists under its lock.
+2. The converter validates every descriptor's physical address and old policy.
+   It completes `DC CIVAC` through the old mapping before editing any descriptor.
+   A refusal leaves mappings and ledger policy unchanged.
+3. It clears every mapping's valid bit, then completes
+   `DSB ISH; TLBI VAAE1IS; DSB ISH; ISB`, covering all ASIDs.
+4. It writes the same descriptors with the new attribute and completes
+   `DSB ISH; ISB`.
 5. The chunk joins the free space of its new policy.
 
-Between steps 2 and 3 no mapping exists, so write-back and non-cacheable translations of one page never coexist. A host model with a TLB and speculative accesses between every instruction checks this, and a variant without the TLBI is flagged.
+Between steps 3 and 4 no mapping exists, so write-back and non-cacheable
+translations of one page never coexist. The callback and linked instruction
+models check cache maintenance before descriptor changes, TLB ordering,
+failure atomicity and omission controls ([implemented path](ledger-nc.md)).
 
-A gigabyte of upper memory is one level-1 block until it is split into a level-2 table of 2 MiB blocks. The split is a boot step, taken before any application root copies the level-1 table; the policy layer refuses a split, and so a conversion in an unsplit gigabyte, once an application root exists. An `NC` request after admission therefore draws on chunks that boot converted, on slot 1, or on a gigabyte that boot split. Making application spaces share the split tables, so that any gigabyte converts at run time, belongs to step 3, where the device pools first need `NC` memory. The conversion runs at allocation time, never on a job path, and an `NC` chunk stays `NC` while it is free until a request needs `WB` memory and no `WB` chunk fits.
+The OS splits every mapped upper kernel slot before building an application
+root. Its eleven level-2 pages are kernel-owned ledger memory taken from the
+end of the largest free WB extent. Application roots share untouched kernel
+tables and register private copies for conversion. Wholly owned, uniformly WB
+gigabytes retain their large application mappings; the hook refuses conversion
+under any remaining private level-1 block. Those regions remain allocated until
+session end. Conversion runs at allocation, and an NC chunk stays NC until a
+WB request needs it and no WB extent fits.
 
 Policy follows use. CPU-written, device-read data that the CPU rereads (weights, tensors, command buffers) is `WB` with a clean at hand-off. Descriptor rings, firmware queues, scanout buffers and any buffer that a device writes while the CPU polls are `NC`. A write-combining CPU mapping is the `NC` attribute on this core family; no further attribute is used.
 
@@ -151,7 +165,12 @@ Every allocation of a `WB` extent returns memory that holds no dirty line, and e
 
 ### Concurrency
 
-Acquire, release and the policy conversion take one ledger lock, the kernel critical section of [memory-architecture.md](memory-architecture.md). Table edits take a per-space lock and run outside the ledger lock. No interrupt handler calls the ledger. The ledger's metadata lives in kernel-owned memory that no application table maps, so EL0 code cannot corrupt ownership; the lock words in the image's `.bss` stay EL0-writable, as the memory architecture records.
+Acquire, release and policy conversion take one ledger lock, the kernel critical
+section of [memory-architecture.md](memory-architecture.md). Conversion holds it
+through cache maintenance, descriptor edits and TLB invalidation. Inactive
+application tables are built before publication. No interrupt handler calls the
+ledger. Its metadata remains EL1-only in every root; the lock words in the
+image's `.bss` stay EL0-writable, as the memory architecture records.
 
 ### Device owners
 
@@ -164,7 +183,19 @@ A device owner is the OS code that drives a device for a session: the NPU runtim
 | `OS_MEMORY_EL0_READ` | The application's tasks may read it |
 | `OS_MEMORY_EL0_WRITE` | The application's tasks may read and write it |
 
-Memory without an EL0 attribute is reachable at EL1 only: the kernel's tables map the ledger's DRAM at EL1, and an application's tables map no kernel extent that carries no access. An application's tables map whole 2 MiB blocks and are built once at admission (`os_large_prepare`), so an EL0-visible request is rounded to 2 MiB on a 2 MiB boundary and must be made before the tables are built; the helper refuses it afterwards. The OS image installs no policy conversion (`convert_chunk`), so the ledger has no non-cacheable chunk and refuses `OS_MEMORY_DEVICE`.
+Memory without an EL0 attribute remains EL1-only in every root. An EL0-visible
+request rounds to 2 MiB blocks and must precede application table construction;
+the helper refuses it afterwards. The OS installs `convert_chunk` and supports
+`OS_MEMORY_DEVICE`. `os_owner_memory_below()` adds a device's physical limit.
+Lazy initialization reserves manifest-pinned regions before table or device
+allocations, and subsequent admission reuses the same ledger.
+
+USB declares `usb.devices` from 1 to 127, default 24. Its controller and retained
+JPEG backing occupies an 8 MiB NC extent at 24 devices or 14 MiB at 127, below
+4 GiB. Only the payload has a read-only EL0 alias. CPU-only HID parser state
+comes from cached ledger memory. OS images reserve no fixed USB link arena;
+legacy diagnostics retain their separate profile. This path is host-tested and
+awaits one empty-port board run ([design](ledger-nc.md)).
 
 The application's own task runs some OS code at EL0 (an SDK call that waits, for example). A word that such code reads must stay where EL0 can read it. The NPU owner keeps its four such words in the image and the rest in an EL1-only extent ([one OS image](one-os-image.md), NPU memory).
 

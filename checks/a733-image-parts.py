@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the fixed USB NOLOAD arena exception in the returning-image parser."""
+"""Check ordinary and ledger USB images, plus the parser's legacy NOLOAD exception."""
 import argparse
 import importlib.util
 import json
@@ -7,13 +7,14 @@ from pathlib import Path
 import struct
 import subprocess
 import sys
+from elftools.elf.elffile import ELFFile
 
 import harness
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--output', '{output}']]
-CHECK_INPUTS = ['tools/check-a733-smp.py', 'apps/os/usb-memory-link.patch',
+GATE_RUNS = [['--output', '{output}', '--ledger-usb-elf', '{elf:os-usb-ledger}']]
+CHECK_INPUTS = ['tools/check-a733-smp.py', 'apps/os/usb-memory.c',
                 'platform/a733-smp-cached/link.ld', 'platform/a733-storage-maintenance/link.patch',
                 'include/a733_usb_memory.h', 'apps/os/session.c', 'apps/os/usb-service.c']
 
@@ -21,7 +22,8 @@ CHECK_INPUTS = ['tools/check-a733-smp.py', 'apps/os/usb-memory-link.patch',
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--usb-elf', type=Path, help='also check a complete native USB image')
+    parser.add_argument('--usb-elf', type=Path, help='also check a legacy USB image with its linked arena')
+    parser.add_argument('--ledger-usb-elf', type=Path, help='check an OS USB image without a linked arena')
     parser.add_argument('--control-elf', type=Path, action='append', default=[], help='also check an existing ordinary image')
     args = parser.parse_args()
     out = args.output
@@ -34,8 +36,9 @@ def main():
         result = subprocess.run([str(p) for p in command], cwd=ROOT, capture_output=True, text=True)
         assert result.returncode == 0, result.stdout + result.stderr
 
-    # This small ELF exercises the real linker reservations, without pretending
-    # that its stub services establish native USB behavior or physical authority.
+    # The ordinary fixture uses the real storage linker reservations. The legacy
+    # fixture constructs the historical arena shape that the parser still admits.
+    # Stub services establish no native USB behavior or physical authority.
     source = out / 'image.S'
     source.write_text('''.section .text.a733_smp_boot,"ax"
 .global a733_smp_entry
@@ -52,17 +55,58 @@ os_usb_service_init: ret
 .type a733_smp_build_id,%object
 a733_smp_build_id: .fill 32,1,1
 .size a733_smp_build_id,32
+.section .bss.legacy_usb_fixture,"aw",%nobits
+.space 1
 ''')
     run([harness.CLANG, '--target=aarch64-none-elf', '-c', source, '-o', out / 'image.o'])
     run(['patch', '--fuzz=0', '-o', out / 'storage.ld', ROOT / 'platform/a733-smp-cached/link.ld',
          ROOT / 'platform/a733-storage-maintenance/link.patch'])
-    run(['patch', '--fuzz=0', '-o', out / 'usb.ld', out / 'storage.ld', ROOT / 'apps/os/usb-memory-link.patch'])
+    (out / 'usb.ld').write_text('''ENTRY(a733_smp_entry)
+MEMORY {
+    CODE (rx) : ORIGIN = 0x41000000, LENGTH = 2M
+    RAM (rw) : ORIGIN = 0x41200000, LENGTH = 14M
+    MONITOR (rw) : ORIGIN = 0x42000000, LENGTH = 2M
+    LEGACY_USB (rw) : ORIGIN = 0x42200000, LENGTH = 8M
+}
+SECTIONS {
+    .text : { *(.text*) } > CODE
+    .rodata : { *(.rodata*) } > CODE
+    .storage_session 0x41f00000 (NOLOAD) : { . += 4096; } > RAM
+    .result 0x42000000 (NOLOAD) : {
+        __a733_smp_result = .; . += 0x4000;
+    } > MONITOR
+    .contract 0x42004000 (NOLOAD) : {
+        __a733_smp_contract = .; . += 0x1000; __a733_smp_contract_end = .;
+    } > MONITOR
+    .uncached_pool (NOLOAD) : {
+        __uncached_pool_start = .; *(.bss.legacy_usb_fixture)
+        . = __uncached_pool_start + 0x800000; __uncached_pool_end = .;
+    } > LEGACY_USB
+    /DISCARD/ : { *(.comment) *(.eh_frame*) *(.note*) }
+}
+''')
     for name, script in (('control', 'storage.ld'), ('usb', 'usb.ld')):
         run([harness.LLD, '-T', out / script, out / 'image.o', '-o', out / (name + '.elf')])
     tool.image_parts(out / 'control.elf')
     for path in args.control_elf:
         tool.image_parts(path)
     originals = [out / 'usb.elf'] + ([args.usb_elf] if args.usb_elf else [])
+
+    def check_ledger(path):
+        with path.open('rb') as stream:
+            elf = ELFFile(stream)
+            symbols = elf.get_section_by_name('.symtab')
+            start = symbols.get_symbol_by_name('__uncached_pool_start')[0]['st_value']
+            end = symbols.get_symbol_by_name('__uncached_pool_end')[0]['st_value']
+        assert start == end, 'ledger USB image reserves a linked NC pool'
+        segments, _, identity = tool.image_parts(path)
+        assert len(identity) == 32 and all(s['address'] + s['memory_bytes'] <= 0x42200000 for s in segments)
+
+    harness.refused(lambda: check_ledger(out / 'usb.elf'), 'reserves a linked NC pool', AssertionError)
+    ledger_images = []
+    if args.ledger_usb_elf:
+        check_ledger(args.ledger_usb_elf)
+        ledger_images.append(str(args.ledger_usb_elf))
     results = {}
     for number, original in enumerate(originals):
         raw = original.read_bytes()
@@ -130,9 +174,10 @@ a733_smp_build_id: .fill 32,1,1
                 raise AssertionError('accepted ' + label)
         results[str(original)] = rejected
     (out / 'result.json').write_text(json.dumps({'passed': True, 'physical_access': False,
-        'usb_images': results, 'ordinary_images': [str(out / 'control.elf'), *map(str, args.control_elf)]}, indent=2) + '\n')
-    print('PASS %d USB images, %d ordinary images, %d rejected mutations per USB image' %
-          (len(originals), 1 + len(args.control_elf), len(mutations)))
+        'usb_images': results, 'ledger_usb_images': ledger_images,
+        'ordinary_images': [str(out / 'control.elf'), *map(str, args.control_elf)]}, indent=2) + '\n')
+    print('PASS %d legacy USB images, %d ledger USB images, %d ordinary images, %d rejected mutations per legacy image' %
+          (len(originals), len(ledger_images), 1 + len(args.control_elf), len(mutations)))
 
 
 if __name__ == '__main__':

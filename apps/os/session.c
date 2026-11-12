@@ -44,10 +44,17 @@ static int extent_copy(const void *raw,uint32_t type,void *target,size_t expecte
 static int usb_memory_extent_valid(const void *raw)
 {
     size_t bytes=0;const struct ss_usb_memory_extent *m=os_session_extent(raw,SS_EXTENT_USB_MEMORY,&bytes);
+#if defined(SUNSTONE_USB_LEDGER_MEMORY) && SUNSTONE_USB_LEDGER_MEMORY
+    /* Ledger backing is allocated after admission; a linked-reservation
+     * extent cannot describe it. */
+    (void)bytes;
+    return !m;
+#else
     /* Optional geometry describes the immutable linked allocation. Physical
      * ownership is established by the runner, not an evidence digest here. */
     return !m || (bytes==sizeof(*m)&&m->version==1&&m->base==A733_USB_MEMORY_BASE&&
         m->bytes==A733_USB_MEMORY_BYTES&&m->alias==A733_USB_MEMORY_ALIAS_BASE);
+#endif
 }
 #endif
 /* The named refusal: *why is the A733_DECODE_* sub-term of the rule that refused the session (include/a733_admission_refusal.h). */
