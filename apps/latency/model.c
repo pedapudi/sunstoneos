@@ -21,6 +21,12 @@ static void number(const char *name, uint64_t value)
 static void controller(void *argument)
 {
     (void)argument;
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    /* Owner notifications do not take the compatibility task lock. Exercise
+     * that lock explicitly so the FIFO timing hook has a real acquisition. */
+    taskENTER_CRITICAL();
+    taskEXIT_CRITICAL();
+#endif
     latency_workload_run(&result);
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     configASSERT(result.scheduler.magic == SS_SCHED_TRACE_MAGIC);
@@ -60,6 +66,17 @@ static void controller(void *argument)
             configASSERT(row->summary[kind][1].count == (kind == 2 ? 0 : row->summary[kind][0].count));
         }
         configASSERT(count == LATENCY_BUSY_SAMPLES);
+        number("wake-chain core=", c);
+        number(" fast=", row->summary[0][0].count);
+        number(" slow=", row->summary[1][0].count);
+        number(" unmatched=", row->summary[2][0].count);
+        number(" max_flags=", w->flags);
+        number(" irq_result=", w->irq.result);
+        number(" irq_seq=", w->irq.sequence);
+        number(" switch_irq_seq=", w->selection.irq_sequence);
+        number(" irq_end=", w->irq.stamp[4]);
+        number(" switch_begin=", w->selection.begin);
+        platform_puts("\n");
         configASSERT(w->running - w->ready == result.phases[SS_LAT_BUSY][c].metric[SS_LAT_SCHED_BUSY].maximum);
         configASSERT(w->ready >= result.phase_bounds[SS_LAT_BUSY][0] && w->running <= result.phase_bounds[SS_LAT_BUSY][1]);
         if (w->flags & SS_SCHED_WAKE_LINKED) {
@@ -72,6 +89,9 @@ static void controller(void *argument)
             configASSERT(w->selection.selected_slot == w->running_slot && w->selection.irq_sequence == w->irq.sequence);
         }
     }
+    number("actual_fifo_cores=", actual_fifo_cores);
+    number(" linked_wakes=", linked_wakes);
+    platform_puts("\n");
     configASSERT(actual_fifo_cores && linked_wakes);
     platform_puts("PASS scheduler trace: actual FIFO intervals, busy wake chains, self-suspends, drain records and timer intervals\n");
 #endif
