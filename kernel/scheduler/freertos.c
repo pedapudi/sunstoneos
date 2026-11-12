@@ -12,6 +12,7 @@
 #include "notification.h"
 #include "deadline.h"
 #include "latency_trace.h"
+#include "latency_pmu.h"
 
 /* The private fork rejects optional configurations whose API branches have
  * not been converted. No enabled public API may fall through to legacy lists.
@@ -1441,8 +1442,17 @@ static void ssKernelSwitch(unsigned c)
         cpu->reschedule = true;
         return;
     }
+#ifdef SUNSTONE_SCHED_PMU
+    unsigned pmu_kind=direct?SS_SCHED_PMU_SELECT_SELF:SS_SCHED_PMU_SELECT_OTHER;
+    (void)ss_sched_pmu_prepare(c,pmu_kind);
+#endif
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     ss_sched_trace_switch_begin(c);
+#endif
+#ifdef SUNSTONE_SCHED_PMU
+    unsigned char pmu_scope;
+    (void)ss_sched_pmu_begin_scope(c,pmu_kind,
+        cpu->run.current?cpu->run.current->slot:UINT32_MAX,direct?SS_SCHED_PMU_SELF:0,&pmu_scope);
 #endif
     struct ss_owner_task *previous = cpu->run.current;
 #if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
@@ -1555,6 +1565,9 @@ static void ssKernelSwitch(unsigned c)
         if (ss_control_has_pending(&ssKernelControl, c) || cpu->idle_pull_deferred)
             ssKernelForce(c);
     }
+#ifdef SUNSTONE_SCHED_PMU
+    (void)ss_sched_pmu_end_scope(c,&pmu_scope);
+#endif
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     ss_sched_trace_switch_end(c, selected->slot);
 #endif

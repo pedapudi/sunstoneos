@@ -2,6 +2,7 @@
 #include "freertos_control.h"
 #include <stddef.h>
 #include "latency_trace.h"
+#include "latency_pmu.h"
 
 #define ROUTE_CLOSED (UINT64_C(1) << 63)
 #define ROUTE_COUNT (ROUTE_CLOSED - 1)
@@ -298,6 +299,9 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
     struct ss_control_slot *s = &c->slot[slot];
     bool put = false, retire = false;
     uint64_t incarnation;
+#ifdef SUNSTONE_SCHED_PMU
+    (void)ss_sched_pmu_prepare(cpu,SS_SCHED_PMU_CONTROL);
+#endif
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     struct ss_sched_trace_record trace_record = {.slot = slot, .stamp = {ss_sched_trace_now()}};
 #endif
@@ -318,6 +322,12 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
     }
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     trace_record.stamp[1] = ss_sched_trace_now();
+#endif
+#ifdef SUNSTONE_SCHED_PMU
+    unsigned char pmu_scope;
+    (void)ss_sched_pmu_begin_scope(cpu,SS_SCHED_PMU_CONTROL,slot,0,&pmu_scope);
+#endif
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
     trace_record.phase = s->phase;
 #endif
     incarnation = s->desired.incarnation;
@@ -328,6 +338,9 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
     }
     if (cpu == s->owner && s->retained && c->ops.prepare &&
         !c->ops.prepare(c->ops.context, cpu, slot)) {
+#ifdef SUNSTONE_SCHED_PMU
+        (void)ss_sched_pmu_end_scope(cpu,&pmu_scope);
+#endif
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
         trace_record.stamp[2] = ss_sched_trace_now();
 #endif
@@ -373,6 +386,9 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
             (void)route_close(s);
             if (!c->ops.apply(c->ops.context, slot, task, &s->desired)) {
                 if (!c->ops.deferred || !c->ops.deferred(c->ops.context, slot)) hint(c, cpu, slot);
+#ifdef SUNSTONE_SCHED_PMU
+                (void)ss_sched_pmu_end_scope(cpu,&pmu_scope);
+#endif
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
                 trace_record.stamp[2] = ss_sched_trace_now();
 #endif
@@ -429,6 +445,9 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
             }
         }
     } else hint(c, s->owner, slot);
+#ifdef SUNSTONE_SCHED_PMU
+    (void)ss_sched_pmu_end_scope(cpu,&pmu_scope);
+#endif
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     trace_record.stamp[2] = ss_sched_trace_now();
 #endif
