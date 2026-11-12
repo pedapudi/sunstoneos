@@ -521,6 +521,7 @@ def prepare(args):
                       'Verified range backups before the backup-first storage sessions',
                       'Cold predecessor, remote writers, cache and CPU ownership admitted before loading',
                       'Native OS session admission after stage-2 publication',
+                      'Resolve BOOT-high cold entry versus BOOT-low EL1 watchdog renewal',
                       'Memory, rail, thermal, autonomous boot and watchdog recovery qualification',
                       'Recovery for interrupted boot0 and monitor-package installation']}
         slots.write_new(out / 'bundle.json', (json.dumps(result, indent=2) + '\n').encode())
