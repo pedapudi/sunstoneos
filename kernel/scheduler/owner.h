@@ -35,9 +35,12 @@ struct ss_owner_fifo { struct ss_owner_task *head, *tail; };
  * never invalidates the lines the owner selects from. */
 #define SS_CACHE_LINE 64u
 struct ss_owner {
-    _Alignas(SS_CACHE_LINE) struct ss_owner_fifo ready[SS_OWNER_PRIORITIES];
-    struct ss_owner_task *current;
+    /* A local wake and a selection read the current task, the bitmap and one
+     * FIFO. The FIFOs are stored highest priority first, so priorities 7 to 5
+     * share the first line with current and the bitmap; use ss_owner_ready(). */
+    _Alignas(SS_CACHE_LINE) struct ss_owner_task *current;
     uint32_t ready_bitmap;
+    struct ss_owner_fifo ready_by_rank[SS_OWNER_PRIORITIES];
     _Alignas(SS_CACHE_LINE) _Atomic uint64_t incoming[SS_OWNER_PRIORITIES][2];
     /* Logical wake-list head: sixteen bucket bits. Slot bits precede their
      * head publication; owner detach may harmlessly consume a slot early. */
@@ -50,6 +53,8 @@ struct ss_owner {
     unsigned cpu;
     const struct ss_owner_backend *backend;
 };
+static inline struct ss_owner_fifo *ss_owner_ready(struct ss_owner *o, unsigned priority)
+{ return &o->ready_by_rank[SS_OWNER_PRIORITIES - 1u - priority]; }
 void ss_owner_init(struct ss_owner *, unsigned, const struct ss_owner_backend *);
 bool ss_owner_enqueue(struct ss_owner *, struct ss_owner_task *, bool front);
 bool ss_owner_remove(struct ss_owner *, struct ss_owner_task *);

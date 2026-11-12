@@ -113,22 +113,27 @@ _Static_assert(SS_K_SAME_LINE(wait_kind, deadline.owner), "the wait flags share 
 struct ssKernelCPU {
     struct ss_owner run;
     struct ss_deadline_heap deadlines;
+    /* The owner's flags and depths, which a wake and the tick read, share one
+     * line (asserted below). */
+    _Alignas(SS_CACHE_LINE) bool yield_tail;
+    bool reschedule, irq_drained, command_finishing, control_draining, selecting;
+    bool direct_suspend, explicit_yield, idle_pull_deferred;
     unsigned preempt, object_depth, critical_depth, suspend_depth, isr_depth;
-    UBaseType_t object_mask;
     /* The per-object lock domain (SS_OBJECT_SLOTS). o_depth counts the holds of the task-side lock (critical sections
      * and suspensions), o_critical the critical sections, o_suspend the suspensions and o_isr the interrupt-side regions.
      * The interrupt-side lock is held while o_critical + o_isr is nonzero. t_slot and i_slot name the slots held. */
     unsigned o_depth, o_critical, o_suspend, o_isr, t_slot, i_slot;
+    UBaseType_t object_mask;
     UBaseType_t o_mask;
-    bool yield_tail, reschedule, irq_drained, command_finishing, control_draining, selecting;
-    bool direct_suspend, explicit_yield, idle_pull_deferred;
     UBaseType_t control_open_mask;
     unsigned service_depth;
     uint64_t control_seen[2];
     bool command_no_wait[SS_OWNER_SLOTS], command_delete[SS_OWNER_SLOTS];
-    uint64_t publication[2];
+    /* The tick's flush reads both words; keep them on one line. */
+    _Alignas(32) uint64_t publication[2];
+    uint64_t command_pending[2];
     uint64_t repair[2], object_repair[2];
-    uint64_t command_pending[2], command_sequence[SS_OWNER_SLOTS];
+    uint64_t command_sequence[SS_OWNER_SLOTS];
     struct ss_kernel_pin command_reference[SS_OWNER_SLOTS];
     struct ss_kernel_pin reference[SS_OWNER_SLOTS];
     /* CPU0's tick samples this deadline of every owner; idle peers read the pull set. */
@@ -137,6 +142,9 @@ struct ssKernelCPU {
      * pull_requests: idle CPUs that asked this owner for work. */
     _Atomic uint64_t pull_targets, pull_requests;
 };
+_Static_assert(offsetof(struct ssKernelCPU, yield_tail) / SS_CACHE_LINE ==
+               (offsetof(struct ssKernelCPU, object_mask) + sizeof(UBaseType_t) - 1) / SS_CACHE_LINE,
+               "the owner's flags and depths share one line");
 /* Bit c is set while CPU c runs only its idle task. */
 static _Atomic uint64_t ssKernelIdleMask;
 _Static_assert(sizeof(struct ssKernelCPU) % SS_CACHE_LINE == 0 && _Alignof(struct ssKernelCPU) == SS_CACHE_LINE,
@@ -1213,7 +1221,7 @@ static void ssKernelSliceRefresh(unsigned c, bool reset)
         TCB_t *t = current->context;
         eligible = !(t->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) &&
             atomic_load_explicit(&ssKernelTasks[current->slot].execution, memory_order_acquire) == SS_K_RUNNING &&
-            cpu->run.ready[current->priority].head != NULL;
+            ss_owner_ready(&cpu->run, current->priority)->head != NULL;
 #if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
         eligible = eligible && !t->xPreemptionDisable;
 #endif
@@ -1741,7 +1749,7 @@ static bool ssKernelIRQSwitchReady(unsigned c, struct ssKernelCPU *cpu)
 #endif
         if (!cpu->run.ready_bitmap) return false;
         unsigned priority = 31U - (unsigned)__builtin_clz(cpu->run.ready_bitmap);
-        configASSERT(cpu->run.ready[priority].head);
+        configASSERT(ss_owner_ready(&cpu->run, priority)->head);
         if (priority <= current->priority) return false;
     }
     if (ss_control_has_pending(&ssKernelControl, c) ||
@@ -2904,7 +2912,7 @@ static uint64_t ssKernelPullTargets(struct ssKernelCPU *cpu, unsigned c)
         const unsigned p = (unsigned)__builtin_ctz(bitmap);
         bitmap &= bitmap - 1;
         unsigned seen = 0;
-        for (struct ss_owner_task *t = cpu->run.ready[p].head; t && seen < 8; t = t->next, ++seen)
+        for (struct ss_owner_task *t = ss_owner_ready(&cpu->run, p)->head; t && seen < 8; t = t->next, ++seen)
             targets |= (uint64_t)((TCB_t *)t->context)->uxCoreAffinityMask;
     }
     return targets & ((UINT64_C(1) << configNUMBER_OF_CORES) - 1) & ~(UINT64_C(1) << c);
@@ -2918,7 +2926,7 @@ static struct ss_owner_task *ssKernelPullCandidate(struct ssKernelCPU *cpu, unsi
         const unsigned p = 31u - (unsigned)__builtin_clz(bitmap);
         bitmap &= ~(UINT32_C(1) << p);
         unsigned seen = 0;
-        for (struct ss_owner_task *t = cpu->run.ready[p].head; t && seen < 8; t = t->next, ++seen)
+        for (struct ss_owner_task *t = ss_owner_ready(&cpu->run, p)->head; t && seen < 8; t = t->next, ++seen)
             if (((uint64_t)((TCB_t *)t->context)->uxCoreAffinityMask >> target) & 1u) return t;
     }
     return NULL;
@@ -3558,7 +3566,7 @@ static UBaseType_t ssKernelForEach(TaskStatusCallbackFunction_t callback, void *
 static bool ssKernelIdleShouldYield(void)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
-    bool ready = ssKernelCPUs[ssKernelCPUId()].run.ready[tskIDLE_PRIORITY].head != NULL;
+    bool ready = ss_owner_ready(&ssKernelCPUs[ssKernelCPUId()].run, tskIDLE_PRIORITY)->head != NULL;
     portCLEAR_INTERRUPT_MASK(irq);
     return ready;
 }

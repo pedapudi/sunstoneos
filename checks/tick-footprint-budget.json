@@ -9,19 +9,19 @@
   "data os actions": 1,
   "data os pxCurrentTCBs": 1,
   "data os ssKernelBackend": 1,
-  "data os ssKernelCPUs": 5,
+  "data os ssKernelCPUs": 4,
   "data os ssKernelControl": 2,
   "data os ssKernelRegistry": 1,
   "data os ssKernelTasks": 5,
   "data stack exception stack": 7,
-  "data total": 28
+  "data total": 27
  },
  "outside": {
   "code fixture": 4,
   "code os": 56,
   "data fixture phase": 1,
   "data fixture wake": 24,
-  "data os ssKernelCPUs": 4,
+  "data os ssKernelCPUs": 2,
   "data os tick_interval": 1,
   "data os ullCriticalNestings": 1,
   "data os ullPortYieldRequired": 1,
@@ -29,7 +29,7 @@
   "data os xPortLocks": 1,
   "data os xSchedulerRunning": 1,
   "data stack exception stack": 7,
-  "data total": 42
+  "data total": 40
  },
  "remote": {
   "code fixture": 6,
