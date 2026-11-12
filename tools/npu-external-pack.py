@@ -4,8 +4,11 @@
 The OS image links no graph: an application registers each compiled graph at run time (ss_npu_register_graph) from RAM that
 something else filled, such as a runner input region (this tool) or a large region that the large-memory loader reads from the
 card. The runtime admits a graph by its structure. The models region starts with an index the application reads: a 16-byte
-header (magic "NMDL", version 1, count) and then, for each graph in list order, its byte offset from the start of the region and
-its length (two little-endian u64). The graphs follow, each on a page. This tool makes the first source:
+header (magic "NMDL", version, count) and then, for each graph in list order, its byte offset from the start of the region and
+its length (two little-endian u64). The graphs follow, each on a page. An artifact entry {"copy_of": NAME} is a second
+registration of the earlier graph NAME: its index entry has length 0 and holds NAME's position in the list instead of an
+offset, the region holds no second copy of the graph, and the index is version 2 (apps/os/npu-graph-index.h). Without copies
+the index is version 1. This tool makes the first source:
 
   npu-external-pack.py --artifacts ARTIFACTS.json --models LIST.json --models-address 0x44000000 --vectors-address 0x45000000 \\
       --output DIR
@@ -39,8 +42,14 @@ def align(n):
 index_bytes = align(16 + 16 * len(names))
 models, vectors, model_map, vector_map = bytearray(index_bytes), bytearray(), {}, {}
 index = []
-for name in names:
+for i, name in enumerate(names):
     files = paths[name]
+    if 'copy_of' in files:
+        original = names.index(files['copy_of'])
+        assert original < i and 'copy_of' not in paths[names[original]], (name, 'a copy names an earlier graph')
+        index.append((original, 0))
+        model_map[name], vector_map[name] = model_map[names[original]], vector_map[names[original]]
+        continue
     blob = Path(files['model']).read_bytes()
     models += bytes(align(len(models)) - len(models))
     model_map[name] = {'address': a.models_address + len(models), 'bytes': len(blob), 'sha256': hashlib.sha256(blob).hexdigest()}
@@ -53,7 +62,8 @@ for name in names:
         entry[kind] = {'address': a.vectors_address + len(vectors), 'bytes': len(data)}
         vectors += data
     vector_map[name] = entry
-models[:16] = b'NMDL' + (1).to_bytes(4, 'little') + len(names).to_bytes(8, 'little')
+version = 2 if any(size == 0 for _, size in index) else 1
+models[:16] = b'NMDL' + version.to_bytes(4, 'little') + len(names).to_bytes(8, 'little')
 for i, (offset, size) in enumerate(index):
     models[16 + 16 * i:32 + 16 * i] = offset.to_bytes(8, 'little') + size.to_bytes(8, 'little')
 models += bytes(align(len(models)) - len(models))
@@ -67,4 +77,4 @@ vectors += bytes(align(len(vectors)) - len(vectors))
      'sha256': hashlib.sha256(models).hexdigest()},
     {'name': 'vectors', 'kind': 'input', 'access': ['read'], 'bytes': len(vectors), 'address': a.vectors_address,
      'sha256': hashlib.sha256(vectors).hexdigest()}], indent=1) + '\n')
-print('%d models, %d bytes at %#x; vectors %d bytes at %#x' % (len(names), len(models), a.models_address, len(vectors), a.vectors_address))
+print('%d models (%d copies), %d bytes at %#x; vectors %d bytes at %#x' % (len(names), sum(size == 0 for _, size in index), len(models), a.models_address, len(vectors), a.vectors_address))

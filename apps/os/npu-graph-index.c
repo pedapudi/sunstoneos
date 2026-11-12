@@ -12,12 +12,18 @@ enum os_npu_index_result os_npu_index_check(const uint8_t *region, uint64_t regi
 {
     if (!region || region_bytes < 16) return OS_NPU_INDEX_SHORT;
     if (u32(region) != OS_NPU_INDEX_MAGIC) return OS_NPU_INDEX_MAGIC_BAD;
-    if (u32(region + 4) != 1) return OS_NPU_INDEX_VERSION_BAD;
+    const uint32_t version = u32(region + 4);
+    if (version != 1 && version != 2) return OS_NPU_INDEX_VERSION_BAD;
     const uint64_t count = u64(region + 8);
     if (!count || count != declared_graphs || count > (region_bytes - 16) / 16) return OS_NPU_INDEX_COUNT;
     const uint64_t first = 16 + 16 * count;     /* the graphs lie behind the index */
     for (uint64_t i = 0; i < count; ++i) {
         const uint64_t offset = u64(region + 16 + 16 * i), bytes = u64(region + 24 + 16 * i);
+        if (version == 2 && !bytes) {
+            /* A copy names an earlier entry that is a graph. */
+            if (offset >= i || !u64(region + 24 + 16 * offset)) return OS_NPU_INDEX_COPY;
+            continue;
+        }
         if (!bytes || offset < first || offset > region_bytes || bytes > region_bytes - offset) return OS_NPU_INDEX_BOUNDS;
         if (graph_bytes_max && bytes > graph_bytes_max) return OS_NPU_INDEX_OVERSIZE;
     }
@@ -27,4 +33,10 @@ void os_npu_index_entry(const uint8_t *region, unsigned graph, uint64_t *offset,
 {
     *offset = u64(region + 16 + 16 * (uint64_t)graph);
     *bytes = u64(region + 24 + 16 * (uint64_t)graph);
+}
+int os_npu_index_copy(const uint8_t *region, unsigned graph, unsigned *original)
+{
+    if (u32(region + 4) != 2 || u64(region + 24 + 16 * (uint64_t)graph)) return 0;
+    *original = (unsigned)u64(region + 16 + 16 * (uint64_t)graph);
+    return 1;
 }

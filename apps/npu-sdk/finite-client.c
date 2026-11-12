@@ -165,7 +165,7 @@ void a733_smp_diagnostic_start(void)
     configASSERT(npu_finite_watchdog_start());
     struct npu_runtime_model models[NPU_FINITE_NETWORKS];
     for(unsigned n=0;n<NPU_FINITE_NETWORKS;++n)
-        models[n]=(struct npu_runtime_model){npu_finite_networks[n].model,npu_finite_networks[n].model_bytes};
+        models[n]=(struct npu_runtime_model){npu_finite_networks[n].model,npu_finite_networks[n].model_bytes,0};
     TaskHandle_t worker=xTaskCreateStaticAffinitySet(sdk_service,"npu-sdk-owner",4096,NULL,2,
         service_stack,&service_state,1);
     TaskHandle_t task=xTaskCreateStaticAffinitySet(npu_runtime_client,"npu-runtime",4096,NULL,2,
