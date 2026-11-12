@@ -180,7 +180,7 @@ __attribute__((naked)) int64_t ss_sched_pmu_begin(unsigned core __attribute__((u
         "91: mov x0, #-2\nret\n92: mov x0, #-3\nret\n93: mov x0, #-4\nret\n");
 }
 __attribute__((naked)) int64_t ss_sched_pmu_begin_scope(unsigned core __attribute__((unused)),unsigned kind __attribute__((unused)),
-    unsigned slot __attribute__((unused)),unsigned flags __attribute__((unused)),const void *scope __attribute__((unused)))
+    unsigned slot __attribute__((unused)),unsigned flags __attribute__((unused)),void *scope __attribute__((unused)))
 {
     __asm__(GUARD
         "ldar x11, [x10]\ncbnz x11, 93f\ncbz x4, 95f\nmrs x5, daif\nmsr daifset, #2\n"
@@ -214,20 +214,22 @@ static __attribute__((used,noinline)) int finish_c(unsigned core,int64_t cookie,
     atomic_store_explicit(&s->cookie,0,memory_order_release);
     return status;
 }
+/* Exclude an IRQ between freezing cycles and reading wall time. Both leaves
+ * restore the caller's DAIF before disabled-counter result publication. */
 __attribute__((naked)) int ss_sched_pmu_end(unsigned core __attribute__((unused)),int64_t cookie __attribute__((unused)))
 {
     __asm__(GUARD
         "cmp x1, #0\nb.le 94f\nldar x11, [x10]\ncbz x11, 95f\ncmp x11, x1\nb.ne 94f\n"
-        "mov x11, #0x3f\nmovk x11, #0x8000, lsl #16\nmsr pmcntenclr_el0, x11\nisb\n"
-        "mrs x2, cntpct_el0\nmrs x3, pmccntr_el0\nmrs x4, pmovsclr_el0\nb finish_c\n"
+        "mov x11, #0x3f\nmovk x11, #0x8000, lsl #16\nmrs x5,daif\nmsr daifset,#2\nmsr pmcntenclr_el0, x11\nisb\n"
+        "mrs x2, cntpct_el0\nmrs x3, pmccntr_el0\nmrs x4, pmovsclr_el0\nmsr daif,x5\nb finish_c\n"
         "91: mov w0, #2\nret\n92: mov w0, #3\nret\n94: mov w0, #6\nret\n95: mov w0, #5\nret\n");
 }
-__attribute__((naked)) int ss_sched_pmu_end_scope(unsigned core __attribute__((unused)),const void *scope __attribute__((unused)))
+__attribute__((naked)) int ss_sched_pmu_end_scope(unsigned core __attribute__((unused)),void *scope __attribute__((unused)))
 {
     __asm__(GUARD
         "cbz x1, 94f\nldar x11, [x10]\ncbz x11, 95f\nldr x12, [x10,#96]\ncmp x12,x1\nb.ne 94f\n"
-        "mov x1,x11\nmov x11,#0x3f\nmovk x11,#0x8000,lsl #16\nmsr pmcntenclr_el0,x11\nisb\n"
-        "mrs x2,cntpct_el0\nmrs x3,pmccntr_el0\nmrs x4,pmovsclr_el0\nb finish_c\n"
+        "mov x1,x11\nmov x11,#0x3f\nmovk x11,#0x8000,lsl #16\nmrs x5,daif\nmsr daifset,#2\nmsr pmcntenclr_el0,x11\nisb\n"
+        "mrs x2,cntpct_el0\nmrs x3,pmccntr_el0\nmrs x4,pmovsclr_el0\nmsr daif,x5\nb finish_c\n"
         "91: mov w0,#2\nret\n92: mov w0,#3\nret\n94: mov w0,#6\nret\n95: mov w0,#5\nret\n");
 }
 

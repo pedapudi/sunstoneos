@@ -24,7 +24,7 @@ EVENTS=[[3,1,0x17,0x2a,0x34,0x35],[3,1,0x17,0x24,0x34,0x35]]
 
 class Model:
     def __init__(self,image,n=6,unsupported=(),mismatch=False,skip_freeze=False,skip_begin_mask=False,
-                 zero_cycles=False,zero_events=False):
+                 zero_cycles=False,zero_events=False,skip_end_mask=False):
         with image.open('rb') as f:
             e=ELFFile(f)
             self.parts=[(p['p_vaddr'],p.data()) for p in e.iter_segments() if p['p_type']=='PT_LOAD']
@@ -45,8 +45,10 @@ class Model:
                    'pmovsclr_el0':0,'pmccntr_el0':0,'midr_el1':0x410fd050,'cntfrq_el0':24000000,'daif':0}
         self.mismatch,self.skip_freeze=mismatch,skip_freeze
         self.skip_begin_mask=skip_begin_mask
+        self.skip_end_mask=skip_end_mask
         self.zero_cycles,self.zero_events=zero_cycles,zero_events
         self.irq_attempts=0;self.admission_violation=None
+        self.endpoint_pending=False;self.endpoint_attempts=0;self.endpoint_violation=None
         self.enabled=False;self.writes=[];self.ops=[];self.cache={};self.violation=None
         self.dis=Cs(CS_ARCH_ARM64,CS_MODE_ARM)
         self.uc.hook_add(UC_HOOK_CODE,self.code)
@@ -77,7 +79,14 @@ class Model:
             if key=='tpidrro_el0':value=0x43000000|(self.core<<48)|((1<<56) if self.el1 else 0)
             elif key=='tpidr_el1':
                 assert self.el1,'EL0 read privileged core register';value=self.core
-            elif key=='cntpct_el0':value=self.clock
+            elif key=='cntpct_el0':
+                if self.endpoint_pending:
+                    self.endpoint_attempts+=1
+                    if not self.regs['daif']&0x80:
+                        self.clock+=24000
+                        self.endpoint_violation=pc
+                    self.endpoint_pending=False
+                value=self.clock
             else:
                 assert self.el1,('EL0 privileged PMU read',key)
                 value=self.regs.get(key)
@@ -92,12 +101,17 @@ class Model:
             value=int(src[1:],0) if src.startswith('#') else (0 if src=='xzr' else uc.reg_read(getattr(R,'UC_ARM64_REG_'+src.upper())))
             if key=='pmcntenset_el0':self.regs[key]|=value;self.enabled=bool(self.regs[key]&ENABLE)
             elif key=='pmcntenclr_el0':
+                previous=self.enabled
                 if not self.skip_freeze:self.regs['pmcntenset_el0']&=~value;self.enabled=bool(self.regs['pmcntenset_el0']&ENABLE)
+                if previous and not self.enabled:self.endpoint_pending=True
             elif key=='pmintenclr_el1':self.regs['pmintenset_el1']&=~value
             elif key=='pmovsclr_el0':self.regs[key]&=~value
             elif key.lower()=='daifset':
                 entry=self.sym['ss_sched_pmu_begin']
-                if not(self.skip_begin_mask and entry<=pc<entry+self.sizes['ss_sched_pmu_begin']):
+                in_end=any(self.sym[name]<=pc<self.sym[name]+self.sizes[name]
+                           for name in ['ss_sched_pmu_end','ss_sched_pmu_end_scope'])
+                if not((self.skip_begin_mask and entry<=pc<entry+self.sizes['ss_sched_pmu_begin']) or
+                       (self.skip_end_mask and in_end)):
                     self.regs['daif']|=value<<6
             else:self.regs[key]=value
             uc.reg_write(R.UC_ARM64_REG_PC,pc+4)
@@ -204,6 +218,20 @@ def main():
     m=Model(image,skip_begin_mask=True);m.setup();m.call('ss_sched_pmu_begin',0,0,6,0)
     assert m.admission_violation,'IRQ admission negative must reach an unreserved metadata write'
     results.append('IRQ attempt before cookie publication is excluded; missing mask fails its negative')
+    for scoped in [False,True]:
+        for original in [0,0x80,0x3c0]:
+            m=Model(image);m.setup();m.regs['daif']=original
+            scope=0x43000040
+            cookie=m.call('ss_sched_pmu_begin_scope',0,0,6,0,scope) if scoped else m.call('ss_sched_pmu_begin',0,0,6,0)
+            before=m.endpoint_attempts
+            assert m.call('ss_sched_pmu_end_scope' if scoped else 'ss_sched_pmu_end',0,scope if scoped else cookie)==0
+            assert m.endpoint_attempts==before+1 and m.endpoint_violation is None and m.regs['daif']==original
+        m=Model(image);m.setup()
+        cookie=m.call('ss_sched_pmu_begin_scope',0,0,6,0,scope) if scoped else m.call('ss_sched_pmu_begin',0,0,6,0)
+        m.skip_end_mask=True
+        assert m.call('ss_sched_pmu_end_scope' if scoped else 'ss_sched_pmu_end',0,scope if scoped else cookie)==0
+        assert m.endpoint_violation and m.row(0,0)[4]-m.row(0,0)[3]>=24000
+    results.append('freeze-to-timestamp IRQ is excluded in both ends; old mask omission injects uncounted delay')
     m=Model(image);m.setup();cookie=m.call('ss_sched_pmu_begin',0,0,6,0)
     m.skip_freeze=True;m.call('ss_sched_pmu_end',0,cookie,allow_violation=True)
     assert m.violation,'negative control must detect post-boundary record stores'

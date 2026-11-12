@@ -85,8 +85,8 @@ int ss_sched_pmu_end(unsigned core, int64_t cookie);
  * local byte at both boundaries. Its contents are never accessed. A rejected
  * nested scope cannot finish its parent's capture. This avoids live-cookie
  * spills after enable in large callers. */
-int64_t ss_sched_pmu_begin_scope(unsigned core,unsigned kind,unsigned slot,unsigned flags,const void *scope);
-int ss_sched_pmu_end_scope(unsigned core,const void *scope);
+int64_t ss_sched_pmu_begin_scope(unsigned core,unsigned kind,unsigned slot,unsigned flags,void *scope);
+int ss_sched_pmu_end_scope(unsigned core,void *scope);
 int ss_sched_pmu_freeze(unsigned core);
 void ss_sched_pmu_snapshot(struct ss_sched_pmu_report *out);
 #endif
