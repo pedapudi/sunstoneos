@@ -167,7 +167,7 @@ endforeach()
 add_executable(a733-usb-runtime
   platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c platform/a733/cpu_coherence.S
   arch/aarch64/cache.S arch/aarch64/start.S arch/aarch64/vectors.S runtime/memory.c
-  drivers/usb/a733_usb.c drivers/usb/diagnostic.c
+  drivers/usb/a733_usb.c drivers/usb/diagnostic.c runtime/deadline.c runtime/deadline-a733.c
   "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
   "${CMAKE_CURRENT_BINARY_DIR}/freertos-port.c" "${PORT}/portASM.S"
   "${TINYUSB_DIR}/src/tusb.c" "${TINYUSB_DIR}/src/common/tusb_fifo.c"
@@ -176,7 +176,9 @@ add_executable(a733-usb-runtime
 target_include_directories(a733-usb-runtime PRIVATE include runtime/include platform/a733
   drivers/usb "${FREERTOS_DIR}/include" "${PORT}" "${TINYUSB_DIR}/src")
 target_compile_definitions(a733-usb-runtime PRIVATE
-  GUEST=1 SUNSTONE_SECURE_MONITOR=1 SUNSTONE_USB_RUNTIME=1 SUNSTONE_A733_USB=1)
+  GUEST=1 SUNSTONE_SECURE_MONITOR=1 SUNSTONE_USB_RUNTIME=1 SUNSTONE_A733_USB=1
+  SUNSTONE_USB_PRECISE_DELAY=1 SUNSTONE_DEADLINE_SINGLE_CORE=1 SUNSTONE_DEADLINE_SLOTS=1
+  INCLUDE_xTaskGetCurrentTaskHandle=1 configUSE_IDLE_HOOK=1)
 target_compile_options(a733-usb-runtime PRIVATE
   -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
   -fno-unwind-tables -fno-asynchronous-unwind-tables

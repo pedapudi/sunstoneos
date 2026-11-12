@@ -39,7 +39,9 @@ _Noreturn void platform_panic(const char *file, unsigned line);
 #define INCLUDE_xTaskGetCurrentTaskHandle 1
 #endif
 #endif
+#ifndef configUSE_IDLE_HOOK
 #define configUSE_IDLE_HOOK 0
+#endif
 #define configUSE_TICK_HOOK 0
 #define configUSE_TIME_SLICING 1
 #define configCPU_CLOCK_HZ 1000000000UL

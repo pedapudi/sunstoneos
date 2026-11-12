@@ -21,12 +21,16 @@ from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_X
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [
     ['--build', '{output}/build', '--output', '{output}/result.json', '--clang', '/usr/lib/llvm-21/bin/clang', '--lld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld', '--objdump', '/usr/lib/llvm-21/bin/llvm-objdump'],
+    ['--build', '{output}/build', '--output', '{output}/result.json', '--clang', '/usr/lib/llvm-21/bin/clang', '--lld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld', '--objdump', '/usr/lib/llvm-21/bin/llvm-objdump', '--usb-deadlines',
+     '--case', 'are-37', '--case', 'deadline-enabled', '--case', 'deadline-pending', '--case', 'deadline-active',
+     '--case', 'cleanup-deadline-priority-restore-dropped', '--case', 'qemu-cold', '--case', 'are-0', '--case', 'are-10', '--case', 'are-20'],
 ]
 p = argparse.ArgumentParser(description=__doc__)
 for name in ('build', 'output', 'clang', 'lld', 'objdump'):
     p.add_argument('--' + name, type=Path, required=True)
 p.add_argument('--monitor-source', type=Path, default=ROOT/'platform/a733/monitor.c')
 p.add_argument('--case', action='append', help='Run only named cases; used to reproduce the old cleanup failure.')
+p.add_argument('--usb-deadlines', action='store_true', help='Select the legacy USB virtual-timer admission and cleanup branch.')
 a = p.parse_args()
 a.build.mkdir(parents=True, exist_ok=False)
 def digest(path):
@@ -55,6 +59,7 @@ MBUS_WRITES = [(0x02002588, 0x0c000000), (0x02002594, 0x10001), (0x02002588, 0x0
 for model in (False, True):
     name = 'qemu' if model else 'physical'
     flags = ['-DMONITOR_QEMU=1'] if model else []
+    if a.usb_deadlines:flags.append('-DSUNSTONE_USB_PRECISE_DELAY=1')
     command([a.clang, '--target=aarch64-none-elf', '-march=armv8-a', '-mgeneral-regs-only', '-ffreestanding',
              '-fno-stack-protector', '-fno-unwind-tables', '-O2', '-g', '-Wall', '-Wextra', *flags,
              '-I' + str(ROOT / 'platform/a733'), '-I' + str(ROOT / 'include'), '-c', a.monitor_source,
@@ -77,6 +82,7 @@ for model in (False, True):
               'spi-disable-dropped', 'spi-enable-restore-dropped', 'banks-changed',
               'final-ctlr-dropped', 'final-rwp', 'dist-read-at-deadline',
               'local-read-at-deadline', 'spi-read-after-deadline', 'final-read-at-deadline')
+    if a.usb_deadlines:faults+=('deadline-priority-restore-dropped',)
     cases = [(f'are-{value:x}', value, False, '', 0) for value in (0, 0x10, 0x20, 0x30, 0x37)] + [
         ('are-37-mbus-rom', 0x37, False, '', 0), ('are-37-mbus-gpu-clocked', 0x37, False, '', 0),
         ('are-37-mbus-dma-busy', 0x37, False, '', 0)] if not model else [
@@ -87,6 +93,7 @@ for model in (False, True):
                   ('controlled-timeout', 0x37, False, '', 2),
                   ('cleanup-overrides-timeout', 0x37, False, 'priority-restore-dropped', 2),
                   ('cleanup-overrides-client-error', 0x37, False, 'priority-restore-dropped', 4)]
+        if a.usb_deadlines:cases.extend((name,0x37,False,'',0) for name in ('deadline-enabled','deadline-pending','deadline-active'))
     for case, original, early_timeout, fault, requested_status in cases:
         if a.case and case not in a.case:
             continue
@@ -140,6 +147,10 @@ for model in (False, True):
                      sgi+0x80: 0x80000001, sgi+0xd00: 0x40000000,
                      sgi+0x100: 0x80000004, sgi+0x200: 0, sgi+0x300: 0,
                      sgi+0xc04: 0x88000000, sgi+0x41c: 0x6080a0c0}
+        if a.usb_deadlines:
+            registers[sgi+0x418]=0x40506070
+            if case=='deadline-pending':registers[sgi+0x200]|=1<<27
+            if case=='deadline-active':registers[sgi+0x300]|=1<<27
         for bank in range(1, 9):
             registers[gicd+0x100+4*bank] = 0x10000000 if bank == 5 else 0
         saved_registers = registers.copy()
@@ -153,7 +164,9 @@ for model in (False, True):
         delayed = {}
         writes, reads, stopped = [], [], []
         instructions = [0, 0]
-        sysregs = {'esr_el3': 0x17 << 26, 'elr_el3': 0, 'far_el3': 0}
+        sysregs = {'esr_el3': 0x17 << 26, 'elr_el3': 0, 'far_el3': 0,
+                   'cntv_ctl_el0':3 if case=='deadline-enabled' else 2,'cntv_cval_el0':12345}
+        saved_sysregs=sysregs.copy()
         def instruction(uc, address, size, unused):
             instructions[phase[0] == 'finish'] += 1
             if address == 0x410f0000:
@@ -180,6 +193,9 @@ for model in (False, True):
                 uc.reg_write(UC_ARM64_REG_X0 + int(read[1]), value)
                 uc.reg_write(UC_ARM64_REG_PC, address + 4)
             elif text.lower().startswith('msr'):
+                write=re.match(r'msr\s+(\S+),\s*(x(\d+)|xzr)',text,re.I)
+                if write and write[1].lower() in ('cntv_ctl_el0','cntv_cval_el0'):
+                    sysregs[write[1].lower()]=uc.reg_read(UC_ARM64_REG_X0+int(write[3])) if write[3] else 0
                 uc.reg_write(UC_ARM64_REG_PC, address + 4)
             elif text.startswith('hlt'):
                 if uc.reg_read(UC_ARM64_REG_X0) == 0x20:
@@ -243,6 +259,7 @@ for model in (False, True):
                     'modifier-restore-dropped': (sgi+0xd00, 'local'),
                     'config-restore-dropped': (sgi+0xc04, 'local'),
                     'priority-restore-dropped': (sgi+0x41c, 'local'),
+                    'deadline-priority-restore-dropped': (sgi+0x418, 'local'),
                     'local-enable-restore-dropped': (sgi+0x100, 'local'),
                     'spi-disable-dropped': (gicd+0x18c, 'spi'),
                     'spi-enable-restore-dropped': (gicd+0x114, 'spi'),
@@ -257,7 +274,7 @@ for model in (False, True):
             value = (registers.get(word, 0) & ~(((1 << (size*8))-1) << shift)) | (value << shift)
             if word in (sgi+0x80, sgi+0xd00): value &= implemented
             if word == sgi+0xc04: value &= 0xaaaaaa00
-            if word == sgi+0x41c: value &= 0xf8f8f8f8
+            if word in (sgi+0x41c,sgi+0x418): value &= 0xf8f8f8f8
             if word in (sgi+0x100, sgi+0x200, sgi+0x300):
                 registers[word] |= value & implemented
             elif word in (sgi+0x180, sgi+0x280, sgi+0x380):
@@ -271,7 +288,7 @@ for model in (False, True):
         cpu.hook_add(UC_HOOK_MEM_READ, read_mmio)
         cpu.hook_add(UC_HOOK_MEM_WRITE, write_mmio)
         cpu.emu_start(symbols['monitor_init'], 0, count=100000)
-        refused = not model and original & 0x30 != 0x30
+        refused = not model and (original & 0x30 != 0x30 or case.startswith('deadline-'))
         cleanup_started = ticks[0]
         if not refused and not early_timeout:
             assert stopped == ['initialized'], (case, stopped)
@@ -282,6 +299,10 @@ for model in (False, True):
             registers[sgi+0x200] |= (1 << 29) | (1 << 30)
             registers[sgi+0x300] |= (1 << 29) | (1 << 30)
             registers[sgi+0x41c] = (registers[sgi+0x41c] & ~0xff0000) | 0xf00000
+            if a.usb_deadlines:
+                registers[sgi+0x100]|=1<<27;registers[sgi+0x200]|=1<<27;registers[sgi+0x300]|=1<<27
+                registers[sgi+0x418]=(registers[sgi+0x418]&~0xff000000)|0xf0000000
+                sysregs['cntv_ctl_el0']=1;sysregs['cntv_cval_el0']=ticks[0]+100
             registers[gicd+0x10c] |= 0x80
             cpu.reg_write(UC_ARM64_REG_X0, 0x733)
             cpu.reg_write(UC_ARM64_REG_X0 + 1, requested_status)
@@ -326,6 +347,9 @@ for model in (False, True):
             for address, value in saved_registers.items():
                 if address not in (gicd, gicd+4, gicr+8):
                     assert registers[address] == value, (case, hex(address), hex(registers[address]), hex(value))
+        if a.usb_deadlines and (refused or not failed_cleanup):
+            assert sysregs['cntv_ctl_el0']==saved_sysregs['cntv_ctl_el0']
+            assert sysregs['cntv_cval_el0']==saved_sysregs['cntv_cval_el0']
         print('PASS', name, case, flush=True)
 assert results, 'No selected case matched'
 a.output.write_text(json.dumps({'physical_access': False, 'passed': True, 'cases': results,

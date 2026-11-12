@@ -23,6 +23,12 @@ const uintptr_t a733_local_pool_stride = (uintptr_t)2 << 20;
 #define LOG_END RESULT_SIZE
 #endif
 #define TIMER_IRQ TICK_IRQ
+#ifdef SUNSTONE_USB_PRECISE_DELAY
+#include "sunstone_deadline.h"
+#define DEADLINE_IRQ 27u
+void vApplicationIdleHook(void)
+{__asm__ volatile("dsb sy\n wfi":::"memory");}
+#endif
 
 static uint64_t tick_interval;
 static uint64_t next_tick;
@@ -193,6 +199,11 @@ void platform_init(void)
     *(volatile uint8_t *)(GICR_SGI + 0x400 + TIMER_IRQ) =
         portLOWEST_USABLE_INTERRUPT_PRIORITY << portPRIORITY_SHIFT;
     mmio_write(GICR_SGI + 0x100, 1U << TIMER_IRQ);
+#ifdef SUNSTONE_USB_PRECISE_DELAY
+    *(volatile uint8_t *)(GICR_SGI+0x400+DEADLINE_IRQ)=
+        portLOWEST_USABLE_INTERRUPT_PRIORITY<<portPRIORITY_SHIFT;
+    mmio_write(GICR_SGI+0x100,1u<<DEADLINE_IRQ);
+#endif
     uint64_t deadline = counter() + COUNTER_HZ / 10;
     while (mmio_read(GICR_BASE) & 8)
         configASSERT(counter() < deadline);
@@ -238,6 +249,9 @@ void vApplicationFPUSafeIRQHandler(uint64_t interrupt)
 {
     if (interrupt == TIMER_IRQ)
         FreeRTOS_Tick_Handler();
+#ifdef SUNSTONE_USB_PRECISE_DELAY
+    else if(interrupt==DEADLINE_IRQ)sunstone_deadline_irq();
+#endif
     else if (interrupt < 1020)
         platform_panic("unexpected interrupt", (unsigned)interrupt);
 }

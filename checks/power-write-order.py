@@ -52,7 +52,9 @@ incs = [root/'include', root/'runtime/include', root/'platform/a733', root/'driv
         fr/'include', fr/'portable/GCC/ARM_AARCH64_SRE', tiny/'src']
 support = out/'support.c'
 support.write_text('#include "FreeRTOS.h"\n#include "task.h"\n'
+                   '#include "sunstone_deadline.h"\n'
                    'void vTaskDelay(TickType_t ticks){(void)ticks;}\n'
+                   'int sunstone_deadline_wait_until(uint64_t until){(void)until;return 0;}\n'
                    'void platform_puts(const char *text){(void)text;}\n'
                    '_Noreturn void platform_panic(const char *text,unsigned line)'
                    '{(void)text;(void)line;for(;;)__asm__ volatile("brk #0");}\n')
@@ -123,7 +125,7 @@ class Machine:
         self.cpu.reg_write(UC_ARM64_REG_SP, 0x407ff000)
         hooks = set(instruction_sites(image.parts, lambda op:
                     op == 0xd5033f9f or op & ~31 == 0xd53be020))
-        for name in ('platform_panic', 'vTaskDelay'):
+        for name in ('platform_panic', 'vTaskDelay','sunstone_deadline_wait_until'):
             hooks.update(image.symbols.get(name, set()))
         for site in hooks:
             self.cpu.hook_add(UC_HOOK_CODE, self.code, begin=site, end=site)
@@ -182,6 +184,13 @@ class Machine:
             if self.variant != 'frozen':
                 self.time = (self.time//period+ticks)*period
             self.ret()
+            return
+        if address == self.image.symbols.get('sunstone_deadline_wait_until', {None}).copy().pop():
+            assert not self.words.pending, 'hold timestamp before completed store'
+            if self.variant=='deadline-error':self.ret((1<<64)-1)
+            else:
+                self.time=max(self.time,cpu.reg_read(UC_ARM64_REG_X0)*1000*24)
+                self.ret(1)
             return
         if op & ~31 == 0xd53be020:  # MRS CNTPCT_EL0
             assert not self.words.pending, 'hold timestamp before completed store'
@@ -266,17 +275,15 @@ def usb_case(variant):
     # pending on entry; the real entry DSB must complete it before detach time.
     m.words.write(0x04100040, 0)
     m.call('a733_usb_prepare')
-    if variant in ('frozen', 'backward', 'overflow'):
+    if variant in ('deadline-error', 'backward', 'overflow'):
         assert m.panic and not m.writes and m.fault_store_count == 0
-        if variant == 'frozen':
-            assert m.samples == 1000001
     else:
         assert not m.panic and len(m.writes) == 5 and m.barriers == 6
         assert not m.words.pending
     return m
 
 
-for variant in ['control', 'frozen', 'backward', 'overflow']:
+for variant in ['control', 'deadline-error', 'backward', 'overflow']:
     m = usb_case(variant)
     results.append(dict(case='usb-'+variant, result='PASS', barriers=m.barriers,
                         counter_samples=m.samples, writes=len(m.writes), panic=m.panic))
@@ -291,5 +298,5 @@ for path in [__file__, root/'checks/harness.py', root/'checks/register_latency.p
 (out/'inputs.json').write_text(json.dumps(inputs, indent=2)+'\n')
 (out/'results.json').write_text(json.dumps(dict(result='PASS', cases=results,
     artifacts={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in [pmic_elf, usb_elf, mutant_elf]},
-    limitations='Host AArch64 execution with modeled architectural completion and separate bus latency; no physical access.'), indent=2)+'\n')
+    limitations='Host AArch64 execution with modeled completion, precise waits and separate bus latency; no physical access or stopped-counter recovery qualification.'), indent=2)+'\n')
 print(json.dumps(results, indent=2))

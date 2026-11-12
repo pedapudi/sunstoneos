@@ -10,6 +10,10 @@
 static struct {
     uint32_t ready, banks, ctlr, group, modifier, enabled, configuration;
     uint32_t priorities, spi_enabled[32];
+#ifdef SUNSTONE_USB_PRECISE_DELAY
+    uint32_t deadline_owned,deadline_priorities;
+    uint64_t deadline_control,deadline_compare;
+#endif
 } saved __attribute__((section(".monitor_state")));
 extern _Noreturn void monitor_reset(void);
 static _Noreturn void finish(unsigned status);
@@ -70,6 +74,17 @@ void monitor_init(void)
     RESULT->start_counter = counter();
     __asm__ volatile("msr cntfrq_el0, %0" :: "r"(COUNTER_HZ));
     saved.ready = 0;
+#ifdef SUNSTONE_USB_PRECISE_DELAY
+    saved.deadline_owned=0;
+    __asm__ volatile("mrs %0,cntv_ctl_el0\n mrs %1,cntv_cval_el0"
+        :"=r"(saved.deadline_control),"=r"(saved.deadline_compare));
+    saved.deadline_control&=3;
+    /* A second timer is acquired only when no earlier owner can signal it. */
+    if((saved.deadline_control&1)||
+       ((mmio_read(GICR_SGI+0x200)|mmio_read(GICR_SGI+0x300))&(1u<<27)))finish(4);
+    saved.deadline_priorities=mmio_read(GICR_SGI+0x418);
+    saved.deadline_owned=1;
+#endif
     saved.ctlr = mmio_read(GICD_BASE);
     RESULT->gicd_ctlr = saved.ctlr;
     RESULT->gicd_typer = mmio_read(GICD_BASE + 4);
@@ -108,7 +123,11 @@ void monitor_init(void)
     mmio_write(GICR_SGI + 0x80, ~(1U << RECOVERY_IRQ));
     mmio_write(GICR_SGI + 0xd00, 0);
     // Both timer PPIs are level-sensitive.
-    mmio_write(GICR_SGI + 0xc04, saved.configuration & ~((2U << 26) | (2U << 28)));
+    uint32_t timer_configuration=saved.configuration&~((2u<<26)|(2u<<28));
+#ifdef SUNSTONE_USB_PRECISE_DELAY
+    timer_configuration&=~(2u<<22); /* Virtual timer PPI 27 is level-sensitive. */
+#endif
+    mmio_write(GICR_SGI + 0xc04,timer_configuration);
     *(volatile uint8_t *)(GICR_SGI + 0x400 + RECOVERY_IRQ) = 0;
     mmio_write(GICR_SGI + 0x100, 1U << RECOVERY_IRQ);
     wait_clear(GICR_BASE, 8);
@@ -207,7 +226,11 @@ static int restore_interrupts(void)
     if (!cleanup_wait(GICR_BASE, 8, deadline) ||
         mmio_read(GICR_SGI + 0x100) || counter() >= deadline)
         return 0;
-    const uint32_t timers = (1U << TICK_IRQ) | (1U << RECOVERY_IRQ);
+    const uint32_t timers = (1U << TICK_IRQ) | (1U << RECOVERY_IRQ)
+#ifdef SUNSTONE_USB_PRECISE_DELAY
+        |(1u<<27)
+#endif
+        ;
     mmio_write(GICR_SGI + 0x280, timers);
     mmio_write(GICR_SGI + 0x380, timers);
     __asm__ volatile("dsb sy" ::: "memory");
@@ -218,6 +241,11 @@ static int restore_interrupts(void)
     mmio_write(GICR_SGI + 0xd00, saved.modifier);
     mmio_write(GICR_SGI + 0xc04, saved.configuration);
     mmio_write(GICR_SGI + 0x41c, saved.priorities);
+#ifdef SUNSTONE_USB_PRECISE_DELAY
+    mmio_write(GICR_SGI+0x418,saved.deadline_priorities);
+    __asm__ volatile("msr cntv_cval_el0,%0\n msr cntv_ctl_el0,%1\n isb"
+        ::"r"(saved.deadline_compare),"r"(saved.deadline_control):"memory");
+#endif
     mmio_write(GICR_SGI + 0x100, saved.enabled);
     __asm__ volatile("dsb sy" ::: "memory");
     // Compare values read from the implemented Secure register view, not
@@ -227,6 +255,9 @@ static int restore_interrupts(void)
         mmio_read(GICR_SGI + 0xd00) != saved.modifier ||
         mmio_read(GICR_SGI + 0xc04) != saved.configuration ||
         mmio_read(GICR_SGI + 0x41c) != saved.priorities ||
+#ifdef SUNSTONE_USB_PRECISE_DELAY
+        mmio_read(GICR_SGI+0x418)!=saved.deadline_priorities||
+#endif
         mmio_read(GICR_SGI + 0x100) != saved.enabled || counter() >= deadline)
         return 0;
 
@@ -268,6 +299,14 @@ static _Noreturn void finish(unsigned status)
 {
     __asm__ volatile("msr daifset, #0xf\n msr cntps_ctl_el1, xzr\n"
                      "msr cntp_ctl_el0, xzr\n isb" ::: "memory");
+#ifdef SUNSTONE_USB_PRECISE_DELAY
+    if(saved.deadline_owned){
+        __asm__ volatile("msr cntv_ctl_el0,xzr\n isb":::"memory");
+        /* A refusal before GIC mutation still preserves the acquired timer. */
+        if(!saved.ready)__asm__ volatile("msr cntv_cval_el0,%0\n msr cntv_ctl_el0,%1\n isb"
+            ::"r"(saved.deadline_compare),"r"(saved.deadline_control):"memory");
+    }
+#endif
     RESULT->end_counter = counter();
 #ifndef SUNSTONE_BOARD_PROBE
     if (saved.ready && !restore_interrupts()) {
