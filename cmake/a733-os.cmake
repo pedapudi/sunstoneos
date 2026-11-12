@@ -180,6 +180,10 @@ elseif(SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle")
     message(FATAL_ERROR "GPU lifecycle requires SUNSTONE_A733_OS_GPU=ON")
   endif()
   option(SUNSTONE_GPU_LIFECYCLE_PEER "Link the fixed sharing peer into the lifecycle image" ON)
+  option(SUNSTONE_GPU_LIFECYCLE_FAIL_AFTER_SUBMIT "Fail the application after both GPU clients accept a job" OFF)
+  if(SUNSTONE_GPU_LIFECYCLE_FAIL_AFTER_SUBMIT AND SUNSTONE_A733_OS_GPU_RECOVERY_TEST)
+    message(FATAL_ERROR "GPU application failure injection requires normal compute completion")
+  endif()
   if(NOT SUNSTONE_GPU_LIFECYCLE_PEER)
     message(FATAL_ERROR "GPU lifecycle qualification requires the fixed sharing peer")
   endif()
@@ -196,6 +200,7 @@ elseif(SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle")
       "${SUNSTONE_SOURCE_ROOT}/apps/gpu-queue-peer")
   target_compile_definitions(gpu-lifecycle PRIVATE
     GPU_LIFECYCLE_PEER=$<BOOL:${SUNSTONE_GPU_LIFECYCLE_PEER}>
+    GPU_LIFECYCLE_FAIL_AFTER_SUBMIT=$<BOOL:${SUNSTONE_GPU_LIFECYCLE_FAIL_AFTER_SUBMIT}>
     GPU_LIFECYCLE_RECOVERY=$<BOOL:${SUNSTONE_A733_OS_GPU_RECOVERY_TEST}>)
   add_sunstone_image(sunstone-a733-os-gpu-lifecycle LIFETIME ${os_lifetime} APPLICATION gpu-lifecycle)
 elseif(SUNSTONE_APPLICATION MATCHES "^usb-(input|serial|camera)$")

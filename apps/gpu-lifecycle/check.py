@@ -29,13 +29,14 @@ fixture = r'''
 #include <string.h>
 static jmp_buf done;
 static unsigned mode, fail_at, creates, submits, waits, closes, opens, recovers, releases, peers, terminal;
+static unsigned accepted, terminal_value;
 static uint32_t input[130], output[67];
 static uint64_t ticks;
 static unsigned attempts, delays;
 const struct ss_manifest gpu_lifecycle_manifest={0}, gpu_queue_peer_manifest={0};
 void gpu_queue_peer_main(const struct ss_grant *g) {(void)g;}
 void gpu_queue_peer_release(void) {assert(submits==1 && !releases);++releases;}
-int gpu_queue_peer_accepted(uint32_t ticks) {assert(ticks==50 && submits==1 && releases==1);return mode!=14;}
+int gpu_queue_peer_accepted(uint32_t ticks) {assert(ticks==50 && submits==1 && releases==1);accepted=mode!=14;return accepted;}
 int gpu_queue_peer_wait(uint32_t ticks) {assert(ticks==4000 && releases==1);++peers;return mode!=11;}
 int gpu_queue_context_create(const struct gpu_queue_context_config *c,uint32_t ticks,
  struct gpu_queue_context *ctx,struct gpu_queue_lease_info *info)
@@ -86,6 +87,8 @@ void vTaskDelay(uint64_t n){assert(n==1);ticks+=n;++delays;}
 int ss_live(void){return mode==16 && delays==2?-1:1;}
 void ss_progress(void) {}
 _Noreturn void ss_fail(uint32_t detail){terminal=detail;longjmp(done,1);}
+_Noreturn void ss_fail_value(uint32_t detail,uint32_t value)
+{terminal=detail;terminal_value=value;longjmp(done,1);}
 _Noreturn void ss_finish(const void *data,size_t bytes)
 {
  const uint32_t *r=data;assert(bytes==88 && r[0]==0x314c5047 && r[6]==8840 && r[10]==1 && r[11]==65);
@@ -96,12 +99,17 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
 int main(int argc,char **argv)
 {
  assert(argc==3);mode=strtoul(argv[1],0,10);fail_at=strtoul(argv[2],0,10);
- struct ss_grant g={.devices=SS_DEVICE_GPU,.region_count=2};
- g.regions[GPU_LIFECYCLE_REGION_INPUT]=(struct ss_span){input,sizeof(input)};
- g.regions[GPU_LIFECYCLE_REGION_OUTPUT]=(struct ss_span){output,260};
+ struct ss_span regions[2]={[GPU_LIFECYCLE_REGION_INPUT]={input,sizeof(input)},
+  [GPU_LIFECYCLE_REGION_OUTPUT]={output,260}};
+ struct ss_grant g={.devices=SS_DEVICE_GPU,.region_count=2,.regions=regions};
  output[65]=0x12345678;output[66]=0x87654321;if(mode==1)g.devices=0;
  if(mode==17)ticks=UINT64_MAX-100;
  if(!setjmp(done))gpu_lifecycle_main(&g);
+#if GPU_LIFECYCLE_FAIL_AFTER_SUBMIT
+ if(!mode){assert(terminal==0x770 && terminal_value==0x47505501 && creates==1 &&
+  submits==1 && accepted==1 && releases==1 && !waits && !closes && !opens && !recovers);
+  return 0;}
+#endif
  unsigned expected=mode==15?0:mode>=16?4:mode;
  if(mode==5)expected=GPU_LIFECYCLE_RECOVERY && fail_at==1?9:5;
  if(mode==12)expected=6;if(mode==13)expected=GPU_LIFECYCLE_RECOVERY && fail_at==1?9:5;
@@ -135,6 +143,13 @@ for recovery in (0, 1):
         cases.append({'recovery':bool(recovery),'injected_failure':mode,'at':at})
     subprocess.run([a.cc,*flags,*definitions,'--target=aarch64-none-elf','-ffreestanding','-mgeneral-regs-only',
                     '-c',str(ROOT/'apps/gpu-lifecycle/main.c'),'-o',str(a.build/('lifecycle-'+str(recovery)+'.o'))],check=True)
+binary=a.build/'lifecycle-failure-return'
+subprocess.run([a.cc,*flags,'-DGPU_LIFECYCLE_RECOVERY=0','-DGPU_LIFECYCLE_FAIL_AFTER_SUBMIT=1',
+                '-fsanitize=address,undefined','-fno-sanitize-recover=all',
+                str(a.build/'fixture.c'),str(ROOT/'apps/gpu-lifecycle/main.c'),'-o',str(binary)],check=True)
+for mode in (0,2,4,14):
+    subprocess.run([str(binary),str(mode),'1'],check=True,env={**os.environ,'ASAN_OPTIONS':'detect_leaks=0'})
+    cases.append({'failure_return':True,'injected_failure':mode,'at':1})
 spec=importlib.util.spec_from_file_location('lifecycle_host',ROOT/'apps/gpu-lifecycle/host.py')
 host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
 decoder_cases=0
