@@ -18,6 +18,9 @@ CHECK_INPUTS=['kernel/scheduler/latency_cause.c','kernel/scheduler/latency_cause
               'checks/scheduler-cause-host','checks/scheduler-pmu-support.c']
 RETURN,STACK,OUTPUT,SCRATCH=0x47fff000,0x47f00000,0x43010000,0x43000000
 CC=1<<31
+EVENTS=0x1f
+# PMCEID0 bits of the five counted events: 0x01, 0x03, 0x17, 0x24 and 0x2a (above bit 31 in PMCEID0's upper word).
+PMCEID0=(1<<0x01)|(1<<0x03)|(1<<0x17)|(1<<0x24)|(1<<0x2a)
 class Model:
     def __init__(self,image,skip_mask=False,mismatch=False,skip_pair_mask=False):
         with image.open('rb') as f:
@@ -34,7 +37,8 @@ class Model:
         self.core=0;self.el1=True;self.clock=1000;self.skip_mask=skip_mask;self.mismatch=mismatch
         self.regs={'pmcr_el0':6<<11,'pmccntr_el0':0,'pmcntenset_el0':0,'pmintenset_el1':0,
                    'pmuserenr_el0':0,'pmccfiltr_el0':0,'pmovsclr_el0':0,'daif':0,
-                   'midr_el1':0x410fd050,'mpidr_el1':0x80000000,'icc_ctlr_el1':0x40,'icc_pmr_el1':0xf0}
+                   'pmceid0_el0':PMCEID0,'midr_el1':0x410fd050,
+                   **{f'pmevcntr{n}_el0':0 for n in range(5)},'mpidr_el1':0x80000000,'icc_ctlr_el1':0x40,'icc_pmr_el1':0xf0}
         self.cache={};self.ops=[];self.writes=[];self.measuring=False;self.samples=[];self.violation=None
         self.dis=Cs(CS_ARCH_ARM64,CS_MODE_ARM)
         self.uc.hook_add(UC_HOOK_CODE,self.code);self.uc.hook_add(UC_HOOK_MEM_WRITE,self.write)
@@ -49,6 +53,8 @@ class Model:
         if pc not in self.cache:self.cache[pc]=next(self.dis.disasm(bytes(uc.mem_read(pc,4)),pc))
         i=self.cache[pc];self.ops.append((pc,i.mnemonic,i.op_str));self.clock+=1
         if self.regs['pmcntenset_el0']&CC:self.regs['pmccntr_el0']+=1
+        for n in range(5):
+            if self.regs['pmcntenset_el0']>>n&1:self.regs[f'pmevcntr{n}_el0']=(self.regs[f'pmevcntr{n}_el0']+1)&0xffffffff
         leaf=self.sym['ss_latency_cause_bench_leaf']<=pc<self.sym['ss_latency_cause_bench_leaf']+self.size['ss_latency_cause_bench_leaf']
         if i.mnemonic=='mrs':
             dst,key=i.op_str.split(', ')
@@ -85,6 +91,12 @@ class Model:
                 pair=any(self.sym[n]<=pc<self.sym[n]+self.size[n] for n in ['ss_latency_cause_irq_end','ss_latency_cause_tick_begin','ss_latency_cause_tick_end'])
                 if not((self.skip_mask and leaf) or (self.skip_pair_mask and pair)):self.regs['daif']|=value<<6
             elif key=='icc_sgi1r_el1':pass
+            elif key=='pmcr_el0':
+                # P (bit 1) and C (bit 2) reset the counters and read as zero (Arm ARM, PMCR_EL0 field descriptions).
+                if value&2:
+                    for n in range(5):self.regs[f'pmevcntr{n}_el0']=0
+                if value&4:self.regs['pmccntr_el0']=0
+                self.regs[key]=value&~6
             else:self.regs[key]=value
             uc.reg_write(R.UC_ARM64_REG_PC,pc+4)
     def call(self,name,*args,allow_violation=False):
@@ -117,7 +129,7 @@ def main():
     assert not any(i[1]=='mrs' and i[2].split(', ')[1] not in ['tpidrro_el0'] for i in m.ops[before:])
     m.el1=True;m.call('ss_latency_cause_irq_begin',1,30);assert not m.call('ss_latency_cause_core_ready',1)
     results.append('unarmed, EL0 and wrong-core IRQs cannot configure a PMU')
-    m=Model(image);m.setup();assert m.row(0)[3]&0x4f==0x41 and m.row(0)[4]==4 and m.row(0)[6]==CC
+    m=Model(image);m.setup();assert m.row(0)[3]&0x4f==0x41 and m.row(0)[4]==4 and m.row(0)[6]==CC|EVENTS
     cc=m.regs['pmccntr_el0'];m.call('ss_latency_cause_irq_end',0);m.call('ss_latency_cause_irq_begin',0,30)
     assert m.regs['pmccntr_el0']>cc
     m=Model(image,mismatch=True)
@@ -192,12 +204,12 @@ def main():
     assert m.readq(bench+88,15)==(64,)*15
     results.append('960 quiet samples, 384 SGI acknowledgments, no sample while pending, and real empty C-hook calibration')
     m=Model(image);m.setup();m.el1=False
-    assert not m.call('ss_latency_cause_snapshot',OUTPUT,13904)
+    assert not m.call('ss_latency_cause_snapshot',OUTPUT,16432)
     assert m.readq(OUTPUT,8)[7]==2
     m.call('ss_latency_cause_freeze',1);assert m.call('ss_latency_cause_core_ready',0)
     for c in range(8):m.core=c;m.call('ss_latency_cause_freeze',c)
-    assert m.call('ss_latency_cause_snapshot',OUTPUT,13904)==1
-    assert m.readq(OUTPUT,8)[:7]==(0x5353434155534531,1,13904,8,2,15,64)
+    assert m.call('ss_latency_cause_snapshot',OUTPUT,16432)==1
+    assert m.readq(OUTPUT,8)[:7]==(0x5353434155534531,2,16432,8,2,15,64)
     results.append('EL0-safe own-core freeze, wrong-core rejection and all-core snapshot acknowledgments')
     r={'passed':True,'cases':results,'leaf_boundaries':boundaries,'image':str(image),'image_sha256':hashlib.sha256(image.read_bytes()).hexdigest(),'physical_access':False}
     (out/'report.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r,indent=2))

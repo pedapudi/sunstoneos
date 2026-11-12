@@ -20,6 +20,13 @@
 #endif
 
 #define LATENCY_CORES 8U
+/* The manifest's output_limit (apps/latency/cmake/application.cmake): traced
+ * and control profiles declare 131072 bytes, the cause profile 147456. */
+#ifdef SUNSTONE_LATENCY_CAUSE
+#define LATENCY_RESULT_LIMIT 147456U
+#else
+#define LATENCY_RESULT_LIMIT 131072U
+#endif
 #define LATENCY_IDLE_SAMPLES 64U
 #define LATENCY_BUSY_SAMPLES 128U
 #define LATENCY_BYTES_PER_CORE (1024U * 1024U)
@@ -82,7 +89,7 @@ _Static_assert(offsetof(struct latency_result, core) == 320 &&
 #else
     offsetof(struct latency_result, scheduler) == 63872 &&
 #endif
-    sizeof(struct latency_result) <= 131072,
+    sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT,
 #elif defined(SUNSTONE_LATENCY_CONTROL)
     offsetof(struct latency_result, control) == 63872 &&
     sizeof(struct latency_result) == 63872 + 17536,
@@ -95,7 +102,7 @@ _Static_assert(offsetof(struct latency_result, core) == 320 &&
 #ifdef SUNSTONE_LATENCY_CONTROL
 _Static_assert(offsetof(struct latency_result, control) % 64 == 0 &&
     sizeof(struct latency_result) == offsetof(struct latency_result, control) + 17536 &&
-    sizeof(struct latency_result) <= 131072, "control report tail layout");
+    sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT, "control report tail layout");
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
 _Static_assert(offsetof(struct latency_result, control) ==
     ((offsetof(struct latency_result, scheduler) + sizeof(struct ss_sched_trace_report) + 63u) & ~(size_t)63u),
@@ -106,11 +113,11 @@ _Static_assert(offsetof(struct latency_result, control) ==
 #ifdef SUNSTONE_SCHED_PMU
 _Static_assert(offsetof(struct latency_result, pmu_windows) % 64 == 0 &&
     sizeof(struct latency_result) == offsetof(struct latency_result, pmu_windows) + 11712 &&
-    sizeof(struct latency_result) <= 131072, "scheduler PMU report tail layout");
+    sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT, "scheduler PMU report tail layout");
 #endif
 
 #ifdef SUNSTONE_LATENCY_CAUSE
-_Static_assert(sizeof(struct latency_result) <= 131072 &&
+_Static_assert(sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT &&
     offsetof(struct latency_result, cause_footer) + 64 == sizeof(struct latency_result),
     "cause diagnostic and footer fit the declared result region");
 #endif

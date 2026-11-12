@@ -12,6 +12,8 @@ extern void *memcpy(void *,const void *,size_t);
 #define ISB() __asm__ volatile("isb" ::: "memory")
 #define CC_ENABLE (UINT64_C(1) << 31)
 #define DEPTHS (configUNIQUE_INTERRUPT_PRIORITIES + 1u)
+#define EVENTS SS_LATENCY_CAUSE_EVENTS
+#define EVENT_ENABLE ((UINT64_C(1) << EVENTS) - 1)
 /* The A733 configuration defines the SGI value in FreeRTOSConfig.h. The QEMU
  * model relies on the port's default in port.c, which this file cannot see, so
  * the same default (target-list bit, Aff1 zero) is repeated here. */
@@ -30,6 +32,8 @@ struct cause_state {
     unsigned depth, tick_depth, release_depth, release_target, phase;
     unsigned state_depth, state_target, mask_depth;
     struct ss_latency_cause_tick tick;
+    uint64_t ev_tick_begin[EVENTS], ev_begin[EVENTS], ev_tick[EVENTS];
+    uint64_t ev_release[SS_LATENCY_CAUSE_CORES][EVENTS], ev_scan[SS_LATENCY_CAUSE_CORES][EVENTS];
     struct sgi_scope sgi[DEPTHS];
 };
 static struct cause_state state[SS_LATENCY_CAUSE_CORES];
@@ -55,6 +59,18 @@ static bool active(unsigned core)
 }
 static uint64_t cycles(void)
 { ISB(); return READ(pmccntr_el0); }
+static const uint64_t event_types[EVENTS] = {SS_LATENCY_CAUSE_EVENT_TYPES};
+static void events_now(uint64_t e[EVENTS])
+{
+    e[0]=READ(pmevcntr0_el0);e[1]=READ(pmevcntr1_el0);e[2]=READ(pmevcntr2_el0);
+    e[3]=READ(pmevcntr3_el0);e[4]=READ(pmevcntr4_el0);
+}
+/* Event counters are 32 bits wide; differences are modular. */
+static void events_since(uint64_t out[EVENTS], const uint64_t begin[EVENTS])
+{
+    uint64_t now[EVENTS];events_now(now);
+    for (unsigned i=0;i<EVENTS;++i) out[i]=(now[i]-begin[i])&UINT32_MAX;
+}
 static void add(uint64_t *p,uint64_t v)
 { __atomic_fetch_add(p,v,__ATOMIC_RELAXED); }
 static void maximum(uint64_t *p,uint64_t v)
@@ -69,6 +85,7 @@ void ss_latency_cause_arm(void)
         .phases=SS_LATENCY_CAUSE_PHASES,.cases=SS_CAUSE_CASES,.samples=SS_LATENCY_CAUSE_SAMPLES,
         .flags=SS_CAUSE_RAW|SS_CAUSE_COMPONENT_OBSERVER_INCLUDED|SS_CAUSE_BENCH_IRQ_MASKED};
     for (unsigned c=0;c<SS_LATENCY_CAUSE_CORES;++c) report.core[c].status=SS_CAUSE_UNARMED;
+    for (unsigned i=0;i<EVENTS;++i) report.events.types[i]=event_types[i];
     atomic_store_explicit(&armed,1,memory_order_release);
 }
 bool ss_latency_cause_core_ready(unsigned core)
@@ -114,14 +131,21 @@ static void configure(unsigned core)
     uint64_t all=((UINT64_C(1)<<n)-1)|CC_ENABLE;
     WRITE(pmcntenclr_el0,all);WRITE(pmintenclr_el1,all);WRITE(pmovsclr_el0,all);
     WRITE(pmccfiltr_el0,0);WRITE(pmuserenr_el0,4);
-    WRITE(pmcr_el0,(pmcr|UINT64_C(0x41))&~UINT64_C(0x0e));
-    WRITE(pmccntr_el0,0);WRITE(pmcntenset_el0,CC_ENABLE);ISB();
+    if (n>=EVENTS) {
+        /* Count at EL0 and EL1 (filter bits zero), as the cycle counter does. */
+        WRITE(pmevtyper0_el0,event_types[0]);WRITE(pmevtyper1_el0,event_types[1]);
+        WRITE(pmevtyper2_el0,event_types[2]);WRITE(pmevtyper3_el0,event_types[3]);
+        WRITE(pmevtyper4_el0,event_types[4]);
+    }
+    WRITE(pmcr_el0,(pmcr|UINT64_C(0x43))&~UINT64_C(0x0c));
+    WRITE(pmccntr_el0,0);WRITE(pmcntenset_el0,CC_ENABLE|(n>=EVENTS?EVENT_ENABLE:0));ISB();
+    report.events.pmceid0[core]=READ(pmceid0_el0);
     r->midr=READ(midr_el1);r->mpidr=READ(mpidr_el1);r->pmcr=READ(pmcr_el0);
     r->userenr=READ(pmuserenr_el0);r->filter=READ(pmccfiltr_el0);
     r->enabled=READ(pmcntenset_el0);r->overflow=READ(pmovsclr_el0);
     r->icc_ctlr=READ(icc_ctlr_el1);r->pmr=READ(icc_pmr_el1);
-    r->status=((r->pmcr&0x4f)==0x41 && r->userenr==4 && !r->filter &&
-        (r->enabled&all)==CC_ENABLE && !(READ(pmintenset_el1)&all) && !(r->overflow&all))?
+    r->status=(n>=EVENTS && (r->pmcr&0x4f)==0x41 && r->userenr==4 && !r->filter &&
+        (r->enabled&all)==(CC_ENABLE|EVENT_ENABLE) && !(READ(pmintenset_el1)&all) && !(r->overflow&all))?
         SS_CAUSE_OK:SS_CAUSE_CONFIG;
     if (r->status==SS_CAUSE_OK) {
         r->cycle_begin=cycles();r->tick_begin=READ(cntpct_el0);r->ready=1;
@@ -147,7 +171,8 @@ void ss_latency_cause_irq_end(unsigned core)
     if (!active(core) || !own_el1(core) || !state[core].depth) return;
     uint64_t saved=READ(daif);__asm__ volatile("msr daifset, #2" ::: "memory");
     report.core[core].cycle_end=cycles();report.core[core].tick_end=READ(cntpct_el0);
-    report.core[core].overflow=READ(pmovsclr_el0);
+    /* Only the 64-bit cycle counter must not wrap; event differences are modular. */
+    report.core[core].overflow=READ(pmovsclr_el0)&CC_ENABLE;
     if (report.core[core].overflow&CC_ENABLE) report.core[core].status=SS_CAUSE_CONFIG;
     --state[core].depth;
     WRITE(daif,saved);
@@ -160,6 +185,7 @@ void ss_latency_cause_tick_begin(void)
     s->tick_depth=s->depth;
     uint64_t saved=READ(daif);__asm__ volatile("msr daifset, #2" ::: "memory");
     s->tick.interrupted=ss_latency_cause_irq_count(0);
+    events_now(s->ev_tick_begin);
     s->tick.begin_tick=READ(cntpct_el0);s->tick.begin_cycles=cycles();
     WRITE(daif,saved);
 }
@@ -169,6 +195,7 @@ void ss_latency_cause_release_begin(unsigned target,unsigned phase)
     if (target>=SS_LATENCY_CAUSE_CORES || !active(0) || own()!=0 ||
         !s->tick_depth || s->depth!=s->tick_depth || s->release_depth) return;
     s->phase=phase;s->release_target=target;s->release_depth=s->depth;
+    events_now(s->ev_begin);
     s->tick.target[target].release_begin=cycles();
 }
 void ss_latency_cause_release_end(unsigned target)
@@ -177,7 +204,7 @@ void ss_latency_cause_release_end(unsigned target)
     struct cause_state *s=&state[0];
     if (target>=SS_LATENCY_CAUSE_CORES || !active(0) || own()!=0 ||
         s->release_depth!=s->depth || !s->release_depth || s->release_target!=target) return;
-    end=cycles();
+    end=cycles();events_since(s->ev_release[target],s->ev_begin);
     struct ss_latency_cause_tick_target *t=&s->tick.target[target];
     t->release_end=end;s->tick.release_mask|=UINT64_C(1)<<target;
     if (s->phase<SS_LATENCY_CAUSE_PHASES) {
@@ -195,6 +222,7 @@ void ss_latency_cause_state_begin(unsigned target)
     if (target>=SS_LATENCY_CAUSE_CORES || !active(0) || own()!=0 ||
         !s->tick_depth || s->depth!=s->tick_depth || s->state_depth) return;
     s->state_target=target;s->state_depth=s->depth;
+    events_now(s->ev_begin);
     s->tick.target[target].state_begin=cycles();
 }
 void ss_latency_cause_state_end(unsigned target,unsigned ds,uint64_t deadline,uint64_t slice,bool due)
@@ -203,7 +231,7 @@ void ss_latency_cause_state_end(unsigned target,unsigned ds,uint64_t deadline,ui
     struct cause_state *s=&state[0];
     if (target>=SS_LATENCY_CAUSE_CORES || !active(0) || own()!=0 ||
         !s->state_depth || s->state_depth!=s->depth || target!=s->state_target) return;
-    end=cycles();
+    end=cycles();events_since(s->ev_scan[target],s->ev_begin);
     struct ss_latency_cause_tick_target *t=&s->tick.target[target];
     t->state_end=end;t->deadline_state=ds;t->deadline=deadline;t->slice_deadline=slice;t->due=due;
     s->tick.state_mask|=UINT64_C(1)<<target;
@@ -345,13 +373,37 @@ void ss_latency_cause_tick_end(void)
     if (!active(0) || !own_el1(0) || !s->tick_depth || s->depth!=s->tick_depth) return;
     uint64_t saved=READ(daif);__asm__ volatile("msr daifset, #2" ::: "memory");
     uint64_t end=cycles(),tick=READ(cntpct_el0);
+    events_since(s->ev_tick,s->ev_tick_begin);
     s->tick.end_cycles=end;s->tick.end_tick=tick;
     s->tick.interrupted=ss_latency_cause_irq_count(0)-s->tick.interrupted;
     WRITE(daif,saved);
     uint64_t count=report.tick.count+1;
     if (s->tick.release_mask==255 && s->tick.state_mask==255) {
-        if (end-s->tick.begin_cycles>report.tick.end_cycles-report.tick.begin_cycles) report.tick=s->tick;
+        struct ss_latency_cause_events *e=&report.events;
+        if (end-s->tick.begin_cycles>report.tick.end_cycles-report.tick.begin_cycles) {
+            report.tick=s->tick;
+            memcpy(e->tick,s->ev_tick,sizeof(e->tick));
+            memcpy(e->release,s->ev_release,sizeof(e->release));
+            memcpy(e->scan,s->ev_scan,sizeof(e->scan));
+        }
         report.tick.count=count;
+        if (s->phase<SS_LATENCY_CAUSE_PHASES) {
+            unsigned p=s->phase;
+            uint64_t outside=end-s->tick.begin_cycles,outside_ev[EVENTS];
+            memcpy(outside_ev,s->ev_tick,sizeof(outside_ev));
+            for (unsigned t=0;t<SS_LATENCY_CAUSE_CORES;++t) {
+                const struct ss_latency_cause_tick_target *x=&s->tick.target[t];
+                uint64_t rel=x->release_end-x->release_begin,scan=x->state_end-x->state_begin;
+                outside-=rel+scan;
+                e->phase_release_cycles[p][t]+=rel;e->phase_scan_cycles[p][t]+=scan;
+                for (unsigned i=0;i<EVENTS;++i) {
+                    e->phase_release[p][t][i]+=s->ev_release[t][i];e->phase_scan[p][t][i]+=s->ev_scan[t][i];
+                    outside_ev[i]-=s->ev_release[t][i]+s->ev_scan[t][i];
+                }
+            }
+            ++e->phase_ticks[p];e->phase_cycles[p]+=end-s->tick.begin_cycles;e->phase_outside_cycles[p]+=outside;
+            for (unsigned i=0;i<EVENTS;++i) { e->phase_events[p][i]+=s->ev_tick[i];e->phase_outside[p][i]+=outside_ev[i]; }
+        }
     }
     s->tick_depth=0;
     bench_step();

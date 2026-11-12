@@ -21,7 +21,9 @@ SCHED_PMU_STATUS = ('ok', 'unarmed', 'not_el1', 'wrong_core', 'nested',
                     'not_active', 'wrong_cookie', 'no_counters',
                     'config_mismatch', 'not_prepared', 'frozen', 'overflow')
 CAUSE_MAGIC = 0x5353434155534531
-CAUSE_BYTES = 13904
+CAUSE_BYTES = 16432
+CAUSE_EVENTS = ('l1i_refill', 'l1d_refill', 'l2d_refill', 'l3d_refill', 'stall_backend')
+CAUSE_EVENT_TYPES = (0x01, 0x03, 0x17, 0x2a, 0x24)
 CAUSE_FOOTER_MAGIC = 0x5353434155534631
 CAUSE_PING_MAGIC = 0x535350494e473031
 CAUSE_PING_BYTES = 3392
@@ -733,7 +735,7 @@ def decode_latency_cause(payload, frequency):
         return result
 
     header = take('magic version bytes cores phases cases samples flags')
-    if tuple(header.values())[:7] != (CAUSE_MAGIC, 1, CAUSE_BYTES, 8, 2, 15, 64) or header['flags'] != 13:
+    if tuple(header.values())[:7] != (CAUSE_MAGIC, 2, CAUSE_BYTES, 8, 2, 15, 64) or header['flags'] != 13:
         raise ValueError('latency cause header is invalid or its snapshot is incomplete')
     cores = []
     for core in range(8):
@@ -741,7 +743,7 @@ def decode_latency_cause(payload, frequency):
                    'icc_ctlr pmr sgi_irq_count cycle_begin tick_begin cycle_end tick_end')
         if (row['status'] or row['ready'] != 1 or row['frozen'] != 1 or row['overflow'] or
                 row['pmcr'] & 0x4f != 0x41 or row['userenr'] != 4 or row['filter'] or
-                row['enabled'] != 1 << 31 or row['cycle_end'] <= row['cycle_begin'] or
+                row['enabled'] != (1 << 31) | 0x1f or row['cycle_end'] <= row['cycle_begin'] or
                 row['tick_end'] <= row['tick_begin']):
             raise ValueError(f'cause core {core} configuration or clock interval is invalid')
         row.update(core=core, pmhe=bool(row['icc_ctlr'] & (1 << 6)),
@@ -818,12 +820,66 @@ def decode_latency_cause(payload, frequency):
     for name, count in zip(CAUSE_CASES, counts):
         cases[name] = cycle_distribution(words[offset:offset + count])
         offset += 64
+    bench['cases'] = cases
+
+    def grid(*shape):
+        nonlocal offset
+        count = 1
+        for extent in shape:
+            count *= extent
+        flat = list(words[offset:offset + count])
+        offset += count
+        for extent in reversed(shape[1:]):
+            flat = [flat[i:i + extent] for i in range(0, len(flat), extent)]
+        return flat
+
+    types = grid(5)
+    if tuple(types) != CAUSE_EVENT_TYPES:
+        raise ValueError('cause event types differ from the declared counters')
+    pmceid0 = grid(8)
+    for core, value in enumerate(pmceid0):
+        missing = [name for name, event in zip(CAUSE_EVENTS, CAUSE_EVENT_TYPES) if not value >> event & 1]
+        if missing:
+            raise ValueError(f'cause core {core} does not implement {missing}')
+    ev_tick, ev_release, ev_scan = grid(5), grid(8, 5), grid(8, 5)
+    phase_ticks, phase_cycles, phase_outside_cycles = grid(2), grid(2), grid(2)
+    phase_events, phase_outside = grid(2, 5), grid(2, 5)
+    phase_release_cycles, phase_scan_cycles = grid(2, 8), grid(2, 8)
+    phase_release, phase_scan = grid(2, 8, 5), grid(2, 8, 5)
     if offset != len(words):
         raise ValueError('cause decoder and wire report disagree')
-    bench['cases'] = cases
+
+    def named(values, divisor=1):
+        return {name: value / divisor for name, value in zip(CAUSE_EVENTS, values)}
+    for target, row in enumerate(targets):
+        row['release_events'] = named(ev_release[target])
+        row['deadline_scan_events'] = named(ev_scan[target])
+    outside_events = [ev_tick[i] - sum(ev_release[t][i] + ev_scan[t][i] for t in range(8)) for i in range(5)]
+    if any(value < 0 for value in outside_events):
+        raise ValueError('cause segment events exceed their tick')
+    tick['events'] = named(ev_tick)
+    tick['outside_events'] = named(outside_events)
+    complete = {}
+    for index, phase in enumerate(('idle', 'busy')):
+        n = phase_ticks[index]
+        if not n:
+            complete[phase] = {'ticks': 0}
+            continue
+        complete[phase] = {
+            'ticks': n, 'mean_cycles': phase_cycles[index] / n,
+            'mean_events': named(phase_events[index], n),
+            'mean_outside_cycles': phase_outside_cycles[index] / n,
+            'mean_outside_events': named(phase_outside[index], n),
+            'targets': [{'target': t, 'mean_release_cycles': phase_release_cycles[index][t] / n,
+                         'mean_release_events': named(phase_release[index][t], n),
+                         'mean_scan_cycles': phase_scan_cycles[index][t] / n,
+                         'mean_scan_events': named(phase_scan[index][t], n)} for t in range(8)]}
+    events = {'types': dict(zip(CAUSE_EVENTS, types)), 'complete_ticks': complete,
+              'scope': 'raw counts with hook bookkeeping included; L3D refill is core-attributable; '
+                       'phase means cover ticks with all eight releases and scans'}
     bench['extra_sgi_observations'] = bench['sgi_observed'] - bench['sgi_sends']
     return {'header': header, 'cores': cores, 'sgi': sends, 'phases': phases,
-            'tick': tick, 'benchmark': bench,
+            'tick': tick, 'benchmark': bench, 'events': events,
             'component_scope': 'raw instrumented cycles; hook bookkeeping and its interaction with DSB remain included',
             'benchmark_scope': 'one IRQ-masked leaf sample per tick; matching blank and common endpoint ISB included; stores follow endpoint',
             'sgi_scope': 'raw and context-synchronized arms differ; SGI-only does not establish target delivery',

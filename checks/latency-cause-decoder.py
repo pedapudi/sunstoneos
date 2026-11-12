@@ -23,11 +23,11 @@ def main():
     cases = []
 
     def payload():
-        w = [host.CAUSE_MAGIC, 1, host.CAUSE_BYTES, 8, 2, 15, 64, 13]
+        w = [host.CAUSE_MAGIC, 2, host.CAUSE_BYTES, 8, 2, 15, 64, 13]
         for core in range(8):
             mhz = 1794 if core < 6 else 2002
             w.extend([0, 0x414fd050 if core < 6 else 0x414fd0b0, core << 8,
-                      0x3041, 4, 0, 1 << 31, 0, 1000, 1, 1, 0x40, 255, 500,
+                      0x3041, 4, 0, (1 << 31) | 0x1f, 0, 1000, 1, 1, 0x40, 255, 500,
                       1000, 1000, 1000 + mhz * 10000, 241000])
         w.extend([0] * (8 * 8 * 4))
         for count in (64, 128):
@@ -46,6 +46,18 @@ def main():
         w.extend([64] * 15)
         for case in range(15):
             w.extend(range(20 + case, 84 + case))
+        w.extend(host.CAUSE_EVENT_TYPES)
+        w.extend([(1 << 0x01) | (1 << 0x03) | (1 << 0x17) | (1 << 0x24) | (1 << 0x2a)] * 8)
+        w.extend([400, 300, 200, 100, 9000])
+        w.extend([10, 8, 6, 4, 500] * 8)
+        w.extend([1, 1, 1, 1, 50] * 8)
+        w.extend([64, 128, 64 * 20000, 128 * 300000, 64 * 5000, 128 * 90000])
+        w.extend([64 * 40, 64 * 30, 64 * 20, 64 * 10, 64 * 5000, 128 * 400, 128 * 300, 128 * 200, 128 * 100, 128 * 200000])
+        w.extend([64 * 10, 64 * 8, 64 * 6, 64 * 4, 64 * 1000, 128 * 100, 128 * 80, 128 * 60, 128 * 40, 128 * 60000])
+        w.extend([64 * 1500] * 8 + [128 * 20000] * 8)
+        w.extend([64 * 100] * 8 + [128 * 1000] * 8)
+        w.extend([64 * 3, 64 * 2, 64 * 1, 64 * 1, 64 * 400] * 8 + [128 * 30, 128 * 20, 128 * 10, 128 * 8, 128 * 15000] * 8)
+        w.extend([64, 64, 64, 64, 64] * 8 + [128, 128, 128, 128, 128] * 8)
         assert len(w) * 8 == host.CAUSE_BYTES
         return bytearray(struct.pack('<' + 'Q' * len(w), *w))
 
@@ -62,6 +74,11 @@ def main():
     assert result['tick']['top_clock_consistent']
     assert 'wall_cycle_ratio_mhz' in result['cores'][0] and 'effective_mhz' not in result['cores'][0]
     cases.append('separate raw cases, correlated components and active-clock scope')
+    busy = result['events']['complete_ticks']['busy']
+    assert busy['ticks'] == 128 and busy['mean_events']['l2d_refill'] == 200
+    assert busy['targets'][0]['mean_release_events']['l3d_refill'] == 8
+    assert result['tick']['outside_events']['l1i_refill'] == 400 - 8 * 11
+    cases.append('per-segment refill counts and complete-tick phase means')
 
     def refused(name, word, value, reason):
         data = payload()
@@ -81,6 +98,11 @@ def main():
     refused('unacknowledged benchmark SGI', bench + 4, 383, 'incomplete')
     refused('incomplete observer control', bench + 7, 63, 'incomplete')
     refused('missing barrier samples', bench + 11, 63, 'incomplete')
+    events = bench + 11 + 15 + 15 * 64
+    refused('wrong event type', events, 0x02, 'event types')
+    refused('unimplemented event', events + 5 + 3, 1 << 0x03, 'does not implement')
+    refused('segment events exceed tick', events + 13 + 2, 1, 'exceed their tick')
+    refused('event counters disabled', 8 + 6, 1 << 31, 'configuration')
     harness.refused(lambda: decode(original[:-8]), 'size', ValueError)
     cases.append('truncated cause report')
 

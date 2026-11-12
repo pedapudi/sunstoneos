@@ -9,6 +9,10 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${latency_manife
 file(READ "${latency_manifest}" latency_manifest_json)
 if(SUNSTONE_SCHED_LATENCY_TRACE OR SUNSTONE_LATENCY_CONTROL)
   string(JSON latency_manifest_json SET "${latency_manifest_json}" output_limit 131072)
+  if(SUNSTONE_LATENCY_CAUSE)
+    # The cause report's event section; LATENCY_RESULT_LIMIT in workload.h matches.
+    string(JSON latency_manifest_json SET "${latency_manifest_json}" output_limit 147456)
+  endif()
   if(SUNSTONE_LATENCY_CONTROL)
     string(JSON latency_manifest_json SET "${latency_manifest_json}" deadlines run_us 15000000)
   endif()

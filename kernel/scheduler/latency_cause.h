@@ -6,10 +6,15 @@
 #include <stdint.h>
 
 #define SS_LATENCY_CAUSE_MAGIC UINT64_C(0x5353434155534531)
-#define SS_LATENCY_CAUSE_VERSION 1u
+#define SS_LATENCY_CAUSE_VERSION 2u
 #define SS_LATENCY_CAUSE_CORES 8u
 #define SS_LATENCY_CAUSE_PHASES 2u
 #define SS_LATENCY_CAUSE_SAMPLES 64u
+/* Event counters 0-4: L1I refill, L1D refill, L2D refill, attributable L3D
+ * refill and backend stall cycles. The counters are 32 bits wide; every
+ * recorded value is a modular difference and the decoder needs no overflow. */
+#define SS_LATENCY_CAUSE_EVENTS 5u
+#define SS_LATENCY_CAUSE_EVENT_TYPES 0x01u, 0x03u, 0x17u, 0x2au, 0x24u
 
 enum ss_latency_cause_case {
     SS_CAUSE_BLANK, SS_CAUSE_ISB, SS_CAUSE_DSB_ISH, SS_CAUSE_DSB_SY,
@@ -63,6 +68,23 @@ struct ss_latency_cause_bench {
     uint64_t count[SS_CAUSE_CASES];
     uint64_t cycles[SS_CAUSE_CASES][SS_LATENCY_CAUSE_SAMPLES];
 };
+/* Event differences per segment. The retained tick's rows match its cycle
+ * stamps. Phase rows sum complete ticks only (all eight releases and scans);
+ * outside is the tick minus its releases and scans. */
+struct ss_latency_cause_events {
+    uint64_t types[SS_LATENCY_CAUSE_EVENTS], pmceid0[SS_LATENCY_CAUSE_CORES];
+    uint64_t tick[SS_LATENCY_CAUSE_EVENTS];
+    uint64_t release[SS_LATENCY_CAUSE_CORES][SS_LATENCY_CAUSE_EVENTS];
+    uint64_t scan[SS_LATENCY_CAUSE_CORES][SS_LATENCY_CAUSE_EVENTS];
+    uint64_t phase_ticks[SS_LATENCY_CAUSE_PHASES], phase_cycles[SS_LATENCY_CAUSE_PHASES];
+    uint64_t phase_outside_cycles[SS_LATENCY_CAUSE_PHASES];
+    uint64_t phase_events[SS_LATENCY_CAUSE_PHASES][SS_LATENCY_CAUSE_EVENTS];
+    uint64_t phase_outside[SS_LATENCY_CAUSE_PHASES][SS_LATENCY_CAUSE_EVENTS];
+    uint64_t phase_release_cycles[SS_LATENCY_CAUSE_PHASES][SS_LATENCY_CAUSE_CORES];
+    uint64_t phase_scan_cycles[SS_LATENCY_CAUSE_PHASES][SS_LATENCY_CAUSE_CORES];
+    uint64_t phase_release[SS_LATENCY_CAUSE_PHASES][SS_LATENCY_CAUSE_CORES][SS_LATENCY_CAUSE_EVENTS];
+    uint64_t phase_scan[SS_LATENCY_CAUSE_PHASES][SS_LATENCY_CAUSE_CORES][SS_LATENCY_CAUSE_EVENTS];
+};
 struct ss_latency_cause_report {
     uint64_t magic, version, bytes, cores, phases, cases, samples, flags;
     struct ss_latency_cause_core core[SS_LATENCY_CAUSE_CORES];
@@ -70,8 +92,10 @@ struct ss_latency_cause_report {
     struct ss_latency_cause_target target[SS_LATENCY_CAUSE_PHASES][SS_LATENCY_CAUSE_CORES];
     struct ss_latency_cause_tick tick;
     struct ss_latency_cause_bench bench;
+    struct ss_latency_cause_events events;
 };
-_Static_assert(sizeof(struct ss_latency_cause_report) == 13904u, "cause report wire layout");
+_Static_assert(sizeof(struct ss_latency_cause_events) == 2528u, "cause event section layout");
+_Static_assert(sizeof(struct ss_latency_cause_report) == 16432u, "cause report wire layout");
 
 #ifdef SUNSTONE_LATENCY_CAUSE
 #if !defined(SUNSTONE_LATENCY) || !defined(SUNSTONE_SCHED_LATENCY_TRACE)
