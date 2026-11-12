@@ -37,9 +37,13 @@ _Static_assert(SS_SCHED_TRACE_TICKS <= UINT32_MAX, "tick capacity must not overl
 /* All timestamps use CNTVCT. A command retains the timestamps after masking,
  * reference, publish, before/after drain, after slice refresh and before unmask.
  * Flags: bit 0 self, bit 1 ISR, bit 2 running scheduler, bit 3 deferred,
- * bit 4 local drain, bit 5 handle admission failed. Version 5 bit 6 marks a
- * direct self-suspend: stamps 0..2 cover unmasked reference/publication;
- * stamps 3..6 cover masked local mark, saved-frame entry and selection. */
+ * bit 4 local drain, bit 5 handle admission failed. Version 5 bit 6 marks atomic
+ * self-suspend timing: flags 69 cover unmasked reference/publication (0..2),
+ * masked local mark (3..4), saved-frame entry (4..5) and selection (5..6).
+ * Flags 85 cover an already-fulfilled request without local selection; flags
+ * 93 cover a deferred local commit under an inherited mask or lock. Both repeat
+ * stamp 4 into 5 and 6; deferred stamps 0..2 precede the local guard but need
+ * not be unmasked. Every atomic form ranks its local guarded interval 3..6. */
 struct ss_sched_trace_command {
     uint64_t command, slot, flags, stamp[7];
 };

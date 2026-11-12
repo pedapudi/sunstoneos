@@ -143,6 +143,18 @@ int main(int argc, char **argv)
     clock_value = 10010; ss_sched_trace_direct_suspend_mark(7);
     clock_value = 10020; ss_sched_trace_switch_begin(7);
     clock_value = 10040; ss_sched_trace_switch_end(7, 4);
+    struct ss_sched_trace_command immediate = {.command = 2, .slot = 3, .flags = 85,
+        .stamp = {20000, 20010, 20020, 21000, 21020, 21020, 21020}};
+    ss_sched_trace_command(5, &immediate); ss_sched_trace_command(7, &immediate);
+    immediate = (struct ss_sched_trace_command){.command = 2, .slot = 3, .flags = 85,
+        .stamp = {22000, 22010, 22020, 22030, 22070, 22070, 22070}};
+    ss_sched_trace_command(5, &immediate); ss_sched_trace_command(7, &immediate);
+    struct ss_sched_trace_command deferred = {.command = 2, .slot = 3, .flags = 93,
+        .stamp = {23000, 23010, 23020, 25000, 25030, 25030, 25030}};
+    ss_sched_trace_command(6, &deferred); ss_sched_trace_command(7, &deferred);
+    deferred = (struct ss_sched_trace_command){.command = 2, .slot = 3, .flags = 93,
+        .stamp = {26000, 26010, 26020, 26030, 26080, 26080, 26080}};
+    ss_sched_trace_command(6, &deferred); ss_sched_trace_command(7, &deferred);
     clock_value = 11000; ss_sched_trace_drain_begin(6);
     const struct ss_sched_trace_record busy = {.slot = 3,
         .phase = SS_SCHED_RECORD_FIFO_BUSY,
@@ -180,7 +192,11 @@ int main(int argc, char **argv)
     assert(report.core[7].self_suspend.flags == 69 && report.core[7].self_suspend.stamp[6] == 9090 &&
            "direct maximum must use masked C duration rather than unmasked delay");
     assert(report.core[7].self_suspend.stamp[4] == 9040 && report.core[7].self_suspend.stamp[5] == 9060);
-    assert(report.core[7].command.stamp[6] == 10040);
+    assert(report.core[7].command.stamp[6] == 25030);
+    assert(report.core[5].self_suspend.stamp[6] == 22070 &&
+           "immediate atomic maximum must exclude unmasked prefix delay");
+    assert(report.core[6].self_suspend.stamp[6] == 26080 &&
+           "deferred atomic maximum must exclude the prefix before its local guard");
     assert(report.core[7].command_stage_max[0] == 10 && report.core[7].command_stage_max[1] == 10);
     assert(!report.core[7].command_stage_max[2] && !report.core[7].command_stage_max[3]);
     assert(report.core[6].drain.count == 1 && report.core[6].drain.record[0].phase == SS_SCHED_RECORD_FIFO_BUSY);

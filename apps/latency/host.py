@@ -84,17 +84,25 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
         def duration(first, last):
             return stamp[last] - stamp[first] if stamp[first] and stamp[last] else 0
         direct = bool(flags & 64)
-        if direct and (version != 5 or kind != 2 or flags & 63 != 5 or not all(stamp)):
+        if direct and (version != 5 or kind != 2 or flags not in (69, 85, 93) or not all(stamp)):
             raise ValueError('scheduler direct suspension flags or timestamps differ')
+        no_selection = direct and bool(flags & 16)
+        if no_selection and len(set(stamp[4:])) != 1:
+            raise ValueError('scheduler atomic no-selection suspension claims saved-frame stages')
         result = {'command': kind, 'slot': slot, 'flags': flags, 'stamp': stamp,
                   'ticks': duration(0, 6), 'direct_self_suspend': direct,
                   'steps_ticks': dict(zip(('reference', 'publish', 'drain', 'slice'),
                       (duration(0, 1), duration(1, 2), duration(3, 4), duration(4, 5))))}
         if direct:
-            result['steps_ticks'] = dict(zip(('reference', 'publish', 'local_commit', 'save_frame', 'select'),
-                (duration(0, 1), duration(1, 2), duration(3, 4), duration(4, 5), duration(5, 6))))
+            result['steps_ticks'] = dict(zip(('reference', 'publish', 'local_commit'),
+                (duration(0, 1), duration(1, 2), duration(3, 4))))
+            if not no_selection:
+                result['steps_ticks'].update(save_frame=duration(4, 5), select=duration(5, 6))
+            result['selection_recorded'] = not no_selection
+            result['self_suspend_outcome'] = ('deferred_without_selection' if flags & 8 else
+                'completed_before_local_selection' if no_selection else 'selected_replacement')
             result['masked_c_ticks'] = duration(3, 6)
-            result['reference_publication_scope'] = 'before_the_API_mask'
+            result['reference_publication_scope'] = 'before_local_guard' if flags & 8 else 'before_the_API_mask'
         return result
 
     def wait_record():
@@ -135,7 +143,7 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
         row = {'core': core, 'command_count': count,
                'command_stage_max_ticks': dict(zip(('reference', 'publish', 'drain', 'slice'), scalars[:4])),
                'command_stage_max_legacy_only': ['drain', 'slice'] if version == 5 else [],
-               'self_suspend_selection': ('largest direct masked C interval; legacy command interval until a direct sample exists'
+               'self_suspend_selection': ('largest atomic self local guarded C interval; legacy command interval until an atomic sample exists'
                    if version == 5 else 'largest command interval'),
                'irq_count': scalars[4], 'drain_count': scalars[5],
                'wait_count': scalars[6], 'wait_dropped': scalars[7],

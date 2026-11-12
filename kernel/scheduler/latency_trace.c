@@ -88,11 +88,13 @@ void ss_sched_trace_command(unsigned core, const struct ss_sched_trace_command *
     /* SS_K_SUSPEND is command 2; keep its own maximum because this is the
      * measured simultaneous worker shutdown after the busy phase. */
     if (command->command == 2 && (command->flags & 1)) {
-        bool direct = (command->flags & 64) != 0, best_direct = (row->self_suspend.flags & 64) != 0;
-        uint64_t length = direct ? command->stamp[6] - command->stamp[3] : command_ticks(command);
-        uint64_t best = best_direct ? row->self_suspend.stamp[6] - row->self_suspend.stamp[3] :
+        /* Bit 64 also covers immediate and deferred atomic rows. Their prefix
+         * must not replace a longer local guarded interval in another row. */
+        bool masked = (command->flags & 64) != 0, best_masked = (row->self_suspend.flags & 64) != 0;
+        uint64_t length = masked ? command->stamp[6] - command->stamp[3] : command_ticks(command);
+        uint64_t best = best_masked ? row->self_suspend.stamp[6] - row->self_suspend.stamp[3] :
             command_ticks(&row->self_suspend);
-        if ((direct && !best_direct) || (direct == best_direct && length > best)) row->self_suspend = *command;
+        if ((masked && !best_masked) || (masked == best_masked && length > best)) row->self_suspend = *command;
     }
     const uint64_t stage[4] = { command->stamp[1] - command->stamp[0],
         command->stamp[2] - command->stamp[1], command->stamp[4] - command->stamp[3],

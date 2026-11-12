@@ -577,8 +577,21 @@ def run(decode):
         assert record['masked_c_ticks'] == 60 and record['ticks'] == 110
         assert record['steps_ticks'] == dict(reference=10, publish=30, local_commit=10, save_frame=20, select=30)
     accepted('direct suspension separates unmasked admission from masked selection', direct, direct_scope)
+    for flags, outcome in ((85, 'completed_before_local_selection'), (93, 'deferred_without_selection')):
+        immediate = copy.deepcopy(direct)
+        immediate['cores'][1]['self_suspend'] = [2, 3, flags, 1000, 1010, 1040, 1050, 1110, 1110, 1110]
+        def no_selection_scope(value, outcome=outcome, flags=flags):
+            record = value['cores'][1]['self_suspend']
+            assert record['masked_c_ticks'] == 60 and record['ticks'] == 110
+            assert not record['selection_recorded'] and record['self_suspend_outcome'] == outcome
+            assert record['steps_ticks'] == dict(reference=10, publish=30, local_commit=60)
+            assert record['reference_publication_scope'] == ('before_local_guard' if flags & 8 else 'before_the_API_mask')
+        accepted(f'atomic suspension flags {flags} do not claim a saved-frame selection', immediate, no_selection_scope)
+    for flags in (71, 77, 101, 197):
+        bad = copy.deepcopy(direct); bad['cores'][1]['self_suspend'][2] = flags
+        rejected(f'atomic suspension rejects unsupported flags {flags}', pack(bad))
     bad = copy.deepcopy(direct); bad['cores'][1]['self_suspend'][2] |= 16
-    rejected('direct suspension cannot claim a control drain', pack(bad))
+    rejected('atomic no-selection suspension cannot claim saved-frame stages', pack(bad))
     bad = fixture(version=4); bad['cores'][1]['self_suspend'][2] = 69
     rejected('older trace cannot reinterpret direct suspension stamps', pack(bad))
     hole = copy.deepcopy(v5)
@@ -630,6 +643,12 @@ def check_history(source, output):
     assert window['selections'][-1]['origin'] == 'svc'
     assert report['cores'][7]['self_suspend']['masked_c_ticks'] == 60
     assert report['cores'][7]['self_suspend']['steps_ticks']['select'] == 30
+    immediate, deferred = (report['cores'][core]['self_suspend'] for core in (5, 6))
+    assert immediate['flags'] == 85 and immediate['masked_c_ticks'] == 40 and immediate['stamp'][6] == 22070
+    assert immediate['self_suspend_outcome'] == 'completed_before_local_selection' and not immediate['selection_recorded']
+    assert deferred['flags'] == 93 and deferred['masked_c_ticks'] == 50 and deferred['stamp'][6] == 26080
+    assert deferred['self_suspend_outcome'] == 'deferred_without_selection' and not deferred['selection_recorded']
+    assert deferred['reference_publication_scope'] == 'before_local_guard'
     busy = report['cores'][6]['drain']['records'][0]
     assert busy['record_type'] == 'fifo_busy' and busy['fifo_try_ticks'] == 10 and busy['park_ticks'] == 20
     interrupted = decode(interrupted_payload.read_bytes(), FREQUENCY)
@@ -654,9 +673,34 @@ def check_history(source, output):
                          capture_output=True, text=True)
     (output / 'history-reentrant-reset.log').write_text(ran.stdout + ran.stderr)
     assert ran.returncode != 0 and 'nested owner trace must preserve its active parent' in ran.stderr
+    # Model a producer dropping the atomic interval flag on immediate/deferred
+    # rows. Whole-prefix ranking then loses the larger local guarded interval.
+    drop_scope = output / 'history-dropped-atomic-scope.c'
+    admission = ('if (!enabled(core)) return;\n    struct ss_sched_trace_core *row = &trace.core[core];\n'
+                 '    ++row->command_count;')
+    assert text.count(admission) == 1
+    replacement = ('if (!enabled(core)) return;\n'
+        '    struct ss_sched_trace_command without_scope = *command;\n'
+        '    if ((command->flags & 80) == 80) without_scope.flags &= ~UINT64_C(64);\n'
+        '    command = &without_scope;\n    struct ss_sched_trace_core *row = &trace.core[core];\n'
+        '    ++row->command_count;')
+    drop_scope.write_text(text.replace(admission, replacement))
+    drop_binary = output / 'history-dropped-atomic-scope'
+    drop_command = [str(drop_scope) if item == str(recorder) else str(drop_binary) if item == str(binary) else item
+                    for item in command]
+    drop_command.append('-I' + str(source / 'kernel/scheduler'))
+    compiled = subprocess.run(drop_command, capture_output=True, text=True)
+    (output / 'history-dropped-atomic-scope-compile.log').write_text(compiled.stdout + compiled.stderr)
+    compiled.check_returncode()
+    ran = subprocess.run([str(drop_binary), str(output / 'drop-report.bin'), str(output / 'drop-interrupted.bin')],
+                         capture_output=True, text=True)
+    (output / 'history-dropped-atomic-scope.log').write_text(ran.stdout + ran.stderr)
+    assert ran.returncode != 0 and 'immediate atomic maximum must exclude unmasked prefix delay' in ran.stderr
     return ['recorder retains a parked FIFO visit without locked work',
             'recorder rejects nested owner tracing and preserves its parent with guarded dispatch history',
             'recorder rejects the old unconditional nested reset',
+            'recorder immediate/deferred atomic round trips preserve local guarded maxima',
+            'recorder rejects dropping atomic scope and ranking the unmasked prefix',
             'recorder unmasked snapshot excludes an injected future event',
             'recorder unmasked snapshot exposes an injected overwrite without retry',
             'recorder CPU0 dispatch IDs and voluntary selection origin', 'recorder history: future IRQ', 'recorder history: trailing IRQ',
