@@ -327,11 +327,11 @@ def decode(words, epoch, elf=None):
             result['last']['name'] = 'CARD_FEL_GATE'
             value = result['last']['value']
             result['last']['gate_progress'] = {
-                1: 'entry', 2: 'mode checked', 3: 'watchdog disarmed',
+                1: 'entry', 2: 'mode checked', 3: 'watchdog set to the profile mode',
                 4: 'request cleared', 5: 'before ROM branch',
                 0x81: 'refused local cache/MMU state', 0x82: 'refused ROM redirect',
                 0x83: 'refused watchdog mode/configuration/output',
-                0x84: 'request clear readback failed', 0x86: 'watchdog disarm readback failed',
+                0x84: 'request clear readback failed', 0x86: 'watchdog readback differs from the profile mode',
             }.get(value, 'unknown gate progress')
         if result['last']['stage'] == 0x0204:
             value = result['last']['value']

@@ -75,7 +75,8 @@ class Model:
 
     def discover(self, port):
         assert port=='3-1'
-        if self.pending and self.variant!='no-return' and not (self.variant in ('recovery-no-return','recovery-stale') and self.launched):
+        if self.pending and self.variant!='no-return' and not (self.variant in ('recovery-no-return','recovery-stale') and self.launched) \
+                and self.clock>=getattr(self,'reset_at',0):
             self.number += 1
             self.pending = False
         return self.node
@@ -187,8 +188,16 @@ class Model:
                         self.registers[board.crumbs.RTC+0x104] = board.crumbs.RETURN_ROM << 16
                 if self.variant.startswith('recovery-'):
                     recovery=images.load('model_card_recovery',ROOT/'tools/card_recovery.py')
+                    assert args[i]=='exe' and kw['timeout']==recovery.EXE_SECONDS
                     self.registers[recovery.RTC_FLAG]=0
                     self.registers[board.crumbs.RTC+0x104]=0x0c020005
+                    # The gate re-arms WDT0 at 16 s instead of disarming it.
+                    self.registers[board.crumbs.WDT_MODE]=recovery.GATE_WATCHDOG
+                    if self.variant=='recovery-no-reenumerate':
+                        # The ROM never re-enumerates; WDT0 expires and resets to FEL, leaving mode 1.
+                        self.registers[board.crumbs.WDT_MODE]=1
+                        self.reset_at=self.clock+recovery.INTERVAL_SECONDS
+                    if self.variant=='recovery-late':self.reset_at=self.clock+recovery.INTERVAL_SECONDS
                     if self.variant=='recovery-progress':self.registers[board.crumbs.RTC+0x104]=0x0c020004
                     if self.variant=='recovery-tag':self.registers[board.crumbs.RTC+0x100]^=1
                     if self.variant=='recovery-flag':self.registers[recovery.RTC_FLAG]=recovery.FEL_FLAG
@@ -200,9 +209,12 @@ class Model:
                         defines,_=board.crumbs.header()
                         self.registers[board.crumbs.RTC+0x110]=defines['FAULT_MAGIC']<<24|3<<16
                     if self.variant=='recovery-malformed-fault':self.registers[board.crumbs.RTC+0x110]=1
-                    if self.variant in ('recovery-disconnect','recovery-timeout','recovery-no-return','recovery-stale'):
+                    if self.variant in ('recovery-disconnect','recovery-timeout','recovery-no-return','recovery-stale',
+                                        'recovery-no-reenumerate','recovery-late'):
                         self.failed_launch_instance=self.number
-                        if self.variant=='recovery-timeout':raise subprocess.TimeoutExpired(command,kw['timeout'])
+                        if self.variant in ('recovery-timeout','recovery-no-reenumerate','recovery-late'):
+                            self.clock+=kw['timeout']
+                            raise subprocess.TimeoutExpired(command,kw['timeout'])
                         return types.SimpleNamespace(returncode=1,stdout='',stderr='injected execute disconnect')
                 i+=2
             else:
@@ -252,10 +264,10 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
                 plan['lifetime']='resident'
                 plan['watchdog']['mode']=0x41
             if recovery:
-                plan.update(format='card-fel-recovery',nonce=1,launch=['exe','0x52000'],uploads=[(0x52000,args.image)],
-                    profile={'version':2,'gate_address':0x52000,'gate_bytes':len(CARD_GATE),'rtc_stage':0x0c02,'final_value':5,
-                             'gate_sha256':images.hashlib.sha256(CARD_GATE).hexdigest()},
-                    watchdog={'mode':0x41,'session_seconds':60})
+                plan.update(format='card-fel-recovery',nonce=1,launch=['exe','0x52000'],launch_seconds=2,uploads=[(0x52000,args.image)],
+                    profile={'version':3,'gate_address':0x52000,'gate_bytes':len(CARD_GATE),'gate_watchdog':0xb1,'rtc_stage':0x0c02,
+                             'final_value':5,'gate_sha256':images.hashlib.sha256(CARD_GATE).hexdigest()},
+                    watchdog={'mode':0x41,'gate_mode':0xb1,'session_seconds':60})
             if grant!='absent':plan['cpu_grant_raises']=grant
             return plan
         def capture(self,plan):
@@ -292,9 +304,12 @@ def card_recovery_fixture(root, legacy=False):
     source.write_text('.syntax unified\n.arm\n.section .card_gate,"ax"\n.global a733_card_fel_gate_image\n'
         '.type a733_card_fel_gate_image,%object\na733_card_fel_gate_image:\n.byte '+','.join(map(str,CARD_GATE))+
         '\n.size a733_card_fel_gate_image,.-a733_card_fel_gate_image\n'
+        '.global a733_card_fel_gate_watchdog\n.type a733_card_fel_gate_watchdog,%object\n'
+        'a733_card_fel_gate_watchdog: .word '+str(recovery.GATE_WATCHDOG)+'\n.size a733_card_fel_gate_watchdog,4\n'
         '.section .profile,"a"\n.balign 8\n.global a733_card_fel_profile\n.type a733_card_fel_profile,%object\n'
-        'a733_card_fel_profile:\n.quad '+','.join(map(str,(recovery.PROFILE_MAGIC,2,88,recovery.GATE,len(CARD_GATE),0x0c02,5)))+
-        '\n.byte '+','.join(map(str,digest))+'\n.size a733_card_fel_profile,88\n')
+        'a733_card_fel_profile:\n.quad '+','.join(map(str,(recovery.PROFILE_MAGIC,3,96,recovery.GATE,len(CARD_GATE),0x0c02,5,
+                                                         recovery.GATE_WATCHDOG)))+
+        '\n.byte '+','.join(map(str,digest))+'\n.size a733_card_fel_profile,96\n')
     script=root/'fixture.ld'
     script.write_text('ENTRY(a733_card_fel_gate_image)\nPHDRS { gate PT_LOAD FLAGS(5); profile PT_LOAD FLAGS(4); }\n'
         'SECTIONS { .card_gate 0x52000 : { *(.card_gate) } :gate '
@@ -356,13 +371,15 @@ def card_recovery_cases(out,image=None):
     original=fixture.read_bytes();elf=ELFFile(io.BytesIO(original));table=elf.get_section_by_name('.symtab')
     symbol=next(s for s in table.iter_symbols() if s.name=='a733_card_fel_profile')
     section=elf.get_section(symbol['st_shndx']);offset=section['sh_offset']+symbol['st_value']-section['sh_addr']
-    mutations=[('old-profile-version',offset+8,'Q',1),('marker-size',offset+16,'Q',96),
+    mutations=[('old-profile-version',offset+8,'Q',2),('marker-size',offset+16,'Q',88),
                ('gate-address',offset+24,'Q',recovery.GATE+4),('gate-size',offset+32,'Q',513),
                ('rtc-stage',offset+40,'Q',0x0c01),('final-value',offset+48,'Q',4),
-               ('gate-hash',offset+56,'B',original[offset+56]^1),('wrong-ELF-entry',24,'I',recovery.ENTRY+4),
+               ('profile-disarm-policy',offset+56,'Q',0),('profile-4s-policy',offset+56,'Q',0x41),
+               ('gate-hash',offset+64,'B',original[offset+64]^1),('wrong-ELF-entry',24,'I',recovery.ENTRY+4),
                ('A64-machine',18,'H',183)]
     gate=elf.get_section_by_name('.card_gate')
     mutations.append(('gate-bytes',gate['sh_offset'],'B',original[gate['sh_offset']]^1))
+    mutations.append(('gate-disarm-policy-word',gate['sh_offset']+len(CARD_GATE),'I',0))
     for index,symbol in enumerate(table.iter_symbols()):
         if symbol.name=='a733_card_fel_gate_image':mutations.append(('gate-object-size',table['sh_offset']+index*table['sh_entsize']+8,'I',len(CARD_GATE)+4))
         if symbol.name=='a733_card_fel_profile':mutations.append(('profile-address',table['sh_offset']+index*table['sh_entsize']+4,'I',recovery.PROFILE_ADDRESS+8))
@@ -403,7 +420,8 @@ def card_recovery_cases(out,image=None):
         passed('card-recovery-transport-scope-'+failure)
     successful=('recovery-success','recovery-disconnect','recovery-timeout')
     for variant in (*successful,'recovery-watchdog','recovery-progress','recovery-tag','recovery-flag','recovery-fault',
-                    'recovery-malformed-fault','recovery-no-return','recovery-stale','recovery-precommand'):
+                    'recovery-malformed-fault','recovery-no-return','recovery-stale','recovery-precommand',
+                    'recovery-no-reenumerate','recovery-late'):
         result,model,owner=lifecycle(out/variant,variant,recovery=True)
         expected=variant in successful
         assert bool(result.get('card_recovery_validated'))==expected,(variant,result)
@@ -433,6 +451,19 @@ def card_recovery_cases(out,image=None):
         if expected:
             assert result['outcome']=='returned' and result['return_report']['rtc_flag']==0
             assert len(result['instances'])>=3 and not owner.failed
+            # The gate left WDT0 re-armed; the runner read it, then disarmed it over FEL.
+            returned=owner.record['watchdog_return']
+            assert (returned['before'],returned['after'])==(recovery.GATE_WATCHDOG,0)
+            assert model.registers[board.crumbs.WDT_MODE]==0
+            assert result['return_report']['seconds_after_exe']<recovery.INTERVAL_SECONDS
+        if variant in ('recovery-no-reenumerate','recovery-late'):
+            # Without re-enumeration WDT0 resets to FEL; the crumbs still show the gate's last step.
+            assert result['outcome']=='watchdog-reset' and not owner.failed
+            back=result['card_recovery_return']
+            assert back['rtc_flag']==0 and back['seconds_after_exe']>=recovery.INTERVAL_SECONDS
+            assert owner.record['watchdog_return']['words']['last']==0x0c020005
+            assert owner.record['watchdog_return']['before']==(1 if variant=='recovery-no-reenumerate' else recovery.GATE_WATCHDOG)
+            assert model.registers[board.crumbs.WDT_MODE]==0
         if variant in ('recovery-disconnect','recovery-timeout'):
             assert any(t.get('provisional_disconnect') and t.get('command_started') for t in owner.record['transactions'])
         if variant=='recovery-watchdog':

@@ -13,7 +13,16 @@ ENTRY = GATE = 0x52000
 PROFILE_ADDRESS, SRAM_END = 0x52400, 0x52d80
 RTC_TAG, RTC_LAST, RTC_FLAG = 0x07090100, 0x07090104, 0x07090108
 FEL_FLAG, RTC_STAGE, FINAL_VALUE = 0x5aa5a55a, 0x0c02, 5
-PROFILE = struct.Struct('<7Q32s')
+PROFILE = struct.Struct('<8Q32s')
+# The proof's WDT0 policy word: the gate re-arms WDT0 at 16 s, the largest
+# interval (A733 manual 8.3.6.6), instead of disarming it. A ROM that does not
+# re-enumerate therefore still resets to FEL. include/a733_card_fel_gate.h.
+GATE_WATCHDOG = 0xb1
+# The ROM never answers the execute request, so end that transaction after
+# 2 s. Gate entry to capture: exe end 2 + enumeration 5 + capture 1 = 8 s
+# of the 16 s interval (docs/designs/card-fel-recovery.md).
+EXE_SECONDS = 2
+INTERVAL_SECONDS = 16
 # This patched tool disables and invalidates the A733 I-cache before MMIO helpers.
 FEL_SHA256 = '4a54cdc179baafbdecac47eb85714c3745d6d9952e05b482c7016afd4b22bf3e'
 FEL_ICACHE_PATCH = 'patches/sunxi-a733-sram.patch'
@@ -91,17 +100,20 @@ def inspect(image):
         return section, value
 
     _, marker = object_at('a733_card_fel_profile', PROFILE_ADDRESS, PROFILE.size)
-    magic, version, size, gate, length, stage, final, digest = PROFILE.unpack(marker)
-    require((magic, version, size, gate, stage, final) ==
-            (PROFILE_MAGIC, 2, PROFILE.size, GATE, RTC_STAGE, FINAL_VALUE) and 8 <= length <= 512 and length % 4 == 0,
-            'Unsupported card recovery profile or gate extent.')
+    magic, version, size, gate, length, stage, final, watchdog, digest = PROFILE.unpack(marker)
+    require((magic, version, size, gate, stage, final, watchdog) ==
+            (PROFILE_MAGIC, 3, PROFILE.size, GATE, RTC_STAGE, FINAL_VALUE, GATE_WATCHDOG) and
+            8 <= length <= 508 and length % 4 == 0,
+            'Unsupported card recovery profile, gate extent or WDT0 policy.')
     section, gate_bytes = object_at('a733_card_fel_gate_image', GATE, length, executable=True)
-    require((section['sh_addr'], section['sh_size']) == (GATE, length),
-            'Card recovery gate requires its exact immutable executable section.')
+    _, policy = object_at('a733_card_fel_gate_watchdog', GATE + length, 4, executable=True)
+    require((section['sh_addr'], section['sh_size']) == (GATE, length + 4) and
+            struct.unpack('<I', policy)[0] == watchdog,
+            'Card recovery gate requires its exact executable section and the profile WDT0 policy word.')
     require(hashlib.sha256(gate_bytes).digest() == digest, 'Card recovery gate identity differs.')
-    return {'profile': {'version': 2, 'gate_address': GATE, 'gate_bytes': length,
+    return {'profile': {'version': 3, 'gate_address': GATE, 'gate_bytes': length, 'gate_watchdog': watchdog,
                         'rtc_stage': stage, 'final_value': final, 'gate_sha256': digest.hex()},
-            'uploads': uploads, 'watchdog': {'mode': 0x41, 'session_seconds': 60}}
+            'uploads': uploads, 'watchdog': {'mode': 0x41, 'gate_mode': watchdog, 'session_seconds': 60}}
 
 
 def prepare(info, inputs, out):
@@ -115,7 +127,7 @@ def prepare(info, inputs, out):
         uploads.append((address, path))
     return {'epoch': nonce, 'generation': nonce, 'nonce': nonce, 'format': 'card-fel-recovery',
             'profile': info['profile'], 'watchdog': info['watchdog'],
-            'uploads': uploads, 'launch': ['exe', hex(ENTRY)]}
+            'uploads': uploads, 'launch': ['exe', hex(ENTRY)], 'launch_seconds': EXE_SECONDS}
 
 
 def arm(owner, plan):
@@ -129,11 +141,19 @@ def arm(owner, plan):
     owner.journal()
 
 
-def receipt(owner):
-    """Read the retained request on every fresh return, including a watchdog failure."""
+def receipt(owner, launched):
+    """Read the retained request on every fresh return, including a watchdog failure,
+    and record how long after the execute request the new instance appeared."""
+    seconds = round(owner.now() - launched, 3)
     flag = int(owner.tx('readl', hex(RTC_FLAG)), 16)
-    owner.record['card_recovery_return'] = {'rtc_flag': flag}
+    owner.record['card_recovery_return'] = {'rtc_flag': flag, 'seconds_after_exe': seconds}
     owner.journal()
+
+
+def gate_return(plan, before, seconds):
+    """True when WDT0 still holds the gate's re-armed mode and the instance appeared
+    inside its interval: the ROM re-enumerated. A WDT0 reset leaves mode 1."""
+    return before == plan['watchdog']['gate_mode'] and seconds < INTERVAL_SECONDS
 
 
 def capture(owner, plan):
@@ -142,7 +162,8 @@ def capture(owner, plan):
     returned = owner.record['watchdog_return']
     words = returned['words']
     flag = owner.record['card_recovery_return']['rtc_flag']
-    require(returned['before'] == 0 and returned['after'] == 0 and
+    require(gate_return(plan, returned['before'], owner.record['card_recovery_return']['seconds_after_exe']) and
+            returned['after'] == 0 and
             words['tag'] == (0x5c0d0000 | (plan['epoch'] & 0xffff)) and
             words['last'] == (RTC_STAGE << 16 | FINAL_VALUE) and not words['fault'] and flag == 0 and
             not owner.record.get('cleanup_failure'), 'Card recovery retained receipt differs.')
@@ -151,4 +172,5 @@ def capture(owner, plan):
     return {'valid': True, 'payload': b'ARM32 SRAM gate consumed the RTC request and selected FEL.\n',
             'report': {'epoch': plan['epoch'], 'rtc_flag': flag, 'stage': RTC_STAGE, 'value': FINAL_VALUE,
                        'watchdog_before': returned['before'], 'watchdog_after': returned['after'],
+                       'seconds_after_exe': owner.record['card_recovery_return']['seconds_after_exe'],
                        'gate_sha256': plan['profile']['gate_sha256']}}

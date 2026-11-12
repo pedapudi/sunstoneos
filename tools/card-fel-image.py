@@ -19,6 +19,7 @@ from elftools.elf.elffile import ELFFile
 ROOT = Path(__file__).resolve().parents[1]
 PIN = '829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3'
 BASE, ORIGINAL_BYTES = 0x47000, 0x3c000
+PRODUCTION_WATCHDOG = 0  # A733_CARD_FEL_PRODUCTION_WATCHDOG in include/a733_card_fel_gate.h
 
 
 def require(ok, message):
@@ -50,7 +51,7 @@ def gate_info(elf_raw, raw):
         require(set(symbols) == set(names), 'Gate symbols missing.')
         start, end = symbols[names[0]], symbols[names[1]]
         require(elf['e_entry'] == start == 0x52000 and end - start == len(raw) and
-                0 < len(raw) <= 512, 'Gate entry or appended-sector budget differs.')
+                0 < len(raw) <= 508, 'Gate entry or appended-sector budget differs.')
         sections = [s for s in elf.iter_sections() if s['sh_flags'] & 2 and s['sh_size']]
         require(len(sections) == 1 and sections[0]['sh_type'] == 'SHT_PROGBITS' and
                 sections[0]['sh_addr'] == start and sections[0].data() == raw, 'Gate binary differs from ELF.')
@@ -63,8 +64,9 @@ def first_stage(original, gate):
             struct.unpack_from('<I', original, 12)[0] == checksum(original), 'Pinned boot0 identity/header differs.')
     entry, = struct.unpack_from('<I', original)
     require(entry == 0xea0002be, 'Pinned boot0 initial branch differs.')
-    require(0 < len(gate) <= 512, 'Gate exceeds its appended sector.')
-    result = bytearray(original + gate + bytes(512 - len(gate)))
+    require(0 < len(gate) <= 508 and len(gate) % 4 == 0, 'Gate and its policy word exceed the appended sector.')
+    # The word after the code is the gate's WDT0 policy; zero disarms WDT0.
+    result = bytearray(original + gate + struct.pack('<I', PRODUCTION_WATCHDOG) + bytes(508 - len(gate)))
     struct.pack_into('<I', result, 0, 0xea000000 | ((len(original) - 8) // 4))
     struct.pack_into('<I', result, 16, len(result))
     struct.pack_into('<I', result, 12, checksum(result))
@@ -105,6 +107,7 @@ def main():
                 'first_stage': {'bytes': len(image), 'sha256': sha(image),
                                 'first_sector': 16, 'sectors': len(image)//512},
                 'changed_original_ranges': [[0,4],[12,8]],
+                'watchdog_policy': PRODUCTION_WATCHDOG,
                 'storage_loader': 'Unchanged pinned vendor loader; no installation authority',
                 'sources': {'boot/a733/card-fel-gate.S': sha((ROOT/'boot/a733/card-fel-gate.S').read_bytes()),
                             'include/a733_card_fel_gate.h': sha((ROOT/'include/a733_card_fel_gate.h').read_bytes()),

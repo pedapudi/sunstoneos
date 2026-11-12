@@ -49,15 +49,20 @@ requested:
     cmp r1,#0
     bne refuse
     mov r7,#3                 /* Watchdog mode, configuration and output. */
+    /* The WDT0 policy word follows the code: zero disarms (card first stage);
+     * a nonzero mode re-arms WDT0 and restarts its interval (FEL proof). */
+    ldr r3,a733_card_fel_gate_end
+    uxth r3,r3
     ldr r5,=0x02050014
     ldr r1,[r5]
     uxth r1,r1
     cmp r1,#0
-    beq mode_checked
-    cmp r1,#1
+    cmpne r1,#1
     cmpne r1,#0x41
     cmpne r1,#0xb1
     bne refuse
+    orrs r2,r1,r3             /* Nothing armed and nothing to arm. */
+    beq mode_checked
     ldr r2,[r5,#-4]
     uxth r2,r2
     cmp r2,#1
@@ -68,15 +73,19 @@ requested:
     bne refuse
 mode_checked:
     progress A733_CARD_FEL_MODE_CHECKED
-    mov r7,#6                 /* Disarm while the request remains pending. */
+    mov r7,#6                 /* Apply the policy while the request remains pending. */
     ldr r2,=0x16aa0000
+    orr r2,r2,r3
     str r2,[r5]
+    ldr r2,=0x14af            /* WDT_CTRL restart key (A733 manual 8.3.6.4). */
+    cmp r3,#0
+    strne r2,[r5,#-8]
     dsb sy
     ldr r2,[r5]
     uxth r2,r2
-    cmp r2,#0
+    cmp r2,r3
     bne refuse
-    progress A733_CARD_FEL_WATCHDOG_DISARMED
+    progress A733_CARD_FEL_WATCHDOG_SET
     mov r1,#0
     str r1,[r0]
     dsb sy
@@ -113,5 +122,5 @@ parked:
     b parked
     .ltorg
 .balign 4
-a733_card_fel_gate_end:
+a733_card_fel_gate_end:            /* The policy word is appended here. */
 .size a733_card_fel_gate,.-a733_card_fel_gate

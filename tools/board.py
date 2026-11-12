@@ -894,14 +894,19 @@ class Live:
         if plan.get('format') == 'card-fel-recovery':
             images.load('arm_card_fel_recovery', ROOT/'tools/card_recovery.py').arm(self, plan)
         self.recovery_deadline = self.now()+plan['watchdog']['session_seconds']+crumbs.interval(plan['watchdog']['mode'])+10
-        if plan.get('format') == 'card-fel-recovery':
-            require(plan['launch'] == ['exe', '0x52000'], 'Card recovery requires its direct SRAM entry.')
-            self.tx(*plan['launch'], recovery_launch=True)
+        recovery = images.load('card_fel_recovery_launch', ROOT/'tools/card_recovery.py') \
+            if plan.get('format') == 'card-fel-recovery' else None
+        launched = self.now()
+        if recovery:
+            require(plan['launch'] == ['exe', '0x52000'] and plan['launch_seconds'] == recovery.EXE_SECONDS,
+                    'Card recovery requires its direct SRAM entry and bounded execute transaction.')
+            # The gate re-enters the ROM, which never answers this request.
+            self.tx(*plan['launch'], recovery_launch=True, timeout=plan['launch_seconds'])
         else:
             self.tx(*plan['launch'])
         self.wait(plan['watchdog']['session_seconds'] + crumbs.interval(plan['watchdog']['mode']) + 10)
-        if plan.get('format') == 'card-fel-recovery':
-            images.load('receipt_card_fel_recovery', ROOT/'tools/card_recovery.py').receipt(self)
+        if recovery:
+            recovery.receipt(self, launched)
         before, after, words = self.returned()
         elf = self.args.image if plan.get('format') == 'npu' or self.args.image.suffix == '.elf' else None
         decoded = crumbs.decode(words, plan['epoch'], elf)
@@ -909,7 +914,10 @@ class Live:
         save(self.evidence/'breadcrumbs.json', decoded)
         require(not after & 1, 'WDT0 did not disarm after return.')
         self.record['rom_returned'] = True
-        if self.watchdog_reset_seen(before):
+        # The recovery gate leaves WDT0 re-armed; the runner disarmed it in returned().
+        gate_armed = bool(recovery) and recovery.gate_return(
+            plan, before, self.record['card_recovery_return']['seconds_after_exe'])
+        if self.watchdog_reset_seen(before) and not gate_armed:
             self.record['dram_lost'] = True
             # The bounded resident test deliberately stops renewal after its application.
             # RTC SRAM is authoritative after reset; no DRAM result survives.
@@ -922,7 +930,7 @@ class Live:
         if plan.get('lifetime') == 'resident':
             raise UnresolvedReturn('Resident qualification returned without its expected watchdog reset.')
         if plan.get('format') == 'card-fel-recovery':
-            if not (before == 0 and after == 0 and decoded['session'] and words['last'] == 0x0c020005 and not words['fault'] and
+            if not (gate_armed and after == 0 and decoded['session'] and words['last'] == 0x0c020005 and not words['fault'] and
                     self.record['card_recovery_return']['rtc_flag'] == 0):
                 raise UnresolvedReturn('Card recovery lacks the matching retained SRAM gate receipt.')
             self.record['normal_return'] = True
