@@ -29,6 +29,16 @@ static void usb_fail_at(uint32_t site,uint32_t value,const void *caller)
     board_fail_at(site,value,caller);
 }
 #define usb_fail() usb_fail_at(SUNSTONE_CRUMB_FAIL_SITE(BOARD),0,SUNSTONE_CRUMB_HERE())
+/* The failure claimant closes admission before the supervisor publishes D. */
+static int usb_return_unpublished(void)
+{return os_returning()&&os_cpu_return_requested()&&!os_cpu_return_deadline_us();}
+#ifdef SUNSTONE_A733_USB_FAILURE_TEST
+static atomic_uint usb_failure_checkpoints;
+void os_usb_failure_checkpoint(unsigned bits)
+{atomic_fetch_or_explicit(&usb_failure_checkpoints,bits,memory_order_release);}
+int os_usb_failure_ready(void)
+{return atomic_load_explicit(&usb_failure_checkpoints,memory_order_acquire)==3u;}
+#endif
 static int usb_stop_fault(unsigned detail,unsigned value)
 {usb_fail_at(SUNSTONE_CRUMB_FAIL_BOARD<<12|detail,value,SUNSTONE_CRUMB_HERE());return -1;}
 void os_application_usb_changed(void);
@@ -374,6 +384,7 @@ void board_host_task(void *unused)
     if(!board_host_irq_deadline_init())usb_fail();
 #endif
     for(;;){
+        if(usb_return_unpublished()){(void)ulTaskNotifyTake(pdTRUE,1);continue;}
         if(os_quiesce_requested(&usb_quiesce))break;
         if(!board_live(NULL))break;
 #ifdef SUNSTONE_BOARD_USB2_IRQ
@@ -382,6 +393,11 @@ void board_host_task(void *unused)
 #endif
         enum a733_usb2_result r=a733_usb2_native_poll(&board.host);
         if(r==A733_USB2_RETAINED||r==A733_USB2_INVALID)break;
+#ifdef SUNSTONE_A733_USB_FAILURE_TEST
+        /* ATTACH (6) follows the five supply observations and precedes all
+         * local controller programming in a733_usb2_platform_poll. */
+        if(board.host.platform.phase==6u&&!board.host.core_started)os_usb_failure_checkpoint(1);
+#endif
 #ifdef SUNSTONE_BOARD_USB2_IRQ
         if(board_host_irq_after()<0)break;
 #endif

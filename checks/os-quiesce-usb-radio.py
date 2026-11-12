@@ -9,10 +9,14 @@ CHECK_INPUTS = ['apps/os/client.c', 'apps/os/main.patch', 'apps/os/quiesce.h',
                 'apps/os/quiesce.c', 'apps/os/radio.c', 'apps/os/radio_scan.c', 'apps/board/radio.c']
 
 PRELUDE = r'''
+#define SUNSTONE_A733_USB_FAILURE_TEST 1
 #include "quiesce.h"
 #include <assert.h>
 #include <stdlib.h>
-static unsigned returning=1, failing=1, registered, notifications, fatal;
+static unsigned returning=1, failing=1, registered, notifications, fatal, closing;
+static uint64_t published_deadline;
+static int os_cpu_return_requested(void) {return closing;}
+static uint64_t os_cpu_return_deadline_us(void) {return published_deadline;}
 static struct {
  void *handles[8]; struct { uint64_t deadline_us; } session;
  struct {unsigned core_started,stop_phase; struct {unsigned marker;} core; struct {unsigned stop_phase;} platform;} host;
@@ -74,6 +78,9 @@ static void reset_usb(void)
 }
 int main(void)
 {
+    assert(!os_usb_failure_ready());os_usb_failure_checkpoint(1);assert(!os_usb_failure_ready());
+    os_usb_failure_checkpoint(2);assert(os_usb_failure_ready());
+    os_usb_failure_checkpoint(1);assert(os_usb_failure_ready());
     returning=0;assert(os_usb_quiesce_start()&&registered==0);
     returning=1;assert(os_usb_quiesce_start()&&registered==1);
     board.handles[4]=(void *)1;
@@ -95,6 +102,9 @@ int main(void)
     atomic_store(&usb_quiesce.requested,0);
     failing=0;usb_stop_fault(0x801,1);assert(fatal==1);fatal=0;
     reset_usb();
+    closing=1;published_deadline=0;assert(usb_return_unpublished());
+    published_deadline=3000000;assert(!usb_return_unpublished());
+    closing=0;published_deadline=0;assert(!usb_return_unpublished());
     assert(!usb_return_poll(0)&&!halt_calls); /* Deadline not published yet. */
     assert(!usb_return_poll(3000000)&&halt_calls==1&&!irq_calls);
     halt_result=1;assert(!usb_return_poll(3000000)&&irq_calls==1&&!broker_stops);
@@ -237,9 +247,13 @@ def usb(out):
     assert build(out, 'usb-skip-halt-proof', body.replace(halt, 'int result=1;'), USB_CASES).returncode != 0
     typec = 'result=a733_typec_native_stop_result(&board.typec);'
     assert build(out, 'usb-skip-typec-proof', body.replace(typec, 'result=1;'), USB_CASES).returncode != 0
+    assert 'if(usb_return_unpublished())' in source
+    assert 'if(board.host.platform.phase==6u&&!board.host.core_started)os_usb_failure_checkpoint(1);' in source
     assert 'if(os_quiesce_requested(&usb_quiesce))goto stopped;' in source
     assert 'if(os_quiesce_requested(&usb_quiesce))break;' in source
     patch = (ROOT / 'apps/os/main.patch').read_text()
+    assert 'if(board.typec.provider.state==A733_TYPEC_LOOK)os_usb_failure_checkpoint(2);' in patch
+    assert patch.count('os_returning()&&os_cpu_return_requested()&&!os_cpu_return_deadline_us()') == 2
     assert '(!os_usb_quiesce_start||!os_usb_quiesce_start())' in patch
     print('PASS USB return: original owner orders halt, IRQ, broker, platform and Type-C proofs; faults stay latched; four mutants fail')
 
