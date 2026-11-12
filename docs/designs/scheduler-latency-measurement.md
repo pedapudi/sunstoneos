@@ -91,12 +91,23 @@ are in [the multicore reference audit](../a733-multicore-reference-audit.md).
 ## Records retain complete maxima and expose missing observations
 
 Every CPU retains the longest command and the self-suspend with the longest
-masked interval. General commands record reference, publication, drain and
+interval from the mask call to its C selection marker.
+General commands record reference, publication, drain and
 slice boundaries. Direct self-suspension instead records the unmasked borrowed
-reference and publication, then masked local commit, frame save and C selection.
-Its masked C interval excludes the final port restoration. Separate per-step
-maxima need not belong to the same command. The longest drain retains its
-individual records; the longest interrupt exit retains its maintenance totals.
+reference and publication, then mask admission and local commit, frame save and
+C selection. The field named `masked_c_ticks` starts before the mask call and
+includes admission; it cannot establish continuous exclusion without a matching
+exception-span record. It also excludes recorder finalization and final port
+restoration. Separate per-step maxima need not belong to the same command.
+The longest drain retains its individual records; the longest interrupt exit
+retains its maintenance totals.
+
+The optional exception-span recorder retains API exclusion through the final
+software return hook. It includes intervals with `DAIF.I` clear while PMR still
+excludes API interrupts. Its generic FromISR close can defer when `DAIF.I` is
+set, without a later endpoint when the port opens both masks. A serialized
+endpoint when PMR admits API interrupts and I is clear remains required.
+Intervals beginning at the batch-end remask cover subsequent masked work.
 
 The application declares storage for sixteen waits per CPU above five
 microseconds, sixteen recent interrupt exits and selections per CPU, and 512

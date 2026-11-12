@@ -22,6 +22,7 @@ The partitioned fork is the default kernel in SMP images, and `-DSUNSTONE_PARTIT
 | Notification from the handler without the mask round trip, event-list race fix | qualified on the board | 4 kHz wakes of 10 µs or more fall from 1.43% to 0.17% | `scheduler-task-path-wake-tail` |
 | Per-object locks for queues, event groups and stream buffers (the only scheme) | qualified on the board | Six soaks of the merged kernel returned exact output; the task path is unchanged within the run-to-run spread; independent objects do not wait for each other (`objects` emulator case) | `1793685079986070508-ab781052`, `1793684142662104594-42dca3b9`; [design](../designs/scheduler-partitioned.md#object-locks-queues-event-groups-and-stream-buffers-lock-their-own-object) |
 | Wake and publication models | host-tested | Finite abstractions | [design](../designs/scheduler-partitioned.md#validation-exercises-ownership-transitions-and-hardware-completion) |
+| Direct self-suspension and interruptible control preparation | host-tested; board timing target not met | Five eight-core models and one heap model pass; retained self-mask 47 µs, post-start mask maximum 83.792 µs | [timing records](../evidence/scheduler-latency-measurement.jsonl); [measurement scope](../designs/scheduler-latency-measurement.md) |
 | One-shot timers, capacity hints, topology-driven placement, EDF/CBS | open | None | [design](../designs/scheduler-partitioned.md#open-work) |
 
 ## Known limits
@@ -33,14 +34,14 @@ The partitioned fork is the default kernel in SMP images, and `-DSUNSTONE_PARTIT
 
 ## Per-object locks
 
-2. Per-object locks (measured negative result for the task path). Queues, event groups and stream buffers lock their own hashed slot instead of the two global locks. A host check proves unrelated objects no longer wait for each other. On the board the global locks serialized independent queues heavily (99% of waits over 5 us were charged to a holder working on a different object), but removing that serialization did not change the task path's entry delay or gap. The change is not in this tree, which keeps the global locks. Its value would be the closed race in point 3 (which the global-lock fix below also closes) and lower lock contention for the recognition workers, not task-path latency.
+Queues, event groups and stream buffers lock their own hashed slot instead of the two global locks. The object model verifies that unrelated slots do not wait for each other. Board comparisons establish no task-path latency improvement from these locks. Driver critical sections and scheduler compatibility sections retain global exclusion; the [locking design](../designs/scheduler-partitioned.md#sections-that-keep-the-global-locks) defines their scope.
 
 ## Open work
 
 1. Task-path wake latency to the 10 µs target (99.99th percentile 19 to 26 µs after the notification change). The gap from handler to task start carries the tail; shorten the wake path (fewer supervisor calls and barriers, no owner pass before the switch, bounded idle-pull and control-drain work per exit).
-2. Measure one control drain broken into its records, and batch the per-record `dsb ishst; sev` pairs.
+2. Bound the masked work after control preparation and isolate dispatch and recorder costs. One maintenance entry attempts at most sixteen distinct records; its full physical batch cost remains unqualified. The unlock event must precede lifetime callbacks, so it cannot be deferred across records. A second event is emitted only when those callbacks run.
 3. Run five soaks of the global-lock images with the notification change to isolate its 4 kHz effect; repeat the A76 task-path soak and measure recognition time with the task path on those cores.
-4. Bound the owner work at interrupt exit (up to 11 µs on the control core); shorten the yield supervisor call, the mask supervisor calls and the FromISR mask pair.
+4. Bound owner work at interrupt exit and shorten the yield and mask supervisor calls. The retained C exit reaches 71.792 µs in the instrumented CPU workload. Add a serialized recorder endpoint when both interrupt masks open; a deferred FromISR close can otherwise omit that boundary. The [timing records](../evidence/scheduler-latency-measurement.jsonl) describe this coverage limit and the unresolved CPU0 wake regression.
 5. An abortable queue lock so a waiter takes its place in line with the mask open; tickless idle (not in this tree; it changes the protected `patches/freertos-smp-*.patch`) with control-period jitter measured with and without it.
 6. Sweep the eight-core soak for masked spans; the earlier 95 to 206 µs stock spans did not recur under the mimus load.
 7. Idle pull: fix the missed pull or measure it on against off on the board.

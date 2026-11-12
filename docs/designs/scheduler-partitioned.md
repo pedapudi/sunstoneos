@@ -324,8 +324,13 @@ global suspension.
 
 Each permanent task descriptor holds desired control state, a request sequence,
 the owner-applied sequence and separate reference and transfer records. A
-per-task control ticket serializes callers that change desired priority,
-affinity, suspend, delete or abort state. Publishing the composite request is one
+per-task control ticket serializes general priority, affinity, suspend, delete
+and abort changes. Self-suspension instead borrows the current execution
+lifetime and publishes atomic suspension and saved-frame obligations before
+the kernel raises the API mask. Its masked path cancels the caller's local
+state, saves the frame and selects a replacement without draining controls.
+Resume preserves the frame obligation until the owner acknowledges it.
+Publishing a general composite request is one
 release store followed by a hint and SGI; requests for the same desired state
 coalesce, and deletion is absorbing for its incarnation. Storage cannot fill
 because publication overwrites state instead of allocating command entries.
@@ -585,53 +590,49 @@ nearly free and queue together, so the masked wait shrinks but remains.
 
 ## The owner exit work must not run after an interrupt above the API mask
 
-The patched interrupt exit (`portASM.S`, `freertos-partitioned-port-asm.patch`) calls
-`ssKernelOwnerIRQExit` after the outermost interrupt; it drains owner work and may
-request a switch. Kernel maintenance, object and control sections are masked at the
-API priority, so an interrupt at or below that priority never lands inside them. A
-control interrupt above the API priority does, and the owner work then re-enters the
-interrupted maintenance, which asserts that it is not re-entered
-(`ssKernelControlDrain`: `isr_depth`, `control_draining`).
-
-`ssKernelOwnerIRQExit` therefore returns without work when `ICC_PMR_EL1` still holds
-the API mask, which only an interrupt above it can observe, because the exit path
-does not change the register. The work is left for the next ordinary exit or the
-tick; the tick calls the unguarded body.
+The patched outermost interrupt exit calls `ssKernelOwnerIRQExit`. It returns 2
+when the interrupted PMR excludes API interrupts or control preparation is
+active. The assembly exit then neither runs maintenance nor selects a task;
+pending work remains for the next ordinary maintenance entry. The active guard
+also protects preparation that admits ordinary API interrupts. CPU0's tick
+advances time and publishes due-owner work without calling owner maintenance.
 
 ### The mask guard leaves the owner work running after ordinary interrupts
 
-The guard is right only if the interrupt path leaves `ICC_PMR_EL1` as the interrupted
-code had it. The register is written in six places of
-the generated `portASM.S`, none on the interrupt path: the first-task start and the
-supervisor-call handlers that mask and unmask. The only way it differs at the exit is
-a handler that raises it through the FromISR mask functions and does not restore it,
-which that pair forbids. Counters (`SUNSTONE_OWNER_COUNTERS`) record drains from
-interrupt exit, exits skipped by the guard, drains from the tick and service passes.
-Cores without a control interrupt skip no exit, so the guard leaves the owner work
-running after ordinary interrupts. A measurement image can add
-`configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES` (`SUNSTONE_LIST_CHECK`), which with the
-stack pattern check arms the kernel's own corruption detectors. The partitioned patches add no list
-operation; the fork's own list operations are the four sites on a task's event list
-item in `kernel/scheduler/freertos.c`, which run under the same task and interrupt
-locks as before.
+The guard relies on `ICC_PMR_EL1` retaining the interrupted context's mask at
+owner entry. A handler using the FromISR mask pair restores that value before
+return. An eligible higher-priority local wake can proceed directly to saved-frame
+selection when no control, object repair, due deadline or expired slice requires
+maintenance. Otherwise the exit runs one service pass. The partitioned SGI
+handler leaves selection to this decision; an empty SGI requests no switch.
+Owner counters and the [step recorder](scheduler-latency-measurement.md) expose
+the guard, service and selection paths. Optional list-integrity and stack checks
+retain FreeRTOS corruption detection.
 
-### The owner exit work runs under the API mask with interrupts open
+<a id="the-owner-exit-work-runs-under-the-api-mask-with-interrupts-open"></a>
 
-The exit raises `ICC_PMR_EL1` to the API mask and clears `PSTATE.I`, as an interrupt
-service routine's critical section does, runs the owner work (up to 11 µs for
-`ssKernelService` on the control core), sets `PSTATE.I`, then restores the mask. Only
-interrupts above the API mask run in it, so a control interrupt is not held off by
-the owner work. Two properties make this safe. A control interrupt that lands in the
-work finds `ICC_PMR_EL1` at the API mask and does no owner work. It must not switch
-tasks either: `ssKernelOwnerIRQExit` returns 2 for an interrupted masked context and
-`freertos-partitioned-port-asm.patch` takes the no-switch exit on 2, so the pending
-switch request stays set for the outer exit. `PSTATE.I` is set before `ICC_PMR_EL1`
-is restored because the port's own restore clears it after the write, and an
-ordinary interrupt in that gap would be a second outermost exit inside the first.
-The fork has two paths to a switch after an interrupt wake, the pending flag and the
-hook's report, and the skipped exit leaves both intact. The bounded work per exit
-remains open: the 11 µs owner work still delays ordinary interrupts and the
-task-path wake.
+### Control preparation opens both interrupt masks
+
+The service raises PMR for local queue work and clears `PSTATE.I`. Control
+preparation opens PMR as well, admitting ordinary interrupts between local
+commits. FIFO, notification, object and administration acquisition each use one
+nonblocking attempt. A busy record parks until its resource release signals
+it. A visited bitmap spans the maintenance entry and limits it to sixteen
+distinct attempts (`SS_OWNER_BATCH`); a reissued hint waits for the next entry.
+Selection skips control preparation and object timeout work. Incoming-wake
+drain and dispatch publication still close the saved-frame selection handshake.
+
+Nested interrupt exits leave pending work intact while preparation is active.
+The outer exit sets `PSTATE.I` before restoring PMR so an ordinary interrupt
+cannot enter an unfinished outer return. The control unlock signals FIFO
+waiters before lifetime callbacks. A second event follows those callbacks only
+when they run; deferring the unlock event across records can strand a waiter.
+
+These work counts do not establish time bounds. The instrumented workload
+retains control records costing 7.667 to 47 µs and an owner C exit of 71.792 µs.
+The sixteen-record batch cost remains unqualified, and masked work after
+preparation still exceeds the 25 µs budget. The [timing records](../evidence/scheduler-latency-measurement.jsonl)
+qualify these observations and the recorder's coverage limits.
 
 ## Per-object locking replaces the global locks for queues, event groups and stream buffers
 
@@ -872,11 +873,12 @@ energy.
    and 4 kHz). The gap from handler to task start carries the tail: control drains
    and idle-pull transfers of 5 to 17 µs and task switches up to 11 µs. Shorten the
    wake path (fewer supervisor calls and barriers, no owner pass before the switch,
-   bounded drain work per exit). A breakdown of one drain into its records, and
-   batching of the per-record `dsb ishst; sev` pairs, is the next measurement.
-2. Per-object locks: land the branch `work/sched-tasklock-1102`; it closes the
-   event-list race on object lists but does not shorten the task path. The
-   race itself is fixed on the global locks (commit `21614e95`).
+   bounded drain work per exit). Isolate local mask admission, dispatch and
+   recorder finalization costs. Qualify the complete bounded control batch and
+   explain the CPU0 wake regression; earlier runs lack interrupt identities.
+2. Bound compatibility sections that retain the global locks. Per-object locks
+   are implemented and close the event-list race without an established
+   task-path latency improvement.
 3. Run five soaks of the global-lock images with the notification change to isolate
    its 4 kHz improvement from the per-object locks.
 4. Repeat the A76 task-path soak and measure recognition time with the task path on
