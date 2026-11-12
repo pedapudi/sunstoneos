@@ -228,6 +228,10 @@ class Scenario:
     def complete_owner(self, name):
         if name not in self.registry:
             return
+        # Supply the owner's publication as well as its registry result. The
+        # completed PMIC callback observes pmic_done before notifying its task.
+        if name == 'pmic_quiesce':
+            self.model.put32(self.local('pmic_done'), 1)
         self.start(0, self.local('os_quiesce_complete'), (self.registry[name],))
         assert self.run_one(0) == 'return'
 
