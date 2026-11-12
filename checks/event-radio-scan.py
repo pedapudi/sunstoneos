@@ -57,7 +57,7 @@ def main():
             'event-radio-scan', includes=[generated, where])
     executable = build(args.output/'host')
     rows = []
-    for case in range(16):
+    for case in range(20):
         result = subprocess.run([str(executable), str(case)], capture_output=True, text=True, env=environment(), timeout=20)
         (args.output/f'case-{case}.log').write_text(result.stdout+result.stderr)
         assert not result.returncode, (case, result.stdout, result.stderr)
@@ -73,6 +73,12 @@ def main():
             'static int application_wait_until_unless(uint64_t until,int (*unless)(void))\n{',
             'static int application_wait_until_unless(uint64_t until,int (*unless)(void))\n{\n'
             '    if(atomic_load(&finish_by)&&until>atomic_load(&finish_by))until=atomic_load(&finish_by);'), 7),
+        ('past-deadline-fails', app, producer_unit, runtime_unit.replace(
+            'if(limit&&until>limit)until=limit;', 'if(until<=a733_smp_counter()/24)ss_fail(0x757);\n    if(limit&&until>limit)until=limit;'), 16),
+        ('now-deadline-armed', app, producer_unit, runtime_unit.replace(
+            'if(application_wait_until(until)==', 'if(application_wait_until(until+1)=='), 17),
+        ('tick-rounded-deadline', app, producer_unit, runtime_unit.replace(
+            'if(application_wait_until(until)==', 'if(application_wait_until((until/1000+1)*1000)=='), 18),
     ]
     for name, radio_app, radio_producer, os_wait, case in mutations:
         assert (radio_app, radio_producer, os_wait) != (app, producer_unit, runtime_unit), name

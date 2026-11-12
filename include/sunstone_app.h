@@ -422,7 +422,9 @@ int ss_input_event(struct ss_input_event *event);
  * Call the class operation again after waking; notifications may coalesce. */
 void ss_usb_wait(uint32_t wait_us);
 /* Main application task: wait to an absolute microsecond deadline in the
- * ss_counter_ticks()/24 epoch, clipped to the granted work finish. Wake hints
+ * ss_counter_ticks()/24 epoch, clipped to the granted work finish. A deadline
+ * at or before the current time returns at once without arming an alarm; a
+ * later deadline wakes at that microsecond, not at a scheduler tick. Wake hints
  * may return early; recheck the operation after each return. An exhausted
  * granted work limit fails the application instead of creating a retry loop. */
 void ss_wait_until(uint64_t absolute_us);

@@ -76,6 +76,11 @@ void ss_usb_wait(uint32_t relative)
 _Noreturn void ss_finish(const void *data,size_t bytes)
 {assert(bytes==16);memcpy(&output,data,bytes);finished_at=host_time_us();finished=1;longjmp(app_return,1);}
 void radio_scan_main(const struct ss_grant *);
+/* Deadline edge cases for ss_wait_until: one microsecond in the past, now,
+ * one counter microsecond ahead and one scheduler tick (1 ms) ahead. */
+#define EDGE_NOW UINT64_C(500000)
+static int64_t edge_offset(void)
+{static const int64_t offsets[]={-1,0,1,1000};return offsets[scenario-16];}
 static void app_entry(void *unused)
 {
     (void)unused;main_task=xTaskGetCurrentTaskHandle();assert(sunstone_deadline_register());
@@ -88,10 +93,17 @@ static void app_entry(void *unused)
         else if(scenario==11)actual_ss_wait_until(LIMIT+250000);
         else if(scenario==12)actual_ss_wait_until(LIMIT+1000);
         else if(scenario==14)actual_ss_wait_until(LIMIT+250000);
+        else if(scenario>=16&&scenario<=19)actual_ss_wait_until(EDGE_NOW+edge_offset());
         else radio_scan_main(&(struct ss_grant){.finish_by_us=LIMIT});
         finished_at=host_time_us();finished=1;
     }
     for(;;)vTaskSuspend(NULL);
+}
+static void unarmed(void)
+{
+    struct sunstone_deadline_record record;
+    assert(sunstone_deadline_owner_record(main_task,&record));
+    assert(!record.armed&&!record.failed);
 }
 static void armed_at(uint64_t expected)
 {
@@ -134,7 +146,18 @@ static void test(void *unused)
     if(scenario==9){producer_cases();puts("PASS all changed scan/entropy/failure/down states publish once");return;}
     if(scenario==4){host_advance_us(LIMIT);report.head.stage=7;atomic_store(&state,SCANNED);}
     if(scenario==10||scenario==12)host_advance_us(LIMIT);
+    if(scenario>=16&&scenario<=19)host_advance_us(EDGE_NOW);
     (void)host_task_create("scan-app",app_entry,NULL,3);
+    if(scenario==16||scenario==17){
+        /* A deadline at or before now returns at once without arming an alarm. */
+        assert(finished&&!detail&&finished_at==EDGE_NOW&&!wait_calls);unarmed();return;
+    }
+    if(scenario==18||scenario==19){
+        const uint64_t until=EDGE_NOW+(uint64_t)edge_offset();
+        assert(!finished);armed_at(until);
+        host_advance_us(until-1-host_time_us());assert(!finished);
+        host_advance_us(1);assert(finished&&!detail&&finished_at==until);unarmed();return;
+    }
     if(scenario==2){assert(finished&&!detail&&finished_at==0&&wait_calls==1);return;}
     if(scenario==4){assert(finished&&detail==2&&!wait_calls);return;}
     if(scenario==12){assert(finished&&detail==0x757&&finished_at==LIMIT&&!wait_calls);return;}
