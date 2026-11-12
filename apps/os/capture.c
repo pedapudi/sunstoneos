@@ -4,11 +4,21 @@
 #include "application.h"
 #include "capture.h"
 #include "boot.h"
+#include "owner-memory.h"
 #include <string.h>
-extern uint8_t ss_capture_buffer[];
 /* The headset library's capture: absent (null) in an image that does not link it. */
 extern int os_headset_capture(unsigned,const uint8_t **,size_t *) __attribute__((weak));
-extern const size_t ss_capture_capacity;
+/* The buffer's size comes from the manifest (tools/sunstone-manifest.py: the headroom and the declared frames); 0 when it
+ * declares none. Admission takes the buffer from the ledger, readable and writable by the application's tasks, which read
+ * it and, in replay, write it. */
+extern const size_t ss_capture_bytes,ss_capture_capacity;
+uint8_t *ss_capture_buffer;
+int os_capture_memory(void)
+{
+    if(!ss_capture_bytes||ss_capture_buffer)return 1;
+    ss_capture_buffer=os_owner_memory(ss_capture_bytes,0,OS_MEMORY_EL0_WRITE);
+    return ss_capture_buffer!=0;
+}
 /* Recorded input uses the same copied output and caller headroom as device
  * capture. Only the application task accesses this state. Input authentication
  * belongs to application startup; replay preserves those input bytes. */

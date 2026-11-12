@@ -147,10 +147,10 @@ It then zeroes the eight slots.
 
 USB0 operation 5 of the OS image's 16-byte request (count, offset and
 generation zero) returns the report alone, without the 64-byte frame header.
-[checks/fault-decode.py](../checks/fault-decode.py) decodes a saved report:
+[tools/fault-decode.py](../tools/fault-decode.py) decodes a saved report:
 
 ```sh
-python3 checks/fault-decode.py report.bin
+python3 tools/fault-decode.py report.bin
 ```
 
 On the host, `fetch()` in [tools/fault-report.py](../tools/fault-report.py)

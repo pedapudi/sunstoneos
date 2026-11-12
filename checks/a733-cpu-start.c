@@ -3,7 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
-/* CPU_START_HELD models a core that the stage-2 loader holds in static OFF (config.held, the resident lifetime). */
+/* CPU_START_HELD exposes the PPU policy register for strict cold entry and
+ * resident selection between stage-2 static OFF and inherited FEL OFF. */
 #ifdef CPU_START_HELD
 #define HELD 1
 #define NREG 7
@@ -128,6 +129,24 @@ int main(void)
         a733_cpu_start_poll(&s);assert(s.error==A733_CPU_START_TIME);quiet(&s,&m);
     }
 #ifdef CPU_START_HELD
+    /* Resident entry accepts stage-2 static OFF and FEL dynamic OFF. The
+     * latter keeps the returning hotplug writes and needs no policy release. */
+    for(unsigned dynamic=0;dynamic<2;++dynamic) {
+        struct a733_cpu_start s={0};struct a733_cpu_start_config c=config(&m,1);
+        c.held=A733_CPU_START_RESIDENT;
+        if(dynamic){m.regs[6]=m.regs[5]=0x100;m.regs[3]&=~2u;}
+        assert(a733_cpu_start_init(&s,&c));run(&s,&m);
+        assert(s.state==A733_CPU_START_POWERED && m.writes==(dynamic?7u:8u));
+        assert(s.static_off==!dynamic);
+        if(dynamic)for(unsigned i=0;i<m.writes;++i)assert(m.trace[i].address!=address(&m,6));
+        quiet(&s,&m);
+    }
+    {
+        struct a733_cpu_start s={0};struct a733_cpu_start_config c=config(&m,1);
+        c.held=A733_CPU_START_RESIDENT;m.regs[6]=0x100;m.regs[5]=0x108;
+        assert(a733_cpu_start_init(&s,&c));run(&s,&m);
+        assert(s.error==A733_CPU_START_INITIAL_STATE && !m.writes);quiet(&s,&m);
+    }
     for(unsigned immediate=0;immediate<2;++immediate) {
         struct a733_cpu_start s={0};struct a733_cpu_start_config c=config(&m,6);
         m.immediate=immediate;m.dynamic_hold=!immediate;c.deadline=80;
@@ -152,7 +171,7 @@ int main(void)
         struct a733_cpu_start s={0},saved=s;struct a733_cpu_start_config c=config(&m,1);
         switch(n) {case 0:c.core=0;break;case 1:c.core=8;break;case 2:c.entry=3;break;
         case 3:c.entry=UINT64_C(1)<<32;break;case 4:c.lease=0;break;case 5:c.boot_mpidr=0x81000100;break;case 6:c.deadline=0;break;
-        case 7:c.held=2;break;}
+        case 7:c.held=3;break;}
         assert(!a733_cpu_start_init(&s,&c));assert(!memcmp(&s,&saved,sizeof(s))&&!m.ops&&!m.clocks);
     }
     puts("PASS CPU power-on: seven secondary targets, bounded steps, retained failures/deadlines, topology and admission");

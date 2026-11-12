@@ -20,6 +20,7 @@ An application declares regions of upper memory, up to the 11 GiB the board maps
 | Device range list read back after the return | qualified on the board | pages below 4 GiB, because FEL addresses are 32 bits; the runner refuses a head at or above 4 GiB | `1793753010853111400-91014eb3`, `1793758036160485351-c9fae9df` |
 | Cache clean at the CPU return | qualified on the board | by set/way: 0.13 ms on core 0, 0.02 ms on each A55 secondary, 2.49 ms on each A76, against 227 ms per 32 MiB range by line | `1793758036160485351-c9fae9df` |
 | Heap from the ledger | qualified on the board | see [application memory layout](../designs/application-memory-layout.md) | `application-memory-layout-heap-modes` |
+| NPU runtime and tasks from the ledger at the grant, EL1 only | qualified on the board | 102,752 bytes in one extent; recognition at 512 frames 422.9 ms against 422.8 ms, same transcript and CRCs | `1794464613159170511-919b9552`, [unified memory](../designs/unified-memory.md) (Device owners) |
 | Partitioned scheduler's task-switch hook | host-tested | builds and boots in QEMU | `checks/qemu-os-boot.py` |
 | Device grant | open | interface only | [design](../designs/large-app-regions.md) |
 | Broadcast TLB invalidation cost (1,000 per second from an A55 core) | qualified on the board | page and ASID forms: control-path maximum 3.54 us against 3.33 us without; all-entries form not cleared (5.38 us jitter in one soak of six) | `application-memory-layout-tlbi-soaks` |
@@ -29,7 +30,7 @@ An application declares regions of upper memory, up to the 11 GiB the board maps
 
 1. Run the SD0 binding in an OS image through the failure scenarios on a board. `apps/os/large_sd.c` (`os_large_device`, `os_large_device_close`, `os_large_sd_pins`) uses the OS's shared providers and the read-only SD core; QEMU has no SD controller, so its RAM disk covers the loader and four scenarios cover a device that is present and fails (metadata, request start, mid-stream, absent).
 2. Count TLB refills in the OS image: EL0 cannot read the PMU, so the figure needs a counter grant or an EL1 sampler.
-3. Run the partitioned scheduler's `freertos.c` with the hook on a board.
+3. Run the partitioned scheduler's `kernel/scheduler/freertos.c` with the hook on a board.
 4. Regions requested at run time: a ledger whose storage grows while the system runs, an upper-memory allocator that serves the request, page-table pages taken at run time, and a break-before-make update of the application's root with `TLBI ASIDE1IS` on every core.
 5. Tearing down a space and reusing its ASID: the pool never takes an ASID back; reuse needs the table clear and the `TLBI ASIDE1IS` described in the design.
 6. Set `TCR_EL1.AS` (bit 36 of both `A733_CPU_COHERENCE_TCR_*` constants) together with the checks and `platform/a733/cpu_continue.c` that pin them, and run the CPU-return images on both clusters, when application teardown or more than 255 applications per session is needed. The pool already widens to 65535 when AS is set and the hardware reports 16 bits.

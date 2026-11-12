@@ -15,7 +15,7 @@ A unit on neither list stays strict. A unit on both is refused when CMake config
 
 ## The memory routines
 
-A relaxed unit is compiled with `include/sunstone_relaxed_memory.h` force-included, which renames its `memcpy`, `memmove` and `memset` calls to `ss_memcpy_unaligned`, `ss_memmove_unaligned` and `ss_memset_unaligned` (`runtime/memory_unaligned.c`). Those routines load unaligned and store 16-byte-aligned pairs. A strict unit keeps the routines of `runtime/memory.c` and `memmove.c`, which copy a byte at a time when source and destination differ in alignment. A call that the compiler makes by itself, such as the copy of a large structure, links the strict routine. The link check (`checks/sunstone-image-link.py`) lists in `link-check.json` which objects call which version.
+A relaxed unit is compiled with `include/sunstone_relaxed_memory.h` force-included, which renames its `memcpy`, `memmove` and `memset` calls to `ss_memcpy_unaligned`, `ss_memmove_unaligned` and `ss_memset_unaligned` (`runtime/memory_unaligned.c`). Those routines load unaligned and store 16-byte-aligned pairs. A strict unit keeps the routines of `runtime/memory.c` and `memmove.c`, which copy a byte at a time when source and destination differ in alignment. A call that the compiler makes by itself, such as the copy of a large structure, links the strict routine. The link check (`tools/sunstone-image-link.py`) lists in `link-check.json` which objects call which version.
 
 ## Every core must have `SCTLR_EL1.A` clear
 

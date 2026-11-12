@@ -888,7 +888,16 @@ class Live:
         self.record['rom_returned'] = True
         if self.watchdog_reset_seen(before):
             self.record['dram_lost'] = True
+            # The bounded resident test deliberately stops renewal after its application.
+            # RTC SRAM is authoritative after reset; no DRAM result survives.
+            self.record['expected_reset'] = bool(
+                plan.get('lifetime') == 'resident' and decoded.get('session') and
+                decoded.get('last', {}).get('stage') == crumbs.EL3_STOP and
+                decoded['last']['value'] == 0x5000 and decoded['last'].get('core') == 0 and not decoded.get('fault') and
+                not words['fault'] and not decoded.get('board_failure') and not self.record.get('cleanup_failure'))
             return 'watchdog-reset'
+        if plan.get('lifetime') == 'resident':
+            raise UnresolvedReturn('Resident qualification returned without its expected watchdog reset.')
         # An image that links the failure return may return after its first
         # failure; the record is then in the breadcrumbs and in its result.
         # Any other return that carries a failure record stays unresolved.
@@ -958,7 +967,8 @@ def run_image(args, backend=Live):
     evidence = args.evidence or CACHE/'board-queue/runs'/f'{time.time_ns()}-{args.port}-{uuid.uuid4().hex[:8]}'
     evidence = evidence_directory(evidence)
     result = {'schema': 'sunstone-board-result-v1', 'port': args.port, 'image': str(args.image),
-              'kind': args.kind, 'outcome': 'host-error', 'first_failure': None, 'durations': {},
+              'kind': args.kind, 'lifetime': getattr(args, 'lifetime', 'returning'),
+              'outcome': 'host-error', 'first_failure': None, 'durations': {},
               'evidence_path': str(evidence.resolve()), 'result_path': str((evidence/'result.json').resolve()),
               'quarantined': False, 'launch_attempted': False, 'time': time.time(), 'host_pressure': {'start': pressure_start},
               'git_revision': subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'], capture_output=True,text=True).stdout.strip()}
@@ -1106,7 +1116,7 @@ def run_image(args, backend=Live):
                         result['decoded'] = decoded
                         if hasattr(decoder, 'failures'):
                             result['decoder_failures'] = decoder.failures(decoded)
-                else:
+                elif not result.get('expected_reset'):
                     decoded = result.get('breadcrumbs',{})
                     fault = decoded.get('fault',{})
                     last = decoded.get('last',{})
@@ -1167,6 +1177,14 @@ def finish_result(result, evidence, started, stage, owner=None):
     return summary
 
 
+def result_passed(result, decoded=True):
+    """A normal return or the exact admitted resident test ending."""
+    return (result.get('outcome') == 'returned' or
+            (result.get('outcome') == 'watchdog-reset' and result.get('expected_reset') is True and
+             result.get('dram_lost') is True and result.get('rom_returned') is True and
+             not result.get('first_failure') and not result.get('quarantined'))) and (not decoded or not result.get('decoder_failures'))
+
+
 def result_summary(result, limit=1500):
     """The lines a waiting `submit --wait` prints: outcome, stage, first failure and the decoded application summary."""
     def short(value):
@@ -1174,6 +1192,8 @@ def result_summary(result, limit=1500):
         return text if len(text) <= limit else text[:limit] + f'... ({len(text)} bytes of JSON in the result)'
     lines = [f"outcome: {result.get('outcome')}", f"stage: {result.get('stage')}",
              'first failure: ' + (short(result['first_failure']) if result.get('first_failure') else 'none')]
+    if result.get('expected_reset'):
+        lines.append('expected resident stop: RTC EL3_STOP 0x5000; DRAM lost')
     if 'decoded' in result:
         decoded = result['decoded']
         if isinstance(decoded, dict) and 'passed' in decoded:
@@ -1262,7 +1282,7 @@ def check_image(args):
     report = {'admitted': True, 'physical_access': False, 'image_sha256': images.sha(args.image),
               'watchdog': plan['watchdog'],
               'uploads': [{'address': a, 'file': str(p), 'sha256': images.sha(p)} for a, p in plan['uploads']]}
-    report.update({k: plan[k] for k in ('epoch', 'generation', 'lease', 'marker', 'host_admission') if k in plan})
+    report.update({k: plan[k] for k in ('epoch', 'generation', 'lease', 'lifetime', 'marker', 'host_admission') if k in plan})
     report['preflight'] = check_preflight(args, info, plan)
     save(evidence/'admission.json', report)
     print(json.dumps(report, indent=2))
@@ -1898,7 +1918,7 @@ class Queue:
 # The caller-controlled launch options a submission freezes in its queue entry.
 # Frozen options whose False differs from leaving them out: --no-restore-rails opts out of the automatic restoration.
 NEGATABLE_OPTIONS = ('restore_rails',)
-FROZEN_OPTIONS = ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool','radio_stage_limit')
+FROZEN_OPTIONS = ('kind','lifetime','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool','radio_stage_limit')
 
 
 def radio_stage_limit(text):
@@ -1912,6 +1932,8 @@ def radio_stage_limit(text):
 
 def run_options(parser, submit=False):
     parser.add_argument('image', type=Path)
+    parser.add_argument('--lifetime', choices=('returning', 'resident'), default='returning',
+                        help='Resident selects the bounded stop-on-finish qualification image and expected watchdog reset; requires coordinator approval.')
     parser.add_argument('--port', choices=('any',*PORTS) if submit else PORTS, required=True)
     if not submit:
         parser.add_argument('--credential-residue', type=Path, default=None, help=argparse.SUPPRESS)  # the queue's marker directory
@@ -1980,7 +2002,7 @@ def main(argv=None):
     waiting.add_argument('--no-wait',action='store_true',help='Print the result path without waiting for the result.')
     waiting.add_argument('--wait',action='store_true',
                          help='Wait for the result, then print its outcome, stage, first failure and decoded summary before the path; '
-                              'exit 0 only for a returned image.')
+                              'exit 0 for a returned image or the exact expected resident watchdog reset.')
     commands.add_parser('status')
     watch = commands.add_parser('watch')
     watch.add_argument('entry',nargs='?',help='Entry ID to wait for, or display status on changes.')
@@ -2001,7 +2023,7 @@ def main(argv=None):
         if args.process_record:
             save(args.process_record,process_identity(os.getpid()))
         result = run_image(args)
-        return 0 if result['outcome']=='returned' else 1
+        return 0 if result_passed(result, decoded=False) else 1
     queue = Queue(args.queue)
     if args.command=='submit':
         job = queue.submit(args)
@@ -2017,7 +2039,7 @@ def main(argv=None):
             result = json.loads(path.read_text())
             print('\n'.join(result_summary(result)))
             print(path)
-            return 0 if result.get('outcome')=='returned' and not result.get('decoder_failures') else 1
+            return 0 if result_passed(result) else 1
         print(path)
     elif args.command=='status':
         print(json.dumps(queue.status(),indent=2))

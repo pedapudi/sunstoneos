@@ -72,7 +72,7 @@ CFLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mge
           '-ffunction-sections', '-fdata-sections', '-O2', '-g', '-Wall', '-Wextra', '-include', 'stdint.h']
 
 # OS and board sources that run unmodified.
-OS_SOURCES = ['apps/os/application.c', 'apps/os/large.c', 'apps/os/large_load.c', 'drivers/storage/fat32_ro.c', 'kernel/appmem/app_region.c', 'kernel/appmem/large_admit.c', 'kernel/umem/umem.c', 'apps/os/services.c', 'apps/os/capture.c', 'apps/os/session.c', 'apps/os/grants.c', 'apps/os/start.c',
+OS_SOURCES = ['apps/os/application.c', 'apps/os/large.c', 'apps/os/large_load.c', 'drivers/storage/fat32_ro.c', 'kernel/appmem/app_region.c', 'kernel/appmem/large_admit.c', 'kernel/umem/umem.c', 'apps/os/services.c', 'apps/os/capture.c', 'apps/os/usb-service.c', 'apps/os/session.c', 'apps/os/grants.c', 'apps/os/start.c',
               'apps/os/thermal.c', 'apps/os/cpu.c', 'apps/os/perf.c', 'drivers/clock/a733_cpu_clock.c', 'drivers/power/a733_perf_mode.c', 'apps/os/admission.c', 'apps/board/main.c', 'apps/os/sealed.c',
               'runtime/deadline.c', 'runtime/deadline-a733.c', 'platform/a733-smp-cached/irq_table.c',
               # The I2S capture service is in every image; an ungranted session never opens its stream.
@@ -325,7 +325,8 @@ def session_for(elf, input_bytes, cpu_critical=0):
     identity = elf_bytes(elf, 'a733_smp_build_id', 32)
     services = {host.THERMAL: thermal_service(host.PREFIX_BYTES + host.SERVICE_BYTES[host.THERMAL], cpu_critical)}
     given = input_bytes if isinstance(input_bytes, list) else [input_bytes] if input_bytes is not None else []
-    raw = host.session_bytes(board_prefix(identity), services, info['manifest'], info['sha256'], 0, host.BIND_SID, given)
+    raw = host.session_bytes(board_prefix(identity), services, info['manifest'], info['sha256'],
+                             info['manifest']['devices_required'], host.BIND_SID, given)
     epoch, generation, lease = struct.unpack_from('<3Q', raw, 24)
     # The supervised launch contract (apps/board/prepare.py request_bytes): the loader
     # stamps the times and the magic when it launches.
@@ -371,12 +372,14 @@ RAMDISK_ADDRESS = 0x48000000
 
 
 def large_manifest_path(path, digest, file, with_digest=True):
-    """manifest.json of the large-region test application: one 1 GiB region loaded from a 4 MiB file."""
+    """manifest.json of the large-region test application: one 1 GiB region loaded from a 4 MiB file, and capture frames, so
+    that admission takes a capture buffer from the ledger for the application's tasks."""
     manifest = {"name": "large-test", "devices": {"required": [], "optional": []},
                 "cpu": {"cluster": "a55", "workers": 1, "priority": 2, "stack_bytes": 8192},
                 "regions": [{"name": "input", "kind": "input", "access": ["read"], "bytes": 4096}],
                 "large_regions": [{"name": "weights", "bytes": 1 << 30, "source_bytes": len(file), "access": ["read"],
                                    "file": "/sunstone-test/sunstone-region-test.bin", **({"sha256": digest} if with_digest else {})}],
+                "audio": {"rate_hz": 16000, "channels": 1, "bits": 16, "min_frames": 1, "max_frames": 4096},
                 "deadlines": {"run_us": 2000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
                 "output_limit": 64}
     Path(path).write_text(json.dumps(manifest, indent=2) + '\n')
@@ -541,10 +544,21 @@ def main():
     expected = struct.pack('<IIQ', adler32(data), 0, len(data))
     results = []
 
-    def build_hello(name, services=None):
+    def usb_manifest(name, source):
+        """The USB scenarios declare the modeled device they exercise."""
+        declaration = json.loads(source.read_text())
+        declaration['devices']['required'].append('usb-device')
+        manifest = out / (name + '-manifest.json')
+        manifest.write_text(json.dumps(declaration))
+        return manifest
+
+    def build_hello(name, services=None, usb=True):
         image = Image(out / name, services_source=services)
+        manifest = ROOT / 'apps/hello-compute/manifest.json'
+        if usb:
+            manifest = usb_manifest(name, manifest)
         application = image.application('hello-compute', ['apps/hello-compute/main.c'],
-                                         ROOT / 'apps/hello-compute/manifest.json')
+                                         manifest)
         return image.build(application)
 
     def build_latency():
@@ -566,7 +580,7 @@ def main():
         else:
             image = Image(out / name, partitioned=scheduler)
             application = image.application('hello-compute', ['apps/hello-compute/main.c'],
-                                             ROOT / 'apps/hello-compute/manifest.json')
+                                             usb_manifest(name, ROOT / 'apps/hello-compute/manifest.json'))
         return image.build(application)
 
     def build_el0_abort():
@@ -623,7 +637,8 @@ def main():
     def build_wake_race():
         """An application whose waits are given their event between the test and the registration."""
         image = Image(out / 'build-wake-race', extra_sources=['checks/qemu-os/wake-race.c'])
-        application = image.application('wake-race', ['checks/qemu-os/wake-race-main.c'], ROOT / 'checks/qemu-os/wake-race-manifest.json')
+        application = image.application('wake-race', ['checks/qemu-os/wake-race-main.c'],
+                                        usb_manifest('wake-race', ROOT / 'checks/qemu-os/wake-race-manifest.json'))
         return image.build(application, wraps=['board_service_blocked_until'])
 
     def build_heap(name, manifest):
@@ -649,7 +664,8 @@ def main():
     def build_usb_race():
         """An application that is started while the transport becomes ready between its liveness test and its wait."""
         image = Image(out / 'build-usb-race', extra_sources=['checks/qemu-os/usb-race.c'])
-        application = image.application('hello-compute', ['apps/hello-compute/main.c'], ROOT / 'apps/hello-compute/manifest.json')
+        application = image.application('hello-compute', ['apps/hello-compute/main.c'],
+                                        usb_manifest('usb-race', ROOT / 'apps/hello-compute/manifest.json'))
         return image.build(application, wraps=['board_service_blocked_until'])
 
     def build_slot1():
@@ -676,6 +692,7 @@ def main():
         partitioned_latency_elf = pool.submit(build_partitioned, 'build-partitioned-latency', True)
         prestart_elf = pool.submit(build_partitioned, 'build-prestart-yield', False, old_scheduler)
         os_elf = pool.submit(build_hello, 'build-os', args.services_source)
+        no_usb_elf = pool.submit(build_hello, 'build-no-usb', None, False)
         (out / 'build-reverted').mkdir()
         control_elf = pool.submit(build_hello, 'build-reverted-services', reverted_services(out / 'build-reverted'))
         latency_elf = pool.submit(build_latency)
@@ -710,6 +727,7 @@ def main():
             os_elf.result(), control_elf.result(), latency_elf.result(), el0_elf.result(),
             partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result(), facts_elf.result())
     built = time.monotonic() - started
+    no_usb_elf = no_usb_elf.result()
 
     def run_case(name, elf, scenario_bytes, input_bytes=data, memory='512M', extra_inputs=(), cpu_critical=0):
         raw, contract, info = session_for(elf, input_bytes, cpu_critical)
@@ -722,6 +740,12 @@ def main():
         return case
 
     usb_delay_ms = 30
+    c = run_case('normal-start-no-usb', no_usb_elf,
+                 scenario(fault=4, usb_ready_ms=60000, limit_ms=2000))
+    c.clean()
+    c.require(c.finished is not None and bytes.fromhex(c.finished['result']) == expected,
+              'the application without USB0 did not complete')
+    c.require('USB0-START' not in c.output, 'an ungranted USB0 task started')
     # 1. Normal start: the OS reports live, the application's main entry runs, and it finishes.
     c = run_case('normal-start', os_elf, scenario(usb_ready_ms=usb_delay_ms))
     c.clean()
@@ -787,8 +811,10 @@ def main():
     # service reports. A healthy session outlives the first expiry; a transport that stalls
     # after it was ready is named by the supervisor; a transport that never reports is
     # reset by the watchdog at the first expiry.
-    c = run_case('resident-normal-start', os_elf, scenario(usb_ready_ms=usb_delay_ms, hold_ms=5000, lifetime=2))
+    c = run_case('resident-normal-start', no_usb_elf,
+                 scenario(fault=4, usb_ready_ms=60000, hold_ms=5000, lifetime=2))
     c.clean()
+    c.require('USB0-START' not in c.output, 'an ungranted resident USB0 task started')
     c.require(c.finished is not None and bytes.fromhex(c.finished['result']) == expected
               and int(c.finished['t_us']) >= 5_000_000, 'the resident session did not outlive the first watchdog expiry')
     c = run_case('resident-service-stall', os_elf, scenario(fault=5, usb_ready_ms=usb_delay_ms, hold_ms=4000, lifetime=2))
@@ -1198,7 +1224,7 @@ def main():
     summary = {'large_region_switch_cost': switch_cost, 'passed': True, 'physical_access': False, 'seconds': round(elapsed, 2), 'build_seconds': round(built, 2),
                'qemu_sha256': hashlib.sha256(QEMU.read_bytes()).hexdigest(),
                'images': {p.parent.name: hashlib.sha256(p.read_bytes()).hexdigest()
-                          for p in (os_elf, control_elf, latency_elf, el0_elf, partitioned_elf,
+                          for p in (os_elf, no_usb_elf, control_elf, latency_elf, el0_elf, partitioned_elf,
                                     partitioned_latency_elf, prestart_elf, facts_elf)},
                'cases': [{'name': r.name, 'status': r.status, 'wall_seconds': round(r.seconds, 3),
                           'failure': r.failure and r.failure['line'], 'main': r.main and r.main['line'],

@@ -9,7 +9,7 @@ taken at EL3, a failed state check and an MPIDR that names no core. It checks
 the pending byte, the decoded slot, the memory-write log and the instruction
 counts against the budgets of docs/designs/cpu-fault-reset.md, and the
 supervisor's added load by disassembly. It also compiles the single-core line
-formatter on the host and compares it with checks/fault-decode.py.
+formatter on the host and compares it with tools/fault-decode.py.
 
 With --baseline IMAGE it measures the same EL3 report path in an image built
 without the capture. No hardware is accessed.
@@ -33,7 +33,7 @@ from unicorn.arm64_const import (UC_ARM64_REG_X0, UC_ARM64_REG_X29, UC_ARM64_REG
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--image', '{elf:sup}', '--output', '{output}']]
-spec = importlib.util.spec_from_file_location('fault_decode', ROOT / 'checks/fault-decode.py')
+spec = importlib.util.spec_from_file_location('fault_decode', ROOT / 'tools/fault-decode.py')
 decode = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(decode)
 

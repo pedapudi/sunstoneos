@@ -84,6 +84,7 @@
 #define SUNSTONE_CRUMB_FAIL_PMIC 0x6u       /* PMIC power service; value: authority word */
 #define SUNSTONE_CRUMB_FAIL_GPU 0x7u        /* GPU failure; value: reason or register status */
 #define SUNSTONE_CRUMB_FAIL_NPU 0xau        /* NPU failure; value: reason or register status */
+#define SUNSTONE_CRUMB_FAIL_USB0 0xbu       /* USB0 guard; layout in sunstone_usb0_stop.h */
 /* Frozen finite NPU images use group 8. The host distinguishes their defined
  * finite return producers from CPU retention using the launched image ELF. */
 /* NPU first-failure layouts, independent of progress stages. Register offsets

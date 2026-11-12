@@ -30,9 +30,9 @@ static size_t whole_groups(size_t bytes)
 { return (bytes + NPU_RUNTIME_GROUP_BYTES - 1) & ~(size_t)(NPU_RUNTIME_GROUP_BYTES - 1); }
 static size_t lines(size_t bytes) { return (bytes + 63) & ~(size_t)63; }
 static int fault(struct npu_runtime *rt)
-{ atomic_store_explicit(&rt->failed, 1, memory_order_release); return 0; }
+{ atomic_store_explicit(&rt->service.signals->runtime_failed, 1, memory_order_release); return 0; }
 static int good(const struct npu_runtime *rt)
-{ return rt && rt->prepared && !atomic_load_explicit(&rt->failed, memory_order_acquire); }
+{ return rt && rt->prepared && !atomic_load_explicit(&rt->service.signals->runtime_failed, memory_order_acquire); }
 static unsigned state(const struct npu_runtime_slot *s)
 { return atomic_load_explicit(&s->state, memory_order_acquire); }
 static void set_state(struct npu_runtime_slot *s, unsigned value)
@@ -384,7 +384,8 @@ static int dc_zva_block(void)
 
 int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config *config)
 {
-    if (!rt || !config || rt->prepared || atomic_load(&rt->failed) ||
+    if (rt && !rt->service.signals) rt->service.signals = &rt->service.own_signals;   /* the owner gave no signal words */
+    if (!rt || !config || rt->prepared || atomic_load(&rt->service.signals->runtime_failed) ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
     const struct npu_runtime_config v = *config;
     if ((v.count && !v.models) || (!v.count && !v.bounds.capacity) || !v.slots || !v.meta ||
@@ -401,7 +402,7 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
             a733_extents_intersect((uintptr_t)v.models[m].data, v.models[m].bytes, v.cpu, v.bytes) ||
             a733_extents_intersect((uintptr_t)v.models[m].data, v.models[m].bytes, (uintptr_t)rt, sizeof(*rt)))
             return 0;
-    atomic_init(&rt->failed, 0);
+    atomic_init(&rt->service.signals->runtime_failed, 0);
     /* Every table is carved from the start of the reservation, in the order lay_out walks the declaration: the per-graph
      * tables, each slot's tables, the service's and the memory layer's. The reservation is the whole pool; a declaration
      * whose tables and regions do not fit it is refused with the resource named in rt->refusal. */

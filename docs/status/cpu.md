@@ -15,7 +15,9 @@ reference at the bin-4 top operating points. A corrected reliability workload
 completes 4096 rounds in 4096 ticks on all eight pinned CPUs with matching
 payload digests, seven secondaries off and WDT0 disarmed. Three returning
 controls on port 3-1 normalize all secondary policies to static OFF and return
-normally without a replug. The records list the queue entries.
+normally without a replug. With cacheable EL1 walks, checksum controls return
+on both clusters and one 512-frame recognition matches its reference in
+422.803 ms on port 3-3. The records list the queue entries.
 
 ## Capabilities
 
@@ -29,6 +31,7 @@ normally without a replug. The records list the queue entries.
 | Integrated OS image at the top points (B1, TOP) | open | Predicted 2.10 s at boot rates, 1.20 s at the top points | [top points](../designs/cpu-top-opp.md) |
 | Cold secondary ownership through static OFF | host-tested | 23 owner cases, stage2 80 bytes below 32 KiB | [design](../designs/cold-cpu-static-off.md); [records](../evidence/cold-cpu-static-off.jsonl) |
 | Thermal capture after returning recognition | host-tested | 33,816 bytes in two ROM reads; longer-input run did not return | [design](../designs/cpu-return-thermal.md); [records](../evidence/cpu-return-thermal.jsonl) |
+| Cacheable EL1 table walks | default enabled; core-6 A/B, both cluster controls and 512-frame recognition pass | 68.458% fewer walk-loop cycles; recognition 422.803 ms versus 422.783 ms reference | [design](../designs/cpu-table-walks.md); [records](../evidence/cpu-table-walks.jsonl) |
 | Performance modes (high and low) | host-tested | 3 CPU requests and 2 PMIC writes per full switch | [design](../designs/performance-modes.md); [resident](../designs/resident-performance.md); [records](../evidence/performance-modes.jsonl) |
 | Sustained scheduling, WFI idle, retention, cluster power-down, PMU events | open | Instruction-model evidence only | Open work below |
 
@@ -37,11 +40,10 @@ normally without a replug. The records list the queue entries.
 1. Repeat the corrected reliability workload from three cold starts; one run passes, so repeatability and full restoration are unqualified.
 2. Qualify sustained scheduling, broader coherence and per-core IRQ workloads, induced-fault recovery, and idle, wake and thermal transitions.
 3. Locate the fault of the longer-recognition nonreturn. Repeat it only with a concrete correction or a narrower hypothesis.
-4. Qualify cacheable table walks with the core-6 walk measurement; eight-core cached images keep noncacheable walks until then.
-5. Qualify WFI idle behavior (instruction-model evidence only), retention and cluster power-down.
-6. Broaden PMU event qualification beyond the single-core result in `board-session-20261023/port-3-3/set5-bb4-run/`.
-7. Release the held static-OFF policy through the reviewed path before later multicore consumers use it.
-8. Run the integrated OS image at the top points (B1, then TOP), the performance-mode board case and the longer-input thermal capture; see the design docs listed above.
+4. Qualify WFI idle behavior (instruction-model evidence only), retention and cluster power-down.
+5. Broaden PMU event qualification beyond the forced-walk loop and main-core application windows in the [table-walk records](../evidence/cpu-table-walks.jsonl) and the single-core result in [cpu-pmu.jsonl](../evidence/cpu-pmu.jsonl).
+6. Release the held static-OFF policy through the reviewed path before later multicore consumers use it.
+7. Run the integrated OS image at the top points (B1, then TOP), the performance-mode board case and the longer-input thermal capture; see the design docs listed above.
 
 ## Evidence
 

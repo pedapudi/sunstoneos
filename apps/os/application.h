@@ -35,6 +35,7 @@ int os_application_gpu_share_bind(struct pvr_compute_queue *);
 int os_application_deadline(void);
 unsigned os_application_activity_generation(void);
 int os_application_finished(void);
+int os_application_succeeded(void);
 /* Wake the main task from its OS wait, or keep the wake for its next wait (apps/os/application.c). */
 void os_application_wake_main(void);
 /* The low 32 bits of the return address of the application's latest ss_progress call (0 before the first): where its

@@ -26,7 +26,7 @@ The maxima come from one run at CPU-L 1794 MHz and 1000 mV, CPU-B 2002 MHz and 1
 2. Design a fair task-lock acquisition protocol and bound contender work; this needs a port synchronization review (`vTaskSwitchContext`, `tasks.c:5393`).
 3. Reduce kernel lock contention in `ulTaskGenericNotifyTake`, keeping the scheduler invariants.
 4. Make NPU mailbox dispatch event-driven in the NPU owner; the owner polls every tick.
-5. Run the combined CPU and DMA image after the thermal-readiness fix and independently established DMA authority; the coordinator lands the reviewed runner branch first.
+5. Run the combined CPU and DMA image after the thermal-readiness fix and independently established DMA authority.
 6. Measure DMA, GPU and NPU completion timing; physical DMA cleanup is unqualified.
 7. Meet the partitioned scheduler's 25 µs masking budget during self-suspension. The running task repairs its detached event item directly and consumes its own control request before yielding. The version-four diagnostic records an 84.458 µs command, including a 51.708 µs drain stage, and 97.667 µs whole-run masking. A general maintenance scan can revisit a deferred record before its saved-frame state changes. [The scheduler timing records](../evidence/scheduler-latency-measurement.jsonl) qualify these figures and identify the required direct local transition.
 8. Qualify task-lock wait at the actual FIFO reservation. The diagnostic identifies an 18.833 µs FIFO wait behind one predecessor during startup. Its timer contribution remains unknown. During the top-point workload, a 17 µs wrapper contains a 2.042 µs uncontended FIFO interval; the remaining wrapper work cannot be charged to contention.

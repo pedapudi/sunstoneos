@@ -26,7 +26,7 @@ worst-case timing, sustained operation or power behavior.
 
 1. Meet the 25 microsecond budget for task-lock wait and interrupt masking. The ticket locks reach 29.625 microseconds of wait and 33.792 of masking.
 2. Shorten the dominant masked path, `ulTaskGenericNotifyTake` to `FreeRTOS_Yield` (33.792 microseconds with tickets). Notification and suspension changes belong to the partitioned scheduler.
-3. Shorten the dominant task-lock holds, `vTaskSuspendAll` to `vTaskExitCritical` (18.125 microseconds) and `vTaskSwitchContext` (9.625 and 8.792). The partitioned scheduler owns them; `freertos-smp-tasks.patch` and the owner run queues are unchanged here.
+3. Shorten the dominant task-lock holds, `vTaskSuspendAll` to `vTaskExitCritical` (18.125 microseconds) and `vTaskSwitchContext` (9.625 and 8.792). The partitioned scheduler owns them; `patches/freertos-smp-tasks.patch` and the owner run queues are unchanged here.
 4. Explain why the thermal rearm fast path raised wait and masking (32.500 and 38.458 microseconds) before attempting it again; the cause of the single-run regression is unknown.
 5. Repeat each lock condition on the board. One run per condition does not establish repeatability, and the ticket locks raise the task-lock wait median on every core.
 6. Reduce the initialization masking maximum of 266.333 microseconds at `prvAddNewTaskToReadyList` to `vPortRestoreTaskContext`.

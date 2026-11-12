@@ -100,7 +100,7 @@ capture fails. The final receipt binds the last sequence, digest and proofs.
 
 ## Independent CPU output is available for comparison
 
-[The CPU reference checker](../checks/isp0-pixel-reference.py) uses the identified
+[The CPU reference checker](../tools/isp0-pixel-reference.py) uses the identified
 host FFmpeg build for Bayer interpolation, RGB24 conversion and BT.601 output.
 It interleaves planar output into NV16 and records input, output, executable and
 shared-library hashes. Its [source record](../drivers/camera/isp0-reference-sources.json)

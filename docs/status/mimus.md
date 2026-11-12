@@ -29,7 +29,7 @@ Mimus runs through the SunstoneOS application kit from its own repository ([apps
 2. Qualify live input and session expiry.
 3. Qualify GPU-assisted recognition on the board.
 4. Qualify retained-state replay and thermal and fault recovery.
-5. Fix the metadata watcher path issue so that the direct-result workaround in `cadence-1101/metadata-watch-note.md` is no longer needed.
+5. Fix the metadata watcher path issue so that reading each result directly from the result file, the current workaround, is no longer needed.
 
 ## Evidence
 

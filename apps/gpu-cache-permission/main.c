@@ -1,3 +1,4 @@
+#include "a733_cpu_coherence.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "platform.h"
@@ -23,7 +24,7 @@ static void run(void *unused)
     (void)unused;
     uint64_t el, mair, tcr;
     __asm__ volatile("mrs %0, CurrentEL\n mrs %1, mair_el1\n mrs %2, tcr_el1" : "=r"(el), "=r"(mair), "=r"(tcr));
-    REQUIRE(el == 4 && mair == 0x44ff00 && tcr == UINT64_C(0x200803519), "EL1 controls");
+    REQUIRE(el == 4 && mair == 0x44ff00 && tcr == A733_CPU_COHERENCE_TCR_CACHED_WALK, "EL1 controls");
     REQUIRE(aarch64_device_cache_stride() == 64, "cache stride");
     for (unsigned i = 0; i < 2; ++i) {
         uintptr_t address = OUTPUT_BASE + i * UINT64_C(0x200000);

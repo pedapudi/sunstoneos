@@ -199,7 +199,7 @@ void NPU_IRQ_HANDLER(void)
     if(binding.service && binding.service->direct) {
         BaseType_t woken=pdFALSE;
         binding.service->direct->irq(binding.service->direct->context,&woken);
-        if(atomic_load_explicit(&binding.service->irq_pending,memory_order_acquire)) {
+        if(atomic_load_explicit(&binding.service->signals->irq_pending,memory_order_acquire)) {
             if(!gicv3_spi_mask(&source))binding.fault=1;
             binding.masked=1;
         }

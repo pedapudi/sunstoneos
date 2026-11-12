@@ -33,14 +33,16 @@ def load(name, path):
 
 
 tool = load('fault_report_tool', ROOT / 'tools/fault-report.py')
-decoder = load('fault_report_decoder', ROOT / 'checks/fault-decode.py')
+decoder = load('fault_report_decoder', ROOT / 'tools/fault-decode.py')
 
 
 def device_rules():
     """The OS-owned fault and NPU requests use the public 16-byte layout."""
     text = (ROOT / 'apps/os/usb0.c').read_text()
-    op, condition = re.search(r'if\(request.op==(5)\)\{if\(([^)]*)\)stop\(\);', text).groups()
-    assert re.search(r'if\(request.op==6&&os_granted\(OS_GRANT_NPU\)\)\{if\(([^)]*)\)stop\(\);', text)[1] == condition
+    op, condition = re.search(
+        r'if\(request.op==(5)\)\{if\(([^)]*)\)stop\(USB0_STOP_FAULT_REQUEST,0\);', text).groups()
+    assert re.search(
+        r'if\(request.op==6&&os_granted\(OS_GRANT_NPU\)\)\{if\(([^)]*)\)stop\(USB0_STOP_NPU_REQUEST,0\);', text)[1] == condition
     header = (ROOT / 'include/sunstone_app.h').read_text()
     fields = re.search(r'struct ss_host_request \{([^}]+)\}', header)[1]
     assert re.sub(r'\s+', '', fields) == 'uint8_top,flags;uint16_tcount;uint32_toffset;uint64_targument;'

@@ -14,8 +14,11 @@ static struct ss_grant grant;
 static uint64_t counter;
 static int active=1,granted=1;
 static uint8_t input[8192];
-uint8_t ss_capture_buffer[SS_CAPTURE_HEADROOM+8192];
-const size_t ss_capture_capacity=8192;
+/* The capture buffer, which admission takes from the ledger (os_capture_memory): readable and writable at EL0. */
+static uint8_t capture_storage[SS_CAPTURE_HEADROOM+8192];
+const size_t ss_capture_bytes=sizeof(capture_storage),ss_capture_capacity=8192;
+void *os_owner_memory(uint64_t bytes,uint64_t align,unsigned attributes)
+{return bytes==sizeof(capture_storage)&&!align&&attributes==OS_MEMORY_EL0_WRITE?capture_storage:NULL;}
 const struct ss_grant *ss_grant(void){return granted?&grant:NULL;}
 int ss_live(void){return active?1:-1;}
 uint64_t a733_smp_counter(void){return counter;}
@@ -40,7 +43,8 @@ static void reset(unsigned frames,unsigned channels,unsigned bits,unsigned heade
 {
     memset(&replay,0,sizeof(replay));memset(&grant,0,sizeof(grant));memset(&manifest_storage,0,sizeof(manifest_storage));grant.regions=spans;
     for(size_t i=0;i<sizeof(input);++i)input[i]=(uint8_t)(i*17+7);
-    memset(ss_capture_buffer,0xa5,sizeof(ss_capture_buffer));
+    check(os_capture_memory()==1&&ss_capture_buffer==capture_storage,14);
+    memset(ss_capture_buffer,0xa5,sizeof(capture_storage));
     manifest.audio=(struct ss_audio_format){16000,channels,bits,1,1024};
     manifest.region_count=grant.region_count=1;
     manifest.regions[0]=(struct ss_region){.kind=SS_REGION_INPUT,.access=SS_ACCESS_READ,.bytes=sizeof(input)};

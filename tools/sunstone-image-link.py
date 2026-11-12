@@ -9,9 +9,6 @@ import struct
 import re
 import subprocess
 import sys
-GATE_WAIVED = (
-    'helper module of a runnable check (not run on its own) | '
-    'run by cmake/sunstone-image.cmake at every OS image link')
 
 if not __debug__:
     raise RuntimeError('checks require assertions')

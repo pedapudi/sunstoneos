@@ -67,6 +67,8 @@ const struct ss_grant *ss_grant(void)
 }
 int os_application_finished(void)
 {return atomic_load_explicit(&finished,memory_order_acquire);}
+int os_application_succeeded(void)
+{return os_application_finished()&&((const struct ss_result *)ss_result_record)->status==SS_RESULT_FINISHED;}
 void os_application_failed(const struct ss_failure *failure,uint64_t epoch,uint64_t generation)
 {
     struct ss_result *r=(void *)ss_result_record;
@@ -127,7 +129,8 @@ void os_application_usb_ready(void)
 int ss_live(void)
 {
     if(!board_live(NULL)||os_application_finished()||atomic_load_explicit(&board.result,memory_order_acquire)==2)return -1;
-    if(!ss_grant()||!atomic_load_explicit(&usb_ready,memory_order_acquire))return 0;
+    if(!ss_grant()||((grant.devices&SS_DEVICE_USB_DEVICE)&&
+       !atomic_load_explicit(&usb_ready,memory_order_acquire)))return 0;
     if(!(grant.devices&SS_DEVICE_USB_STORAGE))return atomic_load_explicit(&board.result,memory_order_acquire)==3;
     return a733_smp_counter()/24<atomic_load_explicit(&observed_until,memory_order_acquire);
 }

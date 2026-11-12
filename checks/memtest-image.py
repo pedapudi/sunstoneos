@@ -24,7 +24,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-GATE_WAIVED = 'helper module of a runnable check (not run on its own) | run by cmake/a733-memtest.cmake'
+GATE_WAIVED = 'stale | needs a built memory qualification image (CMake target a733-memtest; no gate recipe); against a current build the platform tables hold no tested-map entries, and without --baseline the check requires the golden word'
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
