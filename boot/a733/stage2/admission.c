@@ -41,11 +41,11 @@ int a733_stage2_entry_state(void);
  * must precede this controller admission.
  * The card supply has no read-only observation, because the PMIC needs bus
  * transactions. The only evidence for it is that its rails served boot0's
- * own read of this card. boot0 is configured for the AXP2202 and may program
- * PMIC rails: its header power_mode is 1, which the pinned sys_config.fex
- * reads as axp_id 1 (AXP2202) and U-Boot's older private_boot0.h reads as
- * no PMIC, and the binary contains PMU rail code. The card rail state after
- * boot0 is unverified and needs a board observation.
+ * own read of this card. boot0 identifies an AXP8191 by its chip ID and
+ * programs DCDC2, DCDC4, DCDC6, DCDC7 and ELDO1 (docs/vendor-firmware/
+ * boot-rom-and-boot0.md); it does not use the header's power_mode byte to
+ * choose a PMIC. The card rail state after boot0 is unverified and needs a
+ * board observation.
  * Admission then makes two writes to registers that serve only SDC0: PF6
  * becomes an input with pull-up for card detection, and the module clock
  * moves from boot0's transfer rate to the identification rate that the SD
