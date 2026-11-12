@@ -2,9 +2,9 @@
 
 Status: **implemented**; modeled counts are **host-tested**. **Qualified on the
 board** for the core-0 forced-walk loop on the cached single-core images
-(Cortex-A55). The OS core-6 comparison is prepared for port 3-3. The
-port-3-1 host USB refusal precedes native launch and provides no image evidence;
-record `1794464995666959214-7c8fe3fb` in [the evidence](../evidence/cpu-table-walks.jsonl).
+(Cortex-A55). The uncached OS control returns normally on Cortex-A76 core 6
+at the top CPU and DSU points. The cached comparison remains open; record
+`1794465341494995923-e29c2535` in [the evidence](../evidence/cpu-table-walks.jsonl).
 **Open:** the core-0 workload runs, the Cortex-A76 core-6 run
 that admits the eight-core images, the Non-secure dirty-line experiment and the
 stage-2 block access. Readers are assumed to know AArch64 stage-1 translation,
@@ -183,6 +183,7 @@ record; the walk-loop figures are a board measurement.
 | Table-line maintenance per boot, eight-core; single-core | 1,344; 448 | 1,345; 449 (the flush includes the checksum line) | same |
 | Table readback per core and boot | 512 `LDP` | 512 `LDP` | same |
 | Forced-walk loop on core 0, cycles per iteration, uncached; cached | cached no slower | 693.1; 436.1 (spread under 0.2%) | `cpu-table-walks.jsonl`: `cpu-table-walks-board-core0-loop` |
+| OS forced-walk loop on core 6 at 2002 MHz, uncached cycles per iteration | control | 1206.625 median; 1.5605% spread across five blocks | `cpu-table-walks.jsonl`: `1794465341494995923-e29c2535` |
 
 The added boot work is about 1,000 maintenance operations, an estimated 0.15 ms
 at 494 MHz if each costs at most 70 cycles, plus 512 uncached loads per core, an
@@ -249,8 +250,13 @@ hole and visits 63 blocks. Its measured interval uses registers only, apart from
 the target loads. It records cycles, counter ticks, data and instruction walks,
 bus accesses and a load digest. Interrupts are masked only around each block.
 The decoder checks core identity, implemented events, the cycle/counter ratio,
-walk counts and unchanged top clock settings. It reports the five-block median
-and spread. An improvement must exceed the larger spread of the two images.
+advancing walk counters and unchanged top clock settings. Absolute event counts
+can be approximate because of pipeline effects (Cortex-A76 TRM C2.1), so the
+decoder reports them without requiring one event per retired load. A comparison
+requires overlapping measured count ranges for each walk event and a cached
+median count inside the uncached control's range. The warm-up
+block does not enter those ranges or the five-block median and spread.
+An improvement must exceed the larger spread of the two images.
 
 Build with `SUNSTONE_A733_OS=ON`, `SUNSTONE_APPLICATION=table-walks` and an
 explicit `SUNSTONE_A733_TABLE_WALKS=uncached` or `cached`. Build the typed

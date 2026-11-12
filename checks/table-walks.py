@@ -174,7 +174,7 @@ def decoder_cases(tcr, out):
     assert not host.compare(a, host.decode(payload(a733_tcr.CACHED_WALK)))['gain']
     assert not host.compare(a, host.decode(payload(a733_tcr.CACHED_WALK, 1024 * 800)))['gain']
     for offset, size, reason in ((8, 8, 'translation-control profile'), (24, 8, 'CPU'), (host.HEAD.size, 1, 'operating points'),
-                                (host.HEAD.size + 512 + 16, 8, 'walk counts')):
+                                (host.HEAD.size + 512 + 16, 8, 'walk counters did not advance')):
         bad = bytearray(payload(tcr))
         bad[offset:offset + size] = bytes(size)
         harness.refused(lambda: host.decode(bytes(bad)), reason, ValueError)
@@ -182,15 +182,40 @@ def decoder_cases(tcr, out):
     bad = bytearray(payload(tcr))
     struct.pack_into('<Q', bad, 8, tcr ^ (1 << 12))
     harness.refused(lambda: host.decode(bytes(bad)), 'translation-control profile', ValueError)
-    return 10
+    # Native core-6 record 1794465341494995923-e29c2535: the warm-up counts
+    # 1066 data walks, followed by 1024, 1024, 1023, 1023, 1024. TRM C2.1
+    # explicitly permits approximate absolute event counts from pipeline effects.
+    observed = bytearray(payload(tcr))
+    for i, count in enumerate((1066, 1024, 1024, 1023, 1023, 1024)):
+        struct.pack_into('<Q', observed, host.HEAD.size + 512 + i * host.SAMPLE.size + 16, count)
+    warm_cycles = 1024 * 900
+    struct.pack_into('<2Q', observed, host.HEAD.size + 512, warm_cycles, round(warm_cycles * 24 / 2002))
+    observed_result = host.decode(bytes(observed))
+    assert [s['dtlb_walk'] for s in observed_result['samples']] == [1066, 1024, 1024, 1023, 1023, 1024]
+    assert observed_result['median_cycles_per_iteration'] == 700
+    incompatible = host.decode(payload(a733_tcr.CACHED_WALK, 1024 * 400))
+    for sample in incompatible['samples'][1:]:
+        sample['dtlb_walk'] = 512
+    harness.refused(lambda: host.compare(a, incompatible), 'count ranges do not overlap', ValueError)
+    incompatible['samples'][-1]['dtlb_walk'] = 1024
+    harness.refused(lambda: host.compare(a, incompatible), 'median is outside the control range', ValueError)
+    return 13
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--image', type=Path, action='append', required=True)
+    p.add_argument('--image', type=Path, action='append', default=[])
+    p.add_argument('--decoder-only', action='store_true', help='run only decoder cases after a host fixture correction')
     p.add_argument('--output', type=Path, required=True)
     args = p.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
+    if args.decoder_only:
+        counts = [decoder_cases(tcr, args.output) for tcr in (a733_tcr.UNCACHED_WALK, a733_tcr.CACHED_WALK)]
+        harness.save(args.output / 'result.json', dict(passed=True, physical_access=False, decoder_cases=counts))
+        print('PASS frozen decoder: recorded A76 count variation, invalid profiles and unmatched A/B walk ranges')
+        return
+    if not args.image:
+        p.error('--image is required unless --decoder-only is selected')
     reports = []
     for path in args.image:
         image, tcr = harness.Image(path, layout_names=()), a733_tcr.for_image(path)

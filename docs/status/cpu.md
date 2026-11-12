@@ -29,7 +29,7 @@ normally without a replug. The records list the queue entries.
 | Integrated OS image at the top points (B1, TOP) | open | Predicted 2.10 s at boot rates, 1.20 s at the top points | [top points](../designs/cpu-top-opp.md) |
 | Cold secondary ownership through static OFF | host-tested | 23 owner cases, stage2 80 bytes below 32 KiB | [design](../designs/cold-cpu-static-off.md); [records](../evidence/cold-cpu-static-off.jsonl) |
 | Thermal capture after returning recognition | host-tested | 33,816 bytes in two ROM reads; longer-input run did not return | [design](../designs/cpu-return-thermal.md); [records](../evidence/cpu-return-thermal.jsonl) |
-| Cacheable EL1 table walks | host-tested; core-6 comparison prepared | Application-table maintenance: 832 operations uncached, 0 cached; cached stores complete with `DSB ISH` | [design](../designs/cpu-table-walks.md); [records](../evidence/cpu-table-walks.jsonl) |
+| Cacheable EL1 table walks | cached path host-tested; uncached core-6 control returns normally | Uncached control: 1206.625 cycles per iteration at 2002 MHz; cached comparison pending | [design](../designs/cpu-table-walks.md); [records](../evidence/cpu-table-walks.jsonl) |
 | Performance modes (high and low) | host-tested | 3 CPU requests and 2 PMIC writes per full switch | [design](../designs/performance-modes.md); [resident](../designs/resident-performance.md); [records](../evidence/performance-modes.jsonl) |
 | Sustained scheduling, WFI idle, retention, cluster power-down, PMU events | open | Instruction-model evidence only | Open work below |
 
