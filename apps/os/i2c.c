@@ -61,7 +61,7 @@ struct bus {
     atomic_uint phase,command,transfer,live;
     uint32_t want_rate,rate,input_hz,word,fault,fault_detail;
     uint32_t inherited_bgr,inherited_parent,lines_open,lines_close,idle_starts,busy_starts;
-    unsigned opened;
+    unsigned opened,open_failed;
     const struct ss_i2c_message *messages;
     uint32_t count,timeout_us;
     uint64_t deadline_us,started,finished;
@@ -235,15 +235,69 @@ static int controller_quiet(struct bus *b)
     return !(rd(base+A733_I2C_CNTR)&0xfc)&&rd(base+A733_I2C_STAT)==A733_I2C_STAT_IDLE&&
         !(rd(base+A733_I2C_DRV_CTRL)&0x80000003)&&!(rd(base+A733_I2C_DRV_INT_CTRL)&3);
 }
+/* How far an open got, and so how far a teardown must go back. */
+enum stage { S_NONE, S_CLOCK, S_PINS, S_RESET, S_GATE, S_IRQ };
+/* Undo an open, or close a bus, back to the leases: the interrupt masked, the controller disabled and its gate and
+ * reset closed, the pins and the clock returned. A step that fails leaves the bus retained (FAULT) with its resources;
+ * 1 when the bus is CLOSED. */
+static int teardown(struct bus *b,enum stage stage,int check_idle,uint64_t limit,uint64_t wall)
+{
+    if(stage>=S_IRQ){
+        wr(b->data->base+A733_I2C_CNTR,A733_I2C_CNTR_BUS_EN);
+        atomic_store_explicit(&b->live,0,memory_order_release);
+        int r=gicv3_spi_mask(&b->gic);
+        for(unsigned tries=0;r==1&&tries<200;++tries){
+            r=gicv3_spi_masked(&b->gic);
+            if(r==1)break;
+            if(r==0)delay_us(10);
+        }
+        if(r!=1){fail(b,F_CLOSE_GIC,(uint32_t)r);return 0;}
+    }
+    if(stage>=S_GATE){
+        if(check_idle){
+            if(!settle(idle,b,wall)){fail(b,F_CLOSE_IDLE,rd(b->data->base+A733_I2C_LCR)<<8|rd(b->data->base+A733_I2C_STAT));return 0;}
+            b->lines_close=a733_i2c_engine_lines_high(&b->engine);
+        }
+        wr(b->data->base+A733_I2C_CNTR,0);
+    }
+    if(stage>=S_RESET){
+        if(!lock(limit)){fail(b,F_CLOSE_GATE,1);return 0;}
+        int ok=update(b->data->bgr,b->data->gate|b->data->reset,0);
+        unlock();
+        if(!ok){fail(b,F_CLOSE_GATE,2);return 0;}
+    }
+    if(stage>=S_PINS){
+        enum a733_pins_result p=a733_pins_release_banked(&providers.shared.pins,&b->pins,1,limit);
+        if(p!=A733_PINS_OK){fail(b,F_CLOSE_PINS,(uint32_t)p);return 0;}
+    }
+    if(stage>=S_CLOCK){
+        if(a733_clock_release(&providers.shared.clocks,&b->clock,limit)!=A733_CLOCK_OK){fail(b,F_CLOSE_CLOCK,0);return 0;}
+        b->clock=(struct a733_clock_token){0};
+    }
+    atomic_store_explicit(&b->live,0,memory_order_release);
+    atomic_store_explicit(&b->transfer,FREE,memory_order_release);
+    atomic_store_explicit(&b->phase,CLOSED,memory_order_release);
+    return 1;
+}
+/* An open that cannot finish is undone, and the application is told once: the bus returns to CLOSED with the first
+ * failure recorded. Only a teardown that itself fails retains the bus. */
+static void abandon(struct bus *b,enum stage stage,unsigned step,uint32_t detail)
+{
+    if(!b->fault){b->fault=step;b->fault_detail=detail;}
+    b->open_failed=1;
+    (void)teardown(b,stage,0,lease_now()+50000,now_us()+50000);
+}
+#define ABANDON(step,detail) do{abandon(b,stage,(step),(detail));return;}while(0)
 static void open_bus(struct bus *b,unsigned n)
 {
     atomic_store_explicit(&b->phase,OPENING,memory_order_release);
+    enum stage stage=S_NONE;
     const uint64_t owner_id=OWNER_BASE+n+1,limit=lease_now()+50000,wall=now_us()+50000;
     b->lines_open=b->lines_close=unsampled;
     uint32_t input;a733_clock_mask_t extra;
-    if(!parent(b,&input,&extra)){fail(b,F_PARENT,rd(b->data->parent_register));return;}
+    if(!parent(b,&input,&extra))ABANDON(F_PARENT,rd(b->data->parent_register));
     uint32_t actual;
-    if(!a733_i2c_clock_word(input,b->want_rate,&b->word,&actual)){fail(b,F_PARENT,input);return;}
+    if(!a733_i2c_clock_word(input,b->want_rate,&b->word,&actual))ABANDON(F_PARENT,input);
     b->input_hz=input;b->rate=actual;
     a733_clock_mask_t shared=extra|(b->data->parent==A733_I2C_PARENT_APB1?A733_CLOCK_FABRIC:A733_CLOCK_APBS1);
     enum a733_clock_result c=A733_CLOCK_BUSY;
@@ -251,15 +305,16 @@ static void open_bus(struct bus *b,unsigned n)
         c=a733_clock_acquire(&providers.shared.clocks,owner_id,shared,b->scope,limit,&b->clock);
         if(c==A733_CLOCK_BUSY)delay_us(50);
     }
-    if(c!=A733_CLOCK_OK){fail(b,F_CLOCK,(uint32_t)c);return;}
-    if(rd(b->data->parent_register)!=b->inherited_parent){fail(b,F_PARENT,rd(b->data->parent_register));return;}
+    if(c!=A733_CLOCK_OK)ABANDON(F_CLOCK,(uint32_t)c);
+    stage=S_CLOCK;
+    if(rd(b->data->parent_register)!=b->inherited_parent)ABANDON(F_PARENT,rd(b->data->parent_register));
     /* The controller must be unused: gate and reset closed, nothing running. An enabled controller is refused, not reset. */
-    if(!lock(limit)){fail(b,F_GATE,1);return;}
+    if(!lock(limit))ABANDON(F_GATE,1);
     b->inherited_bgr=rd(b->data->bgr);
     const uint32_t both=b->data->gate|b->data->reset;
     int ok=!(b->inherited_bgr&both);
     unlock();
-    if(!ok){fail(b,F_GATE,b->inherited_bgr);return;}
+    if(!ok)ABANDON(F_GATE,b->inherited_bgr);
     /* The pins, with the inherited configuration as the expectation, then pull-up and the controller function. */
     int valid=1;
     const unsigned pin[2]={b->route->scl_pin,b->route->sda_pin};
@@ -268,41 +323,47 @@ static void open_bus(struct bus *b,unsigned n)
         b->requests[i]=(struct a733_pin_request_banked){.bank=b->route->bank,.pin=pin[i],.expected=was,
             .desired={.function=b->route->function,.pull=1,.drive=0}};
     }
-    if(!valid){fail(b,F_PINS,0xffff);return;}
+    if(!valid)ABANDON(F_PINS,0xffff);
     enum a733_pins_result p=A733_PINS_BUSY;
     while(p==A733_PINS_BUSY&&lease_now()<limit){
         p=a733_pins_acquire_banked(&providers.shared.pins,owner_id,b->requests,2,&b->pins,limit);
         if(p==A733_PINS_BUSY)delay_us(50);
     }
-    if(p!=A733_PINS_OK){fail(b,F_PINS,(uint32_t)p);return;}
+    /* RECOVERY means a write may have happened: the pin manager retains the lease, and so does this bus. */
+    if(p==A733_PINS_RECOVERY){fail(b,F_PINS,(uint32_t)p);return;}
+    if(p!=A733_PINS_OK)ABANDON(F_PINS,(uint32_t)p);
+    stage=S_PINS;
     /* Manual 18.11.6.1: reset low then high, then the gate, with the pins already in function. */
-    if(!lock(limit)){fail(b,F_GATE,2);return;}
+    if(!lock(limit))ABANDON(F_GATE,2);
     ok=update(b->data->bgr,b->data->reset,b->data->reset);
     unlock();
-    if(!ok){fail(b,F_GATE,3);return;}
+    stage=S_RESET;
+    if(!ok)ABANDON(F_GATE,3);
     delay_us(2);
-    if(!lock(limit)){fail(b,F_GATE,4);return;}
+    if(!lock(limit))ABANDON(F_GATE,4);
     ok=update(b->data->bgr,b->data->gate,b->data->gate);
     unlock();
-    if(!ok){fail(b,F_GATE,5);return;}
+    stage=S_GATE;
+    if(!ok)ABANDON(F_GATE,5);
     /* Bring-up of the controller: quiet registers first, then soft reset and the rate. */
-    if(!controller_quiet(b)){fail(b,F_IDLE,rd(b->data->base+A733_I2C_STAT));return;}
+    if(!controller_quiet(b))ABANDON(F_IDLE,rd(b->data->base+A733_I2C_STAT));
     a733_i2c_engine_init(&b->engine,&(struct a733_i2c_io){engine_read,engine_write,b});
     a733_i2c_engine_reset(&b->engine);
-    if(!settle(reset_done,b,wall)){fail(b,F_RESET,rd(b->data->base+A733_I2C_SRST));return;}
+    if(!settle(reset_done,b,wall))ABANDON(F_RESET,rd(b->data->base+A733_I2C_SRST));
     /* INT_EN stays set while idle: INT_FLAG, and so the interrupt line, rises only after a START request. */
     a733_i2c_engine_enable(&b->engine,b->word);
-    if(!settle(idle,b,wall)){fail(b,F_IDLE,rd(b->data->base+A733_I2C_LCR)<<8|rd(b->data->base+A733_I2C_STAT));return;}
+    if(!settle(idle,b,wall))ABANDON(F_IDLE,rd(b->data->base+A733_I2C_LCR)<<8|rd(b->data->base+A733_I2C_STAT));
     b->lines_open=a733_i2c_engine_lines_high(&b->engine);b->opened=1;
-    /* The interrupt: live first, then the line, then INT_EN. */
+    /* The interrupt: live first, then the line (which the teardown masks from here on), then INT_EN. */
     atomic_store_explicit(&b->live,1,memory_order_release);
+    stage=S_IRQ;
     int r=0;
     for(unsigned tries=0;tries<100&&!r;++tries){
         r=gicv3_spi_rearm(&b->gic);
         if(r<0)break;
         if(!r)delay_us(10);
     }
-    if(r<=0){fail(b,F_GIC,(uint32_t)r);return;}
+    if(r<=0)ABANDON(F_GIC,(uint32_t)r);
     wr(b->data->base+A733_I2C_CNTR,A733_I2C_CNTR_BUS_EN|A733_I2C_CNTR_INT_EN);
     atomic_store_explicit(&b->phase,OPEN,memory_order_release);
 }
@@ -324,31 +385,8 @@ static void finish_aborted(struct bus *b)
 static void close_bus(struct bus *b)
 {
     atomic_store_explicit(&b->phase,CLOSING,memory_order_release);
-    const uint64_t limit=lease_now()+50000,wall=now_us()+50000;
     if(atomic_load_explicit(&b->transfer,memory_order_acquire)==ACTIVE)finish_aborted(b);
-    /* Interrupt source off at the controller, then at the distributor, and the settled distributor read. */
-    wr(b->data->base+A733_I2C_CNTR,A733_I2C_CNTR_BUS_EN);
-    atomic_store_explicit(&b->live,0,memory_order_release);
-    int r=gicv3_spi_mask(&b->gic);
-    for(unsigned tries=0;r==1&&tries<200;++tries){
-        r=gicv3_spi_masked(&b->gic);
-        if(r==1)break;
-        if(r==0)delay_us(10);
-    }
-    if(r!=1){fail(b,F_CLOSE_GIC,(uint32_t)r);return;}
-    if(!settle(idle,b,wall)){fail(b,F_CLOSE_IDLE,rd(b->data->base+A733_I2C_LCR)<<8|rd(b->data->base+A733_I2C_STAT));return;}
-    b->lines_close=a733_i2c_engine_lines_high(&b->engine);
-    wr(b->data->base+A733_I2C_CNTR,0);
-    if(!lock(limit)){fail(b,F_CLOSE_GATE,1);return;}
-    int ok=update(b->data->bgr,b->data->gate|b->data->reset,0);
-    unlock();
-    if(!ok){fail(b,F_CLOSE_GATE,2);return;}
-    enum a733_pins_result p=a733_pins_release_banked(&providers.shared.pins,&b->pins,1,limit);
-    if(p!=A733_PINS_OK){fail(b,F_CLOSE_PINS,(uint32_t)p);return;}
-    if(a733_clock_release(&providers.shared.clocks,&b->clock,limit)!=A733_CLOCK_OK){fail(b,F_CLOSE_CLOCK,0);return;}
-    b->clock=(struct a733_clock_token){0};
-    atomic_store_explicit(&b->transfer,FREE,memory_order_release);
-    atomic_store_explicit(&b->phase,CLOSED,memory_order_release);
+    (void)teardown(b,S_IRQ,1,lease_now()+50000,now_us()+50000);
 }
 
 /* --- owner: loop ---------------------------------------------------------------------------------------------------- */
@@ -429,6 +467,7 @@ int os_i2c_start(void)
         b->data=a733_i2c_bus_data(n);b->route=route_of(n);b->scope=scope_of(n);
         b->max_rate=ss_i2c_declarations[i].max_rate_hz;
         b->gic=(struct gicv3_spi){GICD,b->data->intid};
+        b->lines_open=b->lines_close=unsampled;
         declared_mask|=1u<<n;
     }
     owner=xTaskCreateStaticAffinitySet(os_i2c_task,"os-i2c",sizeof(owner_stack)/sizeof(owner_stack[0]),NULL,4,
@@ -453,6 +492,7 @@ int ss_i2c_open(unsigned n,uint32_t rate_hz)
     case OPENING:return 0;
     default:break;
     }
+    if(b->open_failed&&atomic_load_explicit(&b->command,memory_order_acquire)==NO_COMMAND){b->open_failed=0;return -1;}
     unsigned none=NO_COMMAND;
     b->want_rate=rate_hz;b->waiter=xTaskGetCurrentTaskHandle();
     if(atomic_compare_exchange_strong_explicit(&b->command,&none,OPEN_COMMAND,memory_order_acq_rel,memory_order_acquire))kick();
@@ -498,7 +538,7 @@ void ss_i2c_wait(uint32_t wait_us)
 int ss_i2c_info(unsigned n,struct ss_i2c_info *info)
 {
     struct bus *b=n<A733_I2C_BUS_COUNT&&(declared_mask&(1u<<n))?&buses[n]:NULL;
-    if(!b||!info||!ss_grant()||!b->opened)return -1;
+    if(!b||!info||!ss_grant())return -1;
     *info=(struct ss_i2c_info){n,b->rate,b->input_hz,b->word,b->engine.interrupts,b->engine.spurious,
         atomic_load_explicit(&b->strays,memory_order_relaxed),b->data->intid,b->idle_starts,b->busy_starts,
         b->lines_open,b->lines_close,b->fault,b->fault_detail};

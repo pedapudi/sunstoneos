@@ -88,8 +88,8 @@ int ss_i2c_result(unsigned bus, struct ss_i2c_result *result);
 /* Sleep until a transfer on any bus finishes or wait_us passes. Call the class
  * operation again after waking; wake-ups may coalesce. */
 void ss_i2c_wait(uint32_t wait_us);
-/* Counters and observations of the bus, valid once it has been opened and also after it closes
- * (the line samples at close are read here). 1 filled, -1 not granted or never opened. */
+/* Counters and observations of the bus: valid at any time for a granted bus, and the way to read why an open failed
+ * (fault, fault_detail) and the line samples taken at open and at close. 1 filled, -1 not granted. */
 int ss_i2c_info(unsigned bus, struct ss_i2c_info *info);
 /* Release the controller: interrupt masked, bus idle, gate and reset closed, pins
  * and clock lease returned. 1 closed, 0 in progress, -1 failed (the bus is retained).
