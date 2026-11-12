@@ -178,6 +178,9 @@ static int open_queue(void *unused,unsigned depth)
     uint64_t enabled=original_sctlr|(UINT64_C(1)<<26);
     CPU_WRITE_SCTLR(enabled);
     ring.job_limit=UINT64_MAX; /* no lifetime count of jobs; the 64-bit sequence is the only bound */
+#ifdef SUNSTONE_NPU_OP_TIMING
+    direct.cut_request=(volatile uint32_t *)&ring.cut;
+#endif
     opened=1;return 1;
 }
 static int close_queue(void *unused)

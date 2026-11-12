@@ -56,6 +56,9 @@ static void acquire(unsigned g)
         ss_progress(); vTaskDelay(1);
     }
 }
+static unsigned prefixes_used;
+/* The prefix pass: for k = 1 .. d->prefixes, d->prefix_jobs single jobs of the graph's first k operations. */
+static void time_prefixes(unsigned g, const struct npu_timing_graph_desc *d);
 static int below(const void *a, const void *b) { uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b; return (x > y) - (x < y); }
 static void sort(uint32_t *v, unsigned n)
 {
@@ -75,6 +78,7 @@ static void time_graph(unsigned g, const uint8_t *region, const struct npu_timin
     queue->traffic = (struct ss_npu_queue_traffic){0};
     write_inputs(g, region + d->input_offset, d->input_bytes);
     r->input_bytes = d->input_bytes;
+    if (d->prefixes) time_prefixes(g, d);
     for (unsigned job = 0; job < 3; ++job) { struct ss_npu_fence f; submit(g, &f, job); finish(f, job); }   /* warm-up */
     for (unsigned job = 0; job < d->jobs; ++job) {
         struct ss_npu_fence f;
@@ -120,6 +124,32 @@ static void time_graph(unsigned g, const uint8_t *region, const struct npu_timin
     r->idle_waits_busy = (w.waits > UINT32_MAX ? UINT32_MAX : w.waits) | (uint64_t)w.busy_bits << 32;
     result.idle_wait_ticks[g] = (w.max_ticks > UINT32_MAX ? UINT32_MAX : w.max_ticks) |
                                 (uint64_t)(w.ticks > UINT32_MAX ? UINT32_MAX : w.ticks) << 32;
+}
+static void time_prefixes(unsigned g, const struct npu_timing_graph_desc *d)
+{
+    if (d->prefix_jobs > NPU_TIMING_JOBS || !d->prefix_jobs || d->prefixes > NPU_TIMING_PREFIXES - prefixes_used) fault(0x40, g);
+    result.prefix_first[g] = prefixes_used; result.prefix_count[g] = d->prefixes;
+    for (unsigned k = 1; k <= d->prefixes; ++k) {
+        struct npu_timing_prefix *p = &result.prefix[prefixes_used++];
+        queue->cut = (struct ss_npu_queue_cut){g + 1, k, 0, 0};     /* no job is in flight here */
+        { struct ss_npu_fence f; submit(g, &f, k); finish(f, k); }   /* warm-up */
+        queue->traffic = (struct ss_npu_queue_traffic){0};
+        for (unsigned job = 0; job < d->prefix_jobs; ++job) {
+            struct ss_npu_fence f;
+            const uint64_t t0 = ss_counter_ticks();
+            submit(g, &f, job);
+            int done;
+            while ((done = ss_npu_queue_status(queue, f)) == 0) if (ss_live() < 0) fault(0x41, job);
+            ticks[job] = (uint32_t)(ss_counter_ticks() - t0);
+            if (done < 0 || ss_npu_queue_release(queue, f) != 1) fault(0x42, job);
+            ss_progress();
+        }
+        sort(ticks, d->prefix_jobs);
+        const struct ss_npu_queue_traffic t = queue->traffic;
+        *p = (struct npu_timing_prefix){ticks[d->prefix_jobs / 2], ticks[0], d->prefix_jobs, queue->cut.slot_operations,
+                                        queue->cut.cut_bytes, 0, t.cycles, t.read8, t.write8};
+    }
+    queue->cut = (struct ss_npu_queue_cut){0};
 }
 void npu_timing_main(const struct ss_grant *grant)
 {

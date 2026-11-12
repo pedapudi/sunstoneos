@@ -560,6 +560,12 @@ endif()
 if(SUNSTONE_NPU_TRAFFIC_COUNTERS)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_NPU_TRAFFIC_COUNTERS=1)
 endif()
+# SUNSTONE_NPU_OP_TIMING, the most operations of any graph of the image, lets a job run a graph's first operations only
+# (drivers/npu/npu_runtime_queue.c, struct ss_npu_queue_cut).
+set(SUNSTONE_NPU_OP_TIMING "" CACHE STRING "Most operations of a graph whose jobs may be cut at an operation end")
+if(SUNSTONE_NPU_OP_TIMING)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_NPU_OP_TIMING=${SUNSTONE_NPU_OP_TIMING}u)
+endif()
 target_compile_definitions(sunstone-a733-os-core PRIVATE SS_PULL_MOVES_PER_PASS=${SUNSTONE_PULL_MOVES_PER_PASS}u)
 if(SUNSTONE_OWNER_COUNTERS)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_OWNER_COUNTERS=1)

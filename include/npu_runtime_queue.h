@@ -44,6 +44,11 @@ struct npu_runtime_queue {
      * holds the last completed job's differences while traffic_ready is set. */
     uint32_t traffic_start[4], traffic[4];
     unsigned traffic_armed, traffic_ready;
+    /* A build with SUNSTONE_NPU_OP_TIMING: the application's request (struct ss_npu_queue_cut, four words), and the command
+     * bytes a cut job's footer replaced, restored at its completion. */
+    volatile uint32_t *cut_request;
+    uint8_t *cut_at;
+    uint32_t cut_saved[16];
     BaseType_t *woken; /* Non-null only during its ISR. */
     /* Optional shared-ring bridge. It consumes bounded work after each IRQ
      * and owns completion notification when installed. Configure before claim. */

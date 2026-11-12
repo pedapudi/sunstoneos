@@ -2,10 +2,11 @@
 """Write the data region of the NPU timing application (timing.h): a header that names, for each graph of the list, its single
 jobs, the jobs in flight of its pipelined pass and where its inputs and reference outputs lie, then those files.
 
-  pack.py --graphs DIR --jobs NAME=SINGLE[:DEPTH] ... --output vectors.region
+  pack.py --graphs DIR --jobs NAME=SINGLE[:DEPTH[:PREFIXES:PREFIX_JOBS]] ... --output vectors.region
 
 DIR holds artifacts.json (name -> {model, inputs, references}) and list.json ({"npu_models": [names]}), in the order the OS
-admits them. A graph not named in --jobs runs 100 single jobs and 100 with 2 in flight.
+admits them. A graph not named in --jobs runs 100 single jobs and 100 with 2 in flight. PREFIXES and PREFIX_JOBS ask for the
+prefix pass (an OS built with SUNSTONE_NPU_OP_TIMING): PREFIX_JOBS jobs of the graph's first k operations for k = 1 .. PREFIXES.
 """
 import argparse
 import json
@@ -24,11 +25,13 @@ assert 0 < len(names) <= 16, len(names)
 plan = {}
 for item in a.jobs:
     name, spec = item.split('=')
-    single, _, depth = spec.partition(':')
-    plan[name] = (int(single), int(depth or 0))
+    fields = [int(f) for f in spec.split(':')]
+    assert len(fields) in (1, 2, 4), item
+    fields += [0] * (4 - len(fields))
+    plan[name] = tuple(fields)
 assert set(plan) <= set(names), set(plan) - set(names)
 body, rows = bytearray(), []
-header_bytes = 16 + 16 * 40
+header_bytes = 16 + 16 * 48
 for name in names:
     files = artifacts[name]
     blobs = []
@@ -37,11 +40,12 @@ for name in names:
         body.extend(bytes(-(header_bytes + len(body)) % PAGE))
         blobs.append((header_bytes + len(body), len(data)))
         body.extend(data)
-    single, depth = plan.get(name, (100, 2))
-    assert 0 < single <= 1000 and 0 <= depth <= 64
-    rows.append(struct.pack('<IIQQQQ', single, depth, *blobs[0], *blobs[1]))
-rows += [bytes(40)] * (16 - len(rows))
-region = struct.pack('<4I', 0x4d49544e, 1, len(names), 0) + b''.join(rows) + body
+    single, depth, prefixes, prefix_jobs = plan.get(name, (100, 2, 0, 0))
+    assert 0 < single <= 1000 and 0 <= depth <= 64 and (not prefixes or 0 < prefix_jobs <= 1000)
+    rows.append(struct.pack('<IIIIQQQQ', single, depth, prefixes, prefix_jobs, *blobs[0], *blobs[1]))
+assert sum(struct.unpack_from('<I', r, 8)[0] for r in rows) <= 512, 'at most 512 prefixes in all (NPU_TIMING_PREFIXES)'
+rows += [bytes(48)] * (16 - len(rows))
+region = struct.pack('<4I', 0x4d49544e, 2, len(names), 0) + b''.join(rows) + body
 region += bytes(-len(region) % PAGE)
 a.output.write_bytes(region)
 print('%d graphs, %d bytes' % (len(names), len(region)))

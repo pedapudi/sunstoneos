@@ -64,6 +64,10 @@ struct ss_npu_queue {
      * reads and writes (units of 8 bytes), cycles and idle cycles in all (struct npu_runtime_queue, traffic). EL1 only adds
      * to these; the application may clear them while no job is in flight. */
     struct ss_npu_queue_traffic { uint64_t jobs, read8, write8, cycles, idle_cycles; } traffic;
+    /* In an image built with SUNSTONE_NPU_OP_TIMING: the application asks that the jobs of slot slot_plus_one - 1 run the graph's
+     * first operations operations only (0, or the graph's count or more: all of them). At the start of each job of that slot
+     * EL1 writes the graph's operation count and the command bytes the job runs when it was cut (0 when it was not). */
+    struct ss_npu_queue_cut { uint32_t slot_plus_one, operations, slot_operations, cut_bytes; } cut;
 };
 /* The bytes of the tables for handles handles holding tensors tensors in all (inputs and outputs), links requested edges and a
  * ring of depth entries. */

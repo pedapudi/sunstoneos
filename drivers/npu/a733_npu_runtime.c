@@ -804,6 +804,9 @@ static int load_work(struct npu_runtime *rt)
                                 &s->layout, &rt->cursor) || !same_plan(&s->layout, plan)) {
             load_end(rt, s, 0); return 1;
         }
+#ifdef SUNSTONE_NPU_OP_TIMING
+        s->op_count = 0;
+#endif
         for (unsigned i = 0; i < plan->inputs + plan->outputs; ++i) {
             struct npu_runtime_tensor *t = &s->tensors[i];
             int output = i >= plan->inputs;
@@ -820,6 +823,12 @@ static int load_work(struct npu_runtime *rt)
     case LOAD_ASSEMBLE: {
         int r = nbg_assembly_next(&rt->view, s->targets, &s->layout, &rt->cursor, NPU_RUNTIME_ASSEMBLY_STEP);
         if (r < 0) { load_end(rt, s, 0); return 1; }
+#ifdef SUNSTONE_NPU_OP_TIMING
+        /* One operation a step: an unfinished step ends where operation cursor.operation - 1 ends. */
+        if (!r && s->op_count < SUNSTONE_NPU_OP_TIMING) s->op_end[s->op_count++] = rt->cursor.offset;
+        else if (!r) s->op_count = UINT32_MAX;
+        if (r) s->op_count = s->op_count == UINT32_MAX ? 0 : s->op_count + 1;
+#endif
         if (r) {
             s->stream_bytes = rt->cursor.offset;
             next_phase(s, LOAD_END);
