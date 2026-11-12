@@ -2,6 +2,15 @@
 #include "task.h"
 #include "platform.h"
 #include "workload.h"
+#include "sunstone_app.h"
+
+/* The QEMU models have no OS and no address spaces; the kit's task creation is the direct FreeRTOS call. */
+void *ss_task_create_static_affinity_set(void (*entry)(void *), const char *name, uint32_t stack_words, void *arg,
+                                         unsigned long priority, void *stack, void *tcb, unsigned long affinity)
+{
+    return xTaskCreateStaticAffinitySet(entry, name, stack_words, arg, (UBaseType_t)priority, (StackType_t *)stack,
+                                        (StaticTask_t *)tcb, (UBaseType_t)affinity);
+}
 
 #ifdef SUNSTONE_LATENCY_CPU_ONLY
 /* The CPU control has no DMA client; these hooks stand for the board image's absence of one. */
