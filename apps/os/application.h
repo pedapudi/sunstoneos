@@ -38,6 +38,12 @@ int os_application_finished(void);
 int os_application_succeeded(void);
 /* Wake the main task from its OS wait, or keep the wake for its next wait (apps/os/application.c). */
 void os_application_wake_main(void);
+/* The same wake-up for the task that submitted a request, from a task or from an interrupt handler. */
+void os_application_wake_task(TaskHandle_t);
+void os_application_wake_task_from_isr(TaskHandle_t,long *woken); /* a BaseType_t pointer */
+/* The OS wait of the calling task to an absolute time in microseconds (sunstone_deadline_now_us epoch), ended early by a
+ * wake-up or when unless() returns nonzero after the wait is registered. */
+int os_application_wait_unless(uint64_t until,int (*unless)(void));
 /* The low 32 bits of the return address of the application's latest ss_progress call (0 before the first): where its
  * waiting loop is. The cutoff failure of the return supervisor records it. */
 uint32_t os_application_progress_site(void);

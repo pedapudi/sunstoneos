@@ -5,8 +5,8 @@
  * convert_chunk hook for a chunk that is free, so no device and no task uses it.
  *
  * Every table that maps the chunk changes together. Between the invalid entry and the new one no entry maps the
- * chunk, so write-back and non-cacheable mappings of one page never coexist, in a table or in a TLB; the invalidate
- * of the cache lines runs afterwards through the new mapping. The instructions sit behind umem_cpu_ops so a host
+ * chunk, so write-back and non-cacheable mappings of one page never coexist, in a table or in a TLB. Cache lines are
+ * cleaned and invalidated through the old mapping before any descriptor changes. The instructions sit behind umem_cpu_ops so a host
  * model can check the order. */
 #include <stdint.h>
 
@@ -16,7 +16,7 @@ struct umem_cpu_ops {
     void (*dsb_ish)(void *ctx);
     void (*isb)(void *ctx);
     void (*tlbi_va_all_asids)(void *ctx, uint64_t va);           /* TLBI VAAE1IS */
-    int (*dc_ivac)(void *ctx, uint64_t va, uint64_t bytes);      /* invalidate by VA, then DSB SY; 0 on success */
+    int (*dc_civac)(void *ctx, uint64_t va, uint64_t bytes);     /* clean and invalidate, complete before return; 0 on success */
 };
 
 /* A level-2 table that maps one gigabyte of the identity map starting at base (512 entries of 2 MiB). */

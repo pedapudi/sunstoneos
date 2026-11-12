@@ -77,6 +77,8 @@
     X("dma", os_dma, os_dma_start, OS_WITH_DMA) \
     X("radio", os_radio, os_radio_start, OS_ALWAYS) \
     X("headset", os_headset, os_headset_start, OS_WITH_HEADSET) \
+    X("i2c", os_i2c, os_i2c_start, OS_ALWAYS) \
+    X("rtc", os_rtc, os_rtc_start, OS_ALWAYS) \
     X("gpu-queue", os_gpu_queue, os_gpu_queue_start_entry, OS_WITH_GPU)
 
 /* X(NAME, name, window_us, grant, with): a task the supervisor watches, after the board's five and the application
@@ -100,7 +102,8 @@ enum { OS_GRANT_ROWS(OS_GRANT_LINKED_) };
 enum { OS_SERVICE_APPLICATION = 5, OS_SUPERVISED_ROWS(OS_SERVICE_ID_) OS_SERVICES };
 /* Deadline storage for supervised tasks, the SD owner, the NPU bootstrap,
  * service worker and optional queue power worker, GPU service/peer, and DMA
- * service/bootstrap workers and the optional periodic invalidation task. */
+ * service/bootstrap workers, I2C and RTC owners, and the optional periodic
+ * invalidation task. The bus owners have start entries but no supervised rows. */
 #ifdef SUNSTONE_A733_OS_SD_WRITE
 #define OS_SD_LOADER_DEADLINES 1u
 #else
@@ -112,7 +115,7 @@ enum { OS_SERVICE_APPLICATION = 5, OS_SUPERVISED_ROWS(OS_SERVICE_ID_) OS_SERVICE
 #else
 #define OS_BG_DEADLINES 0u
 #endif
-#define OS_DEADLINE_OWNERS (OS_SERVICES + 4u + OS_WITH_GPU(2u +) OS_WITH_DMA(2u +) OS_WITH_TLBI(1u +) OS_SD_LOADER_DEADLINES + OS_BG_DEADLINES)
+#define OS_DEADLINE_OWNERS (OS_SERVICES + 6u + OS_WITH_GPU(2u +) OS_WITH_DMA(2u +) OS_WITH_TLBI(1u +) OS_SD_LOADER_DEADLINES + OS_BG_DEADLINES)
 /* The supervision table's rows after the application's, and the grant each one needs, indexed by service id. */
 #define OS_SERVICE_ENTRY_(NAME, name, window_us, grant, with) with({name, window_us},)
 #define OS_SERVICE_TABLE OS_SUPERVISED_ROWS(OS_SERVICE_ENTRY_)

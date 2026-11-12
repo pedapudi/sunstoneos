@@ -20,7 +20,7 @@ from harness import Image, machine, save, environment
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--build', '{build:headset}', '--output', '{output}']]
-CHECK_INPUTS = ['apps/os/cpu-return-spi.c', 'apps/os/cpu-return.h', 'tools/sunstone-manifest.py',
+CHECK_INPUTS = ['apps/os/cpu-return-spi.c', 'apps/os/cpu-return.h', 'apps/os/cpu-return-spi.h', 'tools/sunstone-manifest.py',
                 'checks/cpu-return-spi-table.py', 'platform/a733-smp-cached/irq_table.h',
                 'platform/a733-smp-cached/irq_table.c', 'platform/a733-smp-cached/memory.c',
                 'platform/a733-smp-cached/link.ld']
@@ -35,7 +35,7 @@ def compile_image(args, profile, mutant=None):
     spec.loader.exec_module(generator)
     tables = generator.c_tables(None)
     begin = tables.index('const struct a733_irq_route a733_irq_routes[]')
-    end = tables.index('\n', tables.index('const unsigned os_cpu_return_spi_capacity=', begin))
+    end = tables.index('\n', tables.index('const unsigned os_return_irq_capacity=', begin))
     declaration = tables[begin:end]
     memory = (args.tree/'platform/a733-smp-cached/memory.c').read_text()
     start = memory.index('    for (unsigned i = 0; i < 512; ++i) {\n        uintptr_t a = 0x42000000')
@@ -47,7 +47,7 @@ def compile_image(args, profile, mutant=None):
     fixture += '''
 #define MONITOR_DATA __attribute__((section(".bss.a733_smp_monitor")))
 volatile struct qualification_report a733_qualification_report MONITOR_DATA;
-const unsigned fixture_snapshot_bytes=sizeof(struct os_cpu_return_spi_snapshot);
+const unsigned fixture_snapshot_bytes=sizeof(struct os_return_irq);
 uint64_t fixture_time MONITOR_DATA;
 uint64_t a733_smp_counter(void){return ++fixture_time;}
 #define TABLE __attribute__((section(".bss.a733_cached_tables"),aligned(4096)))
@@ -79,7 +79,7 @@ void fixture_monitor_mapping(void){
     if mutant:
         text = source.read_text()
         if mutant == 'hardcap-four':
-            old = 'a733_irq_route_count>os_cpu_return_spi_capacity'
+            old = 'a733_irq_route_count>os_return_irq_capacity'
             assert text.count(old) == 1
             text = text.replace(old, 'a733_irq_route_count>4u')
         elif mutant == 'stale-resave':
@@ -119,18 +119,18 @@ def readonly_word(elf, symbols, name):
 
 
 def run(path, profile, case):
-    image = Image(path, {'qualification_report', 'os_cpu_return_spi_snapshot'})
+    image = Image(path, {'qualification_report', 'os_return_irq'})
     with path.open('rb') as stream:
         elf = ELFFile(stream)
         symbols = {symbol.name: symbol for symbol in elf.get_section_by_name('.symtab').iter_symbols()}
         expected = readonly_word(elf, symbols, 'a733_irq_route_count')
         stride = readonly_word(elf, symbols, 'fixture_snapshot_bytes')
-        snapshot = symbols['os_cpu_return_spi_saved']
+        snapshot = symbols['os_return_irq_saved']
         section = elf.get_section(snapshot['st_shndx'])
         assert snapshot['st_size'] == expected*stride and snapshot['st_value'] % 128 == 0
         assert section['sh_type'] == 'SHT_NOBITS' and section['sh_flags'] & 3 == 3
         assert MONITOR <= snapshot['st_value'] < snapshot['st_value']+snapshot['st_size'] < TABLES
-        assert not elf.get_section(symbols['os_cpu_return_spi_capacity']['st_shndx'])['sh_flags'] & 1
+        assert not elf.get_section(symbols['os_return_irq_capacity']['st_shndx'])['sh_flags'] & 1
     u = machine()
     u.mem_map(0x41000000, 0x1400000)
     u.mem_map(GIC, 0x10000)
@@ -142,7 +142,7 @@ def run(path, profile, case):
     def get(at, width=4):
         return int.from_bytes(u.mem_read(at, width), 'little')
     count = image.address('a733_irq_route_count')
-    capacity = image.address('os_cpu_return_spi_capacity')
+    capacity = image.address('os_return_irq_capacity')
     assert get(count) == get(capacity) == expected
     ids = [get(image.address('a733_irq_routes')+16*i, 2) for i in range(expected)]
     assert {35,71,97,143} <= set(ids)
@@ -200,7 +200,7 @@ def run(path, profile, case):
         assert get(saved_count) == 0 and not invoke('os_cpu_return_spi_restore'), (case, 'failed initial save accepted')
         return {'case':case, 'routes':expected, 'refused':True}
     assert get(saved_count) == expected, (case, 'declaration-sized save refused', expected)
-    fields = image.layouts['os_cpu_return_spi_snapshot']
+    fields = image.layouts['os_return_irq']
     for index, ident in enumerate(ids):
         at = snapshot['st_value']+index*stride
         assert get(at+fields['intid']) == ident and get(at+fields['valid']) == 1

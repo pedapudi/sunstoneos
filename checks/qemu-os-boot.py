@@ -73,7 +73,8 @@ CFLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mge
 
 # OS and board sources that run unmodified.
 OS_SOURCES = ['apps/os/quiesce.c', 'apps/os/application.c', 'apps/os/large.c', 'apps/os/large_load.c', 'drivers/storage/fat32_ro.c', 'kernel/appmem/app_region.c', 'kernel/appmem/large_admit.c', 'kernel/umem/umem.c', 'apps/os/services.c', 'apps/os/capture.c', 'apps/os/usb-service.c', 'apps/os/session.c', 'apps/os/grants.c', 'apps/os/start.c',
-              'apps/os/thermal.c', 'apps/os/cpu.c', 'apps/os/perf.c', 'drivers/clock/a733_cpu_clock.c', 'drivers/power/a733_perf_mode.c', 'apps/os/admission.c', 'apps/board/main.c', 'apps/os/sealed.c',
+              'kernel/umem/umem_policy.c', 'arch/aarch64/umem_cpu.c',
+              'apps/os/thermal.c', 'apps/os/i2c.c', 'drivers/i2c/a733_i2c_bus.c', 'apps/os/rtc.c', 'drivers/rtc/a733_rtc.c', 'drivers/board/orangepi_zero3w.c', 'apps/os/cpu.c', 'apps/os/perf.c', 'drivers/clock/a733_cpu_clock.c', 'drivers/power/a733_perf_mode.c', 'apps/os/admission.c', 'apps/board/main.c', 'apps/os/sealed.c',
               'runtime/deadline.c', 'runtime/deadline-a733.c', 'platform/a733-smp-cached/irq_table.c',
               # The I2S capture service is in every image; an ungranted session never opens its stream.
               'apps/os/audio.c', 'platform/a733/dma_pool_session.c', 'platform/a733/dma_startup.c', 'platform/a733/dma_native.c',
@@ -389,7 +390,9 @@ def large_manifest_path(path, digest, file, with_digest=True):
 def ramdisk(work, tag, tree):
     """A 40 MiB FAT32 volume with the tree, written by the independent writer of checks/fat32-ro.py."""
     part = Path(work) / (tag + '.disk')
-    run(['truncate', '-s', str(81920 * 512), part])
+    with part.open('xb') as stream:
+        stream.seek(81920 * 512 - 1)
+        stream.write(b'\0')
     done = run(['/usr/sbin/mkfs.fat', '-F', '32', '-s', '1', '-n', 'SUNSTONE', '-i', '5a733004', part])
     assert done.returncode == 0, done.stderr
     image = bytearray(part.read_bytes())
@@ -954,7 +957,9 @@ def main():
     c = run_case('large-region-other-space-faults', large_elf, scenario(usb_ready_ms=usb_delay_ms), mode1, '4G', [(RAMDISK_ADDRESS, good)])
     c.failed_with('APPLICATION', 0xe24)
     c.require(int(c.failure['value'], 16) == 0x80000000, 'the fault address is %s' % c.failure['value'])
-    c.require(int(c.failure['site'], 16) == 0x800d4e24, 'the record holds the site %s: not a level 1 permission fault on a read' % c.failure['site'])
+    # The kernel's upper slots are split for free-chunk policy conversion;
+    # an untagged task therefore fails the EL0 permission check at level 2.
+    c.require(int(c.failure['site'], 16) == 0x800e4e24, 'the record holds the site %s: not a level 2 permission fault on a read' % c.failure['site'])
     # The provider is present but the device fails: at the metadata, at the start of a request, in the middle of the
     # stream, or there is no device. The loader fails the region with its status; the application is told and returns.
     # The file is larger than five requests (4 MiB = 32 requests of 128 KiB), so the mid-stream failure falls inside it.

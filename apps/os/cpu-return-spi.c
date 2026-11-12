@@ -2,8 +2,9 @@
 #include "cpu-return.h"
 #include "cpu-return-runtime.h"
 #include "a733_thermal.h"
+#include "cpu-return-spi.h"
 #include "irq_table.h"
-#define saved os_cpu_return_spi_saved
+#define saved os_return_irq_saved
 static unsigned saved_count __attribute__((section(".bss.a733_smp_monitor")));
 #define GICD UINT32_C(0x03400000)
 static void barrier(void){__asm__ volatile("dsb sy":::"memory");}
@@ -12,7 +13,7 @@ static void wr(uint32_t o,uint32_t v){*(volatile uint32_t *)(uintptr_t)(GICD+o)=
 void os_cpu_return_spi_save(void)
 {
     saved_count=0;
-    if(a733_irq_route_count>os_cpu_return_spi_capacity||!a733_irq_table_valid())return;
+    if(a733_irq_route_count>os_return_irq_capacity||!a733_irq_table_valid())return;
     for(unsigned i=0;i<a733_irq_route_count;++i)saved[i].valid=0;
     for(unsigned i=0;i<a733_irq_route_count;++i){
         unsigned id=a733_irq_routes[i].intid;
@@ -27,7 +28,7 @@ void os_cpu_return_spi_save(void)
 }
 int os_cpu_return_spi_restore(void)
 {
-    if(saved_count!=a733_irq_route_count||saved_count>os_cpu_return_spi_capacity)return 0;
+    if(saved_count!=a733_irq_route_count||saved_count>os_return_irq_capacity)return 0;
     if((rd(0)&7) || rd(0)&UINT32_C(0x80000000))return 0;
     for(unsigned i=0;i<saved_count;++i)
         if(!saved[i].valid || (rd(0x100+saved[i].intid/32*4)&(1u<<(saved[i].intid%32))))return 0;

@@ -77,44 +77,9 @@ def main():
     run('link', [ld, '-T', ROOT/'checks/usb-memory.ld', '--gc-sections', '--undefined=a733_cpu_coherence_check_el1',
         *objects, '-o', image_path])
     image = harness.Image(image_path)
-    # Link the same allocator reservation as the OS: cached base, storage
-    # session patch, then USB arena patch. Inspect allocated ELF bytes instead
-    # of accepting symbols supplied by the table-only fixture.
-    run('storage-link-patch', ['patch', '--fuzz=0', '-o', out/'storage.ld',
-        ROOT/'platform/a733-smp-cached/link.ld', ROOT/'platform/a733-storage-maintenance/link.patch'])
-    run('usb-link-patch', ['patch', '--fuzz=0', '-o', out/'usb.ld',
-        out/'storage.ld', ROOT/'apps/os/usb-memory-link.patch'])
-    run('production-link', [ld, '-T', out/'usb.ld', '--entry=a733_cached_memory_prepare',
-        '--gc-sections', *objects, '-o', out/'production.elf'])
-    # A pool sized from the declaration (22 MiB below the monitor interval) links with the same arena and sections, and both
-    # pools lie in the write-back windows that the walks below prove (the application window and the legacy pool).
-    run('production-link-sized', [ld, '-T', out/'usb.ld', '--entry=a733_cached_memory_prepare',
-        '--gc-sections', *objects, '-o', out/'production-sized.elf'])
-    from elftools.elf.elffile import ELFFile
-    for name in ('production.elf', 'production-sized.elf'):
-        with (out/name).open('rb') as stream:
-            sized_arena = ELFFile(stream).get_section_by_name('.uncached_pool')
-            assert (sized_arena['sh_addr'], sized_arena['sh_size']) == (0x42200000, 0x800000), name
-    wb_windows = ((0x44000000, 0x47000000), (0x47400000, 0x47c00000))
-    for pool in ((0x47400000, 0x47c00000), (0x45a00000, 0x47000000)):
-        assert any(lo <= pool[0] and pool[1] <= hi for lo, hi in wb_windows), pool
-    with (out/'production.elf').open('rb') as stream:
-        elf=ELFFile(stream)
-        arena=elf.get_section_by_name('.uncached_pool')
-        assert (arena['sh_addr'], arena['sh_size'], arena['sh_type']) == (0x42200000, 0x800000, 'SHT_NOBITS')
-        for section in elf.iter_sections():
-            if section.name != '.uncached_pool' and section['sh_flags'] & 2 and section['sh_size']:
-                assert section['sh_addr']+section['sh_size'] <= 0x42200000 or 0x42a00000 <= section['sh_addr']
-        for segment in elf.iter_segments():
-            if segment['p_type']=='PT_LOAD' and segment['p_vaddr']<=0x42200000<segment['p_vaddr']+segment['p_memsz']:
-                assert segment['p_vaddr']==0x42200000 and segment['p_memsz']==0x800000 and segment['p_filesz']==0
-    # Static owners and staging from the production OS and card path. The
-    # arena must remain disjoint even when NPU and USB classes coexist.
-    for low, high in [(0x41000000,0x42200000),(0x43000000,0x43100000),
-                      (0x44000000,0x47000000),
-                      (0x47000000,0x47400000),(0x47400000,0x47c00000),
-                      (0x48000000,0x79000000)]:
-        assert high<=0x42200000 or 0x42a00000<=low
+    # This fixture retains the diagnostic images' fixed pool profile. The OS
+    # ledger profile and absence of a linked arena are checked on the actual
+    # USB OS ELF by checks/usb-ledger-alias.py.
 
     def machine(decode=1):
         m = walk_fixture.Machine(image)
@@ -195,10 +160,10 @@ def main():
         'session_geometry_checked': bool(args.native_flags),
         'image_sha256': hashlib.sha256(image_path.read_bytes()).hexdigest(),
         'table_bytes': image.address('__tables_end')-image.address('__tables_start'),
-        'scope': 'Actual AArch64 table builder and per-core cold checksum; software page walks verify physical identity, AP and NC attributes. Registers and cache effects are modeled; ELF reservation and allocator leases execute; no physical MMU, DMA or board qualification.'}
+        'scope': 'Legacy diagnostic table builder and per-core cold checksum; software walks verify physical identity, AP and NC attributes. Registers and cache effects are modeled; allocator leases execute. OS ledger backing has separate linked-image checks. No physical MMU, DMA or board qualification.'}
     inputs = [ROOT/p for p in units]+[ROOT/'platform/a733/memory_uncached.c', ROOT/'include/a733_usb_memory.h',
         ROOT/'include/a733_cpu_coherence.h', ROOT/'checks/usb-memory.py', ROOT/'checks/usb-memory.ld',
-        ROOT/'checks/usb-memory-pool.c', ROOT/'apps/os/usb-memory-link.patch',
+        ROOT/'checks/usb-memory-pool.c',
         ROOT/'apps/os/session.c', ROOT/'include/sunstone_session.h', ROOT/'checks/usb-memory-session.c',
         ROOT/'platform/a733-smp-cached/link.ld', ROOT/'platform/a733-storage-maintenance/link.patch']
     result['inputs'] = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}

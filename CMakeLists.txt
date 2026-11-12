@@ -316,6 +316,11 @@ if(SUNSTONE_A733_STAGE2)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-standalone-boot.cmake")
 endif()
 
+option(SUNSTONE_A733_CARD_FEL_RECOVERY "Build the RAM-only first-stage FEL recovery proof" OFF)
+if(SUNSTONE_A733_CARD_FEL_RECOVERY)
+ include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-card-fel-recovery.cmake")
+endif()
+
 include(cmake/latency-recorder.cmake)
 include(cmake/latency.cmake)
 include(cmake/a733-os.cmake)

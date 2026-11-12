@@ -616,7 +616,10 @@ def main(argv=None):
     def run_steps():
         started = time.monotonic()
         core_targets, targets_to_build = [], list(targets)
-        core_options = ['-DSUNSTONE_EXTERNAL_APPLICATIONS=', *['-D' + key + '=' for key in selectors]]
+        # Image generators use the same dependency environment as the checks.
+        # CMake's PATH search can otherwise select a Python without elftools.
+        core_options = ['-DPython3_EXECUTABLE=' + str(python), '-DSUNSTONE_EXTERNAL_APPLICATIONS=',
+                        *['-D' + key + '=' for key in selectors]]
         if targets_to_build or args.full or bundles:
             # Override any external selections supplied by the host configuration. The bundle builders read the compile
             # flags of this build (tools/returning_build.py).

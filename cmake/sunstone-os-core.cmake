@@ -134,11 +134,12 @@ list(APPEND os_sources "${os_build}/continue.S")
 # Retained per-core fault records and their previous-boot report
 # (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
 set(os_added apps/os/admission.c apps/os/lifetime.c apps/os/sealed.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
+  kernel/umem/umem_policy.c arch/aarch64/umem_cpu.c
   runtime/cpu_topology_app.c
   apps/os/usb-service.c apps/os/large.c apps/os/large_load.c drivers/storage/sunxi_mmc.c drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c drivers/storage/fat32_ro.c drivers/storage/storage_digest.c drivers/storage/storage_digest_extensions.c drivers/storage/storage_digest_ce.S kernel/appmem/app_region.c kernel/appmem/large_admit.c kernel/umem/umem.c apps/os/application.c apps/os/session.c apps/os/grants.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
   runtime/deadline.c runtime/deadline-a733.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
-  apps/os/thermal.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
+  apps/os/thermal.c apps/os/i2c.c drivers/i2c/a733_i2c_bus.c apps/os/rtc.c drivers/rtc/a733_rtc.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
   drivers/thermal/a733_thermal_native.c drivers/gpu/gicv3_spi.c platform/a733/fault.S platform/a733/fault.c)
 if(SUNSTONE_A733_OS_SD_WRITE)
   # One SD0 owner task serves the loader's reads and the FAT32 write service (apps/os/sd_owner.c); the SD core is built with its write path.
@@ -147,10 +148,8 @@ endif()
 set(os_patches "${os_root}/apps/os/boot.patch" "${os_root}/apps/os/continue-sealed.patch" "${os_root}/apps/os/vectors.patch")
 set(os_link_base "${storage_build}/link.ld")
 if(SUNSTONE_A733_OS_USB_CLASSES)
-  apply_build_patch("${os_build}/link-usb.ld" "${storage_build}/link.ld"
-    "${os_root}/apps/os/usb-memory-link.patch")
-  list(APPEND os_patches "${os_root}/apps/os/usb-memory-link.patch")
-  set(os_link_base "${os_build}/link-usb.ld")
+  list(REMOVE_ITEM os_sources "${os_root}/platform/a733/memory_uncached.c")
+  list(APPEND os_added apps/os/usb-memory.c)
 endif()
 # The sealed session's section, last in the read-only CODE block (apps/os/sealed.c).
 apply_build_patch("${os_build}/link-os.ld" "${os_link_base}" "${os_root}/apps/os/sealed-link.patch")
@@ -462,7 +461,8 @@ if(SUNSTONE_A733_OS_USB_JPEG)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_USB_JPEG=1)
 endif()
 if(SUNSTONE_A733_OS_USB_CLASSES)
-  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_USB_CLASSES=1 SUNSTONE_USB_HOST_GENERIC=1 SUNSTONE_USB_APP_ALIAS=1)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_USB_CLASSES=1 SUNSTONE_USB_HOST_GENERIC=1 SUNSTONE_USB_APP_ALIAS=1 SUNSTONE_USB_LEDGER_MEMORY=1)
+  target_compile_definitions(a733-board-usb2-host PRIVATE SUNSTONE_USB_LEDGER_MEMORY=1)
   if(NOT SUNSTONE_A733_OS_USB_JPEG)
     # The retained JPEG adapter still needs owner passes for setup and copied
     # readout. Enable its precise wait only after IRQ81 and readiness are wired.
@@ -619,6 +619,9 @@ foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE
     set_property(TARGET sunstone-os-settings PROPERTY INTERFACE_${property} "${value}")
   endif()
 endforeach()
+if(SUNSTONE_A733_OS_USB_CLASSES)
+  target_compile_definitions(sunstone-os-settings INTERFACE SUNSTONE_USB_LEDGER_MEMORY=1)
+endif()
 # Keep libraries with their existing device owner. The main core is built even
 # when no application is selected; descriptors and result storage belong to images.
 file(GLOB os_headers "${os_root}/apps/os/*.h")
@@ -631,6 +634,8 @@ if(SUNSTONE_A733_OS_USB_JPEG)
   list(APPEND os_headers "${os_root}/apps/jpeg/native-shared.h" "${os_root}/include/sunstone_usb_jpeg.h")
 endif()
 set(os_inputs ${board_inputs} ${os_sources} ${os_headers} ${os_generated} ${os_patches} ${os_external_inputs}
+  "${os_root}/include/os_memory_tables.h" "${os_root}/include/umem.h"
+  "${os_root}/include/umem_policy.h" "${os_root}/include/umem_cpu.h"
   "${os_root}/platform/a733-smp-cached/irq_table.h" "${os_root}/include/a733_fault.h"
   "${os_root}/include/a733_thermal.h" "${os_root}/include/a733_thermal_native.h"
   "${os_root}/include/gicv3_spi.h" "${os_root}/include/sunstone_deadline.h" "${CMAKE_CURRENT_LIST_FILE}")

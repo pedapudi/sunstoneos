@@ -2,21 +2,24 @@
 
 Status: **implemented**; modeled counts are **host-tested**. **Qualified on the
 board** for the core-0 forced-walk loop on the cached single-core images
-(Cortex-A55). Both OS profiles return normally on Cortex-A76 core 6 at the top
-CPU and DSU points. Cached walks reduce fixed-loop cycles by 68.458% and are
+(Cortex-A55). The frozen OS walk-comparison images return normally on Cortex-A76
+core 6 at the top CPU and DSU points. Cached walks reduce fixed-loop cycles by 68.458% and are
 the default for eight-core images. Matching digests and instruction-side walk
 counts establish equal work; data-side walk counts are observations.
 The [evidence](../evidence/cpu-table-walks.jsonl) records both runs.
-Cached checksum controls return normally on both clusters. The 512-frame
+The frozen cached checksum controls return normally on both clusters. The 512-frame
 recognition matches its reference at 422.803 ms, within 0.005% of 422.783 ms.
+The mutable-ledger and USB profile is host-tested; its empty-port board run
+remains pending ([scope and records](ledger-nc.md)).
 **Open:** the core-0 workload runs, the Non-secure dirty-line experiment and
 stage-2 block access. Readers are assumed to know AArch64 stage-1 translation,
 the Secure and Non-secure physical address spaces, and data-cache maintenance
 by virtual address.
 
-The non-USB cached images build five 4 KiB translation-table pages in the monitor
+The base cached profile builds five 4 KiB translation-table pages in the monitor
 interval at `0x421f0000`: level 1, level 2 and level 3 for EL3, and level 1 and
-level 2 for EL1. USB host profiles add three EL1 level-3 pages.
+level 2 for EL1. OS images add one EL1 level-3 page for protected table access.
+USB host profiles add three payload-view level-3 pages.
 The EL1 walker reads descriptors as write-back cacheable
 memory in both the cached single-core and eight-core images. The header
 [a733_cpu_coherence.h](../../include/a733_cpu_coherence.h) holds both values,
@@ -42,7 +45,7 @@ have separate cacheable tables and an explicit publication barrier.
 
 The header is the sole definition of the cached and uncached EL1 values.
 `checks/cpu-table-walks.py` scans tracked source for full literals and assembly
-instruction triples and permits them only in that header. The sixteen other
+instruction triples and permits them only in that header. The other
 consumers use named values, including patch context and computed-value fixtures:
 
 | Consumers | Selection |
@@ -54,6 +57,7 @@ consumers use named values, including patch context and computed-value fixtures:
 | `apps/gpu-cache-permission/main.c`, `apps/gpu-cache-permission/check.py` | Explicit cached value of the permission diagnostic |
 | `apps/board-bundles-cpu/main.c`, `tools/prepare-board-bundles.py` | Both values for the forced-walk comparison |
 | `checks/memtest-map-admission.py`, `checks/region-el0.c` | Explicit cached value for the mapping fixtures |
+| `arch/aarch64/umem_cpu.c` | Descriptor-store cleaning for the image's uncached-walk override |
 
 The Python reader exports `CACHED_WALK` and `UNCACHED_WALK` for fixed profiles,
 and `SINGLE_CORE` and `EIGHT_CORE` for the corresponding current image defaults.
@@ -67,25 +71,26 @@ the Python reader's `for_image()` reads it when checking an overridden build.
 
 1. **Cold entry, core 0, EL3, MMU and caches off.** At the start of
    `a733_cached_memory_prepare()`, core 0 runs `DC CIVAC` over the whole table
-   section (the five pages and the checksum line) before the first descriptor
+   section (all profile pages and the checksum line) before the first descriptor
    write. EL3 with the MMU off addresses the Secure space, so this removes any
    Secure dirty line that could later be evicted over a descriptor. The flush
    is bounded by 10 ms.
 2. **Build.** `a733_cpu_coherence_tables()` and the rest of
-   `a733_cached_memory_prepare()` write every entry of the five boot pages;
-   these pages remain immutable afterwards. Level-1 entry 0, the MMIO block, carries the
+   `a733_cached_memory_prepare()` write every entry of the boot pages.
+   Level-1 entry 0, the MMIO block, carries the
    outer-shareable field (`SH = 0b10`) in both regimes. As its last step core 0
-   stores a 64-bit additive checksum of the two EL1 pages in
+   stores a 64-bit additive checksum of the EL1 root, slot-1 table and all
+   additional profile level-3 pages in
    `a733_cached_el1_table_sum`, a 64-byte-aligned word in
    `.bss.a733_cached_tables`. Only whole table pages get the EL3 Normal
    non-cacheable mapping; the partial page holding the checksum keeps the
    Device mapping.
 3. **EL1 entry, every core, MMU and caches off.** Before installing TCR, TTBR
    and SCTLR, `a733_cpu_coherence_enable_el1()` runs `DC CIVAC` over the EL1
-   root page and the level-2 page named by the root's entry 1, then `DSB SY`.
+   root, slot-1 table and all additional profile pages, then `DSB SY`.
    EL1 with the MMU off addresses the Non-secure space, the alias the walker
    reads, so stale Non-secure lines are removed before the first walk. The core
-   then reads both pages back with Device loads (512 `LDP`), sums them and
+   then reads those pages back with Device loads (256 `LDP` per page), sums them and
    compares the sum with the recorded checksum. A mismatch returns failure
    before `SCTLR_EL1.M` is set, and the caller stops the core through its
    existing fault path. The cached single-core images enable translation in the
@@ -94,14 +99,18 @@ the Python reader's `for_image()` reads it when checking an overridden build.
    macro in `platform/a733/cpu_coherence.S`. `platform_init()` also flushes its
    own `level1` and `level2` pages before the first write and after the last,
    before `msr ttbr0_el1`.
-4. **Runtime.** The EL1 walker is the only runtime reader of the boot EL1 tables. EL1 has no
-   data mapping of the monitor interval (EL1 level-2 entry 16 is invalid), and
-   EL3 does not access the tables after preparation.
+4. **Runtime.** Non-OS tables remain immutable. OS images reach their EL1 table
+   pages through the EL1-only, write-back, execute-never alias at `0x79e00000`.
+   The monitor identity view remains invalid. The ledger publishes free-chunk
+   conversions and the USB payload binding through that alias after every core
+   has completed entry ([contract](ledger-nc.md)). EL3 performs no runtime table writes.
 
 ### Application tables and mutable mappings
 
 Application admission in `apps/os/large.c` builds an inactive address space with
-`app_space_build_l2()` in `kernel/appmem/app_region.c`. Its arena uses Normal
+`app_space_build_tables()` in `kernel/appmem/app_region.c`. It preserves the
+kernel's WB/NC policies and registers private level-2 copies for conversion.
+Its arena uses Normal
 write-back stores. Publication completes `DSB ISH` for cacheable walks, or
 `DC CIVAC` over the arena followed by `DSB SY` for uncached walks, before the
 release store to `os_space_active`. A fresh ASID is allocated once and never
@@ -147,9 +156,9 @@ Nothing here takes or waits for an interrupt; the only polling is the counter
 read of the deadline check. The EL3 walk and every EL3 data access to the tables
 stay non-cacheable, Inner Shareable (`A733_CPU_COHERENCE_TCR_EL3` is
 `0x80823019`); a cached EL1 walk is write-back, Inner Shareable, so walker
-lines are coherent with every core's data cache and the DSU L3. No lock is
-needed, because the tables are immutable once core 0 returns from preparation
-and the record barrier in `continue.c` holds every secondary until then. For a
+lines are coherent with every core's data cache and the DSU L3. The entry
+barrier holds secondaries through cold preparation. OS runtime conversions take
+the ledger lock and exclude chunks in use; other profiles remain immutable. For a
 stale line in another core's cache to be removed, `DC CIVAC` issued with the MMU
 off must reach every cache in the Outer Shareable domain, which the Arm
 Architecture Reference Manual states for Device-type accesses; the manual is not
@@ -181,10 +190,10 @@ record; the walk-loop figures are a board measurement.
 
 | Figure | Budget | Result | Evidence |
 | --- | --- | --- | --- |
-| Table writes after the builder returns | 0 | 0 (17 before) | `cpu-table-walks.jsonl`: `cpu-table-walks-host-budgets` |
-| `enable_el1` instructions, success path | at most 2,500 | 2,233 | same |
-| Table-line maintenance per boot, eight-core; single-core | 1,344; 448 | 1,345; 449 (the flush includes the checksum line) | same |
-| Table readback per core and boot | 512 `LDP` | 512 `LDP` | same |
+| Cold descriptor writes outside the builder | 0 | 0 | `cpu-table-walks.jsonl`: `cpu-table-walks-host-budgets` |
+| Base-profile `enable_el1` instructions, success path | at most 2,500 | 2,233 | same |
+| Base-profile table-line maintenance per boot, eight-core; single-core | 1,344; 448 | 1,345; 449 (the flush includes the checksum line) | same |
+| Base-profile table readback per core and boot | 512 `LDP` | 512 `LDP` | same |
 | Forced-walk loop on core 0, cycles per iteration, uncached; cached | cached no slower | 693.1; 436.1 (spread under 0.2%) | `cpu-table-walks.jsonl`: `cpu-table-walks-board-core0-loop` |
 | OS forced-walk loop on core 6 at 2002 MHz, uncached cycles per iteration | control | 1206.625 median; 1.5605% spread across five blocks | `cpu-table-walks.jsonl`: `1794465341494995923-e29c2535` |
 | Same fixed loop on core 6, cached cycles per iteration | lower median beyond the larger spread | 380.5918 median; 0.1422% spread; 68.458% fewer cycles | `cpu-table-walks.jsonl`: `1794466032800309049-ed5f20e8` |

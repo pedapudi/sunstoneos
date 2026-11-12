@@ -116,6 +116,21 @@ static void os_wake(TaskHandle_t task)
 }
 /* The OS services that the application's end waits for (the NPU's retirement) wake the main task through here. */
 void os_application_wake_main(void){os_wake(main_task);}
+/* The same wake-up from an interrupt handler, for a device whose completion interrupt ends an application task's wait
+ * (the header I2C class). The kernel critical section is the one os_wake takes; the notification is given from the ISR and
+ * the caller yields at the end of its handler when *woken is set. */
+void os_application_wake_task_from_isr(TaskHandle_t task,long *woken)
+{
+    if(!task)return;
+    unsigned found=0;
+    UBaseType_t mask=taskENTER_CRITICAL_FROM_ISR();
+    for(unsigned i=0;i<os_wake_capacity;++i)
+        if(os_wake_task[i]==task){found=1;os_wake_gave[i]=1;vTaskNotifyGiveIndexedFromISR(task,SS_NOTIFY_DEADLINE,(BaseType_t *)woken);}
+    if(!found&&task==main_task)atomic_store_explicit(&main_wake_pending,1,memory_order_release);
+    taskEXIT_CRITICAL_FROM_ISR(mask);
+}
+/* From a task: the wake-up os_wake gives the main task, for any application task. */
+void os_application_wake_task(TaskHandle_t task){os_wake(task);}
 static unsigned os_wait_begin(TaskHandle_t task)
 {
     unsigned slot=os_wake_capacity;
@@ -191,6 +206,8 @@ static void application_wait_for(int (*done)(void),uint32_t failure)
     }
 }
 #endif
+/* The OS wait with a condition test after registration (see application_wait_until_unless). */
+int os_application_wait_unless(uint64_t until,int (*unless)(void)){return application_wait_until_unless(until,unless);}
 static int application_entry_ready(void)
 {
 #ifdef SUNSTONE_A733_USB_FAILURE_TEST

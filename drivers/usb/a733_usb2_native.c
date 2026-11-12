@@ -192,14 +192,18 @@ int a733_usb2_native_init(struct a733_usb2_native *n,const struct a733_usb2_plat
     if(c->superspeed&&(!mappings(0x06c01000,4096,0)||!mappings(0x06c06000,8192,0)||
        !mappings(0x06c80000,0x20000,0)||!mappings(0x06a0d000,4096,0)))return 0;
 #if SUNSTONE_USB_APP_ALIAS
+#if defined(SUNSTONE_USB_LEDGER_MEMORY) && SUNSTONE_USB_LEDGER_MEMORY
+    if(!a733_usb_memory_pool_valid(pool))return 0;
+#else
     if(pool->backing.cpu!=A733_USB_MEMORY_BASE||pool->backing.physical!=A733_USB_MEMORY_BASE||
        pool->backing.bytes!=A733_USB_MEMORY_END-A733_USB_MEMORY_BASE)return 0;
+#endif
 #endif
     *n=(struct a733_usb2_native){.self=n,.locks=locks,.owner_task=task,.parent_pool=pool,
         .admit=admission,.admission_context=context};
     if(!device_memory_acquire(pool,c->owner,A733_XHCI_MEMORY_BYTES,&n->parent,&n->backing))return 0;
 #if SUNSTONE_USB_APP_ALIAS
-    if(n->backing.cpu!=A733_USB_MEMORY_BASE||n->backing.physical!=A733_USB_MEMORY_BASE){
+    if(n->backing.cpu!=a733_usb_memory_parent_base()||n->backing.physical!=n->backing.cpu){
         device_memory_retain(pool,n->parent);return 0;
     }
 #endif

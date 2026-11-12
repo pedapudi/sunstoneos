@@ -9,7 +9,7 @@
 int umem_policy_init(struct umem_el1_map *p, const struct umem_cpu_ops *cpu, uint64_t *l1, struct umem_policy_table *kernel_slot1,
                      uint64_t (*split_pages)[512])
 {
-    if (!p || !cpu || !cpu->store || !cpu->dsb_ish || !cpu->isb || !cpu->tlbi_va_all_asids || !cpu->dc_ivac || !l1 || !kernel_slot1 ||
+    if (!p || !cpu || !cpu->store || !cpu->dsb_ish || !cpu->isb || !cpu->tlbi_va_all_asids || !cpu->dc_civac || !l1 || !kernel_slot1 ||
         !kernel_slot1->l2) return -1;
     p->cpu = *cpu;
     p->l1 = l1;
@@ -41,13 +41,15 @@ int umem_policy_split(struct umem_el1_map *p, unsigned slot)
     uint64_t base = (uint64_t)slot << 30;
     for (unsigned j = 0; j < 512; ++j) {
         uint64_t attrs = block & ~UINT64_C(0x0000ffffc0000000);       /* every field except the output address */
-        page[j] = (attrs & ~UINT64_C(3)) | ((base + (uint64_t)j * BLOCK) & UINT64_C(0x0000ffffffe00000)) | 1;
+        p->cpu.store(p->cpu.ctx, &page[j],
+            (attrs & ~UINT64_C(3)) | ((base + (uint64_t)j * BLOCK) & UINT64_C(0x0000ffffffe00000)) | 1);
     }
     p->cpu.dsb_ish(p->cpu.ctx);
     p->cpu.store(p->cpu.ctx, &p->l1[slot], 0);
     p->cpu.dsb_ish(p->cpu.ctx);
     p->cpu.tlbi_va_all_asids(p->cpu.ctx, base);
     p->cpu.dsb_ish(p->cpu.ctx);
+    p->cpu.isb(p->cpu.ctx);
     p->cpu.store(p->cpu.ctx, &p->l1[slot], (uint64_t)(uintptr_t)page | 3);
     p->cpu.dsb_ish(p->cpu.ctx);
     p->cpu.isb(p->cpu.ctx);
@@ -66,19 +68,24 @@ static uint64_t *entry_of(struct umem_policy_table *t, uint64_t chunk)
 int umem_policy_convert(void *ctx, uint64_t chunk, unsigned policy)
 {
     struct umem_el1_map *p = ctx;
-    if (!p || (chunk & (BLOCK - 1)) || policy > UMEM_NC || chunk < SLOT1_BASE) return -1;
+    if (!p || (chunk & (BLOCK - 1)) || policy > UMEM_NC || chunk < SLOT1_BASE ||
+        chunk >= (uint64_t)(2 + UMEM_POLICY_UPPER_SLOTS) * UMEM_GIB) return -1;
     unsigned slot = (unsigned)(chunk >> 30);
     if (slot >= 2 && !(p->split_mask & (1u << (slot - 2)))) return -1;   /* an unsplit slot is one block */
     uint64_t want = (uint64_t)(policy == UMEM_NC ? 2 : 1) << 2;
+    uint64_t old = (uint64_t)(policy == UMEM_NC ? 1 : 2) << 2;
     /* Every table that maps the chunk must map it as a valid block with the other attribute. */
     unsigned tables = 0;
     for (struct umem_policy_table *t = p->tables; t; t = t->next) {
         uint64_t *e = entry_of(t, chunk);
         if (!e) continue;
-        if ((*e & 3) != 1 || (*e & ATTR_MASK) == want) return -1;
+        if ((*e & 3) != 1 || (*e & ATTR_MASK) != old ||
+            (*e & UINT64_C(0x0000ffffffe00000)) != chunk) return -1;
         ++tables;
     }
     if (!tables) return -1;
+    /* A refusal leaves both the descriptors and the ledger's policy unchanged. */
+    if (p->cpu.dc_civac(p->cpu.ctx, chunk, BLOCK)) return -1;
     /* Break: clear the valid bit of every entry; the other bits stay for the make step. */
     for (struct umem_policy_table *t = p->tables; t; t = t->next) {
         uint64_t *e = entry_of(t, chunk);
@@ -95,6 +102,5 @@ int umem_policy_convert(void *ctx, uint64_t chunk, unsigned policy)
     }
     p->cpu.dsb_ish(p->cpu.ctx);
     p->cpu.isb(p->cpu.ctx);
-    /* The lines of the old attribute: the chunk is free, so its contents are dead and the invalidate loses nothing. */
-    return p->cpu.dc_ivac(p->cpu.ctx, chunk, BLOCK) ? -1 : 0;
+    return 0;
 }

@@ -36,11 +36,12 @@ with loader close, but excludes interrupted writes and transport recovery
 | Writes at 1.8 V on scratch card 3-3, SDR104 at 150 MHz | qualified on the board | 512 MiB in 42 s, 13.2 MB/s flushed (card-bound), 0 restarts, 0 mismatches on read-back at 46.5 MB/s | [SD card reference](../sd-card.md); `1793692393910115727-f58db0e9`, `1793692075400545011-09988217` |
 | Scratch-card admission (`SSBW0004`) and mode 9 reformat | qualified on the board | format of 15,286,272 bytes | [SD card reference](../sd-card.md) |
 | DDR50, GPT, multiple volumes | open | | |
-| Autonomous OS boot from the card | open | | |
+| Resident card bundle and update plans | host-tested | Four authenticated extents; physical qualification remains false | [Card design](../designs/autonomous-card-os.md); `card-boot-typed-bundle-host` |
+| Autonomous OS boot from the card | open | No identified full backup or production slot reservation | [Card design](../designs/autonomous-card-os.md) |
 
 ## Open work
 
-1. Complete the resident FEL qualification and card producer before physical installation and autonomous boot ([design](../designs/autonomous-card-os.md)). Cold controller and supply state, reset retirement and power-loss recovery remain unqualified.
+1. Preserve an identified full backup, reserve the slot allocation and provide the queue's physical installation path before seeking storage-write approval ([design](../designs/autonomous-card-os.md)). The resident FEL completion diagnostic passes; cold boot, BOOT-input renewal, reset retirement and installation interruption recovery remain unqualified.
 2. Extend the image-level SD checks to the profile 2 and profile 3 images. `checks/storage-read-service.py` (two-client, cancellation, removal and USB cases), `checks/storage-read-sd-modes.py` and `checks/storage-read-dma.py` run in the gate against the profile 1 read image, and `checks/sd-return-native.py` against the returning image. The service cases stop at the first read of the profile 2 image, inside the native aperture filter (`allowed` in `drivers/storage/a733_mmc_platform_native.c`), because only the sd-modes machine models that profile's sequence (CMD11, the PF selector write, clock phases and CMD19 tuning). Move that sequencing into the shared machine of `checks/storage-read-native.py`. The SD path is described in [the SD card reference](../sd-card.md). The board documents disagree on whether DC1SW2 powers the card, so no supply cycle is attempted.
 3. Measure sustained throughput on broader extents and cards, and qualify card replacement, removal and recovery, and voltage timing.
 4. Implement SDR50 and DDR50; add GPT, multiple volumes and clients.

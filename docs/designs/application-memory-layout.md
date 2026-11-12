@@ -10,7 +10,7 @@ An application on SunstoneOS meets memory limits that come from constants in the
 
 | # | Limit | Where it is set | State |
 | --- | --- | --- | --- |
-| 1 | Code and read-only data: 2 MiB | `CODE ... LENGTH = 2M` in `platform/a733-smp-cached/link.ld`, `apps/board-single-core/link.ld`, `apps/os/usb-memory-link.patch`; `IMAGE_RAM` in `apps/os/cpu-return-host.py` | Open. The OS and the application share the 2 MiB; an OS image has 0.75 MB of code and read-only data. |
+| 1 | Code and read-only data: 2 MiB | `CODE ... LENGTH = 2M` in `platform/a733-smp-cached/link.ld` and `apps/board-single-core/link.ld`; `IMAGE_RAM` in `apps/os/cpu-return-host.py` | Open. The OS and the application share the 2 MiB; an OS image has 0.75 MB of code and read-only data. |
 | 2 | Data, bss, static stacks and heap: about 10 MiB | `RAM ... LENGTH = 14M` and `ASSERT(__bss_end <= 0x42000000)` in `link.ld`; `__heap_end <= 0x41c00000` in `cpu-return-host.py` | A heap above `heap_link_max` (4 MiB) comes from the ledger, so the manifest accepts up to 11 GiB of `heap_bytes`; linked data, bss and static stacks stay in the 10 MiB. |
 | 3 | Input, work and output regions, GPU buffers, NPU pool: one 48 MiB window | `window` in `tools/memory_layout.py` | Lifted. Regions continue into the slot 1 area (`0x4800_0000..0x7900_0000`) and the upper memory (`0x8000_0000` to the installed memory). |
 | 4 | EL0 reaches only `0x4000_0000..0x4800_0000` through the shared table | `platform/a733/platform.c` maps 64 blocks for EL0 | Lifted for regions the application is granted: its own tables map them (see "What EL0 reaches"). |
