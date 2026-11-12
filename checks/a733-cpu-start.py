@@ -66,7 +66,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--firmware", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
-    parser.add_argument("--resident", action="store_true", help="only cold static-OFF release cases; no firmware replay")
+    parser.add_argument("--resident", action="store_true", help="resident FEL/cold admission and static-OFF release cases; no firmware replay")
     args = parser.parse_args()
     evidence = args.evidence.resolve()
     assert ROOT not in [evidence, *evidence.parents]
@@ -97,7 +97,7 @@ def main():
               "traces": traces, "inputs": {p: digest(ROOT / p) for p in sources + ["include/a733_cpu_start.h", "checks/a733-cpu-start.py"]},
               "executable_sha256": digest(evidence / "check")}
     (evidence / "results.json").write_text(json.dumps(result, indent=2) + "\n")
-    print("PASS resident bounded static-OFF release and immediate wake" if args.resident else
+    print("PASS resident FEL/cold entry, ON refusal, bounded static-OFF release and immediate wake" if args.resident else
           "PASS native retained-failure checks and complete writes match isolated board firmware for cores1..7")
 
 

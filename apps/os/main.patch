@@ -43,7 +43,7 @@
  /* This hook is used by the existing cached EL1/EL3 fatal paths. It only closes
   * atomic admission; those paths record their own fault, and EL3 cannot use
   * the breadcrumb SVC. The independent watchdog owns recovery from stopped CPUs. */
-@@ -97,7 +118,11 @@
+@@ -97,7 +118,15 @@
  {
      uint64_t el;
      __asm__ volatile("mrs %0, CurrentEL":"=r"(el));
@@ -51,12 +51,16 @@
 +    /* At EL3 the note writes the RTC words directly, so it is stored only under the returning lifetime (the EL3 word, as
 +     * the stop handler reads it). From EL1 the breadcrumb SVC's handler applies the same rule to the sealed copy. */
 +    const unsigned level=(unsigned)((el>>2)&3);
-+    if(level!=3||*(volatile unsigned *)&a733_smp_lifetime==A733_LIFETIME_RETURN)
++    /* The diagnostic completion is an intentional resident stop. Its EL3
++     * stop record survives reset; a synthetic failure would obscure it. */
++    const int completion=level==1&&status==5&&os_lifetime()==A733_LIFETIME_RESIDENT&&
++        board_resident_completion_stop()&&!board_resident_stop_detail();
++    if(!completion&&(level!=3||*(volatile unsigned *)&a733_smp_lifetime==A733_LIFETIME_RETURN))
 +        a733_storage_maintenance_note(status,level,__builtin_return_address(0));
      fail_close();a733_typec_revoke(&board.typec.provider);
  }
  static _Noreturn void park(void){for(;;)vTaskSuspend(NULL);}
-@@ -113,6 +138,8 @@
+@@ -113,6 +142,8 @@
  static void pmic(void *unused)
  {
      (void)unused;for(;;){
@@ -65,7 +69,7 @@
          if(!board_live(NULL))park();
          const uint32_t ticks=a733_power_service_step(&providers.domains);
          const int ready=a733_power_service_ready(&providers.domains);
-@@ -134,6 +161,14 @@
+@@ -134,6 +165,14 @@
  {
      (void)unused;int started=0;
      for(;;){
@@ -80,7 +84,7 @@
          if(!board_live(NULL)||a733_smp_counter()/24>=service_deadline())
              a733_typec_revoke(&board.typec.provider);
          if(!started&&board_live(NULL)&&atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)){
-@@ -141,6 +176,9 @@
+@@ -141,6 +180,9 @@
              started=1;
          }
          if(started)(void)a733_typec_poll(&board.typec.provider);
@@ -90,7 +94,7 @@
          BOARD_PROGRESS(BOARD_SERVICE_TYPEC);
          /* Advance an owned I2C transfer without sleeping after each state.
           * Attached monitoring reads status only once per REFRESH_US, so
-@@ -153,6 +191,11 @@
+@@ -153,6 +195,11 @@
  static void power(void *unused)
  {
      (void)unused;for(;;){
@@ -102,7 +106,7 @@
          if(!board_live(NULL)||a733_smp_counter()/24>=service_deadline())
              a733_typec_revoke(&board.typec.provider);
          (void)a733_typec_native_power_poll(&board.typec);
-@@ -167,6 +210,12 @@
+@@ -167,6 +214,12 @@
  #ifdef SUNSTONE_A733_OS
          os_wifi_credential_poll(); /* EL1: the credential leaves RAM once the application has finished */
  #endif
@@ -115,7 +119,7 @@
          if(!board_live(NULL)){
              (void)board_radio_external_failure(&radio);
              atomic_store_explicit(&board.radio_result,3,memory_order_release);
-@@ -179,24 +228,33 @@
+@@ -179,24 +232,33 @@
                  atomic_store_explicit(&board.radio_result,3,memory_order_release);
                  /* A failure that left nothing powered (a guard refusal, or a completed failure shutdown) is not a
                   * board failure: the session ends normally with the record. */
@@ -153,7 +157,7 @@
              }else if(r==1){
                  unsigned verified=0;
                  if(board_radio_client_result(&radio,&verified)!=1){vTaskDelay(1);continue;}
-@@ -206,6 +264,8 @@
+@@ -206,6 +268,8 @@
                      memory_order_release,memory_order_relaxed);
              }
          }
@@ -162,7 +166,7 @@
          vTaskDelay(1);
      }
  }
-@@ -243,8 +303,11 @@
+@@ -243,8 +307,11 @@
  #elif defined(SUNSTONE_A733_OS)
  static void supervise(void *unused)
  {
@@ -175,7 +179,19 @@
          if(resident){
              /* The armed watchdog bounds every hang. A failure, an expired
               * service window, a service still silent at the loader's first
-@@ -391,6 +454,8 @@
+@@ -254,7 +321,10 @@
+              * expiry is four seconds later. */
+             if(!board_live(NULL)||board_resident_renew(board.handles[7],
+                board.session.session_start_ticks+4*A733_SMP_COUNTER_HZ)!=1){
+-                board_fail(NULL);
++                /* Successful diagnostic completion closes admission without
++                 * inventing a failure record. Real failures retain theirs. */
++                if(board_resident_completion_stop())fail_close();
++                else board_fail(NULL);
+                 if(a733_board_host_workload(board.session.workload))a733_typec_revoke(&board.typec.provider);
+                 /* Status 5: renewal stopped. The reason reaches this core's
+                  * retained slot, and on core 0 the resident result. */
+@@ -391,6 +461,8 @@
      if(board_application_pins(&b.pins)!=1)platform_panic("board application pins",10);
  #endif
      if(!a733_native_usb_init(&providers.shared,&b,board_live,board_fail,NULL))platform_panic("board shared providers",4);
@@ -184,13 +200,13 @@
      TaskFunction_t functions[]={pmic,board_usb0_task,typec,power,board_host_task,radio_owner,radio_client,supervise};
      const char *names[]={"board-pmic","board-usb0","board-typec","board-power","board-usb2","board-radio","board-net","board-watchdog"};
      for(unsigned i=0;i<8;++i){
-@@ -404,7 +469,8 @@
+@@ -404,7 +476,8 @@
          board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,!i?3:i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);
          if(!board.handles[i])platform_panic("board tasks",5);
  #if configNUMBER_OF_CORES > 1
 -        if(!i)vTaskCoreAffinitySet(board.handles[i],1);
-+        /* The returning lifetime's supervisor (task 7) runs on core 0, which notifies the terminals last. */
-+        if(!i||(i==7&&os_returning()))vTaskCoreAffinitySet(board.handles[i],1);
++        /* The returning and resident supervisors use core 0, which publishes their EL3 stop record. */
++        if(!i||(i==7&&(os_returning()||BOARD_RESIDENT())))vTaskCoreAffinitySet(board.handles[i],1);
  #endif
  #ifdef SUNSTONE_BOARD_USB2_IRQ
          if(i==4)vTaskCoreAffinitySet(board.handles[i],1);

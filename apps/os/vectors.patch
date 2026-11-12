@@ -11,7 +11,7 @@
      str x2, [x1, #16]
      dsb sy
 +    // The EL3 lifetime word (apps/os/admission.c), loaded once and kept in x9. Under the returning lifetime a
-+    // status-0 SMC is the success return, and the fault words below are stored. Every other lifetime takes neither.
++    // status-0 SMC is the success return. Returning and resident faults use the retained words below.
 +    adrp x9, a733_smp_lifetime
 +    ldr w9, [x9, :lo12:a733_smp_lifetime]
 +    cmp w9, #OS_LIFETIME_RETURN_WORD
@@ -20,7 +20,7 @@
      // All fatal paths converge here without using an EL1 stack or RAM.
      // Ordinary NS WB memory is safe only after every EL3 context adopted it.
      mrs x3, sctlr_el3
-@@ -415,6 +423,49 @@
+@@ -415,6 +423,58 @@
      add x5, x5, #128
      subs x6, x6, #1
      b.ne .Lstorage_adopted
@@ -28,9 +28,18 @@
 +    // exit after entry, in RTC words that survive a watchdog reset. Only after
 +    // the checks above proved this core's EL3 identity map; the success SMC
 +    // left earlier. x20 is 4 for an exception, as in the report. Uses x2-x7.
-+    // Only under the returning lifetime (x9 above).
++    // Returning and resident faults survive reset. The resident supervisor's
++    // deliberate status-5 SMC is a stop record, not an exception record.
 +    cmp w9, #OS_LIFETIME_RETURN_WORD
++    b.eq .Lcrumb_fault_lifetime
++    cmp w9, #OS_LIFETIME_RESIDENT_WORD
 +    b.ne .Lcrumb_fault_done
++    mrs x3, esr_el3
++    lsr x4, x3, #26
++    cmp x4, #0x17
++    ccmp x20, #5, #0, eq
++    b.eq .Lcrumb_fault_done
++.Lcrumb_fault_lifetime:
 +    mrs x3, esr_el3
 +    lsr x4, x3, #26
 +    cmp x4, #0x17
@@ -70,7 +79,7 @@
      // Use this core's reserved Secure Device stack regardless of the fault's SP.
      adrp x3, a733_cpu_entry_stacks
      add x3, x3, :lo12:a733_cpu_entry_stacks
-@@ -514,14 +565,125 @@
+@@ -514,14 +574,128 @@
      stp x0, x1, [sp, #-16]!
      mrs x0, esr_el1
      and x0, x0, #0xffff
@@ -114,13 +123,16 @@
 +    // sunstone_crumb_fail(site, value, caller) (include/sunstone_crumb.h):
 +    // the first board failure in the FAULT/ESR/ELR/FAR words, unless a fault
 +    // or exit already holds them. x2 is the caller, x1 the value. Stored
-+    // only under the returning lifetime (the sealed copy).
++    // under the returning and resident lifetimes (the sealed copy).
 +    stp x2, x3, [sp, #-16]!
 +    stp x4, x5, [sp, #-16]!
 +    adrp x3, os_sealed+OS_SEALED_LIFETIME_OFFSET
 +    ldr w3, [x3, :lo12:os_sealed+OS_SEALED_LIFETIME_OFFSET]
 +    cmp w3, #OS_LIFETIME_RETURN_WORD
++    b.eq .Lfail_lifetime
++    cmp w3, #OS_LIFETIME_RESIDENT_WORD
 +    b.ne 1f
++.Lfail_lifetime:
 +    ldp x0, x1, [sp, #32]
 +    mov x3, #0x07090000
 +    ldr w4, [x3, #0x110]

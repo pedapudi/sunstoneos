@@ -7,13 +7,17 @@ from pathlib import Path
 import shutil
 import struct
 import subprocess
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+import a733_tcr
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X29, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_PC
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--evidence', '{output}']]
-SOURCES = ['include/a733_cpu_continue.h', 'platform/a733/cpu_continue.c', 'platform/a733/cpu_continue.S',
+SOURCES = ['include/a733_cpu_coherence.h', 'tools/a733_tcr.py',
+           'include/a733_cpu_continue.h', 'platform/a733/cpu_continue.c', 'platform/a733/cpu_continue.S',
            'include/a733_cpu_entry.h', 'platform/a733/cpu_entry.S', 'include/a733_cpu_start.h',
            'platform/a733/cpu_start.c', 'checks/a733-cpu-continue.c', 'checks/a733-cpu-continue.py']
 MASK64 = (1 << 64) - 1
@@ -192,7 +196,7 @@ def emulate(path, system_only=False, vectors_only=False, power_only=False):
         elif mode == 'success':
             assert observed == ['scheduler_svc' if core else 'primary_kernel'], (core, mode, observed, state)
             assert state[:5] == (epoch, core, 4 if core else 3, 0, r)
-            assert model['tcr_el1'] == 0x200803019 and model['mair_el1'] == 0x4400
+            assert model['tcr_el1'] == a733_tcr.UNCACHED_WALK and model['mair_el1'] == 0x4400
             assert model['sctlr_el1'] & 0x1005 == 1 and model['tpidr_el1'] == core
             assert model['sctlr_el3'] == 0 and model['sp_el1'] == el1_stack + 32768
             expected = {'scr_el3': 0x535, 'mdcr_el3': 0x10000000, 'cptr_el3': 0,
@@ -278,6 +282,7 @@ void FreeRTOS_SWI_Handler(void){for(;;){}}
              '-DSUNSTONE_A733_SMP_DIAGNOSTIC', '-I', str(out), '-I', str(ROOT / 'include')]
     if args.reuse_build:
         previous = json.loads((args.reuse_build / 'results.json').read_text())
+        assert set(previous['inputs']) == set(SOURCES), 'Reuse evidence must cover every current input'
         for source, identity in previous['inputs'].items():
             if source not in ('platform/a733/cpu_continue.S', 'checks/a733-cpu-continue.py'):
                 assert digest(ROOT / source) == identity, source

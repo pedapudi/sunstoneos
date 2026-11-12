@@ -225,16 +225,15 @@ class Model(prior.Model):
             # Terminal-only fixture: preceding service close/local stop and
             # worker park are supplied inputs; their real functions have a
             # separate linked integration check.
-            layout = Image(self.image.path, {'os_npu_application', 'npu_runtime', 'npu_service'})
+            # The retirement check reads the runtime's signal words in the npu static, never the device state.
+            layout = Image(self.image.path, {'os_npu_application', 'npu_service_signals'})
             npu = layout.address('npu', '/apps/os/npu.c')
             nf = layout.layouts['os_npu_application']
-            service = npu + nf['runtime'] + layout.layouts['npu_runtime']['service']
+            signals = npu + nf['signals']
             self.put32(npu + nf['stopped'], 1)
             self.put32(npu + nf['active'], 1)
-            self.put32(service + layout.layouts['npu_service']['irq_stopped'], 1)
-            self.put32(service + layout.layouts['npu_service']['runtime_parked'], 1)
-            self.put64(service + layout.layouts['npu_service']['runtime'],
-                       npu + nf['runtime']) # installed runtime-mode authority, supplied fixture
+            self.put32(signals + layout.layouts['npu_service_signals']['irq_stopped'], 1)
+            self.put32(signals + layout.layouts['npu_service_signals']['runtime_parked'], 1)
             report = self.s['os_npu_published_report']
             self.put32(report + 12, 1)
             self.put32(report + 56, 1)
@@ -375,10 +374,10 @@ def main():
         elif case == 'published-deadline':
             model.pool_deadline = True
         elif case == 'npu-late-irq':
-            layout = Image(image.path, {'os_npu_application', 'npu_runtime', 'npu_service'})
+            layout = Image(image.path, {'os_npu_application', 'npu_service_signals'})
             npu = layout.address('npu', '/apps/os/npu.c')
-            service = npu + layout.layouts['os_npu_application']['runtime'] + layout.layouts['npu_runtime']['service']
-            model.put32(service + layout.layouts['npu_service']['irq_pending'], 1)
+            signals = npu + layout.layouts['os_npu_application']['signals']
+            model.put32(signals + layout.layouts['npu_service_signals']['irq_pending'], 1)
         elif case == 'service-not-ready':
             model.put32(model.local['ready'], 0)
         if case != 'success' and case != 'expired-deadline':

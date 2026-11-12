@@ -163,14 +163,14 @@ def offline_words(path=None):
     return words
 
 
-def preflight_admission(image, session, contract, seconds):
+def preflight_admission(image, session, contract, seconds, lifetime='returning'):
     """Run the image's own EL3 admission (tools/host_admission.py) on the session and contract about to be sent.
 
     A refusal raises AdmissionRefusal naming the failing term. When the host admission cannot be built for this image,
     the result says so and nothing is decided."""
     admission = load('runner_host_admission', ROOT/'tools/host_admission.py')
     try:
-        return admission.preflight(image, session, contract, seconds)
+        return admission.preflight(image, session, contract, seconds, lifetime=lifetime)
     except admission.AdmissionRefused as error:
         raise AdmissionRefusal('Host admission refuses this session before any board access: %s' % error)
     except admission.Unavailable as error:
@@ -415,6 +415,13 @@ def policy(info, args, session=None):
     """Approval adds authority; it never creates a storage grant or a backup."""
     d = info['descriptor']
     approved = args.approved_by == 'coordinator'
+    if getattr(args, 'lifetime', 'returning') == 'resident':
+        require(info.get('generic') and not info.get('dma') and args.kind == 'cpu-return',
+                'Resident FEL qualification requires a generic CPU OS image.')
+        require(not preserving(args), 'Resident watchdog reset loses DRAM; --preserve-dram is incompatible.')
+        require('os_resident_test_profile' in info.get('symbols', {}) and
+                symbol_bytes(args.image, 'os_resident_test_profile') == struct.pack('<3Q', 0x3154534554525353, 1, 0x5000),
+                'Resident FEL qualification requires the linked stop-on-finish test profile.')
     # The radio stage limit shapes the radio profile; an image without the radio's result channel has none.
     require(not getattr(args, 'radio_stage_limit', 0) or 'os_radio_result_descriptor' in (info.get('symbols') or {}),
             '--radio-stage-limit applies only to the radio scan image.')
@@ -460,6 +467,26 @@ def launcher(out, size, mode, seconds=60, tree=ROOT, magic=0x415337334f534331):
         '20*A733_SMP_COUNTER_HZ': 'A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ',
         '!(rd(0x02050014)&1) && !(rd(0x02050010)&0x100) &&':
             f'(rd(0x02050014)&0xffff)=={mode:#x} && (rd(0x02050010)&0xffff)==1 && (rd(0x02050018)&0xffff)==2 &&'})
+    if magic == 0x415337334f524331:
+        require(mode == 0x41, 'Resident entry requires the four-second WDT0 mode.')
+        source = board.adapt_launcher(source, {
+            'start<=UINT64_MAX-A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ':
+                'start<=UINT64_MAX-4*A733_SMP_COUNTER_HZ',
+            'CONTRACT->diagnostic_deadline=start+A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ;':
+                'CONTRACT->diagnostic_deadline=UINT64_MAX;',
+            'CONTRACT->expires_at=start+A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ;':
+                'CONTRACT->expires_at=start+4*A733_SMP_COUNTER_HZ;\n'
+                '    CONTRACT->watchdog_mode=0x41;CONTRACT->watchdog_configuration=1;CONTRACT->watchdog_output=2;'})
+        source = board.adapt_launcher(source, {
+            '!rd(0x070501c0) && !rd(0x070501d4),6);':
+                '!rd(0x070501c0) && !rd(0x070501c4) && !rd(0x070501d4) && !rd(0x07090108),6);',
+            'uint64_t start=ticks();require(start<=UINT64_MAX-4*A733_SMP_COUNTER_HZ,8);':
+                'uint64_t start=ticks();require(start<=UINT64_MAX-4*A733_SMP_COUNTER_HZ,8);\n'
+                '    *(volatile uint32_t *)(uintptr_t)0x0205000c=0x14af;\n'
+                '    __asm__ volatile("dsb sy":::"memory");\n'
+                '    require((rd(0x02050014)&0xffff)==0x41 && (rd(0x02050010)&0xffff)==1 &&\n'
+                '        (rd(0x02050018)&0xffff)==2,6);\n'
+                '    within(start);'}, counts={'!rd(0x070501c0) && !rd(0x070501d4),6);':2})
     (out / 'board-launch-base.c').write_text(source)
     for name, path in [('launch.c', 'apps/board/launch.c'), ('launch.S', 'platform/a733-smp-observe/launch.S'),
                        ('launch.ld', 'platform/a733-smp-observe/launch.ld'), ('boot.h', 'platform/a733-smp-cached/boot.h'),
@@ -605,16 +632,20 @@ def prepare(args, info, live, out, *, dma_binding=None):
         write(out/'dma-authority.json', dma_authority)
     session = (out/'session.bin').read_bytes()
     policy(info, args, session)
-    # The image names the magic of its returning lifetime in its compiled contract profile.
-    magic = load('runner_host_admission', ROOT/'tools/host_admission.py').returning_magic(
-        symbol_bytes(args.image, 'os_contract_profile'))
-    launcher(out, len(session), info['watchdog']['mode'], info['watchdog']['session_seconds'], tree, magic)
+    lifetime = getattr(args, 'lifetime', 'returning')
+    # The linked profile supplies authority; a command-line selection cannot add a lifetime.
+    magic = load('runner_host_admission', ROOT/'tools/host_admission.py').contract_magic(
+        symbol_bytes(args.image, 'os_contract_profile'), lifetime)
+    watchdog = dict(info['watchdog'])
+    if lifetime == 'resident':
+        watchdog['mode'] = 0x41
+    launcher(out, len(session), watchdog['mode'], watchdog['session_seconds'], tree, magic)
     board = load('runner_request', ROOT/'apps/board/prepare.py')
     request, contract = board.request_bytes(address, identity, epoch, generation, lease, session)
     request = struct.pack('<Q', 0x415337334f534c31) + request[8:]
     contract = bytearray(contract)
     struct.pack_into('<Q', contract, 184, len(session))
-    host_admission = preflight_admission(args.image, session, bytes(contract), info['watchdog']['session_seconds'])
+    host_admission = preflight_admission(args.image, session, bytes(contract), watchdog['session_seconds'], lifetime)
     uploads = []
     for i, part in enumerate(parts):
         if part['data']:
@@ -633,7 +664,7 @@ def prepare(args, info, live, out, *, dma_binding=None):
                 (0x52d00, write(out/'report-zero.bin', bytes(128))), (0x52000, out/'launch.bin')]
     returning = load('prepare_return_geometry', tree/'apps/os/cpu-return-host.py')
     plan = dict(meta, epoch=epoch, generation=generation, uploads=uploads, launch=['exe', '0x52000'],
-                host_admission=host_admission, watchdog=info['watchdog'], format='generic', geometry=geometry,
+                host_admission=host_admission, watchdog=watchdog, lifetime=lifetime, format='generic', geometry=geometry,
                 return_host=returning, input_regions=list(meta['uploads']) + radio_regions, image_ram=returning.IMAGE_RAM)
     if getattr(args, 'wifi', None):
         credential_session(session, host_admission, records.manifest_tool.DEVICES['radio'])

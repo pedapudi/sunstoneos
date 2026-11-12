@@ -15,10 +15,26 @@ endif()
 if(SUNSTONE_APPLICATION STREQUAL "")
   add_sunstone_image(sunstone-a733-os LIFETIME ${os_lifetime})
 elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
+  set(SUNSTONE_HELLO_CLUSTER "a55" CACHE STRING "CPU-return control placement: a55 or a76")
+  if(NOT SUNSTONE_HELLO_CLUSTER MATCHES "^(a55|a76)$")
+    message(FATAL_ERROR "SUNSTONE_HELLO_CLUSTER must be a55 or a76")
+  endif()
+  set(hello_manifest "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest.json")
+  if(SUNSTONE_HELLO_CLUSTER STREQUAL "a76")
+    set(hello_manifest "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest-a76.json")
+  endif()
+  set(hello_pmu_inputs)
+  if(SUNSTONE_PMU_RESULT)
+    list(APPEND hello_pmu_inputs "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/pmu.c")
+  endif()
   add_sunstone_application(hello-compute
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/main.c"
-    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest.json")
+    MANIFEST "${hello_manifest}" INPUTS ${hello_pmu_inputs})
   add_sunstone_image(sunstone-a733-os-hello LIFETIME ${os_lifetime} APPLICATION hello-compute)
+  if(SUNSTONE_PMU_RESULT)
+    target_sources(sunstone-a733-os-hello PRIVATE ${hello_pmu_inputs})
+    target_link_options(sunstone-a733-os-hello PRIVATE -Wl,--wrap=hello_compute_main)
+  endif()
 elseif(SUNSTONE_APPLICATION STREQUAL "memcpy-bench")
   add_sunstone_application(memcpy-bench
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/memcpy-bench/main.c"
@@ -144,6 +160,17 @@ elseif(SUNSTONE_APPLICATION MATCHES "^(cpu-capacity|cpu-split)$")
   endif()
   include("${SUNSTONE_SOURCE_ROOT}/apps/scheduler-capacity/cmake/application.cmake")
   add_sunstone_image(sunstone-a733-os-${SUNSTONE_APPLICATION} LIFETIME ${os_lifetime} APPLICATION ${SUNSTONE_APPLICATION})
+elseif(SUNSTONE_APPLICATION STREQUAL "table-walks")
+  add_sunstone_application(table-walks
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/main.c"
+      "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/walk.S"
+      "${SUNSTONE_SOURCE_ROOT}/platform/a733/cpu_pmu.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/manifest.json"
+    INPUTS "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/privilege.c"
+    INCLUDE_DIRECTORIES "${SUNSTONE_SOURCE_ROOT}/apps/table-walks")
+  add_sunstone_image(sunstone-a733-os-table-walks LIFETIME ${os_lifetime} APPLICATION table-walks)
+  target_sources(sunstone-a733-os-table-walks PRIVATE "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/privilege.c")
+  target_link_options(sunstone-a733-os-table-walks PRIVATE -Wl,--wrap=os_application_task_privileged)
 elseif(SUNSTONE_APPLICATION STREQUAL "dram-bandwidth")
   include("${SUNSTONE_SOURCE_ROOT}/apps/dram-bandwidth/cmake/application.cmake")
   add_sunstone_image(sunstone-a733-os-dram-bandwidth LIFETIME ${os_lifetime} APPLICATION dram-bandwidth)

@@ -90,6 +90,19 @@ def returning_magic(profile):
     return words[2] if len(words) > 2 and words[2] else words[0]
 
 
+def contract_magic(profile, lifetime='returning'):
+    """Select a lifetime the linked image admits; zero never grants entry."""
+    import struct
+    if lifetime == 'returning':
+        return returning_magic(profile)
+    if lifetime != 'resident':
+        raise ValueError('unknown OS lifetime: ' + lifetime)
+    words = struct.unpack_from('<%dQ' % (len(profile) // 8), profile)
+    if len(words) < 2 or words[1] != 0x415337334f524331:
+        raise ValueError('the image does not admit the resident lifetime')
+    return words[1]
+
+
 def image_facts(image):
     """Manifest section, returning contract magic, admitted magics and lifetime of an OS image with an application."""
     with Path(image).open('rb') as stream:
@@ -101,6 +114,7 @@ def image_facts(image):
             raise Unavailable('not a returning OS image with an application manifest')
         import struct
         return {'manifest': section.data(), 'contract_magic': returning_magic(profile),
+                'contract_magics': profile,
                 'profile': [m for m in struct.unpack_from('<%dQ' % (len(profile) // 8), profile) if m],
                 'seconds': struct.unpack_from('<5Q', marker)[4]}
 
@@ -264,8 +278,13 @@ def completed_contract(contract, seconds, magic, armed_at=COUNTER_HZ * 3600):
             raise ValueError('the runner\'s contract has a nonzero %s before the launcher' % name)
     struct.pack_into('<Q', raw, CONTRACT_OFFSETS['armed_at'], armed_at)
     struct.pack_into('<Q', raw, CONTRACT_OFFSETS['startup_deadline'], armed_at + STARTUP_SECONDS * COUNTER_HZ)
-    struct.pack_into('<Q', raw, CONTRACT_OFFSETS['diagnostic_deadline'], armed_at + seconds * COUNTER_HZ)
-    struct.pack_into('<Q', raw, CONTRACT_OFFSETS['expires_at'], armed_at + seconds * COUNTER_HZ)
+    resident = magic == 0x415337334f524331
+    struct.pack_into('<Q', raw, CONTRACT_OFFSETS['diagnostic_deadline'], (1 << 64) - 1 if resident else armed_at + seconds * COUNTER_HZ)
+    struct.pack_into('<Q', raw, CONTRACT_OFFSETS['expires_at'], armed_at + (4 if resident else seconds) * COUNTER_HZ)
+    if resident:
+        if any(raw[120:144]):
+            raise ValueError('the runner\'s resident watchdog fields are nonzero before the launcher')
+        struct.pack_into('<3Q', raw, 120, 0x41, 1, 2)
     struct.pack_into('<Q', raw, CONTRACT_OFFSETS['magic'], magic)
     return bytes(raw), armed_at + EL3_DELAY_TICKS
 
@@ -302,7 +321,7 @@ def explain(detail, image):
     return text, named
 
 
-def preflight(image, session, contract, seconds=None, build=None, cache=None):
+def preflight(image, session, contract, seconds=None, build=None, cache=None, lifetime='returning'):
     """Run the image's admission on the session and the launcher-completed contract.
 
     Returns {'admitted': True, ...}; raises AdmissionRefused naming the term, or Unavailable when the host
@@ -310,12 +329,13 @@ def preflight(image, session, contract, seconds=None, build=None, cache=None):
     facts = image_facts(image)
     seconds = facts['seconds'] if seconds is None else seconds
     binary = build_harness(image, build, cache)
-    completed, now = completed_contract(contract, seconds, facts['contract_magic'])
+    magic = contract_magic(facts['contract_magics'], lifetime)
+    completed, now = completed_contract(contract, seconds, magic)
     result = evaluate(binary, session, completed, now)
     detail, decode, stop = result['detail'], result['decode'], result['stop']
     if detail != stop:
         raise Unavailable('the board stop %#x differs from the admission refusal %#x' % (stop, detail))
-    report = {'admitted': detail == 0, 'detail': detail, 'decode_subterm': decode, 'lifetime_seconds': seconds,
+    report = {'admitted': detail == 0, 'detail': detail, 'decode_subterm': decode, 'lifetime_seconds': seconds, 'lifetime': lifetime,
               'harness': str(binary)}
     if detail:
         message, named = explain(detail, image)
@@ -330,6 +350,7 @@ def main(argv=None):
     parser.add_argument('session', type=Path)
     parser.add_argument('contract', type=Path, help='the runner\'s contract.bin, before the launcher completes it')
     parser.add_argument('--seconds', type=int)
+    parser.add_argument('--lifetime', choices=('returning', 'resident'), default='returning')
     parser.add_argument('--build', type=Path, help='the CMake build directory of the image, when it is not under it')
     args = parser.parse_args(argv)
     try:
@@ -337,7 +358,8 @@ def main(argv=None):
         if args.build:
             home = re.search(r'^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$', (args.build / 'CMakeCache.txt').read_text(), re.M)
             located = (args.build.resolve(), Path(home.group(1)))
-        print(json.dumps(preflight(args.image, args.session.read_bytes(), args.contract.read_bytes(), args.seconds, build=located), indent=2))
+        print(json.dumps(preflight(args.image, args.session.read_bytes(), args.contract.read_bytes(), args.seconds,
+                                   build=located, lifetime=args.lifetime), indent=2))
     except AdmissionRefused as error:
         print('refused: %s' % error, file=sys.stderr)
         return 1

@@ -61,7 +61,7 @@ static int validate(void *cookie, const struct a733_npu_command *c)
 }
 static int window(struct npu_runtime_queue *q)
 {
-    unsigned failed = atomic_load_explicit(&q->runtime->failed, memory_order_acquire);
+    unsigned failed = atomic_load_explicit(&q->runtime->service.signals->runtime_failed, memory_order_acquire);
     unsigned open = a733_npu_startup_window_open(q->runtime->startup);
     unsigned owns = q->claimed && q->runtime->service.direct == &q->direct;
     if (!failed && open && owns) return 1;
@@ -133,8 +133,8 @@ static void irq_fault(struct npu_runtime_queue *q, BaseType_t *woken, unsigned s
 {
     npu_idle_retain(&q->power, site, 0, q->power.phase, NPU_IDLE_ON);
     atomic_store_explicit(&q->queue.failed, 1, memory_order_release);
-    atomic_store_explicit(&q->runtime->failed, 1, memory_order_release);
-    atomic_fetch_or_explicit(&q->runtime->service.irq_pending, 2u, memory_order_release);
+    atomic_store_explicit(&q->runtime->service.signals->runtime_failed, 1, memory_order_release);
+    atomic_fetch_or_explicit(&q->runtime->service.signals->irq_pending, 2u, memory_order_release);
     if (q->progress_from_isr) q->progress_from_isr(q->progress_cookie, woken);
     q->woken = NULL;
     vTaskNotifyGiveFromISR(q->task, woken);
@@ -160,8 +160,8 @@ static void irq(void *cookie, BaseType_t *woken)
     if (atomic_load_explicit(&q->queue.failed, memory_order_acquire)) {
         /* The first IRQ's status/deadline inputs remain in the queue adapter;
          * no controller operation or release follows this retained failure. */
-        atomic_store_explicit(&q->runtime->failed, 1, memory_order_release);
-        atomic_fetch_or_explicit(&q->runtime->service.irq_pending, 2u, memory_order_release);
+        atomic_store_explicit(&q->runtime->service.signals->runtime_failed, 1, memory_order_release);
+        atomic_fetch_or_explicit(&q->runtime->service.signals->irq_pending, 2u, memory_order_release);
     }
     if (q->progress_from_isr) q->progress_from_isr(q->progress_cookie, woken);
     /* Completion refreshes the idle time and wakes no task; the owner's alarm
@@ -177,7 +177,7 @@ static void irq(void *cookie, BaseType_t *woken)
 int npu_runtime_queue_claim(struct npu_runtime_queue *q, struct npu_runtime *rt)
 {
     if (!q || q->claimed || !rt || !rt->bound || !rt->service.runtime ||
-        atomic_load_explicit(&rt->failed, memory_order_acquire) || !rt->service.irq_bound ||
+        atomic_load_explicit(&rt->service.signals->runtime_failed, memory_order_acquire) || !rt->service.irq_bound ||
         rt->service.runtime->hooks.idle_hint || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING ||
         xTaskGetCurrentTaskHandle() != rt->slot[0].client || !rt->slot[0].opened ||
         rt->slot[0].closed || rt->slot[0].pending || rt->service.direct || rt->service.direct_request ||
@@ -202,7 +202,7 @@ int npu_runtime_queue_claim(struct npu_runtime_queue *q, struct npu_runtime *rt)
     if (!npu_queue_init(&q->queue, &ops, q)) return 0;
     q->direct = (struct npu_service_direct){irq, q};
     const uint64_t saved = npu_runtime_queue_lock();
-    if (atomic_load_explicit(&rt->service.irq_pending, memory_order_acquire)) {
+    if (atomic_load_explicit(&rt->service.signals->irq_pending, memory_order_acquire)) {
         npu_runtime_queue_unlock(saved); return 0;
     }
     rt->service.direct_owner = q->task;
@@ -216,19 +216,19 @@ int npu_runtime_queue_claim(struct npu_runtime_queue *q, struct npu_runtime *rt)
     if (ready != 1) return 0;
     const uint64_t armed_saved = npu_runtime_queue_lock();
     if (rt->service.direct != &q->direct ||
-        atomic_load_explicit(&rt->failed, memory_order_acquire) ||
+        atomic_load_explicit(&rt->service.signals->runtime_failed, memory_order_acquire) ||
         atomic_load_explicit(&q->queue.failed, memory_order_acquire) ||
         !a733_npu_startup_window_open(rt->startup) ||
-        atomic_load_explicit(&rt->service.irq_pending, memory_order_acquire)) {
+        atomic_load_explicit(&rt->service.signals->irq_pending, memory_order_acquire)) {
         atomic_store_explicit(&q->queue.failed, 1, memory_order_release);
-        atomic_store_explicit(&rt->failed, 1, memory_order_release);
+        atomic_store_explicit(&rt->service.signals->runtime_failed, 1, memory_order_release);
         npu_runtime_queue_unlock(armed_saved); return -1;
     }
     const int armed = rt->service.irq_ops.rearm(rt->service.irq_cookie);
     if (armed == 1) { q->claimed = 1; rt->service.irq_masked = 0; }
     else {
         atomic_store_explicit(&q->queue.failed, 1, memory_order_release);
-        atomic_store_explicit(&rt->failed, 1, memory_order_release);
+        atomic_store_explicit(&rt->service.signals->runtime_failed, 1, memory_order_release);
     }
     npu_runtime_queue_unlock(armed_saved);
     return armed == 1 ? 1 : -1;
@@ -247,7 +247,7 @@ static int power_health(void *cookie)
     struct npu_runtime_queue *q = cookie;
     return window(q) && !q->queue.retired &&
         !atomic_load_explicit(&q->queue.failed, memory_order_acquire) &&
-        !atomic_load_explicit(&q->runtime->service.irq_pending, memory_order_acquire);
+        !atomic_load_explicit(&q->runtime->service.signals->irq_pending, memory_order_acquire);
 }
 /* Only the three registers of the part descriptor are reachable. */
 static int power_read(void *cookie, uint32_t offset, uint32_t *value)
@@ -283,8 +283,8 @@ static uint64_t ticks_to_us(struct npu_runtime_queue *q, uint64_t value)
 static void power_failed(struct npu_runtime_queue *q)
 {
     atomic_store_explicit(&q->queue.failed, 1, memory_order_release);
-    atomic_store_explicit(&q->runtime->failed, 1, memory_order_release);
-    atomic_fetch_or_explicit(&q->runtime->service.irq_pending, 2u, memory_order_release);
+    atomic_store_explicit(&q->runtime->service.signals->runtime_failed, 1, memory_order_release);
+    atomic_fetch_or_explicit(&q->runtime->service.signals->irq_pending, 2u, memory_order_release);
     sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU),
         q->power.failure.site | q->power.failure.phase << 16, SUNSTONE_CRUMB_HERE());
 }
@@ -473,8 +473,8 @@ int npu_runtime_queue_return(struct npu_runtime_queue *q)
     int result = s->irq_ops.mask(s->irq_cookie);
     const uint64_t saved = npu_runtime_queue_lock();
     const uint64_t count = atomic_load_explicit(&q->queue.completed, memory_order_acquire);
-    if (!npu_queue_idle(&q->queue) || atomic_load_explicit(&q->runtime->failed, memory_order_acquire) ||
-        atomic_load_explicit(&s->irq_pending, memory_order_acquire) ||
+    if (!npu_queue_idle(&q->queue) || atomic_load_explicit(&q->runtime->service.signals->runtime_failed, memory_order_acquire) ||
+        atomic_load_explicit(&s->signals->irq_pending, memory_order_acquire) ||
         count > UINT32_MAX - npu_service_irq_completions(s) ||
         q->queue.submitted > UINT64_MAX - q->runtime->counters.jobs) result = -1;
     if (result == 1 && !npu_queue_retire(&q->queue)) result = -1;
@@ -487,7 +487,7 @@ int npu_runtime_queue_return(struct npu_runtime_queue *q)
         q->claimed = 0;
     } else if (result < 0) {
         atomic_store_explicit(&q->queue.failed, 1, memory_order_release);
-        atomic_store_explicit(&q->runtime->failed, 1, memory_order_release);
+        atomic_store_explicit(&q->runtime->service.signals->runtime_failed, 1, memory_order_release);
     }
     npu_runtime_queue_unlock(saved);
     if (result == 1) xTaskNotifyGive(s->worker);

@@ -3,12 +3,18 @@
  * at the existing fixture boundary; capture receives the real stream API. */
 #include "../apps/os/audio.c"
 #include "../apps/os/application.h"
+#include "../apps/os/capture.h"
+#include "../apps/os/owner-memory.h"
+extern uint8_t *ss_capture_buffer;
 #define AUDIO_STATE (*audio)
 #include "os-image-audio-model.h"
 enum { CAPTURE_MAX_FRAMES=80000, CAPTURE_BYTES=2*CAPTURE_MAX_FRAMES };
 uint8_t os_check_pcm[2][CAPTURE_BYTES];
-_Alignas(4) uint8_t ss_capture_buffer[SS_CAPTURE_HEADROOM+40*OS_AUDIO_PERIOD_CAPACITY];
-const size_t ss_capture_capacity=sizeof(ss_capture_buffer)-SS_CAPTURE_HEADROOM;
+/* The capture buffer, which admission takes from the ledger (os_capture_memory): readable and writable at EL0. */
+static _Alignas(4) uint8_t capture_storage[SS_CAPTURE_HEADROOM+40*OS_AUDIO_PERIOD_CAPACITY];
+const size_t ss_capture_bytes=sizeof(capture_storage),ss_capture_capacity=sizeof(capture_storage)-SS_CAPTURE_HEADROOM;
+void *os_owner_memory(uint64_t bytes,uint64_t align,unsigned attributes)
+{return bytes==sizeof(capture_storage)&&!align&&attributes==OS_MEMORY_EL0_WRITE?capture_storage:NULL;}
 static const struct ss_manifest manifest={.audio={16000,1,16,16000,CAPTURE_MAX_FRAMES}};
 const struct ss_application ss_application={.manifest=&manifest};
 static struct os_session session;
@@ -120,6 +126,7 @@ static void reset(void)
     sent=held_ticket=0;board_up=1;board_failed=0;parent_polls=0;
     for(unsigned i=0;i<PERIODS;++i)audio->pool.stream_mappings[i].cpu=memory[i];
     atomic_store(&audio->pool.state,A733_DMA_POOL_READY);
+    check(os_capture_memory()==1&&ss_capture_buffer==capture_storage,161);
 }
 static struct os_audio_stream_config config(uint32_t rate,unsigned channels,unsigned bits,
     uint32_t period_bytes,uint32_t periods)

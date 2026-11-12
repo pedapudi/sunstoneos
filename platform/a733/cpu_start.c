@@ -1,8 +1,9 @@
 #include "a733_cpu_start.h"
 #include <stddef.h>
 
-/* The HELD_ and DYNAMIC_ steps run only for a held core (config.held); every other core goes from MODE to ARCH and
- * from PUBLISH to MODE_ON, with the same register operations as before the steps existed. */
+/* Resident entry checks either FEL dynamic OFF or stage-2 static OFF before
+ * the first startup write. Only static OFF needs a dynamic-policy release.
+ * Returning FEL entry keeps its existing register sequence. */
 enum { OFF, CONTROL, MODE,
     HELD_POLICY, HELD_STATUS,
     ARCH, ENTRY_LO, ENTRY_HI, ENTRY_LO_CHECK, ENTRY_HI_CHECK, ARCH_WRITE, ARCH_CHECK, PUBLISH,
@@ -31,9 +32,10 @@ int a733_cpu_start_init(struct a733_cpu_start *s,const struct a733_cpu_start_con
     if(!separate(s,sizeof(*s),c,sizeof(*c)) || s->initialized ||
         !c->ops.read32 || !c->ops.write32 || !c->ops.barrier || !c->ops.now_us ||
         !a733_cpu_index(c->boot_mpidr,&boot) || boot!=0 || !c->core || c->core>=A733_CPU_COUNT ||
-        !c->lease || !c->deadline || c->held>1 || c->entry<UINT32_C(0x40000000) ||
+        !c->lease || !c->deadline || c->held>A733_CPU_START_RESIDENT || c->entry<UINT32_C(0x40000000) ||
         c->entry>UINT32_MAX || (c->entry&3))return 0;
-    *s=(struct a733_cpu_start){.config=*c,.state=A733_CPU_START_PENDING,.initialized=1};return 1;
+    *s=(struct a733_cpu_start){.config=*c,.state=A733_CPU_START_PENDING,.initialized=1,
+        .static_off=c->held!=A733_CPU_START_FEL};return 1;
 }
 static int fail(struct a733_cpu_start *s,enum a733_cpu_start_error e)
 {s->error=e;s->state=A733_CPU_START_RETAINED;return 0;}
@@ -87,11 +89,12 @@ enum a733_cpu_start_state a733_cpu_start_poll(struct a733_cpu_start *s)
         break;
     /* Admission precedes every startup write, including RVBAR. */
     case HELD_POLICY:
-        if(!(s->control&2)) {fail(s,A733_CPU_START_INITIAL_STATE);break;}
-        if(read_reg(s,status(c)-8,&v) && v)fail(s,A733_CPU_START_INITIAL_STATE);
+        if(!read_reg(s,status(c)-8,&v))break;
+        if(s->config.held==A733_CPU_START_RESIDENT && v==0x100)s->static_off=0;
+        else if(v || !(s->control&2))fail(s,A733_CPU_START_INITIAL_STATE);
         break;
     case HELD_STATUS:
-        if(read_reg(s,status(c),&v) && v)fail(s,A733_CPU_START_INITIAL_STATE);
+        if(read_reg(s,status(c),&v) && v!=(s->static_off?0u:0x100u))fail(s,A733_CPU_START_INITIAL_STATE);
         break;
     /* cpu_entry armed the mailbox before POWER. PUBLISH completed the entry
      * stores; an immediate wake parks until POWERED/request cleanup. */
@@ -123,7 +126,7 @@ enum a733_cpu_start_state a733_cpu_start_poll(struct a733_cpu_start *s)
     if(s->state==A733_CPU_START_PENDING && time_ok(s) && advance) {
         if(s->step==FINISH)s->state=A733_CPU_START_POWERED;
         else if(++s->step==HELD_POLICY && !s->config.held)s->step=ARCH;
-        else if(s->step==DYNAMIC_RELEASE && !s->config.held)s->step=MODE_ON;
+        else if(s->step==DYNAMIC_RELEASE && !s->static_off)s->step=MODE_ON;
     }
 out:
     s->entered=0;return s->state;

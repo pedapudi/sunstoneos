@@ -27,7 +27,7 @@ class MMU(ctypes.Structure):
     _fields_ = [(name, ctypes.c_uint64) for name in ('ttbr0', 'tcr', 'mair', 'sctlr')]
 
 
-TCR = (2 << 32) | (1 << 23) | (3 << 12) | (1 << 10) | (1 << 8) | 25
+TCR = module('memtest_tcr', ROOT / 'tools/a733_tcr.py').CACHED_WALK
 ATTR = (1 << 10) | (3 << 8) | 5
 XN = (1 << 53) | (1 << 54)
 ROOT_TABLE, CHILD = 0x41100000, 0x41101000

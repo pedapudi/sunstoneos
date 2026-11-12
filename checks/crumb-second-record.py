@@ -23,6 +23,7 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_SP, UC_ARM64_REG_CPACR_EL1
 
 ROOT = Path(__file__).resolve().parents[1]
+CHECK_INPUTS = ['apps/os/vectors.patch', 'apps/os/sealed-lifetime.h']
 RTC, CODE, STACK = 0x07090000, 0x100000, 0x300000
 if not __debug__:
     raise RuntimeError('checks require assertions')
@@ -39,11 +40,12 @@ def assemble(text, directory, clang='clang-21', lld=None):
     lld = lld or Path.home() / '.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld'
     directory.mkdir(parents=True, exist_ok=True)
     source = directory / 'handler.S'
-    source.write_text('.equ OS_SEALED_LIFETIME_OFFSET, 4100\n.equ OS_LIFETIME_RETURN_WORD, 3\n.text\n.global entry\nentry:\n'
+    source.write_text('#include "sealed-lifetime.h"\n.text\n.global entry\nentry:\n'
                       '    stp x0, x1, [sp, #-16]!\n    b .Lfail_record\n' + text.replace('eret', 'b done') +
                       '\ndone:\n    nop\n.global finish\nfinish:\n    nop\n.balign 4096\n.global os_sealed\nos_sealed:\n    .space 8192\n')
     obj, image = directory / 'handler.o', directory / 'handler.bin'
-    subprocess.run([clang, '--target=aarch64-none-elf', '-c', str(source), '-o', str(obj)], check=True)
+    subprocess.run([clang, '--target=aarch64-none-elf', '-I', str(ROOT / 'apps/os'),
+                    '-c', str(source), '-o', str(obj)], check=True)
     subprocess.run([str(lld), '-Ttext=%#x' % CODE, '--image-base=0', '-e', 'entry', '--oformat=binary', '-o', str(image), str(obj)], check=True,
                    capture_output=True)
     return image.read_bytes()

@@ -43,18 +43,17 @@ Designs: [platform](../designs/npu-platform.md), [fast path](../designs/npu-fast
 5. Run larger command windows with the smaller doorbell word. A reservation that includes run-time graphs uses 512 KiB per command allocation; the manifest could declare a command size to shrink it.
 6. Add exact per-job deadline interrupts through the scheduler's deadline facility (`kernel/scheduler/deadline.h`); do not add a device timer.
 7. Run the `restart-*` cases of no host check on a restart image; the other cases pass.
-8. Take the NPU runtime (35,504 bytes of the `npu` static in `apps/os/npu.c`) from the ledger at the grant too. The application's task reads its stop and interrupt words at EL0 in `ss_finish`, so that wait must first read words the image holds or run at EL1 ([one OS image](../designs/one-os-image.md), NPU memory).
-9. Confirm on the board where the remaining layout time of admission goes. For the encoder's 96 graphs (14.5 MB) at 494 MHz on an A55, preparing the runtime takes 69.4 ms: copy 11.3 ms, decode 6.2 ms, layout 37.9 ms, native setup 13.3 ms. The container checksum runs with the Armv8 `CRC32` instructions, one aligned load for each eight bytes, and should take about 14 ms. A second timed pass over the same graphs on the board would confirm how the layout time divides between the operation inspection and the rest.
-10. Derive the secondary cores' startup wait from the declared graph bytes and the measured preparation rate. The wait is a fixed 1 s: the launchers set the startup deadline to the start plus one second, and the admission rule in `platform/a733-smp-cached/admission.c` refuses a deadline more than one second ahead, inside the 4 s watchdog lease. Preparation of the encoder's graphs uses 69 ms of it.
-11. Run recognition on the NPU on the board at 90 frames and above 512 frames (the simulator gives the CPU's transcript at 90, 300 and 1024 frames), and in sessions that repeat recognition or use live capture, the radio or the headset. The encoder task closes its queue only in the session that ends after one recognition, and the admission refuses live audio, radio and headset sessions that grant the NPU queue.
-12. Run the subsampling stage (161 ms of the 423 ms) on the NPU. It is the largest remaining stage of recognition.
+8. Confirm on the board where the remaining layout time of admission goes. For the encoder's 96 graphs (14.5 MB) at 494 MHz on an A55, preparing the runtime takes 69.4 ms: copy 11.3 ms, decode 6.2 ms, layout 37.9 ms, native setup 13.3 ms. The container checksum runs with the Armv8 `CRC32` instructions, one aligned load for each eight bytes, and should take about 14 ms. A second timed pass over the same graphs on the board would confirm how the layout time divides between the operation inspection and the rest.
+9. Derive the secondary cores' startup wait from the declared graph bytes and the measured preparation rate. The wait is a fixed 1 s: the launchers set the startup deadline to the start plus one second, and the admission rule in `platform/a733-smp-cached/admission.c` refuses a deadline more than one second ahead, inside the 4 s watchdog lease. Preparation of the encoder's graphs uses 69 ms of it.
+10. Run recognition on the NPU on the board at 90 frames and above 512 frames (the simulator gives the CPU's transcript at 90, 300 and 1024 frames), and in sessions that repeat recognition or use live capture, the radio or the headset. The encoder task closes its queue only in the session that ends after one recognition, and the admission refuses live audio, radio and headset sessions that grant the NPU queue.
+11. Run the subsampling stage (161 ms of the 423 ms) on the NPU. It is the largest remaining stage of recognition.
 
 ## Evidence
 
 Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` records hold the results that earlier status prose described. Earlier prose evidence is in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-88 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+89 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -146,4 +145,5 @@ Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` recor
 | `1794129852115418766-3f09a1ed` | 2026-11-08 | 3-1 | `853038725a33` | failure-return | passed | run_total 129.637 s |
 | `1794132080083764983-dd19316f` | 2026-11-08 | 3-1 | `361756975b05` | returned | passed | run_total 130.467 s, frames 512 frames, compute_time 422957 µs, load_time 93728 µs, front_end_time 9236 µs, subsampling_time 161441 µs, layers_time 240327 µs, head_time 9372 µs, punctuation_time 1481 µs, npu_job_wait 140152 µs, cpu_copy_and_convert 78120 µs, position_tables_time 21210 µs, position_embedding_time 3062 µs, first_table_time 4413 µs, jobs 768 jobs, arena_peak 4.34949e+06 bytes |
 | `1794136537959456752-4e4b7609` | 2026-11-08 | 3-1 | `010c92a30e5e` | returned | passed | run_total 129.963 s, frames 512 frames, compute_time 422783 µs, load_time 93685 µs, front_end_time 9256 µs, subsampling_time 161304 µs, layers_time 240274 µs, head_time 9372 µs, punctuation_time 1481 µs, npu_job_wait 152644 µs, cpu_copy_and_convert 65981 µs, position_tables_time 21323 µs, position_embedding_time 3071 µs, first_table_time 4431 µs, jobs 768 jobs, arena_peak 4.34949e+06 bytes |
+| `1794464613159170511-919b9552` | 2026-11-12 | 3-3 | `bc5baa2f99b9` | returned | passed | run_total 129.959 s, run_total 129.959 s, frames 512 frames, compute_time 422934 µs, load_time 93720 µs, layers_time 240318 µs, job_time 152788 µs, copy_time 65884 µs, tables_time 21182 µs |
 <!-- evidence-table:end -->

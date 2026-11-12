@@ -15,6 +15,9 @@ struct os_usb_service_ops {
     void (*leave)(void *context);
 };
 void os_usb_service_init(const struct os_usb_service_ops *ops, void *context);
+/* Admission: take the input queue that the manifest declares from the ledger (apps/os/owner-memory.h). 1 when taken or none
+ * is declared, 0 when the ledger refuses it. */
+int os_usb_service_memory(void);
 void os_usb_service_connected(unsigned devices);
 void os_usb_service_disconnected(unsigned devices);
 void os_usb_service_dispatch(void);
