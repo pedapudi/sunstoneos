@@ -24,10 +24,11 @@ int a733_native_host_current(void *binding);
 #endif
 static int current(void *cookie)
 {
+    struct a733_mmc_platform_native *n=cookie;
+    if(!n||!n->initialized||!a733_platform_lock_live(n->locks))return 0;
 #ifdef A733_MMC_NATIVE_HOST_TEST
     return a733_native_host_current(cookie);
 #else
-    struct a733_mmc_platform_native *n=cookie;
     uint64_t el,flags,nesting,critical;
     __asm__ volatile("mrs %0, CurrentEL\n mrs %1, daif" : "=r"(el),"=r"(flags));
     if (!n || !n->initialized || el!=4 || (flags&0x80)) return 0;
@@ -54,7 +55,7 @@ static int current(void *cookie)
 static int now(void *cookie,uint64_t *v)
 {
     struct a733_mmc_platform_native *n=cookie;
-    return n->locks->now(n->locks->context,v);
+    return a733_platform_lock_live(n->locks)&&n->locks->now(n->locks->context,v);
 }
 static int admit(void *cookie,const struct a733_mmc_platform_config *c,const struct a733_clock_token *t)
 {

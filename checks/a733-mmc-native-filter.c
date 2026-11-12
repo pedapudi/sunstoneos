@@ -28,6 +28,7 @@ void a733_native_host_store(uintptr_t a, uint32_t v)
 }
 int a733_native_host_current(void *n) { (void)n; return task_ok; }
 /* Locks and the update service are linked but not exercised here. */
+int a733_platform_lock_live(struct a733_platform_locks *l) { (void)l; return 1; }
 int a733_platform_lock_enter(struct a733_platform_locks *l, enum a733_platform_lock k, uint64_t d) { (void)l; (void)k; (void)d; return 1; }
 void a733_platform_lock_leave(struct a733_platform_locks *l, enum a733_platform_lock k) { (void)l; (void)k; }
 int a733_platform_lock_retain(struct a733_platform_locks *l, enum a733_platform_lock k) { (void)l; (void)k; return 1; }

@@ -33,7 +33,8 @@ PREAMBLE = r'''
 #include <stdatomic.h>
 #include <stdlib.h>
 #include "quiesce.h"
-#define SUNSTONE_CRUMB_FAIL_BOARD 1u
+#include "fat32_rw.h"
+#undef SUNSTONE_CRUMB_HERE
 #define SUNSTONE_CRUMB_HERE() ((const void *)0x1234)
 static int requested, failing;
 int os_cpu_return_requested(void){return requested;}
@@ -43,6 +44,9 @@ static void xTaskNotifyGive(void *p){assert(p);++notified;}
 static void platform_exit(unsigned status){(void)status;abort();}
 static int os_large_sd_declared(void){return 1;}
 static unsigned close_calls, close_ok=1;
+static uint64_t sd_deadline(uint64_t v){return v;}
+static int sd_time_left(uint64_t v){(void)v;return 1;}
+static void sd_pause(void){}
 static void fake_close(void){++close_calls;}
 static int fake_closed(void){return close_ok;}
 '''
@@ -66,7 +70,8 @@ int main(int argc,char **argv)
     assert(argc==2);int test=atoi(argv[1]);
     assert(os_sd_quiesce_register());assert(storage_quiesce.registered);
     if(test)atomic_store(&storage_state,SD_OPEN);
-    if(test==2||test==3)writes_enabled=1;
+    if(test==2||test==3||test==8){writes_enabled=1;assert(retirement_enable());}
+    if(test==2)assert(retirement_write(FWR_PHASE_RAW,0));
     if(test==3)atomic_store(&storage_state,SD_CLOSED);
     if(test==4)close_ok=0;
     if(test==5)atomic_store(&storage_state,SD_FAILED);
@@ -75,7 +80,7 @@ int main(int argc,char **argv)
     requested=failing=1;
     enum os_quiesce_result r=os_quiesce_step(NULL);
     if(test==0||test==3){assert(r==OS_QUIESCE_DONE);assert(close_calls==0);return 0;}
-    if(test==5){assert(r==OS_QUIESCE_FAULT);assert(close_calls==0);return 0;}
+    if(test==2||test==5){assert(r==OS_QUIESCE_FAULT);assert(close_calls==0);return 0;}
     assert(r==OS_QUIESCE_PENDING);assert(close_calls==0);assert(notified);
     if(test==7){
         assert(!owner_open_allowed());assert(storage_state==SD_CLOSED);
@@ -108,7 +113,7 @@ static struct platform_state platform;
 static struct {uint64_t lifetime_deadline_us;} config={100};
 struct device_memory_lease {void *pool;};
 static struct device_memory_lease descriptor_lease={(void *)1};
-enum a733_mmc_platform_result {A733_MMC_PENDING,A733_MMC_BUSY,A733_MMC_CLOSED,A733_MMC_RETAINED};
+enum a733_mmc_platform_result {A733_MMC_ERROR,A733_MMC_PENDING,A733_MMC_BUSY,A733_MMC_CLOSED,A733_MMC_RETAINED};
 static unsigned native_result=A733_MMC_CLOSED,released,retained;
 static enum a733_mmc_platform_result a733_mmc_platform_close(void *p,uint64_t end)
 {(void)p;(void)end;return native_result;}
@@ -168,13 +173,14 @@ def main():
     while depth:
         depth+=(native[end]=='{')-(native[end]=='}');end+=1
     close='static void close_owner(void)\n'+native[a:end]
-    variants={'owner':PREAMBLE+OWNER_SETUP+adapter(owner)+'\n'+function(owner,'owner_quiesce_step')+'\n'+function(owner,'owner_open_allowed')+OWNER_TEST,
+    tracker=owner[owner.index('/* Owner-only fields;'):owner.index('static enum os_quiesce_result storage_quiesce_step')]
+    variants={'owner':PREAMBLE+OWNER_SETUP+tracker+adapter(owner)+'\n'+function(owner,'owner_quiesce_step')+'\n'+function(owner,'owner_open_allowed')+OWNER_TEST,
               'read':PREAMBLE+READ_SETUP+adapter(native)+'\n'+close+READ_TEST}
     def check(text,name,cases):
         d=args.output/name;d.mkdir(exist_ok=True)
         src=d/'check.c';src.write_text(text);binary=d/'check'
         command=['clang-21','-std=c11','-O1','-g','-Wall','-Wextra','-Wno-unused-function',
-                 '-fsanitize=address,undefined','-I'+str(ROOT/'apps/os'),str(src),str(ROOT/'apps/os/quiesce.c'),'-o',str(binary)]
+                 '-fsanitize=address,undefined','-I'+str(ROOT/'include'),'-I'+str(ROOT/'apps/os'),str(src),str(ROOT/'apps/os/quiesce.c'),'-o',str(binary)]
         built=subprocess.run(command,capture_output=True,text=True)
         (d/'build.log').write_text(built.stdout+built.stderr)
         assert built.returncode==0,built.stderr
@@ -184,7 +190,7 @@ def main():
         return True
     count=0
     for name,text in variants.items():
-        cases=8 if name=='owner' else 4
+        cases=9 if name=='owner' else 4
         assert check(text,name,cases),name
         absent=text.replace('os_quiesce_register(&storage_quiesce)','1')
         assert not check(absent,name+'-missing-registration',cases)
@@ -192,7 +198,7 @@ def main():
         exits=text.replace(call,call.replace('{','{platform_exit(9);',1),1)
         assert not check(exits,name+'-exit',cases)
         count+=2
-    print('PASS storage quiescence: 12 software cases, 4 registration/exit mutants; native hardware effects are modeled')
+    print('PASS storage quiescence: 13 software cases, 4 registration/exit mutants; native hardware effects are modeled')
 
 
 if __name__=='__main__':main()
