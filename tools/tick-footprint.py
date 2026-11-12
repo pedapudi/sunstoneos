@@ -21,6 +21,9 @@ from elftools.elf.elffile import ELFFile
 LINE = 64
 FIXTURE_DIR = 'apps/latency/'
 RANK = ('os', 'stack', 'fixture', 'diagnostic')
+# Static task storage is the kernel's task control block, wherever the owner declares it.
+TCB_TYPES = ('StaticTask_t', 'xSTATIC_TCB', 'tskTCB', 'TCB_t')
+TCB_GROUP = 'task control block'
 DIAGNOSTIC_FILES = ('kernel/scheduler/latency_cause.c', 'runtime/latency.c',
                     'runtime/latency_irq.c', 'kernel/scheduler/latency_trace',
                     'kernel/scheduler/latency_pmu.c')
@@ -107,6 +110,17 @@ def field_path(die, offset, depth=0):
     return ''
 
 
+def label_of(name, vtype):
+    """A variable's name, prefixed with its element type when it holds task control blocks."""
+    die = strip(vtype)
+    while die is not None and die.tag == 'DW_TAG_array_type':
+        die = strip(die.get_DIE_from_attribute('DW_AT_type'))
+    type_name = die.attributes.get('DW_AT_name') if die is not None else None
+    if type_name and type_name.value.decode() in TCB_TYPES:
+        return f'{TCB_GROUP}:{name}'
+    return name
+
+
 def load_variables(path):
     variables = []
     with open(path, 'rb') as f:
@@ -186,7 +200,7 @@ def parse(trace):
             current = None
         elif current is not None:
             if f[0] == 'M':
-                current.append(('M', int(f[1], 16)))
+                current.append(('M', int(f[1], 16), int(f[2], 16) if len(f) > 2 else None))
             elif f[0] == 'I':
                 current.append(('I', int(f[1], 16)))
             else:
@@ -195,18 +209,23 @@ def parse(trace):
 
 
 def segment(window, marks):
-    """Label each record with its segment: release.N, scan.N or outside."""
+    """Label each record with its segment: release.T or scan.T for target core T, or outside.
+
+    The marker's first argument register names the target. Without it (an older
+    trace) segments are numbered in order, which names targets only in a tick
+    that releases all eight."""
     labels, label = [], 'outside'
     releases = scans = 0
     for rec in window:
         if rec[0] == 'M':
+            target = rec[2] if len(rec) > 2 and rec[2] is not None and rec[2] < 8 else None
             if rec[1] == marks['release_begin']:
-                label = f'release.{releases}'
+                label = f'release.{releases if target is None else target}'
             elif rec[1] == marks['release_end']:
                 releases += 1
                 label = 'outside'
             elif rec[1] == marks['state_begin']:
-                label = f'scan.{scans}'
+                label = f'scan.{scans if target is None else target}'
             elif rec[1] == marks['state_end']:
                 scans += 1
                 label = 'outside'
@@ -215,19 +234,15 @@ def segment(window, marks):
     return labels, releases, scans
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('elf', type=Path)
-    p.add_argument('trace', type=Path)
-    p.add_argument('--mark', action='append', default=[], help='name=hexaddr')
-    p.add_argument('--output', type=Path, required=True)
-    a = p.parse_args()
-    marks = {k: int(v, 16) for k, v in (m.split('=') for m in a.mark)}
-    windows = parse(a.trace)
-    full = [w for w in windows if segment(w, marks)[1:] == (8, 8)]
+def analyze(elf, trace, marks, complete=True):
+    """Per window: segment label -> data lines, code lines and counts.
+
+    With complete, only windows with eight releases and eight scans count."""
+    windows = parse(trace)
+    full = [w for w in windows if not complete or segment(w, marks)[1:] == (8, 8)]
     if not full:
-        sys.exit('no window with eight releases and eight deadline scans')
-    variables = load_variables(a.elf)
+        raise ValueError('no window with eight releases and eight deadline scans')
+    variables = load_variables(elf)
     starts = [v[0] for v in variables]
 
     def resolve(addr):
@@ -235,15 +250,15 @@ def main():
         while i >= 0:
             base, size, name, unit, vtype = variables[i]
             if base <= addr < base + max(size, 1):
-                return f'{name}{field_path(vtype, addr - base)}', unit
+                return f'{label_of(name, vtype)}{field_path(vtype, addr - base)}', unit
             if base + max(size, 1) <= addr and addr - base > 1 << 24:
                 break
             i -= 1
         return '?', '?'
 
     pcs = sorted({r[1] for w in full for r in w if r[0] != 'M'})
-    where = symbolize(a.elf, pcs)
-    stacks = symbol(a.elf, '__exception_stacks')
+    where = symbolize(elf, pcs)
+    stacks = symbol(elf, '__exception_stacks')
 
     def code_class(pc):
         loc = where.get(pc, ('?', '?'))[1]
@@ -293,7 +308,50 @@ def main():
                     seen_data.add(line)
                     s['first_data'][cls] += 1
         per_window.append((segs, len(seen_data), len(seen_code)))
+    return per_window
 
+
+def group(entry):
+    """The structure a data line belongs to: its first field's top-level variable."""
+    first = next(iter(entry['fields']))
+    if first.startswith(TCB_GROUP + ':'):
+        return TCB_GROUP
+    return first.split('.')[0].split('[')[0].split(' +')[0]
+
+
+def segment_kinds(segs):
+    """Data lines per (segment kind, class, structure) and code lines per (kind, class).
+
+    Kinds: local (release 0, CPU0's own probe), remote (largest of releases 1-7),
+    scan (largest deadline scan) and outside."""
+    counts = collections.defaultdict(int)
+    for label, s in segs.items():
+        kind = {'release.0': 'local', 'outside': 'outside'}.get(label, label.split('.')[0].replace('release', 'remote'))
+        local = collections.Counter()
+        for e in s['data'].values():
+            if e['class'] != 'diagnostic':
+                local[f"data {e['class']} {group(e)}"] += 1
+        for cls in s['code'].values():
+            if cls != 'diagnostic':
+                local[f'code {cls}'] += 1
+        for key, value in local.items():
+            counts[(kind, key)] = max(counts[(kind, key)], value)
+    return counts
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('elf', type=Path)
+    p.add_argument('trace', type=Path)
+    p.add_argument('--mark', action='append', default=[], help='name=hexaddr')
+    p.add_argument('--output', type=Path, required=True)
+    a = p.parse_args()
+    marks = {k: int(v, 16) for k, v in (m.split('=') for m in a.mark)}
+    try:
+        per_window = analyze(a.elf, a.trace, marks)
+    except ValueError as error:
+        sys.exit(str(error))
+    full = per_window
     order = sorted(range(len(per_window)), key=lambda i: per_window[i][1])
     rep, rep_data, rep_code = per_window[order[len(order) // 2]]
     report = {'windows': len(full),
@@ -307,10 +365,7 @@ def main():
         lines = [{'line': hex(line), 'class': e['class'], 'reads': e['reads'], 'writes': e['writes'],
                   'fields': [{'field': k, 'first_site': v} for k, v in e['fields'].items()]}
                  for line, e in s['data'].items()]
-        by_var = collections.Counter()
-        for e in s['data'].values():
-            if e['class'] != 'diagnostic':
-                by_var[next(iter(e['fields'])).split('.')[0].split('[')[0].split(' +')[0]] += 1
+        by_var = collections.Counter(group(e) for e in s['data'].values() if e['class'] != 'diagnostic')
         report['segments'][label] = {
             'instructions': dict(s['insns']),
             'data_lines': dict(collections.Counter(e['class'] for e in s['data'].values())),

@@ -10,10 +10,13 @@
  *   skip=LO-HI            repeatable; no data callbacks for code in [LO, HI)
  *   windows=N out=PATH    stop after N kept windows; text output path
  *
- * Output lines: "W n" opens a kept window, "M addr" a marker, "I pc" an
+ * Output lines: "W n" opens a kept window, "M addr x0" a marker with the
+ * argument register at that instruction, "I pc" an
  * instruction, "R pc addr size" or "W pc addr size" a data access, "E" the end.
- * Build: clang-21 -shared -fPIC -O2 -fvisibility=hidden -I<dir with
- * qemu-plugin.h and the minimal glib.h> tools/qemu-tick-footprint.c -o X.so */
+ * checks/tick-footprint-budget.py builds it against the unmodified QEMU 10.2.1
+ * qemu-plugin.h (cached under ~/.cache/sunstoneos/host/qemu-plugin-10.2.1, SHA-256
+ * aebc639d01685893a9d71b9ef3afa7ea67e0be6a8959781c4057bd4974d05d4d) and the GLib
+ * type declarations in tools/qemu-plugin-glib. */
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -26,6 +29,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 
 enum { MARKS = 32, SKIPS = 8 };
 struct rec { char kind; uint64_t pc, addr; unsigned size; };
+static struct qemu_plugin_register *x0;
 static uint64_t begin_addr, end_addr, phase_addr, phase_value;
 static uint64_t marks[MARKS]; static unsigned nmarks;
 static uint64_t skip_lo[SKIPS], skip_hi[SKIPS]; static unsigned nskips;
@@ -63,7 +67,7 @@ static void on_end(unsigned vcpu, void *ud)
     fprintf(out, "W %lu\n", kept);
     for (size_t i = 0; i < used; ++i) {
         struct rec *r = &buf[i];
-        if (r->kind == 'M') fprintf(out, "M %" PRIx64 "\n", r->pc);
+        if (r->kind == 'M') fprintf(out, "M %" PRIx64 " %" PRIx64 "\n", r->pc, r->addr);
         else if (r->kind == 'I') fprintf(out, "I %" PRIx64 "\n", r->pc);
         else fprintf(out, "%c %" PRIx64 " %" PRIx64 " %u\n", r->kind, r->pc, r->addr, r->size);
     }
@@ -74,7 +78,21 @@ static void on_end(unsigned vcpu, void *ud)
 static void on_mark(unsigned vcpu, void *ud)
 {
     if (vcpu || !qemu_plugin_u64_get(active, 0)) return;
-    put('M', (uint64_t)(uintptr_t)ud, 0, 0);
+    uint64_t arg = UINT64_MAX;
+    GByteArray *buf = g_byte_array_new();
+    if (x0 && qemu_plugin_read_register(x0, buf) == 8) memcpy(&arg, buf->data, 8);
+    g_byte_array_unref(buf);
+    put('M', (uint64_t)(uintptr_t)ud, arg, 0);
+}
+static void on_vcpu_init(qemu_plugin_id_t id, unsigned vcpu)
+{
+    (void)id;
+    if (vcpu) return;
+    GArray *regs = qemu_plugin_get_registers();
+    qemu_plugin_reg_descriptor *d = (qemu_plugin_reg_descriptor *)regs->data;
+    for (unsigned i = 0; i < regs->len; ++i)
+        if (!strcmp(d[i].name, "x0")) x0 = d[i].handle;
+    g_array_unref(regs);
 }
 static void on_insn(unsigned vcpu, void *ud)
 {
@@ -114,7 +132,7 @@ static void on_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
             qemu_plugin_register_vcpu_insn_exec_cb(insn, on_end, QEMU_PLUGIN_CB_NO_REGS, NULL);
         for (unsigned m = 0; m < nmarks; ++m)
             if (pc == marks[m])
-                qemu_plugin_register_vcpu_insn_exec_cb(insn, on_mark, QEMU_PLUGIN_CB_NO_REGS, ud);
+                qemu_plugin_register_vcpu_insn_exec_cb(insn, on_mark, QEMU_PLUGIN_CB_R_REGS, ud);
         if (skipped(pc)) continue;
         qemu_plugin_register_vcpu_insn_exec_cond_cb(insn, on_insn, QEMU_PLUGIN_CB_NO_REGS,
                                                     QEMU_PLUGIN_COND_NE, active, 0, ud);
@@ -153,6 +171,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id, const qemu_info_
     if (!out) return -1;
     board = qemu_plugin_scoreboard_new(sizeof(uint64_t));
     active = qemu_plugin_scoreboard_u64(board);
+    qemu_plugin_register_vcpu_init_cb(id, on_vcpu_init);
     qemu_plugin_register_vcpu_tb_trans_cb(id, on_trans);
     qemu_plugin_register_atexit_cb(id, on_plugin_exit, NULL);
     return 0;
