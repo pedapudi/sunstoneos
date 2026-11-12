@@ -22,6 +22,10 @@ Read-only images and images without an SD core pass unchanged. A write-capable i
   data area (after the boot sector's reserved sectors and FATs), so the boot, FSInfo and FAT sectors are never exempt;
 - the first input of the run is the version 2 encoding of those bounds (encode_input), checked again after the
   runner has frozen its inputs (verify_delivered).
+A boot-area write (descriptor storage_boot_area, admit_boot_area) is the one class outside the partition: one write range
+equal to the card first stage's extent from its manifest, below sector 2048 and below the partition start, backed up with
+sector 0 and sectors 16..511, writing a candidate whose SHA-256 the record names (the first stage to install it, or the
+extent's bytes from an earlier backup to restore it).
 The record limits what one run writes. The image re-reads the backed-up sectors before its first
 write and refuses to write when their SHA-256 differs from the input's hash.
 
@@ -217,6 +221,110 @@ def admit_scratch(descriptor, args, approvals=None, scratch=None):
     return blob
 
 
+# The boot area below the first partition (docs/designs/card-fel-recovery.md#installing-the-first-stage-on-the-port-3-3-card):
+# one write range, the first-stage extent from tools/card-fel-image.py's manifest, backed up with sector 0 and sectors 16..511.
+BOOT_AREA_BACKUP = [[0, 1], [16, 496]]
+BOOT_AREA_LIMIT = 2048
+BOOT_AREA_KEYS = {'ranges', 'backup_ranges', 'backup_sha256', 'card_cid', 'candidate_sha256'}
+FIRST_STAGE_SCHEMA = 'sunstone-card-fel-image-v1'
+WRITE_EXTENT_MODE = 10      # apps/storage-write-test mode 10: the raw-extent write
+EXTENT_HEADER = 512         # its mode input: u32 mode, u32 0, u64 first sector, zero to 512 bytes, then the candidate sectors
+
+
+def extent_header(first):
+    return struct.pack('<IIQ', WRITE_EXTENT_MODE, 0, first).ljust(EXTENT_HEADER, b'\0')
+
+
+def write_extent_input(first, candidate):
+    """The second input of an apps/storage-write-test mode 10 run: the header, then the candidate sectors."""
+    require(len(candidate) and len(candidate) % 512 == 0, 'The candidate is not a whole number of sectors.')
+    return extent_header(first) + bytes(candidate)
+
+
+def mbr_partition_start(backup_sectors):
+    """First sector of the MBR's single FAT32 partition (type 0x0B or 0x0C), from sector 0 alone."""
+    mbr = backup_sectors.get(0)
+    require(mbr is not None and mbr[510:512] == b'\x55\xaa', 'The backup lacks a valid sector 0 (MBR).')
+    fat32 = [mbr[446 + 16 * i:462 + 16 * i] for i in range(4) if mbr[446 + 16 * i + 4] in (0x0b, 0x0c)]
+    require(len(fat32) == 1, 'The MBR must hold exactly one FAT32 partition entry.')
+    start = struct.unpack_from('<I', fat32[0], 8)[0]
+    require(start > 0, 'The FAT32 partition starts at sector 0.')
+    return start
+
+
+def extent_sha256(backup_sectors, first, count):
+    """SHA-256 of the extent's sector bytes, concatenated in order, from a parsed backup."""
+    require(all(s in backup_sectors for s in range(first, first + count)), 'The source backup does not hold the extent.')
+    return hashlib.sha256(b''.join(backup_sectors[s] for s in range(first, first + count))).hexdigest()
+
+
+def first_stage_extent(path, expected_sha256):
+    """(first sector, sector count, first-stage SHA-256) from a first-stage manifest whose file hash is the approved one."""
+    raw = Path(path).read_bytes()
+    require(hashlib.sha256(raw).hexdigest() == expected_sha256, 'The first-stage manifest differs from the approved hash.')
+    manifest = json.loads(raw)
+    stage = manifest.get('first_stage') if isinstance(manifest, dict) else None
+    require(manifest.get('schema') == FIRST_STAGE_SCHEMA and isinstance(stage, dict) and
+            all(type(stage.get(k)) is int for k in ('first_sector', 'sectors', 'bytes')) and
+            stage['bytes'] == 512 * stage['sectors'] and re.fullmatch(r'[0-9a-f]{64}', str(stage.get('sha256'))),
+            'The first-stage manifest is not a card first-stage manifest.')
+    return stage['first_sector'], stage['sectors'], stage['sha256']
+
+
+def admit_boot_area(descriptor, args, image_sha256, approvals=None):
+    """Admission of a raw write below the first partition: exactly the first-stage extent, backed up with sector 0 and
+    sectors 16..511, writing a candidate whose hash the coordinator's record names. The candidate is the first stage
+    (install) or the extent's bytes from an earlier backup (restore). Inputs: the version 3 blob, then the mode input of
+    apps/storage-write-test mode 10: its 512-byte header for the extent's first sector followed by the candidate
+    sectors (write_extent_input). Returns the blob."""
+    b = descriptor.get('storage_boot_area')
+    require(isinstance(b, dict) and set(b) == BOOT_AREA_KEYS,
+            'storage_boot_area needs ranges, backup_ranges, backup_sha256, card_cid and candidate_sha256.')
+    ranges, backup_ranges = _pairs(b['ranges'], 'ranges'), _pairs(b['backup_ranges'], 'backup_ranges')
+    require(len(ranges) == 1, 'A boot-area write has exactly one write range.')
+    require(b['backup_ranges'] == BOOT_AREA_BACKUP, 'A boot-area write backs up exactly sector 0 and sectors 16..511.')
+    for key in ('backup_sha256', 'candidate_sha256'):
+        require(isinstance(b[key], str) and re.fullmatch(r'[0-9a-f]{64}', b[key]), 'Invalid storage_boot_area.')
+    first, count = ranges[0]
+    require(count > 0 and 16 <= first and first + count <= 512, 'The boot-area extent lies outside the backed-up sectors 16..511.')
+    require(first + count <= BOOT_AREA_LIMIT, 'The boot-area extent reaches sector 2048.')
+    blob = encode_input(ranges, backup_ranges, b['backup_sha256'], b['card_cid'])
+    require(args.input and Path(args.input[0]).read_bytes() == blob, 'The first input must be the encoding of storage_boot_area.')
+    require(len(args.input) == 2, 'A boot-area write takes the bounds blob and the raw-extent mode input.')
+    mode = Path(args.input[1]).read_bytes()
+    require(mode[:EXTENT_HEADER] == extent_header(first), 'The second input must be the raw-extent mode for the extent\'s first sector.')
+    candidate = mode[EXTENT_HEADER:]
+    require(len(candidate) == 512 * count, 'The candidate is not the extent\'s length.')
+    require(hashlib.sha256(candidate).hexdigest() == b['candidate_sha256'], 'The candidate differs from storage_boot_area.')
+    record_path = approval_path(blob, approvals)
+    require(record_path.is_file(), f'No coordinator approval record for these bounds ({record_path.name}).')
+    record = json.loads(record_path.read_text())
+    require(all(record.get(k) == b[k] for k in ('ranges', 'backup_ranges', 'backup_sha256', 'candidate_sha256')),
+            'The approval record differs from storage_boot_area.')
+    require(record.get('port') == args.port, 'The boot-area approval record is for another port.')
+    require(record.get('card_cid') == b['card_cid'], 'The boot-area approval record is for another card.')
+    restore_point(b['card_cid'], args.port)
+    require(record.get('image') in (ANY_IMAGE, image_sha256), 'The approval record does not name this image.')
+    sectors = parse_backup(record.get('backup', ''), b['backup_sha256'])
+    listed = {x for f, n in backup_ranges for x in range(f, f + n)}
+    require(listed == set(sectors), 'The backup file does not hold exactly the listed backup sectors.')
+    require(first + count <= mbr_partition_start(sectors), 'The boot-area extent overlaps the FAT32 partition.')
+    manifest_first, manifest_count, stage_sha256 = first_stage_extent(record.get('first_stage_manifest', ''),
+                                                                     record.get('first_stage_manifest_sha256', ''))
+    require((first, count) == (manifest_first, manifest_count), 'The write range differs from the first-stage extent.')
+    direction = record.get('direction')
+    if direction == 'install':
+        require(b['candidate_sha256'] == stage_sha256, 'The install candidate is not the manifest\'s first stage.')
+    else:
+        require(direction == 'restore', 'The approval record names no direction (install or restore).')
+        original = parse_backup(record.get('original_backup', ''), record.get('original_backup_sha256', ''))
+        require(extent_sha256(original, first, count) == b['candidate_sha256'],
+                'The restore candidate is not the extent\'s bytes in the original backup.')
+    args.storage_admission = hashlib.sha256(blob).hexdigest()
+    args.storage_candidate = b['candidate_sha256']
+    return blob
+
+
 def approval_path(blob, root=None):
     return (Path(root) if root else APPROVALS) / ('storage-' + hashlib.sha256(blob).hexdigest() + '.json')
 
@@ -312,9 +420,12 @@ def admit(descriptor, args, image_sha256, approvals=None):
     require(args.storage_write, 'Image can write the card (or a write was requested); it needs --storage-write, '
             'a coordinator approval record and descriptor storage_bounds.')
     require(args.port in ('3-1', '3-3'), 'Storage write runs on a known port only.')
+    classes = [k for k in ('storage_bounds', 'storage_scratch', 'storage_boot_area') if k in descriptor]
+    require(len(classes) <= 1, 'A descriptor names one of storage_bounds, storage_scratch and storage_boot_area.')
     if 'storage_scratch' in descriptor:
-        require('storage_bounds' not in descriptor, 'A descriptor names storage_bounds or storage_scratch, not both.')
         return admit_scratch(descriptor, args, approvals)
+    if 'storage_boot_area' in descriptor:
+        return admit_boot_area(descriptor, args, image_sha256, approvals)
     bounds = descriptor.get('storage_bounds')
     require(isinstance(bounds, dict) and set(bounds) == {'ranges', 'backup_ranges', 'backup_sha256', 'card_cid'},
             'Storage write requires descriptor storage_bounds with ranges, backup_ranges, backup_sha256 and card_cid.')
@@ -346,3 +457,8 @@ def verify_delivered(args):
         return
     require(args.input and hashlib.sha256(Path(args.input[0]).read_bytes()).hexdigest() == admitted,
             'The delivered first input differs from the admitted storage bounds.')
+    candidate = getattr(args, 'storage_candidate', None)
+    if candidate is not None:
+        require(len(args.input) == 2 and
+                hashlib.sha256(Path(args.input[1]).read_bytes()[EXTENT_HEADER:]).hexdigest() == candidate,
+                'The delivered candidate differs from the admitted boot-area candidate.')
