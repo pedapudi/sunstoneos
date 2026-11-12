@@ -1,117 +1,115 @@
 #include "gate-info.h"
+#include "refusal.h"
 .section .text.entry,"ax"
 .global _start
 .type _start,%function
 _start:
     msr daifset,#15
+    mov x5,#0
+    mov w11,#CARD_FEL_REFUSE_EL
     mrs x0,CurrentEL
     cmp x0,#12
-    b.ne entry_refuse
+    b.ne refuse
+    mov w11,#CARD_FEL_REFUSE_MPIDR
     mrs x0,mpidr_el1
     tst x0,#0xffff
-    b.ne entry_refuse
+    b.ne refuse
     mrs x0,sctlr_el3
-    tbnz x0,#0,entry_refuse
-    tbnz x0,#2,entry_refuse
+    mov w11,#CARD_FEL_REFUSE_TRANSLATION
+    tbnz x0,#0,refuse
+    mov w11,#CARD_FEL_REFUSE_DATA_CACHE
+    tbnz x0,#2,refuse
+    mov w11,#CARD_FEL_REFUSE_INSTRUCTION_CACHE
     tst x0,#0x1000
-    b.ne entry_refuse
+    b.ne refuse
     ldr x8,=a733_card_fel_request
-    ldr x10,[x8,#16]
+    ldr x19,[x8,#16]          /* AAPCS64 preserves the nonce across C admission. */
     ldr x6,=0x07090100
-    and w0,w10,#0xffff
+    and w0,w19,#0xffff
     movk w0,#0x5c0d,lsl #16
     str w0,[x6]
-    mov w11,#2                /* Request framing. */
-    ldr x0,[x8]
+    mov w11,#CARD_FEL_REFUSE_REQUEST_MAGIC
+    mov x5,x8
+    ldr x0,[x5]
     ldr x1,=0x3151524644524143
     cmp x0,x1
     b.ne refuse
-    ldr x0,[x8,#8]
+    mov w11,#CARD_FEL_REFUSE_REQUEST_VERSION
+    add x5,x8,#8
+    ldr x0,[x5]
     cmp x0,#1
     b.ne refuse
-    cbz x10,refuse
-    ldr x0,[x8,#24]
+    mov w11,#CARD_FEL_REFUSE_NONCE
+    add x5,x8,#16
+    mov x0,x19
+    cbz x0,refuse
+    mov w11,#CARD_FEL_REFUSE_REQUEST_WATCHDOG
+    add x5,x8,#24
+    ldr x0,[x5]
     cmp x0,#0x41
     b.ne refuse
-    mov w11,#3                /* Host watchdog contract. */
-    ldr x6,=0x02050010
-    ldr w0,[x6]
-    uxth w0,w0
-    cmp w0,#1
+    mov w11,#CARD_FEL_REFUSE_WATCHDOG_CONFIG
+    ldr x5,=0x02050010
+    ldr w0,[x5]
+    uxth w1,w0
+    cmp w1,#1
     b.ne refuse
-    ldr w0,[x6,#4]
-    uxth w0,w0
-    cmp w0,#0x41
+    mov w11,#CARD_FEL_REFUSE_WATCHDOG_MODE
+    add x5,x5,#4
+    ldr w0,[x5]
+    uxth w1,w0
+    cmp w1,#0x41
     b.ne refuse
-    ldr w0,[x6,#8]
-    uxth w0,w0
-    cmp w0,#2
+    mov w11,#CARD_FEL_REFUSE_WATCHDOG_OUTPUT
+    add x5,x5,#4
+    ldr w0,[x5]
+    uxth w1,w0
+    cmp w1,#2
     b.ne refuse
-    mov w11,#4                /* Runner-owned retained request. */
-    ldr x6,=0x07090108
-    ldr w0,[x6]
+    mov w11,#CARD_FEL_REFUSE_RTC_REQUEST
+    ldr x5,=0x07090108
+    ldr w0,[x5]
     ldr w1,=0x5aa5a55a
     cmp w0,w1
     b.ne refuse
-    mov w11,#5                /* ROM software redirects. */
+    mov w11,#CARD_FEL_REFUSE_REDIRECT_C0
     ldr x5,=0x070501c0
     ldr w0,[x5]
-    ldr w1,[x5,#4]
-    orr w0,w0,w1
-    ldr w1,[x5,#0x14]
-    orr w0,w0,w1
     cbnz w0,refuse
-    /* Read-only FEL admission: OFF, matching policy/status, no hotplug. */
-    mov w9,#1
-secondary:
-    add w11,w9,#0x100         /* Core status, then request, policy, status. */
-    ldr x5,=0x07050200
-    ldr w0,[x5,x9,lsl #2]
-    and w0,w0,#3
-    cmp w0,#2
-    b.ne refuse
-    add w11,w9,#0x200
-    add x5,x5,#0x20
-    ldr w0,[x5,x9,lsl #2]
-    tbnz w0,#0,refuse
-    add w11,w9,#0x300
-    ldr x5,=0x07052000
-    add x5,x5,x9,lsl #12
+    mov w11,#CARD_FEL_REFUSE_REDIRECT_C4
+    add x5,x5,#4
     ldr w0,[x5]
-    cbz w0,policy_valid
-    cmp w0,#0x100
-    b.ne refuse
-policy_valid:
-    add w11,w9,#0x400
-    ldr w1,[x5,#8]
-    cmp w0,w1
-    b.ne refuse
-    add w9,w9,#1
-    cmp w9,#8
-    b.ne secondary
+    cbnz w0,refuse
+    mov w11,#CARD_FEL_REFUSE_REDIRECT_D4
+    add x5,x5,#0x10
+    ldr w0,[x5]
+    cbnz w0,refuse
+    ldr x0,=a733_card_fel_stack_top
+    mov sp,x0
+    bl card_fel_check_secondaries
     ldr x5,=a733_card_fel_report
     ldr x0,=0x3152454644524143
     mov x1,#1
     stp x0,x1,[x5]
     mov x0,#64
-    stp x0,x10,[x5,#16]
+    stp x0,x19,[x5,#16]
     ldr x0,=0x5aa5a55a
     stp x1,x0,[x5,#32]
     mov x0,#0x41
     mov x1,#12
     stp x0,x1,[x5,#48]
     ldr x6,=0x07090100
-    and w0,w10,#0xffff
+    and w0,w19,#0xffff
     movk w0,#0x5c0d,lsl #16
     str w0,[x6]
     movz w0,#0x0c01,lsl #16
     str w0,[x6,#4]
     ldr x5,=0x41001000+CARD_FEL_TEST_OFFSET
-    mov w0,#1
-    str w0,[x5]
+    mov w1,#1
+    str w1,[x5]
     dsb sy
-    ldr w1,[x5]
-    mov w11,#7                /* Gate observation-word publication. */
+    ldr w0,[x5]
+    mov w11,#CARD_FEL_REFUSE_GATE_PUBLICATION
     cmp w0,w1
     b.ne refuse
     ldr x5,=0x08001004
@@ -122,15 +120,45 @@ policy_valid:
     mov x0,#2
     msr rmr_el3,x0
     isb
+    mov w11,#CARD_FEL_REFUSE_RESET_REQUEST
+    mov x5,#0
+    mrs x0,rmr_el3
 refuse:
-    ldr x6,=0x07090104
-    movz w0,#0x0c01,lsl #16
-    orr w0,w0,w11
-    str w0,[x6]
+    mov x2,x0                /* One retained raw sample; no diagnostic reread. */
+    mov w0,w11
+    mov x1,x5
+.global card_fel_refuse
+.type card_fel_refuse,%function
+card_fel_refuse:              /* AAPCS64: code, source address (0 for sysreg), sample. */
+    ldr x6,=0x07090100
+    ldr w3,[x6,#0x10]
+    cbnz w3,refuse_publish    /* A retained fault owns ESR/ELR/FAR. */
+    str w2,[x6,#0x14]
+    lsr x3,x2,#32
+    str w3,[x6,#0x18]
+    orr w1,w1,#0x80000000     /* Refusal sample format; all sources are below 2 GiB. */
+    str w1,[x6,#0x1c]
+refuse_publish:
+    ldr x4,=a733_card_fel_request
+    ldr w3,[x4,#16]
+    and w3,w3,#0xffff
+    movk w3,#0x5c0d,lsl #16
+    str w3,[x6]
+    mrs x3,cntpct_el0
+    lsr x3,x3,#10
+    and w3,w3,#0x1fffffff
+    mrs x4,mpidr_el1
+    ubfx w4,w4,#8,#3
+    orr w3,w3,w4,lsl #29
+    str w3,[x6,#0x0c]
+    dsb sy
+    movk w0,#0x0c01,lsl #16
+    str w0,[x6,#4]            /* Publish LAST only after the sampled payload. */
     dsb sy
 entry_refuse:
     wfi
     b entry_refuse
+.size card_fel_refuse,.-card_fel_refuse
     .ltorg
 .size _start,.-_start
 

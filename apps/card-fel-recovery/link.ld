@@ -10,6 +10,12 @@ SECTIONS {
  . = 0x41002000;
  .data : { *(.data*) } :request
  ASSERT(SIZEOF(.data) == 32,"Recovery request geometry")
+ .stack (NOLOAD) : {
+   a733_card_fel_stack_bottom = .;
+   /* admission.c uses one 16-byte frame; the refusal writer is stackless. */
+   . += 16;
+   a733_card_fel_stack_top = .;
+ } :request
  . = 0x42000000;
  .result (NOLOAD) : { *(.result) } :result
  ASSERT(SIZEOF(.result) == 64,"Recovery report geometry")

@@ -20,12 +20,14 @@ add_custom_command(OUTPUT "${card_fel_build}/gate-info.h" "${card_fel_build}/boo
    "${card_fel_root}/tools/card-fel-image.py" VERBATIM)
 add_executable(a733-card-fel-recovery EXCLUDE_FROM_ALL
  "${card_fel_root}/apps/card-fel-recovery/entry.S"
+ "${card_fel_root}/apps/card-fel-recovery/admission.c"
  "${card_fel_root}/apps/card-fel-recovery/profile.c"
  "${card_fel_build}/gate-info.h")
-target_include_directories(a733-card-fel-recovery PRIVATE "${card_fel_build}")
+target_include_directories(a733-card-fel-recovery PRIVATE "${card_fel_build}" "${card_fel_root}/include")
 target_compile_definitions(a733-card-fel-recovery PRIVATE
  CARD_FEL_GATE_BINARY="${card_fel_build}/gate.bin")
-target_compile_options(a733-card-fel-recovery PRIVATE -ffreestanding -fno-builtin -mgeneral-regs-only)
+target_compile_options(a733-card-fel-recovery PRIVATE -O2 -ffreestanding -fno-builtin -mgeneral-regs-only
+ "$<$<COMPILE_LANGUAGE:C>:-fstack-usage;-fno-stack-protector>")
 target_link_options(a733-card-fel-recovery PRIVATE -nostdlib -static -Wl,--gc-sections
  "-Wl,-T,${card_fel_root}/apps/card-fel-recovery/link.ld")
 set_target_properties(a733-card-fel-recovery PROPERTIES SUFFIX ".elf"

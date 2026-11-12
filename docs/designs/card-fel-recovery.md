@@ -1,10 +1,9 @@
 # A retained first-stage request selects FEL before card loading
 
 **Status: implemented and host-tested.** No card is written.
-The daemon admits the dedicated RAM-proof profile. Physical gate entry requires
-reconciling the launcher's secondary-OFF admission with the FEL platform state
-([evidence](../evidence/card-fel-recovery.jsonl)). The early gate and cold-card
-recovery remain unqualified.
+The daemon admits the dedicated RAM-proof profile. The launcher shares the
+resident CPU owner's read-only OFF admission. The early gate and cold-card
+recovery remain unqualified ([evidence](../evidence/card-fel-recovery.jsonl)).
 
 ## The first stage consumes the vendor request
 
@@ -53,6 +52,14 @@ request and acknowledged OFF secondaries with clear start requests. It changes
 no secondary policy. It publishes its report, enables the gate's RAM-only
 observation word and resets CPU0 into the gate at `0x41001000`.
 
+[The CPU OFF helpers](../../include/a733_cpu_off.h) define both register addresses
+and predicates for the launcher and resident start. PPU status has low bits zero;
+hotplug control and mode have bit 0 clear. Dynamic OFF requires policy and status
+`0x100`. Static OFF requires policy and status zero and control bit 1 set.
+The launcher's C admission uses one measured 16-byte frame in its owned stack
+at `0x41002020..0x41002030`; interrupts remain masked. Linked checks enforce
+the stack bounds on successful and refusing paths.
+
 Only the matching gate path disarms WDT0, clears the request, records completion
 and branches to ROM. In observation mode it also records `RETURN_ROM` with mode
 zero; the production gate preserves the preceding RTC stop/failure record.
@@ -61,11 +68,17 @@ nonce/report, consumed gate state, unchanged gate code, request zero and mode
 zero. A watchdog reset or any mismatch fails the proof and ends board access.
 There is no generic probe return epilogue after the gate.
 
-After primary EL3/core/cache admission, a launcher refusal records stage
-`0x0c01`: values 2, 3, 4, 5 and 7 identify request framing, watchdog state,
-the retained request, redirects and observation publication. Values `0x100+c`,
-`0x200+c`, `0x300+c` and `0x400+c` identify core `c` status, start request,
-policy and policy acknowledgment. Gate refusal values are `0x80+r`, where
+Each launcher refusal records stage `0x0c01` and a distinct guard code from
+[the refusal definitions](../../apps/card-fel-recovery/refusal.h). Values
+`0x100+c` through `0x600+c` identify core `c` OFF status, control request,
+mode request, policy, policy acknowledgment and static wake hold.
+The raw sampled value occupies ESR/ELR as low/high words. FAR contains the source
+address with bit 31 marking this format; source zero denotes a system register.
+Payload stores and a DSB precede publication of LAST. The launcher preserves an
+existing fault and its payload. The decoder names the guard, core, source and
+sample only when the format marker is present and no fault owns those words.
+
+Gate refusal values are `0x80+r`, where
 `r=0,1,2,3,6` identifies a missing request, local entry, redirects, watchdog
 contract or disarm readback. Those gate crumbs exist only in observation mode.
 The ordinary gate preserves earlier fault and stop records.
