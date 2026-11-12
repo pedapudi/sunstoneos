@@ -444,9 +444,11 @@ The ROM's card loader finds a valid boot0 header at sector 16 and copies
 
 - **Step D** wrote sectors 16..497 in two pieces (16.8 ms) and read them back
   in 6.6 ms; the read-back SHA-256 equals the first stage's, and sector 0 is
-  unchanged. The image's own return then loaded the new card boot0: the gate
-  stored warm record `0x0c0240b1`, disarmed WDT0 and entered FEL. The launcher's
-  ROM redirect was not in effect at that reset.
+  unchanged. The run's last reset, the rail-restore helper's return (a warm
+  reset with WDT0 at `0xb1` and no ROM redirect), loaded the new card boot0:
+  the gate stored warm record `0x0c0240b1`, disarmed WDT0 and entered FEL.
+  The result keeps only that last return record, so the route of the image's
+  own return is not recorded.
 - **Step E**, the next session's WDT0 reset, also came back to FEL through
   the gate, with warm record `0x0c024041`. The prediction was `0x0c024001`.
   At gate entry WDT0 still reads the mode armed before the reset (`0x41`);
