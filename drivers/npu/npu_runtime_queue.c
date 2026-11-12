@@ -181,7 +181,13 @@ static int complete(void *cookie)
          * EXPECT_IDLE_VALUE_ALL_MODULE). Poll for at most NPU_IDLE_WAIT_US and record the wait; a unit still busy then is a
          * fault, whose value names the busy units (bits 23:0 of the complement) and the slot (bits 31:24). */
         uint32_t now = idle, busy = ~idle & full;
-        const uint64_t bound = (uint64_t)NPU_IDLE_WAIT_US * q->frequency / 1000000u;
+        uint64_t bound = (uint64_t)NPU_IDLE_WAIT_US * q->frequency / 1000000u;
+#ifdef SUNSTONE_NPU_OP_TIMING
+        /* A cut job's footer event does not wait for the neural-network and shader units: run 1794509651684078706-d1eaad0b
+         * saw them (idle bits 18 and 3, with the memory controller, 14) busy 100 us after the event of a subsampling prefix.
+         * Wait for them up to the job's timeout, so that a prefix's time ends when the NPU is idle. */
+        if (q->cut_at) bound = q->timeout_ticks;
+#endif
         uint64_t waited = 0;
         while ((now & full) != full && (waited = ticks() - q->observed) < bound) {
             now = *(volatile uint32_t *)(base + a733_npu_idle_part.status);
