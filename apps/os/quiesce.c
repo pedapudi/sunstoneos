@@ -78,13 +78,14 @@ enum os_quiesce_result os_quiesce_step(void (*note)(uint32_t,uint32_t,const void
         for(struct os_quiesce *p=owners;p;p=p->next){
             if(p->order!=order)continue;
             enum os_quiesce_result r=os_quiesce_result(p);
-            if(r!=OS_QUIESCE_DONE){
+            if(r!=OS_QUIESCE_FAULT){
+                unsigned previous=r;
                 atomic_store_explicit(&p->requested,1,memory_order_release);
                 r=p->step(p);
                 /* An interrupt may have published a fault during this pass. */
                 if(os_quiesce_result(p)==OS_QUIESCE_FAULT&&r==OS_QUIESCE_PENDING)r=OS_QUIESCE_FAULT;
                 if(r!=OS_QUIESCE_PENDING){
-                    unsigned expected=OS_QUIESCE_PENDING;
+                    unsigned expected=previous;
                     (void)atomic_compare_exchange_strong_explicit(&p->result,&expected,r,memory_order_acq_rel,memory_order_acquire);
                 }
                 r=os_quiesce_result(p);

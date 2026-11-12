@@ -79,6 +79,7 @@ static int return_retained(void)
 }
 static enum os_quiesce_result audio_quiesce_step(struct os_quiesce *q)
 {
+    if(os_quiesce_result(q)==OS_QUIESCE_DONE)return OS_QUIESCE_DONE;
     if(audio&&audio->handle)xTaskNotifyGive(audio->handle);
     return os_quiesce_result(q);
 }

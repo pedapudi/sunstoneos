@@ -22,6 +22,7 @@ static struct os_quiesce radio_quiesce={
 static unsigned shutdown_started;
 static enum os_quiesce_result radio_quiesce_step(struct os_quiesce *q)
 {
+    if(os_quiesce_result(q)==OS_QUIESCE_DONE)return OS_QUIESCE_DONE;
     if(board.handles[5])xTaskNotifyGive(board.handles[5]);
     if(board.handles[6])xTaskNotifyGive(board.handles[6]);
     return os_quiesce_result(q);

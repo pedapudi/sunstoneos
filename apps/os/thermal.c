@@ -36,6 +36,7 @@ static struct os_thermal_service {
 static atomic_uint thermal_stop_authorized;
 static enum os_quiesce_result thermal_quiesce_step(struct os_quiesce *q)
 {
+    if(os_quiesce_result(q)==OS_QUIESCE_DONE)return OS_QUIESCE_DONE;
     if(!os_quiesce_drained_before(OS_QUIESCE_THERMAL)){
         (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_SITE(THERMAL),0x701,SUNSTONE_CRUMB_HERE());
         return OS_QUIESCE_FAULT;

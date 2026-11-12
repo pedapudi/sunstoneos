@@ -19,6 +19,7 @@ int os_usb_quiesce_start(void)
 {return !os_returning()||os_quiesce_register(&usb_quiesce);}
 static enum os_quiesce_result usb_quiesce_step(struct os_quiesce *q)
 {
+    if(os_quiesce_result(q)==OS_QUIESCE_DONE)return OS_QUIESCE_DONE;
     if(board.handles[4])xTaskNotifyGive(board.handles[4]);
     return os_quiesce_result(q);
 }

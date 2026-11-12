@@ -497,6 +497,7 @@ static int gpu_return_untouched_body(int supervisor)
 static enum os_quiesce_result gpu_quiesce_step(struct os_quiesce *entry)
 {
     if(os_gpu_return_ready()){os_quiesce_complete(entry);return OS_QUIESCE_DONE;}
+    if(os_quiesce_result(entry)==OS_QUIESCE_DONE)goto fault;
     if(!os_cpu_return_failing())return OS_QUIESCE_PENDING;
     if(gpu.failed)goto fault;
     if(gpu.constructor_refusal){

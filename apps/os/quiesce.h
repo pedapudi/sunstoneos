@@ -27,7 +27,9 @@ enum os_quiesce_owner {
  * task creation or device access. The supervisor alone invokes step, which
  * must never wait. Hardware work stays on the task authorized to perform it.
  * requested is published before step; result and fault_state publish owner
- * replies. A failed owner keeps its resources and its first fault record. */
+ * replies. After DONE, step only observes the stopped proof; a late fault
+ * revokes it without restarting hardware work. FAULT is final. A failed owner
+ * keeps its resources and its first fault record. */
 struct os_quiesce {
     struct os_quiesce *next;
     enum os_quiesce_result (*step)(struct os_quiesce *);

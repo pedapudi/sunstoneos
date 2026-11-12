@@ -75,7 +75,7 @@ int os_headset_quiesce_pending(void)
 {return os_quiesce_requested(&headset_quiesce)&&os_quiesce_result(&headset_quiesce)==OS_QUIESCE_PENDING;}
 static enum os_quiesce_result headset_quiesce_step(struct os_quiesce *q)
 {
-    if(os_quiesce_result(q)==OS_QUIESCE_FAULT)return OS_QUIESCE_FAULT;
+    if(os_quiesce_result(q)!=OS_QUIESCE_PENDING)return os_quiesce_result(q);
     struct bluetooth_segment_status status;
     uint32_t code=0;
     if(bluetooth_headset_segment_stop(&app)!=1)code=0x100u;
