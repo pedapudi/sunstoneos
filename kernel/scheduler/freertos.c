@@ -276,6 +276,13 @@ static inline bool ssKernelIrqsDisabled(void)
 #endif
 }
 static const struct ss_owner_backend ssKernelBackend = { .sgi = ssKernelSGI };
+/* The kernel backend's barrier is the architectural default, so a pin passes
+ * no backend and reads no backend or registry line besides the descriptor. */
+static bool ssKernelHandlePin(void *task, struct ss_kernel_pin *pin)
+{
+    return ss_kernel_handle_pin_with(&ssKernelRegistry,
+                                     ssKernelBackend.barrier ? &ssKernelBackend : NULL, task, pin);
+}
 static unsigned ssKernelCPUId(void) { return (unsigned)portGET_CORE_ID(); }
 static TaskHandle_t ssKernelCurrentSnapshot(unsigned cpu)
 {
@@ -568,7 +575,7 @@ static bool ssKernelAddTask(TCB_t *t)
             configASSERT(ss_owner_enqueue(&ssKernelCPUs[owner].run, &ssKernelTasks[slot].ready, false));
         } else {
             struct ss_kernel_pin pin;
-            configASSERT(ss_kernel_handle_pin(&ssKernelRegistry, t, &pin));
+            configASSERT(ssKernelHandlePin(t, &pin));
             ssKernelPublishReference(pin);
         }
     }
@@ -1606,7 +1613,7 @@ bool ss_latency_task_suspended(void *task)
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
     bool suspended = false;
-    if (ss_kernel_handle_pin(&ssKernelRegistry, task, &pin)) {
+    if (ssKernelHandlePin(task, &pin)) {
         unsigned flags = ss_control_suspension(&ssKernelControl, pin.slot);
         suspended = (flags & (SS_CONTROL_SUSPENDED | SS_CONTROL_OFFCPU)) == SS_CONTROL_SUSPENDED &&
             atomic_load_explicit(&ssKernelTasks[pin.slot].execution, memory_order_acquire) == SS_K_SUSPENDED;
@@ -1913,7 +1920,7 @@ static void ssKernelEventBlock(List_t *list, TickType_t value, TickType_t ticks,
     struct ssKernelTask *s = ssKernelCurrent();
     TCB_t *t = s->ready.context;
     configASSERT(!s->event_reference.descriptor);
-    configASSERT(ss_kernel_handle_pin(&ssKernelRegistry, t, &s->event_reference));
+    configASSERT(ssKernelHandlePin(t, &s->event_reference));
     s->unordered = unordered;
     /* The caller holds its object's task-side lock (a suspension or a critical section). Insert under the interrupt-side
      * lock of the same slot as well, so that an owner timing out another waiter of this list cannot edit it at the same
@@ -1972,7 +1979,7 @@ static BaseType_t ssKernelNotify(TaskHandle_t task, UBaseType_t index,
     const bool masked_by_exception = from_isr && ssKernelIrqsDisabled();
     UBaseType_t irq = masked_by_exception ? 0 : from_isr ? portSET_INTERRUPT_MASK_FROM_ISR() : portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
-    if (!ss_kernel_handle_pin(&ssKernelRegistry, task, &pin)) {
+    if (!ssKernelHandlePin(task, &pin)) {
         if (masked_by_exception) {} else if (from_isr) {
 #ifdef SUNSTONE_LATENCY_CAUSE
             ss_latency_cause_mask_tail_begin();
@@ -2668,7 +2675,7 @@ unsigned ss_kernel_test_suspension(TaskHandle_t task)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
-    configASSERT(ss_kernel_handle_pin(&ssKernelRegistry, task, &pin));
+    configASSERT(ssKernelHandlePin(task, &pin));
     unsigned flags = ss_control_suspension(&ssKernelControl, pin.slot);
     ss_kernel_handle_put(&pin);
     portCLEAR_INTERRUPT_MASK(irq);
@@ -2678,7 +2685,7 @@ bool ss_kernel_test_frame_pending(TaskHandle_t task)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
-    configASSERT(ss_kernel_handle_pin(&ssKernelRegistry, task, &pin));
+    configASSERT(ssKernelHandlePin(task, &pin));
     configASSERT(atomic_load_explicit(&ssKernelTasks[pin.slot].owner, memory_order_acquire) == ssKernelCPUId());
     struct ss_control_state state;
     ss_control_snapshot(&ssKernelControl, pin.slot, &state);
@@ -2693,7 +2700,7 @@ unsigned ss_kernel_test_drain_held(TaskHandle_t task)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
-    configASSERT(ss_kernel_handle_pin(&ssKernelRegistry, task, &pin));
+    configASSERT(ssKernelHandlePin(task, &pin));
     unsigned slot = pin.slot, priority = ssKernelTasks[slot].ready.priority;
     configASSERT(atomic_load_explicit(&ssKernelTasks[slot].owner, memory_order_acquire) == ssKernelCPUId() &&
         atomic_load_explicit(&ssKernelControl.gate_phase, memory_order_acquire) == SS_GATE_OPEN);
@@ -2727,7 +2734,7 @@ void ss_kernel_test_request(TaskHandle_t task, unsigned kind, unsigned argument)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
-    configASSERT(ss_kernel_handle_pin(&ssKernelRegistry, task, &pin));
+    configASSERT(ssKernelHandlePin(task, &pin));
     struct ssKernelMutation mutation = { kind == 0 ? SS_K_ABORT : kind == 1 ? SS_K_SUSPEND : kind == 2 ? SS_K_PRIORITY :
         kind == 3 ? SS_K_AFFINITY : SS_K_DELETE,
         argument, pin.slot, false };
@@ -2740,7 +2747,7 @@ void ss_kernel_test_resume_then_suspend(TaskHandle_t task, bool final_resume)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
-    configASSERT(ss_kernel_handle_pin(&ssKernelRegistry, task, &pin));
+    configASSERT(ssKernelHandlePin(task, &pin));
     configASSERT(ss_control_resume_isr(&ssKernelControl, pin.slot));
     struct ssKernelMutation mutation = { SS_K_SUSPEND, 0, pin.slot, false };
     ss_control_publish(&ssKernelControl, pin.slot, ssKernelMutate, &mutation);
@@ -2758,7 +2765,7 @@ bool ss_kernel_test_redirect_saved(unsigned slot)
     configASSERT(s->off_cpu && record->phase == 1 && record->transfer.old_owner == c);
     ss_kernel_test_request(s->ready.context, 3, 1u << c);
     struct ss_kernel_pin pin;
-    configASSERT(ss_kernel_handle_pin(&ssKernelRegistry, s->ready.context, &pin));
+    configASSERT(ssKernelHandlePin(s->ready.context, &pin));
     ssKernelPublishReference(pin); /* The closed route broadcasts incoming hints. */
     ss_owner_drain(&ssKernelCPUs[c].run, ssKernelInspect, NULL);
     return true;
@@ -2766,7 +2773,7 @@ bool ss_kernel_test_redirect_saved(unsigned slot)
 bool ss_kernel_test_route_returned(TaskHandle_t task)
 {
     struct ss_kernel_pin pin;
-    configASSERT(ss_kernel_handle_pin(&ssKernelRegistry, task, &pin));
+    configASSERT(ssKernelHandlePin(task, &pin));
     uint64_t route = atomic_load_explicit(&ssKernelControl.slot[pin.slot].route_word, memory_order_acquire);
     bool returned = (route >> 8) >= 2 && (route & 0xff) == ssKernelCPUId();
     ss_kernel_handle_put(&pin);
@@ -2777,7 +2784,7 @@ void ss_kernel_test_dump_control(TaskHandle_t task)
     extern void platform_puts(const char *);
     extern void platform_hex(uint64_t);
     struct ss_kernel_pin pin;
-    if (!ss_kernel_handle_pin(&ssKernelRegistry, task, &pin)) return;
+    if (!ssKernelHandlePin(task, &pin)) return;
     unsigned slot = pin.slot;
     platform_puts("task slot="); platform_hex(slot);
     platform_puts(" owner="); platform_hex(atomic_load(&ssKernelTasks[slot].owner));
@@ -2796,7 +2803,7 @@ unsigned ss_kernel_test_task_state(TaskHandle_t task)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
-    configASSERT(ss_kernel_handle_pin(&ssKernelRegistry, task, &pin));
+    configASSERT(ssKernelHandlePin(task, &pin));
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
     configASSERT(atomic_load_explicit(&s->owner, memory_order_acquire) == ssKernelCPUId());
     TCB_t *t = task;
@@ -2819,7 +2826,7 @@ void ss_kernel_test_cleanup_shield(TaskHandle_t task, bool hold)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
-    configASSERT(ss_kernel_handle_pin(&ssKernelRegistry, task, &pin));
+    configASSERT(ssKernelHandlePin(task, &pin));
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
     if (hold) atomic_fetch_add_explicit(&s->cleanup_shield, 1, memory_order_relaxed);
     else ssKernelCleanupRelease(s);
@@ -2830,7 +2837,7 @@ void ss_kernel_test_gate_hold(TaskHandle_t task)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     configASSERT(!ssKernelTestGatePin.descriptor &&
-        ss_kernel_handle_pin(&ssKernelRegistry, task, &ssKernelTestGatePin));
+        ssKernelHandlePin(task, &ssKernelTestGatePin));
     struct ssKernelTask *s = &ssKernelTasks[ssKernelTestGatePin.slot];
     configASSERT(s->wait_kind == SS_K_NOTIFICATION && s->off_cpu);
     ss_notification_gate_begin(&s->notification[s->notify_index], &ssKernelBackend, &ssKernelTestGate);
@@ -2934,7 +2941,7 @@ static void ssKernelPullServe(unsigned c)
         struct ss_owner_task *candidate = ssKernelPullCandidate(cpu, target);
         if (!candidate) continue;
         struct ss_kernel_pin pin;
-        if (!ss_kernel_handle_pin(&ssKernelRegistry, candidate->context, &pin)) continue;
+        if (!ssKernelHandlePin(candidate->context, &pin)) continue;
         struct ssKernelMutation move = { .command = SS_K_MOVE, .argument = target, .slot = pin.slot };
         (void)ss_control_publish(&ssKernelControl, pin.slot, ssKernelMutate, &move);
         ss_kernel_handle_put(&pin);
@@ -3101,7 +3108,7 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
 #define SS_COMMAND_FINISH() ((void)0)
 #endif
     struct ss_kernel_pin pin;
-    if (!ss_kernel_handle_pin(&ssKernelRegistry, handle, &pin)) {
+    if (!ssKernelHandlePin(handle, &pin)) {
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
         trace_command.flags |= 32u;
 #endif
@@ -3309,7 +3316,7 @@ static unsigned ssKernelPriority(TaskHandle_t handle, bool base)
     if (!handle) handle = ssKernelSelf();
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
-    if (!ss_kernel_handle_pin(&ssKernelRegistry, handle, &pin)) { portCLEAR_INTERRUPT_MASK(irq); return 0; }
+    if (!ssKernelHandlePin(handle, &pin)) { portCLEAR_INTERRUPT_MASK(irq); return 0; }
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
     unsigned priority = atomic_load_explicit(base ? &s->base : &s->effective, memory_order_acquire);
     if (!xSchedulerRunning) {
@@ -3324,7 +3331,7 @@ static unsigned ssKernelPriority(TaskHandle_t handle, bool base)
 static bool ssKernelPin(TaskHandle_t handle, struct ss_kernel_pin *pin)
 {
     if (!handle) handle = ssKernelSelf();
-    return ss_kernel_handle_pin(&ssKernelRegistry, handle, pin);
+    return ssKernelHandlePin(handle, pin);
 }
 static unsigned ssKernelLogicalExecution(struct ssKernelTask *s)
 {
@@ -3335,7 +3342,7 @@ static eTaskState ssKernelState(TaskHandle_t handle)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
-    if (!ss_kernel_handle_pin(&ssKernelRegistry, handle, &pin)) { portCLEAR_INTERRUPT_MASK(irq); return eDeleted; }
+    if (!ssKernelHandlePin(handle, &pin)) { portCLEAR_INTERRUPT_MASK(irq); return eDeleted; }
     unsigned state = ssKernelLogicalExecution(&ssKernelTasks[pin.slot]);
     /* A suspend, resume or delete the owner has not applied yet is already the task's state,
      * as in upstream FreeRTOS, where the call completes the change. */
@@ -3388,7 +3395,7 @@ static uint32_t ssKernelNotifyClear(TaskHandle_t handle, UBaseType_t index,
     if (!handle) handle = ssKernelSelf();
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
-    if (!ss_kernel_handle_pin(&ssKernelRegistry, handle, &pin)) {
+    if (!ssKernelHandlePin(handle, &pin)) {
         portCLEAR_INTERRUPT_MASK(irq);
         return 0;
     }

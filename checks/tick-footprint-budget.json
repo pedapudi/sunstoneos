@@ -11,10 +11,10 @@
   "data os ssKernelBackend": 1,
   "data os ssKernelCPUs": 5,
   "data os ssKernelControl": 2,
-  "data os ssKernelRegistry": 3,
+  "data os ssKernelRegistry": 1,
   "data os ssKernelTasks": 7,
   "data stack exception stack": 7,
-  "data total": 32
+  "data total": 30
  },
  "outside": {
   "code fixture": 4,
@@ -43,11 +43,11 @@
   "data os ssKernelBackend": 2,
   "data os ssKernelCPUs": 4,
   "data os ssKernelControl": 2,
-  "data os ssKernelRegistry": 4,
+  "data os ssKernelRegistry": 1,
   "data os ssKernelTasks": 2,
   "data os xSchedulerRunning": 1,
   "data stack exception stack": 7,
-  "data total": 29
+  "data total": 26
  },
  "scan": {
   "code os": 5,

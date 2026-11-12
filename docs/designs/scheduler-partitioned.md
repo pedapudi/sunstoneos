@@ -367,7 +367,12 @@ an object lock while invoking a synchronous owner wait.
 
 Task descriptors and incoming bitmap storage never move or disappear. A
 descriptor has a task-incarnation number, TCB pointer, admission state and an
-atomic reference count. Object waiters hold references; selecting an event waiter
+atomic reference count, all on one 64-byte line. The descriptor table is also
+the handle table: a multiplicative hash of the handle selects its home slot,
+registration takes the first free slot on the linear probe chain from there, and
+each descriptor's key holds the handle while it is mapped. A lookup without a
+collision therefore reads one line, the target's descriptor, before it pins.
+Object waiters hold references; selecting an event waiter
 transfers its reference to the publisher before the object lock is released, and
 publishing releases it after the hint and any SGI.
 

@@ -93,13 +93,18 @@ struct ss_owner_retirement {
     void *context;
     unsigned slot, retirement_owner;
 };
+/* One cache line per descriptor: a pin touches references, admission,
+ * incarnation, task and the registry's lookup key together. */
 struct ss_owner_descriptor {
-    _Atomic uint64_t references;
+    _Alignas(64) _Atomic uint64_t references;
     _Atomic uint64_t admission;
     _Atomic uint64_t incarnation;
     void *task;
     struct ss_owner_retirement retirement;
+    _Atomic uintptr_t key; /* Handle registry's lookup key; the owner code never reads it. */
 };
+_Static_assert(sizeof(struct ss_owner_descriptor) == 64 || sizeof(void *) != 8,
+               "a descriptor occupies exactly one 64-byte line");
 /* Initialize each permanent descriptor once; the legacy open initializer has
  * no retirement callback. Registry initialization uses the closed initializer,
  * then opens admission only after its fixed control routing is available. */
