@@ -656,9 +656,9 @@ def decode(payload, dma=False):
             'scope': 'deadline-to-task p9999, task-lock wait maximum and recorded mask maximum',
             'recorded_targets_met': result['control']['measurement_qualified'] and
                                     all(value['met'] is True for value in targets.values()),
-            'mask_coverage': ('contiguous exception spans through the recorded restore point'
+            'mask_coverage': ('recorded software exception interval'
                 if result['control']['restore_spans'] else 'fast and switch mask-span coverage unqualified'),
             'limitations': ['startup masking requires separate qualification',
                             'three final-image runs are required for repeatability',
-                            'mask timing excludes the fixed final restore and ERET instructions']}
+                            'exception mask timing excludes entry-save work and post-timestamp observer, restore and ERET work']}
     return result
