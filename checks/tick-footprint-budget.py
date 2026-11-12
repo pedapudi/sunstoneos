@@ -62,6 +62,9 @@ def main():
                         help='write the measured counts as the new budget instead of checking them')
     parser.add_argument('--merge', action='store_true',
                         help='with --record, keep the larger of the recorded and measured counts')
+    parser.add_argument('--lower', action='append', default=[], metavar='STRUCTURE',
+                        help='with --record, lower only this structure (for example "data os ssKernelControl") '
+                             'to its measured count in every segment, and each data total by the same amount')
     args = parser.parse_args()
     out = args.output
     out.mkdir(parents=True, exist_ok=True)
@@ -108,7 +111,22 @@ def main():
         data = sum(v for k, v in measured[kind].items() if k.startswith('data '))
         measured[kind]['data total'] = data
     result = {'windows': len(windows), 'measured': measured}
-    if args.record:
+    if args.record and args.lower:
+        # A cut lowers its own structure; every other budget keeps the maximum
+        # recorded over earlier runs, which covers their path variation.
+        budget = json.loads(BUDGET.read_text())
+        for kind, rows in budget.items():
+            for key in args.lower:
+                if key in rows and measured.get(kind, {}).get(key, 0) < rows[key]:
+                    saved = rows[key] - measured.get(kind, {}).get(key, 0)
+                    rows[key] -= saved
+                    if key.startswith('data '):
+                        rows['data total'] -= saved
+            for key in [k for k, v in rows.items() if not v]:
+                del rows[key]
+        BUDGET.write_text(json.dumps(budget, indent=1, sort_keys=True) + '\n')
+        result['recorded'] = str(BUDGET)
+    elif args.record:
         # Recording raises the budget to the largest count seen in this and earlier
         # recordings; run it several times so that path variation is covered.
         previous = json.loads(BUDGET.read_text()) if BUDGET.exists() and args.merge else {}
