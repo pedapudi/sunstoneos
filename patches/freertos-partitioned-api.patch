@@ -1282,7 +1282,7 @@
      {
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +traceENTER_vTaskPlaceOnEventListRestricted( pxEventList, xTicksToWait, xWaitIndefinitely );
-+ssKernelEventBlock(pxEventList, 0, xTicksToWait, false, xWaitIndefinitely != pdFALSE);
++ssKernelEventBlock(pxEventList, 0, xWaitIndefinitely != pdFALSE ? portMAX_DELAY : xTicksToWait, false, xWaitIndefinitely != pdFALSE);
 +traceRETURN_vTaskPlaceOnEventListRestricted();
 +#else
 +
