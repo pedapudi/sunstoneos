@@ -11,6 +11,7 @@
 #include "app_region.h"
 #include "app_large.h"
 #include "umem.h"
+#include "a733_device_memory_layout.h"
 #include "owner-memory.h"
 #include "capture.h"
 #include "sunstone_usb_service.h"
@@ -199,6 +200,11 @@ int os_large_prepare(void)
     os_kernel_l2_slot1(base_l2);
     struct app_region_range usable[APP_REGION_SLOTS];
     unsigned ranges = usable_ranges(base_l1, base_l2, usable, APP_REGION_SLOTS);
+    /* The last 2 MiB block of the map is the DRAM decode probe's: the ledger never hands it out. */
+    if (ranges && usable[ranges - 1].base + usable[ranges - 1].bytes == A733_DRAM_MAP_END) {
+        if (usable[ranges - 1].bytes == A733_DRAM_TOP_BLOCK) --ranges;
+        else usable[ranges - 1].bytes -= A733_DRAM_TOP_BLOCK;
+    }
     /* An application with upper memory to use also takes its main stack from it, with a guard block below. */
     if (!count && !placed && !(manifest && ranges)) return 1;
     uint64_t mmfr0, tcr;

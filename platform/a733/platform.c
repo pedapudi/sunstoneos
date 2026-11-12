@@ -144,7 +144,7 @@ void platform_init(void)
     // Images that opt in map the rest of DRAM only after the address-test decode check passes, with
     // the MMU off and Non-secure accesses (drivers/dram/a733_dram_decode_probe.c).
     static const struct a733_dram_range upper_ranges[] = {{UINT64_C(0x48000000), UINT64_C(0x38000000)},
-        {UINT64_C(0x80000000), UINT64_C(0x2c0000000)}};
+        {UINT64_C(0x80000000), UINT64_C(0x2bfe00000)}};
     static uint64_t upper_scratch[1];   // the one word the probe writes: kernel memory outside the ranges
     platform_upper_mapped = a733_dram_decode_check(upper_ranges, 2, upper_scratch, 1) == 1;
     if (platform_upper_mapped) {

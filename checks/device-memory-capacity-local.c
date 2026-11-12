@@ -102,7 +102,7 @@ static void golden_tables(void)
 #else
     CHECK(decode_calls==1 && decode_count==2 &&
           decode_seen[0].base==UINT64_C(0x48000000) && decode_seen[0].size==UINT64_C(0x31000000) &&
-          decode_seen[1].base==UINT64_C(0x80000000) && decode_seen[1].size==A733_DRAM_MAP_END-UINT64_C(0x80000000));
+          decode_seen[1].base==UINT64_C(0x80000000) && decode_seen[1].size==A733_DRAM_APP_END-UINT64_C(0x80000000));
 #endif
     uint64_t mapped=0,valid=0;
     for(unsigned i=2;i<512;++i) {

@@ -14,7 +14,7 @@
  * controller configuration (its size and address mapping) comes from the
  * training or restore record that the boot applied, and a different record or
  * a different DRAM population would break linear decode without changing the
- * image. The test writes one token word, in the caller's own kernel memory, and
+ * image. The test writes one token word (and a second in the reserved top block of the map), in the caller's own kernel memory, and
  * only reads everywhere else: for each address bit of the DRAM offset and each
  * gigabyte multiple it reads the word at the offset with that bit flipped (or
  * that many gigabytes added) and requires that it is not the token. A decode that
@@ -48,8 +48,8 @@ int a733_dram_decode_probe(const struct a733_dram_probe_io *io, const struct a73
     uint64_t previous_end = TESTED_FIRST;
     for (unsigned i = 0; i < count; ++i) {
         uint64_t b = ranges[i].base, n = ranges[i].size;
-        if (!n || (b | n) & (BLOCK - 1) || b < previous_end || b > A733_DRAM_MAP_END ||
-            n > A733_DRAM_MAP_END - b) return 0;
+        if (!n || (b | n) & (BLOCK - 1) || b < previous_end || b > A733_DRAM_APP_END ||
+            n > A733_DRAM_APP_END - b) return 0;
         previous_end = b + n;
         if (scratch_pa < b + n && scratch_pa + 8 > b) return 0;     /* the scratch word is not application memory */
     }
@@ -57,6 +57,12 @@ int a733_dram_decode_probe(const struct a733_dram_probe_io *io, const struct a73
     io->write(io->context, scratch_pa, token(scratch_pa));
     io->barrier(io->context);
     unsigned failed = io->read(io->context, scratch_pa) != token(scratch_pa);
+    /* The top word, in the block that no range includes and the ledger never hands out: a second token must read back, which an
+     * absent or truncated top does not do, and the first token must be undisturbed, which an alias of the two does not allow. */
+    const uint64_t top = A733_DRAM_MAP_END - 8, second = ~token(top);
+    io->write(io->context, top, second);
+    io->barrier(io->context);
+    if (io->read(io->context, top) != second || io->read(io->context, scratch_pa) != token(scratch_pa)) failed = 1;
     /* Partners: the offset with each address bit from 2 MiB to 8 GiB flipped, and the offset plus each whole gigabyte. */
     for (uint64_t bit = BLOCK; bit <= UINT64_C(1) << 33; bit <<= 1) {
         uint64_t partner = offset ^ bit;

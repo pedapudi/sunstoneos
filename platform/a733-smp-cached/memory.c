@@ -49,7 +49,7 @@ static const struct a733_dram_range dram_map[] = {
 #if !defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
     {UINT64_C(0x48000000), UINT64_C(0x79000000) - UINT64_C(0x48000000)},
 #endif
-    {UINT64_C(0x80000000), A733_DRAM_MAP_END - UINT64_C(0x80000000)},
+    {UINT64_C(0x80000000), A733_DRAM_APP_END - UINT64_C(0x80000000)},
 };
 #define DRAM_MAP_RANGES (unsigned)(sizeof dram_map / sizeof dram_map[0])
 /* The one word the decode check writes: kernel memory (EL3 bss), outside every range above. */

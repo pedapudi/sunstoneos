@@ -164,7 +164,9 @@ struct a733_dram_probe_io {
     void (*write)(void *, uint64_t, uint64_t);
     void (*barrier)(void *);
 };
-/* Returns 1 when no partner of the scratch word (the DRAM offset with one address bit flipped, or a whole number of gigabytes
+/* The probe also writes a second token in the last word of the map (the reserved top block, A733_DRAM_TOP_BLOCK of
+ * a733_device_memory_layout.h) and requires it to read back; ranges therefore end at A733_DRAM_APP_END.
+ * Returns 1 when no partner of the scratch word (the DRAM offset with one address bit flipped, or a whole number of gigabytes
  * added) holds the token that the probe wrote there, and the first and last word of each range do not either. The only write
  * is the token at `scratch_pa`, a word of the caller's kernel memory outside every range; every other access is a read, so nothing
  * placed in the ranges (the runner's INPUT regions, a loaded application) can change. Refuses (0) ranges outside the
