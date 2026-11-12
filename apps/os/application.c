@@ -67,6 +67,8 @@ const struct ss_grant *ss_grant(void)
 }
 int os_application_finished(void)
 {return atomic_load_explicit(&finished,memory_order_acquire);}
+int os_application_succeeded(void)
+{return os_application_finished()&&((const struct ss_result *)ss_result_record)->status==SS_RESULT_FINISHED;}
 void os_application_failed(const struct ss_failure *failure,uint64_t epoch,uint64_t generation)
 {
     struct ss_result *r=(void *)ss_result_record;

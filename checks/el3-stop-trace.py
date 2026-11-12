@@ -21,8 +21,8 @@ stop cases only).
 
 The reference (checks/data/el3-stop-trace.json) holds the same cases from the tree before the change, d8a6b513: its
 supervised OS image for the words 1, 2 and 0 with the supervised or resident magic, and its CPU-return latency image
-for the word 3 and the word 0 with the returning magic. The supervised image here must match all of them, since it
-admits every lifetime. The returning image must match the returning cases.
+for the word 3 and the word 0 with the returning magic. Supervised and returning paths retain those traces.
+Resident paths add RTC stop and fault records; their other effects retain the supervised trace.
 
 The check also requires that no stop path loads the EL1 copy of the lifetime (os_sealed, apps/os/sealed.c) and that
 every path that reaches the lifetime branch loads the EL3 word (a733_smp_lifetime). The model gives the EL1 copy a value
@@ -210,6 +210,28 @@ def differences(traces, reference, labels):
             continue
         expected = reference[source]
         for name, got in traces[label].items():
+            if label in ('word2', 'word0-res'):
+                # Resident stops retain RTC diagnostics. Every other effect
+                # keeps the supervised reference, including no WDT writes.
+                rtc = lambda operation: 0x07090100 <= int(operation[1], 16) < 0x07090120
+                stripped = dict(got, mmio=[x for x in got['mmio'] if not rtc(x)],
+                                mmio_loads=[x for x in got['mmio_loads'] if not rtc(x)])
+                # The model advances CNTPCT by 24 ticks per read. The added
+                # breadcrumb timestamp reads it once before end_counter.
+                resident_expected = dict(expected[name], result=[
+                    [offset, size, hex(int(value, 16) + 24) if offset == 64 else value]
+                    for offset, size, value in expected[name]['result']])
+                if stripped != resident_expected:
+                    found.append((label, name, stripped, resident_expected))
+                stores = {int(x[1], 16): int(x[3], 16) for x in got['mmio'] if rtc(x)}
+                if name.startswith('stop-'):
+                    status = int(name.split('-')[1])
+                    value = min(status, 15) << 12 | ((0x700 + status) & 0xfff)
+                    if stores.get(0x07090104) != (0x0111 << 16 | value):
+                        found.append((label, name, 'missing resident EL3 stop', stores))
+                elif name.endswith('-mapped') and not name.startswith('smc-success') and not stores.get(0x07090110):
+                    found.append((label, name, 'missing resident fault', stores))
+                continue
             if got != expected[name]:
                 found.append((label, name, got, expected[name]))
     return found
