@@ -15,7 +15,7 @@ import sys
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
 from elftools.elf.elffile import ELFFile
 from elftools.dwarf.dwarf_expr import DWARFExprParser
-from unicorn import UC_HOOK_MEM_WRITE
+from unicorn import UC_HOOK_MEM_INVALID, UC_HOOK_MEM_WRITE, UC_MEM_READ_UNMAPPED, UC_MEM_WRITE_UNMAPPED
 from unicorn.arm64_const import UC_ARM64_REG_LR, UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_X0
 
 sys.dont_write_bytecode = True
@@ -71,6 +71,9 @@ class Model:
         self.lock_depth = 0
         self.operations = dict(civac=0, tlbi=0, descriptor_stores=0)
         self.table_regions = [(ALIAS, ALIAS + 8192)]
+        self.split_bytes = ((self.field('umem_el1_map', 'split_mask') - self.field('umem_el1_map', 'split')) //
+                            image.sizes['umem_policy_table']) * 4096
+        self.sparse_pages = set()
         self.decoder, self.instructions = Cs(CS_ARCH_ARM64, CS_MODE_ARM), {}
         self.entry = image.address('umem_policy_convert')
         self.critical_enter = image.address('vTaskEnterCritical')
@@ -90,6 +93,7 @@ class Model:
         self.write_words(ALIAS, root)
         self.write_words(ALIAS + 4096, l2)
         self.u.hook_add(UC_HOOK_MEM_WRITE, self.store)
+        self.u.hook_add(UC_HOOK_MEM_INVALID, self.unmapped)
         sites = harness.instruction_sites(image.parts, lambda word:
             harness.system_register_access(word) or bool(harness.barriers(word)))
         harness.hook_addresses(self.u, [*sites, self.entry, self.critical_enter, self.critical_exit, RETURN], self.code)
@@ -147,7 +151,7 @@ class Model:
 
     def store(self, u, access, address, size, value, unused):
         split = self.read(self.policy + self.field('umem_el1_map', 'split_pages'))
-        if any(lo <= address < hi for lo, hi in self.table_regions) or split and split <= address < split + 11 * 4096:
+        if any(lo <= address < hi for lo, hi in self.table_regions) or split and split <= address < split + self.split_bytes:
             self.operations['descriptor_stores'] += 1
         if ALIAS <= address < ALIAS + 8192:
             physical = (self.root if address < ALIAS + 4096 else self.slot1) + (address & 4095)
@@ -172,6 +176,24 @@ class Model:
             physical = (self.root if address < ALIAS + 4096 else self.slot1) + (address & 4095)
             u.mem_write(physical, value.to_bytes(size, 'little'))
         self.speculative_read()
+
+    def unmapped(self, u, access, address, size, value, unused):
+        """Map only the table extent chosen by the real ledger allocator."""
+        split = self.read(self.policy + self.field('umem_el1_map', 'split_pages'))
+        assert access in (UC_MEM_READ_UNMAPPED, UC_MEM_WRITE_UNMAPPED), 'unexpected unmapped execution or protection fault'
+        assert split and split <= address and address + size <= split + self.split_bytes, \
+            ('access outside the allocated split-table extent', hex(address), hex(split))
+        for page in range(split, split + self.split_bytes, 4096):
+            first = self.read(self.root + (page >> 30) * 8)
+            descriptor = self.walk(self.root, page)
+            assert descriptor and descriptor & ATTR == 1 << 2, 'table storage is not mapped write-back'
+            granule = GIB if first & 3 == 1 else BLOCK
+            physical = (descriptor & ADDRESS & ~(granule - 1)) | (page & (granule - 1))
+            assert physical == page, 'table storage is not identity mapped'
+            if not any(begin <= page and page + 4096 <= end + 1 for begin, end, permissions in u.mem_regions()):
+                u.mem_map(page, 4096)
+                self.sparse_pages.add(page)
+        return True
 
     def skip(self, address):
         self.u.reg_write(UC_ARM64_REG_PC, address + 4)
@@ -346,16 +368,23 @@ def check_conversion(model, expected_policy, count=1):
         assert address == after_address and new & ATTR == want
         assert old & ~ATTR == new & ~ATTR, 'conversion changes physical output or permissions'
     assert model.policy_byte(state['chunk']) == expected_policy
+    tables = model.read(model.policy + model.field('umem_el1_map', 'split_pages'))
+    extent = model.describe(tables)
+    assert extent == dict(base=tables, bytes=model.split_bytes, owner=0xffff, policy=0), \
+        'split tables are not backed by one kernel-owned WB ledger extent'
     return dict(chunk=hex(state['chunk']), table_entries=entries, civac_lines=len(state['cleaned']),
-                order=state['events'])
+                order=state['events'], split_storage=hex(tables), split_bytes=model.split_bytes,
+                sparse_metadata_pages=len(model.sparse_pages))
 
 
 def run_case(name, image):
     model = Model(image, name if name.startswith('omit-') else 'normal')
     if name == 'owner-nc-allocation':
         pointer = model.call('os_owner_memory_below', 4096, BLOCK, 1, 1 << 32)
-        assert pointer and not pointer & (BLOCK - 1)
-        return check_conversion(model, 1)
+        assert pointer == FLOOR, 'table metadata consumes the first aligned free chunk'
+        result = check_conversion(model, 1)
+        result['first_aligned_free_chunk_preserved'] = True
+        return result
     if name == 'private-l2-policy':
         model.bootstrap()
         model.add_private()
@@ -367,10 +396,12 @@ def run_case(name, image):
         live = model.bootstrap()
         before = bytes(model.u.mem_read(model.slot1, 4096))
         operations = model.operations.copy()
-        result, _ = model.request(FLOOR + 0x10000, 1)
+        chunk, free_page = live & ~(BLOCK - 1), live + 4096
+        assert free_page & ~(BLOCK - 1) == chunk
+        result, _ = model.request(free_page, 1)
         assert result == -2 and not model.conversions and model.operations == operations
         assert bytes(model.u.mem_read(model.slot1, 4096)) == before
-        assert model.policy_byte(FLOOR) == 0 and model.owner(live) == 0xffff
+        assert model.policy_byte(chunk) == 0 and model.owner(live) == 0xffff
         return dict(status=result, cache_and_table_operations=0)
     if name == 'maintenance-refusal':
         model.bootstrap()
@@ -443,7 +474,7 @@ def run_case(name, image):
         extent = model.describe(base)
         assert extent['owner'] == 1, 'early table/device allocation takes a manifest-pinned extent'
         assert extent['base'] == base and extent['bytes'] == size, 'pinned extent geometry changes'
-        assert not (base < tables + 11 * 4096 and tables < base + size), 'table pages overlap a pinned extent'
+        assert not (base < tables + model.split_bytes and tables < base + size), 'table pages overlap a pinned extent'
         assert not (base < pointer + BLOCK and pointer < base + size), 'device chunk overlaps a pinned extent'
         assert all(model.policy_byte(chunk) == 0 for chunk in range(base, base + size, BLOCK))
         reserved.append(dict(base=hex(base), bytes=size, owner=1))
@@ -505,7 +536,7 @@ def main():
     image = harness.Image(args.image, layout_names=('umem', 'umem_request', 'umem_buf', 'umem_extent',
         'umem_el1_map', 'umem_policy_table', 'ss_manifest', 'ss_region', 'ss_application', 'app_space'))
     image.tcr = a733_tcr.for_image(args.image)
-    image.sizes = structure_sizes(args.image, ('ss_manifest', 'ss_region'))
+    image.sizes = structure_sizes(args.image, ('ss_manifest', 'ss_region', 'umem_policy_table'))
     image.admitted_storage = variable_storage(args.image, 'apps/os/large.c', 'admitted')
     cases = {name: run_case(name, image) for name in (args.case or CASES)}
     assert hashlib.sha256(args.image.read_bytes()).hexdigest() == image_sha256, 'image changed during the check'
