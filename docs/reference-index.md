@@ -14,7 +14,7 @@ Reuse prior reading and inspect relevant changes on subsequent visits.
 | Device coverage | [Hardware matrix](hardware.md): the relevant device bullet |
 | Physical access and recovery | [Board skill](../.agents/skills/sunstone-a733-board/SKILL.md) |
 | Boot-input admission versus forced-FEL normal return | [Reset-path guard classification](watchdog.md#choose-the-boot-input-guard-from-the-reset-path) and [captured ROM proof](watchdog.md#captured-board-rom-and-reset-ownership); [GPU actual-input audit](../apps/gpu-finite/HOST.md#failed-physical-attempt-and-input-audit) separates accepted inputs from unobserved native execution |
-| Retained card-first-stage FEL request | [Recovery gate](designs/card-fel-recovery.md) and [source identities](vendor-firmware/data/card-fel-recovery.json): vendor RTC index 2, request consumption, AArch32 ROM entry and the bounded RAM-only proof |
+| Retained card-first-stage FEL request | [Recovery gate](designs/card-fel-recovery.md) and [source identities](vendor-firmware/data/card-fel-recovery.json): vendor RTC index 2, request consumption, AArch64-only RVBAR scope and the blocked AArch32 RAM proof |
 | Multicore implementation | [CPU skill](../.agents/skills/sunstone-a733-multicore/SKILL.md), then its boundary-specific source table |
 | Cold secondary CPU ownership | [Static OFF design](designs/cold-cpu-static-off.md) and [pinned sources](../boot/a733/stage2/cpu-sources.json): acknowledged policy, cache cleanup, publication before release and retained failures |
 | Peripheral implementation | [Device skill](../.agents/skills/sunstone-a733-device/SKILL.md) |

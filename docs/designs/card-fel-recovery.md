@@ -1,10 +1,10 @@
 # A retained first-stage request selects FEL before card loading
 
-**Status: implemented and host-tested.** No card is written.
-The daemon admits the dedicated RAM-proof profile. The launcher shares the
-resident CPU owner's read-only OFF admission, which passes on port 3-3.
-CPU0 reset completion, entry into the early gate and cold-card recovery remain
-unqualified ([evidence](../evidence/card-fel-recovery.jsonl)).
+**Status: blocked.** The gate and launcher have software checks; no card is
+written. The RAM proof lacks a documented AArch32 reset path to its DRAM gate.
+The shared read-only secondary-OFF admission passes on port 3-3. Physical gate
+entry and cold-card recovery remain unqualified
+([evidence](../evidence/card-fel-recovery.jsonl)).
 
 ## The first stage consumes the vendor request
 
@@ -36,13 +36,44 @@ clock or secondary power policy.
 The captured ROM's entry at `0x20` bypasses BOOT sampling but still checks the
 second software redirect at `0x070501d4`. All redirect words therefore remain
 zero. The ROM consumes no RTC request itself; the gate makes the selection.
-The CPU-local transition publishes CPU0 RVBAR and uses the
+The launcher publishes CPU0 RVBAR and uses the
 [shared reset body](../../include/a733_cpu_reset.h): DSB, `RMR_EL3 = 2`, ISB,
 then a terminal WFI/back-branch loop. The request takes effect when the core
 enters WFI. The monitor, probes, finite-device returns and stage-2 loader use
-this same body. The AArch32 gate then branches to `0x20` itself.
+this same body. This sequence does not establish the AArch32 reset destination.
+If entered in AArch32, the gate branches to `0x20` itself.
 
-## The RAM proof executes the actual gate
+## Reset-address authority blocks the RAM proof
+
+The A733 manual places CPU_SUBSYS_CTRL at `0x08000000` (§5.1.5).
+Its CPU0 registers have separate execution-state and reset-address roles:
+
+| Register | Address | Documented role |
+| --- | --- | --- |
+| CLU0_CPU0_CTRL_REG | `0x08001000` | Bit 0 selects AA64NAA32 at processor reset (§5.1.6.6) |
+| CLU0_RVBARADDR0_L | `0x08001004` | Low reset-address bits for AArch64 execution (§5.1.6.7) |
+| CLU0_RVBARADDR0_H | `0x08001008` | High reset-address bits for AArch64 execution (§5.1.6.8) |
+
+The pinned vendor BL31 selects AArch64 at helper `0xc298` and programs its
+warm-entry address through `0xc4a0`. The readable TF-A A733 port uses the same
+addresses, including core 0. SunstoneOS's `cpu_start.c` also selects AArch64
+before starting a core. These sequences corroborate the register map for
+AArch64; they do not extend it to AArch32.
+
+The Cortex-A55 TRM §B2.93 defines architectural `RVBAR_EL3` as read-only,
+derived from RVBARADDR inputs and describing AArch64 reset entry. Its AArch32
+`SCTLR.V` reset value instead depends on VINITHI (§B1.81). The inspected sources
+do not establish a path from `RMR_EL3 = 2` to the gate at `0x41001000`.
+The launcher must not repeat this RAM proof on the strength of its RVBAR writes.
+
+Existing returning images write RVBAR `0x20` and request AArch32 reset, but
+their FEL return does not prove that execution began at `0x20`. In the captured
+ROM, the instruction at offset zero branches to `0x44`, distinct from the
+forced-FEL entry at `0x20`. The inspected references do not establish the full
+AArch32 reset-vector selection or the board's VINITHI value. Source identities
+and these limits are in [the recovery inventory](../vendor-firmware/data/card-fel-recovery.json).
+
+## The RAM-proof profile
 
 The queue profile admits one immutable ELF containing an AArch64 launcher,
 the exact position-independent AArch32 gate and a fresh nonce request. It
@@ -53,7 +84,8 @@ After arming WDT0 in mode `0x41`, the runner sets and reads back the RTC request
 before launch. The launcher checks EL3, cache-off entry, the nonce, watchdog,
 request and acknowledged OFF secondaries with clear start requests. It changes
 no secondary policy. It publishes its report, enables the gate's RAM-only
-observation word and resets CPU0 into the gate at `0x41001000`.
+observation word, writes `0x41001000` to CPU0's AArch64-only RVBAR inputs and
+requests an AArch32 reset. That request does not establish entry into the gate.
 
 [The CPU OFF helpers](../../include/a733_cpu_off.h) define both register addresses
 and predicates for the launcher and resident start. PPU status has low bits zero;
@@ -71,10 +103,11 @@ nonce/report, consumed gate state, unchanged gate code, request zero and mode
 zero. A watchdog reset or any mismatch fails the proof and ends board access.
 There is no generic probe return epilogue after the gate.
 The host model keeps the request pending through the ISB and completes it at
-WFI. A pending-reset case executes the idle loop without further RTC writes.
-Compiled checks require the exact terminal sequence in every caller and refuse
-mutations that remove WFI or its back-branch. Physical reset completion and
-AArch32 gate entry remain qualification requirements.
+WFI, but then assumes that AArch32 execution starts at the programmed RVBAR.
+The register definitions do not support that assumption. Its linked checks
+therefore establish software behavior under a synthetic dispatch, not physical
+gate reachability. The compiled terminal-sequence checks and pending-reset
+case still establish the WFI loop and absence of later RTC writes.
 
 Each launcher refusal records stage `0x0c01` and a distinct guard code from
 [the refusal definitions](../../apps/card-fel-recovery/refusal.h). Values

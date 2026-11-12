@@ -66,7 +66,13 @@
     "second_redirect": "0x1f0..0x208 and 0x240..0x244",
     "media_icache_enable": "0x2888..0x2890",
     "media_branch_to_boot0": "0x1061c",
-    "sd_length_check": "0xae58..0xae78 calls 0x27e8; aligned 512 bytes and at most 0xa7800"
+    "sd_length_check": "0xae58..0xae78 calls 0x27e8; aligned 512 bytes and at most 0xa7800",
+    "reset_vector_branch": {
+      "offset": "0x0",
+      "destination": "0x44",
+      "method": "Decode the signed ARM B immediate from the hash-pinned captured ROM.",
+      "limit": "This differs from forced-FEL entry 0x20; it does not establish which vector the core selects at an AArch32 warm reset."
+    }
   },
   "rtc_manual": {
     "url": "https://gitlab.com/api/v4/projects/71118510/repository/files/A733%2FHardware%E7%A1%AC%E4%BB%B6%E7%B1%BB%E6%96%87%E6%A1%A3%2F%E8%8A%AF%E7%89%87%E6%89%8B%E5%86%8C%2FA733_User%20Manual_V1.00.pdf/raw?ref=d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
@@ -96,5 +102,82 @@
     "The ROM does not consume the RTC request; boot0 or the early gate does.",
     "Direct ROM entry still checks the second redirect word.",
     "The RAM proof establishes no storage loading or system-watchdog-reset-to-card recovery."
-  ]
+  ],
+  "cortex_a55_trm": {
+    "revision": "100442_0200_00",
+    "url": "https://documentation-service.arm.com/static/5e7e09f6a3736a0d2e862d2f",
+    "sha256": "1f71b74d5cf1cbf3c86dab85d1407c45355ab5015d12d68afc0dc64107f7dd97",
+    "license": "Arm proprietary, non-confidential reference; no document code is incorporated.",
+    "sections": [
+      "B2.93 p B2-438: RVBAR_EL3 is read-only and describes AArch64 reset entry from RVBARADDRx",
+      "B1.81 p B1-258: AArch32 SCTLR.V resets from VINITHI"
+    ]
+  },
+  "tf_a_cpu_registers": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "license": "BSD-3-Clause",
+    "use": "Host reference for the readable A733 port; vendor BL31 independently corroborates the AArch64 register sequence.",
+    "files": [
+      {
+        "path": "plat/allwinner/common/include/sunxi_cpucfg_ncat3.h",
+        "sha256": "570a4037808b3f68e71f004ee63f7a71a813e635efa2ebd6b39a4a8cb8110854",
+        "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/include/sunxi_cpucfg_ncat3.h"
+      },
+      {
+        "path": "plat/allwinner/common/sunxi_pm.c",
+        "sha256": "877679c222ac233a38a0878dcb2b8e53618f5f570bf49886422ddd2d0fb9a10c",
+        "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/sunxi_pm.c"
+      },
+      {
+        "path": "plat/allwinner/sun60i_a733/include/sunxi_mmap.h",
+        "sha256": "4a259b8f440bc0e7072dd43b086450581c510fd5cec0038eda9c94676041aec6",
+        "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/sun60i_a733/include/sunxi_mmap.h"
+      },
+      {
+        "path": "plat/allwinner/common/sunxi_native_pm_ncat2.c",
+        "sha256": "62eb0ed4b1d5ec227cb9fdb4bd7a721c716cc0b9d5057976ff6a7a126df4841d",
+        "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/sunxi_native_pm_ncat2.c"
+      }
+    ]
+  },
+  "vendor_bl31_cpu_registers": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/monitor.fex",
+    "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+    "sha256": "8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632",
+    "bytes": 78609,
+    "source_available": false,
+    "license": "Existing vendor monitor dependency terms apply; host analysis only.",
+    "helper_offsets": {
+      "select_aarch64": "0xc298",
+      "set_entry_words": "0xc4a0",
+      "entry_low_store": "0xc4ac",
+      "entry_high_store": "0xc4bc"
+    },
+    "scope": "The selected AArch64 startup programs 0x08001000 bit 0 and 0x08001004/0x08001008; this is not evidence of AArch32 reset-address selection."
+  },
+  "cpu_reset_address_audit": {
+    "status": "RAM proof blocked: the programmed register pair specifies AArch64 reset entry, not a documented AArch32 DRAM destination.",
+    "a733_manual_ref": "rtc_manual",
+    "a733_manual_sections": [
+      "5.1.5 p248 CPU_SUBSYS_CTRL base",
+      "5.1.6.6 p256 CPU0 AA64NAA32",
+      "5.1.6.7/8 p256 CPU0 RVBARADDR low/high for AArch64"
+    ],
+    "registers": {
+      "0x08001000": "CPU0 AA64NAA32 bit 0, sampled during processor reset",
+      "0x08001004": "CPU0 low reset-address bits, AArch64 scope",
+      "0x08001008": "CPU0 high reset-address bits, AArch64 scope"
+    },
+    "launcher": {
+      "low_value": "0x41001000",
+      "high_value": 0,
+      "rmr_el3": 2,
+      "requested_state": "AArch32"
+    },
+    "other_returns": "Writing RVBAR 0x20 and observing FEL does not prove reset entry at 0x20 or establish AArch32 address control.",
+    "limits": [
+      "Full AArch32 reset-vector selection and the board VINITHI value are not established by these sources.",
+      "No new board run, gate-progress implementation or reset-handoff redesign proceeds past this blocker."
+    ]
+  }
 }
