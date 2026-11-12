@@ -112,8 +112,9 @@ int cadence_control(unsigned op,uint64_t at,uint64_t value)
     else if(op==9)valid_mask=(unsigned)value;
     else if(op==10)thermal.driver.fault=(unsigned)value;
     else if(op==11)atomic_store_explicit(&thermal.pending,1,memory_order_release);
-    else if(op==12)result=(int)idle_ticks();
+    else if(op==12)result=(int)idle_deadline();
     else if(op==13)clock_busy=(unsigned)value;
+    else if(op==14){rearm_ok=0;thermal.masked=1;}
     cadence_state[0]=atomic_load_explicit(&readings.count,memory_order_acquire);
     cadence_state[1]=readings.next;cadence_state[2]=reads;cadence_state[3]=clocks;
     cadence_state[4]=failures;cadence_state[5]=thermal.active;

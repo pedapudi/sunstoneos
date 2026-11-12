@@ -17,6 +17,7 @@
 #include "gicv3_spi.h"
 #include "a733_mapping_check.h"
 #include "sunstone_crumb.h"
+#include "sunstone_deadline.h"
 #include "boot.h"
 #include <string.h>
 #include "thermal-report.h"
@@ -28,11 +29,17 @@ static struct os_thermal_service {
     struct a733_thermal_policy policy;
     StaticTask_t task;StackType_t stack[2048];TaskHandle_t handle;
     atomic_uint failed,pending;
-    unsigned active,retaining,masked,rearm_wait,cpu_pages;
-    uint64_t next_read;
+    unsigned active,retaining,masked,cpu_pages;
+    uint64_t next_read,rearm_deadline;
     uint32_t cpu_critical_millicelsius;
     uint32_t critical_word;               /* the reading behind a CRITICAL stop, for the failure record (critical_reading) */
 } thermal;
+/* The host copies this optional telemetry after the owner has stopped. All
+ * fields have one writer, the thermal task; live readers need its deadline
+ * certificate rather than an unsynchronized snapshot of these counters. */
+struct os_thermal_wake_record {
+    uint64_t begin_us,last_us,waits,notifications,deadlines,errors;
+} os_thermal_wake_record;
 static atomic_uint thermal_stop_authorized;
 static enum os_quiesce_result thermal_quiesce_step(struct os_quiesce *q)
 {
@@ -276,9 +283,16 @@ static int rearm(void)
 {
     int ok=1;taskENTER_CRITICAL();
     if(live()&&!atomic_load_explicit(&thermal.pending,memory_order_acquire)&&thermal.masked){
-        int r=gicv3_spi_rearm(&thermal.irq);
-        if(r==1){thermal.masked=0;thermal.rearm_wait=0;}
-        else if(r<0||++thermal.rearm_wait>=100)ok=0;
+        uint64_t now=a733_smp_counter()/24;
+        if(thermal.rearm_deadline&&now>=thermal.rearm_deadline)ok=0;
+        else {
+            int r=gicv3_spi_rearm(&thermal.irq);
+            if(r==1){thermal.masked=0;thermal.rearm_deadline=0;}
+            else if(r<0)ok=0;
+            /* Preserve the GIC propagation availability budget in elapsed
+             * time; extra device notifications do not consume attempts. */
+            else if(!thermal.rearm_deadline)thermal.rearm_deadline=now+100000;
+        }
     }
     taskEXIT_CRITICAL();return ok;
 }
@@ -371,22 +385,25 @@ static int step(void)
     if(os_cpu_clock_step(&thermal.policy)<0&&!os_cpu_return_failing())return fault();
     return 1;
 }
-/* Ticks (1 ms) the owner may sleep after a step. It steps on the next tick while it has work that cannot wait: it is
- * starting or retaining, an interrupt is still masked and awaits its rearm, or the CPU clock driver is working. Otherwise
- * it sleeps until its next reading, its next record slot or the end of the clock admission, at most 20 ms, and the thermal
- * interrupt wakes it earlier. The record slots keep the phase of the first usable row, which an interrupt-notified read
- * can place off the 25 ms read grid, so they are deadlines of their own. An idle session wakes about 50 times a second. */
-static TickType_t idle_ticks(void)
+/* THS interrupts wake the owner before these deadlines. Admission, GIC RWP
+ * propagation and the CPU clock adapter expose no completion notification;
+ * their existing one-millisecond retry interval uses the precise timer too.
+ * Sampling and record slots retain separate absolute phases. */
+static uint64_t idle_deadline(void)
 {
-    if(!thermal.active||thermal.retaining||thermal.masked||!live())return 1;
-    if(os_cpu_clock_busy())return 1;
     uint64_t now=a733_smp_counter()/24,until=thermal.next_read;
+    if(!thermal.active||thermal.retaining||thermal.masked||!live()||os_cpu_clock_busy()||
+       atomic_load_explicit(&thermal_stop_authorized,memory_order_acquire))
+    {
+        until=now+1000<deadline()?now+1000:deadline();
+        if(thermal.rearm_deadline&&thermal.rearm_deadline<until)until=thermal.rearm_deadline;
+        return until;
+    }
     uint64_t state=atomic_load_explicit(&load_state,memory_order_relaxed);
     if((state&3)==A733_THERMAL_NORMAL&&(state>>2)+1<until)until=(state>>2)+1;
     if(readings.next&&readings.next<until)until=readings.next;
-    if(until<=now)return 1;
-    uint64_t ticks=(until-now)/(1000000u/configTICK_RATE_HZ);
-    return ticks<1?1:ticks>20?20:(TickType_t)ticks;
+    if(deadline()<until)until=deadline();
+    return until;
 }
 /* The owner performs one stop operation per pass; it never waits inside a
  * supervisor callback. Keep sampling until the earlier classes have drained. */
@@ -404,13 +421,21 @@ static void thermal_stop_step(void)
 void os_thermal_task(void *unused)
 {
     (void)unused;
+    if(!sunstone_deadline_register()){(void)fault();vTaskSuspend(NULL);return;}
+    os_thermal_wake_record.begin_us=a733_smp_counter()/24;
     for(;;){
         if(atomic_load_explicit(&thermal_stop_authorized,memory_order_acquire)&&os_quiesce_result(&thermal_quiesce)!=OS_QUIESCE_FAULT){
             thermal_stop_step();
             if(os_quiesce_result(&thermal_quiesce)==OS_QUIESCE_DONE)for(;;)vTaskSuspend(NULL);
         }else if(step()==1)BOARD_PROGRESS(OS_SERVICE_THERMAL);
-        TickType_t wait=idle_ticks();
-        if(wait>1)(void)ulTaskNotifyTake(pdTRUE,wait);else vTaskDelay(1);
+        /* A retained token needs no further device or scheduler activity. */
+        if(thermal.retaining==2){vTaskSuspend(NULL);return;}
+        int result=sunstone_deadline_wait_until(idle_deadline());
+        os_thermal_wake_record.last_us=a733_smp_counter()/24;
+        ++os_thermal_wake_record.waits;
+        if(result==SUNSTONE_DEADLINE_NOTIFIED)++os_thermal_wake_record.notifications;
+        else if(result==SUNSTONE_DEADLINE_EXPIRED)++os_thermal_wake_record.deadlines;
+        else {++os_thermal_wake_record.errors;(void)fault();vTaskSuspend(NULL);return;}
     }
 }
 static int construct(const struct os_session *s)
