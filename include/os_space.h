@@ -47,7 +47,7 @@ static inline void os_space_switch_in(const void *tag)
  * and the marks never decide a space: only the tag of a creating task or the argument of a creation call does. */
 #define OS_SPACE_REFUSED 0x7a1u
 extern volatile uint8_t os_space_app_init_active;
-extern volatile uint8_t os_space_explicit[configNUMBER_OF_CORES];
+extern volatile uint8_t os_space_explicit[]; /* one byte per core, sized by configNUMBER_OF_CORES in apps/os/large.c */
 void os_space_refuse_create(void);
 #define os_space_inherit(creator, created) \
     do { if ((creator)) { \
