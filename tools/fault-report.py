@@ -5,7 +5,7 @@ USB0 operation 5 of the integrated OS image answers with the 1,160-byte report
 of docs/fault-capture.md and no frame header. fetch() runs that one exchange
 on a device that a supervised launcher has already claimed; this module opens
 no device and has no command line. Decode the result with decode_report() of
-checks/fault-decode.py, which defines the report layout. The same exchange
+tools/fault-decode.py, which defines the report layout. The same exchange
 reads the other fixed report without a frame header, the 104-byte NPU report
 of operation 6 (apps/os/npu-report.py).
 """
