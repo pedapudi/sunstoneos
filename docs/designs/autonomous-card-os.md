@@ -170,6 +170,10 @@ constant-size session stamping.
    recognition, service timing and a normal watchdog reboot. The native loader
    still refuses unproven remote writers and CPU and cache ownership before SD
    access; no production card reservation or backup exists.
+   The [resident FEL test](resident-fel.md) has host evidence only. FEL entry
+   admits dynamic OFF; cold card entry retains stage 2's static OFF.
 3. Replace identification-speed loading through the SD owner's post-DRAM SD core
    and measure cold boot latency.
 4. Provide recovery for interruption of the monitor and boot0 writes.
+5. Resolve EL1 watchdog renewal requiring BOOT input low while cold resident
+   admission permits it high. This discrepancy remains open for card boot.

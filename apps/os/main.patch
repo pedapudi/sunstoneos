@@ -37,7 +37,7 @@
  /* This hook is used by the existing cached EL1/EL3 fatal paths. It only closes
   * atomic admission; those paths record their own fault, and EL3 cannot use
   * the breadcrumb SVC. The independent watchdog owns recovery from stopped CPUs. */
-@@ -87,7 +102,11 @@
+@@ -87,7 +102,15 @@
  {
      uint64_t el;
      __asm__ volatile("mrs %0, CurrentEL":"=r"(el));
@@ -45,12 +45,16 @@
 +    /* At EL3 the note writes the RTC words directly, so it is stored only under the returning lifetime (the EL3 word, as
 +     * the stop handler reads it). From EL1 the breadcrumb SVC's handler applies the same rule to the sealed copy. */
 +    const unsigned level=(unsigned)((el>>2)&3);
-+    if(level!=3||*(volatile unsigned *)&a733_smp_lifetime==A733_LIFETIME_RETURN)
++    /* The diagnostic completion is an intentional resident stop. Its EL3
++     * stop record survives reset; a synthetic failure would obscure it. */
++    const int completion=level==1&&status==5&&os_lifetime()==A733_LIFETIME_RESIDENT&&
++        board_resident_completion_stop()&&!board_resident_stop_detail();
++    if(!completion&&(level!=3||*(volatile unsigned *)&a733_smp_lifetime==A733_LIFETIME_RETURN))
 +        a733_storage_maintenance_note(status,level,__builtin_return_address(0));
      fail_close();a733_typec_revoke(&board.typec.provider);
  }
  static _Noreturn void park(void){for(;;)vTaskSuspend(NULL);}
-@@ -103,6 +122,8 @@
+@@ -103,6 +126,8 @@
  static void pmic(void *unused)
  {
      (void)unused;for(;;){
@@ -59,7 +63,7 @@
          if(!board_live(NULL))park();
          const uint32_t ticks=a733_power_service_step(&providers.domains);
          const int ready=a733_power_service_ready(&providers.domains);
-@@ -172,6 +193,10 @@
+@@ -172,6 +197,10 @@
                  }
              }
          }
@@ -70,7 +74,7 @@
          vTaskDelay(1);
      }
  }
-@@ -193,6 +218,8 @@
+@@ -193,6 +222,8 @@
                      memory_order_release,memory_order_relaxed);
              }
          }
@@ -79,7 +83,7 @@
          vTaskDelay(1);
      }
  }
-@@ -230,8 +257,11 @@
+@@ -230,8 +261,11 @@
  #elif defined(SUNSTONE_A733_OS)
  static void supervise(void *unused)
  {
@@ -92,13 +96,23 @@
          if(resident){
              /* The armed watchdog bounds every hang. A failure, an expired
               * service window, a service still silent at the loader's first
-@@ -391,7 +421,8 @@
+@@ -242,5 +276,8 @@
+                board.session.session_start_ticks+4*A733_SMP_COUNTER_HZ)!=1){
+-                board_fail(NULL);
++                /* Successful diagnostic completion closes admission without
++                 * inventing a failure record. Real failures retain theirs. */
++                if(board_resident_completion_stop())fail_close();
++                else board_fail(NULL);
+                 if(a733_board_host_workload(board.session.workload))a733_typec_revoke(&board.typec.provider);
+                 /* Status 5: renewal stopped. The reason reaches this core's
+                  * retained slot, and on core 0 the resident result. */
+@@ -391,7 +428,8 @@
          board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,!i?3:i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);
          if(!board.handles[i])platform_panic("board tasks",5);
  #if configNUMBER_OF_CORES > 1
 -        if(!i)vTaskCoreAffinitySet(board.handles[i],1);
-+        /* The returning lifetime's supervisor (task 7) runs on core 0, which notifies the terminals last. */
-+        if(!i||(i==7&&os_returning()))vTaskCoreAffinitySet(board.handles[i],1);
++        /* The returning and resident supervisors use core 0, which publishes their EL3 stop record. */
++        if(!i||(i==7&&(os_returning()||BOARD_RESIDENT())))vTaskCoreAffinitySet(board.handles[i],1);
  #endif
  #ifdef SUNSTONE_BOARD_USB2_IRQ
          if(i==4)vTaskCoreAffinitySet(board.handles[i],1);

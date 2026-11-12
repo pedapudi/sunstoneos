@@ -289,6 +289,8 @@ int board_service_deadline_register(unsigned);
 int board_service_blocked_until(unsigned,uint64_t);
 void os_usb0_notify(void);
 int os_application_finished(void);
+int os_application_succeeded(void);
+int board_resident_completion_stop(void);
 int os_session_decode(const void *,size_t,struct os_session *);
 /* As os_session_decode; a refusal stores the A733_DECODE_* sub-term (include/a733_admission_refusal.h) in *why. */
 int os_session_decode_why(const void *,size_t,struct os_session *,unsigned *why);

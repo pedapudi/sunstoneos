@@ -24,6 +24,8 @@ option(SUNSTONE_GPU_FAST_TIMING "Capture optional GPU IRQ-entry counter timestam
 option(SUNSTONE_A733_OS_CORE "Build the OS core without an application" OFF)
 option(SUNSTONE_A733_CPU_TOPOLOGY "Expose read-only topology and per-core architectural observations" OFF)
 option(SUNSTONE_A733_OS_HELLO "Build the hello-compute OS image" OFF)
+option(SUNSTONE_A733_OS_RESIDENT_STOP_ON_FINISH
+  "Diagnostic resident image: stop watchdog renewal when the application finishes" OFF)
 option(SUNSTONE_A733_HW_FACTS "Record the hardware facts table on every core before the scheduler (docs/hardware/a733-facts-probe.md)" OFF)
 # SUNSTONE_A733_OS_CPU_RETURN is removed. A build directory configured before the removal keeps it in its cache,
 # and CMake cannot tell a cached value from one on this configure's command line, so the entry is dropped with a
@@ -496,6 +498,12 @@ if(os_include_dirs)
   target_include_directories(sunstone-a733-os-core PRIVATE ${os_include_dirs})
 endif()
 target_compile_definitions(sunstone-a733-os-core PRIVATE PVR_GPU_PERFORMANCE=1)
+if(SUNSTONE_A733_OS_RESIDENT_STOP_ON_FINISH)
+  if(NOT SUNSTONE_APPLICATION)
+    message(FATAL_ERROR "Resident completion diagnostic requires an application")
+  endif()
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_RESIDENT_STOP_ON_FINISH=1)
+endif()
 get_target_property(os_link sunstone-a733-os-core LINK_OPTIONS)
 list(FILTER os_link EXCLUDE REGEX "Map,")
 set_property(TARGET sunstone-a733-os-core PROPERTY LINK_OPTIONS "${os_link}")

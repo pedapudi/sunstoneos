@@ -20,6 +20,10 @@ IMAGES = {
     'ret-walks-cached': {'configure': [
         '-DSUNSTONE_APPLICATION=table-walks', '-DSUNSTONE_A733_TABLE_WALKS=cached',
     ], 'target': 'sunstone-a733-os-table-walks', 'elf': 'sunstone-a733-os-table-walks.elf'},
+    'resident-stop': {'configure': [
+        '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=hello-compute',
+        '-DSUNSTONE_A733_OS_RESIDENT_STOP_ON_FINISH=ON',
+    ], 'target': 'sunstone-a733-os-hello', 'elf': 'sunstone-a733-os-hello.elf'},
     # the returning NPU image of apps/cpu-npu-concurrency (apps/cpu-npu-concurrency/README.md)
     'ret-npu-load': {'configure': [
         '-DSUNSTONE_MIMUS_BOARD_APPLICATION=ON',

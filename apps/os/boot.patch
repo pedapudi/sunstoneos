@@ -13,7 +13,7 @@
  #include "a733_cpu_continue.h"
  #include <stddef.h>
  static struct a733_smp_contract admission __attribute__((section(".bss.a733_smp_monitor")));
-@@ -17,16 +22,40 @@
+@@ -17,16 +22,41 @@
  }
  static uint32_t read32(uintptr_t a) {barrier();uint32_t v=*(volatile uint32_t *)a;barrier();return v;}
  static void write32(uintptr_t a,uint32_t v) {barrier();*(volatile uint32_t *)a=v;barrier();}
@@ -29,7 +29,8 @@
  {
      __asm__ volatile("msr daifset, #15":::"memory");
 +    const int ret=returning();
-+    if(ret){
++    if(ret||a733_smp_lifetime==A733_LIFETIME_RESIDENT||
++       (!a733_smp_lifetime&&admission.magic==A733_OS_RESIDENT_CONTRACT_MAGIC)){
 +        detail=a733_smp_refusal_detail(status,detail);
 +        sunstone_crumb_el3(SUNSTONE_CRUMB_EL3_STOP,(uint32_t)((status>15?15:status)<<12|(detail&0xfff)));
 +    }
@@ -56,11 +57,11 @@
  static int boot_state(void)
  {
      uint64_t el,mpidr,sctlr;unsigned core;
-@@ -74,17 +103,46 @@
+@@ -74,17 +104,46 @@
      uint64_t *out=(uint64_t *)&admission;
      for(unsigned i=0;i<sizeof(admission)/8;++i)out[i]=in[i];
      barrier();
-+    if(returning()){
++    if(returning()||admission.magic==A733_OS_RESIDENT_CONTRACT_MAGIC){
 +        sunstone_crumb_el3_start(admission.epoch);
 +        sunstone_crumb_el3(SUNSTONE_CRUMB_EL3_ENTRY,0);
 +    }
@@ -107,7 +108,7 @@
      RESULT->generation=admission.generation;RESULT->start_counter=a733_smp_counter();
      RESULT->status=UINT64_MAX;RESULT->stage=1;
      extern int board_session_prepare(const struct a733_smp_contract *);
-@@ -96,7 +154,13 @@
+@@ -96,7 +155,13 @@
      if(!board_identity_prepare(admission.startup_deadline))a733_smp_stop(3,0x30a);
      if(a733_cpu_coherence_publish(A733_STORAGE_SESSION_ADDRESS,4096,admission.startup_deadline)!=1)
          a733_smp_stop(3,0x308);
@@ -121,7 +122,7 @@
      /* GICv3 security/routing sequence follows the existing EL3 monitor. */
      uint32_t ctlr=read32(0x03400000),banks=(read32(0x03400004)&31)+1;
      if(ctlr&(1u<<6))a733_smp_stop(2,2);
-@@ -108,22 +172,29 @@
+@@ -108,22 +173,29 @@
      for(unsigned i=1;i<banks;++i)write32(0x03400180+i*4,UINT32_MAX);
      wait_clear(0x03400000,1u<<31);
      write32(0x03400000,(ctlr&~7u)|0x30);wait_clear(0x03400000,1u<<31);
@@ -138,7 +139,7 @@
              .context=&targets[c-1],.boot_mpidr=mpidr,.entry=(uintptr_t)a733_cpu_secondary_entry,
 -            .lease=admission.lease,.deadline=admission.startup_deadline/24,.core=c};
 +            .lease=admission.lease,.deadline=admission.startup_deadline/24,.core=c,
-+            .held=a733_smp_lifetime==A733_LIFETIME_RESIDENT};
++            .held=a733_smp_lifetime==A733_LIFETIME_RESIDENT?A733_CPU_START_RESIDENT:A733_CPU_START_FEL};
          if(!a733_cpu_start_init(&power[c-1],&config) ||
             !a733_cpu_entry_native_init(&owners[c-1],&power[c-1],admission.epoch))a733_smp_stop(2,c+16);
          while(a733_cpu_entry_poll(&owners[c-1])==A733_CPU_ENTRY_PENDING) {}
