@@ -40,7 +40,9 @@ def decode(p):
     if alarm['irq_ticks'] > alarm['arm_ticks'] and alarm['status'] == 1:
         interval = alarm['target_day'] * 86400 + (alarm['target_hms'] >> 16) * 3600 + ((alarm['target_hms'] >> 8) & 63) * 60 + (alarm['target_hms'] & 63) - alarm['armed']['seconds']
         out['alarm_latency_ms'] = (alarm['done_ticks'] - alarm['irq_ticks']) / TICKS * 1000
-        out['rtc_second_s'] = (alarm['irq_ticks'] - alarm['arm_ticks']) / TICKS / interval if interval > 0 else None
+        # The calendar read at arm lies somewhere in its RTC second, so the wait is between interval-1 and interval RTC seconds.
+        out['rtc_second_min_s'] = (alarm['irq_ticks'] - alarm['arm_ticks']) / TICKS / interval
+        out['rtc_second_max_s'] = (alarm['irq_ticks'] - alarm['arm_ticks']) / TICKS / (interval - 1) if interval > 1 else None
         out['alarm_wait_s'] = (alarm['irq_ticks'] - alarm['arm_ticks']) / TICKS
     out['note'] = 'RC oscillator: the RTC second is measured (rtc_second_s), not asserted; no 32.768 kHz accuracy is claimed.'
     return out

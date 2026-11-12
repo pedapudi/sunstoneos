@@ -74,6 +74,9 @@ int main(void)
  m.regs[0x14/4]=(4u<<16)|(5u<<8)|10u;    /* a coherent read after the target */
  assert(a733_rtc_finish(&r,0)&&r.state==A733_RTC_FIRED&&r.snapshot.alarm_seen);
  assert(!(m.regs[0x28/4]&1)&&!(m.regs[0x2c/4]&1)&&m.regs[0x20/4]==0&&m.regs[0x24/4]==0);
+ /* The calendar stays readable after the alarm has finished (the board run refused this read). */
+ struct a733_rtc_time after;
+ assert(a733_rtc_read(&r,&after)&&after.second==10);
  no_source_writes(&m);
  /* The source moving to the external oscillator while open retains the instance. */
  memset(&r,0,sizeof(r));reset(&m);

@@ -55,7 +55,8 @@ int a733_rtc_set_time(struct a733_rtc *,uint32_t day,uint32_t hms,int (*pause)(v
  * initialize/set_calendar reject these instance ops before any MMIO. Caller
  * raw ops, if retained independently, remain separate privileged authority. */
 int a733_rtc_open_readonly(struct a733_rtc *,const struct a733_rtc_ops *,void *,uint64_t);
-/* Coherent read by the same owner; permitted during its own active alarm. */
+/* Coherent read by the same owner; permitted during its own active alarm and after it has finished
+ * (fired or cancelled), when the saved alarm registers are restored. A retained instance refuses. */
 int a733_rtc_read(struct a733_rtc *,struct a733_rtc_time *);
 int a733_rtc_arm(struct a733_rtc *,unsigned seconds);
 int a733_rtc_irq(struct a733_rtc *);

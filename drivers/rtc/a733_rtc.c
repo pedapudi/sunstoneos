@@ -131,7 +131,7 @@ int a733_rtc_set_time(struct a733_rtc *r,uint32_t day,uint32_t hms,int (*pause)(
 }
 int a733_rtc_read(struct a733_rtc *r,struct a733_rtc_time *out)
 {
-    if(!r||!out||(r->state!=A733_RTC_READY&&r->state!=A733_RTC_ARMED))return 0;
+    if(!r||!out||(r->state!=A733_RTC_READY&&r->state!=A733_RTC_ARMED&&r->state!=A733_RTC_FIRED&&r->state!=A733_RTC_CANCELLED))return 0;
     return coherent(r,out)?1:fail(r);
 }
 int a733_rtc_arm(struct a733_rtc *r,unsigned delay)
