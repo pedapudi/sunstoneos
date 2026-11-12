@@ -1,12 +1,5 @@
 # SunstoneOS subsystem index
 
-**Recovery required on port `3-1`:** disconnect and reconnect that board's USB
-power cable once. The runner refuses its unresolved failed USB instance, so the
-registered NPU failure-return image has not launched. Resume physical testing
-only after the runner admits the fresh instance. The refusal is recorded in
-[failure-return evidence](evidence/failure-return.jsonl), entry
-`1794466204842182616-99e3dea8`.
-
 SunstoneOS runs FreeRTOS on the Orange Pi Zero 3W/A733. The
 [accepted objective](goal.md) requires complete usable hardware and native
 applications. No subsystem has complete physical qualification.
