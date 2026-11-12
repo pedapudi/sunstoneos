@@ -6,7 +6,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['apps/os/client.c', 'apps/os/main.patch', 'apps/os/quiesce.h',
-                'apps/os/radio.c', 'apps/os/radio_scan.c', 'apps/board/radio.c']
+                'apps/os/quiesce.c', 'apps/os/radio.c', 'apps/os/radio_scan.c', 'apps/board/radio.c']
 
 PRELUDE = r'''
 #include "quiesce.h"
@@ -14,10 +14,15 @@ PRELUDE = r'''
 #include <stdlib.h>
 static unsigned returning=1, failing=1, registered, notifications, fatal;
 static struct { void *handles[8]; struct { uint64_t deadline_us; } session; } board;
+#ifndef SUNSTONE_CRUMB_FAIL_BOARD
 #define SUNSTONE_CRUMB_FAIL_BOARD 1u
+#endif
+#undef SUNSTONE_CRUMB_HERE
+#undef SUNSTONE_CRUMB_FAIL_SITE
 #define SUNSTONE_CRUMB_HERE() ((const void *)1)
 #define SUNSTONE_CRUMB_FAIL_SITE(group) (1u<<12)
 static int os_returning(void) { return returning; }
+static int os_cpu_return_failing(void) { return failing; }
 static void xTaskNotifyGive(void *task) { assert(task); ++notifications; }
 static void platform_exit(unsigned detail) { (void)detail; abort(); }
 static void board_fail_at(uint32_t site,uint32_t value,const void *caller)
@@ -26,13 +31,6 @@ int os_quiesce_register(struct os_quiesce *q)
 { assert(q->order==OS_QUIESCE_DEVICES); ++registered; q->registered=1; return 1; }
 int os_quiesce_requested(const struct os_quiesce *q) { return atomic_load(&q->requested); }
 enum os_quiesce_result os_quiesce_result(const struct os_quiesce *q) { return atomic_load(&q->result); }
-int os_quiesce_fault(struct os_quiesce *q,uint32_t site,uint32_t value,const void *caller)
-{
-    if(!failing)return 0;
-    if(!atomic_exchange(&q->fault_state,1)){q->site=site;q->value=value;q->caller=caller;}
-    atomic_store(&q->result,OS_QUIESCE_FAULT);return 1;
-}
-void os_quiesce_complete(struct os_quiesce *q) { atomic_store(&q->result,OS_QUIESCE_DONE); }
 '''
 
 USB_CASES = r'''
@@ -49,6 +47,15 @@ int main(void)
     usb_quiesce_unproven(0);assert(usb_quiesce.value==2&&!fatal);
     atomic_store(&usb_quiesce.fault_state,0);
     usb_quiesce_unproven(0);assert(usb_quiesce.value==1&&!fatal);
+    /* A requested normal return uses the same fault latch. */
+    failing=0;atomic_store(&usb_quiesce.requested,1);
+    atomic_store(&usb_quiesce.result,OS_QUIESCE_PENDING);
+    atomic_store(&usb_quiesce.fault_state,0);
+    usb_quiesce_unproven(1);
+    assert(os_quiesce_result(&usb_quiesce)==OS_QUIESCE_FAULT&&usb_quiesce.value==2&&!fatal);
+    os_quiesce_complete(&usb_quiesce);
+    assert(os_quiesce_result(&usb_quiesce)==OS_QUIESCE_FAULT);
+    atomic_store(&usb_quiesce.requested,0);
     failing=0;usb_quiesce_unproven(0);assert(fatal==1);
     return 0;
 }
@@ -115,18 +122,42 @@ int main(void)
     reset_radio();assert(os_radio_quiesce_poll(&r,BOARD_RADIO_PENDING)==2&&radio_quiesce.value==0x904&&!fatal);
     reset_radio();r.config.scan_only=0;
     assert(os_radio_quiesce_poll(&r,BOARD_RADIO_SCANNED)==2&&radio_quiesce.value==0x902&&!fatal);
+    /* A normal-return failure is captured, and completion cannot erase it. */
+    reset_radio();failing=0;r.config.scan_only=1;
+    assert(os_radio_quiesce_poll(&r,BOARD_RADIO_RETAINED)==2);
+    assert(os_quiesce_result(&radio_quiesce)==OS_QUIESCE_FAULT&&!fatal);
+    os_quiesce_complete(&radio_quiesce);
+    assert(os_quiesce_result(&radio_quiesce)==OS_QUIESCE_FAULT);
+    atomic_store(&radio_quiesce.requested,0);
+    radio_quiesce_refuse(1);assert(fatal==1);
     return 0;
 }
 '''
+
+
+def function(source, signature):
+    start = source.index(signature)
+    opening = source.index('{', start)
+    depth = 0
+    for offset in range(opening, len(source)):
+        depth += source[offset] == '{'
+        depth -= source[offset] == '}'
+        if not depth:
+            return source[start:offset + 1] + '\n'
+    raise AssertionError('unclosed function: ' + signature)
 
 
 def build(out, name, body, cases):
     folder = out / name
     folder.mkdir(parents=True, exist_ok=True)
     source, binary = folder / 'check.c', folder / 'check'
-    source.write_text(PRELUDE + body + cases)
+    # Run the production fault/completion transitions. The request bit here
+    # represents a class whose supervisor publication is already complete.
+    registry = (ROOT / 'apps/os/quiesce.c').read_text()
+    transitions = function(registry, 'void os_quiesce_complete(') + function(registry, 'int os_quiesce_fault(')
+    source.write_text(PRELUDE + transitions + body + cases)
     subprocess.run(['clang-21', '-std=c11', '-Wall', '-Wextra', '-Wno-unused-function',
-                    '-fsanitize=address,undefined', '-I' + str(ROOT / 'apps/os'),
+                    '-fsanitize=address,undefined', '-I' + str(ROOT / 'apps/os'), '-I' + str(ROOT / 'include'),
                     str(source), '-o', str(binary)], check=True, capture_output=True)
     return subprocess.run([str(binary)], capture_output=True, text=True)
 
