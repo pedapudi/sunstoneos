@@ -574,6 +574,15 @@ target_compile_options(sunstone-a733-os-core PRIVATE -falign-functions=16)
 # The relaxed units and the applications are scheduled for the in-order Cortex-A55 that six of the eight cores are (the
 # Cortex-A76 cores run the same code, out of order); see cmake/codegen-align.cmake. The strict units, which are boot and device
 # code, are not: the tuning unrolls their loops, which adds 9 percent to their instructions and gains nothing measurable.
+set(SUNSTONE_A733_TABLE_WALKS "default" CACHE STRING "OS EL1 walk profile: default, cached or uncached")
+set_property(CACHE SUNSTONE_A733_TABLE_WALKS PROPERTY STRINGS default cached uncached)
+if(SUNSTONE_A733_TABLE_WALKS STREQUAL "cached")
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_CACHEABLE_TABLE_WALKS=1)
+elseif(SUNSTONE_A733_TABLE_WALKS STREQUAL "uncached")
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_CACHEABLE_TABLE_WALKS=0)
+elseif(NOT SUNSTONE_A733_TABLE_WALKS STREQUAL "default")
+  message(FATAL_ERROR "SUNSTONE_A733_TABLE_WALKS must be default, cached or uncached")
+endif()
 # Publish the exact OS compile configuration to application and device objects.
 foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_FEATURES)
   get_target_property(value sunstone-a733-os-core ${property})

@@ -14,6 +14,12 @@ FIXTURES = {
 }
 
 IMAGES = {
+    'ret-walks-uncached': {'configure': [
+        '-DSUNSTONE_APPLICATION=table-walks', '-DSUNSTONE_A733_TABLE_WALKS=uncached',
+    ], 'target': 'sunstone-a733-os-table-walks', 'elf': 'sunstone-a733-os-table-walks.elf'},
+    'ret-walks-cached': {'configure': [
+        '-DSUNSTONE_APPLICATION=table-walks', '-DSUNSTONE_A733_TABLE_WALKS=cached',
+    ], 'target': 'sunstone-a733-os-table-walks', 'elf': 'sunstone-a733-os-table-walks.elf'},
     # the returning NPU image of apps/cpu-npu-concurrency (apps/cpu-npu-concurrency/README.md)
     'ret-npu-load': {'configure': [
         '-DSUNSTONE_MIMUS_BOARD_APPLICATION=ON',

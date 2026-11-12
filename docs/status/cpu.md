@@ -37,7 +37,7 @@ normally without a replug. The records list the queue entries.
 1. Repeat the corrected reliability workload from three cold starts; one run passes, so repeatability and full restoration are unqualified.
 2. Qualify sustained scheduling, broader coherence and per-core IRQ workloads, induced-fault recovery, and idle, wake and thermal transitions.
 3. Locate the fault of the longer-recognition nonreturn. Repeat it only with a concrete correction or a narrower hypothesis.
-4. Qualify cacheable table walks with the core-6 walk measurement; eight-core cached images keep noncacheable walks until then.
+4. Run the prepared core-6 OS walk comparison. Shared TCR definitions and both application-table publication branches are host-tested; eight-core defaults keep uncached walks until a measured gain permits the cached return and recognition checks ([design](../designs/cpu-table-walks.md)).
 5. Qualify WFI idle behavior (instruction-model evidence only), retention and cluster power-down.
 6. Broaden PMU event qualification beyond the single-core result in `board-session-20261023/port-3-3/set5-bb4-run/`.
 7. Release the held static-OFF policy through the reviewed path before later multicore consumers use it.

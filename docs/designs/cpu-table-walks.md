@@ -18,18 +18,20 @@ eight-core images. The header
 the value `platform_init()` in `platform/a733/platform.c` uses for its own
 tables) and `A733_CPU_COHERENCE_TCR_UNCACHED_WALK` (`0x200803019`), and defines
 `A733_CPU_COHERENCE_TCR` as the cached value when the target defines
-`SUNSTONE_CACHED_SINGLE_CORE` and as the uncached value otherwise. Assembly
+`SUNSTONE_CACHED_SINGLE_CORE` or enables `SUNSTONE_A733_CACHEABLE_TABLE_WALKS`.
+The eight-core default leaves that option disabled. Assembly
 takes the value from the header, Python reads it through `tools/a733_tcr.py`,
 and every user, including the profile check in
 `platform/a733/device_memory_layout.c`, compares with its own image's value.
-The eight-core images stay uncached because no Cortex-A76 walk-cost source is
-pinned. They still run the flush and the table check below: with non-cacheable
+The eight-core images stay uncached until the core-6 comparison passes.
+They still run the flush and the table check below: with non-cacheable
 walks the flush removes a stale line that a later eviction could write over the
 tables, and the check refuses tables such a write-back corrupted.
 
 A cacheable walker can hit a stale cache line over a table page, so the images
 add two cache-maintenance steps and a per-boot check of the EL1 tables, and
-finish every EL1 descriptor inside one builder.
+finish every boot EL1 descriptor inside one builder. Application address spaces
+have separate cacheable tables and an explicit publication barrier.
 
 ## Translation-control consumers
 
@@ -51,6 +53,10 @@ consumers use named values, including patch context and computed-value fixtures:
 The Python reader exports `CACHED_WALK` and `UNCACHED_WALK` for fixed profiles,
 and `SINGLE_CORE` and `EIGHT_CORE` for the corresponding current image defaults.
 Frozen fixtures select a fixed profile independently of those defaults.
+`SUNSTONE_A733_TABLE_WALKS=cached|uncached` selects either experimental image
+through CMake. The default selection follows the header. Each linked image
+exports its effective value as the absolute symbol `a733_cpu_coherence_tcr`;
+the Python reader's `for_image()` reads it when checking an overridden build.
 
 ## Ownership and data flow
 
@@ -61,8 +67,8 @@ Frozen fixtures select a fixed profile independently of those defaults.
    Secure dirty line that could later be evicted over a descriptor. The flush
    is bounded by 10 ms.
 2. **Build.** `a733_cpu_coherence_tables()` and the rest of
-   `a733_cached_memory_prepare()` write every entry of the five pages; no code
-   writes a table afterwards. Level-1 entry 0, the MMIO block, carries the
+   `a733_cached_memory_prepare()` write every entry of the five boot pages;
+   these pages remain immutable afterwards. Level-1 entry 0, the MMIO block, carries the
    outer-shareable field (`SH = 0b10`) in both regimes. As its last step core 0
    stores a 64-bit additive checksum of the two EL1 pages in
    `a733_cached_el1_table_sum`, a 64-byte-aligned word in
@@ -83,9 +89,42 @@ Frozen fixtures select a fixed profile independently of those defaults.
    macro in `platform/a733/cpu_coherence.S`. `platform_init()` also flushes its
    own `level1` and `level2` pages before the first write and after the last,
    before `msr ttbr0_el1`.
-4. **Runtime.** The EL1 walker is the only reader of the EL1 tables. EL1 has no
+4. **Runtime.** The EL1 walker is the only runtime reader of the boot EL1 tables. EL1 has no
    data mapping of the monitor interval (EL1 level-2 entry 16 is invalid), and
    EL3 does not access the tables after preparation.
+
+### Application tables and mutable mappings
+
+Application admission in `apps/os/large.c` builds an inactive address space with
+`app_space_build_l2()` in `kernel/appmem/app_region.c`. Its arena uses Normal
+write-back stores. Publication completes `DSB ISH` for cacheable walks, or
+`DC CIVAC` over the arena followed by `DSB SY` for uncached walks, before the
+release store to `os_space_active`. A fresh ASID is allocated once and never
+reused. The task-switch hook installs TTBR0 and the exception return synchronizes
+the context; an inactive table with a fresh ASID needs no TLBI.
+
+The CPU cache-policy converter in `kernel/umem/umem_policy.c`, when linked,
+changes active descriptors through cacheable mappings. It completes descriptor
+stores with `DSB ISH`, broadcasts `TLBI VAAE1IS`, then completes `DSB ISH` and
+`ISB`. The make step has its own `DSB ISH` and `ISB`. The split path publishes
+the new child page before breaking the parent block. No cache clean substitutes
+for these barriers. `checks/umem-policy.py` checks split and conversion order.
+
+The remaining writer audit covers these paths:
+
+| Writer | Publication and scope |
+| --- | --- |
+| `platform/a733-smp-cached/memory.c`, `platform/a733/cpu_coherence.c` | Cold EL3 stores with translation and caches off; `continue.c` completes `DSB SY` before admission of any walker |
+| `platform/a733/platform.c`, `include/a733_memory_boot.h` | Cold EL1 stores, pre/post `DC CIVAC` and `DSB SY` before TTBR0 and TLBI |
+| `platform/a733/cpu_continue.c` | Separate Normal-NC profile; cold table stores followed by `DSB SY` |
+| `boot/a733/native-ns-publication.S`, `platform/a733-smp-supervised/publication.S` | Inactive temporary EL3 tables, clean and `DSB SY` before TTBR0, TLBI and completion barriers; EL3 walks remain uncached |
+| `apps/sd-read-probe/region.c`, `apps/sd-backup-probe/region.c` | Cacheable inactive application tables; code publication and space switch both complete `DSB ISH`; local TLBI completes before execution |
+| `apps/os/large_load.c`, `boot/a733/stage2/loader.c` | Payload stores only; neither writes CPU translation tables |
+
+Cold builders retain their MMU-off store contract. Their descriptors already
+reach memory before a cacheable walker starts. The linked host cases in
+`checks/table-walks.py` verify application publication before space exposure,
+reject omitted barriers and uncached cleans, and check both build selections.
 
 The primitive `a733_cpu_coherence_flush(base, bytes, deadline)` in
 `platform/a733/cpu_coherence.S` requires EL3 or EL1 with the MMU and data cache
@@ -173,7 +212,12 @@ caches or walk latency.
   in [cpu-coherence.md](../cpu-coherence.md).
 - Cortex-A55 TRM 100442_0200_00: A5.5.1 (walks are cacheable only with
   write-back IRGN and ORGN and the cache enabled), A5.2.2, A6.2.4 and C2.4.
-- Unproven: the Cortex-A76 equivalents; the Arm Architecture Reference Manual
+- Cortex-A76 TRM 100798_0401_00_en, r4p1, A5.5.1: both inner and outer
+  write-back encodings make table walks look up the data cache. Other encodings
+  access external memory. The [source record](../cpu-table-walks-sources.json)
+  pins the PDF and extracted text. This establishes the supported configuration;
+  walk cost remains a board measurement.
+- Unproven: the Arm Architecture Reference Manual
   rules that EL3 with the MMU off addresses the Secure space, that EL1 with the
   MMU off addresses the Non-secure space, and that maintenance issued with the
   MMU off reaches every core; whether the A733 has a system cache beyond the DSU.
@@ -187,6 +231,31 @@ workload run shows `DTLB_WALK` costing more than 1% of `CPU_CYCLES`); moving the
 single-core `platform_init()` onto `enable_el1`; stage-3 entries 4 to 12, which
 need launch evidence for `0x1_0000_0000`–`0x3_4000_0000`.
 
+## Core-6 measurement
+
+The OS diagnostic in `apps/table-walks/` runs one pinned EL1 worker on core 6.
+Its controller uses the application kit and waits for the CPU clock owner to
+reach the granted top points. The image-side privilege hook grants EL1 only
+to that diagnostic worker. The linked OS, scheduler and returning lifetime
+remain the production paths.
+
+Each image runs one warm-up block and five measured blocks of 1,024 iterations.
+Each iteration invalidates the local EL1 TLB, completes `DSB ISH; ISB` and
+loads one line from the next mapped 2 MiB DRAM block. The loop skips the monitor
+hole and visits 63 blocks. Its measured interval uses registers only, apart from
+the target loads. It records cycles, counter ticks, data and instruction walks,
+bus accesses and a load digest. Interrupts are masked only around each block.
+The decoder checks core identity, implemented events, the cycle/counter ratio,
+walk counts and unchanged top clock settings. It reports the five-block median
+and spread. An improvement must exceed the larger spread of the two images.
+
+Build with `SUNSTONE_A733_OS=ON`, `SUNSTONE_APPLICATION=table-walks` and an
+explicit `SUNSTONE_A733_TABLE_WALKS=uncached` or `cached`. Build the typed
+session with `tools/session.py build --clock-grant --decoder apps/table-walks/host.py`.
+The queue runs the uncached image first and the cached image only after a pass.
+Any first miss ends the batch. Predictions and timing budgets belong in the
+individual evidence records.
+
 ## Open work
 
 Each run records the CPU-L, CPU-B and DSU clock rates and runs in a scheduled
@@ -199,9 +268,10 @@ board session.
 2. **Core-0 workload A/B** during a GPU frame, an NPU inference and a recognizer
    inference (record `cpu-table-walks-core0-workload-ab`). It also decides the
    contiguous hint.
-3. **Core-6 walk A/B on the Cortex-A76** through the secondary cached-entry
-   probe (record `cpu-table-walks-core6-walk-ab`). The eight-core images take
-   the cached value only when it passes.
+3. **Core-6 walk A/B on the Cortex-A76** through the OS diagnostic above
+   (record `cpu-table-walks-core6-walk-ab`). The eight-core default takes the
+   cached value only after a measured gain, followed by returning controls on
+   both CPU clusters and recognition against the 422.8 ms, 512-frame reference.
 4. **Stage-2 block access**: with the decode check passing, one read and one
    write per 1 GiB block (record `cpu-table-walks-stage2-block-access`).
 5. Decide whether the interleaved single-image form of the walk A/B run is

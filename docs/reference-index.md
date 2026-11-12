@@ -68,6 +68,7 @@ for the four Arm documents. The audit supplies their source links and context.
 | Linux boot contract, pinned v6.17 | `cpu-audit/linux-e5f0a698b34ed76002dc5cff3804a61c80233a7a/Documentation/arch/arm64/booting.rst` | “Caches, MMUs”; “Coherency” |
 | TF-A exception context | `cpu-coherence/lib/el3_runtime/aarch64/context.S` | `save_and_update_ptw_el1_sys_regs`, `restore_ptw_el1_sys_regs` |
 | TF-A cache maintenance | `cpu-coherence/lib/aarch64/cache_helpers.S` | Range maintenance and set/way operations |
+| Cortex-A76 r4p1 technical reference manual | `cpu-table-walks/cortex-a76.txt` | A5.5.1, cacheable table walks; PDF and text hashes in [the source record](cpu-table-walks-sources.json) |
 
 Search a cached text file with `rg -n -C 4 'specific phrase' path`. Read neighboring
 lines only as needed. PDF page numbers printed in extracted text preserve the

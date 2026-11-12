@@ -130,6 +130,17 @@ elseif(SUNSTONE_APPLICATION MATCHES "^(cpu-capacity|cpu-split)$")
   endif()
   include("${SUNSTONE_SOURCE_ROOT}/apps/scheduler-capacity/cmake/application.cmake")
   add_sunstone_image(sunstone-a733-os-${SUNSTONE_APPLICATION} LIFETIME ${os_lifetime} APPLICATION ${SUNSTONE_APPLICATION})
+elseif(SUNSTONE_APPLICATION STREQUAL "table-walks")
+  add_sunstone_application(table-walks
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/main.c"
+      "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/walk.S"
+      "${SUNSTONE_SOURCE_ROOT}/platform/a733/cpu_pmu.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/manifest.json"
+    INPUTS "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/privilege.c"
+    INCLUDE_DIRECTORIES "${SUNSTONE_SOURCE_ROOT}/apps/table-walks")
+  add_sunstone_image(sunstone-a733-os-table-walks LIFETIME ${os_lifetime} APPLICATION table-walks)
+  target_sources(sunstone-a733-os-table-walks PRIVATE "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/privilege.c")
+  target_link_options(sunstone-a733-os-table-walks PRIVATE -Wl,--wrap=os_application_task_privileged)
 elseif(SUNSTONE_APPLICATION STREQUAL "dram-bandwidth")
   include("${SUNSTONE_SOURCE_ROOT}/apps/dram-bandwidth/cmake/application.cmake")
   add_sunstone_image(sunstone-a733-os-dram-bandwidth LIFETIME ${os_lifetime} APPLICATION dram-bandwidth)
