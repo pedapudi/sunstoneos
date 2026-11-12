@@ -23,6 +23,9 @@
 #include "device_memory_pool.h"
 #include "sunxi_smhc.h"
 #include "sd_note.h"
+#include "quiesce.h"
+#include "cpu-return.h"
+#include "sunstone_crumb.h"
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -73,6 +76,27 @@ static struct device_memory_lease descriptor_lease;
 static struct os_large_device device;
 static unsigned blocks_in_flight;
 static int opened;
+static atomic_uint close_proven;
+#ifndef OS_SD_WRITE
+enum { SD_UNOPENED, SD_OPENING, SD_OPEN, SD_CLOSED, SD_FAILED };
+static atomic_uint storage_state;
+static enum os_quiesce_result storage_quiesce_step(struct os_quiesce *q)
+{
+    unsigned state=SD_UNOPENED;
+    if(atomic_compare_exchange_strong_explicit(&storage_state,&state,SD_CLOSED,memory_order_acq_rel,memory_order_acquire))
+        return OS_QUIESCE_DONE;
+    if(state==SD_CLOSED)return OS_QUIESCE_DONE;
+    if(state==SD_FAILED){
+        (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x911,0,SUNSTONE_CRUMB_HERE());
+        return OS_QUIESCE_FAULT;
+    }
+    return os_quiesce_result(q);             /* the loader finishes its current read and closes */
+}
+static struct os_quiesce storage_quiesce={.owner=OS_QUIESCE_STORAGE,
+    .order=OS_QUIESCE_DEVICES,.step=storage_quiesce_step};
+int os_sd_quiesce_register(void)
+{return !os_large_sd_declared()||os_quiesce_register(&storage_quiesce);}
+#endif
 #ifdef OS_SD_WRITE
 static uint8_t write_buffer[OS_SD_WRITE_BYTES] __attribute__((aligned(4096)));
 static struct a733_storage_bounds bounds;
@@ -141,7 +165,17 @@ static inline int diag_set(uint64_t stage, uint64_t detail)
  * 16:6, the first refused register (SMHC offset / 4 + 1, 0xff elsewhere, 0 none) in 24:17, and the fault flag in 25. */
 #define PLATX(r) ((uint64_t)(r) & 7u | (uint64_t)(platform.fault_why & 7u) << 3 | (uint64_t)(platform.fault_line & 0x7ffu) << 6 | \
                   (uint64_t)(platform.refused & 0xffu) << 17 | (uint64_t)(platform.fault ? 1u : 0u) << 25)
-#define DIAGP(stage, detail) ((void)DIAG(stage, detail), (const struct os_large_device *)0)
+static const struct os_large_device *open_refused(unsigned stage,uint64_t detail)
+{
+    (void)DIAG(stage,detail);
+#ifndef OS_SD_WRITE
+    atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);
+    (void)os_quiesce_fault(&storage_quiesce,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x912,
+        stage|((uint32_t)detail<<8),SUNSTONE_CRUMB_HERE());
+#endif
+    return NULL;
+}
+#define DIAGP(stage, detail) open_refused((stage),(uint64_t)(detail))
 /* The three CCU words that the provider checks, and the rates they imply (apps/sd-read-probe/main.c). */
 static int fabric(void)
 {
@@ -291,6 +325,9 @@ static int read_blocking(uint64_t sector, uint32_t count, uint8_t *dma)
 static int sd_read(void *unused, uint64_t sector, uint32_t count, uint8_t *out)
 {
     (void)unused;
+#ifndef OS_SD_WRITE
+    if(os_cpu_return_requested())return 0;
+#endif
     if (!count || count > SUNXI_MMC_MAX_DMA_BLOCKS || sector + count > card.sectors) return 0;
     uint8_t *dma = buffers + 2 * DMA_BUFFER;
     if (!read_blocking(sector, count, dma)) return 0;
@@ -300,6 +337,9 @@ static int sd_read(void *unused, uint64_t sector, uint32_t count, uint8_t *out)
 static int sd_submit(void *unused, uint64_t sector, uint32_t count, uint8_t *dma)
 {
     (void)unused;
+#ifndef OS_SD_WRITE
+    if(os_cpu_return_requested())return 0;
+#endif
     if (!count || count > SUNXI_MMC_MAX_DMA_BLOCKS || sector + count > card.sectors) return 0;
     enum a733_mmc_platform_result r;
     do { r = a733_mmc_platform_read(&platform, sector, count, dma, count * 512u, now_us() + READ_US); }
@@ -342,6 +382,10 @@ const struct os_large_device *os_sd_open_owner_device(void)
 const struct os_large_device *os_large_device(void)
 #endif
 {
+#ifndef OS_SD_WRITE
+    unsigned state=SD_UNOPENED;
+    if(os_cpu_return_requested()||!atomic_compare_exchange_strong_explicit(&storage_state,&state,SD_OPENING,memory_order_acq_rel,memory_order_acquire))return NULL;
+#endif
     if (!os_large_sd_declared() || opened) return DIAGP(1, opened);
     /* The PMIC service must be up before the SD rail can be leased. */
     for (unsigned waited = 0; !atomic_load_explicit(&providers.shared.pmic_ready, memory_order_acquire); ++waited) {
@@ -396,6 +440,9 @@ const struct os_large_device *os_large_device(void)
         opened = 0; blocks_in_flight = 0; reopened = 1;
     }
     record_mode();
+#ifndef OS_SD_WRITE
+    atomic_store_explicit(&storage_state,SD_OPEN,memory_order_release);
+#endif
     device = (struct os_large_device){{NULL, sd_read, card.sectors}, {NULL, sd_submit, sd_poll}, 0, 0, buffers};
     return &device;
 }
@@ -413,9 +460,29 @@ void os_large_device_close(void)
         r = a733_mmc_platform_close(&platform, config.lifetime_deadline_us);
         if (r == A733_MMC_BUSY || r == A733_MMC_PENDING) vTaskDelay(1);
     } while ((r == A733_MMC_BUSY || r == A733_MMC_PENDING) && now_us() < config.lifetime_deadline_us);
-    if (r != A733_MMC_CLOSED) (void)a733_mmc_platform_retain(&platform);
-    opened = 0;
-    if (descriptor_lease.pool) (void)device_memory_release(a733_memory_uncached_init(), descriptor_lease);
+    if (r != A733_MMC_CLOSED) {
+        (void)a733_mmc_platform_retain(&platform);
+#ifndef OS_SD_WRITE
+        atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);
+        (void)os_quiesce_fault(&storage_quiesce,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x913,
+            (uint32_t)PLATX(r),SUNSTONE_CRUMB_HERE());
+#endif
+        return;                             /* uncertain DMA retains its descriptors */
+    }
+    if (descriptor_lease.pool && device_memory_release(a733_memory_uncached_init(), descriptor_lease)!=1) {
+#ifndef OS_SD_WRITE
+        atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);
+        (void)os_quiesce_fault(&storage_quiesce,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x914,
+            0,SUNSTONE_CRUMB_HERE());
+#endif
+        return;
+    }
+    descriptor_lease=(struct device_memory_lease){0};opened=0;
+    atomic_store_explicit(&close_proven,1,memory_order_release);
+#ifndef OS_SD_WRITE
+    atomic_store_explicit(&storage_state,SD_CLOSED,memory_order_release);
+    os_quiesce_complete(&storage_quiesce);
+#endif
 }
 
 #ifdef OS_SD_WRITE
@@ -661,6 +728,7 @@ static int hw_write_piece(uint64_t sector, uint32_t count, const uint8_t *src)
     return ok;
 }
 void os_sd_close_owner(void);
+static int hw_closed(void){return atomic_load_explicit(&close_proven,memory_order_acquire)!=0;}
 static struct os_sd_hw hw;
 const struct os_sd_hw *os_sd_open_owner(void)
 {
@@ -679,14 +747,13 @@ const struct os_sd_hw *os_sd_open_owner(void)
     }
     if (!armed) { irq_live = 0; (void)DIAG(9, 3); return 0; }
     hw = (struct os_sd_hw){d, card.sectors, card.sector_addressed, hw_allocation_unit, hw_enable_writes, hw_write_piece, hw_live,
-                           hw_set_write_region, hw_wait_async, hw_owner_sleep_us, hw_owner_wakes, hw_irq_counts, os_sd_close_owner};
+                           hw_set_write_region, hw_wait_async, hw_owner_sleep_us, hw_owner_wakes, hw_irq_counts, os_sd_close_owner, hw_closed};
     return &hw;
 }
 void os_sd_close_owner(void)
 {
     irq_live = 0; irq_owner_on = 0;
-    (void)sd_irq_mask_settled();
-    (void)a733_mmc_platform_irq(&platform, 0);
+    if(!sd_irq_mask_settled()||!a733_mmc_platform_irq(&platform,0))return;
     os_sd_close_owner_device();
 }
 #endif

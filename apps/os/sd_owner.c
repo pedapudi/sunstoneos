@@ -12,6 +12,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "sd_hw.h"
+#include "quiesce.h"
+#include "cpu-return.h"
 #include "os_space.h"
 #include "../board/application.h"
 #include "sunstone_crumb.h"
@@ -40,7 +42,8 @@ struct request {
     atomic_int done;               /* 0 pending, 1 succeeded, -1 failed */
 };
 static _Atomic(struct request *) loader_slot, writer_slot;
-static TaskHandle_t owner, ready_waiter;
+static _Atomic(TaskHandle_t) owner;
+static TaskHandle_t ready_waiter;
 static StaticTask_t owner_tcb;
 static StackType_t owner_stack[OWNER_STACK_WORDS];
 static const struct os_sd_hw *hw;
@@ -52,6 +55,27 @@ static struct os_large_device proxy;
 #include "sd_note.h"
 extern uint64_t os_sd_diag[4];
 extern uint64_t os_sd_mode[5];                  /* apps/os/large_sd.c: the bus speed mode and its steps */
+
+enum { SD_UNOPENED, SD_STARTING, SD_OPEN, SD_CLOSED, SD_FAILED };
+static atomic_uint storage_state, posting;
+static unsigned writes_enabled;
+static enum os_quiesce_result storage_quiesce_step(struct os_quiesce *q)
+{
+    unsigned state=SD_UNOPENED;
+    if(atomic_compare_exchange_strong_explicit(&storage_state,&state,SD_CLOSED,memory_order_acq_rel,memory_order_acquire))
+        return OS_QUIESCE_DONE;             /* no task can open after this claim */
+    if(state==SD_CLOSED)return OS_QUIESCE_DONE;
+    if(state==SD_FAILED){
+        (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x901,0,SUNSTONE_CRUMB_HERE());
+        return OS_QUIESCE_FAULT;
+    }
+    if(owner)xTaskNotifyGive(owner);
+    return os_quiesce_result(q);
+}
+static struct os_quiesce storage_quiesce={.owner=OS_QUIESCE_STORAGE,
+    .order=OS_QUIESCE_DEVICES,.step=storage_quiesce_step};
+int os_sd_quiesce_register(void)
+{return os_quiesce_register(&storage_quiesce);}
 
 static void finish(struct request *r, int ok)
 {
@@ -80,10 +104,14 @@ static void serve(struct request *r)
         ok = d->async.submit(d->async.context, r->sector, r->count, r->buffer) == 1 && hw->wait_async();
         break;
     case K_WRITE: ok = hw->write_piece(r->sector, r->count, r->source); break;
-    case K_ENABLE: ok = hw->enable_writes(r->source, r->bytes); break;
+    case K_ENABLE: ok = hw->enable_writes(r->source, r->bytes); if(ok)writes_enabled=1; break;
     case K_UNIT: ok = hw->allocation_unit(&r->value); break;
     case K_REGION: ok = hw->set_write_region(r->buffer, r->bytes); break;
-    case K_CLOSE: hw->close(); atomic_store(&closed, 1); ok = 1; break;
+    case K_CLOSE:
+        hw->close();ok=hw->closed&&hw->closed();
+        if(ok){atomic_store(&closed,1);atomic_store_explicit(&storage_state,SD_CLOSED,memory_order_release);}
+        else atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);
+        break;
     }
     /* A refused request leaves its stage as a note, except the enable refusals (stages 20 to 24: preconditions, parse, verify mismatch, binding), which are results the
      * application reports. The first failure record names the SD0 binding when it came first, and a thermal or
@@ -97,6 +125,55 @@ static void serve(struct request *r)
     finish(r, ok);
 }
 
+/* Called only between hardware requests, after the current CMD25 has
+ * completed and its card status has been checked by write_piece. The FAT32
+ * transaction belongs to the application; enabling writes supplies no proof
+ * that its pending metadata reached an unmounted, consistent volume. */
+static int owner_quiesce_step(void)
+{
+    if(!os_quiesce_requested(&storage_quiesce))return 0;
+    atomic_store(&closed,1);                  /* close admission before draining publishers */
+    if(os_quiesce_result(&storage_quiesce)==OS_QUIESCE_FAULT)return 1;
+    if(atomic_load_explicit(&posting,memory_order_acquire))return 1;
+    struct request *r=atomic_exchange(&loader_slot,NULL);
+    if(r)finish(r,0);
+    r=atomic_exchange(&writer_slot,NULL);
+    if(r)finish(r,0);
+    if(atomic_load_explicit(&storage_state,memory_order_acquire)==SD_CLOSED){
+        os_quiesce_complete(&storage_quiesce);return 1;
+    }
+    if(writes_enabled){
+        atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);
+        (void)os_quiesce_fault(&storage_quiesce,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x902,
+            1,SUNSTONE_CRUMB_HERE());
+        return 1;
+    }
+    if(!hw){
+        atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);
+        (void)os_quiesce_fault(&storage_quiesce,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x903,
+            diag_word(),SUNSTONE_CRUMB_HERE());
+        return 1;
+    }
+    hw->close();
+    if(!hw->closed||!hw->closed()){
+        atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);
+        (void)os_quiesce_fault(&storage_quiesce,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x904,
+            diag_word(),SUNSTONE_CRUMB_HERE());
+        return 1;
+    }
+    atomic_store_explicit(&storage_state,SD_CLOSED,memory_order_release);
+    os_quiesce_complete(&storage_quiesce);return 1;
+}
+
+/* Registration may precede the first instruction of the lazy owner task.
+ * A return in that interval prevents its first hardware access. */
+static int owner_open_allowed(void)
+{
+    if(!os_cpu_return_requested())return 1;
+    atomic_store_explicit(&storage_state,SD_CLOSED,memory_order_release);
+    os_quiesce_complete(&storage_quiesce);return 0;
+}
+
 /* TTBR0 as the owner's first instruction found it: the QEMU check requires the kernel's table. */
 static volatile uint64_t entry_ttbr0;
 uint64_t os_sd_owner_entry_ttbr(void) { return entry_ttbr0; }
@@ -106,7 +183,9 @@ static void owner_main(void *unused)
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));
     entry_ttbr0 = ttbr;
     (void)unused;
+    if(!owner_open_allowed())for(;;)vTaskSuspend(NULL);
     hw = os_sd_open_owner();
+    atomic_store_explicit(&storage_state,hw?SD_OPEN:SD_FAILED,memory_order_release);
     atomic_store(&first_us, sunstone_deadline_now_us());
     atomic_store(&ready, hw ? 1 : -1);
     if (ready_waiter) xTaskNotifyGiveIndexed(ready_waiter, WAIT_INDEX);
@@ -124,6 +203,7 @@ static void owner_main(void *unused)
         atomic_fetch_add(&wake_count, 1);
         atomic_fetch_or(&owner_core_mask, 1u << portGET_CORE_ID());
         for (;;) {
+            if(owner_quiesce_step())break;
             struct request *r = atomic_exchange(&loader_slot, NULL);        /* reads first */
             if (r) { serve(r); continue; }
             r = atomic_exchange(&writer_slot, NULL);                        /* then one write-side piece */
@@ -135,12 +215,17 @@ static void owner_main(void *unused)
 
 static int post(_Atomic(struct request *) *slot, struct request *r, int wait)
 {
-    if (atomic_load(&closed)) return 0;                                 /* the card is closed: no request is served */
+    atomic_fetch_add(&posting,1);
+    if(atomic_load(&closed)||os_cpu_return_requested()){
+        atomic_fetch_sub_explicit(&posting,1,memory_order_release);return 0;
+    }
     atomic_fetch_or(&caller_core_mask, 1u << portGET_CORE_ID());
     atomic_init(&r->done, 0);
     r->waiter = wait ? xTaskGetCurrentTaskHandle() : NULL;
     struct request *none = NULL;
-    if (!atomic_compare_exchange_strong(slot, &none, r)) return 0;        /* one request per mailbox */
+    int posted=atomic_compare_exchange_strong(slot,&none,r);
+    atomic_fetch_sub_explicit(&posting,1,memory_order_release);
+    if(!posted)return 0;                    /* one request per mailbox */
     xTaskNotifyGive(owner);
     if (!wait) return 1;
     while (!atomic_load_explicit(&r->done, memory_order_acquire)) ulTaskNotifyTakeIndexed(WAIT_INDEX, pdTRUE, portMAX_DELAY);
@@ -157,12 +242,15 @@ TaskHandle_t os_sd_owner_task(void) { return owner; }
 /* Start the owner task; the caller is told when the card is open (os_large_device) or has failed. */
 static int start(void)
 {
+    if(os_cpu_return_requested())return 0;
     if (owner) return atomic_load(&ready) == 1;
+    unsigned state=SD_UNOPENED;
+    if(!atomic_compare_exchange_strong_explicit(&storage_state,&state,SD_STARTING,memory_order_acq_rel,memory_order_acquire))return 0;
     ready_waiter = xTaskGetCurrentTaskHandle();
     /* The caller is the application's task, which would pass its address space on to the task it creates; the owner is
      * an OS service task and runs in the kernel's table from its first instruction (include/os_space.h). */
     owner = OS_TASK_CREATE_IN_KERNEL_SPACE(xTaskCreateStatic(owner_main, "sd-owner", OWNER_STACK_WORDS, NULL, OWNER_PRIORITY, owner_stack, &owner_tcb));
-    if (!owner) { os_sd_diag[0] = 10; return 0; }
+    if (!owner) { os_sd_diag[0] = 10; atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release); return 0; }
     /* The owner gives the notification once the card is open or has failed. A wake is only a hint (any other notification would end a
      * single wait early), so wait on the state, on the caller's own index, until a time bound measured in microseconds. */
     uint64_t t0 = sunstone_deadline_now_us(), ticks0 = xTaskGetTickCount();
