@@ -13,7 +13,7 @@ import harness
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--output', '{output}', '--usb-elf', '{elf:os-usb-ledger}']]
+GATE_RUNS = [['--output', '{output}', '--ledger-usb-elf', '{elf:os-usb-ledger}']]
 CHECK_INPUTS = ['tools/check-a733-smp.py', 'apps/os/usb-memory.c',
                 'platform/a733-smp-cached/link.ld', 'platform/a733-storage-maintenance/link.patch',
                 'include/a733_usb_memory.h', 'apps/os/session.c', 'apps/os/usb-service.c']
@@ -22,7 +22,8 @@ CHECK_INPUTS = ['tools/check-a733-smp.py', 'apps/os/usb-memory.c',
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--usb-elf', type=Path, help='also check a complete native USB image')
+    parser.add_argument('--usb-elf', type=Path, help='also check a legacy USB image with its linked arena')
+    parser.add_argument('--ledger-usb-elf', type=Path, help='check an OS USB image without a linked arena')
     parser.add_argument('--control-elf', type=Path, action='append', default=[], help='also check an existing ordinary image')
     args = parser.parse_args()
     out = args.output
@@ -89,21 +90,23 @@ SECTIONS {
     tool.image_parts(out / 'control.elf')
     for path in args.control_elf:
         tool.image_parts(path)
-    originals = [out / 'usb.elf']
-    ledger_images = []
-    if args.usb_elf:
-        with args.usb_elf.open('rb') as stream:
+    originals = [out / 'usb.elf'] + ([args.usb_elf] if args.usb_elf else [])
+
+    def check_ledger(path):
+        with path.open('rb') as stream:
             elf = ELFFile(stream)
             symbols = elf.get_section_by_name('.symtab')
             start = symbols.get_symbol_by_name('__uncached_pool_start')[0]['st_value']
             end = symbols.get_symbol_by_name('__uncached_pool_end')[0]['st_value']
-        if start == 0x42200000:
-            originals.append(args.usb_elf)
-        else:
-            assert start == end, 'ledger USB image reserves a linked NC pool'
-            segments, _, identity = tool.image_parts(args.usb_elf)
-            assert len(identity) == 32 and all(s['address'] + s['memory_bytes'] <= 0x42200000 for s in segments)
-            ledger_images.append(str(args.usb_elf))
+        assert start == end, 'ledger USB image reserves a linked NC pool'
+        segments, _, identity = tool.image_parts(path)
+        assert len(identity) == 32 and all(s['address'] + s['memory_bytes'] <= 0x42200000 for s in segments)
+
+    harness.refused(lambda: check_ledger(out / 'usb.elf'), 'reserves a linked NC pool', AssertionError)
+    ledger_images = []
+    if args.ledger_usb_elf:
+        check_ledger(args.ledger_usb_elf)
+        ledger_images.append(str(args.ledger_usb_elf))
     results = {}
     for number, original in enumerate(originals):
         raw = original.read_bytes()
