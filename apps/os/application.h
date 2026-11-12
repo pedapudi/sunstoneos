@@ -40,7 +40,7 @@ int os_application_succeeded(void);
 void os_application_wake_main(void);
 /* The same wake-up for the task that submitted a request, from a task or from an interrupt handler. */
 void os_application_wake_task(TaskHandle_t);
-void os_application_wake_task_from_isr(TaskHandle_t,BaseType_t *woken);
+void os_application_wake_task_from_isr(TaskHandle_t,long *woken); /* a BaseType_t pointer */
 /* The OS wait of the calling task to an absolute time in microseconds (sunstone_deadline_now_us epoch), ended early by a
  * wake-up or when unless() returns nonzero after the wait is registered. */
 int os_application_wait_unless(uint64_t until,int (*unless)(void));

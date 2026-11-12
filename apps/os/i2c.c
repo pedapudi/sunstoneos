@@ -174,7 +174,8 @@ static void irq(unsigned n)
     b->result=(struct ss_i2c_result){(int32_t)b->engine.result,b->engine.last_status,b->engine.index,0,b->started,b->finished};
     atomic_store_explicit(&b->transfer,DONE,memory_order_release);
     BaseType_t woken=pdFALSE;
-    os_application_wake_task_from_isr(b->waiter,&woken);
+    _Static_assert(sizeof(woken)==sizeof(long),"BaseType_t is long");
+    os_application_wake_task_from_isr(b->waiter,(long *)&woken);
     portYIELD_FROM_ISR(woken);
 }
 void os_i2c_irq_twi0(void){irq(A733_I2C_TWI0);}

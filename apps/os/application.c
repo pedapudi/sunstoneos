@@ -114,13 +114,13 @@ void os_application_wake_main(void){os_wake(main_task);}
 /* The same wake-up from an interrupt handler, for a device whose completion interrupt ends an application task's wait
  * (the header I2C class). The kernel critical section is the one os_wake takes; the notification is given from the ISR and
  * the caller yields at the end of its handler when *woken is set. */
-void os_application_wake_task_from_isr(TaskHandle_t task,BaseType_t *woken)
+void os_application_wake_task_from_isr(TaskHandle_t task,long *woken)
 {
     if(!task)return;
     unsigned found=0;
     UBaseType_t mask=taskENTER_CRITICAL_FROM_ISR();
     for(unsigned i=0;i<os_wake_capacity;++i)
-        if(os_wake_task[i]==task){found=1;os_wake_gave[i]=1;vTaskNotifyGiveIndexedFromISR(task,SS_NOTIFY_DEADLINE,woken);}
+        if(os_wake_task[i]==task){found=1;os_wake_gave[i]=1;vTaskNotifyGiveIndexedFromISR(task,SS_NOTIFY_DEADLINE,(BaseType_t *)woken);}
     if(!found&&task==main_task)atomic_store_explicit(&main_wake_pending,1,memory_order_release);
     taskEXIT_CRITICAL_FROM_ISR(mask);
 }
