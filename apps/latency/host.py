@@ -123,6 +123,8 @@ def decode_scheduler_trace(payload, frequency):
         row = {'core': core, 'command_count': count,
                'command_stage_max_ticks': dict(zip(('reference', 'publish', 'drain', 'slice'), scalars[:4])),
                'command_stage_max_legacy_only': ['drain', 'slice'] if version == 5 else [],
+               'self_suspend_selection': ('largest direct masked C interval; legacy command interval until a direct sample exists'
+                   if version == 5 else 'largest command interval'),
                'irq_count': scalars[4], 'drain_count': scalars[5],
                'wait_count': scalars[6], 'wait_dropped': scalars[7],
                'command': command(), 'self_suspend': command()}
@@ -246,7 +248,7 @@ def decode_scheduler_trace(payload, frequency):
             service = list(take(5))
             passes, result, irq_sequence, previous_irq_end = take(4)
             begin, end, selected_slot, switch_sequence, previous_switch_end, switch_irq_sequence = take(6)
-            if running < ready or flags & ~(63 if version >= 4 else 31) or running_slot >= 128:
+            if running < ready or flags & ~(127 if version == 5 else 63 if version == 4 else 31) or running_slot >= 128:
                 raise ValueError('scheduler wake endpoints, flags or probe slot are invalid')
             if irq_sequence:
                 if not all(stamps) or stamps != sorted(stamps) or previous_irq_end > stamps[0] or result not in (0, 1, 3):
@@ -264,6 +266,7 @@ def decode_scheduler_trace(payload, frequency):
                 raise ValueError('scheduler wake switch fields lack a sequence')
             history = histories[core] if histories else None
             lost = bool(flags & 32)
+            snapshot_incomplete = bool(flags & 64) if version == 5 else False
             trailing = history['trailing_count'] if history else 0
             if history:
                 if not ready and any(history.values()):
@@ -275,7 +278,7 @@ def decode_scheduler_trace(payload, frequency):
                                                (switch_sequence, history['switch_overwritten'])):
                     if sequence and not overwritten < sequence <= overwritten + history_capacity:
                         raise ValueError('scheduler retained sequence is outside its history window')
-                if history['latest_sequence'] and history['irq_overwritten'] != max(
+                if not snapshot_incomplete and history['latest_sequence'] and history['irq_overwritten'] != max(
                         history['latest_sequence'] + history['future_irqs'] - history_capacity, 0):
                     raise ValueError('scheduler IRQ overwrite count differs from retained and future sequences')
                 if lost and not (history['irq_overwritten'] or history['switch_overwritten']):
@@ -303,11 +306,12 @@ def decode_scheduler_trace(payload, frequency):
                 elif trailing or history['trailing_work']:
                     raise ValueError('scheduler trailing IRQ work lacks a selecting IRQ')
             multiple = previous_irq_end > ready or previous_switch_end > ready or bool(trailing)
-            linked = bool(irq_sequence and switch_sequence and not multiple and not lost and
+            linked = bool(irq_sequence and switch_sequence and not multiple and not lost and not snapshot_incomplete and
                           ready <= stamps[4] <= begin <= end <= running and
                           irq_sequence == switch_irq_sequence and selected_slot == running_slot and
                           result in ((0, 1, 3) if version >= 4 else (1, 3)))
             expected_flags = (1 if irq_sequence else 0) | (2 if switch_sequence else 0) | (8 if multiple else 0) | (32 if lost else 0)
+            expected_flags |= 64 if snapshot_incomplete else 0
             expected_flags |= 4 if linked else 16
             if ready and flags != expected_flags:
                 raise ValueError('scheduler wake linkage flags differ from its observations')
@@ -331,6 +335,7 @@ def decode_scheduler_trace(payload, frequency):
                 'classes': summaries, 'maximum': {
                     'ready': ready, 'running': running, 'flags': flags, 'running_slot': running_slot,
                     'class': kind, 'linked': linked, 'multiple_entries': multiple,
+                    'snapshot_incomplete': snapshot_incomplete,
                     'whole_wake_ticks': running - ready,
                     'owner_exit_to_running_ticks': running - stamps[0] if linked else None,
                     'irq': {'stamp': stamps, 'service_ticks': dict(zip(('control', 'incoming', 'pull', 'expiry', 'slice'), service)),
@@ -404,6 +409,7 @@ def decode_scheduler_trace(payload, frequency):
         cpu0_window = {'capacity': capacity, 'flags': window_flags,
             'irq_prefix_lost': bool(window_flags & 1), 'switch_prefix_lost': bool(window_flags & 2),
             'incomplete': bool(window_flags & 4), 'ready': ready, 'running': running,
+            'scope': 'outer C dispatch and ordinary owner exits',
             'irqs': irq_rows, 'selections': switch_rows}
     return {'version': version, 'waits_capacity': waits, 'ticks_capacity': tick_capacity,
             'cores': cores, 'startup': startup, 'tick_count': tick_count,

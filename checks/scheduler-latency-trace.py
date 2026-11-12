@@ -554,6 +554,11 @@ def run(decode):
     rejected('direct suspension cannot claim a control drain', pack(bad))
     bad = fixture(version=4); bad['cores'][1]['self_suspend'][2] = 69
     rejected('older trace cannot reinterpret direct suspension stamps', pack(bad))
+    hole = copy.deepcopy(v5)
+    hole['wake'][0][2] |= 64
+    hole['window']['header'][2] |= 4
+    accepted('an explicitly incomplete snapshot remains unattributed', hole,
+             lambda value: value['wake_chains'][0]['maximum']['snapshot_incomplete'])
     return cases
 
 
@@ -570,7 +575,8 @@ def check_history(source, output):
     compiled = subprocess.run(command, capture_output=True, text=True)
     (output / 'history-compile.log').write_text(compiled.stdout + compiled.stderr)
     compiled.check_returncode()
-    ran = subprocess.run([str(binary), str(payload)], capture_output=True, text=True)
+    interrupted_payload = output / 'history-interrupted.bin'
+    ran = subprocess.run([str(binary), str(payload), str(interrupted_payload)], capture_output=True, text=True)
     (output / 'history-run.log').write_text(ran.stdout + ran.stderr)
     ran.check_returncode()
     decode, _ = load_decoder(source)
@@ -579,12 +585,18 @@ def check_history(source, output):
     expected = ('unmatched', 'unmatched', 'unmatched', 'unmatched', 'fast', 'slow', 'unmatched', 'unmatched')
     assert tuple(row['maximum']['class'] for row in report['wake_chains']) == expected
     window = report['cpu0_wake_window']
-    assert len(window['irqs']) == 7 and len(window['selections']) == 4 and not window['flags']
+    assert len(window['irqs']) == 8 and len(window['selections']) == 4 and not window['flags']
     assert window['irqs'][-2]['interrupt'] == 27 and window['irqs'][-1]['interrupt'] == 0
     assert window['selections'][-1]['origin'] == 'svc'
-    assert report['cores'][7]['self_suspend']['masked_c_ticks'] == 50
-    assert report['cores'][7]['self_suspend']['steps_ticks']['select'] == 20
-    return ['recorder CPU0 dispatch IDs and voluntary selection origin', 'recorder history: future IRQ', 'recorder history: trailing IRQ',
+    assert report['cores'][7]['self_suspend']['masked_c_ticks'] == 60
+    assert report['cores'][7]['self_suspend']['steps_ticks']['select'] == 30
+    interrupted = decode(interrupted_payload.read_bytes(), FREQUENCY)
+    assert interrupted['wake_chains'][0]['maximum']['snapshot_incomplete']
+    assert interrupted['wake_chains'][0]['maximum']['class'] == 'unmatched'
+    assert interrupted['cpu0_wake_window']['incomplete']
+    return ['recorder unmasked snapshot excludes an injected future event',
+            'recorder unmasked snapshot exposes an injected overwrite without retry',
+            'recorder CPU0 dispatch IDs and voluntary selection origin', 'recorder history: future IRQ', 'recorder history: trailing IRQ',
             'recorder history: selecting IRQ overwritten', 'recorder history: latest switch task differs',
             'recorder history: old rotation retained', 'recorder history: future switches',
             'recorder history: selection overwritten', 'recorder history: preceding IRQ ambiguity']

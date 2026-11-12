@@ -80,7 +80,8 @@ struct ss_sched_trace_tick { uint64_t start, end; };
 enum ss_sched_trace_wake_flag {
     SS_SCHED_WAKE_IRQ = 1u, SS_SCHED_WAKE_SWITCH = 2u,
     SS_SCHED_WAKE_LINKED = 4u, SS_SCHED_WAKE_MULTIPLE = 8u,
-    SS_SCHED_WAKE_UNMATCHED = 16u, SS_SCHED_WAKE_HISTORY_LOST = 32u
+    SS_SCHED_WAKE_UNMATCHED = 16u, SS_SCHED_WAKE_HISTORY_LOST = 32u,
+    SS_SCHED_WAKE_SNAPSHOT_INCOMPLETE = 64u
 };
 /* An IRQ here is an ordinary owner-exit call after the PMR reentry guard.
  * Stamps: start, eligibility complete, API mask set, work done, mask restored.
@@ -112,7 +113,8 @@ struct ss_sched_trace_wake_core {
 struct ss_sched_trace_wake_history {
     /* Latest completed ordinary exit no later than running. Trailing exits
      * follow the selecting IRQ through running. Overwritten counts are totals
-     * at observation; future_irqs counts retained exits excluded by running. */
+     * at observation; future_irqs counts retained exits excluded by running. A snapshot-hole
+     * flag means a single read overlaps replacement; no retry is attempted. */
     uint64_t latest_start, latest_end, latest_work, latest_result, latest_sequence;
     uint64_t trailing_count, trailing_work, irq_overwritten, switch_overwritten, future_irqs;
 };

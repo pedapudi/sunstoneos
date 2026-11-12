@@ -142,7 +142,8 @@ static void controller(void *argument)
             configASSERT(w->selection.selected_slot == w->running_slot && w->selection.irq_sequence == w->irq.sequence);
             configASSERT(!history->trailing_count && !(w->flags & SS_SCHED_WAKE_HISTORY_LOST));
         }
-        if (c == 0 && !row->summary[0][0].count && !row->summary[1][0].count) {
+        if (c == 0 && !row->summary[0][0].count && !row->summary[1][0].count &&
+            !(w->flags & SS_SCHED_WAKE_SNAPSHOT_INCOMPLETE)) {
             /* An entirely unmatched primary must still expose real measured
              * interference and its selecting exit, not observation-side loss. */
             configASSERT((w->flags & SS_SCHED_WAKE_MULTIPLE) && !(w->flags & SS_SCHED_WAKE_HISTORY_LOST));
@@ -155,7 +156,8 @@ static void controller(void *argument)
     const struct ss_sched_trace_cpu0_window *window = &result.scheduler.cpu0_window;
     configASSERT(window->capacity == SS_SCHED_TRACE_HISTORY);
     configASSERT(window->irq_count && window->irq_count <= window->capacity && window->switch_count <= window->capacity);
-    configASSERT(!(window->flags & SS_SCHED_WINDOW_INCOMPLETE));
+    configASSERT(!(window->flags & ~(SS_SCHED_WINDOW_IRQ_PREFIX_LOST |
+        SS_SCHED_WINDOW_SWITCH_PREFIX_LOST | SS_SCHED_WINDOW_INCOMPLETE)));
     number("cpu0_window_irqs=", window->irq_count);
     number(" selections=", window->switch_count);
     number(" flags=", window->flags);
