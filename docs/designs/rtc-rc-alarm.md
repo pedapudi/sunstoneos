@@ -33,3 +33,30 @@ Time budget: boot and admission about 1.2 s, wait for the CPU clock owner until 
 The V1.2 schematic, sheet 8 ("08_CORE1"), connects crystal Y2 (32.768 kHz, 12 pF load, 20 ppm) between the SoC pins X32KIN (W37) and X32KOUT (V37), with 12 pF C0G capacitors C151 and C158. The pinned device tree feeds the RTC and the other blocks from `rtc_ccu` `CLK_OSC32K` as the low-speed clock (`losc`). The board therefore fits the crystal, and the RC source it runs from is the boot default, not a board limitation. A crystal source would give 20 ppm instead of the measured error of about 16%.
 
 Proposed design (needs the coordinator's approval before any run, because it writes the clock-source selection): reuse `source()` of `drivers/rtc/a733_rtc_initialize.c`, which the manual's section 9.1.7 sequence already defines: select the external oscillator (control bit 0) with the gate (bit 4), poll the oscillator health (status bit 2 clear, four consecutive samples), then accept the external state `(control & 0x193) == 0x11, (status & 7) == 1`. After the switch the existing `a733_rtc_open` and `a733_rtc_set_time` paths apply unchanged. The run reads the calendar before and after, which the switch must preserve, then measures one RTC second against the system counter over ten seconds. The failure case (crystal not oscillating) leaves the RC selected and reports the health bits. The register writes are the control word at offset 0 only, with the key field.
+
+## Crystal selection: vendor sequence and the diff of our code
+
+The manual (section 9.1.7.1 and 9.1.7.2) and `ccu-sun60iw2-rtc.c` define the sequence that `source()` in `drivers/rtc/a733_rtc_initialize.c` follows. `a733_rtc_select_crystal` applies it to an instance that is already open on the RC.
+
+| Step | Vendor and manual | Service |
+| --- | --- | --- |
+| 1 | Auto-switch field (control bits 15:14) = 01 and the crystal gate (bit 4) set. | Both written with the key `0x16aa`, each with a readback of mask `0xc01f`. The board already holds both (control 0x401c), so the values do not change. |
+| 2 | The vendor polls the oscillator status; the manual defines health as status bit 2 clear. | Four consecutive samples with bit 2 clear, 3 us apart, within 1 s. |
+| 3 | Select the external source (bits 1:0 = 01). | `control & 3 = 1`, written with the key. |
+| 4 | Clear the source-switch pending bit (status bit 1). | Written only if set. |
+| 5 | Settle: `control & 0x193 == 0x11` and `status & 7 == 1`. | Polled at 1 ms for at most 1 s. |
+| Not healthy or not settled | Not specified. | The control word is written back to its value on entry, the RC stays selected, and the record carries the samples, the longest healthy run and both control and status words (result 2). |
+
+The service writes only `+0x00` and `+0x04`, and only while the owner runs the selection.
+
+### Prediction for the board run
+
+`apps/rtc-crystal` opens on the RC, times five RTC seconds, selects the crystal, and times ten RTC seconds, then repeats the calendar set, three-second alarm and read.
+
+- The open reports source 2 (control 0x401c); five RC seconds take 1.0 to 1.4 s each (about 1.19 s).
+- The selection ends with result 1: control & 0x193 == 0x11, status & 7 == 1, a healthy run of 4 samples. It issues two key writes for the gate fields, one source write, and a status write only if the pending bit is set.
+- The calendar read before and after the switch differs by 0 or 1 s.
+- Ten RTC seconds on the crystal take 10.000000 s of system counter time within 50 ppm. Resolution: each edge is found by 20 us sleeps plus wake and read latency, under 50 us per edge, so the difference of the two edges is known to under 100 us, 10 ppm over ten seconds. The reference is the 24 MHz system counter, not a calibrated standard, so the 50 ppm allows for its own tolerance and for the crystal's 20 ppm.
+- If the crystal fails to start, the record shows result 2 with the health bits, and the RTC stays on the RC.
+
+Time budget: boot and the wait for the CPU clock owner about 9 s, the RC measurement about 7 s (a 1.4 s edge search and five seconds), the selection under 10 ms, the crystal measurement about 11 s, the alarm about 4 s: about 31 s of application against a 45 s run bound, a 60 s session and a 55 s finish bound. The application reports progress between steps, at most 11 s apart; the progress window is 2 s, so the long measurements run inside the owner while the application waits in `ss_rtc_wait` (a supervised wait) and reports progress every 0.5 s through the alarm loop only; the measurement waits use the same wait call.
