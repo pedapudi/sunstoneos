@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise radio return coordination, retained faults and source mutations."""
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -8,7 +9,8 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['apps/os/radio.c', 'apps/os/quiesce.c', 'apps/os/quiesce.h',
-                'apps/os/radio_scan.c', 'apps/radio-scan/main.c', 'cmake/a733-os.cmake']
+                'apps/os/radio_scan.c', 'apps/board/main.c', 'apps/os/main.patch',
+                'apps/radio-scan/main.c', 'cmake/a733-os.cmake']
 PRELUDE = r'''
 #include "quiesce.h"
 #include <assert.h>
@@ -202,9 +204,114 @@ int main(void)
     subprocess.run([str(binary)], check=True)
 
 
+def owner_loop(out, compiler, main_patch):
+    """Execute one real generated owner pass, ending at its delay or park."""
+    generated = out / 'board-os-main.c'
+    subprocess.run(['patch', '--silent', '-o', str(generated),
+                    str(ROOT / 'apps/board/main.c'), str(main_patch)], check=True)
+    (out / 'owner-main.patch').write_bytes(main_patch.read_bytes())
+    inputs = {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in (ROOT / 'apps/board/main.c', main_patch, generated)}
+    (out / 'owner-loop-inputs.json').write_text(json.dumps(inputs, indent=2) + '\n')
+    source = generated.read_text()
+    body = source[source.index('static void radio_owner('):source.index('static void radio_client(')]
+    before = '''        if(os_radio_quiesce_requested()){
+            parked=os_radio_quiesce_poll(&radio,0)==2;
+            goto radio_return_wait;
+        }
+'''
+    after = '''#endif
+            if(r==BOARD_RADIO_RETAINED||r==BOARD_RADIO_INVALID){'''
+    assert body.count(before) == body.count(after) == 1
+    mutant = body.replace(before, '').replace(after, '''#endif
+            int returning=os_radio_quiesce_poll(&radio,(int)r);
+            if(returning==2){parked=1;goto radio_return_wait;}
+            if(r==BOARD_RADIO_RETAINED||r==BOARD_RADIO_INVALID){''')
+    prelude = r'''
+#include <assert.h>
+#include <setjmp.h>
+#include <stdatomic.h>
+#include <stdint.h>
+#include <stddef.h>
+#define SUNSTONE_A733_OS 1
+#define SUNSTONE_A733_OS_RADIO_SCAN 1
+#define OS_GRANT_HEADSET 64u
+#define OS_SERVICE_RADIO 5u
+#define SUNSTONE_CRUMB_HERE() ((const void *)1)
+enum board_radio_result {BOARD_RADIO_PENDING,BOARD_RADIO_SCANNED,BOARD_RADIO_RETAINED,BOARD_RADIO_INVALID};
+static struct {unsigned platform;} radio;
+static struct {_Atomic unsigned radio_result,watchdog_state;struct {unsigned provider;} typec;} board;
+static struct {struct {_Atomic unsigned pmic_ready;} shared;} providers;
+static jmp_buf pass_end;
+static unsigned requested,terminal,headset=1,headset_pending=1,live=1,quiesce_result=1;
+static unsigned board_polls,quiesce_polls,module_polls,scan_steps,delays,parks,progress,credentials,external,revokes;
+static int os_radio_quiesce_parked(void){return terminal;}
+static int os_radio_quiesce_requested(void){return requested;}
+static int os_radio_quiesce_poll(void *r,int result)
+{assert(r==&radio);(void)result;++quiesce_polls;return requested?(int)quiesce_result:0;}
+static void module_step(void){++module_polls;}
+static int module_pending(void){return headset_pending;}
+static void (*os_module_poll)(void)=module_step;
+static int (*os_headset_quiesce_pending)(void)=module_pending;
+static int os_granted(unsigned grant){assert(grant==OS_GRANT_HEADSET);return headset;}
+static void os_wifi_credential_poll(void){++credentials;}
+static int board_live(void *unused){assert(!unused);return live;}
+static int board_radio_external_failure(void *r){assert(r==&radio);++external;return 0;}
+static enum board_radio_result board_radio_poll(void *r){assert(r==&radio);++board_polls;return BOARD_RADIO_SCANNED;}
+static void os_radio_scan_step(void *r,int result){assert(r==&radio&&result==BOARD_RADIO_SCANNED);++scan_steps;}
+static int a733_radio_platform_clean(void *p){assert(p==&radio.platform);return 1;}
+static int os_radio_quiesce_fault(uint32_t value,const void *caller){(void)value;(void)caller;return requested;}
+static void a733_typec_revoke(void *p){assert(p==&board.typec.provider);++revokes;}
+static void board_progress(unsigned service){assert(service==OS_SERVICE_RADIO);++progress;}
+#define BOARD_PROGRESS(service) board_progress(service)
+static _Noreturn void park(void){++parks;longjmp(pass_end,1);}
+static void vTaskDelay(unsigned ticks){assert(ticks==1);++delays;longjmp(pass_end,1);}
+'''
+    cases = r'''
+static void pass(unsigned request,unsigned done,unsigned pending,unsigned result,unsigned admitted)
+{
+    requested=request;terminal=done;headset_pending=pending;quiesce_result=result;live=admitted;
+    board_polls=quiesce_polls=module_polls=scan_steps=delays=parks=progress=credentials=external=revokes=0;
+    atomic_store(&board.radio_result,0);atomic_store(&providers.shared.pmic_ready,1);
+    if(!setjmp(pass_end))radio_owner(NULL);
+    assert(credentials==1&&!external&&!revokes);
+    assert(module_polls==headset);
+    unsigned stopped=done||(request&&result==2);
+    assert(parks==(stopped&&!pending)&&delays==!parks&&progress==!parks);
+    assert(board_polls==(!request&&!done)&&scan_steps==board_polls);
+    assert(quiesce_polls==(request&&!done));
+}
+int main(void)
+{
+    pass(1,0,1,1,1); /* Pending return submits no ordinary radio work. */
+    pass(1,0,1,2,1); /* Radio done, Bluetooth still needs its owner pass. */
+    pass(1,1,1,2,1); /* Subsequent passes continue Bluetooth without another stop. */
+    pass(1,1,0,2,1); /* Park only after the headset becomes terminal. */
+    pass(1,0,0,2,1); /* Immediate terminal result still polls the shared module. */
+    pass(1,0,1,1,0); /* Return bypasses the old external-failure path too. */
+    pass(0,0,1,1,1); /* Normal admission still polls radio and its observer. */
+    headset=0;pass(0,0,1,1,1);
+    return 0;
+}
+'''
+    results = []
+    for name, variant in [('owner-loop', body), ('owner-loop-post-poll-mutation', mutant)]:
+        fixture = out / (name + '.c')
+        fixture.write_text(prelude + variant + cases)
+        binary = out / name
+        subprocess.run([compiler, '-std=c11', '-Wall', '-Wextra', '-Werror',
+                        '-Wno-unused-function', str(fixture), '-o', str(binary)], check=True)
+        run = subprocess.run([str(binary)], capture_output=True, text=True)
+        results.append({'case': name, 'returncode': run.returncode, 'stderr': run.stderr})
+        assert (run.returncode == 0) == (name == 'owner-loop'), results[-1]
+    (out / 'owner-loop-results.json').write_text(json.dumps(results, indent=2) + '\n')
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--main-patch', type=Path, default=ROOT / 'apps/os/main.patch',
+                   help='Shared owner-loop patch to validate before integration; defaults to this source tree')
     args = p.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -231,7 +338,8 @@ def main():
     (out / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
     application(out, compiler)
     observer(out, compiler)
-    print('PASS radio bounded return, Bluetooth release/peer proof, CE fault, two caught mutations and scan failure injection')
+    owner_loop(out, compiler, args.main_patch.resolve())
+    print('PASS radio return, Bluetooth peer proof, CE fault, three caught mutations, scan injection and actual owner loop')
 
 
 if __name__ == '__main__':
