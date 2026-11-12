@@ -68,6 +68,17 @@ struct a733_radio_bluetooth_pins {
     uint64_t authority;
     struct a733_pin_config expected[2],desired[2]; /* PM3 output-high, PM4 input. */
 };
+/* Optional installed-board authority to hold Bluetooth in reset after its
+ * protocol owner releases the module. The inherited PM2 output and fitted
+ * reset/LPO route require independent evidence. Legacy profiles omit it. */
+struct a733_radio_bluetooth_stop {
+    uint64_t authority,topology;
+    uint8_t wiring_evidence[32];
+    struct a733_pin_config expected;
+    uint8_t inherited_level;
+    uint32_t reserved;
+};
+_Static_assert(sizeof(struct a733_radio_bluetooth_stop)==56,"Bluetooth stop contract geometry");
 /* A borrowed card lifetime is owned by this provider, including after fault.
  * A reset, power change, expiry or owner loss cannot mint a fresh generation.
  * Existing transport workers keep their complete object/buffer graph alive. */
@@ -75,6 +86,8 @@ struct a733_radio_borrow { uint64_t generation,owner; };
 struct a733_radio_platform {
     struct a733_radio_platform_config config;
     struct a733_radio_bluetooth_pins bluetooth;
+    struct a733_radio_bluetooth_stop bluetooth_stop;
+    struct a733_pin_lease_banked bluetooth_stop_lease;
     struct a733_radio_platform_ops ops;
     struct a733_clock_leases *clocks;
     struct a733_pins *pins;
@@ -111,6 +124,9 @@ struct a733_radio_platform {
     /* GPIO_POW_MOD_SEL, GPIO_POW_VAL, SGPIO_POW_MOD_SEL, SGPIO_POW_VAL as read
      * by the first-run guard; valid once guard_done is set. */
     uint32_t pad_power[4];
+    uint64_t stop_deadline;
+    struct sunxi_sdio_result stop_result;
+    unsigned stop_requested,stop_phase,stop_completed,stop_unprepared,stop_bus,stop_powered,peer_stopped;
 };
 /* The failure left nothing powered, so no reset is needed to release anything: the first-run guard refused before
  * any write, or the failure shutdown finished with every readback matched (PM1 low, clocks off, BLDO5 off). Such a
@@ -126,6 +142,12 @@ int a733_radio_platform_init(struct a733_radio_platform *,const struct a733_radi
     const struct a733_radio_platform_ops *,void *,struct a733_clock_leases *,
     struct a733_pins *,struct a733_rail_leases *,struct a733_pmic *);
 int a733_radio_platform_bluetooth(struct a733_radio_platform *,const struct a733_radio_bluetooth_pins *);
+int a733_radio_platform_bluetooth_stop(struct a733_radio_platform *,const struct a733_radio_bluetooth_stop *);
+/* Owner-only permanent stop, including partial startup. The exact borrow is
+ * required once issued; an empty borrow is valid only before issue. Poll drains
+ * the one accepted host operation, then performs checked shutdown. All borrowed
+ * storage remains pinned. Repeated admission cannot extend the first deadline. */
+int a733_radio_platform_stop(struct a733_radio_platform *,const struct a733_radio_borrow *,uint64_t deadline);
 /* Request four-bit default speed before the first poll. Adds the shared PERI0
  * lease scope and its 400 MHz branch to every clock observation. After
  * enumeration of a full-speed card, the platform sets CCCR bus width to four
