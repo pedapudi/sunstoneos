@@ -2,8 +2,9 @@
 
 **Status: implemented and host-tested.** No card is written.
 The daemon admits the dedicated RAM-proof profile. The launcher shares the
-resident CPU owner's read-only OFF admission. The early gate and cold-card
-recovery remain unqualified ([evidence](../evidence/card-fel-recovery.jsonl)).
+resident CPU owner's read-only OFF admission, which passes on port 3-3.
+CPU0 reset completion, entry into the early gate and cold-card recovery remain
+unqualified ([evidence](../evidence/card-fel-recovery.jsonl)).
 
 ## The first stage consumes the vendor request
 
@@ -67,6 +68,9 @@ The runner requires a distinct usable FEL instance, no retained fault, matching
 nonce/report, consumed gate state, unchanged gate code, request zero and mode
 zero. A watchdog reset or any mismatch fails the proof and ends board access.
 There is no generic probe return epilogue after the gate.
+The host model's successful path stops at the reset-request instruction.
+Physical execution reaches its readback, so completion of that request and
+the ordering required for AArch32 gate entry remain qualification blockers.
 
 Each launcher refusal records stage `0x0c01` and a distinct guard code from
 [the refusal definitions](../../apps/card-fel-recovery/refusal.h). Values
