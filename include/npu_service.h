@@ -99,7 +99,7 @@ struct npu_service_activation {
  * invoked inside the kernel critical section after checking latched events.
  * stop follows successful controller CLOSE (events disabled/full idle), and
  * proves the owned GIC source disabled, inactive and pending clear. Deferred
- * callbacks get 10 ms plus one tick from their first pending result, then
+ * callbacks get 10 ms (plus one tick in legacy probe builds) from their first pending result, then
  * retain on the next worker pass. This bounds waiting, not hardware drain. */
 struct npu_service_irq_ops {
     int (*mask)(void *);
@@ -196,7 +196,11 @@ struct npu_service {
     struct npu_service_signals own_signals;
     unsigned irq_bound, irq_masked, irq_rearming, irq_retained;
     unsigned irq_waiting;
+#ifdef SUNSTONE_A733_OS
+    uint64_t irq_wait_start[3]; /* absolute compare deadlines, independent of backend time */
+#else
     TickType_t irq_wait_start[3];
+#endif
     struct npu_service_message deferred;
     unsigned has_deferred;
     struct npu_service_message held;
@@ -230,6 +234,11 @@ struct npu_service {
     struct npu_service_cancel_diagnostic *cancel_diagnostic;
 #endif
 };
+
+/* Single service worker telemetry, copied after retirement by the host. Idle
+ * counts exclude active jobs and register-propagation waits. */
+struct npu_service_wake_record { uint64_t waits,events,deadlines,idle_events,idle_deadlines,idle_us; };
+extern struct npu_service_wake_record npu_service_wakes;
 
 /* The bytes of the tables of a service of clients clients and commands commands (commands[]: the bootstrap and every
  * application command), and the macro form for a static array. They hold the commands, the clients, the members, the

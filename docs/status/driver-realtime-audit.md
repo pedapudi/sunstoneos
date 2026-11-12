@@ -31,7 +31,7 @@ Physical driver timing and idle power are unmeasured. Host models cover the sele
 7. Notify G2D readout by task-end IRQ and batch its copy and guard scans; a 720p frame needs 113 copy wakes.
 8. Carry authenticated lengths into native CE cache synchronization and use the CE completion IRQ; a 16-byte AES task maintains 7,872 bytes of cache ranges.
 9. Integrate the reviewed xHCI close and drain commit `13897638` and the JPEG INTID 81 wakeup commit `3d33b607` after the empty-port runs.
-10. Replace the remaining tick polling in the USB decoder frame lifetime, I2C, SPI, UART, PCIe/NVMe, network, GPU owner, NPU owner, thermal owner and camera paths; the history lists each location.
+10. Replace the remaining tick polling in the USB decoder frame lifetime, I2C, SPI, UART, PCIe/NVMe, network, GPU owner, thermal owner and camera paths. Qualify the [NPU owner's notification and precise-deadline waits](../designs/npu-owner-events.md); the history lists the other locations.
 11. Measure baseline and candidate latency, throughput, CPU cost and idle current on admitted device paths, which need the USB, video and display prerequisites in [USB status](usb.md), [video status](video.md) and [display status](display-g2d.md).
 
 ## Evidence

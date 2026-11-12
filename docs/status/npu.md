@@ -14,6 +14,7 @@ The NPU path is implemented: native model decoding, mappings, shared-provider st
 | --- | --- | --- | --- |
 | Startup and SRAM routing | qualified on the board | startup 4.0 ms | [sram route](../designs/npu-sram-route.md), `npu-sram-route-routing-effect` |
 | Interrupt 97 completion and job timing | qualified on the board | doorbell to interrupt 2.91 ms | [irq completion](../designs/npu-irq-completion.md) |
+| OS owner notifications and precise deadlines | one recognition session passes | 512 frames, exact output, zero outer-loop idle deadline wakes | [owner waits](../designs/npu-owner-events.md), [owner evidence](../evidence/npu-owner-events.jsonl) |
 | Per-job overhead removed, vendor operating point | host-tested; default point qualified | 852 MHz at 800 mV | [job overhead](../designs/npu-job-overhead.md) |
 | Loader admission and page-table containment | qualified on the board | MMU fault recovery about 32 ms | [loader admission](../designs/npu-loader-admission.md), `npu-status-admission-qualified` |
 | Graph kinds NN, SP, ACT, transpose, shader | qualified on the board | byte-equal to the simulator | `npu-status-board-scope` |
@@ -41,7 +42,7 @@ Designs: [platform](../designs/npu-platform.md), [fast path](../designs/npu-fast
 3. Qualify the combined image repeatedly and across both models: the active-cancellation image, and a 20-cycle start, inference, CLOSE and local-stop image. Qualify repeated start and stop.
 4. Qualify the EL0 queue with the public-ring predicate in the power owner, and the saved generic sequence registration and returning diagnostic (`npu-el0-next-1101`). Repeat the add queue image with the clock record, so its figure is measured and not only granted.
 5. Run larger command windows with the smaller doorbell word. A reservation that includes run-time graphs uses 512 KiB per command allocation; the manifest could declare a command size to shrink it.
-6. Add exact per-job deadline interrupts through the scheduler's deadline facility (`kernel/scheduler/deadline.h`); do not add a device timer.
+6. Qualify missing-interrupt expiry and no-work idle rates for the [precise service waits](../designs/npu-owner-events.md), and the direct queue's separate deadline path.
 7. Run the `restart-*` cases of no host check on a restart image; the other cases pass.
 8. Confirm on the board where the remaining layout time of admission goes. For the encoder's 96 graphs (14.5 MB) at 494 MHz on an A55, preparing the runtime takes 69.4 ms: copy 11.3 ms, decode 6.2 ms, layout 37.9 ms, native setup 13.3 ms. The container checksum runs with the Armv8 `CRC32` instructions, one aligned load for each eight bytes, and should take about 14 ms. A second timed pass over the same graphs on the board would confirm how the layout time divides between the operation inspection and the rest.
 9. Derive the secondary cores' startup wait from the declared graph bytes and the measured preparation rate. The wait is a fixed 1 s: the launchers set the startup deadline to the start plus one second, and the admission rule in `platform/a733-smp-cached/admission.c` refuses a deadline more than one second ahead, inside the 4 s watchdog lease. Preparation of the encoder's graphs uses 69 ms of it.

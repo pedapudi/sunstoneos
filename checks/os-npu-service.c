@@ -74,6 +74,16 @@ int board_live(void *context) { assert(!context); return (int)live_value; }
 unsigned board_session_lifetime(void){return A733_LIFETIME_SUPERVISED;}
 unsigned os_lifetime(void){return A733_LIFETIME_SUPERVISED;}
 void board_service_progress(unsigned service){(void)service;}
+int board_service_deadline_register(unsigned service)
+{assert(service==OS_SERVICE_NPU);return sunstone_deadline_register();}
+int board_service_blocked_until(unsigned service,uint64_t until)
+{
+    struct sunstone_deadline_record record;
+    assert(service==OS_SERVICE_NPU&&xTaskGetCurrentTaskHandle()==npu.client);
+    assert(until>host_time_us()&&until<=npu.end);
+    assert(sunstone_deadline_owner_record(npu.client,&record)&&!record.armed&&!record.failed);
+    return 1;
+}
 uint32_t board_live_refusal(void) { return live_value ? 0 : UINT32_C(1) << 28; }
 static unsigned board_failures;
 static uint32_t first_site, first_value, first_caller;
@@ -457,6 +467,7 @@ static unsigned register_later, register_model, queue_registered;
 static void queue_client(void *unused)
 {
     (void)unused;
+    assert(board_service_deadline_register(OS_SERVICE_NPU));
     for (;;) {
         int opened = os_npu_open();
         if (opened == 1) break;
@@ -524,6 +535,7 @@ static void queue_client(void *unused)
 static void client(void *unused)
 {
     (void)unused;
+    assert(board_service_deadline_register(OS_SERVICE_NPU));
     for (;;) {
         int opened = os_npu_open();
         if (opened == 1) break;
@@ -748,6 +760,7 @@ static void check_trust(const struct npu_runtime *rt, uintptr_t pool_lo, uintptr
 int main(int argc, char **argv)
 {
     assert(argc == 2 || argc == 3);
+    host_timer_handler(sunstone_deadline_irq);
     const unsigned mode = (unsigned)strtoul(argv[1], NULL, 10);
 #ifdef UNGRANTED_CASE
     if (mode == 32) {

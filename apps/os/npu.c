@@ -17,6 +17,7 @@
 #include "sunstone_npu_service.h"
 #include "sunstone_npu_queue.h"
 #include "npu-graph-index.h"
+#include "sunstone_deadline.h"
 #include <string.h>
 #define ALLOW UINT64_C(1)
 #define ACCEPTED UINT64_C(2)
@@ -94,6 +95,32 @@ static atomic_uint bootstrap_ran; /* The bootstrap task has run: the service may
 static unsigned creating; /* Only while os_npu_start creates its two tasks. */
 static int clock_now(uint64_t *now)
 {return a733_counter_clock_now(&providers.shared.counter,now);}
+static int fail(void);
+/* Bootstrap and mailbox wait telemetry. Only the named task writes its row. */
+struct npu_service_wake_record os_npu_owner_wakes[2];
+static uint64_t wait_limit(void)
+{
+    const uint64_t gate=atomic_load_explicit(&npu.gate,memory_order_acquire);
+    return (gate&STOP)&&(gate>>3)<npu.end?gate>>3:npu.end;
+}
+static int wait_until(uint64_t until,unsigned owner,int idle)
+{
+    struct npu_service_wake_record *r=&os_npu_owner_wakes[owner];
+    const uint64_t start=sunstone_deadline_now_us(),limit=wait_limit();
+    if(until>limit)until=limit;
+    if(owner==1&&!board_service_blocked_until(OS_SERVICE_NPU,until))return fail();
+    ++r->waits;
+    const int result=sunstone_deadline_wait_until(until);
+    if(result==SUNSTONE_DEADLINE_ERROR)return fail();
+    if(result==SUNSTONE_DEADLINE_EXPIRED)++r->deadlines;else ++r->events;
+    if(idle){
+        r->idle_us+=sunstone_deadline_now_us()-start;
+        if(result==SUNSTONE_DEADLINE_EXPIRED)++r->idle_deadlines;else ++r->idle_events;
+    }
+    return 1;
+}
+int os_npu_wait(void)
+{return wait_until(wait_limit(),1,1);}
 static enum os_quiesce_result npu_quiesce_step(struct os_quiesce *q)
 {
     /* Only the application closes its producer at a safe point. Forcing its
@@ -220,10 +247,10 @@ void os_npu_thermal(int allow,int stop,uint64_t until,uint64_t now)
         if(end>UINT64_MAX>>3)return;
         next=(end<<3)|(old&ACCEPTED)|(stop?STOP:allow?ALLOW:0);
     } while(!atomic_compare_exchange_weak_explicit(&npu.gate,&old,next,memory_order_acq_rel,memory_order_acquire));
-    /* Freshness wakes the idle mailbox owner for its own health/deadline
-     * check. Request publication independently wakes it without a tick. */
-    if(npu.client)xTaskNotifyGive(npu.client);
     if(!((old^next)&(STOP|ALLOW)))return;
+    /* Freshness alone updates admission time. Policy changes wake both owners;
+     * requests and final retirement publish their own notifications. */
+    if(npu.client)xTaskNotifyGive(npu.client);
     if(npu.bootstrap)xTaskNotifyGive(npu.bootstrap);
 }
 /* Same packed publication/claim ordering as the NPU board client: no mixed
@@ -383,20 +410,24 @@ static int call(enum npu_service_operation op,unsigned model,uint64_t timeout)
     uint64_t end=npu.end,word=atomic_load_explicit(&npu.gate,memory_order_acquire);
     if((word&STOP)&&(word>>3)<end)end=word>>3;
     if(end<=now)return FAIL_REQUEST(op,model,0,NULL,end,now);
-    #ifdef SUNSTONE_NPU_FAULT_HOOK
-    TickType_t wait=pdMS_TO_TICKS(8000); /* a test image waits for the controller's own verdict on a stalled job */
+#ifdef SUNSTONE_NPU_FAULT_HOOK
+    const uint64_t window=8000000; /* wait for the controller verdict in fault images */
 #else
-    TickType_t wait=pdMS_TO_TICKS(2000);
+    const uint64_t window=2000000;
 #endif
-    const uint64_t ticks=(end-now)*configTICK_RATE_HZ/1000000;
-    if(ticks<wait)wait=(TickType_t)ticks;
-    if(!wait)return FAIL_REQUEST(op,model,0,NULL,1,ticks);
-    npu.window_ms=(uint32_t)((uint64_t)wait*1000u/configTICK_RATE_HZ);
+    if(end-now>window)end=now+window;
+    npu.window_ms=(uint32_t)((end-now)/1000);
     if(op==NPU_SERVICE_SUBMIT&&RT.service.runtime)RT.service.runtime->marks=0;
-    if(!npu_runtime_send(&RT,0,op,model,timeout,wait,&ticket))
+    if(!npu_runtime_send(&RT,0,op,model,timeout,0,&ticket))
         return FAIL_REQUEST(op,model,0,NULL,1,atomic_load_explicit(&RT.slot[0].state,memory_order_acquire));
     if(RT.service.runtime)RT.service.runtime->marks|=NPU_MARK_COLLECT;
-    if(!npu_runtime_collect(&RT,0,ticket,&reply,wait)) {
+    int collected;
+    while(!(collected=npu_runtime_collect(&RT,0,ticket,&reply,0))){
+        /* Recheck the authoritative reply before testing expiry. The service
+         * publishes the queue entry before notifying this task. */
+        if(!clock_now(&now)||now>=end||wait_until(end,1,0)!=1)break;
+    }
+    if(!collected) {
 #ifdef SUNSTONE_NPU_FAULT_HOOK
         /* No reply in time. The record keeps the progress marks (high half of the value, the worker's steps from the
          * MMU capture to the reply and the client's wait) and the wait window in ms (low half, capped), the capture
@@ -449,9 +480,20 @@ int os_npu_open(void)
  * and the microseconds in the copy, the container decode and the layout, summed over the graphs. Graphs copied out of the
  * declared region at admission are timed there (the copy, then the runtime's prepare, whose layout includes each graph's
  * decode: decode_us is zero for them); graphs registered later add the runtime's own counters (npu_runtime_counters). */
-struct os_npu_register_record{uint64_t graphs,bytes,copy_us,decode_us,layout_us,reserved[3];};
+struct os_npu_register_record{
+    uint64_t graphs,bytes,copy_us,decode_us,layout_us,reserved[3];
+    struct npu_service_wake_record wakes[3]; /* worker, bootstrap, mailbox */
+};
 struct os_npu_register_record os_npu_register_record;
 static struct os_npu_register_record sealed_record;
+void os_npu_publish_wakes(void)
+{
+    /* The service is parked and the mailbox owns no device work. The final
+     * bootstrap notification precedes the client's immutable stop report. */
+    os_npu_register_record.wakes[0]=npu_service_wakes;
+    os_npu_register_record.wakes[1]=os_npu_owner_wakes[0];
+    os_npu_register_record.wakes[2]=os_npu_owner_wakes[1];
+}
 /* Where admission's time went, for the runner to copy out of image RAM (apps/os/cpu-return-host.py decodes it as npu_prepare):
  * microseconds of the reservation, the runtime's prepare by part (npu_runtime_prepare_parts), what follows prepare, and the
  * whole; then the core's cycles and the generic counter's ticks over the whole, so the clock the work ran at is measured, and
@@ -490,9 +532,9 @@ int os_npu_register(const void *model,size_t bytes,unsigned *entry)
     /* The graph is admitted like a linked one and must fit the bounds declared in the session (npu_runtime_register). */
     if(!(caller()&&entry&&npu_runtime_register(&RT,model,bytes,entry)))return 0;
     const struct npu_runtime_counters *c=&RT.counters;
-    os_npu_register_record=(struct os_npu_register_record){sealed_record.graphs+c->registered,sealed_record.bytes+c->registered_bytes,
-        sealed_record.copy_us+c->register_copy_us,sealed_record.decode_us+c->register_decode_us,
-        sealed_record.layout_us+c->register_layout_us,{0}};
+    os_npu_register_record=(struct os_npu_register_record){.graphs=sealed_record.graphs+c->registered,
+        .bytes=sealed_record.bytes+c->registered_bytes,.copy_us=sealed_record.copy_us+c->register_copy_us,
+        .decode_us=sealed_record.decode_us+c->register_decode_us,.layout_us=sealed_record.layout_us+c->register_layout_us};
     return 1;
 }
 int os_npu_load(unsigned entry)
@@ -545,6 +587,7 @@ static void guard_check(void);
 static void bootstrap(void *unused)
 {
     (void)unused;unsigned begun=0;
+    if(!sunstone_deadline_register()){(void)FAIL_REQUEST(NPU_SERVICE_OPEN,0,0,NULL,1,0);goto failed;}
     atomic_store_explicit(&bootstrap_ran,1,memory_order_release);
     for(;;) {
         uint64_t now;struct watch_failure why;
@@ -556,7 +599,10 @@ static void bootstrap(void *unused)
                 guard_check();atomic_store_explicit(&npu.stopped,1,memory_order_release);os_application_wake_main();
                 xTaskNotifyGive(npu.client);STOPPED_WAIT();return;
             }
-            if(!claim()){(void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));continue;}
+            if(!claim()){
+                if(wait_until(npu.initial_deadline,0,1)!=1)goto failed;
+                continue;
+            }
             complete();begun=1;
         }
         enum a733_npu_platform_result r=npu_runtime_startup_poll(&RT);
@@ -573,7 +619,8 @@ static void bootstrap(void *unused)
                          * Its release acknowledgment and notification precede
                          * retiring startup/IRQ provider ownership. */
                         if(!npu_service_runtime_parked(&RT.service)){
-                            (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));continue;
+                            if(wait_until(wait_limit(),0,1)!=1)goto failed;
+                            continue;
                         }
                         if(retirement_fault())goto failed;
                         r=npu_runtime_stop_poll(&RT);
@@ -582,16 +629,21 @@ static void bootstrap(void *unused)
                             guard_check();atomic_store_explicit(&npu.stopped,1,memory_order_release);os_application_wake_main();
                             xTaskNotifyGive(npu.client);STOPPED_WAIT();return;
                         }
-                        vTaskDelay(1);
-                    } else (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));
+                        if(!clock_now(&now)){(void)fail();goto failed;}
+                        if(wait_until(now+50,0,0)!=1)goto failed;
+                    } else if(wait_until(wait_limit(),0,1)!=1)goto failed;
                 }
             }
             if(activated!=NPU_SERVICE_BUSY){(void)FAIL_REQUEST(NPU_SERVICE_OPEN,0,0,NULL,NPU_SERVICE_OK,activated);goto failed;}
         }
-        /* A PENDING startup blocks until its power-service notification, its
-         * deadline or the last tick of its settle; a thermal notification
-         * ends the block early. */
-        (void)ulTaskNotifyTake(pdTRUE,r==A733_NPU_PLATFORM_PENDING ? a733_npu_startup_wait_ticks(&npu.device->startup) : 1);
+        /* Supply/domain publication notifies this task. The settle has an
+         * exact counter deadline; resource/GIC readbacks have no IRQ. */
+        if(!clock_now(&now)){(void)fail();goto failed;}
+        uint64_t until=now+50;
+        const struct a733_npu_startup *s=&npu.device->startup;
+        if(r==A733_NPU_PLATFORM_PENDING&&(s->stage==A733_NPU_STARTUP_SETTLE||
+           s->stage==A733_NPU_STARTUP_SUPPLY||s->stage==A733_NPU_STARTUP_ROW))until=s->wait_until;
+        if(wait_until(until,0,0)!=1)goto failed;
     }
 failed:
     vTaskSuspend(NULL);
