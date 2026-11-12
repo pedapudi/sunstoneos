@@ -228,7 +228,7 @@ memory, electrical and supervision evidence that the admission schema lists.
 - No host check covers the parser, storage mapping, controller sequence or
   failure cases, the native VE access functions, the built image's manifest
   against the ELF rules of `apps/hevc/prepare.py`, or session range admission.
-- `checks/hevc-pixel-reference.py` compares both copied NV12 pictures with an
+- `tools/hevc-pixel-reference.py` compares both copied NV12 pictures with an
   independent software decode. `checks/hevc-pixel-reference-host.py` checks
   equality, altered samples, frame order, extents and tool failures using
   CPU-generated copies.

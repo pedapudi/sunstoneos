@@ -17,7 +17,6 @@ from unicorn import UC_HOOK_CODE, UC_HOOK_MEM_WRITE, UC_HOOK_MEM_READ
 from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_LR
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by os-cpu-return-services.py'
 spec = importlib.util.spec_from_file_location('fault_capture', ROOT/'checks/fault-capture.py')
 fault = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fault)
@@ -201,76 +200,3 @@ class Model:
                 if self.stop=='native-retained':self.parked.add(c)
             if len(self.parked)+(missing is not None)==8:return 'retained'
         raise AssertionError(('execution budget',self.count-initial,[hex(self.uc.context_restore(x) or self.uc.reg_read(UC_ARM64_REG_PC)) for x in contexts]))
-
-def main():
-    ap=argparse.ArgumentParser();ap.add_argument('elf',type=Path);ap.add_argument('--out',type=Path,required=True)
-    a=ap.parse_args();a.out.mkdir(parents=True,exist_ok=True)
-    image=fault.Image(a.elf)
-    assert "a733_fault_boot" not in image.symbols, "resident stage2 rotation must not be linked"
-    model=Model(image);contexts=model.initialize();outcome=model.execute(contexts)
-    assert outcome=='rom',outcome
-    assert not model.postclean,model.postclean[:4]
-    expected=set(range(0x41200000,(image.symbols['__bss_end']+63)&~63,64))
-    assert all(x==expected for x in model.cleaned),[len(x) for x in model.cleaned]
-    clean_end=max(expected)+64
-    assert all(a+size<=clean_end for _,a,size,_ in model.writes if 0x41200000<=a<0x42000000)
-    raw=bytes(model.uc.mem_read(model.report,8880));(a.out/'report.bin').write_bytes(raw)
-    assert model.u64(model.report+40)==4 and model.u64(model.report+48)==0
-    for c in range(8):
-        p=model.report+688+c*1024
-        assert all(model.u64(p+i*8)==EPOCH for i in range(4))
-        assert model.u64(p+40)==(EPOCH if c else 0)
-        assert model.u64(p+768)==(EPOCH if c else 0)
-        assert model.u32(0x03460000+c*0x20000+0x1041c)==0x50607080+c
-        slot=fault.decode.decode_slot(bytes(model.uc.mem_read(fault.SLOTS+c*128,128)))
-        assert slot['state']=='valid' and slot['kind']=='deliberate exit' and slot['epoch']==EPOCH
-    rows=[dict(name='all-eight-success',instructions=model.count,cleaned_lines_per_core=len(expected),normal_writes_after_first_clean=0)]
-    for name in ('ordinary-exit-zero','wrong-core','missing-peer','active-interrupt',
-                 'unrelated-pending','wrong-ns-alias','expired-deadline',
-                 'restore-readback','ack-without-off','missing-timer','duplicate-timer','missing-idle','missing-wake'):
-        m=Model(image);ctx=m.initialize();missing=None
-        m.put64(m.report+32,2500000 if name in ('restore-readback','ack-without-off') else 50000)
-        if name=='ordinary-exit-zero':
-            m.uc.context_restore(ctx[3]);m.uc.reg_write(UC_ARM64_REG_PC,image.symbols['a733_cached_smc'])
-            for i in range(3):m.uc.reg_write(fault.REGS[i],0)
-            ctx[3]=m.uc.context_save()
-        elif name=='wrong-core':
-            m.uc.context_restore(ctx[3]);m.uc.reg_write(fault.REGS[0],2);ctx[3]=m.uc.context_save()
-        elif name=='missing-peer':missing=3
-        elif name in ('missing-timer','duplicate-timer'):
-            m.put64(image.symbols['a733_smp_core_results']+3*128+32,0 if name=='missing-timer' else 2)
-        elif name=='missing-idle':m.put64(image.symbols['a733_qualification_idle_completed']+3*8,0)
-        elif name=='missing-wake':m.put64(image.symbols['a733_qualification_idle_wakes']+3*8,3)
-        elif name=='active-interrupt':m.put32(0x03460000+3*0x20000+0x10300,1)
-        elif name=='unrelated-pending':m.put32(0x03460000+3*0x20000+0x10200,0x40000003)
-        elif name=='wrong-ns-alias':
-            p=image.symbols['a733_cached_el3_l2']+9*8;m.put64(p,m.u64(p)&~32)
-        elif name=='expired-deadline':m.put64(m.report+32,m.time)
-        elif name=='restore-readback':m.corrupt_readback=True
-        elif name=='ack-without-off':m.skip_off=True
-        assert m.execute(ctx,missing=missing)=='retained',name
-        assert m.u64(m.report+40)!=4 and not m.postclean,name
-        if name not in ('restore-readback','ack-without-off'):
-            assert not any(m.cleaned),name
-        if name=='ack-without-off':
-            assert m.u64(m.report+688+1024+40)==EPOCH
-            assert m.u64(m.report+688+1024+768)==0
-        rows.append(dict(name=name,instructions=m.count,success=False,
-                         cleaned_lines=sum(map(len,m.cleaned)),normal_writes_after_first_clean=0))
-    # Real initialized native records and an invalid interrupted SP exercise
-    # the unchanged stackless fault path in this newly linked image.
-    uc=image.machine();epoch=fault.prepare(image,uc,3)
-    regs=fault.el3_model(3);regs.update(esr_el1=0x92000045,spsr_el1=0)
-    result=fault.run(image,uc,image.symbols['a733_cached_el1_vectors']+8*128,
-                     {UC_ARM64_REG_SP:0x40000003},regs,['a733_smp_stop'])
-    slot=fault.decode.decode_slot(bytes(uc.mem_read(fault.SLOTS+3*128,128)))
-    assert slot['state']=='valid' and slot['kind']=='vector fault' and slot['epoch']==epoch
-    assert not [w for w in result['writes'] if w[4]==1]
-    assert not [w for w in result['writes'] if model.report<=w[1]<model.report+8880]
-    rows.append(dict(name='current-native-bad-stack-retains',instructions=len(result['trace']),el1_stores=0,success_publications=0))
-    hashes={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted((ROOT/'apps/cpu-runtime-qualification').glob('*')) if p.is_file() and p.suffix in ('.c','.h','.S','.patch','.txt')}
-    for p in (Path(__file__), ROOT/'checks/fault-capture.py', ROOT/'checks/fault-decode.py'):
-        hashes[str(p.relative_to(ROOT))]=hashlib.sha256(p.read_bytes()).hexdigest()
-    result=dict(schema=1,scope='modeled native shutdown; completed workload is an input fixture, not physical or scheduler qualification',epoch=EPOCH,elf_sha256=hashlib.sha256(a.elf.read_bytes()).hexdigest(),sources=hashes,resident_stage2_rotation_linked=False,manifest_sha256=hashlib.sha256((a.elf.parent/'qualification/manifest.json').read_bytes()).hexdigest(),cases=rows,report_sha256=hashlib.sha256(raw).hexdigest())
-    (a.out/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result,indent=2))
-if __name__=='__main__':main()

@@ -198,8 +198,16 @@ def library(tree, text):
     if "__name__" in text or 'sys.argv' in text:
         return False
     plain = (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.ClassDef, ast.Assign, ast.AnnAssign, ast.Expr)
-    return all(isinstance(node, plain) and not (isinstance(node, ast.Expr) and not isinstance(node.value, ast.Constant))
-               for node in tree.body)
+
+    def path_setup(node):
+        """The calls a module may make at import to find its siblings: sys.path.insert(...), sys.path.append(...) and
+        spec.loader.exec_module(module), which loads a sibling by path."""
+        call = node.value
+        name = ast.unparse(call.func) if isinstance(call, ast.Call) else ''
+        return name in ('sys.path.insert', 'sys.path.append') or name.endswith('.loader.exec_module')
+
+    return all(isinstance(node, plain) and not (isinstance(node, ast.Expr) and not isinstance(node.value, ast.Constant)
+                                                and not path_setup(node)) for node in tree.body)
 
 
 def scan(path, seen=()):

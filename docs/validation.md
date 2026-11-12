@@ -128,7 +128,7 @@ check that is not pure-host, the check's own file says what the gate does, in a 
   test graphs under `build/npu-graph-variants` ([tools/npu-graph-build.py](../tools/npu-graph-build.py)).
 - **Board.** A check that needs a board or USB access is reported with a `BOARD` line and does not refuse. One that needs a
   board without a USB or `--fel` argument declares `GATE_BOARD = 'reason'`.
-- **Waived.** A helper module declares `GATE_WAIVED = 'category | reason'`. The gate counts waived checks and writes their reasons to
+- **Waived.** A check whose inputs the gate cannot supply declares `GATE_WAIVED = 'category | reason'`. A module that only defines helpers (no command line) is a library and declares nothing; a tool that is not a check belongs in `tools/`. The gate counts waived checks and writes their reasons to
   `waived.txt` in its output. A waiver states what input is missing and what would supply it.
 - **Unsupplied.** An affected check in none of these groups makes the gate refuse before building anything (exit 2), naming the
   check, in `--full` and in `--affected` or `--changed` alike.

@@ -33,7 +33,7 @@ from pathlib import Path
 import shutil
 import struct
 import sys
-GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by memtest-map-admission.py'
+GATE_WAIVED = 'stale | needs a built memory qualification image (CMake target a733-memtest; no gate recipe); against a current build fixed_tests expects 192 DC CIVAC and 12 KiB read where the image runs 213 and 13,632 bytes'
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]

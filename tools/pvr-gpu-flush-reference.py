@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 import re
 import subprocess
-GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by pvr-gpu-flush.py'
 
 SHIM = r'''
 #include <assert.h>

@@ -55,7 +55,7 @@ previous boot's records over USB0.
    `0x47008200`, taken only when that report holds its magic and status 6) and
    each slot whose magic and CRC match. It then zeroes the eight slots.
 7. **Report.** USB0 operation 5 (`apps/os/usb0.c`; host side
-   `tools/fault-report.py`, decoder `checks/fault-decode.py`) returns
+   `tools/fault-report.py`, decoder `tools/fault-decode.py`) returns
    `a733_fault_previous`: an 8-byte header, the 128-byte previous resident
    result and eight slots, 1,160 bytes without a frame header.
 

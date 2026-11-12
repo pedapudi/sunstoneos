@@ -80,7 +80,7 @@ The main check passes 44 retained-failure cases; a focused additional case
 rejects a time sample older than the nested controller's sample. Terminal
 polls perform no further backend operations.
 
-The [reference comparison](../checks/pvr-gpu-flush-reference.py) compiles the
+The [reference comparison](../tools/pvr-gpu-flush-reference.py) compiles the
 complete pinned `pvr_mmu_flush_exec()` function with captured transport calls.
 All 88 command bytes match for each translation level, and the reference
 performs one submission and one command-return wait. Original structure and

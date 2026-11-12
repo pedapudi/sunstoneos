@@ -42,8 +42,8 @@ Bank-qualified GPIO, mux, pull, drive, interrupt and debounce ownership is imple
 
 **Board-qualified scope:** The shared PMIC provider initializes, reads DCDC1,
 reaps the request, releases the client lease and restores inherited bus and pins
-in `pmic-provider-probe-20261018/physical/runtime/session.json`.
-`sys-supply-probe-20261018/runtime/` records second-board read-only selectors.
+(record `buses-rtc-pmic-dcdc1-read` in [buses-rtc.jsonl](../evidence/buses-rtc.jsonl)).
+[pmic-supply-observation.jsonl](../evidence/pmic-supply-observation.jsonl) records second-board read-only selectors.
 These are register observations rather than analog voltage measurements.
 
 Header TWI0-3 and S_TWI2 lack native clock, mutex and resource bindings. See [the controller inventory](../../drivers/i2c/README.md).
@@ -72,10 +72,10 @@ SPI0-4 and S_SPI master FIFO paths and selected DMA are implemented; the SPI3 co
 ## RTC and watchdog
 
 **Board-qualified scope:** Read-only inherited-RC observations show one second
-of RTC progression in about 1.1 seconds in
-`rtc-rc-readonly-20261018/physical/observation.json`. Watchdog expiry, retained
-fault breadcrumbs and FEL recovery have evidence in `wdt-fel-return-20261031/`
-and `dev-runs-1031/`.
+of RTC progression in about 1.1 seconds (record `buses-rtc-rtc-rc-progression` in
+[buses-rtc.jsonl](../evidence/buses-rtc.jsonl)). Watchdog expiry, retained
+fault breadcrumbs and FEL recovery have evidence in the record
+`buses-rtc-watchdog-fel-return` of the same file.
 
 Calendar setting, cold crystal initialization, non-waking alarms and a serialized two-client service are implemented. Returning RTC images need the current watchdog, breadcrumb and runner integration. See [RTC](../rtc-application.md), [alarm qualification](../../apps/rtc/qualification.md) and [watchdog](../watchdog.md).
 

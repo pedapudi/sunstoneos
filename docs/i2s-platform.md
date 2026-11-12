@@ -199,7 +199,7 @@ execution below covers the broader lifecycle; a clean integration does not
 require either execution to repeat.
 
 ```sh
-cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+clang-21 -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -Iinclude checks/i2s-platform.c drivers/audio/a733_i2s_platform.c \
   drivers/audio/a733_i2s.c drivers/audio/a733_i2s_stream.c \
   drivers/audio/a733_audio_leases.c drivers/clock/a733_clock_leases.c \
@@ -207,9 +207,7 @@ cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   drivers/dma/a733_dma.c drivers/dma/a733_dma_controller.c \
   -o /tmp/i2s-platform-check
 /tmp/i2s-platform-check > /tmp/i2s-platform.log
-/tmp/i2s-platform-check --rates > /tmp/i2s-rates.log
-python3 checks/i2s-rates-reference.py ~/.cache/sunstoneos/sources/i2s \
-  ~/.cache/sunstoneos/sources/i2s-platform /tmp/i2s-rates.log
+python3 checks/i2s-rates-reference.py --output ~/.cache/sunstoneos/build/i2s-rates
 ```
 
 The `--rates` case offers the binding every integer rate from 1 Hz to

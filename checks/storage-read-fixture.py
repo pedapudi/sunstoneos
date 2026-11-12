@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Produce explicitly modeled authority with the actual SD0 image identity."""
+"""Produce explicitly modeled authority with the actual SD0 image identity; tools/gate_session.py loads it to build the session of a storage-read image."""
 import hashlib,importlib.util,json,re,struct
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
-GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by tools/gate_session.py'
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 FACTS={
@@ -57,6 +56,3 @@ def produce(image,out,rom_usb_takeover=False,sd_profile=0,application_blocks=2):
  path=out/'admission.json';path.write_text(json.dumps(admission,indent=2)+'\n');prep.validate_admission(admission,ih,hashlib.sha256(raw).hexdigest(),raw)
  (out/'fixture-inputs.json').write_text(json.dumps(dict(baseline=str(baseline),baseline_sha256=hashlib.sha256(baseline.read_bytes()).hexdigest(),pmic_fixture=str(pmic_source),pmic_fixture_sha256=hashlib.sha256(pmic_source.read_bytes()).hexdigest(),image_sha256=ih,build_id=identity.hex(),physical_access=False),indent=2)+'\n')
  return template,path
-if __name__=='__main__':
- import argparse
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--rom-usb-takeover',action='store_true');p.add_argument('--sd-profile',type=int,choices=(0,1,2,3),default=0);a=p.parse_args();produce(a.image,a.output,a.rom_usb_takeover,a.sd_profile)

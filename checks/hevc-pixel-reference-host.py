@@ -21,7 +21,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
-    path = Path(__file__).with_name('hevc-pixel-reference.py')
+    path = Path(__file__).resolve().parents[1] / 'tools/hevc-pixel-reference.py'
     spec = importlib.util.spec_from_file_location('hevc_pixel_reference', path)
     comparator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(comparator)
