@@ -8,8 +8,7 @@ GPU lifecycle, read-only SD and CPU/background records in
 validation needs current nonsecure DMA access authority. Headset validation
 needs an accessory and admitted input; the radio's implemented 25 MHz mode does
 not meet the vendor-rate requirement. [Remaining provider waits](designs/remaining-owner-waits.md)
-cover Type-C, GPIO power, PMIC and legacy diagnostics. The coordinator's worker
-handoff is `~/.cache/sunstoneos/build/event-owners-1112/handoff.md`.
+cover Type-C, GPIO power, PMIC and legacy diagnostics.
 
 SunstoneOS runs FreeRTOS on the Orange Pi Zero 3W/A733. The
 [accepted objective](goal.md) requires complete usable hardware and native
