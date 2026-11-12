@@ -14,7 +14,7 @@ The cached-walk CPU latency diagnostic returns normally on port 3-3 and complete
 | A55 C self-selection | measured; full dispatch remains open | 3 to 15.792 µs in retained PMU windows | same record |
 | One control-record body | measured; full batch remains open | 3.125 to 20.375 µs | same record |
 | Instrumented CPU0 whole tick | open | 165.917 µs; a separate sample has 74.88 percent backend stalls | same record |
-| Cause of CPU0 tick stalls | measured | Busy-phase releases cost 11,441 to 74,021 cycles on average against about 2,600 when idle; SGI segments take 2.2 percent of a 192.42 µs tick; one line transfer costs 142.5 to 153.5 cycles | `1794502169612799798-8aea3851`; [cause capture](../designs/scheduler-latency-measurement.md#cause-capture-separates-release-barrier-and-line-transfer-costs) |
+| Cause of CPU0 tick stalls | measured | A busy tick averages 314,510 cycles and 220 attributable L3 refills against 36,541 cycles and one refill when idle, about 1,268 cycles per refill; SGI segments take 2.2 percent of a tick; one line transfer costs 142.5 to 153.5 cycles | `1794504237145636168-9aa4ebd9`, `1794502169612799798-8aea3851`; [cause capture](../designs/scheduler-latency-measurement.md#cause-capture-separates-release-barrier-and-line-transfer-costs) |
 | Retained mask interval after scheduler start | open | 86.250 µs on core 4 against 25 µs | same record |
 | Kernel task-lock wait | measured below budget; worst case unqualified | 9.792 µs against 25 µs | same record |
 | CPU0 busy task wake | open | Maximum 210.417 µs; 10 µs 99.99th-percentile target unqualified | same record |
