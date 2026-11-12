@@ -163,7 +163,19 @@ static int application_wait_until_unless(uint64_t until,int (*unless)(void))
     return result;
 }
 static int application_wait_until(uint64_t until){return application_wait_until_unless(until,NULL);}
-static int live_changed(void){return ss_live()!=0;}
+static int application_entry_ready(void)
+{
+#ifdef SUNSTONE_A733_USB_FAILURE_TEST
+    /* The empty-port diagnostic waits for the two owner checkpoints in its
+     * entry. An attachment is neither expected nor synthesized. The grant
+     * and returning USB0 owner's readiness still precede application entry. */
+    if(ss_live()<0)return -1;
+    return ss_grant()&&atomic_load_explicit(&usb_ready,memory_order_acquire);
+#else
+    return ss_live();
+#endif
+}
+static int live_changed(void){return application_entry_ready()!=0;}
 void ss_usb_wait(uint32_t wait_us)
 {
     uint64_t now=a733_smp_counter()/24;
@@ -304,10 +316,10 @@ static void main_entry(void *unused)
     (void)unused;
     if(!board_service_deadline_register(OS_SERVICE_APPLICATION))ss_fail(0x756);
     int live;
-    while(!(live=ss_live())){
+    while(!(live=application_entry_ready())){
         ss_progress();
         if(application_wait_until_unless(board.session.deadline_us-10000,live_changed)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
-        if(a733_smp_counter()/24>=board.session.deadline_us-10000&&ss_live()!=1)ss_fail(0x750);
+        if(a733_smp_counter()/24>=board.session.deadline_us-10000&&application_entry_ready()!=1)ss_fail(0x750);
     }
     if(live<0)ss_fail(0x750);
     const struct ss_manifest *m=ss_application.manifest;
