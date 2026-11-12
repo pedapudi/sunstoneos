@@ -29,7 +29,8 @@ def prepare(a):
         symbols={s.name:s['st_value'] for s in ELFFile(f).get_section_by_name('.symtab').iter_symbols()}
     require(tuple(symbols[n] for n in SYMBOLS)==LAYOUT,'Native ELF layout changed.')
     a.build=returning.artifact_directory(a.build);shutil.copy2(ROOT/'boot/a733/a64-entry-probe.S',a.build/'probe.S')
-    commands=[[a.clang,'--target=aarch64-none-elf','-march=armv8-a','-c',a.build/'probe.S','-o',a.build/'probe.o'],
+    shutil.copy2(ROOT/'include/a733_cpu_reset.h',a.build/'a733_cpu_reset.h')
+    commands=[[a.clang,'--target=aarch64-none-elf','-march=armv8-a','-I',ROOT/'include','-c',a.build/'probe.S','-o',a.build/'probe.o'],
         [a.lld,'-Ttext=0x41000000','-e','_start',a.build/'probe.o','-o',a.build/'probe.elf'],
         [a.objcopy,'-O','binary',a.build/'probe.elf',a.build/'probe.bin']]
     for command in commands:
@@ -40,6 +41,7 @@ def prepare(a):
     save(a.build/'commands.json',[[str(v) for v in c] for c in commands])
     save(a.build/'manifest.json',{'schema':'a733-a64-entry-probe-v1','physical_access':False,'native_sha256':digest(a.observer),
         'layout':dict(zip(SYMBOLS,LAYOUT)),'source_sha256':digest(ROOT/'boot/a733/a64-entry-probe.S'),'host_sha256':digest(Path(__file__)),
+        'reset_header_sha256':digest(a.build/'a733_cpu_reset.h'),
         'files':{p.name:digest(p) for p in a.build.iterdir() if p.is_file()}})
 
 def decode(raw,nonce,pre):

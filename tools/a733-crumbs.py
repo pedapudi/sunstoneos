@@ -97,19 +97,55 @@ def arm_arguments(mode):
     return args
 
 
+# Words that tell a cold power-on from a warm reset (docs/designs/card-fel-recovery.md):
+# the first-stage gate's record in RTC GP2, the cold-boot marker (RTC IC_CHARA_REG,
+# A733 manual 9.1.7.20), the DCXO control word with the reset level in bit 13
+# (9.1.7.16) and WDT0's configuration and output. Never cleared with WORDS.
+RESET_WORDS = {'flag': RTC + 0x108, 'marker': RTC + 0x1f0, 'xo_ctrl0': RTC + 0x160,
+               'wdt_config': WDT_CONFIG, 'wdt_output': WDT_OUTPUT}
+MARKER, MARKER_KEYED, MARKER_SET = RTC + 0x1f0, 0x16aa16aa, 0x16aa
+FEL_REQUEST, GATE_STAGE = 0x5aa5a55a, 0x0c02
+GATE_FLAGS = {'cold': 0x8000, 'warm': 0x4000, 'unmarked': 0x2000}  # include/a733_card_fel_gate.h
+
+
+def reset_arguments():
+    args = []
+    for address in RESET_WORDS.values():
+        args += ['readl', hex(address)]
+    return args
+
+
+def gate_record(flag):
+    """Decode the first-stage gate's record in GP2, or None for another value."""
+    if flag >> 16 != GATE_STAGE:
+        return None
+    record = {name: bool(flag & bit) for name, bit in GATE_FLAGS.items()}
+    record.update(refused_step=flag >> 8 & 0xf, mode=flag & 0xff)
+    return record
+
+
+def effective_mode(before, record):
+    """WDT0's mode at the reset: the production gate disarms WDT0 on a warm
+    entry and records the mode it read, so a zero readback defers to it."""
+    if record and record['warm'] and before == 0:
+        return record['mode']
+    return before
+
+
 def return_arguments():
-    """One FEL invocation on the returned instance: mode, disarm, mode again, crumbs."""
+    """One FEL invocation on the returned instance: mode, disarm, mode again, crumbs, reset words."""
     args = ['readl', hex(WDT_MODE), 'writel', hex(WDT_MODE), hex(KEY), 'readl', hex(WDT_MODE)]
     for offset in WORDS.values():
         args += ['readl', hex(RTC + offset)]
-    return args
+    return args + reset_arguments()
 
 
 def parse_return(stdout):
     values = [int(x, 16) for x in stdout.split()]
-    if len(values) != 2 + len(WORDS):
+    if len(values) != 2 + len(WORDS) + len(RESET_WORDS):
         raise ValueError('Unexpected watchdog return readback.')
-    return values[0], values[1], dict(zip(WORDS, values[2:]))
+    crumbs = values[2:2 + len(WORDS)]
+    return values[0], values[1], dict(zip(WORDS, crumbs)), dict(zip(RESET_WORDS, values[2 + len(WORDS):]))
 
 
 def bundle_image(bundle, image_sha256):
@@ -323,6 +359,16 @@ def decode(words, epoch, elf=None):
         result['last'] = stage(last)
         result['last']['core'] = time >> 29
         result['last']['seconds_since_power_on'] = round((time & 0x1fffffff) * 1024 / 24e6, 4)
+        if result['last']['stage'] == 0x0c02:
+            result['last']['name'] = 'CARD_FEL_GATE'
+            value = result['last']['value']
+            result['last']['gate_progress'] = {
+                1: 'entry', 2: 'mode checked', 3: 'watchdog set to the profile mode',
+                4: 'request cleared', 5: 'before ROM branch',
+                0x81: 'refused local cache/MMU state', 0x82: 'refused ROM redirect',
+                0x83: 'refused watchdog mode/configuration/output',
+                0x84: 'request clear readback failed', 0x86: 'watchdog readback differs from the profile mode',
+            }.get(value, 'unknown gate progress')
         if result['last']['stage'] == 0x0204:
             value = result['last']['value']
             step = value >> 12
@@ -383,6 +429,8 @@ def decode(words, epoch, elf=None):
     if 'last' in result:
         r = result['last']
         parts.append(f"last stage {r['name']} ({r['stage']:#06x}) value {r['value']:#x} on core {r['core']}")
+        if 'gate_progress' in r:
+            parts.append('gate '+r['gate_progress'])
     else:
         parts.append('tagged at EL3 entry; no later stage')
     if result.get('last', {}).get('admission_refusal'):

@@ -470,7 +470,7 @@
  
          return ( uint8_t ) ( ullMpidrEl1 & 0xff );
      }
-@@ -1763,22 +1915,10 @@
+@@ -1763,22 +1915,18 @@
          }
          #endif /* configASSERT_DEFINED */
  
@@ -490,10 +490,18 @@
 -        #endif
 -        portEXIT_CRITICAL_FROM_ISR( uxSavedInterruptStatus );
 -        portCLEAR_INTERRUPT_MASK_FROM_ISR( uxInterruptStatus );
-+        /* Only this core writes its yield flag, and DAIF.I stays set from
-+         * exception entry, so no mask or lock is needed. The IRQ exit path
-+         * takes both kernel locks when it switches context. */
++        #ifdef SS_KERNEL_TEST_ADMIN_ENTER
++            extern void ss_kernel_test_sgi( void ) __attribute__( ( weak ) );
++            if( ss_kernel_test_sgi != NULL )
++            {
++                ss_kernel_test_sgi();
++            }
++        #endif
++        #if !configSS_PARTITIONED_SCHEDULER
++        /* The global scheduler uses this interrupt as a switch request.
++         * Partitioned owner exit derives rescheduling from published work. */
 +        ullPortYieldRequired[ portGET_CORE_ID_FROM_ISR() ] = pdTRUE;
++        #endif
      }
  
  /*-----------------------------------------------------------*/

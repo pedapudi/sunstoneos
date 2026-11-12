@@ -128,7 +128,8 @@ if(SUNSTONE_PARTITIONED_SCHEDULER)
     target_include_directories(scheduler-${variant}-qemu PRIVATE
       checks/scheduler-partitioned-qemu-config platform/qemu-smp include runtime/include
       "${FREERTOS_DIR}/include" "${smp_build}")
-    target_compile_definitions(scheduler-${variant}-qemu PRIVATE SUNSTONE_SMP_CORES=8 SUNSTONE_OWNER_COUNTERS=1 ${extra})
+    target_compile_definitions(scheduler-${variant}-qemu PRIVATE SUNSTONE_SMP_CORES=8
+      SUNSTONE_OWNER_COUNTERS=1 SS_KERNEL_TEST_IRQ_EXIT=1 ${extra})
     target_compile_options(scheduler-${variant}-qemu PRIVATE ${SUNSTONE_KERNEL_FLAGS})
     target_link_options(scheduler-${variant}-qemu PRIVATE -nostdlib -static -Wl,--gc-sections
       -Wl,--defsym=SUNSTONE_SMP_STACKS=8

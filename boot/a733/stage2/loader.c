@@ -12,6 +12,7 @@
 #include "a733_mmc_read.h"
 #include "a733_range.h"
 #include "a733_storage_digest.h"
+#include "a733_cpu_reset.h"
 #include "a733_board_application.h"
 #include "../../../platform/a733-smp-cached/boot.h"
 #include "sunstone_session.h"
@@ -402,8 +403,7 @@ static _Noreturn void rom_return(void)
     __asm__ volatile("ic iallu\n dsb sy\n isb" ::: "memory");
     *(volatile uint32_t *)UINT64_C(0x08001004) = 0x20;
     *(volatile uint32_t *)UINT64_C(0x08001008) = 0;
-    __asm__ volatile("dsb sy\n msr rmr_el3, %0\n isb" :: "r"(UINT64_C(2)) : "memory");
-    for (;;) __asm__ volatile("wfi");
+    a733_cpu_reset_aarch32();
 }
 static void publish(uint64_t status, uint64_t detail)
 {

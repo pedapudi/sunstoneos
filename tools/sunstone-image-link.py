@@ -280,7 +280,8 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_ex
             (manifest_objects[0]['value'], manifest_objects[0]['size']) == (section[3], section[5]) and \
             section[2] & 7 == 2, 'generated manifest object differs from the immutable application section'
         allowed.add(selected)
-    allowed |= {name for name in linked if re.match(r'^(?:[xv]|ux|ul|uc|pv|pc)[A-Z]', name)}
+    allowed |= {name for name in linked if re.match(r'^(?:[xv]|ux|ul|uc|pv|pc)[A-Z]', name)
+                or name == 'eTaskGetState'}
     # FreeRTOS configASSERT is a board-supplied kernel callback.
     allowed.update(('vApplicationAssert', 'platform_panic', 'ullPortYieldRequired'))
     forbidden = sorted(external - allowed)

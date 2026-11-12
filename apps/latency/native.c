@@ -108,6 +108,9 @@ void latency_main(const struct ss_grant *grant)
     ss_fail(0xb7e);
 #endif
     ss_activity_begin();
+#ifdef SUNSTONE_SCHED_PMU
+    ss_sched_pmu_arm();
+#endif
     latency_workload_run(&result);
     if (!at_top()) ss_fail(0xb03);
     ss_activity_end(1);

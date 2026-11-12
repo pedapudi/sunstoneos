@@ -112,9 +112,19 @@ void ss_latency_tick_hook(void)
 #ifdef SUNSTONE_LATENCY_TLBI
     tlbi_broadcast();
 #endif
+#ifndef SS_LATENCY_TEST_TICK_MASK_HELD
+    /* Each notification takes its own API guard. Admit interrupts between
+     * releases rather than masking this diagnostic's whole eight-task loop. */
+    __asm__ volatile("msr daifclr, #2" ::: "memory");
+#endif
     unsigned limit = p == IDLE ? LATENCY_IDLE_SAMPLES : LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES;
     BaseType_t woken = pdFALSE;
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
+#ifdef SUNSTONE_LATENCY_MODEL
+        uint64_t admission;
+        __asm__ volatile("mrs %0, daif" : "=r"(admission));
+        configASSERT(!(admission & UINT64_C(0x80)));
+#endif
         if (atomic_load_explicit(&wake[c].completed, memory_order_acquire) >= limit ||
             atomic_load_explicit(&wake[c].pending, memory_order_acquire)) continue;
         wake[c].metric = SS_LAT_METRICS;
@@ -124,7 +134,13 @@ void ss_latency_tick_hook(void)
     portYIELD_FROM_ISR(woken);
     /* FromISR mask restoration can clear PSTATE.I. The following production
      * tick handler requires the masked state supplied by IRQ entry. */
+#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
+    const uint64_t restore_start = ss_latency_now();
+#endif
     __asm__ volatile("msr daifset, #2" ::: "memory");
+#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
+    ss_latency_mask_open(portGET_CORE_ID(), restore_start, (uintptr_t)ss_latency_tick_hook);
+#endif
 }
 static void wake_worker(void *argument)
 {
@@ -135,6 +151,9 @@ static void wake_worker(void *argument)
         configASSERT(portGET_CORE_ID() == c);
         if (atomic_load_explicit(&phase, memory_order_acquire) == STOP) {
             ss_latency_freeze(c);
+#ifdef SUNSTONE_SCHED_PMU
+            configASSERT(ss_sched_pmu_freeze(c) == SS_SCHED_PMU_OK);
+#endif
             atomic_store_explicit(&wake[c].parked, 1, memory_order_release);
             vTaskSuspend(NULL);
             configASSERT(0);
@@ -142,6 +161,9 @@ static void wake_worker(void *argument)
         configASSERT(atomic_load_explicit(&wake[c].pending, memory_order_acquire));
         if (wake[c].metric < SS_LAT_METRICS) {
             const uint64_t running = ss_latency_now();
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+            ss_sched_trace_wake(c, wake[c].released, running, wake[c].metric == SS_LAT_SCHED_BUSY);
+#endif
             unsigned index = atomic_load_explicit(&wake[c].completed, memory_order_relaxed);
             configASSERT(index < LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES);
             report->wakes[c][index] = (struct latency_wake_sample){
@@ -180,10 +202,11 @@ static void load_worker(void *argument)
     vTaskSuspend(NULL);
     configASSERT(0);
 }
-static void wait_tick(void)
+static void wait_period(unsigned milliseconds)
 {
+    const TickType_t budget = (TickType_t)(((uint64_t)SUNSTONE_LATENCY_RUN_US * configTICK_RATE_HZ + 999999u) / 1000000u);
 #ifdef SUNSTONE_LATENCY_MODEL
-    if ((TickType_t)(xTaskGetTickCount() - began) >= pdMS_TO_TICKS(10000)) {
+    if ((TickType_t)(xTaskGetTickCount() - began) >= budget) {
         platform_puts("FAIL latency phase="); platform_hex(atomic_load(&phase));
         platform_puts(" ready="); platform_hex(atomic_load(&ready_mask));
         for (unsigned c = 0; c < LATENCY_CORES; ++c) {
@@ -196,10 +219,24 @@ static void wait_tick(void)
         platform_puts("\n");
     }
 #endif
-    configASSERT((TickType_t)(xTaskGetTickCount() - began) < pdMS_TO_TICKS(10000));
+    configASSERT((TickType_t)(xTaskGetTickCount() - began) < budget);
     latency_workload_progress();
-    vTaskDelay(1);
+    vTaskDelay(pdMS_TO_TICKS(milliseconds));
 }
+static void wait_tick(void) { wait_period(1); }
+#ifdef SUNSTONE_LATENCY_CONTROL
+static void qualify_control(void)
+{
+    configASSERT(latency_control_start(SUNSTONE_LATENCY_CONTROL_MODE));
+    /* Waiting twenty milliseconds keeps the lifetime progress window serviced without
+     * imposing a 1 kHz controller wake on the control-only idle phase. */
+    while (!latency_control_ready() && latency_control_complete() == 0) wait_period(20);
+    while (latency_control_complete() == 0) wait_period(20);
+    /* A published error stops sampling and remains visible in the report. */
+    latency_control_stop();
+    while (!latency_control_stopped() || !ulSunstoneControlTasksSuspended()) wait_period(20);
+}
+#endif
 static void wait_samples(unsigned expected)
 {
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
@@ -236,18 +273,32 @@ void latency_workload_run(struct latency_result *out)
     ss_latency_phase_set(SS_LAT_BUSY);
     atomic_store_explicit(&phase, BUSY, memory_order_release);
     wait_samples(LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES);
+#ifdef SUNSTONE_LATENCY_CONTROL
+    atomic_store_explicit(&phase, QUIET, memory_order_release);
+    if (SUNSTONE_LATENCY_CONTROL_MODE == LATENCY_CONTROL_BUSY) qualify_control();
+#endif
     ss_latency_phase_set(SS_LAT_PHASE_NONE);
     /* Measurement is complete. Stop background traffic before draining the
      * modeled DMA client; completion IRQs remain enabled throughout cleanup. */
     atomic_store_explicit(&stop_load, 1, memory_order_release);
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
         while (!atomic_load_explicit(&load[c].stopped, memory_order_acquire)) wait_tick();
+#if defined(SUNSTONE_SCHED_LATENCY_TRACE) || defined(SUNSTONE_LATENCY_CONTROL)
+    /* stopped precedes suspension publication. Wait for the saved frame and
+     * owner acknowledgment before the wake task freezes this core's records. */
+    for (unsigned c = 0; c < LATENCY_CORES; ++c)
+        while (!ss_latency_task_suspended(load_task[c])) wait_tick();
+#endif
     out->dma_jobs = latency_dma_model_stop();
 #ifdef SUNSTONE_LATENCY_TLBI
     configASSERT(atomic_load_explicit(&tlbi_issued, memory_order_relaxed) >= LATENCY_IDLE_SAMPLES);
     out->dma_jobs = (uint32_t)atomic_load_explicit(&tlbi_issue_max, memory_order_relaxed);
 #endif
     atomic_store_explicit(&phase, QUIET, memory_order_release);
+#ifdef SUNSTONE_LATENCY_CONTROL
+    if (SUNSTONE_LATENCY_CONTROL_MODE == LATENCY_CONTROL_IDLE) qualify_control();
+    configASSERT(latency_control_snapshot(&out->control));
+#endif
     atomic_store_explicit(&phase, STOP, memory_order_release);
     for (unsigned c = 0; c < LATENCY_CORES; ++c) xTaskNotifyGive(wake_task[c]);
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
@@ -257,6 +308,12 @@ void latency_workload_run(struct latency_result *out)
     ss_latency_snapshot(out->core);
     ss_latency_phase_snapshot(out->phases);
     ss_latency_sites_snapshot(out->sites);
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_snapshot(&out->scheduler);
+#endif
+#ifdef SUNSTONE_SCHED_PMU
+    ss_sched_pmu_snapshot(&out->pmu_windows);
+#endif
 #ifdef SUNSTONE_LATENCY_PMU
     ss_latency_site_pmu_snapshot(out->site_pmu);
     for (unsigned c = 0; c < LATENCY_CORES; ++c) out->pmu_supported[c] = ss_latency_pmu_supported(c);

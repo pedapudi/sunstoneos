@@ -1,4 +1,7 @@
 #include "sunstone_latency.h"
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+#include "latency_trace.h"
+#endif
 
 #ifdef SUNSTONE_LATENCY
 #include "FreeRTOS.h"
@@ -309,6 +312,9 @@ void ss_latency_init(uint64_t frequency)
 }
 void ss_latency_freeze(unsigned core)
 {
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+    ss_sched_trace_freeze(core);
+#endif
     if (core < 8) __atomic_store_n(&local[core].frozen, 1, __ATOMIC_RELEASE);
 }
 uint64_t ss_latency_counter_frequency(void)

@@ -508,21 +508,49 @@ It restores those bytes after its validated normal return. Finite native NPU dia
 retirement rules described below. Neither format's serialization establishes
 physical qualification.
 
-## First-stage FEL recovery uses its own RAM proof
+## First-stage FEL recovery uses its own SRAM proof
 
 `--kind probe --approved-by coordinator` admits the
-[first-stage recovery image](designs/card-fel-recovery.md) through its immutable
-`a733_card_fel_profile`. This profile has a fresh nonce request, an exact
-AArch32 gate hash and a fixed report. It carries no storage or power-transition
-authority and uses no secondary policy writes or generic probe return epilogue.
+[first-stage recovery images](designs/card-fel-recovery.md) through their
+immutable `a733_card_fel_profile`. Each image holds only the exact AArch32 gate
+code at `0x52000`, followed by its WDT0 policy word `0xb1`, and the read-only
+profile at `0x52400`. The profile's entry field selects the request image or the
+warm-entry image. Neither image carries input, storage, DRAM, clock or
+power-transition authority, and the runner initializes no DRAM. The runner
+refuses any FEL binary other than the reviewed one, which disables the
+instruction cache before each register command, and runs a frozen copy.
 
-The runner sets and verifies the vendor RTC request after arming WDT0 and
-before launching the image. Acceptance requires normal FEL return, mode zero,
-the matching nonce/report, consumed gate state, unchanged gate code and cleared
-RTC request. A watchdog reset is a failed proof; the runner captures no DRAM
-after it. A normal return with an invalid receipt quarantines the instance.
-The resulting evidence qualifies only this RAM path. Card loading and recovery
-after a system watchdog reset remain separate tests.
+At first contact with a board, before the session's watchdog reset, every
+session reads the cold-boot marker (RTC `IC_CHARA`, `0x070901f0`), the GP2 gate
+record, the crystal control word and the WDT0 configuration and output words,
+and records them as `power_epoch`. It then clears the gate record and, if the
+marker's low half does not read `0x16aa`, writes the keyed value `0x16aa16aa`.
+A session whose marker or cleared record does not read back stops before
+launch. The marker is an RTC-domain register; it survives watchdog resets and
+reads 0 only after VDD_RTC loses power. After each watchdog return the runner
+records the same words, decodes and then clears any gate record, and treats
+the recorded WDT0 mode at gate entry as the mode at reset.
+
+The runner uploads both loads, arms WDT0 in mode `0x41`, sets and reads back
+the session tag and the entry state, and executes `0x52000`. The request image
+sets the vendor RTC request `0x5aa5a55a`. The warm-entry image sets no request
+and requires the marker set at first contact; the gate then takes the path a
+watchdog-reset card boot takes. Either path re-arms WDT0 for 16 seconds and
+branches to the ROM's FEL entry from inside that execute command. The ROM
+normally reports the command's status before running the code. If the
+disconnect loses that status, the runner ends the transaction after 2 seconds;
+a failed or ended execute transaction is the expected USB disconnect, but only
+for this command after it has started with the watchdog and entry state armed.
+The runner then sends nothing to the old instance and waits for a new one.
+Acceptance requires WDT0 still at `0xb1` when first read, the new instance
+within 16 seconds of the execute request, the matching tag and no fault word.
+The request image also requires the cleared request and LAST `0x0c020005`. The
+warm-entry image requires the gate record `0x0c0240NN` in GP2, where `NN` is
+the armed mode, LAST unchanged at 0 and the marker still set. The runner then
+disarms WDT0. If the ROM does not re-enumerate, WDT0 resets the board to FEL;
+the result is `watchdog-reset` with the RTC words, crumbs and elapsed time
+recorded. Any other invalid receipt quarantines the instance. The evidence
+qualifies only these SRAM paths. Card loading remains a separate test.
 
 ## USB class probes require finite device cleanup
 

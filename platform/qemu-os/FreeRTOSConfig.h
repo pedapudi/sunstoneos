@@ -46,4 +46,11 @@
 /* The board application's headers include the network stack's, which adds
  * its own requirements (apps/board/FreeRTOSConfig.h does the same). */
 #include "../../network/include/FreeRTOSConfig.h"
+#ifdef SS_SCHED_CLOCK_TEST_TIMERS
+#undef configUSE_TIMERS
+#define configUSE_TIMERS 1
+#define configTIMER_TASK_PRIORITY 2
+#define configTIMER_QUEUE_LENGTH 8
+#define configTIMER_TASK_STACK_DEPTH 2048
+#endif
 #endif
