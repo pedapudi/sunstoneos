@@ -1,10 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "notification.h"
+#include <stddef.h>
 
 void ss_notification_init(struct ss_notification *n, uint32_t value)
 {
     atomic_init(&n->word, value);
     atomic_init(&n->next_ticket, 0); atomic_init(&n->serving, 0);
+    atomic_init(&n->owner_waiters, 0);
+    n->owner_wake = NULL; n->owner_context = NULL;
 }
 enum ss_notification_state ss_notification_payload_state(uint64_t p)
 { return (enum ss_notification_state)((p >> 32) & 3); }
@@ -51,6 +54,31 @@ void ss_notification_gate_begin(struct ss_notification *n,
     g->slot = n; g->backend = backend; g->ticket = ticket;
     g->payload = atomic_load_explicit(&n->word, memory_order_acquire) & SS_NOTIFICATION_PAYLOAD;
 }
+bool ss_notification_gate_try_begin(struct ss_notification *n,
+    const struct ss_owner_backend *backend, struct ss_notification_guard *g)
+{
+    uint64_t ticket = atomic_load_explicit(&n->serving, memory_order_acquire);
+    if (!atomic_compare_exchange_strong_explicit(&n->next_ticket, &ticket,
+        ticket + 1, memory_order_acq_rel, memory_order_acquire)) return false;
+    /* A producer that wins before registration is included by the payload
+     * load. Registration invalidates every later zero-gate CAS snapshot.
+     * Registered callers without tickets join behind this reservation. */
+    atomic_fetch_add_explicit(&n->word, SS_NOTIFICATION_GATE_UNIT, memory_order_acq_rel);
+    *g = (struct ss_notification_guard){ n, backend, ticket,
+        atomic_load_explicit(&n->word, memory_order_acquire) & SS_NOTIFICATION_PAYLOAD };
+    return true;
+}
+void ss_notification_owner_wait(struct ss_notification *n, unsigned cpu,
+                               const struct ss_owner_backend *backend)
+{
+    uint64_t bit = UINT64_C(1) << cpu;
+    atomic_fetch_or_explicit(&n->owner_waiters, bit, memory_order_release);
+    ss_owner_barrier(backend);
+    if (atomic_load_explicit(&n->next_ticket, memory_order_acquire) ==
+        atomic_load_explicit(&n->serving, memory_order_acquire) &&
+        (atomic_fetch_and_explicit(&n->owner_waiters, ~bit, memory_order_acq_rel) & bit) &&
+        n->owner_wake) n->owner_wake(n->owner_context, n, bit);
+}
 void ss_notification_gate_end(struct ss_notification_guard *g)
 {
     struct ss_notification *n = g->slot;
@@ -61,6 +89,8 @@ void ss_notification_gate_end(struct ss_notification_guard *g)
     atomic_fetch_sub_explicit(&n->word, SS_NOTIFICATION_GATE_UNIT, memory_order_release);
     atomic_store_explicit(&n->serving, g->ticket + 1, memory_order_release);
     ss_owner_event(g->backend);
+    uint64_t waiters = atomic_exchange_explicit(&n->owner_waiters, 0, memory_order_acquire);
+    if (waiters && n->owner_wake) n->owner_wake(n->owner_context, n, waiters);
 }
 struct ss_notification_result ss_notification_apply(struct ss_notification *n,
     enum ss_notification_action action, uint32_t value,

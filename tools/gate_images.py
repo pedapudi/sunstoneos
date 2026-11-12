@@ -57,6 +57,21 @@ IMAGES = {
     'smp-models': {'configure': [
         '-DSUNSTONE_PARTITIONED_SCHEDULER=ON',
     ], 'target': ['smp-kernel-model', 'smp-context-model', 'smp8-soak-model'], 'elf': 'smp-kernel-model.elf'},
+    'scheduler-control-models': {'configure': [
+        '-DSUNSTONE_PARTITIONED_SCHEDULER=ON',
+    ], 'target': ['scheduler-partitioned-qemu', 'scheduler-partitioned-storm-qemu',
+                  'scheduler-objects-qemu', 'scheduler-yield-qemu', 'scheduler-yield-storm-qemu',
+                  'scheduler-partitioned-heap-qemu'], 'elf': 'scheduler-partitioned-qemu.elf'},
+    'latency-control-busy-model': {'configure': [
+        '-DSUNSTONE_PARTITIONED_SCHEDULER=ON', '-DSUNSTONE_LATENCY=ON',
+        '-DSUNSTONE_SCHED_LATENCY_TRACE=ON', '-DSUNSTONE_LATENCY_RESTORE_SPANS=ON',
+        '-DSUNSTONE_LATENCY_CONTROL=ON', '-DSUNSTONE_LATENCY_CONTROL_MODE=busy',
+    ], 'target': 'latency-control-model', 'elf': 'latency-control-model.elf'},
+    'latency-control-idle-model': {'configure': [
+        '-DSUNSTONE_PARTITIONED_SCHEDULER=ON', '-DSUNSTONE_LATENCY=ON',
+        '-DSUNSTONE_SCHED_LATENCY_TRACE=ON', '-DSUNSTONE_LATENCY_RESTORE_SPANS=ON',
+        '-DSUNSTONE_LATENCY_CONTROL=ON', '-DSUNSTONE_LATENCY_CONTROL_MODE=idle',
+    ], 'target': 'latency-control-model', 'elf': 'latency-control-model.elf'},
     # the returning scanning radio image
     'ret-radio-scan': {'configure': [
         '-DSUNSTONE_APPLICATION=radio-scan',

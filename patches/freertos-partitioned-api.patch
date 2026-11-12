@@ -246,7 +246,7 @@
      {
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +traceENTER_vTaskDelay( xTicksToDelay );
-+UBaseType_t irq = portSET_INTERRUPT_MASK();
++UBaseType_t irq = ssKernelTaskMask();
 +if (xTicksToDelay) ssKernelBlock(xTicksToDelay, false, SS_K_DELAY);
 +else ssKernelCPUs[ssKernelCPUId()].yield_tail = true;
 +portCLEAR_INTERRUPT_MASK(irq);
@@ -567,7 +567,7 @@
 +traceENTER_xTaskResumeFromISR( xTaskToResume );
 +configASSERT(xTaskToResume);
 +(void)ssKernelCommand(xTaskToResume, SS_K_RESUME, 0, true);
-+{ BaseType_t ss_trace_result = (ssKernelOwnerIRQExit()); traceRETURN_xTaskResumeFromISR(ss_trace_result); return ss_trace_result; }
++{ BaseType_t ss_trace_result = (ssKernelCPUs[ssKernelCPUId()].reschedule ? pdTRUE : pdFALSE); traceRETURN_xTaskResumeFromISR(ss_trace_result); return ss_trace_result; }
 +#else
 +
          BaseType_t xYieldRequired = pdFALSE;

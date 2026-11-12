@@ -115,9 +115,11 @@ static void single_request_and_remaining_batch(void)
     control.cursor[0].value = SS_OWNER_SLOTS - 1;
     for (unsigned slot = 60; slot < 60 + SS_OWNER_BATCH + 1; ++slot)
         ss_control_publish(&control, slot, increment, NULL);
-    assert(ss_control_drain(&control, 0) == SS_OWNER_BATCH);
+    uint64_t visited[2] = {0};
+    assert(ss_control_drain_excluding(&control, 0, visited) == SS_OWNER_BATCH);
     assert(ss_control_has_pending(&control, 0));
     assert(control.cursor[0].value == 60 + SS_OWNER_BATCH);
+    assert(ss_control_drain_excluding(&control, 0, visited) == 0 && "one maintenance epoch has one total batch budget");
     assert(ss_control_drain(&control, 0) == 1);
     assert(!ss_control_has_pending(&control, 0));
 }

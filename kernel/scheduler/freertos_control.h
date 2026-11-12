@@ -2,8 +2,14 @@
 #ifndef SS_FREERTOS_CONTROL_H
 #define SS_FREERTOS_CONTROL_H
 #include "owner.h"
-#define SS_CONTROL_CPUS 64u
+/* The native adapter admits at most the A733's eight CPUs. */
+#define SS_CONTROL_CPUS 8u
 #define SS_CONTROL_NONE 64u
+#define SS_CONTROL_SUSPENDED 1u
+#define SS_CONTROL_OFFCPU 2u
+#define SS_CONTROL_SELF 4u
+#define SS_CONTROL_SELF_FRAME 8u
+#define SS_CONTROL_REMOTE_FRAME 16u
 /* Slow-path callers exclude local API IRQs only during publish/lock service.
  * No object lock may be held. Owner callbacks never wait for another owner.
  * Initialize/register only under registry administration exclusion. Registration
@@ -19,6 +25,7 @@
  * weak-memory modeling and physical timing require separate qualification. */
 struct ss_control_state {
     uint64_t sequence, incarnation, affinity, resume_generation, abort_generation;
+    uint64_t abort_wait_generation;
     uint64_t offcpu_sequence; /* outstanding suspend fence survives resume */
     unsigned priority, effective_priority;
     /* Idle pull: 1 + the CPU that should adopt this ready task, or 0. The owner clears it
@@ -32,6 +39,9 @@ struct ss_control_transfer {
     unsigned old_owner, new_owner;
 };
 struct ss_control_ops {
+    /* Optional preparation runs with the API mask open and the slot FIFO
+     * retained. False parks this record until its resource release. */
+    bool (*prepare)(void *, unsigned cpu, unsigned slot);
     /* apply returns false until every offcpu_sequence fence is acknowledged,
      * even if a later resume cleared suspended. It reloads committed donation
      * records and repairs ready/deadline/active-object order atomically at owner entry.
@@ -48,10 +58,17 @@ struct ss_control_ops {
      * earlier incarnation before retrying retirement of this slot. */
     void (*retired)(void *, unsigned, uint64_t incarnation);
     bool (*dispatch)(void *, unsigned); /* drain local pending; return local yield */
+    bool (*pause)(void *, unsigned); /* stop this batch before another record */
     void *context;
 };
 struct ss_control_slot {
     _Atomic uint32_t tickets, serving;
+    _Atomic uint64_t waiters;
+    /* One authoritative state/source word. Resume clears SUSPENDED and SELF,
+     * preserving OFFCPU and the frame-source bits through saved-frame commit.
+     * Self publication and ISR resume never wait for this metadata FIFO. */
+    _Atomic unsigned suspension;
+    _Atomic uint64_t resume_pending, affinity;
     struct ss_control_state desired;
     _Atomic uint64_t applied;
     struct ss_owner_descriptor *descriptor;
@@ -75,6 +92,8 @@ struct ss_control {
     /* Remote publishers set the pending words; the owner alone moves its
      * cursor. One cache line each, so no owner shares a line with another. */
     struct { _Alignas(64) _Atomic uint64_t word[2]; } pending[SS_CONTROL_CPUS];
+    struct { _Alignas(64) _Atomic uint64_t word[2]; } parked[SS_CONTROL_CPUS];
+    _Atomic uintptr_t parked_on[SS_CONTROL_CPUS][SS_OWNER_SLOTS];
     struct { _Alignas(64) unsigned value; } cursor[SS_CONTROL_CPUS];
     const struct ss_owner_backend *backend;
     struct ss_control_ops ops;
@@ -95,10 +114,27 @@ void ss_control_register(struct ss_control *, unsigned, struct ss_owner_descript
  * false means no logical change (e.g. resume of nonsuspended task). */
 typedef bool (*ss_control_mutate)(void *, struct ss_control_state *);
 uint64_t ss_control_publish(struct ss_control *, unsigned, ss_control_mutate, void *);
+/* Current execution already protects the self task. No counted reference may
+ * be left on its stack. The caller performs its local transition and yields. */
+bool ss_control_suspend_current(struct ss_control *, unsigned slot, unsigned cpu);
+/* A pinned ISR caller publishes logical resume without taking the FIFO. */
+bool ss_control_resume_isr(struct ss_control *, unsigned slot);
+unsigned ss_control_suspension(const struct ss_control *, unsigned slot);
+/* FIFO holder only. Refresh again immediately before the masked owner commit. */
+void ss_control_refresh_suspension(struct ss_control *, unsigned slot);
+/* A failed preparation waits for its resource release, not another SGI retry. */
+void ss_control_park(struct ss_control *, unsigned cpu, unsigned slot);
+void ss_control_wake(struct ss_control *, unsigned cpu, unsigned slot);
+void ss_control_park_on(struct ss_control *, unsigned cpu, unsigned slot, const void *resource);
+void ss_control_wake_on(struct ss_control *, unsigned cpu, unsigned slot, const void *resource);
+void ss_control_wake_mask(struct ss_control *, unsigned cpu, const uint64_t slots[2], const void *resource);
 void ss_control_snapshot(struct ss_control *, unsigned, struct ss_control_state *);
 bool ss_control_applied(const struct ss_control *, unsigned, uint64_t);
 void ss_control_wait(struct ss_control *, unsigned, uint64_t); /* task only, IRQs enabled */
 unsigned ss_control_drain(struct ss_control *, unsigned); /* max sixteen records */
+/* Shared visited words define one maintenance epoch. Reissued hints remain
+ * pending but cannot cause a second visit before a new epoch. */
+unsigned ss_control_drain_excluding(struct ss_control *, unsigned, uint64_t visited[2]);
 /* Consume only this owner's hint for one registered slot. A hint reissued by
  * consume remains pending; the ordinary scan cursor and other slots are unchanged. */
 unsigned ss_control_drain_slot(struct ss_control *, unsigned cpu, unsigned slot);

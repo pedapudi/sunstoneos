@@ -17,6 +17,9 @@ enum ss_notification_action {
 struct ss_notification {
     _Alignas(8) _Atomic uint64_t word;
     _Atomic uint64_t next_ticket, serving;
+    _Atomic uint64_t owner_waiters;
+    void (*owner_wake)(void *, struct ss_notification *, uint64_t);
+    void *owner_context;
 };
 struct ss_notification_result {
     uint32_t previous;
@@ -41,6 +44,14 @@ struct ss_notification_result ss_notification_apply(struct ss_notification *,
  * ticket and signals SEV. No intermediate payload may be observed outside it. */
 void ss_notification_gate_begin(struct ss_notification *,
     const struct ss_owner_backend *, struct ss_notification_guard *);
+/* Owner maintenance never waits with the API mask raised. One reservation
+ * attempt succeeds only when no FIFO ticket is outstanding. */
+bool ss_notification_gate_try_begin(struct ss_notification *,
+    const struct ss_owner_backend *, struct ss_notification_guard *);
+/* A permanent owner record registers before checking again for an empty FIFO.
+ * Release or this recheck claims its bit and invokes owner_wake once. */
+void ss_notification_owner_wait(struct ss_notification *, unsigned cpu,
+                               const struct ss_owner_backend *);
 void ss_notification_gate_end(struct ss_notification_guard *);
 enum ss_notification_state ss_notification_payload_state(uint64_t);
 
