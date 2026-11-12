@@ -1,4 +1,5 @@
 // Read initial A64 state, then use the physically exercised forced-FEL return.
+#include "a733_cpu_reset.h"
 .arch armv8-a
 .section .text,"ax"
 .global _start
@@ -70,10 +71,8 @@ publish:
     mov w1, #0x20
     str w1, [x0]
     str wzr, [x0, #4]
-    dsb sy
     mov x0, #2
-    msr rmr_el3, x0
-    isb
+    A733_CPU_RESET_WAIT(x0)
 park:
     wfi
     b park

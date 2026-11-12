@@ -3,6 +3,7 @@
  * PC; only that path selects a dedicated Secure Device cleanup stack. */
 #include "runtime.h"
 #include "a733_fault.h"
+#include "a733_cpu_reset.h"
 .section .text.qualification,"ax"
 .balign 4
 .global a733_qualification_terminal_el0, a733_qualification_terminal_after
@@ -377,10 +378,8 @@ a733_qualification_rom:
     mov w1, #0x20
     str w1, [x0, #4]
     str wzr, [x0, #8]
-    dsb sy
     mov x0, #2
-    msr rmr_el3, x0
-    isb
+    A733_CPU_RESET_WAIT(x0)
 qualification_park:
     wfi
     b qualification_park

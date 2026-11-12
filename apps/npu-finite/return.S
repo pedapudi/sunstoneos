@@ -1,5 +1,6 @@
 /* Identity-mapped EL1 tail: no stack access after translation/cache disable.
  * The original single-core monitor remains cache disabled at EL3. */
+#include "a733_cpu_reset.h"
 .section .text,"ax"
 .global npu_finite_smc
 .type npu_finite_smc,%function
@@ -32,11 +33,7 @@ npu_finite_rom_return:
     mov w1,#0x20
     str w1,[x0]
     str wzr,[x0,#4]
-    dsb sy
     mov x0,#2
-    msr rmr_el3,x0
-    isb
-2:  wfi
-    b 2b
+    A733_CPU_RESET_WAIT(x0)
 .size npu_finite_rom_return,.-npu_finite_rom_return
 .section .note.GNU-stack,"",%progbits

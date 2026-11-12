@@ -1,3 +1,4 @@
+#include "a733_cpu_reset.h"
 .section .text.boot.monitor, "ax"
 .global monitor_entry
 monitor_entry:
@@ -124,9 +125,5 @@ monitor_reset:
     mov w1, #0x20
     str w1, [x0]
     str wzr, [x0, #4]
-    dsb sy
     mov x0, #2
-    msr rmr_el3, x0
-    isb
-1:  wfi
-    b 1b
+    A733_CPU_RESET_WAIT(x0)
