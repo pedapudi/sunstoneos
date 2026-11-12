@@ -168,8 +168,9 @@ event, not a whole-cluster traffic counter.
 Each window uses a synchronous stack-object address as its scope. Admission
 masks local IRQ entry until the scope and internal sequence are published.
 Counter enable follows all capture-state stores. The end entry validates the
-core and scope, freezes counters and synchronizes before its first spill or
-result store. A nested rejected scope cannot end the outer window. Rejection
+core and scope, then masks IRQs across counter freeze and endpoint reads.
+It restores the prior IRQ state before its first spill or result store.
+A nested rejected scope cannot end the outer window. Rejection
 updates no recorder state while the outer counters run, so its count remains
 explicitly unavailable.
 

@@ -867,6 +867,12 @@ def decode(payload, dma=False):
         if pmu_tail or control_tail or not scheduler_tail:
             raise ValueError('scheduler PMU report requires its exclusive traced CPU profile')
         result['scheduler_pmu'] = decode_scheduler_pmu(scheduler_pmu_tail, frequency)
+        for core in result['scheduler_pmu']['cores']:
+            for row in core['rows']:
+                if row['observed']:
+                    row['phase'] = next((name for name, (begin, end) in result['phase_bounds'].items()
+                        if begin <= row['begin_tick'] < end and row['end_tick'] <= end),
+                        'unassigned_or_crossing')
     control = decode_control(control_tail, frequency) if control_tail else None
     if scheduler_tail:
         result['scheduler_trace'] = decode_scheduler_trace(scheduler_tail, frequency,
