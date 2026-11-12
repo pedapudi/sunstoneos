@@ -124,6 +124,33 @@ int os_services_healthy(uint64_t now)
 /* Supervising task only: why renewal was refused. The supervisor stops at
  * its first refusal, so the value is never reset. */
 static uint64_t stop_detail;
+#ifdef SUNSTONE_A733_OS_RESIDENT_STOP_ON_FINISH
+/* Immutable diagnostic identity, consumed by the runner before selecting an
+ * expected reset. Production images continue supervising after completion. */
+__attribute__((used,retain)) const uint64_t os_resident_test_profile[3]={
+    UINT64_C(0x3154534554525353),1,0x5000};
+static unsigned completion_stop;
+#endif
+int board_resident_completion_stop(void)
+{
+#ifdef SUNSTONE_A733_OS_RESIDENT_STOP_ON_FINISH
+    return completion_stop;
+#else
+    return 0;
+#endif
+}
+static uint64_t resident_stop_detail(void)
+{
+#ifdef SUNSTONE_A733_OS_RESIDENT_STOP_ON_FINISH
+    /* A board_live refusal bypasses renewal. It must not look like the
+     * diagnostic completion, even when no selected service has gone stale. */
+    if(!completion_stop)return stop_detail?stop_detail:0xfff;
+#ifdef SUNSTONE_A733_FAULT_PAGE
+    if(__atomic_load_n(&a733_fault_pending,__ATOMIC_RELAXED))return 0xfff;
+#endif
+#endif
+    return stop_detail;
+}
 #ifdef SUNSTONE_A733_OS_GPU
 /* A GPU loss: a GPU fault ended the boot, or the recognizer went silent while
  * it waited for OPEN or for a job's record. The supervisor calls this after
@@ -135,10 +162,10 @@ uint64_t board_resident_stop_detail(void)
     unsigned gpu=os_gpu_queue_state();
     if(gpu==2||(gpu==1&&stop_detail==OS_SERVICE_APPLICATION+1))
         return OS_STOP_DETAIL_GPU_LOSS;
-    return stop_detail;
+    return resident_stop_detail();
 }
 #else
-uint64_t board_resident_stop_detail(void){return stop_detail;}
+uint64_t board_resident_stop_detail(void){return resident_stop_detail();}
 #endif
 /* Supervising task only. */
 int board_resident_renew(void *supervisor,uint64_t first_expiry)
@@ -158,6 +185,11 @@ int board_resident_renew(void *supervisor,uint64_t first_expiry)
      * startup. Records never return to zero, so this precedes any renewal. */
     if(healthy<0){if(ticks<first_expiry)return 1;stop_detail=first+1;return 0;}
     if(!healthy){stop_detail=first+1;return 0;}
+#ifdef SUNSTONE_A733_OS_RESIDENT_STOP_ON_FINISH
+    /* Completion ends the diagnostic only after selected services report.
+     * Application failures and a refusal before this call keep their records. */
+    if(os_application_succeeded()){completion_stop=1;return 0;}
+#endif
     if(renewed&&now-renewed<OS_RENEW_US)return 1;
     if(os_watchdog_reload(supervisor)!=1)return 0;
     renewed=now;return 1;
