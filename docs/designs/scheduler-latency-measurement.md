@@ -41,14 +41,18 @@ off-CPU fence. Other commands retain the general drain and repair path.
 Additional checks bind the handle to its lifetime,
 restrict list writes to the owner, and require saved-context acknowledgments
 before migration or deletion completes.
+Handle admission and control publication retain the API mask. An interrupt
+cannot wait on the interrupted caller's control FIFO, and a suspended or
+deleted caller cannot retain a lifetime reference on its abandoned stack.
 
 Each low-level control drain consumes at most `SS_OWNER_BATCH` records.
 `ssKernelControlDrain` calls that drain twice, around event-list repair.
 Pending control bits participate in the maintenance continuation check, so
 requests beyond a batch retain a later owner entry. Control
-lock release and completion publication execute store-completion barriers and
-event signals. The diagnostic timestamps each record without changing those
-operations or their ordering.
+lock release completes the serving and applied stores and signals waiters
+before the next record can wait on another FIFO. A second event follows
+post-unlock reference release or retirement callbacks; a record without that
+work needs only the unlock event. The diagnostic timestamps these boundaries.
 
 The upstream interrupt entry saves general and floating-point registers,
 increments nesting, acknowledges the interrupt, and calls the C handler. It

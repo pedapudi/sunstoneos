@@ -4,6 +4,7 @@ import argparse
 import os
 from pathlib import Path
 import re
+import resource
 import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--build-dir', '{output}']]
@@ -14,6 +15,7 @@ def main():
     args = parser.parse_args()
     build = args.build_dir.resolve()
     build.mkdir(parents=True, exist_ok=True)
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     temporary = build / 'tmp'
     temporary.mkdir(exist_ok=True)
     env = dict(os.environ, TMPDIR=str(temporary))
@@ -33,5 +35,29 @@ def main():
     (build / 'control-aarch64.disassembly').write_text(dis)
     assert not re.search(r'\b(?:ldaxr|stlxr|ldxr|stxr)\b', dis)
     print('scheduler control: AArch64 LSE atomics contain no LL/SC')
+    event_sources = [sources[0], sources[1], ROOT / 'checks/scheduler-control-events.c']
+    event_flags = common + ['-O1', '-g', '-fsanitize=address,undefined', '-I', ROOT / 'kernel/scheduler']
+    events = build / 'scheduler-control-events'
+    run(event_flags + event_sources + ['-o', events])
+    print(run([events]), end='')
+    code = sources[0].read_text()
+    negatives = (
+        ('unlock', '    ss_owner_event(c->backend);\n}\nstatic void hint',
+         '    (void)c; /* negative: release without its event */\n}\nstatic void hint',
+         'previous FIFO release must precede the next wait'),
+        ('completion', '    if (put || retire) ss_owner_event(c->backend);',
+         '    /* negative: omit the post-callback completion event */',
+         'retirement callback must precede its completion event'),
+    )
+    for name, before, after, assertion in negatives:
+        assert code.count(before) == 1, name
+        source = build / ('control-no-' + name + '-event.c')
+        source.write_text(code.replace(before, after))
+        negative = build / ('no-' + name + '-event')
+        run(event_flags + [source, *event_sources[1:], '-o', negative])
+        result = subprocess.run([str(negative)], text=True, capture_output=True, env=env)
+        (build / ('no-' + name + '-event.log')).write_text(result.stdout + result.stderr)
+        assert result.returncode and assertion in result.stderr, name
+    print('scheduler control events: both omitted-event negative controls fail')
 if __name__ == '__main__':
     main()

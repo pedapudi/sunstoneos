@@ -271,7 +271,9 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
     /* A last-put callback may publish retirement; never invoke under lock. */
     if (put) ss_owner_put(s->descriptor);
     if (retire && c->ops.retired) c->ops.retired(c->ops.context, slot, incarnation);
-    ss_owner_event(c->backend);
+    /* unlock already completes the serving/applied stores and wakes FIFO
+     * waiters. Only post-unlock lifetime work can require another event. */
+    if (put || retire) ss_owner_event(c->backend);
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     trace_record.stamp[4] = ss_sched_trace_now();
     ss_sched_trace_record(cpu, &trace_record);
