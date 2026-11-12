@@ -1,6 +1,6 @@
 # RTC calendar and alarm while running from the internal RC oscillator
 
-**Status: implemented; the RC source, calendar set, alarm and retention hold on the board; the read after the alarm is corrected and not yet run on the board.**
+**Status: the crystal is selected at open by default and holds on the board (second within 72.4 ppm of the counter); implemented; the RC source, calendar set, alarm and retention hold on the board; the read after the alarm is corrected and not yet run on the board.**
 
 The board starts with the RTC selected to the internal RC oscillator (clock control 0x401c, source status 0, prescaler 0x0f, calibration clear, RC enabled in `+0x160`). The earlier read-only record measured one RTC second in about 1.1 s; two runs 70 s apart show 59 RTC seconds, so about 1.19 s. The rate is uncalibrated and not asserted. The external-source open and the calendar writer in `drivers/rtc/a733_rtc_initialize.c` accept only the external 32.768 kHz source, so they refuse this state. This design adds an RTC mode that writes the calendar and arms one alarm without writing any clock-source register.
 
@@ -60,3 +60,7 @@ The service writes only `+0x00` and `+0x04`, and only while the owner runs the s
 - If the crystal fails to start, the record shows result 2 with the health bits, and the RTC stays on the RC.
 
 Time budget: boot and the wait for the CPU clock owner about 9 s, the RC measurement about 7 s (a 1.4 s edge search and five seconds), the selection under 10 ms, the crystal measurement about 11 s, the alarm about 4 s: about 31 s of application against a 45 s run bound, a 60 s session and a 55 s finish bound. The application reports progress every 0.5 s while it waits for any step, well inside the 2 s progress window.
+
+### Result
+
+The board run selected the crystal at once (four of four healthy samples), the calendar did not jump, and the board now stays on the crystal across runs: the next open sees the external state and does not switch. Five RTC seconds on the RC took 1.1875 s each; ten RTC seconds on the crystal took 9.99928 s of counter time, -72.4 ppm, which is 22 ppm outside the prediction. The resolution (under 10 ppm) does not account for it, and the crystal, its load capacitors and the 24 MHz counter reference cannot be separated by this measurement.

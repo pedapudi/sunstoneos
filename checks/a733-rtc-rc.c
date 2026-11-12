@@ -106,6 +106,9 @@ int main(void)
  assert(a733_rtc_select_crystal(&r,pause,&sw)&&sw.result==A733_RTC_SWITCH_FALLBACK&&sw.healthy_run<4&&sw.samples>100);
 m.sick=0;   /* the entry control word is back, so the status reads as on entry */
  assert(m.regs[0]==0x401c&&r.read_source==A733_RTC_READ_RC_NORMAL&&a733_rtc_read(&r,&t));
+ /* After the switch the board stays on the crystal: the next open sees the external state and adopts it. */
+ memset(&r,0,sizeof(r));reset(&m);m.regs[0]=0x4011;m.regs[1]=1;
+ assert(a733_rtc_open_rc(&r,&ops,&m,1000000000)&&r.read_source==A733_RTC_READ_EXTERNAL&&!m.norder);
  /* An instance not opened in RC mode cannot set the calendar. */
  memset(&r,0,sizeof(r));reset(&m);m.regs[0]=0x4011;m.regs[1]=1;
  assert(a733_rtc_open(&r,&ops,&m,1000000000)&&!a733_rtc_set_time(&r,day,hms,pause)&&!m.norder);
