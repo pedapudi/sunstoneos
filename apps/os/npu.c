@@ -733,11 +733,18 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
         uint64_t total=0;
         for(unsigned i=0;i<model_count;++i){
             uint64_t offset,length;
+            unsigned original;
+            /* A copy entry (npu-graph-index.h) is a second registration of an earlier graph: it takes that graph's kernel copy,
+             * and the runtime gives it that graph's coefficients. */
+            if(os_npu_index_copy(source,i,&original)){
+                models[i]=(struct npu_runtime_model){models[original].data,models[original].bytes,original+1};
+                continue;
+            }
             os_npu_index_entry(source,i,&offset,&length);
             void *const copy=npu_meta_allocate(meta,(size_t)length);
             if(!copy)return UNPREPARED(0x81a);
             memcpy(copy,source+offset,(size_t)length);
-            models[i]=(struct npu_runtime_model){copy,(size_t)length};
+            models[i]=(struct npu_runtime_model){copy,(size_t)length,0};
             total+=length;
         }
         if(!clock_now(&t1))return UNPREPARED(0x819);

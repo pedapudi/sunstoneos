@@ -53,9 +53,11 @@ static int admit(const struct nbg_model *model, struct nbg_assembly_layout *layo
     return nbg_assembly_layout(model, layout);
 }
 struct sizes { size_t command, constant, read, write; };
-static void need(const struct nbg_assembly_layout *l, size_t model_bytes, struct sizes *s)
+/* shared: the graph is a copy (npu_runtime_model.shares), whose jobs read the original's coefficients in the original's slot:
+ * its read-only region holds the descriptors and the dynamic-input allocation only. */
+static void need(const struct nbg_assembly_layout *l, size_t model_bytes, int shared, struct sizes *s)
 {
-    size_t constant = l->buffers[NBG_ALLOC_NN].allocation_bytes + l->buffers[NBG_ALLOC_COEFF].allocation_bytes;
+    size_t constant = l->buffers[NBG_ALLOC_NN].allocation_bytes + (shared ? 0 : l->buffers[NBG_ALLOC_COEFF].allocation_bytes);
     /* The dynamic-input allocation follows the coefficients in the same read-only region. */
     if (l->dynamic) constant += l->buffers[nbg_layout_dynamic_index(l)].allocation_bytes;
     size_t read = 0, write = l->buffers[NBG_ALLOC_POOL].allocation_bytes;
@@ -91,7 +93,7 @@ static void *take_meta(struct bump *b, size_t bytes)
     return p;
 }
 /* What sizing keeps of a graph when no plan table exists: its regions and its layout's entries. */
-struct record { struct sizes size; unsigned entries; };
+struct record { struct sizes size; unsigned entries; size_t coeff; };
 
 /* CPU offsets and device addresses. The read-only group holds the tables, the NPU table arena, the bootstrap stream, the
  * each slot's command allocation and read-only region; then come the read windows and the write
@@ -149,7 +151,7 @@ static struct sizes graph_sizes(const struct nbg_assembly_layout *plans, const s
 {
     if (records) return records[m].size;
     struct sizes s = {0};
-    need(&plans[m], models[m].bytes, &s);
+    need(&plans[m], models[m].bytes, models[m].shares != 0, &s);
     return s;
 }
 /* The work memory of a sizing call: one layout of the largest graph (entries of 12 bytes) and a record for each graph. */
@@ -163,6 +165,7 @@ size_t npu_runtime_scratch_bytes(const struct npu_runtime_model *models, unsigne
     if (!models || !count) return 0;
     for (unsigned m = 0; m < count; ++m) {
         struct nbg_model view;
+        if (models[m].shares) continue;     /* a copy's layout is its original's */
         if (!a733_span_incl_nonempty(models[m].data, models[m].bytes) || models[m].bytes > NBG_MODEL_MAX_BYTES ||
             nbg_model_open(models[m].data, models[m].bytes, &view) != NBG_DECODE_OK) return 0;
         const size_t entries = nbg_assembly_layout_entries(&view);
@@ -193,6 +196,14 @@ static enum npu_declaration_result lay_out(struct npu_runtime *rt, struct bump *
     uint64_t decode_pass = 0;
     for (unsigned m = 0; m < count; ++m) {
         struct nbg_model view;
+        if (models[m].shares) {
+            /* A copy names an earlier graph of its own, holds the same graph, and keeps its slot (per_graph): it is laid out
+             * once, as that graph. */
+            const unsigned o = models[m].shares - 1;
+            if (!bounds || !bounds->per_graph || o >= m || models[o].shares || models[o].data != models[m].data ||
+                models[o].bytes != models[m].bytes) return NPU_DECLARATION_MODEL;
+            continue;
+        }
         if (!a733_span_incl_nonempty(models[m].data, models[m].bytes) || models[m].bytes > NBG_MODEL_MAX_BYTES ||
             nbg_model_open(models[m].data, models[m].bytes, &view) != NBG_DECODE_OK) return NPU_DECLARATION_MODEL;
         const size_t e = nbg_assembly_layout_entries(&view);
@@ -225,6 +236,16 @@ static enum npu_declaration_result lay_out(struct npu_runtime *rt, struct bump *
     uint64_t open_us = 0, admit_us = 0;
     for (unsigned m = 0; m < count; ++m) {
         struct nbg_model view;
+        if (models[m].shares) {
+            /* The original's plan, table included; no region of the copy exceeds the original's, so z is unchanged. */
+            const unsigned o = models[m].shares - 1;
+            if (rt) plans[m] = plans[o];
+            if (records) {
+                records[m] = records[o];
+                records[m].size.constant -= records[o].coeff;
+            }
+            continue;
+        }
         const uint64_t o0 = parts_now(rt);
         (void)nbg_model_open(models[m].data, models[m].bytes, &view);
         open_us += parts_now(rt) - o0;
@@ -239,8 +260,11 @@ static enum npu_declaration_result lay_out(struct npu_runtime *rt, struct bump *
         const uint64_t a0 = parts_now(rt);
         if (!admit(&view, plan)) return NPU_DECLARATION_MODEL;
         admit_us += parts_now(rt) - a0;
-        need(plan, models[m].bytes, z);
-        if (records) { records[m].entries = entries; need(plan, models[m].bytes, &records[m].size); }
+        need(plan, models[m].bytes, 0, z);
+        if (records) {
+            records[m].entries = entries; need(plan, models[m].bytes, 0, &records[m].size);
+            records[m].coeff = plan->buffers[NBG_ALLOC_COEFF].allocation_bytes;
+        }
     }
     if (rt) { rt->parts.decode_us += open_us; rt->parts.layout_us += admit_us; }
     /* Graphs registered later: a model's regions are at most its bytes (the descriptors, coefficients, dynamic-input and
@@ -421,7 +445,7 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     const struct sizes z = w.z;
     const struct placement p = w.p;
     const size_t entries = (size_t)v.count + v.bounds.capacity;
-    for (unsigned m = 0; m < v.count; ++m) rt->catalogue[m] = (struct npu_runtime_model){v.models[m].data, v.models[m].bytes, NULL};
+    for (unsigned m = 0; m < v.count; ++m) rt->catalogue[m] = v.models[m];
     atomic_init(&rt->count, v.count); rt->capacity = (unsigned)entries; rt->slots = v.slots;
     rt->later_entries = w.later_entries;
     rt->queue_links = v.bounds.queue_links; rt->queue_image_links = v.bounds.queue_image_links;
@@ -624,18 +648,20 @@ static int walk(struct npu_runtime *rt, struct npu_runtime_slot *s, const struct
 static void next_phase(struct npu_runtime_slot *s, unsigned phase)
 { s->phase = phase; s->span = 0; s->offset = 0; }
 
-/* Assembly targets inside the slot's fixed regions for an admitted plan. */
-static void targets(struct npu_runtime_slot *s, const struct nbg_assembly_layout *l)
+/* Assembly targets inside the slot's fixed regions for an admitted plan. A copy's coefficients are the original's, in the
+ * original's slot (from: a READY slot holding the same graph); its dynamic-input allocation follows its descriptors. */
+static void targets(struct npu_runtime_slot *s, const struct nbg_assembly_layout *l, const struct npu_runtime_slot *from)
 {
     memset(s->targets, 0, (size_t)s->layout.capacity * sizeof(*s->targets));
     uint32_t nn = l->buffers[NBG_ALLOC_NN].allocation_bytes;
+    const uint32_t own = from ? 0 : l->buffers[NBG_ALLOC_COEFF].allocation_bytes;
     s->targets[NBG_ALLOC_NN] = (struct nbg_assembly_buffer){(void *)s->constant.cpu, nn, s->constant.device};
     /* A graph without coefficients has an empty slot, which the assembler requires to be NULL, 0, 0. */
-    if (l->buffers[NBG_ALLOC_COEFF].allocation_bytes)
-        s->targets[NBG_ALLOC_COEFF] = (struct nbg_assembly_buffer){(void *)(s->constant.cpu + nn),
-            l->buffers[NBG_ALLOC_COEFF].allocation_bytes, s->constant.device + nn};
+    if (from) s->targets[NBG_ALLOC_COEFF] = from->targets[NBG_ALLOC_COEFF];
+    else if (own)
+        s->targets[NBG_ALLOC_COEFF] = (struct nbg_assembly_buffer){(void *)(s->constant.cpu + nn), own, s->constant.device + nn};
     if (l->dynamic) {
-        const uint32_t at = nn + l->buffers[NBG_ALLOC_COEFF].allocation_bytes;
+        const uint32_t at = nn + own;
         s->targets[nbg_layout_dynamic_index(l)] = (struct nbg_assembly_buffer){(void *)(s->constant.cpu + at),
             l->buffers[nbg_layout_dynamic_index(l)].allocation_bytes, s->constant.device + at};
     }
@@ -716,14 +742,22 @@ static int load_work(struct npu_runtime *rt)
     switch (s->phase) {
     case LOAD_OPEN: {
         const struct nbg_assembly_layout *plan = &rt->plans[s->model];
+        /* A copy's coefficients are its original's: the original's slot must hold it, loaded (the slots load in order). */
+        const struct npu_runtime_slot *from = NULL;
+        if (model->shares) {
+            const unsigned o = model->shares - 1;
+            if (o >= rt->slots || o == (unsigned)(s - rt->slot) || state(&rt->slot[o]) != NPU_RUNTIME_READY ||
+                rt->slot[o].model != o) { load_end(rt, s, 0); return 1; }
+            from = &rt->slot[o];
+        }
         {   /* The graph must fit this slot's regions (they are sized by one graph when the slots are). */
             struct sizes fit = {0};
-            need(plan, model->bytes, &fit);
+            need(plan, model->bytes, from != NULL, &fit);
             if (fit.command > s->command.bytes || fit.constant > s->constant.bytes || fit.read > s->read.bytes ||
                 fit.write > s->write.bytes ||
                 NBG_LAYOUT_ENTRIES(plan->inputs, plan->outputs) > s->layout.capacity) { load_end(rt, s, 0); return 1; }
         }
-        targets(s, plan);
+        targets(s, plan, from);
         if (nbg_model_open(model->data, model->bytes, &rt->view) != NBG_DECODE_OK ||
             !nbg_assembly_begin(&rt->view, s->targets, nbg_layout_buffers(plan),
                                 &s->layout, &rt->cursor) || !same_plan(&s->layout, plan)) {
@@ -758,7 +792,9 @@ static int load_work(struct npu_runtime *rt)
         return 1;
     }
     case LOAD_PAD: {
-        for (unsigned i = NBG_ALLOC_NN; i <= NBG_ALLOC_COEFF; ++i) {
+        /* A copy's coefficients are the original's, padded when the original loaded: the copy writes none of them. */
+        const unsigned last = rt->catalogue[s->model].shares ? NBG_ALLOC_NN : NBG_ALLOC_COEFF;
+        for (unsigned i = NBG_ALLOC_NN; i <= last; ++i) {
             uint32_t payload = s->layout.buffers[i].payload_bytes;
             if (s->targets[i].bytes) memset((unsigned char *)s->targets[i].cpu + payload, 0, s->targets[i].bytes - payload);
         }
@@ -773,7 +809,7 @@ static int load_work(struct npu_runtime *rt)
     case LOAD_COEFF: {
         /* The coefficients, the dynamic-input section and the program section, copied in order with one cursor. */
         struct nbg_span coeff = {0}, dyna = {0}, program = {0};
-        const uint32_t coeff_bytes = s->layout.buffers[NBG_ALLOC_COEFF].payload_bytes,
+        const uint32_t coeff_bytes = rt->catalogue[s->model].shares ? 0 : s->layout.buffers[NBG_ALLOC_COEFF].payload_bytes,
             program_bytes = s->layout.program_bytes;
         struct nbg_span section = {0};
         const uint32_t dyna_section = nbg_model_section(&rt->view, NBG_DYNA_IO, &section) ? (uint32_t)section.bytes : 0;
@@ -812,7 +848,7 @@ static int load_work(struct npu_runtime *rt)
         const unsigned d = nbg_layout_dynamic_index(&s->layout);
         struct npu_runtime_span spans[4] = {
             {(uintptr_t)s->targets[NBG_ALLOC_NN].cpu, s->targets[NBG_ALLOC_NN].bytes},
-            {(uintptr_t)s->targets[NBG_ALLOC_COEFF].cpu, s->targets[NBG_ALLOC_COEFF].bytes},
+            {(uintptr_t)s->targets[NBG_ALLOC_COEFF].cpu, rt->catalogue[s->model].shares ? 0 : s->targets[NBG_ALLOC_COEFF].bytes},
             {s->command.cpu, lines(extent)},
             {s->layout.dynamic ? (uintptr_t)s->targets[d].cpu : 0, s->layout.dynamic ? s->targets[d].bytes : 0}};
         if (walk(rt, s, spans, 4, NPU_RUNTIME_CACHE_CHUNK, WALK_CLEAN) && good(rt)) load_end(rt, s, 1);
@@ -953,6 +989,18 @@ static int step(void *cookie)
     return load_step(rt);
 }
 
+/* A slot whose graph a loaded copy reads the coefficients of keeps that graph. */
+static int lends_coefficients(const struct npu_runtime *rt, unsigned slot)
+{
+    const struct npu_runtime_slot *s = &rt->slot[slot];
+    if (state(s) != NPU_RUNTIME_READY || s->model != slot) return 0;
+    for (unsigned i = 0; i < rt->slots; ++i) {
+        const unsigned st = state(&rt->slot[i]), m = rt->slot[i].model;
+        if (i != slot && st != NPU_RUNTIME_EMPTY && m < atomic_load_explicit(&rt->count, memory_order_acquire) &&
+            rt->catalogue[m].shares == slot + 1) return 1;
+    }
+    return 0;
+}
 static int request(void *cookie, unsigned client, const struct npu_service_request *r,
                    enum npu_service_result *result)
 {
@@ -967,6 +1015,7 @@ static int request(void *cookie, unsigned client, const struct npu_service_reque
         if (now_state != NPU_RUNTIME_EMPTY && now_state != NPU_RUNTIME_READY) {
             *result = NPU_SERVICE_BUSY; return 0;
         }
+        if (lends_coefficients(rt, client)) return 0;
         s->model = r->command;
         set_state(s, NPU_RUNTIME_LOADING);
         return 1;
@@ -1150,14 +1199,14 @@ int npu_runtime_register(struct npu_runtime *rt, const void *model, size_t bytes
     struct nbg_assembly_layout plan = {.buffers = rt->scratch, .capacity = rt->later_entries};
     struct sizes z = {0};
     if (!admit(&view, &plan)) { npu_meta_release(rt->meta, copy, bytes); return 0; }
-    need(&plan, bytes, &z);
+    need(&plan, bytes, 0, &z);
     if (z.command > rt->command_bytes || z.constant > rt->constant_bytes || z.read > rt->read_bytes || z.write > rt->write_bytes) {
         npu_meta_release(rt->meta, copy, bytes); rt->register_refusal = NPU_REGISTER_TOO_LARGE; return 0;
     }
     const uint64_t t3 = clock_us(rt);
     rt->counters.registered++; rt->counters.registered_bytes += bytes;
     rt->counters.register_copy_us += t1 - t0; rt->counters.register_decode_us += t2 - t1; rt->counters.register_layout_us += t3 - t2;
-    rt->catalogue[n] = (struct npu_runtime_model){copy, bytes};
+    rt->catalogue[n] = (struct npu_runtime_model){copy, bytes, 0};
     copy_layout(&rt->plans[n], &plan);
     atomic_store_explicit(&rt->count, n + 1, memory_order_release);
     rt->register_refusal = NPU_REGISTER_NONE;
