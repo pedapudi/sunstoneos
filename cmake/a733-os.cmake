@@ -6,10 +6,10 @@ if(NOT TARGET sunstone-a733-os-core)
   return()
 endif()
 include("${CMAKE_CURRENT_LIST_DIR}/sunstone-image.cmake")
-# Every image admits the returning lifetime, except one with the USB class services, and selects its lifetime at run
-# time from the contract magic (apps/os/admission.c); the manifest bounds the supervised and returning ones.
+# The contract magic selects the lifetime. USB classes retain their supervised
+# image profile except for the empty-port failure diagnostic.
 set(os_lifetime return)
-if(SUNSTONE_A733_OS_USB_CLASSES)
+if(SUNSTONE_A733_OS_USB_CLASSES AND NOT os_usb_failure_test)
   set(os_lifetime supervised)
 endif()
 if(SUNSTONE_APPLICATION STREQUAL "")
@@ -24,6 +24,11 @@ elseif(SUNSTONE_APPLICATION STREQUAL "memcpy-bench")
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/memcpy-bench/main.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/memcpy-bench/manifest.json")
   add_sunstone_image(sunstone-a733-os-memcpy-bench LIFETIME ${os_lifetime} APPLICATION memcpy-bench)
+elseif(SUNSTONE_APPLICATION STREQUAL "usb-empty-fail")
+  add_sunstone_application(usb-empty-fail
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/usb-empty-fail/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/usb-empty-fail/manifest.json")
+  add_sunstone_image(sunstone-a733-os-usb-empty-fail LIFETIME return APPLICATION usb-empty-fail)
 elseif(SUNSTONE_APPLICATION STREQUAL "headset-fixture")
   # Declares the headset device, so the image links the headset library with the Bluetooth stack and mSBC.
   add_sunstone_application(headset-fixture

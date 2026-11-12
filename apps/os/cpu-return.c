@@ -128,6 +128,8 @@ int os_cpu_return_start(void)
 {
 #ifdef SUNSTONE_A733_OS_RADIO_SCAN
     if(board.session.workload!=3||board.session.deadline_us<=OS_CPU_RETURN_RESERVE_US+10000)return 0;
+#elif defined(SUNSTONE_A733_USB_FAILURE_TEST)
+    if(board.session.workload!=0||board.session.deadline_us<=OS_CPU_RETURN_RESERVE_US+10000)return 0;
 #else
     if(board.session.workload!=2||board.session.deadline_us<=OS_CPU_RETURN_RESERVE_US+10000)return 0;
 #endif
@@ -310,7 +312,7 @@ void os_cpu_return_supervise(void)
     }
     if(os_cpu_return_expired(now,since,OS_FAILURE_RETURN_US)){os_quiesce_note_faults(board_fail_note);fail(0x742);}
     if(os_quiesce_step(board_fail_note)!=OS_QUIESCE_DONE)return;
-    /* This profile's readiness task never calls USB startup. Constructors
+    /* The readiness task never calls USB0 startup. Constructors
      * alone cannot acquire USB ownership or invoke controller callbacks. */
     const struct a733_native_usb *p=&providers.shared;
     if(p->usb_step||atomic_load_explicit(&p->usb_prepared,memory_order_acquire)||

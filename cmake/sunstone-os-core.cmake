@@ -43,6 +43,15 @@ include_guard(GLOBAL)
 # retirement is qualified only for that lifetime (the RAM-copy DMA service, the scanning radio station) and the GPU
 # qualification builds make an image that admits the returning lifetime alone (SUNSTONE_A733_OS_RETURN_ONLY).
 set(os_return_only OFF)
+set(os_usb_failure_test OFF)
+if(SUNSTONE_APPLICATION STREQUAL "usb-empty-fail")
+  if(NOT SUNSTONE_A733_OS_USB_CLASSES OR SUNSTONE_A733_OS_USB_JPEG OR SUNSTONE_A733_OS_SD_WRITE OR
+     SUNSTONE_A733_OS_RADIO_SCAN OR SUNSTONE_A733_OS_GPU OR SUNSTONE_A733_OS_DMA)
+    message(FATAL_ERROR "usb-empty-fail requires USB classes without JPEG, SD writes, radio, GPU or DMA")
+  endif()
+  set(os_usb_failure_test ON)
+  set(os_return_only ON)
+endif()
 if(SUNSTONE_A733_OS_DMA OR SUNSTONE_A733_OS_RADIO_SCAN OR SUNSTONE_A733_OS_GPU_RECOVERY_TEST OR SUNSTONE_A733_OS_GPU_BISECT)
   set(os_return_only ON)
 endif()
@@ -50,8 +59,8 @@ if(SUNSTONE_A733_OS_GPU_RECOVERY_TEST AND
    (NOT SUNSTONE_A733_OS_GPU OR NOT SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle"))
   message(FATAL_ERROR "GPU recovery qualification requires the returning GPU lifecycle image")
 endif()
-# The USB class services have no qualified drain for the returning lifetime: their image does not admit it.
-if(SUNSTONE_A733_OS_USB_CLASSES AND os_return_only)
+# Only the empty-port diagnostic selects returning USB class retirement.
+if(SUNSTONE_A733_OS_USB_CLASSES AND os_return_only AND NOT os_usb_failure_test)
   message(FATAL_ERROR "The USB class services exclude the returning lifetime, which this image's options require")
 endif()
 if(SUNSTONE_A733_OS_USB_CLASSES AND NOT SUNSTONE_BOARD_USB2_IRQ)
@@ -456,6 +465,7 @@ if(SUNSTONE_A733_OS_USB_CLASSES)
 endif()
 target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_TASK_DEADLINES=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
   SUNSTONE_CRUMBS=1
+  "$<$<BOOL:${os_usb_failure_test}>:SUNSTONE_A733_USB_FAILURE_TEST=1>"
   "$<$<BOOL:${os_return_only}>:SUNSTONE_A733_OS_RETURN_ONLY=1>"
   "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_SCAN}>:SUNSTONE_A733_OS_RADIO_SCAN=1>")
