@@ -19,7 +19,8 @@ add_sunstone_application(${latency_name}
 target_compile_definitions(${latency_name} PRIVATE SUNSTONE_LATENCY=1)
 if(SUNSTONE_SCHED_LATENCY_TRACE)
   target_compile_definitions(${latency_name} PRIVATE SUNSTONE_SCHED_LATENCY_TRACE=1
-    SS_SCHED_TRACE_WAITS=16 SS_SCHED_TRACE_TICKS=512 INCLUDE_eTaskGetState=1)
+    SS_SCHED_TRACE_WAITS=16 SS_SCHED_TRACE_TICKS=512 SS_SCHED_TRACE_HISTORY=16
+    INCLUDE_eTaskGetState=1)
   target_include_directories(${latency_name} PRIVATE "${SUNSTONE_SOURCE_ROOT}/kernel/scheduler")
 endif()
 if(SUNSTONE_LATENCY_PMU)

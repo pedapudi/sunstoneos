@@ -16,7 +16,8 @@ function(sunstone_enable_scheduler_latency_trace target)
   # Diagnostic storage declarations. Overflow is reported; maxima are retained
   # separately, so a full log cannot silently discard its longest observation.
   target_compile_definitions(${target} PRIVATE SUNSTONE_SCHED_LATENCY_TRACE=1
-    SS_SCHED_TRACE_WAITS=16 SS_SCHED_TRACE_TICKS=512 INCLUDE_eTaskGetState=1)
+    SS_SCHED_TRACE_WAITS=16 SS_SCHED_TRACE_TICKS=512 SS_SCHED_TRACE_HISTORY=16
+    INCLUDE_eTaskGetState=1)
   set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/kernel/scheduler/latency_trace.c"
     PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
 endfunction()
