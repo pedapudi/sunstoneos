@@ -1,10 +1,12 @@
 # A retained first-stage request selects FEL before card loading
 
-**Status: host-checked; one physical RAM proof pending.** The gate has
-executing host checks, and no card is written. The RAM proof runs the gate in
-SRAM through the ROM's FEL execute command. Physical gate execution and
-cold-card recovery remain unqualified
-([evidence](../evidence/card-fel-recovery.jsonl)).
+**Status: request consumption and FEL re-entry qualified from SRAM.** The gate
+has executing host checks, and no card is written. One physical run on port
+3-3 executed the gate in SRAM through the ROM's FEL execute command. It
+consumed the RTC request, recorded its final progress, left WDT0 re-armed and
+reached a new FEL instance 0.537 seconds after the execute request. Card
+loading, recovery after a watchdog reset through a card and cold boot remain
+unqualified ([evidence](../evidence/card-fel-recovery.jsonl)).
 
 ## The first stage consumes the vendor request
 
@@ -126,8 +128,11 @@ uploaded gate starts with the cache off. The gate also clears `SCTLR.I` and
 invalidates the instruction cache itself. The runner refuses any FEL binary
 other than the reviewed one and runs a frozen copy.
 
-The gate's branch to `0x20` re-enters the ROM while the host's execute
-transaction is still open, and the ROM never answers it. In the captured ROM,
+The gate's branch to `0x20` re-enters the ROM from inside the execute command.
+On the board the ROM sent that command's status before running the code: the
+transaction completed normally in 0.013 seconds. If the status is lost to the
+disconnect instead, the transaction fails or the runner ends it after
+2 seconds. In the captured ROM,
 the paths from `0x20` and from the reset vector at `0x44` meet at the same FEL
 routine (`0x2514`, called with `r0 = 0x7f`). Both then run the same clock and
 USB initialization and the FEL loop at `0x1061c`. The last run of the earlier
@@ -135,8 +140,8 @@ DRAM-based recovery image (queue entry `1794485680312692366-e77f3e34`)
 measures that path: after an AArch32 warm reset with USB still configured, the
 next command reached a new instance 1.79 seconds after the launch, and WDT0
 still read `0x41`, so no watchdog reset had occurred. The runner therefore
-treats a failed execute transaction, or one it ends at 2 seconds, as the
-expected disconnect. It accepts that only for this execute command, after the
+accepts a normal completion and also treats a failed execute transaction, or
+one it ends at 2 seconds, as the expected disconnect. It accepts that only for this execute command, after the
 command has started, with the watchdog and request armed. It sends no further
 request to the old instance and waits for a new one.
 

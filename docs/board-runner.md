@@ -522,8 +522,9 @@ before each register command, and runs a frozen copy.
 The runner uploads both loads, arms WDT0 in mode `0x41`, then sets and reads
 back the session tag and the vendor RTC request, and executes `0x52000`. The
 gate re-arms WDT0 for 16 seconds and branches to the ROM's FEL entry from
-inside that execute command, which the ROM never answers. The runner ends the
-transaction after 2 seconds; a failed or ended execute transaction is the
+inside that execute command. The ROM normally reports the command's status
+before running the code. If the disconnect loses that status, the runner ends
+the transaction after 2 seconds; a failed or ended execute transaction is the
 expected USB disconnect, but only for this command after it has started with
 the watchdog and request armed. The runner then sends nothing to the old
 instance and waits for a new one. Acceptance requires WDT0 still at `0xb1`

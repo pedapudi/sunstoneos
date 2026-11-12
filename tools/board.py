@@ -900,7 +900,7 @@ class Live:
         if recovery:
             require(plan['launch'] == ['exe', '0x52000'] and plan['launch_seconds'] == recovery.EXE_SECONDS,
                     'Card recovery requires its direct SRAM entry and bounded execute transaction.')
-            # The gate re-enters the ROM, which never answers this request.
+            # The gate re-enters the ROM; the disconnect can lose this request's status.
             self.tx(*plan['launch'], recovery_launch=True, timeout=plan['launch_seconds'])
         else:
             self.tx(*plan['launch'])

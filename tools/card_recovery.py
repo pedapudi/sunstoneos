@@ -18,8 +18,8 @@ PROFILE = struct.Struct('<8Q32s')
 # interval (A733 manual 8.3.6.6), instead of disarming it. A ROM that does not
 # re-enumerate therefore still resets to FEL. include/a733_card_fel_gate.h.
 GATE_WATCHDOG = 0xb1
-# The ROM never answers the execute request, so end that transaction after
-# 2 s. Gate entry to capture: exe end 2 + enumeration 5 + capture 1 = 8 s
+# The ROM reported the execute status before running the gate (0.013 s on the
+# board); if the disconnect loses it, end that transaction after 2 s. Gate entry to capture: exe end 2 + enumeration 5 + capture 1 = 8 s
 # of the 16 s interval (docs/designs/card-fel-recovery.md).
 EXE_SECONDS = 2
 INTERVAL_SECONDS = 16
