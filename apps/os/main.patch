@@ -78,13 +78,15 @@
          else if(ready<0){
              const struct a733_pmic *p=providers.domains.pmic;
              const uint32_t site=SUNSTONE_CRUMB_FAIL_SITE(PMIC),value=p&&p->rails?a733_power_authority_load(&p->rails->authority):~0u;
-@@ -136,6 +167,14 @@
+@@ -136,6 +167,16 @@
  {
      (void)unused;int started=0;
      for(;;){
 +        if(os_returning()&&os_cpu_return_requested()&&!os_cpu_return_deadline_us()){vTaskDelay(1);continue;}
 +        if(a733_typec_native_stop_requested(&board.typec)){
-+            if(a733_typec_native_provider_stop_poll(&board.typec))park();
++            if(a733_typec_native_provider_stop_poll(&board.typec)){
++                if(board.handles[4])xTaskNotifyGive(board.handles[4]);park();
++            }
 +            BOARD_PROGRESS(BOARD_SERVICE_TYPEC);
 +            if(board.typec.bus.state>=A733_TWI_BEGIN&&board.typec.bus.state<=A733_TWI_COMPLETE)taskYIELD();
 +            else vTaskDelay(1);
@@ -103,13 +105,15 @@
          BOARD_PROGRESS(BOARD_SERVICE_TYPEC);
          /* Advance an owned I2C transfer without sleeping after each state.
           * Attached monitoring reads status only once per REFRESH_US, so
-@@ -155,6 +197,11 @@
+@@ -155,6 +197,13 @@
  static void power(void *unused)
  {
      (void)unused;for(;;){
 +        if(os_returning()&&os_cpu_return_requested()&&!os_cpu_return_deadline_us()){vTaskDelay(1);continue;}
 +        if(a733_typec_native_stop_requested(&board.typec)){
-+            if(a733_typec_native_power_stop_poll(&board.typec))park();
++            if(a733_typec_native_power_stop_poll(&board.typec)){
++                if(board.handles[4])xTaskNotifyGive(board.handles[4]);park();
++            }
 +            BOARD_PROGRESS(BOARD_SERVICE_POWER);vTaskDelay(1);continue;
 +        }
          if(!board_live(NULL)||a733_smp_counter()/24>=service_deadline())

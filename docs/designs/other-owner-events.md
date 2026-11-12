@@ -67,3 +67,42 @@ Its phase and stop waits use their original absolute bounds. Its manifest and
 the selected native source objects compile; a complete image still requires
 the central deadline reservation and build definitions. It has no physical
 qualification.
+
+## USB return waits preserve each retirement proof
+
+The USB host owner registers its deadline slot before starting. A return claim
+that precedes publication of the shared return deadline sleeps until the
+supervisor's notification. The session's final 10 ms guard bounds that wait.
+Type-C provider and power stop completion notify the host after their local
+restoration proves complete.
+
+An unfinished xHCI halt or GIC interrupt retirement uses a 50 µs absolute retry,
+capped by the shared return deadline. These status transitions have no separate
+completion interrupt. This uses the same retry policy as
+`apps/board/host_irq.c`; [USB host interrupt ownership](../usb2-host.md) describes
+the mask, deactivation and rearm obligations. Expiry or a failed deadline wait
+retains the failure and parks the task. The host still requires controller halt,
+interrupt retirement, buffer release, local platform restoration and both
+Type-C stop proofs before reporting completion.
+
+`checks/event-misc-usb-return.py` checks a full second with no publication event,
+an explicit publication wake and the 50 µs retirement retry. Its tick-wait
+mutation fails. `checks/os-quiesce-usb-radio.py` checks the retirement ordering
+and retained faults. Physical return qualification remains open.
+
+The USB host configuration without interrupt binding retains a normal-operation
+polling reference at a precise 1 ms cadence in `apps/os/client.c`. It has no
+idle-wake reduction and remains unqualified. The legacy USB0
+runtime in `drivers/usb/a733_usb.c` has no linked precise-deadline backend.
+Replacing either path requires its selected interrupt and timer composition;
+the host return checks do not qualify those paths.
+
+## Network completion still requires native SDIO interrupt delivery
+
+The standalone network worker in `drivers/net/sunstone_net.c` polls the radio
+transport once per scheduler tick. The native SDIO transport configures card
+function interrupt enables but leaves GIC delivery disabled
+(`include/aic8800_sdio_transport.h`). The [SDIO reference comparison](../radio-sdio-reference.md)
+lists INTID 194 delivery as open work. An indefinite worker wait would therefore
+lose received packets and transport completions. Native SDIO interrupt delivery,
+IP-task socket-event publications and precise request deadlines remain required.
