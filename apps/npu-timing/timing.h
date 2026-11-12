@@ -6,6 +6,7 @@
 #include <stdint.h>
 #define NPU_TIMING_MAGIC 0x4d49544eu          /* "NTIM" */
 #define NPU_TIMING_VERSION 1u
+#define NPU_TIMING_RESULT_VERSION 2u
 #define NPU_TIMING_GRAPHS 16u
 #define NPU_TIMING_JOBS 1000u                 /* the most single jobs of one graph */
 struct npu_timing_graph_desc {
@@ -26,13 +27,17 @@ struct npu_timing_graph_result {
     uint64_t depth, pipelined_ticks;
     /* The outputs after the last job against the reference: bytes compared and bytes that differ. */
     uint64_t output_bytes, differing_bytes;
-    uint64_t input_bytes, reserved;
+    uint64_t input_bytes;
+    /* Completions of this graph whose event came before all units were idle (bits 31:0) and the idle-word bits seen busy
+     * (bits 63:32), from the queue's idle-wait record (struct ss_npu_queue_idle_wait). */
+    uint64_t idle_waits_busy;
 };
 struct npu_timing_result {
     uint64_t magic, version, bytes, count;
     uint64_t clock[2], open_ticks, reserved;
     struct npu_timing_graph_result graph[NPU_TIMING_GRAPHS];
-    uint64_t padding[(1728 - 64 - NPU_TIMING_GRAPHS * 96) / 8];
+    /* For each graph: the longest wait for full idle (bits 31:0) and all its waits together (bits 63:32), in counter ticks. */
+    uint64_t idle_wait_ticks[NPU_TIMING_GRAPHS];
 };
 _Static_assert(sizeof(struct npu_timing_result) == 1728, "the result fills the output limit");
 #endif

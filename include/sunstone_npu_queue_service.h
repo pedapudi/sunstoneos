@@ -57,6 +57,9 @@ struct ss_npu_queue {
     uint8_t *tables, *at; size_t table_bytes; /* the tables and the cursor of the next carve */
     struct ss_npu_queue_entry *entry;        /* entry_capacity entries, in the tables: one for each job declared in flight */
     unsigned entry_capacity;
+    /* Completions whose event came before all NPU units were idle: how many, the counter ticks waited in all and at most, and
+     * the idle-word bits seen busy. EL1 only adds to these; the application may clear them while no job is in flight. */
+    struct ss_npu_queue_idle_wait { uint64_t waits, ticks, max_ticks; uint32_t busy_bits, reserved; } idle_wait;
 };
 /* The bytes of the tables for handles handles holding tensors tensors in all (inputs and outputs), links requested edges and a
  * ring of depth entries. */

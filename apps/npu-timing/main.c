@@ -1,6 +1,7 @@
 /* NPU job timing: the time of single jobs and of pipelined jobs of each graph the OS takes from the models region (timing.h). */
 #include "sunstone_app.h"
 #include "sunstone_npu_queue.h"
+#include "sunstone_npu_queue_service.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "timing.h"
@@ -15,7 +16,9 @@ static struct ss_npu_queue *queue;
 static ss_npu_handle handle[NPU_TIMING_GRAPHS];
 static struct ss_npu_fence fences[DEPTH];
 
-static _Noreturn void fault(unsigned site, uint32_t value) { ss_fail_value((0xe0u << 8) | site, value); }
+/* The graph being timed, in the top byte of every fault value: a failure record names its graph. */
+static unsigned current;
+static _Noreturn void fault(unsigned site, uint32_t value) { ss_fail_value((0xe0u << 8) | site, current << 24 | (value & 0xffffffu)); }
 void npu_timing_init(void) {}
 
 static void write_inputs(unsigned g, const uint8_t *data, uint64_t bytes)
@@ -66,7 +69,9 @@ static void sort(uint32_t *v, unsigned n)
 static void time_graph(unsigned g, const uint8_t *region, const struct npu_timing_graph_desc *d)
 {
     struct npu_timing_graph_result *r = &result.graph[g];
+    current = g;
     if (!d->jobs || d->jobs > NPU_TIMING_JOBS || d->depth > DEPTH) fault(0x30, g);
+    queue->idle_wait = (struct ss_npu_queue_idle_wait){0};     /* no job is in flight here */
     write_inputs(g, region + d->input_offset, d->input_bytes);
     r->input_bytes = d->input_bytes;
     for (unsigned job = 0; job < 3; ++job) { struct ss_npu_fence f; submit(g, &f, job); finish(f, job); }   /* warm-up */
@@ -108,6 +113,10 @@ static void time_graph(unsigned g, const uint8_t *region, const struct npu_timin
         offset += t.bytes;
     }
     r->output_bytes = offset; r->differing_bytes = differ;
+    const struct ss_npu_queue_idle_wait w = queue->idle_wait;
+    r->idle_waits_busy = (w.waits > UINT32_MAX ? UINT32_MAX : w.waits) | (uint64_t)w.busy_bits << 32;
+    result.idle_wait_ticks[g] = (w.max_ticks > UINT32_MAX ? UINT32_MAX : w.max_ticks) |
+                                (uint64_t)(w.ticks > UINT32_MAX ? UINT32_MAX : w.ticks) << 32;
 }
 void npu_timing_main(const struct ss_grant *grant)
 {
@@ -134,7 +143,7 @@ void npu_timing_main(const struct ss_grant *grant)
     }
     for (unsigned g = 0; g < h->count; ++g) if (!ss_npu_queue_register(queue, g, &handle[g])) fault(0x06, g);
     result.open_ticks = ss_counter_ticks() - begin;
-    result.magic = NPU_TIMING_RESULT_MAGIC; result.version = 1; result.bytes = sizeof(result); result.count = h->count;
+    result.magic = NPU_TIMING_RESULT_MAGIC; result.version = NPU_TIMING_RESULT_VERSION; result.bytes = sizeof(result); result.count = h->count;
     {
         char line[192]; unsigned long v[7] = {0};
         static const char *const keys[] = {"cpu_l_mhz=", "cpu_b_mhz=", "cpu_l_mv=", "cpu_b_mv=", "transitions=", "dsu_mhz=", "core="};

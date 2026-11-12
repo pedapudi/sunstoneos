@@ -4,6 +4,8 @@
 #include "npu_queue.h"
 #include "npu_idle.h"
 
+/* The longest wait for full idle after a completion event before the completion is a fault (see complete()). */
+#define NPU_IDLE_WAIT_US 100u
 struct npu_runtime_queue_power_config {
     const struct npu_idle_part *part; /* register protocol and timing of the NPU */
     unsigned enabled; /* 0: matching owner/policy control without gate writes. */
@@ -33,6 +35,9 @@ struct npu_runtime_queue {
     uint64_t irq_cpu_ticks;
 #endif
     uint32_t last_events, last_idle; /* First failed completion inputs survive retention. */
+    /* The last completion's wait for full idle after its event (0: none was needed) and the units seen busy meanwhile. */
+    uint64_t idle_wait_ticks;
+    uint32_t idle_busy_bits;
     BaseType_t *woken; /* Non-null only during its ISR. */
     /* Optional shared-ring bridge. It consumes bounded work after each IRQ
      * and owns completion notification when installed. Configure before claim. */

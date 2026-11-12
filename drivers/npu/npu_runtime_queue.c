@@ -92,13 +92,21 @@ static int start(void *cookie, const struct a733_npu_command *c, uint64_t timeou
 #endif
     return 1;
 }
+/* The slot of the job at the head of the queue, from its command address; 0xff when none matches. */
+static unsigned slot_of(const struct npu_runtime_queue *q)
+{
+    const struct npu_queue_job *job = q->queue.head;
+    if (!job || !job->command) return 0xffu;
+    for (unsigned k = 1; k <= q->runtime->slots && k < 0xffu; ++k)
+        if (q->runtime->commands[k].device == job->command->hardware.device) return k - 1;
+    return 0xffu;
+}
 static int complete(void *cookie)
 {
     struct npu_runtime_queue *q = cookie;
     const uintptr_t base = q->runtime->native.registers;
     /* +0x010 is read-to-acknowledge. Read it once, as the vendor ISR does.
-     * Completion requires event zero AND full idle before CPU acquisition.
-     * A premature event is retained; no tick poll treats it as completion. */
+     * Completion requires event zero AND full idle before CPU acquisition. */
     if (!window(q)) return 0;
     const uint32_t events = *(volatile uint32_t *)(base + NPU_REG_EVENTS);
     if (!window(q)) return 0;
@@ -110,10 +118,28 @@ static int complete(void *cookie)
                             events, SUNSTONE_CRUMB_HERE());
         return 0;
     }
-    if ((idle & a733_npu_idle_part.full_idle) != a733_npu_idle_part.full_idle) {
-        sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU) | SUNSTONE_CRUMB_NPU_REGISTER | (1u << 16),
-                            idle, SUNSTONE_CRUMB_HERE());
-        return 0;
+    const uint32_t full = a733_npu_idle_part.full_idle;
+    q->idle_wait_ticks = 0; q->idle_busy_bits = 0;
+    if ((idle & full) != full) {
+        /* The event can come while units still show busy. VIPLite polls +0x004 after every completion until all units are
+         * idle (vip_drv_task_common.c:1078 vipdrv_hw_idle, vip_drv_pm.c:814-826 vipdrv_hw_wait_idle with
+         * EXPECT_IDLE_VALUE_ALL_MODULE). Poll for at most NPU_IDLE_WAIT_US and record the wait; a unit still busy then is a
+         * fault, whose value names the busy units (bits 23:0 of the complement) and the slot (bits 31:24). */
+        uint32_t now = idle, busy = ~idle & full;
+        const uint64_t bound = (uint64_t)NPU_IDLE_WAIT_US * q->frequency / 1000000u;
+        uint64_t waited = 0;
+        while ((now & full) != full && (waited = ticks() - q->observed) < bound) {
+            now = *(volatile uint32_t *)(base + a733_npu_idle_part.status);
+            busy |= ~now & full;
+        }
+        __asm__ volatile("dsb sy" ::: "memory");
+        q->last_idle = now;
+        if ((now & full) != full) {
+            sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU) | SUNSTONE_CRUMB_NPU_REGISTER | (1u << 16),
+                                (~now & 0x00ffffffu) | (uint32_t)slot_of(q) << 24, SUNSTONE_CRUMB_HERE());
+            return 0;
+        }
+        q->idle_wait_ticks = waited ? waited : 1; q->idle_busy_bits = busy;
     }
     if (q->observed - q->started >= q->timeout_ticks) {
         sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU),

@@ -237,7 +237,15 @@ static void progress(void *unused,BaseType_t *woken)
 {
     (void)unused;irq_woken=woken;
     if(atomic_load_explicit(&direct.runtime->service.signals->runtime_failed,memory_order_acquire))ss_npu_queue_service_fail(&ring,1);
-    else (void)ss_npu_queue_service_progress(&ring,1,1);
+    else {
+        if(direct.idle_wait_ticks){
+            struct ss_npu_queue_idle_wait *w=&ring.idle_wait;
+            ++w->waits;w->ticks+=direct.idle_wait_ticks;w->busy_bits|=direct.idle_busy_bits;
+            if(direct.idle_wait_ticks>w->max_ticks)w->max_ticks=direct.idle_wait_ticks;
+            direct.idle_wait_ticks=0;
+        }
+        (void)ss_npu_queue_service_progress(&ring,1,1);
+    }
     irq_woken=NULL;
 }
 int os_npu_queue_sdk_bind(void)
