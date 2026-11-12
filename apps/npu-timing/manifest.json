@@ -47,5 +47,5 @@
     "tensor_bytes": 262144,
     "graph_region": "models"
   },
-  "output_limit": 1728
+  "output_limit": 2368
 }

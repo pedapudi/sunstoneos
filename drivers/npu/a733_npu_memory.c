@@ -3,7 +3,6 @@
 #include "a733_mapping_check.h"
 
 #define PAGE 4096u
-#define TABLE 16384u
 #define PA_LIMIT (UINT64_C(1) << 40)
 #define VA_LIMIT (UINT64_C(1) << 32)
 
@@ -25,6 +24,7 @@ static int translated(const struct a733_npu_memory *m, uintptr_t cpu,
     }
     return 1;
 }
+static unsigned shift_of(const struct a733_npu_buffer *b) { return b->page_shift ? b->page_shift : 12u; }
 static int device_writes(const struct a733_npu_buffer *b)
 { return b->role == A733_NPU_BUFFER_WRITE || b->role == A733_NPU_BUFFER_SCRATCH; }
 /* Every page of the tables and buffers at initialization and around the
@@ -87,8 +87,10 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
     unsigned bootstraps = 0;
     for (size_t i = 0; i < count; ++i) {
         const struct a733_npu_buffer *b = &buffers[i];
+        if (b->page_shift && b->page_shift != 12 && b->page_shift != 16 && b->page_shift != 20) return 0;
+        const uint64_t page = UINT64_C(1) << shift_of(b);
         if (!a733_span_incl_nonempty((void *)b->cpu, b->bytes) || !b->device ||
-            ((b->cpu | b->physical | b->bytes | b->device) & (PAGE - 1)) ||
+            ((b->cpu | b->physical | b->bytes | b->device) & (page - 1)) ||
             (unsigned)b->role > A733_NPU_BUFFER_SCRATCH ||
             b->physical >= PA_LIMIT || b->bytes > PA_LIMIT - b->physical ||
             b->bytes > VA_LIMIT - b->device ||
@@ -117,7 +119,7 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
     for (size_t i = 0; i < count; ++i) {
         const struct a733_npu_buffer *b = &next_->buffers[i];
         regions[i] = (struct a733_npu_region){b->physical, b->bytes, b->device,
-            A733_NPU_PAGE_4K, device_writes(b)};
+            (enum a733_npu_page_size)shift_of(b), device_writes(b)};
     }
     if (!a733_npu_mmu_build(arena, capacity, physical, regions, count, &next_->image)) return 0;
     next_->state = A733_NPU_MEMORY_IDLE;
@@ -181,10 +183,14 @@ static int canonical(const struct a733_npu_memory *m)
             if (word(arena + root * 4u) != 2) return 0;
             continue;
         }
-        if (used > m->capacity || TABLE > m->capacity - used ||
-            word(arena + root * 4u) != ((uint32_t)(m->image.physical + used) | 1u)) return 0;
-        for (unsigned slot = 0; slot < PAGE; ++slot) {
-            uint64_t va = first + (uint64_t)slot * PAGE;
+        /* The range's page is its first buffer's (the builder refuses a range of mixed pages): the directory entry names its
+         * mode and the leaf table has one entry per page of 16 MiB. */
+        const unsigned shift = shift_of(&m->buffers[region]);
+        const size_t entries = (size_t)1 << (24u - shift), table = entries * 4u < 64u ? 64u : entries * 4u;
+        if (used > m->capacity || table > m->capacity - used ||
+            word(arena + root * 4u) != ((uint32_t)(m->image.physical + used) | ((shift - 12u) / 4u) << 2 | 1u)) return 0;
+        for (unsigned slot = 0; slot < entries; ++slot) {
+            uint64_t va = first + ((uint64_t)slot << shift);
             while (region < m->count &&
                    (uint64_t)m->buffers[region].device + m->buffers[region].bytes <= va) ++region;
             uint32_t expected = 2;
@@ -196,7 +202,8 @@ static int canonical(const struct a733_npu_memory *m)
             }
             if (word(arena + used + slot * 4u) != expected) return 0;
         }
-        used += TABLE; ++tables;
+        for (size_t at = entries * 4u; at < table; ++at) if (arena[used + at]) return 0;
+        used += table; ++tables;
     }
     for (size_t i = 1024; i < PAGE; ++i) if (arena[i]) return 0;
     return m->image.bytes == used && m->image.tables == tables &&

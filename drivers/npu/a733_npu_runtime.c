@@ -105,11 +105,48 @@ struct placement {
     uint32_t bootstrap_device, command_device0, read_device0, write_device0;
 };
 /* The regions of one slot, running offsets from the three bases. */
-struct slot_dims { struct sizes size; size_t command_cpu, read_cpu, write_cpu; uint64_t command_dev, read_dev, write_dev; };
+struct slot_dims {
+    struct sizes size;
+    size_t command_cpu, constant_cpu, read_cpu, write_cpu;
+    uint64_t command_dev, constant_dev, read_dev, write_dev;
+};
+/* The NPU MMU page of each slot's constant, read and write regions. A build that defines SUNSTONE_NPU_TENSOR_PAGE_SHIFTS (an
+ * initializer such as {12, 20}, one entry per slot from slot 0; later slots take 4 KiB) maps them with those pages. One
+ * directory entry of the NPU MMU names one page size for its 16 MiB, so in such a build each slot's commands, constant, read
+ * and write regions each start a 16 MiB device range, and each of the three regions is a whole number of its pages at a CPU
+ * offset that is a multiple of its page. Without the definition every region is mapped with 4 KiB pages and placed as before. */
+#ifdef SUNSTONE_NPU_TENSOR_PAGE_SHIFTS
+static const unsigned char tensor_shift[] = SUNSTONE_NPU_TENSOR_PAGE_SHIFTS;
+static unsigned tensor_page_shift(unsigned slot) { return slot < sizeof(tensor_shift) ? tensor_shift[slot] : 12u; }
+#define TENSOR_ROOTS 1
+#else
+static unsigned tensor_page_shift(unsigned slot) { (void)slot; return 12u; }
+#define TENSOR_ROOTS 0
+#endif
+#define ROOT (UINT64_C(1) << 24)
+static uint64_t round_up(uint64_t v, uint64_t a) { return (v + a - 1) & ~(a - 1); }
+/* Before slot i's regions are placed, with d->size the slot's sizes: where its constant region goes (after its commands), and
+ * in a build with tensor pages the rounding above. */
+static void slot_begin(struct slot_dims *d, unsigned slot)
+{
+    if (TENSOR_ROOTS) {
+        const uint64_t g = UINT64_C(1) << tensor_page_shift(slot);
+        d->size.constant = round_up(d->size.constant, g);
+        d->size.read = round_up(d->size.read, g); d->size.write = round_up(d->size.write, g);
+        d->read_cpu = round_up(d->read_cpu, g); d->write_cpu = round_up(d->write_cpu, g);
+        d->command_dev = round_up(d->command_dev, ROOT);
+        d->read_dev = round_up(d->read_dev, ROOT); d->write_dev = round_up(d->write_dev, ROOT);
+        d->constant_cpu = round_up(d->command_cpu + d->size.command, g);
+        d->constant_dev = round_up(d->command_dev + d->size.command + PAGE, ROOT);
+        return;
+    }
+    d->constant_cpu = d->command_cpu + d->size.command;
+    d->constant_dev = d->command_dev + d->size.command + PAGE;
+}
 static void slot_advance(struct slot_dims *d)
 {
-    d->command_cpu += d->size.command + d->size.constant;
-    d->command_dev += d->size.command + PAGE + d->size.constant + PAGE;
+    d->command_cpu = d->constant_cpu + d->size.constant;
+    d->command_dev = d->constant_dev + d->size.constant + PAGE;
     d->read_cpu += d->size.read; d->read_dev += d->size.read + PAGE;
     d->write_cpu += d->size.write; d->write_dev += d->size.write + PAGE;
 }
@@ -125,8 +162,11 @@ static int place(struct placement *p, const struct sizes *z, size_t tables_bytes
         z->read > UINT32_MAX || z->write > UINT32_MAX) return 0;
     uint64_t device = NPU_RUNTIME_DEVICE_BASE;
     p->bootstrap_device = (uint32_t)device; device += (uint64_t)z->command + PAGE;
+    if (TENSOR_ROOTS) device = round_up(device, ROOT);
     p->command_device0 = (uint32_t)device; device += total->command_dev;
+    if (TENSOR_ROOTS) device = round_up(device, ROOT);
     p->read_device0 = (uint32_t)device; device += total->read_dev;
+    if (TENSOR_ROOTS) device = round_up(device, ROOT);
     p->write_device0 = (uint32_t)device; device += total->write_dev;
     /* The NPU's device addresses are 32 bits: the one hardware bound on the memory a declaration can map. */
     if (device > UINT64_C(1) << 32) return 0;
@@ -137,6 +177,7 @@ static int place(struct placement *p, const struct sizes *z, size_t tables_bytes
     p->tables_bytes = pages(tables_bytes); offset += p->tables_bytes;
     p->arena = offset; offset += p->arena_bytes;
     p->bootstrap = offset; offset += z->command;
+    if (TENSOR_ROOTS) offset = round_up(offset, UINT64_C(1) << 20);     /* a constant region's 1 MiB pages */
     p->command0 = offset; offset += total->command_cpu;
     offset = whole_groups(offset);
     p->read0 = offset; offset += total->read_cpu;
@@ -319,7 +360,7 @@ static enum npu_declaration_result lay_out(struct npu_runtime *rt, struct bump *
             (void)take_meta(b, (size_t)entries * sizeof(struct nbg_assembly_buffer));
             (void)take_meta(b, (size_t)(entries - NBG_ALLOC_INPUT) * sizeof(struct npu_runtime_tensor));
         }
-        total->size = s; slot_advance(total);
+        total->size = s; slot_begin(total, i); slot_advance(total);
     }
     /* The tables shared by the slots: the worker's spans and scratch, the commands, the registered buffers and the memory
      * layer's tables behind them, the service's tables and, for a queue image, the queue's. */
@@ -461,25 +502,25 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     const uint64_t fill_begin = parts_now(rt);
 #define REGION(r, offset, size, dev) ((r) = (struct npu_runtime_region){v.cpu + (offset), v.physical + (offset), (size), (dev)})
     rt->bootstrap = all[n++] = (struct a733_npu_buffer){v.cpu + p.bootstrap, v.physical + p.bootstrap,
-        z.command, p.bootstrap_device, A733_NPU_BUFFER_BOOTSTRAP};
+        z.command, p.bootstrap_device, A733_NPU_BUFFER_BOOTSTRAP, 0};
     struct slot_dims d = {0};
     for (unsigned i = 0; i < v.slots; ++i) {
         struct npu_runtime_slot *s = &rt->slot[i];
         d.size = v.bounds.per_graph ? graph_sizes(rt->plans, NULL, v.models, i) : z;
+        slot_begin(&d, i);
         REGION(s->command, p.command0 + d.command_cpu, d.size.command, p.command_device0 + (uint32_t)d.command_dev);
-        REGION(s->constant, p.command0 + d.command_cpu + d.size.command, d.size.constant,
-               p.command_device0 + (uint32_t)d.command_dev + (uint32_t)(d.size.command + PAGE));
+        REGION(s->constant, p.command0 + d.constant_cpu, d.size.constant, p.command_device0 + (uint32_t)d.constant_dev);
         REGION(s->read, p.read0 + d.read_cpu, d.size.read, p.read_device0 + (uint32_t)d.read_dev);
         REGION(s->write, p.write0 + d.write_cpu, d.size.write, p.write_device0 + (uint32_t)d.write_dev);
         slot_advance(&d);
         all[n++] = (struct a733_npu_buffer){s->command.cpu, s->command.physical, s->command.bytes,
-            s->command.device, A733_NPU_BUFFER_COMMAND};
+            s->command.device, A733_NPU_BUFFER_COMMAND, 0};
         all[n++] = (struct a733_npu_buffer){s->constant.cpu, s->constant.physical, s->constant.bytes,
-            s->constant.device, A733_NPU_BUFFER_CONSTANT};
+            s->constant.device, A733_NPU_BUFFER_CONSTANT, tensor_page_shift(i)};
         all[n++] = (struct a733_npu_buffer){s->read.cpu, s->read.physical, s->read.bytes,
-            s->read.device, A733_NPU_BUFFER_READ};
+            s->read.device, A733_NPU_BUFFER_READ, tensor_page_shift(i)};
         all[n++] = (struct a733_npu_buffer){s->write.cpu, s->write.physical, s->write.bytes,
-            s->write.device, A733_NPU_BUFFER_WRITE};
+            s->write.device, A733_NPU_BUFFER_WRITE, tensor_page_shift(i)};
         /* Every byte after an empty slot's stream is an END pair; the END
          * mark is therefore zero. The bootstrap publication cleans them. */
         fill_end(s->command.cpu, s->command.bytes);

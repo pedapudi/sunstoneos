@@ -6,7 +6,7 @@
 #include <stdint.h>
 #define NPU_TIMING_MAGIC 0x4d49544eu          /* "NTIM" */
 #define NPU_TIMING_VERSION 1u
-#define NPU_TIMING_RESULT_VERSION 2u
+#define NPU_TIMING_RESULT_VERSION 3u
 #define NPU_TIMING_GRAPHS 16u
 #define NPU_TIMING_JOBS 1000u                 /* the most single jobs of one graph */
 struct npu_timing_graph_desc {
@@ -38,6 +38,9 @@ struct npu_timing_result {
     struct npu_timing_graph_result graph[NPU_TIMING_GRAPHS];
     /* For each graph: the longest wait for full idle (bits 31:0) and all its waits together (bits 63:32), in counter ticks. */
     uint64_t idle_wait_ticks[NPU_TIMING_GRAPHS];
+    /* For each graph, over its warm-up and single jobs: the queue's traffic record (struct ss_npu_queue_traffic), all zero
+     * unless the OS was built with SUNSTONE_NPU_TRAFFIC_COUNTERS. */
+    struct npu_timing_traffic { uint64_t jobs, read8, write8, cycles, idle_cycles; } traffic[NPU_TIMING_GRAPHS];
 };
-_Static_assert(sizeof(struct npu_timing_result) == 1728, "the result fills the output limit");
+_Static_assert(sizeof(struct npu_timing_result) == 2368, "the result fills the output limit");
 #endif

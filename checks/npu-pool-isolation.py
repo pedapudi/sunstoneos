@@ -24,6 +24,10 @@ MUTATIONS = {
          'a733_extents_intersect(b->cpu, b->bytes, (uintptr_t)arena, capacity) ||\n            a733_extents_intersect(b->cpu, b->bytes, (uintptr_t)tables, table_bytes) ||\n            a733_extents_intersect(b->physical, b->bytes, physical, capacity) ||', ''),
         ('drivers/npu/a733_npu_mmu.c',
          '            a733_extents_intersect(r->physical, r->bytes, physical, capacity)) return 0;', '            0) return 0;')],
+    # A large page must be named in its directory entry, and the layer's own inspection must read each range's page.
+    'directory-entry-names-no-page-size': [('drivers/npu/a733_npu_mmu.c', '(mode << 2) | 1u);', '(mode & 0u) | 1u);')],
+    'inspection-assumes-4k-pages': [('drivers/npu/a733_npu_memory.c',
+        'const unsigned shift = shift_of(&m->buffers[region]);', 'const unsigned shift = 12u;')],
 }
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path, required=True)

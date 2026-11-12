@@ -72,6 +72,7 @@ static void time_graph(unsigned g, const uint8_t *region, const struct npu_timin
     current = g;
     if (!d->jobs || d->jobs > NPU_TIMING_JOBS || d->depth > DEPTH) fault(0x30, g);
     queue->idle_wait = (struct ss_npu_queue_idle_wait){0};     /* no job is in flight here */
+    queue->traffic = (struct ss_npu_queue_traffic){0};
     write_inputs(g, region + d->input_offset, d->input_bytes);
     r->input_bytes = d->input_bytes;
     for (unsigned job = 0; job < 3; ++job) { struct ss_npu_fence f; submit(g, &f, job); finish(f, job); }   /* warm-up */
@@ -85,6 +86,8 @@ static void time_graph(unsigned g, const uint8_t *region, const struct npu_timin
         if (done < 0 || ss_npu_queue_release(queue, f) != 1) fault(0x22, job);
         ss_progress();      /* outside the timed span: a subsampling job takes 15 ms, and the progress window is 1 s */
     }
+    const struct ss_npu_queue_traffic t = queue->traffic;     /* the single jobs only: no job is in flight here */
+    result.traffic[g] = (struct npu_timing_traffic){t.jobs, t.read8, t.write8, t.cycles, t.idle_cycles};
     uint64_t sum = 0;
     for (unsigned job = 0; job < d->jobs; ++job) sum += ticks[job];
     sort(ticks, d->jobs);

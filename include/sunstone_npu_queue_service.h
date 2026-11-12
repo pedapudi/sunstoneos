@@ -60,6 +60,10 @@ struct ss_npu_queue {
     /* Completions whose event came before all NPU units were idle: how many, the counter ticks waited in all and at most, and
      * the idle-word bits seen busy. EL1 only adds to these; the application may clear them while no job is in flight. */
     struct ss_npu_queue_idle_wait { uint64_t waits, ticks, max_ticks; uint32_t busy_bits, reserved; } idle_wait;
+    /* In an image built with SUNSTONE_NPU_TRAFFIC_COUNTERS: the jobs measured from doorbell to completion and their NPU bus
+     * reads and writes (units of 8 bytes), cycles and idle cycles in all (struct npu_runtime_queue, traffic). EL1 only adds
+     * to these; the application may clear them while no job is in flight. */
+    struct ss_npu_queue_traffic { uint64_t jobs, read8, write8, cycles, idle_cycles; } traffic;
 };
 /* The bytes of the tables for handles handles holding tensors tensors in all (inputs and outputs), links requested edges and a
  * ring of depth entries. */

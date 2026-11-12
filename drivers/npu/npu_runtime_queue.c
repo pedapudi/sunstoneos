@@ -13,6 +13,9 @@
 #define NPU_REG_COMMAND_ADDRESS UINT32_C(0x654)
 #define NPU_REG_COMMAND_FETCH UINT32_C(0x3a4)
 #define NPU_REG_EVENTS UINT32_C(0x010)
+#ifdef SUNSTONE_NPU_TRAFFIC_COUNTERS
+static const uint32_t traffic_reg[4] = {0x040, 0x044, 0x078, 0x07c};
+#endif
 static void power_owner(void *);
 static struct npu_runtime_queue *creating_power;
 BaseType_t npu_runtime_queue_task_privileged(TaskFunction_t entry, void *argument)
@@ -86,6 +89,10 @@ static int start(void *cookie, const struct a733_npu_command *c, uint64_t timeou
     if (!window(q)) return 0;
     a733_mmio_write32_dsb_sy_after(base + NPU_REG_COMMAND_ADDRESS, c->device);
     if (!window(q)) return 0;
+#ifdef SUNSTONE_NPU_TRAFFIC_COUNTERS
+    for (unsigned k = 0; k < 4; ++k) q->traffic_start[k] = *(volatile uint32_t *)(base + traffic_reg[k]);
+    q->traffic_armed = 1;
+#endif
     a733_mmio_write32_dsb_sy_after(base + NPU_REG_COMMAND_FETCH, a733_npu_fetch_word(c->readable_bytes));
 #ifdef SUNSTONE_NPU_QUEUE_TIMING
     q->runtime->doorbell_ticks = ticks();
@@ -141,6 +148,12 @@ static int complete(void *cookie)
         }
         q->idle_wait_ticks = waited ? waited : 1; q->idle_busy_bits = busy;
     }
+#ifdef SUNSTONE_NPU_TRAFFIC_COUNTERS
+    if (q->traffic_armed) {
+        for (unsigned k = 0; k < 4; ++k) q->traffic[k] = *(volatile uint32_t *)(base + traffic_reg[k]) - q->traffic_start[k];
+        q->traffic_armed = 0; q->traffic_ready = 1;
+    }
+#endif
     if (q->observed - q->started >= q->timeout_ticks) {
         sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU),
                             (uint32_t)(q->observed - q->started), SUNSTONE_CRUMB_HERE());
