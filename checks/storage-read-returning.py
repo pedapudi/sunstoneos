@@ -2,11 +2,10 @@
 """Earlier frozen SD0 images and reusable card models.
 
 The current terminal-close/return guard is checked by sd-return-native.py.
-This runner preserves the pre-close image's original evidence contract.
+The module preserves the pre-close image's original evidence contract.
 
-usage: storage-read-returning.py --image ELF --board-config CONFIG --output NEW_DIRECTORY [--case NAME]...
-
-Runs, under Unicorn, the linked image's sdrt_setup(), sdrt_bind(), sdrt_step()
+The module has no command line: run(elf, board, out, only) takes the captured board configuration of
+the frozen image and is kept for a re-run against such an image. It runs, under Unicorn, the linked image's sdrt_setup(), sdrt_bind(), sdrt_step()
 until it ends, sdrt_quiet() and sdrt_report() for each case, with the card
 and register models of checks/storage-read-native.py,
 checks/storage-read-service.py and checks/storage-read-sd-modes.py (the UHS-I
@@ -77,7 +76,6 @@ from unicorn.arm64_const import (UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_
                                  UC_ARM64_REG_PSTATE, UC_ARM64_REG_CP_REG)
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by sd-return-native.py'
 sys.path.insert(0, str(ROOT / 'checks'))
 import harness  # noqa: E402
 
@@ -419,11 +417,3 @@ def run(elf, board, out, only=()):
                   'rail, pin, PMIC, translation, scheduler, time and card/MMIO modeled as in the supervised SD0 '
                   'checks. No monitor, scheduler start or physical qualification.')}, indent=1) + '\n')
     print('PASS returning SD0 read image: profiles 2 and 3, window, absent card, CRC fault and PMIC parking')
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    for name in ('image', 'board_config', 'output'): parser.add_argument('--' + name.replace('_', '-'), type=Path, required=True)
-    parser.add_argument('--case', action='append', default=[], help='run only the named cases')
-    a = parser.parse_args()
-    run(a.image, json.loads(a.board_config.read_text()), a.output, tuple(a.case))

@@ -33,7 +33,7 @@ The partitioned fork is the default kernel in SMP images, and `-DSUNSTONE_PARTIT
 
 ## Per-object locks
 
-2. Per-object locks (measured negative result for the task path). Queues, event groups and stream buffers lock their own hashed slot instead of the two global locks. A host check proves unrelated objects no longer wait for each other. On the board the global locks serialized independent queues heavily (99% of waits over 5 us were charged to a holder working on a different object), but removing that serialization did not change the task path's entry delay or gap. The code is only on branch `work/sched-tasklock-1102`; this tree keeps the global locks. Its value would be the closed race in point 3 (which the global-lock fix below also closes) and lower lock contention for the recognition workers, not task-path latency.
+2. Per-object locks (measured negative result for the task path). Queues, event groups and stream buffers lock their own hashed slot instead of the two global locks. A host check proves unrelated objects no longer wait for each other. On the board the global locks serialized independent queues heavily (99% of waits over 5 us were charged to a holder working on a different object), but removing that serialization did not change the task path's entry delay or gap. The change is not in this tree, which keeps the global locks. Its value would be the closed race in point 3 (which the global-lock fix below also closes) and lower lock contention for the recognition workers, not task-path latency.
 
 ## Open work
 
@@ -41,7 +41,7 @@ The partitioned fork is the default kernel in SMP images, and `-DSUNSTONE_PARTIT
 2. Measure one control drain broken into its records, and batch the per-record `dsb ishst; sev` pairs.
 3. Run five soaks of the global-lock images with the notification change to isolate its 4 kHz effect; repeat the A76 task-path soak and measure recognition time with the task path on those cores.
 4. Bound the owner work at interrupt exit (up to 11 µs on the control core); shorten the yield supervisor call, the mask supervisor calls and the FromISR mask pair.
-5. An abortable queue lock so a waiter takes its place in line with the mask open; tickless idle (`work/tickless-idle-1101`, changes the protected `patches/freertos-smp-*.patch`) with control-period jitter measured with and without it.
+5. An abortable queue lock so a waiter takes its place in line with the mask open; tickless idle (not in this tree; it changes the protected `patches/freertos-smp-*.patch`) with control-period jitter measured with and without it.
 6. Sweep the eight-core soak for masked spans; the earlier 95 to 206 µs stock spans did not recur under the mimus load.
 7. Idle pull: fix the missed pull or measure it on against off on the board.
 8. Control-path long runs (10^6 periods) at 1 to 8 kHz; only 10 kHz has them.

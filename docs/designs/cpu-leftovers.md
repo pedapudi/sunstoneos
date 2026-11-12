@@ -105,7 +105,7 @@ and `size` parameters.
 
 The module opens no USB device and imports no USB library; it receives a device
 that a supervised launcher has already claimed. Callers decode with
-`decode_report()` of `checks/fault-decode.py`, the only definition of the
+`decode_report()` of `tools/fault-decode.py`, the only definition of the
 report layout. The supervised OS launcher outside this repository calls
 `fetch()` through its optional `--fault-report` flag, once before the capture,
 and refuses the flag unless the frozen image defines `a733_fault_previous`.

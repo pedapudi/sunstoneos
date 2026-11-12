@@ -9,7 +9,7 @@ Run the offline comparator after capture, using the frozen input clip and
 the two saved pictures:
 
 ```sh
-~/.cache/sunstoneos/venv/bin/python3 -B checks/hevc-pixel-reference.py \
+~/.cache/sunstoneos/venv/bin/python3 -B tools/hevc-pixel-reference.py \
   --clip /path/to/frozen/input.h265 \
   --picture0 /path/to/capture/picture-0.nv12 \
   --picture1 /path/to/capture/picture-1.nv12 \

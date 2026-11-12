@@ -263,7 +263,7 @@ function(add_sunstone_image target)
     endforeach()
   endif()
   add_custom_command(TARGET ${target} POST_BUILD
-    COMMAND "${Python3_EXECUTABLE}" "${SUNSTONE_SOURCE_ROOT}/checks/sunstone-image-link.py"
+    COMMAND "${Python3_EXECUTABLE}" "${SUNSTONE_SOURCE_ROOT}/tools/sunstone-image-link.py"
       --image "$<TARGET_FILE:${target}>" --manifest "${directory}/manifest.bin"
       --application "${name}" --build-id "${output}/build-id.txt"
       --lifetime "${IMAGE_LIFETIME}" --session-seconds "${image_session_seconds}" --output "${output}/link-check.json"

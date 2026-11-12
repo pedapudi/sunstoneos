@@ -13,7 +13,7 @@ input; those bytes belong to the allocation and are outside the input digest.
 
 Output contains 614,400 bytes. Its first 307,200 bytes are the Y plane; its next
 307,200 bytes are interleaved U and V. Both planes have a 640-byte stride.
-The host authenticates the copied output digest and extent. An independent CPU reference is available through `checks/isp0-pixel-reference.py`.
+The host authenticates the copied output digest and extent. An independent CPU reference is available through `tools/isp0-pixel-reference.py`.
 Its Bayer interpolation and color conversion are not established as equivalent
 to ISP600, so a successful capture does not establish numerical correctness.
 

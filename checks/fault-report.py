@@ -33,7 +33,7 @@ def load(name, path):
 
 
 tool = load('fault_report_tool', ROOT / 'tools/fault-report.py')
-decoder = load('fault_report_decoder', ROOT / 'checks/fault-decode.py')
+decoder = load('fault_report_decoder', ROOT / 'tools/fault-decode.py')
 
 
 def device_rules():

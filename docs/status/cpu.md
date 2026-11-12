@@ -40,7 +40,7 @@ normally without a replug. The records list the queue entries.
 3. Locate the fault of the longer-recognition nonreturn. Repeat it only with a concrete correction or a narrower hypothesis.
 4. Resolve the core-6 comparison's differing data-walk counts with the coordinator. The fixed loop uses 68.458% fewer cycles, but its declared count-comparability condition fails. Defaults remain uncached; cluster-return and recognition checks wait for that decision ([design](../designs/cpu-table-walks.md)).
 5. Qualify WFI idle behavior (instruction-model evidence only), retention and cluster power-down.
-6. Broaden PMU event qualification beyond the single-core result in `board-session-20261023/port-3-3/set5-bb4-run/`.
+6. Broaden PMU event qualification beyond the single-core result in the record `cpu-pmu-board-core0` of [cpu-pmu.jsonl](../evidence/cpu-pmu.jsonl).
 7. Release the held static-OFF policy through the reviewed path before later multicore consumers use it.
 8. Run the integrated OS image at the top points (B1, then TOP), the performance-mode board case and the longer-input thermal capture; see the design docs listed above.
 

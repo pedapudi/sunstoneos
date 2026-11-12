@@ -6,7 +6,7 @@ from elftools.elf.elffile import ELFFile
 from unicorn import UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0
 ROOT=Path(__file__).resolve().parents[1]
-GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by storage-read-sd-modes.py'
+GATE_RUNS = [['--image', '{elf:storage-read-p1}', '--session', '{session:storage-read-p1}', '--output', '{output}']]
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 base=module('storage_read_service_model',ROOT/'checks/storage-read-native.py')
@@ -15,7 +15,7 @@ class Machine(base.Machine):
   self.current=1;self.present=True;self.incoming=bytearray();self.dirty=set();self.created=[];self.byte_addressed=byte_addressed
   super().__init__(image,session,'service');self.max_tx=4384;self.first_sector=0;self.api_busy=False
   if byte_addressed:
-   csd=(9<<80)|(5<<84)|(4095<<62)|(7<<47);self.csd=[(csd>>(96-32*i))&0xffffffff for i in range(4)]
+   csd=(9<<80)|((5|(1<<10))<<84)|(4095<<62)|(7<<47)|(0x32<<96);self.csd=[(csd>>(96-32*i))&0xffffffff for i in range(4)]
   for name in ('xTaskCreateStatic','xQueueCreateMutexStatic'):self.hooks[image.address(name)]=name
   self.cpu.hook_add(UC_HOOK_MEM_WRITE,lambda cpu,access,a,n,v,unused:self.dirty.update(range(a&~4095,(a+n+4095)&~4095,4096)))
  def code(self,cpu,a,size,unused):
@@ -33,6 +33,7 @@ class Machine(base.Machine):
    n=min(args[2],len(self.incoming));self.cpu.mem_write(args[1],bytes(self.incoming[:n]));del self.incoming[:n];self.ret(n)
   else:super().code(cpu,a,size,unused)
  def read_mmio(self,cpu,access,a,size,v,unused):
+  if self.mode_read(a):return
   if a==0x04020200:
    assert self.held and size==4 and self.fifo<self.total
    value=sum(((((self.first_sector+(self.fifo+i)//512)*13+(self.fifo+i)%512)*37+11)%256)<<(8*i) for i in range(4))
@@ -40,6 +41,7 @@ class Machine(base.Machine):
   if a==0x04020038 and self.data_command==18 and self.fifo==self.total:self.regs[a]=self.regs.get(a,0)|(1<<14)
   super().read_mmio(cpu,access,a,size,v,unused)
  def write_mmio(self,cpu,access,a,size,v,unused):
+  if self.mode_write(a,v):return
   assert self.held and size==4 and a!=0x04020200
   self.trace.append(['write',a,v]);self.regs[a]=v
   if a==0x04020038:self.regs[a]=self.read(a)&~v
@@ -142,7 +144,7 @@ def run(image,session,out,cases=None):
   initial.regs={int(a):v for a,v in initial.regs.items()}
  else:
   initial.establish();pages=initial.checkpoint()
-  state={k:v for k,v in initial.__dict__.items() if k not in ('cpu','image','session','hooks','dirty','incoming')}
+  state={k:v for k,v in initial.__dict__.items() if k not in ('cpu','image','session','hooks','dirty','incoming','mode_data')}
   checkpoint.write_text(json.dumps(dict(image_sha256=hashlib.sha256(image.read_bytes()).hexdigest(),session_sha256=hashlib.sha256(raw).hexdigest(),pages={str(a):body.hex() for a,body in pages.items()},state=state))+'\n')
  assert 'apbs0' in e.layouts['a733_pmic']
  (out/'preflight.json').write_text(json.dumps(dict(image_sha256=hashlib.sha256(image.read_bytes()).hexdigest(),symbols={n:e.address(n) for n in required},layouts=e.layouts,sizes=e.sizes,checkpoint_pages=len(pages),initial_commands=initial.commands,physical_access=False),indent=2)+'\n')
