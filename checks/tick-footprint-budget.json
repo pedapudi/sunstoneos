@@ -9,12 +9,12 @@
   "data os actions": 1,
   "data os pxCurrentTCBs": 1,
   "data os ssKernelBackend": 1,
-  "data os ssKernelCPUs": 4,
+  "data os ssKernelCPUs": 3,
   "data os ssKernelControl": 2,
   "data os ssKernelRegistry": 1,
-  "data os ssKernelTasks": 5,
+  "data os ssKernelTasks": 4,
   "data stack exception stack": 7,
-  "data total": 27
+  "data total": 25
  },
  "outside": {
   "code fixture": 4,

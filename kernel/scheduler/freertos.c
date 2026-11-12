@@ -1252,9 +1252,15 @@ static void ssKernelMakeReady(struct ssKernelTask *s)
     if (s->detach_pending && ss_kernel_test_detach_incoming)
         ss_kernel_test_detach_incoming(s->ready.slot, s->ready.queued);
 #endif
-    if (!cpu->run.current || s->ready.priority > cpu->run.current->priority)
+    struct ss_owner_task *current = cpu->run.current;
+    if (!current || s->ready.priority > current->priority)
         cpu->reschedule = true;
-    ssKernelSliceRefresh(c, false);
+    /* The slice deadline depends on the current task's execution and on its
+     * own priority's FIFO. A ready transition at another priority changes
+     * neither, so only a transition at the current priority refreshes it;
+     * a woken higher-priority task leaves the current task's state alone. */
+    if (!current || s->ready.priority == current->priority)
+        ssKernelSliceRefresh(c, false);
 }
 static void ssKernelBlock(TickType_t ticks, bool indefinite, unsigned kind)
 {
