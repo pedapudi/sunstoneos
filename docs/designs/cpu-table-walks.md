@@ -251,7 +251,10 @@ and spread. An improvement must exceed the larger spread of the two images.
 
 Build with `SUNSTONE_A733_OS=ON`, `SUNSTONE_APPLICATION=table-walks` and an
 explicit `SUNSTONE_A733_TABLE_WALKS=uncached` or `cached`. Build the typed
-session with `tools/session.py build --clock-grant --decoder apps/table-walks/host.py`.
+session with `tools/session.py build --clock-grant`. Freeze the standalone decoder
+with `apps/table-walks/host.py --freeze PATH` and supply that path to
+`tools/session.py build --decoder PATH`. The frozen decoder embeds both fixed
+values from the shared header and refuses changes to any TCR field.
 The queue runs the uncached image first and the cached image only after a pass.
 Any first miss ends the batch. Predictions and timing budgets belong in the
 individual evidence records.

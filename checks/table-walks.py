@@ -159,8 +159,11 @@ def loop(image):
     return dict(iterations=len(loads), mapped_blocks=63, measured_data_walks=values[2])
 
 
-def decoder_cases(tcr):
+def decoder_cases(tcr, out):
     host = load('table_walk_host', ROOT / 'apps/table-walks/host.py')
+    frozen = out / f'decoder-{tcr:x}.py'
+    host.freeze(frozen)
+    host = load('frozen_table_walk_host', frozen)
     clock = b'CLOCK cpu_l_mhz=1794 cpu_b_mhz=2002 cpu_l_mv=1000 cpu_b_mv=900 transitions=3 dsu_mhz=1274 core=6 pattern=0'
     def payload(value, cycles=1024 * 700):
         return (host.HEAD.pack(b'SSTWALK1', value, 0x414fd0b1, 6, 1024, 24000000) +
@@ -170,13 +173,16 @@ def decoder_cases(tcr):
     assert host.compare(a, b)['gain']
     assert not host.compare(a, host.decode(payload(a733_tcr.CACHED_WALK)))['gain']
     assert not host.compare(a, host.decode(payload(a733_tcr.CACHED_WALK, 1024 * 800)))['gain']
-    for offset, size, reason in ((24, 8, 'CPU'), (host.HEAD.size, 1, 'operating points'),
+    for offset, size, reason in ((8, 8, 'translation-control profile'), (24, 8, 'CPU'), (host.HEAD.size, 1, 'operating points'),
                                 (host.HEAD.size + 512 + 16, 8, 'walk counts')):
         bad = bytearray(payload(tcr))
         bad[offset:offset + size] = bytes(size)
         harness.refused(lambda: host.decode(bytes(bad)), reason, ValueError)
     harness.refused(lambda: host.decode(payload(tcr)[:-1]), 'length', ValueError)
-    return 7
+    bad = bytearray(payload(tcr))
+    struct.pack_into('<Q', bad, 8, tcr ^ (1 << 12))
+    harness.refused(lambda: host.decode(bytes(bad)), 'translation-control profile', ValueError)
+    return 10
 
 
 def main():
@@ -192,7 +198,7 @@ def main():
         harness.refused(lambda: publication(image, tcr, 'missing-barrier'), 'completion barrier', AssertionError)
         if not tcr & 0xf00:
             harness.refused(lambda: publication(image, tcr, 'missing-clean'), 'unclean descriptors', AssertionError)
-        report['decoder_cases'] = decoder_cases(tcr)
+        report['decoder_cases'] = decoder_cases(tcr, args.output)
         reports.append(report)
     harness.save(args.output / 'result.json', dict(passed=True, physical_access=False, images=reports,
         scope='Linked instruction execution; cache visibility and PMU events are modeled. No physical latency or coherence claim.'))

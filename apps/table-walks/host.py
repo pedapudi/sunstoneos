@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Decode the core-6 forced-walk result and compare matched boot profiles."""
 import json
+import importlib.util
 from pathlib import Path
 import re
 import statistics
@@ -11,6 +12,23 @@ HEAD = struct.Struct('<8s5Q')
 SAMPLE = struct.Struct('<6Q')
 SAMPLES, ITERATIONS = 6, 1024
 RESULT_BYTES = HEAD.size + 512 + SAMPLES * SAMPLE.size
+
+
+def profiles():
+    """Fixed header values, embedded when freezing a standalone decoder."""
+    if '_WALK_PROFILES' in globals():
+        return _WALK_PROFILES
+    path = Path(__file__).resolve().parents[2] / 'tools/a733_tcr.py'
+    spec = importlib.util.spec_from_file_location('table_walk_profiles', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.UNCACHED_WALK, module.CACHED_WALK
+
+
+def freeze(output):
+    source = Path(__file__).read_text()
+    first, rest = source.split('\n', 1)
+    Path(output).write_text(first + '\n_WALK_PROFILES = ' + repr(profiles()) + '\n' + rest)
 
 
 def inputs():
@@ -23,9 +41,9 @@ def decode(payload):
     magic, tcr, midr, core, iterations, hz = HEAD.unpack_from(payload)
     if (magic, core, iterations, hz) != (b'SSTWALK1', 6, ITERATIONS, 24000000) or (midr >> 4) & 0xfff != 0xd0b:
         raise ValueError('table-walk CPU or workload differs')
-    walk_bits = tcr & 0xf00
-    if walk_bits not in (0, 0x500):
-        raise ValueError('table-walk cacheability differs')
+    uncached, cached = profiles()
+    if tcr not in (uncached, cached):
+        raise ValueError('table-walk translation-control profile differs')
     clocks = []
     for offset in (HEAD.size, HEAD.size + 256):
         line = payload[offset:offset + 256].split(b'\0', 1)[0].decode('ascii').strip()
@@ -52,7 +70,7 @@ def decode(payload):
                             bus_access=bus, digest=digest, cycles_per_iteration=cycles / ITERATIONS))
     measured = [s['cycles_per_iteration'] for s in samples[1:]]
     median = statistics.median(measured)
-    return dict(tcr=hex(tcr), cached=bool(walk_bits), midr=hex(midr), core=core,
+    return dict(tcr=hex(tcr), cached=tcr == cached, midr=hex(midr), core=core,
                 counter_hz=hz, iterations=iterations, clock_before=clocks[0], clock_after=clocks[1],
                 samples=samples, median_cycles_per_iteration=median,
                 spread_cycles=max(measured) - min(measured),
@@ -72,9 +90,15 @@ def compare(a, b):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('uncached', type=Path)
+    parser.add_argument('uncached', type=Path, nargs='?')
     parser.add_argument('cached', type=Path, nargs='?')
+    parser.add_argument('--freeze', type=Path, help='write a standalone decoder with the shared profile values embedded')
     args = parser.parse_args()
+    if args.freeze:
+        freeze(args.freeze)
+        raise SystemExit(0)
+    if not args.uncached:
+        parser.error('supply a result or --freeze')
     a = decode(args.uncached.read_bytes())
     print(json.dumps(dict(a=a, b=(b := decode(args.cached.read_bytes())), comparison=compare(a, b))
                      if args.cached else a, indent=2))
