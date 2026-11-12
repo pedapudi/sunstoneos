@@ -5,7 +5,8 @@
  *   mode 1: after the read, start a task that runs in no application space and reads the region: it must fault.
  *   mode 2: measure the task switch: two tasks on one core hand a notification to each other, first with both in the
  *           application's space (no TTBR0 write) and then with the second in no space (two writes per round trip).
- * The region's file is 4 MiB. */
+ * The region's file is 4 MiB. Before it reads the region the main task writes and reads back both ends of the capture buffer,
+ * which admission took from the ledger as a kernel extent that the application's tables map (apps/os/capture.c). */
 #include "large_test-app.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -14,6 +15,8 @@
 #define TAG_OK UINT64_C(0x4c4152474f4b)         /* "LARGOK" */
 #define TAG_FAILED UINT64_C(0x4c415247464c)     /* "LARGFL" */
 #define TAG_MISMATCH UINT64_C(0x4c4152474d4d)   /* "LARGMM" */
+extern uint8_t *ss_capture_buffer;
+extern const size_t ss_capture_bytes;
 
 static StaticTask_t intruder_state;
 static StackType_t intruder_stack[512];
@@ -54,6 +57,10 @@ void large_test_main(const struct ss_grant *grant)
 {
     const uint64_t *input = (const uint64_t *)grant->regions[LARGE_TEST_REGION_INPUT].base;
     uint64_t mode = input[0], expected = input[1];
+    volatile uint8_t *capture = ss_capture_buffer;
+    if (!capture || ss_capture_bytes < 4096) ss_fail(0xe03);
+    capture[0] = 0x5a; capture[ss_capture_bytes - 1] = 0xa5;
+    if (capture[0] != 0x5a || capture[ss_capture_bytes - 1] != 0xa5) ss_fail(0xe04);
     int ready = ss_large_wait(LARGE_TEST_LARGE_WEIGHTS, 8000000);
     struct ss_large_status status;
     ss_large_status(LARGE_TEST_LARGE_WEIGHTS, &status);

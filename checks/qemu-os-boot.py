@@ -371,12 +371,14 @@ RAMDISK_ADDRESS = 0x48000000
 
 
 def large_manifest_path(path, digest, file, with_digest=True):
-    """manifest.json of the large-region test application: one 1 GiB region loaded from a 4 MiB file."""
+    """manifest.json of the large-region test application: one 1 GiB region loaded from a 4 MiB file, and capture frames, so
+    that admission takes a capture buffer from the ledger for the application's tasks."""
     manifest = {"name": "large-test", "devices": {"required": [], "optional": []},
                 "cpu": {"cluster": "a55", "workers": 1, "priority": 2, "stack_bytes": 8192},
                 "regions": [{"name": "input", "kind": "input", "access": ["read"], "bytes": 4096}],
                 "large_regions": [{"name": "weights", "bytes": 1 << 30, "source_bytes": len(file), "access": ["read"],
                                    "file": "/sunstone-test/sunstone-region-test.bin", **({"sha256": digest} if with_digest else {})}],
+                "audio": {"rate_hz": 16000, "channels": 1, "bits": 16, "min_frames": 1, "max_frames": 4096},
                 "deadlines": {"run_us": 2000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
                 "output_limit": 64}
     Path(path).write_text(json.dumps(manifest, indent=2) + '\n')

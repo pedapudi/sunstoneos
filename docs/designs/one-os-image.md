@@ -96,7 +96,7 @@ Counts are tracked files that mention the option, including docs.
 
 - **Status: implemented.** Every OS image links `audio.c`, the DMA service and the I2S and audio-lease drivers.
 - **Grant:** the session grants the service when `devices` has `SS_DEVICE_AUDIO_I2S` and the audio record validates. When it is not granted, `os_audio_pins`, the DMA0 open and the interrupt enable do nothing.
-- **Memory:** the stream's state (119,680 bytes: the period ring, the DMA pool session and the task stack) comes from the unified ledger at the first open of the stream, so an image without a capture session holds only a pointer.
+- **Memory:** the stream's state (119,680 bytes: the period ring, the DMA pool session and the task stack) comes from the unified ledger at the first open of the stream, so an image without a capture session holds only a pointer. The capture buffer that the stream and recorded input write (64 bytes of headroom and the manifest's `audio.max_frames`, at least 8,192 bytes, in whole pages) comes from the ledger at admission (`os_capture_memory` in `apps/os/capture.c`), readable and writable by the application's tasks; an application that declares no frames has none.
 - **Refusals:** admission refuses the grant with the DMA service, which shares INTID 143, with the NPU, in a returning session, in an image with the USB camera decoder, in a supervised GPU image and with resident CPU grants.
 
 ### Wi-Fi station (formerly `SUNSTONE_A733_OS_RADIO`)
@@ -116,6 +116,7 @@ Counts are tracked files that mention the option, including docs.
 - **Codec:** mSBC is always linked, so the profile's mode chooses CVSD (2) or mSBC (3) at run time.
 - **Module owner:** the radio and the headset share one AIC8800 module. When the session grants the radio, the headset attaches to the radio owner's module; otherwise it runs its own Bluetooth owner task.
 - **Refusals:** admission refuses the headset with the NPU, in a returning session, in an image with the USB camera decoder and in a supervised GPU image.
+- **Memory:** in a session that grants the headset, admission takes one extent from the ledger (`os_headset_memory` in `apps/os/headset.c`) for the Bluetooth application, the owner and client task stacks, the WAV and the state of `apps/bluetooth/headset.c` (`bluetooth_headset_memory`), readable and writable by the application's tasks: the capture client runs at EL0 and reaches all of it, and the recognizer reads the WAV. The extent is 2 MiB, one block of the application's tables, for 940,864 bytes of state (500,416 of the OS's and 440,448 of the library's). The playback state of `apps/bluetooth/playback.c` is not in the OS image, because the OS admits neither playback mode. The library's sizes are its own fixed bounds (a 3 s segment); sizing them from the session's capture length is open.
 - **Fixture:** the `headset-fixture` application declares USB storage and the headset; the gate's `headset` variant builds it.
 
 ### `SUNSTONE_A733_OS_NPU`, `_NPU_QUEUE`, `_NPU_OBSERVE`
@@ -242,7 +243,7 @@ The headset library, measured on the service series with `aarch64-none-elf-size`
 | difference | +190,168 | +56 | +1,277,952 | +0x137780 |
 | library objects | 201,421 | 8 | 948,008 | |
 
-The library's objects include sections that the link discards. Most of the `.bss` difference beyond the library is the fixture's capture buffer: 160,000 mono 16-bit frames, rounded up to 4,096-byte pages, plus a 64-byte header (323,648 bytes).
+The library's objects include sections that the link discards. Most of the `.bss` difference beyond the library is the fixture's capture buffer: 160,000 mono 16-bit frames, rounded up to 4,096-byte pages, plus a 64-byte header (323,648 bytes). Both now come from the ledger at admission: the headset fixture image's `.bss` fell from 3,210,688 bytes at bringup 27703d63 to 1,905,296, and what the headset keeps in the image is the 832-byte profile, which EL3 copies before any ledger exists, and a few words and pointers.
 
 Fit:
 
