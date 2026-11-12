@@ -7,23 +7,35 @@ completion and per-address-space TLBs; it does not qualify physical coherence.
 """
 import argparse
 import hashlib
+import json
 from pathlib import Path
 import struct
 import sys
 
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
+from elftools.elf.elffile import ELFFile
+from elftools.dwarf.dwarf_expr import DWARFExprParser
 from unicorn import UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_LR, UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_X0
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
+import a733_tcr
 
-GATE_RUNS = [['--image', '{elf:sup}', '--output', '{output}']]
+# This OS application has no pinned upper-memory inputs; the cases below add
+# their own reservation fixture without depending on an external application.
+GATE_RUNS = [['--image', '{elf:ret-walks-cached}', '--output', '{output}']]
 CHECK_INPUTS = ['apps/os/large.c', 'apps/os/owner-memory.h', 'kernel/umem/umem.c',
                 'kernel/umem/umem_policy.c', 'arch/aarch64/umem_cpu.c',
                 'arch/aarch64/device_memory.c', 'include/umem.h', 'include/umem_policy.h',
-                'include/os_memory_tables.h', 'docs/designs/unified-memory.md']
+                'include/os_memory_tables.h', 'docs/designs/unified-memory.md',
+                'apps/slot1-test/manifest-preserve.json']
+
+CASES = ('owner-nc-allocation', 'private-l2-policy', 'chunk-in-use', 'maintenance-refusal',
+         'nc-to-wb', 'omit-cache', 'omit-tlbi', 'out-of-map', 'pinned-reservations',
+         'coalesced-root-refusal')
 
 BLOCK = 0x200000
 GIB = 0x40000000
@@ -57,6 +69,8 @@ class Model:
         self.active = None
         self.conversions = []
         self.lock_depth = 0
+        self.operations = dict(civac=0, tlbi=0, descriptor_stores=0)
+        self.table_regions = [(ALIAS, ALIAS + 8192)]
         self.decoder, self.instructions = Cs(CS_ARCH_ARM64, CS_MODE_ARM), {}
         self.entry = image.address('umem_policy_convert')
         self.critical_enter = image.address('vTaskEnterCritical')
@@ -132,6 +146,9 @@ class Model:
         return result
 
     def store(self, u, access, address, size, value, unused):
+        split = self.read(self.policy + self.field('umem_el1_map', 'split_pages'))
+        if any(lo <= address < hi for lo, hi in self.table_regions) or split and split <= address < split + 11 * 4096:
+            self.operations['descriptor_stores'] += 1
         if ALIAS <= address < ALIAS + 8192:
             physical = (self.root if address < ALIAS + 4096 else self.slot1) + (address & 4095)
             u.mem_write(physical, value.to_bytes(size, 'little'))
@@ -199,11 +216,14 @@ class Model:
         op = self.instructions[address]
         args = op.op_str.lower().split(', ') if op.op_str else []
         if op.mnemonic == 'mrs':
-            values = {'currentel': 4, 'sctlr_el1': 5, 'ctr_el0': (4 << 24) | (4 << 16) if self.cache_stride else 0}
+            values = {'currentel': 4, 'sctlr_el1': 5, 'ctr_el0': (4 << 24) | (4 << 16) if self.cache_stride else 0,
+                      'id_aa64mmfr0_el1': 0x101122, 'tcr_el1': self.image.tcr}
             assert args[1] in values, ('unmodeled system register', op.op_str)
             u.reg_write(reg(args[0]), values[args[1]])
             self.skip(address)
         elif op.mnemonic == 'dc':
+            if args[0] == 'civac':
+                self.operations['civac'] += 1
             if self.active is not None:
                 assert args[0] == 'civac', 'conversion must clean and invalidate, not discard dirty lines'
                 va = u.reg_read(reg(args[1]))
@@ -215,6 +235,7 @@ class Model:
                     state['cleaned'].add(va)
             self.skip(address)
         elif op.mnemonic == 'tlbi':
+            self.operations['tlbi'] += 1
             if self.active is not None:
                 state = self.active
                 assert args[0] == 'vaae1is', 'TLBI must broadcast the address for every ASID'
@@ -272,17 +293,39 @@ class Model:
         self.write_words(table + self.field('umem_policy_table', 'base'), [GIB])
         self.call('umem_policy_add_table', self.policy, table)
         self.roots.append(root)
+        self.table_regions += [(root, root + 4096), (l2, l2 + 4096)]
 
     def policy_byte(self, chunk):
         pointer = self.read(self.ledger + self.field('umem', 'chunk_policy'))
         base = self.read(self.ledger + self.field('umem', 'chunk_base'))
         return self.read(pointer + (chunk - base) // BLOCK, 1)
 
-    def owner(self, pointer):
+    def describe(self, pointer):
         handle, extent = SCRATCH + 768, SCRATCH + 1024
         assert self.call('umem_lookup', self.ledger, pointer, handle) == 0
         assert self.call('umem_describe', self.ledger, handle, extent, 0) == 0
-        return self.read(extent + self.field('umem_extent', 'owner'), 2)
+        return {name: self.read(extent + self.field('umem_extent', name), width)
+                for name, width in (('base', 8), ('bytes', 8), ('owner', 2), ('policy', 1))}
+
+    def owner(self, pointer):
+        return self.describe(pointer)['owner']
+
+    def manifest(self, record):
+        application = self.image.address('ss_application')
+        pointer = self.read(application + self.field('ss_application', 'manifest'))
+        head, region_size = self.image.sizes['ss_manifest'], self.image.sizes['ss_region']
+        at = 0x47010000
+        self.u.mem_write(at, bytes(self.u.mem_read(pointer, head)) + bytes(len(record['regions']) * region_size))
+        self.u.mem_write(at + self.field('ss_manifest', 'name'), record['name'].encode().ljust(16, b'\0'))
+        self.u.mem_write(at + self.field('ss_manifest', 'region_count'), len(record['regions']).to_bytes(1, 'little'))
+        for index, region in enumerate(record['regions']):
+            address = at + self.field('ss_manifest', 'regions') + index * region_size
+            access = sum({'read': 1, 'write': 2, 'scratch': 16}[value] for value in region['access'])
+            fields = {'address': (int(region['address'], 0), 8), 'bytes': (region['bytes'], 8),
+                      'kind': ({'input': 1, 'work': 2, 'output': 3}[region['kind']], 4), 'access': (access, 4)}
+            for name, (value, width) in fields.items():
+                self.u.mem_write(address + self.field('ss_region', name), value.to_bytes(width, 'little'))
+        self.write_words(application + self.field('ss_application', 'manifest'), [at])
 
 
 def signed(value):
@@ -307,78 +350,169 @@ def check_conversion(model, expected_policy, count=1):
                 order=state['events'])
 
 
+def run_case(name, image):
+    model = Model(image, name if name.startswith('omit-') else 'normal')
+    if name == 'owner-nc-allocation':
+        pointer = model.call('os_owner_memory_below', 4096, BLOCK, 1, 1 << 32)
+        assert pointer and not pointer & (BLOCK - 1)
+        return check_conversion(model, 1)
+    if name == 'private-l2-policy':
+        model.bootstrap()
+        model.add_private()
+        model.call('os_owner_memory_below', 4096, BLOCK, 1, 1 << 32)
+        result = check_conversion(model, 1)
+        assert result['table_entries'] == 2
+        return result
+    if name == 'chunk-in-use':
+        live = model.bootstrap()
+        before = bytes(model.u.mem_read(model.slot1, 4096))
+        operations = model.operations.copy()
+        result, _ = model.request(FLOOR + 0x10000, 1)
+        assert result == -2 and not model.conversions and model.operations == operations
+        assert bytes(model.u.mem_read(model.slot1, 4096)) == before
+        assert model.policy_byte(FLOOR) == 0 and model.owner(live) == 0xffff
+        return dict(status=result, cache_and_table_operations=0)
+    if name == 'maintenance-refusal':
+        model.bootstrap()
+        model.cache_stride = False
+        free_before = model.read(model.ledger + model.field('umem', 'free_bytes'))
+        operations = model.operations.copy()
+        pointer = model.call('os_owner_memory_below', 4096, BLOCK, 1, 1 << 32)
+        assert pointer == 0 and len(model.conversions) == 1 and model.operations == operations
+        state = model.conversions[0]
+        assert state['status'] == -1 and state['before'] == state['after'] and not state['cleaned'] and not state['events']
+        assert model.policy_byte(state['chunk']) == 0
+        assert model.read(model.ledger + model.field('umem', 'free_bytes')) == free_before
+        return dict(status=state['status'], unchanged_policy=0, unchanged_descriptors=True)
+    if name == 'nc-to-wb':
+        pointer = model.call('os_owner_memory_below', 4096, BLOCK, 1, 1 << 32)
+        check_conversion(model, 1)
+        handle = SCRATCH + 512
+        assert model.call('umem_lookup', model.ledger, pointer, handle) == 0
+        assert model.call('umem_free', model.ledger, handle) == 0
+        status, _ = model.request(pointer, 0)
+        assert status == 0
+        return check_conversion(model, 0, 2)
+    if name in ('omit-cache', 'omit-tlbi'):
+        model.bootstrap()
+        reason = 'cache maintenance incomplete before break' if name == 'omit-cache' else 'cached translation survives make'
+        return harness.refused(lambda: model.call('os_owner_memory_below', 4096, BLOCK, 1, 1 << 32), reason, AssertionError)
+    if name == 'out-of-map':
+        model.bootstrap()
+        operations = model.operations.copy()
+        for chunk in (0x340000000, 0x10000000000):
+            assert signed(model.call('umem_policy_convert', model.policy, chunk, 1)) == -1
+        assert all(not state['events'] and not state['cleaned'] for state in model.conversions)
+        assert model.operations == operations
+        return dict(refused_chunks=2, cache_and_table_operations=0)
+    if name == 'coalesced-root-refusal':
+        model.bootstrap()
+        root = 0x47000000
+        model.u.mem_write(root, bytes(model.u.mem_read(model.root, 4096)))
+        model.write_words(root + 2 * 8, [2 * GIB | KERNEL_FLAGS | (1 << 6)])
+        model.roots.append(root)
+        space = image.address('space', unit='apps/os/large.c')
+        model.write_words(space + model.field('app_space', 'root'), [root])
+        admitted, width = image.admitted_storage
+        model.u.mem_write(admitted, (1).to_bytes(width, 'little'))
+        operations = model.operations.copy()
+        free_before = model.read(model.ledger + model.field('umem', 'free_bytes'))
+        result, _ = model.request(2 * GIB, 1)
+        assert result == -6 and not model.conversions and model.operations == operations
+        assert model.policy_byte(2 * GIB) == 0
+        assert model.read(model.ledger + model.field('umem', 'free_bytes')) == free_before
+        assert model.read(root + 2 * 8) == 2 * GIB | KERNEL_FLAGS | (1 << 6)
+        return dict(status=result, cache_and_table_operations=0, unchanged_policy=0)
+    assert name == 'pinned-reservations'
+    record = json.loads((Path(__file__).resolve().parents[1] / 'apps/slot1-test/manifest-preserve.json').read_text())
+    model.manifest(record)
+    samples = []
+    for index, region in enumerate(record['regions']):
+        base, size = int(region['address'], 0), region['bytes']
+        for address in (base, base + size - 64):
+            value = bytes([0xa1 + index]) * 64
+            model.u.mem_write(address, value)
+            samples.append((address, value))
+    pointer = model.call('os_owner_memory_below', 4096, BLOCK, 1, 1 << 32)
+    assert pointer, 'early device allocation is refused despite free memory'
+    result = check_conversion(model, 1)
+    tables = model.read(model.policy + model.field('umem_el1_map', 'split_pages'))
+    reserved = []
+    for region in record['regions']:
+        base, size = int(region['address'], 0), region['bytes']
+        extent = model.describe(base)
+        assert extent['owner'] == 1, 'early table/device allocation takes a manifest-pinned extent'
+        assert extent['base'] == base and extent['bytes'] == size, 'pinned extent geometry changes'
+        assert not (base < tables + 11 * 4096 and tables < base + size), 'table pages overlap a pinned extent'
+        assert not (base < pointer + BLOCK and pointer < base + size), 'device chunk overlaps a pinned extent'
+        assert all(model.policy_byte(chunk) == 0 for chunk in range(base, base + size, BLOCK))
+        reserved.append(dict(base=hex(base), bytes=size, owner=1))
+    assert all(bytes(model.u.mem_read(address, 64)) == value for address, value in samples), 'pinned data changes during owner setup'
+    return dict(**result, reserved=reserved, table_pages=hex(tables))
+
+
+def structure_sizes(path, names):
+    sizes = {}
+    with path.open('rb') as stream:
+        dwarf = ELFFile(stream).get_dwarf_info()
+        for unit in dwarf.iter_CUs():
+            for die in unit.iter_DIEs():
+                name, size = die.attributes.get('DW_AT_name'), die.attributes.get('DW_AT_byte_size')
+                if die.tag != 'DW_TAG_structure_type' or name is None or size is None:
+                    continue
+                name = name.value.decode()
+                if name in names:
+                    assert name not in sizes or sizes[name] == int(size.value), name
+                    sizes[name] = int(size.value)
+    assert sizes.keys() == set(names), (names, sizes)
+    return sizes
+
+
+def variable_storage(path, unit_suffix, name):
+    """Resolve an optimized scalar's storage, including a one-byte Boolean."""
+    found = set()
+    with path.open('rb') as stream:
+        elf = ELFFile(stream)
+        dwarf = elf.get_dwarf_info()
+        parser = DWARFExprParser(dwarf.structs)
+        for unit in dwarf.iter_CUs():
+            if not unit.get_top_DIE().attributes['DW_AT_name'].value.decode().endswith(unit_suffix):
+                continue
+            for die in unit.iter_DIEs():
+                label, location = die.attributes.get('DW_AT_name'), die.attributes.get('DW_AT_location')
+                if die.tag != 'DW_TAG_variable' or label is None or label.value.decode() != name or location is None:
+                    continue
+                assert location.form == 'DW_FORM_exprloc'
+                ops = parser.parse_expr(location.value)
+                assert ops and ops[0].op_name in ('DW_OP_addr', 'DW_OP_addrx')
+                address = ops[0].args[0] if ops[0].op_name == 'DW_OP_addr' else dwarf.get_addr(unit, ops[0].args[0])
+                objects = [symbol for symbol in elf.get_section_by_name('.symtab').iter_symbols()
+                           if symbol.name == name and symbol['st_value'] == address and symbol['st_info']['type'] == 'STT_OBJECT']
+                assert len(objects) == 1 and 1 <= objects[0]['st_size'] <= 8
+                found.add((address, int(objects[0]['st_size'])))
+    assert len(found) == 1, (unit_suffix, name, found)
+    return found.pop()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--case', choices=CASES, action='append', help='run only named cases after a fixture or source correction')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     image_sha256 = hashlib.sha256(args.image.read_bytes()).hexdigest()
-    image = harness.Image(args.image, layout_names=('umem', 'umem_request', 'umem_buf', 'umem_extent', 'umem_el1_map', 'umem_policy_table'))
-    cases = {}
-
-    model = Model(image)
-    pointer = model.call('os_owner_memory_below', 4096, BLOCK, 1, 1 << 32)
-    assert pointer and not pointer & (BLOCK - 1)
-    cases['owner-nc-allocation'] = check_conversion(model, 1)
-
-    model = Model(image)
-    model.bootstrap()
-    model.add_private()
-    pointer = model.call('os_owner_memory_below', 4096, BLOCK, 1, 1 << 32)
-    cases['private-l2-policy'] = check_conversion(model, 1)
-    assert cases['private-l2-policy']['table_entries'] == 2
-
-    model = Model(image)
-    live = model.bootstrap()
-    before = bytes(model.u.mem_read(model.slot1, 4096))
-    result, _ = model.request(FLOOR + 0x10000, 1)
-    assert result == -2 and not model.conversions
-    assert bytes(model.u.mem_read(model.slot1, 4096)) == before
-    assert model.policy_byte(FLOOR) == 0 and model.owner(live) == 0xffff
-    cases['chunk-in-use'] = dict(status=result, cache_and_table_operations=0)
-
-    model = Model(image)
-    model.bootstrap()
-    model.cache_stride = False
-    free_before = model.read(model.ledger + model.field('umem', 'free_bytes'))
-    pointer = model.call('os_owner_memory_below', 4096, BLOCK, 1, 1 << 32)
-    assert pointer == 0 and len(model.conversions) == 1
-    state = model.conversions[0]
-    assert state['status'] == -1 and state['before'] == state['after'] and not state['cleaned'] and not state['events']
-    assert model.policy_byte(state['chunk']) == 0
-    assert model.read(model.ledger + model.field('umem', 'free_bytes')) == free_before
-    cases['maintenance-refusal'] = dict(status=state['status'], unchanged_policy=0, unchanged_descriptors=True)
-
-    model = Model(image)
-    pointer = model.call('os_owner_memory_below', 4096, BLOCK, 1, 1 << 32)
-    check_conversion(model, 1)
-    handle = SCRATCH + 512
-    assert model.call('umem_lookup', model.ledger, pointer, handle) == 0
-    assert model.call('umem_free', model.ledger, handle) == 0
-    status, _ = model.request(pointer, 0)
-    assert status == 0
-    cases['nc-to-wb'] = check_conversion(model, 0, 2)
-
-    for variant, reason in [('omit-cache', 'cache maintenance incomplete before break'),
-                            ('omit-tlbi', 'cached translation survives make')]:
-        model = Model(image, variant)
-        model.bootstrap()
-        cases[variant] = harness.refused(
-            lambda: model.call('os_owner_memory_below', 4096, BLOCK, 1, 1 << 32), reason, AssertionError)
-
-    model = Model(image)
-    model.bootstrap()
-    for chunk in (0x340000000, 0x10000000000):
-        assert signed(model.call('umem_policy_convert', model.policy, chunk, 1)) == -1
-    assert all(not state['events'] and not state['cleaned'] for state in model.conversions)
-    cases['out-of-map'] = dict(refused_chunks=2, cache_and_table_operations=0)
-
+    image = harness.Image(args.image, layout_names=('umem', 'umem_request', 'umem_buf', 'umem_extent',
+        'umem_el1_map', 'umem_policy_table', 'ss_manifest', 'ss_region', 'ss_application', 'app_space'))
+    image.tcr = a733_tcr.for_image(args.image)
+    image.sizes = structure_sizes(args.image, ('ss_manifest', 'ss_region'))
+    image.admitted_storage = variable_storage(args.image, 'apps/os/large.c', 'admitted')
+    cases = {name: run_case(name, image) for name in (args.case or CASES)}
     assert hashlib.sha256(args.image.read_bytes()).hexdigest() == image_sha256, 'image changed during the check'
     harness.save(args.output / 'result.json', dict(passed=True, physical_access=False, image=str(args.image),
         image_sha256=image_sha256, cases=cases,
         scope='Linked OS ledger, policy conversion and EL1 maintenance instructions. Cache completion, address-space TLBs and critical sections are modeled; physical coherence is not qualified.'))
-    print(f'PASS ledger NC: {len(cases)} native instruction-model cases, including cache/TLBI negative controls')
+    print(f'PASS ledger NC: {len(cases)} native instruction-model cases')
 
 
 if __name__ == '__main__':
