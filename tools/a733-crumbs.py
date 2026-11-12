@@ -104,6 +104,8 @@ def arm_arguments(mode):
 RESET_WORDS = {'flag': RTC + 0x108, 'marker': RTC + 0x1f0, 'xo_ctrl0': RTC + 0x160,
                'wdt_config': WDT_CONFIG, 'wdt_output': WDT_OUTPUT}
 MARKER, MARKER_KEYED, MARKER_SET = RTC + 0x1f0, 0x16aa16aa, 0x16aa
+# The keyed write that would clear bits 15:0, used only by the runner's approved --marker-clear-test.
+MARKER_CLEAR = 0x16aa0000
 FEL_REQUEST, GATE_STAGE = 0x5aa5a55a, 0x0c02
 GATE_FLAGS = {'cold': 0x8000, 'warm': 0x4000, 'unmarked': 0x2000}  # include/a733_card_fel_gate.h
 
