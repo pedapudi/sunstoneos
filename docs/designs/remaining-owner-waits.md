@@ -19,11 +19,11 @@ Active I2C yields can add runnable passes beyond the timeout wakes below.
 | PMIC, `pmic()` | `ulTaskNotifyTake()` with the delay from `a733_power_service_step()` | Returning: 0 before the session deadline. Resident: 2 from the 500 ms idle cap. |
 | Type-C, `typec()` | One tick outside active I2C; `taskYIELD()` during a transfer | 1,000 when following the one-tick idle branch. |
 | GPIO power, `power()` | One tick, including while GPIO readiness is absent | 1,000. |
-| Supervisor, `supervise()` | 20 ms | 50. |
+| Supervisor, `supervise()` | Precise 20 ms deadlines | 50. |
 
-The supervisor's 20 ms policy checks admission and return progress, and drives
-watchdog supervision. Converting that wait to absolute 20 ms deadlines preserves
-50 wakes/s. Reducing this rate requires a separate supervision-policy change.
+The supervisor's [precise 20 ms cadence](supervisor-events.md) checks admission
+and return progress, and drives watchdog supervision. It retains 50 timer events
+per second. Reducing this rate requires a separate supervision-policy change.
 
 ## PMIC and power-domain service
 

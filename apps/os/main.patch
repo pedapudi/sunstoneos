@@ -1,11 +1,12 @@
 --- main.c
 +++ main-os.c
-@@ -1,4 +1,13 @@
+@@ -1,4 +1,14 @@
 -#include "application.h"
 +/* Generated in the build directory, where "application.h" would name the
 + * generated application header. */
 +#include "../board/application.h"
 +#include "os.h"
++#include "supervisor-wait.h"
 +#include "cpu-return.h"
 +#include "radio-quiesce.h"
 +extern int os_usb_quiesce_start(void) __attribute__((weak));
@@ -15,7 +16,7 @@
  #ifdef SUNSTONE_BOARD_USB2_IRQ
  #include "host_irq.h"
  #endif
-@@ -26,6 +35,12 @@
+@@ -26,6 +36,12 @@
  struct board_application board;
  struct board_provider providers;
  static struct board_radio radio;
@@ -28,7 +29,7 @@
  static struct board_radio_profile admitted_profile;
  #ifdef SUNSTONE_BOARD_SUPERVISED
  static struct board_radio_profile runtime_profile;
-@@ -87,7 +102,14 @@
+@@ -87,7 +103,14 @@
  }
  /* A located failure closes the session without adding another failure note. */
  __attribute__((noinline)) void board_fail_at(uint32_t site,uint32_t value,const void *caller)
@@ -44,7 +45,7 @@
  /* This hook is used by the existing cached EL1/EL3 fatal paths. It only closes
   * atomic admission; those paths record their own fault, and EL3 cannot use
   * the breadcrumb SVC. The independent watchdog owns recovery from stopped CPUs. */
-@@ -99,7 +121,15 @@
+@@ -99,7 +122,15 @@
  {
      uint64_t el;
      __asm__ volatile("mrs %0, CurrentEL":"=r"(el));
@@ -61,7 +62,7 @@
      fail_close();a733_typec_revoke(&board.typec.provider);
  }
  static _Noreturn void park(void){for(;;)vTaskSuspend(NULL);}
-@@ -114,11 +144,28 @@
+@@ -114,11 +145,28 @@
   * returns; faults park it with ownership held. */
  static void pmic(void *unused)
  {
@@ -92,7 +93,7 @@
          else if(ready<0){
              const struct a733_pmic *p=providers.domains.pmic;
              const uint32_t site=SUNSTONE_CRUMB_FAIL_SITE(PMIC),value=p&&p->rails?a733_power_authority_load(&p->rails->authority):~0u;
-@@ -136,6 +183,16 @@
+@@ -136,6 +184,16 @@
  {
      (void)unused;int started=0;
      for(;;){
@@ -109,7 +110,7 @@
          if(!board_live(NULL)||a733_smp_counter()/24>=service_deadline())
              a733_typec_revoke(&board.typec.provider);
          if(!started&&board_live(NULL)&&atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)){
-@@ -143,6 +200,9 @@
+@@ -143,6 +201,9 @@
              started=1;
          }
          if(started)(void)a733_typec_poll(&board.typec.provider);
@@ -119,7 +120,7 @@
          BOARD_PROGRESS(BOARD_SERVICE_TYPEC);
          /* Advance an owned I2C transfer without sleeping after each state.
           * Attached monitoring reads status only once per REFRESH_US, so
-@@ -155,6 +215,13 @@
+@@ -155,6 +216,13 @@
  static void power(void *unused)
  {
      (void)unused;for(;;){
@@ -133,7 +134,7 @@
          if(!board_live(NULL)||a733_smp_counter()/24>=service_deadline())
              a733_typec_revoke(&board.typec.provider);
          (void)a733_typec_native_power_poll(&board.typec);
-@@ -169,6 +236,12 @@
+@@ -169,6 +237,12 @@
  #ifdef SUNSTONE_A733_OS
          os_wifi_credential_poll(); /* EL1: the credential leaves RAM once the application has finished */
  #endif
@@ -146,7 +147,7 @@
          if(!board_live(NULL)){
              (void)board_radio_external_failure(&radio);
              atomic_store_explicit(&board.radio_result,3,memory_order_release);
-@@ -181,34 +254,81 @@
+@@ -181,34 +255,81 @@
                  atomic_store_explicit(&board.radio_result,3,memory_order_release);
                  /* A failure that left nothing powered (a guard refusal, or a completed failure shutdown) is not a
                   * board failure: the session ends normally with the record. */
@@ -233,12 +234,17 @@
      }
  }
  #ifndef SUNSTONE_BOARD_SUPERVISED
-@@ -245,8 +365,11 @@
+@@ -245,8 +366,16 @@
  #elif defined(SUNSTONE_A733_OS)
  static void supervise(void *unused)
  {
 -    (void)unused;const int resident=BOARD_RESIDENT();
 +    (void)unused;const int resident=BOARD_RESIDENT(),returning=os_returning();
++    struct os_supervisor_wait wait={0};
++    if(!os_supervisor_wait_init(&wait)){
++        board_fail_at(SUNSTONE_CRUMB_FAIL_SITE(BOARD),0x7d0u,SUNSTONE_CRUMB_HERE());
++        park();
++    }
      for(;;){
 +        /* The returning lifetime restarts the host-armed WDT0, bounds the session and runs the return
 +         * (apps/os/cpu-return.c). */
@@ -246,7 +252,7 @@
          if(resident){
              /* The armed watchdog bounds every hang. A failure, an expired
               * service window, a service still silent at the loader's first
-@@ -256,7 +379,10 @@
+@@ -256,7 +385,10 @@
               * expiry is four seconds later. */
              if(!board_live(NULL)||board_resident_renew(board.handles[7],
                 board.session.session_start_ticks+4*A733_SMP_COUNTER_HZ)!=1){
@@ -258,7 +264,19 @@
                  if(a733_board_host_workload(board.session.workload))a733_typec_revoke(&board.typec.provider);
                  /* Status 5: renewal stopped. The reason reaches this core's
                   * retained slot, and on core 0 the resident result. */
-@@ -392,7 +518,9 @@
+@@ -269,7 +401,10 @@
+             board_fail_at(SUNSTONE_CRUMB_FAIL_SITE(BOARD),board_live_refusal(),SUNSTONE_CRUMB_HERE());
+             if(a733_board_host_workload(board.session.workload))a733_typec_revoke(&board.typec.provider);
+         }
+-        vTaskDelay(pdMS_TO_TICKS(20));
++        if(os_supervisor_wait_next(&wait)<0){
++            board_fail_at(SUNSTONE_CRUMB_FAIL_SITE(BOARD),0x7d1u,SUNSTONE_CRUMB_HERE());
++            park();
++        }
+     }
+ }
+ #else
+@@ -392,7 +527,9 @@
  #ifdef SUNSTONE_BOARD_APPLICATION
      if(board_application_pins(&b.pins)!=1)platform_panic("board application pins",10);
  #endif
@@ -269,7 +287,7 @@
      TaskFunction_t functions[]={pmic,board_usb0_task,typec,power,board_host_task,radio_owner,radio_client,supervise};
      const char *names[]={"board-pmic","board-usb0","board-typec","board-power","board-usb2","board-radio","board-net","board-watchdog"};
      for(unsigned i=0;i<8;++i){
-@@ -407,7 +535,11 @@
+@@ -407,7 +544,11 @@
          board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,!i?3:i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);
          if(!board.handles[i])platform_panic("board tasks",5);
  #if configNUMBER_OF_CORES > 1
