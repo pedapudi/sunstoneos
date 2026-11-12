@@ -478,6 +478,16 @@ def launcher(out, size, mode, seconds=60, tree=ROOT, magic=0x415337334f534331):
             'CONTRACT->expires_at=start+A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ;':
                 'CONTRACT->expires_at=start+4*A733_SMP_COUNTER_HZ;\n'
                 '    CONTRACT->watchdog_mode=0x41;CONTRACT->watchdog_configuration=1;CONTRACT->watchdog_output=2;'})
+        source = board.adapt_launcher(source, {
+            '!rd(0x070501c0) && !rd(0x070501d4),6);':
+                '!rd(0x070501c0) && !rd(0x070501c4) && !rd(0x070501d4) && !rd(0x07090108),6);',
+            'uint64_t start=ticks();require(start<=UINT64_MAX-4*A733_SMP_COUNTER_HZ,8);':
+                'uint64_t start=ticks();require(start<=UINT64_MAX-4*A733_SMP_COUNTER_HZ,8);\n'
+                '    *(volatile uint32_t *)(uintptr_t)0x0205000c=0x14af;\n'
+                '    __asm__ volatile("dsb sy":::"memory");\n'
+                '    require((rd(0x02050014)&0xffff)==0x41 && (rd(0x02050010)&0xffff)==1 &&\n'
+                '        (rd(0x02050018)&0xffff)==2,6);\n'
+                '    within(start);'}, counts={'!rd(0x070501c0) && !rd(0x070501d4),6);':2})
     (out / 'board-launch-base.c').write_text(source)
     for name, path in [('launch.c', 'apps/board/launch.c'), ('launch.S', 'platform/a733-smp-observe/launch.S'),
                        ('launch.ld', 'platform/a733-smp-observe/launch.ld'), ('boot.h', 'platform/a733-smp-cached/boot.h'),

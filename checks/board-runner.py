@@ -305,8 +305,13 @@ def resident_launcher_cases(out):
         assert launch.stop==['handoff'] and launch.report[0]==12 and launch.session_intact and launch.canary_intact
         expected,_=admission.completed_contract(contract,60,magic,launch.ticks[0])
         assert launch.published==expected[:224],(lifetime,launch.published.hex(),expected[:224].hex())
-        assert launch.writes==[(sram_launcher.RVBAR,0x41000000),(sram_launcher.RVBAR+4,0)]
+        assert launch.writes==([(0x0205000c,0x14af)] if lifetime=='resident' else [])+[
+            (sram_launcher.RVBAR,0x41000000),(sram_launcher.RVBAR+4,0)]
         if lifetime=='resident':
+            assert launch.restart_ticks==[launch.ticks[0]]
+            restarted=launch.events.index(('write',0x0205000c))
+            assert launch.events[restarted+1:restarted+4]==[
+                ('read',sram_launcher.MODE),('read',sram_launcher.CONFIG),('read',0x02050018)]
             assert struct.unpack_from('<2Q',launch.published,96)==((1<<64)-1,launch.ticks[0]+4*24000000)
             assert struct.unpack_from('<3Q',launch.published,120)==(0x41,1,2)
             assert not any(launch.published[144:176])
@@ -315,6 +320,11 @@ def resident_launcher_cases(out):
                                           magic,224,str(bad),watchdog=bad,resident=True)
                 except AssertionError as error:assert 'unexpectedly parked' in str(error),str(error)
                 else:raise AssertionError(('resident launcher admitted incorrect WDT',bad))
+            for flag in (sram_launcher.FLAG,0x070501c4,sram_launcher.ALT,0x07090108):
+                try:sram_launcher.execute([(address,identity)],(root/'launch.bin').read_bytes(),request,contract,session,
+                                          magic,224,hex(flag),watchdog=(mode,1,2),resident=True,registers={flag:1})
+                except AssertionError as error:assert 'unexpectedly parked' in str(error),str(error)
+                else:raise AssertionError(('resident launcher admitted active redirect or FEL flag',flag))
         passed('real-'+lifetime+'-launcher-contract-and-watchdog')
     for profile in (struct.pack('<3Q',1,0,3),struct.pack('<Q',1)):
         try:admission.contract_magic(profile,'resident')
