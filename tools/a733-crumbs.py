@@ -196,9 +196,15 @@ def board_failure(words, defines, elf):
         record['owner'] = owners.get(site >> 16 & 255, 'unknown')
         record['source_group'] = groups.get(site >> 24 & 15, 'unknown')
         record['code'] = site & 0xfff
+        storage_phases = ('unverified', 'fat1', 'fat2', 'directory', 'fsinfo',
+                          'dirty1', 'dirty2', 'clean1', 'clean2', 'raw', 'failed', 'protocol')
+        if record['owner'] == 'storage' and 0x921 <= record['code'] <= 0x92c:
+            record['session'] = value
+            record['storage_phase'] = storage_phases[record['code'] - 0x921]
     if legacy_npu:
         record['group_source'] = 'finite NPU ELF (legacy group 8)'
-    record['site_kind'] = 'detail' if record['group'] in ('cpu_return', 'application') else 'source line'
+    record['site_kind'] = ('code' if record['group'] == 'quiesce' else
+                           'detail' if record['group'] in ('cpu_return', 'application') else 'source line')
     if record['group'] == 'npu' and site & defines['NPU_REGISTER']:
         record['register_offset'] = hex((record['aux'] & 0x3fff) << 2)
     elif record['group'] == 'npu' and site & defines['NPU_STARTUP']:
@@ -383,6 +389,10 @@ def decode(words, epoch, elf=None):
                 f"{f['site_kind']} {f['site']:#x}, value {f['value']}, caller {f['caller']}")
         if f.get('caller_source'):
             text += f" ({f['caller_source']})"
+        if f['group'] == 'quiesce':
+            text += f", owner {f['owner']}, source group {f['source_group']}"
+        if 'session' in f:
+            text += f", SESSION {f['session']:#x}, phase {f['storage_phase']}"
         if 'register_offset' in f:
             text += f"; register offset {f['register_offset']}"
         if 'startup_stage' in f:

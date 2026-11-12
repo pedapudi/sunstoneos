@@ -112,6 +112,17 @@ def main():
                                        'elr': 0x41001234, 'far': 0x902}, defines, None)
         assert record['owner'] == name and record['code'] == 0x901
         assert record['source_group'] == 'board' and record['value'] == '0x902'
+    for phase, name in enumerate(('unverified', 'fat1', 'fat2', 'directory', 'fsinfo',
+                                  'dirty1', 'dirty2', 'clean1', 'clean2', 'raw', 'failed', 'protocol')):
+        site = 0x8100b921 | defines['QUIESCE_STORAGE'] << 16
+        site += phase
+        words = dict.fromkeys(crumbs.WORDS, 0)
+        words.update(tag=0x5c0d0001, fault=0xfa0c0000, esr=site,
+                     elr=0x41001234, far=0xfedcba98)
+        decoded = crumbs.decode(words, 1)
+        record = decoded['board_failure']
+        assert record['session'] == 0xfedcba98 and record['storage_phase'] == name, record
+        assert 'SESSION 0xfedcba98, phase ' + name in decoded['summary'], decoded['summary']
     print('PASS second record: a device failure replaces an application failure in the retained words (level 0xc) and nothing else replaces a record; '
           '6 seeded records, 12 owner decodes, 2 mutants fail')
 
