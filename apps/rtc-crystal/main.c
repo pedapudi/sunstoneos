@@ -20,7 +20,7 @@ struct report {
     uint64_t final_ticks;
 };
 static struct report report;
-#define STEP(call) do{int r_; report.step++; while((r_=(call))==0)ss_rtc_wait(500000); if(r_<0){report.failed=report.step;ss_finish(&report,sizeof report);}}while(0)
+#define STEP(call) do{int r_; report.step++; while((r_=(call))==0){ss_progress();ss_rtc_wait(500000);} if(r_<0){report.failed=report.step;ss_finish(&report,sizeof report);}}while(0)
 void rtc_crystal_main(const struct ss_grant *grant)
 {
     (void)grant;
