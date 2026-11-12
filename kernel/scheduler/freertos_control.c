@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include "latency_trace.h"
 #include "latency_pmu.h"
+#include "latency_cause.h"
 
 #define ROUTE_CLOSED (UINT64_C(1) << 63)
 #define ROUTE_COUNT (ROUTE_CLOSED - 1)
@@ -35,8 +36,14 @@ static bool try_lock(struct ss_control_slot *s)
 static void hint(struct ss_control *c, unsigned cpu, unsigned slot)
 {
     atomic_fetch_or_explicit(&c->pending[cpu].word[slot / 64], UINT64_C(1) << (slot % 64), memory_order_release);
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_sgi_begin(cpu);
+#endif
     ss_owner_barrier(c->backend);
     if (c->backend && c->backend->sgi) c->backend->sgi(c->backend->context, cpu);
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_sgi_end(cpu);
+#endif
 }
 static void all(struct ss_control *c, unsigned slot)
 {
@@ -86,8 +93,14 @@ void ss_control_wake_mask(struct ss_control *c, unsigned cpu, const uint64_t slo
         atomic_fetch_and_explicit(&c->parked[cpu].word[w], ~admitted[w], memory_order_release);
     }
     if (!(admitted[0] | admitted[1])) return;
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_sgi_begin(cpu);
+#endif
     ss_owner_barrier(c->backend);
     if (c->backend && c->backend->sgi) c->backend->sgi(c->backend->context, cpu);
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_sgi_end(cpu);
+#endif
 }
 static void await_fifo_release(struct ss_control *c, unsigned cpu, unsigned slot)
 {
@@ -240,11 +253,17 @@ bool ss_control_suspend_current(struct ss_control *c, unsigned slot, unsigned cp
     unsigned owner = atomic_load_explicit(&s->owner, memory_order_acquire);
     atomic_fetch_or_explicit(&c->pending[owner].word[slot / 64],
                             UINT64_C(1) << (slot % 64), memory_order_release);
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_sgi_begin(owner);
+#endif
     ss_owner_barrier(c->backend);
     /* The current task immediately saves its frame. An interrupt that arrives
      * before that transition already supplies the required owner entry. */
     if (owner != cpu && c->backend && c->backend->sgi)
         c->backend->sgi(c->backend->context, owner);
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_sgi_end(owner);
+#endif
     return !(old & SS_CONTROL_SUSPENDED);
 }
 bool ss_control_resume_isr(struct ss_control *c, unsigned slot)

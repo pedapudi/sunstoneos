@@ -13,6 +13,7 @@
 #include "deadline.h"
 #include "latency_trace.h"
 #include "latency_pmu.h"
+#include "latency_cause.h"
 
 /* The private fork rejects optional configurations whose API branches have
  * not been converted. No enabled public API may fall through to legacy lists.
@@ -250,7 +251,16 @@ static __attribute__((noinline)) void ssKernelSGI(void *context, unsigned cpu)
 #ifdef SUNSTONE_IRQ_COUNT
     if (xSchedulerRunning) ssKernelSgiCount((uintptr_t)__builtin_return_address(0), cpu);
 #endif
-    if (xSchedulerRunning) portYIELD_CORE((BaseType_t)cpu);
+    if (xSchedulerRunning) {
+#ifdef SUNSTONE_LATENCY_CAUSE
+        ss_latency_cause_sgi_begin(cpu);
+        ss_latency_cause_sgi_sent(cpu);
+#endif
+        portYIELD_CORE((BaseType_t)cpu);
+#ifdef SUNSTONE_LATENCY_CAUSE
+        ss_latency_cause_sgi_end(cpu);
+#endif
+    }
 }
 /* True when PSTATE.I is set on this CPU (an exception handler, or code that masked all interrupts). */
 static inline bool ssKernelIrqsDisabled(void)
@@ -358,8 +368,14 @@ static bool ssKernelCanPreempt(void)
 static inline __attribute__((always_inline)) void ssKernelForce(unsigned cpu)
 {
     /* Controls and retirement are urgent regardless of running priority. */
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_sgi_begin(cpu);
+#endif
     ss_owner_barrier(&ssKernelBackend);
     ssKernelSGI(NULL, cpu);
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_sgi_end(cpu);
+#endif
 }
 static void ssKernelWaitSetWakeCPU(struct ssKernelWaitSet *wait, unsigned cpu)
 {
@@ -1864,13 +1880,25 @@ static BaseType_t ssKernelTick(void)
     configASSERT(ssKernelCPUId() == 0);
     uint64_t now = atomic_fetch_add_explicit(&ssKernelTime, 1, memory_order_acq_rel) + 1;
     for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) {
+#ifdef SUNSTONE_LATENCY_CAUSE
+        ss_latency_cause_state_begin(c);
+#endif
         uint64_t next;
         enum ss_deadline_state state = ss_deadline_snapshot(&ssKernelCPUs[c].deadlines.published, &next);
+#ifdef SUNSTONE_LATENCY_CAUSE
+        uint64_t cause_slice = atomic_load_explicit(&ssKernelCPUs[c].slice_deadline, memory_order_acquire);
+        bool cause_due = state == SS_DEADLINE_UNKNOWN || (state == SS_DEADLINE_VALUE && next <= now) || cause_slice <= now;
+        if (cause_due) {
+#else
         if (state == SS_DEADLINE_UNKNOWN || (state == SS_DEADLINE_VALUE && next <= now) ||
             atomic_load_explicit(&ssKernelCPUs[c].slice_deadline, memory_order_acquire) <= now) {
+#endif
             if (c) ssKernelForce(c);
             else ssKernelCPUs[0].reschedule = true;
         }
+#ifdef SUNSTONE_LATENCY_CAUSE
+        ss_latency_cause_state_end(c, (unsigned)state, state == SS_DEADLINE_VALUE ? next : 0, cause_slice, cause_due);
+#endif
     }
     SS_OWNER_COUNT(tick_work);
     /* The ordinary post-EOI exit performs maintenance with API IRQs admitted.
@@ -1945,7 +1973,15 @@ static BaseType_t ssKernelNotify(TaskHandle_t task, UBaseType_t index,
     UBaseType_t irq = masked_by_exception ? 0 : from_isr ? portSET_INTERRUPT_MASK_FROM_ISR() : portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
     if (!ss_kernel_handle_pin(&ssKernelRegistry, task, &pin)) {
-        if (masked_by_exception) {} else if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
+        if (masked_by_exception) {} else if (from_isr) {
+#ifdef SUNSTONE_LATENCY_CAUSE
+            ss_latency_cause_mask_tail_begin();
+#endif
+            portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
+#ifdef SUNSTONE_LATENCY_CAUSE
+            ss_latency_cause_mask_tail_end();
+#endif
+        } else portCLEAR_INTERRUPT_MASK(irq);
         return pdFAIL;
     }
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
@@ -1963,7 +1999,15 @@ static BaseType_t ssKernelNotify(TaskHandle_t task, UBaseType_t index,
         ssKernelPublishReference(pin);
         if (woken && (local_higher || ssKernelCPUs[c].reschedule)) *woken = pdTRUE;
     } else ss_kernel_handle_put(&pin);
-    if (masked_by_exception) {} else if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
+    if (masked_by_exception) {} else if (from_isr) {
+#ifdef SUNSTONE_LATENCY_CAUSE
+            ss_latency_cause_mask_tail_begin();
+#endif
+            portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
+#ifdef SUNSTONE_LATENCY_CAUSE
+            ss_latency_cause_mask_tail_end();
+#endif
+        } else portCLEAR_INTERRUPT_MASK(irq);
     SS_PH_END(0);
     return result.accepted ? pdPASS : pdFAIL;
 }

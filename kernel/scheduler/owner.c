@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "owner.h"
+#include "latency_cause.h"
 #include <stddef.h>
 
 _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "native 64-bit atomics required");
@@ -93,11 +94,17 @@ struct ss_owner_task *ss_owner_yield(struct ss_owner *o)
 static void request_sgi(struct ss_owner *o)
 {
     if (!atomic_exchange_explicit(&o->sgi_pending, 1, memory_order_acq_rel)) {
+#ifdef SUNSTONE_LATENCY_CAUSE
+        ss_latency_cause_sgi_begin(o->cpu);
+#endif
 #if defined(__aarch64__)
         __asm__ volatile("dsb ishst" ::: "memory");
 #endif
         if (o->backend && o->backend->sgi)
             o->backend->sgi(o->backend->context, o->cpu);
+#ifdef SUNSTONE_LATENCY_CAUSE
+        ss_latency_cause_sgi_end(o->cpu);
+#endif
     }
 }
 void ss_owner_publish(struct ss_owner *o, unsigned slot, unsigned priority)
