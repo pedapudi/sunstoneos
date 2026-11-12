@@ -10,8 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('owner_check', ROOT/'checks/os-quiesce-storage.py')
 owner_check = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(owner_check)
-CHECK_INPUTS = owner_check.CHECK_INPUTS + ['drivers/storage/fat32_rw.c', 'include/fat32_rw.h',
-                                         'checks/os-quiesce-storage-write.c']
+CHECK_INPUTS = ['apps/os/sd_owner.c', 'apps/os/large_sd.c', 'apps/os/sd_hw.h',
+                'apps/os/large_load.c', 'apps/os/quiesce.c', 'apps/os/quiesce.h',
+                'drivers/storage/fat32_rw.c', 'include/fat32_rw.h',
+                'checks/os-quiesce-storage.py', 'checks/os-quiesce-storage-write.c']
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
