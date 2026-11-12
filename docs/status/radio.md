@@ -17,7 +17,7 @@ Every OS image links the radio station, and it starts in a session that grants t
 | Passive Wi-Fi scan with shutdown and return | board-qualified | 22 access points, all on 2.4 GHz | [records](../evidence/radio.jsonl) |
 | CE TRNG entropy for bring-up (unqualified) | board-tested, unqualified | 32 bytes in about 4 ms | [records](../evidence/radio.jsonl) |
 | Wi-Fi association, WPA2, IPv4, DHCP and DNS, reconnect | host-tested | none | [radio-wifi.md](../radio-wifi.md) |
-| Bluetooth HFP audio gateway with voice-recognition activation | host-tested | `bt_hfp_ag.c` 11,572 B with call control off | [design](../designs/bluetooth-voice-recognition.md), `bluetooth-voice-recognition-budgets` |
+| Bluetooth HFP audio gateway with voice-recognition activation | host-tested | `drivers/bluetooth/bt_hfp_ag.c` 11,572 B with call control off | [design](../designs/bluetooth-voice-recognition.md), `bluetooth-voice-recognition-budgets` |
 | WPA3 SAE association, top-rate SDIO, headset interoperability | open | none | open work 2 to 4 |
 
 ## Open work
