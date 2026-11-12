@@ -25,6 +25,14 @@ single retirement publication after the final lease release.
 These checks model event producers and the session clock. They do not qualify
 physical USB interrupts, GPU completion timing or idle power.
 
+The public `ss_wait_until` accepts an absolute microsecond deadline in the
+grant's counter epoch. It clips work waits to the immutable application finish
+limit and fails when that limit is exhausted. Preemption between a caller's
+clock observation and the wait cannot move the deadline. Relative `ss_usb_wait`
+calls retain their interval contract, which the storage cut-lifetime diagnostic
+uses through the session cut point. Private retirement waits use their return
+reserve independently of the work limit.
+
 ## Periodic invalidations use absolute deadlines
 
 The optional translation lookaside buffer measurement task derives its period
@@ -63,10 +71,11 @@ device-completion wait.
 `apps/event-waits` is a returning native workload that selects both measurements.
 It verifies the granted CPU clocks, runs two declared background phases, waits
 for every worker to stop and records counts through the public measurement APIs.
-Its phase and stop waits use their original absolute bounds. Its manifest and
-the selected native source objects compile; a complete image still requires
-the central deadline reservation and build definitions. It has no physical
-qualification.
+Its phase and stop waits use their original absolute bounds. The selected native
+image links with the declared deadline storage and public measurement calls.
+Its CPU grant follows the [vendor operating-point sequence](cpu-top-opp.md#the-driver-and-the-vendor-sequence).
+The workload requires every worker's stop acknowledgment before reading its
+statistics. Physical validation is recorded in [the owner evidence](../evidence/other-owner-events.jsonl).
 
 ## USB return waits preserve each retirement proof
 

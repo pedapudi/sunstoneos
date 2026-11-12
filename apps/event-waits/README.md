@@ -11,8 +11,9 @@ finish deadline. The application passes each original absolute deadline to
 The result records elapsed and stopping time, bursts and busy time in each
 phase, application waits, stopped tasks and invalidation-task wakes, issued
 instructions and CPU. The control form must issue no invalidation. This is a
-native workload definition and host-tested source preparation. It has no
-physical qualification.
+native workload definition with [finite timer and retirement evidence](../../docs/evidence/other-owner-events.jsonl).
+Absolute work limits and preemption interleavings have host cases. Physical
+WFI residency remains unmeasured.
 
 Configure with `tools/configure.py`, selecting `SUNSTONE_A733_OS=ON`,
 `SUNSTONE_APPLICATION=event-waits`,
