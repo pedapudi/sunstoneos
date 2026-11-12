@@ -11,6 +11,8 @@ Device faults during the window retain their resources and record the owner and
 code while other cleanup continues. Terminals run only after every owner proves
 retirement. [The owner audit](../designs/failure-return-audit.md) lists the
 implemented stop proofs, admission limits and retained faults.
+The USB0 device grant has its own registration and fault records. Its returning
+composition remains refused because active USB0 has no proven native close path.
 
 GPU compute, NPU recognition with an open queue, and failure after a verified
 512 MiB storage read return to FEL without watchdog reset on port 3-3
@@ -37,7 +39,7 @@ identifies the CPU result and failed controls.
 | --- | --- | --- | --- |
 | Application kit, manifest and session ([design](../designs/app-abi.md)) | implemented | 552-byte manifest, 4,096-byte session page | `app-abi-host-layout-checks` in [app-abi.jsonl](../evidence/app-abi.jsonl) |
 | OS-only, hello-compute and external-mimus builds | host-tested | 12 OS variants, 84 indexed checks passed | `application-host-gate-selection` in [application.jsonl](../evidence/application.jsonl) |
-| Failure return to the boot ROM ([design](../designs/failure-return.md)) | host-tested; selected GPU, NPU and read-only storage failures board-qualified | 12 registered owner identities; three selected failures return without watchdog reset or secondary owner fault | [owner audit](../designs/failure-return-audit.md), [records](../evidence/failure-return.jsonl) |
+| Failure return to the boot ROM ([design](../designs/failure-return.md)) | host-tested; selected GPU, NPU and read-only storage failures board-qualified | 13 registered owner identities; three selected failures return without watchdog reset or secondary owner fault | [owner audit](../designs/failure-return-audit.md), [records](../evidence/failure-return.jsonl) |
 | Eight-worker CPU-only mimus recording | qualified on the board | 90-frame reference matched, seven secondaries off | [CPU status](cpu.md) |
 | GPU compute queue and trusted GPU peer | selected compute failure board-qualified | two completed jobs, one abandoned output, firmware OFF and worker PARK at return | [return record](../evidence/failure-return.jsonl); broader GPU scope in [GPU status](gpu.md) |
 | Typed session for an image that grants a device (`tools/session.py`) | host-tested | control, NPU, GPU and credential-free radio-scan profiles have typed builders; USB host facts remain required | `checks/session-build.py`; [runner document](../board-runner.md) |

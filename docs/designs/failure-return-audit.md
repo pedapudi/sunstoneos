@@ -1,6 +1,6 @@
 # Registered owners govern the return to the boot ROM
 
-Status: **implemented and host-tested**. Twelve registered owner identities cover
+Status: **implemented and host-tested**. Thirteen registered owner identities cover
 session grants, manifest device classes and card-backed storage declarations.
 Selected GPU, NPU and storage-read failures return to FEL without a watchdog
 reset; [the failure-return record](../evidence/failure-return.jsonl) defines their
@@ -35,7 +35,8 @@ request before touching hardware and waits for concurrent mailbox publishers.
 | --- | --- | --- | --- |
 | NPU | NPU extent; application queues | Observes client retirement after the application's producer closes at a safe point when `ss_live()` becomes negative. Retained native callbacks park their task and publish FAULT. | DONE requires the stopped report and native retirement proof. Forced recognition failure with an open queue is board-qualified. An abandoned producer remains PENDING until the shared limit. |
 | GPU | Manifest GPU device; application queues | Closes queue admission, finishes accepted work on the worker, acknowledges completed outputs and executes CLOSE/PARK. | DONE requires a suspended worker and native stopped proof. The selected compute failure is board-qualified, including its abandoned output receipt. Reserved, locked or lost ownership remains FAULT. |
-| USB host | Host board workload and manifest USB devices; device owners | Closes class admission, drains and halts xHCI, retires its interrupt, revokes stopped transport loans, restores the local platform and waits for Type-C source stop. | Host-tested DONE requires every stop proof. Active borrowed JPEG work or uncertain controller, interrupt or source state remains FAULT. An empty-port diagnostic stops before xHCI starts and cannot qualify controller drain. |
+| USB host | Host board workload and USB host class grants; device owners | Closes class admission, drains and halts xHCI, retires its interrupt, revokes stopped transport loans, restores the local platform and waits for Type-C source stop. | Host-tested DONE requires every stop proof. Active borrowed JPEG work or uncertain controller, interrupt or source state remains FAULT. An empty-port diagnostic stops before xHCI starts and cannot qualify controller drain. |
+| USB0 device | USB0 grant from manifest `usb-device`; device owners | Atomically seals startup before inspecting the original provider state. Stop guards and the provider failure hook record their reason and park during a return window. | Host-tested DONE requires no startup, token, PMIC request, provider fault or controller access. Any claimed startup or uncertain state remains FAULT with resources retained. Returning USB0 grants remain excluded; enabling them requires earlier registration and a proven native close path. |
 | Radio | Radio grant and board workload; device owners | Drains the accepted SDIO operation, stops partial startup or a scan through DOWN readbacks, and erases permitted credential copies. Shared Bluetooth must release the module before physical shutdown. | Host-tested DONE covers partial startup and scan-only shutdown with no outstanding transport, PMIC request or credential. Full station, association and entropy-only ownership retain FAULT value `0x905`: crypto-engine (CE) retirement is unproved. |
 | I2S audio | Audio grant; device owners | Returns borrowed periods, cancels, drains, reaps and closes capture; retires the DMA worker and interrupt; verifies the controller; then retires local and shared audio leases. | Host-tested DONE covers partial startup and complete capture. Uncertain drain or a conflicting shared clock consumer retains FAULT. Returning audio admission remains excluded pending qualification. |
 | Bluetooth headset | Headset grant; device owners | Closes capture and protocol channels, completes HCI Reset, waits for the module owner to assert and verify PM2 reset, then drains and closes UART. | Host-tested DONE requires every protocol, peer-stop and UART proof. Profile version 4 supplies explicit PM2 authority; legacy profiles retain FAULT. Returning headset admission remains excluded pending physical qualification, including the reset route and an attached headset. |
@@ -88,8 +89,6 @@ device-failure verdict.
 - Thermal and device interrupt handlers retain their existing source masking
   and notification protocols. An interrupt that proves lost device ownership
   publishes the owner's fault; it does not certify drain.
-- The returning profile leaves USB0 untouched. Its native retention callback
-  still calls `board_fail`; admitting active USB0 requires a separate conversion.
 - Unexpected interrupts, stack corruption, masked scheduler contexts and EL1/EL3
   exceptions retain the exceptional endings described in
   [the return design](failure-return.md). They are not device stop proofs.
@@ -103,8 +102,9 @@ acquire publication. The supervisor reports these records even when an earlier
 owner remains PENDING. It also flushes available records at the global timeout.
 
 The RTC retains one secondary record after an application first record, at level
-`0xc`. Its group is `QUIESCE`: bits 23:16 identify the registered owner, bits
-27:24 identify the original failure group and bits 11:0 retain its detail or
+`0xc`. Its group is `QUIESCE` (`0xc`); the separate USB0 guard group is `0xb`.
+Bits 23:16 identify the registered owner. Bits 27:24 identify the original
+failure group, and bits 11:0 retain its detail or
 source line. The value and caller retain their original meanings. The descriptor
 keeps the full original site, including auxiliary bits. The
 [decoder](../../tools/a733-crumbs.py) prints the owner, source group and code.
@@ -119,7 +119,9 @@ RTC replacement policy.
 
 `tools/session.py` derives `quiesce_actors` from the service declarations in
 `apps/os/os-services.h`, the granted manifest device bits, workload and storage
-binding. The builder still refuses compositions whose hardware facts are absent.
+binding. The manifest class `usb-device` selects USB0; USB host classes select
+the separate USB host owner. The builder still refuses compositions whose
+hardware facts are absent.
 Synthetic host cases exercise those declarations without granting physical
 launch authority.
 
@@ -131,7 +133,9 @@ owner and the shared timeout. Removing each registration or inserting
 scan covers direct callbacks; it is not a complete C call-graph proof.
 
 The owner checks (`checks/os-quiesce-*.py`) exercise native adapters or extracted
-production steps with modeled hardware. GPU and DMA checks execute their actual
+production steps with modeled hardware. The USB0 check uses the actual provider
+layout and registry. It tests both orders of starting and sealing the owner,
+and protects provider memory against access after startup wins. GPU and DMA checks execute their actual
 worker retirement paths under QEMU. The linked failure-return fixture executes
 the image's claim, registry, supervisor and terminal code, with modeled hardware
 and owner publications. QEMU OS boot covers startup, application faults and the
