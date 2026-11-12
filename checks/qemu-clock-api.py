@@ -6,7 +6,6 @@ import importlib.util
 from pathlib import Path
 from harness import available_gib
 
-GATE_RUNS = [['--output', '{output}']]
 CHECK_INPUTS = ['checks/qemu-os-boot.py', 'checks/qemu-os/clock-api-*',
                 'kernel/scheduler/*', 'patches/freertos-*.patch', 'platform/qemu-os/*']
 

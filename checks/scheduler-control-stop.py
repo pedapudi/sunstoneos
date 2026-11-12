@@ -20,7 +20,6 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['runtime/control_irq.c', 'runtime/control_ring.h', 'include/sunstone_control.h',
                 'apps/latency/control.c', 'apps/latency/control.h',
                 'checks/scheduler-control-stop.c', 'checks/control-stop-config']
-GATE_RUNS = [['--output', '{output}']]
 CASES = ('arithmetic', 'overflow-only', 'task-stop', 'unarmed-stop', 'last-task-write',
          'nested-control-stop', 'coalesced-notification', 'consumer-stop', 'start-validation',
          'unselected-stale', 'empty-stop', 'qualification-idle', 'qualification-busy')

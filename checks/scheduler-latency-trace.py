@@ -19,7 +19,6 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['apps/latency/host.py', 'kernel/scheduler/latency_trace.h',
                 'kernel/scheduler/latency_trace.c', 'checks/scheduler-latency-history.c',
                 'tools/sunstone-image-link.py', 'include/sunstone_latency.h']
-GATE_RUNS = [['--output', '{output}']]
 FREQUENCY = 24_000_000
 MAGIC = 0x5353534348545231
 RECORDS = 32

@@ -15,7 +15,6 @@ import struct
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['apps/latency/host.py', 'apps/latency/control.h',
                 'include/sunstone_control.h', 'checks/scheduler-latency-trace.py']
-GATE_RUNS = [['--output', '{output}']]
 HZ = 24_000_000
 
 

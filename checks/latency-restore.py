@@ -8,7 +8,6 @@ import re
 import subprocess
 from harness import CLANG, SANITIZE, environment
 
-GATE_RUNS = [['--output', '{output}']]
 CHECK_INPUTS = ['runtime/latency_restore.c', 'patches/freertos-mask-returns.patch',
                 'checks/latency-restore.c', 'checks/latency-restore-host/FreeRTOS.h',
                 'checks/latency-restore-host/task.h', 'checks/latency-restore-host/sunstone_latency.h']
