@@ -272,11 +272,13 @@ estimates its refills, which the board's event counts then test.
 `checks/tick-footprint-budget.py` holds these counts to
 `checks/tick-footprint-budget.json`. For CPU0's own release, the largest remote
 release, the largest deadline scan and the work outside them, it takes the
-largest line count of each structure over 80 busy ticks and fails if any count
-exceeds its budget. Data lines are physical 64-byte lines. Code lines are
+largest line count of each structure over 240 busy ticks and fails if any data
+count exceeds its budget. Data lines are physical 64-byte lines. Code lines are
 counted from the start of each function, so a change that only moves a function
 leaves its count alone; the board's placement can add up to one line per
-function.
+function. Code counts follow the path each wake takes, which varies with host
+load under multi-threaded QEMU, so they are reported against their budget but
+do not fail the check.
 
 ## The control phase retains enough samples for the requested percentile
 
