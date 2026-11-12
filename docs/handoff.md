@@ -1,5 +1,13 @@
 # SunstoneOS subsystem index
 
+Physical recovery is required for the board on host USB port `3-1`: disconnect
+its USB power/data cable and reconnect the same cable to the same port. Preserve
+the microSD card. The scheduler diagnostic is refused before launch because
+the runner records that USB instance as failed after a FEL timeout. The
+coordinator must establish a fresh working instance before another submission.
+See record `1794464620304638587-2d70ece2` in
+[`evidence/scheduler-latency-measurement.jsonl`](evidence/scheduler-latency-measurement.jsonl).
+
 SunstoneOS runs FreeRTOS on the Orange Pi Zero 3W/A733. The
 [accepted objective](goal.md) requires complete usable hardware and native
 applications. No subsystem has complete physical qualification.

@@ -1,6 +1,9 @@
 # Scheduler step timing
 
-Status: implemented; physical timing is unmeasured for this instrumentation.
+Status: implemented and host-tested; physical timing is blocked by the failed
+USB instance on port `3-1`. The runner refuses the diagnostic before launch;
+[the evidence record](../evidence/scheduler-latency-measurement.jsonl) contains
+the prediction, refusal and host-check results.
 The CPU latency application records scheduler command, control-drain,
 interrupt-exit and lock-wait intervals when `SUNSTONE_SCHED_LATENCY_TRACE` is
 enabled. The recorder uses the architectural virtual counter and preserves raw
