@@ -166,8 +166,8 @@ static int application_wait_until(uint64_t until){return application_wait_until_
 static int application_entry_ready(void)
 {
 #ifdef SUNSTONE_A733_USB_FAILURE_TEST
-    /* The empty-port diagnostic waits for the two owner checkpoints in its
-     * entry. An attachment is neither expected nor synthesized. The grant
+    /* The empty-port diagnostic waits for the two owner checkpoints before
+     * application entry. An attachment is neither expected nor synthesized. The grant
      * and returning USB0 owner's readiness still precede application entry. */
     if(ss_live()<0)return -1;
     return ss_grant()&&atomic_load_explicit(&usb_ready,memory_order_acquire);
@@ -349,6 +349,15 @@ static void main_entry(void *unused)
         peer_grant.finish_by_us=grant.finish_by_us;
         atomic_store_explicit(&peer_ready,1,memory_order_release);
         xTaskNotifyGive(peer_task);
+    }
+#endif
+#ifdef SUNSTONE_A733_USB_FAILURE_TEST
+    /* Only this diagnostic waits for empty-port service startup. Keep the
+     * private owner predicate out of the application's public ABI. */
+    extern int os_usb_failure_ready(void);
+    while(!os_usb_failure_ready()){
+        if(ss_live()<0||!os_application_deadline())ss_fail(0x750);
+        ss_progress();vTaskDelay(1);
     }
 #endif
     ss_application.main(&grant);ss_fail(0x755);

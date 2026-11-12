@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check failure injection after the empty-port owner checkpoint predicate."""
+"""Check the empty-port application's exact grant and injected failure."""
 import argparse
 import json
 import os
@@ -28,11 +28,7 @@ fixture = r'''
 #include <setjmp.h>
 #include <stdlib.h>
 static jmp_buf end;
-static unsigned mode, polls, progress, delays, terminal, value;
-int os_usb_failure_ready(void) { ++polls; return mode == 0 || (mode == 1 && polls == 4); }
-void ss_progress(void) { ++progress; }
-void vTaskDelay(uint64_t ticks)
-{ assert(ticks == 1 && progress == ++delays); if (mode == 5 && delays == 8) longjmp(end, 1); }
+static unsigned mode, terminal, value;
 int ss_live(void) { assert(!"The empty port never becomes attached."); return 0; }
 _Noreturn void ss_fail(uint32_t detail) { terminal = detail; longjmp(end, 1); }
 _Noreturn void ss_fail_value(uint32_t detail, uint32_t v)
@@ -41,14 +37,13 @@ int main(int argc, char **argv)
 {
  assert(argc == 2); mode = strtoul(argv[1], 0, 10);
  struct ss_grant grant = {.devices = SS_DEVICE_USB_KEYBOARD};
- if (mode == 2) grant.devices = 0;
- if (mode == 3) grant.devices |= SS_DEVICE_USB_STORAGE;
- if (mode == 4) grant.region_count = 1;
+ if (mode == 1) grant.devices = 0;
+ if (mode == 2) grant.devices |= SS_DEVICE_USB_STORAGE;
+ if (mode == 3) grant.region_count = 1;
  if (!setjmp(end)) usb_empty_fail_main(&grant);
- if (mode <= 1) assert(terminal == 0x790 && value == 3 && polls == (mode ? 4 : 1));
- else if (mode == 5) assert(!terminal && !value && polls == 8 && delays == 8);
- else assert(terminal == 0x791 && !value && !polls && !delays);
- assert(delays == progress); return 0;
+ if (!mode) assert(terminal == 0x790 && value == 3);
+ else assert(terminal == 0x791 && !value);
+ return 0;
 }
 '''
 (args.build / 'fixture.c').write_text(fixture)
@@ -56,9 +51,9 @@ binary = args.build / 'fixture'
 subprocess.run([args.cc, '-std=c11', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
                 '-fno-sanitize-recover=all', '-I' + str(ROOT / 'include'), '-I' + str(generated),
                 str(args.build / 'fixture.c'), str(app / 'main.c'), '-o', str(binary)], check=True)
-for case in range(6):
+for case in range(4):
     subprocess.run([str(binary), str(case)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
-result = {'cases': 6, 'physical_access': False,
-          'scope': 'Application waits for the owner predicate and never requires an attached-device live state.'}
+result = {'cases': 4, 'physical_access': False,
+          'scope': 'Exact keyboard-only grant validation and deterministic failure; checkpoint waiting is tested through the native launcher.'}
 (args.build / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
 print(json.dumps(result))
