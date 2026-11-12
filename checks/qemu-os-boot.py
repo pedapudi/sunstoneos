@@ -502,13 +502,15 @@ def reverted_owner(work):
     so any hint on that index ends the wait before the owner has opened the card."""
     source = (ROOT / 'apps/os/sd_owner.c').read_text()
     begin = source.index('    /* The owner gives the notification once the card is open or has failed.')
-    end = source.index('    ready_waiter = NULL;')
+    end = source.index('    atomic_store_explicit(&ready_waiter,NULL,memory_order_release);')
     old = ('    if (atomic_load(&ready) == 0) (void)ulTaskNotifyTake(pdTRUE, 8000u);\n')
     source = source[:begin] + old + source[end:]
     marker = '    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) {'
     stop = source.index('    return atomic_load(&ready) == 1;\n}', source.index(marker))
     source = source[:source.index(marker)] + '    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) os_sd_diag[0] = 11;\n' + source[stop:]
-    source = source.replace('xTaskNotifyGiveIndexed(ready_waiter, WAIT_INDEX)', 'xTaskNotifyGive(ready_waiter)')
+    give = 'xTaskNotifyGiveIndexed(waiter, ready_index)'
+    assert source.count(give) == 1, 'apps/os/sd_owner.c no longer gives readiness on the caller index'
+    source = source.replace(give, 'xTaskNotifyGive(waiter)')
     path = Path(work) / 'sd_owner_reverted.c'
     path.write_text(source)
     return path
