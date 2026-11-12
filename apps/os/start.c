@@ -16,7 +16,8 @@
 /* The GPU build's recognition core comes from cmake/a733-os.cmake. */
 _Static_assert(OS_RECOGNITION_CORE==A733_SMP_APPLICATION_CORE,"recognition core differs from the placement header");
 #endif
-_Static_assert(BOARD_SERVICE_TYPEC==2&&BOARD_SERVICE_POWER==3&&BOARD_SERVICE_USB2==4,"host service selection IDs");
+_Static_assert(BOARD_SERVICE_USB0==1&&BOARD_SERVICE_TYPEC==2&&BOARD_SERVICE_POWER==3&&BOARD_SERVICE_USB2==4,
+    "USB service selection IDs");
 int board_application_task_privileged(void (*entry)(void *),void *context)
 {
     for(unsigned i=0;i<os_application_count;++i)

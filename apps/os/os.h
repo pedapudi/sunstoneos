@@ -136,6 +136,8 @@ const struct os_session *os_session_validated(void);
 /* 1 when the admitted session grants every service in the OS_GRANT_* mask; 0 before admission. EL0-safe: after the first
  * admission it is one load of a word that holds the granted set, and it touches no hardware. */
 int os_granted(unsigned mask);
+/* USB0 provider retention records its guard before the generic failure path. */
+void board_usb0_provider_fail(void *);
 
 /* Fixed start list entries; each runs at the board hook of the same name. */
 struct a733_pin_handoff;
