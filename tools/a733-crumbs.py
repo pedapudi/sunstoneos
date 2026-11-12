@@ -20,9 +20,6 @@ WDT_MODE, WDT_CONFIG, WDT_OUTPUT, WDT_RESTART = 0x02050014, 0x02050010, 0x020500
 KEY = 0x16aa0000
 RETURN_ROM = 0x0503  # SUNSTONE_CRUMB_RETURN_ROM: value is the WDT0 mode after the disarm
 EL3_STOP = 0x0111    # SUNSTONE_CRUMB_EL3_STOP: value is min(status, 15) << 12 | detail & 0xfff
-CARD_FEL_REFUSALS = {int(value,0): name.lower().replace('_',' ') for name,value in re.findall(
-    r'^#define CARD_FEL_REFUSE_(\w+) (0x[0-9a-f]+|[0-9]+)$',
-    (ROOT / 'apps/card-fel-recovery/refusal.h').read_text(),re.M)}
 FAIL_LEVEL = 0xb     # SUNSTONE_CRUMB_FAIL_LEVEL: the first board failure, from EL0 or EL1
 FAIL_LEVEL_SECOND = 0xc  # SUNSTONE_CRUMB_FAIL_LEVEL_SECOND: a device failure that followed an application failure
 CUTOFF = 0x73c       # cpu-return fail_cutoff(): the session reached the supervisor's cutoff without a return request
@@ -336,16 +333,6 @@ def decode(words, epoch, elf=None):
                 0x83: 'refused watchdog mode/configuration/output',
                 0x84: 'request clear readback failed', 0x86: 'watchdog disarm readback failed',
             }.get(value, 'unknown gate progress')
-        if result['last']['stage'] == 0x0c01:
-            result['last']['name'] = 'CARD_FEL_LAUNCH'
-            if not fault and words['far'] & 0x80000000:
-                code = result['last']['value']
-                base = code & ~255 if code >= 0x100 else code
-                refusal = {'guard': CARD_FEL_REFUSALS.get(base,'unknown'),
-                           'address': hex(words['far'] & 0x7fffffff),
-                           'sample': hex(words['esr'] | words['elr'] << 32)}
-                if code >= 0x100: refusal['core'] = code & 255
-                result['last']['launcher_refusal'] = refusal
         if result['last']['stage'] == 0x0204:
             value = result['last']['value']
             step = value >> 12
@@ -395,8 +382,7 @@ def decode(words, epoch, elf=None):
         result['fault'] = {'core': (fault >> 20) & 15, 'level': level, 'vector_slot': (fault >> 8) & 255,
                            'x0': fault & 255, 'esr' if level == 3 or fault & 255 == 4 else 'detail': hex(words['esr']),
                            'elr': hex(words['elr']), 'far': hex(words['far'])}
-    if fault >> 24 != defines['FAULT_MAGIC'] and words['elr'] == defines['PROBE_POLICY_MAGIC'] and \
-            not result.get('last',{}).get('launcher_refusal'):
+    if fault >> 24 != defines['FAULT_MAGIC'] and words['elr'] == defines['PROBE_POLICY_MAGIC']:
         inherited, normalized = words['esr'], words['far']
         if not (inherited | normalized) & ~0xfe:
             result['probe_policy'] = {
@@ -409,10 +395,6 @@ def decode(words, epoch, elf=None):
         parts.append(f"last stage {r['name']} ({r['stage']:#06x}) value {r['value']:#x} on core {r['core']}")
         if 'gate_progress' in r:
             parts.append('gate '+r['gate_progress'])
-        if 'launcher_refusal' in r:
-            f = r['launcher_refusal']
-            target = f" core {f['core']}" if 'core' in f else ''
-            parts.append(f"launcher guard {f['guard']}{target}: address {f['address']}, sampled {f['sample']}")
     else:
         parts.append('tagged at EL3 entry; no later stage')
     if result.get('last', {}).get('admission_refusal'):
