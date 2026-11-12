@@ -78,6 +78,7 @@
     X("radio", os_radio, os_radio_start, OS_ALWAYS) \
     X("headset", os_headset, os_headset_start, OS_WITH_HEADSET) \
     X("i2c", os_i2c, os_i2c_start, OS_ALWAYS) \
+    X("rtc", os_rtc, os_rtc_start, OS_ALWAYS) \
     X("gpu-queue", os_gpu_queue, os_gpu_queue_start_entry, OS_WITH_GPU)
 
 /* X(NAME, name, window_us, grant, with): a task the supervisor watches, after the board's five and the application

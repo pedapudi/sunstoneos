@@ -40,6 +40,11 @@ elseif(SUNSTONE_APPLICATION STREQUAL "i2c-scan")
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/i2c-scan/main.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/i2c-scan/manifest.json")
   add_sunstone_image(sunstone-a733-os-i2c-scan LIFETIME ${os_lifetime} APPLICATION i2c-scan)
+elseif(SUNSTONE_APPLICATION STREQUAL "rtc-alarm")
+  add_sunstone_application(rtc-alarm
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/rtc-alarm/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/rtc-alarm/manifest.json")
+  add_sunstone_image(sunstone-a733-os-rtc-alarm LIFETIME ${os_lifetime} APPLICATION rtc-alarm)
 elseif(SUNSTONE_APPLICATION STREQUAL "memcpy-bench")
   add_sunstone_application(memcpy-bench
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/memcpy-bench/main.c"

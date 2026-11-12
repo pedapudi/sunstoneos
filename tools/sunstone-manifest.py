@@ -148,7 +148,7 @@ def load(path, supervised=False):
     """manifest.json -> normalized dict with integer fields."""
     raw = json.loads(Path(path).read_text())
     known = {'name', 'devices', 'cpu', 'regions', 'large_regions', 'audio', 'usb', 'deadlines', 'output_limit', 'host_ops', 'npu', 'gpu',
-             'i2c', 'abi'}
+             'i2c', 'rtc', 'abi'}
     require(set(raw) <= known, '%s: unknown keys %s' % (path, sorted(set(raw) - known)))
     name = raw['name']
     require(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9-]{0,14}', name) is not None,
@@ -227,6 +227,8 @@ def load(path, supervised=False):
             m['npu_graph_region_name'] = n['graph_region']
     m['gpu'] = load_gpu(name, raw.get('gpu'), required)
     m['i2c'] = load_i2c(name, raw.get('i2c', []))
+    require(raw.get('rtc', False) in (True, False), name + ': rtc is true or false')
+    m['rtc'] = bool(raw.get('rtc', False))
     audio = raw.get('audio')
     if audio is not None or (required | optional) & CAPTURE:
         require(audio is not None, name + ': a capture device needs an audio format')
@@ -685,6 +687,7 @@ def c_tables(m):
              'const struct os_i2c_declaration ss_i2c_declarations[%d] = {%s};' % (
                  max(1, len(m.get('i2c', []))), ','.join('{%du,%du}' % (d['bus'], d['max_rate_hz']) for d in m.get('i2c', [])) or '{0,0}'),
              'const unsigned ss_i2c_declaration_count = %du;' % len(m.get('i2c', [])),
+             'const unsigned ss_rtc_declared = %du;' % (1 if m.get('rtc') else 0),
              '__attribute__((used,retain)) const struct os_application os_applications[] = {',
              '    OS_START_TABLE',
              '    {"%s",os_application_task_privileged,os_application_pins,os_application_start},' % m['name'],
@@ -706,7 +709,7 @@ def c_tables(m):
              '#ifndef SUNSTONE_A733_HW_FACTS', '#ifdef SUNSTONE_A733_OS_DMA', '    {143,0,0xd8,os_dma0_irq},', '#else',
              '    {143,0,0xd8,os_audio_irq},', '#endif', '#endif',
              '#ifdef SUNSTONE_A733_OS_GPU', ('    {95,A733_SMP_APPLICATION_CORE,0xd8,os_gpu_queue_irq},' if m.get('cluster', 0) else '    {95,2,0xd8,os_gpu_queue_irq},'), '#endif',
-             ] + ['    {%d,0,0xd8,os_i2c_irq_%s},' % (d['intid'], d['symbol']) for d in m.get('i2c', [])] + [
+             ] + ['    {%d,0,0xd8,os_i2c_irq_%s},' % (d['intid'], d['symbol']) for d in m.get('i2c', [])] + (['    {228,0,0xd8,os_rtc_irq},'] if m.get('rtc') else []) + [
              '#ifdef SUNSTONE_A733_HW_FACTS', '    {97,0,0xd8,os_hw_facts_irq},{143,0,0xd8,os_hw_facts_irq},{95,0,0xd8,os_hw_facts_irq},', '#endif', '};',
              'const unsigned a733_irq_route_count=sizeof(a733_irq_routes)/sizeof(a733_irq_routes[0]);',
              '#include "cpu-return-spi.h"',

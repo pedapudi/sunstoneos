@@ -107,7 +107,7 @@ def main():
     defines, _ = crumbs.header()
     owners = {v: k[len('QUIESCE_'):].lower().removesuffix('_owner')
               for k, v in defines.items() if k.startswith('QUIESCE_')}
-    assert len(owners) == 14 and defines['QUIESCE_I2C'] == 13
+    assert len(owners) == 15 and defines['QUIESCE_I2C'] == 13
     assert defines['QUIESCE_USB0'] == 12 and defines['FAIL_USB0'] != defines['FAIL_QUIESCE']
     usb0_site = (0x80000000 | defines['FAIL_USB0'] << 24 | defines['QUIESCE_USB0'] << 16 |
                  defines['FAIL_QUIESCE'] << 12 | 24)
@@ -132,7 +132,7 @@ def main():
         assert record['session'] == 0xfedcba98 and record['storage_phase'] == name, record
         assert 'SESSION 0xfedcba98, phase ' + name in decoded['summary'], decoded['summary']
     print('PASS second record: a device failure replaces an application failure in the retained words (level 0xc) and nothing else replaces a record; '
-          '6 seeded records, 14 owner decodes, 2 mutants fail')
+          '6 seeded records, 15 owner decodes, 2 mutants fail')
 
 
 if __name__ == '__main__':
