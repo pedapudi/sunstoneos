@@ -26,7 +26,10 @@ returns retain their watchdog ending. The
 90-frame reference, retires seven secondary cores and restores RAM, boot clocks
 and CPU rails. A corrected hello-compute control returns normally with seven
 secondaries off. These inputs do not establish general recognition or startup
-repeatability. [CPU status](cpu.md) identifies the result and failed controls.
+repeatability. Selected GPU compute, open-queue NPU recognition and verified
+read-only storage failures also retire all eight cores without a watchdog reset
+([return evidence](../evidence/failure-return.jsonl)). [CPU status](cpu.md)
+identifies the CPU result and failed controls.
 
 ## Capabilities
 
@@ -37,7 +40,7 @@ repeatability. [CPU status](cpu.md) identifies the result and failed controls.
 | Failure return to the boot ROM ([design](../designs/failure-return.md)) | host-tested; selected GPU, NPU and read-only storage failures board-qualified | 12 registered owner identities; three selected failures return without watchdog reset or secondary owner fault | [owner audit](../designs/failure-return-audit.md), [records](../evidence/failure-return.jsonl) |
 | Eight-worker CPU-only mimus recording | qualified on the board | 90-frame reference matched, seven secondaries off | [CPU status](cpu.md) |
 | GPU compute queue and trusted GPU peer | selected compute failure board-qualified | two completed jobs, one abandoned output, firmware OFF and worker PARK at return | [return record](../evidence/failure-return.jsonl); broader GPU scope in [GPU status](gpu.md) |
-| Typed session for an image that grants a device (`tools/session.py`) | host-tested | the GPU mimus image and the GPU lifecycle image are admitted with device bit `0x10`; the NPU and control images grant no device | `checks/session-build.py`; [runner document](../board-runner.md) |
+| Typed session for an image that grants a device (`tools/session.py`) | host-tested | control, NPU, GPU and credential-free radio-scan profiles have typed builders; USB host facts remain required | `checks/session-build.py`; [runner document](../board-runner.md) |
 | Concurrent CPU, GPU and NPU operation | host-tested | none on the board | [NPU status](npu.md) |
 | Lifetime from the contract magic in one OS image ([design](../designs/one-os-image.md#lifetime-word-and-sealed-session)) | selected returning paths and supervised stops board-tested; resident host-tested | returning images retire all eight cores to ROM; supervised EL3 and EL1 stops have evidence; resident physical qualification is pending | [return records](../evidence/failure-return.jsonl), the supervised records below and [resident entry contract](../designs/resident-fel.md) |
 | Warm PCM-to-transcription time | open | target 0.05 times the audio duration | `application-recognition-time-target` (not run) |
@@ -52,7 +55,7 @@ unqualified.
 
 1. Run an NPU image that fails before its NPU service starts, to confirm on the board that the never-started stop report keeps the port usable.
 2. Run the checks that need external inputs (H.264 capture, SAE); the full gate lists nine remaining checks.
-3. Qualify physical queue execution, recovery and application GPU recognition.
+3. Qualify GPU recovery and application recognition.
 4. Qualify simultaneous CPU, GPU and NPU operation; the optional builds have host evidence only.
 5. Qualify returning accelerator execution; [NPU status](npu.md) lists the finite images that already pass.
 6. Add broader application inputs, native audio input, autonomous card boot, fault recovery and concurrent thermal qualification.
