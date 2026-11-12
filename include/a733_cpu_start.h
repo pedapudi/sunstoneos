@@ -7,6 +7,8 @@ enum a733_cpu_start_state { A733_CPU_START_NEW, A733_CPU_START_PENDING,
     A733_CPU_START_POWERED, A733_CPU_START_RETAINED };
 enum a733_cpu_start_error { A733_CPU_START_NO_ERROR, A733_CPU_START_IO,
     A733_CPU_START_TIME, A733_CPU_START_INITIAL_STATE, A733_CPU_START_VERIFY };
+enum a733_cpu_start_entry { A733_CPU_START_FEL=0, A733_CPU_START_COLD=1,
+    A733_CPU_START_RESIDENT=2 };
 struct a733_cpu_start_ops {
     int (*read32)(void *, uintptr_t, uint32_t *);
     int (*write32)(void *, uintptr_t, uint32_t);
@@ -18,9 +20,9 @@ struct a733_cpu_start_config {
     void *context;
     uint64_t boot_mpidr, entry, lease, deadline;
     unsigned core;
-    /* 1 for the resident cold profile: the stage-2 loader holds the core in
-     * acknowledged static OFF (docs/designs/cold-cpu-static-off.md). The EL3
-     * boot sets it from the admitted lifetime. */
+    /* Entry policy: FEL keeps the returning hotplug sequence; COLD requires
+     * stage-2 static OFF; RESIDENT accepts either acknowledged static OFF or
+     * FEL dynamic OFF (policy/status 0x100). */
     unsigned held;
 };
 struct a733_cpu_start {
@@ -29,7 +31,7 @@ struct a733_cpu_start {
     uint32_t control, mode, architecture, power_status;
     enum a733_cpu_start_state state;
     enum a733_cpu_start_error error;
-    unsigned step, initialized, entered, writes_attempted;
+    unsigned step, initialized, entered, writes_attempted, static_off;
 };
 /* Pure topology conversion. Accept architectural MPIDR flags, reject reserved
  * bits and unknown affinities. Output unchanged on refusal. A733 uses Aff1 for
@@ -43,10 +45,12 @@ int a733_cpu_index(uint64_t mpidr, unsigned *out);
  * boot CPU must be core 0; this component admits cores 1..7 and a 4-byte-aligned
  * DRAM entry below 4 GiB. The entry runs at reset privilege and must park without
  * touching hotplug words until the boot owner hands off after POWERED.
- * The resident cold profile (held) also requires acknowledged static OFF and GIC
- * wake-disable before the first register write. It restores dynamic OFF/ON
+ * The cold profile and resident static-OFF entry require acknowledged static
+ * OFF and GIC wake-disable before the first register write. They restore dynamic OFF/ON
  * policy only after the entry/architecture publication barrier. An immediate
  * wake must obey the same parked-entry/mailbox handoff.
+ * Resident FEL entry requires policy/status 0x100 and clear hotplug requests;
+ * it uses the returning hotplug sequence without writing the policy word.
  * Callbacks return exactly 1, are bounded/non-reentrant, and preserve their
  * original context. They perform ordered, privileged physical register access.
  * One serialized owner; callback state/storage must remain disjoint and live.

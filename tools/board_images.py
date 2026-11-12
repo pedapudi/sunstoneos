@@ -416,7 +416,6 @@ def policy(info, args, session=None):
     d = info['descriptor']
     approved = args.approved_by == 'coordinator'
     if getattr(args, 'lifetime', 'returning') == 'resident':
-        require(approved, 'Resident FEL entry requires --approved-by coordinator for the static-OFF hold.')
         require(info.get('generic') and not info.get('dma') and args.kind == 'cpu-return',
                 'Resident FEL qualification requires a generic CPU OS image.')
         require(not preserving(args), 'Resident watchdog reset loses DRAM; --preserve-dram is incompatible.')

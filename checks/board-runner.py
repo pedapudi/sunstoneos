@@ -188,7 +188,7 @@ class Model:
 def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=False):
     root.mkdir()
     args=arguments(root, development=resident)
-    if resident:args.lifetime='resident';args.approved_by='coordinator'
+    if resident:args.lifetime='resident'
     args.restore_rails=restore
     model=Model(variant)
     owners=[]
@@ -270,14 +270,15 @@ def resident_cases(out):
     assert not result.get('expected_reset') and not board.result_passed(result)
     passed('returning-stop-is-not-a-resident-success')
     root=out/'resident-policy';root.mkdir()
-    args=arguments(root, '--lifetime', 'resident', '--approved-by', 'coordinator', development=True)
+    args=arguments(root, '--lifetime', 'resident', development=True)
     info={'generic':True,'symbols':{'os_resident_test_profile':(0,24)},'descriptor':{}}
     args.kind='cpu-return'
     marker=struct.pack('<3Q',0x3154534554525353,1,0x5000)
     bounds=types.SimpleNamespace(classify=lambda _: 'read-only')
     with patch.object(images, 'symbol_bytes', return_value=marker), patch.object(images, 'load', return_value=bounds):
         images.policy(info,args)
-        for name, value in (('approved_by',None),('preserve_dram',True),('kind','probe')):
+        assert args.approved_by is None
+        for name, value in (('preserve_dram',True),('kind','probe')):
             saved=getattr(args,name);setattr(args,name,value)
             try:images.policy(info,args)
             except ValueError:pass
@@ -291,7 +292,7 @@ def resident_cases(out):
     job={'image':str(args.image),'directory':str(root),'options':{'lifetime':'resident'}}
     command=board.Queue.runner_command(job,'3-1')
     assert command[command.index('--lifetime')+1]=='resident'
-    passed('resident-policy-approval-marker-development-and-frozen-selection')
+    passed('resident-policy-without-power-approval-marker-development-and-frozen-selection')
 
 
 def resident_launcher_cases(out):
@@ -349,7 +350,7 @@ def resident_launcher_cases(out):
 def resident_image_case(out, image, template):
     """Prepare the real bounded resident ELF and execute its own native admission."""
     root=out/'resident-image';root.mkdir()
-    args=arguments(root,'--lifetime','resident','--approved-by','coordinator','--template',str(template),development=True)
+    args=arguments(root,'--lifetime','resident','--template',str(template),development=True)
     args.image=image
     info=images.inspect(image,'cpu-return')
     words=images.offline_words()

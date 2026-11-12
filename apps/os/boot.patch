@@ -139,7 +139,7 @@
              .context=&targets[c-1],.boot_mpidr=mpidr,.entry=(uintptr_t)a733_cpu_secondary_entry,
 -            .lease=admission.lease,.deadline=admission.startup_deadline/24,.core=c};
 +            .lease=admission.lease,.deadline=admission.startup_deadline/24,.core=c,
-+            .held=a733_smp_lifetime==A733_LIFETIME_RESIDENT};
++            .held=a733_smp_lifetime==A733_LIFETIME_RESIDENT?A733_CPU_START_RESIDENT:A733_CPU_START_FEL};
          if(!a733_cpu_start_init(&power[c-1],&config) ||
             !a733_cpu_entry_native_init(&owners[c-1],&power[c-1],admission.epoch))a733_smp_stop(2,c+16);
          while(a733_cpu_entry_poll(&owners[c-1])==A733_CPU_ENTRY_PENDING) {}
