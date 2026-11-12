@@ -19,8 +19,6 @@ if not __debug__:
     raise SystemExit('checks require assertions')
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / 'tools/integration-gate.py'
-# Every command in these cases is a fake executable in the scratch checkout.
-GATE_RUNS = [['--output', '{output}']]
 OUTPUT = None
 _spec = importlib.util.spec_from_file_location('gate_under_test', GATE)
 _gate = importlib.util.module_from_spec(_spec)
@@ -53,25 +51,9 @@ if '--target' in args and 'help' in args:
     print('... all\\n... clean\\n... kernel-check\\n... other-image\\n... ignored.o')
 if os.environ.get('GATE_TEST_TOUCH'):
     pathlib.Path(os.environ['GATE_TEST_TOUCH']).write_text('written during a step\\n')
-if os.environ.get('GATE_TEST_CHMOD'):
-    pathlib.Path(os.environ['GATE_TEST_CHMOD']).chmod(0o755)
 if os.environ.get('GATE_TEST_FAIL') in args or any(x in args for x in os.environ.get('GATE_TEST_FAIL_ALL', '').split(',') if x):
     print(os.environ.get('GATE_TEST_OUTPUT', 'host deadline exceeded'))
     sys.exit(1)
-if os.environ.get('GATE_TEST_ARTIFACTS'):
-    if name == 'cfg.sh':
-        directory = pathlib.Path(args[1]); directory.mkdir(parents=True, exist_ok=True)
-        (directory / 'CMakeCache.txt').write_text('fake configuration')
-        (directory / 'compile_commands.json').write_text('[]')
-    elif name == 'cmake' and '--build' in args and '--target' in args:
-        directory = pathlib.Path(args[args.index('--build') + 1]); directory.mkdir(parents=True, exist_ok=True)
-        for target in args[args.index('--target') + 1:args.index('-j')]:
-            (directory / (target + '.elf')).write_bytes(b'fake ELF')
-    elif args and args[0] == 'tools/gate_session.py':
-        path = pathlib.Path(args[-1]); path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b'fake session')
-    elif '--platform-build' in args and '--evidence' in args:
-        path = pathlib.Path(args[args.index('--evidence') + 1]) / 'build/probe.elf'
-        path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b'fake bundle')
 '''
         for relative in ('bin/cfg.sh', 'venv/bin/python', 'host/usr/lib/llvm-21/bin/cmake'):
             path = self.sandbox / relative
@@ -96,8 +78,8 @@ from pathlib import Path
 import json, os
 indexer = SimpleNamespace(PROSE_CHECKS=json.loads(os.environ.get('GATE_TEST_PROSE', '{}')),
                           SERIAL_CHECKS=set(os.environ.get('GATE_TEST_SERIAL', '').split(',')), generate=lambda: {
-    'focused.py': {'pure_host': True, 'required_arguments': ['--output'], 'inputs': ['checks/focused.py','checks/focused-input.c']},
-    'progress.py': {'pure_host': True, 'required_arguments': [], 'inputs': ['checks/progress.py']},
+    'focused.py': {'pure_host': True, 'required_arguments': ['--output']},
+    'progress.py': {'pure_host': True, 'required_arguments': []},
     'pre-push-hook.py': {'pure_host': True, 'required_arguments': ['--output']},
     'image.py': {'pure_host': False, 'library': False, 'required_arguments': ['--image']},
     **json.loads(os.environ.get('GATE_TEST_DECLARED', '{}'))})
@@ -118,18 +100,11 @@ def plan(value=None, changed=None, index=None):
             checks.append({'check': name, 'status': 'runnable' if entry['pure_host'] else 'pending',
                            'needs': [] if entry['pure_host'] else ['USB access'], 'output': True,
                            'output_option': entry.get('output_option', '--output')})
-    if changed and 'checks/newly-affected.py' in changed:
-        checks.append({'check': 'newly-affected.py', 'status': 'runnable', 'needs': [], 'output': True})
     if set(changed or []) & {'tools/git-hooks/pre-push', 'checks/harness.py', 'checks/pre-push-hook.py', 'untracked-hook-input.txt'}:
         checks.append({'check': 'pre-push-hook.py', 'status': 'runnable', 'needs': [], 'output': True})
-    head = subprocess.check_output(['git','rev-parse',value.split('..')[-1] if value else 'HEAD'],cwd=Path(__file__).resolve().parents[1],text=True).strip()
-    if value and value.endswith('HEAD~1'):
-        checks = [c for c in checks if c['check'] != 'progress.py']
-    return {'baseline': 'sup', 'revisions': [os.environ.get('GATE_TEST_BASE', 'base'), head], 'range': value, 'changed': changed, 'checks': checks}
+    return {'baseline': 'sup', 'revisions': ['base', 'head'], 'range': value, 'changed': changed, 'checks': checks}
 ''')
         (selector.parent / 'pre-push-hook.py').write_text('CHECK_INPUTS = ("untracked-hook-input.txt",)\nprint("fake hook fixture")\n')
-        for name in ('focused.py', 'progress.py', 'focused-input.c'):
-            (selector.parent / name).write_text('# fake host fixture\n')
         hook = source / 'tools/git-hooks/pre-push'
         hook.parent.mkdir(parents=True)
         hook.write_text('# fake hook\n')
@@ -843,275 +818,6 @@ exec "$REAL" "$@"
         self.assertFalse(set(indexer.HOST_ONLY) & set(real))
         self.assertEqual(index['docs-links.py']['prose'], True)
         self.assertTrue(index['pcie-qemu.py']['serial'])
-
-    def resume_gate(self, label='continued', prior=None, selection=None):
-        prior = prior or self.sandbox / 'build/gate-initial'
-        return self.run_gate(*(selection or ['--affected', 'HEAD~1..HEAD']),
-                             '--resume', str(prior), label=label)
-
-    def initial_resume_gate(self, fail=None, selection=None):
-        self.env['GATE_TEST_ARTIFACTS'] = '1'
-        if fail:
-            self.env['GATE_TEST_FAIL'] = fail
-        result = self.run_gate(*(selection or ['--affected', 'HEAD~1..HEAD']), label='initial')
-        self.assertEqual(result.returncode, int(bool(fail)), result.stdout + result.stderr)
-        self.env.pop('GATE_TEST_FAIL', None)
-        return self.sandbox / 'build/gate-initial'
-
-    def test_resume_failed_middle_keeps_original_failure(self):
-        prior = self.initial_resume_gate('checks/progress.py')
-        original = (prior / 'summary.txt').read_bytes()
-        self.commit_source('checks/progress.py')
-        before = len(self.records())
-        result = self.resume_gate()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual([c[1] for c in self.records()[before:]], ['checks/progress.py'])
-        self.assertEqual((prior / 'summary.txt').read_bytes(), original)
-        record = json.loads((self.sandbox / 'build/gate-continued/checkpoint.json').read_text())
-        self.assertIn('reused_from', record['steps']['indexed-focused'])
-        self.assertNotIn('reused_from', record['steps']['indexed-progress'])
-        self.assertTrue(record['steps']['indexed-progress']['stable'])
-        self.assertTrue((self.sandbox / 'build/gate-continued/gate-record.json').is_file())
-
-    def test_resume_changed_declared_input_runs_only_its_check(self):
-        self.initial_resume_gate()
-        self.commit_source('checks/focused-input.c')
-        before = len(self.records())
-        result = self.resume_gate()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual([c[1] for c in self.records()[before:]], ['checks/focused.py'])
-        # A second continuation follows the retained provenance without reruns.
-        before = len(self.records())
-        result = self.resume_gate('third', self.sandbox / 'build/gate-continued')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(self.records()[before:], [])
-
-    def test_resume_missing_or_mismatched_state_refuses(self):
-        before = len(self.records())
-        result = self.resume_gate(prior=self.sandbox / 'missing')
-        self.assertEqual(result.returncode, 2)
-        self.assertEqual(self.records()[before:], [])
-        prior = self.initial_resume_gate()
-        checkpoint = prior / 'checkpoint.json'
-        original = json.loads(checkpoint.read_text())
-        for value in ('invalid JSON', json.dumps(dict(original, source='/different/checkout'))):
-            checkpoint.write_text(value)
-            result = self.resume_gate()
-            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-
-    def test_resume_missing_native_artifact_repairs_only_its_build(self):
-        self.initial_resume_gate()
-        directory = self.sandbox / 'build' / ('gate-os-sup-' + self.tree(self.source))
-        (directory / 'sunstone-a733-os.elf').rename(directory / 'saved.elf')
-        before = len(self.records())
-        result = self.resume_gate()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual([c[0] for c in self.records()[before:]], ['cmake'])
-        self.assertTrue((directory / 'saved.elf').is_file())
-
-    def test_resume_mismatched_native_artifact_repairs_only_its_build(self):
-        self.initial_resume_gate()
-        directory = self.sandbox / 'build' / ('gate-os-sup-' + self.tree(self.source))
-        (directory / 'sunstone-a733-os.elf').write_bytes(b'mismatched artifact')
-        before = len(self.records())
-        result = self.resume_gate()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual([c[0] for c in self.records()[before:]], ['cmake'])
-
-    def test_resume_mismatched_command_or_log_runs_the_check(self):
-        prior = self.initial_resume_gate()
-        checkpoint = prior / 'checkpoint.json'
-        record = json.loads(checkpoint.read_text())
-        record['steps']['indexed-focused']['command'].append('--changed-command')
-        checkpoint.write_text(json.dumps(record))
-        (prior / 'indexed-progress.log').write_text('changed log')
-        before = len(self.records())
-        result = self.resume_gate()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual([c[1] for c in self.records()[before:]], ['checks/focused.py', 'checks/progress.py'])
-
-    def test_resume_native_change_refreshes_prep_and_keeps_host_passes(self):
-        self.initial_resume_gate()
-        before = len(self.records())
-        self.commit_source('CMakeLists.txt')
-        result = self.resume_gate()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('refresh all preparation', result.stdout)
-        self.assertEqual([c[0] for c in self.records()[before:]], ['cfg.sh', 'cmake'])
-
-    def test_resume_changed_host_fixture_used_by_native_refreshes(self):
-        self.initial_resume_gate()
-        self.commit_source('checks/focused-input.c')
-        directory = self.sandbox / 'build' / ('gate-os-sup-' + self.tree(self.source))
-        (directory / 'compile_commands.json').write_text(json.dumps([{'file': str(self.source / 'checks/focused-input.c')}]))
-        before = len(self.records())
-        result = self.resume_gate()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual([c[0] for c in self.records()[before:]], ['cfg.sh', 'cmake', 'python'])
-        self.assertEqual(self.records()[-1][1], 'checks/focused.py')
-
-    def test_resume_rejects_changed_selection_and_observes_source_through_end(self):
-        self.initial_resume_gate('checks/progress.py')
-        before = len(self.records())
-        result = self.resume_gate(selection=['--changed', 'other'])
-        self.assertEqual(result.returncode, 2)
-        self.assertEqual(self.records()[before:], [])
-        self.env['GATE_TEST_TOUCH'] = str(self.source / 'changed-during-resume.c')
-        result = self.resume_gate('mutation')
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn('changed or could not be read during', result.stdout)
-        self.assertFalse((self.sandbox / 'build/gate-mutation/gate-record.json').exists())
-        bad = self.sandbox / 'build/gate-mutation'
-        (bad / 'checkpoint.json').rename(bad / 'saved-checkpoint.json')
-        self.env.pop('GATE_TEST_TOUCH')
-        result = self.resume_gate('legacy-invalid', bad)
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn('source identity failed', result.stderr)
-
-    def test_resume_shortened_range_end_refuses_dropped_coverage(self):
-        self.commit_source('checks/progress.py')
-        self.initial_resume_gate()
-        before = len(self.records())
-        result = self.resume_gate(selection=['--affected','HEAD~1..HEAD~1'])
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn('current source HEAD', result.stderr)
-        self.assertEqual(self.records()[before:], [])
-
-    def test_resume_legacy_clean_record_preserves_passes(self):
-        prior = self.initial_resume_gate('checks/progress.py')
-        (prior / 'checkpoint.json').rename(prior / 'saved-checkpoint.json')
-        self.commit_source('checks/progress.py')
-        before = len(self.records())
-        result = self.resume_gate()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual([c[1] for c in self.records()[before:]], ['checks/progress.py'])
-
-    def test_resume_legacy_changed_log_reruns_only_its_check(self):
-        prior = self.initial_resume_gate()
-        (prior / 'checkpoint.json').rename(prior / 'saved-checkpoint.json')
-        (prior / 'indexed-focused.log').write_text('log changed after the stop')
-        before = len(self.records())
-        result = self.resume_gate()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual([c[1] for c in self.records()[before:]], ['checks/focused.py'])
-
-    def test_resume_pinned_base_spelling_and_changed_base(self):
-        self.initial_resume_gate()
-        before = len(self.records())
-        result = self.resume_gate(selection=['--affected', 'base..HEAD'])
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(self.records()[before:], [])
-        self.env['GATE_TEST_BASE'] = 'different'
-        result = self.resume_gate('different-base')
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn('base differs', result.stderr)
-
-    def test_resume_newly_affected_check_is_in_complete_pass_record(self):
-        self.initial_resume_gate()
-        self.commit_source('checks/newly-affected.py')
-        self.env['GATE_TEST_DECLARED'] = json.dumps({'newly-affected.py': dict(pure_host=True,
-            required_arguments=['--output'], inputs=['checks/newly-affected.py'])})
-        before = len(self.records())
-        result = self.resume_gate()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual([c[1] for c in self.records()[before:]], ['checks/newly-affected.py'])
-        record = json.loads((self.sandbox / 'build/gate-continued/gate-record.json').read_text())
-        self.assertIn('newly-affected.py', record['checks'])
-
-    def test_resume_native_refresh_runs_image_core_and_session_steps(self):
-        self.env['GATE_TEST_DECLARED'] = json.dumps({'session.py': dict(pure_host=True, required_arguments=['--output'],
-            gate=dict(runs=[['--output','{output}','--session','{session:storage-read}']]))})
-        selection = ['--changed', 'declared', '--check', 'kernel']
-        self.initial_resume_gate(selection=selection)
-        self.commit_source('CMakeLists.txt')
-        before = len(self.records())
-        result = self.resume_gate(selection=selection)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        calls = self.records()[before:]
-        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 3)
-        scripts = [c[1] for c in calls if c[0] == 'python']
-        self.assertEqual(scripts, ['tools/gate_session.py', 'tools/check-kernel.py', 'checks/session.py'])
-
-    def test_resume_ancestor_base_advance_refreshes_native_preparation(self):
-        self.env['GATE_TEST_BASE'] = subprocess.check_output(['git','rev-parse','HEAD'],cwd=self.source,text=True).strip()
-        self.initial_resume_gate()
-        self.commit_source('CMakeLists.txt')
-        self.env['GATE_TEST_BASE'] = subprocess.check_output(['git','rev-parse','HEAD'],cwd=self.source,text=True).strip()
-        before = len(self.records())
-        result = self.resume_gate()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual([c[0] for c in self.records()[before:]], ['cfg.sh','cmake'])
-
-    def test_resume_missing_session_keeps_other_prep_and_original_evidence(self):
-        self.env['GATE_TEST_DECLARED'] = json.dumps({'session.py': dict(pure_host=True, required_arguments=['--output'],
-            gate=dict(runs=[['--output','{output}','--session','{session:storage-read}']]))})
-        selection = ['--changed', 'declared']
-        prior = self.initial_resume_gate(selection=selection)
-        original = prior / 'evidence/sessions/storage-read.bin'
-        original.rename(original.with_suffix('.saved'))
-        before = len(self.records())
-        result = self.resume_gate(selection=selection)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        calls = self.records()[before:]
-        self.assertEqual([c[1] for c in calls], ['tools/gate_session.py', 'checks/session.py'])
-        self.assertTrue(original.with_suffix('.saved').is_file())
-        self.assertTrue((self.sandbox / 'build/gate-continued/evidence/sessions/storage-read.bin').is_file())
-
-    def test_resume_changed_session_log_preserves_original_output(self):
-        self.env['GATE_TEST_DECLARED'] = json.dumps({'session.py': dict(pure_host=True, required_arguments=['--output'],
-            gate=dict(runs=[['--output','{output}','--session','{session:storage-read}']]))})
-        selection = ['--changed','declared']
-        prior = self.initial_resume_gate(selection=selection)
-        original = prior / 'evidence/sessions/storage-read.bin'
-        before_bytes, before_time = original.read_bytes(), original.stat().st_mtime_ns
-        (prior / 'session-storage-read.log').write_text('producer log changed after the gate')
-        before = len(self.records())
-        result = self.resume_gate(selection=selection)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual([c[1] for c in self.records()[before:]], ['tools/gate_session.py','checks/session.py'])
-        self.assertEqual((original.read_bytes(),original.stat().st_mtime_ns),(before_bytes,before_time))
-
-    def test_mode_only_untracked_mutation_invalidates_step_and_end(self):
-        local = self.source / 'local-input.c'; local.write_text('unchanged bytes')
-        self.env['GATE_TEST_CHMOD'] = str(local)
-        result = self.run_gate('--check','progress')
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        record = json.loads((self.sandbox / 'build/gate-case/checkpoint.json').read_text())
-        self.assertFalse(record['steps']['check-progress']['stable'])
-        self.assertNotIn('PASS selected integration checks', (self.sandbox / 'build/gate-case/summary.txt').read_text())
-
-    def test_resume_legacy_changed_literal_cached_file_reruns_check(self):
-        vector = self.sandbox / 'vector.bin'; vector.write_bytes(b'first vector')
-        self.env['GATE_TEST_DECLARED'] = json.dumps({'vector.py': dict(pure_host=True, required_arguments=['--output'],
-            gate=dict(runs=[['--output','{output}','--vector','{cache}/vector.bin']]))})
-        selection = ['--changed','declared']
-        prior = self.initial_resume_gate(selection=selection)
-        (prior / 'checkpoint.json').rename(prior / 'saved-checkpoint.json')
-        vector.write_bytes(b'changed vector')
-        before = len(self.records())
-        result = self.resume_gate(selection=selection)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual([c[1] for c in self.records()[before:]], ['checks/vector.py'])
-
-    def test_resume_same_head_base_advance_preserves_original_bundle(self):
-        first = subprocess.check_output(['git','rev-parse','HEAD'],cwd=self.source,text=True).strip()
-        self.commit_source('checks/progress.py')
-        self.env['GATE_TEST_BASE'] = first
-        self.env['GATE_TEST_DECLARED'] = json.dumps({'bundle.py': dict(pure_host=True,required_arguments=['--output'],
-            gate=dict(runs=[['--output','{output}','--bundle','{bundle:opp33}']]))})
-        selection = ['--changed','declared']
-        prior = self.initial_resume_gate(selection=selection)
-        record = json.loads((prior/'checkpoint.json').read_text())
-        old_command = record['steps']['bundle-opp33-build']['command']
-        original = Path(old_command[old_command.index('--evidence')+1])/'build/probe.elf'
-        old_bytes,old_time = original.read_bytes(),original.stat().st_mtime_ns
-        self.env['GATE_TEST_BASE'] = subprocess.check_output(['git','rev-parse','HEAD'],cwd=self.source,text=True).strip()
-        result = self.resume_gate(selection=selection)
-        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-        self.assertEqual((original.read_bytes(),original.stat().st_mtime_ns),(old_bytes,old_time))
-        record = json.loads((self.sandbox/'build/gate-continued/checkpoint.json').read_text())
-        command = record['steps']['bundle-opp33-build']['command']
-        self.assertNotEqual(command[command.index('--evidence')+1],str(original.parents[1]))
 
 
 if __name__ == '__main__':

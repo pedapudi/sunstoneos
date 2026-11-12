@@ -27,15 +27,6 @@ QEMU or time a result run one at a time after the parallel group. Every check
 runs with the environment recorded in environment.txt. Documentation-link and
 status-record checks report WARN lines and do not fail the gate unless
 --strict-docs is given.
-
---resume DIRECTORY continues an affected gate after host-check repairs. It
-recomputes the complete selection with the same base or an ancestral advance, reuses verified
-PASS commands and inputs, and runs failed, unexecuted and newly affected checks.
-Native or configuration changes rebuild all preparation; only unaffected
-indexed host checks may then reuse their passes. Checkpoints retain hashes
-and reuse provenance; older evidence requires a recorded clean commit and
-unchanged preparation tree keys. Sessions and bundles keep their original
-paths, and continuation never cleans the original evidence.
 """
 import argparse
 import atexit
@@ -43,7 +34,6 @@ import fcntl
 import hashlib
 import importlib.util
 import json
-import io
 from pathlib import Path
 from host_evidence import unique_directory
 import host_priority
@@ -52,11 +42,9 @@ import host_space
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import threading
-import tarfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -213,196 +201,6 @@ def tree_state(source):
             hashlib.sha256(diff.stdout).hexdigest() if diff.returncode == 0 else None, untracked)
 
 
-def source_files(source, revision=None):
-    """Content identity of repository inputs, including nonignored local files."""
-    if revision:
-        archive = subprocess.check_output(['git', 'archive', '--format=tar', revision], cwd=source)
-        result = {}
-        with tarfile.open(fileobj=io.BytesIO(archive)) as stream:
-            for entry in stream:
-                if entry.isfile() or entry.issym():
-                    data = entry.linkname.encode() if entry.issym() else stream.extractfile(entry).read()
-                    kind = b'link\0' if entry.issym() else b'executable\0' if entry.mode & 0o111 else b'file\0'
-                    result[entry.name] = hashlib.sha256(kind + data).hexdigest()
-        return result
-    names = subprocess.check_output(['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], cwd=source)
-    result = {}
-    for name in set(os.fsdecode(n) for n in names.split(b'\0') if n):
-        path = source / name
-        if path.is_symlink():
-            data = os.fsencode(os.readlink(path))
-        elif path.is_file():
-            data = path.read_bytes()
-        else:
-            continue
-        kind = b'link\0' if path.is_symlink() else b'executable\0' if path.stat().st_mode & 0o111 else b'file\0'
-        result[name] = hashlib.sha256(kind + data).hexdigest()
-    return result
-
-
-def selection_identity(args):
-    """Invocation policy; labels, reasons and scheduling limits are metadata."""
-    return {name: getattr(args, name) for name in
-            ('target', 'variant', 'check', 'affected', 'changed', 'full', 'trials', 'strict_docs')}
-
-
-def input_identity(files, names):
-    """Include directory inventories, absent inputs and the check itself."""
-    selected = {}
-    for name in names:
-        selected[name] = files.get(name)
-        selected.update((p, value) for p, value in files.items() if p.startswith(name.rstrip('/') + '/'))
-    return selected
-
-
-def command_files(command, source):
-    """Resolved file arguments (ELFs, sessions and bundles) are check inputs."""
-    result = {}
-    for word in command[1:]:
-        path = Path(word)
-        if not path.is_absolute():
-            path = source / path
-        if path.is_file():
-            result[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return result
-
-
-def identity_hash(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
-
-
-class Resume:
-    """Reuse unchanged host checks, with preparation reuse for host-only repairs.
-
-    Old gates without checkpoints are admitted only from their recorded clean
-    commit. Their artifact tree keys and pre-stop file timestamps supply the
-    legacy preparation witness; checkpoints additionally hash every artifact.
-    """
-    def __init__(self, directory, source, args, parser):
-        self.source = source
-        self.directory = directory.resolve()
-        if not self.directory.is_dir():
-            raise ValueError('resume directory does not exist')
-        checkpoint = self.directory / 'checkpoint.json'
-        self.legacy = not checkpoint.exists()
-        if not self.legacy:
-            self.record = json.loads(checkpoint.read_text())
-            if self.record.get('version') != 1 or self.record.get('source') != str(source):
-                raise ValueError('resume checkpoint version or source differs')
-        else:
-            summary = (self.directory / 'summary.txt').read_text()
-            def field(name):
-                found = re.findall('^' + re.escape(name) + r': (.*)$', summary, re.M)
-                if len(found) != 1:
-                    raise ValueError('resume has no unique ' + name)
-                return found[0]
-            empty = hashlib.sha256(b'').hexdigest()
-            revision = field('revision')
-            if re.search(r'^FAIL (?:the source|external .*changed|external .*unreadable)', summary, re.M):
-                raise ValueError('legacy resume source identity failed during the original gate')
-            if (field('source') != str(source) or field('status') != 'clean' or
-                field('diff-sha256') != empty or field('untracked-sha256') != empty + ' (0 files)'):
-                raise ValueError('legacy resume requires a complete clean source identity')
-            previous = parser.parse_args(shlex.split(field('selection')))
-            state = (revision, '', empty, (empty, 0))
-            self.record = dict(version=1, source=str(source), files=source_files(source, revision),
-                selection=selection_identity(previous), state=state,
-                artifact_key=hashlib.sha256(repr(state).encode()).hexdigest()[:16], steps={})
-            verdicts = {name: verdict for verdict, name in re.findall(
-                r'^(PASS|FAIL|WARN|SKIP) ([A-Za-z0-9_.-]+)(?: |$)', summary, re.M)}
-            for line in (self.directory / 'commands.txt').read_text().splitlines():
-                name, command = line.split(': ', 1)
-                if name in self.record['steps'] or not re.fullmatch(r'[A-Za-z0-9_.-]+', name):
-                    raise ValueError('duplicate or invalid resume command')
-                log = self.directory / (name + '.log')
-                self.record['steps'][name] = dict(command=shlex.split(command), verdict=verdicts.get(name),
-                    log_sha256=hashlib.sha256(log.read_bytes()).hexdigest() if log.is_file() else None)
-        previous_selection = dict(self.record.get('selection', {}))
-        current_selection = selection_identity(args)
-        # A symbolic base can move between runs. A pinned spelling is admitted
-        # only when the resolved base below is equal or advances along ancestry.
-        previous_selection['affected'] = bool(previous_selection.get('affected'))
-        current_selection['affected'] = bool(current_selection.get('affected'))
-        if previous_selection != current_selection:
-            raise ValueError('resume selection or policy differs')
-        if (not isinstance(self.record.get('files'), dict) or not isinstance(self.record.get('steps'), dict) or
-            subprocess.run(['git', 'merge-base', '--is-ancestor', self.record['state'][0], 'HEAD'],
-                           cwd=source, capture_output=True).returncode):
-            raise ValueError('resume source identity is incomplete or is not an ancestor')
-        self.affected = json.loads((self.directory / 'affected.json').read_text())
-        if args.affected and (self.affected.get('revisions') or [None, None])[1] != self.record['state'][0]:
-            raise ValueError('resume original selection does not end at its recorded source revision')
-        self.current = source_files(source)
-        self.changed = sorted(p for p in self.current.keys() | self.record['files'].keys()
-                              if self.current.get(p) != self.record['files'].get(p))
-        self.environment = (self.directory / 'environment.txt').read_text()
-        self.legacy_finished_ns = (self.directory / 'summary.txt').stat().st_mtime_ns
-        if self.legacy and any((self.directory / name).stat().st_mtime_ns > self.legacy_finished_ns
-                               for name in ('commands.txt', 'affected.json', 'environment.txt')):
-            raise ValueError('legacy resume metadata changed after the recorded stop')
-        self.refresh_native = False
-
-    def admit(self, index, directories):
-        """Native changes invalidate all preparation and image/core checks."""
-        for path in self.changed:
-            p = Path(path)
-            host = (p.parent == Path('checks') and
-                    ((p.suffix == '.py' and index.get(p.name, {}).get('pure_host')) or
-                     (p.suffix in ('.c', '.h') and any(e.get('pure_host') and path in e.get('inputs', [])
-                                                      for e in index.values()))))
-            if path not in ('tools/integration-gate.py', 'checks/integration-gate.py') and not host:
-                self.refresh_native = True
-        # A host fixture may also be a model image's source. Check actual CMake
-        # and compiler dependency records before treating its change as host-only.
-        needles = [Path(p).name for p in self.changed if p != 'tools/integration-gate.py']
-        for directory in directories if not self.refresh_native else ():
-            if not needles or not directory.is_dir():
-                continue
-            for path in directory.rglob('*'):
-                if path.is_file() and (path.suffix in ('.d', '.make', '.cmake') or path.name == 'compile_commands.json'):
-                    text = path.read_text(errors='replace')
-                    if any(n in text for n in needles):
-                        self.refresh_native = True
-                        return
-
-    def reusable(self, name, command, script, names, artifacts):
-        step = self.record['steps'].get(name)
-        if not step or step.get('verdict') != 'PASS':
-            return None
-        if not self.legacy and not step.get('stable'):
-            return None
-        normalize = lambda words, output: [str(w).replace(str(output), '{gate-output}') for w in words]
-        if normalize(step['command'], self.directory) != normalize(command, self.output):
-            return None
-        log = self.directory / (name + '.log')
-        if not log.is_file() or hashlib.sha256(log.read_bytes()).hexdigest() != step.get('log_sha256'):
-            return None
-        if self.legacy and log.stat().st_mtime_ns > self.legacy_finished_ns:
-            return None
-        before = input_identity(self.record['files'], names)
-        if input_identity(self.current, names) != before:
-            return None
-        if not self.legacy and step.get('inputs_sha256') != identity_hash(before):
-            return None
-        if not self.legacy and step.get('command_files') != command_files(command, self.source):
-            return None
-        if self.legacy and any(Path(p).stat().st_mtime_ns > self.legacy_finished_ns
-                               for p in command_files(command, self.source)):
-            return None
-        for path in artifacts:
-            if not path.is_file():
-                return None
-            if path.name == '.gate-tree-key':
-                if path.read_text() != self.record['artifact_key']:
-                    return None
-                continue
-            if self.legacy:
-                if path.stat().st_mtime_ns > self.legacy_finished_ns:
-                    return None
-            elif step.get('artifacts', {}).get(str(path)) != hashlib.sha256(path.read_bytes()).hexdigest():
-                return None
-        return step
-
 def gate_environment(source, cache, build_root):
     """The environment of every build, configure step and check: a temporary directory on the main disk (never /tmp), the host
     compilers on PATH and no bytecode files in the source."""
@@ -462,7 +260,6 @@ def main(argv=None):
     parser.add_argument('--strict-docs', action='store_true',
                         help='fail, instead of warn, when a documentation-link or status-record check fails')
     parser.add_argument('--allow-dirty', action='store_true', help='compatibility option; local changes are always recorded')
-    parser.add_argument('--resume', type=Path, help='continue a retained affected gate; native/configuration changes refresh preparation and retain only unchanged host passes')
     args = parser.parse_args(argv)
     if not args.full and not (args.target or args.variant or args.check or args.affected or args.changed):
         parser.error('select --target, --variant or --check; --full is only for justified broad validation')
@@ -478,21 +275,12 @@ def main(argv=None):
     source, cache = args.source.resolve(), args.cache.resolve()
     if not (source / 'CMakeLists.txt').is_file():
         parser.error('source must be a SunstoneOS checkout')
-    resume = None
-    if args.resume:
-        if args.full or not (args.affected or args.changed) or args.application:
-            parser.error('--resume requires an affected selection without external applications or --full')
-        try:
-            resume = Resume(args.resume, source, args, parser)
-        except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
-            parser.error('cannot resume: ' + str(error))
     # One gate at a time on the host, whoever starts it: a direct call waits behind a landing's gate instead of running beside
     # it. The full suite takes its own lock so that it blocks no landing. The lock is held until the process exits.
     gate_lock = take_gate_lock(cache, 'gate-full.lock' if args.full else 'gate.lock')
     targets = list(dict.fromkeys(args.target))
     variants = list(VARIANTS) if args.full else list(dict.fromkeys(args.variant))
     indexed, pending, affected_plan, hook_scope = [], [], None, None
-    index = {}
     inputs, classified = None, {'supplied': [], 'board': [], 'waived': [], 'unsupplied': []}
     if args.full or args.affected or args.changed:
         try:
@@ -535,25 +323,6 @@ def main(argv=None):
             else:
                 index = selector.indexer.generate()
                 affected_plan = selector.plan(args.affected, args.changed, index=index)
-                if resume:
-                    current_revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip()
-                    if args.affected and (affected_plan.get('revisions') or [None, None])[1] != current_revision:
-                        raise ValueError('resume affected selection must end at the current source HEAD')
-                    previous_base = (resume.affected.get('revisions') or [None])[0]
-                    current_base = (affected_plan.get('revisions') or [None])[0]
-                    if current_base != previous_base:
-                        if (not previous_base or not current_base or
-                            subprocess.run(['git', 'merge-base', '--is-ancestor', previous_base, current_base],
-                                           cwd=source, capture_output=True).returncode or
-                            subprocess.run(['git', 'merge-base', '--is-ancestor', current_base, 'HEAD'],
-                                           cwd=source, capture_output=True).returncode):
-                            raise ValueError('resume affected base differs without an ancestor chain')
-                        resume.refresh_native = True
-                    added = selector.plan(changed=resume.changed, index=index)
-                    selected = {c['check']: c for c in affected_plan['checks']}
-                    selected.update((c['check'], c) for c in added['checks'])
-                    affected_plan['checks'] = [selected[n] for n in sorted(selected)]
-                    affected_plan['changed'] = sorted(set(affected_plan.get('changed') or []) | set(resume.changed))
                 indexed = [check for check in affected_plan['checks'] if check['status'] == 'runnable']
                 pending = [check for check in affected_plan['checks'] if check['status'] == 'pending']
                 affected_entries = gate_entries(affected_plan['checks'], index)
@@ -600,8 +369,6 @@ def main(argv=None):
         configured = external_applications(source, paths)
     except (OSError, ValueError, KeyError, TypeError) as error:
         parser.error('invalid external application: ' + str(error))
-    if resume and configured:
-        parser.error('--resume does not support external application state')
     application_checks = {check: name for name, app in configured.items() for check in app['checks']}
     known_checks = (*CORE_CHECKS, *application_checks)
     checks = list(known_checks) if args.full else list(dict.fromkeys(args.check))
@@ -657,50 +424,8 @@ def main(argv=None):
     jobs = 1 if fail_fast else args.jobs
     # Every check, build and configure step runs with this environment; it is
     # recorded in environment.txt. Only the configure steps use cfg.sh.
-    results, timings, executed = {}, [], set()
+    results, timings = {}, []
     guard = threading.Lock()
-    files_error = None
-    try:
-        files = source_files(source)
-    except OSError as error:
-        files, files_error = {}, str(error)
-    artifact_key = resume.record['artifact_key'] if resume else hashlib.sha256(repr(state).encode()).hexdigest()[:16]
-    checkpoint = dict(version=1, source=str(source), state=state, files=files,
-                      selection=selection_identity(args), artifact_key=artifact_key, steps={})
-    if resume:
-        resume.output = output
-        checkpoint['resume_from'] = str(resume.directory)
-
-    def save_step(name, command, script, verdict, artifacts, reuse=None):
-        names = step_inputs(name, script)
-        log = output / (name + '.log')
-        record = dict(command=command, script=script, verdict=verdict, inputs_sha256=identity_hash(input_identity(files, names)),
-            command_files=command_files(command, source),
-            log_sha256=hashlib.sha256(log.read_bytes()).hexdigest(),
-            stable=tree_state(source) == state and files_match(),
-            artifacts={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in artifacts
-                       if p.is_file() and p.name != '.gate-tree-key'})
-        if reuse:
-            record['reused_from'] = dict(gate=str(resume.directory), step=name,
-                                        log_sha256=reuse['log_sha256'], command=reuse['command'])
-        with guard:
-            checkpoint['steps'][name] = record
-            temporary = output / 'checkpoint.json.new'
-            temporary.write_text(json.dumps(checkpoint, indent=1) + '\n')
-            temporary.replace(output / 'checkpoint.json')
-
-    def files_match():
-        try:
-            return source_files(source) == files
-        except OSError:
-            return False
-
-    def step_inputs(name, script):
-        if script:
-            return sorted({'checks/' + script, *index.get(script, {}).get('inputs', [])})
-        if name.startswith(('check-', 'image-', 'indexed-')):
-            return sorted(files)
-        return sorted(p for p in files if not p.startswith('checks/') and p != 'tools/integration-gate.py')
 
     class Stop(Exception):
         """Fail-fast mode ends the gate at the first failed step."""
@@ -721,26 +446,12 @@ def main(argv=None):
         failed = set(re.findall(r'^(?:FAIL|ERROR): (\w+)', log, re.M))
         return bool(failed) and failed <= set(allowed)
 
-    def run(name, command, script=None, timeout=None, artifacts=(), allow_reuse=True):
+    def run(name, command, script=None, timeout=None):
         """Run one step; the result is recorded as PASS, WARN or FAIL."""
         command = [str(value) for value in command]
-        artifacts = list(artifacts)
         with guard:
             with (output / 'commands.txt').open('a') as stream:
                 stream.write(name + ': ' + shlex.join(command) + '\n')
-        eligible = not resume or not resume.refresh_native or (
-            name.startswith('indexed-') and script and index.get(script, {}).get('pure_host'))
-        reused = resume.reusable(name, command, script, step_inputs(name, script), artifacts) if resume and allow_reuse and eligible else None
-        if reused:
-            shutil.copy2(resume.directory / (name + '.log'), output / (name + '.log'))
-            results[name] = 'PASS'
-            save_step(name, command, script, 'PASS', artifacts, reused)
-            note('REUSE PASS ' + name + ' from ' + str(resume.directory))
-            return True
-        if any(str(path) in retained_outputs for path in artifacts):
-            note('FAIL ' + name + ': retained preparation proof changed; original output is preserved')
-            raise Stop
-        executed.add(name)
         started, detail = time.monotonic(), ''
         with (output / (name + '.log')).open('w') as log:
             try:
@@ -759,7 +470,6 @@ def main(argv=None):
             verdict = 'WARN'
             detail = ' (documentation or status-record prose; see ' + name + '.log)'
         results[name] = verdict
-        save_step(name, command, script, verdict, artifacts)
         with guard:
             timings.append((name, elapsed))
         note(verdict + ' ' + name + detail)
@@ -822,7 +532,7 @@ def main(argv=None):
 
     def unchanged(when):
         """The recorded state must be complete and still describe the tree."""
-        if files_error or None in state or tree_state(source) != state or not files_match():
+        if None in state or tree_state(source) != state:
             note('FAIL the source revision, status, diff or untracked files changed or could not be read '
                  + when + '; rerun with a new label')
             return False
@@ -843,9 +553,8 @@ def main(argv=None):
     if not unchanged('between the status check and the lock'):
         return 1
     # An image is built once per tree state: the key names the revision, the tracked diff and the untracked files.
-    tree_key = artifact_key
+    tree_key = hashlib.sha256(repr(state).encode()).hexdigest()[:16]
     recipes, bundles, sessions, fixtures = {}, {}, [], {}
-    retained_outputs = set()
     for check in classified['supplied']:
         for run_ in inputs['checks'][check]['runs']:
             for kind, image in placeholders(run_['args']):
@@ -860,9 +569,7 @@ def main(argv=None):
 
     def mark_built(directory):
         directory.mkdir(parents=True, exist_ok=True)
-        marker = directory / '.gate-tree-key'
-        if not marker.is_file() or marker.read_text() != tree_key:
-            marker.write_text(tree_key)
+        (directory / '.gate-tree-key').write_text(tree_key)
 
     def built_for_tree(directory, artifact):
         marker = Path(directory) / '.gate-tree-key'
@@ -876,38 +583,10 @@ def main(argv=None):
         return directory / ('sunstone-a733-os.elf' if image in VARIANTS else inputs['images'][image]['elf'])
 
     def bundle_file(name):
-        if resume:
-            step = resume.record['steps'].get('bundle-' + name + '-build', {})
-            command = step.get('command', [])
-            if not resume.refresh_native and '--evidence' in command:
-                old = Path(command[command.index('--evidence') + 1]) / 'build/probe.elf'
-                bundle_args = bundles[name]
-                builder, builder_args = ((bundle_args['builder'], bundle_args.get('args', [])) if isinstance(bundle_args, dict)
-                                         else ('apps/board-bundles-power/build-opp.py', bundle_args))
-                wanted = [str(python), builder, *builder_args, '--platform-build', str(build_dir), '--evidence', str(old.parents[1])]
-                step_name = 'bundle-' + name + '-build'
-                if 'central-configure' not in executed and resume.reusable(step_name, wanted, None, step_inputs(step_name, None), [old]):
-                    retained_outputs.add(str(old))
-                    return old
-            suffix = hashlib.sha256(str(output).encode()).hexdigest()[:10]
-            return build_root / ('gate-bundle-' + name + '-' + tree) / ('resume-' + suffix) / 'build/probe.elf'
         return build_root / ('gate-bundle-' + name + '-' + tree) / ('out-' + tree_key) / 'build/probe.elf'
 
     def session_file(image):
-        if resume and not resume.refresh_native:
-            step = resume.record['steps'].get('session-' + image, {})
-            command = step.get('command', [])
-            old = Path(command[-1]) if command else resume.directory / 'evidence/sessions' / (image + '.bin')
-            wanted = [str(python), 'tools/gate_session.py', str(image_file(image)), str(old)]
-            step_name = 'session-' + image
-            if 'img-' + image + '-build' not in executed and resume.reusable(step_name, wanted, None, step_inputs(step_name, None), [old]):
-                retained_outputs.add(str(old))
-                return old
         return evidence / 'sessions' / (image + '.bin')
-
-    def build_artifacts(directory, artifact):
-        return [Path(artifact), Path(directory) / '.gate-tree-key', Path(directory) / 'CMakeCache.txt',
-                Path(directory) / 'compile_commands.json']
 
     def fixture_directory(name):
         return cache / inputs['fixtures'][name]['directory']
@@ -945,8 +624,7 @@ def main(argv=None):
             # Override any external selections supplied by the host configuration. The bundle builders read the compile
             # flags of this build (tools/returning_build.py).
             if run('central-configure', [cfg, source, build_dir, '-DSUNSTONE_APPLICATION=', *core_options,
-                                         *(['-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'] if bundles else [])],
-                   artifacts=[build_dir / 'CMakeCache.txt']):
+                                         *(['-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'] if bundles else [])]):
                 if args.full:
                     discovered = discover('central', build_dir)
                     if discovered is None:
@@ -963,36 +641,34 @@ def main(argv=None):
         for variant in variants:
             directory = build_root / ('gate-os-' + variant + '-' + tree)
             options = [value.replace('{cache}', str(cache)) for value in VARIANTS[variant]]
-            if not resume and built_for_tree(directory, directory / 'sunstone-a733-os.elf'):
+            if built_for_tree(directory, directory / 'sunstone-a733-os.elf'):
                 results['os-' + variant + '-configure'] = results['os-' + variant + '-build'] = 'PASS'
                 note('CACHED os-' + variant + ': built for this tree state (' + tree_key + ')')
                 continue
             if run('os-' + variant + '-configure', [cfg, source, directory,
                    *core_options, '-DSUNSTONE_APPLICATION=', '-DSUNSTONE_A733_OS=ON',
-                   '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', *options], artifacts=[directory / 'CMakeCache.txt']):
-                if run('os-' + variant + '-build', ['cmake', '--build', directory, '--target', 'sunstone-a733-os', '-j', '12'],
-                       artifacts=build_artifacts(directory, directory / 'sunstone-a733-os.elf')):
+                   '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', *options]):    # the image checks read each build's compile flags
+                if run('os-' + variant + '-build', ['cmake', '--build', directory, '--target', 'sunstone-a733-os', '-j', '12']):
                     mark_built(directory)
             else:
                 skip('os-' + variant + '-build', 'os-' + variant + '-configure did not pass')
         for image, recipe in recipes.items():
             directory = image_directory(image)
-            if not resume and built_for_tree(directory, image_file(image)):
+            if built_for_tree(directory, image_file(image)):
                 results['img-' + image + '-configure'] = results['img-' + image + '-build'] = 'PASS'
                 note('CACHED img-' + image + ': built for this tree state (' + tree_key + ')')
                 continue
             flags = [value.replace('{source}', str(source)).replace('{cache}', str(cache)) for value in recipe['configure']]
             if run('img-' + image + '-configure', [cfg, source, directory, *core_options, '-DSUNSTONE_A733_OS=ON',
-                                                   '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', *flags], artifacts=[directory / 'CMakeCache.txt']):
+                                                   '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', *flags]):
                 if run('img-' + image + '-build', ['cmake', '--build', directory, '--target',
-                                                  *([recipe['target']] if isinstance(recipe['target'], str) else recipe['target']), '-j', '12'],
-                       artifacts=build_artifacts(directory, image_file(image))):
+                                                  *([recipe['target']] if isinstance(recipe['target'], str) else recipe['target']), '-j', '12']):
                     mark_built(directory)
             else:
                 skip('img-' + image + '-build', 'img-' + image + '-configure did not pass')
         for name, bundle_args in bundles.items():
             output_dir = bundle_file(name).parents[1]
-            if not resume and bundle_file(name).is_file():
+            if bundle_file(name).is_file():
                 results['bundle-' + name + '-build'] = 'PASS'
                 note('CACHED bundle-' + name + ': built for this tree state (' + tree_key + ')')
             elif results.get('central-configure') != 'PASS':
@@ -1003,18 +679,13 @@ def main(argv=None):
                 builder, builder_args = ((bundle_args['builder'], bundle_args.get('args', [])) if isinstance(bundle_args, dict)
                                          else ('apps/board-bundles-power/build-opp.py', bundle_args))
                 run('bundle-' + name + '-build', [python, builder, *builder_args,
-                                                   '--platform-build', build_dir, '--evidence', output_dir], artifacts=[bundle_file(name)])
+                                                   '--platform-build', build_dir, '--evidence', output_dir])
         for name, recipe in fixtures.items():
             # Idempotent: a fixture that is current is left alone, one that a cache cleanup deleted is rebuilt.
-            directory = fixture_directory(name)
-            artifacts = sorted(p for p in directory.rglob('*') if p.is_file()) if directory.is_dir() else []
-            if not artifacts:
-                artifacts = [directory]  # Missing fixture data cannot reuse a PASS.
-            run('fixture-' + name, [python, *[value.replace('{directory}', str(directory)) for value in recipe['build']]], artifacts=artifacts)
+            run('fixture-' + name, [python, *[value.replace('{directory}', str(fixture_directory(name))) for value in recipe['build']]])
         for image in sessions:
             if results.get('img-' + image + '-build') == 'PASS':
-                run('session-' + image, [python, 'tools/gate_session.py', image_file(image), session_file(image)],
-                    artifacts=[session_file(image)])
+                run('session-' + image, [python, 'tools/gate_session.py', image_file(image), session_file(image)])
             else:
                 skip('session-' + image, 'img-' + image + '-build did not pass')
         for name in (configured if args.full else applications):
@@ -1081,8 +752,7 @@ def main(argv=None):
             if missing:
                 skip(task['name'], ', '.join(missing) + ' did not pass')
             else:
-                run(task['name'], task['command'], task['script'], args.check_timeout,
-                    allow_reuse=not any(need in executed for need in task['needs']))
+                run(task['name'], task['command'], task['script'], args.check_timeout)
 
         def wait_for_memory(name):
             deadline, announced = time.monotonic() + args.memory_wait, False
@@ -1126,26 +796,9 @@ def main(argv=None):
             run_group([t for t in tasks if t['serial']], 1)
         return time.monotonic() - started
 
-    environment_text = (
+    (output / 'environment.txt').write_text(
         ''.join(key + '=' + env[key] + '\n' for key in ('PATH', 'SUNSTONEOS_DIR', 'PYTHONDONTWRITEBYTECODE', 'TMPDIR') if key in env) +
         'cwd=' + str(source) + '\nstdin=/dev/null\nconfigure steps run ' + str(cfg) + '; checks do not source it\n')
-    (output / 'environment.txt').write_text(environment_text)
-    if resume:
-        try:
-            if environment_text != resume.environment or files != resume.current:
-                raise ValueError('resume environment or source changed during admission')
-            resume.admit(index, [build_dir, *application_builds.values(),
-                                *[image_directory(n) for n in [*variants, *recipes]]])
-            if resume.refresh_native:
-                artifact_key = tree_key = hashlib.sha256(repr(state).encode()).hexdigest()[:16]
-                checkpoint['artifact_key'] = artifact_key
-                checkpoint['native_refreshed'] = True
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            note('REFUSED resume: ' + str(error))
-            return 2
-        note('resume: ' + str(resume.directory) + '; only verified PASS steps may be reused')
-        if resume.refresh_native:
-            note('resume: native/configuration changes refresh all preparation and image/core checks')
     note('mode: ' + ('fail-fast' if fail_fast else 'keep-going, %d parallel checks, memory guard %g GiB'
                      % (jobs, args.min_available_gb)) + (', strict documentation checks' if args.strict_docs else ''))
     try:
@@ -1171,10 +824,6 @@ def main(argv=None):
         (output / 'gate-record.json').write_text(json.dumps({'tree': tree_hash, 'base': affected_plan['revisions'][0], 'checks': {
             name: index[name].get('inputs', []) for name in selected if name in index}}, indent=1) + '\n')
     note('PASS selected integration checks; unselected behavior is not revalidated')
-    if resume:
-        note('retention: resumed gate preserves the original evidence and shared preparation artifacts')
-        record_peak()
-        return 0
     # A passing gate removes its own bulky outputs and those of earlier gates of the same landing (tools/clean-generated.py).
     record_peak()
     try:
