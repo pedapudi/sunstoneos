@@ -10,12 +10,19 @@ runs 512 MiB and derives its guard from the session deadline), over a file-backe
   read-back  mode 3 on the fast image: status 0 and no mismatches; on the slow image: status 12 (the file is short);
   extent     mode 10 on a fresh image: the candidate lands on its extent below the partition and reads back equal, nothing else changes, and an extent
              that differs from the blob's single write range, a partial sector, two write ranges or an extent reaching the partition write nothing;
+  fresh      (fresh_format_cases) mode 9 with a new volume range inside a 1.1 GiB image's partition: a target outside the partition, or under the FAT32 cluster minimum,
+             writes nothing; otherwise `fsck.fat -n` is clean at the volume's offset, the BPB equals `mkfs.fat -F 32 -s 32 -R 32 -a -h FIRST`, only the boot, FSInfo, backup
+             boot, backup FSInfo, both FATs and the root cluster are written (the boot sector last) and nothing outside the volume changes; mode 0 then creates the file once
+             sector 0 points at the volume. Mode 10 at sector 0 writes an MBR that moves the partition to the volume and mounts it there; an MBR pointing at an unformatted area
+             fails at the mount (status 5), an MBR with no FAT32 entry at status 4, a sector 0 write the card drops at status 13, a write elsewhere that changes sector 0 at status 15;
+  slot       (boot_slot_case) mode 10 with one boot slot of 40,960 sectors writes and reads back equal, and the manifest's mode region is the header plus those sectors;
   format     mode 9 on the whole-file image (a scratch card's restore): status 0, `fsck.fat -n` clean, the file and its directory gone, the whole partition outside the
              FATs, the boot sector's label and the FSInfo counts the only other writes, the geometry kept; the region file then created again by mode 0, whole and equal to the stream.
 """
 import argparse
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import shutil
 import struct
@@ -45,10 +52,10 @@ def stream(n):
     return bytes(out[:n])
 
 
-def make_image(path):
+def make_image(path, base=BASE, part=PART):
     with open(path, 'wb') as f:
-        f.truncate((BASE + PART) * 512)
-    subprocess.run(['/usr/sbin/mkfs.fat', '-F', '32', '-s', '2', '-n', 'SUNSTONE', '--offset', str(BASE), str(path), str(PART // 2)],
+        f.truncate((base + part) * 512)
+    subprocess.run(['/usr/sbin/mkfs.fat', '-F', '32', '-s', '2', '-n', 'SUNSTONE', '--offset', str(base), str(path), str(part // 2)],
                    check=True, capture_output=True)
 
 
@@ -64,11 +71,13 @@ def fsck(image):
     return r
 
 
-def fsck_clean(image):
+def fsck_clean(image, base=BASE, sectors=PART):
     # fsck.fat reads a whole-image volume, so cut the partition out into its own file.
     part = Path(str(image) + '.part')
     with open(image, 'rb') as s, open(part, 'wb') as d:
-        s.seek(BASE * 512); d.write(s.read(PART * 512))
+        s.seek(base * 512)
+        for _ in range(0, sectors, 16384):
+            d.write(s.read(min(16384, sectors - _) * 512))
     r = subprocess.run([fat.FSCK, '-n', str(part)], capture_output=True, text=True)
     assert r.returncode == 0, f'fsck.fat -n on {image}: {r.stdout}{r.stderr}'
     return r.stdout
@@ -196,6 +205,8 @@ def main():
     d7 = run(fast, odd_img, 5, out / 'append-absent.result', 0)
     assert d7['status'] == 7, d7                                  # no file: E_OPEN, nothing written
     extent_cases(fast, out)
+    fresh_format_cases(fast, out)
+    boot_slot_case(fast, out)
     print(f"PASS storage-write guard: stopped at {d['written_bytes']} of {FILE} bytes, file closed at {synced} bytes, fsck clean, "
           f"stream prefix intact; fast run whole and clean; read-back status {d3['status']} and {d4['status']}")
 
@@ -232,7 +243,7 @@ def extent_cases(binary, out):
     assert after[16 * 512:497 * 512] == candidate, 'the extent does not hold the candidate'
     assert after[:16 * 512] == before[:16 * 512] and after[497 * 512:] == before[497 * 512:], 'a sector outside the extent changed'
     fsck_clean(image)
-    assert host.failures(dict(d, extent=dict(d['extent'], sector0_unchanged=False)), want)
+    assert host.failures(dict(d, extent=dict(d['extent'], sector0_expected=False)), want)
     assert host.failures(d, '0' * 64) and host.failures(dict(d, mismatches=1), want)
     for name, bounds_blob, mode_input in (
             ('extent-shifted', blob([(16, 481)]), host.extent_input(17, candidate)),
@@ -243,6 +254,171 @@ def extent_cases(binary, out):
         d = run10(clean, name, bounds_blob, mode_input)
         assert d['status'] == 14 and d['written_bytes'] == 0, (name, d['status'], d['written_bytes'])
         assert clean.read_bytes() == after, name + ' changed the card'
+
+
+FIRST, COUNT = 139264, 2_200_000          # the new volume, 32 sectors per cluster: 68,7xx clusters, just above the FAT32 minimum
+END = FIRST + COUNT
+OLD_BASE, OLD_PART = 2048, END - 2048     # the card's present partition, which ends where the new volume ends
+SPEC = importlib.util.spec_from_file_location('storage_bounds_modes', ROOT / 'tools/storage_bounds.py')
+SB = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(SB)
+CID = '2750485344333247120000029d014c47'
+
+
+def mbr(first, count, signature=True):
+    sector = bytearray(512)
+    sector[446 + 4] = 0x0c
+    struct.pack_into('<II', sector, 446 + 8, first, count)
+    if signature:
+        sector[510:512] = b'\x55\xaa'
+    return bytes(sector)
+
+
+def run_model(binary, image, base, sectors, mode, name, out, mode_input=None, bounds=None, env=None, delay=0):
+    """One run of the model; returns (decoded result, write calls as (sector, count), read calls). Every run gets its own logs."""
+    logs = {k: out / f'{name}.{k}.log' for k in ('write', 'read')}
+    for log in logs.values():
+        log.unlink(missing_ok=True)
+    extra = {'WRITE_LOG': str(logs['write']), 'READ_LOG': str(logs['read']), **(env or {})}
+    if mode_input is not None:
+        (out / f'{name}.mode').write_bytes(mode_input); extra['MODE_INPUT'] = str(out / f'{name}.mode')
+    if bounds is not None:
+        (out / f'{name}.bounds').write_bytes(bounds); extra['BOUNDS'] = str(out / f'{name}.bounds')
+    r = subprocess.run([str(binary), str(image), str(base), str(sectors), str(mode), str(out / f'{name}.result'), str(delay)],
+                       capture_output=True, text=True, env={**harness.environment(), **extra})
+    assert r.returncode == 0, f'{name}: model exited {r.returncode}: {r.stdout}{r.stderr}'
+    calls = lambda log: [tuple(int(x) for x in line.split()) for line in log.read_text().splitlines()] if log.exists() else []
+    return host.decode((out / f'{name}.result').read_bytes()), calls(logs['write']), calls(logs['read'])
+
+
+def sectors_of(calls):
+    return {s + i for s, n in calls for i in range(n)}
+
+
+def differing_sectors(a, b):
+    """The sectors at which two equal-length card images differ."""
+    changed = set()
+    step = 1 << 14
+    with open(a, 'rb') as fa, open(b, 'rb') as fb:
+        sector = 0
+        while True:
+            x, y = fa.read(step * 512), fb.read(step * 512)
+            if not x:
+                return changed
+            if x != y:
+                changed |= {sector + i for i in range(len(x) // 512) if x[i * 512:(i + 1) * 512] != y[i * 512:(i + 1) * 512]}
+            sector += step
+
+
+def copy_image(src, dst):
+    subprocess.run(['cp', '--sparse=always', str(src), str(dst)], check=True)
+
+
+def fresh_format_cases(binary, out):
+    """Mode 9 with a new volume range, and the mode 10 MBR write that makes it the partition."""
+    work = out / 'fresh'; work.mkdir(exist_ok=True)
+    pristine, image = work / 'pristine.img', work / 'fresh.img'
+    make_image(pristine, OLD_BASE, OLD_PART)
+    copy_image(pristine, image)
+
+    # a target that is not wholly inside the MBR partition writes nothing and reports status 14
+    for name, first, count in (('below', OLD_BASE - 1, COUNT), ('past-end', FIRST, COUNT + 1), ('no-count', FIRST, 0), ('huge', FIRST, 1 << 40), ('wrapped', (1 << 64) - 8, 16)):
+        d, writes, _ = run_model(binary, image, OLD_BASE, OLD_PART, 9, 'refuse-' + name, work, host.format_input(first, count))
+        assert d['status'] == 14 and d['detail'] == 1 and d['written_bytes'] == 0 and not writes, (name, d['status'], d['detail'], writes[:3])
+    d, writes, _ = run_model(binary, image, OLD_BASE, OLD_PART, 9, 'refuse-small', work, host.format_input(FIRST, 1 << 20))      # 32,768 clusters: not FAT32
+    assert d['status'] == 14 and d['detail'] == 2 and not writes, d
+    assert not differing_sectors(pristine, image), 'a refused format changed the card'
+
+    # the new volume: fsck clean at its offset, only the allowed sectors written, nothing outside it changed, the boot sector written last
+    d, writes, _ = run_model(binary, image, OLD_BASE, OLD_PART, 9, 'format', work, host.format_input(FIRST, COUNT))
+    assert d['status'] == 0 and d['written_bytes'] > 0 and not host.failures(d), d
+    fatsz = -(-(COUNT - 32) // 4097)
+    allowed = {FIRST, FIRST + 1, FIRST + 6, FIRST + 7} | set(range(FIRST + 32, FIRST + 32 + 2 * fatsz + 32))
+    written = sectors_of(writes)
+    assert written <= allowed and {FIRST, FIRST + 1, FIRST + 6, FIRST + 7} <= written, sorted(written - allowed)[:8]
+    assert writes[-1] == (FIRST, 1) and all(w[0] != FIRST for w in writes[:-1]), 'the boot sector is not the last write'
+    assert (FIRST + 6, 1) in writes and (FIRST + 7, 1) in writes and (FIRST + 1, 1) in writes
+    changed = differing_sectors(pristine, image)
+    assert changed and changed <= written, sorted(changed - written)[:8]
+    assert not any(s < FIRST or s >= END for s in changed), 'a sector outside the new volume changed'
+    fsck_clean(image, FIRST, COUNT)
+    raw = image.read_bytes()
+    sector = lambda n: raw[(FIRST + n) * 512:(FIRST + n + 1) * 512]
+    assert sector(6) == sector(0) and sector(7) == sector(1) and sector(0)[510:512] == b'\x55\xaa'
+    assert struct.unpack_from('<I', sector(0), 28)[0] == FIRST and struct.unpack_from('<I', sector(0), 32)[0] == COUNT
+    # the boot sector's geometry is mkfs.fat -F 32 -s 32 -R 32 -h FIRST (BPB, extended fields and file system type; the jump, OEM name and boot code differ)
+    reference = work / 'reference.img'
+    with open(reference, 'wb') as f:
+        f.truncate(COUNT * 512)
+    subprocess.run(['/usr/sbin/mkfs.fat', '-F', '32', '-s', '32', '-R', '32', '-a', '-h', str(FIRST), '-i', '57534f53', str(reference), str(COUNT // 2)],
+                   check=True, capture_output=True)
+    with open(reference, 'rb') as f:
+        ref = f.read(512)
+    assert ref[11:90] == sector(0)[11:90], (ref[11:90].hex(), sector(0)[11:90].hex())
+
+    # mode 0 creates the region test file once sector 0 points at the new volume (the MBR write is simulated by patching sector 0)
+    with open(image, 'r+b') as f:
+        f.write(mbr(FIRST, COUNT))
+    d, _, _ = run_model(binary, image, FIRST, COUNT, 0, 'create', work)
+    assert d['status'] == 0 and d['written_bytes'] == FILE, d
+    data = fat.Volume(image, FIRST).file(PATH)
+    assert data == stream(FILE), 'the file on the new volume differs from the stream'
+    fsck_clean(image, FIRST, COUNT)
+
+    # mode 10 writes sector 0: an MBR that moves the partition to the new volume, then mounts it (the reads show the mount at FIRST and not at the old start)
+    formatted = work / 'formatted.img'
+    copy_image(pristine, formatted)
+    d, _, _ = run_model(binary, formatted, OLD_BASE, OLD_PART, 9, 'format-again', work, host.format_input(FIRST, COUNT))
+    assert d['status'] == 0, d
+    candidate = mbr(FIRST, COUNT)
+    bounds = SB.encode_input([(0, 1)], [(0, 1), (16, 496)], '00' * 32, CID)
+    d, writes, reads = run_model(binary, formatted, OLD_BASE, OLD_PART, 10, 'mbr', work, host.extent_input(0, candidate), bounds)
+    assert d['status'] == 0 and not host.failures(d, hashlib.sha256(candidate).hexdigest()) and d['extent']['sector0_expected'], d
+    assert writes == [(0, 1)] and formatted.read_bytes()[:512] == candidate, 'the MBR write wrote more than sector 0, or not the candidate'
+    assert (FIRST, 1) in reads and all(r[0] != OLD_BASE for r in reads), 'the mount did not use the new partition entry'
+    # an MBR candidate that points at an unformatted area fails at the mount with status 5 (the detail is the mount's error), after the MBR is written
+    stale = work / 'stale.img'; copy_image(pristine, stale)
+    nowhere = mbr(1_500_000, 600_000)
+    d, writes, _ = run_model(binary, stale, OLD_BASE, OLD_PART, 10, 'mbr-unformatted', work, host.extent_input(0, nowhere), bounds)
+    assert d['status'] == 5 and d['detail'] != 0 and d['mismatches'] == 0 and host.failures(d), d
+    assert writes == [(0, 1)] and stale.read_bytes()[:512] == nowhere
+    # an MBR without a FAT32 entry fails with status 4
+    d, _, _ = run_model(binary, stale, OLD_BASE, OLD_PART, 10, 'mbr-none', work, host.extent_input(0, bytes(510) + b'\x55\xaa'), bounds)
+    assert d['status'] == 4 and host.failures(d), d
+    # an extent at sector 0 whose read-back differs (the card keeps the old sector) fails on the mismatch and on sector 0
+    kept = work / 'kept.img'; copy_image(pristine, kept)
+    d, writes, _ = run_model(binary, kept, OLD_BASE, OLD_PART, 10, 'mbr-dropped', work, host.extent_input(0, candidate), bounds, env={'DROP_SECTOR0': '1'})
+    assert d['status'] == 13 and d['mismatches'] > 0 and not d['extent']['sector0_expected'] and host.failures(d), d
+    # an extent elsewhere must leave sector 0 as it was: a write that also changes sector 0 is status 15
+    other = bytes(range(256)) * 2
+    d, _, _ = run_model(binary, kept, OLD_BASE, OLD_PART, 10, 'sector0-clobbered', work, host.extent_input(16, other),
+                        SB.encode_input([(16, 1)], [(0, 1), (16, 496)], '00' * 32, CID), env={'CLOBBER_SECTOR0': '1'})
+    assert d['status'] == 15 and not d['extent']['sector0_expected'] and host.failures(d), d
+
+
+def boot_slot_case(binary, out):
+    """Mode 10 with one boot slot: 40,960 sectors (20 MiB) below the partition write and read back equal; the mode region of the manifest holds them."""
+    work = out / 'slot'; work.mkdir(exist_ok=True)
+    base, part = 65536, 262144
+    image = work / 'slot.img'; make_image(image, base, part)
+    candidate = bytes((i * 7 + (i >> 9) * 3) & 0xff for i in range(40960 * 512))
+    first = 16
+    mode_input = host.extent_input(first, candidate)
+    manifest = json.loads((ROOT / 'apps/storage-write-test/manifest.json').read_text())
+    region = next(r for r in manifest['regions'] if r['name'] == 'mode')
+    assert region['bytes'] == len(mode_input) == 512 + 40960 * 512, (region['bytes'], len(mode_input))
+    try:
+        host.extent_input(first, candidate + bytes(512))
+        raise AssertionError('a candidate longer than the mode region was accepted')
+    except ValueError:
+        pass
+    before = image.read_bytes()
+    d, writes, _ = run_model(binary, image, base, part, 10, 'slot', work, mode_input, SB.encode_input([(first, 40960)], [(0, 1), (16, 496)], '00' * 32, CID))
+    want = hashlib.sha256(candidate).hexdigest()
+    assert d['status'] == 0 and not host.failures(d, want) and d['written_bytes'] == len(candidate) and d['extent']['readback_sha256'] == want, d
+    after = image.read_bytes()
+    assert after[first * 512:(first + 40960) * 512] == candidate and after[:first * 512] == before[:first * 512] and after[(first + 40960) * 512:] == before[(first + 40960) * 512:]
+    assert sectors_of(writes) == set(range(first, first + 40960))
+    fsck_clean(image, base, part)
 
 
 if __name__ == '__main__':

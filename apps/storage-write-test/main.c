@@ -17,15 +17,24 @@
  *   8  interruption, lifetime 2: mount with recovery (the writer is enabled), report what recovery did, read the interrupted file back against the
  *      stream up to the size the volume holds, and report the size of PATH (written_bytes), which must be unchanged;
  *   2  read back the file at PATH against the stream and report (read-only open);
- *   9  format the card's FAT32 partition in place (scratch cards only; the bounds admit writes inside the partition and nothing else): zero both FATs and the root
- *      cluster, set FAT entries 0 to 2, rewrite the FSInfo sector. The boot sector and the geometry are kept. written_bytes is the bytes zeroed; no file is created.
+ *   9  format a FAT32 volume (scratch cards only; the bounds admit writes inside the partition and nothing else): zero both FATs and the root
+ *      cluster, set FAT entries 0 to 2, rewrite the FSInfo sector. written_bytes is the bytes zeroed; no file is created. With bytes 16..31 of the mode input zero
+ *      the volume is the MBR partition and its boot sector and geometry are kept. With a nonzero (u64 first sector, u64 sector count) there instead, a new
+ *      volume is created at exactly that range, which must lie wholly inside the MBR's FAT32 partition (status 14 and nothing written otherwise) and hold at
+ *      least 65,525 clusters: the geometry of `mkfs.fat -F 32 -s 32 -R 32 -h first` (512-byte sectors, 32 sectors per cluster, 32 reserved sectors, two FATs
+ *      sized by the Microsoft formula, root cluster 2, FSInfo at 1, backup boot sector at 6 and backup FSInfo at 7, label "NO NAME"). The FATs and the root
+ *      cluster are written first, the FSInfo sectors and the backup boot sector next and the boot sector last, so an interrupted run leaves no valid-looking volume.
+ *      The new volume is then mounted and unmounted at `first`. The MBR is not changed; a later mode 10 write of sector 0 points the partition at it.
  *  10  write one raw extent below the partition (the boot-area class of tools/storage_bounds.py): the mode input is a 512-byte header (u32 10, u32 0,
- *      u64 first sector) followed by the candidate sectors. The extent must equal the blob's single write range, or nothing is written (status 14).
- *      The OS re-reads the blob's backup ranges before the first write. The application writes the extent in ascending pieces from the flush region,
- *      reads it back, compares it with the candidate, re-reads sector 0, then mounts and unmounts the FAT32 partition without writing so a raw write
- *      ends at a validated filesystem point. Result: written_bytes the bytes written, flushes the pieces, flush_ticks and read_ticks the write and
- *      read-back times, mismatches and first_mismatch the read-back comparison, volume_size 1 when sector 0 read the same before and after, and the
- *      histogram words 0..7 the read-back SHA-256 and 8..15 the candidate's SHA-256, both computed on the board.
+ *      u64 first sector) followed by the candidate sectors, up to one boot slot of 40,960 sectors. The extent must equal the blob's single write range, or
+ *      nothing is written (status 14). The OS re-reads the blob's backup ranges before the first write. The application writes the extent in ascending
+ *      pieces from the flush region, reads it back, compares it with the candidate and re-reads sector 0. An extent that does not start at sector 0 must
+ *      leave sector 0 as it was; an extent that starts at sector 0 (an MBR write) must leave sector 0 equal to the candidate's first sector (status 15
+ *      otherwise). The application then re-reads the MBR, so a new partition entry takes effect, and mounts and unmounts that FAT32 partition without writing,
+ *      so a raw write ends at a validated filesystem point (status 4 when the MBR no longer holds exactly one FAT32 entry, 5 when the mount fails).
+ *      Result: written_bytes the bytes written, flushes the pieces, flush_ticks and read_ticks the write and read-back times, mismatches and first_mismatch
+ *      the read-back comparison, volume_size 1 when sector 0 read as expected (see above), and the histogram words 0..7 the read-back SHA-256 and 8..15
+ *      the candidate's SHA-256, both computed on the board.
  * The result (512 bytes) carries the write rate, the flush latency percentiles, the wear counters, the owner task's busy
  * time, and the measured CPU clock. Rates are figures only for an image at the approved top operating points. */
 #include "storage_write-app.h"
@@ -211,7 +220,7 @@ static void finish_report(void)
 }
 #define E_MISMATCH 13
 #define E_EXTENT 14        /* mode 10: the extent is not the blob's single write range, or the candidate is not whole sectors; nothing written */
-#define E_SECTOR0 15       /* mode 10: sector 0 read differently after the write */
+#define E_SECTOR0 15       /* mode 10: sector 0 read differently from what the extent implies (unchanged, or the candidate's first sector) */
 enum { OK = 0, E_BOUNDS = 1, E_REGION = 2, E_DEVICE = 3, E_MBR = 4, E_MOUNT = 5, E_DIR = 6, E_OPEN = 7, E_WRITE = 8, E_CLOSE = 9, E_READ = 10, E_TIMEOUT = 11, E_SIZE = 12 };
 
 static uint32_t flush_ticks[MAX_FLUSHES];
@@ -312,6 +321,7 @@ static void collect(void)
 }
 
 static uint32_t le32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
+static uint64_t le64(const uint8_t *p) { uint64_t v = 0; for (unsigned i = 0; i < 8; ++i) v |= (uint64_t)p[i] << (8 * i); return v; }
 static void put32(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24); }
 
 /* Zero `count` sectors from `first` with the flush buffer; returns 1 on success. */
@@ -327,11 +337,38 @@ static int zero_sectors(uint64_t first, uint64_t count)
     return 1;
 }
 
-/* Mode 9: reformat the FAT32 partition at base (scratch cards). Returns 0, or an error status with r.detail set. */
-static int format_partition(uint64_t base, uint64_t sectors)
+#define FRESH_RESERVED 32u
+#define FRESH_SPC 32u
+#define FRESH_BACKUP_BOOT 6u
+#define FRESH_FSINFO 1u
+#define FRESH_VOLUME_ID 0x57534f53u
+/* The boot sector of a new FAT32 volume of `count` sectors that starts at sector `first`: the geometry of mkfs.fat -F 32 -s 32 -R 32 -h first.
+ * Returns 0, or 2 when the volume is too small to be FAT32 (fewer than 65,525 clusters) or too large for 32-bit fields. */
+static int fresh_boot_sector(uint8_t *boot, uint64_t first, uint64_t count)
+{
+    if (first > 0xffffffffu || count > 0xffffffffu || count <= FRESH_RESERVED) return 2;
+    uint64_t fatsz = (count - FRESH_RESERVED + (256u * FRESH_SPC + 2u) / 2u - 1u) / ((256u * FRESH_SPC + 2u) / 2u);   /* Microsoft's FAT32 formula for two FATs */
+    uint64_t data = FRESH_RESERVED + 2 * fatsz;
+    if (count <= data || (count - data) / FRESH_SPC < 65525u) return 2;
+    memset(boot, 0, 512);
+    boot[0] = 0xeb; boot[1] = 0x58; boot[2] = 0x90; memcpy(boot + 3, "SUNSTONE", 8);
+    boot[11] = 0; boot[12] = 2; boot[13] = FRESH_SPC; boot[14] = FRESH_RESERVED; boot[16] = 2; boot[21] = 0xf8;
+    boot[24] = 63; boot[26] = 64;                                     /* the nominal geometry mkfs.fat writes; the card is addressed by LBA */
+    put32(boot + 28, (uint32_t)first); put32(boot + 32, (uint32_t)count); put32(boot + 36, (uint32_t)fatsz);
+    put32(boot + 44, 2); boot[48] = FRESH_FSINFO; boot[50] = FRESH_BACKUP_BOOT;
+    boot[64] = 0x80; boot[66] = 0x29; put32(boot + 67, FRESH_VOLUME_ID);
+    memcpy(boot + 71, "NO NAME    ", 11); memcpy(boot + 82, "FAT32   ", 8);
+    boot[510] = 0x55; boot[511] = 0xaa;
+    return 0;
+}
+
+/* Mode 9: reformat the FAT32 partition at base (scratch cards), or, when count is nonzero, create a new volume at [base, base + count) with a fresh boot
+ * sector (the caller has checked that it lies inside the MBR partition). Returns 0, or an error status with r.detail set. */
+static int format_partition(uint64_t base, uint64_t sectors, int fresh)
 {
     static uint8_t boot[512] __attribute__((aligned(64)));
-    if (device.read(device.context, base, 1, boot) != 1 || boot[510] != 0x55 || boot[511] != 0xaa) return E_MOUNT;
+    if (fresh) { int bad = fresh_boot_sector(boot, base, sectors); if (bad) { r.detail = (uint64_t)bad; return E_EXTENT; } }
+    else if (device.read(device.context, base, 1, boot) != 1 || boot[510] != 0x55 || boot[511] != 0xaa) return E_MOUNT;
     uint32_t bps = boot[11] | boot[12] << 8, spc = boot[13], reserved = boot[14] | boot[15] << 8, nfats = boot[16], fat16 = boot[22] | boot[23] << 8;
     uint32_t fatsz = le32(boot + 36), root = le32(boot + 44), fsinfo = boot[48] | boot[49] << 8;
     uint64_t data = (uint64_t)reserved + (uint64_t)nfats * fatsz;
@@ -353,7 +390,9 @@ static int format_partition(uint64_t base, uint64_t sectors)
         uint32_t total = le32(boot + 32), clusters = total > data ? (uint32_t)((total - data) / spc) : 0;
         put32(scratch, 0x41615252u); put32(scratch + 484, 0x61417272u); put32(scratch + 488, clusters - 1); put32(scratch + 492, 3); put32(scratch + 508, 0xaa550000u);   /* the root cluster is the only one in use */
         if (device.write(device.context, base + fsinfo, 1, scratch) != 1) { r.detail = 17; return E_WRITE; }
+        if (fresh && device.write(device.context, base + FRESH_BACKUP_BOOT + 1, 1, scratch) != 1) { r.detail = 19; return E_WRITE; }
     }
+    if (fresh && device.write(device.context, base + FRESH_BACKUP_BOOT, 1, boot) != 1) { r.detail = 20; return E_WRITE; }
     memcpy(boot + 71, "NO NAME    ", 11);                           /* the volume label entry went with the root cluster */
     if (device.write(device.context, base, 1, boot) != 1) { r.detail = 18; return E_WRITE; }
     r.written_bytes = zeroed;
@@ -362,7 +401,6 @@ static int format_partition(uint64_t base, uint64_t sectors)
 
 /* Mode 10: the header's extent, checked against the blob's single write range (SSBW0003: magic, write count, backup count, digest, ranges, CID). */
 #define EXTENT_HEADER 512u
-static uint64_t le64(const uint8_t *p) { uint64_t v = 0; for (unsigned i = 0; i < 8; ++i) v |= (uint64_t)p[i] << (8 * i); return v; }
 static int extent_of(const struct ss_span *bounds, const struct ss_span *mode, uint64_t *first, uint64_t *count)
 {
     const uint8_t *b = bounds->base, *m = mode->base;
@@ -404,7 +442,7 @@ static int write_extent(const uint8_t *candidate, uint64_t first, uint64_t count
     sha256_end(&got, (uint8_t *)r.histogram);
     r.read_ticks = ss_counter_ticks() - w1;
     if (device.read(device.context, 0, 1, sector0[1]) != 1) { r.detail = 0; return E_READ; }
-    r.volume_size = !memcmp(sector0[0], sector0[1], 512);
+    r.volume_size = !memcmp(first == 0 ? candidate : sector0[0], sector0[1], 512);      /* an MBR write must leave the candidate's first sector there */
     if (r.mismatches) return E_MISMATCH;
     return r.volume_size ? OK : E_SECTOR0;
 }
@@ -459,7 +497,11 @@ void storage_write_main(const struct ss_grant *grant)
     guard_set(grant);
     uint64_t t_start = ss_counter_ticks();
     if (mode_id == 9) {
-        r.status = (uint64_t)format_partition(base, sectors);
+        uint64_t first = mode->bytes >= 32 ? le64(m + 16) : 0, count = mode->bytes >= 32 ? le64(m + 24) : 0;
+        const int fresh = first || count;
+        if (!fresh) r.status = (uint64_t)format_partition(base, sectors, 0);
+        else if (!count || first < base || first - base > sectors || count > sectors - (first - base)) { r.status = E_EXTENT; r.detail = 1; }   /* inside the partition only */
+        else { base = first; sectors = count; r.status = (uint64_t)format_partition(base, sectors, 1); }
         /* Raw writes have no filesystem proof until mount and clean unmount validate them. */
         if (r.status == OK) {
             int verified = mount(base, sectors);
@@ -473,10 +515,13 @@ void storage_write_main(const struct ss_grant *grant)
         if (extent_first + extent_count > base) r.status = E_EXTENT;               /* below the partition only */
         else r.status = (uint64_t)write_extent((const uint8_t *)mode->base + EXTENT_HEADER, extent_first, extent_count);
         memcpy(hashes, r.histogram, sizeof hashes);
-        /* Raw writes have no filesystem proof until mount and clean unmount validate them. */
-        int verified = mount(base, sectors);
-        if (verified) { if (!r.status) { r.status = E_MOUNT; r.detail = (uint64_t)-verified; } }
-        else if ((verified = fwr_unmount(&volume)) && !r.status) { r.status = E_CLOSE; r.detail = (uint64_t)-verified; }
+        /* Raw writes have no filesystem proof until mount and clean unmount validate them. An MBR write may have moved the partition, so the entry is read again. */
+        if (!mbr_partition(&base, &sectors)) { if (!r.status) r.status = E_MBR; }
+        else {
+            int verified = mount(base, sectors);
+            if (verified) { if (!r.status) { r.status = E_MOUNT; r.detail = (uint64_t)-verified; } }
+            else if ((verified = fwr_unmount(&volume)) && !r.status) { r.status = E_CLOSE; r.detail = (uint64_t)-verified; }
+        }
         collect(); memcpy(r.histogram, hashes, sizeof hashes);                    /* the hashes replace the wear histogram, which raw writes do not fill */
         r.total_ticks = ss_counter_ticks() - t_start; finish_report();
     }
