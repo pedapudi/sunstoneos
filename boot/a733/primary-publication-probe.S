@@ -1,5 +1,6 @@
 // Observe the complete image's primary preparation before GIC or CPU release.
 // The builder replaces only the caller's BL, retaining the production callee.
+#include "a733_cpu_reset.h"
 .arch armv8-a
 .section .text,"ax"
 .global primary_publication_probe, primary_publication_return, primary_publication_park
@@ -124,10 +125,8 @@ primary_publication_return:
     mov w1, #0x20
     str w1, [x0]
     str wzr, [x0, #4]
-    dsb sy
     mov x0, #2
-    msr rmr_el3, x0
-    isb
+    A733_CPU_RESET_WAIT(x0)
 primary_publication_park:
     wfi
     b primary_publication_park

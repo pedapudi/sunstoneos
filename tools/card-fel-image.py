@@ -19,6 +19,7 @@ from elftools.elf.elffile import ELFFile
 ROOT = Path(__file__).resolve().parents[1]
 PIN = '829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3'
 BASE, ORIGINAL_BYTES = 0x47000, 0x3c000
+PRODUCTION_WATCHDOG = 0  # A733_CARD_FEL_PRODUCTION_WATCHDOG in include/a733_card_fel_gate.h
 
 
 def require(ok, message):
@@ -41,25 +42,20 @@ def gate_info(elf_raw, raw):
         elf = ELFFile(stream)
         require(elf['e_machine'] == 'EM_ARM' and elf['e_type'] == 'ET_EXEC', 'AArch32 gate ELF required.')
         table = elf.get_section_by_name('.symtab')
-        names = ('a733_card_fel_gate', 'a733_card_fel_gate_state', 'a733_card_fel_gate_test',
-                 'a733_card_fel_gate_end')
+        names = ('a733_card_fel_gate', 'a733_card_fel_gate_end')
         symbols = {}
         for symbol in table.iter_symbols():
             if symbol.name in names and symbol['st_shndx'] != 'SHN_UNDEF':
                 require(symbol.name not in symbols, 'Ambiguous gate symbol.')
                 symbols[symbol.name] = int(symbol['st_value'])
         require(set(symbols) == set(names), 'Gate symbols missing.')
-        start, end = symbols[names[0]], symbols[names[3]]
-        require(elf['e_entry'] == start == 0x41001000 and end - start == len(raw) and
-                0 < len(raw) <= 512, 'Gate entry or appended-sector budget differs.')
+        start, end = symbols[names[0]], symbols[names[1]]
+        require(elf['e_entry'] == start == 0x52000 and end - start == len(raw) and
+                0 < len(raw) <= 508, 'Gate entry or appended-sector budget differs.')
         sections = [s for s in elf.iter_sections() if s['sh_flags'] & 2 and s['sh_size']]
         require(len(sections) == 1 and sections[0]['sh_type'] == 'SHT_PROGBITS' and
                 sections[0]['sh_addr'] == start and sections[0].data() == raw, 'Gate binary differs from ELF.')
-        state, test = symbols[names[1]] - start, symbols[names[2]] - start
-        require(state != test and all(0 <= offset <= len(raw) - 4 and offset % 4 == 0 and
-                                    raw[offset:offset+4] == bytes(4) for offset in (state, test)),
-                'Gate observation words differ.')
-        return {'bytes': len(raw), 'sha256': sha(raw), 'state_offset': state, 'test_offset': test}
+        return {'bytes': len(raw), 'sha256': sha(raw)}
 
 
 def first_stage(original, gate):
@@ -68,8 +64,9 @@ def first_stage(original, gate):
             struct.unpack_from('<I', original, 12)[0] == checksum(original), 'Pinned boot0 identity/header differs.')
     entry, = struct.unpack_from('<I', original)
     require(entry == 0xea0002be, 'Pinned boot0 initial branch differs.')
-    require(0 < len(gate) <= 512, 'Gate exceeds its appended sector.')
-    result = bytearray(original + gate + bytes(512 - len(gate)))
+    require(0 < len(gate) <= 508 and len(gate) % 4 == 0, 'Gate and its policy word exceed the appended sector.')
+    # The word after the code is the gate's WDT0 policy; zero disarms WDT0.
+    result = bytearray(original + gate + struct.pack('<I', PRODUCTION_WATCHDOG) + bytes(508 - len(gate)))
     struct.pack_into('<I', result, 0, 0xea000000 | ((len(original) - 8) // 4))
     struct.pack_into('<I', result, 16, len(result))
     struct.pack_into('<I', result, 12, checksum(result))
@@ -102,9 +99,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     parent = package.directory(args.output); os.close(parent)
     header = (f'#define CARD_FEL_GATE_BYTES {len(gate)}\n'
-              f'#define CARD_FEL_STATE_OFFSET {info["state_offset"]}\n'
-              f'#define CARD_FEL_TEST_OFFSET {info["test_offset"]}\n'
-              '#define CARD_FEL_SHA256 {' + ','.join('0x'+info['sha256'][i:i+2] for i in range(0,64,2)) + '}\n')
+              '#define CARD_FEL_SHA256_BYTES ' + ','.join('0x'+info['sha256'][i:i+2] for i in range(0,64,2)) + '\n')
     write_generated(args.output/'gate-info.h', header.encode())
     write_generated(args.output/'boot0-fel-first-stage.fex', image)
     manifest = {'schema': 'sunstone-card-fel-image-v1', 'physical_qualified': False,
@@ -112,8 +107,10 @@ def main():
                 'first_stage': {'bytes': len(image), 'sha256': sha(image),
                                 'first_sector': 16, 'sectors': len(image)//512},
                 'changed_original_ranges': [[0,4],[12,8]],
+                'watchdog_policy': PRODUCTION_WATCHDOG,
                 'storage_loader': 'Unchanged pinned vendor loader; no installation authority',
                 'sources': {'boot/a733/card-fel-gate.S': sha((ROOT/'boot/a733/card-fel-gate.S').read_bytes()),
+                            'include/a733_card_fel_gate.h': sha((ROOT/'include/a733_card_fel_gate.h').read_bytes()),
                             'tools/card-fel-image.py': sha(Path(__file__).read_bytes())}}
     write_generated(args.output/'first-stage.json', (json.dumps(manifest, indent=2)+'\n').encode())
     print(json.dumps(manifest, indent=2))

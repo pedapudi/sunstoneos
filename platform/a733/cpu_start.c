@@ -1,4 +1,5 @@
 #include "a733_cpu_start.h"
+#include "a733_cpu_off.h"
 #include <stddef.h>
 
 /* Resident entry checks either FEL dynamic OFF or stage-2 static OFF before
@@ -11,9 +12,9 @@ enum { OFF, CONTROL, MODE,
     MODE_ON, CONTROL_ON,
     POWER_WAIT, CONTROL_CLEAR, MODE_CLEAR, CONTROL_CHECK, MODE_CHECK, FINISH };
 static uintptr_t cfg(unsigned c) {return UINT32_C(0x08001000)+(uintptr_t)c*0x1000;}
-static uintptr_t ctrl(unsigned c) {return UINT32_C(0x07050200)+(uintptr_t)c*4;}
-static uintptr_t mode(unsigned c) {return UINT32_C(0x07050220)+(uintptr_t)c*4;}
-static uintptr_t status(unsigned c) {return UINT32_C(0x07052008)+(uintptr_t)c*0x1000;}
+static uintptr_t ctrl(unsigned c) {return a733_cpu_control_register(c);}
+static uintptr_t mode(unsigned c) {return a733_cpu_mode_register(c);}
+static uintptr_t status(unsigned c) {return a733_cpu_status_register(c);}
 int a733_cpu_index(uint64_t mpidr,unsigned *out)
 {
     /* Affinity mask plus architectural U/MT/RES1 flags. */
@@ -63,13 +64,13 @@ enum a733_cpu_start_state a733_cpu_start_poll(struct a733_cpu_start *s)
     switch(s->step) {
     case OFF:
         if(!read_reg(s,status(c),&s->power_status))break;
-        if(s->power_status&15)fail(s,A733_CPU_START_INITIAL_STATE);
+        if(!a733_cpu_off_status_valid(s->power_status))fail(s,A733_CPU_START_INITIAL_STATE);
         break;
     case CONTROL:
-        if(read_reg(s,ctrl(c),&s->control) && (s->control&1))fail(s,A733_CPU_START_INITIAL_STATE);
+        if(read_reg(s,ctrl(c),&s->control) && !a733_cpu_hotplug_clear(s->control))fail(s,A733_CPU_START_INITIAL_STATE);
         break;
     case MODE:
-        if(read_reg(s,mode(c),&s->mode) && (s->mode&1))fail(s,A733_CPU_START_INITIAL_STATE);
+        if(read_reg(s,mode(c),&s->mode) && !a733_cpu_hotplug_clear(s->mode))fail(s,A733_CPU_START_INITIAL_STATE);
         break;
     case ARCH: (void)read_reg(s,cfg(c),&s->architecture);break;
     case ENTRY_LO: (void)write_reg(s,cfg(c)+4,(uint32_t)s->config.entry);break;
@@ -90,11 +91,12 @@ enum a733_cpu_start_state a733_cpu_start_poll(struct a733_cpu_start *s)
     /* Admission precedes every startup write, including RVBAR. */
     case HELD_POLICY:
         if(!read_reg(s,status(c)-8,&v))break;
-        if(s->config.held==A733_CPU_START_RESIDENT && v==0x100)s->static_off=0;
-        else if(v || !(s->control&2))fail(s,A733_CPU_START_INITIAL_STATE);
+        if(!a733_cpu_held_policy_valid(v,s->control,s->config.held==A733_CPU_START_RESIDENT))
+            fail(s,A733_CPU_START_INITIAL_STATE);
+        else s->static_off=v!=A733_CPU_DYNAMIC_OFF;
         break;
     case HELD_STATUS:
-        if(read_reg(s,status(c),&v) && v!=(s->static_off?0u:0x100u))fail(s,A733_CPU_START_INITIAL_STATE);
+        if(read_reg(s,status(c),&v) && !a733_cpu_held_status_valid(v,s->static_off))fail(s,A733_CPU_START_INITIAL_STATE);
         break;
     /* cpu_entry armed the mailbox before POWER. PUBLISH completed the entry
      * stores; an immediate wake parks until POWERED/request cleanup. */

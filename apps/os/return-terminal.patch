@@ -1,12 +1,13 @@
 --- input
 +++ output
-@@ -1,7 +1,7 @@
+@@ -1,8 +1,8 @@
  /* Current-port success terminal and control preservation. No interrupted
   * stack access occurs on the fatal path. Success has a distinct SVC and SMC
   * PC; only that path selects a dedicated Secure Device cleanup stack. */
 -#include "runtime.h"
 +#include "cpu-return-runtime.h"
  #include "a733_fault.h"
+ #include "a733_cpu_reset.h"
  .section .text.qualification,"ax"
  .balign 4
 @@ -208,6 +208,7 @@

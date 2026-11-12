@@ -62,6 +62,7 @@ class Model:
         self.registers = {board.crumbs.WDT_MODE:0,board.crumbs.WDT_CONFIG:1,board.crumbs.WDT_OUTPUT:2,
                           **dict(zip((0x20,0x24,0x28,0x3c,0x40),(0xeb00008f,0xe3a00911,0xe3a0193d,0xe3a0605c,0xea00004d)))}
         self.calls = []
+        self.programs = []
         self.quarantined = []
         self.launched = False
         self.clock = 0
@@ -74,7 +75,8 @@ class Model:
 
     def discover(self, port):
         assert port=='3-1'
-        if self.pending and self.variant!='no-return' and not (self.variant=='recovery-no-return' and self.launched):
+        if self.pending and self.variant!='no-return' and not (self.variant in ('recovery-no-return','recovery-stale') and self.launched) \
+                and self.clock>=getattr(self,'reset_at',0):
             self.number += 1
             self.pending = False
         return self.node
@@ -95,6 +97,8 @@ class Model:
     def identity(self,node):
         assert self.lock
         assert node==self.node
+        if self.variant=='recovery-precommand' and not self.launched and self.registers.get(0x07090108)==0x5aa5a55a:
+            raise board.TransportFailure('injected identity failure before command start')
         return [1,self.number,3,4,5]
 
     def require_session(self,node):
@@ -115,7 +119,9 @@ class Model:
 
     def process(self,command,**kw):
         assert self.lock and command[1]=='-d'
+        self.programs.append(command[0])
         assert command[2]==f'3:{self.number}'
+        assert self.number != getattr(self,'failed_launch_instance',None),'Request sent to the disconnected instance'
         args = command[3:]
         if self.variant == 'fel-after-return' and self.launched and args == ['readl', '0x20']:
             return types.SimpleNamespace(returncode=1, stdout='', stderr='injected post-return transport failure')
@@ -182,21 +188,34 @@ class Model:
                         self.registers[board.crumbs.RTC+0x104] = board.crumbs.RETURN_ROM << 16
                 if self.variant.startswith('recovery-'):
                     recovery=images.load('model_card_recovery',ROOT/'tools/card_recovery.py')
+                    assert args[i]=='exe' and kw['timeout']==recovery.EXE_SECONDS
                     self.registers[recovery.RTC_FLAG]=0
-                    gate=bytearray(CARD_GATE);struct.pack_into('<2I',gate,24,recovery.GATE_COMPLETE,1)
-                    report=recovery.REPORT_RECORD.pack(recovery.REPORT_MAGIC,1,64,1,1,recovery.FEL_FLAG,0x41,12)
-                    if self.variant=='recovery-report':report=report[:24]+struct.pack('<Q',2)+report[32:]
-                    if self.variant=='recovery-gate':gate[0]^=1
+                    self.registers[board.crumbs.RTC+0x104]=0x0c020005
+                    # The gate re-arms WDT0 at 16 s instead of disarming it.
+                    self.registers[board.crumbs.WDT_MODE]=recovery.GATE_WATCHDOG
+                    if self.variant=='recovery-no-reenumerate':
+                        # The ROM never re-enumerates; WDT0 expires and resets to FEL, leaving mode 1.
+                        self.registers[board.crumbs.WDT_MODE]=1
+                        self.reset_at=self.clock+recovery.INTERVAL_SECONDS
+                    if self.variant=='recovery-late':self.reset_at=self.clock+recovery.INTERVAL_SECONDS
+                    if self.variant=='recovery-progress':self.registers[board.crumbs.RTC+0x104]=0x0c020004
+                    if self.variant=='recovery-tag':self.registers[board.crumbs.RTC+0x100]^=1
                     if self.variant=='recovery-flag':self.registers[recovery.RTC_FLAG]=recovery.FEL_FLAG
-                    for address,data in ((recovery.GATE,gate),(recovery.REPORT,report)):
-                        for n,byte in enumerate(data):self.memory[address+n]=byte
                     if self.variant=='recovery-watchdog':
                         self.registers[board.crumbs.WDT_MODE]=1
-                        self.registers[board.crumbs.RTC+0x104]=0x0c010000
+                        self.registers[board.crumbs.RTC+0x104]=0x0c020081
+                        self.registers[recovery.RTC_FLAG]=recovery.FEL_FLAG
                     if self.variant=='recovery-fault':
                         defines,_=board.crumbs.header()
                         self.registers[board.crumbs.RTC+0x110]=defines['FAULT_MAGIC']<<24|3<<16
                     if self.variant=='recovery-malformed-fault':self.registers[board.crumbs.RTC+0x110]=1
+                    if self.variant in ('recovery-disconnect','recovery-timeout','recovery-no-return','recovery-stale',
+                                        'recovery-no-reenumerate','recovery-late'):
+                        self.failed_launch_instance=self.number
+                        if self.variant in ('recovery-timeout','recovery-no-reenumerate','recovery-late'):
+                            self.clock+=kw['timeout']
+                            raise subprocess.TimeoutExpired(command,kw['timeout'])
+                        return types.SimpleNamespace(returncode=1,stdout='',stderr='injected execute disconnect')
                 i+=2
             else:
                 raise AssertionError(op)
@@ -216,7 +235,11 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
             super().__init__(*values,access=model,process=model.process,now=model.now,sleep=model.sleep)
             owners.append(self)
         def dram(self):
+            if recovery:raise AssertionError('SRAM recovery initialized DRAM')
             if variant=='dram-failure':raise board.DramFailure('training rejected')
+        def clear_stale_residue(self,*values):
+            if recovery:raise AssertionError('SRAM recovery accessed credential DRAM')
+            return super().clear_stale_residue(*values)
         rail_phases = None
         def rails(self, phase='rails'):
             if self.rail_phases is None:self.rail_phases=[]
@@ -241,10 +264,10 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
                 plan['lifetime']='resident'
                 plan['watchdog']['mode']=0x41
             if recovery:
-                plan.update(format='card-fel-recovery',nonce=1,launch=['reset64','0x41000000'],
-                    profile={'gate_address':0x41001000,'gate_bytes':len(CARD_GATE),'state_offset':24,'test_offset':28,
-                             'gate_sha256':images.hashlib.sha256(CARD_GATE).hexdigest()},
-                    watchdog={'mode':0x41,'session_seconds':60})
+                plan.update(format='card-fel-recovery',nonce=1,launch=['exe','0x52000'],launch_seconds=2,uploads=[(0x52000,args.image)],
+                    profile={'version':3,'gate_address':0x52000,'gate_bytes':len(CARD_GATE),'gate_watchdog':0xb1,'rtc_stage':0x0c02,
+                             'final_value':5,'gate_sha256':images.hashlib.sha256(CARD_GATE).hexdigest()},
+                    watchdog={'mode':0x41,'gate_mode':0xb1,'session_seconds':60})
             if grant!='absent':plan['cpu_grant_raises']=grant
             return plan
         def capture(self,plan):
@@ -262,6 +285,7 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
         args.decoder.write_text('def decode(payload):\n    return {"failed": True}\ndef failures(decoded):\n    return ["native job failed"]\n' if variant=='decoder-failure' else
                                 'def decode(payload):\n    raise ValueError("malformed payload")\n')
     info={'entry_guard':not recovery,'descriptor':{},'watchdog':{'mode':0xb1,'session_seconds':1}}
+    if recovery:info['card_fel_recovery']=True
     with patch.object(images,'inspect',return_value=info),patch.object(images,'policy'), \
          patch.object(board.os,'access',return_value=True),contextlib.redirect_stdout(io.StringIO()), \
          (patch.object(board.crumbs,'parse_return',side_effect=ValueError('injected return decoder bug')) if variant=='return-decoder' else contextlib.nullcontext()):
@@ -271,28 +295,30 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
     return result,model,owners[0]
 
 
-def card_recovery_fixture(root):
-    """A structural ELF fixture; the gate's executing instruction check lives separately."""
+def card_recovery_fixture(root, legacy=False):
+    """A structural ELF fixture; executing gate checks live separately."""
     root.mkdir()
     recovery=images.load('fixture_card_recovery',ROOT/'tools/card_recovery.py')
     digest=images.hashlib.sha256(CARD_GATE).digest()
     source=root/'fixture.S'
-    source.write_text('.section .text,"ax"\n.global _start\n.type _start,%function\n_start: ret\n.size _start,.-_start\n'
-        '.section .rodata,"a"\n.balign 8\n.global a733_card_fel_profile\n.type a733_card_fel_profile,%object\n'
-        'a733_card_fel_profile:\n.quad '+','.join(map(str,(recovery.PROFILE_MAGIC,1,88,recovery.GATE,len(CARD_GATE),24,28)))+
-        '\n.byte '+','.join(map(str,digest))+'\n.size a733_card_fel_profile,88\n'
-        '.section .card_gate,"ax"\n.byte '+','.join(map(str,CARD_GATE))+'\n'
-        '.section .request,"aw",%nobits\n.global a733_card_fel_request\n.type a733_card_fel_request,%object\n'
-        'a733_card_fel_request: .skip 32\n.size a733_card_fel_request,32\n'
-        '.section .report,"aw",%nobits\n.global a733_card_fel_report\n.type a733_card_fel_report,%object\n'
-        'a733_card_fel_report: .skip 64\n.size a733_card_fel_report,64\n')
+    source.write_text('.syntax unified\n.arm\n.section .card_gate,"ax"\n.global a733_card_fel_gate_image\n'
+        '.type a733_card_fel_gate_image,%object\na733_card_fel_gate_image:\n.byte '+','.join(map(str,CARD_GATE))+
+        '\n.size a733_card_fel_gate_image,.-a733_card_fel_gate_image\n'
+        '.global a733_card_fel_gate_watchdog\n.type a733_card_fel_gate_watchdog,%object\n'
+        'a733_card_fel_gate_watchdog: .word '+str(recovery.GATE_WATCHDOG)+'\n.size a733_card_fel_gate_watchdog,4\n'
+        '.section .profile,"a"\n.balign 8\n.global a733_card_fel_profile\n.type a733_card_fel_profile,%object\n'
+        'a733_card_fel_profile:\n.quad '+','.join(map(str,(recovery.PROFILE_MAGIC,3,96,recovery.GATE,len(CARD_GATE),0x0c02,5,
+                                                         recovery.GATE_WATCHDOG)))+
+        '\n.byte '+','.join(map(str,digest))+'\n.size a733_card_fel_profile,96\n')
     script=root/'fixture.ld'
-    script.write_text('ENTRY(_start)\nPHDRS { code PT_LOAD FLAGS(5); gate PT_LOAD FLAGS(5); request PT_LOAD FLAGS(6); report PT_LOAD FLAGS(6); }\n'
-        'SECTIONS { . = 0x41000000; .text : { *(.text) } :code .rodata : { *(.rodata) } :code '
-        '.card_gate 0x41001000 : { *(.card_gate) } :gate '
-        '.request 0x41002000 (NOLOAD) : { *(.request) } :request '
-        '.report 0x42000000 (NOLOAD) : { *(.report) } :report /DISCARD/ : { *(.comment) *(.note*) } }\n')
-    subprocess.run([str(images.CLANG),'--target=aarch64-none-elf','-c',str(source),'-o',str(root/'fixture.o')],check=True)
+    script.write_text('ENTRY(a733_card_fel_gate_image)\nPHDRS { gate PT_LOAD FLAGS(5); profile PT_LOAD FLAGS(4); }\n'
+        'SECTIONS { .card_gate 0x52000 : { *(.card_gate) } :gate '
+        '.profile 0x52400 : { *(.profile) } :profile /DISCARD/ : { *(.comment) *(.note*) *(.ARM.attributes) } }\n')
+    if legacy:
+        source.write_text(source.read_text().replace('.syntax unified\n.arm\n',''))
+        script.write_text(script.read_text().replace('0x52000','0x41000000').replace('0x52400','0x41001000'))
+    subprocess.run([str(images.CLANG),'--target='+('aarch64-none-elf' if legacy else 'arm-none-eabi'),
+                    '-c',str(source),'-o',str(root/'fixture.o')],check=True)
     subprocess.run([str(images.LLD),'-T',str(script),str(root/'fixture.o'),'-o',str(root/'fixture.elf')],check=True)
     return root/'fixture.elf'
 
@@ -304,6 +330,13 @@ def card_recovery_cases(out,image=None):
     assert info.get('card_fel_recovery') and not info.get('native_probe') and not info['entry_guard']
     args=arguments(fixture.parent,'--kind','probe','--approved-by','coordinator',development=True);args.image=fixture
     images.policy(info,args)
+    unreviewed=fixture.parent/'unreviewed-fel';unreviewed.write_bytes(b'unreviewed host tool')
+    saved=args.fel;args.fel=unreviewed
+    try:images.policy(info,args)
+    except ValueError:pass
+    else:raise AssertionError('An unreviewed FEL binary was admitted')
+    args.fel=saved
+    passed('card-recovery-refuses-unreviewed-FEL-binary')
     for name,value in (('approved_by',None),('storage_write',True),('preserve_dram',True),('restore_rails',True),
                        ('input',[fixture]),('decoder',fixture)):
         saved=getattr(args,name);setattr(args,name,value)
@@ -319,31 +352,44 @@ def card_recovery_cases(out,image=None):
     except ValueError:pass
     else:raise AssertionError('Recovery profile accepted under another kind')
     plan=images.prepare(args,info,{},fixture.parent/'prepared')
-    request=recovery.REQUEST_RECORD.unpack((fixture.parent/'prepared/request.bin').read_bytes())
-    assert request==(recovery.REQUEST_MAGIC,1,plan['epoch'],0x41) and plan['epoch']
-    assert plan['format']=='card-fel-recovery' and plan['launch']==['reset64','0x41000000']
+    assert plan['epoch'] and plan['epoch']==plan['nonce']==plan['generation']
+    assert plan['format']=='card-fel-recovery' and plan['launch']==['exe','0x52000']
+    assert len(plan['uploads'])==2 and all(recovery.GATE<=a<recovery.SRAM_END for a,_ in plan['uploads'])
+    assert not (fixture.parent/'prepared/request.bin').exists() and not (fixture.parent/'prepared/report-zero.bin').exists()
     assert 'tools/card_recovery.py' in board.session_files()
+    assert recovery.FEL_ICACHE_PATCH in board.session_files()
     args.evidence=fixture.parent/'check';args.queue=fixture.parent/'offline-queue';args.state=None
     with contextlib.redirect_stdout(io.StringIO()):assert board.check_image(args)==0
-    passed('card-recovery-ELF-policy-nonce-offline-check-and-daemon-closure')
-    # Mutate the actual marker and allocation records, never a mocked inspect result.
-    import io as binary_io
+    passed('card-recovery-ARM32-ELF-policy-nonce-offline-check-and-daemon-closure')
+    legacy=card_recovery_fixture(out/'card-recovery-old-A64',legacy=True)
+    try:images.inspect(legacy,'probe')
+    except ValueError:pass
+    else:raise AssertionError('The old AArch64 recovery executable was admitted')
+    passed('card-recovery-refuses-ELF64-DRAM-executable')
+    # Mutate real ELF marker, sections, loads and symbols rather than inspect booleans.
     from elftools.elf.elffile import ELFFile
-    original=fixture.read_bytes();elf=ELFFile(binary_io.BytesIO(original));table=elf.get_section_by_name('.symtab')
+    original=fixture.read_bytes();elf=ELFFile(io.BytesIO(original));table=elf.get_section_by_name('.symtab')
     symbol=next(s for s in table.iter_symbols() if s.name=='a733_card_fel_profile')
     section=elf.get_section(symbol['st_shndx']);offset=section['sh_offset']+symbol['st_value']-section['sh_addr']
-    mutations=[('version',offset+8,'Q',2),('marker-size',offset+16,'Q',96),('gate-address',offset+24,'Q',recovery.GATE+4),
-               ('gate-size',offset+32,'Q',513),('state-alignment',offset+40,'Q',25),('state-bounds',offset+40,'Q',32),
-               ('duplicate-state-test',offset+48,'Q',24),('gate-hash',offset+56,'B',original[offset+56]^1),
-               ('wrong-ELF-entry',24,'Q',recovery.ENTRY+4),('wrong-ELF-machine',18,'H',0)]
+    mutations=[('old-profile-version',offset+8,'Q',2),('marker-size',offset+16,'Q',88),
+               ('gate-address',offset+24,'Q',recovery.GATE+4),('gate-size',offset+32,'Q',513),
+               ('rtc-stage',offset+40,'Q',0x0c01),('final-value',offset+48,'Q',4),
+               ('profile-disarm-policy',offset+56,'Q',0),('profile-4s-policy',offset+56,'Q',0x41),
+               ('gate-hash',offset+64,'B',original[offset+64]^1),('wrong-ELF-entry',24,'I',recovery.ENTRY+4),
+               ('A64-machine',18,'H',183)]
     gate=elf.get_section_by_name('.card_gate')
     mutations.append(('gate-bytes',gate['sh_offset'],'B',original[gate['sh_offset']]^1))
-    for index,s in enumerate(table.iter_symbols()):
-        if s.name=='a733_card_fel_request':mutations.append(('request-address',table['sh_offset']+index*table['sh_entsize']+8,'Q',recovery.REQUEST+8))
-        if s.name=='a733_card_fel_report':mutations.append(('report-size',table['sh_offset']+index*table['sh_entsize']+16,'Q',65))
+    mutations.append(('gate-disarm-policy-word',gate['sh_offset']+len(CARD_GATE),'I',0))
+    for index,symbol in enumerate(table.iter_symbols()):
+        if symbol.name=='a733_card_fel_gate_image':mutations.append(('gate-object-size',table['sh_offset']+index*table['sh_entsize']+8,'I',len(CARD_GATE)+4))
+        if symbol.name=='a733_card_fel_profile':mutations.append(('profile-address',table['sh_offset']+index*table['sh_entsize']+4,'I',recovery.PROFILE_ADDRESS+8))
     for index,section in enumerate(elf.iter_sections()):
-        if section.name=='.card_gate':mutations.append(('writable-gate',elf['e_shoff']+index*elf['e_shentsize']+8,'Q',7))
-        if section.name=='.report':mutations.append(('initialized-report',elf['e_shoff']+index*elf['e_shentsize']+4,'I',1))
+        if section.name=='.card_gate':mutations.append(('writable-gate',elf['e_shoff']+index*elf['e_shentsize']+8,'I',7))
+        if section.name=='.profile':mutations.append(('uninitialized-profile',elf['e_shoff']+index*elf['e_shentsize']+4,'I',8))
+    load=next((index,p) for index,p in enumerate(elf.iter_segments()) if p['p_type']=='PT_LOAD')
+    ph=elf['e_phoff']+load[0]*elf['e_phentsize']
+    mutations.extend([('writable-load',ph+24,'I',7),('NOLOAD-tail',ph+20,'I',load[1]['p_memsz']+4),
+                      ('DRAM-load',ph+8,'I',0x41000000)])
     for name,position,fmt,value in mutations:
         bad=bytearray(original);struct.pack_into('<'+fmt,bad,position,value)
         target=fixture.parent/(name+'.elf');target.write_bytes(bad)
@@ -351,30 +397,85 @@ def card_recovery_cases(out,image=None):
         except ValueError:pass
         else:raise AssertionError('Recovery ELF mutation admitted: '+name)
         passed('card-recovery-refuses-'+name)
-    for variant in ('recovery-success','recovery-watchdog','recovery-report','recovery-gate','recovery-flag','recovery-fault',
-                    'recovery-malformed-fault','recovery-no-return'):
+    for failure in ('ordinary-nonzero','ordinary-timeout','recovery-oserror','recovery-unrelated-command','recovery-precommand-timeout'):
+        root=out/failure;root.mkdir();model=Model('normal');record={};called=[]
+        def failed_process(command,**kwargs):
+            called.append(command)
+            if failure.endswith('timeout'):raise subprocess.TimeoutExpired(command,kwargs['timeout'])
+            if failure.endswith('oserror'):raise OSError('injected failure to start the FEL program')
+            return types.SimpleNamespace(returncode=1,stdout='',stderr='injected nonzero FEL result')
+        owner=board.Live(arguments(root,development=True),root,record,access=model,process=failed_process,now=model.now,sleep=model.sleep)
+        with owner.locked():
+            owner.armed=True;record['card_recovery_flag']={'armed':True}
+            with (patch.object(model,'require_rom',side_effect=subprocess.TimeoutExpired(['precommand'],30))
+                  if failure=='recovery-precommand-timeout' else contextlib.nullcontext()):
+                try:
+                    owner.tx(*(['readl','0x7090108'] if failure.endswith('command') else ['exe','0x52000']),
+                             recovery_launch=failure.startswith('recovery-'))
+                except (board.TransportFailure,ValueError):pass
+                else:raise AssertionError('An unrelated or unstarted command was accepted provisionally')
+            assert not any(t.get('provisional_disconnect') for t in record.get('transactions',[]))
+            assert bool(called)==(failure not in ('recovery-unrelated-command','recovery-precommand-timeout'))
+            owner.armed=False
+        passed('card-recovery-transport-scope-'+failure)
+    successful=('recovery-success','recovery-disconnect','recovery-timeout')
+    for variant in (*successful,'recovery-watchdog','recovery-progress','recovery-tag','recovery-flag','recovery-fault',
+                    'recovery-malformed-fault','recovery-no-return','recovery-stale','recovery-precommand',
+                    'recovery-no-reenumerate','recovery-late'):
         result,model,owner=lifecycle(out/variant,variant,recovery=True)
-        assert bool(result.get('card_recovery_validated'))==(variant=='recovery-success'),(variant,result)
-        assert board.result_passed(result)==(variant=='recovery-success'),(variant,result)
+        expected=variant in successful
+        assert bool(result.get('card_recovery_validated'))==expected,(variant,result)
+        assert board.result_passed(result)==expected,(variant,result)
         assert owner.rail_phases is None,'The recovery proof changes no PMIC rail.'
+        frozen=Path(result['evidence_path'])/'sunxi-fel'
+        assert images.sha(frozen)==recovery.FEL_SHA256 and all(Path(p)==frozen for p in model.programs)
+        assert result['recovery_fel']['sha256']==recovery.FEL_SHA256
+        assert result['dram_mode']=='sram-only' and not result.get('dram_dirty') and not result.get('dram_restored')
         assert not result.get('expected_reset'),'A recovery proof cannot relabel watchdog failure.'
-        if variant=='recovery-success':
-            assert result['outcome']=='returned' and not result.get('dram_lost') and result['return_report']['rtc_flag']==0
-            launch=model.calls.index(['reset64','0x41000000'])
-            flag_write=['writel',hex(recovery.RTC_FLAG),hex(recovery.FEL_FLAG),'readl',hex(recovery.RTC_FLAG)]
+        assert not any(c[0] in ('read','write') and int(c[1],0)>=0x40000000 for c in model.calls)
+        if variant=='recovery-precommand':
+            assert not any(c[0]=='exe' for c in model.calls)
+            assert not any(t.get('provisional_disconnect') for t in owner.record['transactions'])
+        else:
+            launch=model.calls.index(['exe','0x52000'])
+            assert not any(c[0] in ('read','write') for c in model.calls[launch+1:]),'Returned ROM owns all SRAM; no RAM reads/restores'
+            flag_write=['writel',hex(recovery.RTC_TAG),'0x5c0d0001','writel',hex(recovery.RTC_FLAG),hex(recovery.FEL_FLAG),
+                        'readl',hex(recovery.RTC_TAG),'readl',hex(recovery.RTC_FLAG)]
             armed=[i for i,c in enumerate(model.calls[:launch]) if hex(board.crumbs.KEY|0x41) in c][-1]
             assert armed<model.calls.index(flag_write)<launch
-        if variant in ('recovery-watchdog','recovery-fault','recovery-malformed-fault'):
-            assert not any(c[0]=='read' and int(c[1],0)>=0x41000000 for c in model.calls[model.calls.index(['reset64','0x41000000'])+1:])
-        if variant in ('recovery-report','recovery-gate','recovery-flag','recovery-fault','recovery-malformed-fault','recovery-no-return'):
+            # The reviewed tool runs its I-cache disable helper before each MMIO
+            # command, so the RTC arm command after the last upload is the
+            # instruction-fetch predecessor of exe (checks/card-fel-recovery.py).
+            uploads=[i for i,c in enumerate(model.calls[:launch]) if c[0]=='write']
+            assert uploads and model.calls[launch-1]==flag_write and uploads[-1]<launch-1
+        if expected:
+            assert result['outcome']=='returned' and result['return_report']['rtc_flag']==0
+            assert len(result['instances'])>=3 and not owner.failed
+            # The gate left WDT0 re-armed; the runner read it, then disarmed it over FEL.
+            returned=owner.record['watchdog_return']
+            assert (returned['before'],returned['after'])==(recovery.GATE_WATCHDOG,0)
+            assert model.registers[board.crumbs.WDT_MODE]==0
+            assert result['return_report']['seconds_after_exe']<recovery.INTERVAL_SECONDS
+        if variant in ('recovery-no-reenumerate','recovery-late'):
+            # Without re-enumeration WDT0 resets to FEL; the crumbs still show the gate's last step.
+            assert result['outcome']=='watchdog-reset' and not owner.failed
+            back=result['card_recovery_return']
+            assert back['rtc_flag']==0 and back['seconds_after_exe']>=recovery.INTERVAL_SECONDS
+            assert owner.record['watchdog_return']['words']['last']==0x0c020005
+            assert owner.record['watchdog_return']['before']==(1 if variant=='recovery-no-reenumerate' else recovery.GATE_WATCHDOG)
+            assert model.registers[board.crumbs.WDT_MODE]==0
+        if variant in ('recovery-disconnect','recovery-timeout'):
+            assert any(t.get('provisional_disconnect') and t.get('command_started') for t in owner.record['transactions'])
+        if variant=='recovery-watchdog':
+            assert result['outcome']=='watchdog-reset' and result['card_recovery_return']['rtc_flag']==recovery.FEL_FLAG
+        if variant in ('recovery-progress','recovery-tag','recovery-flag','recovery-fault','recovery-malformed-fault','recovery-no-return','recovery-stale'):
             assert result['quarantined'],(variant,result)
         passed('card-'+variant)
     if image is not None:
-        actual=images.inspect(image,'probe')
-        args.image=image
+        actual=images.inspect(image,'probe');args.image=image
         images.policy(actual,args)
         prepared=images.prepare(args,actual,{},fixture.parent/'actual-image')
-        assert prepared['format']=='card-fel-recovery'
+        assert prepared['format']=='card-fel-recovery' and prepared['launch']==['exe','0x52000']
         board.save(fixture.parent/'actual-admission.json',{'physical_access':False,'image_sha256':images.sha(image),
             'profile':prepared['profile'],'nonce':prepared['nonce'],'watchdog':prepared['watchdog']})
         passed('card-recovery-actual-frozen-image-admission')
