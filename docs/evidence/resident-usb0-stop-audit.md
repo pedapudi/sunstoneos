@@ -127,7 +127,7 @@ the USB liveness comparison fail because it is not that comparison's operand.
 
 ## Linked cases demonstrate that the failure record is ambiguous
 
-`checks/resident-linked.py` executes the frozen owner, native provider step,
+The attribution check at revision `17adc7ed` executes the frozen owner, native provider step,
 failure recorder, supervisor and EL3 vectors. The modeled PMIC result is the
 injected input. A PMIC-invalid result and a complete result with invalid
 snapshot fields each produce identical retained USB failure words and
@@ -148,15 +148,14 @@ are in `~/.cache/sunstoneos/build/card-boot-1111/usb0-stop-audit-linked/results.
 The old fixture supplied service timestamps and completion without executing
 USB0 startup, so it could not reveal the missing provider observations.
 
-## A nominal frozen resubmission requires a supported correction
+## Attribution does not justify loosening the hardware guards
 
-No production guard is changed. The available record cannot distinguish the
+The available record cannot distinguish the
 pre-platform refusals, and neither fresh USB rail settings nor the complete
 ROM takeover admission is available from this run. Changing a deadline guard
 or weakening a voltage or cold-state guard would not follow from this evidence.
 
-A narrower diagnostic can retain the failing USB guard, provider step and
-PMIC result or snapshot mismatch in RTC before parking. Its prediction must
-allow `0x5fff` while requiring the new reason record. That is a diagnostic
-submission for coordinator review, not a qualified completion submission.
-No new image is submitted and no board communication follows this audit.
+The [current resident design](../designs/resident-fel.md) selects USB0 only
+when the manifest-derived session grants it and retains reason-coded failures.
+Hello-compute's corrected session grants no USB device. The USB0 handoff and
+rail gaps remain open for sessions that grant that service.
