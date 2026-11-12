@@ -66,8 +66,9 @@ The runner accepts only the marked diagnostic's exact retained stop. It reads
 no DRAM after reset. The [prediction record](../evidence/resident-fel.jsonl),
 `resident-fel-completion-proposal`, contains the time budget and expected result.
 The frozen input manifest and exact host commands are in that record's evidence
-directory. Submission waits for the coordinator to land the runner changes,
-restart the daemon and instruct the worker to submit.
+directory. The [application evidence](../evidence/application.jsonl), entry
+`1794468954726206112-8d88da24`, records the physical run. It reaches supervision
+but retains a USB0 stop failure; successful resident completion remains open.
 
 The current EL1 watchdog renewal check requires BOOT low. Its disagreement with
 cold resident admission remains in the card design's open work.
