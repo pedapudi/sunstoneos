@@ -144,7 +144,7 @@ def build(root, out, actors, name, registry=None, step=None):
     limit = re.search(r'#define OS_FAILURE_RETURN_US UINT64_C\((\d+)\)', (root / 'apps/os/cpu-return.h').read_text())
     assert limit and int(limit.group(1)) == 3000000, 'return bound changed: review the failure protocol budget'
     command = ['clang-21', '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
-               '-DRETURN_LIMIT_US=' + limit.group(1), '-I' + str(directory), str(ROOT / 'checks/os-failure-step.c'),
+               '-DRETURN_LIMIT_US=' + limit.group(1), '-I' + str(root / 'include'), '-I' + str(directory), str(ROOT / 'checks/os-failure-step.c'),
                str(directory / 'quiesce.c'), '-o', str(directory / 'model')]
     compiled = subprocess.run(command, capture_output=True, text=True)
     (directory / 'compile.log').write_text(compiled.stdout + compiled.stderr)

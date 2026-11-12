@@ -58,7 +58,7 @@ static enum os_quiesce_result poll_owner(struct os_quiesce *q)
 static void note(uint32_t site,uint32_t value,const void *caller)
 {
     unsigned i=site&0xfffu;
-    assert(i<COUNT && site==(0x80007000u|i));
+    assert(i<COUNT && site==(0x8700b000u|(unsigned)actors[i].step.owner<<16|i));
     assert(value==(0xabc000u|i) && caller==(void *)(uintptr_t)(0x1000+i));
     assert(!actors[i].notes++);++notes;
 }

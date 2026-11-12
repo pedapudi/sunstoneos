@@ -169,9 +169,6 @@ static int failure_claim(unsigned context,uint32_t site,uint32_t value,const voi
         if(portGET_CORE_ID()||ucPrimaryCoreInitDoneFlag||a733_smp_counter()>=completion_cutoff())return 0;
     }else{
         if(a733_smp_counter()>=completion_cutoff())return 0;
-#ifdef SUNSTONE_A733_OS_GPU_LINEAR
-        if(!os_gpu_return_ready())return 0;
-#endif
     }
     if(!atomic_compare_exchange_strong_explicit(&closing,&none,1,memory_order_acq_rel,memory_order_acquire))return 0;
     struct ss_failure record={SS_FAILURE_MAGIC,SS_FAILURE_VERSION,before_scheduler?SS_FAILURE_STARTUP:context,
@@ -290,7 +287,7 @@ void os_cpu_return_supervise(void)
     uint64_t now=a733_smp_counter()/24;
     if(!return_since_us)return_since_us=os_cpu_return_failing()?
         atomic_load_explicit(&failing_since_us,memory_order_acquire):now;
-    if(os_cpu_return_expired(now,return_since_us,OS_FAILURE_RETURN_US))fail(0x742);
+    if(os_cpu_return_expired(now,return_since_us,OS_FAILURE_RETURN_US)){os_quiesce_note_faults(board_fail_note);fail(0x742);}
     if(os_quiesce_step(board_fail_note)!=OS_QUIESCE_DONE)return;
     /* This profile's readiness task never calls USB startup. Constructors
      * alone cannot acquire USB ownership or invoke controller callbacks. */

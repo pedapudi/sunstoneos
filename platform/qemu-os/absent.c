@@ -72,3 +72,8 @@ int os_cpu_return_devices_ready(void) { ABSENT("cpu return devices"); }
 int os_cpu_return_entry_guard(const struct a733_cpu_clock *c, const struct a733_thermal_policy *p, uint64_t now,
     int (*read)(void *, uintptr_t, uint32_t *), void *context)
 { (void)c; (void)p; (void)now; (void)read; (void)context; ABSENT("cpu return entry guard"); }
+
+/* The virtual board does not grant the physical radio. */
+struct board_radio;
+int board_radio_shutdown(struct board_radio *radio,uint64_t deadline)
+{ (void)radio;(void)deadline;return 0; }

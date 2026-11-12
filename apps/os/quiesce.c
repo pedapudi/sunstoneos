@@ -47,12 +47,26 @@ int os_quiesce_drained_before(enum os_quiesce_order order)
         if(p->order<order&&os_quiesce_result(p)!=OS_QUIESCE_DONE)return 0;
     return 1;
 }
+void os_quiesce_note_faults(void (*note)(uint32_t,uint32_t,const void *))
+{
+    /* The list is immutable after the supervisor seals registration. Report
+     * faults even when an earlier class still has a pending operation. */
+    if(!sealed)return;
+    for(struct os_quiesce *p=owners;p;p=p->next)
+        if(!p->visited&&atomic_load_explicit(&p->fault_state,memory_order_acquire)==2){
+            uint32_t site=(p->site&0x80000fffu)|SUNSTONE_CRUMB_FAIL_QUIESCE<<12|
+                (uint32_t)p->owner<<16|((p->site>>12)&15u)<<24;
+            if(note)note(site,p->value,p->caller);
+            p->visited=1;
+        }
+}
 enum os_quiesce_result os_quiesce_step(void (*note)(uint32_t,uint32_t,const void *))
 {
     if(!os_cpu_return_requested())return OS_QUIESCE_PENDING;
     if(atomic_flag_test_and_set_explicit(&registration,memory_order_acquire))return OS_QUIESCE_PENDING;
     sealed=1;
     atomic_flag_clear_explicit(&registration,memory_order_release);
+    os_quiesce_note_faults(note);
     unsigned faults=0;
     for(unsigned order=OS_QUIESCE_QUEUES;order<=OS_QUIESCE_TERMINALS;++order){
         unsigned pending=0;
@@ -75,12 +89,9 @@ enum os_quiesce_result os_quiesce_step(void (*note)(uint32_t,uint32_t,const void
                 }
                 r=os_quiesce_result(p);
             }
-            if(!p->visited&&atomic_load_explicit(&p->fault_state,memory_order_acquire)==2){
-                if(note)note(p->site,p->value,p->caller);
-                p->visited=1;
-            }
             pending|=r==OS_QUIESCE_PENDING;faults|=r==OS_QUIESCE_FAULT;
         }
+        os_quiesce_note_faults(note);
         if(pending)return OS_QUIESCE_PENDING;
     }
     return faults?OS_QUIESCE_FAULT:OS_QUIESCE_DONE;

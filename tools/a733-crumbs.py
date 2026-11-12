@@ -190,6 +190,12 @@ def board_failure(words, defines, elf):
               'site': site & 0xfff, 'aux': site >> 16 & 0x7fff, 'caller': hex(caller), 'value': hex(value),
               'caller_kind': 'return address' if site >> 31 else 'statement',
               'exception_level': 'EL0' if slot == 0 else 'EL1' if slot in (4, 5) else f'SPSR.M {slot:#x}'}
+    if record['group'] == 'quiesce':
+        owners = {v: k[len('QUIESCE_'):].lower().removesuffix('_owner')
+                  for k, v in defines.items() if k.startswith('QUIESCE_')}
+        record['owner'] = owners.get(site >> 16 & 255, 'unknown')
+        record['source_group'] = groups.get(site >> 24 & 15, 'unknown')
+        record['code'] = site & 0xfff
     if legacy_npu:
         record['group_source'] = 'finite NPU ELF (legacy group 8)'
     record['site_kind'] = 'detail' if record['group'] in ('cpu_return', 'application') else 'source line'

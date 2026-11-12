@@ -12,6 +12,9 @@ int main(void)
 {
     /* the failure return: the application's failure, then the NPU's, then more */
     reset(); assert(note(4) == 1 && note(8) == 1 && note(8) == 0 && note(7) == 0 && note(4) == 0);
+    /* Registered owners retain one secondary RTC record. Their separate
+     * descriptor records preserve the remaining faults. */
+    reset(); assert(note(4) == 1 && note(11) == 1 && note(11) == 0);
     /* a second application failure (the producer after the main task) is not a device failure */
     reset(); assert(note(4) == 1 && note(4) == 0 && note(8) == 1 && note(8) == 0);
     /* a device failure first keeps its record against every later one */

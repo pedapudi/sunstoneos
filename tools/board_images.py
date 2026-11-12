@@ -895,7 +895,8 @@ def capture(owner, plan, args):
             decoded['gpu_capture_sha256'] = hashlib.sha256(copied['gpu-report']).hexdigest()
             try:
                 decoded['gpu'] = records.gpu_capture.decode_captured(copied['gpu-report'], geo['gpu_receipt'],
-                                                                     plan['epoch'], plan['generation'])
+                    plan['epoch'], plan['generation'],
+                    failure_return=bool(owner.record.get('failure_return') and decoded.get('failure')))
                 require(args.kind != 'gpu-return' or decoded['gpu'].get('gpu_bisect') or
                         decoded['gpu'].get('completed_gpu_work'),
                         'GPU kind requires completed GPU work or an image-bound diagnostic receipt.')
