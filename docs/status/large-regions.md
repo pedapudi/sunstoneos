@@ -20,6 +20,7 @@ An application declares regions of upper memory, up to the 11 GiB the board maps
 | Device range list read back after the return | qualified on the board | pages below 4 GiB, because FEL addresses are 32 bits; the runner refuses a head at or above 4 GiB | `1793753010853111400-91014eb3`, `1793758036160485351-c9fae9df` |
 | Cache clean at the CPU return | qualified on the board | by set/way: 0.13 ms on core 0, 0.02 ms on each A55 secondary, 2.49 ms on each A76, against 227 ms per 32 MiB range by line | `1793758036160485351-c9fae9df` |
 | Heap from the ledger | qualified on the board | see [application memory layout](../designs/application-memory-layout.md) | `application-memory-layout-heap-modes` |
+| NPU runtime and tasks from the ledger at the grant, EL1 only | qualified on the board | 102,752 bytes in one extent; recognition at 512 frames 422.9 ms against 422.8 ms, same transcript and CRCs | `1794464613159170511-919b9552`, [unified memory](../designs/unified-memory.md) (Device owners) |
 | Partitioned scheduler's task-switch hook | host-tested | builds and boots in QEMU | `checks/qemu-os-boot.py` |
 | Device grant | open | interface only | [design](../designs/large-app-regions.md) |
 | Broadcast TLB invalidation cost (1,000 per second from an A55 core) | qualified on the board | page and ASID forms: control-path maximum 3.54 us against 3.33 us without; all-entries form not cleared (5.38 us jitter in one soak of six) | `application-memory-layout-tlbi-soaks` |

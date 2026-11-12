@@ -7,6 +7,7 @@
 #include "a733_mapping_check.h"
 #include "aarch64_device_memory.h"
 #include "umem.h"
+#include "owner-memory.h"
 #include "app_large.h"
 #include "device-ranges.h"
 #include "application.h"
@@ -20,17 +21,21 @@
 #define ACCEPTED UINT64_C(2)
 #define STOP UINT64_C(4)
 #define STACK 4096u
-/* The startup and the bootstrap and client tasks with their stacks (about 66 KiB) come from the unified ledger when a session
- * that grants the NPU is admitted (device_take), so an image without an NPU session holds only the pointer. EL0 reads none of
- * it. The runtime stays in the image: the application's own task reads its stop and interrupt words at EL0 (ss_finish waits on
- * os_npu_retirement_check), and the application space maps the image but not the kernel's ledger pages. */
+/* The device state of a session that grants the NPU: the runtime with its service, the startup and the bootstrap and client
+ * tasks with their stacks (about 100 KiB). It comes from the unified ledger when the session is admitted (device_take), as
+ * kernel memory that only EL1 reaches, so an image without an NPU session holds only the pointer. The application's task
+ * reads none of it: the words its retirement wait reads (ss_finish waits on os_npu_retirement_check) are the runtime's
+ * signals, which stay in the image below. */
 struct os_npu_device {
+    struct npu_runtime runtime;
     struct a733_npu_startup startup;
     StaticTask_t tasks[2];StackType_t stacks[2][STACK];
 };
 static struct os_npu_application {
-    struct npu_runtime runtime;
     struct os_npu_device *device; /* NULL until a granted admission takes it */
+    /* The runtime's interrupt, park and failure words (struct npu_service_signals), in image memory that the application's
+     * tables map, so that its task reads them at EL0. The runtime's service points to them (device_take). */
+    struct npu_service_signals signals;
     struct umem_buf pool;
     int prepared;
     TaskHandle_t bootstrap,client;
@@ -40,6 +45,8 @@ static struct os_npu_application {
     unsigned attempted,started,opened,jobs;
     uint32_t window_ms; /* the reply wait window of the last call */
 } npu;
+/* The runtime and its service: EL1 code only (the NPU's own tasks, the queue's supervisor call and admission). */
+#define RT (npu.device->runtime)
 /* The EL1-private metadata of the runtime, the service and the queue adapter (include/npu_pool.h, struct npu_meta): memory that
  * no EL0 table maps and that the NPU's page tables do not map. It comes from kernel-owned ledger chunks, taken when a table is
  * asked for: at admission for the declaration's tables, and later for run-time links. A chunk starts with a header (the chunk
@@ -152,18 +159,19 @@ static int fail_at(uint32_t line,enum npu_service_operation op,unsigned model,ui
         f->reply_valid=reply!=NULL;if(reply)f->reply=*reply;
         if(watch){f->watch_valid=1;f->now=watch->now;f->end=watch->end;f->gate=watch->gate;}
         /* These fields have atomic publication. A timeout does not authorize
-         * reading mutable controller fields owned by the NPU worker. The slot
-         * table is EL1 metadata in kernel ledger pages, which an application's
-         * tables do not map. Every task of an application runs at EL0, so an
-         * EL0 caller (a retirement failure in ss_finish, or any other task of
-         * the application) records slot_state 0. The slot pointer is null
-         * before prepare. */
+         * reading mutable controller fields owned by the NPU worker. The
+         * runtime and its slot table are in kernel ledger pages, which an
+         * application's tables do not map. Every task of an application runs
+         * at EL0, so an EL0 caller (a retirement failure in ss_finish, or any
+         * other task of the application) records slot_state 0 and reads only
+         * the signal words in the image. The device state is null before
+         * admission and the slot pointer before prepare. */
         extern int os_task_at_el1(void);
-        f->slot_state=npu.runtime.slot&&os_task_at_el1()?
-            atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire):0;
-        f->runtime_failed=atomic_load_explicit(&npu.runtime.failed,memory_order_acquire);
-        f->irq_pending=atomic_load_explicit(&npu.runtime.service.irq_pending,memory_order_acquire);
-        f->irq_stopped=atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire);
+        f->slot_state=os_task_at_el1()&&npu.device&&RT.slot?
+            atomic_load_explicit(&RT.slot[0].state,memory_order_acquire):0;
+        f->runtime_failed=atomic_load_explicit(&npu.signals.runtime_failed,memory_order_acquire);
+        f->irq_pending=atomic_load_explicit(&npu.signals.irq_pending,memory_order_acquire);
+        f->irq_stopped=atomic_load_explicit(&npu.signals.irq_stopped,memory_order_acquire);
         atomic_store_explicit(&f->ready,2,memory_order_release);
     }
     board_fail_at(site,(uint32_t)observed,where);return -1;
@@ -177,7 +185,7 @@ static void sdk_notify(void *unused)
 {(void)unused;if(npu.client)xTaskNotifyGive(npu.client);}
 void os_npu_queue_notify(void){sdk_notify(NULL);}
 static int fail(void)
-{sdk_notify(NULL);return FAIL_REQUEST(NPU_SERVICE_STATUS,UINT32_MAX,0,NULL,0,npu.runtime.native.failed);}
+{sdk_notify(NULL);return FAIL_REQUEST(NPU_SERVICE_STATUS,UINT32_MAX,0,NULL,0,npu.device?RT.native.failed:0);}
 static void fatal(void *v){(void)v;(void)fail();}
 static int live(void)
 {return npu.started&&board_live(NULL)&&!atomic_load_explicit(&npu.failed,memory_order_acquire);}
@@ -256,20 +264,20 @@ unsigned os_npu_stopped(void)
      * finite client has published its immutable report and suspended. */
     return atomic_load_explicit(&npu.stopped,memory_order_acquire)&&
         !atomic_load_explicit(&npu.failed,memory_order_acquire)&&
-        !atomic_load_explicit(&npu.runtime.failed,memory_order_acquire)&&
-        !atomic_load_explicit(&npu.runtime.service.irq_pending,memory_order_acquire)&&
+        !atomic_load_explicit(&npu.signals.runtime_failed,memory_order_acquire)&&
+        !atomic_load_explicit(&npu.signals.irq_pending,memory_order_acquire)&&
         (!atomic_load_explicit(&npu.active,memory_order_acquire)||
-         (atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire)&&
-          npu_service_runtime_parked(&npu.runtime.service)));
+         (atomic_load_explicit(&npu.signals.irq_stopped,memory_order_acquire)&&
+          atomic_load_explicit(&npu.signals.runtime_parked,memory_order_acquire)));
 }
 static int retirement_fault(void)
 {
     if(atomic_load_explicit(&npu.closed,memory_order_acquire)||
        atomic_load_explicit(&npu.stopped,memory_order_acquire)){
-        unsigned late=atomic_load_explicit(&npu.runtime.service.irq_pending,memory_order_acquire);
-        if(atomic_load_explicit(&npu.runtime.failed,memory_order_acquire))late|=1u<<8;
+        unsigned late=atomic_load_explicit(&npu.signals.irq_pending,memory_order_acquire);
+        if(atomic_load_explicit(&npu.signals.runtime_failed,memory_order_acquire))late|=1u<<8;
         if(atomic_load_explicit(&npu.active,memory_order_acquire)&&
-           !atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire))late|=1u<<9;
+           !atomic_load_explicit(&npu.signals.irq_stopped,memory_order_acquire))late|=1u<<9;
         if(atomic_load_explicit(&npu.failed,memory_order_acquire))late|=1u<<10;
         if(late){(void)FAIL_REQUEST(NPU_SERVICE_CLOSE,UINT32_MAX,0,NULL,0,late);return 1;}
     }
@@ -294,10 +302,10 @@ unsigned os_npu_retirement_state(void)
     if(npu.started)s|=OS_NPU_STATE_STARTED;
     if(npu.opened)s|=OS_NPU_STATE_OPENED;
     if(atomic_load_explicit(&npu.failed,memory_order_acquire))s|=OS_NPU_STATE_FAILED;
-    if(atomic_load_explicit(&npu.runtime.failed,memory_order_acquire))s|=OS_NPU_STATE_RUNTIME_FAILED;
-    if(atomic_load_explicit(&npu.runtime.service.irq_pending,memory_order_acquire))s|=OS_NPU_STATE_IRQ_PENDING;
-    if(atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire))s|=OS_NPU_STATE_IRQ_STOPPED;
-    if(npu_service_runtime_parked(&npu.runtime.service))s|=OS_NPU_STATE_PARKED;
+    if(atomic_load_explicit(&npu.signals.runtime_failed,memory_order_acquire))s|=OS_NPU_STATE_RUNTIME_FAILED;
+    if(atomic_load_explicit(&npu.signals.irq_pending,memory_order_acquire))s|=OS_NPU_STATE_IRQ_PENDING;
+    if(atomic_load_explicit(&npu.signals.irq_stopped,memory_order_acquire))s|=OS_NPU_STATE_IRQ_STOPPED;
+    if(atomic_load_explicit(&npu.signals.runtime_parked,memory_order_acquire))s|=OS_NPU_STATE_PARKED;
     return s;
 }
 int os_npu_retirement_check(void)
@@ -365,31 +373,31 @@ static int call(enum npu_service_operation op,unsigned model,uint64_t timeout)
     if(ticks<wait)wait=(TickType_t)ticks;
     if(!wait)return FAIL_REQUEST(op,model,0,NULL,1,ticks);
     npu.window_ms=(uint32_t)((uint64_t)wait*1000u/configTICK_RATE_HZ);
-    if(op==NPU_SERVICE_SUBMIT&&npu.runtime.service.runtime)npu.runtime.service.runtime->marks=0;
-    if(!npu_runtime_send(&npu.runtime,0,op,model,timeout,wait,&ticket))
-        return FAIL_REQUEST(op,model,0,NULL,1,atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire));
-    if(npu.runtime.service.runtime)npu.runtime.service.runtime->marks|=NPU_MARK_COLLECT;
-    if(!npu_runtime_collect(&npu.runtime,0,ticket,&reply,wait)) {
+    if(op==NPU_SERVICE_SUBMIT&&RT.service.runtime)RT.service.runtime->marks=0;
+    if(!npu_runtime_send(&RT,0,op,model,timeout,wait,&ticket))
+        return FAIL_REQUEST(op,model,0,NULL,1,atomic_load_explicit(&RT.slot[0].state,memory_order_acquire));
+    if(RT.service.runtime)RT.service.runtime->marks|=NPU_MARK_COLLECT;
+    if(!npu_runtime_collect(&RT,0,ticket,&reply,wait)) {
 #ifdef SUNSTONE_NPU_FAULT_HOOK
         /* No reply in time. The record keeps the progress marks (high half of the value, the worker's steps from the
          * MMU capture to the reply and the client's wait) and the wait window in ms (low half, capped), the capture
          * stage (low nibble of the ticket byte) and the controller fault code (high nibble). The controller fields are
          * read from another core, for this image only. */
-        const struct a733_npu_controller *c=&npu.runtime.service.controller;
-        const uint32_t marks=npu.runtime.service.runtime?npu.runtime.service.runtime->marks:0;
+        const struct a733_npu_controller *c=&RT.service.controller;
+        const uint32_t marks=RT.service.runtime?RT.service.runtime->marks:0;
         return fail_at(__LINE__,op,model,(c->mmu_stage&15u)|((unsigned)c->fault&15u)<<4,NULL,1,
                        (uint64_t)(marks&0xffffu)<<16|(npu.window_ms>0xffffu?0xffffu:npu.window_ms),RECORD_WHERE(),NULL);
 #endif
-        return FAIL_REQUEST(op,model,ticket,NULL,1,atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire));
+        return FAIL_REQUEST(op,model,ticket,NULL,1,atomic_load_explicit(&RT.slot[0].state,memory_order_acquire));
     }
-    if(npu.runtime.service.runtime)npu.runtime.service.runtime->marks|=NPU_MARK_WOKE;
+    if(RT.service.runtime)RT.service.runtime->marks|=NPU_MARK_WOKE;
     if(reply.ticket!=ticket)return FAIL_REQUEST(op,model,ticket,&reply,ticket,reply.ticket);
     if(reply.result==NPU_SERVICE_JOB_FAULT&&reply.fault==A733_NPU_MMU&&op==NPU_SERVICE_SUBMIT) {
         /* An NPU MMU exception failed this job; the service recovers the NPU and the session goes on. The fault is
          * published for the application (os_npu_last_fault) and the call returns 2. */
-        if(npu.runtime.service.runtime)npu.runtime.service.runtime->marks|=NPU_MARK_READ;
+        if(RT.service.runtime)RT.service.runtime->marks|=NPU_MARK_READ;
         os_npu_last_fault.mmu_status=reply.mmu_status;os_npu_last_fault.mmu_address=reply.mmu_address;
-        os_npu_last_fault.marks=npu.runtime.service.runtime?npu.runtime.service.runtime->marks:0;
+        os_npu_last_fault.marks=RT.service.runtime?RT.service.runtime->marks:0;
         os_npu_last_fault.window_ms=npu.window_ms;
 #ifdef SUNSTONE_NPU_FAULT_HOOK
         os_npu_last_fault.canary_crc=canary_crc();
@@ -461,8 +469,8 @@ static uint64_t midr_now(void){return 0;}
 int os_npu_register(const void *model,size_t bytes,unsigned *entry)
 {
     /* The graph is admitted like a linked one and must fit the bounds declared in the session (npu_runtime_register). */
-    if(!(caller()&&entry&&npu_runtime_register(&npu.runtime,model,bytes,entry)))return 0;
-    const struct npu_runtime_counters *c=&npu.runtime.counters;
+    if(!(caller()&&entry&&npu_runtime_register(&RT,model,bytes,entry)))return 0;
+    const struct npu_runtime_counters *c=&RT.counters;
     os_npu_register_record=(struct os_npu_register_record){sealed_record.graphs+c->registered,sealed_record.bytes+c->registered_bytes,
         sealed_record.copy_us+c->register_copy_us,sealed_record.decode_us+c->register_decode_us,
         sealed_record.layout_us+c->register_layout_us,{0}};
@@ -470,7 +478,7 @@ int os_npu_register(const void *model,size_t bytes,unsigned *entry)
 }
 int os_npu_load(unsigned entry)
 {
-    if(!caller()||!npu.opened||entry>=atomic_load_explicit(&npu.runtime.count,memory_order_acquire)||os_npu_stopping())return 0;
+    if(!caller()||!npu.opened||entry>=atomic_load_explicit(&RT.count,memory_order_acquire)||os_npu_stopping())return 0;
 #ifdef SUNSTONE_NPU_CASE_SLOTS
     if(entry<sizeof(case_slots)/sizeof(*case_slots)){sunstone_npu_hook_slot=case_slots[entry];sunstone_npu_hook_address=case_addresses[entry];}
     else sunstone_npu_hook_slot=-1;
@@ -480,10 +488,10 @@ int os_npu_load(unsigned entry)
 int os_npu_tensor(enum nbg_section_id section,unsigned index,struct npu_runtime_tensor *tensor)
 {
     if(!caller()||!npu.opened)return 0;
-    return npu_runtime_tensor(&npu.runtime,0,section,index,tensor);
+    return npu_runtime_tensor(&RT,0,section,index,tensor);
 }
 struct npu_runtime *os_npu_queue_runtime(void)
-{return caller()&&npu.opened&&os_npu_queued()?&npu.runtime:NULL;}
+{return caller()&&npu.opened&&os_npu_queued()?&RT:NULL;}
 int os_npu_queue_begin(void)
 {return caller()&&npu.opened&&os_npu_queued()&&claim();}
 void os_npu_queue_end(void){complete();}
@@ -532,10 +540,10 @@ static void bootstrap(void *unused)
             if(!claim()){(void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));continue;}
             complete();begun=1;
         }
-        enum a733_npu_platform_result r=npu_runtime_startup_poll(&npu.runtime);
+        enum a733_npu_platform_result r=npu_runtime_startup_poll(&RT);
         if(r==A733_NPU_PLATFORM_RETAINED){(void)FAIL_REQUEST(NPU_SERVICE_OPEN,0,0,NULL,A733_NPU_PLATFORM_READY,r);goto failed;}
         if(r==A733_NPU_PLATFORM_READY) {
-            enum npu_service_result activated=npu_service_activate(&npu.runtime.service);
+            enum npu_service_result activated=npu_service_activate(&RT.service);
             if(activated==NPU_SERVICE_OK) {
                 atomic_store_explicit(&perf_ready,1,memory_order_release);
                 atomic_store_explicit(&npu.active,1,memory_order_release);xTaskNotifyGive(npu.client);
@@ -545,11 +553,11 @@ static void bootstrap(void *unused)
                         /* The final reply precedes the worker's last callback.
                          * Its release acknowledgment and notification precede
                          * retiring startup/IRQ provider ownership. */
-                        if(!npu_service_runtime_parked(&npu.runtime.service)){
+                        if(!npu_service_runtime_parked(&RT.service)){
                             (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));continue;
                         }
                         if(retirement_fault())goto failed;
-                        r=npu_runtime_stop_poll(&npu.runtime);
+                        r=npu_runtime_stop_poll(&RT);
                         if(r==A733_NPU_PLATFORM_RETAINED){(void)FAIL_REQUEST(NPU_SERVICE_CLOSE,0,0,NULL,A733_NPU_PLATFORM_READY,r);goto failed;}
                         if(r==A733_NPU_PLATFORM_READY) {
                             guard_check();atomic_store_explicit(&npu.stopped,1,memory_order_release);os_application_wake_main();
@@ -651,17 +659,16 @@ static void guard_check(void)
 static int unprepared(uint32_t detail,const void *here){board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),detail,here);return 1;}
 #define UNPREPARED(detail) unprepared((detail),SUNSTONE_CRUMB_HERE())
 const unsigned os_npu_client_model=0;
-/* The device state's pages, zeroed, from the ledger that admission prepares. Admission runs before the scheduler, so nothing else
- * reads the pointer while it is set. */
+/* The device state, zeroed, from the ledger that admission prepares: kernel memory that EL1 alone reaches
+ * (apps/os/owner-memory.h). Admission runs before the scheduler, so nothing else reads the pointer while it is set. The
+ * runtime's service reads and writes its signal words in the image from here on. */
 static int device_take(struct umem *led)
 {
     if(npu.device)return 1;
-    const struct umem_request r={.bytes=(sizeof(struct os_npu_device)+UMEM_PAGE-1)&~(UMEM_PAGE-1),.align=UMEM_PAGE,
-                                 .owner=UMEM_OWNER_KERNEL,.flags=UMEM_RAW,.policy=UMEM_WB};
-    struct umem_buf b;
-    if(umem_alloc(led,&r,&b)!=UMEM_OK)return 0;
-    memset((void *)(uintptr_t)b.base,0,sizeof(struct os_npu_device));
-    npu.device=(struct os_npu_device *)(uintptr_t)b.base;return 1;
+    struct os_npu_device *d=os_owner_memory_from(led,sizeof(struct os_npu_device),UMEM_PAGE,OS_MEMORY_CACHED);
+    if(!d)return 0;
+    d->runtime.service.signals=&npu.signals;
+    npu.device=d;return 1;
 }
 int os_npu_pool_prepare(struct umem *led,uint16_t owner)
 {
@@ -756,24 +763,24 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
         .register_physical=0x03600000,.fatal=fatal,.meta=meta,.now_us=prepare_clock};
     uint64_t layout_begin=0,layout_end=0;
     (void)clock_now(&layout_begin);
-    const int layout_ok=npu_runtime_prepare(&npu.runtime,&config);
+    const int layout_ok=npu_runtime_prepare(&RT,&config);
     (void)clock_now(&layout_end);
     sealed_record.layout_us=layout_end>=layout_begin?layout_end-layout_begin:0;
     prepare_end=layout_end;
     if(!layout_ok){
         /* Name the cause: prepare says which resource did not fit (a graph that is refused, the NPU's address space, or the
          * memory for the declaration's tables and regions). The extent stays held. */
-        return UNPREPARED(npu.runtime.refusal!=NPU_DECLARATION_OK?(uint32_t)npu.runtime.refusal:0x804);
+        return UNPREPARED(RT.refusal!=NPU_DECLARATION_OK?(uint32_t)RT.refusal:0x804);
     }
     /* The bounds are an upper limit on what the graphs need, never a size: a graph beyond them is refused. */
     for(unsigned i=0;i<model_count&&declared.tensor_bytes;++i){
-        const struct nbg_assembly_layout *p=&npu.runtime.plans[i];
+        const struct nbg_assembly_layout *p=&RT.plans[i];
         size_t in=0,out=0;
         for(unsigned j=0;j<p->inputs;++j)in+=p->buffers[NBG_ALLOC_INPUT+j].payload_bytes;
         for(unsigned j=0;j<p->outputs;++j)out+=p->buffers[NBG_ALLOC_INPUT+p->inputs+j].payload_bytes;
         if(in>declared.tensor_bytes||out>declared.tensor_bytes)return UNPREPARED(0x81b);
     }
-    const size_t kept=npu_runtime_trim_parent(&npu.runtime);
+    const size_t kept=npu_runtime_trim_parent(&RT);
     if(!kept||umem_trim(led,&npu.pool,kept)!=UMEM_OK)return UNPREPARED(0x805);
     if(!a733_mapping_check_stride(aarch64_device_translate,(uintptr_t)base,base,kept,0x200000,&wb))return UNPREPARED(0x806);
     /* The reservation is visible to the NPU from here: published before anything can use it. */
@@ -781,10 +788,10 @@ int os_npu_pool_prepare(struct umem *led,uint16_t owner)
     if(requested&&!guard_finish(led,base,kept))return UNPREPARED(0x813);
     /* The queue's tables are in the reservation: take them before the scheduler starts, so the application's first open
      * finds its ring sized for the declaration. */
-    if(queued&&!os_npu_queue_prepare(&npu.runtime))return UNPREPARED((uint32_t)NPU_DECLARATION_MEMORY);
+    if(queued&&!os_npu_queue_prepare(&RT))return UNPREPARED((uint32_t)NPU_DECLARATION_MEMORY);
     os_npu_register_record=sealed_record;
     (void)clock_now(&finish_end);
-    const struct npu_runtime_prepare_parts *pt=&npu.runtime.parts;
+    const struct npu_runtime_prepare_parts *pt=&RT.parts;
     os_npu_prepare_record=(struct os_npu_prepare_record){sealed_record.graphs,sealed_record.bytes,sealed_record.copy_us,
         reserve_end-reserve_begin,pt->decode_us,pt->layout_us,pt->carve_us,pt->place_us,pt->fill_us,pt->native_us,
         finish_end-prepare_end,finish_end-total_begin,cycles_now()-cycles_begin,ticks_now()-ticks_begin,sctlr_now(),midr_now()};
@@ -806,7 +813,7 @@ int os_npu_start(void)
     const struct os_npu_session *g=&s->npu;
     /* The reservation was made when the application was admitted (os_npu_pool_prepare). */
     if(!npu.prepared)return REFUSE();
-    if(!os_npu_sdk_bind(&npu.runtime))return REFUSE();
+    if(!os_npu_sdk_bind(&RT))return REFUSE();
     const struct a733_board_session *b=&s->board;
     npu.end=board.session.deadline_us-10000;
     if(os_lifetime()==A733_LIFETIME_RESIDENT){
@@ -831,10 +838,10 @@ int os_npu_start(void)
     uint64_t now;
     if(!npu.bootstrap||!npu.client)return REFUSE();
     if(!a733_npu_startup_bind_task(&npu.device->startup,npu.bootstrap))return REFUSE();
-    if(!(os_npu_session_queued(g)?npu_runtime_bind_resident(&npu.runtime,&npu.device->startup,npu.client,4,2):
-         npu_runtime_bind(&npu.runtime,&npu.device->startup,clients,4,2)))return REFUSE();
-    if(!os_npu_irq_bind(&npu.runtime))return REFUSE();
-    if(os_npu_diagnostic_bind&&!os_npu_diagnostic_bind(&npu.runtime))return REFUSE();
+    if(!(os_npu_session_queued(g)?npu_runtime_bind_resident(&RT,&npu.device->startup,npu.client,4,2):
+         npu_runtime_bind(&RT,&npu.device->startup,clients,4,2)))return REFUSE();
+    if(!os_npu_irq_bind(&RT))return REFUSE();
+    if(os_npu_diagnostic_bind&&!os_npu_diagnostic_bind(&RT))return REFUSE();
     if(npu.end>(UINT64_MAX>>3)-5000000||!clock_now(&now))return REFUSE();
     if(now>=npu.end)return REFUSE();
     npu.initial_deadline=now+1000000;

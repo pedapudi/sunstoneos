@@ -92,7 +92,7 @@ static struct npu_service_reply irq_wait(enum a733_npu_state wanted)
         r=irq_request(NPU_SERVICE_STATUS,0,0);
     }while(r.state!=wanted && r.state!=A733_NPU_FAULT);
     reply_ticks=irq_ticks();
-    if(r.state==A733_NPU_FAULT){platform_puts("IRQ fixture fault=");platform_hex(r.fault);platform_puts(" masks=");platform_hex(mask_calls);platform_puts(" rearms=");platform_hex(rearm_calls);platform_puts(" pending=");platform_hex(atomic_load(&service.irq_pending));platform_puts("\n");}
+    if(r.state==A733_NPU_FAULT){platform_puts("IRQ fixture fault=");platform_hex(r.fault);platform_puts(" masks=");platform_hex(mask_calls);platform_puts(" rearms=");platform_hex(rearm_calls);platform_puts(" pending=");platform_hex(atomic_load(&service.signals->irq_pending));platform_puts("\n");}
     return r;
 }
 /* WAIT: exactly one held reply once the bootstrap or job leaves its active
@@ -111,7 +111,7 @@ static void cancel_trace(const char *where,struct npu_service_reply r)
     platform_puts(" fault=");platform_hex(r.fault);platform_puts(" owns=");platform_hex(r.owns_session);
     platform_puts(" stops=");platform_hex(stop_calls);platform_puts(" event=");platform_hex(model.regs[0x10/4]);
     platform_puts(" sampled=");platform_hex(model.last_event_read);
-    platform_puts(" notified=");platform_hex(atomic_load(&service.irq_pending));
+    platform_puts(" notified=");platform_hex(atomic_load(&service.signals->irq_pending));
     platform_puts(" injected=");platform_hex(model.cancel_events);platform_puts("\n");
 }
 static void irq_owner(void *unused)
@@ -134,7 +134,7 @@ static void irq_owner(void *unused)
         configASSERT(r.result==NPU_SERVICE_OK && r.canceled && r.owns_session);
         configASSERT(model.regs[0x10/4]==(npu_irq_case==20) && model.event_sent==(npu_irq_case==20));
         configASSERT(model.cancel_events==(npu_irq_case==20) && !model.last_event_read);
-        configASSERT(!delivered && !atomic_load(&service.irq_pending) && !npu_service_irq_completions(&service));
+        configASSERT(!delivered && !atomic_load(&service.signals->irq_pending) && !npu_service_irq_completions(&service));
     }else if(npu_irq_case==0 || npu_irq_case==6 || npu_irq_case==9 || npu_irq_case==12 || npu_irq_case==15 || npu_irq_case==19){
         r=npu_irq_case==9?irq_hold():irq_wait(A733_NPU_READY);configASSERT(r.state==A733_NPU_READY);
         for(unsigned j=0;j<2;++j){

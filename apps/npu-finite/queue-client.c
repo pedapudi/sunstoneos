@@ -228,7 +228,7 @@ int npu_startup_return_ready(void)
 {
     const struct npu_runtime *rt=runtime;
     return completed==NPU_STARTUP_READY&&rt&&a733_npu_application_quiescent()&&
-        !atomic_load_explicit(&rt->failed,memory_order_acquire)&&!direct.claimed&&
+        !atomic_load_explicit(&rt->service.signals->runtime_failed,memory_order_acquire)&&!direct.claimed&&
 #if SUNSTONE_NPU_LATENCY_SEQUENCE
         !sequence.claimed&&sequence_checked==1&&
 #endif

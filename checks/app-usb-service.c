@@ -1,5 +1,13 @@
 #include "sunstone_usb_service.h"
+#include "../apps/os/owner-memory.h"
 #include <assert.h>
+/* The manifest's input queue depth, and the ledger that admission takes the queue from: readable and writable at EL0. */
+enum { EVENTS=4 };
+const unsigned ss_usb_input_events=EVENTS;
+static _Alignas(16) unsigned char queue[EVENTS*(sizeof(struct ss_input_event)+sizeof(unsigned))];
+static unsigned taken;
+void *os_owner_memory(uint64_t bytes,uint64_t align,unsigned attributes)
+{assert(bytes==sizeof(queue)&&!align&&attributes==OS_MEMORY_EL0_WRITE);++taken;return queue;}
 static struct ss_grant grant;
 static int live=1,writes,wakes,configured;
 static unsigned serial_releases,camera_releases;
@@ -22,6 +30,10 @@ int main(void)
     const struct os_usb_service_ops ops={.wake=wake,.release=release,.write=write,
         .configure=configure,.configured=config_result};
     os_usb_service_init(&ops,0);
+    /* Before admission there is no queue, and an event finds it full. */
+    struct ss_input_event early={.kind=SS_INPUT_KEY,.usage=4};
+    assert(os_usb_service_input(&early)==0);
+    assert(os_usb_service_memory()==1&&taken==1&&os_usb_service_memory()==1&&taken==1);
     char bytes[]="abc";struct ss_usb_serial_buffer value={7,1,(void *)bytes,3},out;
     assert(ss_usb_serial_acquire(&out)==-1);
     grant.devices=SS_DEVICE_USB_SERIAL;assert(ss_usb_serial_acquire(&out)==0);
@@ -59,6 +71,10 @@ int main(void)
     assert(ss_input_event(&event)==0);assert(os_usb_service_input(&input)==1);
     assert(ss_input_event(&event)==1&&event.usage==4);
     os_usb_service_disconnected(SS_DEVICE_USB_MOUSE);assert(ss_input_event(&event)==0);
+    /* The queue holds the declared depth and refuses the next event until the application reads one. */
+    for(unsigned i=0;i<EVENTS;++i)assert(os_usb_service_input(&input)==1);
+    assert(os_usb_service_input(&input)==0);assert(ss_input_event(&event)==1);assert(os_usb_service_input(&input)==1);
+    while(ss_input_event(&event)==1){}
 
     /* A pinned frame rejects release until the OS finishes its gather. */
     grant.devices|=SS_DEVICE_USB_CAMERA;os_usb_service_connected(SS_DEVICE_USB_CAMERA);

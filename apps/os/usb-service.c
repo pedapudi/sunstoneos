@@ -8,18 +8,19 @@
 #endif
 #include "sunstone_usb_serial.h"
 #include "sunstone_usb_uvc.h"
+#include "owner-memory.h"
 /* Lease tables follow the drivers that fill them: every receive buffer of
  * every serial port can be leased at once, and the camera holds its frame ring
  * plus the frame being assembled. A frame has at most SUNSTONE_UVC_SLICES
  * pages, one per shared data page. The input queue is a depth, not a format
- * limit: build with -DSS_USB_INPUT_EVENTS=N to size it for the report rate
- * and the longest the application can be away from ss_input_event. */
+ * limit: the manifest declares it (usb.input_events, a power of two, for the
+ * report rate and the longest the application can be away from
+ * ss_input_event; tools/sunstone-manifest.py), and it is 0 for an application
+ * that declares neither keyboard nor mouse. */
 #define serial_SLOTS (SS_USB_SERIAL_PORTS*SS_USB_SERIAL_SLOTS)
 #define camera_SLOTS (SUNSTONE_UVC_FRAMES+1u)
-#ifndef SS_USB_INPUT_EVENTS
-#define SS_USB_INPUT_EVENTS 1024u
-#endif
-#define EVENTS SS_USB_INPUT_EVENTS
+extern const unsigned ss_usb_input_events;
+#define EVENTS ss_usb_input_events
 struct lease { atomic_uint state; uint64_t token; }; /* free, ready, held, release */
 static struct { struct lease lease; struct ss_usb_serial_buffer value; } serial[serial_SLOTS];
 static struct { struct lease lease; struct ss_usb_camera_frame value;
@@ -27,16 +28,27 @@ static struct { struct lease lease; struct ss_usb_camera_frame value;
     struct ss_usb_frame_slice slices[SUNSTONE_UVC_SLICES];
 #endif
 } camera[camera_SLOTS];
-static struct { atomic_uint write,read; struct ss_input_event value[EVENTS]; } input;
+/* The queue's events and their epochs come from the ledger at admission (os_usb_service_memory). */
+static struct { atomic_uint write,read; struct ss_input_event *value; } input;
 static struct { atomic_uint state; uint64_t sequence; const void *data; size_t bytes,actual; int status; } tx;
 static struct {atomic_uint state;uint64_t sequence;struct ss_usb_serial_line line;int result;} config;
 static uint64_t last_config;
 static atomic_uint connected,disconnected,retiring;
 static atomic_uint input_epoch[2];
-static unsigned event_epoch[EVENTS];
+static unsigned *event_epoch;
 static uint64_t serial_token,camera_token,last_tx;
 static struct os_usb_service_ops ops;
 static void *context;
+/* Admission (os_large_prepare): the input queue's storage, readable and writable by the application's tasks, which run
+ * ss_input_event. 1 when taken or none is declared, 0 when the ledger refuses it. */
+int os_usb_service_memory(void)
+{
+    if(!EVENTS||input.value)return 1;
+    size_t values=(size_t)EVENTS*sizeof(*input.value);
+    uint8_t *m=os_owner_memory(values+(size_t)EVENTS*sizeof(*event_epoch),0,OS_MEMORY_EL0_WRITE);
+    if(!m)return 0;
+    input.value=(struct ss_input_event *)(void *)m;event_epoch=(unsigned *)(void *)(m+values);return 1;
+}
 static int allowed(unsigned device)
 { const struct ss_grant *g=ss_grant(); return g&&(g->devices&device)&&!atomic_load_explicit(&retiring,memory_order_acquire)&&ss_live()>=0; }
 static void wake(void){if(ops.wake)ops.wake(context);}
@@ -61,6 +73,7 @@ int os_usb_service_input(const struct ss_input_event *e)
 {
     if(!e||(e->kind!=SS_INPUT_KEY&&e->kind!=SS_INPUT_POINTER))return -1;
     if(atomic_load_explicit(&retiring,memory_order_acquire))return 1;
+    if(!input.value)return 0;   /* no queue: the application declares no input class */
     unsigned w=atomic_load_explicit(&input.write,memory_order_relaxed);
     unsigned r=atomic_load_explicit(&input.read,memory_order_acquire);
     if(w-r==EVENTS)return 0;

@@ -8,7 +8,7 @@ from elftools.elf.elffile import ELFFile
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args();a.out.mkdir(parents=True,exist_ok=False)
-im=Image(a.image,layout_names=('npu_runtime','npu_runtime_slot','npu_runtime_counters','npu_service','a733_npu_controller','a733_observe_identity','npu_finite_network','ss_npu_backend'))
+im=Image(a.image,layout_names=('npu_runtime','npu_runtime_slot','npu_runtime_counters','npu_service','npu_service_signals','a733_npu_controller','a733_observe_identity','npu_finite_network','ss_npu_backend'))
 L=im.layouts;enums={}
 with a.image.open('rb') as f:
  for cu in ELFFile(f).get_dwarf_info().iter_CUs():
@@ -24,7 +24,7 @@ for variant in ('matched','last-output-mismatch','last-IRQ-missing','last-job-fa
  def ret(v=0):u.reg_write(UC_ARM64_REG_X0,v);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
  profile=im.address('npu_startup_return_profile');jobs=get(profile+16);rt=0x43000000
  service=rt+L['npu_runtime']['service'];slot=rt+L['npu_runtime']['slot'];controller=service+L['npu_service']['controller']
- put(im.address('instance'),service);put(service+L['npu_service']['irq_bound'],1,4);put(service+L['npu_service']['irq_completions'],1,4)
+ put(im.address('instance'),service);put(service+L['npu_service']['signals'],service+L['npu_service']['own_signals']);put(service+L['npu_service']['irq_bound'],1,4);put(service+L['npu_service']['irq_completions'],1,4)
  put(im.address('a733_observe_identity')+L['a733_observe_identity']['deadline'],480000000)
  state={'pump':None,'ticks':24000000,'models':[],'exit':None,'retained':False,'closed':False,'log':''}
  names=('a733_npu_application_ready','a733_npu_application_runtime','npu_job_run','npu_job_close','a733_npu_application_stopped','a733_npu_application_quiesce','a733_npu_application_quiescent','a733_npu_application_fail','vTaskDelay','vTaskSuspend','vPortEnterCritical','platform_exit','platform_puts','platform_hex')
@@ -66,7 +66,7 @@ for variant in ('matched','last-output-mismatch','last-IRQ-missing','last-job-fa
    state['closed']=True
    for field,value in [('opened',1),('closed',1),('state',enums['NPU_RUNTIME_CLOSED'])]:put(slot+L['npu_runtime_slot'][field],value,4)
    put(controller+L['a733_npu_controller']['state'],enums['A733_NPU_CLOSED'],4)
-   put(service+L['npu_service']['irq_stopped'],1,4);ret(1)
+   put(service+L['npu_service']['own_signals']+L['npu_service_signals']['irq_stopped'],1,4);ret(1)
   elif name in ('a733_npu_application_stopped','a733_npu_application_quiesce','a733_npu_application_quiescent'):ret(int(state['closed']))
   elif name=='platform_puts':
    text=bytearray();ptr=args[0]

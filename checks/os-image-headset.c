@@ -22,6 +22,18 @@ static uint32_t segment_flags;
 static struct os_session session;
 static unsigned radio_granted; /* the session grants the radio: the headset shares the radio's module owner */
 static uint64_t start_us,end_us;
+/* The ledger (apps/os/owner-memory.h): one extent, readable and writable at EL0, of the headset's memory and the library's state. */
+#define STATE_BYTES 4096u
+const size_t bluetooth_headset_state_bytes=STATE_BYTES;
+static _Alignas(64) uint8_t extent[((sizeof(struct headset_memory)+63)&~(size_t)63)+STATE_BYTES];
+static unsigned taken,given;
+void *os_owner_memory(uint64_t bytes,uint64_t align,unsigned attributes)
+{
+    check(!taken&&bytes==sizeof(extent)&&align==64&&attributes==OS_MEMORY_EL0_WRITE,90);
+    ++taken;return extent;
+}
+int bluetooth_headset_memory(void *m)
+{check(m==extent+((sizeof(struct headset_memory)+63)&~(size_t)63)&&!given,91);++given;return 1;}
 int board_live(void *v){(void)v;return board_up;}
 void board_fail(void *v){(void)v;board_failed=1;}
 const struct os_session *os_session_admitted(void){return &session;}
@@ -146,7 +158,7 @@ static int16_t at(const uint8_t *p){return (int16_t)(p[0]|p[1]<<8);}
 static void converted(unsigned g,uint64_t ticket)
 {
     const uint8_t *wav;size_t bytes;
-    check(os_headset_capture(g,&wav,&bytes)==1&&wav==headset.wav&&bytes==44+2*SEGMENT_BYTES,30);
+    check(os_headset_capture(g,&wav,&bytes)==1&&wav==memory->wav&&bytes==44+2*SEGMENT_BYTES,30);
     check(!memcmp(wav,"RIFF",4)&&!memcmp(wav+8,"WAVEfmt ",8)&&get32(wav+24)==16000&&get32(wav+40)==2*SEGMENT_BYTES,31);
     for(unsigned k=0;k+2<SEGMENT_BYTES;k+=2){
         uint8_t a[2]={value(ticket,k),value(ticket,k+1)},b[2]={value(ticket,k+2),value(ticket,k+3)};
@@ -226,6 +238,7 @@ static void pins_cases(void)
     nominal_session();session.granted&=~OS_GRANT_HEADSET;board_pins(&clear);
     struct a733_pin_handoff before=clear;
     check(os_headset_pins(&clear)==1&&!memcmp(&clear,&before,sizeof(clear)),37);
+    check(os_headset_memory()==1&&!taken&&!memory,39);
     check(os_headset_start()==1&&!created&&!initialized&&!headset.client,38);
 }
 static void start_case(void)
@@ -275,10 +288,18 @@ void os_check_run(unsigned selected)
     mode=selected&0xff;radio_granted=selected>>8&1;
     model_lifetime=selected>>9&1?A733_LIFETIME_RESIDENT:A733_LIFETIME_SUPERVISED;
     const uint8_t *wav;size_t bytes;
-    if(mode==0){pins_cases();start_case();os_check_result=1;return;}
+    if(mode==0){
+        pins_cases();
+        /* The headset has no memory before admission takes it, and starts nothing without it. */
+        nominal_session();check(!os_headset_start()&&!created&&!initialized,45);
+        check(os_headset_memory()==1&&taken==1&&given==1&&(uint8_t *)memory==extent&&os_headset_memory()==1&&taken==1,46);
+        start_case();os_check_result=1;return;
+    }
+    /* Admission took the headset's memory (os_large_prepare). */
+    session.granted=OS_GRANT_HEADSET;check(os_headset_memory()==1&&memory,47);session.granted=0;
     if(mode==7){owner_case();os_check_result=1;return;}
     /* The started client's handle; os_headset_start runs in mode 0. */
-    headset.client=(TaskHandle_t)&headset.client_task;
+    headset.client=(TaskHandle_t)&memory->client_task;
     board.session.workload=mode==10?0:4;
     if(mode==8){
         /* The supervised capture window ends capture without a fault; any other

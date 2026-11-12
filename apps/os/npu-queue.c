@@ -236,7 +236,7 @@ static int doorbell(void *unused)
 static void progress(void *unused,BaseType_t *woken)
 {
     (void)unused;irq_woken=woken;
-    if(atomic_load_explicit(&direct.runtime->failed,memory_order_acquire))ss_npu_queue_service_fail(&ring,1);
+    if(atomic_load_explicit(&direct.runtime->service.signals->runtime_failed,memory_order_acquire))ss_npu_queue_service_fail(&ring,1);
     else (void)ss_npu_queue_service_progress(&ring,1,1);
     irq_woken=NULL;
 }

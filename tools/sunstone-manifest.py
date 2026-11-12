@@ -147,7 +147,8 @@ def integer(value, where, low=0, high=(1 << 64) - 1):
 def load(path, supervised=False):
     """manifest.json -> normalized dict with integer fields."""
     raw = json.loads(Path(path).read_text())
-    known = {'name', 'devices', 'cpu', 'regions', 'large_regions', 'audio', 'deadlines', 'output_limit', 'host_ops', 'npu', 'gpu', 'abi'}
+    known = {'name', 'devices', 'cpu', 'regions', 'large_regions', 'audio', 'usb', 'deadlines', 'output_limit', 'host_ops', 'npu', 'gpu',
+             'abi'}
     require(set(raw) <= known, '%s: unknown keys %s' % (path, sorted(set(raw) - known)))
     name = raw['name']
     require(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9-]{0,14}', name) is not None,
@@ -237,6 +238,19 @@ def load(path, supervised=False):
         require(m['audio']['min_frames'] <= m['audio']['max_frames'], name + ': min_frames exceeds max_frames')
     else:
         m['audio'] = {'rate_hz': 0, 'channels': 0, 'bits': 0, 'min_frames': 0, 'max_frames': 0}
+    # The depth of the USB input queue (apps/os/usb-service.c). It is not part of the packed binary: the generated tables carry
+    # it, and admission takes the queue from the ledger. The ring indexes it with free-running 32-bit counters, so the depth is
+    # a power of two of at most 2^31. The default, 1,024 events, is the depth the USB input image was built with; no
+    # application has measured its report rate.
+    usb = raw.get('usb', {})
+    require(isinstance(usb, dict) and set(usb) <= {'input_events'}, name + ': unknown usb keys')
+    if (required | optional) & (DEVICES['usb-keyboard'] | DEVICES['usb-mouse']):
+        events = integer(usb.get('input_events', 1024), name + ' usb input_events', 1, 1 << 31)
+        require(events & (events - 1) == 0, name + ': usb input_events is a power of two')
+    else:
+        require('input_events' not in usb, name + ': usb input_events needs the usb-keyboard or usb-mouse device')
+        events = 0
+    m['usb_input_events'] = events
     regions, names = [], []
     # region_count is one byte of the manifest head, so a manifest declares at most 255 regions.
     require(len(raw.get('regions', [])) <= 255, name + ': at most 255 regions (the one-byte region_count)')
@@ -581,6 +595,28 @@ def c_header(m):
     return '\n'.join(lines)
 
 
+def capture_bytes(m):
+    """Bytes of the capture buffer: the 64-byte headroom and the declared frames, at least 8,192 bytes of them, in whole
+    pages; 0 when the manifest declares no frames."""
+    a = m['audio']
+    if not a['max_frames']:
+        return 0
+    return 64 + max(8192, -(-(a['max_frames'] * a['channels'] * (a['bits'] // 8)) // 4096) * 4096)
+
+
+def owner_extents(m):
+    """The device owners' extents that the application's tables map (apps/os/owner-memory.h): the capture buffer, the USB
+    input queue, and the headset's state when the manifest lists the headset."""
+    return ((1 if capture_bytes(m) else 0) + (1 if m.get('usb_input_events', 0) else 0) +
+            (1 if (m['devices_required'] | m['devices_optional']) & DEVICES['audio-headset'] else 0))
+
+
+def ledger_entries(m):
+    """Entries of the application's region view: its large regions and regions, three for the OS's own extents in its
+    space (the main stack and the NPU reservation among them), and the device owners' extents."""
+    return len(m.get('large_regions', [])) + len(m.get('regions', [])) + 3 + owner_extents(m)
+
+
 def c_tables(m):
     noapp=m is None
     if noapp:
@@ -605,8 +641,8 @@ def c_tables(m):
              'const unsigned os_large_capacity = %du;' % len(m.get('large_regions', [])),
              'struct large_slot os_large_slot_storage[%d];' % max(1, len(m.get('large_regions', []))),
              '/* The ledger also holds the manifest regions that lie in the slot 1 area. */',
-             'const unsigned os_ledger_capacity = %du;' % (len(m.get('large_regions', [])) + len(m.get('regions', [])) + 3),
-             'struct app_region_entry os_large_entry_storage[%d];' % max(1, len(m.get('large_regions', [])) + len(m.get('regions', [])) + 3),
+             'const unsigned os_ledger_capacity = %du;' % ledger_entries(m),
+             'struct app_region_entry os_large_entry_storage[%d];' % ledger_entries(m),
              '/* A task waits on one region at a time: one entry per task of the application. */',
              'const unsigned os_large_waiter_capacity = %du;' % (m.get('workers', 0) + 1),
              'TaskHandle_t os_large_waiter_task[%d];' % (m.get('workers', 0) + 1),
@@ -616,8 +652,11 @@ def c_tables(m):
              'TaskHandle_t os_wake_task[%d];' % (m.get('workers', 0) + 1),
              'unsigned os_wake_gave[%d];' % (m.get('workers', 0) + 1),
              '/* The start entries and supervised tasks of the OS services (apps/os/os-services.h). */', 'OS_START_PROTOTYPES',
-             '__attribute__((aligned(4))) uint8_t ss_capture_buffer[%d];' % (64 + max(8192, -(-(m['audio']['max_frames']*m['audio']['channels']*(m['audio']['bits']//8))//4096)*4096) if m['audio']['max_frames'] else 64),
-             'const size_t ss_capture_capacity = sizeof(ss_capture_buffer)-SS_CAPTURE_HEADROOM;',
+             '/* The capture buffer: the 64-byte headroom and the declared frames. Admission takes it from the ledger (apps/os/capture.c). */',
+             'const size_t ss_capture_bytes = %du;' % capture_bytes(m),
+             'const size_t ss_capture_capacity = %du;' % (capture_bytes(m) - 64 if capture_bytes(m) else 0),
+             '/* The USB input queue\'s depth; admission takes the queue from the ledger (apps/os/usb-service.c). */',
+             'const unsigned ss_usb_input_events = %du;' % m.get('usb_input_events', 0),
              '__attribute__((used,retain)) const struct os_application os_applications[] = {',
              '    OS_START_TABLE',
              '    {"%s",os_application_task_privileged,os_application_pins,os_application_start},' % m['name'],

@@ -145,6 +145,7 @@ for target, compiler, flags in [('host', a.cc, []),
         for entry in described:
             entry.pop('large_regions')      # the manifest section does not carry them; decode-large does
             entry.pop('gpu')                # the gpu declaration goes to the image tables, not the packed manifest
+            entry.pop('usb_input_events')   # the USB input depth goes to the image tables, not the packed manifest
         assert decoded == described, name + ' decoder differs'
     include = ['-I', ROOT / 'include', '-I', generated['hello_compute']]
     main = out / 'main.o'

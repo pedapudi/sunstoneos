@@ -93,7 +93,7 @@ int npu_startup_return_ready(void)
 {
     const struct npu_runtime *rt=runtime;
     return completed==NPU_STARTUP_READY && rt && a733_npu_application_quiescent() &&
-        !atomic_load_explicit(&rt->failed,memory_order_acquire) &&
+        !atomic_load_explicit(&rt->service.signals->runtime_failed,memory_order_acquire) &&
         atomic_load_explicit(&rt->slot[0].state,memory_order_acquire)==NPU_RUNTIME_CLOSED &&
         rt->slot[0].opened && rt->slot[0].closed && !rt->slot[0].pending &&
         rt->service.controller.state==A733_NPU_CLOSED && !rt->service.controller.fault &&
