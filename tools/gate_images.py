@@ -14,6 +14,9 @@ FIXTURES = {
 }
 
 IMAGES = {
+    'card-fel-recovery': {'configure': [
+        '-DSUNSTONE_A733_CARD_FEL_RECOVERY=ON',
+    ], 'target': 'a733-card-fel-recovery', 'elf': 'a733-card-fel-recovery.elf'},
     'ret-walks-uncached': {'configure': [
         '-DSUNSTONE_APPLICATION=table-walks', '-DSUNSTONE_A733_TABLE_WALKS=uncached',
     ], 'target': 'sunstone-a733-os-table-walks', 'elf': 'sunstone-a733-os-table-walks.elf'},

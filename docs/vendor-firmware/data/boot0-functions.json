@@ -19,7 +19,7 @@
    "size": 0,
    "callers": [],
    "callees": [],
-   "role": "Reset stub. Enters SVC, clears SCTLR.M/A/C and sets SCTLR.I, sets SP=0x8d000, clears BSS (0x47b40), calls main (0x5e158)."
+   "role": "Reset stub. Enters SVC, clears SCTLR bits 0, 1, 2, 12 and 13, sets bit 11, sets SP=0x8d000, clears BSS (0x47b40), and calls main (0x5e158)."
   },
   {
    "addr": "0x482b0",
@@ -956,15 +956,16 @@
   },
   {
    "addr": "0x4a990",
-   "size": 52,
+   "size": 92,
    "callers": [
     "0x5e158"
    ],
    "callees": [
     "0x4993c",
-    "0x4a95c"
+    "0x4a95c",
+    "0x4a940"
    ],
-   "role": "Clear eight RTC general-purpose registers; read index 2 for the crashdump/FEL flag."
+   "role": "Read and print nonzero RTC general-purpose words 0 through 7; test index 2 for the vendor FEL request. The matching request returns true without clearing other words. A separate crashdump value performs a handshake through index 2."
   },
   {
    "addr": "0x4aa08",
@@ -973,7 +974,7 @@
     "0x5e158"
    ],
    "callees": [],
-   "role": "unclassified (BL-reachable; see full inventory)"
+   "role": "Consume the vendor FEL request by clearing only RTC general-purpose index 2 with barriers and readback through the helper at 0x4a974."
   },
   {
    "addr": "0x4aa10",

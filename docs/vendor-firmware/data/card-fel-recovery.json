@@ -1,0 +1,78 @@
+{
+  "schema": "sunstone-card-fel-sources-v1",
+  "source_execution": "Host reference only; no vendor source is linked into the gate.",
+  "uboot": {
+    "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+    "archive_sha256": "e719ccdb7c14b9ac8189c3e5a3fa64dd040aee1efec0adb22f86cb55cebd0ea9",
+    "license": "GPL-2.0-or-later",
+    "files": [
+      {
+        "path": "arch/arm/mach-sunxi/rtc.c",
+        "sha256": "1d636de68635036c17fc347a5f0bd6f9ee1f0c4ae49d5e44996666101c5c0a29",
+        "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/arch/arm/mach-sunxi/rtc.c"
+      },
+      {
+        "path": "board/sunxi/board_common.c",
+        "sha256": "d6112215cca4d8e365261bdb9e8130d9e656cc502039f276a684265b6d5881cf",
+        "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/board/sunxi/board_common.c"
+      },
+      {
+        "path": "arch/arm/include/asm/arch-sunxi/cpu.h",
+        "sha256": "a02bbe7e79ae193507414a4cd9327cffff09a0058625e432ac4208a3209c426e",
+        "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/arch/arm/include/asm/arch-sunxi/cpu.h"
+      },
+      {
+        "path": "arch/arm/include/asm/arch-sunxi/plat-sun60iw2p1/cpu_sun60iw2.h",
+        "sha256": "321fd5c06f491863d840a1cff4348fbb063542890f237700379dad6a5727d94b",
+        "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/arch/arm/include/asm/arch-sunxi/plat-sun60iw2p1/cpu_sun60iw2.h"
+      },
+      {
+        "path": "arch/arm/include/asm/arch-sunxi/plat-sun60iw2p1/cpu_autogen.h",
+        "sha256": "9d3ffa2be3a42321ac371732bda98943791b55c15b4ee783fac0e3e13cce2d55",
+        "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/arch/arm/include/asm/arch-sunxi/plat-sun60iw2p1/cpu_autogen.h"
+      }
+    ]
+  },
+  "boot0": {
+    "sha256": "829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_orangepizero3w.fex",
+    "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+    "source_available": false,
+    "license": "Vendor-distributed opaque boot0; existing dependency record applies.",
+    "load": "0x47000",
+    "functions": {
+      "request_test": "0x4a990",
+      "request_clear": "0x4aa08 via 0x4a974",
+      "main_request_call": "0x5e1ae",
+      "rom_branch": "0x5e1d0..0x5e1d2 via 0x48ec6",
+      "cache_cleanup": "0x48e8c"
+    }
+  },
+  "captured_rom": {
+    "sha256": "a8e31821e8a1611d75867825914c58373c732742cb8f2235e8168c1d7e93b5aa",
+    "bytes": 69632,
+    "source": "Recorded board ROM capture, rom-copy-20261016-084055; no source published.",
+    "forced_fel": "0x20",
+    "second_redirect": "0x1f0..0x208 and 0x240..0x244",
+    "media_icache_enable": "0x2888..0x2890",
+    "media_branch_to_boot0": "0x1061c",
+    "sd_length_check": "0xae58..0xae78 calls 0x27e8; aligned 512 bytes and at most 0xa7800"
+  },
+  "rtc_manual": {
+    "url": "https://gitlab.com/api/v4/projects/71118510/repository/files/A733%2FHardware%E7%A1%AC%E4%BB%B6%E7%B1%BB%E6%96%87%E6%A1%A3%2F%E8%8A%AF%E7%89%87%E6%89%8B%E5%86%8C%2FA733_User%20Manual_V1.00.pdf/raw?ref=d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
+    "revision": "d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
+    "sha256": "cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d",
+    "section": "9.1.7.14, general-purpose registers",
+    "condition": "Retained while VDD_RTC > 0.7 V; power-removal retention is not established."
+  },
+  "request": {
+    "address": "0x07090108",
+    "value": "0x5aa5a55a",
+    "normal_boot_value": 0
+  },
+  "limits": [
+    "The ROM does not consume the RTC request; boot0 or the early gate does.",
+    "Direct ROM entry still checks the second redirect word.",
+    "The RAM proof establishes no storage loading or system-watchdog-reset-to-card recovery."
+  ]
+}
