@@ -10,7 +10,15 @@ static struct a733_usb2_native *host;
 #include "sunstone_usb_uvc.h"
 #include "sunstone_usb_serial.h"
 #include "host/usbh_pvt.h"
+#if defined(SUNSTONE_USB_LEDGER_MEMORY) && SUNSTONE_USB_LEDGER_MEMORY
+#include "../../apps/os/owner-memory.h"
+/* Parser state is CPU-only. The OS takes zeroed cached memory once, before
+ * publishing the host to TinyUSB and its callbacks. */
+static struct sunstone_usb_hid (*generic_hid)[CFG_TUH_HID];
+static unsigned generic_hid_attempted;
+#else
 static struct sunstone_usb_hid generic_hid[CFG_TUH_DEVICE_MAX][CFG_TUH_HID];
+#endif
 static sunstone_hid_emit input_emit;
 static void *input_context;
 static uint64_t hid_generation;
@@ -241,6 +249,14 @@ uint32_t tusb_time_millis_api(void)
 int a733_usb2_host_bind(struct a733_usb2_native *n)
 {
     if(host||!n||n->self!=n||!n->core_started||!n->core.self||n->core.ops.current(n->core.context)!=1)return 0;
+#if SUNSTONE_USB_HOST_GENERIC && defined(SUNSTONE_USB_LEDGER_MEMORY) && SUNSTONE_USB_LEDGER_MEMORY
+    if(generic_hid_attempted)return 0;
+    if(n->generic_host){
+        generic_hid_attempted=1;
+        generic_hid=os_owner_memory(sizeof(*generic_hid)*CFG_TUH_DEVICE_MAX,64,OS_MEMORY_CACHED);
+        if(!generic_hid)return 0;
+    }
+#endif
     host=n;uint64_t now;if(!clock_now(&now)||now>=n->platform.config.deadline){lost();return 0;}
     n->mount_deadline=n->platform.config.deadline;n->mount_budget=n->platform.config.deadline-now;
     if(n->generic_host)n->transport.generation=n->core.generation;
