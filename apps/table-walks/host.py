@@ -82,17 +82,15 @@ def compare(a, b):
     if a['cached'] or not b['cached'] or a['midr'] != b['midr'] or a['iterations'] != b['iterations']:
         raise ValueError('comparison needs uncached A and cached B on the same CPU and workload')
     old, new = a['median_cycles_per_iteration'], b['median_cycles_per_iteration']
-    for event in ('dtlb_walk', 'itlb_walk'):
-        left = [s[event] for s in a['samples'][1:]]
-        right = [s[event] for s in b['samples'][1:]]
-        if max(min(left), min(right)) > min(max(left), max(right)):
-            raise ValueError(f'comparison {event} count ranges do not overlap')
-        if not min(left) <= statistics.median(right) <= max(left):
-            raise ValueError(f'comparison {event} median is outside the control range')
+    for event, description in (('digest', 'load digests'), ('itlb_walk', 'instruction-walk counts')):
+        if [s[event] for s in a['samples'][1:]] != [s[event] for s in b['samples'][1:]]:
+            raise ValueError(f'comparison {description} differ')
     spread = max(a['spread_cycles'], b['spread_cycles'])
     return dict(uncached_cycles=old, cached_cycles=new, saved_cycles=old - new,
                 saved_percent=100 * (old - new) / old, spread_cycles=spread,
-                gain=old - new > spread)
+                gain=old - new > spread,
+                data_walks_uncached=[s['dtlb_walk'] for s in a['samples'][1:]],
+                data_walks_cached=[s['dtlb_walk'] for s in b['samples'][1:]])
 
 
 if __name__ == '__main__':

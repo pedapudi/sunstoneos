@@ -196,19 +196,25 @@ def decoder_cases(tcr, out):
     incompatible = host.decode(payload(a733_tcr.CACHED_WALK, 1024 * 400))
     for sample in incompatible['samples'][1:]:
         sample['dtlb_walk'] = 512
-    harness.refused(lambda: host.compare(a, incompatible), 'count ranges do not overlap', ValueError)
+    assert host.compare(a, incompatible)['gain']
     incompatible['samples'][-1]['dtlb_walk'] = 1024
-    harness.refused(lambda: host.compare(a, incompatible), 'median is outside the control range', ValueError)
+    assert host.compare(a, incompatible)['gain']
     # Native cached record 1794466032800309049-ed5f20e8 returns successfully
-    # but reports 1816 measured data walks per block. Preserve the result and
-    # refuse a matched-walk gain rather than changing its acceptance threshold.
+    # but reports 1816 measured data walks per block. The accepted fixed-work
+    # rule compares digests and instruction-side walks, reporting data walks.
     cached_data = bytearray(payload(a733_tcr.CACHED_WALK, 389726))
     for i in range(host.SAMPLES):
         struct.pack_into('<Q', cached_data, host.HEAD.size + 512 + i * host.SAMPLE.size + 16, 1818 if i == 0 else 1816)
     captured_cached = host.decode(bytes(cached_data))
     assert captured_cached['median_cycles_per_iteration'] == 380.591796875
-    harness.refused(lambda: host.compare(a, captured_cached), 'count ranges do not overlap', ValueError)
-    return 15
+    accepted = host.compare(a, captured_cached)
+    assert accepted['gain'] and accepted['data_walks_cached'] == [1816] * 5
+    captured_cached['samples'][-1]['itlb_walk'] = 1023
+    harness.refused(lambda: host.compare(a, captured_cached), 'instruction-walk counts differ', ValueError)
+    captured_cached['samples'][-1]['itlb_walk'] = 1024
+    captured_cached['samples'][-1]['digest'] = 1
+    harness.refused(lambda: host.compare(a, captured_cached), 'load digests differ', ValueError)
+    return 17
 
 
 def main():
@@ -221,7 +227,7 @@ def main():
     if args.decoder_only:
         counts = [decoder_cases(tcr, args.output) for tcr in (a733_tcr.UNCACHED_WALK, a733_tcr.CACHED_WALK)]
         harness.save(args.output / 'result.json', dict(passed=True, physical_access=False, decoder_cases=counts))
-        print('PASS frozen decoder: recorded A76 count variation, invalid profiles and unmatched A/B walk ranges')
+        print('PASS frozen decoder: A76 data-walk observations, fixed-work acceptance and mismatched work refusal')
         return
     if not args.image:
         p.error('--image is required unless --decoder-only is selected')

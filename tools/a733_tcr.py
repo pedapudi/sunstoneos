@@ -1,9 +1,9 @@
 """Read the EL1 translation-control values from include/a733_cpu_coherence.h.
 
 SINGLE_CORE is the value of the cached single-core images, which walk the EL1
-tables through the caches. EIGHT_CORE is the value of the cached eight-core
-images, which keep noncacheable walks until a Cortex-A76 walk measurement
-admits the cached value. Checks of frozen, digest-pinned images keep the value
+tables through the caches. EIGHT_CORE is the default of the cached eight-core
+images, admitted by the Cortex-A76 fixed-work comparison. Checks of frozen,
+digest-pinned images keep the value
 those images were built with.
 """
 from pathlib import Path

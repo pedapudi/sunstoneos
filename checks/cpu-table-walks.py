@@ -292,8 +292,9 @@ def main():
                   'SH0': ((cached >> 12) & 3, 3), 'TG0': ((cached >> 14) & 3, 0), 'EPD1': ((cached >> 23) & 1, 1),
                   'IPS': ((cached >> 32) & 7, 2)}
         assert all(v == want for v, want in fields.values()) and cached >> 35 == 0, fields
-        assert TCR.EIGHT_CORE == cached & ~(0xf << 8), hex(TCR.EIGHT_CORE)
-        cases['header-tcr-values-differ-only-in-walk-cacheability'] = True
+        assert TCR.UNCACHED_WALK == cached & ~(0xf << 8), hex(TCR.UNCACHED_WALK)
+        assert TCR.EIGHT_CORE == cached, hex(TCR.EIGHT_CORE)
+        cases['header-defaults-use-cached-walks'] = True
         sites = literal_sites()
         result['tcr_literal_files'] = sorted(sites)
         unexpected = sorted(set(sites) - set(ALLOWED))
