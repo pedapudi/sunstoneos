@@ -159,7 +159,7 @@ set(os_generated "${os_build}/boot.c" "${os_build}/continue-sealed.S" "${os_buil
 # The radio station is in every image: the board's own radio composition serves the radio workloads, and the session
 # grants it with the radio device (apps/os/session.c). Its owner and client report resident progress through the
 # patched main.c.
-list(APPEND os_added apps/os/radio.c apps/os/wifi_credential.c)
+list(APPEND os_added apps/os/radio.c apps/os/wifi_credential.c drivers/net/a733_radio_events.c)
 if(SUNSTONE_A733_OS_RADIO_SCAN)
   list(APPEND os_added apps/os/radio_scan.c apps/os/ce_probe.c)
 endif()
@@ -469,7 +469,7 @@ if(SUNSTONE_A733_OS_USB_CLASSES)
     target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_HOST_DEADLINE=1)
   endif()
 endif()
-target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_TASK_DEADLINES=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
+target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_A733_RADIO_IRQ=1 SUNSTONE_TASK_DEADLINES=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
   SUNSTONE_A733_OS_HEADSET_IRQ=1
   SUNSTONE_CRUMBS=1
   "$<$<BOOL:${os_usb_failure_test}>:SUNSTONE_A733_USB_FAILURE_TEST=1>"

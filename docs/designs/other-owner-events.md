@@ -97,12 +97,16 @@ runtime in `drivers/usb/a733_usb.c` has no linked precise-deadline backend.
 Replacing either path requires its selected interrupt and timer composition;
 the host return checks do not qualify those paths.
 
-## Network completion still requires native SDIO interrupt delivery
+## Network and SDIO completion use a retained event binding
 
-The standalone network worker in `drivers/net/sunstone_net.c` polls the radio
-transport once per scheduler tick. The native SDIO transport configures card
-function interrupt enables but leaves GIC delivery disabled
-(`include/aic8800_sdio_transport.h`). The [SDIO reference comparison](../radio-sdio-reference.md)
-lists INTID 194 delivery as open work. An indefinite worker wait would therefore
-lose received packets and transport completions. Native SDIO interrupt delivery,
-IP-task socket-event publications and precise request deadlines remain required.
+The socket owner in `drivers/net/sunstone_net.c` blocks on notifications and
+precise request deadlines when a transport supplies the
+[network event contract](network-owner-events.md). The native radio binding
+uses INTID 194 for command, FIFO and card-function events. Its owner preserves
+platform admission and waits through the registered deadline facility. Normal
+and failed shutdown require interrupt retirement before controller clocks close.
+The unbound composition retains its polling reference. Software request,
+cancellation, DNS, socket and disposal publications are implemented and
+host-tested. Physical SDIO interrupts and the 25 MHz FIFO service margin remain
+unqualified. OS images select the generated route and notification waits,
+including the shared Bluetooth owner's earliest deadline.

@@ -671,6 +671,7 @@ def c_tables(m):
              '#if defined(SUNSTONE_A733_OS_HEADSET) && defined(SUNSTONE_A733_OS_HEADSET_IRQ)',
              'extern void os_headset_uart_irq(void);', '#endif',
              sd_guard, 'extern void os_sd_irq(void);', '#endif',
+             '#ifdef SUNSTONE_A733_RADIO_IRQ', 'extern void os_radio_irq(void);', '#endif',
              'const struct a733_irq_route a733_irq_routes[] = {', '    {71,0,0xd8,os_thermal_irq},',
              '#ifdef SUNSTONE_BOARD_USB2_IRQ', '    {187,0,0xd8,board_host_irq},', '#endif',
              # The NPU's line, in every image; the hardware-facts probe takes it itself.
@@ -678,6 +679,7 @@ def c_tables(m):
              sd_guard, '    {193,0,0xd8,os_sd_irq},', '#endif',
              '#if defined(SUNSTONE_A733_OS_HEADSET) && defined(SUNSTONE_A733_OS_HEADSET_IRQ)',
              '    {35,0,0xd8,os_headset_uart_irq},', '#endif',
+             '#ifdef SUNSTONE_A733_RADIO_IRQ', '    {194,0,0xd8,os_radio_irq},', '#endif',
              # DMA0's one line: the I2S stream's, or in an image with the RAM-copy service the handler of whichever
              # of the two the session granted. The hardware-facts probe takes the line itself.
              '#ifndef SUNSTONE_A733_HW_FACTS', '#ifdef SUNSTONE_A733_OS_DMA', '    {143,0,0xd8,os_dma0_irq},', '#else',
