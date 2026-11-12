@@ -10,6 +10,8 @@
  * them in the supervised lifetime; in the resident lifetime the stream task
  * stops reporting progress and the watchdog resets the board. */
 #include "os.h"
+#include "cpu-return.h"
+#include "quiesce.h"
 #include "../board/application.h"
 #include "a733_audio_leases.h"
 #include "a733_i2s_platform_native.h"
@@ -18,6 +20,7 @@
 #include "a733_mapping_check.h"
 #include "boot.h"
 #include "umem.h"
+#include "sunstone_crumb.h"
 #include <string.h>
 struct umem *os_large_umem(void);
 _Static_assert(OS_AUDIO_DMA_ESTABLISHED(A733_LIFETIME_RESIDENT)==A733_DMA_HANDOFF_REQUIRED,"resident DMA handoff");
@@ -61,9 +64,38 @@ static struct os_audio_state {
     uint64_t pending,held,first,frames;
     struct dma_service_reply reply;
 } *audio;
+static enum os_quiesce_result audio_quiesce_step(struct os_quiesce *);
+static struct os_quiesce audio_quiesce={.owner=OS_QUIESCE_AUDIO,
+    .order=OS_QUIESCE_DEVICES,.step=audio_quiesce_step};
+/* Local stream CLOSE proves capture stopped. The DMA pool's retirement API
+ * rejects streams, and the audio parent has no release API. Keep those
+ * resources and report the missing retirement proof instead of DONE. */
+enum { AUDIO_RETURN_POOL=1u, AUDIO_RETURN_PARENT=2u };
+static int return_retained(void)
+{
+    (void)os_quiesce_fault(&audio_quiesce,SUNSTONE_CRUMB_FAIL_SITE(BOARD),
+        AUDIO_RETURN_POOL|AUDIO_RETURN_PARENT,SUNSTONE_CRUMB_HERE());
+    return 0;
+}
+static enum os_quiesce_result audio_quiesce_step(struct os_quiesce *q)
+{
+    if(audio&&audio->handle)xTaskNotifyGive(audio->handle);
+    return os_quiesce_result(q);
+}
 static int live(void){return board_live(NULL)&&!atomic_load_explicit(&audio->failed,memory_order_acquire);}
-static void fail(void){atomic_store_explicit(&audio->failed,1,memory_order_release);board_fail(NULL);}
-static _Noreturn void dma_fatal(void *unused){(void)unused;fail();platform_panic("OS retained DMA",1);}
+static void fail(void)
+{
+    atomic_store_explicit(&audio->failed,1,memory_order_release);
+    if(!os_quiesce_fault(&audio_quiesce,SUNSTONE_CRUMB_FAIL_SITE(BOARD),
+        0x100u,SUNSTONE_CRUMB_HERE()))board_fail(NULL);
+}
+static _Noreturn void dma_fatal(void *unused)
+{
+    (void)unused;fail();
+    if(os_cpu_return_failing()||os_quiesce_requested(&audio_quiesce))
+        for(;;)vTaskSuspend(NULL);
+    platform_panic("OS retained DMA",1);
+}
 /* Before the parent is ready only the client task enters the backend; then
  * only the DMA worker does (apps/i2s/main.c). */
 static int worker(void)
@@ -101,6 +133,13 @@ static int request(enum dma_service_operation operation,uint64_t timeout,uint64_
 static int step(void)
 {
     int r;
+    const int returning=os_quiesce_requested(&audio_quiesce);
+    if(returning){
+        atomic_store_explicit(&audio->halted,atomic_load_explicit(&audio->requested,memory_order_acquire),memory_order_release);
+        /* No stream exists during parent/pool setup. Do not start one only
+         * to stop it; the retained parents still prevent terminal admission. */
+        if(audio->stage==PREPARE||audio->stage==POOL)return return_retained();
+    }
     switch(audio->stage){
     case PREPARE:{
         enum a733_i2s_resource_result p=a733_audio_parent_poll(&audio->parent);
@@ -115,6 +154,7 @@ static int step(void)
         if(state==A733_DMA_POOL_READY)audio->stage=IDLE;
         return 0;}
     case IDLE:{
+        if(returning){if(audio->reap){audio->stage=REAP;return 0;}return return_retained();}
         unsigned run=atomic_load_explicit(&audio->requested,memory_order_acquire);
         if(run==audio->run)return 0;
         audio->run=run;
@@ -124,6 +164,7 @@ static int step(void)
         audio->first=atomic_load_explicit(&audio->written,memory_order_relaxed);
         audio->stage=audio->reap?REAP:OPEN;return 0;}
     case OPEN:
+        if(returning&&!audio->pending)return return_retained();
         r=request(DMA_SERVICE_OPEN,100000,0);if(r<0)return -1;if(!r)return 0;
         audio->stage=OPENING;return 0;
     case OPENING:
@@ -132,6 +173,7 @@ static int step(void)
         if(audio->reply.phase!=DMA_SERVICE_READY)return -1;
         audio->frames=0;audio->held=0;audio->stage=SUBMIT;return 0;
     case SUBMIT:
+        if(returning&&!audio->pending){audio->stage=CLOSE;return 0;}
         /* Period timeout in DMA counter ticks: one second. */
         r=request(DMA_SERVICE_SUBMIT,A733_SMP_COUNTER_HZ,0);if(r<0)return -1;if(!r)return 0;
         audio->stage=GET;return 0;
@@ -188,6 +230,7 @@ static int step(void)
         r=request(DMA_SERVICE_STATUS,0,0);if(r<0)return -1;if(!r)return 0;
         if(audio->reply.phase==DMA_SERVICE_CLOSING)return 0;
         if(audio->reply.phase!=DMA_SERVICE_CLOSED)return -1;
+        if(returning)return return_retained();
         audio->stage=OPEN;return 0;
     default:return -1;
     }
@@ -198,18 +241,19 @@ static int step(void)
 static void pass(void)
 {
     /* A failed capture parks with its request, leases and periods held. */
-    if(atomic_load_explicit(&audio->failed,memory_order_acquire))return;
+    if(atomic_load_explicit(&audio->failed,memory_order_acquire)||
+       os_quiesce_result(&audio_quiesce)==OS_QUIESCE_FAULT)return;
     if(!live()||step()<0){fail();return;}
     if(!audio->pending)BOARD_PROGRESS(OS_SERVICE_AUDIO);
 }
 void os_audio_task(void *unused)
 {
     (void)unused;
-    for(;;){pass();vTaskDelay(1);}
+    for(;;){pass();(void)ulTaskNotifyTake(pdTRUE,1);}
 }
 int os_audio_stream_start(void)
 {
-    if(!live())return -1;
+    if(!live()||os_quiesce_requested(&audio_quiesce))return -1;
     unsigned run=atomic_load_explicit(&audio->requested,memory_order_relaxed);
     if(atomic_load_explicit(&audio->stopped,memory_order_acquire)!=run)
         return atomic_load_explicit(&audio->halted,memory_order_relaxed)==run?0:1;
@@ -287,6 +331,7 @@ int os_audio_stream_open(const struct os_audio_stream_config *c)
 {
     const struct os_session *s=os_session_admitted();
     if(!s||!board_live(NULL)||!allocate()||audio->handle||!configure(c))return 0;
+    if(!os_quiesce_register(&audio_quiesce))return 0;
     const struct os_audio_session *a=&s->audio;
     uint64_t deadline=board.session.deadline_us,owner=a->dma.owner;
     audio->dma=(struct a733_dma_handoff){a->dma,a->dma_controller,a->dma_evidence,a->dma_established,

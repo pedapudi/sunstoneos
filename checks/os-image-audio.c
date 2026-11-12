@@ -22,6 +22,19 @@ int os_granted(unsigned mask){return mask&&(session.granted&mask)==mask;}
  * stream state machine while supplying their configured provider boundary. */
 static unsigned stream_opens;
 int __wrap_os_audio_stream_open(const struct os_audio_stream_config *c){++stream_opens;return configure(c);}
+static unsigned model_failing,quiesce_notes;
+int os_cpu_return_failing(void){return model_failing!=0;}
+int os_quiesce_register(struct os_quiesce *q){q->registered=1;return 1;}
+int os_quiesce_requested(const struct os_quiesce *q){return atomic_load(&q->requested)!=0;}
+enum os_quiesce_result os_quiesce_result(const struct os_quiesce *q){return atomic_load(&q->result);}
+int os_quiesce_fault(struct os_quiesce *q,uint32_t site,uint32_t value,const void *caller)
+{
+    if(!model_failing&&!os_quiesce_requested(q))return 0;
+    if(!atomic_exchange(&q->fault_state,2)){q->site=site;q->value=value;q->caller=caller;++quiesce_notes;}
+    atomic_store(&q->result,OS_QUIESCE_FAULT);return 1;
+}
+BaseType_t xTaskGenericNotify(TaskHandle_t task,UBaseType_t index,uint32_t value,eNotifyAction action,uint32_t *previous)
+{(void)value;check(task==audio->handle&&!index&&action==eIncrement&&!previous,181);return pdPASS;}
 /* Mode 5: candidate rates and whether the stream accepts each one for
  * 16-bit mono capture with 4,096-byte periods; the runner compares them with
  * the vendor's table. */
@@ -35,6 +48,8 @@ static void reset(void)
     /* The stream's state, which the image takes from the ledger at its first open (outside this model). */
     static struct os_audio_state state;
     audio=&state;memset(audio,0,sizeof(*audio));
+    atomic_store(&audio_quiesce.requested,0);atomic_store(&audio_quiesce.result,OS_QUIESCE_PENDING);
+    atomic_store(&audio_quiesce.fault_state,0);model_failing=quiesce_notes=0;
     phase=DMA_SERVICE_CLOSED;produced=puts_done=reaps=closes=opens=silent=logged=0;
     sent=held_ticket=0;board_up=1;board_failed=0;parent_polls=0;
     for(unsigned i=0;i<PERIODS;++i)audio->pool.stream_mappings[i].cpu=memory[i];
@@ -95,6 +110,45 @@ void os_check_run(unsigned selected,unsigned samples)
     if(selected==12){selected=4;model_lifetime=A733_LIFETIME_SUPERVISED;}
     mode=selected;reset();
     void *pcm;size_t bytes;
+    if(mode==13){
+        /* Request return at each client boundary, including a held period.
+         * Every opened stream drains and closes, with no replacement open.
+         * The unretired DMA pool and audio parent remain an explicit fault. */
+        for(unsigned before=0;before<40;++before){
+            reset();struct os_audio_stream_config c=config(16000,1,16,4096,4);
+            check(configure(&c)&&os_audio_stream_start()==1,160);
+            for(unsigned i=0;i<before;++i)check(step()==0,161);
+            unsigned opened=opens;
+            model_failing=1;atomic_store(&audio_quiesce.requested,1);
+            for(unsigned i=0;i<40&&os_quiesce_result(&audio_quiesce)==OS_QUIESCE_PENDING;++i)pass();
+            check(os_quiesce_result(&audio_quiesce)==OS_QUIESCE_FAULT&&quiesce_notes==1&&!board_failed,162);
+            check(audio_quiesce.value==(AUDIO_RETURN_POOL|AUDIO_RETURN_PARENT),163);
+            check(opens==opened&&(!opened||phase==DMA_SERVICE_CLOSED)&&!held_ticket,164);
+            check(os_audio_stream_start()==-1,165);
+        }
+        os_check_result=1;return;
+    }
+    if(mode==14){
+        /* An outstanding request is collected before cancellation. A late
+         * worker must not be reported drained or treated as an early fault. */
+        struct os_audio_stream_config c=config(16000,1,16,4096,4);
+        check(configure(&c)&&os_audio_stream_start()==1,170);
+        for(unsigned i=0;audio->stage!=GET&&i<20;++i)check(step()==0,171);
+        check(audio->stage==GET,172);silent=1;check(step()==0&&audio->pending,173);
+        model_failing=1;atomic_store(&audio_quiesce.requested,1);
+        for(unsigned i=0;i<10;++i)pass();
+        check(os_quiesce_result(&audio_quiesce)==OS_QUIESCE_PENDING&&!board_failed&&audio->pending,174);
+        silent=0;
+        for(unsigned i=0;i<40&&os_quiesce_result(&audio_quiesce)==OS_QUIESCE_PENDING;++i)pass();
+        check(os_quiesce_result(&audio_quiesce)==OS_QUIESCE_FAULT&&phase==DMA_SERVICE_CLOSED&&!held_ticket&&!board_failed,175);
+        os_check_result=1;return;
+    }
+    if(mode==15){
+        /* A device failure can precede this owner's ordered step. */
+        model_failing=1;fail();
+        check(atomic_load(&audio->failed)&&os_quiesce_result(&audio_quiesce)==OS_QUIESCE_FAULT&&!board_failed,180);
+        os_check_result=1;return;
+    }
     if(mode==11){
         /* A session that does not grant the I2S service: the start entry succeeds without opening the stream, which is
          * the only path to the pins, the clocks, the DMA channel and the interrupt. The device bit and the record are the
