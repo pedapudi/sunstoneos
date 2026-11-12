@@ -75,6 +75,15 @@ uint64_t os_cpu_return_deadline_us(void)
     uint64_t limit=since+OS_FAILURE_RETURN_US,session=board.session.deadline_us-10000;
     return limit<session?limit:session;
 }
+static uint64_t return_lock_deadline(void *unused)
+{(void)unused;return os_cpu_return_deadline_us();}
+static int return_pin_now(void *context,uint64_t *now)
+{
+    struct a733_native_usb *p=context;
+    if(!a733_counter_clock_now(&p->counter,now))return 0;
+    uint64_t deadline=os_cpu_return_deadline_us();
+    return !deadline||*now<deadline;
+}
 int os_cpu_return_requested(void){return atomic_load_explicit(&closing,memory_order_acquire);}
 /* Task-context gates retain the original NPU fault. The EL3 terminal calls
  * ready() after selecting its Secure Device stack; its health read stays
@@ -122,6 +131,8 @@ int os_cpu_return_start(void)
 #else
     if(board.session.workload!=2||board.session.deadline_us<=OS_CPU_RETURN_RESERVE_US+10000)return 0;
 #endif
+    providers.shared.locks.deadline=return_lock_deadline;
+    providers.shared.pin_native.locks.now=return_pin_now;
     if(!os_quiesce_register(&pmic_quiesce)||!os_quiesce_register(&terminal_quiesce))return 0;
     for(unsigned c=0;c<8;++c){
         terminal_handle[c]=xTaskCreateStaticAffinitySet(terminal,"os-cpu-return",1024,(void *)(uintptr_t)c,

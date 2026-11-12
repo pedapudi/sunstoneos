@@ -15,6 +15,7 @@ struct a733_platform_locks {
     atomic_uint retained;
     int (*now)(void *, uint64_t *);
     void *context;
+    uint64_t (*deadline)(void *); /* optional dynamic upper bound; zero keeps the caller bound */
     struct a733_gpu_resource_locks callbacks;
     unsigned initialized;
 };
@@ -35,6 +36,13 @@ int a733_platform_locks_init(struct a733_platform_locks *, int (*now)(void *, ui
  * returned without permitting I/O. A lock retained by a failed transaction
  * remains owned; this API has no forced unlock or recovery path. */
 int a733_platform_lock_enter(struct a733_platform_locks *, enum a733_platform_lock, uint64_t);
+/* One acquisition attempt, waiting at most one existing scheduler tick.
+ * Returns 1 acquired, 0 ordinary contention, -1 invalid context, retained
+ * state, clock error or expired deadline. No failure leaves new ownership.
+ * A caller retries from its existing task state with the same deadline. */
+int a733_platform_lock_step(struct a733_platform_locks *, enum a733_platform_lock, uint64_t);
+/* Checks only the dynamic time bound, not task, mutex or device ownership. */
+int a733_platform_lock_live(struct a733_platform_locks *);
 void a733_platform_lock_leave(struct a733_platform_locks *, enum a733_platform_lock);
 /* Mark uncertain external state while still owning the mutex. Other clients
  * subsequently refuse admission. Recovery requires an independent reset. */
