@@ -297,9 +297,9 @@ physical qualification requirement.
 
 ## Installing the first stage on the port 3-3 card
 
-**Status: steps A to C passed on 2026-11-12; the write, step D, is not
-approved.** The coordinator approved the code, the runner's marker write and
-board steps A to C below. Their records are in
+**Status: installed on 2026-11-12.** Steps A to D passed; the user approved
+the write through the coordinator. Step E's record differed from its
+prediction in the mode byte (below). Their records are in
 [the evidence file](../evidence/card-fel-recovery.jsonl). The card on port 3-3 is the
 scratch card with CID `2750485344333247120000029d014c47`. Its MBR holds one
 FAT32 partition from sector 2048 for 61,065,216 sectors, so sectors 1..2047
@@ -424,8 +424,8 @@ The ROM's card loader finds a valid boot0 header at sector 16 and copies
 `0x83000`.
 
 - **Watchdog return** (marker set by the runner): the gate takes the warm
-  path in microseconds and enters FEL. The runner then reads gate record
-  `0x0c024001` (bit 14, WDT0 mode `1`), WDT0 mode `0`, `0x070901f0` =
+  path in microseconds and enters FEL. The runner then reads a gate record
+  with bit 14 and the WDT0 mode the gate read at entry, WDT0 mode `0`, `0x070901f0` =
   `0x16aa16aa`, and the image's own LAST and fault words. The ROM's card read
   of 246 KB adds an unmeasured delay to the 1.79-second reset-to-instance time
   recorded for a ROM re-entry; at 4-bit 25 MHz it is about 20 ms, and step E
@@ -439,6 +439,21 @@ The ROM's card loader finds a valid boot0 header at sector 16 and copies
   The record then holds bit 15, and bit 14 if that reset occurred.
 - **Power-on with VDD_RTC still above 0.7 V**: the warm path, as for a
   watchdog return.
+
+### Results of the write and the first returns
+
+- **Step D** wrote sectors 16..497 in two pieces (16.8 ms) and read them back
+  in 6.6 ms; the read-back SHA-256 equals the first stage's, and sector 0 is
+  unchanged. The image's own return then loaded the new card boot0: the gate
+  stored warm record `0x0c0240b1`, disarmed WDT0 and entered FEL. The launcher's
+  ROM redirect was not in effect at that reset.
+- **Step E**, the next session's WDT0 reset, also came back to FEL through
+  the gate, with warm record `0x0c024041`. The prediction was `0x0c024001`.
+  At gate entry WDT0 still reads the mode armed before the reset (`0x41`);
+  the mode `1` read in FEL after earlier watchdog resets is written later.
+  Bit 0 is set in both values, so the runner's watchdog-reset test
+  (`mode & 1`) is unchanged. The session reset took 4.8 seconds against 6.0
+  before the install.
 
 ### Restoring the card over FEL
 
