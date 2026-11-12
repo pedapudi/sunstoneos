@@ -118,6 +118,42 @@ cost, and no constant overhead is subtracted. The existing workload takes 64
 idle and 128 busy wake samples per CPU. It supports exact observed maxima and
 phase percentiles, but cannot establish a 99.99th-percentile bound.
 
+## The control phase retains enough samples for the requested percentile
+
+`SUNSTONE_LATENCY_CONTROL` adds a control phase to the latency application.
+`SUNSTONE_LATENCY_CONTROL_MODE=busy` retains memory traffic and measures local
+control interrupts and interrupt-woken tasks on cores 1 through 7 at 1, 2, 4,
+8, 10, 4 and 4 kHz. Mode `idle` stops memory traffic and measures only control
+interrupts at 10 kHz on all seven cores. The controller waits twenty
+milliseconds between progress checks. No ring-consumer task wakes each tick.
+
+Every selected task path requires 10,000 accepted samples. Control paths
+require 10,001 entries, providing 10,000 period-error samples. The runtime
+preserves missed periods, notification errors and incomplete counts. An error
+stops collection; all writers acknowledge stop and all measurement tasks
+suspend before the application snapshots results and freezes mask recording.
+The outer control IRQ wrapper consumes its owned PPIs before the base latency
+wrapper, which continues to record CPU0's scheduler timer.
+
+The aligned control tail occupies 17,536 bytes. Without scheduler tracing the
+complete report occupies 81,408 bytes; with the declared version-four tracing
+capacities it occupies 129,600 bytes. The manifest grants 131,072 output bytes
+and a fifteen-second application deadline. Control qualification rejects PMU
+accounting and per-span PMU recording because their counters conflict with the
+task-path refill measurement.
+
+The decoder validates identities, sample totals, histogram endpoints and
+shutdown acknowledgments. It compares deadline-to-task-start latency at the
+99.99th percentile with ten microseconds, and recorded mask and task-lock
+maxima with twenty-five microseconds. Handler-entry delay, handler-to-task gap
+and control-period jitter remain separate distributions. A result that meets
+those recorded targets does not qualify startup, omitted exception work or
+final-image repeatability. The restore-span flag identifies the optional
+software exception interval; its entry-save prefix and post-timestamp
+observer, temporary restore and exception-return work remain outside that
+measurement. Physical busy sampling and matched idle-jitter runs with and
+without tickless idle remain unqualified.
+
 ## Startup and workload use distinct timing boundaries
 
 Version four marks the primary CPU immediately before it sets the
