@@ -2,7 +2,7 @@
 """Build and check the typed board session of a SunstoneOS image, with no device access and no old queue entry.
 
     session.py build IMAGE --out DIR [--manifest M] [--npu-declaration D] [--input FILE ...]
-                             [--decoder FILE]
+                             [--decoder FILE] [--device-profile usb-host|radio-scan]
     session.py check DIR_OR_SESSION [--image IMAGE] [--admit] [--json]
 
 build writes the complete session of IMAGE to DIR/template/session.bin, the input files to DIR/template/input-N.bin, and DIR/session.json, which
@@ -13,7 +13,9 @@ apps/npu-graphs/host.py writes) to DIR/decoder.py, the file that `board.py submi
   image identity, manifest digest   the image's build ID (tools/check-a733-smp.py) and its sunstone_manifest section
   devices, flags, workload          the device classes the manifest declares (required or optional) that the session can grant: the GPU, when the
                                     image links the GPU service. It has no session record, so the bit and the image's service are the whole
-                                    grant. Every other class needs facts this file does not pin (see DEVICE_FACTS); an optional one is left out
+                                    grant. --device-profile radio-scan selects the passive scan producer and its pinned sources.
+                                    USB host selection requires a reviewed profile that is not yet pinned. Other classes need facts
+                                    this file does not pin (see DEVICE_FACTS); an optional one is left out
                                     and named in session.json, a required one is an error that names what is missing
   which service records             the thermal record always; the CPU clock grant only with --clock-grant (and --perf), for a manifest
                                     that declares cpu.clock_grants (cpu.perf); the NPU service when the application declares the NPU
@@ -25,6 +27,9 @@ apps/npu-graphs/host.py writes) to DIR/decoder.py, the file that `board.py submi
   inputs                            --input FILE for each manifest input region, in order (their digests go into the session)
   board and evidence facts          tools/session-facts.json: the board prefix, thermal and grant records and the NPU authority words of
                                     the profile the image needs ("npu" for an application that declares the NPU, else "control")
+  passive radio scan               --device-profile radio-scan requires the radio declaration and linked scan service. The existing
+                                    runner producer supplies the profile and four verified firmware uploads. session.json records
+                                    their addresses, sizes and hashes; no association input is read
 
 A field that none of these determines is an error that names it; nothing is guessed. The encoder and decoder are apps/os/host.py, the code the
 runner (tools/board_images.py), the producer (apps/os/prepare.py) and the host admission use. check decodes a session with that decoder and
@@ -105,6 +110,11 @@ REVIEWED = ROOT / 'tools/cpu-reviewed-points.json'
 # extent; the decoder (apps/os/host.py) and the EL3 admission (apps/os/session.c) check only the bit, the workload word of the board
 # prefix (2 for a session without USB storage, which the control profile carries) and, in the image, that the GPU service is linked.
 GRANTABLE = {'gpu': 'os_gpu_queue_start_entry', 'usb-device': 'board_usb0_task'}
+DEVICE_PROFILES = {
+    'usb-host': ('usb-keyboard', ('os_usb_service_init', 'os_usb_quiesce_start')),
+    'radio-scan': ('radio', ('os_radio_start', 'os_radio_result_descriptor')),
+}
+RADIO_SCAN_SOURCES = ('tools/radio_scan_prepare.py', 'docs/designs/radio-vendor-power-sequence.md')
 # What the other classes need and the facts file does not pin: a grant of any of them is refused or left out.
 DEVICE_FACTS = {'usb-storage': 'the USB workload facts (workload 0, latch, Type-C and USB2 owners)',
                 'usb-keyboard': 'the USB workload facts (workload 0 or 4, latch, Type-C and USB2 owners)',
@@ -113,24 +123,31 @@ DEVICE_FACTS = {'usb-storage': 'the USB workload facts (workload 0, latch, Type-
                 'usb-mouse': 'the USB class services, which the returning lifetime excludes',
                 'usb-serial': 'the USB class services, which the returning lifetime excludes',
                 'usb-camera': 'the USB class services, which the returning lifetime excludes',
-                'radio': 'the radio profile digest and the Wi-Fi credential'}
+                'radio': 'an explicit scan-only profile or association admission'}
 
 
-def devices_for(manifest, symbols, names):
+def devices_for(manifest, symbols, names, device_profile=None):
     """(granted bits, {name: reason} of the optional classes left out) for a manifest and the symbols of its image.
 
     names maps each class to its bit (tools/sunstone-manifest.py DEVICES). A class the manifest does not declare is not granted.
     A declared class is granted when the facts allow it and the image links its service; a required class that cannot be granted
     is an error, an optional one is reported."""
     declared = manifest['devices_required'] | manifest['devices_optional']
+    selected = DEVICE_PROFILES.get(device_profile)
+    if device_profile is not None and selected is None:
+        raise SessionError('device profile: unsupported selection %s' % device_profile)
+    if selected and not declared & names[selected[0]]:
+        raise SessionError('device profile: %s requires a declared %s device' % (device_profile, selected[0]))
     granted, left_out = 0, {}
     for name, bit in names.items():
         if not declared & bit:
             continue
-        if name in GRANTABLE and GRANTABLE[name] in symbols:
+        required_symbols = selected[1] if selected and name == selected[0] else (GRANTABLE[name],) if name in GRANTABLE else ()
+        missing = [symbol for symbol in required_symbols if symbol not in symbols]
+        if required_symbols and not missing:
             granted |= bit
             continue
-        reason = ('the image links no %s service (symbol %s)' % (name, GRANTABLE[name]) if name in GRANTABLE
+        reason = ('the image links no %s service (symbol %s)' % (name, ', '.join(missing)) if required_symbols
                   else 'tools/session-facts.json pins no facts for %s' % DEVICE_FACTS.get(name, 'it'))
         if manifest['devices_required'] & bit:
             raise SessionError('devices: the manifest requires %s and %s' % (name, reason))
@@ -140,8 +157,50 @@ def devices_for(manifest, symbols, names):
 
 # Services whose records the facts do not pin, refused when the image links them. Every image links the I2S service and
 # the radio station; a session grants them only with the audio-i2s or radio device, which devices_for leaves out or refuses.
-UNSUPPORTED = {'os_dma_profile': 'DMA service record and its physical authority',
-               'usb_memory_extent_valid': 'USB memory extent (USB class devices)'}
+UNSUPPORTED = {'os_dma_profile': 'DMA service record and its physical authority'}
+
+
+def quiesce_actors(plan, manifest=None):
+    """Owner names required by the session records, granted devices and card inputs.
+
+    This is an inventory, not launch admission. A synthetic plan can cover an
+    OS grant whose hardware facts the session builder cannot yet supply.
+    Optional manifest devices enter the inventory only when actually granted.
+    """
+    tool = load('session_quiesce_manifest', ROOT / 'tools/sunstone-manifest.py')
+    grants = {row[0] for row in tool.os_service_rows('OS_GRANT_ROWS')}
+    by_record = {extent.removeprefix('SS_EXTENT_').lower(): grant
+                 for grant, extent, *_ in tool.os_service_rows('OS_RECORD_ROWS')}
+    by_record.update({name.lower(): name for name in grants})
+    actors = {'THERMAL_OWNER', 'PMIC_OWNER', 'TERMINAL_OWNER'}
+    for record in plan.get('services', ()):
+        if record == 'thermal':
+            continue
+        if record not in by_record:
+            raise SessionError('quiesce: no service grant for record %s' % record)
+        actors.add(by_record[record])
+    device_owners = {'audio-i2s': 'AUDIO', 'audio-headset': 'HEADSET', 'usb-device': 'USB0'}
+    devices = plan.get('devices', 0)
+    known_devices = 0
+    for bit in tool.DEVICES.values():
+        known_devices |= bit
+    if devices & ~known_devices:
+        raise SessionError('quiesce: unknown granted device bits %#x' % (devices & ~known_devices))
+    for name, bit in tool.DEVICES.items():
+        if not devices & bit:
+            continue
+        owner = device_owners.get(name, 'USB' if name.startswith('usb-') else name.upper().replace('-', '_'))
+        actors.add(owner)
+    workload = plan.get('workload', plan.get('prefix', {}).get('workload', 2))
+    if workload in (0, 1, 4):
+        actors.add('USB')
+    if workload in (1, 3):
+        actors.add('RADIO')
+    manifest = manifest if manifest is not None else plan.get('manifest', {})
+    if (plan.get('storage') or {'os_sd_owner_task', 'os_sd_quiesce_register'} & set(plan.get('symbols', {})) or
+            any(row.get('source_bytes', 0) for row in manifest.get('large_regions', ()))):
+        actors.add('STORAGE')
+    return sorted(actors)
 
 
 def width(fmt):
@@ -268,7 +327,7 @@ def declaration_of(path):
     return values
 
 
-def describe(image, manifest_path=None, npu_declaration=None, host=None, clock_grant=False, perf=None):
+def describe(image, manifest_path=None, npu_declaration=None, host=None, clock_grant=False, perf=None, device_profile=None):
     """Everything about IMAGE that the session depends on, or a SessionError naming the field that cannot be determined."""
     host = host or records()
     image = Path(image)
@@ -291,7 +350,7 @@ def describe(image, manifest_path=None, npu_declaration=None, host=None, clock_g
             raise SessionError('manifest: %s does not pack to the manifest section of %s' % (manifest_path, image))
         declared = tool.load(manifest_path).get('npu')
     names = load('session_tool_devices', ROOT / 'tools/sunstone-manifest.py').DEVICES
-    granted, left_out = devices_for(manifest, symbols, names)
+    granted, left_out = devices_for(manifest, symbols, names, device_profile)
     plan = {'image': str(image), 'manifest': manifest, 'manifest_sha256': info['sha256'], 'devices': granted, 'devices_left_out': left_out,
             'flags': host.BIND_SID, 'services': ['thermal'], 'symbols': symbols, 'elf': elf}
     if clock_grant or perf:
@@ -319,6 +378,10 @@ def describe(image, manifest_path=None, npu_declaration=None, host=None, clock_g
     elif npu_declaration or declared:
         raise SessionError('npu declaration: the application of %s declares no NPU, so its session grants none' % image)
     plan['profile'] = 'npu' if 'npu' in plan['services'] else 'control'
+    if device_profile and granted & names[DEVICE_PROFILES[device_profile][0]]:
+        if 'npu' in plan['services']:
+            raise SessionError('device profile: %s has no reviewed NPU combination' % device_profile)
+        plan['device_profile'] = device_profile
     return plan
 
 
@@ -330,18 +393,51 @@ def input_values(plan, inputs, host):
     return [Path(p).read_bytes() for p in inputs]
 
 
+def device_profile_facts(plan, data):
+    """Select the board facts and validate the sources of an explicit device profile."""
+    name = plan.get('device_profile')
+    if not name:
+        return {}
+    selected = data.get('device_profiles', {}).get(name)
+    if not selected:
+        raise SessionError('device profile: tools/session-facts.json pins no reviewed facts for %s' % name)
+    expected = 'control' if name == 'radio-scan' else 'usb-host'
+    if selected.get('board_profile') != expected:
+        raise SessionError('device profile: %s requires board profile %s' % (name, expected))
+    if name == 'radio-scan':
+        sources = selected.get('sources', {})
+        if set(sources) != set(RADIO_SCAN_SOURCES):
+            raise SessionError('radio-scan: the producer and reference source hashes are required')
+        for source in RADIO_SCAN_SOURCES:
+            if hashlib.sha256((ROOT / source).read_bytes()).hexdigest() != sources[source]:
+                raise SessionError('radio-scan: source hash differs for %s' % source)
+    plan['profile'] = expected
+    return selected
+
+
 def build_session(plan, inputs, fact_file=FACTS, host=None, entropy=secrets.randbits):
     """The session bytes for a described image, and the identity words it carries."""
     host = host or records()
     base = load('session_tool_image', ROOT / 'tools/check-a733-smp.py')
     _, address, identity = base.image_parts(Path(plan['image']))
-    profile = facts(fact_file)['profiles'].get(plan['profile'])
+    data = facts(fact_file)
+    selected = device_profile_facts(plan, data)
+    profile = data['profiles'].get(plan['profile'])
     if profile is None:
         raise SessionError('profile: tools/session-facts.json has no profile %s' % plan['profile'])
     epoch, generation, lease = [entropy(62) | 1 for _ in range(3)]
     prefix = pack('prefix', profile_values(profile, 'prefix', {
         'magic': SESSION_MAGIC, 'version': SESSION_VERSION, 'bytes': 592, 'epoch': epoch, 'generation': generation,
         'lease': lease, 'image': identity}))
+    if plan.get('device_profile') == 'radio-scan':
+        scan = load('session_tool_radio_scan', ROOT / RADIO_SCAN_SOURCES[0])
+        prefix = bytearray(prefix)
+        try:
+            _, plan['uploads'] = scan.apply(prefix, bytes.fromhex(selected['sources'][RADIO_SCAN_SOURCES[1]]), stage_limit=0)
+        except (OSError, ValueError) as error:
+            raise SessionError('radio-scan: %s' % error) from None
+        prefix = bytes(prefix)
+        plan['device_profile_sources'] = selected['sources']
     services = {}
     size = 592 + sum(LAYOUTS[k][1] for k in plan['services'])
     thermal = profile_values(profile, 'thermal', {'magic': OS_MAGIC, 'version': 1, 'bytes': size})
@@ -372,10 +468,10 @@ def build_session(plan, inputs, fact_file=FACTS, host=None, entropy=secrets.rand
 
 
 def build(image, out, manifest=None, npu_declaration=None, inputs=(), decoder=None, fact_file=FACTS, npu_pool=(0, 0),
-          clock_grant=False, perf=None):
+          clock_grant=False, perf=None, device_profile=None):
     """Write OUT/template/session.bin, input files and session.json; returns the record."""
     host = records()
-    plan = describe(image, manifest, npu_declaration, host, clock_grant, perf)
+    plan = describe(image, manifest, npu_declaration, host, clock_grant, perf, device_profile)
     plan['npu_pool_request'] = tuple(npu_pool)
     values = input_values(plan, inputs, host)
     raw, ids = build_session(plan, values, fact_file, host)
@@ -389,12 +485,21 @@ def build(image, out, manifest=None, npu_declaration=None, inputs=(), decoder=No
               'manifest_sha256': plan['manifest_sha256'], 'application': plan['manifest']['name'], 'profile': plan['profile'],
               'facts': str(Path(fact_file).resolve().relative_to(ROOT)) if Path(fact_file).resolve().is_relative_to(ROOT) else str(fact_file),
               'facts_sha256': hashlib.sha256(Path(fact_file).read_bytes()).hexdigest(),
-              'services': plan['services'], 'devices': plan['devices'], 'devices_left_out': plan['devices_left_out'], 'flags': plan['flags'], 'session_bytes': len(raw),
+              'services': plan['services'], 'quiesce_actors': quiesce_actors(plan), 'devices': plan['devices'], 'devices_left_out': plan['devices_left_out'], 'flags': plan['flags'], 'session_bytes': len(raw),
               'session_sha256': hashlib.sha256(raw).hexdigest(), **ids,
               'inputs': [{'file': 'template/input-%d.bin' % i, 'bytes': len(v), 'sha256': hashlib.sha256(v).hexdigest()} for i, v in enumerate(values)]}
     if 'npu' in plan['services']:
         record['npu_declaration'] = dict(zip(('slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes'), plan['npu_declaration']))
         record['npu_declaration_from'] = plan['npu_declaration_from']
+    if plan.get('device_profile'):
+        record['device_profile'] = plan['device_profile']
+        record['device_profile_sources'] = plan.get('device_profile_sources', {})
+    if plan.get('uploads'):
+        record['uploads'] = []
+        for address, name, data in plan['uploads']:
+            (template / name).write_bytes(data)
+            record['uploads'].append({'file': 'template/' + name, 'address': address, 'bytes': len(data),
+                                      'sha256': hashlib.sha256(data).hexdigest()})
     for name, source, target in (('decoder', decoder, 'decoder.py'),):
         if source:
             shutil.copyfile(source, out / target)
@@ -524,6 +629,8 @@ def main(argv=None):
     b.add_argument('--clock-grant', action='store_true', help='grant the CPU clock at the reviewed points (the manifest must declare cpu.clock_grants)')
     b.add_argument('--perf', choices=('high', 'low'), help='with --clock-grant: the performance-mode service and its boot mode (the manifest must declare cpu.perf)')
     b.add_argument('--decoder', type=Path, help='the application decoder, copied to OUT/decoder.py')
+    b.add_argument('--device-profile', choices=tuple(DEVICE_PROFILES),
+                   help='reviewed facts for a declared device: USB keyboard host or passive radio scan; requires its linked service')
     b.add_argument('--npu-pool', type=lambda text: tuple(int(x, 0) for x in text.split(':')), default=(0, 0), metavar='BASE:BYTES',
                    help='a placement request for the NPU reservation (default 0:0, the allocator chooses; the ledger refuses an extent that is not free)')
     c = commands.add_parser('check', help='decode a session and print its fields')
@@ -536,7 +643,7 @@ def main(argv=None):
     try:
         if args.command == 'build':
             record = build(args.image, args.out, args.manifest, args.npu_declaration, args.input, args.decoder,
-                           npu_pool=args.npu_pool, clock_grant=args.clock_grant, perf=args.perf)
+                           npu_pool=args.npu_pool, clock_grant=args.clock_grant, perf=args.perf, device_profile=args.device_profile)
             print('wrote %s (%d bytes, profile %s, services %s)' % (args.out / 'template/session.bin', record['session_bytes'],
                                                                    record['profile'], ', '.join(record['services'])))
             print('submit with: board.py submit %s --template %s%s%s ...' % (

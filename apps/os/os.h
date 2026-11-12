@@ -192,11 +192,8 @@ int os_radio_start(void);
 struct board_radio_profile;
 const struct board_radio_profile *os_radio_profile(void);
 #ifdef SUNSTONE_A733_OS_RADIO_SCAN
-/* The scanning radio station (apps/os/radio_scan.c). The radio owner task calls
- * os_radio_scan_step after every board_radio_poll with its result. Once the return has
- * begun, the owner shuts the module down (board_radio_shutdown), publishes the encoded
- * result and a descriptor (include/os_radio_result.h), and os_radio_scan_return_ready
- * reports 1. The CPU return waits for it before it stops the PMIC service. */
+/* The radio owner publishes scan progress and the registered return step's
+ * terminal result through this observer. It starts no shutdown of its own. */
 struct board_radio;
 void os_radio_scan_step(struct board_radio *,int result);
 /* The entropy stage's steps (apps/os/ce_probe.c), driven by os_radio_scan_step when the profile's stage limit is the
@@ -212,8 +209,6 @@ int os_ce_entropy_ready(void);
 int os_ce_entropy_failed(void);
 int os_ce_entropy_bytes(void *,uint8_t *,size_t);
 void os_ce_entropy_wipe(void);
-void os_radio_scan_return_request(void);
-int os_radio_scan_return_ready(void);
 #endif
 /* The headset service (apps/os/headset.c, with the Bluetooth stack and the
  * mSBC codec) is an object library that an image links only when its

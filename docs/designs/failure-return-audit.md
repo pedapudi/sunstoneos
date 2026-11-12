@@ -1,63 +1,142 @@
-# The failure window of a returning session: every actor and every path to a stop
+# Registered owners govern the return to the boot ROM
 
-Status: audited on the host for the session of the NPU recognition (granted: the thermal service, the CPU clock grant, the NPU). Branch
-`work/npu-encoder-chain-1107`. The model is `checks/os-failure-step.py`.
+Status: **implemented and host-tested**. Thirteen registered owner identities cover
+session grants, manifest device classes and card-backed storage declarations.
+Selected GPU, NPU and storage-read failures return to FEL without a watchdog
+reset; [the failure-return record](../evidence/failure-return.jsonl) defines their
+physical scope. USB and radio failure-injection stages await reviewed USB launch
+admission facts. Audio and headset accessory-dependent qualification remains open.
 
-A failure return starts when `failing` is set by the claim (`failure_claim`, `apps/os/cpu-return.c`) and ends when the cores reach the boot ROM.
-[failure-return.md](failure-return.md) describes the sequence. In that window a path that reaches `board_fail`, `fail_close`, `platform_exit` or
-`a733_smp_exit_privileged` closes admission (`board.fatal`), and from then on only the watchdog ends the session. The record of the first four
-board runs of the NPU failure test was one such path per run. This list is every actor that runs in the window, read from the source, with each
-path to those four calls and what it does in a failure return.
+A failure window starts when `failure_claim` publishes `failing` and ends at the
+ROM return or the shared three-second limit. The application failure leaves
+`board.fatal` clear. The supervisor requests bounded owner steps in order through
+[the registry](../../apps/os/quiesce.c). Each step reports DONE, PENDING or FAULT.
+Hardware operations execute on their existing authorized tasks.
 
-## What the session grants, and what the model leaves out
+DONE requires the owner's stop proof. PENDING holds the next order class. FAULT
+records the error and permits later classes to run, while keeping terminal
+release blocked. Faulted owners retain their resources. A completion publication
+cannot overwrite FAULT. This distinction preserves DMA memory and storage when
+cleanup cannot establish that the hardware stopped.
 
-The session of `apps/mimus-board` with the NPU pack is `profile npu, services thermal, cpu_grant, npu` (`tools/session.py build`): no USB
-host, storage, audio, headset, radio, GPU, DMA or performance grant. The model contains the actors that exist in that session and leaves out the
-rest, for these reasons, each read from the source:
+After DONE, the supervisor continues bounded observations of each stopped proof
+until terminal release. A late NPU interrupt or worker fault revokes DONE through
+the registered callback. Completed callbacks do not restart shutdown operations
+or clock work. FAULT is final.
 
-- **Tasks that are not created.** `apps/board/main.c` creates the Type-C, power and USB2 tasks only for a host workload and the radio tasks only for a
-  radio workload; the SD owner (`apps/os/sd_owner.c`), the DMA service (`drivers/dma`), the GPU service, the audio and headset tasks, the performance
-  sessions and the large-region loader exist only when the manifest or the grant asks for them, and none does.
-- **Liveness reporting.** `apps/os/services.c` demands progress reports only in the resident lifetime and from services the session grants.
-  A returning session reads `board_live()` and nothing else (`bounded()` in `cpu-return.c`).
-- A different grant (a GPU session, a USB host session) needs its owners added to the model and to this list before its failure return is trusted.
+## Every granted owner has a verdict
 
-## The actors of the window
+Owners in the same class receive one collective request publication before any
+of their tasks can observe it. This matters when radio and headset share a task.
+Registrations precede service startup. Lazy storage startup also checks the
+request before touching hardware and waits for concurrent mailbox publishers.
 
-Verdicts: safe (cannot fire in a failure return, with the reason), fixed (fired in a board run, repaired), needs (not yet shown safe).
-
-| Actor | In a failure return | Paths to a stop | Verdict |
+| Owner | Admission source and order | Return behavior | Verdict and remaining gap |
 | --- | --- | --- | --- |
-| Claim (`failure_claim`: `ss_fail` SVC, EL0 fault stub, unexpected-interrupt handler, `platform_panic`) | publishes `failing`, the result record and the time; no task API | returns 0 (so `board_fail` follows) only when `board.fatal` is already set, when the completion cutoff has passed, or when `closing` was set by a normal return; otherwise 1 | safe |
-| Application tasks (main, workers, NPU owner) | the main task is suspended by `ss_fail`; the others continue; a second `ss_fail`, an EL0 fault or `ss_finish` finds `failing` set | `failure_claim` returns 1 at its first line; `ss_finish` refuses with `ss_fail(0x756)`, which is the same | safe |
-| NPU owner (the application's encoder task) | closes the queue when `ss_live()` is -1, at a safe point, and parks | `fault()` of the layers library if the SDK refuses (`ss_fail_value`, handled as the line above) | safe (and required: without it the return waits 3 s and ends at the watchdog, 0x742) |
-| NPU client (`npu-client.c`) | follows the ring: the owner's close ends its loop; waits for the stop; publishes its report | `RETAIN` sites 0x601 to 0x60c (progress or close refused), each a device failure | safe given the owner's close at a safe point: after the close no job is in flight, so `retirement_fault` finds no late interrupt; the same code path as a normal return after `ss_npu_queue_close` (board run `1794126613592469548-a5cce9e2`) |
-| NPU bootstrap, service worker, power owner (`npu.c`, `drivers/npu`) | stops the engine after the close | `watch()` refusals (board not live, `npu.failed`, `now >= npu.end`, a STOP gate past its end), `retirement_fault`, `fatal()` on a hardware error | safe: `board_live` is a consequence there, never a first cause; the gate is allowed until UINT64_MAX once all 31 thermal channels were seen, and a STOP is only set by the thermal level or `os_npu_close` |
-| Thermal owner (`thermal.c`) | keeps reading the sensors; after the clock owner lowered CPU-B it checks the devices | `fault()` on a CRITICAL reading or a driver fault (a real temperature fault, same as in the session), `platform_exit(6)` at four sites in the return branch | fixed: the devices-not-ready exit (line 381, board run 4) now waits during a failure return (`os_cpu_return_thermal_step`); the other three exits need `mask()` or `live()` to fail, which are consequences of a stop that already happened |
-| CPU clock owner (`cpu.c`, called by the thermal owner on every pass) | lowers CPU-B to boot0's 1014 MHz, publishes it, then does nothing | `REFUSED` sites: 230/260 driver retained or invalid, 234 request refused, 242 report not decoded or an id still held (all hardware or driver errors, and the same as in a normal return, which also may start in any phase), 237 `return_request` and not COMPLETE | fixed: 237 fired on a pass after the lowering was done (board run 5); the owner returns at once when `return_done` is set (`os_cpu_return_clock_pass`) |
-| Supervisor (`os_cpu_return_supervise`, task on core 0) | restarts WDT0, checks the failure time, waits for the devices, then releases the PMIC stop, the thermal done flag and the terminals | `bounded()` 0x736/0x744/0x8xx (board not live: a consequence), `fail(0x742)` (3 s), `fail(0x741)` (devices not ready) | fixed: 0x741 now applies only to a normal return; a failure return waits |
-| PMIC owner (`board-pmic`, `pmic_stop` branch of the supervisor) | `a733_power_service_step`; stops after the supervisor sets `pmic_stop` | `fail(0x739/0x73a/0x73b)` if its locks, slots or borrowed ids are not idle; `fail(0x741)` at line 232 | safe: `pmic_stop` is set only after `thermal_done`, which is set only after the clock owner's lowering and the devices' retirement; at that point no clock or rail request is outstanding; a PMIC fault is a hardware error as in a normal return |
-| Terminals (`terminal`, one per core, highest priority) | clean caches, restore the interrupt controller, return to the ROM | `fail(0x737)` if woken out of order or the devices are not ready | safe: woken last by the supervisor after the devices are ready |
-| USB0 owner (`board-usb0`, `usb0_service.h`) | serves the host channel (the result is read after the return) | `stop()` on a provider or stack error, on `!board_live()`, on `app_success` and a dead export | safe: no host-channel error is produced by the failure; `app_success` is false in a failure return; `!board_live()` is a consequence |
-| Board watchdog task (`supervise` in `apps/board/main.c`) | calls the return supervisor; restarts WDT0 | `board_fail_at(BOARD)` if `!board_live()` (a consequence) | safe |
-| Interrupt handlers: thermal (`os_thermal_irq`), NPU (IRQ 97), GIC, timer | thermal masks its source and notifies the owner; NPU marks its service | the NPU handler records a crumb and marks the service failed on a hardware error; an unexpected interrupt takes the claim or exits (`a733_smp_exit_privileged(4)`) | safe: none is raised by the failure; an unexpected interrupt is a defect in any return |
-| `tlbi-issuer`, large-region loader, `bg_load`, control tasks, perf sessions | idle or not created in this session | none reachable | safe (not active) |
-| Hooks: stack overflow (`vApplicationStackOverflowHook` calls `platform_panic`), tick and idle hooks | the OS defines no idle, tick or malloc-failed hook | stack overflow of a task: `platform_panic` is a stop | safe: the failure adds no stack use to a task beyond the normal return; unchanged |
+| NPU | NPU extent; application queues | Observes client retirement after the application's producer closes at a safe point when `ss_live()` becomes negative. Retained native callbacks park their task and publish FAULT. | DONE requires the stopped report and native retirement proof. Forced recognition failure with an open queue is board-qualified. An abandoned producer remains PENDING until the shared limit. |
+| GPU | Manifest GPU device; application queues | Closes queue admission, finishes accepted work on the worker, acknowledges completed outputs and executes CLOSE/PARK. | DONE requires a suspended worker and native stopped proof. The selected compute failure is board-qualified, including its abandoned output receipt. Reserved, locked or lost ownership remains FAULT. |
+| USB host | Host board workload and USB host class grants; device owners | Closes class admission, drains and halts xHCI, retires its interrupt, revokes stopped transport loans, restores the local platform and waits for Type-C source stop. | Host-tested DONE requires every stop proof. Active borrowed JPEG work or uncertain controller, interrupt or source state remains FAULT. An empty-port diagnostic stops before xHCI starts and cannot qualify controller drain. |
+| USB0 device | USB0 grant from manifest `usb-device`; device owners | Atomically seals startup before inspecting the original provider state. Stop guards and the provider failure hook record their reason and park during a return window. | Host-tested DONE requires no startup, token, PMIC request, provider fault or controller access. Any claimed startup or uncertain state remains FAULT with resources retained. Returning USB0 grants remain excluded; enabling them requires earlier registration and a proven native close path. |
+| Radio | Radio grant and board workload; device owners | Drains the accepted SDIO operation, stops partial startup or a scan through DOWN readbacks, and erases permitted credential copies. Shared Bluetooth must release the module before physical shutdown. | Host-tested DONE covers partial startup and scan-only shutdown with no outstanding transport, PMIC request or credential. Full station, association and entropy-only ownership retain FAULT value `0x905`: crypto-engine (CE) retirement is unproved. |
+| I2S audio | Audio grant; device owners | Returns borrowed periods, cancels, drains, reaps and closes capture; retires the DMA worker and interrupt; verifies the controller; then retires local and shared audio leases. | Host-tested DONE covers partial startup and complete capture. Uncertain drain or a conflicting shared clock consumer retains FAULT. Returning audio admission remains excluded pending qualification. |
+| Bluetooth headset | Headset grant; device owners | Closes capture and protocol channels, completes HCI Reset, waits for the module owner to assert and verify PM2 reset, then drains and closes UART. | Host-tested DONE requires every protocol, peer-stop and UART proof. Profile version 4 supplies explicit PM2 authority; legacy profiles retain FAULT. Returning headset admission remains excluded pending physical qualification, including the reset route and an attached headset. |
+| SD storage | Card-backed large regions or the write-owner binding; device owners | Finishes the issued transfer, refuses further requests and uses its own transaction record to decide whether native close is safe. | DONE covers reads, untouched write sessions and completed consistent transactions. Unsafe phases immediately publish FAULT with the session ID and detail `0x921` through `0x92c`. Failure after a verified 512 MiB read is board-qualified; interrupted filesystem writes are not. |
+| DMA | DMA extent; device owners | Stops admission under the sender reservation and retires the idle worker queue, interrupt and controller through read-only final verification. | Host-tested DONE requires closed channels, no queued request or uncollected reply, and the admitted cold or adopted controller state. Closed streams are supported. Device memory and its platform reservation remain held through FEL. Active or abandoned work retains FAULT. |
+| CPU clock | CPU clock grant; clock lowering | The thermal task finishes an active transition and lowers CPU-B through the boot-point return path. | DONE is published once. Subsequent passes perform no clock work; refusal publishes FAULT. |
+| Thermal | Every OS session; thermal stop | Continues readings until earlier owners drain. A separately published authorization permits bounded interrupt masking and converter stop. | DONE requires converter stop. An earlier device FAULT keeps sampling active and prevents thermal retirement. |
+| PMIC | Every returning OS session; PMIC stop | Its owner verifies idle slots, borrowed IDs and locks, publishes its result and parks. | DONE requires no held, retained or failed PMIC state. A refusal is recorded without closing board admission. |
+| Per-core terminals | Every returning OS session; last | The supervisor releases the eight terminal tasks only after every earlier owner reports DONE. | FAULT never authorizes cache, RAM or power ownership release. The shared timeout retains the watchdog ending. |
 
-## What the model contains
+The six order classes are queues, device owners, CPU clock, thermal, PMIC and
+terminals. Native hardware remains on its authorized owner task. The USB, radio,
+audio, headset and storage retirement changes have design and code review for
+simplicity, hardware performance and correctness. Their host evidence does not qualify
+physical timing or fault recovery.
 
-`checks/os-failure-step.py` and `.c` model: the claim (flags only), the supervisor (`os_cpu_return_failure_step`), `bounded()`
-(`os_cpu_return_bounded_detail`), the application's NPU owner (closes within 100 ms or never), the NPU client (reports 40 ms after the close;
-a stop from outside takes its retained path), the thermal owner (`os_cpu_return_thermal_step`), the CPU clock owner (`os_cpu_return_clock_pass`),
-a device failure at an arbitrary time, and the PMIC and terminal gates as the order of the supervisor (a return completes only when the devices are
-retired and the thermal owner is done). The actors marked safe above are not modelled because they have no path in the window; each reason is a
-line of the table.
+The supervisor publishes one absolute deadline before requesting any owner. It
+allows at most three seconds and preserves the session's final 10 ms guard.
+Shared lock waiters recheck that deadline on each existing wait tick and after
+acquisition; shared pin callbacks refuse register access after expiry. A startup
+task that sees closing before the deadline is published yields without starting
+more hardware work. Normal transaction deadlines remain in force when earlier.
 
-Four stops of the NPU failure test are reproduced by mutants of the model: the supervisor's stop of the NPU (0xa8b), the thermal owner exiting
-(0x744), the clock owner repeating its return branch (0x744), and a failure return that stops at once (0x741).
+## Physical qualification
 
-## Residual risk
+[The failure-return records](../evidence/failure-return.jsonl) qualify three
+selected failures on port 3-3: GPU compute, NPU recognition with an open queue, and
+failure after reading and hashing 512 MiB from storage. Each preserves its
+expected application first record, reports no secondary owner fault, retires all
+eight cores and returns to FEL without a watchdog reset. These cases establish
+healthy-device retirement after application failure. They do not establish
+recovery from a device fault or an interrupted filesystem write.
 
-- The NPU client, bootstrap and service worker were read, not modelled: a failure return depends on the application closing at a safe point. An
-  application that never closes ends at the 3 s limit with 0x742, as designed.
-- The thermal owner does not wake on its own interrupt during the wait if the source is masked; it reads on its 25 ms schedule.
+USB and radio failure-injection stages await reviewed USB launch admission facts.
+The USB empty-port diagnostic can exercise partial startup and Type-C stop only;
+started-xHCI retirement needs an admitted attachment. Audio and headset require
+accessories for their external capture paths. Headset return also needs physical
+version 4 reset authority ([Bluetooth return](bluetooth-return.md)). The pre-launch
+host refusal in the record contains no native execution and supplies no
+device-failure verdict.
+
+## Other actors preserve the failure window
+
+- The claim, application tasks and application fault stubs publish the first
+  failure once. `ss_fail` and `ss_fail_value` use one failure-record path even
+  when a return claim is refused; their fallback does not add a board note.
+  Later application failures preserve the first record.
+- The supervisor restarts the watchdog and enforces one three-second budget
+  for the complete return. Session deadlines continue to bound execution.
+- Thermal and device interrupt handlers retain their existing source masking
+  and notification protocols. An interrupt that proves lost device ownership
+  publishes the owner's fault; it does not certify drain.
+- Unexpected interrupts, stack corruption, masked scheduler contexts and EL1/EL3
+  exceptions retain the exceptional endings described in
+  [the return design](failure-return.md). They are not device stop proofs.
+- Resident liveness renewal and application algorithms retain their own lifetime
+  rules. This registry runs only after the returning supervisor begins closing.
+
+## Fault records identify owners without losing their original diagnostics
+
+Each descriptor keeps its first site, value and caller in RAM, with release and
+acquire publication. The supervisor reports these records even when an earlier
+owner remains PENDING. It also flushes available records at the global timeout.
+
+The RTC retains one secondary record after an application first record, at level
+`0xc`. Its group is `QUIESCE` (`0xc`); the separate USB0 guard group is `0xb`.
+Bits 23:16 identify the registered owner. Bits 27:24 identify the original
+failure group, and bits 11:0 retain its detail or
+source line. The value and caller retain their original meanings. The descriptor
+keeps the full original site, including auxiliary bits. The
+[decoder](../../tools/a733-crumbs.py) prints the owner, source group and code.
+
+Additional owner records remain separate in RAM; the limited RTC slot keeps the
+first reported secondary fault. A watchdog reset invalidates those RAM records.
+The original application failure remains in the application result record when
+the image returns normally. Non-application first records retain the existing
+RTC replacement policy.
+
+## Checks follow the session grants
+
+`tools/session.py` derives `quiesce_actors` from the service declarations in
+`apps/os/os-services.h`, the granted manifest device bits, workload and storage
+binding. The manifest class `usb-device` selects USB0; USB host classes select
+the separate USB host owner. The builder still refuses compositions whose
+hardware facts are absent.
+Synthetic host cases exercise those declarations without granting physical
+launch authority.
+
+`checks/os-failure-step.py` requires a registration for every derived actor and
+executes the production registry. It checks ordered progress, collective request
+publication, completion races, fault retention, later faults behind a pending
+owner and the shared timeout. Removing each registration or inserting
+`platform_exit` into each registered callback must fail the check. The source
+scan covers direct callbacks; it is not a complete C call-graph proof.
+
+The owner checks (`checks/os-quiesce-*.py`) exercise native adapters or extracted
+production steps with modeled hardware. The USB0 check uses the actual provider
+layout and registry. It tests both orders of starting and sealing the owner,
+and protects provider memory against access after startup wins. GPU and DMA checks execute their actual
+worker retirement paths under QEMU. The linked failure-return fixture executes
+the image's claim, registry, supervisor and terminal code, with modeled hardware
+and owner publications. QEMU OS boot covers startup, application faults and the
+storage task composition. None of these host results establishes physical drain.

@@ -29,7 +29,7 @@ static struct playback_state playback_storage,*const playback_state=&playback_st
 #endif
 #define playback (*playback_state)
 int bluetooth_playback_mode(const struct bluetooth_application *a)
-{return playback_state&&a&&a->self==a&&a->profile&&((a->profile->version==2&&a->profile->headset.mode==4)||(a->profile->version==3&&a->profile->headset.mode==5));}
+{return playback_state&&a&&a->self==a&&a->profile&&((a->profile->version==2&&a->profile->headset.mode==4)||(a->profile->version>=3&&a->profile->headset.mode==5));}
 static int live(struct bluetooth_application *a)
 {return bluetooth_playback_mode(a)&&!atomic_load_explicit(&a->failed,memory_order_acquire)&&
     !(atomic_load_explicit(a->recovery_state,memory_order_acquire)&4);}

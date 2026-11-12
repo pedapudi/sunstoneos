@@ -10,6 +10,9 @@ static unsigned mode;
 static struct a733_platform_locks locks;
 static struct a733_radio_platform_native native;
 
+/* This fixture models normal operation with no dynamic return deadline (D=0). */
+int a733_platform_lock_live(struct a733_platform_locks *l){return l&&!l->deadline;}
+
 BaseType_t xTaskGetSchedulerState(void)
 { return mode&32?taskSCHEDULER_NOT_STARTED:taskSCHEDULER_RUNNING; }
 TaskHandle_t xTaskGetCurrentTaskHandle(void)

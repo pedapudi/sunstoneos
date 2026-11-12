@@ -18,15 +18,17 @@ static int native_now(void *cookie, uint64_t *value)
 }
 static int native_read(void *cookie, uintptr_t address, uint32_t *value)
 {
-    (void)cookie;
-    if (!value || !a733_pins_native_address(address,0)) return 0;
+    struct a733_pins_native *n=cookie;
+    uint64_t now;
+    if (!n->locks.now(n->locks.cookie,&now) || !value || !a733_pins_native_address(address,0)) return 0;
     *value=a733_mmio_read32_dsb_sy_both(address);
     return 1;
 }
 static int native_write(void *cookie, uintptr_t address, uint32_t value)
 {
-    (void)cookie;
-    if (!a733_pins_native_address(address,1)) return 0;
+    struct a733_pins_native *n=cookie;
+    uint64_t now;
+    if (!n->locks.now(n->locks.cookie,&now) || !a733_pins_native_address(address,1)) return 0;
     a733_mmio_write32_dsb_sy_both(address,value);
     return 1;
 }

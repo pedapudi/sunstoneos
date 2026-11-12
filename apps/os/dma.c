@@ -6,6 +6,10 @@
 #include "dma_service_i2s_irq.h"
 #include "sunstone_dma.h"
 #include "boot.h"
+#include "quiesce.h"
+#include "sunstone_crumb.h"
+#include "cpu-return.h"
+#include "a733_task_context.h"
 
 __attribute__((used,retain)) const uint64_t os_dma_profile[3]={
     UINT64_C(0x41533733444d4131),1,4096
@@ -21,26 +25,76 @@ static struct {
     uint64_t mask_deadline,mask_now;
     atomic_uint ready;
 } dma;
+static enum os_quiesce_result dma_quiesce_step(struct os_quiesce *q)
+{
+    if(atomic_load_explicit(&dma.ready,memory_order_acquire))return OS_QUIESCE_DONE;
+    unsigned state=atomic_load_explicit(&dma.pool.state,memory_order_acquire);
+    if(state==A733_DMA_POOL_WAITING)return OS_QUIESCE_PENDING;
+    if(state==A733_DMA_POOL_READY){
+        int stopped=dma_service_quiesce(&dma.pool.service);
+        if(!stopped)return OS_QUIESCE_PENDING;
+        if(stopped>0){
+            int retired=a733_dma_pool_session_retire(&dma.pool);
+            if(!retired)return OS_QUIESCE_PENDING;
+            if(retired>0){atomic_store_explicit(&dma.ready,1,memory_order_release);return OS_QUIESCE_DONE;}
+        }
+    }
+    (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|0x811,
+        state|(atomic_load_explicit(&dma.pool.service.quiesce_fault,memory_order_acquire)<<8)|
+        (dma.mask_fault<<24),SUNSTONE_CRUMB_HERE());
+    return OS_QUIESCE_FAULT;
+}
+static struct os_quiesce dma_quiesce={.owner=OS_QUIESCE_DMA,
+    .order=OS_QUIESCE_DEVICES,.step=dma_quiesce_step};
 static _Noreturn void fatal(void *unused)
-{(void)unused;platform_panic("DMA retained state",1);}
+{
+    (void)unused;
+    if(os_quiesce_fault(&dma_quiesce,SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|0x812,
+        atomic_load_explicit(&dma.pool.state,memory_order_acquire),SUNSTONE_CRUMB_HERE()))
+        for(;;)vTaskSuspend(NULL);
+    platform_panic("DMA retained state",1);
+}
 int os_dma_task_privileged(void (*entry)(void *),void *arg)
 {return a733_dma_pool_task_privileged(entry,arg)==pdTRUE;}
 int os_dma_pins(struct a733_pin_handoff *unused)
 {(void)unused;return os_session_admitted()!=NULL;}
+static int mask_timely(void)
+{
+    uint64_t shared=os_cpu_return_deadline_us();
+    if(shared&&shared<dma.mask_deadline)dma.mask_deadline=shared;
+    if(!shared&&!board_live(NULL)){dma.mask_fault=6;return 0;}
+    if(!a733_counter_clock_now(&providers.shared.counter,&dma.mask_now)||
+       dma.mask_now>=dma.mask_deadline){dma.mask_fault=3;return 0;}
+    return 1;
+}
 static int mask(void *cookie)
 {
     struct dma_service_i2s_irq *irq=cookie;
-    dma.mask_now=a733_smp_counter();
-    if(dma.mask_now>UINT64_MAX-A733_SMP_COUNTER_HZ/10000){dma.mask_fault=4;return -1;}
-    dma.mask_deadline=dma.mask_now+A733_SMP_COUNTER_HZ/10000;
+    TaskHandle_t worker=dma.pool.service.worker;
+    if(irq!=&dma.irq||!a733_task_context_owner_el1(worker)){dma.mask_fault=5;return -1;}
+    for(unsigned i=0;i<A733_PLATFORM_LOCK_COUNT;++i)
+        if(xSemaphoreGetMutexHolder(providers.shared.locks.mutex[i])==worker){dma.mask_fault=5;return -1;}
+    dma.mask_deadline=os_cpu_return_deadline_us();
+    /* Explicit application retirement can precede supervisor closing. The
+     * admitted session bounds it until the shared return deadline exists. */
+    if(!dma.mask_deadline)dma.mask_deadline=board.session.deadline_us;
+    if(!dma.mask_deadline){dma.mask_fault=4;return -1;}
+    if(!mask_timely())return -1;
     int result=dma.mask_result=gicv3_spi_mask(&irq->spi);
     if(result!=1){dma.mask_fault=1;return result;}
-    /* GICD_CTLR.RWP clears before ISENABLER can confirm the SPI is disabled. */
+    /* Admission and ISR rearming are already stopped. GICD_CTLR.RWP must
+     * clear before ISENABLER proves the SPI disabled. The worker can sleep
+     * here: retire/quiesce_idle released the scheduler critical section and
+     * every channel is CLOSED, with no platform mutex held. */
     for(;;){
+        if(!mask_timely())return -1;
         result=dma.mask_result=gicv3_spi_masked(&irq->spi);
-        dma.mask_now=a733_smp_counter();
-        if(result<0||dma.mask_now>=dma.mask_deadline){dma.mask_fault=result<0?2:3;return -1;}
-        if(result==1){irq->masked=1;return 1;}
+        if(result<0){dma.mask_fault=2;return -1;}
+        if(!mask_timely())return -1;
+        if(result==1){
+            taskENTER_CRITICAL();irq->masked=1;taskEXIT_CRITICAL();return 1;
+        }
+        vTaskDelay(1);
     }
 }
 int os_dma_start(void)
@@ -49,6 +103,7 @@ int os_dma_start(void)
     uint64_t now;
     if(!s||!ss_application.task||!a733_counter_clock_now(&providers.shared.counter,&now)||
        now>UINT64_MAX-100000)return 0;
+    if(!os_quiesce_register(&dma_quiesce))return 0;
     dma.handoff=s->dma.handoff;
     dma.handoff.allowed.deadline_us=now+100000;
     dma.config=(struct a733_dma_pool_config){
@@ -71,7 +126,7 @@ int os_dma_return_ready(void)
 static int caller(void)
 {
     return xTaskGetCurrentTaskHandle()==(TaskHandle_t)ss_application.task&&
-        !os_dma_return_ready();
+        !os_dma_return_ready()&&!os_quiesce_requested(&dma_quiesce);
 }
 static int request(enum dma_service_operation op,struct dma_service_reply *reply)
 {

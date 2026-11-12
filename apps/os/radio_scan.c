@@ -4,6 +4,7 @@
 #include "os.h"
 #include "../board/application.h"
 #include "cpu-return.h"
+#include "radio-quiesce.h"
 #include "a733_radio_result.h"
 #include "os_radio_result.h"
 #include "sunstone_crumb.h"
@@ -13,10 +14,8 @@
  * until the record is published. */
 struct os_radio_result_descriptor os_radio_result_descriptor __attribute__((used,retain,aligned(8)));
 enum { RUNNING, SCANNED, DOWN, FAILED };
-static _Atomic unsigned state, returning, stage_seen;
-static unsigned shutdown_started, published;
-/* The shutdown has this long to run: every step is a bounded register or PMIC transaction. */
-#define OS_RADIO_SHUTDOWN_US 3000000u
+static _Atomic unsigned state, stage_seen;
+static unsigned published;
 
 static void clean(const void *base, size_t bytes)
 {
@@ -44,6 +43,11 @@ void os_radio_scan_step(struct board_radio *r, int result)
 {
     unsigned current = atomic_load_explicit(&state, memory_order_acquire);
     if (r->config.entropy_only) {
+        if(os_radio_quiesce_requested()){
+            if(result==BOARD_RADIO_RETAINED||result==BOARD_RADIO_INVALID)
+                atomic_store_explicit(&state,FAILED,memory_order_release);
+            return;
+        }
         /* The CE entropy stage replaces the radio's own work: no platform poll, no shutdown to do. */
         if (current == RUNNING) {
             os_ce_probe_start();
@@ -58,31 +62,20 @@ void os_radio_scan_step(struct board_radio *r, int result)
         atomic_store_explicit(&state, SCANNED, memory_order_release);
         current = SCANNED;
     }
-    if (result == BOARD_RADIO_SCANNED && current == SCANNED && !shutdown_started &&
-        atomic_load_explicit(&returning, memory_order_acquire)) {
-        uint64_t now = a733_smp_counter() / 24;
-        shutdown_started = 1;
-        /* Refused (a busy transport) leaves the station scanned; the retry is the next pass. */
-        if (!board_radio_shutdown(r, now + OS_RADIO_SHUTDOWN_US)) shutdown_started = 0;
-    } else if (result == BOARD_RADIO_DOWN && current != DOWN) {
+    if (result == BOARD_RADIO_DOWN && current != DOWN) {
         publish(r);
         atomic_store_explicit(&state, DOWN, memory_order_release);
     } else if ((result == BOARD_RADIO_RETAINED || result == BOARD_RADIO_INVALID) && current != FAILED) {
         /* The first failure record names where the platform failed (source line and stage), so a run that
          * cannot return still says it; the descriptor's record carries the same site. */
-        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD) | SUNSTONE_CRUMB_FAIL_RETURN,
-            r->platform.fail_line ? r->platform.fail_line << 16 | (r->platform.fail_stage & 0xffffu) :
-            r->session.fail_line << 16 | 0x100u | (r->session.fail_stage & 0xfeffu), __builtin_return_address(0));
+        uint32_t value = r->platform.fail_line ? r->platform.fail_line << 16 | (r->platform.fail_stage & 0xffffu) :
+            r->session.fail_line << 16 | 0x100u | (r->session.fail_stage & 0xfeffu);
+        if(!os_radio_quiesce_fault(value,__builtin_return_address(0)))
+            board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD) | SUNSTONE_CRUMB_FAIL_RETURN,
+                value,__builtin_return_address(0));
         publish(r);
         atomic_store_explicit(&state, FAILED, memory_order_release);
     }
-}
-void os_radio_scan_return_request(void){atomic_store_explicit(&returning, 1, memory_order_release);}
-/* Down with every readback matched, or failed and published: nothing more can be shut down. */
-int os_radio_scan_return_ready(void)
-{
-    unsigned s = atomic_load_explicit(&state, memory_order_acquire);
-    return s == DOWN || s == FAILED;
 }
 void ss_radio_status(struct ss_radio_status *status)
 {

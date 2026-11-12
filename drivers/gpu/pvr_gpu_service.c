@@ -19,6 +19,7 @@
 #pragma weak pvr_compute_queue_event
 #pragma weak pvr_compute_queue_abort
 #pragma weak pvr_compute_queue_close
+#pragma weak pvr_compute_queue_quiesce
 #pragma weak pvr_compute_queue_deadline
 #pragma weak pvr_compute_queue_submitting
 #pragma weak pvr_compute_queue_progress
@@ -332,6 +333,8 @@ static int deadline(struct pvr_gpu_service *s, uint64_t duration)
     if (!sample(s, &now) || !a733_deadline_after(now, duration, &s->deadline)) {
         fail(s, PVR_GPU_SERVICE_CLOCK); return 0;
     }
+    if(atomic_load_explicit(&s->quiesce.state,memory_order_acquire)==1 && s->deadline>s->quiesce.deadline)
+        s->deadline=s->quiesce.deadline;
     return 1;
 }
 static int opening_clock(struct pvr_gpu_service *s)
@@ -1203,6 +1206,59 @@ static int step(struct pvr_gpu_service *s)
     if (q && s->config.job_irq_ack) pvr_compute_fast_unlock(q);
     return more;
 }
+unsigned pvr_gpu_service_quiesce(struct pvr_gpu_service *s,uint64_t end)
+{
+    if (!s || !s->initialized || !s->config.compute_queue || !s->config.park || !end) return 3;
+    unsigned state=atomic_load_explicit(&s->quiesce.state,memory_order_acquire);
+    if (state) return state;
+    atomic_store_explicit(&s->config.compute_queue->final_close,1,memory_order_release);
+    s->quiesce.deadline=end;
+    atomic_store_explicit(&s->quiesce.state,1,memory_order_release);
+    const struct pvr_gpu_service_message wake={.client=PVR_GPU_SERVICE_CLIENTS,.ticket=PVR_GPU_SERVICE_QUEUE_WAKE};
+    /* A full request queue already wakes the worker. */
+    (void)xQueueSend(s->requests,&wake,0);
+    return 1;
+}
+/* The worker retains its authority over firmware, interrupts and power. A
+ * fault stops this owner only; the OS collects it while other owners retire. */
+static void quiesce_step(struct pvr_gpu_service *s)
+{
+    if (atomic_load_explicit(&s->quiesce.state,memory_order_acquire)!=1) return;
+    uint64_t now;
+    if (s->phase==PVR_GPU_SERVICE_FAILED || !sample(s,&now) || now>=s->quiesce.deadline) goto fault;
+    /* Drain queued control requests before publishing the final proof. New
+     * requests are refused by the worker while this request is active. */
+    if (uxQueueMessagesWaiting(s->requests)) return;
+    if (s->phase==PVR_GPU_SERVICE_COLD || s->phase==PVR_GPU_SERVICE_PARKED) {
+        atomic_store_explicit(&s->quiesce.state,2,memory_order_release);
+        vTaskSuspend(NULL);
+        return;
+    }
+    struct pvr_gpu_service_message message={.client=s->owner,.epoch=s->epoch,
+        .request={PVR_GPU_SERVICE_CLOSE,s->quiesce.deadline-now}};
+    if (s->phase==PVR_GPU_SERVICE_READY) {
+        int drained=pvr_compute_queue_quiesce(s->config.compute_queue,&s->quiesce.abandoned);
+        if (drained<0) goto fault;
+        if (!drained) return;
+    } else if (s->phase==PVR_GPU_SERVICE_STOPPED) {
+        message.client=s->closed_owner;message.request.operation=PVR_GPU_SERVICE_PARK;
+    } else return;
+    enum pvr_gpu_service_result result=execute(s,&message);
+    if (result==PVR_GPU_SERVICE_OK || result==PVR_GPU_SERVICE_BUSY) return;
+fault:
+    /* A producer can have failed while holding its transport lock. Preserve
+     * that owner's state instead of aborting its queue concurrently. */
+    {
+        struct pvr_compute_queue *q=s->config.compute_queue;
+        const int direct=s->config.job_irq_ack!=NULL;
+        if(!direct||pvr_compute_fast_lock(q)){
+            if(s->phase!=PVR_GPU_SERVICE_FAILED)fail(s,PVR_GPU_SERVICE_STOP);
+            if(direct)pvr_compute_fast_unlock(q);
+        }
+    }
+    atomic_store_explicit(&s->quiesce.state,3,memory_order_release);
+    vTaskSuspend(NULL);
+}
 static TickType_t ticks(uint64_t us)
 {
     const uint64_t period = 1000000u / configTICK_RATE_HZ;
@@ -1218,6 +1274,7 @@ static TickType_t ticks(uint64_t us)
  * delivery an idle session also wakes every IDLE_POLL_US. */
 static TickType_t wait_ticks(struct pvr_gpu_service *s)
 {
+    if (atomic_load_explicit(&s->quiesce.state,memory_order_acquire)==1) return 1;
 #ifdef PVR_GPU_PERFORMANCE
     if(s->phase==PVR_GPU_SERVICE_READY && (s->performance.ticket || performance_controlling(s)))return ticks(1000);
 #endif
@@ -1285,7 +1342,9 @@ static void worker(void *argument)
          * yields to tasks of its priority. */
         struct pvr_gpu_service_message message;
         uint64_t started;
-        if (burst(s, &started)) {
+        int more=burst(s, &started);
+        quiesce_step(s);
+        if (more) {
             /* Bursts that end with CPU work left keep tasks below the worker's
              * priority off its core. Once such a run reaches CPU_RUN_US the
              * worker blocks for one tick, so those tasks run for the rest of
@@ -1324,13 +1383,15 @@ static void worker(void *argument)
         configASSERT(message.client < PVR_GPU_SERVICE_CLIENTS && message.ticket);
         struct pvr_gpu_service_reply reply = {.ticket = message.ticket};
 #ifdef PVR_GPU_PERFORMANCE
-        if(message.request.operation==PVR_GPU_SERVICE_PERFORMANCE) {
+        if(message.request.operation==PVR_GPU_SERVICE_PERFORMANCE &&
+           !atomic_load_explicit(&s->quiesce.state,memory_order_acquire)) {
             reply.result=performance_start(s,&message);
             if(reply.result==PVR_GPU_SERVICE_OK)continue;
             reply.performance_status=reply.result==PVR_GPU_SERVICE_FAULT ? A733_PERF_FAILED : A733_PERF_REFUSED;
         } else
 #endif
-        reply.result = execute(s, &message);
+        reply.result = atomic_load_explicit(&s->quiesce.state,memory_order_acquire) ?
+            PVR_GPU_SERVICE_DENIED : execute(s, &message);
         if(message.request.operation==PVR_GPU_SERVICE_COMPUTE_INPUT) {
             struct pvr_compute_service *c=s->config.compute;
             if(c&&atomic_load_explicit(&c->input_state,memory_order_acquire)==2&&
@@ -1455,7 +1516,8 @@ int pvr_gpu_service_performance(struct pvr_gpu_service *s,enum a733_perf_action 
 {
     unsigned slot;
     struct pvr_gpu_service_client *c=caller(s,&slot);
-    if(!c || !ticket || !s->config.performance_begin || slot!=s->config.performance_client || c->pending ||
+    if(!c || atomic_load_explicit(&s->quiesce.state,memory_order_acquire) ||
+        !ticket || !s->config.performance_begin || slot!=s->config.performance_client || c->pending ||
         c->next_ticket==UINT64_MAX || !deadline || deadline>limit)return 0;
     struct pvr_gpu_service_message m={.request={PVR_GPU_SERVICE_PERFORMANCE,deadline},
         .ticket=c->next_ticket+1,.epoch=atomic_load_explicit(&s->published_epoch,memory_order_acquire),
@@ -1471,7 +1533,8 @@ int pvr_gpu_service_send_epoch(struct pvr_gpu_service *s,uint64_t epoch, const s
     if (!r || !ticket || wait == portMAX_DELAY || r->operation==PVR_GPU_SERVICE_PERFORMANCE || r->operation==PVR_GPU_SERVICE_COMPUTE_INPUT ||
         r->operation==PVR_GPU_SERVICE_DRAW) return 0;
     unsigned slot; struct pvr_gpu_service_client *c = caller(s, &slot);
-    if (!c || c->pending || c->next_ticket == UINT64_MAX) return 0;
+    if (!c || atomic_load_explicit(&s->quiesce.state,memory_order_acquire) ||
+        c->pending || c->next_ticket == UINT64_MAX) return 0;
     struct pvr_gpu_service_message message = {.request=*r, .ticket=c->next_ticket+1, .epoch=epoch, .client=slot};
     c->pending = message.ticket;
     if (xQueueSend(s->requests, &message, wait) != pdTRUE) { c->pending = 0; return 0; }

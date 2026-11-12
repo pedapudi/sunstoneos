@@ -193,9 +193,21 @@ def board_failure(words, defines, elf):
               'site': site & 0xfff, 'aux': site >> 16 & 0x7fff, 'caller': hex(caller), 'value': hex(value),
               'caller_kind': 'return address' if site >> 31 else 'statement',
               'exception_level': 'EL0' if slot == 0 else 'EL1' if slot in (4, 5) else f'SPSR.M {slot:#x}'}
+    if record['group'] == 'quiesce':
+        owners = {v: k[len('QUIESCE_'):].lower().removesuffix('_owner')
+                  for k, v in defines.items() if k.startswith('QUIESCE_')}
+        record['owner'] = owners.get(site >> 16 & 255, 'unknown')
+        record['source_group'] = groups.get(site >> 24 & 15, 'unknown')
+        record['code'] = site & 0xfff
+        storage_phases = ('unverified', 'fat1', 'fat2', 'directory', 'fsinfo',
+                          'dirty1', 'dirty2', 'clean1', 'clean2', 'raw', 'failed', 'protocol')
+        if record['owner'] == 'storage' and 0x921 <= record['code'] <= 0x92c:
+            record['session'] = value
+            record['storage_phase'] = storage_phases[record['code'] - 0x921]
     if legacy_npu:
         record['group_source'] = 'finite NPU ELF (legacy group 8)'
-    record['site_kind'] = 'detail' if record['group'] in ('cpu_return', 'application', 'usb0') else 'source line'
+    record['site_kind'] = ('code' if record['group'] == 'quiesce' else
+                           'detail' if record['group'] in ('cpu_return', 'application', 'usb0') else 'source line')
     if record['group'] == 'usb0':
         record['usb0_guard'] = USB0_REASONS.get(record['site'], 'unknown guard')
         record['provider_step'] = record['aux'] & 255
@@ -385,6 +397,10 @@ def decode(words, epoch, elf=None):
                 f"{f['site_kind']} {f['site']:#x}, value {f['value']}, caller {f['caller']}")
         if f.get('caller_source'):
             text += f" ({f['caller_source']})"
+        if f['group'] == 'quiesce':
+            text += f", owner {f['owner']}, source group {f['source_group']}"
+        if 'session' in f:
+            text += f", SESSION {f['session']:#x}, phase {f['storage_phase']}"
         if 'usb0_guard' in f:
             text += (f"; USB0 guard {f['usb0_guard']}, provider step {f['provider_step']}, "
                      f"rail index {f['rail_index']}, result {f['provider_result']}")

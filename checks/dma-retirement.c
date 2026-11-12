@@ -6,6 +6,49 @@
 #define retirement_case (*(volatile unsigned *)UINT64_C(0x47fff004))
 static uint32_t mask_calls,late_irqs,rearm_calls,peer_command,peer_sent,peer_collected;
 static uint64_t other_ticket;
+static uint32_t admin_ready,sender_resume;
+BaseType_t __real_xQueueGenericSend(QueueHandle_t,const void *,TickType_t,BaseType_t);
+BaseType_t __wrap_xQueueGenericSend(QueueHandle_t queue,const void *item,TickType_t ticks,BaseType_t position)
+{
+    if(retirement_case==9&&queue==service.requests&&!get(&sender_resume)){
+        configASSERT(service.retirement_senders==1);
+        set(&admin_ready,1);wait_flag(&sender_resume,1);
+    }
+    return __real_xQueueGenericSend(queue,item,ticks,position);
+}
+static void retirement_admin(void *unused);
+BaseType_t __real_dma_service_task_privileged(TaskFunction_t,void *);
+BaseType_t __wrap_dma_service_task_privileged(TaskFunction_t entry,void *argument)
+{return (entry==retirement_admin&&!argument)||__real_dma_service_task_privileged(entry,argument);}
+static void retirement_admin(void *unused)
+{
+    (void)unused;wait_flag(&admin_ready,1);
+    int result=dma_service_quiesce(&service);
+    if(retirement_case==9){
+        configASSERT(!result);vTaskDelay(3);
+        configASSERT(service.retirement_senders==1&&!get(&mask_calls)&&!dma_service_retired(&service));
+        set(&sender_resume,1);
+    }
+    TickType_t began=xTaskGetTickCount();
+    while(!result){configASSERT(xTaskGetTickCount()-began<100);vTaskDelay(1);result=dma_service_quiesce(&service);}
+    unsigned reads=get(&accesses[0]),rearms=get(&rearm_calls);
+    if(retirement_case==5){
+        configASSERT(result==1&&dma_service_retired(&service)&&get(&mask_calls)==1);
+    }else{
+        configASSERT(result==-1&&!dma_service_retired(&service));
+        if(retirement_case==6)configASSERT(service.channels[0].owner==0&&service.controller.channels[0].claimed);
+        if(retirement_case==7)configASSERT(service.clients[0].pending&&uxQueueMessagesWaiting(service.clients[0].replies));
+        configASSERT(get(&mask_calls)==(retirement_case==8?1:0));
+        configASSERT(atomic_load(&service.quiesce_fault)==(retirement_case==6?DMA_QUIESCE_CHANNEL_HELD:
+            retirement_case==7?DMA_QUIESCE_REPLY_HELD:
+            retirement_case==9?DMA_QUIESCE_REQUEST_HELD:DMA_QUIESCE_MASK_FAILED));
+    }
+    BaseType_t woken=pdFALSE;dma_service_irq_notify_from_isr(&service,1,&woken);
+    configASSERT(!woken);
+    vTaskDelay(3);configASSERT(get(&accesses[0])==reads&&get(&rearm_calls)==rearms);
+    platform_puts("PASS DMA retirement: owner request retires idle service and preserves abandoned channel or reply\n");
+    platform_exit(0);
+}
 static int retirement_mask(void *cookie)
 {
     configASSERT(cookie==&mask_calls);privileged();
@@ -19,7 +62,7 @@ static int retirement_mask(void *cookie)
     dma_service_irq_notify_from_isr(&service,1,&woken);
     __atomic_fetch_add(&late_irqs,1,__ATOMIC_RELEASE);
     configASSERT(!woken && !atomic_load(&service.irq_pending));
-    return retirement_case==1?0:1;
+    return retirement_case==1||retirement_case==8?0:1;
 }
 static int retirement_rearm(void *cookie)
 {configASSERT(cookie==&mask_calls);privileged();__atomic_fetch_add(&rearm_calls,1,__ATOMIC_RELEASE);return 1;}
@@ -39,6 +82,16 @@ static void retirement_client(void *unused)
 {
     (void)unused;
     configASSERT(!dma_service_bind_retirement(&service,retirement_mask,&mask_calls));
+    if(retirement_case>=5){
+        if(retirement_case==6)configASSERT(request(DMA_SERVICE_OPEN,0,0).result==DMA_SERVICE_OK);
+        if(retirement_case==7||retirement_case==9){
+            struct dma_service_request r={.operation=DMA_SERVICE_STATUS};uint64_t ticket;
+            configASSERT(dma_service_send(&service,&r,0,&ticket));
+            if(retirement_case==9)for(;;)vTaskSuspend(NULL);
+            while(!uxQueueMessagesWaiting(service.clients[0].replies))vTaskDelay(1);
+        }
+        set(&admin_ready,1);for(;;)vTaskSuspend(NULL);
+    }
     configASSERT(request(DMA_SERVICE_RETIRE,0,1).result==DMA_SERVICE_INVALID);
     if(retirement_case==0 || retirement_case==4){
         configASSERT(request(DMA_SERVICE_OPEN,0,0).result==DMA_SERVICE_OK);expect_busy();
@@ -132,5 +185,6 @@ void kernel_main(void)
     TaskHandle_t a=xTaskCreateStaticAffinitySet(retirement_client,"retire-client",2048,NULL,2,stacks[0],&tasks[0],1);
     TaskHandle_t b=xTaskCreateStaticAffinitySet(retirement_peer,"retire-peer",2048,NULL,2,stacks[1],&tasks[1],2);
     configASSERT(a && b && dma_service_bind(&service,0,a,1) && dma_service_bind(&service,1,b,1));
+    if(retirement_case>=5)configASSERT(xTaskCreateStaticAffinitySet(retirement_admin,"return-owner",2048,NULL,2,stacks[2],&tasks[2],2));
     vTaskStartScheduler();platform_panic("scheduler returned",0);
 }

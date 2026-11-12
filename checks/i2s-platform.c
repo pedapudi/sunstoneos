@@ -23,7 +23,7 @@ static unsigned conflict_scope, late_acquire, late_publish, late_release, busy_l
 static unsigned lease_pending, write_failure, lock_never, late_pin_release, late_write;
 static uintptr_t failure_address;
 static unsigned regress_after_enable, regression_phase;
-static uint32_t saved_div2, pll_trace[8];
+static uint32_t saved_div2, pll_trace[32];
 static unsigned pll_count;
 static unsigned gate_status_reads, gate_status_hold, gate_status_fail, gate_status_late;
 static uint64_t lock_after;
@@ -87,7 +87,7 @@ static int write_word(void *cookie, uintptr_t a, uint32_t value)
         assert(a == C+0x280 || a == C+0x1200 || a == C+0x120c);
         if (a == C+0x280) {
             assert(held[A733_AUDIO_CHANGE]);
-            assert(pll_count < 8); pll_trace[pll_count++]=value;
+            assert(pll_count < 32); pll_trace[pll_count++]=value;
             assert((value & 0x700000) == saved_div2);
             assert(!(value & B(27)) || (ccu[0x280/4] & B(28)));
             /* Manual4.1.4.1/.2 requires three lock samples and20us settle.
@@ -124,7 +124,16 @@ static enum a733_i2s_resource_result acquire_lease(void *cookie, enum a733_audio
 static enum a733_i2s_resource_result publish_lease(void *cookie,
     const struct a733_audio_token *old, struct a733_audio_token *new_token, uint64_t deadline)
 {
-    assert(cookie == &parent && !mutex && old->scope == A733_AUDIO_CHANGE);
+    assert(cookie == &parent && !mutex);
+    if(old->scope==A733_AUDIO_STABLE){
+        assert(held[A733_AUDIO_STABLE]&&!held[A733_AUDIO_LOCAL]&&parent.retire_deadline);
+        if(conflict_scope==A733_AUDIO_CHANGE)return BUSY;
+        held[A733_AUDIO_STABLE]=0;held[A733_AUDIO_CHANGE]=1;
+        *new_token=(struct a733_audio_token){901,A733_AUDIO_CHANGE};
+        if(late_publish)now=deadline;
+        return READY;
+    }
+    assert(old->scope == A733_AUDIO_CHANGE);
     assert((ccu[0x280/4] & 0xf807ff00u) == 0xf8047f00u);
     assert(held[A733_AUDIO_CHANGE]);
     assert((ccu[0x191c/4] & 0x60006) == 0x60006);
@@ -137,10 +146,12 @@ static enum a733_i2s_resource_result publish_lease(void *cookie,
 static enum a733_i2s_resource_result release_lease(void *cookie,
     const struct a733_audio_token *token, uint64_t deadline)
 {
-    assert(cookie == &parent && !mutex && token->scope == A733_AUDIO_LOCAL);
-    assert(held[A733_AUDIO_LOCAL] && !binding.pin_lease.id);
-    assert(!(ccu[0x1200/4] & B(31)) && !(ccu[0x120c/4] & 0x10001));
-    ++releases; held[A733_AUDIO_LOCAL]=0;
+    assert(cookie == &parent && !mutex && held[token->scope]);
+    if(token->scope==A733_AUDIO_LOCAL){
+        assert(!binding.pin_lease.id);
+        assert(!(ccu[0x1200/4] & B(31)) && !(ccu[0x120c/4] & 0x10001));
+    }else assert(parent.retire_deadline&&!held[A733_AUDIO_LOCAL]);
+    ++releases; held[token->scope]=0;
     if (late_release) now=deadline;
     return READY;
 }

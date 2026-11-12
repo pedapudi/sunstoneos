@@ -70,4 +70,10 @@ int a733_dma_platform_ready(const struct a733_dma_platform *);
  * autogating and all channel-idle registers; retain the token on every path. */
 enum a733_dma_platform_result a733_dma_platform_verify_adopted(
     struct a733_dma_platform *, uint64_t deadline_us);
+/* Read-only final verification after a cold start or adoption. Startup must
+ * have completed, every service channel must be closed and its worker/IRQ
+ * retired. Compare the admitted final routes without changing the startup
+ * contract. The platform token and descriptor allocation remain reserved. */
+enum a733_dma_platform_result a733_dma_platform_verify_retired(
+    struct a733_dma_platform *, uint64_t deadline_us);
 #endif

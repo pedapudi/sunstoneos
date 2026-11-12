@@ -18,6 +18,9 @@ struct {void *handles[8];struct a733_usb2_native host;} board;
 #include "host_rtos.h"
 static unsigned alive=1,bind_phase,waits,begins,finishes,rearm_fail,work_pending;
 static uint64_t gives_base;
+static uint64_t irq_now;
+#define a733_smp_counter irq_counter
+uint64_t irq_counter(void){return irq_now*24;}
 static volatile uint32_t *regs;
 static TaskHandle_t owner;
 static unsigned notifies(void){return (unsigned)(host_gives_total()-gives_base);}
@@ -58,6 +61,7 @@ static void setup(void)
  memset((void *)regs,0,4096);memset(&irq,0,sizeof(irq));memset(&board,0,sizeof(board));
  board.handles[4]=owner;board.host.core_started=1;regs[0x4b8/4]=0xb0000000;
  waits=begins=finishes=rearm_fail=work_pending=0;alive=1;gives_base=host_gives_total();
+ irq_now=0;
  bind_phase=1;assert(board_host_irq_bind());bind_phase=0;irq.armed=1;
 }
 static void test(void *unused)
@@ -78,6 +82,27 @@ static void test(void *unused)
  setup();regs[0]=1u<<31;atomic_store(&irq.pending,1);
  for(unsigned i=0;i<32;++i)assert(board_host_irq_before()==0);
  assert(board_host_irq_before()<0);board_host_irq_stop();assert(irq.masked);
+ setup();assert(board_host_irq_retire(3000000)<0); /* No controller halt proof. */
+ setup();board.host.stop_phase=2;regs[0x214/4]=1u<<27;
+ assert(board_host_irq_retire(3000000)==0&&irq.stopped&&irq.quiescing);
+ regs[0]=1u<<31;assert(board_host_irq_retire(3000000)==0&&!irq.retiring);
+ regs[0]=0;regs[0x314/4]=1u<<27;
+ assert(board_host_irq_retire(3000000)==0&&!irq.retiring); /* Active dispatch must finish. */
+ host_isr(irq_isr,NULL);assert(!irq.fault); /* Previously pending delivery after mask. */
+ regs[0x314/4]=0;
+ assert(board_host_irq_retire(3000000)==0&&irq.retiring&&regs[0x294/4]==(1u<<27));
+ regs[0x214/4]=0;
+ assert(board_host_irq_retire(3000000)==1&&irq.retired&&!atomic_load(&irq.pending));
+ regs[0]=1u<<31;assert(board_host_irq_retire(3000000)==1); /* Terminal calls perform no MMIO. */
+ setup();board.host.stop_phase=2;assert(!board_host_irq_retire(3000000));
+ assert(!board_host_irq_retire(3000000));regs[0x214/4]=1u<<27;
+ assert(board_host_irq_retire(3000000)<0&&irq.fault); /* Source/pending clear did not settle. */
+ setup();board.host.stop_phase=2;assert(!board_host_irq_retire(3000000));
+ regs[0x314/4]=1u<<27;assert(!board_host_irq_retire(3000000));
+ irq_now=3000000;
+ assert(mprotect((void *)regs,4096,PROT_NONE)==0);
+ assert(board_host_irq_retire(3000000)<0); /* Expiry cannot touch the mapped GIC. */
+ assert(mprotect((void *)regs,4096,PROT_READ|PROT_WRITE)==0);
  setup();board_host_irq_wait();assert(waits==1);
  irq.draining=1;board_host_irq_wait();assert(waits==1);
  setup();work_pending=1;

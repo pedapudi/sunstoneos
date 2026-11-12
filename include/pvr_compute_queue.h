@@ -144,6 +144,9 @@ int pvr_compute_queue_poll(struct pvr_compute_queue *);      /* -1 fault */
 int pvr_compute_queue_event(struct pvr_compute_queue *, const unsigned char command[88]);
 void pvr_compute_queue_abort(struct pvr_compute_queue *);
 int pvr_compute_queue_close(struct pvr_compute_queue *);     /* 1 sealed, 0 busy */
+/* Worker only, after final_close: discard at most one completed output per
+ * client. No running job or reserved caller slot is cleared. */
+int pvr_compute_queue_quiesce(struct pvr_compute_queue *,uint32_t *abandoned);
 /* 1 while a job is in flight (deadline: its hang bound) or waits in the slot
  * with a kick deadline (deadline: not_after). */
 int pvr_compute_queue_deadline(const struct pvr_compute_queue *, uint64_t *deadline);

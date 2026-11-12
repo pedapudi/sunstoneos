@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run adopted DMA return through real pool, startup and FreeRTOS tasks."""
+"""Run DMA return through real pool, startup and FreeRTOS tasks."""
 import argparse
 import hashlib
 import json
@@ -13,7 +13,8 @@ GATE_RUNS = [
 ]
 
 HERE = Path(__file__).resolve().parent
-CASES = ('normal', 'changed-route', 'registry-busy', 'registry-transient')
+CASES = ('normal', 'changed-route', 'registry-busy', 'registry-transient',
+         'cold-start', 'return-limit', 'startup-lock-return', 'unopened-cold-stream')
 
 
 def sha(path):
@@ -25,6 +26,8 @@ def main():
     parser.add_argument('--source', type=Path, default=HERE.parent)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--jobs', type=int, choices=range(1,13), default=1)
+    parser.add_argument('--case', choices=CASES, action='append')
     for name in ('freertos', 'tinyusb', 'qemu', 'lld'):
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
@@ -78,7 +81,9 @@ target_compile_options(dma-pool-return PRIVATE -march=armv8-a -mstrict-align
   -O2 -g -Wall -Wextra -Werror -fstack-usage)
 target_link_options(dma-pool-return PRIVATE -nostdlib -static -Wl,--gc-sections
   -Wl,--wrap=a733_dma_platform_native_read -Wl,--wrap=a733_dma_platform_native_write
-  -Wl,--wrap=a733_dma_native_operations -Wl,--wrap=a733_dma_startup_retire_adopted
+  -Wl,--wrap=a733_dma_native_operations -Wl,--wrap=a733_dma_startup_retire
+  -Wl,--wrap=a733_dma_pool_task_privileged
+  -Wl,--wrap=a733_platform_lock_enter
   "-Wl,-T,{linker}" "-Wl,-Map,{build}/dma-pool-return.map")
 set_target_properties(dma-pool-return PROPERTIES SUFFIX ".elf" LINK_DEPENDS "{linker}")
 ''')
@@ -103,6 +108,8 @@ set_target_properties(dma-pool-return PROPERTIES SUFFIX ".elf" LINK_DEPENDS "{li
 
     try:
         for number, case in enumerate(CASES):
+            if args.case and case not in args.case:
+                continue
             if case in results:
                 continue
             run(case + '-configure', ['cmake', '-S', str(project), '-B', str(build),
@@ -111,7 +118,7 @@ set_target_properties(dma-pool-return PROPERTIES SUFFIX ".elf" LINK_DEPENDS "{li
                 '-DTINYUSB_DIR=' + str(args.tinyusb.resolve()), '-DSUNSTONE_LLD=' + str(args.lld.absolute()),
                 '-DCMAKE_EXE_LINKER_FLAGS=--ld-path=' + str(args.lld.absolute()),
                 '-DDMA_RETURN_CASE=' + str(number)])
-            run(case + '-build', ['cmake', '--build', str(build), '--target', 'dma-pool-return', '-j4'])
+            run(case + '-build', ['cmake', '--build', str(build), '--target', 'dma-pool-return', '-j'+str(args.jobs)])
             binary = out / (case + '.elf')
             shutil.copy2(build / 'dma-pool-return.elf', binary)
             output = run(case + '-execute', [str(args.qemu.resolve()), '-machine', 'virt,gic-version=3',

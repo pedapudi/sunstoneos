@@ -51,6 +51,15 @@ static TaskHandle_t create_static(TaskFunction_t entry, const char *name, uint32
 #endif
 #include OS_NPU_SOURCE
 #include "../apps/os/npu-declaration.c"
+#include "../apps/os/quiesce.c"
+
+/* These runtime cases execute before the supervisor requests a return. The
+ * registry remains real; no application client publishes retirement here. */
+int os_cpu_return_requested(void){return 0;}
+int os_cpu_return_failing(void){return 0;}
+#ifndef UNGRANTED_CASE
+int os_npu_complete(void){abort();}
+#endif
 
 struct board_application board;
 struct board_provider providers;

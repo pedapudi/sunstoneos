@@ -15,7 +15,7 @@ static void i2c_leave(void *p) { a733_platform_lock_leave(p, A733_PLATFORM_I2C_L
 int a733_platform_locks_init(struct a733_platform_locks *p, int (*now)(void *, uint64_t *), void *context)
 {
     if (!p || !now || p->initialized) return 0;
-    p->now = now; p->context = context;
+    p->now = now; p->context = context; p->deadline = NULL;
     atomic_init(&p->retained, 0);
     for (unsigned i=0;i<A733_PLATFORM_LOCK_COUNT;++i) {
         p->mutex[i] = xSemaphoreCreateMutexStatic(&p->storage[i]);
@@ -25,33 +25,52 @@ int a733_platform_locks_init(struct a733_platform_locks *p, int (*now)(void *, u
     p->initialized = 1;
     return 1;
 }
-int a733_platform_lock_enter(struct a733_platform_locks *p, enum a733_platform_lock lock, uint64_t deadline)
+static uint64_t lock_deadline(struct a733_platform_locks *p,uint64_t deadline)
+{
+    uint64_t limit=p->deadline?p->deadline(p->context):0;
+    return limit&&limit<deadline?limit:deadline;
+}
+int a733_platform_lock_live(struct a733_platform_locks *p)
+{
+    if(!p||!p->initialized)return 0;
+    uint64_t limit=p->deadline?p->deadline(p->context):0,now;
+    return !limit||(p->now(p->context,&now)&&now<limit);
+}
+static int lock_enter(struct a733_platform_locks *p, enum a733_platform_lock lock, uint64_t deadline, int once)
 {
     if (!p || !p->initialized || (unsigned)lock >= A733_PLATFORM_LOCK_COUNT || !a733_task_context_any_no_el_check() ||
-        (atomic_load_explicit(&p->retained, memory_order_acquire) & (1u << lock))) return 0;
+        (atomic_load_explicit(&p->retained, memory_order_acquire) & (1u << lock))) return -1;
     TaskHandle_t self = xTaskGetCurrentTaskHandle();
     for (unsigned i=0;i<A733_PLATFORM_LOCK_COUNT;++i)
-        if (xSemaphoreGetMutexHolder(p->mutex[i]) == self) return 0;
+        if (xSemaphoreGetMutexHolder(p->mutex[i]) == self) return -1;
     uint64_t now;
-    if (!p->now(p->context, &now) || now >= deadline) return 0;
+    deadline=lock_deadline(p,deadline);
+    if (!p->now(p->context, &now) || now >= deadline) return -1;
     uint64_t last = now;
     /* Floor to ticks and cap at one tick: a waiter sleeps when useful, but
      * never turns a sub-tick remaining interval into an unbounded wait. */
     uint64_t tick_us = (1000000u + configTICK_RATE_HZ - 1u) / configTICK_RATE_HZ;
     TickType_t wait = deadline - now >= tick_us ? 1 : 0;
     while (xSemaphoreTake(p->mutex[lock], wait) != pdTRUE) {
-        if (!p->now(p->context, &now) || now < last || now >= deadline || !wait ||
-            (atomic_load_explicit(&p->retained, memory_order_acquire) & (1u << lock))) return 0;
+        deadline=lock_deadline(p,deadline);
+        if (!p->now(p->context, &now) || now < last || now >= deadline ||
+            (atomic_load_explicit(&p->retained, memory_order_acquire) & (1u << lock))) return -1;
+        if(once||!wait)return 0;
         last = now;
         wait = deadline - now >= tick_us ? 1 : 0;
     }
+    deadline=lock_deadline(p,deadline);
     if (!p->now(p->context, &now) || now < last || now >= deadline ||
         (atomic_load_explicit(&p->retained, memory_order_acquire) & (1u << lock))) {
         configASSERT(xSemaphoreGive(p->mutex[lock]) == pdTRUE);
-        return 0;
+        return -1;
     }
     return 1;
 }
+int a733_platform_lock_enter(struct a733_platform_locks *p, enum a733_platform_lock lock, uint64_t deadline)
+{return lock_enter(p,lock,deadline,0)==1;}
+int a733_platform_lock_step(struct a733_platform_locks *p, enum a733_platform_lock lock, uint64_t deadline)
+{return lock_enter(p,lock,deadline,1);}
 void a733_platform_lock_leave(struct a733_platform_locks *p, enum a733_platform_lock lock)
 {
     configASSERT(p && p->initialized && (unsigned)lock < A733_PLATFORM_LOCK_COUNT && a733_task_context_any_no_el_check());

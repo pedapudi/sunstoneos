@@ -2,6 +2,7 @@
  * application code runs in the privileged USB owner. */
 #include "os.h"
 #include "cpu-return.h"
+#include "quiesce.h"
 #include "application.h"
 #include "../board/application.h"
 #include "../board/session.h"
@@ -12,22 +13,66 @@
 #include <string.h>
 #include "sunstone_crumb.h"
 #include "sunstone_usb0_stop.h"
+enum { USB0_UNSTARTED, USB0_STARTED, USB0_SEALED };
+static atomic_uint usb0_startup;
+static enum os_quiesce_result usb0_quiesce_step(struct os_quiesce *);
+static struct os_quiesce usb0_quiesce={
+    .owner=OS_QUIESCE_USB0,.order=OS_QUIESCE_DEVICES,.step=usb0_quiesce_step
+};
+/* Only inspect these owner fields after sealing startup. The constructor
+ * copies configuration without calling providers or touching the controller. */
+static int usb0_untouched(void)
+{
+    const struct a733_native_usb *p=&providers.shared;
+    if(p->usb_step||p->usb_rail_index||p->usb_step_result||p->usb_io_denial||p->usb_provider_denial||
+       atomic_load_explicit(&p->usb_prepared,memory_order_acquire)||
+       p->usb.stage||p->usb.step||p->usb.fault||p->usb.held||
+       atomic_load_explicit(&p->usb.busy,memory_order_acquire)||
+       p->usb.wrote||p->usb.writes_attempted||p->usb.writes_completed||p->usb.poll_writes||
+       p->usb.last_now||p->usb.wait_until||p->usb.last_address||p->usb.last_sample_us||
+       p->usb.failure.kind||p->usb.token.id||p->usb_rail.id||p->usb_power.provider)return 0;
+    for(unsigned i=0;i<4;++i)if(p->usb_request[i].id)return 0;
+    return 1;
+}
+static enum os_quiesce_result usb0_quiesce_step(struct os_quiesce *q)
+{
+    unsigned state=USB0_UNSTARTED;
+    if(atomic_compare_exchange_strong_explicit(&usb0_startup,&state,USB0_SEALED,
+        memory_order_acq_rel,memory_order_acquire))state=USB0_SEALED;
+    if(state==USB0_SEALED&&usb0_untouched())return OS_QUIESCE_DONE;
+    const unsigned reason=state==USB0_SEALED?USB0_STOP_RETURN_PROOF:USB0_STOP_RETURN_ACTIVE;
+    (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_RETURN|(SUNSTONE_CRUMB_FAIL_USB0<<12)|reason,
+        state,__builtin_return_address(0));
+    return OS_QUIESCE_FAULT;
+}
+static int usb0_claim_start(void)
+{
+    unsigned state=USB0_UNSTARTED;
+    return atomic_compare_exchange_strong_explicit(&usb0_startup,&state,USB0_STARTED,
+        memory_order_acq_rel,memory_order_acquire);
+}
 static _Noreturn void stop(unsigned reason,int result)
 {
     const unsigned provider=reason==USB0_STOP_START_PROVIDER||reason==USB0_STOP_PROVIDER_RETAIN;
     const unsigned step=provider?(providers.shared.usb_step|(providers.shared.usb_rail_index<<8)):0;
-    board_fail_at(SUNSTONE_CRUMB_FAIL_RETURN|(SUNSTONE_CRUMB_FAIL_USB0<<12)|reason|
-        ((step&0x7fff)<<16),(uint32_t)result,__builtin_return_address(0));
+    const uint32_t site=SUNSTONE_CRUMB_FAIL_RETURN|(SUNSTONE_CRUMB_FAIL_USB0<<12)|reason|((step&0x7fff)<<16);
+    if(!os_quiesce_fault(&usb0_quiesce,site,(uint32_t)result,__builtin_return_address(0)))
+        board_fail_at(site,(uint32_t)result,__builtin_return_address(0));
     for(;;)vTaskSuspend(NULL);
 }
 void board_usb0_provider_fail(void *unused)
 {(void)unused;stop(USB0_STOP_PROVIDER_RETAIN,providers.shared.usb.failure.callback_result);}
+static int usb0_live(void)
+{
+    if(os_cpu_return_failing()||os_quiesce_requested(&usb0_quiesce))stop(USB0_STOP_RETURN_ACTIVE,USB0_STARTED);
+    return board_live(NULL);
+}
 /* The product ID names the admitted lifetime to the host: 0xefea resident, 0xefe8 supervised. */
 #define USB0_PID 0xefe8
 #define USB0_PID_SELECT() (board_session_lifetime()==A733_LIFETIME_RESIDENT?0xefea:0xefe8)
 #define USB0_PRODUCT "sunstoneos native OS"
 #define USB0_SERIAL "sunstoneos-a733-board"
-#define USB0_LIVE() board_live(NULL)
+#define USB0_LIVE() usb0_live()
 #define USB0_PROVIDERS (&providers.shared)
 #define USB0_STOP(reason,result) stop(reason,result)
 #define USB0_PROVIDER_RESULT(result) (providers.shared.usb_step_result)
@@ -115,5 +160,7 @@ void board_usb0_task(void *unused)
 {
     (void)unused;
     if(!os_granted(OS_GRANT_USB0))for(;;)vTaskSuspend(NULL);
+    if(!os_quiesce_register(&usb0_quiesce))stop(USB0_STOP_REGISTRATION,0);
+    if(!usb0_claim_start())for(;;)vTaskSuspend(NULL);
     usb0_service_start();os_application_usb_ready();usb0_service_run(exchange);
 }

@@ -56,6 +56,8 @@ struct bt_sco {
     uint8_t refuse_address[6];
     unsigned refuse;
     unsigned capacity,credits,mtu,command_link,active_tx,initialized;
+    uint64_t stop_deadline;
+    unsigned stop_close;
     enum bt_sco_error error;
 };
 /* One serialized task owns the entire stack. Init requires optional pre-link
@@ -104,4 +106,16 @@ const struct bt_sco_packet *bt_sco_receive(const struct bt_sco *);
 int bt_sco_release_result(struct bt_sco *,uint64_t serial);
 int bt_sco_release_receive(struct bt_sco *,uint64_t serial);
 int bt_sco_close(struct bt_sco *,uint64_t link,uint64_t deadline);
+/* Permanently close setup and data admission. Unsubmitted attempts end locally;
+ * accepted commands retain their original completion bounds. An accepted setup
+ * completes before its resulting link is disconnected. Progress uses step().
+ * Quiescence also requires explicit release of every copied RX/TX result. */
+int bt_sco_stop(struct bt_sco *,uint64_t deadline);
+int bt_sco_quiescent(const struct bt_sco *);
+/* Close setup/data admission while an established audio link stays open for
+ * recognition-off control traffic. Metadata only; step drains accepted work. */
+int bt_sco_close_admission(struct bt_sco *,uint64_t deadline);
+/* Retry one classified held RX record and schedule at most one pending command
+ * or data frame after another upper consumer advances ACL. No UART/HCI step. */
+int bt_sco_service(struct bt_sco *);
 #endif

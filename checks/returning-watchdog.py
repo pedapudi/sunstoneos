@@ -21,6 +21,7 @@ import types
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--out', '{output}', '--image', '{elf:ret-gpu}']]
 EPOCH = 0x1234_5678_9abc_def1
 
 

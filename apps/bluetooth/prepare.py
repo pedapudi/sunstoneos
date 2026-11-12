@@ -19,7 +19,7 @@ SCHEMA = 'a733-bluetooth-supervised-bundle-v1'
 
 
 def profile_check(data, session, *, workloads=(2,), model_pin=None):
-    require(len(data) in (624,752,832) and struct.unpack_from('<QII', data) == (0x3150465442535353, {624:1,752:2,832:3}.get(len(data),0), len(data)), 'Bluetooth profile geometry differs.')
+    require(len(data) in (624,752,832,888) and struct.unpack_from('<QII', data) == (0x3150465442535353, {624:1,752:2,832:3,888:4}.get(len(data),0), len(data)), 'Bluetooth profile geometry differs.')
     if len(data)>=752:
         mode,incoming=struct.unpack_from('<2I',data,624)
         minimum,channel=struct.unpack_from('<2I',data,656)
@@ -27,18 +27,26 @@ def profile_check(data, session, *, workloads=(2,), model_pin=None):
         latency,response=struct.unpack_from('<2Q',data,704)
         samples,mtu,slots,interval,window,line,capture=struct.unpack_from('<I4H2I',data,720)
         scan,role,clock=struct.unpack_from('<BBH',data,740)
-        require((mode==1 or (mode==6 and len(data)==752 and incoming==1 and samples%2==0) or (mode==4 and len(data)==752) or (mode in (2,3,5) and len(data)==832)) and incoming<=1 and any(data[632:638]) and data[654]==0 and data[655]<=1 and
+        require((mode==1 or (mode==6 and len(data)==752 and incoming==1 and samples%2==0) or (mode==4 and len(data)==752) or (mode in (2,3,5) and len(data) in (832,888))) and incoming<=1 and any(data[632:638]) and data[654]==0 and data[655]<=1 and
                 2<=minimum<=3 and 1<=channel<=30 and authority and any(data[672:704]) and
                 0<latency<1000000 and 0<response<1000000 and 0<samples<=24000 and (mode<3 or mode==6 or samples%120==0) and 48<=mtu<=512 and
                 slots>=0xa0 and 0x12<=interval<=0x1000 and not interval%2 and 0x11<=window<=interval and
                 line and 0<capture<=5000000 and scan<=2 and role<=1 and not any(data[744:752]),
                 'Invalid immutable headset policy or discovery metadata.')
-    if len(data)==832:
+    if len(data) in (832,888):
         require(isinstance(model_pin, dict) and isinstance(model_pin.get('models'), list) and
                 len(model_pin['models'])==2, 'Application model identities required for recognition.')
         require(struct.unpack_from('<2Q',data,752)==tuple(m['bytes'] for m in model_pin['models']) and
                 data[768:832]==b''.join(bytes.fromhex(m['sha256']) for m in model_pin['models']),
                 'Application model identities differ from the profile.')
+    if len(data)==888:
+        authority,topology=struct.unpack_from('<2Q',data,832)
+        function,pull,drive,level,reserved=struct.unpack_from('<4BI',data,880)
+        identity,owner,known,value=struct.unpack_from('<2Q2I',data,152)
+        require(authority and topology==struct.unpack_from('<Q',data,16)[0]==struct.unpack_from('<Q',session,184)[0] and
+                topology and any(data[848:880]) and function==1 and pull<=2 and drive<=3 and level<=1 and not reserved and
+                identity and owner and known==0x3f and not value&~known and (value>>2)&1==level,
+                'Explicit Bluetooth reset authority, wiring and inherited PM2 state required.')
     require(struct.unpack_from('<I', session, 400)[0] in workloads and hashlib.sha256(data).digest() == session[320:352], 'Bluetooth profile/session identity differs.')
     require(struct.unpack_from('<Q', data, 24)[0] == struct.unpack_from('<Q', session, 312)[0] != 0, 'Actual secure SID authority required.')
     require(all(struct.unpack_from('<Q', data, offset)[0] == 0 for offset in (184, 192, 200, 360, 368)), 'Runtime handoffs/deadlines must be absent from immutable input.')
@@ -57,7 +65,16 @@ def bluetooth_admission(record, profile, session, manifest, image_hash, cache, f
     spans=profile_check(profile,session,model_pin=model_pin)
     require(isinstance(record.get('payloads'),list) and len(record['payloads'])==4,
             'Exactly four firmware payloads required.')
-    if len(profile)==832:
+    if len(profile)==888:
+        ref=record.get('bluetooth_stop')
+        require(isinstance(ref,dict) and set(ref)=={'path','sha256'} and isinstance(ref['path'],str) and
+                Path(ref['path']).is_absolute(), 'Bluetooth reset evidence reference required.')
+        require(not frozen or ref['path'] in cache, 'Frozen Bluetooth reset evidence missing.')
+        if ref['path'] not in cache:
+            cache[ref['path']]=Path(ref['path']).read_bytes()
+        actual=hashlib.sha256(cache[ref['path']]).digest()
+        require(actual.hex()==ref['sha256'] and actual==profile[848:880], 'Bluetooth reset evidence differs.')
+    if len(profile) in (832,888):
         require(application_admission is not None, 'Application profile admission callback required.')
         application_admission(record,profile,manifest,image_hash,cache,frozen)
 
@@ -121,7 +138,7 @@ def prepare(image, manifest, admission, template, profile, payloads, output, cla
     uploads += [{'name': 'session.bin', 'address': 0x41f00000}, {'name': 'profile.bin', 'address': 0x43000000}]
     for index, ((address, size), data) in enumerate(zip(spans, snapshots)):
         name = f'firmware-{index}.bin';(output / name).write_bytes(data);uploads.append({'name': name, 'address': address})
-    if len(profile_data)==832:
+    if len(profile_data) in (832,888):
         for index,item in enumerate(record['bluetooth_models']):
             name=f'model-{index}.bin';(output/name).write_bytes(cache[item['path']]);uploads.append({'name':name,'address':item['address']})
     request, contract = board.request_bytes(entry, identity, epoch, generation, lease, session)
@@ -166,7 +183,7 @@ def validate_bundle(bundle, *, application_admission=None):
     for index, ((address, size), item) in enumerate(zip(spans, admitted['payloads'])):
         name = f'firmware-{index}.bin';require(len((bundle / name).read_bytes()) == size and digest(bundle / name) == item['sha256'] and int(item['address']) == address, 'Firmware changed.')
         expected.append({'name': name, 'address': address})
-    if len((bundle/'profile.bin').read_bytes())==832:
+    if len((bundle/'profile.bin').read_bytes()) in (832,888):
         for index,item in enumerate(admitted['bluetooth_models']):
             name=f'model-{index}.bin'
             require((bundle/name).read_bytes()==cache[item['path']],'Uploaded model differs from immutable admitted bytes.')

@@ -129,7 +129,8 @@ that settling interval.
 The binding then waits fifty milliseconds before controller preparation, matching
 the AIC BSP power-on path before card rescan.
 
-PM2 configuration and output level remain unchanged. The pin manager may read
+Without an explicit Bluetooth stop contract, PM2 configuration and output level
+remain unchanged. The pin manager may read
 its latch and preserve that bit while writing the shared PM DATA word.
 The schematic connects its net to both the module's Bluetooth reset symbol and
 its low-power oscillator symbol through separate resistors.
@@ -252,13 +253,33 @@ The result is `A733_RADIO_DOWN`. The card and the borrow are unusable afterwards
 The shutdown is host-tested only; the readbacks prove programmed and latched
 values, not a measured rail voltage or a quiet bus.
 
-The current radio transport has no complete disposal protocol for a firmware
-lifetime that is still running: the shutdown requires the owner to have stopped
-the transport first. Accordingly, this binding offers no resource-release API
-after handoff.
-Downstream firmware, runtime and packet objects remain alive through fault and
-external recovery. A future shutdown path must first close every borrower and
-prove card/controller quiescence before restoring pins or changing module power.
+`a733_radio_platform_stop` also accepts partial startup. It completes accepted
+PMIC operations and the current SDIO transfer while preserving the original
+transfer deadline and buffers. It admits no next card command or unsubmitted
+power-on request. Before controller startup, it verifies the inherited or
+partly enabled gate/reset state. An initialized controller reaches READY before
+the existing quiesce sequence begins. The final BLDO5 observation determines
+whether an off request is legal; an already-disabled rail is never passed to
+the PMIC power-off API. The stop has one absolute deadline and cannot obtain
+the legacy abort path's additional allowance.
+
+A Bluetooth wake extension requires an explicit owner release before physical
+shutdown. The optional 56-byte `a733_radio_bluetooth_stop` contract separately
+authorizes PM2 reset. It identifies installed-board wiring evidence, topology,
+inherited GPIO configuration and level, and requires PM2 authority in the pin
+manager's authenticated handoff. After protocol release, checked pin acquisition
+verifies those conditions; driving PM2 low and reading it back establishes the
+peer-stop predicate. A missing contract leaves PM2 unchanged and cannot establish
+that predicate. WLAN DOWN and Bluetooth peer-stop are independent results.
+
+The pinned vendor Bluetooth helper asserts active-low PM2 before disabling its
+regulators. Schematic V1.2 draws both reset and LPO connections through separate
+zero-ohm resistors. A fitted-route and reset-behavior record is therefore required
+before a physical stop contract is issued. Host fixtures provide no such record.
+No new voltage or rail sequence follows from the extension.
+
+Downstream firmware, runtime and packet objects remain pinned through shutdown
+or fault. The binding offers no resource-release or reinitialization API.
 
 ## Validation
 

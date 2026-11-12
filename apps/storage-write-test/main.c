@@ -356,7 +356,16 @@ void storage_write_main(const struct ss_grant *grant)
     if (!mbr_partition(&base, &sectors)) { r.status = E_MBR; finish_report(); }
     guard_set(grant);
     uint64_t t_start = ss_counter_ticks();
-    if (mode_id == 9) { r.status = (uint64_t)format_partition(base, sectors); collect(); r.total_ticks = ss_counter_ticks() - t_start; finish_report(); }
+    if (mode_id == 9) {
+        r.status = (uint64_t)format_partition(base, sectors);
+        /* Raw writes have no filesystem proof until mount and clean unmount validate them. */
+        if (r.status == OK) {
+            int verified = mount(base, sectors);
+            if (verified) { r.status = E_MOUNT; r.detail = (uint64_t)-verified; }
+            else if ((verified = fwr_unmount(&volume))) { r.status = E_CLOSE; r.detail = (uint64_t)-verified; }
+        }
+        collect(); r.total_ticks = ss_counter_ticks() - t_start; finish_report();
+    }
     int rc = mount(base, sectors);
     if (rc) { r.status = E_MOUNT; r.detail = (uint64_t)-rc; finish_report(); }
     if (mode_id == 2 || mode_id == 3) {                              /* read back the finished file: any size (2) or exactly FILE_BYTES (3) */

@@ -1,10 +1,13 @@
 # Return to the boot ROM after a failure
 
-Status: **implemented** and **host-tested** for every row below that returns;
-**qualified on the board** for a forced application failure and an EL0 data
-abort (records `1793579984604886693-7d81d397` and
-`1793582514152160909-ecc5988b` in [application.jsonl](../evidence/application.jsonl)).
-The other paths are executed only in host models and on the virtual board.
+Status: **implemented and host-tested**. Registered return steps cover every
+session grant; [the owner audit](failure-return-audit.md) distinguishes complete
+stop paths from retained faults. Selected GPU, NPU and storage-read failures
+return to FEL without a watchdog reset; [the return evidence](../evidence/failure-return.jsonl) defines those
+inputs and retirement proofs. USB and radio failure-injection stages await
+reviewed USB launch admission facts.
+Forced application and EL0-abort returns also have
+[application evidence](../evidence/application.jsonl).
 
 A returning SunstoneOS image ends a failed run at the boot ROM, with its
 first-failure record and the DRAM that the host saved before launch, instead of
@@ -32,7 +35,8 @@ shortens the watchdog to 0.5 s. The runner classifies that result
 | `platform_panic` on core 0 during board startup, before the scheduler | Same, line numbers 1 to 12 | Failure return, all eight cores |
 | Unexpected interrupt after the scheduler started | Level 1 fault word, detail interrupt number plus 0x100 | Failure return; the source is masked first |
 | Synchronous exception from an application task at EL0 (data abort, instruction abort, undefined instruction, PC or SP alignment fault) on a core open to the scheduler | Level 0xb record: group application, detail 0xe00 plus the ESR class, value the faulting address, caller ELR | Failure return; the faulting task is suspended, see [EL0 exceptions](#exceptions-from-an-application-task-at-el0) |
-| Device failure: PMIC, thermal, NPU, GPU, CPU clock, DMA, `board_fail` called by a driver | Level 0xb record | Watchdog: the owner retains its resources, and only a reset releases them; see [the audit](#device-owner-audit) |
+| Device failure before a return claim | Level 0xb record | Watchdog: admission is closed and resources are retained |
+| Registered owner fault during a return | Per-owner RAM record; first secondary RTC record at level 0xc after an application failure | Remaining stop steps run. Unproved ownership keeps terminals blocked until the shared timeout; see [the audit](failure-return-audit.md) |
 | A check inside the return sequence itself (`cpu-return.c` `fail`, `bounded`) | Level 0xb record | Watchdog |
 | Session deadline or return cutoff | Level 0xb record | Watchdog |
 | `platform_panic` with interrupts or priorities masked, in a critical section or in an interrupt; stack overflow hook | Level 1 fault word | Watchdog: a terminal task cannot take the core |
@@ -68,10 +72,10 @@ stack pointer and registers may be corrupt: it claims a stack with an exclusive
 pair, sets `SP_EL0` to its top, loads `ESR_EL1`, `FAR_EL1` and `ELR_EL1` into
 `x0` to `x2`, and returns to EL0 in `os_cpu_return_el0_fault`
 ([cpu-return.c](../../apps/os/cpu-return.c)). That function runs in the task,
-as `ss_fail` does. It records group application with the detail 0xe00 plus the
-ESR class and `ESR_EL1` bits 14:0 (for an abort, the write flag and the status
-code) in site bits 30:16, the faulting address as the value (zero for classes
-where `FAR_EL1` is undefined) and `ELR_EL1` as the caller. It then makes the
+as `ss_fail` does. It records group application with detail 0xe00 plus the ESR
+class. Site bits 30:16 hold `ESR_EL1` bits 14:0: for an abort, the write flag
+and status code. The value is the faulting address, or zero where `FAR_EL1` is
+undefined; the caller is `ELR_EL1`. It then makes the
 same claim as `ss_fail`, with the record context `fault`, and suspends the
 task. The task never runs application code again.
 
@@ -98,22 +102,40 @@ OS result record (status `SS_RESULT_FAILED`, payload `struct ss_failure` in
 The CPU0 supervisor then runs the same stop sequence as for a successful finish,
 through each service's own stop path:
 
-1. The CPU clock owner lowers CPU-B to the boot point, in whatever phase it was.
-2. The thermal service stops its converter.
-3. The DMA and NPU services report their own retirement. An application's
-   NPU client must close itself when `ss_live()` turns -1; if it does not,
-   step 5 applies.
-4. The PMIC owner stops after its slots and locks are idle.
-5. If the sequence has not finished 3 s after the claim
-   (`OS_FAILURE_RETURN_US`), the supervisor ends the failure at the watchdog.
-   The session deadline bounds it in any case.
-6. The supervisor wakes one terminal task per core. Each runs at the highest
-   priority, so it takes the core from any application task. The terminals
-   clean the caches, restore the interrupt controller and power state, disarm
-   the watchdog and return to the ROM, as for success.
+1. The supervisor requests registered application queues, then device owners,
+   CPU clock lowering, thermal stop, PMIC stop and per-core terminals.
+2. Each callback performs one bounded, non-blocking request or status operation.
+   Hardware work stays on its authorized owner task. PENDING holds the next
+   class; DONE requires that owner's retirement proof.
+3. FAULT preserves resources and the owner's first diagnostic. The supervisor
+   records the fault and continues later steps. Thermal sampling continues while
+   a device remains unretired. A fault cannot authorize terminal release.
+4. One three-second budget (`OS_FAILURE_RETURN_US`) bounds all classes in both
+   normal and failure returns. An unfinished or unsafe return ends at the
+   watchdog when this budget or the session deadline expires.
+5. Once every owner reports DONE, the supervisor wakes one terminal task per
+   core. Each runs at the highest priority, cleans caches, restores interrupt
+   and power state, disarms the watchdog and returns to ROM.
 
-Later application failures during the sequence leave the first record; a
-device failure during it closes admission and ends at the watchdog.
+An application's NPU producer closes its queue at a safe point after
+`ss_live()` becomes negative. The GPU worker can finish accepted work after the
+application is suspended; its failure receipt identifies abandoned completed
+outputs. Storage finishes the issued transfer and closes only when its owner-held
+record proves an untouched write session or a completed consistent transaction.
+An unsafe filesystem phase immediately records the session ID and phase as FAULT;
+return does not issue another metadata write, retry or recovery transaction.
+
+The supervisor publishes the absolute return deadline before requesting owners.
+The limit is three seconds from the return origin and ends before the session's
+final 10 ms guard. Shared lock waiters recheck it during existing tick waits and after
+acquisition. Shared pin reads and writes also check it before register access.
+An earlier transaction deadline still applies; observing closing before the
+shared deadline is published permits no new hardware work.
+
+Later application failures preserve the first record. `ss_fail` and
+`ss_fail_value` record their application detail once, including when a claim is
+refused; their fallback does not add a board note. Registered device faults leave
+`board.fatal` clear while the supervisor collects remaining owner results.
 
 **Before the scheduler started.** Core 0 claims the return in
 `ss_fail` or `platform_panic`, writes the record, marks the return ready and
@@ -130,28 +152,20 @@ interrupt controller before the claim, so that it cannot repeat.
 
 ## Device owner audit
 
-Each `board_fail` caller in a device owner, and whether the owner could stop
-through its normal stop path after the failure. The stop sequence needs the
-owner's stop path to complete with no retained resource: `os_cpu_return_pmic`
-refuses a held, retained or failed PMIC slot, the thermal stop refuses after
-`cancel()`, and `os_npu_retirement_check` and `os_gpu_return_ready` refuse a
-failed service. None of the callers qualifies, so every device failure ends at the
-watchdog.
+[The grant audit](failure-return-audit.md) lists every owner, its admission
+source, order, stop proof and remaining gap. Registration precedes startup;
+closing refuses new registrations. The registry publishes all requests in an
+order class before releasing that class to its tasks. This preserves shared
+radio/headset ownership. A successful completion cannot overwrite FAULT.
 
-| Owner and caller | State after the failure | Stop path | Ending |
-| --- | --- | --- | --- |
-| PMIC task, `apps/board/main.c` `pmic` (authority or ledger fault) | Task parks with the slot ownership held; `pmic.failed` | `os_cpu_return_pmic` refuses (0x739) | Watchdog |
-| Thermal owner, driver fault, lost owner, interrupt re-arm or mask failure (`apps/os/thermal.c` `fault`, `cancel`) | `thermal.failed` and `retaining` set; the clock token is retained | The stop requires `live()`, which `thermal.failed` clears | Watchdog |
-| Thermal owner, critical temperature (`fault` after `A733_THERMAL_CRITICAL`) | The converter is healthy, but the owner takes the same state as above | `a733_thermal_stop` could stop it; the owner refuses. The watchdog ending is deliberate: the 0.5 s stop shortens the time at the critical temperature, and the return sequence can take 3 s | Watchdog |
-| CPU clock owner refusal (`apps/os/cpu.c` `refused`, reached through the thermal owner's `fault`) | A retained or invalid driver state holds the clock, rail or request; a refusal at the start phase holds nothing but still fails the thermal owner | The clock return step refuses a retained or invalid driver (`REFUSED`) | Watchdog |
-| DMA, `apps/os/dma.c` `fatal` through `platform_panic` | The pool service is retained | `os_cpu_return_panic` claims the return, `os_dma_return_ready` never becomes true, and the 3 s bound ends at the watchdog | Watchdog after 3 s |
-| NPU, `apps/os/npu.c` `fail_at`, `apps/os/npu-client.c` `retained` | `npu.failed`; every NPU resource stays held | `os_npu_retirement_check` refuses | Watchdog |
-| GPU, `apps/os/gpu.c` interrupt service failure and `gpu.failed` paths | The compute service is marked failed | `os_gpu_return_ready` and the GPU stop refuse | Watchdog |
-| Supervisor, `apps/board/main.c` `supervise` | Admission was already closed or the deadline passed; this is a consequence, not a cause | Not applicable | Watchdog |
-
-A device failure that the owner could stop after cleaning up needs the owner to
-report a stoppable failure state to the claim, so that `os_cpu_return_failure`
-can accept a device group. No owner provides one.
+USB host, partial radio startup, scan-only radio, I2S audio and closed DMA services
+have native retirement proofs. Their callbacks report DONE only after those
+proofs complete. Active or abandoned DMA work, uncertain filesystem state and
+full-station CE ownership retain FAULT. Headset retirement requires protocol and
+UART closure plus explicit version 4 module-reset authority; legacy profiles
+retain FAULT ([Bluetooth return](bluetooth-return.md)).
+The audit distinguishes implemented stop paths from admitted and physically
+qualified compositions.
 
 ## NPU stop report when the service never ran
 
@@ -174,7 +188,7 @@ other-generation report is refused and the port is quarantined.
 
 ## The record
 
-The breadcrumb record is level 0xb in the RTC fault word, with the site, caller
+The first breadcrumb record is level 0xb in the RTC fault word, with the site, caller
 and value words; `tools/a733-crumbs.py` decodes it. The
 DRAM record repeats the same site, value and caller, with the core, the failure
 context (running, startup or fault) and the counter at the failure. It reaches
@@ -182,6 +196,12 @@ the host through the existing result read, so the runner reads it after the
 return and before restoring DRAM. The runner also reads the breadcrumb words;
 an image that does not link the failure return and returns with a failure
 record in the breadcrumbs is still refused as an unresolved return.
+
+During the window, the supervisor writes the first registered secondary fault
+at RTC level `0xc`. Its `QUIESCE` group names the owner and original group,
+with the original code, value and caller. Each owner also retains its full first
+record separately in RAM; [the audit](failure-return-audit.md) defines the layout
+and the RTC slot's limits.
 
 If a device failure already closed admission, the failure return does not
 start, and the failure ends at the watchdog.
@@ -246,6 +266,7 @@ error, quarantined). Five NPU cases cover the never-started report: valid with a
 failure return (restored, not quarantined), and refused for a normal return, a
 stale epoch, a missing report, `retained` 1 and another generation.
 
-The model does not execute FreeRTOS task switching, the service stop paths
-themselves, or physical clocks and power. The board evidence is the two runs
-named in the status line.
+The linked model executes the registry and supplies owner publications. It does
+not execute FreeRTOS task switching or physical clocks and power. Focused owner
+checks cover their stop paths separately. Physical evidence remains limited to
+the named queue records.

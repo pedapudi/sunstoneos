@@ -51,13 +51,13 @@ int board_application_pins(struct a733_pin_handoff *pins)
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
     /* The model pages skip [0x45000000, 0x46000000). */
     _Static_assert(BLUETOOTH_MODEL_BASE<UINT64_C(0x45000000)&&!(BLUETOOTH_MODEL_BASE&4095),"model pages start page-aligned below the gap");
-    if(p->version==3&&
+    if(p->version>=3&&
        (!a733_mapping_check_stride(aarch64_device_translate,BLUETOOTH_MODEL_BASE,BLUETOOTH_MODEL_BASE,
             UINT64_C(0x45000000)-BLUETOOTH_MODEL_BASE,4096,&wb)||
         !a733_mapping_check_stride(aarch64_device_translate,UINT64_C(0x46000000),UINT64_C(0x46000000),
             UINT64_C(0x01000000),4096,&wb)))return 0;
 #endif
-    pins->authorized[A733_PIN_G]=0x3ff;pins->authorized[A733_PIN_M]=0x1b;
+    pins->authorized[A733_PIN_G]=0x3ff;pins->authorized[A733_PIN_M]=p->version==4?0x1f:0x1b;
     pins->latch[1]=p->pm_latch;return 1;
 }
 int board_application_start(void)
@@ -70,7 +70,7 @@ int board_application_start(void)
         owner,&board.watchdog_state,board.session.session_start_ticks/24,board.session.deadline_us,board.session.sid_evidence);
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
     if(ready&&p->version==2&&p->headset.mode==4)ready=bluetooth_playback_runtime_start(&bluetooth);
-    if(ready&&p->version==3)
+    if(ready&&p->version>=3)
         ready=bluetooth_recognition_start(&bluetooth,&p->recognition,bluetooth.deadline);
 #endif
 #ifdef SUNSTONE_BLUETOOTH_A2DP

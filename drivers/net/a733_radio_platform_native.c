@@ -16,7 +16,7 @@ static int current(void *cookie)
 static int now(void *cookie,uint64_t *v)
 {
     struct a733_radio_platform_native *n=cookie;
-    return n->locks->now(n->locks->context,v);
+    return current(n)&&a733_platform_lock_live(n->locks)&&n->locks->now(n->locks->context,v);
 }
 static int admit(void *cookie,const struct a733_radio_platform_config *c,const struct a733_clock_token *t)
 {
@@ -28,7 +28,10 @@ static int admit(void *cookie,const struct a733_radio_platform_config *c,const s
 static int enter(void *cookie,uint64_t deadline)
 {
     struct a733_radio_platform_native *n=cookie;
-    return current(n)&&a733_platform_lock_enter(n->locks,A733_PLATFORM_REGISTER_LOCK,deadline);
+    if(!current(n))return -1;
+    /* Return to the owner after one scheduler tick of contention, including
+     * waits admitted before a return request. The transaction keeps its bound. */
+    return a733_platform_lock_step(n->locks,A733_PLATFORM_REGISTER_LOCK,deadline);
 }
 static void leave(void *cookie)
 {
@@ -42,7 +45,7 @@ static void retain(void *cookie)
 }
 static int allowed(struct a733_radio_platform_native *n,uintptr_t a,unsigned writing)
 {
-    if(!current(n)||!a733_radio_platform_native_address(a,writing))return 0;
+    if(!current(n)||!a733_platform_lock_live(n->locks)||!a733_radio_platform_native_address(a,writing))return 0;
     if(a>=UINT32_C(0x04021000)&&a<=UINT32_C(0x04021300))return 1;
     return !(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1u)&&
         xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_REGISTER_LOCK])==(TaskHandle_t)n->owner_task;
@@ -76,7 +79,8 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
 }
 static int barrier(void *cookie)
 {
-    if(!current(cookie))return 0;
+    struct a733_radio_platform_native *n=cookie;
+    if(!current(n)||!a733_platform_lock_live(n->locks))return 0;
     a733_mmio_dsb_sy();return 1;
 }
 int a733_radio_platform_native_init(struct a733_radio_platform_native *n,

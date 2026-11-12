@@ -28,6 +28,10 @@ static int32_t temperature;
 int a733_counter_clock_now(void *v,uint64_t *out){(void)v;*out=model_time;return 1;}
 int board_live(void *v){(void)v;return 1;}
 uint32_t board_live_refusal(void){return 0;}
+/* This fixture measures normal service cadence before any return claim. The
+ * real registry must leave thermal faults on their ordinary board-fail path. */
+int os_cpu_return_requested(void){return 0;}
+int os_cpu_return_failing(void){return 0;}
 int os_application_deadline(void){return 1;}
 unsigned os_application_activity_generation(void){return 7;}
 static unsigned clock_busy;
@@ -117,6 +121,9 @@ int cadence_control(unsigned op,uint64_t at,uint64_t value)
     cadence_state[8]=(uint64_t)os_thermal_throttled();
     cadence_state[9]=thermal.next_read;cadence_state[10]=thermal_record_origin_us;
     cadence_state[11]=model_time;
+    if(os_quiesce_requested(&thermal_quiesce)||os_quiesce_result(&thermal_quiesce)!=OS_QUIESCE_PENDING||
+       atomic_load_explicit(&thermal_quiesce.fault_state,memory_order_acquire)||
+       atomic_load_explicit(&thermal_stop_authorized,memory_order_acquire))abort();
     return result;
 }
 
@@ -142,4 +149,8 @@ static void commands(void *unused)
         fflush(stdout);
     }
 }
-int main(void){host_rtos_run(commands,NULL,2,1000000);return 0;}
+int main(void)
+{
+    if(!os_quiesce_register(&thermal_quiesce))abort();
+    host_rtos_run(commands,NULL,2,1000000);return 0;
+}

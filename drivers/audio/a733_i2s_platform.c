@@ -136,10 +136,10 @@ int a733_audio_parent_init(struct a733_audio_parent *p, const struct a733_audio_
     return 1;
 }
 int a733_audio_parent_ready(const struct a733_audio_parent *p)
-{ return p && p->initialized && !p->failed && p->stage == P_READY; }
+{ return p && p->initialized && !p->failed && !p->retire_deadline && p->stage == P_READY; }
 enum a733_i2s_resource_result a733_audio_parent_poll(struct a733_audio_parent *p)
 {
-    if (!p || !p->initialized || p->failed) return RETAINED;
+    if (!p || !p->initialized || p->failed || p->retire_deadline) return RETAINED;
     if (p->stage == P_READY) return READY;
     if (!time_ok(p,p->deadline)) return parent_fail(p);
     enum a733_i2s_resource_result r;
@@ -192,6 +192,77 @@ enum a733_i2s_resource_result a733_audio_parent_poll(struct a733_audio_parent *p
     p->ops.leave(p->cookie);
     if (!ok || !time_ok(p,p->deadline)) return parent_fail(p);
     return p->stage == P_READY ? READY : PENDING;
+}
+
+enum { R_EXCLUDE, R_STOP, R_AUDIO, R_REFERENCE, R_DONE };
+static enum a733_i2s_resource_result retire_release(struct a733_audio_parent *p,
+    struct a733_audio_token *token)
+{
+    if(!token->id)return READY;
+    enum a733_i2s_resource_result r=p->ops.release(p->cookie,token,p->retire_deadline);
+    if(!time_ok(p,p->retire_deadline)||r==RETAINED)return RETAINED;
+    if(r==BUSY||r==PENDING)return PENDING;
+    if(r!=READY)return RETAINED;
+    *token=(struct a733_audio_token){0};return READY;
+}
+static int retire_hardware(struct a733_audio_parent *p)
+{
+    const uint64_t d=p->retire_deadline;
+    uint32_t osc,ref,value,pattern,policy;
+    const uint32_t controls=p->stage<P_GATES?CONTROLS&~BIT(27):CONTROLS;
+    if(!rd(p,d,OSC,&osc)||!rd(p,d,CCU,&ref)||!a733_clock_ref24_valid(osc,ref)||
+       !rd(p,d,AUDIO,&value)||
+       (value&(CONTROLS|RATE_MASK))!=(controls|RATE_VALUE)||
+       ((value^p->audio_value)&~(CONTROLS|RATE_MASK|BIT(28)))||
+       !rd(p,d,CCU+0x288,&pattern)||(pattern&BIT(31))||
+       !rd(p,d,CCU+0x28c,&pattern)||(pattern&BIT(27))||
+       !rd(p,d,CCU+0x191c,&policy)||
+       (policy&(AUDIO_GATE_MODE|AUDIO_GATE_ENABLE))!=(AUDIO_GATE_MODE|AUDIO_GATE_ENABLE))return 0;
+    static const unsigned consumers[]={0x1200,0x1210,0x1220,0x1224,0x1230,0x1240,0x1280,0x12c0};
+    for(unsigned i=0;i<sizeof(consumers)/sizeof(*consumers);++i)
+        if(!rd(p,d,CCU+consumers[i],&value)||(value&BIT(31)))return 0;
+    /* Pinned vendor ccu_pll_gate_helper_disable: output, lock detector, PLL,
+     * LDO. Preserve an inherited enabled LDO, DIV2 and all reserved fields;
+     * restore this owner's dividers only once the PLL is disabled. */
+    return update(p,d,AUDIO,BIT(27),0)&&update(p,d,AUDIO,BIT(29),0)&&
+        update(p,d,AUDIO,BIT(31),0)&&update(p,d,AUDIO,BIT(30),p->audio_value)&&
+        update(p,d,AUDIO,RATE_MASK,p->audio_value);
+}
+enum a733_i2s_resource_result a733_audio_parent_retire(struct a733_audio_parent *p,uint64_t deadline)
+{
+    if(!p||!p->initialized||p->failed||!deadline||
+       (p->retire_deadline&&p->retire_deadline!=deadline))return RETAINED;
+    if(p->retired)return READY;
+    p->retire_deadline=deadline;
+    if(!time_ok(p,deadline)||p->published.id)return parent_fail(p);
+    enum a733_i2s_resource_result r;
+    switch(p->retire_stage){
+    case R_EXCLUDE:
+        /* P_CHECK has not written hardware; a failed baseline never gets here.
+         * Partial cold startup after it still holds exclusive authority. */
+        if(!p->cold||p->stage<=P_CHECK){p->retire_stage=R_AUDIO;return PENDING;}
+        if(p->audio.scope==A733_AUDIO_STABLE){
+            r=p->ops.publish(p->cookie,&p->audio,&p->published,deadline);
+            if(!time_ok(p,deadline)||r==RETAINED)return parent_fail(p);
+            if(r==BUSY){if(p->published.id)return parent_fail(p);return PENDING;}
+            if(r!=READY||!p->published.id||p->published.scope!=A733_AUDIO_CHANGE)return parent_fail(p);
+            p->audio=p->published;p->published=(struct a733_audio_token){0};
+        }
+        if(!p->audio.id||p->audio.scope!=A733_AUDIO_CHANGE)return parent_fail(p);
+        p->retire_stage=R_STOP;return PENDING;
+    case R_STOP:{
+        int held=enter(p,deadline);if(held<0)return parent_fail(p);if(!held)return PENDING;
+        int ok=retire_hardware(p);p->ops.leave(p->cookie);
+        if(!ok||!time_ok(p,deadline))return parent_fail(p);
+        p->retire_stage=R_AUDIO;return PENDING;}
+    case R_AUDIO:
+        r=retire_release(p,&p->audio);if(r==RETAINED)return parent_fail(p);if(r!=READY)return PENDING;
+        p->retire_stage=R_REFERENCE;return PENDING;
+    case R_REFERENCE:
+        r=retire_release(p,&p->reference);if(r==RETAINED)return parent_fail(p);if(r!=READY)return PENDING;
+        p->retire_stage=R_DONE;p->retired=1;return READY;
+    default:return parent_fail(p);
+    }
 }
 
 static int init_route(struct a733_i2s_platform *s, struct a733_audio_parent *parent,

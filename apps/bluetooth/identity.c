@@ -17,7 +17,7 @@ int board_identity_prepare(uint64_t deadline)
     if(el!=12||(sctlr&5)||!a733_board_session_valid(s,a733_smp_counter()))return 0;
     const volatile struct bluetooth_profile *source=(const void *)BLUETOOTH_PROFILE_ADDRESS;
     uint32_t bytes=source->bytes;
-    if(bytes!=624&&bytes!=752&&bytes!=sizeof(profile))return 0;
+    if(bytes!=624&&bytes!=752&&bytes!=832&&bytes!=sizeof(profile))return 0;
     for(uint32_t i=0;i<bytes;++i)((uint8_t *)&profile)[i]=((const volatile uint8_t *)source)[i];
     if(profile.bytes!=bytes||!bluetooth_boot_profile(s,&profile)||
        a733_cpu_coherence_publish((uintptr_t)&profile,sizeof(profile),deadline)!=1)return 0;

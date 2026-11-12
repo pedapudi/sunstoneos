@@ -11,6 +11,52 @@ static int final_park(void *ctx,uint64_t deadline)
     park_deadline=deadline;
     return gpu_queue_case==33 ? -1 : park_calls==2;
 }
+static void failure_return_client(unsigned c)
+{
+    unsigned submitted=c==70||c==73;
+    if(submitted){
+        struct gpu_queue_job job=c==73?fast_job(1,0):make_job(0);
+        if(c==73)atomic_store(&hold_completion,1);
+        configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_OK);
+        if(c==70){
+            TickType_t start=xTaskGetTickCount();
+            while(compute->phase!=PVR_COMPUTE_QUEUE_READY || !uxQueueMessagesWaiting(compute->completions)){
+                configASSERT(xTaskGetTickCount()-start<1000);vTaskDelay(1);
+            }
+        }
+    }
+    if(c==71)atomic_store(&compute->slot_state,PVR_COMPUTE_QUEUE_RESERVED);
+    if(c==74)atomic_store(&compute->lost,1);
+    if(c==75)atomic_store(&compute->fast.locked,1);
+    uint64_t end=now_us()+((c==71||c==75)?10000:3000000);
+    configASSERT(pvr_gpu_service_quiesce(&service,end)==1);
+    unsigned again=pvr_gpu_service_quiesce(&service,end+1000000);
+    configASSERT((again==1||again==2||(c==74&&again==3)) && service.quiesce.deadline==end);
+    if(c==73){
+        vTaskDelay(1);
+        configASSERT(atomic_load(&service.quiesce.state)==1 && !park_calls && compute->fast.used==1);
+        atomic_store(&hold_completion,0);
+    }
+    while(atomic_load_explicit(&service.quiesce.state,memory_order_acquire)==1){
+        configASSERT(now_us()<end+10000);vTaskDelay(1);
+    }
+    if(c==75){
+        configASSERT(atomic_load(&service.quiesce.state)==3 && !park_calls &&
+            atomic_load(&compute->fast.locked) && !atomic_load(&compute->lost));
+    }else if(c==71||c==74){
+        configASSERT(atomic_load(&service.quiesce.state)==3 && !park_calls &&
+            service.phase==PVR_GPU_SERVICE_FAILED && atomic_load(&compute->lost));
+        if(c==71)configASSERT(atomic_load(&compute->slot_state)==PVR_COMPUTE_QUEUE_RESERVED);
+    }else if(c==72){
+        configASSERT(atomic_load(&service.quiesce.state)==2 && service.phase==PVR_GPU_SERVICE_COLD && !enabled && !park_calls);
+    }else{
+        configASSERT(atomic_load(&service.quiesce.state)==2 && service.phase==PVR_GPU_SERVICE_PARKED &&
+            park_calls==2 && isolated && pvr_compute_queue_clients_idle(compute) &&
+            service.quiesce.abandoned==submitted && compute->completed_jobs==submitted);
+    }
+    platform_puts("PASS GPU queue case ");platform_hex(c);
+    platform_puts("; worker failure return preserves unfinished ownership and drains completed outputs\n");platform_exit(0);
+}
 static void return_client(void)
 {
     configASSERT(grid_job(0));closed();
