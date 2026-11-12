@@ -11,6 +11,8 @@
 #include "app_region.h"
 #include "app_large.h"
 #include "umem.h"
+#include "umem_cpu.h"
+#include "os_memory_tables.h"
 #include "owner-memory.h"
 #include "capture.h"
 #include "sunstone_usb_service.h"
@@ -71,6 +73,8 @@ extern struct app_region_entry os_large_entry_storage[];
 #define UMEM_FIRST_CELLS 64u
 static uint8_t umem_cells[UMEM_FIRST_CELLS * 128] __attribute__((aligned(16)));
 static struct umem ledger;
+static struct umem_el1_map policy_map;
+static struct umem_policy_table kernel_table, application_tables[APP_REGION_SLOTS];
 static uint8_t chunk_policy[(APP_REGION_LIMIT - APP_REGION_FLOOR) / UMEM_CHUNK];
 /* The application's regions as the space builder reads them: a snapshot of the owner's extents from the ledger. */
 static struct app_region_ledger view;
@@ -102,7 +106,66 @@ void *os_large_main_stack(void) { return main_stack; }
  * allocator zeroes what it hands out, and a region with a source is overwritten up to the source's length. */
 static void ledger_lock(void *ctx);
 static void ledger_unlock(void *ctx);
-static const struct umem_hooks umem_boot_hooks = {.lock = ledger_lock, .unlock = ledger_unlock};
+static int region_take_at(uint16_t owner, uint64_t base, uint64_t bytes, unsigned access);
+static int ledger_convert(void *ctx, uint64_t chunk, unsigned policy)
+{
+    if (chunk < APP_REGION_FLOOR || chunk >= APP_REGION_LIMIT) return -1;
+    /* Whole application regions may retain a 1 GiB leaf until session end.
+     * Refuse a later conversion there before maintenance if a release path
+     * ever makes such a chunk free without tearing down that mapping. */
+    if (admitted && (space.root[chunk / APP_REGION_GIB] & 3) == 1) return -1;
+    return umem_policy_convert(ctx, chunk, policy);
+}
+static const struct umem_hooks umem_boot_hooks = {.ctx = &policy_map, .lock = ledger_lock, .unlock = ledger_unlock,
+    .convert_chunk = ledger_convert, .maintain = umem_maintain_el1};
+/* Called first at boot, before host construction or application admission. All
+ * later callers keep the same ledger, including the owners already granted. */
+static int ledger_prepare(void)
+{
+    if (ledger_ready) return ledger_ready > 0;
+    uint64_t l1[512] = {0}, l2[512];
+    struct app_region_range usable[APP_REGION_SLOTS];
+    os_kernel_l1_head(l1);
+    os_kernel_l2_slot1(l2);
+    unsigned count = usable_ranges(l1, l2, usable, APP_REGION_SLOTS);
+    struct umem_range ranges[APP_REGION_SLOTS];
+    for (unsigned i = 0; i < count; ++i) ranges[i] = (struct umem_range){usable[i].base, usable[i].bytes};
+    kernel_table = (struct umem_policy_table){.l2 = os_kernel_l2_mutable()};
+    ledger_ready = -1;
+    if (!count || umem_policy_init(&policy_map, &umem_cpu_el1, os_kernel_l1_mutable(), &kernel_table, 0) ||
+        umem_init(&ledger, &umem_boot_hooks, umem_cells, sizeof umem_cells / umem_cell_bytes(), chunk_policy,
+                  APP_REGION_FLOOR, sizeof chunk_policy, ranges, count)) return 0;
+    uint64_t mmfr0, tcr;
+    __asm__ volatile("mrs %0, id_aa64mmfr0_el1\n mrs %1, tcr_el1" : "=r"(mmfr0), "=r"(tcr));
+    app_asid_pool_init(&asids, mmfr0, tcr);
+    owner_asid = app_asid_alloc(&asids);
+    if (!owner_asid) return 0;
+    /* Pinned application inputs precede every allocation, including table
+     * storage and a host constructed before application admission. */
+    const struct ss_manifest *manifest = ss_application.manifest;
+    for (unsigned i = 0; manifest && i < manifest->region_count; ++i) {
+        const struct ss_region *r = &manifest->regions[i];
+        if (r->address >= APP_REGION_FLOOR && region_take_at(owner_asid, r->address, r->bytes,
+                APP_REGION_READ | (r->access & SS_ACCESS_WRITE ? APP_REGION_WRITE : 0))) return 0;
+    }
+    /* One page per upper gigabyte, taken from the ledger. Splitting before any
+     * application root exists keeps later free-chunk conversions local to L2. */
+    struct umem_buf pages;
+    struct umem_request request = {.bytes = UMEM_POLICY_UPPER_SLOTS * UMEM_PAGE, .align = UMEM_PAGE,
+        .owner = UMEM_OWNER_KERNEL, .flags = UMEM_RAW};
+    uint64_t free_base, free_bytes;
+    if (umem_largest(&ledger, &request, &free_base, &free_bytes) || free_bytes < request.bytes) return 0;
+    /* Take metadata from the free extent's end, leaving its aligned beginning
+     * available for large application regions and low-address DMA owners. */
+    request.base = free_base + free_bytes - request.bytes;
+    request.flags |= UMEM_AT;
+    if (umem_alloc(&ledger, &request, &pages)) return 0;
+    policy_map.split_pages = (uint64_t (*)[512])(uintptr_t)pages.base;
+    for (unsigned slot = 2; slot < 2 + UMEM_POLICY_UPPER_SLOTS; ++slot)
+        if (l1[slot] && umem_policy_split(&policy_map, slot)) return 0;
+    ledger_ready = 1;
+    return 1;
+}
 static int region_take(void *ctx, uint16_t owner, uint64_t bytes, unsigned access, uint64_t *base, uint64_t *rounded)
 {
     (void)ctx;
@@ -197,25 +260,13 @@ int os_large_prepare(void)
     static uint64_t base_l1[512], base_l2[512];
     os_kernel_l1_head(base_l1);
     os_kernel_l2_slot1(base_l2);
-    struct app_region_range usable[APP_REGION_SLOTS];
-    unsigned ranges = usable_ranges(base_l1, base_l2, usable, APP_REGION_SLOTS);
     /* An application with upper memory to use also takes its main stack from it, with a guard block below. */
-    if (!count && !placed && !(manifest && ranges)) return 1;
-    uint64_t mmfr0, tcr;
-    __asm__ volatile("mrs %0, id_aa64mmfr0_el1\n mrs %1, tcr_el1" : "=r"(mmfr0), "=r"(tcr));
-    app_asid_pool_init(&asids, mmfr0, tcr);
-    owner_asid = app_asid_alloc(&asids);
-    struct umem_range umem_ranges[APP_REGION_SLOTS];
-    for (unsigned i = 0; i < ranges; ++i) umem_ranges[i] = (struct umem_range){usable[i].base, usable[i].bytes};
-    if (!owner_asid || !ranges || count > os_large_capacity ||
-        umem_init(&ledger, &umem_boot_hooks, umem_cells, sizeof umem_cells / umem_cell_bytes(), chunk_policy, APP_REGION_FLOOR,
-                  sizeof chunk_policy, umem_ranges, ranges)) return large_failed(2 + (!owner_asid ? 0 : !ranges ? 1 : 2));
-    ledger_ready = 1;
-    for (unsigned i = 0; manifest && i < manifest->region_count; ++i) {
-        const struct ss_region *r = &manifest->regions[i];
-        if (r->address < APP_REGION_FLOOR) continue;
-        if (region_take_at(owner_asid, r->address, r->bytes, APP_REGION_READ | (r->access & SS_ACCESS_WRITE ? APP_REGION_WRITE : 0))) return large_failed(6);
-    }
+    struct app_region_range available[APP_REGION_SLOTS];
+    if (!count && !placed && !usable_ranges(base_l1, base_l2, available, APP_REGION_SLOTS)) return 1;
+    if (!ledger_prepare()) return large_failed(3);
+    os_kernel_l1_head(base_l1);
+    os_kernel_l2_slot1(base_l2);
+    if (!owner_asid || count > os_large_capacity) return large_failed(2);
     if (large_admit_with(&region_allocator, owner_asid, __start_sunstone_large_regions, count, slots, os_large_capacity)) return large_failed(7);
     /* The NPU's reservation comes from what the regions left: the largest extent it can address, trimmed to what the runtime
      * places. It belongs to the application and is mapped in its space. A refusal is recorded and leaves the NPU unprepared
@@ -238,7 +289,14 @@ int os_large_prepare(void)
         }
     }
     arena = (struct app_table_arena){arena_pages, (uintptr_t)arena_pages, APP_SPACE_PAGES, 0};
-    int built = export_regions(owner_asid) && app_space_build_l2(&space, &arena, base_l1, base_l2, &view, owner_asid, owner_asid, 0) == 0;
+    /* Device admission may have converted chunks since the first snapshot. */
+    os_kernel_l1_head(base_l1);
+    os_kernel_l2_slot1(base_l2);
+    const uint64_t *base_tables[APP_REGION_SLOTS] = {base_l2};
+    for (unsigned slot = 2; slot < 2 + UMEM_POLICY_UPPER_SLOTS; ++slot)
+        if (policy_map.split_mask & (1u << (slot - 2))) base_tables[slot - 1] = policy_map.split_pages[slot - 2];
+    int built = export_regions(owner_asid) && app_space_build_tables(&space, &arena, base_l1, base_tables, &view,
+        owner_asid, owner_asid, 0) == 0;
     /* The heap record, when the manifest has one, becomes the C library's heap; an image whose library cannot
      * take it refuses the application rather than run with a heap of another size. */
     for (unsigned i = 0; built && i < count; ++i)
@@ -250,6 +308,15 @@ int os_large_prepare(void)
         return large_failed(8);
     }
     publish_tables(arena_pages, sizeof arena_pages);
+    unsigned tables = 0;
+    for (unsigned slot = 1; slot < 2 + UMEM_POLICY_UPPER_SLOTS; ++slot)
+        if ((space.root[slot] & 3) == 3 && space.root[slot] != policy_map.l1[slot]) {
+            application_tables[tables] = (struct umem_policy_table){
+                .l2 = (uint64_t *)(uintptr_t)(space.root[slot] & APP_PTE_ADDR_MASK),
+                .base = (uint64_t)slot * APP_REGION_GIB};
+            umem_policy_add_table(&policy_map, &application_tables[tables++]);
+        }
+    umem_policy_note_space(&policy_map);
     slot_count = count;
     admitted = 1;
     install_space((uint64_t)ttbr);
@@ -268,13 +335,15 @@ int os_large_prepare(void)
  * service's tables, a published device range) take it; admission takes it too, uncontended. */
 static void ledger_lock(void *ctx) { (void)ctx; taskENTER_CRITICAL(); }
 static void ledger_unlock(void *ctx) { (void)ctx; taskEXIT_CRITICAL(); }
-struct umem *os_large_umem(void) { return admitted || ledger_ready ? &ledger : 0; }
+struct umem *os_large_umem(void) { return ledger_ready > 0 ? &ledger : 0; }
 /* A device owner's memory (apps/os/owner-memory.h). EL0-visible memory is mapped by the application's tables, which admission
  * builds once at its end: a request for it after that is refused. */
 void *os_owner_memory(uint64_t bytes, uint64_t align, unsigned attributes)
+{ return os_owner_memory_below(bytes, align, attributes, 0); }
+void *os_owner_memory_below(uint64_t bytes, uint64_t align, unsigned attributes, uint64_t physical_limit)
 {
-    if (!ledger_ready || (admitted && (attributes & (OS_MEMORY_EL0_READ | OS_MEMORY_EL0_WRITE)))) return 0;
-    return os_owner_memory_from(&ledger, bytes, align, attributes);
+    if ((admitted && (attributes & (OS_MEMORY_EL0_READ | OS_MEMORY_EL0_WRITE))) || !ledger_prepare()) return 0;
+    return os_owner_memory_from_below(&ledger, bytes, align, attributes, physical_limit);
 }
 
 /* ---- The device ranges the EL3 terminal cleans (apps/os/device-ranges.h) ---- */
@@ -285,7 +354,7 @@ uint64_t os_cpu_return_walk[16];
 static struct os_device_range_page *range_tail;
 int os_device_range_publish(uint64_t base, uint64_t bytes)
 {
-    if (!ledger_ready || !bytes || ((base | bytes) & 63) || base < UINT64_C(0x42200000) || base + bytes < base ||
+    if (ledger_ready <= 0 || !bytes || ((base | bytes) & 63) || base < UINT64_C(0x42200000) || base + bytes < base ||
         base + bytes > APP_REGION_LIMIT) return 0;
     taskENTER_CRITICAL();
     int ok = 1;

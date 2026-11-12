@@ -8,7 +8,7 @@
 #include <string.h>
 extern bool sunstone_serial_prepare(unsigned,uint8_t,uint8_t,uint8_t);
 static _Alignas(64) uint8_t pages[4][4096];
-static bool used[4]; static unsigned releases, writes, connected, disconnected;
+static bool used[4]; static unsigned releases, writes, connected, disconnected,refills;
 static sunstone_usb_complete completion; static void *completion_ctx;
 static uint8_t *submitted; static struct ss_usb_serial_buffer published;
 static int acquire(struct sunstone_usb_transport *t,uint8_t a,uint8_t e,uint8_t **p,size_t *c,uint64_t *token) {
@@ -20,7 +20,7 @@ static int release(struct sunstone_usb_transport *t,uint8_t a,uint8_t e,uint64_t
 static int submit(struct sunstone_usb_transport *t,uint8_t a,uint8_t e,uint8_t *p,size_t c,sunstone_usb_complete cb,void *ctx) {
  (void)t;(void)a;(void)e; assert(c); submitted=p; completion=cb; completion_ctx=ctx; return 1;
 }
-bool sunstone_cdch_rx_start(uint8_t n) { (void)n; return true; }
+bool sunstone_cdch_rx_start(uint8_t n) { (void)n; ++refills;return true; }
 void sunstone_cdch_control_quiesced(uint8_t n) { (void)n; }
 bool sunstone_cdch_flow(uint8_t n,bool enabled,tuh_xfer_cb_t cb,uintptr_t u) { (void)n;(void)enabled;(void)cb;(void)u; return false; }
 bool tuh_cdc_set_line_coding(uint8_t n,const cdc_line_coding_t *l,tuh_xfer_cb_t cb,uintptr_t u) { (void)n;(void)l;(void)cb;(void)u; return false; }
@@ -28,7 +28,9 @@ bool tuh_cdc_set_control_line_state(uint8_t n,uint16_t l,tuh_xfer_cb_t cb,uintpt
 void os_usb_service_connected(unsigned d) { assert(d==SS_DEVICE_USB_SERIAL); connected++; }
 void os_usb_service_disconnected(unsigned d) { assert(d==SS_DEVICE_USB_SERIAL); disconnected++; }
 int os_usb_service_serial(const struct ss_usb_serial_buffer *b) { published=*b; return 1; }
-void os_usb_service_write_complete(uint64_t seq,int result,size_t actual) { assert(seq==7 && result==1 && actual==62); writes++; }
+void os_usb_service_write_complete(uint64_t seq,int result,size_t actual) {
+ assert((seq==7 && result==1 && actual==62)||(seq==8 && result==-1 && actual==0)); writes++;
+}
 int main(void) {
  const struct sunstone_usb_transport_ops ops={.acquire=acquire,.release=release,.submit=submit};
  struct sunstone_usb_transport t={.ops=&ops,.generation=1};
@@ -49,5 +51,15 @@ int main(void) {
  p=ss_usb_serial_rx_buffer(0,&cookie,&cap); assert(p); assert(ss_usb_serial_rx_complete(0,cookie,4,true));
  assert(published.token>old); os_usb_serial_native_release(old); assert(releases==2);
  os_usb_serial_native_release(published.token); assert(releases==3);
+ p=ss_usb_serial_rx_buffer(0,&cookie,&cap);assert(p);
+ assert(ss_usb_serial_rx_complete(0,cookie,4,true));
+ assert(os_usb_serial_native_write(8,published.data,published.bytes)==1);
+ os_usb_serial_native_release(published.token);assert(releases==3); /* OUT still borrows RX. */
+ unsigned before=refills;
+ os_usb_serial_native_stopped(); /* The host supplies its controller halt proof. */
+ assert(writes==2&&releases==4&&refills==before);
+ assert(!sunstone_serial_prepare(0,1,0x81,2));
+ assert(os_usb_serial_native_write(9,published.data,published.bytes)<0);
+ os_usb_serial_native_stopped();assert(releases==4&&refills==before);
  puts("serial native NC lease broker, borrowed echo, deferred release and quiescence: PASS");
 }

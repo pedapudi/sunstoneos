@@ -11,14 +11,14 @@
 #undef a733_smp_contract_valid
 /* An image built with a service whose retirement is qualified only for the returning lifetime (the RAM-copy DMA
  * service, the scanning radio station, the GPU qualification builds) admits that lifetime alone
- * (SUNSTONE_A733_OS_RETURN_ONLY, cmake/sunstone-os-core.cmake). An image with the USB class services, whose host stack
- * has no returning retirement, refuses the returning lifetime. Every other image admits all three. */
+ * (SUNSTONE_A733_OS_RETURN_ONLY, cmake/sunstone-os-core.cmake). USB class images refuse the returning lifetime except
+ * the empty-port diagnostic, which selects the registered host and Type-C retirement. */
 #ifdef SUNSTONE_A733_OS_RETURN_ONLY
 #define OS_RETURN_ONLY 1
 #else
 #define OS_RETURN_ONLY 0
 #endif
-#ifdef SUNSTONE_A733_OS_USB_CLASSES
+#if defined(SUNSTONE_A733_OS_USB_CLASSES) && !defined(SUNSTONE_A733_USB_FAILURE_TEST)
 #define OS_RETURNS 0
 #else
 #define OS_RETURNS 1
@@ -71,8 +71,8 @@ int os_session_valid(const struct os_session *s)
        !s->limits[i][2]||s->limits[i][2]>s->limits[i][0])return 0;
     /* Each service's record is validated only when the session grants it; an absent record grants nothing. */
     uint64_t cpu_owner=0;(void)cpu_owner;
-    /* A returning session carries the CPU clock grant that its return path needs, for its board workload (2, or 3 in
-     * the scanning image), both clusters, at least four changes and no performance mode. */
+    /* A returning session carries the CPU clock grant for its image's workload,
+     * both clusters, at least four changes and no performance mode. */
     const int returning=os_lifetime()==A733_LIFETIME_RETURN;
     if(returning&&!(s->granted&OS_GRANT_CPU_CLOCK))return 0;
     if(s->granted&OS_GRANT_AUDIO){
@@ -98,6 +98,8 @@ int os_session_valid(const struct os_session *s)
            cpu.owner==s->thermal_owner)return 0;
 #ifdef SUNSTONE_A733_OS_RADIO_SCAN
         if(returning&&(s->board.workload!=3||cpu.grant.clusters!=3||cpu.grant.changes<4||s->cpu_clock.perf))return 0;
+#elif defined(SUNSTONE_A733_USB_FAILURE_TEST)
+        if(returning&&(s->board.workload!=0||cpu.grant.clusters!=3||cpu.grant.changes<4||s->cpu_clock.perf))return 0;
 #else
         if(returning&&(s->board.workload!=2||cpu.grant.clusters!=3||cpu.grant.changes<4||s->cpu_clock.perf))return 0;
 #endif

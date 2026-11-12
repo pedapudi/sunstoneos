@@ -17,8 +17,8 @@ machine with modeled system registers, counter and cache maintenance, and requir
                 section is invalid or read-only (AP[2], or APTable[1] on a table above it). The walk covers the whole
                 level-1 table of the EL1 regime and every table below it: the level-2 blocks of 0x40000000 to
                 0x80000000 (slot 14, the GPU blocks, the DRAM blocks of dram_map), the level-1 DRAM blocks and any USB
-                alias level-3 table. The application spaces that apps/os/large.c builds with app_space_build_l2 from
-                os_kernel_l1_head and os_kernel_l2_slot1 are walked the same way: one whose owner holds every usable
+                alias level-3 table. Application spaces use the linked app_space_build_tables with copies of the same
+                prepared boot pages that the OS getters read. They are walked the same way: one whose owner holds every usable
                 range (with and without 1 GiB blocks), and one whose ledger claims the CODE block, which the builder
                 must refuse or leave read-only.
 
@@ -575,12 +575,17 @@ def usable_ranges(base_l1, base_l2):
 
 
 def build_space(m, entries, flags):
-    """Call the image's app_space_build_l2 on the kernel's base tables; return (result, space root)."""
+    """Call the linked policy-aware builder on the boot tables; return (result, space root)."""
     image = m.image
     L = image.layouts
     base_l1, base_l2 = SCRATCH, SCRATCH + 0x1000
-    m.call('os_kernel_l1_head', base_l1)
-    m.call('os_kernel_l2_slot1', base_l2)
+    # Unicorn accesses here are physical: the OS getters use a virtual table
+    # alias after EL1 translation is enabled. Copy the same live boot pages.
+    m.uc.mem_write(base_l1, bytes(m.uc.mem_read(image.address('a733_cached_el1_l1'), 4096)))
+    m.uc.mem_write(base_l2, bytes(m.uc.mem_read(image.address('a733_cached_el1_l2'), 4096)))
+    base_tables = SCRATCH + 0x4000
+    pointers = [base_l2] + [0] * ((APP_REGION_LIMIT >> 30) - 2)
+    m.uc.mem_write(base_tables, struct.pack('<%dQ' % len(pointers), *pointers))
     entry_at, ledger_at, space_at, arena_at = SCRATCH + 0x2000, SCRATCH + 0x3000, SCRATCH + 0x3100, SCRATCH + 0x3200
     pages = SCRATCH + 0x10000
     entry = L['app_region_entry']
@@ -602,7 +607,7 @@ def build_space(m, entries, flags):
     m.uc.mem_write(arena_at, bytes(arena))
     m.uc.mem_write(space_at, bytes(64))
     m.uc.mem_write(pages, bytes(64 * 4096))
-    result = m.call('app_space_build_l2', space_at, arena_at, base_l1, base_l2, ledger_at, 1, 1, flags)
+    result = m.call('app_space_build_tables', space_at, arena_at, base_l1, base_tables, ledger_at, 1, 1, flags)
     root = m.read(space_at + L['app_space']['root_physical'])
     return result, root
 
@@ -633,7 +638,7 @@ def page_tables(image):
     metrics['usable_ranges'] = [[hex(b), hex(s)] for b, s in usable]
     for flags, label in ((0, 'gib-blocks'), (1, 'no-gib-blocks')):
         result, space = build_space(m, usable, flags)
-        assert result == 0, ('app_space_build_l2 refused the usable ranges', label, result)
+        assert result == 0, ('app_space_build_tables refused the usable ranges', label, result)
         found_space, tables_space = leaves(m.read, space)
         assert not writable_over(found_space, low, high), (label, writable_over(found_space, low, high))
         assert covering(found_space, low, high), (label, 'the application space does not map the image text')

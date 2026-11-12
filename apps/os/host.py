@@ -173,6 +173,8 @@ def session_decode(raw, manifest=None, manifest_sha256=None):
         require(declaration[0] and declaration[1] and declaration[2],
                 'The NPU record declares no slots, in-flight depth or graphs.')
     if USB_MEMORY in extents:
+        require(not (manifest is not None and 'usb_devices' in manifest),
+                'Ledger USB memory cannot carry a linked-reservation extent.')
         value=extents[USB_MEMORY]
         require(len(value)==64 and struct.unpack_from('<4Q',value)==(1,0x42200000,0x800000,0x7a000000),
                 'Invalid USB memory profile geometry.')

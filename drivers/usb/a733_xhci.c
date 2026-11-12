@@ -51,6 +51,9 @@ static uint64_t lease_token(void)
 #define BUSY_US 2000u /* Longest provider BUSY repeated inside one access. */
 enum { P_CAP,P_EXT,P_HALTED,P_RESET,P_RESET_WAIT,P_MEMORY,P_DCBAA,P_COMMAND,
        P_ERST_SIZE,P_ERST_BASE,P_ERDP,P_IMAN,P_CONFIG,P_RUN,P_RUNNING,P_POWER,P_ACTIVE };
+enum { S_NONE,S_DRAIN,S_RESET_WAIT,S_CHECK_HALTED,S_DISABLE_IRQ,S_HALT,S_HALT_WAIT,S_DONE };
+#define HALT_US 16000u /* xHCI 1.2 section 5.4.1 Run/Stop maximum halt latency. */
+#define STATUS_FAULT (BIT(2)|BIT(11)|BIT(12)) /* HSE, CNR, HCE. */
 enum { C_ENABLE=9,C_DISABLE=10,C_ADDRESS=11,C_CONFIGURE=12,C_EVALUATE=13,C_RESET_ENDPOINT=14,C_STOP=15,C_SET_DEQUEUE=16 };
 #define DETACH_US 5000000u /* Teardown bound; pinned Linux XHCI_CMD_DEFAULT_TIMEOUT. */
 #define HOLD_US 1000000u /* Error hold: a hub status interval (at most 256 ms) and a port status request. */
@@ -108,7 +111,7 @@ static int guard(struct a733_xhci *x,uint64_t deadline)
 static int settled(struct a733_xhci *x,uint64_t deadline)
 {
     int live=guard(x,deadline);const uint64_t start=x->last_now;
-    while(!live&&x->last_now-start<BUSY_US)live=guard(x,deadline);
+    while(!x->stop_phase&&!live&&x->last_now-start<BUSY_US)live=guard(x,deadline);
     return live;
 }
 /* Every access still needs a fresh observation. */
@@ -126,7 +129,7 @@ static unsigned dci(unsigned address)
 {return (address&15)?2*(address&15)+!!(address&128):1;}
 static struct a733_xhci_device *device_address(struct a733_xhci *x,unsigned address)
 {
-    if(!x||x->self!=x||address>127)return NULL;
+    if(!x||x->self!=x||x->stop_phase||address>127)return NULL;
     if(!address)return x->default_device<A733_XHCI_DEVICES&&!x->devices[x->default_device].zero_retired&&
         !x->devices[x->default_device].detach?&x->devices[x->default_device]:NULL;
     for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].address==address&&!x->devices[i].detach)return &x->devices[i];
@@ -230,9 +233,14 @@ static int reclaim(struct a733_xhci *x,unsigned j)
  * Address Device in flight queues no TD; teardown waits for its completion. */
 static void detach(struct a733_xhci *x,struct a733_xhci_device *d)
 {
+    uint64_t prior=d->deadline;
+    unsigned pending=d->port_ready&&d->port_ready!=3;
     d->detach=1;d->deadline=x->lifetime_deadline-x->last_now>DETACH_US?x->last_now+DETACH_US:x->lifetime_deadline;
+    if(x->stop_phase&&pending&&prior&&prior<d->deadline)d->deadline=prior;
     for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
         struct a733_xhci_endpoint *e=&d->endpoints[i];e->caller=NULL;
+        if(x->stop_phase&&(e->pending||(i&&e->opened&&!e->configured))&&
+           e->deadline&&e->deadline<d->deadline)d->deadline=e->deadline;
         if((e->pending!=2||!e->pending_trb)&&e->pending!=6)e->pending=0;
     }
     if(x->isoch.device==(unsigned)(d-x->devices)+1)x->isoch.requested=0;
@@ -254,7 +262,8 @@ static int childless(const struct a733_xhci *x,unsigned j)
 {
     const struct a733_xhci_device *d=&x->devices[j];
     for(unsigned k=0;d->slot&&k<A733_XHCI_DEVICES;++k)
-        if(k!=j&&x->devices[k].port_ready&&x->devices[k].parent==d->slot)return 0;
+        if(k!=j&&x->devices[k].port_ready&&x->devices[k].parent==d->slot&&
+           !(x->stop_phase&&x->devices[k].detach==3))return 0;
     return 1;
 }
 /* Publish payload before the cycle bit. The last entry is an owned Link TRB.
@@ -598,7 +607,7 @@ static int command_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
             }
         }
         d->detach=3;
-        return borrowed(x,j)?1:reclaim(x,j);
+        return x->stop_phase||borrowed(x,j)?1:reclaim(x,j);
     }
     if(d->detach)return 1; /* Teardown owns the slot; a completed request has no further effect. */
     unsigned slot_state=get32(d->device+12)>>27;
@@ -732,7 +741,7 @@ static int teardown(struct a733_xhci *x,unsigned j)
 {
     struct a733_xhci_device *d=&x->devices[j];
     if(d->detach==3)return borrowed(x,j)?1:reclaim(x,j);
-    if(!d->slot)return borrowed(x,j)?1:reclaim(x,j);
+    if(!d->slot){if(x->stop_phase){d->detach=3;return 1;}return borrowed(x,j)?1:reclaim(x,j);}
     if(!barrier(x))return 0;
     if(d->detach==1){
         for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
@@ -815,7 +824,7 @@ int a733_xhci_init(struct a733_xhci *x,const struct a733_xhci_ops *ops,void *con
 }
 int a733_xhci_work_pending(const struct a733_xhci *x)
 {
-    if(!owner(x)||x->failed)return 0;
+    if(!owner(x)||x->failed||x->stop_phase)return 0;
     switch(x->phase){
     case P_CAP:case P_EXT:case P_RESET:case P_MEMORY:case P_DCBAA:
     case P_COMMAND:case P_ERST_SIZE:case P_ERST_BASE:case P_ERDP:
@@ -854,14 +863,19 @@ int a733_xhci_work_pending(const struct a733_xhci *x)
 uint64_t a733_xhci_next_deadline(const struct a733_xhci *x)
 {
     if(!owner(x)||x->failed)return 0;
-    if(x->phase!=P_ACTIVE)return x->deadline;
-    uint64_t next=x->lifetime_deadline;
-    if(!x->require_ss&&x->port_reset&&x->devices[0].port_ready<3&&x->reset_deadline<next)next=x->reset_deadline;
+    if(x->stop_phase==S_DONE)return 0;
+    if(x->phase!=P_ACTIVE&&!x->stop_phase)return x->deadline;
+    uint64_t next=x->stop_phase?x->stop_deadline:x->lifetime_deadline;
+    if(x->stop_phase&&x->phase<P_RUNNING&&x->deadline<next)next=x->deadline;
+    if(x->stop_phase==S_HALT_WAIT&&x->halt_deadline<next)next=x->halt_deadline;
+    if(!x->require_ss&&(x->stop_phase?x->port_reset==2:
+       x->port_reset&&x->devices[0].port_ready<3)&&x->reset_deadline<next)next=x->reset_deadline;
     if(x->command_kind&&x->command_deadline<next)next=x->command_deadline;
     for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
         const struct a733_xhci_device *d=&x->devices[j];
+        if(x->stop_phase&&d->detach==3)continue;
         if(((d->detach&&d->detach!=3)||(d->port_ready&&d->port_ready!=3))&&d->deadline&&d->deadline<next)next=d->deadline;
-        if(d->detach)continue;
+        if(d->detach&&(!x->stop_phase||d->detach==3))continue;
         for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
             const struct a733_xhci_endpoint *e=&d->endpoints[i];
             if((e->pending||(i&&e->opened&&!e->configured))&&e->deadline<next)next=e->deadline;
@@ -872,6 +886,7 @@ uint64_t a733_xhci_next_deadline(const struct a733_xhci *x)
 enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
 {
     if(!owner(x))return A733_XHCI_INVALID;if(x->failed)return A733_XHCI_RETAINED;
+    if(x->stop_phase)return A733_XHCI_INVALID;
     if(x->phase==P_ACTIVE) {
         x->deadline=x->lifetime_deadline;
         if(!x->require_ss&&x->port_reset&&x->devices[0].port_ready<3&&x->reset_deadline<x->deadline)x->deadline=x->reset_deadline;
@@ -986,9 +1001,118 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
 done:return x->phase==P_ACTIVE&&x->devices[0].port_ready==3&&!x->devices[0].detach?A733_XHCI_READY:A733_XHCI_PENDING;
 failed:fault(x);return A733_XHCI_RETAINED;
 }
+/* The owner retains every DMA allocation. xHCI 1.2 sections 5.4.1.1 and
+ * 5.4.2 require endpoint/command completion and completed USB2 port resets
+ * before Run/Stop is cleared; an error-induced HCHalted is not that proof. */
+int a733_xhci_stop_draining(const struct a733_xhci *x)
+{
+    return owner(x)&&!x->failed&&x->irq_mode&&x->phase==P_ACTIVE&&
+        (x->stop_phase==S_NONE||x->stop_phase==S_DRAIN);
+}
+int a733_xhci_stop(struct a733_xhci *x,uint64_t absolute_deadline)
+{
+    if(!owner(x)||x->failed)return -1;
+    if(x->stop_phase==S_DONE)return 1;
+    if(!absolute_deadline)goto failed;
+    if(!x->stop_phase){
+        x->stop_deadline=absolute_deadline<x->lifetime_deadline?absolute_deadline:x->lifetime_deadline;
+        /* Startup phase records which writes this session has issued. No
+         * unknown phase or inconsistent publication can claim an untouched HC. */
+        if(x->phase>P_ACTIVE||x->publication!=(unsigned)(x->phase>=P_COMMAND))goto failed;
+        x->stop_phase=x->phase>=P_RUNNING?S_DRAIN:
+            x->phase==P_RESET_WAIT?S_RESET_WAIT:S_CHECK_HALTED;
+        x->connected=0;x->isoch.requested=0;
+        if(x->port_reset==1)x->port_reset=0; /* Software request never issued. */
+        for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
+            struct a733_xhci_device *d=&x->devices[j];
+            for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)d->endpoints[i].caller=NULL;
+            /* Adopt a Stop/Reset Endpoint already issued by stall recovery.
+             * Its completion still validates the same endpoint state. */
+            if(!d->detach&&d->recovering&&x->command_device==j+1&&
+               (x->command_kind==C_STOP||x->command_kind==C_RESET_ENDPOINT))d->stopping=d->recovering;
+            if((d->port_ready||d->slot||x->command_device==j+1)&&!d->detach)detach(x,d);
+        }
+        if(x->phase==P_CAP){
+            if(x->operational||x->publication||x->command_kind)goto failed;
+            /* init owns memory, but has performed no controller access. */
+            uint64_t now;
+            if(x->ops.now(x->context,&now)!=1||!a733_deadline_admit(now,&x->last_now,x->stop_deadline))goto failed;
+            x->stop_phase=S_DONE;return 1;
+        }
+    }else if(absolute_deadline<x->stop_deadline)x->stop_deadline=absolute_deadline;
+    x->deadline=a733_xhci_next_deadline(x);
+    int live=guard(x,x->deadline);if(!live)return 0;if(live<0)goto failed;
+    uint32_t v,status;unsigned reset_pending=0;
+    switch(x->stop_phase){
+    case S_RESET_WAIT:
+        if(!rd(x,x->operational,&v)||(v&1))goto failed;
+        if(v&2)return 0;
+        if(!rd(x,x->operational+4,&status)||(status&(BIT(2)|BIT(12)))||!(status&1))goto failed;
+        if(status&BIT(11))return 0;
+        x->stop_phase=S_CHECK_HALTED;return 0;
+    case S_CHECK_HALTED:
+        /* No Run/Stop write has occurred in these recorded startup phases. */
+        if(!rd(x,x->operational,&v)||(v&3)||
+           !rd(x,x->operational+4,&status)||(status&STATUS_FAULT)||!(status&1))goto failed;
+        x->stop_phase=S_DONE;return 1;
+    case S_DRAIN:
+        if(!rd(x,x->operational+4,&status)||(status&STATUS_FAULT)||
+           (x->phase==P_ACTIVE&&(status&1)))goto failed;
+        {
+            unsigned usb2=x->require_ss?x->usb2_companion_port:x->usb2_port;
+            if(!usb2||!rd(x,x->operational+0x400+(usb2-1)*16,&v)||(v&BIT(3)))goto failed;
+            if(v&BIT(4)){if(x->port_reset!=2)goto failed;reset_pending=1;}
+            else if(x->port_reset==2)x->port_reset=3;
+        }
+        if(!barrier(x))goto failed;
+        if((x->events[x->event_index].control&1)==x->event_cycle){
+            if(x->irq_mode&&!x->irq_service)return 0;
+            if(event_step(x)<0)goto failed;
+            return 0;
+        }
+        if(x->command_kind)return 0;
+        {
+            unsigned waiting=0;
+            for(unsigned j=A733_XHCI_DEVICES;j-->0;){
+                struct a733_xhci_device *d=&x->devices[j];
+                if(!d->detach||d->detach==3)continue;
+                if(!childless(x,j)){waiting=1;continue;}
+                if(!teardown(x,j))goto failed;
+                return 0;
+            }
+            if(waiting)goto failed;
+        }
+        if(reset_pending)return 0;
+        /* From this transition onward the caller must not finish/rearm IRQs.
+         * Its current service remains masked until the final GIC stop. */
+        x->stop_phase=S_DISABLE_IRQ;return 0;
+    case S_DISABLE_IRQ:
+        if(!rd(x,x->operational+4,&status)||(status&STATUS_FAULT)||
+           !rd(x,x->operational,&v)||!(v&1)||(v&2)||
+           !wr(x,x->runtime+0x20,0)||!rd(x,x->runtime+0x20,&status)||(status&2)||
+           !wr(x,x->operational,v&~(BIT(2)|BIT(3)))||
+           !rd(x,x->operational,&status)||status!=(v&~(BIT(2)|BIT(3))))goto failed;
+        if(x->irq_events&&!wr64(x,x->runtime+0x38,(x->event_pa+16*x->event_index)|8))goto failed;
+        x->irq_events=x->irq_service=x->irq_asserted=0;
+        x->stop_phase=S_HALT;return 0;
+    case S_HALT:
+        if(!rd(x,x->operational+4,&status)||(status&STATUS_FAULT)||
+           !rd(x,x->operational,&v)||!(v&1)||(v&(2|BIT(2)|BIT(3)))||
+           !wr(x,x->operational,v&~1u))goto failed;
+        x->halt_deadline=x->stop_deadline-x->last_now>HALT_US?x->last_now+HALT_US:x->stop_deadline;
+        if(!rd(x,x->operational,&status)||status!=(v&~1u))goto failed;
+        x->stop_phase=S_HALT_WAIT;return 0;
+    case S_HALT_WAIT:
+        if(!rd(x,x->operational+4,&status)||(status&STATUS_FAULT))goto failed;
+        if(!(status&1))return 0;
+        x->stop_phase=S_DONE;return 1;
+    default:goto failed;
+    }
+failed:fault(x);return -1;
+}
 int a733_xhci_bind_child(struct a733_xhci *x,unsigned parent,unsigned port_number,unsigned speed,uint64_t deadline)
 {
-    if(!owner(x)||x->failed||x->cap_slots<2||!port_number||port_number>7||speed<1||speed>4||
+    if(!owner(x)||x->failed||x->stop_phase||x->cap_slots<2||!port_number||port_number>7||speed<1||speed>4||
        deadline>x->lifetime_deadline||settled(x,deadline)!=1)return 0;
     struct a733_xhci_device *hub=parent?device_address(x,parent):NULL;
     if(!hub||(hub->speed==4?speed!=4:speed>3)||hub->address!=parent||!hub->hub||!hub->hub_configured||port_number>hub->hub_ports||
@@ -1041,8 +1165,8 @@ unsigned a733_xhci_device_speed(const struct a733_xhci *x,unsigned address)
 int a733_xhci_reset_port(struct a733_xhci *x,uint64_t deadline)
 {
     struct a733_xhci_device *d=x?&x->devices[0]:NULL;
-    if(x&&x->require_ss)return owner(x)&&!x->failed&&x->connected&&x->speed==4&&settled(x,deadline)==1;
-    if(!owner(x)||x->failed||x->phase!=P_ACTIVE||!x->connected||x->port_reset||d->slot||
+    if(x&&x->require_ss)return owner(x)&&!x->failed&&!x->stop_phase&&x->connected&&x->speed==4&&settled(x,deadline)==1;
+    if(!owner(x)||x->failed||x->stop_phase||x->phase!=P_ACTIVE||!x->connected||x->port_reset||d->slot||
        deadline>x->lifetime_deadline||settled(x,deadline)!=1)return 0;
     x->port_reset=1;x->reset_deadline=deadline;return 1;
 }
@@ -1159,14 +1283,14 @@ int a733_xhci_isoch_acquire(struct a733_xhci *x,unsigned address,unsigned ep,
 int a733_xhci_isoch_release(struct a733_xhci *x,unsigned address,unsigned ep,uint64_t token)
 {
     if(!SUNSTONE_USB_HOST_GENERIC)return 0;
-    if(!owner(x)||x->failed||!token||!checked(x))return 0;
+    if(!owner(x)||x->failed||!token||(x->stop_phase!=S_DONE&&!checked(x)))return 0;
     struct a733_xhci_isoch *s=&x->isoch;
     for(unsigned i=0;i<A733_XHCI_ISOCH_BUFFERS;++i)if(s->held[i]==DMA_ISO_BORROWED&&s->token[i]==token){
         unsigned id=s->owner[i];if(!id||id>A733_XHCI_DEVICES*A733_XHCI_ENDPOINTS)return fault(x);
         struct a733_xhci_device *d=&x->devices[(id-1)/A733_XHCI_ENDPOINTS];
         struct a733_xhci_endpoint *e=&d->endpoints[(id-1)%A733_XHCI_ENDPOINTS];
         if(d->address!=address||e->address!=ep||e->transfer_type!=1)return 0;
-        if(!barrier(x))return fault(x);
+        if(x->stop_phase!=S_DONE&&!barrier(x))return fault(x);
         s->held[i]=0;s->owner[i]=0;s->token[i]=0;return 1;
     }
     return 0;
@@ -1216,7 +1340,7 @@ int a733_xhci_dma_acquire(struct a733_xhci *x,unsigned address,unsigned ep,
 int a733_xhci_dma_release(struct a733_xhci *x,unsigned address,unsigned ep,uint64_t token)
 {
     if(!SUNSTONE_USB_HOST_GENERIC)return 0;
-    if(!owner(x)||x->failed||!(ep&15)||!token||!checked(x))return 0;
+    if(!owner(x)||x->failed||!(ep&15)||!token||(x->stop_phase!=S_DONE&&!checked(x)))return 0;
     struct a733_xhci_isoch *s=&x->isoch;
     for(unsigned i=0;i<A733_XHCI_ISOCH_BUFFERS;++i)if(s->token[i]==token&&
        (s->held[i]==DMA_RESERVED||s->held[i]==DMA_COMPLETE)&&!s->references[i]){
@@ -1224,7 +1348,7 @@ int a733_xhci_dma_release(struct a733_xhci *x,unsigned address,unsigned ep,uint6
         struct a733_xhci_device *d=&x->devices[(id-1)/A733_XHCI_ENDPOINTS];
         struct a733_xhci_endpoint *e=&d->endpoints[(id-1)%A733_XHCI_ENDPOINTS];
         if(d->address!=address||e->address!=ep)return 0;
-        if(!barrier(x))return fault(x);
+        if(x->stop_phase!=S_DONE&&!barrier(x))return fault(x);
         s->held[i]=0;s->owner[i]=0;s->token[i]=0;return 1;
     }
     return 0;
@@ -1344,7 +1468,9 @@ int a733_xhci_abort(struct a733_xhci *x,unsigned address,unsigned ep)
 }
 int a733_xhci_detach(struct a733_xhci *x,unsigned address)
 {
-    if(!owner(x)||x->failed||address>127||settled(x,x->lifetime_deadline)!=1)return 0;
+    if(!owner(x)||x->failed||address>127)return 0;
+    if(x->stop_phase)return 1;
+    if(settled(x,x->lifetime_deadline)!=1)return 0;
     struct a733_xhci_device *d=device_address(x,address);
     if(!d||!d->port_ready)return 1; /* Already detaching, or no slot or context exists. */
     if(d==&x->devices[0])return 0; /* The root device follows its port. */
@@ -1357,7 +1483,7 @@ void a733_xhci_lost(struct a733_xhci *x)
 int a733_xhci_interrupt_begin(struct a733_xhci *x)
 {
     uint32_t status,iman;
-    if(!owner(x)||x->failed||!x->irq_mode||x->irq_service)return -1;
+    if(!a733_xhci_stop_draining(x)||x->irq_service)return -1;
     if(!rd(x,x->operational+4,&status)||(status&(1|BIT(2)|BIT(11)|BIT(12)))||
        !rd(x,x->runtime+0x20,&iman)||!(iman&2)||
        !wr(x,x->operational+4,BIT(3))||!wr(x,x->runtime+0x20,iman|1)||
@@ -1369,7 +1495,10 @@ int a733_xhci_interrupt_start(struct a733_xhci *x)
 {
     uint32_t command,iman;
     if(!owner(x)||x->failed)return -1;
-    if(x->irq_mode)return 1;
+    /* The board wrapper rechecks its existing binding on every drain pass.
+     * Shutdown may use that binding until source disable, but never creates one. */
+    if(x->irq_mode)return !x->stop_phase||x->stop_phase==S_DRAIN?1:-1;
+    if(x->stop_phase)return -1;
     if(x->phase!=P_ACTIVE)return 0;
     if(!rd(x,x->operational,&command)||command!=1||
        !rd(x,x->runtime+0x20,&iman)||(iman&2)||
@@ -1384,7 +1513,7 @@ failed:fault(x);return -1;
 int a733_xhci_interrupt_finish(struct a733_xhci *x)
 {
     uint32_t iman,status;
-    if(!owner(x)||x->failed||!x->irq_mode||!x->irq_service)return -1;
+    if(!a733_xhci_stop_draining(x)||!x->irq_service)return -1;
     if(!rd(x,x->operational+4,&status)||(status&(1|BIT(2)|BIT(11)|BIT(12)))||!barrier(x))goto failed;
     int ready=(x->events[x->event_index].control&1)==x->event_cycle;
     if(ready){

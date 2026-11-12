@@ -26,6 +26,7 @@ struct bt_security {
     uint64_t deadline,timeout_us;
     unsigned first,count,allocated,pending,configuration_stage,configured,fatal,entered;
     unsigned pairing_complete,secure_supported,extended_pages;
+    unsigned stopping;
 };
 /* One native controller, one task, fixed lifetime RAM keys; no overwrite,
  * persistence, key export, automatic retry or fallback to unencrypted service.
@@ -48,6 +49,14 @@ int bt_security_step(struct bt_security *,unsigned budget,uint64_t deadline);
  * command work after their step, never advances HCI a second time. */
 int bt_security_service(struct bt_security *,uint64_t deadline);
 int bt_security_start(struct bt_security *,uint64_t acl_generation);
+/* Close new pairing/configuration admission without dropping copied commands,
+ * accepted acknowledgements or keys. Existing service/ACL callbacks drain
+ * accepted work under the earlier of this bound and their original deadlines.
+ * A new pairing request after closure is a retained fault. Stop returns1 or-1;
+ * quiescent returns1 only with no command/borrow and every attached ACL terminal,
+ * 0 pending,-1 fault. Keys and connection metadata remain allocated. */
+int bt_security_stop(struct bt_security *,uint64_t deadline);
+int bt_security_quiescent(const struct bt_security *);
 /* Read-only owner query; output secure_connections comes actual AES-CCM mode.
  * Generation is the exact authenticated ACL lifetime, not a readiness flag. */
 int bt_security_authorized(struct bt_security *,uint64_t acl_generation,uint64_t *generation,unsigned *secure_connections);

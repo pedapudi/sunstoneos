@@ -2,6 +2,7 @@
 #include "aarch64_device_memory.h"
 #include "a733_mapping_check.h"
 #include "a733_i2s_platform.h"
+#include "a733_task_context.h"
 
 _Static_assert(A733_DMA_CHANNELS<=DMA_SERVICE_JOBS,"one job per selected channel");
 _Static_assert(A733_I2S_PERIOD_CAPACITY<=DEVICE_MEMORY_PAGE,"one page backs each stream period");
@@ -154,8 +155,9 @@ static void bootstrap(void *argument)
     if(s==instance && atomic_load_explicit(&s->state,memory_order_acquire)==A733_DMA_POOL_WAITING) {
         for(;;) {
             uint64_t now;
+            uint64_t limit=atomic_load_explicit(&s->startup.return_deadline,memory_order_acquire);
             if(!parent(s) || !a733_counter_clock_now(s->startup.clock,&now) ||
-               now>=s->startup.handoff.allowed.deadline_us) break;
+               now>=s->startup.handoff.allowed.deadline_us||(limit&&now>=limit)) break;
             enum a733_dma_platform_result r=a733_dma_startup_poll(&s->startup);
             if(r==A733_DMA_PLATFORM_RETAINED) break;
             if(r==A733_DMA_PLATFORM_READY) {
@@ -164,11 +166,13 @@ static void bootstrap(void *argument)
                     atomic_store_explicit(&s->state,A733_DMA_POOL_READY,memory_order_release);
                     (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
                     if(!atomic_load_explicit(&s->retire_requested,memory_order_acquire)||
-                       !dma_service_retired(&s->service)||s->periods||s->startup.handoff.allowed.cold)fail(s);
+                       !dma_service_retired(&s->service))fail(s);
                     if(!a733_counter_clock_now(s->startup.clock,&now)||now>UINT64_MAX-50000)fail(s);
-                    const uint64_t deadline=now+50000;
+                    uint64_t deadline=now+50000;
+                    limit=atomic_load_explicit(&s->startup.return_deadline,memory_order_acquire);
+                    if(limit&&limit<deadline)deadline=limit;
                     for(;;){
-                        r=a733_dma_startup_retire_adopted(&s->startup,deadline);
+                        r=a733_dma_startup_retire(&s->startup,deadline);
                         if(r==A733_DMA_PLATFORM_RETAINED)fail(s);
                         if(r==A733_DMA_PLATFORM_READY)break;
                         vTaskDelay(1);
@@ -186,9 +190,20 @@ static void bootstrap(void *argument)
     }
     vTaskSuspend(NULL);fail(s);
 }
+int a733_dma_pool_session_return_limit(struct a733_dma_pool_session *s,uint64_t deadline)
+{
+    if(!s||s!=instance||!deadline||
+       !a733_task_context_owner_el1(s->service.clients[0].task)||!parent(s))return -1;
+    unsigned state=atomic_load_explicit(&s->state,memory_order_acquire);
+    if(state!=A733_DMA_POOL_WAITING&&state!=A733_DMA_POOL_READY)return -1;
+    uint64_t now,expected=0;
+    if(!a733_counter_clock_now(s->startup.clock,&now)||now>=deadline)return -1;
+    return atomic_compare_exchange_strong_explicit(&s->startup.return_deadline,&expected,deadline,
+        memory_order_release,memory_order_relaxed)||expected==deadline?1:-1;
+}
 int a733_dma_pool_session_retire(struct a733_dma_pool_session *s)
 {
-    if(!s||s!=instance||s->periods||s->startup.handoff.allowed.cold||
+    if(!s||s!=instance||
        atomic_load_explicit(&s->state,memory_order_acquire)!=A733_DMA_POOL_READY||
        !dma_service_retired(&s->service))return -1;
     if(atomic_load_explicit(&s->retired,memory_order_acquire))return 1;

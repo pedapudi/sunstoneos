@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Run constructor refusal and cold-service return proofs over modeled setup APIs.
 
-The linked constructor and return branches, worker suspension, receipt predicates
-and copied report execute. Cold cases include no CREATE and a collected refused
+The linked constructor, failure claim, registered quiesce step, normal return
+branches, worker suspension, receipt predicates and copied report execute.
+Cold cases include no CREATE and a collected refused
 CREATE. Setup APIs, worker clock samples and queue contents are modeled RAM
 metadata. No GPU/MMIO effects, scheduling or power qualification are established.
 """
@@ -10,7 +11,7 @@ import argparse, hashlib, importlib.util, json, struct, re
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
-from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP
+from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP
 from harness import machine as harness_machine, Image, save, refused, skip_crumbs, seal_lifetime
 ROOT=Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--image', '{elf:ret-gpu}', '--output', '{output}']]
@@ -18,7 +19,7 @@ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Pat
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
 types={'board_application','a733_board_session','a733_gpu_platform','a733_gpu_power','a733_pmic_consumer',
  'os_thermal_service','a733_thermal_policy','a733_gpu_backend','a733_gpu_reserved','a733_gpu_queue','pvr_compute_queue','pvr_compute_queue_client','pvr_gpu_service','pvr_gpu_service_client',
- 'a733_fault_report','a733_fault_record','a733_power_domain_row','a733_pmic_request','a733_rail_token','ss_result'}
+ 'a733_fault_report','a733_fault_record','a733_power_domain_row','a733_pmic_request','a733_rail_token','ss_result','os_quiesce'}
 im=Image(a.image,types);enums={};sizes={}
 with a.image.open('rb') as f:
  for cu in ELFFile(f).get_dwarf_info().iter_CUs():
@@ -88,7 +89,7 @@ for name,fail_step,mutation in cases:
   slot=field(previous,'a733_fault_report','slot');sf(slot,'a733_fault_record','info',int(re.search(r'#define A733_FAULT_KIND_EXIT (\d+)',(ROOT/'include/a733_fault.h').read_text())[1]),8)
   sf(slot,'a733_fault_record','status',5,8);sf(slot,'a733_fault_record','detail',0x4750554c,8)
  state={'time_us':1000000,'scheduler':1,'suspended':False,'worker_ready':False,'worker_state':None,'setup':[],'getter':0,'queue_reads':0}
- hooks={im.address(n):n for n in [*steps.values(),'xTaskGetSchedulerState','os_session_admitted','xTaskGetCurrentTaskHandle','a733_smp_counter','vTaskSuspend','eTaskGetState','uxQueueMessagesWaiting']+(['os_application_activity_generation'] if thermal_layout is not None else [])}
+ hooks={im.address(n):n for n in [*steps.values(),'xTaskGetSchedulerState','os_session_admitted','xTaskGetCurrentTaskHandle','ucPortGetCoreID','a733_smp_counter','vTaskSuspend','eTaskGetState','uxQueueMessagesWaiting']+(['os_application_activity_generation'] if thermal_layout is not None else [])}
  def ret(value=0):u.reg_write(UC_ARM64_REG_X0,value);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
  def hook(cpu,address,size,unused):
   n=hooks.get(address)
@@ -97,6 +98,7 @@ for name,fail_step,mutation in cases:
   elif n=='xTaskGetSchedulerState':ret(state['scheduler'])
   elif n=='os_session_admitted':ret(os)
   elif n=='xTaskGetCurrentTaskHandle':ret(0x1234)
+  elif n=='ucPortGetCoreID':ret(6)
   elif n=='a733_smp_counter':ret(state['time_us']*24)
   elif n=='vTaskSuspend':
    assert state['scheduler']==(2 if fail_step==0 else 1) and u.reg_read(UC_ARM64_REG_X0)==0x4567;state['suspended']=True;ret()
@@ -123,8 +125,8 @@ for name,fail_step,mutation in cases:
    elif stage==13:sf(field(service,'pvr_gpu_service','clients'),'pvr_gpu_service_client','task',0x1234,8)
    ret(field(field(gpu,'gpu_private','firmware'),'a733_gpu_reserved','config') if stage==9 else component if stage==10 else enums['A733_PMIC_READY'] if stage==6 else 1)
  u.hook_add(UC_HOOK_CODE,hook)
- def call(fn,arg=0,arg1=0):
-  u.reg_write(UC_ARM64_REG_SP,0x8001f000);u.reg_write(UC_ARM64_REG_LR,0x80000000);u.reg_write(UC_ARM64_REG_X0,arg);u.reg_write(UC_ARM64_REG_X1,arg1)
+ def call(fn,arg=0,arg1=0,arg2=0):
+  u.reg_write(UC_ARM64_REG_SP,0x8001f000);u.reg_write(UC_ARM64_REG_LR,0x80000000);u.reg_write(UC_ARM64_REG_X0,arg);u.reg_write(UC_ARM64_REG_X1,arg1);u.reg_write(UC_ARM64_REG_X2,arg2)
   u.emu_start(im.address(fn,'apps/os/thermal.c' if fn=='record_reading' else None),0x80000000,count=2000000);assert u.reg_read(UC_ARM64_REG_PC)==0x80000000,fn
   return u.reg_read(UC_ARM64_REG_X0)
  client_size=sizes['pvr_gpu_service_client']
@@ -132,6 +134,10 @@ for name,fail_step,mutation in cases:
  if fail_step==2:
   sf(bs,'a733_board_session','pmic_owner',0x4f53475055464d31,8)
  assert call('os_gpu_queue_start',6)==1,(name,state)
+ entry=im.address('gpu_quiesce','/apps/os/gpu.c')
+ assert get(field(entry,'os_quiesce','registered'))==1
+ assert get(field(entry,'os_quiesce','step'),8)==im.address('gpu_quiesce_step','/apps/os/gpu.c')
+ assert get(field(entry,'os_quiesce','owner'))==enums['OS_QUIESCE_GPU']
  assert get(field(gpu,'gpu_private','constructor_refusal'))==fail_step,(name,state,get(field(gpu,'gpu_private','constructor_refusal')))
  assert call('os_gpu_queue_start',6)==0 # immutable reason, no second construction
  state['scheduler']=2
@@ -188,8 +194,23 @@ for name,fail_step,mutation in cases:
   elif mutation in ('owed','context-generation','create-ticket','create-pending','unconsumed-record','crumb-pending'):
    member={'owed':'owed','context-generation':'generation','create-ticket':'create_ticket','create-pending':'create_pending','unconsumed-record':'client_owed','crumb-pending':'crumb_pending'}[mutation]
    sf(component,'pvr_compute_queue',member,1,8 if member=='create_ticket' else 4)
- result=call('os_gpu_retire') if fail_step==0 else call('os_gpu_queue_return_untouched')
+ if fail_step==0:
+  result=call('os_gpu_retire')
+ else:
+  # The supervisor now reaches the constructor's untouched proof through
+  # the registered owner. Execute the actual claim and registry; no stub
+  # supplies the completion result or substitutes a hardware proof.
+  assert call('os_cpu_return_failure',0x80004001,1,0x1234)==1
+  assert call('os_cpu_return_failing')==1 and call('os_cpu_return_requested')==1
+  outcome=call('os_quiesce_step')
+  assert outcome==enums['OS_QUIESCE_DONE' if mutation is None else 'OS_QUIESCE_FAULT'],(name,outcome,state)
+  assert get(field(entry,'os_quiesce','result'))==outcome
+  if mutation is not None:assert get(field(entry,'os_quiesce','fault_state'))==2
+  result=outcome==enums['OS_QUIESCE_DONE']
  assert bool(result) is (mutation is None),(name,result,state)
+ if not result:
+  assert call('os_gpu_return_ready')==0
+  assert bytes(u.mem_read(im.address('os_gpu_return_report'),64))==bytes(64)
  if result:
   raw=bytes(u.mem_read(im.address('os_gpu_return_report'),64));decoded=decoder.decode(raw,epoch,generation,require,allow_untouched=True)
   diagnostic_cold=fail_step==0 and diagnostic is not None and diagnostic[1]==1
@@ -205,15 +226,22 @@ for name,fail_step,mutation in cases:
   assert get(field(gpu,'gpu_private','constructor_refusal'))==fail_step
   refused(lambda:decoder.decode(raw,epoch,generation,require),
           'GPU bisect retirement' if diagnostic_cold else 'not admitted')
-  assert call('os_gpu_return_ready')==1 and call('os_gpu_queue_return_untouched')==0
+  assert call('os_gpu_return_ready')==1
   (a.output/(name+'-report.bin')).write_bytes(raw)
-  text=b'MODEL ONLY CPU return with GPU never opened\n';u.mem_write(0x80001000,text)
   result_address=im.address('ss_result_record')
-  sf(result_address,'ss_result','magic',0x31544c5553455241,8)
-  sf(result_address,'ss_result','status',1,8)
-  sf(result_address,'ss_result','payload_bytes',len(text),8)
-  call('os_cpu_return_begin',0x80001000,len(text))
+  if fail_step==0:
+   text=b'MODEL ONLY CPU return with GPU never opened\n';u.mem_write(0x80001000,text)
+   sf(result_address,'ss_result','magic',0x31544c5553455241,8)
+   sf(result_address,'ss_result','status',1,8)
+   sf(result_address,'ss_result','payload_bytes',len(text),8)
+   call('os_cpu_return_begin',0x80001000,len(text))
+  else:
+   assert get(field(result_address,'ss_result','magic'),8)==0x31544c5553455241
+   assert get(field(result_address,'ss_result','status'),8)==2
   assert call('os_cpu_return_requested')==1
+  # Registry completion is idempotent and must preserve the original receipt.
+  assert call('os_quiesce_step')==enums['OS_QUIESCE_DONE']
+  assert bytes(u.mem_read(im.address('os_gpu_return_report'),64))==raw
   (a.output/(name+'-result.bin')).write_bytes(u.mem_read(result_address,56))
   if thermal_layout is not None:
    policy=field(im.address('thermal','apps/os/thermal.c'),'os_thermal_service','policy')

@@ -53,6 +53,9 @@ struct a733_usb2_platform {
     uint64_t deadline,last_now;
     unsigned phase,supply_index,held,failed,clock_retained,rail_retained;
     unsigned ss_phase,ss_failed;uint64_t ss_wait;
+    unsigned stop_phase,ss_stop_phase,ss_published;
+    uint32_t ss_rtc_before,ss_dwc_before;
+    uint64_t stop_deadline,ss_stop_wait;
 };
 /* Zero private platform-lifetime storage before concurrency; dependencies use
  * one clock, registry, rail ledger and register mutex. One designated task owns
@@ -69,6 +72,10 @@ enum a733_usb2_result a733_usb2_platform_poll(struct a733_usb2_platform *);
 int a733_usb2_platform_live(struct a733_usb2_platform *,uint64_t generation,uint64_t deadline);
 int a733_usb2_platform_outside(struct a733_usb2_platform *,const void *,size_t);
 void a733_usb2_platform_lost(struct a733_usb2_platform *);
+/* Original host task, after controller DMA and IRQ quiescence. Restores only
+ * owned local controls and reaps its PMIC observation; shared leases remain.
+ * Returns 1 stopped, 0 pending, -1 fault. The deadline is never extended. */
+int a733_usb2_platform_stop(struct a733_usb2_platform *,uint64_t deadline);
 /* Exact native register/field allowlist shared with source checks. */
 uint32_t a733_usb2_platform_mask(uintptr_t);
 int a733_usb2_platform_address(uintptr_t,unsigned writing);

@@ -20,7 +20,7 @@ static int admit(struct bluetooth_profile *p)
 int main(void)
 {
     assert(admit(&profile)&&digest_calls==1&&digest_bytes==624);
-    profile.version=3;profile.bytes=sizeof(profile);
+    profile.version=3;profile.bytes=832;
     profile.headset=(struct bluetooth_headset_profile){.mode=2,.incoming=1,.peer={1,2,3,4,5,6},
         .minimum_security=2,.server_channel=7,.scheduling_authority=17,.scheduling_evidence={1},
         .receive_latency_us=1000,.response_timeout_us=2000,.samples=24000,.mtu=128,.accept_slots=0x1fa0,
@@ -34,15 +34,15 @@ int main(void)
     puts("{\"version3_admitted\":false,\"digest_calls\":0}");return 0;
 #else
     unsigned refused=0;
-    assert(admit(&profile)&&digest_calls==1&&digest_bytes==sizeof(profile));
+    assert(admit(&profile)&&digest_calls==1&&digest_bytes==profile.bytes);
     struct bluetooth_profile changed=profile;
     changed.recognition.bytes[0]^=1;changed.recognition.sha256[1][0]^=1;
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
     assert(!admit(&changed));
 #else
-    assert(admit(&changed)&&digest_calls==1&&digest_bytes==sizeof(profile));
+    assert(admit(&changed)&&digest_calls==1&&digest_bytes==profile.bytes);
 #endif
-    uint8_t digest[32];__real_storage_digest_bytes(&profile,sizeof(profile),digest);
+    uint8_t digest[32];__real_storage_digest_bytes(&profile,profile.bytes,digest);
     assert(!bluetooth_profile_valid(&changed,digest));
     digest[0]^=1;assert(!bluetooth_profile_valid(&profile,digest));
     assert(!bluetooth_profile_valid(NULL,digest)&&!bluetooth_profile_valid(&profile,NULL));
@@ -68,8 +68,22 @@ int main(void)
 #else
     assert(!admit(&changed));++refused;changed.headset.mode=5;assert(!admit(&changed));++refused;
 #endif
-    assert(admit(&profile)&&digest_calls==1&&digest_bytes==sizeof(profile));
-    printf("{\"version3_admitted\":true,\"digest_calls\":%u,\"digest_bytes\":%zu,\"structural_refusals\":%u}\n",digest_calls,digest_bytes,refused);
+    assert(admit(&profile)&&digest_calls==1&&digest_bytes==profile.bytes);
+    unsigned legacy_refused=refused;
+    profile.version=4;profile.bytes=sizeof(profile);
+    profile.bluetooth_stop=(struct a733_radio_bluetooth_stop){.authority=31,.topology=profile.topology,
+        .wiring_evidence={9},.expected={1,0,0},.inherited_level=0};
+    assert(admit(&profile)&&digest_calls==1&&digest_bytes==888);
+    BAD(bluetooth_stop.authority,0);BAD(bluetooth_stop.topology,3);
+    BAD(bluetooth_stop.expected.function,0);BAD(bluetooth_stop.expected.pull,3);
+    BAD(bluetooth_stop.expected.drive,4);BAD(bluetooth_stop.inherited_level,2);
+    BAD(bluetooth_stop.inherited_level,1);BAD(bluetooth_stop.reserved,1);
+    BAD(pm_latch.known_mask,0);
+    changed=profile;memset(changed.bluetooth_stop.wiring_evidence,0,32);assert(!admit(&changed));++refused;
+    __real_storage_digest_bytes(&profile,profile.bytes,digest);
+    changed=profile;changed.bluetooth_stop.authority++;assert(!bluetooth_profile_valid(&changed,digest));++refused;
+    profile.pm_latch.value=4;profile.bluetooth_stop.inherited_level=1;assert(admit(&profile));
+    printf("{\"version3_admitted\":true,\"version4_admitted\":true,\"digest_calls\":%u,\"digest_bytes\":%zu,\"structural_refusals\":%u,\"stop_refusals\":%u}\n",digest_calls,digest_bytes,legacy_refused,refused-legacy_refused);
     return 0;
 #endif
 }

@@ -84,6 +84,25 @@
 #define SUNSTONE_CRUMB_FAIL_PMIC 0x6u       /* PMIC power service; value: authority word */
 #define SUNSTONE_CRUMB_FAIL_GPU 0x7u        /* GPU failure; value: reason or register status */
 #define SUNSTONE_CRUMB_FAIL_NPU 0xau        /* NPU failure; value: reason or register status */
+/* Registered return faults retain the owner in bits 23:16, the original
+ * group in bits 27:24 and its detail in bits 11:0. The value and caller keep
+ * their original meanings; each descriptor also keeps the original site. */
+#define SUNSTONE_CRUMB_FAIL_QUIESCE 0xcu
+#define SUNSTONE_CRUMB_QUIESCE_NPU 0x0u
+#define SUNSTONE_CRUMB_QUIESCE_GPU 0x1u
+#define SUNSTONE_CRUMB_QUIESCE_USB 0x2u
+#define SUNSTONE_CRUMB_QUIESCE_RADIO 0x3u
+#define SUNSTONE_CRUMB_QUIESCE_AUDIO 0x4u
+#define SUNSTONE_CRUMB_QUIESCE_HEADSET 0x5u
+#define SUNSTONE_CRUMB_QUIESCE_STORAGE 0x6u
+#define SUNSTONE_CRUMB_QUIESCE_DMA 0x7u
+#define SUNSTONE_CRUMB_QUIESCE_CPU_CLOCK 0x8u
+#define SUNSTONE_CRUMB_QUIESCE_THERMAL_OWNER 0x9u
+#define SUNSTONE_CRUMB_QUIESCE_PMIC_OWNER 0xau
+#define SUNSTONE_CRUMB_QUIESCE_TERMINAL_OWNER 0xbu
+#define SUNSTONE_CRUMB_QUIESCE_USB0 0xcu
+#define SUNSTONE_CRUMB_QUIESCE_I2C 0xdu
+#define SUNSTONE_CRUMB_QUIESCE_RTC 0xeu
 #define SUNSTONE_CRUMB_FAIL_USB0 0xbu       /* USB0 guard; layout in sunstone_usb0_stop.h */
 /* Frozen finite NPU images use group 8. The host distinguishes their defined
  * finite return producers from CPU retention using the launched image ELF. */

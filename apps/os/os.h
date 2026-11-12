@@ -175,6 +175,24 @@ void os_dma_irq(void);
 void os_dma0_irq(void);
 int os_dma_return_ready(void);
 #endif
+/* The header I2C class (include/sunstone_i2c.h, apps/os/i2c.c). The generated tables declare the controllers the
+ * application's manifest names; with none, the service touches nothing. */
+struct os_i2c_declaration {uint32_t bus,max_rate_hz;};
+void os_i2c_task(void *);
+int os_i2c_task_privileged(void (*)(void *),void *);
+int os_i2c_pins(struct a733_pin_handoff *);
+int os_i2c_start(void);
+void os_i2c_irq_twi0(void);
+void os_i2c_irq_twi1(void);
+void os_i2c_irq_twi2(void);
+void os_i2c_irq_twi3(void);
+void os_i2c_irq_s_twi2(void);
+/* The RTC class (include/sunstone_rtc.h, apps/os/rtc.c). */
+void os_rtc_task(void *);
+int os_rtc_task_privileged(void (*)(void *),void *);
+int os_rtc_pins(struct a733_pin_handoff *);
+int os_rtc_start(void);
+void os_rtc_irq(void);
 /* The capture stream (audio-stream.h); its start entry is
  * os_audio_stream_open, which the composition calls with the client's
  * configuration. */
@@ -192,11 +210,8 @@ int os_radio_start(void);
 struct board_radio_profile;
 const struct board_radio_profile *os_radio_profile(void);
 #ifdef SUNSTONE_A733_OS_RADIO_SCAN
-/* The scanning radio station (apps/os/radio_scan.c). The radio owner task calls
- * os_radio_scan_step after every board_radio_poll with its result. Once the return has
- * begun, the owner shuts the module down (board_radio_shutdown), publishes the encoded
- * result and a descriptor (include/os_radio_result.h), and os_radio_scan_return_ready
- * reports 1. The CPU return waits for it before it stops the PMIC service. */
+/* The radio owner publishes scan progress and the registered return step's
+ * terminal result through this observer. It starts no shutdown of its own. */
 struct board_radio;
 void os_radio_scan_step(struct board_radio *,int result);
 /* The entropy stage's steps (apps/os/ce_probe.c), driven by os_radio_scan_step when the profile's stage limit is the
@@ -212,8 +227,6 @@ int os_ce_entropy_ready(void);
 int os_ce_entropy_failed(void);
 int os_ce_entropy_bytes(void *,uint8_t *,size_t);
 void os_ce_entropy_wipe(void);
-void os_radio_scan_return_request(void);
-int os_radio_scan_return_ready(void);
 #endif
 /* The headset service (apps/os/headset.c, with the Bluetooth stack and the
  * mSBC codec) is an object library that an image links only when its

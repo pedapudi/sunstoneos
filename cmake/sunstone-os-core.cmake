@@ -45,6 +45,15 @@ include_guard(GLOBAL)
 # retirement is qualified only for that lifetime (the RAM-copy DMA service, the scanning radio station) and the GPU
 # qualification builds make an image that admits the returning lifetime alone (SUNSTONE_A733_OS_RETURN_ONLY).
 set(os_return_only OFF)
+set(os_usb_failure_test OFF)
+if(SUNSTONE_APPLICATION STREQUAL "usb-empty-fail")
+  if(NOT SUNSTONE_A733_OS_USB_CLASSES OR SUNSTONE_A733_OS_USB_JPEG OR SUNSTONE_A733_OS_SD_WRITE OR
+     SUNSTONE_A733_OS_RADIO_SCAN OR SUNSTONE_A733_OS_GPU OR SUNSTONE_A733_OS_DMA)
+    message(FATAL_ERROR "usb-empty-fail requires USB classes without JPEG, SD writes, radio, GPU or DMA")
+  endif()
+  set(os_usb_failure_test ON)
+  set(os_return_only ON)
+endif()
 if(SUNSTONE_A733_OS_DMA OR SUNSTONE_A733_OS_RADIO_SCAN OR SUNSTONE_A733_OS_GPU_RECOVERY_TEST OR SUNSTONE_A733_OS_GPU_BISECT)
   set(os_return_only ON)
 endif()
@@ -52,8 +61,8 @@ if(SUNSTONE_A733_OS_GPU_RECOVERY_TEST AND
    (NOT SUNSTONE_A733_OS_GPU OR NOT SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle"))
   message(FATAL_ERROR "GPU recovery qualification requires the returning GPU lifecycle image")
 endif()
-# The USB class services have no qualified drain for the returning lifetime: their image does not admit it.
-if(SUNSTONE_A733_OS_USB_CLASSES AND os_return_only)
+# Only the empty-port diagnostic selects returning USB class retirement.
+if(SUNSTONE_A733_OS_USB_CLASSES AND os_return_only AND NOT os_usb_failure_test)
   message(FATAL_ERROR "The USB class services exclude the returning lifetime, which this image's options require")
 endif()
 if(SUNSTONE_A733_OS_USB_CLASSES AND NOT SUNSTONE_BOARD_USB2_IRQ)
@@ -125,11 +134,12 @@ list(APPEND os_sources "${os_build}/continue.S")
 # Retained per-core fault records and their previous-boot report
 # (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
 set(os_added apps/os/admission.c apps/os/lifetime.c apps/os/sealed.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
+  kernel/umem/umem_policy.c arch/aarch64/umem_cpu.c
   runtime/cpu_topology_app.c
   apps/os/usb-service.c apps/os/large.c apps/os/large_load.c drivers/storage/sunxi_mmc.c drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c drivers/storage/fat32_ro.c drivers/storage/storage_digest.c drivers/storage/storage_digest_extensions.c drivers/storage/storage_digest_ce.S kernel/appmem/app_region.c kernel/appmem/large_admit.c kernel/umem/umem.c apps/os/application.c apps/os/session.c apps/os/grants.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
   runtime/deadline.c runtime/deadline-a733.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
-  apps/os/thermal.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
+  apps/os/thermal.c apps/os/i2c.c drivers/i2c/a733_i2c_bus.c apps/os/rtc.c drivers/rtc/a733_rtc.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
   drivers/thermal/a733_thermal_native.c drivers/gpu/gicv3_spi.c platform/a733/fault.S platform/a733/fault.c)
 if(SUNSTONE_A733_OS_SD_WRITE)
   # One SD0 owner task serves the loader's reads and the FAT32 write service (apps/os/sd_owner.c); the SD core is built with its write path.
@@ -138,10 +148,8 @@ endif()
 set(os_patches "${os_root}/apps/os/boot.patch" "${os_root}/apps/os/continue-sealed.patch" "${os_root}/apps/os/vectors.patch")
 set(os_link_base "${storage_build}/link.ld")
 if(SUNSTONE_A733_OS_USB_CLASSES)
-  apply_build_patch("${os_build}/link-usb.ld" "${storage_build}/link.ld"
-    "${os_root}/apps/os/usb-memory-link.patch")
-  list(APPEND os_patches "${os_root}/apps/os/usb-memory-link.patch")
-  set(os_link_base "${os_build}/link-usb.ld")
+  list(REMOVE_ITEM os_sources "${os_root}/platform/a733/memory_uncached.c")
+  list(APPEND os_added apps/os/usb-memory.c)
 endif()
 # The sealed session's section, last in the read-only CODE block (apps/os/sealed.c).
 apply_build_patch("${os_build}/link-os.ld" "${os_link_base}" "${os_root}/apps/os/sealed-link.patch")
@@ -316,7 +324,7 @@ foreach(pair "return-runtime.c|return-runtime|${os_qualification}/runtime.c"
   list(APPEND os_patches "${patch_file}")
   list(APPEND os_external_inputs "${original}")
 endforeach()
-list(APPEND os_added apps/os/cpu-return.c apps/os/cpu-return-el0.S apps/os/cpu-return-spi.c apps/os/cpu-return-entry.c)
+list(APPEND os_added apps/os/quiesce.c apps/os/cpu-return.c apps/os/cpu-return-el0.S apps/os/cpu-return-spi.c apps/os/cpu-return-entry.c)
 list(APPEND os_include_dirs "${os_build}")
 list(APPEND os_external_inputs "${os_qualification}/runtime.h" "${os_build}/cpu-return-runtime.h")
 if(SUNSTONE_A733_OS_USB_JPEG)
@@ -453,7 +461,8 @@ if(SUNSTONE_A733_OS_USB_JPEG)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_USB_JPEG=1)
 endif()
 if(SUNSTONE_A733_OS_USB_CLASSES)
-  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_USB_CLASSES=1 SUNSTONE_USB_HOST_GENERIC=1 SUNSTONE_USB_APP_ALIAS=1)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_USB_CLASSES=1 SUNSTONE_USB_HOST_GENERIC=1 SUNSTONE_USB_APP_ALIAS=1 SUNSTONE_USB_LEDGER_MEMORY=1)
+  target_compile_definitions(a733-board-usb2-host PRIVATE SUNSTONE_USB_LEDGER_MEMORY=1)
   if(NOT SUNSTONE_A733_OS_USB_JPEG)
     # The retained JPEG adapter still needs owner passes for setup and copied
     # readout. Enable its precise wait only after IRQ81 and readiness are wired.
@@ -462,6 +471,7 @@ if(SUNSTONE_A733_OS_USB_CLASSES)
 endif()
 target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_TASK_DEADLINES=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
   SUNSTONE_CRUMBS=1
+  "$<$<BOOL:${os_usb_failure_test}>:SUNSTONE_A733_USB_FAILURE_TEST=1>"
   "$<$<BOOL:${os_return_only}>:SUNSTONE_A733_OS_RETURN_ONLY=1>"
   "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_SCAN}>:SUNSTONE_A733_OS_RADIO_SCAN=1>")
@@ -606,6 +616,9 @@ foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE
     set_property(TARGET sunstone-os-settings PROPERTY INTERFACE_${property} "${value}")
   endif()
 endforeach()
+if(SUNSTONE_A733_OS_USB_CLASSES)
+  target_compile_definitions(sunstone-os-settings INTERFACE SUNSTONE_USB_LEDGER_MEMORY=1)
+endif()
 # Keep libraries with their existing device owner. The main core is built even
 # when no application is selected; descriptors and result storage belong to images.
 file(GLOB os_headers "${os_root}/apps/os/*.h")
@@ -618,6 +631,8 @@ if(SUNSTONE_A733_OS_USB_JPEG)
   list(APPEND os_headers "${os_root}/apps/jpeg/native-shared.h" "${os_root}/include/sunstone_usb_jpeg.h")
 endif()
 set(os_inputs ${board_inputs} ${os_sources} ${os_headers} ${os_generated} ${os_patches} ${os_external_inputs}
+  "${os_root}/include/os_memory_tables.h" "${os_root}/include/umem.h"
+  "${os_root}/include/umem_policy.h" "${os_root}/include/umem_cpu.h"
   "${os_root}/platform/a733-smp-cached/irq_table.h" "${os_root}/include/a733_fault.h"
   "${os_root}/include/a733_thermal.h" "${os_root}/include/a733_thermal_native.h"
   "${os_root}/include/gicv3_spi.h" "${os_root}/include/sunstone_deadline.h" "${CMAKE_CURRENT_LIST_FILE}")

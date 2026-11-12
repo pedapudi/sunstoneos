@@ -2,7 +2,7 @@
 #define SUNSTONE_BT_HCI_H
 #include "bt_h4.h"
 
-enum bt_hci_state { BT_HCI_CLOSED, BT_HCI_INITIALIZING, BT_HCI_IDENTIFIED, BT_HCI_FAULT, BT_HCI_CONFIGURING };
+enum bt_hci_state { BT_HCI_CLOSED, BT_HCI_INITIALIZING, BT_HCI_IDENTIFIED, BT_HCI_FAULT, BT_HCI_CONFIGURING, BT_HCI_STOPPED };
 enum bt_hci_command_state { BT_HCI_IDLE, BT_HCI_SENDING, BT_HCI_WAITING };
 struct bt_hci_identity {
     uint8_t version[8], supported_commands[64], features[8], buffer_size[7], address[6];
@@ -39,6 +39,8 @@ struct bt_hci {
     uint64_t initialization_deadline, command_timeout_us, command_deadline, command_tag;
     uint16_t opcode;
     unsigned stage, credits, command_accepted, external_command;
+    uint64_t return_deadline;
+    unsigned scan_requested, scan_complete, stop_requested, return_command;
     uint8_t last_status;
     enum bt_hci_command_state command;
     enum bt_hci_state state;
@@ -80,8 +82,24 @@ int bt_hci_configuration_complete(const struct bt_hci *);
  * Read Remote Features, synchronous buffers and required credit/error-report
  * commands. Returns1 supported,0 otherwise; no I/O or mutation. */
 int bt_hci_synchronous_supported(const struct bt_hci *);
+/* Return requests perform no I/O. They stop automatic initialization/configuration
+ * after the accepted command and keep its original deadline. Step sends Write
+ * Scan Enable(0), then matches its successful Command Complete. Existing lower
+ * owners may still send teardown traffic after scan-disable. Requests return1
+ * accepted/idempotent,-1 invalid/fault; status returns1 proved,0 pending,-1 fault.
+ * Repeated requests can shorten, never renew, the absolute return deadline. */
+int bt_hci_scan_disable(struct bt_hci *,uint64_t deadline);
+int bt_hci_scan_disabled(const struct bt_hci *);
+/* The caller first proves ACL, synchronous and security owners retired. Stop
+ * closes command admission permanently. Reset waits for no accepted command,
+ * security acknowledgement, borrowed frame or retained RX record. Its tagged
+ * successful Command Complete and empty transport prove protocol retirement,
+ * not a silent UART peer. No step performs I/O after BT_HCI_STOPPED. */
+int bt_hci_stop(struct bt_hci *,uint64_t deadline);
+int bt_hci_stopped(const struct bt_hci *);
 /* Post-identification leaf commands: Create Connection (0x0405,13 bytes) and
- * Disconnect (0x0406,3 bytes), Accept Connection Request (0x0409,7 bytes),
+ * Disconnect (0x0406,3 bytes), Create Connection Cancel (0x0408,6 bytes),
+ * Accept Connection Request (0x0409,7 bytes),
  * Reject Connection Request (0x040a,7 bytes). A registered synchronous owner
  * also uses Read Remote Features0x041b/2, Enhanced Setup0x043d/59,
  * Enhanced Accept0x043e/63 and Reject Synchronous0x042a/7 after audio config.
@@ -112,7 +130,8 @@ int bt_hci_security_request(struct bt_hci *,const void *owner,uint16_t opcode,
  * retain Status/refusal records for the link owner and its terminal event.
  * Tagging records at UART acquisition prevents already-acquired bytes from
  * satisfying a later command. H4 drains preexisting FIFO/staging bytes before
- * transmission; it cannot timestamp bytes arriving between observations. No opcode is reused within this initialization lifetime. */
+ * transmission; it cannot timestamp bytes arriving between observations. The
+ * bootstrap sequence never reuses an opcode; return commands use fresh tags. */
 int bt_hci_step(struct bt_hci *, unsigned budget, uint64_t deadline);
 /* Exposes earliest retained unsolicited event or ACL/SCO/ISO packet. Data bytes
  * and raw flags are unchanged; no ACL reassembly, audio decoding, link/security

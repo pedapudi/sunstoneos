@@ -52,7 +52,7 @@ static void recognition_exchange(const uint8_t request[8])
 {
     size_t bytes=request[2]|(unsigned)request[3]<<8;
     uint32_t offset=request[4]|(uint32_t)request[5]<<8|(uint32_t)request[6]<<16|(uint32_t)request[7]<<24;
-    if(request[1]||!bytes||bytes>1024||bluetooth.profile->version!=3)stop();
+    if(request[1]||!bytes||bytes>1024||(bluetooth.profile->version!=3&&bluetooth.profile->version!=4))stop();
     struct bluetooth_recognition_snapshot s;size_t copied;uint8_t text[1024];
     int r=bluetooth_recognition_copy(&bluetooth,offset,bytes,text,&copied,&s);
     memset(identity_frame,0,sizeof(identity_frame));

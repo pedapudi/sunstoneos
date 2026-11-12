@@ -10,6 +10,7 @@ static struct native_port ports[SS_USB_SERIAL_PORTS];
 static struct sunstone_usb_transport *transport;
 static struct { unsigned port; uint64_t token, core_token; const uint8_t *data; size_t bytes; bool deferred; } loan;
 static uint64_t sequence;
+static bool stopping;
 static struct { bool busy; unsigned port; uint64_t sequence; uint64_t token; bool borrowed; } tx;
 struct config { bool busy, flow; unsigned step; int result; cdc_line_coding_t line; };
 static struct config configs[SS_USB_SERIAL_PORTS];
@@ -28,7 +29,7 @@ int os_usb_serial_native_start(struct sunstone_usb_transport *t) {
  transport=t; return 1;
 }
 bool sunstone_serial_prepare(unsigned n,uint8_t address,uint8_t in,uint8_t out) {
- if(!transport || n>=SS_USB_SERIAL_PORTS || (tx.busy && tx.port==n) || configs[n].busy || !transport->ops->acquire || !transport->ops->release) return false;
+ if(stopping || !transport || n>=SS_USB_SERIAL_PORTS || (tx.busy && tx.port==n) || configs[n].busy || !transport->ops->acquire || !transport->ops->release) return false;
  /* Retired callbacks retain the old address until quiescence and release. */
  if(!ss_usb_serial_backend(n,&buffer_ops,NULL)) return false;
  ports[n]=(struct native_port){address,in,out,false}; return true;
@@ -42,7 +43,7 @@ void ss_usb_serial_changed(unsigned n,bool attached) {
  }
 }
 static void publish(void) {
- if(loan.token) return;
+ if(stopping || loan.token) return;
  for(unsigned n=0;n<SS_USB_SERIAL_PORTS;n++) {
   struct ss_usb_serial_view v;
   if(!ss_usb_serial_peek(n,&v)) continue;
@@ -61,7 +62,7 @@ void os_usb_serial_native_release(uint64_t token) {
  if(tx.busy && tx.borrowed) { loan.deferred=true; return; }
  unsigned n=loan.port;
  ss_usb_serial_rx_release(n,loan.core_token); loan.token=0;
- (void)sunstone_cdch_rx_start((uint8_t)n); publish();
+ if(!stopping) { (void)sunstone_cdch_rx_start((uint8_t)n); publish(); }
 }
 static void write_done(void *ctx,unsigned status,size_t bytes) {
  (void)ctx;
@@ -72,7 +73,7 @@ static void write_done(void *ctx,unsigned status,size_t bytes) {
  if(loan.deferred) os_usb_serial_native_release(loan.token);
 }
 int os_usb_serial_native_write(uint64_t seq,const void *data,size_t bytes) {
- if(!transport || !data || !bytes || bytes>SS_USB_SERIAL_BUFFER) return -1;
+ if(stopping || !transport || !data || !bytes || bytes>SS_USB_SERIAL_BUFFER) return -1;
  if(tx.busy) return 0;
  for(unsigned n=0;n<SS_USB_SERIAL_PORTS;n++) if(ports[n].attached) {
   if(loan.token && loan.port==n && (uintptr_t)data>=(uintptr_t)loan.data &&
@@ -113,7 +114,7 @@ static void configured(tuh_xfer_t *x) {
  if(!ok) { c->busy=false; c->result=-1; }
 }
 int os_usb_serial_native_config(unsigned n,uint32_t baud,unsigned bits,unsigned parity,unsigned stop,bool flow) {
- if(n>=SS_USB_SERIAL_PORTS || !ports[n].attached || configs[n].busy || !baud || bits<5 || bits>8 || parity>4 || stop>2) return -1;
+ if(stopping || n>=SS_USB_SERIAL_PORTS || !ports[n].attached || configs[n].busy || !baud || bits<5 || bits>8 || parity>4 || stop>2) return -1;
  struct config *c=&configs[n];
  *c=(struct config){.busy=true,.flow=flow,.line={baud,(uint8_t)stop,(uint8_t)parity,(uint8_t)bits}};
  if(!tuh_cdc_set_line_coding((uint8_t)n,&c->line,configured,n)) { c->busy=false; c->result=-1; return -1; }
@@ -144,4 +145,15 @@ void os_usb_serial_native_quiesced(unsigned n) {
 }
 void os_usb_serial_native_quiesce(uint8_t address) {
  for(unsigned n=0;n<SS_USB_SERIAL_PORTS;n++) if(ports[n].address==address) os_usb_serial_native_quiesced(n);
+}
+/* Original host task, only after the controller halt proof. Detaching the
+ * software class and completing canceled OUT work permits ordinary token
+ * release, while stopping prevents that release from refilling RX. */
+void os_usb_serial_native_stopped(void) {
+ if(stopping || !transport) return;
+ stopping=true;
+ for(unsigned n=0;n<SS_USB_SERIAL_PORTS;n++) {
+  if(ports[n].attached) ss_usb_serial_detach(n);
+  os_usb_serial_native_quiesced(n);
+ }
 }

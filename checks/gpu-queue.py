@@ -64,7 +64,14 @@ CASES = {1: 'grid replay, exact sums', 2: 'grid replay, pattern sums', 3: 'grid 
          65: 'admitted KCCB preserves full-ring and reserved-slot backpressure',
          66: 'admitted KCCB view is revoked on close and restored after fresh READY',
          67: 'uncertain admitted doorbell preserves the accepted batch prefix',
-         68: 'idle direct queue preserves the forced-idle hold deadline'}
+         68: 'idle direct queue preserves the forced-idle hold deadline',
+         69: 'failure return of an idle compute queue',
+         70: 'failure return discards one completed output',
+         71: 'failure return retains an unfinished caller reservation',
+         72: 'failure return before the first GPU open',
+         73: 'failure return waits for an interrupt-completed direct job',
+         74: 'failure return preserves lost queue ownership',
+         75: 'failure return preserves a producer transport lock'}
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
            'advance', 'external', 'now', 'gpu_queue_submit', 'gpu_queue_wait', 'kick',
@@ -255,10 +262,10 @@ def main():
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
     performance = any(25 <= c <= 30 or c==68 for c in args.cases)
-    returning = any(31 <= c <= 33 for c in args.cases)
+    returning = any(31 <= c <= 33 or 69 <= c <= 75 for c in args.cases)
     recovery = any(41 <= c <= 49 or c==52 for c in args.cases)
     assert not recovery or all(41 <= c <= 49 or c==52 for c in args.cases) and not args.trace
-    assert not returning or all(31 <= c <= 33 for c in args.cases) and not args.trace
+    assert not returning or all(31 <= c <= 33 or 69 <= c <= 75 for c in args.cases) and not args.trace
     assert not performance or all(25 <= c <= 30 or c==68 for c in args.cases) and not args.trace
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)

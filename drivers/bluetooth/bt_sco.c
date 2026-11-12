@@ -139,7 +139,7 @@ static void disconnect_commit(void *ctx,const struct bt_h4_record *r)
 {
     struct bt_sco *q=ctx;const uint8_t *p=r->storage.bytes;struct bt_sco_link *l=handle(q,le16(p+3));
     l->status=p[2];l->reason=p[5];
-    if(p[2])l->phase=BT_SCO_OPEN;
+    if(p[2]){l->phase=BT_SCO_OPEN;if(q->stop_deadline)(void)fault(q,BT_SCO_REFUSED);}
     else {l->local_closed=l->phase==BT_SCO_DISCONNECT_WAIT && r->serial>l->acknowledgement;
         l->phase=BT_SCO_CLOSED;l->closed_after=r->serial;
         for(unsigned i=0;i<BT_SCO_PACKETS;++i){struct bt_sco_packet *t=&q->tx[i];if(t->link!=l->generation)continue;
@@ -171,6 +171,7 @@ static unsigned profile(struct bt_sco *q,struct bt_sco_link *l,unsigned type)
 static int completed_failure(struct bt_sco *q,struct bt_sco_link *l,unsigned status)
 {
     l->status=(uint8_t)status;q->command_link=BT_SCO_LINKS;
+    if(q->stop_deadline){l->phase=BT_SCO_CLOSED;return 1;}
     /* Retry only the finite HFP transport fallback after an actual terminal
      * setup event. Command refusal and timeout do not enter this path. */
     if(l->codec==2){
@@ -215,10 +216,12 @@ static int synchronous_event(void *ctx,const struct bt_h4_record *r)
     if(event==0x0f || event==0x0e){
         if(q->refuse==2 && le16(p+(event==0x0f ? 4 : 3))==0x042a && r->tag==q->refuse_tag){
             if(q->acl->hci->command!=BT_HCI_IDLE)return fault(q,BT_SCO_PROTOCOL);
+            if(q->stop_deadline&&p[event==0x0f?2:5])return fault(q,BT_SCO_REFUSED);
             /* A refused reject means the controller already ended the request.
              * An accepted one waits a bounded time for its failed completion. */
             q->refuse=p[event==0x0f ? 2 : 5] ? 0 : 3;q->refuse_acknowledgement=r->serial;
-            q->refuse_deadline=a733_deadline_after_saturating(q->now,q->binding.response_timeout_us);return release(q,r);
+            if(!q->stop_deadline)q->refuse_deadline=a733_deadline_after_saturating(q->now,q->binding.response_timeout_us);
+            return release(q,r);
         }
         if(q->command_link>=BT_SCO_LINKS)return 0;
         struct bt_sco_link *l=&q->links[q->command_link];
@@ -230,6 +233,7 @@ static int synchronous_event(void *ctx,const struct bt_h4_record *r)
         if(q->acl->hci->command!=BT_HCI_IDLE)return fault(q,BT_SCO_PROTOCOL);
         l->status=p[event==0x0f ? 2 : 5];l->acknowledgement=r->serial;
         if(l->status){
+            if(q->stop_deadline&&(l->phase==BT_SCO_DISCONNECT_STATUS||l->phase==BT_SCO_REJECT_STATUS))return fault(q,BT_SCO_REFUSED);
             l->phase=l->phase==BT_SCO_DISCONNECT_STATUS ? BT_SCO_OPEN : BT_SCO_CLOSED;
             q->command_link=BT_SCO_LINKS;
         }else ++l->phase; /* Each STATUS enum is followed by its WAIT. */
@@ -328,7 +332,7 @@ int bt_sco_init(struct bt_sco *q,struct bt_acl *a,const struct bt_sco_binding *b
 }
 int bt_sco_open(struct bt_sco *q,const struct bt_hfp_ag *ag,unsigned listening,uint64_t deadline,uint64_t *id)
 {
-    if(!valid(q) || !ag || listening>1 || !external(q,ag,sizeof(*ag)) || !external(q,id,sizeof(*id)) ||
+    if(!valid(q) || q->stop_deadline || !ag || listening>1 || !external(q,ag,sizeof(*ag)) || !external(q,id,sizeof(*id)) ||
        !bt_range_disjoint(ag,sizeof(*ag),id,sizeof(*id)) || deadline<=q->acl->hci->transport.now)return -1;
     struct bt_sco_security s={0};
     if((ag->local_codecs&&(ag->hf_features&128)&&!ag->selected_codec)||
@@ -346,7 +350,7 @@ int bt_sco_open(struct bt_sco *q,const struct bt_hfp_ag *ag,unsigned listening,u
 }
 int bt_sco_reopen(struct bt_sco *q,uint64_t old,uint64_t deadline,uint64_t *id)
 {
-    if(!valid(q)||!external(q,id,sizeof(*id))||deadline<=q->acl->hci->transport.now||
+    if(!valid(q)||q->stop_deadline||!external(q,id,sizeof(*id))||deadline<=q->acl->hci->transport.now||
        !q->next_link||q->next_link==UINT64_MAX)return -1;
     struct bt_sco_link *l=link(q,old);struct bt_sco_security security={0};
     if(!l||l->phase!=BT_SCO_CLOSED||!l->local_closed||!l->closed_after||!l->handle_valid||
@@ -375,7 +379,7 @@ int bt_sco_reopen(struct bt_sco *q,uint64_t old,uint64_t deadline,uint64_t *id)
 }
 int bt_sco_retry_cvsd(struct bt_sco *q,uint64_t old,uint64_t deadline,uint64_t *id)
 {
-    if(!valid(q)||!external(q,id,sizeof(*id))||deadline<=q->acl->hci->transport.now)return -1;
+    if(!valid(q)||q->stop_deadline||!external(q,id,sizeof(*id))||deadline<=q->acl->hci->transport.now)return -1;
     struct bt_sco_link *l=link(q,old);struct bt_sco_security security={0};
     if(!l||l->codec!=2||!l->fallback_allowed||l->phase!=BT_SCO_CLOSED||l->handle_valid||
        l->ag->selected_codec!=1||!ag_current(q,l->ag,l->acl_generation,l->channel,&security)||
@@ -398,13 +402,27 @@ static void parameters(const struct bt_sco_link *l,uint8_t *p)
     const unsigned latency[]={0,7,12,5,4,8,13};
     put16(x+52,latency[l->profile]);put16(x+54,masks[l->profile]);x[56]=l->codec==2?2:l->profile==1 ? 1 : l->profile==2 ? 2 : 0;
 }
-int bt_sco_step(struct bt_sco *q,unsigned budget,uint64_t deadline)
+static int stopping(struct bt_sco *q)
 {
-    if(!valid(q) || !budget || budget>BT_H4_BUDGET || !deadline)return -1;
+    if(!q->stop_deadline)return 1;
+    if(q->now>=q->stop_deadline)return fault(q,BT_SCO_EXPIRED);
+    for(unsigned i=0;i<BT_SCO_LINKS;++i){struct bt_sco_link *l=&q->links[i];
+        if(l->phase==BT_SCO_FEATURE_QUEUED||l->phase==BT_SCO_LISTENING||l->phase==BT_SCO_SETUP_QUEUED){
+            if(l->requested){l->reason=0x0d;l->phase=BT_SCO_REJECT_QUEUED;}
+            else l->phase=BT_SCO_CLOSED;
+        }else if(l->phase==BT_SCO_OPEN&&q->stop_close&&q->active_tx==BT_SCO_PACKETS){
+            l->deadline=q->stop_deadline;l->phase=BT_SCO_DISCONNECT_QUEUED;
+        }
+        if(l->phase!=BT_SCO_UNUSED&&l->phase!=BT_SCO_CLOSED&&l->deadline>q->stop_deadline)
+            l->deadline=q->stop_deadline;
+    }
+    for(unsigned i=0;i<BT_SCO_PACKETS;++i)if(q->tx[i].state==BT_SCO_QUEUED)q->tx[i].state=BT_SCO_NOT_SENT;
+    if(q->refuse&&q->now>=q->refuse_deadline)return fault(q,BT_SCO_EXPIRED);
+    return 1;
+}
+int bt_sco_service(struct bt_sco *q)
+{
     if(prepare(q)!=1)return -1;
-    for(unsigned i=0;i<BT_SCO_LINKS;++i)if(q->links[i].phase!=BT_SCO_UNUSED && q->links[i].phase!=BT_SCO_CLOSED &&
-        q->links[i].phase!=BT_SCO_OPEN && deadline>q->links[i].deadline)deadline=q->links[i].deadline;
-    if(bt_acl_step(q->acl,budget,deadline)!=1)return fault(q,BT_SCO_LOWER);
     /* A full copied RX pool leaves the exact lower record owned. Retry bounded
      * classified records once capacity returns, preserving serial order. */
     struct bt_h4 *h=&q->acl->hci->transport;
@@ -412,7 +430,7 @@ int bt_sco_step(struct bt_sco *q,unsigned budget,uint64_t deadline)
     for(unsigned i=0;i<h->count;++i){const struct bt_h4_record *c=&h->records[i];
         if(c->owner==BT_H4_OWNED && c->type==3 && q->held_rx[i]==c->serial && c->serial<=q->acl->seen_record && (!r || c->serial<r->serial))r=c;}
     if(r && synchronous_event(q,r)<0)return -1;
-    if(prepare(q)!=1)return -1;
+    if(stopping(q)!=1)return -1;
     if(q->active_tx<BT_SCO_PACKETS || q->acl->active_tx<BT_ACL_TX_SLOTS ||
        q->acl->hci->command!=BT_HCI_IDLE || q->acl->command_link<BT_ACL_LINKS)return 1;
     /* A refusal past its response bound is left to the controller timeout,
@@ -420,7 +438,10 @@ int bt_sco_step(struct bt_sco *q,unsigned budget,uint64_t deadline)
     if((q->refuse==1 || q->refuse==3) && q->now>=q->refuse_deadline)q->refuse=0;
     if(q->command_link==BT_SCO_LINKS && q->refuse==1){
         uint8_t p[7];for(unsigned j=0;j<6;++j)p[j]=q->refuse_address[j];p[6]=0x0d;
-        int result=bt_hci_synchronous_request(q->acl->hci,q,0x042a,p,7,a733_deadline_after_saturating(q->now,q->binding.response_timeout_us));
+        uint64_t bound=a733_deadline_after_saturating(q->now,q->binding.response_timeout_us);
+        if(q->stop_deadline&&bound>q->refuse_deadline)bound=q->refuse_deadline;
+        if(q->stop_deadline&&bound>q->stop_deadline)bound=q->stop_deadline;
+        int result=bt_hci_synchronous_request(q->acl->hci,q,0x042a,p,7,bound);
         if(result<0)return fault(q,BT_SCO_LOWER);
         if(result==1){q->refuse=2;q->refuse_tag=q->acl->hci->command_tag;}
         return 1;
@@ -448,9 +469,19 @@ int bt_sco_step(struct bt_sco *q,unsigned budget,uint64_t deadline)
     if(accepted<0)return fault(q,BT_SCO_LOWER);
     if(accepted==1){--q->credits;t->state=BT_SCO_PARTIAL;q->active_tx=index;}return 1;
 }
+int bt_sco_step(struct bt_sco *q,unsigned budget,uint64_t deadline)
+{
+    if(!valid(q) || !budget || budget>BT_H4_BUDGET || !deadline)return -1;
+    if(prepare(q)!=1||stopping(q)!=1)return -1;
+    if(q->stop_deadline&&deadline>q->stop_deadline)deadline=q->stop_deadline;
+    for(unsigned i=0;i<BT_SCO_LINKS;++i)if(q->links[i].phase!=BT_SCO_UNUSED&&q->links[i].phase!=BT_SCO_CLOSED&&
+        q->links[i].phase!=BT_SCO_OPEN&&deadline>q->links[i].deadline)deadline=q->links[i].deadline;
+    if(bt_acl_step(q->acl,budget,deadline)!=1)return fault(q,BT_SCO_LOWER);
+    return bt_sco_service(q);
+}
 int bt_sco_send(struct bt_sco *q,uint64_t generation,const uint8_t *bytes,size_t n,uint64_t deadline,uint64_t *serial)
 {
-    if(!valid(q) || !n || n>255 || n>q->mtu || deadline<=q->acl->hci->transport.now ||
+    if(!valid(q) || q->stop_deadline || !n || n>255 || n>q->mtu || deadline<=q->acl->hci->transport.now ||
        !external(q,bytes,n) || !external(q,serial,sizeof(*serial)) || !bt_range_disjoint(bytes,n,serial,sizeof(*serial)))return -1;
     struct bt_sco_link *l=link(q,generation);if(!l || l->phase!=BT_SCO_OPEN || (l->codec!=2&&((n&1)||n>254)))return -1;
     if(prepare(q)!=1)return -1;
@@ -485,4 +516,25 @@ int bt_sco_close(struct bt_sco *q,uint64_t generation,uint64_t deadline)
     if(!valid(q) || deadline<=q->acl->hci->transport.now)return -1;
     struct bt_sco_link *l=link(q,generation);if(!l || l->phase!=BT_SCO_OPEN)return -1;
     if(prepare(q)!=1)return -1;l->deadline=deadline;l->phase=BT_SCO_DISCONNECT_QUEUED;return 1;
+}
+int bt_sco_close_admission(struct bt_sco *q,uint64_t deadline)
+{
+    if(!valid(q)||deadline<=q->acl->hci->transport.now)return -1;
+    if(!q->stop_deadline||deadline<q->stop_deadline)q->stop_deadline=deadline;
+    return stopping(q);
+}
+int bt_sco_stop(struct bt_sco *q,uint64_t deadline)
+{
+    if(bt_sco_close_admission(q,deadline)!=1)return -1;
+    q->stop_close=1;return stopping(q);
+}
+int bt_sco_quiescent(const struct bt_sco *q)
+{
+    if(!valid(q)||!q->stop_deadline)return -1;
+    if(!q->stop_close)return 0;
+    if(q->command_link<BT_SCO_LINKS||q->active_tx<BT_SCO_PACKETS||q->refuse||q->credits!=q->capacity)return 0;
+    for(unsigned i=0;i<BT_SCO_LINKS;++i)if(q->links[i].phase!=BT_SCO_UNUSED&&q->links[i].phase!=BT_SCO_CLOSED)return 0;
+    for(unsigned i=0;i<BT_SCO_PACKETS;++i)if(q->tx[i].state!=BT_SCO_FREE||q->rx[i].state!=BT_SCO_FREE)return 0;
+    for(unsigned i=0;i<BT_H4_SLOTS;++i)if(q->held_rx[i])return 0;
+    return 1;
 }

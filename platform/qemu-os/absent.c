@@ -62,6 +62,9 @@ int board_radio_profile_runtime(struct board_radio_profile *o, const struct boar
 uint32_t os_cpu_return_entry_refusal;
 int os_cpu_return_requested(void) { return 0; }
 int os_cpu_return_failing(void) { return 0; }
+uint64_t os_cpu_return_deadline_us(void) { return 0; }
+int os_cpu_return_pmic_fault(uint32_t site,uint32_t value,const void *caller)
+{ (void)site;(void)value;(void)caller;return 0; }
 uint64_t os_cpu_return_cutoff(void) { return UINT64_MAX; }
 int os_cpu_return_start(void) { ABSENT("cpu return start"); }
 void os_cpu_return_begin(const uint8_t *data, size_t bytes) { (void)data; (void)bytes; ABSENT("cpu return begin"); }
@@ -70,3 +73,8 @@ int os_cpu_return_devices_ready(void) { ABSENT("cpu return devices"); }
 int os_cpu_return_entry_guard(const struct a733_cpu_clock *c, const struct a733_thermal_policy *p, uint64_t now,
     int (*read)(void *, uintptr_t, uint32_t *), void *context)
 { (void)c; (void)p; (void)now; (void)read; (void)context; ABSENT("cpu return entry guard"); }
+
+/* The virtual board does not grant the physical radio. */
+struct board_radio;
+int board_radio_shutdown(struct board_radio *radio,uint64_t deadline)
+{ (void)radio;(void)deadline;return 0; }

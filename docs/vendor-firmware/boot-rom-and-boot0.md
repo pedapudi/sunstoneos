@@ -235,8 +235,8 @@ The curated inventories are [`boot0-functions.json`](data/boot0-functions.json),
 ### Entry contract
 
 The ROM enters boot0 at `0x47000`, which branches to the reset stub at `0x47b00`.
-The stub enters AArch32 supervisor mode, clears the MMU-enable, alignment and
-data-cache bits of SCTLR and sets the instruction-cache bit, sets the stack to
+The stub enters AArch32 supervisor mode, clears the MMU-enable, alignment,
+data-cache and instruction-cache bits of SCTLR, sets the stack to
 `0x8d000`, clears the BSS and calls `main` at `0x5e158` (observed,
 `829ea8e3@0x47b00`–`0x47b5c`). boot0 therefore expects to start with
 caches and translation off and a usable SRAM stack; SunstoneOS's RAM wrapper

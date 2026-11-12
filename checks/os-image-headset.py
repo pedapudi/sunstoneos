@@ -12,7 +12,8 @@ model follows that build's lifetime, and runs each mode under unicorn. Modes 0 a
 (workloads 0 and 4) and for one that grants it (workload 1):
 
 - 0: the pin entry admits the nominal profile and adds PG0..PG9, PM0, PM1, PM3,
-  PM4 and the profile's PM latch; it refuses pins already held, other
+  PM4 and the profile's PM latch; version 4 also adds explicit PM2 authority.
+  It refuses pins already held, other
   workloads, headset modes other than CVSD (2) and mSBC (3) and
   profile versions, another SID authority or profile digest, owners that
   collide with a board, thermal or each other's owner, another topology or
@@ -48,7 +49,19 @@ model follows that build's lifetime, and runs each mode under unicorn. Modes 0 a
   capture deadline, backlog or loss ends the session;
 - 9: a wideband (mSBC) segment becomes a 16 kHz WAV unchanged and an unknown
   capture state is refused;
-- 10: workload 0 admits the headset button only (ACCEPT), also after a cancel.
+- 10: workload 0 admits the headset button only (ACCEPT), also after a cancel;
+- 11, 14: failed and normal returns only notify from the supervisor callback.
+  The original owner receives the common absolute deadline, remains pending
+  through delayed cleanup, then publishes completion. No application call
+  follows DONE;
+- 12: a fault before the ordered callback remains FAULT after an attempted
+  completion and performs no owner work;
+- 13, 17: failed and normal returns preserve an owner-side stop fault and its
+  code. The supervisor does not invoke the failing application;
+- 15: the shared owner forwards protocol release and independent Bluetooth
+  reset proof. A descriptor fault stays negative, and an ungranted headset
+  leaves the module callbacks inert;
+- 16: a missing owner reports FAULT without invoking Bluetooth.
 
 No device, UART, radio or Bluetooth controller is modeled.
 """
@@ -67,16 +80,20 @@ ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--build', '{build:headset}', '--output', '{output}']]
 CASES = ['pins-and-startup', 'keyboard-generations', 'request-after-publication', 'refused-borrow',
          'request-rules', 'refused-request', 'failed-application', 'owner-iteration',
-         'stopped-capture', 'wideband-segment', 'button-only-workload']
+         'stopped-capture', 'wideband-segment', 'button-only-workload',
+         'failure-return-owner-completes', 'failure-before-ordered-step',
+         'failure-return-owner-fault', 'normal-return-owner-completes',
+         'shared-module-proof-callbacks', 'return-without-owner', 'normal-return-owner-fault']
 # Bit 8 of the mode: the session grants the radio, so the headset shares the radio's module owner.
 RADIO = 0x100
-# Bit 9: the session's admitted lifetime is resident; without it, supervised. The two cases that depend on the lifetime run
-# in both.
+# Bit 9 selects a resident session; lifetime-dependent cases run in both modes.
 RESIDENT = 0x200
 RUNS = [(mode, case) for mode, case in enumerate(CASES)] + \
     [(RADIO | CASES.index(case), case + '-with-radio') for case in ('pins-and-startup', 'owner-iteration')] + \
+    [(RADIO | mode, CASES[mode] + '-with-radio') for mode in (11, 13, 14, 17)] + \
     [(RESIDENT | radio | CASES.index(case), case + ('-with-radio' if radio else '') + '-resident')
-     for case in ('pins-and-startup', 'owner-iteration') for radio in (0, RADIO)]
+     for case in ('pins-and-startup', 'owner-iteration', 'failure-return-owner-completes',
+                  'normal-return-owner-completes') for radio in (0, RADIO)]
 
 
 def main():
@@ -89,7 +106,8 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     commands = json.loads((args.build / 'compile_commands.json').read_text())
     unit = next(u for u in commands if u['file'].endswith('/apps/os/headset.c'))
-    flags = shlex.split(unit['command'])
+    compiled_root = str(Path(unit['file']).resolve().parents[2])
+    flags = [flag.replace(compiled_root, str(ROOT)) for flag in shlex.split(unit['command'])]
     flags = flags[:flags.index('-o')]
     assert '-DSUNSTONE_A733_OS_HEADSET=1' in flags and '-DSUNSTONE_BLUETOOTH_MSBC=1' in flags, \
         'an OS build that links the headset library is required'

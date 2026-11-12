@@ -1,7 +1,8 @@
 # Resident OS entry from the USB boot ROM
 
-Status: the resident entry, bounded completion test and runner are host-tested.
-No resident board run is qualified. FEL is the boot ROM's USB loader; the
+Status: the bounded resident completion diagnostic is qualified on port 3-3.
+Continuous resident supervision and cold card boot remain unqualified.
+FEL is the boot ROM's USB loader; the
 [autonomous card design](autonomous-card-os.md) defines cold card boot.
 
 ## Resident entry accepts the established FEL state
@@ -87,11 +88,11 @@ no DRAM after reset. The [prediction record](../evidence/resident-fel.jsonl),
 `resident-fel-no-usb0-proposal`, contains the time budget and expected result.
 The frozen input manifest and exact host commands are in that record's evidence
 directory. The [application evidence](../evidence/application.jsonl), entry
-`1794468954726206112-8d88da24`, records the physical run. It reaches supervision
-but retains a USB0 stop failure; successful resident completion remains open.
-The [USB0 failure audit](../evidence/resident-usb0-stop-audit.md) records the
-host diagnosis of that image. The current completion diagnostic excludes USB0
-through its manifest and session grant.
+`1794474070488494360-23d98e20`, records the matching session and core-0
+EL3 stop `0x0111/0x5000`, with no retained fault or board failure. The watchdog
+resets to FEL and DRAM is lost. The diagnostic excludes USB0 through its
+manifest and session grant. This result qualifies the marked completion test;
+it does not measure indefinite resident supervision.
 
 ## Open work
 

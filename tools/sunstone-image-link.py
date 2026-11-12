@@ -211,6 +211,33 @@ def memory_routines(objects, nm, image):
             'both': sorted(set(strict) & set(unaligned))}
 
 
+def breadcrumb_lifetime(elf):
+    """The public diagnostic header reads only the sealed four-byte lifetime.
+
+    The sealed-session check separately verifies the EL0 read-only mapping
+    and cache publication. This check admits no other sealed-session symbol.
+    """
+    def one(name):
+        found = [s for s in elf.symbols if s['name'] == name and s['shndx'] != 0]
+        assert len(found) == 1, 'breadcrumb lifetime: ambiguous or absent ' + name
+        return found[0]
+    alias, owner = one('os_crumb_lifetime'), one('os_sealed')
+    offset_header = Path(__file__).resolve().parents[1] / 'apps/os/sealed-lifetime.h'
+    offset = int(re.search(r'#define OS_SEALED_LIFETIME_OFFSET (\d+)', offset_header.read_text()).group(1))
+    sections = [(i, s) for i, (name, s) in enumerate(zip(elf.names, elf.sections)) if name == '.sealed']
+    assert len(sections) == 1, 'breadcrumb lifetime: ambiguous sealed section'
+    index, section = sections[0]
+    assert alias['bind'] == owner['bind'] == 1 and alias['type'] == owner['type'] == 1 and \
+        alias['size'] == 4 and alias['shndx'] == owner['shndx'] == index and \
+        alias['value'] == owner['value'] + offset and alias['value'] % 4 == 0 and \
+        owner['value'] <= alias['value'] < alias['value'] + 4 <= owner['value'] + owner['size'] and \
+        section[1] == 8 and section[2] & 7 == 3 and \
+        0x41000000 <= section[3] <= owner['value'] and \
+        owner['value'] + owner['size'] <= section[3] + section[5] <= 0x41200000, \
+        'breadcrumb lifetime: alias must name only the sealed lifetime word'
+    return 'os_crumb_lifetime'
+
+
 def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_expected=None):
     """Applications may use their closure, public calls, FreeRTOS and C/C++."""
     def symbols(paths, defined):
@@ -229,7 +256,7 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_ex
     kit = Path(__file__).resolve().parents[1] / 'include'
     header = ''.join((kit / name).read_text() for name in
                      ('sunstone_app.h', 'gpu_queue.h', 'sunstone_latency.h', 'sunstone_dma.h', 'sunstone_storage.h',
-                      'sunstone_npu_queue.h'))
+                      'sunstone_npu_queue.h', 'sunstone_i2c.h', 'sunstone_rtc.h'))
     public_calls = set(re.findall(r'\b((?:ss_|gpu_queue_)[a-z0-9_]+)\s*\([^;{}]*\)\s*;', header))
     # Object inventories include references in discarded sections. A public
     # call remains valid when no live caller keeps its implementation linked.
@@ -237,6 +264,8 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_ex
     # The unaligned memory routines are what an application's memcpy, memmove and memset call (runtime/memory_unaligned.c,
     # include/sunstone_relaxed_memory.h): the same contract as the C library's routines, and stateless.
     allowed |= {'ss_memcpy_unaligned', 'ss_memmove_unaligned', 'ss_memset_unaligned'}
+    if 'os_crumb_lifetime' in external:
+        allowed.add(breadcrumb_lifetime(elf))
     # An explicit shared-GPU descriptor names its own generated manifest.
     # Admit that immutable object only, using the selected image manifest's
     # exact bytes and section bounds rather than a symbol-name suffix.
@@ -298,7 +327,9 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_ex
             assert flags == 13 and i == len(large_records) - 1, 'large region heap record %d' % i
     initializers = admitted['sunstone_region_initializers']
     assert len(initializers) % 16 == 0 and len(initializers) <= 8 * 16, 'region initializer extent'
-    regions = application_manifest(elf)['regions']
+    # An empty OS image has no application manifest or initializer indices.
+    # Nonempty manifest sections still go through the complete decoder above.
+    regions = application_manifest(elf)['regions'] if manifests else []
     seen = set()
     for index, reserved, size in struct.iter_unpack('<IIQ', initializers):
         assert not reserved and index < len(regions) and index not in seen, 'region initializer index'

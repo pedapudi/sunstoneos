@@ -8,6 +8,10 @@
 #include "fail_record.h"
 #include "sunstone_wifi_credential.h"
 #include "../os/cpu-return-el0.h"
+#ifdef SUNSTONE_A733_OS
+#include "../os/cpu-return.h"
+extern int os_task_at_el1(void);
+#endif
 #include "cached.h"
 #include "a733_memory_uncached.h"
 #include "platform.h"
@@ -64,19 +68,26 @@ __attribute__((noinline)) void board_fail_note(uint32_t site,uint32_t value,cons
  * owner then wipes at EL1 (os_wifi_credential_poll). */
 _Atomic unsigned board_fail_from_el0;
 #endif
-__attribute__((noinline)) void board_fail(void *context)
+static void fail_session(void)
 {
 #ifdef SUNSTONE_A733_OS
     /* A fault ends the session: the Wi-Fi credential leaves RAM first (EL1 callers only). Only a radio session receives
      * a credential (tools/board_images.py), and the session decode ties the radio grant to a radio workload. */
-    if(a733_board_radio_workload(board.session.workload)&&!atomic_load_explicit(&board_fail_from_el0,memory_order_acquire))
+    if(a733_board_radio_workload(board.session.workload)&&os_task_at_el1()&&
+       !atomic_load_explicit(&board_fail_from_el0,memory_order_acquire))
         os_wifi_credential_wipe();
 #endif
- board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD)|SUNSTONE_CRUMB_FAIL_RETURN,(uint32_t)(uintptr_t)context,
-    __builtin_return_address(0));fail_close();}
-/* Every failure still passes through board_fail, after its own record. */
+    fail_close();
+}
+__attribute__((noinline)) void board_fail(void *context)
+{
+    board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD)|SUNSTONE_CRUMB_FAIL_RETURN,(uint32_t)(uintptr_t)context,
+        __builtin_return_address(0));
+    fail_session();
+}
+/* A located failure closes the session without adding another failure note. */
 __attribute__((noinline)) void board_fail_at(uint32_t site,uint32_t value,const void *caller)
-{board_fail_note(site,value,caller);board_fail(NULL);}
+{board_fail_note(site,value,caller);fail_session();}
 /* This hook is used by the existing cached EL1/EL3 fatal paths. It only closes
  * atomic admission; those paths record their own fault, and EL3 cannot use
  * the breadcrumb SVC. The independent watchdog owns recovery from stopped CPUs. */
@@ -110,8 +121,11 @@ static void pmic(void *unused)
         if(ready>0)atomic_store_explicit(&providers.shared.pmic_ready,1,memory_order_release);
         else if(ready<0){
             const struct a733_pmic *p=providers.domains.pmic;
-            board_fail_at(SUNSTONE_CRUMB_FAIL_SITE(PMIC),p&&p->rails?a733_power_authority_load(&p->rails->authority):~0u,
-                SUNSTONE_CRUMB_HERE());
+            const uint32_t site=SUNSTONE_CRUMB_FAIL_SITE(PMIC),value=p&&p->rails?a733_power_authority_load(&p->rails->authority):~0u;
+#ifdef SUNSTONE_A733_OS
+            if(!os_cpu_return_pmic_fault(site,value,SUNSTONE_CRUMB_HERE()))
+#endif
+                board_fail_at(site,value,SUNSTONE_CRUMB_HERE());
             park();
         }
         BOARD_PROGRESS(BOARD_SERVICE_PMIC);

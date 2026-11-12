@@ -136,14 +136,25 @@ static int event(void *ctx,const struct bt_h4_record *r)
         return 1;
     }
     if(e==0x05){
-        if(n!=4)return fault(s);struct bt_conn *c=bt_conn_lookup_handle((uint16_t)le16(p+3),BT_CONN_TYPE_BR);
-        if(c){c->authenticated=0;c->key_verified=0;c->encrypt=0;bt_conn_unref(c);}
+        if(n!=4)return fault(s);
+        /* Local Disconnect has already moved the ACL out of CONNECTED, so
+         * authenticated lookup cannot find it. Bind the observer directly to
+         * the retained generation and handle; ACL validates terminal status. */
+        if(!p[2])for(unsigned i=0;i<BT_ACL_LINKS;++i){
+            struct bt_conn *c=&s->connections[i];if(!c->attached)continue;
+            for(unsigned j=0;j<BT_ACL_LINKS;++j){const struct bt_acl_link *l=&s->acl->links[j];
+                if(l->generation==c->acl_generation && l->handle_valid && l->handle==le16(p+3)){
+                    c->authenticated=0;c->key_verified=0;c->encrypt=0;
+                }
+            }
+        }
         return 0; /* Existing ACL/SCO disconnect owns credit/terminal commit. */
     }
     if(e==0x08||e==0x30){
         if(n!=(e==0x08?4u:3u)||p[2])return fault(s);
         struct bt_conn *c=bt_conn_lookup_handle((uint16_t)le16(p+3),BT_CONN_TYPE_BR);if(!c)return fault(s);
         if(e==0x08)c->encrypt=p[5];c->key_verified=0;
+        if(s->stopping){bt_conn_unref(c);return release(s,r);}
         if(!c->authenticated||!c->encrypt||c->encrypt>2||!c->br.link_key||
             (!!(c->br.link_key->flags&BT_LINK_KEY_SC)!=(c->encrypt==2))){bt_conn_unref(c);return fault(s);}
         uint8_t handle[2]={(uint8_t)c->handle,(uint8_t)(c->handle>>8)};
@@ -164,6 +175,7 @@ static int event(void *ctx,const struct bt_h4_record *r)
     default:return 0;
     }
     if(!live(s)||!s->configured||n!=expected)return fault(s);
+    if(s->stopping && e!=0x06 && e!=0x18 && e!=0x36 && e!=0x3b)return fault(s);
     struct bt_conn *c=e==0x06?bt_conn_lookup_handle((uint16_t)le16(p+3),BT_CONN_TYPE_BR):
         bt_conn_lookup_addr_br((const bt_addr_t *)(const void *)(p+2+(e==0x36)));
     if(!c)return fault(s);
@@ -175,6 +187,7 @@ static int event(void *ctx,const struct bt_h4_record *r)
     if(e==0x06){if(p[2]||c->authenticated){bt_conn_unref(c);return fault(s);}c->authenticated=1;}
     if(e==0x18&&p[24]!=0&&p[24]!=4&&p[24]!=5&&p[24]!=7&&p[24]!=8){bt_conn_unref(c);return fault(s);}
     bt_conn_unref(c);
+    if(s->stopping && e==0x06)return release(s,r);
     struct net_buf input={.data=(uint8_t *)(uintptr_t)(p+2),.len=n};consume(&input);
     if(s->fatal)return -1;return release(s,r);
 }
@@ -202,7 +215,7 @@ int bt_security_init(struct bt_security *s,struct bt_acl *a,TaskHandle_t task,
 }
 int bt_security_attach(struct bt_security *s,uint64_t generation)
 {
-    if(!live(s)||!s->configured||connection(s,generation))return -1;
+    if(!live(s)||s->stopping||!s->configured||connection(s,generation))return -1;
     struct bt_acl_link *l=NULL;
     for(unsigned i=0;i<BT_ACL_LINKS;++i)if(s->acl->links[i].generation==generation)l=&s->acl->links[i];
     if(!l||memcmp(l->peer.address,s->policy.peer,6)||l->state==BT_ACL_UNUSED||l->state==BT_ACL_CLOSED)return -1;
@@ -220,7 +233,7 @@ int bt_security_attach(struct bt_security *s,uint64_t generation)
 }
 int bt_security_start(struct bt_security *s,uint64_t generation)
 {
-    if(!live(s)||!s->configured||s->entered)return -1;
+    if(!live(s)||s->stopping||!s->configured||s->entered)return -1;
     struct bt_conn *c=connection(s,generation);struct bt_acl_link *l=c?actual(s,c):NULL;
     if(!l||l->state!=BT_ACL_CONNECTED||!l->handle_valid)return -1;
     c->handle=l->handle;s->entered=1;int result=bt_ssp_start_security(c);s->entered=0;
@@ -231,7 +244,7 @@ int bt_security_service(struct bt_security *s,uint64_t deadline)
     if(!live(s)||s->entered||!deadline||deadline<=s->now)return fault(s);
     if(deadline>s->deadline)deadline=s->deadline;
     if(s->pending)return s->now<s->command_deadline?1:fault(s);
-    if(!s->configured&&!s->count){
+    if(!s->stopping&&!s->configured&&!s->count){
         unsigned op;uint8_t byte=1;unsigned n=1;
         switch(s->configuration_stage){
         case 0:op=0x0c56;break;
@@ -253,6 +266,32 @@ int bt_security_service(struct bt_security *s,uint64_t deadline)
     int result=bt_hci_security_request(h,s,q->opcode,q->bytes,q->length,bound);
     if(result<0)return fault(s);
     if(result==1){s->pending=1;s->tag=h->command_tag;s->command_deadline=bound;}
+    return 1;
+}
+int bt_security_stop(struct bt_security *s,uint64_t deadline)
+{
+    if(!owner(s)||s->fatal||s->entered||!deadline||
+       (atomic_load_explicit(s->recovery,memory_order_acquire)&4)||
+       s->acl->state!=BT_ACL_ACTIVE||s->acl->hci->security_owner!=s||s->acl->security_context!=s)return fault(s);
+    if(deadline<s->deadline)s->deadline=deadline;
+    s->stopping=1;
+    return s->now<s->deadline ? 1 : fault(s);
+}
+int bt_security_quiescent(const struct bt_security *s)
+{
+    if(!owner(s)||s->fatal||(atomic_load_explicit(s->recovery,memory_order_acquire)&4)||
+       s->acl->state!=BT_ACL_ACTIVE||s->acl->hci->state==BT_HCI_FAULT)return -1;
+    if(!s->stopping||s->pending||s->count||s->allocated||s->entered||s->acl->hci->security_ack_pending)return 0;
+    for(unsigned i=0;i<BT_ACL_LINKS;++i){const struct bt_conn *c=&s->connections[i];
+        if(c->references)return 0;
+        if(!c->attached)continue;
+        const struct bt_acl_link *matched=NULL;
+        for(unsigned j=0;j<BT_ACL_LINKS;++j){const struct bt_acl_link *l=&s->acl->links[j];
+            if(l->generation==c->acl_generation){if(matched)return -1;matched=l;}
+        }
+        if(!matched || !c->acl_generation || memcmp(matched->peer.address,c->br.dst.val,6))return -1;
+        if(matched->state!=BT_ACL_CLOSED)return 0;
+    }
     return 1;
 }
 int bt_security_step(struct bt_security *s,unsigned budget,uint64_t deadline)

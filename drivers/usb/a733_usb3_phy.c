@@ -58,6 +58,8 @@ int a733_usb3_phy_poll(struct a733_usb2_platform *p)
     if(now<p->ss_wait)return 0;
     switch(p->ss_phase){
     case 0:
+        if(!a733_usb3_read32(p,0x0709016c,&p->ss_rtc_before))return -1;
+        p->ss_published|=1;
         if(!update(p,0x0709016c,0,BIT(4))||!update(p,0x06c01008,3,0))return -1;
         {
             struct sunxi_cadence_phy c={.platform=p,.top_combo_reg=0x06c06000};
@@ -91,4 +93,60 @@ int a733_usb3_phy_poll(struct a733_usb2_platform *p)
     default:return -1;
     }
     ++p->ss_phase;return p->ss_phase==7?1:0;
+}
+/* Pinned combo0_usb_phy_exit: clock mapping, lane reset, then IDDQ. Shared
+ * SERDES clocks and regulators remain held. The false reset branch keeps
+ * PHY0_RESET_N as observed; the following startup asserts it explicitly. */
+static int stop_update(struct a733_usb2_platform *p,uintptr_t a,uint32_t mask,uint32_t value)
+{
+    uint32_t before,after;
+    return a733_usb3_read32(p,a,&before)&&
+        a733_usb3_write32(p,a,(before&~mask)|value)&&
+        a733_usb3_read32(p,a,&after)&&after==((before&~mask)|value);
+}
+int a733_usb3_phy_stop(struct a733_usb2_platform *p)
+{
+    uint64_t now;uint32_t value;
+    if(!p||p->ss_failed||p->ss_phase>7||!p->stop_deadline||
+       p->ops.now(p->cookie,&now)!=1||!a733_deadline_admit(now,&p->last_now,p->stop_deadline))return -1;
+    if(!(p->ss_published&1))return 1;
+    if(now<p->ss_wait||now<p->ss_stop_wait)return 0;
+    switch(p->ss_stop_phase){
+    case 0:
+        if(!stop_update(p,0x06c01004,BIT(24)|BIT(20)|BIT(0),0)||
+           !stop_update(p,0x06c06100,15,15)||!stop_update(p,0x06c06104,15,15))return -1;
+        break;
+    case 1:
+        if(!stop_update(p,0x06c06004,0xff1,0xff1)||
+           p->ops.now(p->cookie,&now)!=1||!a733_monotonic_advance(now,&p->last_now)||
+           !a733_deadline_after(now,1001,&p->ss_stop_wait))return -1;
+        break;
+    case 2:
+        if(!stop_update(p,0x06c01000,BIT(4),0)||
+           !stop_update(p,0x06c0100c,BIT(0),0)||
+           !stop_update(p,0x06c0100c,0x3f0,0)||
+           !stop_update(p,0x06c01000,BIT(8),0))return -1;
+        break;
+    case 3:
+        if(!a733_usb3_read32(p,0x06c01900,&value))return -1;
+        if(value&1){p->ss_stop_phase=5;return 0;}
+        if(p->ops.now(p->cookie,&now)!=1||!a733_monotonic_advance(now,&p->last_now)||
+           !a733_deadline_after(now,10001,&p->ss_stop_wait))return -1;
+        break;
+    case 4:{uint16_t before,after;
+        if(!a733_usb3_read16(p,0x06c98010,&before)||
+           !a733_usb3_write16(p,0x06c98010,before|0xf00)||
+           !a733_usb3_read16(p,0x06c98010,&after)||after!=(uint16_t)(before|0xf00))return -1;
+        break;}
+    case 5:
+        if(!stop_update(p,0x06c01008,BIT(1),BIT(1))||
+           !stop_update(p,0x06c01008,BIT(0),BIT(0)))return -1;
+        break;
+    case 6:
+        if(!stop_update(p,0x0709016c,BIT(4),p->ss_rtc_before&BIT(4)))return -1;
+        break;
+    case 7:return 1;
+    default:return -1;
+    }
+    ++p->ss_stop_phase;return p->ss_stop_phase==7?1:0;
 }

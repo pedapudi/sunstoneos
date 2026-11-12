@@ -4,6 +4,7 @@
 #include "../drivers/usb/a733_usb3_phy.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "register_latency.h"
 static int usb_gpu_init(struct a733_gpu_resource_manager *,const struct a733_gpu_resource_ops *,void *);
@@ -43,6 +44,7 @@ static unsigned speed_for(unsigned j){return dual_mode?(is_hid(j)?device_speed:3
 static uint8_t request[8],cbw[31];
 static unsigned root_unplug,root_unplugged,removals,remove_result,after_remove,teardown_stuck,disables;
 static unsigned busy_stuck,platform_reads;
+static unsigned stop_bad_read;
 static struct register_latency reset_effect,cnr_effect,run_effect,port_effect;
 static struct register_latency ss_ready_effect;
 static unsigned ss_ready_pending_reads;
@@ -82,7 +84,8 @@ static int write_reg(void *v,uintptr_t a,uint32_t value)
     if(a==0x06c01000&&(value&(1u<<8))&&!(*p&(1u<<8))){
         reg_latency_schedule(&ss_ready_effect,m.now,200,1,1);ss_ready_effect.stuck=ss_bad==5;
     }
-    *p=value;++platform_writes;return 1;
+    if(!(stop_bad_read&&n.platform.stop_phase&&a==0x0200335c))*p=value;
+    ++platform_writes;return 1;
 }
 static int read_half(void *v,uintptr_t a,uint16_t *out)
 {(void)v;assert(m.register_held&&ss_mode&&a733_usb3_address16(a));*out=ss_analog[(a-0x06c80000)/2];return 1;}
@@ -676,9 +679,70 @@ static void read_again(void)
 static void mounted(void)
 {for(unsigned i=0;i<10000&&!n.mounted&&!n.failed;++i)poll();if(!n.mounted||n.failed||commands!=(hub_mode?8u:4u))fprintf(stderr,"mount failed mounted%u failed%u phase%u now%llu cmds%u xfers%u kind%u hub addr%u ports%u power%u local%u mask%x port%u defer%u requested%u root slot%u addr%u ready%u hubcfg%u ep0%u ctl%u child slot%u addr%u ready%u\n",n.mounted,n.failed,n.core.phase,(unsigned long long)m.now,commands,transfers,n.kind,n.hubs[0].address,n.hubs[0].ports,n.hubs[0].device_power,n.hubs[0].local_power,n.hubs[0].powered_mask,n.hubs[0].selected_port,n.hubs[0].status_deferred,n.hubs[0].status_requested,n.core.devices[0].slot,n.core.devices[0].address,n.core.devices[0].port_ready,n.core.devices[0].hub_configured,n.core.devices[0].endpoints[0].pending,n.core.devices[0].control_stage,n.core.devices[1].slot,n.core.devices[1].address,n.core.devices[1].port_ready);
  assert(n.mounted&&!n.failed&&n.blocks==128&&n.block_bytes==512&&commands==(hub_mode?8u:4u));}
+/* Controller halt/IRQ proof is the caller precondition of platform_stop.
+ * This fixture checks the real local provider after each startup publication.
+ * xHCI and Type-C completion have independent native fixtures. */
+static int stop_platform(const char *mode)
+{
+    unsigned target=12,ss_target=8;
+    if(!strcmp(mode,"return-pmic"))target=5;
+    if(!strncmp(mode,"return-phase-",13))target=(unsigned)strtoul(mode+13,NULL,10);
+    if(!strncmp(mode,"return-ss-",10)){
+        ss_mode=1;
+        if(strcmp(mode+10,"ready")){ss_target=(unsigned)strtoul(mode+10,NULL,10);target=10;}
+        if(ss_target==5||ss_target==6)ss_bad=5;
+    }
+    setup();
+    uint32_t rtc_before=*pmic_model_word(&m,0x0709016c)&(1u<<4);
+    uint32_t dwc_before=*pmic_model_word(&m,0x06a0d024)&(1u<<30);
+    for(unsigned polls=0;n.platform.phase<target||(ss_target<8&&n.platform.ss_phase<ss_target);++polls){
+        assert(polls<120000);observe_role();
+        assert(a733_usb2_platform_poll(&n.platform)!=A733_USB2_RETAINED);
+        assert(pmic_model_step(&m)!=A733_PMIC_RETAINED);m.now+=20;
+    }
+    if(!strcmp(mode,"return-pmic")){
+        observe_role();assert(a733_usb2_platform_poll(&n.platform)==A733_USB2_PENDING);
+        assert(n.platform.request.id); /* The provider has not consumed the request. */
+    }
+    unsigned before_writes=platform_writes;
+    uint64_t started=m.now,deadline=m.now+3000000;
+    unsigned held=!strcmp(mode,"return-lock"),bad=!strcmp(mode,"return-readback");
+    if(held){m.register_held=1;deadline=m.now+1000;}
+    stop_bad_read=bad;
+    int result=0;
+    for(unsigned polls=0;!result;++polls){
+        assert(polls<160000);observe_role();
+        result=a733_usb2_platform_stop(&n.platform,deadline);
+        if(!result)assert(pmic_model_step(&m)!=A733_PMIC_RETAINED);m.now+=20;
+    }
+    if(held||bad){assert(result<0&&n.platform.failed);puts("PASS USB platform stop fault retains local resources");return 0;}
+    assert(result==1&&!n.platform.failed&&!m.register_held&&!n.platform.request.id);
+    if(target<=8)assert(platform_writes==before_writes);
+    else{
+        const uintptr_t gates[]={0x02003348,0x02003350,0x02003354,0x02003364};
+        for(unsigned i=0;i<4;++i)assert(!(*pmic_model_word(&m,gates[i])&(1u<<31)));
+        assert(!(*pmic_model_word(&m,0x0200335c)&(1u<<16)));
+        assert(!(*pmic_model_word(&m,0x06c00008)&0x330010));
+    }
+    if(n.platform.ss_published&1){
+        assert((*pmic_model_word(&m,0x06c01008)&3)==3);
+        assert(!(*pmic_model_word(&m,0x06c01000)&((1u<<4)|(1u<<8))));
+        assert(!(*pmic_model_word(&m,0x06c0100c)&0x3f1));
+        assert((*pmic_model_word(&m,0x06c06100)&15)==15&&(*pmic_model_word(&m,0x06c06104)&15)==15);
+        assert((*pmic_model_word(&m,0x0709016c)&(1u<<4))==rtc_before);
+        assert(m.now-started>=1001);
+        if(ss_bad==5){assert(m.now-started>=11002);assert((ss_analog[0xc008]&0xf00)==0xf00);}
+    }
+    assert((*pmic_model_word(&m,0x06a0d024)&(1u<<30))==dwc_before);
+    unsigned accesses=platform_reads+platform_writes;
+    m.now=deadline+1;assert(a733_usb2_platform_stop(&n.platform,deadline)==1);
+    assert(platform_reads+platform_writes==accesses);
+    printf("PASS %s restores owned local state, retains leases and stops MMIO\n",mode);return 0;
+}
 int main(int argc,char **argv)
 {
     const char *mode=argc>1?argv[1]:"read";
+    if(!strncmp(mode,"return-",7))return stop_platform(mode);
     if(!strncmp(mode,"hub-hold",8))hub_hold_case=strstr(mode,"zero")?2:strstr(mode,"expiry")?3:1;
     root_unplug=strstr(mode,"unplug")!=NULL;teardown_stuck=strstr(mode,"unplug-stuck")!=NULL;
     if(!strncmp(mode,"irq-",4)){irq_model=1;mode+=4;}

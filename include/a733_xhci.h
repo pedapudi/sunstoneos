@@ -139,7 +139,8 @@ struct a733_xhci {
     unsigned root_u1,root_u2,usb2_companion_port,companion_root;
     unsigned slot_type,publication,notifying,port_power_control;
     unsigned irq_mode,irq_service,irq_events,irq_asserted;
-    uint64_t reset_deadline;
+    uint64_t reset_deadline,stop_deadline,halt_deadline;
+    unsigned stop_phase; /* Private return state; the startup phase remains provenance. */
     struct a733_xhci_device devices[A733_XHCI_DEVICES];
     struct a733_xhci_isoch isoch;
 };
@@ -166,6 +167,17 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *);
  * Hardware waits, teardown, recovery and isochronous refill keep their existing
  * scheduling. The caller must bound its batch and still run poll's guards. */
 int a733_xhci_work_pending(const struct a733_xhci *);
+/* Owner-task return: 1 DONE, 0 PENDING, -1 FAULT. The first request revokes
+ * caller output and forbids new work. Later calls may shorten the absolute
+ * deadline, never extend it. Stop/Disable completions precede interrupt disable
+ * and the 16 ms HCHalted observation. DMA pages remain reserved on every path.
+ * A constructor with no controller access completes without starting hardware.
+ * Do not call the ordinary poll once stop begins. */
+int a733_xhci_stop(struct a733_xhci *,uint64_t absolute_deadline);
+/* True only while existing IRQ begin/drain/finish calls remain valid. Check
+ * before IRQ begin and again after stop, before IRQ finish/rearm. Once false,
+ * the caller uses timer/status passes and then completes its GIC shutdown. */
+int a733_xhci_stop_draining(const struct a733_xhci *);
 /* Metadata only; owner must serialize access. Includes ISO inactivity, which
  * is checked only after queued events have been drained by poll. */
 uint64_t a733_xhci_next_deadline(const struct a733_xhci *);

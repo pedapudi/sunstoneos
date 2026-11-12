@@ -28,6 +28,7 @@ int os_perf_step(struct a733_cpu_clock *c,const struct a733_thermal_policy *p,in
  * that the returning lifetime adds is never reached. */
 unsigned board_session_lifetime(void){return A733_LIFETIME_SUPERVISED;}
 int os_cpu_return_requested(void){return 0;}
+int os_cpu_return_failing(void){return 0;}
 uint32_t os_cpu_return_entry_refusal;
 int os_cpu_return_entry_guard(const struct a733_cpu_clock *c,const struct a733_thermal_policy *p,uint64_t now,
     int (*read)(void *,uintptr_t,uint32_t *),void *context){(void)c;(void)p;(void)now;(void)read;(void)context;check(0,91);return -1;}

@@ -34,10 +34,11 @@ class Model(terminal.KernelPages,owner.Model):
   self.rt=self.device+self.df['runtime'];self.service=self.rt+layout.layouts['npu_runtime']['service']
   self.sig=self.n+self.nf['signals'];self.gf=layout.layouts['npu_service_signals']
   self.sf=layout.layouts['npu_service'];self.report=layout.address('os_npu_published_report')
+  self.binding=layout.address('binding','apps/os/npu-irq.c')
   self.closed_operation=None;self.stop_calls=0;self.stop_pending=0;self.publish_stop=False
   self.failures=[];self.callback_after_park=0;self.wakes=0;self.waits=[];self.delays=0
   self.hooks[layout.address('os_application_wake_main')]=self.wake_main
-  self.hooks[layout.address('os_granted')]=lambda:int(self.uc.reg_read(owner.prior.fault.REGS[0])==1) # the modeled session grants the NPU (bit 0) alone; admission is not under test
+  assert self.grants & terminal.GRANTS['NPU'], 'the application must declare the NPU service'
   self.deadline_wait=layout.address('sunstone_deadline_wait_until')
   self.hooks[layout.address('board_service_blocked_until')]=lambda:1 # the service's health window is the board's, not under test
   self.put32(self.n+self.nf['started'],1);self.put32(self.n+self.nf['active'],1)
@@ -77,7 +78,9 @@ class Model(terminal.KernelPages,owner.Model):
  def wake_main(self):
   self.wakes+=1;return 0
  def delay(self):
-  self.delays+=1;return super().delay()
+  self.delays+=1
+  if self.thermal_running:return super().delay()
+  self.time+=2400;return 0
  def clock_now(self):
   self.put64(self.uc.reg_read(prior.fault.REGS[1]),self.time//24);return 1
  def send(self):
@@ -101,10 +104,14 @@ class Model(terminal.KernelPages,owner.Model):
  def stopped(self):
   self.put32(self.n+self.nf['stopped'],1);self.put32(self.sig+self.gf['runtime_parked'],1)
   self.put32(self.report+12,1);self.put32(self.report+56,1)
+  # Native IRQ binding after the real source stop: service, masked, stopped,
+  # fault (platform/a733/npu_irq.c, included by apps/os/npu-irq.c).
+  self.put64(self.binding,self.service)
+  self.put32(self.binding+8,1);self.put32(self.binding+12,1)
 
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('elf',type=Path);p.add_argument('--out',type=Path,required=True);p.add_argument('--payload',type=Path);p.add_argument('--late-isr-only',action='store_true');a=p.parse_args();a.out.mkdir(parents=True,exist_ok=False)
 names={'board_application','a733_board_session','board_provider','a733_native_usb','a733_pmic','a733_pmic_slot',
-'a733_platform_locks','os_thermal_service','os_npu_application','os_npu_device','npu_runtime','npu_runtime_slot','npu_service','npu_service_signals','a733_npu_controller','a733_npu_startup','ss_grant','npu_service_reply'}
+'a733_platform_locks','os_thermal_service','os_quiesce','os_npu_application','os_npu_device','npu_runtime','npu_runtime_slot','npu_service','npu_service_signals','a733_npu_controller','a733_npu_startup','ss_grant','npu_service_reply'}
 layout=Image(a.elf,names);image=prior.fault.Image(a.elf);results=[]
 if not a.late_isr_only:
  m=Model(image,layout)
@@ -172,28 +179,36 @@ assert m.stop=='failure' and m.failures and m.failures[0][0]&0xf000==0xa000
 assert m.failures[0][1]&3==3
 results.append(dict(case='actual-parked-late-isr-retains-original-flags',passed=True,failures=m.failures))
 if not a.late_isr_only:
- for failure in [None,'before-thermal','before-pmic','before-ready']:
-  m=Model(image,layout);m.stopped();assert m.call(0,'os_cpu_return_start')==1
+ for failure in [None,'before-thermal','before-pmic','before-ready','runtime-before-pmic','runtime-before-ready']:
+  m=Model(image,layout);m.stopped();m.register()
   m.call(6,'ss_finish',(0x41f00000,16));assert m.stop=='suspended'
   def inject():
-   m.put32(m.sig+m.gf['irq_pending'],3);m.put32(m.sig+m.gf['irq_stopped'],0)
+   if failure.startswith('runtime-'):
+    m.put32(m.sig+m.gf['runtime_failed'],1)
+    return
+   m.hooks[layout.address(notify)]=lambda:0
+   m.call(1,'os_npu_irq')
+   assert m.u32(m.sig+m.gf['irq_pending'])==3 and not m.u32(m.sig+m.gf['irq_stopped'])
   if failure=='before-thermal':inject()
-  m.call(0,'os_thermal_task')
+  m.call(0,'os_cpu_return_supervise')
   if failure=='before-thermal':
-   assert m.stop=='failure' and not m.u32(m.flags['thermal_done'])
+   assert m.q('npu','result')==2 and m.q('thermal','result')==2
   else:
-   assert m.stop=='suspended' and m.u32(m.flags['thermal_done'])==1
+   m.close_thermal()
    m.call(0,'os_cpu_return_supervise');assert not m.u32(m.flags['ready'])
-   if failure=='before-pmic':inject()
-   m.call(0,'os_cpu_return_pmic')
-   if failure=='before-pmic':assert m.stop=='failure' and not m.u32(m.flags['pmic_done'])
-   else:
-    assert m.stop=='suspended' and m.u32(m.flags['pmic_done'])==1
-    if failure=='before-ready':inject()
-    m.call(0,'os_cpu_return_supervise')
-    if failure=='before-ready':assert m.stop=='failure' and not m.u32(m.flags['ready'])
-    else:assert m.stop=='suspended' and m.u32(m.flags['ready'])==1
-  if failure:assert m.failures[0][0]&0xf000==0xa000 and m.failures[0][1]&3==3
+   if failure in ('before-pmic','runtime-before-pmic'):inject()
+  m.call(0,'os_cpu_return_pmic')
+  assert m.stop=='suspended' and m.q('pmic','result')==1
+  if failure in ('before-ready','runtime-before-ready'):inject()
+  m.call(0,'os_cpu_return_supervise')
+  if failure:
+   expected=1<<8 if failure.startswith('runtime-') else 3
+   assert m.q('npu','result')==2 and m.q('npu','value')&expected==expected, (failure, m.q('npu','result'))
+   assert not m.u32(m.flags['ready']) and not m.failures, failure
+   assert not m.u32(m.board+layout.layouts['board_application']['fatal'])
+   m.time+=24*3100000;m.call(0,'os_cpu_return_supervise')
+   assert m.stop=='failure' and not m.u32(m.flags['ready'])
+  else:assert m.stop=='suspended' and m.u32(m.flags['ready'])==1
   results.append(dict(case='actual-retirement-owners-'+str(failure),passed=True,failures=m.failures))
 
 if not a.late_isr_only:

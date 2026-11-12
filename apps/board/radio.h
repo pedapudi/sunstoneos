@@ -217,6 +217,9 @@ int board_radio_shutdown(struct board_radio *,uint64_t deadline_us);
  * Valid after init when report_memory was supplied, else NULL. Owner task only;
  * a host reads it through a733_radio_report_encode. */
 const struct a733_radio_report *board_radio_report(const struct board_radio *);
+/* Owner-only terminal copies and credential erasure after session stop. No
+ * device poll, retain, command or deadline extension occurs here. */
+enum board_radio_result board_radio_stop_result(struct board_radio *,enum a733_radio_session_result);
 /* Existing copied bounded socket queues; call from configured client tasks. */
 /* Existing radio owner task only. Quiescent sockets, healthy IPv4
  * WPA2 profile (fixed or DHCP); same admitted target/credentials, new association/RSN state.

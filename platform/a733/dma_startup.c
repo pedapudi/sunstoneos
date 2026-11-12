@@ -1,6 +1,7 @@
 #include "a733_dma_startup.h"
 #include "a733_dma_platform_native.h"
 #include "a733_dma_controller.h"
+#include "a733_task_context.h"
 
 static int privileged(void)
 {
@@ -20,6 +21,16 @@ static int task_owner(struct a733_dma_startup *b)
 {
     return b && b->initialized && !b->failed && privileged() && b->task &&
         xTaskGetSchedulerState()==taskSCHEDULER_RUNNING && xTaskGetCurrentTaskHandle()==b->task;
+}
+static int register_context(struct a733_dma_startup *b)
+{
+    if(!task_owner(b)||!a733_task_context_any_no_el_check()||
+       atomic_load_explicit(&b->clock->failed,memory_order_acquire)||
+       atomic_load_explicit(&b->registry->failed,memory_order_acquire)||
+       (atomic_load_explicit(&b->locks->retained,memory_order_acquire)&(1u<<A733_PLATFORM_REGISTER_LOCK)))return 0;
+    for(unsigned i=0;i<A733_PLATFORM_LOCK_COUNT;++i)
+        if(xSemaphoreGetMutexHolder(b->locks->mutex[i])==b->task)return 0;
+    return 1;
 }
 static enum a733_dma_platform_result acquire(void *cookie,const struct a733_dma_platform_config *c,
     a733_clock_mask_t shared,struct a733_clock_token *out)
@@ -44,10 +55,21 @@ static enum a733_dma_platform_result acquire(void *cookie,const struct a733_dma_
 static int enter(void *cookie,uint64_t deadline)
 {
     struct a733_dma_startup *b=cookie;
-    if(!task_owner(b) || b->register_held || !b->token.id ||
+    if(!register_context(b) || b->register_held || !b->token.id ||
         !same_token(&b->token,&b->platform.token) ||
         deadline!=(b->retire_deadline?b->retire_deadline:b->handoff.allowed.deadline_us)) return -1;
-    if(!a733_platform_lock_enter(b->locks,A733_PLATFORM_REGISTER_LOCK,deadline)) return 0;
+    uint64_t before,limit=atomic_load_explicit(&b->return_deadline,memory_order_acquire);
+    if(!a733_counter_clock_now(b->clock,&before))return -1;
+    if(limit&&limit<deadline)deadline=limit;
+    if(before>=deadline)return 0;
+    /* A return can arrive during an older startup wait. Slice its deadline
+     * one scheduler tick ahead so the next poll observes the new bound.
+     * Dispatch can occur later; the common lock refuses late ownership. This
+     * limits a wait attempt, not the complete startup transaction. */
+    const uint64_t tick_us=(1000000u+configTICK_RATE_HZ-1u)/configTICK_RATE_HZ;
+    if(deadline-before>tick_us)deadline=before+tick_us;
+    if(!a733_platform_lock_enter(b->locks,A733_PLATFORM_REGISTER_LOCK,deadline))
+        return register_context(b)?0:-1;
     b->register_held=1;return 1;
 }
 static void leave(void *cookie)
@@ -59,7 +81,9 @@ static void leave(void *cookie)
 static int now(void *cookie,uint64_t *out)
 {
     struct a733_dma_startup *b=cookie;
-    return task_owner(b) && a733_counter_clock_now(b->clock,out);
+    if(!task_owner(b)||!a733_counter_clock_now(b->clock,out))return 0;
+    uint64_t limit=atomic_load_explicit(&b->return_deadline,memory_order_acquire);
+    return !limit||*out<limit;
 }
 static int read_reg(void *cookie,uintptr_t address,uint32_t *out)
 {
@@ -96,7 +120,7 @@ static int initialize(struct a733_dma_startup *b,const struct a733_dma_handoff *
     b->supervised=supervised;b->handoff=*h;b->clock=clock;b->registry=registry;b->locks=locks;
     b->operations=(struct a733_dma_platform_operations){acquire,enter,leave,now,read_reg,write_reg};
     if(!a733_dma_platform_init(&b->platform,&h->allowed,&b->operations,b)) return 0;
-    b->initialized=1;return 1;
+    atomic_init(&b->return_deadline,0);b->initialized=1;return 1;
 }
 int a733_dma_startup_init(struct a733_dma_startup *b,const struct a733_dma_handoff *h,
     struct a733_counter_clock *clock,struct a733_clock_leases *registry,struct a733_platform_locks *locks)
@@ -112,7 +136,7 @@ int a733_dma_startup_bind_task(struct a733_dma_startup *b,TaskHandle_t task)
 }
 enum a733_dma_platform_result a733_dma_startup_poll(struct a733_dma_startup *b)
 {
-    if(!b || !b->initialized || b->failed || !privileged() ||
+    if(!b || !b->initialized || b->failed || b->retired || !privileged() ||
         xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING) return A733_DMA_PLATFORM_RETAINED;
     TaskHandle_t self=xTaskGetCurrentTaskHandle();
     if(!self || !b->task || b->task!=self) return A733_DMA_PLATFORM_RETAINED;
@@ -122,27 +146,35 @@ enum a733_dma_platform_result a733_dma_startup_poll(struct a733_dma_startup *b)
 }
 int a733_dma_startup_ready(const struct a733_dma_startup *b)
 {return b && b->initialized && !b->failed && !b->retired && a733_dma_platform_ready(&b->platform);}
-enum a733_dma_platform_result a733_dma_startup_retire_adopted(
+enum a733_dma_platform_result a733_dma_startup_retire(
     struct a733_dma_startup *b,uint64_t deadline)
 {
-    if(!task_owner(b)||!deadline||b->handoff.allowed.cold||
+    if(!task_owner(b)||!deadline||!exact(&b->platform.config,&b->handoff.allowed)||
+       !same_token(&b->token,&b->platform.token)||
        (b->retire_deadline&&b->retire_deadline!=deadline))return A733_DMA_PLATFORM_RETAINED;
     if(b->retired)return A733_DMA_PLATFORM_READY;
     b->retire_deadline=deadline;
     if(!a733_counter_clock_now(b->clock,&b->retire_now)){
         b->retire_fault=1;b->failed=1;return A733_DMA_PLATFORM_RETAINED;
     }
-    if(b->retire_now>=deadline){
+    uint64_t limit=atomic_load_explicit(&b->return_deadline,memory_order_acquire);
+    if(b->retire_now>=deadline||(limit&&deadline>limit)){
         b->retire_fault=2;b->failed=1;return A733_DMA_PLATFORM_RETAINED;
     }
     enum a733_clock_result token=a733_clock_token_status(b->registry,&b->token);
     b->retire_token_result=token;
     if(token==A733_CLOCK_BUSY)return A733_DMA_PLATFORM_BUSY;
     if(token!=A733_CLOCK_OK){b->retire_fault=3;b->failed=1;return A733_DMA_PLATFORM_RETAINED;}
-    enum a733_dma_platform_result r=a733_dma_platform_verify_adopted(&b->platform,deadline);
+    enum a733_dma_platform_result r=a733_dma_platform_verify_retired(&b->platform,deadline);
     if(r==A733_DMA_PLATFORM_RETAINED){b->retire_fault=4;b->failed=1;}
     if(r==A733_DMA_PLATFORM_READY)b->retired=1;
     return r;
+}
+enum a733_dma_platform_result a733_dma_startup_retire_adopted(
+    struct a733_dma_startup *b,uint64_t deadline)
+{
+    if(!b||b->handoff.allowed.cold)return A733_DMA_PLATFORM_RETAINED;
+    return a733_dma_startup_retire(b,deadline);
 }
 
 int a733_dma_startup_prepared(void *cookie,uintptr_t controller,uint16_t channels)

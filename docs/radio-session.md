@@ -261,11 +261,35 @@ packets, requests and sockets. The owned socket loop may continue delivering
 copied link-loss replies and notifying the IP stack that the interface is down.
 That failed-network path performs no further radio MMIO.
 
-No session teardown, module reset, resource release or reinitialization API
-exists. Explicit socket disposal retains its existing stack completion contract;
-it does not release the radio platform. Native shutdown requires a separate
-protocol that drains every borrower and proves controller/module quiescence.
-Independent hardware recovery remains required for stalled MMIO.
+`a733_radio_session_stop` permanently closes session admission and advances
+shutdown through the existing owner task. It accepts one absolute deadline,
+clipped to the supervisor return bound and platform lifetime. Repeated requests
+cannot extend it. Each poll completes only the accepted SDIO operation; no
+later firmware, card, scan or network command is submitted. The physical result
+stays in the platform's stop record, and protocol records and buffers remain
+pinned. `A733_SESSION_DOWN` requires the platform's positive shutdown readbacks.
+An expired operation or failed readback remains a retained fault.
+
+The board owner copies the terminal report without resuming ordinary polling.
+It erases its independent credential copies on either terminal result. A
+retained fault preserves the session's accepted transfer buffers, protocol
+records and CE storage unchanged. Full protocol erasure requires positive
+`A733_SESSION_DOWN`; uncertain ownership cannot authorize an erase.
+
+When Bluetooth shares the module, SDIO drains while its protocol owner closes
+the HCI connections. `a733_radio_session_stop_held` validates the existing
+firmware generation and live resources without reopening admission.
+`a733_radio_session_stop_release` permanently authorizes the later physical
+shutdown. Before release, the module remains available to that HCI close.
+WLAN shutdown alone does not establish a quiet Bluetooth UART peer;
+`a733_radio_session_peer_stopped` requires the separately authenticated PM2
+reset contract described in [the platform contract](radio-platform.md).
+
+Shutdown releases no object storage and permits no reinitialization. Full
+station and association compositions additionally retain CE entropy and DMA
+ownership; the OS return adapter reports that missing CE drain as a fault
+after WLAN stop. Independent hardware recovery remains required for stalled
+MMIO. Physical module shutdown and PM2 reset behavior remain unqualified.
 
 ## The focused composition reuses existing protocol evidence
 

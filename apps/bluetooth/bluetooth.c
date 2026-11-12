@@ -15,7 +15,7 @@ static int present(const uint8_t *p,size_t n)
 {unsigned value=0;for(size_t i=0;i<n;++i)value|=p[i];return value!=0;}
 int bluetooth_profile_valid(const struct bluetooth_profile *p,const uint8_t digest[32])
 {
-    if(!p||!digest||p->magic!=BLUETOOTH_PROFILE_MAGIC||!((p->version==1&&p->bytes==624)||(p->version==2&&p->bytes==752)||(p->version==3&&p->bytes==sizeof(*p)))||
+    if(!p||!digest||p->magic!=BLUETOOTH_PROFILE_MAGIC||!((p->version==1&&p->bytes==624)||(p->version==2&&p->bytes==752)||(p->version==3&&p->bytes==832)||(p->version==4&&p->bytes==sizeof(*p)))||
         !p->topology||!p->sid_authority||!p->radio_authority||!p->uart_authority||!p->wake_authority||
         !present(p->wiring_evidence,32)||!present(p->sid_evidence,32)||!present(p->fresh_transport_evidence,32)||
         p->radio.topology.identity!=p->topology||p->radio.handoff||p->radio.deadline_us||p->radio.lifetime_deadline_us||
@@ -32,6 +32,13 @@ int bluetooth_profile_valid(const struct bluetooth_profile *p,const uint8_t dige
         !p->command_timeout_us||p->command_timeout_us>5000000||!p->frame_timeout_us||
         p->frame_timeout_us>p->command_timeout_us||!p->binding_timeout_us||
         !p->runtime_lease_us||!p->renew_margin_us||p->renew_margin_us>=p->runtime_lease_us)return 0;
+    if(p->version==4){
+        const struct a733_radio_bluetooth_stop *stop=&p->bluetooth_stop;
+        if(!stop->authority||stop->topology!=p->topology||!present(stop->wiring_evidence,32)||
+           stop->expected.function!=1||stop->expected.pull>2||stop->expected.drive>3||
+           stop->inherited_level>1||stop->reserved||!(p->pm_latch.known_mask&4)||
+           ((p->pm_latch.value>>2)&1)!=stop->inherited_level)return 0;
+    }
     if(p->version>=2){
 #ifndef SUNSTONE_BLUETOOTH_HEADSET
         return 0;
@@ -47,7 +54,7 @@ int bluetooth_profile_valid(const struct bluetooth_profile *p,const uint8_t dige
         if(h->mode>=3)return 0;
 #endif
 #endif
-        if(!((h->mode==1)||(h->mode==6&&p->version==2)||(h->mode==4&&p->version==2)||((h->mode==2||h->mode==3||h->mode==5)&&p->version==3))||h->incoming>1||!present(h->peer,6)||h->pin[16]||h->allow_just_works>1||
+        if(!((h->mode==1)||(h->mode==6&&p->version==2)||(h->mode==4&&p->version==2)||((h->mode==2||h->mode==3||h->mode==5)&&p->version>=3))||h->incoming>1||!present(h->peer,6)||h->pin[16]||h->allow_just_works>1||
             h->minimum_security<2||h->minimum_security>3||!h->server_channel||h->server_channel>30||
             !h->scheduling_authority||!present(h->scheduling_evidence,32)||!h->receive_latency_us||
             !h->response_timeout_us||h->receive_latency_us>=1000000||h->response_timeout_us>=1000000||
@@ -57,7 +64,7 @@ int bluetooth_profile_valid(const struct bluetooth_profile *p,const uint8_t dige
             !h->capture_timeout_us||h->capture_timeout_us>5000000||h->peer_page_scan_mode>2||h->peer_role_switch>1||h->reserved2)return 0;
 #endif
     }
-    if(p->version==3){
+    if(p->version>=3){
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
         for(unsigned i=0;i<2;++i)if(!p->recognition.bytes[i]||p->recognition.bytes[i]>BLUETOOTH_MODEL_SLOT||
             p->recognition.bytes[i]!=bluetooth_model_bytes[i]||
@@ -82,13 +89,20 @@ static int platform_id(void *cookie,uint8_t bytes[16])
     const struct board_radio_chip_id *id=cookie;if(!id||!id->secure_read_record||!bytes)return 0;
     for(unsigned i=0;i<4;++i)for(unsigned j=0;j<4;++j)bytes[4*i+j]=(uint8_t)(id->words[i]>>(8*j));return 1;
 }
+static int stop_admitted(const struct bluetooth_application *a,const struct a733_radio_platform *p)
+{
+    static const struct a733_radio_bluetooth_stop absent;
+    const struct a733_radio_bluetooth_stop *expected=a->profile->version==4?&a->profile->bluetooth_stop:&absent;
+    return !memcmp(&p->bluetooth_stop,expected,sizeof(*expected));
+}
 static int radio_admit(void *cookie,const struct a733_radio_platform_config *c,const struct a733_clock_token *token)
 {
     struct bluetooth_application *a=cookie;
     return a->self==a&&a->profile->radio_authority&&a->profile->wake_authority&&
         !(atomic_load_explicit(a->recovery_state,memory_order_acquire)&4)&&
         !memcmp(c,&a->radio_config,sizeof(*c))&&token->owner==c->owner&&
-        !memcmp(&a->radio.bluetooth,&a->profile->wake,sizeof(a->radio.bluetooth));
+        !memcmp(&a->radio.bluetooth,&a->profile->wake,sizeof(a->radio.bluetooth))&&
+        stop_admitted(a,&a->radio);
 }
 static int uart_admit(void *cookie,const struct a733_uart_platform_config *c,const struct a733_clock_token *token,
     enum a733_uart_admission admission)
@@ -96,7 +110,10 @@ static int uart_admit(void *cookie,const struct a733_uart_platform_config *c,con
     struct bluetooth_application *a=cookie;
     /* UART setup precedes module enable/firmware startup. The authenticated
      * fresh-transport evidence excludes an inherited transmitting controller. */
-    return a->self==a&&admission==A733_UART_ADMIT_START&&!a->stage&&a->profile->uart_authority&&
+    unsigned permitted=admission==A733_UART_ADMIT_START?!a->stage:
+        admission==A733_UART_ADMIT_STOP&&atomic_load_explicit(&a->stop_release,memory_order_acquire)&&
+        atomic_load_explicit(&a->stop_peer,memory_order_acquire)==1;
+    return a->self==a&&permitted&&a->profile->uart_authority&&
         !(atomic_load_explicit(a->recovery_state,memory_order_acquire)&4)&&
         !memcmp(c,&a->uart_config,sizeof(*c))&&token->owner==c->owner;
 }
@@ -116,9 +133,9 @@ static int binding_current(void *cookie,uint64_t firmware,uint64_t uart)
 /* Supervised offsets of the firmware bound and of HCI identification from the
  * schedule origin. Recognition and wideband playback reserve the final 20 s. */
 static uint64_t bootstrap_offset(const struct bluetooth_profile *p)
-{return (p->version==3||(p->version==2&&p->headset.mode==4))?30000000:40000000;}
+{return (p->version>=3||(p->version==2&&p->headset.mode==4))?30000000:40000000;}
 static uint64_t hci_offset(const struct bluetooth_profile *p)
-{return (p->version==3||(p->version==2&&p->headset.mode==4))?35000000:p->version==2?45000000:55000000;}
+{return (p->version>=3||(p->version==2&&p->headset.mode==4))?35000000:p->version==2?45000000:55000000;}
 /* Checks and fields shared by both constructors, then the UART provider. */
 static int prepare(struct bluetooth_application *a,const struct bluetooth_profile *p,
     struct a733_native_usb *shared,const struct board_radio_chip_id *id,TaskHandle_t owner,
@@ -135,6 +152,7 @@ static int prepare(struct bluetooth_application *a,const struct bluetooth_profil
     a->started=start;a->deadline=end-10000;a->hci_deadline=start+hci_offset(p);
     a->bootstrap_deadline=start+(a->resident?BLUETOOTH_RESIDENT_BOOTSTRAP_US:bootstrap_offset(p));
     atomic_init(&a->failed,1);atomic_init(&a->result_lock,0);atomic_init(&a->result,0);
+    atomic_init(&a->stop_release,0);atomic_init(&a->stop_peer,0);
     a->uart_config=p->uart;a->uart_config.handoff=shared->boot.identity;a->uart_config.startup_deadline_us=start+2000000;
     for(unsigned i=0;i<4;++i)a->slots[i]=(struct bt_h4_storage){a->packets[i],sizeof(a->packets[i])};
     return a733_uart_platform_native_init(&a->uart_native,&shared->locks,owner,1,uart_admit,a)&&
@@ -152,7 +170,8 @@ int bluetooth_application_init(struct bluetooth_application *a,const struct blue
         !a733_radio_platform_init(&a->radio,&a->radio_config,&a->radio_native.operations,&a->radio_native,
             &shared->clocks,&shared->pins,&shared->rails,&shared->pmic)||
         !a733_radio_platform_four_bit(&a->radio)||
-        !a733_radio_platform_bluetooth(&a->radio,&p->wake))return 0;
+        !a733_radio_platform_bluetooth(&a->radio,&p->wake)||
+        (p->version==4&&!a733_radio_platform_bluetooth_stop(&a->radio,&p->bluetooth_stop)))return 0;
     a->session_config=(struct a733_radio_session_config){.owner_task=owner,.owner=p->session_owner,
         .bootstrap_deadline=a->radio_config.deadline_us,.runtime_lease_us=p->runtime_lease_us,.renew_margin_us=p->renew_margin_us,
         .transport=p->transport,.bootstrap=p->bootstrap,.firmware={.identity=p->identity,.profile=1},
@@ -171,7 +190,8 @@ static int wake_admit(void *cookie,const struct a733_radio_platform_config *c,co
     struct bluetooth_application *a=cookie;
     return a->self==a&&a->attached&&c==&a->module_radio->config&&token->owner==c->owner&&
         a->profile->radio_authority&&a->profile->wake_authority&&
-        !memcmp(&a->module_radio->bluetooth,&a->profile->wake,sizeof(a->profile->wake));
+        !memcmp(&a->module_radio->bluetooth,&a->profile->wake,sizeof(a->profile->wake))&&
+        stop_admitted(a,a->module_radio);
 }
 int bluetooth_application_attach(struct bluetooth_application *a,const struct bluetooth_profile *p,
     struct a733_native_usb *shared,const struct board_radio_chip_id *id,TaskHandle_t owner,
@@ -190,6 +210,7 @@ int bluetooth_application_attach(struct bluetooth_application *a,const struct bl
     if(!prepare(a,p,shared,id,owner,latch,start,end,digest))return 0;
     a->module_radio=module->platform;a->module_session=module;a->attached=1;
     if(!a733_radio_platform_bluetooth(a->module_radio,&p->wake)||
+        (p->version==4&&!a733_radio_platform_bluetooth_stop(a->module_radio,&p->bluetooth_stop))||
         !a733_radio_platform_native_extend(native,wake_admit,a))return 0;
     atomic_store_explicit(&a->failed,0,memory_order_release);return 1;
 }
@@ -232,9 +253,132 @@ static int poll_module(struct bluetooth_application *a,uint64_t *now)
             platform==a->radio.stage&&session==a->session.stage))return 1;
     }
 }
+enum { STOP_NONE,STOP_UART_START,STOP_PROTOCOL,STOP_RESET,STOP_MODULE,
+       STOP_RX,STOP_UART,STOP_DONE,STOP_FAULT };
+static int stop_fault(struct bluetooth_application *a)
+{
+    if(a->stop_phase!=STOP_FAULT){a->stop_fault=a->stop_phase;a->stop_phase=STOP_FAULT;
+        (void)bluetooth_application_retain(a);}
+    return -1;
+}
+int bluetooth_application_module_release(struct bluetooth_application *a)
+{
+    if(!a||a->self!=a||atomic_load_explicit(&a->failed,memory_order_acquire))return -1;
+    return atomic_load_explicit(&a->stop_release,memory_order_acquire)?1:0;
+}
+void bluetooth_application_module_down(struct bluetooth_application *a,int proved)
+{
+    if(!a||a->self!=a||xTaskGetCurrentTaskHandle()!=a->owner||!a->attached)return;
+    /* A later module fault cannot erase a previously published PM2 proof.
+     * Conversely, an earlier failed proof cannot become successful. */
+    unsigned pending=0;
+    (void)atomic_compare_exchange_strong_explicit(&a->stop_peer,&pending,proved==1?1u:2u,
+        memory_order_release,memory_order_relaxed);
+}
+int bluetooth_application_stop(struct bluetooth_application *a,uint64_t deadline)
+{
+    if(!a||a->self!=a||xTaskGetCurrentTaskHandle()!=a->owner||!deadline)return -1;
+    if(a->stop_phase==STOP_FAULT)return -1;
+    if(a->stop_phase==STOP_DONE)return atomic_load_explicit(&a->failed,memory_order_acquire)?-1:1;
+    uint64_t now;
+    if(atomic_load_explicit(&a->failed,memory_order_acquire)||
+       (atomic_load_explicit(a->recovery_state,memory_order_acquire)&4)||
+       !a733_counter_clock_now(&a->shared->counter,&now))return stop_fault(a);
+    if(deadline>a->deadline)deadline=a->deadline;
+    if(!a->stop_deadline||deadline<a->stop_deadline)a->stop_deadline=deadline;
+    if(now>=a->stop_deadline)return stop_fault(a);
+    a->iteration_live=0;
+    if(!a->stop_phase){
+        a->stop_phase=a->stage?STOP_PROTOCOL:STOP_UART_START;
+        /* Stop the standalone SDIO producer immediately. Its accepted request
+         * drains while HCI retires; physical teardown waits for release. */
+        if(!a->attached&&a733_radio_session_stop(&a->session,a->stop_deadline)!=1)return stop_fault(a);
+        if(a->stage>=2){
+#ifdef SUNSTONE_BLUETOOTH_HEADSET
+            if(a->profile->version>=2&&bluetooth_headset_stop_begin(a,now,a->stop_deadline)!=1)return stop_fault(a);
+#endif
+            if(bt_hci_scan_disable(&a->hci,a->stop_deadline)!=1)return stop_fault(a);
+        }
+    }
+    if(a->stop_phase==STOP_UART_START){
+        enum a733_uart_platform_result r=a733_uart_platform_poll(&a->uart);
+        if(r==A733_UART_PLATFORM_RETAINED||r==A733_UART_PLATFORM_INVALID)return stop_fault(a);
+        if(r==A733_UART_PLATFORM_READY){a->uart_generation=a->uart.clock.id;a->stage=1;a->stop_phase=STOP_PROTOCOL;}
+        return 0;
+    }
+    if(!a->attached&&a->stop_phase<=STOP_MODULE){
+        enum a733_radio_session_result r=a733_radio_session_poll(&a->session);
+        if(r==A733_SESSION_RETAINED||r==A733_SESSION_INVALID)return stop_fault(a);
+        if(r==A733_SESSION_DOWN){
+            unsigned proved=a733_radio_session_peer_stopped(&a->session)==1;
+            atomic_store_explicit(&a->stop_peer,proved?1u:2u,memory_order_release);
+        }
+    }
+    if(a->stop_phase==STOP_PROTOCOL||a->stop_phase==STOP_RESET){
+        if(a->stage<2){
+            /* No HCI packet exists. The module owner still must prove the
+             * actual Bluetooth peer stopped before UART can drain. */
+            atomic_store_explicit(&a->stop_release,1,memory_order_release);
+            a->stop_phase=STOP_MODULE;return 0;
+        }
+        /* The shared module owner requests its stop before releasing physical
+         * resources. A notification can reach this client first. */
+        if(a->attached&&!a->module_session->stop_requested)return 0;
+        int held=a733_radio_session_stop_held(a->module_session);
+        if(held<0)return stop_fault(a);if(!held)return 0;
+        enum a733_uart_platform_result u=a733_uart_platform_live(&a->uart,a->stop_deadline);
+        if(u==A733_UART_PLATFORM_BUSY)return 0;if(u!=A733_UART_PLATFORM_READY)return stop_fault(a);
+        a->iteration_live=1;
+        if(a->stop_phase==STOP_PROTOCOL){
+            int done;
+#ifdef SUNSTONE_BLUETOOTH_HEADSET
+            if(a->profile->version>=2)done=bluetooth_headset_stop(a,now,a->stop_deadline);
+            else
+#endif
+            {done=bt_hci_step(&a->hci,64,a->stop_deadline)<0?-1:bt_hci_scan_disabled(&a->hci);}
+            a->iteration_live=0;
+            if(done<0)return stop_fault(a);if(!done)return 0;
+            if(bt_hci_stop(&a->hci,a->stop_deadline)!=1)return stop_fault(a);
+            a->stop_phase=STOP_RESET;return 0;
+        }
+        int r=bt_hci_step(&a->hci,64,a->stop_deadline);
+        a->iteration_live=0;
+        if(r<0)return stop_fault(a);
+        r=bt_hci_stopped(&a->hci);if(r<0)return stop_fault(a);if(!r)return 0;
+        atomic_store_explicit(&a->stop_release,1,memory_order_release);
+        a->stop_phase=STOP_MODULE;return 0;
+    }
+    if(a->stop_phase==STOP_MODULE){
+        if(!a->attached&&a733_radio_session_stop_release(&a->session)!=1)return stop_fault(a);
+        unsigned peer=atomic_load_explicit(&a->stop_peer,memory_order_acquire);
+        if(!peer)return 0;if(peer!=1)return stop_fault(a);
+        a->stop_phase=STOP_RX;return 0;
+    }
+    if(a->stop_phase==STOP_RX){
+        enum a733_uart_platform_result u=a733_uart_platform_live(&a->uart,a->stop_deadline);
+        if(u==A733_UART_PLATFORM_BUSY)return 0;if(u!=A733_UART_PLATFORM_READY)return stop_fault(a);
+        /* PM2 reset-low is already authenticated. No peer can add bytes;
+         * consume only the finite residual FIFO, preserving line errors. */
+        struct a733_uart_byte bytes[64];struct a733_uart_result result;
+        struct a733_uart *uart=a733_uart_platform_controller(&a->uart);
+        if(!uart||a733_uart_exchange(uart,bytes,64,NULL,0,64,a->stop_deadline,&result)!=A733_UART_READY||result.errors)
+            return stop_fault(a);
+        if(result.received)return 0;
+        if(a733_uart_platform_close(&a->uart,1,a->stop_deadline)!=A733_UART_PLATFORM_PENDING)return stop_fault(a);
+        a->stop_phase=STOP_UART;return 0;
+    }
+    if(a->stop_phase==STOP_UART){
+        enum a733_uart_platform_result r=a733_uart_platform_poll(&a->uart);
+        if(r==A733_UART_PLATFORM_RETAINED||r==A733_UART_PLATFORM_INVALID)return stop_fault(a);
+        if(r==A733_UART_PLATFORM_CLOSED){a->stop_phase=STOP_DONE;return 1;}
+        return 0;
+    }
+    return stop_fault(a);
+}
 int bluetooth_application_poll(struct bluetooth_application *a)
 {
     if(!a||a->self!=a||xTaskGetCurrentTaskHandle()!=a->owner)return -1;
+    if(a->stop_phase)return bluetooth_application_stop(a,a->stop_deadline);
 #ifdef SUNSTONE_BLUETOOTH_MSBC
     if(bluetooth_playback_mode(a)&&!atomic_load_explicit(&a->result,memory_order_acquire)&&bluetooth_playback_cancelled(a))return bluetooth_application_retain(a);
 #endif
@@ -332,6 +476,6 @@ int bluetooth_recognition_output(struct bluetooth_application *a,const void *out
 {return a&&bt_range_disjoint(a,sizeof(*a),out,bytes)&&bt_range_disjoint(a->profile,sizeof(*a->profile),out,bytes)&&
     bt_range_disjoint(a->shared,sizeof(*a->shared),out,bytes);}
 int bluetooth_recognition_live(struct bluetooth_application *a)
-{return a&&a->self==a&&a->profile->version==3&&!atomic_load_explicit(&a->failed,memory_order_acquire)&&
+{return a&&a->self==a&&a->profile->version>=3&&!atomic_load_explicit(&a->failed,memory_order_acquire)&&
     !(atomic_load_explicit(a->recovery_state,memory_order_acquire)&4);}
 #endif

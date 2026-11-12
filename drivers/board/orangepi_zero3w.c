@@ -5,6 +5,7 @@
 #include "a733_pins.h"
 #include "a733_twi.h"
 #include "a733_rail_leases.h"
+#include "a733_i2c_bus.h"
 
 /* V1.2 schematic sheets 13 and 17, recorded in docs/board-wiring.md.
  * The reference camera module uses two of each connector's four lanes.
@@ -46,6 +47,20 @@ static const struct sunstone_usb_port usb[] = {
      .sda_bank=A733_PIN_L,.sda_pin=13,.i2c_function=3,
      .supplies={A733_RAIL_DCDC1,A733_RAIL_DC1SW2},.supply_uv=3300000}
 };
+/* Header I2C. The function numbers are the manual's multiplexing tables 18-29,
+ * 18-31 and 18-38: TWI0 and TWI1 are function 8 on PB, TWI2 and TWI3 are
+ * function 2 on PE (shared with SPI3), and S_TWI2 is function 3 on PL4 and PL5.
+ * The device tree places S_TWI2 on PL10 and PL11, which the schematic routes to
+ * the Type-C sideband pins; the schematic's header pins 27 and 28 use PL5 and PL4.
+ * No device is attached; the port enables the SoC pull-up because this record
+ * holds no external pull-up for these nets. */
+static const struct sunstone_i2c_route i2c[] = {
+    {"i2c0",A733_I2C_TWI0,A733_PIN_B,2,3,8,5,3},
+    {"i2c1",A733_I2C_TWI1,A733_PIN_B,7,8,8,40,38},
+    {"i2c2",A733_I2C_TWI2,A733_PIN_E,1,2,2,23,19},
+    {"i2c3",A733_I2C_TWI3,A733_PIN_E,3,4,2,21,26},
+    {"s-i2c2",A733_I2C_S_TWI2,A733_PIN_L,4,5,3,28,27}
+};
 const struct ss_cpu_policy sunstone_orangepi_zero3w_cpu_policy = {
     .admitted=0xff,.reserved=0,.service=0xff,.application=0xff,.irq=0xff
 };
@@ -55,7 +70,8 @@ static const struct sunstone_board_description board = {
     .camera=cameras,.camera_count=sizeof(cameras)/sizeof(cameras[0]),
     .camera_sensors=sensors,.camera_sensor_count=sizeof(sensors)/sizeof(sensors[0]),
     .display_ports=displays,.display_port_count=sizeof(displays)/sizeof(displays[0]),
-    .usb_ports=usb,.usb_port_count=sizeof(usb)/sizeof(usb[0])
+    .usb_ports=usb,.usb_port_count=sizeof(usb)/sizeof(usb[0]),
+    .i2c_routes=i2c,.i2c_route_count=sizeof(i2c)/sizeof(i2c[0])
 };
 const struct sunstone_board_description *sunstone_board_orangepi_zero3w(void)
 { return &board; }

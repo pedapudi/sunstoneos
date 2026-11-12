@@ -15,6 +15,9 @@
 #ifndef GPU_LIFECYCLE_PEER
 #define GPU_LIFECYCLE_PEER 0
 #endif
+#ifndef GPU_LIFECYCLE_FAIL_AFTER_SUBMIT
+#define GPU_LIFECYCLE_FAIL_AFTER_SUBMIT 0
+#endif
 
 /* The fixed peer application is linked only into the sharing image. */
 #if GPU_LIFECYCLE_PEER
@@ -122,6 +125,11 @@ void gpu_lifecycle_main(const struct ss_grant *grant)
         if (submit_ready(context, &job) != GPU_QUEUE_OK) ss_fail(4);
 #if GPU_LIFECYCLE_PEER && !GPU_LIFECYCLE_RECOVERY
         if (sequence == 1) gpu_queue_peer_release();
+#endif
+#if GPU_LIFECYCLE_FAIL_AFTER_SUBMIT
+        /* Keep the owner's accepted output unconsumed for failure quiescence. */
+        if (!gpu_queue_peer_accepted(50)) ss_fail(12);
+        ss_fail_value(0x770, 0x47505501);
 #endif
         struct gpu_queue_record record;
         if (gpu_queue_wait(context, &record, WAIT_TICKS) != GPU_QUEUE_OK ||

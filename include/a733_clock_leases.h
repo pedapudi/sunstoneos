@@ -97,7 +97,13 @@ typedef unsigned __int128 a733_clock_mask_t;
 #define A733_CLOCK_CPU_B A733_CLOCK_BIT(75) /* PLL_CPU_B and CPU-B mux/P at 0x08872000/0x0887201c. */
 #define A733_CLOCK_CPU_DSU A733_CLOCK_BIT(76) /* PLL_CPU_DSU and DSU mux/P at 0x08873000/0x0887301c. */
 #define A733_CLOCK_TWI9 A733_CLOCK_BIT(77) /* Controller, CCU+0xea4 gate0/reset16; exclusive. */
-#define A733_CLOCK_ALL     (A733_CLOCK_BIT(78)-1) /* Bits0–77 assigned; higher bits refused. */
+#define A733_CLOCK_TWI0 A733_CLOCK_BIT(78) /* Controller, CCU+0xe80 gate0/reset16; exclusive. */
+#define A733_CLOCK_TWI1 A733_CLOCK_BIT(79) /* Controller, CCU+0xe84 gate0/reset16; exclusive. */
+#define A733_CLOCK_TWI2 A733_CLOCK_BIT(80) /* Controller, CCU+0xe88 gate0/reset16; exclusive. */
+#define A733_CLOCK_TWI3 A733_CLOCK_BIT(81) /* Controller, CCU+0xe8c gate0/reset16; exclusive. */
+#define A733_CLOCK_S_TWI2 A733_CLOCK_BIT(82) /* Controller, R_CCU+0x19c gate2/reset18; exclusive. */
+#define A733_CLOCK_HEADER_TWIS (A733_CLOCK_TWI0|A733_CLOCK_TWI1|A733_CLOCK_TWI2|A733_CLOCK_TWI3)
+#define A733_CLOCK_ALL     (A733_CLOCK_BIT(83)-1) /* Bits0–82 assigned; higher bits refused. */
 #define A733_CLOCK_AUDIO_CHANGE (A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5|A733_CLOCK_LOCALS)
 
 enum a733_clock_result { A733_CLOCK_OK, A733_CLOCK_BUSY, A733_CLOCK_INVALID,
@@ -199,6 +205,9 @@ int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_
  * PL0/PL1 and electrical authority remain separate. TWI11 owns its controller
  * and CCU+0xeac gate0/reset16, with FABRIC held shared for APB1 stability.
  * TWI9 likewise owns 0x02519000 and CCU+0xea4 gate0/reset16 under FABRIC.
+ * TWI0-3 (header buses) own 0x02510000-0x02513000 and CCU+0xe80-0xe8c gate0/
+ * reset16 under FABRIC, as TWI9 does. S_TWI2 owns 0x07085000 and R_CCU+0x19c
+ * gate2/reset18 under the same APBS1 ancestry as S_TWI0 and S_TWI1.
  * Actual APB1 source/rate, pins and remote exclusion require separate admission.
  * FABRIC additionally covers
  * STORE_AHB/SD-monitor CCU+0x5c0 bits24/29, STORE_MBUS+0x5e0 bit30 and
@@ -255,6 +264,14 @@ enum a733_clock_result a733_clock_release(struct a733_clock_leases *,
  * before profile publication. It does not itself read or program the PLL.
  */
 enum a733_clock_result a733_clock_publish_audio(struct a733_clock_leases *,
+    const struct a733_clock_token *, uint64_t deadline, struct a733_clock_token *);
+/* Retiring cold audio parent only: replace its exact shared AUDIO5 token with
+ * exclusive AUDIO_CHANGE under one registry lock. Every other AUDIO1, DIV2,
+ * DIV5 or local consumer must have released its token. BUSY changes nothing;
+ * OK invalidates the old identity and returns the only live replacement.
+ * This metadata transition permits no hardware change without the parent's
+ * independent local drain and inherited-state checks. */
+enum a733_clock_result a733_clock_reclaim_audio(struct a733_clock_leases *,
     const struct a733_clock_token *, uint64_t deadline, struct a733_clock_token *);
 /* Atomic metadata publication after the privileged PLL coordinator has proved
  * its physical profile stable and kept all consumers excluded. parents must

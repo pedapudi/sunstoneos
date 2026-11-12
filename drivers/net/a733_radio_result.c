@@ -4,10 +4,11 @@
 #include <string.h>
 static unsigned platform_stage(const struct a733_radio_platform *p)
 {
-    if(p->stage>=RSTAGE_READY&&p->card.state==SDIO_CARD_READY)return A733_RADIO_STAGE_ENUMERATED;
-    if(p->stage>=RSTAGE_SUPPLY_WAIT)return A733_RADIO_STAGE_POWERED;
-    if(p->first_run_guard&&p->guard_done&&p->stage>=RSTAGE_PINS)return A733_RADIO_STAGE_GUARD_PASSED;
-    if(p->stage>RSTAGE_RAILS||(p->stage==RSTAGE_RAILS&&p->rail_count&&p->rail_index==p->rail_count))
+    unsigned stage=p->stop_requested&&p->stop_phase==3?p->stop_from:p->stage;
+    if(stage>=RSTAGE_READY&&p->card.state==SDIO_CARD_READY)return A733_RADIO_STAGE_ENUMERATED;
+    if(stage>=RSTAGE_SUPPLY_WAIT)return A733_RADIO_STAGE_POWERED;
+    if(p->first_run_guard&&p->guard_done&&stage>=RSTAGE_PINS)return A733_RADIO_STAGE_GUARD_PASSED;
+    if(stage>RSTAGE_RAILS||(stage==RSTAGE_RAILS&&p->rail_count&&p->rail_index==p->rail_count))
         return A733_RADIO_STAGE_RAILS_OBSERVED;
     return A733_RADIO_STAGE_NONE;
 }

@@ -73,6 +73,7 @@ static int fast_kick(void *,unsigned,unsigned,unsigned char *);
 static void fast_model(void *);
 static void fast_cases(unsigned);
 static void fast_peer(void);
+static struct gpu_queue_job fast_job(unsigned,unsigned);
 
 /* GPU and firmware model state. */
 static uint32_t kicked, run, gpu_status, irq_count, hook_wakes, kick_step_count;
@@ -234,7 +235,7 @@ static int kick(void *ctx, uint32_t off, uint32_t value)
 {
     unsigned next = (unsigned)word(resource(0), 4), slot = (next - 1) & 127;
     unsigned char *command = resource(1) + slot * 88;
-    if (gpu_queue_case>=54 && word(command,4)==(PVR_CCB_MAGIC|101u)) return fast_kick(ctx,off,value,command);
+    if (gpu_queue_case>=54 && (gpu_queue_case<=68||gpu_queue_case==73||gpu_queue_case==75) && word(command,4)==(PVR_CCB_MAGIC|101u)) return fast_kick(ctx,off,value,command);
 #ifdef PVR_GPU_PERFORMANCE
     if(perf_kick(ctx,next,slot,command))return 1;
 #endif
@@ -274,7 +275,7 @@ static const int8_t *weights_cpu(uint64_t gpu)
 { return (const int8_t *)(uintptr_t)gpu; }
 static void model(void *unused)
 {
-    if (gpu_queue_case>=54) fast_model(unused);
+    if (gpu_queue_case>=54 && (gpu_queue_case<=68||gpu_queue_case==73||gpu_queue_case==75)) fast_model(unused);
     (void)unused;
     for (;;) {
         while (__atomic_load_n(&kicked, __ATOMIC_ACQUIRE) == run) {}
@@ -730,6 +731,9 @@ static void client(void *unused)
     (void)unused;
     const unsigned c = gpu_queue_case;
     uint64_t lines0 = cache_lines, translations0 = translations;
+#ifdef GPU_QUEUE_RETURNING
+    if(c==72)failure_return_client(c);
+#endif
     struct gpu_queue_context_config creation={.job_us=(c>=41&&c<=49)||c==52?200000:1000000,.program=&program,.lease_count=4};
     if (c==55) creation.priority=GPU_QUEUE_PRIORITY_HIGH;
     if (c==56) creation.job_us=2000;
@@ -764,6 +768,9 @@ static void client(void *unused)
     struct pvr_gpu_service_reply reply;
     configASSERT(compute->phase==PVR_COMPUTE_QUEUE_READY && service.phase==PVR_GPU_SERVICE_READY &&
         session.vm.phase==A733_GPU_VM_MEMORY_PUBLISHED);
+#ifdef GPU_QUEUE_RETURNING
+    if(c>=69)failure_return_client(c);
+#endif
     if (c>=54) fast_cases(c);
     if (c==53) {
         while (service.irq_masked) vTaskDelay(1);
@@ -1093,7 +1100,7 @@ void kernel_main(void)
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
     ss_latency_init(frequency);
 #endif
-    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 68);
+    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 75);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
     if (gpu_queue_case == 1) for (size_t i = 0; i < (16u << 20) / 8; ++i) weights[i] = next_random();
@@ -1128,8 +1135,8 @@ void kernel_main(void)
     config.stop = (struct pvr_gpu_stop_ops){boundary_now, read_reg, write_reg, sync_write, sync_read, isolate, NULL};
     config.enable = enable; config.context = &config; config.compute_mode = mode;
     config.irq = (struct pvr_gpu_service_irq_ops){mask, rearm};
-    if (gpu_queue_case>=54) {config.job_irq_ack=job_irq_ack;config.job_now=job_now;}
-    if (gpu_queue_case>=63) config.job_kick=job_kick;
+    if (gpu_queue_case>=54 && (gpu_queue_case<=68||gpu_queue_case==73||gpu_queue_case==75)) {config.job_irq_ack=job_irq_ack;config.job_now=job_now;}
+    if (gpu_queue_case>=63 && (gpu_queue_case<=68||gpu_queue_case==73||gpu_queue_case==75)) config.job_kick=job_kick;
     if(gpu_queue_case>=41) {
         config.recovery_begin=recovery_admit;
         config.stop.read=recovery_read;config.stop.isolate=recovery_isolate;
@@ -1149,7 +1156,7 @@ void kernel_main(void)
     TaskHandle_t a = xTaskCreateStaticAffinitySet(client, "client", 4096, NULL, 3, queue_stacks[0], &queue_tasks[0], 1);
     TaskHandle_t m = xTaskCreateStaticAffinitySet(model, "model", 4096, NULL, 6, queue_stacks[1], &queue_tasks[1], 2);
     configASSERT(a && m && pvr_gpu_service_bind(&service, 0, a));
-    if(gpu_queue_case>=40 && gpu_queue_case!=68) {
+    if(gpu_queue_case>=40 && gpu_queue_case<68) {
         TaskHandle_t peer=xTaskCreateStaticAffinitySet(shared_peer,"peer",4096,NULL,3,queue_stacks[2],&queue_tasks[2],1);
         configASSERT(peer && pvr_compute_queue_client_register(compute,peer));
     }

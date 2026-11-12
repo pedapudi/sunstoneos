@@ -17,7 +17,7 @@ import struct
 from elftools.elf.elffile import ELFFile
 from harness import machine as harness_machine, Image, hook_addresses, refused, save, skip_crumbs, seal_lifetime
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM
-from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP
+from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP
 
 ROOT=Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--image', '{elf:ret-gpu}', '--output', '{output}']]
@@ -79,7 +79,7 @@ def run_image(path,output):
         elif case.startswith('nonzero-'):put(gpu+gpu_fields[case.removeprefix('nonzero-')],1,1)
         callbacks=('eTaskGetState','uxQueueMessagesWaiting','pvr_gpu_service_send_epoch',
                    'pvr_gpu_service_collect','a733_gpu_backend_stopped')
-        names=['a733_smp_counter','ucPortGetCoreID','xTaskGetCurrentTaskHandle','board_live','os_gpu_queue_quiesce','board_fail','platform_exit',
+        names=['a733_smp_counter','ucPortGetCoreID','xTaskGetCurrentTaskHandle','board_live','os_gpu_queue_quiesce','board_fail','board_fail_at','platform_exit',
                'vTaskSuspend','os_gpu_retire','os_cpu_return_begin',*callbacks]
         hooks={image.address(name):name for name in names}
         def ret(value=0):u.reg_write(UC_ARM64_REG_X0,value);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
@@ -92,7 +92,13 @@ def run_image(path,output):
             elif name=='os_gpu_retire':state['retire_entries']+=1
             elif name=='os_gpu_queue_quiesce':state['quiesce_entries']+=1
             elif name=='board_live':ret(1)
-            elif name=='board_fail':state['terminal']='board-fail';machine.emu_stop()
+            elif name=='board_fail_at':
+                # ss_fail enters the located failure boundary directly. Stop
+                # before its independent failure-return claim changes result
+                # state; retain the exact refusal instead of accepting a park.
+                state['failure']={'site':arg,'value':machine.reg_read(UC_ARM64_REG_X1),'caller':machine.reg_read(UC_ARM64_REG_X2)}
+                state['terminal']='located-failure';machine.emu_stop()
+            elif name=='board_fail':state['terminal']='unlocated-board-fail';machine.emu_stop()
             elif name=='platform_exit':state['terminal']='exit-'+hex(arg);machine.emu_stop()
             elif name=='vTaskSuspend':
                 if arg:state['worker_callbacks'].append(name)
@@ -132,7 +138,11 @@ def run_image(path,output):
                 (output/(path.stem+'-'+case+'-receipt.bin')).write_bytes(receipt)
                 (output/(path.stem+'-'+case+'-result.bin')).write_bytes(result)
         else:
-            passed=passed and state['terminal']=='board-fail' and state['cpu_return_entries']==0 and finished==0 and closing==0 and receipt==bytes(64)
+            detail=0x756 if case=='wrong-task' else 0x757 if case in ('missing-admission','bound-gpu-client','expired-cutoff') else 0x75e
+            failure=state.get('failure',{})
+            passed=passed and state['terminal']=='located-failure' and failure.get('site')==(0x80004000|detail) and \
+                failure.get('value')==detail and bool(failure.get('caller')) and state['cpu_return_entries']==0 and \
+                finished==0 and closing==0 and receipt==bytes(64)
         rows.append(dict(case=case,passed=passed,expected_success=success,payload_bytes=len(payload),result_capacity=capacity,finished=finished,closing=closing,model=state))
     return dict(image=str(path),image_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),cases=rows,passed=all(r['passed'] for r in rows))
 
