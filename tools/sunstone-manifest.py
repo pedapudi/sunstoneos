@@ -709,6 +709,11 @@ def c_tables(m):
              ] + ['    {%d,0,0xd8,os_i2c_irq_%s},' % (d['intid'], d['symbol']) for d in m.get('i2c', [])] + [
              '#ifdef SUNSTONE_A733_HW_FACTS', '    {97,0,0xd8,os_hw_facts_irq},{143,0,0xd8,os_hw_facts_irq},{95,0,0xd8,os_hw_facts_irq},', '#endif', '};',
              'const unsigned a733_irq_route_count=sizeof(a733_irq_routes)/sizeof(a733_irq_routes[0]);',
+             '#include "cpu-return-spi.h"',
+             '/* The CPU return saves each routed interrupt\'s distributor state: one record for each route. */',
+             'struct os_return_irq os_return_irq_saved[sizeof(a733_irq_routes)/sizeof(a733_irq_routes[0])]',
+             '    __attribute__((section(".bss.a733_smp_monitor"),aligned(128)));',
+             'const unsigned os_return_irq_capacity=sizeof(a733_irq_routes)/sizeof(a733_irq_routes[0]);',
              '#ifdef SUNSTONE_A733_OS_GPU', '#include "gpu-runtime.h"',
              '/* The declared job bound; an image without GPU use replies within the open window. */',
              '__attribute__((used,retain)) const uint64_t os_gpu_job_us=UINT64_C(%d);' % gpu_us,

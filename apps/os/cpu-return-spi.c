@@ -3,13 +3,12 @@
 #include "cpu-return.h"
 #include "cpu-return-runtime.h"
 #include "a733_thermal.h"
+#include "cpu-return-spi.h"
 #include "irq_table.h"
-/* The current image can select thermal, NPU, I2S DMA and GPU routes. */
-#define RETURN_IRQ_CAPACITY 4u
-static struct {
-    uint64_t route;
-    uint32_t group,modifier,config,priority,valid,intid;
-} saved[RETURN_IRQ_CAPACITY] __attribute__((section(".bss.a733_smp_monitor"),aligned(128)));
+/* One saved record for each route of the image: the generated tables define the array with the route table's own
+ * length (tools/sunstone-manifest.py), so a route cannot be added without its record. */
+#define saved os_return_irq_saved
+#define RETURN_IRQ_CAPACITY os_return_irq_capacity
 static unsigned saved_count __attribute__((section(".bss.a733_smp_monitor")));
 #define GICD UINT32_C(0x03400000)
 static void barrier(void){__asm__ volatile("dsb sy":::"memory");}
