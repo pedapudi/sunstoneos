@@ -197,7 +197,10 @@ static int parent(struct bus *b,uint32_t *hz,a733_clock_mask_t *extra)
     uint32_t parent_hz;
     if(b->data->parent==A733_I2C_PARENT_APB1){
         if(source==0){if(!a733_clock_ref24_valid(xo,ref))return 0;parent_hz=24000000;}
-        else if(source==3){if(!a733_clock_peri0_valid(rd(CCU+0xa0)))return 0;parent_hz=600000000;*extra=A733_CLOCK_PERI0;}
+        else if(source==3){
+            if(!a733_clock_ref24_valid(xo,ref)||!a733_clock_peri0_valid(rd(CCU+0xa0)))return 0;
+            parent_hz=600000000;*extra=A733_CLOCK_PERI0;
+        }
         else return 0;
     }else{
         if(source==0){if((xo&UINT32_C(0x10000002))!=UINT32_C(0x10000002))return 0;parent_hz=a733_clock_dcxo_hz(xo);}
