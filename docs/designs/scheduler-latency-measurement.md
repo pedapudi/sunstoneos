@@ -243,11 +243,31 @@ The capture has three parts.
    counter; half a round trip estimates one transfer and includes the peer's
    polling. One 250 ms deadline bounds the exchange.
 
-The report occupies 13,904 bytes and the exchange report 3,392 bytes; a
-64-byte footer gives both offsets. All recorded intervals are raw: hook
+Event counters 0 to 4 count L1 instruction refills (`0x01`), L1 data refills
+(`0x03`), L2 data refills (`0x17`), attributable L3 data refills (`0x2a`) and
+backend stall cycles (`0x24`) at EL0 and EL1. Each tick segment records their
+differences beside its cycle stamps; the counters are 32 bits wide, so every
+difference is taken modulo 2^32. The report keeps these differences for the
+retained tick and, per phase, sums over complete ticks (all eight releases and
+scans): whole tick, each release, each scan, and the remainder outside them.
+
+The report occupies 16,432 bytes and the exchange report 3,392 bytes; a
+64-byte footer gives both offsets. The profile declares a 147,456-byte output
+limit to hold them. All recorded intervals are raw: hook
 bookkeeping stays inside them, and the benchmark's empty body and an empty
 release-hook pair give the overhead references. Every hook is compiled only
 when the option is set, so production images carry none of this code.
+
+The cache lines behind each segment come from the eight-core QEMU model.
+`tools/qemu-tick-footprint.c` is a QEMU plugin that records CPU0's
+instructions and data accesses between the tick hooks, keeping only ticks whose
+fixture phase load returns the busy value. `tools/tick-footprint.py` splits each
+tick at the release and scan hooks, resolves every data address to its variable
+and field through DWARF and every instruction to its source line, and counts the
+lines each segment touches first in the tick. It classes lines as operating
+system, exception stack, latency fixture or diagnostic. When the busy traffic
+evicts the working set between ticks, the first-touch count of a segment
+estimates its refills, which the board's event counts then test.
 
 ## The control phase retains enough samples for the requested percentile
 
