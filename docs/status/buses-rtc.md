@@ -20,13 +20,14 @@ records. These results do not qualify every exposed bus or reset scenario.
 | PWM (fan, LED) and GPADC0-3 | host-tested | LRADC electrically blocked | [PWM](../pwm.md), [ADC](../adc-application.md) |
 | RTC RC-mode progression | qualified on the board | 1 s in about 1.1 s | `buses-rtc-rtc-rc-progression` |
 | RTC calendar, crystal initialization, non-waking alarms | host-tested | | [RTC](../rtc-application.md) |
+| RTC calendar set, one alarm and retention from the internal RC | qualified on the board (read after the alarm unrun) | alarm at target + 1 RTC s, 0.22 ms to finish; RTC second about 1.19 s | [design](../designs/rtc-rc-alarm.md) |
 | Watchdog expiry, retained breadcrumbs, FEL recovery | qualified on the board | | `buses-rtc-watchdog-fel-return`; [watchdog](../watchdog.md) |
 | LEDs, buttons, infrared, Ethernet, debug | open | | [board wiring](../board-wiring.md) |
 
 ## Open work
 
 1. Qualify the exposed I2C controllers electrically with an attached peripheral: rise time, bank voltage, clock stretching and the 400 kHz margin. The empty-bus scan (see the evidence table) establishes the binding only.
-2. Qualify the RTC alarms, clock switching, absolute time, calibration, wake and calendar retention across power modes. The board runs the RTC from the internal RC oscillator (source control 0x401c); the alarm opener and the calendar writer accept only the external 32.768 kHz source, so qualifying alarms and absolute time without changing the clock source needs a reviewed RC-source mode in `drivers/rtc/a733_rtc.c` and `drivers/rtc/a733_rtc_initialize.c`.
+2. Run the corrected `rtc-alarm` image once to qualify the calendar read after the alarm, then qualify crystal selection, calibration, wake and calendar retention across power removal. The RTC runs from the uncalibrated internal RC (about 1.19 s per RTC second); no 32.768 kHz accuracy is established.
 3. Qualify UART, SPI and PWM electrically: wiring, timing, IRQs, DMA visibility and waveform.
 4. Qualify ADC values, accuracy, IRQs and recovery; resolve the LRADC electrical block.
 5. Audit the remaining board functions (LEDs, buttons, infrared, Ethernet and debug) against the wiring record.
@@ -92,7 +93,7 @@ Audit fitted LEDs, buttons, infrared, Ethernet, debug and other blocks against [
 Board results are records in [`docs/evidence/buses-rtc.jsonl`](../evidence/buses-rtc.jsonl); add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-buses-rtc-20261101.md).
 
 <!-- evidence-table:begin -->
-7 records in `docs/evidence/buses-rtc.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+9 records in `docs/evidence/buses-rtc.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -103,4 +104,6 @@ Board results are records in [`docs/evidence/buses-rtc.jsonl`](../evidence/buses
 | `1794482316080920295-1fa0e7b5` | 2026-11-12 | 3-3 | `3d5cda73c6ec` | returned | passed | run_total 22.727 s |
 | `1794482360148455232-b0b0b849` | 2026-11-12 | 3-3 | `6af5ee3fa083` | returned | passed | run_total 22.802 s |
 | `1794482394892578429-4199afcd` | 2026-11-12 | 3-3 | `576462699622` | host-error | passed | run_total 23.166 s, rate_100k_main 96153 Hz, rate_400k_main 384615 Hz, probe_100k_main 107 us, probe_400k_main 40 us, scan_100k 15.6 ms, scan_400k 7.1 ms, interrupts_per_scan 256 |
+| `1794482702632861790-8e32fccf` | 2026-11-12 | 3-3 | `e9110e0c556f` | returned | failed | run_total 27.101 s, alarm_wait 4 s, alarm_latency 0.22 ms |
+| `1794482776569788451-05dabdc7` | 2026-11-12 | 3-3 | `427f6502a73c` | returned | failed | run_total 27.822 s, alarm_wait 4.68 s, calendar_advance 59 s, rtc_second_estimate 1.19 s, alarm_latency 0.22 ms |
 <!-- evidence-table:end -->

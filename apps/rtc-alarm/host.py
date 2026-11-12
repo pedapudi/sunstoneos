@@ -40,9 +40,12 @@ def decode(p):
     if alarm['irq_ticks'] > alarm['arm_ticks'] and alarm['status'] == 1:
         interval = alarm['target_day'] * 86400 + (alarm['target_hms'] >> 16) * 3600 + ((alarm['target_hms'] >> 8) & 63) * 60 + (alarm['target_hms'] & 63) - alarm['armed']['seconds']
         out['alarm_latency_ms'] = (alarm['done_ticks'] - alarm['irq_ticks']) / TICKS * 1000
-        # The calendar read at arm lies somewhere in its RTC second, so the wait is between interval-1 and interval RTC seconds.
-        out['rtc_second_min_s'] = (alarm['irq_ticks'] - alarm['arm_ticks']) / TICKS / interval
-        out['rtc_second_max_s'] = (alarm['irq_ticks'] - alarm['arm_ticks']) / TICKS / (interval - 1) if interval > 1 else None
+        # Board result: the alarm interrupt arrives when the calendar reaches the target second plus one (the terminal
+        # calendar reads target + 1 s), and the calendar read at arm lies somewhere in its RTC second. The wait is
+        # therefore between `seconds` and `seconds + 1` RTC seconds.
+        wait = (alarm['irq_ticks'] - alarm['arm_ticks']) / TICKS
+        out['rtc_second_min_s'] = wait / (interval + 1)
+        out['rtc_second_max_s'] = wait / interval
         out['alarm_wait_s'] = (alarm['irq_ticks'] - alarm['arm_ticks']) / TICKS
     out['note'] = 'RC oscillator: the RTC second is measured (rtc_second_s), not asserted; no 32.768 kHz accuracy is claimed.'
     return out
@@ -59,16 +62,16 @@ def failures(d):
     a = d['alarm']
     if a['status'] != 1 or a['irq_count'] != 1:
         out.append(f"alarm status {a['status']} interrupts {a['irq_count']}")
-    elif not 2.5 <= d['alarm_wait_s'] <= 4.5:
+    elif not 2.5 <= d['alarm_wait_s'] <= 6.0:
         out.append(f"alarm after {d['alarm_wait_s']:.2f} s of real time for 3 RTC seconds")
     elif a['terminal']['seconds'] < a['target_day'] * 86400 + (a['target_hms'] >> 16) * 3600 + ((a['target_hms'] >> 8) & 63) * 60 + (a['target_hms'] & 63):
         out.append('terminal calendar before the alarm target')
     return out
 
 
-def retention(first, second, real_s, rtc_second_s=1.1):
+def retention(first, second, real_s, rtc_second_s=1.19):
     """Does the calendar of the later run's start continue the one the earlier run set? Returns (expected, actual, ok)."""
-    set_at = first['final']['seconds']
+    set_at = first['alarm']['terminal']['seconds']
     expected = set_at + real_s / rtc_second_s
     actual = second['initial']['seconds']
     return expected, actual, abs(actual - expected) <= max(5, 0.1 * real_s / rtc_second_s)

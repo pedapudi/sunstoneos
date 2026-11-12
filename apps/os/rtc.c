@@ -143,7 +143,8 @@ static void serve(void)
         if(phase==OPEN&&rtc.rtc.state==A733_RTC_READY)r=a733_rtc_set_time(&rtc.rtc,rtc.a,rtc.b,pause)?1:(fail(3),-1);
         break;
     case READ_OP:
-        if(phase==OPEN&&(rtc.rtc.state==A733_RTC_READY||rtc.rtc.state==A733_RTC_ARMED)){
+        if(phase==OPEN&&(rtc.rtc.state==A733_RTC_READY||rtc.rtc.state==A733_RTC_ARMED||
+                         rtc.rtc.state==A733_RTC_FIRED||rtc.rtc.state==A733_RTC_CANCELLED)){
             struct a733_rtc_time t;
             if(a733_rtc_read(&rtc.rtc,&t)){memcpy(&rtc.time,&t,sizeof(t));rtc.time_ticks=ss_counter_ticks();r=1;}else fail(4);
         }

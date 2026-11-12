@@ -1,8 +1,8 @@
 # RTC calendar and alarm while running from the internal RC oscillator
 
-**Status: implemented and host-tested; board run pending.**
+**Status: implemented; the RC source, calendar set, alarm and retention hold on the board; the read after the alarm is corrected and not yet run on the board.**
 
-The board starts with the RTC selected to the internal RC oscillator (clock control 0x401c, source status 0, prescaler 0x0f, calibration clear, RC enabled in `+0x160`). The earlier read-only record measured one RTC second in about 1.1 s. The external-source open and the calendar writer in `drivers/rtc/a733_rtc_initialize.c` accept only the external 32.768 kHz source, so they refuse this state. This design adds an RTC mode that writes the calendar and arms one alarm without writing any clock-source register.
+The board starts with the RTC selected to the internal RC oscillator (clock control 0x401c, source status 0, prescaler 0x0f, calibration clear, RC enabled in `+0x160`). The earlier read-only record measured one RTC second in about 1.1 s; two runs 70 s apart show 59 RTC seconds, so about 1.19 s. The rate is uncalibrated and not asserted. The external-source open and the calendar writer in `drivers/rtc/a733_rtc_initialize.c` accept only the external 32.768 kHz source, so they refuse this state. This design adds an RTC mode that writes the calendar and arms one alarm without writing any clock-source register.
 
 ## Vendor sequence and the diff of our code
 
@@ -22,7 +22,7 @@ The application `apps/rtc-alarm` opens the RTC, reads the calendar the RTC holds
 
 - The source is the normal RC (source 2) with control 0x401c.
 - The calendar read after the set is 04:00:00 to 04:00:02.
-- One alarm interrupt arrives. Three RTC seconds take between 2.5 and 4.5 s of system-counter time (about 3.3 s at the measured 1.1 s per RTC second). The result states the measured RTC second; it does not assert 32.768 kHz accuracy.
+- One alarm interrupt arrives. Three RTC seconds take between 2.5 and 6 s of system-counter time. The board shows the interrupt arriving when the calendar reaches the target second plus one, so the wait is between 3 and 4 RTC seconds, 4.0 and 4.7 s in the two runs. The result states the measured RTC second; it does not assert 32.768 kHz accuracy.
 - The owner finishes the alarm within 5 ms of the interrupt and the final calendar is at or after the alarm target.
 - A second run of the same image reads, at its start, the calendar of the first run's end plus the real time between the runs divided by the measured RTC second, which shows that the calendar survives the return to the host.
 
