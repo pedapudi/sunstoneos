@@ -10,6 +10,7 @@
 #include "../os/cpu-return-el0.h"
 #ifdef SUNSTONE_A733_OS
 #include "../os/cpu-return.h"
+extern int os_task_at_el1(void);
 #endif
 #include "cached.h"
 #include "a733_memory_uncached.h"
@@ -72,7 +73,8 @@ static void fail_session(void)
 #ifdef SUNSTONE_A733_OS
     /* A fault ends the session: the Wi-Fi credential leaves RAM first (EL1 callers only). Only a radio session receives
      * a credential (tools/board_images.py), and the session decode ties the radio grant to a radio workload. */
-    if(a733_board_radio_workload(board.session.workload)&&!atomic_load_explicit(&board_fail_from_el0,memory_order_acquire))
+    if(a733_board_radio_workload(board.session.workload)&&os_task_at_el1()&&
+       !atomic_load_explicit(&board_fail_from_el0,memory_order_acquire))
         os_wifi_credential_wipe();
 #endif
     fail_close();

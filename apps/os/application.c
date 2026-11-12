@@ -54,8 +54,13 @@ static TaskHandle_t main_task;
 TaskHandle_t os_application_main_task(void){return main_task;}
 /* 1 when the caller runs at EL1: a privileged task (the NPU's bootstrap, client and worker among them) or an exception
  * handler. The port's task register, TPIDRRO_EL0, carries the bit; EL0 can read it, and the interrupt and supervisor
- * entries set it. Every task of an application runs at EL0, so this is 0 in all of them. */
-int os_task_at_el1(void){return (int)((ullPortGetTaskRegister()>>portTASK_REGISTER_EL1_BIT)&1u);}
+ * entries set it. Before the first task, a zero TCB field identifies EL1 startup. The port installs a nonzero TCB
+ * before returning to an application task at EL0, where this function returns 0. */
+int os_task_at_el1(void)
+{
+    uint64_t tag=ullPortGetTaskRegister();
+    return !(tag&portTASK_REGISTER_TCB_MASK)||(int)((tag>>portTASK_REGISTER_EL1_BIT)&1u);
+}
 static atomic_uint_fast64_t finish_by;
 const struct ss_grant *ss_grant(void)
 {
@@ -516,7 +521,7 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
     }
     /* The Wi-Fi credential does not leave RAM here: the wipe's cache maintenance (dc civac) traps at EL0, where
      * this task runs. The radio owner and the return supervisor, both EL1, wipe once os_application_finished()
-     * holds (os_wifi_credential_poll); board_fail wipes directly. */
+     * holds (os_wifi_credential_poll); board_fail wipes directly only from EL1. */
     struct ss_result *r=(void *)ss_result_record;
     r->magic=SS_RESULT_MAGIC;r->version=SS_RESULT_VERSION;r->bytes=sizeof(*r)+ss_result_capacity;
     r->epoch=board.session.epoch;r->generation=board.session.generation;
