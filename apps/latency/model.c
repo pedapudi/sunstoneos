@@ -28,6 +28,51 @@ static void controller(void *argument)
     taskEXIT_CRITICAL();
 #endif
     latency_workload_run(&result);
+#ifdef SUNSTONE_LATENCY_CONTROL
+    configASSERT(result.control.magic == LATENCY_CONTROL_MAGIC);
+    configASSERT(result.control.mode == SUNSTONE_LATENCY_CONTROL_MODE);
+    configASSERT(result.control.requested_mask == 0xfe && !(result.control.ready_mask & ~0xfeu));
+    configASSERT(result.control.quiescent_mask == 0xfe && result.control.consumer_parked);
+    configASSERT(ulSunstoneControlTasksSuspended());
+    const unsigned control_complete = !result.control.errors && result.control.complete_mask == 0xfe;
+    configASSERT(control_complete || result.control.errors);
+    if (control_complete) configASSERT(result.control.ready_mask == 0xfe);
+    number("control_errors=", result.control.errors);
+    number(" control_complete_mask=", result.control.complete_mask);
+    platform_puts("\n");
+    for (unsigned c = 0; c < LATENCY_CONTROL_COUNT; ++c) {
+        const struct latency_control_core *row = &result.control.core[c];
+        if (result.core[c + 1].metric[SS_LAT_IRQ].count)
+            platform_panic("control PPI reached base tick recorder", c + 1);
+        configASSERT(row->core == c + 1);
+        if (control_complete) configASSERT(row->published_control > LATENCY_CONTROL_MIN_SAMPLES);
+        number("control_core=", row->core);
+        number(" rate_hz=", row->rate_hz);
+        number(" published_control=", row->published_control);
+        number(" published_task=", row->published_task);
+        number(" errors=", row->error_flags);
+        platform_puts("\n");
+        configASSERT(row->published_control == row->stats[0].count);
+        uint64_t sums[LATENCY_CONTROL_HISTOGRAMS] = {0};
+        for (unsigned h = 0; h < LATENCY_CONTROL_HISTOGRAMS; ++h)
+            for (unsigned b = 0; b < SS_CONTROL_BINS; ++b) sums[h] += row->histogram[h][b];
+        configASSERT(sums[LATENCY_CONTROL_IRQ_JITTER] == (row->stats[0].count ? row->stats[0].count - 1 : 0));
+        if (result.control.mode == LATENCY_CONTROL_BUSY) {
+            configASSERT(row->paths == 3);
+            if (control_complete) configASSERT(row->published_task >= LATENCY_CONTROL_MIN_SAMPLES);
+            configASSERT(row->published_task == row->stats[1].count);
+            configASSERT(sums[LATENCY_CONTROL_TASK_LATENCY] == row->published_task);
+            configASSERT(sums[LATENCY_CONTROL_TASK_GAP] == row->published_task);
+        } else {
+            configASSERT(row->paths == 1 && !row->published_task);
+            configASSERT(!sums[LATENCY_CONTROL_TASK_LATENCY] && !sums[LATENCY_CONTROL_TASK_GAP]);
+        }
+    }
+    if (control_complete)
+        platform_puts("PASS control qualification model: seven owned timer paths, declared counts, histogram totals and suspended writers; functional evidence only\n");
+    else
+        platform_puts("PASS control error shutdown model: published runtime error, coherent histograms and suspended writers; sample qualification incomplete\n");
+#endif
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     configASSERT(result.scheduler.magic == SS_SCHED_TRACE_MAGIC);
     configASSERT(result.scheduler.version == SS_SCHED_TRACE_VERSION);

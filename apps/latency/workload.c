@@ -182,10 +182,11 @@ static void load_worker(void *argument)
     vTaskSuspend(NULL);
     configASSERT(0);
 }
-static void wait_tick(void)
+static void wait_period(unsigned milliseconds)
 {
+    const TickType_t budget = (TickType_t)(((uint64_t)SUNSTONE_LATENCY_RUN_US * configTICK_RATE_HZ + 999999u) / 1000000u);
 #ifdef SUNSTONE_LATENCY_MODEL
-    if ((TickType_t)(xTaskGetTickCount() - began) >= pdMS_TO_TICKS(10000)) {
+    if ((TickType_t)(xTaskGetTickCount() - began) >= budget) {
         platform_puts("FAIL latency phase="); platform_hex(atomic_load(&phase));
         platform_puts(" ready="); platform_hex(atomic_load(&ready_mask));
         for (unsigned c = 0; c < LATENCY_CORES; ++c) {
@@ -198,10 +199,24 @@ static void wait_tick(void)
         platform_puts("\n");
     }
 #endif
-    configASSERT((TickType_t)(xTaskGetTickCount() - began) < pdMS_TO_TICKS(10000));
+    configASSERT((TickType_t)(xTaskGetTickCount() - began) < budget);
     latency_workload_progress();
-    vTaskDelay(1);
+    vTaskDelay(pdMS_TO_TICKS(milliseconds));
 }
+static void wait_tick(void) { wait_period(1); }
+#ifdef SUNSTONE_LATENCY_CONTROL
+static void qualify_control(void)
+{
+    configASSERT(latency_control_start(SUNSTONE_LATENCY_CONTROL_MODE));
+    /* Waiting twenty milliseconds keeps the lifetime progress window serviced without
+     * imposing a 1 kHz controller wake on the control-only idle phase. */
+    while (!latency_control_ready() && latency_control_complete() == 0) wait_period(20);
+    while (latency_control_complete() == 0) wait_period(20);
+    /* A published error stops sampling and remains visible in the report. */
+    latency_control_stop();
+    while (!latency_control_stopped() || !ulSunstoneControlTasksSuspended()) wait_period(20);
+}
+#endif
 static void wait_samples(unsigned expected)
 {
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
@@ -238,13 +253,17 @@ void latency_workload_run(struct latency_result *out)
     ss_latency_phase_set(SS_LAT_BUSY);
     atomic_store_explicit(&phase, BUSY, memory_order_release);
     wait_samples(LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES);
+#ifdef SUNSTONE_LATENCY_CONTROL
+    atomic_store_explicit(&phase, QUIET, memory_order_release);
+    if (SUNSTONE_LATENCY_CONTROL_MODE == LATENCY_CONTROL_BUSY) qualify_control();
+#endif
     ss_latency_phase_set(SS_LAT_PHASE_NONE);
     /* Measurement is complete. Stop background traffic before draining the
      * modeled DMA client; completion IRQs remain enabled throughout cleanup. */
     atomic_store_explicit(&stop_load, 1, memory_order_release);
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
         while (!atomic_load_explicit(&load[c].stopped, memory_order_acquire)) wait_tick();
-#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+#if defined(SUNSTONE_SCHED_LATENCY_TRACE) || defined(SUNSTONE_LATENCY_CONTROL)
     /* stopped precedes self-suspension. Wait for the command to commit before
      * the higher-priority wake task freezes this core's diagnostic records. */
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
@@ -256,6 +275,10 @@ void latency_workload_run(struct latency_result *out)
     out->dma_jobs = (uint32_t)atomic_load_explicit(&tlbi_issue_max, memory_order_relaxed);
 #endif
     atomic_store_explicit(&phase, QUIET, memory_order_release);
+#ifdef SUNSTONE_LATENCY_CONTROL
+    if (SUNSTONE_LATENCY_CONTROL_MODE == LATENCY_CONTROL_IDLE) qualify_control();
+    configASSERT(latency_control_snapshot(&out->control));
+#endif
     atomic_store_explicit(&phase, STOP, memory_order_release);
     for (unsigned c = 0; c < LATENCY_CORES; ++c) xTaskNotifyGive(wake_task[c]);
     for (unsigned c = 0; c < LATENCY_CORES; ++c)

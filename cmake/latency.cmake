@@ -53,6 +53,7 @@ sunstone_enable_latency_port(latency-model)
 # The same recorder workload on the private owner scheduler. The host model's
 # images report masked spans as atomic-operation counts (checks/latency-ops.h).
 function(sunstone_latency_partitioned_model target metric)
+  set(control ${ARGV2})
   add_executable(${target} EXCLUDE_FROM_ALL
     "${latency_root}/platform/qemu-smp/start.S"
     "${latency_root}/platform/qemu-smp/platform.c"
@@ -81,7 +82,7 @@ function(sunstone_latency_partitioned_model target metric)
     target_compile_definitions(${target} PRIVATE SS_LATENCY_OPS=${metric})
     target_compile_options(${target} PRIVATE
       "$<$<COMPILE_LANGUAGE:C>:SHELL:-include ${latency_root}/checks/latency-ops.h>")
-  else()
+  elseif(NOT control)
     # Real counter time with the PMU capture of the board image (QEMU counts instructions only).
     target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_PMU=1)
   endif()
@@ -94,14 +95,30 @@ function(sunstone_latency_partitioned_model target metric)
   set_target_properties(${target} PROPERTIES SUFFIX ".elf"
     LINK_DEPENDS "${latency_root}/platform/qemu-smp/link.ld")
   sunstone_scheduler_partitioned_bind(${target} "${smp_build}")
+  if(control)
+    sunstone_enable_latency_control(${target})
+    target_sources(${target} PRIVATE "${latency_root}/apps/latency/control.c"
+      "${latency_root}/checks/latency-control-model.c")
+  endif()
   if(NOT metric)
     sunstone_enable_scheduler_latency_trace(${target})
   endif()
   sunstone_enable_latency_port(${target})
+  if(control AND SUNSTONE_TICKLESS_IDLE)
+    include("${latency_root}/cmake/tickless.cmake")
+    sunstone_enable_tickless(${target})
+  endif()
+  if(control AND SUNSTONE_LATENCY_RESTORE_SPANS)
+    include("${latency_root}/cmake/latency-restore-spans.cmake")
+    sunstone_enable_latency_restore_spans(${target})
+  endif()
 endfunction()
 # Masked spans reported as scheduler atomic stores and read-modify-writes, and as loads.
 if(SUNSTONE_PARTITIONED_SCHEDULER)
   sunstone_latency_partitioned_model(latency-partitioned-writes-model 1)
   sunstone_latency_partitioned_model(latency-partitioned-loads-model 2)
   sunstone_latency_partitioned_model(latency-partitioned-pmu-model 0)
+  if(SUNSTONE_LATENCY_CONTROL)
+    sunstone_latency_partitioned_model(latency-control-model 0 ON)
+  endif()
 endif()

@@ -66,7 +66,13 @@ int latency_control_snapshot(struct latency_control_report *out)
     out->quiescent_mask = progress.quiescent_mask;
     out->consumer_parked = progress.consumer_parked;
     out->complete_mask = complete_mask(&progress);
-    out->flags = SS_CONTROL_HISTOGRAM_ONLY;
+    out->flags = LATENCY_CONTROL_HISTOGRAM_ONLY;
+#ifdef SUNSTONE_OWNER_TICKLESS
+    out->flags |= LATENCY_CONTROL_TICKLESS;
+#endif
+#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
+    out->flags |= LATENCY_CONTROL_RESTORE_SPANS;
+#endif
     for (unsigned i = 0; i < LATENCY_CONTROL_COUNT; ++i) {
         const unsigned c = cores[i];
         struct latency_control_core *row = &out->core[i];
