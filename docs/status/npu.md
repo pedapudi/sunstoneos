@@ -56,13 +56,14 @@ Designs: [platform](../designs/npu-platform.md), [fast path](../designs/npu-fast
     Moving the layout and trim after the scheduler means building the application's NPU mappings later. At 1794 MHz the recognition's 83.6 ms of preparation would take an estimated 23 to 26 ms, if the CPU-bound parts scale with the clock and the graph copy is partly memory-bound.
     Deferred on 2026-11-12: about 60 ms, once per start.
 13. Find which operation makes layer 0's entry graph take 768.5 µs a job, about twice the compiler's 389,514 estimated cycles (the other layer graphs take 1.3 to 1.6 times their estimate; run `1794506933827430720-5ffeeae8`). The timing application times whole jobs, and the compiler gives no estimate for 6 of the graph's 49 operations, its two shader operations among them. VIPLite's profiling mode reports the time of each operation (`vpmdENABLE_CNN_PROFILING` set to 2, `vip_lite_config.h:253`); the same split here means submitting the graph's command stream in parts at operation boundaries, with an event after each part. Not built yet.
+14. Find where subsampling spends its 14.6 ms a job against the compiler's 9.03 ms. Run `1794508867203238346-402089f4` ruled out NPU MMU page size (1 MiB and 64 KiB pages save 0.3%), raw bandwidth (the stream processor's Add moves 2.50 GB/s; a 2.5 GB/s cap on every operation predicts 9.9 ms) and extra traffic (24.9 MB counted against 22.2 MB estimated). The NPU is busy for the whole job, so the excess is inside its operations; the operation-boundary split of item 13 would time them, the 3 by 3 convolution of 2.85 G MACs (5.39 ms estimated) first. The page-size build (`SUNSTONE_NPU_TENSOR_PAGE_SHIFTS`) and the traffic counters (`SUNSTONE_NPU_TRAFFIC_COUNTERS`, 12.8 bytes a count) stay build options.
 
 ## Evidence
 
 Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` records hold the results that earlier status prose described. Earlier prose evidence is in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-98 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+99 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -164,4 +165,5 @@ Board results are records in `docs/evidence/npu.jsonl`; the `npu-status-*` recor
 | `1794506252076994875-247497f5` | 2026-11-12 | 3-3 | `a9e1c5345580` | watchdog-reset | failed | run_total 33.179 s |
 | `1794506933827430720-5ffeeae8` | 2026-11-12 | 3-3 | `a735d49c4236` | returned | failed | run_total 32.181 s, entry_p50 768.5 us, step_p50 229.7 us, output_p50 219.8 us, convolution_p50 173.5 us, final_p50 320.4 us, subsampling_p50 14622.9 us, graph_mul_p50 10.8 us, graph_mul_pipelined 9.7 us, graph_sh_pad_p50 4.3 us, idle_wait_max 0.25 us |
 | `1794507437019165469-02ac874c` | 2026-11-12 | 3-3 | `beee74a6d316` | returned | passed | run_total 22.442 s, step_q64_p50 229.9 us, step_q64_pipelined 228 us, step_q128_p50 581.7 us, step_q128_pipelined 580.1 us, step_total_q64_512 117.7 ms, step_total_q128_512 148.9 ms |
+| `1794508867203238346-402089f4` | 2026-11-12 | 3-3 | `07b829dc9820` | returned | passed | run_total 58.737 s, sub_4k_p50 14647.8 us, sub_1m_p50 14603.5 us, sub_64k_p50 14602.8 us, add_4k_p50 1257 us, add_1m_p50 1258.7 us, sub_cycles_per_job 1.24396e+07, sub_idle_cycles_per_job 1803, add_read_counts 165949, add_write_counts 81920, sub_4k_read_counts 1.33559e+06, sub_1m_read_counts 1.31707e+06, sub_write_counts 624848 |
 <!-- evidence-table:end -->
