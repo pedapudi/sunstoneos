@@ -31,6 +31,17 @@ int os_thermal_throttled(void){return throttled;}
 /* The supervised lifetime: the returning cutoff (apps/os/cpu-return.c) is outside this model and its branch is not taken. */
 unsigned board_session_lifetime(void){return A733_LIFETIME_SUPERVISED;}
 uint64_t os_cpu_return_cutoff(void){return UINT64_MAX;}
+/* Link the actual registry, with no return requested in this supervised
+ * thermal model. Its retained descriptor also references terminal callbacks;
+ * reaching those callbacks is outside the model and fails the case. */
+int os_cpu_return_requested(void){return 0;}
+int os_cpu_return_failing(void){return 0;}
+const struct ss_application ss_application={0};
+const struct ss_grant *ss_grant(void){check(0,41);return NULL;}
+unsigned pvr_gpu_service_quiesce(struct pvr_gpu_service *s,uint64_t deadline)
+{(void)s;(void)deadline;check(0,42);return 3;}
+int a733_gpu_backend_stopped(struct a733_gpu_backend *b,struct pvr_gpu_service *s)
+{(void)b;(void)s;check(0,43);return 0;}
 /* The delay is the kernel's; the check is on its argument. */
 void __real_vTaskDelay(TickType_t ticks);
 void __wrap_vTaskDelay(TickType_t ticks){check(ticks==1,2);__real_vTaskDelay(ticks);}
