@@ -9,7 +9,7 @@ normally with seven secondary CPUs off and complete reference parity: 90 frames,
 transcript `There was silence.`, compute 135.673 ms against the 179.5 ms limit.
 A paced replay of the same input passes six fresh native sessions with full
 segmented parity, complete version 2 thermal reports and rail cleanup; median
-compute is 92.670 ms. A 20.46 s recording (512 encoder frames) on the eight A76 cores returns normally with the host engine's transcript and checksums: compute 599.4 ms on the CPU engine, 422.8 ms with the encoder's 16 layers on the NPU, and 331.3 ms with the subsampling on the NPU as well (one run, with every output check passed and the timing prediction missed; [NPU status](npu.md)). These runs do not qualify corpus latency, retained-state
+compute is 92.670 ms. A 20.46 s recording (512 encoder frames) on the eight A76 cores returns normally with the host engine's transcript and checksums: compute 599.4 ms on the CPU engine, 422.8 ms with the encoder's 16 layers on the NPU, and 317.8 ms with the subsampling on the NPU as well (two runs, every output check passed and both timing predictions missed; [NPU status](npu.md)). These runs do not qualify corpus latency, retained-state
 replay, sustained multi-utterance capture or thermal and fault recovery.
 
 Mimus runs through the SunstoneOS application kit from its own repository ([apps/mimus/source.json](../../apps/mimus/source.json)).
@@ -20,7 +20,7 @@ Mimus runs through the SunstoneOS application kit from its own repository ([apps
 | Paced replay, six fresh native sessions | qualified on the board | Median compute 92.670 ms; full segmented parity | [mimus.jsonl](../evidence/mimus.jsonl) |
 | Recorded 512-frame input, CPU engine on eight A76 workers | qualified on the board | 599.4 ms compute; text and checksums equal the host engine's | `1794107014170351336-e7854a09` |
 | Eight CPU workers | host-tested for the two-core SMP model and the OS build; run on the board only in the 512-frame record above | The record above | [mimus-eight-workers.md](../designs/mimus-eight-workers.md); [mimus-os-eight-workers.md](../designs/mimus-os-eight-workers.md) |
-| Accelerator-assisted recognition | NPU qualified on the board at 512 frames; GPU host-tested | NPU: compute 422.8 ms against 599.4 ms on the CPU, and 331.3 ms with the subsampling on the NPU as well (one run, timing prediction missed); GPU: see [GPU status](gpu.md) | [gpu-recognition.md](../designs/gpu-recognition.md) |
+| Accelerator-assisted recognition | NPU qualified on the board at 512 frames; GPU host-tested | NPU: compute 422.8 ms against 599.4 ms on the CPU, and 317.8 ms with the subsampling on the NPU as well (two runs, timing predictions missed); GPU: see [GPU status](gpu.md) | [gpu-recognition.md](../designs/gpu-recognition.md) |
 | Sustained replay, multi-utterance capture, live input, session expiry, retained-state replay, thermal and fault recovery | open | None | None |
 
 ## Open work
