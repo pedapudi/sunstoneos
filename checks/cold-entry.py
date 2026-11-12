@@ -5,13 +5,16 @@ import hashlib
 import json
 from pathlib import Path
 import struct
+import subprocess
+import sys
 
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
 from elftools.elf.elffile import ELFFile
 from unicorn import (Uc, UC_ARCH_ARM, UC_ARCH_ARM64, UC_MODE_THUMB, UC_MODE_ARM,
                      UC_HOOK_CODE, UC_HOOK_MEM_WRITE)
 from unicorn import arm_const as arm, arm64_const as a64
-GATE_WAIVED = 'helper module of a runnable check (not run on its own) | loaded by standalone-boot-loader.py'
+ROOT = Path(__file__).resolve().parents[1]
+GATE_RUNS = [['--boot0', '{cache}/sources/board-boot/boot0_sdcard_orangepizero3w.fex', '--output', '{output}']]
 
 
 def sha(data):
@@ -111,11 +114,14 @@ def inherited_payload(boot0, payload, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--build", type=Path, required=True)
+    parser.add_argument("--build", type=Path, help="a monitor build of tools/prepare-cold-entry.py; built into the output when omitted")
     parser.add_argument("--boot0", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
+    if args.build is None:
+        args.build = args.output / "monitor-build"
+        subprocess.run([sys.executable, "-B", str(ROOT / "tools/prepare-cold-entry.py"), "--output", str(args.build)], check=True)
     raw = (args.build / "monitor.bin").read_bytes()
     with (args.build / "cold-entry.elf").open("rb") as stream:
         elf = ELFFile(stream)
