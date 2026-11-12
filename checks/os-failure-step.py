@@ -97,6 +97,9 @@ def source_problems(sources, required):
     step = re.search(r'if\s*\(\s*os_quiesce_step\(board_fail_note\)\s*!=\s*OS_QUIESCE_DONE\s*\)\s*return\s*;', supervisor)
     if not timeout or not step or timeout.start() > step.start():
         errors.append('supervisor must enforce the shared bound before the registry completion gate')
+    if not re.search(r'os_cpu_return_expired\([^;]*OS_FAILURE_RETURN_US\)\)\s*\{\s*'
+                     r'os_quiesce_note_faults\(board_fail_note\);\s*fail\(0x742\);', supervisor):
+        errors.append('supervisor must report pending fault records before timeout')
     clock = function(sources['apps/os/cpu.c'], 'os_cpu_clock_step')
     done = re.search(r'if\s*\(atomic_load_explicit\(&return_done,[^)]*\)\)\s*return\s+1\s*;', clock)
     if not done or done.start() > clock.index('a733_cpu_clock_burst'):
@@ -134,12 +137,18 @@ def source_mutants(sources, required):
     return count + 1
 
 
-def build(root, out, actors, name, registry=None, step=None):
+def build(root, out, actors, name, registry=None, step=None, publication_probe=False):
     directory = out / name
     directory.mkdir(parents=True, exist_ok=True)
     (directory / 'actors.inc').write_text(''.join('ACTOR(%s, %s)\n' % (owner, expected_order(owner)) for owner in actors))
     (directory / 'quiesce.h').write_text((root / 'apps/os/quiesce.h').read_text())
-    (directory / 'quiesce.c').write_text(registry if registry is not None else (root / 'apps/os/quiesce.c').read_text())
+    registry = registry if registry is not None else (root / 'apps/os/quiesce.c').read_text()
+    if publication_probe:
+        store = 'atomic_store_explicit(&p->requested,1,memory_order_release);'
+        assert registry.count(store) == 2, 'review request-publication interleaving points'
+        registry = registry.replace('#include "quiesce.h"', '#include "quiesce.h"\nextern void os_quiesce_publication_probe(struct os_quiesce *);')
+        registry = registry.replace(store, '{' + store + 'os_quiesce_publication_probe(p);}')
+    (directory / 'quiesce.c').write_text(registry)
     (directory / 'cpu-return-step.h').write_text(step if step is not None else (root / 'apps/os/cpu-return-step.h').read_text())
     limit = re.search(r'#define OS_FAILURE_RETURN_US UINT64_C\((\d+)\)', (root / 'apps/os/cpu-return.h').read_text())
     assert limit and int(limit.group(1)) == 3000000, 'return bound changed: review the failure protocol budget'
@@ -218,6 +227,12 @@ def main():
         if owner != 'TERMINAL_OWNER':
             run(binary, 3, i);cases += 1
     run(binary, 4);cases += 1
+    orders = ('QUEUES', 'DEVICES', 'CLOCK', 'THERMAL', 'PMIC', 'TERMINALS')
+    earliest = min(range(len(required)), key=lambda i: orders.index(expected_order(required[i])))
+    for mode in (6, 8):
+        run(binary, mode, earliest);cases += 1
+    observed = build(root, args.output, required, 'class-publication', publication_probe=True)
+    run(observed, 7);cases += 1
     for ms in range(40):
         run(binary, 1, delay=100000 + ms * 1000);cases += 1
     registry = (root / 'apps/os/quiesce.c').read_text()
@@ -241,6 +256,29 @@ def main():
         target = next(i for i, owner in enumerate(required) if owner != 'TERMINAL_OWNER')
         assert not run(bad, mode, target, success=False), 'undetected registry mutant ' + name
         mutants += 1
+    # A raw request must remain invisible until every peer request has been
+    # stored. The probe schedules the observer at each publication boundary.
+    armed = '(atomic_load_explicit(&armed_classes,memory_order_acquire)&(1u<<q->order))&&'
+    assert registry.count(armed) == 1
+    bad = build(root, args.output, required, 'mutant-class-visible-before-release',
+                registry=registry.replace(armed, ''), publication_probe=True)
+    assert not run(bad, 7, success=False), 'partial class publication was observable'
+    mutants += 1
+    # Fault reporting is independent of class advancement. An unrequested
+    # later owner can fail while the first class is still waiting.
+    a, b = function_span(registry, 'os_quiesce_step')
+    driven = registry[a:b]
+    assert driven.count('os_quiesce_note_faults(note);') == 2
+    bad = build(root, args.output, required, 'mutant-pending-hides-later-fault',
+                registry=registry[:a] + driven.replace('os_quiesce_note_faults(note);', '(void)note;') + registry[b:])
+    assert not run(bad, 6, earliest, success=False), 'a pending class hid a later fault'
+    mutants += 1
+    cpu = sources['apps/os/cpu-return.c']
+    flush = 'os_quiesce_note_faults(board_fail_note);'
+    assert cpu.count(flush) == 1
+    assert 'supervisor must report pending fault records before timeout' in source_problems(
+        {**sources, 'apps/os/cpu-return.c': cpu.replace(flush, '')}, required)
+    mutants += 1
     unsafe_complete = '{atomic_store_explicit(&q->result,OS_QUIESCE_DONE,memory_order_release);}'
     a, b = function_span(registry, 'os_quiesce_complete')
     bad = build(root, args.output, required, 'mutant-complete-erases-fault',

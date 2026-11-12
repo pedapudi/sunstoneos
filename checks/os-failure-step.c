@@ -24,9 +24,23 @@ static struct actor actors[] = {
 #undef ACTOR
 #define COUNT (sizeof actors / sizeof actors[0])
 static unsigned now_us, delay_us, target, mode;
-static unsigned notes;
+static unsigned notes, late_fault;
+/* The instrumented registry calls this immediately after each raw request
+ * store. An owner may observe that store before the class release. */
+void os_quiesce_publication_probe(struct os_quiesce *q)
+{
+    static unsigned seen[OS_QUIESCE_TERMINALS+1];
+    if(mode!=7)return;
+    unsigned peers=0;
+    for(unsigned i=0;i<COUNT;++i)peers+=actors[i].step.order==q->order;
+    if(seen[q->order]++>=peers)return; /* Only the first publication pass. */
+    for(unsigned i=0;i<COUNT;++i)
+        if(actors[i].step.order==q->order)assert(!os_quiesce_requested(&actors[i].step));
+}
 /* Modes: 0 normal, 1 failure, 2 stalled owner, 3 one fault, 4 every owner
- * faults, 5 owner completes concurrently with a PENDING callback result. */
+ * faults, 5 owner completes concurrently with a PENDING callback result,
+ * 6 a later class faults while an earlier owner is pending, 7 an owner
+ * observes request publication, 8 a fault arrives at the timeout boundary. */
 static enum os_quiesce_result poll_owner(struct os_quiesce *q)
 {
     struct actor *a=(void *)((char *)q - offsetof(struct actor,step));
@@ -49,7 +63,7 @@ static enum os_quiesce_result poll_owner(struct os_quiesce *q)
         assert(os_quiesce_fault(q,0x80007999u,0xffffffffu,NULL));
         return OS_QUIESCE_FAULT;
     }
-    if(mode==2 && index==target)return OS_QUIESCE_PENDING;
+    if((mode==2||mode==6||mode==8) && index==target)return OS_QUIESCE_PENDING;
     if(now_us < delay_us + (q->order+1)*10000u)return OS_QUIESCE_PENDING;
     a->finished=1;
     if(mode==5){os_quiesce_complete(q);return OS_QUIESCE_PENDING;}
@@ -77,12 +91,34 @@ int main(int argc,char **argv)
     failing=mode!=0;requested=1;
     struct os_quiesce late={.owner=OS_QUIESCE_NPU,.order=OS_QUIESCE_QUEUES,.step=poll_owner};
     assert(!os_quiesce_register(&late));
+    if(mode==6||mode==8){
+        late_fault=COUNT;
+        for(unsigned i=0;i<COUNT;++i)
+            if(actors[i].step.order>actors[target].step.order&&actors[i].step.order!=OS_QUIESCE_TERMINALS){late_fault=i;break;}
+        assert(late_fault<COUNT);
+    }
     enum os_quiesce_result result=OS_QUIESCE_PENDING;
     for(now_us=0;!os_cpu_return_expired(now_us,0,RETURN_LIMIT_US);now_us+=10000){
+        if(mode==6&&now_us==10000){
+            assert(!os_quiesce_requested(&actors[late_fault].step));
+            assert(os_quiesce_fault(&actors[late_fault].step,0x80007000u|late_fault,
+                0xabc000u|late_fault,(void *)(uintptr_t)(0x1000+late_fault)));
+        }
         result=os_quiesce_step(note);
+        if(mode==6&&now_us>=10000){
+            assert(notes==1&&actors[late_fault].notes==1);
+            assert(!actors[late_fault].calls&&!os_quiesce_requested(&actors[late_fault].step));
+        }
         if(result==OS_QUIESCE_DONE)break;
     }
-    if(mode==2){
+    if(mode==8){
+        assert(notes==0&&now_us==RETURN_LIMIT_US);
+        assert(os_quiesce_fault(&actors[late_fault].step,0x80007000u|late_fault,
+            0xabc000u|late_fault,(void *)(uintptr_t)(0x1000+late_fault)));
+        os_quiesce_note_faults(note); /* The supervisor flushes before its stop. */
+        assert(notes==1&&actors[late_fault].notes==1&&!actors[late_fault].calls);
+    }
+    if(mode==2||mode==6||mode==8){
         assert(now_us==RETURN_LIMIT_US && result!=OS_QUIESCE_DONE);
         for(unsigned i=0;i<COUNT;++i)
             if(actors[i].step.order>actors[target].step.order)assert(!actors[i].calls);
