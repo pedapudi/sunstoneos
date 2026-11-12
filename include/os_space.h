@@ -13,14 +13,13 @@
 #include <stdint.h>
 extern uint64_t os_space_kernel_ttbr;      /* the table every core installed at boot (ASID 0) */
 extern uint8_t os_space_active;
-/* The kernel's level-1 entries for the first 16 GiB of address space (slots 0 to 15), which the platform
- * copies out of its table. The table's own pages need not be readable at EL1: the A733 profile leaves the
- * 2 MiB block that holds them unmapped there, so reading them through TTBR0 is a translation fault. Every
- * slot from 16 up is zero. */
+/* The live kernel level-1 entries for slots 0 to 15. OS platforms read through
+ * their protected EL1 table alias; the monitor's identity view remains invalid.
+ * Every slot from 16 up is zero. */
 #define OS_KERNEL_L1_HEAD 16
 void os_kernel_l1_head(uint64_t out[OS_KERNEL_L1_HEAD]);
-/* The 512 level-2 entries of level-1 slot 1 (0x40000000 to 0x80000000), copied the same way, so that a space can own
- * blocks above the 128 MiB that EL0 reaches in every space (app_space_build_l2). */
+/* The 512 live level-2 entries of level-1 slot 1 (0x40000000 to 0x80000000), copied the same way, so that a space can own
+ * blocks above the 128 MiB that EL0 reaches in every space (app_space_build_tables). */
 #define OS_KERNEL_L2_ENTRIES 512
 void os_kernel_l2_slot1(uint64_t out[OS_KERNEL_L2_ENTRIES]);
 /* The main task's stack when the OS took it from the application memory ledger with an unmapped guard block below it
@@ -48,7 +47,7 @@ static inline void os_space_switch_in(const void *tag)
  * and the marks never decide a space: only the tag of a creating task or the argument of a creation call does. */
 #define OS_SPACE_REFUSED 0x7a1u
 extern volatile uint8_t os_space_app_init_active;
-extern volatile uint8_t os_space_explicit[8];
+extern volatile uint8_t os_space_explicit[configNUMBER_OF_CORES];
 void os_space_refuse_create(void);
 #define os_space_inherit(creator, created) \
     do { if ((creator)) { \

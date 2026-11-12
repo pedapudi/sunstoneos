@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#define configNUMBER_OF_CORES 8
 struct tcb { const void *pxTaskTag; };
 static unsigned core;
 #define portGET_CORE_ID() core
@@ -10,7 +11,7 @@ static unsigned core;
 uint64_t os_space_kernel_ttbr;
 uint8_t os_space_active;
 volatile uint8_t os_space_app_init_active;
-volatile uint8_t os_space_explicit[8];
+volatile uint8_t os_space_explicit[configNUMBER_OF_CORES];
 static unsigned refusals;
 void os_space_refuse_create(void) { ++refusals; }
 static uint64_t app_ttbr;

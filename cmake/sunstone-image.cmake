@@ -1,6 +1,33 @@
 include_guard(GLOBAL)
 include("${CMAKE_CURRENT_LIST_DIR}/sunstone-application.cmake")
 
+function(sunstone_bind_usb_devices directory)
+  if(NOT SUNSTONE_A733_OS_USB_CLASSES)
+    return()
+  endif()
+  file(READ "${directory}/manifest.json" usb_manifest)
+  string(JSON usb_manifest_count LENGTH "${usb_manifest}")
+  set(usb_devices 0)
+  if(usb_manifest_count GREATER 0)
+    string(JSON usb_devices GET "${usb_manifest}" 0 usb_devices)
+  endif()
+  # A control with no host device supplies no count. A later USB image may
+  # select the shared objects' count; with none, the header defaults to 24.
+  if(usb_devices EQUAL 0)
+    return()
+  endif()
+  get_target_property(usb_existing sunstone-a733-os-core SUNSTONE_USB_DEVICE_COUNT)
+  if(NOT usb_existing STREQUAL "usb_existing-NOTFOUND" AND NOT usb_existing STREQUAL "${usb_devices}")
+    message(FATAL_ERROR "Images sharing the OS core declare different usb.devices counts; use separate build directories")
+  endif()
+  if(usb_existing STREQUAL "usb_existing-NOTFOUND")
+    set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_USB_DEVICE_COUNT "${usb_devices}")
+    target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_USB_HOST_DEVICES=${usb_devices}u)
+    target_compile_definitions(a733-board-usb2-host PRIVATE SUNSTONE_USB_HOST_DEVICES=${usb_devices}u)
+    target_compile_definitions(sunstone-os-settings INTERFACE SUNSTONE_USB_HOST_DEVICES=${usb_devices}u)
+  endif()
+endfunction()
+
 # Hash source inputs and effective settings of each linked application library.
 # Archives supplied by path must exist at configure time; targets contribute
 # their source closure, including private headers, before their archive exists.
@@ -85,6 +112,7 @@ function(add_sunstone_image target)
       message(FATAL_ERROR "${IMAGE_APPLICATION} observes its NPU jobs (npu.observe), which only the returning lifetime admits")
     endif()
   endif()
+  sunstone_bind_usb_devices("${directory}")
   # The session lifetime comes from the application's manifest (tools/session_lifetime.py): startup, setup, run_us and
   # return_reserve_us. An image with no application keeps the header's default. It bounds the supervised and returning
   # lifetimes; a resident session has no deadline and does not read it.

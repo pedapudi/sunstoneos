@@ -14,6 +14,10 @@ FIXTURES = {
 }
 
 IMAGES = {
+    'os-usb-ledger': {'configure': [
+        '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=hello-compute',
+        '-DSUNSTONE_A733_OS_USB_CLASSES=ON', '-DSUNSTONE_BOARD_USB2_IRQ=ON',
+    ], 'target': 'sunstone-a733-os-hello', 'elf': 'sunstone-a733-os-hello.elf'},
     'card-fel-recovery': {'configure': [
         '-DSUNSTONE_A733_CARD_FEL_RECOVERY=ON',
     ], 'target': 'a733-card-fel-recovery', 'elf': 'a733-card-fel-recovery.elf'},

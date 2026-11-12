@@ -148,6 +148,22 @@ uint16_t app_region_owner_of(const struct app_region_ledger *l, uint64_t pa)
                           APP_PTE_NG | APP_PTE_PXN | APP_PTE_UXN)
 
 static uint64_t ap_bits(unsigned access) { return access & APP_REGION_WRITE ? APP_PTE_AP_EL0_RW : APP_PTE_AP_RO; }
+static int kernel_block(uint64_t descriptor, uint64_t physical)
+{
+    const uint64_t attr = UINT64_C(7) << 2;
+    return (descriptor & ~attr) == (KERNEL_BLOCK(physical) & ~attr) &&
+        ((descriptor & attr) == APP_PTE_ATTR_WB || (descriptor & attr) == (UINT64_C(2) << 2));
+}
+static uint64_t whole_slot_block(const uint64_t base_l1[512], const uint64_t *const *base_tables, unsigned slot)
+{
+    if ((base_l1[slot] & 3) == 1) return base_l1[slot];
+    const uint64_t *table = base_tables ? base_tables[slot - 1] : 0;
+    if (!table) return 0;
+    uint64_t base = (uint64_t)slot * APP_REGION_GIB;
+    for (unsigned j = 0; j < BLOCKS_PER_SLOT; ++j)
+        if (table[j] != KERNEL_BLOCK(base + (uint64_t)j * APP_REGION_BLOCK)) return 0;
+    return KERNEL_BLOCK(base);
+}
 
 /* Entries of the owner's region that overlaps [lo, hi): access, or 0. */
 static unsigned covered(const struct app_region_ledger *l, uint16_t owner, uint64_t lo, uint64_t hi,
@@ -175,7 +191,16 @@ int app_space_build_view(struct app_space *s, struct app_table_arena *a, const u
 int app_space_build_l2(struct app_space *s, struct app_table_arena *a, const uint64_t base_l1[512], const uint64_t base_l2[512],
                        const struct app_region_ledger *l, uint16_t owner, uint16_t asid, unsigned flags)
 {
+    const uint64_t *tables[APP_REGION_SLOTS] = {base_l2};
+    return app_space_build_tables(s, a, base_l1, tables, l, owner, asid, flags);
+}
+
+int app_space_build_tables(struct app_space *s, struct app_table_arena *a, const uint64_t base_l1[512],
+                           const uint64_t *const base_tables[APP_REGION_SLOTS], const struct app_region_ledger *l,
+                           uint16_t owner, uint16_t asid, unsigned flags)
+{
     if (!s || !a || !base_l1 || !l || !asid || !owner || !a->page || (flags & ~APP_SPACE_NO_GIB_BLOCKS)) return APP_REGION_INVALID;
+    const uint64_t *base_l2 = base_tables ? base_tables[0] : 0;
     /* Level-1 slot 1 above the floor: the owner's blocks there need a private copy of the kernel's level-2 table. */
     int whole1;
     const int low = covered(l, owner, APP_REGION_FLOOR, APP_REGION_BASE, &whole1) != 0;
@@ -185,22 +210,32 @@ int app_space_build_l2(struct app_space *s, struct app_table_arena *a, const uin
             uint64_t pa = UINT64_C(0x40000000) + (uint64_t)j * APP_REGION_BLOCK;
             int unused;
             if (!covered(l, owner, pa, pa + APP_REGION_BLOCK, &unused)) continue;
-            if (base_l2[j] != KERNEL_BLOCK(pa)) return APP_REGION_INVALID;
+            if (!kernel_block(base_l2[j], pa)) return APP_REGION_INVALID;
         }
     }
     /* Each upper-memory slot is either unmapped (the board maps less than 12 GiB) or the kernel's EL1-only
      * block with nG set; a slot that a region covers must be the block. */
     for (unsigned slot = SLOT_FIRST; slot < SLOT_END; ++slot) {
-        uint64_t want = KERNEL_BLOCK(UINT64_C(0x40000000) * slot), lo = APP_REGION_GIB * slot;
+        uint64_t lo = APP_REGION_GIB * slot, descriptor = base_l1[slot];
         int whole;
-        if (base_l1[slot] != want && base_l1[slot] != 0) return APP_REGION_INVALID;
-        if (base_l1[slot] == 0 && covered(l, owner, lo, lo + APP_REGION_GIB, &whole)) return APP_REGION_INVALID;
+        if (!descriptor) {
+            if (covered(l, owner, lo, lo + APP_REGION_GIB, &whole)) return APP_REGION_INVALID;
+        } else if ((descriptor & 3) == APP_PTE_TABLE) {
+            const uint64_t *table = base_tables ? base_tables[slot - 1] : 0;
+            if (!table || !(descriptor & APP_PTE_ADDR_MASK)) return APP_REGION_INVALID;
+            for (unsigned j = 0; j < BLOCKS_PER_SLOT; ++j) {
+                uint64_t pa = lo + (uint64_t)j * APP_REGION_BLOCK;
+                if (table[j] ? !kernel_block(table[j], pa) : covered(l, owner, pa, pa + APP_REGION_BLOCK, &whole) != 0)
+                    return APP_REGION_INVALID;
+            }
+        } else if (!kernel_block(descriptor, lo)) return APP_REGION_INVALID;
     }
     unsigned need = 1 + (low ? 1u : 0u);
     for (unsigned slot = SLOT_FIRST; slot < SLOT_END; ++slot) {
         uint64_t lo = APP_REGION_GIB * slot;
         int whole;
-        if (covered(l, owner, lo, lo + APP_REGION_GIB, &whole) && (!whole || (flags & APP_SPACE_NO_GIB_BLOCKS))) ++need;
+        if (covered(l, owner, lo, lo + APP_REGION_GIB, &whole) &&
+            (!whole || (flags & APP_SPACE_NO_GIB_BLOCKS) || !whole_slot_block(base_l1, base_tables, slot))) ++need;
     }
     if (a->capacity - a->used < need) return APP_REGION_NO_TABLES;
 
@@ -215,7 +250,7 @@ int app_space_build_l2(struct app_space *s, struct app_table_arena *a, const uin
             uint64_t pa = UINT64_C(0x40000000) + (uint64_t)j * APP_REGION_BLOCK;
             int unused;
             unsigned block_access = covered(l, owner, pa, pa + APP_REGION_BLOCK, &unused);
-            if (block_access) (*l2)[j] = (KERNEL_BLOCK(pa) & ~APP_PTE_AP_RO) | ap_bits(block_access);
+            if (block_access) (*l2)[j] = (base_l2[j] & ~APP_PTE_AP_RO) | ap_bits(block_access);
         }
         (*root)[1] = (a->physical + (uint64_t)used * 4096) | APP_PTE_TABLE;
         ++used;
@@ -225,8 +260,9 @@ int app_space_build_l2(struct app_space *s, struct app_table_arena *a, const uin
         int whole;
         unsigned access = covered(l, owner, lo, lo + APP_REGION_GIB, &whole);
         if (!access) continue;
-        if (whole && !(flags & APP_SPACE_NO_GIB_BLOCKS)) {
-            (*root)[slot] = KERNEL_BLOCK(lo) & ~APP_PTE_AP_RO;
+        uint64_t block = whole && !(flags & APP_SPACE_NO_GIB_BLOCKS) ? whole_slot_block(base_l1, base_tables, slot) : 0;
+        if (block) {
+            (*root)[slot] = block & ~APP_PTE_AP_RO;
             (*root)[slot] |= ap_bits(access);
             continue;
         }
@@ -234,7 +270,9 @@ int app_space_build_l2(struct app_space *s, struct app_table_arena *a, const uin
         uint64_t table_pa = a->physical + (uint64_t)used * 4096;
         ++used;
         for (unsigned j = 0; j < BLOCKS_PER_SLOT; ++j) {
-            uint64_t pa = lo + (uint64_t)j * APP_REGION_BLOCK, e = KERNEL_BLOCK(pa);
+            uint64_t pa = lo + (uint64_t)j * APP_REGION_BLOCK;
+            uint64_t e = (base_l1[slot] & 3) == APP_PTE_TABLE ? base_tables[slot - 1][j] :
+                (base_l1[slot] & ~APP_PTE_ADDR_MASK) | pa;
             int unused;
             unsigned block_access = covered(l, owner, pa, pa + APP_REGION_BLOCK, &unused);
             if (block_access) e |= ap_bits(block_access);

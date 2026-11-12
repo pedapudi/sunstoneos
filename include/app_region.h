@@ -144,6 +144,12 @@ int app_space_build_view(struct app_space *, struct app_table_arena *, const uin
  * floor must be the kernel's EL1-only block with nG set, or unmapped. A null base_l2 refuses any region in slot 1. */
 int app_space_build_l2(struct app_space *, struct app_table_arena *, const uint64_t base_l1[512], const uint64_t base_l2[512],
                        const struct app_region_ledger *, uint16_t owner, uint16_t asid, unsigned flags);
+/* The same with an explicit readable L2 page for each kernel slot 1..12.
+ * Split slots preserve each block's WB/NC policy and EL1 mapping. A table
+ * descriptor without its readable page is refused before any arena write. */
+int app_space_build_tables(struct app_space *, struct app_table_arena *, const uint64_t base_l1[512],
+                           const uint64_t *const base_tables[APP_REGION_SLOTS], const struct app_region_ledger *,
+                           uint16_t owner, uint16_t asid, unsigned flags);
 /* The descriptor through which EL0 reaches va in the space (a 1 GiB, 2 MiB or 4 KiB leaf), or 0 when EL0 cannot make the
  * access: no valid leaf, or an access-permission field that denies it (a write needs read-write, AP[2:1] = 0b01). physical, when not null, receives the
  * physical address of va. This
