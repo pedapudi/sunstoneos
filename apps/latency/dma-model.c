@@ -1,5 +1,6 @@
 /* Real service/controller state machines, with modeled RAM-copy hardware.
  * No register callback accesses a physical DMA controller. */
+#include "sunstone_app.h"
 #include "dma_service.h"
 #include "a733_dma_regs.h"
 #include "workload.h"
@@ -161,7 +162,7 @@ void latency_dma_model_init(void)
     struct dma_service_irq irq = {rearm, &service, 4, ss_latency_frequency / 250};
     configASSERT(dma_service_bind_irq(&service, &irq));
     configASSERT(dma_service_bind_retirement(&service, retire_mask, &service));
-    client_task = xTaskCreateStaticAffinitySet(client, "modeled-DMA", 2048, NULL, 1,
+    client_task = ss_task_create_static_affinity_set(client, "modeled-DMA", 2048, NULL, 1,
         client_stack, &client_state, 1);
     configASSERT(client_task && dma_service_bind(&service, 0, client_task, 1));
 }

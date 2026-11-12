@@ -1,3 +1,4 @@
+#include "sunstone_app.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "workload.h"
@@ -208,9 +209,9 @@ static void wait_samples(unsigned expected)
 void latency_workload_init(void)
 {
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
-        wake_task[c] = xTaskCreateStaticAffinitySet(wake_worker, "latency-wake", 1024,
+        wake_task[c] = ss_task_create_static_affinity_set(wake_worker, "latency-wake", 1024,
             (void *)(uintptr_t)c, configMAX_PRIORITIES - 1, wake_stack[c], &wake_state[c], 1U << c);
-        load_task[c] = xTaskCreateStaticAffinitySet(load_worker, "latency-memory", 1024,
+        load_task[c] = ss_task_create_static_affinity_set(load_worker, "latency-memory", 1024,
             (void *)(uintptr_t)c, 1, load_stack[c], &load_state[c], 1U << c);
         configASSERT(wake_task[c] && load_task[c]);
     }

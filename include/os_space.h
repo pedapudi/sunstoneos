@@ -29,48 +29,30 @@ void *os_large_main_stack(void);
 static inline void os_space_switch_in(const void *tag)
 {
     if (!os_space_active) return;
-    /* Bit 0 of a tag is the creating mark (OS_TASK_CREATE_IN_KERNEL_SPACE), never part of the address. */
-    uint64_t want = tag ? *(const uint64_t *)((uintptr_t)tag & ~(uintptr_t)1) : os_space_kernel_ttbr, have;
+    uint64_t want = tag ? *(const uint64_t *)tag : os_space_kernel_ttbr, have;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(have));
     if (have != want) __asm__ volatile("msr ttbr0_el1, %0" :: "r"(want) : "memory");
 }
 
-/* The application's tag while its init hook runs (apps/os/application.c), otherwise null. The hook runs before the scheduler,
- * where no task creates anything, so a task created there takes this tag in place of a creator's. The OS sets it around
- * the call only; an OS task created before the scheduler, outside the call, finds it null and stays in the kernel's table.
- * The task-switch hook does not read it. */
-extern const void *volatile os_space_init_tag;
-
-/* traceTASK_CREATE: the new task takes the creator's tag, so a task that the application creates runs in the
- * application's space with no call of its own. The creator is the task running on the creating core, which is
- * absent (null) while boot code creates tasks before the scheduler starts. A macro, because the task control
- * block is private to the kernel files that expand it. A task of the OS is created from boot code or from an
- * OS task with no tag, and inherits none. */
+/* The space of a new task is an explicit argument of the OS-side creation call (apps/os/os-task.h): os_task_create_static_affinity_set
+ * and os_task_create_static take the space's tag, the kernel's callers pass null (the kernel's table), and the kit's
+ * ss_task_create_static_affinity_set (include/sunstone_app.h) passes the calling application's. The creation call sets the tag
+ * before the task can run, inside a kernel critical section.
+ *
+ * traceTASK_CREATE: a task that a running task creates directly, with a FreeRTOS call, takes its creator's tag, so a task that
+ * an application's task creates runs in the application's space with no call of its own. Before the scheduler starts there is no
+ * creating task, and nothing says which space a directly created task belongs to; the one place an application creates
+ * tasks there is its init hook, and the OS sets os_space_app_init_active around that call. A direct FreeRTOS creation
+ * inside the hook is refused with the failure OS_SPACE_REFUSED (os_space_refuse_create) instead of becoming a task of the
+ * kernel's table; the creation calls above mark their own creation in os_space_explicit and are not refused. The hook
+ * and the marks never decide a space: only the tag of a creating task or the argument of a creation call does. */
+#define OS_SPACE_REFUSED 0x7a1u
+extern volatile uint8_t os_space_app_init_active;
+extern volatile uint8_t os_space_explicit[8];
+void os_space_refuse_create(void);
 #define os_space_inherit(creator, created) \
     do { if ((creator)) { \
-             if (!(created)->pxTaskTag && !((uintptr_t)(creator)->pxTaskTag & 1u)) \
-                 (created)->pxTaskTag = (creator)->pxTaskTag; \
-         } else if (os_space_init_tag && !(created)->pxTaskTag) \
-             (created)->pxTaskTag = (__typeof__((created)->pxTaskTag))os_space_init_tag; } while (0)
-
-/* Create a task of the OS from a task of an application (an SDK call that starts a service task). The creating task's
- * own tag carries bit 0 for the duration of the creation, so the hook above gives the new task no tag at all: it runs in
- * the kernel's table from its first instruction, whichever core takes it, with no window in which it holds the
- * application's. The tag is an aligned pointer to the space record, so bit 0 is free; the switch hook masks it. A
- * creator with no tag is an OS task already and is left alone. The mark is on the creating task only, so there is no
- * table and no limit on how many tasks create at once. expr is evaluated once; its value is the macro's.
- *
- * Before the scheduler starts there is no creating task, so there is no mark to set; the application's init hook runs in
- * that state, and there os_space_init_tag stands in for the creator's tag. The macro takes it away for the duration of
- * the creation and puts it back, because a service task that the hook starts is a task of the OS and must not take the
- * application's space. */
-#define OS_TASK_CREATE_IN_KERNEL_SPACE(expr) ({ \
-    const void *os_init_tag_ = os_space_init_tag; \
-    os_space_init_tag = NULL; \
-    TaskHookFunction_t os_tag_ = xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED ? NULL : xTaskGetApplicationTaskTag(NULL); \
-    if (os_tag_) vTaskSetApplicationTaskTag(NULL, (TaskHookFunction_t)((uintptr_t)os_tag_ | 1u)); \
-    __typeof__(expr) os_created_ = (expr); \
-    if (os_tag_) vTaskSetApplicationTaskTag(NULL, os_tag_); \
-    os_space_init_tag = os_init_tag_; \
-    os_created_; })
+             if (!(created)->pxTaskTag) (created)->pxTaskTag = (creator)->pxTaskTag; \
+         } else if (os_space_app_init_active && !os_space_explicit[portGET_CORE_ID()]) \
+             os_space_refuse_create(); } while (0)
 #endif

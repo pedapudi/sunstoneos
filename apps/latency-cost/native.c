@@ -67,9 +67,9 @@ void latency_cost_init(void)
     ss_latency_init(result.frequency);
 #endif
     for (unsigned c = 0; c < 8; ++c) {
-        receiver_task[c] = xTaskCreateStaticAffinitySet(receiver, "cost-receive", 1024,
+        receiver_task[c] = ss_task_create_static_affinity_set(receiver, "cost-receive", 1024,
             (void *)(uintptr_t)c, 4, receiver_stack[c], &receiver_state[c], 1u << c);
-        sender_task[c] = xTaskCreateStaticAffinitySet(sender, "cost-send", 1024,
+        sender_task[c] = ss_task_create_static_affinity_set(sender, "cost-send", 1024,
             (void *)(uintptr_t)c, 3, sender_stack[c], &sender_state[c], 1u << c);
         configASSERT(receiver_task[c] && sender_task[c]);
     }

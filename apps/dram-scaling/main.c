@@ -6,6 +6,7 @@
  * 3 MiB region for a fixed 12 ms window. Every core reports the chunks it read and the
  * time to its last chunk, so the host computes a rate per core and the sum of the rates
  * of cores that read at the same time, without a tail where fast cores have finished. */
+#include "sunstone_app.h"
 #include "dram_scaling-app.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -112,7 +113,7 @@ void dram_scaling_init(void)
     const struct ss_grant *g = ss_grant();
     if (!g || g->main_core != 6 || g->worker_cores != 0xbf) ss_fail(0xc701);
     for (unsigned core = 0; core < DS_CORES; ++core) {
-        workers[core] = xTaskCreateStaticAffinitySet(worker, "scaling", 1024,
+        workers[core] = ss_task_create_static_affinity_set(worker, "scaling", 1024,
             (void *)(uintptr_t)core, 2, stack[core], &state[core], 1u << core);
         if (!workers[core]) ss_fail(0xc702);
     }

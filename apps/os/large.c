@@ -8,6 +8,7 @@
 #include "application.h"
 #include "sunstone_app.h"
 #include "os_space.h"
+#include "os-task.h"
 #include "app_region.h"
 #include "app_large.h"
 #include "umem.h"
@@ -322,7 +323,38 @@ int os_device_range_publish(uint64_t base, uint64_t bytes)
 
 uint64_t os_space_kernel_ttbr;
 uint8_t os_space_active;
-const void *volatile os_space_init_tag;
+volatile uint8_t os_space_app_init_active;
+volatile uint8_t os_space_explicit[8];
+__attribute__((noinline)) void os_space_refuse_create(void)
+{
+    /* A task created by a direct FreeRTOS call inside the application's init hook has no space to take. The failure ends the
+     * session; the task is never served (the failure return stops every task). */
+    board_fail_at(SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_APPLICATION<<12|OS_SPACE_REFUSED,OS_SPACE_REFUSED,__builtin_return_address(0));
+}
+TaskHandle_t os_task_create_static_affinity_set(const void *space,TaskFunction_t entry,const char *name,uint32_t stack_words,
+    void *arg,UBaseType_t priority,StackType_t *stack,StaticTask_t *tcb,UBaseType_t affinity)
+{
+    const unsigned core=portGET_CORE_ID();
+    taskENTER_CRITICAL();
+    os_space_explicit[core]=1;
+    TaskHandle_t h=xTaskCreateStaticAffinitySet(entry,name,stack_words,arg,priority,stack,tcb,affinity);
+    if(h)vTaskSetApplicationTaskTag(h,(TaskHookFunction_t)space);
+    os_space_explicit[core]=0;
+    taskEXIT_CRITICAL();
+    return h;
+}
+TaskHandle_t os_task_create_static(const void *space,TaskFunction_t entry,const char *name,uint32_t stack_words,
+    void *arg,UBaseType_t priority,StackType_t *stack,StaticTask_t *tcb)
+{
+    const unsigned core=portGET_CORE_ID();
+    taskENTER_CRITICAL();
+    os_space_explicit[core]=1;
+    TaskHandle_t h=xTaskCreateStatic(entry,name,stack_words,arg,priority,stack,tcb);
+    if(h)vTaskSetApplicationTaskTag(h,(TaskHookFunction_t)space);
+    os_space_explicit[core]=0;
+    taskEXIT_CRITICAL();
+    return h;
+}
 static uint64_t owner_ttbr;          /* the application's tag points here */
 
 /* Tasks of the application that wait for a region: a task waits on one region at a time, so the list holds

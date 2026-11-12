@@ -674,6 +674,12 @@ def main():
         application = image.application('slot1-test', ['checks/qemu-os/slot1-main.c'], ROOT / 'checks/qemu-os/slot1-manifest.json')
         return image.build(application)
 
+    def build_slot1_direct():
+        """The same application, whose init hook creates its task by a direct FreeRTOS call."""
+        image = Image(out / 'build-slot1-direct', extra_defines=['-DQEMU_OS_UPPER=1', '-DSLOT1_DIRECT_CREATE=1'])
+        application = image.application('slot1-test', ['checks/qemu-os/slot1-main.c'], ROOT / 'checks/qemu-os/slot1-manifest.json')
+        return image.build(application)
+
     def build_upper():
         """The same application with its region in level-1 slot 2, above the unmapped hole (step 6b)."""
         image = Image(out / 'build-upper', extra_defines=['-DQEMU_OS_UPPER=1'])
@@ -711,6 +717,7 @@ def main():
         heap_early = pool.submit(build_heap_early, 'build-heap-early', ROOT / 'checks/qemu-os/heap-manifest.json')
         heap_ctor = pool.submit(build_heap_ctor, 'build-heap-ctor', ROOT / 'checks/qemu-os/heap-manifest.json')
         slot1_elf = pool.submit(build_slot1).result()
+        slot1_direct_elf = pool.submit(build_slot1_direct).result()
         heap_elf, heap_big_elf, heap_early_elf = heap_elf.result(), heap_big_elf.result(), heap_early.result()
         notify_elf = pool.submit(build_notify).result()
         tlbi_elfs = {k: pool.submit(build_tlbi, 'build-tlbi-%d-%d' % k, *k).result() for k in ((0, 1), (1, 1), (2, 10), (3, 1))}
@@ -1069,8 +1076,14 @@ def main():
     tag, stack_word, region_word, child_tag, service_tag = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
     c.require(tag == 0x534c4f5433 and stack_word == 0x1111222233334444 and region_word == 0x5555666677778888 and child_tag != 0,
               'init-hook task result %#x stack %#x region %#x tag %#x' % (tag, stack_word, region_word, child_tag))
-    # An OS task that the hook starts through OS_TASK_CREATE_IN_KERNEL_SPACE stays out of the space.
+    # An OS task that the hook starts through os_task_create_static(NULL, ...) stays out of the space.
     c.require(service_tag == 0, 'the OS service task started in the init hook took the application tag %#x' % service_tag)
+    # A task that the hook creates by a direct FreeRTOS call has no space to take: the OS fails the session at the creation, with
+    # the detail 0x7a1, instead of running the task in the kernel's table.
+    c = run_case('init-hook-direct-creation-refused', slot1_direct_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(3), '4G')
+    # The hook runs during application startup, so the session ends in the startup panic, with the record the creation made.
+    c.require('FAILURE-RECORD group=APPLICATION detail=0x7a1' in c.output and 'PANIC board application startup' in c.output,
+              'the direct creation in the init hook was not refused with detail 0x7a1: %s' % c.output[-400:])
 
     # The transport becomes ready between the main task's liveness test and its wait: the wake-up finds no waiter, and the
     # task must still start, not sleep to the session deadline.
