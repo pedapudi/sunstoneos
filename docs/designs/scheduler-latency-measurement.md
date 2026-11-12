@@ -61,8 +61,10 @@ serves idle-work requests, expires deadlines, and refreshes the slice.
 A clean interrupt wake can switch directly when a higher-priority task is
 already ready and no control, repair, due deadline or expired slice requires
 maintenance. Saved-frame selection and its final publication checks still run.
-The detailed IRQ trace covers the maintenance path; it excludes the direct
-switches and their eligibility check.
+The detailed IRQ trace covers the priority-mask guard, eligibility check and
+maintenance or direct-switch decision. It records saved-frame selection
+separately. A result of zero can still precede a switch when the assembly port
+observes an existing yield request.
 
 CPU0 alone advances global scheduler time. Its timer handler processes at most
 three overdue ticks per hardware interrupt. The diagnostic records the complete
@@ -70,7 +72,7 @@ C dispatch interval, including the latency workload's wake hook. Interrupt-exit
 owner work has separate timestamps. The A733 interrupt and CPU identity rules
 are in [the multicore reference audit](../a733-multicore-reference-audit.md).
 
-## Records retain one complete maximum and expose missing observations
+## Records retain complete maxima and expose missing observations
 
 Every CPU retains the longest command and longest self-suspend command, with
 timestamps around the handle reference, publication, control drain and slice
@@ -79,13 +81,25 @@ longest drain retains its individual control records; the longest interrupt
 exit retains its maintenance-step totals.
 
 The application declares storage for sixteen waits per CPU above five
-microseconds and 512 CPU0 timer intervals. Overflow counters identify omitted
+microseconds, sixteen recent interrupt exits and selections per CPU, and 512
+CPU0 timer intervals. Overflow counters identify omitted
 records; the longest wait is retained independently. These capacities limit
 diagnostic storage and do not limit scheduler work. Generation-checked atomic
 holder metadata identifies the holder observed when a waiter arrives.
 Unmatched releases, competing predecessors and incomplete timer coverage leave
 the cause unclassified. A timer overlap establishes observed interference,
-without attributing the complete wait to that interrupt.
+without attributing the complete wait to that interrupt. The actual task-lock
+FIFO reservation and acquisition timestamps distinguish contention from the
+surrounding wrapper work. An empty FIFO does not establish the cause of that
+remaining work.
+
+Version four links each busy wake to the latest completed selection of its
+task before the captured task-entry timestamp, then finds that selection's
+interrupt exit. Events after task entry cannot become its selecting event.
+The report retains the longest busy wake, fast, slow and unmatched sample
+counts, and the number and work of intervening interrupt exits. A missing
+required history entry is explicit. An intervening interrupt leaves the wake
+unmatched for single-exit attribution while preserving its selecting event.
 
 The application waits until every memory worker is suspended before the wake
 tasks freeze their per-CPU recorders. This includes the simultaneous suspends
@@ -102,11 +116,15 @@ phase percentiles, but cannot establish a 99.99th-percentile bound.
 
 ## Startup and workload use distinct timing boundaries
 
-The recorder marks entry to `xPortStartScheduler` and first entry to
-`vPortRestoreTaskContext` on each observed core. The scheduler-running flag is
-already set at port entry. A missing marker remains zero. The interval includes
-timer setup and secondary readiness. It ends before context restoration unmasks
-interrupts, so it is a lower bound on masking after the scheduler starts.
+Version four marks the primary CPU immediately before it sets the
+scheduler-running flag. Assembly records each core's first context restoration
+immediately before restoring the final register pair, changing stack selection
+and returning from the exception. The primary start marker is the common
+origin; other cores' start markers remain zero. The interval includes timer
+setup and secondary readiness. The final stores, register restore and exception
+return remain outside the measured interval, so it is a lower bound on masking
+after the scheduler starts. Earlier report versions mark port entry and restore
+entry and have a narrower scope.
 
 Top CPU clocks are established later by the scheduled clock and thermal
 services. The application verifies CPU-L 1794 MHz at 1000 mV and CPU-B 2002 MHz
