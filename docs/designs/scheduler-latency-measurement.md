@@ -58,6 +58,11 @@ after end of interrupt and before selection. Its priority-mask guard excludes
 reentry into an interrupted owner operation. Maintenance admits only interrupts
 above the kernel API priority while it drains controls and wake requests,
 serves idle-work requests, expires deadlines, and refreshes the slice.
+A clean interrupt wake can switch directly when a higher-priority task is
+already ready and no control, repair, due deadline or expired slice requires
+maintenance. Saved-frame selection and its final publication checks still run.
+The detailed IRQ trace covers the maintenance path; it excludes the direct
+switches and their eligibility check.
 
 CPU0 alone advances global scheduler time. Its timer handler processes at most
 three overdue ticks per hardware interrupt. The diagnostic records the complete
