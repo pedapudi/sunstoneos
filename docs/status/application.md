@@ -71,7 +71,7 @@ unqualified.
 Board results are records in `docs/evidence/application.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-application-20261101.md).
 
 <!-- evidence-table:begin -->
-10 records in `docs/evidence/application.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+12 records in `docs/evidence/application.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -85,4 +85,6 @@ Board results are records in `docs/evidence/application.jsonl`; add one with `to
 | `1793948483319321125-4d7fb7af` | 2026-11-06 | 3-1 | `e44044de5574` | returned | passed | run_total 32.4 s, run_total 32.4 s, launch 14.78 s, npu_trigger_to_irq_p50 2906.5 us, npu_trigger_to_irq_max 2913.5 us, jobs 4, mismatches 0 |
 | `1794468954726206112-8d88da24` | 2026-11-12 | 3-3 | `28155e9b4b9d` | watchdog-reset | failed | run_total 24.846 s, launch_stage 9.62776 s, rtc_stage 273, rtc_stop_value 24575, rtc_core 0, board_failure_core 1, wdt_mode_before 65, wdt_mode_after 0 |
 | `1794474070488494360-23d98e20` | 2026-11-12 | 3-3 | `1b798ae0d45e` | watchdog-reset | passed | run_total 25.15 s, run_total 25.1497 s, launch_with_uploads 10.7867 s, rtc_stage 273, rtc_value 20480, rtc_core 0, rtc_fault 0, wdt_before 65, wdt_after 0 |
+| `1794491155007317124-af2f5180` | 2026-11-12 | 3-3 | `65b3cb6fdde2` | failure-return | failed | run_total 134.437 s |
+| `1794491353241460574-0a73bdb5` | 2026-11-12 | 3-3 | `00e11fb42d05` | returned | passed | run_total 135.03 s, compute 317.733 ms, compute_previous 317.766 ms, frames 512 frames |
 <!-- evidence-table:end -->
