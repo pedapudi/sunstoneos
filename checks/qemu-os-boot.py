@@ -1096,7 +1096,10 @@ def main():
         expected = 200 // period
         c.require(tag == 0x54424c49 and core == 5 and expected * 0.6 <= wakes <= expected * 1.2,
                   'form %d: %d wakes on core %d in 200 ms, expected about %d on core 5' % (form, wakes, core, expected))
-        c.require(issued == (wakes if form else 0) and (largest > 0) == bool(form),
+        # Under -icount shift=0 one instruction is 1 ns and one 24 MHz counter tick is about 42 instructions, so the
+        # measured TLBI, DSB and ISB span zero or one tick. A larger cost records an interrupt taken inside the
+        # window, not the invalidation; only the control form's zero cost is a property of the image.
+        c.require(issued == (wakes if form else 0) and (form or largest == 0),
                   'form %d: %d invalidations for %d wakes, largest %d ticks' % (form, issued, wakes, largest))
     # An OS wake-up between the test and the registration of the wait is kept: a host request offered there, and a USB
     # state change there, end ss_host_recv and ss_usb_wait at the event and not at their two-second timeout.
