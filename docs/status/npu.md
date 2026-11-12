@@ -55,6 +55,7 @@ Designs: [platform](../designs/npu-platform.md), [fast path](../designs/npu-fast
 12. Run the NPU admission layout after the CPU clock is raised, if the startup time is ever worth it. Admission runs at the 494 MHz boot clock because the raise needs the scheduler (the PMIC owner task and a thermal reading) and admission must finish before any task exists (its trimmed reservation and queue tables go into the application's address space).
     Moving the layout and trim after the scheduler means building the application's NPU mappings later. At 1794 MHz the recognition's 83.6 ms of preparation would take an estimated 23 to 26 ms, if the CPU-bound parts scale with the clock and the graph copy is partly memory-bound.
     Deferred on 2026-11-12: about 60 ms, once per start.
+13. Find which operation makes layer 0's entry graph take 768.5 µs a job, about twice the compiler's 389,514 estimated cycles (the other layer graphs take 1.3 to 1.6 times their estimate; run `1794506933827430720-5ffeeae8`). The timing application times whole jobs, and the compiler gives no estimate for 6 of the graph's 49 operations, its two shader operations among them. VIPLite's profiling mode reports the time of each operation (`vpmdENABLE_CNN_PROFILING` set to 2, `vip_lite_config.h:253`); the same split here means submitting the graph's command stream in parts at operation boundaries, with an event after each part. Not built yet.
 
 ## Evidence
 
