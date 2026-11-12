@@ -1,8 +1,8 @@
-# CPU timing exceeds the masked-region and lock-wait budgets
+# Scheduler tick and wake timing remain above target
 
 **Status: implemented.**
 
-The native CPU control returns normally on port 3-3 and completes every wake sample. Its strict timing expectation fails. One CPU-only run establishes observed maxima, not worst-case bounds or combined-load timing. DMA, GPU and NPU completion timing is unmeasured.
+The cached-walk CPU latency diagnostic returns normally on port 3-3 and completes all eight cores' samples. Task-lock wait is below its budget; masking and wake timing remain above target. The instrumented CPU0 tick is the main open item. These observations establish no worst-case bound, task-wake percentile or combined-load timing. DMA, GPU and NPU completion timing is unmeasured.
 
 **Board-qualified scope:** None.
 
@@ -10,22 +10,23 @@ The native CPU control returns normally on port 3-3 and completes every wake sam
 
 | Capability | Status | Key figure | Evidence and design |
 | --- | --- | --- | --- |
-| Eight-core CPU latency control (wake samples, lock and mask recording) | implemented | Returns normally on port 3-3 with every wake sample; the strict timing expectation fails | `1793559978973913698-7f7e36e0` |
-| CPU0 timer assertion to C handler entry | implemented | 6.583 µs against a 50 µs budget | same record |
-| IRQ-masked or kernel critical region | open | 268.125 µs against 25 µs | same record |
-| Kernel ISR lock acquisition / outer hold | open | 9.042 / 19.792 µs against 25 µs each | same record |
-| Kernel task lock acquisition / outer hold | open | 238.750 / 12.625 µs against 25 µs each | same record |
-| Highest-priority ready task, idle / busy core | implemented | 66.625 / 104.542 µs against 100 / 250 µs | same record |
+| Eight-core CPU latency diagnostic | implemented | 64 idle and 128 busy wakes per core; normal return | `1794497365941804086-44d410dc`; [measurement record](../evidence/scheduler-latency-measurement.jsonl) |
+| A55 C self-selection | measured; full dispatch remains open | 3 to 15.792 µs in retained PMU windows | same record |
+| One control-record body | measured; full batch remains open | 3.125 to 20.375 µs | same record |
+| Instrumented CPU0 whole tick | open | 165.917 µs; a separate sample has 74.88 percent backend stalls | same record |
+| Retained mask interval after scheduler start | open | 86.250 µs on core 4 against 25 µs | same record |
+| Kernel task-lock wait | measured below budget; worst case unqualified | 9.792 µs against 25 µs | same record |
+| CPU0 busy task wake | open | Maximum 210.417 µs; 10 µs 99.99th-percentile target unqualified | same record |
 | DMA, GPU and NPU completion timing | open | Unmeasured (budgets 250, 1,000 and 1,000 µs) | none |
 
-The maxima come from one run at CPU-L 1794 MHz and 1000 mV, CPU-B 2002 MHz and 1050 mV. The budgets, with the basis of each, are in the note of the record; the two largest overruns precede the top-point workload by 132 ms.
+The figures come from one instrumented run at CPU-L 1794 MHz and 1000 mV, CPU-B 2002 MHz and 1050 mV, with cached table walks. Long PMU windows confirm effective clocks of 1793 and 1998 MHz. Every retained target window has zero data and instruction TLB walks. New PMU result writes are outside the counted windows; existing control and tick observers remain inside. The aggregate core 0 mask maximum begins before the scheduler running flag and cannot qualify startup masking.
 
 ## Open work
 
-1. Separate initialization from workload recording; the two largest overruns precede the top-point workload by 132 ms, and the workload itself reaches 62.750 us masked and 73.417 us task-lock wait (core 6).
-2. Design a fair task-lock acquisition protocol and bound contender work; this needs a port synchronization review (`vTaskSwitchContext`, `tasks.c:5393`).
-3. Reduce kernel lock contention in `ulTaskGenericNotifyTake`, keeping the scheduler invariants.
-4. Make NPU mailbox dispatch event-driven in the NPU owner; the owner polls every tick.
+1. Shorten CPU0's instrumented tick while preserving its eight periodic latency-fixture notifications, deadline handling and equal-priority slicing.
+2. Bound masking after scheduler start, including initialization, frame restoration and the final recorder boundary.
+3. Determine the cause of backend stalls and reduce remote scheduler-state writes while preserving task lifetime, affinity and priority order.
+4. Qualify lock-wait bounds under contention independently of diagnostic wrapper overhead.
 5. Run the combined CPU and DMA image after the thermal-readiness fix and independently established DMA authority.
 6. Measure DMA, GPU and NPU completion timing; physical DMA cleanup is unqualified.
 7. Meet the partitioned scheduler's 25 µs masking budget. Self-suspension publishes before masking and changes only the caller's local state before saving its frame and selecting a replacement; it drains no controls. Other maintenance admits interrupts during control preparation and attempts at most sixteen distinct records per entry. Masked spans still exceed the budget. With cached table walks, PMU windows measure A55 self-selection at 3 to 15.792 µs, general selection at up to 31.667 µs and control bodies at 3.125 to 20.375 µs. These component observations cannot bound a full maintenance batch. Every retained target window reports zero data and instruction TLB walks. Nearly equal selection refill counts accompany substantially different durations, leaving the cause of the stalls unresolved. [The scheduler timing records](../evidence/scheduler-latency-measurement.jsonl), entry `1794497365941804086-44d410dc`, qualify the image, counter banks and measurement boundaries.
