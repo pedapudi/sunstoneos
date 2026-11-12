@@ -14,10 +14,10 @@ int os_cpu_return_failing(void) { return failing; }
 
 struct actor {
     struct os_quiesce step;
-    unsigned calls, finished, notes;
+    unsigned calls, finished, notes, observations;
 };
 static enum os_quiesce_result poll_owner(struct os_quiesce *);
-#define ACTOR(NAME, ORDER) {{.owner=OS_QUIESCE_##NAME, .order=OS_QUIESCE_##ORDER, .step=poll_owner}, 0, 0, 0},
+#define ACTOR(NAME, ORDER) {{.owner=OS_QUIESCE_##NAME, .order=OS_QUIESCE_##ORDER, .step=poll_owner}, 0, 0, 0, 0},
 static struct actor actors[] = {
 #include "actors.inc"
 };
@@ -40,14 +40,25 @@ void os_quiesce_publication_probe(struct os_quiesce *q)
 /* Modes: 0 normal, 1 failure, 2 stalled owner, 3 one fault, 4 every owner
  * faults, 5 owner completes concurrently with a PENDING callback result,
  * 6 a later class faults while an earlier owner is pending, 7 an owner
- * observes request publication, 8 a fault arrives at the timeout boundary. */
+ * observes request publication, 8 a fault arrives at the timeout boundary,
+ * 9 a completed owner publishes a late fault, 10 its observer returns FAULT. */
 static enum os_quiesce_result poll_owner(struct os_quiesce *q)
 {
     struct actor *a=(void *)((char *)q - offsetof(struct actor,step));
     unsigned index=(unsigned)(a-actors);
     assert(os_quiesce_requested(q));
-    assert(!a->finished); /* Completed clock owners must never run again. */
-    ++a->calls;
+    assert(os_quiesce_result(q)!=OS_QUIESCE_FAULT);
+    if(a->finished){
+        ++a->observations;
+        if((mode==9||mode==10)&&index==target){
+            assert(os_quiesce_result(&actors[late_fault].step)==OS_QUIESCE_PENDING);
+            if(mode==9)
+                assert(os_quiesce_fault(q,0x80007000u|index,0xabc000u|index,(void *)(uintptr_t)(0x1000+index)));
+            return OS_QUIESCE_FAULT;
+        }
+        return OS_QUIESCE_DONE;
+    }
+    ++a->calls; /* Hardware work never repeats after the stopped proof. */
     for(unsigned i=0;i<COUNT;++i)
         if(actors[i].step.order==q->order)assert(os_quiesce_requested(&actors[i].step));
     for(unsigned i=0;i<COUNT;++i)
@@ -64,6 +75,7 @@ static enum os_quiesce_result poll_owner(struct os_quiesce *q)
         return OS_QUIESCE_FAULT;
     }
     if((mode==2||mode==6||mode==8) && index==target)return OS_QUIESCE_PENDING;
+    if((mode==9||mode==10)&&index==late_fault&&now_us<100000)return OS_QUIESCE_PENDING;
     if(now_us < delay_us + (q->order+1)*10000u)return OS_QUIESCE_PENDING;
     a->finished=1;
     if(mode==5){os_quiesce_complete(q);return OS_QUIESCE_PENDING;}
@@ -91,7 +103,7 @@ int main(int argc,char **argv)
     failing=mode!=0;requested=1;
     struct os_quiesce late={.owner=OS_QUIESCE_NPU,.order=OS_QUIESCE_QUEUES,.step=poll_owner};
     assert(!os_quiesce_register(&late));
-    if(mode==6||mode==8){
+    if(mode==6||mode==8||mode==9||mode==10){
         late_fault=COUNT;
         for(unsigned i=0;i<COUNT;++i)
             if(actors[i].step.order>actors[target].step.order&&actors[i].step.order!=OS_QUIESCE_TERMINALS){late_fault=i;break;}
@@ -122,6 +134,14 @@ int main(int argc,char **argv)
         assert(now_us==RETURN_LIMIT_US && result!=OS_QUIESCE_DONE);
         for(unsigned i=0;i<COUNT;++i)
             if(actors[i].step.order>actors[target].step.order)assert(!actors[i].calls);
+    }else if(mode==9||mode==10){
+        assert(now_us==RETURN_LIMIT_US && result!=OS_QUIESCE_DONE);
+        assert(actors[target].finished&&actors[target].observations==1);
+        assert(os_quiesce_result(&actors[target].step)==OS_QUIESCE_FAULT);
+        assert(notes==(mode==9?1u:0u));
+        assert(actors[late_fault].finished);
+        for(unsigned i=0;i<COUNT;++i)
+            if(actors[i].step.order==OS_QUIESCE_TERMINALS)assert(!actors[i].finished);
     }else if(mode==3||mode==4){
         assert(now_us==RETURN_LIMIT_US && result!=OS_QUIESCE_DONE);
         assert(notes==(mode==3?1u:COUNT-1u));
@@ -130,10 +150,12 @@ int main(int argc,char **argv)
     }else{
         assert(result==OS_QUIESCE_DONE && now_us<delay_us+200000u && !notes);
         for(unsigned i=0;i<COUNT;++i)assert(actors[i].finished);
-        unsigned total=0;for(unsigned i=0;i<COUNT;++i)total+=actors[i].calls;
+        unsigned total=0,observations=0;
+        for(unsigned i=0;i<COUNT;++i){total+=actors[i].calls;observations+=actors[i].observations;}
         assert(os_quiesce_step(note)==OS_QUIESCE_DONE);
-        unsigned after=0;for(unsigned i=0;i<COUNT;++i)after+=actors[i].calls;
-        assert(total==after);
+        unsigned after=0,observed=0;
+        for(unsigned i=0;i<COUNT;++i){after+=actors[i].calls;observed+=actors[i].observations;}
+        assert(total==after&&observed==observations+COUNT);
     }
     assert(os_cpu_return_expired(RETURN_LIMIT_US,0,RETURN_LIMIT_US));
     assert(!os_cpu_return_expired(RETURN_LIMIT_US-1,0,RETURN_LIMIT_US));

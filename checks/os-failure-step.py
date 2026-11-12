@@ -231,6 +231,9 @@ def main():
     earliest = min(range(len(required)), key=lambda i: orders.index(expected_order(required[i])))
     for mode in (6, 8):
         run(binary, mode, earliest);cases += 1
+    late_observer = required.index('NPU') if 'NPU' in required else earliest
+    for mode in (9, 10):
+        run(binary, mode, late_observer);cases += 1
     observed = build(root, args.output, required, 'class-publication', publication_probe=True)
     run(observed, 7);cases += 1
     for ms in range(40):
@@ -239,7 +242,7 @@ def main():
     step = (root / 'apps/os/cpu-return-step.h').read_text()
     changes = [
         ('does-not-wait', 'if(pending)return OS_QUIESCE_PENDING;', 'if(pending&&0)return OS_QUIESCE_PENDING;'),
-        ('repeats-completed-owner', 'if(r!=OS_QUIESCE_DONE){', 'if(1){'),
+        ('repeats-failed-owner', 'if(r!=OS_QUIESCE_FAULT){', 'if(1){'),
         ('fault-hides-later-owner', 'faults|=r==OS_QUIESCE_FAULT;', 'faults|=r==OS_QUIESCE_FAULT;if(faults)return OS_QUIESCE_FAULT;'),
         ('fault-replaces-first-code',
          'if(atomic_compare_exchange_strong_explicit(&q->fault_state,&none,1,memory_order_acq_rel,memory_order_acquire)){',
@@ -252,10 +255,25 @@ def main():
     for name, old, new in changes:
         assert registry.count(old) == 1, name
         bad = build(root, args.output, required, 'mutant-' + name, registry=registry.replace(old, new))
-        mode = 3 if name.startswith('fault-') else 1
+        mode = 3 if name.startswith('fault-') or name == 'repeats-failed-owner' else 1
         target = next(i for i, owner in enumerate(required) if owner != 'TERMINAL_OWNER')
         assert not run(bad, mode, target, success=False), 'undetected registry mutant ' + name
         mutants += 1
+    # DONE is a stopped proof that remains under observation until terminal
+    # release. A late hardware fault must invalidate that proof while a later
+    # owner is pending, including observers that return FAULT directly.
+    stopped = 'if(r!=OS_QUIESCE_FAULT){'
+    assert registry.count(stopped) == 1
+    bad = build(root, args.output, required, 'mutant-skips-completed-health',
+                registry=registry.replace(stopped, 'if(r!=OS_QUIESCE_DONE){'))
+    assert not run(bad, 9, late_observer, success=False), 'a completed owner hid a late fault'
+    mutants += 1
+    expected = 'unsigned expected=previous;'
+    assert registry.count(expected) == 1
+    bad = build(root, args.output, required, 'mutant-cannot-revoke-done',
+                registry=registry.replace(expected, 'unsigned expected=OS_QUIESCE_PENDING;(void)previous;'))
+    assert not run(bad, 10, late_observer, success=False), 'a direct FAULT reply kept DONE'
+    mutants += 1
     # A raw request must remain invisible until every peer request has been
     # stored. The probe schedules the observer at each publication boundary.
     armed = '(atomic_load_explicit(&armed_classes,memory_order_acquire)&(1u<<q->order))&&'
