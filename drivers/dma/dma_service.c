@@ -241,6 +241,49 @@ static enum dma_service_result stream_execute(struct dma_service *s,
     if(result==A733_I2S_CONFLICT)return DMA_SERVICE_BUSY;
     return c->phase==DMA_SERVICE_RECOVERY?DMA_SERVICE_FAULT:DMA_SERVICE_OK;
 }
+static int channels_closed(const struct dma_service *s)
+{
+    for(unsigned i=0;i<A733_DMA_CHANNELS;++i){
+        const struct dma_service_channel *c=&s->channels[i];
+        const struct a733_dma_channel *d=&s->controller.channels[i];
+        if(c->phase!=DMA_SERVICE_CLOSED || c->owner!=DMA_SERVICE_CLIENTS ||
+           c->profile!=DMA_SERVICE_NO_JOB || c->job!=DMA_SERVICE_NO_JOB ||
+           c->job_ticket || c->holds_buffers || c->outcome!=DMA_SERVICE_NO_RESULT ||
+           d->claimed || d->transfer)return 0;
+    }
+    return 1;
+}
+/* Only the worker reaches this callback, after closing admission and
+ * synchronizing with the IRQ notifier. It has the normal RETIRE bound. */
+static enum dma_service_result retirement_mask(struct dma_service *s)
+{
+    if(s->retirement_mask(s->retirement_cookie)==1){
+        s->irq_armed=0;
+        atomic_store_explicit(&s->irq_pending,0,memory_order_release);
+        return DMA_SERVICE_OK;
+    }
+    s->irq_retained=1;
+    atomic_store_explicit(&s->quiesce_fault,DMA_QUIESCE_MASK_FAILED,memory_order_release);
+    atomic_store_explicit(&s->activation_state,SERVICE_RETAINED,memory_order_release);
+    return DMA_SERVICE_FAULT;
+}
+/* One worker pass for an idle return. A sender already publishing a request
+ * completes its finite queue operation first. Its request remains owned and
+ * then causes refusal, as does any abandoned result or channel. */
+static void quiesce_idle(struct dma_service *s)
+{
+    taskENTER_CRITICAL();
+    if(s->retirement_senders){taskEXIT_CRITICAL();return;}
+    unsigned fault=channels_closed(s)?DMA_QUIESCE_NO_FAULT:DMA_QUIESCE_CHANNEL_HELD;
+    if(!fault&&uxQueueMessagesWaiting(s->requests))fault=DMA_QUIESCE_REQUEST_HELD;
+    for(unsigned i=0;!fault&&i<DMA_SERVICE_CLIENTS;++i)
+        if(s->clients[i].pending||uxQueueMessagesWaiting(s->clients[i].replies))fault=DMA_QUIESCE_REPLY_HELD;
+    atomic_store_explicit(&s->quiesce_fault,fault,memory_order_release);
+    atomic_store_explicit(&s->activation_state,fault?SERVICE_RETAINED:SERVICE_RETIRING,memory_order_release);
+    taskEXIT_CRITICAL();
+    if(!fault&&retirement_mask(s)==DMA_SERVICE_OK)
+        atomic_store_explicit(&s->retirement_collected,1,memory_order_release);
+}
 static enum dma_service_result retire(struct dma_service *s,const struct dma_service_message *m)
 {
     if(!s->retirement_mask || m->request.job || m->request.timeout || m->request.period_ticket)
@@ -248,14 +291,7 @@ static enum dma_service_result retire(struct dma_service *s,const struct dma_ser
     enum dma_service_result result=DMA_SERVICE_BUSY;
     taskENTER_CRITICAL();
     if(s->retirement_senders || uxQueueMessagesWaiting(s->requests))goto done;
-    for(unsigned i=0;i<A733_DMA_CHANNELS;++i){
-        const struct dma_service_channel *c=&s->channels[i];
-        const struct a733_dma_channel *d=&s->controller.channels[i];
-        if(c->phase!=DMA_SERVICE_CLOSED || c->owner!=DMA_SERVICE_CLIENTS ||
-           c->profile!=DMA_SERVICE_NO_JOB || c->job!=DMA_SERVICE_NO_JOB ||
-           c->job_ticket || c->holds_buffers || c->outcome!=DMA_SERVICE_NO_RESULT ||
-           d->claimed || d->transfer)goto done;
-    }
+    if(!channels_closed(s))goto done;
     for(unsigned i=0;i<DMA_SERVICE_CLIENTS;++i)
         if(s->clients[i].pending!=(i==m->client?m->ticket:0) ||
            uxQueueMessagesWaiting(s->clients[i].replies))goto done;
@@ -269,15 +305,7 @@ done:
     if(result!=DMA_SERVICE_OK)return result;
     /* The closed admission and synchronized ISR prevent further rearming.
      * Device completion waits must not hold the scheduler's global locks. */
-    if(s->retirement_mask(s->retirement_cookie)==1){
-        s->irq_armed=0;
-        atomic_store_explicit(&s->irq_pending,0,memory_order_release);
-    }else{
-        s->irq_retained=1;
-        atomic_store_explicit(&s->activation_state,SERVICE_RETAINED,memory_order_release);
-        result=DMA_SERVICE_FAULT;
-    }
-    return result;
+    return retirement_mask(s);
 }
 static enum dma_service_result execute(struct dma_service *s,const struct dma_service_message *m,
     struct a733_i2s_period *period)
@@ -365,6 +393,12 @@ static void worker(void *argument)
         }
         if (atomic_load_explicit(&s->activation_state,memory_order_acquire)!=SERVICE_ACTIVE) {
             (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+            continue;
+        }
+        if(atomic_load_explicit(&s->quiesce_requested,memory_order_acquire)){
+            quiesce_idle(s);
+            if(atomic_load_explicit(&s->activation_state,memory_order_acquire)==SERVICE_ACTIVE)
+                (void)ulTaskNotifyTake(pdTRUE,1);
             continue;
         }
         unsigned pending=s->irq_bound ? atomic_exchange_explicit(&s->irq_pending,0,memory_order_acq_rel) : 0;
@@ -487,6 +521,8 @@ static int initialize(struct dma_service *s,const struct a733_dma_operations *op
     atomic_init(&s->activation_state,activation ? SERVICE_WAITING : SERVICE_ACTIVE);
     atomic_init(&s->irq_pending,0);
     atomic_init(&s->retirement_collected,0);
+    atomic_init(&s->quiesce_requested,0);
+    atomic_init(&s->quiesce_fault,DMA_QUIESCE_NO_FAULT);
     s->initialized=1; instance=s; creating_worker=1;
 #if configNUMBER_OF_CORES > 1
     s->worker=xTaskCreateStaticAffinitySet(worker,"dma-service",DMA_SERVICE_STACK_WORDS,s,priority,
@@ -555,6 +591,20 @@ int dma_service_retired(const struct dma_service *s)
     return s && s==instance && s->initialized && s->retirement_mask &&
         atomic_load_explicit(&s->activation_state,memory_order_acquire)==SERVICE_RETIRED;
 }
+int dma_service_quiesce(struct dma_service *s)
+{
+    uint64_t level;__asm__ volatile("mrs %0,CurrentEL":"=r"(level));
+    if(level!=4||!s||s!=instance||!s->initialized||!s->retirement_mask||
+       xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING)return -1;
+    unsigned state=atomic_load_explicit(&s->activation_state,memory_order_acquire);
+    if(state==SERVICE_RETIRED)return 1;
+    if(state==SERVICE_RETAINED)return -1;
+    taskENTER_CRITICAL();
+    unsigned requested=atomic_exchange_explicit(&s->quiesce_requested,1,memory_order_acq_rel);
+    taskEXIT_CRITICAL();
+    if(!requested)xTaskNotifyGive(s->worker);
+    return 0;
+}
 void dma_service_irq_notify_from_isr(struct dma_service *s,int mask_ok,BaseType_t *woken)
 {
     configASSERT(s && s == instance && s->initialized && s->irq_bound && woken);
@@ -574,6 +624,7 @@ static struct dma_service_client *caller(struct dma_service *s,unsigned *slot)
 {
     if (!s || s != instance || !s->initialized ||
         atomic_load_explicit(&s->activation_state,memory_order_acquire)!=SERVICE_ACTIVE ||
+        atomic_load_explicit(&s->quiesce_requested,memory_order_acquire) ||
         xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return NULL;
     TaskHandle_t task=xTaskGetCurrentTaskHandle();
     for (unsigned i=0;i<DMA_SERVICE_CLIENTS;++i) if (s->clients[i].task == task) { *slot=i; return &s->clients[i]; }

@@ -256,6 +256,14 @@ enum a733_clock_result a733_clock_release(struct a733_clock_leases *,
  */
 enum a733_clock_result a733_clock_publish_audio(struct a733_clock_leases *,
     const struct a733_clock_token *, uint64_t deadline, struct a733_clock_token *);
+/* Retiring cold audio parent only: replace its exact shared AUDIO5 token with
+ * exclusive AUDIO_CHANGE under one registry lock. Every other AUDIO1, DIV2,
+ * DIV5 or local consumer must have released its token. BUSY changes nothing;
+ * OK invalidates the old identity and returns the only live replacement.
+ * This metadata transition permits no hardware change without the parent's
+ * independent local drain and inherited-state checks. */
+enum a733_clock_result a733_clock_reclaim_audio(struct a733_clock_leases *,
+    const struct a733_clock_token *, uint64_t deadline, struct a733_clock_token *);
 /* Atomic metadata publication after the privileged PLL coordinator has proved
  * its physical profile stable and kept all consumers excluded. parents must
  * be a nonempty subset of PLL_NPU|DISPLL1|USB01_REF|GPADC24M held exclusively. Convert

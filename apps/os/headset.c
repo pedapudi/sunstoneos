@@ -29,44 +29,70 @@
  * acknowledged. A lost packet stops capture, and its stop flag, like any
  * stop but the supervised capture window, ends the session through
  * board_fail, as do a refused take, a failed Bluetooth owner and a failed
- * board. The Bluetooth owner then retains
- * its transports and the client keeps its buffers. The supervised image waits
- * for manual power removal; in the resident image both tasks stop reporting
- * progress and the watchdog resets the board. */
+ * board. During a return the original owner stops the protocol, waits for
+ * authenticated module reset, and drains UART. Uncertain resources stay
+ * retained and the supervisor records the owner's fault. */
 #include "os.h"
+#include "cpu-return.h"
+#include "quiesce.h"
 #include "../board/application.h"
 #include "../bluetooth/bluetooth.h"
 #include "../bluetooth/headset.h"
 #include "../bluetooth/pcm.h"
 #include "../bluetooth/msbc.h"
+#include "owner-memory.h"
 #include "a733_cpu_coherence.h"
 #include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
+#include "sunstone_crumb.h"
 #include <string.h>
-static struct bluetooth_application app;
+/* The headset's memory, taken from the ledger at admission in a session that grants the headset (os_headset_memory): the
+ * Bluetooth application, the task stacks and the WAV, followed by the library's state (bluetooth_headset_memory). The capture
+ * client runs at EL0 and reaches the application and the library's state, and the recognizer reads the WAV, so the extent is
+ * readable and writable by the application's tasks, as the image's .bss that held it was. app is its first member: the address
+ * is null in a session that does not grant the headset, and the entries of apps/bluetooth/headset.c refuse a null application. */
+struct headset_memory {
+    struct bluetooth_application app;
+    StaticTask_t owner_task;     /* the Bluetooth owner when the radio is not granted */
+    StackType_t owner_stack[4096];
+    StaticTask_t client_task;
+    StackType_t client_stack[2048];
+    _Alignas(4) uint8_t headroom[SS_CAPTURE_HEADROOM-44];
+    uint8_t wav[BLUETOOTH_WAV_BYTES];
+};
+static struct headset_memory *memory;
+#define app (memory->app)
 /* The profile that os_headset_identity copied at EL3; its bytes field is zero until then. */
 static struct bluetooth_profile profile;
 static struct {
-    StaticTask_t owner_task;     /* the Bluetooth owner when the radio is not granted */
-    StackType_t owner_stack[4096];
     atomic_uint latch; /* With the radio, the attached Bluetooth client's own recovery latch. */
-    StaticTask_t client_task;
-    StackType_t client_stack[2048];
     TaskHandle_t owner,client;
     atomic_uint failed,requested,captured;
     unsigned started; /* The newest generation that requested START. */
     size_t bytes;
-    _Alignas(4) uint8_t headroom[SS_CAPTURE_HEADROOM-44];
-    uint8_t wav[BLUETOOTH_WAV_BYTES];
 } headset;
+static enum os_quiesce_result headset_quiesce_step(struct os_quiesce *);
+static struct os_quiesce headset_quiesce={.owner=OS_QUIESCE_HEADSET,
+    .order=OS_QUIESCE_DEVICES,.step=headset_quiesce_step};
 static int live(void){return board_live(NULL)&&!atomic_load_explicit(&headset.failed,memory_order_acquire);}
 /* The session grants the radio: the board's radio owner owns the module and the headset attaches to it. */
 static int shared(void){return os_granted(OS_GRANT_RADIO);}
 static int granted(void){return os_granted(OS_GRANT_HEADSET);}
+int os_headset_quiesce_pending(void)
+{return os_quiesce_requested(&headset_quiesce)&&os_quiesce_result(&headset_quiesce)==OS_QUIESCE_PENDING;}
+static enum os_quiesce_result headset_quiesce_step(struct os_quiesce *q)
+{
+    if(os_quiesce_result(q)!=OS_QUIESCE_PENDING)return os_quiesce_result(q);
+    /* The supervisor never runs protocol or device work on the wrong task. */
+    if(!headset.owner)(void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_SITE(BOARD),0x100u,SUNSTONE_CRUMB_HERE());
+    else xTaskNotifyGive(headset.owner);
+    if(headset.client)xTaskNotifyGive(headset.client);
+    return os_quiesce_result(q);
+}
 static void fail(void)
 {
     if(!atomic_exchange_explicit(&headset.failed,1,memory_order_acq_rel))(void)bluetooth_headset_segment_stop(&app);
-    board_fail(NULL);
+    if(!os_quiesce_fault(&headset_quiesce,SUNSTONE_CRUMB_FAIL_SITE(BOARD),0x102u,SUNSTONE_CRUMB_HERE()))board_fail(NULL);
 }
 /* The Bluetooth image's own startup rules (apps/bluetooth/application.c) for
  * the OS workloads, limited to the repeated capture modes. The board
@@ -78,7 +104,7 @@ static int headset_workload_valid(unsigned workload)
 int os_headset_profile_valid(const struct a733_board_session *s,const struct bluetooth_profile *p)
 {
     if(!s||!p||!headset_workload_valid(s->workload)||!s->sid_authority||s->sid_authority!=p->sid_authority||
-       p->version!=3||!os_headset_mode_valid(p->headset.mode)||!bluetooth_profile_valid(p,s->sid_evidence)||p->topology!=s->topology||
+       (p->version!=3&&p->version!=4)||!os_headset_mode_valid(p->headset.mode)||!bluetooth_profile_valid(p,s->sid_evidence)||p->topology!=s->topology||
        memcmp(p->radio.fabric,s->fabric,sizeof(s->fabric))||memcmp(p->radio.fabric_hz,s->fabric_hz,sizeof(s->fabric_hz)))
         return 0;
     uint64_t owners[]={s->pmic_owner,s->usb0_owner,s->typec_owner,s->usb2_owner,p->radio.owner,p->uart.owner};
@@ -90,7 +116,7 @@ int os_headset_identity(const struct a733_board_session *s,uint64_t deadline)
 {
     const volatile struct bluetooth_profile *source=(const void *)OS_HEADSET_PROFILE_ADDRESS;
     uint32_t bytes=source->bytes;
-    if(bytes!=sizeof(profile))return 0;
+    if(bytes!=832&&bytes!=sizeof(profile))return 0;
     for(uint32_t i=0;i<bytes;++i)((uint8_t *)&profile)[i]=((const volatile uint8_t *)source)[i];
     if(profile.bytes!=bytes||!os_headset_profile_valid(s,&profile)||
        a733_cpu_coherence_publish((uintptr_t)&profile,sizeof(profile),deadline)!=1||
@@ -110,6 +136,15 @@ void bluetooth_recognition_abort(void){fail();}
 /* One Bluetooth owner iteration, on the module owner's task. */
 static void serve(void)
 {
+    if(os_quiesce_result(&headset_quiesce)!=OS_QUIESCE_PENDING)return;
+    if(os_quiesce_requested(&headset_quiesce)){
+        int stopped=bluetooth_application_stop(&app,os_cpu_return_deadline_us());
+        if(stopped<0)(void)os_quiesce_fault(&headset_quiesce,SUNSTONE_CRUMB_FAIL_SITE(BOARD),
+            0x110u|(app.stop_fault<<12),SUNSTONE_CRUMB_HERE());
+        else if(stopped)os_quiesce_complete(&headset_quiesce);
+        if(stopped>=0)BOARD_PROGRESS(OS_SERVICE_BLUETOOTH);
+        return;
+    }
     if(!board_live(NULL))(void)bluetooth_application_retain(&app);
     else if(atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire))
         (void)bluetooth_application_poll(&app);
@@ -117,10 +152,19 @@ static void serve(void)
     if(!atomic_load_explicit(&app.failed,memory_order_acquire))BOARD_PROGRESS(OS_SERVICE_BLUETOOTH);
 }
 void os_module_poll(void){serve();}
+int os_headset_module_release_ready(void)
+{
+    if(!granted())return 1;
+    if(os_quiesce_result(&headset_quiesce)==OS_QUIESCE_FAULT)return -1;
+    return bluetooth_application_module_release(&app);
+}
+void os_headset_module_down(int proved)
+{if(granted())bluetooth_application_module_down(&app,proved);}
 static void owner(void *unused){(void)unused;for(;;){serve();vTaskDelay(1);}}
 /* Client task only: one bounded step. 0 continue, -1 failed. */
 static int step(void)
 {
+    if(os_quiesce_requested(&headset_quiesce))return 0;
     struct bluetooth_segment_status status;
     if(bluetooth_headset_segment_status(&app,&status)!=1)return -1;
     /* Capture stopped for any reason but the supervised window would leave
@@ -139,8 +183,8 @@ static int step(void)
          * the recognizer may be reading, is never rewritten. */
         unsigned wanted=g&&atomic_load_explicit(&headset.captured,memory_order_relaxed)!=g;
         /* mSBC segments are already 16 kHz; CVSD segments are interpolated. */
-        if((wanted&&(c->state==2?bluetooth_pcm16_wav(pcm,c->bytes,headset.wav,sizeof(headset.wav),&headset.bytes):
-            bluetooth_pcm_wav(pcm,c->bytes,headset.wav,sizeof(headset.wav),&headset.bytes))!=1)||
+        if((wanted&&(c->state==2?bluetooth_pcm16_wav(pcm,c->bytes,memory->wav,sizeof(memory->wav),&headset.bytes):
+            bluetooth_pcm_wav(pcm,c->bytes,memory->wav,sizeof(memory->wav),&headset.bytes))!=1)||
            bluetooth_headset_segment_ack(&app,segment.ticket)!=1)return -1;
         if(wanted)atomic_store_explicit(&headset.captured,g,memory_order_release);
         return 0;
@@ -163,8 +207,10 @@ void os_headset_task(void *unused)
     (void)unused;
     for(;;){
         /* A failed capture keeps its buffers, stops and stops reporting. */
-        if(!atomic_load_explicit(&headset.failed,memory_order_acquire)&&(!live()||step()<0))fail();
-        if(!atomic_load_explicit(&headset.failed,memory_order_acquire))BOARD_PROGRESS(OS_SERVICE_HEADSET);
+        if(os_quiesce_result(&headset_quiesce)!=OS_QUIESCE_FAULT){
+            if(!atomic_load_explicit(&headset.failed,memory_order_acquire)&&(!live()||step()<0))fail();
+            if(!atomic_load_explicit(&headset.failed,memory_order_acquire))BOARD_PROGRESS(OS_SERVICE_HEADSET);
+        }
         /* Woken by the Bluetooth owner and by a new generation; the wait stays
          * inside the 1 s progress window. */
         (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(250));
@@ -172,12 +218,12 @@ void os_headset_task(void *unused)
 }
 int os_headset_capture(unsigned g,const uint8_t **wav,size_t *bytes)
 {
-    if(!live()||!g||!wav||!bytes)return -1;
+    if(!live()||os_quiesce_requested(&headset_quiesce)||!g||!wav||!bytes)return -1;
     unsigned requested=atomic_load_explicit(&headset.requested,memory_order_relaxed);
     if(g<requested)return -1;
     if(g>requested){atomic_store_explicit(&headset.requested,g,memory_order_release);if(headset.client)xTaskNotifyGive(headset.client);}
     if(atomic_load_explicit(&headset.captured,memory_order_acquire)!=g)return 0;
-    *wav=headset.wav;*bytes=headset.bytes;return live()?1:-1;
+    *wav=memory->wav;*bytes=headset.bytes;return live()?1:-1;
 }
 /* The Bluetooth owner drives the module, UART and pins; the client only
  * copies segments and runs unprivileged. With the radio, the board's radio
@@ -209,18 +255,27 @@ int os_headset_pins(struct a733_pin_handoff *pins)
     static const struct a733_mapping_rule wb={A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
     if(!a733_mapping_check_pages(aarch64_device_translate,BLUETOOTH_PROFILE_ADDRESS,BLUETOOTH_PROFILE_ADDRESS,
            UINT64_C(0x43100000)-BLUETOOTH_PROFILE_ADDRESS,&wb))return 0;
-    pins->authorized[A733_PIN_G]=0x3ff;pins->authorized[A733_PIN_M]=0x1b;pins->latch[1]=p->pm_latch;
+    pins->authorized[A733_PIN_G]=0x3ff;pins->authorized[A733_PIN_M]=p->version==4?0x1f:0x1b;pins->latch[1]=p->pm_latch;
     return 1;
+}
+int os_headset_memory(void)
+{
+    if(!granted()||memory)return 1;
+    size_t own=(sizeof(struct headset_memory)+63)&~(size_t)63;
+    uint8_t *m=os_owner_memory(own+bluetooth_headset_state_bytes,64,OS_MEMORY_EL0_WRITE);
+    if(!m||bluetooth_headset_memory(m+own)!=1)return 0;
+    memory=(struct headset_memory *)(void *)m;return 1;
 }
 int os_headset_start(void)
 {
     const struct os_session *s=os_session_admitted();
     if(s&&!granted())return 1;
     const struct bluetooth_profile *p=os_headset_profile();
-    if(!s||!p||headset.client||!board_live(NULL))return 0;
+    if(!s||!p||!memory||headset.client||!board_live(NULL))return 0;
     /* The recognizer's start entry ran runtime_init, so libsbc can allocate. */
     if(p->headset.mode==3&&bluetooth_msbc_init()!=1)return 0;
-    headset.client=xTaskCreateStatic(os_headset_task,"os-headset",2048,NULL,4,headset.client_stack,&headset.client_task);
+    if(!os_quiesce_register(&headset_quiesce))return 0;
+    headset.client=xTaskCreateStatic(os_headset_task,"os-headset",2048,NULL,4,memory->client_stack,&memory->client_task);
     if(!headset.client)return 0;
     if(shared()){
         /* main.c built the radio and created its owner (handle 5) before this list. */
@@ -231,7 +286,7 @@ int os_headset_start(void)
                &headset.latch,board.session.session_start_ticks/24,board.session.deadline_us,board.session.sid_evidence,
                &radio->native,&radio->session)!=1)return 0;
     }else{
-        headset.owner=xTaskCreateStatic(owner,"bluetooth",4096,NULL,4,headset.owner_stack,&headset.owner_task);
+        headset.owner=xTaskCreateStatic(owner,"bluetooth",4096,NULL,4,memory->owner_stack,&memory->owner_task);
         if(!headset.owner||bluetooth_application_init(&app,p,&providers.shared,board_radio_chip_id(),headset.owner,
                &board.watchdog_state,board.session.session_start_ticks/24,board.session.deadline_us,board.session.sid_evidence)!=1)
             return 0;

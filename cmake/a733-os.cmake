@@ -6,24 +6,45 @@ if(NOT TARGET sunstone-a733-os-core)
   return()
 endif()
 include("${CMAKE_CURRENT_LIST_DIR}/sunstone-image.cmake")
-# Every image admits the returning lifetime, except one with the USB class services, and selects its lifetime at run
-# time from the contract magic (apps/os/admission.c); the manifest bounds the supervised and returning ones.
+# The contract magic selects the lifetime. USB classes retain their supervised
+# image profile except for the empty-port failure diagnostic.
 set(os_lifetime return)
-if(SUNSTONE_A733_OS_USB_CLASSES)
+if(SUNSTONE_A733_OS_USB_CLASSES AND NOT os_usb_failure_test)
   set(os_lifetime supervised)
 endif()
 if(SUNSTONE_APPLICATION STREQUAL "")
   add_sunstone_image(sunstone-a733-os LIFETIME ${os_lifetime})
 elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
+  set(SUNSTONE_HELLO_CLUSTER "a55" CACHE STRING "CPU-return control placement: a55 or a76")
+  if(NOT SUNSTONE_HELLO_CLUSTER MATCHES "^(a55|a76)$")
+    message(FATAL_ERROR "SUNSTONE_HELLO_CLUSTER must be a55 or a76")
+  endif()
+  set(hello_manifest "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest.json")
+  if(SUNSTONE_HELLO_CLUSTER STREQUAL "a76")
+    set(hello_manifest "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest-a76.json")
+  endif()
+  set(hello_pmu_inputs)
+  if(SUNSTONE_PMU_RESULT)
+    list(APPEND hello_pmu_inputs "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/pmu.c")
+  endif()
   add_sunstone_application(hello-compute
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/main.c"
-    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest.json")
+    MANIFEST "${hello_manifest}" INPUTS ${hello_pmu_inputs})
   add_sunstone_image(sunstone-a733-os-hello LIFETIME ${os_lifetime} APPLICATION hello-compute)
+  if(SUNSTONE_PMU_RESULT)
+    target_sources(sunstone-a733-os-hello PRIVATE ${hello_pmu_inputs})
+    target_link_options(sunstone-a733-os-hello PRIVATE -Wl,--wrap=hello_compute_main)
+  endif()
 elseif(SUNSTONE_APPLICATION STREQUAL "memcpy-bench")
   add_sunstone_application(memcpy-bench
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/memcpy-bench/main.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/memcpy-bench/manifest.json")
   add_sunstone_image(sunstone-a733-os-memcpy-bench LIFETIME ${os_lifetime} APPLICATION memcpy-bench)
+elseif(SUNSTONE_APPLICATION STREQUAL "usb-empty-fail")
+  add_sunstone_application(usb-empty-fail
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/usb-empty-fail/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/usb-empty-fail/manifest.json")
+  add_sunstone_image(sunstone-a733-os-usb-empty-fail LIFETIME return APPLICATION usb-empty-fail)
 elseif(SUNSTONE_APPLICATION STREQUAL "headset-fixture")
   # Declares the headset device, so the image links the headset library with the Bluetooth stack and mSBC.
   add_sunstone_application(headset-fixture
@@ -37,6 +58,9 @@ elseif(SUNSTONE_APPLICATION STREQUAL "radio-scan")
   add_sunstone_application(radio-scan
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/radio-scan/main.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/radio-scan/manifest.json")
+  option(SUNSTONE_RADIO_SCAN_FAILURE_TEST "Inject application failure after a successful radio scan" OFF)
+  target_compile_definitions(radio-scan PRIVATE
+    "$<$<BOOL:${SUNSTONE_RADIO_SCAN_FAILURE_TEST}>:SUNSTONE_RADIO_SCAN_FAILURE_TEST=1>")
   add_sunstone_image(sunstone-a733-os-radio-scan LIFETIME ${os_lifetime} APPLICATION radio-scan)
 elseif(SUNSTONE_APPLICATION STREQUAL "large-region-test")
   # The 1 GiB region needs the upper memory mapped, which the table builder does only after the address-test
@@ -47,8 +71,14 @@ elseif(SUNSTONE_APPLICATION STREQUAL "large-region-test")
   # The test runs on the A76 cluster with CPU clock grants. The session lifetime follows the manifest's run deadline
   # (tools/session_lifetime.py).
   set(large_region_manifest "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest-return.json")
+  set(large_region_source "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/main.c")
+  option(SUNSTONE_LARGE_REGION_FAIL_AFTER_READ "Fail the application after the declared card file passes its digest check" OFF)
+  if(SUNSTONE_LARGE_REGION_FAIL_AFTER_READ)
+    set(large_region_manifest "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest-failure-read.json")
+    set(large_region_source "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/failure.c")
+  endif()
   add_sunstone_application(large-region
-    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/main.c"
+    SOURCES "${large_region_source}"
     MANIFEST "${large_region_manifest}")
   add_sunstone_image(sunstone-a733-os-large-region-test LIFETIME ${os_lifetime} APPLICATION large-region)
 elseif(SUNSTONE_APPLICATION STREQUAL "heap-test")
@@ -130,6 +160,17 @@ elseif(SUNSTONE_APPLICATION MATCHES "^(cpu-capacity|cpu-split)$")
   endif()
   include("${SUNSTONE_SOURCE_ROOT}/apps/scheduler-capacity/cmake/application.cmake")
   add_sunstone_image(sunstone-a733-os-${SUNSTONE_APPLICATION} LIFETIME ${os_lifetime} APPLICATION ${SUNSTONE_APPLICATION})
+elseif(SUNSTONE_APPLICATION STREQUAL "table-walks")
+  add_sunstone_application(table-walks
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/main.c"
+      "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/walk.S"
+      "${SUNSTONE_SOURCE_ROOT}/platform/a733/cpu_pmu.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/manifest.json"
+    INPUTS "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/privilege.c"
+    INCLUDE_DIRECTORIES "${SUNSTONE_SOURCE_ROOT}/apps/table-walks")
+  add_sunstone_image(sunstone-a733-os-table-walks LIFETIME ${os_lifetime} APPLICATION table-walks)
+  target_sources(sunstone-a733-os-table-walks PRIVATE "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/privilege.c")
+  target_link_options(sunstone-a733-os-table-walks PRIVATE -Wl,--wrap=os_application_task_privileged)
 elseif(SUNSTONE_APPLICATION STREQUAL "dram-bandwidth")
   include("${SUNSTONE_SOURCE_ROOT}/apps/dram-bandwidth/cmake/application.cmake")
   add_sunstone_image(sunstone-a733-os-dram-bandwidth LIFETIME ${os_lifetime} APPLICATION dram-bandwidth)
@@ -180,6 +221,10 @@ elseif(SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle")
     message(FATAL_ERROR "GPU lifecycle requires SUNSTONE_A733_OS_GPU=ON")
   endif()
   option(SUNSTONE_GPU_LIFECYCLE_PEER "Link the fixed sharing peer into the lifecycle image" ON)
+  option(SUNSTONE_GPU_LIFECYCLE_FAIL_AFTER_SUBMIT "Fail the application after both GPU clients accept a job" OFF)
+  if(SUNSTONE_GPU_LIFECYCLE_FAIL_AFTER_SUBMIT AND SUNSTONE_A733_OS_GPU_RECOVERY_TEST)
+    message(FATAL_ERROR "GPU application failure injection requires normal compute completion")
+  endif()
   if(NOT SUNSTONE_GPU_LIFECYCLE_PEER)
     message(FATAL_ERROR "GPU lifecycle qualification requires the fixed sharing peer")
   endif()
@@ -196,6 +241,7 @@ elseif(SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle")
       "${SUNSTONE_SOURCE_ROOT}/apps/gpu-queue-peer")
   target_compile_definitions(gpu-lifecycle PRIVATE
     GPU_LIFECYCLE_PEER=$<BOOL:${SUNSTONE_GPU_LIFECYCLE_PEER}>
+    GPU_LIFECYCLE_FAIL_AFTER_SUBMIT=$<BOOL:${SUNSTONE_GPU_LIFECYCLE_FAIL_AFTER_SUBMIT}>
     GPU_LIFECYCLE_RECOVERY=$<BOOL:${SUNSTONE_A733_OS_GPU_RECOVERY_TEST}>)
   add_sunstone_image(sunstone-a733-os-gpu-lifecycle LIFETIME ${os_lifetime} APPLICATION gpu-lifecycle)
 elseif(SUNSTONE_APPLICATION MATCHES "^usb-(input|serial|camera)$")

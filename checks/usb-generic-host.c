@@ -23,6 +23,9 @@ static void generic_wire(void);
 /* These inherited helpers belong to the legacy main, which is not run. */
 void usb2_native_mapping_check(void){assert(0);}
 void usb2_source_reference(uint32_t *p){(void)p;assert(0);}
+/* No input queue: the classes reach this fixture's own input callback. */
+const unsigned ss_usb_input_events=0;
+void *os_owner_memory(uint64_t bytes,uint64_t align,unsigned attributes){(void)bytes;(void)align;(void)attributes;return 0;}
 static struct ss_grant application_grant;
 const struct ss_grant *ss_grant(void){return &application_grant;}
 int ss_live(void){return 1;}

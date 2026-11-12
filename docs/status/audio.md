@@ -17,6 +17,7 @@ on port 3-3. External microphone and headset operation remain unqualified.
 | I2S0 loopback capture and playback, cyclic cancellation and drain, raw-ring overrun | qualified on the board | 10.5 to 11.7 s per returning diagnostic | [audio.jsonl](../evidence/audio.jsonl) |
 | HDMI audio streaming through I2S3, four 4,096-byte periods, up to 576,000 frames | host-tested | 50,177 frames and 50 periods in the modeled run | [design](../designs/hdmi-audio-streaming.md), `hdmi-audio-streaming-software` |
 | Bluetooth headset voice-recognition capture (CVSD and mSBC segments) | host-tested | 2,090,169 owner instructions per 48,000-byte segment | [design](../designs/bluetooth-voice-recognition.md), `bluetooth-voice-recognition-measure` |
+| Capture buffer and headset state from the unified ledger at admission | host-tested | headset fixture image `.bss` 3,210,688 to 1,905,296 bytes; an EL0 write to the capture buffer passes in QEMU and faults when it is taken for EL1 only | [unified memory](../designs/unified-memory.md) (Device owners), `checks/qemu-os-boot.py`, `checks/os-image-headset.py` |
 | External microphone and headset operation | open | none | open work 2 |
 
 ## Open work
@@ -24,7 +25,6 @@ on port 3-3. External microphone and headset operation remain unqualified.
 1. Measure the unguarded DMA ordering margin.
 2. Qualify external microphone and headset operation, including physical pairing, interoperability and safe shutdown.
 3. Keep the generic capture and paced or recorded input services independent of the external recognition application.
-4. Allocate the headset state and the capture buffer from the unified ledger at the grant, sized from the session's declared sizes. Both are static today: the headset library holds 948,008 bytes of `.bss`, and the capture buffer of the headset fixture application (160,000 mono 16-bit frames) holds 323,648 bytes.
 
 ## Evidence
 

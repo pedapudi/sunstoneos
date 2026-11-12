@@ -1,3 +1,4 @@
+#include "a733_cpu_coherence.h"
 #include "a733_cpu_continue.h"
 .section .text.a733_cpu_continue,"ax"
 .balign 4
@@ -129,9 +130,9 @@ a733_cpu_continue_enter_el1:
 .Lel1:
     mov x2, #0x4400
     msr mair_el1, x2
-    mov x2, #0x3019
-    movk x2, #0x0080, lsl #16
-    movk x2, #2, lsl #32
+    mov x2, #(A733_CPU_COHERENCE_TCR_UNCACHED_WALK & 0xffff)
+    movk x2, #((A733_CPU_COHERENCE_TCR_UNCACHED_WALK >> 16) & 0xffff), lsl #16
+    movk x2, #(A733_CPU_COHERENCE_TCR_UNCACHED_WALK >> 32), lsl #32
     msr tcr_el1, x2
     adrp x2, a733_cpu_continue_level1
     add x2, x2, :lo12:a733_cpu_continue_level1

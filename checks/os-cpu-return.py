@@ -36,6 +36,14 @@ from harness import Image, save
 # (device_take in apps/os/npu.c), and `npu` holds its address. The models place it in mapped image RAM above the image's device
 # pool and below the fixtures at 0x41f00000.
 NPU_DEVICE = 0x41e00000
+GRANTS = {name: 1 << int(bit, 0) for name, bit, _ in records.manifest_tool.os_service_rows('OS_GRANT_ROWS')}
+
+
+def service_grants(image):
+    """Declared service records used by the linked CPU/NPU return fixtures."""
+    manifest = records.image_manifest(image.path)['manifest'] or {}
+    return ((GRANTS['NPU'] if 'ss_application_npu' in image.symbols else 0) |
+            (GRANTS['CPU_CLOCK'] if manifest.get('clock_use', 0) & 1 else 0))
 
 
 def npu_device(model, symbols, layout, npu):
@@ -210,20 +218,22 @@ class Model(prior.Model):
         self.put64(second + 8, 1)
         self.put64(second + 16, self.published[2][0]); self.put64(second + 24, self.published[2][1])
         self.put64(self.s['os_device_ranges_head'], first)
-        if 'os_npu_published_report' in self.s:
+        grants = service_grants(self.image)
+        layout = Image(self.image.path, set())
+        self.put32(layout.address('granted_word', '/apps/os/grants.c'), 0x80000000 | grants)
+        if grants & GRANTS['NPU']:
             # Terminal-only fixture: preceding service close/local stop and
             # worker park are supplied inputs; their real functions have a
             # separate linked integration check.
-            layout = Image(self.image.path, {'os_npu_application', 'npu_runtime', 'npu_service'})
+            # The retirement check reads the runtime's signal words in the npu static, never the device state.
+            layout = Image(self.image.path, {'os_npu_application', 'npu_service_signals'})
             npu = layout.address('npu', '/apps/os/npu.c')
             nf = layout.layouts['os_npu_application']
-            service = npu + nf['runtime'] + layout.layouts['npu_runtime']['service']
+            signals = npu + nf['signals']
             self.put32(npu + nf['stopped'], 1)
             self.put32(npu + nf['active'], 1)
-            self.put32(service + layout.layouts['npu_service']['irq_stopped'], 1)
-            self.put32(service + layout.layouts['npu_service']['runtime_parked'], 1)
-            self.put64(service + layout.layouts['npu_service']['runtime'],
-                       npu + nf['runtime']) # installed runtime-mode authority, supplied fixture
+            self.put32(signals + layout.layouts['npu_service_signals']['irq_stopped'], 1)
+            self.put32(signals + layout.layouts['npu_service_signals']['runtime_parked'], 1)
             report = self.s['os_npu_published_report']
             self.put32(report + 12, 1)
             self.put32(report + 56, 1)
@@ -291,7 +301,7 @@ def main():
               'published-range-wraps', 'published-deadline')
     if '__os_npu_pool_start' in image.symbols:
         raise SystemExit('the image still links a fixed NPU pool')
-    if 'os_npu_published_report' in image.symbols:
+    if service_grants(image) & GRANTS['NPU']:
         cases += ('npu-late-irq',)
     if 'os_gpu_return_report' in image.symbols:
         cases += ('gpu-active','gpu-spi-restore-readback','wrong-pool-alias')
@@ -364,10 +374,10 @@ def main():
         elif case == 'published-deadline':
             model.pool_deadline = True
         elif case == 'npu-late-irq':
-            layout = Image(image.path, {'os_npu_application', 'npu_runtime', 'npu_service'})
+            layout = Image(image.path, {'os_npu_application', 'npu_service_signals'})
             npu = layout.address('npu', '/apps/os/npu.c')
-            service = npu + layout.layouts['os_npu_application']['runtime'] + layout.layouts['npu_runtime']['service']
-            model.put32(service + layout.layouts['npu_service']['irq_pending'], 1)
+            signals = npu + layout.layouts['os_npu_application']['signals']
+            model.put32(signals + layout.layouts['npu_service_signals']['irq_pending'], 1)
         elif case == 'service-not-ready':
             model.put32(model.local['ready'], 0)
         if case != 'success' and case != 'expired-deadline':

@@ -19,6 +19,7 @@ base=prior.base
 supervised=module('startup_supervised',ROOT/'tools/check-a733-smp-supervised.py')
 require,digest,save=base.require,base.digest,base.save_json
 returning=module('probe_returning',ROOT/'tools/a733-returning-host.py')
+TCR_UNCACHED=module('startup_tcr',ROOT/'tools/a733_tcr.py').UNCACHED_WALK
 NATIVE=prior.NATIVE
 LAUNCH='2b0641c2509963ad08d03e8498ee865b5d858c4536b9ea26fbd26ca576e698ea'
 MAGIC=0x4137335354415254
@@ -51,7 +52,7 @@ SOURCES=('boot/a733/native-startup-probe.S','boot/a733/native-startup-probe.ld',
     'boot/a733/native-local-interrupt-probe.c','boot/a733/native-el3-cache-probe.S','boot/a733/native-el1-cache-probe.S','boot/a733/native-ns-publication.S','platform/a733/cpu_continue.c',
     'platform/a733-smp-cached/continuation-core.patch','platform/a733/cpu_start.c',
     'runtime/memory.c','runtime/include/string.h','include/a733_cpu_continue.h',
-    'include/a733_cpu_entry.h','include/a733_cpu_start.h')
+    'include/a733_cpu_entry.h','include/a733_cpu_start.h','include/a733_cpu_coherence.h','tools/a733_tcr.py')
 REPORT=0x42002000
 # Includes every byte written by actual stack/BSS initialization and admission.
 DRAM=(('native-code',0x41000000,0x12078),('native-data',0x41200000,0x21),
@@ -103,7 +104,7 @@ def prepare(a):
             link_symbols.append('--defsym=probe_production_'+alias+'='+hex(symbols[symbol]))
     if a.el1_cache:
         obj=a.build/'el1-cache.o';objects.append(obj)
-        commands.append([a.clang,'--target=aarch64-none-elf','-march=armv8-a','-c',ROOT/'boot/a733/native-el1-cache-probe.S','-o',obj])
+        commands.append([a.clang,'--target=aarch64-none-elf','-march=armv8-a','-I',ROOT/'include','-c',ROOT/'boot/a733/native-el1-cache-probe.S','-o',obj])
         link_symbols.append('--defsym=probe_production_enter_el1='+hex(symbols['a733_cached_enter_el1']))
         obj=a.build/'ns-publication.o';objects.append(obj)
         commands.append([a.clang,'--target=aarch64-none-elf','-march=armv8-a','-c',ROOT/'boot/a733/native-ns-publication.S','-o',obj])
@@ -250,7 +251,7 @@ def el1_cache_snapshot(raw):
 def validate_el1_cache(r,return_address):
     require(r['state']==3 and not r['failure'] and r['restored']==r['original'],'EL1 controls did not restore.')
     require(r['original']['sctlr']==0xc50839 and r['original']['tcr']==0x800080,'EL1 original walk block differs.')
-    require(r['observed']==dict(marker=0x733,CurrentEL=4,sctlr=0x30d01805,tcr=0x200803019,
+    require(r['observed']==dict(marker=0x733,CurrentEL=4,sctlr=0x30d01805,tcr=TCR_UNCACHED,
         ttbr0=0x421f2000,mair=0x44ff00,ttbr1=0,sp=0x41253000,tpidr=1,cntfrq=24000000,
         mpidr=0x81000100,igrpen1=0),'EL1 production entry readbacks differ.')
     require(r['esr']==0x5e000733 and r['elr']==return_address and r['spsr']&0x3ff==0x3c5 and

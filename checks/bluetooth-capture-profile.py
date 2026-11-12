@@ -27,7 +27,13 @@ def main():
         '#include <stdint.h>\nstatic const uint64_t bluetooth_model_bytes[2]={4096,8192};\n'
         'static const uint8_t bluetooth_model_sha256[2][32]={{1},{2}};\n')
     before = out / 'before.c'
-    before.write_bytes(subprocess.check_output(['git', 'show', BASELINE + ':apps/bluetooth/bluetooth.c'], cwd=ROOT))
+    baseline = subprocess.check_output(['git', 'show', BASELINE + ':apps/bluetooth/bluetooth.c'], cwd=ROOT).decode()
+    # Preserve the baseline's original wire size while sharing the current
+    # C declaration. Otherwise the appended v4 tail would make the baseline
+    # reject v3 at its size check before exercising the capture policy.
+    geometry = 'p->version==3&&p->bytes==sizeof(*p)'
+    assert baseline.count(geometry) == 1
+    before.write_text(baseline.replace(geometry, 'p->version==3&&p->bytes==832'))
     common = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', *SANITIZE,
               '-ffunction-sections', '-fdata-sections', '-DSUNSTONE_AIC8800_RSN=1',
               '-DINCLUDE_xSemaphoreGetMutexHolder=1', '-DSUNSTONE_BLUETOOTH_HEADSET=1',
@@ -69,7 +75,8 @@ def main():
         results[name] = json.loads(run(name + '-run', [binary]))
     assert results['before-capture']['version3_admitted'] is False
     assert results['capture-cvsd']['digest_calls'] == results['capture-msbc']['digest_calls'] == 1
-    assert results['capture-cvsd']['digest_bytes'] == results['capture-msbc']['digest_bytes'] == 832
+    assert results['capture-cvsd']['digest_bytes'] == results['capture-msbc']['digest_bytes'] == 888
+    assert all(results[name]['stop_refusals'] == 11 for name in ('capture-cvsd', 'capture-msbc', 'recognizer', 'recognizer-capture'))
     dependencies.update([Path(__file__).resolve(), ROOT / 'checks/harness.py', Path(CLANG).resolve()])
     record = dict(passed=True, physical_access=False, baseline_revision=BASELINE, variants=results,
                   scope='Actual provider validator and SHA-256; scheduling, transports and hardware are not executed.',

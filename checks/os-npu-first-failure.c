@@ -2,12 +2,19 @@
  * are modeled; no MMIO or accelerator work occurs. */
 #include "../apps/os/npu.c"
 #include "../apps/os/npu-declaration.c"
+#include "../apps/os/quiesce.c"
 #include "npu-queue-unlinked.c"
 #include <assert.h>
 #include <setjmp.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+/* Request failures precede supervisor return. The real registry must leave
+ * these failures with the existing board failure path. */
+int os_cpu_return_requested(void){return 0;}
+int os_cpu_return_failing(void){return 0;}
+int os_npu_complete(void){abort();}
+int os_granted(unsigned mask){(void)mask;abort();}
 struct board_application board;
 /* The guard check of the stop step reads memory that the model keeps coherent; this run reserves no guard. */
 int aarch64_device_cache(enum aarch64_cache_op op,uintptr_t cpu,size_t bytes){(void)op;return cpu&&bytes;}
@@ -23,7 +30,7 @@ _Noreturn void __assert_func(const char *file,int line,const char *function,cons
 /* Model successful worker parking before the stop-refusal case. The complete
  * linked lifecycle fixture establishes the actual worker park transition. */
 int npu_service_runtime_parked(const struct npu_service *service)
-{assert(service==&npu.runtime.service);return 1;}
+{assert(service==&npu.device->runtime.service);return 1;}
 int board_live(void *context){assert(!context);return (int)live_value;}
 /* A supervised session: the lifetime the NPU service reads (apps/os/lifetime.c, apps/os/sealed.c); it reports no
  * resident progress. */
@@ -43,14 +50,14 @@ int a733_counter_clock_now(void *context,uint64_t *out)
 int npu_runtime_send(struct npu_runtime *r,unsigned slot,enum npu_service_operation op,unsigned model,
                      uint64_t timeout,TickType_t wait,uint64_t *ticket)
 {
-    assert(r==&npu.runtime&&!slot&&wait);
+    assert(r==&npu.device->runtime&&!slot&&wait);
     assert(op==NPU_SERVICE_LOAD&&model==2&&!timeout);
     ++send_calls;if(mode==1)return 0;*ticket=sent_ticket;return 1;
 }
 int npu_runtime_collect(struct npu_runtime *r,unsigned slot,uint64_t ticket,
                         struct npu_service_reply *reply,TickType_t wait)
 {
-    assert(r==&npu.runtime&&!slot&&ticket==sent_ticket&&wait);
+    assert(r==&npu.device->runtime&&!slot&&ticket==sent_ticket&&wait);
     ++collect_calls;if(mode==2)return 0;
     *reply=(struct npu_service_reply){.ticket=ticket,.result=NPU_SERVICE_OK,
         .fault=A733_NPU_NO_FAULT,.state=A733_NPU_READY};
@@ -73,11 +80,11 @@ int os_perf_enabled(void){return 0;}
 unsigned os_perf_boot_mode(void){return 0;}
 void vTaskDelay(TickType_t ticks){(void)ticks;abort();}
 enum a733_npu_platform_result npu_runtime_startup_poll(struct npu_runtime *r)
-{assert(r==&npu.runtime);return mode==11?A733_NPU_PLATFORM_RETAINED:A733_NPU_PLATFORM_READY;}
+{assert(r==&npu.device->runtime);return mode==11?A733_NPU_PLATFORM_RETAINED:A733_NPU_PLATFORM_READY;}
 enum npu_service_result npu_service_activate(struct npu_service *s)
-{assert(s==&npu.runtime.service);return mode==12?NPU_SERVICE_DENIED:NPU_SERVICE_OK;}
+{assert(s==&npu.device->runtime.service);return mode==12?NPU_SERVICE_DENIED:NPU_SERVICE_OK;}
 enum a733_npu_platform_result npu_runtime_stop_poll(struct npu_runtime *r)
-{assert(r==&npu.runtime);return A733_NPU_PLATFORM_RETAINED;}
+{assert(r==&npu.device->runtime);return A733_NPU_PLATFORM_RETAINED;}
 uint32_t a733_npu_startup_wait_ticks(struct a733_npu_startup *s)
 {(void)s;abort();}
 static void emit_record(void)
@@ -86,10 +93,10 @@ static struct npu_runtime_slot slot_zero; /* the slot table is carved at prepare
 static struct os_npu_device device; /* what a granted admission takes from the ledger */
 int main(int argc,char **argv)
 {
-    assert(argc==2);npu.device=&device;npu.runtime.slot=&slot_zero;mode=(unsigned)strtoul(argv[1],NULL,10);
+    assert(argc==2);npu.device=&device;device.runtime.service.signals=&npu.signals;npu.device->runtime.slot=&slot_zero;mode=(unsigned)strtoul(argv[1],NULL,10);
     npu.started=1;npu.end=1000000;npu.initial_deadline=2000;
     atomic_store(&npu.gate,(UINT64_C(900000)<<3)|ALLOW);
-    atomic_store(&npu.runtime.slot[0].state,NPU_RUNTIME_READY);
+    atomic_store(&npu.device->runtime.slot[0].state,NPU_RUNTIME_READY);
     if(mode==10)npu.end=now_value+1;
         if(mode==14)live_value=0;
     if(mode==16)now_value=npu.end;
@@ -99,7 +106,7 @@ int main(int argc,char **argv)
     if(mode>=11&&mode<=13) {
         if(mode==13) {
             atomic_store(&npu.closed,1);
-            atomic_store(&npu.runtime.service.irq_stopped,1);
+            atomic_store(&npu.signals.irq_stopped,1);
         }
         if(!setjmp(suspended))bootstrap(NULL);
         assert(board_failures==1&&atomic_load(&os_npu_first_failure.ready)==2);

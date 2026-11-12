@@ -35,6 +35,8 @@ struct os_sd_hw {
     void (*irq_counts)(uint32_t entries[8], uint32_t *stray, uint32_t *recheck);
     /* Restore the clock, the pins and the rail leases; the card is not used afterwards. */
     void (*close)(void);
+    /* True only after native close and descriptor release both succeeded. */
+    int (*closed)(void);
 };
 /* Open the card in the calling task (it becomes the owner) and return the hardware operations; NULL on failure. */
 const struct os_sd_hw *os_sd_open_owner(void);

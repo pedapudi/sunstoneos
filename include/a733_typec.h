@@ -66,7 +66,7 @@ struct a733_typec {
     struct a733_typec_pd pd;
     unsigned pd_turn;
     uint64_t now,last_service,startup_deadline,transaction_deadline,until,
-        candidate_since,shutdown_deadline,cycle_start,status_at;
+        candidate_since,shutdown_deadline,cycle_start,status_at,stop_deadline;
     enum a733_typec_state state,after_measure;
     unsigned step,substep,transaction,measuring,candidate,polarity,cc[2],
         measure_result,classification_step,irq_level,
@@ -85,6 +85,10 @@ int a733_typec_begin(struct a733_typec *,uint64_t deadline);
  * discharge cannot then be observed and remains uncertain.
  */
 int a733_typec_poll(struct a733_typec *);
+/* Provider task only. Finish the current bus transaction before revocation,
+ * then use the ordinary GPIO-off and discharge sequence. No new attachment or
+ * PD work starts. 1 discharged, 0 pending, -1 uncertain; deadline never grows. */
+int a733_typec_stop_poll(struct a733_typec *,uint64_t absolute_deadline);
 /* Independent power task may close admission atomically; it never edits service
  * fields. It lowers GPIO through its own actual pin-manager path. */
 void a733_typec_revoke(struct a733_typec *);

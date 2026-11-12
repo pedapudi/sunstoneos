@@ -167,8 +167,7 @@ void platform_init(void)
     configASSERT(a733_cpu_coherence_flush((uintptr_t)level1, sizeof level1, counter() + COUNTER_HZ / 100) == 1);
     configASSERT(a733_cpu_coherence_flush((uintptr_t)level2, sizeof level2, counter() + COUNTER_HZ / 100) == 1);
     uint64_t mair = 0x44ff00;
-    uint64_t tcr = (2UL << 32) | (1UL << 23) | (3UL << 12) |
-                   (1UL << 10) | (1UL << 8) | 25;
+    uint64_t tcr = A733_CPU_COHERENCE_TCR_CACHED_WALK;
     __asm__ volatile("dsb sy\n msr mair_el1, %0\n msr tcr_el1, %1\n"
                      "msr ttbr0_el1, %2\n isb\n tlbi vmalle1\n dsb sy\n isb"
                      :: "r"(mair), "r"(tcr), "r"((uintptr_t)level1) : "memory");

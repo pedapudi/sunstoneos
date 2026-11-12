@@ -32,6 +32,15 @@
 #include "device/usbd_pvt.h"
 #include <stdint.h>
 #include <string.h>
+#include "sunstone_usb0_stop.h"
+/* Existing board consumers retain their own failure policy. The OS supplies
+ * the reason/result hook so its first-failure record identifies the guard. */
+#ifndef USB0_STOP
+#define USB0_STOP(reason,result) ((void)(reason),(void)(result),stop())
+#endif
+#ifndef USB0_PROVIDER_RESULT
+#define USB0_PROVIDER_RESULT(result) (result)
+#endif
 #ifndef USB0_BCD
 #define USB0_BCD 0x0100
 #endif
@@ -94,24 +103,25 @@ static inline void usb0_service_burst(void (*pass)(void))
 static unsigned polling;
 static void (*usb0_service_exchange)(void);
 void a733_usb_prepare(void)
-{for(;;){int r=a733_native_usb_health(USB0_PROVIDERS);if(r<0||!USB0_LIVE())stop();if(r==1)return;vTaskDelay(1);}}
-void a733_usb_poll_enable(bool enable){if(!USB0_LIVE())stop();polling=enable;}
+{for(;;){int r=a733_native_usb_health(USB0_PROVIDERS);if(r<0||!USB0_LIVE())USB0_STOP(USB0_STOP_PREPARE,r);if(r==1)return;vTaskDelay(1);}}
+void a733_usb_poll_enable(bool enable){if(!USB0_LIVE())USB0_STOP(USB0_STOP_POLL_ENABLE,0);polling=enable;}
 void a733_usb_trace(uint32_t event,uint32_t a,uint32_t b)
-{(void)event;(void)a;(void)b;if(!USB0_LIVE())stop();}
-void a733_usb_assert(void){stop();}
+{(void)event;(void)a;(void)b;if(!USB0_LIVE())USB0_STOP(USB0_STOP_TRACE,0);}
+void a733_usb_assert(void){USB0_STOP(USB0_STOP_ASSERT,0);}
 uint32_t tusb_time_millis_api(void){return (uint32_t)(a733_smp_counter()/24000);}
-void tusb_time_delay_ms_api(uint32_t ms){if(ms>150||!USB0_LIVE())stop();vTaskDelay(pdMS_TO_TICKS(ms));}
+void tusb_time_delay_ms_api(uint32_t ms){if(ms>150||!USB0_LIVE())USB0_STOP(USB0_STOP_DELAY,(int)ms);vTaskDelay(pdMS_TO_TICKS(ms));}
 /* Acquire the USB rails and controller through the shared providers, then
  * start the device stack. Any provider or stack failure takes stop(). */
 static inline void usb0_service_start(void)
 {
-    for(;;){if(!USB0_LIVE())stop();int r=a733_native_usb_step(USB0_PROVIDERS);if(r<0)stop();if(r==1)break;vTaskDelay(1);}
+    for(;;){if(!USB0_LIVE())USB0_STOP(USB0_STOP_START_LIVE,0);int r=a733_native_usb_step(USB0_PROVIDERS);
+        if(r<0)USB0_STOP(USB0_STOP_START_PROVIDER,USB0_PROVIDER_RESULT(r));if(r==1)break;vTaskDelay(1);}
     tusb_rhport_init_t init={.role=TUSB_ROLE_DEVICE,.speed=TUSB_SPEED_HIGH};
-    if(!tusb_init(0,&init))stop();
+    if(!tusb_init(0,&init))USB0_STOP(USB0_STOP_STACK_INIT,0);
 }
 /* Liveness and provider health are rechecked on every pass. */
 static void usb0_service_pass(void)
-{if(!USB0_LIVE())stop();tud_task_ext(0,false);a733_usb_prepare();if(polling)dcd_int_handler(0);usb0_service_exchange();}
+{if(!USB0_LIVE())USB0_STOP(USB0_STOP_PASS_LIVE,0);tud_task_ext(0,false);a733_usb_prepare();if(polling)dcd_int_handler(0);usb0_service_exchange();}
 static inline _Noreturn void usb0_service_run(void (*exchange)(void))
 {usb0_service_exchange=exchange;for(;;){usb0_service_burst(usb0_service_pass);vTaskDelay(1);}}
 #endif

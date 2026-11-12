@@ -54,6 +54,9 @@ void vPortEnterCritical(void) {}
 void vPortExitCritical(void) {}
 int xTaskGetSchedulerState(void) { return 2; }
 void *xTaskGetCurrentTaskHandle(void) { return (void *)1; }
+/* This fixture never requests terminal quiescence; a parked worker would
+ * invalidate its frame scheduling observations. */
+void vTaskSuspend(void *task) { (void)task; frame_stub_reached(); }
 void platform_panic(const char *file, unsigned line) { (void)file; (void)line; frame_stub_reached(); for (;;) {} }
 /* Reached only by service initialization and replies, which the fixture bypasses. */
 void *xQueueGenericCreateStatic(void) { frame_stub_reached(); return NULL; }

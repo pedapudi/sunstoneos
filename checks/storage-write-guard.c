@@ -7,6 +7,7 @@
 #define _FILE_OFFSET_BITS 64
 #include "../apps/storage-write-test/main.c"
 #include <fcntl.h>
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -15,6 +16,7 @@
 static int image_fd;
 static uint64_t dev_sectors, part_base, part_sectors, delay_us;
 static const char *result_path;
+static unsigned format_certified, format_serial;
 static uint64_t region_fat1, region_fat2, region_data, region_end, region_fsinfo, region_boot = UINT64_MAX;   /* the boot sector is writable only in the format mode */
 
 /* The model's clock is virtual: it advances only by the waits the application asks for (ss_usb_wait) and by the modeled card's
@@ -39,7 +41,7 @@ void sha256_block_ce(const uint8_t b[64], uint8_t d[32]) { (void)b; (void)d; abo
 int ss_cpu_observations(unsigned core, struct ss_cpu_observation *o) { (void)core; memset(o, 0, sizeof *o); return 1; }
 int ss_storage_enable(const void *b, size_t n) { (void)b; (void)n; return 1; }
 int ss_storage_region(void *b, size_t n) { (void)b; (void)n; return 1; }
-int ss_storage_close(void) { return 1; }
+int ss_storage_close(void) { if (r.mode == 9 && !r.status) assert(format_certified); return 1; }
 int ss_storage_open_read(void) { return 1; }
 int ss_storage_diagnostic(uint64_t out[4]) { memset(out, 0, 32); return 1; }
 int ss_storage_mode(uint64_t out[5]) { memset(out, 0, 40); return 1; }
@@ -78,6 +80,7 @@ static int allowed(uint64_t s)
 static int dev_write(void *c, uint64_t s, uint32_t n, const uint8_t *buf)
 {
     (void)c;
+    format_certified = 0;
     if (s + n > dev_sectors) { fprintf(stderr, "write outside device\n"); exit(3); }
     for (uint32_t i = 0; i < n; ++i)
         if (!allowed(s + i)) { fprintf(stderr, "model refused write to sector %llu\n", (unsigned long long)(s + i)); exit(4); }
@@ -93,10 +96,20 @@ static int dev_write(void *c, uint64_t s, uint32_t n, const uint8_t *buf)
     virtual_us += delay_us;                                  /* the slow card */
     return pwrite(image_fd, buf, (size_t)n * 512, (off_t)s * 512) == (ssize_t)n * 512;
 }
+static int format_transaction(void *c, unsigned event, unsigned operation, uint32_t *token)
+{
+    (void)c;
+    if (event == FWR_TX_BEGIN) { *token = ++format_serial; format_certified = 0; }
+    else format_certified = event == FWR_TX_COMMIT && operation == FWR_OP_CHECKPOINT;
+    return 1;
+}
+static int format_write(void *c, uint64_t sector, uint32_t count, const uint8_t *data, unsigned phase, uint32_t token)
+{ (void)phase; (void)token; return dev_write(c, sector, count, data); }
 int ss_storage_device(struct fwr_device *d)
 {
     *d = (struct fwr_device){.context = NULL, .read = dev_read, .write = dev_write, .yield = NULL, .sectors = dev_sectors,
                              .au_sectors = getenv("AU_SECTORS") ? (uint32_t)strtoul(getenv("AU_SECTORS"), 0, 0) : 256, .max_write_sectors = 256};
+    if (r.mode == 9) { d->transaction = format_transaction; d->write_classified = format_write; }
     return 1;
 }
 

@@ -8,6 +8,8 @@ import struct
 import tempfile
 import shutil
 import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+import a733_tcr
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'checks'))
@@ -46,7 +48,7 @@ def main():
         u.reg_write(UC_ARM64_REG_PSTATE, 5); u.reg_write(UC_ARM64_REG_CPACR_EL1, 3 << 20)
         state = {'task': None, 'exit': None, 'dc': [], 'barriers': 0, 'initializing': True, 'stores': 0, 'loads': 0, 'cache_entered': False}
         regs = {'currentel': 4, 'sctlr_el1': 0x1005, 'ctr_el0': 0x04040004, 'mair_el1': 0x44ff00,
-                'tcr_el1': 0x200803519, 'daif': 0x3c0, 'par_el1': 0, 'cntpct_el0': 100}
+                'tcr_el1': a733_tcr.CACHED_WALK, 'daif': 0x3c0, 'par_el1': 0, 'cntpct_el0': 100}
         l2 = image.address('level2', unit='gpu-cache-permission/platform.c')
         hooks = {image.address(n): n for n in ('platform_init', 'xTaskCreateStatic', 'vTaskStartScheduler', 'platform_exit', 'aarch64_device_cache')}
         def ret(v=0):

@@ -28,10 +28,13 @@ struct a733_audio_operations {
     /* Atomic conversion from AUDIO_CHANGE to shared AUDIO_STABLE, publishing
      * N=128, DIV5=5 and modulation/auto-gating off before allowing consumers.
      * Old token is immutable; new token is populated on READY/PENDING/RETAINED.
-     * Repeated PENDING calls use the same old/new identities. */
+     * Repeated PENDING calls use the same old/new identities. During parent
+     * retirement an AUDIO_STABLE input reverses this conversion: exclude every
+     * other audio consumer atomically and return AUDIO_CHANGE, or BUSY without
+     * changing either identity. No hardware access occurs in this callback. */
     enum a733_i2s_resource_result (*publish)(void *, const struct a733_audio_token *,
         struct a733_audio_token *, uint64_t deadline_us);
-    /* Only LOCAL is released here. The token remains unchanged on all results;
+    /* LOCAL close and parent retirement release their own tokens here. The token remains unchanged on all results;
      * caller clears its record only after an on-time READY. BUSY has no effects;
      * PENDING retains ownership, RETAINED prohibits further operations. */
     enum a733_i2s_resource_result (*release)(void *, const struct a733_audio_token *, uint64_t);
@@ -42,7 +45,7 @@ struct a733_audio_operations {
     int (*write)(void *, uintptr_t, uint32_t);
 };
 /* Platform-lifetime storage, serialized with every local binding using it.
- * Parent leases survive local close. No shutdown/retune API is provided.
+ * Parent leases survive local close. Retirement requires all local users closed.
  * Failure preserves every identity and prohibits further operations. */
 struct a733_audio_parent {
     struct a733_audio_operations ops;
@@ -51,6 +54,8 @@ struct a733_audio_parent {
     uint64_t deadline, last_time, wait_since;
     uint32_t audio_value;
     unsigned stage, cold, locked_samples, failed, initialized;
+    uint64_t retire_deadline;
+    unsigned retire_stage, retired;
 };
 /* No MMIO. cold=1 authorizes a cold start ONLY after AUDIO_CHANGE is admitted;
  * cold=0 only adopts the exact active profile. This flag conveys no lease. */
@@ -58,6 +63,12 @@ int a733_audio_parent_init(struct a733_audio_parent *, const struct a733_audio_o
     void *, unsigned cold, uint64_t deadline_us);
 enum a733_i2s_resource_result a733_audio_parent_poll(struct a733_audio_parent *);
 int a733_audio_parent_ready(const struct a733_audio_parent *);
+/* The owner first drains/closes every local stream and retires its DMA worker.
+ * One bounded step: release an adopted parent without PLL writes, or restore
+ * a cold parent's saved fields after excluding every audio consumer. Healthy
+ * partial startup uses the same path; uncertainty retains all identities.
+ * The absolute return deadline is fixed on the first call, never extended. */
+enum a733_i2s_resource_result a733_audio_parent_retire(struct a733_audio_parent *,uint64_t deadline_us);
 
 struct a733_i2s_platform {
     struct a733_audio_parent *parent;

@@ -172,21 +172,12 @@ def image_parts(path):
     data = path.read_bytes()
     require(len(data) >= 64 and data[:7] == b'\x7fELF\x02\x01\x01', 'Expected little-endian ELF64.')
     header = struct.unpack_from('<HHIQQQIHHHHHH', data, 16)
-    kind, machine, version, entry, phoff, shoff, _, ehsize, phsize, phnum, shsize, shnum, _ = header
+    kind, machine, version, entry, phoff, shoff, _, ehsize, phsize, phnum, shsize, shnum, shstrndx = header
     require((kind, machine, version, entry, ehsize, phsize, shsize) == (2, 183, 1, 0x41000000, 64, 56, 64), 'ELF contract differs.')
     require(0 < phnum < 64 and 0 < shnum < 4096 and phoff + phnum * phsize <= len(data) and shoff + shnum * shsize <= len(data), 'Invalid ELF tables.')
-    segments = []
-    for i in range(phnum):
-        ptype, flags, offset, address, physical, filesz, memsz, alignment = struct.unpack_from('<IIQQQQQQ', data, phoff + i * phsize)
-        if ptype != 1: continue
-        require(address == physical and 0x41000000 <= address < address + memsz <= 0x42200000 and
-                filesz <= memsz and offset + filesz <= len(data) and flags & 3 != 3, 'Invalid load segment.')
-        require(not (flags & 1) or address + memsz <= 0x41200000, 'Code exceeds reserved block.')
-        require(not filesz or address + filesz <= 0x42000000, 'Image file bytes overlap result or contract.')
-        require(all(address + memsz <= other['address'] or other['address'] + other['memory_bytes'] <= address for other in segments), 'ELF load allocations overlap.')
-        segments.append({'address': address, 'memory_bytes': memsz, 'data': data[offset:offset + filesz]})
-    require(any(s['address'] <= entry < s['address'] + len(s['data']) for s in segments), 'Entry has no file bytes.')
     symbols = {}
+    symbol_info = {}
+    usb_symbols = {'__uncached_pool_start', '__uncached_pool_end', 'usb_memory_extent_valid', 'os_usb_service_init'}
     sections = [struct.unpack_from('<IIQQQQIIQQ', data, shoff + i * shsize) for i in range(shnum)]
     for section in sections:
         if section[1] != 2: continue
@@ -199,8 +190,50 @@ def image_parts(path):
             require(name < len(names), 'Invalid symbol name.')
             end = names.find(b'\0', name); require(end >= 0, 'Unterminated symbol name.')
             label = names[name:end].decode('ascii', errors='replace')
-            if label in {'a733_smp_build_id', '__a733_smp_result', '__a733_smp_contract', '__a733_smp_contract_end'}:
+            if label in {'a733_smp_build_id', '__a733_smp_result', '__a733_smp_contract', '__a733_smp_contract_end'} | usb_symbols:
                 require(label not in symbols, 'Duplicate image contract symbol.'); symbols[label] = (value, length)
+                symbol_info[label] = (info, index)
+    headers = [struct.unpack_from('<IIQQQQQQ', data, phoff + i * phsize) for i in range(phnum)]
+    usb_start, usb_end = 0x42200000, 0x42a00000
+    usb_section = None
+    if symbols.get('__uncached_pool_start', (0,))[0] == usb_start:
+        # apps/os/usb-memory-link.patch reserves this class-only arena. It is
+        # unloaded memory, not a larger executable or upload reservation.
+        require(0 < shstrndx < shnum, 'Missing USB arena section names.')
+        strings = sections[shstrndx]
+        require(strings[1] == 3 and strings[4] + strings[5] <= len(data), 'Malformed USB arena section names.')
+        names = data[strings[4]:strings[4] + strings[5]]
+        matches = [i for i, s in enumerate(sections) if s[0] < len(names) and names[s[0]:].split(b'\0', 1)[0] == b'.uncached_pool']
+        require(len(matches) == 1, 'Missing or duplicate USB arena section.')
+        index = matches[0]; usb_section = sections[index]
+        require(usb_section[1:4] == (8, 3, usb_start) and usb_section[5] == usb_end - usb_start and
+                symbols.get('__uncached_pool_end') == (usb_end, 0) and symbols['__uncached_pool_start'] == (usb_start, 0) and
+                all(symbol_info[name][1] == index for name in ('__uncached_pool_start', '__uncached_pool_end')),
+                'USB arena section or linker bounds differ.')
+        for name in ('usb_memory_extent_valid', 'os_usb_service_init'):
+            value, length = symbols.get(name, (0, 0)); info, section_index = symbol_info.get(name, (0, 0))
+            require(info & 15 == 2 and length and 0 < section_index < shnum and
+                    sections[section_index][1] == 1 and sections[section_index][2] & 4 and
+                    sections[section_index][3] <= value < value + length <= sections[section_index][3] + sections[section_index][5] and
+                    any(h[0] == 1 and h[1] & 1 and h[3] <= value < value + length <= h[3] + h[5] for h in headers),
+                    'USB arena requires its linked service and memory validator.')
+        require(all(i == index or not s[2] & 2 or not s[5] or s[3] + s[5] <= usb_start or usb_end <= s[3]
+                    for i, s in enumerate(sections)), 'USB arena overlaps an allocated section.')
+    segments = []
+    usb_segments = 0
+    for ptype, flags, offset, address, physical, filesz, memsz, alignment in headers:
+        if ptype != 1: continue
+        arena = bool(usb_section and (address, memsz, filesz, flags, offset) ==
+                     (usb_start, usb_end - usb_start, 0, 6, usb_section[4]))
+        require(address == physical and (0x41000000 <= address < address + memsz <= 0x42200000 or arena) and
+                filesz <= memsz and offset + filesz <= len(data) and flags & 3 != 3, 'Invalid load segment.')
+        require(not (flags & 1) or address + memsz <= 0x41200000, 'Code exceeds reserved block.')
+        require(not filesz or address + filesz <= 0x42000000, 'Image file bytes overlap result or contract.')
+        require(all(address + memsz <= other['address'] or other['address'] + other['memory_bytes'] <= address for other in segments), 'ELF load allocations overlap.')
+        segments.append({'address': address, 'memory_bytes': memsz, 'data': data[offset:offset + filesz]})
+        usb_segments += arena
+    require(usb_section is None or usb_segments == 1, 'Missing USB arena load reservation.')
+    require(any(s['address'] <= entry < s['address'] + len(s['data']) for s in segments), 'Entry has no file bytes.')
     require(symbols.get('__a733_smp_result', (0,))[0] == 0x42000000 and
             symbols.get('__a733_smp_contract', (0,))[0] == CONTRACT and
             symbols.get('__a733_smp_contract_end', (0,))[0] == CONTRACT + 4096, 'Missing linker reservations.')

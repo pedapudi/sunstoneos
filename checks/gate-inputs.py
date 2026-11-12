@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Check the gate's input registry and its refusal of an affected check it cannot supply.
 
-tools/integration-gate.py runs the checks that need a built image, and must not skip them silently. Each check that is not
-pure-host declares its answer at the top of its own file: GATE_RUNS (the argument lists of the gate's runs), GATE_BOARD (a
+tools/integration-gate.py runs the checks that need a built image, and must not skip them silently. Checks declare
+GATE_RUNS for their selected modes, including image modes of otherwise pure-host checks. Other checks declare GATE_BOARD (a
 reason it needs a board) or GATE_WAIVED ("category | reason", for a helper module). tools/gate_images.py holds the image
 recipes. Cases:
-  registry   no pure-host check declares an answer; every image a run names is a gate variant or a recipe; each recipe has a
+  registry   a pure-host check may declare runs; every image a run names is a gate variant or a recipe; each recipe has a
              configure list, a target and an ELF name; no check declares two answers; every waiver has a category and a reason;
   coverage   every non-pure-host check of the index declares an answer, or needs only a board or USB access;
   refusal    a check that is affected but in no list is unsupplied, naming the check, and a registered one is supplied; a check
@@ -56,7 +56,7 @@ def main():
         assert recipe['configure'] and recipe['target'] and recipe['elf'].endswith('.elf') and name not in gate.VARIANTS, name
     for name, entry in index.items():
         answers = [key for key in ('runs', 'board', 'waived') if key in entry['gate']]
-        assert len(answers) <= 1 and not (answers and entry['pure_host']), (name, answers, 'declares more than one answer, or runs without inputs')
+        assert len(answers) <= 1 and not (entry['pure_host'] and any(a != 'runs' for a in answers)), (name, answers)
         for run in entry['gate'].get('runs', ()):
             assert run and all(isinstance(a, str) for a in run), (name, 'a run needs string arguments')
             for kind, image in gate.placeholders(run):

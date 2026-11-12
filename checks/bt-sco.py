@@ -20,6 +20,7 @@ p.add_argument('--hfp-source',type=pathlib.Path,required=True)
 p.add_argument('--close-held',action='store_true',help='Check only retained RX after confirmed close and compile changed SCO object')
 p.add_argument('--reopen',action='store_true',help='Check only completed local close/reopen and compile the SCO object')
 p.add_argument('--remaining',action='store_true',help='Reuse preserved acknowledgement backlog proof; execute remaining audio cases')
+p.add_argument('--references-only',action='store_true',help='Build pinned wire layouts and fixture headers without compiling or running the model')
 p.add_argument('--audio-source',type=pathlib.Path,required=True)
 p.add_argument('--core-source',type=pathlib.Path,required=True)
 p.add_argument('--output',type=pathlib.Path,required=True)
@@ -119,6 +120,13 @@ for source_item in audio_sources:
 (a.output/'audio-sources.json').write_text(json.dumps(audio_sources,indent=2)+'\n')
 manifest['primary_sources']={'Core54_HTML':hashlib.sha256(core_html).hexdigest(),
     'Core54_text':hashlib.sha256(core_text).hexdigest(),'HFP19':hashlib.sha256(hfp).hexdigest()}
+if a.references_only:
+    manifest['artifacts']={f.name:hashlib.sha256(f.read_bytes()).hexdigest()
+        for f in a.output.iterdir() if f.is_file()}
+    manifest['scope']='Pinned source layouts and fixture headers only; no model execution.'
+    (a.output/'results.json').write_text(json.dumps(manifest,indent=2)+'\n')
+    print('Pinned Bluetooth wire references and fixture headers prepared')
+    raise SystemExit(0)
 commands=[]
 def run(args):
     commands.append([str(x) for x in args])

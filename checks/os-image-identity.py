@@ -45,6 +45,7 @@ HEADSET = 1 << 3               # SS_DEVICE_AUDIO_HEADSET
 WORKLOAD, SID_AUTHORITY, PROFILE_ADDRESS, PROFILE_BYTES = 400, 312, 352, 360
 SID_WORDS = (0x11223344, 0x55667788, 0x99aabbcc, 0xddeeff00)
 DEADLINE = 100000
+PROFILE_V3_BYTES, PROFILE_V4_BYTES = 832, 888
 
 
 def main():
@@ -89,7 +90,7 @@ def main():
     if headset:
         hooks[symbol('os_headset_profile_valid')] = 'profile'
 
-    def run(workload, profile_bytes=832, profile_valid=1, calls_made=1, devices=0):
+    def run(workload, profile_bytes=PROFILE_V3_BYTES, profile_valid=1, calls_made=1, devices=0):
         cpu = harness_machine()
         cpu.mem_map(0x41000000, 0x7000000)
         cpu.mem_map(0x50000000, 0x100000)
@@ -105,8 +106,9 @@ def main():
         struct.pack_into('<I', sealed, DEVICES, devices)
         cpu.mem_write(SEALED, bytes(sealed))
         cpu.mem_write(0x03006200, struct.pack('<4I', *SID_WORDS))
-        profile = bytes((i * 7 + 3) & 255 for i in range(832))
-        profile = profile[:12] + struct.pack('<I', profile_bytes) + profile[16:]
+        profile = bytes((i * 7 + 3) & 255 for i in range(profile_bytes))
+        version = 4 if profile_bytes == PROFILE_V4_BYTES else 3
+        profile = profile[:8] + struct.pack('<2I', version, profile_bytes) + profile[16:]
         cpu.mem_write(0x43008000, profile)
         reads = {}
         for insn in Cs(CS_ARCH_ARM64, CS_MODE_ARM).disasm(bytes(cpu.mem_read(entry, length)), entry):
@@ -144,7 +146,7 @@ def main():
                     ret(1)
                 elif kind == 'profile':
                     copy = cpu.reg_read(reg.UC_ARM64_REG_X1)
-                    checked.append(bytes(cpu.mem_read(copy, 832)) == profile and cpu.reg_read(reg.UC_ARM64_REG_X0) == SESSION)
+                    checked.append(bytes(cpu.mem_read(copy, profile_bytes)) == profile and cpu.reg_read(reg.UC_ARM64_REG_X0) == SESSION)
                     ret(profile_valid)
                 else:
                     calls.append(tuple(cpu.reg_read(reg.UC_ARM64_REG_X0 + n) for n in range(3)))
@@ -177,8 +179,9 @@ def main():
         elif devices:
             assert checked == [True] and len(calls) == n + 3, (checked, calls)
             copy = calls[n][0]
-            assert calls[:n] == assets and calls[n][1:] == (832, DEADLINE) and calls[n + 1] == (0x43000000, 0x100000, DEADLINE)
-            assert bytes(cpu.mem_read(copy, 832)) == profile
+            assert calls[:n] == assets and calls[n][1:] == (PROFILE_V4_BYTES, DEADLINE) and calls[n + 1] == (0x43000000, 0x100000, DEADLINE)
+            assert bytes(cpu.mem_read(copy, PROFILE_V3_BYTES)) == profile
+            assert bytes(cpu.mem_read(copy + PROFILE_V3_BYTES, PROFILE_V4_BYTES - PROFILE_V3_BYTES)) == bytes(PROFILE_V4_BYTES - PROFILE_V3_BYTES)
             record(cpu, calls)
         elif workload in (1, 3):
             assert calls[:n + 2] == assets + [(0x43000000, 1872, DEADLINE), (0x43010000, 0xf0000, DEADLINE)], calls
@@ -192,6 +195,12 @@ def main():
     assert returned[0] == 1 and returned[1] == 0 and len(calls) == len(assets) + 3, returned
     cases.append({'workload': workload, 'second-call-refused': True})
     if headset:
+        cpu, calls, returned, checked, profile = run(admitted[0], devices=HEADSET, profile_bytes=PROFILE_V4_BYTES)
+        assert returned == [1] and checked == [True] and len(calls) == n + 3
+        assert calls[:n] == assets and calls[n][1:] == (PROFILE_V4_BYTES, DEADLINE)
+        assert bytes(cpu.mem_read(calls[n][0], PROFILE_V4_BYTES)) == profile
+        record(cpu, calls)
+        cases.append({'workload': admitted[0], 'profile-size-888': 'accepted'})
         for name, change in (('profile-size-752', {'profile_bytes': 752}), ('profile-refused', {'profile_valid': 0})):
             _, calls, returned, _, _ = run(admitted[0], devices=HEADSET, **change)
             assert returned == [0] and calls == assets, (name, returned, calls)

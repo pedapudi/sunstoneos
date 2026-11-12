@@ -1,3 +1,4 @@
+#include "a733_cpu_coherence.h"
 /* Returning core-1 diagnostic. The production entry/helper execute unchanged;
  * the checkpoint replaces the first EL1 interrupt-interface configuration.
  * EL1 executes no data stores. EL3 stack/report accesses remain Device memory.
@@ -221,7 +222,7 @@ el1_return_checkpoint_continue:
     ldr x16, =NATIVE_EL1_SCTLR
     cmp x2, x16
     b.ne .Lel1_refuse
-    ldr x16, =0x200803019
+    ldr x16, =A733_CPU_COHERENCE_TCR_UNCACHED_WALK
     cmp x3, x16
     b.ne .Lel1_refuse
 #ifdef SUNSTONE_SECONDARY_CACHE

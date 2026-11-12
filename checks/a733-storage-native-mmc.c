@@ -19,6 +19,8 @@ static unsigned command_checked;
 BaseType_t xTaskGetSchedulerState(void){return taskSCHEDULER_RUNNING;}
 TaskHandle_t xTaskGetCurrentTaskHandle(void){return task;}
 TaskHandle_t xQueueGetMutexHolder(QueueHandle_t queue){(void)queue;return holder;}
+/* This fixture models a normal transaction with no return deadline. */
+int a733_platform_lock_live(struct a733_platform_locks *p){(void)p;return 1;}
 int a733_platform_lock_enter(struct a733_platform_locks *p,enum a733_platform_lock which,uint64_t deadline)
 {(void)p;(void)which;(void)deadline;return 1;}
 void a733_platform_lock_leave(struct a733_platform_locks *p,enum a733_platform_lock which){(void)p;(void)which;}

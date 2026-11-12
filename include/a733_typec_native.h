@@ -31,9 +31,11 @@ struct a733_typec_native {
     struct a733_pin_request_banked pin_requests[4];
     atomic_uint gpio_ready,command,result,output_state;
     atomic_uint_fast64_t command_deadline;
-    uint64_t deadline,last_now,power_now,power_shutdown_deadline;
+    atomic_uint_fast64_t stop_deadline;
+    atomic_uint stop_power_ready,provider_stopped,power_stopped;
+    uint64_t deadline,last_now,power_now,power_shutdown_deadline,power_stop_deadline;
     uint32_t divider,rate_hz,input_hz;
-    unsigned stage,index,held,bus_fault,setup_fault,power_fault;
+    unsigned stage,index,held,bus_fault,setup_fault,power_fault,enable_issued,stop_phase;
 };
 /* One fixed TYPEC24 boot owner; zero private storage once before scheduling.
  * Physical qualification includes exact SY6280 population, source capacity,
@@ -60,4 +62,16 @@ int a733_typec_native_init(struct a733_typec_native *,const struct a733_typec_na
  * A power_fault is terminal.
  */
 int a733_typec_native_power_poll(struct a733_typec_native *);
+/* Host publishes one absolute supervisor deadline. No hardware access; an
+ * accepted repeat must name the same deadline. These functions read immutable
+ * configuration and atomic fields only. Result: 1 DONE, 0 PENDING, -1 FAULT. */
+int a733_typec_native_stop_request(struct a733_typec_native *,uint64_t absolute_deadline);
+int a733_typec_native_stop_requested(struct a733_typec_native *);
+int a733_typec_native_stop_result(struct a733_typec_native *);
+/* Run only on the original provider/power task after stop_requested. Park
+ * each task after its terminal return; no hardware access follows publication.
+ * Shared clock and rail leases remain held. The provider releases pins only
+ * after the power task has confirmed PL8 low and published DONE. */
+int a733_typec_native_provider_stop_poll(struct a733_typec_native *);
+int a733_typec_native_power_stop_poll(struct a733_typec_native *);
 #endif

@@ -85,10 +85,14 @@ class Native(terminal.KernelPages, owners.Model):
         self.device = terminal.npu_device(self, self.s, layout, self.n)
         self.df = layout.layouts['os_npu_device']
         self.kernel_only(self.device, self.device+type_size(image.path, 'os_npu_device'))
-        self.rt = self.n+self.nf['runtime']
+        # The runtime and its service are device state, in kernel ledger pages on the board; their signal words are in the npu
+        # static, which the application's tables map (struct npu_service_signals).
+        self.rt = self.device+self.df['runtime']
         self.rf = layout.layouts['npu_runtime']
         self.service = self.rt+self.rf['service']
         self.sf = layout.layouts['npu_service']
+        self.sig = self.n+self.nf['signals']
+        self.gf = layout.layouts['npu_service_signals']
         self.slotf = layout.layouts['npu_runtime_slot']
         # The runtime's tables are not arrays inside the runtime: it points to them (npu_runtime.slot, .plans, .commands, ...).
         # On the board they are EL1 metadata in kernel ledger pages; this model puts them in the pool from 0x200000 to 0x400000,
@@ -159,6 +163,7 @@ class Native(terminal.KernelPages, owners.Model):
         self.put64(self.slot+self.slotf['client'], CLIENT)
         self.put32(self.slot+self.slotf['state'], 2)
         self.put64(layout.address('instance', 'drivers/npu/npu_service.c'), self.service)
+        self.put64(self.service+self.sf['signals'], self.sig)   # device_take points the service at them
         self.put32(self.service+self.sf['initialized'], 1)
         self.put32(self.service+self.sf['shared'], 1)
         self.put32(self.service+self.sf['irq_bound'], 1)
@@ -168,7 +173,7 @@ class Native(terminal.KernelPages, owners.Model):
         self.el1_hook(layout)
         self.hooks[layout.address('xTaskGetSchedulerState')] = lambda: self.scheduler
         self.hooks[layout.address('os_session')] = lambda: self.session
-        self.hooks[layout.address('os_granted')] = lambda: int(self.uc.reg_read(prior.fault.REGS[0]) == 1)  # the modeled session grants the NPU (bit 0) alone; admission is not under test
+        assert self.grants & terminal.GRANTS['NPU'], 'the application must declare the NPU service'
         self.hooks[layout.address('a733_counter_clock_now')] = self.clock_now
         self.hooks[layout.address('npu_runtime_startup_poll')] = lambda: 0
         self.hooks[layout.address('npu_service_activate')] = self.activate
@@ -198,8 +203,9 @@ class Native(terminal.KernelPages, owners.Model):
             self.put64(tensor+tf['data'], address)
             self.put64(tensor+tf['bytes'], count)
         hooks = layout.address('hooks', 'drivers/npu/a733_npu_runtime.c')
-        assert self.api('npu_service_runtime', self.service, hooks, self.rt) == 1
-        assert self.api('os_npu_sdk_bind', self.rt) == 1
+        # Admission and the NPU start bind the runtime at EL1, before any task of the application runs.
+        assert self.api('npu_service_runtime', self.service, hooks, self.rt, task=CLIENT) == 1
+        assert self.api('os_npu_sdk_bind', self.rt, task=CLIENT) == 1
         self.scheduler = 2
         for name, unit in [('bootstrap', 'apps/os/npu.c'), ('runtime_worker', 'drivers/npu/npu_service.c')]:
             self.s['chain_'+name] = layout.address(name, unit)
@@ -244,6 +250,8 @@ class Native(terminal.KernelPages, owners.Model):
         return super().notify()
 
     def delay(self):
+        if self.thermal_running:
+            return super().delay()
         self.time+=max(1,self.uc.reg_read(prior.fault.REGS[0]))*24000
         return 0
 
@@ -274,7 +282,7 @@ class Native(terminal.KernelPages, owners.Model):
                        self.layout.layouts['a733_npu_controller']['state'], 9)
             self.put32(self.slot+self.slotf['state'], 8)
             self.put32(self.slot+self.slotf['closed'], 1)
-            self.put32(self.service+self.sf['irq_stopped'], 1)
+            self.put32(self.sig+self.gf['irq_stopped'], 1)
         return 1
 
     def collect(self):
@@ -290,8 +298,8 @@ class Native(terminal.KernelPages, owners.Model):
         return 1
 
     def platform_stop(self):
-        assert self.u32(self.service+self.sf['runtime_parked']) == 1
-        assert self.u32(self.service+self.sf['irq_stopped']) == 1
+        assert self.u32(self.sig+self.gf['runtime_parked']) == 1
+        assert self.u32(self.sig+self.gf['irq_stopped']) == 1
         self.stop_calls += 1
         return 2 if self.stop_calls < 3 else 0
 
@@ -399,7 +407,7 @@ def producer(args):
 
 def ownership(image, layout, payload, *, fault=False, fault_task=MAIN):
     native = Native(image, layout, payload)
-    assert native.api('os_cpu_return_start') == 1
+    native.register()
     native.task('bootstrap');assert native.stop == 'blocked'
     assert native.u32(native.n+native.nf['active']) == 1
     assert not native.u32(native.n+native.nf['stopped'])
@@ -423,7 +431,7 @@ def ownership(image, layout, payload, *, fault=False, fault_task=MAIN):
     native.task('client', resume=True);assert native.stop == 'blocked'
     assert native.api('ss_npu_close') == 1
     assert native.u32(native.n+native.nf['closed']) == 1
-    assert not native.u32(native.service+native.sf['runtime_parked'])
+    assert not native.u32(native.sig+native.gf['runtime_parked'])
     assert not native.u32(native.n+native.nf['stopped'])
     assert not native.u32(native.report+12)
     if fault:
@@ -431,7 +439,7 @@ def ownership(image, layout, payload, *, fault=False, fault_task=MAIN):
                       if name in layout.symbols)
         native.hooks[layout.address(notify)] = lambda: 0
         native.api('npu_service_irq_notify_from_isr', native.service, 1, native.output, task=CLIENT, core=1)
-        assert native.u32(native.service+native.sf['irq_pending']) == 3
+        assert native.u32(native.sig+native.gf['irq_pending']) == 3
         native.uc.mem_write(native.payload_address, payload)
         if fault_task == MAIN:
             native.api('ss_finish', native.payload_address, len(payload))
@@ -447,7 +455,7 @@ def ownership(image, layout, payload, *, fault=False, fault_task=MAIN):
         assert not native.u32(native.flags['ready']) and not native.u32(native.flags['closing'])
         return native
     native.api('chain_runtime_worker', native.service, task=WORKER, core=1)
-    assert native.stop == 'blocked' and native.u32(native.service+native.sf['runtime_parked']) == 1
+    assert native.stop == 'blocked' and native.u32(native.sig+native.gf['runtime_parked']) == 1
     native.task('bootstrap', resume=True)
     assert native.stop == 'suspended' and native.stop_calls == 3
     assert native.u32(native.n+native.nf['stopped']) == 1
@@ -460,12 +468,14 @@ def ownership(image, layout, payload, *, fault=False, fault_task=MAIN):
     native.api('ss_finish', native.payload_address, len(payload));assert native.stop == 'suspended'
     assert native.u32(layout.address('finished', 'apps/os/application.c')) == 1
     assert native.u32(native.flags['closing']) == 1
-    native.api('os_thermal_task', task=0x6000, core=0)
-    assert native.stop == 'suspended' and native.u32(native.flags['thermal_done']) == 1
     native.api('os_cpu_return_supervise', task=0x7000, core=0)
-    assert not native.u32(native.flags['ready']) and native.u32(native.flags['pmic_stop']) == 1
+    assert native.q('npu', 'result') == 1 and native.q('thermal', 'requested')
+    native.current_task = 0x6000
+    native.close_thermal()
+    native.api('os_cpu_return_supervise', task=0x7000, core=0)
+    assert not native.u32(native.flags['ready']) and native.q('pmic', 'requested')
     native.api('os_cpu_return_pmic', task=0x8000, core=0)
-    assert native.stop == 'suspended' and native.u32(native.flags['pmic_done']) == 1
+    assert native.stop == 'suspended' and native.q('pmic', 'result') == 1
     native.api('os_cpu_return_supervise', task=0x7000, core=0)
     assert native.stop == 'suspended' and native.u32(native.flags['ready']) == 1
     assert not native.failures
@@ -608,8 +618,8 @@ def main():
     args = parser.parse_args();args.out.mkdir(parents=True, exist_ok=False)
     payload = args.payload.read_bytes() if args.payload else producer(args)
     names = {'board_application', 'a733_board_session', 'board_provider', 'a733_native_usb',
-        'a733_pmic', 'a733_pmic_slot', 'a733_platform_locks', 'os_thermal_service',
-        'os_npu_application', 'os_npu_device', 'os_npu_failure', 'npu_runtime', 'npu_runtime_slot', 'npu_service',
+        'a733_pmic', 'a733_pmic_slot', 'a733_platform_locks', 'os_thermal_service', 'os_quiesce',
+        'os_npu_application', 'os_npu_device', 'os_npu_failure', 'npu_runtime', 'npu_runtime_slot', 'npu_service', 'npu_service_signals',
         'a733_npu_controller', 'a733_npu_startup', 'ss_grant', 'npu_service_reply',
         'os_session', 'os_npu_session', 'nbg_assembly_layout', 'npu_runtime_tensor',
         'a733_thermal_policy', 'os_thermal_readings', 'npu_service_activation', 'a733_cached_runtime'}

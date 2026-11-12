@@ -8,7 +8,7 @@
 /* state0: USB producer owns bytes;1: Bluetooth owns immutable PCM;2: USB owns
  * immutable result. Release/acquire transfers ownership; neither task writes
  * fields belonging to the other state. Provider associations are owner-only. */
-static struct {
+struct playback_state {
     struct bluetooth_application *app;
     TaskHandle_t producer;
     struct {atomic_uint state;uint8_t pcm[BLUETOOTH_PLAYBACK_BYTES];struct bluetooth_playback_result result;} slots[2];
@@ -19,9 +19,17 @@ static struct {
     unsigned upload_bytes,pcm_offset,frame_offset,ready,started;
     uint8_t frame[60];
     struct {uint64_t serial,ticket;unsigned sent;} packets[BT_SCO_PACKETS];
-} playback;
+};
+/* playback names the state. The OS admits neither playback mode (os_headset_mode_valid), so its image keeps no state and every
+ * entry refuses; the Bluetooth image keeps it static. */
+#ifdef SUNSTONE_A733_OS
+static struct playback_state *const playback_state=0;
+#else
+static struct playback_state playback_storage,*const playback_state=&playback_storage;
+#endif
+#define playback (*playback_state)
 int bluetooth_playback_mode(const struct bluetooth_application *a)
-{return a&&a->self==a&&a->profile&&((a->profile->version==2&&a->profile->headset.mode==4)||(a->profile->version==3&&a->profile->headset.mode==5));}
+{return playback_state&&a&&a->self==a&&a->profile&&((a->profile->version==2&&a->profile->headset.mode==4)||(a->profile->version>=3&&a->profile->headset.mode==5));}
 static int live(struct bluetooth_application *a)
 {return bluetooth_playback_mode(a)&&!atomic_load_explicit(&a->failed,memory_order_acquire)&&
     !(atomic_load_explicit(a->recovery_state,memory_order_acquire)&4);}

@@ -20,10 +20,11 @@ def module(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     value = importlib.util.module_from_spec(spec); spec.loader.exec_module(value); return value
 
+TCR_UNCACHED = module('checkpoint_tcr', ROOT / 'tools/a733_tcr.py').UNCACHED_WALK
 prior = module('checkpoint_prior', ROOT / 'apps/gpu-finite/return-check.py')
 # The image intentionally preserves its frozen noncacheable table-walk value.
-prior.entry.shared.TCR = 0x200803019
-prior.entry.shared.shared.TCR = 0x200803019
+prior.entry.shared.TCR = TCR_UNCACHED
+prior.entry.shared.shared.TCR = TCR_UNCACHED
 report = module('checkpoint_report', ROOT / 'apps/gpu-entry-checkpoint/report.py')
 normal_report = module('checkpoint_normal_report', ROOT / 'apps/gpu-finite/report.py')
 parser = argparse.ArgumentParser(description=__doc__)

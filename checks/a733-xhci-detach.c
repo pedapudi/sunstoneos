@@ -145,7 +145,9 @@ static void command_step(void)
         }
     }else if(kind==10){
         /* Contexts and rings keep their contents until this completion is consumed. */
-        assert(get64(x.dcbaa+8*slot)==d->device_pa&&!zero(d->device,2048)&&!zero(d->endpoints[0].ring,4096));
+        assert(get64(x.dcbaa+8*slot)==d->device_pa);
+        /* Enable Slot can be canceled before EP0 or its first TD exists. */
+        if(d->endpoints[0].number)assert(!zero(d->device,2048));
         if(is("disable-fail"))code=11;
         else{slots&=~BIT(slot);memset(last_transfer[x.command_device-1],0,sizeof(last_transfer[0]));}
     }else assert(0);

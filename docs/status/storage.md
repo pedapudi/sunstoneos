@@ -2,9 +2,23 @@
 
 **Status: implemented.**
 
-Native SD identification, bounded reads, backup-first updates, slot loading, cold entry, descriptor-DMA reads, the FAT32 write service and UHS-I SDR104 reads have software evidence; reads, bounded writes and SDR104 reads on the 62.5 GB and 32 GB cards are board-qualified within the scope below. Neither board has populated eMMC or UFS (host-tested only); the failed UFS probe stays disabled.
+Native SD identification, bounded reads, backup-first updates, slot loading, cold entry, descriptor-DMA reads, the FAT32 write service and UHS-I SDR104 reads have software evidence. Reads, bounded writes and SDR104 reads on the 62.5 GB and 32 GB cards are board-qualified within the scope below. Neither board has populated eMMC or UFS (host-tested only); the failed UFS probe stays disabled.
 
-**Board-qualified scope:** Returning microSD PIO reads at 50 MHz, four-bit, 3.3 V, one 4 KiB and one 64 KiB sixteen-descriptor DMA read matching same-card PIO references, restoring controller, clocks, pins and saved RAM before normal ROM return. Read-only SD Status (ACMD13), FAT32 volume mount and 160 sequential 128 KiB reads (port 3-1). Bounded CMD25 writes on port 3-1: a 512 MiB file with append, one interruption with recovery, and read-back, through the OS image's SD owner task. Read-only SDR104 at 150 MHz on port 3-3, reached by re-entering a card at 1.8 V, with the bank returned to 3.3 V at close, and bounded writes to the scratch card on port 3-3 at SDR25 (50 MHz) after the write step-down from SDR104 and SDR50. No other card, write at 100 or 150 MHz, or autonomous boot is qualified. Any physical card write needs its full host backup and the approved target-bound path in [goal section 4](../goal.md).
+**Board-qualified scope:** Returning microSD PIO reads at 50 MHz, four-bit, 3.3 V, one 4 KiB and one 64 KiB sixteen-descriptor DMA read matching same-card PIO references, restoring controller, clocks, pins and saved RAM before normal ROM return. Read-only SD Status (ACMD13), FAT32 volume mount and 160 sequential 128 KiB reads (port 3-1). Bounded CMD25 writes on port 3-1: a 512 MiB file with append, one interruption with recovery, and read-back, through the OS image's SD owner task. Read-only SDR104 at 150 MHz on port 3-3 re-enters the card at 1.8 V and returns the bank to 3.3 V at close. Bounded writes to the scratch card on port 3-3 use SDR25 (50 MHz) after the write step-down from SDR104 and SDR50. No other card, write at 100 or 150 MHz, or autonomous boot is qualified. Any physical card write needs its full host backup and the approved target-bound path in [goal section 4](../goal.md).
+
+The registered return owner finishes the issued transfer and refuses new
+requests. Read-only state, an untouched write session or a completed consistent
+filesystem transaction can reach DONE after native close. The owner records a
+write-session ID and unsafe phase independently of application memory. Phases
+`0x921` through `0x92c` immediately publish FAULT, retain resources and prevent
+terminal release; return issues no further metadata write, retry or recovery
+transaction ([owner audit](../designs/failure-return-audit.md)).
+
+Failure after reading and hashing 512 MiB is board-qualified on port 3-3: the
+expected application record survives, no secondary owner fault is recorded, and
+the image returns to FEL without watchdog reset. This scope includes overlap
+with loader close, but excludes interrupted writes and transport recovery
+([failure-return record](../evidence/failure-return.jsonl)).
 
 | Capability | Status | Key figure | Evidence and design |
 | --- | --- | --- | --- |
@@ -14,6 +28,7 @@ Native SD identification, bounded reads, backup-first updates, slot loading, col
 | FAT32 write service, CMD25 DMA writes | qualified on the board | 14.7 MB/s flushed; flush p50 256 ms, p99 803 ms; recovery after a cut writes 1,536 bytes | [SD card reference](../sd-card.md); `storage-write-qualification` |
 | Re-entry of a card at 1.8 V, SDR25 | qualified on the board | 21.4 MB/s per request | [SD card reference](../sd-card.md); `1793649661736969334-9742cb48` |
 | UHS-I SDR104 at 150 MHz, read only | qualified on the board | 47.6 MB/s per request, 27.4 MB/s sustained; window 16 to 63, delay 40 | [SD card reference](../sd-card.md); `1793650532228649180-1fb49397` |
+| Registered failure return after a read | qualified on the board | 512 MiB verified; no watchdog reset or secondary owner fault | [failure-return record](../evidence/failure-return.jsonl) |
 | Session-start resolution algorithm | host-tested | 256 cut sessions all usable | [SD card reference](../sd-card.md) |
 | File-create module | host-tested | 326-sector backup | [region-test-file-write](../designs/region-test-file-write.md) |
 | FAT32 read cursor | host-tested | 511 links for 256 KiB, against 67,667 | `storage.jsonl` `storage-fat32-read-cursor` |
@@ -25,12 +40,12 @@ Native SD identification, bounded reads, backup-first updates, slot loading, col
 
 ## Open work
 
-1. Qualify physical installation, autonomous OS boot, cold controller and supply state, reset retirement and power-loss recovery.
+1. Complete the resident FEL qualification and card producer before physical installation and autonomous boot ([design](../designs/autonomous-card-os.md)). Cold controller and supply state, reset retirement and power-loss recovery remain unqualified.
 2. Extend the image-level SD checks to the profile 2 and profile 3 images. `checks/storage-read-service.py` (two-client, cancellation, removal and USB cases), `checks/storage-read-sd-modes.py` and `checks/storage-read-dma.py` run in the gate against the profile 1 read image, and `checks/sd-return-native.py` against the returning image. The service cases stop at the first read of the profile 2 image, inside the native aperture filter (`allowed` in `drivers/storage/a733_mmc_platform_native.c`), because only the sd-modes machine models that profile's sequence (CMD11, the PF selector write, clock phases and CMD19 tuning). Move that sequencing into the shared machine of `checks/storage-read-native.py`. The SD path is described in [the SD card reference](../sd-card.md). The board documents disagree on whether DC1SW2 powers the card, so no supply cycle is attempted.
 3. Measure sustained throughput on broader extents and cards, and qualify card replacement, removal and recovery, and voltage timing.
 4. Implement SDR50 and DDR50; add GPT, multiple volumes and clients.
-5. Write qualification beyond one cut: more interruption points, other cards, directories other than `/sunstone-test/`, concurrent writers.
-6. Map kernel and driver data EL1-only (backlog, wider than storage): an EL0 application can reach the bounds object of the write service, the private copy of its blob and the controller state; the service detects a changed blob by re-hashing it on every use ([memory protection](../memory-protection.md#backlog-kernel-and-driver-data-are-reachable-from-el0)).
+5. Qualify registered failure return during filesystem writes, including each retained unsafe phase. Existing write qualification also needs more interruption points, other cards, directories other than `/sunstone-test/` and concurrent writers.
+6. Map kernel and driver data EL1-only (backlog, wider than storage). An EL0 application can reach the write-service bounds object, private blob copy and controller state. The service detects a changed blob by re-hashing it on every use ([memory protection](../memory-protection.md#backlog-kernel-and-driver-data-are-reachable-from-el0)).
 7. Try the busy-clear interrupt (`THLD.BCIG`, `RINTSTS` bits 17 and 13) in place of the DAT0 busy timer, and compare the flush-latency distribution and the owner task's CPU time.
 8. Images that link the SD core without `SUNXI_MMC_READ_ONLY` (the earlier driver probes) are write-capable to the runner and need a rebuild with that definition, or a coordinator approval record, before they run again.
 9. Switch the application's verify to `fwr_read_cursor` and run it on the board.

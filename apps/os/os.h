@@ -136,6 +136,8 @@ const struct os_session *os_session_validated(void);
 /* 1 when the admitted session grants every service in the OS_GRANT_* mask; 0 before admission. EL0-safe: after the first
  * admission it is one load of a word that holds the granted set, and it touches no hardware. */
 int os_granted(unsigned mask);
+/* USB0 provider retention records its guard before the generic failure path. */
+void board_usb0_provider_fail(void *);
 
 /* Fixed start list entries; each runs at the board hook of the same name. */
 struct a733_pin_handoff;
@@ -190,11 +192,8 @@ int os_radio_start(void);
 struct board_radio_profile;
 const struct board_radio_profile *os_radio_profile(void);
 #ifdef SUNSTONE_A733_OS_RADIO_SCAN
-/* The scanning radio station (apps/os/radio_scan.c). The radio owner task calls
- * os_radio_scan_step after every board_radio_poll with its result. Once the return has
- * begun, the owner shuts the module down (board_radio_shutdown), publishes the encoded
- * result and a descriptor (include/os_radio_result.h), and os_radio_scan_return_ready
- * reports 1. The CPU return waits for it before it stops the PMIC service. */
+/* The radio owner publishes scan progress and the registered return step's
+ * terminal result through this observer. It starts no shutdown of its own. */
 struct board_radio;
 void os_radio_scan_step(struct board_radio *,int result);
 /* The entropy stage's steps (apps/os/ce_probe.c), driven by os_radio_scan_step when the profile's stage limit is the
@@ -210,8 +209,6 @@ int os_ce_entropy_ready(void);
 int os_ce_entropy_failed(void);
 int os_ce_entropy_bytes(void *,uint8_t *,size_t);
 void os_ce_entropy_wipe(void);
-void os_radio_scan_return_request(void);
-int os_radio_scan_return_ready(void);
 #endif
 /* The headset service (apps/os/headset.c, with the Bluetooth stack and the
  * mSBC codec) is an object library that an image links only when its
@@ -289,6 +286,8 @@ int board_service_deadline_register(unsigned);
 int board_service_blocked_until(unsigned,uint64_t);
 void os_usb0_notify(void);
 int os_application_finished(void);
+int os_application_succeeded(void);
+int board_resident_completion_stop(void);
 int os_session_decode(const void *,size_t,struct os_session *);
 /* As os_session_decode; a refusal stores the A733_DECODE_* sub-term (include/a733_admission_refusal.h) in *why. */
 int os_session_decode_why(const void *,size_t,struct os_session *,unsigned *why);

@@ -11,7 +11,8 @@ machine with modeled system registers, counter and cache maintenance, and requir
                 (a733_cached_enter_el1, the one caller of a733_cpu_coherence_enable_el1) issues DC CIVAC on every line
                 of the section before it enables translation; the EL1 readers store nothing to the section; and only
                 sealed.c and that entry path materialize an address inside the section (ADRP, ADR or LDR literal),
-                except the lifetime copy, which any code may read (the EL1 vector and the breadcrumb check).
+                except the lifetime copy, which any code may read (the EL1 vector and the breadcrumb check), and a
+                manifest end label equal to the section start when its use never dereferences that address.
   page tables   after a733_cached_memory_prepare, every EL1 descriptor at any level whose output range overlaps the
                 section is invalid or read-only (AP[2], or APTable[1] on a table above it). The walk covers the whole
                 level-1 table of the EL1 regime and every table below it: the level-2 blocks of 0x40000000 to
@@ -38,6 +39,7 @@ import struct
 import sys
 
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
+from capstone.arm64_const import ARM64_OP_REG
 from elftools.elf.elffile import ELFFile
 from unicorn import UC_HOOK_MEM_WRITE, UC_HOOK_MEM_READ_UNMAPPED, UC_HOOK_MEM_WRITE_UNMAPPED
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X29, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_PC
@@ -48,6 +50,7 @@ sys.path.insert(0, str(ROOT / 'checks'))
 import harness  # noqa: E402  Refuses to run with assertions disabled.
 
 GATE_RUNS = [['--image', '{elf:sup}', '--image', '{elf:ret-npu-load}', '--output', '{output}']]
+CHECK_INPUTS = ['apps/os/session.c', 'apps/os/return-terminal.patch']
 GPR = [UC_ARM64_REG_X0 + i for i in range(29)] + [UC_ARM64_REG_X29, UC_ARM64_REG_LR]
 SENTINEL = 0x47fff000
 STACK = 0x47f00000
@@ -301,6 +304,138 @@ def entry_flush(image, patches=()):
     return [line for line in lines(low, high) if line not in flushed]
 
 
+def manifest_end_references(image, references, patches=()):
+    """Prove the two manifest consumers use an aliased end label only as a bound.
+
+    A layout can place __stop_sunstone_manifest exactly at os_sealed. The
+    decoder subtracts the manifest start; the restore assembly compares the
+    bounds before replacing the end register with a region count. Neither
+    dereferences the end register or passes it to another function. Follow
+    both sides of branches until that register is overwritten or returns.
+    Other readers and other references retain the sealed-owner restriction.
+    """
+    low, _ = image.sealed
+    if image.address('__stop_sunstone_manifest') != low:
+        return {}
+    overrides = dict(patches)
+    manifest = image.address('__start_sunstone_manifest')
+    dis = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+    dis.detail = True
+
+    def instruction(pc):
+        for start, data in image.code:
+            if start <= pc and pc + 4 <= start + len(data):
+                raw = struct.pack('<I', overrides[pc]) if pc in overrides else data[pc-start:pc-start+4]
+                return next(dis.disasm(raw, pc))
+        raise AssertionError(('no boundary instruction', hex(pc)))
+
+    def number(ins, reg):
+        name = ins.reg_name(reg) or ''
+        return int(name[1:]) if name[:1] in ('w', 'x') and name[1:].isdigit() else None
+
+    def clobbered_before_use(target, reg):
+        """A direct callee must overwrite the pointer before reading or saving it."""
+        name = image.function_of(target)
+        if not name:
+            return False
+        end = image.address(name) + image.sizes[name]
+        for pc in range(target, end, 4):
+            ins = instruction(pc)
+            reads, writes = ins.regs_access()
+            if reg in {number(ins, r) for r in reads}:
+                return False
+            if reg in {number(ins, r) for r in writes}:
+                return True
+            if ins.mnemonic in ('bl', 'blr', 'br', 'ret', 'b') or ins.mnemonic.startswith('b.') or ins.mnemonic in ('cbz', 'cbnz', 'tbz', 'tbnz'):
+                return False
+        return False
+
+    def bound_use(pc, owner, begin, end):
+        first = instruction(pc)
+        if first.mnemonic != 'adr':
+            return None
+        reg = number(first, first.operands[0].reg)
+        # Only a straight-line, unmodified ADR(start) establishes provenance.
+        starts, overwritten = {}, set()
+        for at in range(pc-4, begin-1, -4):
+            ins = instruction(at)
+            if ins.mnemonic in ('bl', 'blr', 'br', 'ret', 'b') or ins.mnemonic.startswith('b.') or ins.mnemonic in ('cbz', 'cbnz', 'tbz', 'tbnz'):
+                break
+            if ins.mnemonic == 'adr' and ins.operands[-1].imm == manifest:
+                dest = number(ins, ins.operands[0].reg)
+                if dest is not None and dest not in overwritten:
+                    starts[dest] = at
+            _, writes = ins.regs_access()
+            overwritten.update(number(ins, r) for r in writes)
+        starts.pop(reg, None)
+        # A branch into the setup could bypass ADR(start). Unknown indirect
+        # control flow also prevents proving that assignment dominates ADR(end).
+        for at in range(begin, end, 4):
+            ins = instruction(at)
+            if ins.mnemonic in ('br', 'blr'):
+                starts.clear()
+                break
+            if ins.mnemonic in ('b', 'bl', 'cbz', 'cbnz', 'tbz', 'tbnz') or ins.mnemonic.startswith('b.'):
+                target = ins.operands[-1].imm
+                starts = {r: definition for r, definition in starts.items() if not definition < target <= pc}
+        pending, visited, uses = [(pc+4, frozenset(starts))], set(), []
+        while pending:
+            at, starts = pending.pop()
+            if (at, starts) in visited:
+                continue
+            if not begin <= at < end:
+                return None
+            visited.add((at, starts))
+            ins = instruction(at)
+            reads, writes = ins.regs_access()
+            if reg in {number(ins, r) for r in reads}:
+                # Reject loads, stores, copies, calls and address arithmetic.
+                # SUB is the C decoder's manifest-length calculation only.
+                span = (owner == 'os_session_decode_why' and ins.mnemonic == 'sub' and len(ins.operands) == 3 and
+                        ins.operands[1].type == ARM64_OP_REG and ins.operands[2].type == ARM64_OP_REG and
+                        number(ins, ins.operands[1].reg) == reg and number(ins, ins.operands[2].reg) in starts and
+                        not ins.operands[2].shift.value and not ins.operands[2].ext)
+                if ins.mnemonic != 'cmp' and not span:
+                    return None
+                uses.append(at)
+            if ins.mnemonic == 'ret' and reg == 0:
+                return None
+            if reg in {number(ins, r) for r in writes} or ins.mnemonic == 'ret':
+                continue
+            if ins.mnemonic in ('bl', 'blr', 'br'):
+                if ins.mnemonic == 'bl' and clobbered_before_use(ins.operands[-1].imm, reg):
+                    continue
+                return None
+            starts = starts - {number(ins, r) for r in writes}
+            if ins.mnemonic == 'b':
+                pending.append((ins.operands[-1].imm, starts))
+            else:
+                pending.append((at+4, starts))
+                if ins.mnemonic.startswith('b.') or ins.mnemonic in ('cbz', 'cbnz', 'tbz', 'tbnz'):
+                    pending.append((ins.operands[-1].imm, starts))
+        return (reg, min(uses)) if uses else None
+
+    accepted = {}
+    for pc, kind in references:
+        if image.reference_target(pc, kind) != low:
+            continue
+        owner = image.function_of(pc)
+        if owner == 'os_session_decode_why':
+            begin = image.address(owner)
+            end = begin + image.sizes[owner]
+        elif image.address('a733_qualification_system_restore') <= pc < image.address('a733_qualification_power_down'):
+            # These assembly entry labels have no STT_FUNC size. Bound this
+            # consumer by its own entry and the next assembly entry label.
+            owner = 'a733_qualification_system_restore'
+            begin, end = image.address(owner), image.address('a733_qualification_power_down')
+        else:
+            continue
+        proof = bound_use(pc, owner, begin, end)
+        if proof:
+            accepted[pc] = {'owner': owner, 'register': proof[0], 'use': proof[1]}
+    return accepted
+
+
 def cache_order(image):
     cases, metrics = {}, {}
     low, high = image.sealed
@@ -339,13 +474,34 @@ def cache_order(image):
     # other address in the section is named only by sealed.c and the entry path.
     copy = image.address('os_sealed') + 4100 if 'os_sealed' in image.symbols else None
     lifetime_loads = [a for a, kind in references if image.reference_target(a, kind) == copy]
-    owners = sorted({image.function_of(a) or 'unnamed %#x' % a for a, _ in references if a not in lifetime_loads})
+    bounds = manifest_end_references(image, references)
+    owners = sorted({image.function_of(a) or 'unnamed %#x' % a for a, _ in references
+                     if a not in lifetime_loads and a not in bounds})
     allowed = {'board_session_prepare', 'board_session_snapshot', 'board_session_sealed', 'board_session_lifetime',
                'a733_cached_enter_el1'}
     assert set(owners) <= allowed, owners
     metrics['references'] = owners
     metrics['lifetime_copy_references'] = len(lifetime_loads)
+    metrics['manifest_end_references'] = {hex(a): b['owner'] for a, b in bounds.items()}
     cases['only-sealed-c-and-the-entry-path-address-the-section-beside-the-lifetime-copy'] = True
+    for address, proof in bounds.items():
+        # Turn a proven bound use into LDR x0,[end]. The special case must
+        # then refuse it; knowing a consumer's name alone is insufficient.
+        load = 0xf9400000 | proof['register'] << 5
+        assert address not in manifest_end_references(image, references, [(proof['use'], load)])
+        if proof['owner'] == 'os_session_decode_why':
+            # SUB alias,end,#0 is a pointer copy, not a manifest span.
+            copy = 0xd1000000 | proof['register'] << 5
+            assert address not in manifest_end_references(image, references, [(proof['use'], copy)])
+            begin = image.address('os_session_decode_why')
+            skip = 0x14000000 | (((address-begin) >> 2) & 0x3ffffff)
+            assert address not in manifest_end_references(image, references, [(begin, skip)])
+    if bounds:
+        cases['manifest-end-alias-is-used-only-as-a-bound'] = True
+        cases['mutation-manifest-end-dereference-fails'] = True
+        if any(proof['owner'] == 'os_session_decode_why' for proof in bounds.values()):
+            cases['mutation-manifest-end-copy-fails'] = True
+            cases['mutation-manifest-start-assignment-skipped-fails'] = True
 
     # Mutations, applied to the linked image in the model.
     flushes = image.calls('board_session_prepare', 'a733_cpu_coherence_flush')
@@ -522,7 +678,7 @@ def main():
         print(f'{path.name}: sealed {order_metrics["sealed"]}, {len(order) + len(tables)} cases')
     (out / 'results.json').write_text(json.dumps(report, indent=2) + '\n')
     print(f'PASS os sealed session: {total} cases over {len(a.image)} images; cache order at EL3 and EL1 entry, '
-          'read-only in the EL1 tables and the application spaces; five mutations fail')
+          'read-only in the EL1 tables and the application spaces; cache, table and manifest-boundary mutations fail')
 
 
 if __name__ == '__main__':

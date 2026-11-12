@@ -47,11 +47,13 @@ class Launch:
         self.contract_size = contract_size
         self.reads = []
         self.writes = []
+        self.events = []
         self.ticks = []
+        self.restart_ticks = []
         self.stop = []
 
 
-def execute(segments, code, request, contract, session, contract_magic, contract_size, name):
+def execute(segments, code, request, contract, session, contract_magic, contract_size, name, *, watchdog=None, resident=False, registers=None):
     """Run the launcher once and return its Launch.
 
     The memory hooks refuse any access outside the report, stack, contract
@@ -62,7 +64,7 @@ def execute(segments, code, request, contract, session, contract_magic, contract
     cpu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
     cpu.ctl_set_cpu_model(UC_CPU_ARM_CORTEX_A15)
     for base, size in [(0x50000, 0x30000), (0x41000000, 0x1200000), (0x02050000, 4096),
-                       (0x07050000, 4096), (0x08001000, 4096)]:
+                       (0x07050000, 4096), (0x07090000, 4096), (0x08001000, 4096)]:
         cpu.mem_map(base, size)
     for address, data in segments:
         if data:
@@ -76,23 +78,41 @@ def execute(segments, code, request, contract, session, contract_magic, contract
     for register, value in saved.items():
         cpu.reg_write(register, value)
     mmio = {MODE: 0, CONFIG: 0, FLAG: 0, ALT: 0, RVBAR: 0, RVBAR + 4: 0}
+    if watchdog is not None:
+        mmio.update({MODE: watchdog[0], CONFIG: watchdog[1], 0x02050018: watchdog[2]})
+    if resident:
+        mmio.update({0x070501c4: 0, 0x07090108: 0, 0x0205000c: 0})
+    if registers:
+        assert set(registers) <= mmio.keys()
+        mmio.update(registers)
 
     def read(uc, access, address, size, value, unused):
         if address < 0x02000000 or address >= 0x41000000:
             return
         assert address in mmio and size == 4, (name, hex(address), size)
         launch.reads.append(address)
+        launch.events.append(('read', address))
         uc.mem_write(address, struct.pack('<I', mmio[address]))
 
     def write(uc, access, address, size, value, unused):
         if address < 0x02000000:
             assert REPORT <= address < REPORT + 128 or 0x53000 <= address < 0x54000 or 0x70000 - 60 <= address < 0x70000
         elif address >= 0x41000000:
-            assert CONTRACT <= address < CONTRACT + 8 or CONTRACT + 80 <= address < CONTRACT + 112
+            assert (CONTRACT <= address < CONTRACT + 8 or CONTRACT + 80 <= address < CONTRACT + 112 or
+                    (resident and CONTRACT + 120 <= address < CONTRACT + 144))
         else:
-            assert address in (RVBAR, RVBAR + 4) and size == 4
-            assert struct.unpack('<Q', uc.mem_read(CONTRACT, 8))[0] == contract_magic
+            assert size == 4
+            if resident and address == 0x0205000c:
+                assert value == 0x14af and not launch.restart_ticks
+                assert (mmio[MODE], mmio[CONFIG], mmio[0x02050018]) == (0x41, 1, 2)
+                assert not any(mmio[a] for a in (FLAG, ALT, 0x070501c4, 0x07090108))
+                assert struct.unpack('<Q', uc.mem_read(CONTRACT, 8))[0] == 0 and launch.ticks
+                launch.restart_ticks.append(launch.ticks[-1])
+            else:
+                assert address in (RVBAR, RVBAR + 4)
+                assert struct.unpack('<Q', uc.mem_read(CONTRACT, 8))[0] == contract_magic
             launch.writes.append((address, value))
+            launch.events.append(('write', address))
             mmio[address] = value
 
     def instruction(uc, address, size, unused):

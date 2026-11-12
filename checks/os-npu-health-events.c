@@ -7,7 +7,15 @@
 #include <stdio.h>
 struct board_application board;
 struct board_provider providers;
-static unsigned client_events,bootstrap_events,failures;
+static unsigned client_events,bootstrap_events,failures,quiesce_faults;
+/* These events precede a return request. Fault capture declines the event so
+ * the existing board failure sink runs; no retirement observer is invoked. */
+int os_quiesce_fault(struct os_quiesce *q,uint32_t site,uint32_t value,const void *caller)
+{assert(q==&npu_quiesce&&site);(void)value;(void)caller;++quiesce_faults;return 0;}
+enum os_quiesce_result os_quiesce_result(const struct os_quiesce *q)
+{(void)q;assert(0);return OS_QUIESCE_PENDING;}
+int os_granted(unsigned mask){(void)mask;assert(0);return 0;}
+int os_npu_complete(void){assert(0);return 0;}
 BaseType_t xTaskGenericNotify(TaskHandle_t task,UBaseType_t index,uint32_t value,eNotifyAction action,uint32_t *previous)
 {
     assert(!index&&!value&&action==eIncrement&&!previous);
@@ -34,7 +42,7 @@ static struct npu_runtime_slot slot_zero; /* the runtime's slot table is carved 
 static struct os_npu_device device; /* what a granted admission takes from the ledger */
 int main(void)
 {
-    npu.device=&device;npu.runtime.slot=&slot_zero;
+    npu.device=&device;device.runtime.service.signals=&npu.signals;npu.device->runtime.slot=&slot_zero;
     npu.started=1;npu.end=10000000;
     npu.client=(TaskHandle_t)&npu.client;npu.bootstrap=(TaskHandle_t)&npu.bootstrap;
     atomic_store(&npu.gate,(UINT64_C(1000000)<<3)|ALLOW);
@@ -55,6 +63,6 @@ int main(void)
     assert(ss_npu_run(0,&input,1,&output,1,1)==0&&client_events==4);
     assert(ss_npu_run(0,&input,1,&output,1,1)==0&&client_events==4);
     assert(ss_npu_service_step()==1&&ss_npu_run(0,&input,1,&output,1,1)==1);
-    assert(fail()==-1&&failures==1&&client_events==5&&atomic_load(&npu.failed));
+    assert(fail()==-1&&failures==1&&quiesce_faults==1&&client_events==5&&atomic_load(&npu.failed));
     puts("PASS actual OS freshness, policy, terminal STOP, mailbox publication and failure wakeups");
 }

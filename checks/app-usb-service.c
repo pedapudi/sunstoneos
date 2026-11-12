@@ -1,7 +1,15 @@
 #include "sunstone_usb_service.h"
+#include "../apps/os/owner-memory.h"
 #include <assert.h>
+/* The manifest's input queue depth, and the ledger that admission takes the queue from: readable and writable at EL0. */
+enum { EVENTS=4 };
+const unsigned ss_usb_input_events=EVENTS;
+static _Alignas(16) unsigned char queue[EVENTS*(sizeof(struct ss_input_event)+sizeof(unsigned))];
+static unsigned taken;
+void *os_owner_memory(uint64_t bytes,uint64_t align,unsigned attributes)
+{assert(bytes==sizeof(queue)&&!align&&attributes==OS_MEMORY_EL0_WRITE);++taken;return queue;}
 static struct ss_grant grant;
-static int live=1,writes,wakes,configured;
+static int live=1,writes,wakes,configured,configurations;
 static unsigned serial_releases,camera_releases;
 const struct ss_grant *ss_grant(void){return &grant;}
 int ss_live(void){return live;}
@@ -15,13 +23,17 @@ static void release(void *c,unsigned d,uint64_t token)
 static int write(void *c,uint64_t sequence,const void *p,size_t bytes)
 {(void)c;assert(sequence>=9&&p&&bytes==3);++writes;return 1;}
 static int configure(void *c,const struct ss_usb_serial_line *line)
-{(void)c;assert(line->baud==1000000&&line->bits==8);return 1;}
+{(void)c;assert(line->baud==1000000&&line->bits==8);++configurations;return 1;}
 static int config_result(void *c){(void)c;return configured;}
 int main(void)
 {
     const struct os_usb_service_ops ops={.wake=wake,.release=release,.write=write,
         .configure=configure,.configured=config_result};
     os_usb_service_init(&ops,0);
+    /* Before admission there is no queue, and an event finds it full. */
+    struct ss_input_event early={.kind=SS_INPUT_KEY,.usage=4};
+    assert(os_usb_service_input(&early)==0);
+    assert(os_usb_service_memory()==1&&taken==1&&os_usb_service_memory()==1&&taken==1);
     char bytes[]="abc";struct ss_usb_serial_buffer value={7,1,(void *)bytes,3},out;
     assert(ss_usb_serial_acquire(&out)==-1);
     grant.devices=SS_DEVICE_USB_SERIAL;assert(ss_usb_serial_acquire(&out)==0);
@@ -59,6 +71,10 @@ int main(void)
     assert(ss_input_event(&event)==0);assert(os_usb_service_input(&input)==1);
     assert(ss_input_event(&event)==1&&event.usage==4);
     os_usb_service_disconnected(SS_DEVICE_USB_MOUSE);assert(ss_input_event(&event)==0);
+    /* The queue holds the declared depth and refuses the next event until the application reads one. */
+    for(unsigned i=0;i<EVENTS;++i)assert(os_usb_service_input(&input)==1);
+    assert(os_usb_service_input(&input)==0);assert(ss_input_event(&event)==1);assert(os_usb_service_input(&input)==1);
+    while(ss_input_event(&event)==1){}
 
     /* A pinned frame rejects release until the OS finishes its gather. */
     grant.devices|=SS_DEVICE_USB_CAMERA;os_usb_service_connected(SS_DEVICE_USB_CAMERA);
@@ -74,7 +90,11 @@ int main(void)
     /* Application exit retains receive memory while zero-copy TX borrows it. */
     value.token=9;assert(os_usb_service_serial(&value)==1);assert(ss_usb_serial_acquire(&out)==1);
     assert(ss_usb_serial_write(10,out.data,out.bytes)==1);os_usb_service_dispatch();
+    assert(ss_usb_serial_configure(2,&line)==1);
     os_usb_service_retire();os_usb_service_dispatch();assert(!os_usb_service_idle()&&serial_releases==2);
-    os_usb_service_write_complete(10,1,3);os_usb_service_dispatch();
-    assert(os_usb_service_idle()&&serial_releases==3);return 0;
+    assert(configurations==1&&ss_usb_serial_config_result(2)==-1);
+    /* Controller stop proof lets the host retire an aborted transmit. */
+    os_usb_service_stopped();os_usb_service_dispatch();
+    assert(os_usb_service_idle()&&serial_releases==3);
+    assert(ss_usb_serial_write_result(10,&actual)==-1&&actual==0);return 0;
 }

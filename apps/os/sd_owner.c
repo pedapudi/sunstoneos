@@ -12,6 +12,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "sd_hw.h"
+#include "quiesce.h"
+#include "cpu-return.h"
 #include "os_space.h"
 #include "../board/application.h"
 #include "sunstone_crumb.h"
@@ -27,7 +29,7 @@
 #include "sunstone_notify.h"
 #define WAIT_INDEX SS_NOTIFY_REQUEST_WAIT   /* notification index a caller sleeps on; index 0 is the owner's */
 
-enum kind { K_READ, K_ASYNC_READ, K_WRITE, K_ENABLE, K_UNIT, K_REGION, K_CLOSE };
+enum kind { K_READ, K_ASYNC_READ, K_WRITE, K_ENABLE, K_UNIT, K_REGION, K_CLOSE, K_TRANSACTION, K_CLASSIFIED_WRITE };
 struct request {
     enum kind kind;
     uint64_t sector;
@@ -36,11 +38,13 @@ struct request {
     const uint8_t *source;
     size_t bytes;
     TaskHandle_t waiter;
-    uint32_t value;
+    uint32_t value, token;
+    unsigned event, operation, phase;
     atomic_int done;               /* 0 pending, 1 succeeded, -1 failed */
 };
 static _Atomic(struct request *) loader_slot, writer_slot;
-static TaskHandle_t owner, ready_waiter;
+static _Atomic(TaskHandle_t) owner;
+static TaskHandle_t ready_waiter;
 static StaticTask_t owner_tcb;
 static StackType_t owner_stack[OWNER_STACK_WORDS];
 static const struct os_sd_hw *hw;
@@ -52,6 +56,101 @@ static struct os_large_device proxy;
 #include "sd_note.h"
 extern uint64_t os_sd_diag[4];
 extern uint64_t os_sd_mode[5];                  /* apps/os/large_sd.c: the bus speed mode and its steps */
+
+enum { SD_UNOPENED, SD_STARTING, SD_OPEN, SD_CLOSED, SD_FAILED };
+static atomic_uint storage_state, posting;
+static unsigned writes_enabled;
+/* Owner-only fields; the supervisor observes one coherent release snapshot.
+ * The high word names the write session, the low byte its unsafe phase. */
+static struct {
+    uint32_t session, serial, token;
+    unsigned operation, active, consistent, dirty, failed, phase;
+} transaction;
+static atomic_uint_fast64_t retirement;
+static void retirement_publish(void)
+{
+    unsigned phase = transaction.failed ? FWR_PHASE_FAILED : transaction.dirty ? transaction.phase :
+                     transaction.consistent ? FWR_PHASE_DATA : FWR_PHASE_UNVERIFIED;
+    atomic_store_explicit(&retirement, (uint64_t)transaction.session << 32 | phase, memory_order_release);
+}
+static int retirement_enable(void)
+{
+    if (transaction.session == UINT32_MAX) return 0;
+    ++transaction.session;
+    transaction.consistent = 1;             /* this session has changed no sector */
+    transaction.active = transaction.dirty = transaction.failed = 0;
+    retirement_publish();
+    return 1;
+}
+static int retirement_event(unsigned event, unsigned operation, uint32_t *token)
+{
+    if (event == FWR_TX_BEGIN) {
+        if (transaction.active || transaction.serial == UINT32_MAX ||
+            operation < FWR_OP_MOUNT || operation > FWR_OP_RENAME ||
+            (operation != FWR_OP_MOUNT && (!transaction.consistent || transaction.failed))) return 0;
+        transaction.token = ++transaction.serial;
+        transaction.operation = operation; transaction.active = 1;
+        transaction.dirty = 0;
+        if (operation == FWR_OP_MOUNT) transaction.consistent = transaction.failed = 0;
+        *token = transaction.token;
+    } else {
+        if (!transaction.active || *token != transaction.token || operation != transaction.operation) return 0;
+        if (event != FWR_TX_COMMIT && event != FWR_TX_ABORT) return 0;
+        transaction.active = 0;
+        if (event == FWR_TX_COMMIT && !transaction.failed) {
+            transaction.consistent = 1; transaction.dirty = 0;
+        } else if (transaction.dirty) transaction.failed = 1;
+    }
+    retirement_publish();
+    return !transaction.failed;
+}
+static int retirement_write(unsigned phase, uint32_t token)
+{
+    if (phase == FWR_PHASE_RAW) {
+        if(transaction.active){transaction.failed=1;retirement_publish();return 0;}
+        transaction.consistent = 0; transaction.dirty = 1; transaction.phase = phase;
+    } else if (phase > FWR_PHASE_CLEAN2 ||
+               (phase != FWR_PHASE_DATA && (!transaction.active || token != transaction.token)) ||
+               (phase == FWR_PHASE_DATA && token != (transaction.active ? transaction.token : 0))) {
+        transaction.failed = 1; retirement_publish(); return 0;
+    } else if (phase != FWR_PHASE_DATA) {
+        transaction.dirty = 1; transaction.phase = phase;
+    }
+    retirement_publish();                 /* precedes the first destructive command */
+    return !transaction.failed;
+}
+static void retirement_written(int ok)
+{
+    if (!ok) transaction.failed = 1;
+    retirement_publish();
+}
+static int retirement_fault(struct os_quiesce *q)
+{
+    uint64_t state = atomic_load_explicit(&retirement, memory_order_acquire);
+    unsigned phase = (unsigned)state & 255u;
+    if (!(state >> 32) || !phase) return 0;
+    (void)os_quiesce_fault(q, SUNSTONE_CRUMB_FAIL_BOARD << 12 | (0x920u + phase),
+                           (uint32_t)(state >> 32), SUNSTONE_CRUMB_HERE());
+    return 1;
+}
+static enum os_quiesce_result storage_quiesce_step(struct os_quiesce *q)
+{
+    unsigned state=SD_UNOPENED;
+    if(atomic_compare_exchange_strong_explicit(&storage_state,&state,SD_CLOSED,memory_order_acq_rel,memory_order_acquire))
+        return OS_QUIESCE_DONE;             /* no task can open after this claim */
+    if(state==SD_CLOSED)return OS_QUIESCE_DONE;
+    if(state==SD_FAILED){
+        (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x901,0,SUNSTONE_CRUMB_HERE());
+        return OS_QUIESCE_FAULT;
+    }
+    if(owner)xTaskNotifyGive(owner);       /* wake an IRQ/timer wait to observe the shared deadline */
+    if(retirement_fault(q))return OS_QUIESCE_FAULT;
+    return os_quiesce_result(q);
+}
+static struct os_quiesce storage_quiesce={.owner=OS_QUIESCE_STORAGE,
+    .order=OS_QUIESCE_DEVICES,.step=storage_quiesce_step};
+int os_sd_quiesce_register(void)
+{return os_quiesce_register(&storage_quiesce);}
 
 static void finish(struct request *r, int ok)
 {
@@ -79,11 +178,25 @@ static void serve(struct request *r)
         /* The loader's pipelined request: start it, sleep until it finishes, and leave the verdict in `done`. */
         ok = d->async.submit(d->async.context, r->sector, r->count, r->buffer) == 1 && hw->wait_async();
         break;
-    case K_WRITE: ok = hw->write_piece(r->sector, r->count, r->source); break;
-    case K_ENABLE: ok = hw->enable_writes(r->source, r->bytes); break;
+    case K_WRITE:
+    case K_CLASSIFIED_WRITE:
+        if (retirement_write(r->kind == K_WRITE ? FWR_PHASE_RAW : r->phase, r->token))
+            ok = hw->write_piece(r->sector, r->count, r->source);
+        retirement_written(ok);
+        break;
+    case K_TRANSACTION: ok = retirement_event(r->event, r->operation, &r->token); break;
+    case K_ENABLE:
+        ok = !writes_enabled && transaction.session != UINT32_MAX && hw->enable_writes(r->source, r->bytes);
+        if(ok){writes_enabled=1;ok=retirement_enable();}
+        break;
     case K_UNIT: ok = hw->allocation_unit(&r->value); break;
     case K_REGION: ok = hw->set_write_region(r->buffer, r->bytes); break;
-    case K_CLOSE: hw->close(); atomic_store(&closed, 1); ok = 1; break;
+    case K_CLOSE:
+        if(writes_enabled&&(atomic_load_explicit(&retirement,memory_order_acquire)&255u))break;
+        hw->close();ok=hw->closed&&hw->closed();
+        if(ok){atomic_store(&closed,1);atomic_store_explicit(&storage_state,SD_CLOSED,memory_order_release);}
+        else atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);
+        break;
     }
     /* A refused request leaves its stage as a note, except the enable refusals (stages 20 to 24: preconditions, parse, verify mismatch, binding), which are results the
      * application reports. The first failure record names the SD0 binding when it came first, and a thermal or
@@ -97,6 +210,48 @@ static void serve(struct request *r)
     finish(r, ok);
 }
 
+/* Hardware requests finish before this step. The owner record proves the
+ * filesystem's last completed transaction without consulting application RAM. */
+static int owner_quiesce_step(void)
+{
+    if(!os_quiesce_requested(&storage_quiesce))return 0;
+    atomic_store(&closed,1);                  /* close admission before draining publishers */
+    if(os_quiesce_result(&storage_quiesce)==OS_QUIESCE_FAULT)return 1;
+    if(atomic_load_explicit(&posting,memory_order_acquire))return 1;
+    struct request *r=atomic_exchange(&loader_slot,NULL);
+    if(r)finish(r,0);
+    r=atomic_exchange(&writer_slot,NULL);
+    if(r)finish(r,0);
+    if(atomic_load_explicit(&storage_state,memory_order_acquire)==SD_CLOSED){
+        os_quiesce_complete(&storage_quiesce);return 1;
+    }
+    if(retirement_fault(&storage_quiesce))return 1;
+    if(!hw){
+        atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);
+        (void)os_quiesce_fault(&storage_quiesce,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x903,
+            diag_word(),SUNSTONE_CRUMB_HERE());
+        return 1;
+    }
+    hw->close();
+    if(!hw->closed||!hw->closed()){
+        atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);
+        (void)os_quiesce_fault(&storage_quiesce,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x904,
+            diag_word(),SUNSTONE_CRUMB_HERE());
+        return 1;
+    }
+    atomic_store_explicit(&storage_state,SD_CLOSED,memory_order_release);
+    os_quiesce_complete(&storage_quiesce);return 1;
+}
+
+/* Registration may precede the first instruction of the lazy owner task.
+ * A return in that interval prevents its first hardware access. */
+static int owner_open_allowed(void)
+{
+    if(!os_cpu_return_requested())return 1;
+    atomic_store_explicit(&storage_state,SD_CLOSED,memory_order_release);
+    os_quiesce_complete(&storage_quiesce);return 0;
+}
+
 /* TTBR0 as the owner's first instruction found it: the QEMU check requires the kernel's table. */
 static volatile uint64_t entry_ttbr0;
 uint64_t os_sd_owner_entry_ttbr(void) { return entry_ttbr0; }
@@ -106,7 +261,9 @@ static void owner_main(void *unused)
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));
     entry_ttbr0 = ttbr;
     (void)unused;
+    if(!owner_open_allowed())for(;;)vTaskSuspend(NULL);
     hw = os_sd_open_owner();
+    atomic_store_explicit(&storage_state,hw?SD_OPEN:SD_FAILED,memory_order_release);
     atomic_store(&first_us, sunstone_deadline_now_us());
     atomic_store(&ready, hw ? 1 : -1);
     if (ready_waiter) xTaskNotifyGiveIndexed(ready_waiter, WAIT_INDEX);
@@ -124,6 +281,7 @@ static void owner_main(void *unused)
         atomic_fetch_add(&wake_count, 1);
         atomic_fetch_or(&owner_core_mask, 1u << portGET_CORE_ID());
         for (;;) {
+            if(owner_quiesce_step())break;
             struct request *r = atomic_exchange(&loader_slot, NULL);        /* reads first */
             if (r) { serve(r); continue; }
             r = atomic_exchange(&writer_slot, NULL);                        /* then one write-side piece */
@@ -135,12 +293,17 @@ static void owner_main(void *unused)
 
 static int post(_Atomic(struct request *) *slot, struct request *r, int wait)
 {
-    if (atomic_load(&closed)) return 0;                                 /* the card is closed: no request is served */
+    atomic_fetch_add(&posting,1);
+    if(atomic_load(&closed)||os_cpu_return_requested()){
+        atomic_fetch_sub_explicit(&posting,1,memory_order_release);return 0;
+    }
     atomic_fetch_or(&caller_core_mask, 1u << portGET_CORE_ID());
     atomic_init(&r->done, 0);
     r->waiter = wait ? xTaskGetCurrentTaskHandle() : NULL;
     struct request *none = NULL;
-    if (!atomic_compare_exchange_strong(slot, &none, r)) return 0;        /* one request per mailbox */
+    int posted=atomic_compare_exchange_strong(slot,&none,r);
+    atomic_fetch_sub_explicit(&posting,1,memory_order_release);
+    if(!posted)return 0;                    /* one request per mailbox */
     xTaskNotifyGive(owner);
     if (!wait) return 1;
     while (!atomic_load_explicit(&r->done, memory_order_acquire)) ulTaskNotifyTakeIndexed(WAIT_INDEX, pdTRUE, portMAX_DELAY);
@@ -157,12 +320,15 @@ TaskHandle_t os_sd_owner_task(void) { return owner; }
 /* Start the owner task; the caller is told when the card is open (os_large_device) or has failed. */
 static int start(void)
 {
+    if(os_cpu_return_requested())return 0;
     if (owner) return atomic_load(&ready) == 1;
+    unsigned state=SD_UNOPENED;
+    if(!atomic_compare_exchange_strong_explicit(&storage_state,&state,SD_STARTING,memory_order_acq_rel,memory_order_acquire))return 0;
     ready_waiter = xTaskGetCurrentTaskHandle();
     /* The caller is the application's task, which would pass its address space on to the task it creates; the owner is
      * an OS service task and runs in the kernel's table from its first instruction (include/os_space.h). */
     owner = OS_TASK_CREATE_IN_KERNEL_SPACE(xTaskCreateStatic(owner_main, "sd-owner", OWNER_STACK_WORDS, NULL, OWNER_PRIORITY, owner_stack, &owner_tcb));
-    if (!owner) { os_sd_diag[0] = 10; return 0; }
+    if (!owner) { os_sd_diag[0] = 10; atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release); return 0; }
     /* The owner gives the notification once the card is open or has failed. A wake is only a hint (any other notification would end a
      * single wait early), so wait on the state, on the caller's own index, until a time bound measured in microseconds. */
     uint64_t t0 = sunstone_deadline_now_us(), ticks0 = xTaskGetTickCount();
@@ -226,6 +392,21 @@ static int writer_write(void *c, uint64_t sector, uint32_t count, const uint8_t 
     writer_request = (struct request){.kind = K_WRITE, .sector = sector, .count = count, .source = data};
     return post(&writer_slot, &writer_request, 1);
 }
+static int writer_transaction(void *c, unsigned event, unsigned operation, uint32_t *token)
+{
+    (void)c;
+    writer_request = (struct request){.kind=K_TRANSACTION,.event=event,.operation=operation,.token=*token};
+    if (!post(&writer_slot, &writer_request, 1)) return 0;
+    *token=writer_request.token;
+    return 1;
+}
+static int writer_classified(void *c, uint64_t sector, uint32_t count, const uint8_t *data, unsigned phase, uint32_t token)
+{
+    (void)c;
+    if (!count || count > OS_SD_WRITE_PIECE_SECTORS) return 0;
+    writer_request = (struct request){.kind=K_CLASSIFIED_WRITE,.sector=sector,.count=count,.source=data,.phase=phase,.token=token};
+    return post(&writer_slot, &writer_request, 1);
+}
 /* Admit the writes: the runner-delivered bounds blob (the first input, kept unchanged), verified against the card. */
 static int writes_enable(const uint8_t *blob, size_t bytes)
 {
@@ -257,7 +438,8 @@ static int writer_device(struct fwr_device *d)
 {
     if (!hw || atomic_load(&ready) != 1) return 0;
     *d = (struct fwr_device){.context = NULL, .read = writer_read, .write = writer_write, .yield = NULL, .sectors = hw->sectors,
-                             .au_sectors = unit_sectors, .max_write_sectors = OS_SD_WRITE_PIECE_SECTORS};
+                             .au_sectors = unit_sectors, .max_write_sectors = OS_SD_WRITE_PIECE_SECTORS,
+                             .transaction=writer_transaction,.write_classified=writer_classified};
     return 1;
 }
 

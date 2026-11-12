@@ -56,7 +56,8 @@ enum {
     SS_DEVICE_USB_SERIAL = 1u << 6,
     SS_DEVICE_USB_CAMERA = 1u << 7,
     SS_DEVICE_RADIO = 1u << 8,         /* Wi-Fi station of the radio module */
-    SS_DEVICE_ALL = (1u << 9) - 1
+    SS_DEVICE_USB_DEVICE = 1u << 9,    /* USB0 vendor device service */
+    SS_DEVICE_ALL = (1u << 10) - 1
 };
 /* Preferred cluster of the main task. Without A76 admission the OS grants
  * the A55 pair 2-3 instead of the A76 pair 6-7. */

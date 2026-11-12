@@ -58,7 +58,7 @@ authority for a linked image.
 | Field | Meaning |
 | --- | --- |
 | `name` | 1-15 characters `[a-z0-9-]`. The application provides `<name>_main(const struct ss_grant *)` and optionally `<name>_init(void)`, with `-` written as `_`; the generated header declares both. |
-| `devices_required`, `devices_optional` | Device bitmaps: USB storage, USB keyboard, I2S capture, headset capture, GPU, USB mouse, USB serial, USB camera. The session grants every required device and any subset of the optional ones, with at most one capture device. USB0, the host channel and thermal supervision are always present. The radio station and the NPU client are OS services that the image selects. |
+| `devices_required`, `devices_optional` | Device bitmaps: USB storage, USB keyboard, I2S capture, headset capture, GPU, USB mouse, USB serial, USB camera, radio and USB0 device service (`usb-device`). The session grants every required device and any subset of the optional ones, with at most one capture device. USB0 and its host channel require the `usb-device` grant; the other USB classes name USB2 host peripherals. Thermal supervision is always present. The NPU client is selected by its service record. |
 | `cluster`, `workers` | Preferred cluster of the main task and the number of worker tasks. The main task gets the first core of the cluster's pair: core 6 for the A76 pair, or core 2 for the A55 pair when the A76 cores are not admitted. The first worker gets the second core of that pair, and further workers the remaining cores in ascending order. |
 | `priority`, `stack_bytes`, `heap_bytes` | FreeRTOS priority and stack of the main task, which runs at EL0, and the bytes the application adds to the image's C and C++ heap. A heap above 4 MiB is a region of upper memory, zero filled as the allocator takes it ([application-memory-layout.md](application-memory-layout.md)). |
 | `regions[region_count]` | Physical ranges, as many as the application declares, up to 255 (`region_count` is one byte of the head), with kind, access and digest. INPUT regions are uploaded by the host and must not be written by the trusted application; `bytes` is the maximum content length, or the exact length when the manifest pins a SHA-256. WORK regions are private working memory; OUTPUT regions are written by the application and read by the host after the run. Access bits are CPU read, CPU write, GPU read, GPU write and scratch (work or output that the board runner does not back up or restore). A WORK region with GPU write and without CPU write is a GPU output region that the CPU only reads. Unpinned regions are placed on 2 MiB boundaries in the application window `0x44000000`-`0x47000000`. An optional `sunstone_region_initializers` section names a zero prefix that EL3 clears and publishes in a GPU-written WORK region. |
@@ -72,6 +72,13 @@ authority for a linked image.
 The OS image derives its session lifetime from `run_deadline_us` and
 `return_reserve_us` ([os-image.md](../os-image.md#the-session-lifetime-follows-the-manifest)).
 No manifest can exceed it.
+
+One field of `manifest.json` is not packed: `usb.input_events`, the depth of
+the USB input event queue, a power of two of at most 2^31. Only an
+application that lists the USB keyboard or mouse may declare it; one that
+omits it gets 1,024 events, the depth the USB input image was built with. The
+generated tables carry the depth (`ss_usb_input_events`), and admission takes
+the queue from the unified ledger.
 
 **Version.** `SS_MANIFEST_VERSION` is 2. Version 1 held a fixed table of eight
 regions in a 552-byte record. Version 2 keeps the 104-byte head

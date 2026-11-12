@@ -18,10 +18,39 @@ struct board_provider providers;
 volatile unsigned os_check_result;
 static void check(int ok,unsigned code){if(!ok){os_check_result=code;__asm__ volatile("brk #0");for(;;){}}}
 static unsigned board_up=1,board_failed,stopped,bound,initialized,created,attributes=0xff,mode,polled,retained;
-static uint32_t segment_flags;
+static uint32_t segment_flags,segment_disconnected;
+static unsigned model_failing,quiesce_notes,quiesce_registered;
+static unsigned on_owner,owner_notified,stop_calls,release_calls,down_calls,deadline_calls;
+static int stop_reply,module_release,module_down=-1;
+static const uint64_t return_deadline=UINT64_C(12345678);
+int os_quiesce_register(struct os_quiesce *q)
+{check(!created,130);q->registered=1;++quiesce_registered;return 1;}
+int os_quiesce_requested(const struct os_quiesce *q){return atomic_load(&q->requested)!=0;}
+enum os_quiesce_result os_quiesce_result(const struct os_quiesce *q){return atomic_load(&q->result);}
+void os_quiesce_complete(struct os_quiesce *q)
+{unsigned pending=OS_QUIESCE_PENDING;(void)atomic_compare_exchange_strong(&q->result,&pending,OS_QUIESCE_DONE);}
+int os_quiesce_fault(struct os_quiesce *q,uint32_t site,uint32_t value,const void *caller)
+{
+    if(!model_failing&&!os_quiesce_requested(q))return 0;
+    if(!atomic_exchange(&q->fault_state,2)){q->site=site;q->value=value;q->caller=caller;++quiesce_notes;}
+    atomic_store(&q->result,OS_QUIESCE_FAULT);return 1;
+}
+uint64_t os_cpu_return_deadline_us(void){check(on_owner,150);++deadline_calls;return return_deadline;}
 static struct os_session session;
 static unsigned radio_granted; /* the session grants the radio: the headset shares the radio's module owner */
 static uint64_t start_us,end_us;
+/* The ledger (apps/os/owner-memory.h): one extent, readable and writable at EL0, of the headset's memory and the library's state. */
+#define STATE_BYTES 4096u
+const size_t bluetooth_headset_state_bytes=STATE_BYTES;
+static _Alignas(64) uint8_t extent[((sizeof(struct headset_memory)+63)&~(size_t)63)+STATE_BYTES];
+static unsigned taken,given;
+void *os_owner_memory(uint64_t bytes,uint64_t align,unsigned attributes)
+{
+    check(!taken&&bytes==sizeof(extent)&&align==64&&attributes==OS_MEMORY_EL0_WRITE,90);
+    ++taken;return extent;
+}
+int bluetooth_headset_memory(void *m)
+{check(m==extent+((sizeof(struct headset_memory)+63)&~(size_t)63)&&!given,91);++given;return 1;}
 int board_live(void *v){(void)v;return board_up;}
 void board_fail(void *v){(void)v;board_failed=1;}
 const struct os_session *os_session_admitted(void){return &session;}
@@ -74,8 +103,8 @@ unsigned board_session_lifetime(void){return model_lifetime;}
 unsigned os_lifetime(void){return model_lifetime;}
 static unsigned progress[OS_SERVICES];
 void board_service_progress(unsigned service){check(service==OS_SERVICE_BLUETOOTH||service==OS_SERVICE_HEADSET,84);++progress[service];}
-int bluetooth_application_poll(struct bluetooth_application *a){check(a==&app,85);++polled;return 0;}
-int bluetooth_application_retain(struct bluetooth_application *a){check(a==&app,86);++retained;return -1;}
+int bluetooth_application_poll(struct bluetooth_application *a){check(a==&app&&on_owner,85);++polled;return 0;}
+int bluetooth_application_retain(struct bluetooth_application *a){check(a==&app&&on_owner,86);++retained;return -1;}
 
 /* Modeled segment producer: two slots, 3,000-byte CVSD segments whose bytes
  * encode their ticket, and the request word. An activation starts only on a
@@ -83,6 +112,12 @@ int bluetooth_application_retain(struct bluetooth_application *a){check(a==&app,
 enum { SEGMENT_BYTES=3000 };
 static uint64_t head,tail;
 static unsigned failed_app,refuse_take,refuse_request,word,notified,publish_in_take;
+int bluetooth_application_stop(struct bluetooth_application *a,uint64_t deadline)
+{check(a==&app&&on_owner&&deadline==return_deadline,151);++stop_calls;return failed_app?-1:stop_reply;}
+int bluetooth_application_module_release(struct bluetooth_application *a)
+{check(a==&app&&on_owner,152);++release_calls;return module_release;}
+void bluetooth_application_module_down(struct bluetooth_application *a,int proved)
+{check(a==&app&&on_owner&&(proved==0||proved==1),153);++down_calls;module_down=proved;}
 static uint8_t slot[BLUETOOTH_SEGMENT_SLOTS][SEGMENT_BYTES];
 static struct bluetooth_segment_snapshot snapshots[BLUETOOTH_SEGMENT_SLOTS];
 static uint8_t value(uint64_t ticket,unsigned i){return (uint8_t)(ticket*17+i*3);}
@@ -109,7 +144,7 @@ static void activation(unsigned segment)
 int bluetooth_headset_segment_status(struct bluetooth_application *a,struct bluetooth_segment_status *out)
 {
     if(a!=&app||failed_app)return -1;
-    *out=(struct bluetooth_segment_status){head,tail,segment_flags,0};return 1;
+    *out=(struct bluetooth_segment_status){head,tail,segment_flags,segment_disconnected};return 1;
 }
 int bluetooth_headset_segment_request(struct bluetooth_application *a,unsigned request,uint64_t observed)
 {
@@ -136,7 +171,8 @@ int bluetooth_headset_segment_bind(struct bluetooth_application *a,void *consume
 {check(a==&app&&consumer==headset.client,82);++bound;return 1;}
 /* A new generation wakes the client. */
 BaseType_t xTaskGenericNotify(TaskHandle_t task,UBaseType_t index,uint32_t v,eNotifyAction action,uint32_t *previous)
-{(void)v;check(task&&task==headset.client&&!index&&action==eIncrement&&!previous,88);++notified;return pdPASS;}
+{(void)v;check(task&&(task==headset.client||task==headset.owner)&&!index&&action==eIncrement&&!previous,88);
+ if(task==headset.client)++notified;else ++owner_notified;return pdPASS;}
 uint32_t ulTaskGenericNotifyTake(UBaseType_t index,BaseType_t clear,TickType_t ticks){(void)index;(void)clear;(void)ticks;return 0;}
 
 static void steps(unsigned n){for(unsigned i=0;i<n;++i)check(step()==0,83);}
@@ -146,7 +182,7 @@ static int16_t at(const uint8_t *p){return (int16_t)(p[0]|p[1]<<8);}
 static void converted(unsigned g,uint64_t ticket)
 {
     const uint8_t *wav;size_t bytes;
-    check(os_headset_capture(g,&wav,&bytes)==1&&wav==headset.wav&&bytes==44+2*SEGMENT_BYTES,30);
+    check(os_headset_capture(g,&wav,&bytes)==1&&wav==memory->wav&&bytes==44+2*SEGMENT_BYTES,30);
     check(!memcmp(wav,"RIFF",4)&&!memcmp(wav+8,"WAVEfmt ",8)&&get32(wav+24)==16000&&get32(wav+40)==2*SEGMENT_BYTES,31);
     for(unsigned k=0;k+2<SEGMENT_BYTES;k+=2){
         uint8_t a[2]={value(ticket,k),value(ticket,k+1)},b[2]={value(ticket,k+2),value(ticket,k+3)};
@@ -161,7 +197,7 @@ static void nominal_session(void)
     b->sid_authority=21;memset(b->sid_evidence,0x54,32);b->topology=1;
     b->pmic_owner=11;b->usb0_owner=12;b->typec_owner=13;b->usb2_owner=14;session.thermal_owner=15;
     for(unsigned i=0;i<3;++i)b->fabric_hz[i]=200000000;
-    profile.bytes=sizeof(profile);profile.version=3;profile.headset.mode=2;profile.sid_authority=21;profile.topology=1;
+    profile.bytes=832;profile.version=3;profile.headset.mode=2;profile.sid_authority=21;profile.topology=1;
     profile.radio.owner=31;profile.uart.owner=32;profile.pm_latch=(struct a733_pin_latch_handoff){41,42,0x3f,0};
     memcpy(profile.radio.fabric_hz,b->fabric_hz,sizeof(b->fabric_hz));
     board.session=*b;attributes=0xff;
@@ -206,6 +242,8 @@ static void pins_cases(void)
     nominal_session();profile.headset.mode=3;board_pins(&clear);check(os_headset_pins(&clear)==1,16);
     REFUSED(profile.headset.mode=5,16);
     REFUSED(profile.version=2,17);
+    nominal_session();profile.version=4;profile.bytes=sizeof(profile);board_pins(&clear);
+    check(os_headset_pins(&clear)==1&&clear.authorized[A733_PIN_M]==0x1f,154);
     REFUSED(profile.sid_authority=22,18);
     REFUSED(session.board.sid_evidence[0]=0x55,19);
     REFUSED(profile.radio.owner=session.board.usb2_owner,20);
@@ -226,6 +264,7 @@ static void pins_cases(void)
     nominal_session();session.granted&=~OS_GRANT_HEADSET;board_pins(&clear);
     struct a733_pin_handoff before=clear;
     check(os_headset_pins(&clear)==1&&!memcmp(&clear,&before,sizeof(clear)),37);
+    check(os_headset_memory()==1&&!taken&&!memory,39);
     check(os_headset_start()==1&&!created&&!initialized&&!headset.client,38);
 }
 static void start_case(void)
@@ -248,6 +287,7 @@ static void start_case(void)
     }
     check(start_us==7000000&&end_us==board.session.deadline_us,41);
     check(codec_ready==1,44);
+    check(quiesce_registered==1,131);
     check(!os_headset_start()&&initialized==1,42);
 }
 /* One owner iteration polls a live application, retains it once the board
@@ -255,7 +295,7 @@ static void start_case(void)
  * failed. With the radio the board's radio owner runs it after its own poll. */
 static void owner_case(void)
 {
-#define SERVE() (radio_granted?os_module_poll():serve())
+#define SERVE() do{on_owner=1;if(radio_granted)os_module_poll();else serve();on_owner=0;}while(0)
     atomic_store(&providers.shared.pmic_ready,1);
     SERVE();check(polled==1&&!retained,100);
     atomic_store(&app.failed,1);SERVE();check(polled==2,101);
@@ -275,11 +315,81 @@ void os_check_run(unsigned selected)
     mode=selected&0xff;radio_granted=selected>>8&1;
     model_lifetime=selected>>9&1?A733_LIFETIME_RESIDENT:A733_LIFETIME_SUPERVISED;
     const uint8_t *wav;size_t bytes;
-    if(mode==0){pins_cases();start_case();os_check_result=1;return;}
+    if(mode==0){
+        pins_cases();
+        /* The headset has no memory before admission takes it, and starts nothing without it. */
+        nominal_session();check(!os_headset_start()&&!created&&!initialized,45);
+        check(os_headset_memory()==1&&taken==1&&given==1&&(uint8_t *)memory==extent&&os_headset_memory()==1&&taken==1,46);
+        start_case();os_check_result=1;return;
+    }
+    /* Admission took the headset's memory (os_large_prepare). */
+    session.granted=OS_GRANT_HEADSET;check(os_headset_memory()==1&&memory,47);session.granted=0;
     if(mode==7){owner_case();os_check_result=1;return;}
     /* The started client's handle; os_headset_start runs in mode 0. */
-    headset.client=(TaskHandle_t)&headset.client_task;
+    headset.client=(TaskHandle_t)&memory->client_task;
+    headset.owner=radio_granted?(TaskHandle_t)&radio:(TaskHandle_t)&memory->owner_task;
     board.session.workload=mode==10?0:4;
+    if(mode==11||mode==14){
+        /* Only the original owner advances cleanup. The supervisor wakes
+         * both tasks, while pending protocol/device work keeps the descriptor
+         * pending during either a normal or a failed return. */
+        session.granted=OS_GRANT_HEADSET|(radio_granted?OS_GRANT_RADIO:0);
+        model_failing=mode==11;board_up=!model_failing;atomic_store(&headset_quiesce.requested,1);
+        check(os_headset_quiesce_pending(),132);
+        atomic_store(&headset.requested,1);
+        for(unsigned i=0;i<10;++i){
+            check(headset_quiesce_step(&headset_quiesce)==OS_QUIESCE_PENDING,133);
+            check(stop_calls==i&&deadline_calls==i&&!stopped&&!polled&&!retained,155);
+            check(step()==0&&!word&&!board_failed&&owner_notified==i+1&&notified==i+1,134);
+            SERVE();check(stop_calls==i+1&&os_headset_quiesce_pending(),156);
+        }
+        check(quiesce_notes==0&&os_headset_capture(1,&wav,&bytes)==-1,135);
+        stop_reply=1;SERVE();
+        check(headset_quiesce_step(&headset_quiesce)==OS_QUIESCE_DONE&&!os_headset_quiesce_pending(),136);
+        check(!quiesce_notes&&!board_failed&&stop_calls==11&&deadline_calls==11,137);
+        for(unsigned i=0;i<10;++i){SERVE();check(headset_quiesce_step(&headset_quiesce)==OS_QUIESCE_DONE,157);}
+        check(stop_calls==11&&deadline_calls==11&&!polled&&!retained&&owner_notified==10&&notified==10,138);
+        check(progress[OS_SERVICE_BLUETOOTH]==(model_lifetime==A733_LIFETIME_RESIDENT?11u:0u),158);
+        os_check_result=1;return;
+    }
+    if(mode==12){
+        /* A failure before the ordered callback still preserves admission. */
+        model_failing=1;fail();
+        check(os_quiesce_result(&headset_quiesce)==OS_QUIESCE_FAULT&&quiesce_notes==1&&!board_failed,139);
+        os_quiesce_complete(&headset_quiesce);SERVE();
+        check(headset_quiesce_step(&headset_quiesce)==OS_QUIESCE_FAULT&&!stop_calls&&!deadline_calls,159);
+        os_check_result=1;return;
+    }
+    if(mode==13||mode==17){
+        model_failing=mode==13;atomic_store(&headset_quiesce.requested,1);failed_app=1;app.stop_fault=3;
+        check(headset_quiesce_step(&headset_quiesce)==OS_QUIESCE_PENDING&&!stop_calls&&!deadline_calls,140);
+        SERVE();check(os_quiesce_result(&headset_quiesce)==OS_QUIESCE_FAULT&&headset_quiesce.value==(0x110u|3u<<12)&&
+            quiesce_notes==1&&!board_failed&&stop_calls==1&&deadline_calls==1,160);
+        os_quiesce_complete(&headset_quiesce);SERVE();
+        check(headset_quiesce_step(&headset_quiesce)==OS_QUIESCE_FAULT&&stop_calls==1&&quiesce_notes==1,161);
+        os_check_result=1;return;
+    }
+    if(mode==15){
+        /* Radio forwards its independent peer-reset proof, including a
+         * negative outcome. Neither direction infers Bluetooth retirement. */
+        session.granted=OS_GRANT_HEADSET|OS_GRANT_RADIO;on_owner=1;
+        check(os_headset_module_release_ready()==0&&release_calls==1,162);
+        module_release=1;check(os_headset_module_release_ready()==1&&release_calls==2,163);
+        os_headset_module_down(0);check(module_down==0&&down_calls==1,164);
+        os_headset_module_down(1);check(module_down==1&&down_calls==2&&os_quiesce_result(&headset_quiesce)==OS_QUIESCE_PENDING,165);
+        module_release=-1;check(os_headset_module_release_ready()==-1&&release_calls==3,166);
+        model_failing=1;os_quiesce_fault(&headset_quiesce,1,2,NULL);
+        check(os_headset_module_release_ready()==-1&&release_calls==3,167);
+        session.granted=0;check(os_headset_module_release_ready()==1&&release_calls==3,168);
+        os_headset_module_down(1);check(down_calls==2,169);on_owner=0;
+        os_check_result=1;return;
+    }
+    if(mode==16){
+        model_failing=1;atomic_store(&headset_quiesce.requested,1);headset.owner=NULL;
+        check(headset_quiesce_step(&headset_quiesce)==OS_QUIESCE_FAULT&&headset_quiesce.value==0x100u&&
+            !stop_calls&&!deadline_calls&&!board_failed,170);
+        os_check_result=1;return;
+    }
     if(mode==8){
         /* The supervised capture window ends capture without a fault; any other
          * stop reason leaves later generations without a capture. */

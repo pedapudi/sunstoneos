@@ -91,7 +91,7 @@ static void runtime_fatal(void *unused){fatal(unused);}
 unsigned a733_npu_application_health(void)
 {
     if(!app.used)return 0;
-    if(atomic_load_explicit(&app.runtime.failed,memory_order_acquire) ||
+    if(atomic_load_explicit(&app.runtime.service.signals->runtime_failed,memory_order_acquire) ||
        atomic_load_explicit(&app.clock.failed,memory_order_acquire) ||
        atomic_load_explicit(&app.registry.failed,memory_order_acquire) ||
        atomic_load_explicit(&app.locks.retained,memory_order_acquire))

@@ -168,6 +168,12 @@ struct npu_service_cancel_diagnostic {
     int (*check)(void *,unsigned), (*irq)(void *);
     void *cookie;
 };
+/* The words that an owner's stop and retirement checks read: the interrupt's pending events and its stop, the worker's park
+ * after the final CLOSE, and the runtime's failure (npu_runtime, which shares the words of its service). They are apart from
+ * the rest of the service so that an owner can place them in memory its readers reach: the OS keeps them in its image, where
+ * the application's task reads them at EL0, and the service and runtime in EL1-only memory (apps/os/npu.c). An owner sets
+ * npu_service.signals before npu_runtime_prepare or npu_service_init; a service given none uses its own_signals. */
+struct npu_service_signals { atomic_uint irq_pending, irq_stopped, runtime_parked, runtime_failed; };
 /* Optional diagnostic observer. The worker calls it once after attribution
  * of a trigger (event 1), on subsequent passes before IRQ progress (0), and
  * before reaping a completed command (2). It must never block or modify the
@@ -184,8 +190,10 @@ struct npu_service {
     void *cookie;
     struct npu_service_irq_ops irq_ops;
     void *irq_cookie;
-    atomic_uint irq_pending, irq_stopped, irq_completions;
-    atomic_uint runtime_parked;
+    atomic_uint irq_completions;
+    /* The words a retirement check reads (struct npu_service_signals): the owner's copy when it gave one, else own_signals. */
+    struct npu_service_signals *signals;
+    struct npu_service_signals own_signals;
     unsigned irq_bound, irq_masked, irq_rearming, irq_retained;
     unsigned irq_waiting;
     TickType_t irq_wait_start[3];

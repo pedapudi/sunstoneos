@@ -165,8 +165,10 @@ int os_large_task_privileged(void (*entry)(void *), void *context) { (void)conte
 /* The SD binding authorizes the pins its card needs (apps/os/large_sd.c); a board without one authorizes none. */
 __attribute__((weak)) int os_large_sd_pins(struct a733_pin_handoff *pins) { (void)pins; return 1; }
 int os_large_pins(struct a733_pin_handoff *pins) { return os_large_sd_pins(pins); }
+extern int os_sd_quiesce_register(void) __attribute__((weak));
 int os_large_start(void)
 {
+    if(os_sd_quiesce_register&&!os_sd_quiesce_register())return 0;
     unsigned loadable = 0;
     for (unsigned i = 0; i < os_large_count(); ++i) loadable += !(os_large_record(i)->flags & SS_LARGE_HEAP);
     if (!loadable) return 1;                                              /* a heap alone needs no card */

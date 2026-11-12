@@ -1,8 +1,11 @@
 # The radio service runs in stages and records the stage it reached
 
-Status: **the platform stages, the guard and the result record are host-tested.
-The firmware, scan and association stages, the returning lifetime and the host
-launch path are open.** No board has run any of it.
+Status: **implemented**. The platform guard, power-on, enumeration, firmware
+start, passive scan and normal shutdown have finite board qualification
+([radio status](../status/radio.md), [records](../evidence/radio.jsonl)).
+Association remains host-tested. Registered failure return covers partial
+startup and scan-only shutdown; its physical qualification awaits reviewed USB
+launch admission facts.
 
 This document is for driver developers and the board coordinator. It states how
 the shipped Wi-Fi service in the OS image behaves, from supply power-up to
@@ -19,7 +22,7 @@ association, and what it reports to the host.
 | `firmware` | The firmware is loaded and started | Firmware flags |
 | `identified` | The chip and subrevision words are read | Both words |
 | `scanned` | A scan completes | Every access point found: BSSID, SSID, channel, frequency and RSSI, one entry per BSSID (the latest sighting), the count the firmware reported and the count dropped for lack of memory |
-| `associated` | Association completes | Open work |
+| `associated` | The four-way handshake reaches authorized and secured state | Stage, link status, supplicant and RSN states, EAPOL counts, selected frequency and timing; no credential bytes |
 
 A failure keeps the stage reached and names the stage that did not complete. A
 later stage implies every earlier one.
@@ -47,12 +50,12 @@ if all of these hold:
 - CLDO1 is on at 1.8 V;
 - DCDC1 is on at selector code 23.
 
-The PG condition refuses only 3.3 V for three reasons. The manual defines no
-"unsupplied" reading: `00` and `01` are "Invalid", and the earlier condition that
-required them refused the run of 2026-11-03. The board reads `11` for PG with BLDO5
-both off and on, so the word does not track BLDO5. And a 3.3 V reading would mean a
-different supply that could fight BLDO5 once it is switched on, while the vendor
-driver enables BLDO5 unconditionally. The PG bits are recorded either way.
+The PG condition refuses 3.3 V because a different supply could conflict with
+BLDO5 when it is enabled. The manual defines `00` and `01` as invalid; neither
+proves that the pins are unpowered. Qualified observations report PG at 1.8 V
+with BLDO5 both enabled and disabled, so this detector does not identify its
+supply ([power design](radio-vendor-power-sequence.md)). The PG bits are recorded
+either way.
 
 Otherwise the platform keeps every observation, writes nothing and ends without
 retaining anything; the code `0x400 | PG bits << 4 | unmet mask` (1 PG, 2 DCDC1,
@@ -83,18 +86,22 @@ and association 8 s, four-way handshake 8 s, supplicant command 1 s. A normal ru
 Credential residue. The runner backs up image RAM before it delivers the credential, so the backups hold none. After the
 return it reads only named blocks: the return report, the output record, the radio descriptor and the record it names, and
 the device-range list; it then restores image RAM from the backup. Nothing the runner reads holds the SSID or key, and the
-record carries neither. The owner still wipes every credential-derived byte at EL1 as soon as the session is over, on every
-exit that keeps DRAM (the module down after success, and the end of a failure, deadline, refusal or board failure): the SSID
-in the target, the connect command, held records and queued events; the PMK, PTK and GTK in the supplicant and its slots (its
-only heap), the key store and the transport buffers; and the entropy reservoir. Each is zeroed with stores the compiler cannot
-remove and cleaned to DRAM. A watchdog reset loses DRAM and needs no wipe. `checks/board-radio.c` runs six exit paths with a
-test credential and scans the whole `struct board_radio` and the report arena for any 8-byte run of the SSID or PMK.
+record carries neither. During the registered return, the owner erases its independent credential copies at EL1 on every
+terminal path. Positive module shutdown also permits erasing the session's target, connect command, held records, queued
+events, supplicant keys, key store and transport buffers. An uncertain stop retains those accepted-transfer and protocol
+buffers unchanged; it cannot authorize their erasure. Each permitted erase uses stores the compiler cannot remove and
+cleans the bytes to DRAM. `checks/board-radio.c` checks credential residue after completed cleanup and separately verifies
+that a retained active transfer preserves its bytes and ownership while independent owner copies are erased.
 
-The record carries a 48-byte association tail after the access point list (head flags bit 9): the stage reached, the link
-state, the association status code, the supplicant and RSN states, the EAPOL frames received and sent (messages 1 and 3 are
-received, 2 and 4 sent), flags (unqualified entropy, SSID matched, RSN offers PSK and CCMP, target built, entropy ready,
-credential present, entropy failed), the count of matching scan results, the chosen frequency and RSSI, and connect and
-authorize times. It holds no SSID, key or credential byte, and the access point list in this stage carries no SSIDs.
+The record carries a 48-byte association tail after the access point list (head
+flags bit 9). It records the stage, link state, association status, supplicant
+and RSN states, and counts of received and sent EAPOL frames. Messages 1 and 3
+are received; messages 2 and 4 are sent. Flags identify unqualified entropy,
+SSID match, PSK and CCMP support, target construction, entropy readiness,
+credential presence and entropy failure. The tail also records the number of
+matching scan results, selected frequency and RSSI, and connection and
+authorization times. It holds no SSID, key or credential byte. The access point
+list in this stage also omits SSIDs.
 
 ## Entropy and credentials gate association only
 
@@ -104,29 +111,38 @@ credential (`ss_wifi_credential()` in `include/sunstone_wifi_credential.h`)
 gate that stage alone. A session with no credential stops after the scan and
 returns normally; its result is the record up to `scanned`.
 
-## What remains before a board run
+## Registered return and admission limits
 
-1. **Scan results.** The management layer holds one scan result at a time. The
-   session must copy each result into the report through
-   `a733_radio_report_ap()` as it arrives, then call
-   `a733_radio_report_scan_done()` with the firmware's reported count.
-2. **A radio build without entropy.** `board_radio_startup()` refuses
-   construction without CE entropy qualification, and the radio profile carries
-   the WPA2 target. A scan-only profile must construct the platform and session
-   without the entropy source, and `board_radio_poll()` must stop at `scanned`
-   when no credential was uploaded.
-3. **A returning lifetime with the radio.** Only the scanning station shuts
-   the module down on return, with a readback at each step
-   (`apps/os/radio_scan.c`). Admission refuses the radio in any other returning
-   image (`apps/os/grants.c`), so a full-station run still ends by watchdog
-   reset and power removal, as the supervised build does.
-4. **A host channel for the record.** The radio result is not part of the USB0
-   output today, and the record's length is known only when the service ends.
-   The service copies the encoded record into retained memory sized to its
-   length and publishes a small fixed descriptor (magic, address, length) at a
-   known symbol. The host reads the descriptor, then the record in transfers of
-   the channel's measured maximum, so no record is truncated.
-5. **Host preparation.** `apps/os/prepare.py` and `radio-assets.py` require the
-   entropy facts and a WPA2 target in the profile; a scan-only profile needs the
-   same admission without them, and the preparation must accept the first-run
-   guard request.
+The returning supervisor requests the radio owner before thermal and PMIC stop.
+The owner closes admission, drains the accepted SDIO transfer and advances
+partial startup or scan shutdown through the native stop sequence. It uses the
+same absolute deadline as every other owner; existing shorter operation bounds
+still apply. Shared lock waiters and pin callbacks reject access after that
+deadline. No further firmware or protocol setup begins during return.
+
+When Bluetooth shares the module, its protocol owner retains access until it
+publishes release. The module owner then asserts and verifies PM2 using explicit
+version 4 authority and reports peer stop, after which Bluetooth closes UART.
+Without that authority, Bluetooth retains FAULT. Returning headset admission
+remains excluded pending physical reset-route and accessory qualification
+([Bluetooth return](bluetooth-return.md)).
+
+A scan-only return reports DONE after DOWN readbacks, transport and PMIC
+retirement, and credential cleanup. Full-station, association and entropy-only
+sessions retain FAULT value `0x905`: their crypto-engine ownership has no complete
+retirement proof. Returning admission therefore remains limited to the scanning
+station. A registered owner fault records its diagnostic and permits independent
+cleanup to continue, but prevents per-core terminal release
+([owner audit](failure-return-audit.md)).
+
+The service copies each scan result into its allocated report and publishes the
+encoded record through a fixed descriptor containing its address and length.
+The runner reads that descriptor and then the complete variable-length record.
+The scan-only profile constructs the platform and session without CE entropy or
+a stored network credential. The preparation and runner tools support the guard
+and stage limit.
+
+Physical failure injection through scan awaits reviewed USB launch admission
+facts. Existing normal scan returns do not qualify this failure path. Association,
+full-station CE retirement, the Bluetooth reset route and physical headset
+closure remain separate qualification requirements.

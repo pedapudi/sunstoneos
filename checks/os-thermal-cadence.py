@@ -3,8 +3,9 @@
 
 The owner runs as a task of the real FreeRTOS kernel under the host shim, with the
 shim's A733 counter and the kernel's critical sections. Device reads, clock
-completion and GIC calls are modeled. The owner branch, policy, record writer, window publication and host classification
-are actual code. No device is opened and no host coverage limit is changed.
+completion and GIC calls are modeled. The owner branch, policy, record writer,
+window publication, quiesce registry and host classification are actual code.
+No return is requested, no device is opened and no host coverage limit is changed.
 """
 import argparse
 import hashlib
@@ -56,7 +57,7 @@ class Model:
 
 def build(name,source):
     out=a.output/name
-    exe=host_rtos.build(out,['checks/os-thermal-cadence.c','drivers/thermal/a733_thermal.c'],'cadence',
+    exe=host_rtos.build(out,['checks/os-thermal-cadence.c','drivers/thermal/a733_thermal.c','apps/os/quiesce.c'],'cadence',
         defines=DEFINES+['THERMAL_SOURCE="'+str(Path(source).resolve())+'"'],includes=INCLUDES,
         flags=['-Wno-error','-w','-ffunction-sections','-fdata-sections'],link=['-Wl,--gc-sections'])
     return Model(exe)
@@ -193,5 +194,6 @@ if not a.no_control:
     controls['sensor-phase-drift']='fails'
 (a.output/'result.json').write_text(json.dumps(dict(passed=True,cases=cases,negative_controls=controls,
     period_us=125000,lateness_us=2001,source_sha256=hashlib.sha256((ROOT/'apps/os/thermal.c').read_bytes()).hexdigest(),
-    limits='Modeled device/task boundaries; actual owner, policy, writer and v2 classifier.'),indent=2)+'\n')
+    quiesce_sha256=hashlib.sha256((ROOT/'apps/os/quiesce.c').read_bytes()).hexdigest(),
+    limits='Normal operation without a return claim; modeled device/task boundaries; actual owner, policy, registry, writer and v2 classifier.'),indent=2)+'\n')
 print('PASS thermal cadence:',len(cases),'cases')

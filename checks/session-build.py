@@ -161,6 +161,12 @@ def main():
     refusal(lambda: session.devices_for(declared(names['gpu']), {}, names), 'devices', 'gpu', 'service')
     refusal(lambda: session.devices_for(declared(names['usb-storage']), linked, names), 'devices', 'usb-storage', 'pins no facts')
     refusal(lambda: session.devices_for(declared(names['radio']), linked, names), 'devices', 'radio')
+    usb_linked = {session.GRANTABLE['usb-device']: (0, 0)}
+    assert session.devices_for(declared(), usb_linked, names) == (0, {})
+    assert session.devices_for(declared(names['usb-device']), usb_linked, names) == (names['usb-device'], {})
+    assert session.devices_for(declared(0, names['usb-device']), usb_linked, names) == (names['usb-device'], {})
+    refusal(lambda: session.devices_for(declared(names['usb-device']), {}, names), 'devices', 'usb-device', 'service')
+    passed.append('USB0 device service: the manifest grants it only when declared and linked')
     passed.append('devices: none declared grants none; the GPU is granted when declared and linked, optional or required; a required class without pinned facts is refused naming it, an optional one is left out')
     # With the device bits forced to 0 the GPU session no longer matches the manifest that requires the GPU.
     image, raw, _ = built['gpu']

@@ -481,6 +481,38 @@ int pvr_compute_queue_close(struct pvr_compute_queue *q)
     if (q->service->config.job_irq_ack) pvr_compute_fast_seal(q);
     return 1;
 }
+int pvr_compute_queue_quiesce(struct pvr_compute_queue *q,uint32_t *abandoned)
+{
+    if (!q || !abandoned || !atomic_load(&q->final_close) ||
+        xTaskGetCurrentTaskHandle()!=q->service->worker || atomic_load(&q->lost)) return -1;
+    if (atomic_load(&q->recovering)) return 0;
+    for (unsigned i=0;i<GPU_QUEUE_CLIENTS;++i) {
+        struct pvr_compute_queue_client_view v;
+        if (!pvr_compute_queue_client_view(q,i,&v)) continue;
+        if (q->service->config.job_irq_ack) {
+            if (atomic_load(v.client_owed)) {
+                struct gpu_queue_record record;
+                int result=pvr_compute_fast_collect(q,i,0,0,&record);
+                if (result==GPU_QUEUE_OK) ++*abandoned;
+                else if (result==GPU_QUEUE_FAULT) return -1;
+            }
+            continue;
+        }
+        /* IDLE publishes completed hardware work. The application may have
+         * received its record already; clearing its outstanding acknowledgment
+         * does not release any device backing. final_close forbids reuse. */
+        if (q->phase!=PVR_COMPUTE_QUEUE_READY || q->owed ||
+            atomic_load(v.slot_state)!=PVR_COMPUTE_QUEUE_IDLE) continue;
+        struct gpu_queue_record record;
+        (void)xQueueReceive(v.completions,&record,0);
+        *abandoned+=atomic_exchange(v.client_owed,0);
+    }
+    const int direct=q->service->config.job_irq_ack!=NULL;
+    if(direct&&!pvr_compute_fast_lock(q))return 0;
+    int idle=q->phase==PVR_COMPUTE_QUEUE_READY && !q->owed && pvr_compute_queue_clients_idle(q);
+    if(direct)pvr_compute_fast_unlock(q);
+    return idle;
+}
 int pvr_compute_queue_deadline(const struct pvr_compute_queue *q,uint64_t *out)
 {
     if (!q || !out) return 0;

@@ -21,15 +21,19 @@ spec=importlib.util.spec_from_file_location('owner_entry_check',ROOT/'checks/os-
 entry=importlib.util.module_from_spec(spec);spec.loader.exec_module(entry)
 spec=importlib.util.spec_from_file_location('owner_return_host',ROOT/'apps/os/cpu-return-host.py')
 return_host=importlib.util.module_from_spec(spec);spec.loader.exec_module(return_host)
+spec=importlib.util.spec_from_file_location('owner_return_terminal',ROOT/'checks/os-cpu-return.py')
+terminal=importlib.util.module_from_spec(spec);spec.loader.exec_module(terminal)
 prior=entry.prior
 class Model(entry.Model):
  def __init__(self,image,layout,owner_fields):
   super().__init__(image,layout);self.requests=[];self.crumb_trace=[];self.check_ready_fixture=True;self.owner=layout.address('owner','apps/os/cpu.c')
   self.uc.mem_write(self.owner,bytes(self.uc.mem_read(self.c,owner_fields['phase'])))
   self.c=self.owner;self.put32(self.owner+owner_fields['phase'],2)
+  grants=terminal.service_grants(image)
+  assert grants&terminal.GRANTS['CPU_CLOCK'], 'the application must declare CPU clock control'
+  self.put32(layout.address('granted_word','apps/os/grants.c'),0x80000000|grants)
   self.hooks={layout.address('a733_cpu_clock_burst'):lambda:0,
    layout.address('os_session_admitted'):lambda:0,
-   layout.address('os_granted'):lambda:1,   # the modeled session grants the CPU clock (admission is not under test)
    layout.address('os_cpu_return_requested'):lambda:0,
    layout.address('a733_cpu_clock_request'):self.request,
    layout.address('a733_counter_clock_now'):self.now,
@@ -66,10 +70,13 @@ class ReturnModel(Model):
   self.put32(self.c+self.cf['applied_mhz'],494);self.put32(self.c+self.cf['applied_mhz']+4,1014)
   for d in raised:self.apply(d,TOP[d])
   self.flight=flight;self.lower_voltage=False;self.script=[];self.inspections=[];self.guards=0;self.bursts=0;self.closing=1
+  self.quiesce=layout.address('clock_quiesce','apps/os/cpu.c')
+  assert self.call(0,'os_cpu_quiesce_register')==1
   self.hooks[layout.address('os_cpu_return_requested')]=lambda:self.closing
   self.hooks[layout.address('a733_cpu_clock_burst')]=self.burst
   self.hooks[layout.address('a733_cpu_clock_inspect')]=self.inspect
   self.hooks[layout.address('os_cpu_return_entry_guard')]=self.guard
+  assert self.call(0,'os_quiesce_step',(0,))==0
  def apply(self,d,point):
   mhz,pll,mux=point;self.put32(self.c+self.cf['applied_mhz']+4*d,mhz)
   self.put32(0x08871000+4096*d,pll);self.put32(0x0887101c+4096*d,mux)
@@ -90,8 +97,10 @@ class ReturnModel(Model):
   self.lower_voltage=(d,mhz)==(1,1014)
   self.put32(self.c+self.cf['changes'],self.u32(self.c+self.cf['changes'])-1)
   return PENDING
- def done(self):return self.call(0,'os_cpu_return_clock_done')
- def failed(self):return self.u32(self.layout.address('fail_recorded','os-image/main.c'))
+ def result(self):return self.u32(self.quiesce+self.layout.layouts['os_quiesce']['result'])
+ def done(self):
+  self.call(0,'os_quiesce_step',(0,));return self.result()==1
+ def failed(self):return self.result()==2
  def words(self):return tuple((self.u32(0x08871000+4096*d),self.u32(0x0887101c+4096*d)) for d in range(3))
 
 def returns(image,layout,members):
@@ -263,7 +272,7 @@ def retained_diagnostics(image,layout,members):
 
 def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('elf',type=Path);p.add_argument('--out',type=Path,required=True);a=p.parse_args();a.out.mkdir(parents=True,exist_ok=False)
- names={'a733_cpu_clock','a733_cpu_clock_grant','a733_cpu_clock_config','a733_cpu_clock_report','a733_thermal_policy','os_thermal_service','a733_thermal','board_provider','a733_native_usb','a733_counter_clock','a733_clock_leases','a733_rail_leases'}
+ names={'a733_cpu_clock','a733_cpu_clock_grant','a733_cpu_clock_config','a733_cpu_clock_report','a733_thermal_policy','os_thermal_service','a733_thermal','board_provider','a733_native_usb','a733_counter_clock','a733_clock_leases','a733_rail_leases','os_quiesce'}
  layout=Image(a.elf,names);image=prior.fault.Image(a.elf)
  with a.elf.open('rb') as f:
   dwarf=ELFFile(f).get_dwarf_info();members=None

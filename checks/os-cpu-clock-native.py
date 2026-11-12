@@ -30,7 +30,8 @@ u = next(u for u in json.loads((a.build / 'compile_commands.json').read_text())
 original = shlex.split(u['command'])
 old_root = str(ROOT) if u['file'].endswith('/os-image/return-cpu.c') else str(Path(u['file']).parents[2])
 flags = [s.replace(old_root, str(ROOT)) for s in original[:original.index('-o')]]
-units = ('checks/os-cpu-clock-native.c', 'drivers/clock/a733_cpu_clock.c', 'runtime/memory.c', 'checks/os-cpu-clock-traps.c')
+units = ('checks/os-cpu-clock-native.c', 'drivers/clock/a733_cpu_clock.c', 'runtime/memory.c',
+         'checks/os-cpu-clock-traps.c', 'apps/os/quiesce.c')
 objects = []
 for i, unit in enumerate(units):
     obj = a.output / f'{i}.o'; objects.append(obj)
@@ -225,7 +226,7 @@ steps.command('compile-owner-policy-' + hashlib.sha256((ROOT / 'drivers/thermal/
 owner_elf = a.output / 'owner.elf'
 steps.command('link-owner-' + hashlib.sha256(owner_obj.read_bytes() + policy_obj.read_bytes()).hexdigest()[:12],
               [LLD, '-Ttext=0x41000000', '--entry=os_cpu_owner_check', '--gc-sections',
-               owner_obj, policy_obj, *objects[1:3], '-o', owner_elf])
+               owner_obj, policy_obj, *objects[1:3], objects[-1], '-o', owner_elf])
 owner_image = Image(owner_elf)
 for mode, name in enumerate(('both-clusters-big-little-dsu', 'no-grant-read-only', 'retained-request-not-ready')):
     cpu = harness_machine()

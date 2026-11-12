@@ -62,7 +62,7 @@ static int provider_checkpoint_ready(void)
         !app.reserved.convolution.job && !app.reserved.convolution.pending &&
         !atomic_load(&app.reserved.convolution.failed) &&
         v->initialized && v->worker && v->requests && v->irq_bound && !v->irq_masked &&
-        !atomic_load(&v->activation_state) && !atomic_load(&v->irq_pending) &&
+        !atomic_load(&v->activation_state) && !atomic_load(&v->signals->irq_pending) &&
         !atomic_load(&v->irq_completions) && !v->irq_retained && !v->has_deferred &&
         !v->has_held && !v->job_ticket && !v->running && !v->reopening &&
         !atomic_load(&app.ready) && !atomic_load(&app.worker_admitted) &&

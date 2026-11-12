@@ -58,6 +58,8 @@ int os_usb_serial_native_configure(const struct ss_usb_serial_line *);
 int os_usb_serial_native_configured(void);
 void os_usb_serial_native_quiesced(unsigned port);
 void os_usb_serial_native_quiesce(uint8_t address);
+/* Original owner after controller DMA stops; suppresses receive refill. */
+void os_usb_serial_native_stopped(void);
 /* Drain old controller events before clearing retired slots; outstanding
  * application leases continue to block attachment index reuse. */
 #endif

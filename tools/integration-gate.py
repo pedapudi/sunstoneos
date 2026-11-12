@@ -111,14 +111,23 @@ BOARD_NEEDS = {'USB access', '--fel'}
 def load_gate_inputs(index):
     """What the checks declare for the gate (GATE_RUNS, GATE_BOARD, GATE_WAIVED; checks/check-index.py) and the images it builds."""
     gate = {name: entry.get('gate', {}) for name, entry in index.items()}
+    for name, declaration in gate.items():
+        if 'runs' in declaration and not declaration['runs']:
+            raise ValueError('%s declares no gate runs' % name)
     return {'images': gate_images.IMAGES, 'bundles': gate_images.BUNDLES, 'fixtures': gate_images.FIXTURES,
             'checks': {n: {'runs': [{'args': a} for a in g['runs']]} for n, g in gate.items() if 'runs' in g},
             'board': [n for n, g in gate.items() if 'board' in g],
             'waived': {n: g['waived'] for n, g in gate.items() if 'waived' in g}}
 
 
+def gate_entries(checks, index):
+    """Selected checks with declared runs or inputs beyond their default host mode."""
+    return [check for check in checks if check['status'] == 'pending' or
+            'runs' in index.get(check['check'], {}).get('gate', {})]
+
+
 def classify_affected(entries, index, inputs):
-    """Sort the affected checks that are not runnable into the groups the gate reports.
+    """Sort affected checks with declared runs or additional inputs into the reported groups.
 
     entries: [{'check': file name, 'needs': [...]}]. Returns a dict:
       supplied    in the registry, so the gate builds the image and runs them;
@@ -305,21 +314,25 @@ def main(argv=None):
                     selected |= any(check['check'] == 'pre-push-hook.py' for check in local['checks'])
                 indexed = [check for check in indexed if check['check'] != 'pre-push-hook.py' or selected]
                 hook_scope = {'basis': basis, 'selected': selected, 'plan': scope, 'dirty_paths': dirty_paths}
-                # The checks this change affects that the pure-host run does not cover: the full list stays informational,
-                # these must be supplied, board-bound or waived.
-                affected_pending = {c['check']: c for c in scope['checks'] if c['status'] == 'pending'}
+                # Only affected checks select declared modes in a full gate.
+                # Unaffected pure-host checks retain their default invocation.
+                affected_pending = {c['check']: c for c in gate_entries(scope['checks'], index)}
                 if dirty_paths:
-                    affected_pending.update({c['check']: c for c in local['checks'] if c['status'] == 'pending'})
+                    affected_pending.update({c['check']: c for c in gate_entries(local['checks'], index)})
                 affected_entries = list(affected_pending.values())
             else:
                 index = selector.indexer.generate()
                 affected_plan = selector.plan(args.affected, args.changed, index=index)
                 indexed = [check for check in affected_plan['checks'] if check['status'] == 'runnable']
                 pending = [check for check in affected_plan['checks'] if check['status'] == 'pending']
-                affected_entries = pending
+                affected_entries = gate_entries(affected_plan['checks'], index)
                 variants = list(dict.fromkeys([*variants, affected_plan['baseline']]))
             inputs = load_gate_inputs(index)
             classified = classify_affected(affected_entries, index, inputs)
+            # A declaration specifies the complete gate invocation, including
+            # image modes of otherwise pure-host checks. Do not run its default
+            # a second time; declarations can list both modes when needed.
+            indexed = [check for check in indexed if check['check'] not in classified['supplied']]
         except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
             parser.error('cannot select indexed checks: ' + str(error))
         for name in classified['supplied']:

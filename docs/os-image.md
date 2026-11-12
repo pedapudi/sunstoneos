@@ -211,7 +211,8 @@ A new service is therefore:
 
 ## Host messages and results
 
-The OS owns USB0 and the 64-byte frame header. Operations 5–8 preserve fault,
+When the session grants `usb-device`, the OS owns USB0 and the 64-byte frame
+header. Operations 5–8 preserve fault,
 NPU, thermal and performance reports. Operation `0x80` reads the generic
 `ss_result_record`; its 56-byte header binds epoch, generation, status and
 payload length. Application payloads are opaque to the OS.

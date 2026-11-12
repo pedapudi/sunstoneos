@@ -24,6 +24,7 @@ def main():
     model = args.output / 'usb0-service-burst'
     subprocess.run([args.compiler, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                     '-fsanitize=address,undefined', '-I' + str(ROOT / 'drivers/usb'),
+                    '-I' + str(ROOT / 'include'),
                     '-I' + str(args.tinyusb / 'src'), str(ROOT / 'checks/usb0-service-burst.c'),
                     '-o', str(model)], check=True)
     cases = {row['case']: row for row in map(json.loads, subprocess.run(

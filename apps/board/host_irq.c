@@ -23,7 +23,7 @@ void board_host_irq_schedule(uint64_t deadline,int ready)
  * priority 0xd8, which reads as A733_GIC_NS_VIEW(0xd8) at Non-secure EL1.
  * All task/ISR binding fields share the existing kernel critical section. */
 static const struct gicv3_spi source={0x03400000,187};
-static struct {unsigned bound,armed,masked,stopped,fault,draining,burst,deferred;atomic_uint pending,notifications;} irq;
+static struct {unsigned bound,armed,masked,stopped,fault,draining,burst,deferred,quiescing,retiring,retired;atomic_uint pending,notifications;} irq;
 #define USB2_IRQ_STORED_PRIORITY 0xd8u
 _Static_assert(USB2_IRQ_STORED_PRIORITY>=A733_GIC_STORED_API_FLOOR(configMAX_API_CALL_INTERRUPT_PRIORITY<<portPRIORITY_SHIFT),
     "USB2 priority must permit FreeRTOS FromISR calls");
@@ -48,7 +48,8 @@ void board_host_irq(void)
     UBaseType_t saved=taskENTER_CRITICAL_FROM_ISR();
     irq.masked=1;
     unsigned count=atomic_load_explicit(&irq.notifications,memory_order_relaxed);
-    if(!gicv3_spi_mask(&source)||!irq.bound||!irq.armed||irq.stopped||!board_live(NULL)||count==UINT32_MAX)irq.fault=1;
+    if(!gicv3_spi_mask(&source)||!irq.bound||
+       (!irq.quiescing&&(!irq.armed||irq.stopped||!board_live(NULL)))||count==UINT32_MAX)irq.fault=1;
     else atomic_store_explicit(&irq.notifications,count+1,memory_order_release);
     atomic_store_explicit(&irq.pending,1,memory_order_release);
     BaseType_t woken=pdFALSE;
@@ -131,4 +132,48 @@ void board_host_irq_stop(void)
     if(!gicv3_spi_mask(&source))irq.fault=1;
     taskEXIT_CRITICAL();
     /* No pending clear, source reset, DMA release or drain claim on failure. */
+}
+extern uint64_t a733_smp_counter(void);
+static int retire_live(uint64_t deadline)
+{return deadline&&a733_smp_counter()/24<deadline;}
+static int retire_read(uint64_t deadline,unsigned off,uint32_t *value)
+{
+    if(!retire_live(deadline))return 0;
+    *value=read32(off);return retire_live(deadline);
+}
+int board_host_irq_retire(uint64_t deadline)
+{
+    int r=0;taskENTER_CRITICAL();
+    if(irq.retired){r=1;goto done;}
+    if(!retire_live(deadline)||!irq.bound||irq.fault||(board.host.core_started&&board.host.stop_phase<2)){
+        irq.fault=1;r=-1;goto done;
+    }
+    if(!irq.stopped){
+        irq.quiescing=1;irq.stopped=1;irq.armed=0;irq.masked=1;
+        if(!retire_live(deadline)||!gicv3_spi_mask(&source)||!retire_live(deadline)){irq.fault=1;r=-1;}
+        goto done;
+    }
+    uint32_t value;
+    if(!retire_read(deadline,0,&value))goto expired;
+    if(value&(1u<<31))goto done;
+    if(!retire_read(deadline,0x114,&value))goto expired;
+    if(value&(1u<<27)){irq.fault=1;r=-1;goto done;}
+    if(!retire_read(deadline,0x314,&value))goto expired;
+    if(value&(1u<<27))goto done;
+    if(!irq.retiring){
+        /* HCHalted and disabled xHCI interrupters precede this GIC pending
+         * clear. The mask helper supplies DSB after both Device writes. */
+        if(!retire_live(deadline))goto expired;
+        *(volatile uint32_t *)(uintptr_t)0x03400294u=1u<<27;
+        if(!retire_live(deadline)||!gicv3_spi_mask(&source)||!retire_live(deadline))goto expired;
+        irq.retiring=1;r=0;goto done;
+    }
+    if(!retire_read(deadline,0x214,&value))goto expired;
+    if(value&(1u<<27)){irq.fault=1;r=-1;goto done;}
+    irq.draining=0;atomic_store_explicit(&irq.pending,0,memory_order_release);
+    irq.retired=1;r=1;goto done;
+expired:
+    irq.fault=1;r=-1;
+done:
+    taskEXIT_CRITICAL();return r;
 }

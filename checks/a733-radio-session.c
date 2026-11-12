@@ -20,6 +20,8 @@ static atomic_uint network_started,inject_fault;
 static unsigned open_authorized;
 static uint64_t clock_bias,renewed_from;
 static unsigned firmware_checkpoint,association_checkpoint,renewed,io_at_fault,contended,contention_done;
+static unsigned stop_case,stop_started,stop_commands,stop_extra,stop_transport_state;
+static uint64_t stop_deadline,stop_hash;
 extern const uint8_t session_blob0[],session_blob1[],session_blob2[],session_blob3[];
 static uint8_t receive[4096];
 static unsigned transmissions, receive_commands, credit_reads, enable_reads, pad_writes;
@@ -275,6 +277,46 @@ static void adopted_checkpoints(void)
         association_checkpoint=1;m.card[1][3]=3;
     }
 }
+static void stop_request_case(void)
+{
+    if(!stop_case||stop_started)return;
+    struct aic8800_sdio_transport *t=&session.transport;
+    int ready=stop_case==1?r.radio.stage==RSTAGE_PREPARING:
+        stop_case==2?t->state==AIC8800_TRANSPORT_SETUP&&t->pending:
+        stop_case==3?t->state==AIC8800_TRANSPORT_FIRMWARE&&session.firmware.hash_offset>=64:
+        stop_case==4?t->state==AIC8800_TRANSPORT_RUNTIME&&session.dispatcher.initialized:
+        stop_case==5?t->held:r.radio.stage==RSTAGE_READY;
+    if(!ready)return;
+    stop_started=1;stop_commands=m.command_count;
+    stop_extra=r.radio.host.state==SUNXI_SDIO_QUEUED;
+    stop_transport_state=t->state;stop_hash=session.firmware.hash_offset;
+    stop_deadline=r.power.now+(stop_case==6?100:3000000);
+    assert(a733_radio_session_stop(&session,stop_deadline));
+    assert(a733_radio_session_stop(&session,stop_deadline+1000)&&r.radio.stop_deadline==stop_deadline);
+}
+static void stop_result_case(enum a733_radio_session_result status)
+{
+    if(!stop_started)return;
+    assert(session.transport.state==(enum aic8800_transport_state)stop_transport_state);
+    assert(session.firmware.hash_offset==stop_hash&&m.command_count<=stop_commands+stop_extra);
+    if(stop_case==6){
+        if(status!=A733_SESSION_RETAINED)return;
+        assert(!r.radio.aborting&&r.radio.stop_deadline==stop_deadline);
+    }else{
+        assert(status!=A733_SESSION_RETAINED&&status!=A733_SESSION_INVALID);
+        if(status!=A733_SESSION_DOWN)return;
+        assert(m.command_count==stop_commands+stop_extra&&!r.radio.pmic_request.id);
+        assert(r.radio.host.state==SUNXI_SDIO_QUIESCED&&!session.fault);
+        assert(!a733_radio_session_scan(&session,stop_deadline));
+        assert(!a733_radio_session_authorize_open(&session,1));
+        uint64_t generation=0;assert(a733_radio_session_bootstrap(&session,&generation)==-1&&!generation);
+        assert(a733_radio_session_stop_held(&session)==-1&&!a733_radio_session_peer_stopped(&session));
+    }
+    unsigned accesses=m.accesses+r.accesses;
+    assert(a733_radio_session_poll(&session)==status&&m.accesses+r.accesses==accesses);
+    platform_puts("PASS actual session stop preserves protocol records, drains accepted SDIO only and closes admission\n");
+    platform_exit(0);
+}
 static void session_worker(void *unused)
 {
     (void)unused;uint64_t borrowed=0;
@@ -288,9 +330,12 @@ static void session_worker(void *unused)
             assert(a733_clock_retain(&r.power.clocks,&r.radio.clock)==A733_CLOCK_FAULT);
         }
         unsigned had_pins=r.radio.pin_lease.id!=0,enabled=*pmic_model_word(&r.power,0x07025040)&2;
+        stop_request_case();
         enum a733_radio_session_result status=a733_radio_session_poll(&session);
         if(!had_pins&&r.radio.pin_lease.id)r.pins_at=r.power.now;
         if(!enabled&&(*pmic_model_word(&r.power,0x07025040)&2))r.enabled_at=r.power.now;
+        stop_result_case(status);
+        if(stop_started){vTaskDelay(1);continue;}
         if(contended&&!contention_done){
             assert(status==A733_SESSION_BUSY&&session.renew_pending);
             unsigned accesses=m.accesses+r.accesses;size_t cursor=session.transport.cursor;
@@ -305,7 +350,7 @@ static void session_worker(void *unused)
             assert(session.sockets.network.owns_current&&session.sockets.network.active);
         }else assert(status!=A733_SESSION_INVALID);
         if(session.borrow.generation){if(!borrowed)borrowed=session.borrow.generation;assert(session.borrow.generation==borrowed);}
-        adopted_checkpoints();
+        if(stop_case!=3)adopted_checkpoints();
         if(status==A733_SESSION_MANAGEMENT&&!renewed_from){
             renewed_from=session.deadline;
             clock_bias+=session.deadline-r.power.now-session.config.renew_margin_us/2;
@@ -385,6 +430,13 @@ void vApplicationStackOverflowHook(TaskHandle_t task,char *name)
 void kernel_main(void)
 {
     platform_init();
+    char command[128]={0};uint64_t block[2]={(uintptr_t)command,sizeof(command)};
+    register uint64_t operation __asm__("x0")=0x15;register uint64_t *arg __asm__("x1")=block;
+    __asm__ volatile("hlt #0xf000":"+r"(operation):"r"(arg):"memory");
+    const char *names[]={"stop-start","stop-setup","stop-upload","stop-runtime","stop-held","stop-deadline"};
+    if(operation==0)for(unsigned n=0;n<6;++n)for(unsigned i=0;i+strlen(names[n])<sizeof(command);++i)
+        if(!memcmp(command+i,names[n],strlen(names[n])))stop_case=n+1;
+    if(stop_case==5)add_unrelated=1;
     session_task=xTaskCreateStatic(session_worker,"radio-session",8192,NULL,4,session_stack,&session_task_storage);assert(session_task);
     client_task=xTaskCreateStatic(client_worker,"socket-client",4096,NULL,5,client_stack,&client_task_storage);assert(client_task);
     model_setup();vTaskStartScheduler();assert(0);

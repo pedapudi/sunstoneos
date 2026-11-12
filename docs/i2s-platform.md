@@ -17,13 +17,15 @@ refuses those plans. The [capture core](i2s.md) supports
 Sensor alignment, sign, channel selection and startup requirements still need
 a microphone specification. The board has no built-in microphone.
 
-## Shared audio clocks have platform lifetime
+## Shared audio clocks remain owned until parent retirement
 
 The parent object owns a stable 24 MHz reference and AUDIO1 configuration.
 The local binding owns I2S0 and its selected header pins. Closing a capture
 releases local resources while preserving the parent object's clock leases.
-There is no parent shutdown, retune or forced-release API. Parent storage and
-its admitted tokens must remain valid for the platform lifetime.
+`a733_audio_parent_retire` releases those leases after the caller closes every
+local stream and retires its DMA worker. Parent storage and admitted tokens
+remain valid through retirement, including retained failures. There is no
+retune or forced-release API.
 
 The platform supplies an authenticated common lease service through
 `a733_audio_operations`. This service is a required integration dependency;
@@ -52,6 +54,35 @@ shared stability ownership. It must publish before admitting another consumer.
 A late or uncertain conversion retains both old and replacement token records.
 A stable token protects the shared multiplier even when another consumer uses
 DIV2. The binding preserves DIV2's divider field.
+
+An adopted parent retires without changing the PLL. A cold parent atomically
+converts its exact stable token back to exclusive AUDIO1 modification authority.
+Every other AUDIO1, DIV2, DIV5 and local audio consumer prevents that conversion;
+contention leaves the token and hardware unchanged. The parent rechecks disabled
+consumer module gates, the reference, modulation, gate policy and its owned
+profile before changing hardware. It disables output, lock detection and PLL
+enable in that order, restores the inherited LDO state, and restores N and DIV5
+while the PLL is disabled. Each write is read back. DIV2, reserved fields,
+the shared reference and gate policy remain unchanged. Only then does it release
+the exclusive token and its reference token.
+
+This order follows `ccu_pll_gate_helper_disable` in the pinned `ccu_gate.c`;
+`ccu_nm_disable` selects that helper under `CONFIG_AW_STANDARD_CCU`. The native
+cold start changes those separate control fields. Shutdown preserves an
+inherited enabled LDO instead of clearing it. A healthy partial cold start uses
+the same shutdown path and its saved original word; a failed or uncertain
+transaction retains its tokens and performs no further I/O. A parent whose
+startup has not written hardware releases only its admitted tokens.
+
+The OS audio owner first returns any borrowed DMA period, cancels capture,
+waits for DMA drain, reaps the result and closes the local stream. The DMA worker
+then closes request admission and masks INTID 143 before publishing retirement.
+The original pool task verifies the idle controller without changing its
+clocks or reset. Its permanent DEVICE allocation and DMA platform token remain
+reserved through FEL. The audio task regains parent access only after the DMA
+worker's retirement publication. All waits use the supervisor's absolute return
+deadline; register-lock acquisition attempts yield between scheduler-tick
+slices so an existing startup wait can observe that deadline.
 
 ## The clock chain produces 24.576 MHz without inherited rate assumptions
 
