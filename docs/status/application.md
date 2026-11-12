@@ -4,7 +4,21 @@
 
 SunstoneOS supplies the FreeRTOS application kit, an OS-only image, the hello-compute control and optional service profiles. Applications own their algorithms and assets in external repositories.
 
-The returning CPU image ends an application failure, a synchronous exception from an application task at EL0, a panic on a core that can schedule, an unexpected interrupt and a failure before the scheduler starts at the boot ROM with the first-failure record, instead of at a watchdog reset. Device failures, exceptions at EL1 or EL3, SError and an unfinished return still end at the watchdog. An NPU image that fails before its service ran publishes a never-started stop report, so the runner restores DRAM. [The failure-return design](../designs/failure-return.md) lists every failure path and its ending. `checks/os-failure-return.py` executes the linked image in each context on the host, `checks/qemu-os-boot.py` takes a real EL0 data abort on the virtual board, and `checks/board-return-preservation.py` covers the runner outcome. One forced application failure on the board returned through this path without a watchdog reset; the evidence table below records it.
+The returning OS image uses one registered stop protocol for every granted
+owner. Its supervisor orders application queues, device owners, CPU clock
+lowering, thermal stop, PMIC stop and per-core terminals within three seconds.
+Device faults during the window retain their resources and record the owner and
+code while other cleanup continues. Terminals run only after every owner proves
+retirement. [The owner audit](../designs/failure-return-audit.md) lists the
+implemented paths and the USB, audio/headset, DMA and storage limitations.
+
+The registry has host evidence; physical qualification needs port recovery
+([return evidence](../evidence/failure-return.jsonl)). Earlier
+application failures and EL0 exceptions returned without watchdog reset, as the
+evidence table records. An NPU failure before its service starts publishes a
+never-started report. EL1/EL3 exceptions, SError, unsafe ownership and unfinished
+returns retain their watchdog ending. The
+[return design](../designs/failure-return.md) defines these boundaries.
 
 **Board-qualified scope:** One eight-worker CPU-only mimus recording matches its
 90-frame reference, retires seven secondary cores and restores RAM, boot clocks
@@ -18,7 +32,7 @@ repeatability. [CPU status](cpu.md) identifies the result and failed controls.
 | --- | --- | --- | --- |
 | Application kit, manifest and session ([design](../designs/app-abi.md)) | implemented | 552-byte manifest, 4,096-byte session page | `app-abi-host-layout-checks` in [app-abi.jsonl](../evidence/app-abi.jsonl) |
 | OS-only, hello-compute and external-mimus builds | host-tested | 12 OS variants, 84 indexed checks passed | `application-host-gate-selection` in [application.jsonl](../evidence/application.jsonl) |
-| Failure return to the boot ROM ([design](../designs/failure-return.md)) | qualified on the board | two forced failures returned without a watchdog reset (run totals 170.8 s and 171.2 s) | the two entry records below |
+| Failure return to the boot ROM ([design](../designs/failure-return.md)) | registered protocol host-tested; earlier application paths board-qualified | 12 registered owner identities; the two earlier forced failures returned without a watchdog reset | [owner audit](../designs/failure-return-audit.md) and the two entry records below |
 | Eight-worker CPU-only mimus recording | qualified on the board | 90-frame reference matched, seven secondaries off | [CPU status](cpu.md) |
 | GPU compute queue and trusted GPU peer | host-tested | none on the board | [GPU status](gpu.md) |
 | Typed session for an image that grants a device (`tools/session.py`) | host-tested | the GPU mimus image and the GPU lifecycle image are admitted with device bit `0x10`; the NPU and control images grant no device | `checks/session-build.py`; [runner document](../board-runner.md) |
@@ -27,6 +41,11 @@ repeatability. [CPU status](cpu.md) identifies the result and failed controls.
 | Warm PCM-to-transcription time | open | target 0.05 times the audio duration | `application-recognition-time-target` (not run) |
 
 ## Open work
+
+The registered return protocol needs physical failure-injection runs. Clean USB
+host and audio/headset retirement also need complete native shutdown contracts.
+An application suspended during filesystem writes needs a consistency protocol
+before the storage owner can certify retirement.
 
 1. Run an NPU image that fails before its NPU service starts, to confirm on the board that the never-started stop report keeps the port usable.
 2. Run the checks that need external inputs (H.264 capture, SAE); the full gate lists nine remaining checks.
