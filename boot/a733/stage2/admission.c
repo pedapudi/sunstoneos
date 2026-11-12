@@ -16,7 +16,9 @@ int a733_stage2_time_valid(void);
 int a733_stage2_remote_writers_excluded(void);
 uint32_t a733_stage2_remote_writers_mask(void);
 int a733_stage2_cpu_cache_owned(void);
-int a733_stage2_reset_policy(void);
+int a733_stage2_reset_policy(int consumed);
+int a733_stage2_watchdog_state(int consumed);
+int a733_stage2_gate_entry(uint32_t *record);
 int a733_stage2_entry_state(void);
 
 /* Cold SD admission. boot0 has just read the monitor package through SDC0,
@@ -226,15 +228,64 @@ uint32_t a733_stage2_remote_writers_mask(void)
 {
     return remote_sampled ? remote_mask : A733_REMOTE_WRITERS_ALL;
 }
+/* WDT0 and RTC GP2 as the card first stage leaves them. */
+#define WDT0_MODE UINT32_C(0x02050014)
+#define WDT0_CONFIG UINT32_C(0x02050010)
+#define WDT0_OUTPUT UINT32_C(0x02050018)
+#define WDT0_RESTART UINT32_C(0x0205000c)
+#define WDT0_RESTART_KEY UINT32_C(0x14af)
+#define RTC_GP2 UINT32_C(0x07090108)
+#define GATE_MODE UINT32_C(0xb1)
+#define GATE_STAGE UINT32_C(0x0c02)
+#define GATE_COLD UINT32_C(0x8000)
+#define GATE_REFUSED_BITS UINT32_C(0x6f00) /* WARM, UNMARKED and the refused step. */
+static int redirects_clear(void)
+{
+    return !rd(0x070501c0) && !rd(0x070501c4) && !rd(0x070501d4);
+}
+/* The card first stage's cold state: GP2 holds its record, with COLD set, WARM
+ * and UNMARKED clear and no refused step (ONCE and the low byte are free), and
+ * WDT0 holds the 16 s mode with configuration 1 and output 2. */
+static int gate_cold_state(uint32_t record)
+{
+    return (record >> 16) == GATE_STAGE && (record & GATE_COLD) && !(record & GATE_REFUSED_BITS) &&
+        (rd(WDT0_MODE) & 0xffff) == GATE_MODE && (rd(WDT0_CONFIG) & 0xffff) == 1 &&
+        (rd(WDT0_OUTPUT) & 0xffff) == 2;
+}
+/* First call of the stage-2 monitor. In the gate's cold state it restarts WDT0
+ * at once, then clears GP2 and requires the clear to read back. Returns 0 for
+ * any other state, with no write (the later reset policy decides), 1 once the
+ * gate state is consumed and 2 when the clear did not read back. */
+int a733_stage2_gate_entry(uint32_t *record)
+{
+    uint32_t value = rd(RTC_GP2);
+    if (!gate_cold_state(value)) return 0;
+    wr(WDT0_RESTART, WDT0_RESTART_KEY);
+    wr(RTC_GP2, 0);
+    if (rd(RTC_GP2)) return 2;
+    *record = value;
+    return 1;
+}
+/* Without a consumed gate state: no watchdog owner, as after a normal card boot
+ * (WDT0 disarmed). With one (`consumed`): the gate's WDT0, mode 0xb1 with
+ * configuration 1 and output 2, which the entry restarted. Either way no ROM
+ * redirect is set and GP2 is zero. */
+int a733_stage2_watchdog_state(int consumed)
+{
+    if (!redirects_clear() || rd(RTC_GP2)) return 0;
+    if (!consumed) return !(rd(WDT0_MODE) & 1) && !(rd(WDT0_CONFIG) & 0x100);
+    return (rd(WDT0_MODE) & 0xffff) == GATE_MODE && (rd(WDT0_CONFIG) & 0xffff) == 1 &&
+        (rd(WDT0_OUTPUT) & 0xffff) == 2;
+}
 /* The fixed resident contract selects ordinary card boot after system reset:
- * no FEL flag or CPU redirect and no prior watchdog owner. The loader repeats
+ * no FEL flag or CPU redirect and either no watchdog owner or the card first
+ * stage's own 16 s watchdog, consumed at entry (`consumed`). The loader repeats
  * these reads immediately before keyed arming. This admits a reset policy;
  * it does not establish physical watchdog expiry or successful reboot. The
  * BOOT input may select storage normally or FEL if the user holds it low. */
-int a733_stage2_reset_policy(void)
+int a733_stage2_reset_policy(int consumed)
 {
-    return !(rd(0x02050014) & 1) && !(rd(0x02050010) & 0x100) &&
-        !rd(0x070501c0) && !rd(0x070501c4) && !rd(0x070501d4) && !rd(0x07090108);
+    return a733_stage2_watchdog_state(consumed);
 }
 /* Local entry conditions only. The cold entry already checked these before
  * any memory write; check them again at the branch boundary. The OS supplies

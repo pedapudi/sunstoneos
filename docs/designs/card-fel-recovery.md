@@ -328,8 +328,17 @@ lie outside every partition.
   - bit 15: a cold path has run in this power epoch;
   - bit 14: the latest entry selected FEL;
   - bit 13: the cold path's marker did not read back;
+  - bit 12: the cold path ran because GP2 held the boot-once value;
   - bits 11:8: the refused watchdog step;
   - bits 7:0: the WDT0 mode read at entry.
+
+  The stage-2 monitor consumes a cold record (COLD set; WARM, UNMARKED and the
+  refused step clear) while WDT0 reads mode `0xb1` with configuration 1 and
+  output 2: it restarts WDT0, clears GP2 with a read-back, restarts WDT0 after
+  every card read, and keeps the record in its report word `reserved1[22]`
+  (offset 368 of the report at `0x47008200`;
+  [monitor notes](../../boot/a733/stage2/README.md)). It then switches WDT0 to
+  the four-second mode when it arms the loaded image.
 - **Runner marker and reads.** At every new FEL instance, before the
   session's first watchdog reset, `tools/board.py` reads `0x07090108`,
   `0x070901f0`, `0x07090160` and the WDT0 configuration and output words, and
