@@ -145,8 +145,13 @@ def main():
         'freeze-after-mark': ('adapter',
             [('if (cpu->preempt || (!mandatory && ss_control_checkpoint(&ssKernelControl, c))) {',
               'if (cpu->preempt || ss_control_checkpoint(&ssKernelControl, c)) {')],
-            failure('checks/scheduler-partitioned-qemu.c', line(fixture,
-                '        configASSERT(mandatory && ss_kernel_test_freeze_unacked(cpu));'))),
+            # Two detections of one defect: the selection hook sees the early acknowledgement, or the yield
+            # returns without a selection and the suspending task finds itself not running. Which comes first
+            # depends on the image layout's interleaving.
+            (failure('checks/scheduler-partitioned-qemu.c', line(fixture,
+                '        configASSERT(mandatory && ss_kernel_test_freeze_unacked(cpu));')),
+             failure('freertos.c', line(adapter,
+                '        configASSERT(atomic_load_explicit(&s->execution, memory_order_acquire) == SS_K_RUNNING);')))),
         'freeze-after-remote': ('adapter',
             [('if (cpu->preempt || (!mandatory && ss_control_checkpoint(&ssKernelControl, c))) {',
               'if (!direct && (cpu->preempt || ss_control_checkpoint(&ssKernelControl, c))) {')],
@@ -278,8 +283,10 @@ def main():
         (directory / 'link.log').write_text(linked.stdout + linked.stderr)
         assert linked.returncode == 0, (name, 'link.log')
         status, log = execute(elf, directory)
-        assert status and expected in log, (name, expected, directory / 'qemu.log')
-        print(f'PASS linked old-behavior negative: {name} ({expected})', flush=True)
+        expected = (expected,) if isinstance(expected, str) else expected
+        seen = [site for site in expected if site in log]
+        assert status and seen, (name, expected, directory / 'qemu.log')
+        print(f'PASS linked old-behavior negative: {name} ({seen[0]})', flush=True)
 
 
 if __name__ == '__main__':
