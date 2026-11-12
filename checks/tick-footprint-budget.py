@@ -126,7 +126,8 @@ def main():
                 if limit is None or value > limit:
                     over.append({'segment': kind, 'structure': key, 'lines': value, 'budget': limit})
         result['over_budget'] = over
-        result['under_budget'] = [{'segment': kind, 'structure': key, 'lines': rows.get(key, 0), 'budget': limit}
+        result['under_budget'] = [{'segment': kind, 'structure': key,
+                                   'lines': measured.get(kind, {}).get(key, 0), 'budget': limit}
                                   for kind, limits in budget.items() for key, limit in limits.items()
                                   if measured.get(kind, {}).get(key, 0) < limit]
         result['passed'] = not over

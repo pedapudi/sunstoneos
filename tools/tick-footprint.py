@@ -171,6 +171,14 @@ def symbol(elf, name):
         return found[0]['st_value'] if found else None
 
 
+def function_starts(elf):
+    """Sorted start addresses of the ELF's function symbols."""
+    with open(elf, 'rb') as f:
+        table = ELFFile(f).get_section_by_name('.symtab')
+        return sorted({sym['st_value'] for sym in table.iter_symbols()
+                       if sym['st_info']['type'] == 'STT_FUNC' and sym['st_size']})
+
+
 def symbolize(elf, pcs):
     if not pcs:
         return {}
@@ -259,6 +267,13 @@ def analyze(elf, trace, marks, complete=True):
     pcs = sorted({r[1] for w in full for r in w if r[0] != 'M'})
     where = symbolize(elf, pcs)
     stacks = symbol(elf, '__exception_stacks')
+    functions = function_starts(elf)
+
+    def relative_line(pc):
+        # Lines counted from the function's start, so that a change that only
+        # moves a function does not change its count.
+        start = functions[max(bisect.bisect_right(functions, pc) - 1, 0)]
+        return start, (pc - start) // LINE
 
     def code_class(pc):
         loc = where.get(pc, ('?', '?'))[1]
@@ -277,6 +292,7 @@ def analyze(elf, trace, marks, complete=True):
     for w in full:
         labels, _, _ = segment(w, marks)
         segs = collections.defaultdict(lambda: {'data': collections.OrderedDict(), 'code': {},
+                                                'code_relative': {},
                                                 'insns': collections.Counter(),
                                                 'first_data': collections.Counter(),
                                                 'first_code': collections.Counter()})
@@ -288,6 +304,8 @@ def analyze(elf, trace, marks, complete=True):
                 s['insns'][cls] += 1
                 line = rec[1] // LINE * LINE
                 s['code'][line] = min(s['code'].get(line, cls), cls, key=RANK.index)
+                rel = relative_line(rec[1])
+                s['code_relative'][rel] = min(s['code_relative'].get(rel, cls), cls, key=RANK.index)
                 if cls != 'diagnostic' and line not in seen_code:
                     seen_code.add(line)
                     s['first_code'][cls] += 1
@@ -322,6 +340,10 @@ def group(entry):
 def segment_kinds(segs):
     """Data lines per (segment kind, class, structure) and code lines per (kind, class).
 
+    Code lines are counted from each function's start (see relative_line), so
+    the count changes only when the executed code changes; physical placement
+    on the board can add up to one line per function.
+
     Kinds: local (release 0, CPU0's own probe), remote (largest of releases 1-7),
     scan (largest deadline scan) and outside."""
     counts = collections.defaultdict(int)
@@ -331,7 +353,7 @@ def segment_kinds(segs):
         for e in s['data'].values():
             if e['class'] != 'diagnostic':
                 local[f"data {e['class']} {group(e)}"] += 1
-        for cls in s['code'].values():
+        for cls in s['code_relative'].values():
             if cls != 'diagnostic':
                 local[f'code {cls}'] += 1
         for key, value in local.items():

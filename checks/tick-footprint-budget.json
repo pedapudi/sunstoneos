@@ -1,7 +1,7 @@
 {
  "local": {
-  "code fixture": 8,
-  "code os": 76,
+  "code fixture": 4,
+  "code os": 71,
   "data fixture load_task": 1,
   "data fixture task control block": 1,
   "data fixture wake": 2,
@@ -17,8 +17,8 @@
   "data total": 34
  },
  "outside": {
-  "code fixture": 5,
-  "code os": 54,
+  "code fixture": 4,
+  "code os": 56,
   "data fixture phase": 1,
   "data fixture wake": 24,
   "data os ssKernelCPUs": 4,
@@ -32,8 +32,8 @@
   "data total": 42
  },
  "remote": {
-  "code fixture": 8,
-  "code os": 62,
+  "code fixture": 6,
+  "code os": 56,
   "data fixture load_task": 1,
   "data fixture phase": 1,
   "data fixture wake": 2,

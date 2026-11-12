@@ -269,6 +269,15 @@ system, exception stack, latency fixture or diagnostic. When the busy traffic
 evicts the working set between ticks, the first-touch count of a segment
 estimates its refills, which the board's event counts then test.
 
+`checks/tick-footprint-budget.py` holds these counts to
+`checks/tick-footprint-budget.json`. For CPU0's own release, the largest remote
+release, the largest deadline scan and the work outside them, it takes the
+largest line count of each structure over 80 busy ticks and fails if any count
+exceeds its budget. Data lines are physical 64-byte lines. Code lines are
+counted from the start of each function, so a change that only moves a function
+leaves its count alone; the board's placement can add up to one line per
+function.
+
 ## The control phase retains enough samples for the requested percentile
 
 `SUNSTONE_LATENCY_CONTROL` adds a control phase to the latency application.
