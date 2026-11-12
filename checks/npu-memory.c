@@ -373,9 +373,10 @@ int main(void)
     prepare(); input[0].cpu = UINTPTR_MAX - 4095; refused_init(arena, sizeof(arena), TABLE_PA);
     prepare(); input[3].role = A733_NPU_BUFFER_READ; refused_init(arena, sizeof(arena), TABLE_PA);
     prepare(); input[1].role = A733_NPU_BUFFER_BOOTSTRAP; refused_init(arena, sizeof(arena), TABLE_PA);
-    prepare(); input[1].bytes = 4096; refused_init(arena, sizeof(arena), TABLE_PA);
+    /* A command may be one page (A733_NPU_MIN_COMMAND_BYTES); one that is not whole pages is refused. */
+    prepare(); input[1].bytes = 4096 + 2048; refused_init(arena, sizeof(arena), TABLE_PA);
     prepare(); input[0].role = (enum a733_npu_buffer_role)-1; refused_init(arena, sizeof(arena), TABLE_PA);
-    prepare(); input[0].role = (enum a733_npu_buffer_role)(A733_NPU_BUFFER_CONSTANT + 1);
+    prepare(); input[0].role = (enum a733_npu_buffer_role)(A733_NPU_BUFFER_SCRATCH + 1);
     refused_init(arena, sizeof(arena), TABLE_PA);
     /* CONSTANT is not a command role: it cannot stand in for a bootstrap. */
     prepare(); input[3].role = A733_NPU_BUFFER_CONSTANT; refused_init(arena, sizeof(arena), TABLE_PA);

@@ -47,6 +47,12 @@ size_t a733_npu_memory_tables_bytes(size_t count)
     if (count > (SIZE_MAX - 64) / (sizeof(struct a733_npu_buffer) + sizeof(struct a733_npu_region) + 1)) return 0;
     return A733_NPU_MEMORY_TABLES_BYTES(count);
 }
+/* A refusal after the object was built on: it is zero again, as before the call. */
+static int refused(struct a733_npu_memory *m)
+{
+    for (volatile unsigned char *zero = (volatile unsigned char *)m, *end = zero + sizeof(*m); zero != end; ++zero) *zero = 0;
+    return 0;
+}
 int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity,
                          uint64_t physical, const struct a733_npu_buffer *buffers,
                          size_t count, const struct a733_npu_memory_ops *ops, void *cookie,
@@ -87,7 +93,7 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
     unsigned bootstraps = 0;
     for (size_t i = 0; i < count; ++i) {
         const struct a733_npu_buffer *b = &buffers[i];
-        if (b->page_shift && b->page_shift != 12 && b->page_shift != 16 && b->page_shift != 20) return 0;
+        if (b->page_shift && b->page_shift != 12 && b->page_shift != 16 && b->page_shift != 20) return refused(m);
         const uint64_t page = UINT64_C(1) << shift_of(b);
         if (!a733_span_incl_nonempty((void *)b->cpu, b->bytes) || !b->device ||
             ((b->cpu | b->physical | b->bytes | b->device) & (page - 1)) ||
@@ -98,15 +104,15 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
             a733_extents_intersect(b->cpu, b->bytes, (uintptr_t)arena, capacity) ||
             a733_extents_intersect(b->cpu, b->bytes, (uintptr_t)tables, table_bytes) ||
             a733_extents_intersect(b->physical, b->bytes, physical, capacity) ||
-            a733_extents_intersect(b->device, b->bytes, 0x400000, 0x80000)) return 0;
+            a733_extents_intersect(b->device, b->bytes, 0x400000, 0x80000)) return refused(m);
         if (b->role == A733_NPU_BUFFER_BOOTSTRAP) ++bootstraps;
         if ((b->role == A733_NPU_BUFFER_COMMAND || b->role == A733_NPU_BUFFER_BOOTSTRAP) &&
-            b->bytes < A733_NPU_MIN_COMMAND_BYTES) return 0;
+            b->bytes < A733_NPU_MIN_COMMAND_BYTES) return refused(m);
         for (size_t j = 0; j < i; ++j) {
             const struct a733_npu_buffer *p = &buffers[j];
             if (a733_extents_intersect(b->cpu, b->bytes, p->cpu, p->bytes) ||
                 a733_extents_intersect(b->physical, b->bytes, p->physical, p->bytes) ||
-                a733_extents_intersect(b->device, b->bytes, p->device, p->bytes)) return 0;
+                a733_extents_intersect(b->device, b->bytes, p->device, p->bytes)) return refused(m);
         }
         /* Insertion sort keeps canonical table validation linear in pages. */
         size_t at = i;
@@ -115,13 +121,13 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
         }
         next_->buffers[at] = *b;
     }
-    if (bootstraps != 1 || !live_mappings(next_, 1)) return 0;
+    if (bootstraps != 1 || !live_mappings(next_, 1)) return refused(m);
     for (size_t i = 0; i < count; ++i) {
         const struct a733_npu_buffer *b = &next_->buffers[i];
         regions[i] = (struct a733_npu_region){b->physical, b->bytes, b->device,
             (enum a733_npu_page_size)shift_of(b), device_writes(b)};
     }
-    if (!a733_npu_mmu_build(arena, capacity, physical, regions, count, &next_->image)) return 0;
+    if (!a733_npu_mmu_build(arena, capacity, physical, regions, count, &next_->image)) return refused(m);
     next_->state = A733_NPU_MEMORY_IDLE;
     return 1;
 }
