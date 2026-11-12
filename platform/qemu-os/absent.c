@@ -62,6 +62,7 @@ int board_radio_profile_runtime(struct board_radio_profile *o, const struct boar
 uint32_t os_cpu_return_entry_refusal;
 int os_cpu_return_requested(void) { return 0; }
 int os_cpu_return_failing(void) { return 0; }
+uint64_t os_cpu_return_deadline_us(void) { return 0; }
 int os_cpu_return_pmic_fault(uint32_t site,uint32_t value,const void *caller)
 { (void)site;(void)value;(void)caller;return 0; }
 uint64_t os_cpu_return_cutoff(void) { return UINT64_MAX; }
