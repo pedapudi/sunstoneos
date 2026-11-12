@@ -30,6 +30,8 @@ volatile unsigned typec_fault_case,typec_mmio_count,typec_translation_count,type
 volatile unsigned typec_wire_fault,typec_partner_cc=1,typec_external_vbus,typec_delay_stop;
 volatile uint64_t typec_monitor_request;
 volatile unsigned typec_steady_polls,typec_steady_reads,typec_steady_mmio,typec_steady_old_loop;
+volatile unsigned typec_stop_case,typec_low_fault,typec_restore_fault,typec_pin_restore_fault;
+static unsigned stop_check(void);
 BaseType_t xTaskGetSchedulerState(void)
 {return scheduler?taskSCHEDULER_RUNNING:taskSCHEDULER_NOT_STARTED;}
 TaskHandle_t xTaskGetCurrentTaskHandle(void){return (TaskHandle_t)(uintptr_t)current_task;}
@@ -40,6 +42,7 @@ static unsigned queue_index(QueueHandle_t q)
 TaskHandle_t xQueueGetMutexHolder(QueueHandle_t q){return queue_owner[queue_index(q)];}
 BaseType_t xQueueSemaphoreTake(QueueHandle_t q,TickType_t wait)
 {
+    if((current_task==1||current_task==3)&&atomic_load(&port.stop_deadline))assert(!wait);
     unsigned i=queue_index(q);
     if(queue_owner[i]){typec_test_time+=wait?1000:0;return pdFALSE;}
     queue_owner[i]=xTaskGetCurrentTaskHandle();return pdTRUE;
@@ -86,7 +89,8 @@ static void finish_setup(void)
         .source_max_mv=5250,.source_ma=500,.zero_threshold_max_mv=600,.device_id=0x80}};
     assert(a733_typec_native_init(&port,&config));
     assert(!a733_typec_native_init(&copied,&config));
-    scheduler=1;assert(a733_typec_begin(&port.provider,1000000)==0);
+    scheduler=1;typec_checkpoint(9);
+    if(!typec_stop_case)assert(a733_typec_begin(&port.provider,1000000)==0);
 }
 static int service(unsigned run_provider)
 {
@@ -111,7 +115,13 @@ static void retained(void)
 unsigned typec_native_check(void)
 {
     setup();finish_setup();unsigned look_saved=0,safe_saved=0;
+    if(typec_stop_case)return stop_check();
     for(unsigned i=0;i<40000&&!token.provider;i++){
+        typec_checkpoint(10+port.stage);
+        if(typec_stop_case)return stop_check();
+        if(port.provider.state==A733_TYPEC_ENABLE&&atomic_load(&port.command)==2&&atomic_load(&port.output_state)!=2){
+            typec_checkpoint(20);if(typec_stop_case)return stop_check();
+        }
         if(port.stage==7){
             typec_checkpoint(4);
             if(typec_fault_case==7){
@@ -148,6 +158,7 @@ unsigned typec_native_check(void)
     assert(a733_typec_validate(&port.provider,&token,typec_test_time+1000)==1);
     assert(typec_translation_count>=8&&port.supplies[0].programmed_uv==3300000&&port.supplies[1].programmed_uv==3300000);
     typec_checkpoint(3);
+    if(typec_stop_case)return stop_check();
     if(typec_block_only){
         uint8_t bytes[3]={0};
         assert(a733_twi_request_block(&port.bus,0x22,1,1,NULL,3,typec_test_time+5000)==0);
@@ -211,5 +222,98 @@ unsigned typec_native_check(void)
     current_task=1;
     for(unsigned k=0;k<2000&&port.provider.state!=A733_TYPEC_OFF_RETAINED;k++)service(1);
     assert(port.provider.state==A733_TYPEC_OFF_RETAINED&&!queue_owner[0]&&!queue_owner[1]&&!queue_owner[2]);
+    typec_checkpoint(21);if(typec_stop_case)return stop_check();
     retained();return 0;
+}
+static unsigned stop_check(void)
+{
+    const unsigned which=typec_stop_case,stage=port.stage;
+    if(which==2||which==3||which==7||which==15){
+        for(unsigned i=0;i<1000&&port.bus.state!=A733_TWI_WAIT;i++)assert(service(1)>=0);
+        assert(port.bus.held&&port.provider.transaction);
+        if(which==3)typec_wire_fault=1;
+        if(which==7)typec_test_time=port.bus.deadline;
+        if(which==15)a733_typec_revoke(&port.provider);
+    }
+    if(which==9){
+        assert(stage==4||stage==5);
+        unsigned index=stage-4;
+        for(unsigned i=0;i<1000&&!port.requests[index].id;i++)assert(service(1)>=0);
+        assert(port.requests[index].id);
+    }
+    if(which==4)typec_external_vbus=1;
+    if(which==5)typec_low_fault=1;
+    if(which==12)typec_restore_fault=1;
+    if(which==13)typec_pin_restore_fault=1;
+    if(which==14)port.stage=10;
+    if(which==16){
+        assert(stage==8);queue_owner[A733_PLATFORM_REGISTER_LOCK]=(void *)4;
+        uint64_t start=typec_test_time;current_task=1;
+        assert(a733_typec_poll(&port.provider)==0&&!port.setup_fault);
+        assert(typec_test_time-start<=1000);
+    }
+    if(which==17){
+        assert(port.provider.state==A733_TYPEC_OFF_RETAINED&&atomic_load(&port.output_state)==1);
+        typec_test_time+=10000;
+    }
+    uint64_t deadline=typec_test_time+(which==6?1:3000000);
+    current_task=4;
+    assert(a733_typec_native_stop_request(&port,deadline)==1);
+    assert(a733_typec_native_stop_request(&port,deadline)==1);
+    assert(a733_typec_native_stop_request(&port,deadline+1)==-1);
+    unsigned accesses=typec_mmio_count;
+    assert(a733_typec_native_provider_stop_poll(&port)==-1);
+    assert(a733_typec_native_power_stop_poll(&port)==-1);
+    assert(typec_mmio_count==accesses&&a733_typec_native_stop_result(&port)==0);
+    if(which==8)queue_owner[A733_PLATFORM_REGISTER_LOCK]=(void *)4;
+    if(which==10){
+        current_task=1;
+        for(unsigned i=0;i<20;i++){
+            typec_test_time+=25;
+            assert(a733_typec_native_provider_stop_poll(&port)==0);
+            assert(port.pin.id&&a733_typec_native_stop_result(&port)==0);
+        }
+    }
+    unsigned power_terminal=0,provider_terminal=0,saw_drain=0;
+    uint64_t transaction_deadline=port.bus.deadline;
+    for(unsigned i=0;i<120000&&(!power_terminal||!provider_terminal);i++){
+        /* A persistent high comparator has already completed a measurement.
+         * Exercise its specified expiry directly instead of repeating it. */
+        if(which==4&&port.provider.state==A733_TYPEC_DISCHARGE&&port.provider.measure_result)
+            typec_test_time=port.provider.shutdown_deadline-25;
+        typec_test_time+=25;current_task=2;
+        if(!pmic.failed)(void)a733_pmic_poll(&pmic);
+        current_task=3;
+        int power=a733_typec_native_power_stop_poll(&port);
+        if(power)power_terminal=1;
+        current_task=1;
+        int provider=a733_typec_native_provider_stop_poll(&port);
+        if(provider)provider_terminal=1;
+        if(which==2&&!atomic_load(&port.provider.revoked)){
+            assert(port.bus.deadline==transaction_deadline);saw_drain=1;
+        }
+        if(stage>=8&&!atomic_load(&port.power_stopped))assert(port.pin.id);
+        if(a733_typec_native_stop_result(&port)==1)assert(provider_terminal&&power_terminal);
+    }
+    assert(provider_terminal&&power_terminal);
+    int expected=(which==1||which==2||which==9||which==10||which==17)?1:-1;
+    assert(a733_typec_native_stop_result(&port)==expected);
+    if(expected==1){
+        assert(!port.pin.id&&!port.requests[0].id&&!port.requests[1].id);
+        if(stage>=8)assert(atomic_load(&port.output_state)==1);
+        if(stage>=1)assert(port.clock.id);
+        if(stage>=2)assert(port.rail.id);
+        if(stage==9)assert(port.provider.state==A733_TYPEC_OFF_RETAINED&&!port.bus.held);
+        assert(!queue_owner[A733_PLATFORM_REGISTER_LOCK]&&!queue_owner[A733_PLATFORM_I2C1_LOCK]);
+        if(which==2)assert(saw_drain);
+    }else if(stage>=8)assert(port.pin.id);
+    if(which==3||which==7||which==15)assert(port.bus_fault&&port.bus.state==A733_TWI_FAULT);
+    if(which==4)assert(atomic_load(&port.output_state)==1&&typec_test_time<deadline);
+    accesses=typec_mmio_count;
+    for(unsigned i=0;i<3;i++){
+        current_task=3;assert(a733_typec_native_power_stop_poll(&port)!=0);
+        current_task=1;assert(a733_typec_native_provider_stop_poll(&port)!=0);
+        assert(a733_typec_native_stop_result(&port)==expected);
+    }
+    assert(accesses==typec_mmio_count);return 0;
 }

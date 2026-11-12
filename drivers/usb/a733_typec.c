@@ -25,6 +25,7 @@ static void fault(struct a733_typec *s)
     if(!s->shutdown_attempted){
         s->shutdown_attempted=1;s->state=A733_TYPEC_SHUTDOWN;s->transaction=0;s->step=0;
         if(!a733_deadline_after(s->now,FALL_US,&s->shutdown_deadline))s->shutdown_deadline=UINT64_MAX;
+        if(s->stop_deadline&&s->shutdown_deadline>s->stop_deadline)s->shutdown_deadline=s->stop_deadline;
         if(s->config.bus->held||(s->config.bus->state>A733_TWI_READY&&s->config.bus->state<A733_TWI_COMPLETE)){
             (void)a733_twi_retain(s->config.bus);s->bus_failed=1;
         }
@@ -109,6 +110,7 @@ static int publish(struct a733_typec *s)
 static int output(struct a733_typec *s,unsigned on)
 {
     uint64_t d;if(!a733_deadline_after(s->now,TRANSACTION_US,&d))return -1;
+    if(s->stop_deadline&&d>s->stop_deadline)d=s->stop_deadline;
     int r=s->config.ops.vbus(s->config.context,on,d);
     if(r==1)s->enabled=on;
     return r;
@@ -302,6 +304,43 @@ int a733_typec_poll(struct a733_typec *s)
 done:
     atomic_store_explicit(&s->entered,0,memory_order_release);
     return atomic_load_explicit(&s->revoked,memory_order_acquire)?-1:r==1?1:0;
+}
+int a733_typec_stop_poll(struct a733_typec *s,uint64_t deadline)
+{
+    if(!intact(s)||s->config.ops.servicing(s->config.context)!=1||!deadline)return -1;
+    if(s->stop_deadline&&s->stop_deadline!=deadline)return -1;
+    s->stop_deadline=deadline;
+    if(s->state==A733_TYPEC_OFF_RETAINED)return 1;
+    if(s->state==A733_TYPEC_UNCERTAIN)return -1;
+    if(!clock_read(s)||s->now>=deadline){fault(s);s->state=A733_TYPEC_UNCERTAIN;return -1;}
+    if(!s->shutdown_attempted){
+        struct a733_twi *b=s->config.bus;
+        if(atomic_load_explicit(&s->revoked,memory_order_acquire)){
+            fault(s);return 0;
+        }
+        if(b->state>=A733_TWI_BEGIN&&b->state<=A733_TWI_COMPLETE){
+            /* Includes the PD block transfer. Keep its original, earlier
+             * deadline and consume its result without advancing negotiation. */
+            int r=b->state==A733_TWI_COMPLETE?1:a733_twi_poll(b);
+            if(r<0){fault(s);s->state=A733_TYPEC_UNCERTAIN;return -1;}
+            if(r==1){
+                uint8_t discarded[sizeof(b->block)];
+                if(a733_twi_take_block(b,b->reading?discarded:NULL,b->length)!=1){
+                    fault(s);s->state=A733_TYPEC_UNCERTAIN;return -1;
+                }
+                s->transaction=0;s->pd.transaction=0;
+            }
+            return 0;
+        }
+        if(!s->prepared||b->state!=A733_TWI_READY||b->held||s->bus_failed){
+            fault(s);s->state=A733_TYPEC_UNCERTAIN;return -1;
+        }
+        fault(s); /* The bus is idle, so revoke cannot retain a transaction. */
+        return 0;
+    }
+    if(s->shutdown_deadline>deadline)s->shutdown_deadline=deadline;
+    (void)a733_typec_poll(s);
+    return s->state==A733_TYPEC_OFF_RETAINED?1:s->state==A733_TYPEC_UNCERTAIN?-1:0;
 }
 static int observation(struct a733_typec *s,struct a733_typec_token *out,uint64_t deadline)
 {
