@@ -12,7 +12,7 @@
  #ifdef SUNSTONE_BOARD_USB2_IRQ
  #include "host_irq.h"
  #endif
-@@ -22,6 +28,11 @@
+@@ -25,6 +31,11 @@
  struct board_application board;
  struct board_provider providers;
  static struct board_radio radio;
@@ -24,23 +24,23 @@
  static struct board_radio_profile admitted_profile;
  #ifdef SUNSTONE_BOARD_SUPERVISED
  static struct board_radio_profile runtime_profile;
-@@ -76,7 +87,14 @@
-     __builtin_return_address(0));fail_close();}
- /* Every failure still passes through board_fail, after its own record. */
+@@ -85,7 +96,14 @@
+ }
+ /* A located failure closes the session without adding another failure note. */
  __attribute__((noinline)) void board_fail_at(uint32_t site,uint32_t value,const void *caller)
--{board_fail_note(site,value,caller);board_fail(NULL);}
+-{board_fail_note(site,value,caller);fail_session();}
 +{
 +    board_fail_note(site,value,caller);
 +    /* In the returning lifetime an application failure takes the failure
 +     * return; it leaves admission open for the stop paths. Device failures
 +     * close admission as before. */
 +    if(os_returning()&&os_cpu_return_failure(site,value,caller))return;
-+    board_fail(NULL);
++    fail_session();
 +}
  /* This hook is used by the existing cached EL1/EL3 fatal paths. It only closes
   * atomic admission; those paths record their own fault, and EL3 cannot use
   * the breadcrumb SVC. The independent watchdog owns recovery from stopped CPUs. */
-@@ -88,7 +106,11 @@
+@@ -97,7 +115,11 @@
  {
      uint64_t el;
      __asm__ volatile("mrs %0, CurrentEL":"=r"(el));
@@ -53,7 +53,7 @@
      fail_close();a733_typec_revoke(&board.typec.provider);
  }
  static _Noreturn void park(void){for(;;)vTaskSuspend(NULL);}
-@@ -104,6 +126,8 @@
+@@ -113,6 +135,8 @@
  static void pmic(void *unused)
  {
      (void)unused;for(;;){
@@ -62,7 +62,7 @@
          if(!board_live(NULL))park();
          const uint32_t ticks=a733_power_service_step(&providers.domains);
          const int ready=a733_power_service_ready(&providers.domains);
-@@ -155,6 +179,8 @@
+@@ -167,6 +191,8 @@
  #ifdef SUNSTONE_A733_OS
          os_wifi_credential_poll(); /* EL1: the credential leaves RAM once the application has finished */
  #endif
@@ -71,7 +71,7 @@
          if(!board_live(NULL)){
              (void)board_radio_external_failure(&radio);
              atomic_store_explicit(&board.radio_result,3,memory_order_release);
-@@ -163,28 +189,39 @@
+@@ -175,28 +201,39 @@
  #ifdef SUNSTONE_A733_OS_RADIO_SCAN
              os_radio_scan_step(&radio,(int)r);
  #endif
@@ -115,7 +115,7 @@
              }else if(r==1){
                  unsigned verified=0;
                  if(board_radio_client_result(&radio,&verified)!=1){vTaskDelay(1);continue;}
-@@ -194,6 +231,8 @@
+@@ -206,6 +243,8 @@
                      memory_order_release,memory_order_relaxed);
              }
          }
@@ -124,7 +124,7 @@
          vTaskDelay(1);
      }
  }
-@@ -231,8 +270,11 @@
+@@ -243,8 +282,11 @@
  #elif defined(SUNSTONE_A733_OS)
  static void supervise(void *unused)
  {
@@ -137,7 +137,7 @@
          if(resident){
              /* The armed watchdog bounds every hang. A failure, an expired
               * service window, a service still silent at the loader's first
-@@ -379,6 +421,8 @@
+@@ -391,6 +433,8 @@
      if(board_application_pins(&b.pins)!=1)platform_panic("board application pins",10);
  #endif
      if(!a733_native_usb_init(&providers.shared,&b,board_live,board_fail,NULL))platform_panic("board shared providers",4);
@@ -146,7 +146,7 @@
      TaskFunction_t functions[]={pmic,board_usb0_task,typec,power,board_host_task,radio_owner,radio_client,supervise};
      const char *names[]={"board-pmic","board-usb0","board-typec","board-power","board-usb2","board-radio","board-net","board-watchdog"};
      for(unsigned i=0;i<8;++i){
-@@ -392,7 +436,8 @@
+@@ -404,7 +448,8 @@
          board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,!i?3:i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);
          if(!board.handles[i])platform_panic("board tasks",5);
  #if configNUMBER_OF_CORES > 1
