@@ -298,6 +298,14 @@ struct pvr_gpu_service {
     unsigned owner, initialized, closed_owner;
     uint64_t closed_epoch;
     atomic_uint_fast64_t published_epoch;
+    /* A returning OS owns this one-way request. The service worker drains
+     * accepted work and uses the ordinary CLOSE/PARK sequence. Uncollected
+     * completed outputs may be abandoned only after admission closes. */
+    struct {
+        atomic_uint state; /* 0 running, 1 requested, 2 stopped, 3 fault */
+        uint64_t deadline;
+        uint32_t abandoned;
+    } quiesce;
     unsigned irq_masked, irq_fault, irq_wake_pending, irq_deferred;
     /* Fixed native render owner: context pair, HWRT pair, local/global lists. */
     struct pvr_ccb_token graphics_cleanup_tokens[6];
@@ -330,6 +338,9 @@ struct pvr_gpu_service {
 int pvr_gpu_service_init(struct pvr_gpu_service *, const struct pvr_gpu_service_config *,
                          UBaseType_t priority, UBaseType_t affinity);
 int pvr_gpu_service_bind(struct pvr_gpu_service *, unsigned slot, TaskHandle_t);
+/* One supervisor caller; nonblocking. The absolute deadline is immutable
+ * after the first request. Returns the acquired quiesce state above. */
+unsigned pvr_gpu_service_quiesce(struct pvr_gpu_service *,uint64_t deadline);
 #ifdef PVR_GPU_PERFORMANCE
 /* One deferred completion reply per action, collected through the existing
  * finite API. Absolute deadlines are copied, never restarted by the worker. */

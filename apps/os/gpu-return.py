@@ -23,9 +23,17 @@ def validate(review, config, evidence, require):
         evidence(item)
 
 
-def decode(raw, epoch, generation, require, allow_untouched=False):
+def decode(raw, epoch, generation, require, allow_untouched=False, allow_failure=False):
     require(len(raw) == BYTES, 'Incomplete GPU retirement report.')
     magic, version, size, actual, gen, jobs, flags, uv = struct.unpack('<8Q', raw)
+    if version == 4:
+        voltage, abandoned = uv >> 32, uv & 0xffffffff
+        require(allow_failure and (magic, size, actual, gen, flags, voltage) ==
+                (MAGIC, BYTES, epoch, generation, 63, 960000) and abandoned <= jobs < 0xffffffff,
+                'GPU failure retirement is incomplete or not admitted by this session.')
+        return {'jobs': jobs, 'gpu_off': True, 'worker_parked': True,
+                'pmic_sample_retired': True, 'dcdc4_uv': voltage,
+                'failure_return': True, 'abandoned_outputs': abandoned}
     if version == 2:
         require(allow_untouched and (magic, size, actual, gen, jobs, flags) ==
                 (MAGIC, BYTES, epoch, generation, 0, 0) and 0 <= uv <= 14,
@@ -65,7 +73,7 @@ def geometry(image):
         elf = ELFFile(stream)
         table = elf.get_section_by_name('.symtab')
         require(table is not None, 'GPU return image has no symbols.')
-        names = ('os_gpu_return_report', 'os_gpu_untouched_return_version',
+        names = ('os_gpu_return_report', 'os_gpu_untouched_return_version', 'os_gpu_failure_return_version',
                  'os_gpu_bisect_configuration', 'os_gpu_performance_configuration',
                  'os_gpu_recovery_test_configuration')
         symbols = {}
@@ -102,6 +110,10 @@ def geometry(image):
             return section.data()[offset:offset + size]
         result = {'address': object_data('os_gpu_return_report', BYTES, True),
                   'bytes': BYTES, 'allow_untouched': False}
+        if 'os_gpu_failure_return_version' in symbols:
+            require(struct.unpack('<I', object_data('os_gpu_failure_return_version', 4, False)) == (4,),
+                    'GPU failure-return capability marker differs.')
+            result['allow_failure'] = True
         if 'os_gpu_untouched_return_version' in symbols:
             require(struct.unpack('<I', object_data('os_gpu_untouched_return_version', 4, False)) == (2,),
                     'GPU untouched capability marker differs.')
@@ -125,12 +137,13 @@ def geometry(image):
         return result
 
 
-def decode_captured(raw, layout, epoch, generation):
+def decode_captured(raw, layout, epoch, generation, failure_return=False):
     """Decode a copied receipt under the exact frozen image's capabilities."""
     def require(ok, message):
         if not ok:
             raise ValueError(message)
-    result = decode(raw, epoch, generation, require, allow_untouched=layout['allow_untouched'])
+    result = decode(raw, epoch, generation, require, allow_untouched=layout['allow_untouched'],
+                    allow_failure=failure_return and layout.get('allow_failure', False))
     version = struct.unpack_from('<Q', raw, 8)[0]
     diagnostic = layout.get('bisect')
     if version == 3:
