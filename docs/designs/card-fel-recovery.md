@@ -1,8 +1,10 @@
 # A retained first-stage request selects FEL before card loading
 
 **Status: implemented and host-tested.** No card is written.
-The RAM proof requires a dedicated queue profile; the current daemon does not
-admit it. Physical cold-card recovery remains unqualified.
+The daemon admits the dedicated RAM-proof profile. Physical gate entry requires
+reconciling the launcher's secondary-OFF admission with the FEL platform state
+([evidence](../evidence/card-fel-recovery.jsonl)). The early gate and cold-card
+recovery remain unqualified.
 
 ## The first stage consumes the vendor request
 
