@@ -34,6 +34,10 @@ CHECK_INPUTS = ['tools/qemu-tick-footprint.c', 'tools/tick-footprint.py', 'tools
                 'checks/tick-footprint-budget.json']
 GATE_RUNS = [['--build', '{build:latency-cause-model}', '--output', '{output}']]
 WINDOWS = 240
+# The busy phase lasts a fixed number of wake samples, not of ticks; under
+# multi-threaded TCG it spanned 234 to 370 ticks depending on host load. Fewer
+# than this many traced ticks means the phase did not run.
+MINIMUM = 200
 BUSY = 2  # enum phase in apps/latency/workload.c: QUIET, IDLE, BUSY, STOP
 
 
@@ -96,8 +100,9 @@ def main():
     (out / 'qemu.log').write_text(run.stdout + run.stderr)
     # The footprint needs only the traced busy ticks; the model's later functional
     # assertions are covered by its own checks and may see the plugin's slowdown.
-    if f'# kept {WINDOWS}' not in trace.read_text():
-        raise SystemExit(f'the trace holds fewer than {WINDOWS} busy ticks; see qemu.log')
+    kept = [int(line.split()[2]) for line in trace.read_text().splitlines() if line.startswith('# kept ')]
+    if not kept or kept[-1] < MINIMUM:
+        raise SystemExit(f'the trace holds fewer than {MINIMUM} busy ticks; see qemu.log')
 
     spec = importlib.util.spec_from_file_location('tick_footprint', ROOT / 'tools/tick-footprint.py')
     tool = importlib.util.module_from_spec(spec)
