@@ -93,7 +93,7 @@ Audit fitted LEDs, buttons, infrared, Ethernet, debug and other blocks against [
 Board results are records in [`docs/evidence/buses-rtc.jsonl`](../evidence/buses-rtc.jsonl); add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-buses-rtc-20261101.md).
 
 <!-- evidence-table:begin -->
-9 records in `docs/evidence/buses-rtc.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+10 records in `docs/evidence/buses-rtc.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -106,4 +106,5 @@ Board results are records in [`docs/evidence/buses-rtc.jsonl`](../evidence/buses
 | `1794482394892578429-4199afcd` | 2026-11-12 | 3-3 | `576462699622` | host-error | passed | run_total 23.166 s, rate_100k_main 96153 Hz, rate_400k_main 384615 Hz, probe_100k_main 107 us, probe_400k_main 40 us, scan_100k 15.6 ms, scan_400k 7.1 ms, interrupts_per_scan 256 |
 | `1794482702632861790-8e32fccf` | 2026-11-12 | 3-3 | `e9110e0c556f` | returned | failed | run_total 27.101 s, alarm_wait 4 s, alarm_latency 0.22 ms |
 | `1794482776569788451-05dabdc7` | 2026-11-12 | 3-3 | `427f6502a73c` | returned | failed | run_total 27.822 s, alarm_wait 4.68 s, calendar_advance 59 s, rtc_second_estimate 1.19 s, alarm_latency 0.22 ms |
+| `1794482905793724594-35d381b3` | 2026-11-12 | 3-3 | `f5a808858a42` | returned | passed | run_total 26.909 s, alarm_wait 3.67 s, alarm_latency 0.226 ms |
 <!-- evidence-table:end -->
