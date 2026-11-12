@@ -37,6 +37,9 @@ elseif(SUNSTONE_APPLICATION STREQUAL "radio-scan")
   add_sunstone_application(radio-scan
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/radio-scan/main.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/radio-scan/manifest.json")
+  option(SUNSTONE_RADIO_SCAN_FAILURE_TEST "Inject application failure after a successful radio scan" OFF)
+  target_compile_definitions(radio-scan PRIVATE
+    "$<$<BOOL:${SUNSTONE_RADIO_SCAN_FAILURE_TEST}>:SUNSTONE_RADIO_SCAN_FAILURE_TEST=1>")
   add_sunstone_image(sunstone-a733-os-radio-scan LIFETIME ${os_lifetime} APPLICATION radio-scan)
 elseif(SUNSTONE_APPLICATION STREQUAL "large-region-test")
   # The 1 GiB region needs the upper memory mapped, which the table builder does only after the address-test

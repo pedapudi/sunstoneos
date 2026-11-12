@@ -270,6 +270,12 @@ stays in the platform's stop record, and protocol records and buffers remain
 pinned. `A733_SESSION_DOWN` requires the platform's positive shutdown readbacks.
 An expired operation or failed readback remains a retained fault.
 
+The board owner copies the terminal report without resuming ordinary polling.
+It erases its independent credential copies on either terminal result. A
+retained fault preserves the session's accepted transfer buffers, protocol
+records and CE storage unchanged. Full protocol erasure requires positive
+`A733_SESSION_DOWN`; uncertain ownership cannot authorize an erase.
+
 When Bluetooth shares the module, SDIO drains while its protocol owner closes
 the HCI connections. `a733_radio_session_stop_held` validates the existing
 firmware generation and live resources without reopening admission.

@@ -208,6 +208,12 @@ static void scrub(void *memory,size_t bytes)
 #endif
 }
 #define SCRUB(x) scrub(&(x),sizeof(x))
+static void wipe_owner_secrets(struct board_radio *r)
+{
+    if(!r->config.associate)return;
+    SCRUB(r->config.target);SCRUB(r->config.security);
+    SCRUB(r->cand_bssid);SCRUB(r->cand_rsn);SCRUB(r->startup_event);SCRUB(r->diagnostic);
+}
 /* Every place a credential-derived byte lives, once the module is down or the failure shutdown is done and the session is
  * never polled again: the SSID in the target and in the management layer's request, held records and scan results; the
  * PMK and the PTK/GTK in the supplicant (whose slots are its only heap), the key store and the transport's buffers; the
@@ -218,8 +224,7 @@ static void wipe_secrets(struct board_radio *r)
     if(!r->config.associate||r->wiped)return;
     r->wiped=1;
     wipe_pmk(r);
-    SCRUB(r->config.target);SCRUB(r->config.security);
-    SCRUB(r->cand_bssid);SCRUB(r->cand_rsn);SCRUB(r->startup_event);SCRUB(r->diagnostic);
+    wipe_owner_secrets(r);
     struct a733_radio_session *s=&r->session;
     SCRUB(s->transport.tx);SCRUB(s->transport.rx);SCRUB(s->transport.confirmations);SCRUB(s->transport.unrelated);
     SCRUB(s->transport.setup_confirmation);SCRUB(s->transport.last_result);
@@ -300,6 +305,24 @@ static void report_progress(struct board_radio *r)
     if(r->session.firmware.state==AIC8800_FW_START_CONFIRMED)a733_radio_report_firmware(&r->report);
     /* Identity is read before the firmware loads; keep the later stage. */
     assoc_update(r);
+}
+enum board_radio_result board_radio_stop_result(struct board_radio *r,enum a733_radio_session_result result)
+{
+    if(!r||r->self!=r||!r->constructed||xTaskGetCurrentTaskHandle()!=r->config.session.owner_task||
+       (result!=A733_SESSION_DOWN&&result!=A733_SESSION_RETAINED&&result!=A733_SESSION_INVALID))return BOARD_RADIO_INVALID;
+    if(result==A733_SESSION_DOWN&&(!r->session.stop_requested||r->platform.stage!=RSTAGE_DOWN||
+       r->platform.fault||r->platform.pmic_request.id))return BOARD_RADIO_INVALID;
+    if(!r->wiped){
+        report_progress(r);
+        if(r->config.report_memory.allocate)
+            a733_radio_report_session_failure(&r->report,r->session.fail_line,r->session.fail_stage);
+        /* A refused stop can still own an accepted SDIO transfer. Preserve
+         * its protocol storage and ownership until physical drain is proved. */
+        if(result==A733_SESSION_DOWN)wipe_secrets(r);
+        else wipe_owner_secrets(r);
+    }
+    if(result==A733_SESSION_DOWN){r->stage=DOWN;return BOARD_RADIO_DOWN;}
+    atomic_store_explicit(&r->failed,1,memory_order_release);return BOARD_RADIO_RETAINED;
 }
 enum board_radio_result board_radio_poll(struct board_radio *r)
 {

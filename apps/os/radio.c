@@ -19,7 +19,9 @@ static enum os_quiesce_result radio_quiesce_step(struct os_quiesce *);
 static struct os_quiesce radio_quiesce={
     .owner=OS_QUIESCE_RADIO,.order=OS_QUIESCE_DEVICES,.step=radio_quiesce_step
 };
-static unsigned shutdown_started;
+static unsigned shutdown_started,module_notified;
+extern int os_headset_module_release_ready(void) __attribute__((weak));
+extern void os_headset_module_down(int proved) __attribute__((weak));
 static enum os_quiesce_result radio_quiesce_step(struct os_quiesce *q)
 {
     if(os_quiesce_result(q)==OS_QUIESCE_DONE)return OS_QUIESCE_DONE;
@@ -38,34 +40,71 @@ static void radio_quiesce_refuse(uint32_t value)
     if(!os_radio_quiesce_fault(value,SUNSTONE_CRUMB_HERE()))
         board_fail_at(SUNSTONE_CRUMB_FAIL_BOARD<<12|0x901u,value,SUNSTONE_CRUMB_HERE());
 }
-/* One owner pass. The existing board driver admits shutdown only after a
- * completed scan with an idle transport. A retained or unimplemented stop
- * never becomes a successful retirement merely because the scan has ended. */
+static void radio_module_stopped(struct board_radio *r)
+{
+    if(!module_notified&&os_headset_module_down&&os_granted(OS_GRANT_HEADSET)){
+        os_headset_module_down(a733_radio_session_peer_stopped(&r->session));module_notified=1;
+    }
+}
+static enum board_radio_result radio_terminal_result(struct board_radio *r,enum a733_radio_session_result result)
+{
+    enum board_radio_result terminal=board_radio_stop_result(r,result);
+#ifdef SUNSTONE_A733_OS_RADIO_SCAN
+    os_radio_scan_step(r,(int)terminal);
+#else
+    (void)terminal;
+#endif
+    return terminal;
+}
+/* The owner bypasses ordinary board/session polling as soon as return is
+ * requested. The accepted SDIO transfer drains while Bluetooth closes; only
+ * its protocol release authorizes the shared module's physical shutdown. */
 int os_radio_quiesce_poll(struct board_radio *r,int result)
 {
+    (void)result;
     if(!os_radio_quiesce_requested())return 0;
-    if(os_quiesce_result(&radio_quiesce)!=OS_QUIESCE_PENDING)return 2;
-    if(!r->config.scan_only||r->config.entropy_only){radio_quiesce_refuse(0x902u);return 2;}
-    if(result==BOARD_RADIO_RETAINED||result==BOARD_RADIO_INVALID){
+    if(os_quiesce_result(&radio_quiesce)!=OS_QUIESCE_PENDING){
+        if(os_quiesce_result(&radio_quiesce)==OS_QUIESCE_FAULT)
+            (void)radio_terminal_result(r,A733_SESSION_RETAINED);
+        radio_module_stopped(r);return 2;
+    }
+    if(!shutdown_started){
+        uint64_t deadline=os_cpu_return_deadline_us();
+        if(!deadline)return 1;
+        if(r->config.entropy_only){
+            radio_quiesce_refuse(0x905u);(void)radio_terminal_result(r,A733_SESSION_RETAINED);radio_module_stopped(r);return 2;
+        }
+        if(!a733_radio_session_stop(&r->session,deadline)){
+            radio_quiesce_refuse(0x904u);(void)radio_terminal_result(r,A733_SESSION_RETAINED);radio_module_stopped(r);return 2;
+        }
+        shutdown_started=1;
+    }
+    if(os_granted(OS_GRANT_HEADSET)){
+        int release=os_headset_module_release_ready?os_headset_module_release_ready():-1;
+        if(release<0){
+            (void)a733_radio_session_retain(&r->session);
+            radio_quiesce_refuse(0x906u);(void)radio_terminal_result(r,A733_SESSION_RETAINED);radio_module_stopped(r);return 2;
+        }
+        if(release&&!a733_radio_session_stop_release(&r->session)){
+            radio_quiesce_refuse(0x907u);(void)radio_terminal_result(r,A733_SESSION_RETAINED);radio_module_stopped(r);return 2;
+        }
+    }
+    enum a733_radio_session_result stopped=a733_radio_session_poll(&r->session);
+    if(stopped==A733_SESSION_RETAINED||stopped==A733_SESSION_INVALID){
         radio_quiesce_refuse(r->platform.fail_line?r->platform.fail_line<<16|(r->platform.fail_stage&0xffffu):
             r->session.fail_line<<16|0x100u|(r->session.fail_stage&0xfeffu));
-        return 2;
+        (void)radio_terminal_result(r,stopped);radio_module_stopped(r);return 2;
     }
-    if(result==BOARD_RADIO_DOWN){
-        /* DOWN is the normal driver's completed readback sequence. The
-         * platform_clean predicate describes its separate failure cleanup. */
-        if(r->platform.fault||r->platform.held||r->platform.retained||r->platform.pmic_request.id||
-           r->session.transport.pending||r->session.transport.held){radio_quiesce_refuse(0x903u);return 2;}
+    if(stopped==A733_SESSION_DOWN){
+        if(radio_terminal_result(r,stopped)!=BOARD_RADIO_DOWN){
+            radio_quiesce_refuse(0x908u);radio_module_stopped(r);return 2;
+        }
+        radio_module_stopped(r);
+        /* Full station/association additionally owns CE entropy and DMA.
+         * WLAN shutdown supplies no global CE drain or memory-release proof. */
+        if(!r->config.scan_only||r->config.associate){radio_quiesce_refuse(0x905u);return 2;}
         os_wifi_credential_poll();
         if(os_wifi_credential_wiped()){os_quiesce_complete(&radio_quiesce);return 2;}
-        return 1;
-    }
-    if(!shutdown_started&&result!=BOARD_RADIO_SCANNED){radio_quiesce_refuse(0x904u);return 2;}
-    if(result==BOARD_RADIO_SCANNED&&!shutdown_started){
-        uint64_t now=a733_smp_counter()/24;
-        uint64_t deadline=now+OS_FAILURE_RETURN_US;
-        if(deadline>board.session.deadline_us-10000)deadline=board.session.deadline_us-10000;
-        shutdown_started=board_radio_shutdown(r,deadline);
     }
     return 1;
 }

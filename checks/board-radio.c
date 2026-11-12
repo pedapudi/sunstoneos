@@ -419,7 +419,7 @@ int main(void)
         /* Credential residue on every exit path. Each run holds the test SSID and PMK in the places the real session keeps
          * them (target, connect command, held records, supplicant slots and configuration, key store, owner copies), ends
          * a different way, and then the whole board_radio object and the report arena must hold no 8-byte run of either. */
-        enum {OK,HANDSHAKE_TIMEOUT,STARTUP_DEADLINE,BOARD_FAILED,SESSION_RETAINED,CONNECT_TIMEOUT,PATHS};
+        enum {OK,HANDSHAKE_TIMEOUT,STARTUP_DEADLINE,BOARD_FAILED,SESSION_RETAINED,CONNECT_TIMEOUT,STOP_OK,STOP_FAULT,PATHS};
         for(unsigned path=0;path<PATHS;++path){
             a733_radio_report_release(&app.report);
             memset(&app,0,sizeof(app));report_used=0;scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);
@@ -448,9 +448,32 @@ int main(void)
             case SESSION_RETAINED:{
                 enum a733_radio_session_result saved_result=session_result;session_result=A733_SESSION_RETAINED;
                 end=board_radio_poll(&app);session_result=saved_result;break;}
+            case STOP_OK:case STOP_FAULT:{
+                unsigned polls=session_calls,steps=platform_steps,retains=retained;
+                assert(board_radio_stop_result(&app,A733_SESSION_PENDING)==BOARD_RADIO_INVALID&&!app.wiped);
+                assert(board_radio_stop_result(&app,A733_SESSION_DOWN)==BOARD_RADIO_INVALID&&!app.wiped);
+                app.session.stop_requested=1;
+                if(path==STOP_OK)app.platform.stage=RSTAGE_DOWN;
+                else{app.session.fault=1;app.session.fail_line=501;app.session.fail_stage=3;
+                    app.session.transport.pending=1;app.session.transport.held=1;app.platform.host.state=SUNXI_SDIO_ACTIVE;}
+                struct a733_radio_session preserved=app.session;
+                enum a733_radio_session_result stopped=path==STOP_OK?A733_SESSION_DOWN:A733_SESSION_RETAINED;
+                end=board_radio_stop_result(&app,stopped);
+                assert(end==(path==STOP_OK?BOARD_RADIO_DOWN:BOARD_RADIO_RETAINED));
+                assert(board_radio_stop_result(&app,stopped)==end);
+                assert(session_calls==polls&&platform_steps==steps&&retained==retains);
+                if(path==STOP_FAULT){
+                    assert(!app.wiped&&!memcmp(&preserved,&app.session,sizeof(preserved))&&app.platform.host.state==SUNXI_SDIO_ACTIVE);
+                    const uint8_t *owner=(const uint8_t *)&app.config.target;
+                    for(size_t i=0;i<sizeof(app.config.target);++i)assert(!owner[i]);
+                    owner=(const uint8_t *)&app.config.security;
+                    for(size_t i=0;i<sizeof(app.config.security);++i)assert(!owner[i]);
+                }
+                break;}
             default:time_us=app.operation_deadline+1;end=board_radio_poll(&app);break; /* CONNECT_TIMEOUT */
             }
-            if(path!=OK){assert(end==BOARD_RADIO_RETAINED);assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED);}
+            if(path!=OK&&path!=STOP_OK){assert(end==BOARD_RADIO_RETAINED);if(path!=STOP_FAULT)assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED);}
+            if(path==STOP_FAULT)continue; /* Accepted transfer storage remains owned and unchanged. */
             assert(app.wiped);
             /* The report survives the wipe: the failure site and the tail were written before it. */
             assert(board_radio_report(&app)->has_assoc);

@@ -126,7 +126,11 @@ int main(void)
         assert(a733_radio_platform_stop(&r.radio,&token,deadline));
         assert(a733_radio_platform_stop(&r.radio,&token,deadline+1000)&&r.radio.stop_deadline==deadline);
         stopped(commands,0,deadline);
-        if(!enabled&&stage<=RSTAGE_POWER_ON)assert(!pmic_log_count);
+        if(!enabled&&stage<=RSTAGE_POWER_ON){
+            assert(!pmic_log_count);
+            struct a733_radio_report report={0};a733_radio_report_platform(&report,&r.radio);
+            assert(report.head.stage<A733_RADIO_STAGE_POWERED&&(report.head.flags&8));
+        }
         printf("PASS partial startup stage=%u initial_off=%u\n",stage,off);
     }
     /* Stop between host admission, issue and completion; never admit another card command. */

@@ -591,7 +591,7 @@ int a733_radio_platform_stop(struct a733_radio_platform *p,const struct a733_rad
         else if(deadline<p->stop_deadline)p->stop_deadline=deadline;
         p->stop_requested=1;
         if(p->stage>RSTAGE_READY&&p->stage<=RSTAGE_DOWN){
-            p->stop_phase=3;p->stop_bus=0x10001;
+            p->stop_phase=3;p->stop_bus=0x10001;p->stop_from=RSTAGE_READY;
             for(unsigned i=0;i<p->rail_count;++i)if(p->snapshots[i].rail==A733_RAIL_BLDO5)
                 p->stop_powered=p->snapshots[i].enabled;
         }
@@ -666,7 +666,7 @@ static enum a733_radio_platform_result stop_poll(struct a733_radio_platform *p)
         if(r!=A733_PINS_OK)return fail(p);
         p->peer_stopped=1;
     }
-    p->stop_phase=3;p->stage=RSTAGE_SHUTDOWN_PM1;return A733_RADIO_PENDING;
+    p->stop_from=p->stage;p->stop_phase=3;p->stage=RSTAGE_SHUTDOWN_PM1;return A733_RADIO_PENDING;
 }
 /* The failure shutdown. Every step is best effort and read back where the hardware answers; a step that
  * cannot be done sets no success bit and the next still runs: PM1 low first (the module off), then the

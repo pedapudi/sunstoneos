@@ -126,7 +126,7 @@ struct a733_radio_platform {
     uint32_t pad_power[4];
     uint64_t stop_deadline;
     struct sunxi_sdio_result stop_result;
-    unsigned stop_requested,stop_phase,stop_completed,stop_unprepared,stop_bus,stop_powered,peer_stopped,stop_released;
+    unsigned stop_requested,stop_phase,stop_completed,stop_unprepared,stop_bus,stop_powered,peer_stopped,stop_released,stop_from;
 };
 /* The failure left nothing powered, so no reset is needed to release anything: the first-run guard refused before
  * any write, or the failure shutdown finished with every readback matched (PM1 low, clocks off, BLDO5 off). Such a
