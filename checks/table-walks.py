@@ -219,7 +219,7 @@ def decoder_cases(tcr, out):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--image', type=Path, action='append', default=[])
+    p.add_argument('--image', type=Path, action='append', required=True)
     p.add_argument('--decoder-only', action='store_true', help='run only decoder cases after a host fixture correction')
     p.add_argument('--output', type=Path, required=True)
     args = p.parse_args()
@@ -229,8 +229,6 @@ def main():
         harness.save(args.output / 'result.json', dict(passed=True, physical_access=False, decoder_cases=counts))
         print('PASS frozen decoder: A76 data-walk observations, fixed-work acceptance and mismatched work refusal')
         return
-    if not args.image:
-        p.error('--image is required unless --decoder-only is selected')
     reports = []
     for path in args.image:
         image, tcr = harness.Image(path, layout_names=()), a733_tcr.for_image(path)

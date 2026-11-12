@@ -14,7 +14,6 @@ from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_S
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'checks'))
 import harness
-GATE_RUNS = [['--output', '{output}']]
 
 
 def load(name, path):
