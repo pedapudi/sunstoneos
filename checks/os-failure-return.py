@@ -6,9 +6,11 @@ and the first-failure record, instead of a watchdog reset. The real code runs
 from the supplied ELF: the failure sites, the breadcrumb SVC, the claim of the
 return, the result record, the supervisor's escalation, the secondary-core wait
 before the scheduler and the EL1/EL3 terminal with its cleanup and restoration.
-Supplied as inputs, as in os-cpu-return.py: the completion of the service stop
-paths (thermal, PMIC), the task notifications that wake the terminal tasks and
-the scheduler state words. No FreeRTOS task switch happens in this model.
+The fixture registers the image's owner descriptors through the native API.
+It supplies each owner's completion reply only after the supervisor requests
+that owner, plus task notifications and scheduler state words. Registration,
+callbacks, class ordering, fault retention and terminals run from the ELF.
+No FreeRTOS task switch happens in this model.
 
 The model enters the vectors directly with the exception state a core would
 hold (ESR_EL1, FAR_EL1, ELR_EL1, SPSR_EL1, ICC_PMR_EL1); it does not generate
@@ -25,9 +27,14 @@ The context cases:
                it notifies all eight terminals, which return to the ROM.
   running-repeat, running-device, escalation, device-first
                Later application failures leave the first record; a device
-               failure during the return and an unfinished return end at the
-               watchdog; a device failure that closed admission before the
-               failure keeps the watchdog ending.
+               failure through an unconverted board_fail_at caller and an
+               unfinished return end at the watchdog; already-closed admission
+               keeps the watchdog ending.
+  registered-pending, registered-faults, registered-fault-behind-pending
+               Requested owners wait without releasing later classes. Owner
+               faults leave admission open, preserve separate RAM records and
+               the retained secondary RTC record, and allow later cleanup.
+               Unproved retirement withholds terminals until the 3 s bound.
   panic, panic-masked, unexpected-interrupt
                Software-detected faults: a core that can still schedule
                returns; masked or in a critical section it keeps the watchdog.
@@ -85,6 +92,7 @@ GICD = 0x03400000
 APPLICATION = defines['FAIL_APPLICATION']
 PMIC = defines['FAIL_PMIC']
 RETURN = 0x80000000
+GRANTS = {name: 1 << int(bit) for name, bit, _ in records.manifest_tool.os_service_rows('OS_GRANT_ROWS')}
 
 
 class Failure(terminal.Model):
@@ -96,6 +104,8 @@ class Failure(terminal.Model):
         self.notified = []
         self.suspended = set()
         self.panics = []
+        self.quiesce_callbacks = {}
+        self.callback_calls = []
         self.scheduler_state = 1   # taskSCHEDULER_NOT_STARTED; the kernel's own state words are not modeled
         self.el0_watch = False
         self.el0_entry = names.get('os_cpu_return_el0_fault')
@@ -104,6 +114,8 @@ class Failure(terminal.Model):
 
     def code(self, uc, a, size, unused):
         stub = self.stubs.get(a)
+        if a in self.quiesce_callbacks:
+            self.callback_calls.append(self.quiesce_callbacks[a])
         if self.el0_watch and a == self.el0_entry:
             # The vector returned to EL0 in the failure function: capture what it was given.
             self.el0_watch = False
@@ -147,7 +159,8 @@ class Scenario:
         self.elf = elf
         self.image = prior.fault.Image(elf)
         self.syms = symbols(elf)
-        self.layouts = Layouts(elf, {'board_application', 'a733_board_session', 'a733_cached_runtime'}).layouts
+        self.layouts = Layouts(elf, {'board_application', 'a733_board_session', 'a733_cached_runtime', 'os_quiesce'}).layouts
+        self.registry = {}
         self.model = Failure(self.image, {**{k: v[0] for k, v in self.syms.items()}, **self.image.symbols})
         self.contexts = self.model.initialize()
         m = self.model
@@ -183,8 +196,56 @@ class Scenario:
     def fatal(self):
         return self.model.u32(self.board + self.layouts['board_application']['fatal'])
 
+    def register_owners(self):
+        """Register the image's descriptors through the native API before failure.
+
+        Device/clock completion is supplied as owner evidence, as in the
+        terminal fixture. The list links and the ordering are native code.
+        """
+        if self.registry or 'os_quiesce_register' not in self.syms:
+            return
+        manifest = records.image_manifest(self.elf)['manifest']
+        names = ['thermal_quiesce', 'pmic_quiesce', 'terminal_quiesce']
+        grants = 0
+        if manifest and manifest.get('clock_use', 0) & 1:
+            names.insert(0, 'clock_quiesce')
+            grants |= GRANTS['CPU_CLOCK']
+        if 'ss_application_npu' in self.syms:
+            names.insert(0, 'npu_quiesce')
+            grants |= GRANTS['NPU']
+        # A sealed admitted grant cache, supplied by the session boundary.
+        self.model.put32(self.local('granted_word'), 0x80000000 | grants)
+        for name in names:
+            address = self.local(name)
+            self.start(0, self.local('os_quiesce_register'), (address,))
+            assert self.run_one(0) == 'return' and self.model.gpr('x0') == 1, name
+            self.registry[name] = address
+            step = self.model.u64(address + self.layouts['os_quiesce']['step'])
+            self.model.quiesce_callbacks[step] = name
+        owner_head = Layouts(self.elf, layout_names=()).address('owners', '/apps/os/quiesce.c')
+        assert self.model.u64(owner_head) == self.registry[names[-1]]
+
+    def complete_owner(self, name):
+        if name not in self.registry:
+            return
+        self.start(0, self.local('os_quiesce_complete'), (self.registry[name],))
+        assert self.run_one(0) == 'return'
+
+    def requested(self, name):
+        return self.model.u32(self.registry[name] + self.layouts['os_quiesce']['requested'])
+
+    def fault_owner(self, name, site, value):
+        self.start(3, self.local('os_quiesce_fault'), (self.registry[name], site, value, 0x41070200))
+        assert self.run_one(3) == 'return' and self.model.gpr('x0') == 1
+
+    def owner_record(self, name):
+        q, fields = self.registry[name], self.layouts['os_quiesce']
+        return {field: self.model.u32(q + fields[field]) for field in ('result', 'fault_state', 'site', 'value', 'visited')}
+
     def scheduler(self, running=True, core=6):
         m = self.model
+        if running:
+            self.register_owners()
         m.scheduler_state = 2 if running else 1
         m.put32(self.local('ucPrimaryCoreInitDoneFlag'), 1 if running else 0)
 
@@ -327,23 +388,88 @@ def case_running_claim(elf, site=None, group=APPLICATION, value=0x4641, preset_f
     return s, outcome, site
 
 
-def drive_supervisor(s, rounds=8):
-    """The CPU0 supervisor with the stop paths' completions supplied."""
+def drive_supervisor(s, rounds=8, complete=True):
+    """Run registered callbacks, supplying only each requested owner's reply."""
     m = s.model
-    s.start(0, s.image.symbols['os_cpu_return_supervise'])
-    # Thermal and PMIC owners finished their stop paths (their own checks cover them).
-    m.put32(s.local('thermal_done'), 1)
-    m.put32(s.local('pmic_stop'), 1)
-    m.put32(s.local('pmic_done'), 1)
+    handles = s.syms.get('terminal_handle')
     for c in range(8):
-        m.put64(s.local('terminal_handle.%d' % c), 0x41f00000 + c)   # the compiler split the array
+        address = handles[0] + c * 8 if handles else s.local('terminal_handle.%d' % c)
+        m.put64(address, 0x41f00000 + c)
     for _ in range(rounds):
         m.notified.clear()
         s.start(0, s.image.symbols['os_cpu_return_supervise'])
         outcome = s.run_one(0)
         if s.flag('ready') or outcome not in ('return', 'park'):
             break
+        if complete:
+            for name in ('clock_quiesce', 'thermal_quiesce', 'pmic_quiesce'):
+                if name in s.registry and s.requested(name):
+                    s.complete_owner(name)
     return outcome
+
+
+def registered_cases(elf):
+    rows = []
+    s, outcome, _ = case_running_claim(elf)
+    assert outcome == 'return' and s.fatal() == 0
+    waiting = 'clock_quiesce' if 'clock_quiesce' in s.registry else 'thermal_quiesce'
+    assert drive_supervisor(s, rounds=1, complete=False) == 'return'
+    assert s.requested(waiting) and not s.requested('pmic_quiesce') and not s.flag('ready')
+    s.model.time += 24 * 100000
+    assert drive_supervisor(s) == 'park' and s.flag('ready') == 1
+    assert s.terminals() == 'rom'
+    rows.append(dict(name='registered-pending', outcome='rom', owner=waiting, wait_us=100000))
+
+    s, outcome, _ = case_running_claim(elf)
+    first = s.record()[1]
+    owner = 'clock_quiesce' if 'clock_quiesce' in s.registry else 'thermal_quiesce'
+    other = 'pmic_quiesce'
+    site = RETURN | defines['FAIL_CPU_CLOCK' if owner == 'clock_quiesce' else 'FAIL_THERMAL'] << 12 | 0x731
+    second_site = RETURN | defines['FAIL_PMIC'] << 12 | 0x732
+    s.fault_owner(owner, site, 0x11)
+    # Publish the first secondary before another owner faults. The registry
+    # reports asynchronous peers when it next visits the supervisor.
+    assert drive_supervisor(s, rounds=1, complete=False) == 'return'
+    s.fault_owner(other, second_site, 0x22)
+    assert s.fatal() == 0 and s.record()[1] == first
+    # A late DONE publication must not erase an interrupt or owner fault.
+    s.complete_owner(owner)
+    assert s.owner_record(owner)['result'] == 2
+    assert drive_supervisor(s, complete=False) == 'return' and not s.flag('ready')
+    assert all(s.requested(n) for n in (owner, other, 'pmic_quiesce'))
+    assert 'pmic_quiesce' in s.model.callback_calls, 'a prior owner fault must not hide later cleanup'
+    for n, expected_site, value in ((owner, site, 0x11), (other, second_site, 0x22)):
+        record = s.owner_record(n)
+        assert record == dict(result=2, fault_state=2, site=expected_site, value=value, visited=1), (n, record)
+    rtc = s.rtc()
+    retained_site = quiesce_site(s, owner, site)
+    assert (rtc['fault'] >> 16) & 15 == defines['FAIL_LEVEL_SECOND'] and rtc['esr'] == retained_site, rtc
+    assert s.record()[1] == first and not s.fatal()
+    s.model.time += 24 * 3100000
+    s.start(0, s.image.symbols['os_cpu_return_supervise'])
+    assert watchdog_ending(s, 0, s.run_one(0)) and not s.flag('ready')
+    rows.append(dict(name='registered-faults', outcome='watchdog', first_secondary=retained_site,
+                     owner_records={name: s.owner_record(name) for name in (owner, other)}))
+    if 'clock_quiesce' in s.registry:
+        s, _, _ = case_running_claim(elf)
+        site = RETURN | defines['FAIL_THERMAL'] << 12 | 0x733
+        s.fault_owner('thermal_quiesce', site, 0x33)
+        assert drive_supervisor(s, rounds=1, complete=False) == 'return'
+        assert s.requested('clock_quiesce') and not s.requested('pmic_quiesce')
+        assert s.owner_record('thermal_quiesce')['visited'] == 1
+        assert s.rtc()['esr'] == quiesce_site(s, 'thermal_quiesce', site)
+        assert not s.fatal() and not s.flag('ready')
+        s.model.time += 24 * 3100000
+        s.start(0, s.image.symbols['os_cpu_return_supervise'])
+        assert watchdog_ending(s, 0, s.run_one(0)) and not s.flag('ready')
+        rows.append(dict(name='registered-fault-behind-pending', outcome='watchdog', owner='thermal'))
+    return rows
+
+
+def quiesce_site(s, owner, original):
+    """Retained owner identity from the declared crumb format and linked enum."""
+    identifier = s.model.u32(s.registry[owner] + s.layouts['os_quiesce']['owner'])
+    return (original & 0x80000fff) | defines['FAIL_QUIESCE'] << 12 | identifier << 16 | ((original >> 12) & 15) << 24
 
 
 VECTOR_LOWER_A64_SYNC = 8   # slot in the EL1 vector table: lower EL using AArch64, synchronous
@@ -452,7 +578,11 @@ def main():
     parser.add_argument('elf', type=Path)
     parser.add_argument('--baseline-elf', type=Path, help='an image without the failure return, for the negative control')
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--case', action='append', choices=('npu-report', 'startup', 'running', 'registered', 'repeat-device',
+                        'escalation', 'device-first', 'panic', 'unexpected-interrupt', 'el0', 'el0-second', 'negative', 'baseline'),
+                        help='run only this group; repeat to resume affected or unexecuted groups')
     args = parser.parse_args()
+    selected = lambda name: not args.case or name in args.case
     args.out.mkdir(parents=True, exist_ok=False)
     args.elf_symbols = {n: next(iter(v - {0})) for n, v in Layouts(args.elf, layout_names=()).symbols.items() if n in ('os_npu_start', 'os_application_prepare')}
     rows = []
@@ -462,197 +592,214 @@ def main():
     if args.baseline_elf:
         assert 'os_cpu_return_failure' not in board_images.symbols(args.baseline_elf)
 
-    # An NPU image that fails before its service ran publishes the never-started report.
-    if 'os_npu_published_report' in symbols(args.elf):
-        s, outcome = case_startup(args.elf, npu_never_ran=True)
+    if selected('npu-report'):
+        # An NPU image that fails before its service ran publishes the never-started report.
+        if 'os_npu_published_report' in symbols(args.elf):
+            s, outcome = case_startup(args.elf, npu_never_ran=True)
+            assert outcome == 'rom', outcome
+            returned_to_rom(s)
+            raw = bytes(s.model.uc.mem_read(s.local('os_npu_published_report'), 104))
+            words = struct.unpack_from('<4I2Q10I', raw)
+            # magic, version, bytes, finished=2 (never started), the failure record's epoch and generation,
+            # then stopped=1 and nothing else.
+            assert words[:4] == (0x5255504e, 1, 104, 2) and words[4] == prior.EPOCH and words[5] == 7, words
+            assert words[6:] == (0, 0, 0, 0, 0, 0, 1, 0, 0, 0) and not any(raw[72:]), words
+            rows.append(dict(name='startup-npu-never-ran', outcome=outcome, report=list(words)))
+            # A service that already ran (the fixture's finished report) is never replaced.
+            s, outcome = case_startup(args.elf)
+            assert outcome == 'rom' and s.model.u32(s.local('os_npu_published_report') + 12) == 1
+            rows.append(dict(name='startup-npu-ran', outcome=outcome))
+
+            if records.image_manifest(args.elf)['manifest'] is None:
+                save(args.out / 'results.json', {'physical_access': False, 'cases': rows,
+                     'image_sha256': hashlib.sha256(args.elf.read_bytes()).hexdigest(),
+                     'model_boundary': 'An image without an application manifest holds no result record; only its NPU stop report is checked.'})
+                print('PASS linked OS failure return (NPU report):', len(rows), 'cases')
+                return
+
+    if selected('startup'):
+        # Before the scheduler: ROM return, record, all eight cores in the terminal.
+        s, outcome = case_startup(args.elf)
         assert outcome == 'rom', outcome
         returned_to_rom(s)
-        raw = bytes(s.model.uc.mem_read(s.local('os_npu_published_report'), 104))
-        words = struct.unpack_from('<4I2Q10I', raw)
-        # magic, version, bytes, finished=2 (never started), the failure record's epoch and generation,
-        # then stopped=1 and nothing else.
-        assert words[:4] == (0x5255504e, 1, 104, 2) and words[4] == prior.EPOCH and words[5] == 7, words
-        assert words[6:] == (0, 0, 0, 0, 0, 0, 1, 0, 0, 0) and not any(raw[72:]), words
-        rows.append(dict(name='startup-npu-never-ran', outcome=outcome, report=list(words)))
-        # A service that already ran (the fixture's finished report) is never replaced.
-        s, outcome = case_startup(args.elf)
-        assert outcome == 'rom' and s.model.u32(s.local('os_npu_published_report') + 12) == 1
-        rows.append(dict(name='startup-npu-ran', outcome=outcome))
-
-        save(args.out / 'results.json', {'physical_access': False, 'cases': rows,
-             'image_sha256': hashlib.sha256(args.elf.read_bytes()).hexdigest(),
-             'model_boundary': 'An NPU image without an application manifest holds no result record, so only the NPU report is checked.'})
-        print('PASS linked OS failure return (NPU report):', len(rows), 'cases')
-        return
-
-    # Before the scheduler: ROM return, record, all eight cores in the terminal.
-    s, outcome = case_startup(args.elf)
-    assert outcome == 'rom', outcome
-    returned_to_rom(s)
-    failure = board_failure(s)
-    assert failure['group'] == 'application' and failure['site'] == 0xb01 and failure['value'] == hex(0xb01), failure
-    record, payload = s.record()
-    assert record['context'] == 'startup' and record['site'] == (RETURN | APPLICATION << 12 | 0xb01) and \
-        record['value'] == 0xb01 and record['core'] == 0, record
-    assert s.flag('closing') == s.flag('failing') == s.flag('prefail') == s.flag('ready') == 1
-    assert s.fatal() == 0
-    assert not s.model.postclean, s.model.postclean[:4]
-    assert all(s.model.u64(s.model.report + 688 + c * 1024 + 24) == prior.EPOCH for c in range(8)), 'every core restored'
-    rows.append(dict(name='startup', outcome=outcome, record=record, breadcrumb=failure, instructions=s.model.count))
-    (args.out / 'startup-return-report.bin').write_bytes(bytes(s.model.uc.mem_read(s.model.report, 8880)))
-    (args.out / 'startup-failure-record.bin').write_bytes(payload)
-
-    # A refusing start hook: the note, then the board main panic, before the scheduler.
-    npu_start = args.elf_symbols['os_npu_start']
-    for name, group, line, value, caller in (
-            ('startup-refusal-prepare', 1, 37, 0xffff, args.elf_symbols['os_application_prepare']),
-            ('startup-refusal-npu', 10, 434, 0, npu_start)):
-        s, outcome = case_startup_refusal(args.elf, group, line, value, caller)
-        assert outcome == 'rom', (name, outcome)
-        returned_to_rom(s)
-        assert s.flag('closing') == s.flag('failing') == s.flag('prefail') == s.flag('ready') == 1, name
-        assert s.fatal() == 0, 'no watchdog path'
+        failure = board_failure(s)
+        assert failure['group'] == 'application' and failure['site'] == 0xb01 and failure['value'] == hex(0xb01), failure
+        record, payload = s.record()
+        assert record['context'] == 'startup' and record['site'] == (RETURN | APPLICATION << 12 | 0xb01) and \
+            record['value'] == 0xb01 and record['core'] == 0, record
+        assert s.flag('closing') == s.flag('failing') == s.flag('prefail') == s.flag('ready') == 1
+        assert s.fatal() == 0
         assert not s.model.postclean, s.model.postclean[:4]
         assert all(s.model.u64(s.model.report + 688 + c * 1024 + 24) == prior.EPOCH for c in range(8)), 'every core restored'
+        rows.append(dict(name='startup', outcome=outcome, record=record, breadcrumb=failure, instructions=s.model.count))
+        (args.out / 'startup-return-report.bin').write_bytes(bytes(s.model.uc.mem_read(s.model.report, 8880)))
+        (args.out / 'startup-failure-record.bin').write_bytes(payload)
+
+        # A refusing start hook: the note, then the board main panic, before the scheduler.
+        npu_start = args.elf_symbols['os_npu_start']
+        for name, group, line, value, caller in (
+                ('startup-refusal-prepare', 1, 37, 0xffff, args.elf_symbols['os_application_prepare']),
+                ('startup-refusal-npu', 10, 434, 0, npu_start)):
+            s, outcome = case_startup_refusal(args.elf, group, line, value, caller)
+            assert outcome == 'rom', (name, outcome)
+            returned_to_rom(s)
+            assert s.flag('closing') == s.flag('failing') == s.flag('prefail') == s.flag('ready') == 1, name
+            assert s.fatal() == 0, 'no watchdog path'
+            assert not s.model.postclean, s.model.postclean[:4]
+            assert all(s.model.u64(s.model.report + 688 + c * 1024 + 24) == prior.EPOCH for c in range(8)), 'every core restored'
+            record, payload = s.record()
+            assert record['core'] == 0 and record['context'] in ('startup', 'fault'), record
+            rows.append(dict(name=name, outcome=outcome, record=record, breadcrumb=board_failure(s)))
+
+    if selected('running'):
+        # After the scheduler: the claim, then the supervisor's stop sequence, then the terminals.
+        s, outcome, site = case_running_claim(args.elf)
+        assert outcome == 'return', outcome
+        assert s.flag('closing') == s.flag('failing') == 1 and not s.flag('ready') and not s.flag('prefail')
+        assert s.fatal() == 0, 'admission stays open for the stop paths'
         record, payload = s.record()
-        assert record['core'] == 0 and record['context'] in ('startup', 'fault'), record
-        rows.append(dict(name=name, outcome=outcome, record=record, breadcrumb=board_failure(s)))
+        assert record['context'] == 'running' and record['site'] == site and record['value'] == 0x4641 and \
+            record['caller'] == 0x41070000, record
+        assert drive_supervisor(s) == 'park'   # the supervisor suspends after notifying the terminals
+        assert s.flag('ready') == 1 and sorted(c for c, _ in s.model.notified) == [0] * 8, s.model.notified
+        assert len({h for _, h in s.model.notified}) == 8, 'one terminal task per core'
+        outcome = s.terminals()
+        assert outcome == 'rom', outcome
+        returned_to_rom(s)
+        failure = board_failure(s)
+        assert failure['group'] == 'application' and failure['site'] == 0xb7f, failure
+        assert s.record()[0] == record and not s.model.postclean
+        rows.append(dict(name='running', outcome=outcome, record=record, breadcrumb=failure, instructions=s.model.count))
 
-    # After the scheduler: the claim, then the supervisor's stop sequence, then the terminals.
-    s, outcome, site = case_running_claim(args.elf)
-    assert outcome == 'return', outcome
-    assert s.flag('closing') == s.flag('failing') == 1 and not s.flag('ready') and not s.flag('prefail')
-    assert s.fatal() == 0, 'admission stays open for the stop paths'
-    record, payload = s.record()
-    assert record['context'] == 'running' and record['site'] == site and record['value'] == 0x4641 and \
-        record['caller'] == 0x41070000, record
-    assert drive_supervisor(s) == 'park'   # the supervisor suspends after notifying the terminals
-    assert s.flag('ready') == 1 and sorted(c for c, _ in s.model.notified) == [0] * 8, s.model.notified
-    assert len({h for _, h in s.model.notified}) == 8, 'one terminal task per core'
-    outcome = s.terminals()
-    assert outcome == 'rom', outcome
-    returned_to_rom(s)
-    failure = board_failure(s)
-    assert failure['group'] == 'application' and failure['site'] == 0xb7f, failure
-    assert s.record()[0] == record and not s.model.postclean
-    rows.append(dict(name='running', outcome=outcome, record=record, breadcrumb=failure, instructions=s.model.count))
+    if selected('registered'):
+        rows.extend(registered_cases(args.elf))
 
-    # A later application failure leaves the first record and the open admission.
-    s, outcome, site = case_running_claim(args.elf)
-    first = s.record()[1]
-    s.start(2, s.image.symbols['board_fail_at'], (RETURN | APPLICATION << 12 | 0xb01, 5, 0x41070100))
-    assert s.run_one(2) == 'return' and s.fatal() == 0 and s.record()[1] == first
-    rows.append(dict(name='running-repeat', outcome='first-record-kept'))
+    if selected('repeat-device'):
+        # A later application failure leaves the first record and the open admission.
+        s, outcome, site = case_running_claim(args.elf)
+        first = s.record()[1]
+        s.start(2, s.image.symbols['board_fail_at'], (RETURN | APPLICATION << 12 | 0xb01, 5, 0x41070100))
+        assert s.run_one(2) == 'return' and s.fatal() == 0 and s.record()[1] == first
+        rows.append(dict(name='running-repeat', outcome='first-record-kept'))
 
-    # A device failure during the return is not recoverable: admission closes and the
-    # supervisor ends at the watchdog path instead of notifying the terminals.
-    s.start(3, s.image.symbols['board_fail_at'], (PMIC << 12 | 0x123, 9, 0x41070200))
-    assert s.run_one(3) == 'return' and s.fatal() == 1
-    assert watchdog_ending(s, 0, drive_supervisor(s, 2)) and not s.flag('ready') and not s.model.notified
-    rows.append(dict(name='running-device', outcome='watchdog'))
+        # A device failure during the return is not recoverable: admission closes and the
+        # supervisor ends at the watchdog path instead of notifying the terminals.
+        s.start(3, s.image.symbols['board_fail_at'], (PMIC << 12 | 0x123, 9, 0x41070200))
+        assert s.run_one(3) == 'return' and s.fatal() == 1
+        assert watchdog_ending(s, 0, drive_supervisor(s, 2)) and not s.flag('ready') and not s.model.notified
+        rows.append(dict(name='running-device', outcome='watchdog'))
 
-    # An unfinished return ends at the watchdog after the bounded interval.
-    s, outcome, site = case_running_claim(args.elf)
-    m = s.model
-    m.time += 24 * 4_000_000   # four seconds pass with the stop sequence unfinished
-    m.put32(s.local('thermal_done'), 0)
-    s.start(0, s.image.symbols['os_cpu_return_supervise'])
-    assert watchdog_ending(s, 0, s.run_one(0)) and s.fatal() == 1 and not s.flag('ready')
-    rows.append(dict(name='escalation', outcome='watchdog'))
+    if selected('escalation'):
+        # An unfinished return ends at the watchdog after the bounded interval.
+        s, outcome, site = case_running_claim(args.elf)
+        m = s.model
+        m.time += 24 * 4_000_000   # four seconds pass with the stop sequence unfinished
+        s.start(0, s.image.symbols['os_cpu_return_supervise'])
+        assert watchdog_ending(s, 0, s.run_one(0)) and s.fatal() == 1 and not s.flag('ready')
+        rows.append(dict(name='escalation', outcome='watchdog'))
 
-    # A device failure that already closed admission keeps the watchdog ending.
-    s, outcome, site = case_running_claim(args.elf, preset_fatal=True)
-    assert outcome == 'return' and not s.flag('closing') and not s.flag('failing') and s.fatal() == 1
-    rows.append(dict(name='device-first', outcome='watchdog'))
+    if selected('device-first'):
+        # A device failure that already closed admission keeps the watchdog ending.
+        s, outcome, site = case_running_claim(args.elf, preset_fatal=True)
+        assert outcome == 'return' and not s.flag('closing') and not s.flag('failing') and s.fatal() == 1
+        rows.append(dict(name='device-first', outcome='watchdog'))
 
-    # Software-detected faults on a core that can still schedule return; others do not.
-    for name, masked in (('panic', False), ('panic-masked', True)):
+    if selected('panic'):
+        # Software-detected faults on a core that can still schedule return; others do not.
+        for name, masked in (('panic', False), ('panic-masked', True)):
+            s = Scenario(args.elf)
+            s.scheduler(True)
+            m = s.model
+            m.reg[6]['daif'] = 0x80 if masked else 0
+            m.reg[6]['icc_pmr_el1'] = 0xff
+            file = s.local('ss_result_capacity')   # any readable address names the file
+            s.start(6, s.image.symbols['platform_panic'], (file, 1234))
+            outcome = s.run_one(6)
+            if masked:
+                assert watchdog_ending(s, 6, outcome) and not s.flag('closing'), outcome
+            else:
+                assert outcome == 'park' and s.flag('failing') == 1 and 6 not in s.model.suspended
+                record, payload = s.record()
+                assert record['context'] == 'fault' and record['site'] == RETURN | 0x1000 | 1234 and \
+                    record['value'] == file, record
+                failure = board_failure(s)
+                assert failure['group'] == 'board' and failure['site'] == 1234, failure
+            rows.append(dict(name=name, outcome=outcome))
+
+    if selected('unexpected-interrupt'):
         s = Scenario(args.elf)
         s.scheduler(True)
         m = s.model
-        m.reg[6]['daif'] = 0x80 if masked else 0
-        m.reg[6]['icc_pmr_el1'] = 0xff
-        file = s.local('ss_result_capacity')   # any readable address names the file
-        s.start(6, s.image.symbols['platform_panic'], (file, 1234))
+        m.put64(s.local('diagnostic_deadline'), prior.DEADLINE)
+        s.start(6, s.image.symbols['vApplicationIRQHandler'], (300,))
         outcome = s.run_one(6)
-        if masked:
-            assert watchdog_ending(s, 6, outcome) and not s.flag('closing'), outcome
-        else:
-            assert outcome == 'park' and s.flag('failing') == 1 and 6 not in s.model.suspended
-            record, payload = s.record()
-            assert record['context'] == 'fault' and record['site'] == RETURN | 0x1000 | 1234 and \
-                record['value'] == file, record
-            failure = board_failure(s)
-            assert failure['group'] == 'board' and failure['site'] == 1234, failure
-        rows.append(dict(name=name, outcome=outcome))
+        assert outcome == 'return' and s.flag('failing') == 1 and m.u32(GICD + 0x180 + 4 * 9) == 1 << (300 % 32)
+        failure = board_failure(s)
+        assert failure['group'] == 'board' and failure['site'] == 0x800 | 300 and failure['value'] == hex(300), failure
+        rows.append(dict(name='unexpected-interrupt', outcome=outcome))
 
-    s = Scenario(args.elf)
-    s.scheduler(True)
-    m = s.model
-    m.put64(s.local('diagnostic_deadline'), prior.DEADLINE)
-    s.start(6, s.image.symbols['vApplicationIRQHandler'], (300,))
-    outcome = s.run_one(6)
-    assert outcome == 'return' and s.flag('failing') == 1 and m.u32(GICD + 0x180 + 4 * 9) == 1 << (300 % 32)
-    failure = board_failure(s)
-    assert failure['group'] == 'board' and failure['site'] == 0x800 | 300 and failure['value'] == hex(300), failure
-    rows.append(dict(name='unexpected-interrupt', outcome=outcome))
+    if selected('el0'):
+        # Exceptions from an application task at EL0: the task is abandoned, the board returns.
+        ELR = 0x41070040
+        for name, core, klass, iss, far, value in (
+                ('el0-data-abort', 6, 0x24, 0x46, 0x7a000000, 0x7a000000),      # store to an unmapped address
+                ('el0-instruction-abort', 6, 0x20, 0x06, 0x7a000100, 0x7a000100),
+                ('el0-undefined', 2, 0x00, 0x00, 0xdead0000, 0),                # FAR is unknown for this class
+                ('el0-alignment', 3, 0x24, 0x61, 0x41f00003, 0x41f00003),       # data abort, alignment fault status
+                ('el0-pc-alignment', 5, 0x22, 0, 0x41070042, 0x41070042),
+                ('el0-sp-alignment', 1, 0x26, 0, 0, 0),
+                ('el0-secondary', 7, 0x24, 0x46, 0x7a000008, 0x7a000008)):
+            # The controller reads the unmasked priority mask back as 0xf8 when it has five priority bits.
+            s, row = case_el0_return(args.elf, name, core, klass, iss, far, ELR, value, pmr=0xf8 if core == 6 else 0xff)
+            rows.append(row)
+            if name == 'el0-data-abort':
+                (args.out / 'el0-data-abort-failure-record.bin').write_bytes(s.record()[1])
+    if selected('el0-second'):
+        # A second EL0 fault on another core: its own stack, the first record kept.
+        ELR = 0x41070040
+        s, row = case_el0_return(args.elf, 'el0-first', 6, 0x24, 0x46, 0x7a000000, ELR, 0x7a000000)
+        first = s.record()[1]
+        assert raise_exception(s, 4, VECTOR_LOWER_A64_SYNC, 0x00, 0, 0, 0x41070100) == 'el0'
+        assert check_el0_entry(s, 4, 0x00, 0, 0, 0x41070100) == 1, 'a second stack'
+        assert finish_el0_fault(s, 4) == 'park' and 4 in s.model.suspended and s.fatal() == 0 and s.record()[1] == first
+        rows.append(dict(name='el0-second-fault', outcome='first-record-kept'))
 
-    # Exceptions from an application task at EL0: the task is abandoned, the board returns.
-    ELR = 0x41070040
-    for name, core, klass, iss, far, value in (
-            ('el0-data-abort', 6, 0x24, 0x46, 0x7a000000, 0x7a000000),      # store to an unmapped address
-            ('el0-instruction-abort', 6, 0x20, 0x06, 0x7a000100, 0x7a000100),
-            ('el0-undefined', 2, 0x00, 0x00, 0xdead0000, 0),                # FAR is unknown for this class
-            ('el0-alignment', 3, 0x24, 0x61, 0x41f00003, 0x41f00003),       # data abort, alignment fault status
-            ('el0-pc-alignment', 5, 0x22, 0, 0x41070042, 0x41070042),
-            ('el0-sp-alignment', 1, 0x26, 0, 0, 0),
-            ('el0-secondary', 7, 0x24, 0x46, 0x7a000008, 0x7a000008)):
-        # The controller reads the unmasked priority mask back as 0xf8 when it has five priority bits.
-        s, row = case_el0_return(args.elf, name, core, klass, iss, far, ELR, value, pmr=0xf8 if core == 6 else 0xff)
+    if selected('negative'):
+        # Negative controls: the watchdog ending is kept.
+        for name, kwargs in (
+                ('el1-exception', dict(slot=VECTOR_CURRENT_SPX_SYNC, spsr=5, klass=0x25)),    # data abort taken from EL1h
+                ('el1-svc-class-fault', dict(slot=VECTOR_CURRENT_SPX_SYNC, spsr=5, klass=0x21)),
+                ('el0-masked', dict(spsr=0x80)),                  # interrupts masked in the faulting task
+                ('el0-pmr', dict(pmr=0x98)),                      # in a kernel critical section (API mask)
+                ('el0-aarch32', dict(spsr=0x10)),
+                ('el0-other-class', dict(klass=0x07)),            # an FP/SIMD access trap
+                ('el0-no-stack', dict(used_slots=8))):
+            s, row = case_el0_stop(args.elf, name, **kwargs)
+            rows.append(row)
+        # A device failure closed admission first: the exception still ends the task, the claim is refused.
+        s, row = case_el0_stop(args.elf, 'el0-device-first', preset_fatal=True)
         rows.append(row)
-        if name == 'el0-data-abort':
-            (args.out / 'el0-data-abort-failure-record.bin').write_bytes(s.record()[1])
-    # A second EL0 fault on another core: its own stack, the first record kept.
-    s, row = case_el0_return(args.elf, 'el0-first', 6, 0x24, 0x46, 0x7a000000, ELR, 0x7a000000)
-    first = s.record()[1]
-    assert raise_exception(s, 4, VECTOR_LOWER_A64_SYNC, 0x00, 0, 0, 0x41070100) == 'el0'
-    assert check_el0_entry(s, 4, 0x00, 0, 0, 0x41070100) == 1, 'a second stack'
-    assert finish_el0_fault(s, 4) == 'park' and 4 in s.model.suspended and s.fatal() == 0 and s.record()[1] == first
-    rows.append(dict(name='el0-second-fault', outcome='first-record-kept'))
 
-    # Negative controls: the watchdog ending is kept.
-    for name, kwargs in (
-            ('el1-exception', dict(slot=VECTOR_CURRENT_SPX_SYNC, spsr=5, klass=0x25)),    # data abort taken from EL1h
-            ('el1-svc-class-fault', dict(slot=VECTOR_CURRENT_SPX_SYNC, spsr=5, klass=0x21)),
-            ('el0-masked', dict(spsr=0x80)),                  # interrupts masked in the faulting task
-            ('el0-pmr', dict(pmr=0x98)),                      # in a kernel critical section (API mask)
-            ('el0-aarch32', dict(spsr=0x10)),
-            ('el0-other-class', dict(klass=0x07)),            # an FP/SIMD access trap
-            ('el0-no-stack', dict(used_slots=8))):
-        s, row = case_el0_stop(args.elf, name, **kwargs)
-        rows.append(row)
-    # A device failure closed admission first: the exception still ends the task, the claim is refused.
-    s, row = case_el0_stop(args.elf, 'el0-device-first', preset_fatal=True)
-    rows.append(row)
-
-    if args.baseline_elf:
-        # Today's code: the same failures close admission and start no return.
-        base, outcome = case_startup(args.baseline_elf)
-        assert outcome in ('no-return', 'retained') and base.rtc()['last'] >> 16 != 0x0503, outcome
-        rows.append(dict(name='baseline-startup', outcome=outcome))
-        base, outcome, site = case_running_claim(args.baseline_elf)
-        assert base.fatal() == 1 and not base.flag('closing')
-        rows.append(dict(name='baseline-running', outcome='admission closed; no return requested'))
-        # Without the failure return an EL0 exception takes the EL3 stop.
-        base = Scenario(args.baseline_elf)
-        base.scheduler(True)
-        assert watchdog_ending(base, 6, raise_exception(base, 6, VECTOR_LOWER_A64_SYNC, 0x24, 0x46, 0x7a000000))
-        rows.append(dict(name='baseline-el0-exception', outcome='watchdog'))
+    if selected('baseline'):
+        if args.baseline_elf:
+            # Today's code: the same failures close admission and start no return.
+            base, outcome = case_startup(args.baseline_elf)
+            assert outcome in ('no-return', 'retained') and base.rtc()['last'] >> 16 != 0x0503, outcome
+            rows.append(dict(name='baseline-startup', outcome=outcome))
+            base, outcome, site = case_running_claim(args.baseline_elf)
+            assert base.fatal() == 1 and not base.flag('closing')
+            rows.append(dict(name='baseline-running', outcome='admission closed; no return requested'))
+            # Without the failure return an EL0 exception takes the EL3 stop.
+            base = Scenario(args.baseline_elf)
+            base.scheduler(True)
+            assert watchdog_ending(base, 6, raise_exception(base, 6, VECTOR_LOWER_A64_SYNC, 0x24, 0x46, 0x7a000000))
+            rows.append(dict(name='baseline-el0-exception', outcome='watchdog'))
     save(args.out / 'results.json', {'physical_access': False, 'cases': rows,
          'image_sha256': hashlib.sha256(args.elf.read_bytes()).hexdigest(),
          'baseline_sha256': hashlib.sha256(args.baseline_elf.read_bytes()).hexdigest() if args.baseline_elf else None,
          'checker_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-         'model_boundary': 'Service completions, task wake-ups and scheduler words are supplied; the rest runs from the ELF.'})
+         'selected_groups': args.case,
+         'model_boundary': 'Owner completion replies, task wake-ups and scheduler words are supplied; registration, callbacks, ordering and terminals run from the ELF.'})
     print('PASS linked OS failure return:', len(rows), 'cases')
 
 
