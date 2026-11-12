@@ -20,6 +20,14 @@ SCHED_PMU_EVENTS = ((0x03, 0x01, 0x17, 0x2a, 0x34, 0x35),
 SCHED_PMU_STATUS = ('ok', 'unarmed', 'not_el1', 'wrong_core', 'nested',
                     'not_active', 'wrong_cookie', 'no_counters',
                     'config_mismatch', 'not_prepared', 'frozen', 'overflow')
+CAUSE_MAGIC = 0x5353434155534531
+CAUSE_BYTES = 13904
+CAUSE_FOOTER_MAGIC = 0x5353434155534631
+CAUSE_PING_MAGIC = 0x535350494e473031
+CAUSE_PING_BYTES = 3392
+CAUSE_CASES = ('blank', 'isb', 'dsb_ish', 'dsb_sy', 'store', 'store_dsb_ish',
+               'store_dsb_sy', 'sgi', 'sgi_dsb_ish', 'sgi_dsb_sy', 'pmr_same',
+               'sgi_isb', 'sgi_isb_dsb_ish', 'sgi_isb_dsb_sy', 'pmr_same_dsb_sy')
 CONTROL_BINS = 192
 CONTROL_BIN_TICKS = 4
 CONTROL_MINIMUM = 10000
@@ -701,9 +709,182 @@ def decode_scheduler_pmu(payload, frequency):
             'recorder_scope': 'PMU publication follows counter freeze; existing latency diagnostics remain in the measured path'}
 
 
+def cycle_distribution(values):
+    ordered = sorted(values)
+    if not ordered or ordered[0] <= 0:
+        raise ValueError('cause samples must contain positive raw cycles')
+    return {'count': len(ordered), 'minimum': ordered[0],
+            'median': ordered[(len(ordered) - 1) // 2],
+            'p99': ordered[(99 * len(ordered) + 99) // 100 - 1],
+            'maximum': ordered[-1], 'raw_cycles': list(values)}
+
+
+def decode_latency_cause(payload, frequency):
+    if len(payload) != CAUSE_BYTES:
+        raise ValueError('latency cause report has the wrong size')
+    words = struct.unpack('<' + 'Q' * (CAUSE_BYTES // 8), payload)
+    offset = 0
+
+    def take(names):
+        nonlocal offset
+        fields = names.split()
+        result = dict(zip(fields, words[offset:offset + len(fields)]))
+        offset += len(fields)
+        return result
+
+    header = take('magic version bytes cores phases cases samples flags')
+    if tuple(header.values())[:7] != (CAUSE_MAGIC, 1, CAUSE_BYTES, 8, 2, 15, 64) or header['flags'] != 13:
+        raise ValueError('latency cause header is invalid or its snapshot is incomplete')
+    cores = []
+    for core in range(8):
+        row = take('status midr mpidr pmcr userenr filter enabled overflow irq_count ready frozen '
+                   'icc_ctlr pmr sgi_irq_count cycle_begin tick_begin cycle_end tick_end')
+        if (row['status'] or row['ready'] != 1 or row['frozen'] != 1 or row['overflow'] or
+                row['pmcr'] & 0x4f != 0x41 or row['userenr'] != 4 or row['filter'] or
+                row['enabled'] != 1 << 31 or row['cycle_end'] <= row['cycle_begin'] or
+                row['tick_end'] <= row['tick_begin']):
+            raise ValueError(f'cause core {core} configuration or clock interval is invalid')
+        row.update(core=core, pmhe=bool(row['icc_ctlr'] & (1 << 6)),
+                   wall_cycle_ratio_mhz=(row['cycle_end'] - row['cycle_begin']) * frequency /
+                       (row['tick_end'] - row['tick_begin']) / 1000000)
+        cores.append(row)
+    sends = []
+    for source in range(8):
+        for target in range(8):
+            row = take('count total_cycles max_cycles interrupted')
+            if row['max_cycles'] > row['total_cycles'] or (not row['count'] and any(row.values())):
+                raise ValueError('cause SGI aggregate is inconsistent')
+            if row['count']:
+                row.update(source=source, target=target)
+                sends.append(row)
+    phases = {}
+    for phase in ('idle', 'busy'):
+        rows = []
+        for target in range(8):
+            row = take('release_count release_total release_max release_sgi_total release_sgi_max release_sends '
+                       'state_count state_total state_max state_sgi_total state_sgi_max state_sends '
+                       'mask_tail_total mask_tail_max')
+            if (row['release_max'] > row['release_total'] or row['state_max'] > row['state_total'] or
+                    row['release_sgi_total'] > row['release_total'] or
+                    row['state_sgi_total'] > row['state_total'] or
+                    row['mask_tail_total'] > row['release_total']):
+                raise ValueError('cause target aggregate is inconsistent')
+            row['target'] = target
+            rows.append(row)
+        phases[phase] = rows
+    tick = take('count begin_tick end_tick begin_cycles end_cycles release_mask state_mask interrupted')
+    if (not tick['count'] or tick['release_mask'] != 0xff or tick['state_mask'] != 0xff or
+            tick['end_cycles'] <= tick['begin_cycles'] or tick['end_tick'] <= tick['begin_tick']):
+        raise ValueError('cause report lacks a complete correlated eight-target tick')
+    targets = []
+    for target in range(8):
+        row = take('release_begin release_end release_sgi_cycles release_sends '
+                   'state_begin state_end state_sgi_cycles state_sends deadline_state deadline '
+                   'slice_deadline due mask_tail_begin mask_tail_end')
+        if not (tick['begin_cycles'] <= row['release_begin'] < row['release_end'] <= tick['end_cycles'] and
+                tick['begin_cycles'] <= row['state_begin'] < row['state_end'] <= tick['end_cycles']):
+            raise ValueError('cause component lies outside its retained tick')
+        release = row['release_end'] - row['release_begin']
+        if row['mask_tail_begin'] or row['mask_tail_end']:
+            if not row['release_begin'] <= row['mask_tail_begin'] < row['mask_tail_end'] <= row['release_end']:
+                raise ValueError('cause mask tail lies outside its release')
+        mask_tail = row['mask_tail_end'] - row['mask_tail_begin']
+        if row['release_sgi_cycles'] + mask_tail > release:
+            raise ValueError('cause SGI and mask-tail components exceed their release')
+        row.update(target=target, release_cycles=release, mask_tail_cycles=mask_tail,
+                   release_residual_cycles=release - row['release_sgi_cycles'] - mask_tail,
+                   deadline_scan_cycles=row['state_end'] - row['state_begin'])
+        targets.append(row)
+    tick['targets'] = targets
+    tick['cycles'] = tick['end_cycles'] - tick['begin_cycles']
+    tick['time_us'] = (tick['end_tick'] - tick['begin_tick']) * 1000000 / frequency
+    tick['effective_mhz'] = tick['cycles'] / tick['time_us']
+    tick['top_clock_consistent'] = abs(tick['effective_mhz'] - 1794) <= 179.4
+    tick['outside_release_and_deadline_cycles'] = tick['cycles'] - sum(
+        row['release_cycles'] + row['deadline_scan_cycles'] for row in targets)
+    if tick['outside_release_and_deadline_cycles'] < 0:
+        raise ValueError('cause component intervals exceed their tick')
+    bench = take('requested done status sgi_sends sgi_observed delivery_wait_ticks pending '
+                 'observer_count observer_min observer_median observer_max')
+    counts = words[offset:offset + 15]
+    offset += 15
+    if (bench['requested'] != 1 or bench['done'] != 1 or bench['status'] or bench['pending'] or
+            tuple(counts) != (64,) * 15 or bench['sgi_sends'] != 384 or
+            bench['observer_count'] != 64 or
+            not 0 < bench['observer_min'] <= bench['observer_median'] <= bench['observer_max'] or
+            bench['sgi_observed'] < bench['sgi_sends']):
+        raise ValueError('cause barrier samples or SGI completion coverage are incomplete')
+    cases = {}
+    for name, count in zip(CAUSE_CASES, counts):
+        cases[name] = cycle_distribution(words[offset:offset + count])
+        offset += 64
+    if offset != len(words):
+        raise ValueError('cause decoder and wire report disagree')
+    bench['cases'] = cases
+    bench['extra_sgi_observations'] = bench['sgi_observed'] - bench['sgi_sends']
+    return {'header': header, 'cores': cores, 'sgi': sends, 'phases': phases,
+            'tick': tick, 'benchmark': bench,
+            'component_scope': 'raw instrumented cycles; hook bookkeeping and its interaction with DSB remain included',
+            'benchmark_scope': 'one IRQ-masked leaf sample per tick; matching blank and common endpoint ISB included; stores follow endpoint',
+            'sgi_scope': 'raw and context-synchronized arms differ; SGI-only does not establish target delivery',
+            'clock_scope': 'active CPU0 tick gives its cycle frequency; first/latest IRQ ratios can include WFI and are wall-interval coverage only',
+            'deadline_scope': 'state fields describe the production per-CPU deadline scan; release residual also contains API guards and existing observers'}
+
+
+def decode_latency_cause_ping(payload, frequency, core_mhz):
+    if len(payload) != CAUSE_PING_BYTES:
+        raise ValueError('cause ping report has the wrong size')
+    magic, version, size, samples, freq, begin, end, status = struct.unpack_from('<8Q', payload)
+    if ((magic, version, size, samples) != (CAUSE_PING_MAGIC, 1, CAUSE_PING_BYTES, 256) or
+            freq != frequency or status != 1 or end <= begin or end - begin > frequency):
+        raise ValueError('cause ping header or bounded completion is invalid')
+    ref = dict(zip(('core', 'group', 'status', 'completed', 'begin_tick', 'end_tick', 'irq_begin', 'irq_end'),
+                   struct.unpack_from('<8Q', payload, 64)))
+    if (ref['core'], ref['group'], ref['status'], ref['completed']) != (0, 0, 1, 256) or ref['irq_end'] < ref['irq_begin']:
+        raise ValueError('cause ping local reference is incomplete')
+    ref['cycles'] = cycle_distribution(struct.unpack_from('<256I', payload, 128))
+    pairs = []
+    for index, target in enumerate((1, 6)):
+        offset = 1152 + index * 1120
+        row = dict(zip(('source_core', 'target_core', 'source_group', 'target_group', 'status', 'completed',
+                        'begin_tick', 'end_tick', 'source_irq_begin', 'source_irq_end', 'target_irq_begin', 'target_irq_end'),
+                       struct.unpack_from('<12Q', payload, offset)))
+        if ((row['source_core'], row['target_core'], row['source_group'], row['target_group'], row['status'], row['completed']) !=
+                (0, target, 0, int(target == 6), 1, 256) or row['end_tick'] < row['begin_tick'] or
+                row['source_irq_end'] < row['source_irq_begin'] or row['target_irq_end'] < row['target_irq_begin']):
+            raise ValueError('cause ping pair identity, sequence or coverage is invalid')
+        row['roundtrip_cycles'] = cycle_distribution(struct.unpack_from('<256I', payload, offset + 96))
+        row['estimated_transfer_median_cycles'] = row['roundtrip_cycles']['median'] / 2
+        row['estimated_transfer_median_us'] = row['estimated_transfer_median_cycles'] / core_mhz
+        row['half_difference_of_medians_cycles'] = (row['roundtrip_cycles']['median'] - ref['cycles']['median']) / 2
+        pairs.append(row)
+    return {'status': 'ok', 'frequency': frequency, 'begin_tick': begin, 'end_tick': end,
+            'reference': ref, 'pairs': pairs,
+            'scope': 'CPU0 measures round trips on its own cycle counter; half RTT includes peer instructions, polling and IRQ interference',
+            'topology_scope': 'CPU-L and CPU-B are clock/type groups sharing the documented DSU; no separate DSU hop is asserted'}
+
+
+def peel_latency_cause(payload):
+    cause_tail, ping_tail = b'', b''
+    if len(payload) >= 64 and struct.unpack_from('<Q', payload, len(payload) - 64)[0] == CAUSE_FOOTER_MAGIC:
+        footer = struct.unpack_from('<8Q', payload, len(payload) - 64)
+        _, version, size, cause_at, cause_size, ping_at, ping_size, reserved = footer
+        if (version != 1 or size != len(payload) or cause_size != CAUSE_BYTES or
+                ping_size != CAUSE_PING_BYTES or reserved or cause_at < RESULT_BYTES or
+                cause_at % 64 or ping_at != cause_at + cause_size or
+                ping_at + ping_size > len(payload) - 64 or
+                any(payload[ping_at + ping_size:-64])):
+            raise ValueError('cause footer offsets, padding or report sizes are invalid')
+        cause_tail = payload[cause_at:ping_at]
+        ping_tail = payload[ping_at:ping_at + ping_size]
+        payload = payload[:cause_at]
+    return payload, cause_tail, ping_tail
+
+
 def decode(payload, dma=False):
     if len(payload) < RESULT_BYTES:
         raise ValueError(f'latency result must contain {RESULT_BYTES} bytes')
+    payload, cause_tail, ping_tail = peel_latency_cause(payload)
     tail = payload[RESULT_BYTES:]
     scheduler_pmu_tail = b''
     if len(tail) >= SCHED_PMU_BYTES and struct.unpack_from('<Q', tail, len(tail) - SCHED_PMU_BYTES)[0] == SCHED_PMU_MAGIC:
@@ -903,4 +1084,10 @@ def decode(payload, dma=False):
             'limitations': ['startup masking requires separate qualification',
                             'three final-image runs are required for repeatability',
                             'exception mask timing excludes entry-save work and post-timestamp observer, restore and ERET work']}
+    if cause_tail:
+        if dma or pmu_tail or control_tail or scheduler_pmu_tail or not scheduler_tail:
+            raise ValueError('cause report requires its exclusive traced CPU profile')
+        result['latency_cause'] = decode_latency_cause(cause_tail, frequency)
+        result['latency_cause_ping'] = decode_latency_cause_ping(ping_tail, frequency,
+            result['latency_cause']['tick']['effective_mhz'])
     return result
