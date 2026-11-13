@@ -108,7 +108,8 @@ int main(int argc,char **argv)
 READ_SETUP = r'''
 static atomic_uint storage_state,close_proven;
 static int opened=1;
-struct platform_state {uint64_t stage,fault,fault_why,fault_line,refused;};
+static uint8_t os_sd_pf_closed;                                     /* the close's PF withstand-field record (large_sd.c) */
+struct platform_state {uint64_t stage,fault,fault_why,fault_line,refused;uint8_t pf_found;};
 static struct platform_state platform;
 static struct {uint64_t lifetime_deadline_us;} config={100};
 struct device_memory_lease {void *pool;};

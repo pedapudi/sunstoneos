@@ -189,6 +189,9 @@ uint64_t os_sd_diag[4];
 /* The PF bank's power-mode register, voltage status and selector, raw, as the first open found them at its baseline and as the reopen at
  * 1.8 V found them (zero when there was no reopen); sd_owner.c:diag_word carries their PF fields in a failed identification's record. */
 uint32_t os_sd_bank_first[3], os_sd_bank_reopen[3];
+/* The PF withstand field record (a733_mmc_platform.h pf_found) of the open that reached READY, and of the last close that completed with bit 3
+ * set; ss_storage_pf_bank reports both. */
+uint8_t os_sd_pf_open, os_sd_pf_closed;
 static inline int diag_set(uint64_t stage, uint64_t detail)
 {
     if (!os_sd_diag[0]) { os_sd_diag[0] = stage; os_sd_diag[1] = detail; }     /* the first stop is the one that matters */
@@ -516,6 +519,9 @@ const struct os_large_device *os_large_device(void)
         memset(&platform, 0, sizeof platform); memset(&native, 0, sizeof native); memset(&card, 0, sizeof card);
         opened = 0; blocks_in_flight = 0; reopened = 1;
     }
+    /* The bank as the open that reached READY found it, kept on a pass as on a failure. */
+    memcpy(reopened ? os_sd_bank_reopen : os_sd_bank_first, platform.bank_raw, sizeof os_sd_bank_first);
+    os_sd_pf_open = platform.pf_found; os_sd_pf_closed = 0;
     record_mode();
 #ifndef OS_SD_WRITE
     atomic_store_explicit(&storage_state,SD_OPEN,memory_order_release);
@@ -557,6 +563,7 @@ void os_large_device_close(void)
         return;
     }
     descriptor_lease=(struct device_memory_lease){0};opened=0;
+    os_sd_pf_closed = (uint8_t)(8u | platform.pf_found);
     atomic_store_explicit(&close_proven,1,memory_order_release);
 #ifndef OS_SD_WRITE
     atomic_store_explicit(&storage_state,SD_CLOSED,memory_order_release);

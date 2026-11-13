@@ -218,6 +218,8 @@ static void finish_report(void)
     if (card_open) { (void)ss_storage_close(); card_open = 0; }
     uint64_t space;                                                         /* app_core bits 34:32: the owner's address space at its first instruction */
     if (ss_storage_owner_space(&space)) r.app_core = (r.app_core & 0xffffffffu) | (space & 7) << 32;
+    uint64_t bank;                                                          /* app_core bits 51:35: the PF bank record (ss_storage_pf_bank) */
+    if (ss_storage_pf_bank(&bank)) r.app_core |= (bank & 0x1ffff) << 35;
     ss_finish(&r, sizeof r);
 }
 #define E_MISMATCH 13

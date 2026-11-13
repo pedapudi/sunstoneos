@@ -35,6 +35,7 @@ static int requested, scenario, starts, polls, takes, recoveries, close_calls, r
 static int opened=1;
 static unsigned reopened;
 static uint32_t os_sd_bank_first[3], os_sd_bank_reopen[3];
+static uint8_t os_sd_pf_closed;
 static atomic_uint close_proven;
 static struct device_memory_lease descriptor_lease;
 static struct device_memory_pool memory;

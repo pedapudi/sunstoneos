@@ -485,6 +485,13 @@ int ss_storage_mode(uint64_t out[5])
     for (unsigned i = 0; i < 5; ++i) out[i] = os_sd_mode[i];
     return 1;
 }
+extern uint8_t os_sd_pf_open, os_sd_pf_closed;
+int ss_storage_pf_bank(uint64_t *out)
+{
+    if (!out) return 0;
+    *out = bank_fields(os_sd_bank_first) | bank_fields(os_sd_bank_reopen) << 5 | (uint64_t)(os_sd_pf_open & 7u) << 10 | (uint64_t)(os_sd_pf_closed & 15u) << 13;
+    return 1;
+}
 int ss_storage_owner_space(uint64_t *out)
 {
     if (!out) return 0;
