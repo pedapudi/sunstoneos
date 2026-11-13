@@ -572,6 +572,18 @@ def main():
                                          ROOT / 'apps/latency/manifest.json')
         return image.build(application)
 
+    def build_latency_direct():
+        """The latency application with its workload's task creations turned into direct FreeRTOS calls: a mutation of the
+        real init hook, which creates its tasks through the kit's ss_task_create_static_affinity_set (apps/latency/workload.c)."""
+        mutated = out / 'latency-direct-workload.c'
+        text = (ROOT / 'apps/latency/workload.c').read_text()
+        assert text.count('ss_task_create_static_affinity_set(') == 2, 'the latency workload no longer creates its tasks through the kit'
+        mutated.write_text(text.replace('ss_task_create_static_affinity_set(', 'xTaskCreateStaticAffinitySet('))
+        image = Image(out / 'build-latency-direct', extra_defines=['-DSUNSTONE_LATENCY=1', '-I' + str(ROOT / 'apps/latency')],
+                      extra_sources=['runtime/latency.c', 'runtime/latency_irq.c'], latency=True)
+        application = image.application('latency', ['apps/latency/native.c', mutated], ROOT / 'apps/latency/manifest.json')
+        return image.build(application)
+
     def build_partitioned(name, latency=False, scheduler=True):
         """The same board composition on the private owner scheduler (configSS_PARTITIONED_SCHEDULER)."""
         if latency:
@@ -705,6 +717,7 @@ def main():
         (out / 'build-reverted').mkdir()
         control_elf = pool.submit(build_hello, 'build-reverted-services', reverted_services(out / 'build-reverted'))
         latency_elf = pool.submit(build_latency)
+        latency_direct_elf = pool.submit(build_latency_direct)
         el0_elf = pool.submit(build_el0_abort)
         facts_elf = pool.submit(build_facts)
         large_elf = pool.submit(build_large, 'build-large', large_manifest_path(out / 'large-manifest.json', LARGE_DIGEST, LARGE_FILE))
@@ -733,6 +746,7 @@ def main():
         large_elf, large_big_elf, large_6g_elf, large_nodigest_elf = large_elf.result(), large_big_elf.result(), large_6g_elf.result(), large_nodigest_elf.result()
         storage_write_elf = storage_write_elf.result()
         reverted_owner_elf = reverted_owner_elf.result()
+        latency_direct_elf = latency_direct_elf.result()
         os_elf, control_elf, latency_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
             os_elf.result(), control_elf.result(), latency_elf.result(), el0_elf.result(),
             partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result(), facts_elf.result())
@@ -816,6 +830,14 @@ def main():
     c = run_case('latency-clock-not-modeled', latency_elf, scenario(usb_ready_ms=usb_delay_ms), None)
     c.failed_with('APPLICATION', 0xb03)
     c.require(c.main is not None and c.main['name'] == 'latency', 'latency did not reach its main entry')
+
+    # The same application with its task creations made direct FreeRTOS calls (the mutation): the real init hook, run by the image's own
+    # application start with os_space_app_init_active set, ends in the image's os_space_refuse_create with the detail 0x7a1 and never
+    # reaches the main entry; the unmutated image above did.
+    c = run_case('latency-init-hook-direct-creation-refused', latency_direct_elf, scenario(usb_ready_ms=usb_delay_ms), None)
+    c.require('FAILURE-RECORD group=APPLICATION detail=0x7a1' in c.output and 'PANIC board application startup' in c.output,
+              'the direct creation in the latency init hook was not refused with detail 0x7a1: %s' % c.output[-400:])
+    c.require(c.main is None, 'the latency application reached its main entry after a direct creation in its init hook')
 
     # 7. The resident lifetime: a supervisor renews the four-second watchdog while every
     # service reports. A healthy session outlives the first expiry; a transport that stalls
