@@ -158,9 +158,15 @@ class SlotQueue:
         """Block until this gate holds a slot; returns the Slot."""
         self.directory.mkdir(parents=True, exist_ok=True)
         ticket = self.directory / ('%d-%020d-%d.ticket' % (CLASS[priority], time.time_ns(), os.getpid()))
-        held = open(ticket, 'a+')
-        fcntl.flock(held, fcntl.LOCK_EX)
-        _describe(held, 'pid %d %s %s\n' % (os.getpid(), priority, label))
+        # Created and locked under the queue lock: a waiter that lists the tickets between the creation and the flock would take
+        # this one for a dead gate's and remove it.
+        queue = self._queue_lock()
+        try:
+            held = open(ticket, 'a+')
+            fcntl.flock(held, fcntl.LOCK_EX)
+            _describe(held, 'pid %d %s %s\n' % (os.getpid(), priority, label))
+        finally:
+            queue.close()
         announced = None
         try:
             while True:

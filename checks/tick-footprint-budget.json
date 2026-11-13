@@ -16,6 +16,22 @@
   "data stack exception stack": 7,
   "data total": 24
  },
+ "local publish": {
+  "code fixture": 4,
+  "code os": 51,
+  "data fixture load_task": 1,
+  "data fixture wake": 1,
+  "data fixture wake_task": 1,
+  "data os actions": 1,
+  "data os pxCurrentTCBs": 1,
+  "data os ssKernelBackend": 1,
+  "data os ssKernelCPUs": 5,
+  "data os ssKernelControl": 2,
+  "data os ssKernelRegistry": 1,
+  "data os ssKernelTasks": 2,
+  "data stack exception stack": 7,
+  "data total": 23
+ },
  "outside": {
   "code fixture": 4,
   "code os": 56,
