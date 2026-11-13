@@ -303,6 +303,21 @@ function. Code counts follow the path each wake takes, which varies with host
 load under multi-threaded QEMU, so they are reported against their budget but
 do not fail the check.
 
+CPU0's own release normally inserts the woken task straight into CPU0's run
+queue. While CPU0 drains control work, or while another core holds the control
+gate, the kernel queues the task through `ss_owner_publish` instead, which
+touches two more `ssKernelCPUs` lines (the incoming words and the dispatch
+word). Under multi-threaded QEMU this happens in about one release in 1,500, so
+it decided whether a run passed. The check budgets the two paths separately:
+the direct path keeps its budget of 3 `ssKernelCPUs` lines and 24 data lines,
+and the publish path has its own budget of 5 and 23, measured in the two such
+windows that the gate's cause model produced. The 24 such windows in a cause
+model with streaming confined to CPUs 4 to 7 fit the same budget for every
+kernel structure. Before each trace, the check classifies a forced window of
+five `ssKernelCPUs` lines and requires that it fits the publish budget only
+when it passes through `ss_owner_publish`, and that it exceeds the direct
+budget otherwise.
+
 ## The control phase retains enough samples for the requested percentile
 
 `SUNSTONE_LATENCY_CONTROL` adds a control phase to the latency application.

@@ -232,6 +232,20 @@ static void load_worker(void *argument)
     vTaskSuspend(NULL);
     configASSERT(0);
 }
+#ifdef SS_SCHED_TRACE_TEST_EXIT_SUSPEND
+/* Model case: CPU1's memory task interrupts itself between publishing its
+ * final self-suspension and masking, so the SGI exit's control drain parks it.
+ * The trace must record that suspension (flags 197); apps/latency/model.c
+ * checks it. If the SGI arrives too late, the task suspends itself and the
+ * check fails. */
+void ss_kernel_test_self_suspend_published(void)
+{
+    if (portGET_CORE_ID() != 1 || xTaskGetCurrentTaskHandle() != load_task[1] ||
+        !atomic_load_explicit(&stop_load, memory_order_acquire)) return;
+    portYIELD_CORE(1);
+    for (unsigned spin = 0; spin < 100000; ++spin) __asm__ volatile("isb" ::: "memory");
+}
+#endif
 static void wait_period(unsigned milliseconds)
 {
     const TickType_t budget = (TickType_t)(((uint64_t)SUNSTONE_LATENCY_RUN_US * configTICK_RATE_HZ + 999999u) / 1000000u);
