@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "owner.h"
 #include "latency_cause.h"
+#include "perturb.h"
 #include <stddef.h>
 
 _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "native 64-bit atomics required");
@@ -117,6 +118,11 @@ void ss_owner_publish(struct ss_owner *o, unsigned slot, unsigned priority)
      * empty bucket inspection is harmless and never authorizes activation. */
     uint64_t previous = atomic_fetch_or_explicit(&o->incoming_words,
         UINT64_C(1) << (2 * priority + slot / 64), memory_order_release);
+    SS_KERNEL_PERTURB(SS_PERTURB_OWNER_PUBLISH);
+    /* Pairs with the owner's barrier between clearing sgi_pending and its
+     * incoming check (ss_owner_commit_dispatch, ss_owner_settle): either that
+     * check sees this hint, or request_sgi below sees the cleared flag and
+     * sends the SGI. Release and acquire alone allow both to miss. */
     ss_owner_barrier(o->backend);
     uint64_t status = atomic_load_explicit(&o->dispatch, memory_order_acquire);
     if (!previous || (status & 8) || priority > (status & 7)) request_sgi(o);
@@ -168,6 +174,7 @@ unsigned ss_owner_drain(struct ss_owner *o, ss_owner_inspect inspect, void *ctx)
     /* Detach the logical list before reading its buckets. A later first
      * publication gets its own doorbell even while this batch is active. */
     (void)atomic_exchange_explicit(&o->incoming_words, 0, memory_order_acquire);
+    SS_KERNEL_PERTURB(SS_PERTURB_OWNER_DRAIN);
     merge_from(o, 0);
     for (; count < SS_OWNER_BATCH; ++count) {
         uint32_t priorities = detached_priorities(o);
@@ -199,6 +206,24 @@ bool ss_owner_commit_dispatch(struct ss_owner *o, unsigned priority, bool idle)
 {
     uint64_t status = (++o->sequence << 4) | (priority & 7u) | (idle ? 8u : 0u);
     atomic_store_explicit(&o->dispatch, status, memory_order_release);
+    /* Clear, DMB ISH, then check: pairs with the publisher's barrier between
+     * its incoming OR and its sgi_pending exchange (ss_owner_publish). */
+    atomic_store_explicit(&o->sgi_pending, 0, memory_order_release);
+    ss_owner_barrier(o->backend);
+    return ss_owner_has_pending(o);
+}
+/* An owner pass that took hints but selects no task closes the SGI handshake
+ * as a dispatch commit does. Without it sgi_pending stays set after the
+ * pass, and the next publisher, seeing it set, sends no SGI: its wake waits
+ * for the owner's next timer deadline. The clear, DMB ISH and incoming check
+ * pair with the publisher's incoming OR, DMB ISH and sgi_pending exchange:
+ * either this check sees the publication (true: the caller takes another
+ * pass) or the publisher sees the cleared flag and sends an SGI. A flag
+ * already clear needs no barrier, because a publisher that finds it clear
+ * sends its own SGI. */
+bool ss_owner_settle(struct ss_owner *o)
+{
+    if (!atomic_load_explicit(&o->sgi_pending, memory_order_relaxed)) return false;
     atomic_store_explicit(&o->sgi_pending, 0, memory_order_release);
     ss_owner_barrier(o->backend);
     return ss_owner_has_pending(o);
