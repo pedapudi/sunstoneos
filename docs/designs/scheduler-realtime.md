@@ -88,9 +88,33 @@ Two mechanisms can keep the working set resident:
   and per-core scheme registers. It does not protect a real-time core from its
   own streaming unless the scheme changes on each context switch.
 
-Isolation costs no hardware configuration and may suffice. Partitioning adds
-protection against other cores' traffic on L3 misses. The choice needs a
-measurement of the tick with streaming confined to non-real-time cores.
+Isolation alone was measured with streaming confined to CPUs 4-7 and CPUs 0-3
+idle between samples (build option `SUNSTONE_LATENCY_STREAM_MASK=0xf0`, evidence
+entry `1794597393456307577-46a485eb`; the footprint cuts and the owner SGI fix are
+in both images). Against all eight cores streaming (entry
+`1794508626388886966-ae6d2457`):
+
+| Busy-phase mean over complete ticks | All cores stream | CPUs 4-7 stream | Idle phase |
+| --- | ---: | ---: | ---: |
+| Whole tick, cycles | 212,455 | 76,410 | 33,304 |
+| Whole tick, L3 refills | 140.1 | 26.5 | 0.7 |
+| CPU0's own release, cycles | 61,627 | 7,839 | 2,227 |
+| Releases to CPUs 1-3, cycles each | 10,269-30,250 | 4,947-7,519 | 2,616-2,680 |
+| Releases to CPUs 4-7, cycles each | 7,819-11,970 | 4,250-8,671 | 2,636-2,672 |
+| Outside the releases and scans, cycles | 46,703 | 23,096 | 10,840 |
+| CPU0's longest busy wake | 228 µs | 93.1 µs | 28.8 µs (idle wake) |
+
+Isolation removes about three quarters of the busy tick's added cost but does not
+reach the idle tick. About 26 lines per tick that the idle tick finds in the
+shared L3 come from DRAM while other cores stream, at about 1,670 cycles each
+beyond the idle cost. Those lines are spread over every segment, including the
+releases to idle cores. They are what an L3 partition would keep, so the
+partition measurement is the next step for the remaining 43,000 cycles.
+
+The stream mask is a measurement build option. In a product the real-time core
+set should come from the board and application declarations, so that the
+scheduler places streaming work away from the declared cores; it should not be a
+build option.
 
 ## Time slicing has a task-count-independent traversal bound
 
