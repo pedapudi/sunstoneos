@@ -207,7 +207,7 @@ int npu_session_prepare(struct npu_sessions *s, const struct npu_session_config 
     unsigned n = 0;
     s->bootstrap = all[n++] = (struct a733_npu_buffer){v.cpu + p.bootstrap_offset,
         v.physical + p.bootstrap_offset, NPU_SESSION_BOOTSTRAP_BYTES, p.bootstrap_device,
-        A733_NPU_BUFFER_BOOTSTRAP};
+        A733_NPU_BUFFER_BOOTSTRAP, 0};
     for (unsigned m = 0; m < v.count; ++m) {
         struct npu_session *session = &s->session[m];
         session->layout = layouts[m];
@@ -217,7 +217,7 @@ int npu_session_prepare(struct npu_sessions *s, const struct npu_session_config 
             uint32_t bytes = layouts[m].buffers[i].allocation_bytes;
             if (!bytes) continue;
             session->buffers[i] = all[n++] = (struct a733_npu_buffer){v.cpu + p.offset[m][i],
-                v.physical + p.offset[m][i], bytes, p.device[m][i], role(&layouts[m], i)};
+                v.physical + p.offset[m][i], bytes, p.device[m][i], role(&layouts[m], i), 0};
         }
     }
     if (!a733_npu_native_init(&s->native, v.register_cpu, v.register_physical,

@@ -26,6 +26,12 @@
 #define A733_CARD_FEL_RECORD_COLD 0x8000        /* A cold path ran in this power epoch. */
 #define A733_CARD_FEL_RECORD_WARM 0x4000        /* The latest entry selected FEL. */
 #define A733_CARD_FEL_RECORD_UNMARKED 0x2000    /* The cold path's marker did not read back. */
+#define A733_CARD_FEL_RECORD_ONCE 0x1000        /* The cold path ran because GP2 held the boot-once value. */
+/* Boot-once value in GP2: software cannot clear the marker (measured 2026-11-12), so the runner requests one
+ * card boot by writing this value and resetting. The gate consumes it: it replaces GP2 with its cold record and
+ * reads that back before boot0 runs, so every later reset finds no boot-once value and, with the marker set,
+ * enters FEL. It never equals the vendor request or a gate record. */
+#define A733_CARD_FEL_BOOT_ONCE 0xb0070c02
 /* The cold path arms WDT0 for 16 s before boot0, so a hang in boot0 resets
  * into the warm path and FEL. */
 #define A733_CARD_FEL_COLD_WATCHDOG 0xb1

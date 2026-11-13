@@ -83,6 +83,11 @@ IMAGES = {
         '-DSUNSTONE_SCHED_LATENCY_TRACE=ON', '-DSUNSTONE_LATENCY_RESTORE_SPANS=ON',
         '-DSUNSTONE_LATENCY_CONTROL=ON', '-DSUNSTONE_LATENCY_CONTROL_MODE=idle',
     ], 'target': 'latency-control-model', 'elf': 'latency-control-model.elf'},
+    # the eight-core latency cause model (cmake/latency.cmake) that checks/tick-footprint-budget.py traces under QEMU
+    'latency-cause-model': {'configure': [
+        '-DSUNSTONE_PARTITIONED_SCHEDULER=ON', '-DSUNSTONE_LATENCY=ON',
+        '-DSUNSTONE_SCHED_LATENCY_TRACE=ON', '-DSUNSTONE_LATENCY_CAUSE=ON',
+    ], 'target': 'latency-partitioned-pmu-model', 'elf': 'latency-partitioned-pmu-model.elf'},
     # the returning scanning radio image
     'ret-radio-scan': {'configure': [
         '-DSUNSTONE_APPLICATION=radio-scan',

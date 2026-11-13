@@ -29,7 +29,7 @@ def module(name, path):
     return value
 
 
-def native_entry(image, raw):
+def native_entry(image, raw, initial=None, consumed=False):
     """Run actual enter() through refusal or image entry; model only MMIO/counter.
 
     SD loading/hashing and CPU ownership precede this boundary. No SD operation
@@ -41,6 +41,8 @@ def native_entry(image, raw):
     for address, data in image.parts:
         cpu.mem_write(address, data)
     cpu.mem_write(SESSION, raw)
+    if consumed:  # The entry consumed the card first stage's cold state.
+        cpu.mem_write(image.address('gated'), (1).to_bytes(4, 'little'))
     header = bytearray(512)
     struct.pack_into('<Q', header, 16, GENERATION)
     struct.pack_into('<I', header, 32, 2)
@@ -48,7 +50,7 @@ def native_entry(image, raw):
     struct.pack_into('<3Q', header, 128, 40960, len(raw), SESSION)
     cpu.mem_write(SLOT, bytes(header))
     cpu.mem_write(RESULT, struct.pack('<Q', 0x415337334f525231) + bytes([0xa5]) * 120)
-    registers, writes, terminal = {}, [], []
+    registers, writes, terminal = dict(initial or {}), [], []
     ticks = [24000000]
 
     def mmio_read(uc, offset, size, base):
@@ -91,7 +93,7 @@ def native_entry(image, raw):
     cpu.reg_write(a64.UC_ARM64_REG_X0, SLOT)
     cpu.emu_start(image.address('enter'), 0, count=200000)
     assert len(terminal) == 1, 'entry did not terminate within instruction budget'
-    return dict(terminal=terminal[0], writes=writes, ticks=ticks[0],
+    return dict(terminal=terminal[0], writes=writes, ticks=ticks[0], registers=registers,
                 session=bytes(cpu.mem_read(SESSION, len(raw))),
                 contract=bytes(cpu.mem_read(CONTRACT, image.layouts['a733_smp_contract']['reserved'] + 48)),
                 result=bytes(cpu.mem_read(RESULT, 128)),
@@ -212,6 +214,26 @@ def main():
             detail = 1 if struct.unpack_from('<I', raw, 608)[0] != len(raw) else 2
             assert struct.unpack_from('<2Q', result['report'], 24) == (7, detail), name
         results.append(dict(name=name, accepted=expected, linked=True))
+    # The card first stage's cold state at arming: WDT0 already counting at 0xb1
+    # with configuration 1 and output 2 and GP2 cleared by the loader's entry.
+    # Arming switches it to mode 0x41 with the same four writes as a disarmed
+    # entry. Every other watchdog state is refused with no WDT0 write.
+    gate = {0x02050014: 0xb1, 0x02050010: 1, 0x02050018: 2}
+    result = native_entry(image, plain, gate, consumed=True)
+    assert result['terminal'] == 'entered', 'gate-state-arms'
+    assert [address for address, _ in result['writes']] == [0x02050018, 0x02050010, 0x02050014, 0x0205000c]
+    assert result['registers'][0x02050014] == 0x41 and result['registers'][0x02050010] == 1
+    assert result['registers'][0x02050018] == 2
+    results.append(dict(name='gate-state-arms', accepted=True, linked=True))
+    for name, changed in (('wdt-0xb1-not-consumed', {}), ('wdt-armed-0x41', {0x02050014: 0x41}), ('wdt-0xb1-config-2', {0x02050010: 2}),
+                          ('wdt-0xb1-output-1', {0x02050018: 1}), ('wdt-0xb1-config-bit8', {0x02050010: 0x101}),
+                          ('gate-record-left-in-gp2', {0x07090108: 0x0c028000}),
+                          ('gate-state-redirect-set', {0x070501c0: 1})):
+        result = native_entry(image, plain, {**gate, **changed}, consumed=name != 'wdt-0xb1-not-consumed')
+        assert result['terminal'] == 'refused', name
+        assert not any(0x02050000 <= address < 0x02051000 for address, _ in result['writes']), name
+        assert struct.unpack_from('<2Q', result['report'], 24) == (8, 0), name
+        results.append(dict(name=name, accepted=False, linked=True))
     result = dict(passed=True, physical_access=False, cases=results,
                   image_sha256=hashlib.sha256((args.build / 'a733-stage2.elf').read_bytes()).hexdigest(),
                   sources={path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest() for path in

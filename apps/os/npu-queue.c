@@ -178,6 +178,9 @@ static int open_queue(void *unused,unsigned depth)
     uint64_t enabled=original_sctlr|(UINT64_C(1)<<26);
     CPU_WRITE_SCTLR(enabled);
     ring.job_limit=UINT64_MAX; /* no lifetime count of jobs; the 64-bit sequence is the only bound */
+#ifdef SUNSTONE_NPU_OP_TIMING
+    direct.cut_request=(volatile uint32_t *)&ring.cut;
+#endif
     opened=1;return 1;
 }
 static int close_queue(void *unused)
@@ -237,7 +240,21 @@ static void progress(void *unused,BaseType_t *woken)
 {
     (void)unused;irq_woken=woken;
     if(atomic_load_explicit(&direct.runtime->service.signals->runtime_failed,memory_order_acquire))ss_npu_queue_service_fail(&ring,1);
-    else (void)ss_npu_queue_service_progress(&ring,1,1);
+    else {
+        if(direct.idle_wait_ticks){
+            struct ss_npu_queue_idle_wait *w=&ring.idle_wait;
+            ++w->waits;w->ticks+=direct.idle_wait_ticks;w->busy_bits|=direct.idle_busy_bits;
+            if(direct.idle_wait_ticks>w->max_ticks)w->max_ticks=direct.idle_wait_ticks;
+            direct.idle_wait_ticks=0;
+        }
+        if(direct.traffic_ready){
+            struct ss_npu_queue_traffic *t=&ring.traffic;
+            ++t->jobs;t->read8+=direct.traffic[0];t->write8+=direct.traffic[1];
+            t->cycles+=direct.traffic[2];t->idle_cycles+=direct.traffic[3];
+            direct.traffic_ready=0;
+        }
+        (void)ss_npu_queue_service_progress(&ring,1,1);
+    }
     irq_woken=NULL;
 }
 int os_npu_queue_sdk_bind(void)

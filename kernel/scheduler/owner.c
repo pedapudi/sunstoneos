@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "owner.h"
+#include "latency_cause.h"
 #include <stddef.h>
 
 _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "native 64-bit atomics required");
@@ -50,7 +51,7 @@ bool ss_owner_enqueue(struct ss_owner *o, struct ss_owner_task *t, bool front)
 {
     if (!t || t->queued || t == o->current || t->priority >= 8 || t->slot >= 128)
         return false;
-    struct ss_owner_fifo *q = &o->ready[t->priority];
+    struct ss_owner_fifo *q = ss_owner_ready(o, t->priority);
     t->previous = front ? NULL : q->tail;
     t->next = front ? q->head : NULL;
     if (front) {
@@ -66,7 +67,7 @@ bool ss_owner_enqueue(struct ss_owner *o, struct ss_owner_task *t, bool front)
 bool ss_owner_remove(struct ss_owner *o, struct ss_owner_task *t)
 {
     if (!t || !t->queued || t->priority >= 8) return false;
-    struct ss_owner_fifo *q = &o->ready[t->priority];
+    struct ss_owner_fifo *q = ss_owner_ready(o, t->priority);
     if (t->previous) t->previous->next = t->next; else q->head = t->next;
     if (t->next) t->next->previous = t->previous; else q->tail = t->previous;
     t->previous = t->next = NULL; t->queued = false;
@@ -78,7 +79,7 @@ struct ss_owner_task *ss_owner_select(struct ss_owner *o)
     if (o->current) return o->current;
     if (!o->ready_bitmap) return NULL;
     unsigned p = 31u - (unsigned)__builtin_clz(o->ready_bitmap);
-    struct ss_owner_task *t = o->ready[p].head;
+    struct ss_owner_task *t = ss_owner_ready(o, p)->head;
     ss_owner_remove(o, t); o->current = t; return t;
 }
 static void requeue(struct ss_owner *o, bool front)
@@ -93,11 +94,17 @@ struct ss_owner_task *ss_owner_yield(struct ss_owner *o)
 static void request_sgi(struct ss_owner *o)
 {
     if (!atomic_exchange_explicit(&o->sgi_pending, 1, memory_order_acq_rel)) {
+#ifdef SUNSTONE_LATENCY_CAUSE
+        ss_latency_cause_sgi_begin(o->cpu);
+#endif
 #if defined(__aarch64__)
         __asm__ volatile("dsb ishst" ::: "memory");
 #endif
         if (o->backend && o->backend->sgi)
             o->backend->sgi(o->backend->context, o->cpu);
+#ifdef SUNSTONE_LATENCY_CAUSE
+        ss_latency_cause_sgi_end(o->cpu);
+#endif
     }
 }
 void ss_owner_publish(struct ss_owner *o, unsigned slot, unsigned priority)

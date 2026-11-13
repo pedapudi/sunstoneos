@@ -4,6 +4,8 @@
 #include "npu_queue.h"
 #include "npu_idle.h"
 
+/* The longest wait for full idle after a completion event before the completion is a fault (see complete()). */
+#define NPU_IDLE_WAIT_US 100u
 struct npu_runtime_queue_power_config {
     const struct npu_idle_part *part; /* register protocol and timing of the NPU */
     unsigned enabled; /* 0: matching owner/policy control without gate writes. */
@@ -33,6 +35,20 @@ struct npu_runtime_queue {
     uint64_t irq_cpu_ticks;
 #endif
     uint32_t last_events, last_idle; /* First failed completion inputs survive retention. */
+    /* The last completion's wait for full idle after its event (0: none was needed) and the units seen busy meanwhile. */
+    uint64_t idle_wait_ticks;
+    uint32_t idle_busy_bits;
+    /* A build with SUNSTONE_NPU_TRAFFIC_COUNTERS reads the NPU's counters of bus traffic and cycles (+0x040 reads and +0x044
+     * writes, in units of 8 bytes; +0x078 cycles, +0x07c idle cycles; vip_drv_task_debug.c, vipdrv_task_profile_start) at each
+     * doorbell and completion. traffic_start holds them at the doorbell of the job in flight, armed says one is, and traffic
+     * holds the last completed job's differences while traffic_ready is set. */
+    uint32_t traffic_start[4], traffic[4];
+    unsigned traffic_armed, traffic_ready;
+    /* A build with SUNSTONE_NPU_OP_TIMING: the application's request (struct ss_npu_queue_cut, four words), and the command
+     * bytes a cut job's footer replaced, restored at its completion. */
+    volatile uint32_t *cut_request;
+    uint8_t *cut_at;
+    uint32_t cut_saved[16];
     BaseType_t *woken; /* Non-null only during its ISR. */
     /* Optional shared-ring bridge. It consumes bounded work after each IRQ
      * and owns completion notification when installed. Configure before claim. */

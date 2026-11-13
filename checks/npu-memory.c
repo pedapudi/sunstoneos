@@ -100,13 +100,13 @@ static void prepare(void)
     memset(output_device, 0xe2, sizeof(output_device));
     /* Intentionally unsorted. Both a command and a data range cross roots. */
     input[0] = (struct a733_npu_buffer){(uintptr_t)OUTPUT_CPU, UINT64_C(0x9400000000),
-        DATA_BYTES, OUTPUT_VA, A733_NPU_BUFFER_WRITE};
+        DATA_BYTES, OUTPUT_VA, A733_NPU_BUFFER_WRITE, 0};
     input[1] = (struct a733_npu_buffer){(uintptr_t)job_cpu, UINT64_C(0x9200000000),
-        JOB_BYTES, JOB_VA, A733_NPU_BUFFER_COMMAND};
+        JOB_BYTES, JOB_VA, A733_NPU_BUFFER_COMMAND, 0};
     input[2] = (struct a733_npu_buffer){(uintptr_t)input_cpu, UINT64_C(0x9300000000),
-        DATA_BYTES, INPUT_VA, A733_NPU_BUFFER_READ};
+        DATA_BYTES, INPUT_VA, A733_NPU_BUFFER_READ, 0};
     input[3] = (struct a733_npu_buffer){(uintptr_t)boot_cpu, UINT64_C(0x9100000000),
-        BOOT_BYTES, BOOT_VA, A733_NPU_BUFFER_BOOTSTRAP};
+        BOOT_BYTES, BOOT_VA, A733_NPU_BUFFER_BOOTSTRAP, 0};
     memcpy(maps, input, sizeof(maps));
     device_copies[0] = output_device; device_copies[1] = job_device;
     device_copies[2] = input_device; device_copies[3] = boot_device;
@@ -373,9 +373,10 @@ int main(void)
     prepare(); input[0].cpu = UINTPTR_MAX - 4095; refused_init(arena, sizeof(arena), TABLE_PA);
     prepare(); input[3].role = A733_NPU_BUFFER_READ; refused_init(arena, sizeof(arena), TABLE_PA);
     prepare(); input[1].role = A733_NPU_BUFFER_BOOTSTRAP; refused_init(arena, sizeof(arena), TABLE_PA);
-    prepare(); input[1].bytes = 4096; refused_init(arena, sizeof(arena), TABLE_PA);
+    /* A command may be one page (A733_NPU_MIN_COMMAND_BYTES); one that is not whole pages is refused. */
+    prepare(); input[1].bytes = 4096 + 2048; refused_init(arena, sizeof(arena), TABLE_PA);
     prepare(); input[0].role = (enum a733_npu_buffer_role)-1; refused_init(arena, sizeof(arena), TABLE_PA);
-    prepare(); input[0].role = (enum a733_npu_buffer_role)(A733_NPU_BUFFER_CONSTANT + 1);
+    prepare(); input[0].role = (enum a733_npu_buffer_role)(A733_NPU_BUFFER_SCRATCH + 1);
     refused_init(arena, sizeof(arena), TABLE_PA);
     /* CONSTANT is not a command role: it cannot stand in for a bootstrap. */
     prepare(); input[3].role = A733_NPU_BUFFER_CONSTANT; refused_init(arena, sizeof(arena), TABLE_PA);

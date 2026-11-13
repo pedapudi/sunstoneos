@@ -295,6 +295,41 @@ not establish watchdog-reset-to-card execution, power-loss retention, recovery
 from an inaccessible fabric, or autonomous cold boot. Each remains a separate
 physical qualification requirement.
 
+## One card boot under test control
+
+Software cannot clear the marker. On 2026-11-12 the runner wrote `0x16aa0000`
+to IC_CHARA at first contact, with WDT0 disarmed, and the register still read
+`0x16aa16aa`; the restoring write read `0x16aa16aa` too (entry
+`1794507398722683063-15ee0c89`). Any keyed write sets bits 15:0 to `0x16aa`,
+as §9.1.7.20 says. A test session therefore cannot make one reset look cold.
+
+It uses a one-shot value in GP2 instead, the boot-once value `0xb0070c02`
+(`A733_CARD_FEL_BOOT_ONCE`). It differs from the vendor request and from every
+gate record. The sequence is:
+
+1. The runner writes the boot-once value to GP2 and resets the board through
+   WDT0.
+2. The gate finds the value and takes its cold path with the marker set. It
+   writes the cold record, `0x0c02` in bits 31:16, `COLD | ONCE`
+   (`0x8000 | 0x1000`) and the WDT0 mode read at entry, over the boot-once
+   value, and reads the record back. Only then does it arm WDT0 for 16 s and
+   enter boot0. A record that does not read back sends the gate to its warm
+   path, so the board enters FEL instead of booting the card.
+3. Stage 2 accepts that record with WDT0 at `0xb1`, clears GP2 and renews WDT0
+   while it loads.
+4. Every later reset finds no boot-once value and the marker set, and enters
+   FEL, so the runner regains the board.
+
+At first contact the runner clears a boot-once value left in GP2, as it clears
+a gate record, so a board that came back to FEL before a reset consumed the
+value does not boot the card at the session's reset.
+`checks/card-fel-recovery.py` covers both points of this sequence. A boot-once
+entry takes the cold path once, from WDT0 modes `0x41`, `0xb1` and 1. The
+reset after it enters FEL in every WDT0 mode, with or without stage 2's clear.
+A GP2 that keeps the boot-once value never reaches boot0, and neighbouring
+values are not taken for it. Installing this gate rewrites card sectors
+16..497.
+
 ## Installing the first stage on the port 3-3 card
 
 **Status: installed on 2026-11-12.** Steps A to D passed; the user approved
@@ -328,8 +363,17 @@ lie outside every partition.
   - bit 15: a cold path has run in this power epoch;
   - bit 14: the latest entry selected FEL;
   - bit 13: the cold path's marker did not read back;
+  - bit 12: the cold path ran because GP2 held the boot-once value;
   - bits 11:8: the refused watchdog step;
   - bits 7:0: the WDT0 mode read at entry.
+
+  The stage-2 monitor consumes a cold record (COLD set; WARM, UNMARKED and the
+  refused step clear) while WDT0 reads mode `0xb1` with configuration 1 and
+  output 2: it restarts WDT0, clears GP2 with a read-back, restarts WDT0 after
+  every card read, and keeps the record in its report word `reserved1[22]`
+  (offset 368 of the report at `0x47008200`;
+  [monitor notes](../../boot/a733/stage2/README.md)). It then switches WDT0 to
+  the four-second mode when it arms the loaded image.
 - **Runner marker and reads.** At every new FEL instance, before the
   session's first watchdog reset, `tools/board.py` reads `0x07090108`,
   `0x070901f0`, `0x07090160` and the WDT0 configuration and output words, and
@@ -356,9 +400,12 @@ lie outside every partition.
   sectors. `ss_storage_enable` re-reads the backup ranges and refuses unless
   their SHA-256 equals the blob's. The application writes the extent in
   ascending pieces of at most 256 sectors, reads it back, compares SHA-256
-  with the candidate, re-reads sector 0, and mounts and unmounts the FAT32
-  partition without writing, as `include/sunstone_storage.h` requires after
-  raw device writes.
+  with the candidate and re-reads sector 0, which must be unchanged, or equal
+  to the candidate's first sector when the extent starts at sector 0 (an MBR
+  write). It then re-reads the MBR and mounts and unmounts the FAT32
+  partition that the MBR names, without writing, as
+  `include/sunstone_storage.h` requires after raw device writes. The mode
+  region holds the header and at most one boot slot of 40,960 sectors.
 - **Writer audit.** `checks/rtc-marker-writers.py` fails when a tracked
   source outside the gate and the runner names the marker register.
 

@@ -50,7 +50,7 @@
                           "ISB SY                    \n"
                           ::: "memory" );
          /* Hold the primary core here until all the secondary cores are ready, this would be achieved only when
-@@ -1356,11 +1364,13 @@
+@@ -1356,11 +1364,19 @@
       * necessary to turn off interrupts in the CPU itself while the ICCPMR is being
       * updated.
       */
@@ -59,6 +59,12 @@
 -    #if ( configNUMBER_OF_CORES > 1 )
 +    #if ( configNUMBER_OF_CORES == 1 )
 +        UBaseType_t uxInterruptStatus = portSET_INTERRUPT_MASK_FROM_ISR();
++    #elif ( configSS_PARTITIONED_SCHEDULER == 1 )
++        /* The partitioned tick reads published owner state and sends SGIs;
++         * it takes no global lock. IRQ entry has masked interrupts. */
++        extern UBaseType_t ssKernelTickEnter( void );
++        extern void ssKernelTickExit( UBaseType_t );
++        UBaseType_t x = ssKernelTickEnter();
 +    #else
 +        /* The scheduler runs before the tick starts, so the ISR critical
 +         * section sets the mask itself. */
@@ -68,7 +74,7 @@
  
      /* Increment the RTOS tick. */
      if( xTaskIncrementTick() != pdFALSE )
-@@ -1371,12 +1381,12 @@
+@@ -1371,12 +1387,14 @@
              ullPortYieldRequired[ portGET_CORE_ID_FROM_ISR() ] = pdTRUE;
          #endif
      }
@@ -81,13 +87,15 @@
 +    #if ( configNUMBER_OF_CORES == 1 )
 +        /* Ensure all interrupt priorities are active again. */
 +        portCLEAR_INTERRUPT_MASK_FROM_ISR( uxInterruptStatus );
++    #elif ( configSS_PARTITIONED_SCHEDULER == 1 )
++        ssKernelTickExit( x );
 +    #else
 +        portEXIT_CRITICAL_FROM_ISR( x );
 +    #endif /* if ( configNUMBER_OF_CORES == 1 ) */
  
      /* Ok to enable interrupts after the interrupt source has been cleared. */
      configCLEAR_TICK_INTERRUPT();
-@@ -1393,7 +1403,7 @@
+@@ -1393,7 +1411,7 @@
          #if  ( configNUMBER_OF_CORES == 1 )
              ullPortTaskHasFPUContext = pdTRUE;
          #else
@@ -96,7 +104,7 @@
          #endif
  
          /* Consider initialising the FPSR here - but probably not necessary in
-@@ -1406,6 +1416,18 @@
+@@ -1406,6 +1424,18 @@
  
  void vPortClearInterruptMask( UBaseType_t uxNewMaskValue )
  {
@@ -115,7 +123,7 @@
      if( uxNewMaskValue == portUNMASK_VALUE )
      {
          /* Unmask all interrupt priorities. */
-@@ -1413,9 +1435,10 @@
+@@ -1413,9 +1443,10 @@
      }
      else
      {
@@ -128,7 +136,7 @@
              : "i" ( portSVC_UNMASK_INTERRUPTS )
              : "memory"
          );
-@@ -1444,6 +1467,26 @@
+@@ -1444,6 +1475,26 @@
  {
      UBaseType_t ullPMRValue;
  
@@ -155,7 +163,7 @@
      /* Use SVC so this can be called safely from EL0 tasks. */
      __asm volatile (
          "svc %1        \n"
-@@ -1474,7 +1517,7 @@
+@@ -1474,7 +1525,7 @@
                           "MSR DAIFCLR, #2        \n"
                           "DSB SY                 \n"
                           "ISB SY                 \n"
@@ -164,7 +172,7 @@
      }
  
      return ullPMRValue;
-@@ -1538,31 +1581,72 @@
+@@ -1538,31 +1589,72 @@
  
  #if ( configNUMBER_OF_CORES > 1 )
  
@@ -259,7 +267,7 @@
      static inline void prvSpinUnlock( uint32_t * ulLock )
      {
          /* Conservative unlock: preserve original barriers for broad HW/FVP. */
-@@ -1570,8 +1654,8 @@
+@@ -1570,8 +1662,8 @@
              "dmb sy         \n"
              "mov w1, #0     \n"
              "str w1, [%x0]  \n"
@@ -269,7 +277,7 @@
              "isb sy         \n"
              :
              : "r" ( ulLock )
-@@ -1614,21 +1698,69 @@
+@@ -1614,21 +1706,69 @@
  
  /*-----------------------------------------------------------*/
  
@@ -343,7 +351,7 @@
      }
  
  /*-----------------------------------------------------------*/
-@@ -1646,26 +1778,23 @@
+@@ -1646,26 +1786,23 @@
          /* Lock acquire */
          if( uxAcquire )
          {
@@ -376,7 +384,7 @@
                  {
                     /* Follow Arm's recommended way of sleeping
                      * sevl is used to prime the wait loop.
-@@ -1679,7 +1808,7 @@
+@@ -1679,7 +1816,7 @@
                          "ldr w2, [%x0]   \n"
                          "cbnz w2, 1b     \n"
                          :
@@ -385,7 +393,7 @@
                          : "memory", "w2"
                      );
                  }
-@@ -1688,30 +1817,44 @@
+@@ -1688,30 +1825,44 @@
              /* Add barrier to ensure lock is taken before we proceed. */
              __asm__ __volatile__ ( "dmb sy" ::: "memory" );
  
@@ -445,7 +453,7 @@
              }
          }
      }
-@@ -1720,6 +1863,15 @@
+@@ -1720,6 +1871,15 @@
  
      uint8_t ucPortGetCoreID( void )
      {
@@ -461,7 +469,7 @@
          /* Use SVC to obtain the core ID in a way that is safe when called
           * from EL0 tasks. ISRs and EL1 code should use
           * ucPortGetCoreIDFromIsr()/portGET_CORE_ID_FROM_ISR().
-@@ -1740,7 +1892,7 @@
+@@ -1740,7 +1900,7 @@
      uint8_t ucPortGetCoreIDFromIsr ( void ) /* PRIVILEGED_FUNCTION */
      {
          uint64_t ullMpidrEl1;
@@ -470,7 +478,7 @@
  
          return ( uint8_t ) ( ullMpidrEl1 & 0xff );
      }
-@@ -1763,22 +1915,18 @@
+@@ -1763,22 +1923,18 @@
          }
          #endif /* configASSERT_DEFINED */
  

@@ -3,6 +3,11 @@
 #include "a733_npu_idle.h"
 #include "sunstone_crumb.h"
 #include "sunstone_deadline.h"
+#ifdef SUNSTONE_NPU_OP_TIMING
+#include "aarch64_device_memory.h"
+#include "nbg_command.h"
+#include <string.h>
+#endif
 
 /* This file is the A733 resident-queue driver, so the submission interface of
  * the VIPLite 2 command processor (vip_drv_hardware.c:882-893) is fixed here:
@@ -13,6 +18,9 @@
 #define NPU_REG_COMMAND_ADDRESS UINT32_C(0x654)
 #define NPU_REG_COMMAND_FETCH UINT32_C(0x3a4)
 #define NPU_REG_EVENTS UINT32_C(0x010)
+#ifdef SUNSTONE_NPU_TRAFFIC_COUNTERS
+static const uint32_t traffic_reg[4] = {0x040, 0x044, 0x078, 0x07c};
+#endif
 static void power_owner(void *);
 static struct npu_runtime_queue *creating_power;
 BaseType_t npu_runtime_queue_task_privileged(TaskFunction_t entry, void *argument)
@@ -68,6 +76,46 @@ static int window(struct npu_runtime_queue *q)
     sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU), failed | open << 1 | owns << 2, SUNSTONE_CRUMB_HERE());
     return 0;
 }
+#ifdef SUNSTONE_NPU_OP_TIMING
+/* Run the first operations of the job's graph only: the assembler's footer (flush, semaphore and stall, event, END) replaces
+ * the commands after the last operation asked for, and complete() puts them back. The NPU is idle here, and a footer is
+ * written only at an operation end the assembler recorded, so the job is a prefix of the admitted stream. */
+static int cut_maintain(const uint8_t *at)
+{
+    const uintptr_t first = (uintptr_t)at & ~(uintptr_t)63, end = ((uintptr_t)at + sizeof(footer) + 63) & ~(uintptr_t)63;
+    return aarch64_device_cache(AARCH64_CACHE_CLEAN, first, end - first);
+}
+static int cut_apply(struct npu_runtime_queue *q, const struct a733_npu_command *c)
+{
+    volatile uint32_t *r = q->cut_request;
+    struct npu_runtime *rt = q->runtime;
+    if (!r || q->cut_at) return 1;
+    for (unsigned i = 0; i < rt->slots; ++i) {
+        if (rt->commands[i + 1].device != c->device) continue;
+        struct npu_runtime_slot *s = &rt->slot[i];
+        const uint32_t want = r[0], ops = r[1];
+        if (want != i + 1) return 1;
+        r[2] = s->op_count; r[3] = 0;
+        if (!ops || ops >= s->op_count) return 1;
+        const uint32_t at = s->op_end[ops - 1];
+        if ((at & 7u) || at + sizeof(footer) > s->stream_bytes) return 1;
+        uint8_t *const p = (uint8_t *)s->command.cpu + at;
+        memcpy(q->cut_saved, p, sizeof(footer)); memcpy(p, footer, sizeof(footer));
+        q->cut_at = p;
+        r[3] = at + (uint32_t)sizeof(footer);
+        return cut_maintain(p);
+    }
+    return 1;
+}
+static int cut_restore(struct npu_runtime_queue *q)
+{
+    if (!q->cut_at) return 1;
+    uint8_t *const p = q->cut_at;
+    memcpy(p, q->cut_saved, sizeof(footer)); q->cut_at = NULL;
+    return cut_maintain(p);
+}
+_Static_assert(sizeof(((struct npu_runtime_queue *)0)->cut_saved) >= sizeof(footer), "the saved commands hold one footer");
+#endif
 static int start(void *cookie, const struct a733_npu_command *c, uint64_t timeout)
 {
     struct npu_runtime_queue *q = cookie;
@@ -84,21 +132,36 @@ static int start(void *cookie, const struct a733_npu_command *c, uint64_t timeou
     /* VIPLite vip_drv_hardware.c:882-893: address, full barrier, fetch word.
      * Mapping, power and command validation belong to claim/registration. */
     if (!window(q)) return 0;
+#ifdef SUNSTONE_NPU_OP_TIMING
+    if (!cut_apply(q, c)) return 0;
+#endif
     a733_mmio_write32_dsb_sy_after(base + NPU_REG_COMMAND_ADDRESS, c->device);
     if (!window(q)) return 0;
+#ifdef SUNSTONE_NPU_TRAFFIC_COUNTERS
+    for (unsigned k = 0; k < 4; ++k) q->traffic_start[k] = *(volatile uint32_t *)(base + traffic_reg[k]);
+    q->traffic_armed = 1;
+#endif
     a733_mmio_write32_dsb_sy_after(base + NPU_REG_COMMAND_FETCH, a733_npu_fetch_word(c->readable_bytes));
 #ifdef SUNSTONE_NPU_QUEUE_TIMING
     q->runtime->doorbell_ticks = ticks();
 #endif
     return 1;
 }
+/* The slot of the job at the head of the queue, from its command address; 0xff when none matches. */
+static unsigned slot_of(const struct npu_runtime_queue *q)
+{
+    const struct npu_queue_job *job = q->queue.head;
+    if (!job || !job->command) return 0xffu;
+    for (unsigned k = 1; k <= q->runtime->slots && k < 0xffu; ++k)
+        if (q->runtime->commands[k].device == job->command->hardware.device) return k - 1;
+    return 0xffu;
+}
 static int complete(void *cookie)
 {
     struct npu_runtime_queue *q = cookie;
     const uintptr_t base = q->runtime->native.registers;
     /* +0x010 is read-to-acknowledge. Read it once, as the vendor ISR does.
-     * Completion requires event zero AND full idle before CPU acquisition.
-     * A premature event is retained; no tick poll treats it as completion. */
+     * Completion requires event zero AND full idle before CPU acquisition. */
     if (!window(q)) return 0;
     const uint32_t events = *(volatile uint32_t *)(base + NPU_REG_EVENTS);
     if (!window(q)) return 0;
@@ -110,11 +173,44 @@ static int complete(void *cookie)
                             events, SUNSTONE_CRUMB_HERE());
         return 0;
     }
-    if ((idle & a733_npu_idle_part.full_idle) != a733_npu_idle_part.full_idle) {
-        sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU) | SUNSTONE_CRUMB_NPU_REGISTER | (1u << 16),
-                            idle, SUNSTONE_CRUMB_HERE());
-        return 0;
+    const uint32_t full = a733_npu_idle_part.full_idle;
+    q->idle_wait_ticks = 0; q->idle_busy_bits = 0;
+    if ((idle & full) != full) {
+        /* The event can come while units still show busy. VIPLite polls +0x004 after every completion until all units are
+         * idle (vip_drv_task_common.c:1078 vipdrv_hw_idle, vip_drv_pm.c:814-826 vipdrv_hw_wait_idle with
+         * EXPECT_IDLE_VALUE_ALL_MODULE). Poll for at most NPU_IDLE_WAIT_US and record the wait; a unit still busy then is a
+         * fault, whose value names the busy units (bits 23:0 of the complement) and the slot (bits 31:24). */
+        uint32_t now = idle, busy = ~idle & full;
+        uint64_t bound = (uint64_t)NPU_IDLE_WAIT_US * q->frequency / 1000000u;
+#ifdef SUNSTONE_NPU_OP_TIMING
+        /* A cut job's footer event does not wait for the neural-network and shader units: run 1794509651684078706-d1eaad0b
+         * saw them (idle bits 18 and 3, with the memory controller, 14) busy 100 us after the event of a subsampling prefix.
+         * Wait for them up to the job's timeout, so that a prefix's time ends when the NPU is idle. */
+        if (q->cut_at) bound = q->timeout_ticks;
+#endif
+        uint64_t waited = 0;
+        while ((now & full) != full && (waited = ticks() - q->observed) < bound) {
+            now = *(volatile uint32_t *)(base + a733_npu_idle_part.status);
+            busy |= ~now & full;
+        }
+        __asm__ volatile("dsb sy" ::: "memory");
+        q->last_idle = now;
+        if ((now & full) != full) {
+            sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU) | SUNSTONE_CRUMB_NPU_REGISTER | (1u << 16),
+                                (~now & 0x00ffffffu) | (uint32_t)slot_of(q) << 24, SUNSTONE_CRUMB_HERE());
+            return 0;
+        }
+        q->idle_wait_ticks = waited ? waited : 1; q->idle_busy_bits = busy;
     }
+#ifdef SUNSTONE_NPU_OP_TIMING
+    if (!cut_restore(q)) return 0;
+#endif
+#ifdef SUNSTONE_NPU_TRAFFIC_COUNTERS
+    if (q->traffic_armed) {
+        for (unsigned k = 0; k < 4; ++k) q->traffic[k] = *(volatile uint32_t *)(base + traffic_reg[k]) - q->traffic_start[k];
+        q->traffic_armed = 0; q->traffic_ready = 1;
+    }
+#endif
     if (q->observed - q->started >= q->timeout_ticks) {
         sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU),
                             (uint32_t)(q->observed - q->started), SUNSTONE_CRUMB_HERE());

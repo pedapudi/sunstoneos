@@ -61,6 +61,9 @@ class Model:
         self.memory = {}
         self.registers = {board.crumbs.WDT_MODE:0,board.crumbs.WDT_CONFIG:1,board.crumbs.WDT_OUTPUT:2,
                           **dict(zip((0x20,0x24,0x28,0x3c,0x40),(0xeb00008f,0xe3a00911,0xe3a0193d,0xe3a0605c,0xea00004d)))}
+        if variant=='card-boot-once-stale':
+            # The runner wrote the boot-once value but the board came back to FEL before a reset consumed it.
+            self.registers.update({board.crumbs.RESET_WORDS['flag']:board.crumbs.BOOT_ONCE,board.crumbs.MARKER:board.crumbs.MARKER_KEYED})
         if variant=='card-cold-record':
             # A cold power-on ran the card gate and boot0, which found no package and entered FEL.
             # WDT0 mode reads its reset value 0 at a power-on gate entry.
@@ -738,10 +741,10 @@ def marker_clear_cases(out):
 
 def transport_cases(out):
     for variant in ('normal','watchdog','no-return','host-error','dram-failure','rail-refusal','readback','partial-arm','journal-error','invalid-report','stuck-disarm','return-decoder',
-                    'card-watchdog-41','card-watchdog-b1','card-cold-record','marker-stuck'):
+                    'card-watchdog-41','card-watchdog-b1','card-cold-record','card-boot-once-stale','marker-stuck'):
         result,model,owner=lifecycle(out/variant,variant)
         expected={'normal':'returned','watchdog':'watchdog-reset','no-return':'no-return','card-watchdog-41':'watchdog-reset','card-watchdog-b1':'watchdog-reset',
-                  'card-cold-record':'returned','marker-stuck':'refused-before-launch',
+                  'card-cold-record':'returned','card-boot-once-stale':'returned','marker-stuck':'refused-before-launch',
                   'host-error':'host-error','dram-failure':'refused-before-launch','rail-refusal':'refused-before-launch',
                   'readback':'refused-before-launch','partial-arm':'host-error','journal-error':'host-error','invalid-report':'host-error','stuck-disarm':'host-error','return-decoder':'host-error'}[variant]
         assert result['outcome']==expected,(variant,result)
@@ -769,7 +772,7 @@ def transport_cases(out):
             # The session's own WDT0 reset (mode 0x41) passed through the card gate; the runner cleared its record.
             session=result['power_epoch'][1]
             assert session['words']['flag']==0x0c024041 and session['flag_after']==0,(variant,session)
-            assert session['gate']=={'cold':False,'warm':True,'unmarked':False,'refused_step':0,'mode':0x41}
+            assert session['gate']=={'cold':False,'warm':True,'unmarked':False,'once':False,'refused_step':0,'mode':0x41}
         if variant.startswith('card-watchdog-'):
             # The gate disarmed WDT0; the record's low byte is the mode the image armed, so the return is a watchdog reset.
             armed=int(variant.rsplit('-',1)[1],16)
@@ -777,8 +780,15 @@ def transport_cases(out):
             assert back['reset_words']['flag']==0x0c024000|armed,(variant,back)
             assert back['before']==0 and back['mode_at_reset']==armed and back['gate']['mode']==armed and back['gate']['warm']
             assert result['dram_lost'] and model.registers[flag]==0
+        if variant=='card-boot-once-stale':
+            # First contact clears it before the session's reset, so that reset takes the warm path.
+            first=result['power_epoch'][0]
+            assert first['words']['flag']==board.crumbs.BOOT_ONCE and first['gate'] is None and first['flag_after']==0,first
+            clear=next(i for i,c in enumerate(model.calls) if c[:3]==['writel',hex(flag),'0x0'])
+            reset=next(i for i,c in enumerate(model.calls) if '0x16aa0041' in c)
+            assert clear<reset
         if variant=='card-cold-record':
-            assert result['power_epoch'][0]['gate']=={'cold':True,'warm':False,'unmarked':False,'refused_step':0,'mode':0}
+            assert result['power_epoch'][0]['gate']=={'cold':True,'warm':False,'unmarked':False,'once':False,'refused_step':0,'mode':0}
             assert result['power_epoch'][0]['flag_after']==0 and 'marker_after' in result['power_epoch'][0]
         if variant=='marker-stuck':
             assert 'cold-boot marker' in result['first_failure']['detail']

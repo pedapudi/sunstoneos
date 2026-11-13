@@ -77,6 +77,18 @@ for label, listing in (('a1', 'models-a1.json'), ('a2', 'models-a2.json'), ('b',
         print('per-slot sizing: %d bytes in the slot regions against %d with one size for all slots (reserved %d against %d)' %
               (totals['own'][1], totals['uniform'][1], totals['own'][0], totals['uniform'][0]))
     print('set', label, ':', done.stdout.strip().splitlines()[-1])
+    if label == 'a1':
+        # The same set in a build that maps the constant, read and write regions of slot 1 with 1 MiB pages and of slot 2 with
+        # 64 KiB pages (SUNSTONE_NPU_TENSOR_PAGE_SHIFTS): placed, published through the memory layer's inspection, assembled
+        # and submitted as in the build without it.
+        pages = host_rtos.build(work / 'exe-pages', [*UNITS, generated / 'npu-models.c'], 'os-npu-graphs',
+                                defines=DEFINES + ['SUNSTONE_NPU_TENSOR_PAGE_SHIFTS={12,20,16}'], includes=includes,
+                                flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'], link=['-Wl,--gc-sections'])
+        r = subprocess.run([str(pages), '22', str(inputs)], capture_output=True, text=True,
+                           env={**environment(), 'NPU_BOUNDS': '7,262144,262144'}, timeout=1800)
+        (work / 'run-pages.log').write_text(r.stdout + r.stderr)
+        assert r.returncode == 0, ('a1 with tensor pages', r.stdout[-600:], r.stderr[-800:])
+        print('set a1, slots 1 and 2 in 1 MiB and 64 KiB pages:', r.stdout.strip().splitlines()[-1])
 # An unseen graph: the relu graph with one coefficient byte changed, so that its digest is in no table, described by an
 # entry of its own in a copy of the model list. The runtime must admit, place, assemble and submit it.
 admission = importlib.util.spec_from_file_location('nbg_graph_admission', ROOT / 'checks/nbg-graph-admission.py')
