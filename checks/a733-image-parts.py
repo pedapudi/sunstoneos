@@ -17,7 +17,7 @@ import harness
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--output', '{output}', '--ledger-usb-elf', '{elf:os-usb-ledger}']]
-CHECK_INPUTS = ['tools/check-a733-smp.py', 'apps/os/usb-memory.c',
+CHECK_INPUTS = ['tools/check-a733-smp.py', 'apps/board/prepare.py', 'apps/os/usb-memory.c',
                 'platform/a733-smp-cached/link.ld', 'platform/a733-storage-maintenance/link.patch',
                 'include/a733_usb_memory.h', 'apps/os/session.c', 'apps/os/usb-service.c']
 
@@ -102,6 +102,13 @@ SECTIONS {
     run([harness.LLD, '-T', out / 'rodata.ld', out / 'image.o', '-o', out / 'rodata.elf'])
     _, address, _ = tool.image_parts(out / 'rodata.elf')
     assert 0x41200000 <= address < 0x41400000, hex(address)
+    # The runner's launch request takes the same bounds as the image check.
+    spec = importlib.util.spec_from_file_location('image_parts_board', ROOT / 'apps/board/prepare.py')
+    board = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(board)
+    board.request_bytes(address, bytes(32), 1, 1, 1, b'')
+    harness.refused(lambda: board.request_bytes(0x413fffe1, bytes(32), 1, 1, 1, b''),
+                    'Invalid supervised launch identity')
     writable = out / 'writable-identity.S'
     writable.write_text(source.read_text().replace('.section .rodata,"a"', '.section .rodata.identity,"aw"'))
     run([harness.CLANG, '--target=aarch64-none-elf', '-c', writable, '-o', out / 'writable-identity.o'])
