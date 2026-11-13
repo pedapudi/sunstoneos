@@ -81,6 +81,9 @@ def decode(payload):
     out['sd_mode'] = decode_mode(out['mode_words'])
     if out['tag'] != TAG:
         raise ValueError('storage-write result has the wrong tag.')
+    space = out['app_core'] >> 32 & 7                # the storage owner's first instruction (apps/os/sd_owner.c, ss_storage_owner_space)
+    out['owner_space'] = {'table': {0: 'not run', 1: 'kernel', 2: 'other'}.get(space & 3, space & 3), 'tagged': bool(space & 4)}
+    out['app_core'] &= 0xffffffff
     out['irq_stray'] = out['irq_cores'] >> 32
     out['irq_cores'] &= 0xffffffff
     out['owner_recheck_wakes'] = out['owner_wakes'] >> 32

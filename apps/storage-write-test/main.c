@@ -216,6 +216,8 @@ static void finish_report(void)
 {
     if (activity) { ss_activity_end(r.status == 0); activity = 0; }          /* closes the thermal window the image reports */
     if (card_open) { (void)ss_storage_close(); card_open = 0; }
+    uint64_t space;                                                         /* app_core bits 34:32: the owner's address space at its first instruction */
+    if (ss_storage_owner_space(&space)) r.app_core = (r.app_core & 0xffffffffu) | (space & 7) << 32;
     ss_finish(&r, sizeof r);
 }
 #define E_MISMATCH 13

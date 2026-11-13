@@ -253,14 +253,18 @@ static int owner_open_allowed(void)
     os_quiesce_complete(&storage_quiesce);return 0;
 }
 
-/* TTBR0 as the owner's first instruction found it: the QEMU check requires the kernel's table. */
+/* TTBR0 and the task tag as the owner's first instruction found them: the QEMU check requires the kernel's table, and the board report
+ * carries both (ss_storage_owner_space). */
 static volatile uint64_t entry_ttbr0;
+static volatile uint8_t entry_seen, entry_tagged;
 uint64_t os_sd_owner_entry_ttbr(void) { return entry_ttbr0; }
 static void owner_main(void *unused)
 {
     uint64_t ttbr;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));
     entry_ttbr0 = ttbr;
+    entry_tagged = xTaskGetApplicationTaskTag(NULL) != NULL;
+    entry_seen = 1;
     (void)unused;
     if(!owner_open_allowed())for(;;)vTaskSuspend(NULL);
     hw = os_sd_open_owner();
@@ -465,6 +469,12 @@ int ss_storage_mode(uint64_t out[5])
 {
     if (!out) return 0;
     for (unsigned i = 0; i < 5; ++i) out[i] = os_sd_mode[i];
+    return 1;
+}
+int ss_storage_owner_space(uint64_t *out)
+{
+    if (!out) return 0;
+    *out = !entry_seen ? 0 : (uint64_t)(entry_ttbr0 == os_space_kernel_ttbr ? 1 : 2) | (uint64_t)entry_tagged << 2;
     return 1;
 }
 int ss_storage_owner_stats(struct ss_storage_owner_stats *out)

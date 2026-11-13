@@ -39,4 +39,7 @@ int ss_storage_owner_stats(struct ss_storage_owner_stats *);
 int ss_storage_diagnostic(uint64_t out[4]);
 /* The bus speed mode of the card and the steps taken to get there, five words (apps/os/large_sd.c, os_sd_mode); zero before the card is open. */
 int ss_storage_mode(uint64_t out[5]);
+/* The address space the storage owner's first instruction ran in: bits 1:0 are 0 before the owner has run, 1 when its TTBR0 was the kernel's
+ * table, 2 when it was another table; bit 2 is set when the owner's task tag was not null at that instruction. */
+int ss_storage_owner_space(uint64_t *out);
 #endif
