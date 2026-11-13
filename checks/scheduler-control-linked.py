@@ -2,6 +2,7 @@
 """Reject old owner-control behavior in the linked eight-core FreeRTOS fixture."""
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -9,6 +10,8 @@ import shlex
 import shutil
 import signal
 import subprocess
+import threading
+import time
 from harness import environment
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +52,8 @@ def main():
     port = (build / 'freertos-smp/port.c').read_text()
     fixture = (ROOT / 'checks/scheduler-partitioned-qemu.c').read_text()
 
+    times, times_lock = {}, threading.Lock()      # host seconds of each QEMU run, written to qemu-times.json
+
     def execute(image, directory, cores=8, perturb=None):
         (directory / 'image.sha256').write_text(hashlib.sha256(image.read_bytes()).hexdigest() + '\n')
         command = [str(args.qemu.resolve()), '-machine', 'virt,gic-version=3,secure=off,virtualization=off',
@@ -64,8 +69,11 @@ def main():
             command += ['-device', f'loader,addr=0x{0x47ff0040 + 4 * index:x},data={word},data-len=4']
         process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, start_new_session=True)
+        started = time.monotonic()
         try:
             stdout, stderr = process.communicate(timeout=120)
+            with times_lock:
+                times[directory.name] = round(time.monotonic() - started, 2)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
             stdout, stderr = process.communicate()
@@ -116,6 +124,7 @@ def main():
         for (model, site, turns), failure in results:
             print(f'{"PASS" if failure is None else "FAIL"} perturbed linked model: {model} {site} {turns} turns'
                   + ('' if failure is None else f' ({failure})'), flush=True)
+        (output / 'qemu-times.json').write_text(json.dumps({'jobs': args.jobs, 'seconds': times, 'slowest': max(times.values())}, indent=1))
         assert all(failure is None for _, failure in results), 'perturbed linked models failed'
 
     def line(text, needle):
