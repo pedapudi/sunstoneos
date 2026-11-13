@@ -31,6 +31,7 @@ sys.path.insert(0, str(ROOT / 'tools'))
 import gate_slots
 
 CONFIG = gate_slots.load_config()
+WAIT = 60        # seconds a positive wait allows: a gate under load starts processes slowly, and an event that comes returns at once
 
 HOLDER = '''
 import sys
@@ -48,7 +49,7 @@ TIMER = '''
 import sys
 sys.path.insert(0, %r)
 import gate_slots
-with gate_slots.timing_lock(%r, %r, announce=None):
+with gate_slots.timing_lock(%r, %r, announce=lambda message: print("WAIT", flush=True)):
     print("IN", flush=True)
     sys.stdin.readline()
 print("OUT", flush=True)
@@ -71,6 +72,17 @@ class Process:
     def end(self):
         self.process.kill()
         self.process.wait()
+
+
+def wait_ticket(home, label):
+    """Block until the gate with this label has queued (its ticket exists), so that a negative check starts from a waiter."""
+    deadline = time.monotonic() + WAIT
+    while time.monotonic() < deadline:
+        for path in (home / 'gate-queue').glob('*.ticket'):
+            if label in path.read_text():
+                return
+        time.sleep(0.05)
+    raise AssertionError('%s never queued' % label)
 
 
 def holder(home, slots, priority, label):
@@ -98,12 +110,13 @@ def case_derivation():
 def case_two_gates(home):
     first, second, third = (holder(home, 3, gate_slots.WORKER, 'worker-%d' % i) for i in range(3))
     try:
-        got = sorted([first.line(10), second.line(10)])
+        got = sorted([first.line(WAIT), second.line(WAIT)])
         assert got == ['SLOT 1', 'SLOT 2'], 'two workers should run at once in slots 1 and 2: %s' % got
+        wait_ticket(home, 'worker-2')
         assert third.line(1.0) is None, 'a third worker must wait while both worker slots are held'
         first.release()
-        assert first.line(10) == 'DONE'
-        assert third.line(10) in ('SLOT 1', 'SLOT 2'), 'the waiting worker did not take the slot that was freed'
+        assert first.line(WAIT) == 'DONE'
+        assert third.line(WAIT) in ('SLOT 1', 'SLOT 2'), 'the waiting worker did not take the slot that was freed'
         for process in (second, third):
             process.release()
     finally:
@@ -115,14 +128,15 @@ def case_timing_lock(home):
     one = timer(home, 'one')
     two = worker = None
     try:
-        assert one.line(10) == 'IN'
+        assert one.line(WAIT) == 'IN'
         two = timer(home, 'two')                 # started after the first holds the lock, so which gate wins is not a race
         worker = holder(home, 3, gate_slots.WORKER, 'beside the timing lock')
-        assert worker.line(10) is not None, 'a gate in a slot was blocked by the timing lock'
+        assert worker.line(WAIT) is not None, 'a gate in a slot was blocked by the timing lock'
+        assert two.line(WAIT) == 'WAIT', 'the second gate did not wait for the timing lock'
         assert two.line(1.0) is None, 'two gates ran a wall-time step at once'
         one.release()
-        assert one.line(10) == 'OUT'
-        assert two.line(10) == 'IN', 'the second gate did not enter after the first left'
+        assert one.line(WAIT) == 'OUT'
+        assert two.line(WAIT) == 'IN', 'the second gate did not enter after the first left'
         two.release()
     finally:
         for process in (one, two, worker):
@@ -146,27 +160,29 @@ def case_landing_jump(home):
     waiting = []
     try:
         landing = holder(home, 3, gate_slots.LANDING, 'landing-1')
-        assert landing.line(10) == 'SLOT 0', 'a landing should take the slot that only landings use'
+        assert landing.line(WAIT) == 'SLOT 0', 'a landing should take the slot that only landings use'
         worker_one = holder(home, 3, gate_slots.WORKER, 'worker-1')      # one at a time: which worker gets which slot is not a race
-        assert worker_one.line(10) == 'SLOT 1'
+        assert worker_one.line(WAIT) == 'SLOT 1'
         worker_two = holder(home, 3, gate_slots.WORKER, 'worker-2')
-        assert worker_two.line(10) == 'SLOT 2'
+        assert worker_two.line(WAIT) == 'SLOT 2'
         older_worker = holder(home, 3, gate_slots.WORKER, 'worker-3')
         waiting.append(older_worker)
+        wait_ticket(home, 'worker-3')
         assert older_worker.line(1.0) is None
         time.sleep(0.2)
         newer_landing = holder(home, 3, gate_slots.LANDING, 'landing-2')
         waiting.append(newer_landing)
+        wait_ticket(home, 'landing-2')
         assert newer_landing.line(1.0) is None, 'every slot is held; the landing must wait'
         worker_one.release()
-        assert worker_one.line(10) == 'DONE'
-        assert newer_landing.line(10) == 'SLOT 1', 'the landing did not go ahead of the worker that waited longer'
+        assert worker_one.line(WAIT) == 'DONE'
+        assert newer_landing.line(WAIT) == 'SLOT 1', 'the landing did not go ahead of the worker that waited longer'
         assert older_worker.line(1.0) is None, 'the older worker took a slot before the landing'
         worker_two.release()
-        assert worker_two.line(10) == 'DONE'
-        assert older_worker.line(10) == 'SLOT 2', 'the worker did not take the next free worker slot'
+        assert worker_two.line(WAIT) == 'DONE'
+        assert older_worker.line(WAIT) == 'SLOT 2', 'the worker did not take the next free worker slot'
         landing.release()
-        assert landing.line(10) == 'DONE'
+        assert landing.line(WAIT) == 'DONE'
         for process in (newer_landing, older_worker):
             process.release()
     finally:
@@ -179,16 +195,18 @@ def case_stale_ticket(home):
     blocker = holder(home, 2, gate_slots.WORKER, 'blocker')
     dead = nxt = None
     try:
-        assert blocker.line(10) == 'SLOT 1'
+        assert blocker.line(WAIT) == 'SLOT 1'
         dead = holder(home, 2, gate_slots.WORKER, 'killed while waiting')
+        wait_ticket(home, 'killed while waiting')
         assert dead.line(1.0) is None
         time.sleep(0.2)
         nxt = holder(home, 2, gate_slots.WORKER, 'next')
+        wait_ticket(home, 'next')
         assert nxt.line(1.0) is None
         dead.end()
         blocker.release()
-        assert blocker.line(10) == 'DONE'
-        assert nxt.line(10) == 'SLOT 1', 'a killed gate left a ticket that held the queue'
+        assert blocker.line(WAIT) == 'DONE'
+        assert nxt.line(WAIT) == 'SLOT 1', 'a killed gate left a ticket that held the queue'
         assert not [p for p in (home / 'gate-queue').glob('*.ticket') if 'killed' in p.read_text()], 'the stale ticket stayed'
         nxt.release()
     finally:
