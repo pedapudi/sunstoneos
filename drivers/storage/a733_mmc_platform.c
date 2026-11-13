@@ -169,6 +169,11 @@ static int voltage(struct a733_mmc_platform *p,unsigned initial)
     uint32_t mode,value,select;
     unsigned shift=p->config.kind==SUNXI_MMC_SD?10:4;
     if(!rd(p,PIO+0x40,&mode)||!rd(p,PIO+0x48,&value))return 0;
+    if(initial&&!p->bank_seen&&p->config.kind==SUNXI_MMC_SD) {
+        uint32_t raw_select;
+        if(!rd(p,PIO+0x70,&raw_select))return 0;
+        p->bank_raw[0]=mode;p->bank_raw[1]=value;p->bank_raw[2]=raw_select;p->bank_seen=1;
+    }
     mode=(mode>>shift)&3;value=(value>>shift)&3;
     if(p->config.kind==SUNXI_MMC_SD) {
         /* Manual 18.14.6.2-3: PF value 2 is 3.3 V and 3 is 1.8 V; selector bit

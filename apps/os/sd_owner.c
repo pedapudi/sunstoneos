@@ -164,11 +164,20 @@ static void finish(struct request *r, int ok)
 
 /* The note for a refused request or a failed open (the first-failure record's value): bits 7:0 the stage, 23:8 its detail (the low 16 bits:
  * result | platform stage << 8), 26:24 INTID 193 before the owner masked it (enabled, pending, active), 30:28 after the mask settled.
- * A failed identification (stage 7) instead carries, in bits 31:24, what stage ENTER_1V8 found (os_sd_diag[1] bits 47:40), not the INTID state. */
+ * A failed identification (stage 7) has its own layout, marked by bit 31: 7:0 what stage ENTER_1V8 found (a733_mmc_platform.h enter_obs),
+ * 11:8 the platform stage, 14:12 the platform result, then the PF bank as the first open found it (17:16 power mode, PIO 0x40 bits 11:10;
+ * 19:18 voltage status, PIO 0x48 bits 11:10; 20 selector, PIO 0x70 bit 0) and as the reopen found it (22:21, 24:23, 25), and 30:26 the first
+ * open's PIO 0x70 bits 5:1. */
+extern uint32_t os_sd_bank_first[3], os_sd_bank_reopen[3];
+static uint32_t bank_fields(const uint32_t raw[3])
+{
+    return (raw[0] >> 10 & 3u) | (raw[1] >> 10 & 3u) << 2 | (raw[2] & 1u) << 4;
+}
 static uint32_t diag_word(void)
 {
     if (os_sd_diag[0] == 7)
-        return 7u | (uint32_t)(os_sd_diag[1] & 0xffff) << 8 | (uint32_t)(os_sd_diag[1] >> 40 & 0xff) << 24;
+        return (uint32_t)(os_sd_diag[1] >> 40 & 0xff) | (uint32_t)(os_sd_diag[1] >> 8 & 15) << 8 | (uint32_t)(os_sd_diag[1] & 7) << 12 |
+               bank_fields(os_sd_bank_first) << 16 | bank_fields(os_sd_bank_reopen) << 21 | (os_sd_bank_first[2] >> 1 & 31u) << 26 | 1u << 31;
     if (os_sd_diag[0] >= 30)                         /* a refused request: stage in 5:0, then the 26 bits of large_sd.c PLATX (stages 33 and 34: write_fail's core error, protocol step and interrupt status) */
         return os_sd_note_value((unsigned)os_sd_diag[0], os_sd_diag[1]);
     return (uint32_t)(os_sd_diag[0] & 0xff) | (uint32_t)(os_sd_diag[1] & 0xffff) << 8 | (uint32_t)(os_sd_diag[2] & 7) << 24 |

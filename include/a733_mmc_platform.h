@@ -127,6 +127,10 @@ struct a733_mmc_platform {
      * baseline, 2 the bank supply programmed at 1.8 V, 3 the card clock control read 0, 4 the selector written to 1.8 V, 5 the bank reported
      * 1.8 V, 6 10 ms passed with no such report, 7 the bank's voltage check failed after the step. */
     uint8_t enter_obs;
+    /* The PF bank as this open found it at its baseline, before any write: the power-mode register (PIO 0x40), the voltage status
+     * (PIO 0x48) and the selector (PIO 0x70), raw; bank_seen is set once they are read. */
+    uint32_t bank_raw[3];
+    uint8_t bank_seen;
 };
 /* Zero once. All managers, adapter storage and physical authority have platform
  * lifetime. Shared PMIC worker advances independently; the consumer never owns

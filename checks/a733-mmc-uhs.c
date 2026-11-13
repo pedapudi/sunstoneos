@@ -302,6 +302,8 @@ int main(void)
      * with nothing written, and enter_obs names the condition: SDR104 profile, 1.8 V supply and stopped clock hold, the power mode does not. */
     cfg_start18 = 1; begin(2, 1, 3); assert(settle() == A733_MMC_RETAINED);
     assert(m.platform.stage == 12 && m.platform.enter_obs == 0x0d && !pf_writes);
+    /* The baseline kept the bank as found, before any write: power mode 2, status 3.3 V, selector 3.3 V. */
+    assert(m.platform.bank_seen && (m.platform.bank_raw[0] >> 10 & 3) == 2 && (m.platform.bank_raw[1] >> 10 & 3) == 2 && m.platform.bank_raw[2] == 1);
     /* With power mode 1 the same reopen writes the selector once, sees the bank report 1.8 V and opens. */
     begin(1, 1, 3); assert(settle() == A733_MMC_READY);
     assert(m.platform.enter_obs == 0x3f && pf_writes == 1 && m.platform.core.card.reentered); cfg_start18 = 0;
