@@ -112,10 +112,12 @@ def case_two_gates(home):
 
 
 def case_timing_lock(home):
-    one, two = timer(home, 'one'), timer(home, 'two')
-    worker = holder(home, 3, gate_slots.WORKER, 'beside the timing lock')
+    one = timer(home, 'one')
+    two = worker = None
     try:
         assert one.line(10) == 'IN'
+        two = timer(home, 'two')                 # started after the first holds the lock, so which gate wins is not a race
+        worker = holder(home, 3, gate_slots.WORKER, 'beside the timing lock')
         assert worker.line(10) is not None, 'a gate in a slot was blocked by the timing lock'
         assert two.line(1.0) is None, 'two gates ran a wall-time step at once'
         one.release()
@@ -124,7 +126,8 @@ def case_timing_lock(home):
         two.release()
     finally:
         for process in (one, two, worker):
-            process.end()
+            if process:
+                process.end()
     serial = set(('cpu-pmu-smp.py', 'smp-port-cost.py', 'pcie-qemu.py', 'npu-runtime-bounds.py'))
     for name, script in (('image-scheduler-control-linked', 'scheduler-control-linked.py'), ('check-soak8', None),
                          ('indexed-smp-ticket-lock', 'smp-ticket-lock.py'), ('indexed-pcie-qemu', 'pcie-qemu.py')):
@@ -139,13 +142,15 @@ def case_timing_lock(home):
 
 
 def case_landing_jump(home):
-    landing = holder(home, 3, gate_slots.LANDING, 'landing-1')
-    worker_one = holder(home, 3, gate_slots.WORKER, 'worker-1')
-    worker_two = holder(home, 3, gate_slots.WORKER, 'worker-2')
+    landing = worker_one = worker_two = None
     waiting = []
     try:
+        landing = holder(home, 3, gate_slots.LANDING, 'landing-1')
         assert landing.line(10) == 'SLOT 0', 'a landing should take the slot that only landings use'
-        assert worker_one.line(10) == 'SLOT 1' and worker_two.line(10) == 'SLOT 2'
+        worker_one = holder(home, 3, gate_slots.WORKER, 'worker-1')      # one at a time: which worker gets which slot is not a race
+        assert worker_one.line(10) == 'SLOT 1'
+        worker_two = holder(home, 3, gate_slots.WORKER, 'worker-2')
+        assert worker_two.line(10) == 'SLOT 2'
         older_worker = holder(home, 3, gate_slots.WORKER, 'worker-3')
         waiting.append(older_worker)
         assert older_worker.line(1.0) is None
@@ -166,7 +171,8 @@ def case_landing_jump(home):
             process.release()
     finally:
         for process in (landing, worker_one, worker_two, *waiting):
-            process.end()
+            if process:
+                process.end()
 
 
 def case_stale_ticket(home):
