@@ -491,7 +491,7 @@ void kernel_main(void)
     const size_t sizes[]={4096,4096,524288,4096,4096,524288};
     const enum a733_npu_buffer_role roles[]={A733_NPU_BUFFER_CONSTANT,A733_NPU_BUFFER_CONSTANT,
         A733_NPU_BUFFER_COMMAND,A733_NPU_BUFFER_READ,A733_NPU_BUFFER_WRITE,A733_NPU_BUFFER_BOOTSTRAP};
-    for(unsigned i=0;i<6;++i)config.buffers[i]=(struct a733_npu_buffer){addresses[i],addresses[i],sizes[i],devices[i],roles[i]};
+    for(unsigned i=0;i<6;++i)config.buffers[i]=(struct a733_npu_buffer){addresses[i],addresses[i],sizes[i],devices[i],roles[i], 0};
     check_model[20]^=1;
     configASSERT(!npu_convolution_prepare(&rejected,&config) && atomic_load(&rejected.failed) && !rejected.native.initialized);
     check_model[20]^=1;

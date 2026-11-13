@@ -549,6 +549,26 @@ endif()
 if(SUNSTONE_OBJECT_TRACE)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_OBJECT_TRACE=1)
 endif()
+# NPU memory measurements. SUNSTONE_NPU_TENSOR_PAGE_SHIFTS lists the NPU MMU page of each slot's read and write buffers, slot
+# 0 first, as 12, 16 or 20 separated by commas (drivers/npu/a733_npu_runtime.c); SUNSTONE_NPU_TRAFFIC_COUNTERS reads the NPU's
+# traffic and cycle counters around every job (drivers/npu/npu_runtime_queue.c).
+set(SUNSTONE_NPU_TENSOR_PAGE_SHIFTS "" CACHE STRING "NPU MMU page shift of each slot's tensors, such as 12,20")
+option(SUNSTONE_NPU_TRAFFIC_COUNTERS "Read the NPU traffic and cycle counters around every job" OFF)
+if(SUNSTONE_NPU_TENSOR_PAGE_SHIFTS)
+  if(NOT SUNSTONE_NPU_TENSOR_PAGE_SHIFTS MATCHES "^(12|16|20)(,(12|16|20))*$")
+    message(FATAL_ERROR "SUNSTONE_NPU_TENSOR_PAGE_SHIFTS takes 12, 16 or 20 for each slot, separated by commas")
+  endif()
+  target_compile_definitions(sunstone-a733-os-core PRIVATE "SUNSTONE_NPU_TENSOR_PAGE_SHIFTS={${SUNSTONE_NPU_TENSOR_PAGE_SHIFTS}}")
+endif()
+if(SUNSTONE_NPU_TRAFFIC_COUNTERS)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_NPU_TRAFFIC_COUNTERS=1)
+endif()
+# SUNSTONE_NPU_OP_TIMING, the most operations of any graph of the image, lets a job run a graph's first operations only
+# (drivers/npu/npu_runtime_queue.c, struct ss_npu_queue_cut).
+set(SUNSTONE_NPU_OP_TIMING "" CACHE STRING "Most operations of a graph whose jobs may be cut at an operation end")
+if(SUNSTONE_NPU_OP_TIMING)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_NPU_OP_TIMING=${SUNSTONE_NPU_OP_TIMING}u)
+endif()
 target_compile_definitions(sunstone-a733-os-core PRIVATE SS_PULL_MOVES_PER_PASS=${SUNSTONE_PULL_MOVES_PER_PASS}u)
 if(SUNSTONE_OWNER_COUNTERS)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_OWNER_COUNTERS=1)

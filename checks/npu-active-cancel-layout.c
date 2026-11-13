@@ -27,7 +27,7 @@ int npu_active_cancel_native(struct a733_npu_native *native,uintptr_t parent,
     for(unsigned i=0;i<NPU_CONVOLUTION_BUFFERS;++i) {
         const struct npu_convolution_slot *slot=&npu_convolution_layout[i];
         buffers[i]=(struct a733_npu_buffer){parent+slot->offset,physical+slot->offset,
-            slot->bytes,slot->device,slot->role};
+            slot->bytes,slot->device,slot->role, 0};
     }
     return a733_npu_native_init(native,registers,0x03600000,
         (void *)(parent+NPU_CONVOLUTION_ARENA_OFFSET),NPU_CONVOLUTION_TABLE_BYTES,
