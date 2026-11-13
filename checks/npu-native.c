@@ -96,10 +96,10 @@ void kernel_main(void)
     level2[(0x47000000 - 0x40000000) / 0x200000] |= 1u << 7;
     __asm__ volatile("dsb sy\n tlbi vmalle1\n dsb sy\n isb" ::: "memory");
     struct a733_npu_buffer buffers[] = {
-        {(uintptr_t)boot_memory, (uintptr_t)boot_memory, sizeof(boot_memory), 0x10000000, A733_NPU_BUFFER_BOOTSTRAP},
-        {(uintptr_t)job_memory, (uintptr_t)job_memory, sizeof(job_memory), 0x10080000, A733_NPU_BUFFER_COMMAND},
-        {(uintptr_t)data + 4096, (uintptr_t)data + 4096, 4096, 0x10100000, A733_NPU_BUFFER_WRITE},
-        {(uintptr_t)data + 8192, (uintptr_t)data + 8192, 4096, 0x10101000, A733_NPU_BUFFER_READ}
+        {(uintptr_t)boot_memory, (uintptr_t)boot_memory, sizeof(boot_memory), 0x10000000, A733_NPU_BUFFER_BOOTSTRAP, 0},
+        {(uintptr_t)job_memory, (uintptr_t)job_memory, sizeof(job_memory), 0x10080000, A733_NPU_BUFFER_COMMAND, 0},
+        {(uintptr_t)data + 4096, (uintptr_t)data + 4096, 4096, 0x10100000, A733_NPU_BUFFER_WRITE, 0},
+        {(uintptr_t)data + 8192, (uintptr_t)data + 8192, 4096, 0x10101000, A733_NPU_BUFFER_READ, 0}
     };
     static _Alignas(8) uint8_t tables[A733_NPU_MEMORY_TABLES_BYTES(4)];
     memset(data, 0x69, sizeof(data));

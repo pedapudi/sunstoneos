@@ -34,7 +34,13 @@
 #define NPU_RUNTIME_LOAD_CHUNK 1024u
 #define NPU_RUNTIME_READ_CHUNK 32768u
 #define NPU_RUNTIME_CACHE_CHUNK 16384u
+/* An image built with SUNSTONE_NPU_OP_TIMING=N (the most operations of any of its graphs) assembles one operation a step and
+ * keeps where each operation's commands end, so that a job can run a graph's first operations only (npu_runtime_queue.c). */
+#ifdef SUNSTONE_NPU_OP_TIMING
+#define NPU_RUNTIME_ASSEMBLY_STEP 1u
+#else
 #define NPU_RUNTIME_ASSEMBLY_STEP 8u
+#endif
 
 /* A model as an address and a length. A graph handed over at run time (npu_runtime_register) is copied into kernel-owned memory
  * and the catalogue entry names that copy; a model given at prepare (a host check's) is read where it is and must stay
@@ -147,6 +153,11 @@ struct npu_runtime_slot {
     unsigned opened, closed;
     unsigned job_failed;    /* npu_job.c: a request of this slot failed; written only by the slot's client */
     unsigned resident_load; /* the load was made by the owner (npu_runtime_load_resident): no client waits for a reply */
+#ifdef SUNSTONE_NPU_OP_TIMING
+    /* The command offset where operation k + 1 of the graph ends, for its operations but the last; op_count is the graph's
+     * operations, 0 when it has more than SUNSTONE_NPU_OP_TIMING. */
+    uint32_t op_end[SUNSTONE_NPU_OP_TIMING], op_count;
+#endif
 };
 struct npu_runtime {
     struct npu_runtime_slot *slot;   /* slots entries, in the reservation */

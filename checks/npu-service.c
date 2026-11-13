@@ -304,9 +304,9 @@ static _Alignas(8) uint8_t service_tables[NPU_SERVICE_TABLES_BYTES(2, 3)];
     for (unsigned i = 0; i < 3; ++i)
         buffers[i] = (struct a733_npu_buffer){(uintptr_t)command_memory[i], (uintptr_t)command_memory[i],
             sizeof(command_memory[i]), 0x10000000 + i * 524288,
-            i ? A733_NPU_BUFFER_COMMAND : A733_NPU_BUFFER_BOOTSTRAP};
+            i ? A733_NPU_BUFFER_COMMAND : A733_NPU_BUFFER_BOOTSTRAP, 0};
     buffers[3] = (struct a733_npu_buffer){(uintptr_t)data + 4096, (uintptr_t)data + 4096,
-        4096, 0x10180000, A733_NPU_BUFFER_WRITE};
+        4096, 0x10180000, A733_NPU_BUFFER_WRITE, 0};
     configASSERT(a733_npu_bootstrap(command_memory[0], sizeof(command_memory[0])));
     configASSERT(a733_npu_native_init(&native, 0x09000000, 0x09000000,
         arena, sizeof(arena), (uintptr_t)arena, buffers, 4, fatal, NULL, memory_tables, sizeof(memory_tables)));
