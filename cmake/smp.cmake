@@ -1,5 +1,6 @@
 include("${CMAKE_CURRENT_LIST_DIR}/scheduler-partitioned.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/kernel-flags.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/current-tcb.cmake")
 # The SMP port is kept in an emulator-only target until A733 recovery and
 # secondary-core power sequencing are qualified.
 set(smp_port "${FREERTOS_DIR}/portable/GCC/ARM_CR82")

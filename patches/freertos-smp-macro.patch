@@ -4,7 +4,7 @@
  #ifndef PORTMACRO_H
  #define PORTMACRO_H
  
-+/* One cache line per core for pxCurrentTCBs. */
++/* The layout of pxCurrentTCBs, which the kernel sets (sunstone_current_tcb.h). */
 +#include "sunstone_current_tcb.h"
 +
  /* *INDENT-OFF* */

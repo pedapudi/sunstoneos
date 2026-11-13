@@ -6,7 +6,9 @@
 # header's default. Every unit of an image must use the kernel's shift, so a
 # target that compiles a generated tasks.c (any tasks.c outside FREERTOS_DIR)
 # gets the definition for all its units. A target that mixes the two kinds
-# fails to link (the guard symbols in the header).
+# fails to link (the guard symbols in the header). Every module that generates
+# a patched tasks.c includes this file, so standalone projects get the rule too.
+include_guard(GLOBAL)
 function(sunstone_current_tcb_apply directory)
   get_property(targets DIRECTORY "${directory}" PROPERTY BUILDSYSTEM_TARGETS)
   foreach(target IN LISTS targets)
