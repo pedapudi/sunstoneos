@@ -129,8 +129,14 @@ static void controller(void *argument)
         configASSERT(trace->self_suspend.command == 2);
         configASSERT((trace->self_suspend.flags & 5) == 5);
 #ifdef SS_SCHED_TRACE_TEST_EXIT_SUSPEND
-        /* CPU1's memory task is parked at an SGI exit (workload.c). */
-        if (c == 1) configASSERT(trace->self_suspend.flags == 197);
+        /* CPU1's memory task is parked at an SGI exit (workload.c). The kept
+         * row is the longest self-suspension, so check the exit's own record. */
+        if (c == 1) {
+            const struct ss_sched_trace_command *parked = &ss_sched_trace_test_exit_parked[1];
+            configASSERT(parked->command == 2 && parked->flags == 197);
+            for (unsigned i = 1; i < 7; ++i) configASSERT(parked->stamp[i] >= parked->stamp[i - 1]);
+            configASSERT(parked->stamp[3] == parked->stamp[4] && parked->stamp[6]);
+        }
 #endif
         configASSERT(trace->self_suspend.stamp[0] && trace->self_suspend.stamp[6]);
         for (unsigned i = 1; i < 7; ++i)
