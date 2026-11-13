@@ -4,6 +4,14 @@
 #include "platform.h"
 #include "sunstone_app.h"
 #include "result.h"
+/* The kit's task creation (include/sunstone_app.h) on this model image, which has no application address space and does not
+ * link apps/os/application.c: the same FreeRTOS creation. */
+void *ss_task_create_static_affinity_set(void (*entry)(void *), const char *name, uint32_t stack_words, void *arg,
+                                         unsigned long priority, void *stack, void *tcb, unsigned long affinity)
+{
+    return xTaskCreateStaticAffinitySet(entry, name, stack_words, arg, (UBaseType_t)priority, (StackType_t *)stack,
+                                        (StaticTask_t *)tcb, (UBaseType_t)affinity);
+}
 extern void latency_cost_init(void);
 extern void latency_cost_main(const struct ss_grant *);
 static struct ss_grant grant = {.main_core = 6, .worker_cores = 0xbf};
