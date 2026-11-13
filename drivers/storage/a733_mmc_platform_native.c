@@ -62,7 +62,7 @@ static int admit(void *cookie,const struct a733_mmc_platform_config *c,const str
     struct a733_mmc_platform_native *n=cookie;
     if(c->kind!=n->kind||c->emmc_host!=n->emmc_host||!current(n))return -1;
     int r=n->admit(n->admission_cookie,c,t);
-    if(r==1)n->sd_profile=c->sd_profile;
+    if(r==1){n->sd_profile=c->sd_profile;n->pf_switchable=c->pf_switchable;}
     return r;
 }
 /* A successful lock entry is cached until leave or retain, so each access
@@ -130,10 +130,23 @@ static int pf_select(struct a733_mmc_platform_native *n,uint32_t v)
     if(!n->bank_1v8||(MMIO_LOAD((uintptr_t)A733_MMC_BASE(a733_mmc_slot(n->kind,n->emmc_host))+SUNXI_SMHC_CLKCR)&(3u<<16)))return 0;
     n->bank_1v8=0;return store(0x02000070,&v,1);
 }
+/* The PF withstand field (GPIO_POW_MOD_SEL bits 11:10) on a board that declares the PF supply switchable: once from a fixed 3.3 V mode
+ * (00 or 10) to adaptive (01), and, after this binding stored that write, back to the field it replaced. No other bit may change. */
+static int pf_mode(struct a733_mmc_platform_native *n,uint32_t v)
+{
+    if(n->kind!=SUNXI_MMC_SD||n->sd_profile!=SUNXI_MMC_SD_UHS_SDR104||!n->pf_switchable||!current(n)||!n->holding||
+       (atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1u))return 0;
+    uint32_t old=MMIO_LOAD(0x02000040),from=old>>10&3u,to=v>>10&3u;
+    if((old^v)&~(3u<<10))return 0;
+    if(!n->pf_mode_set&&(from==0||from==2)&&to==1){n->pf_mode_set=1;n->pf_mode_found=from;return store(0x02000040,&v,1);}
+    if(n->pf_mode_set&&from==1&&to==n->pf_mode_found){n->pf_mode_set=0;return store(0x02000040,&v,1);}
+    return 0;
+}
 static int write32(void *cookie,uintptr_t a,uint32_t v)
 {
     struct a733_mmc_platform_native *n=cookie;
     if(a==0x02000070)return n&&pf_select(n,v);
+    if(a==0x02000040)return n&&pf_mode(n,v);
     if(!allowed(n,a,1))return 0;
     unsigned slot=a733_mmc_slot(n->kind,n->emmc_host);
     uintptr_t base=A733_MMC_BASE(slot);

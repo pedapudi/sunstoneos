@@ -42,6 +42,11 @@ struct a733_mmc_platform_config {
      * start_1v8: the card still signals 1.8 V from an earlier lifetime; the platform moves the bank to 1.8 V before the core opens
      * (stage ENTER_1V8, with the card clock stopped) and the core identifies without CMD11 (sunxi_mmc_reenter). */
     uint8_t sdr25_only, start_1v8;
+    /* Board description, UHS-I profile only: 1 when the board's PF bank supply is switchable (a 1.8 V rail the platform holds, CLDO5 for
+     * VCC18-PF on the Orange Pi Zero 3W). The platform then puts the PF withstand mode (GPIO_POW_MOD_SEL bits 11:10) in adaptive mode
+     * (01, its reset value and the value boot0 writes) at the open's baseline when it finds it fixed at 3.3 V (00 or 10) with the bank at
+     * 3.3 V, and restores the field it found at close. 0: the bank is fixed; a fixed mode is respected and the card stays at 3.3 V. */
+    uint8_t pf_switchable;
 };
 /* Fixed ROM JTAG route, not permission to take over a debugger. The caller's
  * physical authority must exclude debug clients before this exact handoff.
@@ -131,6 +136,8 @@ struct a733_mmc_platform {
      * (PIO 0x48) and the selector (PIO 0x70), raw; bank_seen is set once they are read. */
     uint32_t bank_raw[3];
     uint8_t bank_seen;
+    /* The PF withstand field this open changed to adaptive: bit 2 set while the change is in place, bits 1:0 the field it found. */
+    uint8_t pf_found;
 };
 /* Zero once. All managers, adapter storage and physical authority have platform
  * lifetime. Shared PMIC worker advances independently; the consumer never owns

@@ -238,7 +238,9 @@ static int configure(unsigned start18)
     if (start == UINT64_MAX) return 0;
     config = (struct a733_mmc_platform_config){.owner = owner, .handoff = s->lease | 1, .topology = generation ^ owner,
         .deadline_us = start + IDENTIFY_US, .lifetime_deadline_us = start + LIFETIME_US, .kind = SUNXI_MMC_SD,
-        .voltage_mask = 0x00300000, .sd_profile = SUNXI_MMC_SD_UHS_SDR104, .start_1v8 = (uint8_t)start18, .dma = descriptors};
+        .voltage_mask = 0x00300000, .sd_profile = SUNXI_MMC_SD_UHS_SDR104, .start_1v8 = (uint8_t)start18, .dma = descriptors,
+        /* Board description: CLDO5 supplies VCC18-PF for 1.8 V signalling (docs/clock-audit.md), so the PF bank's supply is switchable. */
+        .pf_switchable = 1};
     if (!config.topology || !fabric()) return 0;
     /* The pins carry whatever the ROM and the runner left; the provider replaces that state. */
     for (unsigned i = 0; i < 7; ++i) {
