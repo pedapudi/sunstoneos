@@ -35,9 +35,12 @@ struct ss_owner_fifo { struct ss_owner_task *head, *tail; };
  * never invalidates the lines the owner selects from. */
 #define SS_CACHE_LINE 64u
 struct ss_owner {
-    _Alignas(SS_CACHE_LINE) struct ss_owner_fifo ready[SS_OWNER_PRIORITIES];
-    struct ss_owner_task *current;
+    /* A local wake and a selection read the current task, the bitmap and one
+     * FIFO. The FIFOs are stored highest priority first, so priorities 7 to 5
+     * share the first line with current and the bitmap; use ss_owner_ready(). */
+    _Alignas(SS_CACHE_LINE) struct ss_owner_task *current;
     uint32_t ready_bitmap;
+    struct ss_owner_fifo ready_by_rank[SS_OWNER_PRIORITIES];
     _Alignas(SS_CACHE_LINE) _Atomic uint64_t incoming[SS_OWNER_PRIORITIES][2];
     /* Logical wake-list head: sixteen bucket bits. Slot bits precede their
      * head publication; owner detach may harmlessly consume a slot early. */
@@ -50,6 +53,8 @@ struct ss_owner {
     unsigned cpu;
     const struct ss_owner_backend *backend;
 };
+static inline struct ss_owner_fifo *ss_owner_ready(struct ss_owner *o, unsigned priority)
+{ return &o->ready_by_rank[SS_OWNER_PRIORITIES - 1u - priority]; }
 void ss_owner_init(struct ss_owner *, unsigned, const struct ss_owner_backend *);
 bool ss_owner_enqueue(struct ss_owner *, struct ss_owner_task *, bool front);
 bool ss_owner_remove(struct ss_owner *, struct ss_owner_task *);
@@ -93,13 +98,18 @@ struct ss_owner_retirement {
     void *context;
     unsigned slot, retirement_owner;
 };
+/* One cache line per descriptor: a pin touches references, admission,
+ * incarnation, task and the registry's lookup key together. */
 struct ss_owner_descriptor {
-    _Atomic uint64_t references;
+    _Alignas(64) _Atomic uint64_t references;
     _Atomic uint64_t admission;
     _Atomic uint64_t incarnation;
     void *task;
     struct ss_owner_retirement retirement;
+    _Atomic uintptr_t key; /* Handle registry's lookup key; the owner code never reads it. */
 };
+_Static_assert(sizeof(struct ss_owner_descriptor) == 64 || sizeof(void *) != 8,
+               "a descriptor occupies exactly one 64-byte line");
 /* Initialize each permanent descriptor once; the legacy open initializer has
  * no retirement callback. Registry initialization uses the closed initializer,
  * then opens admission only after its fixed control routing is available. */

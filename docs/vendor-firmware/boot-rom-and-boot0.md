@@ -289,21 +289,40 @@ boot0 talks to the AXP8191 PMIC over TWI through a register table of 36
 regulators at `0x81e98`, each entry giving the name, voltage range,
 voltage register and enable bit (observed, table at `829ea8e3@0x81e98`, file
 offset `0x3ae98`). The rail map and the full table are in
-[`boot0-tables.json`](data/boot0-tables.json). boot0 writes only the DRAM supply
-and a GPU-rail enable.
+[`boot0-tables.json`](data/boot0-tables.json). The bus is R_TWI at
+`0x07083000`, 400 kHz, 7-bit address `0x36`. boot0 identifies the PMIC by
+reading register `0x0e` and requiring `0x03`, the AXP8191 chip ID in the pinned
+U-Boot `pmu_axp8191.c`; it does not use the header's `power_mode` byte to choose
+a PMIC (observed, detect routine `829ea8e3@0x5d940`). Every PMIC write goes
+through `0x4af3e`, called only from `0x5d760` and `0x5d940`.
 
-| Rail | Register | Action | Order | Delay | Purpose |
-| --- | --- | --- | --- | --- | --- |
-| DCDC2 | `0x13` voltage, `0x10` bit 1 enable | set voltage code, then enable | before DRAM training | none | DRAM/NPU supply, 800 or 840 mV |
-| DCDC4 | `0x10` bit 3 enable | enable only, voltage left at default | board setup | none | GPU rail at PMIC power-on voltage |
+The cold path makes these writes, in this order (observed in the disassembly;
+the values come from an emulation of `0x48fac` and `0x4b618` with the PMIC
+reads modeled; the scripts are under
+`~/.cache/sunstoneos/build/card-boot-1111/boot0-pmic/`):
 
-boot0 writes no CPU rail; DCDC3 (CPU-B) and DCDC5 (CPU-L and DSU) read 800 mV on
-the board at the PMIC power-on default (observed, DRAM supply routine
-`829ea8e3@0x4b618` and GPU enable `@0x5d940`; confirmed on a board,
-`board-session-20261025-1/port-3-3` bundle 15, and
-[CPU backsolve](../reference-backsolve-cpu.md)). The PMIC
-write-voltage path sets the voltage code before the enable bit with no delay
-(observed, `829ea8e3@0x5d760`).
+| # | Register | Write | Result | Caller |
+| --- | --- | --- | --- | --- |
+| 1 | `0x10` | read, set bit 3 | DCDC4 (GPU) enabled; its voltage is not written | board setup `0x48fac` → `0x5d940` |
+| 2 | `0x13`–`0x1a` | read, set bit 7, eight writes | bit 7 of the DCDC2–DCDC9 voltage registers; the voltage field is kept; the meaning of bit 7 is unknown | same |
+| 3 | `0x13` | voltage code `0x1e` | DCDC2 800 mV; 840 mV (code `0x22`) only when header byte `0x47028` has low nibble 2, which the pinned header does not | board setup → `0x5d760` |
+| 4 | `0x10` | read, set bit 1 | DCDC2 enabled, after its voltage | same |
+| 5 | as 1 and 2 | repeated | the detect sequence runs a second time | `0x49004` → `0x5d744` |
+| 6–7 | `0x18`, `0x10` | code `0x3e`, set bit 6 | DCDC7 1120 mV, enabled | DRAM supply `0x4b618`, parameter set 5 |
+| 8–9 | `0x3a`, `0x22` | code `0x18`, set bit 6 | ELDO1 1100 mV (1120 mV requested, 25 mV steps), enabled | same |
+| 10–11 | `0x17`, `0x10` | code `0x06`, set bit 5 | DCDC6 560 mV (boot0 logs `DRAM_VCC 560`), enabled | same |
+| 12 | `0x49` | write back `old & 0x18` | status clear, not a rail; only when the boot-key GPIO reads active | `main` → `0x4b290` |
+
+No write is followed by a delay; the first TWI use waits 1 ms after the
+controller reset. boot0 writes no CPU rail: DCDC3 (CPU-B) and DCDC5 (CPU-L and
+DSU) keep whatever value they hold, 800 mV at the PMIC power-on default
+(confirmed on a board, `board-session-20261025-1/port-3-3` bundle 15, and
+[CPU backsolve](../reference-backsolve-cpu.md)). The FEL DRAM bring-up calls
+the same board-setup and DRAM routines, so a FEL session makes writes 1–11
+too; write 12 is reached only from `main`. The consumers of DCDC6, DCDC7 and
+ELDO1 are not named in the device tree; "DRAM rails" is inferred from the log
+line. With parameter-set word bits 20 (of word 25) or 16 (of word 22) set,
+the routine would use DCDC8 and ELDO2 or 1200 mV instead; set 5 sets neither.
 
 ### DRAM training
 

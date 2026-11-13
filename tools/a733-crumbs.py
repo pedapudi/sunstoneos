@@ -107,7 +107,9 @@ MARKER, MARKER_KEYED, MARKER_SET = RTC + 0x1f0, 0x16aa16aa, 0x16aa
 # The keyed write that would clear bits 15:0, used only by the runner's approved --marker-clear-test.
 MARKER_CLEAR = 0x16aa0000
 FEL_REQUEST, GATE_STAGE = 0x5aa5a55a, 0x0c02
-GATE_FLAGS = {'cold': 0x8000, 'warm': 0x4000, 'unmarked': 0x2000}  # include/a733_card_fel_gate.h
+GATE_FLAGS = {'cold': 0x8000, 'warm': 0x4000, 'unmarked': 0x2000, 'once': 0x1000}  # include/a733_card_fel_gate.h
+# GP2 value that makes the card gate take its cold path once with the marker set (include/a733_card_fel_gate.h).
+BOOT_ONCE = 0xb0070c02
 
 
 def reset_arguments():

@@ -144,13 +144,14 @@ def stage2_checks(build, output, ce_only=False):
         if i and i.mnemonic in ('mrs', 'msr', 'wfe'): system[i.address] = (i.mnemonic, i.op_str)
     cases = []
 
-    def case(name, entry, expected, controls=None, changes=None, grant_remote=False, mask=None):
+    def case(name, entry, expected, controls=None, changes=None, grant_remote=False, mask=None,
+             watchdog=(), stuck_gp2=False, record=0, consumed=0):
         if ce_only and not name.startswith("cold-CE-"): return
         uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
         uc.mem_map(0x47000000, 0x400000); uc.mem_map(SENTINEL, 0x1000)
         for address, data in segments: uc.mem_write(address, data)
         regs = defaults()
-        regs.update({a: 0 for a in (0x02050010, 0x02050014, 0x070501c0, 0x070501c4,
+        regs.update({a: 0 for a in (0x02050010, 0x02050014, 0x02050018, 0x070501c0, 0x070501c4,
                                    0x070501d4, 0x07090108, 0x08001004, 0x08001008, 0x03000024)})
         regs.update({0x030060a0: 0, 0x47004: 0, 0x47008: 0, 0x47028: 0})
         regs[0x0701022c] = 0  # Unsupported CPU configuration bus: clean refusal.
@@ -163,7 +164,7 @@ def stage2_checks(build, output, ce_only=False):
         values = dict(currentel=12, mpidr_el1=0x81000000, midr_el1=0x412fd050,
                       sctlr_el3=0x30c50832, daif=0x3c0, cntfrq_el0=0, cntpct_el0=24000123)
         values.update(controls or {})
-        reads, writes, reset = [], [], []
+        reads, writes, reset, watched = [], [], [], []
 
         def instruction(u, address, size, unused):
             mnemonic, operands = system[address]
@@ -181,9 +182,13 @@ def stage2_checks(build, output, ce_only=False):
             if any(b <= address < b + n for b, n in pages):
                 assert (size == 4 or (address == 0x47028 and size == 1)) and address in regs, hex(address)
                 reads.append(address)
+                if stuck_gp2 and address == 0x07090108:  # The clear does not take effect.
+                    u.mem_write(address, regs[address].to_bytes(4, 'little'))
 
         def write(u, access, address, size, value, unused):
-            if not 0x47008000 <= address < 0x47400000:
+            if address in (0x0205000c, 0x07090108) and entry in ('a733_stage2_gate_entry', 'a733_stage2_main'):
+                watched.append((address, value))
+            elif not 0x47008000 <= address < 0x47400000:
                 writes.append(address)
                 assert address in (0x08001004, 0x08001008), hex(address)
 
@@ -202,10 +207,16 @@ def stage2_checks(build, output, ce_only=False):
         for address in system: uc.hook_add(UC_HOOK_CODE, instruction, begin=address, end=address)
         uc.hook_add(UC_HOOK_MEM_READ, read); uc.hook_add(UC_HOOK_MEM_WRITE, write)
         uc.reg_write(a64.UC_ARM64_REG_SP, 0x473fff00); uc.reg_write(a64.UC_ARM64_REG_X30, SENTINEL)
+        if entry == 'a733_stage2_gate_entry':
+            uc.reg_write(a64.UC_ARM64_REG_X0, 0x473ffff0)  # The record's address.
+        if entry == 'a733_stage2_reset_policy':
+            uc.reg_write(a64.UC_ARM64_REG_X0, consumed)
         uc.emu_start(symbols[entry], SENTINEL, count=100000)
+        assert watched == list(watchdog), (name, watched)
         if entry == 'a733_stage2_main':
             report = list(struct.unpack('<5Q', uc.mem_read(symbols['a733_stage2_report'], 40)))
             assert reset and report[3:] == [10 if grant_remote else 9, expected], report
+            assert int.from_bytes(uc.mem_read(symbols['a733_stage2_report'] + 368, 8), 'little') == record, name
             assert not any(0x04020000 <= a < 0x04021000 for a in reads), reads
         else:
             assert uc.reg_read(a64.UC_ARM64_REG_PC) == SENTINEL and uc.reg_read(a64.UC_ARM64_REG_X0) == expected, name
@@ -227,6 +238,48 @@ def stage2_checks(build, output, ce_only=False):
     for address, value in ((0x02050014, 1), (0x02050010, 0x100), (0x070501c0, 1),
                            (0x070501c4, 0x20), (0x070501d4, 1), (0x07090108, 1)):
         case('prior-owner-' + hex(address), 'a733_stage2_reset_policy', 0, changes={address: value})
+    # The card first stage's WDT0 state (mode 0xb1, configuration 1, output 2)
+    # is consumed at entry; the later policy then accepts it with GP2 zero.
+    armed = {0x02050014: 0xb1, 0x02050010: 1, 0x02050018: 2}
+    gate = lambda extra=0: 0x0c028000 | extra
+    gate_entry = 'a733_stage2_gate_entry'
+    case('gate-consumed-wdt-reset-policy', 'a733_stage2_reset_policy', 1, changes=armed, consumed=1)
+    case('gate-not-consumed-wdt-0xb1-reset-policy', 'a733_stage2_reset_policy', 0, changes=armed)
+    case('gate-consumed-wdt-disarmed-reset-policy', 'a733_stage2_reset_policy', 0, consumed=1)
+    for label, record in (('cold', gate(0xb1)), ('cold-once', gate(0x1000 | 0xb1)), ('cold-zero-mode', gate(0)),
+                          ('cold-any-low-byte', gate(0x41))):
+        case('gate-entry-' + label, gate_entry, 1, changes={**armed, 0x07090108: record},
+             watchdog=[(0x0205000c, 0x14af), (0x07090108, 0)])
+    case('gate-entry-clear-not-read-back', gate_entry, 2, changes={**armed, 0x07090108: gate(0xb1)},
+         watchdog=[(0x0205000c, 0x14af), (0x07090108, 0)], stuck_gp2=True)
+    for label, change in (('wdt-0xb1-gp2-zero', {}), ('wdt-0x41-gp2-zero', {**armed, 0x02050014: 0x41}), ('disarmed-gp2-zero', {0x02050014: 0, 0x02050010: 0, 0x02050018: 0}), ('warm', {0x07090108: gate(0x4000 | 0xb1)}),
+                          ('unmarked', {0x07090108: gate(0x2000 | 0xb1)}),
+                          ('refused-step', {0x07090108: gate(0x0100 | 0xb1)}),
+                          ('refused-step-high', {0x07090108: gate(0x0800 | 0xb1)}),
+                          ('cold-clear', {0x07090108: 0x0c020000 | 0xb1}),
+                          ('vendor-request', {0x07090108: 0x5aa5a55a}),
+                          ('boot-once', {0x07090108: 0xb0070c02}),
+                          ('wrong-stage', {0x07090108: 0x0c038000 | 0xb1}),
+                          ('wdt-0x41', {**armed, 0x02050014: 0x41, 0x07090108: gate(0x41)}),
+                          ('wdt-disarmed', {**armed, 0x02050014: 0, 0x07090108: gate(0)}),
+                          ('wdt-config-2', {**armed, 0x02050010: 2, 0x07090108: gate(0xb1)}),
+                          ('wdt-config-bit8', {**armed, 0x02050010: 0x101, 0x07090108: gate(0xb1)}),
+                          ('wdt-output-1', {**armed, 0x02050018: 1, 0x07090108: gate(0xb1)})):
+        case('gate-entry-rejects-' + label, gate_entry, 0, changes={**armed, **change})
+    for label, change in (('gp2-gate-record', {0x07090108: gate(0xb1)}), ('wdt-0x41-gp2-zero', {0x02050014: 0x41}),
+                          ('wdt-0xb1-gp2-zero-config-2', {**armed, 0x02050010: 2}),
+                          ('wdt-0xb1-gp2-zero-output-1', {**armed, 0x02050018: 1}),
+                          ('wdt-0xb1-gp2-nonzero', {**armed, 0x07090108: 0x0c028000}),
+                          ('wdt-0xb1-redirect', {**armed, 0x070501c4: 0x20})):
+        for consumed in (0, 1):
+            case(f'gate-policy-rejects-{label}-consumed-{consumed}', 'a733_stage2_reset_policy', 0,
+                 changes=change, consumed=consumed)
+    # Main consumes the gate state before the first refusal and keeps the record.
+    case('gate-main-consumes-record', 'a733_stage2_main', BIT['E902'],
+         changes={**armed, 0x07090108: gate(0x10b1), RISCV_BGR: 1},
+         watchdog=[(0x0205000c, 0x14af), (0x07090108, 0)], record=gate(0x10b1))
+    case('gate-main-rejected-state-no-write', 'a733_stage2_main', BIT['E902'],
+         changes={**armed, 0x07090108: gate(0x4000 | 0xb1), RISCV_BGR: 1})
     case('CPU-cache-refuses-unavailable-bus', 'a733_stage2_cpu_cache_owned', 0)
     case('CPU-cache-refused-before-SD', 'a733_stage2_main', 0, grant_remote=True)
     case('E902-refused-before-SD', 'a733_stage2_main', BIT['E902'], changes={RISCV_BGR: 1})

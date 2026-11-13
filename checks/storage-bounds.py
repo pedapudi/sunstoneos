@@ -130,7 +130,8 @@ def main():
     def submit(image, descriptor=None, *, flag=True, port='3-1', inputs=None, directory=approvals, approved='coordinator'):
         args = SimpleNamespace(approved_by=approved, storage_write=flag, port=port, image=image,
                                input=list(inputs if inputs is not None else ()), host_tree=None)
-        with patch.dict(os.environ, {'SUNSTONE_STORAGE_APPROVALS': str(directory), 'SUNSTONE_RESTORE_POINTS': str(registry)}):
+        with patch.dict(os.environ, {'SUNSTONE_STORAGE_APPROVALS': str(directory), 'SUNSTONE_RESTORE_POINTS': str(registry),
+                                     'SUNSTONE_SCRATCH_CARDS': str(out / 'scratch-cards.json')}):
             images.policy({'descriptor': descriptor or {}, 'symbols': {}}, args)
         return args
 
@@ -402,7 +403,61 @@ def boot_area_cases(out, named, submit, no, approvals, registry, cid):
     d, i = case()
     d['storage_boot_area']['extra'] = 1
     no(lambda: run(d, i), 'storage_boot_area needs')
-    print('storage-bounds: boot-area install and restore admitted; extent, backup, candidate, record and class refusals hold')
+    layout_cases(out, no, case, run, extent, backup_file, mbr, card)
+    print('storage-bounds: boot-area install, restore, mbr and layout admitted; extent, backup, candidate, record and class refusals hold')
+
+
+def layout_cases(out, no, case, run, extent, backup_file, mbr, card):
+    """The mbr and layout directions on a listed scratch card: sector 0 moving the partition start, then extents below it."""
+    listing = out / 'scratch-cards.json'                              # submit() points the runner's listing here
+    listing.write_text(json.dumps({card: {'port': '3-3', 'partition': [2048, 61065216]}}))
+    old, old_sha = backup_file('layout-old.bin')
+    moved = bytearray(mbr(2048)); struct.pack_into('<II', moved, 446 + 8, 139264, 61065216 + 2048 - 139264); moved = bytes(moved)
+    moved_sha = hashlib.sha256(moved).hexdigest()
+    def mbr_case(candidate, **kw):
+        d, i = case(rs=((0, 1),), h=old_sha, backup_path=old, cand=hashlib.sha256(candidate).hexdigest(), direction='mbr', **kw)
+        return d, i, extent(candidate, first=0)
+    d, i, e = mbr_case(moved)
+    assert run(d, i, inputs=(i, e)).storage_candidate == moved_sha                           # the move is admitted
+    for name, change, reason in (
+            ('end', lambda m: struct.pack_into('<I', m, 446 + 12, 61065216 - 139264), 'keep its end'),
+            ('earlier', lambda m: struct.pack_into('<II', m, 446 + 8, 1024, 61065216 + 1024), 'move the partition start later'),
+            ('inside-backup', lambda m: struct.pack_into('<II', m, 446 + 8, 256, 61065216 + 1792), 'move the partition start later'),
+            ('boot-code', lambda m: m.__setitem__(0, 0xea), 'changes more than'),
+            ('type', lambda m: m.__setitem__(446 + 4, 0x07), 'changes more than'),
+            ('second-entry', lambda m: m.__setitem__(462 + 4, 0x0c), 'changes more than'),
+            ('signature', lambda m: m.__setitem__(511, 0), 'boot signature')):
+        bad = bytearray(moved); change(bad)
+        d, i, e = mbr_case(bytes(bad))
+        no(lambda: run(d, i, inputs=(i, e)), reason)
+    # Sector 0 together with sector 1 is not an mbr write.
+    d, i = case(rs=((0, 2),), h=old_sha, backup_path=old, cand=hashlib.sha256(moved + bytes(512)).hexdigest(), direction='mbr')
+    no(lambda: run(d, i, inputs=(i, extent(moved + bytes(512), first=0))), 'neither sector 0 alone')
+    # Layout extents need the new MBR in the backup: below its start, from sector 512.
+    new, new_sha = backup_file('layout-new.bin', start=139264)
+    def layout(first, count, **kw):
+        data = bytes((first + n) & 0xff for n in range(count * 512))
+        d, i = case(rs=((first, count),), h=kw.pop('h', new_sha), backup_path=kw.pop('backup_path', new),
+                    cand=hashlib.sha256(data).hexdigest(), direction='layout', **kw)
+        return d, i, extent(data, first=first)
+    for first, count in ((8192, 1), (32800, 96), (40960, 40960), (122880, 16384)):
+        d, i, e = layout(first, count)
+        run(d, i, inputs=(i, e))                                                               # TOC1, slot A, records
+    for first, count, kw, reason in (
+            (139263, 2, {}, 'up to the FAT32 partition start'),
+            (100, 8, {}, 'from sector 512'),
+            (32800, 96, {'h': old_sha, 'backup_path': old}, 'up to the FAT32 partition start')):  # before the MBR move
+        d, i, e = layout(first, count, **kw)
+        no(lambda: run(d, i, inputs=(i, e)), reason)
+    # Neither direction is admitted on a card that is not listed as a scratch card on this port.
+    listing.write_text(json.dumps({card: {'port': '3-1', 'partition': [2048, 61065216]}}))
+    d, i, e = layout(32800, 96)
+    no(lambda: run(d, i, inputs=(i, e)), 'scratch card on this port')
+    d, i, e = mbr_case(moved)
+    no(lambda: run(d, i, inputs=(i, e)), 'scratch card on this port')
+    listing.write_text('{}')
+    d, i, e = layout(32800, 96)
+    no(lambda: run(d, i, inputs=(i, e)), 'scratch card on this port')
 
 
 def _write(path, data):

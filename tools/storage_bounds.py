@@ -22,10 +22,12 @@ Read-only images and images without an SD core pass unchanged. A write-capable i
   data area (after the boot sector's reserved sectors and FATs), so the boot, FSInfo and FAT sectors are never exempt;
 - the first input of the run is the version 2 encoding of those bounds (encode_input), checked again after the
   runner has frozen its inputs (verify_delivered).
-A boot-area write (descriptor storage_boot_area, admit_boot_area) is the one class outside the partition: one write range
-equal to the card first stage's extent from its manifest, below sector 2048 and below the partition start, backed up with
-sector 0 and sectors 16..511, writing a candidate whose SHA-256 the record names (the first stage to install it, or the
-extent's bytes from an earlier backup to restore it).
+A boot-area write (descriptor storage_boot_area, admit_boot_area) is the one class outside the partition: one write range,
+backed up with sector 0 and sectors 16..511, writing a candidate whose SHA-256 the record names. The record's direction
+selects the range: install or restore, the card first stage's extent from its manifest (the first stage, or the extent's
+bytes from an earlier backup); mbr, sector 0 alone, on a listed scratch card, with a candidate that keeps the boot code and
+moves the start of the single FAT32 partition later while keeping its end; layout, an extent from sector 512 up to the
+partition start, on a listed scratch card (docs/designs/autonomous-card-os.md has the card layout).
 The record limits what one run writes. The image re-reads the backed-up sectors before its first
 write and refuses to write when their SHA-256 differs from the input's hash.
 
@@ -252,6 +254,25 @@ def mbr_partition_start(backup_sectors):
     return start
 
 
+def partition_extent(mbr):
+    """(first sector, end sector) of the MBR's single FAT32 entry."""
+    start = mbr_partition_start({0: mbr})
+    entry = next(mbr[446 + 16 * i:462 + 16 * i] for i in range(4) if mbr[446 + 16 * i + 4] in (0x0b, 0x0c))
+    return start, start + struct.unpack_from('<I', entry, 12)[0]
+
+
+def mbr_move(current, candidate):
+    """(new start, new end) of a candidate MBR that differs from the current one only in its FAT32 entry's start and size:
+    the boot code, the disk signature, the other entries, the entry's status and type and the boot signature are kept."""
+    require(len(candidate) == 512 and candidate[510:512] == b'\x55\xaa', 'The MBR candidate is not one sector with the boot signature.')
+    entries = [i for i in range(4) if current[446 + 16 * i + 4] in (0x0b, 0x0c)]
+    require(len(entries) == 1, 'The current MBR must hold exactly one FAT32 partition entry.')
+    at = 446 + 16 * entries[0]
+    require(candidate[:at + 8] == current[:at + 8] and candidate[at + 16:] == current[at + 16:],
+            'The MBR candidate changes more than the FAT32 entry\'s start and size.')
+    return partition_extent(candidate)
+
+
 def extent_sha256(backup_sectors, first, count):
     """SHA-256 of the extent's sector bytes, concatenated in order, from a parsed backup."""
     require(all(s in backup_sectors for s in range(first, first + count)), 'The source backup does not hold the extent.')
@@ -272,9 +293,10 @@ def first_stage_extent(path, expected_sha256):
 
 
 def admit_boot_area(descriptor, args, image_sha256, approvals=None):
-    """Admission of a raw write below the first partition: exactly the first-stage extent, backed up with sector 0 and
-    sectors 16..511, writing a candidate whose hash the coordinator's record names. The candidate is the first stage
-    (install) or the extent's bytes from an earlier backup (restore). Inputs: the version 3 blob, then the mode input of
+    """Admission of a raw write below the first partition, backed up with sector 0 and sectors 16..511, writing a
+    candidate whose hash the coordinator's record names. The record's direction selects the extent: the first-stage
+    extent for install (the first stage) or restore (the extent's bytes from an earlier backup); sector 0 for mbr; an
+    extent from sector 512 below the partition for layout, the last two on a listed scratch card only. Inputs: the version 3 blob, then the mode input of
     apps/storage-write-test mode 10: its 512-byte header for the extent's first sector followed by the candidate
     sectors (write_extent_input). Returns the blob."""
     b = descriptor.get('storage_boot_area')
@@ -286,8 +308,9 @@ def admit_boot_area(descriptor, args, image_sha256, approvals=None):
     for key in ('backup_sha256', 'candidate_sha256'):
         require(isinstance(b[key], str) and re.fullmatch(r'[0-9a-f]{64}', b[key]), 'Invalid storage_boot_area.')
     first, count = ranges[0]
-    require(count > 0 and 16 <= first and first + count <= 512, 'The boot-area extent lies outside the backed-up sectors 16..511.')
-    require(first + count <= BOOT_AREA_LIMIT, 'The boot-area extent reaches sector 2048.')
+    require(count > 0, 'The boot-area extent is empty.')
+    require((first, count) == (0, 1) or 16 <= first and first + count <= 512 or first >= 512,
+            'The boot-area extent lies outside the backed-up sectors 16..511 and is neither sector 0 alone nor from sector 512.')
     blob = encode_input(ranges, backup_ranges, b['backup_sha256'], b['card_cid'])
     require(args.input and Path(args.input[0]).read_bytes() == blob, 'The first input must be the encoding of storage_boot_area.')
     require(len(args.input) == 2, 'A boot-area write takes the bounds blob and the raw-extent mode input.')
@@ -308,11 +331,30 @@ def admit_boot_area(descriptor, args, image_sha256, approvals=None):
     sectors = parse_backup(record.get('backup', ''), b['backup_sha256'])
     listed = {x for f, n in backup_ranges for x in range(f, f + n)}
     require(listed == set(sectors), 'The backup file does not hold exactly the listed backup sectors.')
-    require(first + count <= mbr_partition_start(sectors), 'The boot-area extent overlaps the FAT32 partition.')
+    start = mbr_partition_start(sectors)
+    direction = record.get('direction')
+    if direction in ('mbr', 'layout'):
+        scratch_entry = scratch_cards().get(b['card_cid']) or {}
+        require(scratch_entry.get('port') == args.port, 'An mbr or layout write needs the card listed as a scratch card on this port.')
+    if direction == 'mbr':
+        require((first, count) == (0, 1), 'An mbr write covers sector 0 alone.')
+        new_start, new_end = mbr_move(sectors[0], candidate)
+        old_start, old_end = partition_extent(sectors[0])
+        require(old_start < new_start and new_end == old_end, 'The new MBR must move the partition start later and keep its end.')
+        require(new_start >= 512, 'The new partition starts inside the backed-up sectors.')
+    elif direction == 'layout':
+        require(first >= 512 and first + count <= start, 'A layout extent lies from sector 512 up to the FAT32 partition start.')
+    else:
+        require(16 <= first and first + count <= 512, 'The boot-area extent lies outside the backed-up sectors 16..511.')
+        require(first + count <= BOOT_AREA_LIMIT, 'The boot-area extent reaches sector 2048.')
+        require(first + count <= start, 'The boot-area extent overlaps the FAT32 partition.')
+    if direction in ('mbr', 'layout'):
+        args.storage_admission = hashlib.sha256(blob).hexdigest()
+        args.storage_candidate = b['candidate_sha256']
+        return blob
     manifest_first, manifest_count, stage_sha256 = first_stage_extent(record.get('first_stage_manifest', ''),
                                                                      record.get('first_stage_manifest_sha256', ''))
     require((first, count) == (manifest_first, manifest_count), 'The write range differs from the first-stage extent.')
-    direction = record.get('direction')
     if direction == 'install':
         require(b['candidate_sha256'] == stage_sha256, 'The install candidate is not the manifest\'s first stage.')
     else:

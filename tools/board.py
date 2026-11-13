@@ -494,7 +494,8 @@ class Live:
         require(len(values) == len(crumbs.RESET_WORDS), 'Reset word readback differs.')
         entry = {'sequence': self.sequence, 'words': values, 'gate': crumbs.gate_record(values['flag'])}
         commands = []
-        if entry['gate']:
+        # A boot-once value left in GP2 would boot the card at the session's reset; clear it with any gate record.
+        if entry['gate'] or values['flag'] == crumbs.BOOT_ONCE:
             commands += ['writel', hex(crumbs.RESET_WORDS['flag']), '0x0']
         if values['marker'] & 0xffff != crumbs.MARKER_SET:
             commands += ['writel', hex(crumbs.MARKER), hex(crumbs.MARKER_KEYED)]
@@ -502,7 +503,8 @@ class Live:
             after = [int(x, 16) for x in self.tx(*commands, 'readl', hex(crumbs.RESET_WORDS['flag']),
                                                  'readl', hex(crumbs.MARKER)).split()]
             entry.update(flag_after=after[0], marker_after=after[1])
-            require(not entry['gate'] or after[0] == 0, 'The first-stage gate record did not clear.')
+            require(after[0] == 0 or not (entry['gate'] or values['flag'] == crumbs.BOOT_ONCE),
+                    'The first-stage gate record or boot-once value did not clear.')
             require(after[1] & 0xffff == crumbs.MARKER_SET, 'The cold-boot marker did not read back after its keyed write.')
         if getattr(self.args, 'marker_clear_test', False) and not self.record.get('power_epoch'):
             self.marker_clear_test()

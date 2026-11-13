@@ -111,6 +111,9 @@ void latency_main(const struct ss_grant *grant)
 #ifdef SUNSTONE_SCHED_PMU
     ss_sched_pmu_arm();
 #endif
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_arm();
+#endif
     latency_workload_run(&result);
     if (!at_top()) ss_fail(0xb03);
     ss_activity_end(1);
