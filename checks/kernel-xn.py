@@ -10,17 +10,19 @@ applying the hierarchical table bits. It then requires:
    page that one virtual address makes writable is executable through another;
 2. every page of .rodata, the application manifest, the other allocated read-only
    sections and the sealed session (apps/os/sealed-link.patch) is read-only and
-   execute-never at EL1 and EL0, and every other allocated section that is not
-   code is execute-never at both levels;
+   execute-never at EL1 and EL0, every other allocated section that is not
+   code is execute-never at both levels, and every code section is executable
+   at EL1;
 3. the image area 0x40000000..0x48000000 is mapped by level-2 block entries only,
    one per 2 MiB, with no level-3 table, so splitting read-only data from text
    changes no TLB reach: 63 valid blocks (the monitor block 0x42000000 stays
    invalid at EL1, docs/memory-protection.md).
 
-Five mutations of the walked tables, each of which one rule must refuse, show that
-the rules can fail: text made writable, read-only data made executable at EL1 and
-at EL0, the sealed session placed in the text block, and the read-only data block
-split into 4 KiB pages with unchanged permissions. No hardware is accessed.
+Six mutations of the walked tables, each of which one rule must refuse, show that
+the rules can fail: text made writable, text made execute-never, read-only data
+made executable at EL1 and at EL0, the sealed session placed in the text block,
+and the read-only data block split into 4 KiB pages with unchanged permissions.
+No hardware is accessed.
 """
 import argparse
 import importlib.util
@@ -143,6 +145,8 @@ def violations(image, tables):
                 found.append(('executable-data' if not read_only else 'executable-rodata', '%s at %#x' % (name, va)))
             if read_only and w:
                 found.append(('writable-rodata', '%s at %#x' % (name, va)))
+            if code and not el1_exec:
+                found.append(('code-not-executable', '%s at %#x' % (name, va)))
     entries = tables.head_entries()
     blocks = sum(1 for d in entries if d & 3 == 1)
     split = [HEAD[0] + (i << 21) for i, d in enumerate(entries) if d & 3 == 3]
@@ -191,6 +195,7 @@ def mutations(image, tables):
         results[name] = sorted(rules)
 
     trial('text-writable', 'writable-executable', {text: text_word & ~(3 << 6) | (1 << 6)})
+    trial('text-execute-never', 'code-not-executable', {text: text_word | BIT(53)})
     trial('rodata-el1-executable', 'executable-rodata', {rodata: rodata_word & ~BIT(53)})
     trial('rodata-el0-executable', 'executable-rodata', {rodata: rodata_word & ~BIT(54)})
     sealed = [s for s in image.sections if s[0] == '.sealed']
@@ -237,7 +242,7 @@ def main():
         result[str(path)] = check(path.resolve())
         print('PASS %s: no writable executable page, read-only data execute-never, %d image blocks' % (path, HEAD_BLOCKS))
     (out / 'result.json').write_text(json.dumps(result, indent=1) + '\n')
-    print('PASS kernel-xn: %d images, 5 mutations each refused' % len(args.image))
+    print('PASS kernel-xn: %d images, 6 mutations each refused' % len(args.image))
 
 
 if __name__ == '__main__':

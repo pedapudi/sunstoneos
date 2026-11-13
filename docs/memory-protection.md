@@ -90,12 +90,13 @@ builder under Unicorn and walks the EL1 tables with their hierarchical bits.
 It fails on any page that EL1 or EL0 can write and either level can execute,
 on a physical page that is writable through one address and executable through
 another, on any page of a read-only section or of the sealed session that is
-writable or executable, on executable data, and on any level-3 table or block
-count other than 63 in the first 128 MiB. Five mutations of the walked tables
-each trip one rule: text made writable, read-only data made executable at EL1
-and at EL0, the sealed session placed in the text block, and the read-only data
-block split into 4 KiB pages with unchanged permissions. The gate runs it on
-every OS image.
+writable or executable, on executable data, on code that EL1 cannot execute,
+and on any level-3 table or block count other than 63 in the first 128 MiB.
+Six mutations of the walked tables each trip one rule: text made writable,
+text made execute-never, read-only data made executable at EL1 and at EL0, the
+sealed session placed in the text block, and the read-only data block split
+into 4 KiB pages with unchanged permissions. The gate runs it on every OS
+image.
 
 ## The DRAM decode check gates every entry above the boot image
 
