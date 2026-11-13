@@ -540,6 +540,56 @@ read `0x16aa` after the second write, the run stops before launch. WDT0 is
 disarmed throughout, so no reset can take the gate's cold path while the
 marker reads clear.
 
+### Boot the card once
+
+`--boot-once-slot MANIFEST.json` replaces the launch with one boot of the
+card's slot. It requires `--approved-by coordinator` and `--lifetime resident`
+and is frozen into the queue entry; the queued copy of the manifest is
+hashed with the other inputs. The image argument is the slot's runtime ELF,
+the one with the linked stop-on-finish profile. Submission and the run flatten
+it as `apps/os/card.py` does and refuse it unless the SHA-256 of the result
+equals the hash of the runtime extent (kind 1) in the manifest, which is the
+plan of `tools/boot-slots.py`. The result then names what the card boots.
+
+After the normal first contact, which sets the marker and clears GP2, the runner:
+
+1. writes the boot-once value `0xb0070c02` to GP2 and reads it back together with
+   the marker. A value that does not read back, or a marker that is not set,
+   clears GP2 again and refuses the run before any reset;
+2. arms WDT0 in mode `0x41` and lets it expire, as the session reset does. It
+   uploads and executes nothing and brings up no DRAM;
+3. waits with no FEL session. The card gate takes its cold path once, boot0
+   trains DRAM and loads the package, the stage-2 monitor loads the slot and
+   enters the image, which runs its test and stops renewing WDT0. The
+   watchdog then resets the board through the gate's warm path into FEL;
+4. reads, in the one transaction that also disarms WDT0, the reset words and the
+   breadcrumb words, then clears GP2.
+
+The wait is `boot_once_deadline()` in `tools/board.py`, a sum of named terms
+in seconds from the arming of WDT0:
+
+| Term | Seconds | Source |
+| --- | --- | --- |
+| `arm_expiry_s` | 4 | the interval of WDT0 mode `0x41` |
+| `gate_watchdog_s` | 16 | the gate's cold-path WDT0 (`0xb1`), which covers boot0, DRAM training (about 5.1 s) and the package load |
+| `slot_load_s` | 30 | the stage-2 loader's bound for the whole slot load |
+| `resident_session_s` | the image's session duration, 60 for the hello-compute diagnostic | the watchdog marker the image declares, as for `--lifetime resident` |
+| `final_watchdog_s` | 4 | the interval of WDT0 mode `0x41` after the monitor enters the image |
+| `margin_s` | 10 | FEL re-enumeration, as in every other wait |
+
+The total is 124 s for a 60 s session. A board that has not reappeared by then
+is a no-return: the instance is quarantined, the port pauses, and the runner
+never retries or resets again.
+
+The result records `boot_once`: the value written and read back, the marker,
+the deadline terms, the seconds to return, WDT0 mode before and after the
+return, the reset words with the gate record decoded, the breadcrumb words and
+their decoding, the LAST word and the stop value. The pass is the gate's warm
+record `0x0c024041`, the marker `0x16aa16aa`, LAST `0x01115000` (stage `0x0111`,
+value `0x5000`) and no fault; the outcome is then `watchdog-reset` with
+`expected_reset: true`. Any other words give the same outcome with a
+`first_failure` that lists the expected and observed words.
+
 The runner uploads both loads, arms WDT0 in mode `0x41`, sets and reads back
 the session tag and the entry state, and executes `0x52000`. The request image
 sets the vendor RTC request `0x5aa5a55a`. The warm-entry image sets no request

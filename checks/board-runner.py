@@ -83,6 +83,17 @@ class Model:
         if not self.variant.startswith('card-') or self.registers.get(board.crumbs.MARKER,0)&0xffff!=board.crumbs.MARKER_SET:
             return
         flag=board.crumbs.RESET_WORDS['flag']
+        if self.registers.get(flag)==board.crumbs.BOOT_ONCE:
+            # The gate took its cold path once and consumed the value. The image ran its test, stopped renewing and WDT0 reset
+            # the board through the warm path (card-once-other: boot0 found no package and entered FEL with the cold record).
+            if self.variant=='card-once-other':
+                self.registers[flag]=0x0c029041
+            else:
+                self.registers[flag]=0x0c024041
+                self.registers[board.crumbs.RTC+0x100]=0x5c0d0001
+                self.registers[board.crumbs.RTC+0x104]=board.crumbs.EL3_STOP<<16|0x5000
+            self.registers[board.crumbs.WDT_MODE]=0
+            return
         self.registers[flag]=0x0c024000|self.registers[board.crumbs.WDT_MODE]&0xff
         self.registers[board.crumbs.WDT_MODE]=0
 
@@ -92,7 +103,7 @@ class Model:
 
     def discover(self, port):
         assert port=='3-1'
-        if self.pending and self.variant!='no-return' and not (self.variant in ('recovery-no-return','recovery-stale') and self.launched) \
+        if self.pending and self.variant not in ('no-return','card-once-no-return') and not (self.variant in ('recovery-no-return','recovery-stale') and self.launched) \
                 and self.clock>=getattr(self,'reset_at',0):
             self.number += 1
             self.pending = False
@@ -156,6 +167,8 @@ class Model:
                 address,value=int(args[i+1],0),int(args[i+2],0)
                 if self.variant=='stuck-disarm' and self.launched and address==board.crumbs.WDT_MODE and value==board.crumbs.KEY:
                     self.pending=True;i+=3;continue
+                if address==board.crumbs.RESET_WORDS['flag'] and value==board.crumbs.BOOT_ONCE and self.variant=='card-once-gp2-stuck':
+                    i+=3;continue
                 if address==board.crumbs.MARKER:
                     # A733 manual 9.1.7.20: only a keyed write takes effect.
                     if value>>16!=0x16aa or self.variant=='marker-stuck':i+=3;continue
@@ -167,6 +180,11 @@ class Model:
                 self.registers[address] = value&0xffff if address in (board.crumbs.WDT_MODE,board.crumbs.WDT_CONFIG,board.crumbs.WDT_OUTPUT) else value
                 if address==board.crumbs.WDT_RESTART and self.registers[board.crumbs.WDT_MODE]==0x41:
                     self.pending=True
+                    if self.registers.get(board.crumbs.RESET_WORDS['flag'])==board.crumbs.BOOT_ONCE:
+                        # The card boots: the 4 s WDT0 interval, the gate and boot0 (DRAM training 5.1 s measured), the slot load
+                        # (a few seconds) and the image's modeled 1 s lifetime and 4 s final interval, with no FEL instance meanwhile.
+                        self.reset_at=self.clock+4+5.1+3+1+4
+                        if self.variant=='card-once-late':self.reset_at=self.clock+board.boot_once_deadline(1)['total_s']+5
                 if address==board.crumbs.WDT_MODE and value&1 and self.variant=='partial-arm' and not self.arm_failed:
                     self.arm_failed=True
                     self.pending=True
@@ -739,6 +757,100 @@ def marker_clear_cases(out):
     passed('marker-clear-test-is-frozen-into-the-runner-command')
 
 
+def boot_once_cases(out):
+    """--boot-once-slot: GP2 gets the boot-once value and reads back, WDT0 resets the board, nothing is launched or uploaded, and the
+    runner waits with no FEL session for the card boot to end in the image's watchdog reset."""
+    flag,slot=board.crumbs.RESET_WORDS['flag'],{'runtime_sha256':'0'*64,'slot':'A','generation':1}
+    terms=board.boot_once_deadline(1)
+    assert terms=={'arm_expiry_s':4,'gate_watchdog_s':16,'slot_load_s':30,'resident_session_s':1,'final_watchdog_s':4,'margin_s':10,'total_s':65},terms
+    def run(variant):
+        def configure(args):args.boot_once_slot=out/'slot.json';args.approved_by='coordinator'
+        with patch.object(images,'boot_once_slot',return_value=slot):
+            return lifecycle(out/variant,variant,resident=True,configure=configure)
+    def assert_no_launch(model):
+        assert not any(c[0] in ('exe','reset64') for c in model.calls),'The card boot launches nothing.'
+        first=next(i for i,c in enumerate(model.calls) if c[:3]==['writel',hex(flag),hex(board.crumbs.BOOT_ONCE)])
+        assert not any(c[0]=='write' for c in model.calls[first:]),'The card boot uploads nothing after the first contact.'
+    result,model,owner=run('card-once-pass')
+    boot=result['boot_once']
+    assert result['outcome']=='watchdog-reset' and board.result_passed(result,decoded=False) and result['expected_reset'],result
+    assert boot['gp2_written']==board.crumbs.BOOT_ONCE==boot['gp2_readback'] and boot['passed'],boot
+    assert boot['reset_words']['flag']==0x0c024041 and boot['reset_words']['marker']==board.crumbs.MARKER_KEYED,boot
+    assert boot['gate']=={'cold':False,'warm':True,'unmarked':False,'once':False,'refused_step':0,'mode':0x41},boot['gate']
+    assert boot['last']==board.crumbs.EL3_STOP<<16|0x5000 and boot['stop_value']==0x5000 and boot['decoded']['last']['stage']==0x0111,boot
+    assert boot['deadline']==terms and 13<boot['seconds_to_return']<terms['total_s'],boot
+    assert result['boot_once_slot']==slot and result['dram_mode']=='sram-only' and not result['launch_attempted']
+    assert_no_launch(model)
+    write=next(i for i,c in enumerate(model.calls) if c[:3]==['writel',hex(flag),hex(board.crumbs.BOOT_ONCE)])
+    arm=[i for i,c in enumerate(model.calls) if '0x16aa0041' in c]
+    assert len(arm)==1 and write<arm[0],'One reset, after the value is written and read back.'
+    assert model.registers[flag]==0 and not model.quarantined,'The gate record is cleared at the return.'
+    assert [c for c in model.calls if c[:1]==['version']].__len__()==1,'No second FEL contact before the card boot ends.'
+    passed('boot-once-pass')
+    result,model,owner=run('card-once-gp2-stuck')
+    assert result['outcome']=='refused-before-launch' and 'read back' in result['first_failure']['detail'],result
+    assert result['boot_once']['gp2_readback']==0 and not any('0x16aa0041' in c for c in model.calls) and model.registers[flag]==0
+    assert_no_launch(model)
+    passed('boot-once-gp2-not-read-back-refused-before-reset')
+    for variant in ('card-once-no-return','card-once-late'):
+        result,model,owner=run(variant)
+        assert result['outcome']=='no-return' and model.quarantined and not board.result_passed(result,decoded=False),(variant,result)
+        assert sum('0x16aa0041' in c for c in model.calls)==1,'A board that has not returned is never reset again.'
+        assert model.clock>=board.boot_once_deadline(1)['total_s'],(variant,model.clock)
+        assert result['boot_once']['gp2_readback']==board.crumbs.BOOT_ONCE and 'watchdog_return' not in owner.record
+        assert_no_launch(model)
+        passed('boot-once-'+variant[len('card-once-'):])
+    result,model,owner=run('card-once-other')
+    boot=result['boot_once']
+    assert result['outcome']=='watchdog-reset' and not board.result_passed(result,decoded=False) and not result['expected_reset'],result
+    assert result['first_failure']['site']=='boot-once' and '0x0c029041'.lower() in result['first_failure']['detail'].lower(),result['first_failure']
+    assert boot['gate']['cold'] and boot['gate']['once'] and boot['observed']['last']==0 and not boot['passed']
+    assert_no_launch(model)
+    passed('boot-once-different-record-fails-and-reports-it')
+    # Admission: coordinator approval, the resident lifetime, and the frozen queue option.
+    info={'generic':True,'dma':False,'symbols':{'os_resident_test_profile':0},'descriptor':{}}
+    args=arguments(out,'--kind','cpu-return',development=True);args.boot_once_slot=out/'slot.json'
+    profile=struct.pack('<3Q',0x3154534554525353,1,0x5000)
+    with patch.object(images,'symbol_bytes',return_value=profile),patch.object(images,'boot_once_slot',return_value=slot):
+        for lifetime,approved,word in (('resident',None,'coordinator'),('returning','coordinator','resident')):
+            args.lifetime,args.approved_by=lifetime,approved
+            try:images.policy(info,args)
+            except ValueError as error:assert word in str(error) and ('--boot-once-slot' in str(error) or lifetime=='returning'),error
+            else:raise AssertionError(('--boot-once-slot admitted',lifetime,approved))
+        args.lifetime,args.approved_by='resident','coordinator'
+        real_load=images.load
+        with patch.object(images,'load',lambda name,path:types.SimpleNamespace(classify=lambda _:'no-core') if name=='storage_bounds' else real_load(name,path)):
+            images.policy(info,args)
+    job={'image':'/image.elf','directory':str(out),'options':{'boot_once_slot':'/slot.json','approved_by':'coordinator','lifetime':'resident'}}
+    command=board.Queue.runner_command(job,'3-1')
+    assert 'boot_once_slot' in board.FROZEN_OPTIONS and command[command.index('--boot-once-slot')+1]=='/slot.json',command
+    passed('boot-once-requires-coordinator-approval-and-is-frozen')
+
+
+def boot_once_slot_cases(out):
+    """The submitted ELF must flatten to the runtime the slot manifest names."""
+    runtime=b'flat runtime'
+    manifest=out/'plan.json';args=types.SimpleNamespace(image=out/'image.elf',boot_once_slot=manifest)
+    def write(digest,**extra):
+        manifest.write_text(json.dumps({'kind':'a733-boot-slot-plan','slot':'A','generation':3,'entry':0x41000000,
+            'extents':[{'name':'runtime.bin','kind':1,'load':0x41000000,'bytes':len(runtime),'sha256':digest},
+                       {'name':'session.bin','kind':2,'load':0x41f00000,'bytes':4,'sha256':'1'*64}],**extra}))
+    card=types.SimpleNamespace(flat_runtime=lambda image:runtime)
+    with patch.object(images,'load',return_value=card):
+        write(images.hashlib.sha256(runtime).hexdigest())
+        record=images.boot_once_slot(args)
+        assert record['slot']=='A' and record['generation']==3 and record['runtime_sha256']==images.hashlib.sha256(runtime).hexdigest()
+        write('2'*64)
+        try:images.boot_once_slot(args)
+        except ValueError as error:assert 'another image' in str(error),error
+        else:raise AssertionError('A slot manifest for another image was accepted')
+        manifest.write_text('{}')
+        try:images.boot_once_slot(args)
+        except ValueError:pass
+        else:raise AssertionError('A manifest without extents was accepted')
+    passed('boot-once-slot-manifest-names-the-submitted-image')
+
+
 def transport_cases(out):
     for variant in ('normal','watchdog','no-return','host-error','dram-failure','rail-refusal','readback','partial-arm','journal-error','invalid-report','stuck-disarm','return-decoder',
                     'card-watchdog-41','card-watchdog-b1','card-cold-record','card-boot-once-stale','marker-stuck'):
@@ -798,6 +910,8 @@ def transport_cases(out):
             assert sum('0x16aa0041' in c for c in model.calls)==1
         passed(variant)
     marker_clear_cases(out)
+    boot_once_cases(out)
+    boot_once_slot_cases(out)
     for variant,expected in (
             ('watchdog-before-entry','watchdog-reset'),('missing-return','host-error'),
             ('wrong-return-session','host-error'),('fel-after-return','host-error'),
