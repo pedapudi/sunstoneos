@@ -43,7 +43,7 @@ void sunstone_net_ip_event(unsigned,void *);
 #define ipconfigSUPPORT_SIGNALS 0
 #define ipconfigUSE_CALLBACKS 0
 #define ipconfigSOCKET_HAS_USER_SEMAPHORE 0
-#define ipconfigSOCKET_HAS_USER_WAKE_CALLBACK 0
+#define ipconfigSOCKET_HAS_USER_WAKE_CALLBACK 1
 #define ipconfigUSE_NETWORK_EVENT_HOOK 1
 #define ipconfigUSE_LINKED_RX_MESSAGES 0
 #define ipconfigDRIVER_INCLUDED_TX_IP_CHECKSUM 0

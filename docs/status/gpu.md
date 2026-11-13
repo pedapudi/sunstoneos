@@ -19,6 +19,7 @@ on the admitted ring). General GPU coverage remains unqualified.
 | Firmware lifecycle, finite queue workloads, recovery paths | qualified on the board | Normal retirement on ports 3-1 and 3-3 | [gpu.jsonl](../evidence/gpu.jsonl); [gpu-compute-queue.md](../designs/gpu-compute-queue.md) |
 | Reference recognition input with exact FP32 sums; four changed-input local-memory GEMMs | qualified on the board | Port 3-1 | [gpu.jsonl](../evidence/gpu.jsonl); [gpu-compute-local-memory.md](../designs/gpu-compute-local-memory.md) |
 | Caller-side submission and interrupt completion | qualified on the board | 20,064 jobs per input; submission median 3.833 us; round trip about 104 us; budgets unmet | [gpu-fast-path.md](../designs/gpu-fast-path.md) |
+| OS owner notifications and precise deadlines | one native lifecycle session passes | Ten owner cycles and one peer job; modeled quiet owner: 1,000 to zero wakes/s; physical counters span the whole lifecycle | [Owner waits](../designs/gpu-owner-events.md), [owner evidence](../evidence/gpu-owner-events.jsonl) |
 | Recognition on the GPU | qualified on the board | 327.476 ms against 135.474 ms CPU-only, 33.5 percent of the linear work on the GPU | `gpu-recognition-vs-cpu-only` |
 | Recognition placement, hook and bounded replies | host-tested | Modeled 0.818 s against the 0.4435 s goal | [gpu-recognition.md](../designs/gpu-recognition.md); [gpu-recognition-wait.md](../designs/gpu-recognition-wait.md); [recognition-dispatch.md](../designs/recognition-dispatch.md) |
 | Composition with CPU clocks, eight workers, NPU and resident card | host-tested | No hardware run | [gpu-cpu-clock.md](../designs/gpu-cpu-clock.md); [gpu-eight-workers.md](../designs/gpu-eight-workers.md); [os-gpu-npu.md](../designs/os-gpu-npu.md); [resident-gpu.md](../designs/resident-gpu.md) |
@@ -36,6 +37,7 @@ on the admitted ring). General GPU coverage remains unqualified.
 5. Select the fastest qualified shader; the shared byte-split screen is rejected (`gpu-shader-byte-split-screen`).
 6. Explain the 104 us dispatch interval and the 118 us notification tail before changing timing budgets.
 7. Qualify sustained concurrent workloads, arbitrary stuck-device recovery, thermal throttling, critical-temperature protection and graphics.
+8. Qualify sustained notification-driven lifecycle, no-work idle rates and WFI residency. Preserve the registered GPU stop and returning failure proofs.
 
 ## Evidence
 

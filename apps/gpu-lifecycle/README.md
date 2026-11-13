@@ -8,7 +8,14 @@ physical execution remains unqualified. It uses the vector-add program and sourc
 vectors between jobs rejects output left by an earlier job.
 
 The default image opens the GPU once during context creation, then completes
-ten open/job/close cycles. The application preserves the context, program,
+ten open/job/close cycles. After initial context creation it holds the open
+owner idle for one second, using precise application waits and rechecking the
+absolute counter target after every notification. This phase fits the existing
+20-second application and five-second progress budgets. The GPU receipt
+reports cumulative owner event and deadline wakes, idle notification wakes and
+microseconds spent in indefinite notification waits. Their ratio measures
+notification wakes during those waits; it does not measure core WFI residency.
+The application preserves the context, program,
 leases and rising job sequence across the nine explicit reopen calls. A fixed
 peer application shares the first cycle, uses separate ranges in the same
 manifest regions and completes before the owner closes the GPU.

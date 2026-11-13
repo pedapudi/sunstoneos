@@ -88,6 +88,11 @@ int ss_npu_service_step(void)
 }
 uint32_t ulTaskGenericNotifyTake(UBaseType_t index,BaseType_t clear,TickType_t wait)
 {(void)index;(void)clear;(void)wait;return 0;}
+/* The owner's waits (apps/os/npu.c os_npu_wait) end at a modeled event or
+ * deadline; the step model above drives the requests between them. */
+int board_service_deadline_register(unsigned service){assert(service==OS_SERVICE_NPU);return 1;}
+int os_npu_wait(void){return 1;}
+void os_npu_publish_wakes(void){}
 void vTaskSuspend(TaskHandle_t task){assert(!task);longjmp(suspended,1);}
 int main(int argc,char **argv)
 {

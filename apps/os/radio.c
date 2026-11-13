@@ -108,6 +108,24 @@ int os_radio_quiesce_poll(struct board_radio *r,int result)
     }
     return 1;
 }
+#ifdef SUNSTONE_A733_RADIO_IRQ
+extern struct board_radio *os_board_radio(void);
+static unsigned radio_wait_registered[2];
+void os_radio_irq(void){board_radio_irq(os_board_radio());}
+static int radio_blocked_until(unsigned service,unsigned index,uint64_t until)
+{
+    if(xTaskGetCurrentTaskHandle()!=board.handles[index]||!board.handles[index])return 0;
+    if(!radio_wait_registered[index-5]){
+        if(!board_service_deadline_register(service))return 0;
+        radio_wait_registered[index-5]=1;
+    }
+    return board_service_blocked_until(service,until);
+}
+int os_radio_owner_blocked_until(uint64_t until)
+{return radio_blocked_until(OS_SERVICE_RADIO,5,until);}
+int os_radio_client_blocked_until(uint64_t until)
+{return radio_blocked_until(OS_SERVICE_NETWORK,6,until);}
+#endif
 static struct board_radio_profile profile;
 static unsigned admitted;
 /* The board's own radio tasks are privileged by main.c. */
