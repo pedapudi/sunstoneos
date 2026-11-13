@@ -430,9 +430,10 @@ against 3.54 s per MB with readback. A `launch` stage therefore lasts about
 | The same image, 1794596079966938149-24a0a868 | 43.8 MB | digest: 76.9 s writing, 6.5 s in 5 helper calls | 86.6 s | 89.1 s | 102.9 s |
 
 Both digest runs completed every helper call with status `DONE` and no fallback.
-The CPU-only run returned the reference result. The NPU run's application then
-stopped at an NPU completion fault that a readback-mode run of an earlier image
-(1794506252076994875-247497f5) also showed; the upload had been verified.
+The CPU-only run returned the reference result. The NPU run's image was built
+before the NPU runtime's bounded idle wait, and its application stopped at the
+completion idle check, as a readback-mode run of another such image
+(1794506252076994875-247497f5) did; its uploads had been verified.
 
 The helper adds 0.565/6.7, about 8.4 %, to the write time. To bring upload time
 within 1 % of the write time alone, the helper would need about 57 MB/s, about
