@@ -206,7 +206,7 @@ mean cores and peak resident memory of one gate, all measured with a sampler on 
 `jobs_per_slot` divides the usable cores across the slots. Change a measurement there, not the code, when the host or the gate changes.
 
 The steps whose result depends on wall time hold the exclusive `~/.cache/sunstoneos/gate-timing.lock` while they run and run alone in
-their gate: the soak, `scheduler-control-linked.py` (its perturbation sweep kills a QEMU run that exceeds four times the slowest measured point, 85.7 s, recorded in the same
+their gate: the soak, `scheduler-control-linked.py` (which also runs `scheduler-yield-qemu`; beside other gates' work 3 of 24 of its runs failed on late wakes, alone 0 of 5; its perturbation sweep kills a QEMU run that exceeds four times the slowest measured point, 85.7 s, recorded in the same
 file; the runs count instructions, so the host load does not change them), `smp-ticket-lock.py`, `tick-footprint-budget.py`, `gpu-conformance.py`, `land.py`, `submit-wait.py` and the
 `SERIAL_CHECKS`. Other gates' work still runs beside them. The list is `timing_checks` and `timing_steps` in the same file. A check's
 pass criteria do not change. `checks/gate-slots.py` runs two gates at once, the exclusive timing lock, a landing that goes ahead of an

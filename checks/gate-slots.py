@@ -152,6 +152,13 @@ def case_timing_lock(home):
                          ('indexed-smp-ticket-lock', 'smp-ticket-lock.py'), ('indexed-pcie-qemu', 'pcie-qemu.py')):
         assert gate_slots.is_timing_step(CONFIG, name, script, serial), name + ' is a wall-time step'
     assert not gate_slots.is_timing_step(CONFIG, 'indexed-memory-layout', 'memory-layout.py', serial)
+    # The models that fail first under host load run inside scheduler-control-linked.py (3 of 24 runs of scheduler-yield-qemu failed
+    # beside other gates' work, 0 of 5 alone: a vCPU that QEMU's round-robin leaves waiting makes its wakes late on the shared counter),
+    # so the timing lock covers them through that script; the case names them so a move out of it is noticed.
+    linked = (ROOT / 'checks/scheduler-control-linked.py').read_text()
+    for model in ('scheduler-yield-qemu', 'scheduler-yield-storm-qemu', 'scheduler-partitioned-qemu', 'scheduler-objects-qemu'):
+        assert "'" + model + "'" in linked, model + ' no longer runs inside scheduler-control-linked.py, a timing step'
+    assert 'scheduler-control-linked.py' in CONFIG['timing_checks']
     for script in CONFIG['timing_checks']:
         assert (ROOT / 'checks' / script).is_file(), script + ' is listed as a timing check but is not in checks/'
     spec = importlib.util.spec_from_file_location('check_index', ROOT / 'checks/check-index.py')
