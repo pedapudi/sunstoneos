@@ -113,6 +113,23 @@ prints its JSON path. `--no-wait` prints the future result path immediately.
 summary before the path, and exits 0 for a returned image whose decoder reports
 no failure or the exact expected resident stop described below.
 
+### Time budget in the hypothesis
+
+Every hypothesis states a worked time budget: the stage durations summed and compared with the session's limits, so that an overrun fails cleanly. Take each term from the result's `durations` of a recent run of the same kind, and count every byte the run uploads. The runner uploads the image's segments and every `--input` file over USB FEL and reads each back to verify it (`upload_verify`, mode `readback`), all inside the `launch` stage, before the image starts.
+
+| Term | Development run on port 3-3, 2026-11-13 |
+| --- | --- |
+| `reset` | 4.8 s |
+| `dram` | 2.2 s |
+| `rails` | 3.3 s |
+| `launch`: start-up and the image's own segments | about 7 s for the 2 MB storage-write-test image |
+| `launch`: the uploaded inputs, written and read back | about 3.6 s per MB of input |
+| `launch`: the image's own work | what the hypothesis predicts |
+| `restore-rails` | 1.6 s |
+| `prepare`, `capture`, `identity` | about 0.8 s together |
+
+The upload term is the one most often left out. On 2026-11-13 an 8.4 MB raw-extent input added 29.6 s to `launch` (run `1794597286400818219-efba4fcf`: 51.1 s in total against a predicted 23 s), and a 2.1 MB input added 7.6 s (run `1794597791506349833-a4fde388`). The image's own work runs inside the OS session limit (`lifetime_seconds` in the admission record, 63 s for a returning image), which starts when the image does; the upload comes before it. A preserving run adds its two DRAM transfers, as measured above.
+
 ### Build, package, submit and wait
 
 Four commands take a source tree to a board result. None needs a script of its own:
@@ -284,7 +301,7 @@ daemon-checkout rule above.
 ### The recorded board words
 
 The offline build needs board words that a live run reads under the port lock:
-the CPU, thermal and clock state words of the session, and the NPU entry state (the
+the CPU, thermal and clock state words of the session (with the PF pin bank's withstand mode, level and supply selector at `0x02000040`, `0x02000048` and `0x02000070`, read just before launch), and the NPU entry state (the
 three entry gates at `0x070101ac`, `0x020025c0`, `0x020025e0` and the two PCK4
 words at `0x07064000` and `0x07064008`). The runner keeps them in
 `~/.cache/sunstoneos/board-words.json`, each with the run that read it, and
