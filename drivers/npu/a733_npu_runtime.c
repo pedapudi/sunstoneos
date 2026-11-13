@@ -1365,12 +1365,14 @@ enum a733_npu_platform_result npu_runtime_startup_poll(struct npu_runtime *rt)
 enum a733_npu_platform_result npu_runtime_stop_poll(struct npu_runtime *rt)
 { return platform_step(rt, 1); }
 
-static struct npu_runtime_slot *client(struct npu_runtime *rt, unsigned slot)
+static struct npu_runtime_slot *client_identity(struct npu_runtime *rt, unsigned slot)
 {
-    if (!good(rt) || !rt->bound || slot >= rt->slots || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING ||
+    if (!rt || !rt->prepared || !rt->bound || slot >= rt->slots || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING ||
         xTaskGetCurrentTaskHandle() != rt->slot[slot].client) return NULL;
     return &rt->slot[slot];
 }
+static struct npu_runtime_slot *client(struct npu_runtime *rt, unsigned slot)
+{return good(rt) ? client_identity(rt,slot) : NULL;}
 int npu_runtime_send(struct npu_runtime *rt, unsigned slot, enum npu_service_operation op, unsigned model,
                      uint64_t timeout, TickType_t wait, uint64_t *ticket)
 {
@@ -1406,7 +1408,10 @@ int npu_runtime_send(struct npu_runtime *rt, unsigned slot, enum npu_service_ope
 int npu_runtime_collect(struct npu_runtime *rt, unsigned slot, uint64_t ticket,
                         struct npu_service_reply *out, TickType_t wait)
 {
-    struct npu_runtime_slot *s = client(rt, slot);
+    /* Failure closes admission, but the retained owner must still consume
+     * its already-issued ticket's fault reply. A notification waiter reaches
+     * this check after the worker has published runtime_failed. */
+    struct npu_runtime_slot *s = client_identity(rt, slot);
     if (!s || !ticket || s->pending != ticket || !out || wait == portMAX_DELAY ||
         private_overlap(rt, (uintptr_t)out, sizeof(*out))) return 0;
     struct npu_service_reply reply;

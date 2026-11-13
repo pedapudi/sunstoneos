@@ -16,12 +16,55 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 #include "sunstone_net.h"
+#include "sunstone_notify.h"
 #include "a733_range.h"
 #include "FreeRTOS_IP_Private.h"
 #include "FreeRTOS_DNS.h"
 #include "event_groups.h"
+#include "sunstone_deadline.h"
 #include <string.h>
+/* Polling-only reference images do not link a precise timer. An event-driven
+ * provider is admitted only when the complete deadline runtime is linked. */
+extern int sunstone_deadline_register(void) __attribute__((weak));
+extern int sunstone_deadline_wait_until(uint64_t) __attribute__((weak));
+extern uint64_t sunstone_deadline_now_us(void) __attribute__((weak));
 static struct sunstone_net *service;
+void sunstone_net_event(void)
+{if(service&&service->config.events.bind&&service->worker)xTaskNotifyGive(service->worker);}
+void sunstone_net_event_from_isr(BaseType_t *woken)
+{if(service&&service->config.events.bind&&service->worker)vTaskNotifyGiveFromISR(service->worker,woken);}
+static uint64_t net_now_us(const struct sunstone_net *s)
+{return s->config.events.bind?sunstone_deadline_now_us():(uint64_t)xTaskGetTickCount()*(1000000u/configTICK_RATE_HZ);}
+static int request_expired(const struct sunstone_net *s,const struct sunstone_net_message *m)
+{return net_now_us(s)>=m->deadline_us;}
+static int ip_publish(struct sunstone_net *s,unsigned client,const IPStackEvent_t *event)
+{
+    const unsigned bit=1u<<client;
+    atomic_fetch_or_explicit(&s->ip_waiters,bit,memory_order_release);
+    const int sent=xSendEventStructToIPTask(event,0)==pdPASS;
+    if(sent)atomic_fetch_and_explicit(&s->ip_waiters,~bit,memory_order_acq_rel);
+    return sent;
+}
+static void ip_capacity_event(struct sunstone_net *s)
+{
+    /* The trace hook runs after dequeue. Subscribe-before-send ensures that
+     * capacity becoming free during a failed send leaves a persistent hint. */
+    if(atomic_exchange_explicit(&s->ip_waiters,0,memory_order_acq_rel))sunstone_net_event();
+}
+static void socket_event(Socket_t socket)
+{
+    struct sunstone_net *s=service;if(!s)return;
+    for(unsigned i=0;i<SUNSTONE_NET_SOCKETS;++i)if(s->sockets[i].socket==socket){
+        /* vSocketWakeUpUser invokes this before publishing xEventGroup bits.
+         * Capture BOUND here so a higher-priority owner sees the same event. */
+        FreeRTOS_Socket_t *native=socket;
+        if(native->xEventBits&eSOCKET_BOUND)atomic_store_explicit(&s->sockets[i].bound_event,1,memory_order_release);
+        break;
+    }
+    sunstone_net_event();
+}
+static int socket_events(Socket_t socket)
+{return FreeRTOS_setsockopt(socket,0,FREERTOS_SO_WAKEUP_CALLBACK,(void *)socket_event,sizeof(SocketWakeupCallback_t))==0;}
 /* A group rekey closes the controlled port and clears ready while the lease
  * remains valid. As in operation(), a waiting request pauses (BUSY) and stops
  * only for link loss, address revocation or lease expiry (which revokes). */
@@ -41,7 +84,7 @@ static void accept_ip_step(struct sunstone_net *s)
         unsigned expected=SUNSTONE_ACCEPT_START;
         if(state!=expected||!atomic_compare_exchange_strong(&a->state,&expected,SUNSTONE_ACCEPT_RUNNING))continue;
         enum sunstone_net_result stopped=address_stop(s);
-        unsigned expired=(TickType_t)(xTaskGetTickCount()-a->submitted)>=a->timeout;
+        unsigned expired=net_now_us(s)>=a->deadline_us;
         if(expired||(stopped!=SUNSTONE_NET_OK&&stopped!=SUNSTONE_NET_BUSY)){
             a->result=expired?SUNSTONE_NET_TIMEOUT:stopped;
             atomic_store_explicit(&a->state,SUNSTONE_ACCEPT_CANCELED,memory_order_release);continue;
@@ -59,6 +102,7 @@ static void accept_ip_step(struct sunstone_net *s)
             a->result=child==FREERTOS_INVALID_SOCKET?-1:0;
             if(!a->result){
                 a->socket=child;
+                if(!socket_events(child)){a->result=-1;}
                 /* Registration precedes publication; an accepted child has
                  * left the stack's unaccepted-child automatic close set. */
                 atomic_store(&s->sockets[a->child].disposal_address,(uintptr_t)child);
@@ -85,11 +129,14 @@ static void dns_result(const char *name,void *context,struct freertos_addrinfo *
         q->address=address&&address->ai_family==FREERTOS_AF_INET&&address->ai_addr?
             address->ai_addr->sin_address.ulIP_IPv4:0;
         atomic_store(&q->callback_ready,1);
+        sunstone_net_event();
     }
 }
 void sunstone_net_ip_step(void)
 {
     struct sunstone_net *s=service;if(!s)return;configASSERT(xIsCallingFromIPTask());
+    unsigned before_dns[SUNSTONE_NET_CLIENTS],before_accept[SUNSTONE_NET_CLIENTS];
+    for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i){before_dns[i]=atomic_load(&s->dns[i].state);before_accept[i]=atomic_load(&s->accept[i].state);}
     aic8800_network_ip_step();
     accept_ip_step(s);
     for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i){
@@ -107,29 +154,30 @@ void sunstone_net_ip_step(void)
             FreeRTOS_gethostbyname_cancel(q);atomic_store(&q->state,SUNSTONE_DNS_DONE);continue;
         }
         if(state!=SUNSTONE_DNS_START)continue;
-        TickType_t elapsed=xTaskGetTickCount()-q->submitted;
+        uint64_t now=net_now_us(s);
         enum sunstone_net_result stopped=address_stop(s);
-        if(elapsed>=q->timeout||(stopped!=SUNSTONE_NET_OK&&stopped!=SUNSTONE_NET_BUSY)){
+        if(now>=q->deadline_us||(stopped!=SUNSTONE_NET_OK&&stopped!=SUNSTONE_NET_BUSY)){
             q->address=0;atomic_store(&q->state,SUNSTONE_DNS_DONE);continue;
         }
         if(stopped==SUNSTONE_NET_BUSY)continue;
         /* API callback timeout is milliseconds, request timeout is ticks. The
          * owner independently enforces its earlier absolute tick deadline. */
-        TickType_t remaining=q->timeout-elapsed;
-        uint64_t milliseconds=remaining>(portMAX_DELAY/2)/1000?portMAX_DELAY/2:
-            (uint64_t)remaining*1000/configTICK_RATE_HZ;
+        uint64_t remaining=q->deadline_us-now;
+        uint64_t milliseconds=remaining/1000+(remaining%1000!=0);
         if(!milliseconds)milliseconds=1;if(milliseconds>portMAX_DELAY/2)milliseconds=portMAX_DELAY/2;
         atomic_store(&q->callback_ready,0);atomic_store(&q->state,SUNSTONE_DNS_WAIT);
         uint32_t value=FreeRTOS_gethostbyname_a(q->name,dns_result,q,(TickType_t)milliseconds);
         if(value){FreeRTOS_gethostbyname_cancel(q);q->address=value;atomic_store(&q->state,SUNSTONE_DNS_DONE);}
     }
+    for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i)
+        if(before_dns[i]!=atomic_load(&s->dns[i].state)||before_accept[i]!=atomic_load(&s->accept[i].state))sunstone_net_event();
 }
 static void dns_cancel(struct sunstone_net *s,unsigned client)
 {
     struct sunstone_net_dns *q=&s->dns[client];unsigned state=atomic_load(&q->state);
     if(state!=SUNSTONE_DNS_IDLE&&state!=SUNSTONE_DNS_CANCELED){
         atomic_store(&q->cancel_requested,atomic_load(&q->ticket));
-        IPStackEvent_t wake={eNoEvent,NULL};(void)xSendEventStructToIPTask(&wake,0);
+        IPStackEvent_t wake={eNoEvent,NULL};(void)ip_publish(s,client,&wake);
     }
 }
 static int independent(const struct sunstone_net *s,const void *p,size_t n)
@@ -146,11 +194,37 @@ void sunstone_net_stack_free(void *pointer)
         if(atomic_compare_exchange_strong(&service->sockets[i].disposal_address,&expected,0)){owned=&service->sockets[i];break;}
     }
     vPortFree(pointer);
-    if(owned)atomic_store(&owned->disposed,1);
+    if(owned){atomic_store(&owned->disposed,1);sunstone_net_event();}
+}
+static void client_ready(struct sunstone_net *s,unsigned id)
+{
+    TaskHandle_t task=s->clients[id].task;
+    if(!s->config.events.bind||!task)return;
+    unsigned index=SS_NOTIFY_OWN;
+#if configUSE_APPLICATION_TASK_TAG
+    if(xTaskGetApplicationTaskTag(task))index=SS_NOTIFY_DEADLINE;
+#endif
+    xTaskNotifyGiveIndexed(task,index);
+}
+static int client_gate_enter(struct sunstone_net *s,unsigned bit)
+{
+    if(s->config.events.bind)atomic_fetch_or_explicit(&s->client_gate_waiters,bit,memory_order_release);
+    unsigned unlocked=0;
+    if(!atomic_compare_exchange_strong(&s->client_gate,&unlocked,1))return 0;
+    if(s->config.events.bind)atomic_fetch_and_explicit(&s->client_gate_waiters,~bit,memory_order_acquire);
+    return 1;
+}
+static void client_gate_leave(struct sunstone_net *s)
+{
+    atomic_store_explicit(&s->client_gate,0,memory_order_release);
+    if(!s->config.events.bind)return;
+    unsigned waiting=atomic_exchange_explicit(&s->client_gate_waiters,0,memory_order_acq_rel);
+    for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i)if(waiting&(1u<<i))client_ready(s,i);
+    if((waiting&(1u<<SUNSTONE_NET_CLIENTS))&&s->worker)xTaskNotifyGive(s->worker);
 }
 static void publish_reply(struct sunstone_net *s,struct sunstone_net_pending *p,struct sunstone_net_reply *r)
 {
-    if(r->result==SUNSTONE_NET_OK&&(TickType_t)(xTaskGetTickCount()-p->message.submitted)>=p->message.request.timeout){
+    if(r->result==SUNSTONE_NET_OK&&request_expired(s,&p->message)){
         r->result=SUNSTONE_NET_TIMEOUT;
         if(p->slot<SUNSTONE_NET_SOCKETS&&s->sockets[p->slot].socket&&
             p->message.request.operation!=SUNSTONE_NET_SEND&&p->message.request.operation!=SUNSTONE_NET_RECEIVE)
@@ -160,6 +234,7 @@ static void publish_reply(struct sunstone_net *s,struct sunstone_net_pending *p,
     atomic_store(&s->cancel[p->message.client],0);
     if(xQueueSend(s->clients[p->message.client].reply_queue,r,0)!=pdPASS){atomic_store(&s->failed,1);aic8800_network_fault(&s->network);return;}
     p->active=0;
+    client_ready(s,p->message.client);
 }
 static void reply(struct sunstone_net *s,struct sunstone_net_pending *p,enum sunstone_net_result result,int code,const void *bytes,unsigned length,const struct freertos_sockaddr *peer)
 {
@@ -173,17 +248,17 @@ static struct freertos_sockaddr address(const uint8_t ip[4],uint16_t port)
     struct freertos_sockaddr a={.sin_len=sizeof(a),.sin_family=FREERTOS_AF_INET,.sin_port=FreeRTOS_htons(port)};
     memcpy(&a.sin_address.ulIP_IPv4,ip,4);return a;
 }
-static int bind_start(struct sunstone_net_socket *record,const uint8_t ip[4],uint16_t port)
+static int bind_start(struct sunstone_net *s,unsigned client,struct sunstone_net_socket *record,const uint8_t ip[4],uint16_t port)
 {
     FreeRTOS_Socket_t *socket=record->socket;uint32_t value;memcpy(&value,ip,4);
     socket->xLocalAddress.ulIP_IPv4=FreeRTOS_ntohl(value);socket->bits.bIsIPv6=0;socket->usLocalPort=port;
     IPStackEvent_t event={eSocketBindEvent,socket};
-    return xSendEventStructToIPTask(&event,0)==pdPASS;
+    return ip_publish(s,client,&event);
 }
 static enum sunstone_net_result accept_stop(struct sunstone_net *s,struct sunstone_net_pending *p)
 {
     if(atomic_load(&s->cancel[p->message.client])==p->message.ticket)return SUNSTONE_NET_CANCELED;
-    if((TickType_t)(xTaskGetTickCount()-p->message.submitted)>=p->message.request.timeout)return SUNSTONE_NET_TIMEOUT;
+    if(request_expired(s,&p->message))return SUNSTONE_NET_TIMEOUT;
     enum sunstone_net_result stopped=address_stop(s);
     return stopped==SUNSTONE_NET_BUSY?SUNSTONE_NET_OK:stopped;
 }
@@ -198,7 +273,7 @@ static void accept_collect(struct sunstone_net *s,struct sunstone_net_pending *p
         state=atomic_load_explicit(&a->state,memory_order_acquire);
     }
     if(state!=SUNSTONE_ACCEPT_DONE&&state!=SUNSTONE_ACCEPT_CANCELED){
-        IPStackEvent_t wake={eNoEvent,NULL};(void)xSendEventStructToIPTask(&wake,0);return;
+        IPStackEvent_t wake={eNoEvent,NULL};(void)ip_publish(s,p->message.client,&wake);return;
     }
     struct sunstone_net_socket *parent=&s->sockets[a->listener],*child=&s->sockets[a->child];
     enum sunstone_net_result result=state==SUNSTONE_ACCEPT_CANCELED?
@@ -229,7 +304,7 @@ static void operation(struct sunstone_net *s,struct sunstone_net_pending *p)
             s->sockets[p->slot].uncertain=1;
         reply(s,p,SUNSTONE_NET_CANCELED,0,NULL,0,NULL);return;
     }
-    if((TickType_t)(xTaskGetTickCount()-p->message.submitted)>=r->timeout){
+    if(request_expired(s,&p->message)){
         if(p->started&&p->slot<SUNSTONE_NET_SOCKETS&&r->operation!=SUNSTONE_NET_RECEIVE&&r->operation!=SUNSTONE_NET_SEND)
             s->sockets[p->slot].uncertain=1;
         reply(s,p,SUNSTONE_NET_TIMEOUT,0,NULL,0,NULL);return;
@@ -264,7 +339,7 @@ static void operation(struct sunstone_net *s,struct sunstone_net_pending *p)
             if(state==SUNSTONE_DNS_CANCELED){atomic_store(&q->state,SUNSTONE_DNS_IDLE);state=SUNSTONE_DNS_IDLE;}
             if(state!=SUNSTONE_DNS_IDLE){reply(s,p,SUNSTONE_NET_BUSY,0,NULL,0,NULL);return;}
             memcpy(q->name,r->payload,r->bytes);q->name[r->bytes]=0;q->ticket=p->message.ticket;
-            q->submitted=p->message.submitted;q->timeout=r->timeout;q->address=0;
+            q->submitted=p->message.submitted;q->timeout=r->timeout;q->deadline_us=p->message.deadline_us;q->address=0;
             atomic_store(&q->state,SUNSTONE_DNS_START);p->started=1;
         }else if(state==SUNSTONE_DNS_DONE){
             unsigned expected=SUNSTONE_DNS_DONE;
@@ -274,7 +349,7 @@ static void operation(struct sunstone_net *s,struct sunstone_net_pending *p)
             struct sunstone_net_reply result={.ticket=p->message.ticket,.result=ip?SUNSTONE_NET_OK:SUNSTONE_NET_IO};
             memcpy(result.address,&ip,4);publish_reply(s,p,&result);return;
         }
-        IPStackEvent_t wake={eNoEvent,NULL};(void)xSendEventStructToIPTask(&wake,0);return;
+        IPStackEvent_t wake={eNoEvent,NULL};(void)ip_publish(s,p->message.client,&wake);return;
     }
     if(!p->started){
         p->slot=SUNSTONE_NET_SOCKETS;
@@ -287,10 +362,11 @@ static void operation(struct sunstone_net *s,struct sunstone_net_pending *p)
             record->socket=FreeRTOS_socket(FREERTOS_AF_INET,r->operation==SUNSTONE_NET_OPEN_TCP?FREERTOS_SOCK_STREAM:FREERTOS_SOCK_DGRAM,0);
             if(record->socket==FREERTOS_INVALID_SOCKET){record->socket=NULL;reply(s,p,SUNSTONE_NET_BUSY,0,NULL,0,NULL);return;}
             atomic_store(&record->disposal_address,(uintptr_t)record->socket);
+            if(!socket_events(record->socket)){record->uncertain=1;reply(s,p,SUNSTONE_NET_IO,-1,NULL,0,NULL);return;}
             record->client=p->message.client;record->tcp=r->operation==SUNSTONE_NET_OPEN_TCP;record->handle=++s->next_handle;
             r->handle=record->handle;p->started=1;
             /* Socket defaults have zero send/receive waits in the private profile. */
-            if(!bind_start(record,(const uint8_t *)&(uint32_t){atomic_load(&s->network.address_value)},r->port))return;
+            if(!bind_start(s,p->message.client,record,(const uint8_t *)&(uint32_t){atomic_load(&s->network.address_value)},r->port))return;
             p->started=2;return;
         }
         for(unsigned i=0;i<SUNSTONE_NET_SOCKETS;++i)if(s->sockets[i].socket&&s->sockets[i].handle==r->handle&&
@@ -302,9 +378,9 @@ static void operation(struct sunstone_net *s,struct sunstone_net_pending *p)
     struct sunstone_net_socket *record=&s->sockets[p->slot];
     if(record->listening&&r->operation!=SUNSTONE_NET_LISTEN&&r->operation!=SUNSTONE_NET_ACCEPT&&r->operation!=SUNSTONE_NET_CLOSE){reply(s,p,SUNSTONE_NET_INVALID,0,NULL,0,NULL);return;}
     if(r->operation==SUNSTONE_NET_OPEN_TCP||r->operation==SUNSTONE_NET_OPEN_UDP){
-        if(p->started==1){if(bind_start(record,(const uint8_t *)&(uint32_t){atomic_load(&s->network.address_value)},r->port))p->started=2;return;}
+        if(p->started==1){if(bind_start(s,p->message.client,record,(const uint8_t *)&(uint32_t){atomic_load(&s->network.address_value)},r->port))p->started=2;return;}
         FreeRTOS_Socket_t *socket=record->socket;
-        if(!(xEventGroupGetBits(socket->xEventGroup)&eSOCKET_BOUND))return;
+        if(!atomic_load_explicit(&record->bound_event,memory_order_acquire)&&!(xEventGroupGetBits(socket->xEventGroup)&eSOCKET_BOUND))return;
         if(listLIST_ITEM_CONTAINER(&socket->xBoundSocketListItem)==NULL){record->uncertain=1;reply(s,p,SUNSTONE_NET_IO,0,NULL,0,NULL);return;}
         record->bound=1;reply(s,p,SUNSTONE_NET_OK,0,NULL,0,NULL);return;
     }
@@ -328,10 +404,10 @@ static void operation(struct sunstone_net *s,struct sunstone_net_pending *p)
         struct sunstone_net_accept *a=&s->accept[p->message.client];
         configASSERT(atomic_load(&a->state)==SUNSTONE_ACCEPT_IDLE);
         a->operation=r->operation;a->listener=p->slot;a->child=child;
-        a->submitted=p->message.submitted;a->timeout=r->timeout;a->socket=NULL;a->result=0;
+        a->submitted=p->message.submitted;a->timeout=r->timeout;a->deadline_us=p->message.deadline_us;a->socket=NULL;a->result=0;
         memset(&a->peer,0,sizeof(a->peer));
         atomic_store_explicit(&a->state,SUNSTONE_ACCEPT_START,memory_order_release);p->started=3;
-        IPStackEvent_t wake={eNoEvent,NULL};(void)xSendEventStructToIPTask(&wake,0);return;
+        IPStackEvent_t wake={eNoEvent,NULL};(void)ip_publish(s,p->message.client,&wake);return;
     }
     case SUNSTONE_NET_CONNECT:
         if(!record->tcp){reply(s,p,SUNSTONE_NET_INVALID,0,NULL,0,NULL);return;}
@@ -350,7 +426,7 @@ static void operation(struct sunstone_net *s,struct sunstone_net_pending *p)
         reply(s,p,result>0?SUNSTONE_NET_OK:SUNSTONE_NET_IO,result,bytes,result>0?(unsigned)result:0,record->tcp?NULL:&peer);return;}
     case SUNSTONE_NET_CLOSE:
         if(p->started==1){IPStackEvent_t event={eSocketCloseEvent,record->socket};
-            if(xSendEventStructToIPTask(&event,0)!=pdPASS)return;
+            if(!ip_publish(s,p->message.client,&event))return;
             record->closing=1;p->started=2;return;}
         if(!atomic_load(&record->disposed))return;
         if(record->listening)for(unsigned i=0;i<SUNSTONE_NET_SOCKETS;++i)
@@ -359,6 +435,7 @@ static void operation(struct sunstone_net *s,struct sunstone_net_pending *p)
         record->tcp=record->bound=record->closing=record->uncertain=0;
         record->listening=record->accepted=0;
         atomic_store(&record->disposal_address,0);atomic_store(&record->disposed,0);
+        atomic_store(&record->bound_event,0);
         reply(s,p,SUNSTONE_NET_OK,0,NULL,0,NULL);return;
     default:reply(s,p,SUNSTONE_NET_INVALID,0,NULL,0,NULL);return;
     }
@@ -373,20 +450,60 @@ static void service_step(struct sunstone_net *s)
     if(xQueueReceive(s->requests,&message,0)==pdPASS){
         struct sunstone_net_pending *p=&s->pending[message.client];configASSERT(!p->active);
         *p=(struct sunstone_net_pending){.message=message,.active=1,.slot=SUNSTONE_NET_SOCKETS};
+        /* Capacity is a publication too. The registered client handle exists
+         * before a failed nonblocking submit, so a raced dequeue is retained. */
+        for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i)client_ready(s,i);
     }
     for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i)operation(s,&s->pending[i]);
+}
+static int worker_wait(struct sunstone_net *s)
+{
+    const int ready=s->config.events.work_pending(s->config.events.context);
+    if(ready<0)return 0;
+    if(uxQueueMessagesWaiting(s->requests)||ready)return 1;
+    uint64_t until=s->config.events.deadline_us(s->config.events.context);
+    const uint64_t now=net_now_us(s);
+    /* A valid timer can mature between service_step and this snapshot. Give
+     * that deadline one service pass; unchanged expiry cannot busy-loop. */
+    if(until&&until<=now){
+        if(s->transport_due_us==until)return 0;
+        s->transport_due_us=until;return 1;
+    }
+    s->transport_due_us=0;
+    for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i){
+        struct sunstone_net_pending *p=&s->pending[i];
+        if(!p->active||p->deadline_seen)continue;
+        const uint64_t end=p->message.deadline_us;
+        /* An expired ACCEPT may still await the IP task's disposal fence.
+         * Classify expiry once, then wait for that fence's publication. */
+        if(now>=end){p->deadline_seen=1;return 1;}
+        if(!until||end<until)until=end;
+    }
+    if(!until){(void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);return 1;}
+    return sunstone_deadline_wait_until(until)!=SUNSTONE_DEADLINE_ERROR;
 }
 static void worker(void *context)
 {
     struct sunstone_net *s=context;
-    while(!atomic_load(&s->activation))vTaskDelay(1);
+    const int events=s->config.events.bind!=NULL;
+    if(events&&(!sunstone_deadline_register()||s->config.events.bind(s->config.events.context,s->worker)!=1)){
+        atomic_store(&s->failed,1);for(;;)vTaskSuspend(NULL);
+    }
+    s->event_bound=(uint8_t)events;
+    while(!atomic_load(&s->activation))(void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
     if(!aic8800_network_activate(&s->network,&s->config.network))atomic_store(&s->failed,1);
-    for(;;){service_step(s);vTaskDelay(1);}
+    for(;;){
+        service_step(s);
+        if(events){if(!worker_wait(s)){atomic_store(&s->failed,1);aic8800_network_fault(&s->network);for(;;)vTaskSuspend(NULL);}}
+        else vTaskDelay(1); /* The unqualified polling reference lacks an IRQ provider. */
+    }
 }
 static int initialize(struct sunstone_net *s,const struct sunstone_net_config *c,unsigned owned)
 {
     if(!s||!c||service||s->initialized||!independent(s,c,sizeof(*c))||!c->bootstrap||
         !aic8800_network_storage_valid(s,sizeof(*s),&c->network)||
+        (!!c->events.bind!=!!c->events.deadline_us)||(!!c->events.bind!=!!c->events.work_pending)||
+        (c->events.bind&&(!sunstone_deadline_register||!sunstone_deadline_wait_until||!sunstone_deadline_now_us))||
         (owned ? (xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING || xTaskGetCurrentTaskHandle()!=c->bootstrap) :
          xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED))return 0;
     for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i)if(c->clients[i])for(unsigned j=0;j<i;++j)if(c->clients[j]==c->clients[i])return 0;
@@ -406,6 +523,12 @@ int sunstone_net_poll_owned(struct sunstone_net *s)
         xTaskGetCurrentTaskHandle()!=s->worker)return 0;
     service_step(s);return 1;
 }
+int sunstone_net_wait_owned(struct sunstone_net *s)
+{
+    if(!s||!s->initialized||!s->owned_poll||!s->event_bound||
+       !atomic_load(&s->activation)||xTaskGetCurrentTaskHandle()!=s->worker)return 0;
+    return worker_wait(s);
+}
 int sunstone_net_activate(struct sunstone_net *s)
 {
     if(!s||!s->initialized||xTaskGetCurrentTaskHandle()!=s->config.bootstrap||atomic_load(&s->activation))return 0;
@@ -413,7 +536,12 @@ int sunstone_net_activate(struct sunstone_net *s)
         atomic_store(&s->failed,1);aic8800_network_fault(&s->network);
         atomic_store(&s->activation,1);return 0;
     }
-    atomic_store(&s->activation,1);return 1;
+    if(s->owned_poll&&s->config.events.bind&&(!sunstone_deadline_register()||
+        s->config.events.bind(s->config.events.context,s->worker)!=1)){
+        atomic_store(&s->failed,1);aic8800_network_fault(&s->network);atomic_store(&s->activation,1);return 0;
+    }
+    if(s->owned_poll)s->event_bound=s->config.events.bind!=NULL;
+    atomic_store(&s->activation,1);xTaskNotifyGive(s->worker);return 1;
 }
 int sunstone_net_submit(struct sunstone_net *s,const struct sunstone_net_request *r,uint64_t *ticket)
 {
@@ -431,12 +559,17 @@ int sunstone_net_submit(struct sunstone_net *s,const struct sunstone_net_request
         if(!label)return 0;
     }
     int i=client(s);if(i<0)return 0;struct sunstone_net_client *c=&s->clients[i];
-    unsigned unlocked=0;
-    if(!atomic_compare_exchange_strong(&s->client_gate,&unlocked,1))return 0;
-    if(atomic_load(&s->offline)||c->pending||c->next_ticket==UINT64_MAX){atomic_store(&s->client_gate,0);return 0;}
-    struct sunstone_net_message m={.request=*r,.client=(unsigned)i,.ticket=++c->next_ticket,.submitted=xTaskGetTickCount()};
-    if(xQueueSend(s->requests,&m,0)!=pdPASS){atomic_store(&s->client_gate,0);return 0;}
-    c->pending=m.ticket;*ticket=m.ticket;atomic_store(&s->client_gate,0);return 1;
+    if(!client_gate_enter(s,1u<<(unsigned)i))return 0;
+    if(atomic_load(&s->offline)||c->pending||c->next_ticket==UINT64_MAX){client_gate_leave(s);return 0;}
+    const uint64_t whole=(uint64_t)r->timeout/configTICK_RATE_HZ;
+    const uint64_t fraction=((uint64_t)r->timeout%configTICK_RATE_HZ)*1000000u/configTICK_RATE_HZ;
+    if(whole>(UINT64_MAX-fraction)/1000000u){client_gate_leave(s);return 0;}
+    const uint64_t now=net_now_us(s),span=whole*1000000u+fraction;
+    if(!span||now>UINT64_MAX-span){client_gate_leave(s);return 0;}
+    struct sunstone_net_message m={.request=*r,.client=(unsigned)i,.ticket=++c->next_ticket,
+        .submitted=xTaskGetTickCount(),.deadline_us=now+span};
+    if(xQueueSend(s->requests,&m,0)!=pdPASS){client_gate_leave(s);return 0;}
+    c->pending=m.ticket;*ticket=m.ticket;client_gate_leave(s);sunstone_net_event();return 1;
 }
 int sunstone_net_receive(struct sunstone_net *s,struct sunstone_net_reply *reply,TickType_t wait)
 {
@@ -451,18 +584,19 @@ int sunstone_net_cancel(struct sunstone_net *s,uint64_t ticket)
 {
     if(!s||!s->initialized||!ticket)return 0;int i=client(s);
     if(i<0||s->clients[i].pending!=ticket)return 0;
-    atomic_store(&s->cancel[i],ticket);return 1;
+    atomic_store(&s->cancel[i],ticket);sunstone_net_event();return 1;
 }
 
 void sunstone_net_ip_event(unsigned event,void *data)
 {
     sunstone_net_ip_step();aic8800_network_ip_event(event,data);
+    if(service)ip_capacity_event(service);
 }
 int sunstone_net_offline(struct sunstone_net *s)
 {
     if(!s||!s->initialized||!s->owned_poll||xTaskGetCurrentTaskHandle()!=s->config.bootstrap||
        atomic_load(&s->failed)||atomic_load(&s->offline))return 0;
-    unsigned unlocked=0;if(!atomic_compare_exchange_strong(&s->client_gate,&unlocked,1))return 0;
+    if(!client_gate_enter(s,1u<<SUNSTONE_NET_CLIENTS))return 0;
     int ok=uxQueueMessagesWaiting(s->requests)==0;
     for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i)
         if(s->clients[i].pending||s->pending[i].active||uxQueueMessagesWaiting(s->clients[i].reply_queue)||
@@ -471,11 +605,13 @@ int sunstone_net_offline(struct sunstone_net *s)
     for(unsigned i=0;i<SUNSTONE_NET_SOCKETS;++i)
         if(s->sockets[i].socket||s->sockets[i].handle||s->sockets[i].parent||atomic_load(&s->sockets[i].disposal_address))ok=0;
     if(ok){atomic_store(&s->offline,1);ok=aic8800_network_offline(&s->network);if(!ok)atomic_store(&s->offline,0);}
-    atomic_store(&s->client_gate,0);return ok;
+    client_gate_leave(s);return ok;
 }
 int sunstone_net_resume(struct sunstone_net *s)
 {
     if(!s||!s->owned_poll||xTaskGetCurrentTaskHandle()!=s->config.bootstrap||
        !atomic_load(&s->offline)||!aic8800_network_address(&s->network,NULL))return 0;
-    atomic_store_explicit(&s->offline,0,memory_order_release);return 1;
+    atomic_store_explicit(&s->offline,0,memory_order_release);
+    for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i)client_ready(s,i);
+    return 1;
 }

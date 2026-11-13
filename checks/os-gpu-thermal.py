@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Check the actual native GPU thermal caller (apps/os/gpu.c) on the real FreeRTOS kernel.
 
-The caller runs as a task under the host shim (checks/host/): delays, ticks and time are the
-kernel's and the shim's, and the wrong-client cases call from a second task. The GPU service
-replies, the board lifetime and the thermal throttle input are modeled. Each case runs in its
-own process.
+The caller runs as a task under the host shim (checks/host/): ticks, time and its event waits
+are the kernel's and the shim's, and the wrong-client cases call from a second task. The GPU
+service replies and publications, the board lifetime and the thermal throttle input are
+modeled. Each case runs in its own process.
 """
 import argparse
 import hashlib
@@ -60,8 +60,8 @@ for mode, name in enumerate(CASES):
 # GPU under an owed job; the owed-job case must fail.
 controls = {}
 if 15 in args.cases:
-    mutant = host_rtos.mutated(out, 'apps/os/gpu.c', 'while (!pvr_compute_queue_clients_idle(gpu.component)) {',
-                               'while (0) {', 'gpu-close-ignores-clients.c')
+    mutant = host_rtos.mutated(out, 'apps/os/gpu.c', 'if(pvr_compute_queue_clients_idle(gpu.component))break;',
+                               'break;', 'gpu-close-ignores-clients.c')
     exe_mutant = host_rtos.build(out / 'control', SOURCES, 'os-gpu-thermal',
         defines=DEFINES + ['GPU_SOURCE="%s"' % mutant], includes=INCLUDES,
         flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'],
@@ -69,6 +69,6 @@ if 15 in args.cases:
     assert run(exe_mutant, 15).returncode != 0, 'control passed: close ignores owed jobs'
     controls['close-ignores-clients'] = 'fails'
 (out / 'results.json').write_text(json.dumps(dict(cases=results, negative_controls=controls, elf_sha256=identity,
-    scope='Actual native thermal caller on the real kernel; service, board lifetime and throttle input modeled.'),
+    scope='Actual native thermal caller and its event waits on the real kernel; service replies and publications, board lifetime and throttle input modeled.'),
     indent=2) + '\n')
 print(f'PASS: {len(results)} native GPU thermal lifecycle cases; no physical access.')

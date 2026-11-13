@@ -50,15 +50,17 @@ int a733_counter_clock_now(void *context,uint64_t *out)
 int npu_runtime_send(struct npu_runtime *r,unsigned slot,enum npu_service_operation op,unsigned model,
                      uint64_t timeout,TickType_t wait,uint64_t *ticket)
 {
-    assert(r==&npu.device->runtime&&!slot&&wait);
+    /* The caller never blocks inside the queue: it waits for the reply's
+     * notification or its exact deadline (apps/os/npu.c call). */
+    assert(r==&npu.device->runtime&&!slot&&!wait);
     assert(op==NPU_SERVICE_LOAD&&model==2&&!timeout);
     ++send_calls;if(mode==1)return 0;*ticket=sent_ticket;return 1;
 }
 int npu_runtime_collect(struct npu_runtime *r,unsigned slot,uint64_t ticket,
                         struct npu_service_reply *reply,TickType_t wait)
 {
-    assert(r==&npu.device->runtime&&!slot&&ticket==sent_ticket&&wait);
-    ++collect_calls;if(mode==2)return 0;
+    assert(r==&npu.device->runtime&&!slot&&ticket==sent_ticket&&!wait);
+    ++collect_calls;if(mode==2||mode==10)return 0;
     *reply=(struct npu_service_reply){.ticket=ticket,.result=NPU_SERVICE_OK,
         .fault=A733_NPU_NO_FAULT,.state=A733_NPU_READY};
     if(mode==3)++reply->ticket;
@@ -74,6 +76,16 @@ BaseType_t xTaskGenericNotify(TaskHandle_t task,UBaseType_t index,uint32_t value
 {(void)task;(void)index;(void)value;(void)action;(void)prior;return pdPASS;}
 uint32_t ulTaskGenericNotifyTake(UBaseType_t index,BaseType_t clear,TickType_t wait)
 {(void)index;(void)clear;(void)wait;abort();}
+/* The owners wait on precise deadlines (runtime/deadline.c). No reply
+ * notification arrives in this model, so each wait expires exactly at its
+ * deadline. The service health window is the board's, not under test. */
+static unsigned deadline_waits;
+static uint64_t last_until;
+int sunstone_deadline_register(void){return 1;}
+uint64_t sunstone_deadline_now_us(void){return now_value;}
+int sunstone_deadline_wait_until(uint64_t until)
+{assert(until>now_value);now_value=last_until=until;++deadline_waits;return 1;}
+int board_service_blocked_until(unsigned service,uint64_t until){(void)service;(void)until;return 1;}
 void vTaskSuspend(TaskHandle_t task){assert(!task);longjmp(suspended,1);}
 /* The modeled session grants no performance service (apps/os/perf.c), so a stopped bootstrap suspends. */
 int os_perf_enabled(void){return 0;}
@@ -127,7 +139,7 @@ int main(int argc,char **argv)
     assert(result==-1&&board_failures==1&&atomic_load(&npu.failed));
     const struct os_npu_failure *f=&os_npu_first_failure;
     assert(atomic_load(&f->ready)==2&&f->operation==NPU_SERVICE_LOAD&&f->model==2);
-    assert(f->ticket==(mode==1||mode==10||mode>=14?0:sent_ticket));
+    assert(f->ticket==(mode==1||mode>=14?0:sent_ticket));
     assert(f->reply_valid==(mode>=3&&mode<=9));
     assert(first_site==f->site&&first_value==(uint32_t)f->observed);
     assert((first_site&0xf000)==SUNSTONE_CRUMB_FAIL_NPU<<12);
@@ -142,7 +154,10 @@ int main(int argc,char **argv)
     if(mode==16)assert(f->watch_valid&&f->now==npu.end&&f->expected==npu.end&&f->observed==npu.end);
     if(mode==17)assert(f->watch_valid&&f->now==now_value&&f->expected==now_value&&f->observed==now_value&&(f->gate&STOP));
     if(mode==19)assert(f->watch_valid&&f->expected==0&&f->observed==1);
-    if(mode==10)assert(!send_calls&&!collect_calls&&f->observed==0);
+    /* A window shorter than one scheduler tick is not refused: the caller
+     * waits once to its exact deadline, rechecks the reply, then reports it
+     * missing. */
+    if(mode==10)assert(send_calls==1&&collect_calls==2&&deadline_waits==1&&last_until==npu.end);
     /* Later downstream refusal preserves both the original RTC latch and
      * the first local native snapshot, including full 64-bit operands. */
     uint32_t saved=first_site;uint64_t observed=f->observed;

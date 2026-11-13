@@ -1,5 +1,15 @@
 # SunstoneOS subsystem index
 
+Device-owner notification changes have passing NPU recognition, thermal capture,
+GPU lifecycle, read-only SD and CPU/background records in
+[NPU](evidence/npu-owner-events.jsonl), [thermal](evidence/thermal-owner-events.jsonl),
+[GPU](evidence/gpu-owner-events.jsonl), [SD](evidence/sd-owner-events.jsonl) and
+[other-owner evidence](evidence/other-owner-events.jsonl). Physical DMA and I2S
+validation needs current nonsecure DMA access authority. Headset validation
+needs an accessory and admitted input; the radio's implemented 25 MHz mode does
+not meet the vendor-rate requirement. [Remaining provider waits](designs/remaining-owner-waits.md)
+cover Type-C, GPIO power, PMIC and legacy diagnostics.
+
 SunstoneOS runs FreeRTOS on the Orange Pi Zero 3W/A733. The
 [accepted objective](goal.md) requires complete usable hardware and native
 applications. No subsystem has complete physical qualification.

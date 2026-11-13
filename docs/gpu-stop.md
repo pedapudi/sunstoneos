@@ -13,6 +13,10 @@ must close application admission, hold power and every device-visible allocation
 and serialize control/queue operations through one shutdown worker. Event handlers
 remain available until the firmware handshakes finish.
 
+The integrated OS uses the [nonspinning owner waits](designs/gpu-owner-events.md),
+which have instruction-model evidence. Descriptions of in-call acknowledgement
+and register-read spins below apply to diagnostic profiles.
+
 ## Separate firmware acknowledgements precede the hardware idle checks
 
 The [implementation](../drivers/gpu/pvr_gpu_stop.c) follows these steps:

@@ -335,11 +335,49 @@ static int cmd52(struct aic8800_sdio_transport *t, unsigned fn, uint32_t addr, i
 {
     return sdio_card_cmd52(t->card, fn, addr, write, 0, value, r);
 }
+#ifdef SUNSTONE_AIC8800_RSN
+static int event_actions(const struct aic8800_sdio_transport *t)
+{
+    const struct aic8800_supplicant *s=t->supplicant;
+    if(!s||s->state==AIC8800_SUPPLICANT_FAULT||s->state==AIC8800_SUPPLICANT_RETIRED)return 0;
+    if(s->state==AIC8800_SUPPLICANT_RETIRING)
+        return t->security&&(t->security->state==AIC8800_SECURITY_IDLE||t->security->state==AIC8800_SECURITY_DONE);
+    if(s->count){
+        if(!s->action_active)return 1;
+        return s->actions[s->head].kind==AIC8800_SUPPLICANT_EAPOL?
+            t->data&&t->data->state==AIC8800_DATA_DONE:
+            t->security&&t->security->state==AIC8800_SECURITY_DONE;
+    }
+    if(s->completed&&s->state==AIC8800_SUPPLICANT_HANDSHAKE)
+        return !s->port_pending||(t->security&&t->security->state==AIC8800_SECURITY_DONE);
+    return s->deferred_bytes&&t->data&&t->data->state==AIC8800_DATA_IDLE;
+}
+static int event_timers(struct aic8800_sdio_transport *t,uint64_t now)
+{
+    struct aic8800_supplicant *s=t->supplicant;
+    if(!s||(s->state!=AIC8800_SUPPLICANT_HANDSHAKE&&s->state!=AIC8800_SUPPLICANT_AUTHORIZED))return 0;
+    unsigned due=0;
+    for(unsigned i=0;i<AIC8800_SUPPLICANT_TIMERS;++i)
+        if(s->timers[i].handler&&s->timers[i].due<=now){due=1;break;}
+    if(!due)return 0;
+    /* observe already authenticates this serialized generation and time.
+     * A callback only publishes supplicant work; the transport still owns
+     * admission of its next command and every borrowed receive buffer. */
+    if(!aic8800_supplicant_os_enter(s)){fail(t,AIC8800_TRANSPORT_DATA_ERROR);return 0;}
+    int fired=aic8800_supplicant_os_timer(s);aic8800_supplicant_os_leave(s);
+    if(s->state==AIC8800_SUPPLICANT_FAULT)fail(t,AIC8800_TRANSPORT_DATA_ERROR);
+    return fired;
+}
+#endif
 static int admit(struct aic8800_sdio_transport *t, uint64_t now)
 {
     struct sunxi_sdio_request r = {0};
     uint64_t deadline;
+    if(t->irq_wait&&t->card->host->sdio_pending){t->irq_wait=0;t->wait_until=0;}
     if (now < t->wait_until) return 1;
+#ifdef SUNSTONE_AIC8800_RSN
+    if(t->card->host->events&&t->runtime&&t->phase==RX_STATUS&&event_actions(t))t->phase=RUNTIME_STEP;
+#endif
     uint64_t timeout = t->config.command_timeout;
     if (t->phase == RX) {
         uint64_t units = (t->rx_bytes + RX_TIMEOUT_BYTES - 1) / RX_TIMEOUT_BYTES;
@@ -411,11 +449,13 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
                 t->tx_bytes=t->data->request_bytes;
                 if(!t->tx_bytes||t->tx_bytes>sizeof(t->data->request)||t->tx_bytes%512)return 0;
                 t->data_tx=1;t->phase=CREDIT;
-            } else t->phase = RX_STATUS;
-        } else if (t->runtime->state != AIC8800_RUNTIME_VERIFYING) t->phase = RX_STATUS;
+            } else if(!t->irq_wait)t->phase = RX_STATUS;
+        } else if (t->runtime->state != AIC8800_RUNTIME_VERIFYING&&!t->irq_wait) t->phase = RX_STATUS;
         return 1;
     case CREDIT: ok = cmd52(t, 1, 3, 0, 0, &r); break;
-    case RX_STATUS: ok = cmd52(t, 1, 4, 0, 0, &r); break;
+    case RX_STATUS:
+        if(t->irq_wait)return 1;
+        ok = cmd52(t, 1, 4, 0, 0, &r); break;
     case RX_LENGTH: ok = cmd52(t, 1, 5, 0, 0, &r); break;
     case TX: ok = sdio_card_cmd53(t->card, 1, 0x10, 1, 0, 512, t->data_tx ? t->data->request : t->tx,
                      t->tx_bytes, &r); break;
@@ -489,12 +529,20 @@ static void completed(struct aic8800_sdio_transport *t, uint64_t now)
         } else if (t->runtime) {
             if (!aic8800_runtime_sent(t->runtime, t)) { fail(t, AIC8800_TRANSPORT_RUNTIME_ERROR); break; }
         } else if (t->firmware && !aic8800_firmware_sent(t->firmware, t)) { fail(t, AIC8800_TRANSPORT_FIRMWARE_ERROR); break; }
-        t->phase = RX_STATUS; break;
+        t->irq_wait=0;t->phase = RX_STATUS; break;
     case RX_STATUS:
         t->raw_rx_status = value;
         if (value & 0x80) { fail(t, AIC8800_TRANSPORT_UNSUPPORTED_IRQ); break; }
         if (!value) {
-            delay(t, now, t->config.poll_interval);
+            if(t->card->host->events){
+                /* Keep IMASK16 suppressed while function work is held. Only
+                 * an empty device status permits acknowledging its raw latch.
+                 * A reasserted source keeps the declared protocol cadence. */
+                if(!sunxi_sdio_ack_irq(t->card->host)){fail(t,AIC8800_TRANSPORT_HOST_ERROR);break;}
+                t->irq_wait=!t->card->host->sdio_pending;
+            }
+            if(!t->irq_wait)delay(t, now, t->config.poll_interval);
+            else t->wait_until=0;
             if (t->runtime) t->phase = RUNTIME_STEP;
             break;
         }
@@ -508,6 +556,53 @@ static void completed(struct aic8800_sdio_transport *t, uint64_t now)
     case RX: t->phase = PARSE; break;
     default: ++t->phase; break;
     }
+}
+int aic8800_transport_event_work(const struct aic8800_sdio_transport *t,uint64_t now)
+{
+    if(!t||!t->initialized||t->held||t->pending||
+       (t->state!=AIC8800_TRANSPORT_SETUP&&t->state!=AIC8800_TRANSPORT_IDENTITY&&
+        t->state!=AIC8800_TRANSPORT_FIRMWARE&&t->state!=AIC8800_TRANSPORT_RUNTIME))return 0;
+    if(t->wait_until>now)return 0;
+#ifdef SUNSTONE_AIC8800_RSN
+    if(t->runtime&&event_actions(t))return 1;
+#endif
+    if(!t->irq_wait||t->card->host->sdio_pending)return 1;
+    if(t->phase!=RX_STATUS&&t->phase!=RUNTIME_STEP)return 1;
+    return t->phase==RUNTIME_STEP&&((t->runtime&&
+        (t->runtime->state==AIC8800_RUNTIME_REQUEST||t->runtime->state==AIC8800_RUNTIME_VERIFYING))||
+        (t->wifi&&(t->wifi->state==AIC8800_WIFI_REQUEST||t->wifi->state==AIC8800_WIFI_PREPARING))||
+        (t->data&&t->data->state==AIC8800_DATA_REQUEST)||
+        (t->security&&t->security->state==AIC8800_SECURITY_REQUEST));
+}
+static uint64_t earlier_future(uint64_t a,uint64_t b,uint64_t now)
+{return b>now&&(!a||b<a)?b:a;}
+static uint64_t earlier_timer(uint64_t a,uint64_t b)
+{return b&&(!a||b<a)?b:a;}
+uint64_t aic8800_transport_event_deadline(const struct aic8800_sdio_transport *t,uint64_t now)
+{
+    if(!t||!t->initialized)return 0;
+    uint64_t until=earlier_timer(0,t->deadline);
+    until=earlier_future(until,t->wait_until,now);
+    until=earlier_timer(until,t->enable_deadline);
+    if(t->runtime&&t->runtime->binding_seen&&!t->runtime->binding_confirmed)
+        until=earlier_timer(until,t->runtime->binding_deadline);
+    if(t->wifi&&(t->wifi->state==AIC8800_WIFI_PREPARING||t->wifi->state==AIC8800_WIFI_REQUEST||t->wifi->state==AIC8800_WIFI_WAITING)){
+        until=earlier_timer(until,t->wifi->deadline);until=earlier_timer(until,t->wifi->command_deadline);}
+    if(t->data&&(t->data->state==AIC8800_DATA_REQUEST||t->data->state==AIC8800_DATA_WAITING))until=earlier_timer(until,t->data->deadline);
+    if(t->security&&(t->security->state==AIC8800_SECURITY_REQUEST||t->security->state==AIC8800_SECURITY_WAITING))
+        until=earlier_timer(until,t->security->deadline);
+#ifdef SUNSTONE_AIC8800_RSN
+    if(t->supplicant){
+        if(t->supplicant->state!=AIC8800_SUPPLICANT_AUTHORIZED&&t->supplicant->state!=AIC8800_SUPPLICANT_RETIRED)
+            until=earlier_timer(until,t->supplicant->deadline);
+        if(t->supplicant->sae&&!t->supplicant->sae_accepted&&t->supplicant->state==AIC8800_SUPPLICANT_NEW)
+            until=earlier_timer(until,t->supplicant->sae_deadline);
+        if(t->supplicant->state==AIC8800_SUPPLICANT_HANDSHAKE||t->supplicant->state==AIC8800_SUPPLICANT_AUTHORIZED)
+            for(unsigned i=0;i<AIC8800_SUPPLICANT_TIMERS;++i)
+                if(t->supplicant->timers[i].handler)until=earlier_timer(until,t->supplicant->timers[i].due);
+    }
+#endif
+    return until;
 }
 static void aggregate_done(struct aic8800_sdio_transport *t)
 {
@@ -615,7 +710,12 @@ static void poll_receive(struct aic8800_sdio_transport *t,const void *owner)
     uint8_t phase = t->phase, pending = t->pending, held = t->held;
     size_t cursor = t->cursor;
     uint64_t host_progress = t->card->host->progress;
+    unsigned timer_fired=0;
     if (!observe(t, &now)) goto out;
+#ifdef SUNSTONE_AIC8800_RSN
+    if(t->card->host->events)timer_fired=(unsigned)event_timers(t,now);
+    if(t->state==AIC8800_TRANSPORT_FAULT)goto out;
+#endif
     if (t->pending) {
         sunxi_sdio_poll(t->card->host);
         if (t->card->host->state == SUNXI_SDIO_FAULT) { fail(t, AIC8800_TRANSPORT_HOST_ERROR); goto out; }
@@ -639,7 +739,7 @@ post:
     if (t->state != AIC8800_TRANSPORT_FAULT) (void)observe(t, &now);
 out:
     if (t->state != state || t->phase != phase || t->pending != pending || t->held != held ||
-        t->cursor != cursor || t->card->host->progress != host_progress) advanced(t);
+        t->cursor != cursor || t->card->host->progress != host_progress || timer_fired) advanced(t);
     t->entered = 0;
 }
 int aic8800_transport_peek(const struct aic8800_sdio_transport *t, struct aic8800_sdio_response *out)

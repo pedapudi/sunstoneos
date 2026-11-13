@@ -1,5 +1,8 @@
 #ifndef SUNSTONE_PVR_GPU_START_H
 #define SUNSTONE_PVR_GPU_START_H
+#ifdef SUNSTONE_A733_OS
+#include "a733_gpu_wait.h"
+#endif
 #include "pvr_mips.h"
 #include "a733_gpu_spin.h"
 
@@ -38,6 +41,9 @@ struct pvr_gpu_start {
     struct pvr_gpu_start_ops ops;
     void *context;
     uint64_t deadline, last_now;
+#ifdef SUNSTONE_A733_OS
+    struct a733_gpu_wait wait;
+#endif
     uint32_t phase, error, index, count, slc_value;
     struct pvr_gpu_start_step steps[PVR_GPU_START_MAX_STEPS];
 };
@@ -57,14 +63,14 @@ int pvr_gpu_start_init(struct pvr_gpu_start *, const void *image, size_t bytes,
  * clock. A failed clock or expired deadline latches FAILED. Re-entry is refused.
  */
 enum pvr_gpu_start_result pvr_gpu_start_begin(struct pvr_gpu_start *, uint64_t deadline);
-/* One bounded step: at most one register access or publication, plus clock
- * reads. The clock may round down to whole microseconds. A delay step waits
- * on the clock inside the step until the clock passes the start sample by more
- * than 3, so at least 3 us elapse after the preceding operation completes. A
- * readiness check re-reads the shared word for at most A733_GPU_SPIN_US and then
- * returns AGAIN. A wait whose clock stops advancing returns AGAIN without
- * advancing the step. Every wait ends at the deadline. Service until BOOTED or
- * FAILED.
+/* One bounded step, plus monotonic clock reads. In SUNSTONE_A733_OS a
+ * readiness check samples once and returns AGAIN with a 50 us retry deadline.
+ * Each vendor 3 us hold persists a 4 us earliest time to cover whole-us rounding.
+ * Calls before that time perform no device access. The service releases its
+ * transport lock before waiting; the controller adds no blocking wait. Other profiles
+ * retain bounded A733_GPU_SPIN_US readiness reads and in-call minimum holds.
+ * Every wait ends at the absolute operation deadline. Service until BOOTED
+ * or FAILED.
  * BOOTED proves only an acquired firmware-started flag, not compatibility,
  * queue health, GPU workload completion, or physical qualification.
  * Failure latches the error/index and prevents further callback access. Keep

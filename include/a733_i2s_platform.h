@@ -62,6 +62,9 @@ struct a733_audio_parent {
 int a733_audio_parent_init(struct a733_audio_parent *, const struct a733_audio_operations *,
     void *, unsigned cold, uint64_t deadline_us);
 enum a733_i2s_resource_result a733_audio_parent_poll(struct a733_audio_parent *);
+/* Absolute earliest PLL sample time after a pending poll, or zero when no
+ * hardware settle is active. The caller supplies its own contention deadline. */
+uint64_t a733_audio_parent_sample_at(const struct a733_audio_parent *);
 int a733_audio_parent_ready(const struct a733_audio_parent *);
 /* The owner first drains/closes every local stream and retires its DMA worker.
  * One bounded step: release an adopted parent without PLL writes, or restore
