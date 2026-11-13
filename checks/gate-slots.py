@@ -109,10 +109,13 @@ def case_derivation():
 
 
 def case_two_gates(home):
-    first, second, third = (holder(home, 3, gate_slots.WORKER, 'worker-%d' % i) for i in range(3))
+    first = second = third = None
     try:
-        got = sorted([first.line(WAIT), second.line(WAIT)])
-        assert got == ['SLOT 1', 'SLOT 2'], 'two workers should run at once in slots 1 and 2: %s' % got
+        first = holder(home, 3, gate_slots.WORKER, 'worker-0')           # one at a time: which gate waits is not a race
+        assert first.line(WAIT) == 'SLOT 1'
+        second = holder(home, 3, gate_slots.WORKER, 'worker-1')
+        assert second.line(WAIT) == 'SLOT 2', 'two workers should run at once in slots 1 and 2, never in 0'
+        third = holder(home, 3, gate_slots.WORKER, 'worker-2')
         wait_ticket(home, 'worker-2')
         assert third.line(1.0) is None, 'a third worker must wait while both worker slots are held'
         first.release()
@@ -122,7 +125,8 @@ def case_two_gates(home):
             process.release()
     finally:
         for process in (first, second, third):
-            process.end()
+            if process:
+                process.end()
 
 
 def case_timing_lock(home):
