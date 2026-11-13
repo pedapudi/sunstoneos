@@ -21,6 +21,8 @@ def module(name, path):
     return result
 
 
+# The OS link script's read-only, execute-never block (apps/os/sealed-link.patch, tools/memory_layout.py).
+RODATA = tuple(module('memory_layout', Path(__file__).resolve().parent / 'memory_layout.py').record()['image']['os_rodata'])
 HOOKS = ('board_application_task_privileged', 'board_application_pins', 'board_application_start',
          'a733_smp_diagnostic_start', 'a733_smp_contract_valid', 'vApplicationIRQHandler')
 ROUTE_BYTES, APPLICATION_BYTES = 16, 32
@@ -83,12 +85,12 @@ def check(image, manifest=None, application=None):
     image = Path(image)
     elf = Elf(image.read_bytes())
     # Returning launchers save mutable image RAM. C++ metadata and linker
-    # orphans must not introduce writable sections into the executable block.
-    # The one exception is the sealed session (apps/os/sealed.c): a NOLOAD section last in the CODE block, written only by
-    # EL3 with translation off, which EL1 and EL0 map read-only.
+    # orphans must not introduce writable sections into the read-only blocks.
+    # The one exception is the sealed session (apps/os/sealed.c): a NOLOAD section last in the RODATA block, written only by
+    # EL3 with translation off, which EL1 and EL0 map read-only and execute-never.
     sealed = [s for name, s in zip(elf.names, elf.sections) if name == '.sealed']
     assert len(sealed) == 1 and sealed[0][1] == 8 and sealed[0][2] & 3 == 3 and \
-        0x41000000 <= sealed[0][3] < sealed[0][3] + sealed[0][5] <= 0x41200000, 'the sealed session must be NOLOAD inside CODE'
+        RODATA[0] <= sealed[0][3] < sealed[0][3] + sealed[0][5] <= RODATA[1], 'the sealed session must be NOLOAD inside RODATA'
     writable = [s for name, s in zip(elf.names, elf.sections) if s[2] & 3 == 3 and s[5] and s[3] < 0x42000000 and name != '.sealed']
     assert all(0x41200000 <= s[3] < s[3] + s[5] <= 0x42000000 for s in writable), \
         'allocated writable section outside image RAM'
@@ -232,8 +234,8 @@ def breadcrumb_lifetime(elf):
         alias['value'] == owner['value'] + offset and alias['value'] % 4 == 0 and \
         owner['value'] <= alias['value'] < alias['value'] + 4 <= owner['value'] + owner['size'] and \
         section[1] == 8 and section[2] & 7 == 3 and \
-        0x41000000 <= section[3] <= owner['value'] and \
-        owner['value'] + owner['size'] <= section[3] + section[5] <= 0x41200000, \
+        RODATA[0] <= section[3] <= owner['value'] and \
+        owner['value'] + owner['size'] <= section[3] + section[5] <= RODATA[1], \
         'breadcrumb lifetime: alias must name only the sealed lifetime word'
     return 'os_crumb_lifetime'
 
