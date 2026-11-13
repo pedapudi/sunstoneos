@@ -109,8 +109,8 @@ Isolation removes about three quarters of the busy tick's added cost but does no
 reach the idle tick. About 26 lines per tick that the idle tick finds in the
 shared L3 come from DRAM while other cores stream, at about 1,670 cycles each
 beyond the idle cost. Those lines are spread over every segment, including the
-releases to idle cores. They are what an L3 partition would keep, so the
-partition measurement is the next step for the remaining 43,000 cycles.
+releases to idle cores. An L3 partition should keep them; the partition
+measurement below removes about 15,900 of the remaining 43,000 cycles.
 
 The stream mask is a measurement build option. In a product the real-time core
 set should come from the board and application declarations, so that the
@@ -119,9 +119,10 @@ build option.
 
 ### An L3 partition would keep the real-time cores' lines in the shared cache
 
-Status: **approved measurement**, one cause-build run on port 3-3. The build
-option `SUNSTONE_LATENCY_L3_PARTITION` enables the writes; no other image
-writes these registers.
+Status: **measured**, one cause-build run on port 3-3 (evidence entry
+`1794605350026314973-495cffbe`); the prediction missed at the whole tick's L3
+refills. The build option `SUNSTONE_LATENCY_L3_PARTITION` enables the writes;
+no other image writes these registers.
 
 The A733's DynamIQ Shared Unit (DSU) reports `CLUSTERIDR_EL1` 0x41, revision
 r4p1. Its L3 holds 1 MiB in 16 ways of 1024 sets with 64-byte lines (`CCSIDR`
@@ -208,18 +209,29 @@ held by CPUs 4 to 7 enter the L3 under scheme 0 when those cores evict them, so
 streaming still evicts them, and the releases to CPUs 4 to 7 keep their
 isolation cost.
 
-| Busy-phase mean over complete ticks | Isolation | Idle phase | Predicted with the partition |
-| --- | ---: | ---: | ---: |
-| Whole tick, cycles | 76,410 | 33,304 | 45,000-62,000 |
-| Whole tick, L3 refills | 26.5 | 0.7 | 8-17 |
-| CPU0's own release, cycles | 7,839 (3.6 refills) | 2,228 | 1,800-4,000, at most 1 refill |
-| Releases to CPUs 1-3, cycles each | 4,948-7,519 | 2,616-2,680 | 2,000-4,000, at most 1 refill each |
-| Releases to CPUs 4-7, cycles summed | 24,866 (11.1 refills) | 10,617 | 18,500-31,000 |
-| Outside the releases and scans, cycles | 23,096 (5.4 refills) | 10,840 | 10,000-23,500 |
-| Deadline scans, cycles summed | 1,952 | 1,669 | 1,000-3,000 |
-| Idle tick, cycles | 33,304 | 33,304 | 28,000-38,000 |
-| CPU0's longest busy wake | 93.1 µs | 28.8 µs (idle wake) | at most 85 µs |
-| 1 MiB sweeps on CPUs 4-7 in the busy phase, summed | 497 | none | 470-505 |
+| Busy-phase mean over complete ticks | Isolation | Idle phase | Predicted with the partition | Measured with the partition |
+| --- | ---: | ---: | ---: | ---: |
+| Whole tick, cycles | 76,410 | 33,304 | 45,000-62,000 | 60,519 |
+| Whole tick, L3 refills | 26.5 | 0.7 | 8-17 | 20.3 (miss) |
+| CPU0's own release, cycles | 7,839 (3.6 refills) | 2,228 | 1,800-4,000, at most 1 refill | 6,624 (2.7 refills; miss) |
+| Releases to CPUs 1-3, cycles each | 4,948-7,519 | 2,616-2,680 | 2,000-4,000, at most 1 refill each | 3,214-3,959 (0.1-0.5 refills) |
+| Releases to CPUs 4-7, cycles summed | 24,866 (11.1 refills) | 10,617 | 18,500-31,000 | 24,571 (11.4 refills) |
+| Outside the releases and scans, cycles | 23,096 (5.4 refills) | 10,840 | 10,000-23,500 | 16,488 (4.3 refills) |
+| Deadline scans, cycles summed | 1,952 | 1,669 | 1,000-3,000 | 2,288 |
+| Idle tick, cycles | 33,304 | 33,304 | 28,000-38,000 | 33,232 |
+| CPU0's longest busy wake | 93.1 µs | 28.8 µs (idle wake) | at most 85 µs | 69.5 µs |
+| 1 MiB sweeps on CPUs 4-7 in the busy phase, summed | 497 | none | 470-505 | 479 (107, 101, 128, 143) |
+
+The run started from reset values: every core read `CLUSTERPARTCR_EL1` 0, scheme
+ID 0 and `CLUSTERPWRSTAT_EL1` 0xf0 (all 16 ways powered) before the write. CPU0
+read back 0x1E, and CPUs 0 to 3 read back scheme ID 1. The partition kept the
+lines that CPUs 1 to 3 own: their releases fell to within about 1,300 cycles of
+the idle cost, and the outside segment fell by 6,600 cycles. CPU0's own release
+did not follow: it kept 6,624 cycles and 2.7 L3 refills per tick, which meets
+the refuting outcome below for that segment. Those lines are either lines a
+streaming core last held, which the streaming scheme still evicts, or lines
+lost by a path other than L3 eviction; this run does not separate the two. The
+streaming cores completed 3.6 percent fewer sweeps.
 
 The point estimate is about 47,800 cycles. The idle-phase costs of CPU0's own
 release (2,228 cycles), the releases to CPUs 1 to 3 (7,949) and the outside
