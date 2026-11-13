@@ -27,8 +27,29 @@ int main(void)
     assert(os_npu_index_check(NULL, sizeof region, 3, 0) == OS_NPU_INDEX_SHORT);
     build(3); region[0] ^= 1;
     assert(os_npu_index_check(region, sizeof region, 3, 0) == OS_NPU_INDEX_MAGIC_BAD);
-    build(3); put32(4, 2);
+    build(3); put32(4, 3);
     assert(os_npu_index_check(region, sizeof region, 3, 0) == OS_NPU_INDEX_VERSION_BAD);
+    /* Version 2: an entry of length 0 is a copy of the earlier graph its offset names. */
+    unsigned original = 99;
+    build(3); put32(4, 2); put64(16 + 32, 0); put64(24 + 32, 0);
+    assert(os_npu_index_check(region, sizeof region, 3, 0) == OS_NPU_INDEX_OK);
+    assert(os_npu_index_copy(region, 2, &original) && original == 0 && !os_npu_index_copy(region, 1, &original));
+    build(3); put32(4, 2); put64(16 + 32, 1); put64(24 + 32, 0);
+    assert(os_npu_index_check(region, sizeof region, 3, 0) == OS_NPU_INDEX_OK && os_npu_index_copy(region, 2, &original) && original == 1);
+    build(3); put32(4, 2); put64(16 + 32, 2); put64(24 + 32, 0);
+    assert(os_npu_index_check(region, sizeof region, 3, 0) == OS_NPU_INDEX_COPY);         /* a copy of itself */
+    build(3); put32(4, 2); put64(16 + 16, 2); put64(24 + 16, 0);
+    assert(os_npu_index_check(region, sizeof region, 3, 0) == OS_NPU_INDEX_COPY);         /* a copy of a later entry */
+    build(3); put32(4, 2); put64(16 + 32, 3); put64(24 + 32, 0);
+    assert(os_npu_index_check(region, sizeof region, 3, 0) == OS_NPU_INDEX_COPY);         /* a copy of a missing entry */
+    build(3); put32(4, 2); put64(16 + 32, UINT64_MAX); put64(24 + 32, 0);
+    assert(os_npu_index_check(region, sizeof region, 3, 0) == OS_NPU_INDEX_COPY);         /* an index far past the count */
+    build(3); put32(4, 2); put64(16 + 16, 0); put64(24 + 16, 0); put64(16 + 32, 1); put64(24 + 32, 0);
+    assert(os_npu_index_check(region, sizeof region, 3, 0) == OS_NPU_INDEX_COPY);         /* a copy of a copy */
+    build(3); put32(4, 2); put64(16, 0); put64(24, 0);
+    assert(os_npu_index_check(region, sizeof region, 3, 0) == OS_NPU_INDEX_COPY);         /* the first entry, with nothing before it */
+    build(3); put64(16 + 32, 0); put64(24 + 32, 0);
+    assert(os_npu_index_check(region, sizeof region, 3, 0) == OS_NPU_INDEX_BOUNDS);       /* version 1 has no copies */
     build(0);
     assert(os_npu_index_check(region, sizeof region, 0, 0) == OS_NPU_INDEX_COUNT);       /* no graph at all */
     build(3); put64(8, UINT64_MAX);
@@ -41,6 +62,6 @@ int main(void)
     assert(os_npu_index_check(region, sizeof region, 3, 0) == OS_NPU_INDEX_BOUNDS);       /* past the end of the region */
     build(3); put64(16, UINT64_MAX - 100); put64(24, 200);
     assert(os_npu_index_check(region, sizeof region, 3, 0) == OS_NPU_INDEX_BOUNDS);       /* offset plus length wraps */
-    puts("PASS NPU graph index: valid, wrong count, magic, version, empty, inside the index, past the end, wrap, oversize");
+    puts("PASS NPU graph index: valid, wrong count, magic, version, copies of an earlier graph, copies of itself, a later, missing or copied entry, empty, inside the index, past the end, wrap, oversize");
     return 0;
 }

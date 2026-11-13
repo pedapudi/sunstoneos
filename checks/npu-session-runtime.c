@@ -1193,7 +1193,7 @@ void kernel_main(void)
     config.meta = &meta_window.meta;
     static struct npu_runtime_model model_table[FIXTURES];
     for (unsigned m = 0; m < FIXTURES; ++m)
-        model_table[m] = (struct npu_runtime_model){m == CONV8 ? writable_conv8 : fixtures[m].model, fixtures[m].bytes};
+        model_table[m] = (struct npu_runtime_model){m == CONV8 ? writable_conv8 : fixtures[m].model, fixtures[m].bytes, 0};
     config.models = model_table;
     size_t bytes = requirements(config.models, FIXTURES, SLOTS);
     configASSERT(bytes && bytes <= PARENT_LIMIT && !(bytes & (NPU_RUNTIME_GROUP_BYTES - 1)));

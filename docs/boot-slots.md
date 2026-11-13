@@ -193,13 +193,11 @@ Two conditions have no register to check, and neither is verified.
 
 - **Card supply.** Reading the PMIC needs bus transactions, so the supply has
   no read-only observation. The only evidence is that its rails served
-  boot0's read of this card. boot0 is configured for the AXP2202 PMIC and may
-  program its rails. The pinned boot0 header holds `power_mode` 1. The pinned
-  board configuration (`sys_config.fex`, `[target]` comment) reads the low
-  three bits of that byte as `axp_id`, where 1 selects the AXP2202, while
-  U-Boot's older generic `private_boot0.h` reads 1 as no PMIC. The boot0
-  binary contains PMU driver code for the DCDC, ALDO and CLDO rails. The card
-  rail state after boot0 needs a board observation.
+  boot0's read of this card. boot0 identifies an AXP8191 by its chip ID and
+  programs DCDC2, DCDC4, DCDC6, DCDC7 and ELDO1; it does not read the header's
+  `power_mode` byte to choose a PMIC
+  ([boot0 PMIC writes](vendor-firmware/boot-rom-and-boot0.md#pmic-rails-over-twi)).
+  The card rail state after boot0 needs a board observation.
 - **Exclusive use of SDC0 and its memory.** The package holds no other image
   and its U-Boot and OP-TEE pointers are zero. This does not prove that other
   Arm cores are off or that dirty shared-cache lines are absent. Separate

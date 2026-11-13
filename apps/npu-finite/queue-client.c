@@ -403,7 +403,7 @@ void a733_smp_diagnostic_start(void)
     configASSERT(a733_smp_device_preparation_admitted());configASSERT(npu_session_copy());
     configASSERT(a733_npu_application_observer_admit());configASSERT(npu_finite_watchdog_start());
     struct npu_runtime_model models[NPU_FINITE_NETWORKS];
-    for(unsigned n=0;n<NPU_FINITE_NETWORKS;++n)models[n]=(struct npu_runtime_model){npu_finite_networks[n].model,npu_finite_networks[n].model_bytes};
+    for(unsigned n=0;n<NPU_FINITE_NETWORKS;++n)models[n]=(struct npu_runtime_model){npu_finite_networks[n].model,npu_finite_networks[n].model_bytes,0};
     TaskHandle_t task=xTaskCreateStaticAffinitySet(npu_latency_client,"npu-latency",4096,NULL,2,client_stack,&client_state,1);
     configASSERT(task&&a733_npu_application_runtime_init(task,models,NPU_FINITE_NETWORKS));
     vTaskStartScheduler();platform_panic("scheduler returned",0);

@@ -2,6 +2,7 @@
 #define SUNSTONE_LATENCY_H
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -105,6 +106,20 @@ struct ss_sched_pmu_report;
 void ss_sched_pmu_arm(void);
 int ss_sched_pmu_freeze(unsigned core);
 void ss_sched_pmu_snapshot(struct ss_sched_pmu_report *out);
+#endif
+#ifdef SUNSTONE_LATENCY_CAUSE
+/* Diagnostic control uses ordinary memory. Only the current EL1 CPU enables
+ * its cycle counter; a task may read that counter after core_ready succeeds. */
+void ss_latency_cause_arm(void);
+bool ss_latency_cause_core_ready(unsigned core);
+uint64_t ss_latency_cause_irq_count(unsigned core);
+void ss_latency_cause_bench_request(void);
+bool ss_latency_cause_bench_done(void);
+void ss_latency_cause_freeze(unsigned core);
+bool ss_latency_cause_snapshot(void *out, size_t bytes);
+/* These two entry points are called only by the diagnostic's EL1 tick hook. */
+void ss_latency_cause_release_begin(unsigned target, unsigned phase);
+void ss_latency_cause_release_end(unsigned target);
 #endif
 /* Snapshot only after every writer has frozen; packed in descending duration. */
 void ss_latency_sites_snapshot(struct ss_latency_site out[SS_LAT_PHASES + 1][8][SS_LAT_SITE_KINDS][SS_LAT_SITE_SLOTS]);

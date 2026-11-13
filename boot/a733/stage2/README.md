@@ -13,9 +13,26 @@ points, manifest compatibility and physical authority remain OS admission
 requirements.
 
 The check runs once per boot over at most 4096 session bytes. It allocates no
-memory and adds no device access. The native monitor occupies 32,368 bytes,
-264 bytes more than the stream's base build. It leaves 400 bytes before the
-fixed cold report. These are static sizes; boot latency is unmeasured.
+memory and adds no device access. The native monitor occupies 32,168 bytes and
+leaves 600 bytes before the fixed cold report; the card-gate entry below added
+280 of them. These are static sizes; boot latency is unmeasured.
+
+## Entry from the card first stage
+
+The monitor accepts two entry states. In the first, WDT0 is disarmed and RTC
+GP2 is zero. In the second, the card first stage has run its cold path
+(`boot/a733/card-fel-gate.S`): GP2 holds its record with the high half `0x0c02`,
+COLD set, WARM, UNMARKED and the refused-step bits (11:8) clear (ONCE and the
+low byte are free), and WDT0 holds mode `0xb1` (16 s) with configuration 1 and
+output 2. Any other state keeps the earlier refusal after loading.
+
+In the second state the monitor restarts WDT0 first, then clears GP2 and
+requires the clear to read back (a failed clear ends with status 7, detail 5),
+and stores the record it read in report word `reserved1[22]` (byte offset 368).
+While loading it restarts WDT0 after every card read, so the 16 s interval does
+not expire during a normal load; the longest read is bounded by 0.5 s. Arming
+then switches WDT0 from `0xb1` to mode `0x41` with the same configuration and
+output writes and the same read-back and timing checks as in the first state.
 
 ## Host verification
 

@@ -55,7 +55,7 @@ struct npu_convolution *a733_npu_reserved_prepare(struct a733_npu_reserved *s,
             if (!bytes || bytes > l->bytes) { device_memory_retain(pool, lease); return NULL; }
         }
         config.buffers[i] = (struct a733_npu_buffer){extent.cpu + l->offset,
-            extent.physical + l->offset, bytes, l->device, l->role};
+            extent.physical + l->offset, bytes, l->device, l->role, 0};
     }
     size_t offset = NPU_CONVOLUTION_ARENA_OFFSET;
     config.arena = (void *)(extent.cpu + offset);

@@ -1,0 +1,51 @@
+{
+  "name": "npu-timing",
+  "devices": {
+    "required": [],
+    "optional": []
+  },
+  "cpu": {
+    "cluster": "a55",
+    "workers": 0,
+    "priority": 2,
+    "stack_bytes": 16384,
+    "clock_grants": true
+  },
+  "regions": [
+    {
+      "name": "models",
+      "kind": "input",
+      "access": [
+        "read"
+      ],
+      "bytes": 1097728,
+      "address": "0x44000000",
+      "sha256": "273ce61d61fa884c3b619897eff772aac0669e8f558c0abc0a92e76e69ca556d"
+    },
+    {
+      "name": "vectors",
+      "kind": "input",
+      "access": [
+        "read"
+      ],
+      "bytes": 262144,
+      "address": "0x45200000",
+      "sha256": "a507a8184bc23cd16d57b812c654d995af567d3a588fac764760d9b99285198d"
+    }
+  ],
+  "deadlines": {
+    "run_us": 20000000,
+    "return_reserve_us": 5000000,
+    "progress_window_us": 1000000
+  },
+  "npu": {
+    "slots": 5,
+    "in_flight": 64,
+    "graphs": 5,
+    "links": 0,
+    "graph_bytes": 393216,
+    "tensor_bytes": 262144,
+    "graph_region": "models"
+  },
+  "output_limit": 27072
+}

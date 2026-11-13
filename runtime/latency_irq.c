@@ -7,6 +7,10 @@ extern volatile uint64_t ullPortInterruptNestings[];
 #include "latency_pmu.h"
 #endif
 
+#ifdef SUNSTONE_LATENCY_CAUSE
+#include "latency_cause.h"
+#endif
+
 extern void __real_vApplicationIRQHandler(uint64_t interrupt);
 void __wrap_vApplicationIRQHandler(uint64_t interrupt)
 {
@@ -14,6 +18,9 @@ void __wrap_vApplicationIRQHandler(uint64_t interrupt)
     uint64_t trace_core, trace_pc, trace_spsr;
     __asm__ volatile("mrs %0, tpidr_el1\n mrs %1, elr_el1\n mrs %2, spsr_el1"
                      : "=r"(trace_core), "=r"(trace_pc), "=r"(trace_spsr));
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_irq_begin((unsigned)trace_core, (unsigned)interrupt);
+#endif
     const uint64_t dispatch = !trace_core && ullPortInterruptNestings[0] == 1 ?
         ss_sched_trace_dispatch_begin(0, (unsigned)interrupt, trace_pc, trace_spsr) : 0;
 #endif
@@ -30,6 +37,10 @@ void __wrap_vApplicationIRQHandler(uint64_t interrupt)
         (void)ss_sched_pmu_begin_scope(0, SS_SCHED_PMU_TICK, UINT32_MAX, 0, &pmu_tick_scope);
 #endif
     if (interrupt == 30 && !trace_core) ss_sched_trace_tick_begin();
+#ifdef SUNSTONE_LATENCY_CAUSE
+    if (interrupt == 30 && !trace_core && ullPortInterruptNestings[0] == 1)
+        ss_latency_cause_tick_begin();
+#endif
 #endif
     if (interrupt == 30) {
         uint64_t core, due;
@@ -50,7 +61,14 @@ void __wrap_vApplicationIRQHandler(uint64_t interrupt)
     if (interrupt == 30 && !trace_core && ullPortInterruptNestings[0] == 1)
         (void)ss_sched_pmu_end_scope(0, &pmu_tick_scope);
 #endif
+#ifdef SUNSTONE_LATENCY_CAUSE
+    if (interrupt == 30 && !trace_core && ullPortInterruptNestings[0] == 1)
+        ss_latency_cause_tick_end();
+#endif
     if (interrupt == 30 && !trace_core) ss_sched_trace_tick_end();
     if (dispatch) ss_sched_trace_dispatch_end(0, dispatch);
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_irq_end((unsigned)trace_core);
+#endif
 #endif
 }

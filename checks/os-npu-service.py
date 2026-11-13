@@ -135,6 +135,18 @@ if not args.artifacts:
     assert line.startswith('queue: 31 handles, 31 registered'), line
     print('registered:', line)
 
+# Case 33 with copies: the first ten graphs, then a second registration of each (npu_runtime_model.shares, a copy entry of
+# the graph index). Each copy must read its original's coefficients in the original's slot, map none of its own, and copy
+# none when it loads; a copy of itself, of a missing, later or copied entry, or of another graph is refused.
+if not args.artifacts:
+    done = subprocess.run([str(qexe), '33', str(out)], capture_output=True, text=True, timeout=3000,
+                          env={**environment(), 'SHARE_COPIES': '10'})
+    (out / 'case33-shared.log').write_text(done.stdout + done.stderr)
+    assert done.returncode == 0, ('case 33 with copies', done.stdout[-800:], done.stderr[-2500:])
+    line = done.stdout.strip().splitlines()[-1]
+    assert line.startswith('shared: 10 copies') and not line.startswith('shared: 10 copies, 0 '), line
+    print('PASS', line)
+
 # Mutation: the application's tables do not map the pool. The queue's open must be refused, and the refusal must carry its own
 # failure detail (0x70c, the read region of slot 0), so a record never says only "retained".
 bad = subprocess.run([str(qexe), '33', str(out)], capture_output=True, text=True,

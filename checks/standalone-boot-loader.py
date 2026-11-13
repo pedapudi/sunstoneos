@@ -43,6 +43,7 @@ slots = module('boot_slots', 'tools/boot-slots.py')
 cold = module('cold_entry_check', 'checks/cold-entry.py')
 
 SDC0, RVBAR = 0x04020000, 0x08001000
+GP2, WDT0 = 0x07090108, 0x02050000
 CCU, PIO = 0x02002000, 0x02000000
 SMHC0_CLK, SMHC0_BGR = CCU + 0xd00, CCU + 0xd0c
 POW_MOD_SEL, POW_VAL, POW_VAL_SET_CTL = PIO + 0x40, PIO + 0x48, PIO + 0x70
@@ -271,7 +272,7 @@ class Board:
         self.values = {**BOOT0_STATE, **(changes or {})}
         self.card, self.counter, self.stuck, self.present = card, counter, stuck, present
         self.removed_after_reads, self.changed_after_reads = removed_after_reads, changed_after_reads
-        self.writes, self.detect_reads = [], []
+        self.writes, self.detect_reads, self.gp2_writes = [], [], []
 
     def page(self, base):
         def read(uc, offset, size, user):
@@ -288,6 +289,12 @@ class Board:
 
         def write(uc, offset, size, value, user):
             address = base + offset
+            if address == GP2:  # The gate record, kept apart from admission's writes.
+                assert size == 4
+                self.gp2_writes.append((value, len(self.card.reads)))
+                if address not in self.stuck:
+                    self.values[address] = value
+                return
             assert size == 4 and address in (SMHC0_CLK, PF_CFG0, PF_PUL0), hex(address)
             self.writes.append((address, value, self.counter()))
             if address not in self.stuck:
@@ -386,12 +393,15 @@ def main():
     cases = []
 
     def run(name, card_bytes, expected, fail_sector=None, registers=None, vector=False,
-            counter_step=2400, expect_writes='all', sdc0=None, variant='normal', **board_state):
+            counter_step=2400, expect_writes='all', sdc0=None, variant='normal', gate=None,
+            gate_record=0, **board_state):
         card = Card(card_bytes, fail_sector)
         card.variant=variant
         card.bounce=table["chunk"];card.extents=[e for plan in headers.values() for e in plan["extents"]]
         for offset, value in (sdc0 or {}).items():
             card.reg[offset // 4] = value
+        if gate is not None:
+            board_state['changes'] = {GP2: gate['gp2'], **board_state.get('changes', {})}
         board = Board(card, lambda: values['cntpct_el0'], **board_state)
         cpu = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
         cpu.mem_map(RAM, RAM_END - RAM)
@@ -400,13 +410,29 @@ def main():
         for base in (PIO, CCU, CCU+0x1000, 0x07090000, 0x03400000):
             read, write = board.page(base)
             cpu.mmio_map(base, 0x1000, read, None, write, None)
+        wdt = {0x10: 0, 0x14: 0, 0x18: 0, 0x0c: 0}
+        wlog, enter_hit = [], []
+        if gate is not None:  # WDT0 and the ROM redirect words, as the card first stage leaves them.
+            wdt.update({0x10: gate['config'], 0x14: gate['mode'], 0x18: gate['output']})
+
+            def wdt_read(u, offset, size, user):
+                assert size == 4 and offset in wdt, hex(offset)
+                return wdt[offset]
+
+            def wdt_write(u, offset, size, value, user):
+                assert size == 4 and offset in wdt, hex(offset)
+                wlog.append((offset, value, len(card.reads), board.values[GP2]))
+                if offset != 0x0c:
+                    wdt[offset] = value & 0xffff
+            cpu.mmio_map(WDT0, 0x1000, wdt_read, None, wdt_write, None)
+            cpu.mmio_map(0x07050000, 0x1000, lambda u, o, sz, d: 0, None, None, None)
         cpu.mem_write(0x47000000, inherited)
         canaries={e['load']+e['bytes']:0xa7 for e in headers['B']['extents']}
         for address,value in canaries.items(): cpu.mem_write(address,bytes([value]))
         cpu.mem_write(0x47008000, b'\xa5' * (table['a733_stage2_stack_top'] - 0x47008000))
         values = {'currentel': 12, 'mpidr_el1': 0x81000000, 'midr_el1': 0x412fd050,
                   'sctlr_el3': 0x30c50832, 'scr_el3': 0x30, 'cntfrq_el0': 0,
-                  'cntpct_el0': 24000123, 'rvbar_el3': 0x47000000,
+                  'cntpct_el0': 24000123, 'daif': 0x3c0, 'rvbar_el3': 0x47000000,
                   'esr_el3': 0x96000010, 'far_el3': 0xdead0000,
                   'elr_el3': table['a733_stage2_main'], 'spsr_el3': 0x3cd, **(registers or {})}
         controls, stops, foreign, report_writes, entered, unaligned = [], [], [], [], [], []
@@ -474,24 +500,50 @@ def main():
                       or 0x08001004 <= address and end <= 0x0800100c
                       or SDC0 <= address and end <= SDC0 + 0x1000
                       or address in (SMHC0_CLK, PF_CFG0, PF_PUL0) and size == 4
+                      or gate is not None and size == 4 and (WDT0 <= address < WDT0 + 0x1000 or address == GP2)
                       or any(lo <= address and end <= hi for lo, hi in windows)):
                 foreign.append(hex(address))
 
         for address in system:
             cpu.hook_add(UC_HOOK_CODE, instruction, begin=address, end=address)
         cpu.hook_add(UC_HOOK_CODE, stage2, begin=table['a733_stage2_main'], end=table['a733_stage2_main'])
-        for symbol, granted in (('a733_stage2_remote_writers_excluded', 1), ('a733_stage2_cpu_cache_owned', 1),
-                                ('a733_stage2_reset_policy', 0)):
+        stubs = [('a733_stage2_remote_writers_excluded', 1), ('a733_stage2_cpu_cache_owned', 1)]
+        if gate is None: stubs += [('a733_stage2_gate_entry', 0), ('a733_stage2_reset_policy', 0)]
+        else: cpu.hook_add(UC_HOOK_CODE, lambda u, a, sz, c: (enter_hit.append(a), u.emu_stop()),
+                           begin=table['enter'], end=table['enter'])
+        for symbol, granted in stubs:
             cpu.hook_add(UC_HOOK_CODE, prerequisite, user_data=granted, begin=table[symbol], end=table[symbol])
         cpu.hook_add(UC_HOOK_CODE, loaded, begin=RAM, end=0x46ffffff)
         cpu.hook_add(UC_HOOK_MEM_WRITE, write)
         cpu.hook_add(UC_HOOK_MEM_READ, aligned)
         start = table['a733_cold_vectors'] + 512 if vector else 0x47000000
         cpu.emu_start(start, 0, count=60000000)
-        assert stops and not entered and not foreign and not unaligned, (
+        assert (stops or enter_hit) and not entered and not foreign and not unaligned, (
             name, stops, entered, foreign[:4], unaligned[:4])
         assert bytes(cpu.mem_read(0x47000000, len(inherited))) == inherited
         assert not any(c[0] == 'sctlr_el3' for c in controls)
+        if gate is not None and not gate.get('enters'):  # Refused states change nothing.
+            assert not enter_hit, name
+        if gate is not None and not (gate.get('consumed') or gate.get('clear_fails')):
+            assert not wlog and not board.gp2_writes, (name, wlog, board.gp2_writes)
+        if gate is not None and gate.get('consumed'):
+            # Restart first, then the clear, both before the first card read; one restart
+            # follows every card read, so the 16 s interval cannot expire during a load.
+            assert wlog[0][:3] == (0x0c, 0x14af, 0) and board.gp2_writes == [(0, 0)], (name, wlog)
+            assert all(w[:2] == (0x0c, 0x14af) for w in wlog), (name, wlog)
+            total = len(card.reads)
+            assert total >= 3 and {w[2] for w in wlog} >= set(range(0, total + 1)), (name, total, wlog)
+            assert wdt[0x14] == 0xb1 and wdt[0x10] == 1 and wdt[0x18] == 2 and board.values[GP2] == 0
+        if gate is not None and gate.get('clear_fails'):
+            assert [w[:3] for w in wlog] == [(0x0c, 0x14af, 0)] and board.gp2_writes == [(0, 0)], (name, wlog)
+        if enter_hit:
+            assert gate.get('enters'), name
+            report = bytes(cpu.mem_read(0x47008200, 512))
+            assert struct.unpack_from('<Q', report, 368)[0] == gate_record, name
+            result = {'case': name, 'entered_image_step': True, 'card_reads': len(card.reads),
+                      'wdt_writes': [[hex(o), hex(v), r] for o, v, r, _ in wlog]}
+            cases.append(result)
+            return result
         cold_report = bytes(cpu.mem_read(0x47008000, 512))
         report = bytes(cpu.mem_read(0x47008200, 512))
         # Admission writes only PF6 and the SMHC0 module clock, in order, and
@@ -526,7 +578,8 @@ def main():
         per_slot = [struct.unpack_from('<4Q', report, 128 + 32 * s) for s in range(2)]
         status, detail, selected, generation = fields[3], fields[4], fields[5], fields[6]
         assert fields[:3] == (REPORT_MAGIC, 1, 512) and report_writes[-1] == 0x47008200
-        assert not any(report[192:320]) and not any(report[368:]) and not any(report[112:128])
+        assert not any(report[192:320]) and not any(report[376:]) and not any(report[112:128])
+        assert struct.unpack_from('<Q', report, 368)[0] == gate_record, name
         sd=struct.unpack_from('<6Q',report,320)
         if status==11:
             assert stops==['wfe'] and not any(c[0]=='rmr_el3' for c in controls)
@@ -656,6 +709,34 @@ def main():
         assert changed['mmc_error'] == SUNXI_MMC_ADMISSION and changed['card_reads'] == 3
         stopped = run('counter-stopped', image(both), (5, None, False), counter_step=0, expect_writes=False)
         assert stopped['card_accesses'] == 0
+        # The card first stage's cold state (WDT0 at 0xb1 with configuration 1 and
+        # output 2, GP2 holding its record): consumed at entry, then the unstubbed
+        # reset policy and entry state admit the load and the loader reaches enter().
+        armed = dict(mode=0xb1, config=1, output=2)
+        for case, record in (('gate-cold', 0x0c0280b1), ('gate-cold-once', 0x0c0290b1), ('gate-cold-mode-0', 0x0c028000)):
+            loaded = run(case, image(both), None, gate=dict(gp2=record, **armed, consumed=True, enters=True),
+                         gate_record=record)
+            assert loaded['card_reads'] >= 3, case
+        # State (a): WDT0 disarmed and GP2 zero; nothing is written before enter().
+        run('gate-absent-disarmed', image(both), None, gate=dict(gp2=0, mode=0, config=0, output=0, enters=True))
+        # The clear does not read back: refused after one restart and one clear, before any card access.
+        failed = run('gate-clear-not-read-back', image(both), (7, None, False), expect_writes=False, stuck=(GP2,),
+                     gate=dict(gp2=0x0c0280b1, **armed, clear_fails=True), gate_record=0)
+        assert failed['card_reads'] == 0 and failed['detail'] == 5 and failed['card_accesses'] == 0
+        # Rejected states: no watchdog or GP2 write, and the loaded slot is not entered.
+        for case, state in (('gate-warm', dict(gp2=0x0c02c0b1, **armed)),
+                            ('gate-unmarked', dict(gp2=0x0c02a0b1, **armed)),
+                            ('gate-refused-step', dict(gp2=0x0c0281b1, **armed)),
+                            ('gate-refused-step-high', dict(gp2=0x0c028ab1, **armed)),
+                            ('gate-cold-bit-clear', dict(gp2=0x0c0200b1, **armed)),
+                            ('gate-vendor-request', dict(gp2=0x5aa5a55a, **armed)),
+                            ('gate-boot-once-value', dict(gp2=0xb0070c02, **armed)),
+                            ('gate-wdt-0x41-gp2-zero', dict(gp2=0, mode=0x41, config=1, output=2)),
+                            ('gate-wdt-0xb1-gp2-zero', dict(gp2=0, **armed)),
+                            ('gate-wdt-config-2', dict(gp2=0x0c0280b1, mode=0xb1, config=2, output=2)),
+                            ('gate-wdt-output-1', dict(gp2=0x0c0280b1, mode=0xb1, config=1, output=1))):
+            refused = run(case, image(both), (1, 'B', False), gate=state)
+            assert refused['detail'] == 0x41000000, (case, refused['detail'])
         run('wrong-el-parks', image(both), None, registers={'currentel': 4}, expect_writes=False)
         run('exception-parks', image(both), None, vector=True, expect_writes=False)
         assert cases[-1]['cold_status'] == 3 and cases[-2]['cold_status'] is None

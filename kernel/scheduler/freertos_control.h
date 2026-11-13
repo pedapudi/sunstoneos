@@ -62,21 +62,25 @@ struct ss_control_ops {
     void *context;
 };
 struct ss_control_slot {
+    /* A wake reads only this first line: the route word, a reader bank and the
+     * affinity. Slots are line-aligned so the count holds for every slot. */
+    /* Low eight route-word bits are the owner; upper bits are the epoch.
+     * Reader banks combine CLOSED in bit 63 with their participant count. */
+    _Alignas(64) _Atomic uint64_t route_word;
+    _Atomic uint64_t route_readers[2];
+    _Atomic uint64_t affinity;
     _Atomic uint32_t tickets, serving;
     _Atomic uint64_t waiters;
     /* One authoritative state/source word. Resume clears SUSPENDED and SELF,
      * preserving OFFCPU and the frame-source bits through saved-frame commit.
      * Self publication and ISR resume never wait for this metadata FIFO. */
     _Atomic unsigned suspension;
-    _Atomic uint64_t resume_pending, affinity;
+    _Atomic uint64_t resume_pending;
     struct ss_control_state desired;
     _Atomic uint64_t applied;
     struct ss_owner_descriptor *descriptor;
     struct ss_control_transfer transfer;
     _Atomic unsigned owner;
-    /* Low eight route-word bits are the owner; upper bits are the epoch.
-     * Reader banks combine CLOSED in bit 63 with their participant count. */
-    _Atomic uint64_t route_word, route_readers[2];
     unsigned phase; /* 0 stable, 1 detach, 2 adopt, 3 forwarding */
     bool retained, old_drained;
     uint64_t drain_mask;
@@ -95,11 +99,12 @@ struct ss_control {
     struct { _Alignas(64) _Atomic uint64_t word[2]; } parked[SS_CONTROL_CPUS];
     _Atomic uintptr_t parked_on[SS_CONTROL_CPUS][SS_OWNER_SLOTS];
     struct { _Alignas(64) unsigned value; } cursor[SS_CONTROL_CPUS];
-    const struct ss_owner_backend *backend;
     struct ss_control_ops ops;
     uint64_t active_mask;
-    _Atomic uint32_t gate_tickets, gate_serving;
+    /* A wake reads the backend and the gate phase; keep them on one line. */
+    _Alignas(64) const struct ss_owner_backend *backend;
     _Atomic unsigned gate_phase;
+    _Atomic uint32_t gate_tickets, gate_serving;
     _Atomic uint64_t gate_ack, gate_epoch;
     _Atomic uintptr_t gate_holder;
     _Atomic uint64_t gate_incarnation;

@@ -460,6 +460,49 @@ int npu_runtime_queue_return(struct npu_runtime_queue *q) { q->claimed = 0; retu
  * loaded through the worker, a handle is built for each, the direct queue is claimed and the ring is ready. Before the open,
  * the service refuses a SUBMIT of a command beyond the declared slots and one of another slot's command. */
 static unsigned queue_handles, queue_wide_inputs, queue_denied, queue_invalid, queue_closed;
+/* SHARE_COPIES=N (case 33): the first N graphs of the catalogue, then a second registration of each (npu_runtime_model.shares), as a
+ * copy entry of the graph index gives one. Once the open has loaded every slot, each copy must read its original's
+ * coefficients in the original's slot: its own read-only region holds none, and its load copied none. */
+static unsigned share_copies, shared_with_coefficients;
+static void check_shared(void)
+{
+    const struct npu_runtime *rt = &npu.device->runtime;
+    uint64_t expected = 0;
+    for (unsigned i = 0; i < rt->slots; ++i) {
+        const struct npu_runtime_slot *s = &rt->slot[i];
+        assert(atomic_load(&s->state) == NPU_RUNTIME_READY && s->model == i);
+        struct nbg_model view;
+        struct nbg_span section;
+        assert(nbg_model_open(rt->catalogue[i].data, rt->catalogue[i].bytes, &view) == NBG_DECODE_OK);
+        const uint64_t dynamic = nbg_model_section(&view, NBG_DYNA_IO, &section) ? section.bytes : 0;
+        const uint32_t coeff = s->layout.buffers[NBG_ALLOC_COEFF].allocation_bytes;
+        const unsigned shares = rt->catalogue[i].shares;
+        if (!shares) { expected += s->layout.buffers[NBG_ALLOC_COEFF].payload_bytes + dynamic + s->layout.program_bytes; continue; }
+        const struct npu_runtime_slot *o = &rt->slot[shares - 1];
+        assert(i >= share_copies && shares - 1 == i - share_copies);
+        /* The copy maps no coefficients of its own: its read-only region is the original's less the coefficient allocation,
+         * and its coefficient target is the original's, outside the copy's regions. */
+        if (s->constant.bytes + coeff != o->constant.bytes) {
+            fprintf(stderr, "copy %u maps %zu read-only bytes; its original %u maps %zu, of them %u of coefficients\n", i,
+                    s->constant.bytes, shares - 1, o->constant.bytes, coeff);
+            abort();
+        }
+        assert(!memcmp(&s->targets[NBG_ALLOC_COEFF], &o->targets[NBG_ALLOC_COEFF], sizeof(s->targets[0])));
+        if (coeff) {
+            const uintptr_t at = (uintptr_t)s->targets[NBG_ALLOC_COEFF].cpu;
+            assert(at - o->constant.cpu < o->constant.bytes && at - s->constant.cpu >= s->constant.bytes);
+            ++shared_with_coefficients;
+        }
+        expected += dynamic + s->layout.program_bytes;
+    }
+    /* The loads copied each original's coefficients once, and no copy copied any. */
+    if (rt->counters.copied_bytes != expected) {
+        fprintf(stderr, "the loads copied %llu bytes; the originals' coefficients and every slot's dynamic and program sections are %llu\n",
+                (unsigned long long)rt->counters.copied_bytes, (unsigned long long)expected);
+        abort();
+    }
+    assert(shared_with_coefficients);
+}
 /* REGISTER_LATER=n (case 33): the image links no graph, as every OS image since the one-image series; the declaration reserves
  * n slots and n graphs of graph_bytes and tensor_bytes (NPU_BOUNDS), and the owner registers catalogue model REGISTER_MODEL n
  * times before the open, as an application that carries its graphs does (apps/npu-graphs). One more is refused as full. */
@@ -521,6 +564,7 @@ static void queue_client(void *unused)
         (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
     }
     queue_handles = q->handles;
+    if (share_copies) check_shared();
     for (unsigned h = 0; h < q->handles; ++h) if (q->handle[h].inputs >= 12) queue_wide_inputs = q->handle[h].inputs;
     for (unsigned spin = 0; spin < 100000; ++spin) {
         const int r = ss_npu_queue_close(q);
@@ -641,6 +685,9 @@ static void verify(void *unused)
         assert(finished && queue_handles == npu.device->runtime.slots && queue_closed && queue_denied && queue_invalid && !board_failures);
         assert(queue_registered == register_later);
         if (getenv("EXPECT_WIDE")) assert(queue_wide_inputs == 12);
+        if (share_copies)
+            printf("shared: %u copies, %u read their original's coefficients; no copy maps or copies coefficients of its own\n",
+                   share_copies, shared_with_coefficients);
         return;
     }
     printf("open %u load %u submit %u close %u finished %u failures %u site %#x value %#x triggers %u\n",
@@ -797,7 +844,7 @@ int main(int argc, char **argv)
         unsigned char *copy = malloc(os_npu_models[0].bytes);
         memcpy(copy, os_npu_models[0].data, os_npu_models[0].bytes);
         copy[os_npu_models[0].bytes / 2] ^= 0xff; /* a damaged graph is not admissible */
-        struct npu_runtime_model damaged = {copy, os_npu_models[0].bytes};
+        struct npu_runtime_model damaged = {copy, os_npu_models[0].bytes, 0};
         assert(npu_runtime_reservation(&damaged, 1, 1, 8u << 20, &scratch) == NPU_DECLARATION_MODEL);
         free(copy);
         /* Graphs have no count limit: forty copies of the graph (more than the former sixteen) fit, and their tables
@@ -877,19 +924,56 @@ int main(int argc, char **argv)
         register_model = getenv("REGISTER_MODEL") ? (unsigned)atoi(getenv("REGISTER_MODEL")) : 0;
         assert(register_later && register_model < os_npu_model_count && bounds.graph_bytes && bounds.tensor_bytes);
     }
-    const unsigned linked = register_later ? 0 : os_npu_model_count;
-    const unsigned slots = register_later ? register_later : mode == 28 ? (getenv("NPU_SLOTS") ? (unsigned)atoi(getenv("NPU_SLOTS")) : 31u) : mode == 30 || mode == 33 ? (getenv("NPU_SLOTS") ? (unsigned)atoi(getenv("NPU_SLOTS")) : os_npu_model_count) : 1;
+    const struct npu_runtime_model *run_models = os_npu_models;
+    unsigned run_count = os_npu_model_count;
+    if (mode == 33 && getenv("SHARE_COPIES")) {
+        assert(!register_later && !getenv("NPU_SLOTS") && !getenv("UNIFORM"));
+        const unsigned n = (unsigned)atoi(getenv("SHARE_COPIES"));
+        assert(n && n <= os_npu_model_count);
+        static struct npu_runtime_model *both;      /* static: the runtime reads it at prepare, and it stays reachable */
+        both = calloc(2 * n, sizeof(*both));
+        for (unsigned i = 0; i < n; ++i) {
+            both[i] = os_npu_models[i];
+            both[n + i] = (struct npu_runtime_model){os_npu_models[i].data, os_npu_models[i].bytes, i + 1};
+        }
+        run_models = both; run_count = 2 * n; share_copies = n;
+        /* A copy is refused unless the slots are per graph and it names an earlier graph of its own with the same data. */
+        struct npu_runtime_bounds uniform = {0}, per = {.per_graph = 1};
+        size_t scratch_size = npu_runtime_scratch_bytes(both, run_count);
+        assert(scratch_size);
+        uniform.scratch = per.scratch = aligned_alloc(64, (scratch_size + 63) & ~(size_t)63); uniform.scratch_bytes = per.scratch_bytes = scratch_size;
+        /* Copies take less than the same graphs registered twice, each with coefficients of its own. */
+        struct npu_runtime_model *twice = calloc(run_count, sizeof(*twice));
+        for (unsigned i = 0; i < run_count; ++i) twice[i] = (struct npu_runtime_model){both[i].data, both[i].bytes, 0};
+        const size_t shared_bytes = npu_runtime_requirements_with(both, run_count, run_count, &per),
+                     twice_bytes = npu_runtime_requirements_with(twice, run_count, run_count, &per);
+        assert(shared_bytes && twice_bytes && shared_bytes <= twice_bytes);
+        free(twice);
+        assert(!npu_runtime_requirements_with(both, run_count, 1, &uniform));
+        struct npu_runtime_model wrong[3] = {os_npu_models[0], os_npu_models[1], {os_npu_models[0].data, os_npu_models[0].bytes, 3}};
+        assert(!npu_runtime_requirements_with(wrong, 3, 3, &per));                       /* a copy of itself */
+        wrong[2].shares = 4; assert(!npu_runtime_requirements_with(wrong, 3, 3, &per));   /* a copy of a missing entry */
+        wrong[1] = (struct npu_runtime_model){os_npu_models[0].data, os_npu_models[0].bytes, 3}; wrong[2] = os_npu_models[0];
+        assert(!npu_runtime_requirements_with(wrong, 3, 3, &per));                       /* a copy of a later entry */
+        wrong[1].shares = 1; wrong[2] = (struct npu_runtime_model){os_npu_models[0].data, os_npu_models[0].bytes, 2};
+        assert(!npu_runtime_requirements_with(wrong, 3, 3, &per));                       /* a copy of a copy */
+        wrong[2].shares = 1; wrong[2].data = os_npu_models[1].data; wrong[2].bytes = os_npu_models[1].bytes;
+        assert(!npu_runtime_requirements_with(wrong, 3, 3, &per));                       /* a copy that holds another graph */
+        free(per.scratch);
+    }
+    const unsigned linked = register_later ? 0 : run_count;
+    const unsigned slots = register_later ? register_later : mode == 28 ? (getenv("NPU_SLOTS") ? (unsigned)atoi(getenv("NPU_SLOTS")) : 31u) : mode == 30 || mode == 33 ? (getenv("NPU_SLOTS") ? (unsigned)atoi(getenv("NPU_SLOTS")) : run_count) : 1;
     if ((mode == 30 || mode == 33) && !getenv("UNIFORM") && !register_later) {
-        assert(slots <= os_npu_model_count && !bounds.capacity);
+        assert(slots <= run_count && !bounds.capacity);
         bounds.per_graph = 1;
     }
     if (mode == 30 && getenv("NPU_QUEUE")) { bounds.queue = 1; bounds.queue_depth = 64; sscanf(getenv("NPU_QUEUE"), "%u,%u", &bounds.queue_links, &bounds.queue_image_links); }
     if (mode == 33) { bounds.queue = 1; bounds.queue_links = 8; bounds.queue_image_links = 0; bounds.queue_depth = 64; bounds.capacity = register_later; }
-    const size_t scratch_bytes = npu_runtime_scratch_bytes(os_npu_models, os_npu_model_count);
+    const size_t scratch_bytes = npu_runtime_scratch_bytes(run_models, run_count);
     assert(scratch_bytes);
     bounds.scratch = aligned_alloc(64, (scratch_bytes + 63) & ~(size_t)63); bounds.scratch_bytes = scratch_bytes;
-    const size_t need = npu_runtime_requirements_with(os_npu_models, linked, slots, &bounds);
-    const size_t meta_need = npu_runtime_meta_bytes_with(os_npu_models, linked, slots, &bounds);
+    const size_t need = npu_runtime_requirements_with(run_models, linked, slots, &bounds);
+    const size_t meta_need = npu_runtime_meta_bytes_with(run_models, linked, slots, &bounds);
     assert(meta_need);
     free(bounds.scratch); bounds.scratch = NULL; bounds.scratch_bytes = 0; /* prepare takes its work memory from the reservation */
     assert(need && !(need & (NPU_RUNTIME_GROUP_BYTES - 1)));
@@ -914,7 +998,7 @@ int main(int argc, char **argv)
     struct npu_runtime_config config = {.count = linked, .slots = slots, .bounds = bounds, .cpu = (uintptr_t)pool,
         .physical = (uintptr_t)pool, .bytes = need, .register_cpu = (uintptr_t)register_page,
         .register_physical = 0x03600000, .fatal = fatal, .meta = &meta_window.meta};
-    config.models = os_npu_models;
+    config.models = run_models;
     if (mode == 30) {
         /* An image whose declaration needs more metadata than it linked is refused at start, naming the memory. */
         static struct npu_runtime shortfall;

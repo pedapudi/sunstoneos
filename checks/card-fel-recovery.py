@@ -41,7 +41,8 @@ WDT_RESTART=0x0205000c
 MARKER=card.RTC_MARKER
 KEYED=0x16aa16aa
 STAGE=card.RTC_STAGE<<16
-WARM,COLD,UNMARKED=0x4000,0x8000,0x2000
+WARM,COLD,UNMARKED,ONCE=0x4000,0x8000,0x2000,0x1000
+BOOT_ONCE=crumbs.BOOT_ONCE
 IMAGE_CRUMB=0x01115000          # an image's own LAST breadcrumb, which a warm entry keeps
 WDT_MODE,WDT_CONFIG,WDT_OUTPUT=0x02050014,0x02050010,0x02050018
 
@@ -272,6 +273,42 @@ def cold_cases(name,raw,cases):
     cases.append(name+'-cold-then-watchdog-reset-enters-FEL')
 
 
+def boot_once_cases(name,raw,cases):
+    """The runner's boot-once value: one cold path with the marker set, consumed before boot0 runs."""
+    for mode in (0x41,0xb1,1):
+        m=Machine(raw,entry='warm');m.regs.update({card.RTC_FLAG:BOOT_ONCE,WDT_MODE:mode})
+        assert m.run()=='cold' and m.regs[MARKER]==KEYED and m.untouched()
+        assert m.regs[card.RTC_FLAG]==STAGE|COLD|ONCE|mode and m.regs[card.RTC_LAST]==IMAGE_CRUMB
+        assert (m.regs[WDT_OUTPUT],m.regs[WDT_CONFIG],m.regs[WDT_MODE],m.restarts)==(2,1,0xb1,1)
+        writes=[e[1] for e in m.writes()]
+        assert writes==[MARKER,card.RTC_FLAG,WDT_OUTPUT,WDT_CONFIG,WDT_MODE,WDT_RESTART]
+        # The record is read back after its write and before WDT0 is armed and boot0 entered.
+        flag=next(i for i,e in enumerate(m.events) if e[0]=='write' and e[1]==card.RTC_FLAG)
+        assert any(e[0]=='read' and e[1]==card.RTC_FLAG for e in m.events[flag:])
+        cases.append('%s-boot-once-from-mode-%x-takes-the-cold-path-once'%(name,mode))
+        # Consume-once: the next reset, whatever WDT0 mode the run left, finds the cold record and enters FEL.
+        for after in (0x41,0xb1,1,0):
+            n=Machine(raw,entry='warm');n.regs.update({card.RTC_FLAG:m.regs[card.RTC_FLAG],MARKER:m.regs[MARKER],WDT_MODE:after})
+            assert n.run()=='rom' and n.regs[card.RTC_FLAG]>>12&0xf==(COLD|WARM|0)>>12 and not any(e[1]==MARKER for e in n.writes())
+            # Stage 2 clears GP2; that reset also enters FEL.
+            o=Machine(raw,entry='warm');o.regs.update({card.RTC_FLAG:0,MARKER:KEYED,WDT_MODE:after})
+            assert o.run()=='rom'
+        cases.append('%s-boot-once-from-mode-%x-consumed-later-resets-enter-FEL'%(name,mode))
+    # A GP2 that does not take the cold record keeps the boot-once value: the gate must not run boot0.
+    m=Machine(raw,entry='warm',variant='stuck-clear');m.regs.update({card.RTC_FLAG:BOOT_ONCE})
+    assert m.run()=='rom' and m.regs[card.RTC_FLAG]==BOOT_ONCE  # FEL, never boot0's stub
+    cases.append(name+'-boot-once-unconsumed-enters-FEL')
+    # Neighbouring values are not the boot-once value.
+    for value in (BOOT_ONCE^1,BOOT_ONCE^0x80000000,STAGE|ONCE):
+        m=Machine(raw,entry='warm');m.regs.update({card.RTC_FLAG:value})
+        assert m.run()=='rom'
+    cases.append(name+'-near-boot-once-values-enter-FEL')
+    # A cold power-on with a stale boot-once value: one cold path, recorded as both.
+    m=Machine(raw,entry='cold');m.regs.update({card.RTC_FLAG:BOOT_ONCE,WDT_MODE:0})
+    assert m.run()=='cold' and m.regs[card.RTC_FLAG]==STAGE|COLD|ONCE
+    cases.append(name+'-cold-power-on-with-boot-once')
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image',type=Path,required=True)
@@ -297,6 +334,7 @@ def main():
         cold=request_cases(name,raw,policy,code,cases)
         warm_cases(name,raw,policy,code,cold,cases)
         cold_cases(name,raw,cases)
+        boot_once_cases(name,raw,cases)
     # The warm proof as the runner sets it: WDT0 armed at 0x41, marker set.
     m=Machine(upload,entry='warm');m.regs[WDT_MODE]=0x41
     assert m.run()=='rom' and m.regs[WDT_MODE]==0xb1 and m.restarts==1

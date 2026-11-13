@@ -427,6 +427,7 @@ def policy(info, args, session=None):
         require('os_resident_test_profile' in info.get('symbols', {}) and
                 symbol_bytes(args.image, 'os_resident_test_profile') == struct.pack('<3Q', 0x3154534554525353, 1, 0x5000),
                 'Resident FEL qualification requires the linked stop-on-finish test profile.')
+    require(not getattr(args, 'marker_clear_test', False) or approved, '--marker-clear-test requires --approved-by coordinator.')
     # The radio stage limit shapes the radio profile; an image without the radio's result channel has none.
     require(not getattr(args, 'radio_stage_limit', 0) or 'os_radio_result_descriptor' in (info.get('symbols') or {}),
             '--radio-stage-limit applies only to the radio scan image.')
