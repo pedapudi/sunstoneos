@@ -12,6 +12,7 @@ import ctypes
 import hashlib
 import json
 import pickle
+import re
 from pathlib import Path
 import shutil
 import statistics
@@ -22,6 +23,12 @@ from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import *
 ROOT=Path(__file__).resolve().parents[1]
+
+def current_tcb_bytes():
+    """Bytes between two cores' pxCurrentTCBs entries (include/sunstone_current_tcb.h)."""
+    text = (ROOT / 'include/sunstone_current_tcb.h').read_text()
+    return int(re.search(r'#define portCURRENT_TCB_BYTES (\d+)', text).group(1))
+
 import importlib.util
 spec=importlib.util.spec_from_file_location('hw_facts',ROOT/'tools/hw_facts.py')
 hw_facts=importlib.util.module_from_spec(spec);spec.loader.exec_module(hw_facts)
@@ -333,7 +340,7 @@ class Machine:
         if skip:u.reg_write(UC_ARM64_REG_PC,a+4)
     def count(self,u,a,c,op):
         sp=u.reg_read(UC_ARM64_REG_SP);irqs=sum(self.exceptions[c])
-        task=self.q(self.symbols['pxCurrentTCBs']+8*c)
+        task=self.q(self.symbols['pxCurrentTCBs']+current_tcb_bytes()*c)
         calls=self.calls[c]
         while calls and a==calls[-1]['return'] and sp==calls[-1]['sp'] and irqs==calls[-1]['irqs']:
             done=calls.pop();self.samples[done['name']].append(done['counts'])

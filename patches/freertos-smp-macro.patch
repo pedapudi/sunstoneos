@@ -1,5 +1,15 @@
 --- portmacro.h
 +++ portmacro.h
+@@ -31,6 +31,9 @@
+ #ifndef PORTMACRO_H
+ #define PORTMACRO_H
+ 
++/* One cache line per core for pxCurrentTCBs. */
++#include "sunstone_current_tcb.h"
++
+ /* *INDENT-OFF* */
+ #ifdef __cplusplus
+     extern "C" {
 @@ -142,10 +142,47 @@
      extern void vInterruptCore( uint32_t ulInterruptID, uint8_t ucCoreID );
  #endif /* if !defined(__ASSEMBLER__) */

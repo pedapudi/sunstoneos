@@ -1,5 +1,51 @@
 --- tasks.c
 +++ tasks.c
+@@ -336,10 +336,10 @@
+ #define taskATTRIBUTE_IS_IDLE    ( UBaseType_t ) ( 1U << 0U )
+ 
+ #if ( ( configNUMBER_OF_CORES > 1 ) && ( portCRITICAL_NESTING_IN_TCB == 1 ) )
+-    #define portGET_CRITICAL_NESTING_COUNT( xCoreID )          ( pxCurrentTCBs[ ( xCoreID ) ]->uxCriticalNesting )
+-    #define portSET_CRITICAL_NESTING_COUNT( xCoreID, x )       ( pxCurrentTCBs[ ( xCoreID ) ]->uxCriticalNesting = ( x ) )
+-    #define portINCREMENT_CRITICAL_NESTING_COUNT( xCoreID )    ( pxCurrentTCBs[ ( xCoreID ) ]->uxCriticalNesting++ )
+-    #define portDECREMENT_CRITICAL_NESTING_COUNT( xCoreID )    ( pxCurrentTCBs[ ( xCoreID ) ]->uxCriticalNesting-- )
++    #define portGET_CRITICAL_NESTING_COUNT( xCoreID )          ( portCURRENT_TCB( ( xCoreID ) )->uxCriticalNesting )
++    #define portSET_CRITICAL_NESTING_COUNT( xCoreID, x )       ( portCURRENT_TCB( ( xCoreID ) )->uxCriticalNesting = ( x ) )
++    #define portINCREMENT_CRITICAL_NESTING_COUNT( xCoreID )    ( portCURRENT_TCB( ( xCoreID ) )->uxCriticalNesting++ )
++    #define portDECREMENT_CRITICAL_NESTING_COUNT( xCoreID )    ( portCURRENT_TCB( ( xCoreID ) )->uxCriticalNesting-- )
+ #endif /* #if ( ( configNUMBER_OF_CORES > 1 ) && ( portCRITICAL_NESTING_IN_TCB == 1 ) ) */
+ 
+ #define taskBITS_PER_BYTE    ( ( size_t ) 8 )
+@@ -359,10 +359,10 @@
+         else                                                                                 \
+         {                                                                                    \
+             /* Request other core to yield if it is not requested before. */                 \
+-            if( pxCurrentTCBs[ ( xCoreID ) ]->xTaskRunState != taskTASK_SCHEDULED_TO_YIELD ) \
++            if( portCURRENT_TCB( ( xCoreID ) )->xTaskRunState != taskTASK_SCHEDULED_TO_YIELD ) \
+             {                                                                                \
+                 portYIELD_CORE( xCoreID );                                                   \
+-                pxCurrentTCBs[ ( xCoreID ) ]->xTaskRunState = taskTASK_SCHEDULED_TO_YIELD;   \
++                portCURRENT_TCB( ( xCoreID ) )->xTaskRunState = taskTASK_SCHEDULED_TO_YIELD;   \
+             }                                                                                \
+         }                                                                                    \
+     } while( 0 )
+@@ -467,7 +467,7 @@
+     /* MISRA Ref 8.4.1 [Declaration shall be visible] */
+     /* More details at: https://github.com/FreeRTOS/FreeRTOS-Kernel/blob/main/MISRA.md#rule-84 */
+     /* coverity[misra_c_2012_rule_8_4_violation] */
+-    portDONT_DISCARD PRIVILEGED_DATA TCB_t * volatile pxCurrentTCBs[ configNUMBER_OF_CORES ];
++    portDONT_DISCARD PRIVILEGED_DATA TCB_t * volatile pxCurrentTCBs[ configNUMBER_OF_CORES * portCURRENT_TCB_STRIDE ] __attribute__( ( aligned( portCURRENT_TCB_BYTES ) ) );
+     #define pxCurrentTCB    xTaskGetCurrentTaskHandle()
+ #endif
+ 
+@@ -819,7 +819,7 @@
+ 
+         /* This function is always called with interrupts disabled
+          * so this is safe. */
+-        pxThisTCB = pxCurrentTCBs[ xCoreID ];
++        pxThisTCB = portCURRENT_TCB( xCoreID );
+ 
+         while( pxThisTCB->xTaskRunState == taskTASK_SCHEDULED_TO_YIELD )
+         {
 @@ -875,6 +875,13 @@
  
  /*-----------------------------------------------------------*/
@@ -14,7 +60,24 @@
  #if ( configNUMBER_OF_CORES > 1 )
      STATIC void prvYieldForTask( const TCB_t * pxTCB )
      {
-@@ -923,7 +930,19 @@
+@@ -909,28 +916,40 @@
+ 
+             for( xCoreID = ( BaseType_t ) 0; xCoreID < ( BaseType_t ) configNUMBER_OF_CORES; xCoreID++ )
+             {
+-                xCurrentCoreTaskPriority = ( BaseType_t ) pxCurrentTCBs[ xCoreID ]->uxPriority;
++                xCurrentCoreTaskPriority = ( BaseType_t ) portCURRENT_TCB( xCoreID )->uxPriority;
+ 
+                 /* System idle tasks are being assigned a priority of tskIDLE_PRIORITY - 1 here. */
+-                if( ( pxCurrentTCBs[ xCoreID ]->uxTaskAttributes & taskATTRIBUTE_IS_IDLE ) != 0U )
++                if( ( portCURRENT_TCB( xCoreID )->uxTaskAttributes & taskATTRIBUTE_IS_IDLE ) != 0U )
+                 {
+                     xCurrentCoreTaskPriority = ( BaseType_t ) ( xCurrentCoreTaskPriority - 1 );
+                 }
+ 
+-                if( ( taskTASK_IS_RUNNING( pxCurrentTCBs[ xCoreID ] ) != pdFALSE ) && ( xYieldPendings[ xCoreID ] == pdFALSE ) )
++                if( ( taskTASK_IS_RUNNING( portCURRENT_TCB( xCoreID ) ) != pdFALSE ) && ( xYieldPendings[ xCoreID ] == pdFALSE ) )
+                 {
+                     #if ( configRUN_MULTIPLE_PRIORITIES == 0 )
                          if( taskTASK_IS_RUNNING( pxTCB ) == pdFALSE )
                      #endif
                      {
@@ -35,17 +98,145 @@
                          {
                              #if ( configUSE_CORE_AFFINITY == 1 )
                                  if( ( pxTCB->uxCoreAffinityMask & ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID ) ) != 0U )
-@@ -1085,6 +1104,9 @@
+                             #endif
+                             {
+                                 #if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
+-                                    if( pxCurrentTCBs[ xCoreID ]->xPreemptionDisable == pdFALSE )
++                                    if( portCURRENT_TCB( xCoreID )->xPreemptionDisable == pdFALSE )
+                                 #endif
+                                 {
+                                     xLowestPriorityToPreempt = xCurrentCoreTaskPriority;
+@@ -978,11 +997,11 @@
+ 
+             #if ( configRUN_MULTIPLE_PRIORITIES == 0 )
+                 /* Verify that the calling core always yields to higher priority tasks. */
+-                if( ( ( pxCurrentTCBs[ xCurrentCoreID ]->uxTaskAttributes & taskATTRIBUTE_IS_IDLE ) == 0U ) &&
+-                    ( pxTCB->uxPriority > pxCurrentTCBs[ xCurrentCoreID ]->uxPriority ) )
++                if( ( ( portCURRENT_TCB( xCurrentCoreID )->uxTaskAttributes & taskATTRIBUTE_IS_IDLE ) == 0U ) &&
++                    ( pxTCB->uxPriority > portCURRENT_TCB( xCurrentCoreID )->uxPriority ) )
+                 {
+                     configASSERT( ( xYieldPendings[ xCurrentCoreID ] == pdTRUE ) ||
+-                                  ( taskTASK_IS_RUNNING( pxCurrentTCBs[ xCurrentCoreID ] ) == pdFALSE ) );
++                                  ( taskTASK_IS_RUNNING( portCURRENT_TCB( xCurrentCoreID ) ) == pdFALSE ) );
+                 }
+             #endif
+         }
+@@ -1018,12 +1037,12 @@
+          *
+          * To fix these problems, the running task should be put to the end of the
+          * ready list before searching for the ready task in the ready list. */
+-        if( listIS_CONTAINED_WITHIN( &( pxReadyTasksLists[ pxCurrentTCBs[ xCoreID ]->uxPriority ] ),
+-                                     &pxCurrentTCBs[ xCoreID ]->xStateListItem ) == pdTRUE )
++        if( listIS_CONTAINED_WITHIN( &( pxReadyTasksLists[ portCURRENT_TCB( xCoreID )->uxPriority ] ),
++                                     &portCURRENT_TCB( xCoreID )->xStateListItem ) == pdTRUE )
+         {
+-            ( void ) uxListRemove( &pxCurrentTCBs[ xCoreID ]->xStateListItem );
+-            vListInsertEnd( &( pxReadyTasksLists[ pxCurrentTCBs[ xCoreID ]->uxPriority ] ),
+-                            &pxCurrentTCBs[ xCoreID ]->xStateListItem );
++            ( void ) uxListRemove( &portCURRENT_TCB( xCoreID )->xStateListItem );
++            vListInsertEnd( &( pxReadyTasksLists[ portCURRENT_TCB( xCoreID )->uxPriority ] ),
++                            &portCURRENT_TCB( xCoreID )->xStateListItem );
+         }
+ 
+         while( xTaskScheduled == pdFALSE )
+@@ -1079,16 +1098,20 @@
+                         #endif
+                         {
+                             /* If the task is not being executed by any core swap it in. */
+-                            pxCurrentTCBs[ xCoreID ]->xTaskRunState = taskTASK_NOT_RUNNING;
++                            portCURRENT_TCB( xCoreID )->xTaskRunState = taskTASK_NOT_RUNNING;
+                             #if ( configUSE_CORE_AFFINITY == 1 )
+-                                pxPreviousTCB = pxCurrentTCBs[ xCoreID ];
++                                pxPreviousTCB = portCURRENT_TCB( xCoreID );
                              #endif
                              pxTCB->xTaskRunState = xCoreID;
-                             pxCurrentTCBs[ xCoreID ] = pxTCB;
+-                            pxCurrentTCBs[ xCoreID ] = pxTCB;
++                            portCURRENT_TCB( xCoreID ) = pxTCB;
 +                            /* xCoreID is the calling core, which keeps the
 +                             * current-task register equal to this entry. */
 +                            portSET_CURRENT_TASK( xCoreID, pxTCB );
++                            traceCURRENT_TCB_SET( xCoreID, pxTCB );
                              xTaskScheduled = pdTRUE;
                          }
                      }
-@@ -4981,9 +5003,79 @@
+-                    else if( pxTCB == pxCurrentTCBs[ xCoreID ] )
++                    else if( pxTCB == portCURRENT_TCB( xCoreID ) )
+                     {
+                         configASSERT( ( pxTCB->xTaskRunState == xCoreID ) || ( pxTCB->xTaskRunState == taskTASK_SCHEDULED_TO_YIELD ) );
+ 
+@@ -1156,7 +1179,7 @@
+ 
+                     for( x = ( BaseType_t ) 0; x < ( BaseType_t ) configNUMBER_OF_CORES; x++ )
+                     {
+-                        if( ( pxCurrentTCBs[ x ]->uxTaskAttributes & taskATTRIBUTE_IS_IDLE ) != 0U )
++                        if( ( portCURRENT_TCB( x )->uxTaskAttributes & taskATTRIBUTE_IS_IDLE ) != 0U )
+                         {
+                             prvYieldCore( x );
+                         }
+@@ -1190,21 +1213,21 @@
+                          * from it's core affinity mask.
+                          *
+                          * pxPreviousTCB is preempted by the new higher priority task
+-                         * pxCurrentTCBs[ xCoreID ]. When searching a new core for pxPreviousTCB,
+-                         * we do not need to look at the cores on which pxCurrentTCBs[ xCoreID ]
++                         * portCURRENT_TCB( xCoreID ). When searching a new core for pxPreviousTCB,
++                         * we do not need to look at the cores on which portCURRENT_TCB( xCoreID )
+                          * is allowed to run. The reason is - when more than one cores are
+                          * eligible for an incoming task, we preempt the core with the minimum
+                          * priority task. Because this core (i.e. xCoreID) was preempted for
+-                         * pxCurrentTCBs[ xCoreID ], this means that all the others cores
+-                         * where pxCurrentTCBs[ xCoreID ] can run, are running tasks with priority
++                         * portCURRENT_TCB( xCoreID ), this means that all the others cores
++                         * where portCURRENT_TCB( xCoreID ) can run, are running tasks with priority
+                          * no lower than pxPreviousTCB's priority. Therefore, the only cores where
+                          * which can be preempted for pxPreviousTCB are the ones where
+-                         * pxCurrentTCBs[ xCoreID ] is not allowed to run (and obviously,
++                         * portCURRENT_TCB( xCoreID ) is not allowed to run (and obviously,
+                          * pxPreviousTCB is allowed to run).
+                          *
+                          * This is an optimization which reduces the number of cores needed to be
+                          * searched for pxPreviousTCB to run. */
+-                        uxCoreMap &= ~( pxCurrentTCBs[ xCoreID ]->uxCoreAffinityMask );
++                        uxCoreMap &= ~( portCURRENT_TCB( xCoreID )->uxCoreAffinityMask );
+                     }
+                     else
+                     {
+@@ -1222,9 +1245,9 @@
+ 
+                         if( ( uxCoreMap & ( ( UBaseType_t ) 1U << uxCore ) ) != 0U )
+                         {
+-                            xTaskPriority = ( BaseType_t ) pxCurrentTCBs[ uxCore ]->uxPriority;
++                            xTaskPriority = ( BaseType_t ) portCURRENT_TCB( uxCore )->uxPriority;
+ 
+-                            if( ( pxCurrentTCBs[ uxCore ]->uxTaskAttributes & taskATTRIBUTE_IS_IDLE ) != 0U )
++                            if( ( portCURRENT_TCB( uxCore )->uxTaskAttributes & taskATTRIBUTE_IS_IDLE ) != 0U )
+                             {
+                                 xTaskPriority = xTaskPriority - ( BaseType_t ) 1;
+                             }
+@@ -1232,11 +1255,11 @@
+                             uxCoreMap &= ~( ( UBaseType_t ) 1U << uxCore );
+ 
+                             if( ( xTaskPriority < xLowestPriority ) &&
+-                                ( taskTASK_IS_RUNNING( pxCurrentTCBs[ uxCore ] ) != pdFALSE ) &&
++                                ( taskTASK_IS_RUNNING( portCURRENT_TCB( uxCore ) ) != pdFALSE ) &&
+                                 ( xYieldPendings[ uxCore ] == pdFALSE ) )
+                             {
+                                 #if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
+-                                    if( pxCurrentTCBs[ uxCore ]->xPreemptionDisable == pdFALSE )
++                                    if( portCURRENT_TCB( uxCore )->xPreemptionDisable == pdFALSE )
+                                 #endif
+                                 {
+                                     xLowestPriority = xTaskPriority;
+@@ -3723,7 +3746,7 @@
+             {
+                 /* Assign idle task to each core before SMP scheduler is running. */
+                 xIdleTaskHandles[ xCoreID ]->xTaskRunState = xCoreID;
+-                pxCurrentTCBs[ xCoreID ] = xIdleTaskHandles[ xCoreID ];
++                portCURRENT_TCB( xCoreID ) = xIdleTaskHandles[ xCoreID ];
+                 #if ( ( configIDLE_AFFINITY == 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
+                 {
+                     xIdleTaskHandles[ xCoreID ]->uxCoreAffinityMask = ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID );
+@@ -4981,9 +5004,79 @@
              {
                  BaseType_t xCoreID;
  
@@ -58,7 +249,7 @@
                  for( xCoreID = 0; xCoreID < ( ( BaseType_t ) configNUMBER_OF_CORES ); xCoreID++ )
                  {
 -                    if( listCURRENT_LIST_LENGTH( &( pxReadyTasksLists[ pxCurrentTCBs[ xCoreID ]->uxPriority ] ) ) > 1U )
-+                    UBaseType_t uxPriority = pxCurrentTCBs[ xCoreID ]->uxPriority;
++                    UBaseType_t uxPriority = portCURRENT_TCB( xCoreID )->uxPriority;
 +                    UBaseType_t uxIndex;
 +
 +                    /* The idle-priority list always holds one idle task per
@@ -126,7 +317,58 @@
                      {
                          xYieldPendings[ xCoreID ] = pdTRUE;
                      }
-@@ -6665,11 +6757,19 @@
+@@ -5034,7 +5127,7 @@
+                 for( xCoreID = 0; xCoreID < ( BaseType_t ) configNUMBER_OF_CORES; xCoreID++ )
+                 {
+                     #if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
+-                        if( pxCurrentTCBs[ xCoreID ]->xPreemptionDisable == pdFALSE )
++                        if( portCURRENT_TCB( xCoreID )->xPreemptionDisable == pdFALSE )
+                     #endif
+                     {
+                         if( xYieldPendings[ xCoreID ] != pdFALSE )
+@@ -5345,7 +5438,7 @@
+                      * are provided by the application, not the kernel. */
+                     if( ulTotalRunTime[ xCoreID ] > ulTaskSwitchedInTime[ xCoreID ] )
+                     {
+-                        pxCurrentTCBs[ xCoreID ]->ulRunTimeCounter += ( ulTotalRunTime[ xCoreID ] - ulTaskSwitchedInTime[ xCoreID ] );
++                        portCURRENT_TCB( xCoreID )->ulRunTimeCounter += ( ulTotalRunTime[ xCoreID ] - ulTaskSwitchedInTime[ xCoreID ] );
+                     }
+                     else
+                     {
+@@ -5362,7 +5455,7 @@
+                 /* Before the currently running task is switched out, save its errno. */
+                 #if ( configUSE_POSIX_ERRNO == 1 )
+                 {
+-                    pxCurrentTCBs[ xCoreID ]->iTaskErrno = FreeRTOS_errno;
++                    portCURRENT_TCB( xCoreID )->iTaskErrno = FreeRTOS_errno;
+                 }
+                 #endif
+ 
+@@ -5373,12 +5466,12 @@
+                 /* Macro to inject port specific behaviour immediately after
+                  * switching tasks, such as setting an end of stack watchpoint
+                  * or reconfiguring the MPU. */
+-                portTASK_SWITCH_HOOK( pxCurrentTCBs[ portGET_CORE_ID() ] );
++                portTASK_SWITCH_HOOK( portCURRENT_TCB( portGET_CORE_ID() ) );
+ 
+                 /* After the new task is switched in, update the global errno. */
+                 #if ( configUSE_POSIX_ERRNO == 1 )
+                 {
+-                    FreeRTOS_errno = pxCurrentTCBs[ xCoreID ]->iTaskErrno;
++                    FreeRTOS_errno = portCURRENT_TCB( xCoreID )->iTaskErrno;
+                 }
+                 #endif
+ 
+@@ -5386,7 +5479,7 @@
+                 {
+                     /* Switch C-Runtime's TLS Block to point to the TLS
+                      * Block specific to this task. */
+-                    configSET_TLS_BLOCK( pxCurrentTCBs[ xCoreID ]->xTLSBlock );
++                    configSET_TLS_BLOCK( portCURRENT_TCB( xCoreID )->xTLSBlock );
+                 }
+                 #endif
+             }
+@@ -6665,11 +6758,19 @@
  
              traceENTER_xTaskGetCurrentTaskHandle();
  
@@ -141,11 +383,20 @@
 -                xReturn = pxCurrentTCBs[ portGET_CORE_ID() ];
 +                uxSavedInterruptStatus = portSET_INTERRUPT_MASK();
 +                {
-+                    xReturn = pxCurrentTCBs[ portGET_CORE_ID() ];
++                    xReturn = portCURRENT_TCB( portGET_CORE_ID() );
 +                }
 +                portCLEAR_INTERRUPT_MASK( uxSavedInterruptStatus );
              }
 -            portCLEAR_INTERRUPT_MASK( uxSavedInterruptStatus );
  
              traceRETURN_xTaskGetCurrentTaskHandle( xReturn );
+ 
+@@ -6688,7 +6789,7 @@
+             #if ( configNUMBER_OF_CORES == 1 )
+                 xReturn = pxCurrentTCB;
+             #else /* #if ( configNUMBER_OF_CORES == 1 ) */
+-                xReturn = pxCurrentTCBs[ xCoreID ];
++                xReturn = portCURRENT_TCB( xCoreID );
+             #endif /* #if ( configNUMBER_OF_CORES == 1 ) */
+         }
  

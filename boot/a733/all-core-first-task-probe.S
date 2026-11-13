@@ -3,6 +3,7 @@
  * All eight writers stop before cleaning the complete owned writable interval.
  * This profile is offline-only until its instruction and return checks pass. */
 #include "secondary-identity-probe.h"
+#include "sunstone_current_tcb.h"
 
 .section .text.identity_first_task,"ax"
 .balign 4
@@ -136,7 +137,8 @@ identity_first_task_svc:
     cbnz x5, identity_park
 #endif
     ldr x6, =pxCurrentTCBs
-    ldr x6, [x6, x20, lsl #3]
+    add x6, x6, x20, lsl #portCURRENT_TCB_SHIFT
+    ldr x6, [x6]
 #ifdef SUNSTONE_TASK_SWITCH
     ldr x7, =probe_worker_tcbs
     mov x8, #168

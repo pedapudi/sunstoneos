@@ -589,9 +589,9 @@
                  /* Assign idle task to each core before SMP scheduler is running. */
                  xIdleTaskHandles[ xCoreID ]->xTaskRunState = xCoreID;
 +                #if ( configSS_PARTITIONED_SCHEDULER == 1 )
-+                __atomic_store_n(&pxCurrentTCBs[xCoreID], xIdleTaskHandles[xCoreID], __ATOMIC_RELEASE);
++                __atomic_store_n(&portCURRENT_TCB( xCoreID ), xIdleTaskHandles[xCoreID], __ATOMIC_RELEASE);
 +#else
-                 pxCurrentTCBs[ xCoreID ] = xIdleTaskHandles[ xCoreID ];
+                 portCURRENT_TCB( xCoreID ) = xIdleTaskHandles[ xCoreID ];
 +#endif
                  #if ( ( configIDLE_AFFINITY == 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
                  {
@@ -2376,7 +2376,7 @@
 +memset(ssKernelTasks, 0, sizeof(ssKernelTasks));
 +for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu) {
 +    atomic_store_explicit(&ssKernelLoad[cpu], 0, memory_order_relaxed);
-+    __atomic_store_n(&pxCurrentTCBs[cpu], NULL, __ATOMIC_RELEASE);
++    __atomic_store_n(&portCURRENT_TCB( cpu ), NULL, __ATOMIC_RELEASE);
 +    xIdleTaskHandles[cpu] = NULL;
 +}
 +
