@@ -8,6 +8,14 @@
 #endif
 
 _Static_assert(configNUMBER_OF_CORES == LATENCY_CORES, "requires eight cores");
+/* Cores whose memory task streams in the busy phase. The other cores keep
+ * their wake probes and idle between samples, as isolated real-time cores. */
+#ifndef SUNSTONE_LATENCY_STREAM_MASK
+#define SUNSTONE_LATENCY_STREAM_MASK 0xffu
+#endif
+_Static_assert(SUNSTONE_LATENCY_STREAM_MASK > 0 && SUNSTONE_LATENCY_STREAM_MASK <= 0xff,
+               "at least one streaming core");
+#define LATENCY_STREAMS(c) ((SUNSTONE_LATENCY_STREAM_MASK >> (c)) & 1u)
 enum phase { QUIET, IDLE, BUSY, STOP };
 /* One line per core: only that core's wake task and CPU0's tick share it.
  * The alignment applies to the first member alone; on a declarator list it
@@ -64,7 +72,8 @@ void ss_latency_task_ready(void *task)
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
         if (task != wake_task[c] || !atomic_load_explicit(&wake[c].pending, memory_order_acquire)) continue;
         TaskHandle_t running = xTaskGetCurrentTaskHandleForCore(c);
-        if (p == IDLE) {
+        /* A core outside the streaming mask stays idle in the busy phase. */
+        if (p == IDLE || !LATENCY_STREAMS(c)) {
             /* Some model configurations let idle tasks migrate. Identity as
              * any kernel idle task establishes that this core is idle. */
             unsigned idle;
@@ -199,6 +208,11 @@ static void load_worker(void *argument)
 #endif
     atomic_store_explicit(&load[c].ready, 1, memory_order_release);
     (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if (!LATENCY_STREAMS(c)) {
+        atomic_store_explicit(&load[c].stopped, 1, memory_order_release);
+        vTaskSuspend(NULL);
+        configASSERT(0);
+    }
     /* Every sweep reads and rewrites every word in a private 1 MiB extent.
      * Volatile accesses preserve that traffic even in optimized builds. */
     uint64_t digest = 0, sweep = 0;
@@ -287,7 +301,7 @@ void latency_workload_run(struct latency_result *out)
     for (unsigned c = 0; c < LATENCY_CORES; ++c) xTaskNotifyGive(load_task[c]);
     /* Require a full sweep on every core before taking loaded samples. */
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
-        while (!atomic_load_explicit(&load[c].sweeps, memory_order_acquire)) wait_tick();
+        while (LATENCY_STREAMS(c) && !atomic_load_explicit(&load[c].sweeps, memory_order_acquire)) wait_tick();
     latency_dma_model_start();
     ss_latency_phase_set(SS_LAT_BUSY);
     atomic_store_explicit(&phase, BUSY, memory_order_release);
@@ -345,9 +359,10 @@ void latency_workload_run(struct latency_result *out)
 #endif
 #ifdef SUNSTONE_LATENCY_CAUSE
     configASSERT(ss_latency_cause_snapshot(&out->cause, sizeof(out->cause)));
-    const uint64_t footer[8] = {LATENCY_CAUSE_FOOTER_MAGIC, 1, sizeof(*out),
+    /* Version 2 names the streaming cores in the last word. */
+    const uint64_t footer[8] = {LATENCY_CAUSE_FOOTER_MAGIC, 2, sizeof(*out),
         offsetof(struct latency_result, cause), sizeof(out->cause),
-        offsetof(struct latency_result, ping), sizeof(out->ping), 0};
+        offsetof(struct latency_result, ping), sizeof(out->ping), SUNSTONE_LATENCY_STREAM_MASK};
     for (unsigned word = 0; word < 8; ++word) out->cause_footer[word] = footer[word];
 #endif
 #ifdef SUNSTONE_LATENCY_PMU
@@ -363,7 +378,7 @@ void latency_workload_run(struct latency_result *out)
     for (unsigned c = 0; c < LATENCY_CORES; ++c) out->wake_site[c] = (uintptr_t)wake_worker;
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
         uint64_t sweeps = atomic_load_explicit(&load[c].sweeps, memory_order_acquire);
-        configASSERT(sweeps >= 2);
+        configASSERT(LATENCY_STREAMS(c) ? sweeps >= 2 : sweeps == 0);
         out->traffic[c] = (struct latency_traffic){sweeps, sweeps * LATENCY_BYTES_PER_CORE,
             sweeps * LATENCY_BYTES_PER_CORE, load[c].digest};
     }

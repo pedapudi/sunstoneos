@@ -88,7 +88,8 @@ function(sunstone_latency_partitioned_model target metric)
   endif()
   if(SUNSTONE_LATENCY_CAUSE AND NOT metric)
     target_sources(${target} PRIVATE "${latency_root}/apps/latency/cause-ping.c")
-    target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_CAUSE=1)
+    target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_CAUSE=1
+      SUNSTONE_LATENCY_STREAM_MASK=${SUNSTONE_LATENCY_STREAM_MASK}u)
   endif()
   target_compile_options(${target} PRIVATE ${SUNSTONE_KERNEL_FLAGS}
     "$<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>")
