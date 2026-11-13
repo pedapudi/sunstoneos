@@ -220,14 +220,18 @@ def qemu_checks(build, emulator, output, cpus):
                 for instruction in decoder.disasm(bytes.fromhex(match[1]), 0):
                     instructions.add(instruction.mnemonic)
             # vPortRecursiveLock takes a ticket with LDADDA and releases with STLRH; no exclusive-load take exists.
-            assert "ldadda" in instructions and "stlrh" in instructions, (cpu, name, sorted(instructions))
+            # Under the partitioned scheduler the tick takes no global lock, so only the kernel model, which takes
+            # both locks itself, is sure to run a take; the other images must still run no exclusive-load loop.
+            locked = name == "smp-kernel-model"
+            if locked:
+                assert "ldadda" in instructions and "stlrh" in instructions, (cpu, name, sorted(instructions))
             assert not instructions & {"ldaxr", "ldxr", "stxr", "stlxr"}, (cpu, name, sorted(instructions & {"ldaxr", "ldxr", "stxr", "stlxr"}))
             waited = {"sevl", "wfe", "ldaxrh"} <= instructions
             if name == "smp-kernel-model":
                 # The kernel model holds both locks until the other core has taken a ticket behind it.
                 assert waited, (cpu, "the forced contention ran no monitored wait")
             reports.append(dict(cpu=cpu, image=name, image_sha256=digest(image), command=command,
-                                lse_take_executed=True, monitored_wait_executed=waited, passed=True))
+                                lse_take_executed=locked, monitored_wait_executed=waited, passed=True))
     return reports
 
 

@@ -58,6 +58,40 @@ assertion, and each acknowledgment advances the original compare phase. A higher
 rate would add work and lock traffic, so the tick stays at 1 kHz and sub-tick
 deadlines use a separate interrupt-driven path (below).
 
+## Real-time cores may need to exclude streaming work
+
+Status: **open decision** for the robotics target, which runs camera and lidar
+pipelines beside control loops.
+
+Streaming memory traffic evicts the scheduler's working set from the private
+caches and the shared L3 between ticks. In [the latency cause
+measurement](scheduler-latency-measurement.md#cause-capture-separates-release-barrier-and-line-transfer-costs)
+(evidence entry `1794504237145636168-9aa4ebd9`), each core of the latency fixture
+streams 1 MiB in the busy phase. A busy CPU0 tick then averages 314,510 cycles
+with 220 attributable L3 refills, about 1,268 cycles per refill. The same tick in
+the idle phase, with no streaming on any core, averages 36,541 cycles (about
+20 µs at 1794 MHz) with one L3 refill. Both figures include the measurement's own
+hooks.
+
+Two mechanisms can keep the working set resident:
+
+- **Core isolation**, a scheduler policy: real-time cores run no streaming work,
+  and bulk producers and consumers run only on the other cores. A real-time core
+  then evicts only its own lines. The idle-phase tick bounds what isolation alone
+  can give: about 36.5k cycles with the hooks. Streaming on other cores still
+  evicts shared L3 lines, so the bound holds only while the real-time core's
+  working set fits in its private L1 and 128 KiB L2. Device DMA into memory that
+  a real-time core reads is a separate question.
+- **L3 partitioning** by DSU scheme ID: a reserved way group keeps the
+  real-time cores' lines in L3 whatever the other cores stream. It takes 256 KiB
+  (25 percent) of the L3 from the other cores per group. It needs EL3 enable bits
+  and per-core scheme registers. It does not protect a real-time core from its
+  own streaming unless the scheme changes on each context switch.
+
+Isolation costs no hardware configuration and may suffice. Partitioning adds
+protection against other cores' traffic on L3 misses. The choice needs a
+measurement of the tick with streaming confined to non-real-time cores.
+
 ## Time slicing has a task-count-independent traversal bound
 
 Status: implemented in `patches/freertos-smp-tasks.patch` and host-tested. The

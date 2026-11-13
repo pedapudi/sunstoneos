@@ -255,6 +255,7 @@ system-register synchronization ([A733 SGI contract](../cpu-continue.md)).
 | Task wait state, generation, owner | Atomic packed state; owner commands arbitrate control changes | Waker claims a wait outcome; owner changes placement and lifetime |
 | Registry, creation and deletion, public global suspend gate | Separate administration lock (`ssKernelAdminNext`/`Serving`) and acknowledged owner commands | Task slow paths; never normal wake or switch |
 | Public `taskENTER_CRITICAL` | Recursive application lock plus local interrupt exclusion | Existing application and driver callers |
+| Global time and the tick's deadline sampling | CPU0 alone advances time with an atomic increment and reads each owner's published deadline and slice deadline; the port's tick handler takes no global lock (`ssKernelTickEnter`/`ssKernelTickExit` only defer preemption) | CPU0's timer interrupt |
 
 Object acquisition masks API-capable local interrupts before joining the FIFO, so
 an ISR never waits on a lock held by the task it interrupted. Waiting and
@@ -367,7 +368,12 @@ an object lock while invoking a synchronous owner wait.
 
 Task descriptors and incoming bitmap storage never move or disappear. A
 descriptor has a task-incarnation number, TCB pointer, admission state and an
-atomic reference count. Object waiters hold references; selecting an event waiter
+atomic reference count, all on one 64-byte line. The descriptor table is also
+the handle table: a multiplicative hash of the handle selects its home slot,
+registration takes the first free slot on the linear probe chain from there, and
+each descriptor's key holds the handle while it is mapped. A lookup without a
+collision therefore reads one line, the target's descriptor, before it pins.
+Object waiters hold references; selecting an event waiter
 transfers its reference to the publisher before the object lock is released, and
 publishing releases it after the hint and any SGI.
 

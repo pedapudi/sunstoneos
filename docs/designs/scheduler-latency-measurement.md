@@ -206,6 +206,103 @@ CPU0's latency tick has eight possible direct notification targets, the pinned
 wake tasks. Other OS waits become ready through deadlines rather than these
 eight notification calls.
 
+## Cause capture separates release, barrier and line-transfer costs
+
+`SUNSTONE_LATENCY_CAUSE` tests two explanations for the backend stalls in
+CPU0's tick. Under the first, cache lines that other cores own migrate to
+CPU0 on each remote release, so cost follows the lines touched and the
+line-transfer time. Under the second, a DSB that follows a GIC write waits for
+that device write to complete, so cost follows the count of such barriers. The
+profile owns the cycle counter exclusively and refuses the scheduler PMU
+windows, span PMU recording, PMU accounting, control qualification and
+interrupt counting. Each CPU enables its own cycle counter, with EL0 reads
+permitted, in its first interrupt after arming.
+
+The capture has three parts.
+
+1. **Tick segments.** Around each of the fixture's eight notifications the
+   tick records the release interval, the SGI sub-interval (from the owner
+   barrier before the SGI to the end of the SGI write sequence) and the
+   interrupt-mask restoration at the end of the notification. Around each
+   core's step in the scheduler tick's deadline scan it records the scan
+   interval and any SGI that the scan forces. The report retains the
+   longest tick in which all eight targets were released, with absolute
+   cycle stamps, and keeps per-target counts, totals and maxima for the idle
+   and busy phases.
+2. **Barrier benchmark.** After the workload stops, CPU0 runs one sample per
+   tick of fifteen instruction sequences with IRQs masked: an empty body,
+   ISB, DSB ISH, DSB SY, a store alone and followed by each DSB, an
+   `ICC_SGI1R_EL1` write alone, followed by each DSB, and followed by ISB and
+   each DSB, and an unchanged `ICC_PMR_EL1` write alone and followed by DSB
+   SY. Each case has 64 raw samples between ISB-synchronized counter reads.
+   SGI cases send the production reschedule SGI to CPU1, and the next sample
+   waits until CPU1 has taken it.
+3. **Line exchange.** CPU0 passes one write-back cache line back and forth
+   256 times with CPU1 (same core type) and with CPU6 (Cortex-A76), after 256
+   local store-and-load references. CPU0 times each round trip on its own
+   counter; half a round trip estimates one transfer and includes the peer's
+   polling. One 250 ms deadline bounds the exchange.
+
+Event counters 0 to 4 count L1 instruction refills (`0x01`), L1 data refills
+(`0x03`), L2 data refills (`0x17`), attributable L3 data refills (`0x2a`) and
+backend stall cycles (`0x24`) at EL0 and EL1. Each tick segment records their
+differences beside its cycle stamps; the counters are 32 bits wide, so every
+difference is taken modulo 2^32. The report keeps these differences for the
+retained tick and, per phase, sums over complete ticks (all eight releases and
+scans): whole tick, each release, each scan, and the remainder outside them.
+
+The report also records, for each core, five registers that the core reads at
+EL3 during boot, after it enables EL3 translation: `CLUSTERIDR_EL1` (the DSU
+revision), `CLUSTERCFR_EL1`, `CLUSTERPARTCR_EL1` (the L3 partition control),
+`CLUSTERTHREADSID_EL1` (the core's scheme ID) and `ACTLR_EL3`, which controls
+EL1 access to the cluster registers. The capture writes no register. The
+decoder reports a missing capture or cluster registers that differ between
+cores; neither refuses the measurement.
+
+The report occupies 16,816 bytes and the exchange report 3,392 bytes; a
+64-byte footer gives both offsets. The profile declares a 147,456-byte output
+limit to hold them. All recorded intervals are raw: hook
+bookkeeping stays inside them, and the benchmark's empty body and an empty
+release-hook pair give the overhead references. Every hook is compiled only
+when the option is set, so production images carry none of this code.
+
+The cache lines behind each segment come from the eight-core QEMU model.
+`tools/qemu-tick-footprint.c` is a QEMU plugin that records CPU0's
+instructions and data accesses between the tick hooks, keeping only ticks whose
+fixture phase load returns the busy value. `tools/tick-footprint.py` splits each
+tick at the release and scan hooks, resolves every data address to its variable
+and field through DWARF and every instruction to its source line, and counts the
+lines each segment touches first in the tick. It classes lines as operating
+system, exception stack, latency fixture or diagnostic. When the busy traffic
+evicts the working set between ticks, the first-touch count of a segment
+estimates its refills, which the board's event counts then test.
+
+A prediction weights each line by who writes it. A line that another core writes
+between ticks refills on every busy tick. A line that only CPU0 touches, such
+as its exception stack or its diagnostic state, mostly stays in its caches and
+seldom refills. Entry `1794508626388886966-ae6d2457` shows the difference: the
+footprint cuts removed mostly lines that other cores write. Scaling each
+segment's earlier refills by its ratio of first-touch lines predicted remote
+releases of 105,000 to 132,000 summed cycles and an outside segment of 50,000
+to 75,000 cycles. The board measured 96,603 and 46,703. Each removed refill
+saved about 1,274 cycles, as the 1,268 cycles per refill of entry
+`1794504237145636168-9aa4ebd9` predicts. A prediction therefore counts the
+lines that other cores write separately and charges one refill to each of them
+per tick.
+
+`checks/tick-footprint-budget.py` holds these counts to
+`checks/tick-footprint-budget.json`. For CPU0's own release, the largest remote
+release, the largest deadline scan and the work outside them, it takes the
+largest line count of each structure over the first 240 busy ticks and fails if
+any data count exceeds its budget. The busy phase lasts a fixed number of wake
+samples, which spanned 234 to 370 ticks under QEMU, so the check accepts a trace
+of 200 ticks or more. Data lines are physical 64-byte lines. Code lines are
+counted from the start of each function, so a change that only moves a function
+leaves its count alone; the board's placement can add up to one line per
+function. Code counts follow the path each wake takes, which varies with host
+load under multi-threaded QEMU, so they are reported against their budget but
+do not fail the check.
+
 ## The control phase retains enough samples for the requested percentile
 
 `SUNSTONE_LATENCY_CONTROL` adds a control phase to the latency application.
