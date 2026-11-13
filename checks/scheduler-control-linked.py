@@ -18,6 +18,10 @@ ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--build-dir', '{build:scheduler-control-models}', '--output', '{output}', '--positive', '--perturb']]
 # Perturbation sweep: kernel/scheduler/perturb.h names the sites. Each point delays one site on every core by a
 # number of loop turns; on QEMU's deterministic clock every delay is a different interleaving of the same run.
+# A QEMU run is killed after this many host seconds: the multiple of the slowest measured point that tools/gate-slots.json records. The
+# runs count instructions (-icount), so the guest result does not depend on the limit; it only ends a run that hangs.
+_PERTURB = json.loads((ROOT / 'tools/gate-slots.json').read_text())['perturb']
+QEMU_KILL_SECONDS = _PERTURB['kill_multiplier'] * _PERTURB['slowest_point_seconds']
 PERTURB_MODELS = ('scheduler-partitioned-qemu', 'scheduler-partitioned-storm-qemu')
 PERTURB_SITES = {'api-entry': 0, 'owner-publish': 1, 'owner-drain': 2, 'control-open': 3}
 PERTURB_TURNS = (300, 1000, 3000)
@@ -71,7 +75,7 @@ def main():
                                    text=True, start_new_session=True)
         started = time.monotonic()
         try:
-            stdout, stderr = process.communicate(timeout=120)
+            stdout, stderr = process.communicate(timeout=QEMU_KILL_SECONDS)
             with times_lock:
                 times[directory.name] = round(time.monotonic() - started, 2)
         except subprocess.TimeoutExpired:
