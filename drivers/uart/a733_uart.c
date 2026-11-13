@@ -20,6 +20,7 @@
 #define LSR 0x14u
 #define MSR 0x18u
 #define USR 0x7cu
+#define RFL 0x84u
 #define HSK 0x88u        /* UART_HSK: 0xe5 selects DMA handshake mode. */
 #define DMA_REQ_EN 0x8cu /* bit0 RX, bit1 TX DMA request enable. */
 #define HALT 0xa4u
@@ -203,6 +204,13 @@ static int service(struct a733_uart *u, struct a733_uart_byte *rx, size_t rn,
         if (!clock_ok(u)) return u->state;
         timed = 1;
     }
+    if (dotx && tn && irq==2) {
+        /* IIR must precede USR, whose read acknowledges a BUSY interrupt.
+         * A half-full RX trigger can leave an older short burst below it;
+         * that burst's timeout interrupt must drain it before this TX. */
+        if(!fifo_read(u,USR,&v) || !clock_ok(u))return u->state;
+        if(v&8u)tn=0;
+    }
     if (dotx) {
         if (tn) {
             if (!timed && !clock_ok(u)) return u->state;
@@ -239,10 +247,22 @@ int a733_uart_tx_irq(struct a733_uart *u,unsigned enabled,uint64_t deadline)
     if (!write_reg(u,IER,ier)) return u->state;
     u->ier=ier;return u->state;
 }
+int a733_uart_rx_empty(struct a733_uart *u,uint64_t deadline)
+{
+    uint32_t status;
+    if(!u || !deadline || u->state!=A733_UART_READY || u->dma_owned || u->dma_released ||
+       !(u->plan.fcr&1u))return -1;
+    u->deadline=deadline;
+    if(!read_reg(u,RFL,&status))return -1;
+    return !(status&0x1ffu); /* Manual 18.10.9.15: receive FIFO entries. */
+}
 int a733_uart_interrupt(struct a733_uart *u, struct a733_uart_byte *rx, size_t rn,
                         const uint8_t *tx, size_t tn, unsigned budget, uint64_t deadline,
                         struct a733_uart_result *r)
 { return service(u, rx, rn, tx, tn, budget, deadline, r, 1); }
+int a733_uart_interrupt_rx_first(struct a733_uart *u,struct a733_uart_byte *rx,size_t rn,
+    const uint8_t *tx,size_t tn,unsigned budget,uint64_t deadline,struct a733_uart_result *r)
+{ return service(u,rx,rn,tx,tn,budget,deadline,r,2); }
 int a733_uart_drain(struct a733_uart *u, uint64_t deadline)
 {
     if (!u || !deadline) return -1;

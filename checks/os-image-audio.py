@@ -38,7 +38,9 @@ CASES = ['two-generations-pcm-headroom-and-stream-reuse', 'discontinuous-period-
          'ungranted-service-touches-nothing', 'supervised-progress-silent',
          'return-drains-and-retires-parents', 'return-waits-for-outstanding-request',
          'failure-window-keeps-admission-open', 'return-retains-unproven-phase-until-deadline',
-         'return-observes-deadline-between-mutex-attempts', 'return-verifies-final-interrupt-mask']
+         'return-observes-deadline-between-mutex-attempts', 'return-verifies-final-interrupt-mask',
+         'owner-blocks-on-idle-and-busy-reply', 'owner-preserves-device-publication-racing-reply',
+         'owner-retains-on-exact-operation-expiry']
 LENGTHS = [16000, 20480, 80000]
 if not __debug__:
     raise RuntimeError('checks require assertions')

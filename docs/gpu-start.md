@@ -1,6 +1,6 @@
 # Bounded GPU firmware startup
 
-The native GPU startup controller is **implemented**; no host check remains. It applies
+The native GPU startup controller is **implemented**. It applies
 the pinned MIPS startup sequence through platform callbacks and waits for the
 firmware-started flag, following the reference functions. It has not accessed a physical GPU or booted firmware on the board.
 
@@ -9,6 +9,10 @@ reset. The [API](../include/pvr_gpu_start.h) separates offline initialization,
 starting a deadline, and bounded polling. A privileged FreeRTOS worker must
 serialize calls. Board power, clocks, identity, allocation, and independent
 watchdog recovery remain prerequisites for physical use.
+
+The integrated OS uses the [nonspinning owner waits](designs/gpu-owner-events.md),
+which have instruction-model evidence. Descriptions of in-call delays and
+readiness spins below apply to diagnostic profiles.
 
 ## Firmware features determine reset and cache setup
 

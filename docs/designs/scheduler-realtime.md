@@ -184,7 +184,8 @@ supplies sub-tick timestamps (24 MHz, nominal 41.667 ns period), and reading it 
 not create an asynchronous timeout. `sunstone_deadline_wait_until()`
 ([header](../../include/sunstone_deadline.h), `runtime/deadline.c`,
 `runtime/deadline-a733.c`) lets a registered task wait until an absolute
-microsecond deadline or a notification on its index. A fixed table of 16 slots
+microsecond deadline or a notification on its index. A table sized for the
+image's declared owner tasks (16 slots by default for standalone profiles)
 shares CPU0's virtual-timer compare (`CNTV`) with the scheduler. A caller updates
 its slot and CPU0 callers rearm the compare directly; secondary callers publish a
 rearm request and send CPU0 an SGI, because the compare register is private to each

@@ -10,6 +10,7 @@
 #include "sunstone_crumb.h"
 #include "cpu-return.h"
 #include "a733_task_context.h"
+#include "sunstone_deadline.h"
 
 __attribute__((used,retain)) const uint64_t os_dma_profile[3]={
     UINT64_C(0x41533733444d4131),1,4096
@@ -24,7 +25,16 @@ static struct {
     int mask_result;
     uint64_t mask_deadline,mask_now;
     atomic_uint ready;
+    atomic_uint_fast64_t events;
+    uint64_t request_event,completion_event;
+    unsigned awaiting_completion;
 } dma;
+static void client_event(void *cookie,unsigned event)
+{
+    if(cookie!=&dma)return;
+    if(event&DMA_SERVICE_PROGRESS_EVENT)atomic_fetch_add_explicit(&dma.events,1,memory_order_release);
+    os_application_wake_main();
+}
 static enum os_quiesce_result dma_quiesce_step(struct os_quiesce *q)
 {
     if(atomic_load_explicit(&dma.ready,memory_order_acquire))return OS_QUIESCE_DONE;
@@ -79,6 +89,7 @@ static int mask(void *cookie)
      * admitted session bounds it until the shared return deadline exists. */
     if(!dma.mask_deadline)dma.mask_deadline=board.session.deadline_us;
     if(!dma.mask_deadline){dma.mask_fault=4;return -1;}
+    if(!sunstone_deadline_register()){dma.mask_fault=7;return -1;}
     if(!mask_timely())return -1;
     int result=dma.mask_result=gicv3_spi_mask(&irq->spi);
     if(result!=1){dma.mask_fault=1;return result;}
@@ -94,7 +105,12 @@ static int mask(void *cookie)
         if(result==1){
             taskENTER_CRITICAL();irq->masked=1;taskEXIT_CRITICAL();return 1;
         }
-        vTaskDelay(1);
+        /* GICD_CTLR.RWP has no interrupt. Retain the existing 1 ms
+         * observation interval with an absolute compare, bounded by the
+         * admitted return deadline, rather than the scheduler tick phase. */
+        uint64_t retry=dma.mask_deadline-dma.mask_now<1000?
+            dma.mask_deadline:dma.mask_now+1000;
+        if(sunstone_deadline_wait_until(retry)<0){dma.mask_fault=7;return -1;}
     }
 }
 int os_dma_start(void)
@@ -114,6 +130,7 @@ int os_dma_start(void)
     };
     return a733_dma_pool_session_init(&dma.pool,&dma.config)&&
         dma_service_bind(&dma.pool.service,0,(TaskHandle_t)ss_application.task,1)&&
+        dma_service_bind_event(&dma.pool.service,0,client_event,&dma)&&
         dma_service_i2s_irq_bind(&dma.irq,&dma.pool.service,A733_SMP_COUNTER_HZ)&&
         dma_service_bind_retirement(&dma.pool.service,mask,&dma.irq);
 }
@@ -137,6 +154,7 @@ static int request(enum dma_service_operation op,struct dma_service_reply *reply
     if(!dma.ticket){
         struct dma_service_request r={.operation=op,.job=0,
             .timeout=op==DMA_SERVICE_SUBMIT?A733_SMP_COUNTER_HZ/2:0};
+        dma.request_event=atomic_load_explicit(&dma.events,memory_order_acquire);
         if(!dma_service_send(&dma.pool.service,&r,0,&dma.ticket))return 0;
         dma.operation=op;
     }
@@ -165,9 +183,14 @@ int ss_dma_submit(void)
 }
 int ss_dma_complete(void)
 {
+    if(!caller()||atomic_load_explicit(&dma.pool.state,memory_order_acquire)==A733_DMA_POOL_FAILED)return -1;
+    if(dma.awaiting_completion&&dma.completion_event==atomic_load_explicit(&dma.events,memory_order_acquire))return 0;
+    dma.awaiting_completion=0;
     struct dma_service_reply r;int ok=request(DMA_SERVICE_STATUS,&r);
     if(ok!=1)return ok;
-    if(r.phase==DMA_SERVICE_RUNNING||r.phase==DMA_SERVICE_DRAINING)return 0;
+    if(r.phase==DMA_SERVICE_RUNNING||r.phase==DMA_SERVICE_DRAINING){
+        dma.completion_event=dma.request_event;dma.awaiting_completion=1;return 0;
+    }
     return r.phase==DMA_SERVICE_RESULT&&r.outcome==DMA_SERVICE_COMPLETE&&r.holds_buffers?1:-1;
 }
 int ss_dma_reap(void)
@@ -195,4 +218,23 @@ int ss_dma_retire(void)
     int r=a733_dma_pool_session_retire(&dma.pool);
     if(r==1)atomic_store_explicit(&dma.ready,1,memory_order_release);
     return r;
+}
+int ss_dma_owner_stats(struct ss_dma_owner_stats *out)
+{
+    if(!out||!ss_application.task||xTaskGetCurrentTaskHandle()!=(TaskHandle_t)ss_application.task||
+       os_quiesce_requested(&dma_quiesce)||!dma.pool.admitted||!dma.pool.service.initialized)return 0;
+    unsigned state=atomic_load_explicit(&dma.pool.state,memory_order_acquire);
+    if(state!=A733_DMA_POOL_READY&&state!=A733_DMA_POOL_FAILED)return 0;
+    const struct dma_service_wait_record *r=&dma_service_wake_record;
+    *out=(struct ss_dma_owner_stats){
+        .waits=atomic_load_explicit(&r->waits,memory_order_acquire),
+        .wakes=atomic_load_explicit(&r->wakes,memory_order_acquire),
+        .idle_us=atomic_load_explicit(&r->idle_us,memory_order_acquire),
+        .idle_notifications=atomic_load_explicit(&r->idle_notifications,memory_order_acquire),
+        .idle_timeouts=atomic_load_explicit(&r->idle_timeouts,memory_order_acquire),
+        .deadline_expiries=atomic_load_explicit(&r->deadline_expiries,memory_order_acquire),
+        .irqs=atomic_load_explicit(&dma.pool.service.irq_deliveries,memory_order_acquire),
+        .waiting=atomic_load_explicit(&dma.pool.service.idle_waiting,memory_order_acquire),
+        .retired=os_dma_return_ready()!=0};
+    return 1;
 }

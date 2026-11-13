@@ -3,6 +3,9 @@
 #include "a733_mapping_check.h"
 #include "a733_i2s_platform.h"
 #include "a733_task_context.h"
+#ifdef SUNSTONE_A733_OS
+#include "sunstone_deadline.h"
+#endif
 
 _Static_assert(A733_DMA_CHANNELS<=DMA_SERVICE_JOBS,"one job per selected channel");
 _Static_assert(A733_I2S_PERIOD_CAPACITY<=DEVICE_MEMORY_PAGE,"one page backs each stream period");
@@ -152,18 +155,23 @@ static int prepared(void *cookie,uintptr_t controller,uint16_t channels)
 static void bootstrap(void *argument)
 {
     struct a733_dma_pool_session *s=argument;
+#ifdef SUNSTONE_A733_OS
+    if(!sunstone_deadline_register())fail(s);
+#endif
     if(s==instance && atomic_load_explicit(&s->state,memory_order_acquire)==A733_DMA_POOL_WAITING) {
         for(;;) {
             uint64_t now;
             uint64_t limit=atomic_load_explicit(&s->startup.return_deadline,memory_order_acquire);
             if(!parent(s) || !a733_counter_clock_now(s->startup.clock,&now) ||
                now>=s->startup.handoff.allowed.deadline_us||(limit&&now>=limit)) break;
+            unsigned stage=s->startup.platform.stage;
             enum a733_dma_platform_result r=a733_dma_startup_poll(&s->startup);
             if(r==A733_DMA_PLATFORM_RETAINED) break;
             if(r==A733_DMA_PLATFORM_READY) {
                 enum dma_service_result a=dma_service_activate(&s->service);
                 if(a==DMA_SERVICE_OK) {
                     atomic_store_explicit(&s->state,A733_DMA_POOL_READY,memory_order_release);
+                    dma_service_notify_clients(&s->service);
                     (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
                     if(!atomic_load_explicit(&s->retire_requested,memory_order_acquire)||
                        !dma_service_retired(&s->service))fail(s);
@@ -175,18 +183,37 @@ static void bootstrap(void *argument)
                         r=a733_dma_startup_retire(&s->startup,deadline);
                         if(r==A733_DMA_PLATFORM_RETAINED)fail(s);
                         if(r==A733_DMA_PLATFORM_READY)break;
+#ifdef SUNSTONE_A733_OS
+                        now=sunstone_deadline_now_us();
+                        if(now>=deadline||sunstone_deadline_wait_until(deadline-now<1000?deadline:now+1000)<0)fail(s);
+#else
                         vTaskDelay(1);
+#endif
                     }
                     atomic_store_explicit(&s->retired,1,memory_order_release);
+                    dma_service_notify_clients(&s->service);
                     vTaskSuspend(NULL);fail(s);
                 }
                 if(a!=DMA_SERVICE_BUSY) break;
             }
-            vTaskDelay(1);
+#ifdef SUNSTONE_A733_OS
+            if(stage!=s->startup.platform.stage)continue;
+            uint64_t end=s->startup.handoff.allowed.deadline_us;
+            if(limit&&limit<end)end=limit;
+            now=sunstone_deadline_now_us();
+            if(now>=end)break;
+            uint64_t sample=a733_dma_platform_sample_at(&s->startup.platform);
+            if(sample<=now)sample=end-now<1000?end:now+1000;
+            if(sample>end)sample=end;
+            if(sunstone_deadline_wait_until(sample)<0)break;
+#else
+            (void)stage;vTaskDelay(1);
+#endif
         }
         /* Runtime failure keeps the immutable allocation DEVICE. No concurrent
          * pool mutation or release occurs on this fault path. */
         atomic_store_explicit(&s->state,A733_DMA_POOL_FAILED,memory_order_release);
+        dma_service_notify_clients(&s->service);
     }
     vTaskSuspend(NULL);fail(s);
 }

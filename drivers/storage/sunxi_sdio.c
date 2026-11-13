@@ -31,6 +31,29 @@
 #define SDIO_IRQ SUNXI_SMHC_INT_SDIO
 #define ERRORS SUNXI_SMHC_ERRORS
 #define UPDATE SUNXI_SMHC_UPDATE
+#define TX_REQUEST (1u << 4)
+#define RX_REQUEST (1u << 5)
+#define GLOBAL_IRQ SUNXI_SMHC_GCTRL_INT_ENABLE
+
+int sunxi_sdio_bind_events(struct sunxi_sdio *h)
+{
+    if(!h||!h->initialized||h->entered||h->events||h->state!=SUNXI_SDIO_UNPREPARED)return 0;
+    h->events=1;return 1;
+}
+static uint32_t event_mask(const struct sunxi_sdio *h)
+{
+    uint32_t mask=h->sdio_pending?0:SDIO_IRQ;
+    if(h->state==SUNXI_SDIO_ACTIVE){
+        mask|=ERRORS;
+        if(!h->response_seen)mask|=CMD_DONE;
+        if(h->request.bytes){
+            if(!(h->result.interrupts&DATA_OVER))mask|=DATA_OVER;
+            if(h->result.transferred<h->request.bytes)
+                mask|=h->request.argument&START?TX_REQUEST:RX_REQUEST;
+        }
+    }
+    return mask;
+}
 
 void sunxi_sdio_stop(struct sunxi_sdio *h, enum sunxi_sdio_error error)
 {
@@ -141,8 +164,15 @@ static void prepare_step(struct sunxi_sdio *h)
         h->step = 1; return;
     case 1:
         if (!rd(h, GCTRL, &value) || (value & 7)) return;
+        if(h->events)h->event_live=1; /* A failed following write may take effect. */
         if (!wr(h, CLKCR, 0) || !wr(h, IMASK, 0) || !wr(h, IDIE, 0) ||
-            !wr(h, DMAC, 0) || !wr(h, GCTRL, AHB)) return;
+            !wr(h, DMAC, 0) || !wr(h, GCTRL, AHB|(h->events?GLOBAL_IRQ:0))) return;
+        /* Manual 11.3.8.17: receive above 15 words, transmit at or below
+         * 240 words; packet tails request service below the watermark. */
+        if(h->events){
+            if(!wr(h,SUNXI_SMHC_FTRGL,0x000f00f0u)||!rd(h,SUNXI_SMHC_FTRGL,&value))return;
+            if(value!=0x000f00f0u){sunxi_sdio_stop(h,SUNXI_SDIO_SETUP_ERROR);return;}
+        }
         h->step = 2; return;
     case 2:
         if (!rd(h, NTSR, &value) || !wr(h, NTSR, value & ~START)) return;
@@ -187,7 +217,9 @@ static void issue_step(struct sunxi_sdio *h)
         if (!wr(h, BLKSZ, block) || !wr(h, BCNT, (uint32_t)h->request.bytes)) return;
     }
     /* Preserve persistent SDIO/card interrupt bits; never request auto-CMD12. */
-    if (!wr(h, RINT, 0xffffu) || !wr(h, ARG, h->request.argument) ||
+    uint32_t mask=(h->sdio_pending?0:SDIO_IRQ)|ERRORS|CMD_DONE;
+    if(h->request.bytes)mask|=DATA_OVER|(h->request.argument&START?TX_REQUEST:RX_REQUEST);
+    if (!wr(h, RINT, 0xffffu) || (h->events&&!wr(h,IMASK,mask)) || !wr(h, ARG, h->request.argument) ||
         !barrier(h) || !wr(h, CMD, command)) return;
     h->state = SUNXI_SDIO_ACTIVE;
 }
@@ -270,12 +302,14 @@ static void quiesce_step(struct sunxi_sdio *h)
         if (!rd(h, CMD, &value) || (value & START)) return;
         if (!rd(h, CLKCR, &value)) return;
         if (value) { sunxi_sdio_stop(h, SUNXI_SDIO_SETUP_ERROR); return; }
-        if (!wr(h, IMASK, 0) || !wr(h, IDIE, 0) || !barrier(h)) return;
+        if (!wr(h, IMASK, 0) || !wr(h, IDIE, 0) ||
+            (h->events&&(!rd(h,GCTRL,&value)||!wr(h,GCTRL,value&~GLOBAL_IRQ))) || !barrier(h)) return;
         h->step = 2; return;
     default: {
-        uint32_t clock, mask, dma;
-        if (!rd(h, CLKCR, &clock) || !rd(h, IMASK, &mask) || !rd(h, IDIE, &dma)) return;
-        if (clock || mask || dma) { sunxi_sdio_stop(h, SUNXI_SDIO_SETUP_ERROR); return; }
+        uint32_t clock, mask, dma, control=0;
+        if (!rd(h, CLKCR, &clock) || !rd(h, IMASK, &mask) || !rd(h, IDIE, &dma) ||
+            (h->events&&!rd(h,GCTRL,&control))) return;
+        if (clock || mask || dma || (control&GLOBAL_IRQ)) { sunxi_sdio_stop(h, SUNXI_SDIO_SETUP_ERROR); return; }
         h->card_hz = 0; h->deadline = 0; h->state = SUNXI_SDIO_QUIESCED; return;
     }
     }
@@ -296,6 +330,9 @@ static void transfer_step(struct sunxi_sdio *h)
                           h->request.command == 3 ? 0xe000u : h->request.command == 7 ? 0xfdff0000u : 0;
         if (h->result.response & errors) { sunxi_sdio_stop(h, SUNXI_SDIO_RESPONSE_ERROR); return; }
     }
+    /* A request record retains these bits. Leaving an accounted CMD_DONE
+     * asserted would wake the owner repeatedly while its FIFO is empty. */
+    if(h->events&&!wr(h,RINT,raw&0xffffu))return;
     /* One-bit operation samples STATUS before every word. Four-bit operation
      * sizes each burst from one FIFO-level sample: the fill level for reads, or
      * one word when the level reads zero but FIFO-empty is clear, and the free
@@ -386,4 +423,58 @@ int sunxi_sdio_ack_irq(struct sunxi_sdio *h)
     int ok = time_limit(h) && wr(h, RINT, SDIO_IRQ) && rd(h, RINT, &raw) && time_limit(h);
     if (ok) h->sdio_pending = (raw & SDIO_IRQ) != 0;
     h->entered = 0; return ok;
+}
+int sunxi_sdio_event_prepare(struct sunxi_sdio *h,uint64_t *until)
+{
+    if(!h||!a733_span_excl(until,sizeof(*until))||
+       a733_extents_overlap_prechecked((uintptr_t)h,sizeof(*h),(uintptr_t)until,sizeof(*until))||
+       !h->events||h->entered||h->state==SUNXI_SDIO_FAULT)return -1;
+    *until=h->deadline;
+    if(h->state==SUNXI_SDIO_UNPREPARED||h->state==SUNXI_SDIO_QUIESCED)return 0;
+    if(h->state==SUNXI_SDIO_DONE)return 1;
+    uint64_t now;
+    if(!sunxi_sdio_time(h,&now))return -1;
+    if(h->deadline&&now>=h->deadline){sunxi_sdio_stop(h,SUNXI_SDIO_TIMEOUT);return -1;}
+    if(h->state==SUNXI_SDIO_ACTIVE||h->state==SUNXI_SDIO_READY){
+        uint32_t raw,mask=event_mask(h);
+        if(!wr(h,IMASK,mask)||!barrier(h)||!rd(h,RINT,&raw))return -1;
+        unsigned function=(raw&SDIO_IRQ)&&!h->sdio_pending;
+        h->sdio_pending|=(raw&SDIO_IRQ)!=0;
+        if(raw&mask)return 1;
+        if(function)return 1;
+        if(h->state==SUNXI_SDIO_READY)return 0;
+        if(!h->response_seen||h->result.transferred<h->request.bytes||
+            (h->request.bytes&&!(h->result.interrupts&DATA_OVER)))return 0;
+        /* Completion can precede DAT0 release. No new CMD_DONE is promised. */
+    }else if(h->state==SUNXI_SDIO_QUEUED){
+        uint32_t status,control=0;
+        if(!rd(h,STATUS,&status))return -1;
+        if(!(status&((1u<<9)|(1u<<10)))){
+            if(!h->request.bytes||!h->step)return 1;
+            if(!rd(h,GCTRL,&control))return -1;
+            if(!(control&2))return 1;
+        }
+    }else{
+        uint32_t value;
+        if(h->state==SUNXI_SDIO_PREPARING&&h->step==0)return 1;
+        if(h->state==SUNXI_SDIO_PREPARING&&h->step==1){
+            if(!rd(h,GCTRL,&value))return -1;
+            if(!(value&7))return 1;
+        }else if((h->state==SUNXI_SDIO_PREPARING&&h->step==2)||
+                 (h->state==SUNXI_SDIO_WIDENING&&h->step==2)||
+                 (h->state==SUNXI_SDIO_QUIESCING&&h->step>=2))return 1;
+        else{
+            if(!rd(h,CMD,&value))return -1;
+            if(!(value&START)){
+                if((h->state==SUNXI_SDIO_WIDENING||h->state==SUNXI_SDIO_QUIESCING)&&h->step==0){
+                    if(!rd(h,STATUS,&value))return -1;
+                    if(!(value&SUNXI_SMHC_STATUS_BUSY))return 1;
+                }else return 1;
+            }
+        }
+    }
+    if(now>UINT64_MAX-50){sunxi_sdio_stop(h,SUNXI_SDIO_CLOCK_ERROR);return -1;}
+    uint64_t observe=now+50;
+    if(!*until||observe<*until)*until=observe;
+    return 0;
 }

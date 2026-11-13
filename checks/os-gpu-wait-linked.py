@@ -4,6 +4,13 @@
 Checks finite waits, late record collection, fault ownership, stale handles and
 wrong callers. The actual public queue API executes; the worker, firmware,
 cache effects and GPU results are model boundaries.
+
+The queue client receives and collects without blocking and then waits for a
+service publication or its absolute deadline. The modeled service publishes at
+a scheduled virtual time. A wait returns at once when the publication sequence
+changed before it armed, wakes at the first publication before its deadline,
+and otherwise returns EXPIRED at exactly its deadline. A blocking receive or
+collect fails the check.
 """
 import argparse
 import hashlib
@@ -50,11 +57,15 @@ for case in ('timely-record','timeout-then-late-record','owed-fault-record','wro
         u.emu_start(image.address(name),0x80000000,count=1000000)
         assert u.reg_read(UC_ARM64_REG_PC)==0x80000000,(case,name,'instruction budget')
         return u.reg_read(UC_ARM64_REG_X0)&0xffffffff
-    q=0x80010000;service=0x80030000;job=0x80050000;output=0x80051000
-    state={'scheduler':1,'task':0x1234,'ticks':0,'receive':0,'sends':0,'collect':0,'available':True,'live':1}
+    q=0x80010000;service=0x80030000;job=0x80050000;output=0x80051000;worker=0x7777
+    state={'scheduler':1,'task':0x1234,'ticks':0,'receive':0,'sends':0,'collect':0,'available':True,'live':1,
+           'time':0,'sequence':0,'publish_at':None,'waits':0,'wakes':0,'expiries':0,'publications':0,
+           'registered':0,'worker_wakes':0}
     names=('xTaskGetSchedulerState','xTaskGetCurrentTaskHandle','xTaskGetTickCount',
            'xQueueGenericSend','xQueueReceive','pvr_compute_queue_runtime_sync',
-           'pvr_gpu_service_send_epoch','pvr_gpu_service_collect','pvr_compute_queue_runtime_opened')
+           'pvr_gpu_service_send_epoch','pvr_gpu_service_collect','pvr_compute_queue_runtime_opened',
+           'sunstone_deadline_now_us','xTaskGenericNotify','pvr_gpu_service_deadline_register',
+           'pvr_gpu_service_event_sequence','pvr_gpu_service_wait_event','pvr_gpu_service_notify_clients')
     hooks={image.address(n):n for n in names}
     def hook(machine,address,size,unused):
         name=hooks[address];args=[machine.reg_read(UC_ARM64_REG_X0+i) for i in range(5)]
@@ -66,9 +77,28 @@ for case in ('timely-record','timeout-then-late-record','owed-fault-record','wro
         elif name=='xQueueGenericSend':state['sends']+=1;ret(1)
         elif name=='pvr_gpu_service_send_epoch':
             state['sends']+=1;put(args[4],77,8);ret(1)
+        elif name=='sunstone_deadline_now_us':ret(state['time'])
+        elif name=='xTaskGenericNotify':
+            # A submission notifies the service worker after queueing its wake.
+            assert args[0]==worker and args[1]==0 and args[3]==ev('eIncrement'),args
+            state['worker_wakes']+=1;ret(1)
+        elif name=='pvr_gpu_service_deadline_register':
+            assert args[0]==service;state['registered']+=1;ret(1)
+        elif name=='pvr_gpu_service_event_sequence':assert args[0]==service;ret(state['sequence'])
+        elif name=='pvr_gpu_service_notify_clients':
+            assert args[0]==service;state['publications']+=1;state['sequence']+=1;ret()
+        elif name=='pvr_gpu_service_wait_event':
+            assert args[0]==service and state['time']<args[2],(args,state)
+            state['waits']+=1
+            if args[1]!=state['sequence']:ret(0)
+            elif state['publish_at'] is not None and state['publish_at']<args[2]:
+                state['time']=state['publish_at'];state['publish_at']=None
+                state['available']=True;state['sequence']+=1;state['wakes']+=1;ret(0)
+            else:state['time']=args[2];state['expiries']+=1;ret(1)
         elif name=='pvr_gpu_service_collect':
+            assert args[3]==0,'blocking collect'
             state['collect']+=1
-            if not state['available']:state['ticks']+=args[3];ret(0)
+            if not state['available']:ret(0)
             else:
                 # Public creation checks result; epoch comes from published state.
                 # Layout is from this exact linked image.
@@ -76,8 +106,9 @@ for case in ('timely-record','timeout-then-late-record','owed-fault-record','wro
                 sf(args[2],typ,'result',ev('PVR_GPU_SERVICE_OK'))
                 ret(1)
         elif name=='xQueueReceive':
+            assert args[2]==0,'blocking receive'
             state['receive']+=1
-            if not state['available']:state['ticks']+=args[2];ret(0);return
+            if not state['available']:ret(0);return
             sequence=0 if case.startswith('create-') else 1
             result=ev('GPU_QUEUE_FAULT') if case=='owed-fault-record' else ev('GPU_QUEUE_OK')
             sf(args[1],'gpu_queue_record','sequence',sequence)
@@ -93,6 +124,7 @@ for case in ('timely-record','timeout-then-late-record','owed-fault-record','wro
     sf(q,'pvr_compute_queue','completions',0x5678,8)
     sf(service,'pvr_gpu_service','requests',0x6789,8)
     sf(service,'pvr_gpu_service','published_epoch',1,8)
+    sf(service,'pvr_gpu_service','worker',worker,8)
     assert call('pvr_compute_queue_client_bind',q)==1
     state['scheduler']=2
     if case.startswith('create-'):
@@ -106,10 +138,12 @@ for case in ('timely-record','timeout-then-late-record','owed-fault-record','wro
         assert call('gpu_queue_context_create',config,10,output,output+64)==ev('GPU_QUEUE_TIMEOUT')
         ticket=get(field(q,'pvr_compute_queue','create_ticket'),8)
         assert bool(ticket)==(case=='create-ticket-timeout')
+        # With nothing published, one wait ends at the 10-tick budget's exact end.
+        assert state['time']==10000 and (state['waits'],state['wakes'],state['expiries'])==(1,0,1),state
         sent=state['sends'];state['available']=True
         sf(q,'pvr_compute_queue','generation',1)
         assert call('gpu_queue_context_create',config,10,output,output+64)==ev('GPU_QUEUE_OK')
-        assert state['sends']==sent and get(output)==1
+        assert state['sends']==sent and get(output)==1 and state['waits']==1 and state['registered']==2
     else:
         sf(q,'pvr_compute_queue','generation',1)
         sf(q,'pvr_compute_queue','create_done',1)
@@ -128,19 +162,27 @@ for case in ('timely-record','timeout-then-late-record','owed-fault-record','wro
                   'parked-submit':'GPU_QUEUE_PARKED','revoked-submit':'GPU_QUEUE_FAULT',
                   'invalid-bindings':'GPU_QUEUE_REFUSED'}.get(case,'GPU_QUEUE_OK')
         assert result==ev(expected),(case,result,expected)
-        if expected!='GPU_QUEUE_OK':assert not state['sends'] and not state['receive']
+        if expected!='GPU_QUEUE_OK':assert not state['sends'] and not state['receive'] and not state['worker_wakes']
         else:
-            assert get(field(q,'pvr_compute_queue','client_owed'))==1
-            assert call('gpu_queue_submit',1,job)==ev('GPU_QUEUE_BUSY')
+            assert get(field(q,'pvr_compute_queue','client_owed'))==1 and state['worker_wakes']==1
+            assert call('gpu_queue_submit',1,job)==ev('GPU_QUEUE_BUSY') and state['worker_wakes']==1
             put(output,0xabcdef)
             if case=='timeout-then-late-record':
                 state['available']=False
                 assert call('gpu_queue_wait',1,output,10)==ev('GPU_QUEUE_TIMEOUT')
                 assert get(output)==0xabcdef and get(field(q,'pvr_compute_queue','client_owed'))==1
+                assert state['time']==10000 and (state['waits'],state['wakes'],state['expiries'])==(1,0,1),state
                 state['available']=True
+            # The timely record is published 400 us after the client arms its wait.
+            if case=='timely-record':state['available']=False;state['publish_at']=400
             if case=='owed-fault-record':sf(q,'pvr_compute_queue','lost',1)
             assert call('gpu_queue_wait',1,output,10)==ev('GPU_QUEUE_FAULT' if case=='owed-fault-record' else 'GPU_QUEUE_OK')
             assert get(output)==1 and get(field(q,'pvr_compute_queue','client_owed'))==0
+            # Collecting the record publishes once, so lifecycle waiters recheck ownership.
+            assert state['publications']==1,state
+            if case=='timely-record':
+                assert state['time']==400 and (state['waits'],state['wakes'],state['expiries'])==(1,1,0),state
+            elif case=='owed-fault-record':assert not state['waits'],state
     results.append(dict(case=case,passed=True,model=state))
 a.output.parent.mkdir(parents=True,exist_ok=True)
 a.output.write_text(json.dumps(dict(passed=True,physical_access=False,

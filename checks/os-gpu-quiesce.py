@@ -16,7 +16,7 @@ GATE_RUNS = [['--image', '{elf:ret-gpu}', '--output', '{output}']]
 CASES=('ready','owned-job','recovery','manual-closed','cold','refused-create','pending-create',
        'unconstructed','lost-isolation','deadline','missing-primary-queue',
        'pending-client','pending-request','pending-reply','irq-wake','irq-deferred',
-       'thermal-peer-drain','thermal-peer-stall','thermal-late-peer')
+       'thermal-peer-drain','thermal-peer-stall','thermal-late-peer','thermal-busy-cleared-before-arm')
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--image',type=Path,required=True)
 p.add_argument('--output',type=Path,required=True)
@@ -24,7 +24,7 @@ p.add_argument('--case',action='append',choices=CASES)
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
 types={'ss_application','board_application','a733_board_session','pvr_gpu_service','pvr_compute_queue',
        'a733_gpu_queue','a733_gpu_platform','a733_gpu_backend','pvr_gpu_service_request','pvr_gpu_service_reply',
-       'pvr_gpu_service_client','pvr_compute_queue_client'}
+       'pvr_gpu_service_client','pvr_compute_queue_client','pvr_gpu_service_config','pvr_compute_fast'}
 image=Image(a.image,types);enums={}
 with a.image.open('rb') as f:
     dwarf=ELFFile(f).get_dwarf_info()
@@ -58,6 +58,9 @@ for case in a.case or CASES:
         sf(gpu,'gpu_private','opened',1);sf(gpu,'gpu_private','epoch',3,8)
         sf(service,'pvr_gpu_service','phase',enums['PVR_GPU_SERVICE_READY'])
         sf(service,'pvr_gpu_service','epoch',3,8);sf(service,'pvr_gpu_service','published_epoch',3,8)
+        sf(field(service,'pvr_gpu_service','config'),'pvr_gpu_service_config','compute_queue',q,8)
+        sf(field(service,'pvr_gpu_service','config'),'pvr_gpu_service_config','job_irq_ack',1,8)
+        sf(q,'pvr_compute_queue','phase',enums['PVR_COMPUTE_QUEUE_READY'])
         sf(q,'pvr_compute_queue','create_done',1);sf(q,'pvr_compute_queue','generation',1)
         sf(q,'pvr_compute_queue','completions',0x8800,8)
         sf(q,'pvr_compute_queue','slot_state',enums['PVR_COMPUTE_QUEUE_IDLE'])
@@ -99,6 +102,8 @@ for case in a.case or CASES:
     names=('board_live','a733_smp_counter','xTaskGetTickCount','xTaskGetCurrentTaskHandle','uxQueueMessagesWaiting',
            'gpu_queue_wait','gpu_queue_context_create','vTaskDelay','a733_gpu_backend_stopped',
            'pvr_gpu_service_send_epoch','pvr_gpu_service_collect','os_thermal_throttled')
+    if 'pvr_gpu_service_wait_event' in image.symbols:
+        names+=('pvr_gpu_service_wait_event','pvr_gpu_service_event_sequence','pvr_gpu_service_event_phase')
     hooks={image.address(name):name for name in names}
     def hook(uc,address,size,unused):
         name=hooks.get(address)
@@ -123,6 +128,19 @@ for case in a.case or CASES:
             sf(service,'pvr_gpu_service','phase',enums['PVR_GPU_SERVICE_READY'])
             sf(service,'pvr_gpu_service','published_epoch',1,8)
             sf(q,'pvr_compute_queue','slot_state',enums['PVR_COMPUTE_QUEUE_IDLE']);ret(enums['GPU_QUEUE_OK'])
+        elif name=='pvr_gpu_service_event_sequence':ret(state['delays'])
+        elif name=='pvr_gpu_service_event_phase':ret(get(field(service,'pvr_gpu_service','phase')))
+        elif name=='pvr_gpu_service_wait_event':
+            state['delays']+=1
+            if case=='thermal-peer-stall':state['time']=args[2];ret(1)
+            else:
+                state['time']+=1000
+                if case=='thermal-peer-drain':
+                    sf(peer,'pvr_compute_queue_client','client_owed',0)
+                    sf(peer,'pvr_compute_queue_client','slot_state',enums['PVR_COMPUTE_QUEUE_IDLE'])
+                sf(q,'pvr_compute_queue','recovering',0)
+                sf(field(q,'pvr_compute_queue','fast'),'pvr_compute_fast','locked',0)
+                sf(service,'pvr_gpu_service','published_epoch',4,8);ret(0)
         elif name=='vTaskDelay':
             state['time']+=1000;state['delays']+=1
             if case=='thermal-peer-drain':
@@ -135,9 +153,13 @@ for case in a.case or CASES:
             state['requests'].append(op);state['ticket']+=1;put(args[4],state['ticket'],8);ret(1)
         elif name=='pvr_gpu_service_collect':
             state['time']+=1000
-            sf(args[2],'pvr_gpu_service_reply','result',enums['PVR_GPU_SERVICE_BUSY'] if case=='thermal-late-peer' and state['ticket']==1 else enums['PVR_GPU_SERVICE_OK'])
+            sf(args[2],'pvr_gpu_service_reply','result',enums['PVR_GPU_SERVICE_BUSY'] if case in ('thermal-late-peer','thermal-busy-cleared-before-arm') and state['ticket']==1 else enums['PVR_GPU_SERVICE_OK'])
             sf(args[2],'pvr_gpu_service_reply','phase',enums['PVR_GPU_SERVICE_STOPPED'])
-            sf(args[2],'pvr_gpu_service_reply','epoch',get(field(gpu,'gpu_private','epoch'),8),8);ret(1)
+            sf(args[2],'pvr_gpu_service_reply','epoch',get(field(gpu,'gpu_private','epoch'),8),8)
+            if case=='thermal-late-peer' and state['ticket']==1:
+                sf(field(q,'pvr_compute_queue','fast'),'pvr_compute_fast','locked',1)
+            if case=='thermal-busy-cleared-before-arm':sf(q,'pvr_compute_queue','phase',enums['PVR_COMPUTE_QUEUE_READY'])
+            ret(1)
         else:raise AssertionError(name)
     u.hook_add(UC_HOOK_CODE,hook);u.reg_write(UC_ARM64_REG_SP,0x8001f000);u.reg_write(UC_ARM64_REG_LR,0x80000000)
     u.emu_start(image.address('os_gpu_queue_thermal' if case.startswith('thermal-') else 'os_gpu_queue_quiesce'),0x80000000,count=5000000)
@@ -150,8 +172,8 @@ for case in a.case or CASES:
     elif case=='thermal-peer-stall':
         assert result&0xffffffff==0xffffffff and not state['requests'] and state['time']<=1010000
         assert get(field(peer,'pvr_compute_queue_client','client_owed'))==1
-    elif case=='thermal-late-peer':
-        assert result==0 and state['delays']==1 and state['requests']==[enums['PVR_GPU_SERVICE_CLOSE']]*2
+    elif case in ('thermal-late-peer','thermal-busy-cleared-before-arm'):
+        assert result==0 and state['delays']==(case=='thermal-late-peer') and state['requests']==[enums['PVR_GPU_SERVICE_CLOSE']]*2,(case,result,state)
         assert state['deadlines'][0]==state['deadlines'][1]
         assert not get(field(gpu,'gpu_private','failed')) and get(field(gpu,'gpu_private','parked'))==1
     else:assert bool(result)==success,(case,result,state)

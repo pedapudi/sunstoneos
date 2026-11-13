@@ -195,6 +195,14 @@ enum a733_i2s_resource_result a733_audio_parent_poll(struct a733_audio_parent *p
 }
 
 enum { R_EXCLUDE, R_STOP, R_AUDIO, R_REFERENCE, R_DONE };
+uint64_t a733_audio_parent_sample_at(const struct a733_audio_parent *p)
+{
+    if(!p||!p->initialized||p->failed||p->retire_deadline)return 0;
+    /* poll requires strictly more than 3 us between LOCK samples and more
+     * than 20 us before the settled output gate is enabled. */
+    uint64_t delay=p->stage==P_LOCK?4:p->stage==P_SETTLE?21:0;
+    return delay&&p->wait_since<=UINT64_MAX-delay?p->wait_since+delay:0;
+}
 static enum a733_i2s_resource_result retire_release(struct a733_audio_parent *p,
     struct a733_audio_token *token)
 {

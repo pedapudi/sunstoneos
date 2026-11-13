@@ -74,8 +74,11 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--port-build',type=Path)
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=False)
+    # The service supervisor uses the OS's declared task set. Select that
+    # same reservation in both the runtime and every mutation build.
+    owner_defines=['SUNSTONE_A733_OS=1']
     exe=host_rtos.build(args.output,['checks/deadline-host.c','runtime/deadline.c'],'deadline-host',
-                        includes=[ROOT/'apps/os'])
+                        includes=[ROOT/'apps/os'],defines=owner_defines)
     host=''
     for scenario in ('runtime','services'):
         done=subprocess.run([str(exe),scenario],capture_output=True,text=True,env=environment())
@@ -91,9 +94,9 @@ def main():
         ('wake-every-due-owner','runtime','runtime/deadline.c','if(d&&d<=now&&(!first||d<first)){first=d;due=&slots[i];}',
          'if(d&&d<=now){first=d;due=&slots[i];}')):
         sources=['checks/deadline-host.c','runtime/deadline.c']
-        defines=[]
+        defines=list(owner_defines)
         if source.startswith('apps/'):
-            defines=['SERVICES_SOURCE="%s"'%host_rtos.mutated(args.output,source,old,new,name+'.c')]
+            defines+=['SERVICES_SOURCE="%s"'%host_rtos.mutated(args.output,source,old,new,name+'.c')]
         else:
             sources[1]=host_rtos.mutated(args.output,source,old,new,name+'.c')
         mutant=host_rtos.build(args.output,sources,'control-'+name,includes=[ROOT/'apps/os'],defines=defines,flags=['-w'],deadline=True)

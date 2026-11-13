@@ -6,7 +6,9 @@ This audit covers the I/O paths under `drivers/`, `platform/`, `runtime/` and `a
 
 **Software evidence:** host.
 
-**Board-qualified scope:** None.
+**Board-qualified scope:** Finite NPU recognition, thermal capture, GPU lifecycle,
+read-only SD and CPU timer/notification composition have passing owner records.
+Comparative driver latency, CPU cost and idle power remain unqualified.
 
 Physical driver timing and idle power are unmeasured. Host models cover the selected ready-step, notification and deadline changes.
 
@@ -17,21 +19,22 @@ Physical driver timing and idle power are unmeasured. Host models cover the sele
 | JPEG ready programming in one advancing poll | host-tested | 659 writes in one call | `driver-realtime-audit-ranked-findings` in [driver-realtime-audit.jsonl](../evidence/driver-realtime-audit.jsonl) |
 | USB serial and UVC ready-step waits | host-tested | at most 32 ready passes before a precise wait | same record, `driver-realtime-audit-host-checks` |
 | Display validation once per prepare, request and replay | host-tested | walks per prepare, start and stop: 13 to 3 | same records |
-| Open findings (USB0, SD, DMA, audio, G2D, CE, other families) | open | counted costs, no board measurement | `driver-realtime-audit-ranked-findings`, `driver-realtime-audit-other-families` |
+| Native NPU, thermal, GPU and read-only SD owner waits | finite board scope | zero idle timer wakes on observed NPU waits; zero wakes in the retired SD observation | [NPU](../evidence/npu-owner-events.jsonl), [thermal](../evidence/thermal-owner-events.jsonl), [GPU](../evidence/gpu-owner-events.jsonl), [SD](../evidence/sd-owner-events.jsonl) |
+| Remaining findings (USB0, DMA, audio, G2D, CE, other families) | open | counted costs, incomplete physical scope | `driver-realtime-audit-ranked-findings`, `driver-realtime-audit-other-families` |
 | Latency, CPU cost and idle current on admitted paths | open | none measured | `driver-realtime-audit-board-comparisons` (not run) |
 
 ## Open work
 
 1. Deliver USB0 device IRQs to the owner and notify application-reply publication. A precise deadline covers protocol and health timers.
 2. Add a bounded EL0 privileged serial submission path and more than one outstanding TX per endpoint.
-3. Route SMHC command, data and IDMA completion to the SD owner, wake requests directly and batch ready state transitions. Storage writes need separate coordinator review.
-4. Admit DMA profiles once, submit from caller context and deliver completion fences, keeping the 25 microsecond masked-region and 250 microsecond DMA delivery targets. Coordinate with the latency work.
-5. Notify the audio owner on mailbox publication and DMA period or reply completion, and use a precise stop deadline.
+3. Qualify read-only SD completion timing and the separate writer path. The read-only binding routes INTID193 and has a verified file-load record; storage writes need separate coordinator review.
+4. Establish current nonsecure DMA authority, then qualify the implemented interrupt completion and precise-deadline path against the 25 microsecond masked-region and 250 microsecond delivery targets.
+5. Physically validate the [event-driven audio owner](../designs/dma-audio-owner-events.md) after DMA authority and input prerequisites are met.
 6. Replace the tick-paced display replay and per-MMIO validation checks.
 7. Notify G2D readout by task-end IRQ and batch its copy and guard scans; a 720p frame needs 113 copy wakes.
 8. Carry authenticated lengths into native CE cache synchronization and use the CE completion IRQ; a 16-byte AES task maintains 7,872 bytes of cache ranges.
 9. Integrate the reviewed xHCI close and drain commit `13897638` and the JPEG INTID 81 wakeup commit `3d33b607` after the empty-port runs.
-10. Replace the remaining tick polling in the USB decoder frame lifetime, I2C, SPI, UART, PCIe/NVMe, network, GPU owner, NPU owner, thermal owner and camera paths; the history lists each location.
+10. Bind the [remaining provider waits](../designs/remaining-owner-waits.md) and qualify physical [network](../designs/network-owner-events.md) and [headset](../designs/bluetooth-uart-events.md) events. USB decoder, SPI, PCIe/NVMe and camera paths retain separate open work. Measure long quiet-state owner rates and physical WFI residency; finite workloads and host wait cases do not establish them.
 11. Measure baseline and candidate latency, throughput, CPU cost and idle current on admitted device paths, which need the USB, video and display prerequisites in [USB status](usb.md), [video status](video.md) and [display status](display-g2d.md).
 
 ## Evidence

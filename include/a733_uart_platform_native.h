@@ -20,7 +20,7 @@ static inline int a733_uart_platform_native_address(unsigned port,uintptr_t a,un
     if (a>=uart && a<=uart+0xc0) {
         switch (a-uart) {
         case 0:case 4:case 8:case 0xc:case 0x10:case 0xa4:case 0x88:case 0x8c:return 1;
-        case 0x14:case 0x18:case 0x7c:return !writing;
+        case 0x14:case 0x18:case 0x7c:case 0x84:return !writing;
         case 0xc0:return port && port<7; /* RS485 control: RTS-capable ports. */
         default:return 0;
         }

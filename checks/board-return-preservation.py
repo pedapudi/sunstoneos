@@ -166,6 +166,11 @@ def main():
             else:
                 self.put(geo['output_address'], b'bad' if self.variant=='output-malformed' else
                          struct.pack('<7Q',0x31544c5553455241,1,64,epoch,generation,1,8)+b'complete')
+            if self.variant.startswith('gpu-'):
+                gpu = struct.pack('<8Q', 0x3152475033333741, 1, 64, epoch, generation, 7, 63, 960000)
+                if self.variant != 'gpu-legacy':
+                    gpu += struct.pack('<4Q', 2 if self.variant=='gpu-telemetry-malformed' else 19, 7, 3, 1000000)
+                self.put(0x41200200, gpu)
             if has_npu:
                 native_stop=bytearray(sdk_stop if self.variant=='npu-sdk' else stop)
                 if self.variant=='npu-mismatch':
@@ -204,19 +209,22 @@ def main():
               'input_regions':[{'address':0x46000000,'bytes':4096}], 'uploads':[(0x41000000,source)],
               'launch':['exe','0x52000'],'watchdog':{'mode':0xb1,'session_seconds':1},
               'epoch':epoch,'generation':generation}
+        if variant.startswith('gpu-'):
+            plan['geometry'] = dict(geo, gpu_receipt={'address': 0x41200200,
+                'bytes': 64 if variant=='gpu-legacy' else 96, 'allow_untouched': False})
         plan['preserve_regions']=images.preservation_regions(plan)
         return plan
 
     source=args.out/'model.bin';source.write_bytes(b'MODEL ONLY')
     variants=['normal','output-malformed','thermal-malformed','retirement-invalid','backup-corrupt',
               'range-omitted','restore-readback','watchdog','late-fault','decoder-bound',
-              'failure-return','failure-return-unlinked']
+              'failure-return','failure-return-unlinked','gpu-legacy','gpu-extended','gpu-telemetry-malformed']
     if has_npu:variants.extend(('npu-sdk','npu-late-fault','npu-mismatch','npu-refused','npu-telemetry-malformed',
                                 'npu-unstarted-no-failure',*UNSTARTED))
     else:variants=[v for v in variants if v not in UNSTARTED]
     # Development runs save and restore no DRAM; these variants cover every way a run can end.
     development=['normal','output-malformed','retirement-invalid','late-fault','failure-return','failure-return-unlinked',
-                 'watchdog','decoder-bound']
+                 'watchdog','decoder-bound','gpu-legacy','gpu-extended','gpu-telemetry-malformed']
     if has_npu:development.append('npu-sdk')
     for preserve,variant in [(True,v) for v in variants]+[(False,v) for v in development]:
         evidence=args.out/(variant if preserve else 'development-'+variant)
@@ -245,7 +253,15 @@ def main():
              contextlib.redirect_stdout(io.StringIO()):
             result=board.run_image(options,backend)
         good=variant in ('normal','output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed','npu-sdk','decoder-bound',
+                         'gpu-legacy','gpu-extended','gpu-telemetry-malformed',
                          'failure-return','failure-return-npu-unstarted')
+        if variant.startswith('gpu-'):
+            decoded = result['return_report']
+            assert (evidence/'gpu-report.bin').stat().st_size == (64 if variant=='gpu-legacy' else 96)
+            assert result['rails_restored'] and (not preserve or result['dram_restored'])
+            assert decoded['gpu_capture_status'] == ('malformed' if variant=='gpu-telemetry-malformed' else 'decoded')
+            if variant=='gpu-extended':
+                assert decoded['gpu']['owner_waits']['idle_notification_wakes_per_second'] == 3
         if not preserve:
             owner=owners[0]
             assert result['dram_mode']=='development',result
@@ -257,13 +273,13 @@ def main():
             if variant not in ('npu-sdk','decoder-bound'):
                 assert not any(e[0]=='write-restore' for e in owner.events if isinstance(e,tuple)),variant
             assert bool(result.get('rails_restored'))==good,(variant,result)
-            assert result['outcome']==('returned' if variant in ('normal','npu-sdk','decoder-bound') else
+            assert result['outcome']==('returned' if variant in ('normal','npu-sdk','decoder-bound','gpu-legacy','gpu-extended') else
                                       'failure-return' if variant=='failure-return' else
                                       'watchdog-reset' if variant=='watchdog' else
-                                      'failure-return' if variant in ('output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed') else 'host-error'),(variant,result)
+                                      'failure-return' if variant in ('output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed','gpu-telemetry-malformed') else 'host-error'),(variant,result)
             # No DRAM was promised, so only unproven retirement quarantines.
             assert result['quarantined']==(variant=='retirement-invalid'),(variant,result)
-            assert bool(result.get('native_retirement_validated'))==(variant in ('normal','output-malformed','failure-return','decoder-bound','npu-sdk')),(variant,result)
+            assert bool(result.get('native_retirement_validated'))==(variant in ('normal','output-malformed','failure-return','decoder-bound','npu-sdk','gpu-legacy','gpu-extended','gpu-telemetry-malformed')),(variant,result)
             if good:
                 assert result['dram_unsaved'] and (evidence/'output-record.bin').exists() and (evidence/'return-report.bin').exists()
                 assert any(bytes(data)!=owner.saved[a] for a,data in owner.memory),'development run restored saved DRAM'
@@ -277,10 +293,10 @@ def main():
         assert result['dram_mode']=='preserved' and (variant!='normal' or len(result['dram_backups'])>=1),result
         assert result.get('dram_restored',False)==good,(variant,result)
         assert bool(result.get('rails_restored'))==good,(variant,result)
-        assert result['outcome']==('returned' if variant in ('normal','npu-sdk','decoder-bound') else
+        assert result['outcome']==('returned' if variant in ('normal','npu-sdk','decoder-bound','gpu-legacy','gpu-extended') else
                                   'failure-return' if variant in ('failure-return','failure-return-npu-unstarted') else
                                   'watchdog-reset' if variant=='watchdog' else
-                                  'failure-return' if variant in ('output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed') else 'host-error'),(variant,result)
+                                  'failure-return' if variant in ('output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed','gpu-telemetry-malformed') else 'host-error'),(variant,result)
         # A watchdog reset returns a fresh ROM instance with DRAM lost: nothing to restore, nothing to quarantine.
         assert result['quarantined']==(not good and variant!='watchdog'),(variant,result)
         if variant=='watchdog':assert result['dram_lost'] and result['rom_returned'] and result['dram_released_by_reset']
