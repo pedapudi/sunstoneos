@@ -246,6 +246,20 @@ int main(int argc, char **argv)
     assert(fwrite(&interrupted, sizeof(interrupted), 1, file) == 1);
     assert(fwrite(padding, 1, bytes, file) == bytes);
     assert(fclose(file) == 0);
+    /* The observer runs late: 16 guarded dispatches after running reuse every
+     * ring slot before the window is read. The window must name the overrun. */
+    irq(0, 40000); select_task(0, 40020, 4);
+    for (unsigned i = 0; i < SS_SCHED_TRACE_HISTORY; ++i) {
+        clock_value = 40200 + i * 20;
+        uint64_t late = ss_sched_trace_dispatch_begin(0, 1, 0x41005000, 0x3c0);
+        clock_value += 5; ss_sched_trace_dispatch_end(0, late);
+    }
+    ss_sched_trace_wake_sample(0, 39000, 40100, 4);
+    static struct ss_sched_trace_report late_observer;
+    ss_sched_trace_snapshot(&late_observer);
+    assert(late_observer.wake[0].maximum.ready == 39000 && !late_observer.cpu0_window.irq_count);
+    assert((late_observer.cpu0_window.flags & SS_SCHED_WINDOW_IRQ_OVERRUN) &&
+           "dispatches after running that replace retained rows must be named");
     for (unsigned core = 0; core < SS_SCHED_TRACE_CORES; ++core) ss_sched_trace_freeze(core);
     for (unsigned core = 0; core < SS_SCHED_TRACE_CORES; ++core)
         assert(!ss_sched_trace_irq_begin(core, 30000));

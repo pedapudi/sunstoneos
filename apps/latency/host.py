@@ -410,8 +410,10 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
         window_offset = offset + (1 + 8 * 10) * 8
         irq_count, switch_count, window_flags, capacity = struct.unpack_from('<4Q', payload, window_offset)
         window_offset += 32
-        if capacity != history_capacity or max(irq_count, switch_count) > capacity or window_flags & ~7:
+        if capacity != history_capacity or max(irq_count, switch_count) > capacity or window_flags & ~15:
             raise ValueError('scheduler CPU0 history window header differs')
+        if window_flags & 8 and irq_count == capacity:
+            raise ValueError('scheduler CPU0 window claims an overrun but retains every row')
         maximum = wake_cores[0]['maximum']
         ready, running = maximum['ready'], maximum['running']
         irq_rows, switch_rows, owner_sequences = [], [], set()
@@ -453,7 +455,7 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
                 if origin:
                     if origin['owner_end'] > begin:
                         raise ValueError('scheduler CPU0 selection precedes its owner exit')
-                elif not window_flags & 5:
+                elif not window_flags & 13:
                     raise ValueError('scheduler CPU0 selection origin is missing without history loss')
             switch_rows.append({'begin': begin, 'end': end, 'irq_sequence': irq_sequence,
                 'selected_slot': slot, 'origin': 'irq' if irq_sequence else 'svc',
@@ -466,11 +468,12 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
                 selected['begin'], selected['end'], selected['irq_sequence'], selected['selected_slot']):
             raise ValueError('scheduler CPU0 window omits the latest selecting event')
         latest = histories[0]['latest_sequence']
-        if latest and latest not in owner_sequences and not window_flags & 5:
+        if latest and latest not in owner_sequences and not window_flags & 13:
             raise ValueError('scheduler CPU0 window omits the latest owner exit')
         cpu0_window = {'capacity': capacity, 'flags': window_flags,
             'irq_prefix_lost': bool(window_flags & 1), 'switch_prefix_lost': bool(window_flags & 2),
-            'incomplete': bool(window_flags & 4), 'ready': ready, 'running': running,
+            'incomplete': bool(window_flags & 4), 'irq_overrun': bool(window_flags & 8),
+            'ready': ready, 'running': running,
             'scope': 'outer C dispatch and ordinary owner exits',
             'irqs': irq_rows, 'selections': switch_rows}
     return {'version': version, 'waits_capacity': waits, 'ticks_capacity': tick_capacity,

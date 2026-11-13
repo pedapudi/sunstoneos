@@ -202,9 +202,13 @@ static void controller(void *argument)
     }
     const struct ss_sched_trace_cpu0_window *window = &result.scheduler.cpu0_window;
     configASSERT(window->capacity == SS_SCHED_TRACE_HISTORY);
-    configASSERT(window->irq_count && window->irq_count <= window->capacity && window->switch_count <= window->capacity);
-    configASSERT(!(window->flags & ~(SS_SCHED_WINDOW_IRQ_PREFIX_LOST |
-        SS_SCHED_WINDOW_SWITCH_PREFIX_LOST | SS_SCHED_WINDOW_INCOMPLETE)));
+    /* A late observer can find every retained row replaced by later dispatches;
+     * the window then says so instead of holding rows. */
+    configASSERT(window->irq_count || (window->flags & SS_SCHED_WINDOW_IRQ_OVERRUN));
+    configASSERT(window->irq_count <= window->capacity && window->switch_count <= window->capacity);
+    configASSERT(!(window->flags & SS_SCHED_WINDOW_IRQ_OVERRUN) || window->irq_count < window->capacity);
+    configASSERT(!(window->flags & ~(SS_SCHED_WINDOW_IRQ_PREFIX_LOST | SS_SCHED_WINDOW_SWITCH_PREFIX_LOST |
+        SS_SCHED_WINDOW_INCOMPLETE | SS_SCHED_WINDOW_IRQ_OVERRUN)));
     number("cpu0_window_irqs=", window->irq_count);
     number(" selections=", window->switch_count);
     number(" flags=", window->flags);

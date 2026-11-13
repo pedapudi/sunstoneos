@@ -138,10 +138,14 @@ struct ss_sched_trace_wake_history {
     uint64_t latest_start, latest_end, latest_work, latest_result, latest_sequence;
     uint64_t trailing_count, trailing_work, irq_overwritten, switch_overwritten, future_irqs;
 };
+/* The window is read when the observer runs, after running. IRQ overrun
+ * means dispatches that began after running reused ring slots, replacing
+ * earlier dispatches; a late observer can leave fewer rows, down to none. */
 enum ss_sched_trace_window_flag {
     SS_SCHED_WINDOW_IRQ_PREFIX_LOST = 1u,
     SS_SCHED_WINDOW_SWITCH_PREFIX_LOST = 2u,
-    SS_SCHED_WINDOW_INCOMPLETE = 4u
+    SS_SCHED_WINDOW_INCOMPLETE = 4u,
+    SS_SCHED_WINDOW_IRQ_OVERRUN = 8u
 };
 /* CPU0 retains complete C dispatches, including exits skipped by the PMR
  * guard. descriptor packs INTID in bits 0..15 and saved SPSR in bits 16..47.

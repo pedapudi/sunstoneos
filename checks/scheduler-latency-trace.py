@@ -549,9 +549,17 @@ def run(decode):
     lost['window']['irqs'] = []
     accepted('version 5 exposes unavailable IRQ history', lost,
              lambda value: value['cpu0_wake_window']['incomplete'])
+    overrun = copy.deepcopy(v5)
+    overrun['window']['header'][:3] = [0, 2, 9]
+    overrun['window']['irqs'] = []
+    accepted('version 5 names dispatches after running that replaced the window', overrun,
+             lambda value: value['cpu0_wake_window']['irq_overrun'] and not value['cpu0_wake_window']['irqs'])
+    bad = copy.deepcopy(v5); bad['window']['header'][0] = 16; bad['window']['header'][2] = 8
+    bad['window']['irqs'] = bad['window']['irqs'] + [bad['window']['irqs'][-1]] * 13
+    rejected('an overrun window cannot retain every row', pack(bad))
     for name, field, value in (('IRQ count exceeds capacity', 0, 17),
                                ('selection count exceeds capacity', 1, 17),
-                               ('unknown window flags', 2, 8), ('window capacity differs', 3, 15)):
+                               ('unknown window flags', 2, 16), ('window capacity differs', 3, 15)):
         bad = copy.deepcopy(v5); bad['window']['header'][field] = value
         rejected(name, pack(bad))
     for name, field, value in (('invalid interrupt ID', 1, 1023),
@@ -664,7 +672,7 @@ def check_history(source, output):
     interrupted = decode(interrupted_payload.read_bytes(), FREQUENCY)
     assert interrupted['wake_chains'][0]['maximum']['snapshot_incomplete']
     assert interrupted['wake_chains'][0]['maximum']['class'] == 'unmatched'
-    assert interrupted['cpu0_wake_window']['incomplete']
+    assert interrupted['cpu0_wake_window']['incomplete'] and interrupted['cpu0_wake_window']['irq_overrun']
     # Preserve the old unconditional-reset behavior behind the new Boolean
     # signature: this must fail when an IRQ arrives inside open owner work.
     text = recorder.read_text()

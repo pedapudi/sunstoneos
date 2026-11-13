@@ -392,7 +392,11 @@ static void cpu0_window(uint64_t ready, uint64_t running,
             out->flags |= SS_SCHED_WINDOW_INCOMPLETE;
             continue;
         }
-        if (words[2] > running) continue;
+        if (words[2] > running) {
+            /* A dispatch after running in a reused slot replaced an earlier one. */
+            if (sequence > SS_SCHED_TRACE_HISTORY) out->flags |= SS_SCHED_WINDOW_IRQ_OVERRUN;
+            continue;
+        }
         if (words[3] > running || words[5] > running || words[6] > running) continue;
         if (!words[3] || (words[5] && !words[6])) {
             out->flags |= SS_SCHED_WINDOW_INCOMPLETE;
