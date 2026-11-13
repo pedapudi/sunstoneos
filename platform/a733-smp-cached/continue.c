@@ -8,6 +8,9 @@
 #include "a733_fault.h"
 #endif
 #include <stddef.h>
+#ifdef SUNSTONE_LATENCY_CAUSE
+#include "latency_cause.h"
+#endif
 #define MONITOR __attribute__((section(".bss.a733_smp_monitor"),aligned(128)))
 #define BIT(n) (UINT64_C(1)<<(n))
 volatile struct a733_cached_record a733_cached_records[8] MONITOR;
@@ -137,6 +140,18 @@ static void local_boot(unsigned c,uint64_t epoch)
     uint64_t sctlr,ttbr;
     __asm__ volatile("mrs %0,sctlr_el3\n mrs %1,ttbr0_el3":"=r"(sctlr),"=r"(ttbr));
     a733_cached_records[c].sctlr3=sctlr;a733_cached_records[c].ttbr3=ttbr;
+#ifdef SUNSTONE_LATENCY_CAUSE
+    {
+        /* Read only; S3_0_C15_C4_3 is CLUSTERPARTCR_EL1 and S3_0_C15_C4_0 is
+         * CLUSTERTHREADSID_EL1 (DSU TRM 100453). EL3 translation is on here. */
+        struct ss_latency_cause_dsu *d=&ss_latency_cause_dsu_boot[c];
+        __asm__ volatile("mrs %0,S3_0_C15_C3_1\n mrs %1,S3_0_C15_C3_0\n mrs %2,S3_0_C15_C4_3\n"
+                         " mrs %3,S3_0_C15_C4_0\n mrs %4,actlr_el3"
+                         :"=&r"(d->clusteridr),"=&r"(d->clustercfr),"=&r"(d->clusterpartcr),
+                          "=&r"(d->clusterthreadsid),"=r"(d->actlr_el3)::"memory");
+        d->captured=1;
+    }
+#endif
     sync_memory();a733_cached_records[c].state=3;sync_memory();
     for(unsigned i=0;i<8;++i)for(;;) {
         sync_memory();uint64_t state=a733_cached_records[i].state,now=a733_smp_counter();

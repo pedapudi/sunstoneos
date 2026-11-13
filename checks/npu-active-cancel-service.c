@@ -175,8 +175,8 @@ void kernel_main(void)
     struct a733_npu_buffer buffers[4];
     static const uint32_t addresses[3]={0xe0089000,0xe0004000,0xe010a000};
     for(unsigned i=0;i<3;++i)buffers[i]=(struct a733_npu_buffer){(uintptr_t)command_memory[i],
-        (uintptr_t)command_memory[i],sizeof(command_memory[i]),addresses[i],i?A733_NPU_BUFFER_COMMAND:A733_NPU_BUFFER_BOOTSTRAP};
-    buffers[3]=(struct a733_npu_buffer){(uintptr_t)data+4096,(uintptr_t)data+4096,4096,0xe0087000,A733_NPU_BUFFER_WRITE};
+        (uintptr_t)command_memory[i],sizeof(command_memory[i]),addresses[i],i?A733_NPU_BUFFER_COMMAND:A733_NPU_BUFFER_BOOTSTRAP, 0};
+    buffers[3]=(struct a733_npu_buffer){(uintptr_t)data+4096,(uintptr_t)data+4096,4096,0xe0087000,A733_NPU_BUFFER_WRITE, 0};
     configASSERT(a733_npu_bootstrap(command_memory[0],sizeof(command_memory[0])));
     configASSERT(a733_npu_native_init(&native,0x09000000,0x09000000,arena,sizeof(arena),(uintptr_t)arena,buffers,4,fatal,NULL,memory_tables,sizeof(memory_tables)));
     struct a733_npu_command commands[3];

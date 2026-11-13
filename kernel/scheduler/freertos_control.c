@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include "latency_trace.h"
 #include "latency_pmu.h"
+#include "latency_cause.h"
 
 #define ROUTE_CLOSED (UINT64_C(1) << 63)
 #define ROUTE_COUNT (ROUTE_CLOSED - 1)
@@ -35,8 +36,14 @@ static bool try_lock(struct ss_control_slot *s)
 static void hint(struct ss_control *c, unsigned cpu, unsigned slot)
 {
     atomic_fetch_or_explicit(&c->pending[cpu].word[slot / 64], UINT64_C(1) << (slot % 64), memory_order_release);
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_sgi_begin(cpu);
+#endif
     ss_owner_barrier(c->backend);
     if (c->backend && c->backend->sgi) c->backend->sgi(c->backend->context, cpu);
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_sgi_end(cpu);
+#endif
 }
 static void all(struct ss_control *c, unsigned slot)
 {
@@ -86,8 +93,14 @@ void ss_control_wake_mask(struct ss_control *c, unsigned cpu, const uint64_t slo
         atomic_fetch_and_explicit(&c->parked[cpu].word[w], ~admitted[w], memory_order_release);
     }
     if (!(admitted[0] | admitted[1])) return;
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_sgi_begin(cpu);
+#endif
     ss_owner_barrier(c->backend);
     if (c->backend && c->backend->sgi) c->backend->sgi(c->backend->context, cpu);
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_sgi_end(cpu);
+#endif
 }
 static void await_fifo_release(struct ss_control *c, unsigned cpu, unsigned slot)
 {
@@ -168,7 +181,12 @@ static void route_adopt(struct ss_control_slot *s)
 void ss_control_init(struct ss_control *c, uint64_t active,
                      const struct ss_owner_backend *b, const struct ss_control_ops *ops)
 {
-    *c = (struct ss_control){ .backend = b, .ops = *ops, .active_mask = active };
+    /* Initialize in place. A compound literal of the whole control (over
+     * 40 KiB) is built on the caller's stack, and each core's stack is 32 KiB. */
+    __builtin_memset(c, 0, sizeof *c);
+    c->backend = b;
+    c->ops = *ops;
+    c->active_mask = active;
 }
 void ss_control_register(struct ss_control *c, unsigned slot,
                          struct ss_owner_descriptor *d, uint64_t incarnation,

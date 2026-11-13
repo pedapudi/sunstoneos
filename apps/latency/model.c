@@ -2,8 +2,9 @@
 #include "task.h"
 #include "platform.h"
 #include "workload.h"
-/* The kit's task creation (include/sunstone_app.h) on the model images, which have no application address space and do not
- * link apps/os/application.c: the same FreeRTOS creation, so the workload shared with the OS image builds unchanged. */
+#include "sunstone_app.h"
+
+/* The QEMU models have no OS and no address spaces; the kit's task creation is the direct FreeRTOS call. */
 void *ss_task_create_static_affinity_set(void (*entry)(void *), const char *name, uint32_t stack_words, void *arg,
                                          unsigned long priority, void *stack, void *tcb, unsigned long affinity)
 {
@@ -38,7 +39,19 @@ static void controller(void *argument)
 #ifdef SUNSTONE_SCHED_PMU
     ss_sched_pmu_arm();
 #endif
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_arm();
+#endif
     latency_workload_run(&result);
+#ifdef SUNSTONE_LATENCY_CAUSE
+    configASSERT(result.cause.magic == SS_LATENCY_CAUSE_MAGIC);
+    configASSERT(!(result.cause.flags & SS_CAUSE_SNAPSHOT_INCOMPLETE));
+    configASSERT(result.cause.bench.done && result.cause.bench.status == SS_CAUSE_OK);
+    for (unsigned sample = 0; sample < SS_CAUSE_CASES; ++sample)
+        configASSERT(result.cause.bench.count[sample] == SS_LATENCY_CAUSE_SAMPLES);
+    configASSERT(result.ping.status == LATENCY_CAUSE_PING_OK);
+    platform_puts("PASS latency cause model: complete barrier samples and same/cross-type line exchanges; functional evidence only\n");
+#endif
 #ifdef SUNSTONE_SCHED_PMU
     configASSERT(result.pmu_windows.magic == SS_SCHED_PMU_MAGIC);
     configASSERT(!(result.pmu_windows.flags & 8));

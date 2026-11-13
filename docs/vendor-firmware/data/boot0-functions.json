@@ -185,7 +185,7 @@
     "0x5d744",
     "0x5d9f0"
    ],
-   "role": "Board clock and power setup. Reads the chip-version nibble at SYSCTRL 0x03000024, selects a CPU rate (0x348 or 0x320), calls the CPU-PLL routine (0x491b8) and NSI setup."
+   "role": "Board clock and power setup. Reads the chip-version nibble at SYSCTRL 0x03000024, selects the DCDC2 voltage in millivolts (0x348 = 840 or 0x320 = 800; the PMIC writes are in docs/vendor-firmware/boot-rom-and-boot0.md), calls the CPU-PLL routine (0x491b8) and NSI setup."
   },
   {
    "addr": "0x49050",
@@ -1323,7 +1323,7 @@
     "0x4993c",
     "0x5d72c"
    ],
-   "role": "DRAM supply setup: compute DRAM_VCC from parameters and program the PMIC rail (0x4b620 regulator path)."
+   "role": "DRAM supply setup: from the selected parameter set, program DCDC7 (1120 mV), ELDO1 (1100 mV) and DCDC6 (DRAM_VCC, 560 mV) on the AXP8191, each voltage then its enable (set 5 values)."
   },
   {
    "addr": "0x5ce50",

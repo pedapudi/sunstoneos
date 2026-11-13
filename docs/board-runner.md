@@ -531,6 +531,15 @@ reads 0 only after VDD_RTC loses power. After each watchdog return the runner
 records the same words, decodes and then clears any gate record, and treats
 the recorded WDT0 mode at gate entry as the mode at reset.
 
+`--marker-clear-test`, which requires `--approved-by coordinator`, tests
+whether software can clear the marker. At first contact, after the marker is
+set and with WDT0 read disarmed, the runner writes `0x16aa0000` to the marker,
+reads it, writes `0x16aa16aa` and reads it again, all in one FEL command.
+Both readbacks are recorded as `marker_clear_test`. If the marker does not
+read `0x16aa` after the second write, the run stops before launch. WDT0 is
+disarmed throughout, so no reset can take the gate's cold path while the
+marker reads clear.
+
 The runner uploads both loads, arms WDT0 in mode `0x41`, sets and reads back
 the session tag and the entry state, and executes `0x52000`. The request image
 sets the vendor RTC request `0x5aa5a55a`. The warm-entry image sets no request

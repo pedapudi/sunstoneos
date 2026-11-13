@@ -30,11 +30,16 @@ def main():
     run(common + ['-O1', '-g', '-pthread', '-fsanitize=address,undefined', *sources, '-o', binary])
     print(run(['/usr/bin/time', '-f', 'peak RSS %M KiB', binary]), end='')
     obj = build / 'control-aarch64.o'
-    run(common + ['--target=aarch64-none-elf', '-march=armv8.1-a+lse', '-ffreestanding', '-O2', '-c', sources[0], '-o', obj])
+    # Control code runs on any task's stack, so no frame may exceed the smallest
+    # task stack. A whole-control compound literal once needed 42 KiB.
+    words = int(re.search(r'#define configMINIMAL_STACK_SIZE\s+(\d+)',
+                          (ROOT / 'include/FreeRTOSConfig.h').read_text())[1])
+    run(common + ['--target=aarch64-none-elf', '-march=armv8.1-a+lse', '-ffreestanding', '-O2',
+                  f'-Wframe-larger-than={words * 8}', '-c', sources[0], '-o', obj])
     dis = run(['llvm-objdump-21', '-d', obj])
     (build / 'control-aarch64.disassembly').write_text(dis)
     assert not re.search(r'\b(?:ldaxr|stlxr|ldxr|stxr)\b', dis)
-    print('scheduler control: AArch64 LSE atomics contain no LL/SC')
+    print(f'scheduler control: AArch64 LSE atomics contain no LL/SC; no frame exceeds {words * 8} bytes')
     event_sources = [sources[0], sources[1], ROOT / 'checks/scheduler-control-events.c']
     event_flags = common + ['-O1', '-g', '-fsanitize=address,undefined', '-I', ROOT / 'kernel/scheduler']
     events = build / 'scheduler-control-events'

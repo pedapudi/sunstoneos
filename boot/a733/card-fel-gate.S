@@ -24,6 +24,11 @@ a733_card_fel_gate:
     mov r8,#0                 /* Final value of GP2: zero clears the request. */
     cmp r1,r2
     beq requested
+    /* The runner's boot-once value takes the cold path once, with the marker set. */
+    ldr r2,=A733_CARD_FEL_BOOT_ONCE
+    cmp r1,r2
+    moveq r8,#A733_CARD_FEL_RECORD_ONCE
+    beq cold
     /* An earlier gate record keeps its cold-path flag for this power epoch. */
     lsr r2,r1,#16
     movw r3,#A733_CARD_FEL_STAGE
@@ -166,9 +171,15 @@ cold:
     ldr r5,=0x02050014
     ldr r1,[r5]
     and r1,r1,#0xff
-    orr r8,r1,#A733_CARD_FEL_RECORD_COLD
+    orr r8,r8,r1
+    orr r8,r8,#A733_CARD_FEL_RECORD_COLD
     movt r8,#A733_CARD_FEL_STAGE
+    /* The cold record replaces the boot-once value; boot0 runs only after it reads back. */
     str r8,[r0]
+    dsb sy
+    ldr r2,[r0]
+    cmp r2,r8
+    bne warm
     /* Arm WDT0 in the runner's measured order: output, system reset, mode,
      * restart (docs/watchdog.md; A733 manual 8.3.6.4-8.3.6.7). */
     ldr r2,=0x16aa0002

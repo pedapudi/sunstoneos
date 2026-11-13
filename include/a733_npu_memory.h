@@ -28,6 +28,9 @@ struct a733_npu_buffer {
     size_t bytes;
     uint32_t device;
     enum a733_npu_buffer_role role;
+    /* The NPU MMU page that maps the buffer: 0 or 12 for 4 KiB, 16 for 64 KiB, 20 for 1 MiB. Its CPU and physical address, size
+     * and device address are multiples of the page, and every buffer in one 16 MiB device range uses the same page. */
+    unsigned page_shift;
 };
 struct a733_npu_memory_ops {
     int (*translate)(void *, uintptr_t, int write, struct aarch64_translation *);
