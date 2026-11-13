@@ -149,6 +149,23 @@ static void local_boot(unsigned c,uint64_t epoch)
                          " mrs %3,S3_0_C15_C4_0\n mrs %4,actlr_el3"
                          :"=&r"(d->clusteridr),"=&r"(d->clustercfr),"=&r"(d->clusterpartcr),
                           "=&r"(d->clusterthreadsid),"=r"(d->actlr_el3)::"memory");
+        /* CLUSTERPWRSTAT_EL1, CLUSTERACPSID_EL1, CLUSTERSTASHSID_EL1 and
+         * CLUSTERTHREADSIDOVR_EL1 (DSU TRM 100453_0401, chapter 11). */
+        __asm__ volatile("mrs %0,S3_0_C15_C3_7\n mrs %1,S3_0_C15_C4_1\n mrs %2,S3_0_C15_C4_2\n"
+                         " mrs %3,S3_0_C15_C4_7"
+                         :"=&r"(d->clusterpwrstat),"=&r"(d->clusteracpsid),"=&r"(d->clusterstashsid),
+                          "=r"(d->clusterthreadsidovr)::"memory");
+#ifdef SUNSTONE_LATENCY_L3_PARTITION
+        /* This core's scheme ID: 1 outside the stream mask, else 0. The
+         * scheme takes effect once CPU0 writes CLUSTERPARTCR_EL1 below. */
+        d->threadsid_set=(SUNSTONE_LATENCY_STREAM_MASK>>c&1u)?0:1;
+        __asm__ volatile("msr S3_0_C15_C4_0,%1\n isb\n mrs %0,S3_0_C15_C4_0"
+                         :"=r"(d->threadsid_after):"r"(d->threadsid_set):"memory");
+        if((d->threadsid_after&7u)!=d->threadsid_set) {
+            __asm__ volatile("msr S3_0_C15_C4_0,xzr\n isb":::"memory");
+            failed(c,0x738);
+        }
+#endif
         d->captured=1;
     }
 #endif
@@ -158,6 +175,21 @@ static void local_boot(unsigned c,uint64_t epoch)
         if(state==6 || now<last || now>=boot_values[1])failed(c,7);
         last=now;if(state==3)break;
     }
+#ifdef SUNSTONE_LATENCY_L3_PARTITION
+    /* Every core has captured and set its scheme ID. CPU0 writes the cluster
+     * partition once; any later entry to EL3 clears it (continue.S). */
+    if(!c) {
+        struct ss_latency_cause_dsu *d=&ss_latency_cause_dsu_boot[0];
+        d->partition=SS_LATENCY_CAUSE_L3_PARTCR;
+        __asm__ volatile("msr S3_0_C15_C4_3,%1\n isb\n mrs %0,S3_0_C15_C4_3"
+                         :"=r"(d->partcr_after):"r"(d->partition):"memory");
+        if(d->partcr_after!=d->partition) {
+            __asm__ volatile("msr S3_0_C15_C4_3,xzr\n isb":::"memory");
+            failed(c,0x739);
+        }
+        sync_memory();
+    }
+#endif
     a733_cached_enter_el1(c,epoch,boot_values[1],boot_values[2],s.redistributor);
 }
 void a733_cpu_continue_primary_boot(uint64_t epoch) {local_boot(0,epoch);}

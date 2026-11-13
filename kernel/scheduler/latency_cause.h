@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #define SS_LATENCY_CAUSE_MAGIC UINT64_C(0x5353434155534531)
-#define SS_LATENCY_CAUSE_VERSION 3u
+#define SS_LATENCY_CAUSE_VERSION 4u
 #define SS_LATENCY_CAUSE_CORES 8u
 #define SS_LATENCY_CAUSE_PHASES 2u
 #define SS_LATENCY_CAUSE_SAMPLES 64u
@@ -85,13 +85,25 @@ struct ss_latency_cause_events {
     uint64_t phase_release[SS_LATENCY_CAUSE_PHASES][SS_LATENCY_CAUSE_CORES][SS_LATENCY_CAUSE_EVENTS];
     uint64_t phase_scan[SS_LATENCY_CAUSE_PHASES][SS_LATENCY_CAUSE_CORES][SS_LATENCY_CAUSE_EVENTS];
 };
-/* DynamIQ Shared Unit state that each core reads at EL3 during boot, read
- * only: CLUSTERIDR_EL1 (DSU revision), CLUSTERCFR_EL1, CLUSTERPARTCR_EL1 (L3
- * partition control), CLUSTERTHREADSID_EL1 (this core's scheme ID) and
- * ACTLR_EL3. captured is 1 once the core has stored the five values. */
+/* DynamIQ Shared Unit state that each core reads at EL3 during boot, before
+ * any write: CLUSTERIDR_EL1 (DSU revision), CLUSTERCFR_EL1, CLUSTERPARTCR_EL1
+ * (L3 partition control), CLUSTERTHREADSID_EL1 (this core's scheme ID),
+ * ACTLR_EL3, CLUSTERPWRSTAT_EL1 (L3 portions powered), CLUSTERACPSID_EL1,
+ * CLUSTERSTASHSID_EL1 and CLUSTERTHREADSIDOVR_EL1. captured is 1 once the core
+ * has stored them. A partitioned build (SUNSTONE_LATENCY_L3_PARTITION) then
+ * writes: threadsid_set is the scheme ID this core wrote and threadsid_after
+ * its readback; partition is the CLUSTERPARTCR_EL1 value CPU0 wrote, and CPU0's
+ * partcr_after its readback. All four are 0 in other builds. Any entry to EL3
+ * clears both registers before the image stops (continue.S). */
 struct ss_latency_cause_dsu {
     uint64_t captured, clusteridr, clustercfr, clusterpartcr, clusterthreadsid, actlr_el3;
+    uint64_t clusterpwrstat, clusteracpsid, clusterstashsid, clusterthreadsidovr;
+    uint64_t threadsid_set, threadsid_after, partition, partcr_after;
 };
+/* Way groups 1-3 private to scheme 0 (bits 1-3), group 0 private to scheme 1
+ * (bit 4): DSU TRM 100453_0401 section 11.12. Cores outside the stream mask
+ * use scheme 1. */
+#define SS_LATENCY_CAUSE_L3_PARTCR UINT64_C(0x1e)
 struct ss_latency_cause_report {
     uint64_t magic, version, bytes, cores, phases, cases, samples, flags;
     struct ss_latency_cause_core core[SS_LATENCY_CAUSE_CORES];
@@ -103,7 +115,7 @@ struct ss_latency_cause_report {
     struct ss_latency_cause_dsu dsu[SS_LATENCY_CAUSE_CORES];
 };
 _Static_assert(sizeof(struct ss_latency_cause_events) == 2528u, "cause event section layout");
-_Static_assert(sizeof(struct ss_latency_cause_report) == 16816u, "cause report wire layout");
+_Static_assert(sizeof(struct ss_latency_cause_report) == 17328u, "cause report wire layout");
 
 #ifdef SUNSTONE_LATENCY_CAUSE
 #if !defined(SUNSTONE_LATENCY) || !defined(SUNSTONE_SCHED_LATENCY_TRACE)
