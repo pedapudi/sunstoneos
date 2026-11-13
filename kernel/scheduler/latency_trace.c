@@ -99,6 +99,10 @@ void ss_sched_trace_command(unsigned core, const struct ss_sched_trace_command *
         uint64_t best = best_masked ? row->self_suspend.stamp[6] - row->self_suspend.stamp[3] :
             command_ticks(&row->self_suspend);
         if ((masked && !best_masked) || (masked == best_masked && length > best)) row->self_suspend = *command;
+#ifdef SS_SCHED_TRACE_TEST_EXIT_SUSPEND
+        /* The kept row is the longest; the model checks the forced exit park. */
+        if (command->flags & 128) ss_sched_trace_test_exit_parked[core] = *command;
+#endif
     }
     const uint64_t stage[4] = { command->stamp[1] - command->stamp[0],
         command->stamp[2] - command->stamp[1], command->stamp[4] - command->stamp[3],
@@ -117,6 +121,9 @@ void ss_sched_trace_direct_suspend_begin(unsigned core, const struct ss_sched_tr
     state[core].direct_suspend_active = 1;
     state[core].open_suspend_active = 0;
 }
+#ifdef SS_SCHED_TRACE_TEST_EXIT_SUSPEND
+struct ss_sched_trace_command ss_sched_trace_test_exit_parked[SS_SCHED_TRACE_CORES];
+#endif
 void ss_sched_trace_self_suspend_open(unsigned core, const struct ss_sched_trace_command *command)
 {
     if (!enabled(core)) return;

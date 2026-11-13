@@ -214,6 +214,11 @@ void ss_sched_trace_direct_suspend_begin(unsigned, const struct ss_sched_trace_c
  * parks the task completes it (flags 197); the task's own path closes it. */
 void ss_sched_trace_self_suspend_open(unsigned, const struct ss_sched_trace_command *);
 void ss_sched_trace_self_suspend_parked(unsigned, uint64_t slot);
+#ifdef SS_SCHED_TRACE_TEST_EXIT_SUSPEND
+/* Model test only: the latest self-suspension each core completed at an
+ * exception exit (flags 197), whatever the kept maximum row holds. */
+extern struct ss_sched_trace_command ss_sched_trace_test_exit_parked[SS_SCHED_TRACE_CORES];
+#endif
 void ss_sched_trace_direct_suspend_mark(unsigned);
 void ss_sched_trace_drain_begin(unsigned);
 void ss_sched_trace_drain_end(unsigned);

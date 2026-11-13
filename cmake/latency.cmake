@@ -107,7 +107,11 @@ function(sunstone_latency_partitioned_model target metric)
   endif()
   if(NOT metric)
     sunstone_enable_scheduler_latency_trace(${target})
-    # CPU1's memory task is parked at an SGI exit to test the trace of that path.
+  endif()
+  if(control AND SUNSTONE_SCHED_LATENCY_TRACE)
+    # CPU1's memory task is parked at an SGI exit to test the trace of that
+    # path. The control models take the SGI before the task masks in every
+    # run; the cause model takes it only after, so it cannot force the path.
     target_compile_definitions(${target} PRIVATE SS_SCHED_TRACE_TEST_EXIT_SUSPEND=1)
   endif()
   sunstone_enable_latency_port(${target})
