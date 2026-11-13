@@ -33,7 +33,7 @@
      /* More details at: https://github.com/FreeRTOS/FreeRTOS-Kernel/blob/main/MISRA.md#rule-84 */
      /* coverity[misra_c_2012_rule_8_4_violation] */
 -    portDONT_DISCARD PRIVILEGED_DATA TCB_t * volatile pxCurrentTCBs[ configNUMBER_OF_CORES ];
-+    portDONT_DISCARD PRIVILEGED_DATA TCB_t * volatile pxCurrentTCBs[ configNUMBER_OF_CORES * portCURRENT_TCB_STRIDE ] __attribute__( ( aligned( portCURRENT_TCB_BYTES ) ) );
++    portDONT_DISCARD PRIVILEGED_DATA TCB_t * volatile pxCurrentTCBs[ configNUMBER_OF_CORES * portCURRENT_TCB_STRIDE ] __attribute__( ( aligned( portCURRENT_TCB_BYTES ) ) ); portCURRENT_TCB_KERNEL_GUARD();
      #define pxCurrentTCB    xTaskGetCurrentTaskHandle()
  #endif
  
@@ -155,7 +155,7 @@
 +                            /* xCoreID is the calling core, which keeps the
 +                             * current-task register equal to this entry. */
 +                            portSET_CURRENT_TASK( xCoreID, pxTCB );
-+                            traceCURRENT_TCB_SET( xCoreID, pxTCB );
++                            traceCURRENT_TCB_SET( xCoreID, pxTCB, ( pxTCB->uxTaskAttributes & taskATTRIBUTE_IS_IDLE ) != 0U );
                              xTaskScheduled = pdTRUE;
                          }
                      }

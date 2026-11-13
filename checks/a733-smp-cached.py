@@ -12,7 +12,6 @@ import ctypes
 import hashlib
 import json
 import pickle
-import re
 from pathlib import Path
 import shutil
 import statistics
@@ -24,10 +23,11 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_RE
 from unicorn.arm64_const import *
 ROOT=Path(__file__).resolve().parents[1]
 
-def current_tcb_bytes():
-    """Bytes between two cores' pxCurrentTCBs entries (include/sunstone_current_tcb.h)."""
-    text = (ROOT / 'include/sunstone_current_tcb.h').read_text()
-    return int(re.search(r'#define portCURRENT_TCB_BYTES (\d+)', text).group(1))
+def current_tcb_bytes(symbols):
+    """Bytes between two cores' pxCurrentTCBs entries. The kernel that defines the array names its layout in an
+    absolute symbol (include/sunstone_current_tcb.h): ss_current_tcb_layout_6 for one 64-byte line per core.
+    Without it the image has the unmodified FreeRTOS kernel and 8-byte entries."""
+    return 64 if 'ss_current_tcb_layout_6' in symbols else 8
 
 import importlib.util
 spec=importlib.util.spec_from_file_location('hw_facts',ROOT/'tools/hw_facts.py')
@@ -340,7 +340,7 @@ class Machine:
         if skip:u.reg_write(UC_ARM64_REG_PC,a+4)
     def count(self,u,a,c,op):
         sp=u.reg_read(UC_ARM64_REG_SP);irqs=sum(self.exceptions[c])
-        task=self.q(self.symbols['pxCurrentTCBs']+current_tcb_bytes()*c)
+        task=self.q(self.symbols['pxCurrentTCBs']+current_tcb_bytes(self.symbols)*c)
         calls=self.calls[c]
         while calls and a==calls[-1]['return'] and sp==calls[-1]['sp'] and irqs==calls[-1]['irqs']:
             done=calls.pop();self.samples[done['name']].append(done['counts'])

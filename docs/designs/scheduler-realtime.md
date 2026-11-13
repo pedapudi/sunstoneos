@@ -305,15 +305,34 @@ tick, so that release refilled the line once per tick. The first line is
 refilled, if at all, by the context save at exception entry, which comes
 before the measured tick begins.
 
-`include/sunstone_current_tcb.h` gives each core a 64-byte line: C code indexes
-the array with `portCURRENT_TCB(core)`, and assembly shifts the core ID by
-`portCURRENT_TCB_SHIFT`. The array costs 448 more bytes. `checks/current-tcb-lines.py`
-fails on any 8-byte stride in C, assembly, Python or a kernel patch, and on an
-image whose array is not one aligned line per core. The fixture's ready hook
-no longer reads the array or the idle handles: each core publishes its running
-task, and whether it is an idle task, into its own wake slot from the
-`traceCURRENT_TCB_SET` hook in the switch path. CPU0 already writes that slot
-in every release.
+`include/sunstone_current_tcb.h` gives each core a 64-byte line in the
+SunstoneOS kernels: C code indexes the array with `portCURRENT_TCB(core)`, and
+assembly shifts the core ID by `portCURRENT_TCB_SHIFT`. The array costs 448
+more bytes. The layout belongs to the kernel that defines the array:
+
+- FreeRTOS `tasks.c` patched for the SunstoneOS schedulers refuses to compile
+  unless `portCURRENT_TCB_SHIFT` is 6, and `cmake/current-tcb.cmake` sets that
+  definition on every target that compiles a generated `tasks.c`.
+- The unmodified `tasks.c`, which the emulator models of the device services
+  and some bring-up images use, keeps 8-byte entries, the header's default.
+- A mismatched kernel and port do not link. The kernel defines the absolute
+  symbol `ss_current_tcb_layout_<shift>` and references
+  `ss_current_tcb_port_<shift>`; the port does the reverse, and a port built
+  with shift 3 supplies the weak layout symbol that the unmodified kernel
+  lacks. Both references sit in retained data, so `--gc-sections` keeps them.
+
+`checks/current-tcb-lines.py` fails on an index stride written out in C,
+assembly, Python or a kernel patch, and on an image whose array does not match
+the layout its guard symbols name. It also links every pairing of kernel kind
+and port shift and requires that only the matching pairs link.
+
+The fixture's ready hook reads neither the array nor the idle-task handles.
+Each core publishes its running task, and whether it is an idle task, into its
+own wake slot from the `traceCURRENT_TCB_SET` hook in the switch path, and the
+kernel passes the idle flag from the task's attributes. CPU0 already writes
+that slot in every release. The image of the run below found the flag on the
+switching core by comparing the task with every core's idle-task handle; the
+current fixture takes it from the kernel.
 
 The run used the partition image of entry `1794605350026314973-495cffbe` with
 only this change applied (branch `work/sched-tcb-lines-base-1113`). The
@@ -347,6 +366,159 @@ CPU0's caches, and it does not read the second line. The kernel's share of
 the old layout is the exception-entry context save, which this measurement does
 not cover. CPU0's own release still takes about 2,500 cycles and one L3 refill
 more than in the idle phase.
+
+### A declared real-time core set keeps a private L3 way group
+
+Status: **approved design**, not implemented; it follows the landing of the
+line-per-core change above. It replaces the measurement options
+`SUNSTONE_LATENCY_L3_PARTITION` and `SUNSTONE_LATENCY_STREAM_MASK` with a
+declaration in the application manifest and the board description.
+
+#### What the partition gives and costs
+
+The A733's DynamIQ Shared Unit (DSU) splits its 1 MiB, 16-way L3 into four way
+groups of 256 KiB. `CLUSTERPARTCR_EL1` makes a group private to a scheme ID, and
+each core's `CLUSTERTHREADSID_EL1` selects its scheme. A private group changes
+only victim selection: a core allocates only into its scheme's groups, and a
+lookup still hits in any way.
+
+Measured on port 3-3 with streaming on CPUs 4-7 and group 0 private to CPUs 0-3
+(evidence entry `1794605350026314973-495cffbe`, against isolation alone in
+`1794597393456307577-46a485eb`):
+
+- CPU0's busy tick fell from 76,410 to 60,519 cycles and from 26.5 to 20.3 L3
+  refills; its longest busy wake fell from 93.1 to 69.5 µs.
+- The releases to CPUs 1-3 fell to within about 1,300 cycles of their idle cost.
+- The streaming cores, left with 12 of 16 ways, completed 479 sweeps of 1 MiB
+  against 497, 3.6 percent fewer. A second partition run
+  (`1794609985926933617-7e0a73a4`) completed 481.
+
+The partition costs nothing at run time: EL3 writes the registers once at
+start, no EL1 code touches them, and `ACTLR_EL3` stays 0, so EL1 cannot change
+them.
+
+#### The declaration
+
+- **Application manifest**, a new optional `cpu.realtime` object:
+  `{"cores": N, "l3_way_groups": G}`. N is how many cores run the application's
+  real-time tasks; G is how many way groups those cores keep to themselves.
+  Without the object the image writes nothing.
+- **Board description**, per-part data in the board port: the real-time core
+  order and the L3 geometry. For the A733 the order is the A55 cores 0, 1, 2,
+  3, 4, 5. CPU0 comes first because it owns the global tick and runs every
+  release. The geometry is 4 groups of 4 ways, 64-byte lines and 1024 sets,
+  read on the board as `CCSIDR` 0x707fe07a.
+- **Derived values**: the real-time set is the first N cores of the order; its
+  cores get scheme ID 1 and every other core keeps 0. Way groups 0 to G-1 are
+  private to scheme 1 and groups G to 3 to scheme 0, so `CLUSTERPARTCR_EL1` is
+  the sum of 2^(4+g) for g below G and 2^g for g from G to 3: 0x1E for one
+  group, 0x3C for two, 0x78 for three.
+
+An image holds one application, and its manifest is compiled in
+(`ss_application.manifest`), so the EL3 boot code reads the declaration from
+the image itself. The image's build ID covers it, and the session carries no
+new record.
+
+The partition protects the real-time cores' lines only while streaming work
+stays off those cores. Placing the application's streaming workers and the OS's
+bulk services on the other cores is the core-isolation decision in "Real-time
+cores may need to exclude streaming work". This design depends on it and does
+not settle it (see the open items below). The latency fixture then streams on the cores outside the
+declared set, and its stream mask becomes a value derived from its manifest.
+
+#### Admission
+
+The manifest generator (`tools/sunstone-manifest.py`) refuses a declaration
+outside these hardware bounds, and the EL3 boot code checks the same bounds
+against the board description before any write:
+
+1. 1 ≤ G ≤ groups − 1, which is 3 on the A733. Scheme 0 keeps at least one
+   group, because the other cores, accelerator coherency port (ACP) requests
+   and cache stashes all allocate under scheme 0.
+2. 1 ≤ N ≤ the length of the real-time order, and at least one core stays
+   outside the set. With every core in scheme 1 the partition only shrinks the
+   cache.
+3. `CLUSTERPWRSTAT_EL1` bits [7:4] show every group powered. A powered-down
+   portion removes its group from every scheme, so a claimed group that is not
+   powered refuses the start.
+
+One scheme ID serves real-time work. Changing a core's scheme on each context
+switch would let one core serve both kinds of work, at an MSR and ISB per
+switch; the design keeps the scheme fixed per core for the boot.
+
+#### Applied at OS start, cleared on every exit
+
+In `local_boot` (`platform/a733-smp-cached/continue.c`), which every OS image
+runs:
+
+1. Each core reads `CLUSTERPARTCR_EL1` and its own `CLUSTERTHREADSID_EL1`.
+   A nonzero value means a partition survived a reset that should have cleared
+   it; the core clears both and stops the boot with a new refusal detail.
+2. Each core in the real-time set writes scheme ID 1, issues an ISB and reads
+   it back (detail 0x738 on a mismatch, as now).
+3. After the barrier that follows the capture, CPU0 checks the power status,
+   writes `CLUSTERPARTCR_EL1` and reads it back (detail 0x739).
+4. A third barrier holds every core until CPU0's write is complete. The current
+   measurement code lacks it, and secondary cores can reach EL1 a few
+   microseconds before the partition exists.
+
+With no declaration, steps 2 to 4 do not run; step 1 still costs two register
+reads per core.
+
+Exits:
+
+- Every entry to EL3 already clears both registers first, in the shared vector
+  entry `a733_cached_el3_fault` (`continue.S`). That covers the normal return,
+  the privileged exit SMC and `svc #119`, EL1 faults, EL3 exceptions, the
+  returning lifetime's success SMC and the resident stop.
+- `failed()` and `park()` in `continue.c` wait at EL3 without passing through
+  the vector. A core that fails there after CPU0's write leaves the partition
+  set. The design clears both registers in `failed()` before it parks.
+- A watchdog reset runs no EL3 code. It is a system reset, which returns the
+  DSU registers to 0; step 1 of the next start checks that.
+
+#### What the streaming side loses
+
+With G groups the other cores keep 16 − 4G ways: 12, 8 or 4. The measured cost
+is 3.6 percent fewer sweeps with one group, for streams that reuse almost
+nothing from the L3. Under random replacement a streamed line survives one
+round of 4 MiB of sweeps with probability (15/16)^64, about 1.6 percent, with
+16 ways and (11/12)^64, about 0.4 percent, with 12 ways.
+
+Work that reuses the L3 loses more. A working set between 768 KiB and 1 MiB fits
+in 16 ways and does not fit in 12. A camera or lidar stage that revisits a
+frame tile, or CPU code feeding NPU tiles, falls in that range. No such
+workload has been measured with the partition. Device DMA into memory does not
+allocate in the L3 today: the drivers treat every device as non-coherent, and
+nothing uses the ACP or stashing. Two or three groups have not been measured
+on either side.
+
+#### Checks
+
+- **Host**: manifest cases that refuse G = 0, G = 4, N = 0 and N equal to every
+  core, and accept the latency fixture's declaration. A host test of the EL3
+  value derivation gives 0x1E, 0x3C and 0x78 and the per-core scheme IDs. A
+  check that no build option names the partition or the stream mask.
+- **QEMU**: the QEMU board description declares no L3 groups, so the start
+  code writes nothing there.
+- **Board**: one cause-build run with the latency manifest declaring four cores
+  and one group. Prediction: the figures of entry
+  `1794605350026314973-495cffbe` within their spread, a boot read of 0 on every
+  core, and readbacks 0x1E and scheme IDs 1, 1, 1, 1, 0, 0, 0, 0.
+
+#### Open items
+
+- Core isolation stays an open decision. The partition does not place work:
+  the scheduler still decides where streaming workers and bulk services run,
+  and this design does not change that.
+- The manifest declaration is also where the scheduler's real-time core set
+  should come from when isolation is decided, so that one declaration names the
+  cores that keep an L3 way group and the cores that streaming work avoids.
+- The declaration does not pass through a session grant, as the CPU clock grant
+  does: the partition changes no voltage, clock or rail, and the image's build
+  ID covers the manifest.
+- An application on the A76 cores has no real-time set yet; the board order
+  holds only A55 cores.
 
 ## Time slicing has a task-count-independent traversal bound
 

@@ -319,10 +319,12 @@ when it passes through `ss_owner_publish`, and that it exceeds the direct
 budget otherwise.
 
 The fixture admits a sample from the target core's own copy of its current
-task, which the core writes into its wake slot on every switch
-(`traceCURRENT_TCB_SET`), not from the core's `pxCurrentTCBs` entry. CPU0
-writes that slot in every release anyway, so the admission adds no line; the
-budgets hold no `pxCurrentTCBs` line in any release.
+task and of whether that task is an idle task. The core writes both into its
+wake slot on every switch (`traceCURRENT_TCB_SET`, with the idle flag from the
+kernel), so admission reads neither the core's `pxCurrentTCBs` entry nor the
+idle-task handles. CPU0 writes that slot in every release anyway, so the
+admission adds no line; the budgets hold no `pxCurrentTCBs` line in any
+release.
 
 ## The control phase retains enough samples for the requested percentile
 

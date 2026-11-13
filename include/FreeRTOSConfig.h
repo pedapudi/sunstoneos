@@ -34,7 +34,7 @@ _Noreturn void platform_panic(const char *file, unsigned line);
 #if defined(SUNSTONE_LATENCY) && !defined(__ASSEMBLER__)
 #include "sunstone_latency.h"
 #define tracePOST_MOVED_TASK_TO_READY_STATE(task) ss_latency_task_ready(task)
-#define traceCURRENT_TCB_SET(core, task) ss_latency_current_set((core), (task))
+#define traceCURRENT_TCB_SET(core, task, idle) ss_latency_current_set((core), (task), (idle))
 #define INCLUDE_xTaskGetIdleTaskHandle 1
 #ifndef INCLUDE_xTaskGetCurrentTaskHandle
 #define INCLUDE_xTaskGetCurrentTaskHandle 1

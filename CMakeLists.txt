@@ -83,6 +83,7 @@ link_libraries(sunstone-path-maps)
 
 set(PORT "${FREERTOS_DIR}/portable/GCC/ARM_AARCH64_SRE")
 include(cmake/patch.cmake)
+include(cmake/current-tcb.cmake)
 apply_build_patch("${CMAKE_CURRENT_BINARY_DIR}/freertos-port.c" "${PORT}/port.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/freertos-aarch64-clang.patch")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS

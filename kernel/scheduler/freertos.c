@@ -1598,7 +1598,7 @@ static void ssKernelSwitch(unsigned c)
     ssKernelPullIdle(c, (((TCB_t *)selected->context)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0);
     __atomic_store_n(&portCURRENT_TCB(c), selected->context, __ATOMIC_RELEASE);
     portCURRENT_TCB(c)->xTaskRunState = (BaseType_t)c;
-    traceCURRENT_TCB_SET(c, selected->context);
+    traceCURRENT_TCB_SET(c, selected->context, (((TCB_t *)selected->context)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0);
 #ifndef SS_KERNEL_TEST_NO_IDLE_PULL
     /* The selecting pass skips the pull, and the pull takes compatibility locks the selector
      * never takes. A migratable task left waiting behind the task just selected, with an

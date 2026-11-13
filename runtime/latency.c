@@ -561,5 +561,5 @@ void ss_latency_gpu_received(unsigned client)
 }
 __attribute__((weak)) void ss_latency_tick_hook(void) {}
 __attribute__((weak)) void ss_latency_task_ready(void *task) { (void)task; }
-__attribute__((weak)) void ss_latency_current_set(unsigned core, void *task) { (void)core; (void)task; }
+__attribute__((weak)) void ss_latency_current_set(unsigned core, void *task, int idle) { (void)core; (void)task; (void)idle; }
 #endif
