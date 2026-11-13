@@ -9,6 +9,7 @@
 #include "freertos.h"
 #include "freertos_registry.h"
 #include "freertos_control.h"
+#include "perturb.h"
 #include "notification.h"
 #include "deadline.h"
 #include "latency_trace.h"
@@ -35,6 +36,16 @@ _Static_assert(configMAX_PRIORITIES == SS_OWNER_PRIORITIES,
 
 #ifndef SS_PULL_MOVES_PER_PASS
 #define SS_PULL_MOVES_PER_PASS 0u /* transfers one idle-pull pass may start; 0 is unlimited */
+#endif
+#ifdef SS_KERNEL_TEST_PERTURB
+void ss_kernel_perturb(enum ss_kernel_perturb_site site)
+{
+    const volatile uint32_t *table = (const volatile uint32_t *)(uintptr_t)SS_KERNEL_TEST_PERTURB;
+    uint32_t cores = table[0], turns = table[1 + site];
+    if (!turns) return;
+    if (cores && !(cores & (UINT32_C(1) << portGET_CORE_ID()))) return;
+    for (volatile uint32_t turn = 0; turn < turns; ++turn) {}
+}
 #endif
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
 static struct { _Alignas(SS_CACHE_LINE) struct ss_sched_trace_lock value; } ssSchedTraceLocks[SS_OBJECT_SLOTS + 1];
@@ -483,6 +494,7 @@ static void ssKernelRetirement(void *context, unsigned slot, unsigned coordinato
 
 static void ssKernelInitialize(void)
 {
+    SS_KERNEL_PERTURB(SS_PERTURB_API_ENTRY);
     if (ssKernelInitialized) return; /* Boot CPU only, before scheduler start. */
     ss_kernel_registry_init_retirement(&ssKernelRegistry, &ssKernelBackend,
                                        ssKernelRetirement, NULL, 0);
@@ -1455,6 +1467,10 @@ static void ssKernelService(void)
      * long span when the memory system is busy, so it is the last resort. */
     bool more = ssKernelServiceOnce(c, cpu);
     for (unsigned pass = 1; more && pass < SS_SERVICE_PASSES; ++pass) more = ssKernelServiceOnce(c, cpu);
+    /* A pass that commits no dispatch must still clear sgi_pending (see
+     * ss_owner_settle for the barrier pairing with ss_owner_publish). A
+     * selecting pass, or one that leaves a reschedule, commits in selection. */
+    if (!more && !cpu->selecting && !cpu->reschedule) more = ss_owner_settle(&cpu->run);
     if (more) {
 #ifdef SS_KERNEL_TEST_ADMIN_ENTER
         ++ssKernelContinuations;
@@ -2237,6 +2253,7 @@ static void ssKernelControlDrain(void)
         if (exception) portCLEAR_INTERRUPT_MASK_FROM_ISR(open);
         else portCLEAR_INTERRUPT_MASK(open);
     }
+    SS_KERNEL_PERTURB(SS_PERTURB_CONTROL_OPEN);
     (void)ss_control_drain_excluding(&ssKernelControl, c, cpu->control_seen);
 #ifdef SS_KERNEL_TEST_ADMIN_ENTER
     for (unsigned w = 0; w < 2; ++w) {
