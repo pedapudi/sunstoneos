@@ -387,9 +387,10 @@ recognition session that uploads about 44 MB of image, session and inputs spends
 about 155 s of its 170 s run in the `launch` stage, about 79 s of it reading
 bytes back.
 
-`--verify readback`, the default, reads each upload back in the transaction that
-writes it and compares the bytes. `--verify digest` writes each DRAM upload
-once and has the board compute its SHA-256:
+`--verify digest`, the default, writes each DRAM upload once and has the board
+compute its SHA-256. `--verify readback` reads each upload back in the
+transaction that writes it and compares the bytes. The digest path works as
+follows:
 
 1. The runner builds the digest helper
    ([boot/a733/upload-digest.S](../boot/a733/upload-digest.S)), 1,152 bytes of
@@ -415,6 +416,32 @@ later batch is sized from the rate the previous call measured. A board whose
 core has no SHA-256 instructions (ID_ISAR5.SHA2 is 0), or a first call no
 faster than the readback rate, makes the runner read the remaining ranges back
 instead; the result records the reason as `upload_verify.fallback`.
+
+On port 3-3 on 2026-11-13 the helper hashed 6.2 to 6.8 MB/s, and writes moved
+0.565 MB/s, so a digest upload takes about 1/0.565 + 1/6.7 = 1.92 s per MB,
+against 3.54 s per MB with readback. A `launch` stage therefore lasts about
+1.92 s per MB of DRAM upload plus 2 to 5 s of other transfers, as in these runs:
+
+| Run | DRAM upload | Verification | First upload to launch | `launch` stage | Total |
+| --- | --- | --- | --- | --- | --- |
+| Recognition, CPU only, 1794107014170351336-e7854a09 | 16.3 MB | readback | 59.6 s | 60.5 s | 78.6 s |
+| The same image, 1794596384126694694-84ec8555 | 16.3 MB | digest: 28.8 s writing, 2.4 s in 3 helper calls | 31.7 s | 33.3 s | 48.1 s |
+| Recognition with the NPU, 1794595892235825416-6bdcd39c | 43.8 MB | readback | 155.8 s | 155.4 s | 171.0 s |
+| The same image, 1794596079966938149-24a0a868 | 43.8 MB | digest: 76.9 s writing, 6.5 s in 5 helper calls | 86.6 s | 89.1 s | 102.9 s |
+
+Both digest runs completed every helper call with status `DONE` and no fallback.
+The CPU-only run returned the reference result. The NPU run's application then
+stopped at an NPU completion fault that a readback-mode run of an earlier image
+(1794506252076994875-247497f5) also showed; the upload had been verified.
+
+The helper adds 0.565/6.7, about 8.4 %, to the write time. To bring upload time
+within 1 % of the write time alone, the helper would need about 57 MB/s, about
+8.5 times its measured rate. It executes about 120 instructions per 64-byte
+block ([checks/upload-digest.py](../checks/upload-digest.py)), so 6.7 MB/s is
+about 12.5 million instructions a second: the helper runs with the instruction
+cache off (`sunxi-fel` turns it off for the ROM's FEL code) and fetches every
+instruction from SRAM. Enabling the instruction cache for the helper's duration is the
+first change to measure.
 
 The digest path applies to a plan that executes `0x52000` and uploads into the
 launcher's reservation: generic, legacy and finite NPU images. It verifies each

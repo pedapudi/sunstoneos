@@ -2187,9 +2187,9 @@ def run_options(parser, submit=False):
                         'state for a run that measures it.')
     parser.add_argument('--preserve-dram', action='store_true',
                         help='Qualification run: save the image DRAM before launch and restore it after retirement. Development runs skip both.')
-    parser.add_argument('--verify', choices=images.VERIFY_MODES, default='readback',
-                        help='How the runner verifies uploads before launch: readback (default) reads every uploaded byte '
-                        'back; digest writes each DRAM upload once and compares SHA-256 digests the board computes '
+    parser.add_argument('--verify', choices=images.VERIFY_MODES, default='digest',
+                        help='How the runner verifies uploads before launch: digest (default) writes each DRAM upload once '
+                        'and compares SHA-256 digests the board computes; readback reads every uploaded byte back '
                         '(docs/board-runner.md, "Verify uploads by digest").')
     parser.add_argument('--preserve-budget-s', type=float,
                         help='Longest estimated backup and restore time, in seconds, that a --preserve-dram run accepts; the plan is refused above it.')

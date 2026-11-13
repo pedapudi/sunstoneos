@@ -300,14 +300,14 @@ class Model:
 
 
 def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=False,recovery=False,entry=1,configure=None,
-              verify='readback',uploads=None):
+              verify=None,uploads=None):
     root.mkdir()
     args=arguments(root, development=resident or recovery)
     if configure:configure(args)
     if resident:args.lifetime='resident'
     if recovery:args.kind='probe';args.approved_by='coordinator'
     args.restore_rails=restore
-    args.verify=verify
+    if verify:args.verify=verify
     model=Model(variant)
     owners=[]
     class Backend(board.Live):
@@ -945,14 +945,21 @@ def upload_verify_cases(out):
     assert split['digest']==[files[0],(0x44000010,odd)] and split['readback']==[(0x41100002,odd),(0x44000000,files[1][1]),files[2]],split
     assert images.upload_verification({'launch':['exe','0x52000'],'uploads':files},'readback')['digest']==[]
     passed('upload-digest-plan-split')
-    # The mode is frozen in the queue entry and reaches the runner command.
+    # Digest is the default; the mode is frozen in the queue entry and reaches the runner command, so an entry
+    # submitted with --verify readback keeps it after the default changes.
     root=out/'verify-queue';root.mkdir()
-    queue=board.Queue(root/'q');args=arguments(root,'--verify','digest',submit=True,development=True)
-    job=queue.submit(args)
-    assert job['options']['verify']=='digest'
-    command=board.Queue.runner_command(job,'3-1')
-    assert command[command.index('--verify')+1]=='digest'
-    passed('upload-verify-frozen-in-queue-entry')
+    queue=board.Queue(root/'q')
+    for extra,mode in (((),'digest'),(('--verify','readback'),'readback')):
+        job=queue.submit(arguments(root,*extra,submit=True,development=True))
+        assert job['options']['verify']==mode,(extra,job['options'])
+        command=board.Queue.runner_command(job,'3-1')
+        assert command[command.index('--verify')+1]==mode,command
+    passed('upload-verify-default-digest-frozen-in-queue-entry')
+    # A run without --verify takes the digest path on a plan that uploads into the launcher's reservation.
+    result,model,owner=lifecycle(out/'digest-default','normal',uploads=plan_files(out/'digest-default-files'))
+    assert result['outcome']=='returned' and result['upload_verify']['mode']=='digest',result['upload_verify']
+    assert model.digest_calls>=1 and not reads(model,0x41000000,0x50000000),reads(model,0x41000000,0x50000000)
+    passed('upload-verify-default-digest-run')
 
 
 def development_dram_cases(out):
