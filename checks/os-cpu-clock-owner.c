@@ -29,6 +29,9 @@ int os_perf_step(struct a733_cpu_clock *c,const struct a733_thermal_policy *p,in
 unsigned board_session_lifetime(void){return A733_LIFETIME_SUPERVISED;}
 int os_cpu_return_requested(void){return 0;}
 int os_cpu_return_failing(void){return 0;}
+/* The readiness publication wakes the application's main task once (apps/os/cpu.c publish_ready). */
+static unsigned ready_wakes;
+void os_application_wake_main(void){++ready_wakes;}
 uint32_t os_cpu_return_entry_refusal;
 int os_cpu_return_entry_guard(const struct a733_cpu_clock *c,const struct a733_thermal_policy *p,uint64_t now,
     int (*read)(void *,uintptr_t,uint32_t *),void *context){(void)c;(void)p;(void)now;(void)read;(void)context;check(0,91);return -1;}
@@ -77,8 +80,8 @@ void os_cpu_owner_check(unsigned mode)
     check(os_cpu_clock_step(&thermal_policy)==1&&requests==1&&!os_cpu_clock_ready(),12);
     atomic_store_explicit(&thermal_policy.published_seen,9,memory_order_release);
     check(os_cpu_clock_step(&thermal_policy)==1&&requests==2,13);
-    check(os_cpu_clock_step(&thermal_policy)==1&&requests==3&&!os_cpu_clock_ready(),14);
-    check(os_cpu_clock_step(&thermal_policy)==1&&os_cpu_clock_ready(),15);
+    check(os_cpu_clock_step(&thermal_policy)==1&&requests==3&&!os_cpu_clock_ready()&&!ready_wakes,14);
+    check(os_cpu_clock_step(&thermal_policy)==1&&os_cpu_clock_ready()&&ready_wakes==1,15);
     check(domains[0]==A733_CPU_BIG&&domains[1]==A733_CPU_LITTLE&&domains[2]==A733_CPU_DSU,16);
     check(targets[0]==2002&&targets[1]==1794&&targets[2]==1274,17);
     check(owner.count==3,18);

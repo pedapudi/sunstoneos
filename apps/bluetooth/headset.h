@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 struct bluetooth_application;
+struct bluetooth_work_state;
 #define BLUETOOTH_PCM_BYTES 48000u
 #define BLUETOOTH_PCM_RECORDS 1024u
 struct bluetooth_pcm_record {uint64_t acquired;uint32_t offset;uint16_t source_bytes,copied_bytes;uint32_t status,reserved;};
@@ -18,6 +19,13 @@ struct bluetooth_pcm_snapshot {
 extern const size_t bluetooth_headset_state_bytes;
 int bluetooth_headset_memory(void *memory);
 int bluetooth_headset_poll(struct bluetooth_application *,uint64_t now);
+/* Owner-only timer query used by bluetooth_application_next_deadline. It
+ * inspects only active protocol states; retained terminal deadlines do not
+ * cause extra wakes. Software-ready work must run before the owner sleeps. */
+uint64_t bluetooth_headset_next_deadline(const struct bluetooth_application *,uint64_t until);
+/* Internal owner-only progress and HCI classification queries. */
+int bluetooth_headset_work_state(const struct bluetooth_application *,struct bluetooth_work_state *);
+int bluetooth_headset_rx_unclassified(const struct bluetooth_application *);
 int bluetooth_headset_retain(struct bluetooth_application *);
 /* Owner-task return protocol for OS capture modes 2 and 3. Begin closes capture and connection admission;
  * stop runs one bounded round of existing consumers and returns 0 pending, 1 after all upper

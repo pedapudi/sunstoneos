@@ -194,7 +194,7 @@ def label_for(args, branch):
 def gate_argv(args, tree):
     """The command that starts the gate on TREE: the gate command given with --gate-command, or tools/integration-gate.py of TREE itself.
 
-    The gate takes the host-wide gate lock (CACHE/gate.lock) itself, so it needs no wrapper."""
+    The gate takes a host gate slot itself (CACHE/gate.lock.N, tools/gate_slots.py), so it needs no wrapper."""
     return args.gate_command or [sys.executable, str(Path(tree) / 'tools/integration-gate.py')]
 
 
@@ -269,7 +269,9 @@ def verify(args, worktree, base, tip, names, label):
     command = gate_argv(args, tree) + [str(tree), label, '--reason', args.reason, '--keep-going', *scope]
     log = args.cache / 'build' / ('land-%s-gate.log' % label)
     with log.open('w') as output:
-        gate = subprocess.Popen(command, cwd=tree, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+        # A landing goes ahead of waiting worker gates and may take the slot that only landings use (tools/gate_slots.py).
+        gate = subprocess.Popen(command, cwd=tree, stdout=output, stderr=subprocess.STDOUT, start_new_session=True,
+                                env={**os.environ, 'SUNSTONE_GATE_PRIORITY': 'landing'})
     try:
         run_step('checks/gate-inputs.py', args.registry_command + ['--output', str(args.cache / 'build' / ('registry-' + label + '.json'))], tree)
         gate.wait()

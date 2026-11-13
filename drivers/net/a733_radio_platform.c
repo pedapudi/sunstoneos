@@ -62,6 +62,9 @@ static int abort_possible(struct a733_radio_platform *p)
 static enum a733_radio_platform_result fail_at(struct a733_radio_platform *p,unsigned line)
 {
     if(line&&!p->fail_line){p->fail_line=line;p->fail_stage=p->stage;}
+    /* Even a retained MMIO/ownership failure keeps the route and handler;
+     * retirement masks delivery before attempting any source cleanup. */
+    if(p->interrupt_retire)(void)p->interrupt_retire(p->interrupt_context);
     /* An abort is never cut short: while it runs inside its deadline the failure waits for it. */
     if(p->aborting&&!p->stop_requested&&p->last_now<p->deadline)return A733_RADIO_PENDING;
     if(a733_radio_platform_clean(p)){
@@ -281,6 +284,19 @@ static int host_barrier(void *cookie)
     if(p->fault||p->ops.current(p->cookie)!=1)return 0;
     if(!timely(p)||p->ops.barrier(p->cookie)!=1||!timely(p)){fail(p);return 0;}
     return 1;
+}
+int a733_radio_platform_event_prepare(struct a733_radio_platform *p,uint64_t *until)
+{
+    if(!p||!p->initialized||!until||!a733_ranges_disjoint(p,sizeof(*p),until,sizeof(*until))||
+       p->ops.current(p->cookie)!=1)return -1;
+    unsigned expected=0;
+    if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return -1;
+    int result=-1;
+    if(!p->fault&&timely(p)){
+        p->core_call=1;result=sunxi_sdio_event_prepare(&p->host,until);p->core_call=0;
+        if(result<0)(void)fail(p);
+    }else if(!p->fault)(void)fail(p);
+    (void)finish(p,A733_RADIO_PENDING);return result;
 }
 int a733_radio_platform_init(struct a733_radio_platform *p,const struct a733_radio_platform_config *c,
     const struct a733_radio_platform_ops *o,void *cookie,struct a733_clock_leases *clocks,
@@ -692,6 +708,13 @@ static enum a733_radio_platform_result abort_poll(struct a733_radio_platform *p)
         p->stage=RSTAGE_ABORT_CLOCKS;return A733_RADIO_PENDING;
     }
     if(p->stage==RSTAGE_ABORT_CLOCKS) {
+        if(p->interrupt_retire){
+            int retired=p->interrupt_retire(p->interrupt_context);
+            if(retired==0&&timely(p))return A733_RADIO_PENDING;
+            /* Failed interrupt retirement retains the clock and power graph;
+             * neither abort clock-off nor the later rail-off may bypass it. */
+            if(retired!=1)return abort_end(p,wanted);
+        }
         if(p->abort_from>=RSTAGE_BUS_GATE) {
             /* The module gate off, then the bus gate and reset asserted, each read back. */
             int locked=lock(p);
@@ -776,6 +799,11 @@ static enum a733_radio_platform_result shutdown_poll(struct a733_radio_platform 
         if(p->host.state==SUNXI_SDIO_FAULT)return fail(p);
         if(p->host.state==SUNXI_SDIO_QUIESCED)p->stage=RSTAGE_SHUTDOWN_CLOCKS;
     } else if(p->stage==RSTAGE_SHUTDOWN_CLOCKS) {
+        if(p->interrupt_retire){
+            int r=p->interrupt_retire(p->interrupt_context);
+            if(r<0)return fail(p);
+            if(!r)return A733_RADIO_PENDING;
+        }
         /* Module gate off, then the bus gate and reset asserted, each read back; the
          * interrupt stays masked and inactive. */
         uint32_t old=p->stop_requested&&!p->stop_bus?p->initial_module&0x87001f1f:p->running_module;

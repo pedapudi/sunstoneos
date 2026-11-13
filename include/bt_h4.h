@@ -29,7 +29,9 @@ struct bt_h4_binding {
 enum bt_h4_state { BT_H4_CLOSED, BT_H4_ACTIVE, BT_H4_FAULT };
 /* Zero-init once. One serialized task owns transport and UART for the entire
  * lifetime. Other task/ISR UART accesses are forbidden. Keep the UART GIC
- * interrupt masked; the platform schedules bounded task polls. No buffer/object reinitialization on fault.
+ * interrupt masked by default; the platform schedules bounded task polls.
+ * irq_enable selects deferred owner-task IIR service under a mask-only ISR.
+ * No buffer/object reinitialization on fault.
  * Storage and object lifetimes extend through external recovery on any fault.
  * No implicit firmware load, reset, generation change or H4 resynchronization. */
 struct bt_h4 {
@@ -42,7 +44,7 @@ struct bt_h4 {
     size_t tx_header;
     size_t tx_length, tx_offset, staged, stage_offset;
     uint64_t now, deadline, partial_deadline, tx_deadline, next_serial, stage_tag;
-    unsigned count, assembling;
+    unsigned count, assembling, deferred_irq;
     enum bt_h4_state state;
 };
 /* All slots must be disjoint from each other, UART, transport and config;
@@ -51,6 +53,19 @@ struct bt_h4 {
  * worker scheduling must prevent overrun. A timeout still faults this lifetime. */
 int bt_h4_init(struct bt_h4 *, const struct bt_h4_binding *,
                const struct bt_h4_storage *, unsigned count, uint64_t deadline);
+/* Opt in once immediately after init, before any frame/command and before
+ * unmasking the source. The caller owns platform deferred_irq=1, a mask-only
+ * ISR and the mask/sync/service/rearm sequence. Only the owner task touches
+ * UART registers. Accepted command/ACL/SCO publication arms THRE directly.
+ * An uncertain arm retains the frame and faults; never retransmit it. */
+int bt_h4_irq_enable(struct bt_h4 *,uint64_t deadline);
+/* Whether the deferred owner can rearm RX: staged bytes require task service
+ * first, and a full record pool keeps the source masked until record release.
+ * Record release and newly available work must notify the same owner. */
+int bt_h4_irq_ready(const struct bt_h4 *);
+/* Minimum of the caller's fixed lifetime/protocol bound and pending frame/TX
+ * deadlines. Zero refuses a closed/faulted transport or zero caller bound. */
+uint64_t bt_h4_deadline(const struct bt_h4 *,uint64_t until);
 /* Commands only; parameters copied before return, length <=255. No automatic
  * retransmission. Returns 1 accepted, 0 busy, -1 invalid/fault. */
 int bt_h4_command(struct bt_h4 *, uint16_t opcode, const uint8_t *, size_t,
@@ -65,12 +80,13 @@ int bt_h4_acl(struct bt_h4 *, uint16_t handle_flags, const uint8_t *, size_t,
  * The synchronous owner reserves its own controller credit before calling.
  * Payload1..255 bytes, handle0..0x0eff; same retained-fault contract as ACL. */
 int bt_h4_sco(struct bt_h4 *,uint16_t handle,const uint8_t *,size_t,uint64_t deadline);
-/* At most budget RX bytes, budget parser bytes and budget TX bytes. RX uses
- * one exchange; TX uses a second only after an RX-empty observation with no
+/* At most budget RX bytes, budget parser bytes and budget TX bytes. Default
+ * mode uses one RX exchange; TX uses a second only after an RX-empty observation with no
  * staged, partial or worker-unprocessed complete records. OWNED records do not
  * block TX while a free slot permits that observation. tag labels eligibility
  * at RX acquisition, not physical arrival time. It remains attached through
- * staging. Fault retains all cursors and records. */
+ * staging. Deferred mode services one IIR cause and arms TX only after those
+ * same predicates and an RX-empty observation. Fault retains all cursors and records. */
 int bt_h4_step(struct bt_h4 *, unsigned budget, uint64_t tag, uint64_t deadline);
 /* Earliest record with selected ownership. Pointer is immutable until exact
  * serial release; no ownership mutation by caller. COMPLETE is worker-private,

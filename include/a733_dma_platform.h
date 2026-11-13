@@ -64,6 +64,8 @@ int a733_dma_platform_scopes(const struct a733_dma_platform_config *, a733_clock
 int a733_dma_platform_init(struct a733_dma_platform *,
     const struct a733_dma_platform_config *, const struct a733_dma_platform_operations *, void *);
 enum a733_dma_platform_result a733_dma_platform_poll(struct a733_dma_platform *);
+/* Earliest absolute reset-settle sample time, zero outside that wait. */
+uint64_t a733_dma_platform_sample_at(const struct a733_dma_platform *);
 int a733_dma_platform_ready(const struct a733_dma_platform *);
 /* Read-only retirement of an adopted controller. The caller first retires
  * its DMA worker and masks the source IRQ. Recheck inherited clocks, routes,

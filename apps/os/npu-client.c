@@ -6,6 +6,7 @@
 #include "sunstone_npu_service.h"
 #include "sunstone_crumb.h"
 #include "../board/application.h"
+#include "sunstone_deadline.h"
 #include <string.h>
 struct os_npu_report os_npu_published_report;
 #define published os_npu_published_report
@@ -127,13 +128,14 @@ void os_npu_client_task(void *unused)
     const struct os_session *s=os_session();
     const int queued=os_npu_session_queued(&s->npu);
     header(r);r->model=os_npu_client_model;r->pattern=OS_NPU_OUTPUT_PATTERN;
+    if(!board_service_deadline_register(OS_SERVICE_NPU))RETAIN(0x600);
     for(;;) {
         if(os_npu_progress()!=1)RETAIN(0x601);
         int opened=os_npu_open();
         if(opened==1)break;
         if(opened<0||!board_live(NULL))RETAIN(0x602);
         if(os_npu_stopped()){r->refused=1;goto done;}
-        (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));
+        if(os_npu_wait()!=1)RETAIN(0x605);
     }
     if(ss_application.manifest) {
         /* Application completion must follow ss_npu_close. Thermal stop also
@@ -144,7 +146,7 @@ void os_npu_client_task(void *unused)
             if(queued&&os_npu_queue_sdk_closed()){sdk_closed=1;goto wait_stop;}
             if(sdk_closed)goto wait_stop;
             if(os_npu_stopped())goto done;
-            (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+            if(os_npu_wait()!=1)RETAIN(0x606);
         }
         if(queued)os_npu_queue_sdk_fail();
         ss_npu_service_fail();
@@ -158,7 +160,7 @@ close:
 wait_stop:
     while(!os_npu_stopped()) {
         if(os_npu_progress()!=1)RETAIN(0x60c);
-        (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));
+        if(os_npu_wait()!=1)RETAIN(0x607);
     }
 done:
     if(ss_application.manifest) {
@@ -169,6 +171,7 @@ done:
     }
     /* One publication: the copy completes before finished becomes visible. */
     r->stopped=os_npu_stopped();
+    if(r->stopped)os_npu_publish_wakes();
     memcpy((uint8_t *)&published+16,(const uint8_t *)r+16,OS_NPU_REPORT_BYTES-16);
     memcpy(&published,r,12);
     atomic_store_explicit(&published.finished,1,memory_order_release);os_application_wake_main();vTaskSuspend(NULL);return;

@@ -171,6 +171,14 @@ def symbol(elf, name):
         return found[0]['st_value'] if found else None
 
 
+def function_range(elf, name):
+    """[start, end) of a function symbol, or None."""
+    with open(elf, 'rb') as f:
+        table = ELFFile(f).get_section_by_name('.symtab')
+        found = table.get_symbol_by_name(name) if table else None
+        return (found[0]['st_value'], found[0]['st_value'] + found[0]['st_size']) if found else None
+
+
 def function_starts(elf):
     """Sorted start addresses of the ELF's function symbols."""
     with open(elf, 'rb') as f:
@@ -267,6 +275,9 @@ def analyze(elf, trace, marks, complete=True):
     pcs = sorted({r[1] for w in full for r in w if r[0] != 'M'})
     where = symbolize(elf, pcs)
     stacks = symbol(elf, '__exception_stacks')
+    # A release that enters ss_owner_publish takes the owner's incoming path;
+    # segment_kinds budgets CPU0's own release on that path separately.
+    publish = function_range(elf, 'ss_owner_publish') or (0, 0)
     functions = function_starts(elf)
 
     def relative_line(pc):
@@ -295,13 +306,16 @@ def analyze(elf, trace, marks, complete=True):
                                                 'code_relative': {},
                                                 'insns': collections.Counter(),
                                                 'first_data': collections.Counter(),
-                                                'first_code': collections.Counter()})
+                                                'first_code': collections.Counter(),
+                                                'publish': False})
         seen_data, seen_code = set(), set()
         for label, rec in labels:
             s = segs[label]
             if rec[0] == 'I':
                 cls = code_class(rec[1])
                 s['insns'][cls] += 1
+                if publish[0] <= rec[1] < publish[1]:
+                    s['publish'] = True
                 line = rec[1] // LINE * LINE
                 s['code'][line] = min(s['code'].get(line, cls), cls, key=RANK.index)
                 rel = relative_line(rec[1])
@@ -337,18 +351,23 @@ def group(entry):
     return first.split('.')[0].split('[')[0].split(' +')[0]
 
 
-def segment_kinds(segs):
+def segment_kinds(segs, split=True):
     """Data lines per (segment kind, class, structure) and code lines per (kind, class).
 
     Code lines are counted from each function's start (see relative_line), so
     the count changes only when the executed code changes; physical placement
     on the board can add up to one line per function.
 
-    Kinds: local (release 0, CPU0's own probe), remote (largest of releases 1-7),
-    scan (largest deadline scan) and outside."""
+    Kinds: local (release 0, CPU0's own probe, inserted directly into its own
+    run queue), local publish (release 0 when CPU0 queues its own task through
+    ss_owner_publish, which the kernel does while CPU0 drains control work or
+    another core holds the control gate), remote (largest of releases 1-7),
+    scan (largest deadline scan) and outside. Without split, release 0 is local
+    on either path."""
     counts = collections.defaultdict(int)
     for label, s in segs.items():
-        kind = {'release.0': 'local', 'outside': 'outside'}.get(label, label.split('.')[0].replace('release', 'remote'))
+        kind = {'release.0': 'local publish' if split and s.get('publish') else 'local',
+                'outside': 'outside'}.get(label, label.split('.')[0].replace('release', 'remote'))
         local = collections.Counter()
         for e in s['data'].values():
             if e['class'] != 'diagnostic':

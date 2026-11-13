@@ -139,12 +139,23 @@ enum pvr_gpu_start_result pvr_gpu_start_poll(struct pvr_gpu_start *s)
     uint64_t now, value = 0;
     uint32_t started = 0;
     if (!clock_now(s, &now)) return PVR_GPU_START_FAULT;
+#ifdef SUNSTONE_A733_OS
+    if(s->wait.next_wait_us && now<s->wait.next_wait_us)return PVR_GPU_START_AGAIN;
+#endif
     const struct pvr_gpu_start_step *op = &s->steps[s->index];
     int ok;
     switch (op->kind) {
     case PUBLISH: ok = s->ops.publish(s->context); break;
     case CHECK_CLEAR:
     case WAIT_BOOT: {
+#ifdef SUNSTONE_A733_OS
+        ok=s->ops.started(s->context,&started);
+        if(ok && !started && op->kind==WAIT_BOOT){
+            if(!clock_now(s,&now))return PVR_GPU_START_FAULT;
+            a733_gpu_wait_set(&s->wait,now,A733_GPU_OBSERVE_US,s->deadline,A733_GPU_WAIT_RETRY);
+            return PVR_GPU_START_AGAIN;
+        }
+#else
         /* Re-read the readiness word for at most A733_GPU_SPIN_US before
          * leaving the wait to the caller's next poll. */
         struct a733_gpu_spin wait = {0};
@@ -154,6 +165,7 @@ enum pvr_gpu_start_result pvr_gpu_start_poll(struct pvr_gpu_start *s)
             if (!clock_now(s, &now)) return PVR_GPU_START_FAULT;
             if (!a733_gpu_spin_again(&wait, now)) return PVR_GPU_START_AGAIN;
         }
+#endif
         if (!ok) break;
         if (started > 1) return fail(s, PVR_GPU_START_BAD_FLAG);
         if (op->kind == CHECK_CLEAR) {
@@ -174,6 +186,12 @@ enum pvr_gpu_start_result pvr_gpu_start_poll(struct pvr_gpu_start *s)
         ok = s->ops.write(s->context, op->offset, op->width, op->value | s->slc_value);
         break;
     case DELAY: {
+#ifdef SUNSTONE_A733_OS
+        if(!s->wait.next_wait_us){
+            a733_gpu_wait_set(&s->wait,now,op->value+1,s->deadline,A733_GPU_WAIT_FIXED);
+            return PVR_GPU_START_AGAIN;
+        }
+#else
         /* A few microseconds: wait on the clock inside the step. The clock
          * may round down, so it must pass the start sample by more than the
          * delay. The deadline check in clock_now bounds the wait; a clock that
@@ -185,11 +203,15 @@ enum pvr_gpu_start_result pvr_gpu_start_poll(struct pvr_gpu_start *s)
             if (!clock_now(s, &now)) return PVR_GPU_START_FAULT;
             if (!a733_gpu_spin_advancing(&wait, now)) return PVR_GPU_START_AGAIN;
         }
+#endif
         ok = 1; break;
     }
     default: return fail(s, PVR_GPU_START_IO);
     }
     if (!ok) return fail(s, PVR_GPU_START_IO);
+#ifdef SUNSTONE_A733_OS
+    s->wait=(struct a733_gpu_wait){0};
+#endif
     ++s->index;
     return s->phase == PVR_GPU_START_BOOTED ? PVR_GPU_START_OK : PVR_GPU_START_AGAIN;
 }

@@ -1,0 +1,11 @@
+{
+  "_comment": "Measured numbers that tools/gate_slots.py turns into the slot count and the jobs per slot (docs/validation.md, Gate slots). Measured 2026-11-13 on the 24-core, 122 GB host: a sampler read the whole process tree of a keep-going gate every 5 s (gate-slots-sample: --affected bringup~30..HEAD, 339 steps, 839 s, mean 5.3 busy cores on the host with p95 10.7 and a 23.9 build peak, peak resident set 10.9 GB, MemAvailable never under 110 GB) and the idle host (1.1 busy cores, about 3 with the board runner and builds outside the gate).",
+  "host_measured": {"cores": 24, "mem_gb": 122},
+  "reserve": {"other_cores": 3, "mem_gb": 32},
+  "gate": {"mean_cores": 5.3, "peak_rss_gb": 10.9},
+  "landing_reserved_slots": 1,
+  "timing_steps": ["check-soak8"],
+  "timing_checks": [
+    "scheduler-control-linked.py", "smp-ticket-lock.py", "tick-footprint-budget.py", "gpu-conformance.py", "land.py", "submit-wait.py"
+  ]
+}

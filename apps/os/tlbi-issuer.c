@@ -14,6 +14,8 @@
 #include "application.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "sunstone_deadline.h"
+#include "sunstone_tlbi.h"
 #include <stdatomic.h>
 #include <stdint.h>
 
@@ -32,6 +34,17 @@ struct os_tlbi_stats {
     atomic_uint_fast64_t max_ticks, total_ticks;
 };
 struct os_tlbi_stats os_tlbi_stats;
+int sunstone_tlbi_sample(struct sunstone_tlbi_sample *out)
+{
+    if(!out)return 0;
+    out->period_us=(uint64_t)SUNSTONE_TLBI_PERIOD_TICKS*1000000u/configTICK_RATE_HZ;
+    out->max_ticks=atomic_load_explicit(&os_tlbi_stats.max_ticks,memory_order_relaxed);
+    out->total_ticks=atomic_load_explicit(&os_tlbi_stats.total_ticks,memory_order_relaxed);
+    out->wakes=atomic_load_explicit(&os_tlbi_stats.wakes,memory_order_relaxed);
+    out->issued=atomic_load_explicit(&os_tlbi_stats.issued,memory_order_relaxed);
+    out->core=atomic_load_explicit(&os_tlbi_stats.core,memory_order_relaxed);
+    out->form=SUNSTONE_TLBI_ISSUER;return 1;
+}
 static StaticTask_t task_state;
 static StackType_t task_stack[STACK_WORDS];
 
@@ -50,13 +63,21 @@ static void issue(void)
 static void issuer(void *unused)
 {
     (void)unused;
-    TickType_t last = xTaskGetTickCount();
+    const uint64_t period=(uint64_t)SUNSTONE_TLBI_PERIOD_TICKS*1000000u/configTICK_RATE_HZ;
+    if(!period||!sunstone_deadline_register())ss_fail(0x760);
+    uint64_t last=sunstone_deadline_now_us();
     atomic_store_explicit(&os_tlbi_stats.core, portGET_CORE_ID(), memory_order_relaxed);
     for (;;) {
         /* A fixed rate without drift: sleep until the next multiple of the period, whatever the last pass took. */
-        last += SUNSTONE_TLBI_PERIOD_TICKS;
-        const TickType_t now = xTaskGetTickCount();
-        if ((int32_t)(last - now) > 0) vTaskDelay(last - now); else last = now;
+        if(last>UINT64_MAX-period)ss_fail(0x760);
+        last+=period;
+        uint64_t now=sunstone_deadline_now_us();
+        while(now<last){
+            if(sunstone_deadline_wait_until(last)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x760);
+            now=sunstone_deadline_now_us();
+        }
+        /* Skip missed periods while preserving the declared timer phase. */
+        if(now-last>=period)last+=(now-last)/period*period;
         if (os_application_finished()) vTaskSuspend(NULL);
         atomic_fetch_add_explicit(&os_tlbi_stats.wakes, 1, memory_order_relaxed);
 #if SUNSTONE_TLBI_ISSUER
