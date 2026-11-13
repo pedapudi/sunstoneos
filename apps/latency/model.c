@@ -128,6 +128,16 @@ static void controller(void *argument)
         configASSERT(trace->command_count && trace->drain_count && trace->irq_count);
         configASSERT(trace->self_suspend.command == 2);
         configASSERT((trace->self_suspend.flags & 5) == 5);
+#ifdef SS_SCHED_TRACE_TEST_EXIT_SUSPEND
+        /* CPU1's memory task is parked at an SGI exit (workload.c). The kept
+         * row is the longest self-suspension, so check the exit's own record. */
+        if (c == 1) {
+            const struct ss_sched_trace_command *parked = &ss_sched_trace_test_exit_parked[1];
+            configASSERT(parked->command == 2 && parked->flags == 197);
+            for (unsigned i = 1; i < 7; ++i) configASSERT(parked->stamp[i] >= parked->stamp[i - 1]);
+            configASSERT(parked->stamp[3] == parked->stamp[4] && parked->stamp[6]);
+        }
+#endif
         configASSERT(trace->self_suspend.stamp[0] && trace->self_suspend.stamp[6]);
         for (unsigned i = 1; i < 7; ++i)
             configASSERT(trace->self_suspend.stamp[i] >= trace->self_suspend.stamp[i - 1]);
@@ -198,9 +208,13 @@ static void controller(void *argument)
     }
     const struct ss_sched_trace_cpu0_window *window = &result.scheduler.cpu0_window;
     configASSERT(window->capacity == SS_SCHED_TRACE_HISTORY);
-    configASSERT(window->irq_count && window->irq_count <= window->capacity && window->switch_count <= window->capacity);
-    configASSERT(!(window->flags & ~(SS_SCHED_WINDOW_IRQ_PREFIX_LOST |
-        SS_SCHED_WINDOW_SWITCH_PREFIX_LOST | SS_SCHED_WINDOW_INCOMPLETE)));
+    /* A late observer can find every retained row replaced by later dispatches;
+     * the window then says so instead of holding rows. */
+    configASSERT(window->irq_count || (window->flags & SS_SCHED_WINDOW_IRQ_OVERRUN));
+    configASSERT(window->irq_count <= window->capacity && window->switch_count <= window->capacity);
+    configASSERT(!(window->flags & SS_SCHED_WINDOW_IRQ_OVERRUN) || window->irq_count < window->capacity);
+    configASSERT(!(window->flags & ~(SS_SCHED_WINDOW_IRQ_PREFIX_LOST | SS_SCHED_WINDOW_SWITCH_PREFIX_LOST |
+        SS_SCHED_WINDOW_INCOMPLETE | SS_SCHED_WINDOW_IRQ_OVERRUN)));
     number("cpu0_window_irqs=", window->irq_count);
     number(" selections=", window->switch_count);
     number(" flags=", window->flags);

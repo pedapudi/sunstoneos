@@ -43,7 +43,12 @@ _Static_assert(SS_SCHED_TRACE_TICKS <= UINT32_MAX, "tick capacity must not overl
  * Flags 85 cover an already-fulfilled request without local selection; flags
  * 93 cover a deferred local commit under an inherited mask or lock. Both repeat
  * stamp 4 into 5 and 6; deferred stamps 0..2 precede the local guard but need
- * not be unmasked. Every atomic form ranks its local guarded interval 3..6. */
+ * not be unmasked. Every atomic form ranks its local guarded interval 3..6.
+ * Flags 197 (bit 7 with 69) cover a self-suspension that an interrupt or
+ * exception exit completed after its publication and before the task masked:
+ * the exit's control drain parked the task, so stamps 3 and 4 hold the park
+ * and stamps 5 and 6 the selection that saved its frame. Stamp 2 repeats
+ * stamp 3 when the exit came before publication returned. */
 struct ss_sched_trace_command {
     uint64_t command, slot, flags, stamp[7];
 };
@@ -133,10 +138,14 @@ struct ss_sched_trace_wake_history {
     uint64_t latest_start, latest_end, latest_work, latest_result, latest_sequence;
     uint64_t trailing_count, trailing_work, irq_overwritten, switch_overwritten, future_irqs;
 };
+/* The window is read when the observer runs, after running. IRQ overrun
+ * means dispatches that began after running reused ring slots, replacing
+ * earlier dispatches; a late observer can leave fewer rows, down to none. */
 enum ss_sched_trace_window_flag {
     SS_SCHED_WINDOW_IRQ_PREFIX_LOST = 1u,
     SS_SCHED_WINDOW_SWITCH_PREFIX_LOST = 2u,
-    SS_SCHED_WINDOW_INCOMPLETE = 4u
+    SS_SCHED_WINDOW_INCOMPLETE = 4u,
+    SS_SCHED_WINDOW_IRQ_OVERRUN = 8u
 };
 /* CPU0 retains complete C dispatches, including exits skipped by the PMR
  * guard. descriptor packs INTID in bits 0..15 and saved SPSR in bits 16..47.
@@ -201,6 +210,15 @@ void ss_sched_trace_snapshot(struct ss_sched_trace_report *);
 void ss_sched_trace_startup(unsigned, unsigned);
 void ss_sched_trace_command(unsigned, const struct ss_sched_trace_command *);
 void ss_sched_trace_direct_suspend_begin(unsigned, const struct ss_sched_trace_command *);
+/* Open a self-suspension record before its publication. An exception exit that
+ * parks the task completes it (flags 197); the task's own path closes it. */
+void ss_sched_trace_self_suspend_open(unsigned, const struct ss_sched_trace_command *);
+void ss_sched_trace_self_suspend_parked(unsigned, uint64_t slot);
+#ifdef SS_SCHED_TRACE_TEST_EXIT_SUSPEND
+/* Model test only: the latest self-suspension each core completed at an
+ * exception exit (flags 197), whatever the kept maximum row holds. */
+extern struct ss_sched_trace_command ss_sched_trace_test_exit_parked[SS_SCHED_TRACE_CORES];
+#endif
 void ss_sched_trace_direct_suspend_mark(unsigned);
 void ss_sched_trace_drain_begin(unsigned);
 void ss_sched_trace_drain_end(unsigned);
