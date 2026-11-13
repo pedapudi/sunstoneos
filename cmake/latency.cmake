@@ -82,9 +82,13 @@ function(sunstone_latency_partitioned_model target metric)
     target_compile_definitions(${target} PRIVATE SS_LATENCY_OPS=${metric})
     target_compile_options(${target} PRIVATE
       "$<$<COMPILE_LANGUAGE:C>:SHELL:-include ${latency_root}/checks/latency-ops.h>")
-  elseif(NOT control AND NOT SUNSTONE_SCHED_PMU)
+  elseif(NOT control AND NOT SUNSTONE_SCHED_PMU AND NOT SUNSTONE_LATENCY_CAUSE)
     # Real counter time with the PMU capture of the board image (QEMU counts instructions only).
     target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_PMU=1)
+  endif()
+  if(SUNSTONE_LATENCY_CAUSE AND NOT metric)
+    target_sources(${target} PRIVATE "${latency_root}/apps/latency/cause-ping.c")
+    target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_CAUSE=1)
   endif()
   target_compile_options(${target} PRIVATE ${SUNSTONE_KERNEL_FLAGS}
     "$<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>")

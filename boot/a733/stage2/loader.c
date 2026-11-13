@@ -62,6 +62,11 @@ _Static_assert(offsetof(struct slot_header, extent) == 64, "slot header ABI");
 _Static_assert(offsetof(struct slot_header, sha256) == 480, "slot header ABI");
 _Static_assert(sizeof(struct slot_header) == SUNXI_MMC_BLOCK_BYTES, "slot header ABI");
 
+/* reserved1 words: 0..15 the retained OS result, 16 card timing, 17 card
+ * clock, 18 card reads, 19 bytes read, 20 card stopped, 21 DMA ownership
+ * transfers, 22 the card gate's record (RTC GP2 as read at entry, zero when
+ * the entry state was not the gate's cold state). Status 7 detail 5: the gate
+ * record's clear did not read back. */
 struct stage2_report {
     uint64_t magic, version, bytes, status, detail, selected, generation;
     uint64_t card_sectors, start_counter, end_counter;
@@ -83,7 +88,7 @@ static _Alignas(64) uint8_t chunk[CHUNK_BYTES];
 static _Alignas(64) struct sunxi_mmc_dma_descriptor descriptors[SUNXI_MMC_DMA_DESCRIPTORS];
 static uint64_t last_counter, lifetime_end;
 static unsigned stalled_samples, dma_owned, stopped;
-static int admitted;
+static int admitted, gated;
 
 static uint64_t counter(void)
 {
@@ -106,7 +111,9 @@ int a733_stage2_remote_writers_excluded(void);
 uint32_t a733_stage2_remote_writers_mask(void);
 int a733_stage2_cpu_cache_owned(void);
 int a733_stage2_cpu_retained(void);
-int a733_stage2_reset_policy(void);
+int a733_stage2_reset_policy(int consumed);
+int a733_stage2_watchdog_state(int consumed);
+int a733_stage2_gate_entry(uint32_t *record);
 int a733_stage2_entry_state(void);
 
 static int admit(void *context, uintptr_t token, enum sunxi_mmc_kind kind, uint32_t module_hz)
@@ -277,6 +284,7 @@ static int card_read(uint64_t sector, uint32_t blocks, void *buffer)
         !sunxi_mmc_read(&card, sector, blocks, buffer, blocks * SUNXI_MMC_BLOCK_BYTES,
                         now + READ_US)) return 0;
     while (card.state == SUNXI_MMC_READING) sunxi_mmc_poll(&card);
+    if (gated) *(volatile uint32_t *)(uintptr_t)0x0205000c = 0x14af; /* Keep the gate's 16 s WDT0 from expiring. */
     int done = card.state == SUNXI_MMC_DONE;
     record();
     if (done) { ++a733_stage2_report.reserved1[18]; a733_stage2_report.reserved1[19]+=(uint64_t)blocks*512u; }
@@ -444,16 +452,16 @@ static void wr(uintptr_t address, uint32_t value)
 /* The FEL launcher's WDT0 sequence (platform/a733-smp/launch.c) without the
  * ROM redirect and RTC FEL flag: output reset, the four-second
  * configuration, then mode enable and one restart. Refuses a watchdog,
- * redirect or flag that another owner already set. */
+ * redirect or flag that another owner already set, except the card first
+ * stage's 16 s watchdog (mode 0xb1, configuration 1, output 2), which it
+ * switches to the four-second mode. */
 static int arm(uint64_t *armed)
 {
-    if ((rd(0x02050014) & 1) || (rd(0x02050010) & 0x100) || rd(0x070501c0) ||
-        rd(0x070501c4) || rd(0x070501d4) || rd(0x07090108))
-        return 0;
+    if (!a733_stage2_watchdog_state(gated)) return 0;
     wr(0x02050018, 0x16aa0002);
     wr(0x02050010, 0x16aa0001);
     if ((rd(0x02050018) & 0xffff) != 2 || (rd(0x02050010) & 0xffff) != 1 ||
-        (rd(0x02050014) & 1)) return 0;
+        ((rd(0x02050014) & 1) && !gated)) return 0;
     *armed = counter();
     wr(0x02050014, 0x16aa0041);
     wr(0x0205000c, 0x14af);
@@ -546,6 +554,13 @@ _Noreturn void a733_stage2_main(void)
     a733_stage2_report.bytes = sizeof(a733_stage2_report);
     a733_stage2_report.selected = UINT64_MAX;
     a733_stage2_report.start_counter = counter();
+    /* The card first stage's cold state is consumed before anything else, so
+     * its 16 s watchdog, started before boot0's DRAM training, restarts now. */
+    uint32_t record = 0;
+    int gate = a733_stage2_gate_entry(&record);
+    if (gate == 2) finish(ENTRY_REFUSED, 5);
+    gated = gate == 1;
+    a733_stage2_report.reserved1[22] = record;
     if (!counter_runs()) finish(COUNTER, 0);
     if (a733_stage2_remote_writers_excluded() != 1)
         finish(REMOTE_WRITERS, a733_stage2_remote_writers_mask());
@@ -577,7 +592,7 @@ _Noreturn void a733_stage2_main(void)
             a733_stage2_report.generation = headers[s].generation;
             /* Remote and CPU/cache ownership preceded the first card access.
              * These local checks do not grant missing ownership evidence. */
-            if (a733_stage2_reset_policy() != 1 ||
+            if (a733_stage2_reset_policy(gated) != 1 ||
                 a733_stage2_entry_state() != 1) finish(LOADED, headers[s].entry);
             if (!card_stop()) finish(LOAD_FAILED,a733_stage2_report.mmc_error);
             enter(&headers[s]);

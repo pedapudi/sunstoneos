@@ -4,7 +4,7 @@
   "cpu": {"clock_grants": true, "cluster": "a76", "workers": 0, "priority": 2, "stack_bytes": 65536, "heap_bytes": 262144},
   "regions": [
     {"name": "bounds", "kind": "input", "access": ["read"], "bytes": 65536},
-    {"name": "mode", "kind": "input", "access": ["read"], "bytes": 254464},
+    {"name": "mode", "kind": "input", "access": ["read"], "bytes": 20972032},
     {"name": "flush", "kind": "work", "access": ["read", "write"], "bytes": 16777216}
   ],
   "deadlines": {"run_us": 55000000, "return_reserve_us": 5000000, "progress_window_us": 2000000},

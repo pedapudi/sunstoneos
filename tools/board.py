@@ -593,7 +593,8 @@ class Live:
         require(len(values) == len(crumbs.RESET_WORDS), 'Reset word readback differs.')
         entry = {'sequence': self.sequence, 'words': values, 'gate': crumbs.gate_record(values['flag'])}
         commands = []
-        if entry['gate']:
+        # A boot-once value left in GP2 would boot the card at the session's reset; clear it with any gate record.
+        if entry['gate'] or values['flag'] == crumbs.BOOT_ONCE:
             commands += ['writel', hex(crumbs.RESET_WORDS['flag']), '0x0']
         if values['marker'] & 0xffff != crumbs.MARKER_SET:
             commands += ['writel', hex(crumbs.MARKER), hex(crumbs.MARKER_KEYED)]
@@ -601,10 +602,30 @@ class Live:
             after = [int(x, 16) for x in self.tx(*commands, 'readl', hex(crumbs.RESET_WORDS['flag']),
                                                  'readl', hex(crumbs.MARKER)).split()]
             entry.update(flag_after=after[0], marker_after=after[1])
-            require(not entry['gate'] or after[0] == 0, 'The first-stage gate record did not clear.')
+            require(after[0] == 0 or not (entry['gate'] or values['flag'] == crumbs.BOOT_ONCE),
+                    'The first-stage gate record or boot-once value did not clear.')
             require(after[1] & 0xffff == crumbs.MARKER_SET, 'The cold-boot marker did not read back after its keyed write.')
+        if getattr(self.args, 'marker_clear_test', False) and not self.record.get('power_epoch'):
+            self.marker_clear_test()
         self.record.setdefault('power_epoch', []).append(entry)
         self.journal()
+
+    def marker_clear_test(self):
+        """Test once, at first contact, whether software can clear the cold-boot marker, then set it again.
+
+        The manual says only a keyed write sets bits 15:0 to 0x16aa; it does not say whether a keyed write of zero
+        clears them. If it can, the runner can let a single reset take the cold path. WDT0 must read disarmed, so no
+        reset can occur between the clear and the restore, and a run that fails to restore stops before launch.
+        The next first contact sets the marker in any case."""
+        mode = int(self.tx('readl', hex(crumbs.WDT_MODE)), 16)
+        require(not mode & 1, 'The marker clear test needs WDT0 disarmed.')
+        values = [int(x, 16) for x in self.tx('writel', hex(crumbs.MARKER), hex(crumbs.MARKER_CLEAR), 'readl', hex(crumbs.MARKER),
+                                             'writel', hex(crumbs.MARKER), hex(crumbs.MARKER_KEYED), 'readl', hex(crumbs.MARKER)).split()]
+        require(len(values) == 2, 'Marker clear test readback differs.')
+        self.record['marker_clear_test'] = {'wdt_mode': mode, 'after_clear': values[0], 'after_restore': values[1],
+                                            'clearable': values[0] & 0xffff == 0}
+        self.journal()
+        require(values[1] & 0xffff == crumbs.MARKER_SET, 'The cold-boot marker did not read back after the clear test restored it.')
 
     def usb_source_off(self, phase, enforce=True):
         usb_power.observe(self, phase)
@@ -2123,7 +2144,7 @@ class Queue:
 # The caller-controlled launch options a submission freezes in its queue entry.
 # Frozen options whose False differs from leaving them out: --no-restore-rails opts out of the automatic restoration.
 NEGATABLE_OPTIONS = ('restore_rails',)
-FROZEN_OPTIONS = ('kind','lifetime','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool','radio_stage_limit','verify')
+FROZEN_OPTIONS = ('kind','lifetime','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool','radio_stage_limit','marker_clear_test','verify')
 
 
 def radio_stage_limit(text):
@@ -2154,6 +2175,9 @@ def run_options(parser, submit=False):
                         '"none" needs --approved-by coordinator and --reference-reason.')
     parser.add_argument('--reference-reason', help='Why a coordinator exempts this run from a reference.')
     parser.add_argument('--storage-write', action='store_true')
+    parser.add_argument('--marker-clear-test', action='store_true',
+                        help='At first contact, write 0x16aa0000 to the cold-boot marker, read it, set it again and record both '
+                        'readbacks (docs/designs/card-fel-recovery.md); requires --approved-by coordinator.')
     parser.add_argument('--no-preflight', metavar='REASON',
                         help='Queue or check an image whose host pre-flight cannot run; REASON is recorded in the entry and the result.')
     parser.add_argument('--descriptor', type=Path, help='Hash-bound image metadata; defaults to IMAGE.board.json.')
