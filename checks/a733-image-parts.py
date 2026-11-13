@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Check ordinary and ledger USB images, plus the parser's legacy NOLOAD exception."""
+"""Check ordinary and ledger USB images, plus the parser's legacy NOLOAD exception.
+
+The build identity is admitted in the text block or the OS read-only data block, and refused in a writable segment.
+"""
 import argparse
 import importlib.util
 import json
@@ -88,6 +91,22 @@ SECTIONS {
     for name, script in (('control', 'storage.ld'), ('usb', 'usb.ld')):
         run([harness.LLD, '-T', out / script, out / 'image.o', '-o', out / (name + '.elf')])
     tool.image_parts(out / 'control.elf')
+    # The build identity may lie in the OS image's read-only data block after the text block (apps/os/sealed-link.patch),
+    # and only in a load segment that is not writable.
+    storage = (out / 'storage.ld').read_text()
+    rodata = storage.replace('    RAM (rw) : ORIGIN = 0x41200000, LENGTH = 14M',
+                             '    RODATA (r) : ORIGIN = 0x41200000, LENGTH = 2M\n    RAM (rw) : ORIGIN = 0x41400000, LENGTH = 12M')
+    rodata = rodata.replace('    .rodata : { *(.rodata*) } > CODE', '    .rodata : { *(.rodata*) } > RODATA')
+    assert rodata.count('> RODATA') == 1 and 'ORIGIN = 0x41400000' in rodata
+    (out / 'rodata.ld').write_text(rodata)
+    run([harness.LLD, '-T', out / 'rodata.ld', out / 'image.o', '-o', out / 'rodata.elf'])
+    _, address, _ = tool.image_parts(out / 'rodata.elf')
+    assert 0x41200000 <= address < 0x41400000, hex(address)
+    writable = out / 'writable-identity.S'
+    writable.write_text(source.read_text().replace('.section .rodata,"a"', '.section .rodata.identity,"aw"'))
+    run([harness.CLANG, '--target=aarch64-none-elf', '-c', writable, '-o', out / 'writable-identity.o'])
+    run([harness.LLD, '-T', out / 'storage.ld', out / 'writable-identity.o', '-o', out / 'writable-identity.elf'])
+    harness.refused(lambda: tool.image_parts(out / 'writable-identity.elf'), 'Invalid image build identity', ValueError)
     for path in args.control_elf:
         tool.image_parts(path)
     originals = [out / 'usb.elf'] + ([args.usb_elf] if args.usb_elf else [])
