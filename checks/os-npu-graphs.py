@@ -33,7 +33,9 @@ UNITS = ('checks/os-npu-service.c', 'kernel/umem/umem.c', 'drivers/npu/npu_decla
          'drivers/npu/a733_npu_mmu.c', 'drivers/npu/nbg_model.c', 'drivers/npu/nbg_assembly.c',
          'drivers/npu/nbg_checksum.c', 'drivers/npu/nbg_relocation.c', 'drivers/storage/storage_digest.c',
          # checks/os-npu-service.c models the EL0 ring too (case 33), so its units are linked.
-         'kernel/appmem/app_region.c', 'apps/os/npu-queue.c', 'runtime/npu_app_queue.c', 'drivers/npu/npu_queue.c')
+         'kernel/appmem/app_region.c', 'apps/os/npu-queue.c', 'runtime/npu_app_queue.c', 'drivers/npu/npu_queue.c',
+         # The owners wait on precise deadlines (runtime/deadline.c), as in checks/os-npu-service.py.
+         'runtime/deadline.c')
 DEFINES = ['SUNSTONE_A733_OS=1',
            'SUNSTONE_BOARD_APPLICATION=1', 'SUNSTONE_BOARD_SUPERVISED=1', 'OS_NPU_CORE=0u']
 ran = []

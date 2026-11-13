@@ -16,7 +16,7 @@ spec.loader.exec_module(report)
 require = report.require
 
 
-def geometry(image):
+def _window_geometry(image):
     """Resolve the native producer's actual object layouts; reject ambiguity."""
     with Path(image).open('rb') as stream:
         elf = ELFFile(stream)
@@ -69,9 +69,70 @@ def geometry(image):
     return objects
 
 
+OWNER_RECORDS = (
+    ('thermal', 'os_thermal_wake_record', 48, 'thermal'),
+)
+
+
+def owner_geometry(symbols):
+    """Optional task counters reside in preserved image RAM, never device RAM."""
+    owners = {}
+    for owner, symbol, expected, kind in OWNER_RECORDS:
+        if symbol not in symbols:
+            continue
+        address, size = symbols[symbol]
+        require(size == expected and address % 8 == 0 and
+                0x41200000 <= address < address + size <= 0x42000000,
+                'Owner wake counter extent differs: ' + symbol)
+        owners[owner] = dict(address=address, bytes=size, kind=kind)
+    return owners
+
+
+def geometry(image):
+    objects = _window_geometry(image)
+    with Path(image).open('rb') as stream:
+        table = ELFFile(stream).get_section_by_name('.symtab')
+        require(table is not None, 'Owner capture requires symbols.')
+        wanted = {row[1] for row in OWNER_RECORDS}
+        symbols = {}
+        for symbol in table.iter_symbols():
+            if (symbol.name not in wanted or symbol['st_info']['type'] != 'STT_OBJECT' or
+                    symbol['st_info']['bind'] != 'STB_GLOBAL' or symbol['st_shndx'] == 'SHN_UNDEF'):
+                continue
+            require(symbol.name not in symbols, 'Ambiguous owner wake counter export.')
+            symbols[symbol.name] = (symbol['st_value'], symbol['st_size'])
+    owners = owner_geometry(symbols)
+    if owners:
+        objects['owner_wakes'] = owners
+    return objects
+
+
 def captures(layout):
     return [('thermal-' + name, layout[name]['address'], layout[name]['bytes'])
-            for name in ('window', 'readings')]
+            for name in ('window', 'readings') if name in layout] + [
+                ('owner-wakes-' + name, record['address'], record['bytes'])
+                for name, record in layout.get('owner_wakes', {}).items()]
+
+
+def decode_owners(layout, copied):
+    owners = {}
+    for name, record in layout.get('owner_wakes', {}).items():
+        raw = copied['owner-wakes-' + name]
+        require(len(raw) == record['bytes'], 'Short owner wake counter capture: ' + name)
+        rows = []
+        for offset in range(0, len(raw), 48):
+            values = struct.unpack_from('<6Q', raw, offset)
+            if record['kind'] == 'thermal':
+                row = dict(zip(('begin_us', 'last_us', 'waits', 'notifications', 'deadlines', 'errors'), values))
+                require(row['last_us'] >= row['begin_us'], 'Owner wake clock regressed.')
+                elapsed = row['last_us'] - row['begin_us']
+                row['elapsed_us'] = elapsed
+                row['wakes_per_second'] = (row['notifications'] + row['deadlines']) * 1e6 / elapsed if elapsed else None
+            else:
+                raise ValueError('Unknown owner wake counter layout.')
+            rows.append(row)
+        owners[name] = rows[0] if len(rows) == 1 else dict(zip(('client', 'transport'), rows))
+    return owners
 
 
 def decode(layout, copied, epoch, generation):
@@ -79,6 +140,7 @@ def decode(layout, copied, epoch, generation):
 
     Completeness remains evidence, independent of ROM return and RAM cleanup.
     """
+    owners = decode_owners(layout, copied)
     w, r = (copied['thermal-' + name] for name in ('window', 'readings'))
     require(len(w) == layout['window']['bytes'] and len(r) == layout['readings']['bytes'],
             'Short thermal object capture.')
@@ -95,4 +157,6 @@ def decode(layout, copied, epoch, generation):
     raw = w[:header_bytes] + r[first * report.ROW_BYTES:(first + h['rows']) * report.ROW_BYTES]
     decoded = report.decode(raw, epoch, generation)
     decoded['classification'] = report.classify(decoded)
+    if owners:
+        decoded['owner_wakes'] = owners
     return decoded

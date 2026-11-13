@@ -19,6 +19,7 @@
 #pragma weak pvr_compute_queue_event
 #pragma weak pvr_compute_queue_abort
 #pragma weak pvr_compute_queue_close
+#pragma weak pvr_compute_queue_clients_idle
 #pragma weak pvr_compute_queue_quiesce
 #pragma weak pvr_compute_queue_deadline
 #pragma weak pvr_compute_queue_submitting
@@ -36,6 +37,45 @@
 static struct pvr_gpu_service *instance;
 static unsigned creating_worker;
 static void worker(void *);
+static BaseType_t request_send(struct pvr_gpu_service *s,const struct pvr_gpu_service_message *m,TickType_t wait)
+{
+    BaseType_t result=xQueueSend(s->requests,m,wait);
+#ifdef SUNSTONE_A733_OS
+    if(result==pdTRUE)xTaskNotifyGive(s->worker);
+#endif
+    return result;
+}
+#ifdef SUNSTONE_A733_OS
+/* The caller holds the critical section. */
+static void notify_waiting_clients(struct pvr_gpu_service *s)
+{
+    atomic_fetch_add_explicit(&s->event_sequence,1,memory_order_release);
+    for(unsigned i=0;i<PVR_GPU_SERVICE_CLIENTS;++i){
+        struct pvr_gpu_service_client *c=&s->clients[i];
+        if(c->event_waiting){c->event_gave=1;xTaskNotifyGiveIndexed(c->task,c->event_index);}
+    }
+}
+void pvr_gpu_service_notify_clients(struct pvr_gpu_service *s)
+{
+    taskENTER_CRITICAL();
+    notify_waiting_clients(s);
+    taskEXIT_CRITICAL();
+}
+/* Worker only: s->phase is the worker's own field. The release store of the
+ * phase precedes the sequence increment, so a client that observes the new
+ * sequence with an acquire load also observes this phase or a later one. */
+static void publish_phase(struct pvr_gpu_service *s)
+{
+    taskENTER_CRITICAL();
+    atomic_store_explicit(&s->event_phase,s->phase,memory_order_release);
+    notify_waiting_clients(s);
+    taskEXIT_CRITICAL();
+}
+unsigned pvr_gpu_service_event_phase(struct pvr_gpu_service *s)
+{return atomic_load_explicit(&s->event_phase,memory_order_acquire);}
+uint64_t pvr_gpu_service_event_sequence(struct pvr_gpu_service *s)
+{return atomic_load_explicit(&s->event_sequence,memory_order_acquire);}
+#endif
 BaseType_t pvr_gpu_service_task_privileged(TaskFunction_t entry, void *argument)
 { return creating_worker && entry == worker && argument == instance ? pdTRUE : pdFALSE; }
 
@@ -182,6 +222,9 @@ int pvr_gpu_service_interrupt(struct pvr_gpu_service *s, BaseType_t *woken)
     if (!s->irq_wake_pending) {
         const struct pvr_gpu_service_message wake = {.client = PVR_GPU_SERVICE_CLIENTS};
         if (xQueueSendFromISR(s->requests, &wake, woken) == pdTRUE) s->irq_wake_pending = 1;
+#ifdef SUNSTONE_A733_OS
+        vTaskNotifyGiveFromISR(s->worker,woken);
+#endif
     }
     int ok = !s->irq_fault;
     taskEXIT_CRITICAL_FROM_ISR(saved);
@@ -934,6 +977,34 @@ static void advance(struct pvr_gpu_service *s)
     advance_locked(s);
     if (q && s->config.job_irq_ack) pvr_compute_fast_unlock(q);
 }
+/* This predicate also governs a lifecycle caller's BUSY recheck. A false
+ * sample never grants ownership; CLOSE repeats it under the transport lock. */
+static int close_ready(const struct pvr_gpu_service *s)
+{
+    if(s->phase!=PVR_GPU_SERVICE_READY)return 0;
+#ifdef PVR_GPU_PERFORMANCE
+    if(s->performance.ticket || performance_controlling(s))return 0;
+#endif
+    const struct pvr_compute_service *c=s->config.compute;
+    if(c && ((c->phase!=PVR_COMPUTE_SERVICE_READY && c->phase!=PVR_COMPUTE_SERVICE_COMPLETE) ||
+        atomic_load_explicit(&c->input_state,memory_order_acquire)))return 0;
+    const struct pvr_render_service *r=s->config.render;
+    if(r && (atomic_load_explicit(&r->draw_state,memory_order_acquire) ||
+        atomic_load_explicit(&r->texture_state,memory_order_acquire) ||
+        atomic_load_explicit(&r->texture_output_state,memory_order_acquire) ||
+        r->texture_draft || r->texture_preparing))return 0;
+    struct pvr_compute_queue *q=s->config.compute_queue;
+    return !q || (q->phase==PVR_COMPUTE_QUEUE_READY && !q->owed &&
+        !atomic_load(&q->lost) && pvr_compute_queue_clients_idle(q));
+}
+#ifdef SUNSTONE_A733_OS
+int pvr_gpu_service_close_ready(struct pvr_gpu_service *s)
+{
+    struct pvr_compute_queue *q=s->config.compute_queue;
+    if(q && s->config.job_irq_ack && atomic_load_explicit(&q->fast.locked,memory_order_acquire))return 0;
+    return close_ready(s);
+}
+#endif
 static enum pvr_gpu_service_result execute_locked(struct pvr_gpu_service *s,
                                            const struct pvr_gpu_service_message *m)
 {
@@ -1028,10 +1099,7 @@ static enum pvr_gpu_service_result execute_locked(struct pvr_gpu_service *s,
     if (s->owner != m->client) return PVR_GPU_SERVICE_DENIED;
     if (s->phase == PVR_GPU_SERVICE_FAILED) return PVR_GPU_SERVICE_FAULT;
     if (s->phase != PVR_GPU_SERVICE_READY) return PVR_GPU_SERVICE_BUSY;
-#ifdef PVR_GPU_PERFORMANCE
-    if(r->operation==PVR_GPU_SERVICE_CLOSE && (s->performance.ticket || performance_controlling(s)))
-        return PVR_GPU_SERVICE_BUSY;
-#endif
+    if(r->operation==PVR_GPU_SERVICE_CLOSE && !close_ready(s))return PVR_GPU_SERVICE_BUSY;
     if(r->operation==PVR_GPU_SERVICE_TEXTURE) {
         struct pvr_render_service *d=s->config.render;
         if(!d || !d->owner || d->owner->draw<2 || !s->config.compute ||
@@ -1190,6 +1258,10 @@ static int step_locked(struct pvr_gpu_service *s)
     if (s->config.job_irq_ack) advance_locked(s);
     else advance(s);
     if (s->phase == PVR_GPU_SERVICE_FAILED) return 0;
+#ifdef SUNSTONE_A733_OS
+    if((s->phase==PVR_GPU_SERVICE_STARTING && s->start.wait.next_wait_us) ||
+       (s->phase==PVR_GPU_SERVICE_STOPPING && s->stop.wait.next_wait_us))return 0;
+#endif
     /* The next slot wake, interrupt or backup poll advances an idle queue. */
     if (phase == PVR_GPU_SERVICE_READY && s->phase == PVR_GPU_SERVICE_READY &&
         s->config.compute_queue && !s->irq_masked &&
@@ -1216,7 +1288,7 @@ unsigned pvr_gpu_service_quiesce(struct pvr_gpu_service *s,uint64_t end)
     atomic_store_explicit(&s->quiesce.state,1,memory_order_release);
     const struct pvr_gpu_service_message wake={.client=PVR_GPU_SERVICE_CLIENTS,.ticket=PVR_GPU_SERVICE_QUEUE_WAKE};
     /* A full request queue already wakes the worker. */
-    (void)xQueueSend(s->requests,&wake,0);
+    (void)request_send(s,&wake,0);
     return 1;
 }
 /* The worker retains its authority over firmware, interrupts and power. A
@@ -1259,6 +1331,7 @@ fault:
     atomic_store_explicit(&s->quiesce.state,3,memory_order_release);
     vTaskSuspend(NULL);
 }
+#ifndef SUNSTONE_A733_OS
 static TickType_t ticks(uint64_t us)
 {
     const uint64_t period = 1000000u / configTICK_RATE_HZ;
@@ -1313,6 +1386,93 @@ static TickType_t wait_ticks(struct pvr_gpu_service *s)
     if (sample(s, &now)) bound = earliest <= now ? 0 : earliest - now < bound ? earliest - now : bound;
     return ticks(bound);
 }
+#else
+/* Firmware-started, compatibility and stop register readbacks have no
+ * interrupt contract. Retry those lifecycle predicates at an absolute time;
+ * READY with routed interrupts has no periodic retry. */
+#define GPU_LIFECYCLE_RETRY_US UINT64_C(1000)
+static uint64_t wait_deadline(struct pvr_gpu_service *s)
+{
+    uint64_t now=sunstone_deadline_now_us(),end=UINT64_MAX;
+    unsigned closing=atomic_load_explicit(&s->quiesce.state,memory_order_acquire)==1;
+    if(closing)end=s->quiesce.deadline;
+    if(s->phase!=PVR_GPU_SERVICE_READY){
+        switch(s->phase){
+        case PVR_GPU_SERVICE_COLD:case PVR_GPU_SERVICE_STOPPED:case PVR_GPU_SERVICE_FAILED:
+        case PVR_GPU_SERVICE_DISPOSED:case PVR_GPU_SERVICE_RECONSTRUCTING:case PVR_GPU_SERVICE_PARKED:
+            return closing?end:0;
+        default:{
+            if(s->deadline<end)end=s->deadline;
+            uint64_t pending=0;
+            if(s->phase==PVR_GPU_SERVICE_STARTING)
+                pending=a733_gpu_wait_until(&s->start.wait,now,s->start.deadline);
+            else if(s->phase==PVR_GPU_SERVICE_STOPPING)
+                pending=a733_gpu_wait_until(&s->stop.wait,now,s->stop.deadline);
+            if(!pending && s->config.next_wait)pending=s->config.next_wait(s->config.context,now);
+            if(pending)return pending<end?pending:end;
+            return now+GPU_LIFECYCLE_RETRY_US<end?now+GPU_LIFECYCLE_RETRY_US:end;
+        }
+        }
+    }
+#ifdef PVR_GPU_PERFORMANCE
+    if(s->performance.ticket || performance_controlling(s)){
+        if(s->performance.ticket && s->performance.deadline<end)end=s->performance.deadline;
+        if(now+GPU_LIFECYCLE_RETRY_US<end)end=now+GPU_LIFECYCLE_RETRY_US;
+    }
+#endif
+    if(s->config.compute_queue){
+        struct pvr_compute_queue *q=s->config.compute_queue;
+        if(s->config.job_irq_ack){
+            /* A direct submission notifies us after publishing its deadline.
+             * Serialize this snapshot with the caller that updates the ring. */
+            if(!pvr_compute_fast_lock(q)){
+                atomic_store_explicit(&q->owner_waiting,1,memory_order_release);
+                if(!atomic_load_explicit(&q->fast.locked,memory_order_acquire))xTaskNotifyGive(s->worker);
+                return 0;
+            }
+            uint32_t complete=atomic_load_explicit(&q->fast.completed,memory_order_acquire);
+            for(unsigned i=0;i<PVR_COMPUTE_FAST_DEPTH;++i){
+                const struct pvr_compute_fast_entry *e=&q->fast.entry[i];
+                if(e->serial>complete && !e->fault && e->deadline<end)end=e->deadline;
+            }
+            pvr_compute_fast_unlock(q);
+        }else{
+            uint64_t job;
+            if(pvr_compute_queue_deadline(q,&job) && job<end)end=job;
+        }
+    }
+    if(compute_polled(s) && s->config.compute->deadline<end)end=s->config.compute->deadline;
+    if(render_polled(s) && s->config.render->deadline<end)end=s->config.render->deadline;
+    uint64_t free_end=free_list_deadline(s);
+    if(free_end && free_end<end)end=free_end;
+    if(s->irq_masked || !s->config.irq.mask){
+        uint64_t retry=now+(s->config.irq.mask?GPU_LIFECYCLE_RETRY_US:PVR_GPU_SERVICE_IDLE_POLL_US);
+        if(retry<end)end=retry;
+    }
+    return end==UINT64_MAX?0:end;
+}
+static int wait_request(struct pvr_gpu_service *s,struct pvr_gpu_service_message *m,uint64_t until)
+{
+    if(xQueueReceive(s->requests,m,0)==pdTRUE)return 1;
+    int result;
+    if(until)result=sunstone_deadline_wait_until(until);
+    else {
+        uint64_t began=sunstone_deadline_now_us();
+        (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+        uint64_t ended=sunstone_deadline_now_us();
+        /* Telemetry never controls retirement. Saturation makes a clock
+         * reversal or overflow observable without wrapping the receipt. */
+        if(ended<began || UINT64_MAX-s->idle_wait_us<ended-began)s->idle_wait_us=UINT64_MAX;
+        else s->idle_wait_us+=ended-began;
+        result=SUNSTONE_DEADLINE_NOTIFIED;
+    }
+    if(result==SUNSTONE_DEADLINE_ERROR){fail(s,PVR_GPU_SERVICE_CLOCK);return 0;}
+    if(result==SUNSTONE_DEADLINE_EXPIRED)++s->deadline_wakes;
+    else ++s->event_wakes;
+    if(!until && !uxQueueMessagesWaiting(s->requests))++s->idle_wakes;
+    return xQueueReceive(s->requests,m,0)==pdTRUE;
+}
+#endif
 /* Steps that progress continue while nothing is queued, for at most
  * PVR_GPU_SERVICE_BURST_US. Return 1 when CPU work remains. */
 static int burst(struct pvr_gpu_service *s, uint64_t *start)
@@ -1335,6 +1495,9 @@ static void worker(void *argument)
 #else
     (void)stack;
 #endif
+#ifdef SUNSTONE_A733_OS
+    configASSERT(sunstone_deadline_register());
+#endif
     for (;;) {
         /* One bounded burst before each request; traffic cannot starve it,
          * and the burst bound keeps requests from waiting behind it. With CPU
@@ -1342,8 +1505,34 @@ static void worker(void *argument)
          * yields to tasks of its priority. */
         struct pvr_gpu_service_message message;
         uint64_t started;
+#ifdef SUNSTONE_A733_OS
+        uint64_t before=progress(s);
+#endif
         int more=burst(s, &started);
         quiesce_step(s);
+#ifdef SUNSTONE_A733_OS
+        if(progress(s)!=before)publish_phase(s);
+        if(more){
+            /* A bounded CPU preparation burst yields through the precise
+             * timer only at its declared fairness budget. */
+            if(submitting(s))s->yield_running=0;
+            else{
+                if(!s->yield_running){s->yield_running=1;s->yield_start=started;}
+                uint64_t run=s->last_now-s->yield_start;
+                if(run>s->longest_yield_us)s->longest_yield_us=run;
+                if(run>=PVR_GPU_SERVICE_CPU_RUN_US){
+                    s->yield_running=0;++s->yield_blocks;
+                    if(!wait_request(s,&message,sunstone_deadline_now_us()+PVR_GPU_SERVICE_CPU_RUN_US))continue;
+                    goto message_ready;
+                }
+            }
+            if(xQueueReceive(s->requests,&message,0)!=pdTRUE){taskYIELD();continue;}
+        }else{
+            s->yield_running=0;
+            if(!wait_request(s,&message,wait_deadline(s)))continue;
+        }
+message_ready:
+#else
         if (more) {
             /* Bursts that end with CPU work left keep tasks below the worker's
              * priority off its core. Once such a run reaches CPU_RUN_US the
@@ -1374,6 +1563,7 @@ static void worker(void *argument)
                 continue;
             }
         }
+#endif
         if (message.client == PVR_GPU_SERVICE_CLIENTS && !message.ticket) {
             taskENTER_CRITICAL(); s->irq_wake_pending = 0; taskEXIT_CRITICAL();
             continue;
@@ -1440,6 +1630,9 @@ static void worker(void *argument)
             }
         }
         configASSERT(xQueueSend(s->clients[message.client].replies, &reply, 0) == pdTRUE);
+#ifdef SUNSTONE_A733_OS
+        publish_phase(s);
+#endif
     }
 }
 int pvr_gpu_service_init(struct pvr_gpu_service *s, const struct pvr_gpu_service_config *c,
@@ -1505,6 +1698,37 @@ static struct pvr_gpu_service_client *caller(struct pvr_gpu_service *s, unsigned
         if (s->clients[i].task == task) { *slot = i; return &s->clients[i]; }
     return NULL;
 }
+#ifdef SUNSTONE_A733_OS
+extern unsigned sunstone_deadline_notify_index(void);
+int pvr_gpu_service_deadline_register(struct pvr_gpu_service *s)
+{
+    unsigned slot;
+    struct pvr_gpu_service_client *c=caller(s,&slot);(void)slot;
+    if(!c)return 0;
+    if(c->deadline_registered)return 1;
+    if(!sunstone_deadline_register())return 0;
+    c->deadline_registered=1;return 1;
+}
+int pvr_gpu_service_wait_event(struct pvr_gpu_service *s,uint64_t sequence,uint64_t until)
+{
+    unsigned slot;
+    struct pvr_gpu_service_client *c=caller(s,&slot);(void)slot;
+    if(!c || !until || !pvr_gpu_service_deadline_register(s))return SUNSTONE_DEADLINE_ERROR;
+    taskENTER_CRITICAL();
+    c->event_index=sunstone_deadline_notify_index();c->event_waiting=1;c->event_gave=0;
+    int changed=sequence!=pvr_gpu_service_event_sequence(s);
+    if(changed)c->event_waiting=0;
+    taskEXIT_CRITICAL();
+    if(changed)return SUNSTONE_DEADLINE_NOTIFIED;
+    int result=sunstone_deadline_wait_until(until);
+    taskENTER_CRITICAL();
+    c->event_waiting=0;
+    if(c->event_gave)(void)ulTaskNotifyTakeIndexed(c->event_index,pdTRUE,0);
+    c->event_gave=0;
+    taskEXIT_CRITICAL();
+    return result;
+}
+#endif
 #ifdef PVR_GPU_PERFORMANCE
 unsigned pvr_gpu_service_performance_state(const struct pvr_gpu_service *s)
 {
@@ -1523,7 +1747,7 @@ int pvr_gpu_service_performance(struct pvr_gpu_service *s,enum a733_perf_action 
         .ticket=c->next_ticket+1,.epoch=atomic_load_explicit(&s->published_epoch,memory_order_acquire),
         .client=slot,.performance_limit=limit,.performance_action=action,.performance_value=value};
     c->pending=m.ticket;
-    if(xQueueSend(s->requests,&m,0)!=pdTRUE){c->pending=0;return 0;}
+    if(request_send(s,&m,0)!=pdTRUE){c->pending=0;return 0;}
     c->next_ticket=m.ticket;*ticket=m.ticket;return 1;
 }
 #endif
@@ -1537,7 +1761,7 @@ int pvr_gpu_service_send_epoch(struct pvr_gpu_service *s,uint64_t epoch, const s
         c->pending || c->next_ticket == UINT64_MAX) return 0;
     struct pvr_gpu_service_message message = {.request=*r, .ticket=c->next_ticket+1, .epoch=epoch, .client=slot};
     c->pending = message.ticket;
-    if (xQueueSend(s->requests, &message, wait) != pdTRUE) { c->pending = 0; return 0; }
+    if (request_send(s,&message,wait) != pdTRUE) { c->pending = 0; return 0; }
     c->next_ticket = message.ticket; *ticket = message.ticket; return 1;
 }
 static uint64_t request_epoch(struct pvr_gpu_service *s)
@@ -1565,7 +1789,7 @@ static int render_read(struct pvr_gpu_service *s,uint64_t epoch,uint32_t sequenc
     struct pvr_gpu_service_message message={.request={PVR_GPU_SERVICE_RENDER_OUTPUT,0},
         .ticket=c->next_ticket+1,.epoch=epoch,.client=slot,.render_first_pixel=first_pixel,.render_sequence=sequence};
     c->pending=message.ticket;
-    if(xQueueSend(s->requests,&message,wait)!=pdTRUE){c->pending=0;return 0;}
+    if(request_send(s,&message,wait)!=pdTRUE){c->pending=0;return 0;}
     c->next_ticket=message.ticket;*ticket=message.ticket;return 1;
 }
 int pvr_gpu_service_render_read(struct pvr_gpu_service *s,uint32_t first,TickType_t wait,uint64_t *ticket)
@@ -1582,7 +1806,7 @@ static int compute_read(struct pvr_gpu_service *s,uint64_t epoch,uint32_t sequen
     struct pvr_gpu_service_message m={.request={PVR_GPU_SERVICE_COMPUTE_OUTPUT,0},
         .ticket=c->next_ticket+1,.epoch=epoch,.client=slot,.compute_first_word=first,.compute_sequence=sequence};
     c->pending=m.ticket;
-    if(xQueueSend(s->requests,&m,wait)!=pdTRUE){c->pending=0;return 0;}
+    if(request_send(s,&m,wait)!=pdTRUE){c->pending=0;return 0;}
     c->next_ticket=m.ticket;*ticket=m.ticket;return 1;
 }
 
@@ -1611,7 +1835,7 @@ int pvr_gpu_service_compute_input_epoch(struct pvr_gpu_service *s,uint64_t epoch
     c->input_ticket=m.ticket;c->input_client=slot;
     client->pending=m.ticket;
     atomic_store_explicit(&c->input_state,2,memory_order_release);
-    if(xQueueSend(s->requests,&m,wait)!=pdTRUE) {
+    if(request_send(s,&m,wait)!=pdTRUE) {
         client->pending=0;atomic_store_explicit(&c->input_state,0,memory_order_release);return 0;
     }
     client->next_ticket=m.ticket;*ticket=m.ticket;return 1;
@@ -1633,7 +1857,7 @@ int pvr_gpu_service_draw_next(struct pvr_gpu_service *s,uint64_t epoch,uint32_t 
     d->draw_ticket=m.ticket;d->draw_client=slot;d->draw_epoch=epoch;d->draw_previous=previous;
     client->pending=m.ticket;
     atomic_store_explicit(&d->draw_state,2,memory_order_release);
-    if(xQueueSend(s->requests,&m,wait)!=pdTRUE) {
+    if(request_send(s,&m,wait)!=pdTRUE) {
         client->pending=0;atomic_store_explicit(&d->draw_state,0,memory_order_release);return 0;
     }
     client->next_ticket=m.ticket;*ticket=m.ticket;return 1;
@@ -1665,7 +1889,7 @@ int pvr_gpu_service_texture(struct pvr_gpu_service *s,uint64_t epoch,const struc
     struct pvr_gpu_service_message m={.request={PVR_GPU_SERVICE_TEXTURE,timeout},.ticket=client->next_ticket+1,.epoch=epoch,.client=slot};
     d->texture_ticket=m.ticket;d->texture_client=slot;d->texture_epoch=epoch;client->pending=m.ticket;
     atomic_store_explicit(&d->texture_state,2,memory_order_release);
-    if(xQueueSend(s->requests,&m,wait)!=pdTRUE) {
+    if(request_send(s,&m,wait)!=pdTRUE) {
         client->pending=0;atomic_store_explicit(&d->texture_state,0,memory_order_release);return 0;
     }
     client->next_ticket=m.ticket;*ticket=m.ticket;return 1;

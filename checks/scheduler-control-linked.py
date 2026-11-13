@@ -12,7 +12,12 @@ import subprocess
 from harness import environment
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--build-dir', '{build:scheduler-control-models}', '--output', '{output}', '--positive']]
+GATE_RUNS = [['--build-dir', '{build:scheduler-control-models}', '--output', '{output}', '--positive', '--perturb']]
+# Perturbation sweep: kernel/scheduler/perturb.h names the sites. Each point delays one site on every core by a
+# number of loop turns; on QEMU's deterministic clock every delay is a different interleaving of the same run.
+PERTURB_MODELS = ('scheduler-partitioned-qemu', 'scheduler-partitioned-storm-qemu')
+PERTURB_SITES = {'api-entry': 0, 'owner-publish': 1, 'owner-drain': 2, 'control-open': 3}
+PERTURB_TURNS = (300, 1000, 3000)
 CHECK_INPUTS = ['kernel/scheduler', 'patches/freertos-smp-c.patch',
                 'patches/freertos-partitioned-api.patch', 'checks/scheduler-partitioned-qemu.c',
                 'checks/scheduler-partitioned-qemu-config/FreeRTOSConfig.h',
@@ -27,6 +32,9 @@ def main():
     parser.add_argument('--qemu', type=Path, default=Path.home() / '.cache/sunstoneos/host/usr/bin/qemu-system-aarch64')
     parser.add_argument('--case', action='append')
     parser.add_argument('--positive', action='store_true', help='run the six unmodified linked models first')
+    parser.add_argument('--perturb', action='store_true',
+                        help='run the linked models at every perturbation site and delay; each must pass')
+    parser.add_argument('--jobs', type=int, default=8, help='concurrent QEMU runs in the perturbation sweep')
     args = parser.parse_args()
     build, output = args.build_dir.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -41,13 +49,19 @@ def main():
     port = (build / 'freertos-smp/port.c').read_text()
     fixture = (ROOT / 'checks/scheduler-partitioned-qemu.c').read_text()
 
-    def execute(image, directory, cores=8):
+    def execute(image, directory, cores=8, perturb=None):
         (directory / 'image.sha256').write_text(hashlib.sha256(image.read_bytes()).hexdigest() + '\n')
         command = [str(args.qemu.resolve()), '-machine', 'virt,gic-version=3,secure=off,virtualization=off',
                    '-accel', 'tcg,thread=single', '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a76',
                    '-smp', str(cores), '-m', '128M', '-nographic', '-monitor', 'none',
                    '-semihosting-config', 'enable=on,target=native', '-device', f'loader,file={image},cpu-num=0',
                    '-device', 'loader,addr=0x47ff0000,data=0,data-len=4']
+        # Word 0 at 0x47ff0040 selects the delaying cores (zero: all); word 1 + site holds that site's turns.
+        table = [0] * (1 + len(PERTURB_SITES))
+        if perturb:
+            table[1 + perturb[0]] = perturb[1]
+        for index, word in enumerate(table):
+            command += ['-device', f'loader,addr=0x{0x47ff0040 + 4 * index:x},data={word},data-len=4']
         process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, start_new_session=True)
         try:
@@ -78,6 +92,31 @@ def main():
             status, log = execute(build / (name + '.elf'), directory, cores)
             assert status == 0 and marker in log and 'FAIL' not in log, (name, directory / 'qemu.log')
             print('PASS linked model: ' + name, flush=True)
+
+    if args.perturb:
+        from concurrent.futures import ThreadPoolExecutor
+        points = [(model, site, turns) for model in PERTURB_MODELS
+                  for site in PERTURB_SITES for turns in PERTURB_TURNS]
+
+        def perturbed(point):
+            model, site, turns = point
+            directory = output / f'perturb-{model}-{site}-{turns}'
+            directory.mkdir(exist_ok=True)
+            try:
+                status, log = execute(build / (model + '.elf'), directory, 8, (PERTURB_SITES[site], turns))
+            except AssertionError:
+                return point, 'QEMU timed out'
+            if status == 0 and 'PASS partitioned concurrent:' in log and 'FAIL' not in log:
+                return point, None
+            failed = re.search(r'FAIL [^\s]+', log)
+            return point, failed.group(0) if failed else f'status {status}'
+
+        with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            results = list(pool.map(perturbed, points))
+        for (model, site, turns), failure in results:
+            print(f'{"PASS" if failure is None else "FAIL"} perturbed linked model: {model} {site} {turns} turns'
+                  + ('' if failure is None else f' ({failure})'), flush=True)
+        assert all(failure is None for _, failure in results), 'perturbed linked models failed'
 
     def line(text, needle):
         matches = list(re.finditer(r'^' + re.escape(needle), text, re.M))

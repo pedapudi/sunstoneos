@@ -69,6 +69,7 @@ class Model:
             # WDT0 mode reads its reset value 0 at a power-on gate entry.
             self.registers.update({board.crumbs.RESET_WORDS['flag']:0x0c028000,board.crumbs.MARKER:board.crumbs.MARKER_KEYED})
         self.calls = []
+        self.writes = []    # (address, bytes) of every write, in order: the sealed source is gone after the call
         self.programs = []
         self.quarantined = []
         self.launched = False
@@ -175,6 +176,11 @@ class Model:
             elif op=='write':
                 address=int(args[i+1],0)
                 data=Path(args[i+2]).read_bytes()
+                if self.launched is False and address==0x41000000:
+                    # A transfer fault: one flipped byte, or a write that ends early and leaves the old bytes.
+                    if self.variant=='upload-flip':data=data[:5]+bytes([data[5]^0x10])+data[6:]
+                    if self.variant=='upload-short':data=data[:-3]
+                self.writes.append((address,data))
                 for n,b in enumerate(data):self.memory[address+n]=b
                 i+=3
             elif op=='read':
@@ -184,6 +190,9 @@ class Model:
                     data=bytes([data[0]^1])+data[1:]
                 Path(args[i+3]).write_bytes(data)
                 i+=4
+            elif op=='exe' and self.digest_helper_loaded(int(args[i+1],0)):
+                self.digest_helper()
+                i+=2
             elif op in ('exe','reset64'):
                 entry_mode=self.registers.get(board.crumbs.WDT_MODE,0)
                 self.launched=True
@@ -261,13 +270,44 @@ class Model:
         return types.SimpleNamespace(returncode=0,stdout='\n'.join(out),stderr='')
 
 
-def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=False,recovery=False,entry=1,configure=None):
+    # The digest helper's contract (boot/a733/upload-digest.S), which checks/upload-digest.py tests on the helper's own
+    # bytes against hashlib: SHA-256 of each requested range, the status word and ID_ISAR5 written into the request block.
+    helper = None
+    digest_rate = 20e6        # bytes per second the modeled helper hashes; it advances the model clock
+
+    def digest_helper_loaded(self,address):
+        helper=self.helper
+        return (helper is not None and address==images.LAUNCHER_SRAM[0] and
+                bytes(self.memory.get(address+n,0) for n in range(len(helper)))==helper)
+
+    def digest_helper(self):
+        block=images.LAUNCHER_SRAM[0]+images.DIGEST_PARAMS
+        word=lambda offset:int.from_bytes(bytes(self.memory.get(block+offset+n,0) for n in range(4)),'little')
+        assert self.registers[board.crumbs.WDT_MODE]&1,'The digest helper runs only under an armed WDT0.'
+        assert word(0)==images.DIGEST_MAGIC
+        count=word(4);hashed=0
+        status=0xe0000002 if self.variant=='digest-no-sha2' else images.DIGEST_DONE
+        for index in range(count if status==images.DIGEST_DONE else 0):
+            address,size=word(16+8*index),word(20+8*index)
+            assert address%4==0,'The helper refuses an address that is not a multiple of 4.'
+            digest=images.hashlib.sha256(bytes(self.memory.get(address+n,0) for n in range(size))).digest()
+            for n,b in enumerate(digest):self.memory[block+16+8*count+32*index+n]=b
+            hashed+=size
+        for n,b in enumerate(struct.pack('<2I',status,0x11011120 if status==images.DIGEST_DONE else 0x01011120)):
+            self.memory[block+8+n]=b
+        self.digest_calls=getattr(self,'digest_calls',0)+1
+        self.clock+=hashed/(0.2e6 if self.variant=='digest-slow' else self.digest_rate)
+
+
+def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=False,recovery=False,entry=1,configure=None,
+              verify='readback',uploads=None):
     root.mkdir()
     args=arguments(root, development=resident or recovery)
     if configure:configure(args)
     if resident:args.lifetime='resident'
     if recovery:args.kind='probe';args.approved_by='coordinator'
     args.restore_rails=restore
+    args.verify=verify
     model=Model(variant)
     owners=[]
     class Backend(board.Live):
@@ -299,7 +339,7 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
         def prepare(self,info):
             if dirty:self.record[dirty]=True
             plan={'epoch':1,'generation':2,'watchdog':{'mode':0xb1,'session_seconds':1},
-                  'uploads':[(0x41000000,args.image)],'launch':['exe','0x52000']}
+                  'uploads':uploads or [(0x41000000,args.image)],'launch':['exe','0x52000']}
             if resident:
                 plan['lifetime']='resident'
                 plan['watchdog']['mode']=0x41
@@ -746,7 +786,7 @@ def transport_cases(out):
         expected={'normal':'returned','watchdog':'watchdog-reset','no-return':'no-return','card-watchdog-41':'watchdog-reset','card-watchdog-b1':'watchdog-reset',
                   'card-cold-record':'returned','card-boot-once-stale':'returned','marker-stuck':'refused-before-launch',
                   'host-error':'host-error','dram-failure':'refused-before-launch','rail-refusal':'refused-before-launch',
-                  'readback':'refused-before-launch','partial-arm':'host-error','journal-error':'host-error','invalid-report':'host-error','stuck-disarm':'host-error','return-decoder':'host-error'}[variant]
+                  'readback':'upload-fault','partial-arm':'host-error','journal-error':'host-error','invalid-report':'host-error','stuck-disarm':'host-error','return-decoder':'host-error'}[variant]
         assert result['outcome']==expected,(variant,result)
         assert bool(model.quarantined)==(variant in ('no-return','stuck-disarm')),(variant,model.quarantined)
         if variant=='stuck-disarm':
@@ -834,6 +874,85 @@ def transport_cases(out):
     else:raise AssertionError('transport error accepted')
     assert model.quarantined and len(model.calls)==0
     passed('transport-error-quarantines-unknown-instance')
+
+
+def upload_verify_cases(out):
+    """Uploads verified by reading back and by the on-board digest helper: a flipped byte and a short write are upload
+    faults in both modes, no image runs, and the instance stays usable. The digest path reads no uploaded DRAM byte back."""
+    Model.helper=images.build_upload_digest(out/'upload-helper').read_bytes()
+    def plan_files(root):
+        root.mkdir(parents=True,exist_ok=True)
+        image=images.write(root/'image.bin',bytes(range(256))*40)               # 10240 bytes
+        data=images.write(root/'input.bin',bytes((7*n)&255 for n in range(70001)))
+        launcher=images.write(root/'launch.bin',b'\x1e\xff\x2f\xe1'*64)         # not the helper's bytes
+        return [(0x41000000,image),(0x44000000,data),(0x52000,launcher)]
+    reads=lambda model,low,high:[c for c in model.calls if c[0]=='read' and low<=int(c[1],0)<high]
+    for verify in ('readback','digest'):
+        for variant in ('upload-flip','upload-short'):
+            name=f'{verify}-{variant}'
+            result,model,owner=lifecycle(out/name,variant,verify=verify,uploads=plan_files(out/(name+'-files')))
+            assert result['outcome']=='upload-fault' and not result['launch_attempted'],(name,result)
+            failure=result['first_failure']
+            assert failure['site']==f'upload-{verify}' and failure['address']=='0x41000000' and failure['bytes']==10240,(name,failure)
+            assert failure['stage']=='launch' and 'image.bin' in failure['detail'],(name,failure)
+            if verify=='digest':
+                assert failure['observed_sha256']!=failure['expected_sha256']
+            else:
+                assert failure['first_difference']==(5 if variant=='upload-flip' else 10237),(name,failure)
+            # Nothing ran: the launcher never reached SRAM and no execute command started the image.
+            assert not model.launched and not model.quarantined and not owner.armed,(name,model.quarantined)
+            assert (0x52000,b'\x1e\xff\x2f\xe1'*64) not in model.writes
+            passed(f'upload-fault-{verify}-{variant}')
+    # The digest path: DRAM uploads written once and verified in batches; the launcher SRAM is written after the helper.
+    with patch.object(board,'DIGEST_CALL_SECONDS',0.01):
+        result,model,owner=lifecycle(out/'digest-normal','normal',verify='digest',uploads=plan_files(out/'digest-normal-files'))
+    assert result['outcome']=='returned',result
+    record=result['upload_verify']
+    assert record['mode']=='digest' and record['digest_bytes']==80241 and record['helper_sha256']==images.hashlib.sha256(Model.helper).hexdigest()
+    batches=record['batches']
+    # The first call assumes the readback rate (5.5 kB at 0.01 s, rounded to 4 KiB); later calls use the modeled 20 MB/s.
+    assert batches[0]['bytes']==4096 and sum(b['bytes'] for b in batches)==80241 and all(b['status']==hex(images.DIGEST_DONE) for b in batches),batches
+    assert len(batches)==model.digest_calls>=2
+    assert not reads(model,0x41000000,0x80000000),'The digest path read uploaded DRAM back.'
+    calls=[' '.join(c) for c in model.calls]
+    first_exe=next(i for i,c in enumerate(calls) if c.startswith('write 0x52800') and ' exe 0x52000 ' in c)
+    order=[address for address,_ in model.writes]
+    launcher=model.writes.index((0x52000,b'\x1e\xff\x2f\xe1'*64))
+    assert order.index(0x52000)<order.index(0x52800)<max(i for i,a in enumerate(order) if a==0x52800)<launcher,\
+        'The helper reaches SRAM before its first call and the launcher only after the last one.'
+    assert first_exe>0
+    # arm() writes the mode and reads it back in two calls before the helper; disarm() follows it.
+    assert all('0x16aa00b1' in calls[i-2] and calls[i+1].startswith('writel 0x2050014 0x16aa0000')
+               for i,c in enumerate(calls) if c.startswith('write 0x52800')),'Each helper call runs under an armed WDT0.'
+    passed('upload-digest-batches-without-dram-readback')
+    for variant,reason in (('digest-no-sha2','no SHA-256 instructions'),('digest-slow','no faster than reading back')):
+        with patch.object(board,'DIGEST_CALL_SECONDS',0.01):
+            result,model,owner=lifecycle(out/variant,variant,verify='digest',uploads=plan_files(out/(variant+'-files')))
+        assert result['outcome']=='returned',(variant,result)
+        assert reason in result['upload_verify']['fallback'] and len(result['upload_verify']['batches'])==1,(variant,result['upload_verify'])
+        # Every byte the helper did not verify is read back.
+        verified=4096 if variant=='digest-slow' else 0
+        assert sum(int(c[2]) for c in reads(model,0x41000000,0x80000000))==80241-verified,variant
+        passed('upload-digest-fallback-'+variant)
+    # A plan that does not own the launcher SRAM keeps the readback; so do unaligned and overlapped uploads.
+    result,model,owner=lifecycle(out/'digest-no-launcher','normal',verify='digest')
+    assert result['outcome']=='returned' and result['upload_verify']['mode']=='readback'
+    assert 'launcher SRAM' in result['upload_verify']['reason'] and not getattr(model,'digest_calls',0)
+    files=plan_files(out/'split-files')
+    odd=images.write(out/'split-files/odd.bin',b'x'*9)
+    split=images.upload_verification({'launch':['exe','0x52000'],
+        'uploads':[files[0],(0x41100002,odd),(0x44000000,files[1][1]),(0x44000010,odd),files[2]]},'digest')
+    assert split['digest']==[files[0],(0x44000010,odd)] and split['readback']==[(0x41100002,odd),(0x44000000,files[1][1]),files[2]],split
+    assert images.upload_verification({'launch':['exe','0x52000'],'uploads':files},'readback')['digest']==[]
+    passed('upload-digest-plan-split')
+    # The mode is frozen in the queue entry and reaches the runner command.
+    root=out/'verify-queue';root.mkdir()
+    queue=board.Queue(root/'q');args=arguments(root,'--verify','digest',submit=True,development=True)
+    job=queue.submit(args)
+    assert job['options']['verify']=='digest'
+    command=board.Queue.runner_command(job,'3-1')
+    assert command[command.index('--verify')+1]=='digest'
+    passed('upload-verify-frozen-in-queue-entry')
 
 
 def development_dram_cases(out):
@@ -1911,7 +2030,7 @@ def main():
         with patch.object(board,'port_idle',return_value=True):queue_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):withdraw_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):reset_release_cases(args.out)
-    if 'transport' in groups:development_dram_cases(args.out);reference_cases(args.out)
+    if 'transport' in groups:development_dram_cases(args.out);reference_cases(args.out);upload_verify_cases(args.out)
     if 'queue-integrity' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_integrity_cases(args.out)
     if 'policy' in groups:policy_cases(args.out)

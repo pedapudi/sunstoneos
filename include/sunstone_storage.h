@@ -33,6 +33,9 @@ int ss_storage_close(void);
 /* irq_entries counts, per core, the entries of the SD0 interrupt handler (INTID 193); irq_stray those that found the owner not ready
  * (the handler then masks the source); irq_recheck counts the interrupt waits that ended on the recheck timer, not the interrupt. */
 struct ss_storage_owner_stats { uint64_t elapsed_us, asleep_us, wakes; uint32_t irq_cores, owner_cores, caller_cores, irq_entries[8], irq_stray, irq_recheck; };
+/* A read-only large-region loader publishes these statistics after its native
+ * close proof. It returns 0 while active. Time after retirement counts as asleep;
+ * observing statistics performs no device access. */
 int ss_storage_owner_stats(struct ss_storage_owner_stats *);
 /* Where the last open or enable stopped: [0] stage, [1] detail, [2] first failed bounds read (sector + 1), [3] bounds reads made
  * (apps/os/large_sd.c lists the stages). All zero when nothing failed. */

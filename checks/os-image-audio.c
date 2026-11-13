@@ -7,6 +7,8 @@
 #include "../apps/os/owner-memory.h"
 extern uint8_t *ss_capture_buffer;
 #define AUDIO_STATE (*audio)
+static unsigned event_waits,event_hints,event_available,event_idle;
+#define AUDIO_MODEL_REPLY_EVENT() audio_event(audio,DMA_SERVICE_REPLY_EVENT)
 #include "os-image-audio-model.h"
 enum { CAPTURE_MAX_FRAMES=80000, CAPTURE_BYTES=2*CAPTURE_MAX_FRAMES };
 uint8_t os_check_pcm[2][CAPTURE_BYTES];
@@ -34,6 +36,41 @@ static unsigned lock_attempts,lock_late,lock_counter_fail,return_deadline_pendin
 static uint64_t lock_deadline;
 static TaskHandle_t mutex_owner,current_task;
 static unsigned mask_mode,mask_attempts,mask_reads,mask_publications,late_irqs;
+int sunstone_deadline_register(void){return 1;}
+int board_service_deadline_register(unsigned service){check(service==OS_SERVICE_AUDIO,220);return 1;}
+int board_service_blocked_until(unsigned service,uint64_t until)
+{check(service==OS_SERVICE_AUDIO&&until<=board.session.deadline_us&&until>model_ticks/24,221);return 1;}
+uint64_t a733_audio_parent_sample_at(const struct a733_audio_parent *p){(void)p;return 0;}
+int sunstone_deadline_wait_until(uint64_t until)
+{
+    if(mode!=19&&mode!=20&&mode!=21){check(until>model_ticks/24&&!model_critical,222);++model_delays;model_ticks=until*24;return 1;}
+    ++event_waits;
+    if(!event_idle){
+        check(audio->stage==IDLE&&until==board.session.deadline_us&&!sent&&!event_hints,223);
+        /* One second of scheduler ticks produces no owner return. The
+         * admitted wait stays armed until this application request. */
+        model_ticks=UINT64_C(1000127)*24;event_idle=1;
+        check(os_audio_stream_start()==1,224);event_hints=0;return 0;
+    }
+    check(until>model_ticks/24&&until<=model_ticks/24+1000000,225);
+    if(event_hints){event_hints=0;return 0;} /* Old reply hints carry no device progress. */
+    if(mode==21){check(sent==4&&audio->await_event&&!produced,232);model_ticks=until*24;return 1;}
+    if(!event_available){
+        check(sent==(mode==20?5u:4u)&&audio->await_event&&!produced&&!puts_done,226);
+        /* A late DMA publication must survive a reply hint that was already
+         * consumed. It authorizes the next GET and no earlier resubmission. */
+        event_available=1;audio_event(audio,DMA_SERVICE_PROGRESS_EVENT);event_hints=0;return 0;
+    }
+    check(produced==1&&puts_done==1&&sent==(mode==20?8u:7u)&&event_waits>=4,227);
+    os_check_result=1;__asm__ volatile("brk #0");for(;;){}
+}
+void vTaskSuspend(TaskHandle_t task){
+    (void)task;
+    check(mode==21&&atomic_load(&audio->failed)&&board_failed&&sent==4&&model_ticks/24==2000127,228);
+    os_check_result=1;__asm__ volatile("brk #0");for(;;){}
+}
+uint32_t ulTaskGenericNotifyTake(UBaseType_t index,BaseType_t clear,TickType_t ticks)
+{(void)index;(void)clear;(void)ticks;check(0,229);return 0;}
 void vTaskEnterCritical(void){check(!model_critical,208);model_critical=1;}
 void vTaskExitCritical(void){check(model_critical&&audio->irq.masked,209);model_critical=0;++mask_publications;}
 int gicv3_spi_mask(const struct gicv3_spi *spi)
@@ -102,7 +139,7 @@ int os_quiesce_fault(struct os_quiesce *q,uint32_t site,uint32_t value,const voi
     atomic_store(&q->result,OS_QUIESCE_FAULT);return 1;
 }
 BaseType_t xTaskGenericNotify(TaskHandle_t task,UBaseType_t index,uint32_t value,eNotifyAction action,uint32_t *previous)
-{(void)value;check(task==audio->handle&&!index&&action==eIncrement&&!previous,181);return pdPASS;}
+{(void)value;check(task==audio->handle&&!index&&action==eIncrement&&!previous,181);++event_hints;return pdPASS;}
 /* Mode 5: candidate rates and whether the stream accepts each one for
  * 16-bit mono capture with 4,096-byte periods; the runner compares them with
  * the vendor's table. */
@@ -119,6 +156,7 @@ static void reset(void)
     atomic_store(&audio_quiesce.requested,0);atomic_store(&audio_quiesce.result,OS_QUIESCE_PENDING);
     atomic_store(&audio_quiesce.fault_state,0);model_failing=quiesce_notes=0;
     model_ticks=0;service_retired=pool_retired=parent_retired=retire_block=0;
+    event_waits=event_hints=event_available=event_idle=0;board.session.deadline_us=60000000;
     lock_attempts=lock_late=lock_counter_fail=return_deadline_pending=lock_delay_ticks=0;lock_deadline=0;mutex_owner=current_task=NULL;
     mask_mode=mask_attempts=mask_reads=mask_publications=late_irqs=model_critical=model_delays=0;
     memset(&providers,0,sizeof(providers));audio->handle=(TaskHandle_t)(uintptr_t)1;
@@ -183,6 +221,11 @@ void os_check_run(unsigned selected,unsigned samples)
     if(selected==12){selected=4;model_lifetime=A733_LIFETIME_SUPERVISED;}
     mode=selected;reset();
     void *pcm;size_t bytes;
+    if(mode==19||mode==20||mode==21){
+        struct os_audio_stream_config c=config(16000,1,16,4096,4);
+        check(configure(&c),230);audio->stage=IDLE;
+        os_audio_task(NULL);check(0,231);
+    }
     if(mode==13){
         /* Request return at each client boundary, including a held period.
          * Every opened stream drains and closes, with no replacement open.

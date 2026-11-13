@@ -14,6 +14,8 @@ int os_perf_step(struct a733_cpu_clock *c,const struct a733_thermal_policy *p,in
 unsigned board_session_lifetime(void){return A733_LIFETIME_SUPERVISED;}
 int os_cpu_return_requested(void){return 0;}
 int os_cpu_return_failing(void){return 0;}
+/* A readiness publication wakes the application's main task (apps/os/application.c); no application runs here. */
+void os_application_wake_main(void){}
 uint32_t os_cpu_return_entry_refusal;
 int os_cpu_return_entry_guard(const struct a733_cpu_clock *c,const struct a733_thermal_policy *p,uint64_t now,
     int (*read)(void *,uintptr_t,uint32_t *),void *context){(void)c;(void)p;(void)now;(void)read;(void)context;return -1;}
