@@ -128,15 +128,15 @@ static int reset(struct a733_npu_controller *c)
             !write_reg(c, 0x104, 0) || !write_reg(c, 0x10c, 0x15a0881) ||
             !write_reg(c, 0x10c, 0x15a0880) || !write_reg(c, 0, 0x70b00)) return 0;
         c->ops.delay(c->cookie, 5);
-        if (!write_reg(c, 0, 0x70900)) return 0;
+        if (!deadline(c) || !write_reg(c, 0, 0x70900)) return 0;
         c->ops.delay(c->cookie, 20);
-        if (!write_reg(c, 0, 0xf0900) || !write_reg(c, 0x3a8, 1)) return 0;
+        if (!deadline(c) || !write_reg(c, 0, 0xf0900) || !write_reg(c, 0x3a8, 1)) return 0;
         c->ops.delay(c->cookie, 20);
-        if (!write_reg(c, 0x3a8, 0)) return 0;
+        if (!deadline(c) || !write_reg(c, 0x3a8, 0)) return 0;
         c->ops.delay(c->cookie, 40);
-        if (!write_reg(c, 0, 0xf0900) || !write_reg(c, 0, 0x70900)) return 0;
+        if (!deadline(c) || !write_reg(c, 0, 0xf0900) || !write_reg(c, 0, 0x70900)) return 0;
         c->ops.delay(c->cookie, 50);
-        if (!verify(c, 4, 1, 1) || !verify(c, 0, 0x30000, 0x30000) ||
+        if (!deadline(c) || !verify(c, 4, 1, 1) || !verify(c, 0, 0x30000, 0x30000) ||
             !verify(c, 0x388, 0, 1)) return 0;
     }
     uint32_t value;

@@ -2,6 +2,9 @@
 #include "a733_clock_reference.h"
 #include "a733_pll_lock.h"
 #include "a733_gpu_spin.h"
+#ifdef SUNSTONE_A733_OS
+#include "sunstone_deadline.h"
+#endif
 #include "a733_npu_platform_native.h"
 #include "a733_range.h"
 #include "sunstone_crumb.h"
@@ -413,6 +416,38 @@ static uint32_t pll_word(const struct a733_npu_startup *s)
  * at most 100, about 420 us with the 20 us settle, so the spin does not
  * yield. An adopted PLL passes the same three consecutive observations. */
 struct startup_lock_sample { struct a733_npu_startup *startup; uint32_t last; };
+#ifdef SUNSTONE_A733_OS
+/* The vendor's three LOCK samples, 3 us spacing and 20 us settle use
+ * compare deadlines. No register lock is held while this task blocks. */
+static int pll_pause(int (*now)(void *,uint64_t *),void *cookie,uint64_t next)
+{
+    uint64_t t;
+    if(now(cookie,&t)!=1)return 0;
+    if(t>=next)return 1;
+    const uint64_t until=sunstone_deadline_now_us()+next-t;
+    do {
+        const int result=sunstone_deadline_wait_until(until);
+        if(result==SUNSTONE_DEADLINE_ERROR||now(cookie,&t)!=1)return 0;
+        if(t>=next)return 1;
+        if(result==SUNSTONE_DEADLINE_EXPIRED)return 0;
+    }while(1);
+}
+static int pll_wait(int (*read)(void *,uint32_t *),int (*now)(void *,uint64_t *),void *cookie,uint32_t word)
+{
+    struct a733_pll_lock lock={0};
+    uint64_t t,next=0;uint32_t value;
+    for(unsigned reads=0;reads<A733_PLL_LOCK_MAX_READS;++reads){
+        if(!pll_pause(now,cookie,next)||read(cookie,&value)!=1||
+           (value&~A733_PLL_LOCK_BIT)!=word||now(cookie,&t)!=1)return 0;
+        next=t+A733_PLL_LOCK_GAP_US+1u;
+        if(a733_pll_lock_count(&lock,t,(value&A733_PLL_LOCK_BIT)!=0))
+            return pll_pause(now,cookie,a733_pll_lock_settled(&lock));
+    }
+    return 0;
+}
+#else
+#define pll_wait a733_pll_lock_wait
+#endif
 static int lock_read(void *v,uint32_t *out)
 {
     struct startup_lock_sample *sample=v;
@@ -420,11 +455,17 @@ static int lock_read(void *v,uint32_t *out)
     sample->last=*out;return 1;
 }
 static int lock_now(void *v,uint64_t *out)
-{struct a733_npu_startup *s=((struct startup_lock_sample *)v)->startup;*out=s->ops.spin_us(s->cookie);return 1;}
+{
+    struct a733_npu_startup *s=((struct startup_lock_sample *)v)->startup;
+#ifdef SUNSTONE_A733_OS
+    if(!now(s,0))return 0;
+#endif
+    *out=s->ops.spin_us(s->cookie);return 1;
+}
 static int lock_wait(struct a733_npu_startup *s)
 {
     struct startup_lock_sample sample={s,0};
-    if(!a733_pll_lock_wait(lock_read,lock_now,&sample,pll_word(s))) {
+    if(!pll_wait(lock_read,lock_now,&sample,pll_word(s))) {
         REGISTER_FAIL(s,PLL,sample.last);return 0;
     }
     return now(s,0);
@@ -605,6 +646,9 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
          * The task blocks until the last tick before the end and spins the
          * remainder, at most one tick, on the raw counter. */
         if(t<s->wait_until) {
+#ifdef SUNSTONE_A733_OS
+            return PENDING; /* The owner arms the exact settle deadline. */
+#else
             const uint64_t left=s->wait_until-t;
             if(left>TICK_US)return PENDING;
             uint64_t raw=s->ops.spin_us(s->cookie),until;
@@ -616,6 +660,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
             }
             if(!now(s,&t))return fault(s);
             if(t<s->wait_until)return PENDING;
+#endif
         }
         s->stage=A733_NPU_STARTUP_FINAL;
         break;
@@ -784,7 +829,7 @@ int a733_npu_startup_retune_until(struct a733_npu_startup *s,unsigned mhz,uint64
     s->pll_factors=target;s->pll_adopted=0;
     if(!apply(s,steps,1) || !retune_apply(s,steps+1,STEPS(steps)-1,deadline)){(void)fault(s);return -1;}
     retune_leave(s);
-    if(!a733_pll_lock_wait(retune_read,retune_now,&wait,pll_word(s)) || !before(s,0,deadline)){
+    if(!pll_wait(retune_read,retune_now,&wait,pll_word(s)) || !before(s,0,deadline)){
         (void)fault(s);return -1;
     }
     held=s->ops.enter(s->cookie,deadline);

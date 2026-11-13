@@ -104,6 +104,11 @@ struct a733_radio_platform {
     struct sdio_card card;
     struct a733_radio_borrow borrower;
     void *cookie;
+    /* Optional image-owned interrupt retirement. Installed before first poll;
+     * the callback must retain its backing through every fault. No clock may
+     * close before it proves source quiet, disabled, inactive and not pending. */
+    int (*interrupt_retire)(void *);
+    void *interrupt_context;
     atomic_uint busy;
     a733_clock_mask_t shared;
     a733_rail_mask_t rail_scopes;
@@ -128,6 +133,10 @@ struct a733_radio_platform {
     struct sunxi_sdio_result stop_result;
     unsigned stop_requested,stop_phase,stop_completed,stop_unprepared,stop_bus,stop_powered,peer_stopped,stop_released,stop_from;
 };
+/* Sole-owner wait preparation with the same host callback admission as poll.
+ * The platform scopes core_call for initialization and stopping, where a
+ * public borrower may not access the controller. See sunxi_sdio_event_prepare. */
+int a733_radio_platform_event_prepare(struct a733_radio_platform *,uint64_t *until);
 /* The failure left nothing powered, so no reset is needed to release anything: the first-run guard refused before
  * any write, or the failure shutdown finished with every readback matched (PM1 low, clocks off, BLDO5 off). Such a
  * failure keeps the board alive: it leaves the register lock and the leases as they are, sets no failure bit, and the

@@ -105,6 +105,9 @@ struct pvr_compute_queue {
     struct gpu_queue_job job;     /* the worker's copy */
     /* Shared with the client. */
     atomic_uint slot_state, lost, wake;
+#ifdef SUNSTONE_A733_OS
+    atomic_uint owner_waiting, lifecycle_waiting;
+#endif
     struct gpu_queue_job slot;
     struct pvr_compute_queue_client peer;
     atomic_uint application_sequence, recovering;

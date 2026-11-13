@@ -83,7 +83,9 @@ CASES = ['pins-and-startup', 'keyboard-generations', 'request-after-publication'
          'stopped-capture', 'wideband-segment', 'button-only-workload',
          'failure-return-owner-completes', 'failure-before-ordered-step',
          'failure-return-owner-fault', 'normal-return-owner-completes',
-         'shared-module-proof-callbacks', 'return-without-owner', 'normal-return-owner-fault']
+         'shared-module-proof-callbacks', 'return-without-owner', 'normal-return-owner-fault',
+         'segment-client-blocks-without-event', 'standalone-owner-uses-precise-cadence',
+         'client-retains-on-session-expiry']
 # Bit 8 of the mode: the session grants the radio, so the headset shares the radio's module owner.
 RADIO = 0x100
 # Bit 9 selects a resident session; lifetime-dependent cases run in both modes.
@@ -109,6 +111,9 @@ def main():
     compiled_root = str(Path(unit['file']).resolve().parents[2])
     flags = [flag.replace(compiled_root, str(ROOT)) for flag in shlex.split(unit['command'])]
     flags = flags[:flags.index('-o')]
+    # This fixture models the legacy polling composition. Native IRQ ownership,
+    # profile admission and retirement run in os-headset-uart-events.py.
+    flags.append('-USUNSTONE_A733_OS_HEADSET_IRQ')
     assert '-DSUNSTONE_A733_OS_HEADSET=1' in flags and '-DSUNSTONE_BLUETOOTH_MSBC=1' in flags, \
         'an OS build that links the headset library is required'
     image = out / 'os-image-headset.elf'

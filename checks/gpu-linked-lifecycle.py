@@ -58,7 +58,11 @@ for case in (('retire', 'close-busy', 'critical-during-close') if a.profile == '
         uc.emu_start(image.address(name, unit), 0x80000000, count=2000000)
         assert uc.reg_read(UC_ARM64_REG_PC) == 0x80000000, 'instruction budget exhausted'
         return uc.reg_read(UC_ARM64_REG_X0)
-    state = dict(time=100, live=1, waiting=0, sent=[], pending=0, collects=0)
+    # The modeled service publishes progress at virtual times listed in 'events'. An event
+    # wait returns at once when the sequence changed before it armed, wakes at the first
+    # publication before its deadline, and otherwise returns EXPIRED at exactly the deadline.
+    state = dict(time=100, live=1, waiting=0, sent=[], pending=0, collects=0,
+                 sequence=0, phase=3, events=[], waits=0, wakes=0, expiries=0, untils=[])
     if a.profile == 'os':
         gpu = image.address('gpu', '/apps/os/gpu.c'); board = image.address('board')
         for name in ('started', 'opened'): setf(gpu, 'os_gpu_state', name, 1)
@@ -69,8 +73,11 @@ for case in (('retire', 'close-busy', 'critical-during-close') if a.profile == '
         setf(component, 'pvr_compute_queue', 'completions', 0x8900, 8)
         setf(board, 'board_application', 'live_until', 3000000, 8)
         setf(field(board, 'board_application', 'session'), 'a733_board_session', 'deadline_us', 60000000, 8)
+        service = field(gpu, 'os_gpu_state', 'service')
         hooks = {image.address(n): n for n in ('board_live', 'a733_smp_counter', 'xTaskGetCurrentTaskHandle',
-            'xTaskGetTickCount', 'os_thermal_throttled', 'vTaskDelay', 'uxQueueMessagesWaiting', 'pvr_gpu_service_send_epoch', 'pvr_gpu_service_collect')}
+            'xTaskGetTickCount', 'os_thermal_throttled', 'vTaskDelay', 'uxQueueMessagesWaiting', 'pvr_gpu_service_send_epoch',
+            'pvr_gpu_service_collect', 'pvr_gpu_service_event_sequence', 'pvr_gpu_service_event_phase',
+            'pvr_gpu_service_wait_event', 'pvr_gpu_service_close_ready')}
         def hook(machine, address, size, unused):
             name = hooks.get(address)
             if not name: return
@@ -81,18 +88,42 @@ for case in (('retire', 'close-busy', 'critical-during-close') if a.profile == '
             elif name == 'xTaskGetCurrentTaskHandle': ret(0x1234)
             elif name == 'os_thermal_throttled': ret(0)
             elif name == 'uxQueueMessagesWaiting': ret(0)
-            elif name == 'vTaskDelay': assert args[0] == 1; state['time'] += 1000; ret()
+            # The owner waits only for publications and deadlines; a tick delay is polling.
+            elif name == 'vTaskDelay': raise AssertionError('tick delay in the GPU owner')
+            elif name == 'pvr_gpu_service_event_sequence': assert args[0] == service; ret(state['sequence'])
+            elif name == 'pvr_gpu_service_event_phase': assert args[0] == service; ret(state['phase'])
+            # The service stays busy in close-busy, so CLOSE never becomes ready there.
+            elif name == 'pvr_gpu_service_close_ready': assert args[0] == service; ret(case != 'close-busy')
+            elif name == 'pvr_gpu_service_wait_event':
+                assert args[0] == service and state['time'] < args[2]
+                # A BUSY CLOSE wait is visible to the queue's ownership producers.
+                assert get(field(component, 'pvr_compute_queue', 'lifecycle_waiting')) == (case == 'close-busy')
+                state['waits'] += 1; state['untils'].append(args[2])
+                if args[1] != state['sequence']: ret(0)
+                elif state['events'] and state['events'][0] < args[2]:
+                    state['time'] = state['events'].pop(0); state['sequence'] += 1; state['wakes'] += 1
+                    if state['phase'] == 4: state['phase'] = 5
+                    ret(0)
+                else: state['time'] = args[2]; state['expiries'] += 1; ret(1)
             elif name == 'pvr_gpu_service_send_epoch':
-                assert args[0] == field(gpu, 'os_gpu_state', 'service') and args[1] == 1 and args[3] == 10
+                assert args[0] == service and args[1] == 1 and args[3] == 0
                 assert not state['pending'] and get(field(gpu, 'os_gpu_state', 'retired')) == 1 and get(field(gpu, 'os_gpu_state', 'waiting'))
                 operation = get(field(args[2], 'pvr_gpu_service_request', 'operation'))
                 assert operation == (2 if not state['sent'] or case == 'close-busy' else 0)
-                state['sent'].append(operation); state['pending'] = len(state['sent']); put(args[4], state['pending'], 8); ret(1)
+                # One final STATUS record follows the published STOPPED phase.
+                assert operation == 2 or state['phase'] == 5
+                state['sent'].append(operation); state['pending'] = len(state['sent']); put(args[4], state['pending'], 8)
+                # CLOSE starts STOPPING; the service publishes STOPPED 2 ms later. In close-busy
+                # the first CLOSE leaves one ownership publication that does not end the busy state.
+                if operation == 2 and len(state['sent']) == 1:
+                    if case != 'close-busy': state['phase'] = 4
+                    state['events'].append(state['time'] + 2000)
+                ret(1)
             else:
-                assert args[1] == state['pending'] and args[3] == 10
+                assert args[0] == service and args[1] == state['pending'] and args[3] == 0
                 state['collects'] += 1
                 for key, value, width in [('ticket', args[1], 8), ('epoch', 1, 8), ('result', 3 if case == 'close-busy' else 0, 4),
-                                          ('phase', 4 if state['collects'] == 1 else 5, 4)]:
+                                          ('phase', state['phase'], 4)]:
                     setf(args[2], 'pvr_gpu_service_reply', key, value, width)
                 if case == 'critical-during-close': state['live'] = 0
                 state['pending'] = 0; ret(1)
@@ -102,6 +133,16 @@ for case in (('retire', 'close-busy', 'critical-during-close') if a.profile == '
         assert get(field(gpu, 'os_gpu_state', 'retired')) == 1
         assert get(field(gpu, 'os_gpu_state', 'failed')) == (case != 'retire')
         assert get(field(gpu, 'os_gpu_state', 'parked')) == (case == 'retire')
+        assert not get(field(component, 'pvr_compute_queue', 'lifecycle_waiting'))
+        # retire waits once for STOPPED and reads one record. close-busy retries CLOSE once
+        # after its one publication, then its second wait expires the window's end.
+        # critical-during-close loses the board in the first reply and never waits.
+        if case == 'retire':
+            assert state['sent'] == [2, 0] and (state['waits'], state['wakes'], state['expiries']) == (1, 1, 0), state
+        elif case == 'close-busy':
+            assert state['sent'] == [2, 2] and (state['waits'], state['wakes'], state['expiries']) == (2, 1, 1), state
+            assert state['untils'] == [1000100] * 2 and state['time'] == 1000100, state
+        else: assert state['sent'] == [2] and not state['waits'], state
         before = list(state['sent']); state['live'] = 1
         assert call('os_gpu_queue_retire') == (case == 'retire')
         assert call('os_gpu_queue_thermal') == (0 if case == 'retire' else 0xffffffff)

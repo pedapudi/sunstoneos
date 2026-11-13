@@ -17,6 +17,7 @@ on port 3-3. External microphone and headset operation remain unqualified.
 | I2S0 loopback capture and playback, cyclic cancellation and drain, raw-ring overrun | qualified on the board | 10.5 to 11.7 s per returning diagnostic | [audio.jsonl](../evidence/audio.jsonl) |
 | HDMI audio streaming through I2S3, four 4,096-byte periods, up to 576,000 frames | host-tested | 50,177 frames and 50 periods in the modeled run | [design](../designs/hdmi-audio-streaming.md), `hdmi-audio-streaming-software` |
 | Bluetooth headset voice-recognition capture (CVSD and mSBC segments) | host-tested | 2,090,169 owner instructions per 48,000-byte segment | [design](../designs/bluetooth-voice-recognition.md), `bluetooth-voice-recognition-measure` |
+| I2S and native UART owner notification waits | host-tested | modeled quiet I2S/UART rates 1,000 to 0 wakes/s; headset segment client 4 to 0 wakes/s | [audio owner](../designs/dma-audio-owner-events.md), [UART owner](../designs/bluetooth-uart-events.md) |
 | Capture buffer and headset state from the unified ledger at admission | host-tested | headset fixture image `.bss` 3,210,688 to 1,905,296 bytes; an EL0 write to the capture buffer passes in QEMU and faults when it is taken for EL1 only | [unified memory](../designs/unified-memory.md) (Device owners), `checks/qemu-os-boot.py`, `checks/os-image-headset.py` |
 | External microphone and headset operation | open | none | open work 2 |
 

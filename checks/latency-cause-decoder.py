@@ -151,11 +151,19 @@ def main():
     footer = (host.CAUSE_FOOTER_MAGIC, 1, len(body) + 64, len(prefix), len(original),
               len(prefix) + len(original), len(ping), 0)
     combined = body + struct.pack('<8Q', *footer)
-    assert host.peel_latency_cause(combined) == (prefix, original, ping)
+    assert host.peel_latency_cause(combined) == (prefix, original, ping, 0xff)
     cases.append('versioned footer preserves the legacy traced report')
-    for name, index, value in [('wrong offset', 5, len(prefix)), ('reserved footer', 7, 1),
-                                ('wrong result size', 2, 123456)]:
+    isolated = bytearray(combined)
+    struct.pack_into('<Q', isolated, len(isolated) - 64 + 8, 2)
+    struct.pack_into('<Q', isolated, len(isolated) - 64 + 7 * 8, 0xf0)
+    assert host.peel_latency_cause(bytes(isolated)) == (prefix, original, ping, 0xf0)
+    cases.append('version 2 footer names the streaming cores')
+    for name, index, value, version in [('wrong offset', 5, len(prefix), 1), ('reserved footer', 7, 1, 1),
+                                        ('wrong result size', 2, 123456, 1), ('no streaming core', 7, 0, 2),
+                                        ('streaming mask beyond eight cores', 7, 0x1ff, 2),
+                                        ('unknown footer version', 7, 0xf0, 3)]:
         bad = bytearray(combined)
+        struct.pack_into('<Q', bad, len(bad) - 64 + 8, version)
         struct.pack_into('<Q', bad, len(bad) - 64 + index * 8, value)
         harness.refused(lambda: host.peel_latency_cause(bad), 'footer', ValueError)
         cases.append(name)

@@ -549,6 +549,10 @@ static enum a733_mmc_platform_result controller(struct a733_mmc_platform *p)
          * core steps only while a transfer advances without a timed wait. Each
          * step still checks owner, shared-clock failure, service and deadline. */
         sunxi_mmc_poll(&p->core);
+#ifdef SUNXI_MMC_READ_ONLY
+        /* The read-only owner blocks on this hint before another status pass. */
+        if(sunxi_mmc_wait_hint(&p->core,NULL)!=SUNXI_MMC_WAIT_NONE)break;
+#endif
         if(p->fault||(p->core.state!=SUNXI_MMC_READING&&p->core.state!=SUNXI_MMC_WRITING&&
            !(p->core.state==SUNXI_MMC_IDENTIFY&&p->core.tuning))||p->core.last_us<p->core.retry_us)break;
     }

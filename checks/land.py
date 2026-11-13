@@ -5,7 +5,7 @@ Covers a code landing gated in affected mode and the full suite starting after i
 runs the evidence and link checks and no gate, a landing after bringup moved during the gate, the unmerged-path,
 registry, failed-gate, protected-path, dirty-worktree, nothing-to-land and concurrent-lander refusals, the
 coordinator approval of a protected path, tools/full-gate.py, the union merge of the evidence logs, and the
-host-wide gate lock of tools/integration-gate.py.
+gate slots of tools/integration-gate.py.
 """
 import argparse
 import fcntl
@@ -452,7 +452,10 @@ def full_gate(fx):
 
 
 def gate_lock(root):
-    """tools/integration-gate.py waits for the host-wide lock; the full suite takes its own."""
+    """tools/integration-gate.py waits for a free gate slot; a landing may take slot 0; the full suite takes its own lock."""
+    import select
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import gate_slots
     source = root / 'src'
     source.mkdir(parents=True)
     (source / 'CMakeLists.txt').write_text('')
@@ -460,19 +463,36 @@ def gate_lock(root):
     (cache / 'build').mkdir(parents=True)
     gate = [sys.executable, str(ROOT / 'tools/integration-gate.py'), str(source), 'lock-check', '--cache', str(cache)]
     env = {**ENV, 'SUNSTONE_HOST_SPACE': 'off'}
-    with open(cache / 'gate.lock', 'a+') as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+    slots = gate_slots.SlotQueue(cache).slots
+    handles = [open(cache / ('gate.lock.%d' % index), 'a+') for index in range(slots)]
+    try:
+        for handle in handles[1:]:                      # every slot a worker may use is held; slot 0 is the landings'
+            fcntl.flock(handle, fcntl.LOCK_EX)
         waiting = subprocess.Popen(gate + ['--check', 'kernel'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
         try:
             line = waiting.stdout.readline()
-            assert 'waiting for' in line and 'gate.lock' in line, line
-            assert waiting.poll() is None, 'the gate ran past a held lock'
+            assert 'waiting for a gate slot' in line, line
+            assert waiting.poll() is None, 'the gate ran past held slots'
         finally:
             waiting.terminate()
             waiting.communicate()
+        landing = subprocess.Popen(gate + ['--check', 'kernel'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                   env={**env, 'SUNSTONE_GATE_PRIORITY': 'landing'})
+        try:
+            ready, _, _ = select.select([landing.stdout], [], [], 20)
+            first = landing.stdout.readline() if ready else ''
+            assert 'waiting for' not in first, 'a landing waited behind the workers: ' + first
+        finally:
+            landing.terminate()
+            landing.communicate()
+        for handle in handles[:1]:
+            fcntl.flock(handle, fcntl.LOCK_EX)
         full = subprocess.run(gate + ['--full'], capture_output=True, text=True, env=env)
         assert 'waiting for' not in full.stdout + full.stderr, 'the full suite waited behind the landing gate'
-    passed('every gate waits for the host-wide gate lock; the full suite has its own')
+    finally:
+        for handle in handles:
+            handle.close()
+    passed('every gate waits for a free slot; a landing takes slot 0; the full suite has its own lock')
 
 
 def default_gate(root):

@@ -23,6 +23,13 @@ int ss_clock_info(char *line,size_t bytes)
 }
 _Noreturn void ss_fail(uint32_t detail){platform_exit(detail);for(;;);}
 _Noreturn void ss_finish(const void *result,size_t bytes){(void)result;(void)bytes;platform_exit(0);for(;;);}
+/* The kit's task creation (include/sunstone_app.h) on this model image, which has no application address space. */
+void *ss_task_create_static_affinity_set(void (*entry)(void *),const char *name,uint32_t stack_words,void *arg,
+    unsigned long priority,void *stack,void *tcb,unsigned long affinity)
+{
+    return xTaskCreateStaticAffinitySet(entry,name,stack_words,arg,(UBaseType_t)priority,(StackType_t *)stack,
+        (StaticTask_t *)tcb,(UBaseType_t)affinity);
+}
 static void main_entry(void *unused){(void)unused;cpu_reliability_main(&grant);}
 void a733_smp_diagnostic_start(void)
 {

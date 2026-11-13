@@ -10,6 +10,9 @@
 #include "large_region-app.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#ifdef SUNSTONE_LARGE_REGION_SD_COUNTERS
+#include "sunstone_storage.h"
+#endif
 
 #define MIB (UINT64_C(1) << 20)
 #define CONTROL_BYTES (40 * MIB)
@@ -66,7 +69,13 @@ struct large_region_test_result {
     uint64_t full_ticks[FULL_PASSES], full_bytes;
     uint64_t fold_control, fold_full;
     uint64_t copy_us, digest_us;          /* of load_us: the loader's copy into the region and its SHA-256 */
+#ifdef SUNSTONE_LARGE_REGION_SD_COUNTERS
+    uint64_t sd_magic,idle_us;
+    struct ss_storage_owner_stats sd_before,sd_after;
+    uint64_t reserved[15];
+#else
     uint64_t reserved[512 / 8 - 8 - CONTROL_PASSES - 1 - FULL_PASSES - 1 - 2 - 2];
+#endif
 };
 _Static_assert(sizeof(struct large_region_test_result) == 512, "result is the manifest's output_limit");
 
@@ -112,5 +121,27 @@ void large_region_main(const struct ss_grant *grant)
         ss_progress();
     }
     r.full_bytes = bytes;
+#ifdef SUNSTONE_LARGE_REGION_SD_COUNTERS
+    /* The read-only statistics become available only after owner retirement. */
+    while(!ss_storage_owner_stats(&r.sd_before)){
+        uint64_t now=ss_counter_ticks()/24;
+        if(ss_live()<0||now>=grant->finish_by_us)ss_fail(0x1e02);
+        ss_progress();
+        ss_usb_wait((uint32_t)(grant->finish_by_us-now));
+    }
+    const uint64_t idle_begin=ss_counter_ticks()/24;
+    if(ss_live()<0||idle_begin>=grant->finish_by_us||grant->finish_by_us-idle_begin<=1000000u)
+        ss_fail(0x1e03);
+    const uint64_t until=idle_begin+1000000u;
+    for(;;){
+        uint64_t now=ss_counter_ticks()/24;
+        if(ss_live()<0||now>=grant->finish_by_us)ss_fail(0x1e03);
+        if(now>=until)break;
+        ss_progress();ss_usb_wait((uint32_t)(until-now));
+    }
+    r.idle_us=ss_counter_ticks()/24-idle_begin;
+    if(!ss_storage_owner_stats(&r.sd_after))ss_fail(0x1e02);
+    r.sd_magic=UINT64_C(0x53444f57414b4531); /* SDOWAKE1 */
+#endif
     ss_finish(&r, sizeof r);
 }

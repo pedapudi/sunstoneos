@@ -184,7 +184,7 @@ def parse_measure(text):
 def default_verdict(outcome, result):
     if outcome == 'returned':
         return 'passed' if result.get('normal_return') is not False else 'failed'
-    if outcome == 'refused-before-launch':
+    if outcome in ('refused-before-launch', 'upload-fault'):
         return 'inconclusive'
     return 'failed'
 

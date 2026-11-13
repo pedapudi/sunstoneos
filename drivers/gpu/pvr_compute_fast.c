@@ -28,19 +28,37 @@ int pvr_compute_fast_lock(struct pvr_compute_queue *q)
     return atomic_compare_exchange_strong_explicit(&q->fast.locked,&unlocked,1,
         memory_order_acquire,memory_order_relaxed);
 }
-void pvr_compute_fast_unlock(struct pvr_compute_queue *q)
+static void notify_waiters(struct pvr_compute_queue *q)
 {
-    atomic_store_explicit(&q->fast.locked,0,memory_order_release);
     uint32_t completed=atomic_load_explicit(&q->fast.completed,memory_order_acquire);
-    for (unsigned i=0;i<GPU_QUEUE_CLIENTS;++i) {
-        if (atomic_exchange_explicit(&q->fast.lock_waiter[i],0,memory_order_acq_rel))
+    for(unsigned i=0;i<GPU_QUEUE_CLIENTS;++i){
+        if(atomic_exchange_explicit(&q->fast.lock_waiter[i],0,memory_order_acq_rel))
             xTaskNotifyGiveIndexed(q->fast.task[i],PVR_COMPUTE_FAST_NOTIFY);
         unsigned target=atomic_load_explicit(&q->fast.waiter[i],memory_order_acquire);
-        if (target && ((target<=completed && !atomic_load(&q->fast.irq_error)) ||
+        if(target && ((target<=completed && !atomic_load(&q->fast.irq_error)) ||
                 target<=atomic_load_explicit(&q->fast.fault_through[i],memory_order_acquire)) &&
             atomic_compare_exchange_strong(&q->fast.waiter[i],&target,0))
             xTaskNotifyGiveIndexed(q->fast.task[i],PVR_COMPUTE_FAST_NOTIFY);
     }
+}
+void pvr_compute_fast_unlock(struct pvr_compute_queue *q)
+{
+    atomic_store_explicit(&q->fast.locked,0,memory_order_release);
+#ifdef SUNSTONE_A733_OS
+    if(atomic_exchange_explicit(&q->owner_waiting,0,memory_order_acq_rel))xTaskNotifyGive(q->service->worker);
+    unsigned waiting=0;
+    for(unsigned i=0;i<GPU_QUEUE_CLIENTS;++i)
+        waiting|=atomic_load_explicit(&q->fast.lock_waiter[i],memory_order_acquire) |
+            atomic_load_explicit(&q->fast.waiter[i],memory_order_acquire);
+    /* A waiter published after this test sees the released lock in its
+     * mandatory recheck. Only an existing waiter needs serialized delivery. */
+    if(waiting){
+        taskENTER_CRITICAL();notify_waiters(q);taskEXIT_CRITICAL();
+    }
+    if(atomic_load_explicit(&q->lifecycle_waiting,memory_order_acquire))pvr_gpu_service_notify_clients(q->service);
+#else
+    notify_waiters(q);
+#endif
 }
 
 void pvr_compute_fast_snapshot(struct pvr_compute_queue *q,BaseType_t *woken
@@ -172,6 +190,9 @@ int pvr_compute_fast_submit(struct pvr_compute_queue *q,unsigned client,const st
 {
     if (!pvr_compute_fast_lock(q)) return GPU_QUEUE_BUSY;
     int result=GPU_QUEUE_PARKED;
+#ifdef SUNSTONE_A733_OS
+    unsigned arm_owner=0;
+#endif
     if (atomic_load(&q->lost) || atomic_load(&q->fast.irq_error)) {result=GPU_QUEUE_FAULT;goto out;}
     if (!atomic_load_explicit(&q->fast.enabled,memory_order_acquire) || q->held || atomic_load(&q->close_pending) ||
         atomic_load(&q->recovering) || atomic_load(&q->final_close) || q->service->phase!=PVR_GPU_SERVICE_READY) goto out;
@@ -239,9 +260,16 @@ int pvr_compute_fast_submit(struct pvr_compute_queue *q,unsigned client,const st
     if (!atomic_fetch_add(v.client_owed,1)) atomic_store_explicit(&q->fast.pending[client],serial,memory_order_release);
     atomic_store(v.slot_state,PVR_COMPUTE_QUEUE_TAKEN);
     *fence=serial;
+#ifdef SUNSTONE_A733_OS
+    arm_owner=1;
+#endif
     result=sent==PVR_CCCB_OK?GPU_QUEUE_OK:FAILED(q,GPU_QUEUE_SERVICE,job->sequence);
 out:
-    pvr_compute_fast_unlock(q);return result;
+    pvr_compute_fast_unlock(q);
+#ifdef SUNSTONE_A733_OS
+    if(arm_owner)xTaskNotifyGive(q->service->worker);
+#endif
+    return result;
 }
 int pvr_compute_fast_collect(struct pvr_compute_queue *q,unsigned client,uint32_t serial,uint32_t sequence,
     struct gpu_queue_record *out)
@@ -285,7 +313,11 @@ int pvr_compute_fast_collect(struct pvr_compute_queue *q,unsigned client,uint32_
     if (atomic_fetch_sub(v.client_owed,1)==1) atomic_store(v.slot_state,
         atomic_load(&q->fast.enabled)?PVR_COMPUTE_QUEUE_IDLE:PVR_COMPUTE_QUEUE_CLOSED);
 done:
-    pvr_compute_fast_unlock(q);return result;
+    pvr_compute_fast_unlock(q);
+#ifdef SUNSTONE_A733_OS
+    if(result==GPU_QUEUE_OK || result==GPU_QUEUE_FAULT)pvr_gpu_service_notify_clients(q->service);
+#endif
+    return result;
 }
 int pvr_compute_fast_poll(struct pvr_compute_queue *q)
 {
