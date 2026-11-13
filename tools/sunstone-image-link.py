@@ -260,6 +260,9 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_ex
                      ('sunstone_app.h', 'gpu_queue.h', 'sunstone_latency.h', 'sunstone_dma.h', 'sunstone_storage.h',
                       'sunstone_npu_queue.h', 'sunstone_i2c.h', 'sunstone_rtc.h'))
     public_calls = set(re.findall(r'\b((?:ss_|gpu_queue_)[a-z0-9_]+)\s*\([^;{}]*\)\s*;', header))
+    # A measurement call, not part of the application kit: an image built with SUNSTONE_TLBI_ISSUER links the issuer's
+    # sample copy (include/sunstone_tlbi.h), which the scheduler measurement application reads.
+    public_calls.add('sunstone_tlbi_sample')
     # Object inventories include references in discarded sections. A public
     # call remains valid when no live caller keeps its implementation linked.
     allowed |= public_calls

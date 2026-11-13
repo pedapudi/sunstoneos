@@ -1,9 +1,25 @@
 #include "dma_service_i2s.h"
 #include "sunstone_latency.h"
+#ifdef SUNSTONE_A733_OS
+#include "sunstone_deadline.h"
+/* Optional post-return telemetry, written only by the native worker. */
+struct dma_service_wait_record dma_service_wake_record;
+_Static_assert(sizeof(dma_service_wake_record)==48,"native wait counter geometry");
+#endif
 #include <string.h>
 
 static struct dma_service *instance;
 static unsigned creating_worker;
+static void notify_client(struct dma_service *s,unsigned client,unsigned event)
+{
+    if(client<DMA_SERVICE_CLIENTS&&s->clients[client].notify)
+        s->clients[client].notify(s->clients[client].notify_cookie,event);
+}
+void dma_service_notify_clients(struct dma_service *s)
+{
+    if(s&&s==instance&&s->initialized)
+        for(unsigned i=0;i<DMA_SERVICE_CLIENTS;++i)notify_client(s,i,DMA_SERVICE_PROGRESS_EVENT);
+}
 enum { SERVICE_ACTIVE, SERVICE_WAITING, SERVICE_CHECKING, SERVICE_RETAINED,
        SERVICE_RETIRING, SERVICE_RETIRED };
 static void worker(void *);
@@ -107,14 +123,27 @@ static void refresh_stream(struct dma_service *s,unsigned channel)
 static unsigned poll_channel(struct dma_service *s,unsigned i)
 {
     struct dma_service_channel *c=&s->channels[i];
+    enum dma_service_phase previous=c->phase;
+    unsigned owner=c->owner;
+    uint64_t frames=0,reported=0,raw_next=0;unsigned snapshot=0,stage=0,priming=0;
+    struct a733_i2s_stream *stream=dma_service_i2s_stream(s,i);
+    if(stream){frames=stream->frames;reported=stream->reported;snapshot=stream->snapshot_state;
+        stage=stream->stage;priming=stream->priming;raw_next=stream->raw_next;}
     refresh_stream(s,i);
-    if (!progressing(c->phase)) return 0;
+    if (!progressing(c->phase)) {
+        if(c->phase!=previous)notify_client(s,owner,DMA_SERVICE_PROGRESS_EVENT);
+        return 0;
+    }
     if (s->jobs[c->profile].kind == DMA_SERVICE_I2S_STREAM) {
         /* The stream owns the producer and the DMA stop/drain sequence. */
         struct a733_i2s_stream *st=dma_service_i2s_stream(s,i);
         (void)a733_i2s_stream_poll(st);stream_state(c,st);
     } else dma_state(c,a733_dma_poll(&s->controller,i));
-    return progressing(c->phase);
+    unsigned changed=c->phase!=previous||(stream&&(stream->frames!=frames||stream->reported!=reported||
+        stream->snapshot_state!=snapshot||stream->stage!=stage||stream->priming!=priming||stream->raw_next!=raw_next));
+    if(changed)
+        notify_client(s,owner,DMA_SERVICE_PROGRESS_EVENT);
+    return progressing(c->phase)|(changed?2u:0u);
 }
 enum { IRQ_EVENT=1u, IRQ_FAILED=2u };
 /* Whether channel i can wait for its next DMA interrupt. Stop drain, I2S
@@ -124,7 +153,13 @@ static int event_driven(struct dma_service *s,unsigned i)
 {
     const struct dma_service_channel *c=&s->channels[i];
     if (c->phase != DMA_SERVICE_RUNNING ||
-        !a733_dma_event_wait(&s->controller,i,2*s->irq.fallback_ticks)) return 0;
+        !a733_dma_event_wait(&s->controller,i,
+#ifdef SUNSTONE_A733_OS
+            0
+#else
+            2*s->irq.fallback_ticks
+#endif
+        )) return 0;
     if (s->jobs[c->profile].kind != DMA_SERVICE_I2S_STREAM) return 1;
     const struct a733_i2s_stream *st=dma_service_i2s_stream(s,i);
     uint64_t packages;
@@ -163,6 +198,45 @@ static TickType_t irq_wait(struct dma_service *s,unsigned event_driven_only)
     }
     return s->irq.fallback;
 }
+#ifdef SUNSTONE_A733_OS
+/* Native DMA counters and the scheduler deadline clock share CNTPCT's 24 MHz
+ * epoch. Wait for the actual transfer deadline when the source is armed.
+ * Drain, clock propagation and register transitions have no completion IRQ;
+ * their existing 1 ms observation interval is an absolute timer deadline. */
+static void native_wait(struct dma_service *s,unsigned active,unsigned events)
+{
+    uint64_t time=sunstone_deadline_now_us(),until=UINT64_MAX;
+    ++dma_service_wake_record.waits;
+    if(!active){
+        atomic_store_explicit(&s->idle_waiting,1,memory_order_release);
+        (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+        atomic_store_explicit(&s->idle_waiting,0,memory_order_release);
+        ++dma_service_wake_record.wakes;++dma_service_wake_record.idle_notifications;
+        dma_service_wake_record.idle_us+=sunstone_deadline_now_us()-time;return;
+    }
+    if(s->irq_bound)(void)irq_wait(s,events);
+    if(!events||!s->irq_armed||s->irq_spurious||s->irq_retained)until=time+1000;
+    for(unsigned i=0;i<A733_DMA_CHANNELS;++i){
+        const struct dma_service_channel *c=&s->channels[i];
+        if(!progressing(c->phase))continue;
+        const struct a733_dma_channel *d=&s->controller.channels[i];
+        if(d->status==A733_DMA_ACTIVE||d->status==A733_DMA_STOPPING){
+            uint64_t base=d->status==A733_DMA_ACTIVE?d->started:d->stop_started;
+            uint64_t span=d->status==A733_DMA_ACTIVE?d->timeout:s->controller.stop_timeout;
+            uint64_t end=base>UINT64_MAX-span?UINT64_MAX:base+span;
+            uint64_t us=end/24+(end%24!=0);
+            if(us<until)until=us;
+        }
+        const struct a733_i2s_stream *st=dma_service_i2s_stream(s,i);
+        if(st&&st->deadline&&st->deadline<until)until=st->deadline;
+    }
+    configASSERT(until!=UINT64_MAX);
+    int result=sunstone_deadline_wait_until(until);
+    ++dma_service_wake_record.wakes;
+    if(result==SUNSTONE_DEADLINE_EXPIRED)++dma_service_wake_record.deadline_expiries;
+    configASSERT(result>=0);
+}
+#endif
 static enum dma_service_result stream_execute(struct dma_service *s,
     const struct dma_service_message *m,struct a733_i2s_period *period)
 {
@@ -283,6 +357,7 @@ static void quiesce_idle(struct dma_service *s)
     taskEXIT_CRITICAL();
     if(!fault&&retirement_mask(s)==DMA_SERVICE_OK)
         atomic_store_explicit(&s->retirement_collected,1,memory_order_release);
+    dma_service_notify_clients(s);
 }
 static enum dma_service_result retire(struct dma_service *s,const struct dma_service_message *m)
 {
@@ -384,11 +459,15 @@ static void worker(void *argument)
 #else
     (void)stack;
 #endif
+#ifdef SUNSTONE_A733_OS
+    configASSERT(sunstone_deadline_register());
+#endif
     for (;;) {
         if(atomic_load_explicit(&s->activation_state,memory_order_acquire)==SERVICE_RETIRING){
             while(!atomic_load_explicit(&s->retirement_collected,memory_order_acquire))
                 (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
             atomic_store_explicit(&s->activation_state,SERVICE_RETIRED,memory_order_release);
+            dma_service_notify_clients(s);
             for(;;)vTaskSuspend(NULL);
         }
         if (atomic_load_explicit(&s->activation_state,memory_order_acquire)!=SERVICE_ACTIVE) {
@@ -398,25 +477,52 @@ static void worker(void *argument)
         if(atomic_load_explicit(&s->quiesce_requested,memory_order_acquire)){
             quiesce_idle(s);
             if(atomic_load_explicit(&s->activation_state,memory_order_acquire)==SERVICE_ACTIVE)
+#ifdef SUNSTONE_A733_OS
+                (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+#else
                 (void)ulTaskNotifyTake(pdTRUE,1);
+#endif
             continue;
         }
         unsigned pending=s->irq_bound ? atomic_exchange_explicit(&s->irq_pending,0,memory_order_acq_rel) : 0;
         SS_LATENCY_EVENT_CLAIM(latency_irq, SS_LAT_DMA);
-        unsigned active=0,event_driven_only=1;
-        for (unsigned i=0;i<A733_DMA_CHANNELS;++i)
-            if (poll_channel(s,i)) { active=1; if (s->irq_bound && !event_driven(s,i)) event_driven_only=0; }
+        unsigned active=0,event_driven_only=1,progressed=0;
+        for (unsigned i=0;i<A733_DMA_CHANNELS;++i){
+#ifdef SUNSTONE_A733_OS
+            /* An armed native transfer completes only after its source IRQ
+             * or exact timeout. Do not clear a fast job's event before the
+             * first rearm has delivered the level-sensitive interrupt. */
+            unsigned state=s->irq_bound&&!(pending&IRQ_EVENT)&&event_driven(s,i)?1u:poll_channel(s,i);
+#else
+            unsigned state=poll_channel(s,i);
+#endif
+            if(state&2u)progressed=1;
+            if(state&1u){active=1;if(s->irq_bound&&!event_driven(s,i))event_driven_only=0;}
+        }
         /* All channels have observed the completion and maintained buffers. */
         SS_LATENCY_EVENT_FINISH(latency_irq, SS_LAT_DMA);
         struct dma_service_message message;
         if (!s->irq_bound) {
+#ifdef SUNSTONE_A733_OS
+            if(xQueueReceive(s->requests,&message,0)!=pdTRUE){
+                if(progressed)continue;
+                native_wait(s,active,0);continue;
+            }
+#else
             if (xQueueReceive(s->requests,&message,active ? 1 : portMAX_DELAY) != pdTRUE) continue;
+#endif
         } else {
             /* Clients and the ISR both notify, so requests are taken without
              * blocking on the queue. */
             irq_observe(s,pending);
             if (xQueueReceive(s->requests,&message,0) != pdTRUE) {
+#ifdef SUNSTONE_A733_OS
+                if(progressed)continue;
+                native_wait(s,active,event_driven_only);
+#else
+                (void)progressed;
                 (void)ulTaskNotifyTake(pdTRUE,active ? irq_wait(s,event_driven_only) : portMAX_DELAY);
+#endif
                 continue;
             }
         }
@@ -425,7 +531,11 @@ static void worker(void *argument)
          * answering, so the reply needs no further worker tick. */
         enum dma_service_operation op=message.request.operation;
         if (message.request.job < s->job_count &&
-            (op == DMA_SERVICE_STATUS || op == DMA_SERVICE_PERIOD_GET || op == DMA_SERVICE_REAP))
+            (op == DMA_SERVICE_STATUS || op == DMA_SERVICE_PERIOD_GET || op == DMA_SERVICE_REAP)
+#ifdef SUNSTONE_A733_OS
+            &&(!s->irq_bound||!event_driven(s,s->jobs[message.request.job].channel))
+#endif
+            )
             (void)poll_channel(s,s->jobs[message.request.job].channel);
         struct dma_service_reply reply={.ticket=message.ticket};
         reply.result=execute(s,&message,&reply.period);
@@ -443,7 +553,15 @@ static void worker(void *argument)
             }
         }
         configASSERT(xQueueSend(s->clients[message.client].replies,&reply,0) == pdTRUE);
+        notify_client(s,message.client,DMA_SERVICE_REPLY_EVENT);
     }
+}
+int dma_service_bind_event(struct dma_service *s,unsigned client,void (*notify)(void *,unsigned),void *cookie)
+{
+    if(!s||s!=instance||!s->initialized||client>=DMA_SERVICE_CLIENTS||!notify||
+       !s->clients[client].task||s->clients[client].notify||
+       xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
+    s->clients[client].notify=notify;s->clients[client].notify_cookie=cookie;return 1;
 }
 static int initialize(struct dma_service *s,const struct a733_dma_operations *ops,void *cookie,
     uintptr_t base,uint16_t channels,uint64_t drain,const struct dma_service_job *jobs,
@@ -616,6 +734,7 @@ void dma_service_irq_notify_from_isr(struct dma_service *s,int mask_ok,BaseType_
         return;
     }
     SS_LATENCY_EVENT_BEGIN(SS_LAT_DMA);
+    atomic_fetch_add_explicit(&s->irq_deliveries,1,memory_order_relaxed);
     atomic_fetch_or_explicit(&s->irq_pending,IRQ_EVENT|(mask_ok == 1 ? 0 : IRQ_FAILED),memory_order_release);
     vTaskNotifyGiveFromISR(s->worker,woken);
     if(s->retirement_mask)taskEXIT_CRITICAL_FROM_ISR(saved);
@@ -669,11 +788,22 @@ int dma_service_send(struct dma_service *s,const struct dma_service_request *req
     if(sent!=pdTRUE){
         c->pending=0;
         if(guarded)taskEXIT_CRITICAL();
+        if(guarded&&atomic_load_explicit(&s->quiesce_requested,memory_order_acquire)){
+#ifdef SUNSTONE_A733_OS
+            xTaskNotifyGive(s->worker);
+#else
+            if(s->irq_bound)xTaskNotifyGive(s->worker);
+#endif
+        }
         return 0;
     }
     c->next_ticket=m.ticket; *ticket=m.ticket;
     if(guarded)taskEXIT_CRITICAL();
+#ifdef SUNSTONE_A733_OS
+    xTaskNotifyGive(s->worker);
+#else
     if (s->irq_bound) xTaskNotifyGive(s->worker);
+#endif
     return 1;
 }
 int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service_reply *out,TickType_t wait)

@@ -116,6 +116,9 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *s)
         return fail(s,PVR_GPU_STOP_CONTROL);
     uint64_t now, value=0;
     if (!clock_now(s,&now)) return PVR_GPU_STOP_FAULT;
+#ifdef SUNSTONE_A733_OS
+    if(s->wait.next_wait_us && now<s->wait.next_wait_us)return PVR_GPU_STOP_AGAIN;
+#endif
     switch(s->phase) {
     case PVR_GPU_STOP_CLEAR_IDLE: case PVR_GPU_STOP_CLEAR_OFF:
         if (!s->ops.sync_write(s->context,0)) return fail(s,PVR_GPU_STOP_IO);
@@ -139,6 +142,15 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *s)
         enum pvr_gpu_control_result r=pvr_gpu_control_poll(s->control,4);
         if (r==PVR_GPU_CONTROL_AGAIN) return PVR_GPU_STOP_AGAIN;
         if (r!=PVR_GPU_CONTROL_OK) return fail(s,PVR_GPU_STOP_CONTROL);
+#ifdef SUNSTONE_A733_OS
+        uint32_t ack=0;
+        if(!s->ops.sync_read(s->context,&ack))return fail(s,PVR_GPU_STOP_IO);
+        if(!ack){
+            if(!clock_now(s,&now))return PVR_GPU_STOP_FAULT;
+            a733_gpu_wait_set(&s->wait,now,A733_GPU_OBSERVE_US,s->deadline,A733_GPU_WAIT_RETRY);
+            return PVR_GPU_STOP_AGAIN;
+        }
+#else
         /* Re-read the acknowledgement for at most A733_GPU_SPIN_US, counted
          * from the first read so event servicing does not consume it. */
         uint32_t ack=0; struct a733_gpu_spin wait={0};
@@ -148,6 +160,7 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *s)
             if (!clock_now(s,&now)) return PVR_GPU_STOP_FAULT;
             if (!a733_gpu_spin_again(&wait,now)) return PVR_GPU_STOP_AGAIN;
         }
+#endif
         s->acknowledgement[which]=ack;
         if (!clock_now(s,&now)) return PVR_GPU_STOP_FAULT;
         enum pvr_ccb_result cr=pvr_ccb_collect(s->control->queue,s->tokens[which],&s->command_status[which]);
@@ -171,6 +184,15 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *s)
             if ((s->irq_status&1u) && !s->ops.write(s->context,op->offset,op->width,op->value))
                 return fail(s,PVR_GPU_STOP_IO);
         } else {
+#ifdef SUNSTONE_A733_OS
+            if(!s->ops.read(s->context,op->offset,op->width,&value))return fail(s,PVR_GPU_STOP_IO);
+            s->last_read=value;
+            if((value&op->mask)!=op->value){
+                if(!clock_now(s,&now))return PVR_GPU_STOP_FAULT;
+                a733_gpu_wait_set(&s->wait,now,A733_GPU_OBSERVE_US,s->deadline,A733_GPU_WAIT_RETRY);
+                return PVR_GPU_STOP_AGAIN;
+            }
+#else
             /* A register poll re-reads for at most A733_GPU_SPIN_US. */
             struct a733_gpu_spin wait={0};
             for (;;) {
@@ -180,6 +202,7 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *s)
                 if (!clock_now(s,&now)) return PVR_GPU_STOP_FAULT;
                 if (!a733_gpu_spin_again(&wait,now)) return PVR_GPU_STOP_AGAIN;
             }
+#endif
         }
         if (++s->index==s->count) ++s->phase;
         break;
@@ -200,5 +223,8 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *s)
         s->phase=PVR_GPU_STOP_STOPPED; return PVR_GPU_STOP_OK;
     default: return fail(s,PVR_GPU_STOP_CONTROL);
     }
+#ifdef SUNSTONE_A733_OS
+    s->wait=(struct a733_gpu_wait){0};
+#endif
     return PVR_GPU_STOP_AGAIN;
 }

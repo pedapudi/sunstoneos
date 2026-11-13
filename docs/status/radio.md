@@ -23,7 +23,7 @@ Every OS image links the radio station, and it starts in a session that grants t
 ## Open work
 
 1. Run the association stage on the board (`--radio-stage-limit 5`, with the unqualified CE entropy for bring-up only), then DHCP and a TCP exchange ([design](../designs/radio-service-stages.md)).
-2. Add capability reads, CMD5 and CMD11 voltage negotiation, drive and speed selection, PERI1 UHS clocks, CMD19 tuning and INTID194 completion for top-rate SDIO (the board runs at four bits and 25 MHz).
+2. Add capability reads, CMD5 and CMD11 voltage negotiation, drive and speed selection, PERI1 UHS clocks and CMD19 tuning for top-rate SDIO. The existing four-bit 25 MHz mode has [host-tested INTID194 completion](../designs/network-owner-events.md); physical interrupt timing remains unqualified.
 3. Complete WPA3 SAE: the arithmetic exists, while external authentication, protected management frames and SAE association remain.
 4. Qualify physical entropy and key-state observations, RF traffic, coexistence, sustained receive deadlines, broader modes, fault recovery and headset interoperability.
 

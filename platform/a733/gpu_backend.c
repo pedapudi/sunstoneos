@@ -136,6 +136,15 @@ static int power_begin(void *context, uint64_t deadline)
     sunstone_crumb(PVR_GPU_CRUMB_POWER_ON, 0);
     return a733_gpu_platform_begin(b->power, deadline) || fail(b, A733_GPU_BACKEND_POWER);
 }
+#ifdef SUNSTONE_A733_OS
+static uint64_t next_wait(void *context,uint64_t now)
+{
+    struct a733_gpu_backend *b=context;
+    struct a733_gpu_power *p=&b->power->power;
+    if(p->phase!=A733_GPU_POWER_STARTING && p->phase!=A733_GPU_POWER_STOPPING)return 0;
+    return a733_gpu_wait_until(&p->wait,now,p->deadline);
+}
+#endif
 static int power_poll(void *context)
 {
     struct a733_gpu_backend *b = context;
@@ -880,6 +889,9 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
     c->irq = (struct pvr_gpu_service_irq_ops){irq_mask, irq_rearm};
     if (c->compute_queue) {c->job_irq_ack=job_irq_ack;c->job_now=job_now;c->job_kick=job_kick;}
     c->power = (struct pvr_gpu_service_enable_ops){power_begin, power_poll};
+#ifdef SUNSTONE_A733_OS
+    c->next_wait=next_wait;
+#endif
     if (c->free_lists.count) c->free_lists.ops = (struct pvr_free_list_ops){free_allocate, free_page,
         free_read, free_write, free_publish, free_recover};
     c->enable = NULL; c->context = b; c->compute_mode = compute_mode;

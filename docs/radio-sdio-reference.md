@@ -44,7 +44,7 @@ The following reference steps remain missing from the native path:
 | Set four-bit width, drive strength and bus-speed selection | Width exists; drive-strength and speed selection do not. Preserve unrelated register bits and verify selection before changing host timing. |
 | Program the selected v5p3x timing and clock parent | Native old timing and PERI0 at 25 MHz do not implement the PERI1 UHS profile. Obtain shared-provider ownership and verify the resulting rate. |
 | Tune SDR50 or SDR104 using CMD19 | Native submission accepts only CMD3, CMD5, CMD7, CMD52 and CMD53. Add bounded tuning and independent data comparison before admitting normal traffic. |
-| Deliver SDIO completion and function interrupts | Native service masks INTID 194 and polls. IRQ delivery, bounded cancellation and reusable shutdown remain required. |
+| Deliver SDIO completion and function interrupts | Deferred INTID 194 service for command, FIFO and function events is implemented and host-tested at the existing 25 MHz mode. Physical delivery, FIFO service margin, cancellation and reusable shutdown remain unqualified. See [the event binding](designs/network-owner-events.md). |
 
 The board node sets `sunxi-dis-signal-vol-sw`. The selected voltage callback
 therefore returns without changing a regulator. The command-level voltage

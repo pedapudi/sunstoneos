@@ -33,6 +33,11 @@ stays set with `A733_GPU_POWER_UPDATE`. An expired deadline, clock
 regression, callback failure, or unexpected register value stops further
 I/O. The controller performs no automatic rollback after a failure.
 
+The integrated OS uses the [nonspinning owner waits](designs/gpu-owner-events.md).
+Its controller returns pending samples and minimum holds to the service task,
+which releases its transport lock before a precise wait. Descriptions of
+in-call clock and status spins above apply to diagnostic profiles.
+
 ## Shared resources require an explicit owner
 
 The resource manager must acquire the following before register preparation:
@@ -195,8 +200,9 @@ Platform recovery must reconcile that state before reuse.
 
 ## Focused checks and source identities
 
-No host check runs the controller against a modeled PLL_GPU0 whose lock bit
-follows its enable bits. The design leaves PLL_GPU0 at `0xf9105300` after ON and
+`checks/event-gpu-nospin.py` runs the OS controller against a modeled PLL_GPU0
+whose lock bit follows its enable bits. It checks ON/OFF order, minimum holds,
+read-count limits, domain publication and retained deadline failures. The design leaves PLL_GPU0 at `0xf9105300` after ON and
 `0x01105300` after OFF, keeps unrelated fields and shared gates. It follows the vendor order: the reset released before the bus gate, the bus gate before the
 core gate, the PLL output gate opened at least 20 µs after each lock. The order continues with PLL_GPU0 disabled only after the core gate closes, the reset asserted after both gates
 close, and the GPU clocked at both CORE6 policy writes. Two further sets have

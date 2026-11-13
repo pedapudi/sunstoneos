@@ -27,11 +27,8 @@ __attribute__((used,retain)) const uint32_t os_gpu_performance_configuration[5]=
     1,A733_GPU_CORE_HZ,A733_GPU_SUPPLY_UV,A733_GPU_LOW_HZ,A733_GPU_LOW_UV};
 
 extern const unsigned char gpu_firmware[], gpu_firmware_end[];
-_Static_assert(configTICK_RATE_HZ == 1000, "GPU caller wait budgets use millisecond ticks");
 struct gpu_wait {
     uint64_t end, last;
-    TickType_t started, ticks;
-    unsigned observations;
 };
 
 static struct {
@@ -92,12 +89,18 @@ static int session_owners_distinct(void)
 }
 
 static int return_park(void *context,uint64_t deadline);
+static void power_changed(void *unused)
+{(void)unused;if(gpu.service.worker)xTaskNotifyGive(gpu.service.worker);}
 static int service_init(unsigned core)
 {
     /* The returning lifetime parks the firmware before the ROM return. */
     if(os_returning())gpu.firmware.config.park=return_park;
     gpu.firmware.config.job_us_limit=&os_gpu_job_us?os_gpu_job_us:0;
-    return pvr_gpu_service_init(&gpu.service,&gpu.firmware.config,OS_GPU_PRIORITY,(UBaseType_t)1<<core);
+    if(!pvr_gpu_service_init(&gpu.service,&gpu.firmware.config,OS_GPU_PRIORITY,(UBaseType_t)1<<core))return 0;
+    /* Admission precedes the scheduler, so no provider callback can race
+     * this one-time consumer binding. Row replies publish before notifying. */
+    gpu.power.power.row.wake=power_changed;gpu.power.power.row.wake_context=NULL;
+    return 1;
 }
 static int start_refused(unsigned reason)
 {
@@ -187,12 +190,9 @@ static int runtime_window(struct gpu_wait *wait, uint64_t budget)
     const uint64_t now = a733_smp_counter() / 24;
     if (limit <= 10000 || now >= limit - 10000) return runtime_fault(OS_GPU_CALL_TIMEOUT);
     limit -= 10000;
-    /* Subtract before adding, so even an invalid near-UINT64_MAX lifetime
-     * cannot wrap this deadline. The RTOS budget is independent of the counter. */
+    /* Subtract before adding so an invalid lifetime cannot wrap the deadline. */
     uint64_t span = limit - now < budget ? limit - now : budget;
-    *wait = (struct gpu_wait){.end = now + span, .last = now,
-        .started = xTaskGetTickCount(), .ticks = (TickType_t)((span + 999) / 1000),
-        .observations = (unsigned)(2 * (span / 1000 + 1) + 2)};
+    *wait = (struct gpu_wait){.end = now + span, .last = now};
     return 1;
 }
 static int runtime_live(struct gpu_wait *wait)
@@ -200,47 +200,59 @@ static int runtime_live(struct gpu_wait *wait)
     if (!board_live(NULL)) return runtime_fault(OS_GPU_CALL_LOST);
     const uint64_t now = a733_smp_counter() / 24;
     if (now < wait->last) return runtime_fault(OS_GPU_CALL_LOST);
-    if (now >= wait->end || (TickType_t)(xTaskGetTickCount() - wait->started) >= wait->ticks)
+    if (now >= wait->end)
         return runtime_fault(OS_GPU_CALL_TIMEOUT);
     wait->last = now;
     return 1;
 }
 static int runtime_observe(struct gpu_wait *wait)
+{return runtime_live(wait);}
+static int runtime_event(struct gpu_wait *wait,uint64_t sequence)
 {
-    int live = runtime_live(wait);
-    if (live != 1) return live;
-    /* Also finite if both clocks stop while mocked/broken queues return. */
-    if (!wait->observations) return runtime_fault(OS_GPU_CALL_TIMEOUT);
-    --wait->observations;
+    if(runtime_live(wait)!=1)return 0;
+    if(pvr_gpu_service_wait_event(&gpu.service,sequence,wait->end)==SUNSTONE_DEADLINE_ERROR){
+        (void)runtime_fault(OS_GPU_CALL_LOST);return 0;
+    }
     return 1;
+}
+static int runtime_phase(struct gpu_wait *wait,unsigned phase)
+{
+    for(;;){
+        uint64_t sequence=pvr_gpu_service_event_sequence(&gpu.service);
+        unsigned observed=pvr_gpu_service_event_phase(&gpu.service);
+        if(observed==phase)return runtime_live(wait);
+        if(observed==PVR_GPU_SERVICE_FAILED || !runtime_event(wait,sequence))return 0;
+    }
 }
 static int runtime_request(enum pvr_gpu_service_operation operation, struct gpu_wait *wait,
                            struct pvr_gpu_service_reply *reply)
 {
-retry:
-    ;
-    int status = runtime_observe(wait);
-    if (status != 1) return status;
-    const struct pvr_gpu_service_request request = {operation,
-        operation == PVR_GPU_SERVICE_STATUS ? 0 : wait->end - wait->last};
-    uint64_t ticket;
-    int sent = pvr_gpu_service_send_epoch(&gpu.service, gpu.epoch, &request, OS_GPU_WAIT_TICKS, &ticket);
-    if (sent) gpu.accepted_ticket = ticket;
-    status = runtime_live(wait);
-    if (status != 1) return status;
-    if (!sent) return 0;
-    for (;;) {
-        status = runtime_observe(wait);
-        if (status != 1) return status;
-        int received = pvr_gpu_service_collect(&gpu.service, ticket, reply, OS_GPU_WAIT_TICKS);
-        status = runtime_live(wait);
-        if (status != 1) return status;
-        if (received) {
-            if(operation==PVR_GPU_SERVICE_CLOSE && reply->result==PVR_GPU_SERVICE_BUSY) {
-                vTaskDelay(1);goto retry;
-            }
-            return reply->result == PVR_GPU_SERVICE_OK ? 1 : runtime_fault(OS_GPU_CALL_LOST);
+    for(;;){
+        int status=runtime_live(wait);
+        if(status!=1)return status;
+        const struct pvr_gpu_service_request request={operation,
+            operation==PVR_GPU_SERVICE_STATUS?0:wait->end-wait->last};
+        uint64_t ticket;
+        if(!pvr_gpu_service_send_epoch(&gpu.service,gpu.epoch,&request,0,&ticket))return 0;
+        gpu.accepted_ticket=ticket;
+        for(;;){
+            uint64_t sequence=pvr_gpu_service_event_sequence(&gpu.service);
+            int received=pvr_gpu_service_collect(&gpu.service,ticket,reply,0);
+            status=runtime_live(wait);if(status!=1)return status;
+            if(received)break;
+            if(!runtime_event(wait,sequence))return 0;
         }
+        if(operation!=PVR_GPU_SERVICE_CLOSE || reply->result!=PVR_GPU_SERVICE_BUSY)
+            return reply->result==PVR_GPU_SERVICE_OK?1:runtime_fault(OS_GPU_CALL_LOST);
+        struct pvr_compute_queue *q=gpu.component;
+        atomic_store_explicit(&q->lifecycle_waiting,1,memory_order_release);
+        uint64_t sequence=pvr_gpu_service_event_sequence(&gpu.service);
+        /* An unlock or drain may precede this snapshot. Recheck its
+         * authoritative predicates before arming a new wait. */
+        int ready=pvr_gpu_service_close_ready(&gpu.service);
+        int woke=ready || runtime_event(wait,sequence);
+        atomic_store_explicit(&q->lifecycle_waiting,0,memory_order_release);
+        if(!woke)return 0;
     }
 }
 /* Context creation owns the first OPEN; the runtime owns healthy reopens. */
@@ -254,10 +266,9 @@ static int runtime_reopen(void)
     if(gpu.failed||gpu.retired||!gpu.parked||runtime_window(&wait,OS_GPU_OPEN_US)!=1)return 0;
     if(runtime_request(PVR_GPU_SERVICE_OPEN,&wait,&reply)!=1)return 0;
     uint64_t epoch=reply.epoch;
-    while(reply.phase!=PVR_GPU_SERVICE_READY){
-        vTaskDelay(1);
-        if(runtime_request(PVR_GPU_SERVICE_STATUS,&wait,&reply)!=1)return 0;
-    }
+    if(reply.phase!=PVR_GPU_SERVICE_READY &&
+       (runtime_phase(&wait,PVR_GPU_SERVICE_READY)!=1 ||
+        runtime_request(PVR_GPU_SERVICE_STATUS,&wait,&reply)!=1))return 0;
     if(epoch!=gpu.epoch+1||reply.epoch!=epoch)return 0;
     pvr_compute_queue_runtime_opened(epoch);return 1;
 }
@@ -266,17 +277,15 @@ static int runtime_close(void)
     struct gpu_wait wait;
     struct pvr_gpu_service_reply reply;
     if (!gpu.opened || runtime_window(&wait,OS_GPU_OPEN_US)!=1) return 0;
-    while (!pvr_compute_queue_clients_idle(gpu.component)) {
-        if (atomic_load(&gpu.component->lost) || runtime_observe(&wait)!=1) return 0;
-        vTaskDelay(1);
+    for(;;){
+        uint64_t sequence=pvr_gpu_service_event_sequence(&gpu.service);
+        if(pvr_compute_queue_clients_idle(gpu.component))break;
+        if(atomic_load(&gpu.component->lost) || !runtime_event(&wait,sequence))return 0;
     }
     if (runtime_request(PVR_GPU_SERVICE_CLOSE,&wait,&reply)!=1) return 0;
-    while (reply.phase != PVR_GPU_SERVICE_STOPPED) {
-        /* The worker owns firmware, drain and platform waits. Observation
-         * renews neither service progress nor this absolute bound. */
-        vTaskDelay(1);
-        if (runtime_request(PVR_GPU_SERVICE_STATUS, &wait, &reply) != 1) return 0;
-    }
+    if(reply.phase!=PVR_GPU_SERVICE_STOPPED &&
+       (runtime_phase(&wait,PVR_GPU_SERVICE_STOPPED)!=1 ||
+        runtime_request(PVR_GPU_SERVICE_STATUS,&wait,&reply)!=1))return 0;
     if (reply.epoch != gpu.epoch) return 0;
     gpu.opened = 0; gpu.parked = 1;
     return 1;
@@ -348,13 +357,15 @@ int os_gpu_queue_quiesce(void)
     }
     if (gpu.failed || atomic_load(&q->lost) || atomic_load(&q->create_done)!=1) return 0;
     atomic_store(&gpu.waiting,1);
-    while (atomic_load(&q->recovering) || atomic_load(&q->client_owed) ||
-           atomic_load(&q->peer.client_owed)) {
+    for(;;){
+        uint64_t sequence=pvr_gpu_service_event_sequence(&gpu.service);
+        if(!atomic_load(&q->recovering) && !atomic_load(&q->client_owed) &&
+           !atomic_load(&q->peer.client_owed))break;
         if (atomic_load(&q->lost) || runtime_observe(&wait)!=1) return 0;
         if (atomic_load(&q->client_owed)) {
             struct gpu_queue_record record;
             (void)gpu_queue_wait((struct gpu_queue_context){q->generation,0},&record,OS_GPU_WAIT_TICKS);
-        } else vTaskDelay(1);
+        } else if(!runtime_event(&wait,sequence))return 0;
     }
     atomic_store(&q->final_close,1);
     if (!pvr_compute_queue_clients_idle(q)) return 0;
@@ -389,8 +400,18 @@ static int gpu_retire_body(void)
 /* The returning lifetime's GPU retirement (apps/os/cpu-return.c). */
 __attribute__((used,retain)) const uint32_t os_gpu_untouched_return_version=2;
 __attribute__((used,retain)) const uint32_t os_gpu_failure_return_version=4;
-__attribute__((used,retain)) uint64_t os_gpu_return_report[8];
+__attribute__((used,retain)) uint64_t os_gpu_return_report[12];
 static atomic_uint return_state;
+/* The caller has suspended the worker, or proved it was never constructed.
+ * Keep the eight-word retirement proof unchanged for legacy readers. */
+static void return_report(const uint64_t proof[8])
+{
+    memcpy(os_gpu_return_report,proof,8*sizeof(*proof));
+    os_gpu_return_report[8]=gpu.service.event_wakes;
+    os_gpu_return_report[9]=gpu.service.deadline_wakes;
+    os_gpu_return_report[10]=gpu.service.idle_wakes;
+    os_gpu_return_report[11]=gpu.service.idle_wait_us;
+}
 int os_gpu_return_ready(void)
 {unsigned state=atomic_load_explicit(&return_state,memory_order_acquire);return state==2||state==3;}
 int os_gpu_return_started(void)
@@ -490,7 +511,7 @@ static int gpu_return_untouched_body(int supervisor)
 #endif
     const uint64_t report[8]={UINT64_C(0x3152475033333741),version,sizeof(report),
         board.session.epoch,board.session.generation,0,0,value};
-    memcpy(os_gpu_return_report,report,sizeof(report));gpu.retired=1;
+    return_report(report);gpu.retired=1;
     atomic_store_explicit(&return_state,3,memory_order_release);
     return 1;
 }
@@ -526,7 +547,7 @@ static enum os_quiesce_result gpu_quiesce_step(struct os_quiesce *entry)
         const uint64_t report[8]={UINT64_C(0x3152475033333741),4,sizeof(report),
             board.session.epoch,board.session.generation,gpu.component->completed_jobs,63,
             UINT64_C(960000)<<32|gpu.service.quiesce.abandoned};
-        memcpy(os_gpu_return_report,report,sizeof(report));
+        return_report(report);
         gpu.opened=0;gpu.parked=1;gpu.retired=1;
         atomic_store_explicit(&return_state,2,memory_order_release);
     }
@@ -564,10 +585,9 @@ static int gpu_return_body(uint64_t completed)
     struct pvr_gpu_service_reply reply;
     if(runtime_window(&wait,OS_GPU_OPEN_US)!=1 ||
        runtime_request(PVR_GPU_SERVICE_PARK,&wait,&reply)!=1)return 0;
-    while(reply.phase!=PVR_GPU_SERVICE_PARKED) {
-        vTaskDelay(1);
-        if(runtime_request(PVR_GPU_SERVICE_STATUS,&wait,&reply)!=1)return 0;
-    }
+    if(reply.phase!=PVR_GPU_SERVICE_PARKED &&
+       (runtime_phase(&wait,PVR_GPU_SERVICE_PARKED)!=1 ||
+        runtime_request(PVR_GPU_SERVICE_STATUS,&wait,&reply)!=1))return 0;
     if(reply.epoch!=gpu.epoch || gpu.component->completed_jobs!=completed || gpu.component->owed ||
        atomic_load(&gpu.component->slot_state)!=PVR_COMPUTE_QUEUE_CLOSED ||
        (gpu.component->peer.completions && atomic_load(&gpu.component->peer.slot_state)!=PVR_COMPUTE_QUEUE_CLOSED) ||
@@ -585,7 +605,7 @@ static int gpu_return_body(uint64_t completed)
     gpu.retired=1;gpu.accepted_ticket=0;
     const uint64_t report[8]={UINT64_C(0x3152475033333741),OS_GPU_RETURN_VERSION,sizeof(report),
         board.session.epoch,board.session.generation,completed,63,OS_GPU_RETURN_VALUE};
-    memcpy(os_gpu_return_report,report,sizeof(report));
+    return_report(report);
     atomic_store_explicit(&return_state,2,memory_order_release);
     return 1;
 }

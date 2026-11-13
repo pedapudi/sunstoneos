@@ -175,11 +175,11 @@ def geometry(image):
     # tools/sunstone-manifest.py) grants it, so only such an image's NPU records are read.
     npu = 'ss_application_npu' in symbols
     for symbol, key, bytes_ in (('os_cpu_return_walk', 'return_walk', 128), ('os_npu_guard_record', 'npu_guard', 64),
-                              ('os_npu_register_record', 'npu_register', 64),
+                              ('os_npu_register_record', 'npu_register', (64, 208)),
                               ('os_npu_prepare_record', 'npu_prepare', 128)):
         if symbol in symbols and (npu or not key.startswith('npu_')):
             address, size = symbols[symbol]
-            require(size == bytes_ and address % 8 == 0 and begin <= address < address + size <= end,
+            require((size in bytes_ if isinstance(bytes_, tuple) else size == bytes_) and address % 8 == 0 and begin <= address < address + size <= end,
                     '%s outside preserved image RAM.' % symbol)
             result[key] = {'address': address, 'bytes': size}
     if npu:
@@ -313,11 +313,20 @@ def decode_published(copied, geometry):
         record['unattributed_us'] = record['total_us'] - sum(record[k] for k in parts)
         out['npu_prepare'] = record
     if 'npu-register' in copied:
-        words = struct.unpack('<8Q', copied['npu-register'])
+        words = struct.unpack_from('<8Q', copied['npu-register'])
         graphs = words[0]
         out['npu_register'] = {'graphs': graphs, 'bytes': words[1], 'copy_us': words[2], 'decode_us': words[3], 'layout_us': words[4],
                                'per_graph_us': {'copy': words[2] / graphs, 'decode': words[3] / graphs, 'layout': words[4] / graphs}
                                if graphs else None}
+        if len(copied['npu-register']) == 208:
+            names = ('waits', 'events', 'deadlines', 'idle_events', 'idle_deadlines', 'idle_us')
+            owners = {}
+            for i, owner in enumerate(('service', 'bootstrap', 'mailbox')):
+                counts = dict(zip(names, struct.unpack_from('<6Q', copied['npu-register'], 64 + 48 * i)))
+                idle_wakes = counts['idle_events'] + counts['idle_deadlines']
+                counts['idle_wakes_per_second'] = idle_wakes * 1e6 / counts['idle_us'] if counts['idle_us'] else None
+                owners[owner] = counts
+            out['npu_owner_wakes'] = owners
     return out
 
 

@@ -77,6 +77,8 @@ struct dma_service_private_job {
 struct dma_service_message { struct dma_service_request request; uint64_t ticket; unsigned client; };
 struct dma_service_client {
     TaskHandle_t task;
+    void (*notify)(void *,unsigned);
+    void *notify_cookie;
     uint32_t jobs;
     uint64_t next_ticket,pending;
     QueueHandle_t replies;
@@ -131,6 +133,7 @@ struct dma_service {
     uint8_t request_storage[DMA_SERVICE_CLIENTS*sizeof(struct dma_service_message)];
     struct dma_service_irq irq;
     atomic_uint irq_pending;
+    atomic_uint_fast64_t irq_deliveries;
     unsigned irq_bound,irq_armed,irq_spurious,irq_retained;
     uint32_t irq_events; /* Controller event count when the SPI was rearmed. */
     int (*retirement_mask)(void *);
@@ -139,6 +142,7 @@ struct dma_service {
     uint64_t retirement_ticket;
     atomic_uint retirement_collected;
     atomic_uint quiesce_requested, quiesce_fault;
+    atomic_uint idle_waiting; /* Native indefinite-wait intent, diagnostic observation only. */
     TaskHandle_t worker;
     StaticTask_t worker_state;
     StackType_t worker_stack[DMA_SERVICE_STACK_WORDS];
@@ -226,6 +230,20 @@ void dma_service_irq_notify_from_isr(struct dma_service *, int mask_ok, BaseType
  * independent generic DMA poll. */
 int dma_service_send(struct dma_service *, const struct dma_service_request *, TickType_t wait, uint64_t *ticket);
 int dma_service_collect(struct dma_service *, uint64_t ticket, struct dma_service_reply *, TickType_t wait);
+/* Optional wake hints for a notification-driven client. Bind before scheduling;
+ * callbacks run on the worker or bootstrap task after authoritative publication.
+ * A hint grants no buffer access: collect the reply or period after waking. */
+enum dma_service_event { DMA_SERVICE_REPLY_EVENT=1u,DMA_SERVICE_PROGRESS_EVENT=2u };
+int dma_service_bind_event(struct dma_service *,unsigned,void (*notify)(void *,unsigned),void *);
+void dma_service_notify_clients(struct dma_service *);
+/* Optional native wait telemetry. Atomic fields permit a diagnostic consumer
+ * to sample counters while the worker remains live. */
+struct dma_service_wait_record {
+    atomic_uint_fast64_t waits,wakes,idle_us,idle_notifications,idle_timeouts,deadline_expiries;
+};
+#ifdef SUNSTONE_A733_OS
+extern struct dma_service_wait_record dma_service_wake_record;
+#endif
 /* Copy only a collected CAPTURED_COPY staging lease for this task/job/ticket.
  * No pointer is queued; CPU destination must not alias service or DMA storage.
  * bytes is the job's period size, at most A733_I2S_PERIOD_CAPACITY. */

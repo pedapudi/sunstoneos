@@ -9,6 +9,7 @@
 #define WAIT_TICKS 4000u
 #define CYCLES 10u
 #define SUBMIT_WAIT_TICKS 500u
+#define IDLE_SAMPLE_US UINT64_C(1000000)
 #ifndef GPU_LIFECYCLE_RECOVERY
 #define GPU_LIFECYCLE_RECOVERY 0
 #endif
@@ -81,6 +82,19 @@ void gpu_lifecycle_main(const struct ss_grant *grant)
     struct gpu_queue_lease_info info[2];
     if (gpu_queue_context_create(&config, WAIT_TICKS, &context, info) != GPU_QUEUE_OK) ss_fail(2);
     if (info[0].address != (uintptr_t)output || info[1].address != (uintptr_t)input) ss_fail(3);
+    /* The receipt samples a quiet open owner before the first submission.
+     * Early task notifications cannot shorten the declared one-second hold. */
+    const uint64_t began = ss_counter_ticks();
+    if (began > UINT64_MAX - 24 * IDLE_SAMPLE_US) ss_fail(13);
+    const uint64_t idle_until = began + 24 * IDLE_SAMPLE_US;
+    ss_progress();
+    for (;;) {
+        const uint64_t now = ss_counter_ticks();
+        if (now < began || ss_live() < 0) ss_fail(13);
+        if (now >= idle_until) break;
+        ss_usb_wait((uint32_t)((idle_until - now + 23) / 24));
+    }
+    ss_progress();
     struct gpu_queue_job job = {
         .bindings = 2, .argument_bytes = sizeof(uint32_t), .groups = {3, 1, 1},
         .binding = {{.lease = 0, .sync_bytes = ELEMENTS * 4u},

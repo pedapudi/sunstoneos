@@ -2,6 +2,9 @@
 #include "npu_service.h"
 #include "sunstone_crumb.h"
 #include "a733_range.h"
+#ifdef SUNSTONE_A733_OS
+#include "sunstone_deadline.h"
+#endif
 #include <string.h>
 
 static struct npu_service *instance;
@@ -45,15 +48,73 @@ static void irq_fault(struct npu_service *s)
     atomic_fetch_or_explicit(&s->signals->irq_pending,IRQ_FAILED,memory_order_release);
 }
 enum { IRQ_MASK_WAIT, IRQ_REARM_WAIT, IRQ_STOP_WAIT };
+#ifdef SUNSTONE_A733_OS
+/* GICD_CTLR.RWP and active-bit propagation have no completion interrupt
+ * (Arm IHI 0069G, GICD_CTLR). Keep the existing 10 ms availability budget;
+ * retry on a precise compare, independently of the scheduler tick. */
+#define IRQ_WAIT_US UINT64_C(10000)
+#define REGISTER_RETRY_US UINT64_C(50)
+struct npu_service_wake_record npu_service_wakes;
+static int service_wait(struct npu_service *s)
+{
+    const uint64_t now=sunstone_deadline_now_us();
+    uint64_t until=0;
+    const struct a733_npu_controller *c=&s->controller;
+    const int busy=active(c->state);
+    if(busy){
+        const int cancel=c->state==A733_NPU_CANCEL_ASSERTED||c->state==A733_NPU_CANCEL_WAIT;
+        const uint64_t elapsed=s->ops.microseconds(s->cookie)-(cancel?c->cancel_start:c->start);
+        const uint64_t budget=cancel?c->cancel_timeout:c->timeout;
+        until=now+(elapsed<budget?budget-elapsed:0);
+        /* After an event, full-idle/drain and cancellation acknowledgments
+         * have no further IRQ. A cancellation pulse lasts at least 101 us. */
+        if(c->irq_seen||cancel){
+            uint64_t retry=now+REGISTER_RETRY_US;
+            if(c->state==A733_NPU_CANCEL_ASSERTED){
+                const uint64_t held=s->ops.microseconds(s->cookie)-c->cancel_asserted_us;
+                retry=now+(held<101?101-held:0);
+            }
+            if(retry<until)until=retry;
+        }
+    }
+    if(!s->irq_retained&&(s->irq_waiting||s->irq_rearming||s->has_deferred||(!s->irq_masked&&
+        (c->state==A733_NPU_FAULT||atomic_load_explicit(&s->signals->irq_pending,memory_order_acquire))))){
+        uint64_t retry=now+REGISTER_RETRY_US;
+        for(unsigned i=0;i<3;++i)if((s->irq_waiting&(1u<<i))&&s->irq_wait_start[i]<retry)
+            retry=s->irq_wait_start[i];
+        if(!until||retry<until)until=retry;
+    }
+    if(!s->irq_bound&&busy&&
+       (!until||now+REGISTER_RETRY_US<until))until=now+REGISTER_RETRY_US;
+    ++npu_service_wakes.waits;
+    const int result=until?sunstone_deadline_wait_until(until):
+        ((void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY),SUNSTONE_DEADLINE_NOTIFIED);
+    if(result==SUNSTONE_DEADLINE_ERROR){irq_fault(s);return 1;}
+    if(result==SUNSTONE_DEADLINE_EXPIRED)++npu_service_wakes.deadlines;
+    else ++npu_service_wakes.events;
+    if(!busy&&!s->irq_waiting&&!s->has_deferred){
+        npu_service_wakes.idle_us+=sunstone_deadline_now_us()-now;
+        if(result==SUNSTONE_DEADLINE_EXPIRED)++npu_service_wakes.idle_deadlines;
+        else ++npu_service_wakes.idle_events;
+    }
+    return result==SUNSTONE_DEADLINE_EXPIRED;
+}
+#endif
 /* Availability policy for scheduler-driven callbacks, not proof of hardware
  * completion. The extra tick covers the first sample's unknown tick phase. */
+#ifndef SUNSTONE_A733_OS
 #define IRQ_WAIT_TICKS (pdMS_TO_TICKS(10) + 1)
+#endif
 static int irq_call(struct npu_service *s, unsigned which, int (*call)(void *))
 {
     unsigned bit = 1u << which;
     if (s->irq_retained) return -1;
     if ((s->irq_waiting & bit) &&
+#ifdef SUNSTONE_A733_OS
+        sunstone_deadline_now_us() >= s->irq_wait_start[which]) {
+#else
         (TickType_t)(xTaskGetTickCount() - s->irq_wait_start[which]) >= IRQ_WAIT_TICKS) {
+#endif
         s->irq_retained = 1;
         irq_fault(s);
         return -1;
@@ -61,7 +122,11 @@ static int irq_call(struct npu_service *s, unsigned which, int (*call)(void *))
     int result = call(s->irq_cookie);
     if (!result) {
         if (!(s->irq_waiting & bit)) {
+#ifdef SUNSTONE_A733_OS
+            s->irq_wait_start[which] = sunstone_deadline_now_us()+IRQ_WAIT_US;
+#else
             s->irq_wait_start[which] = xTaskGetTickCount();
+#endif
             s->irq_waiting |= bit;
         }
     } else s->irq_waiting &= ~bit;
@@ -480,6 +545,9 @@ static void respond(struct npu_service *s, const struct npu_service_message *m,
     if (m->request.operation == NPU_SERVICE_REAP && result == NPU_SERVICE_OK)
         s->job_ticket = 0;
     configASSERT(xQueueSend(s->clients[m->client].replies, &reply, 0) == pdTRUE);
+#ifdef SUNSTONE_A733_OS
+    xTaskNotifyGive(s->clients[m->client].task);
+#endif
 }
 /* The owner's held WAIT is answered once the controller leaves an active state.
  * Every active state has a controller deadline, so the hold is bounded. */
@@ -504,12 +572,14 @@ static enum a733_npu_state view(const struct npu_service *s, unsigned client)
     default: return s->controller.state;
     }
 }
+#ifndef SUNSTONE_A733_OS
 static int queued(const struct npu_service *s)
 {
     for (unsigned i = 0; i < s->client_count; ++i)
         if (s->member[i].state == MEMBER_QUEUED) return 1;
     return 0;
 }
+#endif
 SERVICE_INLINE enum npu_service_result execute_shared(struct npu_service *s,
     const struct npu_service_message *m, unsigned *canceled, unsigned *closed)
 {
@@ -601,6 +671,9 @@ static void respond_shared(struct npu_service *s, const struct npu_service_messa
     if (m->request.operation == NPU_SERVICE_REAP && result == NPU_SERVICE_OK)
         member->job_ticket = 0;
     configASSERT(xQueueSend(s->clients[m->client].replies, &reply, 0) == pdTRUE);
+#ifdef SUNSTONE_A733_OS
+    xTaskNotifyGive(s->clients[m->client].task);
+#endif
 }
 /* Complete the finished job, then start the next queued member after the one
  * served last. Completion already ran the finish callback for that job. */
@@ -657,6 +730,9 @@ static void runtime_reply(struct npu_service *s, unsigned client, enum npu_servi
         .job_ticket = member->wait.request.operation == NPU_SERVICE_SUBMIT ? member->wait.ticket : 0};
     member->has_wait = 0; member->state = MEMBER_IDLE; member->job_ticket = 0;
     configASSERT(xQueueSend(s->clients[client].replies, &reply, 0) == pdTRUE);
+#ifdef SUNSTONE_A733_OS
+    xTaskNotifyGive(s->clients[client].task);
+#endif
     if (s->runtime) s->runtime->marks |= NPU_MARK_REPLY_POSTED;
 }
 static enum npu_service_result execute_runtime(struct npu_service *s,
@@ -835,12 +911,17 @@ static void runtime_worker(struct npu_service *s)
         runtime_settle(s);
         if (stepped) { (void)idle_hint(s); continue; }
         if (handled && !s->has_deferred) continue;
+#ifdef SUNSTONE_A733_OS
+        (void)progressed;
+        timed_out=service_wait(s);
+#else
         TickType_t wait = controller_active(s) || s->has_deferred || !progressed ? 1 :
             s->controller.state == A733_NPU_FAULT ? portMAX_DELAY : pdMS_TO_TICKS(1000);
         if (!s->irq_masked && !s->irq_retained &&
             (s->controller.state == A733_NPU_FAULT || atomic_load_explicit(&s->signals->irq_pending, memory_order_acquire)))
             wait = 1;
         timed_out = !ulTaskNotifyTake(pdTRUE, wait);
+#endif
     }
 }
 
@@ -850,6 +931,9 @@ static void worker(void *argument)
     uint64_t level, stack;
     level = npu_arch_current_el(); stack = npu_arch_stack_select();
     configASSERT(level == 4);
+#ifdef SUNSTONE_A733_OS
+    configASSERT(sunstone_deadline_register());
+#endif
 #if configNUMBER_OF_CORES > 1
     configASSERT(stack == 0); /* Preemptible EL1 task uses SP_EL0, not an exception stack. */
 #else
@@ -890,10 +974,22 @@ static void worker(void *argument)
         if (s->shared) { dispatch(s); release_waits(s); }
         else release_held(s);
         struct npu_service_message message;
+#ifndef SUNSTONE_A733_OS
         TickType_t wait = active(s->controller.state) ? 1 :
             (s->controller.state == A733_NPU_FAULT ? portMAX_DELAY : pdMS_TO_TICKS(1000));
         if (s->shared && s->controller.state == A733_NPU_READY && queued(s)) wait = 1;
+#endif
         if(s->irq_bound) {
+#ifdef SUNSTONE_A733_OS
+            if(!progressed){(void)service_wait(s);continue;}
+            if(s->has_deferred)message=s->deferred;
+            else if(xQueueReceive(s->requests,&message,0)!=pdTRUE) {
+                (void)service_wait(s);continue;
+            }
+        }else if(xQueueReceive(s->requests,&message,0)!=pdTRUE){
+            (void)service_wait(s);continue;
+        }
+#else
             if(!s->irq_masked && !s->irq_retained &&
                (s->controller.state==A733_NPU_FAULT || atomic_load_explicit(&s->signals->irq_pending,memory_order_acquire)))wait=1;
             if(!progressed){(void)ulTaskNotifyTake(pdTRUE,1);continue;}
@@ -902,6 +998,7 @@ static void worker(void *argument)
                 (void)ulTaskNotifyTake(pdTRUE,wait);continue;
             }
         }else if (xQueueReceive(s->requests, &message, wait) != pdTRUE) continue;
+#endif
         configASSERT(message.client < s->client_count && message.ticket);
         unsigned canceled = 0, closed = 0;
         enum npu_service_result result = !s->shared ? execute(s, &message, &canceled) :
@@ -909,7 +1006,11 @@ static void worker(void *argument)
             NPU_SERVICE_INVALID;
         if((unsigned)result==SERVICE_DEFERRED) {
             s->deferred=message;s->has_deferred=1;
+#ifdef SUNSTONE_A733_OS
+            (void)service_wait(s);continue;
+#else
             (void)ulTaskNotifyTake(pdTRUE,1);continue;
+#endif
         }
         s->has_deferred=0;
         if((unsigned)result==SERVICE_HELD) {
@@ -1258,7 +1359,11 @@ int npu_service_send(struct npu_service *s, const struct npu_service_request *re
     c->pending = m.ticket;
     if (xQueueSend(s->requests, &m, wait) != pdTRUE) { c->pending = 0; return 0; }
     c->next_ticket = m.ticket; *ticket = m.ticket;
+#ifdef SUNSTONE_A733_OS
+    xTaskNotifyGive(s->worker);
+#else
     if(s->irq_bound)xTaskNotifyGive(s->worker);
+#endif
     return 1;
 }
 int npu_service_collect(struct npu_service *s, uint64_t ticket,

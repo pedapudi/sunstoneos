@@ -7,7 +7,12 @@
 
 #define PVR_COMPUTE_FAST_DEPTH GPU_QUEUE_DEPTH
 #include "sunstone_notify.h"
+#ifdef SUNSTONE_A733_OS
+/* Same definition as the peer deadline selector and startup-ready signal. */
+#define PVR_COMPUTE_FAST_NOTIFY SS_NOTIFY_DEADLINE
+#else
 #define PVR_COMPUTE_FAST_NOTIFY SS_NOTIFY_REQUEST_WAIT
+#endif
 /* One job slot: the 320-byte PDS and CDM prefix (PVR_COMPUTE_QUEUE_ARGUMENTS), the
  * binding addresses and the arguments, in whole cache lines and at least 512
  * bytes. The slots are contiguous in the job pages of the payload

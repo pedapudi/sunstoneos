@@ -9,11 +9,12 @@ static unsigned taken;
 void *os_owner_memory(uint64_t bytes,uint64_t align,unsigned attributes)
 {assert(bytes==sizeof(queue)&&!align&&attributes==OS_MEMORY_EL0_WRITE);++taken;return queue;}
 static struct ss_grant grant;
-static int live=1,writes,wakes,configured,configurations;
+static int live=1,writes,wakes,configured,configurations,changes;
 static unsigned serial_releases,camera_releases;
 const struct ss_grant *ss_grant(void){return &grant;}
 int ss_live(void){return live;}
 static void wake(void *c){(void)c;++wakes;}
+static void changed(void *c){(void)c;++changes;}
 static void release(void *c,unsigned d,uint64_t token)
 {
     (void)c;assert(token);
@@ -28,7 +29,7 @@ static int config_result(void *c){(void)c;return configured;}
 int main(void)
 {
     const struct os_usb_service_ops ops={.wake=wake,.release=release,.write=write,
-        .configure=configure,.configured=config_result};
+        .configure=configure,.configured=config_result,.changed=changed};
     os_usb_service_init(&ops,0);
     /* Before admission there is no queue, and an event finds it full. */
     struct ss_input_event early={.kind=SS_INPUT_KEY,.usage=4};
@@ -94,7 +95,9 @@ int main(void)
     os_usb_service_retire();os_usb_service_dispatch();assert(!os_usb_service_idle()&&serial_releases==2);
     assert(configurations==1&&ss_usb_serial_config_result(2)==-1);
     /* Controller stop proof lets the host retire an aborted transmit. */
-    os_usb_service_stopped();os_usb_service_dispatch();
+    os_usb_service_stopped();int before_dispatch=changes;os_usb_service_dispatch();
     assert(os_usb_service_idle()&&serial_releases==3);
+    assert(changes==before_dispatch+1);
+    os_usb_service_dispatch();assert(changes==before_dispatch+1);
     assert(ss_usb_serial_write_result(10,&actual)==-1&&actual==0);return 0;
 }

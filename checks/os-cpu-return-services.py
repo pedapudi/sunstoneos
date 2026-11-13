@@ -49,6 +49,9 @@ class Model(prior.Model):
         self.hooks[layout.address('xTaskGenericNotify')] = self.notify
         self.hooks[layout.address('xTaskCreateStaticAffinitySet')] = self.create
         self.hooks[layout.address('vTaskDelay')] = self.delay
+        # The thermal owner blocks on its precise deadline (apps/os/thermal.c);
+        # the modeled wait returns as a notification and yields like a delay.
+        self.hooks[layout.address('sunstone_deadline_wait_until')] = self.deadline_wait
         self.board = layout.address('board', 'os-image/main.c')
         self.shared = layout.address('providers') + layout.layouts['board_provider']['shared']
         self.pmic = self.shared + layout.layouts['a733_native_usb']['pmic']
@@ -94,6 +97,10 @@ class Model(prior.Model):
         self.stop = 'yield'
         self.uc.emu_stop()
         return 0
+
+    def deadline_wait(self):
+        self.delay()
+        return 0  # SUNSTONE_DEADLINE_NOTIFIED
 
     def q(self, name, field):
         return self.u32(self.quiesce[name] + self.layout.layouts['os_quiesce'][field])

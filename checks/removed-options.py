@@ -59,6 +59,8 @@ ALLOWED = {
         'asserts that the image build does not define the name for the capture unit',
     ('checks/os-image-headset.py', 'SUNSTONE_A733_OS_HEADSET'):
         'asserts that the image build defines the name for the headset unit',
+    ('checks/cpu-return-spi-table.py', 'SUNSTONE_A733_OS_HEADSET'):
+        'compiles the route-table unit with the name that the image build defines for an image that links the headset',
     ('checks/removed-options.py', None): 'this check',
 }
 NAMES = '|'.join(sorted(REMOVED, key=len, reverse=True))
