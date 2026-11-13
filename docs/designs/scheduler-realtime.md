@@ -287,6 +287,67 @@ admitted:true, and the first miss ends the stage without a retry.
 In a product, the scheme assignment would follow the real-time set that the
 board and application declarations name, as for core isolation above.
 
+### Each core's current task has its own cache line
+
+Status: **measured**, one cause-build run on port 3-3 with the partition above
+(evidence entry `1794609985926933617-7e0a73a4`); CPU0's own release met its
+prediction and the whole tick missed at its L3 refills.
+
+The SMP kernel keeps each core's running task in `pxCurrentTCBs`. Every
+context switch writes the switching core's entry, and the port reads it on
+every exception entry and exit. With eight 8-byte entries, two lines held all
+of them. In the partition run's image, line 0x41257140 held CPU0's tick time
+and the entries of CPUs 0 to 4, and line 0x41257180 held the entries of CPUs 5
+to 7 with `xIdleTaskHandles[0]`. CPUs 5 to 7 wrote the second line on every
+wake, and their streaming then evicted it to DRAM. The latency fixture's ready
+hook read `xIdleTaskHandles[0]` in CPU0's own release, the first release of each
+tick, so that release refilled the line once per tick. The first line is
+refilled, if at all, by the context save at exception entry, which comes
+before the measured tick begins.
+
+`include/sunstone_current_tcb.h` gives each core a 64-byte line: C code indexes
+the array with `portCURRENT_TCB(core)`, and assembly shifts the core ID by
+`portCURRENT_TCB_SHIFT`. The array costs 448 more bytes. `checks/current-tcb-lines.py`
+fails on any 8-byte stride in C, assembly, Python or a kernel patch, and on an
+image whose array is not one aligned line per core. The fixture's ready hook
+no longer reads the array or the idle handles: each core publishes its running
+task, and whether it is an idle task, into its own wake slot from the
+`traceCURRENT_TCB_SET` hook in the switch path. CPU0 already writes that slot
+in every release.
+
+The run used the partition image of entry `1794605350026314973-495cffbe` with
+only this change applied (branch `work/sched-tcb-lines-base-1113`). The
+prediction removed one DRAM refill, about 1,670 cycles, from CPU0's own release
+and left the other segments unchanged.
+
+| Busy-phase mean over complete ticks | Partition | Predicted | Measured |
+| --- | ---: | ---: | ---: |
+| CPU0's own release, cycles | 6,624 | 4,000-6,000 | 4,719 |
+| CPU0's own release, L3 refills | 2.71 | 1.2-2.2 | 1.63 |
+| Whole tick, cycles | 60,519 | 54,000-61,000 | 59,148 |
+| Whole tick, L3 refills | 20.3 | 17.0-20.0 | 20.14 (miss) |
+| Releases to CPUs 1-3, cycles each | 3,214-3,959 | 2,500-4,500 | 3,164-3,606 |
+| Releases to CPUs 4-7, cycles summed | 24,571 (11.4 refills) | 20,000-28,000 (9.5-13.0) | 25,461 (12.35) |
+| Outside the releases and scans, cycles | 16,488 (4.3 refills) | 13,500-19,500 (3.0-5.5) | 16,699 (4.37) |
+| Idle tick, cycles | 33,232 | 28,000-38,000 | 32,475 |
+| CPU0's longest busy wake | 69.5 µs | at most 75 µs | 86.7 µs (miss) |
+| 1 MiB sweeps on CPUs 4-7, summed | 479 | 465-500 | 481 |
+
+CPU0's own release lost the refill and 1,905 cycles. The tick lost only 1,371
+cycles and 0.2 refills, because the releases to CPU4 and CPU5 rose from 3.77
+and 3.38 refills to 4.13 and 3.84; one run per image cannot separate that rise
+from run-to-run variation. In both runs CPU0's longest busy wake is the first
+sample of the busy phase. Without that sample the longest wake falls from 48.8
+to 45.1 µs and the median from 37.3 to 36.7 µs.
+
+The refill that disappeared came from the fixture's read, not from the
+kernel's own tick path. Inside the measured tick the kernel reads the first
+line only after the context save and the tick-time update have brought it into
+CPU0's caches, and it does not read the second line. The kernel's share of
+the old layout is the exception-entry context save, which this measurement does
+not cover. CPU0's own release still takes about 2,500 cycles and one L3 refill
+more than in the idle phase.
+
 ## Time slicing has a task-count-independent traversal bound
 
 Status: implemented in `patches/freertos-smp-tasks.patch` and host-tested. The
