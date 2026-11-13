@@ -15,6 +15,20 @@ The card is served by **SMHC0**, the first of the SoC's SD/MMC host controllers 
 - **Interrupt.** SMHC0 is GIC SPI 161, INTID 193 (161 + 32), level high (`apps/os/large_sd.c:os_sd_irq`). The platform requires the line masked at open (`a733_mmc_platform.c:masked`) and again whenever the controller is not running a command in interrupt mode (`gic_ok`); the owner unmasks it only after interrupt completion is switched on (section 2).
 - **Internal DMA (IDMAC).** The controller moves data between its FIFO and memory by itself, following a chain of 16-byte descriptors in memory: four 32-bit words `config`, `size`, `buffer` and `next` (`include/sunxi_mmc.h:sunxi_mmc_dma_descriptor`). `buffer` and `next` hold physical addresses shifted right by two. `config` carries: `OWN` (bit 31, set by software, cleared by the IDMAC when it has used the descriptor), `CH` (bit 4, chained), `FD` (bit 3, first), `LD` (bit 2, last) and `DIC` (bit 1, no interrupt on completion). Each descriptor covers up to 4 KiB (`SUNXI_MMC_DMA_SEGMENT`); a transfer of up to 256 blocks (128 KiB) uses at most 32 descriptors, in a list of 33 slots whose last slot is a zero terminator (`SUNXI_MMC_DMA_DESCRIPTORS`). `sunxi_mmc.c:dma_start` builds the chain and `DLBA` (`0x84`) points at it. The descriptors live in uncached memory; the data buffers are cached, so the owner cleans or invalidates them around each transfer (section 5). `FTRGL` (`0x40`) is `0x200700f8` (8-word bursts, receive watermark 7, transmit watermark 248), the board kernel's value for SDC0 (`sunxi-mmc.c:3630`).
 
+### The PF bank's withstand mode across the boot chain
+
+`GPIO_POW_MOD_SEL` at `0x02000040` sets, per pin group, the mode of the internal withstand circuit; the PF field is bits 11:10 (A733 User Manual V1.00, section 18.14.6.2): `00` and `10` fix it at 3.3 V, `01` makes it follow the voltage the SoC detects on the group (adaptive), and `11` fixes it at 1.8 V. The whole register's reset value is `0x01155550`, which puts PF in adaptive mode. `GPIO_POW_VAL` at `0x02000048` bits 11:10 report the detected PF voltage (`10` 3.3 V, `11` 1.8 V), and `0x02000070` bit 0 selects the PF supply level (1 3.3 V, 0 1.8 V).
+
+| Step | Vendor chain | SunstoneOS |
+| --- | --- | --- |
+| Boot ROM, card boot | Not recovered: the ROM reaches the PIO block through a computed base, which the literal scan of [brom-mmio.json](vendor-firmware/data/brom-mmio.json) cannot see. | The same ROM runs. |
+| boot0 board setup | Writes `0x01155550` to `0x02000040` when its condition routine `0x5d9f0` returns 1 (board setup `0x48fac`, literal pool `0x4902c`), which returns PF to adaptive. | Does not run on the warm path through the card gate. |
+| Kernel pin control | On the A733 (`SUNXI_PCTL_HW_TYPE_4`, mode select `0x40`, status `0x48`, PF switch `0x70`) the "auto hard" withstand mode skips every write to the mode register; it assumes the boot chain left PF adaptive. | n/a |
+| Kernel PF 1.8 V switch | `sunxi_power_auto_switch_pf`: writes `0x70` to 0 once, polls `0x48` bit 10 every 100 µs for up to 10 ms, waits 10 µs, and stops the kernel if the bank does not report the new level. | `a733_mmc_platform.c:ENTER_1V8` (reopen) and `core_sd_signal` (first switch): write `0x70` bit 0 to 0 once with the card clock stopped, poll `0x48` bits 11:10 for value 3 within 10 ms, then keep the clock stopped 10 ms. Both require the PF mode captured at the baseline to be `01`; otherwise the first open stays at 3.3 V and a reopen of a card still at 1.8 V fails in `ENTER_1V8` with nothing written. |
+| Supply | The PF supply is the board's 1.8 V/3.3 V switchable rail; the kernel only reads it. | The platform holds `CLDO5` and requires it programmed at 1.8 V before `ENTER_1V8`. |
+
+On port 3-3 after the first-stage install, the open found the PF field at `00` (fixed 3.3 V), the status at `10` (3.3 V) and the selector at 1, at both the first open and the reopen (run `1794594657134903775-717742af`, record value `0x83184c0d`). On 11-12, before the install, the same reopen passed, which requires `01`.
+
 ## 2. Layers and ownership
 
 Each layer owns one thing and calls only the layer below it.
