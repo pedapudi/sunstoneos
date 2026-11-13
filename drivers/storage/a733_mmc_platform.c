@@ -523,15 +523,17 @@ static enum a733_mmc_platform_result registers(struct a733_mmc_platform *p)
          * (as the core's own switch does, within 10 ms), then keep the clock stopped 10 ms before the core opens. */
         uint32_t ctrl,value;
         if(!p->signal) {
-            ok=p->config.sd_profile==SUNXI_MMC_SD_UHS_SDR104&&p->voltage_mode==1&&p->snapshots[2].programmed_uv==1800000u&&
-               rd(p,p->base+4,&ctrl)&&!ctrl&&masked(p)==1&&update(p,PIO+0x70,1,1,0);
-            if(ok){p->signal=1;p->signal_since=p->last_now;}
+            unsigned profile=p->config.sd_profile==SUNXI_MMC_SD_UHS_SDR104,mode=p->voltage_mode==1,supply=p->snapshots[2].programmed_uv==1800000u;
+            unsigned stopped=rd(p,p->base+4,&ctrl)&&!ctrl;
+            p->enter_obs=(uint8_t)(profile|mode<<1|supply<<2|stopped<<3);
+            ok=profile&&mode&&supply&&stopped&&masked(p)==1&&update(p,PIO+0x70,1,1,0);
+            if(ok){p->signal=1;p->signal_since=p->last_now;p->enter_obs|=1u<<4;}
         } else if(p->signal==1) {
             ok=rd(p,PIO+0x48,&value);
-            if(ok&&((value>>10)&3)==3){p->signal=2;p->signal_since=p->last_now;}
-            else if(ok&&p->last_now-p->signal_since>=10000)ok=0;
+            if(ok&&((value>>10)&3)==3){p->signal=2;p->signal_since=p->last_now;p->enter_obs|=1u<<5;}
+            else if(ok&&p->last_now-p->signal_since>=10000){ok=0;p->enter_obs|=1u<<6;}
         } else if(p->last_now-p->signal_since>=10000)p->stage=OPEN;
-        if(ok&&!voltage(p,0))ok=0;
+        if(ok&&!voltage(p,0)){ok=0;p->enter_obs|=1u<<7;}
     } else ok=0;
     return ok&&timely(p)?A733_MMC_PENDING:fail(p);
 }

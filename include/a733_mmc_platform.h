@@ -123,6 +123,10 @@ struct a733_mmc_platform {
     unsigned irq_mode;               /* the owner has unmasked the controller's GIC interrupt (a733_mmc_platform_irq) */
     unsigned signal; /* PF bank: 0 at 3.3 V, 1 selector written, 2 reports 1.8 V, 3 restore written at close (reads 1.8 V or 3.3 V). */
     uint64_t signal_since;           /* when the selector was last written or the bank last reported its new level */
+    /* What stage ENTER_1V8 found when it last ran, for a failed reopen's record: bit 0 the SDR104 profile, 1 the PF power mode was 1 at the
+     * baseline, 2 the bank supply programmed at 1.8 V, 3 the card clock control read 0, 4 the selector written to 1.8 V, 5 the bank reported
+     * 1.8 V, 6 10 ms passed with no such report, 7 the bank's voltage check failed after the step. */
+    uint8_t enter_obs;
 };
 /* Zero once. All managers, adapter storage and physical authority have platform
  * lifetime. Shared PMIC worker advances independently; the consumer never owns

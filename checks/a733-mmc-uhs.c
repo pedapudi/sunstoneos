@@ -298,6 +298,13 @@ int main(void)
     /* Adaptive PF mode and PERI0_300M: one selector write, then SDR104 at 150 MHz. */
     begin(1, 1, 3); assert(settle() == A733_MMC_READY);
     assert(pf_writes == 1 && m.platform.signal == 2 && *pmic_model_word(&m.power, 0x02000070) == 0);
+    /* A reopen of a card that still signals 1.8 V (start_1v8) with the PF power mode other than 1 at the baseline stops in stage ENTER_1V8 (12)
+     * with nothing written, and enter_obs names the condition: SDR104 profile, 1.8 V supply and stopped clock hold, the power mode does not. */
+    cfg_start18 = 1; begin(2, 1, 3); assert(settle() == A733_MMC_RETAINED);
+    assert(m.platform.stage == 12 && m.platform.enter_obs == 0x0d && !pf_writes);
+    /* With power mode 1 the same reopen writes the selector once, sees the bank report 1.8 V and opens. */
+    begin(1, 1, 3); assert(settle() == A733_MMC_READY);
+    assert(m.platform.enter_obs == 0x3f && pf_writes == 1 && m.platform.core.card.reentered); cfg_start18 = 0;
     assert(((*pmic_model_word(&m.power, 0x02000048) >> 10) & 3) == 3 && ((*pmic_model_word(&m.power, 0x02000040) >> 10) & 3) == 1);
     assert(m.platform.core.card.timing == 3 && m.platform.core.card.card_hz == 150000000 && u.s18r_seen);
     assert(last_module == 0x82000000u && m.platform.running_module == 0x82000000u && module_writes == 1);

@@ -163,9 +163,12 @@ static void finish(struct request *r, int ok)
 }
 
 /* The note for a refused request or a failed open (the first-failure record's value): bits 7:0 the stage, 23:8 its detail (the low 16 bits:
- * result | platform stage << 8), 26:24 INTID 193 before the owner masked it (enabled, pending, active), 30:28 after the mask settled. */
+ * result | platform stage << 8), 26:24 INTID 193 before the owner masked it (enabled, pending, active), 30:28 after the mask settled.
+ * A failed identification (stage 7) instead carries, in bits 31:24, what stage ENTER_1V8 found (os_sd_diag[1] bits 47:40), not the INTID state. */
 static uint32_t diag_word(void)
 {
+    if (os_sd_diag[0] == 7)
+        return 7u | (uint32_t)(os_sd_diag[1] & 0xffff) << 8 | (uint32_t)(os_sd_diag[1] >> 40 & 0xff) << 24;
     if (os_sd_diag[0] >= 30)                         /* a refused request: stage in 5:0, then the 26 bits of large_sd.c PLATX (stages 33 and 34: write_fail's core error, protocol step and interrupt status) */
         return os_sd_note_value((unsigned)os_sd_diag[0], os_sd_diag[1]);
     return (uint32_t)(os_sd_diag[0] & 0xff) | (uint32_t)(os_sd_diag[1] & 0xffff) << 8 | (uint32_t)(os_sd_diag[2] & 7) << 24 |

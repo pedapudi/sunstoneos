@@ -481,7 +481,7 @@ const struct os_large_device *os_large_device(void)
             if (r == A733_MMC_READY) break;
             if ((r != A733_MMC_PENDING && r != A733_MMC_BUSY) || !board_live(NULL) || now_us() >= config.deadline_us) {
                 (void)a733_mmc_platform_retain(&platform);
-                return DIAGP(7, PLAT(r));
+                return DIAGP(7, PLAT(r) | (uint64_t)platform.enter_obs << 40);   /* bits 47:40: what stage ENTER_1V8 found (a733_mmc_platform.h) */
             }
             sd_pause();
         }
