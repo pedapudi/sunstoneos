@@ -937,12 +937,18 @@ def decode_latency_cause_ping(payload, frequency, core_mhz):
 
 
 def peel_latency_cause(payload):
-    cause_tail, ping_tail = b'', b''
+    """Split the cause and ping reports from the result. Footer version 1
+    streams on every core; version 2 names the streaming cores in its last word."""
+    cause_tail, ping_tail, stream_mask = b'', b'', 0xff
     if len(payload) >= 64 and struct.unpack_from('<Q', payload, len(payload) - 64)[0] == CAUSE_FOOTER_MAGIC:
         footer = struct.unpack_from('<8Q', payload, len(payload) - 64)
-        _, version, size, cause_at, cause_size, ping_at, ping_size, reserved = footer
-        if (version != 1 or size != len(payload) or cause_size != CAUSE_BYTES or
-                ping_size != CAUSE_PING_BYTES or reserved or cause_at < RESULT_BYTES or
+        _, version, size, cause_at, cause_size, ping_at, ping_size, last = footer
+        if version == 2 and 0 < last <= 0xff:
+            stream_mask = last
+        elif version != 1 or last:
+            raise ValueError('cause footer offsets, padding or report sizes are invalid')
+        if (size != len(payload) or cause_size != CAUSE_BYTES or
+                ping_size != CAUSE_PING_BYTES or cause_at < RESULT_BYTES or
                 cause_at % 64 or ping_at != cause_at + cause_size or
                 ping_at + ping_size > len(payload) - 64 or
                 any(payload[ping_at + ping_size:-64])):
@@ -950,13 +956,13 @@ def peel_latency_cause(payload):
         cause_tail = payload[cause_at:ping_at]
         ping_tail = payload[ping_at:ping_at + ping_size]
         payload = payload[:cause_at]
-    return payload, cause_tail, ping_tail
+    return payload, cause_tail, ping_tail, stream_mask
 
 
 def decode(payload, dma=False):
     if len(payload) < RESULT_BYTES:
         raise ValueError(f'latency result must contain {RESULT_BYTES} bytes')
-    payload, cause_tail, ping_tail = peel_latency_cause(payload)
+    payload, cause_tail, ping_tail, stream_mask = peel_latency_cause(payload)
     tail = payload[RESULT_BYTES:]
     scheduler_pmu_tail = b''
     if len(tail) >= SCHED_PMU_BYTES and struct.unpack_from('<Q', tail, len(tail) - SCHED_PMU_BYTES)[0] == SCHED_PMU_MAGIC:
@@ -985,8 +991,11 @@ def decode(payload, dma=False):
               'first_over_ticks', 'first_over_site')
     for core in range(8):
         sweeps, read, written, digest = struct.unpack_from('<4Q', payload, 40 + core * 32)
-        if sweeps < 2 or read != sweeps * 1048576 or written != read:
-            raise ValueError(f'core {core} memory traffic is incomplete')
+        if stream_mask >> core & 1:
+            if sweeps < 2 or read != sweeps * 1048576 or written != read:
+                raise ValueError(f'core {core} memory traffic is incomplete')
+        elif sweeps or read or written or digest:
+            raise ValueError(f'core {core} streams outside the named streaming cores')
         samples = {}
         for metric, name in enumerate(METRICS):
             words = struct.unpack_from('<7Q', payload, 320 + core * 640 + metric * 56)
@@ -1115,7 +1124,7 @@ def decode(payload, dma=False):
                       'phase_lock_acquisitions': dict(zip(PHASES, phase_acquisitions)),
                       'wake_site': site, 'raw_wakes': raw, 'sites': sites})
     result = {'quantile_method': QUANTILES, 'phase_attribution': 'named phases contain whole intervals; aggregate metrics and sites include gaps and crossings', 'model': False, 'frequency': frequency, 'elapsed_ticks': elapsed,
-            'phase_bounds': dict(zip(PHASES, bounds)), 'core_mask': mask, 'timer_irq_core_mask': irq_mask, 'dma_jobs': dma_jobs, 'cores': cores}
+            'phase_bounds': dict(zip(PHASES, bounds)), 'core_mask': mask, 'stream_mask': stream_mask, 'timer_irq_core_mask': irq_mask, 'dma_jobs': dma_jobs, 'cores': cores}
     if scheduler_pmu_tail:
         if pmu_tail or control_tail or not scheduler_tail:
             raise ValueError('scheduler PMU report requires its exclusive traced CPU profile')

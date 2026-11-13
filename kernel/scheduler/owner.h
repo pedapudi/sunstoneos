@@ -81,6 +81,7 @@ bool ss_owner_has_pending(const struct ss_owner *);
  * committing task execution/WFI.
  * The final call and WFI must retain DAIF.I masking and admit the SGI at GIC. */
 bool ss_owner_commit_dispatch(struct ss_owner *, unsigned priority, bool idle);
+bool ss_owner_settle(struct ss_owner *);
 void ss_owner_continue(struct ss_owner *);
 
 /* Permanent descriptor storage and incoming words must outlive all publishers.
