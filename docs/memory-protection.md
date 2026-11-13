@@ -80,6 +80,12 @@ EL3 keeps its read-write entry for the block, because it writes the sealed
 session with translation off. Application spaces copy these entries below
 `0x4800_0000` unchanged, so an application sees the same permissions.
 
+The build identity is read-only data, so in the OS image it lies in this
+block. The EL3 launcher (`platform/a733-smp-supervised/launch.c`), the
+runner's launch request (`apps/board/prepare.py`) and the image check
+(`tools/check-a733-smp.py`) admit it from `0x4100_0000` to `0x413f_ffe0`, and
+only in a load segment that is not writable.
+
 Moving RAM by 2 MiB takes 2 MiB from every OS image's room for BSS, heap and
 device pool. With the uncached block linked, the device pool must end at or
 below `0x41c0_0000` (`ASSERT(... __device_pool_end <= 0x41c00000 ...)` in
