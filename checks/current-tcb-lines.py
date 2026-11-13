@@ -138,9 +138,11 @@ def self_test():
 
 def tracked():
     names = subprocess.run(['git', '-C', str(ROOT), 'ls-files', '-z'], capture_output=True, check=True).stdout
+    own = Path(__file__).resolve().relative_to(ROOT).as_posix()
     for name in names.decode().split('\0'):
         path = ROOT / name
-        if name and not name.startswith('docs/') and not name.endswith(('.md', '.jsonl')) and path.is_file():
+        # The check's own self-test holds the patterns it must flag.
+        if name and name != own and not name.startswith('docs/') and not name.endswith(('.md', '.jsonl')) and path.is_file():
             yield name, path
 
 
