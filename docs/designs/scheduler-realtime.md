@@ -119,16 +119,18 @@ build option.
 
 ### An L3 partition would keep the real-time cores' lines in the shared cache
 
-Status: **proposed measurement**, not run. The register writes need approval
-before a board run.
+Status: **approved measurement**, one cause-build run on port 3-3. The build
+option `SUNSTONE_LATENCY_L3_PARTITION` enables the writes; no other image
+writes these registers.
 
 The A733's DynamIQ Shared Unit (DSU) reports `CLUSTERIDR_EL1` 0x41, revision
 r4p1. Its L3 holds 1 MiB in 16 ways of 1024 sets with 64-byte lines (`CCSIDR`
 for level 3 reads 0x707fe07a), so one way group of four ways holds 256 KiB. The
-register layout below comes from the DSU Technical Reference Manual for r3p0
-(Arm 100453_0300, sections A5.3 and B1.12). The r4p1 manual is not available.
-The cause build's capture already reads these registers at EL3 on every core
-without a trap; the partition registers and `ACTLR_EL3` read 0.
+register layout below comes from the DSU Technical Reference Manual for r4p1
+(Arm 100453_0401, issue 05, sections 6.3, 11.12, 11.15 and 11.18); it matches
+the r3p0 manual (100453_0300) bit for bit. The cause build's capture already
+reads these registers at EL3 on every core without a trap; the partition
+registers and `ACTLR_EL3` read 0.
 
 The partition registers:
 
@@ -142,6 +144,9 @@ The partition registers:
   bits [2:0], one copy per core, reset 0.
 - **`CLUSTERACPSID_EL1` and `CLUSTERSTASHSID_EL1`** give the scheme IDs of
   accelerator coherency port (ACP) requests and cache stashes; both reset to 0.
+- **`CLUSTERPWRSTAT_EL1`** (`S3_0_C15_C3_7`) bits [7:4] show which L3 portions
+  are powered: 0b1111 means all 16 ways. A powered-down portion removes its way
+  group from every partition.
 - **`ACTLR_EL3` bits 11 (SMEN) and 10 (TSIDEN)** grant EL1 write access to the
   partition registers and to `CLUSTERTHREADSID_EL1`. A Non-secure EL1 write also
   needs the same bit in `ACTLR_EL2`; without both grants the write traps to EL3.
@@ -168,25 +173,32 @@ cannot do it: it reaches the board through FEL on CPU0 only, and
 `CLUSTERTHREADSID_EL1` is a per-core system register with no memory-mapped
 alias, so each core must write its own. The sequence:
 
-1. Each core keeps its read-only boot capture, then writes its
-   `CLUSTERTHREADSID_EL1` and reads it back into a second record.
+1. Each core captures the registers before any write, now including
+   `CLUSTERPWRSTAT_EL1`, the ACP and stash scheme IDs and
+   `CLUSTERTHREADSIDOVR_EL1`. It then writes its `CLUSTERTHREADSID_EL1`, issues
+   an ISB and reads it back; a mismatch clears the register and stops the boot
+   with detail 0x738.
 2. After all eight cores pass the barrier that follows the capture, CPU0 writes
-   `CLUSTERPARTCR_EL1`, issues an ISB and reads the register back. Cores that
-   reach EL1 first run without a partition for a few microseconds of startup,
-   before any measurement.
-3. The decoder checks that the boot capture reads 0 on every core, as now, and
-   that the readback holds 0x1E with scheme ID 1 on CPUs 0 to 3 and 0 on CPUs 4
-   to 7. It must treat `CLUSTERTHREADSID_EL1` as a per-core value; it currently
-   requires the cluster registers to agree across cores.
+   `CLUSTERPARTCR_EL1`, issues an ISB and reads the register back; a mismatch
+   clears it and stops the boot with detail 0x739. Cores that reach EL1 first
+   run without a partition for a few microseconds of startup, before any
+   measurement.
+3. The decoder reports the boot capture and refuses a partition record whose
+   readback differs from what was written, which is 0x1E from CPU0 and the
+   scheme ID from each core. It treats `CLUSTERTHREADSID_EL1` as a per-core
+   value.
 
-Two resets undo the write. When the image stops, `a733_smp_stop` parks every CPU
-at EL3; the stopping core first writes 0 to `CLUSTERPARTCR_EL1`, so a normal
-return and an EL1 fault exit both leave no partition. Before every run, the
-runner's watchdog reset returns the board to FEL; that is a system reset, which
-should return the DSU's partition bits to 0. A hang that never reaches the stop
-path relies on the watchdog reset alone. The DSU register reset by the watchdog
-has not been observed; the boot capture of the next cause-build run checks it
-and must read 0 on every core.
+Two resets undo the write. Every entry to EL3 ends this image, whether a normal
+return, an EL1 fault or an EL3 exception, and the shared EL3 vector entry
+(`a733_cached_el3_fault` in `continue.S`) writes 0 to `CLUSTERPARTCR_EL1` and to
+the entering core's `CLUSTERTHREADSID_EL1` before anything else. The image
+makes no other SMC. Before every run, the runner's watchdog reset returns the
+board to FEL; that is a system reset, which should return the DSU's partition
+bits to 0. A hang that never reaches EL3 relies on the watchdog reset alone.
+The boot capture of the next cause-build run reads the registers before any
+write and must read 0 on every core. Because the EL3 clear runs first, that
+reading shows that no partition persisted; it does not show which of the two
+resets cleared it.
 
 The prediction uses the isolation run (entry `1794597393456307577-46a485eb`,
 streaming on CPUs 4 to 7) as its baseline, with the same image apart from the
@@ -207,6 +219,7 @@ isolation cost.
 | Deadline scans, cycles summed | 1,952 | 1,669 | 1,000-3,000 |
 | Idle tick, cycles | 33,304 | 33,304 | 28,000-38,000 |
 | CPU0's longest busy wake | 93.1 µs | 28.8 µs (idle wake) | at most 85 µs |
+| 1 MiB sweeps on CPUs 4-7 in the busy phase, summed | 497 | none | 470-505 |
 
 The point estimate is about 47,800 cycles. The idle-phase costs of CPU0's own
 release (2,228 cycles), the releases to CPUs 1 to 3 (7,949) and the outside
@@ -219,9 +232,12 @@ CPU0's longest busy wake should fall from 93.1 µs to about 77 µs.
 
 Refuting outcomes, checked in this order:
 
+- A boot capture with a nonzero `CLUSTERPARTCR_EL1` or scheme ID, or with
+  `CLUSTERPWRSTAT_EL1` bits [7:4] other than 0b1111, means the run did not start
+  from a reset, fully powered L3; the run says nothing about the partition.
 - A readback other than 0x1E, or a scheme ID other than 1 on CPUs 0 to 3, means
-  the r4p1 register layout differs from r3p0; the run says nothing about the
-  partition.
+  the register does not hold what was written (the boot stops with detail 0x738
+  or 0x739); the run says nothing about the partition.
 - A busy tick of 70,000 cycles or more, or a CPU0 release of 6,000 cycles or
   more, means the partition does not keep CPU0's lines. The remaining refills
   then come from lines other cores own or from DRAM contention, not from L3
@@ -229,16 +245,28 @@ Refuting outcomes, checked in this order:
 - Releases to CPUs 4 to 7 near their idle cost would mean the partition also
   protects lines that the streaming cores last held, so the line-ownership model
   above is wrong.
+- Fewer than 470 sweeps in all on CPUs 4 to 7 means the partition costs the
+  streaming cores more than the replacement estimate above.
 
-The streaming cores lose a quarter of the L3. Each streams 1 MiB per sweep,
-which already exceeds the L3, so their sweep counts should change little; the
-report's traffic counters show them.
+The streaming cores lose a quarter of the L3: they allocate into 12 ways
+instead of 16. Each of the four streams a private 1 MiB buffer per sweep, 4 MiB
+in all, so every 1024-line L3 set receives 64 streaming lines per round of
+sweeps. Victim selection is not documented. Under random replacement a line
+survives 64 later allocations into its set with probability (15/16)^64, about
+1.6 percent, with 16 ways, and (11/12)^64, about 0.4 percent, with 12 ways. The
+streams therefore read from DRAM nearly always in both cases, and their
+throughput should fall by at most a few percent. In the isolation run, CPUs 4
+to 7 completed 106, 102, 134 and 155 sweeps in the 0.129 s busy phase, 497 in
+all (8.1 GB/s of reads and writes). The prediction is 470 to 505 in all, a fall
+of at most 5.4 percent, with each core within 8 percent of its isolation count.
+A larger fall would mean the streaming cores reuse L3 lines that the partition
+takes from them, which robotics pipelines sharing the cluster would also lose.
 
 Time budget: the isolation run took 21.3 s, with preparation 0.7 s, rails 3.3 s,
 reset 4.8 s, DRAM 2.4 s, launch 6.5 s, capture 0.5 s, rail restoration 1.7 s
-and 1.4 s in the other stages. The partition adds one register write and one
-readback per core at EL3, under 1 µs, and nine readback words (72 bytes) of output, under
-0.01 s of readback. The expected total is 21 to 22 s, below the 55 s finish_by
+and 1.4 s in the other stages. The partition adds four register reads, one
+write and one readback per core at EL3, under 1 µs, and 512 bytes of output,
+under 0.01 s of readback. The expected total is 21 to 22 s, below the 55 s finish_by
 and the 60 s session lifetime. The controller publishes progress every 1 ms
 tick; the longest gap is the bounded 250 ms line exchange, below the 1 s
 application and 3 s runner progress windows. One run follows `check` with

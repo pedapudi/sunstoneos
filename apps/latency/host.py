@@ -21,7 +21,7 @@ SCHED_PMU_STATUS = ('ok', 'unarmed', 'not_el1', 'wrong_core', 'nested',
                     'not_active', 'wrong_cookie', 'no_counters',
                     'config_mismatch', 'not_prepared', 'frozen', 'overflow')
 CAUSE_MAGIC = 0x5353434155534531
-CAUSE_BYTES = 16816
+CAUSE_BYTES = 17328
 CAUSE_EVENTS = ('l1i_refill', 'l1d_refill', 'l2d_refill', 'l3d_refill', 'stall_backend')
 CAUSE_EVENT_TYPES = (0x01, 0x03, 0x17, 0x2a, 0x24)
 CAUSE_FOOTER_MAGIC = 0x5353434155534631
@@ -742,7 +742,7 @@ def decode_latency_cause(payload, frequency):
         return result
 
     header = take('magic version bytes cores phases cases samples flags')
-    if tuple(header.values())[:7] != (CAUSE_MAGIC, 3, CAUSE_BYTES, 8, 2, 15, 64) or header['flags'] != 13:
+    if tuple(header.values())[:7] != (CAUSE_MAGIC, 4, CAUSE_BYTES, 8, 2, 15, 64) or header['flags'] != 13:
         raise ValueError('latency cause header is invalid or its snapshot is incomplete')
     cores = []
     for core in range(8):
@@ -858,7 +858,9 @@ def decode_latency_cause(payload, frequency):
     phase_events, phase_outside = grid(2, 5), grid(2, 5)
     phase_release_cycles, phase_scan_cycles = grid(2, 8), grid(2, 8)
     phase_release, phase_scan = grid(2, 8, 5), grid(2, 8, 5)
-    dsu_fields = ('captured', 'clusteridr', 'clustercfr', 'clusterpartcr', 'clusterthreadsid', 'actlr_el3')
+    dsu_fields = ('captured', 'clusteridr', 'clustercfr', 'clusterpartcr', 'clusterthreadsid', 'actlr_el3',
+                  'clusterpwrstat', 'clusteracpsid', 'clusterstashsid', 'clusterthreadsidovr',
+                  'threadsid_set', 'threadsid_after', 'partition', 'partcr_after')
     dsu_rows = [dict(zip(dsu_fields, row)) for row in grid(8, len(dsu_fields))]
     if offset != len(words):
         raise ValueError('cause decoder and wire report disagree')
@@ -892,15 +894,34 @@ def decode_latency_cause(payload, frequency):
               'scope': 'raw counts with hook bookkeeping included; L3D refill is core-attributable; '
                        'phase means cover ticks with all eight releases and scans'}
     bench['extra_sgi_observations'] = bench['sgi_observed'] - bench['sgi_sends']
-    # A missing capture is reported, not refused: the register values are a
-    # record beside the measurement and never gate it.
+    # A missing boot capture is reported, not refused: the register values are
+    # a record beside the measurement and never gate it. A partition write is
+    # part of the measurement, so its record must be consistent.
+    partition = dsu_rows[0]['partition']
+    for core, row in enumerate(dsu_rows):
+        written = (row['threadsid_set'], row['threadsid_after'], row['partition'], row['partcr_after'])
+        if not partition:
+            if any(written):
+                raise ValueError(f'cause core {core} records a DSU write in an unpartitioned build')
+        elif (row['captured'] != 1 or row['threadsid_set'] > 7 or
+                row['threadsid_after'] & 7 != row['threadsid_set'] or
+                row['partition'] != (partition if core == 0 else 0) or
+                row['partcr_after'] != (partition if core == 0 else 0)):
+            raise ValueError(f'cause core {core} L3 partition write or readback is inconsistent')
+    cluster = ('clusteridr', 'clustercfr', 'clusterpartcr', 'clusterpwrstat', 'clusteracpsid', 'clusterstashsid')
     dsu = {'cores': [dict({k: hex(v) for k, v in row.items() if k != 'captured'},
                           core=core, captured=row['captured'] == 1)
                      for core, row in enumerate(dsu_rows)],
            'complete': all(row['captured'] == 1 for row in dsu_rows),
-           'cluster_registers_agree': len({(row['clusteridr'], row['clustercfr'], row['clusterpartcr'])
+           'cluster_registers_agree': len({tuple(row[k] for k in cluster)
                                            for row in dsu_rows if row['captured'] == 1}) <= 1,
-           'scope': 'read once per core at EL3 during boot; no DSU register is written'}
+           'boot_partition_clear': all(row['clusterpartcr'] == 0 and row['clusterthreadsid'] == 0
+                                       for row in dsu_rows if row['captured'] == 1),
+           'partition': ({'clusterpartcr': hex(partition), 'readback': hex(dsu_rows[0]['partcr_after']),
+                          'scheme_ids': [row['threadsid_after'] & 7 for row in dsu_rows]}
+                         if partition else None),
+           'scope': ('read once per core at EL3 during boot, before any write; a partitioned build then sets '
+                     'each core\'s scheme ID and CPU0 the cluster partition, and any entry to EL3 clears both')}
     return {'header': header, 'cores': cores, 'sgi': sends, 'phases': phases,
             'tick': tick, 'benchmark': bench, 'events': events, 'dsu': dsu,
             'component_scope': 'raw instrumented cycles; hook bookkeeping and its interaction with DSB remain included',
