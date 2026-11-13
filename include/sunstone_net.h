@@ -29,7 +29,7 @@ struct sunstone_net_reply {
     uint16_t bytes,port;uint8_t address[4];
     uint8_t payload[SUNSTONE_NET_BYTES];
 };
-struct sunstone_net_message {struct sunstone_net_request request;uint64_t ticket;unsigned client;TickType_t submitted;};
+struct sunstone_net_message {struct sunstone_net_request request;uint64_t ticket,deadline_us;unsigned client;TickType_t submitted;};
 struct sunstone_net_client {
     TaskHandle_t task;
     uint64_t next_ticket;atomic_uint_fast64_t pending;
@@ -41,6 +41,7 @@ struct sunstone_net_socket {
     uint64_t handle;
     unsigned client;
     atomic_uint disposed;
+    atomic_uint bound_event;
     atomic_uintptr_t disposal_address;
     uint8_t tcp,bound,closing,uncertain;
     /* One listener reserves a ledger entry for its backlog-one child. The
@@ -55,6 +56,7 @@ struct sunstone_net_accept {
     enum sunstone_net_operation operation;
     unsigned listener,child;
     TickType_t submitted,timeout;
+    uint64_t deadline_us;
     Socket_t socket;
     struct freertos_sockaddr peer;
     int result;
@@ -64,15 +66,30 @@ enum sunstone_net_dns_state {SUNSTONE_DNS_IDLE,SUNSTONE_DNS_START,SUNSTONE_DNS_W
 struct sunstone_net_dns {
     char name[SUNSTONE_NET_NAME_BYTES];
     TickType_t submitted,timeout;
+    uint64_t deadline_us;
     atomic_uint_fast64_t ticket; /* Identity is immutable until the IP-task fence. */
     uint32_t address;
     atomic_uint state,callback_ready;
     atomic_uint_fast64_t cancel_requested;
 };
-struct sunstone_net_pending {struct sunstone_net_message message;unsigned slot;uint8_t active,started;};
+struct sunstone_net_pending {struct sunstone_net_message message;unsigned slot;uint8_t active,started,deadline_seen;};
+/* A native provider binds its already-admitted transport interrupt to owner.
+ * It also supplies the earliest transport/protocol deadline in counter
+ * microseconds, or zero when no timer is pending. Binding must establish IRQ
+ * route, publication, rearm and retirement ownership; a nonzero declaration
+ * alone grants no hardware access. bind, deadline_us and work_pending are
+ * required together. The native A733 event image supplies all three through
+ * its retained SDIO binding; an unbound composition keeps its reference. */
+struct sunstone_net_event_source {
+    int (*bind)(void *,TaskHandle_t owner);
+    uint64_t (*deadline_us)(void *);
+    int (*work_pending)(void *); /* 1 ready work, 0 await event, -1 retained fault. */
+    void *context;
+};
 struct sunstone_net_config {
     struct aic8800_network_config network;
     TaskHandle_t bootstrap,clients[SUNSTONE_NET_CLIENTS];
+    struct sunstone_net_event_source events;
 };
 struct sunstone_net {
     struct aic8800_network network;
@@ -87,8 +104,11 @@ struct sunstone_net {
     uint8_t request_storage[SUNSTONE_NET_CLIENTS*sizeof(struct sunstone_net_message)];
     StaticTask_t task;StackType_t stack[SUNSTONE_NET_STACK_WORDS];TaskHandle_t worker;
     uint64_t next_handle;
+    uint64_t transport_due_us; /* The matured provider deadline awaiting one service pass. */
     atomic_uint activation,failed,client_gate,offline;
-    uint8_t initialized,owned_poll;
+    atomic_uint ip_waiters; /* Client bits armed before a possibly full IP queue. */
+    atomic_uint client_gate_waiters; /* Client bits; bit CLIENTS names the owned worker. */
+    uint8_t initialized,owned_poll,event_bound;
 };
 /* Trusted initialization before scheduling. Configuration and task identities
  * are copied; radio and entropy contexts remain pinned. Activation transfers
@@ -113,6 +133,8 @@ int sunstone_net_init_owned(struct sunstone_net *,const struct sunstone_net_conf
  * session must authenticate its actual platform lifetime before each call;
  * after revocation, fault the network before calling to drain copied replies. */
 int sunstone_net_poll_owned(struct sunstone_net *);
+/* Only an owner whose event provider bound successfully may block here. */
+int sunstone_net_wait_owned(struct sunstone_net *);
 int sunstone_net_activate(struct sunstone_net *);
 /* Owned polling only; every socket, pending request and unread reply must be
  * disposed before closing admission. Reopening also requires NetworkUp. */
@@ -124,6 +146,10 @@ int sunstone_net_receive(struct sunstone_net *,struct sunstone_net_reply *,TickT
  * already completed reply remains authoritative. DNS storage remains busy
  * until the sole IP task acknowledges callback cancellation. */
 int sunstone_net_cancel(struct sunstone_net *,uint64_t ticket);
+/* Hints only: authoritative queue, socket and transport state is rechecked.
+ * A transport's ISR calls the FromISR form after latching its event. */
+void sunstone_net_event(void);
+void sunstone_net_event_from_isr(BaseType_t *woken);
 /* FreeRTOS+TCP's supported socket-free override; invoked after its socket's
  * buffers/event group are disposed. Applications must not call it. */
 void sunstone_net_stack_free(void *);

@@ -21,6 +21,7 @@
 #include "boot.h"
 #include "umem.h"
 #include "sunstone_crumb.h"
+#include "sunstone_deadline.h"
 #include <string.h>
 struct umem *os_large_umem(void);
 _Static_assert(OS_AUDIO_DMA_ESTABLISHED(A733_LIFETIME_RESIDENT)==A733_DMA_HANDOFF_REQUIRED,"resident DMA handoff");
@@ -60,11 +61,16 @@ static struct os_audio_state {
     uint64_t read,base;
     struct os_audio_period ring[OS_AUDIO_RING_CAPACITY];
     /* Stream task only. */
-    unsigned stage,run,reap;
+    unsigned stage,run,reap,await_event;
+    atomic_uint_fast64_t events;
+    uint64_t request_event,await_sequence;
     uint64_t pending,held,first,frames;
     struct dma_service_reply reply;
     uint64_t return_deadline;
 } *audio;
+/* Optional post-return telemetry, written only by the audio owner. */
+struct { uint64_t waits,wakes,idle_us,idle_notifications,idle_timeouts,deadline_expiries; }
+    os_audio_wake_record;
 static enum os_quiesce_result audio_quiesce_step(struct os_quiesce *);
 static struct os_quiesce audio_quiesce={.owner=OS_QUIESCE_AUDIO,
     .order=OS_QUIESCE_DEVICES,.step=audio_quiesce_step};
@@ -75,6 +81,14 @@ static enum os_quiesce_result audio_quiesce_step(struct os_quiesce *q)
     return os_quiesce_result(q);
 }
 static int live(void){return board_live(NULL)&&!atomic_load_explicit(&audio->failed,memory_order_acquire);}
+static void audio_event(void *cookie,unsigned event)
+{
+    if(cookie!=audio)return;
+    if(event&DMA_SERVICE_PROGRESS_EVENT)atomic_fetch_add_explicit(&audio->events,1,memory_order_release);
+    if(audio->handle)xTaskNotifyGive(audio->handle);
+}
+static void await_event(void)
+{audio->await_sequence=audio->request_event;audio->await_event=1;}
 static void fail(void)
 {
     atomic_store_explicit(&audio->failed,1,memory_order_release);
@@ -144,6 +158,7 @@ static int request(enum dma_service_operation operation,uint64_t timeout,uint64_
 {
     if(!audio->pending){
         struct dma_service_request r={.operation=operation,.job=0,.timeout=timeout,.period_ticket=period};
+        audio->request_event=atomic_load_explicit(&audio->events,memory_order_acquire);
         if(!dma_service_send(&audio->pool.service,&r,0,&audio->pending))return 0;
     }
     if(!dma_service_collect(&audio->pool.service,audio->pending,&audio->reply,0))return 0;
@@ -156,6 +171,11 @@ static int step(void)
 {
     int r;
     const int returning=os_quiesce_requested(&audio_quiesce);
+    /* Replies and device changes have distinct publications. Consuming an old
+     * reply notification cannot authorize another STATUS or PERIOD_GET. */
+    if(audio->await_event&&audio->await_sequence==atomic_load_explicit(&audio->events,memory_order_acquire)&&!returning)
+        return 0;
+    audio->await_event=0;
     if(returning){
         if(!audio->return_deadline){
             audio->return_deadline=os_cpu_return_deadline_us();
@@ -197,7 +217,7 @@ static int step(void)
         audio->stage=OPENING;return 0;
     case OPENING:
         r=request(DMA_SERVICE_STATUS,0,0);if(r<0)return -1;if(!r)return 0;
-        if(audio->reply.phase==DMA_SERVICE_OPENING)return 0;
+        if(audio->reply.phase==DMA_SERVICE_OPENING){await_event();return 0;}
         if(audio->reply.phase!=DMA_SERVICE_READY)return -1;
         audio->frames=0;audio->held=0;audio->stage=SUBMIT;return 0;
     case SUBMIT:
@@ -210,7 +230,13 @@ static int step(void)
             audio->stage=CANCEL;return 0;}
         r=request(DMA_SERVICE_PERIOD_GET,0,0);if(r<0)return -1;
         /* No completed period: a stream that stopped by itself has failed. */
-        if(!r){if(!audio->pending&&audio->reply.result==DMA_SERVICE_BUSY)audio->stage=CHECK;return 0;}
+        if(!r){
+            if(!audio->pending&&audio->reply.result==DMA_SERVICE_BUSY){
+                if(audio->reply.phase!=DMA_SERVICE_RUNNING&&audio->reply.phase!=DMA_SERVICE_READY)return -1;
+                await_event();
+            }
+            return 0;
+        }
         struct a733_i2s_period p=audio->reply.period;
         if(p.kind!=(audio->client.cyclic?A733_I2S_CAPTURED_COPY:A733_I2S_CAPTURED)||
            p.slot>=PERIODS||p.frames!=audio->period_frames||!p.ticket||
@@ -242,7 +268,7 @@ static int step(void)
         audio->stage=DRAIN;return 0;
     case DRAIN:
         r=request(DMA_SERVICE_STATUS,0,0);if(r<0)return -1;if(!r)return 0;
-        if(audio->reply.phase==DMA_SERVICE_DRAINING)return 0;
+        if(audio->reply.phase==DMA_SERVICE_DRAINING){await_event();return 0;}
         if(audio->reply.phase==DMA_SERVICE_RUNNING){audio->stage=CANCEL;return 0;}
         if(audio->reply.phase!=DMA_SERVICE_RESULT||audio->reply.outcome!=DMA_SERVICE_CANCELED||
            !audio->reply.holds_buffers)return -1;
@@ -256,7 +282,7 @@ static int step(void)
         audio->stage=CLOSING;return 0;
     case CLOSING:
         r=request(DMA_SERVICE_STATUS,0,0);if(r<0)return -1;if(!r)return 0;
-        if(audio->reply.phase==DMA_SERVICE_CLOSING)return 0;
+        if(audio->reply.phase==DMA_SERVICE_CLOSING){await_event();return 0;}
         if(audio->reply.phase!=DMA_SERVICE_CLOSED)return -1;
         if(returning){audio->stage=RETURN_POOL;return 0;}
         audio->stage=OPEN;return 0;
@@ -279,18 +305,60 @@ static int step(void)
 /* One bounded pass of the client task. The DMA worker answers each request
  * within its next iteration, so a pass that ends with no unanswered request
  * reports resident progress; a stalled worker or a failed capture does not. */
-static void pass(void)
+static int pass(void)
 {
     /* A failed capture parks with its request, leases and periods held. */
     if(atomic_load_explicit(&audio->failed,memory_order_acquire)||
-       os_quiesce_result(&audio_quiesce)!=OS_QUIESCE_PENDING)return;
-    if(!live()||step()<0){fail();return;}
+       os_quiesce_result(&audio_quiesce)!=OS_QUIESCE_PENDING)return 0;
+    unsigned stage=audio->stage,parent=audio->parent.stage,retire=audio->parent.retire_stage;
+    uint64_t pending=audio->pending,wait=audio->parent.wait_since;
+    if(!live()||step()<0){fail();return 0;}
     if(!audio->pending)BOARD_PROGRESS(OS_SERVICE_AUDIO);
+    return !audio->await_event&&(stage!=audio->stage||pending!=audio->pending||parent!=audio->parent.stage||
+        retire!=audio->parent.retire_stage||wait!=audio->parent.wait_since);
 }
 void os_audio_task(void *unused)
 {
     (void)unused;
-    for(;;){pass();(void)ulTaskNotifyTake(pdTRUE,1);}
+    if(!board_service_deadline_register(OS_SERVICE_AUDIO)){fail();vTaskSuspend(NULL);return;}
+    for(;;){
+        while(pass()){}
+        if(atomic_load_explicit(&audio->failed,memory_order_acquire)||
+           os_quiesce_result(&audio_quiesce)!=OS_QUIESCE_PENDING){vTaskSuspend(NULL);return;}
+        uint64_t time=a733_smp_counter()/24;
+        uint64_t budget=os_quiesce_requested(&audio_quiesce)?audio->return_deadline:board.session.deadline_us;
+        if(!budget||time>=budget){fail();continue;}
+        /* An idle stream has no hardware transaction to time out. Active
+         * work retains the stream's declared one-second progress budget. */
+        if(!os_quiesce_requested(&audio_quiesce)&&audio->stage!=IDLE&&budget-time>1000000)budget=time+1000000;
+        for(;;){
+            uint64_t until=budget;
+            if(audio->stage==PREPARE||audio->stage==RETURN_PARENT){
+                uint64_t sample=a733_audio_parent_sample_at(&audio->parent);
+                /* Clock-lease contention and gate propagation have no IRQ.
+                 * Keep the existing 1 ms availability interval precisely. */
+                if(sample<=time)sample=budget-time<1000?budget:time+1000;
+                if(sample<until)until=sample;
+            }
+            if(time>=budget||!board_service_blocked_until(OS_SERVICE_AUDIO,budget)){fail();break;}
+            const unsigned idle=audio->stage==IDLE&&!audio->pending;
+            uint64_t began=a733_smp_counter()/24;
+            ++os_audio_wake_record.waits;
+            int result=sunstone_deadline_wait_until(until);
+            ++os_audio_wake_record.wakes;
+            if(result==SUNSTONE_DEADLINE_EXPIRED)++os_audio_wake_record.deadline_expiries;
+            if(idle){
+                os_audio_wake_record.idle_us+=a733_smp_counter()/24-began;
+                if(result==SUNSTONE_DEADLINE_EXPIRED)++os_audio_wake_record.idle_timeouts;
+                else if(result>=0)++os_audio_wake_record.idle_notifications;
+            }
+            if(result<0){fail();break;}
+            int progressed=pass();
+            if(progressed||atomic_load_explicit(&audio->failed,memory_order_acquire)||
+               os_quiesce_result(&audio_quiesce)!=OS_QUIESCE_PENDING)break;
+            time=a733_smp_counter()/24;
+        }
+    }
 }
 int os_audio_stream_start(void)
 {
@@ -302,6 +370,7 @@ int os_audio_stream_start(void)
     uint64_t n=atomic_load_explicit(&audio->written,memory_order_acquire);
     audio->read=audio->base=n;atomic_store_explicit(&audio->released,n,memory_order_release);
     atomic_store_explicit(&audio->requested,run+1,memory_order_release);
+    audio_event(audio,DMA_SERVICE_PROGRESS_EVENT);
     return live()?1:-1;
 }
 int os_audio_stream_read(struct os_audio_period *out)
@@ -323,7 +392,7 @@ int os_audio_stream_stop(void)
     if(!live())return -1;
     unsigned run=atomic_load_explicit(&audio->requested,memory_order_relaxed);
     if(atomic_load_explicit(&audio->stopped,memory_order_acquire)==run)return 1;
-    atomic_store_explicit(&audio->halted,run,memory_order_release);return 0;
+    atomic_store_explicit(&audio->halted,run,memory_order_release);audio_event(audio,DMA_SERVICE_PROGRESS_EVENT);return 0;
 }
 void os_audio_irq(void){dma_service_i2s_irq_handler(&audio->irq);}
 static int mask(void *cookie)
@@ -334,6 +403,7 @@ static int mask(void *cookie)
         if(xSemaphoreGetMutexHolder(providers.shared.locks.mutex[i])==xTaskGetCurrentTaskHandle())return -1;
     const uint64_t end=os_cpu_return_deadline_us();
     if(!end||a733_smp_counter()/24>=end)return -1;
+    if(!sunstone_deadline_register())return -1;
     if(gicv3_spi_mask(&irq->spi)!=1)return -1;
     for(;;){
         if(a733_smp_counter()/24>=end)return -1;
@@ -342,7 +412,8 @@ static int mask(void *cookie)
         if(r==1){taskENTER_CRITICAL();irq->masked=1;taskEXIT_CRITICAL();return 1;}
         /* The worker closed admission and left every critical/register region
          * before this callback. GIC write propagation has no completion IRQ. */
-        vTaskDelay(1);
+        uint64_t time=a733_smp_counter()/24;
+        if(time>=end||sunstone_deadline_wait_until(end-time<1000?end:time+1000)<0)return -1;
     }
 }
 int os_audio_task_privileged(void (*entry)(void *),void *context)
@@ -418,6 +489,7 @@ int os_audio_stream_open(const struct os_audio_stream_config *c)
          a733_dma_pool_session_stream_supervised_init(&audio->pool,&audio->config,&audio->stream,PERIODS,c->period_bytes)))
         return 0;
     return dma_service_bind(&audio->pool.service,0,audio->handle,1)&&
+        dma_service_bind_event(&audio->pool.service,0,audio_event,audio)&&
         dma_service_i2s_irq_bind(&audio->irq,&audio->pool.service,A733_SMP_COUNTER_HZ)&&
         dma_service_bind_retirement(&audio->pool.service,mask,&audio->irq);
 }

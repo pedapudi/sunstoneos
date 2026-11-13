@@ -34,7 +34,8 @@ UNITS = ('checks/os-npu-service.c', 'kernel/umem/umem.c', 'drivers/npu/npu_decla
          'drivers/npu/a733_npu_mmu.c', 'drivers/npu/nbg_model.c', 'drivers/npu/nbg_assembly.c',
          'drivers/npu/nbg_checksum.c', 'drivers/npu/nbg_relocation.c', 'drivers/storage/storage_digest.c',
          # checks/os-npu-service.c models the EL0 ring too (case 33), so its units are linked.
-         'kernel/appmem/app_region.c', 'apps/os/npu-queue.c', 'runtime/npu_app_queue.c', 'drivers/npu/npu_queue.c')
+         'kernel/appmem/app_region.c', 'apps/os/npu-queue.c', 'runtime/npu_app_queue.c', 'drivers/npu/npu_queue.c',
+         'runtime/deadline.c')
 DEFINES = ['SUNSTONE_A733_OS=1',
            'SUNSTONE_BOARD_APPLICATION=1', 'SUNSTONE_BOARD_SUPERVISED=1', 'OS_NPU_CORE=0u',
            'SUNSTONE_NPU_FAULT_HOOK=1', 'SUNSTONE_NPU_MMU_CAPTURE_ON_TIMEOUT=1',
@@ -47,6 +48,11 @@ REPLY_PATH = MARK['captured'] | MARK['progress'] | MARK['settle'] | MARK['finish
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--graphs', type=Path, default=CACHE / 'build/npu-graph-variants')
+parser.add_argument('--case', action='append', choices=(
+    'recovery', 'recovery-gic-defers', 'recovery-cancel-never-completes',
+    'blocks-on-event-read', 'blocks-on-status-read', 'blocks-on-address-read',
+    'blocks-in-cancel', 'blocks-in-mask', 'bypass-read', 'bypass-write', 'shader'),
+    help='Run only named cases; repeat to resume failed or unexecuted cases')
 args = parser.parse_args()
 out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
 artifacts = json.loads((args.graphs / 'artifacts.json').read_text())
@@ -118,56 +124,67 @@ def blocked(name, stage, **env):
     print('  ', name, ': the record names stage', stage, 'marks', hex(s['value'] >> 16), 'window', s['value'] & 0xffff)
 
 
-recovered('recovery')
-recovered('recovery-gic-defers', NPU_GIC_DEFER='3')
-recovered('recovery-cancel-never-completes', NPU_NO_CANCEL='1')
-blocked('blocks-on-event-read', 0, NPU_STALL_READ='0x10')
-blocked('blocks-on-status-read', 2, NPU_STALL_READ='0x384')
-blocked('blocks-on-address-read', 4, NPU_STALL_READ='0x380')
+def selected(name):
+    return args.case is None or name in args.case
+
+for name, env in (('recovery', {}), ('recovery-gic-defers', {'NPU_GIC_DEFER': '3'}),
+                  ('recovery-cancel-never-completes', {'NPU_NO_CANCEL': '1'})):
+    if selected(name):
+        recovered(name, **env)
+for name, stage, offset in (('blocks-on-event-read', 0, '0x10'),
+                            ('blocks-on-status-read', 2, '0x384'),
+                            ('blocks-on-address-read', 4, '0x380')):
+    if selected(name):
+        blocked(name, stage, NPU_STALL_READ=offset)
 # The cancel handshake's read never returns. The failed job's reply is held until the slot is checked and the recovery
 # has run (the recovery comes first), so the job's wait ends in the failure record, whose marks show that the capture,
 # the progress pass, the settle step and the finished hook ran and the recovery did not finish.
-jobs, s = run('blocks-in-cancel', NPU_STALL_READ='0x3a8')
-assert jobs[0]['result'] == -1 and s['failures'] == 1, (jobs, s)
-assert s['value'] >> 16 == MARK['captured'] | MARK['progress'] | MARK['settle'] | MARK['finished'] | MARK['collect'], s
-print('   blocks-in-cancel : the record shows captured, progress, settle and finished marks and no reinit mark')
+if selected('blocks-in-cancel'):
+    jobs, s = run('blocks-in-cancel', NPU_STALL_READ='0x3a8')
+    assert jobs[0]['result'] == -1 and s['failures'] == 1, (jobs, s)
+    assert s['value'] >> 16 == MARK['captured'] | MARK['progress'] | MARK['settle'] | MARK['finished'] | MARK['collect'], s
+    print('   blocks-in-cancel : the record shows captured, progress, settle and finished marks and no reinit mark')
 # The interrupt controller never answers the mask: the capture cannot run, the service retains the controller and the
 # job fails with a controller fault, not with an MMU record. The failure is the image's.
-jobs, s = run('blocks-in-mask', NPU_GIC_HANG='1')
-assert jobs[0]['result'] == -1 and s['failures'] == 1 and s['value'] == 4, (jobs, s)  # NPU_SERVICE_FAULT
-print('   blocks-in-mask : the job fails with a service fault (value', s['value'], '), no MMU record, as the code says')
+if selected('blocks-in-mask'):
+    jobs, s = run('blocks-in-mask', NPU_GIC_HANG='1')
+    assert jobs[0]['result'] == -1 and s['failures'] == 1 and s['value'] == 4, (jobs, s)  # NPU_SERVICE_FAULT
+    print('   blocks-in-mask : the job fails with a service fault (value', s['value'], '), no MMU record, as the code says')
 # Controls: an access that is let through completes the job. The record has ticket byte 0xee and the canary CRC.
-jobs, s = run('bypass-read', UNMAPPED_BYPASS='1')
-assert jobs[0]['result'] == -1 and ticket(s) == 0xee and s['value'] == s['pattern'], (jobs, s)
-jobs, s = run('bypass-write', UNMAPPED_BYPASS='1', UNMAPPED_BYPASS_WRITE='1')
-assert jobs[0]['result'] == -1 and ticket(s) == 0xee and s['value'] != s['pattern'], (jobs, s)
-print('   bypass controls : the completion is recorded, and a bypassing write changes the canary CRC')
+if selected('bypass-read'):
+    jobs, s = run('bypass-read', UNMAPPED_BYPASS='1')
+    assert jobs[0]['result'] == -1 and ticket(s) == 0xee and s['value'] == s['pattern'], (jobs, s)
+if selected('bypass-write'):
+    jobs, s = run('bypass-write', UNMAPPED_BYPASS='1', UNMAPPED_BYPASS_WRITE='1')
+    assert jobs[0]['result'] == -1 and ticket(s) == 0xee and s['value'] != s['pattern'], (jobs, s)
 # Shader operations: the first graph has the address word of its first tensor descriptor aimed at the canary (a data
 # descriptor, S7), the second its program address (source 0); then four graphs run untouched. The register file finds the
 # address in the command stream and raises the same exception.
-shader_models = ROOT / 'apps/npu-graphs/models-shr.json'
-shader_out = out / 'shader'; shader_out.mkdir()
-(shader_out / 'artifacts.json').write_text(json.dumps(artifacts))
-(shader_out / 'generated').mkdir()
-subprocess.run([sys.executable, str(ROOT / 'tools/npu-test-models.py'), '--artifacts', str(shader_out / 'artifacts.json'),
-                '--models', str(shader_models), '--model', '0', '--all', '--output', str(shader_out / 'generated/npu-models.c')], check=True)
-(shader_out / 'inputs').mkdir()
-for number, name in enumerate(json.loads(shader_models.read_text())['npu_models']):
-    for k, path in enumerate(artifacts[name]['inputs']):
-        shutil.copy(path, shader_out / 'inputs' / ('%02d-%d.bin' % (number, k)))
-shader_exe = host_rtos.build(shader_out / 'exe', [*UNITS, shader_out / 'generated/npu-models.c'], 'os-npu-fault-shader',
-                             defines=[d for d in DEFINES if not d.startswith('SUNSTONE_NPU_CASE')] +
-                             ['SUNSTONE_NPU_CASE_SLOTS=100,101,-1,-1,-1,-1', 'SUNSTONE_NPU_CASE_ADDRESSES=0,0,0,0,0,0'],
-                             includes=[ROOT / 'apps/os', ROOT / 'checks', shader_out / 'generated', *includes[3:]],
-                             flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections', '-fno-pie'],
-                             link=['-Wl,--gc-sections', '-no-pie'])
-done = subprocess.run([str(shader_exe), '25', str(shader_out / 'inputs')], capture_output=True, text=True,
-                      env=environment(), timeout=1800)
-(out / 'shader.log').write_text(done.stdout + done.stderr)
-assert done.returncode == 0, ('shader', done.stdout[-600:], done.stderr[-800:])
-results = [int(l.split()[3]) for l in done.stdout.splitlines() if l.startswith('job ')]
-summary = [l for l in done.stdout.splitlines() if l.startswith('summary')][0].split()
-assert results == [2, 2, 1, 1, 1, 1] and 'recoveries' in summary and summary[summary.index('recoveries') + 1] == '2' and \
-    summary[summary.index('failures') + 1] == '0', (results, summary)
-print('   shader operations : a data descriptor and a program address aimed at the canary fail alone, the NPU recovers, four graphs run')
-print('PASS NPU MMU exception recovery on the real runtime and service: 3 recovery scenarios, 5 blocking sites, 2 controls')
+if selected('shader'):
+    shader_models = ROOT / 'apps/npu-graphs/models-shr.json'
+    shader_out = out / 'shader'; shader_out.mkdir()
+    (shader_out / 'artifacts.json').write_text(json.dumps(artifacts))
+    (shader_out / 'generated').mkdir()
+    subprocess.run([sys.executable, str(ROOT / 'tools/npu-test-models.py'), '--artifacts', str(shader_out / 'artifacts.json'),
+                    '--models', str(shader_models), '--model', '0', '--all', '--output', str(shader_out / 'generated/npu-models.c')], check=True)
+    (shader_out / 'inputs').mkdir()
+    for number, name in enumerate(json.loads(shader_models.read_text())['npu_models']):
+        for k, path in enumerate(artifacts[name]['inputs']):
+            shutil.copy(path, shader_out / 'inputs' / ('%02d-%d.bin' % (number, k)))
+    shader_exe = host_rtos.build(shader_out / 'exe', [*UNITS, shader_out / 'generated/npu-models.c'], 'os-npu-fault-shader',
+                                 defines=[d for d in DEFINES if not d.startswith('SUNSTONE_NPU_CASE')] +
+                                 ['SUNSTONE_NPU_CASE_SLOTS=100,101,-1,-1,-1,-1', 'SUNSTONE_NPU_CASE_ADDRESSES=0,0,0,0,0,0'],
+                                 includes=[ROOT / 'apps/os', ROOT / 'checks', shader_out / 'generated', *includes[3:]],
+                                 flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections', '-fno-pie'],
+                                 link=['-Wl,--gc-sections', '-no-pie'])
+    done = subprocess.run([str(shader_exe), '25', str(shader_out / 'inputs')], capture_output=True, text=True,
+                          env=environment(), timeout=1800)
+    (out / 'shader.log').write_text(done.stdout + done.stderr)
+    assert done.returncode == 0, ('shader', done.stdout[-600:], done.stderr[-800:])
+    results = [int(l.split()[3]) for l in done.stdout.splitlines() if l.startswith('job ')]
+    summary = [l for l in done.stdout.splitlines() if l.startswith('summary')][0].split()
+    assert results == [2, 2, 1, 1, 1, 1] and 'recoveries' in summary and summary[summary.index('recoveries') + 1] == '2' and \
+        summary[summary.index('failures') + 1] == '0', (results, summary)
+    print('   shader operations : a data descriptor and a program address aimed at the canary fail alone, the NPU recovers, four graphs run')
+print('PASS NPU MMU exception recovery on the real runtime and service:',
+      ', '.join(args.case) if args.case else 'all eleven cases')

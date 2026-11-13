@@ -12,6 +12,9 @@ static const struct board_radio_chip_id id={7,{0x11223344,0x55667788,0x99aabbcc,
 static TaskHandle_t task=(TaskHandle_t)(uintptr_t)1;
 static BaseType_t scheduler=taskSCHEDULER_NOT_STARTED;
 static uint64_t time_us=100;
+#ifdef EVENT_MISC_RADIO_COMPOSITION
+static unsigned event_clock_cost,event_session_step;
+#endif
 static unsigned abort_model,abort_steps_left;
 static unsigned entropy_calls,session_calls,retained,connects,security_calls,network_calls,submitted,received;
 static unsigned entropy_retains;
@@ -40,7 +43,11 @@ int a733_ce_native_sync(void *p,struct a733_ce_memory *m,enum a733_ce_sync s)
 {(void)p;(void)m;(void)s;assert(0);return 0;}
 TaskHandle_t xTaskGetCurrentTaskHandle(void){return task;}
 BaseType_t xTaskGetSchedulerState(void){return scheduler;}
-int a733_counter_clock_now(void *p,uint64_t *n){assert(p==&shared.counter);*n=time_us;return 1;}
+int a733_counter_clock_now(void *p,uint64_t *n){assert(p==&shared.counter);*n=time_us;
+#ifdef EVENT_MISC_RADIO_COMPOSITION
+ time_us+=event_clock_cost;
+#endif
+ return 1;}
 int a733_radio_entropy_init(struct a733_radio_entropy *e,const struct a733_radio_entropy_config *c)
 {assert(e==&app.entropy&&c->source==&source&&c->clock==&shared.counter);atomic_init(&e->fault,0);return 1;}
 enum a733_radio_entropy_result a733_radio_entropy_poll(struct a733_radio_entropy *e)
@@ -74,7 +81,11 @@ int a733_radio_session_init(struct a733_radio_session *s,struct a733_radio_platf
     s->deadline=9000;return 1;
 }
 enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session *s)
-{assert(s==&app.session&&(app.config.scan_only||entropy_calls>session_calls));++session_calls;return session_result;}
+{assert(s==&app.session&&(app.config.scan_only||entropy_calls>session_calls));++session_calls;
+#ifdef EVENT_MISC_RADIO_COMPOSITION
+ if(event_session_step){++s->stage;return A733_SESSION_PENDING;}
+#endif
+ return session_result;}
 enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_session *s)
 {assert(s==&app.session);++retained;s->fault=1;
  if(app.platform.refused)app.platform.fault=1;

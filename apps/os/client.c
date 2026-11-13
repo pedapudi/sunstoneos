@@ -6,6 +6,7 @@
 #include "../board/application.h"
 #include "../board/session.h"
 #include "sunstone_crumb.h"
+#include "sunstone_deadline.h"
 #ifdef SUNSTONE_BOARD_USB2_IRQ
 #include "../board/host_irq.h"
 #endif
@@ -35,7 +36,10 @@ static int usb_return_unpublished(void)
 #ifdef SUNSTONE_A733_USB_FAILURE_TEST
 static atomic_uint usb_failure_checkpoints;
 void os_usb_failure_checkpoint(unsigned bits)
-{atomic_fetch_or_explicit(&usb_failure_checkpoints,bits,memory_order_release);}
+{
+    const unsigned previous=atomic_fetch_or_explicit(&usb_failure_checkpoints,bits,memory_order_release);
+    if((previous|bits)!=previous)os_application_wake_main();
+}
 int os_usb_failure_ready(void)
 {return atomic_load_explicit(&usb_failure_checkpoints,memory_order_acquire)==3u;}
 #endif
@@ -366,8 +370,36 @@ static int usb_return_poll(uint64_t deadline)
     if(!result)return 0;
     os_quiesce_complete(&usb_quiesce);return 1;
 }
+static void usb_return_wait(uint64_t deadline)
+{
+    uint64_t until=board.session.deadline_us-10000;
+    if(deadline){
+        /* xHCI HCHalted and GIC RWP/active retirement have no completion
+         * interrupt. Match the existing host IRQ adapter's 50 us retry. */
+        const uint64_t now=sunstone_deadline_now_us();
+        until=now>UINT64_MAX-50?UINT64_MAX:now+50;
+        if(deadline<until)until=deadline;
+    }
+    if(sunstone_deadline_now_us()>=until||sunstone_deadline_wait_until(until)==SUNSTONE_DEADLINE_ERROR){
+        usb_fail();for(;;)vTaskSuspend(NULL);
+    }
+}
+#ifndef SUNSTONE_BOARD_USB2_IRQ
+static void usb_poll_wait(void)
+{
+    /* This reference profile has no bound interrupt. Retain its 1 ms
+     * cadence while using a precise, session-bounded wait. */
+    const uint64_t now=sunstone_deadline_now_us(),end=board.host.platform.config.lifetime_deadline;
+    uint64_t until=now>UINT64_MAX-1000?UINT64_MAX:now+1000;
+    if(end<until)until=end;
+    if(!until||now>=until||sunstone_deadline_wait_until(until)==SUNSTONE_DEADLINE_ERROR){
+        usb_fail();for(;;)vTaskSuspend(NULL);
+    }
+}
+#endif
 void board_host_task(void *unused)
 {
+    if(!sunstone_deadline_register()){usb_fail();for(;;)vTaskSuspend(NULL);}
     if(os_quiesce_requested(&usb_quiesce))goto stopped;
     (void)unused;board.host.dual_leaf=!!(os_session_devices()&SS_DEVICE_USB_KEYBOARD);
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
@@ -384,7 +416,7 @@ void board_host_task(void *unused)
     if(!board_host_irq_deadline_init())usb_fail();
 #endif
     for(;;){
-        if(usb_return_unpublished()){(void)ulTaskNotifyTake(pdTRUE,1);continue;}
+        if(usb_return_unpublished()){usb_return_wait(0);continue;}
         if(os_quiesce_requested(&usb_quiesce))break;
         if(!board_live(NULL))break;
 #ifdef SUNSTONE_BOARD_USB2_IRQ
@@ -413,7 +445,7 @@ void board_host_task(void *unused)
 #ifdef SUNSTONE_BOARD_USB2_IRQ
         host_wait();
 #else
-        vTaskDelay(1);
+        usb_poll_wait();
 #endif
     }
 stopped:
@@ -422,7 +454,7 @@ stopped:
         for(;;){
             int result=usb_return_poll(os_cpu_return_deadline_us());
             if(result)break;
-            (void)ulTaskNotifyTake(pdTRUE,1);
+            usb_return_wait(os_cpu_return_deadline_us());
         }
         for(;;)vTaskSuspend(NULL);
     }

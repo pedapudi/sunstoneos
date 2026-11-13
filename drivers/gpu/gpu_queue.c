@@ -36,8 +36,10 @@ static int caller(struct pvr_compute_queue *q,unsigned client)
     TaskHandle_t expected=client?q->peer.task:q->service->clients[0].task;
     return expected && expected==xTaskGetCurrentTaskHandle();
 }
+#ifndef SUNSTONE_A733_OS
 static TickType_t remaining(TickType_t began,TickType_t budget)
 { TickType_t elapsed=xTaskGetTickCount()-began; return elapsed>=budget ? 0 : budget-elapsed; }
+#endif
 static int collect(struct pvr_compute_queue *q,uint64_t *ticket,TickType_t wait,struct pvr_gpu_service_reply *reply)
 {
     if (!*ticket) return 0;
@@ -51,12 +53,59 @@ static int send(struct pvr_compute_queue *q,unsigned operation,uint64_t *ticket)
     return pvr_gpu_service_send_epoch(q->service,atomic_load_explicit(&q->service->published_epoch,memory_order_acquire),
         &r,0,ticket);
 }
+#ifdef SUNSTONE_A733_OS
+static uint64_t queue_until(uint32_t ticks)
+{
+    uint64_t now=sunstone_deadline_now_us(),span=(uint64_t)ticks*1000000/configTICK_RATE_HZ;
+    return UINT64_MAX-now<span?UINT64_MAX:now+span;
+}
+/* One wait on the service event sequence: 1 after an event or wake hint, 0
+ * at the deadline, -1 when the wait is refused (an unregistered caller, an
+ * invalid deadline or one already armed). A refused wait is a fault, not a
+ * timeout: no retry can succeed. */
+static int event_wait(struct pvr_compute_queue *q,uint64_t sequence,uint64_t until)
+{
+    if(sunstone_deadline_now_us()>=until)return 0;
+    return pvr_gpu_service_wait_event(q->service,sequence,until)==SUNSTONE_DEADLINE_ERROR?-1:1;
+}
+static int wait_failure(int waited){return waited<0?GPU_QUEUE_FAULT:GPU_QUEUE_TIMEOUT;}
+/* 1 with the reply, 0 at the deadline, -1 on a refused wait. */
+static int collect_until(struct pvr_compute_queue *q,uint64_t *ticket,uint64_t until,struct pvr_gpu_service_reply *reply)
+{
+    for(;;){
+        uint64_t sequence=pvr_gpu_service_event_sequence(q->service);
+        if(collect(q,ticket,0,reply))return 1;
+        int waited=event_wait(q,sequence,until);
+        if(waited<=0)return waited;
+    }
+}
+/* 1 with the record, 0 at the deadline or on a lost queue, -1 on a refused wait. */
+static int record_until(struct pvr_compute_queue *q,QueueHandle_t queue,struct gpu_queue_record *record,uint64_t until)
+{
+    for(;;){
+        uint64_t sequence=pvr_gpu_service_event_sequence(q->service);
+        if(xQueueReceive(queue,record,0)==pdTRUE)return 1;
+        if(atomic_load(&q->lost))return 0;
+        int waited=event_wait(q,sequence,until);
+        if(waited<=0)return waited;
+    }
+}
+#endif
 static int creation(struct pvr_compute_queue *q,TickType_t wait)
 {
+#ifdef SUNSTONE_A733_OS
+    uint64_t until=queue_until(wait);
+#else
     TickType_t began=xTaskGetTickCount();
+#endif
     if (q->create_ticket) {
         struct pvr_gpu_service_reply r;
+#ifdef SUNSTONE_A733_OS
+        const int collected=collect_until(q,&q->create_ticket,until,&r);
+        if(collected<=0)return wait_failure(collected);
+#else
         if (!collect(q,&q->create_ticket,wait,&r)) return GPU_QUEUE_TIMEOUT;
+#endif
         if (r.result!=PVR_GPU_SERVICE_OK) {
             q->create_done=2;
             return r.result==PVR_GPU_SERVICE_FAULT ? GPU_QUEUE_FAULT : GPU_QUEUE_REFUSED;
@@ -66,7 +115,13 @@ static int creation(struct pvr_compute_queue *q,TickType_t wait)
     if (q->create_done) return q->create_done==1 ? GPU_QUEUE_OK : GPU_QUEUE_REFUSED;
     if (q->create_pending!=2) return GPU_QUEUE_REFUSED;
     struct gpu_queue_record record;
+#ifdef SUNSTONE_A733_OS
+    const int received=record_until(q,q->completions,&record,until);
+    if(received<0)return GPU_QUEUE_FAULT;
+    if(!received)
+#else
     if (xQueueReceive(q->completions,&record,remaining(began,wait))!=pdTRUE)
+#endif
         return atomic_load(&q->lost)?GPU_QUEUE_FAULT:GPU_QUEUE_TIMEOUT;
     if (record.result!=GPU_QUEUE_OK || record.sequence) return GPU_QUEUE_FAULT;
     q->create_done=1;
@@ -80,6 +135,9 @@ int gpu_queue_context_create(const struct gpu_queue_context_config *c,uint32_t t
     if (!caller(q,0) || !c || !out || !info) return GPU_QUEUE_REFUSED;
     if (atomic_load(&q->lost)) return GPU_QUEUE_FAULT;
     if (q->final_close || q->create_done) return GPU_QUEUE_REFUSED;
+#ifdef SUNSTONE_A733_OS
+    if(!pvr_gpu_service_deadline_register(q->service))return GPU_QUEUE_FAULT;
+#endif
     if (!q->create_pending) {
         if (!c->program || !pvr_compute_queue_runtime_program(c->program) || !c->lease_count || c->lease_count>GPU_QUEUE_LEASES || c->reserved || c->priority>GPU_QUEUE_PRIORITY_HIGH || c->payload_cache>GPU_QUEUE_PAYLOAD_UNCACHED) return GPU_QUEUE_REFUSED;
         q->create_program=*c->program;
@@ -167,10 +225,39 @@ static int direct_submit(struct gpu_queue_context c,const struct gpu_queue_job *
     if (fence && (r==GPU_QUEUE_OK || (r==GPU_QUEUE_FAULT && call.fence))) *fence=call.fence;
     return r;
 }
+static void direct_wait_clear(atomic_uint *waiter)
+{
+#ifdef SUNSTONE_A733_OS
+    taskENTER_CRITICAL();
+    atomic_store_explicit(waiter,0,memory_order_release);
+    (void)ulTaskNotifyTakeIndexed(PVR_COMPUTE_FAST_NOTIFY,pdTRUE,0);
+    taskEXIT_CRITICAL();
+#else
+    atomic_store(waiter,0);
+#endif
+}
+#ifdef SUNSTONE_A733_OS
+/* 1 after a wake, 0 at the deadline, -1 when the deadline wait is refused. */
+static int direct_notify_wait(uint64_t until)
+{
+    if(!until){(void)ulTaskNotifyTakeIndexed(PVR_COMPUTE_FAST_NOTIFY,pdTRUE,portMAX_DELAY);return 1;}
+    if(sunstone_deadline_now_us()>=until)return 0;
+    /* Expiry is a wake hint too: the caller rechecks the acquired fence or
+     * lock predicate before its next timeout decision. */
+    return sunstone_deadline_wait_until(until)==SUNSTONE_DEADLINE_ERROR?-1:1;
+}
+#endif
+#ifdef SUNSTONE_A733_OS
+static int direct_wait_until(struct pvr_compute_queue *q,struct gpu_queue_context c,
+    struct gpu_queue_record *out,uint64_t until,uint32_t requested,uint32_t sequence)
+#else
 static int direct_wait(struct pvr_compute_queue *q,struct gpu_queue_context c,
     struct gpu_queue_record *out,uint32_t ticks,uint32_t requested,uint32_t sequence)
+#endif
 {
+#ifndef SUNSTONE_A733_OS
     TickType_t begin=xTaskGetTickCount(),budget=ticks==GPU_QUEUE_WAIT_FOREVER?portMAX_DELAY:(TickType_t)ticks;
+#endif
     int queried=0;
 #ifdef SUNSTONE_GPU_FAST_TIMING
     atomic_store_explicit(&q->fast.last_wake[c.client],0,memory_order_relaxed);
@@ -189,34 +276,62 @@ static int direct_wait(struct pvr_compute_queue *q,struct gpu_queue_context c,
                 return r;
             }
             if (r==GPU_QUEUE_BUSY) {
+#ifdef SUNSTONE_A733_OS
+                if(until && sunstone_deadline_now_us()>=until)return GPU_QUEUE_TIMEOUT;
+#else
                 if (!budget || (budget!=portMAX_DELAY && !remaining(begin,budget))) return GPU_QUEUE_TIMEOUT;
+#endif
                 (void)ulTaskNotifyTakeIndexed(PVR_COMPUTE_FAST_NOTIFY,pdTRUE,0);
                 atomic_store_explicit(&q->fast.lock_waiter[c.client],1,memory_order_release);
                 if (!atomic_load_explicit(&q->fast.locked,memory_order_acquire) || atomic_load(&q->lost)) {
-                    atomic_store(&q->fast.lock_waiter[c.client],0);continue;
+                    direct_wait_clear(&q->fast.lock_waiter[c.client]);
+                    continue;
                 }
+#ifdef SUNSTONE_A733_OS
+                const int woke=direct_notify_wait(until);
+                if(woke<=0){
+#else
+                const int woke=0;
                 TickType_t wait=budget==portMAX_DELAY?portMAX_DELAY:remaining(begin,budget);
                 if (!wait || !ulTaskNotifyTakeIndexed(PVR_COMPUTE_FAST_NOTIFY,pdTRUE,wait)) {
-                    atomic_store(&q->fast.lock_waiter[c.client],0);return GPU_QUEUE_TIMEOUT;
+#endif
+                    direct_wait_clear(&q->fast.lock_waiter[c.client]);
+                    return woke<0?GPU_QUEUE_FAULT:GPU_QUEUE_TIMEOUT;
                 }
-                atomic_store(&q->fast.lock_waiter[c.client],0);continue;
+                direct_wait_clear(&q->fast.lock_waiter[c.client]);
+                continue;
             }
         }
+#ifdef SUNSTONE_A733_OS
+        if(until && sunstone_deadline_now_us()>=until)return GPU_QUEUE_TIMEOUT;
+#else
         if (!budget || (budget!=portMAX_DELAY && !remaining(begin,budget))) return GPU_QUEUE_TIMEOUT;
+#endif
         /* Clear stale notifications BEFORE publishing the waiter, then
          * recheck. An IRQ in either gap cannot lose the wakeup. */
         (void)ulTaskNotifyTakeIndexed(PVR_COMPUTE_FAST_NOTIFY,pdTRUE,0);
         atomic_store_explicit(&q->fast.waiter[c.client],target,memory_order_release);
-        if (atomic_load(&q->lost)) {atomic_store(&q->fast.waiter[c.client],0);return GPU_QUEUE_FAULT;}
+        if (atomic_load(&q->lost)) {
+            direct_wait_clear(&q->fast.waiter[c.client]);
+            return GPU_QUEUE_FAULT;
+        }
         if (((!atomic_load_explicit(&q->fast.irq_error,memory_order_acquire) &&
               target<=atomic_load_explicit(&q->fast.completed,memory_order_acquire)) ||
              target<=atomic_load_explicit(&q->fast.fault_through[c.client],memory_order_acquire)) &&
             !atomic_load_explicit(&q->fast.locked,memory_order_acquire)) {
-            atomic_store(&q->fast.waiter[c.client],0);continue;
+            direct_wait_clear(&q->fast.waiter[c.client]);
+            continue;
         }
+#ifdef SUNSTONE_A733_OS
+        const int woke=direct_notify_wait(until);
+        if(woke<=0){
+#else
+        const int woke=0;
         TickType_t wait=budget==portMAX_DELAY?portMAX_DELAY:remaining(begin,budget);
         if (!wait || !ulTaskNotifyTakeIndexed(PVR_COMPUTE_FAST_NOTIFY,pdTRUE,wait)) {
-            atomic_store(&q->fast.waiter[c.client],0);return GPU_QUEUE_TIMEOUT;
+#endif
+            direct_wait_clear(&q->fast.waiter[c.client]);
+            return woke<0?GPU_QUEUE_FAULT:GPU_QUEUE_TIMEOUT;
         }
 #ifdef SUNSTONE_GPU_FAST_TIMING
         uint64_t resumed;
@@ -224,9 +339,14 @@ static int direct_wait(struct pvr_compute_queue *q,struct gpu_queue_context c,
         if (target<=atomic_load_explicit(&q->fast.completed,memory_order_acquire))
             atomic_store_explicit(&q->fast.last_wake[c.client],resumed,memory_order_release);
 #endif
-        atomic_store(&q->fast.waiter[c.client],0);
+        direct_wait_clear(&q->fast.waiter[c.client]);
     }
 }
+#ifdef SUNSTONE_A733_OS
+static int direct_wait(struct pvr_compute_queue *q,struct gpu_queue_context c,
+    struct gpu_queue_record *out,uint32_t ticks,uint32_t requested,uint32_t sequence)
+{return direct_wait_until(q,c,out,ticks==GPU_QUEUE_WAIT_FOREVER?0:queue_until(ticks),requested,sequence);}
+#endif
 int gpu_queue_submit(struct gpu_queue_context c,const struct gpu_queue_job *job)
 {
     struct pvr_compute_queue *q=instance;
@@ -268,6 +388,9 @@ int gpu_queue_submit(struct gpu_queue_context c,const struct gpu_queue_job *job)
         const struct pvr_gpu_service_message wake={.client=PVR_GPU_SERVICE_CLIENTS,.ticket=PVR_GPU_SERVICE_QUEUE_WAKE};
         /* One pending ticket per client, one IRQ wake and one queue wake fit. */
         configASSERT(xQueueSend(q->service->requests,&wake,0)==pdTRUE);
+#ifdef SUNSTONE_A733_OS
+        xTaskNotifyGive(q->service->worker);
+#endif
     }
     return GPU_QUEUE_OK;
 }
@@ -336,9 +459,17 @@ int gpu_queue_wait(struct gpu_queue_context c,struct gpu_queue_record *out,uint3
     if (!atomic_load(v.client_owed)) return atomic_load(&q->lost)?GPU_QUEUE_FAULT:GPU_QUEUE_REFUSED;
     if (q->service->config.job_irq_ack) return direct_wait(q,c,out,ticks,0,0);
     struct gpu_queue_record record;
+#ifdef SUNSTONE_A733_OS
+    const int received=record_until(q,v.completions,&record,queue_until(ticks));
+    if(received<=0)return wait_failure(received);
+#else
     if (xQueueReceive(v.completions,&record,(TickType_t)ticks)!=pdTRUE) return GPU_QUEUE_TIMEOUT;
+#endif
     SS_LATENCY_GPU_RECEIVED(c.client);
     atomic_store(v.client_owed,0); *out=record;
+#ifdef SUNSTONE_A733_OS
+    pvr_gpu_service_notify_clients(q->service);
+#endif
     return record.result;
 }
 int gpu_queue_context_join(struct gpu_queue_context *out,struct gpu_queue_lease_info *info)
@@ -347,9 +478,102 @@ int gpu_queue_context_join(struct gpu_queue_context *out,struct gpu_queue_lease_
     if (!caller(q,1) || !out || !info) return GPU_QUEUE_REFUSED;
     if (atomic_load(&q->lost)) return GPU_QUEUE_FAULT;
     if (atomic_load(&q->create_done)!=1) return GPU_QUEUE_BUSY;
+#ifdef SUNSTONE_A733_OS
+    if(!pvr_gpu_service_deadline_register(q->service))return GPU_QUEUE_FAULT;
+#endif
     *out=(struct gpu_queue_context){q->generation,1};
     memcpy(info,q->lease,q->lease_count*sizeof(*info)); return GPU_QUEUE_OK;
 }
+#ifdef SUNSTONE_A733_OS
+static int lifetime_until(struct gpu_queue_context c,uint64_t until,unsigned operation)
+{
+    struct pvr_compute_queue *q=instance;
+    if(!caller(q,0) || c.client || c.generation!=q->generation || atomic_load(&q->create_done)!=1)
+        return GPU_QUEUE_REFUSED;
+    if(atomic_load(&q->lost))return GPU_QUEUE_FAULT;
+    if(atomic_load(&q->final_close))return GPU_QUEUE_PARKED;
+    unsigned transition=atomic_load(&q->close_pending);
+    if(transition && (transition&255u)!=operation+1)return GPU_QUEUE_BUSY;
+    atomic_store(&q->close_pending,transition?transition:operation+1);
+    if(operation==PVR_GPU_SERVICE_CLOSE){
+        while(atomic_load(&q->client_owed)){
+            struct gpu_queue_record record;
+            if(q->service->config.job_irq_ack){
+                int result=direct_wait_until(q,c,&record,until,0,0);
+                if(result!=GPU_QUEUE_OK)return result;
+            }else{
+                const int received=record_until(q,q->completions,&record,until);
+                if(received<=0)return wait_failure(received);
+                atomic_store(&q->client_owed,0);
+                if(record.result!=GPU_QUEUE_OK)return record.result;
+            }
+        }
+        if(!pvr_compute_queue_clients_idle(q))return GPU_QUEUE_BUSY;
+    }
+    for(;;){
+        struct pvr_gpu_service_reply reply;
+        if(!q->close_ticket){
+            unsigned request=(transition&256u)?PVR_GPU_SERVICE_STATUS:
+                (transition&512u)?operation:PVR_GPU_SERVICE_STATUS;
+            if(!send(q,request,&q->close_ticket))return GPU_QUEUE_BUSY;
+            transition=operation+1+(request==operation?256u:(transition&256u)?256u:512u);
+            atomic_store(&q->close_pending,transition);
+        }
+        const int collected=collect_until(q,&q->close_ticket,until,&reply);
+        if(collected<=0)return wait_failure(collected);
+        if(reply.result!=PVR_GPU_SERVICE_OK){
+            atomic_store(&q->close_pending,0);
+            return reply.result==PVR_GPU_SERVICE_FAULT?GPU_QUEUE_FAULT:
+                reply.result==PVR_GPU_SERVICE_BUSY?GPU_QUEUE_BUSY:GPU_QUEUE_REFUSED;
+        }
+        unsigned desired=operation==PVR_GPU_SERVICE_CLOSE?PVR_GPU_SERVICE_STOPPED:PVR_GPU_SERVICE_READY;
+        if(reply.phase==desired){
+            atomic_store(&q->close_pending,0);
+            if(operation==PVR_GPU_SERVICE_CLOSE)pvr_compute_queue_runtime_closed();
+            else pvr_compute_queue_runtime_opened(atomic_load_explicit(&q->service->published_epoch,memory_order_acquire));
+            return GPU_QUEUE_OK;
+        }
+        transition=atomic_load(&q->close_pending);
+        /* The initial STATUS may need the requested transition first. */
+        if(!(transition&256u))continue;
+        for(;;){
+            uint64_t sequence=pvr_gpu_service_event_sequence(q->service);
+            unsigned phase=pvr_gpu_service_event_phase(q->service);
+            if(phase==desired || phase==PVR_GPU_SERVICE_FAILED)break;
+            const int waited=event_wait(q,sequence,until);
+            if(waited<=0)return wait_failure(waited);
+        }
+    }
+}
+static int lifetime(struct gpu_queue_context c,uint32_t ticks,unsigned operation)
+{return lifetime_until(c,queue_until(ticks),operation);}
+int gpu_queue_close(struct gpu_queue_context c,uint32_t ticks)
+{return lifetime(c,ticks,PVR_GPU_SERVICE_CLOSE);}
+int gpu_queue_open(struct gpu_queue_context c,uint32_t ticks)
+{return lifetime(c,ticks,PVR_GPU_SERVICE_OPEN);}
+int gpu_queue_recover(struct gpu_queue_context c,uint32_t ticks)
+{
+    struct pvr_compute_queue *q=instance;
+    if(!caller(q,0) || c.client || c.generation!=q->generation || atomic_load(&q->create_done)!=1)
+        return GPU_QUEUE_REFUSED;
+    uint64_t until=queue_until(ticks);
+    if(q->close_ticket){
+        struct pvr_gpu_service_reply reply;
+        const int collected=collect_until(q,&q->close_ticket,until,&reply);
+        if(collected<=0)return wait_failure(collected);
+    }
+    atomic_store(&q->close_pending,0);
+    for(;;){
+        uint64_t sequence=pvr_gpu_service_event_sequence(q->service);
+        if(!atomic_load(&q->recovering)){
+            if(atomic_load(&q->lost))return GPU_QUEUE_FAULT;
+            return lifetime_until(c,until,PVR_GPU_SERVICE_OPEN);
+        }
+        const int waited=event_wait(q,sequence,until);
+        if(waited<=0)return wait_failure(waited);
+    }
+}
+#else
 static int lifetime(struct gpu_queue_context c,uint32_t ticks,unsigned operation)
 {
     struct pvr_compute_queue *q=instance;
@@ -420,3 +644,5 @@ int gpu_queue_recover(struct gpu_queue_context c,uint32_t ticks)
         vTaskDelay(1);
     }
 }
+
+#endif

@@ -1,14 +1,10 @@
-/* Secure Device storage survives the final no-Normal-writer barrier. This
- * profile has THS INTID71 and, with GPU recognition, INTID95. */
+/* The generated image table supplies Secure Device storage for every route. */
 #include "cpu-return.h"
 #include "cpu-return-runtime.h"
 #include "a733_thermal.h"
 #include "cpu-return-spi.h"
 #include "irq_table.h"
-/* One saved record for each route of the image: the generated tables define the array with the route table's own
- * length (tools/sunstone-manifest.py), so a route cannot be added without its record. */
 #define saved os_return_irq_saved
-#define RETURN_IRQ_CAPACITY os_return_irq_capacity
 static unsigned saved_count __attribute__((section(".bss.a733_smp_monitor")));
 #define GICD UINT32_C(0x03400000)
 static void barrier(void){__asm__ volatile("dsb sy":::"memory");}
@@ -16,7 +12,9 @@ static uint32_t rd(uint32_t o){uint32_t v=*(volatile uint32_t *)(uintptr_t)(GICD
 static void wr(uint32_t o,uint32_t v){*(volatile uint32_t *)(uintptr_t)(GICD+o)=v;barrier();}
 void os_cpu_return_spi_save(void)
 {
-    if(a733_irq_route_count>RETURN_IRQ_CAPACITY||!a733_irq_table_valid())return;
+    saved_count=0;
+    if(a733_irq_route_count>os_return_irq_capacity||!a733_irq_table_valid())return;
+    for(unsigned i=0;i<a733_irq_route_count;++i)saved[i].valid=0;
     for(unsigned i=0;i<a733_irq_route_count;++i){
         unsigned id=a733_irq_routes[i].intid;
         if(((rd(0x100+id/32*4)|rd(0x200+id/32*4)|rd(0x300+id/32*4))&(1u<<(id%32))))return;
@@ -30,7 +28,7 @@ void os_cpu_return_spi_save(void)
 }
 int os_cpu_return_spi_restore(void)
 {
-    if(saved_count!=a733_irq_route_count||saved_count>RETURN_IRQ_CAPACITY)return 0;
+    if(saved_count!=a733_irq_route_count||saved_count>os_return_irq_capacity)return 0;
     if((rd(0)&7) || rd(0)&UINT32_C(0x80000000))return 0;
     for(unsigned i=0;i<saved_count;++i)
         if(!saved[i].valid || (rd(0x100+saved[i].intid/32*4)&(1u<<(saved[i].intid%32))))return 0;
