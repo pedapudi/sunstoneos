@@ -134,6 +134,7 @@ static int retirement_fault(struct os_quiesce *q)
                            (uint32_t)(state >> 32), SUNSTONE_CRUMB_HERE());
     return 1;
 }
+static uint32_t diag_word(void);
 static enum os_quiesce_result storage_quiesce_step(struct os_quiesce *q)
 {
     unsigned state=SD_UNOPENED;
@@ -141,7 +142,8 @@ static enum os_quiesce_result storage_quiesce_step(struct os_quiesce *q)
         return OS_QUIESCE_DONE;             /* no task can open after this claim */
     if(state==SD_CLOSED)return OS_QUIESCE_DONE;
     if(state==SD_FAILED){
-        (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x901,0,SUNSTONE_CRUMB_HERE());
+        /* The open's own note (owner_main) is overwritten by this record, so this record carries the open's diagnostic word as its value. */
+        (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x901,diag_word(),SUNSTONE_CRUMB_HERE());
         return OS_QUIESCE_FAULT;
     }
     if(owner)xTaskNotifyGive(owner);       /* wake an IRQ/timer wait to observe the shared deadline */

@@ -126,7 +126,7 @@ The sequence for one CMD25 piece (`sunxi_mmc.c:command_step` and `protocol`):
 
 A failure survives a watchdog reset only as two words in RTC memory: a value word and an aux field of 15 bits. The application's report (512 bytes, returned at a normal return) carries more. Each layout is defined here once.
 
-**Failure note.** `apps/os/sd_owner.c:serve` raises it when a request fails, through `board_fail_note`: the site word is the call site with `aux << 16`, and the value is `sd_owner.c:diag_word`. The stage is in bits 5:0 of the value and the stage's detail in bits 31:6 (`apps/os/sd_note.h:os_sd_note_value`). `os_sd_diag[0..3]` hold the first stop (`large_sd.c:diag_set`; the first stop wins), readable at normal return through `ss_storage_diagnostic`.
+**Failure note.** `apps/os/sd_owner.c:serve` raises it when a request fails, through `board_fail_note`: the site word is the call site with `aux << 16`, and the value is `sd_owner.c:diag_word`. The stage is in bits 5:0 of the value and the stage's detail in bits 31:6 (`apps/os/sd_note.h:os_sd_note_value`). `os_sd_diag[0..3]` hold the first stop (`large_sd.c:diag_set`; the first stop wins), readable at normal return through `ss_storage_diagnostic`. A failed open is noted the same way from `owner_main`; the return's quiesce then replaces that note with its own record (code 0x901, state `SD_FAILED`), so that record's value is also `diag_word` and the failing open stage survives the return.
 
 | Stage | Meaning | Detail |
 | --- | --- | --- |
