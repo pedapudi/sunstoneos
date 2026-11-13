@@ -23,6 +23,9 @@ OUTPUT = None
 _spec = importlib.util.spec_from_file_location('gate_under_test', GATE)
 _gate = importlib.util.module_from_spec(_spec)
 sys.path.insert(0, str(GATE.parent))
+import gate_slots
+# The -j of a gate's builds is its share of the usable cores (tools/gate-slots.json), not a constant.
+JOBS = str(gate_slots.jobs_per_slot(gate_slots.load_config(), gate_slots.slot_count(gate_slots.load_config())))
 _spec.loader.exec_module(_gate)
 OS_VARIANTS = len(_gate.VARIANTS)
 
@@ -163,7 +166,7 @@ def plan(value=None, changed=None, index=None):
         # The OS-core build overrides the EXAMPLE_DIR that cfg.sh passes.
         self.assertEqual(calls[0][-1], '-DEXAMPLE_DIR=')
         self.assertIn('-DPython3_EXECUTABLE=' + str(self.sandbox / 'venv/bin/python'), calls[0])
-        self.assertEqual(calls[1][calls[1].index('--target') + 1:], ['kernel-check', '-j', '12'])
+        self.assertEqual(calls[1][calls[1].index('--target') + 1:], ['kernel-check', '-j', JOBS])
         self.assertEqual(calls[2][1], 'tools/check-kernel.py')
 
     def test_application_check_uses_its_own_build(self):
@@ -177,12 +180,12 @@ def plan(value=None, changed=None, index=None):
         python_option = '-DPython3_EXECUTABLE=' + str(self.sandbox / 'venv/bin/python')
         self.assertEqual(calls[0][1:], [str(self.source), str(core), '-DSUNSTONE_APPLICATION=', python_option,
                                       '-DSUNSTONE_EXTERNAL_APPLICATIONS=', '-DEXAMPLE_DIR='])
-        self.assertEqual(calls[1][calls[1].index('--target') + 1:], ['kernel-check', '-j', '12'])
+        self.assertEqual(calls[1][calls[1].index('--target') + 1:], ['kernel-check', '-j', JOBS])
         self.assertEqual(calls[2][1:], [str(self.source), str(example), python_option, '-DSUNSTONE_EXTERNAL_APPLICATIONS=', '-DEXAMPLE_DIR=',
                                       '-DSUNSTONE_EXTERNAL_APPLICATIONS=' + str(self.example),
                                       '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=example'])
         self.assertEqual(calls[3][calls[3].index('--target') + 1:],
-                         ['sunstone-a733-os', 'smp-example-model', '-j', '12'])
+                         ['sunstone-a733-os', 'smp-example-model', '-j', JOBS])
         self.assertEqual(calls[4][1], 'tools/check-kernel.py')
         self.assertEqual(calls[5][calls[5].index('--image') + 1], str(example / 'smp-example-model.elf'))
         self.assertEqual(calls[5][1], str(checker))
@@ -263,7 +266,7 @@ def plan(value=None, changed=None, index=None):
         self.assertEqual(calls[0][2], str(self.sandbox / 'build' / ('gate-os-headset-' + self.tree(self.source))))
 
     def test_affected_runs_one_baseline_and_deduplicates_core_checks(self):
-        result = self.run_gate('--affected', 'HEAD~1..HEAD', '--check', 'progress')
+        result = self.run_gate('--affected', 'HEAD~1..HEAD', '--check', 'progress', '--fail-fast')   # the fixed order of the steps
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.records()
         self.assertEqual(sum(call[0] == 'cfg.sh' for call in calls), 1)
@@ -594,7 +597,7 @@ exec "$REAL" "$@"
     def test_failure_is_not_retried_and_later_checks_do_not_run(self):
         checker = str(self.enable_example())
         self.env['GATE_TEST_FAIL'] = checker
-        result = self.run_gate('--reason', 'Application scheduling', '--check', 'example-smp', '--check', 'progress')
+        result = self.run_gate('--reason', 'Application scheduling', '--check', 'example-smp', '--check', 'progress', '--fail-fast')
         self.assertEqual(result.returncode, 1)
         runs = [c for c in self.records() if c[0] == 'python']
         self.assertEqual(len(runs), 1)

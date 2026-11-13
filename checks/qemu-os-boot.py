@@ -502,13 +502,15 @@ def reverted_owner(work):
     so any hint on that index ends the wait before the owner has opened the card."""
     source = (ROOT / 'apps/os/sd_owner.c').read_text()
     begin = source.index('    /* The owner gives the notification once the card is open or has failed.')
-    end = source.index('    ready_waiter = NULL;')
+    end = source.index('    atomic_store_explicit(&ready_waiter,NULL,memory_order_release);')
     old = ('    if (atomic_load(&ready) == 0) (void)ulTaskNotifyTake(pdTRUE, 8000u);\n')
     source = source[:begin] + old + source[end:]
     marker = '    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) {'
     stop = source.index('    return atomic_load(&ready) == 1;\n}', source.index(marker))
     source = source[:source.index(marker)] + '    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) os_sd_diag[0] = 11;\n' + source[stop:]
-    source = source.replace('xTaskNotifyGiveIndexed(ready_waiter, WAIT_INDEX)', 'xTaskNotifyGive(ready_waiter)')
+    give = 'xTaskNotifyGiveIndexed(waiter, ready_index)'
+    assert source.count(give) == 1, 'apps/os/sd_owner.c no longer gives readiness on the caller index'
+    source = source.replace(give, 'xTaskNotifyGive(waiter)')
     path = Path(work) / 'sd_owner_reverted.c'
     path.write_text(source)
     return path
@@ -1107,7 +1109,10 @@ def main():
         expected = 200 // period
         c.require(tag == 0x54424c49 and core == 5 and expected * 0.6 <= wakes <= expected * 1.2,
                   'form %d: %d wakes on core %d in 200 ms, expected about %d on core 5' % (form, wakes, core, expected))
-        c.require(issued == (wakes if form else 0) and (largest > 0) == bool(form),
+        # Under -icount shift=0 one instruction is 1 ns and one 24 MHz counter tick is about 42 instructions, so the
+        # measured TLBI, DSB and ISB span zero or one tick. A larger cost records an interrupt taken inside the
+        # window, not the invalidation; only the control form's zero cost is a property of the image.
+        c.require(issued == (wakes if form else 0) and (form or largest == 0),
                   'form %d: %d invalidations for %d wakes, largest %d ticks' % (form, issued, wakes, largest))
     # An OS wake-up between the test and the registration of the wait is kept: a host request offered there, and a USB
     # state change there, end ss_host_recv and ss_usb_wait at the event and not at their two-second timeout.
@@ -1224,7 +1229,9 @@ def main():
                  [(RAMDISK_ADDRESS, card_image())])
     c.require(c.failure is not None and c.failure['group'] == 'APPLICATION', 'a failed SD open left no application failure record')
     word = int(c.failure['value'], 16)
-    c.require(word & 0xff == 7 and (word >> 8 & 0xffff) == 0x0903, 'the record %#x does not carry stage 7 and its detail' % word)
+    # A failed identification (stage 7) has its own layout (apps/os/sd_owner.c diag_word): bit 31, the platform stage in 11:8 and the
+    # result in 14:12 (detail 0x0903: stage 9, result 3), no ENTER_1V8 observation and no PF bank fields (the QEMU card has none).
+    c.require(word == 1 << 31 | 9 << 8 | 3 << 12, 'the record %#x does not carry stage 7 with platform stage 9 and result 3' % word)
     # The read-back modes open the card for reading and verify no bounds: a card whose backup sectors have changed (every session changes them) opens.
     c = run_case('storage-write-open-read-backup-changed', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, storage_host.mode_input(6)], '512M',
                  [(RAMDISK_ADDRESS, card_image(corrupt=32770))])

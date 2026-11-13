@@ -63,6 +63,7 @@ struct sunxi_sdio {
     uint64_t progress; /* Owner-only count of polls that changed state or moved FIFO words. */
     uint32_t version, card_hz;
     uint8_t step, response_seen, sdio_pending, entered, initialized, wide, divisor;
+    uint8_t events,event_live;
 };
 
 /* Single serialized owner; no API is safe for concurrent task/ISR use.
@@ -73,6 +74,17 @@ struct sunxi_sdio {
  * No disposal API exists. Never clear or reuse storage while a request, fault,
  * callback context, or hardware access remains owned. */
 int sunxi_sdio_init(struct sunxi_sdio *, const struct sunxi_sdio_config *);
+/* Pure binding before prepare. The platform has already configured a level
+ * interrupt and retains its handler, owner and GIC state through shutdown.
+ * The ISR masks that SPI and notifies the owner; it never calls this core. */
+int sunxi_sdio_bind_events(struct sunxi_sdio *);
+/* Owner-only preparation for sleep after draining software progress. Programs
+ * only currently useful controller sources, then samples them again. Returns
+ * 1 for work already ready, 0 for an event/deadline wait, -1 on retained fault.
+ * *until is the core's absolute timeout, or a 50 us observation for controller
+ * reset, clock update and DAT0 busy conditions that have no completion IRQ.
+ * Caller arms the GIC only after this check and preserves a raced ISR hint. */
+int sunxi_sdio_event_prepare(struct sunxi_sdio *, uint64_t *until);
 /* Pure admission; absolute deadlines use ops.now units. No automatic retries. */
 int sunxi_sdio_prepare(struct sunxi_sdio *, uint64_t deadline);
 int sunxi_sdio_submit(struct sunxi_sdio *, const struct sunxi_sdio_request *, uint64_t deadline);

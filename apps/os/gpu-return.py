@@ -5,6 +5,7 @@ CONDITIONS = {'output-lending-retired', 'firmware-off-isolation-and-resources',
               'gpu-worker-and-pmic-sample-parked', 'spi95-restoration',
               'local-pools-and-read-only-cache-retirement'}
 MAGIC, BYTES = 0x3152475033333741, 64
+EXTENDED_BYTES = BYTES + 32
 CONSTRUCTOR_STAGES = (
     None, 'previous GPU-loss record', 'owner identities', 'queue client binding',
     'native platform constructor', 'platform constructor', 'PMIC lifetime',
@@ -24,6 +25,19 @@ def validate(review, config, evidence, require):
 
 
 def decode(raw, epoch, generation, require, allow_untouched=False, allow_failure=False):
+    require(len(raw) in (BYTES, EXTENDED_BYTES), 'GPU retirement report length differs.')
+    result = decode_proof(raw[:BYTES], epoch, generation, require, allow_untouched, allow_failure)
+    if len(raw) == EXTENDED_BYTES:
+        event, deadline, idle, waited = struct.unpack_from('<4Q', raw, BYTES)
+        require(idle <= event and waited != 0xffffffffffffffff,
+                'GPU owner wake telemetry is inconsistent or its clock failed.')
+        result['owner_waits'] = {'event_wakes': event, 'deadline_wakes': deadline,
+                                 'idle_notification_wakes': idle, 'idle_wait_us': waited,
+                                 'idle_notification_wakes_per_second': idle * 1000000 / waited if waited else None}
+    return result
+
+
+def decode_proof(raw, epoch, generation, require, allow_untouched=False, allow_failure=False):
     require(len(raw) == BYTES, 'Incomplete GPU retirement report.')
     magic, version, size, actual, gen, jobs, flags, uv = struct.unpack('<8Q', raw)
     if version == 4:
@@ -108,8 +122,10 @@ def geometry(image):
             require(section['sh_type'] == 'SHT_PROGBITS', 'GPU capability marker has no immutable bytes.')
             offset = address - section['sh_addr']
             return section.data()[offset:offset + size]
-        result = {'address': object_data('os_gpu_return_report', BYTES, True),
-                  'bytes': BYTES, 'allow_untouched': False}
+        size = int(symbols['os_gpu_return_report']['st_size'])
+        require(size in (BYTES, EXTENDED_BYTES), 'GPU return report object length differs.')
+        result = {'address': object_data('os_gpu_return_report', size, True),
+                  'bytes': size, 'allow_untouched': False}
         if 'os_gpu_failure_return_version' in symbols:
             require(struct.unpack('<I', object_data('os_gpu_failure_return_version', 4, False)) == (4,),
                     'GPU failure-return capability marker differs.')
@@ -142,6 +158,7 @@ def decode_captured(raw, layout, epoch, generation, failure_return=False):
     def require(ok, message):
         if not ok:
             raise ValueError(message)
+    require(len(raw) == layout.get('bytes', BYTES), 'GPU receipt differs from its frozen image length.')
     result = decode(raw, epoch, generation, require, allow_untouched=layout['allow_untouched'],
                     allow_failure=failure_return and layout.get('allow_failure', False))
     version = struct.unpack_from('<Q', raw, 8)[0]

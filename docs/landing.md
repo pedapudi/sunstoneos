@@ -122,12 +122,13 @@ append-only, so two branches that each add a record merge to a log with both, an
 branches that add records to one subsystem still conflict in that table, and the
 second worker regenerates it with `sync` after merging.
 
-## The gate lock
+## The gate slots
 
-`tools/integration-gate.py` takes the host-wide lock `~/.cache/sunstoneos/gate.lock`
-and waits for it when another gate holds it, so a direct call and a landing never
-run gates side by side. The full suite takes `~/.cache/sunstoneos/gate-full.lock`
-instead, so that it blocks no landing and no worker's gate.
+`tools/integration-gate.py` takes one of the host's gate slots, `~/.cache/sunstoneos/gate.lock.0` to `gate.lock.N-1`, and waits
+for a free one, so a direct call and a landing share the host. A landing gate (`tools/land.py` sets
+`SUNSTONE_GATE_PRIORITY=landing`) goes ahead of waiting worker gates and may take slot 0, which workers never use. The full suite
+takes `~/.cache/sunstoneos/gate-full.lock` instead, so that it blocks no landing and no worker's gate. The slot count, the cores
+per slot and the wall-time steps that take `gate-timing.lock` are described in docs/validation.md, "Gate slots and the timing lock".
 
 ## Full suite on bringup
 
@@ -178,4 +179,4 @@ landing, a landing when `bringup` moves during the gate, the refusals for unmerg
 paths, a failed gate, a check without gate declarations, protected paths, a dirty
 worktree, a branch with nothing to land and a held lock, and the coordinator
 approval. It also covers `tools/full-gate.py`, the union merge of two appended
-evidence records and the gate lock of `tools/integration-gate.py`.
+evidence records and the gate slots of `tools/integration-gate.py`.

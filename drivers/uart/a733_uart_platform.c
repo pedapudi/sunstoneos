@@ -129,7 +129,7 @@ static int uart_address(struct a733_uart_platform *s,uintptr_t a,unsigned writin
     if (a<s->uart.plan.base || a>s->uart.plan.base+0xc0 || (a&3)) return 0;
     switch (a-s->uart.plan.base) {
     case 0:case 4:case 8:case 0xc:case 0x10:case 0xa4:case 0x88:case 0x8c:return 1;
-    case 0x14:case 0x18:case 0x7c:return !writing;
+    case 0x14:case 0x18:case 0x7c:case 0x84:return !writing;
     case 0xc0:return s->route.port && s->route.port<7; /* RS-485 control. */
     default:return 0;
     }

@@ -119,10 +119,10 @@ def application(out, compiler):
     (out / 'radio_scan-app.h').write_text(r'''
 #include <stdint.h>
 #include <stddef.h>
-struct ss_grant {unsigned unused;};
+struct ss_grant {uint64_t finish_by_us;};
 struct ss_radio_status {uint32_t stage,failed,done,reserved;};
 int ss_live(void);void ss_progress(void);void ss_radio_status(struct ss_radio_status *);
-void ss_usb_wait(uint64_t);
+uint64_t ss_counter_ticks(void);void ss_wait_until(uint64_t);
 _Noreturn void ss_fail(uint32_t);
 _Noreturn void ss_finish(const void *,size_t);
 ''')
@@ -139,14 +139,17 @@ void radio_scan_main(const struct ss_grant *);
 int ss_live(void){return 1;}
 void ss_progress(void){++progress;}
 void ss_radio_status(struct ss_radio_status *s){*s=status;if(!polls++)s->done=0;}
-void ss_usb_wait(uint64_t us){assert(us==1000);++waits;}
+/* The application waits for a status publication or its granted finish. */
+static const struct ss_grant grant={.finish_by_us=55000000};
+uint64_t ss_counter_ticks(void){return 24u*1000000u;}
+void ss_wait_until(uint64_t us){assert(us==grant.finish_by_us);++waits;}
 _Noreturn void ss_fail(uint32_t value){failure=value;longjmp(terminal,1);}
 _Noreturn void ss_finish(const void *p,size_t n)
 {const uint32_t *r=p;assert(n==16&&r[0]==status.stage&&r[1]==status.failed&&r[2]==1&&!r[3]);++finished;longjmp(terminal,1);}
 int main(int argc,char **argv)
 {
     assert(argc==4);status.stage=(unsigned)strtoul(argv[1],0,0);status.failed=(unsigned)strtoul(argv[2],0,0);status.done=1;
-    if(!setjmp(terminal))radio_scan_main(0);
+    if(!setjmp(terminal))radio_scan_main(&grant);
     if(strtoul(argv[3],0,0)){assert(failure==0x524107&&!finished);}else assert(!failure&&finished==1);
     assert(progress==2&&waits==1&&polls==2);return 0;
 }
@@ -163,6 +166,8 @@ int main(int argc,char **argv)
 def observer(out, compiler):
     source = (ROOT / 'apps/os/radio_scan.c').read_text()
     body = source[source.index('void os_radio_scan_step('):source.index('void ss_radio_status(')]
+    # Each state publication wakes the application's main task (its status wait).
+    publisher = source[source.index('static void publish_state('):source.index('static void clean(')]
     fixture = out / 'scan-observer.c'
     fixture.write_text(r'''
 #include <assert.h>
@@ -186,16 +191,19 @@ static int os_radio_quiesce_fault(uint32_t value,const void *caller){(void)value
 #define SUNSTONE_CRUMB_FAIL_SITE(x) 0
 #define SUNSTONE_CRUMB_FAIL_RETURN 0
 static void board_fail_note(uint32_t site,uint32_t value,const void *caller){(void)site;(void)value;(void)caller;++noted;}
-''' + body + r'''
+static unsigned wakes;
+static void os_application_wake_main(void){++wakes;}
+''' + publisher + body + r'''
 int main(void)
 {
     struct board_radio r={.config.entropy_only=1};
     os_radio_scan_step(&r,BOARD_RADIO_SCANNED);assert(starts==1&&steps==1);
     requested=1;os_radio_scan_step(&r,BOARD_RADIO_RETAINED);
-    assert(starts==1&&steps==1&&atomic_load(&state)==FAILED&&!noted&&!published);
+    assert(starts==1&&steps==1&&atomic_load(&state)==FAILED&&!noted&&!published&&wakes==1);
     r.config.entropy_only=0;atomic_store(&state,RUNNING);
-    os_radio_scan_step(&r,BOARD_RADIO_SCANNED);assert(atomic_load(&state)==SCANNED&&atomic_load(&stage_seen)==7);
-    os_radio_scan_step(&r,BOARD_RADIO_DOWN);assert(atomic_load(&state)==DOWN&&published==1);
+    os_radio_scan_step(&r,BOARD_RADIO_SCANNED);assert(atomic_load(&state)==SCANNED&&atomic_load(&stage_seen)==7&&wakes==2);
+    os_radio_scan_step(&r,BOARD_RADIO_SCANNED);assert(wakes==2);
+    os_radio_scan_step(&r,BOARD_RADIO_DOWN);assert(atomic_load(&state)==DOWN&&published==1&&wakes==3);
     return 0;
 }
 ''')
