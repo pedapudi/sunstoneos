@@ -23,7 +23,7 @@ from harness import environment, save
 
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = 'drivers/npu/npu_runtime_queue.c'
-CHECK_INPUTS = [DRIVER, 'include/npu_runtime_queue.h', 'include/a733_npu_idle.h', 'include/sunstone_crumb.h',
+CHECK_INPUTS = ['drivers/npu/npu_runtime_queue.c', 'include/npu_runtime_queue.h', 'include/a733_npu_idle.h', 'include/sunstone_crumb.h',
                 'checks/npu-completion-idle.c', 'checks/npu-completion-idle.py', 'checks/host/strict_mmio.c',
                 'checks/host/strict_mmio.h']
 # The OS sources of the two failing images, from their queue entries' hypotheses.
