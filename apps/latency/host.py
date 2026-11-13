@@ -102,7 +102,7 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
         def duration(first, last):
             return stamp[last] - stamp[first] if stamp[first] and stamp[last] else 0
         direct = bool(flags & 64)
-        if direct and (version != 5 or kind != 2 or flags not in (69, 85, 93) or not all(stamp)):
+        if direct and (version != 5 or kind != 2 or flags not in (69, 85, 93, 197) or not all(stamp)):
             raise ValueError('scheduler direct suspension flags or timestamps differ')
         no_selection = direct and bool(flags & 16)
         if no_selection and len(set(stamp[4:])) != 1:
@@ -118,7 +118,11 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
                 result['steps_ticks'].update(save_frame=duration(4, 5), select=duration(5, 6))
             result['selection_recorded'] = not no_selection
             result['self_suspend_outcome'] = ('deferred_without_selection' if flags & 8 else
-                'completed_before_local_selection' if no_selection else 'selected_replacement')
+                'completed_before_local_selection' if no_selection else
+                'parked_at_exception_exit' if flags & 128 else 'selected_replacement')
+            if flags & 128:
+                result['steps_ticks'] = dict(zip(('reference', 'publish_until_exit', 'save_frame', 'select'),
+                    (duration(0, 1), duration(1, 3), duration(4, 5), duration(5, 6))))
             result['masked_c_ticks'] = duration(3, 6)
             result['reference_publication_scope'] = 'before_local_guard' if flags & 8 else 'before_the_API_mask'
         return result

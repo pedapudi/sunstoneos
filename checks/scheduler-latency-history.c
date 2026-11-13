@@ -155,6 +155,22 @@ int main(int argc, char **argv)
     deferred = (struct ss_sched_trace_command){.command = 2, .slot = 3, .flags = 93,
         .stamp = {26000, 26010, 26020, 26030, 26080, 26080, 26080}};
     ss_sched_trace_command(6, &deferred); ss_sched_trace_command(7, &deferred);
+    /* An exception exit parks core 4's task after its self-suspension opened:
+     * the exit's selection records it with flags 197. On core 3 the task's own
+     * path closes the record first, so a later park of that slot adds nothing. */
+    struct ss_sched_trace_command opened = {.command = 2, .slot = 3, .flags = 85,
+        .stamp = {29000, 29010}};
+    ss_sched_trace_self_suspend_open(4, &opened);
+    clock_value = 29050; ss_sched_trace_self_suspend_parked(4, 3);
+    clock_value = 29060; ss_sched_trace_switch_begin(4);
+    clock_value = 29080; ss_sched_trace_switch_end(4, 5);
+    ss_sched_trace_self_suspend_open(3, &opened);
+    struct ss_sched_trace_command closed = {.command = 2, .slot = 3, .flags = 85,
+        .stamp = {29000, 29010, 29020, 29030, 29040, 29040, 29040}};
+    ss_sched_trace_command(3, &closed);
+    clock_value = 29100; ss_sched_trace_self_suspend_parked(3, 3);
+    clock_value = 29110; ss_sched_trace_switch_begin(3);
+    clock_value = 29120; ss_sched_trace_switch_end(3, 5);
     clock_value = 11000; ss_sched_trace_drain_begin(6);
     const struct ss_sched_trace_record busy = {.slot = 3,
         .phase = SS_SCHED_RECORD_FIFO_BUSY,
@@ -199,6 +215,12 @@ int main(int argc, char **argv)
            "deferred atomic maximum must exclude the prefix before its local guard");
     assert(report.core[7].command_stage_max[0] == 10 && report.core[7].command_stage_max[1] == 10);
     assert(!report.core[7].command_stage_max[2] && !report.core[7].command_stage_max[3]);
+    assert(report.core[4].command_count == 1 && report.core[4].self_suspend.flags == 197 &&
+           "an exception exit that parks the task must record its self-suspension");
+    assert(report.core[4].self_suspend.stamp[2] == 29050 && report.core[4].self_suspend.stamp[4] == 29050 &&
+           report.core[4].self_suspend.stamp[5] == 29060 && report.core[4].self_suspend.stamp[6] == 29080);
+    assert(report.core[3].command_count == 1 && report.core[3].self_suspend.flags == 85 &&
+           "a record the task closed itself must not be completed again by a park");
     assert(report.core[6].drain.count == 1 && report.core[6].drain.record[0].phase == SS_SCHED_RECORD_FIFO_BUSY);
     assert(report.core[6].drain.record[0].stamp[4] == 11040);
     FILE *file = fopen(argv[1], "wb"); assert(file);

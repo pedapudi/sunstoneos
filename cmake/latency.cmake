@@ -107,6 +107,8 @@ function(sunstone_latency_partitioned_model target metric)
   endif()
   if(NOT metric)
     sunstone_enable_scheduler_latency_trace(${target})
+    # CPU1's memory task is parked at an SGI exit to test the trace of that path.
+    target_compile_definitions(${target} PRIVATE SS_SCHED_TRACE_TEST_EXIT_SUSPEND=1)
   endif()
   sunstone_enable_latency_port(${target})
   if(control AND SUNSTONE_TICKLESS_IDLE)

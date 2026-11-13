@@ -21,8 +21,8 @@ static struct {
     struct ss_sched_irq_history irq_history[SS_SCHED_TRACE_HISTORY];
     struct ss_sched_switch_history switch_history[SS_SCHED_TRACE_HISTORY];
     struct ss_sched_trace_switch active_switch;
-    unsigned direct_suspend_active;
-    struct ss_sched_trace_command direct_suspend;
+    unsigned direct_suspend_active, open_suspend_active;
+    struct ss_sched_trace_command direct_suspend, open_suspend;
     struct {
         uint64_t start, end, serving, ticket;
         unsigned valid;
@@ -84,6 +84,10 @@ void ss_sched_trace_command(unsigned core, const struct ss_sched_trace_command *
     if (!enabled(core)) return;
     struct ss_sched_trace_core *row = &trace.core[core];
     ++row->command_count;
+    /* The task's own path completed its opened self-suspension. */
+    if (command->command == 2 && (command->flags & 1) && state[core].open_suspend_active &&
+        state[core].open_suspend.slot == command->slot)
+        state[core].open_suspend_active = 0;
     if (command_ticks(command) > command_ticks(&row->command)) row->command = *command;
     /* SS_K_SUSPEND is command 2; keep its own maximum because this is the
      * measured simultaneous worker shutdown after the busy phase. */
@@ -111,6 +115,31 @@ void ss_sched_trace_direct_suspend_begin(unsigned core, const struct ss_sched_tr
     state[core].direct_suspend.command = 2;
     state[core].direct_suspend.flags = (command->flags | UINT64_C(65)) & ~UINT64_C(58);
     state[core].direct_suspend_active = 1;
+    state[core].open_suspend_active = 0;
+}
+void ss_sched_trace_self_suspend_open(unsigned core, const struct ss_sched_trace_command *command)
+{
+    if (!enabled(core)) return;
+    state[core].open_suspend = *command;
+    state[core].open_suspend_active = 1;
+}
+/* The caller is this core's control drain at an exception exit, parking the
+ * interrupted task whose self-suspension it found published. The selection
+ * that follows saves the task's frame and records the command. */
+void ss_sched_trace_self_suspend_parked(unsigned core, uint64_t slot)
+{
+    const uint64_t now = ss_sched_trace_now();
+    if (!enabled(core) || !state[core].open_suspend_active || state[core].open_suspend.slot != slot ||
+        state[core].direct_suspend_active) return;
+    struct ss_sched_trace_command *d = &state[core].direct_suspend;
+    *d = state[core].open_suspend;
+    d->command = 2;
+    d->flags = (d->flags | UINT64_C(197)) & ~UINT64_C(58);
+    if (!d->stamp[2]) d->stamp[2] = now;
+    d->stamp[3] = d->stamp[4] = now;
+    d->stamp[5] = d->stamp[6] = 0;
+    state[core].direct_suspend_active = 1;
+    state[core].open_suspend_active = 0;
 }
 void ss_sched_trace_direct_suspend_mark(unsigned core)
 {

@@ -128,6 +128,10 @@ static void controller(void *argument)
         configASSERT(trace->command_count && trace->drain_count && trace->irq_count);
         configASSERT(trace->self_suspend.command == 2);
         configASSERT((trace->self_suspend.flags & 5) == 5);
+#ifdef SS_SCHED_TRACE_TEST_EXIT_SUSPEND
+        /* CPU1's memory task is parked at an SGI exit (workload.c). */
+        if (c == 1) configASSERT(trace->self_suspend.flags == 197);
+#endif
         configASSERT(trace->self_suspend.stamp[0] && trace->self_suspend.stamp[6]);
         for (unsigned i = 1; i < 7; ++i)
             configASSERT(trace->self_suspend.stamp[i] >= trace->self_suspend.stamp[i - 1]);

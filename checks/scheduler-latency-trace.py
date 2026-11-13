@@ -587,7 +587,14 @@ def run(decode):
             assert record['steps_ticks'] == dict(reference=10, publish=30, local_commit=60)
             assert record['reference_publication_scope'] == ('before_local_guard' if flags & 8 else 'before_the_API_mask')
         accepted(f'atomic suspension flags {flags} do not claim a saved-frame selection', immediate, no_selection_scope)
-    for flags in (71, 77, 101, 197):
+    parked = copy.deepcopy(direct)
+    parked['cores'][1]['self_suspend'] = [2, 3, 197, 1000, 1010, 1050, 1050, 1050, 1070, 1100]
+    def parked_scope(value):
+        record = value['cores'][1]['self_suspend']
+        assert record['self_suspend_outcome'] == 'parked_at_exception_exit' and record['selection_recorded']
+        assert record['steps_ticks'] == dict(reference=10, publish_until_exit=40, save_frame=20, select=30)
+    accepted('a self-suspension parked at an exception exit keeps its selection', parked, parked_scope)
+    for flags in (71, 77, 101, 325):
         bad = copy.deepcopy(direct); bad['cores'][1]['self_suspend'][2] = flags
         rejected(f'atomic suspension rejects unsupported flags {flags}', pack(bad))
     bad = copy.deepcopy(direct); bad['cores'][1]['self_suspend'][2] |= 16
@@ -649,6 +656,9 @@ def check_history(source, output):
     assert deferred['flags'] == 93 and deferred['masked_c_ticks'] == 50 and deferred['stamp'][6] == 26080
     assert deferred['self_suspend_outcome'] == 'deferred_without_selection' and not deferred['selection_recorded']
     assert deferred['reference_publication_scope'] == 'before_local_guard'
+    exit_parked = report['cores'][4]['self_suspend']
+    assert exit_parked['flags'] == 197 and exit_parked['self_suspend_outcome'] == 'parked_at_exception_exit'
+    assert exit_parked['steps_ticks'] == dict(reference=10, publish_until_exit=40, save_frame=10, select=20)
     busy = report['cores'][6]['drain']['records'][0]
     assert busy['record_type'] == 'fifo_busy' and busy['fifo_try_ticks'] == 10 and busy['park_ticks'] == 20
     interrupted = decode(interrupted_payload.read_bytes(), FREQUENCY)
