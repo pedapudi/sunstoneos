@@ -56,9 +56,17 @@ class Model(trace.Trace):
         self.put64(self.s['ss_result_record'] + 40, 1)
         self.put32(0x02050014, 0x41)
         self.hooks = {self.s['os_session_admitted']: lambda: self.session,
-                      self.s['a733_typec_revoke']: lambda: 1}
+                      self.s['a733_typec_revoke']: lambda: 1,
+                      # The supervisor's precise observation deadline (apps/os/supervisor-wait.c) is
+                      # outside this model; each case decides on its first pass.
+                      self.s['os_supervisor_wait_init']: lambda: 1}
 
     def code(self, uc, address, size, unused):
+        if address == self.s['os_supervisor_wait_next']:
+            # A pass that does not stop renewal waits for its next observation.
+            self.stop = 'observation-wait'
+            uc.emu_stop()
+            return
         if address in self.hooks:
             uc.reg_write(prior.fault.REGS[0], self.hooks[address]())
             uc.reg_write(prior.UC_ARM64_REG_PC, uc.reg_read(prior.UC_ARM64_REG_LR))

@@ -3,6 +3,9 @@
 #include "a733_range.h"
 #include "a733_mmio.h"
 #include "a733_mapping_check.h"
+#ifdef SUNSTONE_A733_OS
+#include "sunstone_deadline.h"
+#endif
 
 static int ready(const struct a733_npu_native *n)
 { return n && n->initialized && !n->failed && aarch64_device_cache_stride(); }
@@ -131,6 +134,14 @@ static void delay(void *cookie, unsigned us)
     struct a733_npu_native *n = cookie;
     if (us > 1000) fatal(n);
     uint64_t start = microseconds(n);
+#ifdef SUNSTONE_A733_OS
+    const uint64_t until=sunstone_deadline_now_us()+us+1u;
+    while(microseconds(n)-start<=us){
+        const int result=sunstone_deadline_wait_until(until);
+        if(result==SUNSTONE_DEADLINE_ERROR ||
+           (result==SUNSTONE_DEADLINE_EXPIRED&&microseconds(n)-start<=us))fatal(n);
+    }
+#else
     for (unsigned samples = 0; samples < 1048576; ++samples) {
         /* Whole microseconds round down. Passing the endpoint guarantees
          * the full requested interval from any fractional starting phase. */
@@ -138,6 +149,7 @@ static void delay(void *cookie, unsigned us)
         __asm__ volatile("yield" ::: "memory");
     }
     fatal(n);
+#endif
 }
 static int publish(void *cookie, const struct a733_npu_mmu_image *image,
                    const struct a733_npu_command *cmd, int bootstrap)

@@ -211,6 +211,9 @@ static enum a733_gpu_power_result begin(struct a733_gpu_power *s,
     s->deadline = deadline;
     s->index = 0;
     s->requested = 0;
+#ifdef SUNSTONE_A733_OS
+    s->wait=(struct a733_gpu_wait){0};s->sample_reads=s->sample_run=0;
+#endif
     s->phase = on ? A733_GPU_POWER_STARTING : A733_GPU_POWER_STOPPING;
     /* ON clears its own notes and keeps those of the OFF before it; OFF
      * clears its notes. core_seen bit 3 + n follows note n. */
@@ -243,6 +246,9 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
     if (s->phase != A733_GPU_POWER_STARTING && s->phase != A733_GPU_POWER_STOPPING)
         return A733_GPU_POWER_INVALID;
     if (!clock_read(s)) return A733_GPU_POWER_FAULT;
+#ifdef SUNSTONE_A733_OS
+    if(s->wait.kind!=A733_GPU_WAIT_EVENT && s->wait.next_wait_us && s->last_now<s->wait.next_wait_us)return A733_GPU_POWER_AGAIN;
+#endif
     int on = s->phase == A733_GPU_POWER_STARTING;
     if (on && !s->lease_attempted) {
         struct a733_gpu_power_resources r = {0};
@@ -257,15 +263,12 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
     }
     uint32_t count = on ? sizeof(on_steps) / sizeof(*on_steps) :
                           sizeof(off_steps) / sizeof(*off_steps);
-    /* Steps run back to back. A delay waits on the clock inside the poll. The
-     * domain step requests the row once and returns AGAIN until the service
-     * answers, one acquire load per poll. A delay whose clock stops advancing
-     * returns AGAIN without advancing the step. Every wait ends at the
-     * deadline. A CORE status poll re-reads for up to A733_GPU_SPIN_US
-     * within one call, with the clock advancing, before it returns AGAIN;
-     * each step list has one poll. A SETTLE observation reads CORE status
-     * once. A LOCK or UPDATED wait runs to its read bound inside one call. */
+    /* Ready programming steps retain vendor order. The OS profile returns
+     * each unsatisfied observation, hold or domain request to its unlocked
+     * owner; diagnostic profiles retain their bounded in-call waits. */
+#ifndef SUNSTONE_A733_OS
     struct a733_gpu_spin spin = {0};
+#endif
     while (s->index < count) {
         const struct step *p = &(on ? on_steps : off_steps)[s->index];
         if (p->kind == DOMAIN) {
@@ -274,16 +277,31 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
                 s->requested = 1;
             }
             enum a733_power_row_state state = a733_power_domain_state(&s->row);
-            if (state == A733_POWER_ROW_PENDING) return A733_GPU_POWER_AGAIN;
+            if (state == A733_POWER_ROW_PENDING){
+#ifdef SUNSTONE_A733_OS
+                a733_gpu_wait_set(&s->wait,s->last_now,s->deadline-s->last_now,s->deadline,A733_GPU_WAIT_EVENT);
+#endif
+                return A733_GPU_POWER_AGAIN;
+            }
             if (state == A733_POWER_ROW_REFUSED) return fail(s, A733_GPU_POWER_STATE);
             if (state != (p->value ? A733_POWER_ROW_ON : A733_POWER_ROW_OFF))
                 return fail(s, A733_GPU_POWER_DOMAIN);
             s->requested = 0;
+#ifdef SUNSTONE_A733_OS
+            s->wait=(struct a733_gpu_wait){0};
+#endif
             ++s->index;
             if (!clock_read(s)) return A733_GPU_POWER_FAULT;
             continue;
         }
         if (p->kind == DELAY) {
+#ifdef SUNSTONE_A733_OS
+            if(!s->wait.next_wait_us){
+                a733_gpu_wait_set(&s->wait,s->last_now,p->value+1,s->deadline,A733_GPU_WAIT_FIXED);
+                return A733_GPU_POWER_AGAIN;
+            }
+            s->wait=(struct a733_gpu_wait){0};
+#else
             /* The clock may round down to whole microseconds; passing the
              * start sample by more than the delay guarantees the delay. */
             uint64_t until;
@@ -295,6 +313,7 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
                 if (!clock_read(s)) return A733_GPU_POWER_FAULT;
                 if (!a733_gpu_spin_advancing(&delay, s->last_now)) return A733_GPU_POWER_AGAIN;
             }
+#endif
             ++s->index;
             continue;
         }
@@ -303,6 +322,39 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
             const struct step *table = on ? on_steps : off_steps;
             unsigned slot = 0;
             for (uint32_t i = 0; i < s->index; ++i) slot += table[i].kind == p->kind;
+#ifdef SUNSTONE_A733_OS
+            if(p->kind==LOCK){
+                /* A completed sample retains its trailing vendor hold,
+                 * including the third stable or hundredth sampled read. */
+                if(s->sample_reads && (s->sample_run>=3 || s->sample_reads>=p->value)){
+                    s->pll_lock_reads[slot&1]=s->sample_reads;
+                    if(s->sample_run<3)return fail(s,A733_GPU_POWER_LOCK);
+                }else{
+                    uint32_t value;
+                    if(!s->ops.read(s->context,p->bank,p->offset,&value))return fail(s,A733_GPU_POWER_IO);
+                    ++s->sample_reads;s->last_value=s->pll_word=value;
+                    s->sample_run=value&p->mask?s->sample_run+1:0;
+                    if(!clock_read(s))return A733_GPU_POWER_FAULT;
+                    /* Pending observations use 50 us; the final stable sample
+                     * retains its 4 us earliest advancement boundary. */
+                    a733_gpu_wait_set(&s->wait,s->last_now,s->sample_run>=3?4:A733_GPU_OBSERVE_US,
+                        s->deadline,s->sample_run<3?A733_GPU_WAIT_RETRY:A733_GPU_WAIT_FIXED);
+                    return A733_GPU_POWER_AGAIN;
+                }
+            }else{
+                uint32_t value;
+                if(!s->ops.read(s->context,p->bank,p->offset,&value))return fail(s,A733_GPU_POWER_IO);
+                ++s->sample_reads;s->last_value=value;
+                s->clock_update_reads[slot&1]=s->sample_reads;
+                if(!clock_read(s))return A733_GPU_POWER_FAULT;
+                if(value&p->mask){
+                    if(s->sample_reads>=p->value)return fail(s,A733_GPU_POWER_UPDATE);
+                    a733_gpu_wait_set(&s->wait,s->last_now,A733_GPU_OBSERVE_US,s->deadline,A733_GPU_WAIT_RETRY);
+                    return A733_GPU_POWER_AGAIN;
+                }
+            }
+            s->wait=(struct a733_gpu_wait){0};s->sample_reads=s->sample_run=0;
+#else
             struct a733_gpu_spin stall = {0};
             uint32_t value = 0, reads = 0, run = 0;
             while (reads < p->value && (p->kind == LOCK ? run < 3 : !reads || (value & p->mask))) {
@@ -330,6 +382,7 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
                 s->clock_update_reads[slot & 1] = reads;
                 if (value & p->mask) return fail(s, A733_GPU_POWER_UPDATE);
             }
+#endif
             ++s->index;
             continue;
         }
@@ -361,10 +414,17 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
         if (p->kind == POLL) {
             if (value != 0 && value != 8) return fail(s, A733_GPU_POWER_STATE);
             if (value != p->value) {
+#ifdef SUNSTONE_A733_OS
+                a733_gpu_wait_set(&s->wait,s->last_now,A733_GPU_OBSERVE_US,s->deadline,A733_GPU_WAIT_RETRY);
+#else
                 if (a733_gpu_spin_again(&spin, s->last_now)) continue;
+#endif
                 return A733_GPU_POWER_AGAIN;
             }
         }
+#ifdef SUNSTONE_A733_OS
+        s->wait=(struct a733_gpu_wait){0};
+#endif
         ++s->index;
     }
     if (!on) {

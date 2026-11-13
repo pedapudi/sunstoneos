@@ -112,6 +112,18 @@ int bluetooth_application_retain(struct bluetooth_application *a){check(a==&app&
 enum { SEGMENT_BYTES=3000 };
 static uint64_t head,tail;
 static unsigned failed_app,refuse_take,refuse_request,word,notified,publish_in_take;
+static uint64_t event_time;
+static unsigned event_waits;
+uint64_t a733_smp_counter(void){return event_time*24;}
+int board_service_deadline_register(unsigned service)
+{check(service==(mode==19?OS_SERVICE_BLUETOOTH:OS_SERVICE_HEADSET),180);return 1;}
+int board_service_blocked_until(unsigned service,uint64_t until)
+{check(service==(mode==19?OS_SERVICE_BLUETOOTH:OS_SERVICE_HEADSET)&&until==board.session.deadline_us,181);return 1;}
+void vTaskSuspend(TaskHandle_t task)
+{
+    (void)task;check(mode==20&&board_failed&&stopped==1&&atomic_load(&headset.failed)&&!event_waits,182);
+    os_check_result=1;__asm__ volatile("brk #0");for(;;){}
+}
 int bluetooth_application_stop(struct bluetooth_application *a,uint64_t deadline)
 {check(a==&app&&on_owner&&deadline==return_deadline,151);++stop_calls;return failed_app?-1:stop_reply;}
 int bluetooth_application_module_release(struct bluetooth_application *a)
@@ -173,7 +185,8 @@ int bluetooth_headset_segment_bind(struct bluetooth_application *a,void *consume
 BaseType_t xTaskGenericNotify(TaskHandle_t task,UBaseType_t index,uint32_t v,eNotifyAction action,uint32_t *previous)
 {(void)v;check(task&&(task==headset.client||task==headset.owner)&&!index&&action==eIncrement&&!previous,88);
  if(task==headset.client)++notified;else ++owner_notified;return pdPASS;}
-uint32_t ulTaskGenericNotifyTake(UBaseType_t index,BaseType_t clear,TickType_t ticks){(void)index;(void)clear;(void)ticks;return 0;}
+uint32_t ulTaskGenericNotifyTake(UBaseType_t index,BaseType_t clear,TickType_t ticks)
+{(void)index;(void)clear;(void)ticks;check(mode<18,192);return 0;}
 
 static void steps(unsigned n){for(unsigned i=0;i<n;++i)check(step()==0,83);}
 static uint32_t get32(const uint8_t *p){return p[0]|p[1]<<8|p[2]<<16|(uint32_t)p[3]<<24;}
@@ -295,6 +308,8 @@ static void start_case(void)
  * failed. With the radio the board's radio owner runs it after its own poll. */
 static void owner_case(void)
 {
+    /* Module service is legal only for an admitted headset grant. */
+    nominal_session();
 #define SERVE() do{on_owner=1;if(radio_granted)os_module_poll();else serve();on_owner=0;}while(0)
     atomic_store(&providers.shared.pmic_ready,1);
     SERVE();check(polled==1&&!retained,100);
@@ -310,6 +325,25 @@ static void generation(unsigned g)
     check(!os_headset_capture(g,&wav,&bytes)&&notified==before+1,61);
     check(!os_headset_capture(g,&wav,&bytes)&&notified==before+1,62);
 }
+int sunstone_deadline_wait_until(uint64_t until)
+{
+    ++event_waits;
+    if(mode==19){
+        check(on_owner&&polled==event_waits,183);
+        if(event_waits==1){check(until==1127,184);event_time=until;return SUNSTONE_DEADLINE_EXPIRED;}
+        if(event_waits==2){check(until==2127,185);event_time=1200;return SUNSTONE_DEADLINE_NOTIFIED;}
+        check(event_waits==3&&until==2127&&os_headset_wake_record[1].wakes==2,186);
+    }else{
+        check(mode==18&&until==board.session.deadline_us&&!on_owner&&!polled,187);
+        if(event_waits==1){check(!head&&!word&&!atomic_load(&headset.requested),188);
+            event_time=1000127;generation(1);return SUNSTONE_DEADLINE_NOTIFIED;}
+        if(event_waits==2){check(word==BLUETOOTH_SEGMENT_START&&!head,189);activation(1);event_time+=17;return SUNSTONE_DEADLINE_NOTIFIED;}
+        check(event_waits==3&&head==1&&tail==1&&atomic_load(&headset.captured)==1&&
+            os_headset_wake_record[0].wakes==2&&!os_headset_wake_record[0].idle_timeouts,190);
+        converted(1,1);
+    }
+    os_check_result=1;__asm__ volatile("brk #0");for(;;){}
+}
 void os_check_run(unsigned selected)
 {
     mode=selected&0xff;radio_granted=selected>>8&1;
@@ -323,12 +357,19 @@ void os_check_run(unsigned selected)
         start_case();os_check_result=1;return;
     }
     /* Admission took the headset's memory (os_large_prepare). */
-    session.granted=OS_GRANT_HEADSET;check(os_headset_memory()==1&&memory,47);session.granted=0;
+    session.granted=OS_GRANT_HEADSET|(radio_granted?OS_GRANT_RADIO:0);
+    check(os_headset_memory()==1&&memory,47);
     if(mode==7){owner_case();os_check_result=1;return;}
     /* The started client's handle; os_headset_start runs in mode 0. */
     headset.client=(TaskHandle_t)&memory->client_task;
     headset.owner=radio_granted?(TaskHandle_t)&radio:(TaskHandle_t)&memory->owner_task;
     board.session.workload=mode==10?0:4;
+    if(mode>=18){
+        board.session.deadline_us=60000000;event_time=127;
+        if(mode==19){on_owner=1;atomic_store(&providers.shared.pmic_ready,1);owner(NULL);}
+        else{if(mode==20)event_time=board.session.deadline_us;os_headset_task(NULL);}
+        check(0,191);
+    }
     if(mode==11||mode==14){
         /* Only the original owner advances cleanup. The supervisor wakes
          * both tasks, while pending protocol/device work keeps the descriptor

@@ -68,6 +68,13 @@ int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service
     case DMA_SERVICE_SUBMIT:check(phase==DMA_SERVICE_READY,13);phase=DMA_SERVICE_RUNNING;break;
     case DMA_SERVICE_PERIOD_GET:{
         check(phase==DMA_SERVICE_RUNNING,14);
+#ifdef AUDIO_MODEL_REPLY_EVENT
+        if(mode==19||mode==20||mode==21){
+            AUDIO_MODEL_REPLY_EVENT();
+            if(mode==20&&sent==4)audio_event(audio,DMA_SERVICE_PROGRESS_EVENT);
+            if(!event_available||produced){out->result=DMA_SERVICE_BUSY;break;}
+        }
+#endif
         /* Mode 2: the stream stops by itself after two periods. */
         if(mode==2&&produced==2){out->result=DMA_SERVICE_BUSY;phase=DMA_SERVICE_RESULT;break;}
         unsigned n=produced++,frames=model_bytes/model_frame;
@@ -86,6 +93,7 @@ int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service
     case DMA_SERVICE_CLOSE:check(phase==DMA_SERVICE_READY,18);++closes;phase=DMA_SERVICE_CLOSING;break;
     default:out->result=DMA_SERVICE_INVALID;
     }
+    out->phase=phase;
     return 1;
 }
 int dma_service_copy_period(struct dma_service *s,unsigned job,uint64_t ticket,void *out,size_t bytes)

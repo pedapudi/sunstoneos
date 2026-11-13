@@ -158,18 +158,24 @@ for label,op in [('inactive',8),('retaining',6),('rearm-fault',7)]:
     m.call(op,1127000,1);step(m,1127000)
     assert m.state()[0]==before,label
     cases.append('no-cached-publication-'+label)
-# The owner sleeps between readings (at most 20 ms, to the next reading, the interrupt wakes it) and steps on the next tick
-# only while it has work that cannot wait: starting, retaining, a masked interrupt awaiting its rearm, or the CPU clock
-# driver working.
+# Absolute deadlines preserve sample, record and freshness phases. Only
+# no-interrupt progress paths retain the one-millisecond retry interval.
 m.call(0,1000000);step(m,1000000)
-assert m.call(12,1000000)==20 and m.call(12,1015000)==10 and m.call(12,1024500)==1 and m.call(12,1030000)==1
+assert m.call(12,1000000)==1025000 and m.call(12,1015000)==1025000 and m.call(12,1024500)==1025000
 for label,change in [('inactive',(8,1)),('retaining',(6,1)),('rearm-pending',(7,1)),('clock-busy',(13,1))]:
-    m.call(0,1000000);step(m,1000000);assert m.call(12,1000000)==20,label
-    m.call(*change[:1],1000000,change[1]);assert m.call(12,1000000)==1,label
-    cases.append('wakes-next-tick-'+label)
-m.call(0,1000000);step(m,1000000);m.call(13,1000000,1);m.call(13,1000000,0);assert m.call(12,1000000)==20
+    m.call(0,1000000);step(m,1000000);assert m.call(12,1000000)==1025000,label
+    m.call(*change[:1],1000000,change[1]);assert m.call(12,1000000)==1001000,label
+    cases.append('precise-retry-'+label)
+m.call(0,1000000);step(m,1000000);m.call(13,1000000,1);m.call(13,1000000,0);assert m.call(12,1000000)==1025000
 cases.append('idle-sleep-to-next-reading')
-# The owner steps only when idle_ticks wakes it. The first usable row comes from an interrupt-notified read, off the 25 ms
+# A GIC without completion notification gets the elapsed propagation budget.
+# Device notifications must not turn that budget into a count of attempts.
+m.call(0,1000000);step(m,1000000);m.call(14,1000000)
+for offset in range(150):assert step(m,1000000+offset)==1
+assert m.call(12,1099500)==1100000
+assert step(m,1099999)==1 and step(m,1100000)==0xffffffff
+cases.append('gic-rearm-deadline-survives-frequent-notifications')
+# The owner steps only at its absolute deadline. The first usable row comes from an interrupt-notified read, off the 25 ms
 # read grid, and starts the 125 ms record phase there: each later record slot must wake the owner (board run
 # 1793934571637827194-6be652e2 recorded every slot after the first 19.9 ms late, on the next periodic read).
 m.call(0,1000000);m.call(9,1000000,0);step(m,1000000)
@@ -178,7 +184,7 @@ assert m.state()[0]==1 and m.state()[10]==1010000
 m.call(2,1010001)
 t=1010000
 while t<1600000:
-    t+=1000*m.call(12,t);step(m,t)
+    t=m.call(12,t);step(m,t)
 r=finish(m,t+10)
 assert r['rows']>=5 and report.classify(r)=='complete',[x['time_us'] for x in r['readings']]
 cases.append('idle-sleep-wakes-for-each-record-slot')

@@ -192,6 +192,10 @@ int os_cpu_clock_busy(void)
 }
 /* EL0-safe: the recognizer waits for this before each timed run. */
 int os_cpu_clock_ready(void){return !os_granted(OS_GRANT_CPU_CLOCK)||(int)atomic_load_explicit(&owner.ready,memory_order_acquire);}
+static void publish_ready(void)
+{
+    if(!atomic_exchange_explicit(&owner.ready,1,memory_order_release))os_application_wake_main();
+}
 static uint64_t later(uint64_t us)
 {uint64_t now;return a733_counter_clock_now(&providers.shared.counter,&now)?now+us:0;}
 /* Each refusal records its line, phase, cluster and full status word before
@@ -269,8 +273,7 @@ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
     if(owner.phase==FOLLOW) {
         int ready=os_perf_step(c,policy,(int)r);
         if(ready<0)return REFUSED(0);
-        if(ready && !atomic_load_explicit(&owner.ready,memory_order_relaxed))
-            atomic_store_explicit(&owner.ready,1,memory_order_release);
+        if(ready)publish_ready();
     }
     if(r==A733_CPU_CLOCK_RETAINED||r==A733_CPU_CLOCK_INVALID)return REFUSED(r);
     if(r==A733_CPU_CLOCK_PENDING)return 1;
@@ -322,7 +325,7 @@ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
             if(q==A733_CPU_CLOCK_PENDING)return 1;
             if(q==A733_CPU_CLOCK_RETAINED||q==A733_CPU_CLOCK_INVALID)return REFUSED(q);
         }
-        owner.phase=FOLLOW;atomic_store_explicit(&owner.ready,1,memory_order_release);
+        owner.phase=FOLLOW;publish_ready();
         sunstone_crumb(SUNSTONE_CRUMB_CLOCK_READY,0);
     }
     return 1;

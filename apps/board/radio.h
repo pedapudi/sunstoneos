@@ -5,6 +5,9 @@
 #include "a733_radio_platform_native.h"
 #include "a733_radio_result.h"
 #include "a733_radio_session.h"
+#ifdef SUNSTONE_A733_RADIO_IRQ
+#include "a733_radio_events.h"
+#endif
 #include "identity.h"
 struct board_radio_config {
     struct a733_native_usb *shared;
@@ -49,6 +52,12 @@ struct board_radio {
     struct a733_radio_platform_native native;
     struct a733_radio_platform platform;
     struct a733_radio_session session;
+#ifdef SUNSTONE_A733_RADIO_IRQ
+    struct a733_radio_events events;
+    uint64_t event_until,event_caller_limit,event_caller_due;
+    unsigned client_registered,client_retry;
+    unsigned event_ready,event_before_stage;
+#endif
     struct a733_radio_entropy entropy;
     struct a733_ce_entropy ce_source;
     atomic_uint failed,network_started;
@@ -87,6 +96,12 @@ struct board_radio {
     unsigned recovering;
     uint64_t loss_deadline,recoveries;
 };
+/* The native event image replaces the radio owner's final tick wait with
+ * this call. The reference composition returns 0 and keeps its old policy.
+ * A negative result is a retained event-source failure. */
+int board_radio_owner_wait(struct board_radio *,uint64_t caller_limit);
+int board_radio_client_wait(struct board_radio *);
+void board_radio_irq(struct board_radio *);
 /* Pointer-free immutable boot profile, authenticated by the board session.
  * Evidence describes actual external qualification; no field qualifies CE.
  * Firmware addresses name retained read-only image spans, not upload commands. */

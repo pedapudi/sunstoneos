@@ -14,6 +14,12 @@ extern void os_ce_entropy_wipe(void) __attribute__((weak));
 extern int os_radio_quiesce_fault(uint32_t,const void *) __attribute__((weak));
 extern int ss_wifi_credential(const uint8_t **,size_t *,const uint8_t **,const uint8_t **,size_t *) __attribute__((weak));
 enum { STARTING,CONNECTING,SECURING,ONLINE,SCANNING,SCANNED,SHUTTING_DOWN,DOWN };
+#ifdef SUNSTONE_A733_RADIO_IRQ
+#include "sunstone_deadline.h"
+static int event_bind(void *,TaskHandle_t);
+static uint64_t event_deadline(void *);
+static int event_work(void *);
+#endif
 /* Elapsed time before an owner stops repeating advancing session steps. At
  * 25 MHz four-bit SDIO this covers the largest 4,096-byte receive. */
 #define BOARD_RADIO_POLL_BUDGET_US 500u
@@ -77,7 +83,135 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
         ((!p->enumeration_only||p->four_bit)&&!a733_radio_platform_four_bit(&r->platform))||
         (p->first_run_guard&&!a733_radio_platform_first_run_guard(&r->platform))||
         !a733_radio_session_init(&r->session,&r->platform,&p->session))return 0;
+#ifdef SUNSTONE_A733_RADIO_IRQ
+    if(!a733_radio_events_init(&r->events,&r->platform,p->session.owner_task))return 0;
+    p->network.events=(struct sunstone_net_event_source){event_bind,event_deadline,event_work,r};
+#endif
     r->constructed=1;atomic_store_explicit(&r->failed,0,memory_order_release);return 1;
+}
+#ifdef SUNSTONE_A733_RADIO_IRQ
+/* The OS supplies the supervision certificate; the non-OS board composition
+ * has its own watchdog policy and may omit this hook. */
+extern int os_radio_owner_blocked_until(uint64_t) __attribute__((weak));
+extern int os_radio_client_blocked_until(uint64_t) __attribute__((weak));
+static uint64_t event_min(uint64_t a,uint64_t b){return b&&(!a||b<a)?b:a;}
+static int event_bind(void *cookie,TaskHandle_t owner)
+{
+    struct board_radio *r=cookie;
+    return owner==r->events.owner&&a733_radio_events_begin(&r->events);
+}
+static uint64_t event_deadline(void *cookie)
+{return ((struct board_radio *)cookie)->event_until;}
+static int event_work(void *cookie)
+{
+    struct board_radio *r=cookie;
+    if(!r||!r->constructed||!a733_radio_events_begin(&r->events))return -1;
+    uint64_t now=sunstone_deadline_now_us(),until=r->platform.config.lifetime_deadline_us;
+    struct a733_radio_platform *p=&r->platform;
+    if(now>=until)return -1;
+    unsigned stopping=p->stop_requested||p->aborting||r->stage==SHUTTING_DOWN||
+        atomic_load_explicit(&r->failed,memory_order_acquire);
+    unsigned software=r->event_ready;r->event_ready=0;
+    if(software&&!stopping)return 1;
+    if(r->event_caller_limit&&r->event_caller_limit<=now){
+        if(r->event_caller_due==r->event_caller_limit)return -1;
+        r->event_caller_due=r->event_caller_limit;return 1;
+    }
+    r->event_caller_due=0;until=event_min(until,r->event_caller_limit);
+    if(p->stop_requested)until=event_min(until,p->stop_deadline);
+    else if(!stopping&&r->stage!=ONLINE&&r->stage!=SCANNED&&r->stage!=DOWN)until=event_min(until,r->config.startup_deadline_us);
+    if(stopping&&r->stage!=DOWN&&!a733_radio_platform_clean(p))until=event_min(until,p->deadline);
+    /* The publisher always knows this immutable owner handle. Registering
+     * before this acquire check preserves readiness published before sleep. */
+    if(!atomic_load_explicit(&r->config.shared->pmic_ready,memory_order_acquire)||
+       (atomic_load_explicit(&r->failed,memory_order_acquire)&&a733_radio_platform_clean(p))||r->stage==DOWN){
+        r->event_until=until;
+        if(os_radio_owner_blocked_until&&!os_radio_owner_blocked_until(until))return -1;
+        return 0;
+    }
+    if(!stopping){
+        until=event_min(until,r->session.deadline);
+        if(r->session.deadline>r->session.config.renew_margin_us&&
+           r->session.deadline-r->session.config.renew_margin_us>now)
+            until=event_min(until,r->session.deadline-r->session.config.renew_margin_us);
+        if(r->session.transport.initialized){
+            if(aic8800_transport_event_work(&r->session.transport,now))return 1;
+            until=event_min(until,aic8800_transport_event_deadline(&r->session.transport,now));
+        }
+        if(p->card.state==SDIO_CARD_ENUMERATING&&p->card.retry_at>now)
+            until=event_min(until,p->card.retry_at);
+    }
+    if(until<=now)return stopping?-1:1; /* A live timer may mature after the last pass. */
+    if(p->host.state==SUNXI_SDIO_UNPREPARED||p->host.state==SUNXI_SDIO_QUIESCED||p->aborting||
+       (stopping&&p->host.state==SUNXI_SDIO_READY&&p->stage!=RSTAGE_READY)){
+        uint64_t cadence=50; /* Existing non-IRQ metadata/PMIC result observation. */
+        if(p->stage==RSTAGE_SUPPLY_WAIT)cadence=p->wait_since+10001>now?p->wait_since+10001-now:1;
+        else if(p->stage==RSTAGE_MODULE_SETTLE)cadence=p->wait_since+50001>now?p->wait_since+50001-now:1;
+        else if(p->stage==RSTAGE_RESET_WAIT)cadence=p->wait_since+10>now?p->wait_since+10-now:1;
+        if(now>UINT64_MAX-cadence)return -1;
+        until=event_min(until,now+cadence);
+        r->event_until=until;
+        if(os_radio_owner_blocked_until&&!os_radio_owner_blocked_until(until))return -1;
+        return 0;
+    }
+    if(p->host.state==SUNXI_SDIO_READY&&p->stage!=RSTAGE_READY&&
+       !(p->card.state==SDIO_CARD_ENUMERATING&&p->card.retry_at>now))return 1;
+    int ready=a733_radio_events_prepare(&r->events,&until);
+    if(ready)return ready;
+    r->event_until=until;
+    if(os_radio_owner_blocked_until&&!os_radio_owner_blocked_until(until))return -1;
+    return 0;
+}
+#endif
+int board_radio_owner_wait(struct board_radio *r,uint64_t caller_limit)
+{
+#ifdef SUNSTONE_A733_RADIO_IRQ
+    if(!r||!r->constructed)return -1;
+    r->event_caller_limit=caller_limit;
+    if(r->stage==ONLINE&&!atomic_load_explicit(&r->failed,memory_order_acquire)&&!r->platform.aborting&&
+       r->session.sockets.initialized&&r->session.sockets.event_bound&&!r->platform.stop_requested)
+        return sunstone_net_wait_owned(&r->session.sockets)?1:-1;
+    int work=event_work(r);
+    if(work)return work;
+    int result=sunstone_deadline_wait_until(r->event_until);
+    if(result==SUNSTONE_DEADLINE_ERROR)return -1;
+    ++r->events.wakes;if(result==SUNSTONE_DEADLINE_EXPIRED)++r->events.deadline_wakes;
+    return 1;
+#else
+    (void)r;(void)caller_limit;return 0;
+#endif
+}
+int board_radio_client_wait(struct board_radio *r)
+{
+#ifdef SUNSTONE_A733_RADIO_IRQ
+    if(!r||!r->constructed||xTaskGetCurrentTaskHandle()!=r->config.network.clients[0])return -1;
+    if(!r->client_registered){if(!sunstone_deadline_register())return -1;r->client_registered=1;}
+    uint64_t until=r->platform.config.lifetime_deadline_us;
+    if(!r->config.scan_only){
+        if(!r->startup_profile)return -1;
+        unsigned status=atomic_load_explicit(&r->client_status,memory_order_acquire);
+        if(status!=1)until=r->startup_profile->client_deadline_us;
+        if(atomic_load_explicit(&r->failed,memory_order_acquire))return -1;
+        if(r->client_pending&&r->session.sockets.initialized&&
+           uxQueueMessagesWaiting(r->session.sockets.clients[0].reply_queue))return 1;
+        if(!r->client_pending&&!r->client_retry&&!status&&
+           atomic_load_explicit(&r->network_started,memory_order_acquire))return 1;
+    }
+    if(sunstone_deadline_now_us()>=until)return -1;
+    if(os_radio_client_blocked_until&&!os_radio_client_blocked_until(until))return -1;
+    if(sunstone_deadline_wait_until(until)==SUNSTONE_DEADLINE_ERROR)return -1;
+    r->client_retry=0;return 1;
+#else
+    (void)r;return 0;
+#endif
+}
+void board_radio_irq(struct board_radio *r)
+{
+#ifdef SUNSTONE_A733_RADIO_IRQ
+    if(r)a733_radio_events_irq(&r->events);
+#else
+    (void)r;
+#endif
 }
 static void assoc_update(struct board_radio *r);
 static void wipe_pmk(struct board_radio *r);
@@ -89,7 +223,12 @@ static enum board_radio_result retain(struct board_radio *r)
     uint64_t now=0;
     int have=a733_counter_clock_now(&r->config.shared->counter,&now);
     if(!r->failing){r->failing=1;r->failing_since=now;}
-    atomic_store_explicit(&r->failed,1,memory_order_release);
+    unsigned was_failed=atomic_exchange_explicit(&r->failed,1,memory_order_acq_rel);
+#ifdef SUNSTONE_A733_RADIO_IRQ
+    if(!was_failed&&r->config.network.clients[0])xTaskNotifyGive(r->config.network.clients[0]);
+#else
+    (void)was_failed;
+#endif
     /* The first retain starts the failure shutdown when the module is powered; a later one never cuts it short. */
     if(!r->wiped)(void)a733_radio_session_retain(&r->session);
     unsigned waiting=r->platform.aborting&&!r->platform.abort_done&&!r->platform.fault&&have&&
@@ -126,10 +265,16 @@ enum board_radio_result board_radio_external_failure(struct board_radio *r)
 {
     if(!r||r->self!=r||!r->constructed||
         xTaskGetCurrentTaskHandle()!=r->config.session.owner_task)return BOARD_RADIO_INVALID;
+#ifdef SUNSTONE_A733_RADIO_IRQ
+    if(!a733_radio_events_begin(&r->events))return retain(r);
+#endif
     return retain(r);
 }
 static enum board_radio_result publish(struct board_radio *r,enum board_radio_result result)
 {
+#ifdef SUNSTONE_A733_RADIO_IRQ
+    if(r->stage!=r->event_before_stage)r->event_ready=1;
+#endif
     uint64_t watch=r->stage==ONLINE?r->platform.config.lifetime_deadline_us:r->config.startup_deadline_us;
     if(r->stage==ONLINE&&r->startup_profile&&r->startup_profile->client_deadline_us<watch)
         watch=r->startup_profile->client_deadline_us;
@@ -328,6 +473,10 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
 {
     if(!r||r->self!=r||!r->constructed||
         xTaskGetCurrentTaskHandle()!=r->config.session.owner_task)return BOARD_RADIO_INVALID;
+#ifdef SUNSTONE_A733_RADIO_IRQ
+    if(!a733_radio_events_begin(&r->events))return retain(r);
+    r->event_ready=0;r->event_before_stage=r->stage;
+#endif
     if(atomic_load_explicit(&r->failed,memory_order_acquire)||
         (atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4))return retain(r);
     enum a733_radio_entropy_result entropy=A733_RADIO_ENTROPY_PENDING;
@@ -374,7 +523,12 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
         if((result!=A733_SESSION_PENDING&&result!=A733_SESSION_MANAGEMENT&&result!=A733_SESSION_NETWORK)||
             !advanced(r,&before))break;
         if(!a733_counter_clock_now(&r->config.shared->counter,&now))return retain(r);
-        if(now-start>=BOARD_RADIO_POLL_BUDGET_US)break;
+        if(now-start>=BOARD_RADIO_POLL_BUDGET_US){
+#ifdef SUNSTONE_A733_RADIO_IRQ
+            r->event_ready=1;
+#endif
+            break;
+        }
     }
     if(result==A733_SESSION_RETAINED||result==A733_SESSION_INVALID)return retain(r);
     if(result==A733_SESSION_BUSY)return publish(r,BOARD_RADIO_PENDING);
@@ -465,6 +619,9 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
             r->session.supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED&&
             a733_radio_session_start_network(&r->session,&r->config.network)){
             r->stage=ONLINE;atomic_store_explicit(&r->network_started,1,memory_order_release);
+#ifdef SUNSTONE_A733_RADIO_IRQ
+            if(r->config.network.clients[0])xTaskNotifyGive(r->config.network.clients[0]);
+#endif
         }
     }
     return r->session.fault?retain(r):publish(r,BOARD_RADIO_PENDING);
@@ -609,6 +766,7 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
          * until the supply route is confirmed on the board. */
         p->used=1;p->shared=shared;p->profile=f;
         struct board_radio_config sc={.shared=shared,.platform=f->platform,.chip_id=id,.recovery_state=recovery_state,
+            .network={.bootstrap=owner,.clients={client}},
             .admit=radio_authorize,.admission_context=p,.startup_deadline_us=f->startup_deadline_us,
             .scan_only=1,.first_run_guard=1,.scan_timeout_us=f->association_timeout_us,
             .associate=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_ASSOCIATE,
@@ -682,7 +840,11 @@ static unsigned exchange_timeout(const struct board_radio *r,const struct sunsto
 static int client_failure(struct board_radio *r)
 {atomic_fetch_or_explicit(r->config.recovery_state,4,memory_order_acq_rel);
  atomic_store_explicit(&r->client_status,2,memory_order_release);
- atomic_store_explicit(&r->failed,1,memory_order_release);return -1;}
+ atomic_store_explicit(&r->failed,1,memory_order_release);
+#ifdef SUNSTONE_A733_RADIO_IRQ
+ xTaskNotifyGive(r->events.owner);
+#endif
+ return -1;}
 int board_radio_client_result(const struct board_radio *r,unsigned *verified)
 {
     if(!r||r->self!=r||!r->constructed||!verified||!a733_ranges_disjoint(r,sizeof(*r),verified,sizeof(*verified)))return -1;
@@ -742,7 +904,11 @@ static int listener_poll(struct board_radio *r)
     else if(r->client_stage==4){request.operation=SUNSTONE_NET_RECEIVE;request.handle=r->client_handle;
         request.bytes=(uint16_t)(f->response_bytes-r->client_received);}
     else{request.operation=SUNSTONE_NET_CLOSE;request.handle=r->client_stage==5?r->client_handle:r->listener_handle;}
-    uint64_t ticket;if(board_radio_submit(r,&request,&ticket)){r->client_ticket=ticket;r->client_pending=1;}
+    uint64_t ticket;int submitted=board_radio_submit(r,&request,&ticket);
+#ifdef SUNSTONE_A733_RADIO_IRQ
+    r->client_retry=!submitted;
+#endif
+    if(submitted){r->client_ticket=ticket;r->client_pending=1;}
     return 0;
 }
 int board_radio_client_poll(struct board_radio *r)
@@ -794,6 +960,10 @@ int board_radio_client_poll(struct board_radio *r)
     /* Queue copies must lie outside the entire radio graph; the local copy
      * expires immediately after submit, while service owns its copied bytes. */
     struct sunstone_net_request copy=*request;uint64_t ticket;
-    if(board_radio_submit(r,&copy,&ticket)){r->client_ticket=ticket;r->client_pending=1;}
+    int submitted=board_radio_submit(r,&copy,&ticket);
+#ifdef SUNSTONE_A733_RADIO_IRQ
+    r->client_retry=!submitted;
+#endif
+    if(submitted){r->client_ticket=ticket;r->client_pending=1;}
     return 0;
 }
