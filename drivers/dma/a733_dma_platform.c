@@ -197,6 +197,11 @@ enum a733_dma_platform_result a733_dma_platform_poll(struct a733_dma_platform *p
 }
 int a733_dma_platform_ready(const struct a733_dma_platform *p)
 {return p && p->initialized && !p->failed && p->stage==COMPLETE;}
+uint64_t a733_dma_platform_sample_at(const struct a733_dma_platform *p)
+{
+    return p&&p->initialized&&!p->failed&&p->stage==RESET_WAIT&&p->reset_since<=UINT64_MAX-21?
+        p->reset_since+21:0;
+}
 
 /* The final enabled state is the same for cold startup and adoption. This
  * verifier never enters baseline/controller: those startup helpers can write. */

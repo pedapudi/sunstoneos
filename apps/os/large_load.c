@@ -157,7 +157,8 @@ static void loader(void *unused)
         load(i, d, mounted);
     }
     if (needing) os_large_device_close();
-    vTaskDelete(NULL);
+    /* A card wait can register this handle with the deadline facility. */
+    vTaskSuspend(NULL);
 }
 
 /* The loader runs at EL1: it writes regions that the application sees read-only and drives the device. */

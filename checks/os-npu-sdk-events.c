@@ -16,6 +16,9 @@ static jmp_buf ended;
 const struct os_session *os_session(void){return &session;}
 int os_npu_progress(void){++progresses;return 1;}
 int os_npu_open(void){return 1;}
+int board_service_deadline_register(unsigned service){assert(service==OS_SERVICE_NPU);return 1;}
+int os_npu_wait(void){(void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);return 1;}
+void os_npu_publish_wakes(void){}
 int os_npu_stopping(void){return 0;}
 unsigned os_npu_stopped(void){return closed;}
 int os_npu_load(unsigned model){assert(!model);++loads;ready=1;return 1;}

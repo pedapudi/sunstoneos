@@ -78,3 +78,8 @@ int os_cpu_return_entry_guard(const struct a733_cpu_clock *c, const struct a733_
 struct board_radio;
 int board_radio_shutdown(struct board_radio *radio,uint64_t deadline)
 { (void)radio;(void)deadline;return 0; }
+
+/* The virtual board has no SD controller. An application that declares a
+ * read-only card region links the card interrupt route
+ * (tools/sunstone-manifest.py); no interrupt reaches this entry. */
+void os_sd_irq(void) { ABSENT("sd interrupt"); }

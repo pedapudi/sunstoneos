@@ -34,6 +34,7 @@ static struct { atomic_uint state; uint64_t sequence; const void *data; size_t b
 static struct {atomic_uint state;uint64_t sequence;struct ss_usb_serial_line line;int result;} config;
 static uint64_t last_config;
 static atomic_uint connected,disconnected,retiring;
+static atomic_uint retirement_published;
 static atomic_uint input_epoch[2];
 static unsigned *event_epoch;
 static uint64_t serial_token,camera_token,last_tx;
@@ -280,4 +281,6 @@ void os_usb_service_dispatch(void)
            ops.write(context,tx.sequence,tx.data,tx.bytes)!=1)
             os_usb_service_write_complete(tx.sequence,-1,0);
     }
+    /* Lease release completes before the application observes retirement. */
+    if(os_usb_service_idle()&&!atomic_exchange_explicit(&retirement_published,1,memory_order_acq_rel))changed();
 }

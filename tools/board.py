@@ -41,7 +41,7 @@ DRAM_UNRESOLVED = 'DRAM ownership remains unresolved.'
 # runner has read the region back as zero. It holds the port, the region's address and size and the evidence path, never a
 # credential byte. A later run on the port zeroes the region first, and a credential run is refused if it cannot.
 CREDENTIAL_RESIDUE = Path('~/.cache/sunstoneos/board-queue/credential-residue').expanduser()
-OUTCOMES = ('returned', 'failure-return', 'watchdog-reset', 'no-return', 'refused-before-launch', 'host-error')
+OUTCOMES = ('returned', 'failure-return', 'watchdog-reset', 'no-return', 'refused-before-launch', 'upload-fault', 'host-error')
 crumbs = images.load('board_crumbs', ROOT/'tools/a733-crumbs.py')
 import board_state as state
 import board_usb_power as usb_power
@@ -120,6 +120,28 @@ class Mismatch(ValueError):
 
 class UnresolvedReturn(ValueError):
     pass
+
+
+UploadFault = images.UploadFault
+# One digest helper call lasts about this long: a fifth of sunxi-fel's 10 s USB transfer timeout (USB_TIMEOUT in
+# fel_lib.c), which bounds the request that waits for the helper to finish, and well inside the 16 s WDT0 interval of
+# mode 0xb1 that supervises it.
+DIGEST_CALL_SECONDS = 2.0
+
+
+def upload_fault(method, address, data, source, observed, offset=0):
+    """The UploadFault for a range whose on-board bytes differ from DATA, with what the result records about it."""
+    detail = {'site': 'upload-' + method, 'address': hex(address), 'bytes': len(data), 'source': str(source),
+              'source_offset': offset, 'expected_sha256': hashlib.sha256(data).hexdigest()}
+    if method == 'digest':
+        detail['observed_sha256'] = observed.hex()
+        text = 'Upload digest differs for %d bytes at %#x (%s from offset %d); execution refused.'
+    else:
+        detail['observed_bytes'] = len(observed)
+        detail['first_difference'] = next((i for i, (a, b) in enumerate(zip(data, observed)) if a != b),
+                                          min(len(data), len(observed)))
+        text = 'Upload readback differs for %d bytes at %#x (%s from offset %d); execution refused.'
+    return UploadFault(text % (len(data), address, Path(source).name, offset), detail)
 
 
 def heading_anchors(text):
@@ -351,21 +373,96 @@ class Live:
             os.fsync(stream.fileno())
         return data
 
-    def upload(self, address, source, *, expected_sha256=None):
+    def upload(self, address, source, *, expected_sha256=None, readback=True):
+        """Write SOURCE at ADDRESS. With readback, read the range back in the same transaction and compare; without it,
+        return the bytes written so that the digest helper verifies them (verify_digests)."""
         data = Path(source).read_bytes()
         require(expected_sha256 is None or hashlib.sha256(data).hexdigest() == expected_sha256,
                 'Saved DRAM changed before sealed restoration upload.')
         self.sequence += 1
         # A sealed source prevents a concurrent build changing upload bytes.
         base = images.load('board_sealed', ROOT/'tools/check-a733-smp.py')
+        if not readback:
+            with base.sealed_source(data) as (sealed, fd):
+                self.tx('write', hex(address), sealed, timeout=max(30, len(data)/100000+10), pass_fds=(fd,))
+            return data
         path = self.evidence/f'readback-{self.sequence}.bin'
         with base.sealed_source(data) as (sealed, fd):
             self.tx('write', hex(address), sealed, 'read', hex(address), len(data), path,
                     timeout=max(30, len(data)*2/100000+10), pass_fds=(fd,))
-        if path.read_bytes() != data:
-            raise Mismatch(f'Upload readback differs at {address:#x}; execution refused.')
+        returned = path.read_bytes()
+        if returned != data:
+            raise upload_fault('readback', address, data, source, observed=returned)
         with path.open('rb') as stream:
             os.fsync(stream.fileno())
+        return data
+
+    def verify_digests(self, pending):
+        """Verify uploads written without readback by the on-board SHA-256 helper; PENDING is [(address, data, source)].
+
+        The helper runs in the launcher's SRAM reservation under WDT0, one call per batch of ranges. A call lasts about
+        DIGEST_CALL_SECONDS: the first batch assumes the readback rate (memory_layout fel_bytes_per_second) and later
+        batches use the rate the previous call measured. A board without the SHA-256 instructions, or a first call no faster
+        than reading the bytes back, verifies the remaining ranges by reading them back instead. A digest that differs
+        raises UploadFault."""
+        record = self.record.setdefault('upload_verify', {'mode': 'digest', 'batches': []})
+        helper = images.build_upload_digest(self.evidence/'upload-digest')
+        record['helper_sha256'] = images.sha(helper)
+        self.upload(images.LAUNCHER_SRAM[0], helper)
+        rate = images.memory_layout.record()['fel_bytes_per_second']
+        work = [(address, data, source, 0) for address, data, source in pending]
+        while work:
+            budget = max(4096, int(rate * DIGEST_CALL_SECONDS) // 4096 * 4096)
+            batch, used = [], 0
+            while work and len(batch) < images.DIGEST_MAX_RANGES:
+                address, data, source, offset = work[0]
+                remaining = len(data) - offset
+                # A split keeps every range address a multiple of 4, which the helper's loads need.
+                count = remaining if remaining <= budget - used else (budget - used) // 64 * 64
+                if not count:
+                    break
+                work.pop(0)
+                batch.append((address + offset, data[offset:offset + count], source, offset))
+                used += count
+                if count < remaining:
+                    work.insert(0, (address, data, source, offset + count))
+            request = images.digest_request([(a, len(d)) for a, d, _, _ in batch])
+            self.sequence += 1
+            request_path = images.write(self.evidence/f'digest-request-{self.sequence}.bin', request)
+            reply_path = self.evidence/f'digest-reply-{self.sequence}.bin'
+            parameters = images.LAUNCHER_SRAM[0] + images.DIGEST_PARAMS
+            self.arm(0xb1, clear=False)
+            started = self.now()
+            self.tx('write', hex(parameters), request_path, 'exe', hex(images.LAUNCHER_SRAM[0]),
+                    'read', hex(parameters), len(request), reply_path, timeout=30)
+            seconds = self.now() - started
+            self.disarm()
+            status, isar5, digests = images.digest_reply(request, reply_path.read_bytes())
+            record.update(isar5=isar5)
+            record['batches'].append({'ranges': len(batch), 'bytes': used, 'seconds': round(seconds, 6),
+                                      'status': hex(status)})
+            self.journal()
+            if status != images.DIGEST_DONE:
+                require(status == 0xe0000002, 'Digest helper refused its request: %s.' % images.DIGEST_STATUS.get(status, hex(status)))
+                record['fallback'] = images.DIGEST_STATUS[status]
+                return self.read_back(batch + [(a + o, d[o:], s, o) for a, d, s, o in work])
+            for (address, data, source, offset), observed in zip(batch, digests):
+                if hashlib.sha256(data).digest() != observed:
+                    raise upload_fault('digest', address, data, source, observed=observed, offset=offset)
+            rate = used / max(seconds, 1e-3)
+            if len(record['batches']) == 1 and rate <= images.memory_layout.record()['fel_bytes_per_second'] and work:
+                record['fallback'] = 'the first call hashed %.0f bytes/s, no faster than reading back' % rate
+                return self.read_back([(a + o, d[o:], s, o) for a, d, s, o in work])
+        self.usb_source_off('upload-digest')
+
+    def read_back(self, ranges):
+        """Read written ranges back and compare: the digest path's fallback."""
+        for address, data, source, offset in ranges:
+            self.sequence += 1
+            returned = self.read(address, len(data), self.evidence/f'readback-{self.sequence}.bin')
+            if returned != data:
+                raise upload_fault('readback', address, data, source, observed=returned, offset=offset)
+        self.usb_source_off('upload-digest')
 
     def upload_credential(self, address, data):
         """Write the credential record and verify it by readback without any file: the source and the readback are
@@ -381,7 +478,9 @@ class Live:
         finally:
             os.close(readback)
         if returned != bytes(data):
-            raise Mismatch('Wi-Fi credential readback differs; execution refused.')
+            # No byte, digest or difference offset of the record leaves this process.
+            raise UploadFault('Wi-Fi credential readback differs; execution refused.',
+                              {'site': 'upload-readback', 'address': hex(address), 'bytes': len(data), 'source': 'wifi-credential'})
 
     def residue_marker(self):
         return (getattr(self.args, 'credential_residue', None) or CREDENTIAL_RESIDUE)/f'{self.args.port}.json'
@@ -974,8 +1073,26 @@ class Live:
                 plan.update(dram_backup=backup, dram_backup_sha256=images.sha(backup))
                 self.record['dram_backup_sha256'] = plan['dram_backup_sha256']
                 self.journal()
-        for address, source in plan['uploads']:
-            self.upload(address, source)
+        verification = images.upload_verification(plan, getattr(self.args, 'verify', 'readback'))
+        self.record['upload_verify'] = {'mode': verification['mode'], 'reason': verification['reason'],
+                                        'digest_bytes': sum(Path(s).stat().st_size for _, s in verification['digest']),
+                                        'batches': []}
+        if verification['mode'] == 'digest':
+            # DRAM uploads are written once and verified on the board; the launcher SRAM is written after the helper ran.
+            later, pending = [], []
+            for address, source in plan['uploads']:
+                if (address, source) in verification['digest']:
+                    pending.append((address, self.upload(address, source, readback=False), source))
+                elif images.LAUNCHER_SRAM[0] <= address < images.LAUNCHER_SRAM[1]:
+                    later.append((address, source))
+                else:
+                    self.upload(address, source)
+            self.verify_digests(pending)
+            for address, source in later:
+                self.upload(address, source)
+        else:
+            for address, source in plan['uploads']:
+                self.upload(address, source)
         self.deliver_credential(plan)
         if plan.get('format') == 'npu':
             self.sanity()
@@ -1326,6 +1443,11 @@ def run_image(args, backend=Live):
     except usb_power.PowerFault as error:
         result['outcome'] = 'host-error' if result.get('launch_attempted') else 'refused-before-launch'
         result['first_failure'] = result.get('usb_vbus_fault', {'site': stage, 'detail': str(error)})
+    except UploadFault as error:
+        # Before launch an upload that differs on the board is a transport fault: no image ran, and an unchanged
+        # resubmission may pass. After launch (a restoration write) it stays a host error.
+        result['outcome'] = 'host-error' if result.get('launch_attempted') else 'upload-fault'
+        result['first_failure'] = dict(error.detail, stage=stage, detail=str(error))
     except (ValueError, DramFailure) as error:
         result['outcome'] = 'host-error' if result.get('launch_attempted') else 'refused-before-launch'
         result['first_failure'] = {'site': stage, 'detail': str(error)}
@@ -1461,6 +1583,13 @@ def check_image(args):
     report = {'admitted': True, 'physical_access': False, 'image_sha256': images.sha(args.image),
               'watchdog': plan['watchdog'],
               'uploads': [{'address': a, 'file': str(p), 'sha256': images.sha(p)} for a, p in plan['uploads']]}
+    verification = images.upload_verification(plan, getattr(args, 'verify', 'readback'))
+    report['upload_verify'] = {'mode': verification['mode'], 'reason': verification['reason'],
+                               'digest': [hex(a) for a, _ in verification['digest']],
+                               'digest_bytes': sum(Path(p).stat().st_size for _, p in verification['digest']),
+                               'readback_bytes': sum(Path(p).stat().st_size for _, p in verification['readback'])}
+    if verification['mode'] == 'digest':
+        report['upload_verify']['helper_sha256'] = images.sha(images.build_upload_digest(evidence/'upload-digest'))
     report.update({k: plan[k] for k in ('epoch', 'generation', 'lease', 'lifetime', 'marker', 'profile', 'host_admission') if k in plan})
     report['preflight'] = check_preflight(args, info, plan)
     save(evidence/'admission.json', report)
@@ -2097,7 +2226,7 @@ class Queue:
 # The caller-controlled launch options a submission freezes in its queue entry.
 # Frozen options whose False differs from leaving them out: --no-restore-rails opts out of the automatic restoration.
 NEGATABLE_OPTIONS = ('restore_rails',)
-FROZEN_OPTIONS = ('kind','lifetime','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool','radio_stage_limit','marker_clear_test','boot_once_slot')
+FROZEN_OPTIONS = ('kind','lifetime','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool','radio_stage_limit','marker_clear_test','verify','boot_once_slot')
 
 
 def radio_stage_limit(text):
@@ -2145,6 +2274,10 @@ def run_options(parser, submit=False):
                         'state for a run that measures it.')
     parser.add_argument('--preserve-dram', action='store_true',
                         help='Qualification run: save the image DRAM before launch and restore it after retirement. Development runs skip both.')
+    parser.add_argument('--verify', choices=images.VERIFY_MODES, default='readback',
+                        help='How the runner verifies uploads before launch: readback (default) reads every uploaded byte '
+                        'back; digest writes each DRAM upload once and compares SHA-256 digests the board computes '
+                        '(docs/board-runner.md, "Verify uploads by digest").')
     parser.add_argument('--preserve-budget-s', type=float,
                         help='Longest estimated backup and restore time, in seconds, that a --preserve-dram run accepts; the plan is refused above it.')
     parser.add_argument('--decoder', type=Path, help='Application payload decoder; its decoded result is recorded in the result.')

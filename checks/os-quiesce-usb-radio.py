@@ -14,7 +14,7 @@ PRELUDE = r'''
 #include "quiesce.h"
 #include <assert.h>
 #include <stdlib.h>
-static unsigned returning=1, failing=1, registered, notifications, fatal, closing;
+static unsigned returning=1, failing=1, registered, notifications, fatal, closing, application_wakes;
 static uint64_t published_deadline;
 static int os_cpu_return_requested(void) {return closing;}
 static uint64_t os_cpu_return_deadline_us(void) {return published_deadline;}
@@ -33,6 +33,7 @@ static struct {
 static int os_returning(void) { return returning; }
 static int os_cpu_return_failing(void) { return failing; }
 static void xTaskNotifyGive(void *task) { assert(task); ++notifications; }
+static void os_application_wake_main(void) { ++application_wakes; }
 static void platform_exit(unsigned detail) { (void)detail; abort(); }
 static void board_fail_at(uint32_t site,uint32_t value,const void *caller)
 { (void)site; (void)value; (void)caller; ++fatal; }
@@ -82,6 +83,7 @@ int main(void)
     assert(!os_usb_failure_ready());os_usb_failure_checkpoint(1);assert(!os_usb_failure_ready());
     os_usb_failure_checkpoint(2);assert(os_usb_failure_ready());
     os_usb_failure_checkpoint(1);assert(os_usb_failure_ready());
+    assert(application_wakes==2);
     returning=0;assert(os_usb_quiesce_start()&&registered==0);
     returning=1;assert(os_usb_quiesce_start()&&registered==1);
     board.handles[4]=(void *)1;

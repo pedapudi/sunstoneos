@@ -1,3 +1,4 @@
+#include "sunstone_app.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "sunstone_latency.h"
@@ -228,7 +229,9 @@ void latency_cause_ping_init(void)
         result.pair[pair].source_group = result.pair[pair].target_group = UINT64_MAX;
     }
     for (unsigned i = 0; i < 3; ++i) {
-        tasks[i] = xTaskCreateStaticAffinitySet(i ? peer : driver, "cause-ping", 1024,
+        /* The application's init hook calls this: the kit call names the
+         * application's space, which a direct FreeRTOS creation cannot. */
+        tasks[i] = ss_task_create_static_affinity_set(i ? peer : driver, "cause-ping", 1024,
             (void *)(uintptr_t)i, configMAX_PRIORITIES - 1, task_stack[i], &task_state[i], 1u << task_core[i]);
         configASSERT(tasks[i]);
     }

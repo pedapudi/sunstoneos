@@ -1,5 +1,8 @@
 #ifndef SUNSTONE_A733_GPU_POWER_H
 #define SUNSTONE_A733_GPU_POWER_H
+#ifdef SUNSTONE_A733_OS
+#include "a733_gpu_wait.h"
+#endif
 #include <stdint.h>
 #include "a733_gpu_spin.h"
 #include "a733_power_domain_row.h"
@@ -83,9 +86,15 @@ struct a733_gpu_power {
     struct a733_gpu_power_ops ops;
     void *context;
     uint64_t deadline, last_now;
+#ifdef SUNSTONE_A733_OS
+    struct a733_gpu_wait wait;
+#endif
     enum a733_gpu_power_phase phase;
     enum a733_gpu_power_error error;
     uint32_t index, last_value, lease_attempted, lease_held, requested;
+#ifdef SUNSTONE_A733_OS
+    uint32_t sample_reads, sample_run;
+#endif
     /* Entry observations for retained diagnostics, not release authority.
      * seen bits0/1/2 identify successful policy/status/PWCR reads, and bit
      * 3 + n a successful read of core_note[n] (enum a733_gpu_core_note).
@@ -129,8 +138,14 @@ enum a733_gpu_power_result a733_gpu_power_off(struct a733_gpu_power *, uint64_t 
  * and polls CORE status until 8. A TOP5 OFF closes the master gates until
  * the next TOP5 ON, so they are checked only after it.
  * Every PLL_GPU0 write is read back (error PLL); each lock wait reads at most
- * 100 times 3 us apart (error LOCK) and each GPU clock update bit must clear
- * within 100 reads (error UPDATE); these waits run inside one poll. Status
+ * 100 times with at least 3 us between reads (error LOCK). Each GPU clock
+ * update bit must clear within 100 reads (error UPDATE). SUNSTONE_A733_OS
+ * persists sample counts, consecutive stable samples and earliest times;
+ * pending observations return AGAIN for a 50 us retry. Final LOCK samples
+ * retain their trailing 4 us minimum, and the following 20 us holds retain 21 us
+ * under the whole-us clock. Domain replies notify the service, which waits
+ * after releasing its transport lock. Early calls cannot shorten fixed holds
+ * or retry intervals. Other profiles retain bounded in-call waits. Status
  * observations after the PWCR and policy writes require 0 or 8.
  * Power-off commands and checks CORE OFF and requests the TOP row OFF while
  * the GPU is still clocked, then closes the bus and core gates, disables
@@ -138,8 +153,8 @@ enum a733_gpu_power_result a733_gpu_power_off(struct a733_gpu_power *, uint64_t 
  * clocks, PLL_GPU0, TOP5 and CORE6 as that step left them, listed in
  * docs/designs/gpu-vendor-default.md, and reports the error and step. A
  * refused row fails with STATE, a failed domain with
- * DOMAIN. A wait whose clock stops advancing for A733_GPU_SPIN_STALLED_READS
- * samples returns AGAIN without advancing the step. Every wait ends at the
+ * DOMAIN. Legacy in-call waits return AGAIN after A733_GPU_SPIN_STALLED_READS
+ * unchanged clock samples. Every wait ends at the
  * absolute deadline. Failure retains diagnostics and disables further I/O; no
  * automatic rollback. lease_held records completed acquire/release
  * callbacks. Failed callbacks can leave partial ownership; a late successful

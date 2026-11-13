@@ -3,6 +3,7 @@
 #include "queue.h"
 #include "platform.h"
 #include "freertos_control.h"
+#include "perturb.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -104,8 +105,24 @@ static volatile unsigned control_round, control_phase;
 static unsigned isolated_local, selected_idle[8];
 static unsigned withholding, blocker_release, withhold_cores, blocker_parked;
 static uint64_t withholding_completed, withholding_observations, withholding_ticks;
+/* The fixture's own timing limits (busy-wait bounds and the local-phase tick
+ * bound) scale with an injected scheduler delay, so a delay alone cannot trip
+ * them; a lost wake still exceeds any scaled limit. One loaded turn costs a
+ * few instructions; a scheduler call costs hundreds. */
+static unsigned limit(unsigned base)
+{
+#ifdef SS_KERNEL_TEST_PERTURB
+    const volatile uint32_t *table = (const volatile uint32_t *)(uintptr_t)SS_KERNEL_TEST_PERTURB;
+    unsigned turns = 0;
+    for (unsigned site = 0; site < SS_PERTURB_SITES; ++site) turns += table[1 + site];
+    return base * (1 + turns / 100);
+#else
+    return base;
+#endif
+}
 static uint64_t local_phase_locks, local_wakes, local_completed, local_ticks, peer_idle_samples;
 static unsigned freeze_test, empty_sgis[8], abort_phase, abort_parked, abort_waits;
+static unsigned freeze_control_path;
 static TaskHandle_t abort_target;
 static unsigned migration_phase, migration_started, migration_incoming, migration_adopted;
 static TaskHandle_t migration_target;
@@ -149,7 +166,7 @@ void ss_kernel_test_gate_acquiring(void)
     unsigned kind = __atomic_load_n(&admission_armed, __ATOMIC_ACQUIRE);
     if (!kind) return;
     __atomic_store_n(&admission_go, kind, __ATOMIC_RELEASE);
-    for (unsigned wait = 0; wait < 1000000 && __atomic_load_n(&admission_waiting, __ATOMIC_ACQUIRE) != kind; ++wait)
+    for (unsigned wait = 0; wait < limit(1000000) && __atomic_load_n(&admission_waiting, __ATOMIC_ACQUIRE) != kind; ++wait)
         __asm__ volatile("nop");
     configASSERT(admission_waiting == kind);
 }
@@ -202,10 +219,15 @@ void ss_kernel_test_remote_suspend_mark(unsigned cpu)
         configASSERT(!ss_latency_task_suspended(shield_self_target));
         shield_remote_frame = 1;
     }
-    if (cpu == 0 && __atomic_load_n(&freeze_test, __ATOMIC_ACQUIRE) == 4 &&
-        xTaskGetCurrentTaskHandle() == controller) {
+    unsigned freeze = __atomic_load_n(&freeze_test, __ATOMIC_ACQUIRE);
+    if (cpu == 0 && (freeze == 1 || freeze == 4) && xTaskGetCurrentTaskHandle() == controller) {
+        /* At step 1 the controller suspends itself. An interrupt exit between
+         * the suspend's publication and its local transition can complete the
+         * suspension here instead (see ssKernelSuspendCurrent); the freeze
+         * must then be checked on this path. */
+        if (freeze == 1) freeze_control_path = 1;
         ss_kernel_test_freeze_mark(cpu);
-        __atomic_store_n(&freeze_test, 5, __ATOMIC_RELEASE);
+        __atomic_store_n(&freeze_test, freeze + 1, __ATOMIC_RELEASE);
     }
 }
 void ss_kernel_test_detach_incoming(unsigned slot, bool queued)
@@ -325,8 +347,11 @@ static void worker(void *argument)
 {
     unsigned id = (uintptr_t)argument;
     for (;;) {
+        /* The first wait spans the controller's setup checks, whose length
+         * grows with an injected delay; the controller's reply timeout bounds
+         * the first round instead. */
         uint32_t notified = ulTaskNotifyTake(pdTRUE,
-            worker_round[id] == ROUNDS ? portMAX_DELAY : pdMS_TO_TICKS(2000));
+            worker_round[id] == ROUNDS || worker_round[id] == 0 ? portMAX_DELAY : pdMS_TO_TICKS(2000));
         if (notified != 1) {
             platform_puts("worker wait cpu="); platform_hex(id);
             platform_puts(" control-round="); platform_hex(control_round);
@@ -510,7 +535,13 @@ static void boot_controls_verify(void)
         if (id == 3) continue;
         for (unsigned wait = 0; wait < 200 && !__atomic_load_n(&boot_suspend_checks[id], __ATOMIC_ACQUIRE); ++wait)
             vTaskDelay(1);
-        configASSERT(__atomic_load_n(&boot_suspend_checks[id], __ATOMIC_ACQUIRE) == 1);
+        /* Unperturbed, the resumed task suspends itself through the direct
+         * transition, which the hook checks once. An injected delay can let the
+         * resume's control record still be open then, and the suspension
+         * completes through the control path without the hook; the task must
+         * still end suspended (checked below). */
+        unsigned checks = __atomic_load_n(&boot_suspend_checks[id], __ATOMIC_ACQUIRE);
+        configASSERT(checks == 1 || (limit(1) > 1 && checks == 0));
         for (unsigned wait = 0; wait < 200 && !ss_latency_task_suspended(boot_tasks[id]); ++wait) vTaskDelay(1);
         configASSERT(ss_latency_task_suspended(boot_tasks[id]));
     }
@@ -600,7 +631,7 @@ static void admission_verify(void)
         xTaskNotifyGive(controller);
         configASSERT(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
         __atomic_store_n(&admission_go, kind, __ATOMIC_RELEASE);
-        for (unsigned wait = 0; wait < 1000000 && (kind == 8 || __atomic_load_n(&admission_waiting, __ATOMIC_ACQUIRE) != kind) &&
+        for (unsigned wait = 0; wait < limit(1000000) && (kind == 8 || __atomic_load_n(&admission_waiting, __ATOMIC_ACQUIRE) != kind) &&
              __atomic_load_n(&admission_completed, __ATOMIC_ACQUIRE) < kind; ++wait) __asm__ volatile("nop");
         if (kind == 8) configASSERT(admission_completed == 8 && admission_waiting != 8);
         else {
@@ -644,13 +675,15 @@ static void local_wakes_verify(void)
         configASSERT(local_wake_target && local_wake_started && (ss_kernel_test_task_state(local_wake_target) & 1));
         if (!mode) {
             vTaskPreemptionDisable(NULL);
+            /* Any interrupt exit after the wake may make the selection that
+             * keeps this task, so count selections from before the wake. */
+            uint64_t selections = __atomic_load_n(&switches[0], __ATOMIC_ACQUIRE);
             uint32_t value = 0x42;
             configASSERT(xQueueSend(local_wake_queue, &value, 0) == pdPASS);
             configASSERT(local_wake_ran == 0);
             unsigned seen = __atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE);
-            uint64_t selections = __atomic_load_n(&switches[0], __ATOMIC_ACQUIRE);
             portYIELD_CORE(0);
-            for (unsigned wait = 0; wait < 100000 && __atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE) == seen; ++wait)
+            for (unsigned wait = 0; wait < limit(100000) && __atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE) == seen; ++wait)
                 __asm__ volatile("nop");
             configASSERT(__atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE) > seen);
             configASSERT(__atomic_load_n(&switches[0], __ATOMIC_ACQUIRE) > selections);
@@ -674,7 +707,7 @@ static void held_self_actor(void *unused)
     ssKernelObjectSuspendOn(empty);
     unsigned seen = __atomic_load_n(&empty_sgis[1], __ATOMIC_ACQUIRE);
     vTaskSuspend(NULL);
-    for (unsigned wait = 0; wait < 100000 && __atomic_load_n(&empty_sgis[1], __ATOMIC_ACQUIRE) == seen; ++wait)
+    for (unsigned wait = 0; wait < limit(100000) && __atomic_load_n(&empty_sgis[1], __ATOMIC_ACQUIRE) == seen; ++wait)
         __asm__ volatile("nop");
     configASSERT(__atomic_load_n(&empty_sgis[1], __ATOMIC_ACQUIRE) > seen);
     __atomic_store_n(&held_self_started, 1, __ATOMIC_RELEASE);
@@ -802,12 +835,12 @@ static void delete_self_verify(void)
         if (mode == 1) vTaskSuspendAll();
         __atomic_store_n(&delete_self_go, 1, __ATOMIC_RELEASE);
         if (mode == 1) {
-            for (unsigned wait = 0; wait < 1000000 && !__atomic_load_n(&delete_self_waiting, __ATOMIC_ACQUIRE); ++wait)
+            for (unsigned wait = 0; wait < limit(1000000) && !__atomic_load_n(&delete_self_waiting, __ATOMIC_ACQUIRE); ++wait)
                 __asm__ volatile("nop");
             configASSERT(delete_self_waiting && eTaskGetState(delete_self_target) == eRunning);
             (void)xTaskResumeAll();
         } else {
-            for (unsigned wait = 0; wait < 1000000 && (!__atomic_load_n(&delete_self_frozen, __ATOMIC_ACQUIRE) ||
+            for (unsigned wait = 0; wait < limit(1000000) && (!__atomic_load_n(&delete_self_frozen, __ATOMIC_ACQUIRE) ||
                  ss_kernel_test_freeze_unacked(2)); ++wait) __asm__ volatile("nop");
             configASSERT(delete_self_frozen && xTaskGetCurrentTaskHandleForCore(2) != delete_self_target);
             ss_kernel_test_freeze_release(delete_self_target);
@@ -819,8 +852,11 @@ static void delete_self_verify(void)
 }
 static void control_races_verify(void)
 {
+    /* The peer outranks the controller. At equal priority the voluntary yield
+     * can select it just before a tick, and the slice ending at that tick
+     * returns the core to the controller before the peer leaves its wait. */
     TaskHandle_t peer = xTaskCreateStaticAffinitySet(deferred_peer, "deferred-yield", 2048,
-        NULL, 5, control_race_stack[3], &control_race_state[3], 1);
+        NULL, 6, control_race_stack[3], &control_race_state[3], 1);
     configASSERT(peer);
     for (unsigned wait = 0; wait < 200 && !__atomic_load_n(&deferred_peer_started, __ATOMIC_ACQUIRE); ++wait) vTaskDelay(1);
     configASSERT(deferred_peer_started);
@@ -829,7 +865,7 @@ static void control_races_verify(void)
     configASSERT(!deferred_peer_ran);
     unsigned slice_sgi = __atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE);
     ss_kernel_test_pending_slice();
-    for (unsigned wait = 0; wait < 100000 && __atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE) == slice_sgi; ++wait)
+    for (unsigned wait = 0; wait < limit(100000) && __atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE) == slice_sgi; ++wait)
         __asm__ volatile("nop");
     configASSERT(__atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE) > slice_sgi);
     configASSERT(deferred_peer_ran == 0);
@@ -843,7 +879,7 @@ static void control_races_verify(void)
     for (unsigned n = 0; n < 8; ++n) {
         unsigned seen = __atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE);
         portYIELD_CORE(0);
-        for (unsigned wait = 0; wait < 100000 && __atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE) == seen; ++wait)
+        for (unsigned wait = 0; wait < limit(100000) && __atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE) == seen; ++wait)
             __asm__ volatile("nop");
         configASSERT(__atomic_load_n(&empty_sgis[0], __ATOMIC_ACQUIRE) > seen);
         configASSERT(__atomic_load_n(&switches[0], __ATOMIC_ACQUIRE) == before);
@@ -851,12 +887,17 @@ static void control_races_verify(void)
     __atomic_store_n(&freeze_test, 1, __ATOMIC_RELEASE);
     vTaskSuspend(NULL);
     configASSERT(__atomic_load_n(&freeze_test, __ATOMIC_ACQUIRE) == 3);
+#ifndef SS_STORM
+    /* Without the interrupt storm and an injected delay, the step-1 freeze
+     * must be checked on the direct local transition. */
+    configASSERT(limit(1) > 1 || !freeze_control_path);
+#endif
     TaskHandle_t remote = xTaskCreateStaticAffinitySet(remote_suspend_actor, "freeze-remote", 2048,
         NULL, 6, control_race_stack[4], &control_race_state[4], 2);
     configASSERT(remote);
     __atomic_store_n(&freeze_test, 4, __ATOMIC_RELEASE);
     xTaskNotifyGive(remote);
-    for (unsigned wait = 0; wait < 10000000 && __atomic_load_n(&freeze_test, __ATOMIC_ACQUIRE) != 6; ++wait) {
+    for (unsigned wait = 0; wait < limit(10000000) && __atomic_load_n(&freeze_test, __ATOMIC_ACQUIRE) != 6; ++wait) {
         configASSERT(ss_kernel_test_current_running());
     }
     configASSERT(freeze_test == 6);
@@ -987,7 +1028,7 @@ static void control(void *unused)
     platform_puts("\n");
     configASSERT(local_wakes == ROUNDS && local_completed == ROUNDS);
     configASSERT(peer_idle_samples == ROUNDS && busy_delta > 0);
-    configASSERT(local_ticks >= ROUNDS && local_ticks < pdMS_TO_TICKS(1000));
+    configASSERT(local_ticks >= ROUNDS && local_ticks < limit(pdMS_TO_TICKS(1000)));
     control_phase = 6;
     configASSERT(local_phase_locks == 0);
     home_blocker = xTaskCreateStaticAffinitySet(withhold_home, "home-blocker", 2048,

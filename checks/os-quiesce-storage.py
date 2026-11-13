@@ -107,9 +107,17 @@ int main(int argc,char **argv)
 
 READ_SETUP = r'''
 static atomic_uint storage_state,close_proven;
+static _Atomic uint64_t read_closed_us;
+static uint64_t sunstone_deadline_now_us(void){return 0;}
+static void os_application_wake_main(void){}
 static int opened=1;
-struct platform_state {uint64_t stage,fault,fault_why,fault_line,refused;};
-static struct platform_state platform;
+struct platform_state {uint64_t stage,fault,fault_why,fault_line,refused;unsigned irq_mode;};
+static struct platform_state platform={.irq_mode=1};
+static int irq_live=1,irq_owner_on=1,mask_ok=1,irq_off_ok=1;
+static unsigned mask_calls,irq_off_calls;
+static int sd_irq_mask_settled(void){++mask_calls;return mask_ok;}
+static int a733_mmc_platform_irq(struct platform_state *p,int on)
+{assert(p==&platform&&!on);++irq_off_calls;if(irq_off_ok)p->irq_mode=0;return irq_off_ok;}
 static struct {uint64_t lifetime_deadline_us;} config={100};
 struct device_memory_lease {void *pool;};
 static struct device_memory_lease descriptor_lease={(void *)1};
@@ -134,6 +142,8 @@ int main(int argc,char **argv)
     if(test)atomic_store(&storage_state,SD_OPEN);
     if(test==2)native_result=A733_MMC_RETAINED;
     if(test==3)close_ok=0;
+    if(test==4)mask_ok=0;
+    if(test==5)irq_off_ok=0;
     requested=failing=1;
     enum os_quiesce_result r=os_quiesce_step(NULL);
     if(test==0){assert(r==OS_QUIESCE_DONE);assert(!released);return 0;}
@@ -142,6 +152,10 @@ int main(int argc,char **argv)
     if(test==1){assert(r==OS_QUIESCE_DONE);assert(close_proven);assert(!opened);assert(released==1);}
     if(test==2){assert(r==OS_QUIESCE_FAULT);assert(!close_proven);assert(opened);assert(!released);assert(retained==1);}
     if(test==3){assert(r==OS_QUIESCE_FAULT);assert(!close_proven);assert(opened);assert(released==1);}
+    if(test==4||test==5){assert(r==OS_QUIESCE_FAULT&&!close_proven&&opened&&!released&&retained==1);}
+    assert(mask_calls==1&&!irq_live);
+    assert(irq_off_calls==(test==4?0u:1u));
+    if(test<4)assert(!irq_owner_on&&!platform.irq_mode);
     return 0;
 }
 '''
@@ -158,6 +172,7 @@ def adapter(source):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',type=Path,required=True)
+    parser.add_argument('--case',action='append',choices=('owner','read'))
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=True)
     owner=(ROOT/'apps/os/sd_owner.c').read_text()
     native=(ROOT/'apps/os/large_sd.c').read_text()
@@ -190,7 +205,8 @@ def main():
         return True
     count=0
     for name,text in variants.items():
-        cases=9 if name=='owner' else 4
+        if args.case and name not in args.case:continue
+        cases=9 if name=='owner' else 6
         assert check(text,name,cases),name
         absent=text.replace('os_quiesce_register(&storage_quiesce)','1')
         assert not check(absent,name+'-missing-registration',cases)
@@ -198,7 +214,7 @@ def main():
         exits=text.replace(call,call.replace('{','{platform_exit(9);',1),1)
         assert not check(exits,name+'-exit',cases)
         count+=2
-    print('PASS storage quiescence: 13 software cases, 4 registration/exit mutants; native hardware effects are modeled')
+    print('PASS selected storage quiescence cases and registration/exit mutants; native hardware effects are modeled')
 
 
 if __name__=='__main__':main()

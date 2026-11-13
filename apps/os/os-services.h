@@ -10,8 +10,8 @@
  * the start entries, the record's struct in struct os_session and its validation in apps/os/admission.c.
  *
  * Python reads the rows as written: one X(...) per line, arguments separated by commas, no nested parentheses except in
- * a macro name the rows already use. This header includes nothing and declares no functions, so host models can include it
- * alone. */
+ * a macro name the rows already use. This header declares no functions, so
+ * host models can include it alone. */
 #ifndef SUNSTONE_OS_SERVICES_H
 #define SUNSTONE_OS_SERVICES_H
 
@@ -100,8 +100,22 @@ enum { OS_GRANT_ROWS(OS_GRANT_BIT_) };
 enum { OS_GRANT_ROWS(OS_GRANT_LINKED_) };
 #define OS_SERVICE_ID_(NAME, name, window_us, grant, with) with(OS_SERVICE_##NAME,)
 enum { OS_SERVICE_APPLICATION = 5, OS_SUPERVISED_ROWS(OS_SERVICE_ID_) OS_SERVICES };
-/* The tasks that register a deadline owner (runtime/deadline.c): every service, the SD owner and the GPU peer. */
-#define OS_DEADLINE_OWNERS (OS_SERVICES + 1u + OS_WITH_GPU(1u +) 0u)
+/* Deadline storage for supervised tasks, the SD owner, the NPU bootstrap,
+ * service worker and optional queue power worker, GPU service/peer, and DMA
+ * service/bootstrap workers, I2C and RTC owners, and the optional periodic
+ * invalidation task. The bus owners and supervisor have no supervised rows. */
+#ifdef SUNSTONE_A733_OS_SD_WRITE
+#define OS_SD_LOADER_DEADLINES 1u
+#else
+#define OS_SD_LOADER_DEADLINES 0u
+#endif
+#ifdef SUNSTONE_BG_LOAD
+#include "sunstone_bg_count.h"
+#define OS_BG_DEADLINES SUNSTONE_BG_TASKS
+#else
+#define OS_BG_DEADLINES 0u
+#endif
+#define OS_DEADLINE_OWNERS (OS_SERVICES + 7u + OS_WITH_GPU(2u +) OS_WITH_DMA(2u +) OS_WITH_TLBI(1u +) OS_SD_LOADER_DEADLINES + OS_BG_DEADLINES)
 /* The supervision table's rows after the application's, and the grant each one needs, indexed by service id. */
 #define OS_SERVICE_ENTRY_(NAME, name, window_us, grant, with) with({name, window_us},)
 #define OS_SERVICE_TABLE OS_SUPERVISED_ROWS(OS_SERVICE_ENTRY_)

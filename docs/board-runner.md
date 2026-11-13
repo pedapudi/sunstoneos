@@ -380,7 +380,9 @@ breadcrumb contract and the existing RTC watchdog clock.
 
 Preparation creates fresh session identities, checks the native allocations and
 CPU grants, and builds the SRAM launcher for the image's watchdog mode and
-session lifetime. Every upload is read back and compared. WDT0 supervises DRAM
+session lifetime. Every upload is verified before the image is launched, by
+reading it back or by an on-board digest (see
+[Verify uploads by digest](#verify-uploads-by-digest)). WDT0 supervises DRAM
 helpers, rail normalization and the submitted image. The returned watchdog state
 and retained RTC breadcrumbs are classified before any DRAM result read.
 
@@ -392,6 +394,73 @@ rows; the result records `rail_restore.outcome` as `already-at-target` (or `rest
 outcome as it was, records `rails_restored` false, `rails_unrestored` true and the helper's facts, and pauses the port until
 someone checks the rails.
 
+## Verify uploads by digest
+
+The FEL loader in the boot ROM is a USB full-speed device (12 Mbit/s). It moves
+about 0.56 MB/s in each direction: in the DRAM stage of a run on 2026-11-12, the
+246,776 bytes of boot0 and its entry code took 0.442 s to write and 0.442 s to
+read back. Reading every upload back therefore doubles the upload time. A speech
+recognition session that uploads about 44 MB of image, session and inputs spends
+about 155 s of its 170 s run in the `launch` stage, about 79 s of it reading
+bytes back.
+
+`--verify readback`, the default, reads each upload back in the transaction that
+writes it and compares the bytes. `--verify digest` writes each DRAM upload
+once and has the board compute its SHA-256:
+
+1. The runner builds the digest helper
+   ([boot/a733/upload-digest.S](../boot/a733/upload-digest.S)), 1,152 bytes of
+   A32 code, and uploads it with a readback to `0x52000`, the start of the
+   launcher's SRAM reservation (`0x52000..0x52d80`).
+2. It writes the image segments, session, inputs and other DRAM uploads without
+   reading them back.
+3. For each batch of ranges, it arms WDT0 in mode `0xb1` (16 s), writes the
+   request block at `0x52800`, executes the helper and reads the block back,
+   all in one FEL transaction, then disarms WDT0. The helper enables the
+   floating-point unit, hashes each range with the SHA-256 instructions,
+   restores CPACR and FPEXC, and returns to the ROM. The block holds at most 34
+   ranges, the number that fits between `0x52800` and the end of the
+   reservation; a longer upload is split into several ranges.
+4. The runner compares each digest with the SHA-256 of the bytes it sent.
+5. It uploads the launcher, request and report into the reservation, with a
+   readback, and launches.
+
+A helper call lasts about 2 s, a fifth of the 10 s USB transfer timeout of
+`sunxi-fel` (the request that follows the execute command waits for the helper
+to finish). The first batch assumes the readback rate, 550,000 bytes/s; each
+later batch is sized from the rate the previous call measured. A board whose
+core has no SHA-256 instructions (ID_ISAR5.SHA2 is 0), or a first call no
+faster than the readback rate, makes the runner read the remaining ranges back
+instead; the result records the reason as `upload_verify.fallback`.
+
+The digest path applies to a plan that executes `0x52000` and uploads into the
+launcher's reservation: generic, legacy and finite NPU images. It verifies each
+DRAM upload whose address is a multiple of 4 and that no later upload overlaps;
+the helper's loads need 4-byte alignment, because with the MMU off a data access
+is to Device memory, where an unaligned access faults. These transfers keep the
+readback in either mode: the ROM scratch restoration, the rail helpers and their
+saved DRAM, the DRAM stage's SRAM payloads, the Wi-Fi credential, every upload of
+a probe or first-stage recovery plan, and the DRAM restoration of a preserving
+run, which runs after the returned ROM owns SRAM.
+
+The result's `upload_verify` records the mode, the reason when the digest path
+does not apply, the helper's SHA-256, ID_ISAR5 and each batch's ranges, bytes,
+seconds and status. `check` reports which uploads each mode verifies.
+[checks/upload-digest.py](../checks/upload-digest.py) runs the helper's bytes
+under Unicorn against hashlib and holds it to the accesses described in its
+source; [checks/board-runner.py](../checks/board-runner.py) runs both modes on
+the fake board, including a flipped byte and a short write.
+
+The images authenticate only part of what they receive. EL3 admission checks the
+typed session's SHA-256 against the contract, the radio service checks its
+profile against a digest the session carries, and the OS application checks
+each manifest input's SHA-256 before the application starts (`ss_fail(0x753)`,
+which the runner reports as an image failure). The image's load segments are
+bound only by the 32-byte build identity that the contract names. The contract,
+the request, the launcher and the zeroed result and report pages have field or
+sentinel checks at most. The runner's verification therefore covers every
+upload itself, before launch.
+
 ## Interpret the result and recovery state
 
 | Outcome | Meaning |
@@ -401,6 +470,7 @@ someone checks the rails.
 | `watchdog-reset` | A new permitted FEL instance returned with WDT0 still enabled. Breadcrumbs identify the last stage and any first fault. DRAM is lost. The runner disarms WDT0 on the fresh instance and releases it: the result records `dram_released_by_reset`, the instance is not quarantined, and the port is not paused. |
 | `no-return` | No accessible new FEL instance appeared within the watchdog window and margin. Recovery is unresolved. |
 | `refused-before-launch` | Image, session, helper or prerequisite validation stopped the submitted image before launch. Earlier setup helpers may have run. |
+| `upload-fault` | An upload read back, or hashed on the board, differently from the bytes the runner sent, before launch. No image ran and the instance is not quarantined; an unchanged resubmission may pass. `first_failure` names the method (`upload-readback` or `upload-digest`), the address, size, source file and offset, and the expected and observed SHA-256 or the first differing byte. |
 | `host-error` | Host code, transport or evidence handling failed, including an upload that reads back differently after launch and a result that the decoder cannot decode. Inspect the first failure and quarantine fields. |
 
 Each result records the image SHA-256, Git revision, per-stage durations,

@@ -50,6 +50,8 @@ int os_npu_stopping(void);
 unsigned os_npu_stopped(void);
 /* Caller progress must remain within the finite NPU work deadline. */
 int os_npu_progress(void);
+int os_npu_wait(void); /* Client task: notification or absolute session/stop deadline. */
+void os_npu_publish_wakes(void); /* Client task, after the stopped proof. */
 /* Published finite result with local stop complete and no retained failure. */
 int os_npu_complete(void);
 /* Task context only: preserve a late atomic failure before generic cleanup. */

@@ -32,7 +32,7 @@ def main():
     b=source.index('        memset(&platform, 0, sizeof platform);',a)
     helpers+='\nstatic const void *reentry_close(void) {\n'+source[a:b]+'return (const void *)1;}\n'
     a=source.index('    for (unsigned waited = 0;');b=source.index('    struct device_memory_pool *pool',a)
-    helpers+='\nstatic const void *pmic_wait(void) {\n'+source[a:b]+'return (const void *)1;}\n'
+    helpers+='\nstatic const void *pmic_wait(void) {\n#ifdef OS_SD_WRITE\n'+source[a:b]+'return (const void *)1;}\n'
     opening=owner_check.function(source,'os_sd_open_owner')
     assert opening.index('sunstone_deadline_register()')<opening.index('os_sd_open_owner_device()')
     def run(name,text):
