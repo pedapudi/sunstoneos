@@ -80,10 +80,27 @@ EL3 keeps its read-write entry for the block, because it writes the sealed
 session with translation off. Application spaces copy these entries below
 `0x4800_0000` unchanged, so an application sees the same permissions.
 
-Moving RAM by 2 MiB leaves the recognition image 1.3 MiB below the uncached
-block for its heap and device pool. An image whose BSS, heap and device pool
-no longer fit below `0x41c0_0000` fails at link time on the existing
-assertions.
+Moving RAM by 2 MiB takes 2 MiB from every OS image's room for BSS, heap and
+device pool. With the uncached block linked, the device pool must end at or
+below `0x41c0_0000` (`ASSERT(... __device_pool_end <= 0x41c00000 ...)` in
+`platform/a733-smp-cached/link.ld`); without it, at or below the storage
+session at `0x41f0_0000` (`platform/a733-storage-maintenance/link.patch`).
+An image that no longer fits fails at link time on those assertions. The room
+left on 2026-11-13, from the end of each image's device pool to its limit:
+
+| Image | Device pool ends | Limit | Room left |
+| --- | --- | --- | --- |
+| `ret-latency` (gate) | `0x41b3_d000` | `0x41c0_0000` | 780 KiB |
+| mimus recognition, 8 workers | `0x41ab_6000` | `0x41c0_0000` | 1.3 MiB |
+| `ret-npu-load` (gate) | `0x4190_e000` | `0x41c0_0000` | 2.9 MiB |
+| `sup`, `headset`, `resident-stop`, `card-profile`, `ret-gpu`, `ret-radio-scan`, `ret-walks-*` (gate) | `0x418e_1000` to `0x418f_6000` | `0x41c0_0000` | 3.0 to 3.1 MiB |
+| `os-usb-ledger` (gate, no uncached block) | `0x4193_e000` | `0x41f0_0000` | 5.8 MiB |
+
+The latency and recognition images are the close ones: a larger heap (the
+manifest's `heap_bytes` up to `heap_link_max`, 4 MiB), more worker stacks or a
+larger write-back pool reaches the assertion first there. Such a heap belongs in
+the application memory ledger instead
+([application-memory-layout.md](designs/application-memory-layout.md)).
 
 [checks/kernel-xn.py](../checks/kernel-xn.py) runs each OS image's own table
 builder under Unicorn and walks the EL1 tables with their hierarchical bits.
