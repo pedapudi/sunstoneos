@@ -4,8 +4,9 @@
 Host configuration stays in CACHE/bin/cfg.sh. This tool never launches a board.
 Build directories belong to the resolved source checkout, so gates on different
 checkouts never share a CMake cache; a lock refuses a second concurrent gate on
-the same checkout. Every gate also waits for the host-wide lock CACHE/gate.lock (CACHE/gate-full.lock for --full), so
-gates never run side by side. The recorded source identity includes uncommitted changes:
+the same checkout. Every gate also holds one of the host's gate slots (CACHE/gate.lock.0 to N-1, tools/gate_slots.py; a landing
+may take slot 0, which workers never use, and goes ahead of waiting workers; CACHE/gate-full.lock for --full), so only N gates run
+side by side, each with its share of the cores. The steps that depend on wall time hold CACHE/gate-timing.lock. The recorded source identity includes uncommitted changes:
 the revision, the tracked diff and every untracked file that Git does not
 ignore. The gate fails if that state cannot be read completely, or if it
 changes before the gate holds the lock or by the end of the last step.
@@ -15,15 +16,13 @@ The full gate conditions hook fixtures on --affected or --changed scope. Its
 default combines HEAD^..HEAD (all tracked files at a root commit) with staged,
 unstaged and nonignored untracked changes in the checkout.
 
-The full gate keeps going: it runs every selected step, records every failure
+A gate keeps going: it runs every selected step, records every failure
 in summary.txt and exits nonzero if any step failed. A step whose build failed
 is recorded as SKIP and counts as a failure. --fail-fast stops at the first
-failure and runs the steps one at a time in their fixed order; the targeted
-selections (--target, --variant, --check, --affected, --changed) keep that
-behavior unless --keep-going is given. Builds run one at a time and finish
+failure and runs the steps one at a time in their fixed order. Builds run one at a time and finish
 before the checks that need them. Checks run in parallel (--jobs workers, no
 new check while MemAvailable is below --min-available-gb); checks that run
-QEMU or time a result run one at a time after the parallel group. Every check
+QEMU or time a result run one at a time after the parallel group, and take the timing lock. Every check
 runs with the environment recorded in environment.txt. Documentation-link and
 status-record checks report WARN lines and do not fail the gate unless
 --strict-docs is given.
@@ -38,6 +37,7 @@ from pathlib import Path
 from host_evidence import unique_directory
 import host_priority
 import gate_images
+import gate_slots
 import host_space
 import os
 import re
@@ -248,10 +248,13 @@ def main(argv=None):
     parser.add_argument('--trials', type=int, default=1, help='predeclared soak8 trials, not failure retries (default: 1)')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--fail-fast', action='store_true',
-                      help='stop at the first failure and run steps one at a time (the default for targeted selections)')
+                      help='stop at the first failure and run steps one at a time')
     mode.add_argument('--keep-going', action='store_true',
-                      help='run every selected step and report every failure (the default for --full)')
-    parser.add_argument('--jobs', type=int, default=8, help='parallel checks when keeping going (default: 8)')
+                      help='run every selected step and report every failure (the default)')
+    parser.add_argument('--jobs', type=int, help='parallel checks and the -j of builds when keeping going '
+                        '(default: the usable cores divided across the gate slots, tools/gate-slots.json; 8 for --full)')
+    parser.add_argument('--priority', choices=sorted(gate_slots.CLASS), default=os.environ.get('SUNSTONE_GATE_PRIORITY', gate_slots.WORKER),
+                        help='landing gates may take slot 0 and go ahead of waiting workers (tools/land.py sets it; default: worker)')
     parser.add_argument('--min-available-gb', type=float, default=32,
                         help='start no new check while MemAvailable is below this many GiB (default: 32)')
     parser.add_argument('--memory-wait', type=int, default=3600,
@@ -265,7 +268,7 @@ def main(argv=None):
         parser.error('select --target, --variant or --check; --full is only for justified broad validation')
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', args.label):
         parser.error('label must be a single filename beginning with a letter or digit')
-    if args.jobs < 1 or args.min_available_gb < 0 or args.check_timeout < 1:
+    if (args.jobs is not None and args.jobs < 1) or args.min_available_gb < 0 or args.check_timeout < 1:
         parser.error('--jobs and --check-timeout must be positive and --min-available-gb cannot be negative')
     if args.trials < 1 or (args.trials != 1 and not args.full and 'soak8' not in args.check):
         parser.error('--trials must be positive and applies only to soak8')
@@ -275,9 +278,20 @@ def main(argv=None):
     source, cache = args.source.resolve(), args.cache.resolve()
     if not (source / 'CMakeLists.txt').is_file():
         parser.error('source must be a SunstoneOS checkout')
-    # One gate at a time on the host, whoever starts it: a direct call waits behind a landing's gate instead of running beside
-    # it. The full suite takes its own lock so that it blocks no landing. The lock is held until the process exits.
-    gate_lock = take_gate_lock(cache, 'gate-full.lock' if args.full else 'gate.lock')
+    # A gate runs in one of the host's slots, whoever starts it: a direct call waits its turn behind the gates that wait before it
+    # (a landing goes ahead of workers). The full suite takes its own lock so that it blocks no landing. The slot is held until
+    # the process exits.
+    slot_config = gate_slots.load_config()
+    if args.full:
+        gate_lock = take_gate_lock(cache, 'gate-full.lock')        # the full suite blocks no landing and uses no slot
+        slots, build_jobs = 1, 12
+        args.jobs = args.jobs or 8
+    else:
+        queue = gate_slots.SlotQueue(cache, slot_config)
+        gate_lock = queue.acquire(args.priority, args.label, lambda message: print(message, flush=True))
+        slots = queue.slots
+        build_jobs = gate_slots.jobs_per_slot(slot_config, slots)
+        args.jobs = args.jobs or build_jobs
     targets = list(dict.fromkeys(args.target))
     variants = list(VARIANTS) if args.full else list(dict.fromkeys(args.variant))
     indexed, pending, affected_plan, hook_scope = [], [], None, None
@@ -420,7 +434,7 @@ def main(argv=None):
             pass
     atexit.register(record_peak)         # a failed gate keeps everything and still records its peak
 
-    fail_fast = args.fail_fast or not (args.full or args.keep_going)
+    fail_fast = args.fail_fast
     jobs = 1 if fail_fast else args.jobs
     # Every check, build and configure step runs with this environment; it is
     # recorded in environment.txt. Only the configure steps use cfg.sh.
@@ -477,6 +491,10 @@ def main(argv=None):
             note('Stopped at first failure; diagnose it before running only the affected steps with a new label.')
             raise Stop
         return verdict != 'FAIL'
+
+    def timing(name, script):
+        """A step whose result depends on wall time: it runs alone in its gate and holds the host's timing lock."""
+        return gate_slots.is_timing_step(slot_config, name, script, serial)
 
     def skip(name, reason):
         results[name] = 'SKIP'
@@ -635,7 +653,7 @@ def main(argv=None):
                         targets_to_build = list(dict.fromkeys(targets_to_build + core_targets))
                 if targets_to_build:
                     # One invocation lets CMake reuse shared dependencies across selected targets.
-                    run('central-build', ['cmake', '--build', build_dir, '--target', *targets_to_build, '-j', '12'])
+                    run('central-build', ['cmake', '--build', build_dir, '--target', *targets_to_build, '-j', str(build_jobs)])
             else:
                 skip('central-build', 'central-configure did not pass')
         for variant in variants:
@@ -648,7 +666,7 @@ def main(argv=None):
             if run('os-' + variant + '-configure', [cfg, source, directory,
                    *core_options, '-DSUNSTONE_APPLICATION=', '-DSUNSTONE_A733_OS=ON',
                    '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', *options]):    # the image checks read each build's compile flags
-                if run('os-' + variant + '-build', ['cmake', '--build', directory, '--target', 'sunstone-a733-os', '-j', '12']):
+                if run('os-' + variant + '-build', ['cmake', '--build', directory, '--target', 'sunstone-a733-os', '-j', str(build_jobs)]):
                     mark_built(directory)
             else:
                 skip('os-' + variant + '-build', 'os-' + variant + '-configure did not pass')
@@ -662,7 +680,7 @@ def main(argv=None):
             if run('img-' + image + '-configure', [cfg, source, directory, *core_options, '-DSUNSTONE_A733_OS=ON',
                                                    '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', *flags]):
                 if run('img-' + image + '-build', ['cmake', '--build', directory, '--target',
-                                                  *([recipe['target']] if isinstance(recipe['target'], str) else recipe['target']), '-j', '12']):
+                                                  *([recipe['target']] if isinstance(recipe['target'], str) else recipe['target']), '-j', str(build_jobs)]):
                     mark_built(directory)
             else:
                 skip('img-' + image + '-build', 'img-' + image + '-configure did not pass')
@@ -704,7 +722,7 @@ def main(argv=None):
                 # The application build repeats the core targets; build only its own.
                 selected = list(dict.fromkeys(selected + [t for t in discovered if t not in core_targets]))
             if selected:
-                run(name + '-build', ['cmake', '--build', directory, '--target', *selected, '-j', '12'])
+                run(name + '-build', ['cmake', '--build', directory, '--target', *selected, '-j', str(build_jobs)])
         commands = {
             'kernel': ['tools/check-kernel.py', build_dir / 'kernel-check.elf', '--qemu', qemu, '--evidence', evidence / 'kernel'],
             'soak8': ['tools/check-smp.py', build_dir / 'smp8-soak-model.elf', '--case', 'soak8', '--trials', str(args.trials), '--qemu', qemu, '--evidence', evidence / 'soak8'],
@@ -726,14 +744,14 @@ def main(argv=None):
                 [application_checks[check] + '-build'] if check in application_checks else [])
             script = Path(command[0]).name if Path(command[0]).parent == Path('checks') else None
             tasks.append({'name': 'check-' + check, 'command': [python, *command], 'script': script, 'needs': needs,
-                          'serial': check in DEPENDENCIES or check in application_checks or script in serial})
+                          'serial': check in DEPENDENCIES or check in application_checks or script in serial or timing('check-' + check, script)})
         for check in indexed:
             command = [python, 'checks/' + check['check']]
             option = output_option(check)
             if option:
                 command += ([option] if option.startswith('-') else []) + [evidence / 'indexed' / Path(check['check']).stem]
             tasks.append({'name': 'indexed-' + Path(check['check']).stem, 'command': command, 'script': check['check'],
-                          'needs': [], 'serial': check['check'] in serial})
+                          'needs': [], 'serial': check['check'] in serial or timing('indexed-' + Path(check['check']).stem, check['check'])})
 
         for check in classified['supplied']:
             for number, run_ in enumerate(inputs['checks'][check]['runs']):
@@ -745,12 +763,15 @@ def main(argv=None):
                          ('os-' + image if image in VARIANTS else 'img-' + image) + '-build'
                          for kind, image in placeholders(run_['args'])]
                 tasks.append({'name': 'image-' + stem, 'command': command, 'script': check,
-                              'needs': list(dict.fromkeys(needs)), 'serial': check in serial})
+                              'needs': list(dict.fromkeys(needs)), 'serial': check in serial or timing('image-' + stem, check)})
 
         def start(task):
             missing = [need for need in task['needs'] if results.get(need) != 'PASS']
             if missing:
                 skip(task['name'], ', '.join(missing) + ' did not pass')
+            elif timing(task['name'], task['script']):
+                with gate_slots.timing_lock(cache, args.label, note):
+                    run(task['name'], task['command'], task['script'], args.check_timeout)
             else:
                 run(task['name'], task['command'], task['script'], args.check_timeout)
 
@@ -800,7 +821,8 @@ def main(argv=None):
         ''.join(key + '=' + env[key] + '\n' for key in ('PATH', 'SUNSTONEOS_DIR', 'PYTHONDONTWRITEBYTECODE', 'TMPDIR') if key in env) +
         'cwd=' + str(source) + '\nstdin=/dev/null\nconfigure steps run ' + str(cfg) + '; checks do not source it\n')
     note('mode: ' + ('fail-fast' if fail_fast else 'keep-going, %d parallel checks, memory guard %g GiB'
-                     % (jobs, args.min_available_gb)) + (', strict documentation checks' if args.strict_docs else ''))
+                     % (jobs, args.min_available_gb)) + ('' if args.full else ', slot %d of %d, %s, -j %d' % (
+                         gate_lock.index, slots, args.priority, build_jobs)) + (', strict documentation checks' if args.strict_docs else ''))
     try:
         elapsed = run_steps()
     except Stop:
