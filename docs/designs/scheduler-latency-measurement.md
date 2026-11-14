@@ -294,14 +294,22 @@ per tick.
 `checks/tick-footprint-budget.json`. For CPU0's own release, the largest remote
 release, the largest deadline scan and the work outside them, it takes the
 largest line count of each structure over the first 240 busy ticks and fails if
-any data count exceeds its budget. The busy phase lasts a fixed number of wake
-samples, which spanned 234 to 370 ticks under QEMU, so the check accepts a trace
-of 200 ticks or more. Data lines are physical 64-byte lines. Code lines are
-counted from the start of each function, so a change that only moves a function
-leaves its count alone; the board's placement can add up to one line per
-function. Code counts follow the path each wake takes, which varies with host
-load under multi-threaded QEMU, so they are reported against their budget but
-do not fail the check.
+any data count exceeds its budget. QEMU runs the model on one host thread with
+a fixed instruction count (`-accel tcg,thread=single -icount shift=0,sleep=off`),
+so guest time follows the instructions executed, not the host's load. The busy
+phase lasts a fixed number of wake samples and spans 2,599 ticks; the check
+accepts a trace of 200 ticks or more. Under multi-threaded QEMU, where guest
+time was host time, the phase spanned 195 to 370 ticks, and a landing gate kept
+only 195. Six runs beside twelve busy host processes kept the same 240 ticks and
+the same line counts. Their traces still differ in a few branches, because
+QEMU's switch between vCPUs can be advanced by its host-timed main loop. The
+plugin reads the executing core from `TPIDR_EL1` once per block, because on one
+thread a callback's vCPU argument names the vCPU that translated the block.
+Data lines are physical 64-byte lines. Code lines are counted from the start of
+each function, so a change that only moves a function leaves its count alone;
+the board's placement can add up to one line per function. Code counts follow
+the path each wake takes, which varies with the interleaving of the cores, so
+they are reported against their budget but do not fail the check.
 
 CPU0's own release normally inserts the woken task straight into CPU0's run
 queue. While CPU0 drains control work, or while another core holds the control

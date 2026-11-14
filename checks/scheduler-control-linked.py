@@ -31,12 +31,17 @@ INSTRUCTIONS_PER_US = 1000
 WAKE_BOUND_US = 200
 CRITICAL_PATH_BOUND = WAKE_BOUND_US * INSTRUCTIONS_PER_US
 OWNER_CORE = 0
+CORES = 8                   # the yield models' marker functions: a wake and a served mark per core, then a drop mark per core
 YIELD_MODELS = ('scheduler-yield-qemu', 'scheduler-yield-storm-qemu')
 # Extra work on the wake path for the regression case: the word after the sites of kernel/scheduler/perturb.h in the table, which the
-# yield models read (checks/scheduler-yield-qemu.c), as this many loop turns (about 5 instructions each) before every served mark.
-# The models' own end-of-run accounting fails above about 3,000 turns, so the case does not need the critical path to be the only
-# detector: it needs the critical path to cross the bound, which it does at 6,000 turns (276,127 instructions measured).
-WAKE_PATH_REGRESSION_TURNS = 6000      # in the table word after the last site (WAKE_PATH_WORD, below)
+# yield models read (checks/scheduler-yield-qemu.c), as this many loop turns before the served mark of every wake on
+# WAKE_PATH_REGRESSION_CORE. A turn is 7.4 instructions (6,000 turns added 44,451 to the woken core's count), so 34,000 turns add
+# about 252,000, and the woken core's own count crosses the bound without help from the owner's. All eight cores spin, so virtual
+# time runs at about eight instructions per core instruction and such a wake spans several wake interrupts; a critical path
+# therefore starts at the earliest interrupt mark not yet served (critical_paths). One core is slowed so the run, which ends when
+# core 1 has served its wakes, keeps its length. The model's own end-of-run accounting fails at this size.
+WAKE_PATH_REGRESSION_TURNS = 34000      # in the table word after the last site (WAKE_PATH_WORD, below)
+WAKE_PATH_REGRESSION_CORE = 2
 PLUGIN_HEADER = CACHE / 'host/qemu-plugin-10.2.1/qemu-plugin.h'
 PLUGIN_HEADER_SHA256 = 'aebc639d01685893a9d71b9ef3afa7ea67e0be6a8959781c4057bd4974d05d4d'
 PERTURB_SITES = {'api-entry': 0, 'owner-publish': 1, 'owner-drain': 2, 'control-open': 3, 'object-walk': 4}
@@ -133,30 +138,41 @@ def main():
 
     def critical_paths(trace):
         """The critical path of every ordinary wake in a plugin trace: the owner's instructions plus the victim's own instructions
-        outside the spin function, between the wake interrupt and the served task. Both are counted outside the spin function."""
+        outside the spin function, between the wake interrupt and the served task. Both are counted outside the spin function.
+        A wake interrupt that arrives before the previous one is served does not restart the path: the earlier wake still waits
+        for the served mark, so its path, the longer, is the one recorded. A drop mark (ymark_drop_N, after the sixteen wake and served
+        marks) ends a wake whose served task the model does not measure, one that carried an injected interrupt exit, without a path.
+        Returns (path, core, victim's own instructions)."""
         paths, wake = [], {}
         for text in trace.read_text().splitlines():
             fields = text.split()
             if fields[0] != 'M':
                 continue
-            offset, vcpu = int(fields[1], 16), int(fields[2])
+            offset, executing = int(fields[1], 16), int(fields[2])
             total, spin = [int(v) for v in fields[3:11]], [int(v) for v in fields[11:19]]
-            core = offset // 16
-            if offset % 16 == 0:
-                wake[core] = (total, spin)
+            drop = offset >= 16 * CORES
+            core = (offset - 16 * CORES) // 8 if drop else offset // 16
+            # Each marker is called on the core it names. The plugin reads the executing core from the guest (TPIDR_EL1), because the
+            # vcpu argument of QEMU 10.2.1's block callback names the vCPU that translated the block; a marker credited to another core
+            # means the attribution is wrong and every count after it is too.
+            assert executing == core, ('marker of core', core, 'ran on core', executing)
+            if drop:
+                wake.pop(core, None)
+            elif offset % 16 == 0:
+                wake.setdefault(core, (total, spin))
             elif core in wake:
                 (t0, s0), (t1, s1) = wake.pop(core), (total, spin)
                 work = lambda c: (t1[c] - s1[c]) - (t0[c] - s0[c])
-                paths.append((work(OWNER_CORE) + work(core), core))
+                paths.append((work(OWNER_CORE) + work(core), core, work(core)))
         return paths
 
     def yield_critical_path(name, directory, plugin, perturb=None, must_pass=True):
-        """Run one yield model under the plugin; returns (worst critical path, its core, wakes)."""
+        """Run one yield model under the plugin; returns (worst critical path, its core, wakes, the woken core's own part)."""
         directory.mkdir(exist_ok=True)
         image = build / (name + '.elf')
         with ELFFile(image.open('rb')) as elf:
             symbols = {sym.name: (sym['st_value'], sym['st_size']) for sym in elf.get_section_by_name('.symtab').iter_symbols()}
-        low, high = symbols['ymark_isr_0'][0], symbols['ymark_srv_7'][0] + 8
+        low, high = symbols['ymark_isr_0'][0], symbols['ymark_drop_7'][0] + 8
         spin_low, spin_size = symbols['busy_task']
         trace = directory / 'critical-path.txt'
         status, log = execute(image, directory, 8, perturb,
@@ -166,8 +182,9 @@ def main():
         assert len(paths) > 300, (name, 'too few paired wakes', len(paths))
         worst = max(paths)
         (directory / 'critical-path.json').write_text(json.dumps(
-            {'bound_instructions': CRITICAL_PATH_BOUND, 'wakes': len(paths), 'worst': worst[0], 'worst_core': worst[1]}, indent=1))
-        return worst[0], worst[1], len(paths)
+            {'bound_instructions': CRITICAL_PATH_BOUND, 'wakes': len(paths), 'worst': worst[0], 'worst_core': worst[1],
+             'worst_victim': worst[2]}, indent=1))
+        return worst[0], worst[1], len(paths), worst[2]
 
     if args.positive:
         plugin = build_plugin()
@@ -182,7 +199,7 @@ def main():
             directory = output / name
             directory.mkdir(exist_ok=True)
             if name in YIELD_MODELS:
-                worst, core, wakes = yield_critical_path(name, directory, plugin)
+                worst, core, wakes, _ = yield_critical_path(name, directory, plugin)
                 assert worst <= CRITICAL_PATH_BOUND, (name, 'critical path', worst, 'instructions on core', core, 'exceeds', CRITICAL_PATH_BOUND)
                 print(f'PASS linked model: {name} (critical path {worst} instructions of {CRITICAL_PATH_BOUND}, core {core}, {wakes} wakes)', flush=True)
                 continue
@@ -192,11 +209,14 @@ def main():
         # The bound must still catch a regression: extra work on the wake path, with every other input equal, crosses it. The model may
         # also fail its own accounting at this size; the critical path of the wakes it did serve is what is asserted.
         directory = output / 'yield-wake-path-regression'
-        worst, core, wakes = yield_critical_path('scheduler-yield-qemu', directory, plugin,
-                                                 (WAKE_PATH_WORD, WAKE_PATH_REGRESSION_TURNS), must_pass=False)
-        assert worst > CRITICAL_PATH_BOUND, ('the wake-path regression did not cross the bound', worst, CRITICAL_PATH_BOUND)
-        print(f'PASS wake-path regression: {WAKE_PATH_REGRESSION_TURNS} extra turns give a critical path of {worst} instructions, '
-              f'above {CRITICAL_PATH_BOUND}', flush=True)
+        worst, core, wakes, victim = yield_critical_path(
+            'scheduler-yield-qemu', directory, plugin,
+            (WAKE_PATH_WORD, WAKE_PATH_REGRESSION_TURNS, 1 << WAKE_PATH_REGRESSION_CORE), must_pass=False)
+        # The crossing must come from the slowed wake itself: on the slowed core, with that core's own instructions above the bound.
+        assert core == WAKE_PATH_REGRESSION_CORE and victim > CRITICAL_PATH_BOUND, (
+            'the wake-path regression did not cross the bound on its own core', worst, core, victim, CRITICAL_PATH_BOUND)
+        print(f'PASS wake-path regression: {WAKE_PATH_REGRESSION_TURNS} extra turns on core {core} give a critical path of {worst} '
+              f'instructions, {victim} of them on that core, above {CRITICAL_PATH_BOUND}', flush=True)
 
     if args.perturb:
         from concurrent.futures import ThreadPoolExecutor
