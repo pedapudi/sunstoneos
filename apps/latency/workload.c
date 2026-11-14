@@ -17,14 +17,19 @@ _Static_assert(SUNSTONE_LATENCY_STREAM_MASK > 0 && SUNSTONE_LATENCY_STREAM_MASK 
                "at least one streaming core");
 #define LATENCY_STREAMS(c) ((SUNSTONE_LATENCY_STREAM_MASK >> (c)) & 1u)
 enum phase { QUIET, IDLE, BUSY, STOP };
-/* One line per core: only that core's wake task and CPU0's tick share it.
- * The alignment applies to the first member alone; on a declarator list it
- * would align every member and spread a slot over three lines. */
+/* One line per core: only that core and CPU0's tick share it. The core
+ * also publishes here the task it last switched to, so that CPU0's release
+ * admits a sample from a line it writes anyway, rather than from the core's
+ * pxCurrentTCBs line. The alignment applies to the first member alone; on a
+ * declarator list it would align every member and spread a slot over three
+ * lines. */
 struct wake_slot {
     _Alignas(64) atomic_uint pending;
     atomic_uint completed, parked;
     uint64_t released;
     unsigned metric;
+    _Atomic(void *) running;
+    atomic_uint running_idle;
 };
 _Static_assert(sizeof(struct wake_slot) == 64, "one line per wake slot");
 struct load_slot {
@@ -61,9 +66,22 @@ static void latency_dma_model_start(void) {}
 static unsigned latency_dma_model_stop(void) { return 0; }
 #endif
 
+/* The kernel calls this on a core right after it stores its new current
+ * task, with idle nonzero when that task is an idle task. Some model
+ * configurations let idle tasks migrate, so being any idle task establishes
+ * that the core is idle. The ready hook on CPU0 reads this slot, which it
+ * writes in every release anyway, instead of the kernel's current-task entries
+ * or the idle-task handles. */
+void ss_latency_current_set(unsigned core, void *task, int idle)
+{
+    if (core >= LATENCY_CORES) return;
+    atomic_store_explicit(&wake[core].running_idle, idle != 0, memory_order_relaxed);
+    atomic_store_explicit(&wake[core].running, task, memory_order_release);
+}
 /* The kernel calls this after ready-list insertion while its locks exclude
  * changes to the running task. Admit a sample only when its target core runs
- * the idle task or this diagnostic's memory task, as the phase requires. */
+ * the idle task or this diagnostic's memory task, as the phase requires. The
+ * running task comes from the target's own copy in its wake slot. */
 void ss_latency_task_ready(void *task)
 {
     const uint64_t ready = ss_latency_now();
@@ -71,15 +89,10 @@ void ss_latency_task_ready(void *task)
     if (p != IDLE && p != BUSY) return;
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
         if (task != wake_task[c] || !atomic_load_explicit(&wake[c].pending, memory_order_acquire)) continue;
-        TaskHandle_t running = xTaskGetCurrentTaskHandleForCore(c);
+        void *running = atomic_load_explicit(&wake[c].running, memory_order_acquire);
         /* A core outside the streaming mask stays idle in the busy phase. */
         if (p == IDLE || !LATENCY_STREAMS(c)) {
-            /* Some model configurations let idle tasks migrate. Identity as
-             * any kernel idle task establishes that this core is idle. */
-            unsigned idle;
-            for (idle = 0; idle < LATENCY_CORES; ++idle)
-                if (running == xTaskGetIdleTaskHandleForCore(idle)) break;
-            if (idle == LATENCY_CORES) return;
+            if (!atomic_load_explicit(&wake[c].running_idle, memory_order_relaxed)) return;
         } else if (running != load_task[c]) return;
         wake[c].released = ready;
         wake[c].metric = p == IDLE ? SS_LAT_SCHED_IDLE : SS_LAT_SCHED_BUSY;

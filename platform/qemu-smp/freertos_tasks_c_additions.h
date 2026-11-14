@@ -6,5 +6,5 @@ _Static_assert(offsetof(TCB_t, xTLSBlock) == offsetof(StaticTask_t, xDummy17),
 // Only SVC 118 calls this function, with IRQs masked throughout the lookup.
 struct _reent *runtime_current_reent(void) {
     if (xSchedulerRunning == pdFALSE) return _GLOBAL_REENT;
-    return &pxCurrentTCBs[portGET_CORE_ID_FROM_ISR()]->xTLSBlock;
+    return &portCURRENT_TCB(portGET_CORE_ID_FROM_ISR())->xTLSBlock;
 }

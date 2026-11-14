@@ -32,6 +32,13 @@ from unicorn.arm64_const import (UC_ARM64_REG_X0, UC_ARM64_REG_X29, UC_ARM64_REG
                                  UC_ARM64_REG_PC)
 
 ROOT = Path(__file__).resolve().parents[1]
+
+def current_tcb_bytes(symbols):
+    """Bytes between two cores' pxCurrentTCBs entries. The kernel that defines the array names its layout in an
+    absolute symbol (include/sunstone_current_tcb.h): ss_current_tcb_layout_6 for one 64-byte line per core.
+    Without it the image has the unmodified FreeRTOS kernel and 8-byte entries."""
+    return 64 if 'ss_current_tcb_layout_6' in symbols else 8
+
 GATE_RUNS = [['--image', '{elf:sup}', '--output', '{output}']]
 spec = importlib.util.spec_from_file_location('fault_decode', ROOT / 'tools/fault-decode.py')
 decode = importlib.util.module_from_spec(spec)
@@ -159,7 +166,7 @@ def prepare(image, uc, core, state=3, name=b'app-worker\0'):
     epoch = 0x5eed0000 + core
     uc.mem_write(records + core * 128, struct.pack('<3Q', epoch, core, state))
     offset = struct.unpack('<Q', uc.mem_read(image.symbols['a733_fault_task_name_offset'], 8))[0]
-    uc.mem_write(image.symbols['pxCurrentTCBs'] + core * 8, struct.pack('<Q', TCB))
+    uc.mem_write(image.symbols['pxCurrentTCBs'] + core * current_tcb_bytes(image.symbols), struct.pack('<Q', TCB))
     uc.mem_write(TCB + offset, name.ljust(16, b'\0')[:16])
     return epoch
 
@@ -309,7 +316,7 @@ def name_bounds(image):
                         (0x41fffff0, 'outside'), (0, 'null')):
         uc = image.machine()
         prepare(image, uc, 2)
-        uc.mem_write(image.symbols['pxCurrentTCBs'] + 16, struct.pack('<Q', tcb))
+        uc.mem_write(image.symbols['pxCurrentTCBs'] + 2 * current_tcb_bytes(image.symbols), struct.pack('<Q', tcb))
         model = el3_model(2)
         run(image, uc, image.symbols['a733_cached_el1_vectors'] + 4 * 128, {UC_ARM64_REG_SP: EL1_STACK},
             model, ['a733_smp_stop', 'a733_storage_maintenance_stop'])

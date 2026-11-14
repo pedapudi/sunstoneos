@@ -309,14 +309,22 @@ gate, the kernel queues the task through `ss_owner_publish` instead, which
 touches two more `ssKernelCPUs` lines (the incoming words and the dispatch
 word). Under multi-threaded QEMU this happens in about one release in 1,500, so
 it decided whether a run passed. The check budgets the two paths separately:
-the direct path keeps its budget of 3 `ssKernelCPUs` lines and 24 data lines,
-and the publish path has its own budget of 5 and 23, measured in the two such
-windows that the gate's cause model produced. The 24 such windows in a cause
+the direct path keeps its budget of 3 `ssKernelCPUs` lines, and the publish
+path has its own budget of 5, measured in the two such windows that the gate's
+cause model produced. The 24 such windows in a cause
 model with streaming confined to CPUs 4 to 7 fit the same budget for every
 kernel structure. Before each trace, the check classifies a forced window of
 five `ssKernelCPUs` lines and requires that it fits the publish budget only
 when it passes through `ss_owner_publish`, and that it exceeds the direct
 budget otherwise.
+
+The fixture admits a sample from the target core's own copy of its current
+task and of whether that task is an idle task. The core writes both into its
+wake slot on every switch (`traceCURRENT_TCB_SET`, with the idle flag from the
+kernel), so admission reads neither the core's `pxCurrentTCBs` entry nor the
+idle-task handles. CPU0 writes that slot in every release anyway, so the
+admission adds no line; the budgets hold no `pxCurrentTCBs` line in any
+release.
 
 ## The control phase retains enough samples for the requested percentile
 

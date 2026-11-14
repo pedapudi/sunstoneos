@@ -322,14 +322,14 @@ static bool ssKernelHandlePin(void *task, struct ss_kernel_pin *pin)
 static unsigned ssKernelCPUId(void) { return (unsigned)portGET_CORE_ID(); }
 static TaskHandle_t ssKernelCurrentSnapshot(unsigned cpu)
 {
-    return __atomic_load_n(&pxCurrentTCBs[cpu], __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&portCURRENT_TCB(cpu), __ATOMIC_ACQUIRE);
 }
 static uint64_t ssKernelNow(void)
 { return atomic_load_explicit(&ssKernelTime, memory_order_acquire); }
 static TCB_t *ssKernelSelf(void)
 {
     /* Boot has no migration and has not installed the task register yet. */
-    if (!xSchedulerRunning) return pxCurrentTCBs[ssKernelCPUId()];
+    if (!xSchedulerRunning) return portCURRENT_TCB(ssKernelCPUId());
     /* One architectural snapshot binds task identity across migration. */
     return (TCB_t *)(uintptr_t)(ullPortGetTaskRegister() & portTASK_REGISTER_TCB_MASK);
 }
@@ -619,7 +619,7 @@ static bool ssKernelAddTask(TCB_t *t)
     bool yield = false;
     if (slot < SS_OWNER_SLOTS && xSchedulerRunning) {
         struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
-        if (owner == ssKernelCPUId() && t->uxPriority > pxCurrentTCBs[owner]->uxPriority) {
+        if (owner == ssKernelCPUId() && t->uxPriority > portCURRENT_TCB(owner)->uxPriority) {
             cpu->reschedule = true;
             yield = !cpu->preempt;
         }
@@ -1596,8 +1596,9 @@ static void ssKernelSwitch(unsigned c)
     atomic_store_explicit(&s->execution, SS_K_RUNNING, memory_order_release);
     s->off_cpu = false;
     ssKernelPullIdle(c, (((TCB_t *)selected->context)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0);
-    __atomic_store_n(&pxCurrentTCBs[c], selected->context, __ATOMIC_RELEASE);
-    pxCurrentTCBs[c]->xTaskRunState = (BaseType_t)c;
+    __atomic_store_n(&portCURRENT_TCB(c), selected->context, __ATOMIC_RELEASE);
+    portCURRENT_TCB(c)->xTaskRunState = (BaseType_t)c;
+    traceCURRENT_TCB_SET(c, selected->context, (((TCB_t *)selected->context)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0);
 #ifndef SS_KERNEL_TEST_NO_IDLE_PULL
     /* The selecting pass skips the pull, and the pull takes compatibility locks the selector
      * never takes. A migratable task left waiting behind the task just selected, with an
@@ -1612,15 +1613,15 @@ static void ssKernelSwitch(unsigned c)
 #endif
     ssKernelSliceRefresh(c, true);
     traceTASK_SWITCHED_IN();
-    portTASK_SWITCH_HOOK(pxCurrentTCBs[c]);
+    portTASK_SWITCH_HOOK(portCURRENT_TCB(c));
 #if ( configUSE_POSIX_ERRNO == 1 )
-    FreeRTOS_errno = pxCurrentTCBs[c]->iTaskErrno;
+    FreeRTOS_errno = portCURRENT_TCB(c)->iTaskErrno;
 #endif
 #if ( configUSE_C_RUNTIME_TLS_SUPPORT == 1 )
-    configSET_TLS_BLOCK(pxCurrentTCBs[c]->xTLSBlock);
+    configSET_TLS_BLOCK(portCURRENT_TCB(c)->xTLSBlock);
 #endif
     cpu->reschedule = false;
-    bool idle = (pxCurrentTCBs[c]->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0;
+    bool idle = (portCURRENT_TCB(c)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0;
     if (ss_owner_commit_dispatch(&cpu->run, selected->priority, idle)) {
         cpu->reschedule = true;
         ssKernelForce(c);
@@ -3468,7 +3469,7 @@ static void ssKernelSuspendAll(void)
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
     ++ssKernelCPUs[c].preempt;
-    uintptr_t holder = (uintptr_t)pxCurrentTCBs[c];
+    uintptr_t holder = (uintptr_t)portCURRENT_TCB(c);
     uint64_t incarnation = xSchedulerRunning ? atomic_load_explicit(
         &ssKernelRegistry.descriptor[ssKernelCurrent()->ready.slot].incarnation, memory_order_acquire) : 0;
     portCLEAR_INTERRUPT_MASK(irq);
@@ -3478,7 +3479,7 @@ static BaseType_t ssKernelResumeAll(void)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
-    uintptr_t holder = (uintptr_t)pxCurrentTCBs[c];
+    uintptr_t holder = (uintptr_t)portCURRENT_TCB(c);
     uint64_t incarnation = xSchedulerRunning ? atomic_load_explicit(
         &ssKernelRegistry.descriptor[ssKernelCurrent()->ready.slot].incarnation, memory_order_acquire) : 0;
     bool yield = ss_control_resume_all(&ssKernelControl, c, holder, incarnation,
