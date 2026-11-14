@@ -23,6 +23,9 @@ ROOT = Path(__file__).resolve().parents[1]
 LAND = Path(os.environ.get('LAND_UNDER_TEST', ROOT / 'tools/land.py'))   # an older copy shows a new case failing
 ENV = {**os.environ, 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_SYSTEM': os.devnull,
        'SUNSTONE_HOST_SPACE': 'off',     # the fake cache is in a scratch directory (tools/host_space.py)
+       # A landing gate runs this check with SUNSTONE_GATE_PRIORITY=landing (tools/land.py); the gates and landings this check
+       # starts are workers unless a case says otherwise, so the class is never inherited from the gate running the check.
+       'SUNSTONE_GATE_PRIORITY': 'worker',
        'GIT_AUTHOR_NAME': 'check', 'GIT_AUTHOR_EMAIL': 'check@example.invalid',
        'GIT_COMMITTER_NAME': 'check', 'GIT_COMMITTER_EMAIL': 'check@example.invalid'}
 

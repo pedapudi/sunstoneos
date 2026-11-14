@@ -15,11 +15,17 @@ ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--build-dir', '{build:scheduler-control-models}', '--output', '{output}', '--positive', '--perturb']]
 # Perturbation sweep: kernel/scheduler/perturb.h names the sites. Each point delays one site on every core by a
 # number of loop turns; on QEMU's deterministic clock every delay is a different interleaving of the same run.
-PERTURB_MODELS = ('scheduler-partitioned-qemu', 'scheduler-partitioned-storm-qemu')
-PERTURB_SITES = {'api-entry': 0, 'owner-publish': 1, 'owner-drain': 2, 'control-open': 3}
+PERTURB_SITES = {'api-entry': 0, 'owner-publish': 1, 'owner-drain': 2, 'control-open': 3, 'object-walk': 4}
+# Each model's pass marker and the sites it is swept at. The partitioned models link no event group, so the walk site
+# runs only in the objects model.
+SCHEDULER_SITES = ('api-entry', 'owner-publish', 'owner-drain', 'control-open')
+PERTURB_MODELS = {'scheduler-partitioned-qemu': ('PASS partitioned concurrent:', SCHEDULER_SITES),
+                  'scheduler-partitioned-storm-qemu': ('PASS partitioned concurrent:', SCHEDULER_SITES),
+                  'scheduler-objects-qemu': ('PASS objects:', ('object-walk',))}
 PERTURB_TURNS = (300, 1000, 3000)
 CHECK_INPUTS = ['kernel/scheduler', 'patches/freertos-smp-c.patch',
-                'patches/freertos-partitioned-api.patch', 'checks/scheduler-partitioned-qemu.c',
+                'patches/freertos-partitioned-api.patch', 'patches/freertos-partitioned-objects.patch',
+                'checks/scheduler-partitioned-qemu.c',
                 'checks/scheduler-partitioned-qemu-config/FreeRTOSConfig.h',
                 'checks/scheduler-objects-qemu.c', 'checks/scheduler-yield-qemu.c']
 
@@ -95,8 +101,8 @@ def main():
 
     if args.perturb:
         from concurrent.futures import ThreadPoolExecutor
-        points = [(model, site, turns) for model in PERTURB_MODELS
-                  for site in PERTURB_SITES for turns in PERTURB_TURNS]
+        points = [(model, site, turns) for model, (_, sites) in PERTURB_MODELS.items()
+                  for site in sites for turns in PERTURB_TURNS]
 
         def perturbed(point):
             model, site, turns = point
@@ -106,7 +112,7 @@ def main():
                 status, log = execute(build / (model + '.elf'), directory, 8, (PERTURB_SITES[site], turns))
             except AssertionError:
                 return point, 'QEMU timed out'
-            if status == 0 and 'PASS partitioned concurrent:' in log and 'FAIL' not in log:
+            if status == 0 and PERTURB_MODELS[model][0] in log and 'FAIL' not in log:
                 return point, None
             failed = re.search(r'FAIL [^\s]+', log)
             return point, failed.group(0) if failed else f'status {status}'

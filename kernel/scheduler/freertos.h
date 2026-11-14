@@ -43,5 +43,18 @@ void ssKernelOwnerYieldTail(void);
 #define ssTimerInitExit() vTaskExitCritical()
 #define vTaskSuspendAll() ssKernelObjectSuspendOn((const void *)(SS_FREERTOS_OBJECT_EXPR))
 #define xTaskResumeAll() ssKernelObjectResumeOn()
+/* A walk of an object's waiter list. The owner of a waiter times it out, aborts it or detaches it under the slot's
+ * interrupt-side lock alone, so a walk that reads an item's successor before it uses either holds that lock as well as
+ * the task-side lock from the first read to the last use. */
+#define ssKernelObjectWalkEnter() ssKernelObjectEnterFromISROn((const void *)(SS_FREERTOS_OBJECT_EXPR))
+#define ssKernelObjectWalkLeave(mask) ssKernelObjectLeaveFromISR(mask)
+/* Host models delay here, between reading a waiter-list item and its successor and using them (perturb.h). */
+#include "perturb.h"
+#define ssKernelObjectWalkStep() SS_KERNEL_PERTURB(SS_PERTURB_OBJECT_WALK)
+/* A member queue would wake a queue set's waiters under the member's slot, while the set's waiters are timed out under
+ * the set's slot. */
+#if ( configUSE_QUEUE_SETS == 1 )
+#error "queue sets need the set's slot lock held where a member queue wakes the set's waiters"
+#endif
 #endif
 #endif
