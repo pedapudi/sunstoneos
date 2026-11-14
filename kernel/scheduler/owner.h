@@ -30,10 +30,40 @@ struct ss_owner_task {
     bool queued;
 };
 struct ss_owner_fifo { struct ss_owner_task *head, *tail; };
-/* Cache-line groups. Another core writes the second group on every wake; the
- * first and third groups belong to the owner alone, so a remote publication
- * never invalidates the lines the owner selects from. */
 #define SS_CACHE_LINE 64u
+#define SS_OWNER_SOURCES 8u /* publishing CPUs */
+#define SS_OWNER_RING 32u   /* hints per (source, owner) outbox */
+/* What an owner reads on every entry, on one line that only other parties
+ * write. published[s] counts the hints source CPU s has written to its outbox
+ * (16-bit, modulo). limit[s] is source s's copy of the owner's consumed[s],
+ * refreshed only when its outbox looks full. spilled counts hints that found
+ * a full outbox and went to the spill bitmap instead. control and gate belong
+ * to the control path (freertos_control.h): a count of requests made pending
+ * and not parked on this CPU, and a copy of the gate phase. The owner never
+ * writes this line, so under streaming load the copy that serves its reads
+ * stays in the cache of the CPU that last published. */
+struct ss_owner_inbox {
+    _Alignas(SS_CACHE_LINE) _Atomic uint16_t published[SS_OWNER_SOURCES];
+    _Atomic uint16_t limit[SS_OWNER_SOURCES];
+    _Atomic uint32_t spilled, control, gate;
+    /* Constant after init. Here so that a publisher's SGI reads no other
+     * owner line. */
+    unsigned cpu;
+    const struct ss_owner_backend *backend;
+};
+/* Written only by its source: entry[n % SS_OWNER_RING] holds hint n as
+ * slot | priority << 7. */
+struct ss_owner_outbox {
+    _Alignas(SS_CACHE_LINE) _Atomic uint16_t entry[SS_OWNER_RING];
+};
+_Static_assert(sizeof(struct ss_owner_inbox) == SS_CACHE_LINE &&
+               sizeof(struct ss_owner_outbox) == SS_CACHE_LINE, "one line each");
+/* Cache-line groups. The first group and the detached group belong to the
+ * owner alone. Publishers write the inbox, their own outbox and, only when
+ * that is full, the spill bitmap; the owner writes consumed, which a source
+ * reads only when its outbox looks full. So a publication reads no line the
+ * owner wrote, and the owner reads no line it wrote that another CPU must
+ * fetch back. */
 struct ss_owner {
     /* A local wake and a selection read the current task, the bitmap and one
      * FIFO. The FIFOs are stored highest priority first, so priorities 7 to 5
@@ -41,17 +71,14 @@ struct ss_owner {
     _Alignas(SS_CACHE_LINE) struct ss_owner_task *current;
     uint32_t ready_bitmap;
     struct ss_owner_fifo ready_by_rank[SS_OWNER_PRIORITIES];
-    _Alignas(SS_CACHE_LINE) _Atomic uint64_t incoming[SS_OWNER_PRIORITIES][2];
-    /* Logical wake-list head: sixteen bucket bits. Slot bits precede their
-     * head publication; owner detach may harmlessly consume a slot early. */
-    _Atomic uint64_t incoming_words;
-    _Atomic uint64_t dispatch;
-    _Atomic uint64_t sgi_pending;
+    struct ss_owner_inbox inbox;
+    struct ss_owner_outbox outbox[SS_OWNER_SOURCES];
+    _Alignas(SS_CACHE_LINE) _Atomic uint64_t spill[SS_OWNER_PRIORITIES][2];
+    _Alignas(SS_CACHE_LINE) _Atomic uint16_t consumed[SS_OWNER_SOURCES];
     _Alignas(SS_CACHE_LINE) uint64_t detached[SS_OWNER_PRIORITIES][2];
     unsigned cursor[SS_OWNER_PRIORITIES];
-    uint64_t sequence;
-    unsigned cpu;
-    const struct ss_owner_backend *backend;
+    uint16_t taken[SS_OWNER_SOURCES]; /* owner's copy of consumed */
+    uint32_t spilled_seen;
 };
 static inline struct ss_owner_fifo *ss_owner_ready(struct ss_owner *o, unsigned priority)
 { return &o->ready_by_rank[SS_OWNER_PRIORITIES - 1u - priority]; }
@@ -63,28 +90,28 @@ struct ss_owner_task *ss_owner_select(struct ss_owner *);
 struct ss_owner_task *ss_owner_yield(struct ss_owner *);
 /* Requeue interrupted current at the head; yielding uses the tail. */
 void ss_owner_preempt(struct ss_owner *);
-void ss_owner_publish(struct ss_owner *, unsigned slot, unsigned priority);
+/* Publish a hint from source CPU `source` and signal the owner with an SGI,
+ * every time: the owner's dispatch state is not read, because reading it
+ * would fetch a line the owner wrote. The caller masks local API interrupts,
+ * so each source has one writer. */
+void ss_owner_publish(struct ss_owner *, unsigned source, unsigned slot, unsigned priority);
 /* Inspections validate current descriptor/wait state; hints never authorize a
  * wake. Each call inspects at most SS_OWNER_BATCH hints, highest priority first.
  * The callback alone decides whether to enqueue under local IRQ exclusion.
- * Incoming scan cost is 16 acquire loads initially, then for each subsequent
- * attempt: 16 loads if detached is empty, otherwise 2*(7-p) for its highest
- * detached priority p. At most 16 attempts give at most 256 loads; each nonzero
- * load adds one exchange. Sixteen priority-7 hints already detached require
- * only the initial 16 loads and their nonzero-word exchanges. */
+ * Each merge reads the inbox line, then the outbox of each source whose count
+ * moved, and the spill bitmap only when the spill count moved. A drain merges
+ * before each inspection, so a hint published during the batch can outrank
+ * the rest of it. */
 typedef void (*ss_owner_inspect)(void *, unsigned slot, unsigned hint_priority);
 unsigned ss_owner_drain(struct ss_owner *, ss_owner_inspect, void *);
+/* Owner CPU only. True while a hint is unmerged or detached. */
 bool ss_owner_has_pending(const struct ss_owner *);
-/* Publish selected priority (0..7) or idle, clear SGI pending, DMB, inspect.
- * Any remaining publication requires a bounded continuation, including work
- * below the selected priority. True requires another owner entry before
- * committing task execution/WFI.
- * The final call and WFI must retain DAIF.I masking and admit the SGI at GIC. */
-bool ss_owner_commit_dispatch(struct ss_owner *, unsigned priority, bool idle);
-bool ss_owner_settle(struct ss_owner *);
+/* Owner CPU only. True while a hint for this slot is unmerged or detached. */
+bool ss_owner_slot_pending(const struct ss_owner *, unsigned slot);
+/* Signal the owner again when hints remain after its pass. */
 void ss_owner_continue(struct ss_owner *);
 
-/* Permanent descriptor storage and incoming words must outlive all publishers.
+/* Permanent descriptor storage and the owner mailbox must outlive all publishers.
  * A valid task handle is required before pin. No TCB field may be read before
  * pin succeeds. Close cannot free storage: wait for references, then drain and
  * acknowledge every owner's live/detached/control hints before reopen. */

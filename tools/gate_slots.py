@@ -12,7 +12,8 @@ it one. A landing may use any slot and prefers slot 0, which workers never use (
 never waits behind workers and jumps a worker that has waited longer for a slot both may use.
 
 The steps whose result depends on wall time (config: timing_checks, timing_steps) hold the exclusive CACHE/gate-timing.lock while
-they run, so no two gates run such a step at once. Other work of other gates still runs beside them.
+they run, so no two gates run such a step at once. Other work of other gates still runs beside them. Its waiters queue the same
+way (CACHE/gate-timing-queue), so a landing takes the timing lock when the step that holds it ends, ahead of waiting workers.
 """
 import contextlib
 import fcntl
@@ -146,25 +147,7 @@ class SlotQueue:
         return handle
 
     def _live(self, mine):
-        """The tickets whose owners still wait, oldest landing first; a ticket whose owner died is removed."""
-        live = []
-        for path in sorted(self.directory.glob('*.ticket')):
-            if path == mine:
-                live.append(path)
-                continue
-            try:
-                handle = open(path, 'a+')
-            except OSError:
-                continue
-            try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                live.append(path)
-            else:
-                path.unlink(missing_ok=True)
-            finally:
-                handle.close()
-        return live
+        return live_tickets(self.directory, mine)
 
     def _priority_of(self, ticket):
         return LANDING if ticket.name.startswith('0-') else WORKER
@@ -241,18 +224,73 @@ class SlotQueue:
         return Slot(mine, free[mine])
 
 
-@contextlib.contextmanager
-def timing_lock(cache, label='', announce=print):
-    """Hold the exclusive timing lock; blocks while another gate runs a wall-time step."""
-    handle = _open(Path(cache) / 'gate-timing.lock')
-    try:
+def live_tickets(directory, mine):
+    """The tickets in directory whose owners still wait, landings first and then oldest first; a ticket whose owner died is
+    removed. A waiter holds a flock on its own ticket for as long as it waits."""
+    live = []
+    for path in sorted(Path(directory).glob('*.ticket')):
+        if path == mine:
+            live.append(path)
+            continue
+        try:
+            handle = open(path, 'a+')
+        except OSError:
+            continue
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            if announce:
-                announce('waiting for the timing lock, held by %s' % _held_by(handle))
-            fcntl.flock(handle, fcntl.LOCK_EX)
-        _describe(handle, 'pid %d since %s %s\n' % (os.getpid(), time.strftime('%Y-%m-%dT%H:%M:%S'), label))
+            live.append(path)
+        else:
+            path.unlink(missing_ok=True)
+        finally:
+            handle.close()
+    return live
+
+
+@contextlib.contextmanager
+def timing_lock(cache, label='', announce=print, priority=WORKER, poll=0.5):
+    """Hold the exclusive timing lock for one wall-time step.
+
+    A gate that wants it writes a ticket (CACHE/gate-timing-queue/CLASS-TIME-PID.ticket, as for the slots) and takes the lock only
+    when its ticket is the first live one: landings before workers, then oldest first. A free lock is not taken past an earlier
+    live ticket. The gate that holds the lock keeps it until its step ends; a landing waits for that step, not for the waiting
+    workers."""
+    cache = Path(cache)
+    handle = _open(cache / 'gate-timing.lock')
+    directory = cache / 'gate-timing-queue'
+    directory.mkdir(parents=True, exist_ok=True)
+    ticket = directory / ('%d-%020d-%d.ticket' % (CLASS[priority], time.time_ns(), os.getpid()))
+    queue = _open(cache / 'gate-timing-queue.lock')
+    fcntl.flock(queue, fcntl.LOCK_EX)
+    try:
+        held = open(ticket, 'a+')
+        fcntl.flock(held, fcntl.LOCK_EX)
+        _describe(held, 'pid %d %s %s\n' % (os.getpid(), priority, label))
+    finally:
+        queue.close()
+    try:
+        announced = False
+        try:
+            while True:
+                queue = _open(cache / 'gate-timing-queue.lock')
+                fcntl.flock(queue, fcntl.LOCK_EX)
+                try:
+                    if live_tickets(directory, ticket)[0] == ticket:
+                        try:
+                            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            break
+                        except BlockingIOError:
+                            pass
+                finally:
+                    queue.close()
+                if announce and not announced:
+                    announce('waiting for the timing lock (%s), held by %s' % (priority, _held_by(handle)))
+                    announced = True
+                time.sleep(poll)
+        finally:
+            ticket.unlink(missing_ok=True)
+            held.close()
+        _describe(handle, 'pid %d since %s %s %s\n' % (os.getpid(), time.strftime('%Y-%m-%dT%H:%M:%S'), priority, label))
         yield
     finally:
         handle.close()

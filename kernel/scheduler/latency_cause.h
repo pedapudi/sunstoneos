@@ -157,4 +157,5 @@ void ss_latency_cause_sgi_begin(unsigned target);
 void ss_latency_cause_sgi_end(unsigned target);
 void ss_latency_cause_sgi_sent(unsigned target);
 #endif
+#include "service_cycles.h"
 #endif

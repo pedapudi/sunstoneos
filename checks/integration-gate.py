@@ -284,6 +284,22 @@ def plan(value=None, changed=None, index=None):
         self.assertEqual(record['tree'], subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=self.source, text=True).strip())
         self.assertEqual(sorted(record['checks']), ['focused.py', 'progress.py'])
 
+    def test_parallel_checks_start_longest_first_by_earlier_timings(self):
+        # The selection lists focused.py before progress.py. One worker shows the start order: the longest recorded step first.
+        for durations, expected in (({'indexed-focused': 1.0, 'indexed-progress': 9.0}, ['checks/progress.py', 'checks/focused.py']),
+                                    ({'indexed-focused': 9.0, 'indexed-progress': 1.0}, ['checks/focused.py', 'checks/progress.py']),
+                                    ({'indexed-progress': 9.0}, ['checks/focused.py', 'checks/progress.py'])):   # unrecorded first
+            earlier = self.sandbox / 'build/gate-earlier/timing.txt'
+            earlier.parent.mkdir(parents=True, exist_ok=True)
+            earlier.write_text(''.join('%8.1f %s\n' % (seconds, name) for name, seconds in durations.items()))
+            self.calls.unlink(missing_ok=True)
+            result = self.run_gate('--affected', 'HEAD~1..HEAD', '--jobs', '1', label='order-%d' % len(self.records()))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            runs = [call[1] for call in self.records() if call[0] == 'python']
+            self.assertEqual(runs, expected, durations)
+            for gate in (self.sandbox / 'build').glob('gate-order-*'):
+                (gate / 'timing.txt').write_text('')     # this gate's own record must not decide the next case
+
     def test_pending_affected_checks_are_reported_and_incomplete(self):
         result = self.run_gate('--changed', 'pending')
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
@@ -724,6 +740,28 @@ exec "$REAL" "$@"
         summary = (self.sandbox / 'build/gate-case/summary.txt').read_text()
         self.assertIn('FAIL check-pmic-tree', summary)
         self.assertIn('PASS check-power-domains-tree', summary)
+
+    def test_failing_step_keeps_its_build_directory_from_the_next_gate(self):
+        central = self.sandbox / 'build' / ('gate-central-' + self.tree(self.source))
+        central.mkdir(parents=True)
+        (central / 'product.elf').write_text('first gate\n')
+        self.env['GATE_TEST_FAIL'] = 'kernel-check'
+        result = self.run_gate('--reason', 'Central build fails', '--target', 'kernel-check', '--check', 'kernel')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        kept_root = self.sandbox / 'build/gate-case/evidence/kept-builds'
+        kept = kept_root / central.name
+        self.assertEqual((kept / 'product.elf').read_text(), 'first gate\n')
+        record = json.loads((kept_root / 'kept.json').read_text())
+        self.assertEqual(record['central-build']['kept'], {str(central): str(kept)})
+        self.assertIn(str(kept), record['central-build']['rerun'])
+        self.assertNotIn(str(central), record['central-build']['rerun'])
+        # The next gate of the same checkout builds into the same directory; the first gate's copy does not change.
+        (central / 'product.elf').write_text('second gate\n')
+        self.env.pop('GATE_TEST_FAIL')
+        result = self.run_gate('--reason', 'Central build passes', '--target', 'kernel-check', '--check', 'kernel', label='second')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((kept / 'product.elf').read_text(), 'first gate\n')
+        self.assertFalse((self.sandbox / 'build/gate-second/evidence/kept-builds').exists())
 
     def test_failed_build_skips_only_the_checks_that_need_it(self):
         self.full_catalogue()

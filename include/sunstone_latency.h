@@ -182,6 +182,12 @@ void ss_latency_current_set(unsigned core, void *task, int idle);
 #define SS_LATENCY_GPU_POST(client) ((void)0)
 #define SS_LATENCY_GPU_RECEIVED(client) ((void)0)
 #endif
+#ifdef SUNSTONE_LATENCY_SERVICE_CYCLES
+/* Measurement build only (kernel/scheduler/service_cycles.h): the latency
+ * workload copies the service cycle report after every CPU has frozen. */
+struct ss_service_cycles_report;
+bool ss_service_cycles_snapshot(struct ss_service_cycles_report *out);
+#endif
 #ifdef __cplusplus
 }
 #endif

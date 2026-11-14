@@ -156,7 +156,14 @@ bytes removed and the size and SHA-256 of every linked ELF removed. The gate als
 image it built, because the per-checkout build directories that hold the images are rebuilt by the next gate on that checkout.
 
 A step that failed or was skipped keeps everything, and so does an evidence directory that no step names, so a failure stays
-diagnosable. The gate-root files stay as they are: `summary.txt`, `commands.txt`, `timing.txt`, `environment.txt`, `gate-record.json`,
+diagnosable. That includes the build products it ran on: the build directories are named after the checkout, not the gate, and every
+landing gate runs in `~/.cache/sunstoneos/land-integration`, so the next landing rebuilds into the same `gate-img-*` directories (on
+2026-11-14 a failing landing step's image was overwritten by the next landing before anyone re-ran it). At its end, while it still holds
+its checkout, a gate copies every build directory that a failing step's command names into `evidence/kept-builds/` (for a bundle, only the
+`out-` directory of its tree state), and `kept-builds/kept.json` records each failing step's command as run and pointed at the copies.
+Over the 130 gates of the week to 2026-11-14, 27 had a failing step, and the directories those steps named came to 39 MiB per failed
+gate at the median, 286 MiB at most and 1.7 GB in all. When a later gate of the same landing label passes, its slimming of the earlier
+gates removes the build products of the copies too. The gate-root files stay as they are: `summary.txt`, `commands.txt`, `timing.txt`, `environment.txt`, `gate-record.json`,
 `disk-peak.json` and the step logs. These are the only files that anything reads from a gate directory after the gate: `tools/land.py`
 reads `summary.txt` and `gate-record.json`, `tools/host_space.py` reads `disk-peak.json`, the evidence records under `docs/evidence/` cite
 `summary.txt` and `commands.txt`, and the board runner copies each image into its own queue entry. A passing gate also slims every step
@@ -199,7 +206,7 @@ divided by three and rounded up (`-j 3` in a slot of `-j 7`), and starts another
 peak are `image_builds` in [tools/gate-slots.json](../tools/gate-slots.json), measured on the 21 image builds of an affected gate:
 one at a time with `-j 7` they took 168 s, and three at a time with `-j 3` took 72 s; a rebuild after one kernel source changed took
 135 s and 48 s. Three builds peak at 1.0 GB in all, inside the measured peak of a gate, so the slot count does not change. A keep-going gate
-then runs the checks in parallel. `--jobs N` bounds the workers and sets the `-j` of the builds (default: the gate's share of the
+then runs the checks in parallel, longest first: the order follows the host seconds that the latest 20 earlier gates recorded in their `timing.txt`, the most recent record of each step winning, and a step with no record starts first. The order changes no check's inputs or verdict; it lets the longest check start when the builds end instead of after the shorter ones. `--jobs N` bounds the workers and sets the `-j` of the builds (default: the gate's share of the
 usable cores, below; 8 and `-j 12` for `--full`). The
 gate starts no new check while `MemAvailable` is below `--min-available-gb`
 (default 32); a check that cannot start within `--memory-wait` seconds
@@ -290,9 +297,9 @@ host load (in one full run of the check beside 24 busy processes, 11 of 71 QEMU 
 heaviest perturbation, against a bound of 7,600; each progress wait of `scheduler-objects-qemu` has 4,000 ticks, and how close a run
 comes to that is not recorded.
 The perturbation sweep kills a QEMU run that exceeds eight times the slowest measured point,
-85.7 s, recorded in the same file; the slowest run took 192 s beside 24 busy processes. Other gates' work still runs beside them. The list is `timing_checks` and `timing_steps` in the same file. A check's
+85.7 s, recorded in the same file; the slowest run took 192 s beside 24 busy processes. Other gates' work still runs beside them. A gate that wants the lock writes a ticket in `~/.cache/sunstoneos/gate-timing-queue/` and takes the lock only when its ticket is the first live one, landings before workers and then oldest first, as for the slots; a free lock is not taken past an earlier waiter, and the gate that holds it keeps it until its step ends. A landing therefore waits only for the step that runs, not for the workers queued before it (measured on 2026-11-13: landing gates waited up to 475 s for this lock). The list is `timing_checks` and `timing_steps` in the same file. A check's
 pass criteria do not change. `checks/gate-slots.py` runs two gates at once, the exclusive timing lock, a landing that goes ahead of an
-older worker and a killed waiter.
+older worker, a landing that takes the timing lock ahead of an older waiting worker, and a killed waiter.
 
 Every check runs from the source directory with standard input closed and one
 environment: the process environment, `PYTHONDONTWRITEBYTECODE=1`,

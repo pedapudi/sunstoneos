@@ -33,9 +33,16 @@ static bool try_lock(struct ss_control_slot *s)
     return atomic_compare_exchange_strong_explicit(&s->tickets, &serving,
         serving + 1, memory_order_acq_rel, memory_order_acquire);
 }
+/* The pending bit precedes the count, so an owner whose acquire load sees the
+ * count sees the bit. */
+static void summarize(struct ss_control *c, unsigned cpu)
+{
+    if (c->inbox[cpu]) atomic_fetch_add_explicit(&c->inbox[cpu]->control, 1, memory_order_release);
+}
 static void hint(struct ss_control *c, unsigned cpu, unsigned slot)
 {
     atomic_fetch_or_explicit(&c->pending[cpu].word[slot / 64], UINT64_C(1) << (slot % 64), memory_order_release);
+    summarize(c, cpu);
 #ifdef SUNSTONE_LATENCY_CAUSE
     ss_latency_cause_sgi_begin(cpu);
 #endif
@@ -93,6 +100,7 @@ void ss_control_wake_mask(struct ss_control *c, unsigned cpu, const uint64_t slo
         atomic_fetch_and_explicit(&c->parked[cpu].word[w], ~admitted[w], memory_order_release);
     }
     if (!(admitted[0] | admitted[1])) return;
+    summarize(c, cpu);
 #ifdef SUNSTONE_LATENCY_CAUSE
     ss_latency_cause_sgi_begin(cpu);
 #endif
@@ -188,6 +196,19 @@ void ss_control_init(struct ss_control *c, uint64_t active,
     c->ops = *ops;
     c->active_mask = active;
 }
+void ss_control_attach_inbox(struct ss_control *c, unsigned cpu, struct ss_owner_inbox *inbox)
+{
+    if (cpu >= SS_CONTROL_CPUS) return;
+    atomic_store_explicit(&inbox->gate, atomic_load_explicit(&c->gate_phase, memory_order_relaxed),
+                          memory_order_relaxed);
+    c->inbox[cpu] = inbox;
+}
+void ss_control_set_gate(struct ss_control *c, unsigned phase)
+{
+    atomic_store_explicit(&c->gate_phase, phase, memory_order_release);
+    for (unsigned cpu = 0; cpu < SS_CONTROL_CPUS; ++cpu)
+        if (c->inbox[cpu]) atomic_store_explicit(&c->inbox[cpu]->gate, phase, memory_order_release);
+}
 void ss_control_register(struct ss_control *c, unsigned slot,
                          struct ss_owner_descriptor *d, uint64_t incarnation,
                          unsigned owner, unsigned priority, uint64_t affinity)
@@ -258,6 +279,7 @@ bool ss_control_suspend_current(struct ss_control *c, unsigned slot, unsigned cp
     unsigned owner = atomic_load_explicit(&s->owner, memory_order_acquire);
     atomic_fetch_or_explicit(&c->pending[owner].word[slot / 64],
                             UINT64_C(1) << (slot % 64), memory_order_release);
+    summarize(c, owner);
     ss_owner_barrier(c->backend);
     /* The current task immediately saves its frame. An interrupt that arrives
      * before that transition already supplies the required owner entry. */
@@ -560,7 +582,7 @@ void ss_control_suspend_all(struct ss_control *c, unsigned cpu, uintptr_t holder
     c->gate_holder = holder; c->gate_incarnation = incarnation; c->gate_depth = 1;
     atomic_store_explicit(&c->gate_ack, 0, memory_order_relaxed);
     atomic_fetch_add_explicit(&c->gate_epoch, 1, memory_order_relaxed);
-    atomic_store_explicit(&c->gate_phase, SS_GATE_ACQUIRING, memory_order_release);
+    ss_control_set_gate(c, SS_GATE_ACQUIRING);
 #ifdef SS_KERNEL_TEST_ADMIN_ENTER
     extern void ss_kernel_test_gate_acquiring(void) __attribute__((weak));
     if (ss_kernel_test_gate_acquiring) ss_kernel_test_gate_acquiring();
@@ -570,7 +592,7 @@ void ss_control_suspend_all(struct ss_control *c, unsigned cpu, uintptr_t holder
             c->backend->sgi(c->backend->context, target);
     (void)ss_control_checkpoint(c, cpu);
     while (atomic_load_explicit(&c->gate_ack, memory_order_acquire) != c->active_mask) ss_owner_wait(c->backend);
-    atomic_store_explicit(&c->gate_phase, SS_GATE_HELD, memory_order_release);
+    ss_control_set_gate(c, SS_GATE_HELD);
 }
 bool ss_control_resume_all(struct ss_control *c, unsigned cpu, uintptr_t holder,
                            uint64_t incarnation, bool running)
@@ -579,12 +601,12 @@ bool ss_control_resume_all(struct ss_control *c, unsigned cpu, uintptr_t holder,
     if (atomic_load_explicit(&c->gate_phase, memory_order_acquire) != SS_GATE_HELD ||
         c->gate_holder != holder || c->gate_incarnation != incarnation) return false;
     if (--c->gate_depth) return false;
-    atomic_store_explicit(&c->gate_phase, SS_GATE_RELEASING, memory_order_release);
+    ss_control_set_gate(c, SS_GATE_RELEASING);
     bool yielded = c->ops.dispatch && c->ops.dispatch(c->ops.context, cpu);
     for (unsigned target = 0; target < SS_CONTROL_CPUS; ++target)
         if ((c->active_mask & (UINT64_C(1) << target)) && c->backend && c->backend->sgi)
             c->backend->sgi(c->backend->context, target);
-    atomic_store_explicit(&c->gate_phase, SS_GATE_OPEN, memory_order_release);
+    ss_control_set_gate(c, SS_GATE_OPEN);
     atomic_fetch_add_explicit(&c->gate_serving, 1, memory_order_release);
     ss_owner_event(c->backend); return yielded;
 }

@@ -15,7 +15,8 @@ ROOT=Path(__file__).resolve().parents[1]
 CHECK_INPUTS=['kernel/scheduler/latency_cause.c','kernel/scheduler/latency_cause.h',
               'kernel/scheduler/freertos.c','kernel/scheduler/freertos_control.c',
               'kernel/scheduler/owner.c','runtime/latency_irq.c',
-              'checks/scheduler-cause-host','checks/scheduler-pmu-support.c']
+              'checks/scheduler-cause-host','checks/scheduler-pmu-support.c',
+              'kernel/scheduler/service_cycles.c','kernel/scheduler/service_cycles.h','checks/service-cycles-support.c']
 RETURN,STACK,OUTPUT,SCRATCH=0x47fff000,0x47f00000,0x43010000,0x43000000
 CC=1<<31
 EVENTS=0x1f
@@ -60,6 +61,8 @@ class Model:
             dst,key=i.op_str.split(', ')
             if key=='tpidrro_el0':value=0x43000000|(self.core<<48)|((1<<56) if self.el1 else 0)
             elif key=='tpidr_el1':assert self.el1;value=self.core
+            # CNTKCTL_EL1.EL0VCTEN is set on the board (platform/a733-smp-cached/continue.S).
+            elif key=='cntvct_el0':value=self.clock
             elif key=='cntpct_el0':
                 if self.pair_pending:
                     self.pair_attempts+=1
@@ -115,9 +118,11 @@ def main():
     flags=['/usr/bin/clang-21','--target=aarch64-none-elf','-march=armv8.1-a+lse','-mgeneral-regs-only',
            '-ffreestanding','-fno-builtin','-fno-stack-protector','-O2','-g','-Wall','-Wextra','-Werror',
            '-DSUNSTONE_LATENCY_CAUSE=1','-DSUNSTONE_LATENCY=1','-DSUNSTONE_SCHED_LATENCY_TRACE=1',
-           '-I'+str(ROOT/'checks/scheduler-cause-host'),'-I'+str(ROOT/'kernel/scheduler')]
+           '-DSUNSTONE_LATENCY_SERVICE_CYCLES=1',
+           '-I'+str(ROOT/'checks/scheduler-cause-host'),'-I'+str(ROOT/'kernel/scheduler'),'-I'+str(ROOT/'include')]
     objects=[]
-    for name in ('kernel/scheduler/latency_cause.c','checks/scheduler-pmu-support.c'):
+    for name in ('kernel/scheduler/latency_cause.c','checks/scheduler-pmu-support.c',
+                 'kernel/scheduler/service_cycles.c','checks/service-cycles-support.c'):
         obj=out/(Path(name).stem+'.o');objects.append(obj)
         run=subprocess.run(flags+['-c',str(ROOT/name),'-o',str(obj)],text=True,capture_output=True,env=environment())
         (out/(obj.stem+'.log')).write_text(run.stdout+run.stderr);assert not run.returncode,run.stderr
@@ -214,6 +219,23 @@ def main():
     assert m.readq(OUTPUT,8)[:7]==(0x5353434155534531,4,17328,8,2,15,64)
     assert m.readq(OUTPUT+17328-112*8,112)==tuple(dsu)
     results.append('EL0-safe own-core freeze, wrong-core rejection and all-core snapshot acknowledgments')
+    # Service cycle spans (kernel/scheduler/service_cycles.c). Tasks call the drain at EL0, where the cycle counter is
+    # readable only after the cause build configured that CPU; the board trapped such a read (entry 1794644402407062582-0b1d2013).
+    def busy_cells(m,kind):
+        base=m.sym['service_report']+128+((1*8+0)*2+kind)*2*464
+        return m.readq(base,1)[0]+m.readq(base+464,1)[0]
+    def bounds(m):m.uc.mem_write(m.sym['ss_service_cycles_test_bounds'],struct.pack('<6Q',0,500,500,600,600,0))
+    m=Model(image);m.call('ss_latency_cause_arm');bounds(m);m.el1=False
+    m.call('ss_service_cycles_begin',SCRATCH,1,0);m.call('ss_service_cycles_end',SCRATCH,0)
+    assert busy_cells(m,1)==0
+    results.append('an EL0 drain on a CPU the cause build has not configured reads no cycle counter')
+    m=Model(image);m.setup();bounds(m);m.el1=False
+    m.call('ss_service_cycles_begin',SCRATCH,1,0);m.call('ss_service_cycles_end',SCRATCH,0)
+    assert busy_cells(m,1)==1
+    m.call('ss_service_cycles_begin',SCRATCH,1,0)
+    m.core=1;m.regs['pmuserenr_el0']=0;m.call('ss_service_cycles_end',SCRATCH,1);m.core=0;m.regs['pmuserenr_el0']=4
+    assert busy_cells(m,1)==1
+    results.append('a configured EL0 drain is recorded; one that resumes on an unconfigured CPU reads no counter and is dropped')
     r={'passed':True,'cases':results,'leaf_boundaries':boundaries,'image':str(image),'image_sha256':hashlib.sha256(image.read_bytes()).hexdigest(),'physical_access':False}
     (out/'report.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r,indent=2))
 if __name__=='__main__':main()
