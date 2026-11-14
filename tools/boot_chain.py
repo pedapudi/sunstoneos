@@ -35,6 +35,23 @@ OPEN_RISKS = {
                  'reach that state.',
 }
 
+# Re-arms over an enabled WDT0 that the board has shown to expire. Both ran from FEL, over a 0x41 that the runner had
+# armed from mode 0 in the same power epoch; the mode write restarted the counter at the new interval.
+REARM_MEASURED = (
+    '1794643227744371298-6101ee0d: the runner wrote 0xb1 over its running 0x41 with no disarm, and the reset came '
+    '18.137 s later',
+    '1794643284421551583-789b13b5: the gate warm path, executed from SRAM, wrote 0xb1 over the runner\'s running 0x41 '
+    'with no disarm, and the reset came 18.169 s after the execute request',
+)
+
+# The re-arm conditions of the 2026-11-13 boot-once run that REARM_MEASURED does not cover. The gate and stage 2 now
+# disarm before every arming, so no stage depends on them; a re-arm stays unproven while any is listed.
+REARM_OPEN = (
+    'a re-arm over a mode that survived its own expiry reset (WDT0 still reads the mode armed before a watchdog reset, '
+    'card-fel-recovery step E)',
+    'output and configuration writes over a running counter, which the gate cold path made before its mode write',
+)
+
 # where -> {'by': ..., 'date': ..., 'reference': ...}. An accepted risk grants recovery for an arming that the board
 # has shown to expire in a FEL session. Only the coordinator adds an entry, with its written reference.
 ACCEPTED = {}
@@ -88,6 +105,8 @@ def unproven(stages=STAGES, measured=None, accepted=None):
         if recovery(stage, measured, accepted) is not None:
             continue
         why = OPEN_RISKS.get(stage['expires'], 'no board record shows this arming expire')
+        if stage['arming'] == REARM and REARM_OPEN:
+            why += '; a re-arm is unmeasured for ' + ' and for '.join(REARM_OPEN)
         problems.append('%s (%s): WDT0 %s to 0x%x, expiring %s, has no measured recovery; %s' % (
             stage['name'], stage['covers'], 'armed from mode 0' if stage['arming'] == FROM_ZERO else 're-armed without a disarm',
             stage['mode'], stage['expires'], why))
