@@ -177,6 +177,12 @@ def boot_once_real_elf(base):
     images = module('check_card_board_images', 'tools/board_images.py')
     plan = base.output/'slot/plan.json'
     runtime = [e for e in json.loads(plan.read_text())['extents'] if e['kind'] == 1]
+    # The chain's open watchdog risks refuse first (tools/boot_chain.py); the image checks below run with them granted.
+    try:images.boot_once_slot(SimpleNamespace(image=base.image, boot_once_slot=plan))
+    except ValueError as error:assert 'no measured watchdog recovery' in str(error), error
+    else:raise AssertionError('A boot-once run was admitted while a chain stage has no measured recovery')
+    real = images.load
+    images.load = lambda name, path: SimpleNamespace(unproven=lambda: []) if path.name == 'boot_chain.py' else real(name, path)
     record = images.boot_once_slot(SimpleNamespace(image=base.image, boot_once_slot=plan))
     assert len(runtime) == 1 and record['runtime_sha256'] == runtime[0]['sha256'] and record['entry'] == 0x41000000, record
     changed = bytearray(base.image.read_bytes())
@@ -193,6 +199,7 @@ def boot_once_real_elf(base):
     try:images.boot_once_slot(SimpleNamespace(image=damaged, boot_once_slot=plan))
     except ValueError as error:assert 'another image' in str(error), error
     else:raise AssertionError('A boot-once run of an ELF the slot does not hold was admitted')
+    images.load = real
     passed('boot-once-slot-admits-the-real-runtime-elf-only')
 
 

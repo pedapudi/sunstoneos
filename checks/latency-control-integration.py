@@ -13,6 +13,8 @@ import shlex
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+_LIMIT = json.loads((ROOT / 'tools/gate-slots.json').read_text())['latency_control']
+QEMU_KILL_SECONDS = _LIMIT['kill_multiplier'] * _LIMIT['slowest_run_seconds']      # a hang backstop, from the measured runs
 CACHE = Path.home() / '.cache/sunstoneos'
 GATE_RUNS = [
     ['--build', '{build:latency-control-busy-model}', '--output', '{output}/busy', '--allow-runtime-error'],
@@ -63,12 +65,16 @@ def main():
     image = args.build / 'latency-control-model.elf'
     if args.negative_wrapper_order:
         image = reverse_wrappers(args.build.resolve(), args.output.resolve())
+    # One host thread and guest time that follows the instructions executed (fixed shift, no sleeping): host load cannot change a
+    # counter reading, a wake latency or the order in which the vCPUs interleave. The default multi-threaded TCG failed the idle
+    # model's wake check when other work loaded the host (gate-index-1113f).
     command = [str(args.qemu), '-M', 'virt,gic-version=3,secure=off,virtualization=off',
+               '-accel', 'tcg,thread=single', '-icount', 'shift=0,sleep=off',
                '-cpu', 'max', '-smp', '8', '-m', '128M', '-nographic', '-nic', 'none',
                '-monitor', 'none', '-semihosting-config', 'enable=on,target=native',
                '-kernel', str(image)]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(command, capture_output=True, text=True, timeout=QEMU_KILL_SECONDS)
         log, code = result.stdout + result.stderr, result.returncode
     except subprocess.TimeoutExpired as error:
         log = (error.stdout or b'').decode() + (error.stderr or b'').decode()

@@ -9,6 +9,7 @@ Every case runs real processes on a temporary home directory, so the file locks 
                blocked by it; the scheduler perturbation sweep, the soak and the SERIAL_CHECKS of the index are timing steps;
   landing-jump slots held by a landing and two workers; an older worker and a newer landing wait: the slot a worker frees goes to
                the landing, then the next free slot to the worker, and a landing takes slot 0 when it frees;
+  perturb-limit the kill limit of the perturbation sweep is a multiple of its slowest measured point in the same JSON;
   stale-ticket a waiting gate that is killed leaves no ticket behind that holds the queue.
 Usage: gate-slots.py --output DIR
 """
@@ -151,6 +152,13 @@ def case_timing_lock(home):
                          ('indexed-smp-ticket-lock', 'smp-ticket-lock.py'), ('indexed-pcie-qemu', 'pcie-qemu.py')):
         assert gate_slots.is_timing_step(CONFIG, name, script, serial), name + ' is a wall-time step'
     assert not gate_slots.is_timing_step(CONFIG, 'indexed-memory-layout', 'memory-layout.py', serial)
+    # The models that fail first under host load run inside scheduler-control-linked.py (3 of 24 runs of scheduler-yield-qemu failed
+    # beside other gates' work, 0 of 5 alone: a vCPU that QEMU's round-robin leaves waiting makes its wakes late on the shared counter),
+    # so the timing lock covers them through that script; the case names them so a move out of it is noticed.
+    linked = (ROOT / 'checks/scheduler-control-linked.py').read_text()
+    for model in ('scheduler-yield-qemu', 'scheduler-yield-storm-qemu', 'scheduler-partitioned-qemu', 'scheduler-objects-qemu'):
+        assert "'" + model + "'" in linked, model + ' no longer runs inside scheduler-control-linked.py, a timing step'
+    assert 'scheduler-control-linked.py' in CONFIG['timing_checks']
     for script in CONFIG['timing_checks']:
         assert (ROOT / 'checks' / script).is_file(), script + ' is listed as a timing check but is not in checks/'
     spec = importlib.util.spec_from_file_location('check_index', ROOT / 'checks/check-index.py')
@@ -219,6 +227,15 @@ def case_stale_ticket(home):
                 process.end()
 
 
+def case_perturb_limit():
+    """The kill limit of the perturbation sweep is a multiple of its slowest measured point, from the same JSON, not a literal."""
+    measured = CONFIG['perturb']
+    assert measured['slowest_point_seconds'] > 0 and measured['kill_multiplier'] >= 4, measured
+    text = (ROOT / 'checks/scheduler-control-linked.py').read_text()
+    assert 'timeout=QEMU_KILL_SECONDS' in text and 'timeout=120' not in text, 'the sweep kills a QEMU run on a literal limit'
+    assert "['perturb']" in text and 'gate-slots.json' in text
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
@@ -226,6 +243,8 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     case_derivation()
     print('PASS derivation')
+    case_perturb_limit()
+    print('PASS perturb-limit')
     for name, case in (('two-gates', case_two_gates), ('timing-lock', case_timing_lock), ('landing-jump', case_landing_jump),
                        ('stale-ticket', case_stale_ticket)):
         home = args.output / name

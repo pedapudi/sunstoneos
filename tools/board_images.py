@@ -428,6 +428,13 @@ def policy(info, args, session=None):
                 symbol_bytes(args.image, 'os_resident_test_profile') == struct.pack('<3Q', 0x3154534554525353, 1, 0x5000),
                 'Resident FEL qualification requires the linked stop-on-finish test profile.')
     require(not getattr(args, 'marker_clear_test', False) or approved, '--marker-clear-test requires --approved-by coordinator.')
+    if getattr(args, 'rearm_expiry', None):
+        recovery = info.get('card_fel_recovery')
+        require(approved, '--rearm-expiry requires --approved-by coordinator.')
+        require(isinstance(recovery, dict) and recovery.get('profile', {}).get('entry') == 2,
+                '--rearm-expiry runs with the warm-entry SRAM proof image (a733-card-fel-warm.elf).')
+        require(not getattr(args, 'boot_once_slot', None) and not getattr(args, 'marker_clear_test', False) and not args.storage_write,
+                '--rearm-expiry is incompatible with --boot-once-slot, --marker-clear-test and --storage-write.')
     if getattr(args, 'boot_once_slot', None):
         require(approved, '--boot-once-slot requires --approved-by coordinator.')
         require(getattr(args, 'lifetime', 'returning') == 'resident',
@@ -708,7 +715,13 @@ def boot_once_slot(args):
 
     The manifest is the plan of tools/boot-slots.py (or the card build's manifest): its kind 1 extent holds the flat runtime
     image, whose SHA-256 must equal the hash of the flat runtime built from the submitted ELF (apps/os/card.py). The run then
-    names exactly what the card boots; no byte of the card is read or written."""
+    names exactly what the card boots; no byte of the card is read or written.
+
+    It first requires a measured watchdog recovery for every stage of the chain (tools/boot_chain.py): a stage that hangs
+    with no WDT0 reset leaves the board off USB until the card is removed."""
+    problems = load('boot_once_chain', ROOT/'tools/boot_chain.py').unproven()
+    require(not problems, 'Boot-once refused: a stage of the card boot chain has no measured watchdog recovery. ' +
+            ' '.join(problems))
     path = Path(args.boot_once_slot)
     raw = path.read_bytes()
     try:
