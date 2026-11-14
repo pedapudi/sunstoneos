@@ -312,6 +312,9 @@ def main():
     arms = decoded['cores'][5]['timer_arms']
     assert arms['count'] == 130 and arms['mean_cycles'] == 40 and arms['max_cycles'] == 75
     assert decoded['cores'][4]['timer_arms']['count'] == 0 and host.wake_masks(local) == (0x11, 0x01)
+    # A tick that scans CPU0 alone leaves CPUs 1-7 to their own timers, so their timer samples are expected
+    # even when the image's header names CPU0 only (the stage-4 board image, entry 1794692009857062646-48facc67).
+    assert host.timer_core_mask(1, local) == 0xff and host.timer_core_mask(1, wake) == 1 == host.timer_core_mask(1, b'')
     assert host.wake_masks(wake) == (0xff, 0xff)
     for name, word, value in [('version 1 wake report with arms', 16 + 5 * 416 + 5, 1),
                               ('wake arm maximum above its total', 16 + 5 * 416 + 7, 10 ** 6)]:

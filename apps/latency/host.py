@@ -762,6 +762,12 @@ def wake_masks(payload):
     return (release, scan) if version == 2 else (0xff, 0xff)
 
 
+def timer_core_mask(irq_mask, wake_tail):
+    """The cores that may take timer samples: the header's mask, plus, in a cause build, the cores
+    CPU0's tick does not scan, which arm their own one-shot timers (configSS_LOCAL_TIMERS)."""
+    return irq_mask | (0xff & ~wake_masks(wake_tail)[1])
+
+
 def decode_latency_cause(payload, frequency, userenr=4, release_mask=0xff, scan_mask=0xff):
     if len(payload) != CAUSE_BYTES:
         raise ValueError('latency cause report has the wrong size')
@@ -1303,11 +1309,12 @@ def decode(payload, dma=False):
         raise ValueError(f'latency result must contain {RESULT_BYTES} bytes')
     payload = payload[:RESULT_BYTES]
     magic, frequency, elapsed, mask, model, dma_jobs, irq_mask = struct.unpack_from('<3Q4I', payload)
-    if magic != MAGIC or mask != 0xff or model or irq_mask != 1 or \
+    if magic != MAGIC or mask != 0xff or model or irq_mask not in (1, 0xff) or \
             (dma_jobs < 2 if dma else dma_jobs != 0):
         raise ValueError('native CPU latency header differs')
     if not frequency or not 0 < elapsed <= (15000 if control_tail else 10000):
         raise ValueError('latency counter frequency or run interval is invalid')
+    timer_cores = timer_core_mask(irq_mask, wake_tail)
     cores = []
     fields = ('count', 'max_ticks', 'max_start', 'max_site', 'first_over_start',
               'first_over_ticks', 'first_over_site')
@@ -1335,8 +1342,10 @@ def decode(payload, dma=False):
             raise ValueError('native CPU image cannot report accelerator or DMA samples')
         if dma and core == 0 and samples['dma']['count'] < 2:
             raise ValueError('native DMA completion coverage is incomplete')
-        if bool(samples['timer_irq']['count']) != (core == 0):
-            raise ValueError('timer IRQ coverage differs from CPU0-only delivery')
+        # CPU0 always takes the scheduler tick; with local timers CPUs 1-7 take their own.
+        if (core == 0 and not samples['timer_irq']['count']) or \
+                (samples['timer_irq']['count'] and not timer_cores >> core & 1):
+            raise ValueError('timer IRQ samples on a core outside the timer core mask')
         phases = {}
         distribution_fields = ('count', 'p50_upper_ticks', 'p99_upper_ticks',
                                'max_ticks', 'max_start', 'max_site', 'overflow_bin_count')

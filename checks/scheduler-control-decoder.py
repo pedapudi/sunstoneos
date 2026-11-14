@@ -279,6 +279,18 @@ def run(decoder, source):
         result = decoder.decode(base_payload(**kwargs) + pack(busy))
         assert not result['qualification']['recorded_targets_met'] and result['control']['measurement_qualified']
         cases.append(name + ' miss is valid but unqualified')
+    # CPU0 takes the scheduler tick in every image. With local timers the header names all eight cores
+    # (CPUs 1-7 arm their own one-shot timers); otherwise a timer sample on CPUs 1-7 is a defect.
+    own = bytearray(base)
+    struct.pack_into('<7Q', own, 320 + 3 * 640, 1, 2, 10000, 0x1000, 0, 0, 0)
+    reject('timer samples on CPU3 under CPU0-only delivery', bytes(own), decoder.decode)
+    struct.pack_into('<I', own, 36, 0xff)
+    timed = decoder.decode(bytes(own))
+    assert timed['timer_irq_core_mask'] == 0xff and timed['cores'][3]['metrics']['timer_irq']['count'] == 1
+    silent = bytearray(own)
+    struct.pack_into('<7Q', silent, 320, 0, 0, 0, 0, 0, 0, 0)
+    reject('CPU0 without tick samples under local timers', bytes(silent), decoder.decode)
+    cases.append('local timers: CPUs 1-7 report their own timer samples; CPU0 still reports the tick')
     reject('unexpected data before control', base + bytes(8) + pack(busy), decoder.decode)
     reject('control before PMU', base + pack(busy) + bytes(1216), decoder.decode)
     reject('unknown control magic in combined layout', base + b'\0' * 8 + pack(busy)[8:], decoder.decode)

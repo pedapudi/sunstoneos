@@ -622,7 +622,11 @@ void latency_workload_run(struct latency_result *out)
     out->frequency = ss_latency_counter_frequency();
     out->elapsed_ticks = (TickType_t)(xTaskGetTickCount() - began);
     out->core_mask = 0xff;
+#if defined(configSS_LOCAL_TIMERS) && configSS_LOCAL_TIMERS
+    out->timer_irq_core_mask = 0xff; /* CPUs 1-7 arm their own one-shot timers. */
+#else
     out->timer_irq_core_mask = 1;
+#endif
 #ifdef SUNSTONE_LATENCY_MODEL
     out->model = 1;
 #endif
