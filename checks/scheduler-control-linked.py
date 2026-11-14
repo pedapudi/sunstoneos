@@ -2,6 +2,7 @@
 """Reject old owner-control behavior in the linked eight-core FreeRTOS fixture."""
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -9,12 +10,35 @@ import shlex
 import shutil
 import signal
 import subprocess
-from harness import environment
+import threading
+import time
+from elftools.elf.elffile import ELFFile
+from harness import CACHE, environment
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--build-dir', '{build:scheduler-control-models}', '--output', '{output}', '--positive', '--perturb']]
 # Perturbation sweep: kernel/scheduler/perturb.h names the sites. Each point delays one site on every core by a
 # number of loop turns; on QEMU's deterministic clock every delay is a different interleaving of the same run.
+# A QEMU run is killed after this many host seconds: the multiple of the slowest measured point that tools/gate-slots.json records. The
+# runs count instructions (-icount), so the guest result does not depend on the limit; it only ends a run that hangs.
+_PERTURB = json.loads((ROOT / 'tools/gate-slots.json').read_text())['perturb']
+QEMU_KILL_SECONDS = _PERTURB['kill_multiplier'] * _PERTURB['slowest_point_seconds']
+# The wake latency of the yield models is bounded by the critical path of each wake, in instructions (docs/validation.md, "Scheduler QEMU
+# models"). The model's wake period is 400 us (checks/scheduler-yield-qemu.c) and the bound is half of it, 200 us; the runs use
+# -icount shift=0, one nanosecond per instruction (1000 per microsecond, 16 per tick of the 62.5 MHz counter), so the bound is 200,000
+# instructions, the value the old 12,500-tick bound had. The owner of every object in these models is core 0.
+INSTRUCTIONS_PER_US = 1000
+WAKE_BOUND_US = 200
+CRITICAL_PATH_BOUND = WAKE_BOUND_US * INSTRUCTIONS_PER_US
+OWNER_CORE = 0
+YIELD_MODELS = ('scheduler-yield-qemu', 'scheduler-yield-storm-qemu')
+# Extra work on the wake path for the regression case: the word after the sites of kernel/scheduler/perturb.h in the table, which the
+# yield models read (checks/scheduler-yield-qemu.c), as this many loop turns (about 5 instructions each) before every served mark.
+# The models' own end-of-run accounting fails above about 3,000 turns, so the case does not need the critical path to be the only
+# detector: it needs the critical path to cross the bound, which it does at 6,000 turns (217,260 instructions measured, 8.6 percent above the bound; the run is deterministic).
+WAKE_PATH_REGRESSION_TURNS = 6000      # in the table word after the last site (WAKE_PATH_WORD, below)
+PLUGIN_HEADER = CACHE / 'host/qemu-plugin-10.2.1/qemu-plugin.h'
+PLUGIN_HEADER_SHA256 = 'aebc639d01685893a9d71b9ef3afa7ea67e0be6a8959781c4057bd4974d05d4d'
 PERTURB_SITES = {'api-entry': 0, 'owner-publish': 1, 'owner-drain': 2, 'control-open': 3, 'object-walk': 4}
 # Each model's pass marker and the sites it is swept at. The partitioned models link no event group, so the walk site
 # runs only in the objects model.
@@ -23,7 +47,8 @@ PERTURB_MODELS = {'scheduler-partitioned-qemu': ('PASS partitioned concurrent:',
                   'scheduler-partitioned-storm-qemu': ('PASS partitioned concurrent:', SCHEDULER_SITES),
                   'scheduler-objects-qemu': ('PASS objects:', ('object-walk',))}
 PERTURB_TURNS = (300, 1000, 3000)
-CHECK_INPUTS = ['kernel/scheduler', 'patches/freertos-smp-c.patch',
+WAKE_PATH_WORD = len(PERTURB_SITES)             # derived from the site count, so a new site cannot collide with it
+CHECK_INPUTS = ['tools/qemu-critical-path.c', 'tools/qemu-plugin-glib', 'kernel/scheduler', 'patches/freertos-smp-c.patch',
                 'patches/freertos-partitioned-api.patch', 'patches/freertos-partitioned-objects.patch',
                 'checks/scheduler-partitioned-qemu.c',
                 'checks/scheduler-partitioned-qemu-config/FreeRTOSConfig.h',
@@ -31,6 +56,9 @@ CHECK_INPUTS = ['kernel/scheduler', 'patches/freertos-smp-c.patch',
 
 
 def main():
+    # The sites of the table are the enumerators of perturb.h; the yield models' wake-path word follows the last (SS_PERTURB_SITES).
+    enumerators = re.search(r'enum ss_kernel_perturb_site \{(.*?)\};', (ROOT / 'kernel/scheduler/perturb.h').read_text(), re.S).group(1)
+    assert len(re.findall(r'^\s*SS_PERTURB_(?!SITES)\w+', enumerators, re.M)) == len(PERTURB_SITES), 'PERTURB_SITES differs from perturb.h'
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build-dir', type=Path, required=True,
                         help='configured build with scheduler-partitioned-qemu built')
@@ -55,7 +83,9 @@ def main():
     port = (build / 'freertos-smp/port.c').read_text()
     fixture = (ROOT / 'checks/scheduler-partitioned-qemu.c').read_text()
 
-    def execute(image, directory, cores=8, perturb=None):
+    times, times_lock = {}, threading.Lock()      # host seconds of each QEMU run, written to qemu-times.json
+
+    def execute(image, directory, cores=8, perturb=None, plugin=None):
         (directory / 'image.sha256').write_text(hashlib.sha256(image.read_bytes()).hexdigest() + '\n')
         command = [str(args.qemu.resolve()), '-machine', 'virt,gic-version=3,secure=off,virtualization=off',
                    '-accel', 'tcg,thread=single', '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a76',
@@ -63,15 +93,22 @@ def main():
                    '-semihosting-config', 'enable=on,target=native', '-device', f'loader,file={image},cpu-num=0',
                    '-device', 'loader,addr=0x47ff0000,data=0,data-len=4']
         # Word 0 at 0x47ff0040 selects the delaying cores (zero: all); word 1 + site holds that site's turns.
-        table = [0] * (1 + len(PERTURB_SITES))
+        table = [0] * (2 + len(PERTURB_SITES))          # cores, one word per site, then the yield models' wake-path word
         if perturb:
             table[1 + perturb[0]] = perturb[1]
+            if len(perturb) > 2:
+                table[0] = perturb[2]               # the cores that delay, one bit each
         for index, word in enumerate(table):
             command += ['-device', f'loader,addr=0x{0x47ff0040 + 4 * index:x},data={word},data-len=4']
+        if plugin:
+            command += ['-plugin', plugin]
         process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, start_new_session=True)
+        started = time.monotonic()
         try:
-            stdout, stderr = process.communicate(timeout=120)
+            stdout, stderr = process.communicate(timeout=QEMU_KILL_SECONDS)
+            with times_lock:
+                times[directory.name] = round(time.monotonic() - started, 2)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
             stdout, stderr = process.communicate()
@@ -84,7 +121,60 @@ def main():
             shutil.copy2(image, directory / 'failed.elf')
         return process.returncode, stdout + stderr
 
+    def build_plugin():
+        """tools/qemu-critical-path.c against the unmodified QEMU 10.2.1 plugin header."""
+        if hashlib.sha256(PLUGIN_HEADER.read_bytes()).hexdigest() != PLUGIN_HEADER_SHA256:
+            raise SystemExit(f'{PLUGIN_HEADER}: not the QEMU 10.2.1 plugin header')
+        library = output / 'qemu-critical-path.so'
+        subprocess.run(['clang-21', '-shared', '-fPIC', '-O2', '-fvisibility=hidden', '-Wall', '-Werror',
+                        '-I', str(PLUGIN_HEADER.parent), '-I', str(ROOT / 'tools/qemu-plugin-glib'),
+                        str(ROOT / 'tools/qemu-critical-path.c'), '-o', str(library)], check=True)
+        return library
+
+    def critical_paths(trace):
+        """The critical path of every ordinary wake in a plugin trace: the owner's instructions plus the victim's own instructions
+        outside the spin function, between the wake interrupt and the served task. Both are counted outside the spin function."""
+        paths, wake = [], {}
+        for text in trace.read_text().splitlines():
+            fields = text.split()
+            if fields[0] != 'M':
+                continue
+            offset, executing = int(fields[1], 16), int(fields[2])
+            total, spin = [int(v) for v in fields[3:11]], [int(v) for v in fields[11:19]]
+            core = offset // 16
+            # Each marker is called on the core it names. The plugin reads the executing core from the guest (TPIDR_EL1), because the
+            # vcpu argument of QEMU 10.2.1's block callback names the vCPU that translated the block; a marker credited to another core
+            # means the attribution is wrong and every count after it is too.
+            assert executing == core, ('marker of core', core, 'ran on core', executing)
+            if offset % 16 == 0:
+                wake[core] = (total, spin)
+            elif core in wake:
+                (t0, s0), (t1, s1) = wake.pop(core), (total, spin)
+                work = lambda c: (t1[c] - s1[c]) - (t0[c] - s0[c])
+                paths.append((work(OWNER_CORE) + work(core), core))
+        return paths
+
+    def yield_critical_path(name, directory, plugin, perturb=None, must_pass=True):
+        """Run one yield model under the plugin; returns (worst critical path, its core, wakes)."""
+        directory.mkdir(exist_ok=True)
+        image = build / (name + '.elf')
+        with ELFFile(image.open('rb')) as elf:
+            symbols = {sym.name: (sym['st_value'], sym['st_size']) for sym in elf.get_section_by_name('.symtab').iter_symbols()}
+        low, high = symbols['ymark_isr_0'][0], symbols['ymark_srv_7'][0] + 8
+        spin_low, spin_size = symbols['busy_task']
+        trace = directory / 'critical-path.txt'
+        status, log = execute(image, directory, 8, perturb,
+                              f'{plugin},lo={low:x},hi={high:x},spin={spin_low:x}-{spin_low + spin_size:x},out={trace}')
+        assert not must_pass or (status == 0 and 'PASS yield:' in log and 'FAIL' not in log), (name, directory / 'qemu.log')
+        paths = critical_paths(trace)
+        assert len(paths) > 300, (name, 'too few paired wakes', len(paths))
+        worst = max(paths)
+        (directory / 'critical-path.json').write_text(json.dumps(
+            {'bound_instructions': CRITICAL_PATH_BOUND, 'wakes': len(paths), 'worst': worst[0], 'worst_core': worst[1]}, indent=1))
+        return worst[0], worst[1], len(paths)
+
     if args.positive:
+        plugin = build_plugin()
         for name, marker, cores in (
             ('scheduler-partitioned-qemu', 'PASS partitioned concurrent:', 8),
             ('scheduler-partitioned-storm-qemu', 'PASS partitioned concurrent:', 8),
@@ -95,9 +185,22 @@ def main():
         ):
             directory = output / name
             directory.mkdir(exist_ok=True)
+            if name in YIELD_MODELS:
+                worst, core, wakes = yield_critical_path(name, directory, plugin)
+                assert worst <= CRITICAL_PATH_BOUND, (name, 'critical path', worst, 'instructions on core', core, 'exceeds', CRITICAL_PATH_BOUND)
+                print(f'PASS linked model: {name} (critical path {worst} instructions of {CRITICAL_PATH_BOUND}, core {core}, {wakes} wakes)', flush=True)
+                continue
             status, log = execute(build / (name + '.elf'), directory, cores)
             assert status == 0 and marker in log and 'FAIL' not in log, (name, directory / 'qemu.log')
             print('PASS linked model: ' + name, flush=True)
+        # The bound must still catch a regression: extra work on the wake path, with every other input equal, crosses it. The model may
+        # also fail its own accounting at this size; the critical path of the wakes it did serve is what is asserted.
+        directory = output / 'yield-wake-path-regression'
+        worst, core, wakes = yield_critical_path('scheduler-yield-qemu', directory, plugin,
+                                                 (WAKE_PATH_WORD, WAKE_PATH_REGRESSION_TURNS), must_pass=False)
+        assert worst > CRITICAL_PATH_BOUND, ('the wake-path regression did not cross the bound', worst, CRITICAL_PATH_BOUND)
+        print(f'PASS wake-path regression: {WAKE_PATH_REGRESSION_TURNS} extra turns give a critical path of {worst} instructions, '
+              f'above {CRITICAL_PATH_BOUND}', flush=True)
 
     if args.perturb:
         from concurrent.futures import ThreadPoolExecutor
@@ -122,6 +225,7 @@ def main():
         for (model, site, turns), failure in results:
             print(f'{"PASS" if failure is None else "FAIL"} perturbed linked model: {model} {site} {turns} turns'
                   + ('' if failure is None else f' ({failure})'), flush=True)
+        (output / 'qemu-times.json').write_text(json.dumps({'jobs': args.jobs, 'seconds': times, 'slowest': max(times.values())}, indent=1))
         assert all(failure is None for _, failure in results), 'perturbed linked models failed'
 
     def line(text, needle):
