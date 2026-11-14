@@ -377,7 +377,9 @@ lie outside every partition.
 - **Runner marker and reads.** At every new FEL instance, before the
   session's first watchdog reset, `tools/board.py` reads `0x07090108`,
   `0x070901f0`, `0x07090160` and the WDT0 configuration and output words, and
-  records them under `power_epoch`. It then clears a gate record and writes
+  records them under `power_epoch`, together with the eight RTC
+  general-purpose words `0x07090100..0x0709011c` and the WDT0 interrupt
+  status `0x02050004` (`contact`), all read before any write. It then clears a gate record and writes
   `0x16aa16aa` to the marker when its low half is not `0x16aa`. A marker that
   does not read back refuses the run before any reset. Every return reads the
   same words. When WDT0 reads zero and a warm gate record is present, the

@@ -638,7 +638,13 @@ instruction cache before each register command, and runs a frozen copy.
 At first contact with a board, before the session's watchdog reset, every
 session reads the cold-boot marker (RTC `IC_CHARA`, `0x070901f0`), the GP2 gate
 record, the crystal control word and the WDT0 configuration and output words,
-and records them as `power_epoch`. It then clears the gate record and, if the
+and records them as `power_epoch`. The same read-only transaction also reads
+all eight RTC general-purpose words `0x07090100..0x0709011c` (tag, LAST, GP2,
+time, fault, ESR, ELR, FAR) and the WDT0 interrupt status `0x02050004`, and
+records them under `contact`. These words survive a watchdog reset and a power
+loss short enough to keep VDD_RTC up. After a run that never returned, they
+are the only record of where the boot stopped, so nothing is written before
+they are read. It then clears the gate record and, if the
 marker's low half does not read `0x16aa`, writes the keyed value `0x16aa16aa`.
 A session whose marker or cleared record does not read back stops before
 launch. The marker is an RTC-domain register; it survives watchdog resets and
