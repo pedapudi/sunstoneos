@@ -205,6 +205,34 @@ application check, the indexed checks named in `SERIAL_CHECKS` in
 [checks/check-index.py](../checks/check-index.py) and the wall-time checks of the timing lock (below). The index reports the
 choice as the `serial` field of each entry.
 
+### Scheduler QEMU models: wake latency is a critical path
+
+The yield models (`scheduler-yield-qemu` and `scheduler-yield-storm-qemu`, run by `checks/scheduler-control-linked.py`) used to assert that
+no ordinary wake took more than half of the 400 microsecond wake period, measured as the counter ticks from the wake interrupt to the
+served task. The runs use one TCG thread and `-icount shift=0,sleep=off`, where the eight vCPUs take turns and guest time is the sum of
+the instructions that all of them execute. A core that spins while it waits, here the priority-1 busy task of the victim core, therefore
+adds its instructions to the elapsed time of the wake, which on hardware, where the cores run in parallel, it does not. How many of
+them it adds depends on the order in which the vCPUs happen to interleave, and under host load that order differed in about one run
+in twenty: the worst wake was 11,207 ticks (90 percent of the 12,500-tick bound) in 23 of 24 runs and 16,016 ticks in the other. QEMU 10.2.1's own host-timed paths are not the cause: the round-robin kick timer runs on the virtual clock, and no RCU
+force-kick occurred in 72 loaded runs. The cause of the different interleavings is not identified; QEMU pinned to one or two otherwise idle
+cores differed in 22 to 25 percent of runs, so it is not starvation of the QEMU thread.
+
+The bound is now on the critical path of each wake, in instructions: the instructions of the owner (core 0) plus the instructions of the
+victim core itself, both outside the spin function, between the wake interrupt and the served task. `tools/qemu-critical-path.c` is a TCG
+plugin that counts the instructions each vCPU executes (the quantity the PMU instruction counter of each core reports under icount) and
+snapshots the counts at the empty marker functions `ymark_isr_N` and `ymark_srv_N` that `checks/scheduler-yield-qemu.c` calls on core N; the
+check subtracts the two snapshots. The bound stays 200 microseconds: at the model's one nanosecond per instruction (1,000 instructions per
+microsecond, 16 per tick of the 62.5 MHz counter) it is 200,000 instructions, the value of the old 12,500 ticks. The models no longer
+assert the tick latency; they still count raised and served wakes, the pending switch requests and the fast-path exits.
+
+Over 48 runs under 24 busy host processes, with 24 runs at once, the worst critical path was 36,855 instructions in 23 of 24 runs of the
+yield model and 47,279 in the other, and 61,467 to 84,814 in the storm model (a quarter to two fifths of the bound). It still varies with the
+interleaving because the owner and the victim also run kernel service loops that poll while they wait, and how often they run in the gap
+depends on how many turns the round-robin gives them. The measure removes the spinner, which is five to seven times larger, not the polling.
+The case `yield-wake-path-regression` runs the model with 6,000 extra loop turns of work on the wake path (about 5 instructions each) and
+requires the critical path to cross the bound (276,127 measured); the models' own end-of-run accounting fails above about 3,000 turns, so
+the critical path is not the only detector there.
+
 ### Gate slots and the timing lock
 
 The host runs N gates at once, not one. `tools/gate_slots.py` holds the slots as the files `~/.cache/sunstoneos/gate.lock.0` to
@@ -220,11 +248,10 @@ mean cores and peak resident memory of one gate, all measured with a sampler on 
 `jobs_per_slot` divides the usable cores across the slots. Change a measurement there, not the code, when the host or the gate changes.
 
 The steps whose result depends on wall time hold the exclusive `~/.cache/sunstoneos/gate-timing.lock` while they run and run alone in
-their gate: the soak, `scheduler-control-linked.py` (its perturbation sweep kills a QEMU run after 120 s of wall time, whatever the
-injected delay), `smp-ticket-lock.py`, `tick-footprint-budget.py`, `gpu-conformance.py`, `land.py`, `submit-wait.py`, `cpu-npu-concurrency.py`,
-`cpu-npu-return-chain.py` and the `SERIAL_CHECKS`. The two CPU/NPU checks run the application's producer on eight host threads
-whose counter is the host's `CLOCK_MONOTONIC` (`checks/cpu-npu-concurrency/producer.c`); the receipt decoder allows 0.1 s
-after the 5 s work cutoff for every worker to finish its last chunk, which a loaded host can exceed. Other gates' work still runs beside them. The list is `timing_checks` and `timing_steps` in the same file. A check's
+their gate: the soak, `scheduler-control-linked.py` (which also runs the yield models, whose wake bound is the critical path described above; its perturbation sweep kills a QEMU run that exceeds four times the slowest measured point, 85.7 s, recorded in the same
+file; the runs count instructions, so the host load does not change them), `smp-ticket-lock.py`, `tick-footprint-budget.py`, `gpu-conformance.py`, `land.py`, `submit-wait.py` and the `SERIAL_CHECKS`. The two CPU/NPU
+checks (`cpu-npu-concurrency.py`, `cpu-npu-return-chain.py`) need no lock: their producer runs the application's threads on a
+virtual counter (`checks/cpu-npu-concurrency/producer.c`), so two runs write the same receipt whatever the host load. Other gates' work still runs beside them. The list is `timing_checks` and `timing_steps` in the same file. A check's
 pass criteria do not change. `checks/gate-slots.py` runs two gates at once, the exclusive timing lock, a landing that goes ahead of an
 older worker and a killed waiter.
 

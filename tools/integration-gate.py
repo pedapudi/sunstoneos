@@ -36,6 +36,7 @@ import json
 from pathlib import Path
 from host_evidence import unique_directory
 import host_priority
+import build_graph
 import gate_images
 import gate_slots
 import host_space
@@ -296,7 +297,11 @@ def main(argv=None):
     variants = list(VARIANTS) if args.full else list(dict.fromkeys(args.variant))
     indexed, pending, affected_plan, hook_scope = [], [], None, None
     inputs, classified = None, {'supplied': [], 'board': [], 'waived': [], 'unsupplied': []}
-    if args.full or args.affected or args.changed:
+    # --check also names an indexed check (a script in checks/ with its own declared gate runs): it is selected as if its
+    # own file had changed, and only that check is kept, so the index's textual coverage of other checks adds nothing.
+    explicit = [] if args.full else [Path(name).stem for name in dict.fromkeys(args.check)
+                                      if name not in CORE_CHECKS and (source / 'checks' / (Path(name).stem + '.py')).is_file()]
+    if args.full or args.affected or args.changed or explicit:
         try:
             spec = importlib.util.spec_from_file_location('affected', source / 'checks/affected.py')
             selector = importlib.util.module_from_spec(spec)
@@ -337,6 +342,11 @@ def main(argv=None):
             else:
                 index = selector.indexer.generate()
                 affected_plan = selector.plan(args.affected, args.changed, index=index)
+                if explicit:
+                    own = selector.plan(changed=['checks/%s.py' % name for name in explicit], index=index)
+                    present = {check['check'] for check in affected_plan['checks']}
+                    affected_plan['checks'] += [check for check in own['checks']
+                                                if Path(check['check']).stem in explicit and check['check'] not in present]
                 indexed = [check for check in affected_plan['checks'] if check['status'] == 'runnable']
                 pending = [check for check in affected_plan['checks'] if check['status'] == 'pending']
                 affected_entries = gate_entries(affected_plan['checks'], index)
@@ -384,8 +394,8 @@ def main(argv=None):
     except (OSError, ValueError, KeyError, TypeError) as error:
         parser.error('invalid external application: ' + str(error))
     application_checks = {check: name for name, app in configured.items() for check in app['checks']}
-    known_checks = (*CORE_CHECKS, *application_checks)
-    checks = list(known_checks) if args.full else list(dict.fromkeys(args.check))
+    known_checks = (*CORE_CHECKS, *application_checks, *explicit)
+    checks = list(known_checks) if args.full else [c for c in dict.fromkeys(args.check) if c not in explicit]
     # Core commands already run these scripts with their established arguments.
     indexed = [check for check in indexed if Path(check['check']).stem not in set(checks) & set(CORE_SCRIPTS)]
     if any(check not in known_checks for check in checks):
@@ -677,8 +687,10 @@ def main(argv=None):
                 note('CACHED img-' + image + ': built for this tree state (' + tree_key + ')')
                 continue
             flags = [value.replace('{source}', str(source)).replace('{cache}', str(cache)) for value in recipe['configure']]
-            if run('img-' + image + '-configure', [cfg, source, directory, *core_options, '-DSUNSTONE_A733_OS=ON',
-                                                   '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', *flags]):
+            configure_command = ([cfg, source, directory, *core_options, '-DSUNSTONE_A733_OS=ON',
+                                  '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', *flags] if 'project' not in recipe else
+                                 build_graph.configure_command(source, recipe, directory, cache))
+            if run('img-' + image + '-configure', configure_command):
                 if run('img-' + image + '-build', ['cmake', '--build', directory, '--target',
                                                   *([recipe['target']] if isinstance(recipe['target'], str) else recipe['target']), '-j', str(build_jobs)]):
                     mark_built(directory)
