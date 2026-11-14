@@ -219,7 +219,7 @@ def image_parts(path):
                     'USB arena requires its linked service and memory validator.')
         require(all(i == index or not s[2] & 2 or not s[5] or s[3] + s[5] <= usb_start or usb_end <= s[3]
                     for i, s in enumerate(sections)), 'USB arena overlaps an allocated section.')
-    segments = []
+    segments, read_only = [], []
     usb_segments = 0
     for ptype, flags, offset, address, physical, filesz, memsz, alignment in headers:
         if ptype != 1: continue
@@ -231,6 +231,7 @@ def image_parts(path):
         require(not filesz or address + filesz <= 0x42000000, 'Image file bytes overlap result or contract.')
         require(all(address + memsz <= other['address'] or other['address'] + other['memory_bytes'] <= address for other in segments), 'ELF load allocations overlap.')
         segments.append({'address': address, 'memory_bytes': memsz, 'data': data[offset:offset + filesz]})
+        read_only.append(not flags & 2)
         usb_segments += arena
     require(usb_section is None or usb_segments == 1, 'Missing USB arena load reservation.')
     require(any(s['address'] <= entry < s['address'] + len(s['data']) for s in segments), 'Entry has no file bytes.')
@@ -238,10 +239,13 @@ def image_parts(path):
             symbols.get('__a733_smp_contract', (0,))[0] == CONTRACT and
             symbols.get('__a733_smp_contract_end', (0,))[0] == CONTRACT + 4096, 'Missing linker reservations.')
     address, size = symbols.get('a733_smp_build_id', (0, 0))
-    require(size == 32 and 0x41000000 <= address <= 0x411fffe0, 'Invalid image build identity.')
-    for segment in segments:
+    # The identity lies in the read-only image prefix: the text block, or the OS image's read-only data block that follows
+    # it (apps/os/sealed-link.patch), and in a load segment that is not writable.
+    require(size == 32 and 0x41000000 <= address <= 0x413fffe0, 'Invalid image build identity.')
+    for segment, flags in zip(segments, read_only):
         offset = address - segment['address']
         if 0 <= offset <= len(segment['data']) - 32:
+            require(flags, 'Invalid image build identity.')
             return segments, address, segment['data'][offset:offset + 32]
     raise ValueError('Build identity is not file-backed.')
 

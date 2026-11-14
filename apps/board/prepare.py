@@ -79,8 +79,9 @@ def usb_audio_image_check(raw):
 
 
 def request_bytes(address,identity,epoch,generation,lease,session):
+    # The identity lies in the text block, or in the OS image's read-only data block after it (apps/os/sealed-link.patch).
     require(len(identity)==32 and all(type(x) is int and 0<x<2**64 for x in (epoch,generation,lease)) and
-        0x41000000<=address<=0x411fffe0,'Invalid supervised launch identity.')
+        0x41000000<=address<=0x413fffe0,'Invalid supervised launch identity.')
     h=hashlib.sha256(session).digest()
     request=struct.pack('<8Q',REQUEST_MAGIC,2,128,epoch,generation,generation^((1<<64)-1),lease,address)+identity+h
     contract=struct.pack('<6Q',0,2,224,epoch,generation,generation^((1<<64)-1))+identity
