@@ -54,6 +54,9 @@ def main():
     waits = '\n'.join(function(native, name) for name in ('read_sleep_until','os_sd_pmic_ready', 'read_pmic_ready', 'read_wait_until', 'read_drive','ss_storage_owner_stats'))
     entry = function(owner, 'owner_main')
     entry = entry.replace('__asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));', 'ttbr=0;')
+    tag = 'entry_tagged = xTaskGetApplicationTaskTag(NULL) != NULL;'
+    assert entry.count(tag) == 1, 'owner_main no longer records its task tag'
+    entry = entry.replace(tag, 'entry_tagged = 0;')    # the host kernel has no application task tags
     platform_source=(ROOT/'drivers/storage/a733_mmc_platform.c').read_text()
     production = function(platform_source,'controller')+'\n'+waits+'\n'+function(owner, 'wait_ready')+'\n'+function(owner, 'proxy_poll')+'\n'+function(owner,'finish')+'\n'+function(owner,'post')+'\n'+entry+'\n'
     (args.output/'event-sd-production.h').write_text(production)

@@ -428,6 +428,13 @@ def policy(info, args, session=None):
                 symbol_bytes(args.image, 'os_resident_test_profile') == struct.pack('<3Q', 0x3154534554525353, 1, 0x5000),
                 'Resident FEL qualification requires the linked stop-on-finish test profile.')
     require(not getattr(args, 'marker_clear_test', False) or approved, '--marker-clear-test requires --approved-by coordinator.')
+    if getattr(args, 'boot_once_slot', None):
+        require(approved, '--boot-once-slot requires --approved-by coordinator.')
+        require(getattr(args, 'lifetime', 'returning') == 'resident',
+                '--boot-once-slot runs the slot\'s bounded resident image and requires --lifetime resident.')
+        require(not getattr(args, 'marker_clear_test', False) and not getattr(args, 'wifi', None) and not args.storage_write,
+                '--boot-once-slot is incompatible with --marker-clear-test, --wifi and --storage-write.')
+        boot_once_slot(args)
     # The radio stage limit shapes the radio profile; an image without the radio's result channel has none.
     require(not getattr(args, 'radio_stage_limit', 0) or 'os_radio_result_descriptor' in (info.get('symbols') or {}),
             '--radio-stage-limit applies only to the radio scan image.')
@@ -694,6 +701,35 @@ def prepare(args, info, live, out, *, dma_binding=None):
     plan['preserve_regions'] = preservation_regions(plan)
     validate_uploads(plan)
     return plan
+
+
+def boot_once_slot(args):
+    """Verify that the submitted image is the runtime the slot manifest names, and return the record the result carries.
+
+    The manifest is the plan of tools/boot-slots.py (or the card build's manifest): its kind 1 extent holds the flat runtime
+    image, whose SHA-256 must equal the hash of the flat runtime built from the submitted ELF (apps/os/card.py). The run then
+    names exactly what the card boots; no byte of the card is read or written."""
+    path = Path(args.boot_once_slot)
+    raw = path.read_bytes()
+    try:
+        manifest = json.loads(raw)
+    except ValueError as error:
+        raise ValueError('The boot-once slot manifest is not JSON: %s' % error) from None
+    extents = manifest.get('extents') if isinstance(manifest, dict) else None
+    require(isinstance(extents, list) and extents and manifest.get('kind', 'a733-boot-slot-plan') == 'a733-boot-slot-plan',
+            'The boot-once slot manifest has no boot slot extents.')
+    runtime = [e for e in extents if isinstance(e, dict) and e.get('kind') == 1]
+    require(len(runtime) == 1 and re.fullmatch(r'[0-9a-f]{64}', str(runtime[0].get('sha256', ''))),
+            'The boot-once slot manifest needs exactly one runtime extent (kind 1) with a SHA-256.')
+    flat = load('boot_once_runtime', ROOT/'apps/os/card.py').flat_runtime(args.image)
+    digest = hashlib.sha256(flat).hexdigest()
+    require(digest == runtime[0]['sha256'],
+            'The submitted image flattens to runtime %s, but the slot manifest names %s; the card would boot another image.'
+            % (digest, runtime[0]['sha256']))
+    return {'manifest_sha256': hashlib.sha256(raw).hexdigest(), 'slot': manifest.get('slot'),
+            'generation': manifest.get('generation'), 'entry': manifest.get('entry'),
+            'runtime_sha256': digest, 'runtime_bytes': len(flat),
+            'extents': [{k: e.get(k) for k in ('name', 'kind', 'load', 'bytes', 'sha256')} for e in extents]}
 
 
 def preserving(args):

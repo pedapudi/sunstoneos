@@ -21,7 +21,7 @@ SCHED_PMU_STATUS = ('ok', 'unarmed', 'not_el1', 'wrong_core', 'nested',
                     'not_active', 'wrong_cookie', 'no_counters',
                     'config_mismatch', 'not_prepared', 'frozen', 'overflow')
 CAUSE_MAGIC = 0x5353434155534531
-CAUSE_BYTES = 16816
+CAUSE_BYTES = 17328
 CAUSE_EVENTS = ('l1i_refill', 'l1d_refill', 'l2d_refill', 'l3d_refill', 'stall_backend')
 CAUSE_EVENT_TYPES = (0x01, 0x03, 0x17, 0x2a, 0x24)
 CAUSE_FOOTER_MAGIC = 0x5353434155534631
@@ -102,7 +102,7 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
         def duration(first, last):
             return stamp[last] - stamp[first] if stamp[first] and stamp[last] else 0
         direct = bool(flags & 64)
-        if direct and (version != 5 or kind != 2 or flags not in (69, 85, 93) or not all(stamp)):
+        if direct and (version != 5 or kind != 2 or flags not in (69, 85, 93, 197) or not all(stamp)):
             raise ValueError('scheduler direct suspension flags or timestamps differ')
         no_selection = direct and bool(flags & 16)
         if no_selection and len(set(stamp[4:])) != 1:
@@ -118,7 +118,11 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
                 result['steps_ticks'].update(save_frame=duration(4, 5), select=duration(5, 6))
             result['selection_recorded'] = not no_selection
             result['self_suspend_outcome'] = ('deferred_without_selection' if flags & 8 else
-                'completed_before_local_selection' if no_selection else 'selected_replacement')
+                'completed_before_local_selection' if no_selection else
+                'parked_at_exception_exit' if flags & 128 else 'selected_replacement')
+            if flags & 128:
+                result['steps_ticks'] = dict(zip(('reference', 'publish_until_exit', 'save_frame', 'select'),
+                    (duration(0, 1), duration(1, 3), duration(4, 5), duration(5, 6))))
             result['masked_c_ticks'] = duration(3, 6)
             result['reference_publication_scope'] = 'before_local_guard' if flags & 8 else 'before_the_API_mask'
         return result
@@ -406,8 +410,10 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
         window_offset = offset + (1 + 8 * 10) * 8
         irq_count, switch_count, window_flags, capacity = struct.unpack_from('<4Q', payload, window_offset)
         window_offset += 32
-        if capacity != history_capacity or max(irq_count, switch_count) > capacity or window_flags & ~7:
+        if capacity != history_capacity or max(irq_count, switch_count) > capacity or window_flags & ~15:
             raise ValueError('scheduler CPU0 history window header differs')
+        if window_flags & 8 and irq_count == capacity:
+            raise ValueError('scheduler CPU0 window claims an overrun but retains every row')
         maximum = wake_cores[0]['maximum']
         ready, running = maximum['ready'], maximum['running']
         irq_rows, switch_rows, owner_sequences = [], [], set()
@@ -449,7 +455,7 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
                 if origin:
                     if origin['owner_end'] > begin:
                         raise ValueError('scheduler CPU0 selection precedes its owner exit')
-                elif not window_flags & 5:
+                elif not window_flags & 13:
                     raise ValueError('scheduler CPU0 selection origin is missing without history loss')
             switch_rows.append({'begin': begin, 'end': end, 'irq_sequence': irq_sequence,
                 'selected_slot': slot, 'origin': 'irq' if irq_sequence else 'svc',
@@ -462,11 +468,12 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
                 selected['begin'], selected['end'], selected['irq_sequence'], selected['selected_slot']):
             raise ValueError('scheduler CPU0 window omits the latest selecting event')
         latest = histories[0]['latest_sequence']
-        if latest and latest not in owner_sequences and not window_flags & 5:
+        if latest and latest not in owner_sequences and not window_flags & 13:
             raise ValueError('scheduler CPU0 window omits the latest owner exit')
         cpu0_window = {'capacity': capacity, 'flags': window_flags,
             'irq_prefix_lost': bool(window_flags & 1), 'switch_prefix_lost': bool(window_flags & 2),
-            'incomplete': bool(window_flags & 4), 'ready': ready, 'running': running,
+            'incomplete': bool(window_flags & 4), 'irq_overrun': bool(window_flags & 8),
+            'ready': ready, 'running': running,
             'scope': 'outer C dispatch and ordinary owner exits',
             'irqs': irq_rows, 'selections': switch_rows}
     return {'version': version, 'waits_capacity': waits, 'ticks_capacity': tick_capacity,
@@ -735,7 +742,7 @@ def decode_latency_cause(payload, frequency):
         return result
 
     header = take('magic version bytes cores phases cases samples flags')
-    if tuple(header.values())[:7] != (CAUSE_MAGIC, 3, CAUSE_BYTES, 8, 2, 15, 64) or header['flags'] != 13:
+    if tuple(header.values())[:7] != (CAUSE_MAGIC, 4, CAUSE_BYTES, 8, 2, 15, 64) or header['flags'] != 13:
         raise ValueError('latency cause header is invalid or its snapshot is incomplete')
     cores = []
     for core in range(8):
@@ -851,7 +858,9 @@ def decode_latency_cause(payload, frequency):
     phase_events, phase_outside = grid(2, 5), grid(2, 5)
     phase_release_cycles, phase_scan_cycles = grid(2, 8), grid(2, 8)
     phase_release, phase_scan = grid(2, 8, 5), grid(2, 8, 5)
-    dsu_fields = ('captured', 'clusteridr', 'clustercfr', 'clusterpartcr', 'clusterthreadsid', 'actlr_el3')
+    dsu_fields = ('captured', 'clusteridr', 'clustercfr', 'clusterpartcr', 'clusterthreadsid', 'actlr_el3',
+                  'clusterpwrstat', 'clusteracpsid', 'clusterstashsid', 'clusterthreadsidovr',
+                  'threadsid_set', 'threadsid_after', 'partition', 'partcr_after')
     dsu_rows = [dict(zip(dsu_fields, row)) for row in grid(8, len(dsu_fields))]
     if offset != len(words):
         raise ValueError('cause decoder and wire report disagree')
@@ -885,15 +894,34 @@ def decode_latency_cause(payload, frequency):
               'scope': 'raw counts with hook bookkeeping included; L3D refill is core-attributable; '
                        'phase means cover ticks with all eight releases and scans'}
     bench['extra_sgi_observations'] = bench['sgi_observed'] - bench['sgi_sends']
-    # A missing capture is reported, not refused: the register values are a
-    # record beside the measurement and never gate it.
+    # A missing boot capture is reported, not refused: the register values are
+    # a record beside the measurement and never gate it. A partition write is
+    # part of the measurement, so its record must be consistent.
+    partition = dsu_rows[0]['partition']
+    for core, row in enumerate(dsu_rows):
+        written = (row['threadsid_set'], row['threadsid_after'], row['partition'], row['partcr_after'])
+        if not partition:
+            if any(written):
+                raise ValueError(f'cause core {core} records a DSU write in an unpartitioned build')
+        elif (row['captured'] != 1 or row['threadsid_set'] > 7 or
+                row['threadsid_after'] & 7 != row['threadsid_set'] or
+                row['partition'] != (partition if core == 0 else 0) or
+                row['partcr_after'] != (partition if core == 0 else 0)):
+            raise ValueError(f'cause core {core} L3 partition write or readback is inconsistent')
+    cluster = ('clusteridr', 'clustercfr', 'clusterpartcr', 'clusterpwrstat', 'clusteracpsid', 'clusterstashsid')
     dsu = {'cores': [dict({k: hex(v) for k, v in row.items() if k != 'captured'},
                           core=core, captured=row['captured'] == 1)
                      for core, row in enumerate(dsu_rows)],
            'complete': all(row['captured'] == 1 for row in dsu_rows),
-           'cluster_registers_agree': len({(row['clusteridr'], row['clustercfr'], row['clusterpartcr'])
+           'cluster_registers_agree': len({tuple(row[k] for k in cluster)
                                            for row in dsu_rows if row['captured'] == 1}) <= 1,
-           'scope': 'read once per core at EL3 during boot; no DSU register is written'}
+           'boot_partition_clear': all(row['clusterpartcr'] == 0 and row['clusterthreadsid'] == 0
+                                       for row in dsu_rows if row['captured'] == 1),
+           'partition': ({'clusterpartcr': hex(partition), 'readback': hex(dsu_rows[0]['partcr_after']),
+                          'scheme_ids': [row['threadsid_after'] & 7 for row in dsu_rows]}
+                         if partition else None),
+           'scope': ('read once per core at EL3 during boot, before any write; a partitioned build then sets '
+                     'each core\'s scheme ID and CPU0 the cluster partition, and any entry to EL3 clears both')}
     return {'header': header, 'cores': cores, 'sgi': sends, 'phases': phases,
             'tick': tick, 'benchmark': bench, 'events': events, 'dsu': dsu,
             'component_scope': 'raw instrumented cycles; hook bookkeeping and its interaction with DSB remain included',

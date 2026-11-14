@@ -113,6 +113,23 @@ prints its JSON path. `--no-wait` prints the future result path immediately.
 summary before the path, and exits 0 for a returned image whose decoder reports
 no failure or the exact expected resident stop described below.
 
+### Time budget in the hypothesis
+
+Every hypothesis states a worked time budget: the stage durations summed and compared with the session's limits, so that an overrun fails cleanly. Take each term from the result's `durations` of a recent run of the same kind, and count every byte the run uploads. The runner uploads the image's segments and every `--input` file over USB FEL and reads each back to verify it (`upload_verify`, mode `readback`), all inside the `launch` stage, before the image starts.
+
+| Term | Development run on port 3-3, 2026-11-13 |
+| --- | --- |
+| `reset` | 4.8 s |
+| `dram` | 2.2 s |
+| `rails` | 3.3 s |
+| `launch`: start-up and the image's own segments | about 7 s for the 2 MB storage-write-test image |
+| `launch`: the uploaded inputs, written and read back | about 3.6 s per MB of input |
+| `launch`: the image's own work | what the hypothesis predicts |
+| `restore-rails` | 1.6 s |
+| `prepare`, `capture`, `identity` | about 0.8 s together |
+
+The upload term is the one most often left out. On 2026-11-13 an 8.4 MB raw-extent input added 29.6 s to `launch` (run `1794597286400818219-efba4fcf`: 51.1 s in total against a predicted 23 s), and a 2.1 MB input added 7.6 s (run `1794597791506349833-a4fde388`). The image's own work runs inside the OS session limit (`lifetime_seconds` in the admission record, 63 s for a returning image), which starts when the image does; the upload comes before it. A preserving run adds its two DRAM transfers, as measured above.
+
 ### Build, package, submit and wait
 
 Four commands take a source tree to a board result. None needs a script of its own:
@@ -284,7 +301,7 @@ daemon-checkout rule above.
 ### The recorded board words
 
 The offline build needs board words that a live run reads under the port lock:
-the CPU, thermal and clock state words of the session, and the NPU entry state (the
+the CPU, thermal and clock state words of the session (with the PF pin bank's withstand mode, level and supply selector at `0x02000040`, `0x02000048` and `0x02000070`, read just before launch), and the NPU entry state (the
 three entry gates at `0x070101ac`, `0x020025c0`, `0x020025e0` and the two PCK4
 words at `0x07064000` and `0x07064008`). The runner keeps them in
 `~/.cache/sunstoneos/board-words.json`, each with the run that read it, and
@@ -387,9 +404,10 @@ recognition session that uploads about 44 MB of image, session and inputs spends
 about 155 s of its 170 s run in the `launch` stage, about 79 s of it reading
 bytes back.
 
-`--verify readback`, the default, reads each upload back in the transaction that
-writes it and compares the bytes. `--verify digest` writes each DRAM upload
-once and has the board compute its SHA-256:
+`--verify digest`, the default, writes each DRAM upload once and has the board
+compute its SHA-256. `--verify readback` reads each upload back in the
+transaction that writes it and compares the bytes. The digest path works as
+follows:
 
 1. The runner builds the digest helper
    ([boot/a733/upload-digest.S](../boot/a733/upload-digest.S)), 1,152 bytes of
@@ -415,6 +433,33 @@ later batch is sized from the rate the previous call measured. A board whose
 core has no SHA-256 instructions (ID_ISAR5.SHA2 is 0), or a first call no
 faster than the readback rate, makes the runner read the remaining ranges back
 instead; the result records the reason as `upload_verify.fallback`.
+
+On port 3-3 on 2026-11-13 the helper hashed 6.2 to 6.8 MB/s, and writes moved
+0.565 MB/s, so a digest upload takes about 1/0.565 + 1/6.7 = 1.92 s per MB,
+against 3.54 s per MB with readback. A `launch` stage therefore lasts about
+1.92 s per MB of DRAM upload plus 2 to 5 s of other transfers, as in these runs:
+
+| Run | DRAM upload | Verification | First upload to launch | `launch` stage | Total |
+| --- | --- | --- | --- | --- | --- |
+| Recognition, CPU only, 1794107014170351336-e7854a09 | 16.3 MB | readback | 59.6 s | 60.5 s | 78.6 s |
+| The same image, 1794596384126694694-84ec8555 | 16.3 MB | digest: 28.8 s writing, 2.4 s in 3 helper calls | 31.7 s | 33.3 s | 48.1 s |
+| Recognition with the NPU, 1794595892235825416-6bdcd39c | 43.8 MB | readback | 155.8 s | 155.4 s | 171.0 s |
+| The same image, 1794596079966938149-24a0a868 | 43.8 MB | digest: 76.9 s writing, 6.5 s in 5 helper calls | 86.6 s | 89.1 s | 102.9 s |
+
+Both digest runs completed every helper call with status `DONE` and no fallback.
+The CPU-only run returned the reference result. The NPU run's image was built
+before the NPU runtime's bounded idle wait, and its application stopped at the
+completion idle check, as a readback-mode run of another such image
+(1794506252076994875-247497f5) did; its uploads had been verified.
+
+The helper adds 0.565/6.7, about 8.4 %, to the write time. To bring upload time
+within 1 % of the write time alone, the helper would need about 57 MB/s, about
+8.5 times its measured rate. It executes about 120 instructions per 64-byte
+block ([checks/upload-digest.py](../checks/upload-digest.py)), so 6.7 MB/s is
+about 12.5 million instructions a second: the helper runs with the instruction
+cache off (`sunxi-fel` turns it off for the ROM's FEL code) and fetches every
+instruction from SRAM. Enabling the instruction cache for the helper's duration is the
+first change to measure.
 
 The digest path applies to a plan that executes `0x52000` and uploads into the
 launcher's reservation: generic, legacy and finite NPU images. It verifies each
@@ -609,6 +654,56 @@ Both readbacks are recorded as `marker_clear_test`. If the marker does not
 read `0x16aa` after the second write, the run stops before launch. WDT0 is
 disarmed throughout, so no reset can take the gate's cold path while the
 marker reads clear.
+
+### Boot the card once
+
+`--boot-once-slot MANIFEST.json` replaces the launch with one boot of the
+card's slot. It requires `--approved-by coordinator` and `--lifetime resident`
+and is frozen into the queue entry; the queued copy of the manifest is
+hashed with the other inputs. The image argument is the slot's runtime ELF,
+the one with the linked stop-on-finish profile. Submission and the run flatten
+it as `apps/os/card.py` does and refuse it unless the SHA-256 of the result
+equals the hash of the runtime extent (kind 1) in the manifest, which is the
+plan of `tools/boot-slots.py`. The result then names what the card boots.
+
+After the normal first contact, which sets the marker and clears GP2, the runner:
+
+1. writes the boot-once value `0xb0070c02` to GP2 and reads it back together with
+   the marker. A value that does not read back, or a marker that is not set,
+   clears GP2 again and refuses the run before any reset;
+2. arms WDT0 in mode `0x41` and lets it expire, as the session reset does. It
+   uploads and executes nothing and brings up no DRAM;
+3. waits with no FEL session. The card gate takes its cold path once, boot0
+   trains DRAM and loads the package, the stage-2 monitor loads the slot and
+   enters the image, which runs its test and stops renewing WDT0. The
+   watchdog then resets the board through the gate's warm path into FEL;
+4. reads, in the one transaction that also disarms WDT0, the reset words and the
+   breadcrumb words, then clears GP2.
+
+The wait is `boot_once_deadline()` in `tools/board.py`, a sum of named terms
+in seconds from the arming of WDT0:
+
+| Term | Seconds | Source |
+| --- | --- | --- |
+| `arm_expiry_s` | 4 | the interval of WDT0 mode `0x41` |
+| `gate_watchdog_s` | 16 | the gate's cold-path WDT0 (`0xb1`), which covers boot0, DRAM training (about 5.1 s) and the package load |
+| `slot_load_s` | 30 | the stage-2 loader's bound for the whole slot load |
+| `resident_session_s` | the image's session duration, 60 for the hello-compute diagnostic | the watchdog marker the image declares, as for `--lifetime resident` |
+| `final_watchdog_s` | 4 | the interval of WDT0 mode `0x41` after the monitor enters the image |
+| `margin_s` | 10 | FEL re-enumeration, as in every other wait |
+
+The total is 124 s for a 60 s session. A board that has not reappeared by then
+is a no-return: the instance is quarantined, the port pauses, and the runner
+never retries or resets again.
+
+The result records `boot_once`: the value written and read back, the marker,
+the deadline terms, the seconds to return, WDT0 mode before and after the
+return, the reset words with the gate record decoded, the breadcrumb words and
+their decoding, the LAST word and the stop value. The pass is the gate's warm
+record `0x0c024041`, the marker `0x16aa16aa`, LAST `0x01115000` (stage `0x0111`,
+value `0x5000`) and no fault; the outcome is then `watchdog-reset` with
+`expected_reset: true`. Any other words give the same outcome with a
+`first_failure` that lists the expected and observed words.
 
 The runner uploads both loads, arms WDT0 in mode `0x41`, sets and reads back
 the session tag and the entry state, and executes `0x52000`. The request image
