@@ -66,50 +66,80 @@
  #include "timers.h"
  #include "event_groups.h"
  
-@@ -566,6 +572,9 @@
+@@ -566,9 +572,17 @@
          pxListEnd = listGET_END_MARKER( pxList );
          vTaskSuspendAll();
          {
 +            #if ( configSS_PARTITIONED_SCHEDULER == 1 )
-+                const UBaseType_t uxWalkMask = ssKernelObjectWalkEnter();
++                ListItem_t xWalkCursor;
++                UBaseType_t uxWalkMask = ssKernelObjectWalkBegin( &xWalkCursor, pxList );
 +            #endif
              traceEVENT_GROUP_SET_BITS( xEventGroup, uxBitsToSet );
  
-             pxListItem = listGET_HEAD_ENTRY( pxList );
-@@ -577,6 +586,9 @@
+-            pxListItem = listGET_HEAD_ENTRY( pxList );
++            #if ( configSS_PARTITIONED_SCHEDULER == 1 )
++                pxListItem = ssKernelObjectWalkNext( &xWalkCursor, pxListEnd );
++            #else
++                pxListItem = listGET_HEAD_ENTRY( pxList );
++            #endif
+ 
+             /* Set the bits. */
+             pxEventBits->uxEventBits |= uxBitsToSet;
+@@ -576,7 +590,9 @@
+             /* See if the new bit value should unblock any tasks. */
              while( pxListItem != pxListEnd )
              {
-                 pxNext = listGET_NEXT( pxListItem );
-+                #if ( configSS_PARTITIONED_SCHEDULER == 1 )
-+                    ssKernelObjectWalkStep();
+-                pxNext = listGET_NEXT( pxListItem );
++                #if ( configSS_PARTITIONED_SCHEDULER == 0 )
++                    pxNext = listGET_NEXT( pxListItem );
 +                #endif
                  uxBitsWaitedFor = listGET_LIST_ITEM_VALUE( pxListItem );
                  xMatchFound = pdFALSE;
  
-@@ -638,6 +650,9 @@
+@@ -629,7 +645,13 @@
+                 /* Move onto the next list item.  Note pxListItem->pxNext is not
+                  * used here as the list item may have been removed from the event list
+                  * and inserted into the ready/pending reading list. */
+-                pxListItem = pxNext;
++                #if ( configSS_PARTITIONED_SCHEDULER == 1 )
++                    ( void ) pxNext;
++                    uxWalkMask = ssKernelObjectWalkStep( uxWalkMask );
++                    pxListItem = ssKernelObjectWalkNext( &xWalkCursor, pxListEnd );
++                #else
++                    pxListItem = pxNext;
++                #endif
+             }
+ 
+             /* Clear any bits that matched when the eventCLEAR_EVENTS_ON_EXIT_BIT
+@@ -638,6 +660,9 @@
  
              /* Snapshot resulting bits. */
              uxReturnBits = pxEventBits->uxEventBits;
 +            #if ( configSS_PARTITIONED_SCHEDULER == 1 )
-+                ssKernelObjectWalkLeave( uxWalkMask );
++                ssKernelObjectWalkEnd( &xWalkCursor, uxWalkMask );
 +            #endif
          }
          ( void ) xTaskResumeAll();
  
-@@ -660,6 +675,9 @@
+@@ -660,6 +685,9 @@
  
          vTaskSuspendAll();
          {
 +            #if ( configSS_PARTITIONED_SCHEDULER == 1 )
-+                const UBaseType_t uxWalkMask = ssKernelObjectWalkEnter();
++                UBaseType_t uxWalkMask = ssKernelObjectWalkEnter();
 +            #endif
              traceEVENT_GROUP_DELETE( xEventGroup );
  
              while( listCURRENT_LIST_LENGTH( pxTasksWaitingForBits ) > ( UBaseType_t ) 0 )
-@@ -669,6 +687,9 @@
+@@ -668,7 +696,13 @@
+                  * and cannot therefore have any bits set. */
                  configASSERT( pxTasksWaitingForBits->xListEnd.pxNext != ( const ListItem_t * ) &( pxTasksWaitingForBits->xListEnd ) );
                  vTaskRemoveFromUnorderedEventList( pxTasksWaitingForBits->xListEnd.pxNext, eventUNBLOCKED_DUE_TO_BIT_SET );
-             }
+-            }
++                #if ( configSS_PARTITIONED_SCHEDULER == 1 )
++                    uxWalkMask = ssKernelObjectWalkStep( uxWalkMask );
++                #endif
++            }
 +            #if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +                ssKernelObjectWalkLeave( uxWalkMask );
 +            #endif
