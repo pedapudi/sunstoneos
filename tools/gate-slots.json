@@ -1,11 +1,37 @@
 {
   "_comment": "Measured numbers that tools/gate_slots.py turns into the slot count and the jobs per slot (docs/validation.md, Gate slots). Measured 2026-11-13 on the 24-core, 122 GB host: a sampler read the whole process tree of a keep-going gate every 5 s (gate-slots-sample: --affected bringup~30..HEAD, 339 steps, 839 s, mean 5.3 busy cores on the host with p95 10.7 and a 23.9 build peak, peak resident set 10.9 GB, MemAvailable never under 110 GB) and the idle host (1.1 busy cores, about 3 with the board runner and builds outside the gate).",
-  "host_measured": {"cores": 24, "mem_gb": 122},
-  "reserve": {"other_cores": 3, "mem_gb": 32},
-  "gate": {"mean_cores": 5.3, "peak_rss_gb": 10.9},
+  "host_measured": {
+    "cores": 24,
+    "mem_gb": 122
+  },
+  "reserve": {
+    "other_cores": 3,
+    "mem_gb": 32
+  },
+  "gate": {
+    "mean_cores": 5.3,
+    "peak_rss_gb": 10.9
+  },
   "landing_reserved_slots": 1,
-  "timing_steps": ["check-soak8"],
+  "timing_steps": [
+    "check-soak8"
+  ],
   "timing_checks": [
-    "scheduler-control-linked.py", "smp-ticket-lock.py", "tick-footprint-budget.py", "gpu-conformance.py", "land.py", "submit-wait.py"
-  ]
+    "scheduler-control-linked.py",
+    "smp-ticket-lock.py",
+    "tick-footprint-budget.py",
+    "gpu-conformance.py",
+    "land.py",
+    "submit-wait.py"
+  ],
+  "perturb": {
+    "_comment": "checks/scheduler-control-linked.py: QEMU runs on the instruction counter, so a run's host time is its instruction work, not the host load (serial and eight at once measured 85.1 s and 85.7 s for the slowest point, perturb-scheduler-partitioned-qemu-control-open-3000, 30 runs, 427 s in all). The kill limit is a hang backstop: kill_multiplier times the slowest measured point.",
+    "slowest_point_seconds": 85.7,
+    "kill_multiplier": 4
+  },
+  "latency_control": {
+    "_comment": "checks/latency-control-integration.py runs the control models on one TCG thread with a fixed icount (24 concurrent runs under 24 busy processes and 10 alone gave one identical log); the busy model with --allow-runtime-error takes 33.0 s, with --negative-wrapper-order 33.5 s, the idle model 15.6 s. The kill limit is a hang backstop: kill_multiplier times the slowest.",
+    "slowest_run_seconds": 33.5,
+    "kill_multiplier": 4
+  }
 }
