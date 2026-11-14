@@ -3,6 +3,7 @@ include_guard(GLOBAL)
 include("${CMAKE_CURRENT_LIST_DIR}/patch.cmake")
 option(SUNSTONE_PARTITIONED_SCHEDULER "Select the private owner scheduler in SMP images" ON)
 
+include("${CMAKE_CURRENT_LIST_DIR}/current-tcb.cmake")
 function(sunstone_scheduler_partitioned_prepare output smp_tasks)
   get_filename_component(root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/.." ABSOLUTE)
   file(MAKE_DIRECTORY "${output}/include")

@@ -39,6 +39,53 @@
              #endif
          }
          #else /* if ( configUSE_TASK_FPU_SUPPORT == portTASK_NO_FPU_CONTEXT_BY_DEFAULT ) */
+@@ -854,8 +862,8 @@
+             extern TaskHandle_t pxCurrentTCB;
+             xMPU_SETTINGS * pxMpuSettings = xTaskGetMPUSettings( pxCurrentTCB );
+         #else
+-            extern TaskHandle_t pxCurrentTCBs[ configNUMBER_OF_CORES ];
+-            xMPU_SETTINGS * pxMpuSettings = xTaskGetMPUSettings( pxCurrentTCBs[ portGET_CORE_ID_FROM_ISR() ] );
++            extern TaskHandle_t pxCurrentTCBs[ configNUMBER_OF_CORES * portCURRENT_TCB_STRIDE ];
++            xMPU_SETTINGS * pxMpuSettings = xTaskGetMPUSettings( portCURRENT_TCB( portGET_CORE_ID_FROM_ISR() ) );
+         #endif
+ 
+         if( ( pxMpuSettings->ullTaskFlags & portTASK_IS_PRIVILEGED_FLAG ) == portTASK_IS_PRIVILEGED_FLAG )
+@@ -946,7 +954,7 @@
+         #if ( configNUMBER_OF_CORES == 1 )
+             extern TaskHandle_t pxCurrentTCB;
+         #else
+-            extern TaskHandle_t pxCurrentTCBs[ configNUMBER_OF_CORES ];
++            extern TaskHandle_t pxCurrentTCBs[ configNUMBER_OF_CORES * portCURRENT_TCB_STRIDE ];
+         #endif
+         extern UBaseType_t uxSystemCallImplementations[ NUM_SYSTEM_CALLS ];
+         xMPU_SETTINGS * pxMpuSettings;
+@@ -968,7 +976,7 @@
+         #if ( configNUMBER_OF_CORES == 1 )
+             pxMpuSettings = xTaskGetMPUSettings( pxCurrentTCB );
+         #else
+-            pxMpuSettings = xTaskGetMPUSettings( pxCurrentTCBs[ portGET_CORE_ID_FROM_ISR() ] );
++            pxMpuSettings = xTaskGetMPUSettings( portCURRENT_TCB( portGET_CORE_ID_FROM_ISR() ) );
+         #endif
+ 
+         /* Checks:
+@@ -1028,7 +1036,7 @@
+         #if ( configNUMBER_OF_CORES == 1 )
+             extern TaskHandle_t pxCurrentTCB;
+         #else
+-            extern TaskHandle_t pxCurrentTCBs[ configNUMBER_OF_CORES ];
++            extern TaskHandle_t pxCurrentTCBs[ configNUMBER_OF_CORES * portCURRENT_TCB_STRIDE ];
+         #endif
+         xMPU_SETTINGS * pxMpuSettings;
+         uint64_t ullSystemCallLocation; /* Address where SVC was raised. */
+@@ -1048,7 +1056,7 @@
+         #if ( configNUMBER_OF_CORES == 1 )
+             pxMpuSettings = xTaskGetMPUSettings( pxCurrentTCB );
+         #else
+-            pxMpuSettings = xTaskGetMPUSettings( pxCurrentTCBs[ portGET_CORE_ID_FROM_ISR() ] );
++            pxMpuSettings = xTaskGetMPUSettings( portCURRENT_TCB( portGET_CORE_ID_FROM_ISR() ) );
+         #endif
+ 
+         /* Check:
 @@ -1228,8 +1236,8 @@
          /* Start the timer that generates the tick ISR. */
          configSETUP_TICK_INTERRUPT();
@@ -221,10 +268,6 @@
 -            : "r" ( ulRegVal ), "i" ( portSVC_INTERRUPT_CORE )
 -            : "memory", "w1"
 -        );
--    }
--
--/*-----------------------------------------------------------*/
--
 +        register uint64_t ulRegVal __asm( "x0" ) = portSGI1R_VALUE( ulInterruptID, ucCoreID );
 +        const uint64_t ullTaskRegister = ullPortGetTaskRegister();
 +
@@ -259,10 +302,10 @@
 +        }
 +
 +        __asm volatile ( "svc %1" : "+r" ( ulRegVal ) : "i" ( portSVC_INTERRUPT_CORE ) : "memory" );
-+    }
-+
-+/*-----------------------------------------------------------*/
-+
+     }
+ 
+ /*-----------------------------------------------------------*/
+ 
 +    #if SUNSTONE_LOCK_TAS_CONTROL
      static inline void prvSpinUnlock( uint32_t * ulLock )
      {
@@ -271,9 +314,9 @@
              "dmb sy         \n"
              "mov w1, #0     \n"
              "str w1, [%x0]  \n"
-+            "dsb sy         \n"
-             "sev            \n"
--            "dsb sy         \n"
+-            "sev            \n"
+             "dsb sy         \n"
++            "sev            \n"
              "isb sy         \n"
              :
              : "r" ( ulLock )
@@ -427,17 +470,15 @@
              /* Assert the lock is not free already. */
 -            configASSERT( ( prvGet64( &ullOwnedByCore[ ucCoreID ] ) & ulLockBit ) != 0 );
 -            configASSERT( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) != 0 );
--
--            /* Reduce ullRecursionCountByLock by 1. */
--            prvSet64( &ullRecursionCountByLock[ eLockNum ], ( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) - 1 ) );
--
--            if( !prvGet64( &ullRecursionCountByLock[ eLockNum ] ) )
 +            configASSERT( ( prvGet64( &( xPortCoreStates[ ucCoreID ].ullOwnedLocks ) ) & ulLockBit ) != 0 );
 +            configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) != 0 );
-+
+ 
+-            /* Reduce ullRecursionCountByLock by 1. */
+-            prvSet64( &ullRecursionCountByLock[ eLockNum ], ( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) - 1 ) );
 +            /* Reduce the recursion count by 1. */
 +            prvSet64( &( xPortLocks[ eLockNum ].ullRecursionCount ), ( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) - 1 ) );
-+
+ 
+-            if( !prvGet64( &ullRecursionCountByLock[ eLockNum ] ) )
 +            if( !prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) )
              {
 -                prvSet64( &ullOwnedByCore[ ucCoreID ], ( prvGet64( &ullOwnedByCore[ ucCoreID ] ) & ~ulLockBit ) );
@@ -495,9 +536,6 @@
 -            ullPortYieldRequired = pdTRUE;
 -        #else
 -            ullPortYieldRequired[ portGET_CORE_ID_FROM_ISR() ] = pdTRUE;
--        #endif
--        portEXIT_CRITICAL_FROM_ISR( uxSavedInterruptStatus );
--        portCLEAR_INTERRUPT_MASK_FROM_ISR( uxInterruptStatus );
 +        #ifdef SS_KERNEL_TEST_ADMIN_ENTER
 +            extern void ss_kernel_test_sgi( void ) __attribute__( ( weak ) );
 +            if( ss_kernel_test_sgi != NULL )
@@ -509,7 +547,9 @@
 +        /* The global scheduler uses this interrupt as a switch request.
 +         * Partitioned owner exit derives rescheduling from published work. */
 +        ullPortYieldRequired[ portGET_CORE_ID_FROM_ISR() ] = pdTRUE;
-+        #endif
+         #endif
+-        portEXIT_CRITICAL_FROM_ISR( uxSavedInterruptStatus );
+-        portCLEAR_INTERRUPT_MASK_FROM_ISR( uxInterruptStatus );
      }
  
  /*-----------------------------------------------------------*/

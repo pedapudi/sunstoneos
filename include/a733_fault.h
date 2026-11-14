@@ -41,7 +41,7 @@
 /* The EL3 capture writes words 2..15, then word 1 = CRC32C (initial value and
  * final XOR 0xffffffff, as crc32cx computes over each word in order) of words
  * 2..15, then word 0. A vector fault also records the four EL1 registers, the
- * address of pxCurrentTCBs[core] and up to 16 bytes of that task's name;
+ * current task of the faulting core (its pxCurrentTCBs entry) and up to 16 bytes of that task's name;
  * these words are zero for an exit. */
 struct a733_fault_record {
     uint64_t magic, crc, info, status, detail, counter, epoch;

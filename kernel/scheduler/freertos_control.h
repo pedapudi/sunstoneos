@@ -109,8 +109,19 @@ struct ss_control {
     _Atomic uintptr_t gate_holder;
     _Atomic uint64_t gate_incarnation;
     unsigned gate_depth, boot_depth;
+    /* Each owner's inbox line (owner.h), when attached: the control path
+     * counts there every request it makes pending and not parked on that CPU,
+     * after the bit is visible, and copies the gate phase there, so an owner's
+     * empty check reads one line that it never writes. */
+    struct ss_owner_inbox *inbox[SS_CONTROL_CPUS];
 };
 void ss_control_init(struct ss_control *, uint64_t, const struct ss_owner_backend *, const struct ss_control_ops *);
+/* Attach an owner's inbox after init and before the CPU runs. */
+void ss_control_attach_inbox(struct ss_control *, unsigned cpu, struct ss_owner_inbox *);
+/* Store the gate phase, then its copy in every attached inbox. A transition
+ * that must reach the owners is followed by SGIs, which the backend orders
+ * after these stores. */
+void ss_control_set_gate(struct ss_control *, unsigned phase);
 /* Called by registry initializer before publishing handle. */
 void ss_control_register(struct ss_control *, unsigned, struct ss_owner_descriptor *, uint64_t, unsigned, unsigned, uint64_t);
 /* Caller owns a successful registry pin, so descriptor/task are live. Mutation

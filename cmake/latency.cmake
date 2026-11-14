@@ -1,5 +1,6 @@
 include("${CMAKE_CURRENT_LIST_DIR}/kernel-flags.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/latency-instrumentation.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/current-tcb.cmake")
 # Include after smp.cmake. Only this diagnostic enables latency recording.
 set(latency_root "${SUNSTONE_SOURCE_ROOT}")
 if(NOT latency_root)

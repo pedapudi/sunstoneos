@@ -52,6 +52,29 @@ static void controller(void *argument)
     configASSERT(result.ping.status == LATENCY_CAUSE_PING_OK);
     platform_puts("PASS latency cause model: complete barrier samples and same/cross-type line exchanges; functional evidence only\n");
 #endif
+#ifdef SUNSTONE_LATENCY_SERVICE_CYCLES
+    configASSERT(result.service.magic == SS_SERVICE_CYCLES_MAGIC && result.service.complete);
+    configASSERT(result.service_footer[0] == SS_SERVICE_CYCLES_FOOTER_MAGIC);
+    /* Each kind ran in both settings in both phases, and each cell's bins hold its uninterrupted count. */
+    for (unsigned p = 0; p < SS_SERVICE_CYCLES_PHASES; ++p)
+        for (unsigned kind = 0; kind < SS_SERVICE_CYCLES_KINDS; ++kind)
+            for (unsigned state = 0; state < SS_SERVICE_CYCLES_STATES; ++state) {
+                uint64_t count = 0;
+                for (unsigned core = 0; core < SS_SERVICE_CYCLES_CORES; ++core) {
+                    const struct ss_service_cycles_cell *cell = &result.service.cell[p][core][kind][state];
+                    uint64_t binned = 0;
+                    for (unsigned b = 0; b < SS_SERVICE_CYCLES_BINS; ++b) binned += cell->bins[b];
+                    configASSERT(binned == cell->count && cell->max * cell->count >= cell->sum);
+                    count += cell->count;
+                }
+                number(p ? "service_cycles busy kind=" : "service_cycles idle kind=", kind);
+                number(" state=", state);
+                number(" count=", count);
+                platform_puts("\n");
+                configASSERT(count);
+            }
+    platform_puts("PASS service cycle model: both drain settings timed in both phases; functional evidence only\n");
+#endif
 #ifdef SUNSTONE_SCHED_PMU
     configASSERT(result.pmu_windows.magic == SS_SCHED_PMU_MAGIC);
     configASSERT(!(result.pmu_windows.flags & 8));
