@@ -394,6 +394,7 @@ uint64_t os_space_kernel_ttbr;
 uint8_t os_space_active;
 volatile uint8_t os_space_app_init_active;
 volatile uint8_t os_space_explicit[configNUMBER_OF_CORES];
+const void *volatile os_space_explicit_space[configNUMBER_OF_CORES];
 __attribute__((noinline)) void os_space_refuse_create(void)
 {
     /* A task created by a direct FreeRTOS call inside the application's init hook has no space to take. The failure ends the
@@ -405,10 +406,9 @@ TaskHandle_t os_task_create_static_affinity_set(const void *space,TaskFunction_t
 {
     const unsigned core=portGET_CORE_ID();
     taskENTER_CRITICAL();
-    os_space_explicit[core]=1;
+    os_space_explicit_space[core]=space;os_space_explicit[core]=1;       /* traceTASK_CREATE tags the task inside the creation, before any core can run it */
     TaskHandle_t h=xTaskCreateStaticAffinitySet(entry,name,stack_words,arg,priority,stack,tcb,affinity);
-    if(h)vTaskSetApplicationTaskTag(h,(TaskHookFunction_t)space);
-    os_space_explicit[core]=0;
+    os_space_explicit[core]=0;os_space_explicit_space[core]=NULL;
     taskEXIT_CRITICAL();
     return h;
 }
@@ -417,10 +417,9 @@ TaskHandle_t os_task_create_static(const void *space,TaskFunction_t entry,const 
 {
     const unsigned core=portGET_CORE_ID();
     taskENTER_CRITICAL();
-    os_space_explicit[core]=1;
+    os_space_explicit_space[core]=space;os_space_explicit[core]=1;       /* traceTASK_CREATE tags the task inside the creation, before any core can run it */
     TaskHandle_t h=xTaskCreateStatic(entry,name,stack_words,arg,priority,stack,tcb);
-    if(h)vTaskSetApplicationTaskTag(h,(TaskHookFunction_t)space);
-    os_space_explicit[core]=0;
+    os_space_explicit[core]=0;os_space_explicit_space[core]=NULL;
     taskEXIT_CRITICAL();
     return h;
 }

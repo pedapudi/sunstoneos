@@ -2346,6 +2346,12 @@ static bool ssKernelApplyMasked(void *context, unsigned slot, void *task,
         atomic_store_explicit(&s->execution, state->dead ? SS_K_DEAD : SS_K_SUSPENDED,
                                memory_order_release);
         if (!s->off_cpu) {
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+            /* An exit that parks the interrupted task completes its own
+             * published self-suspension; the task never returns to record it. */
+            if ((suspension & SS_CONTROL_SELF) && cpu->run.current == &s->ready)
+                ss_sched_trace_self_suspend_parked(c, slot);
+#endif
             s->offcpu_wait = true;
             ss_control_park_on(&ssKernelControl, c, slot, &s->off_cpu);
             cpu->reschedule = true;
@@ -3063,12 +3069,15 @@ static bool ssKernelSuspendCurrent(TCB_t *current)
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     trace.slot = slot;
     trace.stamp[1] = ss_sched_trace_now();
+    /* An exception exit may complete this suspension from here until the
+     * mask below; the open record lets that exit's selection record it. */
+    ss_sched_trace_self_suspend_open(ssKernelCPUId(), &trace);
 #endif
     bool changed = ss_control_suspend_current(&ssKernelControl, slot, ssKernelCPUId());
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     trace.stamp[2] = ss_sched_trace_now();
 #endif
-#ifdef SS_KERNEL_TEST_ADMIN_ENTER
+#if defined(SS_KERNEL_TEST_ADMIN_ENTER) || defined(SS_SCHED_TRACE_TEST_EXIT_SUSPEND)
     extern void ss_kernel_test_self_suspend_published(void) __attribute__((weak));
     if (ss_kernel_test_self_suspend_published) ss_kernel_test_self_suspend_published();
 #endif

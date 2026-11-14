@@ -19,11 +19,14 @@ and, across them:
 Usage: session-build.py --control-elf ELF --npu-elf ELF --gpu-elf ELF --output DIR
 """
 import argparse
+import contextlib
 import copy
 import importlib.util
+import io
 import json
 from pathlib import Path
 import struct
+from unittest.mock import patch
 import sys
 GATE_RUNS = [['--control-elf', '{elf:ret-latency}', '--npu-elf', '{elf:ret-npu-load}', '--gpu-elf', '{elf:ret-gpu}', '--output', '{output}']]
 
@@ -133,6 +136,35 @@ def main():
     verdict = session.admit(image, bytes(perfed))
     assert verdict['admitted'] is False and verdict['term'] == 'session_decode', verdict
     passed.append('a grant that carries perf for a manifest without cpu.perf is refused by the EL3 admission')
+    # check --admit --lifetime: the lifetime reaches host_admission.preflight (default returning), and a CLI call carries it to admit().
+    image, raw, _ = built['control']
+    seen = []
+    class Spy:
+        AdmissionRefused, Unavailable = admission.AdmissionRefused, admission.Unavailable
+        @staticmethod
+        def preflight(image, raw, contract, **kwargs):
+            seen.append(kwargs['lifetime'])
+            return {'admitted': True}
+    real_load = session.load
+    with patch.object(session, 'load', lambda name, path: Spy if name == 'session_tool_admission' else real_load(name, path)):
+        session.admit(image, raw)
+        session.admit(image, raw, lifetime='resident')
+    assert seen == ['returning', 'resident'], seen
+    calls = []
+    with patch.object(session, 'admit', lambda image, raw, build=None, lifetime='returning': calls.append(lifetime) or {'admitted': True}), \
+         contextlib.redirect_stdout(io.StringIO()):
+        for extra in ([], ['--lifetime', 'resident']):
+            assert session.main(['check', str(out / 'control' / 'template' / 'session.bin'), '--image', str(image), '--admit', *extra]) == 0
+    assert calls == ['returning', 'resident'], calls
+    # With the real admission, the lifetime selects the contract: an image that does not admit the resident lifetime is
+    # refused at selection, never silently admitted under the returning one.
+    try:
+        verdict = session.admit(image, raw, lifetime='resident')
+    except ValueError as error:
+        assert 'resident' in str(error), error
+    else:
+        assert verdict['admitted'] is False or verdict.get('lifetime') == 'resident', verdict
+    passed.append('check --admit --lifetime passes the lifetime to the image admission (default returning)')
     # refusals that name the field
     control, npu = built['control'], built['npu']
     facts = json.loads(session.FACTS.read_text())

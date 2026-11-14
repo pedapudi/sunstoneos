@@ -66,6 +66,56 @@
  #include "timers.h"
  #include "event_groups.h"
  
+@@ -566,6 +572,9 @@
+         pxListEnd = listGET_END_MARKER( pxList );
+         vTaskSuspendAll();
+         {
++            #if ( configSS_PARTITIONED_SCHEDULER == 1 )
++                const UBaseType_t uxWalkMask = ssKernelObjectWalkEnter();
++            #endif
+             traceEVENT_GROUP_SET_BITS( xEventGroup, uxBitsToSet );
+ 
+             pxListItem = listGET_HEAD_ENTRY( pxList );
+@@ -577,6 +586,9 @@
+             while( pxListItem != pxListEnd )
+             {
+                 pxNext = listGET_NEXT( pxListItem );
++                #if ( configSS_PARTITIONED_SCHEDULER == 1 )
++                    ssKernelObjectWalkStep();
++                #endif
+                 uxBitsWaitedFor = listGET_LIST_ITEM_VALUE( pxListItem );
+                 xMatchFound = pdFALSE;
+ 
+@@ -638,6 +650,9 @@
+ 
+             /* Snapshot resulting bits. */
+             uxReturnBits = pxEventBits->uxEventBits;
++            #if ( configSS_PARTITIONED_SCHEDULER == 1 )
++                ssKernelObjectWalkLeave( uxWalkMask );
++            #endif
+         }
+         ( void ) xTaskResumeAll();
+ 
+@@ -660,6 +675,9 @@
+ 
+         vTaskSuspendAll();
+         {
++            #if ( configSS_PARTITIONED_SCHEDULER == 1 )
++                const UBaseType_t uxWalkMask = ssKernelObjectWalkEnter();
++            #endif
+             traceEVENT_GROUP_DELETE( xEventGroup );
+ 
+             while( listCURRENT_LIST_LENGTH( pxTasksWaitingForBits ) > ( UBaseType_t ) 0 )
+@@ -669,6 +687,9 @@
+                 configASSERT( pxTasksWaitingForBits->xListEnd.pxNext != ( const ListItem_t * ) &( pxTasksWaitingForBits->xListEnd ) );
+                 vTaskRemoveFromUnorderedEventList( pxTasksWaitingForBits->xListEnd.pxNext, eventUNBLOCKED_DUE_TO_BIT_SET );
+             }
++            #if ( configSS_PARTITIONED_SCHEDULER == 1 )
++                ssKernelObjectWalkLeave( uxWalkMask );
++            #endif
+         }
+         ( void ) xTaskResumeAll();
+ 
 --- stream_buffer.c
 +++ stream_buffer.c
 @@ -37,6 +37,12 @@
