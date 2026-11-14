@@ -52,6 +52,7 @@ static _Atomic uint32_t read_owner_cores,irq_entry_count[8],irq_stray_count;
 static atomic_uint close_proven;
 static atomic_uint storage_state;
 static atomic_uint_fast64_t entry_ttbr0;
+static volatile uint8_t entry_seen, entry_tagged;      /* sd_owner.c: the owner's address space at its first instruction */
 #define SD_OPEN 2u
 #define SD_FAILED 4u
 static int owner_open_allowed(void){return 1;}

@@ -32,7 +32,7 @@ static int close_write(void *v,uintptr_t a,uint32_t value)
  * host check had applied. Each write here is first offered to a shadow adapter with the model's current module, bus and clock-control words. */
 uint32_t a733_native_host_load(uintptr_t a)
 {
-    if(a==m.platform.module||a==m.platform.bus)return *pmic_model_word(&m.power,a);
+    if(a==m.platform.module||a==m.platform.bus||a==0x02000040)return *pmic_model_word(&m.power,a);
     if(a>=m.platform.base&&a<m.platform.base+0x300)return u.base.reg[(a-m.platform.base)/4];     /* the model's controller registers */
     return 0;
 }
@@ -53,7 +53,7 @@ static void shadow_begin(void)
 {
     memset(&shadow_locks,0,sizeof shadow_locks);shadow_locks.initialized=1;memset(&shadow,0,sizeof shadow);
     assert(a733_mmc_platform_native_init_selected(&shadow,&shadow_locks,&shadow_task,SUNXI_MMC_SD,A733_MMC_EMMC_SDC2,shadow_admit,NULL));
-    shadow.sd_profile=m.platform.config.sd_profile;assert(shadow.operations.enter(&shadow,1000));
+    shadow.sd_profile=m.platform.config.sd_profile;shadow.pf_switchable=m.platform.config.pf_switchable;assert(shadow.operations.enter(&shadow,1000));
 }
 static unsigned shadow_refusals;
 static int shadow_write(void *v,uintptr_t a,uint32_t value)
@@ -79,7 +79,9 @@ static enum a733_mmc_platform_result close_step(void)
 /* The UHS-I lifetimes of docs/sd-card.md. Lifetime 1 switches the card to 1.8 V, runs SDR25, reads and closes with the bank
  * put back at 3.3 V; lifetime 2 starts with the card already at 1.8 V, moves the bank to 1.8 V before the core opens, identifies without
  * CMD11, reads and closes the same way. run_lifetime stops ("a cut") after `cut` polls and checks the state a watchdog reset leaves. */
-/* variant 0 SDR25 only; 1 SDR104 at 150 MHz; 2 SDR104 at 100 MHz (no 300 MHz branch); 3 SDR104 with no passing delay, which falls back to SDR25 at 50 MHz. */
+/* variant 0 SDR25 only; 1 SDR104 at 150 MHz; 2 SDR104 at 100 MHz (no 300 MHz branch); 3 SDR104 with no passing delay, which falls back to SDR25 at 50 MHz;
+ * 6 SDR104 at 150 MHz on a switchable board whose PF withstand field the boot chain left fixed at 3.3 V (00): adaptive at the baseline, 00 again
+ * after the close puts the bank back at 3.3 V, every write offered to the adapter. */
 static int run_lifetime(unsigned start18,int cut,unsigned variant)
 {
     unsigned sdr104=variant!=0;cfg_nowindow=variant==3;cfg_dma=variant==5;
@@ -87,7 +89,7 @@ static int run_lifetime(unsigned start18,int cut,unsigned variant)
     selected_profile=SUNXI_MMC_SD_UHS_SDR104;cfg_sdr25=!sdr104;cfg_start18=start18;
     closing=stall_update=fail_gate=gate_order=0;
 #define TICK() do{if((int)n++==cut)goto cut_point;}while(0)
-    if(variant==2)begin(1,0,1);else begin(1,1,3);
+    if(variant==2)begin(1,0,1);else begin(variant==6?0:1,1,3);
     if(variant==4)u.sdr50=1;       /* a card with SDR50 as well: the restarts walk SDR104, SDR50, SDR25 */
     shadow_begin();shadow_refusals=0;m.platform.ops.write=shadow_write;
     enum a733_mmc_platform_result r=A733_MMC_PENDING;
@@ -153,6 +155,7 @@ static int run_lifetime(unsigned start18,int cut,unsigned variant)
            ((*pmic_model_word(&m.power,0x02000048)>>10)&3)==2&&u.phase==3&&u.bank==0&&pf_writes==1);
     assert(!*pmic_model_word(&m.power,m.platform.module)&&!*pmic_model_word(&m.power,m.platform.bus));
     assert(!commands_at_mismatch&&!shadow_refusals);
+    assert(pf_mode_writes==(variant==6?2u:0u)&&((*pmic_model_word(&m.power,0x02000040)>>10)&3)==(variant==6?0u:1u));
     return (int)n;
 cut_point:
     /* What a reset here leaves: the selector, the card's level and the platform's record agree, and no command went out at a mismatch. */
@@ -162,6 +165,8 @@ cut_point:
     if(m.platform.signal==1||m.platform.signal==2)assert(!uhs_pf_value);
     if(m.platform.signal==3)assert(uhs_pf_value&&restore_writes==1);
     if(!m.platform.signal&&!restore_writes)assert(uhs_pf_value&&!pf_writes);
+    /* The withstand field reads adaptive exactly while the platform records the change (a reset then leaves the field at its reset value). */
+    assert(pf_mode_writes<=2&&(((*pmic_model_word(&m.power,0x02000040)>>10)&3)==1)==(variant!=6||(m.platform.pf_found&4)));
     return -1;
 #undef TICK
 }
@@ -170,19 +175,19 @@ int main(int argc,char **argv)
     assert(argc==1||(argc==2&&(!strcmp(argv[1],"--failures-only")||!strcmp(argv[1],"--admission")||!strcmp(argv[1],"--lifetimes"))));
     if(argc==2&&!strcmp(argv[1],"--lifetimes")){
         unsigned cuts=0;
-        for(unsigned variant=0;variant<6;++variant)for(unsigned start18=0;start18<2;++start18){
+        for(unsigned variant=0;variant<7;++variant)for(unsigned start18=0;start18<2;++start18){
             unsigned sdr104=variant!=0;
             int total=run_lifetime(start18,-1,variant);assert(total>0);
             /* every poll for SDR25; for SDR104 every poll except inside the 520-command sweep, where every 9th */
             for(int cut=0;cut<total;cut+=(sdr104&&cut>300&&cut<total-60)?9:1){assert(run_lifetime(start18,cut,variant)==-1);++cuts;}
         }
-        /* A UHS-I lifetime that stayed at 3.3 V (manual PF mode, no switch) closes too. */
+        /* A UHS-I lifetime that stayed at 3.3 V (a board that declares the PF bank fixed, no switch) closes too. */
         selected_profile=SUNXI_MMC_SD_UHS_SDR104;cfg_sdr25=cfg_start18=cfg_dma=0;closing=stall_update=fail_gate=gate_order=0;
-        begin(2,1,2);assert(settle()==A733_MMC_READY&&!m.platform.signal);
+        cfg_pf_fixed=1;begin(2,1,2);cfg_pf_fixed=0;assert(settle()==A733_MMC_READY&&!m.platform.signal);
         {static uint8_t b[4096];read_ok(b);}
         m.platform.ops.write=close_write;closing=1;enum a733_mmc_platform_result r=A733_MMC_PENDING;
         for(unsigned i=0;i<40&&r!=A733_MMC_CLOSED;++i){r=close_step();assert(r!=A733_MMC_RETAINED);}
-        assert(r==A733_MMC_CLOSED&&!restore_writes&&!pf_writes);
+        assert(r==A733_MMC_CLOSED&&!restore_writes&&!pf_writes&&!pf_mode_writes);
         printf("PASS UHS-I lifetimes: switch, SDR25, SDR104 at 150 and at 100 MHz (CMD19 sweep) and the no-window fallback to SDR25, reads and close with the bank back at 3.3 V; re-entry from a card at 1.8 V with no CMD11; %u cuts (every poll, every 9th inside a CMD19 sweep), "
                "no command with the bank at 1.8 V and the card at 3.3 V, the selector and the platform's record agree at every cut\n",cuts);
         return 0;

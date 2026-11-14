@@ -45,8 +45,14 @@ const struct a733_cached_device_inputs a733_cached_device_inputs = {
 uint64_t a733_smp_counter(void)
 { uint64_t value; __asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(value)); return value; }
 static void barrier(void) { __asm__ volatile("dsb sy" ::: "memory"); }
+/* A core that waits for another yields (WFE) instead of spinning: under QEMU's -icount, guest time is the instructions of all
+ * vCPUs, so a waiting core that gets a long turn while the primary is preempted by a host-timed vCPU switch advances the counter
+ * by milliseconds and expires the deadline of the primary's table flush (platform/a733-smp-cached/memory.c). A yielding core gives
+ * the turn back after a few instructions. The writer signals with SEV. */
 static void wait_device(volatile uint64_t *value)
-{ while (!*value) { CHECK(a733_smp_counter() < UINT32_MAX); barrier(); } }
+{ while (!*value) { CHECK(a733_smp_counter() < UINT32_MAX); barrier(); __asm__ volatile("wfe" ::: "memory"); } }
+static void signal_device(volatile uint64_t *value)
+{ barrier(); *value = 1; barrier(); __asm__ volatile("sev" ::: "memory"); }
 
 void fixture_el3_prepare(unsigned core)
 {
@@ -65,7 +71,7 @@ void fixture_el3_prepare(unsigned core)
         CHECK((a733_cached_el3_l2[14] & 31) == 9 && (a733_cached_el1_l2[14] & 31) == 9);
         CHECK(a733_cpu_coherence_publish(0x41000000, 0x200000, UINT32_MAX) == 1);
         CHECK(a733_cpu_coherence_publish(0x41200000, (uintptr_t)__bss_end - 0x41200000, UINT32_MAX) == 1);
-        barrier(); tables_published = 1; barrier();
+        signal_device(&tables_published);
     } else wait_device(&tables_published);
 }
 static uint64_t el3_translation(uintptr_t address, int write)
@@ -85,7 +91,7 @@ static void el3_range(uintptr_t begin, uintptr_t end, unsigned attribute)
 }
 void fixture_el3_mapped(unsigned core)
 {
-    barrier(); el3_active[core] = 1; barrier();
+    signal_device(&el3_active[core]);
     for (unsigned i = 0; i < 8; ++i) wait_device(&el3_active[i]);
     el3_range((uintptr_t)__device_pool_start, (uintptr_t)__device_pool_end, 0xff);
     el3_range(0x41c00000, 0x41e00000, 0x44);

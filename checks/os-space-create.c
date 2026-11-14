@@ -12,6 +12,7 @@ uint64_t os_space_kernel_ttbr;
 uint8_t os_space_active;
 volatile uint8_t os_space_app_init_active;
 volatile uint8_t os_space_explicit[configNUMBER_OF_CORES];
+const void *volatile os_space_explicit_space[configNUMBER_OF_CORES];
 static unsigned refusals;
 void os_space_refuse_create(void) { ++refusals; }
 static uint64_t app_ttbr;
@@ -36,6 +37,16 @@ int main(void)
     os_space_inherit((struct tcb *)0, &made);
     assert(refusals == 1);
     os_space_explicit[core] = 0;
+    /* An explicit creation by a task that carries a space: the hook itself gives the new task the named space (here none, an OS task), never
+     * the creator's. A tag set after the creation returns is too late: the partitioned scheduler publishes the task to its owner core
+     * inside the creation, and that core can switch it in with whatever tag it holds then (the storage owner, 2026-11-13). */
+    made.pxTaskTag = 0; os_space_explicit_space[core] = 0; os_space_explicit[core] = 1;
+    os_space_inherit(&creator, &made);
+    assert(!made.pxTaskTag && refusals == 1);
+    made.pxTaskTag = 0; os_space_explicit_space[core] = &app_ttbr;
+    os_space_inherit(&kernel_creator, &made);
+    assert(made.pxTaskTag == &app_ttbr);
+    os_space_explicit[core] = 0; os_space_explicit_space[core] = 0;
     /* The mark of another core does not excuse this core. */
     core = 3; os_space_explicit[1] = 1;
     os_space_inherit((struct tcb *)0, &made);

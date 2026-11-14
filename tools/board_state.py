@@ -38,7 +38,12 @@ WORDS = (0x2002000, 0x20020a0, 0x20020a8, 0x20020ac, 0x2002518, 0x2002fc0, 0x200
          # CE clock (CE_CLK_REG) and bus gating/reset (CE_BGR_REG: CE_RST bit 16, CE_SYS_RST bit 17, gates bits 0 and 1).
          # CCU reads are always safe; the CE's own registers are not read here, because a gated or reset-held CE can
          # stall the bus. They say whether anything before the image left the CE running, which could leave DMA active.
-         0x2002ac0, 0x2002ac4)
+         0x2002ac0, 0x2002ac4,
+         # The PF pin bank (the microSD signalling pins) as the boot chain and the runner's reset, DRAM and rail steps leave it, read just
+         # before launch: GPIO_POW_MOD_SEL (withstand mode, PF bits 11:10), GPIO_POW_VAL (detected level, PF bits 11:10) and the PF supply
+         # selector (bit 0). The SD open records what it found too (docs/sd-card.md, the PF bank's withstand mode); this places the value
+         # before the OS. PIO registers are always clocked, so the reads cannot stall.
+         0x2000040, 0x2000048, 0x2000070)
 
 
 BOOT_PLL, BOOT_MUX = (0xf8802600, 0xf8802700, 0xf8802600), (0x03010000, 0x03000000, 0x03010105)

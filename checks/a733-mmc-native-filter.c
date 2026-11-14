@@ -114,6 +114,29 @@ int main(void)
     }
     fresh(SUNXI_MMC_EMMC, SUNXI_MMC_SD_LEGACY, 0);
     assert(!n.operations.write(&n, 0x02000070, 0) && !n.operations.write(&n, 0x02000070, 1));
+    /* The PF withstand field (0x02000040 bits 11:10), on a board declared switchable and in the UHS-I profile only: from a fixed 3.3 V mode
+     * (00 or 10) to adaptive (01), then back to the field found, alternating; no other bit, no other value. */
+    for (unsigned found = 0; found <= 2; found += 2) {
+        const uint32_t was = (0x01155550u & ~(3u << 10)) | (found << 10), adaptive = (was & ~(3u << 10)) | (1u << 10);
+        fresh(SUNXI_MMC_SD, SUNXI_MMC_SD_UHS_SDR104, 0); a733_native_host_store(0x02000040, was);
+        assert(!n.operations.write(&n, 0x02000040, adaptive));                                          /* declared fixed */
+        n.pf_switchable = 1;
+        assert(!n.operations.write(&n, 0x02000040, was | (3u << 10)));                                 /* fixed 1.8 V */
+        assert(!n.operations.write(&n, 0x02000040, adaptive ^ (1u << 4)));                              /* another bank's field */
+        assert(!n.operations.write(&n, 0x02000040, (was & ~(3u << 10)) | ((2u - found) << 10)));        /* the other fixed mode */
+        task_ok = 0; assert(!n.operations.write(&n, 0x02000040, adaptive)); task_ok = 1;               /* not the owning task */
+        assert(n.operations.write(&n, 0x02000040, adaptive) && a733_native_host_load(0x02000040) == adaptive);
+        assert(!n.operations.write(&n, 0x02000040, adaptive));                                          /* once */
+        assert(!n.operations.write(&n, 0x02000040, (was & ~(3u << 10)) | ((2u - found) << 10)));        /* back to a mode not found */
+        assert(n.operations.write(&n, 0x02000040, was) && a733_native_host_load(0x02000040) == was);    /* back to the field found */
+        assert(!n.operations.write(&n, 0x02000040, was));
+        a733_native_host_store(0x02000040, adaptive);
+        assert(!n.operations.write(&n, 0x02000040, was));                                               /* found adaptive: never written */
+        for (unsigned profile = SUNXI_MMC_SD_LEGACY; profile < SUNXI_MMC_SD_UHS_SDR104; ++profile) {
+            fresh(SUNXI_MMC_SD, (enum sunxi_mmc_sd_profile)profile, 0); n.pf_switchable = 1; a733_native_host_store(0x02000040, was);
+            assert(!n.operations.write(&n, 0x02000040, adaptive));                                      /* other profiles never write it */
+        }
+    }
     /* The terminal close restores the inherited module setting, in the high-speed and the UHS-I profiles, only with module and bus off. */
     for (unsigned profile = SUNXI_MMC_SD_HIGH_SPEED4; profile <= SUNXI_MMC_SD_UHS_SDR104; ++profile) {
         uintptr_t module = 0x02002d00u, bus = 0x02002d0cu;

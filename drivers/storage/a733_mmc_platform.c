@@ -169,7 +169,19 @@ static int voltage(struct a733_mmc_platform *p,unsigned initial)
     uint32_t mode,value,select;
     unsigned shift=p->config.kind==SUNXI_MMC_SD?10:4;
     if(!rd(p,PIO+0x40,&mode)||!rd(p,PIO+0x48,&value))return 0;
+    if(initial&&!p->bank_seen&&p->config.kind==SUNXI_MMC_SD) {
+        uint32_t raw_select;
+        if(!rd(p,PIO+0x70,&raw_select))return 0;
+        p->bank_raw[0]=mode;p->bank_raw[1]=value;p->bank_raw[2]=raw_select;p->bank_seen=1;
+    }
     mode=(mode>>shift)&3;value=(value>>shift)&3;
+    if(initial&&p->config.kind==SUNXI_MMC_SD&&p->config.pf_switchable&&p->config.sd_profile==SUNXI_MMC_SD_UHS_SDR104&&
+       !p->signal&&!(p->pf_found&4)&&(mode==0||mode==2)&&value==2) {
+        /* A switchable bank found with its withstand mode fixed at 3.3 V: adaptive mode, as boot0 leaves it and as the board kernel's
+         * automatic PF switch assumes (docs/sd-card.md, the PF bank's withstand mode), read back; close restores the field found. */
+        if(!update(p,PIO+0x40,3u<<shift,mode<<shift,1u<<shift))return 0;
+        p->pf_found=(uint8_t)(4u|mode);mode=1;
+    }
     if(p->config.kind==SUNXI_MMC_SD) {
         /* Manual 18.14.6.2-3: PF value 2 is 3.3 V and 3 is 1.8 V; selector bit
          * 0 chooses 3.3 V. Only the UHS-I switch clears it, once. */
@@ -523,15 +535,17 @@ static enum a733_mmc_platform_result registers(struct a733_mmc_platform *p)
          * (as the core's own switch does, within 10 ms), then keep the clock stopped 10 ms before the core opens. */
         uint32_t ctrl,value;
         if(!p->signal) {
-            ok=p->config.sd_profile==SUNXI_MMC_SD_UHS_SDR104&&p->voltage_mode==1&&p->snapshots[2].programmed_uv==1800000u&&
-               rd(p,p->base+4,&ctrl)&&!ctrl&&masked(p)==1&&update(p,PIO+0x70,1,1,0);
-            if(ok){p->signal=1;p->signal_since=p->last_now;}
+            unsigned profile=p->config.sd_profile==SUNXI_MMC_SD_UHS_SDR104,mode=p->voltage_mode==1,supply=p->snapshots[2].programmed_uv==1800000u;
+            unsigned stopped=rd(p,p->base+4,&ctrl)&&!ctrl;
+            p->enter_obs=(uint8_t)(profile|mode<<1|supply<<2|stopped<<3);
+            ok=profile&&mode&&supply&&stopped&&masked(p)==1&&update(p,PIO+0x70,1,1,0);
+            if(ok){p->signal=1;p->signal_since=p->last_now;p->enter_obs|=1u<<4;}
         } else if(p->signal==1) {
             ok=rd(p,PIO+0x48,&value);
-            if(ok&&((value>>10)&3)==3){p->signal=2;p->signal_since=p->last_now;}
-            else if(ok&&p->last_now-p->signal_since>=10000)ok=0;
+            if(ok&&((value>>10)&3)==3){p->signal=2;p->signal_since=p->last_now;p->enter_obs|=1u<<5;}
+            else if(ok&&p->last_now-p->signal_since>=10000){ok=0;p->enter_obs|=1u<<6;}
         } else if(p->last_now-p->signal_since>=10000)p->stage=OPEN;
-        if(ok&&!voltage(p,0))ok=0;
+        if(ok&&!voltage(p,0)){ok=0;p->enter_obs|=1u<<7;}
     } else ok=0;
     return ok&&timely(p)?A733_MMC_PENDING:fail(p);
 }
@@ -870,6 +884,12 @@ enum a733_mmc_platform_result a733_mmc_platform_close(struct a733_mmc_platform *
                !update(p,p->bus,0x10001,0x10000,p->initial_bus&0x10001)||
                !update(p,p->module,0x87001f1f,p->running_module&~BIT(31),p->initial_module&0x87001f1f))
                 return finish(p,fail(p));
+            if(p->pf_found&4){
+                /* The bank is back at 3.3 V: the withstand field returns to the fixed mode this open found. */
+                unsigned found=p->pf_found&3u;
+                if(!update(p,PIO+0x40,3u<<10,1u<<10,found<<10))return finish(p,fail(p));
+                p->pf_found=(uint8_t)found;p->voltage_mode=found;
+            }
             p->stage=CLOSE_PINS;
         }
     }

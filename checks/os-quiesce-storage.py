@@ -111,7 +111,8 @@ static _Atomic uint64_t read_closed_us;
 static uint64_t sunstone_deadline_now_us(void){return 0;}
 static void os_application_wake_main(void){}
 static int opened=1;
-struct platform_state {uint64_t stage,fault,fault_why,fault_line,refused;unsigned irq_mode;};
+static uint8_t os_sd_pf_closed;                                     /* the close's PF withstand-field record (large_sd.c) */
+struct platform_state {uint64_t stage,fault,fault_why,fault_line,refused;unsigned irq_mode;uint8_t pf_found;};
 static struct platform_state platform={.irq_mode=1};
 static int irq_live=1,irq_owner_on=1,mask_ok=1,irq_off_ok=1;
 static unsigned mask_calls,irq_off_calls;

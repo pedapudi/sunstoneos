@@ -3,7 +3,7 @@
 
     session.py build IMAGE --out DIR [--manifest M] [--npu-declaration D] [--input FILE ...]
                              [--decoder FILE] [--device-profile usb-host|radio-scan]
-    session.py check DIR_OR_SESSION [--image IMAGE] [--admit] [--json]
+    session.py check DIR_OR_SESSION [--image IMAGE] [--admit [--lifetime returning|resident]] [--json]
 
 build writes the complete session of IMAGE to DIR/template/session.bin, the input files to DIR/template/input-N.bin, and DIR/session.json, which
 records what each field came from. The template is what `board.py submit --template DIR/template` takes; the runner draws a fresh epoch,
@@ -567,11 +567,12 @@ def inspect(raw, image=None, host=None):
     return report
 
 
-def admit(image, raw, build=None):
+def admit(image, raw, build=None, lifetime='returning'):
     """The image's own EL3 admission on the session and the launch contract the runner would send; returns its verdict dictionary.
 
     The admission code is compiled from the image's own source tree, the one its CMake build directory was configured from
-    (tools/host_admission.py refuses a tree that has moved or an image that is not that build's). An image under its build directory
+    (tools/host_admission.py refuses a tree that has moved or an image that is not that build's). lifetime selects the contract the
+    admission is run with: an image that admits only the resident lifetime is refused under the returning one. An image under its build directory
     needs no argument; build names the directory for an image copied away from it. A queued copy finds the harness built at submission."""
     import re
     located = None
@@ -584,7 +585,7 @@ def admit(image, raw, build=None):
     _, address, identity = base.image_parts(Path(image))
     _, contract = from_prepare.request_bytes(address, identity, raw)
     try:
-        return admission.preflight(Path(image), raw, contract, build=located)
+        return admission.preflight(Path(image), raw, contract, build=located, lifetime=lifetime)
     except admission.AdmissionRefused as error:
         return {'admitted': False, 'refusal': str(error), 'detail': error.detail, 'term': error.term, 'sub': error.sub}
     except admission.Unavailable as error:
@@ -638,6 +639,8 @@ def main(argv=None):
     c.add_argument('--image', type=Path, help='compare the session with this image; default: the image session.json names')
     c.add_argument('--admit', action='store_true', help='run the image\'s EL3 admission on the session (needs the image)')
     c.add_argument('--build', type=Path, help='the CMake build directory of an image that was copied away from it (for --admit)')
+    c.add_argument('--lifetime', choices=('returning', 'resident'), default='returning',
+                   help='the lifetime contract --admit runs the admission with (default returning); a resident-only image needs resident')
     c.add_argument('--json', action='store_true', help='print the fields as JSON')
     args = parser.parse_args(argv)
     try:
@@ -659,7 +662,7 @@ def main(argv=None):
         if args.admit:
             if image is None:
                 raise SessionError('admit: --admit needs the image (--image, or a directory with session.json)')
-            report['admission'] = admit(image, raw, args.build)
+            report['admission'] = admit(image, raw, args.build, args.lifetime)
         if args.json:
             print(json.dumps(report, indent=2, sort_keys=True))
         else:

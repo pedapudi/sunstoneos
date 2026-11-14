@@ -81,6 +81,14 @@ def decode(payload):
     out['sd_mode'] = decode_mode(out['mode_words'])
     if out['tag'] != TAG:
         raise ValueError('storage-write result has the wrong tag.')
+    space = out['app_core'] >> 32 & 7                # the storage owner's first instruction (apps/os/sd_owner.c, ss_storage_owner_space)
+    out['owner_space'] = {'table': {0: 'not run', 1: 'kernel', 2: 'other'}.get(space & 3, space & 3), 'tagged': bool(space & 4)}
+    bank = out['app_core'] >> 35 & 0x1ffff          # the PF bank record (apps/os/sd_owner.c, ss_storage_pf_bank)
+    fields = lambda f: {'mode': f & 3, 'status': f >> 2 & 3, 'selector': f >> 4 & 1}
+    out['pf_bank'] = {'first': fields(bank & 31), 'reopen': fields(bank >> 5 & 31), 'open_set': bool(bank >> 12 & 1),
+                      'open_found': bank >> 10 & 3, 'closed': bool(bank >> 16 & 1), 'close_adaptive': bool(bank >> 15 & 1),
+                      'close_field': bank >> 13 & 3}
+    out['app_core'] &= 0xffffffff
     out['irq_stray'] = out['irq_cores'] >> 32
     out['irq_cores'] &= 0xffffffff
     out['owner_recheck_wakes'] = out['owner_wakes'] >> 32

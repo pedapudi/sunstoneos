@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Check ordinary and ledger USB images, plus the parser's legacy NOLOAD exception."""
+"""Check ordinary and ledger USB images, plus the parser's legacy NOLOAD exception.
+
+The build identity is admitted in the text block or the OS read-only data block, and refused in a writable segment.
+"""
 import argparse
 import importlib.util
 import json
@@ -14,7 +17,7 @@ import harness
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--output', '{output}', '--ledger-usb-elf', '{elf:os-usb-ledger}']]
-CHECK_INPUTS = ['tools/check-a733-smp.py', 'apps/os/usb-memory.c',
+CHECK_INPUTS = ['tools/check-a733-smp.py', 'apps/board/prepare.py', 'apps/os/usb-memory.c',
                 'platform/a733-smp-cached/link.ld', 'platform/a733-storage-maintenance/link.patch',
                 'include/a733_usb_memory.h', 'apps/os/session.c', 'apps/os/usb-service.c']
 
@@ -88,6 +91,29 @@ SECTIONS {
     for name, script in (('control', 'storage.ld'), ('usb', 'usb.ld')):
         run([harness.LLD, '-T', out / script, out / 'image.o', '-o', out / (name + '.elf')])
     tool.image_parts(out / 'control.elf')
+    # The build identity may lie in the OS image's read-only data block after the text block (apps/os/sealed-link.patch),
+    # and only in a load segment that is not writable.
+    storage = (out / 'storage.ld').read_text()
+    rodata = storage.replace('    RAM (rw) : ORIGIN = 0x41200000, LENGTH = 14M',
+                             '    RODATA (r) : ORIGIN = 0x41200000, LENGTH = 2M\n    RAM (rw) : ORIGIN = 0x41400000, LENGTH = 12M')
+    rodata = rodata.replace('    .rodata : { *(.rodata*) } > CODE', '    .rodata : { *(.rodata*) } > RODATA')
+    assert rodata.count('> RODATA') == 1 and 'ORIGIN = 0x41400000' in rodata
+    (out / 'rodata.ld').write_text(rodata)
+    run([harness.LLD, '-T', out / 'rodata.ld', out / 'image.o', '-o', out / 'rodata.elf'])
+    _, address, _ = tool.image_parts(out / 'rodata.elf')
+    assert 0x41200000 <= address < 0x41400000, hex(address)
+    # The runner's launch request takes the same bounds as the image check.
+    spec = importlib.util.spec_from_file_location('image_parts_board', ROOT / 'apps/board/prepare.py')
+    board = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(board)
+    board.request_bytes(address, bytes(32), 1, 1, 1, b'')
+    harness.refused(lambda: board.request_bytes(0x413fffe1, bytes(32), 1, 1, 1, b''),
+                    'Invalid supervised launch identity')
+    writable = out / 'writable-identity.S'
+    writable.write_text(source.read_text().replace('.section .rodata,"a"', '.section .rodata.identity,"aw"'))
+    run([harness.CLANG, '--target=aarch64-none-elf', '-c', writable, '-o', out / 'writable-identity.o'])
+    run([harness.LLD, '-T', out / 'storage.ld', out / 'writable-identity.o', '-o', out / 'writable-identity.elf'])
+    harness.refused(lambda: tool.image_parts(out / 'writable-identity.elf'), 'Invalid image build identity', ValueError)
     for path in args.control_elf:
         tool.image_parts(path)
     originals = [out / 'usb.elf'] + ([args.usb_elf] if args.usb_elf else [])

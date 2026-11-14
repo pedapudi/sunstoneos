@@ -17,6 +17,8 @@ static unsigned pf_flip, cfg_nowindow, cfg_dma;
 static volatile struct sunxi_mmc_dma_descriptor *dma_area;
 static int uhs_dma_sync(void *v, uint8_t *b, size_t n, unsigned phase) { (void)v; (void)b; (void)n; (void)phase; return 1; }
 static unsigned pf_settle, pf_writes, module_writes, restore_settle, restore_writes, cfg_sdr25, cfg_start18, commands_at_mismatch;
+/* cfg_pf_fixed: the board description declares the PF bank fixed (pf_switchable 0); pf_mode_writes counts writes of the withstand field. */
+static unsigned cfg_pf_fixed, pf_mode_writes;
 static uint32_t last_module;
 static void live(struct storage_model *s)
 {
@@ -65,6 +67,13 @@ static int uhs_platform_write(void *v, uintptr_t a, uint32_t value)
         assert(value == 0 && (u.phase == 2 || cfg_start18) && !pf_writes && !u.base.reg[4/4]);
         ++pf_writes; u.bank = 1; *pmic_model_word(&s->power, a) = 0; return 1;
     }
+    if (a == 0x02000040) {
+        /* The PF withstand field, on a board declared switchable only: bits 11:10 alone, with the bank at 3.3 V (selector and status). */
+        uint32_t *w = pmic_model_word(&s->power, a);
+        assert(!cfg_pf_fixed && !((*w ^ value) & ~(3u << 10)) && (*pmic_model_word(&s->power, 0x02000070) & 1) &&
+               ((*pmic_model_word(&s->power, 0x02000048) >> 10) & 3) == 2 && !u.base.reg[4/4]);
+        ++pf_mode_writes; *w = value; return 1;
+    }
     assert(a733_mmc_platform_native_address_selected(SUNXI_MMC_SD, 0, a, 1));
     if (a >= s->platform.base && a <= s->platform.base + 0x300) {
         live(s); u.base.now = s->power.now;
@@ -86,6 +95,13 @@ static int uhs_platform_write(void *v, uintptr_t a, uint32_t value)
     }
     *pmic_model_word(&s->power, a) = value; return 1;
 }
+/* The terminal close's module and bus writes (gate, then the inherited settings; checks/sd-return-close.c checks their order); the rest as above. */
+static int uhs_close_write(void *v, uintptr_t a, uint32_t value)
+{
+    struct storage_model *s = v;
+    if (a != s->platform.module && a != s->platform.bus) return uhs_platform_write(v, a, value);
+    assert(!(value & (1u << 31))); ++s->accesses; ++s->writes; *pmic_model_word(&s->power, a) = value; return 1;
+}
 static void begin(unsigned pf_mode, unsigned fast, unsigned caps)
 {
     if (cfg_dma && !dma_area) {
@@ -93,7 +109,7 @@ static void begin(unsigned pf_mode, unsigned fast, unsigned caps)
         assert(p != (void *)-1 && (uintptr_t)p < (UINT64_C(1) << 32) - 4096); dma_area = p;
     }
     memset(&m, 0, sizeof(m)); memset(&u, 0, sizeof(u));
-    pf_flip = 0; pf_settle = 3; pf_writes = module_writes = restore_writes = restore_settle = commands_at_mismatch = 0; last_module = 0;
+    pf_flip = 0; pf_settle = 3; pf_writes = pf_mode_writes = module_writes = restore_writes = restore_settle = commands_at_mismatch = 0; last_module = 0;
     pmic_model_setup(&m.power); seed(&u.base, &m.platform.core, SUNXI_MMC_SD, 1);
     field(u.base.csd, 84, 12, 5 | (1u << 10)); field(u.base.csd, 96, 8, 0x32); u.scr[0] = 2; u.scr[1] = 5;
     u.caps = caps; u.s18a = 1; u.sdr104 = 1; u.tune_kinds = 8; u.fatal_delay = 99; u.window[0][0] = 20; u.window[0][1] = cfg_nowindow ? 0 : 24;
@@ -116,6 +132,7 @@ static void begin(unsigned pf_mode, unsigned fast, unsigned caps)
     struct a733_mmc_platform_config c = {.owner = 42, .handoff = 200, .topology = 201, .kind = SUNXI_MMC_SD,
         .deadline_us = 8000000, .lifetime_deadline_us = 10000000, .voltage_mask = 0x00300000,
         .sd_profile = SUNXI_MMC_SD_UHS_SDR104, .sdr25_only = (uint8_t)cfg_sdr25, .start_1v8 = (uint8_t)cfg_start18, .dma = cfg_dma ? dma_area : NULL,
+        .pf_switchable = (uint8_t)!cfg_pf_fixed,
         .fabric = {0, 1u << 31, 1u << 31},
         .fabric_hz = {24000000, 24000000, 24000000}};
     for (unsigned i = 0; i < 7; ++i) { c.desired[i].function = i < 6 ? 2 : 0; c.desired[i].pull = 1; }
@@ -285,7 +302,8 @@ static void runtime_recovery(uint8_t *buffer)
     assert(m.platform.core.card.timing == 1 && m.platform.core.card.signal_1v8 && pf_writes == 1 && u.cmd11 == 1);
     read_ok(buffer);
     /* A 3.3 V card steps down from high speed to default speed, and a card that fails at every mode is final. */
-    begin(2, 1, 2); assert(settle() == A733_MMC_READY); assert(m.platform.core.card.timing == 1 && !m.platform.core.card.signal_1v8);
+    cfg_pf_fixed = 1; begin(2, 1, 2); cfg_pf_fixed = 0;
+    assert(settle() == A733_MMC_READY); assert(m.platform.core.card.timing == 1 && !m.platform.core.card.signal_1v8);
     u.read_fail = 2; failed_read(buffer); recover_to_ready(); failed_read(buffer); recover_to_ready();
     assert(m.platform.core.card.timing == 0 && u.sdr == 0 && m.platform.core.card.card_hz == 25000000 && !pf_writes);
     read_ok(buffer);
@@ -298,18 +316,51 @@ int main(void)
     /* Adaptive PF mode and PERI0_300M: one selector write, then SDR104 at 150 MHz. */
     begin(1, 1, 3); assert(settle() == A733_MMC_READY);
     assert(pf_writes == 1 && m.platform.signal == 2 && *pmic_model_word(&m.power, 0x02000070) == 0);
+    /* On a board that declares the PF bank fixed, a reopen of a card that still signals 1.8 V (start_1v8) with the PF power mode other than 1
+     * at the baseline stops in stage ENTER_1V8 (12) with nothing written, and enter_obs names the condition: SDR104 profile, 1.8 V supply and
+     * stopped clock hold, the power mode does not. */
+    cfg_start18 = 1; cfg_pf_fixed = 1; begin(2, 1, 3); assert(settle() == A733_MMC_RETAINED);
+    assert(m.platform.stage == 12 && m.platform.enter_obs == 0x0d && !pf_writes && !pf_mode_writes); cfg_pf_fixed = 0;
+    /* The baseline kept the bank as found, before any write: power mode 2, status 3.3 V, selector 3.3 V. */
+    assert(m.platform.bank_seen && (m.platform.bank_raw[0] >> 10 & 3) == 2 && (m.platform.bank_raw[1] >> 10 & 3) == 2 && m.platform.bank_raw[2] == 1);
+    /* With power mode 1 the same reopen writes the selector once, sees the bank report 1.8 V and opens. */
+    begin(1, 1, 3); assert(settle() == A733_MMC_READY);
+    assert(m.platform.enter_obs == 0x3f && pf_writes == 1 && m.platform.core.card.reentered); cfg_start18 = 0;
     assert(((*pmic_model_word(&m.power, 0x02000048) >> 10) & 3) == 3 && ((*pmic_model_word(&m.power, 0x02000040) >> 10) & 3) == 1);
     assert(m.platform.core.card.timing == 3 && m.platform.core.card.card_hz == 150000000 && u.s18r_seen);
     assert(last_module == 0x82000000u && m.platform.running_module == 0x82000000u && module_writes == 1);
     assert(m.platform.core.card.sample_delay == 32 && m.platform.core.card.uhs_outcome == SUNXI_MMC_UHS_SDR104);
     read_ok(buffer); read_ok(buffer);
+    /* A switchable board (the default here) whose PF field the boot chain left fixed at 3.3 V (00 or 10): the reopen moves the field to adaptive
+     * at the baseline, reads it back, re-enters the card at 1.8 V with one selector write, reaches SDR104, and the close puts the bank back
+     * at 3.3 V and then the field back to the one found. The first open of the same board switches the card with CMD11 the same way. */
+    for (unsigned found = 0; found <= 2; found += 2)
+        for (unsigned start18 = 0; start18 <= 1; ++start18) {
+            cfg_start18 = start18; begin(found, 1, 3); assert(settle() == A733_MMC_READY);
+            assert(pf_mode_writes == 1 && pf_writes == 1 && m.platform.signal == 2 && m.platform.pf_found == (4u | found));
+            assert(((*pmic_model_word(&m.power, 0x02000040) >> 10) & 3) == 1 && (*pmic_model_word(&m.power, 0x02000040) & ~(3u << 10)) == (3u << 4));
+            assert(m.platform.core.card.timing == 3 && m.platform.core.card.card_hz == 150000000 && u.cmd11 == !start18);
+            assert(m.platform.core.card.reentered == start18 && (!start18 || m.platform.enter_obs == 0x3f));
+            assert((m.platform.bank_raw[0] >> 10 & 3) == found);                             /* the baseline record keeps the field found */
+            read_ok(buffer);
+            enum a733_mmc_platform_result r = A733_MMC_PENDING; m.platform.ops.write = uhs_close_write;
+            for (unsigned i = 0; i < 40 && r != A733_MMC_CLOSED; ++i) { m.power.now += 100; r = a733_mmc_platform_close(&m.platform, 9000000); }
+            assert(r == A733_MMC_CLOSED && restore_writes == 1 && pf_mode_writes == 2 && m.platform.pf_found == found);
+            assert(*pmic_model_word(&m.power, 0x02000040) == ((found << 10) | (3u << 4)) && (*pmic_model_word(&m.power, 0x02000070) & 1));
+            assert(((*pmic_model_word(&m.power, 0x02000048) >> 10) & 3) == 2);
+        }
+    cfg_start18 = 0;
     /* Without the 300 MHz branch: 400 MHz / 2, a 100 MHz card clock. */
     begin(1, 0, 1); assert(settle() == A733_MMC_READY);
     assert(last_module == 0x81000001u && m.platform.core.card.card_hz == 100000000 && pf_writes == 1);
     read_ok(buffer);
-    /* Manual 3.3 V PF mode offers no switch: high speed at 3.3 V, no PF write. */
-    begin(2, 1, 2); assert(settle() == A733_MMC_READY);
-    assert(!pf_writes && !m.platform.signal && last_module == 0x81000003u && !u.cmd11);
+    /* A board that declares the PF bank fixed keeps a fixed 3.3 V mode (00 or 10): high speed at 3.3 V, no PF write of either register. */
+    for (unsigned found = 0; found <= 2; found += 2) {
+        cfg_pf_fixed = 1; begin(found, 1, 2); cfg_pf_fixed = 0; assert(settle() == A733_MMC_READY);
+        assert(!pf_writes && !pf_mode_writes && !m.platform.signal && last_module == 0x81000003u && !u.cmd11 && !m.platform.pf_found);
+        assert(m.platform.core.card.uhs_outcome == SUNXI_MMC_UHS_HOST && m.platform.core.card.card_hz == 50000000);
+        assert(((*pmic_model_word(&m.power, 0x02000040) >> 10) & 3) == found);
+    }
     assert(m.platform.core.card.uhs_outcome == SUNXI_MMC_UHS_HOST && m.platform.core.card.card_hz == 50000000);
     read_ok(buffer);
     /* A bank that never reports 1.8 V retains every resource after the one write. */
@@ -328,6 +379,7 @@ int main(void)
     runtime_recovery(buffer);
     write_recovery(buffer); recovery_budget(buffer); busy_field_case();
     puts("PASS UHS-I platform: one adaptive-mode PF write, 150 MHz from PERI0_300M, 100 MHz without it, "
-         "3.3 V high speed in manual PF mode, retained bank timeout and three retained losses after the switch");
+         "a switchable board's fixed PF field to adaptive and back at close (first open and reopen, from 00 and 10), "
+         "3.3 V high speed on a board that declares the PF bank fixed, retained bank timeout and three retained losses after the switch");
     return 0;
 }

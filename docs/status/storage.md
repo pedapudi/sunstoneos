@@ -56,7 +56,7 @@ with loader close, but excludes interrupted writes and transport recovery
 Board results are records in [`docs/evidence/storage.jsonl`](../evidence/storage.jsonl); add one with `tools/evidence.py add`. Design records are in [sd-uhs](../evidence/sd-uhs.jsonl), [sd-uhs-recovery](../evidence/sd-uhs-recovery.jsonl), [sd-dma](../evidence/sd-dma.jsonl), [storage-write](../evidence/storage-write.jsonl), [mmc-multiblock-write](../evidence/mmc-multiblock-write.jsonl), [region-test-file-write](../evidence/region-test-file-write.jsonl) and [spi-native-dma](../evidence/spi-native-dma.jsonl). Earlier prose evidence is in [the historical log](../history/status-storage-20261101.md).
 
 <!-- evidence-table:begin -->
-67 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+68 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -127,4 +127,5 @@ Board results are records in [`docs/evidence/storage.jsonl`](../evidence/storage
 | `1793692075400545011-09988217` | 2026-11-03 | 3-3 | `215ff6f2fcf2` | returned | passed | run_total 33.819 s, verified_bytes 5.36871e+08 B, mismatches 0, read_rate 46.5 MB/s |
 | `1793692362723456455-361d643b` | 2026-11-03 | 3-3 | `cb9bb22b5303` | returned | passed | run_total 22.211 s, written_bytes 1.52863e+07 B, busy_timeouts 1, restarts 0 |
 | `1793692393910115727-f58db0e9` | 2026-11-03 | 3-3 | `cb9bb22b5303` | returned | passed | run_total 62.497 s, written_bytes 5.36871e+08 B, flush_rate 13.2 MB/s, busy_timeouts 15, restarts 0 |
+| `1794607200843702122-d2ed7876` | 2026-11-13 | 3-3 | `c3a38890ede9` | returned | passed | run_total 27.205 s, run_total 27.205 s, launch 10.676 s, card_hz 1.5e+08 Hz |
 <!-- evidence-table:end -->
