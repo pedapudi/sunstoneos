@@ -108,9 +108,18 @@ int a733_uart_exchange(struct a733_uart *, struct a733_uart_byte *, size_t,
 /* Arm/disarm THRE without transmitting. READY and exclusive task ownership
  * required; used to start an interrupt-driven transfer without FIFO polling. */
 int a733_uart_tx_irq(struct a733_uart *,unsigned enabled,uint64_t deadline);
+/* Read-only receive FIFO level: 1 empty, 0 bytes remain, -1 refused or
+ * faulted. Requires READY, FIFO enabled, exclusive task ownership and no DMA
+ * lease. Detects short bursts while preserving IIR, BUSY, LSR and RBR. */
+int a733_uart_rx_empty(struct a733_uart *,uint64_t deadline);
 int a733_uart_interrupt(struct a733_uart *, struct a733_uart_byte *, size_t,
                         const uint8_t *, size_t, unsigned budget,
                         uint64_t deadline, struct a733_uart_result *);
+/* H4's receive-before-transmit rule: on THRE, observe USR.RFNE only after
+ * decoding IIR and withhold TX if any received byte remains. This also
+ * disables THRE until the caller can drain RX and explicitly rearm it. */
+int a733_uart_interrupt_rx_first(struct a733_uart *,struct a733_uart_byte *,size_t,
+    const uint8_t *,size_t,unsigned budget,uint64_t deadline,struct a733_uart_result *);
 /* Before drain, stop submissions, quiesce the peer and mask/synchronize GIC.
  * Poll until TX FIFO and shift register empty, RX empty and USR idle. Pending
  * RX is preserved and will cause deadline failure unless consumed first.

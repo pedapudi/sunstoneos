@@ -78,6 +78,7 @@ static int read32(void *cookie,uintptr_t a,uint32_t *v)
         if (off==0 && !(f->uart[3]&0x80)) {assert(f->rx_count);*v=f->rx;--f->rx_count;}
         else if (off==0x14) *v=(f->shift_busy ? 0x20 : 0x60)|(f->rx_count ? 1 : 0)|f->line_error;
         else if (off==0x7c) *v=6|(f->shift_busy ? 1 : 0)|(f->rx_count ? 8 : 0);
+        else if (off==0x84) *v=f->rx_count;
         else if (off==0xa4 && !f->halt_stuck) {*v=f->uart[off/4]&~4u;f->uart[off/4]=*v;}
         else if (off==8) *v=f->cause;
         else *v=f->uart[off/4];
@@ -194,6 +195,11 @@ int main(void)
     assert(step(&second)==A733_UART_PLATFORM_BUSY && !second.binding.clock.id && writes==before);
     assert(a733_uart_platform_live(&first.binding,now_us+100)==A733_UART_PLATFORM_READY);
     struct a733_uart *u=a733_uart_platform_controller(&first.binding);assert(u);
+    before=writes;
+    assert(a733_uart_rx_empty(u,now_us+100)==1);
+    first.rx_count=3;assert(a733_uart_rx_empty(u,now_us+100)==0&&first.rx_count==3);
+    first.rx_count=0;
+    assert(!u->ops.write32(u->context,u->plan.base+0x84,1)&&writes==before);
     struct a733_uart_byte rx;uint8_t tx=0x42;struct a733_uart_result result;
     first.rx=0x5a;first.rx_count=1;
     assert(a733_uart_exchange(u,&rx,1,&tx,1,1,now_us+100,&result)==A733_UART_READY);
@@ -315,6 +321,8 @@ int main(void)
         assert(a733_pin_descriptor(p.bank,p.rx)->uart[p.function]==p.port+1);
         assert(a733_uart_platform_native_address(p.port,uart_base(p.port)+0x14,0));
         assert(!a733_uart_platform_native_address(p.port,uart_base(p.port)+0x14,1));
+        assert(a733_uart_platform_native_address(p.port,uart_base(p.port)+0x84,0));
+        assert(!a733_uart_platform_native_address(p.port,uart_base(p.port)+0x84,1));
         assert(!a733_uart_platform_native_address(p.port,uart_base((p.port+1)%9),1));
         assert(!a733_uart_platform_native_address(p.port,CCU+0x538,1));
         assert(!a733_uart_platform_native_address(p.port,RCCU+0x10,1));

@@ -33,10 +33,22 @@ int ss_storage_close(void);
 /* irq_entries counts, per core, the entries of the SD0 interrupt handler (INTID 193); irq_stray those that found the owner not ready
  * (the handler then masks the source); irq_recheck counts the interrupt waits that ended on the recheck timer, not the interrupt. */
 struct ss_storage_owner_stats { uint64_t elapsed_us, asleep_us, wakes; uint32_t irq_cores, owner_cores, caller_cores, irq_entries[8], irq_stray, irq_recheck; };
+/* A read-only large-region loader publishes these statistics after its native
+ * close proof. It returns 0 while active. Time after retirement counts as asleep;
+ * observing statistics performs no device access. */
 int ss_storage_owner_stats(struct ss_storage_owner_stats *);
 /* Where the last open or enable stopped: [0] stage, [1] detail, [2] first failed bounds read (sector + 1), [3] bounds reads made
  * (apps/os/large_sd.c lists the stages). All zero when nothing failed. */
 int ss_storage_diagnostic(uint64_t out[4]);
 /* The bus speed mode of the card and the steps taken to get there, five words (apps/os/large_sd.c, os_sd_mode); zero before the card is open. */
 int ss_storage_mode(uint64_t out[5]);
+/* The address space the storage owner's first instruction ran in: bits 1:0 are 0 before the owner has run, 1 when its TTBR0 was the kernel's
+ * table, 2 when it was another table; bit 2 is set when the owner's task tag was not null at that instruction. */
+int ss_storage_owner_space(uint64_t *out);
+/* The PF pin bank (the card's signalling pins) as the open that reached READY found it, and the withstand field across that open and the close
+ * (apps/os/large_sd.c, a733_mmc_platform.h pf_found): bits 4:0 the first open's baseline (1:0 power mode, 0x02000040 bits 11:10; 3:2 voltage
+ * status, 0x02000048 bits 11:10; 4 selector, 0x02000070 bit 0), 9:5 the same at the reopen (zero without one), 12:10 the open's record (bit 12
+ * set while the open had moved a fixed field to adaptive, 11:10 the field it found), 16:13 the close's record (bit 16 set once a close completed,
+ * bit 15 set if the field was still adaptive by this open's write, 14:13 the field then). */
+int ss_storage_pf_bank(uint64_t *out);
 #endif

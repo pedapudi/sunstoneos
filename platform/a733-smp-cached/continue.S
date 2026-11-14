@@ -280,6 +280,14 @@ a733_cached_el1_fault:
 .global a733_cached_el3_fault
 a733_cached_el3_fault:
     msr daifset, #15
+#ifdef SUNSTONE_LATENCY_L3_PARTITION
+    // Every entry to EL3 ends the image, normally or on a fault: drop the
+    // measurement's L3 partition (CLUSTERPARTCR_EL1) and this core's scheme
+    // ID (CLUSTERTHREADSID_EL1) first. Both reset to 0.
+    msr S3_0_C15_C4_3, xzr
+    msr S3_0_C15_C4_0, xzr
+    isb
+#endif
     mov x20, x0
     mov x21, x1
 #ifdef SUNSTONE_A733_FAULT_PAGE

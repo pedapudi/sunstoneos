@@ -27,7 +27,17 @@ The worker alone reads `+0x010`, so the device events have one reader, and the m
 
 ## Fallback and deadline
 
-The worker sleeps on its task notification. The interrupt, a client request and a one-tick timeout each wake it. The tick timeout is the bounded fallback: it lets the worker check the controller's deadline (`a733_npu_check_timeout`) while no interrupt arrives. The tick cannot complete a job, because the worker samples `+0x010` only after a notification. A job whose interrupt never arrives therefore ends at its deadline, 1 s for each job and for the bootstrap, as a timeout fault that retains the NPU. The held `WAIT` then answers with the fault.
+The integrated OS worker sleeps on its task notification until an interrupt,
+a client request or the precise controller deadline. It has no idle tick
+timeout. A missing interrupt ends at the job deadline and retains the NPU.
+The [owner wait contract](npu-owner-events.md) defines publication ordering,
+register states without interrupts, vendor holds and host checks.
+
+The standalone finite diagnostic retains its one-tick deadline fallback
+because it does not link the OS timer backend. Its tick cannot complete a job:
+the worker samples `+0x010` only after a notification. A job whose interrupt
+never arrives ends at its deadline, one second for each job and bootstrap,
+as a timeout fault that retains the NPU. The held `WAIT` answers with the fault.
 
 ## Interrupt routing
 
@@ -59,6 +69,7 @@ The delivery time measures the job from publication to the interrupt, excluding 
 ## Limits and open work
 
 - The interrupt host is not root reviewed.
-- The worker still wakes once per tick while a job runs, to check the deadline; it reads no completion state then.
+- The standalone finite diagnostic wakes once per tick to check its deadline.
+  The integrated OS uses precise deadline waits; its physical wake count is unqualified.
 - The cycle counters are those the vendor's profiling build reads; whether they count while the clock is gated between jobs does not affect a job's differences.
 - The two-start set of [the interrupt runbook](../board-runbooks/npu-irq-starts.md) (492 MHz then 852 MHz, two jobs per start) has no recorded per-rate result for the 492 MHz start; the prediction is in the record above.

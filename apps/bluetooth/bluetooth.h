@@ -6,6 +6,7 @@
 #include "a733_uart_platform_native.h"
 #include "a733_native_usb.h"
 #include "bt_hci.h"
+#include "work-state.h"
 #include "recognition.h"
 #include "../board/identity.h"
 #define BLUETOOTH_PROFILE_MAGIC UINT64_C(0x3150465442535353)
@@ -143,6 +144,14 @@ int bluetooth_application_attach(struct bluetooth_application *,const struct blu
     const uint8_t profile_digest[32],struct a733_radio_platform_native *,struct a733_radio_session *);
 /* 0 pending,1 actual six-command identity captured,-1 retained failure. */
 int bluetooth_application_poll(struct bluetooth_application *);
+/* Owner-only pure minimum of the fixed caller bound and active application,
+ * HCI/H4 and headset protocol timers. No provider, UART or time-source access.
+ * Zero refuses invalid/failed state or an unsupported event-driven mode.
+ * Due output requests one protocol pass; it never authorizes retirement.
+ * Software-ready state transitions and record release require owner events.
+ * Event mode separately measures IRQ publication to owner service against
+ * the profile's receive_latency_us; time with no pending IRQ is idle. */
+uint64_t bluetooth_application_next_deadline(const struct bluetooth_application *,uint64_t until);
 /* Owner-only return work: 0 pending, 1 UART and owned module stopped,
  * -1 retained fault. The absolute deadline only shortens. Each call performs
  * one bounded protocol/platform step; it does not renew any accepted command. */

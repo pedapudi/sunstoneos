@@ -39,7 +39,8 @@ static void owner2(void *unused)
     vTaskSuspend(NULL);
 }
 static void deliver_kick(void *unused){(void)unused;host_deadline_deliver_kick();}
-static volatile int admitted[15];
+_Static_assert(SUNSTONE_DEADLINE_SLOTS>=2,"The race fixture uses two initial owners");
+static volatile int admitted[SUNSTONE_DEADLINE_SLOTS-1u];
 static void admit(void *index){admitted[(uintptr_t)index]=sunstone_deadline_register();vTaskSuspend(NULL);}
 
 static void runtime_cases(void *unused)
@@ -101,11 +102,13 @@ static void runtime_cases(void *unused)
      sunstone_deadline_owner_progress(t1);
      assert(sunstone_deadline_owner_record(t1,&record)&&!record.failed);
      assert(sunstone_deadline_wait_until(at)==SUNSTONE_DEADLINE_EXPIRED);}
-    /* Fixed admission: sixteen owners, the seventeenth refused. */
-    for(unsigned i=0;i<14;++i)host_task_create("owner",admit,(void *)(uintptr_t)i,3);
-    host_task_create("owner",admit,(void *)(uintptr_t)14,3);
-    for(unsigned i=0;i<14;++i)assert(admitted[i]==1);
-    assert(admitted[14]==0);
+    /* Fill the selected declaration after the two existing owners, then
+     * refuse the next owner. Every attempted task must actually exist. */
+    const unsigned available=SUNSTONE_DEADLINE_SLOTS-2u;
+    for(unsigned i=0;i<available;++i)assert(host_task_create("owner",admit,(void *)(uintptr_t)i,3));
+    assert(host_task_create("overflow",admit,(void *)(uintptr_t)available,3));
+    for(unsigned i=0;i<available;++i)assert(admitted[i]==1);
+    assert(admitted[available]==0);
     assert(!host_critical_depth());
     puts("PASS deadline arm, notification-before-sleep, exact expiry, cancellation, simultaneous owners, task-handle identity, fixed admission and owner progress");
 }

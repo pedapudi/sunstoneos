@@ -4,6 +4,7 @@ import argparse
 import copy
 import importlib.util
 import json
+import shutil
 from pathlib import Path
 import struct
 import subprocess
@@ -80,6 +81,28 @@ def main():
                     '-c', str(private), '-o', str(private_obj)], check=True, capture_output=True)
     refused(lambda: check(elf, private_obj), 'private OS symbols: os_sealed', kind=AssertionError)
     cases.append('sealed-input-reference-refused')
+    # The public calls are the kit's ss_ and gpu_queue_ declarations plus one named measurement call. A sunstone_
+    # declaration in a kit header stays private: a copy of the tool reads a kit whose sunstone_app.h declares one.
+    tree = args.output / 'kit-tree'
+    (tree / 'tools').mkdir(parents=True)
+    shutil.copytree(ROOT / 'include', tree / 'include')
+    shutil.copyfile(ROOT / 'tools/sunstone-image-link.py', tree / 'tools/sunstone-image-link.py')
+    with (tree / 'include/sunstone_app.h').open('a') as stream:
+        stream.write('\nint sunstone_internal_probe(void);\n')
+    spec = importlib.util.spec_from_file_location('image_symbols_kit', tree / 'tools/sunstone-image-link.py')
+    kit_link = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(kit_link)
+    def kit_check(name, call):
+        source, output = args.output / (name + '.c'), args.output / (name + '.o')
+        source.write_text(call)
+        subprocess.run([str(CLANG), '--target=aarch64-none-elf', '-O2', '-ffreestanding',
+                        '-c', str(source), '-o', str(output)], check=True, capture_output=True)
+        return lambda: kit_link.application_symbols(elf, [output], [], [], '/usr/bin/llvm-nm-21')
+    refused(kit_check('kit-private', 'int sunstone_internal_probe(void);int f(void){return sunstone_internal_probe();}\n'),
+            'private OS symbols: sunstone_internal_probe', kind=AssertionError)
+    cases.append('sunstone-prefixed-kit-declaration-refused')
+    kit_check('kit-tlbi', 'struct s;int sunstone_tlbi_sample(struct s *);int f(void){return sunstone_tlbi_sample(0);}\n')()
+    cases.append('named-measurement-call-admitted')
     (args.output / 'result.json').write_text(json.dumps({'passed': True, 'cases': cases}, indent=2) + '\n')
     print(f'PASS application breadcrumb symbol: {len(cases)} cases')
 

@@ -70,7 +70,7 @@ def validate(record, raw, flags, cache, board, bluetooth, require, *, frozen=Fal
     require(bool(doc.get('radio_profile')) == flags['radio'] and
             bool(doc.get('headset_profile')) == flags['headset'], 'Radio/headset profile selection differs.')
     profiles, plan = {}, []
-    for key, address in [('radio', RANGE[0]), ('headset', RANGE[0] + (0x8000 if flags['radio'] else 0))]:
+    for key, address in [('radio', RANGE[0]), ('headset', RANGE[0] + 0x8000)]:
         if flags[key]:
             ref = doc[key + '_profile']; profiles[key] = read(ref); plan.append((ref['path'], address))
     radio, headset = profiles.get('radio'), profiles.get('headset')
