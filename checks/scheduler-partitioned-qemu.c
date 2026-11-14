@@ -1023,7 +1023,8 @@ static void control(void *unused)
     uint64_t busy_start = __atomic_load_n(&busy[1], __ATOMIC_RELAXED);
     xTaskNotifyGive(local_sender);
     control_phase = 0x514;
-    configASSERT(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000)) == 1);
+    /* The local phase may take limit(1000) ticks (checked below), so its wait scales the same way. */
+    configASSERT(ulTaskNotifyTake(pdTRUE, limit(pdMS_TO_TICKS(2000))) == 1);
     uint64_t busy_delta = __atomic_load_n(&busy[1], __ATOMIC_RELAXED) - busy_start;
     platform_puts("local-wake attempts="); platform_hex(local_wakes);
     platform_puts(" completions="); platform_hex(local_completed);
