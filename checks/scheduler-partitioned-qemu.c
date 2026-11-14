@@ -533,7 +533,12 @@ static void boot_controls_verify(void)
     for (unsigned wait = 0; wait < 200 && __atomic_load_n(&boot_runs[2], __ATOMIC_ACQUIRE) == 0; ++wait) vTaskDelay(1);
     configASSERT(boot_runs[2] == 1 && boot_core[2] == 7);
     /* Task 4: moved to the boot core above the idle task, as the board's first task is. The
-     * boot core owns it, so no acknowledgment can be awaited and no yield may be taken. */
+     * boot core owns it, so no acknowledgment can be awaited and no yield may be taken.
+     * This task shares CPU0 with task 4, and a one-tick delay cannot be relied on to give CPU0 up:
+     * kernel time is the counter, so when CPU0 is slow (a perturbed QEMU run with every vCPU busy
+     * gives CPU0 about 8,000 instructions a tick) the delay expires inside its own block path and
+     * this task is selected again. Below task 4's priority, task 4 runs as soon as it is ready. */
+    vTaskPrioritySet(NULL, 3);
     for (unsigned wait = 0; wait < 200 && __atomic_load_n(&boot_runs[4], __ATOMIC_ACQUIRE) == 0; ++wait) vTaskDelay(1);
     configASSERT(boot_runs[4] == 1 && boot_core[4] == 0);
     /* Task 3: deleted before the start; it never runs. */
@@ -553,6 +558,7 @@ static void boot_controls_verify(void)
         for (unsigned wait = 0; wait < 200 && !ss_latency_task_suspended(boot_tasks[id]); ++wait) vTaskDelay(1);
         configASSERT(ss_latency_task_suspended(boot_tasks[id]));
     }
+    vTaskPrioritySet(NULL, 5);
 }
 static StaticTask_t control_race_state[11];
 static StackType_t control_race_stack[11][2048];

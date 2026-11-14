@@ -36,7 +36,7 @@
   "data fixture phase": 1,
   "data fixture wake": 8,
   "data os ssKernelCPUs": 1,
-  "data os ssKernelTime": 1,
+  "data os ssKernelEpoch": 1,
   "data os tick_interval": 1,
   "data os ullPortYieldRequired": 1,
   "data os xSchedulerRunning": 1,
