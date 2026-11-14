@@ -162,6 +162,12 @@ void ss_latency_gpu_post(unsigned client);
 void ss_latency_gpu_received(unsigned client);
 void ss_latency_tick_hook(void);
 void ss_latency_task_ready(void *task);
+/* The kernel calls this on the owning core when a deadline at kernel tick
+ * `tick` expires for `task`, before the task becomes ready. */
+void ss_latency_deadline_ready(void *task, uint64_t tick);
+/* The counter value at which kernel tick `tick` begins; it needs the time
+ * base the platform publishes when it starts the tick. */
+uint64_t ss_latency_tick_counter(uint64_t tick);
 void ss_latency_current_set(unsigned core, void *task, int idle);
 #define SS_LATENCY_RECORD(core, region, start, site) \
     ss_latency_record((core), (region), (start), (uintptr_t)(site))
@@ -201,6 +207,7 @@ bool ss_band_pmr_snapshot(uint64_t count[2], uint64_t cycles[2][64]);
  * closes its wake chain with the release and running times and the band
  * setting at the wake; the workload copies the report after every CPU froze. */
 struct ss_wake_seg_report;
+void ss_wake_seg_mark(unsigned core);
 void ss_wake_seg_running(unsigned core, uint64_t ready, uint64_t running, uint64_t index, unsigned setting);
 bool ss_wake_seg_snapshot(struct ss_wake_seg_report *out);
 #endif

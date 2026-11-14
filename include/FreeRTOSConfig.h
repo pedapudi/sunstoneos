@@ -31,6 +31,11 @@ _Noreturn void platform_panic(const char *file, unsigned line);
 #ifndef configSS_PARTITIONED_SCHEDULER
 #define configSS_PARTITIONED_SCHEDULER 0
 #endif
+/* CPUs 1-7 arm their own one-shot timers once the platform publishes the
+ * counter time base (kernel/scheduler/freertos.c, ss_kernel_timebase). */
+#if defined(SUNSTONE_LOCAL_TIMERS) && defined(__aarch64__) && !defined(configSS_LOCAL_TIMERS)
+#define configSS_LOCAL_TIMERS 1
+#endif
 #if defined(SUNSTONE_LATENCY) && !defined(__ASSEMBLER__)
 #include "sunstone_latency.h"
 #define tracePOST_MOVED_TASK_TO_READY_STATE(task) ss_latency_task_ready(task)

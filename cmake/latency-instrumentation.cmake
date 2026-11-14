@@ -33,6 +33,13 @@ option(SUNSTONE_LATENCY_BAND_SWITCH "Alternate the reschedule band masks by coun
 if(SUNSTONE_LATENCY_BAND_SWITCH AND NOT SUNSTONE_LATENCY_CAUSE)
   message(FATAL_ERROR "The band switch measurement extends the cause build")
 endif()
+set(SUNSTONE_LATENCY_RELEASE_MASK "0xff" CACHE STRING "Cores whose wake CPU0's tick releases; the others wait on their own deadlines (cause measurement only)")
+if(NOT SUNSTONE_LATENCY_RELEASE_MASK MATCHES "^0x[0-9a-f][0-9a-f]?$")
+  message(FATAL_ERROR "SUNSTONE_LATENCY_RELEASE_MASK must be a two-digit hex core mask such as 0x11")
+endif()
+if(NOT SUNSTONE_LATENCY_RELEASE_MASK STREQUAL "0xff" AND (NOT SUNSTONE_LATENCY_CAUSE OR SUNSTONE_LATENCY_BAND_SWITCH))
+  message(FATAL_ERROR "Deadline-timed wakes extend the cause build without the band probes")
+endif()
 option(SUNSTONE_LATENCY_WAKE_SEGMENTS "Count cycles and cache events in each segment of every busy wake, and file CPU0's busy ticks by band setting (cause measurement only)" OFF)
 if(SUNSTONE_LATENCY_WAKE_SEGMENTS AND NOT SUNSTONE_LATENCY_CAUSE)
   message(FATAL_ERROR "Wake segment measurement uses the latency cause build's counters")
@@ -107,6 +114,7 @@ function(sunstone_enable_scheduler_latency_trace target)
     target_sources(${target} PRIVATE "${SUNSTONE_SOURCE_ROOT}/kernel/scheduler/latency_cause.c")
     target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_CAUSE=1
       SUNSTONE_LATENCY_STREAM_MASK=${SUNSTONE_LATENCY_STREAM_MASK}u
+      SUNSTONE_LATENCY_RELEASE_MASK=${SUNSTONE_LATENCY_RELEASE_MASK}u
       $<$<BOOL:${SUNSTONE_LATENCY_L3_PARTITION}>:SUNSTONE_LATENCY_L3_PARTITION=1>)
     set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/kernel/scheduler/latency_cause.c"
       PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)

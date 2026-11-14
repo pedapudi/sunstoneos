@@ -889,10 +889,28 @@ numerical ordering, and no application header enters the OS.
 
 ## One-shot local timers replace periodic scheduler ticks
 
-Status: open. The fork keeps the periodic 1 ms tick: CPU0's PPI30 advances global
-time (`ssKernelTick`), samples every owner's next deadline and slice deadline, and
-forces owner service on a remote CPU when one is due. Secondaries execute WFI when
-idle and receive only SGIs. `configUSE_TICKLESS_IDLE` is rejected at compile time.
+Status: CPUs 1-7 are implemented behind `SUNSTONE_LOCAL_TIMERS` (default off); CPU0
+keeps its tick. By default the fork keeps the periodic 1 ms tick: CPU0's PPI30
+advances global time (`ssKernelTick`), samples every owner's next deadline and slice
+deadline, and forces owner service on a remote CPU when one is due. Secondaries
+execute WFI when idle and receive only SGIs. `configUSE_TICKLESS_IDLE` is rejected at
+compile time.
+
+With `SUNSTONE_LOCAL_TIMERS`, the platform publishes the counter value at which kernel
+time began and the counter periods per tick when it starts CPU0's tick
+(`ss_kernel_timebase`; `platform/a733-smp-cached` and `platform/qemu-smp` do). From
+then on, kernel time on every CPU is the counter's whole periods since that epoch, and
+CPU0's tick reads only CPU0's deadlines. Each of CPUs 1-7 arms its own CNTP compare
+for the earlier of its next deadline and its slice deadline (`ssKernelLocalArm`). It
+arms at the end of every service pass, at the end of every selection and whenever its
+slice deadline changes. It writes the timer registers only when that tick changed,
+and it stops the timer when it has neither deadline. So a CPU with nothing due takes
+no timer interrupt and stays in WFI. The PPI30 handler stops the timer, and the
+interrupt exit's service expires the deadline and arms the next one. EL0 cannot write
+the timer (`CNTKCTL_EL1.EL0PTEN` is clear), so a task-level change to an earlier tick
+sends the CPU SGI 0, and the arm happens at the interrupt exit, at EL1. A platform
+that publishes no time base keeps the ticked behaviour. The option excludes the
+control-interrupt measurement, whose task path uses PPI30 on CPUs 1-7.
 The sub-tick wait for drivers is a separate consumer:
 `sunstone_deadline_wait_until()` (`include/sunstone_deadline.h`, `runtime/deadline.c`) shares CPU0's generic-timer compare through a fixed 16-slot table (`DEADLINE_SLOTS`).
 

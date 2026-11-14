@@ -76,6 +76,9 @@ static void controller(void *argument)
     platform_puts("PASS service cycle model: both drain settings timed in both phases; functional evidence only\n");
 #endif
 #ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+#ifndef SUNSTONE_LATENCY_RELEASE_MASK
+#define SUNSTONE_LATENCY_RELEASE_MASK 0xffu
+#endif
     configASSERT(result.wake_segments.magic == SS_WAKE_SEG_MAGIC && result.wake_segments.complete);
     configASSERT(result.wake_footer[0] == SS_WAKE_SEG_FOOTER_MAGIC);
     /* Every core linked busy wakes from interrupt entry to its running task, and CPU0 filed busy ticks. */
@@ -87,9 +90,20 @@ static void controller(void *argument)
         number(" unlinked=", w->unlinked);
         number(" filed=", filed);
         number(" first_state=", w->first_state);
+        number(" arms=", w->arms);
         platform_puts("\n");
         configASSERT(filed && w->first.running && filed + 1 <= w->linked);
+#if configSS_LOCAL_TIMERS
+        /* CPUs 1-7 that wait on their own deadlines armed their timers; those CPU0 releases had nothing to arm. */
+        if (core) configASSERT((SUNSTONE_LATENCY_RELEASE_MASK >> core & 1u) ? !w->arms : w->arms != 0);
+#endif
     }
+    configASSERT(result.wake_segments.release_mask == SUNSTONE_LATENCY_RELEASE_MASK);
+#if configSS_LOCAL_TIMERS
+    configASSERT(result.wake_segments.scan_mask == 1u);
+#else
+    configASSERT(result.wake_segments.scan_mask == 0xffu);
+#endif
     configASSERT(result.wake_segments.tick[0].count + result.wake_segments.tick[1].count &&
                  result.wake_segments.first.count == 1 && result.wake_segments.second.count == 1);
     platform_puts("PASS wake segment model: linked busy wake chains on every core and filed busy ticks; functional evidence only\n");

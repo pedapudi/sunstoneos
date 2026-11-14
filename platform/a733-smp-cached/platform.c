@@ -14,6 +14,12 @@ static uint32_t probe_lock,probe_count,probe_arrived[8],probe_finished[8],probe_
 struct a733_smp_core_result a733_smp_core_results[8] __attribute__((aligned(128)));
 extern uint64_t a733_smp_diagnostic_deadline(void);
 extern void FreeRTOS_SGI_Handler(void);
+#if configSS_PARTITIONED_SCHEDULER
+extern void ss_kernel_timebase(uint64_t epoch,uint64_t period);
+#endif
+#if configSS_LOCAL_TIMERS
+extern void ss_kernel_local_timer_irq(void);
+#endif
 #ifdef SUNSTONE_A733_IRQ_TABLE
 #include "irq_table.h"
 #endif
@@ -137,7 +143,12 @@ void platform_tick_setup(void)
 {
     configASSERT(core()==0);
     tick_interval=A733_SMP_COUNTER_HZ/configTICK_RATE_HZ;
-    next_tick=a733_smp_counter();platform_tick_ack();
+    const uint64_t epoch=a733_smp_counter();
+    next_tick=epoch;platform_tick_ack();
+#if configSS_PARTITIONED_SCHEDULER
+    /* Tick n of kernel time begins at epoch + n periods. */
+    ss_kernel_timebase(epoch,tick_interval);
+#endif
     uint64_t one=1;
     __asm__ volatile("msr cntp_ctl_el0,%0\n isb"::"r"(one):"memory");
 }
@@ -185,6 +196,11 @@ void vApplicationIRQHandler(uint64_t interrupt)
                 }
             }
         }
+#if configSS_LOCAL_TIMERS
+    } else if(interrupt==30 && c<8) {
+        /* CPUs 1-7 arm their own timers (kernel/scheduler/freertos.c). */
+        ss_kernel_local_timer_irq();
+#endif
     #ifdef SUNSTONE_TASK_DEADLINES
     } else if(interrupt==27 && !c) {
         sunstone_deadline_irq();

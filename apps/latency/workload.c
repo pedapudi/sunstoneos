@@ -17,6 +17,15 @@ _Static_assert(configNUMBER_OF_CORES == LATENCY_CORES, "requires eight cores");
 _Static_assert(SUNSTONE_LATENCY_STREAM_MASK > 0 && SUNSTONE_LATENCY_STREAM_MASK <= 0xff,
                "at least one streaming core");
 #define LATENCY_STREAMS(c) ((SUNSTONE_LATENCY_STREAM_MASK >> (c)) & 1u)
+/* Cores whose wake CPU0's tick releases. The wake task of every other core
+ * waits on its own deadline, one tick ahead, so its wake comes from that
+ * core's own deadline expiry, and its ready stamp is the counter value at
+ * which the deadline's tick begins. */
+#ifndef SUNSTONE_LATENCY_RELEASE_MASK
+#define SUNSTONE_LATENCY_RELEASE_MASK 0xffu
+#endif
+_Static_assert(SUNSTONE_LATENCY_RELEASE_MASK <= 0xff, "a core mask");
+#define LATENCY_RELEASED(c) ((SUNSTONE_LATENCY_RELEASE_MASK >> (c)) & 1u)
 enum phase { QUIET, IDLE, BUSY, STOP };
 /* One line per core: only that core and CPU0's tick share it. The core
  * also publishes here the task it last switched to, so that CPU0's release
@@ -208,22 +217,62 @@ void ss_latency_current_set(unsigned core, void *task, int idle)
  * changes to the running task. Admit a sample only when its target core runs
  * the idle task or this diagnostic's memory task, as the phase requires. The
  * running task comes from the target's own copy in its wake slot. */
+static bool admitted(unsigned c, unsigned p)
+{
+    void *running = atomic_load_explicit(&wake[c].running, memory_order_acquire);
+    /* A core outside the streaming mask stays idle in the busy phase. */
+    if (p == IDLE || !LATENCY_STREAMS(c)) return atomic_load_explicit(&wake[c].running_idle, memory_order_relaxed);
+    return running == load_task[c];
+}
 void ss_latency_task_ready(void *task)
 {
     const uint64_t ready = ss_latency_now();
     unsigned p = atomic_load_explicit(&phase, memory_order_acquire);
     if (p != IDLE && p != BUSY) return;
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
-        if (task != wake_task[c] || !atomic_load_explicit(&wake[c].pending, memory_order_acquire)) continue;
-        void *running = atomic_load_explicit(&wake[c].running, memory_order_acquire);
-        /* A core outside the streaming mask stays idle in the busy phase. */
-        if (p == IDLE || !LATENCY_STREAMS(c)) {
-            if (!atomic_load_explicit(&wake[c].running_idle, memory_order_relaxed)) return;
-        } else if (running != load_task[c]) return;
+        if (!LATENCY_RELEASED(c) || task != wake_task[c] ||
+            !atomic_load_explicit(&wake[c].pending, memory_order_acquire)) continue;
+        if (!admitted(c, p)) return;
         wake[c].released = ready;
         wake[c].metric = p == IDLE ? SS_LAT_SCHED_IDLE : SS_LAT_SCHED_BUSY;
         return;
     }
+}
+/* The kernel calls this on the owning core when a deadline at kernel tick
+ * `tick` expires for `task`, before it makes the task ready. */
+void ss_latency_deadline_ready(void *task, uint64_t tick)
+{
+    unsigned p = atomic_load_explicit(&phase, memory_order_acquire);
+    if (p != IDLE && p != BUSY) return;
+    const unsigned c = portGET_CORE_ID();
+    if (c >= LATENCY_CORES || LATENCY_RELEASED(c) || task != wake_task[c] ||
+        !atomic_load_explicit(&wake[c].pending, memory_order_acquire) || !admitted(c, p)) return;
+    wake[c].released = ss_latency_tick_counter(tick);
+    wake[c].metric = p == IDLE ? SS_LAT_SCHED_IDLE : SS_LAT_SCHED_BUSY;
+}
+/* A core outside the release mask: wait one tick on this task's own deadline
+ * while the phase wants samples from it, otherwise for the phase control's
+ * notification. Returns at once in the stop phase. */
+static void wait_own(unsigned c)
+{
+    for (;;) {
+        unsigned p = atomic_load_explicit(&phase, memory_order_acquire);
+        if (p == STOP) return;
+        unsigned limit = p == IDLE ? LATENCY_IDLE_SAMPLES : p == BUSY ? LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES : 0;
+        if (atomic_load_explicit(&wake[c].completed, memory_order_acquire) < limit) {
+            wake[c].metric = SS_LAT_METRICS;
+            atomic_store_explicit(&wake[c].pending, 1, memory_order_release);
+            vTaskDelay(1);
+            return;
+        }
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    }
+}
+/* Start the sampling phase just published on the cores that time themselves. */
+static void start_own(void)
+{
+    for (unsigned c = 0; c < LATENCY_CORES; ++c)
+        if (!LATENCY_RELEASED(c)) xTaskNotifyGive(wake_task[c]);
 }
 #ifdef SUNSTONE_LATENCY_TLBI
 /* docs/designs/application-memory-layout.md, step 7: the cost of a broadcast TLB invalidation to the cores that do not issue
@@ -280,7 +329,7 @@ void ss_latency_tick_hook(void)
         __asm__ volatile("mrs %0, daif" : "=r"(admission));
         configASSERT(!(admission & UINT64_C(0x80)));
 #endif
-        if (atomic_load_explicit(&wake[c].completed, memory_order_acquire) >= limit ||
+        if (!LATENCY_RELEASED(c) || atomic_load_explicit(&wake[c].completed, memory_order_acquire) >= limit ||
             atomic_load_explicit(&wake[c].pending, memory_order_acquire)) continue;
         wake[c].metric = SS_LAT_METRICS;
         atomic_store_explicit(&wake[c].pending, 1, memory_order_release);
@@ -308,7 +357,8 @@ static void wake_worker(void *argument)
     unsigned c = (unsigned)(uintptr_t)argument;
     atomic_fetch_or_explicit(&ready_mask, 1U << c, memory_order_release);
     for (;;) {
-        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (LATENCY_RELEASED(c)) (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        else wait_own(c);
         configASSERT(portGET_CORE_ID() == c);
         if (atomic_load_explicit(&phase, memory_order_acquire) == STOP) {
             ss_latency_freeze(c);
@@ -325,6 +375,10 @@ static void wake_worker(void *argument)
         configASSERT(atomic_load_explicit(&wake[c].pending, memory_order_acquire));
         if (wake[c].metric < SS_LAT_METRICS) {
             const uint64_t running = ss_latency_now();
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+            /* The last segment ends here, before this task's own bookkeeping. */
+            ss_wake_seg_mark(c);
+#endif
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
             ss_sched_trace_wake(c, wake[c].released, running, wake[c].metric == SS_LAT_SCHED_BUSY);
 #endif
@@ -475,6 +529,7 @@ void latency_workload_run(struct latency_result *out)
         while (!atomic_load_explicit(&load[c].ready, memory_order_acquire)) wait_tick();
     ss_latency_phase_set(SS_LAT_IDLE);
     atomic_store_explicit(&phase, IDLE, memory_order_release);
+    start_own();
     wait_samples(LATENCY_IDLE_SAMPLES);
     atomic_store_explicit(&phase, QUIET, memory_order_release);
     ss_latency_phase_set(SS_LAT_PHASE_NONE);
@@ -485,6 +540,7 @@ void latency_workload_run(struct latency_result *out)
     latency_dma_model_start();
     ss_latency_phase_set(SS_LAT_BUSY);
     atomic_store_explicit(&phase, BUSY, memory_order_release);
+    start_own();
     wait_samples(LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES);
 #ifdef SUNSTONE_LATENCY_CONTROL
     atomic_store_explicit(&phase, QUIET, memory_order_release);

@@ -302,6 +302,46 @@ def main():
         struct.pack_into('<Q', bad, word * 8, value)
         harness.refused(lambda: host.decode_wake_segments(bytes(bad), 24000000), 'wake segment', ValueError)
         cases.append(name)
+    # Version 2 (local timers): the report names the release and scan masks and counts each core's timer arms.
+    local = list(struct.unpack(f'<{host.WAKE_BYTES // 8}Q', wake))
+    local[1], local[8], local[9] = 2, 0x11, 0x01
+    local[16 + 5 * 416 + 5:16 + 5 * 416 + 8] = [130, 130 * 40, 75]
+    local = struct.pack(f'<{len(local)}Q', *local)
+    decoded = host.decode_wake_segments(local, 24000000)
+    assert (decoded['version'], decoded['release_mask'], decoded['scan_mask']) == (2, 0x11, 0x01)
+    arms = decoded['cores'][5]['timer_arms']
+    assert arms['count'] == 130 and arms['mean_cycles'] == 40 and arms['max_cycles'] == 75
+    assert decoded['cores'][4]['timer_arms']['count'] == 0 and host.wake_masks(local) == (0x11, 0x01)
+    assert host.wake_masks(wake) == (0xff, 0xff)
+    for name, word, value in [('version 1 wake report with arms', 16 + 5 * 416 + 5, 1),
+                              ('wake arm maximum above its total', 16 + 5 * 416 + 7, 10 ** 6)]:
+        bad = bytearray(wake if name.startswith('version 1') else local)
+        struct.pack_into('<Q', bad, word * 8, value)
+        harness.refused(lambda: host.decode_wake_segments(bytes(bad), 24000000), 'wake segment', ValueError)
+        cases.append(name)
+    cases.append('a version 2 wake report names its release and scan masks and decodes timer arms')
+    # With local timers CPU0's tick releases CPUs 0 and 4 and reads CPU0's deadlines only; the retained tick holds
+    # components for those cores alone.
+    tick_word = 8 + 18 * 8 + 4 * 64 + 14 * 16
+    words = list(struct.unpack(f'<{host.CAUSE_BYTES // 8}Q', original))
+    words[tick_word + 5], words[tick_word + 6] = 0x11, 0x01
+    for target in range(8):
+        row = tick_word + 8 + 14 * target
+        if not 0x11 >> target & 1:
+            words[row:row + 4] = [0] * 4
+            words[row + 12:row + 14] = [0, 0]
+        if target:
+            words[row + 4:row + 8] = [0] * 4
+    local_cause = struct.pack(f'<{len(words)}Q', *words)
+    tick = host.decode_latency_cause(local_cause, 24000000, 4, 0x11, 0x01)['tick']
+    assert tick['release_mask'] == 0x11 and tick['targets'][4]['release_cycles'] == 1000
+    assert tick['targets'][5]['release_cycles'] == 0 and tick['targets'][4]['deadline_scan_cycles'] == 0
+    harness.refused(lambda: host.decode_latency_cause(local_cause, 24000000, 4), 'complete correlated', ValueError)
+    stray = bytearray(local_cause)
+    struct.pack_into('<Q', stray, (tick_word + 8 + 14 * 5) * 8, 1300)
+    harness.refused(lambda: host.decode_latency_cause(bytes(stray), 24000000, 4, 0x11, 0x01), 'outside its masks',
+                    ValueError)
+    cases.append("a local timer tick decodes with its masks and refuses all-eight masks or a component outside them")
     # The wake build grants EL0 event counter reads, so its cause rows carry PMUSERENR 12, and only it may.
     harness.refused(lambda: host.decode_latency_cause(original, 24000000, 12), 'cause core', ValueError)
     granted = bytearray(original)

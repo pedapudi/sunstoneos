@@ -16,6 +16,20 @@ extern void _start(void);
 extern volatile uint8_t ucPrimaryCoreInitDoneFlag;
 extern volatile uint8_t ucSecondaryCoresReadyFlags[];
 extern void FreeRTOS_SGI_Handler(void);
+#if configSS_PARTITIONED_SCHEDULER
+extern void ss_kernel_timebase(uint64_t epoch, uint64_t period);
+#endif
+/* With local timers, PPI 30 on cores 1-7 is each core's own scheduler timer
+ * (kernel/scheduler/freertos.c). */
+#if configSS_LOCAL_TIMERS
+extern void ss_kernel_local_timer_irq(void);
+#define LOCAL_TIMER_BIT(c) (1U << TIMER_IRQ)
+#ifdef SS_WAKE
+#error "the wake check uses PPI 30 on cores 1-7, which local timers own"
+#endif
+#else
+#define LOCAL_TIMER_BIT(c) ((c) ? 0 : 1U << TIMER_IRQ)
+#endif
 
 static uint32_t read32(uintptr_t address) { return *(volatile uint32_t *)address; }
 static void write32(uintptr_t address, uint32_t value) { *(volatile uint32_t *)address = value; }
@@ -86,12 +100,13 @@ static void local_init(void) {
     *(volatile uint8_t *)(s + 0x400) = SS_BAND_COMMAND_PRIORITY;
     for (unsigned b = 1; b <= SS_BANDS; ++b) *(volatile uint8_t *)(s + 0x400 + b) = SS_BAND_SGI_PRIORITY(b);
     *(volatile uint8_t *)(s + 0x400 + TIMER_IRQ) = SS_BAND_COMMAND_PRIORITY;
-    write32(s + 0x100, 0xfU | (core() ? 0 : 1U << TIMER_IRQ));
+    if (core()) __asm__ volatile("msr cntp_ctl_el0, xzr\n isb" ::: "memory");
+    write32(s + 0x100, 0xfU | LOCAL_TIMER_BIT(core()));
 #else
     uint8_t priority = portLOWEST_USABLE_INTERRUPT_PRIORITY << portPRIORITY_SHIFT;
     *(volatile uint8_t *)(s + 0x400) = priority;
     *(volatile uint8_t *)(s + 0x400 + TIMER_IRQ) = priority;
-    write32(s + 0x100, 1 | (core() ? 0 : 1U << TIMER_IRQ));
+    write32(s + 0x100, 1 | LOCAL_TIMER_BIT(core()));
 #endif
     wait_clear(r, 8);
     uint64_t value = 1;
@@ -146,7 +161,12 @@ void platform_secondary(void) {
 }
 void platform_tick_setup(void) {
     tick_interval = frequency() / configTICK_RATE_HZ;
-    next_tick = counter(); platform_tick_ack();
+    const uint64_t epoch = counter();
+    next_tick = epoch; platform_tick_ack();
+#if configSS_PARTITIONED_SCHEDULER
+    /* Tick n of kernel time begins at epoch + n periods. */
+    ss_kernel_timebase(epoch, tick_interval);
+#endif
     uint64_t enable = 1;
     __asm__ volatile("msr cntp_ctl_el0, %0\n isb" :: "r"(enable) : "memory");
 }
@@ -229,6 +249,10 @@ void vApplicationIRQHandler(uint64_t interrupt) {
         }
         if (!storm_armed[c]) storm_arm();
     }
+#endif
+#if configSS_LOCAL_TIMERS
+    if (interrupt == TIMER_IRQ && core()) ss_kernel_local_timer_irq();
+    else
 #endif
     if (interrupt == TIMER_IRQ) FreeRTOS_Tick_Handler();
     else if (interrupt <= 3) { /* SGI 0 and the band SGIs (kernel/scheduler/bands.h) */

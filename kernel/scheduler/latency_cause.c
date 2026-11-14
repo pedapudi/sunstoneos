@@ -49,6 +49,10 @@ static uint64_t observer_sample[SS_LATENCY_CAUSE_SAMPLES];
 #else
 #define USERENR UINT64_C(4)
 #endif
+/* The CPUs CPU0's tick releases (apps/latency/workload.c). */
+#ifndef SUNSTONE_LATENCY_RELEASE_MASK
+#define SUNSTONE_LATENCY_RELEASE_MASK 0xffu
+#endif
 
 static unsigned own(void)
 { return (unsigned)((READ(tpidrro_el0) >> 48) & 255); }
@@ -93,7 +97,7 @@ struct chain_state {
     uint64_t entry_tick, switch_tick;
     struct ss_wake_seg_values point[SS_WAKE_POINTS], part[SS_WAKE_PARTS], part_begin;
 };
-struct wake_chain { struct chain_state cur, held; };
+struct wake_chain { struct chain_state cur, held; struct ss_wake_seg_values running; bool marked; };
 static struct { _Alignas(64) struct wake_chain c; } chain[SS_LATENCY_CAUSE_CORES];
 static struct ss_wake_seg_report wake_report;
 static uint64_t busy_complete_ticks;
@@ -160,11 +164,19 @@ static bool chain_links(unsigned core,const struct chain_state *c,uint64_t ready
     return c->stage==SS_WAKE_POINTS-1 && c->entry_tick<=running && ready<=c->switch_tick &&
         (core ? ready<=c->entry_tick : c->entry_tick<=ready);
 }
+/* The woken task, right after its running stamp: the end of the last segment. */
+void ss_wake_seg_mark(unsigned core)
+{
+    if (core>=SS_LATENCY_CAUSE_CORES || !active(core) || own()!=core) return;
+    struct wake_chain *w=&chain[core].c;
+    values_now(&w->running);w->marked=true;
+}
 void ss_wake_seg_running(unsigned core,uint64_t ready,uint64_t running,uint64_t index,unsigned setting)
 {
     if (core>=SS_LATENCY_CAUSE_CORES || !active(core) || own()!=core) return;
     struct wake_chain *w=&chain[core].c;
-    struct ss_wake_seg_values now;values_now(&now);
+    if (!w->marked) { w->cur.stage=0;w->held.stage=0;++wake_report.core[core].unlinked;return; }
+    const struct ss_wake_seg_values now=w->running;w->marked=false;
     struct ss_wake_seg_core *r=&wake_report.core[core];
     const struct chain_state *c=NULL;bool interrupted=false;
     if (chain_links(core,&w->cur,ready,running)) c=&w->cur;
@@ -196,12 +208,26 @@ bool ss_wake_seg_snapshot(struct ss_wake_seg_report *out)
     wake_report.magic=SS_WAKE_SEG_MAGIC;wake_report.version=SS_WAKE_SEG_VERSION;
     wake_report.bytes=sizeof(wake_report);wake_report.cores=SS_LATENCY_CAUSE_CORES;
     wake_report.points=SS_WAKE_POINTS;wake_report.parts=SS_WAKE_PARTS;
+    wake_report.release_mask=SUNSTONE_LATENCY_RELEASE_MASK;wake_report.scan_mask=ss_kernel_tick_scan_mask();
 #ifdef SUNSTONE_LATENCY_BAND_SWITCH
     wake_report.switch_shift=ss_band_switch_shift();
 #endif
     wake_report.complete=1;
     memcpy(out,&wake_report,sizeof(wake_report));
     return true;
+}
+void ss_wake_seg_arm_begin(unsigned core,uint64_t stamp[2])
+{
+    if (!active(core) || !own_el1(core)) { stamp[0]=stamp[1]=0;return; }
+    stamp[0]=cycles();stamp[1]=cycles();
+}
+void ss_wake_seg_arm_end(unsigned core,const uint64_t stamp[2])
+{
+    if (!stamp[1] || !active(core) || !own_el1(core)) return;
+    const uint64_t end=cycles(),empty=stamp[1]-stamp[0],span=end-stamp[1];
+    const uint64_t net=span>empty ? span-empty : 0;
+    struct ss_wake_seg_core *r=&wake_report.core[core];
+    ++r->arms;r->arm_cycles+=net;if (net>r->arm_max) r->arm_max=net;
 }
 static void wake_tick_add(struct ss_wake_seg_tick *t,const struct cause_state *s,uint64_t end,
                           uint64_t outside,const uint64_t outside_ev[EVENTS])
@@ -578,7 +604,7 @@ void ss_latency_cause_tick_end(void)
     s->tick.interrupted=ss_latency_cause_irq_count(0)-s->tick.interrupted;
     WRITE(daif,saved);
     uint64_t count=report.tick.count+1;
-    if (s->tick.release_mask==255 && s->tick.state_mask==255) {
+    if (s->tick.release_mask==SUNSTONE_LATENCY_RELEASE_MASK && s->tick.state_mask==ss_kernel_tick_scan_mask()) {
         struct ss_latency_cause_events *e=&report.events;
         if (end-s->tick.begin_cycles>report.tick.end_cycles-report.tick.begin_cycles) {
             report.tick=s->tick;

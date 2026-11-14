@@ -754,7 +754,15 @@ def cycle_distribution(values):
             'maximum': ordered[-1], 'raw_cycles': list(values)}
 
 
-def decode_latency_cause(payload, frequency, userenr=4):
+def wake_masks(payload):
+    """The release and scan masks a wake segment report names (version 2), or all eight cores (version 1)."""
+    if not payload:
+        return 0xff, 0xff
+    version, release, scan = (struct.unpack_from('<Q', payload, 8)[0], *struct.unpack_from('<2Q', payload, 64))
+    return (release, scan) if version == 2 else (0xff, 0xff)
+
+
+def decode_latency_cause(payload, frequency, userenr=4, release_mask=0xff, scan_mask=0xff):
     if len(payload) != CAUSE_BYTES:
         raise ValueError('latency cause report has the wrong size')
     words = struct.unpack('<' + 'Q' * (CAUSE_BYTES // 8), payload)
@@ -808,17 +816,23 @@ def decode_latency_cause(payload, frequency, userenr=4):
             rows.append(row)
         phases[phase] = rows
     tick = take('count begin_tick end_tick begin_cycles end_cycles release_mask state_mask interrupted')
-    if (not tick['count'] or tick['release_mask'] != 0xff or tick['state_mask'] != 0xff or
+    # A complete tick released every core of the release mask and read the deadlines of every core of the scan mask;
+    # with local timers CPU0's tick reads its own deadlines only (kernel/scheduler/freertos.c, ssKernelTick).
+    if (not tick['count'] or tick['release_mask'] != release_mask or tick['state_mask'] != scan_mask or
             tick['end_cycles'] <= tick['begin_cycles'] or tick['end_tick'] <= tick['begin_tick']):
-        raise ValueError('cause report lacks a complete correlated eight-target tick')
+        raise ValueError('cause report lacks a complete correlated tick for its release and scan masks')
     targets = []
     for target in range(8):
         row = take('release_begin release_end release_sgi_cycles release_sends '
                    'state_begin state_end state_sgi_cycles state_sends deadline_state deadline '
                    'slice_deadline due mask_tail_begin mask_tail_end')
-        if not (tick['begin_cycles'] <= row['release_begin'] < row['release_end'] <= tick['end_cycles'] and
-                tick['begin_cycles'] <= row['state_begin'] < row['state_end'] <= tick['end_cycles']):
-            raise ValueError('cause component lies outside its retained tick')
+        for part, mask in (('release', release_mask), ('state', scan_mask)):
+            begin, end = row[part + '_begin'], row[part + '_end']
+            if mask >> target & 1:
+                if not tick['begin_cycles'] <= begin < end <= tick['end_cycles']:
+                    raise ValueError('cause component lies outside its retained tick')
+            elif begin or end or row[part + '_sgi_cycles'] or row[part + '_sends']:
+                raise ValueError('cause tick holds a component for a core outside its masks')
         release = row['release_end'] - row['release_begin']
         if row['mask_tail_begin'] or row['mask_tail_end']:
             if not row['release_begin'] <= row['mask_tail_begin'] < row['mask_tail_end'] <= row['release_end']:
@@ -918,7 +932,8 @@ def decode_latency_cause(payload, frequency, userenr=4):
                          'mean_scan_events': named(phase_scan[index][t], n)} for t in range(8)]}
     events = {'types': dict(zip(CAUSE_EVENTS, types)), 'complete_ticks': complete,
               'scope': 'raw counts with hook bookkeeping included; L3D refill is core-attributable; '
-                       'phase means cover ticks with all eight releases and scans'}
+                       'phase means cover ticks with every release and scan of the release and scan masks',
+              'release_mask': release_mask, 'scan_mask': scan_mask}
     bench['extra_sgi_observations'] = bench['sgi_observed'] - bench['sgi_sends']
     # A missing boot capture is reported, not refused: the register values are
     # a record beside the measurement and never gate it. A partition write is
@@ -1032,8 +1047,12 @@ def decode_wake_segments(payload, frequency):
     words = struct.unpack('<' + 'Q' * (WAKE_BYTES // 8), payload)
     header = words[:16]
     magic, version, size, cores, points, parts, shift, complete = header[:8]
-    if ((magic, version, size, cores, points, parts, complete) !=
-            (WAKE_MAGIC, 1, WAKE_BYTES, 8, len(WAKE_POINTS), len(WAKE_PARTS), 1) or any(header[8:])):
+    # Version 2 names the release and scan masks and counts each core's local timer arms.
+    masks = header[8:10] if version == 2 else (0xff, 0xff)
+    if ((magic, size, cores, points, parts, complete) !=
+            (WAKE_MAGIC, WAKE_BYTES, 8, len(WAKE_POINTS), len(WAKE_PARTS), 1) or version not in (1, 2) or
+            any(header[10:]) or (version == 1 and any(header[8:10])) or
+            not 0 < masks[0] <= 0xff or not 0 < masks[1] <= 0xff):
         raise ValueError('wake segment header is invalid or incomplete')
     offset = 16
 
@@ -1069,14 +1088,16 @@ def decode_wake_segments(payload, frequency):
                 'chain_cycles': sum(row['cycles'] for row in segments.values()),
                 'segments': segments, 'parts': part}
 
-    result = {'switch_shift': shift, 'cores': [], 'ticks': {},
+    result = {'version': version, 'release_mask': masks[0], 'scan_mask': masks[1],
+              'switch_shift': shift, 'cores': [], 'ticks': {},
               'scope': ('a chain starts at the outermost interrupt entry and is kept only when every point '
                         'follows in order and it carried the release (CPU0: release inside the chain); a chain '
                         'completed before a later interrupt links with that interrupt in its last segment; busy samples after '
                         'the first are filed by the band setting at the wake; events are refills and backend stalls')}
     for core in range(8):
-        linked, unlinked, nested, interrupted, first_state, *reserved = take(8)
-        if any(reserved) or nested > linked or interrupted > linked:
+        linked, unlinked, nested, interrupted, first_state, arms, arm_cycles, arm_max = take(8)
+        if (nested > linked or interrupted > linked or (version == 1 and (arms or arm_cycles or arm_max)) or
+                arm_max > arm_cycles or (not arms and arm_cycles)):
             raise ValueError('wake segment core counts or reserved words are invalid')
         cells = {}
         for setting in ('off', 'on'):
@@ -1095,6 +1116,10 @@ def decode_wake_segments(payload, frequency):
             raise ValueError('wake segment cells exceed the linked count')
         result['cores'].append({'core': core, 'linked': linked, 'unlinked': unlinked, 'nested': nested,
                                 'interrupted': interrupted,
+                                'timer_arms': {'count': arms, 'mean_cycles': arm_cycles / arms if arms else None,
+                                               'max_cycles': arm_max,
+                                               'scope': 'local timer register writes at EL1 while measuring, '
+                                                        'net of an empty bracket; the arm call itself is outside'},
                                 'first_state': {'seen': bool(first_state >> 16 & 1), 'linked': bool(first_state >> 8 & 1),
                                                 'through_held_chain': bool(first_state >> 9 & 1),
                                                 'current_chain_stage': first_state & 0xff},
@@ -1466,7 +1491,9 @@ def decode(payload, dma=False):
         if dma or pmu_tail or control_tail or scheduler_pmu_tail or not scheduler_tail:
             raise ValueError('cause report requires its exclusive traced CPU profile')
         # The wake segment build lets the woken task read the event counters (PMUSERENR.ER).
-        result['latency_cause'] = decode_latency_cause(cause_tail, frequency, 12 if wake_tail else 4)
+        release_mask, scan_mask = wake_masks(wake_tail)
+        result['latency_cause'] = decode_latency_cause(cause_tail, frequency, 12 if wake_tail else 4,
+                                                       release_mask, scan_mask)
         result['latency_cause_ping'] = decode_latency_cause_ping(ping_tail, frequency,
             result['latency_cause']['tick']['effective_mhz'])
     if service_tail:

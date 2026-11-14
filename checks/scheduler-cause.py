@@ -145,18 +145,22 @@ def wake_chain(m,core,skip=None,nest=False):
         if point==skip:continue
         m.call('ss_wake_seg_point',core,point)
         if point==3:m.call('ss_wake_seg_part_begin',core);m.call('ss_wake_seg_part_end',core,1)
+def run_wake(m,core,ready,running,index,setting,**options):
+    """The woken task marks its running stamp, then closes its chain (apps/latency/workload.c, wake_worker)."""
+    m.call('ss_wake_seg_mark',core,**options)
+    return m.call('ss_wake_seg_running',core,ready,running,index,setting,**options)
 def wake_cases(image,results):
     m=Model(image);m.setup();assert m.row(0)[4]==12
     m.call('ss_latency_cause_irq_end',0)
     # A remote wake: CPU1's chain starts at the interrupt after the release.
     m.core=1;m.call('ss_latency_cause_irq_begin',1,30);assert m.call('ss_latency_cause_core_ready',1);m.call('ss_latency_cause_irq_end',1)
     ready=m.clock;wake_chain(m,1);m.el1=False
-    m.call('ss_wake_seg_running',1,ready,m.clock+10,0,1)
+    run_wake(m,1,ready,m.clock+10,0,1)
     assert m.readq(wake_core(m,1),3)==(1,0,0)
     first=m.readq(wake_core(m,1)+64+2*WAKE_CELL,4)
     assert first[0]==ready and ready<=first[1]<=first[2] and first[3]==0 and m.readq(wake_cell(m,1,1),1)[0]==0
     ready=m.clock;wake_chain(m,1,nest=True);m.el1=False
-    m.call('ss_wake_seg_running',1,ready,m.clock+10,1,1)
+    run_wake(m,1,ready,m.clock+10,1,1)
     assert m.readq(wake_core(m,1),3)==(2,0,1)
     cell=m.readq(wake_cell(m,1,1),3+13*6)
     segments=[cell[3+k*6] for k in range(8)];part=cell[3+8*6+6]
@@ -164,9 +168,9 @@ def wake_cases(image,results):
     assert m.readq(wake_core(m,1)+64+2*WAKE_CELL+WAKE_SAMPLE+WAKE_SAMPLE,4)[3]==1|1<<33
     results.append('a remote wake chain from interrupt entry to the running task files its segments and service part; the first busy wake is kept apart; nesting is counted')
     ready=m.clock;wake_chain(m,1,skip=3);m.el1=False
-    m.call('ss_wake_seg_running',1,ready,m.clock+10,2,1)
+    run_wake(m,1,ready,m.clock+10,2,1)
     wake_chain(m,1);ready=m.clock+1;m.el1=False
-    m.call('ss_wake_seg_running',1,ready,m.clock+10,3,1)
+    run_wake(m,1,ready,m.clock+10,3,1)
     assert m.readq(wake_core(m,1),3)==(2,2,1) and m.readq(wake_cell(m,1,1),1)[0]==1
     results.append('a remote chain with a missing point, or one whose interrupt began before the release, is counted unlinked')
     # An interrupt between the switch and running (the model's first busy wake on CPU0 met one) keeps the completed chain.
@@ -174,36 +178,36 @@ def wake_cases(image,results):
         m.el1=True;m.call('ss_latency_cause_irq_begin',core,0);m.call('ss_latency_cause_irq_end',core)
         for point in range(2,6):m.call('ss_wake_seg_point',core,point)
     ready=m.clock;wake_chain(m,1);interrupt_without_switch(m,1);m.el1=False
-    m.call('ss_wake_seg_running',1,ready,m.clock+10,4,1)
+    run_wake(m,1,ready,m.clock+10,4,1)
     core=m.readq(wake_core(m,1),4)
     assert core[:2]==(3,2) and core[3]==1 and m.readq(wake_cell(m,1,1),1)[0]==2,core
     results.append('a completed chain links through a later interrupt that switched nothing, and is counted interrupted')
-    wake_chain(m,1);m.el1=False;m.call('ss_wake_seg_running',1,0,m.clock+10,5,1)
+    wake_chain(m,1);m.el1=False;run_wake(m,1,0,m.clock+10,5,1)
     ready=m.clock;interrupt_without_switch(m,1);m.el1=False
-    m.call('ss_wake_seg_running',1,ready,m.clock+10,6,1)
+    run_wake(m,1,ready,m.clock+10,6,1)
     assert m.readq(wake_core(m,1),4)[:2]==(4,3)
     m.core=0;m.el1=True;m.call('ss_latency_cause_irq_begin',0,30);m.call('ss_latency_cause_irq_end',0)
     for point in range(2,8):m.call('ss_wake_seg_point',0,point)
     ready=m.clock;interrupt_without_switch(m,0);m.el1=False
-    m.call('ss_wake_seg_running',0,ready,m.clock+10,7,1)
+    run_wake(m,0,ready,m.clock+10,7,1)
     assert m.readq(wake_core(m,0),4)[:2]==(0,1)
     results.append('a completed chain is consumed by its running task, and one that switched before the release cannot link')
     # CPU0 releases its own task inside the tick interrupt that starts its chain (apps/latency/workload.c, ss_latency_tick_hook).
     m.core=0;m.el1=True;m.call('ss_latency_cause_irq_begin',0,30);ready=m.clock
     m.call('ss_latency_cause_irq_end',0)
     for point in range(2,8):m.call('ss_wake_seg_point',0,point)
-    m.el1=False;m.call('ss_wake_seg_running',0,0,m.clock+10,0,1)
-    m.call('ss_wake_seg_running',0,ready,m.clock+10,1,1)
-    wake_chain(m,0);m.el1=False;m.call('ss_wake_seg_running',0,ready,m.clock+10,2,1)
+    m.el1=False;run_wake(m,0,0,m.clock+10,0,1)
+    run_wake(m,0,ready,m.clock+10,1,1)
+    wake_chain(m,0);m.el1=False;run_wake(m,0,ready,m.clock+10,2,1)
     assert m.readq(wake_core(m,0),3)==(0,4,0) and m.readq(wake_cell(m,0,1),2)==(0,0)
     m.core=0;m.el1=True;m.call('ss_latency_cause_irq_begin',0,30);ready=m.clock;m.call('ss_latency_cause_irq_end',0)
     for point in range(2,8):m.call('ss_wake_seg_point',0,point)
-    m.el1=False;m.call('ss_wake_seg_running',0,ready,m.clock+10,1,1)
+    m.el1=False;run_wake(m,0,ready,m.clock+10,1,1)
     assert m.readq(wake_core(m,0),3)==(1,4,0) and m.readq(wake_cell(m,0,1),2)==(1,0)
     results.append("CPU0's own wake links only when its release falls inside the tick chain, and records no time before entry")
     bad=Model(image);bad.setup();bad.call('ss_latency_cause_irq_end',0);bad.core=1
     bad.call('ss_latency_cause_irq_begin',1,30);bad.call('ss_latency_cause_irq_end',1);wake_chain(bad,1);bad.el1=False
-    bad.regs['pmuserenr_el0']=4;bad.call('ss_wake_seg_running',1,0,bad.clock+10,1,1,allow_violation=True)
+    bad.regs['pmuserenr_el0']=4;run_wake(bad,1,0,bad.clock+10,1,1,allow_violation=True)
     assert bad.violation and bad.violation[0]=='EL0 event read without PMUSERENR.ER'
     results.append('the woken task reads event counters at EL0 only with PMUSERENR.ER, which the wake build sets')
     m=Model(image);m.setup()
@@ -221,8 +225,30 @@ def wake_cases(image,results):
     m.el1=False;assert not m.call('ss_wake_seg_snapshot',OUTPUT)
     for c in range(8):m.core=c;m.call('ss_latency_cause_freeze',c)
     assert m.call('ss_wake_seg_snapshot',OUTPUT)
-    assert m.readq(OUTPUT,8)==(0x5353574b53454731,1,28736,8,9,5,0,1)
-    results.append('the wake snapshot waits for every core to freeze and names its layout')
+    assert m.readq(OUTPUT,10)==(0x5353574b53454731,2,28736,8,9,5,0,1,0xff,0xff)
+    results.append('the wake snapshot waits for every core to freeze and names its layout, release mask and scan mask')
+    # The last segment ends at the woken task's mark, not after its bookkeeping (stage 3 counted the bookkeeping).
+    m=Model(image);m.setup();m.call('ss_latency_cause_irq_end',0);m.core=1
+    ready=m.clock;wake_chain(m,1);m.el1=False
+    m.call('ss_wake_seg_mark',1);marked=m.regs['pmccntr_el0'];m.regs['pmccntr_el0']+=1000000
+    m.call('ss_wake_seg_running',1,ready,m.clock+10,0,1)
+    first=m.readq(wake_core(m,1)+64+2*WAKE_CELL,4+13*6)
+    last=first[4+7*6]
+    assert m.readq(wake_core(m,1),1)[0]==1 and 0<last<1000000,last
+    m.call('ss_wake_seg_running',1,ready,m.clock+10,1,1)
+    assert m.readq(wake_core(m,1),2)==(1,1)
+    results.append('the last wake segment ends at the running mark, and a running call without a mark is unlinked')
+    # A local timer arm: an empty bracket is subtracted, and only an armed EL1 core counts.
+    m=Model(image);m.setup();m.call('ss_latency_cause_irq_end',0);m.core=3
+    m.call('ss_latency_cause_irq_begin',3,30);m.call('ss_latency_cause_irq_end',3)
+    stamp=SCRATCH+0x100
+    m.call('ss_wake_seg_arm_begin',3,stamp);begin=m.readq(stamp,2);m.regs['pmccntr_el0']+=500
+    m.call('ss_wake_seg_arm_end',3,stamp)
+    arms=m.readq(wake_core(m,3)+40,3)
+    assert begin[0]<begin[1] and arms[0]==1 and 500<=arms[1]<600 and arms[2]==arms[1],(begin,arms)
+    m.el1=False;m.call('ss_wake_seg_arm_begin',3,stamp);assert m.readq(stamp,2)==(0,0)
+    m.call('ss_wake_seg_arm_end',3,stamp);assert m.readq(wake_core(m,3)+40,1)[0]==1
+    results.append('a timer arm counts its cycles net of an empty bracket, and EL0 takes no stamps')
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True);a=p.parse_args()
@@ -232,6 +258,8 @@ def main():
                  'kernel/scheduler/service_cycles.c','checks/service-cycles-support.c'))
     wake_image=build(out,'wake',['-DSUNSTONE_LATENCY_WAKE_SEGMENTS=1'],
                      ('kernel/scheduler/latency_cause.c','checks/scheduler-pmu-support.c'))
+    local_image=build(out,'local',['-DSUNSTONE_LATENCY_WAKE_SEGMENTS=1','-DSUNSTONE_LATENCY_RELEASE_MASK=0x11u'],
+                      ('kernel/scheduler/latency_cause.c','checks/scheduler-pmu-support.c'))
     results=[]
     m=Model(image);m.call('ss_latency_cause_irq_begin',0,30);assert not m.call('ss_latency_cause_core_ready',0)
     m.call('ss_latency_cause_arm');m.el1=False;before=len(m.ops);m.call('ss_latency_cause_irq_begin',0,30)
@@ -341,6 +369,22 @@ def main():
     assert busy_cells(m,1)==1
     results.append('a configured EL0 drain is recorded; one that resumes on an unconfigured CPU reads no counter and is dropped')
     wake_cases(wake_image,results)
+    # Local timers (stage 4): CPU0's tick releases CPUs 0 and 4 and reads CPU0's deadlines only. Such a tick is complete;
+    # one that released and read all eight is not, since the build's masks name the ticks it compares.
+    m=Model(local_image);m.setup()
+    m.uc.mem_write(m.sym['ss_test_scan_mask'],struct.pack('<I',1))
+    def tick(m,releases,scans):
+        m.call('ss_latency_cause_tick_begin')
+        for target in releases:m.call('ss_latency_cause_release_begin',target,1);m.call('ss_latency_cause_release_end',target)
+        for target in scans:m.call('ss_latency_cause_state_begin',target);m.call('ss_latency_cause_state_end',target,1,10,20,1)
+        m.call('ss_latency_cause_tick_end')
+        return m.readq(m.sym['report']+5056,8)
+    assert tick(m,[0,4],[0])[0]==1
+    assert tick(m,range(8),range(8))[0]==1
+    retained=tick(m,[0,4],[0]);assert retained[0]==2 and retained[5]==0x11 and retained[6]==1,retained
+    for c in range(8):m.core=c;m.call('ss_latency_cause_freeze',c)
+    m.el1=False;assert m.call('ss_wake_seg_snapshot',OUTPUT) and m.readq(OUTPUT+64,2)==(0x11,1)
+    results.append("with local timers a tick that releases the release mask and reads CPU0's deadlines is complete, and the wake report names both masks")
     r={'passed':True,'cases':results,'leaf_boundaries':boundaries,'image':str(image),'image_sha256':hashlib.sha256(image.read_bytes()).hexdigest(),
        'wake_image_sha256':hashlib.sha256(wake_image.read_bytes()).hexdigest(),'physical_access':False}
     (out/'report.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r,indent=2))

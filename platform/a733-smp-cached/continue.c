@@ -253,6 +253,18 @@ _Noreturn void a733_cached_el1(unsigned c,uint64_t epoch,uint64_t startup,uint64
 #endif
         a733_smp_primary_el1();a733_cached_smc(4,0x202);
     }
+#if configSS_LOCAL_TIMERS
+    {
+        /* This CPU arms its own timer for its deadlines (kernel/scheduler/freertos.c). The continuation made PPI 30
+         * Group1NS and level-sensitive on every core; it sits at the API level with the tick and SGI 0, so no band
+         * mask holds it (kernel/scheduler/bands.h). The timer starts stopped, whatever an earlier image left. */
+        __asm__ volatile("msr cntp_ctl_el0, xzr\n isb":::"memory");
+        uintptr_t g=rdist+0x10000;
+        *(volatile uint8_t *)(g+0x400+30)=portMAX_API_PRIORITY_MASK;
+        *(volatile uint32_t *)(g+0x100)=1u<<30;
+        __asm__ volatile("dsb sy":::"memory");
+    }
+#endif
     uint64_t last=0;
     while(!__atomic_load_n(&ucPrimaryCoreInitDoneFlag,__ATOMIC_ACQUIRE)) {
         uint64_t now=a733_smp_counter();

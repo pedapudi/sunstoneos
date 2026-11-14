@@ -134,13 +134,18 @@ _Static_assert(sizeof(struct ss_latency_cause_report) == 17328u, "cause report w
  * 0 is then recorded as zero). An interrupt that arrives after the switch and
  * before running starts a new chain but keeps the completed one, which then
  * links with the interrupt's time in its last segment. Any other wake is
- * counted unlinked. Cells are
+ * counted unlinked. The last segment ends where the woken task marks its
+ * running stamp (ss_wake_seg_mark), before its own bookkeeping. Cells are
  * filed by the band setting at running (1 when the build has no band switch).
  * CPU0's busy complete ticks are filed by the band setting at the tick's start,
- * and the first and second busy complete ticks are kept whole. */
+ * and the first and second busy complete ticks are kept whole. A complete
+ * tick released every CPU of the release mask and read the deadlines of every
+ * CPU of the scan mask (header words 8 and 9): version 2 names both, and its
+ * cores count their local timer arms (configSS_LOCAL_TIMERS) with each arm's
+ * cycles net of an empty bracket. */
 #define SS_WAKE_SEG_MAGIC UINT64_C(0x5353574b53454731)
 #define SS_WAKE_SEG_FOOTER_MAGIC UINT64_C(0x5353574b53454631)
-#define SS_WAKE_SEG_VERSION 1u
+#define SS_WAKE_SEG_VERSION 2u
 #define SS_WAKE_POINTS 9u
 #define SS_WAKE_SEGMENTS (SS_WAKE_POINTS - 1u)
 #define SS_WAKE_PARTS 5u
@@ -165,8 +170,9 @@ struct ss_wake_seg_core {
     uint64_t linked, unlinked, nested, interrupted;
     /* The first busy wake's chain at running: bit 16 seen, bit 8 linked, bit 9
      * linked through the held chain, bits 0-7 the next point the current chain
-     * expected. */
-    uint64_t first_state, reserved[3];
+     * expected. arms counts the timer register writes this core made while
+     * measuring; arm_cycles sums their cycles and arm_max is the largest. */
+    uint64_t first_state, arms, arm_cycles, arm_max;
     struct ss_wake_seg_cell cell[2];
     struct ss_wake_seg_sample first, maximum[2];
 };
@@ -178,7 +184,7 @@ struct ss_wake_seg_tick {
 };
 struct ss_wake_seg_report {
     uint64_t magic, version, bytes, cores, points, parts, switch_shift, complete;
-    uint64_t reserved[8];
+    uint64_t release_mask, scan_mask, reserved[6];
     struct ss_wake_seg_core core[SS_LATENCY_CAUSE_CORES];
     /* tick[setting]: busy complete ticks; first, second: busy complete ticks 1 and 2. */
     struct ss_wake_seg_tick tick[2], first, second;
@@ -234,9 +240,16 @@ void ss_wake_seg_point(unsigned core, unsigned point);
 void ss_wake_seg_fast(unsigned core);
 void ss_wake_seg_part_begin(unsigned core);
 void ss_wake_seg_part_end(unsigned core, unsigned part);
+void ss_wake_seg_mark(unsigned core);
 void ss_wake_seg_running(unsigned core, uint64_t ready, uint64_t running, uint64_t index, unsigned setting);
 bool ss_wake_seg_snapshot(struct ss_wake_seg_report *out);
+/* A local timer arm at EL1 (kernel/scheduler/freertos.c): begin takes two
+ * stamps, the second closing an empty bracket; end counts the arm. */
+void ss_wake_seg_arm_begin(unsigned core, uint64_t stamp[2]);
+void ss_wake_seg_arm_end(unsigned core, const uint64_t stamp[2]);
 #endif
+/* The CPUs whose deadlines CPU0's tick reads (kernel/scheduler/freertos.c). */
+unsigned ss_kernel_tick_scan_mask(void);
 #endif
 #include "service_cycles.h"
 #endif

@@ -34,6 +34,12 @@ _Static_assert(configMAX_PRIORITIES == SS_OWNER_PRIORITIES,
 #ifndef SS_OBJECT_SLOTS
 #define SS_OBJECT_SLOTS 64u
 #endif
+#ifndef configSS_LOCAL_TIMERS
+#define configSS_LOCAL_TIMERS 0
+#endif
+#if configSS_LOCAL_TIMERS && !defined(__aarch64__)
+#error "local timers program the AArch64 generic timer"
+#endif
 
 #ifndef SS_PULL_MOVES_PER_PASS
 #define SS_PULL_MOVES_PER_PASS 0u /* transfers one idle-pull pass may start; 0 is unlimited */
@@ -150,6 +156,9 @@ struct ssKernelCPU {
      * due; any CPU may store it, since each stored value was checked. */
     _Atomic uint32_t control_checked;
     uint64_t control_seen[2];
+    /* The kernel tick this CPU's timer is armed for, UINT64_MAX when it is
+     * stopped (configSS_LOCAL_TIMERS; written only by this CPU). */
+    uint64_t timer_armed;
     bool command_no_wait[SS_OWNER_SLOTS], command_delete[SS_OWNER_SLOTS];
     /* The tick's flush reads both words; keep them on one line. */
     _Alignas(32) uint64_t publication[2];
@@ -219,6 +228,26 @@ static inline bool ssKernelRepairDue(const struct ssKernelCPU *cpu, unsigned c)
     return false;
 }
 static _Atomic uint64_t ssKernelTime;
+/* The counter time base (docs/designs/scheduler-partitioned.md, "One-shot
+ * local timers replace periodic scheduler ticks"). When it starts CPU0's tick,
+ * the platform publishes the counter value at which kernel time
+ * configINITIAL_TICK_COUNT began and the counter periods per tick. With
+ * configSS_LOCAL_TIMERS, kernel time on every CPU is then the counter's whole
+ * periods since that epoch, CPU0's tick no longer releases CPUs 1-7, and each
+ * of them arms its own timer (CNTP, PPI 30) for its earliest deadline; a
+ * platform that publishes the time base routes PPI 30 on those CPUs to
+ * ss_kernel_local_timer_irq. Without a published time base the kernel keeps
+ * CPU0's ticked time and releases. */
+static _Atomic uint64_t ssKernelEpoch;
+static uint64_t ssKernelPeriod, ssKernelSpan;
+void ss_kernel_timebase(uint64_t epoch, uint64_t period)
+{
+    configASSERT(epoch && period && !atomic_load_explicit(&ssKernelEpoch, memory_order_relaxed));
+    ssKernelPeriod = period;
+    /* Ticks after the epoch whose counter value fits in 64 bits. */
+    ssKernelSpan = (UINT64_MAX - epoch) / period;
+    atomic_store_explicit(&ssKernelEpoch, epoch, memory_order_release);
+}
 static _Atomic uint64_t ssKernelAdminNext, ssKernelAdminServing;
 static struct ssKernelWaitSet ssKernelAdminWait;
 static _Atomic uint64_t ssKernelCleanupPending[2];
@@ -391,7 +420,40 @@ static TaskHandle_t ssKernelCurrentSnapshot(unsigned cpu)
     return __atomic_load_n(&portCURRENT_TCB(cpu), __ATOMIC_ACQUIRE);
 }
 static uint64_t ssKernelNow(void)
-{ return atomic_load_explicit(&ssKernelTime, memory_order_acquire); }
+{
+#if configSS_LOCAL_TIMERS
+    const uint64_t epoch = atomic_load_explicit(&ssKernelEpoch, memory_order_acquire);
+    if (epoch) {
+        /* EL0 reads the counter too (CNTKCTL_EL1.EL0PCTEN). A read the core
+         * performs early can precede the epoch only on CPU0 at publication. */
+        uint64_t count;
+        __asm__ volatile("mrs %0, cntpct_el0" : "=r"(count) :: "memory");
+        return configINITIAL_TICK_COUNT + (count > epoch ? (count - epoch) / ssKernelPeriod : 0);
+    }
+#endif
+    return atomic_load_explicit(&ssKernelTime, memory_order_acquire);
+}
+#ifdef SUNSTONE_LATENCY_CAUSE
+/* The CPUs whose deadlines CPU0's tick reads: all of them, or CPU0 alone when
+ * the others arm their own timers. */
+unsigned ss_kernel_tick_scan_mask(void)
+{
+#if configSS_LOCAL_TIMERS
+    if (atomic_load_explicit(&ssKernelEpoch, memory_order_acquire)) return 1u;
+#endif
+    return (1u << configNUMBER_OF_CORES) - 1u;
+}
+#endif
+#ifdef SUNSTONE_LATENCY
+/* The counter value at which kernel tick `tick` begins, for the latency
+ * diagnostic's ready stamps of deadline wakes. */
+uint64_t ss_latency_tick_counter(uint64_t tick)
+{
+    const uint64_t epoch = atomic_load_explicit(&ssKernelEpoch, memory_order_acquire);
+    configASSERT(epoch && tick >= configINITIAL_TICK_COUNT && tick - configINITIAL_TICK_COUNT < ssKernelSpan);
+    return epoch + (tick - configINITIAL_TICK_COUNT) * ssKernelPeriod;
+}
+#endif
 static TCB_t *ssKernelSelf(void)
 {
     /* Boot has no migration and has not installed the task register yet. */
@@ -611,6 +673,7 @@ static void ssKernelInitialize(void)
         ss_control_attach_inbox(&ssKernelControl, c, &ssKernelCPUs[c].run.inbox);
         ss_deadline_init(&ssKernelCPUs[c].deadlines);
         atomic_init(&ssKernelCPUs[c].slice_deadline, UINT64_MAX);
+        ssKernelCPUs[c].timer_armed = UINT64_MAX;
     }
     atomic_init(&ssKernelTime, configINITIAL_TICK_COUNT);
     atomic_init(&ssKernelAdminNext, 0);
@@ -1325,6 +1388,65 @@ static void ssKernelCancel(struct ssKernelTask *s)
 /* Only the owner inspects its queues/current task. CPU0 samples this published
  * deadline without reading a remote task or queue. The first equal peer arms
  * a slice immediately, including local wakes that need no scheduler IRQ. */
+#if configSS_LOCAL_TIMERS
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+#define SS_ARM_BEGIN(c) uint64_t ss_arm_stamp[2]; ss_wake_seg_arm_begin((c), ss_arm_stamp)
+#define SS_ARM_END(c) ss_wake_seg_arm_end((c), ss_arm_stamp)
+#else
+#define SS_ARM_BEGIN(c) ((void)0)
+#define SS_ARM_END(c) ((void)0)
+#endif
+/* CPU c of 1-7, with the API mask held: arm its timer for the earlier of its
+ * next deadline and its slice deadline, or stop the timer when it has
+ * neither. The timer registers are written only when that tick changed. EL0
+ * cannot write them (CNTKCTL_EL1.EL0PTEN is clear), so there an earlier tick
+ * sends this CPU SGI 0, whose interrupt exit arms it at EL1; a later one keeps
+ * the earlier compare, whose interrupt finds nothing due and arms again. CPU0
+ * keeps the periodic tick. */
+static void ssKernelLocalArm(unsigned c, struct ssKernelCPU *cpu)
+{
+    if (!c) return;
+    const uint64_t epoch = atomic_load_explicit(&ssKernelEpoch, memory_order_acquire);
+    if (!epoch) return;
+    uint64_t tick = atomic_load_explicit(&cpu->slice_deadline, memory_order_relaxed), next;
+    if (ss_deadline_next(&cpu->deadlines, &next) && next < tick) tick = next;
+    if (tick < configINITIAL_TICK_COUNT) tick = configINITIAL_TICK_COUNT;
+    if (tick != UINT64_MAX && tick - configINITIAL_TICK_COUNT >= ssKernelSpan) tick = UINT64_MAX;
+    if (tick == cpu->timer_armed) return;
+    if (!((ullPortGetTaskRegister() >> portTASK_REGISTER_EL1_BIT) & 1U)) {
+        if (tick < cpu->timer_armed) ssKernelForce(c);
+        return;
+    }
+    SS_ARM_BEGIN(c);
+    if (tick == UINT64_MAX) {
+        __asm__ volatile("msr cntp_ctl_el0, xzr\n isb" ::: "memory");
+    } else {
+        const uint64_t compare = epoch + (tick - configINITIAL_TICK_COUNT) * ssKernelPeriod;
+        __asm__ volatile("msr cntp_cval_el0, %0" :: "r"(compare) : "memory");
+        if (cpu->timer_armed == UINT64_MAX)
+            __asm__ volatile("msr cntp_ctl_el0, %0" :: "r"(UINT64_C(1)) : "memory");
+        __asm__ volatile("isb" ::: "memory");
+    }
+    SS_ARM_END(c);
+    cpu->timer_armed = tick;
+}
+/* PPI 30 on CPU c of 1-7 (the platform's interrupt handler calls this): stop
+ * the timer. The interrupt exit's service expires the due deadline or slice
+ * and arms the next. When this CPU's preemption count defers that service,
+ * the reschedule request makes the count's release yield, and the selection
+ * arms the timer again for the deadline that is still due. */
+void ss_kernel_local_timer_irq(void)
+{
+    const unsigned c = ssKernelCPUId();
+    configASSERT(c && ssKernelIrqsDisabled() && atomic_load_explicit(&ssKernelEpoch, memory_order_relaxed));
+    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    __asm__ volatile("msr cntp_ctl_el0, xzr\n isb" ::: "memory");
+    cpu->timer_armed = UINT64_MAX;
+    if (cpu->preempt) cpu->reschedule = true;
+}
+#else
+#define ssKernelLocalArm(c, cpu) ((void)0)
+#endif
 static void ssKernelSliceRefresh(unsigned c, bool reset)
 {
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
@@ -1350,6 +1472,7 @@ static void ssKernelSliceRefresh(unsigned c, bool reset)
         deadline = now + 1;
     }
     atomic_store_explicit(&cpu->slice_deadline, deadline, memory_order_release);
+    ssKernelLocalArm(c, cpu);
 }
 static void ssKernelMakeReady(struct ssKernelTask *s)
 {
@@ -1448,6 +1571,9 @@ static void ssKernelExpired(void *context, const struct ss_deadline_result *resu
     struct ssKernelTask *s = result->context;
     if (s->generation != result->generation || s->dead) return;
     if (atomic_load_explicit(&s->execution, memory_order_acquire) != SS_K_BLOCKED) return;
+#ifdef SUNSTONE_LATENCY
+    ss_latency_deadline_ready(s->ready.context, result->deadline);
+#endif
     if (s->wait_kind == SS_K_NOTIFICATION) {
         struct ss_notification_guard guard;
         ss_notification_gate_begin(&s->notification[s->notify_index], &ssKernelBackend, &guard);
@@ -1590,6 +1716,8 @@ static void SS_SERVICE_DEFINITION(void)
         ssKernelForce(c);
 #endif
     }
+    /* The pass expired deadlines, adopted tasks and refreshed the slice. */
+    ssKernelLocalArm(c, cpu);
     SS_PMU_LEAVE(1);
     SS_PH_END(2);
     --cpu->service_depth;
@@ -1753,6 +1881,9 @@ static void ssKernelSwitch(unsigned c)
         if (ssKernelControlPending(c) || cpu->idle_pull_deferred)
             ssKernelForce(c);
     }
+    /* A task that blocked with a timeout inserted its deadline before this
+     * selection. */
+    ssKernelLocalArm(c, cpu);
 #ifdef SUNSTONE_SCHED_PMU
     (void)ss_sched_pmu_end_scope(c,&pmu_scope);
 #endif
@@ -2068,8 +2199,16 @@ static BaseType_t ssKernelTick(void)
     /* CPU0 alone advances stage-B time. Remote CPUs receive only due-work or
      * slice requests; CPU0 never touches a remote timeout or ready link. */
     configASSERT(ssKernelCPUId() == 0);
+#if configSS_LOCAL_TIMERS
+    /* With the counter time base, CPUs 1-7 arm their own timers. */
+    const bool local = atomic_load_explicit(&ssKernelEpoch, memory_order_relaxed) != 0;
+    const uint64_t now = local ? ssKernelNow() : atomic_fetch_add_explicit(&ssKernelTime, 1, memory_order_acq_rel) + 1;
+    const unsigned cores = local ? 1u : configNUMBER_OF_CORES;
+#else
     uint64_t now = atomic_fetch_add_explicit(&ssKernelTime, 1, memory_order_acq_rel) + 1;
-    for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) {
+    const unsigned cores = configNUMBER_OF_CORES;
+#endif
+    for (unsigned c = 0; c < cores; ++c) {
 #ifdef SUNSTONE_LATENCY_CAUSE
         ss_latency_cause_state_begin(c);
 #endif
