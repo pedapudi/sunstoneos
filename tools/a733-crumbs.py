@@ -117,6 +117,11 @@ BOOT_ONCE = 0xb0070c02
 # watchdog resets and short power losses, so after a run that never returned they show where it stopped.
 CONTACT_WORDS = {'rtc_%03x' % offset: RTC + offset for offset in range(0x100, 0x120, 4)}
 CONTACT_WORDS['wdt_status'] = 0x02050004
+# The RTC clock source that WDT0 counts in configuration 1 (A733 manual 9.1.7.1 and 9.1.7.2): LOSC_CTRL, which boot0
+# rewrites (docs/vendor-firmware/boot-rom-and-boot0.md), and LOSC_AUTO_SWT_STA. The DCXO word 0x07090160 is xo_ctrl0 in
+# RESET_WORDS. Then the ROM's software redirect words (flag, entry, alternate flag), which the card gate refuses nonzero.
+CONTACT_WORDS.update(losc_ctrl=RTC, losc_auto_swt_sta=RTC + 0x4,
+                     redirect_flag=0x070501c0, redirect_entry=0x070501c4, alternate_flag=0x070501d4)
 
 
 def contact_arguments():

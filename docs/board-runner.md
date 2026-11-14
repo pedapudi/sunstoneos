@@ -676,8 +676,13 @@ session reads the cold-boot marker (RTC `IC_CHARA`, `0x070901f0`), the GP2 gate
 record, the crystal control word and the WDT0 configuration and output words,
 and records them as `power_epoch`. The same read-only transaction also reads
 all eight RTC general-purpose words `0x07090100..0x0709011c` (tag, LAST, GP2,
-time, fault, ESR, ELR, FAR) and the WDT0 interrupt status `0x02050004`, and
-records them under `contact`. These words survive a watchdog reset and a power
+time, fault, ESR, ELR, FAR), the WDT0 interrupt status `0x02050004`, the RTC
+clock-source control and status words `LOSC_CTRL` (`0x07090000`) and
+`LOSC_AUTO_SWT_STA` (`0x07090004`), and the ROM redirect flag, entry and
+alternate flag (`0x070501c0`, `0x070501c4`, `0x070501d4`), and records them
+under `contact`. WDT0 counts the RTC 32 kHz clock in configuration 1, and
+vendor boot0 rewrites `LOSC_CTRL`; the card first stage refuses to enter FEL
+while a redirect word is nonzero. These words survive a watchdog reset and a power
 loss short enough to keep VDD_RTC up. After a run that never returned, they
 are the only record of where the boot stopped, so nothing is written before
 they are read. It then clears the gate record and, if the
@@ -792,11 +797,32 @@ image, measures whether such a re-arm resets the board:
 - `gate`: the runner runs the warm-entry proof as above. The gate re-arms
   `0xb1` over the runner's `0x41`, and the runner leaves it armed after the
   proof's FEL return.
+- `stage2`: the WDT0 history of a boot-once card boot without boot0, on a
+  board whose card holds the first stage. The runner's `0x41` expiry resets
+  the board through the card gate's warm path. On the new instance the runner
+  uploads the arming replay (`boot/a733/rearm-stage2.S`) into the launcher
+  SRAM and runs its two entry points with the FEL execute command. The first
+  makes the gate's cold-path WDT0 writes: mode 0, output 2, configuration 1,
+  mode `0xb1` and the restart key. Three seconds later, in place of boot0's DRAM
+  training and the package load, the second makes stage 2's `arm()` accesses
+  in order: the redirect, GP2 and WDT0 state reads, the disarm, the output and
+  configuration writes and their reads, the counter read, mode `0x41`, the
+  restart, the step `0x0e` store to LAST and the final reads. Each access
+  sits between two `dsb sy`, as `rd()` and `wr()` place it. The replay
+  leaves out the gate's GP2 record store and runs in A32 state from the ROM's
+  FEL, so its timing between accesses is not stage 2's. It records every value
+  it reads and the status `arm()` would return; the result's `rearm_writes`
+  holds them. `checks/rearm-stage2.py` runs the replay's bytes under Unicorn
+  and compares its register accesses with the gate and stage-2 sources.
 
 The runner then reads WDT0 without a disarm and waits for a new FEL instance
-until 10 seconds after the 16-second interval. A reset 16 to 21 seconds after
-the re-arm (the restart, or the execute request for `gate`) matches the
-prediction: the outcome is `watchdog-reset` with `expected_reset: true`. An
+until 10 seconds after the interval of the mode it read: 16 seconds for
+`0xb1`, 4 seconds for the `0x41` that `stage2` arms. A reset within 5
+seconds after that interval, counted from the re-arm (the restart, the
+execute request for `gate`, or the end of the stage-2 execute request for
+`stage2`), matches the prediction: the outcome is `watchdog-reset` with
+`expected_reset: true`. A `stage2` replay whose `arm()` refused is a failure
+whatever reset follows; the result names the refusal. An
 earlier reset means the 4-second arming fired and the re-arm did not apply. If
 no new instance appears, the board is still in FEL: the runner disarms WDT0
 on the same instance and the outcome is `failure-return`, so the port stays

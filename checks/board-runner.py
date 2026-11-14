@@ -78,6 +78,10 @@ class Model:
             # records them before it writes anything.
             self.registers.update({0x07090100:0x5c0dc5f9,0x07090104:0x0c030007,0x0709010c:0x19cf2,0x07090110:0xfa030001,
                                    0x07090114:0x96000010,0x07090118:0x41019db8,0x0709011c:0x47008000,0x02050004:1})
+        if variant=='card-cold-record':
+            # The RTC clock source after boot0's unkeyed gain write, and the ROM redirect words, which must read clear.
+            self.registers.update({0x07090000:0x401c})
+        self.replay_writes = []  # (address, value) of each register store the arming replay made
         self.calls = []
         self.writes = []    # (address, bytes) of every write, in order: the sealed source is gone after the call
         self.programs = []
@@ -238,6 +242,9 @@ class Model:
                     data=bytes([data[0]^1])+data[1:]
                 Path(args[i+3]).write_bytes(data)
                 i+=4
+            elif op=='exe' and self.variant.startswith('card-stage2-rearm'):
+                self.rearm_replay(int(args[i+1],0))
+                i+=2
             elif op=='exe' and self.digest_helper_loaded(int(args[i+1],0)):
                 self.digest_helper()
                 i+=2
@@ -318,6 +325,33 @@ class Model:
                 raise AssertionError(op)
         return types.SimpleNamespace(returncode=0,stdout='\n'.join(out),stderr='')
 
+
+    def rearm_replay(self,entry):
+        """--rearm-expiry stage2: run the uploaded replay's own bytes (boot/a733/rearm-stage2.S) under Unicorn against the
+        modeled registers, with the keyed WDT0 words holding their low half. A 0xb1 arming resets 16 s after it; the 0x41
+        arming resets 4 s after it (card-stage2-rearm-expires) or never (-stops). -refused sets the alternate redirect
+        flag first, so the replayed arm() refuses before any WDT0 write."""
+        from unicorn import Uc,UC_ARCH_ARM,UC_MODE_ARM
+        from unicorn.arm_const import UC_CPU_ARM_MAX,UC_ARM_REG_SP,UC_ARM_REG_LR
+        assert entry in (images.REARM_GATE,images.REARM_STAGE2),hex(entry)
+        if self.variant=='card-stage2-rearm-refused' and entry==images.REARM_STAGE2:self.registers[0x070501d4]=1
+        keyed=(board.crumbs.WDT_MODE,board.crumbs.WDT_CONFIG,board.crumbs.WDT_OUTPUT)
+        uc=Uc(UC_ARCH_ARM,UC_MODE_ARM);uc.ctl_set_cpu_model(UC_CPU_ARM_MAX)
+        low,high=images.LAUNCHER_SRAM
+        uc.mem_map(0x50000,0x10000);uc.mem_map(0x40000000,0x100000)
+        uc.mem_write(low,bytes(self.memory.get(a,0) for a in range(low,high)))
+        def read(uc,offset,size,base):return self.registers.get(base+offset,0)
+        def write(uc,offset,size,value,base):
+            self.replay_writes.append((base+offset,value))
+            self.registers[base+offset]=value&0xffff if base+offset in keyed else value
+        for base in (0x02050000,0x07050000,0x07090000):uc.mmio_map(base,0x1000,read,base,write,base)
+        uc.reg_write(UC_ARM_REG_SP,0x40080000);uc.reg_write(UC_ARM_REG_LR,0x40000000)
+        uc.emu_start(entry,0x40000000,count=100000)
+        for a in range(low,high):self.memory[a]=uc.mem_read(a,1)[0]
+        mode=self.registers.get(board.crumbs.WDT_MODE,0)
+        if mode==0xb1:self.pending,self.reset_at=True,self.clock+16
+        elif mode==0x41 and self.variant=='card-stage2-rearm-expires':self.pending,self.reset_at=True,self.clock+4
+        elif mode==0x41:self.pending=False
 
     # The digest helper's contract (boot/a733/upload-digest.S), which checks/upload-digest.py tests on the helper's own
     # bytes against hashlib: SHA-256 of each requested range, the status word and ID_ISAR5 written into the request block.
@@ -863,6 +897,7 @@ def rearm_expiry_cases(out):
             assert 'No reset within 26 s' in result['first_failure']['detail'] and not owner.armed and model.registers[board.crumbs.WDT_MODE]==0
             assert not board.result_passed(result,decoded=False)
         passed('rearm-expiry-'+variant)
+    rearm_stage2_cases(out)
     # Admission: coordinator approval and the warm-entry proof image; frozen in the queue entry.
     args=arguments(out,'--kind','probe',development=True);args.rearm_expiry='runner'
     info={'card_fel_recovery':{'profile':{'entry':2}},'descriptor':{}}
@@ -875,6 +910,51 @@ def rearm_expiry_cases(out):
     command=board.Queue.runner_command(job,'3-1')
     assert 'rearm_expiry' in board.FROZEN_OPTIONS and command[command.index('--rearm-expiry')+1]=='gate',command
     passed('rearm-expiry-requires-approval-and-the-warm-proof')
+
+
+def rearm_stage2_cases(out):
+    """--rearm-expiry stage2: the runner's 0x41 resets the board through the card gate; on the new instance the replay's own
+    bytes run the gate's cold-path arming and, REARM_STAGE2_GAP_S later, stage 2's arm(); the runner times the 0x41 reset,
+    or disarms a 0x41 that never fires on the same instance. A refused replay is the result, whatever reset follows."""
+    def configure(args):args.rearm_expiry='stage2'
+    key=board.crumbs.KEY
+    mode,cfg,ocfg,restart=board.crumbs.WDT_MODE,board.crumbs.WDT_CONFIG,board.crumbs.WDT_OUTPUT,board.crumbs.WDT_RESTART
+    gate=[(mode,key),(ocfg,key|2),(cfg,key|1),(mode,key|0xb1),(restart,0x14af)]
+    stage2=[(mode,key),(ocfg,key|2),(cfg,key|1),(mode,key|0x41),(restart,0x14af),(board.crumbs.RTC+0x104,0x0c030e00)]
+    for variant in ('card-stage2-rearm-expires','card-stage2-rearm-stops','card-stage2-rearm-refused'):
+        result,model,owner=lifecycle(out/variant,variant,recovery=True,entry=2,configure=configure)
+        test,writes=result['rearm_expiry'],result['rearm_writes']
+        assert not model.quarantined and result['dram_mode']=='sram-only',(variant,result)
+        # The session reset went through the gate's warm path: its record at the second contact holds mode 0x41.
+        second=result['power_epoch'][1]
+        assert second['gate']['warm'] and second['gate']['mode']==0x41 and writes['power_epoch']==2,(variant,second)
+        # One replay upload, then the gate entry, the gap and the stage-2 entry, each once and in that order.
+        exes=[c for c in model.calls if c[0]=='exe']
+        assert exes==[['exe',hex(images.REARM_GATE)],['exe',hex(images.REARM_STAGE2)]],exes
+        assert board.REARM_STAGE2_GAP_S<=writes['gap_s']<board.REARM_STAGE2_GAP_S+1,writes
+        assert writes['gate']=={'mode_at_entry':0,'mode':0xb1,'configuration':1,'output':2,'done':True},writes
+        if variant=='card-stage2-rearm-refused':
+            assert model.replay_writes==gate,model.replay_writes
+            assert writes['stage2']['status']==0x11 and writes['stage2']['redirect']==[0,0,1]
+            assert test['mode']==0xb1 and test['reset'] and not test['matched'] and not result['expected_reset']
+            assert 'status 0x11' in result['first_failure']['detail'] and not board.result_passed(result,decoded=False)
+            passed('rearm-expiry-'+variant);continue
+        assert model.replay_writes==gate+stage2,model.replay_writes
+        s2=writes['stage2']
+        assert s2['status']==1 and s2['state']==[0xb1,1,2] and s2['mode_after_disarm']==0 and s2['final']==[0x41,1,2],s2
+        assert test['variant']=='stage2' and test['mode']==0x41 and test['interval_s']==4 and test['deadline_s']==14,test
+        if variant.endswith('expires'):
+            assert result['outcome']=='watchdog-reset' and result['expected_reset'] and test['matched'],(variant,result)
+            assert 4<=test['seconds_after_arm']<=9 and not result.get('first_failure') and board.result_passed(result,decoded=False)
+        else:
+            assert result['outcome']=='failure-return' and not test['reset'] and not result['expected_reset'],(variant,result)
+            assert 'No reset within 14 s' in result['first_failure']['detail'] and not owner.armed and model.registers[mode]==0
+            assert not board.result_passed(result,decoded=False)
+        passed('rearm-expiry-'+variant)
+    job={'image':'/image.elf','directory':str(out),'options':{'rearm_expiry':'stage2','approved_by':'coordinator'}}
+    command=board.Queue.runner_command(job,'3-1')
+    assert command[command.index('--rearm-expiry')+1]=='stage2',command
+    passed('rearm-expiry-stage2-is-frozen-into-the-runner-command')
 
 
 def boot_once_cases(out):
@@ -1069,10 +1149,13 @@ def transport_cases(out):
             assert result['power_epoch'][0]['gate']=={'cold':True,'warm':False,'unmarked':False,'once':False,'refused_step':0,'mode':0}
             contact=result['power_epoch'][0]['contact']
             assert contact=={'rtc_100':0x5c0dc5f9,'rtc_104':0x0c030007,'rtc_108':0x0c028000,'rtc_10c':0x19cf2,'rtc_110':0xfa030001,
-                             'rtc_114':0x96000010,'rtc_118':0x41019db8,'rtc_11c':0x47008000,'wdt_status':1},contact
+                             'rtc_114':0x96000010,'rtc_118':0x41019db8,'rtc_11c':0x47008000,'wdt_status':1,
+                             'losc_ctrl':0x401c,'losc_auto_swt_sta':0,'redirect_flag':0,'redirect_entry':0,'alternate_flag':0},contact
             # One read-only transaction, and the first register access after the ROM checks.
             read=next(i for i,c in enumerate(model.calls) if hex(0x0709011c) in c)
             assert 'writel' not in model.calls[read] and not any(c[0]=='writel' for c in model.calls[:read]),model.calls[:read+1]
+            # The clock-source and redirect words are read in that same transaction.
+            assert all(hex(a) in model.calls[read] for a in (0x07090000,0x07090004,0x070501c0,0x070501c4,0x070501d4)),model.calls[read]
             assert result['power_epoch'][0]['flag_after']==0 and 'marker_after' in result['power_epoch'][0]
         if variant=='marker-stuck':
             assert 'cold-boot marker' in result['first_failure']['detail']

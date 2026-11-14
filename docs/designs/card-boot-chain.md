@@ -4,7 +4,8 @@
 first stage and the diagnostic stage 2 (writes D1 and D2 of 2026-11-14). The
 boot-once run that measures the OS row then did not return (see "Card boots
 of this first stage"). No further card boot runs until the cause is known
-from data. The boot0 and stage-2 rows have a board record of their recovery
+from data; the FEL-only run in "Separating stage 2's arming from boot0" is
+implemented and not yet run on the board. The boot0 and stage-2 rows have a board record of their recovery
 after a power-up; the OS row has none.
 
 A card boot under test control ([card-fel-recovery.md](card-fel-recovery.md))
@@ -248,5 +249,99 @@ reset the board, including the disarm-first gate's warm path on port 3-1
 
 Before that run, the first contact read WDT0 configuration `0x101`, where
 the read-only capture before the writes (`1794675109428657635-3a8d28e4`) read
-configuration 1.
+configuration 1. The runner wrote `0x101` itself: it arms the rail helper
+with configuration `0x101` (the DCXO/750 clock, `tools/board.py`, `rails`),
+and its disarm writes only the mode. The two runs that wrote the card ran that
+helper last; the capture ran no helper. The boot-once run of 2026-11-13 and
+the FEL-only run on port 3-1 also read `0x101` at first contact, and the
+port 3-1 run returned. Each arming writes configuration 1 and reads it back,
+and the gate's cold path writes it again, so all three card boots counted
+WDT0 on the RTC 32 kHz clock.
+
+## Separating stage 2's arming from boot0
+
+boot0 takes the same path after a WDT0 expiry reset as after a power-up
+([boot0 and a watchdog reset](../vendor-firmware/boot-rom-and-boot0.md#boot0-takes-the-same-path-after-a-watchdog-reset-as-after-a-power-up)).
+It never accesses WDT0. The words it reads match across the card boots on
+port 3-3:
+
+- GP2 holds a gate record in every boot, which matches neither of boot0's
+  two values;
+- the DCXO word reads `0x983fb0f7` at every contact on record;
+- the PMIC settings are the same on every boot.
+
+`LOSC_CTRL` bit 0 had not been recorded in any of these epochs. Only the RTC
+application selects the crystal; the gate, stage 2 and the rail helper do not
+write `LOSC_CTRL`. boot0 therefore most likely left the RTC on its RC
+oscillator in every boot.
+
+| Boot | Port | Epoch started by | boot0 ran | Arming live when the reset was due | Written | Returned |
+| --- | --- | --- | --- | --- | --- | --- |
+| Boot-once, 2026-11-13 | 3-3 | `0x41` expiry | Yes | Stage 2's `0x41` over the gate's counting `0xb1`, no disarm | After boot0 | No |
+| Replug, 2026-11-13 | 3-3 | Power-up | Yes | The gate's `0xb1` | Before boot0 | Yes |
+| Runner re-arm (`1794643227744371298-6101ee0d`) | 3-1 | FEL session | No | `0xb1` over a counting `0x41`, no disarm | FEL | Yes, 18.137 s |
+| Gate warm path (`1794675168534838087-526c0fd2`) | 3-1 | `0x41` expiry | No | The gate's `0xb1` after a disarm | FEL | Yes, 18.158 s |
+| Boot-once with `--boot-once-measure os`, 2026-11-14 | 3-3 | `0x41` expiry | Yes | Stage 2's `0x41` after it disarmed the gate's counting `0xb1` | After boot0 | No |
+
+In both boots that did not return, stage 2 wrote the arming that was live
+when the reset was due, after boot0 had run in an epoch started by an expiry.
+Every return had its live arming written before boot0, or ran no boot0. The
+records leave two causes open:
+
+- **S:** on port 3-3, stage 2's arming sequence over the gate's counting
+  arming does not expire. All FEL-only re-arm measurements were made on
+  port 3-1.
+- **B:** state that boot0 leaves in an epoch started by an expiry stops a later
+  arming. The only candidate in boot0 is its `LOSC_CTRL` store, and that store
+  can change the clock only when bit 0 reads set.
+
+A reset that fires but never reaches FEL would need the gate's refusal path:
+SCTLR with the MMU or data cache enabled, or a nonzero ROM redirect word. That
+path parks the CPU. Neither boot0 nor stage 2 writes a redirect word, and
+every first contact now records them.
+
+### The FEL-only run that separates S from B
+
+`--rearm-expiry stage2` on port 3-3 ([board runner](../board-runner.md#wdt0-re-arm-expiry-test))
+makes no card write and no clock-source write. It arms WDT0 only in modes and
+configurations the runner already uses:
+
+1. The first contact reads the RTC words, WDT0, `0x07090160`, `LOSC_CTRL`,
+   `LOSC_AUTO_SWT_STA` and the redirect words.
+2. The runner's `0x41` expiry resets the board through the gate's warm path,
+   which starts an epoch after an expiry as the boot-once run did.
+3. The replay makes the gate's cold-path arming. Three seconds later it makes
+   stage 2's `arm()` accesses. The runner then waits for the `0x41` reset.
+
+Prediction: the contact reads `LOSC_CTRL` `0x401c` (the reset value `0x4010`
+with boot0's gain bits), status 0 and zero redirect words. The replay reports
+status 1 (armed). The board resets about 4.5 s after the second execute
+request. That figure is the 4-second interval at the RC rate measured on port
+3-1, where `0xb1` took 18.14 to 18.17 s for 16 s nominal, a factor of 1.135.
+
+| Observation | Conclusion | Next step |
+| --- | --- | --- |
+| Contact reads `LOSC_CTRL` bit 0 set | B is possible: boot0's keyed store switches the WDT0 clock source | Stop before step 2; revise the run |
+| Replay status other than 1 | The replayed `arm()` refused at the recorded access | Compare the recorded values with stage 2's admission |
+| No reset within 14 s of the stage-2 arming; the runner disarms WDT0 on the same instance | S holds on port 3-3 and boot0 is not required | Change stage 2's arming; test the change FEL-only first |
+| Reset 4 to 9 s after the stage-2 arming | S is refuted on port 3-3; the failure needs boot0's run | Card boot whose stage 2 leaves the gate's `0xb1` alone, proposed only after the contact rules out B |
+
+Time budget, worked from the measured and nominal figures:
+
+| Stage | Seconds | Source |
+| --- | --- | --- |
+| First contact | 1 | One read-only transaction |
+| Runner `0x41` to the warm-path FEL instance | 4.5 + 2 | RC rate; gate return and enumeration as in the card writes of 2026-11-14 |
+| Second contact, replay upload and gate arming | 1 | Three transactions |
+| Gap before the stage-2 arming | 3 | `REARM_STAGE2_GAP_S`, shorter than the gate's 18 s `0xb1` |
+| Stage-2 `0x41` to the next FEL instance | 4.5 + 2 | RC rate; gate return |
+| Return report | 1 | One transaction |
+| Total | 19 | |
+
+The step-2 wait ends at 14 s, the stage-3 wait at 14 s after the stage-2
+arming (interval plus 10 s), and the gate's `0xb1`, live during the gap,
+expires about 18 s after the gate arming. A `0x41` that never fires is
+therefore caught at 14 s while the board is still in FEL. No step runs boot0;
+each reset passes through the gate's warm path to FEL, which returned on port
+3-3 in the card writes of 2026-11-14.
 

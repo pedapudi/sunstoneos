@@ -913,6 +913,36 @@ class Live:
         require(values == [0xb1, 1, 2], 'The re-arm readback differs: %s.' % values)
         return self.watch_expiry(armed_at, 'runner')
 
+    def rearm_stage2(self):
+        """Replay the WDT0 history of the 2026-11-14 boot-once card boot without boot0 and time the reset.
+
+        The runner's 0x41 expiry resets the board through the card gate's warm path (reset()). On the new instance the
+        replay (boot/a733/rearm-stage2.S) runs the gate's cold-path arming, 0xb1 from mode 0; REARM_STAGE2_GAP_S later, in
+        place of boot0 and the stage-2 load, it runs stage 2's arm(), which disarms that arming and arms 0x41. Both run with
+        the FEL execute command and return to FEL, so a 0x41 that never expires leaves the board in FEL on the same
+        instance, where watch_expiry() disarms it."""
+        mode = int(self.tx('readl', hex(crumbs.WDT_MODE)), 16) & 0xffff
+        require(not mode & 1, 'The re-arm test starts from a disarmed WDT0; it read mode 0x%x.' % mode)
+        self.reset()
+        record = self.record['rearm_writes'] = {'mode_before': mode, 'power_epoch': len(self.record.get('power_epoch', []))}
+        replay = images.build_rearm_stage2(self.evidence/'rearm-stage2')
+        record['replay_sha256'] = images.sha(replay)
+        self.upload(images.REARM_GATE, replay)
+        self.upload(images.REARM_RESULT, images.write(self.evidence/'rearm-result-blank.bin', bytes(images.REARM_RESULT_BYTES)))
+        self.armed = True
+        gate_at = self.now()
+        self.recovery_deadline = gate_at+crumbs.interval(0xb1)+10
+        self.journal()
+        self.tx('exe', hex(images.REARM_GATE))
+        self.sleep(max(0, gate_at+REARM_STAGE2_GAP_S-self.now()))
+        self.tx('exe', hex(images.REARM_STAGE2))
+        armed_at = self.now()
+        record.update(images.rearm_results(self.read(images.REARM_RESULT, images.REARM_RESULT_BYTES,
+                                                     self.evidence/'rearm-result.bin')))
+        record['gap_s'] = round(armed_at-gate_at, 3)
+        self.journal()
+        return self.watch_expiry(armed_at, 'stage2')
+
     def finish_pending(self):
         """A host error cannot release an armed run before its reset deadline."""
         if self.armed and not self.failed:
@@ -1332,6 +1362,9 @@ BOOT_ONCE_MARGIN_S = 10         # the FEL re-enumeration margin every runner wai
 
 
 REARM_WINDOW_S = 5  # a reset counts as the 16 s interval when it appears within this many seconds after it
+# --rearm-expiry stage2: the seconds between the gate's cold-path arming and stage 2's arm(), in place of boot0's DRAM training
+# (about 5.1 s measured) and the package load, kept short so the gate's 0xb1 cannot expire first.
+REARM_STAGE2_GAP_S = 3
 
 
 def rearm_outcome(owner, reset):
@@ -1353,6 +1386,18 @@ def rearm_outcome(owner, reset):
             seconds, record['interval_s'], record['interval_s']+REARM_WINDOW_S)
     owner.journal()
     return 'watchdog-reset'
+
+
+def rearm_stage2_outcome(owner, reset):
+    """rearm_outcome() for the stage-2 replay, which counts only when the replayed arm() armed: a refusal before or after its
+    disarm is the result instead, whatever reset follows."""
+    outcome = rearm_outcome(owner, reset)
+    stage2 = owner.record['rearm_writes']['stage2']
+    if stage2['status'] != 1:
+        owner.record['rearm_expiry']['matched'] = False
+        owner.record['rearm_failure'] = "Stage 2's arming replay ended with status 0x%x: %s." % (stage2['status'], stage2['status_text'])
+        owner.journal()
+    return outcome
 
 
 def boot_once_deadline(session_seconds):
@@ -1518,6 +1563,11 @@ def run_image(args, backend=Live):
                     # FEL register writes only: nothing is uploaded or launched.
                     result['dram_mode'] = 'sram-only'
                     outcome = timed('rearm-expiry', lambda: rearm_outcome(owner, owner.rearm_runner()))
+                    return rearm_result(result, owner, outcome, evidence, started, stage)
+                if getattr(args, 'rearm_expiry', None) == 'stage2':
+                    # The arming replay runs in the launcher SRAM only: no DRAM, nothing launched.
+                    result['dram_mode'] = 'sram-only'
+                    outcome = timed('rearm-expiry', lambda: rearm_stage2_outcome(owner, owner.rearm_stage2()))
                     return rearm_result(result, owner, outcome, evidence, started, stage)
                 timed('reset', owner.reset)
                 if info.get('card_fel_recovery'):
@@ -2469,10 +2519,11 @@ def run_options(parser, submit=False):
     parser.add_argument('--marker-clear-test', action='store_true',
                         help='At first contact, write 0x16aa0000 to the cold-boot marker, read it, set it again and record both '
                         'readbacks (docs/designs/card-fel-recovery.md); requires --approved-by coordinator.')
-    parser.add_argument('--rearm-expiry', choices=('runner', 'gate'),
+    parser.add_argument('--rearm-expiry', choices=('runner', 'gate', 'stage2'),
                         help='Measure whether a WDT0 re-arm with no disarm resets the board (docs/board-runner.md, "WDT0 re-arm expiry test"): '
                              '"runner" arms 0x41, then writes 0xb1 and restarts it over FEL and launches nothing; "gate" runs the '
-                             'warm-entry SRAM proof, which re-arms 0xb1 over the runner\'s 0x41, and leaves WDT0 armed. '
+                             'warm-entry SRAM proof, which re-arms 0xb1 over the runner\'s 0x41, and leaves WDT0 armed; "stage2" resets '
+                             'through the card gate, then replays the gate\'s cold-path arming and, 3 s later, stage 2\'s arm(). '
                              'Requires --approved-by coordinator and the warm-entry proof image.')
     parser.add_argument('--boot-once-slot', type=Path, metavar='MANIFEST.json',
                         help='Boot the card once instead of launching over FEL: write the boot-once value to GP2, reset through WDT0 and wait, '

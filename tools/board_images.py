@@ -884,6 +884,46 @@ def build_upload_digest(out):
     return binary
 
 
+# boot/a733/rearm-stage2.S, the WDT0 arming replay of `--rearm-expiry stage2`, runs in the same reservation. Its two
+# entry points are the gate's cold-path arming and stage 2's arm(); its result block follows the code.
+REARM_SOURCE = 'boot/a733/rearm-stage2.S'
+REARM_GATE, REARM_STAGE2, REARM_RESULT, REARM_RESULT_BYTES = 0x52000, 0x52100, 0x52400, 0x70
+REARM_GATE_DONE = 0x45544147
+REARM_STATUS = {1: 'armed', 0x11: 'watchdog state refused before any WDT0 write',
+                0x12: 'mode still enabled after the disarm', 0x13: 'readback after the disarm differs; WDT0 left disarmed',
+                0x14: 'final readback or 1 ms timing check failed; WDT0 holds 0x41'}
+
+
+def build_rearm_stage2(out):
+    """Assemble the arming replay at the launcher's address; return its flat binary."""
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    flags = ['--target=arm-none-eabi', '-march=armv8-a', '-marm']
+    commands = [[str(CLANG), *flags, '-c', str(ROOT/REARM_SOURCE), '-o', str(out/'rearm-stage2.o')],
+                [str(LLD), f'-Ttext={LAUNCHER_SRAM[0]:#x}', '-e', '_start', str(out/'rearm-stage2.o'),
+                 '-o', str(out/'rearm-stage2.elf')],
+                ['/usr/lib/llvm-21/bin/llvm-objcopy', '-O', 'binary', str(out/'rearm-stage2.elf'), str(out/'rearm-stage2.bin')]]
+    with (out/'rearm-stage2.log').open('w') as log:
+        for command in commands:
+            subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT)
+    binary = out/'rearm-stage2.bin'
+    require(0 < binary.stat().st_size <= REARM_RESULT - LAUNCHER_SRAM[0], 'The arming replay overlaps its result block.')
+    return binary
+
+
+def rearm_results(data):
+    """Decode the replay's result block (the layout in boot/a733/rearm-stage2.S)."""
+    require(len(data) == REARM_RESULT_BYTES, 'The arming replay result block has the wrong size.')
+    w = struct.unpack('<%dI' % (REARM_RESULT_BYTES // 4), data)
+    return {'gate': {'mode_at_entry': w[0], 'mode': w[1] & 0xffff, 'configuration': w[2] & 0xffff,
+                     'output': w[3] & 0xffff, 'done': w[4] == REARM_GATE_DONE},
+            'stage2': {'status': w[8], 'status_text': REARM_STATUS.get(w[8], 'not run'),
+                       'redirect': list(w[9:12]), 'gp2': w[12], 'state': [x & 0xffff for x in w[13:16]],
+                       'mode_after_disarm': w[16] & 0xffff, 'output': w[17] & 0xffff, 'configuration': w[18] & 0xffff,
+                       'mode_before_arm': w[19] & 0xffff, 'armed_counter': w[20] | w[21] << 32,
+                       'final': [x & 0xffff for x in w[22:25]], 'final_counter': w[25] | w[26] << 32}}
+
+
 def upload_verification(plan, mode):
     """Which uploads the digest helper verifies and which are read back, in plan order.
 
