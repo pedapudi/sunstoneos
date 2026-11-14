@@ -243,6 +243,26 @@ bound (217,260 measured, 8.6 percent above it, the same in every run). The bound
 models' own end-of-run accounting fails above about 3,000 turns, where the critical path is 65,000 instructions, and a run that fails
 ends early, so the path of the larger delays does not rise monotonically (8,000 turns: 119,619).
 
+### QEMU guest time in the radio checks
+
+A QEMU guest that runs without `-icount` counts a tick, a timeout and a clock reading in the host's time, so a verdict that reads them changes
+with the speed and the load of the host. The four radio checks that start a guest (`a733-radio-session`, `aic8800-dispatch`, `radio-network`
+and `radio-network-dhcp-dns`, 29 guest runs in all) did not use it. With 24 copies of each run at once beside 24 busy host processes
+(48 runs of each of the 29, 1,392 in all), 83 runs failed: 76 of 336 in `a733-radio-session` (six of its seven cases), 3 of 240 in
+`aic8800-dispatch` (the deadline case), 1 of 240 in `radio-network-dhcp-dns` (the DHCP case) and 3 of 48 in the `late` case of
+`radio-network`. The console output of the DHCP, static-address and SNTP cases differed in every run, because it prints times.
+
+They now pass `harness.QEMU_DETERMINISTIC` (`-accel tcg,thread=single -icount shift=0,sleep=off`), the flags of the yield models and the
+latency-control models, so that guest time follows the instructions executed. Under the same load all 1,392 runs pass and each case writes
+one console output, byte for byte, in all 48 runs; alone the verdict and the output are the same as before. The slowest run beside the
+busy processes was 3.8 s (`a733-radio-session`), 1.4 s (`aic8800-dispatch`), 1.8 s (`radio-network`) and 7.0 s (the DHCP case); the host
+kill limit of each check is 4 times that, recorded per check in `qemu_checks` of [tools/gate-slots.json](../tools/gate-slots.json), and
+only ends a run that hangs. `checks/qemu-icount-audit.py` fails a check that starts a guest without `-icount` unless it is listed with the
+reason its verdict does not read guest time: `checks/smp-ticket-lock.py` and `tools/check-smp.py` run multi-threaded TCG on purpose, to
+exercise the ticket lock's atomics on cores that run in parallel, and their guests assert no time. The checks `os-npu-graphs`,
+`os-npu-service` and `os-npu-fault` run on `checks/host/host_rtos.c`, whose clock is virtual and whose tasks switch only at their own
+calls, and `session-lifetime` and `a733-radio-platform` start no guest; none reads host time.
+
 ### Gate slots and the timing lock
 
 The host runs N gates at once, not one. `tools/gate_slots.py` holds the slots as the files `~/.cache/sunstoneos/gate.lock.0` to

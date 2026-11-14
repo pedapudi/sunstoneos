@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import harness
 ROOT=Path(__file__).resolve().parents[1]
 GATE_RUNS = [
     ['--tcp', '{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7', '--rsn', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--kernel', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--headers', '{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include', '--clang', '/usr/bin/clang-21', '--linker', '{cache}/host/usr/lib/llvm-21/bin/ld.lld', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64', '--evidence', '{output}'],
@@ -86,8 +88,8 @@ include("{ROOT}/cmake/aarch64-clang.cmake")
     record['required_symbols']=sorted(required);save()
     for case in ('dhcp','acquisition','static','omitted','sntp'):
         if record['cases'].get(case,{}).get('exit_code')==0:continue
-        cmd=[str(a.qemu),'-M','virt,gic-version=3,secure=off,virtualization=off','-cpu','cortex-a53','-m','128M','-nographic','-nic','none','-monitor','none','-semihosting-config','enable=on,target=native,arg='+case,'-kernel',str(out/'build/radio-network-dhcp-dns-model.elf')]
-        r=subprocess.run(cmd,capture_output=True,text=True,timeout=40);record['cases'][case]={'command':cmd,'exit_code':r.returncode,'stdout':r.stdout,'stderr':r.stderr};save()
+        cmd=[str(a.qemu),'-M','virt,gic-version=3,secure=off,virtualization=off',*harness.QEMU_DETERMINISTIC,'-cpu','cortex-a53','-m','128M','-nographic','-nic','none','-monitor','none','-semihosting-config','enable=on,target=native,arg='+case,'-kernel',str(out/'build/radio-network-dhcp-dns-model.elf')]
+        r=subprocess.run(cmd,capture_output=True,text=True,timeout=harness.qemu_kill_seconds('radio-network-dhcp-dns'));record['cases'][case]={'command':cmd,'exit_code':r.returncode,'stdout':r.stdout,'stderr':r.stderr};save()
         if r.returncode:raise RuntimeError(r.stdout+r.stderr)
     record['result']='PASS new actual-stack DHCP/DNS/SNTP cases only; no physical RF, credentials, entropy, or networking qualification';save();print(record['result'])
 if __name__=='__main__':main()
