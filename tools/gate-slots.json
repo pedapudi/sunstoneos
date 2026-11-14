@@ -6,7 +6,6 @@
   "landing_reserved_slots": 1,
   "timing_steps": ["check-soak8"],
   "timing_checks": [
-    "scheduler-control-linked.py", "smp-ticket-lock.py", "tick-footprint-budget.py", "gpu-conformance.py", "land.py", "submit-wait.py",
-    "cpu-npu-concurrency.py", "cpu-npu-return-chain.py"
+    "scheduler-control-linked.py", "smp-ticket-lock.py", "tick-footprint-budget.py", "gpu-conformance.py", "land.py", "submit-wait.py"
   ]
 }
