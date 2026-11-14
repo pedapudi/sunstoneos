@@ -589,9 +589,13 @@ class Live:
         A card first stage boots the card only while the marker reads zero, which means the RTC supply was lost
         (docs/designs/card-fel-recovery.md). A board that powers up in FEL never runs the gate, so the runner sets
         the marker at every contact; without it the first watchdog return would boot the card."""
-        values = dict(zip(crumbs.RESET_WORDS, (int(x, 16) for x in self.tx(*crumbs.reset_arguments()).split())))
-        require(len(values) == len(crumbs.RESET_WORDS), 'Reset word readback differs.')
-        entry = {'sequence': self.sequence, 'words': values, 'gate': crumbs.gate_record(values['flag'])}
+        try:
+            values, contact = crumbs.parse_contact(self.tx(*crumbs.contact_arguments()))
+        except ValueError as error:
+            raise ValueError('Reset word readback differs.') from error
+        # The RTC words and WDT0 status, read before this contact writes anything: after a run that never returned they
+        # are the only record of where it stopped.
+        entry = {'sequence': self.sequence, 'words': values, 'contact': contact, 'gate': crumbs.gate_record(values['flag'])}
         commands = []
         # A boot-once value left in GP2 would boot the card at the session's reset; clear it with any gate record.
         if entry['gate'] or values['flag'] == crumbs.BOOT_ONCE:

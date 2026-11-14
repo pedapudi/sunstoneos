@@ -68,6 +68,11 @@ class Model:
             # A cold power-on ran the card gate and boot0, which found no package and entered FEL.
             # WDT0 mode reads its reset value 0 at a power-on gate entry.
             self.registers.update({board.crumbs.RESET_WORDS['flag']:0x0c028000,board.crumbs.MARKER:board.crumbs.MARKER_KEYED})
+        if variant=='card-cold-record':
+            # Words a stopped boot left in the RTC domain, and a pending WDT0 interval interrupt: the first contact
+            # records them before it writes anything.
+            self.registers.update({0x07090100:0x5c0dc5f9,0x07090104:0x0c030007,0x0709010c:0x19cf2,0x07090110:0xfa030001,
+                                   0x07090114:0x96000010,0x07090118:0x41019db8,0x0709011c:0x47008000,0x02050004:1})
         self.calls = []
         self.writes = []    # (address, bytes) of every write, in order: the sealed source is gone after the call
         self.programs = []
@@ -936,7 +941,12 @@ def boot_once_slot_cases(out):
         manifest.write_text(json.dumps({'kind':'a733-boot-slot-plan','slot':'A','generation':3,'entry':0x41000000,
             'extents':[{'name':'runtime.bin','kind':1,'load':0x41000000,'bytes':len(runtime),'sha256':digest},
                        {'name':'session.bin','kind':2,'load':0x41f00000,'bytes':4,'sha256':'1'*64}],**extra}))
-    card=types.SimpleNamespace(flat_runtime=lambda image:runtime)
+    # The card boot chain lacks a measured recovery (tools/boot_chain.py): refused before the manifest is read.
+    write(images.hashlib.sha256(runtime).hexdigest())
+    try:images.boot_once_slot(args)
+    except ValueError as error:assert 'no measured watchdog recovery' in str(error) and 'after boot0' in str(error),error
+    else:raise AssertionError('A boot-once run was admitted while a chain stage has no measured recovery')
+    card=types.SimpleNamespace(flat_runtime=lambda image:runtime,unproven=lambda:[])
     with patch.object(images,'load',return_value=card):
         write(images.hashlib.sha256(runtime).hexdigest())
         record=images.boot_once_slot(args)
@@ -1002,6 +1012,12 @@ def transport_cases(out):
             assert clear<reset
         if variant=='card-cold-record':
             assert result['power_epoch'][0]['gate']=={'cold':True,'warm':False,'unmarked':False,'once':False,'refused_step':0,'mode':0}
+            contact=result['power_epoch'][0]['contact']
+            assert contact=={'rtc_100':0x5c0dc5f9,'rtc_104':0x0c030007,'rtc_108':0x0c028000,'rtc_10c':0x19cf2,'rtc_110':0xfa030001,
+                             'rtc_114':0x96000010,'rtc_118':0x41019db8,'rtc_11c':0x47008000,'wdt_status':1},contact
+            # One read-only transaction, and the first register access after the ROM checks.
+            read=next(i for i,c in enumerate(model.calls) if hex(0x0709011c) in c)
+            assert 'writel' not in model.calls[read] and not any(c[0]=='writel' for c in model.calls[:read]),model.calls[:read+1]
             assert result['power_epoch'][0]['flag_after']==0 and 'marker_after' in result['power_epoch'][0]
         if variant=='marker-stuck':
             assert 'cold-boot marker' in result['first_failure']['detail']

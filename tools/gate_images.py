@@ -1,6 +1,7 @@
 """The images and bundles tools/integration-gate.py builds for the checks that name them in GATE_RUNS (checks/check-index.py).
 
-IMAGES are CMake recipes built once per tree state, with one target or a list of targets built in one invocation; the gate's
+IMAGES are CMake recipes built once per tree state, with one target or a list of targets built in one invocation (a recipe with
+'project' configures that directory of the checkout on its own: tools/build_graph.configure_command); the gate's
 OS variants (VARIANTS) are named directly and need no recipe.
 {elf:X} and {build:X} are an image's ELF and build directory, {session:X} the session bytes tools/gate_session.py builds for
 image X, {bundle:X} the probe ELF that apps/board-bundles-power/build-opp.py builds for bundle X (BUNDLES lists its arguments),
@@ -88,6 +89,20 @@ IMAGES = {
         '-DSUNSTONE_PARTITIONED_SCHEDULER=ON', '-DSUNSTONE_LATENCY=ON',
         '-DSUNSTONE_SCHED_LATENCY_TRACE=ON', '-DSUNSTONE_LATENCY_CAUSE=ON',
     ], 'target': 'latency-partitioned-pmu-model', 'elf': 'latency-partitioned-pmu-model.elf'},
+    # the other host model images that link the latency workloads (cmake/latency.cmake); one configure builds them all, so the
+    # images that checks/latency-control-integration.py runs and these are built by the same recipe options
+    'latency-models': {'configure': [
+        '-DSUNSTONE_PARTITIONED_SCHEDULER=ON', '-DSUNSTONE_LATENCY=ON',
+        '-DSUNSTONE_SCHED_LATENCY_TRACE=ON', '-DSUNSTONE_LATENCY_RESTORE_SPANS=ON',
+        '-DSUNSTONE_LATENCY_CONTROL=ON', '-DSUNSTONE_LATENCY_CONTROL_MODE=busy',
+    ], 'target': ['latency-model', 'latency-partitioned-writes-model', 'latency-partitioned-loads-model',
+                  'latency-partitioned-pmu-model'], 'elf': 'latency-model.elf'},
+    # standalone model projects beside the top-level one: 'project' is the CMake source directory, configured with the toolchain file
+    # and the pinned kernel only (no cfg.sh, which configures the top-level project)
+    'latency-cost-model': {'project': 'apps/latency-cost', 'configure': [],
+                           'target': 'latency-cost-model', 'elf': 'latency-cost-model.elf'},
+    'cpu-reliability-model': {'project': 'checks/cpu-reliability-model', 'configure': [],
+                              'target': 'a733-smp-cached-diagnostic', 'elf': 'a733-smp-cached-diagnostic.elf'},
     # the returning scanning radio image
     'ret-radio-scan': {'configure': [
         '-DSUNSTONE_APPLICATION=radio-scan',
@@ -99,3 +114,11 @@ BUNDLES = {
     'opp33-dcdc3': ['--bundle', '33', '--cpu-return-dcdc3-800'],
     'storage-read-returning': {'builder': 'apps/storage-read-returning/build.py', 'args': []},
 }
+
+
+def project_flags(cache):
+    """The cache variables of a standalone model project: the toolchain file, the pinned kernel and the linker."""
+    sources = cache / 'sources'
+    return ['-DCMAKE_TOOLCHAIN_FILE=%s' % '{source}/cmake/aarch64-clang.cmake',
+            '-DFREERTOS_DIR=%s' % (sources / 'FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2'),
+            '-DSUNSTONE_LLD=%s' % (cache / 'host/usr/lib/llvm-21/bin/ld.lld')]

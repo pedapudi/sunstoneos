@@ -25,7 +25,9 @@ directories, or when the path is reached through #include from a named source.
 Changed paths are relative to the repository root; a directory selects every
 check that covers a path below it.
 A check whose GATE_RUNS name an image also covers the CMake files that the
-gate's configure step for that image reads (configure_inputs).
+gate's configure step for that image reads (configure_inputs) and, for an image that is not an integrated OS image, the
+source files the build graph compiles into it (tools/build_graph.py reads them from CMake's file API and caches them
+by the content of those CMake files); the include closure of each source follows as for any other path.
 Paths assembled from separate string segments are not found, so an empty
 selection is not proof that no check covers a change.
 CHECK_INPUTS supplies supplementary literal repository paths. The hook fixture
@@ -49,6 +51,9 @@ import tarfile
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
+import build_graph
+import gate_images
 import harness
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -345,8 +350,49 @@ def builds_image(path, revision=None):
     return any(IMAGE_RUN.search(argument) for run in runs for argument in run)
 
 
+IMAGE_NAME = re.compile(r"""\{(?:elf|build|session):([A-Za-z0-9_-]+)\}""")
+
+
+def run_images(path, revision=None):
+    """The gate_images recipes that the check's GATE_RUNS name."""
+    text = revision.text(path) if revision else path.read_text(errors='replace')
+    runs = literals(ast.parse(text), 'GATE_RUNS').get('GATE_RUNS', ())
+    names = {name for run in runs for argument in run for name in IMAGE_NAME.findall(argument)}
+    return sorted(name for name in names if name in gate_images.IMAGES)
+
+
+def recipe_roots(recipe):
+    """The CMake files a configure of the recipe starts from, each with the source directory it configures."""
+    project = recipe.get('project')
+    if project:
+        return [(ROOT / project / 'CMakeLists.txt', ROOT / project), (ROOT / 'cmake/aarch64-clang.cmake', ROOT)]
+    return [(ROOT / name, ROOT) for name in CONFIGURE_ROOTS]
+
+
 @functools.lru_cache(maxsize=None)
-def configure_inputs(revision=None):
+def image_sources(image, revision=None):
+    """The repository paths of the source files that the build graph compiles into one image recipe (none for an OS image)."""
+    recipe = gate_images.IMAGES[image]
+    roots = tuple(recipe_roots(recipe))
+    texts = {path.relative_to(ROOT).as_posix(): (revision.files[path] if revision else path.read_bytes())
+             for path in configure_inputs(revision, roots)}
+    extract = None
+    if revision:
+        def extract(directory):
+            directory.mkdir(parents=True)
+            for member, data in revision.files.items():
+                target = directory / member.relative_to(ROOT)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            return directory
+    try:
+        return frozenset(build_graph.image_sources(ROOT, recipe, texts, extract) or ())
+    except (OSError, ValueError, subprocess.CalledProcessError, KeyError, StopIteration) as error:
+        raise SystemExit('cannot read the build graph of image %s: %s' % (image, getattr(error, 'stderr', None) or error))
+
+
+@functools.lru_cache(maxsize=None)
+def configure_inputs(revision=None, roots=None):
     """The CMake files a configure of the top-level project can read: the configure roots and every file they reach
     through include() and add_subdirectory(), under any option. An argument that still holds an unknown variable after
     the checkout and directory variables are replaced is an application root that a configure option selects
@@ -354,7 +400,7 @@ def configure_inputs(revision=None):
     external application's files are outside the checkout."""
     files = revision.files if revision else {p for p in ROOT.joinpath('apps').glob('*/**/*') if p.is_file()}
     found = set()
-    stack = [(ROOT / name, ROOT) for name in CONFIGURE_ROOTS]
+    stack = list(roots) if roots else [(ROOT / name, ROOT) for name in CONFIGURE_ROOTS]
     while stack:
         path, source_dir = stack.pop()
         exists = path in revision.files if revision else path.is_file()
@@ -390,6 +436,9 @@ def covered(path, revision=None):
     CMake files of the configure step when the check's gate runs build an image."""
     top = path
     seen, stack = set(), [path]
+    if top.suffix == '.py' and (top in revision.files if revision else top.is_file()):
+        for image in run_images(top, revision):
+            stack.extend(ROOT / name for name in image_sources(image, revision))
     while stack:
         current = stack.pop()
         if current in seen:
