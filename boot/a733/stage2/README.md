@@ -31,8 +31,10 @@ requires the clear to read back (a failed clear ends with status 7, detail 5),
 and stores the record it read in report word `reserved1[22]` (byte offset 368).
 While loading it restarts WDT0 after every card read, so the 16 s interval does
 not expire during a normal load; the longest read is bounded by 0.5 s. Arming
-then switches WDT0 from `0xb1` to mode `0x41` with the same configuration and
-output writes and the same read-back and timing checks as in the first state.
+then disarms WDT0 and arms mode `0x41` with the same configuration and output
+writes and the same read-back and timing checks as in the first state; the
+board has shown expiry only after an arming from mode 0
+([card-boot-chain.md](../../../docs/designs/card-boot-chain.md)).
 
 ## Host verification
 
