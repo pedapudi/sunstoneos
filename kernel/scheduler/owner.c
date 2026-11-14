@@ -41,7 +41,7 @@ void ss_owner_init(struct ss_owner *o, unsigned cpu,
                    const struct ss_owner_backend *backend)
 {
     *o = (struct ss_owner){0};
-    o->cpu = cpu; o->backend = backend;
+    o->inbox.cpu = cpu; o->inbox.backend = backend;
 }
 bool ss_owner_enqueue(struct ss_owner *o, struct ss_owner_task *t, bool front)
 {
@@ -90,15 +90,15 @@ struct ss_owner_task *ss_owner_yield(struct ss_owner *o)
 static void signal(struct ss_owner *o)
 {
 #ifdef SUNSTONE_LATENCY_CAUSE
-    ss_latency_cause_sgi_begin(o->cpu);
+    ss_latency_cause_sgi_begin(o->inbox.cpu);
 #endif
 #if defined(__aarch64__)
     __asm__ volatile("dsb ishst" ::: "memory");
 #endif
-    if (o->backend && o->backend->sgi)
-        o->backend->sgi(o->backend->context, o->cpu);
+    const struct ss_owner_backend *b = o->inbox.backend;
+    if (b && b->sgi) b->sgi(b->context, o->inbox.cpu);
 #ifdef SUNSTONE_LATENCY_CAUSE
-    ss_latency_cause_sgi_end(o->cpu);
+    ss_latency_cause_sgi_end(o->inbox.cpu);
 #endif
 }
 void ss_owner_publish(struct ss_owner *o, unsigned source, unsigned slot, unsigned priority)

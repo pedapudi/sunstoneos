@@ -46,6 +46,10 @@ struct ss_owner_inbox {
     _Alignas(SS_CACHE_LINE) _Atomic uint16_t published[SS_OWNER_SOURCES];
     _Atomic uint16_t limit[SS_OWNER_SOURCES];
     _Atomic uint32_t spilled, control, gate;
+    /* Constant after init. Here so that a publisher's SGI reads no other
+     * owner line. */
+    unsigned cpu;
+    const struct ss_owner_backend *backend;
 };
 /* Written only by its source: entry[n % SS_OWNER_RING] holds hint n as
  * slot | priority << 7. */
@@ -75,8 +79,6 @@ struct ss_owner {
     unsigned cursor[SS_OWNER_PRIORITIES];
     uint16_t taken[SS_OWNER_SOURCES]; /* owner's copy of consumed */
     uint32_t spilled_seen;
-    unsigned cpu;
-    const struct ss_owner_backend *backend;
 };
 static inline struct ss_owner_fifo *ss_owner_ready(struct ss_owner *o, unsigned priority)
 { return &o->ready_by_rank[SS_OWNER_PRIORITIES - 1u - priority]; }
