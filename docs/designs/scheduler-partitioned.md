@@ -237,10 +237,28 @@ owner: for each source s: n = acquire_load(published[s])
        inspect a bounded batch, merging again before each inspection
 ```
 
-A waker that found the target already signalled could skip the SGI, but
-learning that requires reading a line the owner writes, which under streaming
-load costs a DRAM access on every remote wake. An extra SGI costs the owner an
-exception entry only when several publications reach it between two entries.
+A waker could skip the SGI when the target already has one pending or runs a
+task that the published one cannot preempt. Learning either requires reading a
+line the owner writes. On the board (latency-cause entries
+`1794642926946693792-c3a22eb5` and `1794644716545175948-2ce0b5a1`, CPU0 at
+1794 MHz) the SGI costs CPU0 258 to 262 cycles on average per release to CPUs
+2 to 7, at most 366. Reading a line that a streaming owner wrote since CPU0's
+last read misses to DRAM, at 1,139 to 1,217 cycles per refill. The SGI is needed
+in two cases. A secondary in WFI has no other wake source, because
+secondaries take no timer interrupt. A task that preempts the running one
+waits, without the SGI, for that task's next kernel entry, and a compute loop
+need not make one. An SGI that cannot preempt costs the owner one service pass,
+959 to 1,279 cycles at the median plus exception entry and exit, and falls on
+the target, not on the waker. An SGI that arrives while one is already pending
+at the GIC costs the owner nothing more.
+
+A later stage can drop the SGIs that cannot preempt without a read on the
+waker. Each priority band gets its own SGI number with a matching GIC priority,
+and the owner writes `ICC_PMR_EL1` to its running band on every switch. The GIC
+then delivers only SGIs that would preempt and holds the rest pending until the
+owner's priority falls. The cost is one priority-mask write per switch, which
+has not been measured, and the design must fit the kernel's use of the priority
+mask for the API mask.
 The final check and WFI occur with `DAIF.I` masking IRQ entry and the GIC
 priority mask admitting the reschedule interrupt, so a pending eligible IRQ
 prevents indefinite sleep.
@@ -950,6 +968,9 @@ energy.
     work splitting, EDF/CBS reservations, and the capacity, weighted-split,
     pinned-versus-unpinned and idle-wakeup measurements of the acceptance list.
 11. Heterogeneous placement and tickless timing have no physical qualification.
+12. Per-band SGIs with an owner-side priority mask (see "Every publication sends an
+    SGI"): measure the `ICC_PMR_EL1` write on the board, then design how the bands
+    share the priority mask with the API mask.
 
 ## Design review
 
