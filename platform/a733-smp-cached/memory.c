@@ -69,6 +69,9 @@ void os_kernel_l2_slot1(uint64_t out[512])
 }
 extern unsigned char __tables_start[], __tables_end[], __bss_end[], __heap_end[];
 extern unsigned char __device_pool_start[], __device_pool_end[];
+#if defined(SUNSTONE_A733_OS)
+extern unsigned char __os_rodata_block[];
+#endif
 extern unsigned char __uncached_pool_start[], __uncached_pool_end[];
 /* DRAM above the boot image that EL1 maps when this boot's decode check
  * passes: level-2 blocks below 0x80000000, level-1 blocks from there. The same
@@ -145,6 +148,14 @@ int a733_cached_memory_prepare(void)
             (uintptr_t)a733_cached_el3_l2, 3) != 1 ||
         a733_cpu_coherence_tables(a733_cached_el1_l1, a733_cached_el1_l2,
             (uintptr_t)a733_cached_el1_l2, 1) != 1) return 0;
+#if defined(SUNSTONE_A733_OS)
+    /* Read-only data, the manifest and the sealed session have their own level-2 block, the OS link script's RODATA
+     * (apps/os/sealed-link.patch). AP = 0b11 makes it read-only at EL1 and EL0, and UXN and PXN make it execute-never
+     * at both; it stays write-back inner shareable and one block entry. EL3 keeps its entry: it writes the sealed
+     * session with translation off. */
+    a733_cached_el1_l2[((uintptr_t)__os_rodata_block - UINT64_C(0x40000000)) >> 21] |=
+        (UINT64_C(3) << 6) | BIT(53) | BIT(54);
+#endif
 #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
     /* Both regimes use identical memory attributes. New EL1 blocks deny EL0. */
     for (uintptr_t a = wb; a < ne; a += 0x200000) {

@@ -51,6 +51,7 @@ def main():
                 ids.add(json.loads(line).get('id'))
     for key, records in chain.MEASURED.items():
         assert key[2] == chain.FEL and records and all(r.split(':')[0] in ids for r in records), key
+    assert chain.REARM_MEASURED and all(r.split(':')[0] in ids for r in chain.REARM_MEASURED)
     cases.append('measured-armings-cite-board-records')
 
     # Today's chain: every stage after the gate expires after boot0's PMIC writes, which no board run has shown.
@@ -73,6 +74,9 @@ def main():
     # The pre-fix chain (re-arms in the gate and stage 2) is what ran on 2026-11-13; with the current table it is refused
     # for both reasons.
     assert all('re-armed without a disarm' in p for p in chain.unproven(rearmed))
+    # The re-arm conditions the board has not measured stay named in every refusal of a re-arm.
+    assert chain.REARM_OPEN and all(c in p for p in chain.unproven(rearmed) for c in chain.REARM_OPEN)
+    assert not any(c in p for p in problems for c in chain.REARM_OPEN)
     cases.append('pre-fix-chain-refused')
 
     # The runner refuses a boot-once run before it reads the slot manifest.
